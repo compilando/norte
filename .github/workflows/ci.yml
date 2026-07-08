@@ -1,0 +1,24 @@
+# CI mínimo (fase 2 de M0): ubuntu + stable, corriendo exactamente `just ci`.
+# La matrix completa {3 OS} × {stable, MSRV} + coverage gate llega en la fase 12.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    name: just ci (ubuntu, stable)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # rustup respeta rust-toolchain.toml (stable pineada + componentes)
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-nextest,cargo-deny
+      - run: just ci
