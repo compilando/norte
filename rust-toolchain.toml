@@ -1,0 +1,5 @@
+[toolchain]
+# Stable pineada (kickoff M0). MSRV del workspace = stable − 2 (spec §18) = 1.94,
+# declarada en [workspace.package].rust-version y testeada en la matrix de CI.
+channel = "1.96.1"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]

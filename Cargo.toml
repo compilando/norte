@@ -1,0 +1,58 @@
+# Workspace norte — ver ARCHITECTURE.md para el mapa y docs/adr/0003 para lints/estructura.
+
+[workspace]
+resolver = "3"
+members = [
+    "crates/norte-proto",
+    "crates/norte-vfs",
+    "crates/norte-vfs-local",
+    "crates/norte-testkit",
+    "crates/norte-core",
+    "crates/norte-cli",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.94"
+repository = "https://github.com/compilando/norte"
+authors = ["The norte Authors"]
+
+[workspace.dependencies]
+# Crates internos
+norte-proto = { path = "crates/norte-proto", version = "0.0.0" }
+norte-vfs = { path = "crates/norte-vfs", version = "0.0.0" }
+norte-vfs-local = { path = "crates/norte-vfs-local", version = "0.0.0" }
+norte-testkit = { path = "crates/norte-testkit", version = "0.0.0" }
+norte-core = { path = "crates/norte-core", version = "0.0.0" }
+
+# Externos: versiones centralizadas; cada crate opta por las que necesita
+# con justificación en la PR que las introduce (regla 8 de CLAUDE.md).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+bitflags = { version = "2", features = ["serde"] }
+anyhow = "1"
+async-trait = "0.1"
+bytes = "1"
+futures = "0.3"
+tokio = { version = "1", default-features = false }
+tokio-stream = "0.1"
+tokio-util = "0.7"
+tracing = "0.1"
+clap = { version = "4", features = ["derive"] }
+
+# Solo dev
+proptest = "1"
+tempfile = "3"
+assert_cmd = "2"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Única excepción global a pedantic: el patrón norte-vfs::provider::Provider
+# la dispara constantemente y no aporta.
+module_name_repetitions = "allow"

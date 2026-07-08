@@ -1,0 +1,30 @@
+# cargo-deny: licencias + advisories + sources. Ver docs/adr/0003.
+
+[graph]
+all-features = true
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "MIT",
+    # Solo crates propios (core, cli); ninguna dependencia externa debería traerla.
+    "AGPL-3.0-only",
+    "Unicode-3.0",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[advisories]
+yanked = "deny"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Las deps internas van por path sin versión (workspace privado, sin publish aún).
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

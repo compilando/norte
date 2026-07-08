@@ -1,0 +1,15 @@
+[package]
+name = "norte-testkit"
+description = "MemProvider determinista, corpus de fixtures hostiles y estrategias proptest"
+license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+norte-vfs.workspace = true
+
+[lints]
+workspace = true

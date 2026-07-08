@@ -1,0 +1,19 @@
+[package]
+name = "norte-cli"
+description = "CLI de humo de norte: banco de pruebas manual del core embebido"
+license = "AGPL-3.0-only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "norte"
+path = "src/main.rs"
+
+[dependencies]
+norte-core.workspace = true
+
+[lints]
+workspace = true

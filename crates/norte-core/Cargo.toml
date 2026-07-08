@@ -1,0 +1,15 @@
+[package]
+name = "norte-core"
+description = "Núcleo de norte: scheduler de tasks, copy engine, sesiones"
+license = "AGPL-3.0-only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+norte-vfs.workspace = true
+
+[lints]
+workspace = true
