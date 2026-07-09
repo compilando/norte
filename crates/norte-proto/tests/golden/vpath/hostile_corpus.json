@@ -1,0 +1,158 @@
+[
+  {
+    "name": "latin1_e_acute",
+    "segments_hex": ["e9"],
+    "expected_wire": "file:///%E9",
+    "display": "⟨file⟩/�"
+  },
+  {
+    "name": "overlong_slash",
+    "segments_hex": ["c0af"],
+    "expected_wire": "file:///%C0%AF",
+    "display": "⟨file⟩/��"
+  },
+  {
+    "name": "nfd_e_acute",
+    "segments_hex": ["65cc81"],
+    "expected_wire": "file:///é",
+    "display": "⟨file⟩/é"
+  },
+  {
+    "name": "nfc_e_acute",
+    "segments_hex": ["c3a9"],
+    "expected_wire": "file:///é",
+    "display": "⟨file⟩/é"
+  },
+  {
+    "name": "nfd_hangul",
+    "segments_hex": ["e18492e185a1e186ab"],
+    "expected_wire": "file:///한",
+    "display": "⟨file⟩/한"
+  },
+  {
+    "name": "emoji_zwj_family",
+    "segments_hex": ["f09f91a8e2808df09f91a9e2808df09f91a7e2808df09f91a6"],
+    "expected_wire": "file:///👨‍👩‍👧‍👦",
+    "display": "⟨file⟩/👨‍👩‍👧‍👦"
+  },
+  {
+    "name": "rtl_override",
+    "segments_hex": ["616263e280ae67706a2e657865"],
+    "expected_wire": "file:///abc‮gpj.exe",
+    "display": "⟨file⟩/abc‮gpj.exe"
+  },
+  {
+    "name": "win_trailing_dot",
+    "segments_hex": ["66696c652e"],
+    "expected_wire": "file:///file.",
+    "display": "⟨file⟩/file."
+  },
+  {
+    "name": "win_trailing_space",
+    "segments_hex": ["66696c6520"],
+    "expected_wire": "file:///file ",
+    "display": "⟨file⟩/file "
+  },
+  {
+    "name": "win_reserved_con",
+    "segments_hex": ["434f4e"],
+    "expected_wire": "file:///CON",
+    "display": "⟨file⟩/CON"
+  },
+  {
+    "name": "win_reserved_con_ext",
+    "segments_hex": ["434f4e2e747874"],
+    "expected_wire": "file:///CON.txt",
+    "display": "⟨file⟩/CON.txt"
+  },
+  {
+    "name": "win_reserved_com1",
+    "segments_hex": ["434f4d31"],
+    "expected_wire": "file:///COM1",
+    "display": "⟨file⟩/COM1"
+  },
+  {
+    "name": "win_reserved_lpt1",
+    "segments_hex": ["4c505431"],
+    "expected_wire": "file:///LPT1",
+    "display": "⟨file⟩/LPT1"
+  },
+  {
+    "name": "backslash_not_separator",
+    "segments_hex": ["615c62"],
+    "expected_wire": "file:///a\\b",
+    "display": "⟨file⟩/a\\b"
+  },
+  {
+    "name": "ntfs_ads_colon",
+    "segments_hex": ["666f6f3a626172"],
+    "expected_wire": "file:///foo:bar",
+    "display": "⟨file⟩/foo:bar"
+  },
+  {
+    "name": "wtf8_lone_surrogate",
+    "segments_hex": ["eda080"],
+    "expected_wire": "file:///%ED%A0%80",
+    "display": "⟨file⟩/���"
+  },
+  {
+    "name": "pct_literal_lookalike",
+    "segments_hex": ["3530254646"],
+    "expected_wire": "file:///50%25FF",
+    "display": "⟨file⟩/50%FF"
+  },
+  {
+    "name": "shift_jis_tesuto",
+    "segments_hex": ["836583588367"],
+    "expected_wire": "file:///%83e%83X%83g",
+    "display": "⟨file⟩/�e�X�g"
+  },
+  {
+    "name": "control_newline",
+    "segments_hex": ["610a62"],
+    "expected_wire": "file:///a%0Ab",
+    "display": "⟨file⟩/a�b"
+  },
+  {
+    "name": "control_carriage_return",
+    "segments_hex": ["610d62"],
+    "expected_wire": "file:///a%0Db",
+    "display": "⟨file⟩/a�b"
+  },
+  {
+    "name": "control_esc_osc",
+    "segments_hex": ["1b5d303b70776e6564"],
+    "expected_wire": "file:///%1B]0;pwned",
+    "display": "⟨file⟩/�]0;pwned"
+  },
+  {
+    "name": "control_del",
+    "segments_hex": ["617f62"],
+    "expected_wire": "file:///a%7Fb",
+    "display": "⟨file⟩/a�b"
+  },
+  {
+    "name": "truncated_utf8_2byte",
+    "segments_hex": ["61c3"],
+    "expected_wire": "file:///a%C3",
+    "display": "⟨file⟩/a�"
+  },
+  {
+    "name": "truncated_utf8_4byte",
+    "segments_hex": ["f09f92"],
+    "expected_wire": "file:///%F0%9F%92",
+    "display": "⟨file⟩/�"
+  },
+  {
+    "name": "legit_replacement_char",
+    "segments_hex": ["efbfbd"],
+    "expected_wire": "file:///�",
+    "display": "⟨file⟩/�"
+  },
+  {
+    "name": "bom_prefix",
+    "segments_hex": ["efbbbf78"],
+    "expected_wire": "file:///﻿x",
+    "display": "⟨file⟩/﻿x"
+  }
+]

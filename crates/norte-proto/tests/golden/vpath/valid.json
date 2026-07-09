@@ -1,0 +1,92 @@
+[
+  {
+    "description": "raíz sin authority",
+    "wire": "file:///",
+    "canonical_wire": "file:///",
+    "scheme": "file",
+    "authority": null,
+    "segments_hex": [],
+    "display": "⟨file⟩/"
+  },
+  {
+    "description": "forma leniente: raíz sin slash final canonicaliza con él",
+    "wire": "file://",
+    "canonical_wire": "file:///",
+    "scheme": "file",
+    "authority": null,
+    "segments_hex": [],
+    "display": "⟨file⟩/"
+  },
+  {
+    "description": "path local UTF-8 con ñ",
+    "wire": "file:///home/oscar/año.txt",
+    "canonical_wire": "file:///home/oscar/año.txt",
+    "scheme": "file",
+    "authority": null,
+    "segments_hex": ["686f6d65", "6f73636172", "61c3b16f2e747874"],
+    "display": "⟨file⟩/home/oscar/año.txt"
+  },
+  {
+    "description": "authority con host y puerto",
+    "wire": "sftp://host:22/dir/f.txt",
+    "canonical_wire": "sftp://host:22/dir/f.txt",
+    "scheme": "sftp",
+    "authority": "host:22",
+    "segments_hex": ["646972", "662e747874"],
+    "display": "⟨sftp host:22⟩/dir/f.txt"
+  },
+  {
+    "description": "decode leniente: %41 canonicaliza a A",
+    "wire": "file:///%41",
+    "canonical_wire": "file:///A",
+    "scheme": "file",
+    "authority": null,
+    "segments_hex": ["41"],
+    "display": "⟨file⟩/A"
+  },
+  {
+    "description": "bytes no-UTF8 en medio de nombre legible",
+    "wire": "file:///informe%FF%FE.dat",
+    "canonical_wire": "file:///informe%FF%FE.dat",
+    "scheme": "file",
+    "authority": null,
+    "segments_hex": ["696e666f726d65fffe2e646174"],
+    "display": "⟨file⟩/informe��.dat"
+  },
+  {
+    "description": "porcentaje literal siempre escapado",
+    "wire": "file:///50%25",
+    "canonical_wire": "file:///50%25",
+    "scheme": "file",
+    "authority": null,
+    "segments_hex": ["353025"],
+    "display": "⟨file⟩/50%"
+  },
+  {
+    "description": "hex minúscula canonicaliza a mayúscula",
+    "wire": "file:///%ff",
+    "canonical_wire": "file:///%FF",
+    "scheme": "file",
+    "authority": null,
+    "segments_hex": ["ff"],
+    "display": "⟨file⟩/�"
+  },
+  {
+    "description": "U+FFFD legítimo en el nombre: wire distinto de un byte corrupto, display idéntico (colisión documentada)",
+    "wire": "file:///�",
+    "canonical_wire": "file:///�",
+    "scheme": "file",
+    "authority": null,
+    "segments_hex": ["efbfbd"],
+    "display": "⟨file⟩/�"
+  },
+  {
+    "description": "scheme con charset completo",
+    "wire": "s3+v2.x-y://bucket/key",
+    "canonical_wire": "s3+v2.x-y://bucket/key",
+    "scheme": "s3+v2.x-y",
+    "authority": "bucket",
+    "segments_hex": ["6b6579"],
+    "display": "⟨s3+v2.x-y bucket⟩/key"
+  }
+]

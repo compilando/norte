@@ -24,6 +24,5 @@ cov:
 docs:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
-# Lo que corre CI. `cov` entra al gate cuando norte-proto tenga código (fase 3 de M0);
-# hasta entonces llvm-cov no tiene líneas que medir.
-ci: lint test docs
+# Lo que corre CI.
+ci: lint test cov docs
