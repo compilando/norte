@@ -20,5 +20,5 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
-          tool: just,cargo-nextest,cargo-deny
+          tool: just,cargo-nextest,cargo-deny,cargo-llvm-cov
       - run: just ci
