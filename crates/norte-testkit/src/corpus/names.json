@@ -50,6 +50,16 @@
     "why": "CON: nombre reservado de Windows, error o cuelgue sin prefijo verbatim"
   },
   {
+    "id": "win_backslash",
+    "hex": "615c62",
+    "why": "contrabarra dentro del segmento: separador en Windows incluso bajo \\\\?\\ — InvalidPath allí, nombre normal en unix"
+  },
+  {
+    "id": "win_ads_colon",
+    "hex": "663a616473",
+    "why": "dos-puntos = Alternate Data Stream en NTFS: escribir 'f:ads' esconde los datos en un stream que list jamás devuelve"
+  },
+  {
     "id": "emoji_zwj_family",
     "hex": "f09f91a8e2808df09f91a9e2808df09f91a7e2808df09f91a6",
     "why": "familia emoji con ZWJ: grapheme multi-codepoint, rompe truncados por-char"

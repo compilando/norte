@@ -1,7 +1,13 @@
 //! Provider VFS del filesystem local, por OS (`cfg(unix)` / `cfg(windows)`).
 //!
-//! Único crate del workspace autorizado a usar `unsafe` (regla 5 de `CLAUDE.md`):
-//! reconstrucción de `OsString` desde bytes y syscalls específicas de OS.
-//! Cada uso se habilita por ítem con `#[allow(unsafe_code)]`, lleva comentario
-//! `// SAFETY:` y test que ejercita la invariante.
+//! Único crate del workspace AUTORIZADO a usar `unsafe` (regla 5 de
+//! `CLAUDE.md`)… y actualmente con CERO usos: la reconstrucción de `OsString`
+//! en Windows va por WTF-8 validado → UTF-16 → `from_wide` (100% safe). Si
+//! algún día hace falta, cada uso irá con `#[allow(unsafe_code)]` por ítem,
+//! `// SAFETY:` y test.
 #![deny(unsafe_code)]
+
+mod native_path;
+mod provider;
+
+pub use provider::LocalProvider;

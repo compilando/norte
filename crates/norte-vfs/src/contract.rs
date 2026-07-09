@@ -389,9 +389,31 @@ macro_rules! provider_contract {
                 let root: VPath = $root;
                 let names: Vec<Vec<u8>> = $hostile;
                 assert!(!names.is_empty(), "el corpus no puede estar vacío");
+                let mut created = 0usize;
                 for bytes in names {
                     let f = child(&root, &bytes);
-                    write_all(&p, &f, b"x").await;
+                    // El OS puede rechazar el nombre (APFS exige UTF-8, NTFS
+                    // prohíbe controles): rechazo limpio = skip. La garantía
+                    // contractual es: SI se crea, los bytes vuelven intactos.
+                    let mut sink = match p.write(&f).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("skip {}: {e}", f.display_lossy());
+                            continue;
+                        }
+                    };
+                    sink.write(Bytes::from_static(b"x")).await.expect("chunk");
+                    // Algunos providers publican en commit (rename/put): el
+                    // rechazo del OS también puede llegar aquí.
+                    match sink.commit().await {
+                        Ok(()) => {}
+                        Err(Error::InvalidPath | Error::Conflict { .. }) => {
+                            eprintln!("skip (commit) {}", f.display_lossy());
+                            continue;
+                        }
+                        Err(e) => panic!("commit de {}: {e:?}", f.display_lossy()),
+                    }
+                    created += 1;
                     let e = p.stat(&f).await.unwrap_or_else(|err| {
                         panic!("stat de {:?} tras commit: {err:?}", f.display_lossy())
                     });
@@ -401,11 +423,70 @@ macro_rules! provider_contract {
                         "bytes intactos para {}",
                         f.display_lossy()
                     );
+                    // La prueba REAL de roundtrip: los bytes que devuelve el
+                    // BACKEND al listar (no el eco del path de entrada).
+                    let listed: Vec<Vec<u8>> = p
+                        .list(&root)
+                        .await
+                        .expect("list raíz")
+                        .map(|e| {
+                            e.expect("entrada ok")
+                                .path
+                                .file_name()
+                                .expect("con nombre")
+                                .as_bytes()
+                                .to_vec()
+                        })
+                        .collect()
+                        .await;
+                    let exact = listed.iter().filter(|n| n.as_slice() == bytes.as_slice()).count();
+                    assert_eq!(
+                        exact,
+                        1,
+                        "el backend debe devolver los bytes EXACTOS una vez para {}",
+                        f.display_lossy()
+                    );
                     assert_eq!(read_all(&p, &f).await.unwrap(), b"x");
                 }
+                assert!(created > 0, "ningún nombre hostil se pudo crear: sospechoso");
+            }
+
+            #[tokio::test]
+            async fn contract_write_never_touches_siblings() {
+                let p = $factory;
+                let root: VPath = $root;
+                // Un archivo REAL del usuario cuyo nombre coincide con un
+                // posible esquema de staging: escribir el vecino jamás lo toca.
+                let sibling = child(&root, b"x.norte-partial");
+                write_all(&p, &sibling, b"contenido real del usuario").await;
+                let target = child(&root, b"x");
+                write_all(&p, &target, b"nuevo").await;
+                assert_eq!(
+                    read_all(&p, &sibling).await.unwrap(),
+                    b"contenido real del usuario",
+                    "el staging pisó un archivo real"
+                );
+                assert_eq!(read_all(&p, &target).await.unwrap(), b"nuevo");
             }
 
             // ---------- capabilities condicionales ----------
+
+            #[tokio::test]
+            async fn contract_rename_case_variant_when_sensitive_is_conflict() {
+                let p = $factory;
+                require_caps!(p, has: CapabilityFlags::CASE_SENSITIVE);
+                let root: VPath = $root;
+                write_all(&p, &child(&root, b"caja"), b"1").await;
+                write_all(&p, &child(&root, b"CAJA"), b"2").await;
+                // En FS case-sensitive son archivos DISTINTOS: rename entre
+                // variantes de caja es Conflict, jamás un reemplazo silencioso.
+                match p.rename(&child(&root, b"caja"), &child(&root, b"CAJA")).await {
+                    Err(Error::Conflict { .. }) => {}
+                    other => panic!("esperaba Conflict, fue {other:?}"),
+                }
+                assert_eq!(read_all(&p, &child(&root, b"caja")).await.unwrap(), b"1");
+                assert_eq!(read_all(&p, &child(&root, b"CAJA")).await.unwrap(), b"2");
+            }
 
             #[tokio::test]
             async fn contract_case_collision_when_insensitive() {
