@@ -6,4 +6,10 @@
 //! `norte-core` (spec §5).
 #![forbid(unsafe_code)]
 
+mod provider;
+mod sink;
+
 pub use norte_proto as proto;
+pub use norte_proto::{Capabilities, CapabilityFlags, Entry, EntryKind, Error, VPath};
+pub use provider::{ByteStream, EntryStream, Provider};
+pub use sink::ByteSink;

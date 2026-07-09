@@ -9,7 +9,13 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+futures.workspace = true
 norte-proto.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true
