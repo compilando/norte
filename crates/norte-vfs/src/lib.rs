@@ -6,6 +6,7 @@
 //! `norte-core` (spec §5).
 #![forbid(unsafe_code)]
 
+mod contract;
 mod provider;
 mod sink;
 
@@ -13,3 +14,12 @@ pub use norte_proto as proto;
 pub use norte_proto::{Capabilities, CapabilityFlags, Entry, EntryKind, Error, VPath};
 pub use provider::{ByteStream, EntryStream, Provider};
 pub use sink::ByteSink;
+
+/// Re-exports internos para la expansión de [`provider_contract!`].
+/// NO es API: puede cambiar sin aviso.
+#[doc(hidden)]
+pub mod __private {
+    pub use bytes;
+    pub use futures;
+    pub use norte_proto;
+}
