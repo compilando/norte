@@ -1,0 +1,15 @@
+{
+  "pending": { "kind": "pending" },
+  "running": { "kind": "running" },
+  "paused": { "kind": "paused" },
+  "completed": { "kind": "completed" },
+  "cancelled": { "kind": "cancelled" },
+  "failed_conflict": {
+    "kind": "failed",
+    "error": { "kind": "conflict", "conflict": "exists" }
+  },
+  "failed_panic": {
+    "kind": "failed",
+    "error": { "kind": "internal", "panic": true }
+  }
+}

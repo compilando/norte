@@ -8,3 +8,4 @@ La spec evoluciona por ADR, no por edición silenciosa (spec §18).
 | [0001](0001-vpath-representacion-wire.md) | Representación de VPath y su wire format | accepted |
 | [0002](0002-runtime-async-blocking-io.md) | Runtime async y modelo de I/O bloqueante | accepted |
 | [0003](0003-workspace-lints-licencias.md) | Estructura del workspace, lints y licencias | accepted |
+| [0004](0004-convenciones-wire-protocolo.md) | Convenciones de wire del protocolo v0 | accepted |

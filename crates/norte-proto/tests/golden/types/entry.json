@@ -1,0 +1,32 @@
+{
+  "file_full": {
+    "path": "file:///home/user/doc.txt",
+    "kind": "file",
+    "size": 1234,
+    "mtime_ms": 1720000000000
+  },
+  "dir_no_meta": {
+    "path": "file:///home/user",
+    "kind": "dir",
+    "size": null,
+    "mtime_ms": null
+  },
+  "symlink": {
+    "path": "file:///ln",
+    "kind": "symlink",
+    "size": null,
+    "mtime_ms": null
+  },
+  "other_pre_epoch": {
+    "path": "file:///dev-thing",
+    "kind": "other",
+    "size": null,
+    "mtime_ms": -86400000
+  },
+  "hostile_name": {
+    "path": "file:///informe%FF%FE.dat",
+    "kind": "file",
+    "size": 0,
+    "mtime_ms": null
+  }
+}

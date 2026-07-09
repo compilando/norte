@@ -1,0 +1,32 @@
+{
+  "running_mid_copy": {
+    "task_id": 7,
+    "kind": "copy",
+    "state": { "kind": "running" },
+    "bytes_done": 1024,
+    "bytes_total": 4096,
+    "entries_done": 1,
+    "entries_total": 3,
+    "current": "file:///src/informe%FF%FE.dat"
+  },
+  "pending_unknown_totals": {
+    "task_id": 1,
+    "kind": "move",
+    "state": { "kind": "pending" },
+    "bytes_done": 0,
+    "bytes_total": null,
+    "entries_done": 0,
+    "entries_total": null,
+    "current": null
+  },
+  "terminal_cancelled": {
+    "task_id": 3,
+    "kind": "delete",
+    "state": { "kind": "cancelled" },
+    "bytes_done": 512,
+    "bytes_total": 4096,
+    "entries_done": 0,
+    "entries_total": 2,
+    "current": null
+  }
+}

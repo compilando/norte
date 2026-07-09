@@ -1,0 +1,14 @@
+{
+  "local_typical": {
+    "flags": "RENAME_ATOMIC | SYMLINKS | CASE_SENSITIVE | CASE_PRESERVING",
+    "max_path": 4096
+  },
+  "server_copy_only": {
+    "flags": "SERVER_COPY",
+    "max_path": null
+  },
+  "empty": {
+    "flags": "",
+    "max_path": null
+  }
+}
