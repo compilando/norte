@@ -241,7 +241,15 @@ dependencies = [
 name = "norte-testkit"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "norte-proto",
  "norte-vfs",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

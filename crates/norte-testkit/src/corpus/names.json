@@ -1,0 +1,62 @@
+[
+  {
+    "id": "latin1_e_acute",
+    "hex": "e9",
+    "why": "é en Latin-1: byte suelto inválido como UTF-8; el clásico archivo pre-Unicode"
+  },
+  {
+    "id": "overlong_slash",
+    "hex": "c0af",
+    "why": "encoding overlong de '/': ataque clásico de path traversal vía decoders laxos"
+  },
+  {
+    "id": "nfd_e_acute",
+    "hex": "65cc81",
+    "why": "é en NFD (e + combining acute): lo que devuelve macOS; distinto byte a byte de NFC"
+  },
+  {
+    "id": "nfc_e_acute",
+    "hex": "c3a9",
+    "why": "é en NFC: la pareja del NFD — sin ambos no se puede testear la colisión por normalización de APFS"
+  },
+  {
+    "id": "lone_surrogate",
+    "hex": "eda080",
+    "why": "surrogate sin parear (WTF-8): nombres reales de Windows que UTF-8 estricto rechaza"
+  },
+  {
+    "id": "shift_jis_tesuto",
+    "hex": "836583588367",
+    "why": "テスト en Shift-JIS: multibyte legacy que parece basura en UTF-8"
+  },
+  {
+    "id": "control_newline",
+    "hex": "610a62",
+    "why": "newline dentro del nombre: legal en unix, rompe logs y UIs ingenuas"
+  },
+  {
+    "id": "win_trailing_dot",
+    "hex": "66696c652e",
+    "why": "punto final: Windows lo pierde en silencio sin prefijo \\\\?\\"
+  },
+  {
+    "id": "win_trailing_space",
+    "hex": "66696c6520",
+    "why": "espacio final: Windows lo pierde en silencio sin prefijo \\\\?\\, igual que el punto"
+  },
+  {
+    "id": "win_reserved_con",
+    "hex": "434f4e",
+    "why": "CON: nombre reservado de Windows, error o cuelgue sin prefijo verbatim"
+  },
+  {
+    "id": "emoji_zwj_family",
+    "hex": "f09f91a8e2808df09f91a9e2808df09f91a7e2808df09f91a6",
+    "why": "familia emoji con ZWJ: grapheme multi-codepoint, rompe truncados por-char"
+  },
+  {
+    "id": "rtl_override",
+    "hex": "616263e280ae67706a2e657865",
+    "why": "RIGHT-TO-LEFT OVERRIDE: abc‮gpj.exe se pinta como abcexe.jpg — spoofing visual"
+  }
+]

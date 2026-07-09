@@ -5,3 +5,11 @@
 //! Regla del proyecto: todo bug de encoding/paths añade su fixture aquí ANTES
 //! del fix.
 #![forbid(unsafe_code)]
+
+pub mod corpus;
+mod faults;
+mod mem;
+pub mod strategies;
+
+pub use faults::Faults;
+pub use mem::MemProvider;
