@@ -16,7 +16,7 @@ lint: fmt-check
 # el gate de cobertura (85%) hace imposible un workspace sin tests que pase CI.
 # nextest no corre doctests: van aparte (los exige la convención de rustdoc).
 test:
-    cargo nextest run --workspace --no-tests=pass
+    cargo nextest run --workspace --no-tests=pass --no-fail-fast
     cargo test --workspace --doc
 
 # Gate de cobertura (mismo umbral que CI): solo crates de lógica (spec §12).

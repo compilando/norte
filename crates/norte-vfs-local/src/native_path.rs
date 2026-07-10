@@ -65,7 +65,9 @@ pub(crate) fn to_native(base: &Path, p: &VPath) -> Result<PathBuf, Error> {
         let Some(first) = segs.next() else {
             return Err(Error::InvalidPath);
         };
-        let mut drive = bytes_to_os(first)?;
+        // El prefijo de unidad es el ÚNICO lugar donde ':' es legal: no pasa
+        // por bytes_to_os (que lo rechaza como ADS en nombres).
+        let mut drive = drive_prefix_to_os(first)?;
         drive.push(std::path::MAIN_SEPARATOR_STR);
         PathBuf::from(drive)
     } else {
@@ -75,6 +77,17 @@ pub(crate) fn to_native(base: &Path, p: &VPath) -> Result<PathBuf, Error> {
         out.push(bytes_to_os(seg)?);
     }
     Ok(verbatim(out))
+}
+
+/// Prefijo de unidad de Windows (`X:`) desde su segmento. UNC como primer
+/// segmento no está soportado en M0 (deuda: paths `\\\\server\\share`).
+fn drive_prefix_to_os(bytes: &[u8]) -> Result<OsString, Error> {
+    if bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        let s = std::str::from_utf8(bytes).map_err(|_| Error::InvalidPath)?;
+        Ok(OsString::from(s))
+    } else {
+        Err(Error::InvalidPath)
+    }
 }
 
 /// Convierte un path NATIVO absoluto a `VPath` (`file:///…`), byte a byte.
