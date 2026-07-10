@@ -14,8 +14,10 @@ lint: fmt-check
 
 # --no-tests=pass: el esqueleto de fase 1 no tiene tests aún; con código real
 # el gate de cobertura (85%) hace imposible un workspace sin tests que pase CI.
+# nextest no corre doctests: van aparte (los exige la convención de rustdoc).
 test:
     cargo nextest run --workspace --no-tests=pass
+    cargo test --workspace --doc
 
 # Gate de cobertura (mismo umbral que CI): solo crates de lógica (spec §12).
 cov:

@@ -1,5 +1,6 @@
-# CI mínimo (fase 2 de M0): ubuntu + stable, corriendo exactamente `just ci`.
-# La matrix completa {3 OS} × {stable, MSRV} + coverage gate llega en la fase 12.
+# CI completo de M0 (fase 12): lint + tests en {3 OS} × {stable pineada, MSRV}
+# + gate de cobertura (85% en proto/vfs/core) + docs con -D warnings.
+# Todos los jobs corren exactamente las recetas de `just`: humanos y CI iguales.
 name: CI
 
 on:
@@ -11,8 +12,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  ci:
-    name: just ci (ubuntu, stable)
+  lint:
+    name: lint (fmt, clippy, deny)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,5 +21,51 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
-          tool: just,cargo-nextest,cargo-deny,cargo-llvm-cov
-      - run: just ci
+          tool: just,cargo-deny
+      - run: just lint
+
+  test:
+    name: test (${{ matrix.os }}, ${{ matrix.rust }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [pinned, msrv]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Usar MSRV (1.94) en vez de la toolchain pineada
+        if: matrix.rust == 'msrv'
+        shell: bash
+        run: |
+          rustup toolchain install 1.94 --profile minimal
+          echo "RUSTUP_TOOLCHAIN=1.94" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.rust }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-nextest
+      - run: just test
+
+  coverage:
+    name: coverage (gate 85% proto/vfs/core)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-nextest,cargo-llvm-cov
+      - run: just cov
+
+  docs:
+    name: docs (-D warnings)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - run: just docs
