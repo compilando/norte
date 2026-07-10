@@ -17,6 +17,8 @@ tokio-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+bytes.workspace = true
+norte-testkit.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time", "test-util"] }
 
 [lints]

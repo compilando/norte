@@ -33,3 +33,12 @@
 - **proto: ConflictKind para colisión por normalización** (fase 8, B4): en
   macOS una colisión NFD/NFC sale como CaseCollision; variante nueva = cambio
   de wire (golden + bump + ADR) — decidir en M1 con el engine de colisiones.
+- **core: move cross-provider con walk único** (rust-reviewer fase 10, M4):
+  copy y delete walkean por separado; entradas creadas en el origen entre
+  ambos se borran sin copiarse. El journal M3 conduce ambos desde un plan.
+- **vfs: symlinks en el contrato Provider** (fase 10): sin API de crear
+  symlinks; el copy de un symlink es Unsupported en M0. M1: método
+  symlink() + política follow/preserve/skip del engine (spec §17.9).
+- **core: fallback copy+delete si rename da EXDEV** (fase 10): el move
+  same-provider propaga el error de rename; con bind mounts (EXDEV) debería
+  degradar a copy+delete. Necesita ErrorKind::CrossesDevices en map_io.

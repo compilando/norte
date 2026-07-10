@@ -531,6 +531,14 @@ macro_rules! provider_contract {
                         assert!(declared, "copy_native sin declarar SERVER_COPY");
                         res.expect("copia nativa ok");
                         assert_eq!(read_all(&p, &b).await.unwrap(), b"bytes");
+                        // Destino existente: Conflict, jamás sobrescritura
+                        // silenciosa (misma política que write).
+                        match p.copy_native(&a, &b).await {
+                            Some(Err(Error::Conflict { .. })) => {}
+                            other => panic!(
+                                "copy_native sobre destino existente debía dar Conflict, fue {other:?}"
+                            ),
+                        }
                     }
                 }
             }

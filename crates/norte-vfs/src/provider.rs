@@ -111,6 +111,10 @@ pub trait Provider: Send + Sync {
     /// Copia server-side de UN archivo si el backend la ofrece (S3 `CopyObject`,
     /// reflink/clonefile…). `None` = "no sé hacerlo, hazlo por streaming";
     /// solo se consulta si la capability `SERVER_COPY` está declarada.
+    ///
+    /// Si el destino ya existe: [`Error::Conflict`] — MISMA política que
+    /// [`Self::write`]. Un backend cuyo copy nativo sobrescribe por defecto
+    /// (S3 `CopyObject`) DEBE chequear antes; jamás sobrescritura silenciosa.
     async fn copy_native(&self, from: &VPath, to: &VPath) -> Option<Result<(), Error>> {
         let _ = (from, to);
         None
