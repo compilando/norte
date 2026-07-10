@@ -25,7 +25,7 @@ async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
 }
 
 async fn read_all(mem: &MemProvider, wire: &str) -> Result<Vec<u8>, Error> {
-    let mut stream = mem.read(&vp(wire)).await?;
+    let mut stream = mem.read(&vp(wire), None).await?;
     let mut out = Vec::new();
     while let Some(chunk) = stream.next().await {
         out.extend_from_slice(&chunk?);
@@ -490,8 +490,12 @@ impl Provider for SinRename {
     async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, Error> {
         self.0.list(p).await
     }
-    async fn read(&self, p: &VPath) -> Result<norte_vfs::ByteStream, Error> {
-        self.0.read(p).await
+    async fn read(
+        &self,
+        p: &VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> Result<norte_vfs::ByteStream, Error> {
+        self.0.read(p, range).await
     }
     async fn write(&self, p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
         self.0.write(p).await
@@ -555,11 +559,15 @@ impl Provider for InyectaEnRead {
     async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, Error> {
         self.inner.list(p).await
     }
-    async fn read(&self, p: &VPath) -> Result<norte_vfs::ByteStream, Error> {
+    async fn read(
+        &self,
+        p: &VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> Result<norte_vfs::ByteStream, Error> {
         if !self.hecho.swap(true, std::sync::atomic::Ordering::SeqCst) {
             write_file(&self.inner, "src:///dir/tardio", b"llegue tras el walk").await;
         }
-        self.inner.read(p).await
+        self.inner.read(p, range).await
     }
     async fn write(&self, p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
         self.inner.write(p).await
@@ -651,4 +659,558 @@ async fn move_by_copy_cancel_mid_delete_loses_nothing() {
         };
         assert_eq!(contenido, b"data", "{name} a medias");
     }
+}
+
+// ---------- fase 2: políticas de colisión, symlinks y reintentos (ADR 0005) ----------
+
+use norte_core::TransferOptions;
+use norte_proto::{CollisionPolicy, SymlinkPolicy};
+
+fn on_collision(c: CollisionPolicy) -> TransferOptions {
+    TransferOptions {
+        on_collision: c,
+        ..Default::default()
+    }
+}
+
+fn on_symlinks(s: SymlinkPolicy) -> TransferOptions {
+    TransferOptions {
+        symlinks: s,
+        ..Default::default()
+    }
+}
+
+/// Wrapper de delegación pura con scheme propio: dos "providers" distintos
+/// sobre árboles Mem independientes para forzar el camino cross-provider.
+struct Alias(Arc<MemProvider>);
+
+#[async_trait::async_trait]
+impl Provider for Alias {
+    // La firma del trait es `-> &str`; el literal aquí es correcto.
+    #[allow(clippy::unnecessary_literal_bound)]
+    fn scheme(&self) -> &str {
+        "src"
+    }
+    fn capabilities(&self) -> norte_proto::Capabilities {
+        self.0.capabilities()
+    }
+    async fn stat(&self, p: &VPath) -> Result<norte_proto::Entry, Error> {
+        self.0.stat(p).await
+    }
+    async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, Error> {
+        self.0.list(p).await
+    }
+    async fn read(
+        &self,
+        p: &VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> Result<norte_vfs::ByteStream, Error> {
+        self.0.read(p, range).await
+    }
+    async fn write(&self, p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
+        self.0.write(p).await
+    }
+    async fn mkdir(&self, p: &VPath) -> Result<(), Error> {
+        self.0.mkdir(p).await
+    }
+    async fn remove(&self, p: &VPath) -> Result<(), Error> {
+        self.0.remove(p).await
+    }
+    async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), Error> {
+        self.0.rename(from, to).await
+    }
+    async fn read_link(&self, p: &VPath) -> Result<Vec<u8>, Error> {
+        self.0.read_link(p).await
+    }
+    async fn symlink(
+        &self,
+        link: &VPath,
+        target: &[u8],
+        kind: norte_vfs::SymlinkKind,
+    ) -> Result<(), Error> {
+        self.0.symlink(link, target, kind).await
+    }
+}
+
+/// Dos árboles Mem con schemes distintos, registrados en un engine.
+fn engine_cross() -> (Engine, Arc<MemProvider>, Arc<MemProvider>) {
+    let engine = Engine::new();
+    let src = Arc::new(MemProvider::new());
+    let dst = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::new(Alias(Arc::clone(&src))) as Arc<dyn Provider>);
+    engine.register_provider(Arc::clone(&dst) as Arc<dyn Provider>);
+    (engine, src, dst)
+}
+
+#[tokio::test]
+async fn copy_skip_merges_and_keeps_existing() {
+    let (engine, mem) = engine_with_mem();
+    mem.mkdir(&vp("mem:///src")).await.unwrap();
+    write_file(&mem, "mem:///src/a", b"nuevo").await;
+    write_file(&mem, "mem:///src/b", b"extra").await;
+    mem.mkdir(&vp("mem:///dst")).await.unwrap();
+    write_file(&mem, "mem:///dst/a", b"viejo").await;
+
+    let handle = engine
+        .copy_with(
+            &vp("mem:///src"),
+            &vp("mem:///dst"),
+            on_collision(CollisionPolicy::Skip),
+        )
+        .unwrap();
+    assert_eq!(handle.join().await, TaskState::Completed);
+    assert_eq!(read_all(&mem, "mem:///dst/a").await.unwrap(), b"viejo");
+    assert_eq!(read_all(&mem, "mem:///dst/b").await.unwrap(), b"extra");
+}
+
+#[tokio::test]
+async fn copy_overwrite_replaces_colliding_file() {
+    let (engine, mem) = engine_with_mem();
+    mem.mkdir(&vp("mem:///src")).await.unwrap();
+    write_file(&mem, "mem:///src/a", b"nuevo").await;
+    mem.mkdir(&vp("mem:///dst")).await.unwrap();
+    write_file(&mem, "mem:///dst/a", b"viejo").await;
+
+    let handle = engine
+        .copy_with(
+            &vp("mem:///src"),
+            &vp("mem:///dst"),
+            on_collision(CollisionPolicy::Overwrite),
+        )
+        .unwrap();
+    assert_eq!(handle.join().await, TaskState::Completed);
+    assert_eq!(read_all(&mem, "mem:///dst/a").await.unwrap(), b"nuevo");
+}
+
+#[tokio::test]
+async fn copy_overwrite_file_over_dir_is_type_mismatch() {
+    let (engine, mem) = engine_with_mem();
+    write_file(&mem, "mem:///a", b"archivo").await;
+    mem.mkdir(&vp("mem:///dst")).await.unwrap();
+    mem.mkdir(&vp("mem:///dst/a")).await.unwrap();
+
+    let handle = engine
+        .copy_with(
+            &vp("mem:///a"),
+            &vp("mem:///dst/a"),
+            on_collision(CollisionPolicy::Overwrite),
+        )
+        .unwrap();
+    match handle.join().await {
+        TaskState::Failed {
+            error:
+                Error::Conflict {
+                    conflict: ConflictKind::TypeMismatch,
+                },
+        } => {}
+        other => panic!("esperaba TypeMismatch, fue {other:?}"),
+    }
+    // El dir sobrevive: jamás se borra un dir para plantar un archivo.
+    assert!(mem.stat(&vp("mem:///dst/a")).await.is_ok());
+}
+
+#[tokio::test]
+async fn copy_rename_auto_creates_numbered_variant() {
+    let (engine, mem) = engine_with_mem();
+    write_file(&mem, "mem:///origen.txt", b"v2").await;
+    write_file(&mem, "mem:///destino.txt", b"v1").await;
+
+    for esperado in ["mem:///destino (1).txt", "mem:///destino (2).txt"] {
+        let handle = engine
+            .copy_with(
+                &vp("mem:///origen.txt"),
+                &vp("mem:///destino.txt"),
+                on_collision(CollisionPolicy::RenameAuto),
+            )
+            .unwrap();
+        assert_eq!(handle.join().await, TaskState::Completed);
+        assert_eq!(read_all(&mem, esperado).await.unwrap(), b"v2");
+    }
+    assert_eq!(
+        read_all(&mem, "mem:///destino.txt").await.unwrap(),
+        b"v1",
+        "el original jamás se toca"
+    );
+}
+
+#[tokio::test]
+async fn copy_newer_replaces_only_older_destination() {
+    // Caso A: el origen es MÁS NUEVO (se escribió después) → reemplaza.
+    let (engine, mem) = engine_with_mem();
+    write_file(&mem, "mem:///dst-viejo", b"v1").await;
+    write_file(&mem, "mem:///src-nuevo", b"v2").await;
+    let handle = engine
+        .copy_with(
+            &vp("mem:///src-nuevo"),
+            &vp("mem:///dst-viejo"),
+            on_collision(CollisionPolicy::Newer),
+        )
+        .unwrap();
+    assert_eq!(handle.join().await, TaskState::Completed);
+    assert_eq!(read_all(&mem, "mem:///dst-viejo").await.unwrap(), b"v2");
+
+    // Caso B: el destino es más nuevo → skip, contenido intacto.
+    let (engine, mem) = engine_with_mem();
+    write_file(&mem, "mem:///src-viejo", b"v1").await;
+    write_file(&mem, "mem:///dst-nuevo", b"v2").await;
+    let handle = engine
+        .copy_with(
+            &vp("mem:///src-viejo"),
+            &vp("mem:///dst-nuevo"),
+            on_collision(CollisionPolicy::Newer),
+        )
+        .unwrap();
+    assert_eq!(handle.join().await, TaskState::Completed);
+    assert_eq!(read_all(&mem, "mem:///dst-nuevo").await.unwrap(), b"v2");
+}
+
+#[tokio::test]
+async fn copy_ask_behaves_as_fail_in_m1() {
+    let (engine, mem) = engine_with_mem();
+    write_file(&mem, "mem:///a", b"1").await;
+    write_file(&mem, "mem:///b", b"2").await;
+    let handle = engine
+        .copy_with(
+            &vp("mem:///a"),
+            &vp("mem:///b"),
+            on_collision(CollisionPolicy::Ask),
+        )
+        .unwrap();
+    match handle.join().await {
+        TaskState::Failed {
+            error: Error::Conflict { .. },
+        } => {}
+        other => panic!("esperaba Conflict, fue {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn symlink_preserve_recreates_link_bytes() {
+    let (engine, mem) = engine_with_mem();
+    mem.mkdir(&vp("mem:///src")).await.unwrap();
+    write_file(&mem, "mem:///src/f", b"contenido").await;
+    mem.symlink(&vp("mem:///src/ln"), b"f", norte_vfs::SymlinkKind::File)
+        .await
+        .unwrap();
+
+    let handle = engine.copy(&vp("mem:///src"), &vp("mem:///dst")).unwrap();
+    assert_eq!(
+        handle.join().await,
+        TaskState::Completed,
+        "default Preserve"
+    );
+    assert_eq!(
+        mem.read_link(&vp("mem:///dst/ln")).await.unwrap(),
+        b"f",
+        "bytes del target intactos"
+    );
+    assert_eq!(read_all(&mem, "mem:///dst/f").await.unwrap(), b"contenido");
+}
+
+#[tokio::test]
+async fn symlink_skip_copies_the_rest() {
+    let (engine, mem) = engine_with_mem();
+    mem.mkdir(&vp("mem:///src")).await.unwrap();
+    write_file(&mem, "mem:///src/f", b"contenido").await;
+    mem.symlink(&vp("mem:///src/ln"), b"f", norte_vfs::SymlinkKind::File)
+        .await
+        .unwrap();
+
+    let handle = engine
+        .copy_with(
+            &vp("mem:///src"),
+            &vp("mem:///dst"),
+            on_symlinks(SymlinkPolicy::Skip),
+        )
+        .unwrap();
+    assert_eq!(handle.join().await, TaskState::Completed);
+    assert_eq!(read_all(&mem, "mem:///dst/f").await.unwrap(), b"contenido");
+    assert_eq!(
+        mem.stat(&vp("mem:///dst/ln")).await.unwrap_err(),
+        Error::NotFound,
+        "el link no se copia"
+    );
+}
+
+#[tokio::test]
+async fn symlink_follow_copies_target_content_as_file() {
+    let (engine, mem) = engine_with_mem();
+    mem.mkdir(&vp("mem:///src")).await.unwrap();
+    write_file(&mem, "mem:///src/f", b"contenido").await;
+    mem.symlink(&vp("mem:///src/ln"), b"f", norte_vfs::SymlinkKind::File)
+        .await
+        .unwrap();
+
+    let handle = engine
+        .copy_with(
+            &vp("mem:///src"),
+            &vp("mem:///dst"),
+            on_symlinks(SymlinkPolicy::Follow),
+        )
+        .unwrap();
+    assert_eq!(handle.join().await, TaskState::Completed);
+    let e = mem.stat(&vp("mem:///dst/ln")).await.unwrap();
+    assert_eq!(e.kind, norte_proto::EntryKind::File, "contenido, no link");
+    assert_eq!(read_all(&mem, "mem:///dst/ln").await.unwrap(), b"contenido");
+}
+
+#[tokio::test]
+async fn symlink_follow_dir_symlink_is_unsupported() {
+    let (engine, mem) = engine_with_mem();
+    mem.mkdir(&vp("mem:///src")).await.unwrap();
+    mem.mkdir(&vp("mem:///src/sub")).await.unwrap();
+    mem.symlink(&vp("mem:///src/ln"), b"sub", norte_vfs::SymlinkKind::Dir)
+        .await
+        .unwrap();
+
+    let handle = engine
+        .copy_with(
+            &vp("mem:///src"),
+            &vp("mem:///dst"),
+            on_symlinks(SymlinkPolicy::Follow),
+        )
+        .unwrap();
+    assert_eq!(
+        handle.join().await,
+        TaskState::Failed {
+            error: Error::Unsupported
+        },
+        "seguir dir-symlinks exige detección de ciclos (M2)"
+    );
+}
+
+#[tokio::test]
+async fn move_skip_keeps_skipped_in_source() {
+    let (engine, src, dst) = engine_cross();
+    src.mkdir(&vp("src:///dir")).await.unwrap();
+    write_file(&src, "src:///dir/a", b"colisiona").await;
+    write_file(&src, "src:///dir/b", b"pasa").await;
+    dst.mkdir(&vp("mem:///dir")).await.unwrap();
+    write_file(&dst, "mem:///dir/a", b"viejo").await;
+
+    let handle = engine
+        .move_with(
+            &vp("src:///dir"),
+            &vp("mem:///dir"),
+            on_collision(CollisionPolicy::Skip),
+        )
+        .unwrap();
+    assert_eq!(handle.join().await, TaskState::Completed);
+    // Lo saltado SIGUE en el origen (jamás se borra sin copiarse).
+    assert_eq!(read_all(&src, "src:///dir/a").await.unwrap(), b"colisiona");
+    // Lo movido se fue del origen y está en el destino.
+    assert_eq!(
+        src.stat(&vp("src:///dir/b")).await.unwrap_err(),
+        Error::NotFound
+    );
+    assert_eq!(read_all(&dst, "mem:///dir/b").await.unwrap(), b"pasa");
+    assert_eq!(read_all(&dst, "mem:///dir/a").await.unwrap(), b"viejo");
+}
+
+#[tokio::test]
+async fn move_overwrite_same_provider_replaces() {
+    let (engine, mem) = engine_with_mem();
+    write_file(&mem, "mem:///a", b"nuevo").await;
+    write_file(&mem, "mem:///b", b"viejo").await;
+    let handle = engine
+        .move_with(
+            &vp("mem:///a"),
+            &vp("mem:///b"),
+            on_collision(CollisionPolicy::Overwrite),
+        )
+        .unwrap();
+    assert_eq!(handle.join().await, TaskState::Completed);
+    assert_eq!(read_all(&mem, "mem:///b").await.unwrap(), b"nuevo");
+    assert_eq!(
+        mem.stat(&vp("mem:///a")).await.unwrap_err(),
+        Error::NotFound
+    );
+}
+
+// ---------- reintentos con backoff (ADR 0005) ----------
+
+#[tokio::test]
+async fn retry_recovers_from_transient_unavailability() {
+    let (engine, mem) = engine_with_mem();
+    write_file(&mem, "mem:///src.bin", b"datos").await;
+    mem.faults().unavailable_for_next(2);
+
+    let handle = engine
+        .copy(&vp("mem:///src.bin"), &vp("mem:///dst.bin"))
+        .unwrap();
+    assert_eq!(
+        handle.join().await,
+        TaskState::Completed,
+        "reintenta y pasa"
+    );
+    assert_eq!(read_all(&mem, "mem:///dst.bin").await.unwrap(), b"datos");
+}
+
+#[tokio::test]
+async fn retry_gives_up_against_permanent_outage() {
+    let (engine, mem) = engine_with_mem();
+    write_file(&mem, "mem:///src.bin", b"datos").await;
+    mem.faults().disconnect_after(0);
+
+    let handle = engine
+        .copy(&vp("mem:///src.bin"), &vp("mem:///dst.bin"))
+        .unwrap();
+    match handle.join().await {
+        TaskState::Failed {
+            error: Error::ProviderUnavailable { .. },
+        } => {}
+        other => panic!("esperaba ProviderUnavailable, fue {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn cancel_during_backoff_is_prompt() {
+    let (engine, mem) = engine_with_mem();
+    write_file(&mem, "mem:///src.bin", b"datos").await;
+    mem.faults().unavailable_for_next(u64::MAX);
+
+    let inicio = std::time::Instant::now();
+    let handle = engine
+        .copy(&vp("mem:///src.bin"), &vp("mem:///dst.bin"))
+        .unwrap();
+    // Deja a la task entrar en la espera del backoff y cancela.
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    handle.cancel();
+    assert_eq!(handle.join().await, TaskState::Cancelled);
+    assert!(
+        inicio.elapsed() < std::time::Duration::from_millis(500),
+        "la cancelación no espera a que el backoff termine"
+    );
+}
+
+// ---------- hallazgos de revisión fase 2 ----------
+
+/// B1: copiar algo SOBRE SÍ MISMO con Overwrite jamás puede destruir el
+/// origen — es `InvalidPath`, con el contenido intacto.
+#[tokio::test]
+async fn copy_overwrite_onto_itself_never_destroys() {
+    let (engine, mem) = engine_with_mem();
+    write_file(&mem, "mem:///unico", b"precioso").await;
+    let handle = engine
+        .copy_with(
+            &vp("mem:///unico"),
+            &vp("mem:///unico"),
+            on_collision(CollisionPolicy::Overwrite),
+        )
+        .unwrap();
+    assert_eq!(
+        handle.join().await,
+        TaskState::Failed {
+            error: Error::InvalidPath
+        }
+    );
+    assert_eq!(read_all(&mem, "mem:///unico").await.unwrap(), b"precioso");
+}
+
+/// B1 variante caja: en provider case-insensitive, `a → A` es el MISMO nodo.
+#[tokio::test]
+async fn copy_overwrite_case_variant_of_itself_never_destroys() {
+    let engine = Engine::new();
+    let mem = Arc::new(MemProvider::with_flags(
+        CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::CASE_PRESERVING,
+    ));
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    write_file(&mem, "mem:///unico", b"precioso").await;
+    let handle = engine
+        .copy_with(
+            &vp("mem:///UNICO"),
+            &vp("mem:///unico"),
+            on_collision(CollisionPolicy::Overwrite),
+        )
+        .unwrap();
+    let state = handle.join().await;
+    assert!(
+        matches!(state, TaskState::Failed { .. }),
+        "copiarse sobre sí mismo no puede 'funcionar': {state:?}"
+    );
+    assert_eq!(read_all(&mem, "mem:///unico").await.unwrap(), b"precioso");
+}
+
+/// B1 variante normalización: NFC → NFD del mismo nodo en Mem insensitive.
+#[tokio::test]
+async fn copy_overwrite_normalization_variant_never_destroys() {
+    use norte_testkit::Normalization;
+    let engine = Engine::new();
+    let mem = Arc::new(MemProvider::new().with_normalization(Normalization::Insensitive));
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    // é NFC
+    let nfc = "mem:///%C3%A9";
+    let nfd = "mem:///e%CC%81";
+    write_file(&mem, nfc, b"precioso").await;
+    let handle = engine
+        .copy_with(&vp(nfc), &vp(nfd), on_collision(CollisionPolicy::Overwrite))
+        .unwrap();
+    let state = handle.join().await;
+    assert!(
+        matches!(state, TaskState::Failed { .. }),
+        "variante de normalización del propio origen: {state:?}"
+    );
+    assert_eq!(read_all(&mem, nfc).await.unwrap(), b"precioso");
+}
+
+/// M1: move same-provider de un DIR sobre un ARCHIVO con Overwrite es
+/// `TypeMismatch` — jamás se borra el archivo para plantar el dir.
+#[tokio::test]
+async fn move_overwrite_dir_over_file_is_type_mismatch() {
+    let (engine, mem) = engine_with_mem();
+    mem.mkdir(&vp("mem:///carpeta")).await.unwrap();
+    write_file(&mem, "mem:///ocupado", b"archivo").await;
+    let handle = engine
+        .move_with(
+            &vp("mem:///carpeta"),
+            &vp("mem:///ocupado"),
+            on_collision(CollisionPolicy::Overwrite),
+        )
+        .unwrap();
+    match handle.join().await {
+        TaskState::Failed {
+            error:
+                Error::Conflict {
+                    conflict: ConflictKind::TypeMismatch,
+                },
+        } => {}
+        other => panic!("esperaba TypeMismatch, fue {other:?}"),
+    }
+    assert_eq!(read_all(&mem, "mem:///ocupado").await.unwrap(), b"archivo");
+}
+
+/// M2: Follow + Overwrite sobre un dir-symlink NO destruye el destino:
+/// el sondeo del target ocurre ANTES de cualquier acción destructiva.
+#[tokio::test]
+async fn follow_dir_symlink_with_overwrite_leaves_destination_intact() {
+    let (engine, mem) = engine_with_mem();
+    mem.mkdir(&vp("mem:///src")).await.unwrap();
+    mem.mkdir(&vp("mem:///src/sub")).await.unwrap();
+    mem.symlink(&vp("mem:///src/ln"), b"sub", norte_vfs::SymlinkKind::Dir)
+        .await
+        .unwrap();
+    mem.mkdir(&vp("mem:///dst")).await.unwrap();
+    write_file(&mem, "mem:///dst/ln", b"no me borres").await;
+
+    let handle = engine
+        .copy_with(
+            &vp("mem:///src"),
+            &vp("mem:///dst"),
+            TransferOptions {
+                on_collision: CollisionPolicy::Overwrite,
+                symlinks: SymlinkPolicy::Follow,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        handle.join().await,
+        TaskState::Failed {
+            error: Error::Unsupported
+        }
+    );
+    assert_eq!(
+        read_all(&mem, "mem:///dst/ln").await.unwrap(),
+        b"no me borres",
+        "el fallo era 100% predecible: el destino no se toca"
+    );
 }

@@ -71,7 +71,15 @@ macro_rules! provider_contract {
             }
 
             async fn read_all<P: Provider>(p: &P, path: &VPath) -> Result<Vec<u8>, Error> {
-                let mut stream = p.read(path).await?;
+                read_all_range(p, path, None).await
+            }
+
+            async fn read_all_range<P: Provider>(
+                p: &P,
+                path: &VPath,
+                range: Option<$crate::__private::norte_proto::ByteRange>,
+            ) -> Result<Vec<u8>, Error> {
+                let mut stream = p.read(path, range).await?;
                 let mut out = Vec::new();
                 while let Some(chunk) = stream.next().await {
                     out.extend_from_slice(&chunk?);
@@ -209,6 +217,136 @@ macro_rules! provider_contract {
                     read_all(&p, &child(&root, b"nada")).await.unwrap_err(),
                     Error::NotFound
                 );
+            }
+
+            #[tokio::test]
+            async fn contract_read_range_slices_exactly() {
+                use $crate::__private::norte_proto::ByteRange;
+                let p = $factory;
+                let root: VPath = $root;
+                let f = child(&root, b"rango.bin");
+                write_all(&p, &f, b"0123456789").await;
+
+                let mid = ByteRange { offset: 2, len: Some(3) };
+                assert_eq!(
+                    read_all_range(&p, &f, Some(mid)).await.expect("rango medio"),
+                    b"234"
+                );
+                let cola = ByteRange { offset: 8, len: None };
+                assert_eq!(
+                    read_all_range(&p, &f, Some(cola)).await.expect("hasta EOF"),
+                    b"89"
+                );
+                let pasado = ByteRange { offset: 100, len: Some(4) };
+                assert_eq!(
+                    read_all_range(&p, &f, Some(pasado)).await.expect("pread past-EOF"),
+                    b"",
+                    "offset más allá de EOF = stream vacío, no error"
+                );
+                let sobra = ByteRange { offset: 7, len: Some(100) };
+                assert_eq!(
+                    read_all_range(&p, &f, Some(sobra)).await.expect("len recortado a EOF"),
+                    b"789"
+                );
+            }
+
+            #[tokio::test]
+            async fn contract_symlink_roundtrip_bytes() {
+                use $crate::SymlinkKind;
+                let p = $factory;
+                require_caps!(p, has: CapabilityFlags::SYMLINKS);
+                let root: VPath = $root;
+                let link = child(&root, b"enlace");
+                // Target relativo con bytes arbitrarios: JAMAS se interpreta.
+                let target: &[u8] = b"destino-que-no-existe";
+                p.symlink(&link, target, SymlinkKind::File)
+                    .await
+                    .expect("symlink crea");
+                assert_eq!(
+                    p.read_link(&link).await.expect("read_link"),
+                    target,
+                    "bytes del target intactos"
+                );
+                let e = p.stat(&link).await.expect("stat del link");
+                assert_eq!(e.kind, EntryKind::Symlink, "describe el LINK");
+            }
+
+            /// Targets hostiles: la garantía central es que los BYTES del
+            /// target viajan intactos, jamás interpretados ni decodificados.
+            /// Viven inline (no en names.json): un target NO es un Segment —
+            /// admite `/`, `\`, `..`, absolutos y no-UTF8.
+            #[tokio::test]
+            async fn contract_symlink_hostile_targets_roundtrip() {
+                use $crate::SymlinkKind;
+                let p = $factory;
+                require_caps!(p, has: CapabilityFlags::SYMLINKS);
+                let root: VPath = $root;
+                let hostiles: &[(&str, &[u8])] = &[
+                    ("latin1", b"caf\xE9"),
+                    ("relative_deep", b"sub/dir/f"),
+                    ("absolute", b"/etc/hostname"),
+                    ("dotdot", b"../fuera"),
+                    ("windows_style", b"C:\\Users\\x"),
+                    ("lone_surrogate", &[0xED, 0xA0, 0x80]),
+                    ("not_wtf8", &[0xFF, 0xFE]),
+                ];
+                for (i, (id, target)) in hostiles.iter().enumerate() {
+                    let link = child(&root, format!("ln{i}").as_bytes());
+                    match p.symlink(&link, target, SymlinkKind::File).await {
+                        Ok(()) => {
+                            assert_eq!(
+                                p.read_link(&link).await.expect("read_link"),
+                                *target,
+                                "bytes del target intactos: {id}"
+                            );
+                        }
+                        // El OS puede rechazar el target (Windows exige
+                        // WTF-8): rechazo LIMPIO, jamás lossy ni panic.
+                        Err(Error::InvalidPath) => {
+                            eprintln!("skip target {id}: rechazo limpio del OS");
+                        }
+                        Err(e) => panic!("symlink con target {id}: {e:?}"),
+                    }
+                }
+            }
+
+            #[tokio::test]
+            async fn contract_symlink_over_existing_is_conflict() {
+                use $crate::SymlinkKind;
+                let p = $factory;
+                require_caps!(p, has: CapabilityFlags::SYMLINKS);
+                let root: VPath = $root;
+                let f = child(&root, b"ocupado");
+                write_all(&p, &f, b"x").await;
+                match p.symlink(&f, b"target", SymlinkKind::File).await {
+                    Err(Error::Conflict { .. }) => {}
+                    other => panic!("esperaba Conflict, fue {other:?}"),
+                }
+                assert_eq!(read_all(&p, &f).await.expect("intacto"), b"x");
+            }
+
+            #[tokio::test]
+            async fn contract_read_link_errors() {
+                let p = $factory;
+                let root: VPath = $root;
+                // Inexistente: NotFound (o Unsupported si el provider no
+                // sabe de symlinks en absoluto).
+                match p.read_link(&child(&root, b"no-existe")).await {
+                    Err(Error::NotFound | Error::Unsupported) => {}
+                    other => panic!("esperaba NotFound/Unsupported, fue {other:?}"),
+                }
+                // Archivo normal: TypeMismatch (o Unsupported).
+                let f = child(&root, b"normal");
+                write_all(&p, &f, b"x").await;
+                match p.read_link(&f).await {
+                    Err(
+                        Error::Conflict {
+                            conflict: ConflictKind::TypeMismatch,
+                        }
+                        | Error::Unsupported,
+                    ) => {}
+                    other => panic!("esperaba TypeMismatch/Unsupported, fue {other:?}"),
+                }
             }
 
             #[tokio::test]

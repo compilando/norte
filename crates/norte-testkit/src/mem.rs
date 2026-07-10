@@ -23,6 +23,7 @@ const READ_CHUNK: usize = 1024;
 enum Node {
     File { content: Vec<u8>, mtime: i64 },
     Dir { mtime: i64 },
+    Symlink { target: Vec<u8>, mtime: i64 },
 }
 
 #[derive(Debug, Default)]
@@ -65,8 +66,32 @@ impl Tree {
 /// ```
 pub struct MemProvider {
     caps: Capabilities,
+    norm: Normalization,
     tree: Arc<Mutex<Tree>>,
     faults: Arc<Faults>,
+}
+
+/// Eje de normalización Unicode del FS simulado (issue #7).
+///
+/// Límite documentado: con caja Y normalización insensibles a la vez, un
+/// nombre que difiera en AMBAS cosas no se pliega (los ejes se evalúan por
+/// separado; APFS real los combina). Suficiente para el testkit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Normalization {
+    /// Bytes tal cual (ext4): NFC y NFD son nombres DISTINTOS.
+    #[default]
+    ByteExact,
+    /// Insensible preservando bytes (APFS): NFC y NFD resuelven al mismo
+    /// nodo; la colisión solo-por-normalización se etiqueta
+    /// [`ConflictKind::Normalization`].
+    Insensitive,
+}
+
+/// Config de resolución de nombres: los dos ejes juntos.
+#[derive(Debug, Clone, Copy)]
+struct Lookup {
+    case_sensitive: bool,
+    norm_insensitive: bool,
 }
 
 impl MemProvider {
@@ -77,7 +102,8 @@ impl MemProvider {
         Self::with_flags(
             CapabilityFlags::RENAME_ATOMIC
                 | CapabilityFlags::CASE_SENSITIVE
-                | CapabilityFlags::CASE_PRESERVING,
+                | CapabilityFlags::CASE_PRESERVING
+                | CapabilityFlags::SYMLINKS,
         )
     }
 
@@ -91,9 +117,23 @@ impl MemProvider {
                 flags,
                 max_path: None,
             },
+            norm: Normalization::default(),
             tree: Arc::new(Mutex::new(Tree::default())),
             faults: Arc::new(Faults::default()),
         }
+    }
+
+    /// Fija el eje de normalización (default: [`Normalization::ByteExact`]).
+    ///
+    /// ```
+    /// use norte_testkit::{MemProvider, Normalization};
+    /// let apfs = MemProvider::new().with_normalization(Normalization::Insensitive);
+    /// let _ = apfs;
+    /// ```
+    #[must_use]
+    pub fn with_normalization(mut self, norm: Normalization) -> Self {
+        self.norm = norm;
+        self
     }
 
     /// Handle de inyección de fallos (compartible con el test mientras el
@@ -112,8 +152,11 @@ impl MemProvider {
         VPath::root(Scheme::new("mem").expect("scheme constante válido"), None)
     }
 
-    fn case_sensitive(&self) -> bool {
-        self.caps.flags.contains(CapabilityFlags::CASE_SENSITIVE)
+    fn lookup(&self) -> Lookup {
+        Lookup {
+            case_sensitive: self.caps.flags.contains(CapabilityFlags::CASE_SENSITIVE),
+            norm_insensitive: self.norm == Normalization::Insensitive,
+        }
     }
 
     fn lock(&self) -> MutexGuard<'_, Tree> {
@@ -133,14 +176,31 @@ fn fold_eq_path(a: &SegPath, b: &SegPath) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.eq_ignore_ascii_case(y))
 }
 
-/// Resuelve `key` contra el árbol según la sensibilidad a la caja.
-/// Devuelve la clave REAL almacenada (puede diferir en caja).
-fn resolve(tree: &Tree, case_sensitive: bool, key: &SegPath) -> Option<SegPath> {
+/// ¿Misma forma NFC segmento a segmento? Solo si ambos son UTF-8 válido.
+fn nfc_eq_path(a: &SegPath, b: &SegPath) -> bool {
+    use unicode_normalization::UnicodeNormalization;
+    a.len() == b.len()
+        && a.iter().zip(b).all(
+            |(x, y)| match (std::str::from_utf8(x), std::str::from_utf8(y)) {
+                (Ok(x), Ok(y)) => x.nfc().eq(y.nfc()),
+                _ => x == y,
+            },
+        )
+}
+
+/// Resuelve `key` contra el árbol según los ejes de caja y normalización.
+/// Devuelve la clave REAL almacenada (puede diferir en caja o en forma).
+fn resolve(tree: &Tree, lk: Lookup, key: &SegPath) -> Option<SegPath> {
     if tree.nodes.contains_key(key) {
         return Some(key.clone());
     }
-    if !case_sensitive {
-        return tree.nodes.keys().find(|k| fold_eq_path(k, key)).cloned();
+    if !lk.case_sensitive
+        && let Some(k) = tree.nodes.keys().find(|k| fold_eq_path(k, key))
+    {
+        return Some(k.clone());
+    }
+    if lk.norm_insensitive {
+        return tree.nodes.keys().find(|k| nfc_eq_path(k, key)).cloned();
     }
     None
 }
@@ -151,7 +211,7 @@ fn resolve(tree: &Tree, case_sensitive: bool, key: &SegPath) -> Option<SegPath> 
 /// huérfanos invisibles para `list` — imposible en un FS real.
 ///
 /// `None` si algún ancestro falta o no es Dir.
-fn canonical_key(tree: &Tree, case_sensitive: bool, key: &SegPath) -> Option<SegPath> {
+fn canonical_key(tree: &Tree, lk: Lookup, key: &SegPath) -> Option<SegPath> {
     let mut canon: SegPath = Vec::with_capacity(key.len());
     for (i, seg) in key.iter().enumerate() {
         if i == key.len() - 1 {
@@ -159,7 +219,7 @@ fn canonical_key(tree: &Tree, case_sensitive: bool, key: &SegPath) -> Option<Seg
         } else {
             let mut probe = canon.clone();
             probe.push(seg.clone());
-            let real = resolve(tree, case_sensitive, &probe)?;
+            let real = resolve(tree, lk, &probe)?;
             if !matches!(tree.nodes.get(&real), Some(Node::Dir { .. })) {
                 return None;
             }
@@ -169,10 +229,33 @@ fn canonical_key(tree: &Tree, case_sensitive: bool, key: &SegPath) -> Option<Seg
     Some(canon)
 }
 
-/// Clasifica una colisión: byte-exacta = `Exists`, solo-por-fold = `CaseCollision`.
+/// Resolución mínima de un symlink de Mem: `target` relativo al PADRE del
+/// link, segmentos separados por `/`. Sin `..`, sin absolutos, y las CADENAS
+/// symlink→symlink dan `NotFound` (un FS real las seguiría): con eso basta
+/// para el testkit — los targets exóticos se testean en el provider real.
+fn resolve_symlink(
+    tree: &Tree,
+    lk: Lookup,
+    link: &SegPath,
+    target: &[u8],
+) -> Result<SegPath, Error> {
+    if target.starts_with(b"/") || target.split(|b| *b == b'/').any(|s| s == b"..") {
+        return Err(Error::Unsupported);
+    }
+    let mut key: SegPath = link[..link.len() - 1].to_vec();
+    for seg in target.split(|b| *b == b'/').filter(|s| !s.is_empty()) {
+        key.push(seg.to_vec());
+    }
+    resolve(tree, lk, &key).ok_or(Error::NotFound)
+}
+
+/// Clasifica una colisión: byte-exacta = `Exists`; misma forma NFC =
+/// `Normalization` (issue #8); si no, variante de caja = `CaseCollision`.
 fn collision_kind(real: &SegPath, requested: &SegPath) -> ConflictKind {
     if real == requested {
         ConflictKind::Exists
+    } else if nfc_eq_path(real, requested) {
+        ConflictKind::Normalization
     } else {
         ConflictKind::CaseCollision
     }
@@ -205,6 +288,12 @@ fn entry_for(base: &VPath, key: &SegPath, node: &Node) -> Entry {
             size: None,
             mtime_ms: Some(*mtime),
         },
+        Node::Symlink { mtime, .. } => Entry {
+            path: p,
+            kind: EntryKind::Symlink,
+            size: None,
+            mtime_ms: Some(*mtime),
+        },
     }
 }
 
@@ -223,7 +312,7 @@ impl Provider for MemProvider {
     async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
         self.faults.op_gate().await?;
         let key = seg_path(p);
-        let cs = self.case_sensitive();
+        let lk = self.lookup();
         let tree = self.lock();
         if key.is_empty() {
             return Ok(Entry {
@@ -233,7 +322,7 @@ impl Provider for MemProvider {
                 mtime_ms: Some(0),
             });
         }
-        let real = resolve(&tree, cs, &key).ok_or(Error::NotFound)?;
+        let real = resolve(&tree, lk, &key).ok_or(Error::NotFound)?;
         let node = tree.nodes.get(&real).ok_or(Error::NotFound)?;
         Ok(entry_for(p, &real, node))
     }
@@ -241,14 +330,14 @@ impl Provider for MemProvider {
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
         self.faults.op_gate().await?;
         let key = seg_path(p);
-        let cs = self.case_sensitive();
+        let lk = self.lookup();
         let tree = self.lock();
         // El filtro de hijos usa la clave REAL: listar con otra caja debe
         // ver lo mismo que stat (coherencia con el FS simulado).
         let real = if key.is_empty() {
             key
         } else {
-            let real = resolve(&tree, cs, &key).ok_or(Error::NotFound)?;
+            let real = resolve(&tree, lk, &key).ok_or(Error::NotFound)?;
             if !matches!(tree.nodes.get(&real), Some(Node::Dir { .. })) {
                 return Err(Error::Conflict {
                     conflict: ConflictKind::TypeMismatch,
@@ -265,14 +354,33 @@ impl Provider for MemProvider {
         Ok(futures::stream::iter(entries).boxed())
     }
 
-    async fn read(&self, p: &VPath) -> Result<ByteStream, Error> {
+    async fn read(
+        &self,
+        p: &VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> Result<ByteStream, Error> {
         self.faults.op_gate().await?;
         let key = seg_path(p);
-        let cs = self.case_sensitive();
+        let lk = self.lookup();
         let tree = self.lock();
-        let real = resolve(&tree, cs, &key).ok_or(Error::NotFound)?;
+        let real = resolve(&tree, lk, &key).ok_or(Error::NotFound)?;
         let content = match tree.nodes.get(&real) {
             Some(Node::File { content, .. }) => content.clone(),
+            // Como un FS real: read() SIGUE el symlink. Resolución mínima
+            // (target relativo al padre del link, separado por '/', sin
+            // `..`): suficiente para testear la política Follow del engine.
+            Some(Node::Symlink { target, .. }) => {
+                let resolved = resolve_symlink(&tree, lk, &real, target)?;
+                match tree.nodes.get(&resolved) {
+                    Some(Node::File { content, .. }) => content.clone(),
+                    Some(Node::Dir { .. }) => {
+                        return Err(Error::Conflict {
+                            conflict: ConflictKind::TypeMismatch,
+                        });
+                    }
+                    _ => return Err(Error::NotFound),
+                }
+            }
             Some(Node::Dir { .. }) => {
                 return Err(Error::Conflict {
                     conflict: ConflictKind::TypeMismatch,
@@ -281,6 +389,22 @@ impl Provider for MemProvider {
             None => return Err(Error::NotFound),
         };
         drop(tree);
+
+        // Rango (ADR 0005): pread — offset pasado de EOF = vacío, len se
+        // recorta a EOF. El fallo inyectado cuenta bytes DEL STREAM.
+        let content: Vec<u8> = match range {
+            None => content,
+            Some(r) => {
+                let start =
+                    usize::try_from(r.offset.min(content.len() as u64)).unwrap_or(content.len());
+                let end = match r.len {
+                    None => content.len(),
+                    Some(l) => start.saturating_add(usize::try_from(l).unwrap_or(usize::MAX)),
+                }
+                .min(content.len());
+                content[start..end].to_vec()
+            }
+        };
 
         // Snapshot del fallo: el stream truncará en el byte exacto.
         let fail_at = self.faults.read_fault_for(&key);
@@ -309,10 +433,10 @@ impl Provider for MemProvider {
         if key.is_empty() {
             return Err(Error::InvalidPath);
         }
-        let cs = self.case_sensitive();
+        let lk = self.lookup();
         let tree = self.lock();
-        let canon = canonical_key(&tree, cs, &key).ok_or(Error::NotFound)?;
-        if let Some(real) = resolve(&tree, cs, &canon) {
+        let canon = canonical_key(&tree, lk, &key).ok_or(Error::NotFound)?;
+        if let Some(real) = resolve(&tree, lk, &canon) {
             return Err(Error::Conflict {
                 conflict: collision_kind(&real, &canon),
             });
@@ -325,7 +449,7 @@ impl Provider for MemProvider {
             fail_at: self.faults.write_fault_for(&key),
             written: 0,
             tree: Arc::clone(&self.tree),
-            case_sensitive: cs,
+            lookup: lk,
         }))
     }
 
@@ -337,10 +461,10 @@ impl Provider for MemProvider {
                 conflict: ConflictKind::Exists,
             });
         }
-        let cs = self.case_sensitive();
+        let lk = self.lookup();
         let mut tree = self.lock();
-        let canon = canonical_key(&tree, cs, &key).ok_or(Error::NotFound)?;
-        if let Some(real) = resolve(&tree, cs, &canon) {
+        let canon = canonical_key(&tree, lk, &key).ok_or(Error::NotFound)?;
+        if let Some(real) = resolve(&tree, lk, &canon) {
             return Err(Error::Conflict {
                 conflict: collision_kind(&real, &canon),
             });
@@ -356,9 +480,9 @@ impl Provider for MemProvider {
         if key.is_empty() {
             return Err(Error::Unsupported);
         }
-        let cs = self.case_sensitive();
+        let lk = self.lookup();
         let mut tree = self.lock();
-        let real = resolve(&tree, cs, &key).ok_or(Error::NotFound)?;
+        let real = resolve(&tree, lk, &key).ok_or(Error::NotFound)?;
         if matches!(tree.nodes.get(&real), Some(Node::Dir { .. })) {
             let has_children = tree
                 .nodes
@@ -382,17 +506,17 @@ impl Provider for MemProvider {
         if from_key.is_empty() || to_key.is_empty() {
             return Err(Error::InvalidPath);
         }
-        let cs = self.case_sensitive();
+        let lk = self.lookup();
         let mut tree = self.lock();
-        let real_from = resolve(&tree, cs, &from_key).ok_or(Error::NotFound)?;
-        let canon_to = canonical_key(&tree, cs, &to_key).ok_or(Error::NotFound)?;
+        let real_from = resolve(&tree, lk, &from_key).ok_or(Error::NotFound)?;
+        let canon_to = canonical_key(&tree, lk, &to_key).ok_or(Error::NotFound)?;
         // Mover un dir DENTRO de sí mismo es imposible en cualquier FS (EINVAL).
         if canon_to.len() > real_from.len() && canon_to.starts_with(&real_from) {
             return Err(Error::InvalidPath);
         }
         // El destino puede "existir" solo como el propio origen con otra caja
         // (rename a→A en FS case-insensitive-preserving): permitido.
-        if let Some(real_to) = resolve(&tree, cs, &canon_to)
+        if let Some(real_to) = resolve(&tree, lk, &canon_to)
             && real_to != real_from
         {
             return Err(Error::Conflict {
@@ -413,10 +537,57 @@ impl Provider for MemProvider {
         for (k, mut node) in moved {
             let mut new_key = canon_to.clone();
             new_key.extend_from_slice(&k[real_from.len()..]);
-            let (Node::Dir { mtime: m } | Node::File { mtime: m, .. }) = &mut node;
+            let (Node::Dir { mtime: m }
+            | Node::File { mtime: m, .. }
+            | Node::Symlink { mtime: m, .. }) = &mut node;
             *m = mtime;
             tree.nodes.insert(new_key, node);
         }
+        Ok(())
+    }
+
+    async fn read_link(&self, p: &VPath) -> Result<Vec<u8>, Error> {
+        self.faults.op_gate().await?;
+        let key = seg_path(p);
+        let lk = self.lookup();
+        let tree = self.lock();
+        let real = resolve(&tree, lk, &key).ok_or(Error::NotFound)?;
+        match tree.nodes.get(&real) {
+            Some(Node::Symlink { target, .. }) => Ok(target.clone()),
+            Some(_) => Err(Error::Conflict {
+                conflict: ConflictKind::TypeMismatch,
+            }),
+            None => Err(Error::NotFound),
+        }
+    }
+
+    async fn symlink(
+        &self,
+        link: &VPath,
+        target: &[u8],
+        _kind: norte_vfs::SymlinkKind,
+    ) -> Result<(), Error> {
+        self.faults.op_gate().await?;
+        let key = seg_path(link);
+        if key.is_empty() {
+            return Err(Error::InvalidPath);
+        }
+        let lk = self.lookup();
+        let mut tree = self.lock();
+        let canon = canonical_key(&tree, lk, &key).ok_or(Error::NotFound)?;
+        if let Some(real) = resolve(&tree, lk, &canon) {
+            return Err(Error::Conflict {
+                conflict: collision_kind(&real, &canon),
+            });
+        }
+        let mtime = tree.tick();
+        tree.nodes.insert(
+            canon,
+            Node::Symlink {
+                target: target.to_vec(),
+                mtime,
+            },
+        );
         Ok(())
     }
 
@@ -436,21 +607,22 @@ impl MemProvider {
         if to_key.is_empty() {
             return Err(Error::InvalidPath);
         }
-        let cs = self.case_sensitive();
+        let lk = self.lookup();
         let mut tree = self.lock();
-        let real_from = resolve(&tree, cs, &from_key).ok_or(Error::NotFound)?;
+        let real_from = resolve(&tree, lk, &from_key).ok_or(Error::NotFound)?;
         let content = match tree.nodes.get(&real_from) {
             Some(Node::File { content, .. }) => content.clone(),
-            // copy_native es de UN archivo; árboles los compone el core.
-            Some(Node::Dir { .. }) => {
+            // copy_native es de UN archivo; árboles (y symlinks, que tienen
+            // política propia) los compone el core.
+            Some(Node::Dir { .. } | Node::Symlink { .. }) => {
                 return Err(Error::Conflict {
                     conflict: ConflictKind::TypeMismatch,
                 });
             }
             None => return Err(Error::NotFound),
         };
-        let canon_to = canonical_key(&tree, cs, &to_key).ok_or(Error::NotFound)?;
-        if let Some(real) = resolve(&tree, cs, &canon_to) {
+        let canon_to = canonical_key(&tree, lk, &to_key).ok_or(Error::NotFound)?;
+        if let Some(real) = resolve(&tree, lk, &canon_to) {
             return Err(Error::Conflict {
                 conflict: collision_kind(&real, &canon_to),
             });
@@ -467,7 +639,7 @@ struct MemSink {
     fail_at: Option<usize>,
     written: usize,
     tree: Arc<Mutex<Tree>>,
-    case_sensitive: bool,
+    lookup: Lookup,
 }
 
 #[async_trait]
@@ -491,8 +663,8 @@ impl ByteSink for MemSink {
         let mut tree = self.tree.lock().expect("tree lock sano");
         // Re-validación completa: entre write() y commit() pudo desaparecer
         // el padre (→ NotFound, jamás huérfanos) o aparecer una colisión.
-        let canon = canonical_key(&tree, self.case_sensitive, &self.key).ok_or(Error::NotFound)?;
-        if let Some(real) = resolve(&tree, self.case_sensitive, &canon) {
+        let canon = canonical_key(&tree, self.lookup, &self.key).ok_or(Error::NotFound)?;
+        if let Some(real) = resolve(&tree, self.lookup, &canon) {
             return Err(Error::Conflict {
                 conflict: collision_kind(&real, &canon),
             });

@@ -28,6 +28,10 @@ bitflags::bitflags! {
         const CASE_SENSITIVE = 1 << 3;
         /// El FS preserva la caja aunque no la distinga (NTFS/APFS).
         const CASE_PRESERVING = 1 << 4;
+        /// Se puede añadir al final de un archivo existente (resume M2).
+        const APPEND = 1 << 5;
+        /// Se puede escribir en un offset arbitrario (verificación/parcheo).
+        const RANDOM_WRITE = 1 << 6;
     }
 }
 

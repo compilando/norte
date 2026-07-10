@@ -32,6 +32,9 @@ struct FaultState {
     fail_write_at: Option<(SegPath, usize)>,
     /// `Some(n)`: quedan `n` operaciones antes de la desconexión.
     disconnect_after: Option<u64>,
+    /// Las próximas `n` operaciones fallan retryable (indisponibilidad
+    /// TRANSITORIA); luego el provider se recupera solo.
+    unavailable_next: u64,
 }
 
 impl Faults {
@@ -65,6 +68,15 @@ impl Faults {
         self.lock().disconnect_after = Some(n);
     }
 
+    /// Las próximas `n` operaciones fallan con
+    /// [`Error::ProviderUnavailable`](norte_proto::Error::ProviderUnavailable)
+    /// `{retryable: true}` y DESPUÉS el provider se recupera solo — la
+    /// contraparte transitoria de [`Self::disconnect_after`], para testear
+    /// los reintentos con backoff del engine (ADR 0005).
+    pub fn unavailable_for_next(&self, n: u64) {
+        self.lock().unavailable_next = n;
+    }
+
     /// Borra toda la configuración de fallos.
     pub fn clear(&self) {
         *self.lock() = FaultState::default();
@@ -75,6 +87,10 @@ impl Faults {
     pub(crate) async fn op_gate(&self) -> Result<(), norte_proto::Error> {
         let latency = {
             let mut st = self.lock();
+            if st.unavailable_next > 0 {
+                st.unavailable_next -= 1;
+                return Err(norte_proto::Error::ProviderUnavailable { retryable: true });
+            }
             if let Some(remaining) = st.disconnect_after {
                 if remaining == 0 {
                     return Err(norte_proto::Error::ProviderUnavailable { retryable: true });

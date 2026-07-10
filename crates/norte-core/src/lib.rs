@@ -8,7 +8,7 @@ mod ops;
 mod progress;
 mod scheduler;
 
-pub use engine::Engine;
+pub use engine::{Engine, TransferOptions};
 pub use observer::{Mutation, MutationObserver};
 pub use progress::ProgressReporter;
 pub use scheduler::{Priority, Scheduler, TaskBody, TaskCtx, TaskHandle};

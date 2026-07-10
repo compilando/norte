@@ -4,12 +4,31 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use norte_proto::{Entry, Error, TaskKind, VPath};
+use norte_proto::{CollisionPolicy, Entry, Error, SymlinkPolicy, TaskKind, VPath};
 use norte_vfs::{EntryStream, Provider};
 
 use crate::observer::{MutationObserver, NoopObserver};
 use crate::ops;
 use crate::scheduler::{Priority, Scheduler, TaskHandle};
+
+/// Opciones de una copia/movimiento (ADR 0005): qué hacer ante colisiones
+/// y con los symlinks. `Default` = el comportamiento estricto de M0
+/// (`Fail` + `Preserve`).
+///
+/// ```
+/// use norte_core::TransferOptions;
+/// use norte_proto::{CollisionPolicy, SymlinkPolicy};
+/// let opts = TransferOptions::default();
+/// assert_eq!(opts.on_collision, CollisionPolicy::Fail);
+/// assert_eq!(opts.symlinks, SymlinkPolicy::Preserve);
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TransferOptions {
+    /// Qué hacer si el destino ya existe.
+    pub on_collision: CollisionPolicy,
+    /// Qué hacer con los symlinks del origen.
+    pub symlinks: SymlinkPolicy,
+}
 
 /// Núcleo embebido: registro de providers por scheme + operaciones.
 /// Lecturas (`stat`/`list`) son directas; mutaciones (`copy`/`move_`/
@@ -74,12 +93,26 @@ impl Engine {
         self.provider_for(p)?.list(p).await
     }
 
-    /// Copia (recursiva si es dir) como Task.
+    /// Copia (recursiva si es dir) como Task, con las políticas por defecto
+    /// (`Fail` + `Preserve`).
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si algún scheme no tiene provider registrado.
+    pub fn copy(&self, from: &VPath, to: &VPath) -> Result<TaskHandle, Error> {
+        self.copy_with(from, to, TransferOptions::default())
+    }
+
+    /// Copia con políticas explícitas de colisión y symlinks (ADR 0005).
     ///
     /// # Errors
     /// [`Error::Unsupported`] si algún scheme no tiene provider registrado.
     #[tracing::instrument(skip(self), fields(from = %from.display_lossy(), to = %to.display_lossy()))]
-    pub fn copy(&self, from: &VPath, to: &VPath) -> Result<TaskHandle, Error> {
+    pub fn copy_with(
+        &self,
+        from: &VPath,
+        to: &VPath,
+        opts: TransferOptions,
+    ) -> Result<TaskHandle, Error> {
         let src = self.provider_for(from)?;
         let dst = self.provider_for(to)?;
         let observer = Arc::clone(&self.observer);
@@ -90,18 +123,34 @@ impl Engine {
             TaskKind::Copy,
             Priority::Normal,
             Box::new(move |ctx| {
-                Box::pin(async move { ops::copy_task(src, dst, from, to, observer, &ctx).await })
+                Box::pin(
+                    async move { ops::copy_task(src, dst, from, to, opts, observer, &ctx).await },
+                )
             }),
         ))
     }
 
-    /// Move como Task: rename si mismo provider; copy+delete con plan único
-    /// si es cross-provider o el rename devuelve `Unsupported` (EXDEV).
+    /// Move como Task con las políticas por defecto: rename si mismo
+    /// provider; copy+delete con plan único si es cross-provider o el
+    /// rename devuelve `Unsupported` (EXDEV).
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si algún scheme no tiene provider registrado.
+    pub fn move_(&self, from: &VPath, to: &VPath) -> Result<TaskHandle, Error> {
+        self.move_with(from, to, TransferOptions::default())
+    }
+
+    /// Move con políticas explícitas de colisión y symlinks (ADR 0005).
     ///
     /// # Errors
     /// [`Error::Unsupported`] si algún scheme no tiene provider registrado.
     #[tracing::instrument(skip(self), fields(from = %from.display_lossy(), to = %to.display_lossy()))]
-    pub fn move_(&self, from: &VPath, to: &VPath) -> Result<TaskHandle, Error> {
+    pub fn move_with(
+        &self,
+        from: &VPath,
+        to: &VPath,
+        opts: TransferOptions,
+    ) -> Result<TaskHandle, Error> {
         let src = self.provider_for(from)?;
         let dst = self.provider_for(to)?;
         let observer = Arc::clone(&self.observer);
@@ -112,7 +161,9 @@ impl Engine {
             TaskKind::Move,
             Priority::Normal,
             Box::new(move |ctx| {
-                Box::pin(async move { ops::move_task(src, dst, from, to, observer, &ctx).await })
+                Box::pin(
+                    async move { ops::move_task(src, dst, from, to, opts, observer, &ctx).await },
+                )
             }),
         ))
     }

@@ -4,7 +4,7 @@
 
 use bytes::Bytes;
 use futures::StreamExt;
-use norte_proto::{CapabilityFlags, ConflictKind, EntryKind, Error, VPath};
+use norte_proto::{CapabilityFlags, ConflictKind, EntryKind, Error, Segment, VPath};
 use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
@@ -21,7 +21,7 @@ async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
 }
 
 async fn read_all(mem: &MemProvider, wire: &str) -> Result<Vec<u8>, Error> {
-    let mut stream = mem.read(&vp(wire)).await?;
+    let mut stream = mem.read(&vp(wire), None).await?;
     let mut out = Vec::new();
     while let Some(chunk) = stream.next().await {
         out.extend_from_slice(&chunk?);
@@ -251,7 +251,7 @@ async fn fail_read_at_exact_byte() {
     write_file(&mem, "mem:///big", &content).await;
     mem.faults().fail_read_at(&vp("mem:///big"), 3000);
 
-    let mut stream = mem.read(&vp("mem:///big")).await.unwrap();
+    let mut stream = mem.read(&vp("mem:///big"), None).await.unwrap();
     let mut got = Vec::new();
     let mut err = None;
     while let Some(item) = stream.next().await {
@@ -393,4 +393,70 @@ async fn commit_detects_late_case_collision() {
         Err(e) => panic!("esperaba CaseCollision, fue {e:?}"),
         Ok(()) => panic!("esperaba CaseCollision, el commit publicó"),
     }
+}
+
+// ---------- eje de normalización NFC/NFD (issue #7) ----------
+
+/// Simulación APFS: lookup insensible a la normalización, bytes preservados.
+/// La colisión solo-por-normalización se etiqueta `Normalization` (#8).
+#[tokio::test]
+async fn normalization_insensitive_collides_with_label() {
+    use norte_testkit::Normalization;
+    let mem = MemProvider::new().with_normalization(Normalization::Insensitive);
+    let root = MemProvider::root();
+    let nfc = root.join(Segment::new(vec![0xC3, 0xA9]).unwrap()); // é NFC
+    let nfd = root.join(Segment::new(vec![0x65, 0xCC, 0x81]).unwrap()); // é NFD
+
+    let mut sink = mem.write(&nfc).await.unwrap();
+    sink.write(bytes::Bytes::from_static(b"x")).await.unwrap();
+    sink.commit().await.unwrap();
+
+    // El lookup NFD resuelve al archivo NFC (insensible, preservando bytes).
+    let e = mem.stat(&nfd).await.expect("lookup normalizado resuelve");
+    assert_eq!(
+        e.path.file_name().unwrap().as_bytes(),
+        &[0xC3, 0xA9],
+        "los bytes ALMACENADOS (NFC) se preservan"
+    );
+
+    // Escribir la variante NFD colisiona con la etiqueta correcta.
+    match mem.write(&nfd).await {
+        Err(Error::Conflict {
+            conflict: ConflictKind::Normalization,
+        }) => {}
+        Err(other) => panic!("esperaba Conflict::Normalization, fue {other:?}"),
+        Ok(_) => panic!("esperaba Conflict::Normalization, fue Ok(sink)"),
+    }
+}
+
+/// Default (byte-exact, como ext4): NFC y NFD son archivos DISTINTOS.
+#[tokio::test]
+async fn normalization_byte_exact_keeps_both() {
+    let mem = MemProvider::new();
+    let root = MemProvider::root();
+    let nfc = root.join(Segment::new(vec![0xC3, 0xA9]).unwrap());
+    let nfd = root.join(Segment::new(vec![0x65, 0xCC, 0x81]).unwrap());
+    for p in [&nfc, &nfd] {
+        let mut sink = mem.write(p).await.unwrap();
+        sink.write(bytes::Bytes::from_static(b"x")).await.unwrap();
+        sink.commit().await.unwrap();
+    }
+    assert!(mem.stat(&nfc).await.is_ok());
+    assert!(mem.stat(&nfd).await.is_ok());
+}
+
+/// Indisponibilidad TRANSITORIA (issue de reintentos, ADR 0005): las
+/// próximas n ops fallan retryable y el provider se recupera solo.
+#[tokio::test]
+async fn unavailable_for_next_recovers() {
+    let mem = MemProvider::new();
+    mem.faults().unavailable_for_next(2);
+    let root = MemProvider::root();
+    for _ in 0..2 {
+        match mem.stat(&root).await {
+            Err(Error::ProviderUnavailable { retryable: true }) => {}
+            other => panic!("esperaba ProviderUnavailable retryable, fue {other:?}"),
+        }
+    }
+    assert!(mem.stat(&root).await.is_ok(), "tras n ops, recupera");
 }

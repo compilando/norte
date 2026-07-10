@@ -11,8 +11,8 @@ mod provider;
 mod sink;
 
 pub use norte_proto as proto;
-pub use norte_proto::{Capabilities, CapabilityFlags, Entry, EntryKind, Error, VPath};
-pub use provider::{ByteStream, EntryStream, Provider};
+pub use norte_proto::{ByteRange, Capabilities, CapabilityFlags, Entry, EntryKind, Error, VPath};
+pub use provider::{ByteStream, EntryStream, Provider, SymlinkKind};
 pub use sink::ByteSink;
 
 /// Re-exports internos para la expansión de [`provider_contract!`].

@@ -98,7 +98,7 @@ async fn read_streams_multiple_chunks() {
     sink.write(Bytes::from(content.clone())).await.unwrap();
     sink.commit().await.unwrap();
 
-    let mut stream = p.read(&f).await.unwrap();
+    let mut stream = p.read(&f, None).await.unwrap();
     let mut chunks = 0usize;
     let mut got = Vec::new();
     while let Some(item) = stream.next().await {
@@ -219,7 +219,7 @@ async fn write_commits_names_at_name_max() {
     let mut sink = p.write(&f).await.expect("write abre pese a NAME_MAX");
     sink.write(Bytes::from_static(b"cabe")).await.unwrap();
     sink.commit().await.expect("commit publica");
-    let mut stream = p.read(&f).await.expect("read abre");
+    let mut stream = p.read(&f, None).await.expect("read abre");
     let mut got = Vec::new();
     while let Some(chunk) = stream.next().await {
         got.extend_from_slice(&chunk.expect("chunk ok"));
@@ -335,7 +335,7 @@ async fn dropping_byte_stream_mid_read_releases_fd() {
     sink.commit().await.unwrap();
 
     let baseline = open_fds();
-    let mut stream = p.read(&f).await.unwrap();
+    let mut stream = p.read(&f, None).await.unwrap();
     let first = stream.next().await.expect("hay datos").expect("chunk ok");
     assert!(!first.is_empty());
     assert!(
@@ -387,7 +387,7 @@ async fn dropping_byte_stream_mid_read_releases_handle() {
         .unwrap();
     sink.commit().await.unwrap();
 
-    let mut stream = p.read(&f).await.unwrap();
+    let mut stream = p.read(&f, None).await.unwrap();
     let _ = stream.next().await.expect("hay datos").expect("chunk ok");
     drop(stream);
     drop(p);

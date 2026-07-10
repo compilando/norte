@@ -12,4 +12,4 @@ mod mem;
 pub mod strategies;
 
 pub use faults::Faults;
-pub use mem::MemProvider;
+pub use mem::{MemProvider, Normalization};

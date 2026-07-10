@@ -1,19 +1,67 @@
 {
-  "not_found": { "kind": "not_found" },
-  "permission_denied": { "kind": "permission_denied" },
-  "conflict_exists": { "kind": "conflict", "conflict": "exists" },
-  "conflict_case_collision": { "kind": "conflict", "conflict": "case_collision" },
-  "conflict_type_mismatch": { "kind": "conflict", "conflict": "type_mismatch" },
-  "provider_unavailable_retryable": { "kind": "provider_unavailable", "retryable": true },
-  "provider_unavailable_fatal": { "kind": "provider_unavailable", "retryable": false },
-  "no_space": { "kind": "no_space" },
-  "io_retryable": { "kind": "io", "retryable": true },
-  "io_fatal": { "kind": "io", "retryable": false },
-  "cancelled": { "kind": "cancelled" },
-  "policy_denied": { "kind": "policy_denied", "rule": "no_delete_home" },
-  "encoding_loss": { "kind": "encoding_loss" },
-  "unsupported": { "kind": "unsupported" },
-  "invalid_path": { "kind": "invalid_path" },
-  "internal_panic": { "kind": "internal", "panic": true },
-  "internal_no_panic": { "kind": "internal", "panic": false }
+  "cancelled": {
+    "kind": "cancelled"
+  },
+  "conflict_case_collision": {
+    "conflict": "case_collision",
+    "kind": "conflict"
+  },
+  "conflict_exists": {
+    "conflict": "exists",
+    "kind": "conflict"
+  },
+  "conflict_normalization": {
+    "conflict": "normalization",
+    "kind": "conflict"
+  },
+  "conflict_type_mismatch": {
+    "conflict": "type_mismatch",
+    "kind": "conflict"
+  },
+  "encoding_loss": {
+    "kind": "encoding_loss"
+  },
+  "internal_no_panic": {
+    "kind": "internal",
+    "panic": false
+  },
+  "internal_panic": {
+    "kind": "internal",
+    "panic": true
+  },
+  "invalid_path": {
+    "kind": "invalid_path"
+  },
+  "io_fatal": {
+    "kind": "io",
+    "retryable": false
+  },
+  "io_retryable": {
+    "kind": "io",
+    "retryable": true
+  },
+  "no_space": {
+    "kind": "no_space"
+  },
+  "not_found": {
+    "kind": "not_found"
+  },
+  "permission_denied": {
+    "kind": "permission_denied"
+  },
+  "policy_denied": {
+    "kind": "policy_denied",
+    "rule": "no_delete_home"
+  },
+  "provider_unavailable_fatal": {
+    "kind": "provider_unavailable",
+    "retryable": false
+  },
+  "provider_unavailable_retryable": {
+    "kind": "provider_unavailable",
+    "retryable": true
+  },
+  "unsupported": {
+    "kind": "unsupported"
+  }
 }

@@ -220,22 +220,59 @@ fn entry_from(path: VPath, md: &std::fs::Metadata) -> Entry {
 }
 
 /// Ante una colisión ya confirmada: ¿el nombre EXACTO (bytes) está en el
-/// directorio, o solo una variante de caja? Distingue `Exists` de
-/// `CaseCollision` (la colisión se evalúa contra el FS destino).
+/// directorio, una variante de normalización Unicode (macOS NFD, issue #8)
+/// o una variante de caja? La colisión se evalúa contra el FS destino.
 fn collision_kind_for(path: &Path) -> ConflictKind {
     let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
         return ConflictKind::Exists;
     };
     match std::fs::read_dir(parent) {
         Ok(rd) => {
+            // Precedencia: byte-exacto > caja > normalización — en NTFS
+            // (insensible a caja, sensible a normalización) el EEXIST real
+            // viene de la variante de caja aunque haya un dirent NFD cerca.
+            let mut case_hit = false;
+            let mut norm_hit = false;
             for d in rd.flatten() {
-                if d.file_name() == name {
+                let dn = d.file_name();
+                if dn == name {
                     return ConflictKind::Exists;
                 }
+                if !case_hit && case_eq_os(&dn, name) {
+                    case_hit = true;
+                }
+                if !norm_hit && nfc_eq_os(&dn, name) {
+                    norm_hit = true;
+                }
             }
-            ConflictKind::CaseCollision
+            if case_hit {
+                ConflictKind::CaseCollision
+            } else if norm_hit {
+                ConflictKind::Normalization
+            } else {
+                ConflictKind::CaseCollision
+            }
         }
         Err(_) => ConflictKind::Exists,
+    }
+}
+
+/// ¿Variante solo-de-caja? (lowercase Unicode de std; el fold real del FS
+/// puede ser más ancho — suficiente como etiqueta para el frontend).
+fn case_eq_os(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> bool {
+    match (a.to_str(), b.to_str()) {
+        (Some(a), Some(b)) => a != b && a.to_lowercase() == b.to_lowercase(),
+        _ => false,
+    }
+}
+
+/// ¿Misma forma NFC? Solo comparable si ambos nombres son UTF-8 válido
+/// (la normalización no está definida sobre bytes arbitrarios).
+fn nfc_eq_os(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> bool {
+    use unicode_normalization::UnicodeNormalization;
+    match (a.to_str(), b.to_str()) {
+        (Some(a), Some(b)) => a.nfc().eq(b.nfc()),
+        _ => false,
     }
 }
 
@@ -309,10 +346,58 @@ fn probe_same_file(_upper_md: &std::fs::Metadata, _lower_md: &std::fs::Metadata)
     true
 }
 
+/// Crea el symlink nativo. Pre-chequeo de colisión no hace falta: el
+/// syscall falla con EEXIST atómicamente.
+#[cfg(unix)]
+fn make_symlink(
+    target: &std::ffi::OsStr,
+    link: &Path,
+    _kind: norte_vfs::SymlinkKind,
+) -> Result<(), Error> {
+    std::os::unix::fs::symlink(target, link).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            Error::Conflict {
+                conflict: collision_kind_for(link),
+            }
+        } else {
+            map_io(&e)
+        }
+    })
+}
+
+/// Windows distingue archivo/dir en la creación; exige privilegio
+/// (SeCreateSymbolicLinkPrivilege o Developer Mode) — por eso el provider
+/// no declara `SYMLINKS` en Windows y este camino responde vía
+/// `Unsupported` antes de llegar aquí salvo sondeos futuros.
+#[cfg(windows)]
+fn make_symlink(
+    target: &std::ffi::OsStr,
+    link: &Path,
+    kind: norte_vfs::SymlinkKind,
+) -> Result<(), Error> {
+    let res = match kind {
+        norte_vfs::SymlinkKind::Dir => std::os::windows::fs::symlink_dir(target, link),
+        norte_vfs::SymlinkKind::File => std::os::windows::fs::symlink_file(target, link),
+    };
+    res.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            Error::Conflict {
+                conflict: collision_kind_for(link),
+            }
+        } else {
+            map_io(&e)
+        }
+    })
+}
+
 /// Capabilities por defecto del OS, sin tocar el FS: lo que responde
 /// `capabilities()` si aún no corrió ninguna operación async.
 fn default_capabilities() -> Capabilities {
-    let mut flags = CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::CASE_PRESERVING;
+    let mut flags = CapabilityFlags::RENAME_ATOMIC
+        | CapabilityFlags::CASE_PRESERVING
+        // FS local: escritura en offset arbitrario y append (resume M2).
+        | CapabilityFlags::APPEND
+        | CapabilityFlags::RANDOM_WRITE;
     if cfg!(unix) {
         // Crear symlinks en Windows exige privilegio: no se declara en M0.
         flags |= CapabilityFlags::SYMLINKS;
@@ -416,7 +501,11 @@ impl Provider for LocalProvider {
         Ok(ReceiverStream::new(rx).boxed())
     }
 
-    async fn read(&self, p: &VPath) -> Result<ByteStream, Error> {
+    async fn read(
+        &self,
+        p: &VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> Result<ByteStream, Error> {
         self.ensure_caps().await;
         let native = self.native(p)?;
         let file = blocking(move || {
@@ -426,9 +515,19 @@ impl Provider for LocalProvider {
                     conflict: ConflictKind::TypeMismatch,
                 });
             }
-            std::fs::File::open(&native).map_err(|e| map_io(&e))
+            let mut file = std::fs::File::open(&native).map_err(|e| map_io(&e))?;
+            if let Some(r) = range {
+                use std::io::Seek;
+                // Semántica pread (ADR 0005): offset pasado de EOF no es
+                // error — el stream simplemente termina vacío.
+                file.seek(std::io::SeekFrom::Start(r.offset))
+                    .map_err(|e| map_io(&e))?;
+            }
+            Ok(file)
         })
         .await?;
+        // `None` = sin límite (hasta EOF).
+        let mut remaining: Option<u64> = range.and_then(|r| r.len);
         // Buffer de 8 chunks: 2 MiB máximos retenidos si el consumidor se
         // atasca (con blocking_send el productor espera igual de bien).
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, Error>>(8);
@@ -437,9 +536,19 @@ impl Provider for LocalProvider {
             let mut file = file;
             let mut buf = vec![0u8; READ_CHUNK];
             loop {
-                match file.read(&mut buf) {
+                let want = match remaining {
+                    Some(0) => return,
+                    // INVARIANTE: min(n, READ_CHUNK=256Ki) siempre cabe.
+                    Some(n) => usize::try_from(n.min(READ_CHUNK as u64))
+                        .expect("min con READ_CHUNK cabe en usize"),
+                    None => READ_CHUNK,
+                };
+                match file.read(&mut buf[..want]) {
                     Ok(0) => return,
                     Ok(n) => {
+                        if let Some(rem) = &mut remaining {
+                            *rem -= n as u64;
+                        }
                         if tx
                             .blocking_send(Ok(Bytes::copy_from_slice(&buf[..n])))
                             .is_err()
@@ -456,6 +565,42 @@ impl Provider for LocalProvider {
             }
         });
         Ok(ReceiverStream::new(rx).boxed())
+    }
+
+    async fn read_link(&self, p: &VPath) -> Result<Vec<u8>, Error> {
+        self.ensure_caps().await;
+        let native = self.native(p)?;
+        blocking(move || {
+            let md = std::fs::symlink_metadata(&native).map_err(|e| map_io(&e))?;
+            if !md.file_type().is_symlink() {
+                return Err(Error::Conflict {
+                    conflict: ConflictKind::TypeMismatch,
+                });
+            }
+            let target = std::fs::read_link(&native).map_err(|e| map_io(&e))?;
+            // Bytes CRUDOS del target (regla 1): jamás String ni VPath.
+            Ok(os_to_bytes(target.as_os_str()))
+        })
+        .await
+    }
+
+    async fn symlink(
+        &self,
+        link: &VPath,
+        target: &[u8],
+        kind: norte_vfs::SymlinkKind,
+    ) -> Result<(), Error> {
+        self.ensure_caps().await;
+        if !self
+            .capabilities()
+            .flags
+            .contains(CapabilityFlags::SYMLINKS)
+        {
+            return Err(Error::Unsupported);
+        }
+        let native = self.native(link)?;
+        let target = crate::native_path::link_target_to_os(target)?;
+        blocking(move || make_symlink(&target, &native, kind)).await
     }
 
     async fn write(&self, p: &VPath) -> Result<Box<dyn ByteSink>, Error> {
@@ -879,6 +1024,28 @@ mod tests {
         rename_noreplace(&a, &c).expect("destino libre");
         assert_eq!(std::fs::read(&c).unwrap(), b"origen");
         assert!(!a.exists());
+    }
+
+    /// Colisión por normalización (issue #8): el dirent existe en NFD (lo
+    /// que escribe macOS) y el pedido llega en NFC — bytes distintos, forma
+    /// NFC idéntica. Etiquetarla `CaseCollision` despistaría al frontend.
+    #[test]
+    fn collision_por_normalizacion_se_etiqueta() {
+        use norte_proto::ConflictKind;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let nfd = String::from_utf8(vec![0x65, 0xCC, 0x81]).unwrap(); // e + ́
+        std::fs::write(dir.path().join(&nfd), b"x").unwrap();
+        let nfc = String::from_utf8(vec![0xC3, 0xA9]).unwrap(); // é
+        assert_eq!(
+            super::collision_kind_for(&dir.path().join(&nfc)),
+            ConflictKind::Normalization
+        );
+        // Caja distinta sin tema de normalización: sigue siendo CaseCollision.
+        std::fs::write(dir.path().join("caja"), b"x").unwrap();
+        assert_eq!(
+            super::collision_kind_for(&dir.path().join("CAJA")),
+            ConflictKind::CaseCollision
+        );
     }
 
     /// Un path con NUL interior (posible en un `base` hostil del caller)

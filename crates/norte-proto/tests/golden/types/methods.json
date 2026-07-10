@@ -1,34 +1,54 @@
 {
-  "fs_list_params": { "path": "file:///home/user" },
+  "fs_copy_params": {
+    "from": "file:///src/a.txt",
+    "on_collision": "fail",
+    "symlinks": "preserve",
+    "to": "file:///dst/a.txt"
+  },
+  "fs_copy_params_policies": {
+    "from": "file:///src/a.txt",
+    "on_collision": "rename_auto",
+    "symlinks": "skip",
+    "to": "file:///dst/a.txt"
+  },
+  "fs_delete_params": {
+    "path": "file:///tmp/victim"
+  },
+  "fs_list_params": {
+    "path": "file:///home/user"
+  },
   "fs_list_result": {
     "entries": [
       {
-        "path": "file:///home/user/doc.txt",
         "kind": "file",
-        "size": 1234,
-        "mtime_ms": 1720000000000
+        "mtime_ms": 1720000000000,
+        "path": "file:///home/user/doc.txt",
+        "size": 1234
       }
     ]
   },
-  "fs_stat_params": { "path": "file:///home/user/doc.txt" },
-  "fs_stat_result": {
-    "entry": {
-      "path": "file:///home/user/doc.txt",
-      "kind": "file",
-      "size": 1234,
-      "mtime_ms": 1720000000000
-    }
-  },
-  "fs_copy_params": {
-    "from": "file:///src/a.txt",
-    "to": "file:///dst/a.txt"
-  },
   "fs_move_params": {
     "from": "file:///src/dir",
+    "on_collision": "fail",
+    "symlinks": "preserve",
     "to": "sftp://nas:22/backup/dir"
   },
-  "fs_delete_params": { "path": "file:///tmp/victim" },
-  "fs_task_result": { "task_id": 7 },
-  "task_cancel_params": { "task_id": 7 },
+  "fs_stat_params": {
+    "path": "file:///home/user/doc.txt"
+  },
+  "fs_stat_result": {
+    "entry": {
+      "kind": "file",
+      "mtime_ms": 1720000000000,
+      "path": "file:///home/user/doc.txt",
+      "size": 1234
+    }
+  },
+  "fs_task_result": {
+    "task_id": 7
+  },
+  "task_cancel_params": {
+    "task_id": 7
+  },
   "task_cancel_result": {}
 }

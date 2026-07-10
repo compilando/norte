@@ -13,8 +13,8 @@ use norte_proto::methods::{
     FsStatResult, FsTaskResult, TaskCancelParams, TaskCancelResult,
 };
 use norte_proto::{
-    Capabilities, CapabilityFlags, ConflictKind, Entry, EntryKind, Error, TaskId, TaskKind,
-    TaskProgress, TaskState, VPath,
+    ByteRange, Capabilities, CapabilityFlags, CollisionPolicy, ConflictKind, Entry, EntryKind,
+    Error, SymlinkPolicy, TaskId, TaskKind, TaskProgress, TaskState, VPath,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -159,6 +159,13 @@ fn golden_capabilities() {
                     max_path: None,
                 },
             ),
+            (
+                "remote_append_random_write",
+                Capabilities {
+                    flags: CapabilityFlags::APPEND | CapabilityFlags::RANDOM_WRITE,
+                    max_path: None,
+                },
+            ),
         ],
     );
 }
@@ -180,6 +187,12 @@ fn golden_error() {
                 "conflict_case_collision",
                 Error::Conflict {
                     conflict: ConflictKind::CaseCollision,
+                },
+            ),
+            (
+                "conflict_normalization",
+                Error::Conflict {
+                    conflict: ConflictKind::Normalization,
                 },
             ),
             (
@@ -335,6 +348,18 @@ fn golden_methods() {
         &FsCopyParams {
             from: vpath("file:///src/a.txt"),
             to: vpath("file:///dst/a.txt"),
+            on_collision: CollisionPolicy::Fail,
+            symlinks: SymlinkPolicy::Preserve,
+        },
+    );
+    check_one(
+        &fixtures,
+        "fs_copy_params_policies",
+        &FsCopyParams {
+            from: vpath("file:///src/a.txt"),
+            to: vpath("file:///dst/a.txt"),
+            on_collision: CollisionPolicy::RenameAuto,
+            symlinks: SymlinkPolicy::Skip,
         },
     );
     check_one(
@@ -343,6 +368,8 @@ fn golden_methods() {
         &FsMoveParams {
             from: vpath("file:///src/dir"),
             to: vpath("sftp://nas:22/backup/dir"),
+            on_collision: CollisionPolicy::Fail,
+            symlinks: SymlinkPolicy::Preserve,
         },
     );
     check_one(
@@ -367,7 +394,7 @@ fn golden_methods() {
         },
     );
     check_one(&fixtures, "task_cancel_result", &TaskCancelResult {});
-    assert_eq!(fixtures.len(), 10, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 11, "[methods.json] fixtures sin caso Rust");
 }
 
 #[test]
@@ -380,5 +407,47 @@ fn method_names_frozen() {
     assert_eq!(methods::FS_DELETE, "fs.delete");
     assert_eq!(methods::TASK_CANCEL, "task.cancel");
     assert_eq!(methods::TASK_PROGRESS, "task.progress");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.1.0");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.2.0");
+}
+
+#[test]
+fn golden_transfer() {
+    check_family(
+        "transfer.json",
+        &[
+            (
+                "byte_range_full",
+                ByteRange {
+                    offset: 0,
+                    len: None,
+                },
+            ),
+            (
+                "byte_range_chunk",
+                ByteRange {
+                    offset: 65536,
+                    len: Some(1_048_576),
+                },
+            ),
+        ],
+    );
+    check_family(
+        "transfer_collision.json",
+        &[
+            ("fail", CollisionPolicy::Fail),
+            ("ask", CollisionPolicy::Ask),
+            ("skip", CollisionPolicy::Skip),
+            ("overwrite", CollisionPolicy::Overwrite),
+            ("rename_auto", CollisionPolicy::RenameAuto),
+            ("newer", CollisionPolicy::Newer),
+        ],
+    );
+    check_family(
+        "transfer_symlinks.json",
+        &[
+            ("follow", SymlinkPolicy::Follow),
+            ("preserve", SymlinkPolicy::Preserve),
+            ("skip", SymlinkPolicy::Skip),
+        ],
+    );
 }

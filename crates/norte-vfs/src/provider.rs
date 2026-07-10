@@ -10,7 +10,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use norte_proto::{Capabilities, Entry, Error, VPath};
+use norte_proto::{ByteRange, Capabilities, Entry, Error, VPath};
 
 use crate::sink::ByteSink;
 
@@ -49,7 +49,11 @@ pub type ByteStream = BoxStream<'static, Result<Bytes, Error>>;
 ///     async fn list(&self, _p: &VPath) -> Result<EntryStream, Error> {
 ///         Err(Error::NotFound)
 ///     }
-///     async fn read(&self, _p: &VPath) -> Result<ByteStream, Error> {
+///     async fn read(
+///         &self,
+///         _p: &VPath,
+///         _range: Option<norte_proto::ByteRange>,
+///     ) -> Result<ByteStream, Error> {
 ///         Err(Error::NotFound)
 ///     }
 ///     async fn write(&self, _p: &VPath) -> Result<Box<dyn ByteSink>, Error> {
@@ -85,9 +89,34 @@ pub trait Provider: Send + Sync {
     /// El orden es el del backend, sin garantía.
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error>;
 
-    /// Contenido completo de un archivo como stream de chunks.
-    /// (Lectura por rango — resume — llega en M1.)
-    async fn read(&self, p: &VPath) -> Result<ByteStream, Error>;
+    /// Contenido de un archivo como stream de chunks. `range: None` = el
+    /// archivo completo; con rango, desde `offset` hasta `len` bytes (o EOF,
+    /// lo que llegue antes). `offset` más allá de EOF: stream vacío, no
+    /// error (semántica de `pread`). Lo exige el resume de M2 y el viewer
+    /// (ADR 0005).
+    async fn read(&self, p: &VPath, range: Option<ByteRange>) -> Result<ByteStream, Error>;
+
+    /// Bytes CRUDOS del destino de un symlink (relativo o absoluto, quizá
+    /// roto, quizá no-UTF8 — jamás se valida como `VPath` ni se resuelve).
+    ///
+    /// Errores: [`Error::NotFound`] si `p` no existe;
+    /// [`Error::Conflict`] (`TypeMismatch`) si existe pero no es symlink;
+    /// [`Error::Unsupported`] si el provider no sabe de symlinks (default).
+    async fn read_link(&self, p: &VPath) -> Result<Vec<u8>, Error> {
+        let _ = p;
+        Err(Error::Unsupported)
+    }
+
+    /// Crea un symlink en `link` apuntando a `target` (bytes crudos, tal
+    /// cual — el provider no los interpreta). `kind` distingue archivo/dir
+    /// donde el OS lo exige (Windows); unix lo ignora.
+    ///
+    /// Si `link` ya existe: [`Error::Conflict`]. Providers sin symlinks:
+    /// [`Error::Unsupported`] (default) y SIN la capability `SYMLINKS`.
+    async fn symlink(&self, link: &VPath, target: &[u8], kind: SymlinkKind) -> Result<(), Error> {
+        let _ = (link, target, kind);
+        Err(Error::Unsupported)
+    }
 
     /// Abre un sink de escritura para un archivo NUEVO. Si el destino ya
     /// existe: [`Error::Conflict`] — la política de sobrescritura es del core,
@@ -119,4 +148,14 @@ pub trait Provider: Send + Sync {
         let _ = (from, to);
         None
     }
+}
+
+/// Tipo del symlink a crear: Windows distingue archivo/directorio en la
+/// creación (`CreateSymbolicLinkW`); unix lo ignora.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SymlinkKind {
+    /// El destino es (o será) un archivo.
+    File,
+    /// El destino es (o será) un directorio.
+    Dir,
 }

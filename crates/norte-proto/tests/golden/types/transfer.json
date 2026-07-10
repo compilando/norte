@@ -1,0 +1,10 @@
+{
+  "byte_range_chunk": {
+    "len": 1048576,
+    "offset": 65536
+  },
+  "byte_range_full": {
+    "len": null,
+    "offset": 0
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "ask": "ask",
+  "fail": "fail",
+  "newer": "newer",
+  "overwrite": "overwrite",
+  "rename_auto": "rename_auto",
+  "skip": "skip"
+}

@@ -46,6 +46,10 @@ clap = { version = "4", features = ["derive"] }
 # sin REPLACE_EXISTING (windows-sys, el binding oficial de Microsoft).
 libc = "0.2"
 windows-sys = "0.61"
+# testkit (simular APFS/HFS+) y vfs-local (etiquetar colisiones por
+# normalización, issue #8): NFC real, no un fold casero. unicode-rs,
+# MIT/Apache; transitivas: solo tinyvec.
+unicode-normalization = "0.1"
 
 # Solo dev
 proptest = "1"

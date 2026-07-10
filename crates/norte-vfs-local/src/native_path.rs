@@ -51,6 +51,24 @@ pub(crate) fn bytes_to_os(bytes: &[u8]) -> Result<OsString, Error> {
     Ok(OsString::from_wide(&wide))
 }
 
+/// Destino de un symlink → `OsString`. Unix: bytes tal cual. El target NO
+/// es un segmento: no se le aplican las restricciones de `bytes_to_os`.
+#[cfg(unix)]
+#[allow(clippy::unnecessary_wraps)] // firma común con la variante Windows
+pub(crate) fn link_target_to_os(bytes: &[u8]) -> Result<OsString, Error> {
+    use std::os::unix::ffi::OsStrExt;
+    Ok(OsStr::from_bytes(bytes).to_os_string())
+}
+
+/// Destino de un symlink → `OsString` (Windows): WTF-8 validado, SIN las
+/// restricciones de segmento — un target legítimo contiene `\` y `:`.
+#[cfg(windows)]
+pub(crate) fn link_target_to_os(bytes: &[u8]) -> Result<OsString, Error> {
+    use std::os::windows::ffi::OsStringExt;
+    let wide = wtf8::decode_to_wide(bytes).ok_or(Error::InvalidPath)?;
+    Ok(OsString::from_wide(&wide))
+}
+
 /// Path nativo de `p` bajo `base`: `base/<seg1>/<seg2>/…`.
 ///
 /// En Windows el resultado va SIEMPRE con prefijo verbatim `\\?\`

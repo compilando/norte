@@ -32,7 +32,11 @@ impl Provider for NullProvider {
         // Directorio "vacío": stream sin elementos.
         Ok(futures::stream::empty().boxed())
     }
-    async fn read(&self, _p: &VPath) -> Result<ByteStream, Error> {
+    async fn read(
+        &self,
+        _p: &VPath,
+        _range: Option<norte_proto::ByteRange>,
+    ) -> Result<ByteStream, Error> {
         Ok(futures::stream::iter([Ok(Bytes::from_static(b"null"))]).boxed())
     }
     async fn write(&self, _p: &VPath) -> Result<Box<dyn ByteSink>, Error> {
@@ -94,7 +98,7 @@ async fn streams_and_sink_are_usable_through_the_trait() {
     let mut entries = p.list(&vpath("null:///")).await.expect("list");
     assert!(entries.next().await.is_none(), "listado vacío");
 
-    let mut bytes = p.read(&vpath("null:///f")).await.expect("read");
+    let mut bytes = p.read(&vpath("null:///f"), None).await.expect("read");
     let chunk = bytes.next().await.expect("un chunk").expect("sin error");
     assert_eq!(&chunk[..], b"null");
 

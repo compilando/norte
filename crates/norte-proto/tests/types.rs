@@ -263,6 +263,9 @@ fn error_roundtrip_all_variants() {
             conflict: ConflictKind::CaseCollision,
         },
         Error::Conflict {
+            conflict: ConflictKind::Normalization,
+        },
+        Error::Conflict {
             conflict: ConflictKind::TypeMismatch,
         },
         Error::ProviderUnavailable { retryable: false },
@@ -291,6 +294,48 @@ fn error_unknown_kind_degrades() {
     let with_payload: Error =
         serde_json::from_str(r#"{"kind": "quota_del_futuro", "limite": 9}"#).unwrap();
     assert_eq!(with_payload, Error::Unknown);
+}
+
+#[test]
+fn conflict_unknown_subtype_degrades_nested() {
+    // Tolerancia N/N-1 (ADR 0005): un subtipo de conflicto desconocido
+    // DENTRO de un Error::Conflict conocido degrada a Unknown, no revienta.
+    let e: Error =
+        serde_json::from_str(r#"{"kind": "conflict", "conflict": "subtipo_del_futuro"}"#).unwrap();
+    assert_eq!(
+        e,
+        Error::Conflict {
+            conflict: ConflictKind::Unknown
+        }
+    );
+}
+
+#[test]
+fn unknown_policies_are_hard_errors() {
+    // Asimetría deliberada (ADR 0005): las políticas viajan client→server
+    // como ÓRDENES mutantes — un core que no las entiende debe rechazar el
+    // request, jamás degradar a un default que haga otra cosa.
+    assert!(
+        serde_json::from_str::<norte_proto::CollisionPolicy>(r#""politica_del_futuro""#).is_err()
+    );
+    assert!(
+        serde_json::from_str::<norte_proto::SymlinkPolicy>(r#""politica_del_futuro""#).is_err()
+    );
+}
+
+#[test]
+fn copy_params_absent_policies_default() {
+    // La forma de wire 0.1.0 ({"from","to"} sin políticas) sigue siendo
+    // válida: ausencia = Fail/Preserve (el comportamiento de M0).
+    use norte_proto::methods::{FsCopyParams, FsMoveParams};
+    let p: FsCopyParams =
+        serde_json::from_str(r#"{"from": "file:///a", "to": "file:///b"}"#).unwrap();
+    assert_eq!(p.on_collision, norte_proto::CollisionPolicy::Fail);
+    assert_eq!(p.symlinks, norte_proto::SymlinkPolicy::Preserve);
+    let m: FsMoveParams =
+        serde_json::from_str(r#"{"from": "file:///a", "to": "file:///b"}"#).unwrap();
+    assert_eq!(m.on_collision, norte_proto::CollisionPolicy::Fail);
+    assert_eq!(m.symlinks, norte_proto::SymlinkPolicy::Preserve);
 }
 
 #[test]

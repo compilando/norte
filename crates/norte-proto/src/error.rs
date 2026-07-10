@@ -7,16 +7,34 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 /// Subtipo de conflicto en el destino de una operación.
+/// Tolerancia N/N-1 (patrón de ADR 0004; el fallback lo introduce ADR
+/// 0005): un subtipo desconocido deserializa a [`ConflictKind::Unknown`] —
+/// el cliente viejo degrada a "conflicto genérico", no revienta.
+///
+/// ```
+/// use norte_proto::ConflictKind;
+/// let futuro: ConflictKind = serde_json::from_str(r#""subtipo_del_futuro""#).unwrap();
+/// assert_eq!(futuro, ConflictKind::Unknown);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ConflictKind {
     /// El destino ya existe.
     Exists,
     /// Colisión solo-por-caja en FS case-insensitive (evaluada contra el
     /// FS DESTINO, no el origen).
     CaseCollision,
+    /// Colisión solo-por-normalización Unicode: los bytes difieren pero la
+    /// forma NFC coincide (macOS almacena NFD; issue #8, ADR 0005).
+    Normalization,
     /// El destino existe con otro tipo (dir donde va un archivo o viceversa).
     TypeMismatch,
+    /// Subtipo de un protocolo más nuevo (fallback de deserialización).
+    /// El core JAMÁS lo emite.
+    #[doc(hidden)]
+    #[serde(other)]
+    Unknown,
 }
 
 impl fmt::Display for ConflictKind {
@@ -24,7 +42,9 @@ impl fmt::Display for ConflictKind {
         f.write_str(match self {
             Self::Exists => "destination exists",
             Self::CaseCollision => "case-insensitive collision",
+            Self::Normalization => "unicode normalization collision",
             Self::TypeMismatch => "destination type mismatch",
+            Self::Unknown => "unknown conflict kind (newer protocol)",
         })
     }
 }

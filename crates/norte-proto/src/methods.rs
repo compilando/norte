@@ -15,6 +15,8 @@
 //! let params = FsCopyParams {
 //!     from: VPath::parse("file:///src/a.txt").unwrap(),
 //!     to: VPath::parse("file:///dst/a.txt").unwrap(),
+//!     on_collision: Default::default(),
+//!     symlinks: Default::default(),
 //! };
 //! let wire = serde_json::to_string(&params).unwrap();
 //! let back: FsCopyParams = serde_json::from_str(&wire).unwrap();
@@ -27,10 +29,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Entry, TaskId, VPath};
+use crate::{CollisionPolicy, Entry, SymlinkPolicy, TaskId, VPath};
 
 /// Versión del protocolo (semver). El core soporta N y N-1 (spec §11).
-pub const PROTOCOL_VERSION: &str = "0.1.0";
+pub const PROTOCOL_VERSION: &str = "0.2.0";
 
 /// `fs.list` — listar un directorio.
 pub const FS_LIST: &str = "fs.list";
@@ -88,8 +90,16 @@ pub struct FsStatResult {
 pub struct FsCopyParams {
     /// Origen (archivo o directorio).
     pub from: VPath,
-    /// Destino EXACTO (el core no inventa nombres; la colisión es `Conflict`).
+    /// Destino EXACTO (con `RenameAuto` el core deriva el nombre libre;
+    /// con el resto de políticas jamás inventa nombres).
     pub to: VPath,
+    /// Qué hacer si el destino existe. `#[serde(default)]`: un cliente N-1
+    /// que no lo envía obtiene `Fail` (el comportamiento de siempre).
+    #[serde(default)]
+    pub on_collision: CollisionPolicy,
+    /// Qué hacer con los symlinks del origen (default `Preserve`).
+    #[serde(default)]
+    pub symlinks: SymlinkPolicy,
 }
 
 /// Params de [`FS_MOVE`].
@@ -97,8 +107,15 @@ pub struct FsCopyParams {
 pub struct FsMoveParams {
     /// Origen.
     pub from: VPath,
-    /// Destino exacto.
+    /// Destino exacto (ver [`FsCopyParams::to`]).
     pub to: VPath,
+    /// Qué hacer si el destino existe (ver [`FsCopyParams::on_collision`]).
+    #[serde(default)]
+    pub on_collision: CollisionPolicy,
+    /// Qué hacer con los symlinks (solo aplica al camino copy+delete; el
+    /// rename same-provider mueve el link tal cual).
+    #[serde(default)]
+    pub symlinks: SymlinkPolicy,
 }
 
 /// Params de [`FS_DELETE`].

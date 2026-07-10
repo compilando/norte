@@ -37,3 +37,18 @@ norte_vfs::provider_contract! {
     root: MemProvider::root(),
     hostile_names: hostile(),
 }
+
+// Simulación APFS (issue #7): normalización insensible preservando bytes.
+// El roundtrip hostil ejercita el camino skip ante colisiones de
+// normalización (nfc_e_acute/nfd_e_acute) — lo que pasa en macOS real.
+norte_vfs::provider_contract! {
+    mod mem_apfs_like,
+    factory: MemProvider::with_flags(
+        CapabilityFlags::RENAME_ATOMIC
+            | CapabilityFlags::CASE_PRESERVING
+            | CapabilityFlags::SYMLINKS,
+    )
+    .with_normalization(norte_testkit::Normalization::Insensitive),
+    root: MemProvider::root(),
+    hostile_names: hostile(),
+}
