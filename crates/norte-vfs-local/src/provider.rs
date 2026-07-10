@@ -66,6 +66,28 @@ impl LocalProvider {
         self
     }
 
+    /// Provider que sirve TODO el filesystem del OS: unix se enraíza en `/`;
+    /// Windows usa base vacía (el primer segmento del `VPath` es la unidad,
+    /// p. ej. `C:`) y capabilities por defecto del OS sin sondeo (la raíz no
+    /// es escribible y la sensibilidad varía por volumen).
+    #[must_use]
+    pub fn os_root() -> Self {
+        if cfg!(windows) {
+            let mut flags = CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::CASE_PRESERVING;
+            let _ = &mut flags;
+            Self {
+                base: PathBuf::new(),
+                caps: Capabilities {
+                    flags,
+                    max_path: Some(32767),
+                },
+                _guard: None,
+            }
+        } else {
+            Self::rooted("/")
+        }
+    }
+
     /// La raíz de este provider: `file:///`.
     ///
     /// # Panics

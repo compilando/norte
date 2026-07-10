@@ -53,14 +53,63 @@ pub(crate) fn bytes_to_os(bytes: &[u8]) -> Result<OsString, Error> {
 
 /// Path nativo de `p` bajo `base`: `base/<seg1>/<seg2>/…`.
 ///
-/// En Windows el resultado va SIEMPRE con prefijo verbatim `\\?\` (paths
-/// >260, `CON`/`NUL`, trailing dots/spaces intactos).
+/// En Windows el resultado va SIEMPRE con prefijo verbatim `\\?\`
+/// (paths largos de más de 260, `CON`/`NUL`, trailing dots/spaces intactos).
+/// Caso especial Windows:
+/// `base` vacío = "raíz del OS" — el PRIMER segmento es el prefijo de unidad
+/// (`C:`) y se le restituye su separador (evita el path drive-relative
+/// `C:Users` que produciría un `push` ingenuo).
 pub(crate) fn to_native(base: &Path, p: &VPath) -> Result<PathBuf, Error> {
-    let mut out = base.to_path_buf();
-    for seg in p.segments() {
+    let mut segs = p.segments();
+    let mut out = if cfg!(windows) && base.as_os_str().is_empty() {
+        let Some(first) = segs.next() else {
+            return Err(Error::InvalidPath);
+        };
+        let mut drive = bytes_to_os(first)?;
+        drive.push(std::path::MAIN_SEPARATOR_STR);
+        PathBuf::from(drive)
+    } else {
+        base.to_path_buf()
+    };
+    for seg in segs {
         out.push(bytes_to_os(seg)?);
     }
     Ok(verbatim(out))
+}
+
+/// Convierte un path NATIVO absoluto a `VPath` (`file:///…`), byte a byte.
+/// La inversa de la resolución de [`crate::LocalProvider::os_root`].
+///
+/// # Errors
+/// [`Error::InvalidPath`] si el path no puede normalizarse o contiene
+/// componentes no representables como segmentos.
+///
+/// # Panics
+/// Nunca: el scheme `file` es constante y válido.
+pub fn vpath_from_native(path: &Path) -> Result<VPath, Error> {
+    use norte_proto::{Scheme, Segment};
+    let abs = std::path::absolute(path).map_err(|_| Error::InvalidPath)?;
+    let mut out = VPath::root(Scheme::new("file").expect("scheme constante válido"), None);
+    for comp in abs.components() {
+        use std::path::Component;
+        match comp {
+            Component::RootDir => {}
+            Component::Prefix(pr) => {
+                // Windows: la unidad (`C:`) o el UNC viajan como primer segmento.
+                let seg =
+                    Segment::new(os_to_bytes(pr.as_os_str())).map_err(|_| Error::InvalidPath)?;
+                out = out.join(seg);
+            }
+            Component::Normal(os) => {
+                let seg = Segment::new(os_to_bytes(os)).map_err(|_| Error::InvalidPath)?;
+                out = out.join(seg);
+            }
+            // `absolute` no resuelve `..` contra el FS pero sí los pliega
+            // lexicalmente en Windows; en unix pueden sobrevivir: rechazo.
+            Component::CurDir | Component::ParentDir => return Err(Error::InvalidPath),
+        }
+    }
+    Ok(out)
 }
 
 /// Aplica el prefijo verbatim en Windows; identidad en el resto.

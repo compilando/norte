@@ -66,6 +66,13 @@ impl TaskHandle {
         self.cancel.cancel();
     }
 
+    /// Clona el token de cancelación (para cancelar desde otra task, p. ej.
+    /// un manejador de señales).
+    #[must_use]
+    pub fn cancel_token(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
+
     /// Espera el estado terminal y lo devuelve.
     pub async fn join(mut self) -> TaskState {
         loop {
