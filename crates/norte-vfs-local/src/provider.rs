@@ -137,6 +137,14 @@ static PARTIAL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 /// frontends renderizan por categoría, jamás parsean strings de OS.
 fn map_io(e: &std::io::Error) -> Error {
     use std::io::ErrorKind as K;
+    // EILSEQ: el FS rechaza los BYTES del nombre (APFS exige UTF-8 válido).
+    // std lo deja en `Uncategorized`, así que se mira el errno crudo. Con el
+    // staging corto (issue #4) este rechazo llega en el rename de commit —
+    // sin este mapeo sería un `Io` opaco (regresión cazada en CI de macOS).
+    #[cfg(unix)]
+    if e.raw_os_error() == Some(libc::EILSEQ) {
+        return Error::InvalidPath;
+    }
     match e.kind() {
         K::NotFound => Error::NotFound,
         K::PermissionDenied => Error::PermissionDenied,
@@ -838,6 +846,17 @@ mod tests {
         // al abrir el staging: el rechazo del OS llega en el stat/rename del
         // path FINAL. Es un problema del path, no de I/O: InvalidPath.
         let e = std::io::Error::from(std::io::ErrorKind::InvalidFilename);
+        assert_eq!(map_io(&e), Error::InvalidPath);
+    }
+
+    /// EILSEQ (APFS rechaza nombres no-UTF8) llega como `Uncategorized`:
+    /// hay que mirar el errno crudo. Mismo desplazamiento del issue #4: con
+    /// el staging corto el rechazo ocurre en el rename de commit, y sin este
+    /// mapeo saldría como `Io` opaco (lo cazó la CI de macOS).
+    #[cfg(unix)]
+    #[test]
+    fn eilseq_mapea_a_invalid_path() {
+        let e = std::io::Error::from_raw_os_error(libc::EILSEQ);
         assert_eq!(map_io(&e), Error::InvalidPath);
     }
 

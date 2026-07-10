@@ -30,7 +30,16 @@ proptest! {
                 sink.write(bytes::Bytes::from_static(b"x"))
                     .await
                     .expect("chunk");
-                sink.commit().await.expect("commit");
+                // Con el staging corto (issue #4) el rechazo del OS al nombre
+                // FINAL llega en el rename de commit: rechazo limpio = skip,
+                // cualquier otro error es fallo real.
+                match sink.commit().await {
+                    Ok(()) => {}
+                    Err(norte_proto::Error::InvalidPath | norte_proto::Error::Conflict { .. }) => {
+                        return Ok(());
+                    }
+                    Err(e) => panic!("commit: {e:?}"),
+                }
                 // La prueba real: los bytes que devuelve el FS al LISTAR
                 // (stat ecoa el path de entrada; eso no prueba nada).
                 let listed: Vec<Vec<u8>> = norte_vfs::Provider::list(&p, &root)
