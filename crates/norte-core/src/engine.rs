@@ -95,7 +95,8 @@ impl Engine {
         ))
     }
 
-    /// Move como Task: rename si mismo provider; copy+delete cross-provider.
+    /// Move como Task: rename si mismo provider; copy+delete con plan único
+    /// si es cross-provider o el rename devuelve `Unsupported` (EXDEV).
     ///
     /// # Errors
     /// [`Error::Unsupported`] si algún scheme no tiene provider registrado.

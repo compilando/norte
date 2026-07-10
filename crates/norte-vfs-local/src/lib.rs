@@ -1,10 +1,11 @@
 //! Provider VFS del filesystem local, por OS (`cfg(unix)` / `cfg(windows)`).
 //!
 //! Único crate del workspace AUTORIZADO a usar `unsafe` (regla 5 de
-//! `CLAUDE.md`)… y actualmente con CERO usos: la reconstrucción de `OsString`
-//! en Windows va por WTF-8 validado → UTF-16 → `from_wide` (100% safe). Si
-//! algún día hace falta, cada uso irá con `#[allow(unsafe_code)]` por ítem,
-//! `// SAFETY:` y test.
+//! `CLAUDE.md`). Único uso hoy: `rename_noreplace` (syscalls que std no
+//! expone — `renameat2`/`renamex_np`/`MoveFileExW` sin replace), con
+//! `#[allow(unsafe_code)]` por ítem, `// SAFETY:` y test. La reconstrucción
+//! de `OsString` en Windows sigue 100% safe: WTF-8 validado → UTF-16 →
+//! `from_wide` (la unchecked queda prohibida).
 #![deny(unsafe_code)]
 
 mod native_path;

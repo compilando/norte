@@ -467,3 +467,188 @@ async fn copy_dir_into_itself_rejected() {
     let n = mem.list(&vp("mem:///a")).await.unwrap().count().await;
     assert_eq!(n, 0);
 }
+
+// ---------- deuda dura M0: EXDEV (#3) y move con walk único (#9) ----------
+
+/// Delega TODO en un [`MemProvider`] salvo `rename`, que devuelve
+/// `Unsupported` — como un FS real ante EXDEV (montajes distintos).
+struct SinRename(Arc<MemProvider>);
+
+#[async_trait::async_trait]
+impl Provider for SinRename {
+    // La firma del trait es `-> &str`; el literal aquí es correcto.
+    #[allow(clippy::unnecessary_literal_bound)]
+    fn scheme(&self) -> &str {
+        "mem"
+    }
+    fn capabilities(&self) -> norte_proto::Capabilities {
+        self.0.capabilities()
+    }
+    async fn stat(&self, p: &VPath) -> Result<norte_proto::Entry, Error> {
+        self.0.stat(p).await
+    }
+    async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, Error> {
+        self.0.list(p).await
+    }
+    async fn read(&self, p: &VPath) -> Result<norte_vfs::ByteStream, Error> {
+        self.0.read(p).await
+    }
+    async fn write(&self, p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
+        self.0.write(p).await
+    }
+    async fn mkdir(&self, p: &VPath) -> Result<(), Error> {
+        self.0.mkdir(p).await
+    }
+    async fn remove(&self, p: &VPath) -> Result<(), Error> {
+        self.0.remove(p).await
+    }
+    async fn rename(&self, _from: &VPath, _to: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+}
+
+/// EXDEV (issue #3): rename imposible en el mismo provider NO es un error
+/// terminal — el move degrada a copy+delete.
+#[tokio::test]
+async fn move_degrades_to_copy_delete_when_rename_unsupported() {
+    let engine = Engine::new();
+    let inner = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::new(SinRename(Arc::clone(&inner))) as Arc<dyn Provider>);
+    write_file(&inner, "mem:///origen", b"contenido").await;
+
+    let handle = engine
+        .move_(&vp("mem:///origen"), &vp("mem:///destino"))
+        .unwrap();
+    assert_eq!(handle.join().await, TaskState::Completed);
+
+    assert_eq!(
+        read_all(&inner, "mem:///destino").await.unwrap(),
+        b"contenido"
+    );
+    assert_eq!(
+        inner.stat(&vp("mem:///origen")).await.unwrap_err(),
+        Error::NotFound
+    );
+}
+
+/// Origen cuyo primer `read` INYECTA un archivo nuevo en el directorio en
+/// movimiento: simula una entrada aparecida después del walk de la copia
+/// (la ventana del issue #9).
+struct InyectaEnRead {
+    inner: Arc<MemProvider>,
+    hecho: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl Provider for InyectaEnRead {
+    // La firma del trait es `-> &str`; el literal aquí es correcto.
+    #[allow(clippy::unnecessary_literal_bound)]
+    fn scheme(&self) -> &str {
+        "src"
+    }
+    fn capabilities(&self) -> norte_proto::Capabilities {
+        self.inner.capabilities()
+    }
+    async fn stat(&self, p: &VPath) -> Result<norte_proto::Entry, Error> {
+        self.inner.stat(p).await
+    }
+    async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, Error> {
+        self.inner.list(p).await
+    }
+    async fn read(&self, p: &VPath) -> Result<norte_vfs::ByteStream, Error> {
+        if !self.hecho.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            write_file(&self.inner, "src:///dir/tardio", b"llegue tras el walk").await;
+        }
+        self.inner.read(p).await
+    }
+    async fn write(&self, p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
+        self.inner.write(p).await
+    }
+    async fn mkdir(&self, p: &VPath) -> Result<(), Error> {
+        self.inner.mkdir(p).await
+    }
+    async fn remove(&self, p: &VPath) -> Result<(), Error> {
+        self.inner.remove(p).await
+    }
+    async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), Error> {
+        self.inner.rename(from, to).await
+    }
+}
+
+/// Issue #9: lo aparecido en el origen DESPUÉS del walk de la copia jamás se
+/// borra sin haberse copiado. Con walks separados de copy y delete, `tardio`
+/// se borraba en silencio; con el plan único sobrevive (y el move falla con
+/// Conflict al no poder vaciar el dir — sin pérdida, jamás en silencio).
+#[tokio::test]
+async fn move_cross_provider_never_deletes_uncopied_entries() {
+    let engine = Engine::new();
+    let src_inner = Arc::new(MemProvider::new());
+    let dst = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::new(InyectaEnRead {
+        inner: Arc::clone(&src_inner),
+        hecho: std::sync::atomic::AtomicBool::new(false),
+    }) as Arc<dyn Provider>);
+    engine.register_provider(Arc::clone(&dst) as Arc<dyn Provider>);
+
+    src_inner.mkdir(&vp("src:///dir")).await.unwrap();
+    write_file(&src_inner, "src:///dir/a", b"planificado").await;
+
+    let handle = engine.move_(&vp("src:///dir"), &vp("mem:///dir")).unwrap();
+    let state = handle.join().await;
+
+    // Lo planificado llegó al destino.
+    assert_eq!(
+        read_all(&dst, "mem:///dir/a").await.unwrap(),
+        b"planificado"
+    );
+    // `tardio` existe en ALGÚN lado (origen o destino): jamás pérdida muda.
+    let en_origen = src_inner.stat(&vp("src:///dir/tardio")).await.is_ok();
+    let en_destino = dst.stat(&vp("mem:///dir/tardio")).await.is_ok();
+    assert!(
+        en_origen || en_destino,
+        "entrada tardía borrada sin copiarse (estado: {state:?})"
+    );
+}
+
+/// Regla 3 para el camino nuevo copy+delete del move (issues #3/#9):
+/// cancelar en plena fase DELETE deja destino completo + origen parcial —
+/// duplicado, jamás pérdida ni archivo a medias.
+#[tokio::test]
+async fn move_by_copy_cancel_mid_delete_loses_nothing() {
+    let engine = Engine::new();
+    let inner = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::new(SinRename(Arc::clone(&inner))) as Arc<dyn Provider>);
+    build_tree(&inner, 12).await;
+    inner
+        .faults()
+        .set_latency_per_op(Some(std::time::Duration::from_millis(3)));
+
+    let handle = engine.move_(&vp("mem:///src"), &vp("mem:///dst")).unwrap();
+    let mut rx = handle.progress();
+    // Fase copy = 13 pasos (12 archivos + raíz); a partir de 14 la task está
+    // borrando el origen.
+    loop {
+        let snap = rx.borrow_and_update().clone();
+        if snap.entries_done >= 14 || snap.state.is_terminal() {
+            break;
+        }
+        if rx.changed().await.is_err() {
+            break;
+        }
+    }
+    handle.cancel();
+    let state = handle.join().await;
+    inner.faults().clear();
+    assert_eq!(state, TaskState::Cancelled);
+    // Invariante: cada archivo original existe COMPLETO en origen o destino.
+    for i in 0..12 {
+        let name = format!("f{i:03}");
+        let contenido = match read_all(&inner, &format!("mem:///dst/{name}")).await {
+            Ok(c) => c,
+            Err(_) => read_all(&inner, &format!("mem:///src/{name}"))
+                .await
+                .unwrap_or_else(|_| panic!("{name} perdido en la cancelación")),
+        };
+        assert_eq!(contenido, b"data", "{name} a medias");
+    }
+}

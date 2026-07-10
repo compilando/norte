@@ -57,23 +57,27 @@ pub(crate) async fn copy_task(
             ctx.progress.update(|p| p.entries_done = 1);
             Ok(())
         }
-        EntryKind::Dir => copy_tree(&src, &dst, &from, &to, &observer, ctx).await,
+        EntryKind::Dir => {
+            let entries = walk(&*src, &from, &ctx.cancel).await?;
+            copy_tree(&src, &dst, &from, &to, &entries, &observer, ctx).await
+        }
         // M0: sin API de crear symlinks en el contrato Provider (deuda M1);
         // jamás se sigue el link para copiar el destino en su lugar.
         EntryKind::Symlink | EntryKind::Other => Err(Error::Unsupported),
     }
 }
 
+/// Copia el árbol `from` → `to` según un plan de entradas YA walkeado
+/// (el walk es del caller: el move lo reusa para el delete — issue #9).
 async fn copy_tree(
     src: &Arc<dyn Provider>,
     dst: &Arc<dyn Provider>,
     from: &VPath,
     to: &VPath,
+    entries: &[Entry],
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
-    // Walk previo para totales de progreso (el usuario ve X/Y desde el inicio).
-    let entries = walk(&**src, from, &ctx.cancel).await?;
     let bytes_total: u64 = entries
         .iter()
         .filter(|e| e.kind == EntryKind::File)
@@ -92,7 +96,7 @@ async fn copy_tree(
         p.current = Some(to.clone());
     });
 
-    for entry in &entries {
+    for entry in entries {
         if ctx.cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
@@ -185,13 +189,17 @@ async fn copy_file(
 }
 
 /// Move: rename si origen y destino viven en el MISMO provider (0 bytes);
-/// cross-provider = copy + delete del origen (spec §5).
+/// si el provider no puede (`Unsupported`: EXDEV entre montajes, remoto sin
+/// rename) o es cross-provider, copy + delete del origen (spec §5).
 ///
-/// Estado post-fallo del cross-provider: si el delete del origen falla a
-/// mitad, el DESTINO ya está completo y el origen queda parcial — duplicado,
-/// jamás pérdida de lo copiado. Limitación M0 (deuda): copy y delete hacen
-/// walks separados; entradas creadas en el origen entre ambos se borran sin
-/// haberse copiado. El journal M3 conducirá ambos desde un único plan.
+/// El copy y el delete se conducen desde UN plan (walk único, issue #9): el
+/// delete borra EXACTAMENTE lo copiado, en post-order. Una entrada aparecida
+/// en el origen tras el walk sobrevive y hace fallar el remove de su dir
+/// padre con `Conflict` — jamás pérdida silenciosa.
+///
+/// Estado post-fallo del copy+delete: si el delete falla a mitad, el DESTINO
+/// ya está completo y el origen queda parcial — duplicado, jamás pérdida de
+/// lo copiado.
 #[tracing::instrument(skip_all, fields(from = %from.display_lossy(), to = %to.display_lossy()))]
 pub(crate) async fn move_task(
     src: Arc<dyn Provider>,
@@ -225,24 +233,96 @@ pub(crate) async fn move_task(
             p.entries_total = Some(1);
             p.current = Some(from.clone());
         });
-        src.rename(&from, &to).await?;
-        observer.on_mutation(&Mutation::Renamed {
-            from: &from,
-            to: &to,
-        });
-        ctx.progress.update(|p| p.entries_done = 1);
-        return Ok(());
+        match src.rename(&from, &to).await {
+            Ok(()) => {
+                observer.on_mutation(&Mutation::Renamed {
+                    from: &from,
+                    to: &to,
+                });
+                ctx.progress.update(|p| p.entries_done = 1);
+                return Ok(());
+            }
+            // El provider no sabe renombrar ESTO (EXDEV entre montajes es el
+            // caso típico): degradar a copy+delete, como cross-provider.
+            Err(Error::Unsupported) => {}
+            Err(e) => return Err(e),
+        }
     }
-    copy_task(
-        Arc::clone(&src),
-        dst,
-        from.clone(),
-        to,
-        Arc::clone(&observer),
-        ctx,
-    )
-    .await?;
-    delete_task(src, from, observer, ctx).await
+    move_by_copy(src, dst, from, to, observer, ctx).await
+}
+
+/// Move por copy + delete con plan único: el walk de la copia ES la lista
+/// del delete. Colisión contra el provider DESTINO, como en copy.
+async fn move_by_copy(
+    src: Arc<dyn Provider>,
+    dst: Arc<dyn Provider>,
+    from: VPath,
+    to: VPath,
+    observer: Arc<dyn MutationObserver>,
+    ctx: &TaskCtx,
+) -> Result<(), Error> {
+    if Arc::ptr_eq(&src, &dst) && is_descendant(&to, &from) {
+        return Err(Error::InvalidPath);
+    }
+    match dst.stat(&to).await {
+        Ok(_) => {
+            return Err(Error::Conflict {
+                conflict: ConflictKind::Exists,
+            });
+        }
+        Err(Error::NotFound) => {}
+        Err(e) => return Err(e),
+    }
+    let src_entry = src.stat(&from).await?;
+    match src_entry.kind {
+        EntryKind::File => {
+            ctx.progress.update(|p| {
+                p.bytes_total = src_entry.size;
+                // 2 pasos: copiar + borrar el origen.
+                p.entries_total = Some(2);
+                p.current = Some(from.clone());
+            });
+            copy_file(&*src, &*dst, &from, &to, src_entry.size, &observer, ctx).await?;
+            ctx.progress.update(|p| p.entries_done = 1);
+            if ctx.cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            src.remove(&from).await?;
+            observer.on_mutation(&Mutation::Removed(&from));
+            ctx.progress.update(|p| p.entries_done = 2);
+            Ok(())
+        }
+        EntryKind::Dir => {
+            let entries = walk(&*src, &from, &ctx.cancel).await?;
+            copy_tree(&src, &dst, &from, &to, &entries, &observer, ctx).await?;
+            // Fase delete: el total crece con los pasos de borrado (la barra
+            // sigue monótona; copy_tree ya contó los suyos).
+            ctx.progress.update(|p| {
+                p.entries_total = p.entries_total.map(|t| t + entries.len() as u64 + 1);
+            });
+            // Borra EXACTAMENTE el plan, en post-order (el walk emite cada
+            // padre antes que sus hijos; al revés todo dir llega vacío…
+            // salvo que algo haya aparecido después del walk: ese remove
+            // falla con Conflict y lo no copiado SOBREVIVE).
+            for e in entries.iter().rev() {
+                if ctx.cancel.is_cancelled() {
+                    return Err(Error::Cancelled);
+                }
+                ctx.progress.update(|p| p.current = Some(e.path.clone()));
+                src.remove(&e.path).await?;
+                observer.on_mutation(&Mutation::Removed(&e.path));
+                ctx.progress.update(|p| p.entries_done += 1);
+            }
+            if ctx.cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            src.remove(&from).await?;
+            observer.on_mutation(&Mutation::Removed(&from));
+            ctx.progress.update(|p| p.entries_done += 1);
+            Ok(())
+        }
+        EntryKind::Symlink | EntryKind::Other => Err(Error::Unsupported),
+    }
 }
 
 /// Delete recursivo post-order (los hijos caen antes que su padre).

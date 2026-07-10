@@ -390,6 +390,7 @@ dependencies = [
 name = "norte-core"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "futures",
  "norte-proto",
@@ -444,6 +445,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures",
+ "libc",
  "norte-proto",
  "norte-testkit",
  "norte-vfs",
@@ -451,6 +453,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-stream",
+ "windows-sys",
 ]
 
 [[package]]

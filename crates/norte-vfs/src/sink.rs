@@ -12,8 +12,9 @@ use norte_proto::Error;
 ///
 /// Contrato (verificado por la suite contractual):
 /// - Los bytes van a un staging propio del provider (p. ej.
-///   `<nombre>.norte-partial` en FS reales); el path final NO existe ni
-///   cambia hasta [`Self::commit`].
+///   `.norte-partial.<hash>.<pid>-<seq>` en FS reales — nombre corto que NO
+///   deriva del nombre final, que puede rozar `NAME_MAX`); el path final NO
+///   existe ni cambia hasta [`Self::commit`].
 /// - [`Self::commit`] publica el contenido completo en el path final, de
 ///   forma atómica si el backend puede (`RENAME_ATOMIC`).
 /// - [`Self::abort`] elimina todo rastro del staging; es la vía de la
