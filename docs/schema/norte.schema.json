@@ -1,0 +1,30 @@
+{
+  "$defs": {
+    "KeymapSection": {
+      "additionalProperties": false,
+      "description": "`[keymap]` de `norte.toml`.",
+      "properties": {
+        "preset": {
+          "default": null,
+          "description": "Preset base (`orthodox`, `vim`, `cua`). Ausente = capa anterior.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`norte.toml`: la config general.",
+  "properties": {
+    "keymap": {
+      "$ref": "#/$defs/KeymapSection",
+      "description": "Sección de keymap."
+    }
+  },
+  "title": "NorteToml",
+  "type": "object"
+}

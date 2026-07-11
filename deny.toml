@@ -14,6 +14,9 @@ allow = [
     "ISC",
     "Zlib",
 ]
+# notify (watcher de config, ADR 0007): CC0 = dominio público equivalente.
+# Excepción ACOTADA: otra dep CC0 futura deberá justificarse aquí.
+exceptions = [{ name = "notify", allow = ["CC0-1.0"] }]
 confidence-threshold = 0.9
 
 [advisories]

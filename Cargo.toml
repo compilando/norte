@@ -52,6 +52,13 @@ crossterm = "0.29"
 # keymap.toml y (fase 6) el resto de la config: formato mandado por la spec
 # §13. toml-rs, MIT/Apache, el estándar del ecosistema.
 toml = "0.9"
+# Hot-reload de config (spec §13, ADR 0007): watcher multiplataforma;
+# alternativa evaluada = solo polling (peor latencia y más syscalls; el
+# poll queda como respaldo). CC0-1.0 (excepción acotada en deny.toml).
+notify = "8"
+# JSON Schema de la config (spec §13) desde los MISMOS structs serde que
+# parsean: un golden test impide que diverjan. MIT.
+schemars = "1"
 # Solo norte-vfs-local (regla 5): syscalls de rename no-replace que std no
 # expone — renameat2/renamex_np (libc, la misma que ya usa std) y MoveFileExW
 # sin REPLACE_EXISTING (windows-sys, el binding oficial de Microsoft).

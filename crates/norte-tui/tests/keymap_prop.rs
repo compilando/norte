@@ -69,7 +69,7 @@ proptest! {
         // 1) Toda secuencia ligada camina Pending…Pending→Run (da igual la
         //    capa: una secuencia exacta pisada sigue estando LIGADA).
         for (on, _) in todas() {
-            let mut r = Resolver::new(&eff);
+            let mut r = Resolver::new(eff.clone());
             for (i, k) in on.iter().enumerate() {
                 let res = r.push(parse_chord(k).unwrap());
                 if i + 1 < on.len() {
@@ -85,8 +85,8 @@ proptest! {
 
         // 2) Ningún stream arbitrario panica ni desborda el pending; y la
         //    resolución es una FUNCIÓN del stream (dos pasadas idénticas).
-        let mut r1 = Resolver::new(&eff);
-        let mut r2 = Resolver::new(&eff);
+        let mut r1 = Resolver::new(eff.clone());
+        let mut r2 = Resolver::new(eff.clone());
         for k in &stream {
             let c = parse_chord(k).unwrap();
             let a = r1.push(c);

@@ -11,3 +11,4 @@ La spec evoluciona por ADR, no por edición silenciosa (spec §18).
 | [0004](0004-convenciones-wire-protocolo.md) | Convenciones de wire del protocolo v0 | accepted |
 | [0005](0005-provider-ancho-politicas-engine.md) | Ensanchado del contrato Provider y políticas del copy engine | accepted |
 | [0006](0006-keymap-resolucion.md) | Semántica de resolución del keymap engine | accepted |
+| [0007](0007-config-capas-hot-reload.md) | Config en capas: precedencia y hot-reload | accepted |

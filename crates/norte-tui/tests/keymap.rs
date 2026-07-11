@@ -65,7 +65,7 @@ fn resuelve_secuencias_multi_tecla() {
         keymap = [{ on = ["q"], run = "app.quit" }]
     "#;
     let eff = eff(preset, None).unwrap();
-    let mut r = Resolver::new(&eff);
+    let mut r = Resolver::new(eff.clone());
     assert_eq!(
         r.push(parse_chord("g").unwrap()),
         Resolution::Pending(1),
@@ -102,7 +102,7 @@ fn esc_cancela_la_secuencia_pendiente() {
         ]
     "#;
     let eff = eff(preset, None).unwrap();
-    let mut r = Resolver::new(&eff);
+    let mut r = Resolver::new(eff.clone());
     r.push(parse_chord("g").unwrap());
     // Con secuencia pendiente, Esc SIEMPRE cancela (jamás ejecuta binding).
     assert_eq!(r.push(parse_chord("esc").unwrap()), Resolution::Reset);
@@ -189,7 +189,7 @@ fn la_especificidad_de_contexto_prevalece_sobre_la_capa() {
         prepend_keymap = [{ on = ["j"], run = "app.quit" }]
     "#;
     let eff = eff(preset, Some(user)).unwrap();
-    let mut r = Resolver::new(&eff);
+    let mut r = Resolver::new(eff.clone());
     assert_eq!(
         r.push(parse_chord("q").unwrap()),
         Resolution::Run("cursor.up".into()),
@@ -245,7 +245,7 @@ fn capas_yazi_prepend_pisa_y_append_solo_anade() {
         ]
     "#;
     let eff = eff(preset, Some(user)).unwrap();
-    let mut r = Resolver::new(&eff);
+    let mut r = Resolver::new(eff.clone());
     assert_eq!(
         r.push(parse_chord("j").unwrap()),
         Resolution::Run("cursor.top".into()),
@@ -275,7 +275,7 @@ fn el_contexto_especifico_pisa_al_global_por_secuencia_exacta() {
         keymap = [{ on = ["q"], run = "cursor.up" }]
     "#;
     let eff = eff(preset, None).unwrap();
-    let mut r = Resolver::new(&eff);
+    let mut r = Resolver::new(eff.clone());
     assert_eq!(
         r.push(parse_chord("q").unwrap()),
         Resolution::Run("cursor.up".into())
@@ -291,7 +291,7 @@ fn los_tres_presets_de_fabrica_cargan_y_cubren_lo_basico() {
     for (nombre, preset) in norte_tui::keymap::presets() {
         let eff = Effective::build(&preset, None, COMANDOS)
             .unwrap_or_else(|e| panic!("preset {nombre}: {e:?}"));
-        let mut r = Resolver::new(&eff);
+        let mut r = Resolver::new(eff.clone());
         // Todo preset debe poder salir y cambiar de pane.
         let quit_posible = ["q", "f10", "ctrl+q"].iter().any(|k| {
             let res = r.push(parse_chord(k).unwrap());
@@ -311,7 +311,7 @@ fn los_presets_ligan_las_operaciones_de_archivo() {
     for (nombre, preset) in norte_tui::keymap::presets() {
         let eff = Effective::build(&preset, None, COMANDOS)
             .unwrap_or_else(|e| panic!("preset {nombre}: {e:?}"));
-        let mut r = Resolver::new(&eff);
+        let mut r = Resolver::new(eff.clone());
         for (tecla, cmd) in [
             ("f5", "pane.copy"),
             ("f6", "pane.move"),
@@ -325,4 +325,45 @@ fn los_presets_ligan_las_operaciones_de_archivo() {
             );
         }
     }
+}
+
+#[test]
+fn capas_multiples_se_pliegan_por_precedencia() {
+    // ADR 0007: prepends de capas superiores primero; appends igual.
+    let preset = parse_keymap(
+        r#"
+        [pane]
+        keymap = [{ on = ["j"], run = "cursor.down" }]
+    "#,
+    )
+    .unwrap();
+    let sistema = parse_keymap(
+        r#"
+        [pane]
+        prepend_keymap = [{ on = ["j"], run = "cursor.up" }]
+        append_keymap = [{ on = ["x"], run = "app.quit" }]
+    "#,
+    )
+    .unwrap();
+    let usuario = parse_keymap(
+        r#"
+        [pane]
+        prepend_keymap = [{ on = ["j"], run = "cursor.top" }]
+        append_keymap = [{ on = ["x"], run = "cursor.bottom" }]
+    "#,
+    )
+    .unwrap();
+    // Capas en precedencia ASCENDENTE: sistema, usuario.
+    let eff = Effective::build_layered(&preset, &[sistema, usuario], COMANDOS).unwrap();
+    let mut r = Resolver::new(eff);
+    assert_eq!(
+        r.push(parse_chord("j").unwrap()),
+        Resolution::Run("cursor.top".into()),
+        "el prepend de la capa MÁS alta gana"
+    );
+    assert_eq!(
+        r.push(parse_chord("x").unwrap()),
+        Resolution::Run("cursor.bottom".into()),
+        "entre appends también gana la capa más alta"
+    );
 }

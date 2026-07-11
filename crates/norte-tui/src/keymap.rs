@@ -205,6 +205,7 @@ pub fn parse_chord(s: &str) -> Result<Chord, KeymapError> {
 
 /// Un binding tal como viene del TOML.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 struct RawBinding {
     on: Vec<String>,
@@ -214,6 +215,7 @@ struct RawBinding {
 /// Las tres listas de una sección (preset: `keymap`; usuario:
 /// `prepend_keymap`/`append_keymap` — modelo Yazi, spec §12).
 #[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 struct RawSection {
     #[serde(default)]
@@ -226,12 +228,22 @@ struct RawSection {
 
 /// Un `keymap.toml` parseado (preset de fábrica o capa de usuario).
 #[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct KeymapFile {
     #[serde(default)]
     global: RawSection,
     #[serde(default)]
     pane: RawSection,
+}
+
+impl KeymapFile {
+    /// ¿Define `keymap` (lista completa de preset)? Las CAPAS de usuario
+    /// no lo admiten — el diagnóstico con archivo vive en `config::load`.
+    #[must_use]
+    pub fn has_full_keymap(&self) -> bool {
+        !self.global.keymap.is_empty() || !self.pane.keymap.is_empty()
+    }
 }
 
 /// Parsea un `keymap.toml`.
@@ -254,17 +266,16 @@ pub enum Resolution {
 }
 
 /// Keymap EFECTIVO: capas y contextos ya fusionados y validados
-/// (prefix-free). Inmutable tras construir.
-#[derive(Debug)]
+/// (prefix-free). Inmutable tras construir; clonable barato (el hot-reload
+/// construye uno nuevo y lo cambia entero, ADR 0007).
+#[derive(Debug, Clone)]
 pub struct Effective {
     bindings: Vec<(Vec<Chord>, String)>,
 }
 
 impl Effective {
-    /// Fusiona `preset` + capa opcional de usuario y valida (ADR 0006):
-    /// por contexto, `prepend` PISA por secuencia exacta y `append` solo
-    /// añade; entre contextos, el específico (`pane`) pisa al `global`;
-    /// el resultado debe ser prefix-free y con comandos conocidos.
+    /// Fusiona `preset` + capa opcional de usuario (ADR 0006). Azúcar de
+    /// [`Self::build_layered`] con cero o una capa.
     ///
     /// # Errors
     /// Ver [`KeymapError`] — todos son errores de CARGA con diagnóstico.
@@ -273,21 +284,40 @@ impl Effective {
         user: Option<&KeymapFile>,
         known_commands: &[&str],
     ) -> Result<Self, KeymapError> {
-        // Cada capa admite SOLO sus listas (M2 de la revisión): descartar
-        // en silencio la lista equivocada sería el "comportamiento raro"
-        // que el ADR prohíbe.
-        for (file, layer) in [(Some(preset), "preset"), (user, "usuario")] {
-            let Some(file) = file else { continue };
-            for section in [&file.global, &file.pane] {
-                if layer == "preset"
-                    && !(section.prepend_keymap.is_empty() && section.append_keymap.is_empty())
-                {
-                    return Err(KeymapError::WrongLayerKey {
-                        layer: "preset",
-                        key: "prepend_keymap/append_keymap",
-                    });
-                }
-                if layer == "usuario" && !section.keymap.is_empty() {
+        match user {
+            Some(u) => Self::build_layered(preset, std::slice::from_ref(u), known_commands),
+            None => Self::build_layered(preset, &[], known_commands),
+        }
+    }
+
+    /// Fusiona `preset` + N capas de usuario en precedencia ASCENDENTE
+    /// (sistema → usuario → proyecto, ADR 0007) y valida (ADR 0006): por
+    /// contexto, los `prepend` de capas superiores van primero (ganan),
+    /// luego el preset, luego los `append` (superiores antes); entre
+    /// contextos, el específico (`pane`) pisa al `global`; el resultado
+    /// debe ser prefix-free y con comandos conocidos.
+    ///
+    /// # Errors
+    /// Ver [`KeymapError`] — todos son errores de CARGA con diagnóstico.
+    pub fn build_layered(
+        preset: &KeymapFile,
+        layers: &[KeymapFile],
+        known_commands: &[&str],
+    ) -> Result<Self, KeymapError> {
+        // Cada capa admite SOLO sus listas (revisión fase 4): descartar en
+        // silencio la lista equivocada sería el "comportamiento raro" que
+        // el ADR prohíbe.
+        for section in [&preset.global, &preset.pane] {
+            if !(section.prepend_keymap.is_empty() && section.append_keymap.is_empty()) {
+                return Err(KeymapError::WrongLayerKey {
+                    layer: "preset",
+                    key: "prepend_keymap/append_keymap",
+                });
+            }
+        }
+        for layer in layers {
+            for section in [&layer.global, &layer.pane] {
+                if !section.keymap.is_empty() {
                     return Err(KeymapError::WrongLayerKey {
                         layer: "usuario",
                         key: "keymap",
@@ -295,15 +325,20 @@ impl Effective {
                 }
             }
         }
-        let empty = RawSection::default();
         let merge_ctx = |get: fn(&KeymapFile) -> &RawSection| -> Vec<&RawBinding> {
-            let p = get(preset);
-            let u = user.map_or(&empty, get);
-            // Orden de precedencia: prepend usuario > preset > append usuario.
-            u.prepend_keymap
+            // Prepends de capa superior primero (ganan), luego el preset,
+            // luego los appends (superiores antes).
+            layers
                 .iter()
-                .chain(p.keymap.iter())
-                .chain(u.append_keymap.iter())
+                .rev()
+                .flat_map(|l| get(l).prepend_keymap.iter())
+                .chain(get(preset).keymap.iter())
+                .chain(
+                    layers
+                        .iter()
+                        .rev()
+                        .flat_map(|l| get(l).append_keymap.iter()),
+                )
                 .collect()
         };
         // Entre contextos: pane (específico) antes que global.
@@ -382,17 +417,19 @@ enum Lookup<'a> {
     Miss,
 }
 
-/// Estado de resolución de UNA secuencia en curso.
-#[derive(Debug)]
-pub struct Resolver<'a> {
-    eff: &'a Effective,
+/// Estado de resolución de UNA secuencia en curso. POSEE su keymap
+/// efectivo: el hot-reload (ADR 0007) construye uno nuevo y reemplaza el
+/// resolver entero.
+#[derive(Debug, Clone)]
+pub struct Resolver {
+    eff: Effective,
     pending: Vec<Chord>,
 }
 
-impl<'a> Resolver<'a> {
+impl Resolver {
     /// Resolver limpio sobre un keymap efectivo.
     #[must_use]
-    pub fn new(eff: &'a Effective) -> Self {
+    pub fn new(eff: Effective) -> Self {
         Self {
             eff,
             pending: Vec::new(),

@@ -19,18 +19,32 @@ futures.workspace = true
 norte-core.workspace = true
 norte-proto.workspace = true
 norte-vfs-local.workspace = true
+notify.workspace = true
+schemars = { workspace = true, features = ["derive"], optional = true }
 serde.workspace = true
 thiserror.workspace = true
 ratatui.workspace = true
 toml.workspace = true
 unicode-normalization.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio-util.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true
 norte-testkit.workspace = true
 proptest.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
 norte-vfs.workspace = true
+
+[features]
+# Generación de los JSON Schema publicados (golden test de docs/schema);
+# fuera del binario final (ADR 0007).
+schema = ["dep:schemars"]
+
+[[test]]
+name = "schema"
+required-features = ["schema"]
 
 [lints]
 workspace = true

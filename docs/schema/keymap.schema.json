@@ -1,0 +1,62 @@
+{
+  "$defs": {
+    "RawBinding": {
+      "additionalProperties": false,
+      "description": "Un binding tal como viene del TOML.",
+      "properties": {
+        "on": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "run": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "on",
+        "run"
+      ],
+      "type": "object"
+    },
+    "RawSection": {
+      "additionalProperties": false,
+      "description": "Las tres listas de una sección (preset: `keymap`; usuario:\n`prepend_keymap`/`append_keymap` — modelo Yazi, spec §12).",
+      "properties": {
+        "append_keymap": {
+          "items": {
+            "$ref": "#/$defs/RawBinding"
+          },
+          "type": "array"
+        },
+        "keymap": {
+          "items": {
+            "$ref": "#/$defs/RawBinding"
+          },
+          "type": "array"
+        },
+        "prepend_keymap": {
+          "items": {
+            "$ref": "#/$defs/RawBinding"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Un `keymap.toml` parseado (preset de fábrica o capa de usuario).",
+  "properties": {
+    "global": {
+      "$ref": "#/$defs/RawSection"
+    },
+    "pane": {
+      "$ref": "#/$defs/RawSection"
+    }
+  },
+  "title": "KeymapFile",
+  "type": "object"
+}

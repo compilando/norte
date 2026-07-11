@@ -12,6 +12,7 @@ use futures::StreamExt;
 use norte_core::{Engine, TransferOptions};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{App, DialogOutcome, Modal, Pane, TransferKind, dialog_key, sort_entries};
+use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::keymap::{COMMANDS, Chord, Effective, Resolution, Resolver, presets};
 use norte_tui::tasks::RetrySpec;
 use norte_tui::ui;
@@ -23,22 +24,16 @@ const PAGE: usize = 10;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Preset por argumento (`norte-tui vim`); default orthodox (decisión
-    // 2026-07-10). La capa de usuario (keymap.toml en disco) llega con la
-    // config en capas de la fase 6.
-    let preset_name = std::env::args_os().nth(1).map_or_else(
-        || "orthodox".to_owned(),
-        |s| s.to_string_lossy().into_owned(),
-    );
-    let presets = presets();
-    let (_, preset) = presets
-        .iter()
-        .find(|(n, _)| *n == preset_name)
-        .with_context(|| {
-            let nombres: Vec<&str> = presets.iter().map(|(n, _)| *n).collect();
-            format!("preset desconocido {preset_name:?}; disponibles: {nombres:?}")
-        })?;
-    let eff = Effective::build(preset, None, COMMANDS).context("keymap inválido")?;
+    // Capas de config (ADR 0007) + flag: el argumento (`norte-tui vim`) es
+    // la capa MÁS alta y pisa el preset de norte.toml.
+    let cli_preset = std::env::args_os()
+        .nth(1)
+        .map(|s| s.to_string_lossy().into_owned());
+    let layers = config::standard_layers();
+    let cfg = config::load_async(layers.clone())
+        .await
+        .context("config inválida")?;
+    let eff = build_keymap(&cfg, cli_preset.as_deref())?;
 
     let engine = Engine::new();
     engine.register_provider(Arc::new(LocalProvider::os_root()));
@@ -51,24 +46,63 @@ async fn main() -> Result<()> {
     let left = Pane::new(start.clone(), listing(&engine, &start).await?);
     let right = Pane::new(start.clone(), listing(&engine, &start).await?);
     let mut app = App::new(left, right);
-    let mut resolver = Resolver::new(&eff);
+    let mut resolver = Resolver::new(eff);
+
+    // Hot-reload: vigilancia de las capas, con aviso si degrada a polling.
+    let (cfg_tx, cfg_rx) = tokio::sync::mpsc::channel(8);
+    let watch = config::watch(&layers, cfg_tx).await;
+    if watch.mode == WatchMode::Polling {
+        app.message = Some("config: vigilancia degradada a polling".to_owned());
+    }
 
     let mut terminal = ratatui::init();
-    let res = run(&mut terminal, &mut app, &engine, &mut resolver).await;
+    let res = run(
+        &mut terminal,
+        &mut app,
+        &engine,
+        &mut resolver,
+        layers,
+        cli_preset,
+        cfg_rx,
+    )
+    .await;
     ratatui::restore();
+    drop(watch);
     res
 }
 
+/// Resuelve el preset (flag > config > default) y pliega las capas de
+/// keymap (ADR 0007) sobre él.
+fn build_keymap(cfg: &config::LoadedConfig, cli_preset: Option<&str>) -> Result<Effective> {
+    let preset_name = cli_preset.unwrap_or(&cfg.preset);
+    let presets = presets();
+    let (_, preset) = presets
+        .iter()
+        .find(|(n, _)| *n == preset_name)
+        .with_context(|| {
+            let nombres: Vec<&str> = presets.iter().map(|(n, _)| *n).collect();
+            format!("preset desconocido {preset_name:?}; disponibles: {nombres:?}")
+        })?;
+    Effective::build_layered(preset, &cfg.keymap_layers, COMMANDS).context("keymap inválido")
+}
+
+#[allow(clippy::too_many_arguments)] // wiring del binario, no API
 async fn run(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
     engine: &Engine,
-    resolver: &mut Resolver<'_>,
+    resolver: &mut Resolver,
+    layers: Layers,
+    cli_preset: Option<String>,
+    mut cfg_rx: tokio::sync::mpsc::Receiver<()>,
 ) -> Result<()> {
     let mut events = EventStream::new();
     // Tick del panel de tasks: copia snapshots del watch (jamás bloquea).
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(100));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Debounce del hot-reload SIN bloquear el loop (revisión fase 6): cada
+    // evento de config empuja el deadline; el reload corre cuando vence.
+    let mut reload_at: Option<tokio::time::Instant> = None;
     loop {
         // Exención puntual de la regla 2: el draw escribe stdout síncrono
         // (patrón async oficial de ratatui; acotado, runtime multi-thread).
@@ -79,6 +113,21 @@ async fn run(
         tokio::select! {
             _ = tick.tick() => {
                 on_tick(app, engine, &mut events).await;
+            }
+            Some(()) = cfg_rx.recv() => {
+                // Ráfaga de guardados: empuja el deadline (ADR 0007).
+                reload_at =
+                    Some(tokio::time::Instant::now() + std::time::Duration::from_millis(300));
+            }
+            () = async {
+                match reload_at {
+                    Some(d) => tokio::time::sleep_until(d).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                reload_at = None;
+                while cfg_rx.try_recv().is_ok() {}
+                reload_config(app, resolver, &layers, cli_preset.as_deref()).await;
             }
             maybe = events.next() => {
                 let Some(event) = maybe else { return Ok(()); };
@@ -109,6 +158,28 @@ async fn run(
             }
         }
         // Resize/Focus/etc: el draw del inicio del loop repinta solo.
+    }
+}
+
+/// Hot-reload (ADR 0007): relee TODAS las capas; ante CUALQUIER error se
+/// conserva la config vigente y se avisa por la barra — jamás romper una
+/// sesión en marcha por un TOML a medio guardar.
+async fn reload_config(
+    app: &mut App,
+    resolver: &mut Resolver,
+    layers: &Layers,
+    cli_preset: Option<&str>,
+) {
+    match config::load_async(layers.clone()).await {
+        Ok(cfg) => match build_keymap(&cfg, cli_preset) {
+            Ok(eff) => {
+                *resolver = Resolver::new(eff);
+                app.pending.clear();
+                app.message = Some("config recargada".to_owned());
+            }
+            Err(e) => app.message = Some(format!("config NO aplicada: {e:#}")),
+        },
+        Err(e) => app.message = Some(format!("config NO aplicada: {e}")),
     }
 }
 
