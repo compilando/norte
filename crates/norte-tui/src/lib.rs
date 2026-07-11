@@ -5,4 +5,5 @@
 
 pub mod app;
 pub mod keymap;
+pub mod tasks;
 pub mod ui;

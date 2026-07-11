@@ -27,6 +27,7 @@ unicode-normalization.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [dev-dependencies]
+bytes.workspace = true
 norte-testkit.workspace = true
 proptest.workspace = true
 norte-vfs.workspace = true

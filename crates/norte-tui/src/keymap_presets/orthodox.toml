@@ -19,4 +19,8 @@ keymap = [
     { on = ["end"], run = "cursor.bottom" },
     { on = ["enter"], run = "nav.enter" },
     { on = ["backspace"], run = "nav.parent" },
+    { on = ["f5"], run = "pane.copy" },
+    { on = ["f6"], run = "pane.move" },
+    { on = ["f8"], run = "pane.delete" },
+    { on = ["ctrl+k"], run = "task.cancel" },
 ]

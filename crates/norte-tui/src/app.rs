@@ -124,7 +124,6 @@ pub fn path_display(p: &VPath) -> (String, bool) {
 }
 
 /// Estado completo del TUI: dos panes y el foco.
-#[derive(Debug)]
 pub struct App {
     /// Los dos paneles (izquierda, derecha).
     pub panes: [Pane; 2],
@@ -134,6 +133,16 @@ pub struct App {
     pub quit: bool,
     /// Secuencia de teclas pendiente, ya formateada (status bar).
     pub pending: String,
+    /// Diálogo modal activo (bloquea el keymap hasta resolverse).
+    pub modal: Option<Modal>,
+    /// Último mensaje para la barra (error por categoría o resultado).
+    pub message: Option<String>,
+    /// Panel de tasks vivo.
+    pub board: crate::tasks::TaskBoard,
+    /// Colisiones a la espera de diálogo: JAMÁS se pisa un modal abierto
+    /// (una tecla en vuelo respondería a la pregunta equivocada); se
+    /// atienden en orden al cerrarse el modal actual.
+    pub pending_collisions: std::collections::VecDeque<crate::tasks::RetrySpec>,
 }
 
 impl App {
@@ -145,6 +154,10 @@ impl App {
             focus: 0,
             quit: false,
             pending: String::new(),
+            modal: None,
+            message: None,
+            board: crate::tasks::TaskBoard::default(),
+            pending_collisions: std::collections::VecDeque::new(),
         }
     }
 
@@ -168,5 +181,92 @@ impl App {
     /// Alterna el foco entre los dos panes (Tab, keymap mc).
     pub fn switch_focus(&mut self) {
         self.focus ^= 1;
+    }
+
+    /// Si no hay modal abierto, abre el diálogo de la siguiente colisión
+    /// encolada. Llamar tras cerrar un modal y en cada tick.
+    pub fn open_next_collision(&mut self) {
+        if self.modal.is_none()
+            && let Some(retry) = self.pending_collisions.pop_front()
+        {
+            self.modal = Some(Modal::Collision { retry });
+        }
+    }
+}
+
+/// Tipo de transferencia pendiente de confirmación/colisión.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferKind {
+    /// Copia (F5).
+    Copy,
+    /// Movimiento (F6).
+    Move,
+}
+
+/// Diálogo modal activo. Sus teclas van HARDCODEADAS (son la semántica del
+/// diálogo, no bindings del usuario); el contexto `dialog` del keymap es
+/// deuda anotada (issue #24).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Modal {
+    /// Confirmación de borrado (F8): irreversible hasta el trash (fase 8).
+    ConfirmDelete {
+        /// Lo que se borraría.
+        target: VPath,
+    },
+    /// Confirmación de copy/move (F5/F6).
+    ConfirmTransfer {
+        /// Copy o Move.
+        kind: TransferKind,
+        /// Origen (la entrada seleccionada).
+        from: VPath,
+        /// Destino (el dir del otro pane + el nombre).
+        to: VPath,
+    },
+    /// Colisión: elegir política y REENVIAR la operación entera (ADR 0005:
+    /// el engine trata Ask como Fail; el TUI pregunta a nivel de task).
+    /// Porta el `RetrySpec` COMPLETO: el reintento conserva las opciones
+    /// originales, solo cambia la política de colisión.
+    Collision {
+        /// La transferencia que colisionó, lista para reenviar.
+        retry: crate::tasks::RetrySpec,
+    },
+}
+
+/// Resultado de una tecla sobre un modal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogOutcome {
+    /// Tecla irrelevante: el diálogo sigue abierto.
+    Open,
+    /// Cerrado sin hacer nada.
+    Cancelled,
+    /// Confirmado (Enter/y).
+    Confirmed,
+    /// Reintentar la transferencia con esta política.
+    Retry(norte_proto::CollisionPolicy),
+}
+
+/// Teclas de diálogo: Esc SIEMPRE cancela; confirmaciones aceptan Enter/y
+/// y rechazan n; la colisión elige o/s/r/n (sin default en Enter: no hay
+/// respuesta inocua que merezca dispararse sola).
+#[must_use]
+pub fn dialog_key(modal: &Modal, code: crossterm::event::KeyCode) -> DialogOutcome {
+    use crossterm::event::KeyCode as K;
+    use norte_proto::CollisionPolicy as P;
+    if code == K::Esc {
+        return DialogOutcome::Cancelled;
+    }
+    match modal {
+        Modal::ConfirmDelete { .. } | Modal::ConfirmTransfer { .. } => match code {
+            K::Enter | K::Char('y') => DialogOutcome::Confirmed,
+            K::Char('n') => DialogOutcome::Cancelled,
+            _ => DialogOutcome::Open,
+        },
+        Modal::Collision { .. } => match code {
+            K::Char('o') => DialogOutcome::Retry(P::Overwrite),
+            K::Char('s') => DialogOutcome::Retry(P::Skip),
+            K::Char('r') => DialogOutcome::Retry(P::RenameAuto),
+            K::Char('n') => DialogOutcome::Retry(P::Newer),
+            _ => DialogOutcome::Open,
+        },
     }
 }

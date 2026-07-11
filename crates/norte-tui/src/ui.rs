@@ -16,11 +16,17 @@ use crate::app::{App, Pane, display_name, path_display};
 /// estilado (bold) — fuera de banda: un archivo llamado "! x" no lo imita.
 const HOSTILE_BADGE: &str = "!";
 
-/// Pinta el frame completo: dos panes + barra de estado.
+/// Pinta el frame completo: panes + panel de tasks + barra de estado +
+/// modal por encima.
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
+    let tasks_h = u16::try_from(app.board.rows().len().min(6)).unwrap_or(6);
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(tasks_h),
+            Constraint::Length(1),
+        ])
         .split(frame.area());
     let cols = Layout::default()
         .direction(Direction::Horizontal)
@@ -29,7 +35,110 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     for (i, pane) in app.panes.iter().enumerate() {
         draw_pane(frame, cols[i], pane, app.focus() == i);
     }
-    draw_status(frame, rows[1], app);
+    draw_tasks(frame, rows[1], app);
+    draw_status(frame, rows[2], app);
+    if let Some(modal) = &app.modal {
+        draw_modal(frame, modal);
+    }
+}
+
+fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    if area.height == 0 {
+        return;
+    }
+    let lines: Vec<Line<'_>> = app
+        .board
+        .rows()
+        .iter()
+        .rev()
+        .take(area.height as usize)
+        .map(|row| {
+            let p = &row.last;
+            let pct = match (p.bytes_total, p.entries_total) {
+                (Some(total), _) if total > 0 => {
+                    (p.bytes_done.saturating_mul(100) / total).min(100)
+                }
+                (_, Some(total)) if total > 0 => {
+                    (p.entries_done.saturating_mul(100) / total).min(100)
+                }
+                _ => 0,
+            };
+            // Por CATEGORÍA (Display estable), jamás Debug de cara al usuario.
+            let estado = match &p.state {
+                norte_proto::TaskState::Completed => "✓".to_owned(),
+                norte_proto::TaskState::Cancelled => "cancelado".to_owned(),
+                norte_proto::TaskState::Failed { error } => format!("✗ {error}"),
+                _ => format!("{pct}%"),
+            };
+            let kind = match p.kind {
+                norte_proto::TaskKind::Copy => "copy",
+                norte_proto::TaskKind::Move => "move",
+                norte_proto::TaskKind::Delete => "delete",
+            };
+            Line::raw(format!(" {kind} #{} {estado}", p.task_id.get()))
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Caja centrada del modal (teclas hardcodeadas, issue #24; strings
+/// hardcodeados hasta Fluent, fase 9 / issue #1).
+fn draw_modal(frame: &mut Frame<'_>, modal: &crate::app::Modal) {
+    use crate::app::{Modal, TransferKind};
+    let (titulo, cuerpo) = match modal {
+        Modal::ConfirmDelete { target } => (
+            "Borrar",
+            format!(
+                "{}
+[y/enter] borrar   [n/esc] cancelar",
+                path_display(target).0
+            ),
+        ),
+        Modal::ConfirmTransfer { kind, from, to } => (
+            match kind {
+                TransferKind::Copy => "Copiar",
+                TransferKind::Move => "Mover",
+            },
+            format!(
+                "{}
+→ {}
+[y/enter] adelante   [n/esc] cancelar",
+                path_display(from).0,
+                path_display(to).0
+            ),
+        ),
+        Modal::Collision { retry } => (
+            "Colisión",
+            format!(
+                "el destino ya existe:
+{}
+[o]sobrescribir  [s]altar  [r]enombrar  [n]más nuevo  [esc]cancelar",
+                path_display(&retry.to).0
+            ),
+        ),
+    };
+    let area = centered(frame.area(), 60, 6);
+    frame.render_widget(ratatui::widgets::Clear, area);
+    frame.render_widget(
+        Paragraph::new(cuerpo).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(titulo)
+                .border_style(Style::default().add_modifier(Modifier::BOLD)),
+        ),
+        area,
+    );
+}
+
+fn centered(base: Rect, w: u16, h: u16) -> Rect {
+    let w = w.min(base.width);
+    let h = h.min(base.height);
+    Rect {
+        x: base.x + (base.width - w) / 2,
+        y: base.y + (base.height - h) / 2,
+        width: w,
+        height: h,
+    }
 }
 
 fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool) {
@@ -90,7 +199,12 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     } else {
         format!("  [{} …]", app.pending)
     };
-    let text = format!(" {marca}{dir_texto}  {pos}/{total}{seq}");
+    // Un mensaje pendiente (error por categoría, resultado) desplaza al
+    // resto de la barra hasta la siguiente tecla (issue #20).
+    let text = match &app.message {
+        Some(msg) => format!(" {msg}"),
+        None => format!(" {marca}{dir_texto}  {pos}/{total}{seq}"),
+    };
     frame.render_widget(
         Paragraph::new(text).style(Style::default().add_modifier(Modifier::REVERSED)),
         area,

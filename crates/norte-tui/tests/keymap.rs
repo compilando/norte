@@ -305,3 +305,24 @@ fn los_tres_presets_de_fabrica_cargan_y_cubren_lo_basico() {
         );
     }
 }
+
+#[test]
+fn los_presets_ligan_las_operaciones_de_archivo() {
+    for (nombre, preset) in norte_tui::keymap::presets() {
+        let eff = Effective::build(&preset, None, COMANDOS)
+            .unwrap_or_else(|e| panic!("preset {nombre}: {e:?}"));
+        let mut r = Resolver::new(&eff);
+        for (tecla, cmd) in [
+            ("f5", "pane.copy"),
+            ("f6", "pane.move"),
+            ("f8", "pane.delete"),
+            ("ctrl+k", "task.cancel"),
+        ] {
+            assert_eq!(
+                r.push(parse_chord(tecla).unwrap()),
+                Resolution::Run(cmd.into()),
+                "preset {nombre}: {tecla}"
+            );
+        }
+    }
+}

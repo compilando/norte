@@ -441,6 +441,10 @@ pub const COMMANDS: &[&str] = &[
     "cursor.bottom",
     "nav.enter",
     "nav.parent",
+    "pane.copy",
+    "pane.move",
+    "pane.delete",
+    "task.cancel",
 ];
 
 /// Los presets de fábrica, parseados (se validan en tests y al construir

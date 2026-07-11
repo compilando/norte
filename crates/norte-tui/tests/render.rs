@@ -88,3 +88,35 @@ fn badge_sobrevive_al_truncado_en_pane_estrecho() {
         "la marca es visible aunque el � truncado no lo sea: {contenido}"
     );
 }
+
+/// Fase 5: el panel de tasks pinta progreso vivo y el modal se superpone.
+#[test]
+fn panel_de_tasks_y_modal_se_pintan() {
+    use norte_tui::app::{Modal, TransferKind};
+    let dir = vp("file:///x");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir.clone(), Vec::new()),
+    );
+    app.message = Some("copy: destination exists".to_owned());
+    app.modal = Some(Modal::Collision {
+        retry: norte_tui::tasks::RetrySpec {
+            kind: TransferKind::Copy,
+            from: dir.join(Segment::new(b"a".to_vec()).unwrap()),
+            to: dir.join(Segment::new(b"b".to_vec()).unwrap()),
+            opts: norte_core::TransferOptions::default(),
+        },
+    });
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 14)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let contenido = terminal.backend().to_string();
+    assert!(
+        contenido.contains("destination exists"),
+        "mensaje por categoría visible: {contenido}"
+    );
+    assert!(
+        contenido.contains("[o]") && contenido.contains("[r]"),
+        "el diálogo de colisión lista sus opciones: {contenido}"
+    );
+}

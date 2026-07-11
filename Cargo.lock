@@ -993,6 +993,7 @@ name = "norte-tui"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "crossterm",
  "futures",
  "norte-core",
