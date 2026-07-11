@@ -330,7 +330,7 @@ fn on_dialog_key(app: &mut App, engine: &Engine, code: KeyCode) {
                     match engine.delete_with(&target, mode) {
                         Ok(handle) => {
                             app.board
-                                .push_full(handle, None, (!permanent).then(|| target.clone()))
+                                .push_full(handle, None, (!permanent).then(|| target.clone()));
                         }
                         Err(e) => app.message = Some(format!("error: {e}")),
                     }
