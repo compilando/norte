@@ -132,6 +132,8 @@ pub struct App {
     focus: usize,
     /// `true` cuando el usuario pidió salir.
     pub quit: bool,
+    /// Secuencia de teclas pendiente, ya formateada (status bar).
+    pub pending: String,
 }
 
 impl App {
@@ -142,6 +144,7 @@ impl App {
             panes: [left, right],
             focus: 0,
             quit: false,
+            pending: String::new(),
         }
     }
 

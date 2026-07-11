@@ -47,6 +47,23 @@ fn frame_pinta_panes_y_badge_no_utf8() {
     );
 }
 
+/// ADR 0006: la secuencia pendiente se pinta en la status bar.
+#[test]
+fn la_secuencia_pendiente_se_ve_en_la_status_bar() {
+    let dir = vp("file:///x");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir, Vec::new()),
+    );
+    app.pending = "g".to_owned();
+    let mut terminal = Terminal::new(TestBackend::new(60, 8)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    assert!(
+        terminal.backend().to_string().contains("[g …]"),
+        "el prefijo pendiente da feedback visual"
+    );
+}
+
 /// F3.1 de la auditoría: el badge va en PREFIJO porque al final moriría en
 /// el truncado por ancho — un nombre hostil LARGO en un pane estrecho debe
 /// seguir marcado.

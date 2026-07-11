@@ -1,0 +1,22 @@
+# Preset orthodox (mc clásico) — el default del producto (decisión 2026-07-10).
+# Tab entre panes es sagrado (spec §12). F5/F6/F7/F8 llegan con la fase 5.
+
+[global]
+keymap = [
+    { on = ["q"], run = "app.quit" },
+    { on = ["f10"], run = "app.quit" },
+    { on = ["ctrl+c"], run = "app.quit" },
+    { on = ["tab"], run = "pane.switch" },
+]
+
+[pane]
+keymap = [
+    { on = ["up"], run = "cursor.up" },
+    { on = ["down"], run = "cursor.down" },
+    { on = ["pgup"], run = "cursor.page-up" },
+    { on = ["pgdn"], run = "cursor.page-down" },
+    { on = ["home"], run = "cursor.top" },
+    { on = ["end"], run = "cursor.bottom" },
+    { on = ["enter"], run = "nav.enter" },
+    { on = ["backspace"], run = "nav.parent" },
+]

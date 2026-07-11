@@ -83,8 +83,14 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     // Strings de UI hardcodeados: Fluent llega en la fase 9 (issue #1).
     let (dir_texto, dir_hostil) = path_display(&pane.dir);
     let marca = if dir_hostil { HOSTILE_BADGE } else { "" };
-    let text =
-        format!(" {marca}{dir_texto}  {pos}/{total}  Tab:pane  Enter:entrar  Bksp:subir  q:salir");
+    // Sin chuleta de teclas: mentiría según el preset (el which-key overlay
+    // llega en fase 5). La secuencia pendiente SÍ se pinta (ADR 0006).
+    let seq = if app.pending.is_empty() {
+        String::new()
+    } else {
+        format!("  [{} …]", app.pending)
+    };
+    let text = format!(" {marca}{dir_texto}  {pos}/{total}{seq}");
     frame.render_widget(
         Paragraph::new(text).style(Style::default().add_modifier(Modifier::REVERSED)),
         area,

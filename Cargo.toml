@@ -49,6 +49,9 @@ clap = { version = "4", features = ["derive"] }
 # async del TUI).
 ratatui = "0.30"
 crossterm = "0.29"
+# keymap.toml y (fase 6) el resto de la config: formato mandado por la spec
+# §13. toml-rs, MIT/Apache, el estándar del ecosistema.
+toml = "0.9"
 # Solo norte-vfs-local (regla 5): syscalls de rename no-replace que std no
 # expone — renameat2/renamex_np (libc, la misma que ya usa std) y MoveFileExW
 # sin REPLACE_EXISTING (windows-sys, el binding oficial de Microsoft).

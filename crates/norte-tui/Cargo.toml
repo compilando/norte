@@ -19,12 +19,16 @@ futures.workspace = true
 norte-core.workspace = true
 norte-proto.workspace = true
 norte-vfs-local.workspace = true
+serde.workspace = true
+thiserror.workspace = true
 ratatui.workspace = true
+toml.workspace = true
 unicode-normalization.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [dev-dependencies]
 norte-testkit.workspace = true
+proptest.workspace = true
 norte-vfs.workspace = true
 
 [lints]

@@ -4,5 +4,5 @@
 #![forbid(unsafe_code)]
 
 pub mod app;
-pub mod keys;
+pub mod keymap;
 pub mod ui;

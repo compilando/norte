@@ -1,0 +1,25 @@
+# Preset vim-like. Prefix-free (ADR 0006): sin pares tipo `d`/`d d` — los
+# modos visual/normal de la spec llegarán como CONTEXTOS, no timeouts.
+
+[global]
+keymap = [
+    { on = ["q"], run = "app.quit" },
+    { on = ["ctrl+c"], run = "app.quit" },
+    { on = ["tab"], run = "pane.switch" },
+]
+
+[pane]
+keymap = [
+    { on = ["k"], run = "cursor.up" },
+    { on = ["j"], run = "cursor.down" },
+    { on = ["up"], run = "cursor.up" },
+    { on = ["down"], run = "cursor.down" },
+    { on = ["ctrl+u"], run = "cursor.page-up" },
+    { on = ["ctrl+d"], run = "cursor.page-down" },
+    { on = ["g", "g"], run = "cursor.top" },
+    { on = ["G"], run = "cursor.bottom" },
+    { on = ["l"], run = "nav.enter" },
+    { on = ["enter"], run = "nav.enter" },
+    { on = ["h"], run = "nav.parent" },
+    { on = ["backspace"], run = "nav.parent" },
+]

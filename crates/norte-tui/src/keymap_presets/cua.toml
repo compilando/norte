@@ -1,0 +1,22 @@
+# Preset CUA (flechas + convenciones de escritorio). Ctrl+C saldrá del
+# preset cuando la fase 5 lo rebindee a copy (con Ctrl+Q como salida).
+
+[global]
+keymap = [
+    { on = ["f10"], run = "app.quit" },
+    { on = ["ctrl+q"], run = "app.quit" },
+    { on = ["ctrl+c"], run = "app.quit" },
+    { on = ["tab"], run = "pane.switch" },
+]
+
+[pane]
+keymap = [
+    { on = ["up"], run = "cursor.up" },
+    { on = ["down"], run = "cursor.down" },
+    { on = ["pgup"], run = "cursor.page-up" },
+    { on = ["pgdn"], run = "cursor.page-down" },
+    { on = ["home"], run = "cursor.top" },
+    { on = ["end"], run = "cursor.bottom" },
+    { on = ["enter"], run = "nav.enter" },
+    { on = ["backspace"], run = "nav.parent" },
+]
