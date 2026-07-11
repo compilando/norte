@@ -33,12 +33,18 @@ tokio-util.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true
+criterion.workspace = true
+insta.workspace = true
 norte-i18n.workspace = true
 norte-testkit.workspace = true
 proptest.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 norte-vfs.workspace = true
+
+[[bench]]
+name = "presupuestos"
+harness = false
 
 [features]
 # Generación de los JSON Schema publicados (golden test de docs/schema);

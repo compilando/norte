@@ -94,6 +94,10 @@ unicode-normalization = "0.1"
 proptest = "1"
 tempfile = "3"
 assert_cmd = "2"
+# Fase 10 (calidad, spec §12): snapshots del TUI y benchmarks de los
+# presupuestos (cold start <50 ms; 100k listado <200 ms a primer render).
+insta = "1"
+criterion = { version = "0.8", default-features = false }
 
 [workspace.lints.rust]
 missing_docs = "warn"

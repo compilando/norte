@@ -1,0 +1,20 @@
+---
+source: crates/norte-tui/tests/snapshots_ui.rs
+expression: render(&app)
+---
+"┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
+"│ /docs                                ││  cosa                                │"
+"│ /src                                 ││                                      │"
+"│ @enlace                              ││                                      │"
+"│  notas.txt                           ││                                      │"
+"│! �.dat  ┌Colisión──────────────────────────────────────────────────┐         │"
+"│         │el destino ya existe:                                     │         │"
+"│         │⟨file⟩/otro/notas.txt                                     │         │"
+"│         │[o]sobrescribir  [s]altar  [r]enombrar  [n]más nuevo  [esc│         │"
+"│         │                                                          │         │"
+"│         └──────────────────────────────────────────────────────────┘         │"
+"│                                      ││                                      │"
+"│                                      ││                                      │"
+"│                                      ││                                      │"
+"└──────────────────────────────────────┘└──────────────────────────────────────┘"
+" ⟨file⟩/casa  2/5                                                               "

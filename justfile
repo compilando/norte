@@ -50,3 +50,7 @@ t crate:
 # Loop de desarrollo: tests del workspace en cada guardado (exige cargo-watch).
 watch:
     cargo watch -x "nextest run --workspace"
+
+# Benchmarks de los presupuestos de la spec §12 (manual: tardan).
+bench:
+    cargo bench -p norte-tui --bench presupuestos
