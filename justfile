@@ -28,3 +28,25 @@ docs:
 
 # Lo que corre CI.
 ci: lint test cov docs
+
+# ---------- desarrollo: ejecutar y probar a mano ----------
+
+# El TUI (release: arranque frío <50 ms es presupuesto de la spec §12).
+run:
+    cargo run --release -p norte-tui
+
+# El TUI en debug (compila más rápido; para iterar).
+dev:
+    cargo run -p norte-tui
+
+# El CLI de humo (paths NATIVOS): `just cli ls /tmp`, `just cli cp a b`…
+cli *args:
+    cargo run -p norte-cli -- {{args}}
+
+# Tests de un crate concreto: `just t norte-vfs`, `just t norte-tui`.
+t crate:
+    cargo nextest run -p {{crate}}
+
+# Loop de desarrollo: tests del workspace en cada guardado (exige cargo-watch).
+watch:
+    cargo watch -x "nextest run --workspace"
