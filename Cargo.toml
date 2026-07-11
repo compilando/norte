@@ -9,6 +9,7 @@ members = [
     "crates/norte-testkit",
     "crates/norte-core",
     "crates/norte-cli",
+    "crates/norte-tui",
 ]
 
 [workspace.package]
@@ -25,6 +26,7 @@ norte-vfs = { path = "crates/norte-vfs", version = "0.0.0" }
 norte-vfs-local = { path = "crates/norte-vfs-local", version = "0.0.0" }
 norte-testkit = { path = "crates/norte-testkit", version = "0.0.0" }
 norte-core = { path = "crates/norte-core", version = "0.0.0" }
+norte-tui = { path = "crates/norte-tui", version = "0.0.0" }
 
 # Externos: versiones centralizadas; cada crate opta por las que necesita
 # con justificación en la PR que las introduce (regla 8 de CLAUDE.md).
@@ -41,6 +43,12 @@ tokio-stream = "0.1"
 tokio-util = "0.7"
 tracing = "0.1"
 clap = { version = "4", features = ["derive"] }
+# Frontend TUI (decisión cerrada en plan-m1: widgets de librería, no a mano).
+# ratatui: estándar de facto, MIT, mantenimiento activo, Table/List/Gauge de
+# serie. crossterm: backend de terminal 3-OS, MIT (event-stream para el loop
+# async del TUI).
+ratatui = "0.30"
+crossterm = "0.29"
 # Solo norte-vfs-local (regla 5): syscalls de rename no-replace que std no
 # expone — renameat2/renamex_np (libc, la misma que ya usa std) y MoveFileExW
 # sin REPLACE_EXISTING (windows-sys, el binding oficial de Microsoft).

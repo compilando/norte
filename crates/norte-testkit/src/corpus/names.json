@@ -88,5 +88,10 @@
     "id": "name_max_255_multibyte",
     "hex": "e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182e38182",
     "why": "85 veces あ = 255 bytes UTF-8 exactos pero solo 85 unidades UTF-16: legal en ext4 (límite en bytes) Y en NTFS (límite en unidades) — caza validadores que confunden ambas métricas"
+  },
+  {
+    "id": "control_escape",
+    "hex": "611b5b33316d62",
+    "why": "ESC embebido en nombre UTF-8 válido: inyección ANSI en cualquier frontend que imprima sin enmascarar (ls del CLI, logs, títulos de terminal) — el display debe enmascarar Cc, jamás pasarlo crudo"
   }
 ]

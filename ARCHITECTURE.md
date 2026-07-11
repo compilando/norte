@@ -20,9 +20,10 @@ negocio: si una operación no se puede hacer vía protocolo, no existe.
 | `norte-testkit` | `MemProvider` determinista con fallos inyectables, corpus de fixtures hostiles, estrategias proptest | MIT OR Apache-2.0 |
 | `norte-core` | Scheduler de tasks (cancelación, progreso), copy engine. En M0: lib embebida, sin daemon | AGPL-3.0-only |
 | `norte-cli` | `norte ls/cp`: banco de pruebas manual del core. No es un producto | AGPL-3.0-only |
+| `norte-tui` | Frontend TUI dual-pane (ratatui). Sin lógica de negocio: solo proto + core embebido | AGPL-3.0-only |
 
 Hitos posteriores añaden: `norte-vfs-{sftp,object,archive}`, `norte-index`,
-`norte-ai`, `norte-mcp`, `norte-plugin-host`, `norte-tui`, `norte-gui` (spec §3).
+`norte-ai`, `norte-mcp`, `norte-plugin-host`, `norte-gui` (spec §3).
 
 ## Reglas de dependencia (enforcement: cargo-deny + revisión)
 

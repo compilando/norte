@@ -1,0 +1,31 @@
+[package]
+name = "norte-tui"
+description = "Frontend TUI de norte: dual-pane ortodoxo sobre el core embebido"
+license = "AGPL-3.0-only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "norte-tui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+crossterm = { workspace = true, features = ["event-stream"] }
+futures.workspace = true
+norte-core.workspace = true
+norte-proto.workspace = true
+norte-vfs-local.workspace = true
+ratatui.workspace = true
+unicode-normalization.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[dev-dependencies]
+norte-testkit.workspace = true
+norte-vfs.workspace = true
+
+[lints]
+workspace = true
