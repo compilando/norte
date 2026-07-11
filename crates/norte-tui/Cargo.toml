@@ -18,6 +18,7 @@ crossterm = { workspace = true, features = ["event-stream"] }
 futures.workspace = true
 norte-core.workspace = true
 norte-encoding.workspace = true
+norte-i18n.workspace = true
 norte-proto.workspace = true
 norte-vfs-local.workspace = true
 notify.workspace = true
@@ -32,6 +33,7 @@ tokio-util.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true
+norte-i18n.workspace = true
 norte-testkit.workspace = true
 proptest.workspace = true
 serde_json.workspace = true

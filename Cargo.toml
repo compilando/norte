@@ -11,6 +11,7 @@ members = [
     "crates/norte-cli",
     "crates/norte-tui",
     "crates/norte-encoding",
+    "crates/norte-i18n",
 ]
 
 [workspace.package]
@@ -29,6 +30,7 @@ norte-testkit = { path = "crates/norte-testkit", version = "0.0.0" }
 norte-core = { path = "crates/norte-core", version = "0.0.0" }
 norte-tui = { path = "crates/norte-tui", version = "0.0.0" }
 norte-encoding = { path = "crates/norte-encoding", version = "0.0.0" }
+norte-i18n = { path = "crates/norte-i18n", version = "0.0.0" }
 
 # Externos: versiones centralizadas; cada crate opta por las que necesita
 # con justificación en la PR que las introduce (regla 8 de CLAUDE.md).
@@ -71,6 +73,13 @@ encoding_rs = "0.8"
 # alternativa evaluada: implementación propia — 3 integraciones de
 # plataforma para reinventar esto). MIT; os_limited::restore = base de M3.
 trash = "5"
+# i18n de los frontends (convención de CLAUDE.md: strings de UI por
+# Fluent, issue #1). fluent-rs = la referencia del formato (Mozilla),
+# Apache/MIT. Alternativa evaluada: gettext (formato peor para plurales
+# y args) o mapas a mano (sin plurales ni fallback por locale).
+fluent = "0.17"
+fluent-syntax = "0.12"
+unic-langid = "0.9"
 # Solo norte-vfs-local (regla 5): syscalls de rename no-replace que std no
 # expone — renameat2/renamex_np (libc, la misma que ya usa std) y MoveFileExW
 # sin REPLACE_EXISTING (windows-sys, el binding oficial de Microsoft).

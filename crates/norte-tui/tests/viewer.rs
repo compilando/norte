@@ -5,6 +5,9 @@ use norte_proto::VPath;
 use norte_tui::viewer::Viewer;
 
 fn vp() -> VPath {
+    // Los asserts de status son en español: fija el idioma del proceso
+    // (nextest = un proceso por test; primera llamada gana).
+    let _ = norte_i18n::force(norte_i18n::Lang::Es);
     VPath::parse("file:///f").unwrap()
 }
 

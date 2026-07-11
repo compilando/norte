@@ -3,6 +3,7 @@
 //! y testeable: la lectura la hace `main` vía el core (regla 7).
 
 use norte_encoding::{Decoded, Detection, Eol};
+use norte_i18n::t;
 use norte_proto::VPath;
 
 /// Cuántas líneas salta una página (fijo, como en los panes).
@@ -82,7 +83,7 @@ impl Viewer {
         } else {
             // Binario: jamás decodificar a ciegas (spec §6) — hexview.
             self.hex = true;
-            self.encoding_name = "binario";
+            self.encoding_name = "";
             self.eol = Eol::None;
             self.had_errors = false;
             self.text = String::new();
@@ -173,27 +174,32 @@ impl Viewer {
     #[must_use]
     pub fn status(&self) -> String {
         use std::fmt::Write;
-        let mut out = self.encoding_name.to_string();
+        let mut out = if self.encoding_name.is_empty() {
+            t("viewer-binary")
+        } else {
+            self.encoding_name.to_owned()
+        };
         if self.forced.is_some() {
-            out.push_str(" (forzado)");
+            out.push(' ');
+            out.push_str(&t("viewer-forced"));
         }
         if !self.hex {
             // Etiqueta de UI (la lib da identificadores técnicos estables;
             // strings hardcodeados hasta Fluent — fase 9, issue #1).
             let eol = match self.eol {
-                Eol::Lf => "LF",
-                Eol::CrLf => "CRLF",
-                Eol::Cr => "CR",
-                Eol::Mixed => "EOL mixto",
-                Eol::None => "sin EOL",
+                Eol::Lf => "LF".to_owned(),
+                Eol::CrLf => "CRLF".to_owned(),
+                Eol::Cr => "CR".to_owned(),
+                Eol::Mixed => t("eol-mixed"),
+                Eol::None => t("eol-none"),
             };
             let _ = write!(out, "  {eol}");
         }
         if self.had_errors {
-            out.push_str("  con pérdidas (�)");
+            let _ = write!(out, "  {}", t("viewer-lossy"));
         }
         if self.truncated {
-            out.push_str("  [cabecera]");
+            let _ = write!(out, "  {}", t("viewer-truncated"));
         }
         out
     }

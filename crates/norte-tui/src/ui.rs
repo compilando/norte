@@ -9,6 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 use crate::app::{App, Pane, display_name, path_display};
+use norte_i18n::t;
 
 /// Badge de nombre hostil: PREFIJO en columna fija (al final moriría en el
 /// truncado por ancho de ratatui y el nombre se pintaría "limpio") y en
@@ -101,7 +102,7 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
             // Por CATEGORÍA (Display estable), jamás Debug de cara al usuario.
             let estado = match &p.state {
                 norte_proto::TaskState::Completed => "✓".to_owned(),
-                norte_proto::TaskState::Cancelled => "cancelado".to_owned(),
+                norte_proto::TaskState::Cancelled => t("task-cancelled"),
                 norte_proto::TaskState::Failed { error } => format!("✗ {error}"),
                 _ => format!("{pct}%"),
             };
@@ -120,45 +121,49 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
 /// hardcodeados hasta Fluent, fase 9 / issue #1).
 fn draw_modal(frame: &mut Frame<'_>, modal: &crate::app::Modal) {
     use crate::app::{Modal, TransferKind};
-    let (titulo, cuerpo) = match modal {
+    let (titulo, cuerpo): (String, String) = match modal {
         Modal::ConfirmDelete { target, permanent } => (
             if *permanent {
-                "Borrar PERMANENTE"
+                t("modal-delete-permanent-title")
             } else {
-                "A la papelera"
+                t("modal-trash-title")
             },
             format!(
                 "{}
 {}
-[y/enter] adelante   [n/esc] cancelar",
+{}",
                 path_display(target).0,
                 if *permanent {
-                    "⚠ SIN papelera: esto no se puede deshacer"
+                    t("modal-delete-permanent-warning")
                 } else {
-                    "recuperable desde la papelera del sistema"
-                }
+                    t("modal-trash-note")
+                },
+                t("modal-confirm-keys")
             ),
         ),
         Modal::ConfirmTransfer { kind, from, to } => (
             match kind {
-                TransferKind::Copy => "Copiar",
-                TransferKind::Move => "Mover",
+                TransferKind::Copy => t("modal-copy-title"),
+                TransferKind::Move => t("modal-move-title"),
             },
             format!(
                 "{}
 → {}
-[y/enter] adelante   [n/esc] cancelar",
+{}",
                 path_display(from).0,
-                path_display(to).0
+                path_display(to).0,
+                t("modal-confirm-keys")
             ),
         ),
         Modal::Collision { retry } => (
-            "Colisión",
+            t("modal-collision-title"),
             format!(
-                "el destino ya existe:
+                "{}
 {}
-[o]sobrescribir  [s]altar  [r]enombrar  [n]más nuevo  [esc]cancelar",
-                path_display(&retry.to).0
+{}",
+                t("modal-collision-body"),
+                path_display(&retry.to).0,
+                t("modal-collision-keys")
             ),
         ),
     };

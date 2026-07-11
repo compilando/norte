@@ -22,6 +22,7 @@ negocio: si una operación no se puede hacer vía protocolo, no existe.
 | `norte-cli` | `norte ls/cp`: banco de pruebas manual del core. No es un producto | AGPL-3.0-only |
 | `norte-tui` | Frontend TUI dual-pane (ratatui). Sin lógica de negocio: proto + core embebido + libs de presentación (norte-encoding) | AGPL-3.0-only |
 | `norte-encoding` | Detección/decodificación de encodings de texto (aísla chardetng/encoding_rs) | MIT OR Apache-2.0 |
+| `norte-i18n` | Strings de UI por Fluent (es/en) para los frontends | MIT OR Apache-2.0 |
 
 Hitos posteriores añaden: `norte-vfs-{sftp,object,archive}`, `norte-index`,
 `norte-ai`, `norte-mcp`, `norte-plugin-host`, `norte-gui` (spec §3).

@@ -24,6 +24,19 @@ pub struct NorteToml {
     /// Sección de keymap.
     #[serde(default)]
     pub keymap: KeymapSection,
+    /// Sección de UI.
+    #[serde(default)]
+    pub ui: UiSection,
+}
+
+/// `[ui]` de `norte.toml`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct UiSection {
+    /// Idioma (`es`, `en`). Ausente = negociar del entorno.
+    #[serde(default)]
+    pub lang: Option<String>,
 }
 
 /// `[keymap]` de `norte.toml`.
@@ -94,6 +107,8 @@ pub fn standard_layers() -> Layers {
 pub struct LoadedConfig {
     /// Preset de keymap efectivo (último-gana; default compilado).
     pub preset: String,
+    /// Idioma de `[ui] lang` (último-gana; None = entorno).
+    pub ui_lang: Option<String>,
     /// Capas de `keymap.toml` presentes, en precedencia ascendente.
     pub keymap_layers: Vec<KeymapFile>,
     /// Archivos que participaron (para el watcher y los diagnósticos).
@@ -106,6 +121,7 @@ pub struct LoadedConfig {
 /// [`ConfigError`] con el archivo culpable; una capa AUSENTE no es error.
 pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
     let mut preset: Option<String> = None;
+    let mut ui_lang: Option<String> = None;
     let mut keymap_layers = Vec::new();
     let mut sources = Vec::new();
     for dir in &layers.dirs {
@@ -117,6 +133,9 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
             })?;
             if let Some(p) = parsed.keymap.preset {
                 preset = Some(p);
+            }
+            if let Some(l) = parsed.ui.lang {
+                ui_lang = Some(l);
             }
             sources.push(norte);
         }
@@ -141,6 +160,7 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
     }
     Ok(LoadedConfig {
         preset: preset.unwrap_or_else(|| DEFAULT_PRESET.to_owned()),
+        ui_lang,
         keymap_layers,
         sources,
     })

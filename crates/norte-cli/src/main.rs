@@ -71,7 +71,10 @@ fn main() -> ExitCode {
     {
         Ok(rt) => rt,
         Err(e) => {
-            eprintln!("norte: no se pudo arrancar el runtime: {e}");
+            eprintln!(
+                "{}",
+                norte_i18n::ta("cli-runtime-error", &[("error", &e.to_string())])
+            );
             return ExitCode::FAILURE;
         }
     };
@@ -94,21 +97,21 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             let (from, to) = (vpath(&src)?, vpath(&dst)?);
             let handle = engine
                 .copy(&from, &to)
-                .context("no se pudo encolar la copia")?;
+                .context(norte_i18n::t("cli-enqueue-copy"))?;
             Ok(run_task(handle, true).await)
         }
         Cmd::Mv { src, dst } => {
             let (from, to) = (vpath(&src)?, vpath(&dst)?);
             let handle = engine
                 .move_(&from, &to)
-                .context("no se pudo encolar el move")?;
+                .context(norte_i18n::t("cli-enqueue-move"))?;
             Ok(run_task(handle, false).await)
         }
         Cmd::Rm { path } => {
             let target = vpath(&path)?;
             let handle = engine
                 .delete(&target)
-                .context("no se pudo encolar el borrado")?;
+                .context(norte_i18n::t("cli-enqueue-delete"))?;
             Ok(run_task(handle, false).await)
         }
     }
@@ -121,15 +124,18 @@ fn vpath(path: &std::path::Path) -> anyhow::Result<VPath> {
 
 async fn ls(engine: &Engine, path: &std::path::Path, json: bool) -> anyhow::Result<ExitCode> {
     let target = vpath(path)?;
-    let mut stream = engine.list(&target).await.context("list falló")?;
+    let mut stream = engine
+        .list(&target)
+        .await
+        .context(norte_i18n::t("cli-list-failed"))?;
     let mut entries: Vec<Entry> = Vec::new();
     while let Some(item) = stream.next().await {
-        entries.push(item.context("entrada ilegible")?);
+        entries.push(item.context(norte_i18n::t("cli-entry-unreadable"))?);
     }
     if json {
         // Forma wire (lossless); el consumidor decodifica con el codec.
         serde_json::to_writer_pretty(std::io::stdout().lock(), &entries)
-            .context("no se pudo serializar")?;
+            .context(norte_i18n::t("cli-serialize-failed"))?;
         println!();
     } else {
         for e in &entries {
@@ -152,7 +158,7 @@ async fn run_task(handle: TaskHandle, show_bytes: bool) -> ExitCode {
     let cancel = handle.cancel_token();
     let sig = tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
-            eprintln!("\ncancelando…");
+            eprintln!("\n{}", norte_i18n::t("cli-cancelling"));
             cancel.cancel();
         }
     });
@@ -174,15 +180,21 @@ async fn run_task(handle: TaskHandle, show_bytes: bool) -> ExitCode {
     match final_state {
         TaskState::Completed => ExitCode::SUCCESS,
         TaskState::Cancelled => {
-            eprintln!("cancelado (destino limpio)");
+            eprintln!("{}", norte_i18n::t("cli-cancelled-clean"));
             ExitCode::from(EXIT_CANCELLED)
         }
         TaskState::Failed { error } => {
-            eprintln!("error: {error}");
+            eprintln!(
+                "{}",
+                norte_i18n::ta("cli-final-error", &[("error", &error.to_string())])
+            );
             ExitCode::FAILURE
         }
         other => {
-            eprintln!("estado final inesperado: {other:?}");
+            eprintln!(
+                "{}",
+                norte_i18n::ta("cli-unexpected-state", &[("state", &format!("{other:?}"))])
+            );
             ExitCode::FAILURE
         }
     }

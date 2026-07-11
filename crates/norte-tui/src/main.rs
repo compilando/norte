@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
 use futures::StreamExt;
 use norte_core::{Engine, TransferOptions};
+use norte_i18n::{t, ta};
 use norte_proto::DeleteMode;
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{App, DialogOutcome, Modal, Pane, TransferKind, dialog_key, sort_entries};
@@ -35,6 +36,15 @@ async fn main() -> Result<()> {
     let cfg = config::load_async(layers.clone())
         .await
         .context("config inválida")?;
+    // Idioma: NORTE_LANG explícito > [ui] lang de la config > entorno.
+    let lang = if std::env::var("NORTE_LANG").is_ok_and(|v| !v.is_empty()) {
+        norte_i18n::Lang::from_env()
+    } else if let Some(l) = &cfg.ui_lang {
+        norte_i18n::Lang::negotiate(Some(l))
+    } else {
+        norte_i18n::Lang::from_env()
+    };
+    let _ = norte_i18n::force(lang);
     let (browse_eff, viewer_eff) = build_keymaps(&cfg, cli_preset.as_deref())?;
 
     let engine = Engine::new();
@@ -55,7 +65,7 @@ async fn main() -> Result<()> {
     let (cfg_tx, cfg_rx) = tokio::sync::mpsc::channel(8);
     let watch = config::watch(&layers, cfg_tx).await;
     if watch.mode == WatchMode::Polling {
-        app.message = Some("config: vigilancia degradada a polling".to_owned());
+        app.message = Some(t("msg-config-polling"));
     }
 
     let mut terminal = ratatui::init();
@@ -196,11 +206,16 @@ async fn reload_config(
                 *resolver = Resolver::new(browse);
                 *viewer_resolver = Resolver::new(viewer);
                 app.pending.clear();
-                app.message = Some("config recargada".to_owned());
+                app.message = Some(t("msg-config-reloaded"));
             }
-            Err(e) => app.message = Some(format!("config NO aplicada: {e:#}")),
+            Err(e) => {
+                app.message = Some(ta(
+                    "msg-config-not-applied",
+                    &[("error", &format!("{e:#}"))],
+                ));
+            }
         },
-        Err(e) => app.message = Some(format!("config NO aplicada: {e}")),
+        Err(e) => app.message = Some(ta("msg-config-not-applied", &[("error", &e.to_string())])),
     }
 }
 
@@ -221,11 +236,11 @@ async fn on_tick(app: &mut App, engine: &Engine, events: &mut EventStream) {
         match fin.state {
             TaskState::Completed => {
                 refresh = true;
-                app.message = Some("hecho".to_owned());
+                app.message = Some(t("msg-done"));
             }
             TaskState::Cancelled => {
                 refresh = true;
-                app.message = Some("cancelado".to_owned());
+                app.message = Some(t("msg-cancelled"));
             }
             TaskState::Failed { error } => {
                 if let (Error::Unsupported, Some(target)) = (&error, &fin.trash_target) {
@@ -238,15 +253,14 @@ async fn on_tick(app: &mut App, engine: &Engine, events: &mut EventStream) {
                             permanent: true,
                         });
                     } else {
-                        app.message =
-                            Some("sin papelera aquí: F8 de nuevo para permanente".to_owned());
+                        app.message = Some(t("msg-no-trash-here"));
                     }
                 } else if let (Error::Conflict { .. }, Some(retry)) = (&error, fin.retry) {
                     app.pending_collisions.push_back(retry);
                 } else {
                     // Render por CATEGORÍA (spec §17.7): Display estable,
                     // jamás strings del OS.
-                    app.message = Some(format!("error: {error}"));
+                    app.message = Some(ta("msg-error", &[("error", &error.to_string())]));
                     refresh = true;
                 }
             }
@@ -279,7 +293,7 @@ async fn refresh_panes(app: &mut App, engine: &Engine, events: &mut EventStream)
                             pane.cursor = cursor;
                         }
                         // Sin silencio: el dir pudo desaparecer (issue #20).
-                        Err(e) => app.message = Some(format!("refresh: {e}")),
+                        Err(e) => app.message = Some(ta("msg-refresh-error", &[("error", &e.to_string())])),
                     }
                     break;
                 }
@@ -332,7 +346,7 @@ fn on_dialog_key(app: &mut App, engine: &Engine, code: KeyCode) {
                             app.board
                                 .push_full(handle, None, (!permanent).then(|| target.clone()));
                         }
-                        Err(e) => app.message = Some(format!("error: {e}")),
+                        Err(e) => app.message = Some(ta("msg-error", &[("error", &e.to_string())])),
                     }
                 }
                 Modal::ConfirmTransfer { kind, from, to } => {
@@ -380,7 +394,7 @@ fn submit_transfer(
                 opts,
             }),
         ),
-        Err(e) => app.message = Some(format!("error: {e}")),
+        Err(e) => app.message = Some(ta("msg-error", &[("error", &e.to_string())])),
     }
 }
 
@@ -470,9 +484,9 @@ async fn dispatch(app: &mut App, engine: &Engine, events: &mut EventStream, cmd:
         "viewer.hex" => viewer_do(app, norte_tui::viewer::Viewer::toggle_hex),
         "task.cancel" => {
             app.message = Some(if app.board.cancel_last_running() {
-                "cancelando…".to_owned()
+                t("msg-cancelling")
             } else {
-                "no hay tasks en marcha".to_owned()
+                t("msg-no-tasks")
             });
         }
         // Inalcanzable: todo keymap se valida contra COMMANDS al cargar
@@ -505,7 +519,7 @@ async fn open_viewer(app: &mut App, engine: &Engine, events: &mut EventStream, p
                     Ok((bytes, truncated)) => {
                         app.viewer = Some(Viewer::new(path.clone(), bytes, truncated));
                     }
-                    Err(e) => app.message = Some(format!("view: {e}")),
+                    Err(e) => app.message = Some(ta("msg-view-error", &[("error", &e.to_string())])),
                 }
                 return;
             }

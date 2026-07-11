@@ -14,6 +14,21 @@
         }
       },
       "type": "object"
+    },
+    "UiSection": {
+      "additionalProperties": false,
+      "description": "`[ui]` de `norte.toml`.",
+      "properties": {
+        "lang": {
+          "default": null,
+          "description": "Idioma (`es`, `en`). Ausente = negociar del entorno.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -23,6 +38,10 @@
     "keymap": {
       "$ref": "#/$defs/KeymapSection",
       "description": "Sección de keymap."
+    },
+    "ui": {
+      "$ref": "#/$defs/UiSection",
+      "description": "Sección de UI."
     }
   },
   "title": "NorteToml",

@@ -1,0 +1,17 @@
+[package]
+name = "norte-i18n"
+description = "Strings de UI por Fluent (es/en) para los frontends de norte"
+license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+fluent.workspace = true
+fluent-syntax.workspace = true
+unic-langid.workspace = true
+
+[lints]
+workspace = true
