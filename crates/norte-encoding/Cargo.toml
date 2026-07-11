@@ -1,0 +1,19 @@
+[package]
+name = "norte-encoding"
+description = "Detección y decodificación de encodings de texto (BOM → chardetng → heurística NUL)"
+license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+chardetng.workspace = true
+encoding_rs.workspace = true
+
+[dev-dependencies]
+norte-testkit.workspace = true
+
+[lints]
+workspace = true

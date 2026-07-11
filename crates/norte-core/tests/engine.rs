@@ -1214,3 +1214,25 @@ async fn follow_dir_symlink_with_overwrite_leaves_destination_intact() {
         "el fallo era 100% predecible: el destino no se toca"
     );
 }
+
+/// Fase 7: el TUI lee vía el core (regla 7) — passthrough con rango.
+#[tokio::test]
+async fn engine_read_respeta_el_rango() {
+    let (engine, mem) = engine_with_mem();
+    write_file(&mem, "mem:///f", b"0123456789").await;
+    let mut stream = engine
+        .read(
+            &vp("mem:///f"),
+            Some(norte_proto::ByteRange {
+                offset: 2,
+                len: Some(3),
+            }),
+        )
+        .await
+        .unwrap();
+    let mut out = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        out.extend_from_slice(&chunk.unwrap());
+    }
+    assert_eq!(out, b"234");
+}

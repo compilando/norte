@@ -55,6 +55,9 @@
     },
     "pane": {
       "$ref": "#/$defs/RawSection"
+    },
+    "viewer": {
+      "$ref": "#/$defs/RawSection"
     }
   },
   "title": "KeymapFile",

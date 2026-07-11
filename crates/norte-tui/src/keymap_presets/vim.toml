@@ -26,4 +26,26 @@ keymap = [
     { on = ["f6"], run = "pane.move" },
     { on = ["f8"], run = "pane.delete" },
     { on = ["ctrl+k"], run = "task.cancel" },
+    { on = ["f3"], run = "pane.view" },
+]
+
+[viewer]
+keymap = [
+    { on = ["q"], run = "viewer.close" },
+    { on = ["esc"], run = "viewer.close" },
+    { on = ["f3"], run = "viewer.close" },
+    { on = ["f10"], run = "viewer.close" },
+    { on = ["up"], run = "viewer.up" },
+    { on = ["down"], run = "viewer.down" },
+    { on = ["pgup"], run = "viewer.page-up" },
+    { on = ["pgdn"], run = "viewer.page-down" },
+    { on = ["home"], run = "viewer.top" },
+    { on = ["end"], run = "viewer.bottom" },
+    { on = ["e"], run = "viewer.encoding" },
+    { on = ["E"], run = "viewer.encoding-auto" },
+    { on = ["x"], run = "viewer.hex" },
+    { on = ["k"], run = "viewer.up" },
+    { on = ["j"], run = "viewer.down" },
+    { on = ["g", "g"], run = "viewer.top" },
+    { on = ["G"], run = "viewer.bottom" },
 ]

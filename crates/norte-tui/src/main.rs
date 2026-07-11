@@ -13,9 +13,10 @@ use norte_core::{Engine, TransferOptions};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{App, DialogOutcome, Modal, Pane, TransferKind, dialog_key, sort_entries};
 use norte_tui::config::{self, Layers, WatchMode};
-use norte_tui::keymap::{COMMANDS, Chord, Effective, Resolution, Resolver, presets};
+use norte_tui::keymap::{COMMANDS, Chord, Effective, Resolution, Resolver, Screen, presets};
 use norte_tui::tasks::RetrySpec;
 use norte_tui::ui;
+use norte_tui::viewer::Viewer;
 use norte_vfs_local::LocalProvider;
 
 /// Filas que salta `cursor.page-up/down` (fijo hasta que el alto real del
@@ -33,7 +34,7 @@ async fn main() -> Result<()> {
     let cfg = config::load_async(layers.clone())
         .await
         .context("config inválida")?;
-    let eff = build_keymap(&cfg, cli_preset.as_deref())?;
+    let (browse_eff, viewer_eff) = build_keymaps(&cfg, cli_preset.as_deref())?;
 
     let engine = Engine::new();
     engine.register_provider(Arc::new(LocalProvider::os_root()));
@@ -46,7 +47,8 @@ async fn main() -> Result<()> {
     let left = Pane::new(start.clone(), listing(&engine, &start).await?);
     let right = Pane::new(start.clone(), listing(&engine, &start).await?);
     let mut app = App::new(left, right);
-    let mut resolver = Resolver::new(eff);
+    let mut resolver = Resolver::new(browse_eff);
+    let mut viewer_resolver = Resolver::new(viewer_eff);
 
     // Hot-reload: vigilancia de las capas, con aviso si degrada a polling.
     let (cfg_tx, cfg_rx) = tokio::sync::mpsc::channel(8);
@@ -61,6 +63,7 @@ async fn main() -> Result<()> {
         &mut app,
         &engine,
         &mut resolver,
+        &mut viewer_resolver,
         layers,
         cli_preset,
         cfg_rx,
@@ -72,8 +75,11 @@ async fn main() -> Result<()> {
 }
 
 /// Resuelve el preset (flag > config > default) y pliega las capas de
-/// keymap (ADR 0007) sobre él.
-fn build_keymap(cfg: &config::LoadedConfig, cli_preset: Option<&str>) -> Result<Effective> {
+/// keymap (ADR 0007) para las DOS pantallas (browse y viewer).
+fn build_keymaps(
+    cfg: &config::LoadedConfig,
+    cli_preset: Option<&str>,
+) -> Result<(Effective, Effective)> {
     let preset_name = cli_preset.unwrap_or(&cfg.preset);
     let presets = presets();
     let (_, preset) = presets
@@ -83,7 +89,11 @@ fn build_keymap(cfg: &config::LoadedConfig, cli_preset: Option<&str>) -> Result<
             let nombres: Vec<&str> = presets.iter().map(|(n, _)| *n).collect();
             format!("preset desconocido {preset_name:?}; disponibles: {nombres:?}")
         })?;
-    Effective::build_layered(preset, &cfg.keymap_layers, COMMANDS).context("keymap inválido")
+    let browse = Effective::build_for(preset, &cfg.keymap_layers, COMMANDS, Screen::Browse)
+        .context("keymap inválido")?;
+    let viewer = Effective::build_for(preset, &cfg.keymap_layers, COMMANDS, Screen::Viewer)
+        .context("keymap inválido")?;
+    Ok((browse, viewer))
 }
 
 #[allow(clippy::too_many_arguments)] // wiring del binario, no API
@@ -92,6 +102,7 @@ async fn run(
     app: &mut App,
     engine: &Engine,
     resolver: &mut Resolver,
+    viewer_resolver: &mut Resolver,
     layers: Layers,
     cli_preset: Option<String>,
     mut cfg_rx: tokio::sync::mpsc::Receiver<()>,
@@ -127,7 +138,8 @@ async fn run(
             } => {
                 reload_at = None;
                 while cfg_rx.try_recv().is_ok() {}
-                reload_config(app, resolver, &layers, cli_preset.as_deref()).await;
+                reload_config(app, resolver, viewer_resolver, &layers, cli_preset.as_deref())
+                    .await;
             }
             maybe = events.next() => {
                 let Some(event) = maybe else { return Ok(()); };
@@ -138,13 +150,19 @@ async fn run(
                     if app.modal.is_some() {
                         on_dialog_key(app, engine, key.code);
                     } else {
-                        match resolver.push(Chord::from_event(key.modifiers, key.code)) {
+                        // Pantalla activa: el viewer tiene su contexto.
+                        let active = if app.viewer.is_some() {
+                            &mut *viewer_resolver
+                        } else {
+                            &mut *resolver
+                        };
+                        match active.push(Chord::from_event(key.modifiers, key.code)) {
                             Resolution::Run(cmd) => {
                                 app.pending.clear();
                                 dispatch(app, engine, &mut events, &cmd).await;
                             }
                             Resolution::Pending(_) => {
-                                app.pending = resolver
+                                app.pending = active
                                     .pending()
                                     .iter()
                                     .map(ToString::to_string)
@@ -167,13 +185,15 @@ async fn run(
 async fn reload_config(
     app: &mut App,
     resolver: &mut Resolver,
+    viewer_resolver: &mut Resolver,
     layers: &Layers,
     cli_preset: Option<&str>,
 ) {
     match config::load_async(layers.clone()).await {
-        Ok(cfg) => match build_keymap(&cfg, cli_preset) {
-            Ok(eff) => {
-                *resolver = Resolver::new(eff);
+        Ok(cfg) => match build_keymaps(&cfg, cli_preset) {
+            Ok((browse, viewer)) => {
+                *resolver = Resolver::new(browse);
+                *viewer_resolver = Resolver::new(viewer);
                 app.pending.clear();
                 app.message = Some("config recargada".to_owned());
             }
@@ -394,6 +414,28 @@ async fn dispatch(app: &mut App, engine: &Engine, events: &mut EventStream, cmd:
                 });
             }
         }
+        "pane.view" => {
+            // También symlinks (mismo criterio que nav.enter): si apunta a
+            // un dir, el read fallará con mensaje visible.
+            let target = app
+                .focused()
+                .selected()
+                .filter(|e| matches!(e.kind, EntryKind::File | EntryKind::Symlink))
+                .map(|e| e.path.clone());
+            if let Some(path) = target {
+                open_viewer(app, engine, events, path).await;
+            }
+        }
+        "viewer.close" => app.viewer = None,
+        "viewer.up" => viewer_do(app, |v| v.scroll_up(1)),
+        "viewer.down" => viewer_do(app, |v| v.scroll_down(1)),
+        "viewer.page-up" => viewer_do(app, |v| v.scroll_up(norte_tui::viewer::PAGE)),
+        "viewer.page-down" => viewer_do(app, |v| v.scroll_down(norte_tui::viewer::PAGE)),
+        "viewer.top" => viewer_do(app, norte_tui::viewer::Viewer::scroll_top),
+        "viewer.bottom" => viewer_do(app, norte_tui::viewer::Viewer::scroll_bottom),
+        "viewer.encoding" => viewer_do(app, norte_tui::viewer::Viewer::cycle_encoding),
+        "viewer.encoding-auto" => viewer_do(app, norte_tui::viewer::Viewer::reset_encoding),
+        "viewer.hex" => viewer_do(app, norte_tui::viewer::Viewer::toggle_hex),
         "task.cancel" => {
             app.message = Some(if app.board.cancel_last_running() {
                 "cancelando…".to_owned()
@@ -405,6 +447,78 @@ async fn dispatch(app: &mut App, engine: &Engine, events: &mut EventStream, cmd:
         // (y COMMANDS vive en la lib: una sola fuente).
         _ => debug_assert!(false, "comando validado sin brazo: {cmd}"),
     }
+}
+
+fn viewer_do(app: &mut App, f: impl FnOnce(&mut Viewer)) {
+    if let Some(v) = &mut app.viewer {
+        f(v);
+    }
+}
+
+/// Presupuesto de lectura del viewer: cabecera de 256 KiB (el resto del
+/// archivo NO se lee — rango de ADR 0005; «cargar más» = deuda de M2).
+/// OJO si esto crece (>~1 MiB): `Viewer::recompute` y `rows()` corren en
+/// el hilo del loop — harían falta `spawn_blocking` + índice de líneas.
+const VIEW_CAP: u64 = 256 * 1024;
+
+/// Abre el viewer leyendo la CABECERA vía el core (regla 7), cancelable
+/// como el cd (Esc abandona, Ctrl-C sale).
+async fn open_viewer(app: &mut App, engine: &Engine, events: &mut EventStream, path: VPath) {
+    let fut = read_head(engine, &path);
+    tokio::pin!(fut);
+    loop {
+        tokio::select! {
+            res = &mut fut => {
+                match res {
+                    Ok((bytes, truncated)) => {
+                        app.viewer = Some(Viewer::new(path.clone(), bytes, truncated));
+                    }
+                    Err(e) => app.message = Some(format!("view: {e}")),
+                }
+                return;
+            }
+            maybe = events.next() => {
+                match maybe {
+                    Some(Ok(Event::Key(key)))
+                        if key.kind == crossterm::event::KeyEventKind::Press =>
+                    {
+                        match (key.code, key.modifiers) {
+                            (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
+                                app.quit = true;
+                                return;
+                            }
+                            (KeyCode::Esc, _) => return,
+                            _ => {}
+                        }
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) | None => return,
+                }
+            }
+        }
+    }
+}
+
+/// Lee hasta `VIEW_CAP + 1` bytes: el byte extra delata el truncado.
+async fn read_head(engine: &Engine, path: &VPath) -> Result<(Vec<u8>, bool), Error> {
+    let mut stream = engine
+        .read(
+            path,
+            Some(norte_proto::ByteRange {
+                offset: 0,
+                len: Some(VIEW_CAP + 1),
+            }),
+        )
+        .await?;
+    let mut out = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        out.extend_from_slice(&chunk?);
+    }
+    let truncated = out.len() as u64 > VIEW_CAP;
+    if truncated {
+        out.truncate(usize::try_from(VIEW_CAP).unwrap_or(usize::MAX));
+    }
+    Ok((out, truncated))
 }
 
 /// cd CANCELABLE (regla 3): el listado corre contra el stream de eventos —

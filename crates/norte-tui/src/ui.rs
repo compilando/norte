@@ -16,9 +16,13 @@ use crate::app::{App, Pane, display_name, path_display};
 /// estilado (bold) — fuera de banda: un archivo llamado "! x" no lo imita.
 const HOSTILE_BADGE: &str = "!";
 
-/// Pinta el frame completo: panes + panel de tasks + barra de estado +
-/// modal por encima.
+/// Pinta el frame completo: panes (o viewer) + panel de tasks + barra de
+/// estado + modal por encima.
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
+    if let Some(viewer) = &app.viewer {
+        draw_viewer(frame, viewer, app);
+        return;
+    }
     let tasks_h = u16::try_from(app.board.rows().len().min(6)).unwrap_or(6);
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -40,6 +44,37 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(modal) = &app.modal {
         draw_modal(frame, modal);
     }
+}
+
+/// Viewer a pantalla completa: contenido + status propia (encoding, EOL,
+/// pérdidas, truncado — el usuario SIEMPRE sabe qué mira, spec §6).
+fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer, app: &App) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(frame.area());
+    let (title, hostil) = path_display(&viewer.path);
+    let block = Block::default().borders(Borders::ALL).title(if hostil {
+        format!("{HOSTILE_BADGE} {title}")
+    } else {
+        title
+    });
+    let inner_h = rows[0].height.saturating_sub(2) as usize;
+    let lines: Vec<Line<'_>> = viewer.rows(inner_h).into_iter().map(Line::raw).collect();
+    frame.render_widget(Paragraph::new(lines).block(block), rows[0]);
+    let pos = format!(
+        "{}/{}",
+        (viewer.scroll + 1).min(viewer.total_rows().max(1)),
+        viewer.total_rows().max(1)
+    );
+    let text = match &app.message {
+        Some(msg) => format!(" {msg}"),
+        None => format!(" {}  {pos}", viewer.status()),
+    };
+    frame.render_widget(
+        Paragraph::new(text).style(Style::default().add_modifier(Modifier::REVERSED)),
+        rows[1],
+    );
 }
 
 fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {

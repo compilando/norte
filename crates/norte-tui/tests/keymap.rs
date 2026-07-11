@@ -367,3 +367,38 @@ fn capas_multiples_se_pliegan_por_precedencia() {
         "entre appends también gana la capa más alta"
     );
 }
+
+#[test]
+fn el_contexto_viewer_se_fusiona_para_su_pantalla() {
+    use norte_tui::keymap::Screen;
+    let preset = parse_keymap(
+        r#"
+        [global]
+        keymap = [{ on = ["q"], run = "app.quit" }]
+        [pane]
+        keymap = [{ on = ["enter"], run = "nav.enter" }]
+        [viewer]
+        keymap = [{ on = ["q"], run = "cursor.top" }]
+    "#,
+    )
+    .unwrap();
+    // En Browse, el q global manda y enter existe.
+    let browse = Effective::build_for(&preset, &[], COMANDOS, Screen::Browse).unwrap();
+    let mut r = Resolver::new(browse);
+    assert_eq!(
+        r.push(parse_chord("q").unwrap()),
+        Resolution::Run("app.quit".into())
+    );
+    assert_eq!(
+        r.push(parse_chord("enter").unwrap()),
+        Resolution::Run("nav.enter".into())
+    );
+    // En Viewer, su q específico PISA al global y enter NO existe.
+    let viewer = Effective::build_for(&preset, &[], COMANDOS, Screen::Viewer).unwrap();
+    let mut r = Resolver::new(viewer);
+    assert_eq!(
+        r.push(parse_chord("q").unwrap()),
+        Resolution::Run("cursor.top".into())
+    );
+    assert_eq!(r.push(parse_chord("enter").unwrap()), Resolution::Reset);
+}

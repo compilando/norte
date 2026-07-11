@@ -22,7 +22,7 @@ just ci                                 # todo lo anterior, como lo corre CI
 - `crates/norte-vfs-{local,sftp,object,archive}` — providers. Los providers NO se conocen entre sí.
 - `crates/norte-core` — daemon: scheduler, policy engine, journal, sesiones. AGPL.
 - `crates/norte-{index,ai,mcp,plugin-host}` — subsistemas del core.
-- `crates/norte-{tui,cli}` — frontends. Solo dependen de `norte-proto` (+ core en modo embebido).
+- `crates/norte-{tui,cli}` — frontends. Solo dependen de `norte-proto` (+ core en modo embebido y libs de presentación permisivas como `norte-encoding`).
 - `crates/norte-testkit` — `MemProvider`, fixtures hostiles, estrategias proptest. Apache/MIT.
 - `docs/adr/` — decisiones de arquitectura (MADR). `docs/spec/` — la spec.
 

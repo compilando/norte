@@ -30,11 +30,7 @@ fn los_schemas_publicados_no_divergen() {
             })
             // Cinturón además del .gitattributes: un checkout con CRLF no
             // debe romper la comparación (cazado en CI de Windows).
-            .replace(
-                "
-", "
-",
-            );
+            .replace("\r\n", "\n");
         assert_eq!(
             publicado, json,
             "docs/schema/{name} divergió del código: regenera con \

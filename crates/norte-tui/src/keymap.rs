@@ -235,6 +235,8 @@ pub struct KeymapFile {
     global: RawSection,
     #[serde(default)]
     pane: RawSection,
+    #[serde(default)]
+    viewer: RawSection,
 }
 
 impl KeymapFile {
@@ -242,8 +244,20 @@ impl KeymapFile {
     /// no lo admiten — el diagnóstico con archivo vive en `config::load`.
     #[must_use]
     pub fn has_full_keymap(&self) -> bool {
-        !self.global.keymap.is_empty() || !self.pane.keymap.is_empty()
+        !self.global.keymap.is_empty()
+            || !self.pane.keymap.is_empty()
+            || !self.viewer.keymap.is_empty()
     }
+}
+
+/// Pantalla activa: decide qué contexto específico se fusiona con
+/// `global` (ADR 0006; el stack crece con la UI — dialog es issue #24).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Screen {
+    /// Los dos panes (contexto `pane`).
+    Browse,
+    /// El viewer (contexto `viewer`, fase 7).
+    Viewer,
 }
 
 /// Parsea un `keymap.toml`.
@@ -304,10 +318,25 @@ impl Effective {
         layers: &[KeymapFile],
         known_commands: &[&str],
     ) -> Result<Self, KeymapError> {
+        Self::build_for(preset, layers, known_commands, Screen::Browse)
+    }
+
+    /// Fusiona para una pantalla concreta: su contexto específico pisa a
+    /// `global` por secuencia exacta (ADR 0006), capas como en
+    /// [`Self::build_layered`].
+    ///
+    /// # Errors
+    /// Ver [`KeymapError`].
+    pub fn build_for(
+        preset: &KeymapFile,
+        layers: &[KeymapFile],
+        known_commands: &[&str],
+        screen: Screen,
+    ) -> Result<Self, KeymapError> {
         // Cada capa admite SOLO sus listas (revisión fase 4): descartar en
         // silencio la lista equivocada sería el "comportamiento raro" que
         // el ADR prohíbe.
-        for section in [&preset.global, &preset.pane] {
+        for section in [&preset.global, &preset.pane, &preset.viewer] {
             if !(section.prepend_keymap.is_empty() && section.append_keymap.is_empty()) {
                 return Err(KeymapError::WrongLayerKey {
                     layer: "preset",
@@ -316,7 +345,7 @@ impl Effective {
             }
         }
         for layer in layers {
-            for section in [&layer.global, &layer.pane] {
+            for section in [&layer.global, &layer.pane, &layer.viewer] {
                 if !section.keymap.is_empty() {
                     return Err(KeymapError::WrongLayerKey {
                         layer: "usuario",
@@ -341,8 +370,12 @@ impl Effective {
                 )
                 .collect()
         };
-        // Entre contextos: pane (específico) antes que global.
-        let ordered: Vec<&RawBinding> = merge_ctx(|f| &f.pane)
+        // Entre contextos: el específico de la pantalla antes que global.
+        let specific: fn(&KeymapFile) -> &RawSection = match screen {
+            Screen::Browse => |f| &f.pane,
+            Screen::Viewer => |f| &f.viewer,
+        };
+        let ordered: Vec<&RawBinding> = merge_ctx(specific)
             .into_iter()
             .chain(merge_ctx(|f| &f.global))
             .collect();
@@ -481,7 +514,18 @@ pub const COMMANDS: &[&str] = &[
     "pane.copy",
     "pane.move",
     "pane.delete",
+    "pane.view",
     "task.cancel",
+    "viewer.close",
+    "viewer.up",
+    "viewer.down",
+    "viewer.page-up",
+    "viewer.page-down",
+    "viewer.top",
+    "viewer.bottom",
+    "viewer.encoding",
+    "viewer.encoding-auto",
+    "viewer.hex",
 ];
 
 /// Los presets de fábrica, parseados (se validan en tests y al construir

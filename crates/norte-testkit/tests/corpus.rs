@@ -1,4 +1,4 @@
-//! Sanidad del corpus canónico: 25 fixtures (19 nombres + 6 contenidos),
+//! Sanidad del corpus canónico: 31 fixtures (19 nombres + 9+3 contenidos),
 //! nombres válidos como segmentos `VPath`, contenidos con la forma declarada.
 
 use norte_testkit::corpus::{content_fixtures, hostile_names};
@@ -6,7 +6,12 @@ use norte_testkit::corpus::{content_fixtures, hostile_names};
 #[test]
 fn corpus_counts() {
     assert_eq!(hostile_names().len(), 19, "nombres hostiles");
-    assert_eq!(content_fixtures().len(), 6, "contenidos legacy");
+    assert_eq!(content_fixtures().len(), 9, "contenidos detectables");
+    assert_eq!(
+        norte_testkit::corpus::content_fixtures_forced().len(),
+        3,
+        "contenidos solo-forzables"
+    );
 }
 
 #[test]
@@ -85,6 +90,21 @@ fn contents_match_declared_shape() {
             "utf8_bom" => {
                 assert_eq!(&c.bytes[..3], &[0xEF, 0xBB, 0xBF], "BOM UTF-8");
                 assert_eq!(std::str::from_utf8(&c.bytes[3..]).unwrap(), c.decoded);
+            }
+            "utf8_plain" => {
+                assert_eq!(std::str::from_utf8(&c.bytes).unwrap(), c.decoded);
+                assert!(!c.bytes.starts_with(&[0xEF, 0xBB, 0xBF]), "SIN BOM");
+            }
+            "gb18030" => {
+                assert_eq!(&c.bytes[..4], b"\x95\x32\x82\x36", "4 bytes de GB18030");
+                assert!(c.decoded.starts_with('\u{20000}'), "zona exclusiva");
+            }
+            "koi8_r" => {
+                assert!(std::str::from_utf8(&c.bytes).is_err());
+                assert!(c.decoded.starts_with("Привет"));
+                // Solo cirílico: KOI8-R y KOI8-U coinciden ahí (el corpus
+                // no debe depender de la variante que adivine chardetng).
+                assert!(c.bytes.iter().all(|&b| b != 0xA4 && b != 0xB4));
             }
             other => panic!("fixture inesperada: {other}"),
         }

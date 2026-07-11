@@ -139,6 +139,8 @@ pub struct App {
     pub message: Option<String>,
     /// Panel de tasks vivo.
     pub board: crate::tasks::TaskBoard,
+    /// Viewer abierto (F3); None = navegando.
+    pub viewer: Option<crate::viewer::Viewer>,
     /// Colisiones a la espera de diálogo: JAMÁS se pisa un modal abierto
     /// (una tecla en vuelo respondería a la pregunta equivocada); se
     /// atienden en orden al cerrarse el modal actual.
@@ -157,6 +159,7 @@ impl App {
             modal: None,
             message: None,
             board: crate::tasks::TaskBoard::default(),
+            viewer: None,
             pending_collisions: std::collections::VecDeque::new(),
         }
     }

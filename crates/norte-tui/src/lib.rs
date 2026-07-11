@@ -8,3 +8,4 @@ pub mod config;
 pub mod keymap;
 pub mod tasks;
 pub mod ui;
+pub mod viewer;

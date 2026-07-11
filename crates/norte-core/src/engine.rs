@@ -93,6 +93,20 @@ impl Engine {
         self.provider_for(p)?.list(p).await
     }
 
+    /// Lectura de un archivo como stream (directa, sin Task), con rango
+    /// opcional — el viewer lee cabeceras de archivos enormes sin tragarse
+    /// el resto (ADR 0005).
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si no hay provider para el scheme; los del provider.
+    pub async fn read(
+        &self,
+        p: &VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> Result<norte_vfs::ByteStream, Error> {
+        self.provider_for(p)?.read(p, range).await
+    }
+
     /// Copia (recursiva si es dir) como Task, con las políticas por defecto
     /// (`Fail` + `Preserve`).
     ///

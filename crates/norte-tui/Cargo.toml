@@ -17,6 +17,7 @@ anyhow.workspace = true
 crossterm = { workspace = true, features = ["event-stream"] }
 futures.workspace = true
 norte-core.workspace = true
+norte-encoding.workspace = true
 norte-proto.workspace = true
 norte-vfs-local.workspace = true
 notify.workspace = true

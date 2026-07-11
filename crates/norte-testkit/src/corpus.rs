@@ -1,5 +1,5 @@
 //! Corpus canónico de fixtures hostiles (spec §6.1/§12): 19 nombres de
-//! archivo + 6 contenidos en encodings legacy. TODO crate que toque paths o
+//! archivo + 9 contenidos detectables + 3 solo-forzables. TODO crate que toque paths o
 //! texto testea contra ESTE corpus — las fixtures nuevas entran aquí (regla
 //! de CLAUDE.md: test-first en bugs de encoding).
 
@@ -62,7 +62,7 @@ pub struct ContentFixture {
     pub decoded: &'static str,
 }
 
-/// Los 6 contenidos canónicos. Texto base: `"año 2026\n"` (ñ fuera de ASCII),
+/// Los 9 contenidos canónicos DETECTABLES. Texto base: `"año 2026\n"` (ñ fuera de ASCII),
 /// `"テスト\n"` para Shift-JIS, o `"it’s\n"` para la zona divergente
 /// 0x80–0x9F de windows-1252. Generados en código: deterministas,
 /// autodocumentados, sin binarios opacos en el repo.
@@ -87,6 +87,29 @@ pub fn content_fixtures() -> Vec<ContentFixture> {
         out
     };
     vec![
+        ContentFixture {
+            id: "utf8_plain",
+            encoding: "utf-8",
+            bytes: TEXT.as_bytes().to_vec(),
+            decoded: TEXT,
+        },
+        ContentFixture {
+            // 0x95 0x32 0x82 0x36 = U+20000 (4 bytes, zona exclusiva de
+            // GB18030): caza decoders que se queden en GBK "clásico".
+            id: "gb18030",
+            encoding: "gb18030",
+            bytes: b"\x95\x32\x82\x36 2026\n".to_vec(),
+            decoded: "\u{20000} 2026\n",
+        },
+        ContentFixture {
+            // Cirílico PURO: KOI8-R y KOI8-U coinciden en letras (difieren
+            // en box-drawing) — chardetng puede decir KOI8-U y el decode
+            // sigue siendo exacto.
+            id: "koi8_r",
+            encoding: "koi8-r",
+            bytes: b"\xf0\xd2\xc9\xd7\xc5\xd4 2026\n".to_vec(),
+            decoded: "Привет 2026\n",
+        },
         ContentFixture {
             id: "utf16le_bom",
             encoding: "utf-16le",
@@ -140,4 +163,50 @@ fn hex_decode(s: &str) -> Vec<u8> {
         .step_by(2)
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("dígitos hex"))
         .collect()
+}
+
+/// Contenidos que la detección NO puede resolver (spec §6: recuperables
+/// SOLO con «recargar como…» forzado): UTF-16 sin BOM (cae a binario por
+/// la heurística NUL — contrato deliberado) y un BOM espurio que es DATO.
+///
+/// El contrato: `detect` no da su encoding, pero `decode_forced` con la
+/// etiqueta debe ser EXACTO y sin pérdidas.
+#[must_use]
+pub fn content_fixtures_forced() -> Vec<ContentFixture> {
+    const TEXT: &str = "año 2026\n";
+    let utf16_nobom = |big_endian: bool| -> Vec<u8> {
+        let mut out = Vec::new();
+        for unit in TEXT.encode_utf16() {
+            let b = if big_endian {
+                unit.to_be_bytes()
+            } else {
+                unit.to_le_bytes()
+            };
+            out.extend_from_slice(&b);
+        }
+        out
+    };
+    vec![
+        ContentFixture {
+            id: "utf16le_nobom",
+            encoding: "utf-16le",
+            bytes: utf16_nobom(false),
+            decoded: TEXT,
+        },
+        ContentFixture {
+            id: "utf16be_nobom",
+            encoding: "utf-16be",
+            bytes: utf16_nobom(true),
+            decoded: TEXT,
+        },
+        ContentFixture {
+            // FE FF como DATOS windows-1252 (þÿ): un decode que sniffe el
+            // BOM por encima del encoding FORZADO viola "siempre
+            // corregible a mano" (spec §6.2).
+            id: "w1252_fake_bom",
+            encoding: "windows-1252",
+            bytes: b"\xFE\xFF Fahr.\n".to_vec(),
+            decoded: "þÿ Fahr.\n",
+        },
+    ]
 }
