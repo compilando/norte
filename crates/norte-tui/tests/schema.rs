@@ -24,9 +24,17 @@ fn los_schemas_publicados_no_divergen() {
             std::fs::write(&path, &json).expect("escribir schema");
             continue;
         }
-        let publicado = std::fs::read_to_string(&path).unwrap_or_else(|_| {
-            panic!("falta docs/schema/{name}: regenera con NORTE_UPDATE_SCHEMA=1")
-        });
+        let publicado = std::fs::read_to_string(&path)
+            .unwrap_or_else(|_| {
+                panic!("falta docs/schema/{name}: regenera con NORTE_UPDATE_SCHEMA=1")
+            })
+            // Cinturón además del .gitattributes: un checkout con CRLF no
+            // debe romper la comparación (cazado en CI de Windows).
+            .replace(
+                "
+", "
+",
+            );
         assert_eq!(
             publicado, json,
             "docs/schema/{name} divergió del código: regenera con \

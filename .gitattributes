@@ -1,0 +1,4 @@
+# Los golden (schemas, fixtures) se comparan por BYTES en tests: jamás
+# dejar que el checkout de Windows los convierta a CRLF.
+*.json text eol=lf
+*.toml text eol=lf
