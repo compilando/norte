@@ -55,6 +55,8 @@ enum Cmd {
         dst: PathBuf,
     },
     /// Borra archivo o directorio (recursivo), con progreso y Ctrl-C limpio
+    /// Borra PERMANENTE (banco de pruebas del engine; la papelera vive
+    /// en el TUI — ADR 0009).
     Rm {
         /// Nodo a borrar
         path: PathBuf,

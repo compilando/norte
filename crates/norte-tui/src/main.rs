@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
 use futures::StreamExt;
 use norte_core::{Engine, TransferOptions};
+use norte_proto::DeleteMode;
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{App, DialogOutcome, Modal, Pane, TransferKind, dialog_key, sort_entries};
 use norte_tui::config::{self, Layers, WatchMode};
@@ -227,7 +228,20 @@ async fn on_tick(app: &mut App, engine: &Engine, events: &mut EventStream) {
                 app.message = Some("cancelado".to_owned());
             }
             TaskState::Failed { error } => {
-                if let (Error::Conflict { .. }, Some(retry)) = (&error, fin.retry) {
+                if let (Error::Unsupported, Some(target)) = (&error, &fin.trash_target) {
+                    // La papelera no pudo AQUÍ (mount sin topdir…): se
+                    // reofrece PERMANENTE con aviso — degradación con
+                    // usuario informado (ADR 0009), jamás pisando un modal.
+                    if app.modal.is_none() {
+                        app.modal = Some(Modal::ConfirmDelete {
+                            target: target.clone(),
+                            permanent: true,
+                        });
+                    } else {
+                        app.message =
+                            Some("sin papelera aquí: F8 de nuevo para permanente".to_owned());
+                    }
+                } else if let (Error::Conflict { .. }, Some(retry)) = (&error, fin.retry) {
                     app.pending_collisions.push_back(retry);
                 } else {
                     // Render por CATEGORÍA (spec §17.7): Display estable,
@@ -307,10 +321,20 @@ fn on_dialog_key(app: &mut App, engine: &Engine, code: KeyCode) {
             app.modal = None;
             app.open_next_collision();
             match modal {
-                Modal::ConfirmDelete { target } => match engine.delete(&target) {
-                    Ok(handle) => app.board.push(handle, None),
-                    Err(e) => app.message = Some(format!("error: {e}")),
-                },
+                Modal::ConfirmDelete { target, permanent } => {
+                    let mode = if permanent {
+                        DeleteMode::Permanent
+                    } else {
+                        DeleteMode::Trash
+                    };
+                    match engine.delete_with(&target, mode) {
+                        Ok(handle) => {
+                            app.board
+                                .push_full(handle, None, (!permanent).then(|| target.clone()))
+                        }
+                        Err(e) => app.message = Some(format!("error: {e}")),
+                    }
+                }
                 Modal::ConfirmTransfer { kind, from, to } => {
                     submit_transfer(app, engine, kind, from, to, TransferOptions::default());
                 }
@@ -407,10 +431,18 @@ async fn dispatch(app: &mut App, engine: &Engine, events: &mut EventStream, cmd:
                 app.modal = Some(Modal::ConfirmTransfer { kind, from, to });
             }
         }
-        "pane.delete" => {
+        "pane.delete" | "pane.delete-permanent" => {
             if let Some(e) = app.focused().selected() {
+                // F8 = papelera si el provider la declara; sin ella, el
+                // MISMO diálogo avisa de PERMANENTE (degradación con
+                // usuario informado, ADR 0009). shift+f8 = permanente.
+                let hay_papelera = engine
+                    .capabilities(&e.path)
+                    .is_ok_and(|c| c.flags.contains(norte_proto::CapabilityFlags::TRASH));
+                let permanent = cmd == "pane.delete-permanent" || !hay_papelera;
                 app.modal = Some(Modal::ConfirmDelete {
                     target: e.path.clone(),
+                    permanent,
                 });
             }
         }

@@ -32,6 +32,8 @@ bitflags::bitflags! {
         const APPEND = 1 << 5;
         /// Se puede escribir en un offset arbitrario (verificación/parcheo).
         const RANDOM_WRITE = 1 << 6;
+        /// Hay papelera: `trash()` mueve a un lugar recuperable (ADR 0009).
+        const TRASH = 1 << 7;
     }
 }
 

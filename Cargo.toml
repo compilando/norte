@@ -67,6 +67,10 @@ schemars = "1"
 # chardet portado (peor acierto) o solo UTF-8 (inaceptable, spec §6).
 chardetng = "1"
 encoding_rs = "0.8"
+# Papelera nativa 3-OS (ADR 0009: freedesktop/Recycle Bin/NSFileManager;
+# alternativa evaluada: implementación propia — 3 integraciones de
+# plataforma para reinventar esto). MIT; os_limited::restore = base de M3.
+trash = "5"
 # Solo norte-vfs-local (regla 5): syscalls de rename no-replace que std no
 # expone — renameat2/renamex_np (libc, la misma que ya usa std) y MoveFileExW
 # sin REPLACE_EXISTING (windows-sys, el binding oficial de Microsoft).

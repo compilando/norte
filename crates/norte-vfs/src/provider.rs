@@ -107,6 +107,20 @@ pub trait Provider: Send + Sync {
         Err(Error::Unsupported)
     }
 
+    /// Mueve `p` (árbol entero si es dir) a la PAPELERA del provider —
+    /// recuperable (ADR 0009). Solo con la capability `TRASH`; sin ella:
+    /// [`Error::Unsupported`] (default) — el engine JAMÁS degrada a
+    /// borrado permanente por su cuenta.
+    ///
+    /// Excepciones de plataforma conocidas (ADR 0009, issues #25/#26):
+    /// Windows puede DESTRUIR ítems no reciclables (auto-respuesta del
+    /// nuke warning); freedesktop cross-device degrada a copy+delete
+    /// interno (potencialmente largo e incancelable a mitad).
+    async fn trash(&self, p: &VPath) -> Result<(), Error> {
+        let _ = p;
+        Err(Error::Unsupported)
+    }
+
     /// Crea un symlink en `link` apuntando a `target` (bytes crudos, tal
     /// cual — el provider no los interpreta). `kind` distingue archivo/dir
     /// donde el OS lo exige (Windows); unix lo ignora.

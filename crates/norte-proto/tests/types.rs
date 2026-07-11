@@ -339,6 +339,20 @@ fn copy_params_absent_policies_default() {
 }
 
 #[test]
+fn delete_params_sin_mode_es_trash() {
+    // ADR 0009: el default del wire es el SEGURO — un cliente 0.2 que no
+    // manda mode obtiene papelera, jamás pérdida sorpresa.
+    use norte_proto::methods::FsDeleteParams;
+    let p: FsDeleteParams = serde_json::from_str(r#"{"path": "file:///x"}"#).unwrap();
+    assert_eq!(p.mode, norte_proto::DeleteMode::Trash);
+    // Un modo desconocido es error duro (orden mutante, como las políticas).
+    assert!(
+        serde_json::from_str::<FsDeleteParams>(r#"{"path": "file:///x", "mode": "modo_futuro"}"#)
+            .is_err()
+    );
+}
+
+#[test]
 fn error_display_is_english_and_stable() {
     // Display es para logs (los frontends renderizan por categoría, no por string).
     assert_eq!(Error::NotFound.to_string(), "not found");

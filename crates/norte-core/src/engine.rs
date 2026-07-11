@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use norte_proto::{CollisionPolicy, Entry, Error, SymlinkPolicy, TaskKind, VPath};
+use norte_proto::{CollisionPolicy, DeleteMode, Entry, Error, SymlinkPolicy, TaskKind, VPath};
 use norte_vfs::{EntryStream, Provider};
 
 use crate::observer::{MutationObserver, NoopObserver};
@@ -182,12 +182,24 @@ impl Engine {
         ))
     }
 
-    /// Borrado (recursivo post-order) como Task.
+    /// Borrado PERMANENTE (recursivo post-order) como Task. La papelera
+    /// es [`Self::delete_with`] con [`DeleteMode::Trash`].
     ///
     /// # Errors
     /// [`Error::Unsupported`] si el scheme no tiene provider registrado.
-    #[tracing::instrument(skip(self), fields(path = %path.display_lossy()))]
     pub fn delete(&self, path: &VPath) -> Result<TaskHandle, Error> {
+        self.delete_with(path, DeleteMode::Permanent)
+    }
+
+    /// Borrado con modo explícito (ADR 0009): `Trash` mueve el árbol
+    /// entero a la papelera del provider (una sola operación; sin la
+    /// capability `TRASH` la task falla `Unsupported` — el engine JAMÁS
+    /// degrada a permanente por su cuenta); `Permanent` borra de verdad.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si el scheme no tiene provider registrado.
+    #[tracing::instrument(skip(self), fields(path = %path.display_lossy(), ?mode))]
+    pub fn delete_with(&self, path: &VPath, mode: DeleteMode) -> Result<TaskHandle, Error> {
         let provider = self.provider_for(path)?;
         let observer = Arc::clone(&self.observer);
         let path = path.clone();
@@ -197,9 +209,20 @@ impl Engine {
             TaskKind::Delete,
             Priority::Normal,
             Box::new(move |ctx| {
-                Box::pin(async move { ops::delete_task(provider, path, observer, &ctx).await })
+                Box::pin(
+                    async move { ops::delete_task(provider, path, mode, observer, &ctx).await },
+                )
             }),
         ))
+    }
+
+    /// Capabilities del provider que sirve `p` (para que el frontend
+    /// decida, p. ej., si el F8 va a papelera o avisa de permanente).
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si el scheme no tiene provider registrado.
+    pub fn capabilities(&self, p: &VPath) -> Result<norte_proto::Capabilities, Error> {
+        Ok(self.provider_for(p)?.capabilities())
     }
 }
 

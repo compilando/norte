@@ -14,5 +14,9 @@
   "server_copy_only": {
     "flags": "SERVER_COPY",
     "max_path": null
+  },
+  "with_trash": {
+    "flags": "TRASH",
+    "max_path": null
   }
 }

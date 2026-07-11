@@ -47,6 +47,7 @@ fn confirmacion_acepta_y_cancela() {
     );
     let borrar = Modal::ConfirmDelete {
         target: vp("file:///x"),
+        permanent: false,
     };
     assert_eq!(
         dialog_key(&borrar, KeyCode::Enter),

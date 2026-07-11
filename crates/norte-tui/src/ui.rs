@@ -121,12 +121,22 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
 fn draw_modal(frame: &mut Frame<'_>, modal: &crate::app::Modal) {
     use crate::app::{Modal, TransferKind};
     let (titulo, cuerpo) = match modal {
-        Modal::ConfirmDelete { target } => (
-            "Borrar",
+        Modal::ConfirmDelete { target, permanent } => (
+            if *permanent {
+                "Borrar PERMANENTE"
+            } else {
+                "A la papelera"
+            },
             format!(
                 "{}
-[y/enter] borrar   [n/esc] cancelar",
-                path_display(target).0
+{}
+[y/enter] adelante   [n/esc] cancelar",
+                path_display(target).0,
+                if *permanent {
+                    "⚠ SIN papelera: esto no se puede deshacer"
+                } else {
+                    "recuperable desde la papelera del sistema"
+                }
             ),
         ),
         Modal::ConfirmTransfer { kind, from, to } => (

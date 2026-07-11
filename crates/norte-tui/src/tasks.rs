@@ -28,6 +28,8 @@ pub struct TaskRow {
     pub last: TaskProgress,
     /// Contexto de reintento (None en deletes).
     pub retry: Option<RetrySpec>,
+    /// Objetivo de un delete a papelera (ver [`Finished::trash_target`]).
+    pub trash_target: Option<VPath>,
     /// Ya se emitió su evento terminal.
     reported: bool,
 }
@@ -39,6 +41,9 @@ pub struct Finished {
     pub state: TaskState,
     /// Contexto de reintento de la transferencia, si lo había.
     pub retry: Option<RetrySpec>,
+    /// Para un delete a PAPELERA: el objetivo (si falla Unsupported, el
+    /// TUI reofrece el diálogo de permanente — ADR 0009).
+    pub trash_target: Option<VPath>,
 }
 
 /// Filas máximas del panel. Política: al empujar una task nueva caen las
@@ -56,6 +61,16 @@ pub struct TaskBoard {
 impl TaskBoard {
     /// Añade una task recién encolada.
     pub fn push(&mut self, handle: TaskHandle, retry: Option<RetrySpec>) {
+        self.push_full(handle, retry, None);
+    }
+
+    /// Como [`Self::push`], con objetivo de papelera (deletes Trash).
+    pub fn push_full(
+        &mut self,
+        handle: TaskHandle,
+        retry: Option<RetrySpec>,
+        trash_target: Option<VPath>,
+    ) {
         let rx = handle.progress();
         let last = rx.borrow().clone();
         self.rows.push(TaskRow {
@@ -63,6 +78,7 @@ impl TaskBoard {
             rx,
             last,
             retry,
+            trash_target,
             reported: false,
         });
         // Hueco: caen primero las terminales más viejas — solo las YA
@@ -91,6 +107,7 @@ impl TaskBoard {
                 out.push(Finished {
                     state: row.last.state.clone(),
                     retry: row.retry.clone(),
+                    trash_target: row.trash_target.clone(),
                 });
             }
         }

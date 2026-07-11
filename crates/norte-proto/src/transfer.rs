@@ -1,6 +1,6 @@
-//! Tipos de transferencia (ADR 0005, spec §5): rango de lectura y políticas
-//! del copy engine. Viajan en los params de `fs.copy`/`fs.move` y en la API
-//! del trait `Provider`.
+//! Tipos de transferencia (ADR 0005/0009, spec §5): rango de lectura y
+//! políticas de copy y delete. Viajan en los params de
+//! `fs.copy`/`fs.move`/`fs.delete` y en la API del trait `Provider`.
 
 use serde::{Deserialize, Serialize};
 
@@ -79,4 +79,29 @@ pub enum SymlinkPolicy {
     Preserve,
     /// No copiar symlinks (contados como saltados).
     Skip,
+}
+
+/// Cómo borrar (ADR 0009). El default del WIRE es el seguro:
+/// [`Trash`](Self::Trash). El engine JAMÁS degrada solo — pedir `Trash`
+/// sin capability `TRASH` es `Unsupported` y el frontend decide con el
+/// usuario informado.
+///
+/// SKEW: un core anterior a 0.3 IGNORA `mode` (tolerancia de structs,
+/// ADR 0004) y borra PERMANENTE — condiciona `Trash` a la capability
+/// `TRASH` (que un core viejo jamás anuncia), NUNCA a tu versión.
+///
+/// ```
+/// use norte_proto::DeleteMode;
+/// assert_eq!(DeleteMode::default(), DeleteMode::Trash);
+/// let m: DeleteMode = serde_json::from_str(r#""permanent""#).unwrap();
+/// assert_eq!(m, DeleteMode::Permanent);
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeleteMode {
+    /// A la papelera del provider (recuperable).
+    #[default]
+    Trash,
+    /// Borrado permanente (elección EXPLÍCITA).
+    Permanent,
 }

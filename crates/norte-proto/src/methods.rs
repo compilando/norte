@@ -29,10 +29,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{CollisionPolicy, Entry, SymlinkPolicy, TaskId, VPath};
+use crate::{CollisionPolicy, DeleteMode, Entry, SymlinkPolicy, TaskId, VPath};
 
 /// Versión del protocolo (semver). El core soporta N y N-1 (spec §11).
-pub const PROTOCOL_VERSION: &str = "0.2.0";
+pub const PROTOCOL_VERSION: &str = "0.3.0";
 
 /// `fs.list` — listar un directorio.
 pub const FS_LIST: &str = "fs.list";
@@ -42,7 +42,8 @@ pub const FS_STAT: &str = "fs.stat";
 pub const FS_COPY: &str = "fs.copy";
 /// `fs.move` — movimiento como Task (rename atómico si el provider puede).
 pub const FS_MOVE: &str = "fs.move";
-/// `fs.delete` — borrado (recursivo post-order) como Task.
+/// `fs.delete` — borrado como Task: papelera (default) o permanente
+/// (recursivo post-order) — ADR 0009.
 pub const FS_DELETE: &str = "fs.delete";
 /// `task.cancel` — petición de cancelación cooperativa. La respuesta solo
 /// confirma la recepción; el estado final (`cancelled`, o `completed` si la
@@ -121,8 +122,12 @@ pub struct FsMoveParams {
 /// Params de [`FS_DELETE`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsDeleteParams {
-    /// Nodo a borrar (recursivo si es dir). M0 borra permanente; trash = M2.
+    /// Nodo a borrar (recursivo si es dir).
     pub path: VPath,
+    /// Papelera o permanente. `#[serde(default)]` = Trash: el default del
+    /// wire es el SEGURO (ADR 0009).
+    #[serde(default)]
+    pub mode: DeleteMode,
 }
 
 /// Result de [`FS_COPY`], [`FS_MOVE`] y [`FS_DELETE`]: la Task creada.

@@ -211,10 +211,13 @@ pub enum TransferKind {
 /// deuda anotada (issue #24).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Modal {
-    /// Confirmación de borrado (F8): irreversible hasta el trash (fase 8).
+    /// Confirmación de borrado (F8). `permanent = false` → papelera.
     ConfirmDelete {
         /// Lo que se borraría.
         target: VPath,
+        /// `true` = borrado PERMANENTE (sin papelera aquí, o elección
+        /// explícita): el diálogo AVISA (ADR 0009).
+        permanent: bool,
     },
     /// Confirmación de copy/move (F5/F6).
     ConfirmTransfer {

@@ -13,3 +13,4 @@ La spec evoluciona por ADR, no por edición silenciosa (spec §18).
 | [0006](0006-keymap-resolucion.md) | Semántica de resolución del keymap engine | accepted |
 | [0007](0007-config-capas-hot-reload.md) | Config en capas: precedencia y hot-reload | accepted |
 | [0008](0008-norte-encoding-frontera.md) | norte-encoding: frontera de detección/decodificación | accepted |
+| [0009](0009-trash.md) | Papelera: crate trash, capability y degradación explícita | accepted |

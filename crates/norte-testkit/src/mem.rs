@@ -103,7 +103,8 @@ impl MemProvider {
             CapabilityFlags::RENAME_ATOMIC
                 | CapabilityFlags::CASE_SENSITIVE
                 | CapabilityFlags::CASE_PRESERVING
-                | CapabilityFlags::SYMLINKS,
+                | CapabilityFlags::SYMLINKS
+                | CapabilityFlags::TRASH,
         )
     }
 
@@ -543,6 +544,34 @@ impl Provider for MemProvider {
             *m = mtime;
             tree.nodes.insert(new_key, node);
         }
+        Ok(())
+    }
+
+    async fn trash(&self, p: &VPath) -> Result<(), Error> {
+        if !self.caps.flags.contains(CapabilityFlags::TRASH) {
+            return Err(Error::Unsupported);
+        }
+        self.faults.op_gate().await?;
+        let key = seg_path(p);
+        // La raíz no se trashea: el path es el problema (como local).
+        if key.is_empty() {
+            return Err(Error::InvalidPath);
+        }
+        let lk = self.lookup();
+        let mut tree = self.lock();
+        let real = resolve(&tree, lk, &key).ok_or(Error::NotFound)?;
+        // Papelera lógica del testkit: el subárbol desaparece de la vista
+        // (list/restore de verdad = M3 sobre el provider real).
+        let victims: Vec<SegPath> = tree
+            .nodes
+            .keys()
+            .filter(|k| k.starts_with(&real))
+            .cloned()
+            .collect();
+        for k in victims {
+            tree.nodes.remove(&k);
+        }
+        tree.tick();
         Ok(())
     }
 

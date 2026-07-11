@@ -12,6 +12,11 @@
     "to": "file:///dst/a.txt"
   },
   "fs_delete_params": {
+    "mode": "trash",
+    "path": "file:///tmp/victim"
+  },
+  "fs_delete_params_permanent": {
+    "mode": "permanent",
     "path": "file:///tmp/victim"
   },
   "fs_list_params": {

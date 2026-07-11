@@ -160,6 +160,13 @@ fn golden_capabilities() {
                 },
             ),
             (
+                "with_trash",
+                Capabilities {
+                    flags: CapabilityFlags::TRASH,
+                    max_path: None,
+                },
+            ),
+            (
                 "remote_append_random_write",
                 Capabilities {
                     flags: CapabilityFlags::APPEND | CapabilityFlags::RANDOM_WRITE,
@@ -377,6 +384,15 @@ fn golden_methods() {
         "fs_delete_params",
         &FsDeleteParams {
             path: vpath("file:///tmp/victim"),
+            mode: norte_proto::DeleteMode::Trash,
+        },
+    );
+    check_one(
+        &fixtures,
+        "fs_delete_params_permanent",
+        &FsDeleteParams {
+            path: vpath("file:///tmp/victim"),
+            mode: norte_proto::DeleteMode::Permanent,
         },
     );
     check_one(
@@ -394,7 +410,7 @@ fn golden_methods() {
         },
     );
     check_one(&fixtures, "task_cancel_result", &TaskCancelResult {});
-    assert_eq!(fixtures.len(), 11, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 12, "[methods.json] fixtures sin caso Rust");
 }
 
 #[test]
@@ -407,7 +423,7 @@ fn method_names_frozen() {
     assert_eq!(methods::FS_DELETE, "fs.delete");
     assert_eq!(methods::TASK_CANCEL, "task.cancel");
     assert_eq!(methods::TASK_PROGRESS, "task.progress");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.2.0");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.3.0");
 }
 
 #[test]
@@ -440,6 +456,13 @@ fn golden_transfer() {
             ("overwrite", CollisionPolicy::Overwrite),
             ("rename_auto", CollisionPolicy::RenameAuto),
             ("newer", CollisionPolicy::Newer),
+        ],
+    );
+    check_family(
+        "transfer_delete_mode.json",
+        &[
+            ("trash", norte_proto::DeleteMode::Trash),
+            ("permanent", norte_proto::DeleteMode::Permanent),
         ],
     );
     check_family(

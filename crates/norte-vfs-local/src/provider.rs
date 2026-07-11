@@ -128,6 +128,23 @@ impl LocalProvider {
     }
 }
 
+/// Papelera nativa. macOS: `NSFileManager` (headless, sin prompts TCC) —
+/// el default del crate sería Finder vía osascript: colgaría la task en
+/// un prompt de Automation y muere en CI (hallazgo B1, ADR 0009).
+#[cfg(target_os = "macos")]
+fn trash_delete(p: &Path) -> Result<(), trash::Error> {
+    use trash::macos::{DeleteMethod, TrashContextExtMacos};
+    let mut ctx = trash::TrashContext::default();
+    ctx.set_delete_method(DeleteMethod::NsFileManager);
+    ctx.delete(p)
+}
+
+/// Papelera nativa (freedesktop / Recycle Bin).
+#[cfg(not(target_os = "macos"))]
+fn trash_delete(p: &Path) -> Result<(), trash::Error> {
+    trash::delete(p)
+}
+
 /// Contador de staging: junto al pid hace único el nombre del `.norte-partial`
 /// (dos writes al mismo destino jamás comparten staging, y un archivo REAL
 /// del usuario llamado `x.norte-partial` jamás se toca).
@@ -397,7 +414,9 @@ fn default_capabilities() -> Capabilities {
         | CapabilityFlags::CASE_PRESERVING
         // FS local: escritura en offset arbitrario y append (resume M2).
         | CapabilityFlags::APPEND
-        | CapabilityFlags::RANDOM_WRITE;
+        | CapabilityFlags::RANDOM_WRITE
+        // Papelera nativa en los 3 OS (crate trash, ADR 0009).
+        | CapabilityFlags::TRASH;
     if cfg!(unix) {
         // Crear symlinks en Windows exige privilegio: no se declara en M0.
         flags |= CapabilityFlags::SYMLINKS;
@@ -565,6 +584,33 @@ impl Provider for LocalProvider {
             }
         });
         Ok(ReceiverStream::new(rx).boxed())
+    }
+
+    async fn trash(&self, p: &VPath) -> Result<(), Error> {
+        self.ensure_caps().await;
+        if !self.capabilities().flags.contains(CapabilityFlags::TRASH) {
+            return Err(Error::Unsupported);
+        }
+        let native = self.native(p)?;
+        blocking(move || {
+            // Existencia primero: el crate trash da errores variopintos.
+            // (TOCTOU cosmético: si la víctima desaparece entre el stat y
+            // el delete, saldrá PermissionDenied en vez de NotFound.)
+            std::fs::symlink_metadata(&native).map_err(|e| map_io(&e))?;
+            trash_delete(&native).map_err(|e| match e {
+                trash::Error::CouldNotAccess { .. } => Error::PermissionDenied,
+                trash::Error::TargetedRoot => Error::InvalidPath,
+                // "Sin papelera utilizable AQUÍ" (mount sin topdir, sin
+                // $HOME…): Unsupported — el TUI reofrece PERMANENTE con
+                // aviso (ADR 0009). Variantes del crate stringly: Unknown
+                // es su cajón para "no pude"; upstream además panickea con
+                // /proc/mounts no-UTF8 (contenido por `blocking()` como
+                // Internal{panic}).
+                trash::Error::Unknown { .. } => Error::Unsupported,
+                _ => Error::Io { retryable: false },
+            })
+        })
+        .await
     }
 
     async fn read_link(&self, p: &VPath) -> Result<Vec<u8>, Error> {

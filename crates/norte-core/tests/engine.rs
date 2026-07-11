@@ -1236,3 +1236,72 @@ async fn engine_read_respeta_el_rango() {
     }
     assert_eq!(out, b"234");
 }
+
+// ---------- fase 8: papelera (ADR 0009) ----------
+
+/// Trash es UNA operación: el árbol entero desaparece, recuperable.
+#[tokio::test]
+async fn delete_trash_se_lleva_el_arbol() {
+    let (engine, mem) = engine_with_mem();
+    build_tree(&mem, 3).await;
+    let handle = engine
+        .delete_with(&vp("mem:///src"), norte_proto::DeleteMode::Trash)
+        .unwrap();
+    assert_eq!(handle.join().await, TaskState::Completed);
+    assert_eq!(
+        mem.stat(&vp("mem:///src")).await.unwrap_err(),
+        Error::NotFound
+    );
+}
+
+/// Sin capability TRASH el engine JAMÁS degrada: Unsupported y el árbol
+/// queda intacto (la degradación es decisión del usuario, ADR 0009).
+#[tokio::test]
+async fn delete_trash_sin_capability_no_degrada() {
+    let engine = Engine::new();
+    let mem = Arc::new(MemProvider::with_flags(
+        CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::CASE_SENSITIVE,
+    ));
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    write_file(&mem, "mem:///valioso", b"datos").await;
+    let handle = engine
+        .delete_with(&vp("mem:///valioso"), norte_proto::DeleteMode::Trash)
+        .unwrap();
+    assert_eq!(
+        handle.join().await,
+        TaskState::Failed {
+            error: Error::Unsupported
+        }
+    );
+    assert_eq!(read_all(&mem, "mem:///valioso").await.unwrap(), b"datos");
+}
+
+/// Regla 3 para el camino Trash (una sola op): cancelable ANTES de
+/// disparar — o gana la cancelación (árbol intacto) o ganó el trash
+/// (carrera legítima, como en el move).
+#[tokio::test]
+async fn delete_trash_cancel_before_start_leaves_tree_intact() {
+    let (engine, mem) = engine_with_mem();
+    build_tree(&mem, 3).await;
+    mem.faults()
+        .set_latency_per_op(Some(std::time::Duration::from_millis(30)));
+    let handle = engine
+        .delete_with(&vp("mem:///src"), norte_proto::DeleteMode::Trash)
+        .unwrap();
+    handle.cancel();
+    let state = handle.join().await;
+    mem.faults().clear();
+    match state {
+        TaskState::Cancelled => {
+            assert!(mem.stat(&vp("mem:///src")).await.is_ok(), "árbol intacto");
+        }
+        TaskState::Completed => {
+            assert_eq!(
+                mem.stat(&vp("mem:///src")).await.unwrap_err(),
+                Error::NotFound,
+                "el trash ganó la carrera: fue ENTERO"
+            );
+        }
+        other => panic!("estado inesperado: {other:?}"),
+    }
+}

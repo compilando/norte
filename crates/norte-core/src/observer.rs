@@ -9,8 +9,11 @@ use norte_proto::VPath;
 pub enum Mutation<'a> {
     /// Nodo creado (archivo commiteado o dir).
     Created(&'a VPath),
-    /// Nodo eliminado.
+    /// Nodo eliminado PERMANENTEMENTE (irreversible).
     Removed(&'a VPath),
+    /// Nodo movido a la papelera (RECUPERABLE — el undo de M3 usa el
+    /// restore del OS; régimen distinto a `Removed`, ADR 0009).
+    Trashed(&'a VPath),
     /// Nodo renombrado dentro de un provider.
     Renamed {
         /// Path original.

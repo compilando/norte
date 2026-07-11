@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use futures::{FutureExt, StreamExt};
 use norte_proto::SymlinkPolicy;
-use norte_proto::{CollisionPolicy, ConflictKind, Entry, EntryKind, Error, Segment, VPath};
+use norte_proto::{
+    CollisionPolicy, ConflictKind, DeleteMode, Entry, EntryKind, Error, Segment, VPath,
+};
 use norte_vfs::{Provider, SymlinkKind};
 use tokio_util::sync::CancellationToken;
 
@@ -759,17 +761,31 @@ async fn move_by_copy(
     }
 }
 
-/// Delete recursivo post-order (los hijos caen antes que su padre).
-/// Cancelar a mitad deja el resto del árbol intacto (la raíz cae la última).
-#[tracing::instrument(skip_all, fields(path = %path.display_lossy()))]
+/// Delete: `Trash` = UNA operación del provider sobre la raíz (el OS se
+/// lleva el árbol entero — cancelable ANTES de disparar, no a mitad);
+/// `Permanent` = recursivo post-order (los hijos caen antes que su padre;
+/// cancelar a mitad deja el resto del árbol intacto, la raíz cae la
+/// última). ADR 0009.
+#[tracing::instrument(skip_all, fields(path = %path.display_lossy(), ?mode))]
 pub(crate) async fn delete_task(
     provider: Arc<dyn Provider>,
     path: VPath,
+    mode: DeleteMode,
     observer: Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
     if ctx.cancel.is_cancelled() {
         return Err(Error::Cancelled);
+    }
+    if mode == DeleteMode::Trash {
+        ctx.progress.update(|p| {
+            p.entries_total = Some(1);
+            p.current = Some(path.clone());
+        });
+        provider.trash(&path).await?;
+        observer.on_mutation(&Mutation::Trashed(&path));
+        ctx.progress.update(|p| p.entries_done = 1);
+        return Ok(());
     }
     let entry = provider.stat(&path).await?;
     if entry.kind == EntryKind::Dir {

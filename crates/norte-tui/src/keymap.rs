@@ -514,6 +514,7 @@ pub const COMMANDS: &[&str] = &[
     "pane.copy",
     "pane.move",
     "pane.delete",
+    "pane.delete-permanent",
     "pane.view",
     "task.cancel",
     "viewer.close",

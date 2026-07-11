@@ -325,6 +325,40 @@ macro_rules! provider_contract {
                 assert_eq!(read_all(&p, &f).await.expect("intacto"), b"x");
             }
 
+            /// ADR 0009: con capability TRASH, `trash()` se lleva el
+            /// árbol ENTERO y el path deja de existir; sin capability,
+            /// Unsupported (jamás borrar en su lugar).
+            #[tokio::test]
+            async fn contract_trash_takes_the_tree_or_refuses() {
+                let p = $factory;
+                let root: VPath = $root;
+                // Nombre ÚNICO y reconocible: la papelera real del
+                // desarrollador acumula esto — la purga vive en los tests
+                // del provider local (os_limited); macOS se acepta
+                // documentado en ADR 0009.
+                let nombre = format!("norte-contract-trash-{}", std::process::id());
+                let dir = child(&root, nombre.as_bytes());
+                p.mkdir(&dir).await.expect("mkdir");
+                write_all(&p, &child(&dir, b"hijo"), b"x").await;
+                // Y una víctima con nombre HOSTIL (no-UTF8): el trash de
+                // los 3 OS debe tragarlo o rechazar limpio, jamás panicar.
+                // (Si el FS rechaza el nombre — APFS — simplemente no está.)
+                if let Ok(mut sink) = p.write(&child(&dir, b"tr\xE1sh")).await {
+                    let _ = sink.write(Bytes::from_static(b"x")).await;
+                    let _ = sink.commit().await;
+                }
+                if p.capabilities().flags.contains(CapabilityFlags::TRASH) {
+                    p.trash(&dir).await.expect("trash");
+                    assert_eq!(
+                        p.stat(&dir).await.expect_err("se fue"),
+                        Error::NotFound
+                    );
+                } else {
+                    assert!(matches!(p.trash(&dir).await, Err(Error::Unsupported)));
+                    assert!(p.stat(&dir).await.is_ok(), "sin papelera NO se toca");
+                }
+            }
+
             #[tokio::test]
             async fn contract_read_link_errors() {
                 let p = $factory;
