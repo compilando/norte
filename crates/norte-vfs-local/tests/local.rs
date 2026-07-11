@@ -408,7 +408,7 @@ async fn dropping_byte_stream_mid_read_releases_handle() {
 /// Purga de la papelera REAL tras la suite (hallazgo M3 de fase 8): el
 /// contrato trashea `norte-contract-trash-<pid>` en cada run — sin esto,
 /// la papelera del desarrollador crece para siempre. macOS no tiene
-/// os_limited: aceptado y documentado en ADR 0009.
+/// `os_limited`: aceptado y documentado en ADR 0009.
 #[cfg(any(target_os = "linux", windows))]
 #[test]
 fn purga_los_restos_del_contrato_en_la_papelera() {
