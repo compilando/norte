@@ -1,6 +1,12 @@
 //! Contención de un servidor SFTP HOSTIL (ADR 0013, threat model §14): un
 //! servidor que inyecta nombres trampa (`../../`) y symlinks fuera de la
 //! base no puede hacer que el provider escape la raíz ni corrompa.
+//!
+//! Solo-Linux (igual que `contract.rs`): el servidor in-process se respalda en
+//! el FS del HOST y solo es fiel en POSIX (case-sensitive, byte-preserving);
+//! un fixture no-UTF8 crudo (`caf\xE9`) ni siquiera se puede plantar en APFS
+//! (EILSEQ). El provider es OS-agnóstico; el nightly openssh cubre POSIX real.
+#![cfg(target_os = "linux")]
 
 mod common;
 

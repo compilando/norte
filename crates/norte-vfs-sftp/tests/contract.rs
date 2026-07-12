@@ -2,6 +2,15 @@
 //! MISMA suite que pasan `MemProvider` y `LocalProvider`, ahora contra un
 //! provider REMOTO de verdad, con el corpus de nombres hostiles. Corre en
 //! CI normal, sin Docker (el openssh real es un job nightly aparte).
+//!
+//! Solo-Linux: el servidor in-process mapea las ops sftp sobre el FS del HOST,
+//! así que su fidelidad exige un FS POSIX (case-sensitive, byte-preserving).
+//! macOS (APFS case-insensitive, rechaza nombres no-UTF8) y Windows (NTFS
+//! case-insensitive, sin symlinks POSIX) NO pueden respaldar el harness fiel
+//! —darían un "servidor" no representativo—. El provider es OS-agnóstico (Rust
+//! puro, sin `cfg`), así que el run de Linux es autoritativo y el nightly
+//! openssh valida un servidor POSIX de producción.
+#![cfg(target_os = "linux")]
 
 mod common;
 
