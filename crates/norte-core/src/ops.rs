@@ -1243,7 +1243,7 @@ struct DirFrame {
 /// Walk con expansión de dir-symlinks (`SymlinkPolicy::Follow`, issue
 /// #19): cada symlink se sondea; los que apuntan a dir se convierten en
 /// dirs sintéticos y se desciende A TRAVÉS del link. Un link cuyo target
-/// resuelto ya está en la cadena de ancestros es un CICLO → `InvalidPath`.
+/// resuelto ya está en la cadena de ancestros es un CICLO → [`Error::Loop`].
 /// Expandir exige identidad ([`Provider::node_id`]): sin ella,
 /// `Unsupported` — exactamente el comportamiento M1 (los árboles sin
 /// dir-symlinks no la necesitan y siguen funcionando).
@@ -1315,8 +1315,9 @@ async fn walk_following(
                                 return Err(Error::Unsupported);
                             };
                             if frame.ancestors.contains(&id) {
-                                // Ciclo: seguirlo copiaría infinito.
-                                return Err(Error::InvalidPath);
+                                // Ciclo: seguirlo copiaría infinito. Categoría
+                                // propia desde 0.4.0 (#31, ADR 0011).
+                                return Err(Error::Loop);
                             }
                             let mut ancestors = frame.ancestors.clone();
                             ancestors.push(id);

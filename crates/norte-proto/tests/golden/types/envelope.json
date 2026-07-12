@@ -1,0 +1,61 @@
+{
+  "notification": {
+    "jsonrpc": "2.0",
+    "method": "task.progress",
+    "params": {
+      "task_id": 3
+    }
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "fs.list",
+    "params": {
+      "path": "file:///home"
+    }
+  },
+  "request_null_params": {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "method": "daemon.shutdown",
+    "params": null
+  },
+  "request_string_id": {
+    "jsonrpc": "2.0",
+    "id": "req-abc",
+    "method": "fs.stat",
+    "params": {
+      "path": "file:///x"
+    }
+  },
+  "response_app_error": {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "result": null,
+    "error": {
+      "code": -32000,
+      "message": "not found",
+      "data": {
+        "kind": "not_found"
+      }
+    }
+  },
+  "response_ok": {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "result": {
+      "entries": []
+    },
+    "error": null
+  },
+  "response_protocol_error_null_id": {
+    "jsonrpc": "2.0",
+    "id": null,
+    "result": null,
+    "error": {
+      "code": -32700,
+      "message": "invalid JSON",
+      "data": null
+    }
+  }
+}

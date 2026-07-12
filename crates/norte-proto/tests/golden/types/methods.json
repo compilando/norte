@@ -1,4 +1,11 @@
 {
+  "daemon_shutdown_params_graceful": {
+    "graceful": true
+  },
+  "daemon_shutdown_params_hard": {
+    "graceful": false
+  },
+  "daemon_shutdown_result": {},
   "fs_copy_params": {
     "from": "file:///src/a.txt",
     "on_collision": "fail",
@@ -51,6 +58,26 @@
   },
   "fs_task_result": {
     "task_id": 7
+  },
+  "initialize_params": {
+    "client_info": {
+      "name": "norte-tui",
+      "version": "0.1.0"
+    },
+    "protocol_version": "0.4.0",
+    "encodings": [
+      "json"
+    ]
+  },
+  "initialize_result": {
+    "server_info": {
+      "name": "norte-core",
+      "version": "0.1.0"
+    },
+    "protocol_version": "0.4.0",
+    "encodings": [
+      "json"
+    ]
   },
   "task_cancel_params": {
     "task_id": 7

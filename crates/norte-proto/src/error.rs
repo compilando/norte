@@ -124,6 +124,10 @@ pub enum Error {
         /// `true` si el origen fue un panic capturado en una task.
         panic: bool,
     },
+    /// Ciclo de symlinks detectado al recorrer con `Follow` (visited set
+    /// de la spec §17.9; issue #31). Un cliente N-1 degrada a `Unknown`.
+    #[error("symlink loop")]
+    Loop,
     /// Categoría de un protocolo más nuevo (fallback de deserialización).
     /// El core JAMÁS la emite; existe para que un cliente N degrade con
     /// elegancia ante categorías N+1.

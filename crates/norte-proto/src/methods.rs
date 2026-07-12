@@ -32,7 +32,68 @@ use serde::{Deserialize, Serialize};
 use crate::{CollisionPolicy, DeleteMode, Entry, SymlinkPolicy, TaskId, VPath};
 
 /// Versión del protocolo (semver). El core soporta N y N-1 (spec §11).
-pub const PROTOCOL_VERSION: &str = "0.3.0";
+pub const PROTOCOL_VERSION: &str = "0.4.0";
+
+/// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
+/// (ADR 0011). Rechaza versiones incompatibles (ver
+/// [`version_compatible`]) y negocia el encoding (hoy solo `"json"`).
+pub const INITIALIZE: &str = "initialize";
+/// `daemon.shutdown` — apaga el daemon: `graceful` (default) espera a las
+/// tasks vivas; sin graceful las cancela primero. Autenticado como todo.
+pub const DAEMON_SHUTDOWN: &str = "daemon.shutdown";
+
+/// ¿Acepta un core `server` a un cliente `client`? N y N-1 (spec §11):
+/// mismo major; en 0.x el "major efectivo" es el minor — se acepta el
+/// mismo minor o el inmediatamente anterior. El patch jamás importa.
+///
+/// ```
+/// use norte_proto::methods::version_compatible;
+/// assert!(version_compatible("0.4.0", "0.4.9"));
+/// assert!(version_compatible("0.4.0", "0.3.0"));
+/// assert!(!version_compatible("0.4.0", "0.2.0"));
+/// assert!(!version_compatible("0.4.0", "0.5.0")); // cliente del futuro
+/// assert!(!version_compatible("0.4.0", "no-semver"));
+/// ```
+#[must_use]
+pub fn version_compatible(server: &str, client: &str) -> bool {
+    fn digits(seg: &str) -> Option<u64> {
+        // Estricto: solo dígitos, sin `+`/espacios (que u64::parse tolera)
+        // ni ceros a la izquierda (semver los prohíbe). Pre-release y
+        // build metadata también quedan fuera — deliberado y pinneado en
+        // tests: un daemon de desarrollo con tag raro NO negocia.
+        if seg.is_empty() || !seg.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        if seg.len() > 1 && seg.starts_with('0') {
+            return None;
+        }
+        seg.parse().ok()
+    }
+    fn parse(v: &str) -> Option<(u64, u64)> {
+        let mut it = v.split('.');
+        let major = digits(it.next()?)?;
+        let minor = digits(it.next()?)?;
+        // El patch debe existir y ser numérico (semver), pero no se compara.
+        let _ = digits(it.next()?)?;
+        if it.next().is_some() {
+            return None;
+        }
+        Some((major, minor))
+    }
+    let (Some((sj, sn)), Some((cj, cn))) = (parse(server), parse(client)) else {
+        return false;
+    };
+    if sj != cj {
+        return false;
+    }
+    if sj > 0 {
+        // Estabilidad real: mismo major basta; N/N-1 aplica al minor del
+        // servidor frente a clientes más nuevos.
+        return cn <= sn;
+    }
+    // 0.x: el minor es el "major efectivo" — N o N-1.
+    cn == sn || cn + 1 == sn
+}
 
 /// `fs.list` — listar un directorio.
 pub const FS_LIST: &str = "fs.list";
@@ -137,6 +198,72 @@ pub struct FsTaskResult {
     /// Id de la Task encolada.
     pub task_id: TaskId,
 }
+
+/// Identidad de un cliente (va en [`InitializeParams`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientInfo {
+    /// Nombre del frontend (`norte-tui`, `norte-cli`, un tercero…).
+    pub name: String,
+    /// Versión del frontend (informativa, jamás se compara).
+    pub version: String,
+}
+
+/// Identidad del servidor (va en [`InitializeResult`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerInfo {
+    /// Nombre del servidor (`norte-core`).
+    pub name: String,
+    /// Versión del binario del daemon (informativa).
+    pub version: String,
+}
+
+/// Params de [`INITIALIZE`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InitializeParams {
+    /// Quién se conecta.
+    pub client_info: ClientInfo,
+    /// Versión del protocolo del cliente; incompatible = error y cierre.
+    pub protocol_version: String,
+    /// Encodings que el cliente sabe hablar, por preferencia. Vacío o
+    /// ausente = `["json"]` implícito (el único de M2, decisión 4 del
+    /// kickoff: negociado-pero-solo-JSON).
+    #[serde(default)]
+    pub encodings: Vec<String>,
+}
+
+/// Result de [`INITIALIZE`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InitializeResult {
+    /// Quién responde.
+    pub server_info: ServerInfo,
+    /// Versión del protocolo del core.
+    pub protocol_version: String,
+    /// Encodings aceptados (hoy siempre `["json"]`).
+    pub encodings: Vec<String>,
+}
+
+/// Params de [`DAEMON_SHUTDOWN`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DaemonShutdownParams {
+    /// `true` (default): terminar las tasks vivas antes de salir.
+    /// `false`: cancelarlas primero (estado limpio garantizado igual).
+    #[serde(default = "default_graceful")]
+    pub graceful: bool,
+}
+
+impl Default for DaemonShutdownParams {
+    fn default() -> Self {
+        Self { graceful: true }
+    }
+}
+
+fn default_graceful() -> bool {
+    true
+}
+
+/// Result de [`DAEMON_SHUTDOWN`]: objeto vacío, reservado para extensión.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DaemonShutdownResult {}
 
 /// Params de [`TASK_CANCEL`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

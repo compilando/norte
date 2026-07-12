@@ -2,6 +2,8 @@
 //! y (en M0) modo embebido como biblioteca — el daemon llega en hitos posteriores.
 #![forbid(unsafe_code)]
 
+#[cfg(unix)]
+pub mod daemon;
 mod engine;
 mod observer;
 mod ops;

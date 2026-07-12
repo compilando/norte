@@ -67,6 +67,37 @@ enum Cmd {
         /// Nodo a borrar
         path: PathBuf,
     },
+    /// Daemon JSON-RPC sobre UDS (ADR 0011; solo unix en M2)
+    #[cfg(unix)]
+    Daemon {
+        #[command(subcommand)]
+        cmd: DaemonCmd,
+    },
+}
+
+/// Subcomandos del daemon.
+#[cfg(unix)]
+#[derive(Subcommand)]
+enum DaemonCmd {
+    /// Sirve en primer plano hasta shutdown (petición, SIGTERM/Ctrl-C o
+    /// inactividad)
+    Run {
+        /// Path del socket (default: `$XDG_RUNTIME_DIR/norte/daemon.sock`)
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        /// Apagado tras N segundos sin clientes ni tasks (0 = nunca)
+        #[arg(long, default_value_t = 300)]
+        idle_timeout: u64,
+    },
+    /// Pide el apagado al daemon en marcha
+    Stop {
+        /// Path del socket (default: el mismo que run)
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        /// Cancela las tasks vivas en vez de esperarlas
+        #[arg(long)]
+        hard: bool,
+    },
 }
 
 /// Política de symlinks de `cp`/`mv` (mapea 1:1 a la del protocolo).
@@ -149,6 +180,93 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 .delete(&target)
                 .context(norte_i18n::t("cli-enqueue-delete"))?;
             Ok(run_task(handle, false).await)
+        }
+        #[cfg(unix)]
+        Cmd::Daemon { cmd } => daemon_cmd(engine, cmd).await,
+    }
+}
+
+/// `norte daemon run|stop` (ADR 0011). El engine que sirve el daemon es el
+/// MISMO embebido de esta CLI: solo cambia el transporte (regla 7).
+#[cfg(unix)]
+async fn daemon_cmd(engine: Engine, cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
+    use norte_core::daemon::{Client, Daemon, DaemonConfig, default_socket_path};
+    match cmd {
+        DaemonCmd::Run {
+            socket,
+            idle_timeout,
+        } => {
+            let daemon = Daemon::bind(
+                std::sync::Arc::new(engine),
+                DaemonConfig {
+                    socket_path: socket,
+                    idle_timeout: (idle_timeout > 0)
+                        .then(|| std::time::Duration::from_secs(idle_timeout)),
+                },
+            )
+            .await
+            .context("no se pudo enlazar el daemon")?;
+            eprintln!(
+                "{}",
+                norte_i18n::ta(
+                    "cli-daemon-listening",
+                    &[("socket", &daemon.socket_path().display().to_string())]
+                )
+            );
+            // Ctrl-C/SIGTERM = shutdown graceful (las tasks terminan);
+            // la SEGUNDA señal escala a hard (cancela tasks) — sin ella,
+            // una task colgada solo moriría con SIGKILL (M4 rust-reviewer).
+            // El registro va ANTES del spawn: si falla, error visible, no
+            // un panic tragado dentro de un task (M5).
+            let mut sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .context("no se pudo registrar SIGTERM")?;
+            let shutdown = daemon.shutdown_token();
+            let hard = daemon.hard_shutdown_token();
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = sigterm.recv() => {}
+                }
+                shutdown.cancel();
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = sigterm.recv() => {}
+                }
+                eprintln!("{}", norte_i18n::t("cli-daemon-hard-shutdown"));
+                hard.cancel();
+            });
+            daemon.run().await.context("el daemon terminó con error")?;
+            Ok(ExitCode::SUCCESS)
+        }
+        DaemonCmd::Stop { socket, hard } => {
+            // La resolución del path por defecto puede sondear el FS
+            // (regla 2): fuera del hilo del runtime.
+            let socket = match socket {
+                Some(s) => s,
+                None => tokio::task::spawn_blocking(|| default_socket_path(None))
+                    .await
+                    .context("resolución del socket")?,
+            };
+            let mut client = Client::connect(&socket)
+                .await
+                .context("no hay daemon escuchando en el socket")?;
+            client
+                .initialize(norte_proto::methods::ClientInfo {
+                    name: "norte-cli".into(),
+                    version: env!("CARGO_PKG_VERSION").into(),
+                })
+                .await
+                .context("initialize")?;
+            let _: norte_proto::methods::DaemonShutdownResult = client
+                .call(
+                    norte_proto::methods::DAEMON_SHUTDOWN,
+                    &norte_proto::methods::DaemonShutdownParams { graceful: !hard },
+                )
+                .await
+                .context("daemon.shutdown")?;
+            eprintln!("{}", norte_i18n::t("cli-daemon-stopped"));
+            Ok(ExitCode::SUCCESS)
         }
     }
 }

@@ -369,3 +369,211 @@ fn error_is_std_error() {
     fn assert_err<E: std::error::Error>(_: &E) {}
     assert_err(&Error::NotFound);
 }
+
+// ---------- envelope JSON-RPC (ADR 0011) ----------
+
+/// Tolerancia de structs (ADR 0004) aplica al envelope: campos extra de un
+/// protocolo más nuevo se ignoran.
+#[test]
+fn envelope_ignora_campos_desconocidos() {
+    use norte_proto::wire::{Message, Request};
+    let r: Request = serde_json::from_str(
+        r#"{"jsonrpc":"2.0","id":1,"method":"fs.list","params":null,"traceparent":"00-abc"}"#,
+    )
+    .unwrap();
+    assert_eq!(r.method, "fs.list");
+    // Y la clasificación estructural no se despista por el campo extra.
+    let m: Message = serde_json::from_str(
+        r#"{"jsonrpc":"2.0","id":1,"method":"fs.list","params":null,"extra":1}"#,
+    )
+    .unwrap();
+    assert!(matches!(m, Message::Request(_)));
+}
+
+/// `jsonrpc` distinto de "2.0" se RECHAZA (peer que no habla el protocolo).
+#[test]
+fn envelope_rechaza_jsonrpc_distinto_de_2_0() {
+    use norte_proto::wire::Request;
+    for raw in [
+        r#"{"jsonrpc":"1.0","id":1,"method":"m","params":null}"#,
+        r#"{"jsonrpc":"3.0","id":1,"method":"m","params":null}"#,
+        r#"{"id":1,"method":"m","params":null}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<Request>(raw).is_err(),
+            "debía rechazar: {raw}"
+        );
+    }
+}
+
+/// Una response con result Y error (o ninguno) viola JSON-RPC: `outcome`
+/// la convierte en error de protocolo, jamás la interpreta.
+#[test]
+fn response_outcome_valida_xor() {
+    use norte_proto::wire::{Response, RpcError, codes};
+    let both: Response = serde_json::from_str(
+        r#"{"jsonrpc":"2.0","id":1,"result":{},"error":{"code":-32000,"message":"x","data":null}}"#,
+    )
+    .unwrap();
+    assert_eq!(both.outcome().unwrap_err().code, codes::INVALID_REQUEST);
+    let neither: Response =
+        serde_json::from_str(r#"{"jsonrpc":"2.0","id":1,"result":null,"error":null}"#).unwrap();
+    assert_eq!(neither.outcome().unwrap_err().code, codes::INVALID_REQUEST);
+    // El error del peer se entrega tal cual.
+    let err = Response::err(None, RpcError::protocol(codes::PARSE_ERROR, "x"));
+    assert_eq!(err.outcome().unwrap_err().code, codes::PARSE_ERROR);
+}
+
+/// El error de aplicación lleva la taxonomía ÍNTEGRA en data — el contrato
+/// de los frontends es data.kind, no code/message.
+#[test]
+fn rpc_error_de_aplicacion_lleva_la_taxonomia_en_data() {
+    use norte_proto::wire::{RpcError, codes};
+    let e = RpcError::from(Error::Conflict {
+        conflict: ConflictKind::CaseCollision,
+    });
+    assert_eq!(e.code, codes::APP_ERROR);
+    assert_eq!(
+        e.data,
+        Some(Error::Conflict {
+            conflict: ConflictKind::CaseCollision
+        })
+    );
+    // data de un protocolo más nuevo degrada por el fallback de Error.
+    let raw = r#"{"code":-32000,"message":"x","data":{"kind":"categoria_del_futuro"}}"#;
+    let back: RpcError = serde_json::from_str(raw).unwrap();
+    assert_eq!(back.data, Some(Error::Unknown));
+}
+
+// ---------- framing NDJSON (ADR 0011) ----------
+
+#[test]
+fn frame_decoder_trocea_y_tolera() {
+    use norte_proto::wire::FrameDecoder;
+    let mut d = FrameDecoder::new();
+    // Parcial, luego dos completos en un push, con \r\n y línea vacía.
+    d.push(b"{\"a\"").unwrap();
+    assert_eq!(d.next_frame(), None);
+    d.push(b":1}\r\n\n{\"b\":2}\n{\"c\"").unwrap();
+    assert_eq!(d.next_frame(), Some(b"{\"a\":1}".to_vec()));
+    assert_eq!(d.next_frame(), Some(b"{\"b\":2}".to_vec()));
+    assert_eq!(d.next_frame(), None, "el tercero no cerró");
+    d.push(b":3}\n").unwrap();
+    assert_eq!(d.next_frame(), Some(b"{\"c\":3}".to_vec()));
+}
+
+#[test]
+fn frame_decoder_rechaza_frames_gigantes() {
+    use norte_proto::wire::{FrameDecoder, MAX_FRAME_BYTES};
+    let mut d = FrameDecoder::new();
+    let chunk = vec![b'x'; 1024 * 1024];
+    let mut fallo = false;
+    for _ in 0..=(MAX_FRAME_BYTES / chunk.len()) {
+        if d.push(&chunk).is_err() {
+            fallo = true;
+            break;
+        }
+    }
+    assert!(fallo, "un frame sin fin debe cortarse en MAX_FRAME_BYTES");
+}
+
+#[test]
+fn encode_frame_termina_en_newline_y_roundtripea() {
+    use norte_proto::wire::{FrameDecoder, Request, RequestId, encode_frame};
+    let req = Request {
+        jsonrpc: norte_proto::wire::JsonRpcVersion,
+        id: RequestId::Num(1),
+        method: "fs.stat".into(),
+        params: None,
+    };
+    let frame = encode_frame(&req).unwrap();
+    assert_eq!(frame.last(), Some(&b'\n'));
+    // serde_json escapa \n internos: un frame es SIEMPRE una línea.
+    assert_eq!(
+        frame.iter().position(|&b| b == b'\n'),
+        Some(frame.len() - 1)
+    );
+    let mut d = FrameDecoder::new();
+    d.push(&frame).unwrap();
+    let back: Request = serde_json::from_slice(&d.next_frame().unwrap()).unwrap();
+    assert_eq!(back, req);
+}
+
+// ---------- versionado N/N-1 (ADR 0011) ----------
+
+#[test]
+fn version_compatible_solo_n_y_n_menos_1() {
+    use norte_proto::methods::version_compatible;
+    // 0.x: el minor es el major efectivo.
+    assert!(version_compatible("0.4.0", "0.4.7"));
+    assert!(version_compatible("0.4.0", "0.3.2"));
+    assert!(!version_compatible("0.4.0", "0.2.9"));
+    assert!(!version_compatible("0.4.0", "0.5.0"));
+    assert!(!version_compatible("0.4.0", "1.4.0"));
+    // Malformados: jamás compatibles, jamás panic.
+    for v in ["", "0.4", "0.4.0.1", "a.b.c", "0.4.x", " 0.4.0"] {
+        assert!(!version_compatible("0.4.0", v), "aceptó {v:?}");
+    }
+}
+
+/// Tolerancia del envelope: `params` AUSENTE (no null) y `encodings`
+/// ausente en initialize — el receptor acepta ausencia (ADR 0004).
+#[test]
+fn envelope_tolera_ausencias() {
+    use norte_proto::methods::InitializeParams;
+    use norte_proto::wire::{Notification, Request};
+    let r: Request = serde_json::from_str(r#"{"jsonrpc":"2.0","id":1,"method":"m"}"#).unwrap();
+    assert_eq!(r.params, None);
+    let n: Notification = serde_json::from_str(r#"{"jsonrpc":"2.0","method":"m"}"#).unwrap();
+    assert_eq!(n.params, None);
+    let p: InitializeParams = serde_json::from_str(
+        r#"{"client_info":{"name":"x","version":"0"},"protocol_version":"0.4.0"}"#,
+    )
+    .unwrap();
+    assert!(p.encodings.is_empty(), "encodings ausente = vacío = json");
+}
+
+/// Clasificación estructural (M2/M3 del guardian): JSON válido que no es
+/// envelope, y requests con id de tipo ilegal — jamás silencio.
+#[test]
+fn classify_distingue_lo_invalido_de_lo_ilegal() {
+    use norte_proto::wire::{MessageKind, classify};
+    let j = |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap();
+    assert_eq!(classify(&j(r#"{"foo":1}"#)), MessageKind::Invalid);
+    assert_eq!(classify(&j("[1,2]")), MessageKind::Invalid);
+    // id ilegal (negativo/fraccional/null): sigue siendo Request — el
+    // server responde INVALID_REQUEST en vez de tragárselo.
+    assert_eq!(
+        classify(&j(r#"{"jsonrpc":"2.0","id":-1,"method":"m"}"#)),
+        MessageKind::Request
+    );
+    assert_eq!(
+        classify(&j(r#"{"jsonrpc":"2.0","id":null,"method":"m"}"#)),
+        MessageKind::Request
+    );
+    assert_eq!(
+        classify(&j(r#"{"jsonrpc":"2.0","method":"m"}"#)),
+        MessageKind::Notification
+    );
+    assert_eq!(
+        classify(&j(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#)),
+        MessageKind::Response
+    );
+    // Response con error y sin id explícito también clasifica.
+    assert_eq!(
+        classify(&j(
+            r#"{"jsonrpc":"2.0","error":{"code":-32700,"message":"x"}}"#
+        )),
+        MessageKind::Response
+    );
+}
+
+/// Semver estricto en la negociación (m2 del guardian): ni `+`, ni ceros a
+/// la izquierda, ni pre-release/build metadata — deliberado y pinneado.
+#[test]
+fn version_compatible_es_estricta_con_el_formato() {
+    use norte_proto::methods::version_compatible;
+    for v in ["+0.4.0", "0.04.0", "0.4.00", "0.4.0-rc.1", "0.4.0+abc"] {
+        assert!(!version_compatible("0.4.0", v), "aceptó {v:?}");
+    }
+}

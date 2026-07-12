@@ -9,8 +9,9 @@ use std::fmt::Debug;
 use std::path::Path;
 
 use norte_proto::methods::{
-    FsCopyParams, FsDeleteParams, FsListParams, FsListResult, FsMoveParams, FsStatParams,
-    FsStatResult, FsTaskResult, TaskCancelParams, TaskCancelResult,
+    ClientInfo, DaemonShutdownParams, DaemonShutdownResult, FsCopyParams, FsDeleteParams,
+    FsListParams, FsListResult, FsMoveParams, FsStatParams, FsStatResult, FsTaskResult,
+    InitializeParams, InitializeResult, ServerInfo, TaskCancelParams, TaskCancelResult,
 };
 use norte_proto::{
     ByteRange, Capabilities, CapabilityFlags, CollisionPolicy, ConflictKind, Entry, EntryKind,
@@ -184,6 +185,7 @@ fn golden_error() {
         &[
             ("not_found", Error::NotFound),
             ("permission_denied", Error::PermissionDenied),
+            ("loop", Error::Loop),
             (
                 "conflict_exists",
                 Error::Conflict {
@@ -410,7 +412,129 @@ fn golden_methods() {
         },
     );
     check_one(&fixtures, "task_cancel_result", &TaskCancelResult {});
-    assert_eq!(fixtures.len(), 12, "[methods.json] fixtures sin caso Rust");
+    check_methods_daemon(&fixtures);
+    assert_eq!(fixtures.len(), 17, "[methods.json] fixtures sin caso Rust");
+}
+
+/// Métodos del daemon (ADR 0011): initialize y daemon.shutdown.
+fn check_methods_daemon(fixtures: &BTreeMap<String, Value>) {
+    check_one(
+        fixtures,
+        "initialize_params",
+        &InitializeParams {
+            client_info: ClientInfo {
+                name: "norte-tui".into(),
+                version: "0.1.0".into(),
+            },
+            protocol_version: "0.4.0".into(),
+            encodings: vec!["json".into()],
+        },
+    );
+    check_one(
+        fixtures,
+        "initialize_result",
+        &InitializeResult {
+            server_info: ServerInfo {
+                name: "norte-core".into(),
+                version: "0.1.0".into(),
+            },
+            protocol_version: "0.4.0".into(),
+            encodings: vec!["json".into()],
+        },
+    );
+    check_one(
+        fixtures,
+        "daemon_shutdown_params_graceful",
+        &DaemonShutdownParams { graceful: true },
+    );
+    check_one(
+        fixtures,
+        "daemon_shutdown_params_hard",
+        &DaemonShutdownParams { graceful: false },
+    );
+    check_one(fixtures, "daemon_shutdown_result", &DaemonShutdownResult {});
+}
+
+/// El envelope JSON-RPC congelado (ADR 0011): la forma de request/response/
+/// notification y el objeto de error con la taxonomía en `data`.
+#[test]
+fn golden_envelope() {
+    use norte_proto::wire::{
+        JsonRpcVersion, Notification, Request, RequestId, Response, RpcError, codes,
+    };
+    let fixtures = load("envelope.json");
+    check_one(
+        &fixtures,
+        "request",
+        &Request {
+            jsonrpc: JsonRpcVersion,
+            id: RequestId::Num(7),
+            method: "fs.list".into(),
+            params: Some(serde_json::json!({"path": "file:///home"})),
+        },
+    );
+    check_one(
+        &fixtures,
+        "request_null_params",
+        &Request {
+            jsonrpc: JsonRpcVersion,
+            id: RequestId::Num(8),
+            method: "daemon.shutdown".into(),
+            params: None,
+        },
+    );
+    check_one(
+        &fixtures,
+        "notification",
+        &Notification {
+            jsonrpc: JsonRpcVersion,
+            method: "task.progress".into(),
+            params: Some(serde_json::json!({"task_id": 3})),
+        },
+    );
+    check_one(
+        &fixtures,
+        "response_ok",
+        &Response::ok(RequestId::Num(7), serde_json::json!({"entries": []})),
+    );
+    check_one(
+        &fixtures,
+        "response_app_error",
+        &Response::err(Some(RequestId::Num(7)), RpcError::from(Error::NotFound)),
+    );
+    check_one(
+        &fixtures,
+        "response_protocol_error_null_id",
+        &Response::err(None, RpcError::protocol(codes::PARSE_ERROR, "invalid JSON")),
+    );
+    check_one(
+        &fixtures,
+        "request_string_id",
+        &Request {
+            jsonrpc: JsonRpcVersion,
+            id: RequestId::Str("req-abc".into()),
+            method: "fs.stat".into(),
+            params: Some(serde_json::json!({"path": "file:///x"})),
+        },
+    );
+    assert_eq!(fixtures.len(), 7, "[envelope.json] fixtures sin caso Rust");
+}
+
+/// Los CÓDIGOS JSON-RPC y el límite de frame son wire observable: un typo
+/// no puede pasar CI (hallazgo m1 del protocol-guardian).
+#[test]
+fn rpc_codes_y_limites_congelados() {
+    use norte_proto::wire::{MAX_FRAME_BYTES, codes};
+    assert_eq!(codes::PARSE_ERROR, -32700);
+    assert_eq!(codes::INVALID_REQUEST, -32600);
+    assert_eq!(codes::METHOD_NOT_FOUND, -32601);
+    assert_eq!(codes::INVALID_PARAMS, -32602);
+    assert_eq!(codes::INTERNAL_ERROR, -32603);
+    assert_eq!(codes::APP_ERROR, -32000);
+    assert_eq!(codes::VERSION_MISMATCH, -32001);
+    assert_eq!(codes::NOT_INITIALIZED, -32002);
+    assert_eq!(codes::OVERLOADED, -32003);
+    assert_eq!(MAX_FRAME_BYTES, 16 * 1024 * 1024);
 }
 
 #[test]
@@ -423,7 +547,10 @@ fn method_names_frozen() {
     assert_eq!(methods::FS_DELETE, "fs.delete");
     assert_eq!(methods::TASK_CANCEL, "task.cancel");
     assert_eq!(methods::TASK_PROGRESS, "task.progress");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.3.0");
+    assert_eq!(methods::INITIALIZE, "initialize");
+    assert_eq!(methods::DAEMON_SHUTDOWN, "daemon.shutdown");
+    // 0.4.0: envelope JSON-RPC + initialize + Error::Loop (ADR 0011).
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.4.0");
 }
 
 #[test]

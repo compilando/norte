@@ -48,6 +48,9 @@ cli-cancelling = cancelando…
 cli-cancelled-clean = cancelado (destino limpio)
 cli-final-error = error: { $error }
 cli-unexpected-state = estado final inesperado: { $state }
+cli-daemon-listening = daemon escuchando en { $socket }
+cli-daemon-stopped = apagado pedido al daemon
+cli-daemon-hard-shutdown = segunda señal: cancelando tasks…
 
 # --- Ayuda (F1) — construida del keymap efectivo ---
 help-title = Ayuda — teclas activas

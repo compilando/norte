@@ -40,6 +40,9 @@
     "kind": "io",
     "retryable": true
   },
+  "loop": {
+    "kind": "loop"
+  },
   "no_space": {
     "kind": "no_space"
   },

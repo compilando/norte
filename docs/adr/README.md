@@ -15,3 +15,4 @@ La spec evoluciona por ADR, no por edición silenciosa (spec §18).
 | [0008](0008-norte-encoding-frontera.md) | norte-encoding: frontera de detección/decodificación | accepted |
 | [0009](0009-trash.md) | Papelera: crate trash, capability y degradación explícita | accepted |
 | [0010](0010-frontera-core-plugin-config.md) | Frontera core/plugin/config para extensiones | accepted |
+| [0011](0011-envelope-jsonrpc-daemon.md) | Envelope JSON-RPC 2.0, framing, transporte y daemon | accepted |

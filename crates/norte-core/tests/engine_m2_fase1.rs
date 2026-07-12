@@ -455,10 +455,8 @@ async fn follow_ciclo_de_symlinks_falla_limpio() {
         .unwrap();
     assert_eq!(
         handle.join().await,
-        TaskState::Failed {
-            error: Error::InvalidPath
-        },
-        "ciclo detectado y rechazado"
+        TaskState::Failed { error: Error::Loop },
+        "ciclo detectado y rechazado con su categoría propia (#31)"
     );
 }
 
