@@ -40,6 +40,9 @@ const MAX_PARSE_ERRORS: u32 = 16;
 const MAX_CONNECTIONS: usize = 256;
 /// Tasks vivas simultáneas encoladas vía el daemon.
 const MAX_LIVE_TASKS: usize = 512;
+/// Snapshots TERMINALES retenidos para el resync de `task.list` (un
+/// frontend que reconecta ve el desenlace de lo que se perdió).
+const RECENT_TERMINAL: usize = 64;
 
 /// Configuración del daemon.
 #[derive(Debug, Clone)]
@@ -69,6 +72,8 @@ struct Shared {
     /// task jamás terminaría: el broadcast retendría su sender). Bounded:
     /// un suscriptor que no drena pierde la suscripción, jamás acumula.
     subscribers: Mutex<HashMap<u64, mpsc::Sender<Arc<[u8]>>>>,
+    /// Desenlaces recientes (snapshots terminales) para `task.list`.
+    recent: Mutex<std::collections::VecDeque<norte_proto::TaskProgress>>,
     /// Contador de ids de conexión.
     next_conn: AtomicUsize,
     /// Conexiones autenticadas vivas.
@@ -188,6 +193,7 @@ impl Daemon {
             shared: Arc::new(Shared {
                 engine,
                 tasks: Mutex::new(HashMap::new()),
+                recent: Mutex::new(std::collections::VecDeque::new()),
                 subscribers: Mutex::new(HashMap::new()),
                 next_conn: AtomicUsize::new(0),
                 connections: AtomicUsize::new(0),
@@ -664,6 +670,54 @@ async fn dispatch_fs_task(
                 .map_err(RpcError::from)?;
             register_task(shared, handle)
         }
+        _ => dispatch_task_family(req, shared).await,
+    }
+}
+
+/// El resto del dispatch: `task.*` y los métodos de solo-lectura de 0.5.0.
+async fn dispatch_task_family(
+    req: Request,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    match req.method.as_str() {
+        methods::TASK_LIST => {
+            let _p: methods::TaskListParams = parse_params(
+                req.params
+                    .filter(|v| !v.is_null())
+                    .or_else(|| Some(serde_json::json!({}))),
+            )?;
+            // Resync de un frontend que (re)conecta: tasks VIVAS + los
+            // desenlaces recientes (por si su terminal se emitió mientras
+            // estaba fuera); lo posterior llega por task.progress.
+            let mut tasks: Vec<norte_proto::TaskProgress> = shared
+                .recent
+                .lock()
+                .expect("recent lock sano")
+                .iter()
+                .cloned()
+                .collect();
+            tasks.extend(
+                shared
+                    .tasks
+                    .lock()
+                    .expect("tasks lock sano")
+                    .values()
+                    .map(|h| h.progress().borrow().clone()),
+            );
+            to_value(&methods::TaskListResult { tasks })
+        }
+        methods::FS_READ => {
+            let p: methods::FsReadParams = parse_params(req.params)?;
+            dispatch_fs_read(p, shared).await
+        }
+        methods::FS_CAPABILITIES => {
+            let p: methods::FsCapabilitiesParams = parse_params(req.params)?;
+            let capabilities = shared
+                .engine
+                .capabilities(&p.path)
+                .map_err(RpcError::from)?;
+            to_value(&methods::FsCapabilitiesResult { capabilities })
+        }
         methods::TASK_CANCEL => {
             let p: methods::TaskCancelParams = parse_params(req.params)?;
             // Cancelar algo terminal o desconocido NO es error (contrato
@@ -683,6 +737,46 @@ async fn dispatch_fs_task(
             format!("unknown method: {other}"),
         )),
     }
+}
+
+/// `fs.read` (0.5.0): UN tramo en base64, con tope por llamada. Se lee
+/// UN byte de más para saber si el archivo sigue (`eof` honesto sin un
+/// stat extra ni confiar en el tamaño, que puede cambiar bajo los pies).
+async fn dispatch_fs_read(
+    p: methods::FsReadParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    use base64::Engine as _;
+    let offset = p.range.as_ref().map_or(0, |r| r.offset);
+    let want = p
+        .range
+        .as_ref()
+        .and_then(|r| r.len)
+        .unwrap_or(methods::FS_READ_MAX_CHUNK)
+        .min(methods::FS_READ_MAX_CHUNK);
+    let probe_range = norte_proto::ByteRange {
+        offset,
+        len: Some(want.saturating_add(1)),
+    };
+    let mut stream = shared
+        .engine
+        .read(&p.path, Some(probe_range))
+        .await
+        .map_err(RpcError::from)?;
+    let mut bytes: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(RpcError::from)?;
+        bytes.extend_from_slice(&chunk);
+        if bytes.len() as u64 > want {
+            break;
+        }
+    }
+    let eof = bytes.len() as u64 <= want;
+    bytes.truncate(usize::try_from(want).unwrap_or(usize::MAX).min(bytes.len()));
+    to_value(&methods::FsReadResult {
+        content_b64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        eof,
+    })
 }
 
 /// Registra la task y arranca su bomba de progreso: cada snapshot (≤30 Hz)
@@ -711,6 +805,17 @@ fn register_task(shared: &Arc<Shared>, handle: TaskHandle) -> Result<serde_json:
         loop {
             let snapshot = progress.borrow_and_update().clone();
             let terminal = snapshot.state.is_terminal();
+            // Un terminal se recuerda en `recent` ANTES de difundirlo: así
+            // un task.list concurrente (o una suscripción que nace tras el
+            // broadcast) lo ve por uno de los dos caminos, jamás por
+            // ninguno (M1 del rust-reviewer).
+            if terminal {
+                let mut recent = shared_pump.recent.lock().expect("recent lock sano");
+                recent.push_back(snapshot.clone());
+                while recent.len() > RECENT_TERMINAL {
+                    recent.pop_front();
+                }
+            }
             let notif = Notification {
                 jsonrpc: norte_proto::wire::JsonRpcVersion,
                 method: methods::TASK_PROGRESS.into(),
@@ -727,6 +832,13 @@ fn register_task(shared: &Arc<Shared>, handle: TaskHandle) -> Result<serde_json:
             if progress.changed().await.is_err() {
                 // El scheduler soltó el emisor: difunde el último estado.
                 let last = progress.borrow().clone();
+                if last.state.is_terminal() {
+                    let mut recent = shared_pump.recent.lock().expect("recent lock sano");
+                    recent.push_back(last.clone());
+                    while recent.len() > RECENT_TERMINAL {
+                        recent.pop_front();
+                    }
+                }
                 let notif = Notification {
                     jsonrpc: norte_proto::wire::JsonRpcVersion,
                     method: methods::TASK_PROGRESS.into(),
@@ -738,6 +850,8 @@ fn register_task(shared: &Arc<Shared>, handle: TaskHandle) -> Result<serde_json:
                 break;
             }
         }
+        // El desenlace ya está en `recent` (arriba, antes del broadcast).
+        // Solo queda sacar la task del mapa de vivas.
         shared_pump
             .tasks
             .lock()

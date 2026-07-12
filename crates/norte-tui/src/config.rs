@@ -27,6 +27,35 @@ pub struct NorteToml {
     /// Sección de UI.
     #[serde(default)]
     pub ui: UiSection,
+    /// Sección del daemon (fase 3 M2).
+    #[serde(default)]
+    pub daemon: DaemonSection,
+}
+
+/// `[daemon]` de `norte.toml` (ADR 0011). El modo se decide EN EL
+/// ARRANQUE: no participa del hot-reload (cambiar de transporte en
+/// caliente = reiniciar).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct DaemonSection {
+    /// `embedded` (default: arranque instantáneo) o `daemon`.
+    #[serde(default)]
+    pub mode: Option<DaemonMode>,
+    /// Socket del daemon; ausente = el default del OS.
+    #[serde(default)]
+    pub socket: Option<PathBuf>,
+}
+
+/// Transporte del core (regla 7: solo cambia el transporte).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum DaemonMode {
+    /// Core in-process (default).
+    Embedded,
+    /// Contra el daemon UDS (solo unix, ADR 0011).
+    Daemon,
 }
 
 /// `[ui]` de `norte.toml`.
@@ -109,6 +138,10 @@ pub struct LoadedConfig {
     pub preset: String,
     /// Idioma de `[ui] lang` (último-gana; None = entorno).
     pub ui_lang: Option<String>,
+    /// `[daemon] mode` (último-gana; None = embedded). Solo arranque.
+    pub daemon_mode: Option<DaemonMode>,
+    /// `[daemon] socket` (último-gana; None = default del OS).
+    pub daemon_socket: Option<PathBuf>,
     /// Capas de `keymap.toml` presentes, en precedencia ascendente.
     pub keymap_layers: Vec<KeymapFile>,
     /// Archivos que participaron (para el watcher y los diagnósticos).
@@ -122,6 +155,8 @@ pub struct LoadedConfig {
 pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
     let mut preset: Option<String> = None;
     let mut ui_lang: Option<String> = None;
+    let mut daemon_mode: Option<DaemonMode> = None;
+    let mut daemon_socket: Option<PathBuf> = None;
     let mut keymap_layers = Vec::new();
     let mut sources = Vec::new();
     for dir in &layers.dirs {
@@ -136,6 +171,12 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
             }
             if let Some(l) = parsed.ui.lang {
                 ui_lang = Some(l);
+            }
+            if let Some(m) = parsed.daemon.mode {
+                daemon_mode = Some(m);
+            }
+            if let Some(sock) = parsed.daemon.socket {
+                daemon_socket = Some(sock);
             }
             sources.push(norte);
         }
@@ -161,6 +202,8 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
     Ok(LoadedConfig {
         preset: preset.unwrap_or_else(|| DEFAULT_PRESET.to_owned()),
         ui_lang,
+        daemon_mode,
+        daemon_socket,
         keymap_layers,
         sources,
     })

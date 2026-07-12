@@ -1,5 +1,7 @@
 //! Binario del TUI (fases 3–4 M1): loop de eventos async sobre el core
-//! EMBEBIDO (el daemon llega en M2), con keymap engine (ADR 0006).
+//! EMBEBIDO o contra el DAEMON (fase 3 M2, por `[daemon] mode` o
+//! `--daemon`), con keymap engine (ADR 0006). Regla 7: solo cambia el
+//! transporte.
 //! `ratatui::init/restore` gestionan raw mode + pantalla alternativa con
 //! hook de pánico incluido: la terminal del usuario JAMÁS queda rota.
 #![forbid(unsafe_code)]
@@ -9,6 +11,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
 use futures::StreamExt;
+use norte_core::backend::{Backend, ConnEvent};
 use norte_core::{Engine, TransferOptions};
 use norte_i18n::{t, ta};
 use norte_proto::DeleteMode;
@@ -29,11 +32,10 @@ const PAGE: usize = 10;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Capas de config (ADR 0007) + flag: el argumento (`norte-tui vim`) es
-    // la capa MÁS alta y pisa el preset de norte.toml.
-    let cli_preset = std::env::args_os()
-        .nth(1)
-        .map(|s| s.to_string_lossy().into_owned());
+    // Args: preset posicional (`norte-tui vim`, capa MÁS alta sobre
+    // norte.toml) + flags `--daemon`/`--socket` (fase 3 M2). Parseo a mano:
+    // el TUI evita clap para no arrastrar su peso en el arranque.
+    let (cli_preset, cli_daemon, cli_socket) = parse_args();
     let layers = config::standard_layers();
     let cfg = config::load_async(layers.clone())
         .await
@@ -49,17 +51,32 @@ async fn main() -> Result<()> {
     let _ = norte_i18n::force(lang);
     let (browse_eff, viewer_eff) = build_keymaps(&cfg, cli_preset.as_deref())?;
 
-    let engine = Engine::new();
-    engine.register_provider(Arc::new(LocalProvider::os_root()));
+    let mut backend = make_backend(&cfg, cli_daemon, cli_socket).await?;
 
     let cwd = std::env::current_dir().context("cwd")?;
     // Deuda conocida: en Windows un cwd UNC (\\server\share) no es
     // representable todavía y esto aborta con error claro (issue #22).
     let start = norte_vfs_local::vpath_from_native(&cwd)
         .map_err(|e| anyhow::anyhow!("cwd no representable como VPath: {e}"))?;
-    let left = Pane::new(start.clone(), listing(&engine, &start).await?);
-    let right = Pane::new(start.clone(), listing(&engine, &start).await?);
+    let left = Pane::new(
+        start.clone(),
+        backend
+            .list(&start)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?,
+    );
+    let right = Pane::new(
+        start.clone(),
+        backend
+            .list(&start)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?,
+    );
     let mut app = App::new(left, right);
+    // Canales del modo daemon (None en embebido): tasks de otros frontends
+    // y avisos de (re)conexión — se drenan en el loop principal.
+    let foreign_tasks = backend.take_foreign_tasks();
+    let conn_events = backend.take_conn_events();
     let mut help_lines = norte_tui::help::build(&browse_eff, &viewer_eff);
     let mut resolver = Resolver::new(browse_eff);
     let mut viewer_resolver = Resolver::new(viewer_eff);
@@ -75,18 +92,92 @@ async fn main() -> Result<()> {
     let res = run(
         &mut terminal,
         &mut app,
-        &engine,
+        &backend,
         &mut resolver,
         &mut viewer_resolver,
         &mut help_lines,
         layers,
         cli_preset,
         cfg_rx,
+        foreign_tasks,
+        conn_events,
     )
     .await;
     ratatui::restore();
     drop(watch);
     res
+}
+
+/// Parsea los argumentos: preset posicional + `--daemon`/`--socket`.
+fn parse_args() -> (Option<String>, bool, Option<std::path::PathBuf>) {
+    let mut preset = None;
+    let mut daemon = false;
+    let mut socket = None;
+    let mut it = std::env::args_os().skip(1);
+    while let Some(arg) = it.next() {
+        let a = arg.to_string_lossy();
+        match a.as_ref() {
+            "--daemon" => daemon = true,
+            "--socket" => {
+                socket = it.next().map(std::path::PathBuf::from);
+            }
+            s if s.starts_with("--") => {} // flag desconocido: ignora (compat)
+            _ if preset.is_none() => preset = Some(a.into_owned()),
+            _ => {}
+        }
+    }
+    (preset, daemon, socket)
+}
+
+/// Elige el transporte (regla 7): `--daemon` o `[daemon] mode = daemon`
+/// conecta al socket (arrancando `norte daemon run` si hace falta);
+/// cualquier otra cosa = embebido (arranque instantáneo, el default).
+async fn make_backend(
+    cfg: &config::LoadedConfig,
+    cli_daemon: bool,
+    cli_socket: Option<std::path::PathBuf>,
+) -> Result<Backend> {
+    let want_daemon = cli_daemon || cfg.daemon_mode == Some(config::DaemonMode::Daemon);
+    if !want_daemon {
+        let engine = Engine::new();
+        engine.register_provider(Arc::new(LocalProvider::os_root()));
+        return Ok(Backend::Embedded(Arc::new(engine)));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (cli_socket, cfg);
+        anyhow::bail!("el modo daemon no está disponible en Windows todavía (issue #33)");
+    }
+    #[cfg(unix)]
+    {
+        use norte_core::backend::remote::RemoteBackend;
+        let socket = match cli_socket.or_else(|| cfg.daemon_socket.clone()) {
+            Some(s) => s,
+            None => tokio::task::spawn_blocking(|| norte_core::daemon::default_socket_path(None))
+                .await
+                .context("resolución del socket")?,
+        };
+        let exe = std::env::current_exe().context("current_exe")?;
+        // El binario del daemon es `norte` (la CLI), no `norte-tui`: junto
+        // al ejecutable actual dentro del mismo directorio de instalación.
+        let daemon_bin = exe.with_file_name("norte");
+        let mut spawn_cmd: Vec<std::ffi::OsString> =
+            vec![daemon_bin.into(), "daemon".into(), "run".into()];
+        spawn_cmd.push("--socket".into());
+        spawn_cmd.push(socket.clone().into());
+        let remote = RemoteBackend::connect(
+            socket,
+            Some(spawn_cmd),
+            norte_proto::methods::ClientInfo {
+                name: "norte-tui".into(),
+                version: env!("CARGO_PKG_VERSION").into(),
+            },
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("no se pudo hablar con el daemon")?;
+        Ok(Backend::Remote(remote))
+    }
 }
 
 /// Resuelve el preset (flag > config > default) y pliega las capas de
@@ -111,17 +202,19 @@ fn build_keymaps(
     Ok((browse, viewer))
 }
 
-#[allow(clippy::too_many_arguments)] // wiring del binario, no API
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)] // wiring del binario, no API
 async fn run(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
-    engine: &Engine,
+    backend: &Backend,
     resolver: &mut Resolver,
     viewer_resolver: &mut Resolver,
     help_lines: &mut Vec<String>,
     layers: Layers,
     cli_preset: Option<String>,
     mut cfg_rx: tokio::sync::mpsc::Receiver<()>,
+    mut foreign_tasks: Option<tokio::sync::mpsc::UnboundedReceiver<norte_core::backend::TaskRef>>,
+    mut conn_events: Option<tokio::sync::mpsc::UnboundedReceiver<ConnEvent>>,
 ) -> Result<()> {
     let mut events = EventStream::new();
     // Tick del panel de tasks: copia snapshots del watch (jamás bloquea).
@@ -139,7 +232,27 @@ async fn run(
         }
         tokio::select! {
             _ = tick.tick() => {
-                on_tick(app, engine, &mut events).await;
+                on_tick(app, backend, &mut events).await;
+            }
+            Some(task) = async {
+                match &mut foreign_tasks {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                // Task de OTRO frontend de la misma sesión (fase 3): al panel.
+                app.board.push_foreign(task);
+            }
+            Some(ev) = async {
+                match &mut conn_events {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                app.message = Some(match ev {
+                    ConnEvent::Lost => t("msg-daemon-lost"),
+                    ConnEvent::Restored => t("msg-daemon-restored"),
+                });
             }
             Some(()) = cfg_rx.recv() => {
                 // Ráfaga de guardados: empuja el deadline (ADR 0007).
@@ -186,7 +299,7 @@ async fn run(
                             _ => {}
                         }
                     } else if app.modal.is_some() {
-                        on_dialog_key(app, engine, key.code);
+                        on_dialog_key(app, backend, key.code).await;
                     } else {
                         // Pantalla activa: el viewer tiene su contexto.
                         let active = if app.viewer.is_some() {
@@ -197,7 +310,7 @@ async fn run(
                         match active.push(Chord::from_event(key.modifiers, key.code)) {
                             Resolution::Run(cmd) => {
                                 app.pending.clear();
-                                dispatch(app, engine, &mut events, help_lines, &cmd).await;
+                                dispatch(app, backend, &mut events, help_lines, &cmd).await;
                             }
                             Resolution::Pending(_) => {
                                 app.pending = active
@@ -255,7 +368,7 @@ async fn reload_config(
 /// pisa un modal abierto, hallazgo B1); el resto → mensaje por categoría +
 /// refresh de ambos panes (una mutación pudo cambiarlos).
 /// (Strings de mensaje hardcodeados hasta Fluent — fase 9, issue #1.)
-async fn on_tick(app: &mut App, engine: &Engine, events: &mut EventStream) {
+async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream) {
     let finished = app.board.tick();
     if finished.is_empty() {
         app.open_next_collision();
@@ -300,7 +413,7 @@ async fn on_tick(app: &mut App, engine: &Engine, events: &mut EventStream) {
     }
     app.open_next_collision();
     if refresh {
-        refresh_panes(app, engine, events).await;
+        refresh_panes(app, backend, events).await;
     }
 }
 
@@ -308,10 +421,10 @@ async fn on_tick(app: &mut App, engine: &Engine, events: &mut EventStream) {
 /// CANCELABLE como el cd (regla 3): Esc abandona el refresh (los panes se
 /// quedan como estaban), Ctrl-C sale. El cursor se conserva por ÍNDICE
 /// (tras un delete queda en la siguiente entrada — semántica ortodoxa).
-async fn refresh_panes(app: &mut App, engine: &Engine, events: &mut EventStream) {
+async fn refresh_panes(app: &mut App, backend: &Backend, events: &mut EventStream) {
     for i in 0..app.panes.len() {
         let dir = app.panes[i].dir.clone();
-        let fut = listing(engine, &dir);
+        let fut = listing(backend, &dir);
         tokio::pin!(fut);
         loop {
             tokio::select! {
@@ -352,7 +465,7 @@ async fn refresh_panes(app: &mut App, engine: &Engine, events: &mut EventStream)
 }
 
 /// Teclas de un modal abierto (hardcodeadas, issue #24).
-fn on_dialog_key(app: &mut App, engine: &Engine, code: KeyCode) {
+async fn on_dialog_key(app: &mut App, backend: &Backend, code: KeyCode) {
     let Some(modal) = app.modal.clone() else {
         return;
     };
@@ -372,16 +485,16 @@ fn on_dialog_key(app: &mut App, engine: &Engine, code: KeyCode) {
                     } else {
                         DeleteMode::Trash
                     };
-                    match engine.delete_with(&target, mode) {
-                        Ok(handle) => {
+                    match backend.delete(&target, mode).await {
+                        Ok(task) => {
                             app.board
-                                .push_full(handle, None, (!permanent).then(|| target.clone()));
+                                .push_full(task, None, (!permanent).then(|| target.clone()));
                         }
                         Err(e) => app.message = Some(ta("msg-error", &[("error", &e.to_string())])),
                     }
                 }
                 Modal::ConfirmTransfer { kind, from, to } => {
-                    submit_transfer(app, engine, kind, from, to, TransferOptions::default());
+                    submit_transfer(app, backend, kind, from, to, TransferOptions::default()).await;
                 }
                 Modal::Collision { .. } => {}
             }
@@ -394,7 +507,7 @@ fn on_dialog_key(app: &mut App, engine: &Engine, code: KeyCode) {
                     on_collision: policy,
                     ..retry.opts
                 };
-                submit_transfer(app, engine, retry.kind, retry.from, retry.to, opts);
+                submit_transfer(app, backend, retry.kind, retry.from, retry.to, opts).await;
             }
             app.open_next_collision();
         }
@@ -403,21 +516,21 @@ fn on_dialog_key(app: &mut App, engine: &Engine, code: KeyCode) {
 
 /// Encola una transferencia y la registra en el panel con su contexto de
 /// reintento (para el diálogo de colisión).
-fn submit_transfer(
+async fn submit_transfer(
     app: &mut App,
-    engine: &Engine,
+    backend: &Backend,
     kind: TransferKind,
     from: VPath,
     to: VPath,
     opts: TransferOptions,
 ) {
     let res = match kind {
-        TransferKind::Copy => engine.copy_with(&from, &to, opts),
-        TransferKind::Move => engine.move_with(&from, &to, opts),
+        TransferKind::Copy => backend.copy(&from, &to, opts).await,
+        TransferKind::Move => backend.move_(&from, &to, opts).await,
     };
     match res {
-        Ok(handle) => app.board.push(
-            handle,
+        Ok(task) => app.board.push(
+            task,
             Some(RetrySpec {
                 kind,
                 from,
@@ -434,7 +547,7 @@ fn submit_transfer(
 /// pane se queda donde estaba (aviso visible: barra de mensajes, issue #20).
 async fn dispatch(
     app: &mut App,
-    engine: &Engine,
+    backend: &Backend,
     events: &mut EventStream,
     help_lines: &[String],
     cmd: &str,
@@ -458,12 +571,12 @@ async fn dispatch(
                 .filter(|e| matches!(e.kind, EntryKind::Dir | EntryKind::Symlink))
                 .map(|e| e.path.clone());
             if let Some(dir) = target {
-                cd(app, engine, events, dir).await;
+                cd(app, backend, events, dir).await;
             }
         }
         "nav.parent" => {
             if let Some(parent) = app.focused().dir.parent() {
-                cd(app, engine, events, parent).await;
+                cd(app, backend, events, parent).await;
             }
         }
         "pane.copy" | "pane.move" => {
@@ -487,8 +600,9 @@ async fn dispatch(
                 // F8 = papelera si el provider la declara; sin ella, el
                 // MISMO diálogo avisa de PERMANENTE (degradación con
                 // usuario informado, ADR 0009). shift+f8 = permanente.
-                let hay_papelera = engine
+                let hay_papelera = backend
                     .capabilities(&e.path)
+                    .await
                     .is_ok_and(|c| c.flags.contains(norte_proto::CapabilityFlags::TRASH));
                 let permanent = cmd == "pane.delete-permanent" || !hay_papelera;
                 app.modal = Some(Modal::ConfirmDelete {
@@ -506,7 +620,7 @@ async fn dispatch(
                 .filter(|e| matches!(e.kind, EntryKind::File | EntryKind::Symlink))
                 .map(|e| e.path.clone());
             if let Some(path) = target {
-                open_viewer(app, engine, events, path).await;
+                open_viewer(app, backend, events, path).await;
             }
         }
         "viewer.close" => app.viewer = None,
@@ -552,8 +666,8 @@ const VIEW_CAP: u64 = 256 * 1024;
 
 /// Abre el viewer leyendo la CABECERA vía el core (regla 7), cancelable
 /// como el cd (Esc abandona, Ctrl-C sale).
-async fn open_viewer(app: &mut App, engine: &Engine, events: &mut EventStream, path: VPath) {
-    let fut = read_head(engine, &path);
+async fn open_viewer(app: &mut App, backend: &Backend, events: &mut EventStream, path: VPath) {
+    let fut = read_head(backend, &path);
     tokio::pin!(fut);
     loop {
         tokio::select! {
@@ -589,8 +703,8 @@ async fn open_viewer(app: &mut App, engine: &Engine, events: &mut EventStream, p
 }
 
 /// Lee hasta `VIEW_CAP + 1` bytes: el byte extra delata el truncado.
-async fn read_head(engine: &Engine, path: &VPath) -> Result<(Vec<u8>, bool), Error> {
-    let mut stream = engine
+async fn read_head(backend: &Backend, path: &VPath) -> Result<(Vec<u8>, bool), Error> {
+    let mut out = backend
         .read(
             path,
             Some(norte_proto::ByteRange {
@@ -599,10 +713,6 @@ async fn read_head(engine: &Engine, path: &VPath) -> Result<(Vec<u8>, bool), Err
             }),
         )
         .await?;
-    let mut out = Vec::new();
-    while let Some(chunk) = stream.next().await {
-        out.extend_from_slice(&chunk?);
-    }
     let truncated = out.len() as u64 > VIEW_CAP;
     if truncated {
         out.truncate(usize::try_from(VIEW_CAP).unwrap_or(usize::MAX));
@@ -616,8 +726,8 @@ async fn read_head(engine: &Engine, path: &VPath) -> Result<(Vec<u8>, bool), Err
 /// emergencia y no deben ser remapeables a algo que no exista). Soltar el
 /// future del listado detiene al productor del provider (testeado en
 /// vfs-local). El resto de teclas se descartan mientras dura el cd.
-async fn cd(app: &mut App, engine: &Engine, events: &mut EventStream, dir: VPath) {
-    let fut = listing(engine, &dir);
+async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPath) {
+    let fut = listing(backend, &dir);
     tokio::pin!(fut);
     loop {
         tokio::select! {
@@ -652,12 +762,8 @@ async fn cd(app: &mut App, engine: &Engine, events: &mut EventStream, dir: VPath
 /// Listado completo y ordenado de `dir` vía el core (regla 7: el TUI no
 /// toca el FS). Una entrada con error corta el listado: mejor un error
 /// honesto que un listado silenciosamente incompleto.
-async fn listing(engine: &Engine, dir: &VPath) -> Result<Vec<Entry>, Error> {
-    let mut stream = engine.list(dir).await?;
-    let mut entries = Vec::new();
-    while let Some(item) = stream.next().await {
-        entries.push(item?);
-    }
+async fn listing(backend: &Backend, dir: &VPath) -> Result<Vec<Entry>, Error> {
+    let mut entries = backend.list(dir).await?;
     sort_entries(&mut entries);
     Ok(entries)
 }

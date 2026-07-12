@@ -118,7 +118,7 @@ async fn initialize_rechaza_version_incompatible() {
             },
         )
         .await
-        .expect_err("0.1.0 no es N ni N-1 de 0.4.0");
+        .expect_err("0.1.0 no es N ni N-1 de 0.5.0");
     match err {
         ClientError::Rpc(rpc) => {
             // Código PROPIO: la señal de upgrade jamás se parsea de message.
@@ -129,14 +129,14 @@ async fn initialize_rechaza_version_incompatible() {
         }
         other => panic!("esperaba Rpc, fue {other:?}"),
     }
-    // N-1 (0.3.x) SÍ entra.
+    // N-1 (0.4.x) SÍ entra.
     let c2 = Client::connect(&d.socket).await.expect("connect");
     let ok: methods::InitializeResult = c2
         .call(
             methods::INITIALIZE,
             &InitializeParams {
                 client_info: client_info(),
-                protocol_version: "0.3.7".into(),
+                protocol_version: "0.4.2".into(),
                 encodings: vec![],
             },
         )
@@ -600,5 +600,135 @@ async fn call_tras_el_cierre_no_se_cuelga() {
     assert!(
         matches!(err, ClientError::ConnectionClosed | ClientError::Io(_)),
         "{err:?}"
+    );
+}
+
+// ---------- métodos 0.5.0 (fase 3) ----------
+
+/// `task.list` devuelve el snapshot de las tasks VIVAS: el resync de un
+/// frontend que se conecta tarde.
+#[tokio::test]
+async fn task_list_da_el_snapshot_de_tasks_vivas() {
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///grande.bin", &vec![0xAB; 50_000]).await;
+    d.mem
+        .faults()
+        .set_latency_per_op(Some(Duration::from_millis(20)));
+    let c1 = connected_client(&d).await;
+    let task: FsTaskResult = c1
+        .call(
+            methods::FS_COPY,
+            &FsCopyParams {
+                from: vp("mem:///grande.bin"),
+                to: vp("mem:///copia.bin"),
+                on_collision: norte_proto::CollisionPolicy::default(),
+                symlinks: norte_proto::SymlinkPolicy::default(),
+            },
+        )
+        .await
+        .expect("fs.copy");
+    // Cliente TARDÍO: ve la task del primero por task.list.
+    let mut c2 = connected_client(&d).await;
+    let list: methods::TaskListResult = c2
+        .call(methods::TASK_LIST, &methods::TaskListParams {})
+        .await
+        .expect("task.list");
+    assert!(
+        list.tasks.iter().any(|t| t.task_id == task.task_id),
+        "la task viva del otro cliente aparece: {list:?}"
+    );
+    // Y sigue viéndola progresar hasta el terminal por broadcast.
+    let seen = drain_task(&mut c2, task.task_id.get()).await;
+    assert_eq!(seen.last().expect("terminal").state, TaskState::Completed);
+}
+
+/// `fs.read` con rango: bytes exactos en base64 y eof honesto.
+#[tokio::test]
+async fn fs_read_devuelve_tramos_con_eof_honesto() {
+    use base64::Engine as _;
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///f.bin", b"0123456789").await;
+    let c = connected_client(&d).await;
+
+    let r: methods::FsReadResult = c
+        .call(
+            methods::FS_READ,
+            &methods::FsReadParams {
+                path: vp("mem:///f.bin"),
+                range: Some(norte_proto::ByteRange {
+                    offset: 2,
+                    len: Some(3),
+                }),
+            },
+        )
+        .await
+        .expect("fs.read");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&r.content_b64)
+        .expect("base64 válido");
+    assert_eq!(bytes, b"234");
+    assert!(!r.eof, "quedan bytes detrás del tramo");
+
+    // Tramo hasta el final: eof true.
+    let r: methods::FsReadResult = c
+        .call(
+            methods::FS_READ,
+            &methods::FsReadParams {
+                path: vp("mem:///f.bin"),
+                range: Some(norte_proto::ByteRange {
+                    offset: 5,
+                    len: Some(100),
+                }),
+            },
+        )
+        .await
+        .expect("fs.read");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&r.content_b64)
+        .expect("base64 válido");
+    assert_eq!(bytes, b"56789");
+    assert!(r.eof);
+
+    // Sin rango: el archivo entero (cabe de sobra en el tope).
+    let r: methods::FsReadResult = c
+        .call(
+            methods::FS_READ,
+            &methods::FsReadParams {
+                path: vp("mem:///f.bin"),
+                range: None,
+            },
+        )
+        .await
+        .expect("fs.read");
+    assert!(r.eof);
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(&r.content_b64)
+            .expect("base64"),
+        b"0123456789"
+    );
+}
+
+/// `fs.capabilities`: el frontend decide (F8 papelera, ADR 0009) sin
+/// lógica propia.
+#[tokio::test]
+async fn fs_capabilities_viaja_por_el_socket() {
+    let d = spawn_daemon(None).await;
+    let c = connected_client(&d).await;
+    let r: methods::FsCapabilitiesResult = c
+        .call(
+            methods::FS_CAPABILITIES,
+            &methods::FsCapabilitiesParams {
+                path: vp("mem:///"),
+            },
+        )
+        .await
+        .expect("fs.capabilities");
+    assert!(
+        r.capabilities
+            .flags
+            .contains(norte_proto::CapabilityFlags::TRASH),
+        "MemProvider declara TRASH: {:?}",
+        r.capabilities.flags
     );
 }

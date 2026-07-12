@@ -37,6 +37,7 @@ norte-i18n = { path = "crates/norte-i18n", version = "0.0.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+base64 = "0.22"
 bitflags = { version = "2", features = ["serde"] }
 anyhow = "1"
 async-trait = "0.1"

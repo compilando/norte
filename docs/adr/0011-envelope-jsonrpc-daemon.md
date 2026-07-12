@@ -146,3 +146,18 @@ rust-reviewer):
   agentes al socket — gating de política por cliente para `daemon.shutdown`
   y `task.cancel` (hoy: mismo uid = mismo poder, correcto para frontends
   de confianza; insuficiente para agentes, M3/M4).
+
+Fase 3 (0.5.0, `task.list`/`fs.read`/`fs.capabilities` + backend unificado):
+
+- **`task.list`** devuelve tasks vivas + desenlaces recientes (anillo
+  acotado); el receptor DEDUPLICA por `task_id`. El desenlace se retiene
+  ANTES de difundirse (invariante: visible por broadcast o por el anillo,
+  jamás por ninguno).
+- **Reconciliación de huérfanas**: al reconectar, una task en vuelo que el
+  daemon ya no conoce se resuelve `Failed{ProviderUnavailable}` — su
+  `join()` jamás cuelga (revisión de fase 3).
+- **Reconexión NO re-arranca el daemon** (solo el primer connect) y usa un
+  `Weak` para que la bomba muera con el backend; llamadas remotas con
+  timeout; auth simétrica ya vigente.
+- **`fs.read`** transporta bytes en base64 (`content_b64`), tope
+  `FS_READ_MAX_CHUNK`=8 MiB por llamada, `eof` para reanudar.

@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use crate::{CollisionPolicy, DeleteMode, Entry, SymlinkPolicy, TaskId, VPath};
 
 /// Versión del protocolo (semver). El core soporta N y N-1 (spec §11).
-pub const PROTOCOL_VERSION: &str = "0.4.0";
+pub const PROTOCOL_VERSION: &str = "0.5.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -41,6 +41,26 @@ pub const INITIALIZE: &str = "initialize";
 /// `daemon.shutdown` — apaga el daemon: `graceful` (default) espera a las
 /// tasks vivas; sin graceful las cancela primero. Autenticado como todo.
 pub const DAEMON_SHUTDOWN: &str = "daemon.shutdown";
+/// `task.list` — resync de un frontend que (re)conecta (0.5.0, fase 3):
+/// las tasks VIVAS más los desenlaces recientes que el server retiene
+/// (anillo acotado, mejor esfuerzo); los cambios posteriores llegan por
+/// [`TASK_PROGRESS`]. El receptor DEBE deduplicar por `task_id` (una
+/// misma task puede venir viva y su terminal en la misma respuesta si
+/// caen en la ventana del anillo).
+pub const TASK_LIST: &str = "task.list";
+/// `fs.read` — UN tramo de un archivo, en base64 (0.5.0). Para lectura de
+/// presentación (viewer); las copias JAMÁS pasan por aquí (son tasks del
+/// daemon). El tramo devuelto puede ser más corto que el pedido: `eof`
+/// dice si el archivo terminó — si es `false`, el caller repite con el
+/// offset avanzado.
+pub const FS_READ: &str = "fs.read";
+/// `fs.capabilities` — capabilities del provider que sirve un path
+/// (0.5.0): el frontend decide p. ej. si F8 ofrece papelera (ADR 0009).
+pub const FS_CAPABILITIES: &str = "fs.capabilities";
+
+/// Tope de bytes devueltos por UNA llamada a [`FS_READ`] (antes de
+/// base64). Pedir más no es error: se recorta y `eof` lo cuenta.
+pub const FS_READ_MAX_CHUNK: u64 = 8 * 1024 * 1024;
 
 /// ¿Acepta un core `server` a un cliente `client`? N y N-1 (spec §11):
 /// mismo major; en 0.x el "major efectivo" es el minor — se acepta el
@@ -264,6 +284,74 @@ fn default_graceful() -> bool {
 /// Result de [`DAEMON_SHUTDOWN`]: objeto vacío, reservado para extensión.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DaemonShutdownResult {}
+
+/// Params de [`TASK_LIST`]: objeto vacío, reservado para extensión
+/// (filtros por estado/kind llegarán aquí como campos opcionales).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskListParams {}
+
+/// Result de [`TASK_LIST`].
+///
+/// ```
+/// use norte_proto::methods::TaskListResult;
+/// let r: TaskListResult = serde_json::from_str(r#"{"tasks":[]}"#).unwrap();
+/// assert!(r.tasks.is_empty());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskListResult {
+    /// Snapshots de las tasks vivas + los desenlaces recientes retenidos
+    /// por el server (mejor esfuerzo; ver [`TASK_LIST`]). Puede repetir
+    /// `task_id` — el receptor deduplica.
+    pub tasks: Vec<crate::TaskProgress>,
+}
+
+/// Params de [`FS_READ`].
+///
+/// ```
+/// use norte_proto::methods::FsReadParams;
+/// use norte_proto::VPath;
+/// let p = FsReadParams { path: VPath::parse("file:///x").unwrap(), range: None };
+/// // El emisor canónico escribe `range: null` explícito (ADR 0004).
+/// assert!(serde_json::to_string(&p).unwrap().contains(r#""range":null"#));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsReadParams {
+    /// Archivo a leer.
+    pub path: VPath,
+    /// Tramo pedido; ausente/`null` = desde 0, tope del server.
+    #[serde(default)]
+    pub range: Option<crate::ByteRange>,
+}
+
+/// Result de [`FS_READ`].
+///
+/// ```
+/// use norte_proto::methods::FsReadResult;
+/// let r: FsReadResult = serde_json::from_str(r#"{"content_b64":"aGk=","eof":true}"#).unwrap();
+/// assert!(r.eof);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsReadResult {
+    /// Bytes del tramo, en base64 estándar (los bytes de un archivo no
+    /// son texto: JSON no puede llevarlos crudos).
+    pub content_b64: String,
+    /// `true` si el tramo termina EN el fin del archivo.
+    pub eof: bool,
+}
+
+/// Params de [`FS_CAPABILITIES`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsCapabilitiesParams {
+    /// Un path del provider a consultar.
+    pub path: VPath,
+}
+
+/// Result de [`FS_CAPABILITIES`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsCapabilitiesResult {
+    /// Capabilities declaradas por el provider.
+    pub capabilities: crate::Capabilities,
+}
 
 /// Params de [`TASK_CANCEL`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

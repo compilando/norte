@@ -6,6 +6,15 @@
     "graceful": false
   },
   "daemon_shutdown_result": {},
+  "fs_capabilities_params": {
+    "path": "file:///home"
+  },
+  "fs_capabilities_result": {
+    "capabilities": {
+      "flags": "RENAME_ATOMIC | SYMLINKS",
+      "max_path": null
+    }
+  },
   "fs_copy_params": {
     "from": "file:///src/a.txt",
     "on_collision": "fail",
@@ -45,6 +54,25 @@
     "symlinks": "preserve",
     "to": "sftp://nas:22/backup/dir"
   },
+  "fs_read_params": {
+    "path": "file:///home/user/doc.txt",
+    "range": {
+      "offset": 0,
+      "len": 4096
+    }
+  },
+  "fs_read_params_sin_rango": {
+    "path": "file:///home/user/doc.txt",
+    "range": null
+  },
+  "fs_read_result": {
+    "content_b64": "aG9sYQ==",
+    "eof": true
+  },
+  "fs_read_result_parcial": {
+    "content_b64": "MDEy",
+    "eof": false
+  },
   "fs_stat_params": {
     "path": "file:///home/user/doc.txt"
   },
@@ -82,5 +110,25 @@
   "task_cancel_params": {
     "task_id": 7
   },
-  "task_cancel_result": {}
+  "task_cancel_result": {},
+  "task_list_params": {},
+  "task_list_result": {
+    "tasks": [
+      {
+        "task_id": 7,
+        "kind": "copy",
+        "state": {
+          "kind": "running"
+        },
+        "bytes_done": 512,
+        "bytes_total": 1024,
+        "entries_done": 1,
+        "entries_total": 3,
+        "current": "file:///src/a.txt"
+      }
+    ]
+  },
+  "task_list_result_vacio": {
+    "tasks": []
+  }
 }

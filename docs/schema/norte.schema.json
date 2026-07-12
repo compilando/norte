@@ -1,5 +1,46 @@
 {
   "$defs": {
+    "DaemonMode": {
+      "description": "Transporte del core (regla 7: solo cambia el transporte).",
+      "oneOf": [
+        {
+          "const": "embedded",
+          "description": "Core in-process (default).",
+          "type": "string"
+        },
+        {
+          "const": "daemon",
+          "description": "Contra el daemon UDS (solo unix, ADR 0011).",
+          "type": "string"
+        }
+      ]
+    },
+    "DaemonSection": {
+      "additionalProperties": false,
+      "description": "`[daemon]` de `norte.toml` (ADR 0011). El modo se decide EN EL\nARRANQUE: no participa del hot-reload (cambiar de transporte en\ncaliente = reiniciar).",
+      "properties": {
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DaemonMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`embedded` (default: arranque instantáneo) o `daemon`."
+        },
+        "socket": {
+          "default": null,
+          "description": "Socket del daemon; ausente = el default del OS.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "KeymapSection": {
       "additionalProperties": false,
       "description": "`[keymap]` de `norte.toml`.",
@@ -35,6 +76,10 @@
   "additionalProperties": false,
   "description": "`norte.toml`: la config general.",
   "properties": {
+    "daemon": {
+      "$ref": "#/$defs/DaemonSection",
+      "description": "Sección del daemon (fase 3 M2)."
+    },
     "keymap": {
       "$ref": "#/$defs/KeymapSection",
       "description": "Sección de keymap."

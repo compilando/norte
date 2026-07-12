@@ -5,7 +5,8 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use norte_core::Engine;
+use norte_core::backend::Backend;
+use norte_core::{Engine, TransferOptions};
 use norte_proto::{TaskState, VPath};
 use norte_testkit::MemProvider;
 use norte_tui::tasks::TaskBoard;
@@ -21,20 +22,23 @@ async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
     sink.commit().await.unwrap();
 }
 
-fn engine_mem() -> (Engine, Arc<MemProvider>) {
+fn backend_mem() -> (Backend, Arc<MemProvider>) {
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::new());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
-    (engine, mem)
+    (Backend::Embedded(Arc::new(engine)), mem)
 }
 
 #[tokio::test]
 async fn el_board_ve_terminar_una_task() {
-    let (engine, mem) = engine_mem();
+    let (backend, mem) = backend_mem();
     write_file(&mem, "mem:///a", b"datos").await;
     let mut board = TaskBoard::default();
-    let handle = engine.copy(&vp("mem:///a"), &vp("mem:///b")).unwrap();
-    board.push(handle, None);
+    let task = backend
+        .copy(&vp("mem:///a"), &vp("mem:///b"), TransferOptions::default())
+        .await
+        .unwrap();
+    board.push(task, None);
     assert_eq!(board.rows().len(), 1);
 
     // La task termina; el tick la detecta como terminal UNA sola vez.
@@ -53,12 +57,16 @@ async fn el_board_ve_terminar_una_task() {
 
 #[tokio::test]
 async fn cancelar_la_ultima_en_marcha() {
-    let (engine, mem) = engine_mem();
+    let (backend, mem) = backend_mem();
     write_file(&mem, "mem:///a", b"datos").await;
     mem.faults()
         .set_latency_per_op(Some(std::time::Duration::from_millis(20)));
     let mut board = TaskBoard::default();
-    board.push(engine.copy(&vp("mem:///a"), &vp("mem:///b")).unwrap(), None);
+    let task = backend
+        .copy(&vp("mem:///a"), &vp("mem:///b"), TransferOptions::default())
+        .await
+        .unwrap();
+    board.push(task, None);
     assert!(board.cancel_last_running(), "había una en marcha");
 
     let mut terminales = Vec::new();

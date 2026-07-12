@@ -9,6 +9,8 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+# fs.read del daemon devuelve bytes en base64 (JSON no lleva bytes crudos).
+base64.workspace = true
 futures.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true

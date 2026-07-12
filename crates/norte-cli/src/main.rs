@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use futures::StreamExt;
-use norte_core::{Engine, TaskHandle, TransferOptions};
+use norte_core::backend::{Backend, TaskRef};
+use norte_core::{Engine, TransferOptions};
 use norte_proto::{Entry, EntryKind, SymlinkPolicy, TaskState, VPath};
 use norte_vfs::Provider;
 use norte_vfs_local::LocalProvider;
@@ -26,6 +26,13 @@ const EXIT_CANCELLED: u8 = 130;
     about = "file manager ortodoxo — CLI de humo (M0)"
 )]
 struct Cli {
+    /// Opera contra el daemon (arrancándolo si hace falta) en vez del
+    /// core embebido. Solo unix (ADR 0011).
+    #[arg(long, global = true)]
+    daemon: bool,
+    /// Socket del daemon (default: `$XDG_RUNTIME_DIR/norte/daemon.sock`)
+    #[arg(long, global = true)]
+    socket: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -150,18 +157,27 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let engine = Engine::new();
     engine.register_provider(Arc::new(LocalProvider::os_root()) as Arc<dyn Provider>);
 
+    // El subcomando daemon usa el engine directo (ES el daemon).
+    #[cfg(unix)]
+    if let Cmd::Daemon { cmd } = cli.cmd {
+        return daemon_cmd(engine, cmd).await;
+    }
+
+    let backend = make_backend(engine, cli.daemon, cli.socket).await?;
     match cli.cmd {
-        Cmd::Ls { path, json } => ls(&engine, &path, json).await,
+        Cmd::Ls { path, json } => ls(&backend, &path, json).await,
         Cmd::Cp { src, dst, symlinks } => {
             let (from, to) = (vpath(&src)?, vpath(&dst)?);
             let opts = TransferOptions {
                 symlinks: symlinks.into(),
                 ..TransferOptions::default()
             };
-            let handle = engine
-                .copy_with(&from, &to, opts)
+            let task = backend
+                .copy(&from, &to, opts)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))
                 .context(norte_i18n::t("cli-enqueue-copy"))?;
-            Ok(run_task(handle, true).await)
+            Ok(run_task(task, true).await)
         }
         Cmd::Mv { src, dst, symlinks } => {
             let (from, to) = (vpath(&src)?, vpath(&dst)?);
@@ -169,20 +185,71 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 symlinks: symlinks.into(),
                 ..TransferOptions::default()
             };
-            let handle = engine
-                .move_with(&from, &to, opts)
+            let task = backend
+                .move_(&from, &to, opts)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))
                 .context(norte_i18n::t("cli-enqueue-move"))?;
-            Ok(run_task(handle, false).await)
+            Ok(run_task(task, false).await)
         }
         Cmd::Rm { path } => {
             let target = vpath(&path)?;
-            let handle = engine
-                .delete(&target)
+            let task = backend
+                .delete(&target, norte_proto::DeleteMode::Permanent)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))
                 .context(norte_i18n::t("cli-enqueue-delete"))?;
-            Ok(run_task(handle, false).await)
+            Ok(run_task(task, false).await)
         }
         #[cfg(unix)]
-        Cmd::Daemon { cmd } => daemon_cmd(engine, cmd).await,
+        Cmd::Daemon { .. } => unreachable!("manejado arriba"),
+    }
+}
+
+/// Elige el transporte (regla 7: la lógica es la misma). `--daemon`
+/// conecta al socket, arrancando `norte daemon run` si hace falta.
+async fn make_backend(
+    engine: Engine,
+    daemon: bool,
+    socket: Option<PathBuf>,
+) -> anyhow::Result<Backend> {
+    if !daemon {
+        return Ok(Backend::Embedded(Arc::new(engine)));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = socket;
+        anyhow::bail!("--daemon no está disponible en Windows todavía (issue #33)");
+    }
+    #[cfg(unix)]
+    {
+        use norte_core::backend::remote::RemoteBackend;
+        // Ambas sondas de FS (socket por defecto + current_exe) fuera del
+        // runtime (regla 2, m3 del rust-reviewer).
+        let (socket, exe) = tokio::task::spawn_blocking(move || {
+            let socket = socket.unwrap_or_else(|| norte_core::daemon::default_socket_path(None));
+            (socket, std::env::current_exe())
+        })
+        .await
+        .context("resolución del socket/exe")?;
+        let exe = exe.context("current_exe")?;
+        // Autoarranque: este MISMO binario sabe ser daemon.
+        let mut spawn_cmd: Vec<std::ffi::OsString> =
+            vec![exe.into(), "daemon".into(), "run".into()];
+        spawn_cmd.push("--socket".into());
+        spawn_cmd.push(socket.clone().into());
+        let remote = RemoteBackend::connect(
+            socket,
+            Some(spawn_cmd),
+            norte_proto::methods::ClientInfo {
+                name: "norte-cli".into(),
+                version: env!("CARGO_PKG_VERSION").into(),
+            },
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("no se pudo hablar con el daemon")?;
+        Ok(Backend::Remote(remote))
     }
 }
 
@@ -276,16 +343,13 @@ fn vpath(path: &std::path::Path) -> anyhow::Result<VPath> {
         .with_context(|| format!("path no representable: {}", path.display()))
 }
 
-async fn ls(engine: &Engine, path: &std::path::Path, json: bool) -> anyhow::Result<ExitCode> {
+async fn ls(backend: &Backend, path: &std::path::Path, json: bool) -> anyhow::Result<ExitCode> {
     let target = vpath(path)?;
-    let mut stream = engine
+    let entries: Vec<Entry> = backend
         .list(&target)
         .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
         .context(norte_i18n::t("cli-list-failed"))?;
-    let mut entries: Vec<Entry> = Vec::new();
-    while let Some(item) = stream.next().await {
-        entries.push(item.context(norte_i18n::t("cli-entry-unreadable"))?);
-    }
     if json {
         // Forma wire (lossless); el consumidor decodifica con el codec.
         serde_json::to_writer_pretty(std::io::stdout().lock(), &entries)
@@ -308,16 +372,16 @@ async fn ls(engine: &Engine, path: &std::path::Path, json: bool) -> anyhow::Resu
 
 /// Corre una Task pintando progreso en stderr; Ctrl-C cancela cooperativamente
 /// (la task deja destino limpio o `.norte-partial`, regla dura 3).
-async fn run_task(handle: TaskHandle, show_bytes: bool) -> ExitCode {
-    let cancel = handle.cancel_token();
+async fn run_task(task: TaskRef, show_bytes: bool) -> ExitCode {
+    let canceller = task.canceller();
     let sig = tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
             eprintln!("\n{}", norte_i18n::t("cli-cancelling"));
-            cancel.cancel();
+            canceller.cancel();
         }
     });
 
-    let mut rx = handle.progress();
+    let mut rx = task.progress();
     loop {
         let snap = rx.borrow_and_update().clone();
         render(&snap, show_bytes);

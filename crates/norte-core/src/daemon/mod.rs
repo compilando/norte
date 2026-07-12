@@ -44,10 +44,18 @@ pub enum DaemonError {
 /// su propio socket; los clientes, del dir que encuentran).
 #[must_use]
 pub fn default_socket_path(uid_hint: Option<u32>) -> PathBuf {
-    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
+    socket_path_from(
+        std::env::var_os("XDG_RUNTIME_DIR"),
+        uid_hint.unwrap_or_else(process_uid_best_effort),
+    )
+}
+
+/// La lógica pura de [`default_socket_path`] (testeable sin tocar el
+/// entorno global — que en edición 2024 exige `unsafe`, prohibido aquí).
+fn socket_path_from(xdg: Option<std::ffi::OsString>, uid: u32) -> PathBuf {
+    if let Some(runtime) = xdg.filter(|v| !v.is_empty()) {
         return PathBuf::from(runtime).join("norte").join("daemon.sock");
     }
-    let uid = uid_hint.unwrap_or_else(process_uid_best_effort);
     PathBuf::from(format!("/tmp/norte-{uid}")).join("daemon.sock")
 }
 
@@ -74,4 +82,40 @@ pub(crate) fn process_uid_best_effort() -> u32 {
     // Fallback imposible en la práctica (temp_dir no escribible): 0 hará
     // que el chequeo anti-root de bind() rechace, fail-safe.
     uid.unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{process_uid_best_effort, socket_path_from};
+
+    #[test]
+    fn socket_path_usa_xdg_si_esta() {
+        let p = socket_path_from(Some("/run/user/4242".into()), 1000);
+        assert_eq!(p, std::path::Path::new("/run/user/4242/norte/daemon.sock"));
+    }
+
+    #[test]
+    fn socket_path_cae_a_tmp_sin_xdg() {
+        assert_eq!(
+            socket_path_from(None, 1000),
+            std::path::Path::new("/tmp/norte-1000/daemon.sock")
+        );
+        // XDG vacío = como ausente.
+        assert_eq!(
+            socket_path_from(Some(String::new().into()), 7),
+            std::path::Path::new("/tmp/norte-7/daemon.sock")
+        );
+    }
+
+    #[test]
+    fn uid_best_effort_es_nuestro_euid() {
+        use std::os::unix::fs::MetadataExt;
+        // El dueño de un archivo que acabamos de crear ES nuestro euid.
+        let probe = std::env::temp_dir().join(format!(".norte-uid-test-{}", std::process::id()));
+        let f = std::fs::File::create(&probe).expect("crear sonda");
+        let expected = f.metadata().expect("metadata").uid();
+        drop(f);
+        let _ = std::fs::remove_file(&probe);
+        assert_eq!(process_uid_best_effort(), expected);
+    }
 }

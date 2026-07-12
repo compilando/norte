@@ -254,6 +254,14 @@ impl Client {
     pub async fn notification(&mut self) -> Option<Notification> {
         self.notifications.recv().await
     }
+
+    /// Se lleva el receptor de notificaciones (para bombearlo desde una
+    /// task propia mientras el `Client` — en un `Arc` — sigue sirviendo
+    /// `call`). Tras esto, [`Self::notification`] devuelve `None`.
+    pub fn take_notifications(&mut self) -> mpsc::UnboundedReceiver<Notification> {
+        let (_dead_tx, dead_rx) = mpsc::unbounded_channel();
+        std::mem::replace(&mut self.notifications, dead_rx)
+    }
 }
 
 /// El código RPC que señala "el server no habla nuestra versión" —

@@ -577,3 +577,24 @@ fn version_compatible_es_estricta_con_el_formato() {
         assert!(!version_compatible("0.4.0", v), "aceptó {v:?}");
     }
 }
+
+/// Tolerancia (ADR 0004): `range` AUSENTE en fs.read = None (default),
+/// no solo `null` explícito. Y N/N-1 en el borde exacto de 0.5.0.
+#[test]
+fn fs_read_params_tolera_range_ausente() {
+    use norte_proto::methods::FsReadParams;
+    let p: FsReadParams = serde_json::from_str(r#"{"path":"file:///x"}"#).expect("range ausente");
+    assert!(p.range.is_none());
+}
+
+#[test]
+fn version_ventana_de_0_5_0() {
+    use norte_proto::PROTOCOL_VERSION;
+    use norte_proto::methods::version_compatible;
+    assert!(version_compatible(PROTOCOL_VERSION, "0.5.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.4.0"), "N-1");
+    assert!(
+        !version_compatible(PROTOCOL_VERSION, "0.3.9"),
+        "0.3 cayó de la ventana"
+    );
+}

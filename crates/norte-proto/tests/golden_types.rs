@@ -9,9 +9,11 @@ use std::fmt::Debug;
 use std::path::Path;
 
 use norte_proto::methods::{
-    ClientInfo, DaemonShutdownParams, DaemonShutdownResult, FsCopyParams, FsDeleteParams,
-    FsListParams, FsListResult, FsMoveParams, FsStatParams, FsStatResult, FsTaskResult,
-    InitializeParams, InitializeResult, ServerInfo, TaskCancelParams, TaskCancelResult,
+    ClientInfo, DaemonShutdownParams, DaemonShutdownResult, FsCapabilitiesParams,
+    FsCapabilitiesResult, FsCopyParams, FsDeleteParams, FsListParams, FsListResult, FsMoveParams,
+    FsReadParams, FsReadResult, FsStatParams, FsStatResult, FsTaskResult, InitializeParams,
+    InitializeResult, ServerInfo, TaskCancelParams, TaskCancelResult, TaskListParams,
+    TaskListResult,
 };
 use norte_proto::{
     ByteRange, Capabilities, CapabilityFlags, CollisionPolicy, ConflictKind, Entry, EntryKind,
@@ -413,7 +415,7 @@ fn golden_methods() {
     );
     check_one(&fixtures, "task_cancel_result", &TaskCancelResult {});
     check_methods_daemon(&fixtures);
-    assert_eq!(fixtures.len(), 17, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 26, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Métodos del daemon (ADR 0011): initialize y daemon.shutdown.
@@ -453,6 +455,85 @@ fn check_methods_daemon(fixtures: &BTreeMap<String, Value>) {
         &DaemonShutdownParams { graceful: false },
     );
     check_one(fixtures, "daemon_shutdown_result", &DaemonShutdownResult {});
+    check_methods_v05(fixtures);
+}
+
+/// Métodos de 0.5.0 (fase 3): task.list, fs.read, fs.capabilities.
+fn check_methods_v05(fixtures: &BTreeMap<String, Value>) {
+    check_one(fixtures, "task_list_params", &TaskListParams {});
+    check_one(
+        fixtures,
+        "task_list_result",
+        &TaskListResult {
+            tasks: vec![TaskProgress {
+                task_id: TaskId::new(7),
+                kind: TaskKind::Copy,
+                state: TaskState::Running,
+                bytes_done: 512,
+                bytes_total: Some(1024),
+                entries_done: 1,
+                entries_total: Some(3),
+                current: Some(vpath("file:///src/a.txt")),
+            }],
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_read_params",
+        &FsReadParams {
+            path: vpath("file:///home/user/doc.txt"),
+            range: Some(ByteRange {
+                offset: 0,
+                len: Some(4096),
+            }),
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_read_params_sin_rango",
+        &FsReadParams {
+            path: vpath("file:///home/user/doc.txt"),
+            range: None,
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_read_result",
+        &FsReadResult {
+            content_b64: "aG9sYQ==".into(),
+            eof: true,
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_read_result_parcial",
+        &FsReadResult {
+            content_b64: "MDEy".into(),
+            eof: false,
+        },
+    );
+    check_one(
+        fixtures,
+        "task_list_result_vacio",
+        &TaskListResult { tasks: vec![] },
+    );
+    check_one(
+        fixtures,
+        "fs_capabilities_params",
+        &FsCapabilitiesParams {
+            path: vpath("file:///home"),
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_capabilities_result",
+        &FsCapabilitiesResult {
+            capabilities: Capabilities {
+                flags: CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::SYMLINKS,
+                max_path: None,
+            },
+        },
+    );
 }
 
 /// El envelope JSON-RPC congelado (ADR 0011): la forma de request/response/
@@ -549,8 +630,12 @@ fn method_names_frozen() {
     assert_eq!(methods::TASK_PROGRESS, "task.progress");
     assert_eq!(methods::INITIALIZE, "initialize");
     assert_eq!(methods::DAEMON_SHUTDOWN, "daemon.shutdown");
-    // 0.4.0: envelope JSON-RPC + initialize + Error::Loop (ADR 0011).
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.4.0");
+    assert_eq!(methods::TASK_LIST, "task.list");
+    assert_eq!(methods::FS_READ, "fs.read");
+    assert_eq!(methods::FS_CAPABILITIES, "fs.capabilities");
+    assert_eq!(methods::FS_READ_MAX_CHUNK, 8 * 1024 * 1024);
+    // 0.5.0: task.list + fs.read + fs.capabilities (fase 3 M2).
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.5.0");
 }
 
 #[test]

@@ -1,8 +1,9 @@
 //! Panel de tasks del TUI (fase 5): snapshots vivos leídos del canal
-//! `watch` de cada [`TaskHandle`] — el TUI jamás bloquea esperando a una
+//! `watch` de cada [`TaskRef`] — el TUI jamás bloquea esperando a una
 //! task; el tick copia el último snapshot publicado.
 
-use norte_core::{TaskHandle, TransferOptions};
+use norte_core::TransferOptions;
+use norte_core::backend::TaskRef;
 use norte_proto::{TaskProgress, TaskState, VPath};
 
 use crate::app::TransferKind;
@@ -22,7 +23,7 @@ pub struct RetrySpec {
 
 /// Una fila del panel.
 pub struct TaskRow {
-    handle: TaskHandle,
+    task: TaskRef,
     rx: tokio::sync::watch::Receiver<TaskProgress>,
     /// Último snapshot copiado (lo que se pinta).
     pub last: TaskProgress,
@@ -59,22 +60,36 @@ pub struct TaskBoard {
 }
 
 impl TaskBoard {
-    /// Añade una task recién encolada.
-    pub fn push(&mut self, handle: TaskHandle, retry: Option<RetrySpec>) {
-        self.push_full(handle, retry, None);
+    /// Añade una task recién encolada por ESTE frontend.
+    pub fn push(&mut self, task: TaskRef, retry: Option<RetrySpec>) {
+        self.push_full(task, retry, None);
+    }
+
+    /// Añade una task FORÁNEA (otro frontend de la misma sesión, fase 3):
+    /// sin contexto de reintento (no la lanzamos nosotros) — se ve
+    /// progresar en el panel como una más. Duplicados por id se ignoran
+    /// (la propia puede llegar también por broadcast).
+    pub fn push_foreign(&mut self, task: TaskRef) {
+        if self.rows.iter().any(|r| r.task.id() == task.id()) {
+            return;
+        }
+        self.push_full(task, None, None);
     }
 
     /// Como [`Self::push`], con objetivo de papelera (deletes Trash).
     pub fn push_full(
         &mut self,
-        handle: TaskHandle,
+        task: TaskRef,
         retry: Option<RetrySpec>,
         trash_target: Option<VPath>,
     ) {
-        let rx = handle.progress();
+        if self.rows.iter().any(|r| r.task.id() == task.id()) {
+            return;
+        }
+        let rx = task.progress();
         let last = rx.borrow().clone();
         self.rows.push(TaskRow {
-            handle,
+            task,
             rx,
             last,
             retry,
@@ -120,7 +135,7 @@ impl TaskBoard {
     pub fn cancel_last_running(&mut self) -> bool {
         for row in self.rows.iter().rev() {
             if !row.rx.borrow().state.is_terminal() {
-                row.handle.cancel();
+                row.task.cancel();
                 return true;
             }
         }
