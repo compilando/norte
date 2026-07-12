@@ -93,6 +93,44 @@ async fn nombre_con_crlf_se_rechaza() {
     assert_eq!(p.stat(&hostil2).await.unwrap_err(), Error::InvalidPath);
 }
 
+/// Nombres con `;` y con espacio inicial roundtripean byte-exacto por MLSD
+/// (Hallazgo B del encoding-auditor): el extractor de nombre de suppaftp
+/// (`split(';').last().trim_start()`) truncaría `a;b.txt` a `b.txt` y perdería
+/// el espacio inicial; el provider saca el nombre CRUDO de la línea MLSD
+/// (`split_once(' ')`, RFC 3659) para no corromperlo.
+#[tokio::test]
+async fn nombres_con_punto_y_coma_y_espacio_roundtrip() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = provider(dir.path()).await;
+    let hostiles: [&[u8]; 2] = [b"a;b.txt", b" sp.txt"];
+    for raw in hostiles {
+        let seg = norte_proto::Segment::new(raw.to_vec()).unwrap();
+        let path = FtpProvider::root(Authority::new("test:21").unwrap()).join(seg);
+        let mut sink = p.write(&path).await.expect("write abre");
+        sink.write(Bytes::from_static(b"x")).await.unwrap();
+        sink.commit().await.expect("commit");
+    }
+    let mut stream = p.list(&vp("/")).await.expect("list abre");
+    let mut names: Vec<Vec<u8>> = Vec::new();
+    while let Some(item) = stream.next().await {
+        let entry = item.expect("entrada válida");
+        names.push(
+            entry
+                .path
+                .file_name()
+                .expect("con nombre")
+                .as_bytes()
+                .to_vec(),
+        );
+    }
+    for raw in hostiles {
+        assert!(
+            names.iter().any(|n| n.as_slice() == raw),
+            "el nombre {raw:?} debe volver byte-exacto por MLSD, no truncado/strippeado"
+        );
+    }
+}
+
 /// El provider nunca sale de su base: escribir crea el fichero DENTRO del
 /// tempdir que respalda al servidor, en ningún otro sitio.
 #[tokio::test]

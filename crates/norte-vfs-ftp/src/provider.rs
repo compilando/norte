@@ -58,15 +58,29 @@ impl FtpProvider {
             .map_err(|e| map_err(&e))?;
         // ¿MLSD/MLST? (listado machine-readable, robusto con nombres hostiles).
         // Muchos servidores (pure-ftpd) no lo anuncian → respaldo a LIST.
-        let has_mlsd = match stream.feat().await {
-            Ok(feats) => feats
-                .keys()
-                .any(|k| k.eq_ignore_ascii_case("MLST") || k.eq_ignore_ascii_case("MLSD")),
-            Err(_) => false,
-        };
+        let feats = stream.feat().await.ok();
+        let has_mlsd = feats.as_ref().is_some_and(|f| {
+            f.keys()
+                .any(|k| k.eq_ignore_ascii_case("MLST") || k.eq_ignore_ascii_case("MLSD"))
+        });
+        // OPTS UTF8 ON si el servidor lo anuncia (RFC 2640, ADR 0014 D2): así
+        // los servidores que lo soportan devuelven UTF-8 real y no caemos en el
+        // rechazo lossy de U+FFFD. Best-effort: si falla, seguimos.
+        if feats
+            .as_ref()
+            .is_some_and(|f| f.keys().any(|k| k.eq_ignore_ascii_case("UTF8")))
+        {
+            let _ = stream.opts("UTF8", Some("ON")).await;
+        }
         let mut base = base.into();
         while base.len() > 1 && base.ends_with('/') {
             base.pop();
+        }
+        // `base` es config de confianza (fase 6), pero se valida como defensa en
+        // profundidad: absoluta y sin CR/LF/NUL (que inyectarían un comando FTP
+        // en cada operación, saltándose el filtro por-segmento).
+        if !base.starts_with('/') || base.contains(['\r', '\n', '\0']) {
+            return Err(Error::InvalidPath);
         }
         Ok(Self {
             ftp: Arc::new(Mutex::new(stream)),
@@ -223,7 +237,12 @@ fn entry_from_file(path: VPath, f: &File) -> Entry {
 /// `stat` de `remote`. Con MLSD: `MLST` directo (robusto). Sin MLSD: `LIST`
 /// del DIRECTORIO padre + búsqueda por nombre (universal — pure-ftpd; ADR 0014
 /// C). `None` = no existe.
-async fn stat_remote(guard: &mut Ftp, remote: &str, has_mlsd: bool) -> Result<Option<File>, Error> {
+async fn stat_remote(
+    guard: &mut Ftp,
+    remote: &str,
+    has_mlsd: bool,
+    base: &str,
+) -> Result<Option<File>, Error> {
     if has_mlsd {
         return match guard.mlst(Some(remote)).await {
             Ok(line) => {
@@ -237,14 +256,21 @@ async fn stat_remote(guard: &mut Ftp, remote: &str, has_mlsd: bool) -> Result<Op
             },
         };
     }
-    let (parent, base) = match remote.rfind('/') {
+    // Contención (security): la rama LIST lista el DIRECTORIO PADRE. Para la
+    // RAÍZ del provider (`remote == base`) el padre estaría FUERA de la base —
+    // jamás se lista por encima de la base. La raíz es un dir degenerado como
+    // "hijo": None (fail-safe; sus ops son degeneradas de todas formas).
+    if remote == base {
+        return Ok(None);
+    }
+    let (parent, child) = match remote.rfind('/') {
         Some(0) => ("/", &remote[1..]),
         Some(i) => (&remote[..i], &remote[i + 1..]),
         // `remote` siempre es absoluto (arranca en la base); sin `/` no es un
         // hijo consultable.
         None => return Ok(None),
     };
-    if base.is_empty() {
+    if child.is_empty() {
         return Ok(None);
     }
     let lines = match guard.list(Some(parent)).await {
@@ -257,9 +283,17 @@ async fn stat_remote(guard: &mut Ftp, remote: &str, has_mlsd: bool) -> Result<Op
         }
     };
     for line in lines {
-        if let Some(f) = parse_list_line(&line)
-            && f.name() == base
-        {
+        let Some(f) = parse_list_line(&line) else {
+            continue;
+        };
+        // El nombre del servidor viene lossy: un no-UTF8 (U+FFFD) jamás casa un
+        // `child` UTF-8 del cliente de forma fiable → se salta (fail-loud), no
+        // se compara (evita un falso match con metadatos equivocados).
+        let n = f.name();
+        if n.contains('\u{FFFD}') {
+            continue;
+        }
+        if n == child {
             return Ok(Some(f));
         }
     }
@@ -267,11 +301,16 @@ async fn stat_remote(guard: &mut Ftp, remote: &str, has_mlsd: bool) -> Result<Op
 }
 
 /// ¿Existe `remote`? (vía `stat_remote`.)
-async fn exists(guard: &mut Ftp, remote: &str, has_mlsd: bool) -> Result<bool, Error> {
-    Ok(stat_remote(guard, remote, has_mlsd).await?.is_some())
+async fn exists(guard: &mut Ftp, remote: &str, has_mlsd: bool, base: &str) -> Result<bool, Error> {
+    Ok(stat_remote(guard, remote, has_mlsd, base).await?.is_some())
 }
 
 /// Crea `remote` como fichero VACÍO (STOR sin datos): base para APPE-ar.
+///
+/// FTP no tiene `O_EXCL`: si el staging predecible ya existía, `STOR` lo trunca
+/// (no falla como el `EXCLUDE` de sftp). Riesgo bajo — el nombre lleva `seq`/hash,
+/// FTP no tiene symlinks (no hay escape de base) y el destino final sí se
+/// comprueba. Divergencia consciente del endurecimiento de sftp (threat model).
 async fn create_empty(guard: &mut Ftp, remote: &str) -> Result<(), Error> {
     let data = guard
         .put_with_stream(remote)
@@ -315,7 +354,7 @@ impl Provider for FtpProvider {
             });
         }
         let mut guard = self.ftp.lock().await;
-        let found = stat_remote(&mut guard, &remote, self.has_mlsd).await?;
+        let found = stat_remote(&mut guard, &remote, self.has_mlsd, &self.base).await?;
         drop(guard);
         // El path del Entry es el del cliente, no el nombre ecoado.
         match found {
@@ -355,7 +394,19 @@ impl Provider for FtpProvider {
                 // raros) se descartan, no cortan.
                 None => continue,
             };
-            let name = f.name();
+            // Nombre: en MLSD se saca CRUDO de la línea (RFC 3659 `facts SP
+            // pathname`); el extractor de suppaftp lo trunca en `;` y strippea
+            // el espacio inicial (`split(';').last().trim_start()`). En LIST,
+            // `f.name()` (parse ls -l).
+            let name = if has_mlsd {
+                let Some((_, n)) = line.split_once(' ') else {
+                    entries.push(Err(Error::Io { retryable: false }));
+                    break;
+                };
+                n
+            } else {
+                f.name()
+            };
             if name == "." || name == ".." {
                 continue;
             }
@@ -377,12 +428,18 @@ impl Provider for FtpProvider {
         Ok(futures::stream::iter(entries).boxed())
     }
 
+    /// Lectura por RETR. Retiene la conexión de control ÚNICA durante todo el
+    /// stream (FTP no multiplexa): copiar FTP→FTP mismo host o cancelar a
+    /// mitad exige el pool de conexiones de fase 6 (issue #39). Un `range`
+    /// acotado DRENA el resto del fichero hasta EOF (RETR va offset→EOF; ABOR
+    /// desincronizaría) — el viewer no debe hacer reads acotados sobre FTP de
+    /// ficheros enormes (issue #40).
     async fn read(&self, p: &VPath, range: Option<ByteRange>) -> Result<ByteStream, Error> {
         let remote = self.remote(p)?;
         let mut guard = self.ftp.clone().lock_owned().await;
         // Rechaza dirs (leerlos es error) y ausentes (NotFound): stat vía LIST
         // del padre, con la MISMA conexión bloqueada.
-        match stat_remote(&mut guard, &remote, self.has_mlsd).await? {
+        match stat_remote(&mut guard, &remote, self.has_mlsd, &self.base).await? {
             None => return Err(Error::NotFound),
             Some(f) if f.is_directory() => {
                 return Err(Error::Conflict {
@@ -414,7 +471,7 @@ impl Provider for FtpProvider {
         let mut guard = self.ftp.lock().await;
         // El destino final no debe existir (create-new; la política de
         // sobrescritura es del core). Ventana TOCTOU documentada.
-        if exists(&mut guard, &final_remote, self.has_mlsd).await? {
+        if exists(&mut guard, &final_remote, self.has_mlsd, &self.base).await? {
             return Err(Error::Conflict {
                 conflict: ConflictKind::Exists,
             });
@@ -430,6 +487,7 @@ impl Provider for FtpProvider {
             staging,
             final_remote,
             has_mlsd: self.has_mlsd,
+            base: self.base.clone(),
         }))
     }
 
@@ -437,19 +495,24 @@ impl Provider for FtpProvider {
         let final_remote = self.remote(p)?;
         let staging = self.stable_partial(p)?;
         let mut guard = self.ftp.lock().await;
-        if exists(&mut guard, &final_remote, self.has_mlsd).await? {
+        if exists(&mut guard, &final_remote, self.has_mlsd, &self.base).await? {
             return Err(Error::Conflict {
                 conflict: ConflictKind::Exists,
             });
         }
         // Bytes ya presentes de un intento previo; si no existe el staging, se
         // crea vacío (para que los APPE de write() tengan base).
-        let already = if let Ok(n) = guard.size(&staging).await {
-            n as u64
-        } else {
-            // No existe el staging: créalo vacío (base para los APPE).
-            create_empty(&mut guard, &staging).await?;
-            0
+        // SIZE del parcial: NotFound = no hay parcial (créalo vacío); otro
+        // error se PROPAGA (no truncar el parcial ni enmascarar un fallo real).
+        let already = match guard.size(&staging).await {
+            Ok(n) => n as u64,
+            Err(e) => match map_err(&e) {
+                Error::NotFound => {
+                    create_empty(&mut guard, &staging).await?;
+                    0
+                }
+                other => return Err(other),
+            },
         };
         drop(guard);
         Ok((
@@ -458,6 +521,7 @@ impl Provider for FtpProvider {
                 staging,
                 final_remote,
                 has_mlsd: self.has_mlsd,
+                base: self.base.clone(),
             }),
             already,
         ))
@@ -466,7 +530,7 @@ impl Provider for FtpProvider {
     async fn mkdir(&self, p: &VPath) -> Result<(), Error> {
         let remote = self.remote(p)?;
         let mut guard = self.ftp.lock().await;
-        if exists(&mut guard, &remote, self.has_mlsd).await? {
+        if exists(&mut guard, &remote, self.has_mlsd, &self.base).await? {
             return Err(Error::Conflict {
                 conflict: ConflictKind::Exists,
             });
@@ -478,7 +542,7 @@ impl Provider for FtpProvider {
         let remote = self.remote(p)?;
         let mut guard = self.ftp.lock().await;
         // Saber si es dir para elegir RMD vs DELE (stat vía LIST del padre).
-        let f = stat_remote(&mut guard, &remote, self.has_mlsd)
+        let f = stat_remote(&mut guard, &remote, self.has_mlsd, &self.base)
             .await?
             .ok_or(Error::NotFound)?;
         if f.is_directory() {
@@ -494,7 +558,7 @@ impl Provider for FtpProvider {
         let mut guard = self.ftp.lock().await;
         // RNFR/RNTO no garantiza no-replace: se comprueba antes (TOCTOU
         // documentada) para dar `Conflict`, no pisar.
-        if exists(&mut guard, &to_r, self.has_mlsd).await? {
+        if exists(&mut guard, &to_r, self.has_mlsd, &self.base).await? {
             return Err(Error::Conflict {
                 conflict: ConflictKind::Exists,
             });
@@ -514,6 +578,7 @@ struct FtpSink {
     staging: String,
     final_remote: String,
     has_mlsd: bool,
+    base: String,
 }
 
 #[async_trait]
@@ -540,7 +605,7 @@ impl ByteSink for FtpSink {
         // El destino final no debe existir (create-new): comprobado al abrir;
         // la ventana hasta aquí es TOCTOU (FTP sin rename atómico) — si aparece
         // algo, Conflict y el staging se queda para el GC.
-        if exists(&mut guard, &self.final_remote, self.has_mlsd).await? {
+        if exists(&mut guard, &self.final_remote, self.has_mlsd, &self.base).await? {
             return Err(Error::Conflict {
                 conflict: ConflictKind::Exists,
             });

@@ -139,13 +139,23 @@ Negativas / deuda asumida:
   en lectura, fix de bytes crudos = issue #37 (compartida).
 - **Conexión de control ÚNICA y estatal**: `Arc<Mutex>` serializa las
   operaciones del provider — no hay paralelismo dentro de una conexión (el
-  scheduler abre varias conexiones si hace falta — futuro).
+  scheduler abre varias conexiones si hace falta — futuro). El `read` retiene
+  la conexión todo el stream: copiar FTP→FTP mismo host (deadlock) y cancelar
+  a mitad (desync de la conexión) exigen el POOL de conexiones de fase 6
+  (**issue #39**, hallazgos B1/M1 de los reviewers — latentes hasta que fase 6
+  cablee FTP al engine).
 - **Cleartext**: sin FTPS (fase 6) el provider es inseguro en red real; por eso
   no se conecta fuera de los tests hasta fase 6. FTP es candidato #1 a migrar a
   plugin-provider en M4 (issue #30).
 - `suppaftp` arrastra `chrono` (fechas MLSD/MDTM) y, con TLS, `native-tls`/
   `rustls` (no se activan en fase 5bis: sin feature secure). `cargo deny`
   vigilante, deps justificadas en la PR (regla 8).
-- MLSD no está garantizado en todo servidor; el degradado a `LIST` es
-  heurístico (parsing POSIX/DOS de suppaftp) — aceptable, con `size`/`mdtm` de
-  respaldo.
+- MLSD no está garantizado en todo servidor; el degradado a `LIST` (`ls -l`)
+  es heurístico y FRÁGIL con nombres whitespace-edge (espacio inicial se pierde
+  en el `\s+` del regex) — solo afecta a servidores SIN MLSD (**issue #40**,
+  con la cota de listado anti-DoS). El nombre en la rama MLSD se saca CRUDO de
+  la línea (`split_once(' ')`, RFC 3659), NO del extractor de suppaftp que
+  trunca en `;` y strippea el espacio inicial (Hallazgo B del encoding-auditor).
+- **OPTS UTF8 ON**: implementado en `new()` si `FEAT` lo anuncia (D2) — los
+  servidores que lo soportan devuelven UTF-8 real. `base` se valida en `new()`
+  (absoluta, sin CR/LF/NUL) como defensa antes de que fase 6 la tome de config.
