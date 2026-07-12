@@ -6,6 +6,7 @@ members = [
     "crates/norte-proto",
     "crates/norte-vfs",
     "crates/norte-vfs-local",
+    "crates/norte-vfs-sftp",
     "crates/norte-testkit",
     "crates/norte-core",
     "crates/norte-cli",
@@ -26,6 +27,7 @@ authors = ["The norte Authors"]
 norte-proto = { path = "crates/norte-proto", version = "0.0.0" }
 norte-vfs = { path = "crates/norte-vfs", version = "0.0.0" }
 norte-vfs-local = { path = "crates/norte-vfs-local", version = "0.0.0" }
+norte-vfs-sftp = { path = "crates/norte-vfs-sftp", version = "0.0.0" }
 norte-testkit = { path = "crates/norte-testkit", version = "0.0.0" }
 norte-core = { path = "crates/norte-core", version = "0.0.0" }
 norte-tui = { path = "crates/norte-tui", version = "0.0.0" }
@@ -36,6 +38,12 @@ norte-i18n = { path = "crates/norte-i18n", version = "0.0.0" }
 # con justificación en la PR que las introduce (regla 8 de CLAUDE.md).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Provider SFTP (spec §3, ADR 0013): russh (SSH async Rust puro; alternativa
+# ssh2/libssh2 = binding a C con API bloqueante, rompe la regla 2) +
+# russh-sftp (cliente Y servidor sobre stream crudo, base del test in-process
+# sin Docker). Superficie de deps grande (aws-lc-rs) → cargo-deny vigilante.
+russh = "0.62"
+russh-sftp = "2.3"
 sha2 = "0.10"
 thiserror = "2"
 base64 = "0.22"

@@ -21,6 +21,17 @@ confidence-threshold = 0.9
 
 [advisories]
 yanked = "deny"
+ignore = [
+    # RUSTSEC-2023-0071 — Marvin Attack: sidechannel de temporización en las
+    # operaciones de CLAVE PRIVADA RSA del crate `rsa`. Entra transitivamente
+    # por `russh` → `ssh-key` → `rsa` (norte-vfs-sftp, ADR 0013). SIN fix
+    # upstream (abierto desde 2023; lo arrastra todo el ecosistema SSH/TLS de
+    # Rust). Exposición en norte: es CLIENTE sftp, no expone un oráculo RSA;
+    # el único vector sería auth de cliente con clave RSA propia — fase 6, con
+    # ed25519 por defecto. Riesgo aceptado y vigilado en issue #36 (migrar a
+    # una pila SSH sin `rsa` en la ruta de firma, o esperar el fix upstream).
+    "RUSTSEC-2023-0071",
+]
 
 [bans]
 multiple-versions = "warn"

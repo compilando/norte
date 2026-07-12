@@ -17,3 +17,4 @@ La spec evoluciona por ADR, no por edición silenciosa (spec §18).
 | [0010](0010-frontera-core-plugin-config.md) | Frontera core/plugin/config para extensiones | accepted |
 | [0011](0011-envelope-jsonrpc-daemon.md) | Envelope JSON-RPC 2.0, framing, transporte y daemon | accepted |
 | [0012](0012-resume-transferencias.md) | Resume de transferencias: `.norte-partial`, reanudación y GC | accepted |
+| [0013](0013-provider-sftp.md) | Provider SFTP: russh, contención del servidor hostil y testing | accepted |

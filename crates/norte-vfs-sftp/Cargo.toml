@@ -1,0 +1,47 @@
+[package]
+name = "norte-vfs-sftp"
+description = "Provider VFS sobre SFTP/SSH (russh)"
+license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+futures.workspace = true
+norte-proto.workspace = true
+norte-vfs.workspace = true
+# La lib solo habla sftp sobre un stream ya establecido; russh-sftp es agnóstico
+# del transporte y NO arrastra russh/rsa. El transporte SSH (`russh`) lo usa solo
+# el test nightly `openssh` → es dev-dependency hasta que fase 6 cablee connect()
+# de verdad; así rsa/aws-lc-rs (RUSTSEC-2023-0071) NO entra al build del gate.
+russh-sftp.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
+
+[dev-dependencies]
+norte-testkit.workspace = true
+russh.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+
+[features]
+# Test de integración NIGHTLY contra un servidor OpenSSH real (atmoz/sftp) por
+# testcontainers (ADR 0013 C2). Fuera del gate de PR: exige Docker y es lento;
+# lo corre el workflow nightly, no `just ci`. `testcontainers` es dep opcional
+# para no compilar su árbol (bollard, …) en el build normal.
+it-openssh = ["dep:testcontainers"]
+
+[dependencies.testcontainers]
+version = "0.27"
+optional = true
+
+# El test `openssh` solo se compila con la feature `it-openssh` (nightly).
+[[test]]
+name = "openssh"
+required-features = ["it-openssh"]
+
+[lints]
+workspace = true

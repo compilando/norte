@@ -15,9 +15,13 @@ lint: fmt-check
 # --no-tests=pass: el esqueleto de fase 1 no tiene tests aún; con código real
 # el gate de cobertura (85%) hace imposible un workspace sin tests que pase CI.
 # nextest no corre doctests: van aparte (los exige la convención de rustdoc).
+# Features EXPLÍCITAS en vez de --all-features: `it-openssh` (norte-vfs-sftp)
+# es un test nightly contra Docker (ADR 0013) y NO debe entrar al gate de PR
+# —ni correrse ni compilar su árbol (testcontainers/bollard)—. Toda feature
+# nueva apta para el gate se añade aquí; las de integración/nightly, no.
 test:
-    cargo nextest run --workspace --all-features --no-tests=pass --no-fail-fast
-    cargo test --workspace --doc
+    cargo nextest run --workspace --features norte-tui/schema --no-tests=pass --no-fail-fast
+    cargo test --workspace --features norte-tui/schema --doc
 
 # Gate de cobertura (mismo umbral que CI): solo crates de lógica (spec §12).
 cov:
@@ -50,6 +54,12 @@ t crate:
 # Loop de desarrollo: tests del workspace en cada guardado (exige cargo-watch).
 watch:
     cargo watch -x "nextest run --workspace"
+
+# Tests de integración NIGHTLY contra servidores reales por Docker (ADR 0013):
+# el provider sftp contra OpenSSH real (atmoz/sftp). EXIGE Docker; fuera del
+# gate de PR (lo corre el workflow nightly, no `just ci`).
+it-remote:
+    cargo nextest run -p norte-vfs-sftp --features it-openssh
 
 # Benchmarks de los presupuestos de la spec §12 (manual: tardan).
 bench:

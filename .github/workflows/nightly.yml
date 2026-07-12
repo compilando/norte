@@ -1,0 +1,30 @@
+# Tests de integración NIGHTLY contra servidores REALES por Docker (ADR 0013,
+# spec §12). Fuera del gate de PR por lentitud/flakiness: el gate normal ya
+# corre la suite contractual completa (incluido el corpus hostil) contra un
+# servidor sftp in-process. Esto valida además que el provider habla con un
+# OpenSSH de producción (atmoz/sftp), no solo con el server de test de russh.
+name: Nightly (integración remota)
+
+on:
+  schedule:
+    # 04:17 UTC cada día (hora "rara" para no coincidir con el pico de colas).
+    - cron: "17 4 * * *"
+  # Permite lanzarlo a mano desde la pestaña Actions.
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  it-remote:
+    name: it-remote (sftp vs OpenSSH real)
+    # Docker viene preinstalado en los runners ubuntu; macOS/Windows no lo
+    # traen, por eso el nightly es solo-Linux.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-nextest
+      - run: just it-remote
