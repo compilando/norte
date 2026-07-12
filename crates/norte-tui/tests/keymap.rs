@@ -402,3 +402,64 @@ fn el_contexto_viewer_se_fusiona_para_su_pantalla() {
     );
     assert_eq!(r.push(parse_chord("enter").unwrap()), Resolution::Reset);
 }
+
+/// Extensibilidad de la ayuda: TODO comando tiene descripción en AMBOS
+/// locales — un comando nuevo sin entrada help-cmd-* rompe aquí. La
+/// decoración de la pantalla (título, hint, secciones) también.
+#[test]
+fn todo_comando_tiene_ayuda_traducida() {
+    use norte_tui::keymap::help_id;
+    let ids_decoracion = [
+        "help-title".to_owned(),
+        "help-hint".to_owned(),
+        "help-section-browse".to_owned(),
+        "help-section-viewer".to_owned(),
+    ];
+    let ids = COMANDOS.iter().map(|cmd| help_id(cmd));
+    for id in ids.chain(ids_decoracion) {
+        for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
+            let texto = norte_i18n::t_in(lang, &id);
+            assert_ne!(texto, id, "{id}: sin traducción en {lang:?}");
+        }
+    }
+}
+
+/// La ayuda se construye del keymap EFECTIVO: los bindings expuestos
+/// reflejan preset + capas EN ORDEN de precedencia, y un binding
+/// sombreado aparece UNA vez con el comando que gana (lo que la tecla
+/// hace de verdad, no lo que el preset dice).
+#[test]
+fn bindings_expuestos_reflejan_las_capas() {
+    let preset = parse_keymap(
+        r#"
+        [pane]
+        keymap = [
+            { on = ["j"], run = "cursor.down" },
+            { on = ["k"], run = "cursor.up" },
+        ]
+    "#,
+    )
+    .unwrap();
+    let user = parse_keymap(
+        r#"
+        [pane]
+        prepend_keymap = [{ on = ["j"], run = "cursor.top" }]
+        append_keymap = [{ on = ["g", "g"], run = "cursor.top" }]
+    "#,
+    )
+    .unwrap();
+    let eff = Effective::build_layered(&preset, std::slice::from_ref(&user), COMANDOS).unwrap();
+    let b = eff.bindings();
+    // Sombreado: "j" UNA sola vez y gana el prepend del usuario.
+    let jotas: Vec<_> = b.iter().filter(|(seq, _)| seq == "j").collect();
+    assert_eq!(jotas.len(), 1, "binding sombreado duplicado: {b:?}");
+    assert_eq!(jotas[0].1, "cursor.top", "debe ganar la capa del usuario");
+    // Orden de precedencia: prepend del usuario antes que el preset.
+    let pos = |wanted: &str| b.iter().position(|(seq, _)| seq == wanted).unwrap();
+    assert!(pos("j") < pos("k"), "prepend antes que preset: {b:?}");
+    assert!(
+        b.iter()
+            .any(|(seq, cmd)| seq == "g g" && *cmd == "cursor.top"),
+        "el append del usuario aparece en la ayuda: {b:?}"
+    );
+}

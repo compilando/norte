@@ -426,6 +426,20 @@ impl Effective {
         Ok(Self { bindings })
     }
 
+    /// Los bindings efectivos, en orden de precedencia: secuencia ya
+    /// formateada (`"g g"`, `"ctrl+k"`) y comando. La AYUDA se construye
+    /// de aquí — refleja preset y capas del usuario, jamás listas a mano.
+    #[must_use]
+    pub fn bindings(&self) -> Vec<(String, &str)> {
+        self.bindings
+            .iter()
+            .map(|(seq, run)| {
+                let teclas: Vec<String> = seq.iter().map(ToString::to_string).collect();
+                (teclas.join(" "), run.as_str())
+            })
+            .collect()
+    }
+
     fn lookup(&self, candidate: &[Chord]) -> Lookup<'_> {
         for (seq, run) in &self.bindings {
             if seq[..] == candidate[..] {
@@ -511,6 +525,7 @@ pub const COMMANDS: &[&str] = &[
     "cursor.bottom",
     "nav.enter",
     "nav.parent",
+    "app.help",
     "pane.copy",
     "pane.move",
     "pane.delete",
@@ -528,6 +543,15 @@ pub const COMMANDS: &[&str] = &[
     "viewer.encoding-auto",
     "viewer.hex",
 ];
+
+/// Id de Fluent con la descripción de un comando (`app.quit` →
+/// `help-cmd-app-quit`). La suite OBLIGA a que exista en ambos locales
+/// para TODO comando de [`COMMANDS`]: un comando nuevo sin descripción
+/// rompe tests — la ayuda no puede quedarse atrás.
+#[must_use]
+pub fn help_id(command: &str) -> String {
+    format!("help-cmd-{}", command.replace('.', "-"))
+}
 
 /// Los presets de fábrica, parseados (se validan en tests y al construir
 /// el efectivo). Default del producto: `orthodox` (decisión 2026-07-10).

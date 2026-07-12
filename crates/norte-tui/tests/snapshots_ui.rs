@@ -112,3 +112,25 @@ fn snapshot_viewer_texto_y_hex() {
     let hex = render(&app);
     insta::assert_snapshot!(format!("{texto}\n===\n{hex}"));
 }
+
+#[test]
+fn snapshot_ayuda() {
+    let mut app = app_base();
+    // El MISMO builder que usa el binario (no una copia del formato):
+    // ambas pantallas, desde el preset orthodox real.
+    let presets = norte_tui::keymap::presets();
+    let (_, preset) = presets.iter().find(|(n, _)| *n == "orthodox").unwrap();
+    let build = |screen| {
+        norte_tui::keymap::Effective::build_for(preset, &[], norte_tui::keymap::COMMANDS, screen)
+            .unwrap()
+    };
+    let lines = norte_tui::help::build(
+        &build(norte_tui::keymap::Screen::Browse),
+        &build(norte_tui::keymap::Screen::Viewer),
+    );
+    app.help = Some(norte_tui::app::Help { lines, scroll: 0 });
+    let arriba = render(&app);
+    // Scrolleada: el viewport empieza más abajo (sección Viewer visible).
+    app.help.as_mut().unwrap().scroll_down(24);
+    insta::assert_snapshot!(format!("{arriba}\n===\n{}", render(&app)));
+}

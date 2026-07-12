@@ -7,6 +7,7 @@ keymap = [
     { on = ["ctrl+q"], run = "app.quit" },
     { on = ["ctrl+c"], run = "app.quit" },
     { on = ["tab"], run = "pane.switch" },
+    { on = ["f1"], run = "app.help" },
 ]
 
 [pane]

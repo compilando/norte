@@ -45,6 +45,36 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(modal) = &app.modal {
         draw_modal(frame, modal);
     }
+    if let Some(help) = &app.help {
+        draw_help(frame, help);
+    }
+}
+
+/// Overlay de ayuda a pantalla (casi) completa, por encima de todo.
+fn draw_help(frame: &mut Frame<'_>, help: &crate::app::Help) {
+    let area = centered(
+        frame.area(),
+        frame.area().width.saturating_sub(4).max(20),
+        frame.area().height.saturating_sub(2).max(6),
+    );
+    frame.render_widget(ratatui::widgets::Clear, area);
+    let inner_h = area.height.saturating_sub(2) as usize;
+    let lines: Vec<Line<'_>> = help
+        .lines
+        .iter()
+        .skip(help.scroll)
+        .take(inner_h)
+        .map(|l| Line::raw(l.as_str()))
+        .collect();
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" {} — {} ", t("help-title"), t("help-hint")))
+                .border_style(Style::default().add_modifier(Modifier::BOLD)),
+        ),
+        area,
+    );
 }
 
 /// Viewer a pantalla completa: contenido + status propia (encoding, EOL,

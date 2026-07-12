@@ -13,7 +13,9 @@ use norte_core::{Engine, TransferOptions};
 use norte_i18n::{t, ta};
 use norte_proto::DeleteMode;
 use norte_proto::{Entry, EntryKind, Error, VPath};
-use norte_tui::app::{App, DialogOutcome, Modal, Pane, TransferKind, dialog_key, sort_entries};
+use norte_tui::app::{
+    App, DialogOutcome, Help, Modal, Pane, TransferKind, dialog_key, sort_entries,
+};
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::keymap::{COMMANDS, Chord, Effective, Resolution, Resolver, Screen, presets};
 use norte_tui::tasks::RetrySpec;
@@ -58,6 +60,7 @@ async fn main() -> Result<()> {
     let left = Pane::new(start.clone(), listing(&engine, &start).await?);
     let right = Pane::new(start.clone(), listing(&engine, &start).await?);
     let mut app = App::new(left, right);
+    let mut help_lines = norte_tui::help::build(&browse_eff, &viewer_eff);
     let mut resolver = Resolver::new(browse_eff);
     let mut viewer_resolver = Resolver::new(viewer_eff);
 
@@ -75,6 +78,7 @@ async fn main() -> Result<()> {
         &engine,
         &mut resolver,
         &mut viewer_resolver,
+        &mut help_lines,
         layers,
         cli_preset,
         cfg_rx,
@@ -114,6 +118,7 @@ async fn run(
     engine: &Engine,
     resolver: &mut Resolver,
     viewer_resolver: &mut Resolver,
+    help_lines: &mut Vec<String>,
     layers: Layers,
     cli_preset: Option<String>,
     mut cfg_rx: tokio::sync::mpsc::Receiver<()>,
@@ -149,8 +154,15 @@ async fn run(
             } => {
                 reload_at = None;
                 while cfg_rx.try_recv().is_ok() {}
-                reload_config(app, resolver, viewer_resolver, &layers, cli_preset.as_deref())
-                    .await;
+                reload_config(
+                    app,
+                    resolver,
+                    viewer_resolver,
+                    help_lines,
+                    &layers,
+                    cli_preset.as_deref(),
+                )
+                .await;
             }
             maybe = events.next() => {
                 let Some(event) = maybe else { return Ok(()); };
@@ -158,7 +170,22 @@ async fn run(
                     && key.kind == crossterm::event::KeyEventKind::Press
                 {
                     app.message = None;
-                    if app.modal.is_some() {
+                    if let Some(help) = &mut app.help {
+                        // Teclas de la ayuda: fijas, como los diálogos (#24).
+                        // ctrl+c conserva su significado global (salir).
+                        match (key.modifiers, key.code) {
+                            (KeyModifiers::CONTROL, KeyCode::Char('c')) => app.quit = true,
+                            (
+                                KeyModifiers::NONE,
+                                KeyCode::Esc | KeyCode::Char('q') | KeyCode::F(1),
+                            ) => app.help = None,
+                            (KeyModifiers::NONE, KeyCode::Up) => help.scroll_up(1),
+                            (KeyModifiers::NONE, KeyCode::Down) => help.scroll_down(1),
+                            (KeyModifiers::NONE, KeyCode::PageUp) => help.scroll_up(PAGE),
+                            (KeyModifiers::NONE, KeyCode::PageDown) => help.scroll_down(PAGE),
+                            _ => {}
+                        }
+                    } else if app.modal.is_some() {
                         on_dialog_key(app, engine, key.code);
                     } else {
                         // Pantalla activa: el viewer tiene su contexto.
@@ -170,7 +197,7 @@ async fn run(
                         match active.push(Chord::from_event(key.modifiers, key.code)) {
                             Resolution::Run(cmd) => {
                                 app.pending.clear();
-                                dispatch(app, engine, &mut events, &cmd).await;
+                                dispatch(app, engine, &mut events, help_lines, &cmd).await;
                             }
                             Resolution::Pending(_) => {
                                 app.pending = active
@@ -197,12 +224,16 @@ async fn reload_config(
     app: &mut App,
     resolver: &mut Resolver,
     viewer_resolver: &mut Resolver,
+    help_lines: &mut Vec<String>,
     layers: &Layers,
     cli_preset: Option<&str>,
 ) {
     match config::load_async(layers.clone()).await {
         Ok(cfg) => match build_keymaps(&cfg, cli_preset) {
             Ok((browse, viewer)) => {
+                // La ayuda refleja el keymap VIGENTE: se reconstruye aquí.
+                *help_lines = norte_tui::help::build(&browse, &viewer);
+                app.help = None;
                 *resolver = Resolver::new(browse);
                 *viewer_resolver = Resolver::new(viewer);
                 app.pending.clear();
@@ -401,7 +432,13 @@ fn submit_transfer(
 /// Ejecuta un comando nombrado (ADR 0006: los mismos nombres que verán la
 /// palette y el wire). Un error de listado en un cd NO tumba el TUI: el
 /// pane se queda donde estaba (aviso visible: barra de mensajes, issue #20).
-async fn dispatch(app: &mut App, engine: &Engine, events: &mut EventStream, cmd: &str) {
+async fn dispatch(
+    app: &mut App,
+    engine: &Engine,
+    events: &mut EventStream,
+    help_lines: &[String],
+    cmd: &str,
+) {
     match cmd {
         "app.quit" => app.quit = true,
         "pane.switch" => app.switch_focus(),
@@ -482,6 +519,12 @@ async fn dispatch(app: &mut App, engine: &Engine, events: &mut EventStream, cmd:
         "viewer.encoding" => viewer_do(app, norte_tui::viewer::Viewer::cycle_encoding),
         "viewer.encoding-auto" => viewer_do(app, norte_tui::viewer::Viewer::reset_encoding),
         "viewer.hex" => viewer_do(app, norte_tui::viewer::Viewer::toggle_hex),
+        "app.help" => {
+            app.help = Some(Help {
+                lines: help_lines.to_vec(),
+                scroll: 0,
+            });
+        }
         "task.cancel" => {
             app.message = Some(if app.board.cancel_last_running() {
                 t("msg-cancelling")
