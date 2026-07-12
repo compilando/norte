@@ -13,6 +13,8 @@ use norte_proto::{
 use norte_vfs::{Provider, SymlinkKind};
 use tokio_util::sync::CancellationToken;
 
+use norte_vfs::{FollowLinks, NodeId};
+
 use crate::engine::TransferOptions;
 use crate::observer::{Mutation, MutationObserver};
 use crate::scheduler::TaskCtx;
@@ -31,14 +33,26 @@ fn is_transient(e: &Error) -> bool {
     )
 }
 
-/// Reintenta una operación puntual de provider ante errores transitorios:
-/// hasta [`MAX_RETRIES`] reintentos con backoff exponencial, cancelable
-/// DURANTE la espera (regla 3: la cancelación jamás espera al backoff).
+/// Espera el backoff del intento `attempt`, cancelable DURANTE la espera
+/// (regla 3: la cancelación jamás espera al backoff).
+async fn backoff_or_cancel(cancel: &CancellationToken, attempt: u32) -> Result<(), Error> {
+    let delay = std::time::Duration::from_millis(BACKOFF_BASE_MS << attempt);
+    tokio::select! {
+        () = cancel.cancelled() => Err(Error::Cancelled),
+        () = tokio::time::sleep(delay) => Ok(()),
+    }
+}
+
+/// Reintenta una operación puntual IDEMPOTENTE (`stat`/`read`/`read_link`/
+/// `node_id`) ante errores transitorios: hasta [`MAX_RETRIES`] reintentos
+/// con backoff exponencial cancelable.
 ///
-/// SOLO para operaciones idempotentes (`stat`/`read`/`read_link`). Reintentar
-/// mutación cuyo efecto pudo aplicarse antes del error (timeout post-commit
-/// en remotos M2) duplicaría efectos o perdería la entrada del journal —
-/// mapear esa ambigüedad por operación es deuda de M2 (issue vinculada).
+/// Las MUTACIONES no pasan por aquí: tras un fallo transitorio su efecto
+/// pudo haberse aplicado (timeout post-commit en remotos) y reintentarlas a
+/// ciegas duplicaría efectos o mentiría al journal — usan los wrappers
+/// `*_retrying` con desambiguación por operación (issue #17). Deuda
+/// restante con issue: el COMMIT del write y el evento `Created` del mkdir
+/// ambiguo (#32); `trash` no se reintenta (una op del OS, #32).
 async fn with_retry<'a, T: 'a>(
     cancel: &CancellationToken,
     mut op: impl FnMut() -> futures::future::BoxFuture<'a, Result<T, Error>>,
@@ -47,15 +61,193 @@ async fn with_retry<'a, T: 'a>(
     loop {
         match op().await {
             Err(e) if attempt < MAX_RETRIES && is_transient(&e) => {
-                let delay = std::time::Duration::from_millis(BACKOFF_BASE_MS << attempt);
+                backoff_or_cancel(cancel, attempt).await?;
                 attempt += 1;
-                tokio::select! {
-                    () = cancel.cancelled() => return Err(Error::Cancelled),
-                    () = tokio::time::sleep(delay) => {}
-                }
             }
             other => return other,
         }
+    }
+}
+
+/// `remove` con reintentos y desambiguación (issue #17): tras un fallo
+/// transitorio el efecto pudo aplicarse — `NotFound` en el reintento
+/// significa "ya no está", que ES el estado que el remove perseguía (lo
+/// borrase nuestra primera aplicación o no, el journal registra un único
+/// `Removed` verdadero).
+async fn remove_retrying(
+    p: &dyn Provider,
+    path: &VPath,
+    cancel: &CancellationToken,
+) -> Result<(), Error> {
+    let mut attempt = 0u32;
+    let mut ambiguous = false;
+    loop {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        match p.remove(path).await {
+            Ok(()) => return Ok(()),
+            Err(Error::NotFound) if ambiguous => return Ok(()),
+            Err(e) if attempt < MAX_RETRIES && is_transient(&e) && !cancel.is_cancelled() => {
+                ambiguous = true;
+                backoff_or_cancel(cancel, attempt).await?;
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// `mkdir` con reintentos (issue #17). La ambigüedad post-efecto NO se
+/// resuelve aquí: un `Conflict` tras fallo transitorio puede ser nuestro
+/// dir fantasma O uno preexistente — indistinguibles sin pre-stat. Se
+/// devuelve `Conflict` y la política del caller decide: merge lo absorbe
+/// ([`ensure_dir`]); `Fail`/`Ask` fallan EN SEGURO. Deuda journal
+/// documentada: si el dir era nuestro no habrá evento `Created` — el undo
+/// de M3 dejará un dir vacío de más, jamás pérdida (issue #32).
+async fn mkdir_retrying(
+    p: &dyn Provider,
+    path: &VPath,
+    cancel: &CancellationToken,
+) -> Result<(), Error> {
+    let mut attempt = 0u32;
+    loop {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        match p.mkdir(path).await {
+            Err(e) if attempt < MAX_RETRIES && is_transient(&e) && !cancel.is_cancelled() => {
+                backoff_or_cancel(cancel, attempt).await?;
+                attempt += 1;
+            }
+            other => return other,
+        }
+    }
+}
+
+/// `symlink` con reintentos y desambiguación (issue #17): un `Conflict`
+/// tras fallo transitorio se verifica leyendo el link — si su target son
+/// EXACTAMENTE nuestros bytes, es nuestra primera aplicación y cuenta como
+/// éxito (un único `Created` para el journal). Target distinto = colisión
+/// real.
+///
+/// Límites documentados: (a) un provider que CANONICALICE el target al
+/// releerlo (Windows reconstruye desde el reparse buffer; SFTP exóticos)
+/// daría falso negativo → `Conflict` fail-safe con el efecto aplicado y
+/// un `Created` perdido para el journal (misma deuda que mkdir, #32);
+/// (b) el kind no se verifica — un link preexistente con el MISMO target
+/// y otro kind pasaría por nuestro (requiere transitorio + preexistencia
+/// exacta; el target manda, jamás hay pérdida).
+async fn symlink_retrying(
+    dst: &dyn Provider,
+    link: &VPath,
+    target: &[u8],
+    kind: SymlinkKind,
+    cancel: &CancellationToken,
+) -> Result<(), Error> {
+    let mut attempt = 0u32;
+    let mut ambiguous = false;
+    loop {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        match dst.symlink(link, target, kind).await {
+            Ok(()) => return Ok(()),
+            Err(e @ Error::Conflict { .. }) if ambiguous => {
+                return match with_retry(cancel, || dst.read_link(link).boxed()).await {
+                    Ok(bytes) if bytes == target => Ok(()),
+                    Err(Error::Cancelled) => Err(Error::Cancelled),
+                    _ => Err(e),
+                };
+            }
+            Err(e) if attempt < MAX_RETRIES && is_transient(&e) && !cancel.is_cancelled() => {
+                ambiguous = true;
+                backoff_or_cancel(cancel, attempt).await?;
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// `rename` con reintentos y desambiguación (issue #17): tras un fallo
+/// transitorio, un `NotFound`/`Conflict` del reintento se verifica por
+/// IDENTIDAD (`from_id`, capturada por el caller ANTES del primer intento):
+/// destino = nodo original Y origen ausente ⇒ el rename se aplicó. Sin
+/// identidad no se adivina: surge el error transitorio original (fail-safe;
+/// el usuario reintenta contra el estado real).
+async fn rename_retrying(
+    p: &dyn Provider,
+    from: &VPath,
+    to: &VPath,
+    from_id: Option<NodeId>,
+    cancel: &CancellationToken,
+) -> Result<(), Error> {
+    let mut attempt = 0u32;
+    let mut last_transient: Option<Error> = None;
+    loop {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let err = match p.rename(from, to).await {
+            Ok(()) => return Ok(()),
+            Err(e) => e,
+        };
+        match err {
+            Error::NotFound | Error::Conflict { .. } if last_transient.is_some() => {
+                return match rename_applied(p, from, to, from_id, cancel).await? {
+                    Some(true) => Ok(()),
+                    // Verificado: NO se aplicó — el error es genuino (la
+                    // política de colisión del caller sigue funcionando).
+                    Some(false) => Err(err),
+                    // Inverificable: el transitorio original es la verdad.
+                    None => Err(last_transient.take().unwrap_or(err)),
+                };
+            }
+            e if attempt < MAX_RETRIES && is_transient(&e) && !cancel.is_cancelled() => {
+                last_transient = Some(e);
+                backoff_or_cancel(cancel, attempt).await?;
+                attempt += 1;
+            }
+            e => return Err(e),
+        }
+    }
+}
+
+/// ¿Se aplicó el rename de verdad? `Some(true)` = el destino ES el nodo
+/// original y el origen ya no existe. `Some(false)` = verificado que NO
+/// (destino es OTRO nodo con el origen aún vivo, o el "destino" es un
+/// hardlink del origen — id igual pero origen presente: eso no es un
+/// rename aplicado). `None` = inverificable (sin identidad).
+async fn rename_applied(
+    p: &dyn Provider,
+    from: &VPath,
+    to: &VPath,
+    from_id: Option<NodeId>,
+    cancel: &CancellationToken,
+) -> Result<Option<bool>, Error> {
+    let Some(expected) = from_id else {
+        return Ok(None);
+    };
+    let to_id = match with_retry(cancel, || p.node_id(to, FollowLinks::No).boxed()).await {
+        Ok(Some(id)) => id,
+        // Sin identidad del destino (o destino ausente): inverificable.
+        Ok(None) | Err(Error::NotFound) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let from_gone = match with_retry(cancel, || p.stat(from).boxed()).await {
+        Err(Error::NotFound) => true,
+        Ok(_) => false,
+        Err(e) => return Err(e),
+    };
+    match (to_id == expected, from_gone) {
+        (true, true) => Ok(Some(true)),
+        // Origen vivo: no hubo rename — o el destino es OTRO nodo
+        // (conflicto real) o es un HARDLINK del origen (id igual, pero un
+        // rename aplicado habría hecho desaparecer el dirent de origen).
+        (_, false) => Ok(Some(false)),
+        // Origen desaparecido y destino ajeno: estado irreconocible.
+        (false, true) => Ok(None),
     }
 }
 
@@ -90,20 +282,73 @@ fn rename_auto_candidate(name: &[u8], n: u32) -> Vec<u8> {
     out
 }
 
-/// ¿`from` y `to` apuntan con toda probabilidad al MISMO nodo del provider?
-/// Sobrescribir algo consigo mismo lo DESTRUYE (remove + read → NotFound):
-/// hay que rechazarlo antes. Byte-igual siempre; en destino case-insensitive,
-/// también la variante que solo difiere en caja (lowercase Unicode de std).
-/// La identidad REAL ((dev,ino)/FileId) llega en M2 — hasta entonces este
-/// guard es deliberadamente conservador y NO cubre pares de caja que el FS
-/// pliegue de forma más ancha que `to_lowercase`.
-fn same_node_likely(from: &VPath, to: &VPath, dst: &dyn Provider) -> bool {
+/// ¿`from` y `to` apuntan al MISMO nodo del provider? Sobrescribir algo
+/// consigo mismo lo DESTRUYE (remove + read → NotFound): hay que
+/// rechazarlo antes.
+///
+/// Con identidad real ([`Provider::node_id`], issue #16) el veredicto es
+/// DEFINITIVO en ambos sentidos: ids iguales = mismo nodo (aunque el FS
+/// pliegue caja/normalización más ancho que cualquier heurística); ids
+/// distintos = nodos distintos (aunque los nombres solo difieran en caja —
+/// el caso NTFS case-sensitive bajo WSL, que la heurística bloqueaba mal).
+/// Sin identidad (`Ok(None)`), degrada a la heurística conservadora de M1.
+/// Un error real de `node_id` aborta (fail-safe: ante la duda, nada
+/// destructivo).
+///
+/// `follow_src`: bajo `SymlinkPolicy::Follow` lo que se copia es el
+/// TARGET del origen — copiar `ln → f` con `ln` apuntando a `f` es
+/// sobrescribir `f` consigo mismo (el remove del Overwrite lo destruiría
+/// antes de leerlo a través del link): la identidad del origen se compara
+/// RESUELTA (hallazgo del encoding-auditor, fase 1 M2).
+async fn same_node(
+    from: &VPath,
+    to: &VPath,
+    dst: &dyn Provider,
+    follow_src: FollowLinks,
+    cancel: &CancellationToken,
+) -> Result<bool, Error> {
     if from == to {
-        return true;
+        return Ok(true);
     }
     if from.scheme() != to.scheme() || from.authority() != to.authority() {
-        return false;
+        return Ok(false);
     }
+    let from_id = match with_retry(cancel, || dst.node_id(from, follow_src).boxed()).await {
+        Ok(id) => id,
+        // Sin origen (o link roto): no hay autodestrucción posible; su
+        // stat/read posterior dará el error honesto.
+        Err(Error::NotFound) => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    if let Some(a) = from_id {
+        match with_retry(cancel, || dst.node_id(to, FollowLinks::No).boxed()).await {
+            Ok(Some(b)) => return Ok(a == b),
+            // Destino libre: nada que destruir.
+            Err(Error::NotFound) => return Ok(false),
+            // Identidad a medias (volumen mixto): cae a la heurística.
+            Ok(None) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(same_node_heuristic(from, to, dst))
+}
+
+/// El modo de identidad del ORIGEN según la política de symlinks: bajo
+/// `Follow` se copia el target, así que la identidad relevante es la
+/// resuelta.
+fn follow_links_for(opts: TransferOptions) -> FollowLinks {
+    if opts.symlinks == SymlinkPolicy::Follow {
+        FollowLinks::Yes
+    } else {
+        FollowLinks::No
+    }
+}
+
+/// Heurística conservadora de M1 para providers sin identidad: byte-igual
+/// siempre; en destino case-insensitive, también la variante que solo
+/// difiere en caja (lowercase Unicode de std). NO cubre pliegues más
+/// anchos del FS — por eso la identidad real tiene prioridad.
+fn same_node_heuristic(from: &VPath, to: &VPath, dst: &dyn Provider) -> bool {
     if dst
         .capabilities()
         .flags
@@ -156,12 +401,12 @@ async fn resolve_collision(
         }),
         CollisionPolicy::Skip => Ok(None),
         CollisionPolicy::Overwrite => {
-            overwrite_existing(dst, to, &existing, observer).await?;
+            overwrite_existing(dst, to, &existing, observer, ctx).await?;
             Ok(Some(to.clone()))
         }
         CollisionPolicy::Newer => match (src_entry.mtime_ms, existing.mtime_ms) {
             (Some(s), Some(d)) if s > d => {
-                overwrite_existing(dst, to, &existing, observer).await?;
+                overwrite_existing(dst, to, &existing, observer, ctx).await?;
                 Ok(Some(to.clone()))
             }
             (Some(_), Some(_)) => Ok(None),
@@ -200,13 +445,14 @@ async fn overwrite_existing(
     to: &VPath,
     existing: &Entry,
     observer: &Arc<dyn MutationObserver>,
+    ctx: &TaskCtx,
 ) -> Result<(), Error> {
     if existing.kind == EntryKind::Dir {
         return Err(Error::Conflict {
             conflict: ConflictKind::TypeMismatch,
         });
     }
-    dst.remove(to).await?;
+    remove_retrying(dst, to, &ctx.cancel).await?;
     observer.on_mutation(&Mutation::Removed(to));
     Ok(())
 }
@@ -220,7 +466,7 @@ async fn ensure_dir(
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
-    match dst.mkdir(to).await {
+    match mkdir_retrying(dst, to, &ctx.cancel).await {
         Ok(()) => {
             observer.on_mutation(&Mutation::Created(to));
             Ok(())
@@ -279,10 +525,16 @@ async fn copy_symlink_leaf(
             else {
                 return Ok(Placed::Skipped);
             };
-            // Kind `File`: el único OS donde importa (Windows) no declara
-            // SYMLINKS en M1 — su provider responde Unsupported antes.
-            dst.symlink(&target, &target_bytes, SymlinkKind::File)
-                .await?;
+            // `Unknown` (issue #18): el kind lo resuelve el provider DESTINO
+            // best-effort contra su propio árbol; unix lo ignora gratis.
+            symlink_retrying(
+                dst,
+                &target,
+                &target_bytes,
+                SymlinkKind::Unknown,
+                &ctx.cancel,
+            )
+            .await?;
             observer.on_mutation(&Mutation::Created(&target));
             Ok(Placed::Done)
         }
@@ -338,7 +590,10 @@ pub(crate) async fn copy_task(
     }
     // Copiar un dir DENTRO de sí mismo produciría una copia anidada absurda;
     // copiar algo SOBRE SÍ MISMO con Overwrite lo destruiría (hallazgo B1).
-    if Arc::ptr_eq(&src, &dst) && (is_descendant(&to, &from) || same_node_likely(&from, &to, &*dst))
+    // Bajo Follow, el "sí mismo" es el TARGET resuelto del origen.
+    if Arc::ptr_eq(&src, &dst)
+        && (is_descendant(&to, &from)
+            || same_node(&from, &to, &*dst, follow_links_for(opts), &ctx.cancel).await?)
     {
         return Err(Error::InvalidPath);
     }
@@ -355,6 +610,16 @@ pub(crate) async fn copy_task(
             Ok(())
         }
         EntryKind::Symlink => {
+            // Dir-symlink raíz con Follow: se copia el ÁRBOL del target
+            // como dir real (issue #19), no como hoja.
+            if opts.symlinks == SymlinkPolicy::Follow
+                && probe_symlink_target(&*src, &from, &ctx.cancel).await? == TargetKind::Dir
+            {
+                let plan = walk_following(&*src, &from, true, &ctx.cancel).await?;
+                return copy_tree(&src, &dst, &from, &to, &plan, opts, &observer, ctx)
+                    .await
+                    .map(|_skipped| ());
+            }
             ctx.progress.update(|p| {
                 p.entries_total = Some(1);
                 p.current = Some(from.clone());
@@ -364,8 +629,8 @@ pub(crate) async fn copy_task(
             Ok(())
         }
         EntryKind::Dir => {
-            let entries = walk(&*src, &from, &ctx.cancel).await?;
-            copy_tree(&src, &dst, &from, &to, &entries, opts, &observer, ctx)
+            let plan = plan_for(&*src, &from, opts, &ctx.cancel).await?;
+            copy_tree(&src, &dst, &from, &to, &plan, opts, &observer, ctx)
                 .await
                 .map(|_skipped| ())
         }
@@ -373,27 +638,28 @@ pub(crate) async fn copy_task(
     }
 }
 
-/// Copia el árbol `from` → `to` según un plan de entradas YA walkeado
-/// (el walk es del caller: el move lo reusa para el delete — issue #9).
-/// Devuelve los paths de ORIGEN saltados por política (el move no debe
-/// borrarlos).
+/// Copia el árbol `from` → `to` según un plan YA walkeado (el walk es del
+/// caller: el move lo reusa para el delete — issue #9). La copia ignora la
+/// provenance (un dir sintético de un link expandido se crea como dir
+/// real, issue #19); la provenance manda en el DELETE del move. Devuelve
+/// los paths de ORIGEN saltados por política (el move no debe borrarlos).
 #[allow(clippy::too_many_arguments)] // función interna del módulo, no API
 async fn copy_tree(
     src: &Arc<dyn Provider>,
     dst: &Arc<dyn Provider>,
     from: &VPath,
     to: &VPath,
-    entries: &[Entry],
+    plan: &[PlanEntry],
     opts: TransferOptions,
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<Vec<VPath>, Error> {
-    let bytes_total: u64 = entries
+    let bytes_total: u64 = plan
         .iter()
-        .filter(|e| e.kind == EntryKind::File)
-        .filter_map(|e| e.size)
+        .filter(|pe| pe.entry.kind == EntryKind::File)
+        .filter_map(|pe| pe.entry.size)
         .sum();
-    let total = entries.len() as u64 + 1; // +1 por la raíz
+    let total = plan.len() as u64 + 1; // +1 por la raíz
     ctx.progress.update(|p| {
         p.bytes_total = Some(bytes_total);
         p.entries_total = Some(total);
@@ -406,10 +672,11 @@ async fn copy_tree(
     });
 
     let mut skipped: Vec<VPath> = Vec::new();
-    for entry in entries {
+    for pe in plan {
         if ctx.cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
+        let entry = &pe.entry;
         let target = rebase(&entry.path, from, to)?;
         ctx.progress
             .update(|p| p.current = Some(entry.path.clone()));
@@ -616,7 +883,16 @@ async fn rename_with_policy(
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<RenameOutcome, Error> {
-    let first = src.rename(from, to).await;
+    // Identidad del origen ANTES del primer intento: es lo único que puede
+    // desambiguar un rename cuyo efecto se aplicó tras un timeout (#17).
+    // Best-effort puro — la identidad solo VERIFICA: cualquier error aquí
+    // degrada a None (el rename sigue funcionando como en M1 y dará su
+    // propio error si el problema es real).
+    let from_id = with_retry(&ctx.cancel, || src.node_id(from, FollowLinks::No).boxed())
+        .await
+        .ok()
+        .flatten();
+    let first = rename_retrying(src, from, to, from_id, &ctx.cancel).await;
     let conflict = match first {
         Ok(()) => {
             observer.on_mutation(&Mutation::Renamed { from, to });
@@ -632,8 +908,8 @@ async fn rename_with_policy(
             let src_e = with_retry(&ctx.cancel, || src.stat(from).boxed()).await?;
             let existing = with_retry(&ctx.cancel, || src.stat(to).boxed()).await?;
             check_overwrite_kinds(&src_e, &existing)?;
-            overwrite_existing(src, to, &existing, observer).await?;
-            src.rename(from, to).await?;
+            overwrite_existing(src, to, &existing, observer, ctx).await?;
+            rename_retrying(src, from, to, from_id, &ctx.cancel).await?;
             observer.on_mutation(&Mutation::Renamed { from, to });
             Ok(RenameOutcome::Renamed)
         }
@@ -643,8 +919,8 @@ async fn rename_with_policy(
             match (src_e.mtime_ms, existing.mtime_ms) {
                 (Some(s), Some(d)) if s > d => {
                     check_overwrite_kinds(&src_e, &existing)?;
-                    overwrite_existing(src, to, &existing, observer).await?;
-                    src.rename(from, to).await?;
+                    overwrite_existing(src, to, &existing, observer, ctx).await?;
+                    rename_retrying(src, from, to, from_id, &ctx.cancel).await?;
                     observer.on_mutation(&Mutation::Renamed { from, to });
                     Ok(RenameOutcome::Renamed)
                 }
@@ -662,7 +938,7 @@ async fn rename_with_policy(
                 let seg = Segment::new(rename_auto_candidate(&name, n))
                     .map_err(|_| Error::InvalidPath)?;
                 let cand = to.with_file_name(seg).ok_or(Error::InvalidPath)?;
-                match src.rename(from, &cand).await {
+                match rename_retrying(src, from, &cand, from_id, &ctx.cancel).await {
                     Ok(()) => {
                         observer.on_mutation(&Mutation::Renamed { from, to: &cand });
                         return Ok(RenameOutcome::Renamed);
@@ -688,13 +964,29 @@ async fn move_by_copy(
     observer: Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
-    if Arc::ptr_eq(&src, &dst) && (is_descendant(&to, &from) || same_node_likely(&from, &to, &*dst))
+    if Arc::ptr_eq(&src, &dst)
+        && (is_descendant(&to, &from)
+            || same_node(&from, &to, &*dst, follow_links_for(opts), &ctx.cancel).await?)
     {
         return Err(Error::InvalidPath);
     }
     let src_entry = with_retry(&ctx.cancel, || src.stat(&from).boxed()).await?;
-    match src_entry.kind {
-        EntryKind::File | EntryKind::Symlink => {
+    // ¿Se mueve como ÁRBOL? Un dir siempre; un dir-symlink raíz solo bajo
+    // Follow (issue #19): su contenido se expande en el destino y en el
+    // origen se borra EL LINK.
+    let tree_plan = match src_entry.kind {
+        EntryKind::Dir => Some(plan_for(&*src, &from, opts, &ctx.cancel).await?),
+        EntryKind::Symlink
+            if opts.symlinks == SymlinkPolicy::Follow
+                && probe_symlink_target(&*src, &from, &ctx.cancel).await? == TargetKind::Dir =>
+        {
+            Some(walk_following(&*src, &from, true, &ctx.cancel).await?)
+        }
+        EntryKind::File | EntryKind::Symlink => None,
+        EntryKind::Other => return Err(Error::Unsupported),
+    };
+    match tree_plan {
+        None => {
             ctx.progress.update(|p| {
                 p.bytes_total = src_entry.size;
                 // 2 pasos: copiar + borrar el origen.
@@ -715,49 +1007,63 @@ async fn move_by_copy(
             if ctx.cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
-            src.remove(&from).await?;
+            remove_retrying(&*src, &from, &ctx.cancel).await?;
             observer.on_mutation(&Mutation::Removed(&from));
             ctx.progress.update(|p| p.entries_done = 2);
             Ok(())
         }
-        EntryKind::Dir => {
-            let entries = walk(&*src, &from, &ctx.cancel).await?;
-            let skipped = copy_tree(&src, &dst, &from, &to, &entries, opts, &observer, ctx).await?;
+        Some(plan) => {
+            let skipped = copy_tree(&src, &dst, &from, &to, &plan, opts, &observer, ctx).await?;
             // Fase delete: el total crece con los pasos de borrado (la barra
             // sigue monótona; copy_tree ya contó los suyos).
             ctx.progress.update(|p| {
-                p.entries_total = p.entries_total.map(|t| t + entries.len() as u64 + 1);
+                p.entries_total = p.entries_total.map(|t| t + plan.len() as u64 + 1);
             });
             // Borra EXACTAMENTE lo copiado, en post-order. Lo saltado (y sus
             // ancestros) y lo aparecido tras el walk sobreviven: ese remove
-            // ni se intenta (skip) o falla con Conflict (aparecido).
-            for e in entries.iter().rev() {
+            // ni se intenta (skip) o falla con Conflict (aparecido). La
+            // provenance manda (issue #19): lo visto A TRAVÉS de un link es
+            // del TARGET y jamás se borra; del link expandido se borra EL
+            // LINK. Esquina DAG documentada: una hoja alcanzable por dos
+            // caminos, saltada en uno y movida por el otro, termina solo en
+            // el destino (sin pérdida: el contenido vive allí).
+            for pe in plan.iter().rev() {
                 if ctx.cancel.is_cancelled() {
                     return Err(Error::Cancelled);
                 }
-                let keep = skipped.contains(&e.path)
-                    || (e.kind == EntryKind::Dir
-                        && skipped.iter().any(|s| is_descendant(s, &e.path)));
+                let keep = match pe.provenance {
+                    Provenance::ViaLink => true,
+                    Provenance::LinkRoot => {
+                        skipped.iter().any(|s| is_descendant(s, &pe.entry.path))
+                    }
+                    Provenance::Real => {
+                        skipped.contains(&pe.entry.path)
+                            || (pe.entry.kind == EntryKind::Dir
+                                && skipped.iter().any(|s| is_descendant(s, &pe.entry.path)))
+                    }
+                };
                 if keep {
                     ctx.progress.update(|p| p.entries_done += 1);
                     continue;
                 }
-                ctx.progress.update(|p| p.current = Some(e.path.clone()));
-                src.remove(&e.path).await?;
-                observer.on_mutation(&Mutation::Removed(&e.path));
+                ctx.progress
+                    .update(|p| p.current = Some(pe.entry.path.clone()));
+                remove_retrying(&*src, &pe.entry.path, &ctx.cancel).await?;
+                observer.on_mutation(&Mutation::Removed(&pe.entry.path));
                 ctx.progress.update(|p| p.entries_done += 1);
             }
             if ctx.cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
             if skipped.is_empty() {
-                src.remove(&from).await?;
+                // Raíz: para un dir, el dir ya vacío; para un dir-symlink
+                // raíz bajo Follow, EL LINK (remove jamás sigue links).
+                remove_retrying(&*src, &from, &ctx.cancel).await?;
                 observer.on_mutation(&Mutation::Removed(&from));
             }
             ctx.progress.update(|p| p.entries_done += 1);
             Ok(())
         }
-        EntryKind::Other => Err(Error::Unsupported),
     }
 }
 
@@ -787,7 +1093,7 @@ pub(crate) async fn delete_task(
         ctx.progress.update(|p| p.entries_done = 1);
         return Ok(());
     }
-    let entry = provider.stat(&path).await?;
+    let entry = with_retry(&ctx.cancel, || provider.stat(&path).boxed()).await?;
     if entry.kind == EntryKind::Dir {
         let entries = walk(&*provider, &path, &ctx.cancel).await?;
         ctx.progress
@@ -799,7 +1105,7 @@ pub(crate) async fn delete_task(
                 return Err(Error::Cancelled);
             }
             ctx.progress.update(|p| p.current = Some(e.path.clone()));
-            provider.remove(&e.path).await?;
+            remove_retrying(&*provider, &e.path, &ctx.cancel).await?;
             observer.on_mutation(&Mutation::Removed(&e.path));
             ctx.progress.update(|p| p.entries_done += 1);
         }
@@ -809,7 +1115,7 @@ pub(crate) async fn delete_task(
     if ctx.cancel.is_cancelled() {
         return Err(Error::Cancelled);
     }
-    provider.remove(&path).await?;
+    remove_retrying(&*provider, &path, &ctx.cancel).await?;
     observer.on_mutation(&Mutation::Removed(&path));
     ctx.progress.update(|p| p.entries_done += 1);
     Ok(())
@@ -840,6 +1146,206 @@ async fn walk(
                 pending.push(entry.path.clone());
             }
             out.push(entry);
+        }
+    }
+    Ok(out)
+}
+
+/// Entrada del plan de copia: la provenance decide cómo la trata el
+/// DELETE de un move (la copia la ignora — issue #19).
+#[derive(Debug)]
+struct PlanEntry {
+    entry: Entry,
+    provenance: Provenance,
+}
+
+/// Origen de una entrada del plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Provenance {
+    /// Dirent real del árbol origen: se borra en un move.
+    Real,
+    /// Dir-symlink REAL expandido por Follow: en un move se borra EL LINK
+    /// (un solo remove), jamás su contenido.
+    LinkRoot,
+    /// Visto A TRAVÉS de un link expandido: pertenece al TARGET del link;
+    /// un move jamás lo borra (el `LinkRoot` se lleva el link).
+    ViaLink,
+}
+
+/// ¿A qué apunta un symlink?
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TargetKind {
+    /// Archivo — o roto: la hoja Follow dará su error honesto al copiar.
+    File,
+    /// Directorio.
+    Dir,
+}
+
+/// Sondea el tipo del target de un symlink SIN abrir el nodo: `list()`
+/// valida con metadata que sigue el link (Ok = dir; `TypeMismatch` =
+/// archivo u otro; `NotFound` = roto — la hoja Follow dará su error
+/// honesto al copiar). Jamás `read()`: abrir un symlink→FIFO bloquearía
+/// el hilo blocking sin respetar la cancelación (hallazgo M3 del
+/// rust-reviewer). Soltar el stream cancela el listado.
+async fn probe_symlink_target(
+    provider: &dyn Provider,
+    p: &VPath,
+    cancel: &CancellationToken,
+) -> Result<TargetKind, Error> {
+    match with_retry(cancel, || provider.list(p).boxed()).await {
+        Ok(probe) => {
+            drop(probe);
+            Ok(TargetKind::Dir)
+        }
+        // TypeMismatch = archivo/otro; NotFound = roto → en ambos casos la
+        // hoja Follow decide (y dará su error honesto si aplica).
+        Err(
+            Error::Conflict {
+                conflict: ConflictKind::TypeMismatch,
+            }
+            | Error::NotFound,
+        ) => Ok(TargetKind::File),
+        Err(e) => Err(e),
+    }
+}
+
+/// Plan de un árbol: walk plano (todo `Real`) salvo bajo Follow, donde los
+/// dir-symlinks se expanden con detección de ciclos (issue #19).
+async fn plan_for(
+    provider: &dyn Provider,
+    root: &VPath,
+    opts: TransferOptions,
+    cancel: &CancellationToken,
+) -> Result<Vec<PlanEntry>, Error> {
+    if opts.symlinks == SymlinkPolicy::Follow {
+        walk_following(provider, root, false, cancel).await
+    } else {
+        Ok(walk(provider, root, cancel)
+            .await?
+            .into_iter()
+            .map(|entry| PlanEntry {
+                entry,
+                provenance: Provenance::Real,
+            })
+            .collect())
+    }
+}
+
+/// Un directorio pendiente del walk con Follow: su path, la cadena de
+/// identidades de sus ancestros (ciclos, spec §17.9) y si se llegó a él a
+/// través de un link expandido.
+struct DirFrame {
+    dir: VPath,
+    ancestors: Vec<NodeId>,
+    via_link: bool,
+}
+
+/// Walk con expansión de dir-symlinks (`SymlinkPolicy::Follow`, issue
+/// #19): cada symlink se sondea; los que apuntan a dir se convierten en
+/// dirs sintéticos y se desciende A TRAVÉS del link. Un link cuyo target
+/// resuelto ya está en la cadena de ancestros es un CICLO → `InvalidPath`.
+/// Expandir exige identidad ([`Provider::node_id`]): sin ella,
+/// `Unsupported` — exactamente el comportamiento M1 (los árboles sin
+/// dir-symlinks no la necesitan y siguen funcionando).
+///
+/// `root_is_link` = la raíz misma es un dir-symlink a expandir (todo el
+/// contenido queda `ViaLink` y el move borra solo el link raíz).
+async fn walk_following(
+    provider: &dyn Provider,
+    root: &VPath,
+    root_is_link: bool,
+    cancel: &CancellationToken,
+) -> Result<Vec<PlanEntry>, Error> {
+    // La identidad de la raíz abre la cadena de ancestros. Para una raíz
+    // link es OBLIGATORIA (expandir sin visited set sería ruleta rusa);
+    // para un dir normal, best-effort (sin ids solo fallará si aparece un
+    // dir-symlink que expandir).
+    let root_id =
+        match with_retry(cancel, || provider.node_id(root, FollowLinks::Yes).boxed()).await? {
+            Some(id) => Some(id),
+            None if root_is_link => return Err(Error::Unsupported),
+            None => None,
+        };
+    let mut out: Vec<PlanEntry> = Vec::new();
+    let mut pending = vec![DirFrame {
+        dir: root.clone(),
+        ancestors: root_id.into_iter().collect(),
+        via_link: root_is_link,
+    }];
+    while let Some(frame) = pending.pop() {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let mut stream = provider.list(&frame.dir).await?;
+        while let Some(item) = stream.next().await {
+            // Inner loop de verdad (regla 3), como en walk().
+            if cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            let entry = item?;
+            let provenance = if frame.via_link {
+                Provenance::ViaLink
+            } else {
+                Provenance::Real
+            };
+            match entry.kind {
+                EntryKind::Dir => {
+                    let id = with_retry(cancel, || {
+                        provider.node_id(&entry.path, FollowLinks::Yes).boxed()
+                    })
+                    .await?;
+                    let mut ancestors = frame.ancestors.clone();
+                    ancestors.extend(id);
+                    pending.push(DirFrame {
+                        dir: entry.path.clone(),
+                        ancestors,
+                        via_link: frame.via_link,
+                    });
+                    out.push(PlanEntry { entry, provenance });
+                }
+                EntryKind::Symlink => {
+                    match probe_symlink_target(provider, &entry.path, cancel).await? {
+                        TargetKind::File => out.push(PlanEntry { entry, provenance }),
+                        TargetKind::Dir => {
+                            let Some(id) = with_retry(cancel, || {
+                                provider.node_id(&entry.path, FollowLinks::Yes).boxed()
+                            })
+                            .await?
+                            else {
+                                return Err(Error::Unsupported);
+                            };
+                            if frame.ancestors.contains(&id) {
+                                // Ciclo: seguirlo copiaría infinito.
+                                return Err(Error::InvalidPath);
+                            }
+                            let mut ancestors = frame.ancestors.clone();
+                            ancestors.push(id);
+                            pending.push(DirFrame {
+                                dir: entry.path.clone(),
+                                ancestors,
+                                via_link: true,
+                            });
+                            // Dir SINTÉTICO: la copia crea un dir real en
+                            // el destino; el mtime del link se conserva
+                            // como referencia.
+                            out.push(PlanEntry {
+                                entry: Entry {
+                                    path: entry.path,
+                                    kind: EntryKind::Dir,
+                                    size: None,
+                                    mtime_ms: entry.mtime_ms,
+                                },
+                                provenance: if frame.via_link {
+                                    Provenance::ViaLink
+                                } else {
+                                    Provenance::LinkRoot
+                                },
+                            });
+                        }
+                    }
+                }
+                EntryKind::File | EntryKind::Other => out.push(PlanEntry { entry, provenance }),
+            }
         }
     }
     Ok(out)
@@ -883,6 +1389,52 @@ fn is_descendant(child: &VPath, ancestor: &VPath) -> bool {
 #[cfg(test)]
 mod tests {
     use super::rename_auto_candidate;
+
+    /// Rama NEGATIVA de la desambiguación de symlink (encoding-auditor,
+    /// fixture 3): tras un transitorio, el Conflict con un link AJENO
+    /// (target distinto) sigue siendo Conflict y el link ajeno queda
+    /// intacto. Y la rama positiva desambigua igual con bytes no-UTF8.
+    #[tokio::test]
+    async fn symlink_retrying_no_adopta_links_ajenos_y_desambigua_bytes_crudos() {
+        use futures::StreamExt as _;
+        use norte_proto::Error;
+        use norte_testkit::MemProvider;
+        use norte_vfs::{Provider, SymlinkKind};
+        use tokio_util::sync::CancellationToken;
+
+        let mem = MemProvider::new();
+        let root = MemProvider::root();
+        let seg = |b: &[u8]| norte_proto::Segment::new(b.to_vec()).expect("segmento válido");
+        let cancel = CancellationToken::new();
+
+        // Negativa: link preexistente con OTRO target + transitorio previo.
+        let ajeno = root.join(seg(b"ajeno"));
+        mem.symlink(&ajeno, b"otro", SymlinkKind::File)
+            .await
+            .expect("symlink previo");
+        mem.faults().unavailable_for_next(1);
+        let res =
+            super::symlink_retrying(&mem, &ajeno, b"nuestro", SymlinkKind::File, &cancel).await;
+        assert!(
+            matches!(res, Err(Error::Conflict { .. })),
+            "un link ajeno jamás se adopta: {res:?}"
+        );
+        assert_eq!(
+            mem.read_link(&ajeno).await.expect("intacto"),
+            b"otro",
+            "el link ajeno no se toca"
+        );
+
+        // Positiva con bytes CRUDOS no-UTF8 (regla 1: comparación por bytes).
+        let crudo = root.join(seg(b"crudo"));
+        mem.faults().ambiguous_mutations(1);
+        super::symlink_retrying(&mem, &crudo, b"caf\xE9", SymlinkKind::File, &cancel)
+            .await
+            .expect("efecto aplicado + verificado por bytes = ok");
+        assert_eq!(mem.read_link(&crudo).await.expect("existe"), b"caf\xE9");
+        // El stream de list sigue vivo tras todo esto (sanidad).
+        drop(mem.list(&root).await.expect("list ok").next().await);
+    }
 
     #[test]
     fn rename_auto_respeta_la_extension() {

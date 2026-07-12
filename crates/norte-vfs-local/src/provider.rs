@@ -363,6 +363,123 @@ fn probe_same_file(_upper_md: &std::fs::Metadata, _lower_md: &std::fs::Metadata)
     true
 }
 
+/// Identidad real del nodo en unix: `(dev, ino)` de lstat/stat según
+/// `follow`. Es la misma identidad que ya usan la sonda de caja y el
+/// case-rename (`same_node`) — aquí se expone por el trait (issue #16).
+#[cfg(unix)]
+fn node_id_native(
+    p: &Path,
+    follow: norte_vfs::FollowLinks,
+) -> Result<Option<norte_vfs::NodeId>, Error> {
+    use std::os::unix::fs::MetadataExt;
+    let md = match follow {
+        norte_vfs::FollowLinks::No => std::fs::symlink_metadata(p),
+        norte_vfs::FollowLinks::Yes => std::fs::metadata(p),
+    }
+    .map_err(|e| map_io(&e))?;
+    Ok(Some(norte_vfs::NodeId {
+        volume: md.dev(),
+        index: u128::from(md.ino()),
+    }))
+}
+
+/// Identidad real del nodo en Windows: `FILE_ID_INFO` (serial de volumen
+/// u64 + FileId de 128 bits, cubre ReFS) vía `GetFileInformationByHandleEx`.
+/// Si el volumen no lo soporta (FAT32, SMB antiguo), degrada a `Ok(None)` —
+/// "no hay identidad estable aquí" es la respuesta honesta del contrato,
+/// jamás un id inventado.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn node_id_native(
+    p: &Path,
+    follow: norte_vfs::FollowLinks,
+) -> Result<Option<norte_vfs::NodeId>, Error> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_128, FILE_ID_INFO,
+        FileIdInfo, GetFileInformationByHandleEx,
+    };
+
+    // access_mode 0 = solo consultar metadatos (ni read ni write: funciona
+    // incluso sin permiso de lectura). BACKUP_SEMANTICS es obligatorio para
+    // abrir directorios; OPEN_REPARSE_POINT da la identidad del PROPIO link
+    // (semántica lstat) cuando follow = No.
+    let mut opts = std::fs::OpenOptions::new();
+    opts.access_mode(0);
+    let mut flags = FILE_FLAG_BACKUP_SEMANTICS;
+    if follow == norte_vfs::FollowLinks::No {
+        flags |= FILE_FLAG_OPEN_REPARSE_POINT;
+    }
+    opts.custom_flags(flags);
+    let file = opts.open(p).map_err(|e| map_io(&e))?;
+
+    let mut info = FILE_ID_INFO {
+        VolumeSerialNumber: 0,
+        FileId: FILE_ID_128 {
+            Identifier: [0; 16],
+        },
+    };
+    // SAFETY: el handle es válido y vive durante toda la llamada (file no se
+    // suelta antes); el buffer es exactamente un FILE_ID_INFO y el tamaño
+    // pasado es size_of del mismo tipo. Contrato verificado en el test
+    // `node_id_identifica_el_mismo_archivo` (y la suite contractual de
+    // node_id) sobre el FS real de la CI de Windows.
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle().cast(),
+            FileIdInfo,
+            std::ptr::from_mut(&mut info).cast(),
+            u32::try_from(std::mem::size_of::<FILE_ID_INFO>()).expect("tamaño fijo pequeño"),
+        )
+    };
+    if ok == 0 {
+        // El volumen no sabe dar FileId de 128 bits: sin identidad estable.
+        return Ok(None);
+    }
+    Ok(Some(norte_vfs::NodeId {
+        volume: info.VolumeSerialNumber,
+        index: u128::from_le_bytes(info.FileId.Identifier),
+    }))
+}
+
+/// Kind efectivo de un symlink a crear cuando el caller pasó `Unknown`
+/// (issue #18): resuelve el target RELATIVO AL PADRE del link en este FS,
+/// siguiendo la cadena (metadata). Target roto o indeterminable degrada a
+/// `File` — el mismo default que un `mklink` sin `/D`. Solo Windows lo
+/// consulta (unix ignora el kind); se compila en todos los OS para poder
+/// testearlo en cualquier CI.
+#[cfg_attr(unix, allow(dead_code))]
+fn effective_symlink_kind(
+    link: &Path,
+    target: &std::ffi::OsStr,
+    kind: norte_vfs::SymlinkKind,
+) -> norte_vfs::SymlinkKind {
+    match kind {
+        norte_vfs::SymlinkKind::Unknown => {
+            let resolved = match link.parent() {
+                // join con target absoluto LO respeta (semántica de Path).
+                Some(parent) => parent.join(target),
+                None => std::path::PathBuf::from(target),
+            };
+            // `link` llega verbatim (`\\?\`) en Windows y bajo verbatim el
+            // kernel NO pliega `..` ni convierte `/`: normalizar léxicamente
+            // (GetFullPathNameW vía `absolute`) y re-aplicar verbatim antes
+            // de sondear, o un target relativo con `..` degradaría a File
+            // aunque apunte a un dir (hallazgo del encoding-auditor).
+            // Target drive-relative (`C:foo`): irresoluble sin el CWD de
+            // aquella unidad — degrada a File, documentado.
+            let resolved =
+                crate::native_path::verbatim(std::path::absolute(&resolved).unwrap_or(resolved));
+            match std::fs::metadata(&resolved) {
+                Ok(md) if md.is_dir() => norte_vfs::SymlinkKind::Dir,
+                _ => norte_vfs::SymlinkKind::File,
+            }
+        }
+        explicit => explicit,
+    }
+}
+
 /// Crea el symlink nativo. Pre-chequeo de colisión no hace falta: el
 /// syscall falla con EEXIST atómicamente.
 #[cfg(unix)]
@@ -392,9 +509,12 @@ fn make_symlink(
     link: &Path,
     kind: norte_vfs::SymlinkKind,
 ) -> Result<(), Error> {
-    let res = match kind {
+    let res = match effective_symlink_kind(link, target, kind) {
         norte_vfs::SymlinkKind::Dir => std::os::windows::fs::symlink_dir(target, link),
-        norte_vfs::SymlinkKind::File => std::os::windows::fs::symlink_file(target, link),
+        // `Unknown` ya quedó resuelto arriba; el brazo existe por exhaustividad.
+        norte_vfs::SymlinkKind::File | norte_vfs::SymlinkKind::Unknown => {
+            std::os::windows::fs::symlink_file(target, link)
+        }
     };
     res.map_err(|e| {
         if e.kind() == std::io::ErrorKind::AlreadyExists {
@@ -474,11 +594,13 @@ impl Provider for LocalProvider {
         self.ensure_caps().await;
         let native = self.native(p)?;
         // Validación previa síncrona: NotFound / no-dir se devuelven en el
-        // Result, no como primer item del stream.
+        // Result, no como primer item del stream. `metadata` SIGUE symlinks
+        // (semántica opendir): listar un dir-symlink lista su target, y un
+        // link roto es NotFound — igual que el FS real por debajo.
         {
             let probe = native.clone();
             blocking(move || {
-                let md = std::fs::symlink_metadata(&probe).map_err(|e| map_io(&e))?;
+                let md = std::fs::metadata(&probe).map_err(|e| map_io(&e))?;
                 if md.is_dir() {
                     Ok(())
                 } else {
@@ -528,11 +650,21 @@ impl Provider for LocalProvider {
         self.ensure_caps().await;
         let native = self.native(p)?;
         let file = blocking(move || {
-            let md = std::fs::symlink_metadata(&native).map_err(|e| map_io(&e))?;
+            // `metadata` SIGUE symlinks (semántica open): leer un
+            // dir-symlink es TypeMismatch — el sondeo del copy engine
+            // distingue así archivo/dir — y un link roto es NotFound.
+            let md = std::fs::metadata(&native).map_err(|e| map_io(&e))?;
             if md.is_dir() {
                 return Err(Error::Conflict {
                     conflict: ConflictKind::TypeMismatch,
                 });
+            }
+            // No-regulares (FIFO/socket/device): el open puede BLOQUEAR el
+            // hilo indefinidamente (una FIFO sin escritor) y la cancelación
+            // no puede interrumpirlo (regla 3) — rechazo honesto ANTES del
+            // open. El engine los trata como Other/Unsupported igualmente.
+            if !md.is_file() {
+                return Err(Error::Unsupported);
             }
             let mut file = std::fs::File::open(&native).map_err(|e| map_io(&e))?;
             if let Some(r) = range {
@@ -584,6 +716,16 @@ impl Provider for LocalProvider {
             }
         });
         Ok(ReceiverStream::new(rx).boxed())
+    }
+
+    async fn node_id(
+        &self,
+        p: &VPath,
+        follow: norte_vfs::FollowLinks,
+    ) -> Result<Option<norte_vfs::NodeId>, Error> {
+        self.ensure_caps().await;
+        let native = self.native(p)?;
+        blocking(move || node_id_native(&native, follow)).await
     }
 
     async fn trash(&self, p: &VPath) -> Result<(), Error> {
@@ -1070,6 +1212,99 @@ mod tests {
         rename_noreplace(&a, &c).expect("destino libre");
         assert_eq!(std::fs::read(&c).unwrap(), b"origen");
         assert!(!a.exists());
+    }
+
+    /// `SymlinkKind::Unknown` (issue #18): el kind se resuelve contra el
+    /// target REAL relativo al padre del link; roto degrada a File; los
+    /// kinds explícitos pasan tal cual sin tocar el FS.
+    #[test]
+    fn unknown_symlink_kind_se_resuelve_contra_el_target() {
+        use norte_vfs::SymlinkKind;
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join("subdir")).unwrap();
+        std::fs::write(dir.path().join("archivo"), b"x").unwrap();
+        let link = dir.path().join("el-link");
+
+        let kind_of = |target: &str, kind| {
+            super::effective_symlink_kind(&link, std::ffi::OsStr::new(target), kind)
+        };
+        assert_eq!(kind_of("subdir", SymlinkKind::Unknown), SymlinkKind::Dir);
+        assert_eq!(kind_of("archivo", SymlinkKind::Unknown), SymlinkKind::File);
+        assert_eq!(
+            kind_of("no-existe", SymlinkKind::Unknown),
+            SymlinkKind::File
+        );
+        // Target con `..` y con separador `/` anidado: canarios de la
+        // normalización pre-verbatim en la CI de Windows (bajo `\\?\` el
+        // kernel no pliega `..` ni convierte `/` — hallazgo del auditor).
+        std::fs::create_dir_all(dir.path().join("inner")).unwrap();
+        std::fs::create_dir_all(dir.path().join("nested").join("leaf")).unwrap();
+        let inner_link = dir.path().join("inner").join("el-link");
+        assert_eq!(
+            super::effective_symlink_kind(
+                &inner_link,
+                std::ffi::OsStr::new("../subdir"),
+                SymlinkKind::Unknown
+            ),
+            SymlinkKind::Dir,
+            "target relativo con .."
+        );
+        assert_eq!(
+            kind_of("nested/leaf", SymlinkKind::Unknown),
+            SymlinkKind::Dir,
+            "target anidado con separador /"
+        );
+        // Target ABSOLUTO: join lo respeta.
+        let abs = dir.path().join("subdir");
+        assert_eq!(
+            super::effective_symlink_kind(&link, abs.as_os_str(), SymlinkKind::Unknown),
+            SymlinkKind::Dir
+        );
+        // Explícito: jamás se re-resuelve (no-existe seguiría siendo Dir).
+        assert_eq!(kind_of("no-existe", SymlinkKind::Dir), SymlinkKind::Dir);
+    }
+
+    /// Identidad de nodo sobre el FS real (issue #16): estable, distinta
+    /// entre nodos, sobrevive al rename y — donde hay symlinks — `follow`
+    /// resuelve al destino. En volúmenes sin identidad (`Ok(None)`) el test
+    /// se auto-salta, igual que el contrato.
+    #[tokio::test]
+    async fn node_id_identifica_el_mismo_archivo() {
+        use norte_vfs::{FollowLinks, Provider};
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("a"), b"x").unwrap();
+        std::fs::write(dir.path().join("b"), b"y").unwrap();
+        let p = super::LocalProvider::rooted(dir.path());
+        let root = super::LocalProvider::root();
+        let a = root.join(norte_proto::Segment::new(b"a".to_vec()).unwrap());
+        let b = root.join(norte_proto::Segment::new(b"b".to_vec()).unwrap());
+
+        let Some(id_a) = p.node_id(&a, FollowLinks::No).await.expect("node_id a") else {
+            eprintln!("skip: volumen sin identidad estable");
+            return;
+        };
+        let id_b = p
+            .node_id(&b, FollowLinks::No)
+            .await
+            .expect("node_id b")
+            .expect("mismo volumen: o siempre o nunca");
+        assert_ne!(id_a, id_b, "nodos distintos");
+        assert_eq!(
+            p.node_id(&a, FollowLinks::Yes).await.unwrap().unwrap(),
+            id_a,
+            "follow sobre un archivo normal no cambia nada"
+        );
+
+        // El rename mueve el nodo, no lo recrea.
+        std::fs::rename(dir.path().join("a"), dir.path().join("c")).unwrap();
+        let c = root.join(norte_proto::Segment::new(b"c".to_vec()).unwrap());
+        assert_eq!(p.node_id(&c, FollowLinks::No).await.unwrap().unwrap(), id_a);
+
+        // Inexistente: NotFound, jamás None-silencioso.
+        assert_eq!(
+            p.node_id(&a, FollowLinks::No).await.unwrap_err(),
+            norte_proto::Error::NotFound
+        );
     }
 
     /// Colisión por normalización (issue #8): el dirent existe en NFD (lo

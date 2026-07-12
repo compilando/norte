@@ -954,8 +954,10 @@ async fn symlink_follow_copies_target_content_as_file() {
     assert_eq!(read_all(&mem, "mem:///dst/ln").await.unwrap(), b"contenido");
 }
 
+/// M2 fase 1 (#19): Follow sobre dir-symlink ya NO es Unsupported — se
+/// expande como dir real (la matriz fina vive en `engine_m2_fase1.rs`).
 #[tokio::test]
-async fn symlink_follow_dir_symlink_is_unsupported() {
+async fn symlink_follow_dir_symlink_expands() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///src")).await.unwrap();
     mem.mkdir(&vp("mem:///src/sub")).await.unwrap();
@@ -970,12 +972,12 @@ async fn symlink_follow_dir_symlink_is_unsupported() {
             on_symlinks(SymlinkPolicy::Follow),
         )
         .unwrap();
+    assert_eq!(handle.join().await, TaskState::Completed);
+    let e = mem.stat(&vp("mem:///dst/ln")).await.unwrap();
     assert_eq!(
-        handle.join().await,
-        TaskState::Failed {
-            error: Error::Unsupported
-        },
-        "seguir dir-symlinks exige detección de ciclos (M2)"
+        e.kind,
+        norte_proto::EntryKind::Dir,
+        "expandido como dir real"
     );
 }
 
@@ -1202,10 +1204,15 @@ async fn follow_dir_symlink_with_overwrite_leaves_destination_intact() {
             },
         )
         .unwrap();
+    // M2 fase 1 (#19): el dir-symlink se expande como DIR, y un dir jamás
+    // pisa un archivo ni con Overwrite (TypeMismatch, ADR 0005). El
+    // invariante que este test pinnea sigue intacto: el destino NO se toca.
     assert_eq!(
         handle.join().await,
         TaskState::Failed {
-            error: Error::Unsupported
+            error: Error::Conflict {
+                conflict: ConflictKind::TypeMismatch
+            }
         }
     );
     assert_eq!(

@@ -11,8 +11,8 @@ use std::sync::Arc;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
-use norte_core::{Engine, TaskHandle};
-use norte_proto::{Entry, EntryKind, TaskState, VPath};
+use norte_core::{Engine, TaskHandle, TransferOptions};
+use norte_proto::{Entry, EntryKind, SymlinkPolicy, TaskState, VPath};
 use norte_vfs::Provider;
 use norte_vfs_local::LocalProvider;
 
@@ -46,6 +46,9 @@ enum Cmd {
         src: PathBuf,
         /// Destino EXACTO (si existe: conflicto, jamás sobrescribe)
         dst: PathBuf,
+        /// Política de symlinks (ADR 0005)
+        #[arg(long, value_enum, default_value = "preserve")]
+        symlinks: SymlinksArg,
     },
     /// Mueve/renombra, con progreso y Ctrl-C limpio
     Mv {
@@ -53,6 +56,9 @@ enum Cmd {
         src: PathBuf,
         /// Destino exacto
         dst: PathBuf,
+        /// Política de symlinks (ADR 0005; solo aplica al camino copy+delete)
+        #[arg(long, value_enum, default_value = "preserve")]
+        symlinks: SymlinksArg,
     },
     /// Borra archivo o directorio (recursivo), con progreso y Ctrl-C limpio
     /// Borra PERMANENTE (banco de pruebas del engine; la papelera vive
@@ -61,6 +67,28 @@ enum Cmd {
         /// Nodo a borrar
         path: PathBuf,
     },
+}
+
+/// Política de symlinks de `cp`/`mv` (mapea 1:1 a la del protocolo).
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum SymlinksArg {
+    /// Copia el LINK tal cual (como `cp -a`)
+    Preserve,
+    /// Los symlinks no se copian
+    Skip,
+    /// Copia el CONTENIDO apuntado; los dir-symlinks se expanden como
+    /// dirs reales (un ciclo de links aborta la operación)
+    Follow,
+}
+
+impl From<SymlinksArg> for SymlinkPolicy {
+    fn from(a: SymlinksArg) -> Self {
+        match a {
+            SymlinksArg::Preserve => SymlinkPolicy::Preserve,
+            SymlinksArg::Skip => SymlinkPolicy::Skip,
+            SymlinksArg::Follow => SymlinkPolicy::Follow,
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -93,17 +121,25 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
 
     match cli.cmd {
         Cmd::Ls { path, json } => ls(&engine, &path, json).await,
-        Cmd::Cp { src, dst } => {
+        Cmd::Cp { src, dst, symlinks } => {
             let (from, to) = (vpath(&src)?, vpath(&dst)?);
+            let opts = TransferOptions {
+                symlinks: symlinks.into(),
+                ..TransferOptions::default()
+            };
             let handle = engine
-                .copy(&from, &to)
+                .copy_with(&from, &to, opts)
                 .context(norte_i18n::t("cli-enqueue-copy"))?;
             Ok(run_task(handle, true).await)
         }
-        Cmd::Mv { src, dst } => {
+        Cmd::Mv { src, dst, symlinks } => {
             let (from, to) = (vpath(&src)?, vpath(&dst)?);
+            let opts = TransferOptions {
+                symlinks: symlinks.into(),
+                ..TransferOptions::default()
+            };
             let handle = engine
-                .move_(&from, &to)
+                .move_with(&from, &to, opts)
                 .context(norte_i18n::t("cli-enqueue-move"))?;
             Ok(run_task(handle, false).await)
         }

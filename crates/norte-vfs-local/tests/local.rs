@@ -427,3 +427,32 @@ fn purga_los_restos_del_contrato_en_la_papelera() {
         let _ = trash::os_limited::purge_all(nuestros);
     }
 }
+
+/// Regla 3 vía `read`: una FIFO (o symlink a FIFO) jamás cuelga el hilo —
+/// `read` la rechaza con `Unsupported` ANTES del open (un open de FIFO sin
+/// escritor bloquea para siempre y la cancelación no lo interrumpe).
+#[cfg(unix)]
+#[tokio::test]
+async fn read_de_fifo_no_cuelga() {
+    use norte_proto::Error;
+    use norte_vfs::Provider;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fifo = dir.path().join("pipe");
+    let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+    // SAFETY del test: CString NUL-terminada válida; mkfifo no retiene el puntero.
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0, "mkfifo");
+    std::os::unix::fs::symlink("pipe", dir.path().join("lpipe")).unwrap();
+
+    let p = norte_vfs_local::LocalProvider::rooted(dir.path());
+    let root = norte_vfs_local::LocalProvider::root();
+    let seg = |b: &[u8]| norte_proto::Segment::new(b.to_vec()).unwrap();
+    let deadline = std::time::Duration::from_secs(5);
+    for name in [&b"pipe"[..], &b"lpipe"[..]] {
+        let path = root.join(seg(name));
+        let res = tokio::time::timeout(deadline, p.read(&path, None))
+            .await
+            .expect("read responde, jamás cuelga");
+        let err = res.err().expect("no-regular rechazado honesto");
+        assert_eq!(err, Error::Unsupported);
+    }
+}

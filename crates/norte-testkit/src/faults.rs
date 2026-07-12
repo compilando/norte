@@ -35,6 +35,9 @@ struct FaultState {
     /// Las próximas `n` operaciones fallan retryable (indisponibilidad
     /// TRANSITORIA); luego el provider se recupera solo.
     unavailable_next: u64,
+    /// Las próximas `n` MUTACIONES que se apliquen devuelven error
+    /// transitorio DESPUÉS de aplicar su efecto (ambigüedad post-efecto).
+    ambiguous_next: u64,
 }
 
 impl Faults {
@@ -77,6 +80,17 @@ impl Faults {
         self.lock().unavailable_next = n;
     }
 
+    /// Las próximas `n` mutaciones puntuales (`mkdir`/`remove`/`rename`/
+    /// `symlink`) que lleguen a APLICARSE devuelven
+    /// [`Error::ProviderUnavailable`](norte_proto::Error::ProviderUnavailable)
+    /// `{retryable: true}` DESPUÉS de aplicar su efecto — el "timeout tras
+    /// commit" de un provider remoto (issue #17): el caller no puede saber
+    /// si la mutación ocurrió. Las lecturas y las mutaciones que fallan por
+    /// otra causa NO consumen el contador.
+    pub fn ambiguous_mutations(&self, n: u64) {
+        self.lock().ambiguous_next = n;
+    }
+
     /// Borra toda la configuración de fallos.
     pub fn clear(&self) {
         *self.lock() = FaultState::default();
@@ -103,6 +117,18 @@ impl Faults {
             tokio::time::sleep(d).await;
         }
         Ok(())
+    }
+
+    /// Consume una carga de mutación ambigua, si está armada. Lo llama cada
+    /// mutación de Mem JUSTO DESPUÉS de aplicar su efecto.
+    pub(crate) fn take_ambiguous(&self) -> bool {
+        let mut st = self.lock();
+        if st.ambiguous_next > 0 {
+            st.ambiguous_next -= 1;
+            true
+        } else {
+            false
+        }
     }
 
     /// Snapshot del fallo de lectura para `path`, si aplica.

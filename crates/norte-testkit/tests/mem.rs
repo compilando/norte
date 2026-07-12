@@ -460,3 +460,214 @@ async fn unavailable_for_next_recovers() {
     }
     assert!(mem.stat(&root).await.is_ok(), "tras n ops, recupera");
 }
+
+// ---------- identidad de nodo (issue #16) ----------
+
+/// `without_node_ids()` simula un backend SIN identidad estable (object
+/// storage, ftp): `node_id` = `Ok(None)` siempre, aun existiendo el nodo.
+#[tokio::test]
+async fn without_node_ids_devuelve_none() {
+    use norte_vfs::FollowLinks;
+    let mem = MemProvider::new().without_node_ids();
+    write_file(&mem, "mem:///f", b"x").await;
+    assert_eq!(
+        mem.node_id(&vp("mem:///f"), FollowLinks::No).await.unwrap(),
+        None
+    );
+}
+
+/// La identidad distingue nodos aunque los PATHS se plieguen: en un Mem
+/// case-insensitive, `a` y `A` resuelven al MISMO nodo → mismo id. Es lo
+/// que el guard del engine no podía saber con heurísticas (issue #16).
+#[tokio::test]
+async fn node_id_es_el_mismo_para_variantes_de_caja_plegadas() {
+    use norte_vfs::FollowLinks;
+    let mem =
+        MemProvider::with_flags(CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::CASE_PRESERVING);
+    write_file(&mem, "mem:///Mismo", b"x").await;
+    let a = mem
+        .node_id(&vp("mem:///Mismo"), FollowLinks::No)
+        .await
+        .unwrap()
+        .expect("Mem tiene identidad");
+    let b = mem
+        .node_id(&vp("mem:///mismo"), FollowLinks::No)
+        .await
+        .unwrap()
+        .expect("Mem tiene identidad");
+    assert_eq!(a, b, "mismo nodo bajo cualquier caja que el FS pliegue");
+}
+
+// ---------- kind de symlink (issue #18) ----------
+
+/// `SymlinkKind::Unknown`: el provider resuelve el target en SU árbol.
+/// Target dir → Dir; target archivo → File; roto → File (documentado).
+#[tokio::test]
+async fn symlink_unknown_resuelve_el_kind_del_target() {
+    use norte_vfs::SymlinkKind;
+    let mem = MemProvider::new();
+    mem.mkdir(&vp("mem:///d")).await.unwrap();
+    write_file(&mem, "mem:///f", b"x").await;
+
+    mem.symlink(&vp("mem:///ld"), b"d", SymlinkKind::Unknown)
+        .await
+        .unwrap();
+    mem.symlink(&vp("mem:///lf"), b"f", SymlinkKind::Unknown)
+        .await
+        .unwrap();
+    mem.symlink(&vp("mem:///lroto"), b"nada", SymlinkKind::Unknown)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        mem.symlink_kind_of(&vp("mem:///ld")),
+        Some(SymlinkKind::Dir)
+    );
+    assert_eq!(
+        mem.symlink_kind_of(&vp("mem:///lf")),
+        Some(SymlinkKind::File)
+    );
+    assert_eq!(
+        mem.symlink_kind_of(&vp("mem:///lroto")),
+        Some(SymlinkKind::File),
+        "roto degrada a File, jamás error"
+    );
+    // Kind explícito: se respeta tal cual, sin resolver nada.
+    mem.symlink(&vp("mem:///lex"), b"nada", SymlinkKind::Dir)
+        .await
+        .unwrap();
+    assert_eq!(
+        mem.symlink_kind_of(&vp("mem:///lex")),
+        Some(SymlinkKind::Dir)
+    );
+}
+
+// ---------- mutación ambigua (issue #17) ----------
+
+/// El fallo POST-efecto: la mutación se aplica Y devuelve
+/// `ProviderUnavailable` retryable — el "timeout tras commit" de un remoto.
+/// Es la fixture del retry con desambiguación del engine.
+#[tokio::test]
+async fn ambiguous_mutation_aplica_el_efecto_y_falla_transitorio() {
+    let mem = MemProvider::new();
+    mem.faults().ambiguous_mutations(1);
+    match mem.mkdir(&vp("mem:///d")).await {
+        Err(Error::ProviderUnavailable { retryable: true }) => {}
+        other => panic!("esperaba ProviderUnavailable retryable, fue {other:?}"),
+    }
+    // El efecto SÍ se aplicó (esa es la ambigüedad).
+    let e = mem.stat(&vp("mem:///d")).await.unwrap();
+    assert_eq!(e.kind, EntryKind::Dir);
+    // Consumido: la siguiente mutación es normal.
+    mem.mkdir(&vp("mem:///d2")).await.unwrap();
+}
+
+/// El fallo ambiguo cubre las 4 mutaciones puntuales del trait
+/// (mkdir/remove/rename/symlink); las lecturas NO lo consumen.
+#[tokio::test]
+async fn ambiguous_mutation_cubre_las_cuatro_mutaciones() {
+    use norte_vfs::SymlinkKind;
+    let mem = MemProvider::new();
+    write_file(&mem, "mem:///a", b"x").await;
+
+    // Una lectura de por medio no consume el fallo armado.
+    mem.faults().ambiguous_mutations(1);
+    mem.stat(&vp("mem:///a")).await.unwrap();
+    assert!(mem.rename(&vp("mem:///a"), &vp("mem:///b")).await.is_err());
+    assert!(mem.stat(&vp("mem:///b")).await.is_ok(), "rename aplicado");
+
+    mem.faults().ambiguous_mutations(1);
+    assert!(mem.remove(&vp("mem:///b")).await.is_err());
+    assert_eq!(
+        mem.stat(&vp("mem:///b")).await.unwrap_err(),
+        Error::NotFound,
+        "remove aplicado"
+    );
+
+    mem.faults().ambiguous_mutations(1);
+    assert!(
+        mem.symlink(&vp("mem:///l"), b"t", SymlinkKind::File)
+            .await
+            .is_err()
+    );
+    assert_eq!(mem.read_link(&vp("mem:///l")).await.unwrap(), b"t");
+}
+
+/// Cadena link→link con follow: `NotFound`, coherente con `read()` (la
+/// resolución mínima de Mem no sigue cadenas — límite documentado).
+#[tokio::test]
+async fn node_id_follow_sobre_cadena_es_notfound() {
+    use norte_vfs::{FollowLinks, SymlinkKind};
+    let mem = MemProvider::new();
+    write_file(&mem, "mem:///f", b"x").await;
+    mem.symlink(&vp("mem:///l1"), b"f", SymlinkKind::File)
+        .await
+        .unwrap();
+    mem.symlink(&vp("mem:///l2"), b"l1", SymlinkKind::File)
+        .await
+        .unwrap();
+    assert_eq!(
+        mem.node_id(&vp("mem:///l2"), FollowLinks::Yes)
+            .await
+            .unwrap_err(),
+        Error::NotFound
+    );
+    // Un nivel sí resuelve.
+    assert!(
+        mem.node_id(&vp("mem:///l1"), FollowLinks::Yes)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+/// La travesía de symlinks compone con el eje de normalización: dir
+/// almacenado en NFD, lookup en NFC a través de un link intermedio.
+#[tokio::test]
+async fn travesia_compone_con_normalizacion_insensible() {
+    use norte_testkit::Normalization;
+    let mem = MemProvider::new().with_normalization(Normalization::Insensitive);
+    // Dir con nombre NFD (e + combinante).
+    mem.mkdir(&vp("mem:///e%CC%81")).await.unwrap();
+    write_file(&mem, "mem:///e%CC%81/f", b"x").await;
+    // Link apuntando al dir por su forma NFC (é precompuesto).
+    mem.symlink(&vp("mem:///ln"), &[0xC3, 0xA9], norte_vfs::SymlinkKind::Dir)
+        .await
+        .unwrap();
+    // Lectura A TRAVÉS del link (target NFC → dirent NFD).
+    assert_eq!(read_all(&mem, "mem:///ln/f").await.unwrap(), b"x");
+    let e = mem.stat(&vp("mem:///ln/f")).await.unwrap();
+    assert_eq!(e.kind, EntryKind::File);
+}
+
+/// `SymlinkKind::Unknown` con targets hostiles: absoluto y `..` degradan
+/// a File (resolución mínima → Unsupported); un target no-UTF8 que
+/// apunta a un dir de nombre no-UTF8 resuelve Dir.
+#[tokio::test]
+async fn symlink_unknown_con_targets_hostiles() {
+    use norte_vfs::SymlinkKind;
+    let mem = MemProvider::new();
+    mem.symlink(&vp("mem:///labs"), b"/etc", SymlinkKind::Unknown)
+        .await
+        .unwrap();
+    mem.symlink(&vp("mem:///ldot"), b"../fuera", SymlinkKind::Unknown)
+        .await
+        .unwrap();
+    assert_eq!(
+        mem.symlink_kind_of(&vp("mem:///labs")),
+        Some(SymlinkKind::File)
+    );
+    assert_eq!(
+        mem.symlink_kind_of(&vp("mem:///ldot")),
+        Some(SymlinkKind::File)
+    );
+
+    let seg = norte_proto::Segment::new(vec![0xE9]).unwrap();
+    let hostile_dir = MemProvider::root().join(seg.clone());
+    mem.mkdir(&hostile_dir).await.unwrap();
+    let link = MemProvider::root().join(norte_proto::Segment::new(b"lhost".to_vec()).unwrap());
+    mem.symlink(&link, &[0xE9], SymlinkKind::Unknown)
+        .await
+        .unwrap();
+    assert_eq!(mem.symlink_kind_of(&link), Some(SymlinkKind::Dir));
+}

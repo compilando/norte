@@ -21,23 +21,63 @@ const READ_CHUNK: usize = 1024;
 
 #[derive(Debug, Clone)]
 enum Node {
-    File { content: Vec<u8>, mtime: i64 },
-    Dir { mtime: i64 },
-    Symlink { target: Vec<u8>, mtime: i64 },
+    File {
+        content: Vec<u8>,
+        mtime: i64,
+        id: u64,
+    },
+    Dir {
+        mtime: i64,
+        id: u64,
+    },
+    Symlink {
+        target: Vec<u8>,
+        mtime: i64,
+        id: u64,
+        kind: norte_vfs::SymlinkKind,
+    },
 }
 
-#[derive(Debug, Default)]
+impl Node {
+    /// Identidad del nodo (issue #16): asignada al crear, estable bajo
+    /// rename (el nodo se mueve de clave, no se recrea).
+    fn id(&self) -> u64 {
+        match self {
+            Node::File { id, .. } | Node::Dir { id, .. } | Node::Symlink { id, .. } => *id,
+        }
+    }
+}
+
+#[derive(Debug)]
 struct Tree {
     /// Nodos por path de segmentos; la raíz es implícita (siempre Dir).
     nodes: BTreeMap<SegPath, Node>,
     /// Reloj lógico: avanza 1 por mutación → mtimes deterministas.
     clock: i64,
+    /// Siguiente identidad de nodo (0 es la raíz implícita).
+    next_id: u64,
+}
+
+impl Default for Tree {
+    fn default() -> Self {
+        Self {
+            nodes: BTreeMap::new(),
+            clock: 0,
+            next_id: 1,
+        }
+    }
 }
 
 impl Tree {
     fn tick(&mut self) -> i64 {
         self.clock += 1;
         self.clock
+    }
+
+    fn new_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
     }
 }
 
@@ -56,6 +96,13 @@ impl Tree {
 ///   mismo archivo). Ese eje llegará como knob propio (issue de deuda M0).
 /// - El scheme/authority del `VPath` de entrada no se valida: todas las
 ///   authorities comparten el mismo árbol.
+/// - **La travesía de symlinks intermedios solo cubre LECTURAS**
+///   (stat/list/read/`read_link`/`node_id`): las mutaciones
+///   (write/mkdir/remove/rename/symlink) exigen ancestros Dir literales —
+///   en POSIX real, mutar a través de un dir-symlink funciona. El copy
+///   engine nunca muta vía paths a través de links (las creaciones van al
+///   árbol destino real; de un link expandido se borra EL LINK), así que
+///   el testkit no lo necesita todavía.
 ///
 /// ```
 /// use norte_testkit::MemProvider;
@@ -67,6 +114,8 @@ impl Tree {
 pub struct MemProvider {
     caps: Capabilities,
     norm: Normalization,
+    /// `false` = simula un backend sin identidad estable (`node_id` = None).
+    node_ids: bool,
     tree: Arc<Mutex<Tree>>,
     faults: Arc<Faults>,
 }
@@ -119,8 +168,34 @@ impl MemProvider {
                 max_path: None,
             },
             norm: Normalization::default(),
+            node_ids: true,
             tree: Arc::new(Mutex::new(Tree::default())),
             faults: Arc::new(Faults::default()),
+        }
+    }
+
+    /// Simula un backend SIN identidad de nodo estable (object storage,
+    /// ftp): `node_id` devuelve `Ok(None)` siempre. Para testear los
+    /// caminos degradados del engine (heurísticas, Follow → Unsupported).
+    #[must_use]
+    pub fn without_node_ids(mut self) -> Self {
+        self.node_ids = false;
+        self
+    }
+
+    /// Inspección de test (issue #18): el kind ALMACENADO del symlink en
+    /// `p`, ya resuelto si se creó con [`SymlinkKind`](norte_vfs::SymlinkKind)
+    /// `::Unknown`. `None` si no existe o no es symlink. Los providers
+    /// reales no exponen esto.
+    #[must_use]
+    pub fn symlink_kind_of(&self, p: &VPath) -> Option<norte_vfs::SymlinkKind> {
+        let key = seg_path(p);
+        let lk = self.lookup();
+        let tree = self.lock();
+        let real = resolve_traversing(&tree, lk, &key)?;
+        match tree.nodes.get(&real) {
+            Some(Node::Symlink { kind, .. }) => Some(*kind),
+            _ => None,
         }
     }
 
@@ -206,6 +281,36 @@ fn resolve(tree: &Tree, lk: Lookup, key: &SegPath) -> Option<SegPath> {
     None
 }
 
+/// Resolución de un path completo con TRAVESÍA de symlinks en los
+/// componentes intermedios (semántica POSIX: un FS real resuelve
+/// `link/hijo` a través del link). Un nivel de link por componente — las
+/// cadenas link→link dan `None`, mismo límite documentado que
+/// [`resolve_symlink`]. La HOJA no se sigue (semántica lstat, como `stat`).
+fn resolve_traversing(tree: &Tree, lk: Lookup, key: &SegPath) -> Option<SegPath> {
+    // Atajo: la clave exacta existe (el caso abrumadoramente común).
+    if tree.nodes.contains_key(key) {
+        return Some(key.clone());
+    }
+    let mut canon: SegPath = Vec::new();
+    for (i, seg) in key.iter().enumerate() {
+        let mut probe = canon.clone();
+        probe.push(seg.clone());
+        let real = resolve(tree, lk, &probe)?;
+        if i < key.len() - 1
+            && let Some(Node::Symlink { target, .. }) = tree.nodes.get(&real)
+        {
+            let resolved = resolve_symlink(tree, lk, &real, target).ok()?;
+            if !matches!(tree.nodes.get(&resolved), Some(Node::Dir { .. })) {
+                return None;
+            }
+            canon = resolved;
+        } else {
+            canon = real;
+        }
+    }
+    Some(canon)
+}
+
 /// Canonicaliza `key` respecto a la caja ALMACENADA: cada ancestro adopta la
 /// caja real de su Dir (y debe existir como Dir); la hoja conserva la caja
 /// pedida (case-preserving). Sin esto, una inserción vía caja distinta crearía
@@ -262,6 +367,31 @@ fn collision_kind(real: &SegPath, requested: &SegPath) -> ConflictKind {
     }
 }
 
+/// [`Entry`] de un hijo con path YA construido (listados: el padre es el
+/// path PEDIDO, no la clave canónica — ver `list`).
+fn entry_for_child(path: VPath, node: &Node) -> Entry {
+    match node {
+        Node::File { content, mtime, .. } => Entry {
+            path,
+            kind: EntryKind::File,
+            size: Some(content.len() as u64),
+            mtime_ms: Some(*mtime),
+        },
+        Node::Dir { mtime, .. } => Entry {
+            path,
+            kind: EntryKind::Dir,
+            size: None,
+            mtime_ms: Some(*mtime),
+        },
+        Node::Symlink { mtime, .. } => Entry {
+            path,
+            kind: EntryKind::Symlink,
+            size: None,
+            mtime_ms: Some(*mtime),
+        },
+    }
+}
+
 /// Reconstruye la [`Entry`] de una clave del árbol sobre el scheme y la
 /// authority de `base` (la authority se preserva: la identidad del path en el
 /// wire no puede cambiar por pasar por el provider).
@@ -277,13 +407,13 @@ fn entry_for(base: &VPath, key: &SegPath, node: &Node) -> Entry {
         p = p.join(norte_proto::Segment::new(seg.clone()).expect("clave del árbol ya validada"));
     }
     match node {
-        Node::File { content, mtime } => Entry {
+        Node::File { content, mtime, .. } => Entry {
             path: p,
             kind: EntryKind::File,
             size: Some(content.len() as u64),
             mtime_ms: Some(*mtime),
         },
-        Node::Dir { mtime } => Entry {
+        Node::Dir { mtime, .. } => Entry {
             path: p,
             kind: EntryKind::Dir,
             size: None,
@@ -323,9 +453,48 @@ impl Provider for MemProvider {
                 mtime_ms: Some(0),
             });
         }
-        let real = resolve(&tree, lk, &key).ok_or(Error::NotFound)?;
+        let real = resolve_traversing(&tree, lk, &key).ok_or(Error::NotFound)?;
         let node = tree.nodes.get(&real).ok_or(Error::NotFound)?;
         Ok(entry_for(p, &real, node))
+    }
+
+    async fn node_id(
+        &self,
+        p: &VPath,
+        follow: norte_vfs::FollowLinks,
+    ) -> Result<Option<norte_vfs::NodeId>, Error> {
+        if !self.node_ids {
+            return Ok(None);
+        }
+        self.faults.op_gate().await?;
+        let key = seg_path(p);
+        let lk = self.lookup();
+        let tree = self.lock();
+        // La raíz implícita tiene la identidad reservada 0.
+        if key.is_empty() {
+            return Ok(Some(norte_vfs::NodeId {
+                volume: 0,
+                index: 0,
+            }));
+        }
+        let real = resolve_traversing(&tree, lk, &key).ok_or(Error::NotFound)?;
+        let node = tree.nodes.get(&real).ok_or(Error::NotFound)?;
+        let node = match (follow, node) {
+            (norte_vfs::FollowLinks::Yes, Node::Symlink { target, .. }) => {
+                let resolved = resolve_symlink(&tree, lk, &real, target)?;
+                match tree.nodes.get(&resolved) {
+                    // Cadena link→link: coherente con read() — NotFound
+                    // (la resolución mínima de Mem no sigue cadenas).
+                    Some(Node::Symlink { .. }) | None => return Err(Error::NotFound),
+                    Some(n) => n,
+                }
+            }
+            _ => node,
+        };
+        Ok(Some(norte_vfs::NodeId {
+            volume: 0,
+            index: u128::from(node.id()),
+        }))
     }
 
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
@@ -334,11 +503,16 @@ impl Provider for MemProvider {
         let lk = self.lookup();
         let tree = self.lock();
         // El filtro de hijos usa la clave REAL: listar con otra caja debe
-        // ver lo mismo que stat (coherencia con el FS simulado).
+        // ver lo mismo que stat (coherencia con el FS simulado). Como un
+        // opendir de verdad, la travesía sigue symlinks intermedios Y el
+        // link final.
         let real = if key.is_empty() {
             key
         } else {
-            let real = resolve(&tree, lk, &key).ok_or(Error::NotFound)?;
+            let mut real = resolve_traversing(&tree, lk, &key).ok_or(Error::NotFound)?;
+            if let Some(Node::Symlink { target, .. }) = tree.nodes.get(&real) {
+                real = resolve_symlink(&tree, lk, &real, target).map_err(|_| Error::NotFound)?;
+            }
             if !matches!(tree.nodes.get(&real), Some(Node::Dir { .. })) {
                 return Err(Error::Conflict {
                     conflict: ConflictKind::TypeMismatch,
@@ -346,11 +520,18 @@ impl Provider for MemProvider {
             }
             real
         };
+        // Los paths de los hijos cuelgan del path PEDIDO (con el nombre
+        // REAL de la hoja): listar a través de un link debe dar paths
+        // utilizables bajo ese link, como en un FS real.
         let entries: Vec<Result<Entry, Error>> = tree
             .nodes
             .iter()
             .filter(|(k, _)| k.len() == real.len() + 1 && k.starts_with(&real))
-            .map(|(k, node)| Ok(entry_for(p, k, node)))
+            .map(|(k, node)| {
+                let name = k.last().expect("clave de hijo no vacía").clone();
+                let seg = norte_proto::Segment::new(name).expect("clave del árbol ya validada");
+                Ok(entry_for_child(p.join(seg), node))
+            })
             .collect();
         Ok(futures::stream::iter(entries).boxed())
     }
@@ -364,7 +545,7 @@ impl Provider for MemProvider {
         let key = seg_path(p);
         let lk = self.lookup();
         let tree = self.lock();
-        let real = resolve(&tree, lk, &key).ok_or(Error::NotFound)?;
+        let real = resolve_traversing(&tree, lk, &key).ok_or(Error::NotFound)?;
         let content = match tree.nodes.get(&real) {
             Some(Node::File { content, .. }) => content.clone(),
             // Como un FS real: read() SIGUE el symlink. Resolución mínima
@@ -471,8 +652,10 @@ impl Provider for MemProvider {
             });
         }
         let mtime = tree.tick();
-        tree.nodes.insert(canon, Node::Dir { mtime });
-        Ok(())
+        let id = tree.new_id();
+        tree.nodes.insert(canon, Node::Dir { mtime, id });
+        drop(tree);
+        self.ambiguous_gate()
     }
 
     async fn remove(&self, p: &VPath) -> Result<(), Error> {
@@ -497,7 +680,8 @@ impl Provider for MemProvider {
         }
         tree.nodes.remove(&real);
         tree.tick();
-        Ok(())
+        drop(tree);
+        self.ambiguous_gate()
     }
 
     async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), Error> {
@@ -538,13 +722,15 @@ impl Provider for MemProvider {
         for (k, mut node) in moved {
             let mut new_key = canon_to.clone();
             new_key.extend_from_slice(&k[real_from.len()..]);
-            let (Node::Dir { mtime: m }
+            let (Node::Dir { mtime: m, .. }
             | Node::File { mtime: m, .. }
             | Node::Symlink { mtime: m, .. }) = &mut node;
             *m = mtime;
+            // El id viaja DENTRO del nodo: rename preserva identidad.
             tree.nodes.insert(new_key, node);
         }
-        Ok(())
+        drop(tree);
+        self.ambiguous_gate()
     }
 
     async fn trash(&self, p: &VPath) -> Result<(), Error> {
@@ -580,7 +766,7 @@ impl Provider for MemProvider {
         let key = seg_path(p);
         let lk = self.lookup();
         let tree = self.lock();
-        let real = resolve(&tree, lk, &key).ok_or(Error::NotFound)?;
+        let real = resolve_traversing(&tree, lk, &key).ok_or(Error::NotFound)?;
         match tree.nodes.get(&real) {
             Some(Node::Symlink { target, .. }) => Ok(target.clone()),
             Some(_) => Err(Error::Conflict {
@@ -594,7 +780,7 @@ impl Provider for MemProvider {
         &self,
         link: &VPath,
         target: &[u8],
-        _kind: norte_vfs::SymlinkKind,
+        kind: norte_vfs::SymlinkKind,
     ) -> Result<(), Error> {
         self.faults.op_gate().await?;
         let key = seg_path(link);
@@ -609,15 +795,31 @@ impl Provider for MemProvider {
                 conflict: collision_kind(&real, &canon),
             });
         }
+        // `Unknown` (issue #18): el provider resuelve el kind contra SU
+        // árbol, best-effort — roto o irresoluble degrada a File.
+        let kind = match kind {
+            norte_vfs::SymlinkKind::Unknown => match resolve_symlink(&tree, lk, &canon, target) {
+                Ok(resolved) => match tree.nodes.get(&resolved) {
+                    Some(Node::Dir { .. }) => norte_vfs::SymlinkKind::Dir,
+                    _ => norte_vfs::SymlinkKind::File,
+                },
+                Err(_) => norte_vfs::SymlinkKind::File,
+            },
+            explicit => explicit,
+        };
         let mtime = tree.tick();
+        let id = tree.new_id();
         tree.nodes.insert(
             canon,
             Node::Symlink {
                 target: target.to_vec(),
                 mtime,
+                id,
+                kind,
             },
         );
-        Ok(())
+        drop(tree);
+        self.ambiguous_gate()
     }
 
     async fn copy_native(&self, from: &VPath, to: &VPath) -> Option<Result<(), Error>> {
@@ -629,6 +831,17 @@ impl Provider for MemProvider {
 }
 
 impl MemProvider {
+    /// Puerta de salida de cada mutación puntual: si hay una carga de
+    /// [`Faults::ambiguous_mutations`] armada, el efecto YA se aplicó y aun
+    /// así se devuelve error transitorio (issue #17).
+    fn ambiguous_gate(&self) -> Result<(), Error> {
+        if self.faults.take_ambiguous() {
+            Err(Error::ProviderUnavailable { retryable: true })
+        } else {
+            Ok(())
+        }
+    }
+
     async fn copy_native_inner(&self, from: &VPath, to: &VPath) -> Result<(), Error> {
         self.faults.op_gate().await?;
         let from_key = seg_path(from);
@@ -657,7 +870,9 @@ impl MemProvider {
             });
         }
         let mtime = tree.tick();
-        tree.nodes.insert(canon_to, Node::File { content, mtime });
+        let id = tree.new_id();
+        tree.nodes
+            .insert(canon_to, Node::File { content, mtime, id });
         Ok(())
     }
 }
@@ -699,11 +914,13 @@ impl ByteSink for MemSink {
             });
         }
         let mtime = tree.tick();
+        let id = tree.new_id();
         tree.nodes.insert(
             canon,
             Node::File {
                 content: self.buffer.clone(),
                 mtime,
+                id,
             },
         );
         Ok(())

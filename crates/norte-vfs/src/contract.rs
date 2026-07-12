@@ -392,6 +392,200 @@ macro_rules! provider_contract {
                 assert!(read_all(&p, &d).await.is_err(), "leer un dir es error");
             }
 
+            // ---------- node_id (identidad real, issue #16) ----------
+
+            /// Un provider CON identidad: estable entre llamadas y distinta
+            /// entre nodos distintos. Un provider sin identidad (Ok(None))
+            /// se auto-salta — el default del trait es legal.
+            #[tokio::test]
+            async fn contract_node_id_stable_and_distinct() {
+                use $crate::FollowLinks;
+                let p = $factory;
+                let root: VPath = $root;
+                let a = child(&root, b"ida");
+                let b = child(&root, b"idb");
+                write_all(&p, &a, b"x").await;
+                write_all(&p, &b, b"y").await;
+                let Some(id_a) = p.node_id(&a, FollowLinks::No).await.expect("node_id a") else {
+                    eprintln!("skip: el provider no expone identidad de nodo");
+                    return;
+                };
+                let id_a2 = p
+                    .node_id(&a, FollowLinks::No)
+                    .await
+                    .expect("node_id a, 2ª")
+                    .expect("con identidad: siempre o nunca");
+                assert_eq!(id_a, id_a2, "estable entre llamadas");
+                let id_b = p
+                    .node_id(&b, FollowLinks::No)
+                    .await
+                    .expect("node_id b")
+                    .expect("con identidad: siempre o nunca");
+                assert_ne!(id_a, id_b, "nodos distintos, identidades distintas");
+                // En un nodo que no es symlink, follow no cambia nada.
+                let id_a3 = p
+                    .node_id(&a, FollowLinks::Yes)
+                    .await
+                    .expect("node_id a, follow")
+                    .expect("con identidad: siempre o nunca");
+                assert_eq!(id_a, id_a3, "follow sobre no-symlink es lo mismo");
+            }
+
+            /// La identidad sobrevive al rename: es del NODO, no del path.
+            /// (Es la base del rename_retrying del engine, issue #17.)
+            #[tokio::test]
+            async fn contract_node_id_survives_rename() {
+                use $crate::FollowLinks;
+                let p = $factory;
+                let root: VPath = $root;
+                let antes = child(&root, b"id-antes");
+                write_all(&p, &antes, b"x").await;
+                let Some(id) = p.node_id(&antes, FollowLinks::No).await.expect("node_id") else {
+                    eprintln!("skip: el provider no expone identidad de nodo");
+                    return;
+                };
+                let despues = child(&root, b"id-despues");
+                p.rename(&antes, &despues).await.expect("rename");
+                let id2 = p
+                    .node_id(&despues, FollowLinks::No)
+                    .await
+                    .expect("node_id tras rename")
+                    .expect("con identidad: siempre o nunca");
+                assert_eq!(id, id2, "el rename mueve el nodo, no lo recrea");
+            }
+
+            /// `FollowLinks::Yes` resuelve el symlink (identidad del DESTINO);
+            /// `No` da la identidad del propio link (semántica lstat).
+            #[tokio::test]
+            async fn contract_node_id_follow_resolves_link() {
+                use $crate::{FollowLinks, SymlinkKind};
+                let p = $factory;
+                require_caps!(p, has: CapabilityFlags::SYMLINKS);
+                let root: VPath = $root;
+                let f = child(&root, b"idf");
+                write_all(&p, &f, b"x").await;
+                let link = child(&root, b"idlink");
+                // Target relativo al padre del link: resoluble en cualquier
+                // provider (mismo convenio que el resolve mínimo de Mem).
+                p.symlink(&link, b"idf", SymlinkKind::File)
+                    .await
+                    .expect("symlink crea");
+                let Some(target_id) = p.node_id(&f, FollowLinks::No).await.expect("id del target")
+                else {
+                    eprintln!("skip: el provider no expone identidad de nodo");
+                    return;
+                };
+                let followed = p
+                    .node_id(&link, FollowLinks::Yes)
+                    .await
+                    .expect("node_id follow")
+                    .expect("con identidad: siempre o nunca");
+                assert_eq!(followed, target_id, "Yes = identidad del destino");
+                let own = p
+                    .node_id(&link, FollowLinks::No)
+                    .await
+                    .expect("node_id del link")
+                    .expect("con identidad: siempre o nunca");
+                assert_ne!(own, target_id, "No = identidad del propio link");
+            }
+
+            /// Symlink roto: `Yes` es NotFound (no hay destino); `No` sigue
+            /// funcionando (el link existe). Path inexistente: NotFound en
+            /// ambos modos (u Ok(None) si el provider no sabe de identidad).
+            #[tokio::test]
+            async fn contract_node_id_broken_and_missing() {
+                use $crate::{FollowLinks, SymlinkKind};
+                let p = $factory;
+                let root: VPath = $root;
+                match p.node_id(&child(&root, b"no-existe"), FollowLinks::No).await {
+                    Ok(None) | Err(Error::NotFound) => {}
+                    other => panic!("esperaba NotFound/Ok(None), fue {other:?}"),
+                }
+                require_caps!(p, has: CapabilityFlags::SYMLINKS);
+                let roto = child(&root, b"id-roto");
+                p.symlink(&roto, b"nada-aqui", SymlinkKind::File)
+                    .await
+                    .expect("symlink crea");
+                match p.node_id(&roto, FollowLinks::No).await {
+                    Ok(_) => {}
+                    other => panic!("el link EXISTE aunque esté roto, fue {other:?}"),
+                }
+                match p.node_id(&roto, FollowLinks::Yes).await {
+                    Err(Error::NotFound) => {}
+                    // Sin identidad, None es legal también para un link roto.
+                    Ok(None) => {}
+                    other => panic!("esperaba NotFound al seguir link roto, fue {other:?}"),
+                }
+            }
+
+            /// GARANTÍA del trait: `remove` sobre un symlink borra EL
+            /// LINK, jamás su target (semántica unlink). El move del copy
+            /// engine depende de esto para no destruir targets al borrar
+            /// links expandidos (issue #19).
+            #[tokio::test]
+            async fn contract_remove_symlink_leaves_target_intact() {
+                use $crate::SymlinkKind;
+                let p = $factory;
+                require_caps!(p, has: CapabilityFlags::SYMLINKS);
+                let root: VPath = $root;
+                let dir = child(&root, b"rmtarget");
+                p.mkdir(&dir).await.expect("mkdir");
+                write_all(&p, &child(&dir, b"hijo"), b"vivo").await;
+                let link = child(&root, b"rmlink");
+                p.symlink(&link, b"rmtarget", SymlinkKind::Dir)
+                    .await
+                    .expect("symlink crea");
+                p.remove(&link).await.expect("remove del LINK");
+                assert_eq!(
+                    p.stat(&link).await.expect_err("el link se fue"),
+                    Error::NotFound
+                );
+                let e = p.stat(&dir).await.expect("el target VIVE");
+                assert_eq!(e.kind, EntryKind::Dir);
+                assert_eq!(
+                    read_all(&p, &child(&dir, b"hijo")).await.expect("contenido intacto"),
+                    b"vivo"
+                );
+            }
+
+            /// La identidad funciona igual con nombres HOSTILES (bytes
+            /// no-UTF8). Si el FS rechaza el nombre (APFS exige UTF-8),
+            /// rechazo limpio y skip — como el resto del corpus hostil.
+            #[tokio::test]
+            async fn contract_node_id_with_hostile_name() {
+                use $crate::FollowLinks;
+                let p = $factory;
+                let root: VPath = $root;
+                let name: &[u8] = b"id-\xE9-latin1";
+                let Ok(seg) = $crate::__private::norte_proto::Segment::new(name.to_vec()) else {
+                    panic!("segmento hostil válido");
+                };
+                let path = root.join(seg);
+                let mut sink = match p.write(&path).await {
+                    Ok(s) => s,
+                    Err(Error::InvalidPath) => {
+                        eprintln!("skip: el FS rechaza el nombre (limpio)");
+                        return;
+                    }
+                    Err(e) => panic!("write hostil: {e:?}"),
+                };
+                sink.write(Bytes::from_static(b"x")).await.expect("chunk");
+                if let Err(Error::InvalidPath) = sink.commit().await {
+                    eprintln!("skip: el FS rechaza el nombre en commit (limpio)");
+                    return;
+                }
+                let Some(id) = p.node_id(&path, FollowLinks::No).await.expect("node_id") else {
+                    eprintln!("skip: el provider no expone identidad de nodo");
+                    return;
+                };
+                let id2 = p
+                    .node_id(&path, FollowLinks::No)
+                    .await
+                    .expect("node_id, 2ª")
+                    .expect("con identidad: siempre o nunca");
+                assert_eq!(id, id2, "identidad estable con bytes no-UTF8");
+            }
+
             // ---------- mkdir / list ----------
 
             #[tokio::test]

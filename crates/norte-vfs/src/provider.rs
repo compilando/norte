@@ -96,6 +96,27 @@ pub trait Provider: Send + Sync {
     /// (ADR 0005).
     async fn read(&self, p: &VPath, range: Option<ByteRange>) -> Result<ByteStream, Error>;
 
+    /// Identidad REAL del nodo, si el backend la conoce: `(dev, ino)` en
+    /// unix, `(volumen, FileId)` en Windows, clave interna en providers
+    /// sintéticos. Es la base de los guards anti-autodestrucción del copy
+    /// engine y del visited set contra ciclos de symlinks (spec §17.9).
+    ///
+    /// `follow` elige entre la identidad del PROPIO nodo (semántica lstat,
+    /// coherente con [`Self::stat`]) o la de su destino resuelto; sobre un
+    /// nodo que no es symlink ambas coinciden.
+    ///
+    /// `Ok(None)` (default) = este backend no tiene identidad estable
+    /// (object storage, ftp): el caller degrada a heurísticas conservadoras
+    /// y las features que EXIGEN identidad (seguir dir-symlinks) responden
+    /// `Unsupported`.
+    ///
+    /// Errores: [`Error::NotFound`] si `p` no existe — o si es un symlink
+    /// roto con [`FollowLinks::Yes`].
+    async fn node_id(&self, p: &VPath, follow: FollowLinks) -> Result<Option<NodeId>, Error> {
+        let _ = (p, follow);
+        Ok(None)
+    }
+
     /// Bytes CRUDOS del destino de un symlink (relativo o absoluto, quizá
     /// roto, quizá no-UTF8 — jamás se valida como `VPath` ni se resuelve).
     ///
@@ -144,6 +165,11 @@ pub trait Provider: Send + Sync {
 
     /// Borra UN nodo: archivo, symlink o directorio VACÍO (el walk post-order
     /// es del core). Directorio no vacío: [`Error::Conflict`].
+    ///
+    /// GARANTÍA (contractual): sobre un symlink borra EL LINK, jamás su
+    /// target (semántica lstat/unlink). El copy engine confía en esto para
+    /// que mover un árbol con links expandidos no destruya los targets
+    /// (issue #19).
     async fn remove(&self, p: &VPath) -> Result<(), Error>;
 
     /// Renombra dentro de ESTE provider (cross-provider = copy+delete en el
@@ -172,4 +198,46 @@ pub enum SymlinkKind {
     File,
     /// El destino es (o será) un directorio.
     Dir,
+    /// El caller NO lo sabe (p. ej. el copy engine preservando un link de
+    /// otro provider, issue #18): el provider lo determina best-effort
+    /// resolviendo el target EN SU PROPIO árbol — target roto o
+    /// indeterminable degrada a `File` (documentado). En OS donde el kind
+    /// no importa (unix) equivale a `File` sin coste alguno.
+    Unknown,
+}
+
+/// ¿Resolver symlinks al calcular la identidad de un nodo?
+/// (Parámetro de [`Provider::node_id`].)
+///
+/// ```
+/// use norte_vfs::FollowLinks;
+/// // `No` = identidad del propio link; `Yes` = la de su destino.
+/// assert_ne!(FollowLinks::No, FollowLinks::Yes);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FollowLinks {
+    /// Identidad del propio nodo (semántica lstat, como `stat`).
+    No,
+    /// Identidad del destino resuelto; symlink roto = `NotFound`.
+    Yes,
+}
+
+/// Identidad real de un nodo DENTRO de un provider: comparable y hashable,
+/// jamás interpretable ni serializable al wire (es un detalle del backend;
+/// comparar `NodeId` de providers distintos no significa nada).
+///
+/// ```
+/// use norte_vfs::NodeId;
+/// let a = NodeId { volume: 1, index: 42 };
+/// let b = NodeId { volume: 1, index: 42 };
+/// assert_eq!(a, b);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NodeId {
+    /// Dominio de unicidad del índice (device unix, serial de volumen
+    /// Windows; 0 si el backend no distingue volúmenes).
+    pub volume: u64,
+    /// Índice del nodo dentro del volumen (`ino`; 128 bits cubren el
+    /// `FileId` de `ReFS`).
+    pub index: u128,
 }
