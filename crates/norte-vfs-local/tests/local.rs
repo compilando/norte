@@ -456,3 +456,102 @@ async fn read_de_fifo_no_cuelga() {
         assert_eq!(err, Error::Unsupported);
     }
 }
+
+/// Resume real sobre el FS (ADR 0012): keep conserva el `.norte-partial`
+/// con nombre ESTABLE, `open_resumable` lo reencuentra y reanuda; el GC
+/// barre los huérfanos por edad.
+#[tokio::test]
+async fn resume_local_conserva_reanuda_y_gc() {
+    use norte_vfs::Provider;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = norte_vfs_local::LocalProvider::rooted(dir.path());
+    let root = norte_vfs_local::LocalProvider::root();
+    let seg = |b: &[u8]| norte_proto::Segment::new(b.to_vec()).unwrap();
+    let f = root.join(seg(b"grande.bin"));
+
+    // Primer tramo: 4 bytes, keep (conserva el parcial, no publica).
+    let (mut sink, already) = p.open_resumable(&f).await.expect("open 1");
+    assert_eq!(already, 0);
+    sink.write(Bytes::from_static(b"hola")).await.unwrap();
+    sink.keep().await.expect("keep");
+    assert_eq!(
+        p.stat(&f).await.unwrap_err(),
+        norte_proto::Error::NotFound,
+        "keep no publica"
+    );
+    // Hay UN .norte-partial en disco (nombre estable).
+    let partials: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .filter(|d| {
+            d.file_name()
+                .to_string_lossy()
+                .starts_with(".norte-partial.")
+        })
+        .collect();
+    assert_eq!(partials.len(), 1, "un parcial estable conservado");
+
+    // Segundo tramo: reanuda desde los 4 bytes.
+    let (mut sink, already) = p.open_resumable(&f).await.expect("open 2");
+    assert_eq!(already, 4, "reanuda tras lo conservado");
+    sink.write(Bytes::from_static(b"mundo")).await.unwrap();
+    sink.commit().await.expect("commit");
+    assert_eq!(
+        std::fs::read(dir.path().join("grande.bin")).unwrap(),
+        b"holamundo"
+    );
+    // El parcial desapareció al commitear.
+    let quedan = std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .filter(|d| {
+            d.file_name()
+                .to_string_lossy()
+                .starts_with(".norte-partial.")
+        })
+        .count();
+    assert_eq!(quedan, 0, "commit publica y limpia el parcial");
+
+    // GC de un huérfano: keep otro parcial y bárrelo con older_than=0.
+    let g = root.join(seg(b"otro.bin"));
+    let (mut sink, _) = p.open_resumable(&g).await.expect("open g");
+    sink.write(Bytes::from_static(b"x")).await.unwrap();
+    sink.keep().await.expect("keep g");
+    let removed = p
+        .gc_partials(&root, std::time::Duration::ZERO)
+        .await
+        .expect("gc");
+    assert_eq!(removed, 1, "el huérfano se barre");
+}
+
+/// H2 del encoding-auditor: `gc_partials` reconoce el staging por su FORMA
+/// exacta, no por el prefijo — un archivo REAL del usuario que empiece por
+/// `.norte-partial.` JAMÁS se borra.
+#[tokio::test]
+async fn gc_partials_no_toca_archivos_del_usuario() {
+    use norte_vfs::Provider;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = norte_vfs_local::LocalProvider::rooted(dir.path());
+    let root = norte_vfs_local::LocalProvider::root();
+    let seg = |b: &[u8]| norte_proto::Segment::new(b.to_vec()).unwrap();
+
+    // Archivo del usuario con el prefijo pero NO la forma de un staging.
+    std::fs::write(dir.path().join(".norte-partial.backup"), b"mio").unwrap();
+    std::fs::write(dir.path().join(".norte-partial.notas.txt"), b"mio").unwrap();
+    // Un parcial de verdad (forma estable: 32 hex).
+    let g = root.join(seg(b"grande.bin"));
+    let (mut sink, _) = p.open_resumable(&g).await.expect("open");
+    sink.write(Bytes::from_static(b"x")).await.unwrap();
+    sink.keep().await.expect("keep");
+
+    let removed = p
+        .gc_partials(&root, std::time::Duration::ZERO)
+        .await
+        .expect("gc");
+    assert_eq!(removed, 1, "solo el parcial de verdad se barre");
+    assert!(
+        dir.path().join(".norte-partial.backup").exists(),
+        "el archivo del usuario sobrevive"
+    );
+    assert!(dir.path().join(".norte-partial.notas.txt").exists());
+}

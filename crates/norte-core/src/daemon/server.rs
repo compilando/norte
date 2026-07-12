@@ -643,6 +643,8 @@ async fn dispatch_fs_task(
             let opts = TransferOptions {
                 on_collision: p.on_collision,
                 symlinks: p.symlinks,
+                resume: p.resume,
+                verify: p.verify,
             };
             let handle = shared
                 .engine
@@ -655,6 +657,8 @@ async fn dispatch_fs_task(
             let opts = TransferOptions {
                 on_collision: p.on_collision,
                 symlinks: p.symlinks,
+                resume: p.resume,
+                verify: p.verify,
             };
             let handle = shared
                 .engine

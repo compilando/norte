@@ -17,7 +17,8 @@ use norte_proto::methods::{
 };
 use norte_proto::{
     ByteRange, Capabilities, CapabilityFlags, CollisionPolicy, ConflictKind, Entry, EntryKind,
-    Error, SymlinkPolicy, TaskId, TaskKind, TaskProgress, TaskState, VPath,
+    Error, ResumePolicy, SymlinkPolicy, TaskId, TaskKind, TaskProgress, TaskState, VPath,
+    VerifyPolicy,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -317,74 +318,52 @@ fn golden_task_progress() {
 
 #[test]
 fn golden_methods() {
+    let fixtures = load("methods.json");
+    check_methods_fs(&fixtures);
+    check_methods_daemon(&fixtures);
+    check_methods_v05(&fixtures);
+    assert_eq!(fixtures.len(), 26, "[methods.json] fixtures sin caso Rust");
+}
+
+/// Familia fs.* + task.cancel (list/stat/copy/move/delete/task).
+fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
     let sample_entry = Entry {
         path: vpath("file:///home/user/doc.txt"),
         kind: EntryKind::File,
         size: Some(1234),
         mtime_ms: Some(1_720_000_000_000),
     };
-    let fixtures = load("methods.json");
-
     check_one(
-        &fixtures,
+        fixtures,
         "fs_list_params",
         &FsListParams {
             path: vpath("file:///home/user"),
         },
     );
     check_one(
-        &fixtures,
+        fixtures,
         "fs_list_result",
         &FsListResult {
             entries: vec![sample_entry.clone()],
         },
     );
     check_one(
-        &fixtures,
+        fixtures,
         "fs_stat_params",
         &FsStatParams {
             path: vpath("file:///home/user/doc.txt"),
         },
     );
     check_one(
-        &fixtures,
+        fixtures,
         "fs_stat_result",
         &FsStatResult {
             entry: sample_entry,
         },
     );
+    check_methods_transfer(fixtures);
     check_one(
-        &fixtures,
-        "fs_copy_params",
-        &FsCopyParams {
-            from: vpath("file:///src/a.txt"),
-            to: vpath("file:///dst/a.txt"),
-            on_collision: CollisionPolicy::Fail,
-            symlinks: SymlinkPolicy::Preserve,
-        },
-    );
-    check_one(
-        &fixtures,
-        "fs_copy_params_policies",
-        &FsCopyParams {
-            from: vpath("file:///src/a.txt"),
-            to: vpath("file:///dst/a.txt"),
-            on_collision: CollisionPolicy::RenameAuto,
-            symlinks: SymlinkPolicy::Skip,
-        },
-    );
-    check_one(
-        &fixtures,
-        "fs_move_params",
-        &FsMoveParams {
-            from: vpath("file:///src/dir"),
-            to: vpath("sftp://nas:22/backup/dir"),
-            on_collision: CollisionPolicy::Fail,
-            symlinks: SymlinkPolicy::Preserve,
-        },
-    );
-    check_one(
-        &fixtures,
+        fixtures,
         "fs_delete_params",
         &FsDeleteParams {
             path: vpath("file:///tmp/victim"),
@@ -392,7 +371,7 @@ fn golden_methods() {
         },
     );
     check_one(
-        &fixtures,
+        fixtures,
         "fs_delete_params_permanent",
         &FsDeleteParams {
             path: vpath("file:///tmp/victim"),
@@ -400,22 +379,60 @@ fn golden_methods() {
         },
     );
     check_one(
-        &fixtures,
+        fixtures,
         "fs_task_result",
         &FsTaskResult {
             task_id: TaskId::new(7),
         },
     );
     check_one(
-        &fixtures,
+        fixtures,
         "task_cancel_params",
         &TaskCancelParams {
             task_id: TaskId::new(7),
         },
     );
-    check_one(&fixtures, "task_cancel_result", &TaskCancelResult {});
-    check_methods_daemon(&fixtures);
-    assert_eq!(fixtures.len(), 26, "[methods.json] fixtures sin caso Rust");
+    check_one(fixtures, "task_cancel_result", &TaskCancelResult {});
+}
+
+/// fs.copy/fs.move (con resume/verify de 0.6.0, ADR 0012).
+fn check_methods_transfer(fixtures: &BTreeMap<String, Value>) {
+    check_one(
+        fixtures,
+        "fs_copy_params",
+        &FsCopyParams {
+            from: vpath("file:///src/a.txt"),
+            to: vpath("file:///dst/a.txt"),
+            on_collision: CollisionPolicy::Fail,
+            symlinks: SymlinkPolicy::Preserve,
+            resume: ResumePolicy::Off,
+            verify: VerifyPolicy::Length,
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_copy_params_policies",
+        &FsCopyParams {
+            from: vpath("file:///src/a.txt"),
+            to: vpath("file:///dst/a.txt"),
+            on_collision: CollisionPolicy::RenameAuto,
+            symlinks: SymlinkPolicy::Skip,
+            resume: ResumePolicy::On,
+            verify: VerifyPolicy::Hash,
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_move_params",
+        &FsMoveParams {
+            from: vpath("file:///src/dir"),
+            to: vpath("sftp://nas:22/backup/dir"),
+            on_collision: CollisionPolicy::Fail,
+            symlinks: SymlinkPolicy::Preserve,
+            resume: ResumePolicy::Off,
+            verify: VerifyPolicy::Length,
+        },
+    );
 }
 
 /// Métodos del daemon (ADR 0011): initialize y daemon.shutdown.
@@ -455,7 +472,6 @@ fn check_methods_daemon(fixtures: &BTreeMap<String, Value>) {
         &DaemonShutdownParams { graceful: false },
     );
     check_one(fixtures, "daemon_shutdown_result", &DaemonShutdownResult {});
-    check_methods_v05(fixtures);
 }
 
 /// Métodos de 0.5.0 (fase 3): task.list, fs.read, fs.capabilities.
@@ -634,8 +650,8 @@ fn method_names_frozen() {
     assert_eq!(methods::FS_READ, "fs.read");
     assert_eq!(methods::FS_CAPABILITIES, "fs.capabilities");
     assert_eq!(methods::FS_READ_MAX_CHUNK, 8 * 1024 * 1024);
-    // 0.5.0: task.list + fs.read + fs.capabilities (fase 3 M2).
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.5.0");
+    // 0.6.0: resume/verify en fs.copy/move (fase 4 M2, ADR 0012).
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.6.0");
 }
 
 #[test]
@@ -683,6 +699,17 @@ fn golden_transfer() {
             ("follow", SymlinkPolicy::Follow),
             ("preserve", SymlinkPolicy::Preserve),
             ("skip", SymlinkPolicy::Skip),
+        ],
+    );
+    check_family(
+        "transfer_resume.json",
+        &[("off", ResumePolicy::Off), ("on", ResumePolicy::On)],
+    );
+    check_family(
+        "transfer_verify.json",
+        &[
+            ("length", VerifyPolicy::Length),
+            ("hash", VerifyPolicy::Hash),
         ],
     );
 }

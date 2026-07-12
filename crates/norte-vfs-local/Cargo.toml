@@ -14,6 +14,11 @@ bytes.workspace = true
 futures.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
+# Nombre ESTABLE del `.norte-partial` de resume (ADR 0012): SHA-256 truncado
+# a 128 bits — estable entre versiones de Rust (a diferencia de DefaultHasher)
+# y sin colisión accidental/adversarial (hallazgo H1/H3 del encoding-auditor).
+# También servirá para verify=Hash/ETags en la fase 7 (object storage).
+sha2.workspace = true
 unicode-normalization.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 tokio-stream.workspace = true

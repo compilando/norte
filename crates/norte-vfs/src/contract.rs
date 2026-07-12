@@ -184,6 +184,61 @@ macro_rules! provider_contract {
                 );
             }
 
+            // ---------- resume (ADR 0012) ----------
+
+            /// `open_resumable` sobre un destino SIN parcial empieza de cero
+            /// (`already == 0`) y publica normal. Contrato universal (el
+            /// default del trait lo cumple).
+            #[tokio::test]
+            async fn contract_open_resumable_fresh_starts_at_zero() {
+                let p = $factory;
+                let root: VPath = $root;
+                let f = child(&root, b"resumable-nuevo");
+                let (mut sink, already) = p.open_resumable(&f).await.expect("open_resumable");
+                assert_eq!(already, 0, "sin parcial previo, empieza de cero");
+                sink.write(Bytes::from_static(b"entero")).await.expect("write");
+                sink.commit().await.expect("commit");
+                assert_eq!(read_all(&p, &f).await.expect("leer"), b"entero");
+            }
+
+            /// `keep` + `open_resumable` REANUDA: los bytes conservados se
+            /// reportan en `already` y el sink añade tras ellos. Un provider
+            /// sin reanudación (default `keep=abort`) se auto-salta: su
+            /// segundo `open_resumable` da `already==0` y este test lo
+            /// detecta y no exige lo imposible.
+            #[tokio::test]
+            async fn contract_keep_then_resume_continues() {
+                let p = $factory;
+                let root: VPath = $root;
+                let f = child(&root, b"resumable-cont");
+                // Primer tramo: escribe "hola" y CONSERVA (no publica).
+                let (mut sink, already) = p.open_resumable(&f).await.expect("open 1");
+                assert_eq!(already, 0);
+                sink.write(Bytes::from_static(b"hola")).await.expect("write 1");
+                sink.keep().await.expect("keep");
+                // El destino final NO existe todavía (keep no publica).
+                assert_eq!(p.stat(&f).await.unwrap_err(), Error::NotFound);
+
+                // Segundo tramo: reanuda.
+                let (mut sink, already) = p.open_resumable(&f).await.expect("open 2");
+                if already == 0 {
+                    // Provider sin reanudación (keep=abort): recopia entero.
+                    eprintln!("skip: el provider no reanuda (keep degrada a abort)");
+                    sink.write(Bytes::from_static(b"holamundo")).await.expect("w");
+                    sink.commit().await.expect("commit");
+                    assert_eq!(read_all(&p, &f).await.unwrap(), b"holamundo");
+                    return;
+                }
+                assert_eq!(already, 4, "reanuda tras los 4 bytes conservados");
+                sink.write(Bytes::from_static(b"mundo")).await.expect("write 2");
+                sink.commit().await.expect("commit");
+                assert_eq!(
+                    read_all(&p, &f).await.expect("leer"),
+                    b"holamundo",
+                    "el contenido es la concatenación de los dos tramos"
+                );
+            }
+
             #[tokio::test]
             async fn contract_write_collision_is_conflict() {
                 let p = $factory;

@@ -321,6 +321,9 @@ fn unknown_policies_are_hard_errors() {
     assert!(
         serde_json::from_str::<norte_proto::SymlinkPolicy>(r#""politica_del_futuro""#).is_err()
     );
+    // Resume/verify (0.6.0) son igual de mutantes: valor desconocido = error.
+    assert!(serde_json::from_str::<norte_proto::ResumePolicy>(r#""futuro""#).is_err());
+    assert!(serde_json::from_str::<norte_proto::VerifyPolicy>(r#""futuro""#).is_err());
 }
 
 #[test]
@@ -332,10 +335,15 @@ fn copy_params_absent_policies_default() {
         serde_json::from_str(r#"{"from": "file:///a", "to": "file:///b"}"#).unwrap();
     assert_eq!(p.on_collision, norte_proto::CollisionPolicy::Fail);
     assert_eq!(p.symlinks, norte_proto::SymlinkPolicy::Preserve);
+    // resume/verify ausentes (cliente 0.5) = Off/Length = contrato M1 (0.6.0).
+    assert_eq!(p.resume, norte_proto::ResumePolicy::Off);
+    assert_eq!(p.verify, norte_proto::VerifyPolicy::Length);
     let m: FsMoveParams =
         serde_json::from_str(r#"{"from": "file:///a", "to": "file:///b"}"#).unwrap();
     assert_eq!(m.on_collision, norte_proto::CollisionPolicy::Fail);
     assert_eq!(m.symlinks, norte_proto::SymlinkPolicy::Preserve);
+    assert_eq!(m.resume, norte_proto::ResumePolicy::Off);
+    assert_eq!(m.verify, norte_proto::VerifyPolicy::Length);
 }
 
 #[test]
@@ -579,7 +587,7 @@ fn version_compatible_es_estricta_con_el_formato() {
 }
 
 /// Tolerancia (ADR 0004): `range` AUSENTE en fs.read = None (default),
-/// no solo `null` explícito. Y N/N-1 en el borde exacto de 0.5.0.
+/// no solo `null` explícito (ADR 0004).
 #[test]
 fn fs_read_params_tolera_range_ausente() {
     use norte_proto::methods::FsReadParams;
@@ -588,13 +596,13 @@ fn fs_read_params_tolera_range_ausente() {
 }
 
 #[test]
-fn version_ventana_de_0_5_0() {
+fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    assert!(version_compatible(PROTOCOL_VERSION, "0.5.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.4.0"), "N-1");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.6.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.5.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.3.9"),
-        "0.3 cayó de la ventana"
+        !version_compatible(PROTOCOL_VERSION, "0.4.9"),
+        "N-2 fuera de la ventana"
     );
 }

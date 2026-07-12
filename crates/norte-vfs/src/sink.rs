@@ -34,4 +34,15 @@ pub trait ByteSink: Send {
     /// Elimina el staging sin publicar nada y consume el sink.
     /// Idempotente respecto a un staging ya desaparecido.
     async fn abort(self: Box<Self>) -> Result<(), Error>;
+
+    /// Suelta el staging SIN publicar y SIN borrar, durabilizándolo, para
+    /// que un [`Provider::open_resumable`](crate::Provider::open_resumable)
+    /// posterior lo reencuentre y REANUDE (ADR 0012). Es la vía de la
+    /// cancelación/fallo cuando el caller pidió resume.
+    ///
+    /// Default: [`abort`](Self::abort) — un provider sin reanudación NO
+    /// deja parcial (degrada a destino limpio, coherente con `resume=Off`).
+    async fn keep(self: Box<Self>) -> Result<(), Error> {
+        self.abort().await
+    }
 }

@@ -118,7 +118,7 @@ async fn initialize_rechaza_version_incompatible() {
             },
         )
         .await
-        .expect_err("0.1.0 no es N ni N-1 de 0.5.0");
+        .expect_err("0.1.0 no es N ni N-1 de 0.6.0");
     match err {
         ClientError::Rpc(rpc) => {
             // Código PROPIO: la señal de upgrade jamás se parsea de message.
@@ -129,14 +129,14 @@ async fn initialize_rechaza_version_incompatible() {
         }
         other => panic!("esperaba Rpc, fue {other:?}"),
     }
-    // N-1 (0.4.x) SÍ entra.
+    // N-1 (0.5.x) SÍ entra.
     let c2 = Client::connect(&d.socket).await.expect("connect");
     let ok: methods::InitializeResult = c2
         .call(
             methods::INITIALIZE,
             &InitializeParams {
                 client_info: client_info(),
-                protocol_version: "0.4.2".into(),
+                protocol_version: "0.5.2".into(),
                 encodings: vec![],
             },
         )
@@ -266,6 +266,8 @@ async fn fs_copy_progresa_hasta_completed() {
                 to: vp("mem:///dst.bin"),
                 on_collision: norte_proto::CollisionPolicy::default(),
                 symlinks: norte_proto::SymlinkPolicy::default(),
+                resume: norte_proto::ResumePolicy::default(),
+                verify: norte_proto::VerifyPolicy::default(),
             },
         )
         .await
@@ -304,6 +306,8 @@ async fn task_cancel_por_el_socket_cancela_limpio() {
                 to: vp("mem:///copia.bin"),
                 on_collision: norte_proto::CollisionPolicy::default(),
                 symlinks: norte_proto::SymlinkPolicy::default(),
+                resume: norte_proto::ResumePolicy::default(),
+                verify: norte_proto::VerifyPolicy::default(),
             },
         )
         .await
@@ -342,6 +346,8 @@ async fn el_progreso_se_difunde_a_todos_los_clientes() {
                 to: vp("mem:///dst.bin"),
                 on_collision: norte_proto::CollisionPolicy::default(),
                 symlinks: norte_proto::SymlinkPolicy::default(),
+                resume: norte_proto::ResumePolicy::default(),
+                verify: norte_proto::VerifyPolicy::default(),
             },
         )
         .await
@@ -522,7 +528,7 @@ async fn frames_hostiles_y_formas_canonicas_crudas() {
 
     // initialize + daemon.shutdown con params null (golden canónico, M1).
     s.write_all(
-        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.4.0\",\"encodings\":[\"json\"]}}\n",
+        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.6.0\",\"encodings\":[\"json\"]}}\n",
     )
     .await
     .expect("write");
@@ -623,6 +629,8 @@ async fn task_list_da_el_snapshot_de_tasks_vivas() {
                 to: vp("mem:///copia.bin"),
                 on_collision: norte_proto::CollisionPolicy::default(),
                 symlinks: norte_proto::SymlinkPolicy::default(),
+                resume: norte_proto::ResumePolicy::default(),
+                verify: norte_proto::VerifyPolicy::default(),
             },
         )
         .await

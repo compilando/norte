@@ -81,6 +81,48 @@ pub enum SymlinkPolicy {
     Skip,
 }
 
+/// Reanudación de una transferencia interrumpida (ADR 0012, spec §5).
+///
+/// ```
+/// use norte_proto::ResumePolicy;
+/// assert_eq!(ResumePolicy::default(), ResumePolicy::Off);
+/// let p: ResumePolicy = serde_json::from_str(r#""on""#).unwrap();
+/// assert_eq!(p, ResumePolicy::On);
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResumePolicy {
+    /// Sin reanudación: cancelar/fallar deja el destino LIMPIO (contrato
+    /// de M1). Default — cero sorpresas para quien no lo pide.
+    #[default]
+    Off,
+    /// Reanudar: cancelar o un fallo transitorio CONSERVA el
+    /// `.norte-partial`; la próxima copia del mismo `src→dst` continúa
+    /// desde donde iba (`already` del provider, ADR 0012).
+    On,
+}
+
+/// Cómo verificar el `.norte-partial` antes de reanudar sobre él
+/// (ADR 0012). Solo aplica con [`ResumePolicy::On`].
+///
+/// ```
+/// use norte_proto::VerifyPolicy;
+/// assert_eq!(VerifyPolicy::default(), VerifyPolicy::Length);
+/// let v: VerifyPolicy = serde_json::from_str(r#""hash""#).unwrap();
+/// assert_eq!(v, VerifyPolicy::Hash);
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerifyPolicy {
+    /// Solo longitud: si el parcial es más largo que el origen se descarta
+    /// y se empieza de cero. Barato (default).
+    #[default]
+    Length,
+    /// Además, el hash de `origen[..already]` debe coincidir con el del
+    /// parcial; si no, se descarta. Relee `already` bytes de ambos lados.
+    Hash,
+}
+
 /// Cómo borrar (ADR 0009). El default del WIRE es el seguro:
 /// [`Trash`](Self::Trash). El engine JAMÁS degrada solo — pedir `Trash`
 /// sin capability `TRASH` es `Unsupported` y el frontend decide con el

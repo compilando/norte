@@ -20,5 +20,7 @@ pub use entry::{Entry, EntryKind};
 pub use error::{ConflictKind, Error};
 pub use methods::PROTOCOL_VERSION;
 pub use task::{TaskId, TaskKind, TaskProgress, TaskState};
-pub use transfer::{ByteRange, CollisionPolicy, DeleteMode, SymlinkPolicy};
+pub use transfer::{
+    ByteRange, CollisionPolicy, DeleteMode, ResumePolicy, SymlinkPolicy, VerifyPolicy,
+};
 pub use vpath::{Authority, Scheme, Segment, VPath, VPathError};

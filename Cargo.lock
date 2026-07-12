@@ -1418,6 +1418,7 @@ dependencies = [
  "norte-testkit",
  "norte-vfs",
  "proptest",
+ "sha2",
  "tempfile",
  "tokio",
  "tokio-stream",

@@ -1201,6 +1201,7 @@ async fn follow_dir_symlink_with_overwrite_leaves_destination_intact() {
             TransferOptions {
                 on_collision: CollisionPolicy::Overwrite,
                 symlinks: SymlinkPolicy::Follow,
+                ..TransferOptions::default()
             },
         )
         .unwrap();

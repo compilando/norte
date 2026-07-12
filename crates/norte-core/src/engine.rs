@@ -4,7 +4,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use norte_proto::{CollisionPolicy, DeleteMode, Entry, Error, SymlinkPolicy, TaskKind, VPath};
+use norte_proto::{
+    CollisionPolicy, DeleteMode, Entry, Error, ResumePolicy, SymlinkPolicy, TaskKind, VPath,
+    VerifyPolicy,
+};
 use norte_vfs::{EntryStream, Provider};
 
 use crate::observer::{MutationObserver, NoopObserver};
@@ -28,6 +31,11 @@ pub struct TransferOptions {
     pub on_collision: CollisionPolicy,
     /// Qué hacer con los symlinks del origen.
     pub symlinks: SymlinkPolicy,
+    /// Reanudación de transferencias interrumpidas (ADR 0012); default
+    /// `Off` = contrato de M1 (cancelar deja destino limpio).
+    pub resume: ResumePolicy,
+    /// Verificación del parcial al reanudar (solo con `resume=On`).
+    pub verify: VerifyPolicy,
 }
 
 /// Núcleo embebido: registro de providers por scheme + operaciones.

@@ -159,6 +159,22 @@ pub trait Provider: Send + Sync {
     /// [`ByteSink::commit`].
     async fn write(&self, p: &VPath) -> Result<Box<dyn ByteSink>, Error>;
 
+    /// Abre un sink que REANUDA una escritura previa a `p` (ADR 0012):
+    /// devuelve el sink y cuántos bytes YA hay durables en el staging
+    /// (`0` = empieza de cero). El sink AÑADE después de esos bytes; el
+    /// engine lee el origen desde ese offset.
+    ///
+    /// La reanudación cross-invocación exige un staging con nombre ESTABLE
+    /// por destino (un provider que lo soporte lo reencuentra). Default:
+    /// `(write(p), 0)` — sin reanudación, empieza de cero (correcto y
+    /// seguro; el engine recopia entero).
+    ///
+    /// El destino final debe seguir sin existir: si ya existe, mismo
+    /// [`Error::Conflict`] que [`Self::write`].
+    async fn open_resumable(&self, p: &VPath) -> Result<(Box<dyn ByteSink>, u64), Error> {
+        Ok((self.write(p).await?, 0))
+    }
+
     /// Crea UN directorio (el padre debe existir; `mkdir -p` lo compone el core).
     /// Si ya existe: [`Error::Conflict`].
     async fn mkdir(&self, p: &VPath) -> Result<(), Error>;

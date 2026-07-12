@@ -52,6 +52,10 @@ impl Node {
 struct Tree {
     /// Nodos por path de segmentos; la raíz es implícita (siempre Dir).
     nodes: BTreeMap<SegPath, Node>,
+    /// Staging de resume por destino (ADR 0012): bytes CONSERVADOS por un
+    /// `keep` que un `open_resumable` posterior reanuda. Se limpia en
+    /// commit/abort.
+    partials: BTreeMap<SegPath, Vec<u8>>,
     /// Reloj lógico: avanza 1 por mutación → mtimes deterministas.
     clock: i64,
     /// Siguiente identidad de nodo (0 es la raíz implícita).
@@ -62,6 +66,7 @@ impl Default for Tree {
     fn default() -> Self {
         Self {
             nodes: BTreeMap::new(),
+            partials: BTreeMap::new(),
             clock: 0,
             next_id: 1,
         }
@@ -635,6 +640,38 @@ impl Provider for MemProvider {
         }))
     }
 
+    async fn open_resumable(&self, p: &VPath) -> Result<(Box<dyn ByteSink>, u64), Error> {
+        self.faults.op_gate().await?;
+        let key = seg_path(p);
+        if key.is_empty() {
+            return Err(Error::InvalidPath);
+        }
+        let lk = self.lookup();
+        let tree = self.lock();
+        let canon = canonical_key(&tree, lk, &key).ok_or(Error::NotFound)?;
+        // El destino final debe seguir sin existir (mismo contrato que write).
+        if let Some(real) = resolve(&tree, lk, &canon) {
+            return Err(Error::Conflict {
+                conflict: collision_kind(&real, &canon),
+            });
+        }
+        // Reanuda desde el staging conservado, si lo hay.
+        let buffer = tree.partials.get(&canon).cloned().unwrap_or_default();
+        let already = buffer.len() as u64;
+        drop(tree);
+        Ok((
+            Box::new(MemSink {
+                key: canon,
+                buffer,
+                fail_at: self.faults.write_fault_for(&key),
+                written: 0,
+                tree: Arc::clone(&self.tree),
+                lookup: lk,
+            }),
+            already,
+        ))
+    }
+
     async fn mkdir(&self, p: &VPath) -> Result<(), Error> {
         self.faults.op_gate().await?;
         let key = seg_path(p);
@@ -915,6 +952,7 @@ impl ByteSink for MemSink {
         }
         let mtime = tree.tick();
         let id = tree.new_id();
+        tree.partials.remove(&canon);
         tree.nodes.insert(
             canon,
             Node::File {
@@ -927,7 +965,22 @@ impl ByteSink for MemSink {
     }
 
     async fn abort(self: Box<Self>) -> Result<(), Error> {
-        // Nada llegó al árbol: soltar el buffer ES la limpieza.
+        // Descarta también el staging conservado (si lo había).
+        self.tree
+            .lock()
+            .expect("tree lock sano")
+            .partials
+            .remove(&self.key);
+        Ok(())
+    }
+
+    async fn keep(self: Box<Self>) -> Result<(), Error> {
+        // Conserva los bytes para un open_resumable posterior (ADR 0012).
+        self.tree
+            .lock()
+            .expect("tree lock sano")
+            .partials
+            .insert(self.key.clone(), self.buffer.clone());
         Ok(())
     }
 }

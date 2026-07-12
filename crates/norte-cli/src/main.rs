@@ -56,6 +56,9 @@ enum Cmd {
         /// Política de symlinks (ADR 0005)
         #[arg(long, value_enum, default_value = "preserve")]
         symlinks: SymlinksArg,
+        /// Reanudar una copia interrumpida (deja/usa `.norte-partial`, ADR 0012)
+        #[arg(long)]
+        resume: bool,
     },
     /// Mueve/renombra, con progreso y Ctrl-C limpio
     Mv {
@@ -66,6 +69,9 @@ enum Cmd {
         /// Política de symlinks (ADR 0005; solo aplica al camino copy+delete)
         #[arg(long, value_enum, default_value = "preserve")]
         symlinks: SymlinksArg,
+        /// Reanudar un movimiento interrumpido (camino copy+delete, ADR 0012)
+        #[arg(long)]
+        resume: bool,
     },
     /// Borra archivo o directorio (recursivo), con progreso y Ctrl-C limpio
     /// Borra PERMANENTE (banco de pruebas del engine; la papelera vive
@@ -119,6 +125,15 @@ enum SymlinksArg {
     Follow,
 }
 
+/// `--resume` → política (opt-in; sin el flag, contrato de M1).
+fn resume_policy(on: bool) -> norte_proto::ResumePolicy {
+    if on {
+        norte_proto::ResumePolicy::On
+    } else {
+        norte_proto::ResumePolicy::Off
+    }
+}
+
 impl From<SymlinksArg> for SymlinkPolicy {
     fn from(a: SymlinksArg) -> Self {
         match a {
@@ -166,10 +181,16 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let backend = make_backend(engine, cli.daemon, cli.socket).await?;
     match cli.cmd {
         Cmd::Ls { path, json } => ls(&backend, &path, json).await,
-        Cmd::Cp { src, dst, symlinks } => {
+        Cmd::Cp {
+            src,
+            dst,
+            symlinks,
+            resume,
+        } => {
             let (from, to) = (vpath(&src)?, vpath(&dst)?);
             let opts = TransferOptions {
                 symlinks: symlinks.into(),
+                resume: resume_policy(resume),
                 ..TransferOptions::default()
             };
             let task = backend
@@ -179,10 +200,16 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 .context(norte_i18n::t("cli-enqueue-copy"))?;
             Ok(run_task(task, true).await)
         }
-        Cmd::Mv { src, dst, symlinks } => {
+        Cmd::Mv {
+            src,
+            dst,
+            symlinks,
+            resume,
+        } => {
             let (from, to) = (vpath(&src)?, vpath(&dst)?);
             let opts = TransferOptions {
                 symlinks: symlinks.into(),
+                resume: resume_policy(resume),
                 ..TransferOptions::default()
             };
             let task = backend

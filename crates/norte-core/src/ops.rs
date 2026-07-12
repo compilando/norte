@@ -501,7 +501,17 @@ async fn copy_file_leaf(
     else {
         return Ok(Placed::Skipped);
     };
-    copy_file_retrying(src, dst, &entry.path, &target, entry.size, observer, ctx).await?;
+    copy_file_retrying(
+        src,
+        dst,
+        &entry.path,
+        &target,
+        entry.size,
+        opts,
+        observer,
+        ctx,
+    )
+    .await?;
     Ok(Placed::Done)
 }
 
@@ -558,7 +568,9 @@ async fn copy_symlink_leaf(
             };
             // Tamaño desconocido (el stat describe el LINK, no el destino).
             // El target pudo cambiar tras el sondeo: se re-mapea igual.
-            match copy_file_retrying(src, dst, &entry.path, &target, None, observer, ctx).await {
+            match copy_file_retrying(src, dst, &entry.path, &target, None, opts, observer, ctx)
+                .await
+            {
                 Ok(()) => Ok(Placed::Done),
                 Err(Error::Conflict {
                     conflict: ConflictKind::TypeMismatch,
@@ -711,24 +723,31 @@ async fn copy_tree(
     Ok(skipped)
 }
 
-/// Copia UN archivo con reintentos a nivel de archivo: un fallo transitorio
-/// a mitad de stream reinicia el archivo entero (el sink ya abortó limpio) y
-/// devuelve el progreso de bytes al punto de partida.
+/// Copia UN archivo con reintentos a nivel de archivo. Con `resume=Off` un
+/// fallo transitorio reinicia el archivo entero (el sink abortó limpio) y
+/// devuelve el progreso al punto de partida. Con `resume=On` el parcial
+/// SOBREVIVE (`keep`) y el reintento continúa desde donde iba
+/// (`open_resumable`) — el `before` que se restaura es la base del archivo,
+/// no cero, y `copy_file` recompone `base + already` en cada intento.
+#[allow(clippy::too_many_arguments)] // función interna del módulo, no API
 async fn copy_file_retrying(
     src: &dyn Provider,
     dst: &dyn Provider,
     from: &VPath,
     to: &VPath,
     known_size: Option<u64>,
+    opts: TransferOptions,
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
+    let base = ctx.progress.snapshot().bytes_done;
     let mut attempt = 0u32;
     loop {
-        let before = ctx.progress.snapshot().bytes_done;
-        match copy_file(src, dst, from, to, known_size, observer, ctx).await {
+        match copy_file(src, dst, from, to, known_size, base, opts, observer, ctx).await {
             Err(e) if attempt < MAX_RETRIES && is_transient(&e) && !ctx.cancel.is_cancelled() => {
-                ctx.progress.update(|p| p.bytes_done = before);
+                // Base del archivo: `copy_file` recompone `base + already`
+                // (con resume, `already` crece; sin resume, vuelve a 0).
+                ctx.progress.update(|p| p.bytes_done = base);
                 let delay = std::time::Duration::from_millis(BACKOFF_BASE_MS << attempt);
                 attempt += 1;
                 tokio::select! {
@@ -742,14 +761,21 @@ async fn copy_file_retrying(
 }
 
 /// Copia UN archivo: `copy_native` si el provider (el mismo a ambos lados)
-/// declara `SERVER_COPY`; si no, streaming con cancelación por chunk y
-/// limpieza garantizada vía `abort` del sink.
+/// declara `SERVER_COPY`; si no, streaming con cancelación por chunk.
+///
+/// `base` = `bytes_done` ANTES de este archivo (para recomponer el progreso
+/// al reanudar). Con resume: abre `open_resumable`, descarta el parcial si
+/// es más largo que el origen (`verify`), lee el origen desde `already`, y
+/// en cancelación/fallo CONSERVA el parcial (`keep`) en vez de abortar.
+#[allow(clippy::too_many_arguments)] // función interna del módulo, no API
 async fn copy_file(
     src: &dyn Provider,
     dst: &dyn Provider,
     from: &VPath,
     to: &VPath,
     known_size: Option<u64>,
+    base: u64,
+    opts: TransferOptions,
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
@@ -765,41 +791,105 @@ async fn copy_file(
         res?;
         // El tamaño ya lo dio el stat del origen: cero round-trips extra.
         let size = known_size.unwrap_or(0);
-        ctx.progress.update(|p| p.bytes_done += size);
+        ctx.progress.update(|p| p.bytes_done = base + size);
         observer.on_mutation(&Mutation::Created(to));
         return Ok(());
     }
 
-    let mut stream = src.read(from, None).await?;
-    let mut sink = dst.write(to).await?;
+    // Resume AGNÓSTICO del provider (ADR 0012 A2): `open_resumable` con su
+    // default seguro `(write, 0)` degrada limpio en un provider sin
+    // reanudación real; no se gatea por capability (S3 reanuda por
+    // multipart, no por APPEND — M1 del rust-reviewer).
+    let resume = opts.resume == norte_proto::ResumePolicy::On;
+    // Abre el sink: reanudable (con offset ya durable) o fresco.
+    let (mut sink, already) = if resume {
+        let (sink, already) = dst.open_resumable(to).await?;
+        // Verify=Length: un parcial más largo que el origen no cuadra
+        // (origen cambió/encogió) — se descarta y se empieza de cero.
+        // (Verify=Hash queda wire-completo pero se trata como Length en
+        // fase 4: leer el parcial exige API que llega con S3, issue #35.)
+        if let Some(size) = known_size
+            && already > size
+        {
+            // Propagar el fallo de abort (M2 del rust-reviewer): tragarlo y
+            // seguir dejaría bytes obsoletos y el destino saldría corrupto.
+            sink.abort().await?;
+            let (fresh, fresh_already) = dst.open_resumable(to).await?;
+            if fresh_already != 0 {
+                // El staging sigue ahí tras el abort: no se puede reanudar
+                // limpio — fallar en vez de publicar algo dudoso.
+                return Err(Error::Io { retryable: false });
+            }
+            (fresh, 0)
+        } else {
+            (sink, already)
+        }
+    } else {
+        (dst.write(to).await?, 0)
+    };
+
+    // El tramo ya presente cuenta como hecho de inmediato (la barra no
+    // retrocede al reanudar).
+    ctx.progress.update(|p| p.bytes_done = base + already);
+
+    let range = (already > 0).then_some(norte_proto::ByteRange {
+        offset: already,
+        len: None,
+    });
+    let mut stream = match src.read(from, range).await {
+        Ok(s) => s,
+        Err(e) => {
+            release(sink, to, resume).await;
+            return Err(e);
+        }
+    };
+    let mut written = base + already;
     while let Some(item) = stream.next().await {
-        // Cancelación por chunk: destino limpio o `.norte-partial`, jamás
-        // un archivo a medias sin marcar.
+        // Cancelación por chunk: destino limpio, o `.norte-partial`
+        // reanudable (resume), jamás un archivo a medias sin marcar.
         if ctx.cancel.is_cancelled() {
-            abort_traced(sink, to).await;
+            release(sink, to, resume).await;
             return Err(Error::Cancelled);
         }
         let chunk = match item {
             Ok(c) => c,
             Err(e) => {
-                abort_traced(sink, to).await;
+                release(sink, to, resume).await;
                 return Err(e);
             }
         };
         let n = chunk.len() as u64;
         if let Err(e) = sink.write(chunk).await {
-            abort_traced(sink, to).await;
+            release(sink, to, resume).await;
             return Err(e);
         }
-        ctx.progress.update(|p| p.bytes_done += n);
+        written += n;
+        ctx.progress.update(|p| p.bytes_done = written);
     }
     if ctx.cancel.is_cancelled() {
-        abort_traced(sink, to).await;
+        release(sink, to, resume).await;
         return Err(Error::Cancelled);
     }
     sink.commit().await?;
     observer.on_mutation(&Mutation::Created(to));
     Ok(())
+}
+
+/// Suelta el sink al interrumpir: `keep` (conserva el `.norte-partial`
+/// reanudable) si hay resume, `abort` (destino limpio) si no.
+async fn release(sink: Box<dyn norte_vfs::ByteSink>, to: &VPath, resume: bool) {
+    let res = if resume {
+        sink.keep().await
+    } else {
+        sink.abort().await
+    };
+    if let Err(e) = res {
+        tracing::warn!(
+            path = %to.display_lossy(),
+            error = %e,
+            "soltar el sink falló; posible staging huérfano"
+        );
+    }
 }
 
 /// Move: rename si origen y destino viven en el MISMO provider (0 bytes);
@@ -1362,18 +1452,6 @@ fn rebase(path: &VPath, from: &VPath, to: &VPath) -> Result<VPath, Error> {
         target = target.join(seg);
     }
     Ok(target)
-}
-
-/// Aborta un sink dejando traza si la limpieza falla (posible
-/// `.norte-partial` huérfano que el journal M3 barrerá).
-async fn abort_traced(sink: Box<dyn norte_vfs::ByteSink>, to: &VPath) {
-    if let Err(e) = sink.abort().await {
-        tracing::warn!(
-            path = %to.display_lossy(),
-            error = %e,
-            "abort del sink falló; posible staging huérfano"
-        );
-    }
 }
 
 /// `true` si `child` es descendiente PROPIO de `ancestor` (mismo scheme y

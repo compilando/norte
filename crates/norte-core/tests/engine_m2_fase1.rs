@@ -616,6 +616,7 @@ async fn follow_overwrite_de_link_sobre_su_target_no_destruye() {
             TransferOptions {
                 on_collision: CollisionPolicy::Overwrite,
                 symlinks: SymlinkPolicy::Follow,
+                ..TransferOptions::default()
             },
         )
         .unwrap();
@@ -646,6 +647,7 @@ async fn follow_overwrite_de_dir_link_sobre_su_target_no_destruye() {
             TransferOptions {
                 on_collision: CollisionPolicy::Overwrite,
                 symlinks: SymlinkPolicy::Follow,
+                ..TransferOptions::default()
             },
         )
         .unwrap();

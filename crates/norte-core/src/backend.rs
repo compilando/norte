@@ -563,6 +563,8 @@ pub mod remote {
                         to: to.clone(),
                         on_collision: opts.on_collision,
                         symlinks: opts.symlinks,
+                        resume: opts.resume,
+                        verify: opts.verify,
                     },
                 )
                 .await?
@@ -574,6 +576,8 @@ pub mod remote {
                         to: to.clone(),
                         on_collision: opts.on_collision,
                         symlinks: opts.symlinks,
+                        resume: opts.resume,
+                        verify: opts.verify,
                     },
                 )
                 .await?

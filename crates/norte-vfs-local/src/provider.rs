@@ -126,6 +126,52 @@ impl LocalProvider {
         }
         to_native(&self.base, p)
     }
+
+    /// GC de `.norte-partial` huérfanos en el directorio `dir` (ADR 0012):
+    /// borra los staging cuya última modificación es anterior a
+    /// `older_than`. Reconoce los parciales por su FORMA exacta
+    /// (`is_norte_partial`), no por el prefijo suelto — un archivo real
+    /// del usuario `.norte-partial.backup` JAMÁS se toca (H2 del
+    /// encoding-auditor). Devuelve cuántos borró.
+    ///
+    /// No distingue un parcial de una copia VIVA (esa correlación es del
+    /// journal M3): usar un `older_than` holgado (horas) para no barrer una
+    /// reanudación en curso. Es una operación puntual, no una Task.
+    ///
+    /// # Errors
+    /// [`Error`] si `dir` no se puede listar; los fallos de borrado
+    /// individuales se cuentan como no-borrados, sin abortar el barrido.
+    pub async fn gc_partials(
+        &self,
+        dir: &VPath,
+        older_than: std::time::Duration,
+    ) -> Result<usize, Error> {
+        self.ensure_caps().await;
+        let native = self.native(dir)?;
+        blocking(move || {
+            let now = std::time::SystemTime::now();
+            let rd = std::fs::read_dir(&native).map_err(|e| map_io(&e))?;
+            let mut removed = 0usize;
+            for dent in rd.flatten() {
+                let name = dent.file_name();
+                if !is_norte_partial(&os_to_bytes(&name)) {
+                    continue;
+                }
+                // Edad por mtime; sin metadata legible, se deja (conservador).
+                let old = dent
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| now.duration_since(t).ok())
+                    .is_some_and(|age| age >= older_than);
+                if old && std::fs::remove_file(dent.path()).is_ok() {
+                    removed += 1;
+                }
+            }
+            Ok(removed)
+        })
+        .await
+    }
 }
 
 /// Papelera nativa. macOS: `NSFileManager` (headless, sin prompts TCC) —
@@ -149,6 +195,68 @@ fn trash_delete(p: &Path) -> Result<(), trash::Error> {
 /// (dos writes al mismo destino jamás comparten staging, y un archivo REAL
 /// del usuario llamado `x.norte-partial` jamás se toca).
 static PARTIAL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Prefijo de todo staging de norte (write efímero y resume estable): lo
+/// usa el GC para reconocer parciales (ADR 0012).
+const PARTIAL_PREFIX: &str = ".norte-partial.";
+
+/// Longitud (en chars hex) del hash del nombre estable: 32 = 128 bits.
+const STABLE_HASH_HEX: usize = 32;
+
+/// Path del staging ESTABLE de resume para el destino `p`: mismo
+/// directorio, nombre `.norte-partial.<sha256-128-del-nombre-final>` — 47
+/// bytes (no roza `NAME_MAX`) y reencontrable entre invocaciones Y entre
+/// versiones de Rust. SHA-256 truncado a 128 bits: colisión accidental
+/// imposible (birthday 2^64) y adversarial 2^64 (nombres desde un archivo
+/// no confiable) — hallazgo H1/H3 del encoding-auditor. Hashea los BYTES
+/// crudos del nombre (regla 1), jamás lo decodifica.
+fn stable_partial_vpath(p: &VPath) -> Result<VPath, Error> {
+    use sha2::{Digest, Sha256};
+    let name = p.file_name().ok_or(Error::InvalidPath)?;
+    let digest = Sha256::digest(name.as_bytes());
+    let mut hex = String::with_capacity(STABLE_HASH_HEX);
+    for b in &digest[..STABLE_HASH_HEX / 2] {
+        use std::fmt::Write;
+        let _ = write!(hex, "{b:02x}");
+    }
+    let partial_name = format!("{PARTIAL_PREFIX}{hex}").into_bytes();
+    let seg = Segment::new(partial_name).map_err(|_| Error::InvalidPath)?;
+    p.with_file_name(seg).ok_or(Error::InvalidPath)
+}
+
+/// ¿`name` (bytes) tiene la FORMA de un staging de norte? Estrecho a las
+/// dos formas conocidas — NO al prefijo suelto (H2 del encoding-auditor:
+/// un archivo real del usuario `.norte-partial.backup` NO debe barrerse):
+/// - estable: prefijo + exactamente 32 hex.
+/// - efímero: prefijo + 16 hex + `.` + <pid> + `-` + <seq>.
+fn is_norte_partial(name: &[u8]) -> bool {
+    let Some(rest) = name.strip_prefix(PARTIAL_PREFIX.as_bytes()) else {
+        return false;
+    };
+    let is_hex = |b: &u8| b.is_ascii_digit() || (b'a'..=b'f').contains(b);
+    // Estable: 32 hex y nada más.
+    if rest.len() == STABLE_HASH_HEX && rest.iter().all(is_hex) {
+        return true;
+    }
+    // Efímero: <16 hex>.<pid>-<seq>, todo dígitos/hex y separadores.
+    let Some(dot) = rest.iter().position(|&b| b == b'.') else {
+        return false;
+    };
+    let (hash, tail) = rest.split_at(dot);
+    if hash.len() != 16 || !hash.iter().all(is_hex) {
+        return false;
+    }
+    // tail = ".<pid>-<seq>": dígitos, un '-', dígitos.
+    let tail = &tail[1..];
+    let Some(dash) = tail.iter().position(|&b| b == b'-') else {
+        return false;
+    };
+    let (pid, seq) = tail.split_at(dash);
+    !pid.is_empty()
+        && pid.iter().all(u8::is_ascii_digit)
+        && seq.len() > 1
+        && seq[1..].iter().all(u8::is_ascii_digit)
+}
 
 /// Mapea un error de OS a la taxonomía del protocolo (spec §17.7): los
 /// frontends renderizan por categoría, jamás parsean strings de OS.
@@ -845,6 +953,52 @@ impl Provider for LocalProvider {
         }))
     }
 
+    async fn open_resumable(&self, p: &VPath) -> Result<(Box<dyn ByteSink>, u64), Error> {
+        self.ensure_caps().await;
+        let final_native = self.native(p)?;
+        // Staging con nombre ESTABLE por destino (ADR 0012): sin pid+seq,
+        // así una segunda invocación lo reencuentra y REANUDA. Sigue siendo
+        // corto (deriva del hash del nombre final, no del nombre) para no
+        // rozar NAME_MAX (issue #4). Prefijo `.norte-partial` reconocible
+        // para el GC.
+        let partial_vpath = stable_partial_vpath(p)?;
+        let partial_native = self.native(&partial_vpath)?;
+
+        let (file, already, partial_native, final_native) = blocking(move || {
+            // El destino final NO debe existir todavía (mismo contrato que
+            // write): si existe, la política de colisión es del core.
+            match std::fs::symlink_metadata(&final_native) {
+                Ok(_) => {
+                    return Err(Error::Conflict {
+                        conflict: collision_kind_for(&final_native),
+                    });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(map_io(&e)),
+            }
+            // Abre (o crea) el parcial en APPEND: si ya había bytes de una
+            // copia previa, se reanuda tras ellos.
+            let file = std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(&partial_native)
+                .map_err(|e| map_io(&e))?;
+            let already = file.metadata().map_err(|e| map_io(&e))?.len();
+            Ok((file, already, partial_native, final_native))
+        })
+        .await?;
+
+        Ok((
+            Box::new(LocalSink {
+                file: Some(file),
+                partial: partial_native,
+                final_path: final_native,
+                done: false,
+            }),
+            already,
+        ))
+    }
+
     async fn mkdir(&self, p: &VPath) -> Result<(), Error> {
         self.ensure_caps().await;
         let native = self.native(p)?;
@@ -1145,6 +1299,21 @@ impl ByteSink for LocalSink {
         })
         .await
     }
+
+    async fn keep(mut self: Box<Self>) -> Result<(), Error> {
+        // Conserva el staging para un open_resumable posterior (ADR 0012):
+        // durabiliza (fsync) y NO renombra ni borra. `done` evita que Drop
+        // lo barra.
+        let file = self.file.take();
+        self.done = true;
+        blocking(move || {
+            if let Some(f) = file {
+                f.sync_all().map_err(|e| map_io(&e))?;
+            }
+            Ok(())
+        })
+        .await
+    }
 }
 
 impl Drop for LocalSink {
@@ -1212,6 +1381,42 @@ mod tests {
         rename_noreplace(&a, &c).expect("destino libre");
         assert_eq!(std::fs::read(&c).unwrap(), b"origen");
         assert!(!a.exists());
+    }
+
+    /// Guardián del hash del nombre estable (H3 del encoding-auditor): el
+    /// valor DEBE ser constante entre versiones de Rust — SHA-256 lo
+    /// garantiza; un cambio de algoritmo rompería la reanudación
+    /// cross-versión en silencio, así que se congela aquí.
+    #[test]
+    fn stable_partial_name_is_frozen() {
+        use norte_proto::{Scheme, Segment, VPath};
+        let dst = VPath::root(Scheme::new("file").unwrap(), None)
+            .join(Segment::new(b"dst.bin".to_vec()).unwrap());
+        let partial = super::stable_partial_vpath(&dst).unwrap();
+        assert_eq!(
+            partial.file_name().unwrap().as_bytes(),
+            b".norte-partial.80dcee3a35d0eff397ec041e9ee27a3c",
+            "sha256(\"dst.bin\")[..16] hex — congelado (H3)"
+        );
+    }
+
+    /// `is_norte_partial` (H2): reconoce las dos formas de staging y NADA
+    /// más — un archivo de usuario con el prefijo no se confunde.
+    #[test]
+    fn is_norte_partial_reconoce_solo_las_formas() {
+        use super::is_norte_partial as f;
+        // Estable: prefijo + 32 hex.
+        assert!(f(b".norte-partial.80dcee3a35d0eff397ec041e9ee27a3c"));
+        // Efímero: prefijo + 16 hex + .<pid>-<seq>.
+        assert!(f(b".norte-partial.80dcee3a35d0eff3.12345-7"));
+        // NO son staging:
+        assert!(!f(b".norte-partial.backup"));
+        assert!(!f(b".norte-partial.notas.txt"));
+        assert!(!f(b".norte-partial.")); // vacío
+        assert!(!f(b".norte-partial.80dcee3a35d0eff397ec041e9ee27a3")); // 31 hex
+        assert!(!f(b".norte-partial.ZZZZ")); // no-hex
+        assert!(!f(b"otro.norte-partial.80dcee3a35d0eff397ec041e9ee27a3c")); // sin prefijo al inicio
+        assert!(!f(b".norte-partial.80dcee3a35d0eff3.abc-7")); // pid no-dígito
     }
 
     /// `SymlinkKind::Unknown` (issue #18): el kind se resuelve contra el

@@ -17,6 +17,8 @@
 //!     to: VPath::parse("file:///dst/a.txt").unwrap(),
 //!     on_collision: Default::default(),
 //!     symlinks: Default::default(),
+//!     resume: Default::default(),
+//!     verify: Default::default(),
 //! };
 //! let wire = serde_json::to_string(&params).unwrap();
 //! let back: FsCopyParams = serde_json::from_str(&wire).unwrap();
@@ -29,10 +31,12 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{CollisionPolicy, DeleteMode, Entry, SymlinkPolicy, TaskId, VPath};
+use crate::{
+    CollisionPolicy, DeleteMode, Entry, ResumePolicy, SymlinkPolicy, TaskId, VPath, VerifyPolicy,
+};
 
 /// Versión del protocolo (semver). El core soporta N y N-1 (spec §11).
-pub const PROTOCOL_VERSION: &str = "0.5.0";
+pub const PROTOCOL_VERSION: &str = "0.6.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -182,6 +186,12 @@ pub struct FsCopyParams {
     /// Qué hacer con los symlinks del origen (default `Preserve`).
     #[serde(default)]
     pub symlinks: SymlinkPolicy,
+    /// Reanudación (ADR 0012); default `Off` = contrato de M1.
+    #[serde(default)]
+    pub resume: ResumePolicy,
+    /// Verificación del parcial al reanudar; default `Length`.
+    #[serde(default)]
+    pub verify: VerifyPolicy,
 }
 
 /// Params de [`FS_MOVE`].
@@ -198,6 +208,12 @@ pub struct FsMoveParams {
     /// rename same-provider mueve el link tal cual).
     #[serde(default)]
     pub symlinks: SymlinkPolicy,
+    /// Reanudación del camino copy+delete (ADR 0012); default `Off`.
+    #[serde(default)]
+    pub resume: ResumePolicy,
+    /// Verificación del parcial al reanudar; default `Length`.
+    #[serde(default)]
+    pub verify: VerifyPolicy,
 }
 
 /// Params de [`FS_DELETE`].

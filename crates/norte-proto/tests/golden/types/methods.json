@@ -19,13 +19,17 @@
     "from": "file:///src/a.txt",
     "on_collision": "fail",
     "symlinks": "preserve",
-    "to": "file:///dst/a.txt"
+    "to": "file:///dst/a.txt",
+    "resume": "off",
+    "verify": "length"
   },
   "fs_copy_params_policies": {
     "from": "file:///src/a.txt",
     "on_collision": "rename_auto",
     "symlinks": "skip",
-    "to": "file:///dst/a.txt"
+    "to": "file:///dst/a.txt",
+    "resume": "on",
+    "verify": "hash"
   },
   "fs_delete_params": {
     "mode": "trash",
@@ -52,7 +56,9 @@
     "from": "file:///src/dir",
     "on_collision": "fail",
     "symlinks": "preserve",
-    "to": "sftp://nas:22/backup/dir"
+    "to": "sftp://nas:22/backup/dir",
+    "resume": "off",
+    "verify": "length"
   },
   "fs_read_params": {
     "path": "file:///home/user/doc.txt",
