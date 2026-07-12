@@ -18,3 +18,4 @@ La spec evoluciona por ADR, no por edición silenciosa (spec §18).
 | [0011](0011-envelope-jsonrpc-daemon.md) | Envelope JSON-RPC 2.0, framing, transporte y daemon | accepted |
 | [0012](0012-resume-transferencias.md) | Resume de transferencias: `.norte-partial`, reanudación y GC | accepted |
 | [0013](0013-provider-sftp.md) | Provider SFTP: russh, contención del servidor hostil y testing | accepted |
+| [0014](0014-provider-ftp.md) | Provider FTP: suppaftp, MLSD, testing in-process y cleartext | accepted |

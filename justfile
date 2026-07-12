@@ -55,11 +55,13 @@ t crate:
 watch:
     cargo watch -x "nextest run --workspace"
 
-# Tests de integración NIGHTLY contra servidores reales por Docker (ADR 0013):
-# el provider sftp contra OpenSSH real (atmoz/sftp). EXIGE Docker; fuera del
-# gate de PR (lo corre el workflow nightly, no `just ci`).
+# Tests de integración NIGHTLY contra servidores REALES por Docker (ADR 0013/
+# 0014): sftp contra OpenSSH real (atmoz/sftp) y ftp contra pure-ftpd real
+# (delfer/alpine-ftp-server). EXIGEN Docker; fuera del gate de PR (lo corre el
+# workflow nightly, no `just ci`).
 it-remote:
     cargo nextest run -p norte-vfs-sftp --features it-openssh
+    cargo nextest run -p norte-vfs-ftp --features it-ftp -E 'binary(realftp)'
 
 # Benchmarks de los presupuestos de la spec §12 (manual: tardan).
 bench:

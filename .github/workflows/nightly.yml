@@ -1,8 +1,9 @@
-# Tests de integración NIGHTLY contra servidores REALES por Docker (ADR 0013,
-# spec §12). Fuera del gate de PR por lentitud/flakiness: el gate normal ya
-# corre la suite contractual completa (incluido el corpus hostil) contra un
-# servidor sftp in-process. Esto valida además que el provider habla con un
-# OpenSSH de producción (atmoz/sftp), no solo con el server de test de russh.
+# Tests de integración NIGHTLY contra servidores REALES por Docker (ADR 0013/
+# 0014, spec §12). Fuera del gate de PR por lentitud/flakiness: el gate normal
+# ya corre la suite contractual completa (incluido el corpus hostil) contra
+# servidores in-process. Esto valida además que los providers hablan con
+# servidores de PRODUCCIÓN: sftp contra OpenSSH (atmoz/sftp) y ftp contra
+# pure-ftpd (delfer/alpine-ftp-server) — que, p. ej., NO soporta MLSD.
 name: Nightly (integración remota)
 
 on:
@@ -17,7 +18,7 @@ env:
 
 jobs:
   it-remote:
-    name: it-remote (sftp vs OpenSSH real)
+    name: it-remote (sftp vs OpenSSH, ftp vs pure-ftpd)
     # Docker viene preinstalado en los runners ubuntu; macOS/Windows no lo
     # traen, por eso el nightly es solo-Linux.
     runs-on: ubuntu-latest

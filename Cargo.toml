@@ -7,6 +7,7 @@ members = [
     "crates/norte-vfs",
     "crates/norte-vfs-local",
     "crates/norte-vfs-sftp",
+    "crates/norte-vfs-ftp",
     "crates/norte-testkit",
     "crates/norte-core",
     "crates/norte-cli",
@@ -28,6 +29,7 @@ norte-proto = { path = "crates/norte-proto", version = "0.0.0" }
 norte-vfs = { path = "crates/norte-vfs", version = "0.0.0" }
 norte-vfs-local = { path = "crates/norte-vfs-local", version = "0.0.0" }
 norte-vfs-sftp = { path = "crates/norte-vfs-sftp", version = "0.0.0" }
+norte-vfs-ftp = { path = "crates/norte-vfs-ftp", version = "0.0.0" }
 norte-testkit = { path = "crates/norte-testkit", version = "0.0.0" }
 norte-core = { path = "crates/norte-core", version = "0.0.0" }
 norte-tui = { path = "crates/norte-tui", version = "0.0.0" }
@@ -44,6 +46,11 @@ serde_json = "1"
 # sin Docker). Superficie de deps grande (aws-lc-rs) → cargo-deny vigilante.
 russh = "0.62"
 russh-sftp = "2.3"
+# Provider FTP (fase 5bis, ADR 0014): suppaftp, cliente FTP/FTPS async (fork
+# mantenido de rust-ftp), feature async sobre tokio. MLSD (RFC 3659) + REST
+# (resume). Alternativa evaluada: async-ftp (sin mantener). El servidor de
+# test in-process usa libunftp (dev-dep del crate).
+suppaftp = "10"
 sha2 = "0.10"
 thiserror = "2"
 base64 = "0.22"
@@ -103,6 +110,12 @@ unicode-normalization = "0.1"
 # Solo dev
 proptest = "1"
 tempfile = "3"
+# Servidor FTP in-process para los tests del provider (fase 5bis, ADR 0014):
+# libunftp (servidor FTP async tokio) + unftp-sbe-fs (backend de FS) montan un
+# servidor real en 127.0.0.1:puerto-efímero sobre un tempdir, sin Docker. Solo
+# dev; el nightly usa un servidor real por testcontainers.
+libunftp = "0.23"
+unftp-sbe-fs = "0.4"
 assert_cmd = "2"
 # Fase 10 (calidad, spec §12): snapshots del TUI y benchmarks de los
 # presupuestos (cold start <50 ms; 100k listado <200 ms a primer render).

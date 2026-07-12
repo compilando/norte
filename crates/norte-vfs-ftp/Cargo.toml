@@ -1,0 +1,44 @@
+[package]
+name = "norte-vfs-ftp"
+description = "Provider VFS sobre FTP (suppaftp)"
+license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+futures.workspace = true
+norte-proto.workspace = true
+norte-vfs.workspace = true
+suppaftp = { workspace = true, features = ["tokio"] }
+tokio = { workspace = true, features = ["io-util", "net", "sync"] }
+
+[dev-dependencies]
+libunftp.workspace = true
+norte-testkit.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+unftp-sbe-fs.workspace = true
+
+[features]
+# Test de integración NIGHTLY contra un servidor FTP REAL (delfer/alpine-ftp-
+# server) por testcontainers (ADR 0014). Fuera del gate de PR: exige Docker y
+# el PASV de FTP obliga a pinnear puertos — lo corre el workflow nightly, no
+# `just ci`. `testcontainers` es dep opcional para no compilar su árbol.
+it-ftp = ["dep:testcontainers"]
+
+[dependencies.testcontainers]
+version = "0.27"
+optional = true
+
+# El test `realftp` solo se compila con la feature `it-ftp` (nightly).
+[[test]]
+name = "realftp"
+required-features = ["it-ftp"]
+
+[lints]
+workspace = true
