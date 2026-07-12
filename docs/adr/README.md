@@ -19,3 +19,4 @@ La spec evoluciona por ADR, no por edición silenciosa (spec §18).
 | [0012](0012-resume-transferencias.md) | Resume de transferencias: `.norte-partial`, reanudación y GC | accepted |
 | [0013](0013-provider-sftp.md) | Provider SFTP: russh, contención del servidor hostil y testing | accepted |
 | [0014](0014-provider-ftp.md) | Provider FTP: suppaftp, MLSD, testing in-process y cleartext | accepted |
+| [0015](0015-conexiones-y-secretos.md) | Conexiones y secretos: connections.toml, keyring, TOFU, ed25519 | accepted |
