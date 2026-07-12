@@ -30,16 +30,24 @@ M2**); E2E real por fase (pty para TUI, contenedores para remotos); deuda
 
 ## Decisiones a confirmar con el usuario en el kickoff
 
-1. **Interpretación del criterio de salida**: archive es READ-ONLY en M2
-   (spec §15) — la cadena verificable es sftp → S3 → local y LEER/copiar
-   desde zip. ¿Escribir dentro de zip queda para M2+/M3 (propuesto: sí)?
-2. **FTP plano**: el plan M1 lo dejó como "candidato a provider extra en
-   M2+, decidir allí". Al usuario le importa ftp — ¿entra como fase 5bis
-   (russh no lo cubre; sería dep aparte) o se difiere con issue?
-3. **#27 (100k listado, 254 ms vs 200)**: ¿se ataca dentro de la fase 7
-   (la paginación del protocolo es la mitigación grande) o se difiere?
-4. **MessagePack** como encoding alternativo negociable (spec §11):
-   ¿fase 2 lo deja negociado-pero-solo-JSON (propuesto) o entra ya?
+RESUELTAS en el kickoff (2026-07-12):
+
+1. **Interpretación del criterio de salida**: archive READ-ONLY en M2
+   (spec §15 literal). Escribir dentro de zip → M2+/M3 con issue.
+2. **FTP plano**: entra como **fase 5bis** (tras sftp, reutilizando su
+   suite; dep aparte con justificación). Marcado como candidato #1 a
+   migrar a plugin-provider en M4 (#30, ADR 0010).
+3. **#27**: se ataca DENTRO de la fase 7 — la paginación por cursor del
+   protocolo (cláusula reservada en ADR 0004) mata #27 y los listados
+   enormes de object storage con un solo diseño.
+4. **MessagePack**: fase 2 deja el encoding negociado-pero-solo-JSON.
+   Añadir msgpack después es no-breaking.
+
+Adicional (planteada por oscar en el kickoff): **frontera
+core/plugin/config** → ADR 0010. Providers de la cadena de salida (sftp,
+object, archive, ftp) = crates del core; cola exótica (WebDAV, GDrive) =
+plugin WASM M4; binarios externos (bat, delta, unrar) = `openers.toml`
+(#28). Viewer+bat NO es M2 ni es plugin (#28/#29).
 
 ## Riesgos principales
 
