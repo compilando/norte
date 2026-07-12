@@ -2,7 +2,7 @@
 # y CI corren exactamente lo mismo — ver justfile). Instala just con
 # `cargo install just` si no lo tienes.
 
-.PHONY: all run dev cli test t ci fmt lint cov docs watch help
+.PHONY: all run dev cli test t ci fmt lint cov docs watch help install uninstall
 
 all: help
 
@@ -14,6 +14,8 @@ help:
 	@echo "  make ci     - lo mismo que CI: lint + test + cobertura + docs"
 	@echo "  make fmt    - formatear"
 	@echo "  make watch  - tests en cada guardado (exige cargo-watch)"
+	@echo "  make install   - instala norte-tui y norte (CLI) en \$$CARGO_HOME/bin"
+	@echo "  make uninstall - los desinstala"
 	@echo "  just cli ls /tmp          - CLI de humo (args libres via just)"
 
 run:
@@ -42,3 +44,9 @@ docs:
 
 watch:
 	just watch
+
+install:
+	just install
+
+uninstall:
+	just uninstall

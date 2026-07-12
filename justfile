@@ -54,3 +54,17 @@ watch:
 # Benchmarks de los presupuestos de la spec §12 (manual: tardan).
 bench:
     cargo bench -p norte-tui --bench presupuestos
+
+# ---------- instalación ----------
+
+# Instala en $CARGO_HOME/bin —~/.cargo/bin por defecto— (release):
+# `norte-tui` (el TUI) y `norte` (el CLI).
+# --locked: exactamente las versiones del Cargo.lock que pasó CI.
+install:
+    cargo install --path crates/norte-tui --locked
+    cargo install --path crates/norte-cli --locked
+    @echo "instalados: $(command -v norte-tui) y $(command -v norte)"
+
+uninstall:
+    cargo uninstall norte-tui
+    cargo uninstall norte-cli
