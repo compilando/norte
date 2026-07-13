@@ -599,10 +599,10 @@ fn fs_read_params_tolera_range_ausente() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    assert!(version_compatible(PROTOCOL_VERSION, "0.6.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.5.0"), "N-1");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.7.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.6.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.4.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.5.9"),
         "N-2 fuera de la ventana"
     );
 }

@@ -128,6 +128,38 @@ pub enum Error {
     /// de la spec §17.9; issue #31). Un cliente N-1 degrada a `Unknown`.
     #[error("symlink loop")]
     Loop,
+    /// Host key SSH DESCONOCIDA en el primer contacto (TOFU — ADR 0015 D). El
+    /// frontend muestra el `fingerprint` y, si el usuario confía, llama a
+    /// `connection.trust_host_key` y reintenta. Un cliente N-1 degrada a
+    /// `Unknown` (0.7.0, fase 6).
+    #[error("unknown host key for {host} ({algo})")]
+    HostKeyUnknown {
+        /// Host DESNUDO al que se conecta (sin puerto; el puerto va aparte
+        /// para que el mapeo error→`connection.trust_host_key` sea 1:1).
+        host: String,
+        /// Puerto (ausente = default del scheme).
+        #[serde(default)]
+        port: Option<u16>,
+        /// Algoritmo de la clave (p. ej. `ssh-ed25519`).
+        algo: String,
+        /// Fingerprint en formato OpenSSH `SHA256:<base64>` — la MISMA cadena
+        /// que core y frontend comparan y que va en `trust_host_key`.
+        fingerprint: String,
+    },
+    /// La host key SSH CAMBIÓ respecto a la registrada en `known_hosts`:
+    /// posible MITM. JAMÁS se acepta en silencio (0.7.0, fase 6).
+    #[error("host key MISMATCH for {host} ({algo}) — possible MITM")]
+    HostKeyMismatch {
+        /// Host DESNUDO afectado (sin puerto).
+        host: String,
+        /// Puerto (ausente = default del scheme).
+        #[serde(default)]
+        port: Option<u16>,
+        /// Algoritmo de la clave presentada.
+        algo: String,
+        /// Fingerprint OpenSSH `SHA256:<base64>` de la clave presentada.
+        fingerprint: String,
+    },
     /// Categoría de un protocolo más nuevo (fallback de deserialización).
     /// El core JAMÁS la emite; existe para que un cliente N degrade con
     /// elegancia ante categorías N+1.

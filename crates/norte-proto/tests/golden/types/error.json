@@ -21,6 +21,20 @@
   "encoding_loss": {
     "kind": "encoding_loss"
   },
+  "host_key_mismatch": {
+    "algo": "ssh-ed25519",
+    "fingerprint": "SHA256:zzz999",
+    "host": "sftp.example.com",
+    "kind": "host_key_mismatch",
+    "port": null
+  },
+  "host_key_unknown": {
+    "algo": "ssh-ed25519",
+    "fingerprint": "SHA256:abc123def456",
+    "host": "sftp.example.com",
+    "kind": "host_key_unknown",
+    "port": 22
+  },
   "internal_no_panic": {
     "kind": "internal",
     "panic": false

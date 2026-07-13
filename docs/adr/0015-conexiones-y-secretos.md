@@ -94,7 +94,7 @@ Trust-on-first-use como OpenSSH: un `known_hosts` propio en el dir de config.
 
 - **Primera conexión a un host desconocido**: el core NO acepta a ciegas.
   Devuelve un error tipado `HostKeyUnknown { fingerprint, algo }`; el frontend
-  MUESTRA el fingerprint y pide confirmación; un `connections.trust_host_key`
+  MUESTRA el fingerprint y pide confirmación; un `connection.trust_host_key`
   explícito lo registra en `known_hosts`. (Requiere un método de protocolo para
   la confirmación — **cambio de wire → golden + bump + protocol-guardian**; se
   detalla en la implementación. Alternativa para CI: `NORTE_KNOWN_HOSTS` o

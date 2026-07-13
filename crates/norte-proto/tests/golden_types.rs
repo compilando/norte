@@ -236,6 +236,24 @@ fn golden_error() {
             ("invalid_path", Error::InvalidPath),
             ("internal_panic", Error::Internal { panic: true }),
             ("internal_no_panic", Error::Internal { panic: false }),
+            (
+                "host_key_unknown",
+                Error::HostKeyUnknown {
+                    host: "sftp.example.com".to_owned(),
+                    port: Some(22),
+                    algo: "ssh-ed25519".to_owned(),
+                    fingerprint: "SHA256:abc123def456".to_owned(),
+                },
+            ),
+            (
+                "host_key_mismatch",
+                Error::HostKeyMismatch {
+                    host: "sftp.example.com".to_owned(),
+                    port: None,
+                    algo: "ssh-ed25519".to_owned(),
+                    fingerprint: "SHA256:zzz999".to_owned(),
+                },
+            ),
         ],
     );
 }
@@ -322,7 +340,39 @@ fn golden_methods() {
     check_methods_fs(&fixtures);
     check_methods_daemon(&fixtures);
     check_methods_v05(&fixtures);
-    assert_eq!(fixtures.len(), 26, "[methods.json] fixtures sin caso Rust");
+    check_methods_connection(&fixtures);
+    assert_eq!(fixtures.len(), 29, "[methods.json] fixtures sin caso Rust");
+}
+
+/// Familia connection.* (0.7.0, fase 6): `trust_host_key` del flujo TOFU.
+fn check_methods_connection(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{ConnectionTrustHostKeyParams, ConnectionTrustHostKeyResult};
+    check_one(
+        fixtures,
+        "connection_trust_host_key_params",
+        &ConnectionTrustHostKeyParams {
+            host: "sftp.example.com".to_owned(),
+            port: Some(22),
+            algo: "ssh-ed25519".to_owned(),
+            fingerprint: "SHA256:abc123def456".to_owned(),
+        },
+    );
+    // `port` ausente serializa como `null` (Option sin skip): caso pinneado.
+    check_one(
+        fixtures,
+        "connection_trust_host_key_params_sin_puerto",
+        &ConnectionTrustHostKeyParams {
+            host: "sftp.example.com".to_owned(),
+            port: None,
+            algo: "ssh-ed25519".to_owned(),
+            fingerprint: "SHA256:abc123def456".to_owned(),
+        },
+    );
+    check_one(
+        fixtures,
+        "connection_trust_host_key_result",
+        &ConnectionTrustHostKeyResult { trusted: true },
+    );
 }
 
 /// Familia fs.* + task.cancel (list/stat/copy/move/delete/task).
@@ -649,9 +699,14 @@ fn method_names_frozen() {
     assert_eq!(methods::TASK_LIST, "task.list");
     assert_eq!(methods::FS_READ, "fs.read");
     assert_eq!(methods::FS_CAPABILITIES, "fs.capabilities");
+    assert_eq!(
+        methods::CONNECTION_TRUST_HOST_KEY,
+        "connection.trust_host_key"
+    );
     assert_eq!(methods::FS_READ_MAX_CHUNK, 8 * 1024 * 1024);
-    // 0.6.0: resume/verify en fs.copy/move (fase 4 M2, ADR 0012).
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.6.0");
+    // 0.7.0: connection.trust_host_key + host_key_unknown/mismatch (fase 6 M2,
+    // ADR 0015, flujo TOFU).
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.7.0");
 }
 
 #[test]

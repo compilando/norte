@@ -1,4 +1,19 @@
 {
+  "connection_trust_host_key_params": {
+    "algo": "ssh-ed25519",
+    "fingerprint": "SHA256:abc123def456",
+    "host": "sftp.example.com",
+    "port": 22
+  },
+  "connection_trust_host_key_params_sin_puerto": {
+    "algo": "ssh-ed25519",
+    "fingerprint": "SHA256:abc123def456",
+    "host": "sftp.example.com",
+    "port": null
+  },
+  "connection_trust_host_key_result": {
+    "trusted": true
+  },
   "daemon_shutdown_params_graceful": {
     "graceful": true
   },
@@ -18,17 +33,17 @@
   "fs_copy_params": {
     "from": "file:///src/a.txt",
     "on_collision": "fail",
+    "resume": "off",
     "symlinks": "preserve",
     "to": "file:///dst/a.txt",
-    "resume": "off",
     "verify": "length"
   },
   "fs_copy_params_policies": {
     "from": "file:///src/a.txt",
     "on_collision": "rename_auto",
+    "resume": "on",
     "symlinks": "skip",
     "to": "file:///dst/a.txt",
-    "resume": "on",
     "verify": "hash"
   },
   "fs_delete_params": {
@@ -55,16 +70,16 @@
   "fs_move_params": {
     "from": "file:///src/dir",
     "on_collision": "fail",
+    "resume": "off",
     "symlinks": "preserve",
     "to": "sftp://nas:22/backup/dir",
-    "resume": "off",
     "verify": "length"
   },
   "fs_read_params": {
     "path": "file:///home/user/doc.txt",
     "range": {
-      "offset": 0,
-      "len": 4096
+      "len": 4096,
+      "offset": 0
     }
   },
   "fs_read_params_sin_rango": {
@@ -98,20 +113,20 @@
       "name": "norte-tui",
       "version": "0.1.0"
     },
-    "protocol_version": "0.4.0",
     "encodings": [
       "json"
-    ]
+    ],
+    "protocol_version": "0.4.0"
   },
   "initialize_result": {
+    "encodings": [
+      "json"
+    ],
+    "protocol_version": "0.4.0",
     "server_info": {
       "name": "norte-core",
       "version": "0.1.0"
-    },
-    "protocol_version": "0.4.0",
-    "encodings": [
-      "json"
-    ]
+    }
   },
   "task_cancel_params": {
     "task_id": 7
@@ -121,16 +136,16 @@
   "task_list_result": {
     "tasks": [
       {
-        "task_id": 7,
+        "bytes_done": 512,
+        "bytes_total": 1024,
+        "current": "file:///src/a.txt",
+        "entries_done": 1,
+        "entries_total": 3,
         "kind": "copy",
         "state": {
           "kind": "running"
         },
-        "bytes_done": 512,
-        "bytes_total": 1024,
-        "entries_done": 1,
-        "entries_total": 3,
-        "current": "file:///src/a.txt"
+        "task_id": 7
       }
     ]
   },

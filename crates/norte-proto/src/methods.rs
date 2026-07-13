@@ -36,7 +36,7 @@ use crate::{
 };
 
 /// Versión del protocolo (semver). El core soporta N y N-1 (spec §11).
-pub const PROTOCOL_VERSION: &str = "0.6.0";
+pub const PROTOCOL_VERSION: &str = "0.7.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -134,6 +134,11 @@ pub const FS_DELETE: &str = "fs.delete";
 /// confirma la recepción; el estado final (`cancelled`, o `completed` si la
 /// Task ganó la carrera) llega por [`TASK_PROGRESS`].
 pub const TASK_CANCEL: &str = "task.cancel";
+/// `connection.trust_host_key` — registra una host key SSH en el `known_hosts`
+/// tras confirmación del usuario (flujo TOFU, ADR 0015 D; 0.7.0, fase 6). Se
+/// llama tras un [`Error::HostKeyUnknown`](crate::Error::HostKeyUnknown) y
+/// antes de reintentar la conexión. Idempotente.
+pub const CONNECTION_TRUST_HOST_KEY: &str = "connection.trust_host_key";
 /// `task.progress` — notificación server→client, coalescida (≤30 Hz).
 pub const TASK_PROGRESS: &str = "task.progress";
 
@@ -380,3 +385,28 @@ pub struct TaskCancelParams {
 /// Result de [`TASK_CANCEL`]: objeto vacío, reservado para extensión.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskCancelResult {}
+
+/// Params de [`CONNECTION_TRUST_HOST_KEY`] (flujo TOFU, ADR 0015 D). Lleva el
+/// fingerprint que el usuario VERIFICÓ; el core lo compara con la clave que
+/// vuelve a presentar el servidor al reintentar, y solo registra si coincide.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectionTrustHostKeyParams {
+    /// Host al que se conecta (`host`; el puerto aparte).
+    pub host: String,
+    /// Puerto (ausente = default del scheme).
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// Algoritmo de la clave (p. ej. `ssh-ed25519`).
+    pub algo: String,
+    /// Fingerprint en formato OpenSSH `SHA256:<base64>` que el usuario
+    /// confirmó (la misma cadena que trae el `Error::HostKeyUnknown`).
+    pub fingerprint: String,
+}
+
+/// Result de [`CONNECTION_TRUST_HOST_KEY`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectionTrustHostKeyResult {
+    /// `true` si la clave quedó registrada (idempotente: `true` también si ya
+    /// estaba). `false` reservado para un futuro rechazo por política.
+    pub trusted: bool,
+}
