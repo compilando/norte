@@ -80,6 +80,12 @@ delimitador, multipart uploads y `CopyObject` server-side. Preguntas:
   `InvalidPath`. SIN filtro CRLF: S3 viaja por HTTP firmado (sigv4 cubre el
   path), no hay protocolo de líneas que inyectar — divergencia justificada
   respecto a FTP (ADR 0014).
+- **Whitespace en extremos → `InvalidPath`** (hallazgo del spike de 7b): el
+  `normalize_path` de opendal-core hace `path.trim()` — un nombre con
+  whitespace Unicode inicial/final se RENOMBRARÍA en silencio ("file " →
+  "file") en TODOS los backends, corrupción de bytes (regla 1) que S3 sí
+  permitiría. Rechazo fail-loud uniforme por segmento hasta que upstream
+  preserve los bytes (deuda con issue, misma familia que #37).
 - **Sink / create-new**: el multipart upload (o el PutObject bufferizado de
   opendal para objetos pequeños) ES el staging invisible natural — nada existe
   en la key final hasta `close()`. `write(p)` = validar padre + stat-check de
@@ -135,16 +141,25 @@ delimitador, multipart uploads y `CopyObject` server-side. Preguntas:
   (`AWS_*`/perfil/IMDS — el caso CI). Endpoint https por defecto; http =
   opt-in visible en config. Sin TOFU: S3 va por TLS/WebPKI, nunca emite
   `HostKeyUnknown`.
-- **Testing**: servidor S3 IN-PROCESS con `s3s`/`s3s-fs` 0.14 (dev-deps,
-  Apache-2.0) sobre tempdir en `127.0.0.1:0` — corre `provider_contract!` +
-  corpus hostil sin Docker, solo-Linux (mismo criterio que 0013/0014: el
-  harness se respalda en el FS del host). s3s-fs es EXPERIMENTAL → spike de
-  fidelidad el día 1 de 7b (multipart, CopyObject, If-None-Match, delimiter,
-  nombres hostiles); plan B registrado: el gate corre el contrato sobre un
-  `Operator` `services-fs` inyectado (misma lógica del provider, sin HTTP) y
-  lo específico-S3 queda solo en el nightly. Nightly (feature `it-s3`, fuera
-  del gate): MinIO real por testcontainers (spec §12) — roundtrip, hostiles,
-  `copy_native` y conditional-write real.
+- **Testing — harness DUAL (el spike de 7b activó el plan B)**. El spike
+  midió s3s-fs FIEL en multipart, invisibilidad pre-commit, abort,
+  `if_not_exists` (simple y multipart), rangos y delimiter — e INFIEL justo
+  donde el contrato aprieta: markers de dir vacío invisibles al LIST,
+  nombres cerca del NAME_MAX de su fs → 500, `HeadObject` de un
+  path-directorio → 500 (S3 real: 404) y `copy_with if_not_exists` ignorado.
+  Resultado:
+  1. `tests/contract.rs`: `provider_contract!` + corpus hostil sobre un
+     `Operator` **`services-fs`** con `atomic_write_dir` (misma lógica del
+     provider, sin HTTP; fixtures de >246 bytes filtradas — NAME_MAX del
+     harness, no del provider), solo-Linux.
+  2. `tests/s3.rs`: suite S3-ESPECÍFICA contra **s3s-fs** in-process
+     (127.0.0.1:0, patrón libunftp): multipart real, ventana de carrera del
+     conditional write, rangos, nombres — solo donde es fiel.
+  3. `tests/hostile.rs`: contención provider-level + servidor S3 MENTIROSO
+     por HTTP crudo (keys con `/` inyectado / U+FFFD cortan el listado).
+  4. Nightly (feature `it-s3`, fuera del gate): MinIO real por testcontainers
+     (spec §12) — roundtrip, hostiles + keys largas, dirs/markers,
+     `copy_native` y conditional-write real.
 
 ## Consecuencias
 
@@ -173,3 +188,10 @@ Negativas / deuda asumida:
   el mismo nombre de bucket en DOS endpoints distintos comparte clave de caché
   del engine (issue; tocar la authority sería cambio de wire).
 - s3s-fs experimental como harness del gate: plan B documentado arriba.
+- **Deuda upstream de opendal** (issue #48): `normalize_path` hace `str::trim`
+  (renombrado silencioso, mitigado con rechazo fail-loud en `key()`) y
+  `build_rel_path` panica ante una key ecoada más corta que el `root` (minor;
+  se defiende validando longitud en 7e). **rename de prefijo materializa el
+  árbol en RAM** (issue #49, streaming pendiente). Cobertura que el harness
+  in-process no alcanza (keys largas, siembra externa, root no vacío) → nightly
+  MinIO, issue #50.

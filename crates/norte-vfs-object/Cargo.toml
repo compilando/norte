@@ -1,0 +1,53 @@
+[package]
+name = "norte-vfs-object"
+description = "Provider VFS sobre object storage (opendal: S3 primero)"
+license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+futures.workspace = true
+norte-proto.workspace = true
+norte-vfs.workspace = true
+# El Operator llega INYECTADO ya configurado (bucket/region/credenciales en
+# norte-connect, fase 7d — ADR 0016 B); el provider jamás ve el secreto.
+opendal.workspace = true
+# Solo `rt`: el Drop del sink aborta el multipart huérfano best-effort vía
+# Handle::try_current().spawn() — el abort es una llamada de red, no un unlink
+# síncrono como en local.
+tokio = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+# services-fs: harness del CONTRATO (misma lógica del provider sin HTTP; el
+# spike de 7b midió que s3s-fs pierde markers de dir vacío y nombres largos).
+# services-memory no: sin atomic_write_dir ni semántica de fs POSIX.
+hyper-util.workspace = true
+norte-testkit.workspace = true
+opendal = { workspace = true, features = ["services-fs"] }
+s3s.workspace = true
+s3s-fs.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+
+[features]
+# Test de integración NIGHTLY contra un servidor S3 REAL (MinIO) por
+# testcontainers (ADR 0016 J, spec §12). Fuera del gate de PR: exige Docker —
+# lo corre el workflow nightly, no `just ci`.
+it-s3 = ["dep:testcontainers"]
+
+[dependencies.testcontainers]
+version = "0.27"
+optional = true
+
+# El test `reals3` solo se compila con la feature `it-s3` (nightly).
+[[test]]
+name = "reals3"
+required-features = ["it-s3"]
+
+[lints]
+workspace = true

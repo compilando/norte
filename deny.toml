@@ -21,6 +21,14 @@ allow = [
 exceptions = [
     { name = "notify", allow = ["CC0-1.0"] },
     { name = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
+    # Fase 7 (opendal, ADR 0016): datos de certificados raíz de Mozilla — el
+    # MISMO contenido y licencia de DATOS que webpki-roots (arriba); entra
+    # por reqwest → rustls-platform-verifier.
+    { name = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] },
+    # Fase 7 (opendal, ADR 0016): keccak puro-Rust, CC0 (dominio público);
+    # transitiva de reqsign (firma sigv4) vía const-random. Mismo criterio
+    # que notify: CC0 acotado por-crate, jamás en el allow global.
+    { name = "tiny-keccak", allow = ["CC0-1.0"] },
 ]
 confidence-threshold = 0.9
 
@@ -49,6 +57,12 @@ multiple-versions = "warn"
 wildcards = "deny"
 # Las deps internas van por path sin versión (workspace privado, sin publish aún).
 allow-wildcard-paths = true
+# NOTA pila criptográfica: el build ENVIADO usa una sola pila, aws-lc-rs
+# (russh/suppaftp/rustls/opendal la seleccionan). `ring` solo aparece bajo
+# `all-features=true` (que este [graph] activa) porque rustls enciende su
+# feature `ring` — NO en el grafo real (verificado: `cargo tree -p
+# norte-vfs-object -e features -i ring` = vacío). No se puede `ban` sin dar
+# rojo permanente contra all-features; el invariante se revisa por-PR.
 
 [sources]
 unknown-registry = "deny"

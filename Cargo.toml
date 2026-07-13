@@ -8,6 +8,7 @@ members = [
     "crates/norte-vfs-local",
     "crates/norte-vfs-sftp",
     "crates/norte-vfs-ftp",
+    "crates/norte-vfs-object",
     "crates/norte-connect",
     "crates/norte-testkit",
     "crates/norte-core",
@@ -31,6 +32,7 @@ norte-vfs = { path = "crates/norte-vfs", version = "0.0.0" }
 norte-vfs-local = { path = "crates/norte-vfs-local", version = "0.0.0" }
 norte-vfs-sftp = { path = "crates/norte-vfs-sftp", version = "0.0.0" }
 norte-vfs-ftp = { path = "crates/norte-vfs-ftp", version = "0.0.0" }
+norte-vfs-object = { path = "crates/norte-vfs-object", version = "0.0.0" }
 norte-connect = { path = "crates/norte-connect", version = "0.0.0" }
 norte-testkit = { path = "crates/norte-testkit", version = "0.0.0" }
 norte-core = { path = "crates/norte-core", version = "0.0.0" }
@@ -53,6 +55,15 @@ russh-sftp = "2.3"
 # (resume). Alternativa evaluada: async-ftp (sin mantener). El servidor de
 # test in-process usa libunftp (dev-dep del crate).
 suppaftp = "10"
+# Provider de object storage (fase 7, ADR 0016): opendal, capa multi-backend
+# de la ASF (S3 primero; GCS/Azure = activar features sin tocar código, spec
+# §3). default-features=false + services-s3: solo el backend S3 y el
+# transporte reqwest/rustls (aws-lc-rs, la MISMA pila cripto que russh/
+# suppaftp). Alternativa evaluada (ADR 0016 A): aws-sdk-s3 (S3-only, stack
+# smithy igual de grande, sin camino GCS/Azure) y firma sigv4 a mano
+# (reqsign/rusty-s3 — deuda de mantenimiento permanente). Dep GRANDE:
+# transitivas reqwest/reqsign/quick-xml bajo cargo-deny.
+opendal = { version = "0.58", default-features = false, features = ["services-s3", "http-transport-reqwest", "executors-tokio"] }
 sha2 = "0.10"
 # Fase 6 (ADR 0015, connections/secretos): keyring del OS (Secret Service/
 # Keychain/Credential Manager, el estándar cross-platform); age (fichero
@@ -148,6 +159,18 @@ tempfile = "3"
 # dev; el nightly usa un servidor real por testcontainers.
 libunftp = "0.23"
 unftp-sbe-fs = "0.4"
+# Servidor S3 in-process para los tests del provider object (fase 7, ADR 0016
+# J): s3s (framework de servicio S3) + s3s-fs (backend de FS) sirven la API S3
+# real en 127.0.0.1:puerto-efímero sobre un tempdir, sin Docker — el patrón
+# libunftp/russh-server. s3s-fs es EXPERIMENTAL: el spike de 7b midió su
+# fidelidad (multipart/if_not_exists/delimiter fieles; markers de dir vacío y
+# nombres >255 bytes NO) → el contrato corre sobre services-fs de opendal y la
+# suite S3-específica sobre s3s-fs (tests/common). Nightly = MinIO real.
+s3s = "0.14"
+s3s-fs = "0.14"
+# Glue HTTP del servidor s3s in-process (hyper 1 ya está en el árbol vía
+# reqwest/libunftp; hyper-util aporta el serve_connection con TokioIo).
+hyper-util = { version = "0.1", features = ["server", "http1", "tokio"] }
 assert_cmd = "2"
 # Fase 10 (calidad, spec §12): snapshots del TUI y benchmarks de los
 # presupuestos (cold start <50 ms; 100k listado <200 ms a primer render).
