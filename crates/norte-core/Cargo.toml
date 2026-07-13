@@ -20,6 +20,7 @@ futures.workspace = true
 norte-connect.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
+norte-vfs-archive.workspace = true
 norte-vfs-ftp.workspace = true
 norte-vfs-object.workspace = true
 norte-vfs-sftp.workspace = true

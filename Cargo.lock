@@ -3745,6 +3745,7 @@ dependencies = [
  "norte-proto",
  "norte-testkit",
  "norte-vfs",
+ "norte-vfs-archive",
  "norte-vfs-ftp",
  "norte-vfs-object",
  "norte-vfs-sftp",

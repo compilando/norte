@@ -398,12 +398,27 @@ async fn daemon_cmd(engine: Engine, cmd: DaemonCmd) -> anyhow::Result<ExitCode> 
 /// trata como URL remota.
 const REMOTE_SCHEMES: [&str; 3] = ["sftp://", "ftp://", "s3://"];
 
+/// ¿El arg es una URL de archivo-como-directorio (ADR 0018)? Exige la forma
+/// completa `<formato>+<scheme>://…` con formato de la whitelist de proto
+/// (la reserva normativa garantiza que ningún provider legítimo empieza
+/// así, test abajo): un path local raro tipo `zip+dir/sub://y` sigue
+/// siendo nativo.
+fn is_archive_url(s: &str) -> bool {
+    let Some((scheme, _)) = s.split_once("://") else {
+        return false;
+    };
+    let Some((fmt, inner)) = scheme.split_once('+') else {
+        return false;
+    };
+    norte_proto::ARCHIVE_FORMATS.contains(&fmt) && !inner.is_empty() && !inner.contains('/')
+}
+
 fn vpath(path: &std::path::Path) -> anyhow::Result<VPath> {
     // Una URL remota va por el parser wire; todo lo demás es un path NATIVO
     // local (bytes, jamás forzados a UTF-8 — un arg no-UTF8 no puede ser URL
     // y cae al camino nativo).
     if let Some(s) = path.to_str()
-        && REMOTE_SCHEMES.iter().any(|p| s.starts_with(p))
+        && (REMOTE_SCHEMES.iter().any(|p| s.starts_with(p)) || is_archive_url(s))
     {
         reject_inline_password(s)?;
         return VPath::parse(s).with_context(|| norte_i18n::ta("cli-invalid-url", &[("url", s)]));
@@ -616,5 +631,42 @@ fn render(p: &norte_proto::TaskProgress, show_bytes: bool) {
         eprint!("\r{bytes} — {entries} entradas   ");
     } else {
         eprint!("\r{entries} entradas   ");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reserva normativa de ADR 0018: ningún scheme remoto de la allowlist
+    /// puede empezar por `<formato>+` — el registro de formatos manda.
+    #[test]
+    fn remote_schemes_respetan_la_reserva_de_formatos() {
+        for scheme in REMOTE_SCHEMES {
+            for format in norte_proto::ARCHIVE_FORMATS {
+                assert!(
+                    !scheme.starts_with(&format!("{format}+")),
+                    "{scheme} invade el namespace del formato {format}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn urls_de_archivo_van_por_el_parser_wire() {
+        let p = vpath(std::path::Path::new("zip+file:///tmp/a.zip/!/x")).expect("parsea");
+        assert_eq!(p.scheme(), "zip+file");
+        // Un path local que solo se PARECE (sin `://`) sigue siendo nativo.
+        let p = vpath(std::path::Path::new("zip+file")).expect("nativo");
+        assert_eq!(p.scheme(), "file");
+        // Password inline en un compuesto remoto: mismo guard que siempre.
+        // Directo contra el guard (el parse TAMBIÉN lo rechaza desde #46,
+        // pero este test protege la defensa en profundidad de la CLI).
+        assert!(reject_inline_password("tar+sftp://u:pass@h/a.tar/!").is_err());
+        assert!(vpath(std::path::Path::new("tar+sftp://u:pass@h/a.tar/!")).is_err());
+        // Paths locales patológicos que se PARECEN: nativos, no URL.
+        for nativo in ["zip+dir/sub://y", "tar+xz", "zip+://x"] {
+            assert!(!is_archive_url(nativo), "{nativo} debe ser nativo");
+        }
     }
 }

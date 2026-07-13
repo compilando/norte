@@ -669,18 +669,29 @@ async fn dispatch(
         "nav.enter" => {
             // También symlinks: si apunta a un dir, el provider listará; si
             // no, el cd falla y se absorbe — qué es "entrable" lo decide el
-            // core, no el TUI (regla 7).
+            // core, no el TUI (regla 7). Un File .zip/.tar entra como
+            // directorio virtual (ADR 0018): el TUI solo COMPONE el path
+            // (azúcar de navegación); listar/validar sigue siendo del core.
             let target = app
                 .focused()
                 .selected()
                 .filter(|e| matches!(e.kind, EntryKind::Dir | EntryKind::Symlink))
-                .map(|e| e.path.clone());
+                .map(|e| e.path.clone())
+                .or_else(|| app.focused().selected().and_then(archive_root_for));
             if let Some(dir) = target {
                 cd_outcome = cd(app, backend, events, dir).await;
             }
         }
         "nav.parent" => {
-            if let Some(parent) = app.focused().dir.parent() {
+            // Salir de la raíz interior de un archivo = el dir que CONTIENE
+            // al contenedor (el padre sintáctico sería un compuesto sin
+            // marcador: malformado, ADR 0018).
+            let dir = &app.focused().dir;
+            let parent = match dir.archive_split() {
+                Ok(Some(aref)) if aref.inner.is_empty() => aref.outer.parent(),
+                _ => dir.parent(),
+            };
+            if let Some(parent) = parent {
                 cd_outcome = cd(app, backend, events, parent).await;
             }
         }
@@ -826,58 +837,25 @@ async fn read_head(backend: &Backend, path: &VPath) -> Result<(Vec<u8>, bool), E
     Ok((out, truncated))
 }
 
-/// cd CANCELABLE (regla 3): el listado corre contra el stream de eventos —
-/// Esc lo abandona (el pane se queda donde estaba) y Ctrl-C sale del TUI
-/// (atajos FIJOS durante un cd: aquí no aplica el keymap — son la salida de
-/// emergencia y no deben ser remapeables a algo que no exista). Soltar el
-/// future del listado detiene al productor del provider (testeado en
-/// vfs-local). El resto de teclas se descartan mientras dura el cd.
-async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPath) -> Cd {
-    let fut = first_page(backend, &dir);
-    tokio::pin!(fut);
-    loop {
-        tokio::select! {
-            res = &mut fut => {
-                match res {
-                    Ok((mut first, stream)) => {
-                        sort_entries(&mut first);
-                        let more = stream.is_some();
-                        app.focused_mut().begin_listing(dir.clone(), first, more);
-                        let pane = app.focus();
-                        // Si queda stream, un drenador lo rellena en background.
-                        return match stream {
-                            Some(s) => Cd::Filling(spawn_fill(pane, s)),
-                            None => Cd::Replaced(pane),
-                        };
-                    }
-                    // Un error de listado NO tumba el TUI: el pane se queda,
-                    // pero un relleno previo de ESTE pane ya no aplica.
-                    Err(e) => {
-                        app.message = Some(ta("msg-error", &[("error", &e.to_string())]));
-                        return Cd::Replaced(app.focus());
-                    }
-                }
-            }
-            maybe = events.next() => {
-                match maybe {
-                    Some(Ok(Event::Key(key)))
-                        if key.kind == crossterm::event::KeyEventKind::Press =>
-                    {
-                        match (key.code, key.modifiers) {
-                        (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
-                            app.quit = true;
-                            return Cd::Cancelled;
-                        }
-                            (KeyCode::Esc, _) => return Cd::Cancelled,
-                            _ => {}
-                        }
-                    }
-                    Some(Ok(_)) => {}
-                    Some(Err(_)) | None => return Cd::Cancelled,
-                }
-            }
-        }
+/// Si la entrada es un contenedor navegable (`.<formato>` de la whitelist
+/// de proto, extensión ASCII case-insensitive), la raíz de su interior
+/// (ADR 0018). El mapa extensión→formato es azúcar de presentación; la
+/// validación real es del core. Un SYMLINK a un archivo no entra como
+/// contenedor en v1 (decisión consciente: exigiría resolver el target por
+/// stat del core; issue de fase 8g).
+fn archive_root_for(e: &norte_proto::Entry) -> Option<VPath> {
+    fn ends_ci(name: &[u8], suffix: &[u8]) -> bool {
+        name.len() >= suffix.len() && name[name.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
     }
+    if e.kind != EntryKind::File {
+        return None;
+    }
+    let name = e.path.file_name()?.as_bytes();
+    let format = norte_proto::ARCHIVE_FORMATS
+        .iter()
+        .find(|f| ends_ci(name, format!(".{f}").as_bytes()))?;
+    // Falla (exterior con `!`, ya compuesto…): no es navegable — Enter no-op.
+    VPath::archive_compose(format, &e.path, &[]).ok()
 }
 
 /// Listado COMPLETO y ordenado de `dir` (para `refresh_panes` tras una
@@ -960,4 +938,89 @@ fn spawn_fill(pane: usize, mut stream: EntryStream) -> Fill {
         }
     });
     Fill { pane, rx }
+}
+
+/// cd CANCELABLE (regla 3): el listado corre contra el stream de eventos —
+/// Esc lo abandona (el pane se queda donde estaba) y Ctrl-C sale del TUI
+/// (atajos FIJOS durante un cd: aquí no aplica el keymap — son la salida de
+/// emergencia y no deben ser remapeables a algo que no exista). Soltar el
+/// future del listado detiene al productor del provider (testeado en
+/// vfs-local). El resto de teclas se descartan mientras dura el cd.
+async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPath) -> Cd {
+    let fut = first_page(backend, &dir);
+    tokio::pin!(fut);
+    loop {
+        tokio::select! {
+            res = &mut fut => {
+                match res {
+                    Ok((mut first, stream)) => {
+                        sort_entries(&mut first);
+                        let more = stream.is_some();
+                        app.focused_mut().begin_listing(dir.clone(), first, more);
+                        let pane = app.focus();
+                        // Si queda stream, un drenador lo rellena en background.
+                        return match stream {
+                            Some(s) => Cd::Filling(spawn_fill(pane, s)),
+                            None => Cd::Replaced(pane),
+                        };
+                    }
+                    // Un error de listado NO tumba el TUI: el pane se queda,
+                    // pero un relleno previo de ESTE pane ya no aplica.
+                    Err(e) => {
+                        app.message = Some(ta("msg-error", &[("error", &e.to_string())]));
+                        return Cd::Replaced(app.focus());
+                    }
+                }
+            }
+            maybe = events.next() => {
+                match maybe {
+                    Some(Ok(Event::Key(key)))
+                        if key.kind == crossterm::event::KeyEventKind::Press =>
+                    {
+                        match (key.code, key.modifiers) {
+                        (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
+                            app.quit = true;
+                            return Cd::Cancelled;
+                        }
+                            (KeyCode::Esc, _) => return Cd::Cancelled,
+                            _ => {}
+                        }
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) | None => return Cd::Cancelled,
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod archive_nav_tests {
+    use super::*;
+    use norte_proto::{Entry, EntryKind};
+
+    fn entry(wire: &str, kind: EntryKind) -> Entry {
+        Entry {
+            path: VPath::parse(wire).expect("wire de test"),
+            kind,
+            size: None,
+            mtime_ms: None,
+        }
+    }
+
+    #[test]
+    fn archive_root_for_decide_por_extension_y_kind() {
+        let e = entry("file:///d/A.ZIP", EntryKind::File);
+        assert_eq!(
+            archive_root_for(&e).expect("mayúsculas entran").to_wire(),
+            "zip+file:///d/A.ZIP/!"
+        );
+        assert!(archive_root_for(&entry("file:///d/a.tar", EntryKind::File)).is_some());
+        assert!(archive_root_for(&entry("file:///d/a.txt", EntryKind::File)).is_none());
+        // Un dir llamado x.zip NO es contenedor; un symlink tampoco (v1).
+        assert!(archive_root_for(&entry("file:///d/x.zip", EntryKind::Dir)).is_none());
+        assert!(archive_root_for(&entry("file:///d/x.zip", EntryKind::Symlink)).is_none());
+        // Ya compuesto (zip dentro de tar): v1 sin anidar → no-op.
+        assert!(archive_root_for(&entry("tar+file:///a.tar/!/i.zip", EntryKind::File)).is_none());
+    }
 }

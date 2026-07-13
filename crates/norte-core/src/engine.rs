@@ -143,6 +143,34 @@ impl Engine {
                 return Ok(Arc::clone(prov));
             }
         }
+        // Archivos como directorios (ADR 0018): scheme compuesto = provider
+        // por composición sobre el provider del CONTENEDOR. Antes del
+        // connector: el interior puede ser local o una conexión ya viva.
+        if let Some(aref) = p.archive_split().map_err(|_| Error::InvalidPath)? {
+            let format = match aref.format.as_str() {
+                "tar" => norte_vfs_archive::Format::Tar,
+                "zip" => norte_vfs_archive::Format::Zip,
+                // Formato de la whitelist de proto sin provider aquí: una
+                // versión de core más vieja que el proto. Honesto: no sé.
+                _ => return Err(Error::Unsupported),
+            };
+            // El exterior jamás lleva prefijo de formato (archive_split
+            // rechaza anidamiento en v1): recursión de profundidad 1.
+            let inner = Box::pin(self.provider_for(&aref.outer)).await?;
+            tracing::debug!(scheme = %p.scheme(), %key, "componiendo provider de archivo");
+            let provider: Arc<dyn Provider> = Arc::new(norte_vfs_archive::ArchiveProvider::new(
+                inner,
+                format,
+                p.scheme().to_owned(),
+            ));
+            // Mismo double-check que los remotos: si otra petición registró
+            // primero, gana la suya (el ArchiveProvider extra solo es RAM).
+            let mut providers = self.providers.write().expect("providers lock sano");
+            let entry = providers
+                .entry(key)
+                .or_insert_with(|| Arc::clone(&provider));
+            return Ok(Arc::clone(entry));
+        }
         let connector = self
             .connector
             .read()
