@@ -20,3 +20,5 @@ La spec evoluciona por ADR, no por edición silenciosa (spec §18).
 | [0013](0013-provider-sftp.md) | Provider SFTP: russh, contención del servidor hostil y testing | accepted |
 | [0014](0014-provider-ftp.md) | Provider FTP: suppaftp, MLSD, testing in-process y cleartext | accepted |
 | [0015](0015-conexiones-y-secretos.md) | Conexiones y secretos: connections.toml, keyring, TOFU, ed25519 | accepted |
+| [0016](0016-provider-object-storage.md) | Provider de object storage: opendal, modelo de keys y S3 primero | accepted |
+| [0017](0017-paginacion-cursor-fs-list.md) | Paginación por cursor de `fs.list`: stream retenido por conexión | accepted |

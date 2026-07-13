@@ -76,6 +76,8 @@ M0 devuelve el listado completo. Cuando llegue la paginación por cursor (M1),
 un core nuevo DEBE seguir devolviendo el listado completo a clientes que no
 envíen cursor — jamás truncar en silencio a un N-1.
 
+> Materializada en M2 fase 7 (proto 0.8.0) honrando esta cláusula: ADR 0017.
+
 ## Consecuencias
 
 - ＋ Añadir superficie al protocolo (lo normal en M1–M4) casi nunca será breaking.
