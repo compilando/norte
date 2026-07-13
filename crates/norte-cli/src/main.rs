@@ -80,6 +80,12 @@ enum Cmd {
         /// Nodo a borrar
         path: PathBuf,
     },
+    /// Establece una conexión remota (por nombre de `connections.toml` o
+    /// URL `sftp://…`/`ftp://…`), con el flujo TOFU interactivo (fase 6e)
+    Connect {
+        /// Nombre de la conexión o URL remota
+        target: String,
+    },
     /// Daemon JSON-RPC sobre UDS (ADR 0011; solo unix en M2)
     #[cfg(unix)]
     Daemon {
@@ -171,6 +177,12 @@ fn main() -> ExitCode {
 async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let engine = Engine::new();
     engine.register_provider(Arc::new(LocalProvider::os_root()) as Arc<dyn Provider>);
+    // Conexiones remotas bajo demanda (fase 6e): connections.toml +
+    // known_hosts + secretos en el dir de config del usuario. Aplica tanto
+    // al modo embebido como al engine que sirve `norte daemon run`.
+    engine.set_connector(Arc::new(norte_core::connect::ConnectionManager::new(
+        norte_core::connect::config_dir(),
+    )));
 
     // El subcomando daemon usa el engine directo (ES el daemon).
     #[cfg(unix)]
@@ -181,6 +193,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let backend = make_backend(engine, cli.daemon, cli.socket).await?;
     match cli.cmd {
         Cmd::Ls { path, json } => ls(&backend, &path, json).await,
+        Cmd::Connect { target } => connect_cmd(&backend, &target, cli.daemon).await,
         Cmd::Cp {
             src,
             dst,
@@ -193,11 +206,13 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 resume: resume_policy(resume),
                 ..TransferOptions::default()
             };
-            let task = backend
-                .copy(&from, &to, opts)
-                .await
-                .map_err(|e| anyhow::anyhow!("{e}"))
-                .context(norte_i18n::t("cli-enqueue-copy"))?;
+            let task = match backend.copy(&from, &to, opts).await {
+                // Primer contacto TOFU: confirmar y reintentar UNA vez.
+                Err(e) if tofu_confirm(&backend, &e).await? => backend.copy(&from, &to, opts).await,
+                other => other,
+            }
+            .map_err(|e| anyhow::anyhow!("{e}"))
+            .context(norte_i18n::t("cli-enqueue-copy"))?;
             Ok(run_task(task, true).await)
         }
         Cmd::Mv {
@@ -212,20 +227,31 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 resume: resume_policy(resume),
                 ..TransferOptions::default()
             };
-            let task = backend
-                .move_(&from, &to, opts)
-                .await
-                .map_err(|e| anyhow::anyhow!("{e}"))
-                .context(norte_i18n::t("cli-enqueue-move"))?;
+            let task = match backend.move_(&from, &to, opts).await {
+                Err(e) if tofu_confirm(&backend, &e).await? => {
+                    backend.move_(&from, &to, opts).await
+                }
+                other => other,
+            }
+            .map_err(|e| anyhow::anyhow!("{e}"))
+            .context(norte_i18n::t("cli-enqueue-move"))?;
             Ok(run_task(task, false).await)
         }
         Cmd::Rm { path } => {
             let target = vpath(&path)?;
-            let task = backend
+            let task = match backend
                 .delete(&target, norte_proto::DeleteMode::Permanent)
                 .await
-                .map_err(|e| anyhow::anyhow!("{e}"))
-                .context(norte_i18n::t("cli-enqueue-delete"))?;
+            {
+                Err(e) if tofu_confirm(&backend, &e).await? => {
+                    backend
+                        .delete(&target, norte_proto::DeleteMode::Permanent)
+                        .await
+                }
+                other => other,
+            }
+            .map_err(|e| anyhow::anyhow!("{e}"))
+            .context(norte_i18n::t("cli-enqueue-delete"))?;
             Ok(run_task(task, false).await)
         }
         #[cfg(unix)]
@@ -365,18 +391,146 @@ async fn daemon_cmd(engine: Engine, cmd: DaemonCmd) -> anyhow::Result<ExitCode> 
     }
 }
 
+/// Schemes remotos que la CLI enruta por URL. ALLOWLIST explícita: un path
+/// local puede llamarse legalmente `a://b` (o `./x://y`) y debe seguir
+/// siendo un fichero — solo lo que empieza EXACTAMENTE por estos prefijos se
+/// trata como URL remota.
+const REMOTE_SCHEMES: [&str; 2] = ["sftp://", "ftp://"];
+
 fn vpath(path: &std::path::Path) -> anyhow::Result<VPath> {
+    // Una URL remota va por el parser wire; todo lo demás es un path NATIVO
+    // local (bytes, jamás forzados a UTF-8 — un arg no-UTF8 no puede ser URL
+    // y cae al camino nativo).
+    if let Some(s) = path.to_str()
+        && REMOTE_SCHEMES.iter().any(|p| s.starts_with(p))
+    {
+        reject_inline_password(s)?;
+        return VPath::parse(s).with_context(|| norte_i18n::ta("cli-invalid-url", &[("url", s)]));
+    }
     norte_vfs_local::vpath_from_native(path)
         .with_context(|| format!("path no representable: {}", path.display()))
 }
 
+/// Rechaza `user:pass@host` en una URL ANTES de que entre a `VPath::parse`
+/// (que la aceptaría) y por tanto a spans/errores: mensaje ESTÁTICO, sin
+/// ecoar la URL (regla 10). El parser de conexiones la rechazaría después,
+/// pero para entonces ya habría tocado logs.
+fn reject_inline_password(url: &str) -> anyhow::Result<()> {
+    let after_scheme = url.split_once("://").map_or(url, |(_, r)| r);
+    let authority = after_scheme.split('/').next().unwrap_or(after_scheme);
+    if let Some((userinfo, _)) = authority.rsplit_once('@')
+        && userinfo.contains(':')
+    {
+        anyhow::bail!(norte_i18n::t("cli-inline-password"));
+    }
+    Ok(())
+}
+
+/// Flujo TOFU interactivo (ADR 0015 D/G): ante un `Error::HostKeyUnknown`
+/// muestra la huella, pide confirmación por el terminal y, si el usuario
+/// acepta, la registra (el core re-verifica anti-TOCTOU) y devuelve `true`
+/// (reintentar la operación). Errores que no son TOFU → `false` (el caller
+/// reporta el original). Sin terminal NO se confía nada: instrucciones y error.
+async fn tofu_confirm(backend: &Backend, err: &norte_proto::Error) -> anyhow::Result<bool> {
+    use std::io::IsTerminal;
+    let norte_proto::Error::HostKeyUnknown {
+        host,
+        port,
+        algo,
+        fingerprint,
+    } = err
+    else {
+        return Ok(false);
+    };
+    let port_shown = port.unwrap_or(22).to_string();
+    eprintln!(
+        "{}",
+        norte_i18n::ta(
+            "cli-hostkey-unknown",
+            &[("host", host.as_str()), ("port", port_shown.as_str())]
+        )
+    );
+    eprintln!(
+        "{}",
+        norte_i18n::ta(
+            "cli-hostkey-fingerprint",
+            &[
+                ("algo", algo.as_str()),
+                ("fingerprint", fingerprint.as_str())
+            ]
+        )
+    );
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!(norte_i18n::t("cli-hostkey-noninteractive"));
+    }
+    eprint!("{} ", norte_i18n::t("cli-hostkey-prompt"));
+    // stdin es bloqueante: fuera del reactor (regla 2).
+    let line = tokio::task::spawn_blocking(|| {
+        let mut s = String::new();
+        std::io::stdin().read_line(&mut s).map(|_| s)
+    })
+    .await
+    .context(norte_i18n::t("cli-confirm-read"))??;
+    let yes = matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "s" | "si" | "sí" | "y" | "yes"
+    );
+    if !yes {
+        anyhow::bail!(norte_i18n::t("cli-hostkey-refused"));
+    }
+    backend
+        .trust_host_key(host, *port, algo, fingerprint)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    eprintln!("{}", norte_i18n::t("cli-hostkey-trusted"));
+    Ok(true)
+}
+
+/// `norte connect <nombre|url>`: establece la conexión (disparando el flujo
+/// TOFU si es el primer contacto) y confirma. El valor duradero es el
+/// registro de la host key + la validación de credenciales.
+async fn connect_cmd(backend: &Backend, target: &str, daemon: bool) -> anyhow::Result<ExitCode> {
+    if daemon {
+        // La resolución por nombre lee el config LOCAL; contra un daemon
+        // remoto la semántica cambia — se difiere (mínimo viable, ADR 0015 G).
+        anyhow::bail!(norte_i18n::t("cli-connect-daemon-unsupported"));
+    }
+    let url = if target.contains("://") {
+        target.to_string()
+    } else {
+        // Nombre de connections.toml → su URL (el core la resuelve).
+        norte_core::connect::named_url(&norte_core::connect::config_dir(), target)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+            .context(norte_i18n::t("cli-connect-failed"))?
+    };
+    reject_inline_password(&url)?;
+    let root = VPath::parse(&url)
+        .with_context(|| norte_i18n::ta("cli-invalid-url", &[("url", url.as_str())]))?;
+    // capabilities fuerza el establecimiento por el camino normal del engine.
+    let result = match backend.capabilities(&root).await {
+        Err(e) if tofu_confirm(backend, &e).await? => backend.capabilities(&root).await,
+        other => other,
+    };
+    result
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context(norte_i18n::t("cli-connect-failed"))?;
+    println!(
+        "{}",
+        norte_i18n::ta("cli-connect-ok", &[("target", target)])
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
 async fn ls(backend: &Backend, path: &std::path::Path, json: bool) -> anyhow::Result<ExitCode> {
     let target = vpath(path)?;
-    let entries: Vec<Entry> = backend
-        .list(&target)
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))
-        .context(norte_i18n::t("cli-list-failed"))?;
+    let entries: Vec<Entry> = match backend.list(&target).await {
+        // Primer contacto TOFU: confirmar y reintentar UNA vez.
+        Err(e) if tofu_confirm(backend, &e).await? => backend.list(&target).await,
+        other => other,
+    }
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .context(norte_i18n::t("cli-list-failed"))?;
     if json {
         // Forma wire (lossless); el consumidor decodifica con el codec.
         serde_json::to_writer_pretty(std::io::stdout().lock(), &entries)

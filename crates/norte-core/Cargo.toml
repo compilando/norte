@@ -9,11 +9,19 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+# Providers de la cadena de salida = crates core (ADR 0010): el connection
+# manager de fase 6e (ADR 0015 A) resuelve connections.toml + secreto vía
+# norte-connect y construye SftpProvider/FtpProvider con la sesión inyectada.
+# El trait de conexión se implementa aquí; los providers jamás ven un secreto.
+async-trait.workspace = true
 # fs.read del daemon devuelve bytes en base64 (JSON no lleva bytes crudos).
 base64.workspace = true
 futures.workspace = true
+norte-connect.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
+norte-vfs-ftp.workspace = true
+norte-vfs-sftp.workspace = true
 # El daemon (ADR 0011) serializa el dispatch JSON-RPC; mismo encoding que proto.
 serde.workspace = true
 serde_json.workspace = true
@@ -23,8 +31,16 @@ tokio-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-async-trait.workspace = true
+# Servidores SSH y FTP in-process para el test de integración del connection
+# manager (mismo arnés que norte-connect; sin Docker).
+libunftp.workspace = true
+rand.workspace = true
+russh.workspace = true
+russh-sftp.workspace = true
 tempfile.workspace = true
+# Fixtures de connections.toml en los tests del connection manager.
+toml.workspace = true
+unftp-sbe-fs.workspace = true
 bytes.workspace = true
 norte-testkit.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time", "test-util"] }

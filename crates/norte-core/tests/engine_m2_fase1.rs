@@ -172,6 +172,7 @@ async fn overwrite_entre_variantes_de_caja_que_el_fs_distingue_procede() {
             &vp("mem:///casa"),
             on_collision(CollisionPolicy::Overwrite),
         )
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(read_all(&*inner, "mem:///casa").await.unwrap(), b"mayus");
@@ -196,6 +197,7 @@ async fn sin_identidad_la_heuristica_conservadora_sigue_bloqueando() {
             &vp("mem:///unico"),
             on_collision(CollisionPolicy::Overwrite),
         )
+        .await
         .unwrap();
     assert!(matches!(handle.join().await, TaskState::Failed { .. }));
     assert_eq!(read_all(&*mem, "mem:///unico").await.unwrap(), b"precioso");
@@ -214,6 +216,7 @@ async fn mutacion_con_fallo_transitorio_pre_efecto_se_reintenta() {
 
     let handle = engine
         .delete_with(&vp("mem:///victima"), DeleteMode::Permanent)
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(
@@ -233,6 +236,7 @@ async fn remove_ambiguo_se_desambigua_como_exito() {
 
     let handle = engine
         .delete_with(&vp("mem:///victima"), DeleteMode::Permanent)
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(
@@ -263,6 +267,7 @@ async fn mkdir_ambiguo_bajo_merge_completa_la_copia() {
             &vp("mem:///dst"),
             on_collision(CollisionPolicy::Overwrite),
         )
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(read_all(&*mem, "mem:///dst/f").await.unwrap(), b"data");
@@ -278,7 +283,10 @@ async fn mkdir_ambiguo_bajo_fail_es_conflict() {
     write_file(&mem, "mem:///src/f", b"data").await;
     mem.faults().ambiguous_mutations(1);
 
-    let handle = engine.copy(&vp("mem:///src"), &vp("mem:///dst")).unwrap();
+    let handle = engine
+        .copy(&vp("mem:///src"), &vp("mem:///dst"))
+        .await
+        .unwrap();
     match handle.join().await {
         TaskState::Failed {
             error: Error::Conflict { .. },
@@ -300,7 +308,10 @@ async fn symlink_ambiguo_preserve_se_desambigua() {
     let (engine, observer) = engine_recording(&mem);
     mem.faults().ambiguous_mutations(1);
 
-    let handle = engine.copy(&vp("mem:///ln"), &vp("mem:///ln2")).unwrap();
+    let handle = engine
+        .copy(&vp("mem:///ln"), &vp("mem:///ln2"))
+        .await
+        .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(mem.read_link(&vp("mem:///ln2")).await.unwrap(), b"target");
     let created: Vec<_> = observer
@@ -323,6 +334,7 @@ async fn rename_ambiguo_se_desambigua_como_exito() {
 
     let handle = engine
         .move_(&vp("mem:///antes"), &vp("mem:///despues"))
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(
@@ -354,6 +366,7 @@ async fn rename_ambiguo_sin_identidad_no_adivina() {
 
     let handle = engine
         .move_(&vp("mem:///antes"), &vp("mem:///despues"))
+        .await
         .unwrap();
     match handle.join().await {
         TaskState::Failed {
@@ -383,7 +396,10 @@ async fn preserve_resuelve_el_kind_del_dir_symlink() {
         .await
         .unwrap();
 
-    let handle = engine.copy(&vp("mem:///src"), &vp("mem:///dst")).unwrap();
+    let handle = engine
+        .copy(&vp("mem:///src"), &vp("mem:///dst"))
+        .await
+        .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(
         mem.symlink_kind_of(&vp("mem:///dst/zln")),
@@ -408,6 +424,7 @@ async fn follow_expande_dir_symlink_como_directorio() {
 
     let handle = engine
         .copy_with(&vp("mem:///src"), &vp("mem:///dst"), follow())
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(read_all(&*mem, "mem:///dst/at/f").await.unwrap(), b"data");
@@ -433,6 +450,7 @@ async fn follow_de_un_dir_symlink_raiz_copia_el_arbol() {
 
     let handle = engine
         .copy_with(&vp("mem:///zln"), &vp("mem:///dst"), follow())
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(read_all(&*mem, "mem:///dst/f").await.unwrap(), b"data");
@@ -452,6 +470,7 @@ async fn follow_ciclo_de_symlinks_falla_limpio() {
 
     let handle = engine
         .copy_with(&vp("mem:///src"), &vp("mem:///dst"), follow())
+        .await
         .unwrap();
     assert_eq!(
         handle.join().await,
@@ -477,6 +496,7 @@ async fn follow_dag_sin_ciclo_copia_dos_veces() {
 
     let handle = engine
         .copy_with(&vp("mem:///src"), &vp("mem:///dst"), follow())
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(read_all(&*mem, "mem:///dst/y1/f").await.unwrap(), b"data");
@@ -498,6 +518,7 @@ async fn follow_sin_identidad_es_unsupported() {
 
     let handle = engine
         .copy_with(&vp("mem:///zln"), &vp("mem:///dst"), follow())
+        .await
         .unwrap();
     assert_eq!(
         handle.join().await,
@@ -522,6 +543,7 @@ async fn move_follow_no_borra_a_traves_del_link() {
 
     let handle = engine
         .move_with(&vp("mem:///src"), &vp("mem:///dst2"), follow())
+        .await
         .unwrap();
     // Mismo provider: el rename gana y no hay expansión — forzar el camino
     // copy+delete con un destino CROSS-provider sería el caso puro; aquí
@@ -556,6 +578,7 @@ async fn move_follow_cross_provider_expande_y_borra_solo_el_link() {
 
     let handle = engine
         .move_with(&vp("src:///m"), &vp("mem:///dst"), follow())
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     // Destino: expandido de verdad (at real + zln expandido como dir real).
@@ -592,6 +615,7 @@ async fn follow_cancelacion_durante_walk_es_limpia() {
 
     let handle = engine
         .copy_with(&vp("mem:///src"), &vp("mem:///dst"), follow())
+        .await
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     handle.cancel();
@@ -619,6 +643,7 @@ async fn follow_overwrite_de_link_sobre_su_target_no_destruye() {
                 ..TransferOptions::default()
             },
         )
+        .await
         .unwrap();
     assert_eq!(
         handle.join().await,
@@ -650,6 +675,7 @@ async fn follow_overwrite_de_dir_link_sobre_su_target_no_destruye() {
                 ..TransferOptions::default()
             },
         )
+        .await
         .unwrap();
     assert_eq!(
         handle.join().await,
@@ -685,6 +711,7 @@ async fn follow_expande_con_nombres_hostiles_byte_exactos() {
 
     let handle = engine
         .copy_with(&vp("mem:///src"), &vp("mem:///dst"), follow())
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     for name in [nfd, ctrl] {
@@ -712,6 +739,7 @@ async fn cancelacion_durante_backoff_de_mutacion_es_rapida() {
     let inicio = std::time::Instant::now();
     let handle = engine
         .delete_with(&vp("mem:///victima"), DeleteMode::Permanent)
+        .await
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     handle.cancel();

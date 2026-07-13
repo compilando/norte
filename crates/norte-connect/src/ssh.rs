@@ -212,10 +212,24 @@ impl SshConnector {
             match store.check(&host, port, &key)? {
                 HostKeyStatus::Known => Ok(()), // idempotente
                 HostKeyStatus::Unknown { .. } => store.learn(&host, port, &key),
-                HostKeyStatus::Mismatch { .. } => Err(ConnectError::KnownHosts(format!(
-                    "{host}:{port} ya tiene otra clave registrada (¿rotación?); \
-                     elimina la entrada antigua del known_hosts antes de confiar la nueva"
-                ))),
+                // La categoría VIAJA como HostKeyMismatch (es el escenario
+                // rotación/MITM para el que existe en la taxonomía); la guía
+                // accionable queda en el log del core.
+                HostKeyStatus::Mismatch { algo, fingerprint } => {
+                    tracing::warn!(
+                        host = %host,
+                        port,
+                        "trust rechazado: {host}:{port} ya tiene otra clave registrada \
+                         (¿rotación?); elimina la entrada antigua del known_hosts antes \
+                         de confiar la nueva"
+                    );
+                    Err(ConnectError::HostKeyMismatch {
+                        host: host.clone(),
+                        port,
+                        algo,
+                        fingerprint,
+                    })
+                }
             }
         })
         .await

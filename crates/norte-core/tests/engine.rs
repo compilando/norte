@@ -51,6 +51,7 @@ async fn copy_file_happy_path() {
 
     let handle = engine
         .copy(&vp("mem:///src.bin"), &vp("mem:///dst.bin"))
+        .await
         .expect("submit");
     let rx = handle.progress();
     assert_eq!(handle.join().await, TaskState::Completed);
@@ -86,6 +87,7 @@ async fn copy_dir_recursive_with_hostile_names() {
 
     let handle = engine
         .copy(&vp("mem:///src"), &vp("mem:///dst"))
+        .await
         .expect("submit");
     assert_eq!(handle.join().await, TaskState::Completed);
 
@@ -112,7 +114,10 @@ async fn copy_collision_fails_without_writing() {
     write_file(&mem, "mem:///src", b"nuevo").await;
     write_file(&mem, "mem:///dst", b"precioso contenido previo").await;
 
-    let handle = engine.copy(&vp("mem:///src"), &vp("mem:///dst")).unwrap();
+    let handle = engine
+        .copy(&vp("mem:///src"), &vp("mem:///dst"))
+        .await
+        .unwrap();
     match handle.join().await {
         TaskState::Failed {
             error: Error::Conflict { conflict },
@@ -134,6 +139,7 @@ async fn copy_cancel_leaves_no_partial_destination() {
 
     let handle = engine
         .copy(&vp("mem:///grande"), &vp("mem:///copia"))
+        .await
         .unwrap();
     // Cancela en cuanto haya progreso de bytes (el engine chequea por chunk).
     let mut rx = handle.progress();
@@ -171,7 +177,10 @@ async fn copy_read_fault_fails_and_cleans_destination() {
     write_file(&mem, "mem:///src", &vec![1u8; 4000]).await;
     mem.faults().fail_read_at(&vp("mem:///src"), 2000);
 
-    let handle = engine.copy(&vp("mem:///src"), &vp("mem:///dst")).unwrap();
+    let handle = engine
+        .copy(&vp("mem:///src"), &vp("mem:///dst"))
+        .await
+        .unwrap();
     match handle.join().await {
         TaskState::Failed { error } => assert_eq!(error, Error::Io { retryable: false }),
         other => panic!("esperaba Failed{{Io}}, fue {other:?}"),
@@ -189,7 +198,10 @@ async fn copy_write_fault_fails_and_cleans_destination() {
     write_file(&mem, "mem:///src", &vec![2u8; 4000]).await;
     mem.faults().fail_write_at(&vp("mem:///dst"), 1000);
 
-    let handle = engine.copy(&vp("mem:///src"), &vp("mem:///dst")).unwrap();
+    let handle = engine
+        .copy(&vp("mem:///src"), &vp("mem:///dst"))
+        .await
+        .unwrap();
     match handle.join().await {
         TaskState::Failed { error } => assert_eq!(error, Error::Io { retryable: false }),
         other => panic!("esperaba Failed{{Io}}, fue {other:?}"),
@@ -207,7 +219,10 @@ async fn copy_disconnect_maps_to_provider_unavailable() {
     write_file(&mem, "mem:///src", b"x").await;
     mem.faults().disconnect_after(1);
 
-    let handle = engine.copy(&vp("mem:///src"), &vp("mem:///dst")).unwrap();
+    let handle = engine
+        .copy(&vp("mem:///src"), &vp("mem:///dst"))
+        .await
+        .unwrap();
     match handle.join().await {
         TaskState::Failed { error } => {
             assert_eq!(error, Error::ProviderUnavailable { retryable: true });
@@ -228,7 +243,10 @@ async fn copy_native_used_when_server_copy_declared() {
     // no lee por stream, así que debe completar igual.
     mem.faults().fail_read_at(&vp("mem:///src"), 0);
 
-    let handle = engine.copy(&vp("mem:///src"), &vp("mem:///dst")).unwrap();
+    let handle = engine
+        .copy(&vp("mem:///src"), &vp("mem:///dst"))
+        .await
+        .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     mem.faults().clear();
     assert_eq!(
@@ -246,6 +264,7 @@ async fn move_same_provider_is_rename_zero_bytes() {
 
     let handle = engine
         .move_(&vp("mem:///origen"), &vp("mem:///destino"))
+        .await
         .unwrap();
     let rx = handle.progress();
     assert_eq!(handle.join().await, TaskState::Completed);
@@ -267,7 +286,10 @@ async fn move_collision_fails_and_source_intact() {
     write_file(&mem, "mem:///a", b"1").await;
     write_file(&mem, "mem:///b", b"2").await;
 
-    let handle = engine.move_(&vp("mem:///a"), &vp("mem:///b")).unwrap();
+    let handle = engine
+        .move_(&vp("mem:///a"), &vp("mem:///b"))
+        .await
+        .unwrap();
     match handle.join().await {
         TaskState::Failed {
             error: Error::Conflict { .. },
@@ -288,7 +310,7 @@ async fn delete_tree_post_order() {
     write_file(&mem, "mem:///d/f1", b"x").await;
     write_file(&mem, "mem:///d/sub/f2", b"y").await;
 
-    let handle = engine.delete(&vp("mem:///d")).unwrap();
+    let handle = engine.delete(&vp("mem:///d")).await.unwrap();
     let rx = handle.progress();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(
@@ -304,7 +326,7 @@ async fn delete_tree_post_order() {
 async fn delete_missing_fails_not_found() {
     let (engine, mem) = engine_with_mem();
     let _ = &mem;
-    let handle = engine.delete(&vp("mem:///nada")).unwrap();
+    let handle = engine.delete(&vp("mem:///nada")).await.unwrap();
     assert_eq!(
         handle.join().await,
         TaskState::Failed {
@@ -321,11 +343,13 @@ async fn unknown_scheme_rejected_at_submit() {
     assert!(
         engine
             .copy(&vp("sftp://h/x"), &vp("mem:///y"))
+            .await
             .is_err_and(|e| e == Error::Unsupported)
     );
     assert!(
         engine
             .copy(&vp("mem:///x"), &vp("sftp://h/y"))
+            .await
             .is_err_and(|e| e == Error::Unsupported)
     );
 }
@@ -359,7 +383,10 @@ async fn copy_tree_cancel_leaves_complete_files_only() {
     mem.faults()
         .set_latency_per_op(Some(std::time::Duration::from_millis(3)));
 
-    let handle = engine.copy(&vp("mem:///src"), &vp("mem:///dst")).unwrap();
+    let handle = engine
+        .copy(&vp("mem:///src"), &vp("mem:///dst"))
+        .await
+        .unwrap();
     let mut rx = handle.progress();
     loop {
         let snap = rx.borrow_and_update().clone();
@@ -397,7 +424,7 @@ async fn delete_tree_cancel_keeps_root_and_rest_intact() {
     mem.faults()
         .set_latency_per_op(Some(std::time::Duration::from_millis(3)));
 
-    let handle = engine.delete(&vp("mem:///src")).unwrap();
+    let handle = engine.delete(&vp("mem:///src")).await.unwrap();
     let mut rx = handle.progress();
     loop {
         let snap = rx.borrow_and_update().clone();
@@ -428,6 +455,7 @@ async fn move_cancel_before_start_leaves_everything_intact() {
 
     let handle = engine
         .move_(&vp("mem:///origen"), &vp("mem:///destino"))
+        .await
         .unwrap();
     // Cancela inmediatamente: la task lo observa antes del rename.
     handle.cancel();
@@ -456,7 +484,10 @@ async fn move_cancel_before_start_leaves_everything_intact() {
 async fn copy_dir_into_itself_rejected() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///a")).await.unwrap();
-    let handle = engine.copy(&vp("mem:///a"), &vp("mem:///a/b")).unwrap();
+    let handle = engine
+        .copy(&vp("mem:///a"), &vp("mem:///a/b"))
+        .await
+        .unwrap();
     assert_eq!(
         handle.join().await,
         TaskState::Failed {
@@ -522,6 +553,7 @@ async fn move_degrades_to_copy_delete_when_rename_unsupported() {
 
     let handle = engine
         .move_(&vp("mem:///origen"), &vp("mem:///destino"))
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
 
@@ -601,7 +633,10 @@ async fn move_cross_provider_never_deletes_uncopied_entries() {
     src_inner.mkdir(&vp("src:///dir")).await.unwrap();
     write_file(&src_inner, "src:///dir/a", b"planificado").await;
 
-    let handle = engine.move_(&vp("src:///dir"), &vp("mem:///dir")).unwrap();
+    let handle = engine
+        .move_(&vp("src:///dir"), &vp("mem:///dir"))
+        .await
+        .unwrap();
     let state = handle.join().await;
 
     // Lo planificado llegó al destino.
@@ -631,7 +666,10 @@ async fn move_by_copy_cancel_mid_delete_loses_nothing() {
         .faults()
         .set_latency_per_op(Some(std::time::Duration::from_millis(3)));
 
-    let handle = engine.move_(&vp("mem:///src"), &vp("mem:///dst")).unwrap();
+    let handle = engine
+        .move_(&vp("mem:///src"), &vp("mem:///dst"))
+        .await
+        .unwrap();
     let mut rx = handle.progress();
     // Fase copy = 13 pasos (12 archivos + raíz); a partir de 14 la task está
     // borrando el origen.
@@ -757,6 +795,7 @@ async fn copy_skip_merges_and_keeps_existing() {
             &vp("mem:///dst"),
             on_collision(CollisionPolicy::Skip),
         )
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(read_all(&mem, "mem:///dst/a").await.unwrap(), b"viejo");
@@ -777,6 +816,7 @@ async fn copy_overwrite_replaces_colliding_file() {
             &vp("mem:///dst"),
             on_collision(CollisionPolicy::Overwrite),
         )
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(read_all(&mem, "mem:///dst/a").await.unwrap(), b"nuevo");
@@ -795,6 +835,7 @@ async fn copy_overwrite_file_over_dir_is_type_mismatch() {
             &vp("mem:///dst/a"),
             on_collision(CollisionPolicy::Overwrite),
         )
+        .await
         .unwrap();
     match handle.join().await {
         TaskState::Failed {
@@ -822,6 +863,7 @@ async fn copy_rename_auto_creates_numbered_variant() {
                 &vp("mem:///destino.txt"),
                 on_collision(CollisionPolicy::RenameAuto),
             )
+            .await
             .unwrap();
         assert_eq!(handle.join().await, TaskState::Completed);
         assert_eq!(read_all(&mem, esperado).await.unwrap(), b"v2");
@@ -845,6 +887,7 @@ async fn copy_newer_replaces_only_older_destination() {
             &vp("mem:///dst-viejo"),
             on_collision(CollisionPolicy::Newer),
         )
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(read_all(&mem, "mem:///dst-viejo").await.unwrap(), b"v2");
@@ -859,6 +902,7 @@ async fn copy_newer_replaces_only_older_destination() {
             &vp("mem:///dst-nuevo"),
             on_collision(CollisionPolicy::Newer),
         )
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(read_all(&mem, "mem:///dst-nuevo").await.unwrap(), b"v2");
@@ -875,6 +919,7 @@ async fn copy_ask_behaves_as_fail_in_m1() {
             &vp("mem:///b"),
             on_collision(CollisionPolicy::Ask),
         )
+        .await
         .unwrap();
     match handle.join().await {
         TaskState::Failed {
@@ -893,7 +938,10 @@ async fn symlink_preserve_recreates_link_bytes() {
         .await
         .unwrap();
 
-    let handle = engine.copy(&vp("mem:///src"), &vp("mem:///dst")).unwrap();
+    let handle = engine
+        .copy(&vp("mem:///src"), &vp("mem:///dst"))
+        .await
+        .unwrap();
     assert_eq!(
         handle.join().await,
         TaskState::Completed,
@@ -922,6 +970,7 @@ async fn symlink_skip_copies_the_rest() {
             &vp("mem:///dst"),
             on_symlinks(SymlinkPolicy::Skip),
         )
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(read_all(&mem, "mem:///dst/f").await.unwrap(), b"contenido");
@@ -947,6 +996,7 @@ async fn symlink_follow_copies_target_content_as_file() {
             &vp("mem:///dst"),
             on_symlinks(SymlinkPolicy::Follow),
         )
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     let e = mem.stat(&vp("mem:///dst/ln")).await.unwrap();
@@ -971,6 +1021,7 @@ async fn symlink_follow_dir_symlink_expands() {
             &vp("mem:///dst"),
             on_symlinks(SymlinkPolicy::Follow),
         )
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     let e = mem.stat(&vp("mem:///dst/ln")).await.unwrap();
@@ -996,6 +1047,7 @@ async fn move_skip_keeps_skipped_in_source() {
             &vp("mem:///dir"),
             on_collision(CollisionPolicy::Skip),
         )
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     // Lo saltado SIGUE en el origen (jamás se borra sin copiarse).
@@ -1020,6 +1072,7 @@ async fn move_overwrite_same_provider_replaces() {
             &vp("mem:///b"),
             on_collision(CollisionPolicy::Overwrite),
         )
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(read_all(&mem, "mem:///b").await.unwrap(), b"nuevo");
@@ -1039,6 +1092,7 @@ async fn retry_recovers_from_transient_unavailability() {
 
     let handle = engine
         .copy(&vp("mem:///src.bin"), &vp("mem:///dst.bin"))
+        .await
         .unwrap();
     assert_eq!(
         handle.join().await,
@@ -1056,6 +1110,7 @@ async fn retry_gives_up_against_permanent_outage() {
 
     let handle = engine
         .copy(&vp("mem:///src.bin"), &vp("mem:///dst.bin"))
+        .await
         .unwrap();
     match handle.join().await {
         TaskState::Failed {
@@ -1074,6 +1129,7 @@ async fn cancel_during_backoff_is_prompt() {
     let inicio = std::time::Instant::now();
     let handle = engine
         .copy(&vp("mem:///src.bin"), &vp("mem:///dst.bin"))
+        .await
         .unwrap();
     // Deja a la task entrar en la espera del backoff y cancela.
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
@@ -1099,6 +1155,7 @@ async fn copy_overwrite_onto_itself_never_destroys() {
             &vp("mem:///unico"),
             on_collision(CollisionPolicy::Overwrite),
         )
+        .await
         .unwrap();
     assert_eq!(
         handle.join().await,
@@ -1124,6 +1181,7 @@ async fn copy_overwrite_case_variant_of_itself_never_destroys() {
             &vp("mem:///unico"),
             on_collision(CollisionPolicy::Overwrite),
         )
+        .await
         .unwrap();
     let state = handle.join().await;
     assert!(
@@ -1146,6 +1204,7 @@ async fn copy_overwrite_normalization_variant_never_destroys() {
     write_file(&mem, nfc, b"precioso").await;
     let handle = engine
         .copy_with(&vp(nfc), &vp(nfd), on_collision(CollisionPolicy::Overwrite))
+        .await
         .unwrap();
     let state = handle.join().await;
     assert!(
@@ -1168,6 +1227,7 @@ async fn move_overwrite_dir_over_file_is_type_mismatch() {
             &vp("mem:///ocupado"),
             on_collision(CollisionPolicy::Overwrite),
         )
+        .await
         .unwrap();
     match handle.join().await {
         TaskState::Failed {
@@ -1204,6 +1264,7 @@ async fn follow_dir_symlink_with_overwrite_leaves_destination_intact() {
                 ..TransferOptions::default()
             },
         )
+        .await
         .unwrap();
     // M2 fase 1 (#19): el dir-symlink se expande como DIR, y un dir jamás
     // pisa un archivo ni con Overwrite (TypeMismatch, ADR 0005). El
@@ -1254,6 +1315,7 @@ async fn delete_trash_se_lleva_el_arbol() {
     build_tree(&mem, 3).await;
     let handle = engine
         .delete_with(&vp("mem:///src"), norte_proto::DeleteMode::Trash)
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(
@@ -1274,6 +1336,7 @@ async fn delete_trash_sin_capability_no_degrada() {
     write_file(&mem, "mem:///valioso", b"datos").await;
     let handle = engine
         .delete_with(&vp("mem:///valioso"), norte_proto::DeleteMode::Trash)
+        .await
         .unwrap();
     assert_eq!(
         handle.join().await,
@@ -1295,6 +1358,7 @@ async fn delete_trash_cancel_before_start_leaves_tree_intact() {
         .set_latency_per_op(Some(std::time::Duration::from_millis(30)));
     let handle = engine
         .delete_with(&vp("mem:///src"), norte_proto::DeleteMode::Trash)
+        .await
         .unwrap();
     handle.cancel();
     let state = handle.join().await;

@@ -216,6 +216,39 @@ async fn fs_stat_de_inexistente_viaja_como_taxonomia_en_data() {
     }
 }
 
+/// `connection.trust_host_key` (0.7.0, fase 6e) existe en el dispatch y
+/// llega al engine: sin conector configurado responde la taxonomía
+/// `Unsupported` por el wire — no `METHOD_NOT_FOUND` (eso significaría que
+/// el handler falta).
+#[tokio::test]
+async fn trust_host_key_llega_al_engine() {
+    let d = spawn_daemon(None).await;
+    let c = connected_client(&d).await;
+    let err = c
+        .call::<_, methods::ConnectionTrustHostKeyResult>(
+            methods::CONNECTION_TRUST_HOST_KEY,
+            &methods::ConnectionTrustHostKeyParams {
+                host: "h.example".into(),
+                port: Some(22),
+                algo: "ssh-ed25519".into(),
+                fingerprint: "SHA256:abc".into(),
+            },
+        )
+        .await
+        .expect_err("sin conector: Unsupported");
+    match err {
+        ClientError::Rpc(rpc) => {
+            assert_eq!(rpc.code, codes::APP_ERROR);
+            assert!(
+                matches!(rpc.data, Some(norte_proto::Error::Unsupported)),
+                "taxonomía Unsupported, fue {:?}",
+                rpc.data
+            );
+        }
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn metodo_desconocido_es_method_not_found() {
     let d = spawn_daemon(None).await;

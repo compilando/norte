@@ -392,10 +392,11 @@ async fn auth_por_agente() {
     let _session = conn.connect(&spec, None).await.unwrap();
 }
 
-/// Trust sobre un host que YA tiene OTRA clave registrada: error explícito y
-/// el store queda intacto. (El `learn` de russh solo appendea: "parchear por
-/// encima" dejaría el fichero con dos claves en conflicto y el check en
-/// Mismatch perpetuo pese a un trust que reportó éxito.)
+/// Trust sobre un host que YA tiene OTRA clave registrada: `HostKeyMismatch`
+/// (la categoría de rotación/MITM del wire) y el store queda intacto. (El
+/// `learn` de russh solo appendea: "parchear por encima" dejaría el fichero
+/// con dos claves en conflicto y el check en Mismatch perpetuo pese a un
+/// trust que reportó éxito.)
 #[tokio::test]
 async fn trust_sobre_clave_registrada_distinta_es_error() {
     let host_key = clave();
@@ -411,7 +412,10 @@ async fn trust_sobre_clave_registrada_distinta_es_error() {
         .trust_host_key("127.0.0.1", port, &fp_nueva)
         .await
         .unwrap_err();
-    assert!(matches!(err, ConnectError::KnownHosts(_)), "fue {err:?}");
+    assert!(
+        matches!(err, ConnectError::HostKeyMismatch { .. }),
+        "fue {err:?}"
+    );
     // El fichero NO cambió: sigue solo la entrada antigua.
     let contenido = std::fs::read_to_string(dir.path().join("known_hosts")).unwrap();
     assert_eq!(contenido, linea_vieja);

@@ -649,6 +649,7 @@ async fn dispatch_fs_task(
             let handle = shared
                 .engine
                 .copy_with(&p.from, &p.to, opts)
+                .await
                 .map_err(RpcError::from)?;
             register_task(shared, handle)
         }
@@ -663,6 +664,7 @@ async fn dispatch_fs_task(
             let handle = shared
                 .engine
                 .move_with(&p.from, &p.to, opts)
+                .await
                 .map_err(RpcError::from)?;
             register_task(shared, handle)
         }
@@ -671,6 +673,7 @@ async fn dispatch_fs_task(
             let handle = shared
                 .engine
                 .delete_with(&p.path, p.mode)
+                .await
                 .map_err(RpcError::from)?;
             register_task(shared, handle)
         }
@@ -719,6 +722,7 @@ async fn dispatch_task_family(
             let capabilities = shared
                 .engine
                 .capabilities(&p.path)
+                .await
                 .map_err(RpcError::from)?;
             to_value(&methods::FsCapabilitiesResult { capabilities })
         }
@@ -735,6 +739,19 @@ async fn dispatch_task_family(
                 handle.cancel();
             }
             to_value(&methods::TaskCancelResult {})
+        }
+        methods::CONNECTION_TRUST_HOST_KEY => {
+            let p: methods::ConnectionTrustHostKeyParams = parse_params(req.params)?;
+            // El engine delega en el conector, que RE-VERIFICA el fingerprint
+            // contra la clave que el host presenta ahora (anti-TOCTOU, ADR
+            // 0015 D) antes de registrar nada. `algo` es informativo: la
+            // identidad que se confirma es el fingerprint.
+            shared
+                .engine
+                .trust_host_key(&p.host, p.port, &p.fingerprint)
+                .await
+                .map_err(RpcError::from)?;
+            to_value(&methods::ConnectionTrustHostKeyResult { trusted: true })
         }
         other => Err(RpcError::protocol(
             codes::METHOD_NOT_FOUND,

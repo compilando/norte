@@ -53,6 +53,18 @@ cli-unexpected-state = estado final inesperado: { $state }
 cli-daemon-listening = daemon escuchando en { $socket }
 cli-daemon-stopped = apagado pedido al daemon
 cli-daemon-hard-shutdown = segunda señal: cancelando tasks…
+cli-hostkey-unknown = primera conexión a { $host }:{ $port } — host key sin registrar
+cli-hostkey-fingerprint = huella { $algo }: { $fingerprint }
+cli-hostkey-prompt = ¿Confiar en esta clave y registrarla en known_hosts? [s/N]
+cli-hostkey-refused = conexión abortada: host key sin confirmar
+cli-hostkey-noninteractive = entrada no interactiva: confirma la host key con `norte connect <url>` en un terminal, o pre-puebla el known_hosts (env NORTE_KNOWN_HOSTS)
+cli-hostkey-trusted = host key registrada
+cli-connect-ok = conexión establecida: { $target }
+cli-connect-failed = no se pudo conectar
+cli-connect-daemon-unsupported = `norte connect` todavía no funciona con --daemon (usa el modo embebido)
+cli-invalid-url = URL remota inválida: { $url }
+cli-confirm-read = lectura de confirmación
+cli-inline-password = la URL no debe llevar el password inline (user:pass@…); el secreto va por el keyring/env/secrets.age
 
 # --- Ayuda (F1) — construida del keymap efectivo ---
 help-title = Ayuda — teclas activas

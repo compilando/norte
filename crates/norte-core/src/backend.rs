@@ -176,7 +176,7 @@ impl Backend {
     /// Taxonomía del protocolo.
     pub async fn capabilities(&self, path: &VPath) -> Result<Capabilities, Error> {
         match self {
-            Self::Embedded(engine) => engine.capabilities(path),
+            Self::Embedded(engine) => engine.capabilities(path).await,
             #[cfg(unix)]
             Self::Remote(r) => r.capabilities(path).await,
         }
@@ -193,7 +193,9 @@ impl Backend {
         opts: TransferOptions,
     ) -> Result<TaskRef, Error> {
         match self {
-            Self::Embedded(engine) => Ok(TaskRef::from_handle(&engine.copy_with(from, to, opts)?)),
+            Self::Embedded(engine) => Ok(TaskRef::from_handle(
+                &engine.copy_with(from, to, opts).await?,
+            )),
             #[cfg(unix)]
             Self::Remote(r) => {
                 r.transfer(norte_proto::methods::FS_COPY, from, to, opts)
@@ -213,7 +215,9 @@ impl Backend {
         opts: TransferOptions,
     ) -> Result<TaskRef, Error> {
         match self {
-            Self::Embedded(engine) => Ok(TaskRef::from_handle(&engine.move_with(from, to, opts)?)),
+            Self::Embedded(engine) => Ok(TaskRef::from_handle(
+                &engine.move_with(from, to, opts).await?,
+            )),
             #[cfg(unix)]
             Self::Remote(r) => {
                 r.transfer(norte_proto::methods::FS_MOVE, from, to, opts)
@@ -228,9 +232,39 @@ impl Backend {
     /// Taxonomía del protocolo.
     pub async fn delete(&self, path: &VPath, mode: DeleteMode) -> Result<TaskRef, Error> {
         match self {
-            Self::Embedded(engine) => Ok(TaskRef::from_handle(&engine.delete_with(path, mode)?)),
+            Self::Embedded(engine) => {
+                Ok(TaskRef::from_handle(&engine.delete_with(path, mode).await?))
+            }
             #[cfg(unix)]
             Self::Remote(r) => r.delete(path, mode).await,
+        }
+    }
+
+    /// Registra la host key de `host:port` tras la confirmación EXPLÍCITA
+    /// del usuario (flujo TOFU: un `Error::HostKeyUnknown` trajo el
+    /// fingerprint, el frontend lo mostró y el usuario aceptó — ADR 0015 D).
+    /// El core re-verifica el fingerprint contra la clave real del host
+    /// antes de registrar (anti-TOCTOU).
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo ([`Error::HostKeyMismatch`] si el host ya no
+    /// presenta esa clave).
+    /// `algo` viaja informativo en el wire (la identidad que se confirma es
+    /// el fingerprint); pásalo tal cual llegó en el `HostKeyUnknown`.
+    pub async fn trust_host_key(
+        &self,
+        host: &str,
+        port: Option<u16>,
+        algo: &str,
+        fingerprint: &str,
+    ) -> Result<(), Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let _ = algo; // el engine confirma por fingerprint
+                engine.trust_host_key(host, port, fingerprint).await
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.trust_host_key(host, port, algo, fingerprint).await,
         }
     }
 
@@ -500,6 +534,37 @@ pub mod remote {
                 )
                 .await?;
             Ok(r.capabilities)
+        }
+
+        pub(super) async fn trust_host_key(
+            &self,
+            host: &str,
+            port: Option<u16>,
+            algo: &str,
+            fingerprint: &str,
+        ) -> Result<(), Error> {
+            let r: methods::ConnectionTrustHostKeyResult = self
+                .call_timed(
+                    methods::CONNECTION_TRUST_HOST_KEY,
+                    &methods::ConnectionTrustHostKeyParams {
+                        host: host.to_string(),
+                        port,
+                        algo: algo.to_string(),
+                        fingerprint: fingerprint.to_string(),
+                    },
+                )
+                .await?;
+            // `trusted: false` está reservado en 0.7.0 para un rechazo por
+            // política de un core futuro: tratarlo como éxito dejaría al
+            // usuario en un bucle de reintentos "confiados" que nunca
+            // registran nada.
+            if r.trusted {
+                Ok(())
+            } else {
+                Err(Error::PolicyDenied {
+                    rule: "connection.trust_host_key".to_string(),
+                })
+            }
         }
 
         pub(super) async fn read(

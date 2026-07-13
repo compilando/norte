@@ -141,6 +141,13 @@ async fn make_backend(
     if !want_daemon {
         let engine = Engine::new();
         engine.register_provider(Arc::new(LocalProvider::os_root()));
+        // Conexiones remotas (fase 6e): un path sftp://…/ftp://… navegable si
+        // la host key ya es de confianza. La CONFIRMACIÓN TOFU interactiva
+        // (modal con fingerprint) es UX pendiente — hoy un primer contacto
+        // aparece como error con la huella; confírmalo con `norte connect`.
+        engine.set_connector(Arc::new(norte_core::connect::ConnectionManager::new(
+            norte_core::connect::config_dir(),
+        )));
         return Ok(Backend::Embedded(Arc::new(engine)));
     }
     #[cfg(not(unix))]

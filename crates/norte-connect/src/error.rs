@@ -7,6 +7,10 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 /// Error al resolver una conexión o su secreto.
+///
+/// Se proyecta a la taxonomía del protocolo con `norte_proto::Error::from`:
+/// las variantes TOFU van 1:1; el resto degrada a categoría (el detalle se
+/// queda en el log del core).
 #[derive(Debug, Error)]
 pub enum ConnectError {
     /// `connections.toml` mal formado o inválido (referencias, sin secretos).
@@ -124,5 +128,103 @@ pub enum ConnectError {
 impl From<russh::Error> for ConnectError {
     fn from(e: russh::Error) -> Self {
         Self::Ssh(e.to_string())
+    }
+}
+
+// Proyección a la taxonomía del protocolo (spec §17.7): el core la usa para
+// que el fallo de conexión viaje por el wire. Las variantes TOFU van 1:1
+// (portan host/port/algo/fingerprint para el flujo `connection.trust_host_key`,
+// ADR 0015 D); el resto degrada a la categoría más cercana — el detalle queda
+// en el log del core (el Display de ConnectError), no en el wire.
+impl From<ConnectError> for norte_proto::Error {
+    fn from(e: ConnectError) -> Self {
+        match e {
+            ConnectError::HostKeyUnknown {
+                host,
+                port,
+                algo,
+                fingerprint,
+            } => Self::HostKeyUnknown {
+                host,
+                port: Some(port),
+                algo,
+                fingerprint,
+            },
+            ConnectError::HostKeyMismatch {
+                host,
+                port,
+                algo,
+                fingerprint,
+            } => Self::HostKeyMismatch {
+                host,
+                port: Some(port),
+                algo,
+                fingerprint,
+            },
+            // Credenciales rechazadas o irresolubles / material de clave
+            // inutilizable: el usuario no puede autenticarse.
+            ConnectError::AuthFailed { .. }
+            | ConnectError::Secret { .. }
+            | ConnectError::KeyUnsupported { .. }
+            | ConnectError::KeyLoad { .. } => Self::PermissionDenied,
+            // La URL/config de la conexión no es válida.
+            ConnectError::InvalidUrl(_) | ConnectError::MissingUser | ConnectError::Config(_) => {
+                Self::InvalidPath
+            }
+            // Transporte: la red puede reintentarse; una validación TLS o un
+            // known_hosts/secret-store rotos NO (reintentar no los arregla).
+            ConnectError::Ssh(_) | ConnectError::Ftp(_) => {
+                Self::ProviderUnavailable { retryable: true }
+            }
+            ConnectError::Tls(_)
+            | ConnectError::KnownHosts(_)
+            | ConnectError::Agent(_)
+            | ConnectError::SecretStore(_) => Self::ProviderUnavailable { retryable: false },
+            ConnectError::Io(_) => Self::Io { retryable: false },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Las variantes TOFU cruzan 1:1 al protocolo (mismo fingerprint y
+    /// puerto RESUELTO): es lo que permite el mapeo error→trust en el
+    /// frontend sin ambigüedad (ADR 0015 D).
+    #[test]
+    fn tofu_va_uno_a_uno_al_proto() {
+        let e = ConnectError::HostKeyUnknown {
+            host: "h".into(),
+            port: 2222,
+            algo: "ssh-ed25519".into(),
+            fingerprint: "SHA256:abc".into(),
+        };
+        let p = norte_proto::Error::from(e);
+        let norte_proto::Error::HostKeyUnknown {
+            host,
+            port,
+            algo,
+            fingerprint,
+        } = p
+        else {
+            panic!("esperaba HostKeyUnknown, fue {p:?}");
+        };
+        assert_eq!(host, "h");
+        assert_eq!(port, Some(2222));
+        assert_eq!(algo, "ssh-ed25519");
+        assert_eq!(fingerprint, "SHA256:abc");
+    }
+
+    #[test]
+    fn auth_degrada_a_permission_denied() {
+        let e = ConnectError::AuthFailed {
+            user: "u".into(),
+            host: "h".into(),
+        };
+        assert!(matches!(
+            norte_proto::Error::from(e),
+            norte_proto::Error::PermissionDenied
+        ));
     }
 }

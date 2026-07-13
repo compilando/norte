@@ -14,6 +14,10 @@ use crate::observer::{MutationObserver, NoopObserver};
 use crate::ops;
 use crate::scheduler::{Priority, Scheduler, TaskHandle};
 
+/// Tope para ESTABLECER una conexión remota (dial+TOFU+auth+subsistema).
+/// Generoso a propósito: cubre redes lentas sin colgar indefinidamente.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Opciones de una copia/movimiento (ADR 0005): qué hacer ante colisiones
 /// y con los symlinks. `Default` = el comportamiento estricto de M0
 /// (`Fail` + `Preserve`).
@@ -42,7 +46,13 @@ pub struct TransferOptions {
 /// Lecturas (`stat`/`list`) son directas; mutaciones (`copy`/`move_`/
 /// `delete`) son Tasks con progreso y cancelación.
 pub struct Engine {
+    /// Clave: el scheme (`"file"`, providers de proceso) o
+    /// `"scheme://authority"` (remotos establecidos bajo demanda — un
+    /// provider remoto envuelve UNA sesión a UN host, fase 6e).
     providers: RwLock<HashMap<String, Arc<dyn Provider>>>,
+    /// Establece providers remotos bajo demanda (fase 6e, ADR 0015). Sin
+    /// conector, un scheme sin provider registrado es `Unsupported` (M0/M1).
+    connector: RwLock<Option<Arc<dyn crate::connect::RemoteConnector>>>,
     sched: Scheduler,
     observer: Arc<dyn MutationObserver>,
 }
@@ -59,6 +69,7 @@ impl Engine {
     pub fn with_observer(observer: Arc<dyn MutationObserver>) -> Self {
         Self {
             providers: RwLock::new(HashMap::new()),
+            connector: RwLock::new(None),
             sched: Scheduler::new(4),
             observer,
         }
@@ -76,13 +87,95 @@ impl Engine {
             .insert(scheme, provider);
     }
 
-    fn provider_for(&self, p: &VPath) -> Result<Arc<dyn Provider>, Error> {
-        self.providers
+    /// Configura el conector de providers remotos (fase 6e, ADR 0015 A):
+    /// ante un `VPath` remoto sin provider, el Engine le pide la conexión y
+    /// cachea el resultado por `scheme://authority`.
+    ///
+    /// # Panics
+    /// Nunca en la práctica: solo por envenenamiento del lock interno.
+    pub fn set_connector(&self, connector: Arc<dyn crate::connect::RemoteConnector>) {
+        *self.connector.write().expect("connector lock sano") = Some(connector);
+    }
+
+    /// Registra la host key de `host:port` tras confirmación explícita del
+    /// usuario (flujo TOFU, método `connection.trust_host_key`).
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] sin conector; los del conector (p. ej.
+    /// [`Error::HostKeyMismatch`] si el host ya no presenta esa clave).
+    ///
+    /// # Panics
+    /// Nunca en la práctica: solo por envenenamiento del lock interno.
+    pub async fn trust_host_key(
+        &self,
+        host: &str,
+        port: Option<u16>,
+        fingerprint: &str,
+    ) -> Result<(), Error> {
+        let connector = self
+            .connector
             .read()
-            .expect("providers lock sano")
-            .get(p.scheme())
-            .cloned()
-            .ok_or(Error::Unsupported)
+            .expect("connector lock sano")
+            .clone()
+            .ok_or(Error::Unsupported)?;
+        connector.trust_host_key(host, port, fingerprint).await
+    }
+
+    /// La clave de registro/caché para `p`: providers de proceso van por
+    /// scheme; los remotos por `scheme://authority`.
+    fn provider_key(p: &VPath) -> String {
+        match p.authority() {
+            Some(a) => format!("{}://{a}", p.scheme()),
+            None => p.scheme().to_owned(),
+        }
+    }
+
+    async fn provider_for(&self, p: &VPath) -> Result<Arc<dyn Provider>, Error> {
+        let key = Self::provider_key(p);
+        {
+            let providers = self.providers.read().expect("providers lock sano");
+            // Primero el provider de proceso registrado para el scheme entero
+            // (local, mem de tests): tiene prioridad y no dispara conexiones.
+            if let Some(prov) = providers.get(p.scheme()) {
+                return Ok(Arc::clone(prov));
+            }
+            if let Some(prov) = providers.get(&key) {
+                return Ok(Arc::clone(prov));
+            }
+        }
+        let connector = self
+            .connector
+            .read()
+            .expect("connector lock sano")
+            .clone()
+            .ok_or(Error::Unsupported)?;
+        let Some(authority) = p.authority() else {
+            return Err(Error::Unsupported);
+        };
+        // Fuera del lock: conectar puede tardar (red, TOFU). Con TIMEOUT: el
+        // connect ocurre ANTES de existir una Task cancelable — sin límite,
+        // un host que acepta TCP y calla colgaría la operación para siempre
+        // (regla 3). La cancelación fina llegará al mover el connect dentro
+        // de la Task (issue #47).
+        let provider = tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            connector.connect(p.scheme(), authority),
+        )
+        .await
+        .map_err(|_| {
+            tracing::warn!(scheme = %p.scheme(), "timeout estableciendo la conexión remota");
+            Error::ProviderUnavailable { retryable: true }
+        })??;
+        // Double-check bajo el write lock: si otra petición concurrente
+        // registró primero, se conserva LA SUYA (una clave = una sesión) y la
+        // recién creada se suelta — su Drop cierra la sesión de más (deuda de
+        // single-flight/evicción: issue #47; la sesión duplicada es coste,
+        // no riesgo — mismo uid, mismas credenciales).
+        let mut providers = self.providers.write().expect("providers lock sano");
+        let entry = providers
+            .entry(key)
+            .or_insert_with(|| Arc::clone(&provider));
+        Ok(Arc::clone(entry))
     }
 
     /// Metadatos de un nodo (directo, sin Task).
@@ -90,7 +183,7 @@ impl Engine {
     /// # Errors
     /// [`Error::Unsupported`] si no hay provider para el scheme; los del provider.
     pub async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
-        self.provider_for(p)?.stat(p).await
+        self.provider_for(p).await?.stat(p).await
     }
 
     /// Listado de un directorio (directo, sin Task).
@@ -98,7 +191,7 @@ impl Engine {
     /// # Errors
     /// [`Error::Unsupported`] si no hay provider para el scheme; los del provider.
     pub async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
-        self.provider_for(p)?.list(p).await
+        self.provider_for(p).await?.list(p).await
     }
 
     /// Lectura de un archivo como stream (directa, sin Task), con rango
@@ -112,7 +205,7 @@ impl Engine {
         p: &VPath,
         range: Option<norte_proto::ByteRange>,
     ) -> Result<norte_vfs::ByteStream, Error> {
-        self.provider_for(p)?.read(p, range).await
+        self.provider_for(p).await?.read(p, range).await
     }
 
     /// Copia (recursiva si es dir) como Task, con las políticas por defecto
@@ -120,23 +213,23 @@ impl Engine {
     ///
     /// # Errors
     /// [`Error::Unsupported`] si algún scheme no tiene provider registrado.
-    pub fn copy(&self, from: &VPath, to: &VPath) -> Result<TaskHandle, Error> {
-        self.copy_with(from, to, TransferOptions::default())
+    pub async fn copy(&self, from: &VPath, to: &VPath) -> Result<TaskHandle, Error> {
+        self.copy_with(from, to, TransferOptions::default()).await
     }
 
     /// Copia con políticas explícitas de colisión y symlinks (ADR 0005).
     ///
     /// # Errors
     /// [`Error::Unsupported`] si algún scheme no tiene provider registrado.
-    #[tracing::instrument(skip(self), fields(from = %from.display_lossy(), to = %to.display_lossy()))]
-    pub fn copy_with(
+    #[tracing::instrument(skip(self), fields(from = %span_path(from), to = %span_path(to)))]
+    pub async fn copy_with(
         &self,
         from: &VPath,
         to: &VPath,
         opts: TransferOptions,
     ) -> Result<TaskHandle, Error> {
-        let src = self.provider_for(from)?;
-        let dst = self.provider_for(to)?;
+        let src = self.provider_for(from).await?;
+        let dst = self.provider_for(to).await?;
         let observer = Arc::clone(&self.observer);
         let (from, to) = (from.clone(), to.clone());
         let key = to.scheme().to_owned();
@@ -158,23 +251,23 @@ impl Engine {
     ///
     /// # Errors
     /// [`Error::Unsupported`] si algún scheme no tiene provider registrado.
-    pub fn move_(&self, from: &VPath, to: &VPath) -> Result<TaskHandle, Error> {
-        self.move_with(from, to, TransferOptions::default())
+    pub async fn move_(&self, from: &VPath, to: &VPath) -> Result<TaskHandle, Error> {
+        self.move_with(from, to, TransferOptions::default()).await
     }
 
     /// Move con políticas explícitas de colisión y symlinks (ADR 0005).
     ///
     /// # Errors
     /// [`Error::Unsupported`] si algún scheme no tiene provider registrado.
-    #[tracing::instrument(skip(self), fields(from = %from.display_lossy(), to = %to.display_lossy()))]
-    pub fn move_with(
+    #[tracing::instrument(skip(self), fields(from = %span_path(from), to = %span_path(to)))]
+    pub async fn move_with(
         &self,
         from: &VPath,
         to: &VPath,
         opts: TransferOptions,
     ) -> Result<TaskHandle, Error> {
-        let src = self.provider_for(from)?;
-        let dst = self.provider_for(to)?;
+        let src = self.provider_for(from).await?;
+        let dst = self.provider_for(to).await?;
         let observer = Arc::clone(&self.observer);
         let (from, to) = (from.clone(), to.clone());
         let key = to.scheme().to_owned();
@@ -195,8 +288,8 @@ impl Engine {
     ///
     /// # Errors
     /// [`Error::Unsupported`] si el scheme no tiene provider registrado.
-    pub fn delete(&self, path: &VPath) -> Result<TaskHandle, Error> {
-        self.delete_with(path, DeleteMode::Permanent)
+    pub async fn delete(&self, path: &VPath) -> Result<TaskHandle, Error> {
+        self.delete_with(path, DeleteMode::Permanent).await
     }
 
     /// Borrado con modo explícito (ADR 0009): `Trash` mueve el árbol
@@ -206,9 +299,9 @@ impl Engine {
     ///
     /// # Errors
     /// [`Error::Unsupported`] si el scheme no tiene provider registrado.
-    #[tracing::instrument(skip(self), fields(path = %path.display_lossy(), ?mode))]
-    pub fn delete_with(&self, path: &VPath, mode: DeleteMode) -> Result<TaskHandle, Error> {
-        let provider = self.provider_for(path)?;
+    #[tracing::instrument(skip(self), fields(path = %span_path(path), ?mode))]
+    pub async fn delete_with(&self, path: &VPath, mode: DeleteMode) -> Result<TaskHandle, Error> {
+        let provider = self.provider_for(path).await?;
         let observer = Arc::clone(&self.observer);
         let path = path.clone();
         let key = path.scheme().to_owned();
@@ -229,8 +322,21 @@ impl Engine {
     ///
     /// # Errors
     /// [`Error::Unsupported`] si el scheme no tiene provider registrado.
-    pub fn capabilities(&self, p: &VPath) -> Result<norte_proto::Capabilities, Error> {
-        Ok(self.provider_for(p)?.capabilities())
+    pub async fn capabilities(&self, p: &VPath) -> Result<norte_proto::Capabilities, Error> {
+        Ok(self.provider_for(p).await?.capabilities())
+    }
+}
+
+/// Forma de un `VPath` para SPANS de tracing: `display_lossy`, salvo que el
+/// userinfo de la authority contenga `:` — un password inline en la URL
+/// (`sftp://u:pass@h`) se rechaza al parsear la conexión, pero el span se
+/// abre ANTES: jamás debe llegar a un log (regla 10).
+fn span_path(p: &VPath) -> String {
+    match p.authority() {
+        Some(a) if a.rsplit_once('@').is_some_and(|(ui, _)| ui.contains(':')) => {
+            format!("<{} ***>", p.scheme())
+        }
+        _ => p.display_lossy().clone(),
     }
 }
 

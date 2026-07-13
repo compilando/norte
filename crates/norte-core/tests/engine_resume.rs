@@ -65,6 +65,7 @@ async fn resume_continua_sin_recopiar() {
     mem.faults().fail_read_at(&vp("mem:///src.bin"), 4096);
     let handle = engine
         .copy_with(&vp("mem:///src.bin"), &vp("mem:///dst.bin"), resume_on())
+        .await
         .unwrap();
     assert!(matches!(handle.join().await, TaskState::Failed { .. }));
     // El destino final aún no existe; hay un parcial con ~4096 bytes.
@@ -77,6 +78,7 @@ async fn resume_continua_sin_recopiar() {
     mem.faults().clear();
     let handle = engine
         .copy_with(&vp("mem:///src.bin"), &vp("mem:///dst.bin"), resume_on())
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(
@@ -100,6 +102,7 @@ async fn resume_no_reinicia_la_barra() {
     mem.faults().fail_read_at(&vp("mem:///src.bin"), 4096);
     let handle = engine
         .copy_with(&vp("mem:///src.bin"), &vp("mem:///dst.bin"), resume_on())
+        .await
         .unwrap();
     assert!(matches!(handle.join().await, TaskState::Failed { .. }));
 
@@ -108,6 +111,7 @@ async fn resume_no_reinicia_la_barra() {
     mem.faults().clear();
     let handle = engine
         .copy_with(&vp("mem:///src.bin"), &vp("mem:///dst.bin"), resume_on())
+        .await
         .unwrap();
     let rx = handle.progress();
     let arranque = rx.borrow().bytes_done;
@@ -133,6 +137,7 @@ async fn sin_resume_cancelar_deja_limpio() {
 
     let handle = engine
         .copy(&vp("mem:///src.bin"), &vp("mem:///dst.bin"))
+        .await
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     handle.cancel();
@@ -147,6 +152,7 @@ async fn sin_resume_cancelar_deja_limpio() {
     mem.faults().clear();
     let handle = engine
         .copy(&vp("mem:///src.bin"), &vp("mem:///dst.bin"))
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(read_all(&*mem, "mem:///dst.bin").await.unwrap(), content);
@@ -166,6 +172,7 @@ async fn resume_descarta_parcial_mas_largo_que_el_origen() {
     write_file(&mem, "mem:///src.bin", b"abc").await;
     let handle = engine
         .copy_with(&vp("mem:///src.bin"), &vp("mem:///dst.bin"), resume_on())
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(
@@ -225,6 +232,7 @@ async fn resume_con_defaults_del_trait_degrada_limpio() {
     write_file(&mem, "mem:///src", b"datos").await;
     let handle = engine
         .copy_with(&vp("mem:///src"), &vp("mem:///dst"), resume_on())
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(read_all(&*mem, "mem:///dst").await.unwrap(), b"datos");
@@ -234,6 +242,7 @@ async fn resume_con_defaults_del_trait_degrada_limpio() {
     mem.faults().fail_read_at(&vp("mem:///src2"), 4);
     let handle = engine
         .copy_with(&vp("mem:///src2"), &vp("mem:///dst2"), resume_on())
+        .await
         .unwrap();
     assert!(matches!(handle.join().await, TaskState::Failed { .. }));
     assert_eq!(
@@ -258,6 +267,7 @@ async fn resume_cancelacion_es_limpia_y_reanuda() {
 
     let handle = engine
         .copy_with(&vp("mem:///src.bin"), &vp("mem:///dst.bin"), resume_on())
+        .await
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     handle.cancel();
@@ -272,6 +282,7 @@ async fn resume_cancelacion_es_limpia_y_reanuda() {
     mem.faults().clear();
     let handle = engine
         .copy_with(&vp("mem:///src.bin"), &vp("mem:///dst.bin"), resume_on())
+        .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(read_all(&*mem, "mem:///dst.bin").await.unwrap(), content);

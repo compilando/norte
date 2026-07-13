@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod backend;
+pub mod connect;
 #[cfg(unix)]
 pub mod daemon;
 mod engine;
