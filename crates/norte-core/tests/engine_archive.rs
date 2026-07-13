@@ -127,7 +127,9 @@ async fn dos_contenedores_comparten_provider_sin_mezclarse() {
             .write(&vp(&format!("mem:///{name}")))
             .await
             .expect("write");
-        sink.write(Bytes::copy_from_slice(&tar)).await.expect("chunk");
+        sink.write(Bytes::copy_from_slice(&tar))
+            .await
+            .expect("chunk");
         sink.commit().await.expect("commit");
     }
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
