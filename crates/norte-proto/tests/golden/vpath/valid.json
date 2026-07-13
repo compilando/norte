@@ -88,5 +88,59 @@
     "authority": "bucket",
     "segments_hex": ["6b6579"],
     "display": "⟨s3+v2.x-y bucket⟩/key"
+  },
+  {
+    "description": "archivo como directorio (ADR 0018): scheme compuesto + marcador ! + interior",
+    "wire": "zip+file:///home/o/a.zip/!/docs/x.txt",
+    "canonical_wire": "zip+file:///home/o/a.zip/!/docs/x.txt",
+    "scheme": "zip+file",
+    "authority": null,
+    "segments_hex": ["686f6d65", "6f", "612e7a6970", "21", "646f6373", "782e747874"],
+    "display": "⟨zip+file⟩/home/o/a.zip/!/docs/x.txt"
+  },
+  {
+    "description": "ADR 0018: %21 canonicaliza a ! literal — un splitter textual del wire sería incorrecto; el split va por segmentos",
+    "wire": "zip+file:///a.zip/%21/x",
+    "canonical_wire": "zip+file:///a.zip/!/x",
+    "scheme": "zip+file",
+    "authority": null,
+    "segments_hex": ["612e7a6970", "21", "78"],
+    "display": "⟨zip+file⟩/a.zip/!/x"
+  },
+  {
+    "description": "ADR 0018: raíz del interior = marcador final; authority del provider interior se preserva",
+    "wire": "tar+sftp://user@host:22/d/a.tar/!",
+    "canonical_wire": "tar+sftp://user@host:22/d/a.tar/!",
+    "scheme": "tar+sftp",
+    "authority": "user@host:22",
+    "segments_hex": ["64", "612e746172", "21"],
+    "display": "⟨tar+sftp user@host:22⟩/d/a.tar/!"
+  },
+  {
+    "description": "ADR 0018: ! múltiple es wire válido — el split corta en el PRIMERO; los demás son interior (NotFound aguas abajo)",
+    "wire": "zip+file:///a.zip/!/x/!/y",
+    "canonical_wire": "zip+file:///a.zip/!/x/!/y",
+    "scheme": "zip+file",
+    "authority": null,
+    "segments_hex": ["612e7a6970", "21", "78", "21", "79"],
+    "display": "⟨zip+file⟩/a.zip/!/x/!/y"
+  },
+  {
+    "description": "ADR 0018: compuesto SOBRE un provider cuyo scheme legítimo lleva + — la whitelist corta en el primer + y el resto es del provider",
+    "wire": "zip+s3+v2.x-y://bucket/key.zip/!/x",
+    "canonical_wire": "zip+s3+v2.x-y://bucket/key.zip/!/x",
+    "scheme": "zip+s3+v2.x-y",
+    "authority": "bucket",
+    "segments_hex": ["6b65792e7a6970", "21", "78"],
+    "display": "⟨zip+s3+v2.x-y bucket⟩/key.zip/!/x"
+  },
+  {
+    "description": "ADR 0018: un ! suelto en un path PLANO es un nombre normal (compose lo rechaza como exterior; el wire no)",
+    "wire": "file:///dir/!/config",
+    "canonical_wire": "file:///dir/!/config",
+    "scheme": "file",
+    "authority": null,
+    "segments_hex": ["646972", "21", "636f6e666967"],
+    "display": "⟨file⟩/dir/!/config"
   }
 ]

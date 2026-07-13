@@ -140,6 +140,15 @@ fn golden_capabilities() {
         "capabilities.json",
         &[
             (
+                "archive_read_only",
+                Capabilities {
+                    flags: CapabilityFlags::CASE_SENSITIVE
+                        | CapabilityFlags::CASE_PRESERVING
+                        | CapabilityFlags::READ_ONLY,
+                    max_path: None,
+                },
+            ),
+            (
                 "local_typical",
                 Capabilities {
                     flags: CapabilityFlags::RENAME_ATOMIC
@@ -726,9 +735,9 @@ fn method_names_frozen() {
     );
     assert_eq!(methods::FS_READ_MAX_CHUNK, 8 * 1024 * 1024);
     assert_eq!(methods::FS_LIST_MAX_PAGE, 10_000);
-    // 0.8.0: paginación por cursor de fs.list (limit/cursor/next_cursor) +
-    // Error::CursorExpired (fase 7f M2, ADR 0017). Aditivo sobre 0.7.x.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.8.0");
+    // 0.9.0: capability READ_ONLY + schemes compuestos zip+/tar+ con
+    // marcador `!` (fase 8 M2, ADR 0018). Aditivo sobre 0.8.x.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.9.0");
 }
 
 #[test]

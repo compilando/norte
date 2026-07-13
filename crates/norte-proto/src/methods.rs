@@ -36,7 +36,11 @@ use crate::{
 };
 
 /// Versión del protocolo (semver). El core soporta N y N-1 (spec §11).
-pub const PROTOCOL_VERSION: &str = "0.8.0";
+///
+/// 0.9.0 (fase 8, ADR 0018): capability `READ_ONLY` + schemes compuestos
+/// `zip+`/`tar+` con marcador `!` (archivos como directorios). Aditivo
+/// sobre 0.8.x; el bump señala que el server entiende paths compuestos.
+pub const PROTOCOL_VERSION: &str = "0.9.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver

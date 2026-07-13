@@ -34,6 +34,10 @@ bitflags::bitflags! {
         const RANDOM_WRITE = 1 << 6;
         /// Hay papelera: `trash()` mueve a un lugar recuperable (ADR 0009).
         const TRASH = 1 << 7;
+        /// El provider es solo-lectura (0.9.0, ADR 0018: archivos como
+        /// directorios): TODA mutación responde `Unsupported`. La UI veta
+        /// upfront y el copy engine rechaza destinos aquí sin round-trip.
+        const READ_ONLY = 1 << 8;
     }
 }
 

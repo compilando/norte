@@ -14,7 +14,11 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::wire::vpath_codec;
 
 /// Error de validación o parseo de [`VPath`] y sus componentes.
+///
+/// `non_exhaustive`: como [`Error`](crate::Error) — un consumidor externo
+/// no debe romper cuando una versión nueva añade una causa de rechazo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum VPathError {
     /// El wire no contiene el separador `://`.
     #[error("missing scheme: expected `scheme://…`")]
@@ -43,6 +47,39 @@ pub enum VPathError {
     /// Escape percent malformado (`%G1`, `%4`, `%` final).
     #[error("malformed percent escape")]
     BadEscape,
+    /// Direccionamiento de archivo-como-directorio malformado (ADR 0018):
+    /// marcador `!` ausente en un scheme compuesto, `!` en posición
+    /// prohibida al componer, o formato fuera de [`ARCHIVE_FORMATS`].
+    #[error("malformed archive addressing (`!` marker / format, ADR 0018)")]
+    ArchiveAddressing,
+}
+
+/// Tokens de formato de archivo-como-directorio reconocidos (ADR 0018).
+///
+/// Un scheme es compuesto si y solo si su prefijo hasta el primer `+` está
+/// aquí; ampliar la lista es cambio de protocolo. Reserva normativa: ningún
+/// provider registra schemes que empiecen por `<formato>+`.
+pub const ARCHIVE_FORMATS: &[&str] = &["zip", "tar"];
+
+/// Referencia desmontada de un path de archivo-como-directorio (ADR 0018):
+/// `<formato>+<scheme>://auth/<exterior>/!/<interior>`.
+///
+/// ```
+/// use norte_proto::VPath;
+/// let p = VPath::parse("zip+file:///a.zip/!/x").unwrap();
+/// let r = p.archive_split().unwrap().unwrap();
+/// assert_eq!(r.format, "zip");
+/// assert_eq!(r.outer.to_wire(), "file:///a.zip");
+/// assert_eq!(r.inner[0].as_bytes(), b"x");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveRef {
+    /// Formato del contenedor (token de [`ARCHIVE_FORMATS`]).
+    pub format: String,
+    /// Path del ARCHIVO contenedor en su provider interior.
+    pub outer: VPath,
+    /// Segmentos interiores relativos a la raíz del archivo.
+    pub inner: Vec<Segment>,
 }
 
 /// Scheme de un [`VPath`] (`file`, `sftp`, `mem`…), validado a `[a-z][a-z0-9+.-]*`.
@@ -363,6 +400,103 @@ impl VPath {
         Some(p)
     }
 
+    /// Compone el path de una entrada DENTRO de un archivo (ADR 0018):
+    /// `<format>+<scheme-de-outer>://<auth-de-outer>/<outer>/!/<inner>`.
+    ///
+    /// Solo sobre segmentos ya validados — jamás fabrica paths que
+    /// [`Self::archive_split`] no pueda deshacer (roundtrip garantizado).
+    /// Puramente sintáctico: un `outer` raíz (`file:///`) compone sin error
+    /// y es el provider quien responde `TypeMismatch` (la raíz no es un
+    /// archivo).
+    ///
+    /// ```
+    /// use norte_proto::VPath;
+    /// let outer = VPath::parse("file:///home/o/a.zip").unwrap();
+    /// let root = VPath::archive_compose("zip", &outer, &[]).unwrap();
+    /// assert_eq!(root.to_wire(), "zip+file:///home/o/a.zip/!");
+    /// ```
+    ///
+    /// # Errors
+    /// [`VPathError::ArchiveAddressing`] si `format` no está en
+    /// [`ARCHIVE_FORMATS`], si `outer` ya es compuesto (v1 = una capa), o
+    /// si `outer`/`inner` contienen un segmento `!` literal (el exterior
+    /// no sería direccionable; el interior, incontrastable con el índice,
+    /// que omite esos componentes). [`VPathError::InvalidScheme`] si la
+    /// concatenación no forma un scheme válido (imposible con formatos de
+    /// la whitelist; defensa en profundidad).
+    ///
+    /// # Panics
+    /// Nunca en la práctica: `!` es un segmento válido por construcción.
+    pub fn archive_compose(
+        format: &str,
+        outer: &Self,
+        inner: &[Segment],
+    ) -> Result<Self, VPathError> {
+        if !ARCHIVE_FORMATS.contains(&format) {
+            return Err(VPathError::ArchiveAddressing);
+        }
+        if scheme_format_prefix(outer.scheme()).is_some() {
+            return Err(VPathError::ArchiveAddressing);
+        }
+        let marker = || Segment::new(MARKER.to_vec()).expect("`!` es segmento válido");
+        if outer.segments.iter().any(|s| s.as_bytes() == MARKER)
+            || inner.iter().any(|s| s.as_bytes() == MARKER)
+        {
+            return Err(VPathError::ArchiveAddressing);
+        }
+        let mut segments = outer.segments.clone();
+        segments.push(marker());
+        segments.extend_from_slice(inner);
+        Ok(Self {
+            scheme: Scheme::new(&format!("{format}+{}", outer.scheme()))?,
+            authority: outer.authority.clone(),
+            segments,
+        })
+    }
+
+    /// Deshace [`Self::archive_compose`]: `Ok(None)` si el scheme no es
+    /// compuesto (el prefijo hasta el primer `+` no es un formato de
+    /// [`ARCHIVE_FORMATS`] — `s3+v2.x-y` es un scheme de provider
+    /// legítimo, no un archivo). Corta en el PRIMER segmento `!`; los `!`
+    /// posteriores quedan en el interior (el índice del provider jamás
+    /// los contiene → `NotFound` aguas abajo). Puramente sintáctico: no
+    /// valida que el exterior nombre un archivo.
+    ///
+    /// ```
+    /// use norte_proto::VPath;
+    /// let plano = VPath::parse("file:///a.zip").unwrap();
+    /// assert!(plano.archive_split().unwrap().is_none());
+    /// ```
+    ///
+    /// # Errors
+    /// [`VPathError::ArchiveAddressing`] si el scheme es compuesto pero no
+    /// hay marcador `!` en el path. [`VPathError::InvalidScheme`] si tras
+    /// quitar el formato el scheme interior es a su vez compuesto
+    /// (anidamiento, fuera de v1 — ADR 0018) o queda vacío.
+    pub fn archive_split(&self) -> Result<Option<ArchiveRef>, VPathError> {
+        let Some(format) = scheme_format_prefix(self.scheme.as_str()) else {
+            return Ok(None);
+        };
+        let inner_scheme = &self.scheme.as_str()[format.len() + 1..];
+        if scheme_format_prefix(inner_scheme).is_some() {
+            return Err(VPathError::InvalidScheme);
+        }
+        let marker_pos = self
+            .segments
+            .iter()
+            .position(|s| s.as_bytes() == MARKER)
+            .ok_or(VPathError::ArchiveAddressing)?;
+        Ok(Some(ArchiveRef {
+            format: format.to_owned(),
+            outer: Self {
+                scheme: Scheme::new(inner_scheme)?,
+                authority: self.authority.clone(),
+                segments: self.segments[..marker_pos].to_vec(),
+            },
+            inner: self.segments[marker_pos + 1..].to_vec(),
+        }))
+    }
+
     fn write_prefix(&self, out: &mut String) {
         out.push_str(self.scheme.as_str());
         out.push_str("://");
@@ -371,6 +505,16 @@ impl VPath {
         }
         out.push('/');
     }
+}
+
+/// El segmento marcador de ADR 0018.
+const MARKER: &[u8] = b"!";
+
+/// El token de formato si `scheme` es compuesto (`zip+file` → `Some("zip")`);
+/// `None` si el prefijo hasta el primer `+` no es un formato registrado.
+fn scheme_format_prefix(scheme: &str) -> Option<&str> {
+    let (prefix, _) = scheme.split_once('+')?;
+    ARCHIVE_FORMATS.contains(&prefix).then_some(prefix)
 }
 
 impl fmt::Debug for VPath {

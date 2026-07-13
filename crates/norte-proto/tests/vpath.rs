@@ -423,3 +423,137 @@ fn scheme_newtype_validates() {
     assert_eq!(Scheme::new("FILE").unwrap_err(), VPathError::InvalidScheme);
     assert_eq!(Scheme::new("").unwrap_err(), VPathError::InvalidScheme);
 }
+
+// ---------- archive_compose / archive_split (ADR 0018) ----------
+
+#[test]
+fn archive_compose_basico() {
+    let outer = path("file:///home/o/a.zip");
+    let root = VPath::archive_compose("zip", &outer, &[]).expect("compose raíz");
+    assert_eq!(root.to_wire(), "zip+file:///home/o/a.zip/!");
+    let hijo = VPath::archive_compose("zip", &outer, &[seg(b"docs"), seg(b"x.txt")])
+        .expect("compose con interior");
+    assert_eq!(hijo.to_wire(), "zip+file:///home/o/a.zip/!/docs/x.txt");
+}
+
+#[test]
+fn archive_compose_preserva_authority() {
+    let outer = path("sftp://user@host:22/d/a.tar");
+    let p = VPath::archive_compose("tar", &outer, &[seg(b"x")]).expect("compose");
+    assert_eq!(p.to_wire(), "tar+sftp://user@host:22/d/a.tar/!/x");
+    assert_eq!(p.authority(), Some("user@host:22"));
+}
+
+#[test]
+fn archive_compose_rechaza_formato_desconocido() {
+    let outer = path("file:///a.rar");
+    assert!(VPath::archive_compose("rar", &outer, &[]).is_err());
+    assert!(VPath::archive_compose("", &outer, &[]).is_err());
+}
+
+#[test]
+fn archive_compose_rechaza_exterior_ya_compuesto() {
+    // v1 una capa (ADR 0018): componer sobre un path ya compuesto = anidar.
+    let outer = path("file:///a.zip");
+    let composed = VPath::archive_compose("zip", &outer, &[]).expect("capa 1");
+    assert!(VPath::archive_compose("tar", &composed, &[]).is_err());
+}
+
+#[test]
+fn archive_compose_rechaza_marcador_en_ambos_lados() {
+    // Exterior con segmento `!`: ese archivo no es direccionable (ADR 0018).
+    let outer = path("file:///dir/!/a.zip");
+    assert!(VPath::archive_compose("zip", &outer, &[]).is_err());
+    // Interior con `!`: compose jamás fabrica paths que el índice omite.
+    let ok = path("file:///a.zip");
+    assert!(VPath::archive_compose("zip", &ok, &[seg(b"!")]).is_err());
+}
+
+#[test]
+fn archive_split_roundtrip() {
+    let outer = path("sftp://host/d/a.zip");
+    let inner = [seg(b"sub"), seg(b"f.bin")];
+    let p = VPath::archive_compose("zip", &outer, &inner).expect("compose");
+    let r = p
+        .archive_split()
+        .expect("split bien formado")
+        .expect("es compuesto");
+    assert_eq!(r.format, "zip");
+    assert_eq!(r.outer, outer);
+    assert_eq!(r.inner, inner.to_vec());
+}
+
+#[test]
+fn archive_split_scheme_plano_es_none() {
+    assert!(path("file:///a.zip").archive_split().expect("ok").is_none());
+    // `s3+v2.x-y` lleva `+` pero `s3` NO es formato: scheme de provider
+    // legítimo (pinneado en goldens), no compuesto.
+    assert!(
+        path("s3+v2.x-y://bucket/key")
+            .archive_split()
+            .expect("ok")
+            .is_none()
+    );
+}
+
+#[test]
+fn archive_split_sin_marcador_es_err() {
+    assert!(path("zip+file:///a.zip").archive_split().is_err());
+}
+
+#[test]
+fn archive_split_anidado_es_err_v1() {
+    assert!(
+        path("zip+tar+file:///a.tar/!/i.zip/!/x")
+            .archive_split()
+            .is_err()
+    );
+}
+
+#[test]
+fn archive_split_marcador_extra_interior_tolerado() {
+    // Corta en el PRIMER `!`; los `!` extra van al interior (el índice del
+    // provider jamás los contiene → NotFound aguas abajo, ADR 0018).
+    let r = path("zip+file:///a.zip/!/x/!/y")
+        .archive_split()
+        .expect("ok")
+        .expect("compuesto");
+    assert_eq!(r.outer.to_wire(), "file:///a.zip");
+    assert_eq!(r.inner, vec![seg(b"x"), seg(b"!"), seg(b"y")]);
+}
+
+#[test]
+fn archive_split_raiz_exterior_tolerada() {
+    // Sintácticamente válido; el provider dará TypeMismatch (la raíz no es
+    // un archivo). El split no hace semántica.
+    let r = path("zip+file:///!")
+        .archive_split()
+        .expect("ok")
+        .expect("compuesto");
+    assert!(r.outer.is_root());
+    assert!(r.inner.is_empty());
+}
+
+#[test]
+fn archive_sobre_provider_con_mas_en_el_scheme() {
+    // El caso que motivó la whitelist (ADR 0018): componer sobre un provider
+    // cuyo scheme legítimo lleva `+` — la descomposición corta en el PRIMER
+    // `+` y devuelve el scheme del provider intacto.
+    let outer = path("s3+v2.x-y://bucket/key.zip");
+    let p = VPath::archive_compose("zip", &outer, &[seg(b"x")]).expect("compose");
+    assert_eq!(p.to_wire(), "zip+s3+v2.x-y://bucket/key.zip/!/x");
+    let r = p.archive_split().expect("ok").expect("compuesto");
+    assert_eq!(r.format, "zip");
+    assert_eq!(r.outer, outer);
+    assert_eq!(r.outer.scheme(), "s3+v2.x-y");
+}
+
+#[test]
+fn archive_split_scheme_interior_vacio_es_err() {
+    // `zip+` es un Scheme válido gramaticalmente; el split lo rechaza al
+    // reconstruir el scheme interior vacío.
+    assert_eq!(
+        path("zip+:///x/!").archive_split().unwrap_err(),
+        VPathError::InvalidScheme
+    );
+}

@@ -622,11 +622,11 @@ fn fs_list_result_tolera_next_cursor_ausente() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.8.0 (fase 7f): acepta 0.8.x (N) y 0.7.x (N-1), rechaza 0.6.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.8.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.7.0"), "N-1");
+    // 0.9.0 (fase 8): acepta 0.9.x (N) y 0.8.x (N-1), rechaza 0.7.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.9.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.8.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.6.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.7.9"),
         "N-2 fuera de la ventana"
     );
 }

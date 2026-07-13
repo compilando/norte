@@ -152,3 +152,38 @@ proptest! {
         prop_assert!(!p.display_lossy().chars().any(char::is_control));
     }
 }
+
+/// `VPath`s plausibles como EXTERIOR de un archivo (ADR 0018): scheme sin
+/// prefijo de formato, ≥1 segmento, sin segmentos `!`.
+fn arb_archive_outer() -> impl Strategy<Value = VPath> {
+    arb_vpath().prop_filter("exterior componible", |p| {
+        !p.is_root()
+            && p.archive_split().is_ok_and(|r| r.is_none())
+            && p.segments().all(|s| s != b"!")
+    })
+}
+
+proptest! {
+    /// El "roundtrip garantizado" del rustdoc de `archive_compose`:
+    /// split(compose(f, outer, inner)) == (f, outer, inner).
+    #[test]
+    fn prop_archive_compose_split_roundtrip(
+        outer in arb_archive_outer(),
+        inner_bytes in proptest::collection::vec(arb_segment_bytes(), 0..6),
+        format in proptest::sample::select(norte_proto::ARCHIVE_FORMATS),
+    ) {
+        let inner: Vec<Segment> = inner_bytes
+            .into_iter()
+            .filter(|b| b.as_slice() != b"!")
+            .map(|b| Segment::new(b).expect("estrategia válida"))
+            .collect();
+        let p = VPath::archive_compose(format, &outer, &inner).expect("compose válido");
+        let r = p.archive_split().expect("bien formado").expect("compuesto");
+        prop_assert_eq!(r.format.as_str(), format);
+        prop_assert_eq!(r.outer, outer);
+        prop_assert_eq!(r.inner, inner);
+        // Y el wire del compuesto reparsea al mismo path (transitividad con
+        // prop_reparse_idempotent).
+        prop_assert_eq!(VPath::parse(&p.to_wire()).expect("wire válido"), p);
+    }
+}

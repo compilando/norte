@@ -1,4 +1,8 @@
 {
+  "archive_read_only": {
+    "flags": "CASE_SENSITIVE | CASE_PRESERVING | READ_ONLY",
+    "max_path": null
+  },
   "empty": {
     "flags": "",
     "max_path": null
