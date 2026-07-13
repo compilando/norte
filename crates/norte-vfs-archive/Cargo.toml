@@ -1,0 +1,30 @@
+[package]
+name = "norte-vfs-archive"
+description = "Provider VFS read-only: zip/tar como directorios virtuales (ADR 0018)"
+license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+futures.workspace = true
+norte-proto.workspace = true
+norte-vfs.workspace = true
+# Parsers SYNC de formato (regla 2: corren en spawn_blocking sobre un
+# adaptador Read+Seek que puentea al Provider interior con block_on).
+tar.workspace = true
+# `rt`: Handle::current().block_on en los hilos blocking del índice/lectura.
+tokio = { workspace = true, features = ["rt"] }
+# warn! de entradas hostiles omitidas (ADR 0018 C2: omitir CON señal).
+tracing.workspace = true
+
+[dev-dependencies]
+norte-testkit.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+
+[lints]
+workspace = true

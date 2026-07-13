@@ -9,6 +9,7 @@ members = [
     "crates/norte-vfs-sftp",
     "crates/norte-vfs-ftp",
     "crates/norte-vfs-object",
+    "crates/norte-vfs-archive",
     "crates/norte-connect",
     "crates/norte-testkit",
     "crates/norte-core",
@@ -33,6 +34,7 @@ norte-vfs-local = { path = "crates/norte-vfs-local", version = "0.0.0" }
 norte-vfs-sftp = { path = "crates/norte-vfs-sftp", version = "0.0.0" }
 norte-vfs-ftp = { path = "crates/norte-vfs-ftp", version = "0.0.0" }
 norte-vfs-object = { path = "crates/norte-vfs-object", version = "0.0.0" }
+norte-vfs-archive = { path = "crates/norte-vfs-archive", version = "0.0.0" }
 norte-connect = { path = "crates/norte-connect", version = "0.0.0" }
 norte-testkit = { path = "crates/norte-testkit", version = "0.0.0" }
 norte-core = { path = "crates/norte-core", version = "0.0.0" }
@@ -65,6 +67,11 @@ suppaftp = "10"
 # transitivas reqwest/reqsign/quick-xml bajo cargo-deny.
 opendal = { version = "0.58", default-features = false, features = ["services-s3", "http-transport-reqwest", "executors-tokio"] }
 sha2 = "0.10"
+# Provider archive (fase 8, ADR 0018): parsers de formato hostil battle-tested
+# y puro Rust. `tar` (ustar/GNU/pax; alternativa hand-rolled = deuda de
+# seguridad permanente); `zip` default-features=false + deflate (flate2/
+# miniz_oxide, sin C): stored+deflate v1, cifrado/bzip2/zstd fuera.
+tar = { version = "0.4", default-features = false }
 # Fase 6 (ADR 0015, connections/secretos): keyring del OS (Secret Service/
 # Keychain/Credential Manager, el estándar cross-platform); age (fichero
 # cifrado de secretos headless, auditado); zeroize (borrar secretos de memoria,
