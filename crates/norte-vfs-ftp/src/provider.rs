@@ -29,15 +29,75 @@ const PARTIAL_PREFIX: &str = ".norte-partial.";
 // solo cambia el parámetro de tipo del stream inyectado.
 type Ftp = AsyncRustlsFtpStream;
 
+/// Conexión de control + estado de resincronización (issue #39 M1).
+///
+/// Cancelar una lectura (drop del stream con el RETR en vuelo) deja la
+/// respuesta de transferencia (226/426) PENDIENTE en el control; la
+/// siguiente operación la leería como suya y desincronizaría la conexión.
+/// El flag lo marca el read y [`lock_synced`] drena antes de operar.
+struct Conn {
+    stream: Ftp,
+    pending_retr: bool,
+}
+
+impl Conn {
+    fn new(stream: Ftp) -> Self {
+        Self {
+            stream,
+            pending_retr: false,
+        }
+    }
+}
+
+impl std::ops::Deref for Conn {
+    type Target = Ftp;
+    fn deref(&self) -> &Ftp {
+        &self.stream
+    }
+}
+
+impl std::ops::DerefMut for Conn {
+    fn deref_mut(&mut self) -> &mut Ftp {
+        &mut self.stream
+    }
+}
+
+/// Bloquea la conexión y, si un RETR cancelado dejó respuesta pendiente, la
+/// drena (best-effort: si la conexión está rota, la operación que sigue
+/// fallará con su propio error, que es el diagnóstico honesto).
+///
+/// El drenado va por `finalize_retr_stream` con un stream VACÍO: además de
+/// leer la respuesta pendiente (426, o 226 si el servidor terminó antes de
+/// notar el cierre), resetea el flag interno `data_connection_open` de
+/// suppaftp — sin eso, todo comando de datos posterior fallaría con
+/// `DataConnectionAlreadyOpen` aunque el control esté limpio.
+async fn lock_synced(conn: &Arc<Mutex<Conn>>) -> OwnedMutexGuard<Conn> {
+    let mut g = Arc::clone(conn).lock_owned().await;
+    if g.pending_retr {
+        // Err(UnexpectedResponse(426)) esperado en cancelación: la respuesta
+        // queda consumida del wire igualmente.
+        let _ = g.stream.finalize_retr_stream(tokio::io::empty()).await;
+        g.pending_retr = false;
+    }
+    g
+}
+
 /// Provider VFS sobre una conexión FTP ya establecida (ADR 0014).
 ///
 /// FTP tiene una sola conexión de control ESTATAL (CWD/TYPE/REST se acumulan):
 /// se envuelve en `Arc<Mutex>` y las operaciones se serializan. La conexión
-/// con auth (cleartext / FTPS) se INYECTA ([`FtpProvider::new`]); el `connect`
-/// con secretos llega en la fase 6. El modo BINARIO se fija al construir (FTP
+/// con auth (cleartext / FTPS) se INYECTA ([`FtpProvider::new`] /
+/// [`FtpProvider::with_reader`]); el `connect` con secretos vive en
+/// norte-connect (fase 6). El modo BINARIO se fija al construir (FTP
 /// arranca en ASCII, que corrompe binarios).
 pub struct FtpProvider {
-    ftp: Arc<Mutex<Ftp>>,
+    ftp: Arc<Mutex<Conn>>,
+    /// Conexión de control DEDICADA a lecturas (issue #39 B1): el RETR de una
+    /// copia FTP→FTP mismo host retiene su conexión durante todo el stream —
+    /// con una sola, el APPE del lado escritura deadlockearía. `None` = una
+    /// sola conexión (lecturas y escrituras se serializan; una copia
+    /// mismo-host NO es segura).
+    reader: Option<Arc<Mutex<Conn>>>,
     /// Raíz remota absoluta bajo la que vive todo. Sin `..`, sin barra final.
     base: String,
     /// Contador de staging (nombre efímero único para `write`).
@@ -54,27 +114,40 @@ impl FtpProvider {
     ///
     /// # Errors
     /// Si el `TYPE I` inicial falla (conexión caída).
-    pub async fn new(mut stream: Ftp, base: impl Into<String>) -> Result<Self, Error> {
-        stream
-            .transfer_type(FileType::Binary)
-            .await
-            .map_err(|e| map_err(&e))?;
-        // ¿MLSD/MLST? (listado machine-readable, robusto con nombres hostiles).
-        // Muchos servidores (pure-ftpd) no lo anuncian → respaldo a LIST.
-        let feats = stream.feat().await.ok();
-        let has_mlsd = feats.as_ref().is_some_and(|f| {
-            f.keys()
-                .any(|k| k.eq_ignore_ascii_case("MLST") || k.eq_ignore_ascii_case("MLSD"))
-        });
-        // OPTS UTF8 ON si el servidor lo anuncia (RFC 2640, ADR 0014 D2): así
-        // los servidores que lo soportan devuelven UTF-8 real y no caemos en el
-        // rechazo lossy de U+FFFD. Best-effort: si falla, seguimos.
-        if feats
-            .as_ref()
-            .is_some_and(|f| f.keys().any(|k| k.eq_ignore_ascii_case("UTF8")))
-        {
-            let _ = stream.opts("UTF8", Some("ON")).await;
-        }
+    pub async fn new(stream: Ftp, base: impl Into<String>) -> Result<Self, Error> {
+        Self::build(stream, None, base).await
+    }
+
+    /// Como [`FtpProvider::new`], con una SEGUNDA conexión (al mismo servidor,
+    /// ya logueada) dedicada a lecturas: hace segura la copia FTP→FTP dentro
+    /// del mismo host (issue #39 B1) — el RETR va por `reader` y el APPE del
+    /// lado escritura por la principal, sin deadlock.
+    ///
+    /// # Errors
+    /// Si el `TYPE I` inicial falla en cualquiera de las dos conexiones.
+    pub async fn with_reader(
+        main: Ftp,
+        reader: Ftp,
+        base: impl Into<String>,
+    ) -> Result<Self, Error> {
+        Self::build(main, Some(reader), base).await
+    }
+
+    async fn build(
+        mut stream: Ftp,
+        reader: Option<Ftp>,
+        base: impl Into<String>,
+    ) -> Result<Self, Error> {
+        let has_mlsd = setup_conn(&mut stream).await?;
+        let reader = match reader {
+            Some(mut r) => {
+                // Misma preparación (BINARIO es imprescindible para RETR); el
+                // has_mlsd manda el de la principal (mismo servidor).
+                setup_conn(&mut r).await?;
+                Some(Arc::new(Mutex::new(Conn::new(r))))
+            }
+            None => None,
+        };
         let mut base = base.into();
         while base.len() > 1 && base.ends_with('/') {
             base.pop();
@@ -86,7 +159,8 @@ impl FtpProvider {
             return Err(Error::InvalidPath);
         }
         Ok(Self {
-            ftp: Arc::new(Mutex::new(stream)),
+            ftp: Arc::new(Mutex::new(Conn::new(stream))),
+            reader,
             base,
             seq: AtomicU64::new(0),
             has_mlsd,
@@ -156,9 +230,33 @@ impl FtpProvider {
         Ok(format!("{parent}/{PARTIAL_PREFIX}{hash:032x}"))
     }
 
-    fn ftp(&self) -> Arc<Mutex<Ftp>> {
+    fn ftp(&self) -> Arc<Mutex<Conn>> {
         Arc::clone(&self.ftp)
     }
+}
+
+/// Prepara una conexión recién logueada: BINARIO (ASCII corrompe binarios),
+/// detección de MLSD/MLST y `OPTS UTF8 ON` si el servidor lo anuncia (RFC
+/// 2640, ADR 0014 D2; best-effort). Devuelve si hay MLSD.
+async fn setup_conn(stream: &mut Ftp) -> Result<bool, Error> {
+    stream
+        .transfer_type(FileType::Binary)
+        .await
+        .map_err(|e| map_err(&e))?;
+    // ¿MLSD/MLST? (listado machine-readable, robusto con nombres hostiles).
+    // Muchos servidores (pure-ftpd) no lo anuncian → respaldo a LIST.
+    let feats = stream.feat().await.ok();
+    let has_mlsd = feats.as_ref().is_some_and(|f| {
+        f.keys()
+            .any(|k| k.eq_ignore_ascii_case("MLST") || k.eq_ignore_ascii_case("MLSD"))
+    });
+    if feats
+        .as_ref()
+        .is_some_and(|f| f.keys().any(|k| k.eq_ignore_ascii_case("UTF8")))
+    {
+        let _ = stream.opts("UTF8", Some("ON")).await;
+    }
+    Ok(has_mlsd)
 }
 
 impl std::fmt::Debug for FtpProvider {
@@ -358,7 +456,7 @@ impl Provider for FtpProvider {
                 mtime_ms: None,
             });
         }
-        let mut guard = self.ftp.lock().await;
+        let mut guard = lock_synced(&self.ftp).await;
         let found = stat_remote(&mut guard, &remote, self.has_mlsd, &self.base).await?;
         drop(guard);
         // El path del Entry es el del cliente, no el nombre ecoado.
@@ -372,7 +470,7 @@ impl Provider for FtpProvider {
         let remote = self.remote(p)?;
         let base = p.clone();
         let has_mlsd = self.has_mlsd;
-        let mut guard = self.ftp.lock().await;
+        let mut guard = lock_synced(&self.ftp).await;
         let lines = if has_mlsd {
             guard.mlsd(Some(&remote)).await
         } else {
@@ -433,15 +531,18 @@ impl Provider for FtpProvider {
         Ok(futures::stream::iter(entries).boxed())
     }
 
-    /// Lectura por RETR. Retiene la conexión de control ÚNICA durante todo el
-    /// stream (FTP no multiplexa): copiar FTP→FTP mismo host o cancelar a
-    /// mitad exige el pool de conexiones de fase 6 (issue #39). Un `range`
-    /// acotado DRENA el resto del fichero hasta EOF (RETR va offset→EOF; ABOR
+    /// Lectura por RETR. Retiene SU conexión de control durante todo el
+    /// stream (FTP no multiplexa): va por la conexión de LECTURA dedicada si
+    /// existe (issue #39 B1 — así una copia mismo-host no deadlockea con el
+    /// APPE de la principal). Cancelar a mitad marca la conexión para
+    /// resincronizar en el siguiente uso (#39 M1). Un `range` acotado DRENA
+    /// el resto del fichero hasta EOF (RETR va offset→EOF; ABOR
     /// desincronizaría) — el viewer no debe hacer reads acotados sobre FTP de
     /// ficheros enormes (issue #40).
     async fn read(&self, p: &VPath, range: Option<ByteRange>) -> Result<ByteStream, Error> {
         let remote = self.remote(p)?;
-        let mut guard = self.ftp.clone().lock_owned().await;
+        let conn = self.reader.as_ref().unwrap_or(&self.ftp);
+        let mut guard = lock_synced(conn).await;
         // Rechaza dirs (leerlos es error) y ausentes (NotFound): stat vía LIST
         // del padre, con la MISMA conexión bloqueada.
         match stat_remote(&mut guard, &remote, self.has_mlsd, &self.base).await? {
@@ -464,6 +565,9 @@ impl Provider for FtpProvider {
             .retr_as_stream(&remote)
             .await
             .map_err(|e| map_err(&e))?;
+        // RETR en vuelo: si el stream se suelta sin finalizar (cancelación),
+        // el flag queda puesto y el siguiente lock resincroniza (#39 M1).
+        guard.pending_retr = true;
         let len = range.and_then(|r| r.len);
         Ok(read_stream::ftp_read_stream(guard, Box::new(data), len))
     }
@@ -473,7 +577,7 @@ impl Provider for FtpProvider {
         let parent = self.remote_parent(p)?;
         let seq = self.seq.fetch_add(1, Ordering::Relaxed);
         let staging = format!("{parent}/{PARTIAL_PREFIX}eph.{seq}");
-        let mut guard = self.ftp.lock().await;
+        let mut guard = lock_synced(&self.ftp).await;
         // El destino final no debe existir (create-new; la política de
         // sobrescritura es del core). Ventana TOCTOU documentada.
         if exists(&mut guard, &final_remote, self.has_mlsd, &self.base).await? {
@@ -499,7 +603,7 @@ impl Provider for FtpProvider {
     async fn open_resumable(&self, p: &VPath) -> Result<(Box<dyn ByteSink>, u64), Error> {
         let final_remote = self.remote(p)?;
         let staging = self.stable_partial(p)?;
-        let mut guard = self.ftp.lock().await;
+        let mut guard = lock_synced(&self.ftp).await;
         if exists(&mut guard, &final_remote, self.has_mlsd, &self.base).await? {
             return Err(Error::Conflict {
                 conflict: ConflictKind::Exists,
@@ -534,7 +638,7 @@ impl Provider for FtpProvider {
 
     async fn mkdir(&self, p: &VPath) -> Result<(), Error> {
         let remote = self.remote(p)?;
-        let mut guard = self.ftp.lock().await;
+        let mut guard = lock_synced(&self.ftp).await;
         if exists(&mut guard, &remote, self.has_mlsd, &self.base).await? {
             return Err(Error::Conflict {
                 conflict: ConflictKind::Exists,
@@ -545,7 +649,7 @@ impl Provider for FtpProvider {
 
     async fn remove(&self, p: &VPath) -> Result<(), Error> {
         let remote = self.remote(p)?;
-        let mut guard = self.ftp.lock().await;
+        let mut guard = lock_synced(&self.ftp).await;
         // Saber si es dir para elegir RMD vs DELE (stat vía LIST del padre).
         let f = stat_remote(&mut guard, &remote, self.has_mlsd, &self.base)
             .await?
@@ -560,7 +664,7 @@ impl Provider for FtpProvider {
     async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), Error> {
         let from_r = self.remote(from)?;
         let to_r = self.remote(to)?;
-        let mut guard = self.ftp.lock().await;
+        let mut guard = lock_synced(&self.ftp).await;
         // RNFR/RNTO no garantiza no-replace: se comprueba antes (TOCTOU
         // documentada) para dar `Conflict`, no pisar.
         if exists(&mut guard, &to_r, self.has_mlsd, &self.base).await? {
@@ -579,7 +683,7 @@ impl Provider for FtpProvider {
 /// commit). El staging queda visible en el servidor; el destino final no
 /// existe hasta el `rename` del commit.
 struct FtpSink {
-    ftp: Arc<Mutex<Ftp>>,
+    ftp: Arc<Mutex<Conn>>,
     staging: String,
     final_remote: String,
     has_mlsd: bool,
@@ -592,7 +696,7 @@ impl ByteSink for FtpSink {
         if chunk.is_empty() {
             return Ok(());
         }
-        let mut guard = self.ftp.lock().await;
+        let mut guard = lock_synced(&self.ftp).await;
         let mut data = guard
             .append_with_stream(&self.staging)
             .await
@@ -606,7 +710,7 @@ impl ByteSink for FtpSink {
     }
 
     async fn commit(self: Box<Self>) -> Result<(), Error> {
-        let mut guard = self.ftp.lock().await;
+        let mut guard = lock_synced(&self.ftp).await;
         // El destino final no debe existir (create-new): comprobado al abrir;
         // la ventana hasta aquí es TOCTOU (FTP sin rename atómico) — si aparece
         // algo, Conflict y el staging se queda para el GC.
@@ -623,7 +727,7 @@ impl ByteSink for FtpSink {
 
     async fn abort(self: Box<Self>) -> Result<(), Error> {
         // Borra el staging (cada write lo dejó durable en el servidor).
-        let mut guard = self.ftp.lock().await;
+        let mut guard = lock_synced(&self.ftp).await;
         let _ = guard.rm(&self.staging).await;
         Ok(())
     }
@@ -637,18 +741,21 @@ impl ByteSink for FtpSink {
 }
 
 /// Productor del stream de lectura, aislado para no arrastrar genéricos al
-/// método del trait. Sostiene el `OwnedMutexGuard` (conexión única) mientras
-/// dura la transferencia de datos.
+/// método del trait. Sostiene el `OwnedMutexGuard` de SU conexión mientras
+/// dura la transferencia de datos; en cada finalización limpia (EOF, drenado
+/// de rango, error) limpia el `pending_retr` — si el stream se SUELTA sin
+/// llegar aquí (cancelación), el flag queda puesto y el siguiente
+/// [`lock_synced`] resincroniza la conexión (#39 M1).
 mod read_stream {
     use super::{
-        AsyncRead, AsyncReadExt, ByteStream, Bytes, Error, Ftp, OwnedMutexGuard, READ_CHUNK,
+        AsyncRead, AsyncReadExt, ByteStream, Bytes, Conn, Error, OwnedMutexGuard, READ_CHUNK,
         StreamExt,
     };
 
     type Reader = Box<dyn AsyncRead + Send + Unpin>;
 
     struct State {
-        guard: OwnedMutexGuard<Ftp>,
+        guard: OwnedMutexGuard<Conn>,
         reader: Reader,
         /// Bytes que aún se deben entregar (`None` = hasta EOF).
         remaining: Option<u64>,
@@ -657,7 +764,7 @@ mod read_stream {
     /// Stream de chunks desde una conexión de datos RETR abierta (ya
     /// posicionada por REST). `len` acota los bytes a entregar.
     pub(super) fn ftp_read_stream(
-        guard: OwnedMutexGuard<Ftp>,
+        guard: OwnedMutexGuard<Conn>,
         reader: Reader,
         len: Option<u64>,
     ) -> ByteStream {
@@ -670,7 +777,7 @@ mod read_stream {
             let mut st = state?;
             // Rango acotado ya entregado: FTP no sabe parar un RETR a media
             // (RETR va de offset a EOF). ABOR desincroniza la conexión de
-            // control ÚNICA, así que en vez de abortar se DRENA el resto de la
+            // control, así que en vez de abortar se DRENA el resto de la
             // conexión de datos y se finaliza limpio (la siguiente operación
             // encuentra la conexión sana). Coste: transferir la cola no pedida
             // — aceptable, los rangos acotados son de trozos pequeños.
@@ -686,7 +793,8 @@ mod read_stream {
             match st.reader.read(&mut buf).await {
                 // EOF natural: cierra la conexión de datos y lee la respuesta.
                 Ok(0) => {
-                    let _ = st.guard.finalize_retr_stream(st.reader).await;
+                    let _ = st.guard.stream.finalize_retr_stream(st.reader).await;
+                    st.guard.pending_retr = false;
                     None
                 }
                 Ok(n) => {
@@ -698,7 +806,8 @@ mod read_stream {
                 }
                 Err(_) => {
                     // Conexión de datos rota: finaliza best-effort y corta.
-                    let _ = st.guard.finalize_retr_stream(st.reader).await;
+                    let _ = st.guard.stream.finalize_retr_stream(st.reader).await;
+                    st.guard.pending_retr = false;
                     Some((Err(Error::Io { retryable: false }), None))
                 }
             }
@@ -708,7 +817,7 @@ mod read_stream {
 
     /// Lee y descarta el resto de la conexión de datos hasta EOF, luego
     /// finaliza (deja la conexión de control limpia para la siguiente op).
-    async fn drain_and_finalize(guard: &mut Ftp, mut reader: Reader) {
+    async fn drain_and_finalize(guard: &mut Conn, mut reader: Reader) {
         let mut scratch = vec![0u8; 8192];
         loop {
             match reader.read(&mut scratch).await {
@@ -716,6 +825,7 @@ mod read_stream {
                 Ok(_) => {}
             }
         }
-        let _ = guard.finalize_retr_stream(reader).await;
+        let _ = guard.stream.finalize_retr_stream(reader).await;
+        guard.pending_retr = false;
     }
 }
