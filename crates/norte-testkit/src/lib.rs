@@ -9,7 +9,9 @@
 pub mod corpus;
 mod faults;
 mod mem;
+mod smith;
 pub mod strategies;
 
 pub use faults::Faults;
 pub use mem::{MemProvider, Normalization};
+pub use smith::{TarSmith, ZipSmith};
