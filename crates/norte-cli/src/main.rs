@@ -322,6 +322,7 @@ async fn daemon_cmd(engine: Engine, cmd: DaemonCmd) -> anyhow::Result<ExitCode> 
                     socket_path: socket,
                     idle_timeout: (idle_timeout > 0)
                         .then(|| std::time::Duration::from_secs(idle_timeout)),
+                    ..DaemonConfig::default()
                 },
             )
             .await

@@ -49,6 +49,10 @@ struct TestDaemon {
 }
 
 async fn spawn_daemon(idle: Option<Duration>) -> TestDaemon {
+    spawn_daemon_ttl(idle, Duration::from_mins(2)).await
+}
+
+async fn spawn_daemon_ttl(idle: Option<Duration>, listing_ttl: Duration) -> TestDaemon {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
     let engine = Arc::new(Engine::new());
@@ -59,6 +63,7 @@ async fn spawn_daemon(idle: Option<Duration>) -> TestDaemon {
         DaemonConfig {
             socket_path: Some(socket.clone()),
             idle_timeout: idle,
+            listing_ttl,
         },
     )
     .await
@@ -92,6 +97,8 @@ async fn initialize_negocia_y_es_obligatorio() {
             methods::FS_LIST,
             &FsListParams {
                 path: vp("mem:///"),
+                limit: None,
+                cursor: None,
             },
         )
         .await
@@ -118,7 +125,7 @@ async fn initialize_rechaza_version_incompatible() {
             },
         )
         .await
-        .expect_err("0.1.0 no es N ni N-1 de 0.7.0");
+        .expect_err("0.1.0 no es N ni N-1 de 0.8.0");
     match err {
         ClientError::Rpc(rpc) => {
             // Código PROPIO: la señal de upgrade jamás se parsea de message.
@@ -129,14 +136,14 @@ async fn initialize_rechaza_version_incompatible() {
         }
         other => panic!("esperaba Rpc, fue {other:?}"),
     }
-    // N-1 (0.6.x) SÍ entra.
+    // N-1 (0.7.x) SÍ entra.
     let c2 = Client::connect(&d.socket).await.expect("connect");
     let ok: methods::InitializeResult = c2
         .call(
             methods::INITIALIZE,
             &InitializeParams {
                 client_info: client_info(),
-                protocol_version: "0.6.2".into(),
+                protocol_version: "0.7.2".into(),
                 encodings: vec![],
             },
         )
@@ -176,6 +183,8 @@ async fn fs_list_y_stat_responden_por_el_socket() {
             methods::FS_LIST,
             &FsListParams {
                 path: vp("mem:///"),
+                limit: None,
+                cursor: None,
             },
         )
         .await
@@ -192,6 +201,204 @@ async fn fs_list_y_stat_responden_por_el_socket() {
         .await
         .expect("fs.stat");
     assert_eq!(stat.entry.size, Some(4));
+}
+
+// ---------- paginación de fs.list (ADR 0017) ----------
+
+/// Una página de `fs.list` con `limit`/`cursor`.
+async fn list_page(
+    c: &Client,
+    path: &str,
+    limit: Option<u32>,
+    cursor: Option<String>,
+) -> FsListResult {
+    c.call(
+        methods::FS_LIST,
+        &FsListParams {
+            path: vp(path),
+            limit,
+            cursor,
+        },
+    )
+    .await
+    .expect("fs.list")
+}
+
+async fn seed(mem: &MemProvider, n: usize) {
+    for i in 0..n {
+        write_file(mem, &format!("mem:///f{i:03}.txt"), b"x").await;
+    }
+}
+
+/// Paginar por cursor devuelve EXACTAMENTE las mismas entradas que el listado
+/// completo, sin duplicar ni perder.
+#[tokio::test]
+async fn fs_list_paginado_concatena_igual_que_completo() {
+    let d = spawn_daemon(None).await;
+    seed(&d.mem, 5).await;
+    let c = connected_client(&d).await;
+
+    let completo = list_page(&c, "mem:///", None, None).await;
+    assert_eq!(completo.entries.len(), 5);
+    assert!(
+        completo.next_cursor.is_none(),
+        "sin cursor = listado completo"
+    );
+
+    // Páginas de 2.
+    let mut acumulado = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = list_page(&c, "mem:///", Some(2), cursor).await;
+        assert!(page.entries.len() <= 2, "respeta el limit");
+        acumulado.extend(page.entries);
+        match page.next_cursor {
+            Some(cur) => cursor = Some(cur),
+            None => break,
+        }
+    }
+    // Mismo conjunto de paths (el orden del provider puede variar).
+    let mut a: Vec<_> = acumulado.iter().map(|e| e.path.clone()).collect();
+    let mut b: Vec<_> = completo.entries.iter().map(|e| e.path.clone()).collect();
+    a.sort();
+    b.sort();
+    assert_eq!(a, b, "paginado == completo");
+}
+
+/// `limit = 0` es error de params (evita páginas vacías en bucle).
+#[tokio::test]
+async fn fs_list_limit_cero_es_invalid_params() {
+    let d = spawn_daemon(None).await;
+    seed(&d.mem, 2).await;
+    let c = connected_client(&d).await;
+    let err = c
+        .call::<_, FsListResult>(
+            methods::FS_LIST,
+            &FsListParams {
+                path: vp("mem:///"),
+                limit: Some(0),
+                cursor: None,
+            },
+        )
+        .await
+        .expect_err("limit 0");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+}
+
+/// Un cursor desconocido (o no-numérico) → `CursorExpired`: el cliente reinicia.
+#[tokio::test]
+async fn fs_list_cursor_desconocido_es_cursor_expired() {
+    let d = spawn_daemon(None).await;
+    seed(&d.mem, 2).await;
+    let c = connected_client(&d).await;
+    for cur in ["999", "no-numerico"] {
+        let err = c
+            .call::<_, FsListResult>(
+                methods::FS_LIST,
+                &FsListParams {
+                    path: vp("mem:///"),
+                    limit: Some(1),
+                    cursor: Some(cur.to_string()),
+                },
+            )
+            .await
+            .expect_err("cursor inválido");
+        match err {
+            ClientError::Rpc(rpc) => {
+                assert_eq!(rpc.data, Some(norte_proto::Error::CursorExpired), "{cur}");
+            }
+            other => panic!("esperaba Rpc, fue {other:?}"),
+        }
+    }
+}
+
+/// Un cursor de OTRO path → `INVALID_PARAMS` (el cursor valida contra su dir).
+#[tokio::test]
+async fn fs_list_cursor_de_otro_path_es_invalid_params() {
+    let d = spawn_daemon(None).await;
+    seed(&d.mem, 3).await;
+    let c = connected_client(&d).await;
+    // Abre un listado de la raíz que RETIENE (limit 1, hay 3 entradas).
+    let page = list_page(&c, "mem:///", Some(1), None).await;
+    let cur = page.next_cursor.expect("retiene");
+    // Continuarlo con OTRO path: el check de path va ANTES de listar, así que
+    // el otro path ni siquiera necesita existir.
+    let err = c
+        .call::<_, FsListResult>(
+            methods::FS_LIST,
+            &FsListParams {
+                path: vp("mem:///otro"),
+                limit: Some(1),
+                cursor: Some(cur),
+            },
+        )
+        .await
+        .expect_err("cursor de otro path");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+}
+
+/// LRU: al abrir el 9º listado retenido se expulsa el más viejo (su cursor →
+/// `CursorExpired`).
+#[tokio::test]
+async fn fs_list_lru_expulsa_el_mas_viejo() {
+    let d = spawn_daemon(None).await;
+    seed(&d.mem, 3).await; // ≥2 para que cada limit=1 retenga
+    let c = connected_client(&d).await;
+    // Abre 9 listados (MAX_OPEN_LISTINGS = 8): el 9º expulsa el 1º.
+    let mut cursores = Vec::new();
+    for _ in 0..9 {
+        let page = list_page(&c, "mem:///", Some(1), None).await;
+        cursores.push(page.next_cursor.expect("retiene"));
+    }
+    // El primer cursor fue expulsado.
+    let err = c
+        .call::<_, FsListResult>(
+            methods::FS_LIST,
+            &FsListParams {
+                path: vp("mem:///"),
+                limit: Some(1),
+                cursor: Some(cursores[0].clone()),
+            },
+        )
+        .await
+        .expect_err("el 1º fue expulsado");
+    match err {
+        ClientError::Rpc(rpc) => {
+            assert_eq!(rpc.data, Some(norte_proto::Error::CursorExpired));
+        }
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+    // El último sigue vivo.
+    let ok = list_page(&c, "mem:///", Some(1), Some(cursores[8].clone())).await;
+    assert!(!ok.entries.is_empty(), "el más reciente sobrevive");
+}
+
+/// TTL: un listado retenido sin continuar caduca (su cursor → `CursorExpired`).
+#[tokio::test]
+async fn fs_list_ttl_expira_el_listado() {
+    let d = spawn_daemon_ttl(None, Duration::from_millis(150)).await;
+    seed(&d.mem, 3).await;
+    let c = connected_client(&d).await;
+    let page = list_page(&c, "mem:///", Some(1), None).await;
+    let cur = page.next_cursor.expect("retiene");
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let err = c
+        .call::<_, FsListResult>(
+            methods::FS_LIST,
+            &FsListParams {
+                path: vp("mem:///"),
+                limit: Some(1),
+                cursor: Some(cur),
+            },
+        )
+        .await
+        .expect_err("caducó por TTL");
+    match err {
+        ClientError::Rpc(rpc) => {
+            assert_eq!(rpc.data, Some(norte_proto::Error::CursorExpired));
+        }
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -439,6 +646,7 @@ async fn dos_daemons_no_comparten_socket() {
         DaemonConfig {
             socket_path: Some(d.socket.clone()),
             idle_timeout: None,
+            listing_ttl: std::time::Duration::from_mins(2),
         },
     )
     .await
@@ -461,6 +669,7 @@ async fn bind_rechaza_dir_symlink() {
         DaemonConfig {
             socket_path: Some(link.join("d.sock")),
             idle_timeout: None,
+            listing_ttl: std::time::Duration::from_mins(2),
         },
     )
     .await
@@ -495,6 +704,7 @@ async fn spawn_daemon_at(socket: PathBuf) -> TestDaemon {
         DaemonConfig {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
+            listing_ttl: std::time::Duration::from_mins(2),
         },
     )
     .await
@@ -561,7 +771,7 @@ async fn frames_hostiles_y_formas_canonicas_crudas() {
 
     // initialize + daemon.shutdown con params null (golden canónico, M1).
     s.write_all(
-        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.6.0\",\"encodings\":[\"json\"]}}\n",
+        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.7.0\",\"encodings\":[\"json\"]}}\n",
     )
     .await
     .expect("write");
@@ -597,6 +807,8 @@ async fn initialize_repetido_es_invalid_request() {
             methods::FS_LIST,
             &FsListParams {
                 path: vp("mem:///"),
+                limit: None,
+                cursor: None,
             },
         )
         .await
@@ -630,6 +842,8 @@ async fn call_tras_el_cierre_no_se_cuelga() {
             methods::FS_LIST,
             &FsListParams {
                 path: vp("mem:///"),
+                limit: None,
+                cursor: None,
             },
         ),
     )

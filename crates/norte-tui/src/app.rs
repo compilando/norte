@@ -12,6 +12,10 @@ pub struct Pane {
     pub entries: Vec<Entry>,
     /// Índice bajo el cursor (0 incluso con lista vacía).
     pub cursor: usize,
+    /// El listado se está RELLENANDO en background (paginación, ADR 0017): la
+    /// primera página ya se pintó y llegan más entradas. La UI lo marca — un
+    /// listado incompleto JAMÁS es silencioso.
+    pub loading: bool,
 }
 
 impl Pane {
@@ -22,6 +26,7 @@ impl Pane {
             dir,
             entries,
             cursor: 0,
+            loading: false,
         }
     }
 
@@ -57,6 +62,38 @@ impl Pane {
         self.dir = dir;
         self.entries = entries;
         self.cursor = 0;
+        self.loading = false;
+    }
+
+    /// Primera página de un listado paginado: reemplaza el contenido y MARCA
+    /// que faltan entradas por llegar (ADR 0017). El drenador irá llamando a
+    /// [`Pane::extend_listing`] y, al terminar, [`Pane::finish_listing`].
+    pub fn begin_listing(&mut self, dir: VPath, first_page: Vec<Entry>, more: bool) {
+        self.dir = dir;
+        self.entries = first_page;
+        self.cursor = 0;
+        self.loading = more;
+    }
+
+    /// Añade un lote del drenador: re-ordena TODO y re-ancla el cursor al path
+    /// que estaba seleccionado (si desapareció del re-orden, clamp por índice)
+    /// para que rellenar no mueva la selección del usuario bajo sus pies.
+    pub fn extend_listing(&mut self, batch: Vec<Entry>) {
+        if batch.is_empty() {
+            return;
+        }
+        let selected = self.entries.get(self.cursor).map(|e| e.path.clone());
+        self.entries.extend(batch);
+        sort_entries(&mut self.entries);
+        self.cursor = match selected.and_then(|p| self.entries.iter().position(|e| e.path == p)) {
+            Some(i) => i,
+            None => self.cursor.min(self.entries.len().saturating_sub(1)),
+        };
+    }
+
+    /// El drenador terminó: el listado ya está completo.
+    pub fn finish_listing(&mut self) {
+        self.loading = false;
     }
 }
 
@@ -300,5 +337,78 @@ pub fn dialog_key(modal: &Modal, code: crossterm::event::KeyCode) -> DialogOutco
             K::Char('n') => DialogOutcome::Retry(P::Newer),
             _ => DialogOutcome::Open,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use norte_proto::Scheme;
+
+    fn root() -> VPath {
+        VPath::root(Scheme::new("mem").unwrap(), None)
+    }
+
+    fn file(name: &str) -> Entry {
+        Entry {
+            path: root().join(norte_proto::Segment::new(name.as_bytes().to_vec()).unwrap()),
+            kind: EntryKind::File,
+            size: Some(1),
+            mtime_ms: None,
+        }
+    }
+
+    fn names(p: &Pane) -> Vec<String> {
+        p.entries
+            .iter()
+            .map(|e| String::from_utf8_lossy(e.path.file_name().unwrap().as_bytes()).into_owned())
+            .collect()
+    }
+
+    /// `extend_listing` re-ordena TODO el listado (primera página + lote).
+    #[test]
+    fn extend_reordena_todo() {
+        let mut first = vec![file("b.txt"), file("d.txt")];
+        sort_entries(&mut first);
+        let mut p = Pane::new(root(), first);
+        p.loading = true;
+        p.extend_listing(vec![file("a.txt"), file("c.txt")]);
+        assert_eq!(names(&p), vec!["a.txt", "b.txt", "c.txt", "d.txt"]);
+    }
+
+    /// El cursor se re-ancla al PATH seleccionado, no al índice: rellenar no
+    /// mueve la selección del usuario bajo sus pies.
+    #[test]
+    fn extend_reancla_el_cursor_por_path() {
+        let mut first = vec![file("m.txt"), file("z.txt")];
+        sort_entries(&mut first);
+        let mut p = Pane::new(root(), first);
+        p.cursor = 1; // "z.txt"
+        // Llega un lote de nombres que ordenan ANTES: z.txt se desplaza.
+        p.extend_listing(vec![file("a.txt"), file("b.txt")]);
+        assert_eq!(names(&p), vec!["a.txt", "b.txt", "m.txt", "z.txt"]);
+        assert_eq!(
+            p.selected().unwrap().path.file_name().unwrap().as_bytes(),
+            b"z.txt"
+        );
+    }
+
+    /// Un lote vacío no altera nada (fin del drenado sin cola).
+    #[test]
+    fn extend_vacio_es_noop() {
+        let mut p = Pane::new(root(), vec![file("a.txt")]);
+        p.cursor = 0;
+        p.extend_listing(vec![]);
+        assert_eq!(names(&p), vec!["a.txt"]);
+        assert_eq!(p.cursor, 0);
+    }
+
+    /// `finish_listing` limpia el flag de carga.
+    #[test]
+    fn finish_limpia_loading() {
+        let mut p = Pane::new(root(), vec![]);
+        p.loading = true;
+        p.finish_listing();
+        assert!(!p.loading);
     }
 }

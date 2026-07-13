@@ -160,6 +160,12 @@ pub enum Error {
         /// Fingerprint OpenSSH `SHA256:<base64>` de la clave presentada.
         fingerprint: String,
     },
+    /// Un `cursor` de paginación de `fs.list` ya no es válido: expiró (TTL),
+    /// fue expulsado (LRU) o murió con la conexión (ADR 0017, 0.8.0). El
+    /// cliente reinicia el listado desde cero. Un cliente N-1 (0.7.x) jamás la
+    /// ve — no envía cursores — pero degrada a `Unknown` si la recibiera.
+    #[error("list cursor expired; restart the listing")]
+    CursorExpired,
     /// Categoría de un protocolo más nuevo (fallback de deserialización).
     /// El core JAMÁS la emite; existe para que un cliente N degrade con
     /// elegancia ante categorías N+1.

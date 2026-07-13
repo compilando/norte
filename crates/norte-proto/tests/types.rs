@@ -595,14 +595,38 @@ fn fs_read_params_tolera_range_ausente() {
     assert!(p.range.is_none());
 }
 
+/// Compat N-1 (ADR 0017): un cliente 0.7 OMITE `limit`/`cursor`/`next_cursor`
+/// (no los manda `null`). El golden pinnea el `null` canónico del emisor 0.8;
+/// esto pinnea la otra dirección — claves AUSENTES → None. Sin esto, quitar el
+/// `#[serde(default)]` pasaría todos los tests y solo rompería a los 0.7.
+#[test]
+fn fs_list_params_tolera_cursor_y_limit_ausentes() {
+    use norte_proto::methods::FsListParams;
+    let p: FsListParams =
+        serde_json::from_str(r#"{"path":"file:///x"}"#).expect("limit/cursor ausentes");
+    assert!(p.limit.is_none() && p.cursor.is_none());
+}
+
+#[test]
+fn fs_list_result_tolera_next_cursor_ausente() {
+    use norte_proto::methods::FsListResult;
+    let r: FsListResult = serde_json::from_str(r#"{"entries":[]}"#).expect("next_cursor ausente");
+    assert!(r.next_cursor.is_none());
+    // Y un campo DESCONOCIDO (0.9 → 0.8) no rompe la deserialización.
+    let r2: FsListResult = serde_json::from_str(r#"{"entries":[],"campo_futuro":42}"#)
+        .expect("campo desconocido tolerado");
+    assert!(r2.entries.is_empty());
+}
+
 #[test]
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    assert!(version_compatible(PROTOCOL_VERSION, "0.7.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.6.0"), "N-1");
+    // 0.8.0 (fase 7f): acepta 0.8.x (N) y 0.7.x (N-1), rechaza 0.6.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.8.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.7.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.5.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.6.9"),
         "N-2 fuera de la ventana"
     );
 }

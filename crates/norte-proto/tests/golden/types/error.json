@@ -18,6 +18,9 @@
     "conflict": "type_mismatch",
     "kind": "conflict"
   },
+  "cursor_expired": {
+    "kind": "cursor_expired"
+  },
   "encoding_loss": {
     "kind": "encoding_loss"
   },

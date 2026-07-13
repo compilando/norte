@@ -22,6 +22,10 @@ use crate::Engine;
 use crate::engine::TransferOptions;
 use crate::scheduler::TaskHandle;
 
+/// El tipo de stream que devuelve [`Backend::list_stream`] (ADR 0017),
+/// re-exportado para que los frontends lo nombren sin depender de `norte-vfs`.
+pub use norte_vfs::EntryStream;
+
 /// Una task en marcha, venga del scheduler embebido o del daemon.
 pub struct TaskRef {
     id: TaskId,
@@ -130,24 +134,36 @@ pub enum Backend {
 }
 
 impl Backend {
-    /// Listado completo de un directorio (el orden es del backend).
+    /// Listado de un directorio como STREAM perezoso (ADR 0017). Embebido =
+    /// el stream del engine tal cual; remoto = primera página EAGER (paridad
+    /// de errores: `NotFound`/`TypeMismatch` en el `Result`, no como primer
+    /// item) + páginas siguientes por cursor. Soltar el stream lo cancela.
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo; con el daemon caído,
+    /// `ProviderUnavailable{retryable:true}`.
+    pub async fn list_stream(&self, dir: &VPath) -> Result<EntryStream, Error> {
+        match self {
+            Self::Embedded(engine) => engine.list(dir).await,
+            #[cfg(unix)]
+            Self::Remote(r) => r.list_stream(dir).await,
+        }
+    }
+
+    /// Listado COMPLETO (drena [`Backend::list_stream`]). El `ls` remoto de un
+    /// dir gigante ya no arriesga el `CALL_TIMEOUT` ni un frame monstruoso: son
+    /// N páginas acotadas por debajo.
     ///
     /// # Errors
     /// Taxonomía del protocolo; con el daemon caído,
     /// `ProviderUnavailable{retryable:true}`.
     pub async fn list(&self, dir: &VPath) -> Result<Vec<Entry>, Error> {
-        match self {
-            Self::Embedded(engine) => {
-                let mut stream = engine.list(dir).await?;
-                let mut entries = Vec::new();
-                while let Some(item) = stream.next().await {
-                    entries.push(item?);
-                }
-                Ok(entries)
-            }
-            #[cfg(unix)]
-            Self::Remote(r) => r.list(dir).await,
+        let mut stream = self.list_stream(dir).await?;
+        let mut entries = Vec::new();
+        while let Some(item) = stream.next().await {
+            entries.push(item?);
         }
+        Ok(entries)
     }
 
     /// Lectura de PRESENTACIÓN (viewer): junta el rango pedido en memoria.
@@ -298,6 +314,7 @@ pub mod remote {
     use std::time::Duration;
 
     use base64::Engine as _;
+    use futures::StreamExt as _;
     use norte_proto::methods::{
         self, ClientInfo, FsCapabilitiesParams, FsCapabilitiesResult, FsCopyParams, FsDeleteParams,
         FsListParams, FsListResult, FsMoveParams, FsReadParams, FsReadResult, FsTaskResult,
@@ -307,6 +324,7 @@ pub mod remote {
         ByteRange, Capabilities, DeleteMode, Entry, Error, TaskId, TaskKind, TaskProgress,
         TaskState, VPath,
     };
+    use norte_vfs::EntryStream;
     use tokio::sync::{mpsc, watch};
 
     use super::{ConnEvent, TaskCanceller, TaskRef};
@@ -318,6 +336,53 @@ pub mod remote {
     /// Tope de una llamada RPC: un daemon vivo-pero-atascado (stat sobre un
     /// NFS muerto) jamás congela el frontend (M4 del rust-reviewer).
     const CALL_TIMEOUT: Duration = Duration::from_secs(30);
+    /// Entradas por página al listar un dir remoto (ADR 0017): acota el frame
+    /// de respuesta y el tiempo de UNA llamada.
+    const LIST_PAGE: u32 = 1000;
+
+    /// Estado del `try_unfold` que pagina un listado remoto: el buffer de la
+    /// página actual y el cursor de la siguiente.
+    struct PageState {
+        backend: RemoteBackend,
+        dir: VPath,
+        buffer: std::collections::VecDeque<Entry>,
+        cursor: Option<String>,
+        done: bool,
+    }
+
+    /// Un paso del stream paginado: sirve del buffer o pide la página siguiente.
+    async fn page_step(mut st: PageState) -> Result<Option<(Entry, PageState)>, Error> {
+        loop {
+            if let Some(e) = st.buffer.pop_front() {
+                return Ok(Some((e, st)));
+            }
+            if st.done {
+                return Ok(None);
+            }
+            let cursor = st.cursor.take();
+            let page: FsListResult = st
+                .backend
+                .call_timed(
+                    methods::FS_LIST,
+                    &FsListParams {
+                        path: st.dir.clone(),
+                        limit: Some(LIST_PAGE),
+                        cursor,
+                    },
+                )
+                .await?;
+            // Un server roto que devuelve página vacía CON next_cursor haría
+            // un bucle infinito: se corta (precedente del guard de fs.read).
+            if page.entries.is_empty() && page.next_cursor.is_some() {
+                return Err(Error::Internal { panic: false });
+            }
+            st.buffer.extend(page.entries);
+            match page.next_cursor {
+                Some(c) => st.cursor = Some(c),
+                None => st.done = true,
+            }
+        }
+    }
 
     /// Mapea el error del cliente RPC a la taxonomía (el contrato de los
     /// frontends es SIEMPRE la taxonomía, spec §17.7).
@@ -519,11 +584,30 @@ pub mod remote {
             }
         }
 
-        pub(super) async fn list(&self, dir: &VPath) -> Result<Vec<Entry>, Error> {
-            let r: FsListResult = self
-                .call_timed(methods::FS_LIST, &FsListParams { path: dir.clone() })
+        /// Listado remoto como stream perezoso: primera página EAGER (paridad
+        /// de errores) + `try_unfold` sobre el `next_cursor`. Sin deps nuevas.
+        pub(super) async fn list_stream(&self, dir: &VPath) -> Result<EntryStream, Error> {
+            // Primera página síncrona: un `NotFound`/`TypeMismatch` sale en el
+            // Result, no como primer item del stream (paridad con el embebido).
+            let first: FsListResult = self
+                .call_timed(
+                    methods::FS_LIST,
+                    &FsListParams {
+                        path: dir.clone(),
+                        limit: Some(LIST_PAGE),
+                        cursor: None,
+                    },
+                )
                 .await?;
-            Ok(r.entries)
+            let done = first.next_cursor.is_none();
+            let state = PageState {
+                backend: self.clone(),
+                dir: dir.clone(),
+                buffer: first.entries.into(),
+                cursor: first.next_cursor,
+                done,
+            };
+            Ok(futures::stream::try_unfold(state, page_step).boxed())
         }
 
         pub(super) async fn capabilities(&self, path: &VPath) -> Result<Capabilities, Error> {

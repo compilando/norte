@@ -11,6 +11,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
 use futures::StreamExt;
+use norte_core::backend::EntryStream;
 use norte_core::backend::{Backend, ConnEvent};
 use norte_core::{Engine, TransferOptions};
 use norte_i18n::{t, ta};
@@ -29,6 +30,48 @@ use norte_vfs_local::LocalProvider;
 /// Filas que salta `cursor.page-up/down` (fijo hasta que el alto real del
 /// pane viaje con el comando).
 const PAGE: usize = 10;
+
+/// Entradas de la PRIMERA página que un cd pinta antes de rellenar en
+/// background (ADR 0017): con esto el primer render no espera al listado
+/// entero (spec §11: primeras 100 en <16 ms aunque el dir tenga 500k).
+const FIRST_PAGE: usize = 100;
+/// Lote que el drenador coalesce antes de enviar (evita un re-sort por
+/// entrada; el re-sort completo lo hace [`Pane::extend_listing`]). Un dir de
+/// 100k son ~24 lotes ⇒ ~24 re-sorts de tamaño creciente durante el fill; el
+/// merge incremental (claves persistidas) es la optimización diferida a issue.
+const FILL_BATCH: usize = 4096;
+/// El drenador vacía un lote PARCIAL cada tanto (además de al llenarlo): en un
+/// listado remoto lento (páginas por RTT) el usuario ve progreso y el
+/// contador `cargando… (n)` avanza en vez de saltar de 4096 en 4096.
+const FILL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Mensaje del drenador de un listado paginado al run loop.
+enum FillMsg {
+    /// Un lote más de entradas para el pane.
+    Batch(Vec<Entry>),
+    /// El listado se cortó a mitad (error del provider/daemon): no es
+    /// silencioso (la UI avisa y limpia el `loading`).
+    Failed,
+}
+
+/// Un listado RELLENÁNDOSE en background: el pane destino y el canal del
+/// drenador. Soltarlo (un cd nuevo) dropea el `rx` → el drenador muere en su
+/// próximo envío → suelta el stream → cancelación cooperativa (regla 3).
+struct Fill {
+    pane: usize,
+    rx: tokio::sync::mpsc::Receiver<FillMsg>,
+}
+
+/// Desenlace de un `cd`, para que el run loop actualice el relleno vivo.
+enum Cd {
+    /// El pane se reemplazó y su RESTO se rellena en background.
+    Filling(Fill),
+    /// El pane `usize` se reemplazó y ya está completo (o el cd falló): un
+    /// relleno anterior de ESE pane queda obsoleto y hay que soltarlo.
+    Replaced(usize),
+    /// El cd se abandonó (Esc/Ctrl-C): nada cambió, el relleno sigue.
+    Cancelled,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -230,6 +273,8 @@ async fn run(
     // Debounce del hot-reload SIN bloquear el loop (revisión fase 6): cada
     // evento de config empuja el deadline; el reload corre cuando vence.
     let mut reload_at: Option<tokio::time::Instant> = None;
+    // Listado paginado rellenándose en background (ADR 0017): a lo sumo uno.
+    let mut fill: Option<Fill> = None;
     loop {
         // Exención puntual de la regla 2: el draw escribe stdout síncrono
         // (patrón async oficial de ratatui; acotado, runtime multi-thread).
@@ -239,7 +284,13 @@ async fn run(
         }
         tokio::select! {
             _ = tick.tick() => {
-                on_tick(app, backend, &mut events).await;
+                // Un refresh de panes (mutación terminada) reescribe AMBOS
+                // panes con el listado COMPLETO → suelta el relleno paginado
+                // en curso (su drenador duplicaría entradas, BLOCKER del
+                // rust-reviewer).
+                if on_tick(app, backend, &mut events).await {
+                    fill = None;
+                }
             }
             Some(task) = async {
                 match &mut foreign_tasks {
@@ -260,6 +311,28 @@ async fn run(
                     ConnEvent::Lost => t("msg-daemon-lost"),
                     ConnEvent::Restored => t("msg-daemon-restored"),
                 });
+            }
+            msg = async {
+                match &mut fill {
+                    Some(f) => f.rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                // Lote del drenador del listado paginado (ADR 0017): al pane
+                // que lo abrió. `None` = canal cerrado (fin del drenado).
+                let pane = fill.as_ref().map_or(0, |f| f.pane);
+                match msg {
+                    Some(FillMsg::Batch(batch)) => app.panes[pane].extend_listing(batch),
+                    Some(FillMsg::Failed) => {
+                        app.panes[pane].finish_listing();
+                        app.message = Some(t("msg-list-incomplete"));
+                        fill = None;
+                    }
+                    None => {
+                        app.panes[pane].finish_listing();
+                        fill = None;
+                    }
+                }
             }
             Some(()) = cfg_rx.recv() => {
                 // Ráfaga de guardados: empuja el deadline (ADR 0007).
@@ -317,7 +390,20 @@ async fn run(
                         match active.push(Chord::from_event(key.modifiers, key.code)) {
                             Resolution::Run(cmd) => {
                                 app.pending.clear();
-                                dispatch(app, backend, &mut events, help_lines, &cmd).await;
+                                match dispatch(app, backend, &mut events, help_lines, &cmd).await {
+                                    // Nuevo relleno: suelta el anterior (su rx
+                                    // dropeado mata su drenador → suelta el
+                                    // stream, regla 3).
+                                    Cd::Filling(f) => fill = Some(f),
+                                    // El pane se reemplazó sin relleno: invalida
+                                    // uno anterior de ESE pane (no aplicaría).
+                                    Cd::Replaced(pane) => {
+                                        if fill.as_ref().is_some_and(|f| f.pane == pane) {
+                                            fill = None;
+                                        }
+                                    }
+                                    Cd::Cancelled => {}
+                                }
                             }
                             Resolution::Pending(_) => {
                                 app.pending = active
@@ -375,11 +461,15 @@ async fn reload_config(
 /// pisa un modal abierto, hallazgo B1); el resto → mensaje por categoría +
 /// refresh de ambos panes (una mutación pudo cambiarlos).
 /// (Strings de mensaje hardcodeados hasta Fluent — fase 9, issue #1.)
-async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream) {
+/// Devuelve `true` si ha REFRESCADO los panes (una mutación terminó): el run
+/// loop suelta entonces cualquier relleno paginado en curso — `refresh_panes`
+/// reescribe AMBOS panes con el listado completo, así que un drenador viejo
+/// duplicaría entradas si siguiera vivo.
+async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream) -> bool {
     let finished = app.board.tick();
     if finished.is_empty() {
         app.open_next_collision();
-        return;
+        return false;
     }
     let mut refresh = false;
     for fin in finished {
@@ -422,6 +512,7 @@ async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream) {
     if refresh {
         refresh_panes(app, backend, events).await;
     }
+    refresh
 }
 
 /// Recarga ambos panes tras una mutación (pueden mostrar el mismo dir).
@@ -442,6 +533,10 @@ async fn refresh_panes(app: &mut App, backend: &Backend, events: &mut EventStrea
                             let cursor = pane.cursor.min(entries.len().saturating_sub(1));
                             pane.entries = entries;
                             pane.cursor = cursor;
+                            // El listado es COMPLETO: si venía de un cd paginado
+                            // a medio rellenar, ya no está cargando (el run loop
+                            // suelta el drenador tras este refresh).
+                            pane.loading = false;
                         }
                         // Sin silencio: el dir pudo desaparecer (issue #20).
                         Err(e) => app.message = Some(ta("msg-refresh-error", &[("error", &e.to_string())])),
@@ -558,7 +653,10 @@ async fn dispatch(
     events: &mut EventStream,
     help_lines: &[String],
     cmd: &str,
-) {
+) -> Cd {
+    // Solo los cd (nav.enter/nav.parent) tocan el relleno en background; el
+    // resto de comandos lo dejan como está (`Cancelled`).
+    let mut cd_outcome = Cd::Cancelled;
     match cmd {
         "app.quit" => app.quit = true,
         "pane.switch" => app.switch_focus(),
@@ -578,12 +676,12 @@ async fn dispatch(
                 .filter(|e| matches!(e.kind, EntryKind::Dir | EntryKind::Symlink))
                 .map(|e| e.path.clone());
             if let Some(dir) = target {
-                cd(app, backend, events, dir).await;
+                cd_outcome = cd(app, backend, events, dir).await;
             }
         }
         "nav.parent" => {
             if let Some(parent) = app.focused().dir.parent() {
-                cd(app, backend, events, parent).await;
+                cd_outcome = cd(app, backend, events, parent).await;
             }
         }
         "pane.copy" | "pane.move" => {
@@ -657,6 +755,7 @@ async fn dispatch(
         // (y COMMANDS vive en la lib: una sola fuente).
         _ => debug_assert!(false, "comando validado sin brazo: {cmd}"),
     }
+    cd_outcome
 }
 
 fn viewer_do(app: &mut App, f: impl FnOnce(&mut Viewer)) {
@@ -733,16 +832,31 @@ async fn read_head(backend: &Backend, path: &VPath) -> Result<(Vec<u8>, bool), E
 /// emergencia y no deben ser remapeables a algo que no exista). Soltar el
 /// future del listado detiene al productor del provider (testeado en
 /// vfs-local). El resto de teclas se descartan mientras dura el cd.
-async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPath) {
-    let fut = listing(backend, &dir);
+async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPath) -> Cd {
+    let fut = first_page(backend, &dir);
     tokio::pin!(fut);
     loop {
         tokio::select! {
             res = &mut fut => {
-                if let Ok(entries) = res {
-                    app.focused_mut().set_listing(dir.clone(), entries);
+                match res {
+                    Ok((mut first, stream)) => {
+                        sort_entries(&mut first);
+                        let more = stream.is_some();
+                        app.focused_mut().begin_listing(dir.clone(), first, more);
+                        let pane = app.focus();
+                        // Si queda stream, un drenador lo rellena en background.
+                        return match stream {
+                            Some(s) => Cd::Filling(spawn_fill(pane, s)),
+                            None => Cd::Replaced(pane),
+                        };
+                    }
+                    // Un error de listado NO tumba el TUI: el pane se queda,
+                    // pero un relleno previo de ESTE pane ya no aplica.
+                    Err(e) => {
+                        app.message = Some(ta("msg-error", &[("error", &e.to_string())]));
+                        return Cd::Replaced(app.focus());
+                    }
                 }
-                return;
             }
             maybe = events.next() => {
                 match maybe {
@@ -752,25 +866,98 @@ async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPa
                         match (key.code, key.modifiers) {
                         (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
                             app.quit = true;
-                            return;
+                            return Cd::Cancelled;
                         }
-                            (KeyCode::Esc, _) => return,
+                            (KeyCode::Esc, _) => return Cd::Cancelled,
                             _ => {}
                         }
                     }
                     Some(Ok(_)) => {}
-                    Some(Err(_)) | None => return,
+                    Some(Err(_)) | None => return Cd::Cancelled,
                 }
             }
         }
     }
 }
 
-/// Listado completo y ordenado de `dir` vía el core (regla 7: el TUI no
-/// toca el FS). Una entrada con error corta el listado: mejor un error
-/// honesto que un listado silenciosamente incompleto.
+/// Listado COMPLETO y ordenado de `dir` (para `refresh_panes` tras una
+/// mutación: conserva el cursor por índice). Una entrada con error corta el
+/// listado — mejor un error honesto que un listado silenciosamente incompleto.
 async fn listing(backend: &Backend, dir: &VPath) -> Result<Vec<Entry>, Error> {
     let mut entries = backend.list(dir).await?;
     sort_entries(&mut entries);
     Ok(entries)
+}
+
+/// Primera página de `dir` (hasta [`FIRST_PAGE`]) más el stream con el RESTO
+/// (o `None` si el dir cabía en la primera página). El primer render no espera
+/// al listado entero (ADR 0017). Regla 7: el TUI no toca el FS.
+async fn first_page(
+    backend: &Backend,
+    dir: &VPath,
+) -> Result<(Vec<Entry>, Option<EntryStream>), Error> {
+    let mut stream = backend.list_stream(dir).await?;
+    let mut first = Vec::with_capacity(FIRST_PAGE);
+    while first.len() < FIRST_PAGE {
+        match stream.next().await {
+            Some(item) => first.push(item?),
+            // El dir cabía en la primera página: no hay resto que drenar.
+            None => return Ok((first, None)),
+        }
+    }
+    Ok((first, Some(stream)))
+}
+
+/// Arranca el drenador del RESTO del listado: envía lotes coalescidos al run
+/// loop, que los aplica con [`Pane::extend_listing`]. Soltar el `rx` (un cd
+/// nuevo) mata el drenador en su próximo envío → suelta el stream (regla 3).
+fn spawn_fill(pane: usize, mut stream: EntryStream) -> Fill {
+    // Bounded a 1: el drenador no corre por delante del run loop más de un
+    // lote (backpressure); el pico de memoria es un lote, no todo el dir.
+    let (tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
+    tokio::spawn(async move {
+        let mut batch = Vec::with_capacity(FILL_BATCH);
+        let mut flush = tokio::time::interval(FILL_INTERVAL);
+        flush.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        flush.tick().await; // consume el tick inmediato del interval
+        loop {
+            tokio::select! {
+                item = stream.next() => match item {
+                    Some(Ok(e)) => {
+                        batch.push(e);
+                        if batch.len() >= FILL_BATCH
+                            && tx
+                                .send(FillMsg::Batch(std::mem::take(&mut batch)))
+                                .await
+                                .is_err()
+                        {
+                            return; // el run loop soltó el rx (cd nuevo)
+                        }
+                    }
+                    Some(Err(_)) => {
+                        let _ = tx.send(FillMsg::Failed).await;
+                        return;
+                    }
+                    None => {
+                        if !batch.is_empty() {
+                            let _ = tx.send(FillMsg::Batch(batch)).await;
+                        }
+                        return; // fin: drop(tx) cierra el canal → finish_listing
+                    }
+                },
+                _ = flush.tick() => {
+                    // Vacía un lote PARCIAL (progreso en streams lentos).
+                    if !batch.is_empty()
+                        && tx
+                            .send(FillMsg::Batch(std::mem::take(&mut batch)))
+                            .await
+                            .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    Fill { pane, rx }
 }

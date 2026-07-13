@@ -55,6 +55,13 @@
     "path": "file:///tmp/victim"
   },
   "fs_list_params": {
+    "cursor": null,
+    "limit": null,
+    "path": "file:///home/user"
+  },
+  "fs_list_params_paginado": {
+    "cursor": "3",
+    "limit": 1000,
     "path": "file:///home/user"
   },
   "fs_list_result": {
@@ -65,7 +72,19 @@
         "path": "file:///home/user/doc.txt",
         "size": 1234
       }
-    ]
+    ],
+    "next_cursor": null
+  },
+  "fs_list_result_paginado": {
+    "entries": [
+      {
+        "kind": "file",
+        "mtime_ms": 1720000000000,
+        "path": "file:///home/user/doc.txt",
+        "size": 1234
+      }
+    ],
+    "next_cursor": "3"
   },
   "fs_move_params": {
     "from": "file:///src/dir",

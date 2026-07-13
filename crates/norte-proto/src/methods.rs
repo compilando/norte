@@ -36,7 +36,7 @@ use crate::{
 };
 
 /// Versión del protocolo (semver). El core soporta N y N-1 (spec §11).
-pub const PROTOCOL_VERSION: &str = "0.7.0";
+pub const PROTOCOL_VERSION: &str = "0.8.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -65,6 +65,11 @@ pub const FS_CAPABILITIES: &str = "fs.capabilities";
 /// Tope de bytes devueltos por UNA llamada a [`FS_READ`] (antes de
 /// base64). Pedir más no es error: se recorta y `eof` lo cuenta.
 pub const FS_READ_MAX_CHUNK: u64 = 8 * 1024 * 1024;
+
+/// Tope de entradas devueltas por UNA página de [`FS_LIST`] (0.8.0, ADR
+/// 0017). Pedir un `limit` mayor no es error: se recorta a este techo (mismo
+/// patrón que [`FS_READ_MAX_CHUNK`]), y el resto sigue por el `next_cursor`.
+pub const FS_LIST_MAX_PAGE: u32 = 10_000;
 
 /// ¿Acepta un core `server` a un cliente `client`? N y N-1 (spec §11):
 /// mismo major; en 0.x el "major efectivo" es el minor — se acepta el
@@ -142,24 +147,37 @@ pub const CONNECTION_TRUST_HOST_KEY: &str = "connection.trust_host_key";
 /// `task.progress` — notificación server→client, coalescida (≤30 Hz).
 pub const TASK_PROGRESS: &str = "task.progress";
 
-/// Params de [`FS_LIST`].
+/// Params de [`FS_LIST`] (paginación por cursor desde 0.8.0, ADR 0017).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsListParams {
-    /// Directorio a listar.
+    /// Directorio a listar. OBLIGATORIO también al continuar (valida que el
+    /// `cursor` corresponde a ESTE listado).
     pub path: VPath,
+    /// Máximo de entradas de ESTA página. `None` (o ausente) = sin límite
+    /// (drena el resto). Recortado a [`FS_LIST_MAX_PAGE`]; `Some(0)` es error
+    /// (`-32602`, evita páginas vacías en bucle). Un cliente 0.7 no lo envía.
+    #[serde(default)]
+    pub limit: Option<u32>,
+    /// Cursor OPACO de la página siguiente (el `next_cursor` de la respuesta
+    /// previa). `None` = abre un listado nuevo. Jamás se parsea; desconocido
+    /// o expirado → [`Error::CursorExpired`](crate::Error::CursorExpired).
+    #[serde(default)]
+    pub cursor: Option<String>,
 }
 
 /// Result de [`FS_LIST`].
 ///
-/// M0 devuelve el listado completo; paginación por cursor + streaming
-/// incremental llegan en M1 como campos nuevos. Cláusula de compatibilidad
-/// (ADR 0004): un core con paginación DEBE seguir devolviendo el listado
-/// completo cuando el cliente no envía cursor — jamás truncar en silencio
-/// a un cliente N-1.
+/// Cláusula de compatibilidad (ADR 0004/0017): sin `cursor` NI `limit`, el
+/// core DEVUELVE el listado COMPLETO con `next_cursor: null` — un cliente
+/// 0.7 (N-1) recibe exactamente lo de antes, jamás un truncado en silencio.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsListResult {
-    /// Entradas del directorio (orden: el del provider, sin garantía).
+    /// Entradas de ESTA página (orden: el del provider, sin garantía).
     pub entries: Vec<Entry>,
+    /// Cursor de la página siguiente, o `None` si el listado terminó. Un
+    /// cliente 0.7 lo ignora (campo desconocido para él).
+    #[serde(default)]
+    pub next_cursor: Option<String>,
 }
 
 /// Params de [`FS_STAT`].

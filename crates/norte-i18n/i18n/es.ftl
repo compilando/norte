@@ -26,6 +26,8 @@ msg-daemon-restored = reconectado al daemon
 msg-config-not-applied = config NO aplicada: { $error }
 msg-config-polling = config: vigilancia degradada a polling
 msg-no-trash-here = sin papelera aquí: F8 de nuevo para permanente
+msg-list-incomplete = listado incompleto: se cortó al rellenar
+pane-loading = cargando… ({ $n })
 
 # --- Panel de tasks ---
 task-cancelled = cancelado

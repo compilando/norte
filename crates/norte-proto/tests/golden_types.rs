@@ -254,6 +254,7 @@ fn golden_error() {
                     fingerprint: "SHA256:zzz999".to_owned(),
                 },
             ),
+            ("cursor_expired", Error::CursorExpired),
         ],
     );
 }
@@ -341,7 +342,7 @@ fn golden_methods() {
     check_methods_daemon(&fixtures);
     check_methods_v05(&fixtures);
     check_methods_connection(&fixtures);
-    assert_eq!(fixtures.len(), 29, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 31, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia connection.* (0.7.0, fase 6): `trust_host_key` del flujo TOFU.
@@ -388,6 +389,17 @@ fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
         "fs_list_params",
         &FsListParams {
             path: vpath("file:///home/user"),
+            limit: None,
+            cursor: None,
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_list_params_paginado",
+        &FsListParams {
+            path: vpath("file:///home/user"),
+            limit: Some(1000),
+            cursor: Some("3".to_owned()),
         },
     );
     check_one(
@@ -395,6 +407,15 @@ fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
         "fs_list_result",
         &FsListResult {
             entries: vec![sample_entry.clone()],
+            next_cursor: None,
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_list_result_paginado",
+        &FsListResult {
+            entries: vec![sample_entry.clone()],
+            next_cursor: Some("3".to_owned()),
         },
     );
     check_one(
@@ -704,9 +725,10 @@ fn method_names_frozen() {
         "connection.trust_host_key"
     );
     assert_eq!(methods::FS_READ_MAX_CHUNK, 8 * 1024 * 1024);
-    // 0.7.0: connection.trust_host_key + host_key_unknown/mismatch (fase 6 M2,
-    // ADR 0015, flujo TOFU).
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.7.0");
+    assert_eq!(methods::FS_LIST_MAX_PAGE, 10_000);
+    // 0.8.0: paginación por cursor de fs.list (limit/cursor/next_cursor) +
+    // Error::CursorExpired (fase 7f M2, ADR 0017). Aditivo sobre 0.7.x.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.8.0");
 }
 
 #[test]

@@ -228,14 +228,25 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool) {
         Style::default().add_modifier(Modifier::DIM)
     };
     let (title, title_hostil) = path_display(&pane.dir);
+    let mut title = if title_hostil {
+        format!("{HOSTILE_BADGE} {title}")
+    } else {
+        title
+    };
+    // Un listado RELLENÁNDOSE (paginación, ADR 0017) se marca SIEMPRE: un
+    // listado incompleto jamás es silencioso.
+    if pane.loading {
+        use std::fmt::Write as _;
+        let _ = write!(
+            title,
+            " [{}]",
+            norte_i18n::ta("pane-loading", &[("n", &pane.entries.len().to_string())])
+        );
+    }
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(if title_hostil {
-            format!("{HOSTILE_BADGE} {title}")
-        } else {
-            title
-        });
+        .title(title);
     let items: Vec<ListItem<'_>> = pane.entries.iter().map(entry_item).collect();
     let list = List::new(items)
         .block(block)

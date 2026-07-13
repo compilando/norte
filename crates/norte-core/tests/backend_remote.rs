@@ -46,6 +46,7 @@ async fn spawn_daemon_with(dir: tempfile::TempDir, mem: Arc<MemProvider>) -> Tes
         DaemonConfig {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
+            listing_ttl: std::time::Duration::from_mins(2),
         },
     )
     .await
@@ -231,6 +232,7 @@ async fn bind_at(
         DaemonConfig {
             socket_path: Some(socket),
             idle_timeout: None,
+            listing_ttl: std::time::Duration::from_mins(2),
         },
     )
     .await

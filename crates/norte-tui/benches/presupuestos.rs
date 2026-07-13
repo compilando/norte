@@ -19,6 +19,7 @@ use norte_vfs_local::LocalProvider;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
+/// Drena el listado ENTERO + sort (vara de regresión del coste total).
 fn listar(rt: &tokio::runtime::Runtime, engine: &Engine, dir: &VPath) -> Vec<Entry> {
     use futures::StreamExt;
     rt.block_on(async {
@@ -26,6 +27,24 @@ fn listar(rt: &tokio::runtime::Runtime, engine: &Engine, dir: &VPath) -> Vec<Ent
         let mut out = Vec::new();
         while let Some(item) = stream.next().await {
             out.push(item.expect("entry"));
+        }
+        sort_entries(&mut out);
+        out
+    })
+}
+
+/// PRIMERA página (hasta 100) + sort: el camino real del primer render con
+/// paginación (ADR 0017). No drena las 100k — es lo que #27 mide de verdad.
+fn primera_pagina(rt: &tokio::runtime::Runtime, engine: &Engine, dir: &VPath) -> Vec<Entry> {
+    use futures::StreamExt;
+    rt.block_on(async {
+        let mut stream = engine.list(dir).await.expect("list");
+        let mut out = Vec::with_capacity(100);
+        while out.len() < 100 {
+            match stream.next().await {
+                Some(item) => out.push(item.expect("entry")),
+                None => break,
+            }
         }
         sort_entries(&mut out);
         out
@@ -90,7 +109,21 @@ fn bench_list_100k(c: &mut Criterion) {
     let root = LocalProvider::root();
     let mut group = c.benchmark_group("listado");
     group.sample_size(10);
+    // El criterio de #27: primer render con la PRIMERA página (paginación,
+    // ADR 0017). Presupuesto spec §12 <200 ms (esperado ~1-3 ms: no espera a
+    // las 100k); de paso verifica el <16 ms de spec §11.
     group.bench_function("cien_mil_hasta_primer_render", |b| {
+        b.iter(|| {
+            let entries = primera_pagina(&rt, &engine, &root);
+            let mut pane = Pane::new(root.clone(), entries);
+            pane.loading = true; // el resto se rellenaría en background
+            let app = App::new(pane, Pane::new(root.clone(), Vec::new()));
+            draw_once(&app);
+        });
+    });
+    // Vara de regresión del coste TOTAL (drenar+sort las 100k): la métrica de
+    // la issue diferida de los statx de vfs-local (d_type/size lazy).
+    group.bench_function("cien_mil_drenado_completo", |b| {
         b.iter(|| {
             let entries = listar(&rt, &engine, &root);
             let app = App::new(

@@ -43,6 +43,22 @@ const MAX_LIVE_TASKS: usize = 512;
 /// Snapshots TERMINALES retenidos para el resync de `task.list` (un
 /// frontend que reconecta ve el desenlace de lo que se perdió).
 const RECENT_TERMINAL: usize = 64;
+/// Listados paginados VIVOS retenidos por conexión (ADR 0017): cada uno es un
+/// `EntryStream` perezoso sin drenar. Al abrir el (N+1), se expulsa el más
+/// viejo (LRU). Un TUI navega 1-2 a la vez; el tope acota el coste (incluido
+/// un hilo blocking parkeado del productor local por listado no drenado).
+const MAX_OPEN_LISTINGS: usize = 8;
+/// Tope GLOBAL de listados retenidos en todo el daemon (M1 del rust-reviewer):
+/// 256 conexiones × 8 = 2048 productores de `vfs-local` podrían quedar
+/// parkeados en `blocking_send` > el pool blocking por defecto (512). Con este
+/// tope (bien por debajo del pool), al superarlo un listado NUEVO se drena
+/// ENTERO en línea (libera el hilo al instante) en vez de retenerse: bajo
+/// presión del MISMO uid, la paginación degrada a listado-completo, jamás a
+/// agotar el pool. Coste de una llamada lenta, nunca corrupción ni truncado.
+const GLOBAL_MAX_LISTINGS: usize = 256;
+/// Cada cuánto barre el server los listados retenidos expirados de una
+/// conexión VIVA-pero-muda (además del barrido perezoso en cada `fs.list`).
+const LISTING_SWEEP: Duration = Duration::from_secs(30);
 
 /// Configuración del daemon.
 #[derive(Debug, Clone)]
@@ -51,6 +67,10 @@ pub struct DaemonConfig {
     pub socket_path: Option<PathBuf>,
     /// Apagado tras este tiempo sin clientes NI tasks. `None` = nunca.
     pub idle_timeout: Option<Duration>,
+    /// TTL de un listado paginado retenido sin continuar (ADR 0017): pasado
+    /// este tiempo se descarta aunque la conexión siga viva. Configurable para
+    /// testear la expiración sin esperas largas.
+    pub listing_ttl: Duration,
 }
 
 impl Default for DaemonConfig {
@@ -58,6 +78,7 @@ impl Default for DaemonConfig {
         Self {
             socket_path: None,
             idle_timeout: Some(Duration::from_mins(5)),
+            listing_ttl: Duration::from_mins(2),
         }
     }
 }
@@ -84,6 +105,11 @@ struct Shared {
     hard_shutdown: CancellationToken,
     /// uid del daemon (derivado del propio socket): el ÚNICO peer admitido.
     uid: u32,
+    /// TTL de un listado paginado retenido (ADR 0017); de [`DaemonConfig`].
+    listing_ttl: Duration,
+    /// Listados paginados retenidos en TODO el daemon (M1): tope global
+    /// [`GLOBAL_MAX_LISTINGS`] para proteger el pool blocking.
+    open_listings: Arc<AtomicUsize>,
 }
 
 impl Shared {
@@ -200,6 +226,8 @@ impl Daemon {
                 shutdown: CancellationToken::new(),
                 hard_shutdown: CancellationToken::new(),
                 uid,
+                listing_ttl: cfg.listing_ttl,
+                open_listings: Arc::new(AtomicUsize::new(0)),
             }),
             idle_timeout: cfg.idle_timeout,
         })
@@ -370,6 +398,214 @@ fn spawn_connection(stream: UnixStream, shared: Arc<Shared>) {
     });
 }
 
+/// Un listado paginado VIVO retenido por el daemon entre páginas (ADR 0017):
+/// el `EntryStream` perezoso sin drenar, la ruta que lo abrió (para validar
+/// que un `cursor` corresponde a ESTE listado) y cuándo se usó por última vez
+/// (TTL/LRU). Soltar la struct = soltar el stream = cancelación cooperativa
+/// hasta el productor del provider (regla 3).
+struct OpenListing {
+    path: norte_proto::VPath,
+    stream: norte_vfs::EntryStream,
+    last_used: std::time::Instant,
+    /// Decrementa el contador GLOBAL al soltarse el listado (remove/evict/
+    /// sweep/muerte de la conexión): contabilidad RAII, sin decrementos
+    /// dispersos (M1 del rust-reviewer).
+    _guard: ListingGuard,
+}
+
+/// Guard RAII del contador global de listados retenidos.
+struct ListingGuard {
+    global: Arc<AtomicUsize>,
+}
+
+impl Drop for ListingGuard {
+    fn drop(&mut self) {
+        self.global.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Estado POR-CONEXIÓN: el `initialized` del handshake más los listados
+/// paginados retenidos. Local de [`serve_connection`] — se dropea en TODOS los
+/// caminos de salida, así que los streams mueren con la conexión. El dispatch
+/// es serial (se awaitea inline), sin concurrencia: basta `&mut`.
+struct ConnState {
+    initialized: bool,
+    listings: HashMap<u64, OpenListing>,
+    next_listing_id: u64,
+}
+
+impl ConnState {
+    fn new() -> Self {
+        Self {
+            initialized: false,
+            listings: HashMap::new(),
+            next_listing_id: 0,
+        }
+    }
+
+    /// Descarta los listados sin continuar en más de `ttl` (barrido perezoso).
+    fn sweep_expired(&mut self, ttl: Duration) {
+        let now = std::time::Instant::now();
+        self.listings
+            .retain(|_, l| now.duration_since(l.last_used) < ttl);
+    }
+
+    /// Expulsa el listado menos-recientemente-usado (LRU) si el mapa está en
+    /// el tope: abrir el (N+1) no debe crecer sin límite.
+    fn evict_if_full(&mut self) {
+        if self.listings.len() < MAX_OPEN_LISTINGS {
+            return;
+        }
+        if let Some((&victim, _)) = self.listings.iter().min_by_key(|(_, l)| l.last_used) {
+            self.listings.remove(&victim);
+        }
+    }
+}
+
+/// Resultado de drenar una página de un `EntryStream`.
+enum Drained {
+    /// El stream tiene MÁS: se retiene para la página siguiente.
+    More,
+    /// El stream se agotó: no hay `next_cursor`.
+    Done,
+}
+
+/// Drena hasta `cap` entradas (o todas si `cap` es `None`) a `out`. Un `Err`
+/// del stream se propaga (el listado se descarta arriba).
+async fn drain_page(
+    stream: &mut norte_vfs::EntryStream,
+    cap: Option<usize>,
+    out: &mut Vec<norte_proto::Entry>,
+) -> Result<Drained, norte_proto::Error> {
+    loop {
+        if let Some(c) = cap
+            && out.len() >= c
+        {
+            return Ok(Drained::More);
+        }
+        match stream.next().await {
+            Some(item) => out.push(item?),
+            None => return Ok(Drained::Done),
+        }
+    }
+}
+
+/// El handler de `fs.list` con paginación por cursor (ADR 0017). Cláusula ADR
+/// 0004: sin `cursor` NI `limit` drena el listado COMPLETO con `next_cursor:
+/// null` (un cliente 0.7 recibe exactamente lo de antes).
+#[tracing::instrument(level = "debug", skip_all, fields(path = %p.path.display_lossy(), paginado = p.cursor.is_some()))]
+async fn handle_fs_list(
+    p: methods::FsListParams,
+    conn: &mut ConnState,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    // Barrido perezoso antes de tocar el mapa (además del periódico).
+    conn.sweep_expired(shared.listing_ttl);
+
+    // `limit == 0` sería una página vacía en bucle: error de params.
+    if p.limit == Some(0) {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "limit must be >= 1",
+        ));
+    }
+    let cap = p.limit.map(|l| l.min(methods::FS_LIST_MAX_PAGE) as usize);
+    let now = std::time::Instant::now();
+    let mut entries = Vec::new();
+
+    // Continuación: el cursor es el id opaco de un listado retenido.
+    if let Some(cur) = &p.cursor {
+        // Cursor no-numérico o desconocido = expirado (el cliente reinicia).
+        let id: u64 = cur.parse().map_err(|_| cursor_expired())?;
+        let drained = {
+            let listing = conn.listings.get_mut(&id).ok_or_else(cursor_expired)?;
+            if listing.path != p.path {
+                return Err(RpcError::protocol(
+                    codes::INVALID_PARAMS,
+                    "cursor does not belong to this path",
+                ));
+            }
+            drain_page(&mut listing.stream, cap, &mut entries).await
+        };
+        return match drained {
+            Ok(Drained::More) => {
+                // Se conserva bajo el MISMO id (el cliente reusa el cursor).
+                if let Some(l) = conn.listings.get_mut(&id) {
+                    l.last_used = now;
+                }
+                Ok(to_value(&methods::FsListResult {
+                    entries,
+                    next_cursor: Some(id.to_string()),
+                })?)
+            }
+            Ok(Drained::Done) => {
+                conn.listings.remove(&id);
+                to_value(&methods::FsListResult {
+                    entries,
+                    next_cursor: None,
+                })
+            }
+            Err(e) => {
+                conn.listings.remove(&id);
+                Err(RpcError::from(e))
+            }
+        };
+    }
+
+    // Listado NUEVO (sin cursor).
+    let mut stream = shared.engine.list(&p.path).await.map_err(RpcError::from)?;
+    match drain_page(&mut stream, cap, &mut entries).await {
+        Ok(Drained::Done) => to_value(&methods::FsListResult {
+            entries,
+            next_cursor: None,
+        }),
+        Ok(Drained::More) => {
+            // Presión GLOBAL (M1): por encima del tope no se retiene — se drena
+            // el resto EN LÍNEA y se devuelve completo (libera el hilo blocking
+            // del productor al instante). Degrada a listado-completo, nunca
+            // agota el pool ni trunca.
+            if shared.open_listings.load(Ordering::SeqCst) >= GLOBAL_MAX_LISTINGS {
+                match drain_page(&mut stream, None, &mut entries).await {
+                    Ok(_) => {
+                        return to_value(&methods::FsListResult {
+                            entries,
+                            next_cursor: None,
+                        });
+                    }
+                    Err(e) => return Err(RpcError::from(e)),
+                }
+            }
+            conn.evict_if_full();
+            shared.open_listings.fetch_add(1, Ordering::SeqCst);
+            let id = conn.next_listing_id;
+            conn.next_listing_id += 1;
+            conn.listings.insert(
+                id,
+                OpenListing {
+                    path: p.path,
+                    stream,
+                    last_used: now,
+                    _guard: ListingGuard {
+                        global: Arc::clone(&shared.open_listings),
+                    },
+                },
+            );
+            to_value(&methods::FsListResult {
+                entries,
+                next_cursor: Some(id.to_string()),
+            })
+        }
+        Err(e) => Err(RpcError::from(e)),
+    }
+}
+
+/// `RpcError` para un cursor de paginación inválido/expirado (ADR 0017): lleva
+/// la taxonomía [`Error::CursorExpired`](norte_proto::Error::CursorExpired) en
+/// `data`, así el cliente la distingue y reinicia el listado.
+fn cursor_expired() -> RpcError {
+    RpcError::from(norte_proto::Error::CursorExpired)
+}
+
 async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::Result<()> {
     let (mut reader, mut writer) = stream.into_split();
 
@@ -389,8 +625,14 @@ async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::
     let conn_id = shared.next_conn.fetch_add(1, Ordering::SeqCst) as u64;
     let mut decoder = FrameDecoder::new();
     let mut buf = vec![0u8; 64 * 1024];
-    let mut initialized = false;
+    let mut conn = ConnState::new();
     let mut parse_errors = 0u32;
+    // Reap de listados paginados expirados en una conexión viva-pero-muda
+    // (además del barrido perezoso en cada fs.list): un peer que abre un
+    // listado y no lo continúa no retiene el stream (ni su hilo blocking) más
+    // allá del TTL.
+    let mut sweep = tokio::time::interval(LISTING_SWEEP);
+    sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let result: std::io::Result<()> = 'conn: loop {
         let n = tokio::select! {
             r = reader.read(&mut buf) => match r {
@@ -401,6 +643,10 @@ async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::
                 Err(e) => break 'conn Err(e),
             },
             () = shared.shutdown.cancelled() => break 'conn Ok(()),
+            _ = sweep.tick() => {
+                conn.sweep_expired(shared.listing_ttl);
+                continue;
+            }
         };
         if n == 0 {
             break Ok(());
@@ -432,7 +678,7 @@ async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::
                 }
             };
             parse_errors = 0;
-            handle_value(value, conn_id, &tx, &mut initialized, shared).await;
+            handle_value(value, conn_id, &tx, &mut conn, shared).await;
         }
     };
 
@@ -456,7 +702,7 @@ async fn handle_value(
     value: serde_json::Value,
     conn_id: u64,
     tx: &mpsc::Sender<Arc<[u8]>>,
-    initialized: &mut bool,
+    conn: &mut ConnState,
     shared: &Arc<Shared>,
 ) {
     match classify(&value) {
@@ -476,11 +722,11 @@ async fn handle_value(
                 }
             };
             let id = req.id.clone();
-            let was_initialized = *initialized;
+            let was_initialized = conn.initialized;
             // El dispatch respeta el shutdown (regla 3): un fs.list
             // gigante no retiene el apagado.
             let response = tokio::select! {
-                r = dispatch(req, initialized, shared) => r,
+                r = dispatch(req, conn, shared) => r,
                 () = shared.shutdown.cancelled() => {
                     Err(RpcError::protocol(
                         codes::INTERNAL_ERROR,
@@ -491,7 +737,7 @@ async fn handle_value(
             // La suscripción al broadcast nace CON el handshake (nota del
             // security-reviewer): antes de initialize nadie recibe el
             // progreso de otros.
-            if !was_initialized && *initialized {
+            if !was_initialized && conn.initialized {
                 shared
                     .subscribers
                     .lock()
@@ -551,10 +797,10 @@ fn to_value<T: serde::Serialize>(v: &T) -> Result<serde_json::Value, RpcError> {
 #[tracing::instrument(skip_all, fields(method = %req.method))]
 async fn dispatch(
     req: Request,
-    initialized: &mut bool,
+    conn: &mut ConnState,
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
-    if !*initialized && req.method != methods::INITIALIZE {
+    if !conn.initialized && req.method != methods::INITIALIZE {
         return Err(RpcError::protocol(
             codes::NOT_INITIALIZED,
             "initialize required first",
@@ -564,7 +810,7 @@ async fn dispatch(
         methods::INITIALIZE => {
             // Repetirlo es un error de protocolo (como LSP): renegociar a
             // mitad de sesión no significa nada.
-            if *initialized {
+            if conn.initialized {
                 return Err(RpcError::protocol(
                     codes::INVALID_REQUEST,
                     "already initialized",
@@ -589,7 +835,7 @@ async fn dispatch(
                     "only supported encoding: json",
                 ));
             }
-            *initialized = true;
+            conn.initialized = true;
             to_value(&methods::InitializeResult {
                 server_info: methods::ServerInfo {
                     name: "norte-core".into(),
@@ -614,6 +860,12 @@ async fn dispatch(
             shared.shutdown.cancel();
             to_value(&methods::DaemonShutdownResult {})
         }
+        // fs.list vive AQUÍ (no en dispatch_fs_task): necesita el ConnState
+        // para retener el stream paginado entre páginas (ADR 0017).
+        methods::FS_LIST => {
+            let p: methods::FsListParams = parse_params(req.params)?;
+            handle_fs_list(p, conn, shared).await
+        }
         _ => dispatch_fs_task(req, shared).await,
     }
 }
@@ -624,15 +876,6 @@ async fn dispatch_fs_task(
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
     match req.method.as_str() {
-        methods::FS_LIST => {
-            let p: methods::FsListParams = parse_params(req.params)?;
-            let mut stream = shared.engine.list(&p.path).await.map_err(RpcError::from)?;
-            let mut entries = Vec::new();
-            while let Some(item) = stream.next().await {
-                entries.push(item.map_err(RpcError::from)?);
-            }
-            to_value(&methods::FsListResult { entries })
-        }
         methods::FS_STAT => {
             let p: methods::FsStatParams = parse_params(req.params)?;
             let entry = shared.engine.stat(&p.path).await.map_err(RpcError::from)?;

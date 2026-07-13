@@ -119,10 +119,17 @@ Positivas:
 Negativas / deuda asumida:
 
 - Estado nuevo en el daemon (streams retenidos): acotado por 8/conexión + TTL
-  + muerte con la conexión + idle-shutdown; peor caso teórico de hilos
-  blocking parkeados (productor de vfs-local con canal lleno) señalado al
-  security-reviewer — mitigación barata si la exige: contador global (patrón
-  `MAX_LIVE_TASKS`).
+  + muerte con la conexión + idle-shutdown. El peor caso de hilos blocking
+  parkeados (256 conn × 8 = 2048 productores de vfs-local en `blocking_send` >
+  pool 512) lo cierra un **tope GLOBAL** (`GLOBAL_MAX_LISTINGS = 256`, bien bajo
+  el pool): por encima, un listado nuevo NO se retiene — se drena entero en
+  línea (libera el hilo al instante) y degrada a listado-completo, jamás agota
+  el pool ni trunca. Contabilidad RAII (guard en `OpenListing`). Tuning fino
+  (max_blocking_threads, TTL) + test de connection-drop = issues de deuda.
+- El fill del TUI re-ordena por LOTE (`FILL_BATCH = 4096`): un dir de 100k son
+  ~24 re-sorts de tamaño creciente durante el relleno (no bloquea el primer
+  render; el drenado completo = 250 ms de vara). El merge incremental con
+  claves persistidas es la optimización diferida (issue).
 - Un listado paginado NO es una foto consistente (el dir puede mutar entre
   páginas) — inherente a cualquier paginación sobre un FS vivo; mismo
   contrato que hoy (el orden del provider tampoco garantiza nada).
