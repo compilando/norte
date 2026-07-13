@@ -22,3 +22,4 @@ La spec evoluciona por ADR, no por edición silenciosa (spec §18).
 | [0015](0015-conexiones-y-secretos.md) | Conexiones y secretos: connections.toml, keyring, TOFU, ed25519 | accepted |
 | [0016](0016-provider-object-storage.md) | Provider de object storage: opendal, modelo de keys y S3 primero | accepted |
 | [0017](0017-paginacion-cursor-fs-list.md) | Paginación por cursor de `fs.list`: stream retenido por conexión | accepted |
+| [0018](0018-provider-archive.md) | Provider archive: zip/tar read-only como directorios virtuales | accepted |
