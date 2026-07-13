@@ -22,12 +22,39 @@
 use std::net::SocketAddr;
 use std::path::Path;
 
+use bytes::Bytes;
+use norte_proto::{Error, VPath};
+use norte_vfs::Provider;
+use norte_vfs_object::ObjectProvider;
 use opendal::Operator;
 
 /// Credenciales de juguete del servidor in-process (no son un secreto).
 pub const TEST_AK: &str = "norte-test-ak";
 pub const TEST_SK: &str = "norte-test-sk";
 pub const TEST_BUCKET: &str = "norte-test";
+
+/// Escribe `data` en `f` (write + commit), compartido por las suites.
+pub async fn write_all(p: &ObjectProvider, f: &VPath, data: &[u8]) {
+    let mut sink = p.write(f).await.expect("write");
+    sink.write(Bytes::copy_from_slice(data))
+        .await
+        .expect("chunk");
+    sink.commit().await.expect("commit");
+}
+
+/// Lee `f` entero a bytes.
+///
+/// # Errors
+/// Propaga el error del provider (útil para tests que esperan `NotFound`).
+pub async fn read_all(p: &ObjectProvider, f: &VPath) -> Result<Vec<u8>, Error> {
+    use futures::TryStreamExt as _;
+    let mut s = p.read(f, None).await?;
+    let mut out = Vec::new();
+    while let Some(chunk) = s.try_next().await? {
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
+}
 
 /// Instala el transporte HTTP por defecto de opendal (idempotente). Con
 /// `default-features = false` opendal NO lo auto-registra.

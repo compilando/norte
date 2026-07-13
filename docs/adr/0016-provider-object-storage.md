@@ -111,12 +111,17 @@ delimitador, multipart uploads y `CopyObject` server-side. Preguntas:
   `reqsign` (ya en el árbol), (iii) `aws-sdk-s3` acotado a esa pieza. Este ADR
   RE-PROGRAMA el compromiso de 0012, no lo borra.
 - **`copy_native` (fase 7c)**: `CopyObject` server-side; destino existente
-  (file o dir) → `Conflict`; `copy_with(...).if_not_exists(true)` si la
-  capability del `Operator` lo confirma (`copy_with_if_not_exists`), si no
-  check racy documentado. OJO: `Operator::copy`/`rename` de opendal
-  SOBRESCRIBEN por defecto — nunca llamarlos sin el check. Límite 5 GiB del
-  CopyObject single-shot → issue (UploadPartCopy futuro). Se declara
-  `SERVER_COPY` solo desde 7c.
+  (file o dir) → `Conflict` (el `ensure_absent` no es solo cinturón: es el
+  ÚNICO guard contra un destino DIRECTORIO, que el `If-None-Match` del copy no
+  ve); `copy_with(...).if_not_exists(true)` si la capability del `Operator` lo
+  confirma (`copy_with_if_not_exists`), si no check racy documentado. OJO:
+  `Operator::copy`/`rename` de opendal SOBRESCRIBEN por defecto — nunca
+  llamarlos sin el check. `SERVER_COPY` se declara solo si el backend anuncia
+  `copy` (un `Operator` sin copia haría fallar en duro un fichero, sin
+  fallback a streaming). opendal hace UploadPartCopy automático para >5 GiB
+  (sin tope oculto). **Cancelación**: el engine llama `copy_native` en un solo
+  `.await` — un multipart copy largo no tiene punto de corte (regla 3): issue
+  #51, se ataca en el wiring de 7d/7e.
 - **Resto de semántica**: `list` = stat previo (`NotFound` honesto) + stream
   PEREZOSO sobre el lister de opendal (pagina con ContinuationToken por
   debajo; engancha con ADR 0017 sin tocar el trait), filtrando la self-entry

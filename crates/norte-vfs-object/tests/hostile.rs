@@ -294,3 +294,39 @@ async fn nombre_con_nbsp_final_se_rechaza() {
     assert_eq!(p.stat(&f).await.unwrap_err(), Error::InvalidPath);
     assert!(matches!(p.write(&f).await, Err(Error::InvalidPath)));
 }
+
+/// `copy_native` con origen DIRECTORIO → `TypeMismatch` (`copy_native` es de
+/// objeto único; el engine copia árboles hoja a hoja). Sobre services-fs
+/// porque s3s-fs miente en el HEAD de un path-directorio (issue #50).
+#[tokio::test]
+async fn copy_native_origen_dir_es_typemismatch() {
+    let p = fresh_fs();
+    let r = root();
+    let d = child(&r, b"undir");
+    p.mkdir(&d).await.expect("mkdir");
+    common::write_all(&p, &child(&d, b"hijo.txt"), b"x").await;
+    let dst = child(&r, b"destino");
+    match p.copy_native(&d, &dst).await {
+        Some(Err(Error::Conflict {
+            conflict: norte_proto::ConflictKind::TypeMismatch,
+        })) => {}
+        other => panic!("copy_native de un dir debía dar TypeMismatch, fue {other:?}"),
+    }
+}
+
+/// `copy_native` a un DESTINO que es directorio → `Conflict`: el
+/// `If-None-Match` del copy no ve el dir, el guard es el `ensure_absent`.
+/// Sobre services-fs (dirs fiables).
+#[tokio::test]
+async fn copy_native_destino_dir_es_conflict() {
+    let p = fresh_fs();
+    let r = root();
+    let src = child(&r, b"origen.bin");
+    common::write_all(&p, &src, b"x").await;
+    let dst = child(&r, b"dst-dir");
+    p.mkdir(&dst).await.expect("mkdir dst");
+    match p.copy_native(&src, &dst).await {
+        Some(Err(Error::Conflict { .. })) => {}
+        other => panic!("copy_native sobre un dir destino debía dar Conflict, fue {other:?}"),
+    }
+}

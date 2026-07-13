@@ -39,22 +39,73 @@ fn child(base: &VPath, name: &[u8]) -> VPath {
     base.join(Segment::new(name.to_vec()).expect("segmento"))
 }
 
-async fn read_all(p: &ObjectProvider, f: &VPath) -> Result<Vec<u8>, Error> {
-    let mut s = p.read(f, None).await?;
-    let mut out = Vec::new();
-    while let Some(chunk) = s.try_next().await? {
-        out.extend_from_slice(&chunk);
+use common::{read_all, write_all};
+
+// ---------- copy_native (fase 7c) ----------
+
+/// `copy_native` = `CopyObject` server-side: copia byte-exacta de un nombre
+/// hostil sin leer+reescribir.
+#[tokio::test]
+async fn copy_native_byte_exacto_nombre_hostil() {
+    let (p, _op) = fresh().await;
+    let r = root();
+    let src = child(&r, "ñ é+%20.bin".as_bytes());
+    write_all(&p, &src, b"contenido-servidor").await;
+    let dst = child(&r, b"copia.bin");
+    match p.copy_native(&src, &dst).await {
+        Some(Ok(())) => {}
+        other => panic!("copy_native debía copiar, fue {other:?}"),
     }
-    Ok(out)
+    assert_eq!(
+        read_all(&p, &dst).await.expect("read"),
+        b"contenido-servidor"
+    );
+    // el origen sigue intacto (copy, no move).
+    assert_eq!(
+        read_all(&p, &src).await.expect("read"),
+        b"contenido-servidor"
+    );
 }
 
-async fn write_all(p: &ObjectProvider, f: &VPath, data: &[u8]) {
-    let mut sink = p.write(f).await.expect("write");
-    sink.write(Bytes::copy_from_slice(data))
-        .await
-        .expect("chunk");
-    sink.commit().await.expect("commit");
+/// Destino existente → `Conflict`, jamás sobrescritura silenciosa.
+#[tokio::test]
+async fn copy_native_destino_existente_es_conflict() {
+    let (p, _op) = fresh().await;
+    let r = root();
+    let src = child(&r, b"a.bin");
+    let dst = child(&r, b"b.bin");
+    write_all(&p, &src, b"origen").await;
+    write_all(&p, &dst, b"NO-pisar").await;
+    match p.copy_native(&src, &dst).await {
+        Some(Err(Error::Conflict { .. })) => {}
+        other => panic!("copy_native sobre existente debía dar Conflict, fue {other:?}"),
+    }
+    assert_eq!(read_all(&p, &dst).await.expect("read"), b"NO-pisar");
 }
+
+/// Origen ausente → `NotFound` (rama implementada, sin cobertura del contrato).
+#[tokio::test]
+async fn copy_native_origen_ausente_es_not_found() {
+    let (p, _op) = fresh().await;
+    let r = root();
+    let src = child(&r, b"no-existe.bin");
+    let dst = child(&r, b"destino.bin");
+    assert_eq!(p.copy_native(&src, &dst).await, Some(Err(Error::NotFound)));
+}
+
+/// Destino cuyo padre NO existe → `NotFound` (misma política que `write`).
+#[tokio::test]
+async fn copy_native_padre_del_destino_ausente_es_not_found() {
+    let (p, _op) = fresh().await;
+    let r = root();
+    let src = child(&r, b"origen.bin");
+    write_all(&p, &src, b"x").await;
+    let dst = child(&child(&r, b"dir-inexistente"), b"destino.bin");
+    assert_eq!(p.copy_native(&src, &dst).await, Some(Err(Error::NotFound)));
+}
+
+// (copy_native de un dir origen → TypeMismatch se prueba en hostile.rs sobre
+// services-fs: s3s-fs devuelve 500 al HEAD de un path-directorio, no 404.)
 
 /// Multipart real: >8 MiB de chunk → `CreateMultipartUpload` + `UploadPart`
 /// + `CompleteMultipartUpload` por debajo; roundtrip byte-exacto.

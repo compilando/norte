@@ -49,6 +49,11 @@ pub struct ObjectProvider {
     /// Bytes disponibles para el path del provider = 1024 − prefijo `root` del
     /// `Operator` − 1 (la variante dir añade `/`). Calculado en [`new`].
     key_budget: usize,
+    /// El backend anuncia `copy` server-side (S3 sí; otro `Operator` podría
+    /// no). Gatea `SERVER_COPY`: sin él, declararlo haría que el engine
+    /// fallara en duro un fichero (`Some(Err(Unsupported))`, sin fallback a
+    /// streaming) donde el streaming habría funcionado.
+    server_copy: bool,
 }
 
 impl ObjectProvider {
@@ -65,10 +70,12 @@ impl ObjectProvider {
         let root_prefix = op.info().root().trim_start_matches('/').len();
         // −1: reserva el `/` final de la variante directorio.
         let key_budget = MAX_KEY_BYTES.saturating_sub(root_prefix).saturating_sub(1);
+        let server_copy = op.info().capability().copy;
         Self {
             op,
             scheme: scheme.into(),
             key_budget,
+            server_copy,
         }
     }
 
@@ -242,11 +249,18 @@ impl Provider for ObjectProvider {
 
     fn capabilities(&self) -> Capabilities {
         // Honestas (ADR 0016 H): keys UTF-8 byte-exactas → case-sensitive y
-        // case-preserving. NO declara: APPEND/RANDOM_WRITE (S3 no tiene),
-        // SYMLINKS, RENAME_ATOMIC (copy+delete O(n)), TRASH (papelera lógica
-        // = fase 9) ni — todavía — SERVER_COPY (fase 7c).
+        // case-preserving. SERVER_COPY = CopyObject (fase 7c, primer provider
+        // del repo que lo implementa) SOLO si el backend anuncia `copy` — sin
+        // ese gate, un backend sin copia haría fallar en duro un fichero que
+        // el streaming habría copiado. NO declara: APPEND/RANDOM_WRITE (S3 no
+        // tiene), SYMLINKS, RENAME_ATOMIC (copy+delete O(n)), TRASH (papelera
+        // lógica = fase 9).
+        let mut flags = CapabilityFlags::CASE_SENSITIVE | CapabilityFlags::CASE_PRESERVING;
+        if self.server_copy {
+            flags |= CapabilityFlags::SERVER_COPY;
+        }
         Capabilities {
-            flags: CapabilityFlags::CASE_SENSITIVE | CapabilityFlags::CASE_PRESERVING,
+            flags,
             // El presupuesto EFECTIVO (1024 − prefijo root − 1), no el límite
             // bruto de S3: lo que `key()` acepta = lo que el core pre-valida.
             max_path: u32::try_from(self.key_budget).ok(),
@@ -587,6 +601,65 @@ impl Provider for ObjectProvider {
                 .map_err(|e| map_err(&e))?;
         }
         self.op.delete(&from_dir).await.map_err(|e| map_err(&e))
+    }
+
+    async fn copy_native(&self, from: &VPath, to: &VPath) -> Option<Result<(), Error>> {
+        // Object storage SÍ tiene copia server-side (CopyObject) — el engine
+        // la prefiere a leer+reescribir. Aplica solo a UN objeto (fichero);
+        // el copy de un árbol lo orquesta el engine con list+copy_native por
+        // hoja. `Some(_)`: el engine solo llama aquí con SERVER_COPY y src==dst
+        // (mismo provider por puntero), así que la copia nativa siempre aplica;
+        // un error se propaga tal cual (el engine NO cae a streaming).
+        Some(self.copy_object(from, to).await)
+    }
+}
+
+impl ObjectProvider {
+    /// `CopyObject` de un fichero (ADR 0016 G). Destino existente → `Conflict`
+    /// (jamás sobrescritura silenciosa, misma política que `write`). El
+    /// `ensure_absent` previo NO es solo cinturón: `If-None-Match: *` sobre la
+    /// key `to` NO ve un DIRECTORIO destino (marker `to/` ni prefijo con
+    /// hijos), así que el sondeo file+dir de `stat_kind` es el ÚNICO guard
+    /// contra copiar un fichero `to` que aliasa el dir `to/`. Para el destino
+    /// FICHERO: con `copy_with_if_not_exists` es race-free; si el backend no
+    /// lo soporta degrada a ese check (racy, mismo nivel aceptado en write/ftp).
+    async fn copy_object(&self, from: &VPath, to: &VPath) -> Result<(), Error> {
+        let from_key = self.key(from)?;
+        let to_key = self.key(to)?;
+        if from_key.is_empty() || to_key.is_empty() {
+            return Err(Error::InvalidPath);
+        }
+        // copy_native es de objeto único: un directorio origen es TypeMismatch
+        // (el engine copia árboles hoja a hoja, nunca pasa un dir aquí).
+        match self.stat_kind(&from_key).await? {
+            None => return Err(Error::NotFound),
+            Some((EntryKind::Dir, _)) => {
+                return Err(Error::Conflict {
+                    conflict: ConflictKind::TypeMismatch,
+                });
+            }
+            Some(_) => {}
+        }
+        if !self.parent_dir_exists(to).await? {
+            return Err(Error::NotFound);
+        }
+        // Cinturón: el stat-check upfront cubre los backends que ignoran
+        // If-None-Match (degrada a nivel racy, jamás a sobrescritura).
+        self.ensure_absent(&to_key).await?;
+        if self.op.info().capability().copy_with_if_not_exists {
+            self.op
+                .copy_with(&from_key, &to_key)
+                .if_not_exists(true)
+                .await
+                .map(|_| ())
+                .map_err(|e| map_err(&e))
+        } else {
+            self.op
+                .copy(&from_key, &to_key)
+                .await
+                .map(|_| ())
+                .map_err(|e| map_err(&e))
+        }
     }
 }
 
