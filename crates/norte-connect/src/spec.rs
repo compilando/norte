@@ -140,7 +140,10 @@ fn parse_endpoint(url: &str) -> Result<Endpoint, ConnectError> {
         .ok_or_else(|| ConnectError::InvalidUrl(url.to_string()))?;
     // Solo authority: descarta cualquier `/path` accidental.
     let authority = rest.split('/').next().unwrap_or(rest);
-    let (user, hostport) = match authority.split_once('@') {
+    // ÚLTIMO `@` (no el primero): un authority patológico `u@a:b@h` no debe
+    // colar un `:` en un tramo intermedio y caer luego por puerto inválido
+    // ecoando la URL con el secreto. Alinea con Authority::new de proto (#46).
+    let (user, hostport) = match authority.rsplit_once('@') {
         // `@` sin usuario (`sftp://@host`) es una URL malformada, no un host.
         Some(("", _)) => return Err(ConnectError::InvalidUrl(url.to_string())),
         // `user:pass@host` NO se admite (regla 10: el secreto iría a config/

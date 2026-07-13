@@ -20,11 +20,11 @@ fn arb_scheme() -> impl Strategy<Value = String> {
 }
 
 fn arb_authority() -> impl Strategy<Value = Option<Authority>> {
-    // Charset completo de Authority: ASCII imprimible menos `%` (0x25) y `/` (0x2F).
+    // Charset de Authority: ASCII imprimible menos `%` (0x25) y `/` (0x2F). El
+    // charset incluye `:` y `@`, así que un `user:pass@host` puede caer y ya
+    // NO es válido (#46, proto 0.8.0): se FILTRA en vez de `expect`.
     let valid = proptest::string::string_regex("[!-$&-.0-~]{1,16}").expect("regex válida");
-    proptest::option::of(
-        valid.prop_map(|s| Authority::new(&s).expect("estrategia genera authorities válidas")),
-    )
+    proptest::option::of(valid.prop_filter_map("authority válida", |s| Authority::new(&s).ok()))
 }
 
 prop_compose! {

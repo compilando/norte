@@ -22,8 +22,11 @@ pub enum VPathError {
     /// El scheme no cumple `[a-z][a-z0-9+.-]*` (sin case-folding).
     #[error("invalid scheme: expected `[a-z][a-z0-9+.-]*`")]
     InvalidScheme,
-    /// La authority está vacía o sale del charset (ASCII imprimible sin `/` ni `%`).
-    #[error("invalid authority: expected non-empty printable ASCII without `/` or `%`")]
+    /// La authority está vacía, sale del charset (ASCII imprimible sin `/` ni
+    /// `%`) o lleva un `:` en el userinfo (password inline, #46).
+    #[error(
+        "invalid authority: non-empty printable ASCII without `/`/`%`, and no `:` in the userinfo"
+    )]
     InvalidAuthority,
     /// Segmento vacío (`//` doble o slash final fuera de la raíz).
     #[error("empty path segment")]
@@ -97,14 +100,30 @@ pub struct Authority(String);
 impl Authority {
     /// Valida y construye una authority.
     ///
+    /// Rechaza un `:` en el userinfo (`user:pass@host`): una password inline
+    /// en la URL acabaría en config/logs (regla 10). Defensa RAÍZ, proto 0.8.0
+    /// (#46): los guards de la CLI/`norte-connect` quedan como defensa en
+    /// profundidad. El `:` del `host:port` (tras `@`, o sin `@`) y el de un
+    /// IPv6 con corchetes siguen siendo válidos.
+    ///
     /// # Errors
-    /// [`VPathError::InvalidAuthority`] si está vacía o contiene bytes fuera
-    /// de ASCII imprimible, `/` o `%`.
+    /// [`VPathError::InvalidAuthority`] si está vacía, contiene bytes fuera de
+    /// ASCII imprimible / `/` / `%`, o lleva un `:` en el userinfo.
     pub fn new(s: &str) -> Result<Self, VPathError> {
-        let ok = !s.is_empty()
+        let charset_ok = !s.is_empty()
             && s.bytes()
                 .all(|b| b.is_ascii_graphic() && b != b'/' && b != b'%');
-        if ok {
+        // userinfo = lo anterior al ÚLTIMO `@`; un `:` ahí es `user:pass`. Se
+        // usa el último `@` (no el primero) para que un authority patológico
+        // con varios `@` (`a@b:c@host`) no cuele un `:` en un tramo intermedio;
+        // un authority legítimo tiene a lo sumo un `@` (el host no lleva `@`),
+        // así que esto no rechaza nada válido. Coincide con el `rsplit_once`
+        // del guard de la CLI (defensa en profundidad consistente).
+        let no_inline_password = match s.rfind('@') {
+            Some(at) => !s[..at].contains(':'),
+            None => true,
+        };
+        if charset_ok && no_inline_password {
             Ok(Self(s.to_owned()))
         } else {
             Err(VPathError::InvalidAuthority)

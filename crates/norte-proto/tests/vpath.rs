@@ -177,6 +177,23 @@ fn err_invalid_authority() {
     expect_err("file://h%41/a", VPathError::InvalidAuthority);
 }
 
+/// Un `:` en el userinfo (`user:pass@host`) = password inline: defensa RAÍZ
+/// contra que el secreto acabe en config/logs (regla 10, #46, proto 0.8.0).
+/// El `host:port` y el IPv6 con corchetes siguen siendo válidos.
+#[test]
+fn err_inline_password_en_authority() {
+    use norte_proto::Authority;
+    // Rechazados: `:` antes del `@`.
+    assert!(Authority::new("user:pass@host").is_err());
+    assert!(Authority::new("u:p@h:22").is_err());
+    expect_err("sftp://oscar:hunter2@host/x", VPathError::InvalidAuthority);
+    // Aceptados: `:` de puerto (con o sin usuario) y IPv6.
+    assert!(Authority::new("host:22").is_ok());
+    assert!(Authority::new("user@host:22").is_ok());
+    assert!(Authority::new("[::1]:22").is_ok());
+    assert!(Authority::new("user@[::1]:2222").is_ok());
+}
+
 // ---------- constructor de Segment ----------
 
 #[test]

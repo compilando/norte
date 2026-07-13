@@ -41,10 +41,14 @@ válidos — y (c) hacer el roundtrip byte-exacto siempre.
   no vacío, sin NUL, sin `/`, sin `.` ni `..` literales; scheme `[a-z][a-z0-9+.-]*`.
 - **Authority validada:** `Authority(String)` — ASCII imprimible (0x21–0x7E)
   sin `/` ni `%`, nunca vacía (`Some("")` es inconstruible; la ausencia es
-  `None`). La authority NO lleva percent-encoding: viaja literal, y como no
-  puede contener `/`, el primer `/` tras `://` separa siempre authority de
-  path — el wire es inyectivo. Hosts no-ASCII van en punycode (decisión del
-  provider, fuera de proto).
+  `None`). Desde proto 0.8.0 (#46) TAMPOCO admite un `:` en el userinfo (lo
+  anterior al último `@`): un `user:pass@host` sería una password inline en la
+  URL (regla 10, ADR 0015) — defensa RAÍZ, con los guards de CLI/norte-connect
+  como defensa en profundidad. El `:` de `host:port` y el de un IPv6 con
+  corchetes siguen siendo válidos. La authority NO lleva percent-encoding:
+  viaja literal, y como no puede contener `/`, el primer `/` tras `://` separa
+  siempre authority de path — el wire es inyectivo. Hosts no-ASCII van en
+  punycode (decisión del provider, fuera de proto).
 - **Wire:** string único `scheme://authority/seg1/seg2`. Encoding por segmento:
   secuencias UTF-8 válidas van literales; cualquier byte fuera de una secuencia
   UTF-8 válida → `%XX`; `%` literal → `%25`; controles C0 (0x00–0x1F) y DEL
