@@ -62,6 +62,7 @@ watch:
 it-remote:
     cargo nextest run -p norte-vfs-sftp --features it-openssh
     cargo nextest run -p norte-vfs-ftp --features it-ftp -E 'binary(realftp)'
+    cargo nextest run -p norte-vfs-object --features it-s3 -E 'binary(reals3)'
 
 # Benchmarks de los presupuestos de la spec §12 (manual: tardan).
 bench:

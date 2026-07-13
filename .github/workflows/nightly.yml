@@ -2,8 +2,10 @@
 # 0014, spec §12). Fuera del gate de PR por lentitud/flakiness: el gate normal
 # ya corre la suite contractual completa (incluido el corpus hostil) contra
 # servidores in-process. Esto valida además que los providers hablan con
-# servidores de PRODUCCIÓN: sftp contra OpenSSH (atmoz/sftp) y ftp contra
-# pure-ftpd (delfer/alpine-ftp-server) — que, p. ej., NO soporta MLSD.
+# servidores de PRODUCCIÓN: sftp contra OpenSSH (atmoz/sftp), ftp contra
+# pure-ftpd (delfer/alpine-ftp-server) — que, p. ej., NO soporta MLSD — y
+# object contra MinIO real (semántica de dirs/markers y conditional writes que
+# el s3s-fs in-process del gate no da bien).
 name: Nightly (integración remota)
 
 on:
@@ -18,7 +20,7 @@ env:
 
 jobs:
   it-remote:
-    name: it-remote (sftp vs OpenSSH, ftp vs pure-ftpd)
+    name: it-remote (sftp vs OpenSSH, ftp vs pure-ftpd, object vs MinIO)
     # Docker viene preinstalado en los runners ubuntu; macOS/Windows no lo
     # traen, por eso el nightly es solo-Linux.
     runs-on: ubuntu-latest
