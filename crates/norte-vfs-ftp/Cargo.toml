@@ -14,7 +14,11 @@ bytes.workspace = true
 futures.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
-suppaftp = { workspace = true, features = ["tokio"] }
+# tokio-rustls-aws-lc-rs: habilita el TIPO de stream FTPS-capaz (fase 6d,
+# ADR 0015 F). El provider NO abre TLS (la política tls y el connect viven en
+# norte-connect); aws-lc-rs y no ring porque ya está en el árbol vía russh
+# (una sola pila criptográfica que vigilar en cargo-deny).
+suppaftp = { workspace = true, features = ["tokio", "tokio-rustls-aws-lc-rs"] }
 tokio = { workspace = true, features = ["io-util", "net", "sync"] }
 
 [dev-dependencies]

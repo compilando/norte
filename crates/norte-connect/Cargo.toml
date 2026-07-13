@@ -24,10 +24,20 @@ russh.workspace = true
 # El connect devuelve la `SftpSession` que `SftpProvider::new` acepta — es la
 # interfaz pública del provider, no un tipo de auth (frontera ADR 0015 A).
 russh-sftp.workspace = true
+# Parsear la CA extra (`extra_root_ca`) en PEM para FTPS (módulo `pem`, en
+# la feature default `alloc`).
+rustls-pki-types.workspace = true
 serde = { workspace = true, features = ["derive"] }
+# Transporte FTP/FTPS del connect (ADR 0015 A/F): la política TLS vive aquí;
+# el provider recibe el stream ya negociado. aws-lc-rs = misma pila que russh.
+suppaftp = { workspace = true, features = ["tokio", "tokio-rustls-aws-lc-rs"] }
 thiserror.workspace = true
 # Solo spawn_blocking (feature rt); nada de tokio::sync.
 tokio = { workspace = true, features = ["rt"] }
+# Construye el TlsConnector de FTPS (re-exporta rustls; versión de suppaftp).
+tokio-rustls.workspace = true
+# Raíces CA Mozilla para validar el cert del servidor FTPS.
+webpki-roots.workspace = true
 toml.workspace = true
 tracing.workspace = true
 zeroize.workspace = true
@@ -41,12 +51,17 @@ linux-keyring = ["keyring/sync-secret-service", "keyring/crypto-rust"]
 [dev-dependencies]
 # Servidor SSH + agente in-process para los tests de connect (sin Docker).
 futures.workspace = true
+# Servidor FTP/FTPS in-process (mismo arnés que norte-vfs-ftp).
+libunftp.workspace = true
 # Claves ed25519 efímeras de test (host/client keys).
 rand.workspace = true
+# Certificado self-signed efímero del servidor FTPS de test.
+rcgen.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread", "time"] }
 # UnixListenerStream para servir el agente SSH in-process.
 tokio-stream = { workspace = true, features = ["net"] }
+unftp-sbe-fs.workspace = true
 
 [lints]
 workspace = true

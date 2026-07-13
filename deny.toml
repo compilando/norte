@@ -15,8 +15,13 @@ allow = [
     "Zlib",
 ]
 # notify (watcher de config, ADR 0007): CC0 = dominio público equivalente.
-# Excepción ACOTADA: otra dep CC0 futura deberá justificarse aquí.
-exceptions = [{ name = "notify", allow = ["CC0-1.0"] }]
+# webpki-roots (raíces CA de Mozilla para FTPS, fase 6d): CDLA-Permissive-2.0
+# — licencia de DATOS (el bundle de certs), sin código; permisiva.
+# Excepciones ACOTADAS: otra dep con estas licencias deberá justificarse aquí.
+exceptions = [
+    { name = "notify", allow = ["CC0-1.0"] },
+    { name = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
+]
 confidence-threshold = 0.9
 
 [advisories]

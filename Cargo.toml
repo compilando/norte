@@ -70,6 +70,20 @@ zeroize = "1"
 # (host keys / client keys del servidor SSH in-process). Misma major que la
 # que russh usa internamente.
 rand = "0.10"
+# FTPS (fase 6d, ADR 0015 F): tokio-rustls construye el TlsConnector que
+# suppaftp envuelve (misma versión que usa suppaftp; re-exporta rustls).
+tokio-rustls = "0.26"
+# Raíces CA de Mozilla compiladas: deterministas y sin depender del store del
+# OS (la CA corporativa/self-signed entra por `extra_root_ca` en PEM).
+webpki-roots = "1"
+# Feature `pem` para parsear la CA extra (CertificateDer::pem_file_iter).
+# Ya estaba en el árbol (transitiva de rustls); solo se hace directa.
+rustls-pki-types = "1"
+# Solo dev (norte-connect): certificado self-signed efímero del servidor FTPS
+# de test (libunftp exige cert+key en PEM). default-features=false: los
+# defaults arrastran ring — aws_lc_rs mantiene UNA sola pila cripto (russh/
+# rustls/suppaftp ya usan aws-lc-rs).
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 thiserror = "2"
 base64 = "0.22"
 bitflags = { version = "2", features = ["serde"] }

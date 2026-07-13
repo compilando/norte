@@ -10,13 +10,13 @@ use std::path::Path;
 use std::time::Duration;
 
 use libunftp::ServerBuilder;
-use suppaftp::tokio::AsyncFtpStream;
+use suppaftp::tokio::AsyncRustlsFtpStream;
 use unftp_sbe_fs::Filesystem;
 
 /// Arranca un servidor FTP in-process respaldado por `base` (tempdir) en un
 /// puerto efímero de localhost y devuelve una conexión de cliente logueada
 /// (auth anónima: el authenticator por defecto de libunftp acepta cualquiera).
-pub async fn connect(base: &Path) -> AsyncFtpStream {
+pub async fn connect(base: &Path) -> AsyncRustlsFtpStream {
     let home = base.to_path_buf();
     // Puerto efímero: bind-then-drop para descubrirlo (ventana de carrera
     // mínima en localhost; el bucle de connect de abajo la absorbe).
@@ -39,7 +39,7 @@ pub async fn connect(base: &Path) -> AsyncFtpStream {
     let addr = format!("127.0.0.1:{port}");
     let mut last = None;
     for _ in 0..100 {
-        match AsyncFtpStream::connect(&addr).await {
+        match AsyncRustlsFtpStream::connect(&addr).await {
             Ok(mut ftp) => {
                 ftp.login("anonymous", "anonymous").await.expect("login");
                 return ftp;

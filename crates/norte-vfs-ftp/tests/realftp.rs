@@ -19,7 +19,7 @@ use futures::StreamExt;
 use norte_proto::{EntryKind, VPath};
 use norte_vfs::Provider;
 use norte_vfs_ftp::FtpProvider;
-use suppaftp::tokio::AsyncFtpStream;
+use suppaftp::tokio::AsyncRustlsFtpStream;
 use testcontainers::core::{IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{GenericImage, ImageExt};
@@ -67,7 +67,7 @@ async fn realftp_roundtrip_y_resume() {
     let addr = format!("127.0.0.1:{CONTROL_PORT}");
     let mut ftp = None;
     for _ in 0..40 {
-        if let Ok(mut s) = AsyncFtpStream::connect(&addr).await
+        if let Ok(mut s) = AsyncRustlsFtpStream::connect(&addr).await
             && s.login(USER, PASS).await.is_ok()
         {
             ftp = Some(s);

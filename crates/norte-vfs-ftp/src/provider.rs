@@ -13,7 +13,7 @@ use norte_proto::{
 };
 use norte_vfs::{ByteSink, ByteStream, EntryStream, Provider};
 use suppaftp::list::{File, ListParser};
-use suppaftp::tokio::AsyncFtpStream;
+use suppaftp::tokio::AsyncRustlsFtpStream;
 use suppaftp::types::FileType;
 use suppaftp::{FtpError, Status};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -24,7 +24,10 @@ const READ_CHUNK: usize = 256 * 1024;
 /// Prefijo del staging de escritura (ADR 0012, mismo convenio que local/sftp).
 const PARTIAL_PREFIX: &str = ".norte-partial.";
 
-type Ftp = AsyncFtpStream;
+// Rustls-capaz: el MISMO tipo transporta FTP plano (sin `into_secure`) y FTPS
+// (ADR 0015 F). El connect con la política TLS vive en norte-connect; aquí
+// solo cambia el parámetro de tipo del stream inyectado.
+type Ftp = AsyncRustlsFtpStream;
 
 /// Provider VFS sobre una conexión FTP ya establecida (ADR 0014).
 ///
@@ -191,14 +194,16 @@ fn map_err(e: &FtpError) -> Error {
             Status::RequestFileActionIgnored => Error::Io { retryable: true },
             _ => Error::Io { retryable: false },
         },
-        // Fallo de transporte: el provider "no responde" — reintentable.
-        FtpError::ConnectionError(_) => Error::ProviderUnavailable { retryable: true },
+        // Fallo de transporte (TCP, o TLS caído a MITAD de sesión — la
+        // negociación es del connect, fase 6d): el provider "no responde",
+        // reintentable.
+        FtpError::ConnectionError(_) | FtpError::SecureError(_) => {
+            Error::ProviderUnavailable { retryable: true }
+        }
         FtpError::InvalidAddress(_) => Error::InvalidPath,
         FtpError::BadResponse | FtpError::DataConnectionAlreadyOpen => {
             Error::Io { retryable: false }
         }
-        #[allow(unreachable_patterns)]
-        _ => Error::Io { retryable: false },
     }
 }
 

@@ -69,7 +69,10 @@ pub enum TlsMode {
     /// FTPS obligatorio (AUTH TLS). Default seguro.
     #[default]
     Require,
-    /// Intenta TLS, cae a plano con aviso.
+    /// Intenta TLS; si el servidor RECHAZA `AUTH TLS`, cae a plano con aviso.
+    /// OJO: no protege ante un atacante ACTIVO (puede suprimir el AUTH y
+    /// recibir las credenciales en claro). Un fallo de handshake/validación
+    /// con el AUTH ya aceptado NO degrada (fail-closed: posible MITM).
     Allow,
     /// FTP plano (inseguro): opt-in EXPLÍCITO.
     Plain,
@@ -104,16 +107,15 @@ fn parse_endpoint(url: &str) -> Result<Endpoint, ConnectError> {
     let (scheme, rest) = url
         .split_once("://")
         .ok_or_else(|| ConnectError::InvalidUrl(url.to_string()))?;
-    if scheme.is_empty() || (scheme != "sftp" && scheme != "ftp") {
-        return Err(ConnectError::InvalidUrl(url.to_string()));
-    }
     // Solo authority: descarta cualquier `/path` accidental.
     let authority = rest.split('/').next().unwrap_or(rest);
     let (user, hostport) = match authority.split_once('@') {
         // `@` sin usuario (`sftp://@host`) es una URL malformada, no un host.
         Some(("", _)) => return Err(ConnectError::InvalidUrl(url.to_string())),
         // `user:pass@host` NO se admite (regla 10: el secreto iría a config/
-        // logs). Mensaje ESTÁTICO: ecoar la URL ecoaría el password.
+        // logs). Mensaje ESTÁTICO, y este check va ANTES que el del scheme:
+        // ningún error posterior puede ecoar una URL con password (p. ej. el
+        // typo `ftps://u:pass@h` moriría por scheme ecoando el secreto).
         Some((u, _)) if u.contains(':') => {
             return Err(ConnectError::InvalidUrl(
                 "la URL no debe llevar password inline (user:pass@…); el secreto va por el \
@@ -124,6 +126,9 @@ fn parse_endpoint(url: &str) -> Result<Endpoint, ConnectError> {
         Some((u, hp)) => (Some(u.to_string()), hp),
         None => (None, authority),
     };
+    if scheme.is_empty() || (scheme != "sftp" && scheme != "ftp") {
+        return Err(ConnectError::InvalidUrl(url.to_string()));
+    }
     // IPv6 SIEMPRE entre `[...]`; fuera de corchetes un `:` residual en el host
     // sería un IPv6 sin corchetes (ambiguo) → inválido.
     let (host, port) = if let Some(rest) = hostport.strip_prefix('[') {
@@ -256,6 +261,20 @@ mod tests {
             !format!("{err}").contains("hunter2"),
             "el error no debe ecoar el password"
         );
+    }
+
+    /// El typo `ftps://` (scheme inválido) con password inline TAMPOCO ecoa
+    /// la URL: el check del userinfo va ANTES que el del scheme — si no, el
+    /// error de scheme llevaría el password a los logs (regla 10).
+    #[test]
+    fn scheme_invalido_con_password_inline_no_eco() {
+        for url in ["ftps://u:hunter2@h", "http://u:hunter2@h"] {
+            let err = parse_endpoint(url).unwrap_err();
+            assert!(
+                !format!("{err}").contains("hunter2"),
+                "{url}: el error ecoa el password"
+            );
+        }
     }
 
     /// El host no admite caracteres con significado en `known_hosts` (`,` lista

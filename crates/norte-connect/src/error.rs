@@ -104,6 +104,17 @@ pub enum ConnectError {
     /// El fichero `known_hosts` propio no se pudo leer/parsear.
     #[error("known_hosts: {0}")]
     KnownHosts(String),
+    /// Error del transporte FTP (control, red, protocolo). El texto viene
+    /// SANEADO (`redact_ftp_err`): los bodies de respuesta los controla el
+    /// servidor y podrían llevar control chars o ecoar credenciales — el
+    /// camino de login ni siquiera pasa por aquí (va a `AuthFailed`).
+    #[error("FTP: {0}")]
+    Ftp(String),
+    /// TLS de FTPS falló: el servidor no lo ofrece con `tls = "require"`, o
+    /// su certificado no valida contra las raíces (+ CA extra). Jamás se
+    /// degrada en silencio (ADR 0015 F).
+    #[error("FTPS/TLS: {0}")]
+    Tls(String),
 }
 
 // EXCEPCIÓN consciente a "los tipos de russh no cruzan la frontera" (ADR
