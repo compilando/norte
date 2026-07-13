@@ -33,12 +33,13 @@ pub struct ConnectionsFile {
 /// `deny_unknown_fields`: un campo inesperado (p. ej. un `password = "…"`
 /// inline que el usuario intente meter aquí) es un ERROR ruidoso, no se ignora
 /// en silencio — los secretos van al keyring/env/age, jamás a config plano.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionSpec {
-    /// `scheme://[user@]host[:port]`.
+    /// `scheme://[user@]host[:port]` (para s3: `s3://bucket`, sin user/puerto).
     pub url: String,
-    /// Método de auth. Default: `agent` (SSH agent / anónimo).
+    /// Método de auth. Default: `agent` (SSH agent / anónimo / cadena ambiente
+    /// de opendal en s3).
     #[serde(default)]
     pub auth: AuthMethod,
     /// Ruta a la clave privada (para `auth = "key"`). NUNCA el secreto en sí:
@@ -47,19 +48,49 @@ pub struct ConnectionSpec {
     /// Política TLS para FTP. Default: `require` (FTPS).
     #[serde(default)]
     pub tls: TlsMode,
+    /// (s3) Región del bucket. Con endpoint AWS es obligatoria; con endpoint
+    /// custom (`MinIO`) se asume `us-east-1` si falta.
+    #[serde(default)]
+    pub region: Option<String>,
+    /// (s3) Endpoint del servicio (`https://minio.interno:9000`). Ausente =
+    /// AWS. http = opt-in visible (inseguro).
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// (s3) Access key id — NO es secreto (identificador público): puede ir en
+    /// config. El secret-access-key SÍ va por el `SecretResolver`.
+    #[serde(default)]
+    pub access_key_id: Option<String>,
+    /// (s3) Estilo de direccionamiento. Default: virtual-host sin endpoint
+    /// (AWS), path con endpoint custom (convención `MinIO`).
+    #[serde(default)]
+    pub addressing: Option<AddressingStyle>,
 }
 
 /// Cómo autenticarse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum AuthMethod {
-    /// SSH agent (sftp) o anónimo (ftp).
+    /// SSH agent (sftp), anónimo (ftp), o cadena ambiente de opendal (s3:
+    /// `AWS_*`/perfil/IMDS — el caso CI/corporativo).
     #[default]
     Agent,
     /// Clave privada (`key = …`), passphrase por el resolver.
     Key,
     /// Contraseña por el resolver.
     Password,
+    /// (s3) Access key: `access_key_id` en config + secret-access-key por el
+    /// resolver. Desactiva la cadena ambiente (determinismo).
+    AccessKey,
+}
+
+/// Estilo de direccionamiento S3 (ADR 0016 I).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AddressingStyle {
+    /// `https://bucket.host/key` (AWS por defecto).
+    VirtualHost,
+    /// `https://host/bucket/key` (`MinIO` y S3-compatibles).
+    Path,
 }
 
 /// Política TLS de FTP (ADR 0014/0015 F).
@@ -126,8 +157,17 @@ fn parse_endpoint(url: &str) -> Result<Endpoint, ConnectError> {
         Some((u, hp)) => (Some(u.to_string()), hp),
         None => (None, authority),
     };
-    if scheme.is_empty() || (scheme != "sftp" && scheme != "ftp") {
+    if !matches!(scheme, "sftp" | "ftp" | "s3") {
         return Err(ConnectError::InvalidUrl(url.to_string()));
+    }
+    // s3://bucket: la authority es SOLO el bucket. Un `user@` en posición de
+    // usuario olería a credencial en la URL (regla 10) y el puerto va en el
+    // campo `endpoint`, no en la authority — ambos se rechazan.
+    if scheme == "s3" && user.is_some() {
+        return Err(ConnectError::InvalidUrl(
+            "s3://bucket no lleva user@ (las credenciales van por access_key_id + resolver)"
+                .to_string(),
+        ));
     }
     // IPv6 SIEMPRE entre `[...]`; fuera de corchetes un `:` residual en el host
     // sería un IPv6 sin corchetes (ambiguo) → inválido.
@@ -149,6 +189,22 @@ fn parse_endpoint(url: &str) -> Result<Endpoint, ConnectError> {
     if host.is_empty() || !is_valid_host(&host) {
         return Err(ConnectError::InvalidUrl(url.to_string()));
     }
+    if scheme == "s3" {
+        if port.is_some() {
+            return Err(ConnectError::InvalidUrl(
+                "s3://bucket no lleva puerto en la authority; usa el campo `endpoint`".to_string(),
+            ));
+        }
+        // El bucket se inyecta CRUDO en la URL (virtual-host: `//{bucket}.host`)
+        // sin percent-encoding: se valida con las reglas de nombrado de AWS,
+        // no con el charset laxo de `is_valid_host` (pensado para known_hosts).
+        if !is_valid_bucket(&host) {
+            return Err(ConnectError::InvalidUrl(
+                "nombre de bucket s3 inválido (3-63, minúsculas alfanuméricas + `-`/`.`, sin `..`)"
+                    .to_string(),
+            ));
+        }
+    }
     Ok(Endpoint {
         scheme: scheme.to_string(),
         user,
@@ -164,6 +220,19 @@ fn parse_endpoint(url: &str) -> Result<Endpoint, ConnectError> {
 fn is_valid_host(host: &str) -> bool {
     host.chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | ':' | '%'))
+}
+
+/// Reglas de nombrado de bucket S3 (subconjunto seguro): 3-63 bytes,
+/// minúsculas alfanuméricas + `-`/`.`, empieza y acaba alfanumérico, sin `..`
+/// (que rompería el virtual-host `//{bucket}.host`). No cubre la prohibición
+/// de formato-IP (irrelevante para inyección); AWS/opendal la rechazarían.
+fn is_valid_bucket(b: &str) -> bool {
+    (3..=63).contains(&b.len())
+        && b.bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-' || c == b'.')
+        && b.bytes().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && b.bytes().last().is_some_and(|c| c.is_ascii_alphanumeric())
+        && !b.contains("..")
 }
 
 fn parse_port(p: Option<&str>, url: &str) -> Result<Option<u16>, ConnectError> {
@@ -301,6 +370,87 @@ mod tests {
             [connections.x]
             url = "sftp://h"
             password = "no-va-aqui"
+        "#;
+        assert!(toml::from_str::<ConnectionsFile>(toml).is_err());
+    }
+
+    #[test]
+    fn parse_s3_connection() {
+        let toml = r#"
+            [connections.almacen]
+            url = "s3://mi-bucket"
+            auth = "access-key"
+            access_key_id = "AKIAEXAMPLE"
+            region = "eu-west-1"
+            endpoint = "https://minio.interno:9000"
+            addressing = "path"
+        "#;
+        let f: ConnectionsFile = toml::from_str(toml).unwrap();
+        let s = &f.connections["almacen"];
+        assert_eq!(s.auth, AuthMethod::AccessKey);
+        assert_eq!(s.access_key_id.as_deref(), Some("AKIAEXAMPLE"));
+        assert_eq!(s.region.as_deref(), Some("eu-west-1"));
+        assert_eq!(s.endpoint.as_deref(), Some("https://minio.interno:9000"));
+        assert_eq!(s.addressing, Some(AddressingStyle::Path));
+        let ep = s.endpoint().unwrap();
+        assert_eq!(ep.scheme, "s3");
+        assert_eq!(ep.host, "mi-bucket"); // authority = bucket
+        assert_eq!(ep.user, None);
+        assert_eq!(ep.port, None);
+    }
+
+    /// Los campos s3 son opcionales: un connections.toml de sftp/ftp sin ellos
+    /// sigue parseando con `deny_unknown_fields`.
+    #[test]
+    fn campos_s3_opcionales_no_rompen_sftp() {
+        let s: ConnectionSpec = toml::from_str(r#"url = "sftp://h""#).unwrap();
+        assert_eq!(s.region, None);
+        assert_eq!(s.endpoint, None);
+        assert_eq!(s.access_key_id, None);
+        assert_eq!(s.addressing, None);
+    }
+
+    /// `s3://user@bucket` y `s3://bucket:9000` se rechazan: la authority de s3
+    /// es SOLO el bucket (user olería a credencial, el puerto va en `endpoint`).
+    #[test]
+    fn s3_con_user_o_puerto_se_rechaza() {
+        assert!(parse_endpoint("s3://user@bucket").is_err());
+        assert!(parse_endpoint("s3://bucket:9000").is_err());
+        // El bucket desnudo sí vale.
+        let ep = parse_endpoint("s3://mi-bucket").unwrap();
+        assert_eq!(ep.host, "mi-bucket");
+    }
+
+    /// Nombres de bucket inválidos (charset de AWS, no el laxo de `known_hosts`):
+    /// mayúsculas, `_`, `..`, extremos no-alfanuméricos, longitud fuera de 3-63.
+    #[test]
+    fn s3_bucket_invalido_se_rechaza() {
+        for bad in [
+            "s3://MiBucket",   // mayúsculas
+            "s3://mi_bucket",  // guion bajo
+            "s3://mi..bucket", // doble punto (rompe virtual-host)
+            "s3://-bucket",    // empieza no-alfanumérico
+            "s3://bucket.",    // acaba no-alfanumérico
+            "s3://ab",         // <3
+            "s3://a%evil",     // % (charset laxo de host, no de bucket)
+        ] {
+            assert!(parse_endpoint(bad).is_err(), "{bad:?} debería ser inválida");
+        }
+        // Válidos típicos.
+        assert!(parse_endpoint("s3://mi-bucket.prod").is_ok());
+        assert!(parse_endpoint("s3://data123").is_ok());
+    }
+
+    /// Un `secret_access_key` inline en connections.toml es ERROR (regla 10):
+    /// el secreto va por el resolver, jamás a config plano.
+    #[test]
+    fn secret_access_key_inline_rechazado() {
+        let toml = r#"
+            [connections.x]
+            url = "s3://b"
+            auth = "access-key"
+            access_key_id = "AKIA"
+            secret_access_key = "no-va-aqui"
         "#;
         assert!(toml::from_str::<ConnectionsFile>(toml).is_err());
     }

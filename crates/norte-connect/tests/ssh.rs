@@ -154,6 +154,7 @@ fn spec_password(port: u16) -> ConnectionSpec {
         auth: AuthMethod::Password,
         key: None,
         tls: TlsMode::Require,
+        ..Default::default()
     }
 }
 
@@ -310,6 +311,7 @@ async fn auth_por_clave_ed25519_cifrada() {
         auth: AuthMethod::Key,
         key: Some(key_path.clone()),
         tls: TlsMode::Require,
+        ..Default::default()
     };
     let _session = conn
         .connect(&spec, Some(&Secret::new("frase-de-paso".into())))
@@ -340,6 +342,7 @@ async fn clave_rsa_rechazada_sin_red() {
         auth: AuthMethod::Key,
         key: Some(key_path),
         tls: TlsMode::Require,
+        ..Default::default()
     };
     let err = connect_err(&conn, &spec, None).await;
     let ConnectError::KeyUnsupported { algo, .. } = &err else {
@@ -388,6 +391,7 @@ async fn auth_por_agente() {
         auth: AuthMethod::Agent,
         key: None,
         tls: TlsMode::Require,
+        ..Default::default()
     };
     let _session = conn.connect(&spec, None).await.unwrap();
 }
@@ -431,6 +435,7 @@ async fn agente_ausente_es_error_claro() {
         auth: AuthMethod::Agent,
         key: None,
         tls: TlsMode::Require,
+        ..Default::default()
     };
     let err = connect_err(&conn, &spec, None).await;
     assert!(matches!(err, ConnectError::Agent(_)), "fue {err:?}");
@@ -446,6 +451,7 @@ async fn scheme_no_sftp_es_error() {
         auth: AuthMethod::Password,
         key: None,
         tls: TlsMode::Require,
+        ..Default::default()
     };
     let err = connect_err(&conn, &spec, None).await;
     assert!(matches!(err, ConnectError::InvalidUrl(_)), "fue {err:?}");

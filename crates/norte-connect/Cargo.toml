@@ -17,6 +17,11 @@ age.workspace = true
 # env/age; un escritorio Linux con libdbus lo habilita.
 keyring = { workspace = true, features = ["apple-native", "windows-native"] }
 norte-proto.workspace = true
+# Object storage del connect (fase 7d, ADR 0016 B): construye el `Operator`
+# de opendal (bucket/region/endpoint/credenciales) que `ObjectProvider::new`
+# recibe inyectado — mismo patrón que la SftpSession/FtpStream. El provider
+# jamás ve el secret-access-key.
+opendal.workspace = true
 # Transporte SSH del connect (ADR 0015 A): russh vive AQUÍ (AGPL), no en el
 # provider (MIT/Apache, que recibe la sesión inyectada). Ya estaba en el
 # workspace (norte-vfs-sftp nightly); solo se promociona a dep normal.
@@ -62,6 +67,11 @@ tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread"
 # UnixListenerStream para servir el agente SSH in-process.
 tokio-stream = { workspace = true, features = ["net"] }
 unftp-sbe-fs.workspace = true
+# Servidor S3 in-process para el test del S3Connector (mismo patrón que
+# norte-vfs-object): valida el probe contra un servidor real sin Docker.
+hyper-util.workspace = true
+s3s.workspace = true
+s3s-fs.workspace = true
 
 [lints]
 workspace = true

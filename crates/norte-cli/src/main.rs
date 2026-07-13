@@ -395,7 +395,7 @@ async fn daemon_cmd(engine: Engine, cmd: DaemonCmd) -> anyhow::Result<ExitCode> 
 /// local puede llamarse legalmente `a://b` (o `./x://y`) y debe seguir
 /// siendo un fichero — solo lo que empieza EXACTAMENTE por estos prefijos se
 /// trata como URL remota.
-const REMOTE_SCHEMES: [&str; 2] = ["sftp://", "ftp://"];
+const REMOTE_SCHEMES: [&str; 3] = ["sftp://", "ftp://", "s3://"];
 
 fn vpath(path: &std::path::Path) -> anyhow::Result<VPath> {
     // Una URL remota va por el parser wire; todo lo demás es un path NATIVO

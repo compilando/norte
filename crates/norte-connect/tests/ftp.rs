@@ -98,6 +98,7 @@ fn spec(port: u16, tls: TlsMode) -> ConnectionSpec {
         auth: AuthMethod::Password,
         key: None,
         tls,
+        ..Default::default()
     }
 }
 
@@ -263,6 +264,7 @@ async fn ca_extra_corrupta_es_error_local() {
         auth: AuthMethod::Password,
         key: None,
         tls: TlsMode::Allow,
+        ..Default::default()
     };
     let err = connect_err(&conn, &spec, Some(&Secret::new("x".into()))).await;
     assert!(matches!(err, ConnectError::Tls(_)), "fue {err:?}");
@@ -279,6 +281,7 @@ async fn agent_es_anonimo_sin_secreto() {
         auth: AuthMethod::Agent,
         key: None,
         tls: TlsMode::Plain,
+        ..Default::default()
     };
     let mut stream = conn.connect(&spec, None).await.unwrap();
     assert_eq!(stream.pwd().await.expect("sesión anónima"), "/");
@@ -294,6 +297,7 @@ async fn auth_key_no_aplica_a_ftp() {
         auth: AuthMethod::Key,
         key: Some("/no/importa".into()),
         tls: TlsMode::Plain,
+        ..Default::default()
     };
     let err = connect_err(&conn, &spec, None).await;
     assert!(matches!(err, ConnectError::Config(_)), "fue {err:?}");
@@ -308,6 +312,7 @@ async fn scheme_no_ftp_es_error() {
         auth: AuthMethod::Password,
         key: None,
         tls: TlsMode::Require,
+        ..Default::default()
     };
     let err = connect_err(&conn, &spec, None).await;
     assert!(matches!(err, ConnectError::InvalidUrl(_)), "fue {err:?}");

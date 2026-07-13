@@ -98,6 +98,12 @@ impl SshConnector {
         // (ADR 0015 E) o la falta de agente son errores locales y claros,
         // no errores de red.
         let prepared = match spec.auth {
+            AuthMethod::AccessKey => {
+                return Err(ConnectError::Config(
+                    "auth = \"access-key\" es de s3, no de SSH; usa \"key\", \"password\" o \"agent\""
+                        .to_string(),
+                ));
+            }
             AuthMethod::Password => PreparedAuth::Password,
             AuthMethod::Agent => {
                 if self.agent_socket.is_none() {

@@ -74,6 +74,12 @@ impl FtpConnector {
                         .to_string(),
                 ));
             }
+            AuthMethod::AccessKey => {
+                return Err(ConnectError::Config(
+                    "auth = \"access-key\" es de s3, no de FTP; usa \"password\" o \"agent\""
+                        .to_string(),
+                ));
+            }
             AuthMethod::Password => {
                 let s = secret.ok_or_else(|| ConnectError::Secret {
                     conn: ep.host.clone(),

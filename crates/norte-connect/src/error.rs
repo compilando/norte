@@ -119,6 +119,11 @@ pub enum ConnectError {
     /// degrada en silencio (ADR 0015 F).
     #[error("FTPS/TLS: {0}")]
     Tls(String),
+    /// Error de object storage (construcción del `Operator` o sondeo): red,
+    /// bucket ausente, config. El texto lleva solo la CATEGORÍA de opendal
+    /// (`ErrorKind`), jamás el secreto (regla 10, ADR 0016 K).
+    #[error("s3: {0}")]
+    S3(String),
 }
 
 // EXCEPCIÓN consciente a "los tipos de russh no cruzan la frontera" (ADR
@@ -173,7 +178,7 @@ impl From<ConnectError> for norte_proto::Error {
             }
             // Transporte: la red puede reintentarse; una validación TLS o un
             // known_hosts/secret-store rotos NO (reintentar no los arregla).
-            ConnectError::Ssh(_) | ConnectError::Ftp(_) => {
+            ConnectError::Ssh(_) | ConnectError::Ftp(_) | ConnectError::S3(_) => {
                 Self::ProviderUnavailable { retryable: true }
             }
             ConnectError::Tls(_)

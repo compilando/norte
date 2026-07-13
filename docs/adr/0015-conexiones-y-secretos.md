@@ -55,15 +55,27 @@ auth = "key"                                # "key" | "password" | "agent"
 key = "~/.ssh/id_ed25519"                   # ruta a la clave (no el secreto)
 # El passphrase/password NO va aquí: se resuelve del keyring/env/fichero (C).
 
-[connections.s3backup]
+[connections.backup]
 url = "ftp://backup@ftp.example.com:21"
 auth = "password"
 tls = "require"                             # "require" (FTPS) | "allow" | "plain"
+
+# Object storage (fase 7d, ADR 0016): la authority es SOLO el bucket (sin
+# user@ ni puerto). El access_key_id NO es secreto; el secret-access-key va
+# por el resolver (env NORTE_SECRET_<CONN> / keyring / secrets.age).
+[connections.almacen]
+url = "s3://mi-bucket"
+auth = "access-key"                         # o "agent" = cadena ambiente AWS_*
+access_key_id = "AKIAEXAMPLE"               # público, no secreto
+region = "eu-west-1"                        # obligatoria contra AWS
+endpoint = "https://minio.interno:9000"     # ausente = AWS
+addressing = "path"                         # "path" | "virtual-host"
 ```
 
 `connections.toml` es una capa más del sistema de config (ADR 0007). NUNCA
 contiene secretos; solo la referencia (`url` + `auth` + ruta de clave / política
-TLS). El passphrase de una clave o el password se resuelven aparte.
+TLS / `access_key_id`). El passphrase de una clave, el password o el
+secret-access-key se resuelven aparte.
 
 ### C. Secretos: keyring del OS + env vars + fichero cifrado (decisión oscar)
 
@@ -118,6 +130,32 @@ recomienda ed25519. Se documenta y se cierra la deducción de #36.
 `tls = "require"` (default recomendado) exige AUTH TLS (suppaftp feature
 `async-secure` + rustls); `"plain"` es opt-in EXPLÍCITO con aviso de inseguro;
 `"allow"` intenta TLS y cae a plano con aviso. FTP plano nunca es silencioso.
+
+### F-bis. Object storage (s3, fase 7d — ADR 0016)
+
+Tercer connector (`S3Connector`), mismo patrón que SSH/FTP: construye el
+`Operator` de opendal (bucket/region/endpoint/credenciales) que
+`ObjectProvider::new` recibe inyectado; el provider jamás ve el
+secret-access-key. `auth = "access-key"` = `access_key_id` (público, en config)
++ secret-access-key por el `SecretResolver` (env→keyring→age),
+`disable_config_load`+`disable_ec2_metadata` (determinismo: la cadena ambiente
+NO suplanta la credencial explícita). `auth = "agent"` = cadena ambiente de
+opendal (`AWS_*`/perfil/IMDS), el caso CI/instancia-con-rol.
+
+Postura de canal:
+- **endpoint `http://` = opt-in VISIBLE**: se acepta pero con `tracing::warn`
+  (datos + `access_key_id` en claro; con `agent`+IMDS también el
+  `X-Amz-Security-Token`, un bearer replayable). https por defecto (endpoint
+  ausente = AWS).
+- **IMDS/SSRF con `auth = "agent"` + endpoint custom**: opendal firma y envía
+  las credenciales temporales de IMDS al endpoint configurado. Riesgo acotado:
+  una conexión s3 AD-HOC (URL sin entrada en `connections.toml`) muere en el
+  check "region obligatoria sin endpoint" ANTES de tocar credenciales, así que
+  un agente no dispara acceso con credenciales ambiente vía una URL arbitraria;
+  requiere una entrada de config (controlada por el operador). Deshabilitar
+  IMDS por defecto en `agent` rompería el caso legítimo instancia-con-rol → se
+  deja activo y documentado.
+- Sin TOFU (S3 va por TLS/WebPKI, nunca emite `HostKeyUnknown`).
 
 ### G. UX mínima (spec / plan)
 

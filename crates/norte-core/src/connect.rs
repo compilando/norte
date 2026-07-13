@@ -14,11 +14,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use norte_connect::{
-    AuthMethod, ConnectionSpec, ConnectionsFile, FtpConnector, Secret, SecretResolver, SshConnector,
+    AuthMethod, ConnectionSpec, ConnectionsFile, FtpConnector, S3Connector, Secret, SecretResolver,
+    SshConnector,
 };
 use norte_proto::Error;
 use norte_vfs::Provider;
 use norte_vfs_ftp::FtpProvider;
+use norte_vfs_object::ObjectProvider;
 use norte_vfs_sftp::SftpProvider;
 
 /// Establece providers remotos bajo demanda. El Engine lo consulta cuando un
@@ -96,6 +98,7 @@ pub struct ConnectionManager {
     secrets: SecretResolver,
     ssh: SshConnector,
     ftp: FtpConnector,
+    s3: S3Connector,
 }
 
 impl ConnectionManager {
@@ -107,6 +110,7 @@ impl ConnectionManager {
             secrets: SecretResolver::new(&dir),
             ssh: SshConnector::new(&dir),
             ftp: FtpConnector::new(),
+            s3: S3Connector::new(),
             config_dir: dir,
         }
     }
@@ -148,10 +152,11 @@ impl ConnectionManager {
     ) -> Result<Arc<dyn Provider>, Error> {
         let ep = spec.endpoint().map_err(log_and_map)?;
         // El secreto solo se resuelve si el método de auth lo puede usar
-        // (password siempre; key para la passphrase). Agent no lleva secreto.
+        // (password/access-key siempre; key para la passphrase). Agent no
+        // lleva secreto (en s3, agent = cadena ambiente de opendal).
         let secret: Option<Secret> = match spec.auth {
             AuthMethod::Agent => None,
-            AuthMethod::Password | AuthMethod::Key => self
+            AuthMethod::Password | AuthMethod::Key | AuthMethod::AccessKey => self
                 .secrets
                 .resolve(name.unwrap_or(&ep.host), &spec.url)
                 .await
@@ -182,6 +187,16 @@ impl ConnectionManager {
                     .map_err(log_and_map)?;
                 let provider = FtpProvider::with_reader(main, reader, "/").await?;
                 Ok(Arc::new(provider))
+            }
+            "s3" => {
+                // El S3Connector construye y SONDEA el Operator (fail-fast); el
+                // provider lo recibe inyectado, sin ver el secret-access-key.
+                let op = self
+                    .s3
+                    .connect(spec, secret.as_ref())
+                    .await
+                    .map_err(log_and_map)?;
+                Ok(Arc::new(ObjectProvider::new(op, "s3")))
             }
             _ => Err(Error::Unsupported),
         }
@@ -234,6 +249,10 @@ fn resolve_spec(
         auth: AuthMethod::Agent,
         key: None,
         tls: norte_connect::TlsMode::Require,
+        region: None,
+        endpoint: None,
+        access_key_id: None,
+        addressing: None,
     };
     let target = ad_hoc.endpoint()?;
     for (name, spec) in &file.connections {
@@ -269,7 +288,13 @@ fn resolve_spec(
 }
 
 fn effective_port(ep: &norte_connect::Endpoint) -> u16 {
-    ep.port.unwrap_or(if ep.scheme == "sftp" { 22 } else { 21 })
+    // Constante de matching (nunca viaja): s3 no lleva puerto en la authority
+    // (443 nominal); sftp=22, ftp=21.
+    ep.port.unwrap_or(match ep.scheme.as_str() {
+        "sftp" => 22,
+        "s3" => 443,
+        _ => 21,
+    })
 }
 
 /// La authority canónica de un endpoint (con el puerto solo si es explícito):
@@ -359,6 +384,28 @@ mod tests {
         assert_eq!(spec.auth, AuthMethod::Password);
     }
 
+    #[test]
+    fn matchea_conexion_s3_por_bucket() {
+        let f = file(
+            r#"
+            [connections.almacen]
+            url = "s3://mi-bucket"
+            auth = "access-key"
+            access_key_id = "AKIA"
+            region = "eu-west-1"
+            endpoint = "https://minio.interno:9000"
+        "#,
+        );
+        let (name, spec) = resolve_spec(&f, "s3://mi-bucket").unwrap();
+        assert_eq!(name.as_deref(), Some("almacen"));
+        assert_eq!(spec.auth, AuthMethod::AccessKey);
+        assert_eq!(spec.endpoint.as_deref(), Some("https://minio.interno:9000"));
+        // Otro bucket → ad-hoc (sin credenciales de config).
+        let (name, spec) = resolve_spec(&f, "s3://otro-bucket").unwrap();
+        assert_eq!(name, None);
+        assert_eq!(spec.auth, AuthMethod::Agent);
+    }
+
     /// Dos entradas para el MISMO host:puerto con usuarios distintos y una
     /// URL sin usuario: gana la primera por orden alfabético del NOMBRE de
     /// la entrada (`BTreeMap`) — comportamiento fijado y determinista.
@@ -407,22 +454,29 @@ mod tests {
         assert_eq!(spec.tls, norte_connect::TlsMode::Require);
     }
 
+    /// spec mínima (auth agent, sin campos s3) para probar el parseo de URL.
+    fn min_spec(url: &str) -> ConnectionSpec {
+        ConnectionSpec {
+            url: url.into(),
+            auth: AuthMethod::Agent,
+            key: None,
+            tls: norte_connect::TlsMode::Require,
+            region: None,
+            endpoint: None,
+            access_key_id: None,
+            addressing: None,
+        }
+    }
+
     #[test]
     fn authority_canonica() {
-        let spec = ConnectionSpec {
-            url: "sftp://u@[::1]:2222".into(),
-            auth: AuthMethod::Agent,
-            key: None,
-            tls: norte_connect::TlsMode::Require,
-        };
+        let spec = min_spec("sftp://u@[::1]:2222");
         assert_eq!(authority_of(&spec.endpoint().unwrap()), "u@[::1]:2222");
-        let spec = ConnectionSpec {
-            url: "ftp://host".into(),
-            auth: AuthMethod::Agent,
-            key: None,
-            tls: norte_connect::TlsMode::Require,
-        };
+        let spec = min_spec("ftp://host");
         assert_eq!(authority_of(&spec.endpoint().unwrap()), "host");
+        // s3://bucket: authority = bucket, sin puerto.
+        let spec = min_spec("s3://mi-bucket");
+        assert_eq!(authority_of(&spec.endpoint().unwrap()), "mi-bucket");
     }
 
     #[test]
