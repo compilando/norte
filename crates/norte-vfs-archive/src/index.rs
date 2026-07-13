@@ -34,6 +34,9 @@ pub(crate) enum Locator {
     /// tar: los datos son CONTIGUOS y sin comprimir — `read` es un range
     /// passthrough al provider interior.
     Tar { offset: u64, size: u64 },
+    /// zip: índice de la entrada en el central directory — `read`
+    /// descomprime en un hilo blocking (stored/deflate).
+    Zip { index: usize },
 }
 
 /// Un nodo del árbol virtual.
@@ -94,7 +97,7 @@ impl ArchiveIndex {
         // debug! por entrada (un tar hostil trae MILLONES): el warn!
         // agregado con el total lo emite build_index al final.
         let mut hostile = |why: &str| {
-            tracing::debug!(name = %String::from_utf8_lossy(raw), why, "entrada omitida");
+            tracing::debug!(name = ?String::from_utf8_lossy(raw), why, "entrada omitida");
             self.skipped += 1;
             None
         };
@@ -135,13 +138,19 @@ impl ArchiveIndex {
         self.children.entry(parent).or_default().insert(name);
     }
 
-    /// Materializa los ancestros de `path` como dirs implícitos.
+    /// Materializa los ancestros de `path` como dirs implícitos. Un File
+    /// preexistente en posición de ancestro ASCIENDE a dir (mismo criterio
+    /// "gana dir" que las colisiones directas: sin esto, `file a` seguido
+    /// de `a/hijo` dejaría el subárbol invisible — auditoría 8e, H4).
     fn ensure_parents(&mut self, path: &[Vec<u8>]) {
         for depth in 0..path.len().saturating_sub(1) {
             let dir: InnerPath = path[..=depth].to_vec();
-            self.nodes
-                .entry(dir.clone())
-                .or_insert_with(|| Node::dir(None));
+            let node = self.nodes.entry(dir).or_insert_with(|| Node::dir(None));
+            if node.kind != EntryKind::Dir {
+                *node = Node::dir(node.mtime_ms);
+                self.skipped += 1;
+                tracing::debug!("file en posición de ancestro asciende a dir");
+            }
             self.add_child(path[..depth].to_vec(), path[depth].clone());
         }
     }
@@ -173,7 +182,7 @@ impl ArchiveIndex {
                 // Un dir (explícito o implícito con hijos) jamás degrada a
                 // file: perderíamos el subárbol (patrón de ataque).
                 tracing::debug!(
-                    name = %String::from_utf8_lossy(raw_name),
+                    name = ?String::from_utf8_lossy(raw_name),
                     "entrada file colisiona con dir: gana el dir"
                 );
                 self.skipped += 1;
@@ -181,7 +190,7 @@ impl ArchiveIndex {
             }
             Some(_) => {
                 tracing::debug!(
-                    name = %String::from_utf8_lossy(raw_name),
+                    name = ?String::from_utf8_lossy(raw_name),
                     "entrada duplicada: última gana"
                 );
             }
@@ -271,12 +280,15 @@ mod tests {
             b"",
             b"!",
             b"a/!/b",
+            b"nul\x00byte",
+            b"/",
+            b"a//",
         ] {
             i.insert_entry(hostile, file_node(), &l)
                 .expect("skip, no err");
         }
         assert!(i.nodes.is_empty(), "nada hostil entra al árbol");
-        assert_eq!(i.skipped, 8);
+        assert_eq!(i.skipped, 11);
     }
 
     #[test]
@@ -316,6 +328,13 @@ mod tests {
         i.insert_entry(b"b", file_node(), &l).expect("ok");
         assert_eq!(i.nodes[&key(&[b"b"])].kind, EntryKind::Dir);
         assert!(i.nodes.contains_key(&key(&[b"b", b"hijo"])));
+        // FILE primero, hijo después (H4): el file ASCIENDE a dir y el
+        // subárbol es visible.
+        i.insert_entry(b"c", file_node(), &l).expect("ok");
+        i.insert_entry(b"c/hijo", file_node(), &l).expect("ok");
+        assert_eq!(i.nodes[&key(&[b"c"])].kind, EntryKind::Dir);
+        assert!(i.nodes.contains_key(&key(&[b"c", b"hijo"])));
+        assert!(i.children[&key(&[b"c"])].contains(b"hijo".as_slice()));
     }
 
     #[test]

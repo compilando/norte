@@ -1,6 +1,10 @@
 //! Utilidades compartidas: sembrar un contenedor en un `MemProvider` y
 //! envolverlo en el `ArchiveProvider` (composición pura, sin FS del host —
 //! la primera suite de provider 100 % portable, ADR 0018).
+//!
+//! Cada binario de test compila este módulo entero; no todos usan todos
+//! los helpers.
+#![allow(dead_code)]
 
 use std::sync::Arc;
 
@@ -33,6 +37,19 @@ pub async fn write_file(mem: &MemProvider, path: &VPath, bytes: &[u8]) {
 /// Provider tar sobre un contenedor recién sembrado + la raíz interior.
 pub async fn tar_provider(bytes: &[u8]) -> (ArchiveProvider, VPath) {
     tar_provider_with_limits(bytes, Limits::default()).await
+}
+
+/// Provider zip sobre un contenedor recién sembrado + la raíz interior.
+pub async fn zip_provider(bytes: &[u8]) -> (ArchiveProvider, VPath) {
+    zip_provider_with_limits(bytes, Limits::default()).await
+}
+
+/// Como [`zip_provider`] con límites propios (tests de bomba).
+pub async fn zip_provider_with_limits(bytes: &[u8], limits: Limits) -> (ArchiveProvider, VPath) {
+    let (mem, path) = seed_container(b"fixture.zip", bytes).await;
+    let root = VPath::archive_compose("zip", &path, &[]).expect("compose");
+    let provider = ArchiveProvider::with_limits(mem, Format::Zip, "zip+mem", limits);
+    (provider, root)
 }
 
 /// Como [`tar_provider`] con límites propios (tests de bomba).

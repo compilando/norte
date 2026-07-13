@@ -17,8 +17,11 @@ norte-vfs.workspace = true
 # Parsers SYNC de formato (regla 2: corren en spawn_blocking sobre un
 # adaptador Read+Seek que puentea al Provider interior con block_on).
 tar.workspace = true
+zip.workspace = true
 # `rt`: Handle::current().block_on en los hilos blocking del índice/lectura.
-tokio = { workspace = true, features = ["rt"] }
+# `sync`: canal acotado que puentea la descompresión zip → ByteStream (el
+# drop del receptor corta el hilo: cancelación de la regla 3).
+tokio = { workspace = true, features = ["rt", "sync"] }
 # warn! de entradas hostiles omitidas (ADR 0018 C2: omitir CON señal).
 tracing.workspace = true
 

@@ -32,6 +32,7 @@ mod blocking;
 mod index;
 mod provider;
 mod tar_format;
+mod zip_format;
 
 pub use index::Limits;
 pub use provider::{ArchiveProvider, Format};

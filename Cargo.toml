@@ -72,6 +72,11 @@ sha2 = "0.10"
 # seguridad permanente); `zip` default-features=false + deflate (flate2/
 # miniz_oxide, sin C): stored+deflate v1, cifrado/bzip2/zstd fuera.
 tar = { version = "0.4", default-features = false }
+# zip (fase 8e, ADR 0018): stored+deflate v1 (flate2/miniz_oxide, sin C);
+# cifrado/bzip2/zstd fuera de features — esas entradas se listan pero read
+# responde Unsupported. Alternativas evaluadas: rc-zip/async_zip (menos
+# ejercitados contra zips hostiles reales).
+zip = { version = "5", default-features = false, features = ["deflate"] }
 # Fase 6 (ADR 0015, connections/secretos): keyring del OS (Secret Service/
 # Keychain/Credential Manager, el estándar cross-platform); age (fichero
 # cifrado de secretos headless, auditado); zeroize (borrar secretos de memoria,

@@ -41,6 +41,12 @@ pub(crate) fn build_index<R: Read + Seek>(
             return Err(Error::Cancelled);
         }
         let entry = entry.map_err(|e| corrupt(&e))?;
+        // El iterador del crate `tar` consume L/K/x (longname/pax local)
+        // pero NO `g`: sin esto, todo tar de `git archive` listaría un
+        // `pax_global_header` fantasma (auditoría 8e, H5).
+        if entry.header().entry_type() == tar::EntryType::XGlobalHeader {
+            continue;
+        }
         let raw_name = entry.path_bytes().to_vec();
         let header = entry.header();
         let kind = header.entry_type();

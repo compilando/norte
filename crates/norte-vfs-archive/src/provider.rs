@@ -20,12 +20,15 @@ use crate::index::{ArchiveIndex, InnerPath, Limits, Locator};
 pub enum Format {
     /// tar plano (ustar/GNU/pax). Lectura passthrough (datos contiguos).
     Tar,
+    /// zip stored+deflate. Lectura descomprimiendo en hilo blocking.
+    Zip,
 }
 
 impl Format {
     fn token(self) -> &'static str {
         match self {
             Self::Tar => "tar",
+            Self::Zip => "zip",
         }
     }
 }
@@ -182,6 +185,9 @@ impl ArchiveProvider {
             Format::Tar => {
                 crate::tar_format::build_index(reader, container_len, generation, &limits, &cancel)
             }
+            Format::Zip => {
+                crate::zip_format::build_index(reader, container_len, generation, &limits, &cancel)
+            }
         })
         .await;
         guard.disarm();
@@ -262,7 +268,13 @@ impl Provider for ArchiveProvider {
     /// mapea a segmentos `VPath` válidos (`..`, `.`, vacío, NUL, absoluto,
     /// componente `!`) NO aparecen — se omiten al indexar con
     /// `tracing::warn!` y cuentan en el `skipped` del índice. Duplicados:
-    /// última gana; conflicto file-vs-dir: gana dir.
+    /// última gana; conflicto file-vs-dir: gana dir (un file en posición de
+    /// ancestro asciende a dir).
+    ///
+    /// Caveats zip conocidos (auditoría 8e; upstream, con issue): el crate
+    /// `zip` colapsa nombres crudos distintos que decodifican igual (H1 —
+    /// detectado y contado en `skipped` para no-zip64) y un extra field
+    /// Info-ZIP 0x7075 válido SUSTITUYE el nombre del header (H3).
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
         let aref = self.split(p)?;
         let index = self.index_for(&aref).await?;
@@ -309,21 +321,22 @@ impl Provider for ArchiveProvider {
             // Listable pero no legible (método no soportado, cifrado…).
             return Err(Error::Unsupported);
         };
+        // El range pedido se recorta al tramo de la ENTRADA (semántica pread).
+        let entry_size = node.size.unwrap_or(0);
+        let req_off = range.map_or(0, |r| r.offset);
+        if req_off >= entry_size {
+            return Ok(futures::stream::empty().boxed());
+        }
+        let disponible = entry_size - req_off;
+        let req_len = range
+            .and_then(|r| r.len)
+            .map_or(disponible, |l| l.min(disponible));
+        if req_len == 0 {
+            return Ok(futures::stream::empty().boxed());
+        }
         match *locator {
-            Locator::Tar { offset, size } => {
-                // Passthrough: datos contiguos sin comprimir. El range pedido
-                // se recorta al tramo de la entrada (semántica pread).
-                let req_off = range.map_or(0, |r| r.offset);
-                if req_off >= size {
-                    return Ok(futures::stream::empty().boxed());
-                }
-                let disponible = size - req_off;
-                let req_len = range
-                    .and_then(|r| r.len)
-                    .map_or(disponible, |l| l.min(disponible));
-                if req_len == 0 {
-                    return Ok(futures::stream::empty().boxed());
-                }
+            Locator::Tar { offset, .. } => {
+                // Passthrough: datos contiguos sin comprimir.
                 self.inner
                     .read(
                         &aref.outer,
@@ -333,6 +346,26 @@ impl Provider for ArchiveProvider {
                         }),
                     )
                     .await
+            }
+            Locator::Zip { index: entry_index } => {
+                // Descompresión en hilo blocking → canal acotado → stream.
+                // Drop del stream = el send falla = el hilo termina (regla 3).
+                let reader = ProviderReader::new(
+                    tokio::runtime::Handle::current(),
+                    Arc::clone(&self.inner),
+                    aref.outer.clone(),
+                    // El tamaño de la MISMA generación que el índice: vista
+                    // coherente aunque el contenedor cambie por debajo.
+                    index.generation.1.unwrap_or(0),
+                );
+                let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+                // El JoinHandle se suelta a propósito: la vida del hilo la
+                // gobierna el canal, no el caller (huérfano acotado a 4
+                // chunks de 64 KiB tras el drop).
+                drop(tokio::task::spawn_blocking(move || {
+                    crate::zip_format::read_entry(reader, entry_index, req_off, req_len, &tx);
+                }));
+                Ok(futures::stream::poll_fn(move |cx| rx.poll_recv(cx)).boxed())
             }
         }
     }

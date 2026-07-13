@@ -35,6 +35,14 @@ enum ZipEntry {
     },
     /// Entrada de directorio explícita (nombre con `/` final).
     Dir { name: Vec<u8> },
+    /// Entrada con method/flags CRUDOS (cifrado simulado bit 0, métodos
+    /// exóticos): `data` va tal cual — las fixtures no se descomprimen.
+    Raw {
+        name: Vec<u8>,
+        data: Vec<u8>,
+        method: u16,
+        flags: u16,
+    },
 }
 
 /// Forja de bytes ZIP entrada a entrada. Ver el módulo para el porqué.
@@ -49,6 +57,7 @@ enum ZipEntry {
 #[derive(Default)]
 pub struct ZipSmith {
     entries: Vec<ZipEntry>,
+    comment: Vec<u8>,
 }
 
 impl ZipSmith {
@@ -93,6 +102,27 @@ impl ZipSmith {
         self
     }
 
+    /// Entrada con `method`/`flags` crudos: cifrado simulado (bit 0),
+    /// métodos no soportados (99 = AES), lo que haga falta romper.
+    #[must_use]
+    pub fn file_raw(mut self, name: &[u8], data: &[u8], method: u16, flags: u16) -> Self {
+        self.entries.push(ZipEntry::Raw {
+            name: name.to_vec(),
+            data: data.to_vec(),
+            method,
+            flags,
+        });
+        self
+    }
+
+    /// Comentario del EOCD (bytes arbitrarios — incluso firmas EOCD falsas,
+    /// el clásico que rompe localizadores ingenuos).
+    #[must_use]
+    pub fn comment(mut self, bytes: &[u8]) -> Self {
+        self.comment = bytes.to_vec();
+        self
+    }
+
     /// Los bytes del ZIP completo (local headers + central directory + EOCD).
     #[must_use]
     pub fn build(self) -> Vec<u8> {
@@ -112,7 +142,7 @@ impl ZipSmith {
         let mut central = Vec::new();
         let real_count = self.entries.len() as u16;
         for entry in &self.entries {
-            let (name, data, flags) = match entry {
+            let (name, data, flags, method) = match entry {
                 ZipEntry::File {
                     name,
                     data,
@@ -121,8 +151,15 @@ impl ZipSmith {
                     name,
                     data.as_slice(),
                     if *utf8_flag { 1u16 << 11 } else { 0 },
+                    0u16,
                 ),
-                ZipEntry::Dir { name } => (name, &[][..], 0),
+                ZipEntry::Dir { name } => (name, &[][..], 0, 0),
+                ZipEntry::Raw {
+                    name,
+                    data,
+                    method,
+                    flags,
+                } => (name, data.as_slice(), *flags, *method),
             };
             let offset = out.len() as u32;
             let crc = crc32(data);
@@ -131,7 +168,7 @@ impl ZipSmith {
             out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
             out.extend_from_slice(&20u16.to_le_bytes()); // version needed
             out.extend_from_slice(&flags.to_le_bytes());
-            out.extend_from_slice(&0u16.to_le_bytes()); // stored
+            out.extend_from_slice(&method.to_le_bytes());
             out.extend_from_slice(&DOS_TIME.to_le_bytes());
             out.extend_from_slice(&DOS_DATE.to_le_bytes());
             out.extend_from_slice(&crc.to_le_bytes());
@@ -146,7 +183,7 @@ impl ZipSmith {
             central.extend_from_slice(&20u16.to_le_bytes()); // made by
             central.extend_from_slice(&20u16.to_le_bytes()); // needed
             central.extend_from_slice(&flags.to_le_bytes());
-            central.extend_from_slice(&0u16.to_le_bytes()); // stored
+            central.extend_from_slice(&method.to_le_bytes());
             central.extend_from_slice(&DOS_TIME.to_le_bytes());
             central.extend_from_slice(&DOS_DATE.to_le_bytes());
             central.extend_from_slice(&crc.to_le_bytes());
@@ -159,7 +196,7 @@ impl ZipSmith {
             central.extend_from_slice(&0u16.to_le_bytes()); // internal attrs
             let external: u32 = match entry {
                 ZipEntry::Dir { .. } => 0x10, // bit de directorio DOS
-                ZipEntry::File { .. } => 0,
+                ZipEntry::File { .. } | ZipEntry::Raw { .. } => 0,
             };
             central.extend_from_slice(&external.to_le_bytes());
             central.extend_from_slice(&offset.to_le_bytes());
@@ -177,7 +214,8 @@ impl ZipSmith {
         out.extend_from_slice(&count.to_le_bytes());
         out.extend_from_slice(&cd_size.to_le_bytes());
         out.extend_from_slice(&cd_offset.to_le_bytes());
-        out.extend_from_slice(&0u16.to_le_bytes()); // comentario
+        out.extend_from_slice(&(self.comment.len() as u16).to_le_bytes());
+        out.extend_from_slice(&self.comment);
         out
     }
 }
