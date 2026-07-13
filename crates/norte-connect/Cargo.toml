@@ -11,10 +11,11 @@ authors.workspace = true
 [dependencies]
 # Formato binario (no armor): el secrets.age no es de edición manual.
 age.workspace = true
-# Backends de los 3 OS de CI; crypto-rust = crypto pura (secret-service sin
-# dep C de openssl). default-features=false para NO arrastrar el backend async
-# (zbus) que no se usa: la ruta sync va dentro de spawn_blocking.
-keyring = { workspace = true, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+# macOS/Windows: backends nativos, SIN dep C. El Secret Service de Linux
+# (sync-secret-service → libdbus C, exige libdbus-1-dev al construir) es opt-in
+# por la feature `linux-keyring` (abajo): así CI/headless compilan sin C y usan
+# env/age; un escritorio Linux con libdbus lo habilita.
+keyring = { workspace = true, features = ["apple-native", "windows-native"] }
 norte-proto.workspace = true
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
@@ -23,6 +24,12 @@ tokio = { workspace = true, features = ["rt"] }
 toml.workspace = true
 tracing.workspace = true
 zeroize.workspace = true
+
+[features]
+# Keyring de Linux (Secret Service) vía libdbus C: opt-in — exige
+# `libdbus-1-dev` + `pkg-config` al construir. Off por defecto (CI/headless
+# compilan sin C; Linux cae a env/age). macOS/Windows no lo necesitan.
+linux-keyring = ["keyring/sync-secret-service", "keyring/crypto-rust"]
 
 [dev-dependencies]
 tempfile.workspace = true
