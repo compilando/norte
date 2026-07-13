@@ -66,6 +66,10 @@ keyring = { version = "3", default-features = false }
 # hoy no compila (ml-kem 0.2.1 roto contra kem 0.3.0). 0.11 es pre-PQ y limpio.
 age = "0.11"
 zeroize = "1"
+# Solo dev (norte-connect): generación de claves ed25519 efímeras en tests
+# (host keys / client keys del servidor SSH in-process). Misma major que la
+# que russh usa internamente.
+rand = "0.10"
 thiserror = "2"
 base64 = "0.22"
 bitflags = { version = "2", features = ["serde"] }

@@ -6,9 +6,16 @@
 #![forbid(unsafe_code)]
 
 mod error;
+mod known_hosts;
 mod secret;
 mod spec;
+mod ssh;
 
 pub use error::ConnectError;
+pub use known_hosts::KnownHostsStore;
+// Re-export: es el tipo que `SftpProvider::new` acepta (inyección de sesión,
+// ADR 0013); así el core no necesita una dep directa de russh-sftp.
+pub use russh_sftp::client::SftpSession;
 pub use secret::{Secret, SecretResolver};
 pub use spec::{AuthMethod, ConnectionSpec, ConnectionsFile, Endpoint, TlsMode};
+pub use ssh::SshConnector;

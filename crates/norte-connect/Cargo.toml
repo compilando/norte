@@ -17,6 +17,13 @@ age.workspace = true
 # env/age; un escritorio Linux con libdbus lo habilita.
 keyring = { workspace = true, features = ["apple-native", "windows-native"] }
 norte-proto.workspace = true
+# Transporte SSH del connect (ADR 0015 A): russh vive AQUÍ (AGPL), no en el
+# provider (MIT/Apache, que recibe la sesión inyectada). Ya estaba en el
+# workspace (norte-vfs-sftp nightly); solo se promociona a dep normal.
+russh.workspace = true
+# El connect devuelve la `SftpSession` que `SftpProvider::new` acepta — es la
+# interfaz pública del provider, no un tipo de auth (frontera ADR 0015 A).
+russh-sftp.workspace = true
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 # Solo spawn_blocking (feature rt); nada de tokio::sync.
@@ -32,8 +39,14 @@ zeroize.workspace = true
 linux-keyring = ["keyring/sync-secret-service", "keyring/crypto-rust"]
 
 [dev-dependencies]
+# Servidor SSH + agente in-process para los tests de connect (sin Docker).
+futures.workspace = true
+# Claves ed25519 efímeras de test (host/client keys).
+rand.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread"] }
+# UnixListenerStream para servir el agente SSH in-process.
+tokio-stream = { workspace = true, features = ["net"] }
 
 [lints]
 workspace = true

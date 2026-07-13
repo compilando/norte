@@ -3400,12 +3400,17 @@ name = "norte-connect"
 version = "0.0.0"
 dependencies = [
  "age",
+ "futures",
  "keyring",
  "norte-proto",
+ "rand 0.10.2",
+ "russh",
+ "russh-sftp",
  "serde",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "zeroize",

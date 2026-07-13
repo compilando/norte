@@ -112,6 +112,15 @@ fn parse_endpoint(url: &str) -> Result<Endpoint, ConnectError> {
     let (user, hostport) = match authority.split_once('@') {
         // `@` sin usuario (`sftp://@host`) es una URL malformada, no un host.
         Some(("", _)) => return Err(ConnectError::InvalidUrl(url.to_string())),
+        // `user:pass@host` NO se admite (regla 10: el secreto iría a config/
+        // logs). Mensaje ESTÁTICO: ecoar la URL ecoaría el password.
+        Some((u, _)) if u.contains(':') => {
+            return Err(ConnectError::InvalidUrl(
+                "la URL no debe llevar password inline (user:pass@…); el secreto va por el \
+                 keyring/env/secrets.age"
+                    .to_string(),
+            ));
+        }
         Some((u, hp)) => (Some(u.to_string()), hp),
         None => (None, authority),
     };
@@ -132,7 +141,7 @@ fn parse_endpoint(url: &str) -> Result<Endpoint, ConnectError> {
     } else {
         (hostport.to_string(), None)
     };
-    if host.is_empty() {
+    if host.is_empty() || !is_valid_host(&host) {
         return Err(ConnectError::InvalidUrl(url.to_string()));
     }
     Ok(Endpoint {
@@ -141,6 +150,15 @@ fn parse_endpoint(url: &str) -> Result<Endpoint, ConnectError> {
         host,
         port,
     })
+}
+
+/// Charset de hostname/IP (incl. IPv6 con zona: `:`/`%`). Excluye TODO lo que
+/// tiene significado en el formato `known_hosts` (`,` lista de hosts, espacio
+/// y nueva línea separadores, `#` comentario, `|` hash) y los caracteres de
+/// control: un host hostil no puede envenenar entradas ajenas vía `learn`.
+fn is_valid_host(host: &str) -> bool {
+    host.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | ':' | '%'))
 }
 
 fn parse_port(p: Option<&str>, url: &str) -> Result<Option<u16>, ConnectError> {
@@ -226,6 +244,35 @@ mod tests {
         assert!(parse_endpoint("sftp://@host").is_err()); // usuario vacío
         assert!(parse_endpoint("sftp://host:0").is_err()); // puerto 0
         assert!(parse_endpoint("sftp://::1").is_err()); // IPv6 sin corchetes
+    }
+
+    /// Un password inline en la URL (`user:pass@host`) se rechaza SIN ecoar
+    /// la URL: si se aceptara (o se ecoara en el error), el password acabaría
+    /// en connections.toml, en logs o en mensajes de error (regla 10).
+    #[test]
+    fn password_inline_en_url_rechazado_sin_eco() {
+        let err = parse_endpoint("sftp://u:hunter2@h").unwrap_err();
+        assert!(
+            !format!("{err}").contains("hunter2"),
+            "el error no debe ecoar el password"
+        );
+    }
+
+    /// El host no admite caracteres con significado en `known_hosts` (`,` lista
+    /// de hosts, espacio/nueva-línea separadores, `#` comentario, `|` hash) ni
+    /// de control: si se colaran, un `learn` podría envenenar entradas ajenas.
+    #[test]
+    fn host_con_caracteres_de_formato_rechazado() {
+        for url in [
+            "sftp://banco.com,evil.com",
+            "sftp://a b",
+            "sftp://a\nb",
+            "sftp://a#b",
+            "sftp://a|b",
+            "sftp://a\tb",
+        ] {
+            assert!(parse_endpoint(url).is_err(), "{url:?} debería ser inválida");
+        }
     }
 
     #[test]
