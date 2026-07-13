@@ -1,0 +1,32 @@
+[package]
+name = "norte-connect"
+description = "Gestión de conexiones remotas y secretos (connections.toml, keyring, age)"
+license = "AGPL-3.0-only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Formato binario (no armor): el secrets.age no es de edición manual.
+age.workspace = true
+# Backends de los 3 OS de CI; crypto-rust = crypto pura (secret-service sin
+# dep C de openssl). default-features=false para NO arrastrar el backend async
+# (zbus) que no se usa: la ruta sync va dentro de spawn_blocking.
+keyring = { workspace = true, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+norte-proto.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+# Solo spawn_blocking (feature rt); nada de tokio::sync.
+tokio = { workspace = true, features = ["rt"] }
+toml.workspace = true
+tracing.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+
+[lints]
+workspace = true

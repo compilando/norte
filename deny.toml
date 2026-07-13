@@ -31,6 +31,12 @@ ignore = [
     # ed25519 por defecto. Riesgo aceptado y vigilado en issue #36 (migrar a
     # una pila SSH sin `rsa` en la ruta de firma, o esperar el fix upstream).
     "RUSTSEC-2023-0071",
+    # RUSTSEC-2026-0173 — `proc-macro-error2` SIN MANTENER (no es
+    # vulnerabilidad). Es un proc-macro de BUILD-TIME que entra por
+    # `age` → `i18n-embed-fl` (localización de los mensajes de error de age,
+    # norte-connect fase 6). Sin impacto en runtime ni superficie de ataque.
+    # Vigilado: se quita cuando age/i18n-embed-fl migren (issue #41).
+    "RUSTSEC-2026-0173",
 ]
 
 [bans]

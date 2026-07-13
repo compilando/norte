@@ -1,0 +1,360 @@
+//! Resolución de secretos (ADR 0015 C): `NORTE_SECRET_<CONN>` (env) → keyring
+//! del OS → fichero `secrets.age` cifrado. El secreto se envuelve en
+//! [`Secret`] (se borra de memoria al soltarse, spec §265) y JAMÁS se loguea
+//! ni se imprime (regla 10). Los intermedios en claro (mapa descifrado,
+//! passphrase) se mantienen zeroizados de punta a punta.
+
+use std::collections::BTreeMap;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+
+use zeroize::{Zeroize, Zeroizing};
+
+use crate::error::ConnectError;
+
+/// Servicio bajo el que se guardan los secretos en el keyring del OS.
+const KEYRING_SERVICE: &str = "norte";
+/// Fichero de secretos cifrados dentro del dir de config.
+const SECRETS_FILE: &str = "secrets.age";
+/// Fichero opcional con la passphrase del `secrets.age` (debe ser 0600).
+const SECRETS_KEY_FILE: &str = "secrets.key";
+
+/// Un secreto (contraseña/passphrase) que se borra de memoria al soltarse y
+/// NUNCA se imprime. Su contenido solo sale por [`Secret::expose`].
+#[derive(Clone)]
+pub struct Secret(Zeroizing<String>);
+
+impl Secret {
+    /// Envuelve un secreto.
+    #[must_use]
+    pub fn new(value: String) -> Self {
+        Self(Zeroizing::new(value))
+    }
+
+    /// El contenido en claro. Úsalo lo más tarde y brevemente posible; jamás
+    /// lo loguees (regla 10).
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Nunca el contenido (regla 10).
+        f.write_str("Secret(***)")
+    }
+}
+
+/// Mapa conn→secreto descifrado del `secrets.age`. Zeroiza TODOS sus valores
+/// al soltarse (spec §265): el plaintext no queda residual en el heap.
+#[derive(Default)]
+struct SecretMap(BTreeMap<String, String>);
+
+impl Drop for SecretMap {
+    fn drop(&mut self) {
+        for v in self.0.values_mut() {
+            v.zeroize();
+        }
+    }
+}
+
+/// Resuelve el secreto de una conexión por el orden env → keyring → `age`.
+#[derive(Debug, Clone)]
+pub struct SecretResolver {
+    config_dir: PathBuf,
+}
+
+impl SecretResolver {
+    /// Resolver anclado en el dir de config (donde vive `secrets.age`).
+    #[must_use]
+    pub fn new(config_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            config_dir: config_dir.into(),
+        }
+    }
+
+    /// Resuelve el secreto de la conexión `conn` (con `keyring_account`
+    /// típicamente la URL). `None` = no hay secreto (p. ej. auth por agente).
+    ///
+    /// Orden (ADR 0015 C): `NORTE_SECRET_<CONN>` → keyring del OS →
+    /// `secrets.age`. El primero que acierte gana.
+    ///
+    /// # Errors
+    /// Solo si el `secrets.age` existe pero no se puede descifrar/parsear;
+    /// el keyring no disponible (headless) NO es error (se cae al siguiente).
+    #[tracing::instrument(level = "debug", skip_all, fields(conn = %conn))]
+    pub async fn resolve(
+        &self,
+        conn: &str,
+        keyring_account: &str,
+    ) -> Result<Option<Secret>, ConnectError> {
+        // 1. Env var (override explícito para CI/corporativo).
+        if let Some(v) = env_secret(conn) {
+            return Ok(Some(Secret::new(v)));
+        }
+        // 2. Keyring del OS (bloqueante → spawn_blocking). No disponible
+        //    (headless) = se cae al fichero, no es error.
+        let account = keyring_account.to_string();
+        let from_keyring = tokio::task::spawn_blocking(move || keyring_lookup(&account))
+            .await
+            .map_err(|_| ConnectError::SecretStore("error interno del resolver"))?;
+        if let Some(s) = from_keyring {
+            return Ok(Some(s));
+        }
+        // 3. Fichero `secrets.age` cifrado (headless persistente).
+        let dir = self.config_dir.clone();
+        let conn_owned = conn.to_string();
+        tokio::task::spawn_blocking(move || age_lookup(&dir, &conn_owned))
+            .await
+            .map_err(|_| ConnectError::SecretStore("error interno del resolver"))?
+    }
+
+    /// Guarda `secret` para `conn` en el `secrets.age` (read-modify-write
+    /// cifrado). Para la UX de fase 6 (`norte connect --save`).
+    ///
+    /// # Errors
+    /// Si no hay passphrase del store, o falla el cifrado/escritura.
+    #[tracing::instrument(level = "debug", skip_all, fields(conn = %conn))]
+    pub async fn store_in_age(&self, conn: &str, secret: &Secret) -> Result<(), ConnectError> {
+        let dir = self.config_dir.clone();
+        let conn = conn.to_string();
+        // El valor se mantiene zeroizado también en el camino de escritura.
+        let value = Zeroizing::new(secret.expose().to_string());
+        tokio::task::spawn_blocking(move || age_store(&dir, &conn, value.as_str()))
+            .await
+            .map_err(|_| ConnectError::SecretStore("error interno del resolver"))?
+    }
+}
+
+/// El nombre de la env var para `conn`: `NORTE_SECRET_<CONN>` con `<CONN>` en
+/// mayúsculas y no-alfanuméricos → `_`.
+fn env_key(conn: &str) -> String {
+    let tail: String = conn
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("NORTE_SECRET_{tail}")
+}
+
+fn env_secret(conn: &str) -> Option<String> {
+    std::env::var(env_key(conn)).ok()
+}
+
+/// Busca `account` en el keyring del OS. Cualquier fallo (incluido "no hay
+/// backend", típico en headless/CI) se trata como "no encontrado": es
+/// best-effort, los fallbacks env/age son los fiables.
+fn keyring_lookup(account: &str) -> Option<Secret> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, account).ok()?;
+    match entry.get_password() {
+        Ok(p) => Some(Secret::new(p)),
+        Err(e) => {
+            // El error de get_password no contiene el password.
+            tracing::debug!(error = %e, "keyring no disponible o sin entrada; se prueba el fichero");
+            None
+        }
+    }
+}
+
+/// Passphrase del `secrets.age`: `NORTE_SECRETS_KEY` (env) o `<dir>/secrets.key`.
+/// El contenido se mantiene zeroizado; en Unix se avisa si el fichero es
+/// legible por grupo/otros (la passphrase quedaría expuesta).
+fn age_passphrase(dir: &Path) -> Option<Zeroizing<String>> {
+    if let Ok(p) = std::env::var("NORTE_SECRETS_KEY") {
+        return Some(Zeroizing::new(p));
+    }
+    let path = dir.join(SECRETS_KEY_FILE);
+    // Lee el fichero COMPLETO a un buffer zeroizado (sin String residual).
+    let raw = Zeroizing::new(std::fs::read_to_string(&path).ok()?);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(md) = std::fs::metadata(&path)
+            && md.permissions().mode() & 0o077 != 0
+        {
+            tracing::warn!(
+                "secrets.key es legible por grupo/otros: usa permisos 0600 (la passphrase queda expuesta)"
+            );
+        }
+    }
+    Some(Zeroizing::new(
+        raw.trim_end_matches(['\r', '\n']).to_string(),
+    ))
+}
+
+/// Descifra `secrets.age` y devuelve el secreto de `conn` (si está).
+fn age_lookup(dir: &Path, conn: &str) -> Result<Option<Secret>, ConnectError> {
+    let path = dir.join(SECRETS_FILE);
+    let ciphertext = match std::fs::read(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(ConnectError::Io(e)),
+    };
+    let map = age_decrypt(dir, &ciphertext)?;
+    // La copia entra a `Secret` (zeroiza); `map` zeroiza el resto al soltarse.
+    Ok(map.0.get(conn).map(|v| Secret::new(v.clone())))
+}
+
+/// Añade/actualiza `conn`→`value` en el `secrets.age` (read-modify-write).
+fn age_store(dir: &Path, conn: &str, value: &str) -> Result<(), ConnectError> {
+    let path = dir.join(SECRETS_FILE);
+    let mut map = match std::fs::read(&path) {
+        Ok(c) => age_decrypt(dir, &c)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => SecretMap::default(),
+        Err(e) => return Err(ConnectError::Io(e)),
+    };
+    map.0.insert(conn.to_string(), value.to_string());
+    let plaintext = Zeroizing::new(
+        toml::to_string(&map.0).map_err(|_| ConnectError::SecretStore("serializar"))?,
+    );
+    let ciphertext = age_encrypt(dir, plaintext.as_bytes())?;
+    write_secret_file(&path, &ciphertext)?;
+    Ok(())
+}
+
+/// Escribe `data` en `path` de forma ATÓMICA (tmp + rename) y con permisos
+/// 0600 en Unix (el `secrets.age` no debe ser world-readable — ADR 0015 C/6).
+fn write_secret_file(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("age.tmp");
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    {
+        let mut f = opts.open(&tmp)?;
+        f.write_all(data)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)
+}
+
+/// Mapa conn→secreto descifrado de un `secrets.age`. Los valores se zeroizan
+/// al soltar el [`SecretMap`].
+fn age_decrypt(dir: &Path, ciphertext: &[u8]) -> Result<SecretMap, ConnectError> {
+    let passphrase =
+        age_passphrase(dir).ok_or(ConnectError::SecretStore("sin passphrase para secrets.age"))?;
+    let decryptor = age::Decryptor::new(ciphertext)
+        .map_err(|_| ConnectError::SecretStore("secrets.age ilegible"))?;
+    let identity =
+        age::scrypt::Identity::new(age::secrecy::SecretString::from(passphrase.to_string()));
+    let mut reader = decryptor
+        .decrypt(std::iter::once(&identity as &dyn age::Identity))
+        .map_err(|_| ConnectError::SecretStore("passphrase incorrecta"))?;
+    let mut plaintext = Zeroizing::new(String::new());
+    reader
+        .read_to_string(&mut plaintext)
+        .map_err(|_| ConnectError::SecretStore("descifrado"))?;
+    // NUNCA interpolar el error de toml: llevaría el plaintext (los secretos)
+    // al mensaje y de ahí a los logs (regla 10). Mensaje estático.
+    let map: BTreeMap<String, String> =
+        toml::from_str(&plaintext).map_err(|_| ConnectError::SecretStore("TOML inválido"))?;
+    Ok(SecretMap(map))
+}
+
+/// Cifra `plaintext` con la passphrase del store.
+fn age_encrypt(dir: &Path, plaintext: &[u8]) -> Result<Vec<u8>, ConnectError> {
+    let passphrase =
+        age_passphrase(dir).ok_or(ConnectError::SecretStore("sin passphrase para secrets.age"))?;
+    let encryptor = age::Encryptor::with_user_passphrase(age::secrecy::SecretString::from(
+        passphrase.to_string(),
+    ));
+    let mut out = Vec::new();
+    let mut writer = encryptor
+        .wrap_output(&mut out)
+        .map_err(|_| ConnectError::SecretStore("cifrado"))?;
+    writer
+        .write_all(plaintext)
+        .map_err(|_| ConnectError::SecretStore("cifrado"))?;
+    writer
+        .finish()
+        .map_err(|_| ConnectError::SecretStore("cifrado"))?;
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn env_key_sanitiza() {
+        assert_eq!(env_key("trabajo"), "NORTE_SECRET_TRABAJO");
+        assert_eq!(env_key("mi-server.1"), "NORTE_SECRET_MI_SERVER_1");
+    }
+
+    #[test]
+    fn secret_debug_no_filtra() {
+        let s = Secret::new("hunter2".into());
+        assert_eq!(format!("{s:?}"), "Secret(***)");
+        assert!(!format!("{s:?}").contains("hunter2"));
+        assert_eq!(s.expose(), "hunter2");
+    }
+
+    /// Round-trip del store `age`: guardar y resolver con la passphrase del
+    /// fichero `secrets.key` (sin tocar env global, que es unsafe en 2024).
+    #[tokio::test]
+    async fn age_store_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        write_key_file(dir.path(), "passphrase-de-test");
+        let r = SecretResolver::new(dir.path());
+        // Nombre único → ni el keyring ni una env var lo interceptan.
+        let conn = "conn-age-roundtrip-xyz";
+        assert!(r.resolve(conn, "sftp://x@y:22").await.unwrap().is_none());
+        r.store_in_age(conn, &Secret::new("s3cr3t".into()))
+            .await
+            .unwrap();
+        let got = r.resolve(conn, "sftp://x@y:22").await.unwrap();
+        assert_eq!(got.expect("presente").expose(), "s3cr3t");
+        // El fichero en disco está CIFRADO (no contiene el secreto en claro).
+        let raw = std::fs::read(dir.path().join(SECRETS_FILE)).unwrap();
+        assert!(
+            !raw.windows(6).any(|w| w == b"s3cr3t"),
+            "secreto en claro en disco"
+        );
+    }
+
+    /// El `secrets.age` se escribe 0600 (no world-readable).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn secrets_age_es_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        write_key_file(dir.path(), "pass");
+        let r = SecretResolver::new(dir.path());
+        r.store_in_age("c", &Secret::new("v".into())).await.unwrap();
+        let md = std::fs::metadata(dir.path().join(SECRETS_FILE)).unwrap();
+        assert_eq!(md.permissions().mode() & 0o777, 0o600);
+    }
+
+    #[tokio::test]
+    async fn age_sin_passphrase_es_error_si_existe_el_fichero() {
+        let dir = tempfile::tempdir().unwrap();
+        // Fichero presente pero sin passphrase (ni env ni secrets.key).
+        std::fs::write(dir.path().join(SECRETS_FILE), b"cualquier cosa").unwrap();
+        let r = SecretResolver::new(dir.path());
+        assert!(
+            r.resolve("conn-sin-pass-xyz", "sftp://x@y:22")
+                .await
+                .is_err()
+        );
+    }
+
+    /// Escribe `secrets.key` con 0600 en Unix (evita el warn de permisos).
+    fn write_key_file(dir: &Path, pass: &str) {
+        let path = dir.join(SECRETS_KEY_FILE);
+        std::fs::write(&path, pass).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    }
+}

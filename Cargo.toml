@@ -8,6 +8,7 @@ members = [
     "crates/norte-vfs-local",
     "crates/norte-vfs-sftp",
     "crates/norte-vfs-ftp",
+    "crates/norte-connect",
     "crates/norte-testkit",
     "crates/norte-core",
     "crates/norte-cli",
@@ -30,6 +31,7 @@ norte-vfs = { path = "crates/norte-vfs", version = "0.0.0" }
 norte-vfs-local = { path = "crates/norte-vfs-local", version = "0.0.0" }
 norte-vfs-sftp = { path = "crates/norte-vfs-sftp", version = "0.0.0" }
 norte-vfs-ftp = { path = "crates/norte-vfs-ftp", version = "0.0.0" }
+norte-connect = { path = "crates/norte-connect", version = "0.0.0" }
 norte-testkit = { path = "crates/norte-testkit", version = "0.0.0" }
 norte-core = { path = "crates/norte-core", version = "0.0.0" }
 norte-tui = { path = "crates/norte-tui", version = "0.0.0" }
@@ -52,6 +54,18 @@ russh-sftp = "2.3"
 # test in-process usa libunftp (dev-dep del crate).
 suppaftp = "10"
 sha2 = "0.10"
+# Fase 6 (ADR 0015, connections/secretos): keyring del OS (Secret Service/
+# Keychain/Credential Manager, el estándar cross-platform); age (fichero
+# cifrado de secretos headless, auditado); zeroize (borrar secretos de memoria,
+# spec §265). Solo en norte-connect (AGPL). cargo-deny vigilante.
+# keyring 3 (no 4): v4 exige registro explícito de store; v3 tiene el
+# `Entry::new(service, user)` simple. default-features=false: el crate elige
+# los backends (los defaults arrastran el async zbus, no usado).
+keyring = { version = "3", default-features = false }
+# age 0.11 (no 0.12): 0.12 depende INCONDICIONAL de ml-kem (post-quantum), que
+# hoy no compila (ml-kem 0.2.1 roto contra kem 0.3.0). 0.11 es pre-PQ y limpio.
+age = "0.11"
+zeroize = "1"
 thiserror = "2"
 base64 = "0.22"
 bitflags = { version = "2", features = ["serde"] }
