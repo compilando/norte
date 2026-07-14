@@ -554,15 +554,32 @@ impl Engine {
             Vec::with_capacity(entries.len());
         for e in entries {
             let p = wire_engine(&e.path)?;
-            // Reversa de un Created BORRA → Delete; rename_back / restore_trash
-            // reubican → Move.
-            let undo_op = match e.reversal.as_str() {
-                "rename_back" | "restore_trash" => crate::policy::PolicyOp::Move,
-                _ => crate::policy::PolicyOp::Delete {
-                    mode: DeleteMode::Permanent,
-                },
+            // Reversa de un Created BORRA → Delete (una ruta). rename_back /
+            // restore_trash REUBICAN → Move con DOS endpoints (origen+destino de
+            // la restauración): ambos deben pasar el gate, igual que un Move
+            // normal (security M2). El segundo endpoint es `path_to` (rename) o
+            // `reversal_ref` (trash).
+            let (undo_op, second) = match e.reversal.as_str() {
+                "rename_back" => (
+                    crate::policy::PolicyOp::Move,
+                    e.path_to.as_deref().map(wire_engine).transpose()?,
+                ),
+                "restore_trash" => (
+                    crate::policy::PolicyOp::Move,
+                    e.reversal_ref.as_deref().map(wire_engine).transpose()?,
+                ),
+                _ => (
+                    crate::policy::PolicyOp::Delete {
+                        mode: DeleteMode::Permanent,
+                    },
+                    None,
+                ),
             };
-            if let Err(err) = self.gate(&actor, undo_op, &[&p]).await {
+            let mut gate_paths: Vec<&VPath> = vec![&p];
+            if let Some(s) = &second {
+                gate_paths.push(s);
+            }
+            if let Err(err) = self.gate(&actor, undo_op, &gate_paths).await {
                 report.lock().expect("undo report lock").blocked = Some((e.seq, err));
                 break; // estricto: para al primer bloqueo de policy (LIFO).
             }

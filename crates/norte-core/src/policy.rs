@@ -2,6 +2,22 @@
 //! la frontera de su SCOPE (rutas + ops + TTL) y las reglas de `policy.toml`,
 //! dando `Allow | Ask | Deny` ANTES de ejecutarse. Los humanos (`User`) no se
 //! sandboxean. Enforcement, no prompt-engineering (regla 9).
+//!
+//! **Requisitos de seguridad para M3-3b/M3-4 (deuda anotada):**
+//! - El daemon DEBE instalar `ScopedPolicy` vía [`crate::Engine::with_policy`];
+//!   el default [`AllowAll`] es solo para el engine embebido/humano. Con agentes,
+//!   olvidar el wiring = sin sandbox (fail-open estructural, security M3).
+//! - El actor lo fija el CORE por conexión autenticada, jamás se lee de params
+//!   del wire: un cliente agéntico no debe poder declararse `User` (que
+//!   cortocircuita a `Allow`).
+//! - [`ScopeRegistry`] hoy clava por id string; namespacear por `(actor_kind,
+//!   id)` para que un Plugin no herede el scope de un Agent homónimo (m4) y
+//!   añadir `revoke(session)` para respuesta a incidentes (m7).
+//! - El resolver de `Ask` (M3-3b) DEBE aplicar TTL/timeout y ser cancelable: el
+//!   gate suspende la llamada del engine fuera del framework de Task (m5).
+//! - Escape de scope vía symlink dentro→fuera que el provider siga (m6): la
+//!   mitigación es la política de symlinks del provider (ADR 0005) + fixture
+//!   hostil; el gate razona sobre VPaths lógicos.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
@@ -349,7 +365,11 @@ mod tests {
                 roots: vec![vp("file:///a")],
                 ops: OpSet::all(),
                 // Expiró hace rato.
-                expires_at: Some(Instant::now() - std::time::Duration::from_secs(1)),
+                expires_at: Some(
+                    Instant::now()
+                        .checked_sub(std::time::Duration::from_secs(1))
+                        .expect("instante en el pasado"),
+                ),
             },
         );
         let pol = ScopedPolicy::new(reg, PolicyConfig::default());
