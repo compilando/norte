@@ -40,6 +40,7 @@ verdad el "el core soporta N y N-1" de la spec §11.
 | `EntryKind` | kind nuevo | degrada a `other` (`#[serde(other)]`) |
 | `Error` | categoría nueva | degrada a `Unknown` (oculto, jamás emitido por el core) |
 | `TaskState` | estado nuevo | degrada a `Unknown`, tratado como NO terminal (el cliente sigue escuchando) |
+| `TaskKind` | kind nuevo | degrada a `Unknown` (`#[serde(other)]`, desde 0.10.0). OJO: solo protege hacia adelante (receptor ≥0.10 frente a kinds futuros); un cliente 0.9.x NO degrada `undo` — el emisor debe gatear kinds nuevos por versión negociada (M3-4) |
 | `CapabilityFlags` | nombre nuevo bien formado (`[A-Z0-9_]+`) | se ignora: una capability es un anuncio; no conocerla = no explotarla |
 | `CapabilityFlags` | hex (`0x…`) o token malformado | ERROR: bits sin nombre no viajan (`from_str` de bitflags los retendría en silencio — inaceptable) |
 

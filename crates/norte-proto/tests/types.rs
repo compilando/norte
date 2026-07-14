@@ -211,9 +211,18 @@ fn task_kind_wire_strings() {
         (TaskKind::Copy, "\"copy\""),
         (TaskKind::Move, "\"move\""),
         (TaskKind::Delete, "\"delete\""),
+        (TaskKind::Undo, "\"undo\""),
     ] {
         assert_eq!(serde_json::to_string(&kind).unwrap(), wire);
     }
+}
+
+#[test]
+fn task_kind_unknown_is_tolerant() {
+    // Un cliente N-1 recibe un kind futuro → Unknown, no error de parse
+    // (forward-compat, igual que TaskState::Unknown).
+    let k: TaskKind = serde_json::from_str("\"teleport\"").expect("tolerante");
+    assert_eq!(k, TaskKind::Unknown);
 }
 
 // ---------- TaskProgress ----------
@@ -622,11 +631,11 @@ fn fs_list_result_tolera_next_cursor_ausente() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.9.0 (fase 8): acepta 0.9.x (N) y 0.8.x (N-1), rechaza 0.7.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.9.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.8.0"), "N-1");
+    // 0.10.0 (M3-2): acepta 0.10.x (N) y 0.9.x (N-1), rechaza 0.8.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.10.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.9.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.7.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.8.9"),
         "N-2 fuera de la ventana"
     );
 }

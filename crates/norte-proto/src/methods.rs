@@ -40,7 +40,11 @@ use crate::{
 /// 0.9.0 (fase 8, ADR 0018): capability `READ_ONLY` + schemes compuestos
 /// `zip+`/`tar+` con marcador `!` (archivos como directorios). Aditivo
 /// sobre 0.8.x; el bump señala que el server entiende paths compuestos.
-pub const PROTOCOL_VERSION: &str = "0.9.0";
+///
+/// 0.10.0 (M3-2): `TaskKind::Undo` + `TaskKind::Unknown` (forward-compat, como
+/// `TaskState::Unknown`). Aditivo sobre 0.9.x; el bump señala que el server sabe
+/// emitir Tasks de undo de sesión.
+pub const PROTOCOL_VERSION: &str = "0.10.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver

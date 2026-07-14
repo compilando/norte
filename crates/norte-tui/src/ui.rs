@@ -140,6 +140,9 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 norte_proto::TaskKind::Copy => "copy",
                 norte_proto::TaskKind::Move => "move",
                 norte_proto::TaskKind::Delete => "delete",
+                norte_proto::TaskKind::Undo => "undo",
+                // Clase de un daemon N+1: etiqueta genérica, no rompe la UI.
+                norte_proto::TaskKind::Unknown => "task",
             };
             Line::raw(format!(" {kind} #{} {estado}", p.task_id.get()))
         })

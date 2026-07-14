@@ -51,6 +51,22 @@ pub enum TaskKind {
     Move,
     /// Borrado (recursivo post-order).
     Delete,
+    /// Undo de sesión: deshace mutaciones previas en LIFO (M3-2).
+    ///
+    /// OJO (compat): esta variante entra en 0.10.0. Un cliente 0.9.x (N-1) NO la
+    /// conoce y su parse de `TaskKind` FALLA al recibirla — el `serde(other)` de
+    /// abajo protege a ESTE proto (0.10+) frente a kinds de 0.11+, no
+    /// retroactivamente al 0.9. En M3-2 el undo no se expone por RPC (no llega a
+    /// clientes), así que la rotura es latente; M3-4 debe gatear la emisión de
+    /// kinds nuevos por versión negociada (o asumir descarte silencioso en
+    /// broadcast y proteger el resync de `task.list`).
+    Undo,
+    /// Clase desconocida: un daemon N+1 (0.11+) envió un kind que ESTE proto no
+    /// conoce → se acepta como genérica en vez de fallar el parse (forward-compat
+    /// desde 0.10, como [`TaskState::Unknown`]). No cubre el borde hacia atrás
+    /// 0.9→0.10 (ver `Undo`).
+    #[serde(other)]
+    Unknown,
 }
 
 /// Estado del ciclo de vida de una Task.

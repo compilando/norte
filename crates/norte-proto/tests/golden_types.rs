@@ -735,9 +735,8 @@ fn method_names_frozen() {
     );
     assert_eq!(methods::FS_READ_MAX_CHUNK, 8 * 1024 * 1024);
     assert_eq!(methods::FS_LIST_MAX_PAGE, 10_000);
-    // 0.9.0: capability READ_ONLY + schemes compuestos zip+/tar+ con
-    // marcador `!` (fase 8 M2, ADR 0018). Aditivo sobre 0.8.x.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.9.0");
+    // 0.10.0: TaskKind::Undo + Unknown forward-compat (M3-2). Aditivo sobre 0.9.x.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.10.0");
 }
 
 #[test]
