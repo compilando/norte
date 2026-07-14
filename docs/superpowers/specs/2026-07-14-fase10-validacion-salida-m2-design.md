@@ -52,9 +52,12 @@ matriz en `norte-core` (engine) y `norte-vfs` (providers). Sin infra nueva.
 
 ### 10b — E2E del criterio de salida (central)
 
-Test de integración en `norte-core` (nivel Engine, no daemon) con los tres
-providers in-process sobre el mismo Engine: object-fs, sftp-in-process, Local
-sobre tempdir, y un zip real sembrado con `ZipSmith` (8c).
+Test de integración en `norte-core` (nivel Engine, no daemon). Remoto =
+**object-fs (S3)** — el eje del criterio "vía S3"; barato (solo `opendal`
+dev-dep, sin servidor). Providers sobre el mismo Engine: object-fs, Local sobre
+tempdir, y un zip real sembrado con `ZipSmith` (8c). **sftp NO entra en este
+E2E de core** (evita replicar su arnés russh de ~350 líneas): su semántica
+cross-provider está cubierta por su suite contractual + el nightly OpenSSH real.
 
 Secuencia:
 1. **Leer desde zip:** árbol + nombres hostiles (corpus UTF-8-representable:
