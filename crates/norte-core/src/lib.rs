@@ -7,6 +7,7 @@ pub mod connect;
 #[cfg(unix)]
 pub mod daemon;
 mod engine;
+pub mod logging;
 mod observer;
 mod ops;
 mod progress;

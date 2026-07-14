@@ -175,6 +175,10 @@ fn main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
+    // Tracing con el cap de seguridad `suppaftp=info` (issue #43, regla 10):
+    // sin esto un `RUST_LOG=trace` volcaría `PASS <password>` de suppaftp.
+    norte_core::logging::init();
+
     let engine = Engine::new();
     engine.register_provider(Arc::new(LocalProvider::os_root()) as Arc<dyn Provider>);
     // Conexiones remotas bajo demanda (fase 6e): connections.toml +
