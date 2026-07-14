@@ -4,8 +4,8 @@
 //!
 //! Se usa un archive READ-ONLY (`zip+mem`, ADR 0018) como provider que NO
 //! declara TRASH ni escritura: es el caso honesto para probar que
-//! - un `DeleteMode::Trash` sin cap TRASH NO se degrada a permanente (ADR 0009 B2),
-//! - una copia HACIA dentro de un READ_ONLY se rechaza limpio (Unsupported).
+//! - un `DeleteMode::Trash` sin cap `TRASH` NO se degrada a permanente (ADR 0009 B2),
+//! - una copia HACIA dentro de un `READ_ONLY` se rechaza limpio (`Unsupported`).
 
 use std::sync::Arc;
 
