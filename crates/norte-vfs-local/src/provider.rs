@@ -126,52 +126,6 @@ impl LocalProvider {
         }
         to_native(&self.base, p)
     }
-
-    /// GC de `.norte-partial` huérfanos en el directorio `dir` (ADR 0012):
-    /// borra los staging cuya última modificación es anterior a
-    /// `older_than`. Reconoce los parciales por su FORMA exacta
-    /// (`is_norte_partial`), no por el prefijo suelto — un archivo real
-    /// del usuario `.norte-partial.backup` JAMÁS se toca (H2 del
-    /// encoding-auditor). Devuelve cuántos borró.
-    ///
-    /// No distingue un parcial de una copia VIVA (esa correlación es del
-    /// journal M3): usar un `older_than` holgado (horas) para no barrer una
-    /// reanudación en curso. Es una operación puntual, no una Task.
-    ///
-    /// # Errors
-    /// [`Error`] si `dir` no se puede listar; los fallos de borrado
-    /// individuales se cuentan como no-borrados, sin abortar el barrido.
-    pub async fn gc_partials(
-        &self,
-        dir: &VPath,
-        older_than: std::time::Duration,
-    ) -> Result<usize, Error> {
-        self.ensure_caps().await;
-        let native = self.native(dir)?;
-        blocking(move || {
-            let now = std::time::SystemTime::now();
-            let rd = std::fs::read_dir(&native).map_err(|e| map_io(&e))?;
-            let mut removed = 0usize;
-            for dent in rd.flatten() {
-                let name = dent.file_name();
-                if !is_norte_partial(&os_to_bytes(&name)) {
-                    continue;
-                }
-                // Edad por mtime; sin metadata legible, se deja (conservador).
-                let old = dent
-                    .metadata()
-                    .ok()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| now.duration_since(t).ok())
-                    .is_some_and(|age| age >= older_than);
-                if old && std::fs::remove_file(dent.path()).is_ok() {
-                    removed += 1;
-                }
-            }
-            Ok(removed)
-        })
-        .await
-    }
 }
 
 /// Papelera nativa. macOS: `NSFileManager` (headless, sin prompts TCC) —
@@ -859,6 +813,51 @@ impl Provider for LocalProvider {
                 trash::Error::Unknown { .. } => Error::Unsupported,
                 _ => Error::Io { retryable: false },
             })
+        })
+        .await
+    }
+
+    /// GC de `.norte-partial` huérfanos en el directorio `dir` (ADR 0012, #11):
+    /// borra los staging cuya última modificación es anterior a `older_than`.
+    /// Reconoce los parciales por su FORMA exacta (`is_norte_partial`), no por
+    /// el prefijo suelto — un archivo real del usuario `.norte-partial.backup`
+    /// JAMÁS se toca (H2 del encoding-auditor). Devuelve cuántos borró.
+    ///
+    /// No distingue un parcial de una copia VIVA (esa correlación es del
+    /// journal M3): usar un `older_than` holgado (horas) para no barrer una
+    /// reanudación en curso. Es una operación puntual, no una Task.
+    ///
+    /// # Errors
+    /// [`Error`] si `dir` no se puede listar; los fallos de borrado
+    /// individuales se cuentan como no-borrados, sin abortar el barrido.
+    async fn gc_partials(
+        &self,
+        dir: &VPath,
+        older_than: std::time::Duration,
+    ) -> Result<usize, Error> {
+        self.ensure_caps().await;
+        let native = self.native(dir)?;
+        blocking(move || {
+            let now = std::time::SystemTime::now();
+            let rd = std::fs::read_dir(&native).map_err(|e| map_io(&e))?;
+            let mut removed = 0usize;
+            for dent in rd.flatten() {
+                let name = dent.file_name();
+                if !is_norte_partial(&os_to_bytes(&name)) {
+                    continue;
+                }
+                // Edad por mtime; sin metadata legible, se deja (conservador).
+                let old = dent
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| now.duration_since(t).ok())
+                    .is_some_and(|age| age >= older_than);
+                if old && std::fs::remove_file(dent.path()).is_ok() {
+                    removed += 1;
+                }
+            }
+            Ok(removed)
         })
         .await
     }

@@ -142,6 +142,26 @@ pub trait Provider: Send + Sync {
         Err(Error::Unsupported)
     }
 
+    /// GC de staging `.norte-partial` huérfano (ADR 0012, #11) en el directorio
+    /// `dir`: borra los parciales cuya antigüedad supera `older_than`. Los
+    /// reconoce por su FORMA exacta, no por prefijo suelto — un archivo real
+    /// `.norte-partial.backup` JAMÁS se toca. Devuelve cuántos borró.
+    ///
+    /// Default no-op (`Ok(0)`): solo los providers con staging LOCAL lo
+    /// implementan. NO es una mutación de usuario → no pasa por el journal.
+    ///
+    /// # Errors
+    /// [`Error`] si `dir` no se puede listar; los fallos de borrado
+    /// individuales se cuentan como no-borrados, sin abortar el barrido.
+    async fn gc_partials(
+        &self,
+        dir: &VPath,
+        older_than: std::time::Duration,
+    ) -> Result<usize, Error> {
+        let _ = (dir, older_than);
+        Ok(0)
+    }
+
     /// Crea un symlink en `link` apuntando a `target` (bytes crudos, tal
     /// cual — el provider no los interpreta). `kind` distingue archivo/dir
     /// donde el OS lo exige (Windows); unix lo ignora.

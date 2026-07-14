@@ -353,6 +353,28 @@ impl Engine {
     pub async fn capabilities(&self, p: &VPath) -> Result<norte_proto::Capabilities, Error> {
         Ok(self.provider_for(p).await?.capabilities())
     }
+
+    /// Barre el staging `.norte-partial` huérfano (crashes previos, ADR 0012 /
+    /// #11) bajo `dir`, delegando en el provider que lo sirve. Operación
+    /// PUNTUAL (no una Task) y NO registrada en el journal (no es una mutación
+    /// de usuario). Los providers sin staging local devuelven 0.
+    ///
+    /// No hay barrido automático al arranque: `gc_partials` es single-dir y no
+    /// existe una raíz gestionada fiable hasta que el journal registre el
+    /// staging in-flight (deuda, futuro increment de M3).
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si el scheme no tiene provider; los del provider.
+    pub async fn gc_partials(
+        &self,
+        dir: &VPath,
+        older_than: std::time::Duration,
+    ) -> Result<usize, Error> {
+        self.provider_for(dir)
+            .await?
+            .gc_partials(dir, older_than)
+            .await
+    }
 }
 
 /// Forma de un `VPath` para SPANS de tracing: `display_lossy`, salvo que el
