@@ -1,5 +1,5 @@
 //! Journal transaccional (M3-1, ADR 0020): toda mutación → una entrada con
-//! actor, referencia de reversa y hash-chain tamper-evident sobre SQLite (WAL).
+//! actor, referencia de reversa y hash-chain tamper-evident sobre `SQLite` (WAL).
 
 use std::str::FromStr;
 
@@ -28,7 +28,7 @@ struct ChainState {
     last_hash: [u8; 32],
 }
 
-/// El journal transaccional sobre SQLite (WAL).
+/// El journal transaccional sobre `SQLite` (WAL).
 pub struct Journal {
     pub(crate) pool: SqlitePool,
     chain: Mutex<ChainState>,
@@ -67,13 +67,12 @@ impl Journal {
         let last_hash = sqlx::query("SELECT entry_hash FROM journal ORDER BY seq DESC LIMIT 1")
             .fetch_optional(&pool)
             .await?
-            .map(|row| {
+            .map_or([0u8; 32], |row| {
                 let v: Vec<u8> = row.get(0);
                 let mut h = [0u8; 32];
                 h.copy_from_slice(&v);
                 h
-            })
-            .unwrap_or([0u8; 32]);
+            });
         Ok(Self {
             pool,
             chain: Mutex::new(ChainState { last_hash }),
@@ -197,7 +196,7 @@ impl Journal {
 
     /// SOLO TESTS: corrompe el `path` de una entrada sin recomputar su hash.
     #[cfg(test)]
-    pub async fn corrupt_path_for_test(&self, seq: i64, path: &[u8]) -> Result<(), sqlx::Error> {
+    async fn corrupt_path_for_test(&self, seq: i64, path: &[u8]) -> Result<(), sqlx::Error> {
         sqlx::query("UPDATE journal SET path = ? WHERE seq = ?")
             .bind(path)
             .bind(seq)
@@ -207,9 +206,9 @@ impl Journal {
     }
 }
 
-/// El [`Journal`] como [`MutationObserver`]: mapea cada `Mutation` a una entrada
-/// y asigna el `seq` monótono. El wiring en el engine y la `reversal_ref` de
-/// `Trashed` llegan en M3-1b.
+/// El [`Journal`] como [`crate::observer::MutationObserver`]: mapea cada
+/// `Mutation` a una entrada y asigna el `seq` monótono. El wiring en el engine y
+/// la `reversal_ref` de `Trashed` llegan en M3-1b.
 pub struct SqliteJournal {
     journal: Journal,
     next_seq: std::sync::atomic::AtomicI64,
