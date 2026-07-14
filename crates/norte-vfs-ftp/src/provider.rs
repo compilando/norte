@@ -19,6 +19,9 @@ use suppaftp::{FtpError, Status};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
+/// Cota defensiva de entradas materializadas por listado (issue #40). El bound
+/// real contra OOM es upstream (suppaftp bufferiza las líneas) + scheduler (#53).
+const MAX_LIST_ENTRIES: usize = 1 << 20;
 /// Tamaño de chunk de lectura (256 KiB, alineado con el copy engine).
 const READ_CHUNK: usize = 256 * 1024;
 /// Prefijo del staging de escritura (ADR 0012, mismo convenio que local/sftp).
@@ -480,6 +483,15 @@ impl Provider for FtpProvider {
         drop(guard);
         let mut entries: Vec<Result<Entry, Error>> = Vec::new();
         for line in lines {
+            // Cota defensiva de nuestra materialización (issue #40): un servidor
+            // hostil con un listado gigante nos haría crecer `entries` sin fin.
+            // NOTA: `lines` ya viene bufferizado ENTERO por suppaftp (sin API de
+            // streaming), así que el bound DURO contra OOM es upstream/scheduler
+            // (#53); esto solo acota nuestra copia de `Entry`.
+            if entries.len() >= MAX_LIST_ENTRIES {
+                entries.push(Err(Error::Io { retryable: false }));
+                break;
+            }
             let parsed = if has_mlsd {
                 ListParser::parse_mlsd(&line).ok()
             } else {
@@ -827,5 +839,55 @@ mod read_stream {
         }
         let _ = guard.stream.finalize_retr_stream(reader).await;
         guard.pending_retr = false;
+    }
+}
+
+#[cfg(test)]
+mod list_parse_tests {
+    use super::parse_list_line;
+
+    #[test]
+    fn parses_posix_file_and_dir() {
+        let f = parse_list_line("-rw-r--r-- 1 owner group 1234 Jan 12 10:00 hola.txt")
+            .expect("fichero POSIX");
+        assert_eq!(f.name(), "hola.txt");
+        assert!(f.is_file());
+        assert_eq!(f.size(), 1234);
+
+        let d =
+            parse_list_line("drwxr-xr-x 2 owner group 4096 Jan 12 10:00 sub").expect("dir POSIX");
+        assert_eq!(d.name(), "sub");
+        assert!(d.is_directory());
+    }
+
+    #[test]
+    fn discards_unparseable_lines() {
+        // Cabecera `total N` y basura → None (se descartan, no cortan).
+        assert!(parse_list_line("total 8").is_none());
+        assert!(parse_list_line("").is_none());
+        assert!(parse_list_line("garbage garbage").is_none());
+    }
+
+    #[test]
+    fn name_with_internal_spaces_survives() {
+        let f = parse_list_line("-rw-r--r-- 1 o g 5 Jan 12 10:00 con espacios.txt")
+            .expect("nombre con espacios internos");
+        assert_eq!(f.name(), "con espacios.txt");
+    }
+
+    #[test]
+    fn leading_space_name_is_lost_known_limitation() {
+        // LÍMITE DOCUMENTADO (issue #40): el `\s+` de suppaftp se come el espacio
+        // INICIAL del nombre. Un ` sp.txt` en un servidor SIN MLSD se lista como
+        // `sp.txt` → stat da falso NotFound. No hay forma robusta de saber dónde
+        // empieza un nombre con whitespace inicial en `ls -l`. Solo afecta a
+        // servidores sin MLSD; los modernos (libunftp) van por MLSD, robusto.
+        let f = parse_list_line("-rw-r--r-- 1 o g 5 Jan 12 10:00  sp.txt")
+            .expect("parsea, pero pierde el espacio inicial");
+        assert_eq!(
+            f.name(),
+            "sp.txt",
+            "el espacio inicial se pierde (upstream)"
+        );
     }
 }
