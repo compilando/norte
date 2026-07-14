@@ -31,6 +31,11 @@ pub struct SftpProvider {
     base: String,
     /// Contador de staging (nombre efímero único para `write`).
     seq: AtomicU64,
+    /// Papelera lógica `.norte-trash/` activa (opt-in por conexión, ADR
+    /// 0019). Off por defecto → no declara `TRASH` → borrado permanente.
+    logical_trash: bool,
+    /// Contador monótono para desempatar ids de papelera del mismo ms.
+    trash_counter: AtomicU64,
 }
 
 impl SftpProvider {
@@ -47,7 +52,17 @@ impl SftpProvider {
             session: Arc::new(session),
             base,
             seq: AtomicU64::new(0),
+            logical_trash: false,
+            trash_counter: AtomicU64::new(0),
         }
+    }
+
+    /// Activa/desactiva la papelera lógica `.norte-trash/` (ADR 0019).
+    /// Sin ella el provider no declara `TRASH` y `trash()` da `Unsupported`.
+    #[must_use]
+    pub fn with_logical_trash(mut self, enabled: bool) -> Self {
+        self.logical_trash = enabled;
+        self
     }
 
     /// La raíz de este provider para un `authority` dado
@@ -188,17 +203,22 @@ impl Provider for SftpProvider {
     fn capabilities(&self) -> Capabilities {
         // Honestas (ADR 0013): sftp tiene symlinks y escritura en offset/
         // append (habilita el resume de ADR 0012), y se asume remoto POSIX
-        // case-sensitive. NO declara: rename atómico (v3 no lo garantiza),
-        // papelera ni server-copy.
+        // case-sensitive. NO declara: rename atómico (v3 no lo garantiza) ni
+        // server-copy. TRASH solo si la conexión activó la papelera lógica
+        // `.norte-trash/` (ADR 0019).
+        let mut flags = CapabilityFlags::SYMLINKS
+            | CapabilityFlags::APPEND
+            | CapabilityFlags::RANDOM_WRITE
+            | CapabilityFlags::CASE_PRESERVING
+            // El remoto se asume POSIX (case-sensitive): declararla evita
+            // que el engine invente colisiones de caja que un servidor
+            // Linux no tiene (bytes exactos = conservador correcto).
+            | CapabilityFlags::CASE_SENSITIVE;
+        if self.logical_trash {
+            flags |= CapabilityFlags::TRASH;
+        }
         Capabilities {
-            flags: CapabilityFlags::SYMLINKS
-                | CapabilityFlags::APPEND
-                | CapabilityFlags::RANDOM_WRITE
-                | CapabilityFlags::CASE_PRESERVING
-                // El remoto se asume POSIX (case-sensitive): declararla evita
-                // que el engine invente colisiones de caja que un servidor
-                // Linux no tiene (bytes exactos = conservador correcto).
-                | CapabilityFlags::CASE_SENSITIVE,
+            flags,
             max_path: None,
         }
     }
