@@ -73,7 +73,11 @@ impl RecordingObserver {
 
 #[async_trait::async_trait]
 impl MutationObserver for RecordingObserver {
-    async fn on_mutation(&self, mutation: &Mutation<'_>, _actor: &norte_core::journal::Actor) {
+    async fn on_mutation(
+        &self,
+        mutation: &Mutation<'_>,
+        _actor: &norte_core::journal::Actor,
+    ) -> Result<(), norte_proto::Error> {
         let repr = match mutation {
             Mutation::Created(p) => format!("created:{}", p.display_lossy()),
             Mutation::Removed(p) => format!("removed:{}", p.display_lossy()),
@@ -83,6 +87,7 @@ impl MutationObserver for RecordingObserver {
             }
         };
         self.events.lock().expect("events lock sano").push(repr);
+        Ok(())
     }
 }
 

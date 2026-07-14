@@ -25,14 +25,29 @@ storage y la costura real.
   (regla 4 — journal durable antes del ack). Consecuencia: migrar los
   call-sites de `ops.rs`.
 - **hash-chain propia** (sha2, ya en el árbol): `entry_hash =
-  sha256(prev_hash ‖ campos con longitud prefijada)`. Tamper-evident → base del
-  audit export (M3-5).
+  sha256(prev_hash ‖ campos con longitud prefijada y byte de presencia)`.
+  **Alcance honesto de la integridad**: detecta corrupción y ediciones INGENUAS
+  (las que no recomputan la cadena). NO es tamper-evidence frente a un atacante
+  con acceso de escritura a la DB — reescritura total, truncación de COLA y
+  rollback pasan `verify_chain` (keyless, genesis fijo). La evidencia real
+  (firma/anclaje del head) es audit **M3-5** (issue #63). Hasta entonces, no
+  presentar la garantía como tamper-evidence.
 
 ## Consecuencias
 
 Dep estructural nueva (sqlx + su árbol de deps). Positivo: un solo motor para
 journal/index/tags/embeddings (spec §4), ops/backup/tests simples. Negativas /
-deuda: los inserts se serializan (un escritor bajo `Mutex`) — aceptable (el
-journal no es el cuello de botella); si duele, batch. Licencias de sqlx a
-revisar en `cargo deny` (MIT/Apache esperado). El `seq` lo asigna la app
-(monótono) porque el hash lo incluye — no se delega al rowid de SQLite.
+deuda:
+
+- Los inserts se serializan (un escritor bajo `Mutex`) — aceptable (el journal
+  no es el cuello de botella); si duele, batch. El `seq` se asigna DENTRO del
+  lock (junto al encadenado) para que orden-seq == orden-hash; delegarlo al
+  rowid rompería la cadena bajo concurrencia.
+- **Durabilidad**: WAL + `synchronous=NORMAL` NO hace fsync por commit ante
+  crash de OS/energía → una mutación recién ack-eada puede perder su entrada.
+  «Durable antes del ack» es durabilidad de proceso, no de crash. Si el audit
+  exige fsync duro, `synchronous=FULL` (coste) — decisión de M3-5.
+- **Permisos**: el fichero se crea `0600` en unix (contiene metadatos de rutas,
+  security-review). Los sidecars `-wal`/`-shm` heredan; el directorio per-user
+  `0700` es responsabilidad del daemon.
+- Licencias de sqlx verificadas en `cargo deny check licenses` (ok).
