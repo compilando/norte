@@ -3758,6 +3758,7 @@ dependencies = [
  "norte-vfs-ftp",
  "norte-vfs-object",
  "norte-vfs-sftp",
+ "opendal",
  "rand 0.10.2",
  "russh",
  "russh-sftp",

@@ -46,6 +46,8 @@ toml.workspace = true
 unftp-sbe-fs.workspace = true
 bytes.workspace = true
 norte-testkit.workspace = true
+# E2E del criterio de salida M2 (fase 10b): object-fs como remoto S3 stand-in.
+opendal = { workspace = true, features = ["services-fs"] }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time", "test-util"] }
 
 [lints]
