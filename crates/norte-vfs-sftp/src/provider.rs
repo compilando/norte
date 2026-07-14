@@ -439,8 +439,7 @@ impl Provider for SftpProvider {
         // Reloj de pared + contador de sesión → id único y ordenable.
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-            .unwrap_or(0);
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
         let counter = self.trash_counter.fetch_add(1, Ordering::Relaxed);
         let id = trash::trash_id(now_ms, counter);
         let paths = trash::plan(p, &id)?;
