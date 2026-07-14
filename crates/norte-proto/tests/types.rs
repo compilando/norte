@@ -628,14 +628,74 @@ fn fs_list_result_tolera_next_cursor_ausente() {
 }
 
 #[test]
+fn agent_session_optional_roundtrip() {
+    use norte_proto::methods::InitializeParams;
+    // Ausente = None (frontend humano); un cliente 0.10 no lo envía.
+    let humano: InitializeParams = serde_json::from_str(
+        r#"{"client_info":{"name":"tui","version":"1"},"protocol_version":"0.11.0"}"#,
+    )
+    .expect("sin agent_session");
+    assert_eq!(humano.agent_session, None);
+    // Presente = sesión de agente.
+    let agente = InitializeParams {
+        client_info: norte_proto::methods::ClientInfo {
+            name: "mcp".into(),
+            version: "1".into(),
+        },
+        protocol_version: "0.11.0".into(),
+        encodings: vec![],
+        agent_session: Some("s1".into()),
+    };
+    let wire = serde_json::to_string(&agente).unwrap();
+    assert!(wire.contains("\"agent_session\":\"s1\""));
+    let back: InitializeParams = serde_json::from_str(&wire).unwrap();
+    assert_eq!(back.agent_session.as_deref(), Some("s1"));
+}
+
+#[test]
+fn policy_types_roundtrip() {
+    use norte_proto::methods::{
+        PolicyApprovalRequired, PolicyDecideParams, RequestScopeParams, RequestScopeResult,
+    };
+    let req = RequestScopeParams {
+        session: "s1".into(),
+        roots: vec![VPath::parse("file:///work").unwrap()],
+        ops: vec!["copy".into(), "delete".into()],
+        ttl_ms: 60_000,
+    };
+    let back: RequestScopeParams =
+        serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+    assert_eq!(back, req);
+    assert_eq!(
+        serde_json::from_str::<RequestScopeResult>(r#"{"request_id":3}"#)
+            .unwrap()
+            .request_id,
+        3
+    );
+    let ar = PolicyApprovalRequired {
+        approval_id: 7,
+        session: Some("s1".into()),
+        op: "delete".into(),
+        paths: vec!["file:///work/x".into()],
+        ttl_ms: 30_000,
+    };
+    let back: PolicyApprovalRequired =
+        serde_json::from_str(&serde_json::to_string(&ar).unwrap()).unwrap();
+    assert_eq!(back, ar);
+    let dec: PolicyDecideParams =
+        serde_json::from_str(r#"{"approval_id":7,"approve":true}"#).unwrap();
+    assert!(dec.approve);
+}
+
+#[test]
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.10.0 (M3-2): acepta 0.10.x (N) y 0.9.x (N-1), rechaza 0.8.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.10.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.9.0"), "N-1");
+    // 0.11.0 (M3-3b): acepta 0.11.x (N) y 0.10.x (N-1), rechaza 0.9.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.11.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.10.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.8.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.9.9"),
         "N-2 fuera de la ventana"
     );
 }

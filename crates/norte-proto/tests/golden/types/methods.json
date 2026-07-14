@@ -170,5 +170,45 @@
   },
   "task_list_result_vacio": {
     "tasks": []
+  },
+  "initialize_params_agent": {
+    "client_info": { "name": "mcp", "version": "1" },
+    "protocol_version": "0.11.0",
+    "encodings": [],
+    "agent_session": "s1"
+  },
+  "request_scope_params": {
+    "session": "s1",
+    "roots": ["file:///work"],
+    "ops": ["copy", "delete"],
+    "ttl_ms": 60000
+  },
+  "request_scope_result": { "request_id": 3 },
+  "grant_scope_params": { "request_id": 3 },
+  "grant_scope_result": {},
+  "policy_approval_required": {
+    "approval_id": 7,
+    "session": "s1",
+    "op": "delete",
+    "paths": ["file:///work/x"],
+    "ttl_ms": 30000
+  },
+  "policy_decide_params": { "approval_id": 7, "approve": true },
+  "policy_decide_result": {},
+  "pending_approval": {
+    "approval_id": 7,
+    "session": "s1",
+    "op": "delete",
+    "paths": ["file:///work/x"]
+  },
+  "policy_pending_result": {
+    "pending": [
+      {
+        "approval_id": 7,
+        "session": "s1",
+        "op": "delete",
+        "paths": ["file:///work/x"]
+      }
+    ]
   }
 }

@@ -351,7 +351,93 @@ fn golden_methods() {
     check_methods_daemon(&fixtures);
     check_methods_v05(&fixtures);
     check_methods_connection(&fixtures);
-    assert_eq!(fixtures.len(), 31, "[methods.json] fixtures sin caso Rust");
+    check_methods_policy(&fixtures);
+    assert_eq!(fixtures.len(), 41, "[methods.json] fixtures sin caso Rust");
+}
+
+/// Familia policy.* (0.11.0, M3-3b): scopes + aprobaciones + `agent_session`.
+fn check_methods_policy(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{
+        ClientInfo, GrantScopeParams, GrantScopeResult, InitializeParams, PendingApproval,
+        PolicyApprovalRequired, PolicyDecideParams, PolicyDecideResult, PolicyPendingResult,
+        RequestScopeParams, RequestScopeResult,
+    };
+    check_one(
+        fixtures,
+        "initialize_params_agent",
+        &InitializeParams {
+            client_info: ClientInfo {
+                name: "mcp".into(),
+                version: "1".into(),
+            },
+            protocol_version: "0.11.0".into(),
+            encodings: vec![],
+            agent_session: Some("s1".into()),
+        },
+    );
+    check_one(
+        fixtures,
+        "request_scope_params",
+        &RequestScopeParams {
+            session: "s1".into(),
+            roots: vec![vpath("file:///work")],
+            ops: vec!["copy".into(), "delete".into()],
+            ttl_ms: 60_000,
+        },
+    );
+    check_one(
+        fixtures,
+        "request_scope_result",
+        &RequestScopeResult { request_id: 3 },
+    );
+    check_one(
+        fixtures,
+        "grant_scope_params",
+        &GrantScopeParams { request_id: 3 },
+    );
+    check_one(fixtures, "grant_scope_result", &GrantScopeResult {});
+    check_one(
+        fixtures,
+        "policy_approval_required",
+        &PolicyApprovalRequired {
+            approval_id: 7,
+            session: Some("s1".into()),
+            op: "delete".into(),
+            paths: vec!["file:///work/x".into()],
+            ttl_ms: 30_000,
+        },
+    );
+    check_one(
+        fixtures,
+        "policy_decide_params",
+        &PolicyDecideParams {
+            approval_id: 7,
+            approve: true,
+        },
+    );
+    check_one(fixtures, "policy_decide_result", &PolicyDecideResult {});
+    check_one(
+        fixtures,
+        "pending_approval",
+        &PendingApproval {
+            approval_id: 7,
+            session: Some("s1".into()),
+            op: "delete".into(),
+            paths: vec!["file:///work/x".into()],
+        },
+    );
+    check_one(
+        fixtures,
+        "policy_pending_result",
+        &PolicyPendingResult {
+            pending: vec![PendingApproval {
+                approval_id: 7,
+                session: Some("s1".into()),
+                op: "delete".into(),
+                paths: vec!["file:///work/x".into()],
+            }],
+        },
+    );
 }
 
 /// Familia connection.* (0.7.0, fase 6): `trust_host_key` del flujo TOFU.
@@ -527,6 +613,7 @@ fn check_methods_daemon(fixtures: &BTreeMap<String, Value>) {
             },
             protocol_version: "0.4.0".into(),
             encodings: vec!["json".into()],
+            agent_session: None,
         },
     );
     check_one(
@@ -735,8 +822,8 @@ fn method_names_frozen() {
     );
     assert_eq!(methods::FS_READ_MAX_CHUNK, 8 * 1024 * 1024);
     assert_eq!(methods::FS_LIST_MAX_PAGE, 10_000);
-    // 0.10.0: TaskKind::Undo + Unknown forward-compat (M3-2). Aditivo sobre 0.9.x.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.10.0");
+    // 0.11.0: policy engine por el protocolo (M3-3b). Aditivo sobre 0.10.x.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.11.0");
 }
 
 #[test]

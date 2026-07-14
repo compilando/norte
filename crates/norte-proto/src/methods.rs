@@ -44,7 +44,12 @@ use crate::{
 /// 0.10.0 (M3-2): `TaskKind::Undo` + `TaskKind::Unknown` (forward-compat, como
 /// `TaskState::Unknown`). Aditivo sobre 0.9.x; el bump señala que el server sabe
 /// emitir Tasks de undo de sesión.
-pub const PROTOCOL_VERSION: &str = "0.10.0";
+///
+/// 0.11.0 (M3-3b): policy engine por el protocolo — `InitializeParams.
+/// agent_session` (liga la conexión a una sesión de agente) + métodos
+/// `policy.request_scope`/`grant_scope`/`decide`/`pending` + notificación
+/// `policy.approval_required`. Aditivo sobre 0.10.x.
+pub const PROTOCOL_VERSION: &str = "0.11.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -154,6 +159,17 @@ pub const TASK_CANCEL: &str = "task.cancel";
 pub const CONNECTION_TRUST_HOST_KEY: &str = "connection.trust_host_key";
 /// `task.progress` — notificación server→client, coalescida (≤30 Hz).
 pub const TASK_PROGRESS: &str = "task.progress";
+/// `policy.request_scope` — un agente pide un scope (rutas+ops+TTL, M3-3b).
+pub const POLICY_REQUEST_SCOPE: &str = "policy.request_scope";
+/// `policy.grant_scope` — un humano concede un scope pendiente.
+pub const POLICY_GRANT_SCOPE: &str = "policy.grant_scope";
+/// `policy.decide` — un humano aprueba/deniega una aprobación pendiente.
+pub const POLICY_DECIDE: &str = "policy.decide";
+/// `policy.pending` — lista de aprobaciones pendientes (resync).
+pub const POLICY_PENDING: &str = "policy.pending";
+/// `policy.approval_required` — notificación server→client: una op `ask`
+/// espera decisión (M3-3b).
+pub const POLICY_APPROVAL_REQUIRED: &str = "policy.approval_required";
 
 /// Params de [`FS_LIST`] (paginación por cursor desde 0.8.0, ADR 0017).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -296,6 +312,12 @@ pub struct InitializeParams {
     /// kickoff: negociado-pero-solo-JSON).
     #[serde(default)]
     pub encodings: Vec<String>,
+    /// Si presente, la conexión actúa como SESIÓN DE AGENTE con este id: sus
+    /// mutaciones se evalúan por el policy engine (M3-3). Ausente = frontend
+    /// humano (`User`, sin sandbox). El servidor liga el actor a la conexión;
+    /// un cliente no puede declararse `User` por otra vía.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_session: Option<String>,
 }
 
 /// Result de [`INITIALIZE`].
@@ -435,4 +457,88 @@ pub struct ConnectionTrustHostKeyResult {
     /// `true` si la clave quedó registrada (idempotente: `true` también si ya
     /// estaba). `false` reservado para un futuro rechazo por política.
     pub trusted: bool,
+}
+
+/// Params de [`POLICY_REQUEST_SCOPE`] (M3-3b): un agente pide un scope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestScopeParams {
+    /// Sesión de agente que pide (debe coincidir con la de la conexión).
+    pub session: String,
+    /// Raíces solicitadas (contención por subtree-prefix).
+    pub roots: Vec<VPath>,
+    /// Op-kinds solicitados (`copy|move|delete|mkdir`).
+    pub ops: Vec<String>,
+    /// TTL solicitado en milisegundos.
+    pub ttl_ms: u64,
+}
+
+/// Result de [`POLICY_REQUEST_SCOPE`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestScopeResult {
+    /// Id de la petición, para que un humano la conceda con `policy.grant_scope`.
+    pub request_id: u64,
+}
+
+/// Params de [`POLICY_GRANT_SCOPE`] (un humano concede una petición pendiente).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrantScopeParams {
+    /// Id devuelto por `policy.request_scope`.
+    pub request_id: u64,
+}
+
+/// Result de [`POLICY_GRANT_SCOPE`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrantScopeResult {}
+
+/// Notificación [`POLICY_APPROVAL_REQUIRED`] (server→client): una op `ask`
+/// espera decisión. Las rutas van REDACTADAS si llevan userinfo (regla 10).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyApprovalRequired {
+    /// Id para responder con `policy.decide`.
+    pub approval_id: u64,
+    /// Sesión de agente que pidió la op (si aplica).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// Op-kind (`copy|move|delete|mkdir`).
+    pub op: String,
+    /// Rutas implicadas (wire, redactadas). SOLO display: jamás se reparsan a
+    /// una operación — la op real va ligada server-side por `approval_id`.
+    pub paths: Vec<String>,
+    /// TTL de la aprobación en milisegundos.
+    pub ttl_ms: u64,
+}
+
+/// Params de [`POLICY_DECIDE`] (un humano aprueba/deniega).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyDecideParams {
+    /// Id de la aprobación pendiente.
+    pub approval_id: u64,
+    /// `true` = aprobar, `false` = denegar.
+    pub approve: bool,
+}
+
+/// Result de [`POLICY_DECIDE`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyDecideResult {}
+
+/// Una aprobación pendiente (elemento de [`PolicyPendingResult`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingApproval {
+    /// Id para responder con `policy.decide`.
+    pub approval_id: u64,
+    /// Sesión de agente que pidió la op (si aplica).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// Op-kind.
+    pub op: String,
+    /// Rutas implicadas (wire, redactadas). SOLO display: jamás se reparsan a
+    /// una operación — la op real va ligada server-side por `approval_id`.
+    pub paths: Vec<String>,
+}
+
+/// Result de [`POLICY_PENDING`] (resync de aprobaciones pendientes).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyPendingResult {
+    /// Aprobaciones pendientes.
+    pub pending: Vec<PendingApproval>,
 }

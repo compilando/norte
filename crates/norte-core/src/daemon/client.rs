@@ -203,6 +203,7 @@ impl Client {
                 client_info,
                 protocol_version: methods::PROTOCOL_VERSION.into(),
                 encodings: vec!["json".into()],
+                agent_session: None,
             },
         )
         .await
