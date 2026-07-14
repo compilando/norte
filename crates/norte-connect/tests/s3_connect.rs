@@ -55,6 +55,7 @@ fn spec_access_key(addr: SocketAddr) -> ConnectionSpec {
         endpoint: Some(format!("http://{addr}")),
         access_key_id: Some(AK.to_string()),
         addressing: Some(norte_connect::AddressingStyle::Path),
+        logical_trash: false,
     }
 }
 
@@ -149,6 +150,7 @@ async fn region_ausente_sin_endpoint_es_error() {
         endpoint: None, // AWS
         access_key_id: Some(AK.to_string()),
         addressing: None,
+        logical_trash: false,
     };
     let secret = Secret::new(SK.to_string());
     let err = S3Connector::new()

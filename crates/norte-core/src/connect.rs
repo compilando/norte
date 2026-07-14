@@ -170,7 +170,9 @@ impl ConnectionManager {
                     .await
                     .map_err(log_and_map)?;
                 // Base "/": los segmentos del VPath son absolutos del server.
-                Ok(Arc::new(SftpProvider::new(session, "/")))
+                Ok(Arc::new(
+                    SftpProvider::new(session, "/").with_logical_trash(spec.logical_trash),
+                ))
             }
             "ftp" => {
                 // DOS conexiones: control principal + lectura dedicada — la
@@ -253,6 +255,7 @@ fn resolve_spec(
         endpoint: None,
         access_key_id: None,
         addressing: None,
+        logical_trash: false,
     };
     let target = ad_hoc.endpoint()?;
     for (name, spec) in &file.connections {
@@ -465,6 +468,7 @@ mod tests {
             endpoint: None,
             access_key_id: None,
             addressing: None,
+            logical_trash: false,
         }
     }
 

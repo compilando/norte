@@ -64,6 +64,10 @@ pub struct ConnectionSpec {
     /// (AWS), path con endpoint custom (convención `MinIO`).
     #[serde(default)]
     pub addressing: Option<AddressingStyle>,
+    /// Papelera lógica `.norte-trash/` en esta conexión (ADR 0019). Off por
+    /// defecto: el borrado degrada a permanente con aviso del frontend.
+    #[serde(default)]
+    pub logical_trash: bool,
 }
 
 /// Cómo autenticarse.
@@ -273,6 +277,20 @@ impl ConnectionsFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logical_trash_defaults_off_and_parses() {
+        // Ausente → false (default seguro, ADR 0019).
+        let f: ConnectionsFile =
+            toml::from_str("[connections.a]\nurl = \"sftp://h\"\n").expect("parse");
+        assert!(!f.connections["a"].logical_trash);
+
+        // Presente → true.
+        let f: ConnectionsFile =
+            toml::from_str("[connections.b]\nurl = \"sftp://h\"\nlogical_trash = true\n")
+                .expect("parse");
+        assert!(f.connections["b"].logical_trash);
+    }
 
     #[test]
     fn parse_connections_toml() {
