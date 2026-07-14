@@ -119,19 +119,23 @@ impl Engine {
     }
 
     /// Evalúa la policy PRE-efecto; un `Ask` suspende hasta aprobación. `Err`
-    /// [`Error::PermissionDenied`] si se deniega (en M3-3b será `PolicyDenied`).
+    /// [`Error::PolicyDenied`] con la causa (`rule`) si se deniega — el wire lo
+    /// distingue de un `PermissionDenied` del OS/provider (M3-3b).
     async fn gate(
         &self,
         actor: &crate::journal::Actor,
         op: crate::policy::PolicyOp,
         paths: &[&VPath],
     ) -> Result<(), Error> {
-        use crate::policy::Decision;
+        use crate::policy::{Decision, DenyReason};
+        let denied = |reason: DenyReason| Error::PolicyDenied {
+            rule: reason.rule_id().to_owned(),
+        };
         match self.policy.evaluate(actor, op, paths) {
             Decision::Allow => Ok(()),
             Decision::Deny(reason) => {
                 tracing::info!(?reason, op = op.kind(), "policy denegó la operación");
-                Err(Error::PermissionDenied)
+                Err(denied(reason))
             }
             Decision::Ask => {
                 let req = crate::approval::ApprovalRequest {
@@ -142,7 +146,9 @@ impl Engine {
                 match self.approvals.request(req).await {
                     crate::approval::ApprovalOutcome::Approved => Ok(()),
                     crate::approval::ApprovalOutcome::Denied
-                    | crate::approval::ApprovalOutcome::TimedOut => Err(Error::PermissionDenied),
+                    | crate::approval::ApprovalOutcome::TimedOut => {
+                        Err(denied(DenyReason::NotApproved))
+                    }
                 }
             }
         }
@@ -337,7 +343,7 @@ impl Engine {
     /// policy PRE-efecto y registra el actor real en el journal.
     ///
     /// # Errors
-    /// [`Error::PermissionDenied`] si la policy deniega; [`Error::Unsupported`]
+    /// [`Error::PolicyDenied`] si la policy deniega; [`Error::Unsupported`]
     /// si algún scheme no tiene provider registrado.
     #[tracing::instrument(skip(self, actor), fields(from = %span_path(from), to = %span_path(to)))]
     pub async fn copy_with_as(
@@ -395,7 +401,7 @@ impl Engine {
     /// Move con políticas y ACTOR explícito (camino agéntico, M3-3).
     ///
     /// # Errors
-    /// [`Error::PermissionDenied`] si la policy deniega; [`Error::Unsupported`]
+    /// [`Error::PolicyDenied`] si la policy deniega; [`Error::Unsupported`]
     /// si algún scheme no tiene provider registrado.
     #[tracing::instrument(skip(self, actor), fields(from = %span_path(from), to = %span_path(to)))]
     pub async fn move_with_as(
@@ -449,7 +455,7 @@ impl Engine {
     /// Borrado con modo y ACTOR explícito (camino agéntico, M3-3).
     ///
     /// # Errors
-    /// [`Error::PermissionDenied`] si la policy deniega; [`Error::Unsupported`]
+    /// [`Error::PolicyDenied`] si la policy deniega; [`Error::Unsupported`]
     /// si el scheme no tiene provider registrado.
     #[tracing::instrument(skip(self, actor), fields(path = %span_path(path), ?mode))]
     pub async fn delete_with_as(

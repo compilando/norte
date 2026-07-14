@@ -102,10 +102,17 @@ pub enum Error {
     /// Cancelado por el usuario o por shutdown; estado limpio garantizado.
     #[error("cancelled")]
     Cancelled,
-    /// El policy engine denegó la operación (agentes/plugins, M4).
+    /// El policy engine denegó la operación (agentes/plugins, M3-3).
     #[error("denied by policy rule `{rule}`")]
     PolicyDenied {
-        /// Identificador de la regla que denegó.
+        /// Categoría GRUESA de la causa de denegación — NO el identificador de
+        /// la regla concreta de `policy.toml` (que no se filtra, por
+        /// seguridad). Vocabulario cerrado, comparable por igualdad:
+        /// `"out-of-scope"` (ruta/op fuera del scope del agente),
+        /// `"scope-expired"` (el scope aplicable venció),
+        /// `"policy-rule"` (una regla `deny` de `policy.toml` hizo match),
+        /// `"no-rule"` (fail-closed: dentro del scope pero sin regla que
+        /// aplique), `"not-approved"` (un `ask` fue denegado o su TTL venció).
         rule: String,
     },
     /// Una transcodificación habría perdido datos y se abortó.

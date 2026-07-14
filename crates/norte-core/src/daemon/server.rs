@@ -430,6 +430,12 @@ impl Drop for ListingGuard {
 /// es serial (se awaitea inline), sin concurrencia: basta `&mut`.
 struct ConnState {
     initialized: bool,
+    /// Actor bajo el que se journaliza y se evalúa la policy TODA mutación de
+    /// esta conexión (M3-3b). `User` por defecto (frontend humano, sin
+    /// sandbox); pasa a `Agent { session }` si el `initialize` trae
+    /// `agent_session`. Lo fija SOLO el servidor en el handshake: un cliente
+    /// jamás puede declararse `User` por otra vía.
+    actor: crate::journal::Actor,
     listings: HashMap<u64, OpenListing>,
     next_listing_id: u64,
 }
@@ -438,6 +444,7 @@ impl ConnState {
     fn new() -> Self {
         Self {
             initialized: false,
+            actor: crate::journal::Actor::User,
             listings: HashMap::new(),
             next_listing_id: 0,
         }
@@ -835,6 +842,12 @@ async fn dispatch(
                     "only supported encoding: json",
                 ));
             }
+            // El servidor liga el actor a la conexión (deuda M3 de 3a): una
+            // conexión con `agent_session` ES una sesión de agente y se
+            // sandboxea; sin él es `User` (humano). No es declarable al revés.
+            if let Some(session) = p.agent_session {
+                conn.actor = crate::journal::Actor::Agent { session };
+            }
             conn.initialized = true;
             to_value(&methods::InitializeResult {
                 server_info: methods::ServerInfo {
@@ -866,13 +879,16 @@ async fn dispatch(
             let p: methods::FsListParams = parse_params(req.params)?;
             handle_fs_list(p, conn, shared).await
         }
-        _ => dispatch_fs_task(req, shared).await,
+        _ => dispatch_fs_task(req, conn.actor.clone(), shared).await,
     }
 }
 
-/// Las familias `fs.*`/`task.*` del dispatch (separadas por tamaño).
+/// Las familias `fs.*`/`task.*` del dispatch (separadas por tamaño). El
+/// `actor` viene de la conexión (M3-3b): las mutaciones se journalizan y
+/// evalúan bajo él.
 async fn dispatch_fs_task(
     req: Request,
+    actor: crate::journal::Actor,
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
     match req.method.as_str() {
@@ -891,7 +907,7 @@ async fn dispatch_fs_task(
             };
             let handle = shared
                 .engine
-                .copy_with(&p.from, &p.to, opts)
+                .copy_with_as(&p.from, &p.to, opts, actor)
                 .await
                 .map_err(RpcError::from)?;
             register_task(shared, handle)
@@ -906,7 +922,7 @@ async fn dispatch_fs_task(
             };
             let handle = shared
                 .engine
-                .move_with(&p.from, &p.to, opts)
+                .move_with_as(&p.from, &p.to, opts, actor)
                 .await
                 .map_err(RpcError::from)?;
             register_task(shared, handle)
@@ -915,7 +931,7 @@ async fn dispatch_fs_task(
             let p: methods::FsDeleteParams = parse_params(req.params)?;
             let handle = shared
                 .engine
-                .delete_with(&p.path, p.mode)
+                .delete_with_as(&p.path, p.mode, actor)
                 .await
                 .map_err(RpcError::from)?;
             register_task(shared, handle)

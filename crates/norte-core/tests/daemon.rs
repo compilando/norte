@@ -8,8 +8,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use norte_core::Engine;
+use norte_core::approval::DenyAll;
 use norte_core::daemon::{Client, ClientError, Daemon, DaemonConfig, DaemonError};
+use norte_core::{Engine, PolicyConfig, ScopeRegistry, ScopedPolicy};
 use norte_proto::methods::{
     self, ClientInfo, DaemonShutdownParams, DaemonShutdownResult, FsCopyParams, FsListParams,
     FsListResult, FsStatParams, FsStatResult, FsTaskResult, InitializeParams, TaskCancelParams,
@@ -82,6 +83,54 @@ async fn connected_client(d: &TestDaemon) -> Client {
     let init = c.initialize(client_info()).await.expect("initialize");
     assert_eq!(init.protocol_version, methods::PROTOCOL_VERSION);
     assert_eq!(init.encodings, vec!["json".to_string()]);
+    c
+}
+
+/// Daemon con `ScopedPolicy` instalada (registro de scopes VACÍO, sin reglas):
+/// un `User` pasa (no se sandboxea), un `Agent` sin scope se deniega. Base de
+/// la matriz de actor por conexión (M3-3b, Task 2).
+async fn spawn_daemon_policy() -> TestDaemon {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    let policy = ScopedPolicy::new(ScopeRegistry::new(), PolicyConfig::default());
+    let engine = Arc::new(Engine::new().with_policy(Arc::new(policy), Arc::new(DenyAll)));
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    let daemon = Daemon::bind(
+        engine,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+        },
+    )
+    .await
+    .expect("bind");
+    let run = tokio::spawn(daemon.run());
+    TestDaemon {
+        socket,
+        run,
+        _dir: dir,
+        mem,
+    }
+}
+
+/// Abre una conexión que declara `agent_session`: el servidor la liga a un
+/// `Actor::Agent` y sandboxea sus mutaciones (M3-3b).
+async fn connected_agent(d: &TestDaemon, session: &str) -> Client {
+    let c = Client::connect(&d.socket).await.expect("connect");
+    let _init: methods::InitializeResult = c
+        .call(
+            methods::INITIALIZE,
+            &InitializeParams {
+                client_info: client_info(),
+                protocol_version: methods::PROTOCOL_VERSION.into(),
+                encodings: vec!["json".into()],
+                agent_session: Some(session.into()),
+            },
+        )
+        .await
+        .expect("initialize agente");
     c
 }
 
@@ -424,6 +473,57 @@ async fn fs_stat_de_inexistente_viaja_como_taxonomia_en_data() {
         }
         other => panic!("esperaba Rpc con data, fue {other:?}"),
     }
+}
+
+/// M3-3b Task 2: el actor lo fija la conexión. Un cliente-agente sin scope ve
+/// su `fs.copy` denegado por policy (taxonomía `PolicyDenied`, NO
+/// `PermissionDenied`) y el FS queda intacto; un cliente humano (sin
+/// `agent_session`) copia sin gate.
+#[tokio::test]
+async fn agente_sin_scope_ve_policy_denied_humano_copia() {
+    let d = spawn_daemon_policy().await;
+    write_file(&d.mem, "mem:///src.txt", b"hola").await;
+    let copy = |from: &str, to: &str| FsCopyParams {
+        from: vp(from),
+        to: vp(to),
+        on_collision: norte_proto::CollisionPolicy::default(),
+        symlinks: norte_proto::SymlinkPolicy::default(),
+        resume: norte_proto::ResumePolicy::default(),
+        verify: norte_proto::VerifyPolicy::default(),
+    };
+
+    // Agente sin scope: denegado por policy, sin tocar el FS.
+    let agent = connected_agent(&d, "s1").await;
+    let err = agent
+        .call::<_, FsTaskResult>(methods::FS_COPY, &copy("mem:///src.txt", "mem:///a.txt"))
+        .await
+        .expect_err("agente sin scope: denegado");
+    match err {
+        ClientError::Rpc(rpc) => {
+            assert_eq!(rpc.code, codes::APP_ERROR);
+            assert!(
+                matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
+                "PolicyDenied out-of-scope, fue {:?}",
+                rpc.data
+            );
+        }
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+    assert!(
+        matches!(
+            d.mem.stat(&vp("mem:///a.txt")).await,
+            Err(norte_proto::Error::NotFound)
+        ),
+        "el gate PRE-efecto no tocó el destino"
+    );
+
+    // Humano (sin agent_session): copia aceptada, la Task se encola.
+    let human = connected_client(&d).await;
+    let res: FsTaskResult = human
+        .call(methods::FS_COPY, &copy("mem:///src.txt", "mem:///h.txt"))
+        .await
+        .expect("humano copia sin gate");
+    assert!(res.task_id.get() > 0);
 }
 
 /// `connection.trust_host_key` (0.7.0, fase 6e) existe en el dispatch y

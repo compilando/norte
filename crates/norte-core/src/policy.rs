@@ -222,6 +222,24 @@ pub enum DenyReason {
     NotApproved,
 }
 
+impl DenyReason {
+    /// Identificador estable de la causa, tal como viaja en
+    /// [`norte_proto::Error::PolicyDenied`]`.rule` por el wire (M3-3b). El
+    /// cliente lo compara por igualdad, jamás parsea texto libre. El conjunto
+    /// es CERRADO y contractual: su enumeración autoritativa vive en el rustdoc
+    /// de `PolicyDenied.rule`; cambiar un string aquí es cambio de wire.
+    #[must_use]
+    pub fn rule_id(self) -> &'static str {
+        match self {
+            DenyReason::OutOfScope => "out-of-scope",
+            DenyReason::ScopeExpired => "scope-expired",
+            DenyReason::PolicyRule => "policy-rule",
+            DenyReason::NoRule => "no-rule",
+            DenyReason::NotApproved => "not-approved",
+        }
+    }
+}
+
 /// El gate que consulta el engine antes de cada mutación.
 pub trait PolicyGate: Send + Sync {
     /// Decide para (actor, op, rutas). TODAS las rutas deben pasar la frontera.
@@ -298,6 +316,17 @@ mod tests {
             &[&vp("file:///x")],
         );
         assert!(matches!(d, Decision::Allow));
+    }
+
+    #[test]
+    fn deny_reason_rule_ids_are_the_closed_wire_vocabulary() {
+        // Pin del conjunto CERRADO que viaja en PolicyDenied.rule: renombrar
+        // cualquiera es cambio de wire y debe romper aquí (no en silencio).
+        assert_eq!(DenyReason::OutOfScope.rule_id(), "out-of-scope");
+        assert_eq!(DenyReason::ScopeExpired.rule_id(), "scope-expired");
+        assert_eq!(DenyReason::PolicyRule.rule_id(), "policy-rule");
+        assert_eq!(DenyReason::NoRule.rule_id(), "no-rule");
+        assert_eq!(DenyReason::NotApproved.rule_id(), "not-approved");
     }
 
     #[test]

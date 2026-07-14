@@ -78,7 +78,10 @@ async fn agent_out_of_scope_copy_is_denied_without_touching_fs() {
         .await
         .err()
         .expect("denegada");
-    assert!(matches!(err, Error::PermissionDenied));
+    assert!(
+        matches!(err, Error::PolicyDenied { ref rule } if rule == "out-of-scope"),
+        "policy fuera-de-scope: {err:?}"
+    );
     assert!(
         matches!(mem.stat(&vp("mem:///dst.txt")).await, Err(Error::NotFound)),
         "no tocó el FS"
@@ -141,7 +144,10 @@ async fn ask_denied_by_resolver_blocks_the_op() {
         .await
         .err()
         .expect("denegada");
-    assert!(matches!(err, Error::PermissionDenied));
+    assert!(
+        matches!(err, Error::PolicyDenied { ref rule } if rule == "not-approved"),
+        "Ask denegado por el resolver: {err:?}"
+    );
     assert!(matches!(
         mem.stat(&vp("mem:///dst.txt")).await,
         Err(Error::NotFound)
@@ -191,7 +197,7 @@ async fn undo_of_agent_is_blocked_when_reverse_op_denied_by_policy() {
     let r = report.lock().expect("lock").clone();
     assert_eq!(r.undone, 0, "el undo (delete) lo bloquea la policy");
     assert!(
-        matches!(r.blocked, Some((_, Error::PermissionDenied))),
+        matches!(&r.blocked, Some((_, Error::PolicyDenied { rule })) if rule == "policy-rule"),
         "bloqueado por policy: {:?}",
         r.blocked
     );
