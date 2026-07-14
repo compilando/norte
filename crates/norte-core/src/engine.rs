@@ -59,6 +59,13 @@ pub struct Engine {
     /// (el undo devuelve `Unsupported`). Es el MISMO objeto que `observer`
     /// cuando se construye con [`Self::with_journal`].
     journal: Option<Arc<crate::journal::SqliteJournal>>,
+    /// Gate de policy consultado PRE-efecto en cada mutación (M3-3). Default
+    /// [`AllowAll`](crate::policy::AllowAll): el engine embebido/humano no se
+    /// sandboxea salvo que se instale una policy con [`Self::with_policy`].
+    policy: Arc<dyn crate::policy::PolicyGate>,
+    /// Resuelve un `Ask` de policy. Default [`DenyAll`](crate::approval::DenyAll)
+    /// (headless fail-closed).
+    approvals: Arc<dyn crate::approval::ApprovalResolver>,
 }
 
 impl Engine {
@@ -78,6 +85,8 @@ impl Engine {
             sched: Scheduler::new(4),
             observer,
             journal: None,
+            policy: Arc::new(crate::policy::AllowAll),
+            approvals: Arc::new(crate::approval::DenyAll),
         }
     }
 
@@ -91,6 +100,51 @@ impl Engine {
             sched: Scheduler::new(4),
             observer: Arc::clone(&journal) as Arc<dyn MutationObserver>,
             journal: Some(journal),
+            policy: Arc::new(crate::policy::AllowAll),
+            approvals: Arc::new(crate::approval::DenyAll),
+        }
+    }
+
+    /// Instala el gate de policy y el resolver de aprobaciones (M3-3): a partir
+    /// de aquí, las mutaciones de agentes se evalúan PRE-efecto.
+    #[must_use]
+    pub fn with_policy(
+        mut self,
+        policy: Arc<dyn crate::policy::PolicyGate>,
+        approvals: Arc<dyn crate::approval::ApprovalResolver>,
+    ) -> Self {
+        self.policy = policy;
+        self.approvals = approvals;
+        self
+    }
+
+    /// Evalúa la policy PRE-efecto; un `Ask` suspende hasta aprobación. `Err`
+    /// [`Error::PermissionDenied`] si se deniega (en M3-3b será `PolicyDenied`).
+    async fn gate(
+        &self,
+        actor: &crate::journal::Actor,
+        op: crate::policy::PolicyOp,
+        paths: &[&VPath],
+    ) -> Result<(), Error> {
+        use crate::policy::Decision;
+        match self.policy.evaluate(actor, op, paths) {
+            Decision::Allow => Ok(()),
+            Decision::Deny(reason) => {
+                tracing::info!(?reason, op = op.kind(), "policy denegó la operación");
+                Err(Error::PermissionDenied)
+            }
+            Decision::Ask => {
+                let req = crate::approval::ApprovalRequest {
+                    actor: actor.clone(),
+                    op,
+                    paths: paths.iter().map(|p| p.to_wire()).collect(),
+                };
+                match self.approvals.request(req).await {
+                    crate::approval::ApprovalOutcome::Approved => Ok(()),
+                    crate::approval::ApprovalOutcome::Denied
+                    | crate::approval::ApprovalOutcome::TimedOut => Err(Error::PermissionDenied),
+                }
+            }
         }
     }
 
@@ -264,17 +318,37 @@ impl Engine {
         self.copy_with(from, to, TransferOptions::default()).await
     }
 
-    /// Copia con políticas explícitas de colisión y symlinks (ADR 0005).
+    /// Copia con políticas explícitas de colisión y symlinks (ADR 0005), como
+    /// `User` (camino humano, sin sandbox).
     ///
     /// # Errors
     /// [`Error::Unsupported`] si algún scheme no tiene provider registrado.
-    #[tracing::instrument(skip(self), fields(from = %span_path(from), to = %span_path(to)))]
     pub async fn copy_with(
         &self,
         from: &VPath,
         to: &VPath,
         opts: TransferOptions,
     ) -> Result<TaskHandle, Error> {
+        self.copy_with_as(from, to, opts, crate::journal::Actor::User)
+            .await
+    }
+
+    /// Copia con políticas y ACTOR explícito (camino agéntico, M3-3): gatea por
+    /// policy PRE-efecto y registra el actor real en el journal.
+    ///
+    /// # Errors
+    /// [`Error::PermissionDenied`] si la policy deniega; [`Error::Unsupported`]
+    /// si algún scheme no tiene provider registrado.
+    #[tracing::instrument(skip(self, actor), fields(from = %span_path(from), to = %span_path(to)))]
+    pub async fn copy_with_as(
+        &self,
+        from: &VPath,
+        to: &VPath,
+        opts: TransferOptions,
+        actor: crate::journal::Actor,
+    ) -> Result<TaskHandle, Error> {
+        self.gate(&actor, crate::policy::PolicyOp::Copy, &[from, to])
+            .await?;
         let src = self.provider_for(from).await?;
         let dst = self.provider_for(to).await?;
         let observer = Arc::clone(&self.observer);
@@ -284,6 +358,7 @@ impl Engine {
             &key,
             TaskKind::Copy,
             Priority::Normal,
+            actor,
             Box::new(move |ctx| {
                 Box::pin(
                     async move { ops::copy_task(src, dst, from, to, opts, observer, &ctx).await },
@@ -302,17 +377,36 @@ impl Engine {
         self.move_with(from, to, TransferOptions::default()).await
     }
 
-    /// Move con políticas explícitas de colisión y symlinks (ADR 0005).
+    /// Move con políticas explícitas de colisión y symlinks (ADR 0005), como
+    /// `User`.
     ///
     /// # Errors
     /// [`Error::Unsupported`] si algún scheme no tiene provider registrado.
-    #[tracing::instrument(skip(self), fields(from = %span_path(from), to = %span_path(to)))]
     pub async fn move_with(
         &self,
         from: &VPath,
         to: &VPath,
         opts: TransferOptions,
     ) -> Result<TaskHandle, Error> {
+        self.move_with_as(from, to, opts, crate::journal::Actor::User)
+            .await
+    }
+
+    /// Move con políticas y ACTOR explícito (camino agéntico, M3-3).
+    ///
+    /// # Errors
+    /// [`Error::PermissionDenied`] si la policy deniega; [`Error::Unsupported`]
+    /// si algún scheme no tiene provider registrado.
+    #[tracing::instrument(skip(self, actor), fields(from = %span_path(from), to = %span_path(to)))]
+    pub async fn move_with_as(
+        &self,
+        from: &VPath,
+        to: &VPath,
+        opts: TransferOptions,
+        actor: crate::journal::Actor,
+    ) -> Result<TaskHandle, Error> {
+        self.gate(&actor, crate::policy::PolicyOp::Move, &[from, to])
+            .await?;
         let src = self.provider_for(from).await?;
         let dst = self.provider_for(to).await?;
         let observer = Arc::clone(&self.observer);
@@ -322,6 +416,7 @@ impl Engine {
             &key,
             TaskKind::Move,
             Priority::Normal,
+            actor,
             Box::new(move |ctx| {
                 Box::pin(
                     async move { ops::move_task(src, dst, from, to, opts, observer, &ctx).await },
@@ -346,8 +441,25 @@ impl Engine {
     ///
     /// # Errors
     /// [`Error::Unsupported`] si el scheme no tiene provider registrado.
-    #[tracing::instrument(skip(self), fields(path = %span_path(path), ?mode))]
     pub async fn delete_with(&self, path: &VPath, mode: DeleteMode) -> Result<TaskHandle, Error> {
+        self.delete_with_as(path, mode, crate::journal::Actor::User)
+            .await
+    }
+
+    /// Borrado con modo y ACTOR explícito (camino agéntico, M3-3).
+    ///
+    /// # Errors
+    /// [`Error::PermissionDenied`] si la policy deniega; [`Error::Unsupported`]
+    /// si el scheme no tiene provider registrado.
+    #[tracing::instrument(skip(self, actor), fields(path = %span_path(path), ?mode))]
+    pub async fn delete_with_as(
+        &self,
+        path: &VPath,
+        mode: DeleteMode,
+        actor: crate::journal::Actor,
+    ) -> Result<TaskHandle, Error> {
+        self.gate(&actor, crate::policy::PolicyOp::Delete { mode }, &[path])
+            .await?;
         let provider = self.provider_for(path).await?;
         let observer = Arc::clone(&self.observer);
         let path = path.clone();
@@ -356,6 +468,7 @@ impl Engine {
             &key,
             TaskKind::Delete,
             Priority::Normal,
+            actor,
             Box::new(move |ctx| {
                 Box::pin(
                     async move { ops::delete_task(provider, path, mode, observer, &ctx).await },
@@ -401,15 +514,18 @@ impl Engine {
     /// cancelable con progreso; el [`crate::UndoReport`] se llena en el
     /// `Arc<Mutex<…>>` devuelto y queda completo al terminar la Task.
     ///
-    /// El `actor` SELECCIONA qué sesión deshacer. El actor de las entradas
-    /// compensatorias es el de la Task (`User` en modo embebido = el humano que
-    /// dispara el undo); cuando M3-4 permita que un agente dispare su propio
-    /// undo habrá que threadear el actor ejecutor hasta el `TaskCtx`.
+    /// El `actor` SELECCIONA qué sesión deshacer Y actúa como ejecutor: el gate
+    /// de policy se evalúa con él y las compensaciones lo registran (así, un
+    /// agente que deshace su propia sesión queda sujeto a su scope/policy, y las
+    /// compensaciones llevan el actor real — cierra la deuda M2 de M3-2 para el
+    /// caso target==performer). El caso «humano deshace la sesión de un agente»
+    /// (performer ≠ target) necesitará un parámetro de ejecutor en M3-4.
     ///
-    /// DEUDA (M3-3): el undo NO pasa aún por el policy engine y resuelve
-    /// providers desde los schemes del propio journal — cuando exista policy,
-    /// el undo debe pasar por ella igual que las mutaciones normales (regla 9),
-    /// y no debe establecer conexiones remotas nuevas dirigidas por el journal.
+    /// El undo pasa por el gate de policy (M3-3, regla 9): cada reversa se evalúa
+    /// como su `PolicyOp` inverso ANTES de resolver el provider; una denegación
+    /// para el bucle LIFO (`report.blocked`). Gatear antes de `provider_for`
+    /// evita además establecer conexiones remotas dirigidas por el journal sin
+    /// pasar por policy.
     ///
     /// # Errors
     /// [`Error::Unsupported`] si el Engine no tiene journal ([`Self::with_journal`]),
@@ -429,23 +545,38 @@ impl Engine {
             .await
             .map_err(Error::from)?;
 
-        // Resuelve el provider de cada entrada ANTES de spawnear (el cuerpo de
-        // la Task es 'static y no puede tener `&self`).
+        let report = Arc::new(std::sync::Mutex::new(crate::UndoReport::default()));
+
+        // Planning: gatea cada reversa por policy y resuelve su provider ANTES de
+        // spawnear (el cuerpo de la Task es 'static y no puede tener `&self`).
+        // Gate → provider (para no conectar a schemes del journal sin policy).
         let mut plan: Vec<(crate::journal::JournalEntry, Arc<dyn Provider>)> =
             Vec::with_capacity(entries.len());
         for e in entries {
             let p = wire_engine(&e.path)?;
+            // Reversa de un Created BORRA → Delete; rename_back / restore_trash
+            // reubican → Move.
+            let undo_op = match e.reversal.as_str() {
+                "rename_back" | "restore_trash" => crate::policy::PolicyOp::Move,
+                _ => crate::policy::PolicyOp::Delete {
+                    mode: DeleteMode::Permanent,
+                },
+            };
+            if let Err(err) = self.gate(&actor, undo_op, &[&p]).await {
+                report.lock().expect("undo report lock").blocked = Some((e.seq, err));
+                break; // estricto: para al primer bloqueo de policy (LIFO).
+            }
             let provider = self.provider_for(&p).await?;
             plan.push((e, provider));
         }
 
-        let report = Arc::new(std::sync::Mutex::new(crate::UndoReport::default()));
         let report_task = Arc::clone(&report);
         let key = "undo".to_owned();
         let handle = self.sched.submit(
             &key,
             TaskKind::Undo,
             Priority::Normal,
+            actor,
             Box::new(move |ctx| {
                 Box::pin(async move {
                     let total = plan.len() as u64;

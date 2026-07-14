@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use norte_core::{Priority, Scheduler, TaskBody};
+use norte_core::{Actor, Priority, Scheduler, TaskBody};
 use norte_proto::{Error, TaskKind, TaskState};
 
 fn body(
@@ -23,6 +23,7 @@ async fn task_completes_and_reports_progress() {
         "mem",
         TaskKind::Copy,
         Priority::Normal,
+        Actor::User,
         body(|ctx| {
             Box::pin(async move {
                 ctx.progress.update(|p| {
@@ -45,6 +46,7 @@ async fn cancellation_is_clean_and_cooperative() {
         "mem",
         TaskKind::Delete,
         Priority::Normal,
+        Actor::User,
         body(move |ctx| {
             Box::pin(async move {
                 let _ = started_tx.send(());
@@ -70,6 +72,7 @@ async fn panic_is_supervised_and_scheduler_survives() {
         "mem",
         TaskKind::Copy,
         Priority::Normal,
+        Actor::User,
         body(|_ctx| Box::pin(async { panic!("task rota a propósito") })),
     );
     match handle.join().await {
@@ -81,6 +84,7 @@ async fn panic_is_supervised_and_scheduler_survives() {
         "mem",
         TaskKind::Copy,
         Priority::Normal,
+        Actor::User,
         body(|_ctx| Box::pin(async { Ok(()) })),
     );
     assert_eq!(ok.join().await, TaskState::Completed);
@@ -93,6 +97,7 @@ async fn error_maps_to_failed_with_taxonomy() {
         "mem",
         TaskKind::Move,
         Priority::Normal,
+        Actor::User,
         body(|_ctx| Box::pin(async { Err(Error::NotFound) })),
     );
     assert_eq!(
@@ -115,6 +120,7 @@ async fn priority_orders_queued_work() {
         "mem",
         TaskKind::Copy,
         Priority::Normal,
+        Actor::User,
         body(move |_ctx| {
             Box::pin(async move {
                 let _ = gate_rx.await;
@@ -135,12 +141,14 @@ async fn priority_orders_queued_work() {
         "mem",
         TaskKind::Copy,
         Priority::Low,
+        Actor::User,
         mk("low", order.clone()),
     );
     let high = sched.submit(
         "mem",
         TaskKind::Copy,
         Priority::High,
+        Actor::User,
         mk("high", order.clone()),
     );
 
@@ -164,6 +172,7 @@ async fn semaphore_bounds_concurrency_per_provider() {
             "mem",
             TaskKind::Copy,
             Priority::Normal,
+            Actor::User,
             body(move |_ctx| {
                 Box::pin(async move {
                     let now = live.fetch_add(1, Ordering::SeqCst) + 1;
@@ -194,6 +203,7 @@ async fn providers_have_independent_queues() {
         "mem",
         TaskKind::Copy,
         Priority::Normal,
+        Actor::User,
         body(move |_ctx| {
             Box::pin(async move {
                 let _ = gate_rx.await;
@@ -205,6 +215,7 @@ async fn providers_have_independent_queues() {
         "file",
         TaskKind::Copy,
         Priority::Normal,
+        Actor::User,
         body(|_ctx| Box::pin(async { Ok(()) })),
     );
     assert_eq!(other.join().await, TaskState::Completed);
@@ -219,6 +230,7 @@ async fn progress_is_coalesced_but_terminal_always_flushes() {
         "mem",
         TaskKind::Copy,
         Priority::Normal,
+        Actor::User,
         body(|ctx| {
             Box::pin(async move {
                 // 100 updates sin avanzar el reloj: deben coalescer.

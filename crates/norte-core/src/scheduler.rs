@@ -163,6 +163,7 @@ impl Scheduler {
         provider_key: &str,
         kind: TaskKind,
         priority: Priority,
+        actor: crate::journal::Actor,
         body: TaskBody,
     ) -> TaskHandle {
         let seq = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
@@ -174,8 +175,9 @@ impl Scheduler {
         let ctx = TaskCtx {
             cancel: cancel.clone(),
             progress: Arc::clone(&reporter),
-            // M3-1a: default `User`. El actor agéntico llega con MCP (M3-4).
-            actor: crate::journal::Actor::User,
+            // El actor real lo fija el llamante (M3-3): `User` en el camino
+            // humano, `Agent{session}` en el agéntico. Alimenta el journal.
+            actor,
         };
         let queue = self.queue_for(provider_key);
         {
