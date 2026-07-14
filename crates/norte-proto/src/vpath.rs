@@ -310,10 +310,12 @@ impl VPath {
     }
 
     /// Vista para humanos, forma `⟨scheme authority⟩/seg/…`: UTF-8 lossy con
-    /// `�` marcando bytes no decodificables Y caracteres de control (jamás
-    /// controles crudos hacia un terminal). Deliberadamente NO tiene forma
-    /// wire (sin `://`): [`Self::parse`] sobre un display siempre falla, así
-    /// que nunca reconstruye un path por accidente (usa [`Self::to_wire`]).
+    /// `�` marcando bytes no decodificables, caracteres de control Y
+    /// formateadores bidi/invisibles (jamás controles ni overrides RTL
+    /// crudos hacia un terminal — spoofing de dirección, issue #21).
+    /// Deliberadamente NO tiene forma wire (sin `://`): [`Self::parse`]
+    /// sobre un display siempre falla, así que nunca reconstruye un path
+    /// por accidente (usa [`Self::to_wire`]).
     #[must_use]
     pub fn display_lossy(&self) -> String {
         let mut out = String::from("⟨");
@@ -330,7 +332,7 @@ impl VPath {
             }
             first = false;
             for c in String::from_utf8_lossy(seg.as_bytes()).chars() {
-                out.push(if c.is_control() {
+                out.push(if is_display_hazard(c) {
                     char::REPLACEMENT_CHARACTER
                 } else {
                     c
@@ -505,6 +507,23 @@ impl VPath {
         }
         out.push('/');
     }
+}
+
+/// `true` si `c` no debe ir crudo a un display (terminal/GUI): controles
+/// C0/C1 **y** formateadores bidi/invisibles. Estos últimos (overrides RTL
+/// como U+202E, marcas de dirección, zero-width, BOM) permiten spoofing
+/// visual del nombre —un `.exe` que se ve como `.jpg`— sin ser `is_control`
+/// (issue #21).
+fn is_display_hazard(c: char) -> bool {
+    c.is_control()
+        || matches!(c,
+            // Marcas y overrides bidi.
+            '\u{200E}' | '\u{200F}' | '\u{061C}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2066}'..='\u{2069}'
+            // Zero-width / invisibles que rompen la integridad del display.
+            | '\u{200B}'..='\u{200D}' | '\u{2060}' | '\u{FEFF}'
+        )
 }
 
 /// El segmento marcador de ADR 0018.

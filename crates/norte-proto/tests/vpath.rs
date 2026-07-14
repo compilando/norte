@@ -557,3 +557,27 @@ fn archive_split_scheme_interior_vacio_es_err() {
         VPathError::InvalidScheme
     );
 }
+
+#[test]
+fn display_lossy_masks_bidi_override() {
+    // U+202E (RIGHT-TO-LEFT OVERRIDE, bytes E2 80 AE) NO es is_control pero
+    // permite spoofing visual del nombre (issue #21): debe ir a `�`.
+    let p = path("file:///factura%E2%80%AEgpj.exe");
+    let shown = p.display_lossy();
+    assert!(
+        !shown.contains('\u{202E}'),
+        "el override RTL crudo no debe llegar al display: {shown:?}"
+    );
+    assert!(shown.contains('\u{FFFD}'), "se marca con �: {shown:?}");
+    // El texto visible sigue ahí (solo el formateador se enmascara).
+    assert!(shown.contains("factura") && shown.contains("gpj.exe"));
+}
+
+#[test]
+fn display_lossy_masks_zero_width_and_controls() {
+    // Zero-width joiner (U+200D) e invisibles también.
+    let p = path("file:///a%E2%80%8Db");
+    let shown = p.display_lossy();
+    assert!(!shown.contains('\u{200D}'));
+    assert!(shown.contains('\u{FFFD}'));
+}
