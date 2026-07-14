@@ -453,7 +453,9 @@ async fn overwrite_existing(
         });
     }
     remove_retrying(dst, to, &ctx.cancel).await?;
-    observer.on_mutation(&Mutation::Removed(to));
+    observer
+        .on_mutation(&Mutation::Removed(to), &ctx.actor)
+        .await;
     Ok(())
 }
 
@@ -468,7 +470,9 @@ async fn ensure_dir(
 ) -> Result<(), Error> {
     match mkdir_retrying(dst, to, &ctx.cancel).await {
         Ok(()) => {
-            observer.on_mutation(&Mutation::Created(to));
+            observer
+                .on_mutation(&Mutation::Created(to), &ctx.actor)
+                .await;
             Ok(())
         }
         Err(Error::Conflict { .. }) if merge_allowed(opts.on_collision) => {
@@ -545,7 +549,9 @@ async fn copy_symlink_leaf(
                 &ctx.cancel,
             )
             .await?;
-            observer.on_mutation(&Mutation::Created(&target));
+            observer
+                .on_mutation(&Mutation::Created(&target), &ctx.actor)
+                .await;
             Ok(Placed::Done)
         }
         SymlinkPolicy::Follow => {
@@ -792,7 +798,9 @@ async fn copy_file(
         // El tamaño ya lo dio el stat del origen: cero round-trips extra.
         let size = known_size.unwrap_or(0);
         ctx.progress.update(|p| p.bytes_done = base + size);
-        observer.on_mutation(&Mutation::Created(to));
+        observer
+            .on_mutation(&Mutation::Created(to), &ctx.actor)
+            .await;
         return Ok(());
     }
 
@@ -871,7 +879,9 @@ async fn copy_file(
         return Err(Error::Cancelled);
     }
     sink.commit().await?;
-    observer.on_mutation(&Mutation::Created(to));
+    observer
+        .on_mutation(&Mutation::Created(to), &ctx.actor)
+        .await;
     Ok(())
 }
 
@@ -985,7 +995,9 @@ async fn rename_with_policy(
     let first = rename_retrying(src, from, to, from_id, &ctx.cancel).await;
     let conflict = match first {
         Ok(()) => {
-            observer.on_mutation(&Mutation::Renamed { from, to });
+            observer
+                .on_mutation(&Mutation::Renamed { from, to }, &ctx.actor)
+                .await;
             return Ok(RenameOutcome::Renamed);
         }
         Err(e @ Error::Conflict { .. }) => e,
@@ -1000,7 +1012,9 @@ async fn rename_with_policy(
             check_overwrite_kinds(&src_e, &existing)?;
             overwrite_existing(src, to, &existing, observer, ctx).await?;
             rename_retrying(src, from, to, from_id, &ctx.cancel).await?;
-            observer.on_mutation(&Mutation::Renamed { from, to });
+            observer
+                .on_mutation(&Mutation::Renamed { from, to }, &ctx.actor)
+                .await;
             Ok(RenameOutcome::Renamed)
         }
         CollisionPolicy::Newer => {
@@ -1011,7 +1025,9 @@ async fn rename_with_policy(
                     check_overwrite_kinds(&src_e, &existing)?;
                     overwrite_existing(src, to, &existing, observer, ctx).await?;
                     rename_retrying(src, from, to, from_id, &ctx.cancel).await?;
-                    observer.on_mutation(&Mutation::Renamed { from, to });
+                    observer
+                        .on_mutation(&Mutation::Renamed { from, to }, &ctx.actor)
+                        .await;
                     Ok(RenameOutcome::Renamed)
                 }
                 (Some(_), Some(_)) => Ok(RenameOutcome::SkippedByPolicy),
@@ -1030,7 +1046,9 @@ async fn rename_with_policy(
                 let cand = to.with_file_name(seg).ok_or(Error::InvalidPath)?;
                 match rename_retrying(src, from, &cand, from_id, &ctx.cancel).await {
                     Ok(()) => {
-                        observer.on_mutation(&Mutation::Renamed { from, to: &cand });
+                        observer
+                            .on_mutation(&Mutation::Renamed { from, to: &cand }, &ctx.actor)
+                            .await;
                         return Ok(RenameOutcome::Renamed);
                     }
                     Err(Error::Conflict { .. }) => {}
@@ -1098,7 +1116,9 @@ async fn move_by_copy(
                 return Err(Error::Cancelled);
             }
             remove_retrying(&*src, &from, &ctx.cancel).await?;
-            observer.on_mutation(&Mutation::Removed(&from));
+            observer
+                .on_mutation(&Mutation::Removed(&from), &ctx.actor)
+                .await;
             ctx.progress.update(|p| p.entries_done = 2);
             Ok(())
         }
@@ -1139,7 +1159,9 @@ async fn move_by_copy(
                 ctx.progress
                     .update(|p| p.current = Some(pe.entry.path.clone()));
                 remove_retrying(&*src, &pe.entry.path, &ctx.cancel).await?;
-                observer.on_mutation(&Mutation::Removed(&pe.entry.path));
+                observer
+                    .on_mutation(&Mutation::Removed(&pe.entry.path), &ctx.actor)
+                    .await;
                 ctx.progress.update(|p| p.entries_done += 1);
             }
             if ctx.cancel.is_cancelled() {
@@ -1149,7 +1171,9 @@ async fn move_by_copy(
                 // Raíz: para un dir, el dir ya vacío; para un dir-symlink
                 // raíz bajo Follow, EL LINK (remove jamás sigue links).
                 remove_retrying(&*src, &from, &ctx.cancel).await?;
-                observer.on_mutation(&Mutation::Removed(&from));
+                observer
+                    .on_mutation(&Mutation::Removed(&from), &ctx.actor)
+                    .await;
             }
             ctx.progress.update(|p| p.entries_done += 1);
             Ok(())
@@ -1179,7 +1203,9 @@ pub(crate) async fn delete_task(
             p.current = Some(path.clone());
         });
         provider.trash(&path).await?;
-        observer.on_mutation(&Mutation::Trashed(&path));
+        observer
+            .on_mutation(&Mutation::Trashed(&path), &ctx.actor)
+            .await;
         ctx.progress.update(|p| p.entries_done = 1);
         return Ok(());
     }
@@ -1196,7 +1222,9 @@ pub(crate) async fn delete_task(
             }
             ctx.progress.update(|p| p.current = Some(e.path.clone()));
             remove_retrying(&*provider, &e.path, &ctx.cancel).await?;
-            observer.on_mutation(&Mutation::Removed(&e.path));
+            observer
+                .on_mutation(&Mutation::Removed(&e.path), &ctx.actor)
+                .await;
             ctx.progress.update(|p| p.entries_done += 1);
         }
     } else {
@@ -1206,7 +1234,9 @@ pub(crate) async fn delete_task(
         return Err(Error::Cancelled);
     }
     remove_retrying(&*provider, &path, &ctx.cancel).await?;
-    observer.on_mutation(&Mutation::Removed(&path));
+    observer
+        .on_mutation(&Mutation::Removed(&path), &ctx.actor)
+        .await;
     ctx.progress.update(|p| p.entries_done += 1);
     Ok(())
 }

@@ -34,6 +34,9 @@ pub struct TaskCtx {
     pub cancel: CancellationToken,
     /// Emisor de progreso coalescido.
     pub progress: Arc<ProgressReporter>,
+    /// Origen de las mutaciones de esta task (default `User`; los agentes lo
+    /// fijan vía MCP en M3-4). Lo consume el journal.
+    pub actor: crate::journal::Actor,
 }
 
 /// El cuerpo de una task: una factoría que recibe su [`TaskCtx`] y devuelve
@@ -171,6 +174,8 @@ impl Scheduler {
         let ctx = TaskCtx {
             cancel: cancel.clone(),
             progress: Arc::clone(&reporter),
+            // M3-1a: default `User`. El actor agéntico llega con MCP (M3-4).
+            actor: crate::journal::Actor::User,
         };
         let queue = self.queue_for(provider_key);
         {

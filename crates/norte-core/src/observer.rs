@@ -2,7 +2,10 @@
 //! [`MutationObserver`] ANTES de considerarse completa (regla dura 4). En M0
 //! el observador es no-op; el journal se enchufará aquí sin tocar el engine.
 
+use async_trait::async_trait;
 use norte_proto::VPath;
+
+use crate::journal::Actor;
 
 /// Una mutación observable del VFS.
 #[derive(Debug)]
@@ -25,14 +28,17 @@ pub enum Mutation<'a> {
 
 /// Receptor de mutaciones. M3 lo implementa el journal (con undo); hasta
 /// entonces, un observador no-op interno.
+#[async_trait]
 pub trait MutationObserver: Send + Sync {
-    /// Notifica una mutación ya aplicada con éxito.
-    fn on_mutation(&self, mutation: &Mutation<'_>);
+    /// Notifica una mutación ya aplicada con éxito. Async: el journal await-ea
+    /// el insert antes de que la op se considere completa (regla 4).
+    async fn on_mutation(&self, mutation: &Mutation<'_>, actor: &Actor);
 }
 
-/// Observador que no hace nada (M0).
+/// Observador que no hace nada (M0 / tests sin journal).
 pub(crate) struct NoopObserver;
 
+#[async_trait]
 impl MutationObserver for NoopObserver {
-    fn on_mutation(&self, _mutation: &Mutation<'_>) {}
+    async fn on_mutation(&self, _mutation: &Mutation<'_>, _actor: &Actor) {}
 }

@@ -207,6 +207,77 @@ impl Journal {
     }
 }
 
+/// El [`Journal`] como [`MutationObserver`]: mapea cada `Mutation` a una entrada
+/// y asigna el `seq` monótono. El wiring en el engine y la `reversal_ref` de
+/// `Trashed` llegan en M3-1b.
+pub struct SqliteJournal {
+    journal: Journal,
+    next_seq: std::sync::atomic::AtomicI64,
+}
+
+impl SqliteJournal {
+    /// Envuelve un journal ya abierto; el `seq` continúa tras las entradas
+    /// existentes.
+    ///
+    /// # Errors
+    /// Errores de sqlx al leer el último `seq`.
+    pub async fn new(journal: Journal) -> Result<Self, sqlx::Error> {
+        let last = sqlx::query("SELECT COALESCE(MAX(seq), 0) FROM journal")
+            .fetch_one(&journal.pool)
+            .await?;
+        let max: i64 = last.get(0);
+        Ok(Self {
+            journal,
+            next_seq: std::sync::atomic::AtomicI64::new(max + 1),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::observer::MutationObserver for SqliteJournal {
+    async fn on_mutation(&self, mutation: &crate::observer::Mutation<'_>, actor: &Actor) {
+        use crate::observer::Mutation;
+        let seq = self
+            .next_seq
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let (op, path, path_to, reversal): (&str, Vec<u8>, Option<Vec<u8>>, Reversal) =
+            match mutation {
+                Mutation::Created(p) => {
+                    ("created", p.to_wire().into_bytes(), None, Reversal::Delete)
+                }
+                Mutation::Removed(p) => (
+                    "removed",
+                    p.to_wire().into_bytes(),
+                    None,
+                    Reversal::Irreversible,
+                ),
+                // reversal_ref (ruta de papelera) llega en M3-1b; aquí queda None.
+                Mutation::Trashed(p) => (
+                    "trashed",
+                    p.to_wire().into_bytes(),
+                    None,
+                    Reversal::RestoreTrash,
+                ),
+                Mutation::Renamed { from, to } => (
+                    "renamed",
+                    to.to_wire().into_bytes(),
+                    Some(from.to_wire().into_bytes()),
+                    Reversal::RenameBack,
+                ),
+            };
+        // Un fallo de journal tras una mutación aplicada NO puede tragarse
+        // (regla 4): se registra a nivel tracing; M3-1b decide propagarlo como
+        // fallo de la task.
+        if let Err(e) = self
+            .journal
+            .record(op, &path, path_to.as_deref(), reversal, None, actor, seq)
+            .await
+        {
+            tracing::error!(error = %e, seq, "fallo al escribir el journal");
+        }
+    }
+}
+
 /// Quién originó la mutación (spec §10). Hoy siempre `User`; los agentes lo
 /// fijan vía scopes/MCP (M3-4).
 #[derive(Debug, Clone, PartialEq, Eq)]
