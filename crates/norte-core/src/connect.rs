@@ -198,7 +198,9 @@ impl ConnectionManager {
                     .connect(spec, secret.as_ref())
                     .await
                     .map_err(log_and_map)?;
-                Ok(Arc::new(ObjectProvider::new(op, "s3")))
+                Ok(Arc::new(
+                    ObjectProvider::new(op, "s3").with_logical_trash(spec.logical_trash),
+                ))
             }
             _ => Err(Error::Unsupported),
         }
