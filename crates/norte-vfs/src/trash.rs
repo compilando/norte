@@ -48,6 +48,13 @@ pub fn plan(p: &VPath, id: &str) -> Result<TrashPaths, Error> {
     if p.segments().next() == Some(TRASH_DIR) {
         return Err(Error::Unsupported);
     }
+    // El basename no puede ser el nombre RESERVADO del sidecar: un fichero
+    // llamado `.norte-info` daría `payload == info` (misma key) → el rename
+    // chocaría con el `.norte-info` recién escrito (Conflict + huérfano). Se
+    // rechaza limpio; el frontend degrada a permanente si el usuario confirma.
+    if basename.as_bytes() == INFO_NAME {
+        return Err(Error::Unsupported);
+    }
     let id_seg = Segment::new(id.as_bytes().to_vec()).map_err(|_| Error::InvalidPath)?;
     let dir = provider_root(p).join(seg_const(TRASH_DIR)).join(id_seg);
     let payload = dir.join(basename);
@@ -208,9 +215,20 @@ mod tests {
         // Ni nada que ya viva dentro de ella (re-trashear una entrada).
         let inside = VPath::parse("sftp://host/.norte-trash/2-0/x").unwrap();
         assert!(matches!(plan(&inside, "3-0"), Err(Error::Unsupported)));
-        // Pero un fichero `.norte-trash` ANIDADO (no en la raíz) sí se puede.
+        // Pero un fichero `.norte-trash` ANIDADO (no en la raíz) sí se puede
+        // (no colisiona: payload `<id>/.norte-trash` ≠ info `<id>/.norte-info`).
         let nested = VPath::parse("sftp://host/dir/.norte-trash").unwrap();
         assert!(plan(&nested, "4-0").is_ok());
+    }
+
+    #[test]
+    fn plan_refuses_reserved_info_basename() {
+        // Un fichero llamado `.norte-info` colisionaría con el sidecar.
+        let root_info = VPath::parse("sftp://host/.norte-info").unwrap();
+        assert!(matches!(plan(&root_info, "1-0"), Err(Error::Unsupported)));
+        // También anidado (el basename es lo que colisiona, no la posición).
+        let nested_info = VPath::parse("sftp://host/dir/.norte-info").unwrap();
+        assert!(matches!(plan(&nested_info, "2-0"), Err(Error::Unsupported)));
     }
 
     #[test]

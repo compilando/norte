@@ -75,6 +75,12 @@ async fn trash_moves_file_and_writes_info() {
     ));
 
     let entry = sole_entry(&p).await;
+    // La entrada contiene EXACTAMENTE {payload, .norte-info}, sin markers extra.
+    let mut names = child_names(&p, &entry).await;
+    names.sort();
+    let mut expected = vec![b".norte-info".to_vec(), b"victim.txt".to_vec()];
+    expected.sort();
+    assert_eq!(names, expected);
     // Payload preserva el contenido.
     let payload = entry.join(Segment::new(b"victim.txt".to_vec()).unwrap());
     assert_eq!(

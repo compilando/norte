@@ -56,6 +56,24 @@ recuperable propio sin degradar en silencio a permanente.
   la vez).
 - **Víctima ausente**: `stat` previo → `NotFound` limpio, sin entrada
   huérfana.
+- **Basename reservado**: `trash::plan` rechaza (`Unsupported`) papelerizar
+  un fichero llamado `.norte-info` — colisionaría con el sidecar de
+  metadatos (misma key que el payload).
+
+## Deuda (fase 9, tracked)
+
+- Cancelación de grano fino a mitad del walk copy-all/delete-all de object
+  = **#51** (misma naturaleza que rename/copy_native).
+- `.norte-trash` como FICHERO (no dir) creado por el usuario →
+  `ensure_dir_idempotent` acepta el `Conflict::Exists` del fast-path y el
+  error final es `NotFound` en vez de `TypeMismatch` (fallo-seguro, sin
+  corrupción; sftp+object).
+- Duplicación de secuencia `trash()` entre sftp y object (~40 líneas
+  casi idénticas): candidato a orquestador `trash::execute(mkdir, write,
+  rename)` por closures en `norte-vfs` (sin acoplar providers).
+- Test de fallo-de-rename por fault injection (orphan-info) + corpus
+  `poisoned_trash_info` (cross-scheme/authority) + guard overwrite
+  intra-conexión → **M3 restore**.
 
 ## Consecuencias
 
