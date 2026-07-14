@@ -515,14 +515,14 @@ impl VPath {
 /// visual del nombre —un `.exe` que se ve como `.jpg`— sin ser `is_control`
 /// (issue #21).
 fn is_display_hazard(c: char) -> bool {
+    // Controles C0/C1 + formateadores/overrides BIDI. NO se enmascaran
+    // ZWJ/ZWNJ (U+200C/200D): son legítimos en secuencias emoji y en escrituras
+    // (persa, índicas) — el vector de #21 es la dirección bidi, no la unión.
     c.is_control()
         || matches!(c,
-            // Marcas y overrides bidi.
             '\u{200E}' | '\u{200F}' | '\u{061C}'
             | '\u{202A}'..='\u{202E}'
             | '\u{2066}'..='\u{2069}'
-            // Zero-width / invisibles que rompen la integridad del display.
-            | '\u{200B}'..='\u{200D}' | '\u{2060}' | '\u{FEFF}'
         )
 }
 

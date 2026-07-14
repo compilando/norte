@@ -574,10 +574,15 @@ fn display_lossy_masks_bidi_override() {
 }
 
 #[test]
-fn display_lossy_masks_zero_width_and_controls() {
-    // Zero-width joiner (U+200D) e invisibles también.
-    let p = path("file:///a%E2%80%8Db");
+fn display_lossy_masks_isolates_but_not_zwj() {
+    // Los aisladores bidi (U+2066 LRI) se enmascaran…
+    let p = path("file:///a%E2%81%A6b");
     let shown = p.display_lossy();
-    assert!(!shown.contains('\u{200D}'));
+    assert!(!shown.contains('\u{2066}'));
     assert!(shown.contains('\u{FFFD}'));
+
+    // …pero el zero-width joiner (U+200D) NO: es legítimo en emoji/escrituras.
+    let emoji = path("file:///a%E2%80%8Db");
+    let shown = emoji.display_lossy();
+    assert!(shown.contains('\u{200D}'), "el ZWJ legítimo se conserva");
 }

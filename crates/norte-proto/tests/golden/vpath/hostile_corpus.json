@@ -39,7 +39,7 @@
     "name": "rtl_override",
     "segments_hex": ["616263e280ae67706a2e657865"],
     "expected_wire": "file:///abc‮gpj.exe",
-    "display": "⟨file⟩/abc‮gpj.exe"
+    "display": "⟨file⟩/abc�gpj.exe"
   },
   {
     "name": "win_trailing_dot",
