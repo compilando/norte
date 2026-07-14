@@ -24,6 +24,14 @@ recuperable propio sin degradar en silencio a permanente.
   .norte-info}`. `<id>` = `<epoch_ms>-<counter>` (monótono por sesión).
   `.norte-info` guarda la ruta original como `VPath::to_wire()`
   (percent-encoded ASCII, lossless, line-safe) + `deleted-ms`.
+- **Guard de restore (confused-deputy)**: un `.norte-info` en un
+  share/bucket compartido es atacante-controlable. `trash::info_decode`
+  exige un `expected_root` (la raíz de la conexión) y RECHAZA
+  (`InvalidPath`) cualquier ruta con distinto scheme/authority → el
+  restore (M3) jamás escribe el payload en otra conexión/host. El
+  traversal (`.`/`..`/`%2F`/NUL) ya lo bloquea `VPath::parse`. La
+  sobrescritura de un fichero existente DENTRO de la misma conexión es
+  política del restore (confirmación reforzada, M3), no del parser.
 - **Sin cambio de firma del trait**: `Provider::trash(&self, p)` intacto.
   El trait no recibe `CancellationToken` (modelo por drop, sin dep
   `tokio-util` en el crate fundacional; rule 8). La garantía de cero

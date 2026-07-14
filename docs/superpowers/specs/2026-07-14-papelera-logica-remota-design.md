@@ -62,7 +62,13 @@ En la **raíz del provider** (por conexión). Por ítem borrado:
   ASCII, sin controles ni saltos de línea (el codec escapa C0+DEL a
   `%XX`), losslessly round-trippeable vía `VPath::parse`. Line-safe → sin
   base64. Formato por líneas: cabecera de versión, `path: <wire>`,
-  `deleted-ms: <u64>`.
+  `deleted-ms: <u64>` (estricto: nada tras la 3.ª línea).
+- **Guard confused-deputy** (hallazgo encoding-auditor, ALTA):
+  `info_decode(bytes, expected_root)` ancla la ruta a la conexión de la
+  papelera — rechaza scheme/authority distintos (un `.norte-info`
+  envenenado en un share apuntaría el restore a otro host). Traversal ya
+  lo corta `VPath::parse`. Sobrescritura intra-conexión = política de
+  restore (M3).
 - El wrapper `<id>/` aísla cada ítem → `.norte-info` no colisiona con el
   basename original ni entre ítems.
 - Borrar `.norte-trash/` o algo ya dentro → ruta normal (permanente si

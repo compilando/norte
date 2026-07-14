@@ -76,7 +76,8 @@ pub struct TrashInfo {
 
 /// Serializa los metadatos de restauración a los bytes de un `.norte-info`.
 /// La ruta va como [`VPath::to_wire`] (percent-encoded ASCII, lossless,
-/// sin controles ni newlines) → el resultado es line-safe.
+/// sin newlines ni controles ASCII) → el resultado es line-safe (siempre
+/// exactamente 3 líneas, el valor de `path:` jamás contiene `\n`).
 #[must_use]
 pub fn info_encode(original: &VPath, deleted_ms: u64) -> Vec<u8> {
     format!(
@@ -86,13 +87,25 @@ pub fn info_encode(original: &VPath, deleted_ms: u64) -> Vec<u8> {
     .into_bytes()
 }
 
-/// Parsea el contenido de un `.norte-info`.
+/// Parsea el contenido de un `.norte-info` y **ancla** la ruta original a
+/// la conexión de la papelera.
+///
+/// `expected_root` es la raíz del provider donde vive esta papelera (mismo
+/// scheme+authority que la conexión). El guard es de SEGURIDAD: un
+/// `.norte-info` en un share/bucket compartido es atacante-controlable; sin
+/// anclar, un restore (M3) escribiría el payload en OTRA conexión/host
+/// (`path: sftp://otro-host/.ssh/authorized_keys`) — deputy confundido. El
+/// traversal (`.`/`..`/`%2F`/NUL) ya lo bloquea [`VPath::parse`]; aquí se
+/// cierra el vector scheme/authority. La política de sobrescritura de un
+/// fichero existente DENTRO de la misma conexión es decisión del restore
+/// (confirmación reforzada), no de este parser.
 ///
 /// # Errors
 /// [`Error::InvalidPath`] si el contenido no es UTF-8, le falta la
-/// cabecera o un campo, la ruta wire no parsea, o el timestamp no es un
-/// `u64`.
-pub fn info_decode(bytes: &[u8]) -> Result<TrashInfo, Error> {
+/// cabecera o un campo, sobran líneas, la ruta wire no parsea, el
+/// timestamp no es un `u64`, o la ruta original no pertenece a
+/// `expected_root` (distinto scheme o authority).
+pub fn info_decode(bytes: &[u8], expected_root: &VPath) -> Result<TrashInfo, Error> {
     let text = std::str::from_utf8(bytes).map_err(|_| Error::InvalidPath)?;
     let mut lines = text.lines();
     if lines.next() != Some(INFO_HEADER) {
@@ -106,7 +119,19 @@ pub fn info_decode(bytes: &[u8]) -> Result<TrashInfo, Error> {
         .next()
         .and_then(|l| l.strip_prefix("deleted-ms: "))
         .ok_or(Error::InvalidPath)?;
+    // Estricto: nada tras el 3.er campo. Rechaza `.norte-info` semi-corruptos
+    // o con líneas inyectadas de más.
+    if lines.next().is_some() {
+        return Err(Error::InvalidPath);
+    }
     let original = VPath::parse(wire).map_err(|_| Error::InvalidPath)?;
+    // Guard confused-deputy: la ruta restaurada DEBE pertenecer a la MISMA
+    // conexión que la papelera.
+    if original.scheme() != expected_root.scheme()
+        || original.authority() != expected_root.authority()
+    {
+        return Err(Error::InvalidPath);
+    }
     let deleted_ms = ms.parse::<u64>().map_err(|_| Error::InvalidPath)?;
     Ok(TrashInfo {
         original,
@@ -170,9 +195,18 @@ mod tests {
     }
 
     #[test]
+    fn seg_const_uses_valid_constants() {
+        // Ata la invariante del `expect()` de `seg_const` (rule 6): las
+        // constantes del módulo son siempre segmentos válidos.
+        assert!(Segment::new(TRASH_DIR.to_vec()).is_ok());
+        assert!(Segment::new(INFO_NAME.to_vec()).is_ok());
+    }
+
+    #[test]
     fn info_roundtrips_hostile_path() {
         // Ruta con byte no-UTF8 (0xFF) Y un byte de control newline (0x0A)
         // dentro de un segmento: to_wire los escapa a %FF/%0A → line-safe.
+        let root = VPath::parse("sftp://host/").unwrap();
         let p = VPath::parse("sftp://host/a/%FF/x%0Ay").unwrap();
         let bytes = info_encode(&p, 1_726_000_000_123);
 
@@ -180,25 +214,83 @@ mod tests {
         let text = std::str::from_utf8(&bytes).unwrap();
         assert_eq!(text.lines().count(), 3);
 
-        let info = info_decode(&bytes).unwrap();
+        let info = info_decode(&bytes, &root).unwrap();
         assert_eq!(info.original, p);
         assert_eq!(info.deleted_ms, 1_726_000_000_123);
     }
 
     #[test]
     fn info_decode_rejects_corrupt() {
-        assert!(matches!(info_decode(b"garbage"), Err(Error::InvalidPath)));
+        let root = VPath::parse("sftp://host/").unwrap();
         assert!(matches!(
-            info_decode(b"norte-trash-info v1\npath: sftp://host/x\n"),
+            info_decode(b"garbage", &root),
+            Err(Error::InvalidPath)
+        ));
+        assert!(matches!(
+            info_decode(b"norte-trash-info v1\npath: sftp://host/x\n", &root),
             Err(Error::InvalidPath) // falta deleted-ms
         ));
         assert!(matches!(
-            info_decode(b"norte-trash-info v1\npath: not-a-wire-path\ndeleted-ms: 5\n"),
+            info_decode(
+                b"norte-trash-info v1\npath: not-a-wire-path\ndeleted-ms: 5\n",
+                &root
+            ),
             Err(Error::InvalidPath) // wire no parsea
         ));
         assert!(matches!(
-            info_decode(b"norte-trash-info v1\npath: sftp://host/x\ndeleted-ms: NaN\n"),
+            info_decode(
+                b"norte-trash-info v1\npath: sftp://host/x\ndeleted-ms: NaN\n",
+                &root
+            ),
             Err(Error::InvalidPath) // ms no numérico
         ));
+    }
+
+    #[test]
+    fn info_decode_rejects_trailing_lines() {
+        // Estricto: una 4.ª línea inyectada invalida el fichero.
+        let root = VPath::parse("sftp://host/").unwrap();
+        assert!(matches!(
+            info_decode(
+                b"norte-trash-info v1\npath: sftp://host/x\ndeleted-ms: 5\ninyectado\n",
+                &root
+            ),
+            Err(Error::InvalidPath)
+        ));
+    }
+
+    #[test]
+    fn info_decode_anchors_to_connection() {
+        // Guard confused-deputy: un .norte-info envenenado que apunta a OTRA
+        // conexión (distinto scheme o authority) se rechaza.
+        let root = VPath::parse("sftp://host/").unwrap();
+
+        // Distinto scheme (papelera sftp → ruta file://).
+        assert!(matches!(
+            info_decode(
+                b"norte-trash-info v1\npath: file:///etc/passwd\ndeleted-ms: 0\n",
+                &root
+            ),
+            Err(Error::InvalidPath)
+        ));
+        // Distinta authority (otro host).
+        assert!(matches!(
+            info_decode(
+                b"norte-trash-info v1\npath: sftp://evil/home/victima/.ssh/authorized_keys\ndeleted-ms: 0\n",
+                &root
+            ),
+            Err(Error::InvalidPath)
+        ));
+        // Misma conexión (mismo scheme+authority): aceptado, ruta profunda ok.
+        let ok = info_decode(
+            b"norte-trash-info v1\npath: sftp://host/deep/nested/file.txt\ndeleted-ms: 7\n",
+            &root,
+        )
+        .unwrap();
+        assert_eq!(
+            ok.original,
+            VPath::parse("sftp://host/deep/nested/file.txt").unwrap()
+        );
+        assert_eq!(ok.deleted_ms, 7);
     }
 }
