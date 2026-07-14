@@ -65,6 +65,55 @@ fn seg_const(bytes: &[u8]) -> Segment {
     Segment::new(bytes.to_vec()).expect("constante de papelera es un Segment válido")
 }
 
+/// Metadatos de restauración de una entrada de papelera.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrashInfo {
+    /// Ruta original, reconstruida desde su forma wire.
+    pub original: VPath,
+    /// Instante de borrado, ms desde epoch.
+    pub deleted_ms: u64,
+}
+
+/// Serializa los metadatos de restauración a los bytes de un `.norte-info`.
+/// La ruta va como [`VPath::to_wire`] (percent-encoded ASCII, lossless,
+/// sin controles ni newlines) → el resultado es line-safe.
+#[must_use]
+pub fn info_encode(original: &VPath, deleted_ms: u64) -> Vec<u8> {
+    format!(
+        "{INFO_HEADER}\npath: {}\ndeleted-ms: {deleted_ms}\n",
+        original.to_wire()
+    )
+    .into_bytes()
+}
+
+/// Parsea el contenido de un `.norte-info`.
+///
+/// # Errors
+/// [`Error::InvalidPath`] si el contenido no es UTF-8, le falta la
+/// cabecera o un campo, la ruta wire no parsea, o el timestamp no es un
+/// `u64`.
+pub fn info_decode(bytes: &[u8]) -> Result<TrashInfo, Error> {
+    let text = std::str::from_utf8(bytes).map_err(|_| Error::InvalidPath)?;
+    let mut lines = text.lines();
+    if lines.next() != Some(INFO_HEADER) {
+        return Err(Error::InvalidPath);
+    }
+    let wire = lines
+        .next()
+        .and_then(|l| l.strip_prefix("path: "))
+        .ok_or(Error::InvalidPath)?;
+    let ms = lines
+        .next()
+        .and_then(|l| l.strip_prefix("deleted-ms: "))
+        .ok_or(Error::InvalidPath)?;
+    let original = VPath::parse(wire).map_err(|_| Error::InvalidPath)?;
+    let deleted_ms = ms.parse::<u64>().map_err(|_| Error::InvalidPath)?;
+    Ok(TrashInfo {
+        original,
+        deleted_ms,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,5 +167,38 @@ mod tests {
         let p = VPath::parse("sftp://host/x").unwrap();
         // Un id con `/` no es un Segment válido.
         assert!(matches!(plan(&p, "bad/id"), Err(Error::InvalidPath)));
+    }
+
+    #[test]
+    fn info_roundtrips_hostile_path() {
+        // Ruta con byte no-UTF8 (0xFF) Y un byte de control newline (0x0A)
+        // dentro de un segmento: to_wire los escapa a %FF/%0A → line-safe.
+        let p = VPath::parse("sftp://host/a/%FF/x%0Ay").unwrap();
+        let bytes = info_encode(&p, 1_726_000_000_123);
+
+        // Line-safe: exactamente 3 líneas, ningún newline dentro del valor.
+        let text = std::str::from_utf8(&bytes).unwrap();
+        assert_eq!(text.lines().count(), 3);
+
+        let info = info_decode(&bytes).unwrap();
+        assert_eq!(info.original, p);
+        assert_eq!(info.deleted_ms, 1_726_000_000_123);
+    }
+
+    #[test]
+    fn info_decode_rejects_corrupt() {
+        assert!(matches!(info_decode(b"garbage"), Err(Error::InvalidPath)));
+        assert!(matches!(
+            info_decode(b"norte-trash-info v1\npath: sftp://host/x\n"),
+            Err(Error::InvalidPath) // falta deleted-ms
+        ));
+        assert!(matches!(
+            info_decode(b"norte-trash-info v1\npath: not-a-wire-path\ndeleted-ms: 5\n"),
+            Err(Error::InvalidPath) // wire no parsea
+        ));
+        assert!(matches!(
+            info_decode(b"norte-trash-info v1\npath: sftp://host/x\ndeleted-ms: NaN\n"),
+            Err(Error::InvalidPath) // ms no numérico
+        ));
     }
 }
