@@ -11,7 +11,7 @@ use norte_proto::{
     Authority, ByteRange, Capabilities, CapabilityFlags, ConflictKind, Entry, EntryKind, Error,
     Scheme, Segment, VPath,
 };
-use norte_vfs::{ByteSink, ByteStream, EntryStream, Provider};
+use norte_vfs::{ByteSink, ByteStream, EntryStream, Provider, trash};
 use opendal::{ErrorKind, Metadata, Operator};
 
 /// Límite de S3 para la longitud de la KEY COMPLETA: 1024 BYTES de UTF-8. El
@@ -94,6 +94,26 @@ impl ObjectProvider {
     pub fn with_logical_trash(mut self, enabled: bool) -> Self {
         self.logical_trash = enabled;
         self
+    }
+
+    /// Siguiente valor del contador monótono de ids de papelera.
+    fn next_counter(&self) -> u64 {
+        self.trash_counter.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Crea el marker `dir` tolerando que ya exista (idempotente): útil para
+    /// `.norte-trash/` bajo concurrencia entre sesiones.
+    async fn ensure_dir_idempotent(&self, dir: &VPath) -> Result<(), Error> {
+        match self.mkdir(dir).await {
+            Ok(())
+            | Err(Error::Conflict {
+                conflict: ConflictKind::Exists,
+            }) => Ok(()),
+            Err(e) => match self.stat_kind(&self.key(dir)?).await? {
+                Some((EntryKind::Dir, _)) => Ok(()),
+                _ => Err(e),
+            },
+        }
     }
 
     /// La raíz de este provider para un `scheme`/`authority` (`s3://bucket/`).
@@ -622,6 +642,54 @@ impl Provider for ObjectProvider {
                 .map_err(|e| map_err(&e))?;
         }
         self.op.delete(&from_dir).await.map_err(|e| map_err(&e))
+    }
+
+    async fn trash(&self, p: &VPath) -> Result<(), Error> {
+        if !self.logical_trash {
+            return Err(Error::Unsupported);
+        }
+        // Víctima ausente = `NotFound` limpio, sin entrada de papelera huérfana.
+        let _ = self.stat(p).await?;
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+
+        // Primer plan: valida `p` (rechaza papelerizar la propia papelera,
+        // ADR 0019) y da la raíz `.norte-trash`.
+        let first = trash::plan(p, &trash::trash_id(now_ms, self.next_counter()))?;
+        let trash_root = first.dir.parent().ok_or(Error::Unsupported)?;
+        self.ensure_dir_idempotent(&trash_root).await?;
+
+        // `.norte-trash/<id>/` fresco; `<id>` solo único POR SESIÓN → reintenta
+        // con id nuevo si otra sesión colisionó en el mismo ms.
+        let mut paths = first;
+        let mut attempts = 0u32;
+        loop {
+            match self.mkdir(&paths.dir).await {
+                Ok(()) => break,
+                Err(Error::Conflict {
+                    conflict: ConflictKind::Exists,
+                }) if attempts < 8 => {
+                    attempts += 1;
+                    paths = trash::plan(p, &trash::trash_id(now_ms, self.next_counter()))?;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        // `.norte-info` ANTES de mover: si el rename falla, el origen queda
+        // intacto o recuperable (copiado a la papelera), nunca un payload sin
+        // metadatos.
+        let info = trash::info_encode(p, now_ms);
+        let mut sink = self.write(&paths.info).await?;
+        sink.write(Bytes::from(info)).await?;
+        sink.commit().await?;
+
+        // Mueve el árbol reutilizando el rename AUDITADO: copy-all →
+        // delete-all, keys reconstruidas desde sufijos validados (contención
+        // de servidor hostil), sin pérdida ante interrupción (ADR 0019/0016).
+        self.rename(p, &paths.payload).await
     }
 
     async fn copy_native(&self, from: &VPath, to: &VPath) -> Option<Result<(), Error>> {
