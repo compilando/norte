@@ -67,6 +67,8 @@ suppaftp = "10"
 # transitivas reqwest/reqsign/quick-xml bajo cargo-deny.
 opendal = { version = "0.58", default-features = false, features = ["services-s3", "http-transport-reqwest", "executors-tokio"] }
 sha2 = "0.10"
+# Journal transaccional (M3-1, ADR 0020): SQLite WAL, async, runtime queries.
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
 # Provider archive (fase 8, ADR 0018): parsers de formato hostil battle-tested
 # y puro Rust. `tar` (ustar/GNU/pax; alternativa hand-rolled = deuda de
 # seguridad permanente); `zip` default-features=false + deflate (flate2/
