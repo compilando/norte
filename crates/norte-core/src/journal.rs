@@ -42,6 +42,10 @@ pub enum JournalError {
     /// bytes): NO se panica, se falla en seguro.
     #[error("journal corrupto: {0}")]
     Corrupt(&'static str),
+    /// Error de I/O al preparar la ubicación del journal (p. ej. crear el dir
+    /// de config).
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 impl From<JournalError> for ProtoError {
@@ -449,6 +453,28 @@ impl SqliteJournal {
     pub fn journal(&self) -> &Journal {
         &self.journal
     }
+
+    /// Abre (o crea) el journal en `path` y lo envuelve como observer, listo
+    /// para [`crate::Engine::with_observer`]. Crea el directorio contenedor si
+    /// falta.
+    ///
+    /// UN SOLO ESCRITOR (spec §4): el hash-chain asume un único proceso dueño
+    /// (el daemon). Varios procesos efímeros escribiendo el MISMO fichero
+    /// forkean la cadena y colisionan en `seq` — el journal on-disk NO debe
+    /// compartirse entre binarios embebidos concurrentes. El wiring del dueño
+    /// único llega con el daemon agéntico (M3-4).
+    ///
+    /// # Errors
+    /// [`JournalError::Io`] si no puede crear el directorio contenedor;
+    /// [`JournalError`] al abrir/crear la DB (ver [`Journal::open`]).
+    pub async fn open(path: &std::path::Path) -> Result<Self, JournalError> {
+        // El dir de config puede no existir en el primer arranque; SQLite crea
+        // el FICHERO (create_if_missing) pero no su directorio padre.
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        Ok(Self::new(Journal::open(path).await?))
+    }
 }
 
 #[async_trait::async_trait]
@@ -709,6 +735,24 @@ mod tests {
             obs.journal.verify_chain().await.expect("verify"),
             "sin falso-manipulado bajo concurrencia (security M1)"
         );
+    }
+
+    #[tokio::test]
+    async fn sqlite_journal_open_creates_missing_parent_dir() {
+        use crate::observer::{Mutation, MutationObserver};
+        use norte_proto::VPath;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        // El dir contenedor NO existe todavía (primer arranque del dueño).
+        let path = dir.path().join("state/journal.db");
+        let j = SqliteJournal::open(&path)
+            .await
+            .expect("open crea el padre");
+        let victim = VPath::parse("file:///a").expect("vpath");
+        j.on_mutation(&Mutation::Created(&victim), &Actor::User)
+            .await
+            .expect("on_mutation");
+        assert_eq!(j.journal().count().await.expect("count"), 1);
     }
 
     #[tokio::test]
