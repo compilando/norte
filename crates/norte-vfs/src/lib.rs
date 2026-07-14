@@ -11,6 +11,7 @@ mod contract;
 mod contract_ro;
 mod provider;
 mod sink;
+pub mod trash;
 
 pub use norte_proto as proto;
 pub use norte_proto::{ByteRange, Capabilities, CapabilityFlags, Entry, EntryKind, Error, VPath};
