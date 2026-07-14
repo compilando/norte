@@ -124,3 +124,33 @@ async fn trash_without_capability_is_unsupported() {
     // El origen sigue ahí (no se degradó a permanente).
     assert!(p.stat(&victim).await.is_ok());
 }
+
+#[tokio::test]
+async fn trash_preserves_hostile_basename() {
+    let p = fresh(true).await;
+    // sftp (russh-sftp) usa paths String → NO representa bytes no-UTF8
+    // (rechaza con InvalidPath, issue #37); el nombre hostil que SÍ maneja
+    // es UTF-8 retorcido: espacios, unicode, emoji, punto inicial.
+    let hostile = "año 名前 😀 .txt".as_bytes().to_vec();
+    let victim = root().join(Segment::new(hostile.clone()).unwrap());
+
+    let mut sink = p.write(&victim).await.expect("write");
+    sink.write(Bytes::from_static(b"z")).await.expect("chunk");
+    sink.commit().await.expect("commit");
+
+    p.trash(&victim).await.expect("trash");
+    assert!(matches!(
+        p.stat(&victim).await,
+        Err(norte_proto::Error::NotFound)
+    ));
+
+    // El payload dentro de la papelera conserva los bytes hostiles.
+    let trash_dir = root().join(Segment::new(trash::TRASH_DIR.to_vec()).unwrap());
+    let ids = child_names(&p, &trash_dir).await;
+    let entry = trash_dir.join(Segment::new(ids[0].clone()).unwrap());
+    let names = child_names(&p, &entry).await;
+    assert!(
+        names.iter().any(|n| n == &hostile),
+        "basename hostil preservado"
+    );
+}
