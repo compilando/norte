@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS journal (
     path_to      BLOB,
     reversal     TEXT    NOT NULL,
     reversal_ref BLOB,
+    undoes_seq   INTEGER,
     prev_hash    BLOB    NOT NULL,
     entry_hash   BLOB    NOT NULL
 );";
@@ -134,6 +135,26 @@ pub struct JournalEntry {
     /// Referencia para revertir (p. ej. ruta de papelera de un `trashed`),
     /// bytes `to_wire`.
     pub reversal_ref: Option<Vec<u8>>,
+    /// Si esta entrada COMPENSA un undo, el `seq` original que deshace; `None`
+    /// si es una mutación normal.
+    pub undoes_seq: Option<i64>,
+}
+
+/// Materializa un `JournalEntry` desde una fila con el orden de columnas
+/// `seq, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref,
+/// undoes_seq` (compartido por `entries` y `revertible_for`).
+fn row_to_entry(row: sqlx::sqlite::SqliteRow) -> JournalEntry {
+    JournalEntry {
+        seq: row.get(0),
+        actor_kind: row.get(1),
+        actor_id: row.get(2),
+        op: row.get(3),
+        path: row.get(4),
+        path_to: row.get(5),
+        reversal: row.get(6),
+        reversal_ref: row.get(7),
+        undoes_seq: row.get(8),
+    }
 }
 
 /// Los campos de una entrada, en el orden canónico del hash.
@@ -147,6 +168,7 @@ pub(crate) struct Record<'a> {
     pub path_to: Option<&'a [u8]>,
     pub reversal: &'a str,
     pub reversal_ref: Option<&'a [u8]>,
+    pub undoes_seq: Option<i64>,
 }
 
 fn feed(h: &mut Sha256, bytes: &[u8]) {
@@ -179,6 +201,13 @@ pub(crate) fn chain_hash(prev: &[u8; 32], r: &Record<'_>) -> [u8; 32] {
     feed_opt(&mut h, r.path_to);
     feed(&mut h, r.reversal.as_bytes());
     feed_opt(&mut h, r.reversal_ref);
+    match r.undoes_seq {
+        None => h.update([0u8]),
+        Some(s) => {
+            h.update([1u8]);
+            feed(&mut h, &s.to_le_bytes());
+        }
+    }
     h.finalize().into()
 }
 
@@ -260,10 +289,10 @@ impl Journal {
         })
     }
 
-    /// Registra una mutación. El `seq` se asigna monótono DENTRO del lock de la
-    /// cadena (junto al encadenado) → orden de `seq` == orden de hash. Devuelve
-    /// el `seq` asignado. Si el insert falla, ni `seq` ni `last_hash` avanzan
-    /// (sin huecos ni cadena rota).
+    /// Registra una mutación NORMAL (no compensa ningún undo). El `seq` se
+    /// asigna monótono DENTRO del lock de la cadena (junto al encadenado) →
+    /// orden de `seq` == orden de hash. Devuelve el `seq` asignado. Si el insert
+    /// falla, ni `seq` ni `last_hash` avanzan (sin huecos ni cadena rota).
     ///
     /// # Errors
     /// [`JournalError::Sqlx`] al insertar.
@@ -276,6 +305,27 @@ impl Journal {
         reversal: Reversal,
         reversal_ref: Option<&[u8]>,
         actor: &Actor,
+    ) -> Result<i64, JournalError> {
+        self.record_undoing(op, path, path_to, reversal, reversal_ref, actor, None)
+            .await
+    }
+
+    /// Como [`Self::record`] pero fija `undoes_seq` = el `seq` que esta entrada
+    /// COMPENSA (undo M3-2). `None` para mutaciones normales. El `undoes_seq`
+    /// entra en el hash-chain (sigue tamper-evident).
+    ///
+    /// # Errors
+    /// [`JournalError::Sqlx`] al insertar.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_undoing(
+        &self,
+        op: &str,
+        path: &[u8],
+        path_to: Option<&[u8]>,
+        reversal: Reversal,
+        reversal_ref: Option<&[u8]>,
+        actor: &Actor,
+        undoes_seq: Option<i64>,
     ) -> Result<i64, JournalError> {
         let (actor_kind, actor_id) = actor.parts();
         let ts_ms = std::time::SystemTime::now()
@@ -295,12 +345,13 @@ impl Journal {
             path_to,
             reversal: reversal.as_str(),
             reversal_ref,
+            undoes_seq,
         };
         let entry_hash = chain_hash(&prev, &rec);
 
         sqlx::query(
-            "INSERT INTO journal (seq, ts_ms, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, prev_hash, entry_hash) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO journal (seq, ts_ms, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, prev_hash, entry_hash) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(seq)
         .bind(ts_ms)
@@ -311,6 +362,7 @@ impl Journal {
         .bind(path_to)
         .bind(reversal.as_str())
         .bind(reversal_ref)
+        .bind(undoes_seq)
         .bind(&prev[..])
         .bind(&entry_hash[..])
         .execute(&self.pool)
@@ -341,7 +393,7 @@ impl Journal {
     /// [`JournalError::Sqlx`].
     pub async fn verify_chain(&self) -> Result<bool, JournalError> {
         let rows = sqlx::query(
-            "SELECT seq, ts_ms, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, prev_hash, entry_hash \
+            "SELECT seq, ts_ms, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, prev_hash, entry_hash \
              FROM journal ORDER BY seq ASC",
         )
         .fetch_all(&self.pool)
@@ -355,8 +407,9 @@ impl Journal {
             let path_to: Option<Vec<u8>> = row.get(6);
             let reversal: String = row.get(7);
             let reversal_ref: Option<Vec<u8>> = row.get(8);
-            let stored_prev: Vec<u8> = row.get(9);
-            let stored_hash: Vec<u8> = row.get(10);
+            let undoes_seq: Option<i64> = row.get(9);
+            let stored_prev: Vec<u8> = row.get(10);
+            let stored_hash: Vec<u8> = row.get(11);
             if stored_prev != prev {
                 return Ok(false); // rotura de encadenado
             }
@@ -370,6 +423,7 @@ impl Journal {
                 path_to: path_to.as_deref(),
                 reversal: &reversal,
                 reversal_ref: reversal_ref.as_deref(),
+                undoes_seq,
             };
             let computed = chain_hash(&prev, &rec);
             if computed[..] != stored_hash[..] {
@@ -389,24 +443,34 @@ impl Journal {
     /// [`JournalError::Sqlx`].
     pub async fn entries(&self) -> Result<Vec<JournalEntry>, JournalError> {
         let rows = sqlx::query(
-            "SELECT seq, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref \
+            "SELECT seq, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq \
              FROM journal ORDER BY seq ASC",
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| JournalEntry {
-                seq: row.get(0),
-                actor_kind: row.get(1),
-                actor_id: row.get(2),
-                op: row.get(3),
-                path: row.get(4),
-                path_to: row.get(5),
-                reversal: row.get(6),
-                reversal_ref: row.get(7),
-            })
-            .collect())
+        Ok(rows.into_iter().map(row_to_entry).collect())
+    }
+
+    /// Las entradas REVERTIBLES de la sesión `actor`, en orden LIFO (`seq`
+    /// DESC): mutaciones normales (`undoes_seq IS NULL`) de ese actor que nadie
+    /// ha compensado todavía. Base de [`crate::Engine::undo_session`] (M3-2).
+    ///
+    /// # Errors
+    /// [`JournalError::Sqlx`].
+    pub async fn revertible_for(&self, actor: &Actor) -> Result<Vec<JournalEntry>, JournalError> {
+        let (actor_kind, actor_id) = actor.parts();
+        let rows = sqlx::query(
+            "SELECT seq, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq \
+             FROM journal \
+             WHERE undoes_seq IS NULL AND actor_kind = ? AND actor_id IS ? \
+               AND seq NOT IN (SELECT undoes_seq FROM journal WHERE undoes_seq IS NOT NULL) \
+             ORDER BY seq DESC",
+        )
+        .bind(actor_kind)
+        .bind(actor_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(row_to_entry).collect())
     }
 
     /// SOLO TESTS: corrompe el `path` de una entrada sin recomputar su hash.
@@ -558,6 +622,7 @@ mod tests {
             path_to: None,
             reversal: "delete",
             reversal_ref: None,
+            undoes_seq: None,
         }
     }
 
@@ -858,5 +923,80 @@ mod tests {
         assert_eq!(es[1].path, b"file:///b");
         assert_eq!(es[1].path_to.as_deref(), Some(&b"file:///a"[..]));
         assert_eq!(es[1].reversal, "rename_back");
+    }
+
+    #[tokio::test]
+    async fn revertible_for_excludes_compensated_and_foreign_actor() {
+        let j = Journal::open_in_memory().await.expect("open");
+        let agent = Actor::Agent {
+            session: "s1".into(),
+        };
+        // seq 1: agente crea A. seq 2: usuario crea B (otro actor).
+        j.record(
+            "created",
+            b"file:///a",
+            None,
+            Reversal::Delete,
+            None,
+            &agent,
+        )
+        .await
+        .expect("1");
+        j.record(
+            "created",
+            b"file:///b",
+            None,
+            Reversal::Delete,
+            None,
+            &Actor::User,
+        )
+        .await
+        .expect("2");
+        // seq 3: compensación de la 1 (undoes_seq=1) → la 1 deja de ser revertible.
+        j.record_undoing(
+            "removed",
+            b"file:///a",
+            None,
+            Reversal::Irreversible,
+            None,
+            &agent,
+            Some(1),
+        )
+        .await
+        .expect("3");
+
+        let rev = j.revertible_for(&agent).await.expect("revertible");
+        assert!(
+            rev.is_empty(),
+            "la 1 ya está compensada; la 2 es de otro actor"
+        );
+
+        let rev_user = j
+            .revertible_for(&Actor::User)
+            .await
+            .expect("revertible user");
+        assert_eq!(rev_user.len(), 1);
+        assert_eq!(rev_user[0].seq, 2);
+        assert_eq!(rev_user[0].undoes_seq, None);
+    }
+
+    #[tokio::test]
+    async fn revertible_for_is_lifo_and_hash_survives_undoes_seq() {
+        let j = Journal::open_in_memory().await.expect("open");
+        for w in [&b"file:///a"[..], b"file:///b", b"file:///c"] {
+            j.record("created", w, None, Reversal::Delete, None, &Actor::User)
+                .await
+                .expect("rec");
+        }
+        let rev = j.revertible_for(&Actor::User).await.expect("rev");
+        assert_eq!(
+            rev.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![3, 2, 1],
+            "orden LIFO (DESC)"
+        );
+        assert!(
+            j.verify_chain().await.expect("verify"),
+            "chain íntegra con undoes_seq"
+        );
     }
 }
