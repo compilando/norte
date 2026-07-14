@@ -31,6 +31,8 @@ serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
+# Reglas declarativas de policy.toml (M3-3, spec §10): parsing con deny_unknown_fields.
+toml.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
