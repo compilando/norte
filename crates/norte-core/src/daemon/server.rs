@@ -5,9 +5,9 @@
 use std::collections::HashMap;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use norte_proto::wire::{
@@ -23,6 +23,8 @@ use tokio_util::sync::CancellationToken;
 use super::DaemonError;
 use crate::Engine;
 use crate::engine::TransferOptions;
+use crate::journal::Actor;
+use crate::policy::{OpSet, Scope, ScopeRegistry};
 use crate::scheduler::TaskHandle;
 
 /// Intervalo mínimo entre notificaciones de progreso de UNA task (≤30 Hz).
@@ -56,6 +58,17 @@ const MAX_OPEN_LISTINGS: usize = 8;
 /// presión del MISMO uid, la paginación degrada a listado-completo, jamás a
 /// agotar el pool. Coste de una llamada lenta, nunca corrupción ni truncado.
 const GLOBAL_MAX_LISTINGS: usize = 256;
+/// Peticiones de scope PENDIENTES retenidas en TODO el daemon (M3-3b): tope
+/// GLOBAL. Debajo, cada conexión tiene su propio sub-cap
+/// [`MAX_PENDING_SCOPE_PER_CONN`] para que una sola sesión no agote el canal
+/// de las demás (patrón de los listings: por-conexión + global).
+const MAX_PENDING_SCOPE: usize = 256;
+/// Peticiones de scope pendientes por CONEXIÓN: acota lo que una sola sesión
+/// puede retener del tope global. Se limpian al morir la conexión.
+const MAX_PENDING_SCOPE_PER_CONN: usize = 16;
+/// Tope del TTL de un scope concedido (24 h): una petición con `ttl_ms`
+/// enorme no concede acceso cuasi-perpetuo por accidente.
+const MAX_SCOPE_TTL_MS: u64 = 24 * 60 * 60 * 1000;
 /// Cada cuánto barre el server los listados retenidos expirados de una
 /// conexión VIVA-pero-muda (además del barrido perezoso en cada `fs.list`).
 const LISTING_SWEEP: Duration = Duration::from_secs(30);
@@ -110,6 +123,25 @@ struct Shared {
     /// Listados paginados retenidos en TODO el daemon (M1): tope global
     /// [`GLOBAL_MAX_LISTINGS`] para proteger el pool blocking.
     open_listings: Arc<AtomicUsize>,
+    /// Registro de scopes concedidos por sesión de agente (M3-3b). Es la MISMA
+    /// instancia (`Arc`-backed) que el `ScopedPolicy` del engine consulta en el
+    /// gate: conceder aquí abre la frontera allí. Vacío si no hay policy.
+    scopes: ScopeRegistry,
+    /// Peticiones de scope pendientes de concesión humana, por `request_id`.
+    /// Acotado a [`MAX_PENDING_SCOPE`].
+    pending_scope: Mutex<HashMap<u64, PendingScope>>,
+    /// Contador de `request_id` de scope (monótono).
+    next_scope_req: AtomicU64,
+}
+
+/// Una petición de scope registrada por un agente, a la espera de que un
+/// humano la conceda con `policy.grant_scope`. Guarda lo pedido verbatim; la
+/// sesión ya quedó validada contra el actor de la conexión al registrarla.
+struct PendingScope {
+    session: String,
+    roots: Vec<norte_proto::VPath>,
+    ops: Vec<String>,
+    ttl_ms: u64,
 }
 
 impl Shared {
@@ -162,6 +194,25 @@ impl Daemon {
     /// vivo, o I/O.
     #[tracing::instrument(skip(engine, cfg))]
     pub async fn bind(engine: Arc<Engine>, cfg: DaemonConfig) -> Result<Self, DaemonError> {
+        Self::bind_with_scopes(engine, ScopeRegistry::new(), cfg).await
+    }
+
+    /// Como [`Self::bind`] pero comparte `scopes` con el `ScopedPolicy` del
+    /// engine (M3-3b): el llamante construye
+    /// `engine.with_policy(ScopedPolicy::new(scopes.clone(), cfg), …)` y pasa
+    /// el MISMO registro aquí para que `policy.grant_scope` abra la frontera
+    /// que el gate del engine consulta. Sin policy, pásale un registro vacío
+    /// (o usa [`Self::bind`]).
+    ///
+    /// # Errors
+    /// [`DaemonError`]: dir inseguro, root, socket ocupado por un daemon vivo,
+    /// o I/O.
+    #[tracing::instrument(skip(engine, scopes, cfg))]
+    pub async fn bind_with_scopes(
+        engine: Arc<Engine>,
+        scopes: ScopeRegistry,
+        cfg: DaemonConfig,
+    ) -> Result<Self, DaemonError> {
         // La resolución del path por defecto puede tocar el FS (sonda de
         // uid del fallback /tmp): TODO dentro del spawn_blocking (regla 2).
         let (listener, uid, socket_path) = tokio::task::spawn_blocking({
@@ -228,6 +279,9 @@ impl Daemon {
                 uid,
                 listing_ttl: cfg.listing_ttl,
                 open_listings: Arc::new(AtomicUsize::new(0)),
+                scopes,
+                pending_scope: Mutex::new(HashMap::new()),
+                next_scope_req: AtomicU64::new(0),
             }),
             idle_timeout: cfg.idle_timeout,
         })
@@ -438,6 +492,12 @@ struct ConnState {
     actor: crate::journal::Actor,
     listings: HashMap<u64, OpenListing>,
     next_listing_id: u64,
+    /// `request_id`s de scope que ESTA conexión dejó pendientes (M3-3b): al
+    /// morir la conexión se retiran del mapa global de `Shared` — una petición
+    /// sin conceder no sobrevive a su peticionario (sin esto, un agente que
+    /// pide y se va clava un slot para siempre). Acotado a
+    /// [`MAX_PENDING_SCOPE_PER_CONN`]: una sesión no monopoliza el canal global.
+    pending_scope_ids: Vec<u64>,
 }
 
 impl ConnState {
@@ -447,6 +507,7 @@ impl ConnState {
             actor: crate::journal::Actor::User,
             listings: HashMap::new(),
             next_listing_id: 0,
+            pending_scope_ids: Vec::new(),
         }
     }
 
@@ -697,6 +758,19 @@ async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::
         .lock()
         .expect("subscribers lock sano")
         .remove(&conn_id);
+    // Las peticiones de scope que ESTA conexión dejó pendientes mueren con
+    // ella: una petición sin conceder no debe sobrevivir a su peticionario
+    // (anti-fuga del canal global, M3-3b). `remove` de un id ya concedido es
+    // un no-op benigno.
+    if !conn.pending_scope_ids.is_empty() {
+        let mut pending = shared
+            .pending_scope
+            .lock()
+            .expect("pending_scope lock sano");
+        for id in &conn.pending_scope_ids {
+            pending.remove(id);
+        }
+    }
     drop(tx);
     let _ = writer_task.await;
     result
@@ -879,8 +953,132 @@ async fn dispatch(
             let p: methods::FsListParams = parse_params(req.params)?;
             handle_fs_list(p, conn, shared).await
         }
+        // policy.* con round-trip humano (M3-3b): request/grant de scope. Viven
+        // AQUÍ porque atan la operación al ACTOR de la conexión (server-side).
+        methods::POLICY_REQUEST_SCOPE => {
+            let p: methods::RequestScopeParams = parse_params(req.params)?;
+            handle_request_scope(conn, p, shared)
+        }
+        methods::POLICY_GRANT_SCOPE => {
+            let p: methods::GrantScopeParams = parse_params(req.params)?;
+            handle_grant_scope(&conn.actor, &p, shared)
+        }
         _ => dispatch_fs_task(req, conn.actor.clone(), shared).await,
     }
+}
+
+/// `policy.request_scope` (M3-3b): un AGENTE pide un scope para SÍ mismo. La
+/// petición queda pendiente; no concede nada hasta que un humano la conceda
+/// con `policy.grant_scope`. Devuelve el `request_id`. La pendiente se retira
+/// del mapa global al morir la conexión que la creó (no sobrevive a su dueño).
+#[tracing::instrument(skip_all, fields(ops = ?p.ops, ttl_ms = p.ttl_ms))]
+fn handle_request_scope(
+    conn: &mut ConnState,
+    p: methods::RequestScopeParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    // Solo un agente pide scope, y SOLO para su propia sesión: la identidad la
+    // fija la conexión (T2), jamás el cuerpo del mensaje. Un `User` no necesita
+    // scope (no se sandboxea), así que pedirlo es un error de protocolo.
+    let Actor::Agent { session } = &conn.actor else {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only an agent session may request a scope",
+        ));
+    };
+    if p.session != *session {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "session must match the connection's agent session",
+        ));
+    }
+    // Sub-cap por conexión: una sola sesión no agota el canal global de las
+    // demás (una pendiente sin conceder ocupa slot hasta grant o desconexión).
+    if conn.pending_scope_ids.len() >= MAX_PENDING_SCOPE_PER_CONN {
+        return Err(RpcError::protocol(
+            codes::OVERLOADED,
+            "too many pending scope requests on this connection",
+        ));
+    }
+    let session = session.clone();
+    let mut pending = shared
+        .pending_scope
+        .lock()
+        .expect("pending_scope lock sano");
+    if pending.len() >= MAX_PENDING_SCOPE {
+        return Err(RpcError::protocol(
+            codes::OVERLOADED,
+            "too many pending scope requests",
+        ));
+    }
+    let request_id = shared.next_scope_req.fetch_add(1, Ordering::SeqCst);
+    pending.insert(
+        request_id,
+        PendingScope {
+            session,
+            roots: p.roots,
+            ops: p.ops,
+            ttl_ms: p.ttl_ms,
+        },
+    );
+    drop(pending);
+    conn.pending_scope_ids.push(request_id);
+    to_value(&methods::RequestScopeResult { request_id })
+}
+
+/// `policy.grant_scope` (M3-3b): un humano concede una petición pendiente.
+///
+/// "Humano" = cualquier conexión que NO declaró `agent_session` (actor `User`).
+/// Bajo el threat model UDS same-uid (§14) esto no es una barrera fuerte: un
+/// proceso del mismo uid puede abrir una 2ª conexión sin `agent_session` y
+/// autoconcederse scope — pero esa conexión `User` YA puede ejecutar las
+/// mutaciones directamente (`User` = allow-all), así que el grant no otorga
+/// poder extra. La policy es un guardarraíl para agentes que COOPERAN (vía
+/// norte-mcp, M3-4), no un sandbox. Materializa el `Scope` con su TTL y abre la
+/// frontera que el gate del engine consulta (mismo `ScopeRegistry`).
+#[tracing::instrument(skip_all, fields(request_id = p.request_id))]
+fn handle_grant_scope(
+    actor: &Actor,
+    p: &methods::GrantScopeParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection may grant a scope",
+        ));
+    }
+    // Consume la petición (una concesión por id; re-conceder es INVALID_PARAMS).
+    let req = shared
+        .pending_scope
+        .lock()
+        .expect("pending_scope lock sano")
+        .remove(&p.request_id);
+    let Some(req) = req else {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "unknown or already-granted request_id",
+        ));
+    };
+    let scope = Scope {
+        roots: req.roots,
+        ops: OpSet::from_names(&req.ops),
+        expires_at: Some(scope_deadline(req.ttl_ms)),
+    };
+    // Efecto de seguridad (futuro material de auditoría M3-5): traza el grant
+    // con la sesión y las ops, jamás las rutas crudas (regla 10).
+    tracing::info!(session = %req.session, ops = ?req.ops, "scope concedido a la sesión de agente");
+    shared.scopes.grant(&req.session, scope);
+    to_value(&methods::GrantScopeResult {})
+}
+
+/// Instante de expiración de un scope a partir de su `ttl_ms`: clamp a
+/// `[1, MAX_SCOPE_TTL_MS]` (ni 0 = ya-expirado inútil, ni cuasi-perpetuo) y
+/// suma saturante (jamás panica por overflow del reloj).
+fn scope_deadline(ttl_ms: u64) -> Instant {
+    let ms = ttl_ms.clamp(1, MAX_SCOPE_TTL_MS);
+    let now = Instant::now();
+    now.checked_add(Duration::from_millis(ms)).unwrap_or(now)
 }
 
 /// Las familias `fs.*`/`task.*` del dispatch (separadas por tamaño). El

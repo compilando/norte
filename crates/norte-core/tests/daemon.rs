@@ -13,8 +13,8 @@ use norte_core::daemon::{Client, ClientError, Daemon, DaemonConfig, DaemonError}
 use norte_core::{Engine, PolicyConfig, ScopeRegistry, ScopedPolicy};
 use norte_proto::methods::{
     self, ClientInfo, DaemonShutdownParams, DaemonShutdownResult, FsCopyParams, FsListParams,
-    FsListResult, FsStatParams, FsStatResult, FsTaskResult, InitializeParams, TaskCancelParams,
-    TaskCancelResult,
+    FsListResult, FsStatParams, FsStatResult, FsTaskResult, GrantScopeParams, GrantScopeResult,
+    InitializeParams, RequestScopeParams, RequestScopeResult, TaskCancelParams, TaskCancelResult,
 };
 use norte_proto::wire::codes;
 use norte_proto::{TaskProgress, TaskState, VPath};
@@ -86,18 +86,23 @@ async fn connected_client(d: &TestDaemon) -> Client {
     c
 }
 
-/// Daemon con `ScopedPolicy` instalada (registro de scopes VACÍO, sin reglas):
-/// un `User` pasa (no se sandboxea), un `Agent` sin scope se deniega. Base de
-/// la matriz de actor por conexión (M3-3b, Task 2).
+/// Daemon con `ScopedPolicy` instalada: registro de scopes VACÍO al arrancar
+/// (concedible por el wire, `policy.grant_scope`) + una regla `allow` (dentro
+/// de scope se permite). Un `User` pasa (no se sandboxea); un `Agent` sin scope
+/// se deniega por frontera antes de mirar reglas. El registro se COMPARTE entre
+/// el `ScopedPolicy` del engine y el `Shared` del daemon (M3-3b).
 async fn spawn_daemon_policy() -> TestDaemon {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
-    let policy = ScopedPolicy::new(ScopeRegistry::new(), PolicyConfig::default());
+    let scopes = ScopeRegistry::new();
+    let cfg = PolicyConfig::parse("[[rule]]\naction=\"allow\"").expect("policy cfg");
+    let policy = ScopedPolicy::new(scopes.clone(), cfg);
     let engine = Arc::new(Engine::new().with_policy(Arc::new(policy), Arc::new(DenyAll)));
     let mem = Arc::new(MemProvider::new());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
-    let daemon = Daemon::bind(
+    let daemon = Daemon::bind_with_scopes(
         engine,
+        scopes,
         DaemonConfig {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
@@ -524,6 +529,224 @@ async fn agente_sin_scope_ve_policy_denied_humano_copia() {
         .await
         .expect("humano copia sin gate");
     assert!(res.task_id.get() > 0);
+}
+
+/// M3-3b Task 3: round-trip de scope. Un agente pide (`request_scope`) — sin
+/// concesión su copia dentro sigue denegada —; un humano concede
+/// (`grant_scope`) y entonces la copia DENTRO del scope procede, pero FUERA
+/// sigue denegada. Prueba que el registro es el MISMO que consulta el gate.
+#[tokio::test]
+async fn scope_request_grant_abre_la_frontera_y_solo_dentro() {
+    let d = spawn_daemon_policy().await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
+    write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
+    let copy = |from: &str, to: &str| FsCopyParams {
+        from: vp(from),
+        to: vp(to),
+        on_collision: norte_proto::CollisionPolicy::default(),
+        symlinks: norte_proto::SymlinkPolicy::default(),
+        resume: norte_proto::ResumePolicy::default(),
+        verify: norte_proto::VerifyPolicy::default(),
+    };
+    let assert_out_of_scope = |err: ClientError| match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
+            "PolicyDenied out-of-scope, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    };
+
+    let agent = connected_agent(&d, "s1").await;
+
+    // 1) Pide scope para su propia sesión: queda pendiente.
+    let req: RequestScopeResult = agent
+        .call(
+            methods::POLICY_REQUEST_SCOPE,
+            &RequestScopeParams {
+                session: "s1".into(),
+                roots: vec![vp("mem:///proj")],
+                ops: vec!["copy".into()],
+                ttl_ms: 60_000,
+            },
+        )
+        .await
+        .expect("request_scope");
+
+    // 2) Sin concesión, la copia DENTRO sigue denegada (frontera cerrada).
+    let err = agent
+        .call::<_, FsTaskResult>(
+            methods::FS_COPY,
+            &copy("mem:///proj/src.txt", "mem:///proj/dst.txt"),
+        )
+        .await
+        .expect_err("pendiente aún no concede");
+    assert_out_of_scope(err);
+
+    // 3) Un humano concede la petición.
+    let human = connected_client(&d).await;
+    let _grant: GrantScopeResult = human
+        .call(
+            methods::POLICY_GRANT_SCOPE,
+            &GrantScopeParams {
+                request_id: req.request_id,
+            },
+        )
+        .await
+        .expect("grant_scope");
+
+    // 4) Ahora la copia DENTRO del scope procede (frontera + regla allow).
+    let ok: FsTaskResult = agent
+        .call(
+            methods::FS_COPY,
+            &copy("mem:///proj/src.txt", "mem:///proj/dst.txt"),
+        )
+        .await
+        .expect("dentro del scope procede");
+    assert!(ok.task_id.get() > 0);
+
+    // 5) Pero FUERA del scope sigue denegada (la concesión no es un cheque en
+    //    blanco: solo abre `mem:///proj`).
+    let err_out = agent
+        .call::<_, FsTaskResult>(
+            methods::FS_COPY,
+            &copy("mem:///proj/src.txt", "mem:///out.txt"),
+        )
+        .await
+        .expect_err("fuera del scope");
+    assert_out_of_scope(err_out);
+}
+
+/// El canal de peticiones tiene sub-cap POR CONEXIÓN: una sola sesión que pide
+/// sin que nadie conceda no agota el tope global de las demás.
+#[tokio::test]
+async fn request_scope_sub_cap_por_conexion() {
+    let d = spawn_daemon_policy().await;
+    let agent = connected_agent(&d, "s1").await;
+    let req = || RequestScopeParams {
+        session: "s1".into(),
+        roots: vec![vp("mem:///proj")],
+        ops: vec!["copy".into()],
+        ttl_ms: 60_000,
+    };
+    // MAX_PENDING_SCOPE_PER_CONN (16) peticiones entran; la 17ª es OVERLOADED.
+    for i in 0..16 {
+        let _: RequestScopeResult = agent
+            .call(methods::POLICY_REQUEST_SCOPE, &req())
+            .await
+            .unwrap_or_else(|e| panic!("petición {i} dentro del cap: {e:?}"));
+    }
+    let err = agent
+        .call::<_, RequestScopeResult>(methods::POLICY_REQUEST_SCOPE, &req())
+        .await
+        .expect_err("supera el sub-cap");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::OVERLOADED));
+}
+
+/// Una petición de scope sin conceder muere con la conexión que la creó: no
+/// sobrevive a su peticionario (anti-fuga del canal global). Tras desconectar
+/// el agente, conceder ese `request_id` es `INVALID_PARAMS`.
+#[tokio::test]
+async fn pending_scope_se_limpia_al_desconectar_el_agente() {
+    let d = spawn_daemon_policy().await;
+    let request_id = {
+        let agent = connected_agent(&d, "s1").await;
+        let r: RequestScopeResult = agent
+            .call(
+                methods::POLICY_REQUEST_SCOPE,
+                &RequestScopeParams {
+                    session: "s1".into(),
+                    roots: vec![vp("mem:///proj")],
+                    ops: vec!["copy".into()],
+                    ttl_ms: 60_000,
+                },
+            )
+            .await
+            .expect("request_scope");
+        r.request_id
+        // `agent` se dropea aquí: su mitad de escritura cierra, el daemon ve
+        // EOF y ejecuta la limpieza de sus pendientes.
+    };
+    // La limpieza es asíncrona del lado del daemon: margen generoso sobre UDS
+    // local antes de comprobar (patrón de los otros tests con timing).
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let human = connected_client(&d).await;
+    let err = human
+        .call::<_, GrantScopeResult>(
+            methods::POLICY_GRANT_SCOPE,
+            &GrantScopeParams { request_id },
+        )
+        .await
+        .expect_err("la pendiente no debía sobrevivir a su conexión");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+}
+
+/// Un agente no puede pedir scope para OTRA sesión (la identidad la fija la
+/// conexión, no el cuerpo); y un humano no puede pedir scope (no se sandboxea).
+#[tokio::test]
+async fn request_scope_rechaza_sesion_ajena_y_no_agente() {
+    let d = spawn_daemon_policy().await;
+
+    // Agente s1 pidiendo para s2 → INVALID_PARAMS (no falsea su identidad).
+    let agent = connected_agent(&d, "s1").await;
+    let err = agent
+        .call::<_, RequestScopeResult>(
+            methods::POLICY_REQUEST_SCOPE,
+            &RequestScopeParams {
+                session: "s2".into(),
+                roots: vec![vp("mem:///proj")],
+                ops: vec!["copy".into()],
+                ttl_ms: 1000,
+            },
+        )
+        .await
+        .expect_err("sesión ajena");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+
+    // Humano (sin agent_session) pidiendo scope → INVALID_REQUEST.
+    let human = connected_client(&d).await;
+    let err2 = human
+        .call::<_, RequestScopeResult>(
+            methods::POLICY_REQUEST_SCOPE,
+            &RequestScopeParams {
+                session: "whatever".into(),
+                roots: vec![vp("mem:///proj")],
+                ops: vec!["copy".into()],
+                ttl_ms: 1000,
+            },
+        )
+        .await
+        .expect_err("humano no pide scope");
+    assert!(matches!(err2, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
+}
+
+/// Un agente no puede CONCEDER (grant es acto humano); y conceder un
+/// `request_id` desconocido es `INVALID_PARAMS`.
+#[tokio::test]
+async fn grant_scope_es_humano_y_id_desconocido_falla() {
+    let d = spawn_daemon_policy().await;
+
+    // Agente intentando conceder → INVALID_REQUEST.
+    let agent = connected_agent(&d, "s1").await;
+    let err = agent
+        .call::<_, GrantScopeResult>(
+            methods::POLICY_GRANT_SCOPE,
+            &GrantScopeParams { request_id: 0 },
+        )
+        .await
+        .expect_err("agente no concede");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
+
+    // Humano concediendo un id que no existe → INVALID_PARAMS.
+    let human = connected_client(&d).await;
+    let err2 = human
+        .call::<_, GrantScopeResult>(
+            methods::POLICY_GRANT_SCOPE,
+            &GrantScopeParams { request_id: 999 },
+        )
+        .await
+        .expect_err("id desconocido");
+    assert!(matches!(err2, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 }
 
 /// `connection.trust_host_key` (0.7.0, fase 6e) existe en el dispatch y

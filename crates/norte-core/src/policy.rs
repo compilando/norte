@@ -81,6 +81,20 @@ impl OpSet {
             kinds: kinds.iter().copied().collect(),
         }
     }
+    /// Desde nombres en RUNTIME (wire): conserva cada nombre que sea un op-kind
+    /// canónico y DESCARTA los desconocidos (fail-closed — un op-kind que no
+    /// reconocemos no se concede jamás). La fuente de verdad de los kinds
+    /// válidos es [`Self::all`]: añadir una op ahí la hace concedible por wire
+    /// sin tocar este método. Usado por el daemon al conceder un scope pedido.
+    #[must_use]
+    pub fn from_names<S: AsRef<str>>(names: &[S]) -> Self {
+        let all = Self::all();
+        let kinds = names
+            .iter()
+            .filter_map(|n| all.kinds.iter().copied().find(|k| *k == n.as_ref()))
+            .collect();
+        Self { kinds }
+    }
     /// `true` si `op` está concedida.
     #[must_use]
     pub fn allows(&self, op: PolicyOp) -> bool {
@@ -161,12 +175,14 @@ impl ScopeRegistry {
     /// # Panics
     /// Solo si el lock interno queda envenenado.
     pub fn grant(&self, session: &str, scope: Scope) {
-        self.inner
-            .lock()
-            .expect("scope registry lock")
-            .entry(session.to_owned())
-            .or_default()
-            .push(scope);
+        let now = Instant::now();
+        let mut map = self.inner.lock().expect("scope registry lock");
+        let entry = map.entry(session.to_owned()).or_default();
+        // Poda perezosa: al conceder, descarta los scopes ya expirados de esta
+        // sesión para que el `Vec` no crezca monótono en un daemon longevo. La
+        // recolección de claves de sesiones muertas es deuda m7 (revoke).
+        entry.retain(|s| !s.is_expired(now));
+        entry.push(scope);
     }
     /// Veredicto de frontera para `(session, op, path)` a instante `now`.
     ///
