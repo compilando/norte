@@ -107,6 +107,31 @@ impl Reversal {
     }
 }
 
+/// Una entrada del journal materializada para LECTURA (undo M3-2, audit M3-5,
+/// tests de integración). Los `path`/`path_to`/`reversal_ref` son BYTES crudos
+/// de [`norte_proto::VPath::to_wire`] (regla 1): reconstruye con
+/// `VPath::from_wire` al consumir, jamás asumas UTF-8.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalEntry {
+    /// Secuencia monótona asignada al registrar.
+    pub seq: i64,
+    /// Origen: `"user" | "agent" | "plugin"`.
+    pub actor_kind: String,
+    /// Id de sesión del agente / id del plugin, si aplica.
+    pub actor_id: Option<String>,
+    /// Operación: `"created" | "removed" | "trashed" | "renamed"`.
+    pub op: String,
+    /// Path afectado (bytes `to_wire`).
+    pub path: Vec<u8>,
+    /// Destino de un `renamed` (bytes `to_wire`).
+    pub path_to: Option<Vec<u8>>,
+    /// Etiqueta de reversa persistida ([`Reversal::as_str`]).
+    pub reversal: String,
+    /// Referencia para revertir (p. ej. ruta de papelera de un `trashed`),
+    /// bytes `to_wire`.
+    pub reversal_ref: Option<Vec<u8>>,
+}
+
 /// Los campos de una entrada, en el orden canónico del hash.
 pub(crate) struct Record<'a> {
     pub seq: i64,
@@ -349,6 +374,35 @@ impl Journal {
             prev = computed;
         }
         Ok(true)
+    }
+
+    /// Vuelca todas las entradas en orden de `seq`. Materializa en memoria:
+    /// pensado para journals de tamaño de sesión (la paginación es deuda si
+    /// crece — mismo criterio que el listado, #27). Base de lectura para el
+    /// undo (M3-2) y el audit export (M3-5).
+    ///
+    /// # Errors
+    /// [`JournalError::Sqlx`].
+    pub async fn entries(&self) -> Result<Vec<JournalEntry>, JournalError> {
+        let rows = sqlx::query(
+            "SELECT seq, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref \
+             FROM journal ORDER BY seq ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| JournalEntry {
+                seq: row.get(0),
+                actor_kind: row.get(1),
+                actor_id: row.get(2),
+                op: row.get(3),
+                path: row.get(4),
+                path_to: row.get(5),
+                reversal: row.get(6),
+                reversal_ref: row.get(7),
+            })
+            .collect())
     }
 
     /// SOLO TESTS: corrompe el `path` de una entrada sin recomputar su hash.
@@ -629,5 +683,41 @@ mod tests {
             obs.journal.verify_chain().await.expect("verify"),
             "sin falso-manipulado bajo concurrencia (security M1)"
         );
+    }
+
+    #[tokio::test]
+    async fn entries_returns_fields_in_seq_order() {
+        let j = Journal::open_in_memory().await.expect("open");
+        j.record(
+            "created",
+            b"file:///a",
+            None,
+            Reversal::Delete,
+            None,
+            &Actor::User,
+        )
+        .await
+        .expect("r1");
+        j.record(
+            "renamed",
+            b"file:///b",
+            Some(b"file:///a"),
+            Reversal::RenameBack,
+            None,
+            &Actor::User,
+        )
+        .await
+        .expect("r2");
+
+        let es = j.entries().await.expect("entries");
+        assert_eq!(es.len(), 2);
+        assert_eq!(es[0].seq, 1);
+        assert_eq!(es[0].op, "created");
+        assert_eq!(es[0].path, b"file:///a");
+        assert_eq!(es[0].reversal, "delete");
+        assert_eq!(es[1].op, "renamed");
+        assert_eq!(es[1].path, b"file:///b");
+        assert_eq!(es[1].path_to.as_deref(), Some(&b"file:///a"[..]));
+        assert_eq!(es[1].reversal, "rename_back");
     }
 }
