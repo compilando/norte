@@ -15,8 +15,8 @@ const jetBrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "[NOMBRE] — The keyboard-first file commander",
-  description: "A blazingly fast, keyboard-first file commander for every platform.",
+  title: "[NOMBRE] — Command every file. Trust every move.",
+  description: "The keyboard-first file commander with a native Rust core, a universal filesystem, and a journal behind every move.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

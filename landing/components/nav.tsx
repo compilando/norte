@@ -10,10 +10,10 @@ export function Nav() {
         </a>
         <div className="hidden items-center gap-7 md:flex">
           <a href="#features" className="text-sm text-muted transition-colors hover:text-ink">Features</a>
-          <a href="#docs" className="text-sm text-muted transition-colors hover:text-ink">Docs</a>
+          <a href="#architecture" className="text-sm text-muted transition-colors hover:text-ink">Architecture</a>
           <a href="#source" className="text-sm text-muted transition-colors hover:text-ink">GitHub</a>
         </div>
-        <ButtonLink href="#download" className="h-9 px-4 text-xs">Download</ButtonLink>
+        <ButtonLink href="#download" className="h-9 px-4 text-xs">Download <span className="hidden sm:inline">[NOMBRE]</span></ButtonLink>
       </nav>
     </header>
   );
