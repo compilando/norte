@@ -42,6 +42,12 @@ pub struct TrashPaths {
 /// - [`Error::InvalidPath`] si `id` no es un segmento válido.
 pub fn plan(p: &VPath, id: &str) -> Result<TrashPaths, Error> {
     let basename = p.file_name().ok_or(Error::Unsupported)?.clone();
+    // No se papeleriza la propia papelera ni nada dentro de ella: evita el
+    // rename de `.norte-trash` dentro de sí mismo (POSIX EINVAL) y entradas
+    // basura autorreferenciales que confundirían al restore de M3.
+    if p.segments().next() == Some(TRASH_DIR) {
+        return Err(Error::Unsupported);
+    }
     let id_seg = Segment::new(id.as_bytes().to_vec()).map_err(|_| Error::InvalidPath)?;
     let dir = provider_root(p).join(seg_const(TRASH_DIR)).join(id_seg);
     let payload = dir.join(basename);
@@ -192,6 +198,19 @@ mod tests {
         let p = VPath::parse("sftp://host/x").unwrap();
         // Un id con `/` no es un Segment válido.
         assert!(matches!(plan(&p, "bad/id"), Err(Error::InvalidPath)));
+    }
+
+    #[test]
+    fn plan_refuses_trashing_the_trash_itself() {
+        // La papelera misma no se papeleriza (auto-referencia).
+        let dir = VPath::parse("sftp://host/.norte-trash").unwrap();
+        assert!(matches!(plan(&dir, "1-0"), Err(Error::Unsupported)));
+        // Ni nada que ya viva dentro de ella (re-trashear una entrada).
+        let inside = VPath::parse("sftp://host/.norte-trash/2-0/x").unwrap();
+        assert!(matches!(plan(&inside, "3-0"), Err(Error::Unsupported)));
+        // Pero un fichero `.norte-trash` ANIDADO (no en la raíz) sí se puede.
+        let nested = VPath::parse("sftp://host/dir/.norte-trash").unwrap();
+        assert!(plan(&nested, "4-0").is_ok());
     }
 
     #[test]

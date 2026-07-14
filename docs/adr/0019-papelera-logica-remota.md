@@ -43,6 +43,20 @@ recuperable propio sin degradar en silencio a permanente.
   de id/paths y encode/decode del `.norte-info`. Los providers no se
   conocen entre sí; solo conocen el trait + este módulo.
 
+## Robustez (hallazgos de auditoría 9b)
+
+- **Auto-referencia**: `trash::plan` rechaza (`Unsupported`) papelerizar
+  `.norte-trash` o cualquier ruta dentro de ella — evita el rename de la
+  papelera dentro de sí misma (POSIX EINVAL) y entradas basura.
+- **Colisión de id entre sesiones**: `<id>` solo es único por sesión; dos
+  conexiones borrando en el mismo ms colisionan. El provider reintenta con
+  id nuevo (contador avanza) en vez de fallar en duro.
+- **Concurrencia en `.norte-trash/`**: la creación de la raíz es
+  idempotente (tolera el `Failure` genérico de v3 si otra sesión la crea a
+  la vez).
+- **Víctima ausente**: `stat` previo → `NotFound` limpio, sin entrada
+  huérfana.
+
 ## Consecuencias
 
 Positivas: borrado recuperable en remotos con layout estable (M3 restaura

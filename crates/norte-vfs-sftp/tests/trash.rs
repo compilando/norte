@@ -154,3 +154,58 @@ async fn trash_preserves_hostile_basename() {
         "basename hostil preservado"
     );
 }
+
+#[tokio::test]
+async fn trash_moves_directory_tree() {
+    // Prueba de verdad el claim de ADR 0009: un rename se lleva el ÁRBOL
+    // entero (entries_total = 1), no solo un fichero suelto.
+    let p = fresh(true).await;
+    let dir = root().join(Segment::new(b"proj".to_vec()).unwrap());
+    p.mkdir(&dir).await.expect("mkdir proj");
+    let sub = dir.join(Segment::new(b"sub".to_vec()).unwrap());
+    p.mkdir(&sub).await.expect("mkdir sub");
+    let deep = sub.join(Segment::new(b"b.txt".to_vec()).unwrap());
+    let mut sink = p.write(&deep).await.expect("write");
+    sink.write(Bytes::from_static(b"hondo"))
+        .await
+        .expect("chunk");
+    sink.commit().await.expect("commit");
+
+    p.trash(&dir).await.expect("trash");
+    assert!(matches!(
+        p.stat(&dir).await,
+        Err(norte_proto::Error::NotFound)
+    ));
+
+    // El subárbol entero aterrizó en `.norte-trash/<id>/proj/sub/b.txt`.
+    let trash_dir = root().join(Segment::new(trash::TRASH_DIR.to_vec()).unwrap());
+    let ids = child_names(&p, &trash_dir).await;
+    let entry = trash_dir.join(Segment::new(ids[0].clone()).unwrap());
+    let moved_deep = entry
+        .join(Segment::new(b"proj".to_vec()).unwrap())
+        .join(Segment::new(b"sub".to_vec()).unwrap())
+        .join(Segment::new(b"b.txt".to_vec()).unwrap());
+    assert_eq!(read_all(&p, &moved_deep).await, b"hondo");
+}
+
+#[tokio::test]
+async fn trash_refuses_to_trash_itself() {
+    // Papelerizar `.norte-trash` (o algo dentro) = Unsupported (auto-ref),
+    // sin dejar basura ni tocar la papelera existente.
+    let p = fresh(true).await;
+
+    // Crea la papelera trasheando un fichero cualquiera.
+    let victim = root().join(Segment::new(b"v.txt".to_vec()).unwrap());
+    let mut sink = p.write(&victim).await.expect("write");
+    sink.write(Bytes::from_static(b"a")).await.expect("chunk");
+    sink.commit().await.expect("commit");
+    p.trash(&victim).await.expect("trash");
+
+    let trash_dir = root().join(Segment::new(trash::TRASH_DIR.to_vec()).unwrap());
+    assert!(matches!(
+        p.trash(&trash_dir).await,
+        Err(norte_proto::Error::Unsupported)
+    ));
+    // La papelera sigue en pie.
+    assert!(p.stat(&trash_dir).await.is_ok());
+}

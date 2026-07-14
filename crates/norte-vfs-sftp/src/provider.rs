@@ -67,6 +67,32 @@ impl SftpProvider {
         self
     }
 
+    /// Siguiente valor del contador monótono de ids de papelera.
+    fn next_counter(&self) -> u64 {
+        self.trash_counter.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Crea `dir` tolerando que ya exista (idempotente). Bajo concurrencia
+    /// v3 puede devolver `Failure` genérico (→ `Io`) en vez de `Conflict`
+    /// si otra sesión lo crea entre el `exists()` y el `create_dir`; si al
+    /// final el directorio está, el resultado es benigno.
+    async fn ensure_dir_idempotent(&self, dir: &VPath) -> Result<(), Error> {
+        match self.mkdir(dir).await {
+            Ok(())
+            | Err(Error::Conflict {
+                conflict: ConflictKind::Exists,
+            }) => Ok(()),
+            Err(e) => {
+                let remote = self.remote(dir)?;
+                if self.exists(&remote).await.unwrap_or(false) {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
     /// La raíz de este provider para un `authority` dado
     /// (`sftp://host:22/`).
     ///
@@ -436,24 +462,42 @@ impl Provider for SftpProvider {
         if !self.logical_trash {
             return Err(Error::Unsupported);
         }
+        // Víctima ausente = `NotFound` limpio (como `remove`), sin crear una
+        // entrada de papelera huérfana (lstat: no sigue symlinks).
+        let _ = self.stat(p).await?;
+
         // Reloj de pared + contador de sesión → id único y ordenable.
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
-        let counter = self.trash_counter.fetch_add(1, Ordering::Relaxed);
-        let id = trash::trash_id(now_ms, counter);
-        let paths = trash::plan(p, &id)?;
 
-        // `.norte-trash/` (ignora si ya existe) → `.norte-trash/<id>/` (fresco).
-        let trash_root = paths.dir.parent().ok_or(Error::Unsupported)?;
-        match self.mkdir(&trash_root).await {
-            Ok(())
-            | Err(Error::Conflict {
-                conflict: ConflictKind::Exists,
-            }) => {}
-            Err(e) => return Err(e),
+        // Primer plan: valida `p` (rechaza papelerizar la propia papelera,
+        // ADR 0019) y da la raíz `.norte-trash`.
+        let first = trash::plan(p, &trash::trash_id(now_ms, self.next_counter()))?;
+        let trash_root = first.dir.parent().ok_or(Error::Unsupported)?;
+
+        // `.norte-trash/` idempotente: bajo concurrencia entre sesiones el
+        // `create_dir` perdedor puede dar `Failure` genérico (→ `Io`) en vez
+        // de `Conflict`; si ya existe, es benigno.
+        self.ensure_dir_idempotent(&trash_root).await?;
+
+        // `.norte-trash/<id>/` fresco. `<id>` solo es único POR SESIÓN; dos
+        // conexiones borrando en el mismo ms colisionan → reintenta con id
+        // nuevo (el contador avanza) en vez de fallar en duro.
+        let mut paths = first;
+        let mut attempts = 0u32;
+        loop {
+            match self.mkdir(&paths.dir).await {
+                Ok(()) => break,
+                Err(Error::Conflict {
+                    conflict: ConflictKind::Exists,
+                }) if attempts < 8 => {
+                    attempts += 1;
+                    paths = trash::plan(p, &trash::trash_id(now_ms, self.next_counter()))?;
+                }
+                Err(e) => return Err(e),
+            }
         }
-        self.mkdir(&paths.dir).await?;
 
         // Escribe `.norte-info` ANTES de mover: si el rename falla, el origen
         // queda intacto y solo hay un info huérfano (basura limpiable), nunca
