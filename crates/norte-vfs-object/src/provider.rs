@@ -2,6 +2,8 @@
 //! (ADR 0016). Object storage no tiene directorios: se modelan como marker
 //! objects (`clave/`) + sondeo de prefijo, con precedencia fichero > dir.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt};
@@ -54,6 +56,11 @@ pub struct ObjectProvider {
     /// fallara en duro un fichero (`Some(Err(Unsupported))`, sin fallback a
     /// streaming) donde el streaming habría funcionado.
     server_copy: bool,
+    /// Papelera lógica `.norte-trash/` activa (opt-in por conexión, ADR
+    /// 0019). Off por defecto → no declara `TRASH` → borrado permanente.
+    logical_trash: bool,
+    /// Contador monótono para desempatar ids de papelera del mismo ms.
+    trash_counter: AtomicU64,
 }
 
 impl ObjectProvider {
@@ -76,7 +83,17 @@ impl ObjectProvider {
             scheme: scheme.into(),
             key_budget,
             server_copy,
+            logical_trash: false,
+            trash_counter: AtomicU64::new(0),
         }
+    }
+
+    /// Activa/desactiva la papelera lógica `.norte-trash/` (ADR 0019).
+    /// Sin ella el provider no declara `TRASH` y `trash()` da `Unsupported`.
+    #[must_use]
+    pub fn with_logical_trash(mut self, enabled: bool) -> Self {
+        self.logical_trash = enabled;
+        self
     }
 
     /// La raíz de este provider para un `scheme`/`authority` (`s3://bucket/`).
@@ -253,11 +270,15 @@ impl Provider for ObjectProvider {
         // del repo que lo implementa) SOLO si el backend anuncia `copy` — sin
         // ese gate, un backend sin copia haría fallar en duro un fichero que
         // el streaming habría copiado. NO declara: APPEND/RANDOM_WRITE (S3 no
-        // tiene), SYMLINKS, RENAME_ATOMIC (copy+delete O(n)), TRASH (papelera
-        // lógica = fase 9).
+        // tiene), SYMLINKS, RENAME_ATOMIC (copy+delete O(n)). TRASH solo si la
+        // conexión activó la papelera lógica `.norte-trash/` (ADR 0019): la
+        // relocalización reusa el rename copy-all→delete-all.
         let mut flags = CapabilityFlags::CASE_SENSITIVE | CapabilityFlags::CASE_PRESERVING;
         if self.server_copy {
             flags |= CapabilityFlags::SERVER_COPY;
+        }
+        if self.logical_trash {
+            flags |= CapabilityFlags::TRASH;
         }
         Capabilities {
             flags,
