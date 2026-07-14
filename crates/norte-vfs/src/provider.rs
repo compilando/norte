@@ -167,6 +167,20 @@ pub trait Provider: Send + Sync {
         Ok(0)
     }
 
+    /// Restaura desde la papelera NATIVA del OS el ítem cuya ruta original es
+    /// `original` (undo M3-2 de un `Trashed` sin `reversal_ref`, ADR 0009).
+    /// Default `Unsupported`. Solo el provider local lo implementa: casa por
+    /// ruta original el ítem MÁS RECIENTE y lo restaura. Falla limpio si la
+    /// plataforma no lista la papelera, no hay match, o el destino está ocupado.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] (default y plataformas sin listado de papelera);
+    /// [`Error::NotFound`] sin match; [`Error::Conflict`] destino ocupado.
+    async fn restore_trashed(&self, original: &VPath) -> Result<(), Error> {
+        let _ = original;
+        Err(Error::Unsupported)
+    }
+
     /// Crea un symlink en `link` apuntando a `target` (bytes crudos, tal
     /// cual — el provider no los interpreta). `kind` distingue archivo/dir
     /// donde el OS lo exige (Windows); unix lo ignora.

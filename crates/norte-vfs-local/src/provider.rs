@@ -820,6 +820,60 @@ impl Provider for LocalProvider {
         Ok(None)
     }
 
+    /// Restaura desde la papelera nativa del OS el ítem cuya ruta ORIGINAL es
+    /// `original` (undo M3-2). Lista la papelera (`os_limited`), casa por ruta
+    /// original el ítem más reciente (desempate estable por id) y lo restaura.
+    /// Estricto: si el destino ya existe, `Conflict` (jamás pisa).
+    ///
+    /// SOLO freedesktop (Linux/BSD): la papelera guarda el parent CANONICALIZADO
+    /// (symlinks resueltos), así que se canoniza el parent de `original` antes de
+    /// casar; sin ello, una raíz colgada de un symlink nunca acertaría. Windows
+    /// (prefijo verbatim vs `C:\` del shell) y macOS/iOS/Android quedan
+    /// `Unsupported` por el default del trait (deuda: restore Windows/macOS).
+    #[cfg(all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    ))]
+    async fn restore_trashed(&self, original: &VPath) -> Result<(), Error> {
+        self.ensure_caps().await;
+        let native = self.native(original)?;
+        blocking(move || {
+            // Destino LIBRE (estricto: jamás pisa). symlink_metadata NO sigue el
+            // link (un symlink colgante en el destino ES «ocupado»), coherente
+            // con `trash()`.
+            if native.symlink_metadata().is_ok() {
+                return Err(Error::Conflict {
+                    conflict: ConflictKind::Exists,
+                });
+            }
+            // La papelera almacena `parent.canonicalize().join(name)`: casa contra
+            // esa MISMA forma o el match falla si la raíz cuelga de un symlink.
+            let name = native.file_name().ok_or(Error::InvalidPath)?;
+            let parent = native.parent().ok_or(Error::InvalidPath)?;
+            let target = parent.canonicalize().map_err(|e| map_io(&e))?.join(name);
+
+            let items = trash::os_limited::list().map_err(|_| Error::Unsupported)?;
+            let pick = items
+                .into_iter()
+                .filter(|it| it.original_path() == target)
+                // Más reciente; desempate por id → determinista bajo empate de
+                // segundo (deuda: resolución de 1s no distingue trash-recrea-trash
+                // en el mismo segundo — capturar el id al tirar sería exacto).
+                .max_by_key(|it| (it.time_deleted, it.id.clone()))
+                .ok_or(Error::NotFound)?;
+            trash::os_limited::restore_all([pick]).map_err(|e| match e {
+                trash::Error::RestoreCollision { .. } => Error::Conflict {
+                    conflict: ConflictKind::Exists,
+                },
+                trash::Error::CouldNotAccess { .. } => Error::PermissionDenied,
+                _ => Error::Io { retryable: false },
+            })
+        })
+        .await
+    }
+
     /// GC de `.norte-partial` huérfanos en el directorio `dir` (ADR 0012, #11):
     /// borra los staging cuya última modificación es anterior a `older_than`.
     /// Reconoce los parciales por su FORMA exacta (`is_norte_partial`), no por

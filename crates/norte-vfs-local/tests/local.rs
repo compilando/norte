@@ -555,3 +555,101 @@ async fn gc_partials_no_toca_archivos_del_usuario() {
     );
     assert!(dir.path().join(".norte-partial.notas.txt").exists());
 }
+
+#[cfg(all(
+    unix,
+    not(target_os = "macos"),
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+#[tokio::test]
+async fn restore_trashed_brings_back_by_original_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("v.txt"), b"data").expect("seed");
+    let p = LocalProvider::rooted(dir.path().to_path_buf());
+    let victim = child(&LocalProvider::root(), b"v.txt");
+
+    // Si la papelera del OS no está disponible en el runner, skip limpio.
+    if p.trash(&victim).await.is_err() {
+        eprintln!("skip: papelera del OS no disponible");
+        return;
+    }
+    assert!(matches!(
+        p.stat(&victim).await,
+        Err(norte_proto::Error::NotFound)
+    ));
+
+    p.restore_trashed(&victim).await.expect("restore");
+    assert_eq!(
+        std::fs::read(dir.path().join("v.txt")).expect("restaurado"),
+        b"data"
+    );
+}
+
+/// Regla 1: el match por ruta original y la restauración preservan bytes
+/// hostiles (nombre no-UTF8) — round-trip byte-exacto por la papelera real.
+#[cfg(all(
+    unix,
+    not(target_os = "macos"),
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+#[tokio::test]
+async fn restore_trashed_preserves_hostile_bytes() {
+    use std::os::unix::ffi::OsStrExt;
+    let name: &[u8] = b"h\xffstil.bin"; // 0xFF: inválido en cualquier UTF-8
+    let dir = tempfile::tempdir().expect("tempdir");
+    let native = dir.path().join(std::ffi::OsStr::from_bytes(name));
+    std::fs::write(&native, b"payload").expect("seed");
+    let p = LocalProvider::rooted(dir.path().to_path_buf());
+    let victim = child(&LocalProvider::root(), name);
+    if p.trash(&victim).await.is_err() {
+        eprintln!("skip: papelera del OS no disponible");
+        return;
+    }
+    assert!(matches!(
+        p.stat(&victim).await,
+        Err(norte_proto::Error::NotFound)
+    ));
+    p.restore_trashed(&victim).await.expect("restore");
+    assert_eq!(
+        std::fs::read(&native).expect("restaurado byte-exacto"),
+        b"payload"
+    );
+}
+
+/// Estricto: sin ítem en la papelera → `NotFound`; destino ocupado → `Conflict`
+/// (jamás pisa — la invariante de seguridad del undo).
+#[cfg(all(
+    unix,
+    not(target_os = "macos"),
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+#[tokio::test]
+async fn restore_trashed_is_strict() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = LocalProvider::rooted(dir.path().to_path_buf());
+    let ghost = child(&LocalProvider::root(), b"jamas_borrado.bin");
+    // Sin ítem correspondiente en la papelera → NotFound (o Unsupported si el
+    // runner no tiene papelera; ambos son fallos limpios, nunca pisa).
+    assert!(matches!(
+        p.restore_trashed(&ghost).await,
+        Err(norte_proto::Error::NotFound | norte_proto::Error::Unsupported)
+    ));
+
+    // Destino ocupado: trashear, recrear algo en su sitio, restaurar → Conflict.
+    std::fs::write(dir.path().join("v.txt"), b"orig").expect("seed");
+    let victim = child(&LocalProvider::root(), b"v.txt");
+    if p.trash(&victim).await.is_err() {
+        eprintln!("skip: papelera del OS no disponible");
+        return;
+    }
+    std::fs::write(dir.path().join("v.txt"), b"nuevo").expect("recrea");
+    assert!(matches!(
+        p.restore_trashed(&victim).await,
+        Err(norte_proto::Error::Conflict { .. })
+    ));
+    // No pisó: el nuevo contenido sigue intacto.
+    assert_eq!(std::fs::read(dir.path().join("v.txt")).unwrap(), b"nuevo");
+}
