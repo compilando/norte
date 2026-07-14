@@ -13,9 +13,11 @@ mod observer;
 mod ops;
 mod progress;
 mod scheduler;
+mod undo;
 
 pub use engine::{Engine, TransferOptions};
-pub use journal::{Actor, Journal, JournalEntry, SqliteJournal};
+pub use journal::{Actor, Journal, JournalEntry, Reversal, SqliteJournal};
 pub use observer::{Mutation, MutationObserver};
 pub use progress::ProgressReporter;
 pub use scheduler::{Priority, Scheduler, TaskBody, TaskCtx, TaskHandle};
+pub use undo::UndoReport;

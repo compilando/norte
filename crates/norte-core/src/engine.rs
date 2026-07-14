@@ -55,6 +55,10 @@ pub struct Engine {
     connector: RwLock<Option<Arc<dyn crate::connect::RemoteConnector>>>,
     sched: Scheduler,
     observer: Arc<dyn MutationObserver>,
+    /// Fuente de LECTURA del journal para el undo (M3-2). `None` = sin journal
+    /// (el undo devuelve `Unsupported`). Es el MISMO objeto que `observer`
+    /// cuando se construye con [`Self::with_journal`].
+    journal: Option<Arc<crate::journal::SqliteJournal>>,
 }
 
 impl Engine {
@@ -64,7 +68,8 @@ impl Engine {
         Self::with_observer(Arc::new(NoopObserver))
     }
 
-    /// Engine con un observador de mutaciones propio (costura del journal).
+    /// Engine con un observador de mutaciones propio (costura del journal), sin
+    /// fuente de undo (`undo_session` → `Unsupported`).
     #[must_use]
     pub fn with_observer(observer: Arc<dyn MutationObserver>) -> Self {
         Self {
@@ -72,6 +77,20 @@ impl Engine {
             connector: RwLock::new(None),
             sched: Scheduler::new(4),
             observer,
+            journal: None,
+        }
+    }
+
+    /// Engine cuyo observer Y fuente de undo es el mismo `SqliteJournal` (M3-2).
+    /// El journal es single-writer (spec §4): un solo Engine por fichero.
+    #[must_use]
+    pub fn with_journal(journal: Arc<crate::journal::SqliteJournal>) -> Self {
+        Self {
+            providers: RwLock::new(HashMap::new()),
+            connector: RwLock::new(None),
+            sched: Scheduler::new(4),
+            observer: Arc::clone(&journal) as Arc<dyn MutationObserver>,
+            journal: Some(journal),
         }
     }
 
@@ -375,6 +394,78 @@ impl Engine {
             .gc_partials(dir, older_than)
             .await
     }
+
+    /// Deshace en LIFO las mutaciones revertibles de la sesión `actor`, sin
+    /// pisar el trabajo del usuario (estricto: para en el primer conflicto).
+    /// Cada undo se registra como entrada compensatoria (append-only). Task
+    /// cancelable con progreso; el [`crate::UndoReport`] se llena en el
+    /// `Arc<Mutex<…>>` devuelto y queda completo al terminar la Task.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si el Engine no tiene journal ([`Self::with_journal`]),
+    /// o si algún path del journal no tiene provider registrado.
+    pub async fn undo_session(
+        &self,
+        actor: crate::journal::Actor,
+    ) -> Result<(TaskHandle, Arc<std::sync::Mutex<crate::UndoReport>>), Error> {
+        let journal = self.journal.clone().ok_or(Error::Unsupported)?;
+        let entries = journal
+            .journal()
+            .revertible_for(&actor)
+            .await
+            .map_err(Error::from)?;
+
+        // Resuelve el provider de cada entrada ANTES de spawnear (el cuerpo de
+        // la Task es 'static y no puede tener `&self`).
+        let mut plan: Vec<(crate::journal::JournalEntry, Arc<dyn Provider>)> =
+            Vec::with_capacity(entries.len());
+        for e in entries {
+            let p = wire_engine(&e.path)?;
+            let provider = self.provider_for(&p).await?;
+            plan.push((e, provider));
+        }
+
+        let report = Arc::new(std::sync::Mutex::new(crate::UndoReport::default()));
+        let report_task = Arc::clone(&report);
+        let key = "undo".to_owned();
+        let handle = self.sched.submit(
+            &key,
+            TaskKind::Undo,
+            Priority::Normal,
+            Box::new(move |ctx| {
+                Box::pin(async move {
+                    let total = plan.len() as u64;
+                    ctx.progress.update(|p| p.entries_total = Some(total));
+                    for (entry, provider) in plan {
+                        if ctx.cancel.is_cancelled() {
+                            return Err(Error::Cancelled);
+                        }
+                        match crate::undo::revert_entry(&*provider, &journal, &entry, &ctx.actor)
+                            .await?
+                        {
+                            crate::undo::Reverted::Done => {
+                                report_task.lock().expect("undo report lock").undone += 1;
+                            }
+                            crate::undo::Reverted::SkippedIrreversible => {
+                                report_task
+                                    .lock()
+                                    .expect("undo report lock")
+                                    .skipped_irreversible += 1;
+                            }
+                            crate::undo::Reverted::Blocked(err) => {
+                                report_task.lock().expect("undo report lock").blocked =
+                                    Some((entry.seq, err));
+                                break; // estricto: para en el primer bloqueo.
+                            }
+                        }
+                        ctx.progress.update(|p| p.entries_done += 1);
+                    }
+                    Ok(())
+                })
+            }),
+        );
+        Ok((handle, report))
+    }
 }
 
 /// Forma de un `VPath` para SPANS de tracing: `display_lossy`, salvo que el
@@ -388,6 +479,12 @@ fn span_path(p: &VPath) -> String {
         }
         _ => p.display_lossy().clone(),
     }
+}
+
+/// Reconstruye un `VPath` desde los bytes `to_wire` del journal (undo M3-2).
+fn wire_engine(bytes: &[u8]) -> Result<VPath, Error> {
+    let s = std::str::from_utf8(bytes).map_err(|_| Error::InvalidPath)?;
+    VPath::parse(s).map_err(|_| Error::InvalidPath)
 }
 
 impl Default for Engine {
