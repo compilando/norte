@@ -1202,9 +1202,15 @@ pub(crate) async fn delete_task(
             p.entries_total = Some(1);
             p.current = Some(path.clone());
         });
-        provider.trash(&path).await?;
+        let dest = provider.trash(&path).await?;
         observer
-            .on_mutation(&Mutation::Trashed(&path), &ctx.actor)
+            .on_mutation(
+                &Mutation::Trashed {
+                    path: &path,
+                    dest: dest.as_ref(),
+                },
+                &ctx.actor,
+            )
             .await?;
         ctx.progress.update(|p| p.entries_done = 1);
         return Ok(());

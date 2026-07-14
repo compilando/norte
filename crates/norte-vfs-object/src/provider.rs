@@ -644,7 +644,7 @@ impl Provider for ObjectProvider {
         self.op.delete(&from_dir).await.map_err(|e| map_err(&e))
     }
 
-    async fn trash(&self, p: &VPath) -> Result<(), Error> {
+    async fn trash(&self, p: &VPath) -> Result<Option<VPath>, Error> {
         if !self.logical_trash {
             return Err(Error::Unsupported);
         }
@@ -689,7 +689,9 @@ impl Provider for ObjectProvider {
         // Mueve el árbol reutilizando el rename AUDITADO: copy-all →
         // delete-all, keys reconstruidas desde sufijos validados (contención
         // de servidor hostil), sin pérdida ante interrupción (ADR 0019/0016).
-        self.rename(p, &paths.payload).await
+        self.rename(p, &paths.payload).await?;
+        // Papelera LÓGICA: el payload ES la ruta recuperable → reversal_ref.
+        Ok(Some(paths.payload))
     }
 
     async fn copy_native(&self, from: &VPath, to: &VPath) -> Option<Result<(), Error>> {

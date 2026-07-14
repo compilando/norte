@@ -770,7 +770,7 @@ impl Provider for MemProvider {
         self.ambiguous_gate()
     }
 
-    async fn trash(&self, p: &VPath) -> Result<(), Error> {
+    async fn trash(&self, p: &VPath) -> Result<Option<VPath>, Error> {
         if !self.caps.flags.contains(CapabilityFlags::TRASH) {
             return Err(Error::Unsupported);
         }
@@ -795,7 +795,9 @@ impl Provider for MemProvider {
             tree.nodes.remove(&k);
         }
         tree.tick();
-        Ok(())
+        // Papelera "vanish" de test: el subárbol desaparece de la vista, sin
+        // destino recuperable expuesto (como la papelera nativa del OS).
+        Ok(None)
     }
 
     async fn read_link(&self, p: &VPath) -> Result<Vec<u8>, Error> {

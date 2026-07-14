@@ -81,7 +81,7 @@ impl MutationObserver for RecordingObserver {
         let repr = match mutation {
             Mutation::Created(p) => format!("created:{}", p.display_lossy()),
             Mutation::Removed(p) => format!("removed:{}", p.display_lossy()),
-            Mutation::Trashed(p) => format!("trashed:{}", p.display_lossy()),
+            Mutation::Trashed { path, .. } => format!("trashed:{}", path.display_lossy()),
             Mutation::Renamed { from, to } => {
                 format!("renamed:{}>{}", from.display_lossy(), to.display_lossy())
             }

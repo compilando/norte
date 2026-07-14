@@ -790,7 +790,7 @@ impl Provider for LocalProvider {
         blocking(move || node_id_native(&native, follow)).await
     }
 
-    async fn trash(&self, p: &VPath) -> Result<(), Error> {
+    async fn trash(&self, p: &VPath) -> Result<Option<VPath>, Error> {
         self.ensure_caps().await;
         if !self.capabilities().flags.contains(CapabilityFlags::TRASH) {
             return Err(Error::Unsupported);
@@ -814,7 +814,10 @@ impl Provider for LocalProvider {
                 _ => Error::Io { retryable: false },
             })
         })
-        .await
+        .await?;
+        // Papelera NATIVA del OS: no exponemos una ruta estable de destino; el
+        // handle de restauración se resuelve en el undo (M3-2, ADR 0009).
+        Ok(None)
     }
 
     /// GC de `.norte-partial` huérfanos en el directorio `dir` (ADR 0012, #11):

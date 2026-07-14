@@ -431,8 +431,8 @@ impl Journal {
 
 /// El [`Journal`] como [`crate::observer::MutationObserver`]: mapea cada
 /// `Mutation` a una entrada. El `seq` lo asigna el propio [`Journal`] bajo su
-/// lock. El wiring en el engine y la `reversal_ref` de `Trashed` llegan en
-/// M3-1b.
+/// lock. Una papelerización lógica arrastra su destino recuperable a la
+/// `reversal_ref` (M3-1b).
 pub struct SqliteJournal {
     journal: Journal,
 }
@@ -442,6 +442,12 @@ impl SqliteJournal {
     #[must_use]
     pub fn new(journal: Journal) -> Self {
         Self { journal }
+    }
+
+    /// El [`Journal`] subyacente (lectura para audit/undo/tests).
+    #[must_use]
+    pub fn journal(&self) -> &Journal {
+        &self.journal
     }
 }
 
@@ -453,35 +459,55 @@ impl crate::observer::MutationObserver for SqliteJournal {
         actor: &Actor,
     ) -> Result<(), ProtoError> {
         use crate::observer::Mutation;
-        let (op, path, path_to, reversal): (&str, Vec<u8>, Option<Vec<u8>>, Reversal) =
-            match mutation {
-                Mutation::Created(p) => {
-                    ("created", p.to_wire().into_bytes(), None, Reversal::Delete)
-                }
-                Mutation::Removed(p) => (
-                    "removed",
-                    p.to_wire().into_bytes(),
-                    None,
-                    Reversal::Irreversible,
-                ),
-                // reversal_ref (ruta de papelera) llega en M3-1b; aquí queda None.
-                Mutation::Trashed(p) => (
-                    "trashed",
-                    p.to_wire().into_bytes(),
-                    None,
-                    Reversal::RestoreTrash,
-                ),
-                Mutation::Renamed { from, to } => (
-                    "renamed",
-                    to.to_wire().into_bytes(),
-                    Some(from.to_wire().into_bytes()),
-                    Reversal::RenameBack,
-                ),
-            };
+        let (op, path, path_to, reversal, reversal_ref): (
+            &str,
+            Vec<u8>,
+            Option<Vec<u8>>,
+            Reversal,
+            Option<Vec<u8>>,
+        ) = match mutation {
+            Mutation::Created(p) => (
+                "created",
+                p.to_wire().into_bytes(),
+                None,
+                Reversal::Delete,
+                None,
+            ),
+            Mutation::Removed(p) => (
+                "removed",
+                p.to_wire().into_bytes(),
+                None,
+                Reversal::Irreversible,
+                None,
+            ),
+            // Papelera lógica → `dest` es la ruta recuperable (reversal_ref).
+            // Papelera nativa/"vanish" → `dest` None (handle en el undo M3-2).
+            Mutation::Trashed { path, dest } => (
+                "trashed",
+                path.to_wire().into_bytes(),
+                None,
+                Reversal::RestoreTrash,
+                dest.map(|d| d.to_wire().into_bytes()),
+            ),
+            Mutation::Renamed { from, to } => (
+                "renamed",
+                to.to_wire().into_bytes(),
+                Some(from.to_wire().into_bytes()),
+                Reversal::RenameBack,
+                None,
+            ),
+        };
         // El error se PROPAGA (regla 4): la op no se considera completa si su
         // entrada de journal no quedó durable. El detalle va por tracing.
         self.journal
-            .record(op, &path, path_to.as_deref(), reversal, None, actor)
+            .record(
+                op,
+                &path,
+                path_to.as_deref(),
+                reversal,
+                reversal_ref.as_deref(),
+                actor,
+            )
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, "fallo al escribir el journal");
@@ -682,6 +708,75 @@ mod tests {
         assert!(
             obs.journal.verify_chain().await.expect("verify"),
             "sin falso-manipulado bajo concurrencia (security M1)"
+        );
+    }
+
+    #[tokio::test]
+    async fn trashed_with_dest_records_reversal_ref_byte_exact() {
+        use crate::observer::{Mutation, MutationObserver};
+        use norte_proto::{Scheme, Segment, VPath};
+
+        let obs = SqliteJournal::new(Journal::open_in_memory().await.expect("open"));
+        let seg = |b: &[u8]| Segment::new(b.to_vec()).expect("segment");
+        let root = VPath::root(Scheme::new("file").expect("scheme"), None);
+        // Basename NO-UTF8 (0xFF 0xFE): ejercita la rama percent-encoding del
+        // wire, justo donde un bug lossy (regla 1) se escondería.
+        let victim = root.join(seg(&[0xFF, 0xFE]));
+        let dest = root
+            .join(seg(b".norte-trash"))
+            .join(seg(b"17-3"))
+            .join(seg(&[0xFF, 0xFE]));
+
+        obs.on_mutation(
+            &Mutation::Trashed {
+                path: &victim,
+                dest: Some(&dest),
+            },
+            &Actor::User,
+        )
+        .await
+        .expect("on_mutation");
+
+        let es = obs.journal.entries().await.expect("entries");
+        assert_eq!(es.len(), 1);
+        assert_eq!(es[0].op, "trashed");
+        assert_eq!(es[0].reversal, "restore_trash");
+        let stored = es[0]
+            .reversal_ref
+            .as_deref()
+            .expect("papelera lógica: hay reversal_ref");
+        // Round-trip REAL (no tautológico): `VPath::parse` es la inversa de
+        // `to_wire`; si el wire perdiera los bytes hostiles, reconstruiría un
+        // VPath distinto y este assert fallaría.
+        let roundtrip =
+            VPath::parse(std::str::from_utf8(stored).expect("wire es ASCII")).expect("parse");
+        assert_eq!(
+            roundtrip, dest,
+            "reversal_ref round-trip byte-exacto (regla 1)"
+        );
+    }
+
+    #[tokio::test]
+    async fn trashed_without_dest_has_no_reversal_ref() {
+        use crate::observer::{Mutation, MutationObserver};
+        use norte_proto::VPath;
+
+        let obs = SqliteJournal::new(Journal::open_in_memory().await.expect("open"));
+        let victim = VPath::parse("file:///v").expect("vpath");
+        obs.on_mutation(
+            &Mutation::Trashed {
+                path: &victim,
+                dest: None,
+            },
+            &Actor::User,
+        )
+        .await
+        .expect("on_mutation");
+        let es = obs.journal.entries().await.expect("entries");
+        assert_eq!(es[0].reversal, "restore_trash");
+        assert_eq!(
+            es[0].reversal_ref, None,
+            "papelera nativa: sin ruta estable"
         );
     }
 

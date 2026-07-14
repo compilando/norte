@@ -14,9 +14,16 @@ pub enum Mutation<'a> {
     Created(&'a VPath),
     /// Nodo eliminado PERMANENTEMENTE (irreversible).
     Removed(&'a VPath),
-    /// Nodo movido a la papelera (RECUPERABLE — el undo de M3 usa el
-    /// restore del OS; régimen distinto a `Removed`, ADR 0009).
-    Trashed(&'a VPath),
+    /// Nodo movido a la papelera (RECUPERABLE — el undo de M3 lo restaura;
+    /// régimen distinto a `Removed`, ADR 0009).
+    Trashed {
+        /// Path original (víctima).
+        path: &'a VPath,
+        /// Destino recuperable en una papelera LÓGICA (`.norte-trash/<id>`,
+        /// fase 9) → `reversal_ref`. `None` si es papelera NATIVA del OS o
+        /// "vanish" (sin ruta estable; el handle se resuelve en el undo M3-2).
+        dest: Option<&'a VPath>,
+    },
     /// Nodo renombrado dentro de un provider.
     Renamed {
         /// Path original.

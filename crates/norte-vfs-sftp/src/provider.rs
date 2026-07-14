@@ -458,7 +458,7 @@ impl Provider for SftpProvider {
             .map_err(|e| map_err(&e))
     }
 
-    async fn trash(&self, p: &VPath) -> Result<(), Error> {
+    async fn trash(&self, p: &VPath) -> Result<Option<VPath>, Error> {
         if !self.logical_trash {
             return Err(Error::Unsupported);
         }
@@ -510,7 +510,8 @@ impl Provider for SftpProvider {
         // Mueve el árbol entero (un rename del server — ADR 0009,
         // entries_total = 1).
         self.rename(p, &paths.payload).await?;
-        Ok(())
+        // Papelera LÓGICA: el payload ES la ruta recuperable → reversal_ref.
+        Ok(Some(paths.payload))
     }
 
     async fn read_link(&self, p: &VPath) -> Result<Vec<u8>, Error> {

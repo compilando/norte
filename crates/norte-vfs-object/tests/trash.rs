@@ -66,7 +66,7 @@ async fn trash_moves_file_and_writes_info() {
     let victim = root().join(Segment::new(b"victim.txt".to_vec()).unwrap());
     common::write_all(&p, &victim, b"contenido").await;
 
-    p.trash(&victim).await.expect("trash");
+    let dest = p.trash(&victim).await.expect("trash");
 
     // Origen desaparece.
     assert!(matches!(
@@ -86,6 +86,13 @@ async fn trash_moves_file_and_writes_info() {
     assert_eq!(
         common::read_all(&p, &payload).await.expect("read payload"),
         b"contenido"
+    );
+    // La papelera LÓGICA devuelve el destino recuperable → reversal_ref del
+    // journal (M3-1b): es EXACTAMENTE el payload dentro de `.norte-trash/<id>`.
+    assert_eq!(
+        dest.expect("papelera lógica devuelve destino recuperable"),
+        payload,
+        "el dest devuelto es la ruta del payload"
     );
     // `.norte-info` decodifica a la ruta original, anclado a la conexión.
     let info_path = entry.join(Segment::new(trash::INFO_NAME.to_vec()).unwrap());

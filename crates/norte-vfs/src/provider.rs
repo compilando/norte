@@ -133,11 +133,16 @@ pub trait Provider: Send + Sync {
     /// [`Error::Unsupported`] (default) — el engine JAMÁS degrada a
     /// borrado permanente por su cuenta.
     ///
+    /// Devuelve `Some(dest)` con el destino recuperable cuando la papelera es
+    /// LÓGICA (`.norte-trash/<id>/payload`) — el core lo persiste como
+    /// `reversal_ref` para el undo. `None` si es la papelera NATIVA del OS (sin
+    /// ruta estable expuesta) o una papelera "vanish" de test.
+    ///
     /// Excepciones de plataforma conocidas (ADR 0009, issues #25/#26):
     /// Windows puede DESTRUIR ítems no reciclables (auto-respuesta del
     /// nuke warning); freedesktop cross-device degrada a copy+delete
     /// interno (potencialmente largo e incancelable a mitad).
-    async fn trash(&self, p: &VPath) -> Result<(), Error> {
+    async fn trash(&self, p: &VPath) -> Result<Option<VPath>, Error> {
         let _ = p;
         Err(Error::Unsupported)
     }
