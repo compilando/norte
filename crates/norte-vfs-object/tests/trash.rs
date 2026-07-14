@@ -2,7 +2,6 @@
 //! el harness `services-fs` de opendal.
 mod common;
 
-use bytes::Bytes;
 use futures::TryStreamExt;
 use norte_proto::{Authority, CapabilityFlags, Segment, VPath};
 use norte_vfs::Provider;
