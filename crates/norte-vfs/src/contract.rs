@@ -201,6 +201,37 @@ macro_rules! provider_contract {
                 assert_eq!(read_all(&p, &f).await.expect("leer"), b"entero");
             }
 
+            /// Honestidad de capabilities (fase 10a): `SERVER_COPY` ⟺
+            /// `copy_native` maneja el fichero (`Some`); SIN la cap, `None` —
+            /// así el engine cae a streaming en vez de fallar en duro donde
+            /// el streaming habría copiado. "Sin sorpresas" = caps que no
+            /// mienten (criterio de salida M2).
+            #[tokio::test]
+            async fn contract_capabilities_server_copy_is_honest() {
+                let p = $factory;
+                let root: VPath = $root;
+                let flags = p.capabilities().flags;
+                // READ_ONLY va por readonly_provider_contract! (no siembra).
+                if flags.contains($crate::__private::norte_proto::CapabilityFlags::READ_ONLY) {
+                    return;
+                }
+                let from = child(&root, b"cap-src.txt");
+                write_all(&p, &from, b"honesto").await;
+                let to = child(&root, b"cap-dst.txt");
+                let native = p.copy_native(&from, &to).await;
+                if flags.contains($crate::__private::norte_proto::CapabilityFlags::SERVER_COPY) {
+                    assert!(
+                        native.is_some(),
+                        "declara SERVER_COPY pero copy_native devolvió None"
+                    );
+                } else {
+                    assert!(
+                        native.is_none(),
+                        "NO declara SERVER_COPY pero copy_native devolvió Some"
+                    );
+                }
+            }
+
             /// `keep` + `open_resumable` REANUDA: los bytes conservados se
             /// reportan en `already` y el sink añade tras ellos. Un provider
             /// sin reanudación (default `keep=abort`) se auto-salta: su
