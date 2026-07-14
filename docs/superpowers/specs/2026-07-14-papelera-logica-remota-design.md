@@ -57,10 +57,12 @@ En la **raíz del provider** (por conexión). Por ítem borrado:
 
 - `<id>`: único, sin colisión, ordenable. Formato `<epoch_ms>-<counter>`
   (contador monótono por sesión evita colisión mismo-ms; sin dep `uuid`).
-- `.norte-info`: ruta original (**bytes crudos de VPath**, seguro
-  no-UTF8) + timestamp de borrado (ms). Formato por líneas: `path:` con
-  base64 de los bytes crudos (bytes-safe, sin adivinar encoding),
-  `deleted_ms:` con el stamp.
+- `.norte-info`: ruta original + timestamp de borrado (ms). La ruta se
+  guarda como su **forma wire** `VPath::to_wire()` — percent-encoded
+  ASCII, sin controles ni saltos de línea (el codec escapa C0+DEL a
+  `%XX`), losslessly round-trippeable vía `VPath::parse`. Line-safe → sin
+  base64. Formato por líneas: cabecera de versión, `path: <wire>`,
+  `deleted-ms: <u64>`.
 - El wrapper `<id>/` aísla cada ítem → `.norte-info` no colisiona con el
   basename original ni entre ítems.
 - Borrar `.norte-trash/` o algo ya dentro → ruta normal (permanente si
@@ -80,31 +82,35 @@ La **relocalización** la implementa cada provider (los providers no se
 conocen entre sí; solo conocen el trait + este módulo del crate `vfs`
 del que ambos dependen).
 
-### Firma del trait
+### Firma del trait (SIN cambio)
 
-`trash()` gana token de cancelación (cambio **vfs-interno, no wire**):
+`trash(&self, p: &VPath) -> Result<(), Error>` se mantiene **tal cual**.
+El trait `Provider` NO tiene ningún método que reciba
+`CancellationToken` — su modelo de cancelación es **por drop** (p.ej.
+`list_stream` cancela soltando el `BoxStream`, no sondeando un token) y
+`norte-vfs` no depende de `tokio-util`. Añadir un token a `trash()`
+rompería esa convención uniforme y metería un dep nuevo en el crate-trait
+fundacional (rule 8). Descartado en planificación.
 
-```rust
-async fn trash(&self, p: &VPath, cancel: &CancellationToken) -> Result<(), Error>
-```
-
-Threading del token que `ops.rs` ya tiene en el punto de delete.
-Actualiza `LocalProvider`/`MemProvider`/macro de contrato — `LocalProvider`
-lo ignora (op del OS de un tiro, ADR 0009).
+La garantía de cero pérdida de datos NO viene de un token: viene del
+**orden copiar-todo → borrar-todo** (ver abajo). Drop/abort en cualquier
+punto deja el origen intacto o toda key borrada ya respaldada. La
+cancelación de grano fino a mitad del walk S3 sigue el mismo modelo que
+las ops largas existentes de object (rename = copy+delete O(n), cuya
+cancelación mid-op es deuda ya registrada, **#51**) → deuda junto a #51,
+no bloqueante.
 
 ### Estrategia de relocalización por provider
 
 - **sftp** (rename atómico-ish):
   `create_dir(.norte-trash/<id>)` → `rename(p → .norte-trash/<id>/<basename>)`
-  → `write(.norte-info)`. Un rename mueve el árbol entero; token chequeado
-  una vez antes de disparar. Cumple el contrato fast-trash de ADR 0009
-  (`entries_total = 1`).
+  → `write(.norte-info)`. Un rename mueve el árbol entero. Cumple el
+  contrato fast-trash de ADR 0009 (`entries_total = 1`).
 
 - **object/S3** (sin rename atómico → copy+delete largo). Orden crítico
   para cancelación segura: **copiar-todo primero, borrar-todo después.**
   - Fase A: walk del subárbol, copia cada key →
-    `.norte-trash/<id>/<basename>/…`, escribe `.norte-info`. Token en el
-    inner loop.
+    `.norte-trash/<id>/<basename>/…`, escribe `.norte-info`.
   - Fase B: borra cada key original.
   - **Cancel en Fase A** → ningún original borrado → origen intacto;
     trash con copias huérfanas bajo `<id>/` (basura limpiable, jamás
@@ -147,8 +153,10 @@ lo ignora (op del OS de un tiro, ADR 0009).
 
 ## Decomposición (PRs < 400 líneas, un propósito c/u)
 
-- **9a** — ADR (extiende 0009 o ADR nuevo) + módulo `norte-vfs::trash`
-  (puro) + cambio de firma `trash()` con token + campo de config.
+- **9a** — ADR nuevo (0019) + módulo `norte-vfs::trash` (puro: `trash_id`,
+  `plan` de paths del entry, `info_encode`/`info_decode` sobre
+  `to_wire`). SIN base64, SIN cambio de firma del trait, SIN config
+  todavía (el campo `logical_trash` entra por provider en 9b/9c).
 - **9b** — sftp logical trash + tests de contrato/cancelación.
 - **9c** — object/S3 logical trash (copy-all/delete-all) + tests de
   cancelación.
