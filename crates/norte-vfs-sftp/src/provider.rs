@@ -10,7 +10,9 @@ use futures::StreamExt;
 use norte_proto::{
     ByteRange, Capabilities, CapabilityFlags, ConflictKind, Entry, EntryKind, Error, Scheme, VPath,
 };
-use norte_vfs::{ByteSink, ByteStream, EntryStream, FollowLinks, NodeId, Provider, SymlinkKind};
+use norte_vfs::{
+    ByteSink, ByteStream, EntryStream, FollowLinks, NodeId, Provider, SymlinkKind, trash,
+};
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::OpenFlags;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
@@ -428,6 +430,44 @@ impl Provider for SftpProvider {
             .rename(from_r, to_r)
             .await
             .map_err(|e| map_err(&e))
+    }
+
+    async fn trash(&self, p: &VPath) -> Result<(), Error> {
+        if !self.logical_trash {
+            return Err(Error::Unsupported);
+        }
+        // Reloj de pared + contador de sesión → id único y ordenable.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+            .unwrap_or(0);
+        let counter = self.trash_counter.fetch_add(1, Ordering::Relaxed);
+        let id = trash::trash_id(now_ms, counter);
+        let paths = trash::plan(p, &id)?;
+
+        // `.norte-trash/` (ignora si ya existe) → `.norte-trash/<id>/` (fresco).
+        let trash_root = paths.dir.parent().ok_or(Error::Unsupported)?;
+        match self.mkdir(&trash_root).await {
+            Ok(())
+            | Err(Error::Conflict {
+                conflict: ConflictKind::Exists,
+            }) => {}
+            Err(e) => return Err(e),
+        }
+        self.mkdir(&paths.dir).await?;
+
+        // Escribe `.norte-info` ANTES de mover: si el rename falla, el origen
+        // queda intacto y solo hay un info huérfano (basura limpiable), nunca
+        // un payload sin metadatos.
+        let info = trash::info_encode(p, now_ms);
+        let mut sink = self.write(&paths.info).await?;
+        sink.write(Bytes::from(info)).await?;
+        sink.commit().await?;
+
+        // Mueve el árbol entero (un rename del server — ADR 0009,
+        // entries_total = 1).
+        self.rename(p, &paths.payload).await?;
+        Ok(())
     }
 
     async fn read_link(&self, p: &VPath) -> Result<Vec<u8>, Error> {
