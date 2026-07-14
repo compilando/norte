@@ -17,7 +17,7 @@
 //!   gate suspende la llamada del engine fuera del framework de Task (m5).
 //! - Escape de scope vía symlink dentro→fuera que el provider siga (m6): la
 //!   mitigación es la política de symlinks del provider (ADR 0005) + fixture
-//!   hostil; el gate razona sobre VPaths lógicos.
+//!   hostil; el gate razona sobre `VPath`s lógicos.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
@@ -27,7 +27,7 @@ use norte_proto::{DeleteMode, VPath};
 
 use crate::journal::Actor;
 
-pub use config::{PolicyConfig, Rule, RuleAction};
+pub use config::{PolicyConfig, PolicyConfigError, Rule, RuleAction};
 
 mod config;
 
