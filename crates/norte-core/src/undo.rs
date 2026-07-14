@@ -1,8 +1,16 @@
 //! Undo de sesión (M3-2): ejecuta la `Reversal` persistida de cada entrada del
-//! journal en orden LIFO, sin pisar el trabajo del usuario (estricto), y
-//! appendea una entrada compensatoria (append-only, la cadena sigue íntegra).
+//! journal en orden LIFO y appendea una entrada compensatoria (append-only, la
+//! cadena sigue íntegra).
+//!
+//! **No-clobber (estricto).** `RenameBack`/`RestoreTrash` exigen destino LIBRE
+//! antes de actuar (nunca sobrescriben). El undo de un `Created` es el caso
+//! sutil: el journal no guarda identidad del nodo, así que se deshace vía
+//! PAPELERA (recuperable) cuando el provider la soporta, para no destruir de
+//! forma irreversible un fichero que el usuario pudiera haber editado tras la
+//! creación. Deuda: identidad (`node_id`/hash) en el `Created` para un undo con
+//! verificación real.
 
-use norte_proto::{ConflictKind, Error, VPath};
+use norte_proto::{CapabilityFlags, ConflictKind, Error, VPath};
 use norte_vfs::Provider;
 
 use crate::journal::{Actor, JournalEntry, Reversal, SqliteJournal};
@@ -54,6 +62,8 @@ pub(crate) enum Reverted {
 /// # Errors
 /// Solo por fallo al PERSISTIR la compensación en el journal (regla 4). Un
 /// conflicto/drift del FS NO es error: se devuelve `Reverted::Blocked`.
+// Dispatch lineal por `Reversal` (4 ramas): más claro junto que fragmentado.
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn revert_entry(
     provider: &dyn Provider,
     journal: &SqliteJournal,
@@ -64,24 +74,46 @@ pub(crate) async fn revert_entry(
     match entry.reversal.as_str() {
         "irreversible" => Ok(Reverted::SkippedIrreversible),
 
-        // Undo de un Created: borrar el nodo creado (si sigue existiendo).
+        // Undo de un Created: quitar el nodo creado (si sigue existiendo).
+        //
+        // OJO (seguridad): el journal NO guarda identidad del nodo creado
+        // (node_id/hash), así que no podemos distinguir «el fichero que el
+        // agente creó» de «ese fichero con contenido que el usuario editó
+        // DESPUÉS» (una edición de contenido no genera un nuevo `Created`).
+        // Por eso preferimos PAPELERA (recuperable) sobre `remove` permanente:
+        // si el usuario había modificado el nodo, su trabajo queda recuperable
+        // en la papelera en vez de destruido. Sin capability `TRASH` caemos a
+        // `remove` permanente (documentado; deuda: identidad en el `Created`).
         "delete" => {
             match provider.stat(&path).await {
                 Ok(_) => {}
                 // Ya no está: estado inesperado → bloquea (no finge éxito).
                 Err(e) => return Ok(Reverted::Blocked(e)),
             }
-            if let Err(e) = provider.remove(&path).await {
-                return Ok(Reverted::Blocked(e));
-            }
+            let (comp_op, comp_reversal, comp_ref) = if provider
+                .capabilities()
+                .flags
+                .contains(CapabilityFlags::TRASH)
+            {
+                match provider.trash(&path).await {
+                    Ok(dest) => ("trashed", Reversal::RestoreTrash, dest),
+                    Err(e) => return Ok(Reverted::Blocked(e)),
+                }
+            } else {
+                if let Err(e) = provider.remove(&path).await {
+                    return Ok(Reverted::Blocked(e));
+                }
+                ("removed", Reversal::Irreversible, None)
+            };
+            let comp_ref_bytes = comp_ref.map(|d| d.to_wire().into_bytes());
             journal
                 .journal()
                 .record_undoing(
-                    "removed",
+                    comp_op,
                     &entry.path,
                     None,
-                    Reversal::Irreversible,
-                    None,
+                    comp_reversal,
+                    comp_ref_bytes.as_deref(),
                     actor,
                     Some(entry.seq),
                 )

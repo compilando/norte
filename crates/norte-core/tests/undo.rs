@@ -1,0 +1,322 @@
+//! Integración del undo de sesión (M3-2): `Engine::undo_session` deshace en
+//! LIFO, estricto (nunca pisa), con compensaciones append-only.
+
+use std::sync::Arc;
+
+use bytes::Bytes;
+use futures::StreamExt;
+use norte_core::journal::Actor;
+use norte_core::{Engine, Journal, Reversal, SqliteJournal, UndoReport};
+use norte_proto::{DeleteMode, TaskState, VPath};
+use norte_testkit::MemProvider;
+use norte_vfs::Provider;
+
+fn vp(w: &str) -> VPath {
+    VPath::parse(w).expect("wire")
+}
+
+async fn write_file(mem: &MemProvider, w: &str, c: &[u8]) {
+    let mut s = mem.write(&vp(w)).await.expect("open");
+    s.write(Bytes::copy_from_slice(c)).await.expect("chunk");
+    s.commit().await.expect("commit");
+}
+
+async fn setup() -> (Engine, Arc<MemProvider>, Arc<SqliteJournal>) {
+    let journal = Arc::new(SqliteJournal::new(
+        Journal::open_in_memory().await.expect("j"),
+    ));
+    let engine = Engine::with_journal(Arc::clone(&journal));
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    (engine, mem, journal)
+}
+
+async fn run_undo(engine: &Engine, actor: Actor) -> (TaskState, UndoReport) {
+    let (h, report) = engine.undo_session(actor).await.expect("undo submit");
+    let state = h.join().await;
+    let r = report.lock().expect("lock").clone();
+    (state, r)
+}
+
+#[tokio::test]
+async fn undo_deletes_created() {
+    let (engine, mem, _j) = setup().await;
+    write_file(&mem, "mem:///src.txt", b"x").await;
+    let h = engine
+        .copy(&vp("mem:///src.txt"), &vp("mem:///dst.txt"))
+        .await
+        .expect("copy");
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert!(mem.stat(&vp("mem:///dst.txt")).await.is_ok());
+
+    let (state, r) = run_undo(&engine, Actor::User).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(r.undone, 1);
+    assert!(r.blocked.is_none());
+    assert!(matches!(
+        mem.stat(&vp("mem:///dst.txt")).await,
+        Err(norte_proto::Error::NotFound)
+    ));
+}
+
+#[tokio::test]
+async fn undo_restores_renamed() {
+    let (engine, mem, _j) = setup().await;
+    write_file(&mem, "mem:///a.txt", b"x").await;
+    let h = engine
+        .move_(&vp("mem:///a.txt"), &vp("mem:///b.txt"))
+        .await
+        .expect("move");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    let (state, r) = run_undo(&engine, Actor::User).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(r.undone, 1);
+    assert!(
+        mem.stat(&vp("mem:///a.txt")).await.is_ok(),
+        "origen restaurado"
+    );
+    assert!(matches!(
+        mem.stat(&vp("mem:///b.txt")).await,
+        Err(norte_proto::Error::NotFound)
+    ));
+}
+
+#[tokio::test]
+async fn undo_lifo_reverts_all_then_double_undo_is_noop() {
+    let (engine, mem, _j) = setup().await;
+    write_file(&mem, "mem:///s.txt", b"x").await;
+    for d in ["mem:///a", "mem:///b", "mem:///c"] {
+        let h = engine
+            .copy(&vp("mem:///s.txt"), &vp(d))
+            .await
+            .expect("copy");
+        assert_eq!(h.join().await, TaskState::Completed);
+    }
+    let (_s, r1) = run_undo(&engine, Actor::User).await;
+    assert_eq!(r1.undone, 3);
+    for d in ["mem:///a", "mem:///b", "mem:///c"] {
+        assert!(matches!(
+            mem.stat(&vp(d)).await,
+            Err(norte_proto::Error::NotFound)
+        ));
+    }
+    // 2º undo: todo ya compensado → 0.
+    let (_s2, r2) = run_undo(&engine, Actor::User).await;
+    assert_eq!(r2.undone, 0);
+}
+
+#[tokio::test]
+async fn undo_blocks_when_target_occupied_by_foreign_state() {
+    let (engine, mem, journal) = setup().await;
+    let agent = Actor::Agent {
+        session: "s1".into(),
+    };
+    // Estado FS coherente con un Renamed a→b del agente: b existe, a no.
+    write_file(&mem, "mem:///b.txt", b"x").await;
+    journal
+        .journal()
+        .record(
+            "renamed",
+            b"mem:///b.txt",
+            Some(b"mem:///a.txt"),
+            Reversal::RenameBack,
+            None,
+            &agent,
+        )
+        .await
+        .expect("seed");
+    // Drift: alguien ocupa el origen `a` (NO en la sesión del agente).
+    write_file(&mem, "mem:///a.txt", b"ocupado").await;
+
+    let (state, r) = run_undo(&engine, agent).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(r.undone, 0);
+    assert!(
+        matches!(r.blocked, Some((_, norte_proto::Error::Conflict { .. }))),
+        "origen ocupado bloquea, {:?}",
+        r.blocked
+    );
+    // No pisó: ambos intactos.
+    assert!(mem.stat(&vp("mem:///a.txt")).await.is_ok());
+    assert!(mem.stat(&vp("mem:///b.txt")).await.is_ok());
+}
+
+#[tokio::test]
+async fn undo_skips_irreversible_permanent_delete() {
+    let (engine, mem, _j) = setup().await;
+    write_file(&mem, "mem:///keep.txt", b"x").await;
+    write_file(&mem, "mem:///gone.txt", b"x").await;
+    let h = engine
+        .copy(&vp("mem:///keep.txt"), &vp("mem:///copy.txt"))
+        .await
+        .expect("copy");
+    assert_eq!(h.join().await, TaskState::Completed);
+    let h = engine.delete(&vp("mem:///gone.txt")).await.expect("delete");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    let (state, r) = run_undo(&engine, Actor::User).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(r.undone, 1, "deshace la copia");
+    assert_eq!(r.skipped_irreversible, 1, "salta el borrado permanente");
+    assert!(r.blocked.is_none(), "irreversible NO bloquea");
+    assert!(matches!(
+        mem.stat(&vp("mem:///copy.txt")).await,
+        Err(norte_proto::Error::NotFound)
+    ));
+}
+
+#[tokio::test]
+async fn undo_filters_by_actor() {
+    let (engine, mem, journal) = setup().await;
+    write_file(&mem, "mem:///u.txt", b"x").await;
+    let h = engine
+        .copy(&vp("mem:///u.txt"), &vp("mem:///user_copy.txt"))
+        .await
+        .expect("copy");
+    assert_eq!(h.join().await, TaskState::Completed);
+    // Created del agente (sembrado; FS coherente).
+    write_file(&mem, "mem:///agent_made.txt", b"x").await;
+    let agent = Actor::Agent {
+        session: "s1".into(),
+    };
+    journal
+        .journal()
+        .record(
+            "created",
+            b"mem:///agent_made.txt",
+            None,
+            Reversal::Delete,
+            None,
+            &agent,
+        )
+        .await
+        .expect("seed");
+
+    let (_s, r) = run_undo(&engine, agent).await;
+    assert_eq!(r.undone, 1);
+    assert!(matches!(
+        mem.stat(&vp("mem:///agent_made.txt")).await,
+        Err(norte_proto::Error::NotFound)
+    ));
+    assert!(
+        mem.stat(&vp("mem:///user_copy.txt")).await.is_ok(),
+        "no tocó al User"
+    );
+}
+
+#[tokio::test]
+async fn undo_trashed_logical_restores_from_dest() {
+    // Papelera lógica sembrada: un Trashed con reversal_ref = ruta del payload.
+    let (engine, mem, journal) = setup().await;
+    // FS coherente: el original NO existe; el payload en la papelera SÍ.
+    mem.mkdir(&vp("mem:///.trash")).await.expect("mkdir trash");
+    mem.mkdir(&vp("mem:///.trash/1")).await.expect("mkdir id");
+    write_file(&mem, "mem:///.trash/1/v.txt", b"payload").await;
+    journal
+        .journal()
+        .record(
+            "trashed",
+            b"mem:///v.txt",
+            None,
+            Reversal::RestoreTrash,
+            Some(b"mem:///.trash/1/v.txt"),
+            &Actor::User,
+        )
+        .await
+        .expect("seed");
+
+    let (state, r) = run_undo(&engine, Actor::User).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(r.undone, 1);
+    assert_eq!(
+        // Restaurado al original desde el payload.
+        {
+            let mut s = mem.read(&vp("mem:///v.txt"), None).await.expect("read");
+            let mut out = Vec::new();
+            while let Some(c) = s.next().await {
+                out.extend_from_slice(&c.expect("chunk"));
+            }
+            out
+        },
+        b"payload"
+    );
+    assert!(
+        matches!(
+            mem.stat(&vp("mem:///.trash/1/v.txt")).await,
+            Err(norte_proto::Error::NotFound)
+        ),
+        "el payload se movió fuera de la papelera"
+    );
+}
+
+#[tokio::test]
+async fn undo_cancellation_is_clean() {
+    let (engine, mem, journal) = setup().await;
+    write_file(&mem, "mem:///s.txt", b"x").await;
+    // 4 Created para tener trabajo que cancelar a mitad.
+    for d in ["mem:///a", "mem:///b", "mem:///c", "mem:///d"] {
+        let h = engine
+            .copy(&vp("mem:///s.txt"), &vp(d))
+            .await
+            .expect("copy");
+        assert_eq!(h.join().await, TaskState::Completed);
+    }
+    // Latencia por op → ventana determinista para cancelar antes de terminar.
+    mem.faults()
+        .set_latency_per_op(Some(std::time::Duration::from_millis(40)));
+
+    let (h, report) = engine.undo_session(Actor::User).await.expect("submit");
+    tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+    h.cancel();
+    let state = h.join().await;
+
+    assert_eq!(state, TaskState::Cancelled, "corte cooperativo limpio");
+    let r = report.lock().expect("lock").clone();
+    assert!(
+        r.undone < 4,
+        "cancelada antes de terminar (undone={})",
+        r.undone
+    );
+    assert!(r.blocked.is_none(), "cancelación no es bloqueo");
+    // Coherencia: el corte es ENTRE entradas (cada paso es op+compensación por
+    // entrada), nunca a mitad de una — la cadena sigue íntegra.
+    mem.faults().set_latency_per_op(None);
+    assert!(
+        journal.journal().verify_chain().await.expect("verify"),
+        "hash-chain íntegra tras cancelar"
+    );
+}
+
+#[tokio::test]
+async fn undo_without_journal_is_unsupported() {
+    let engine = Engine::new(); // observer no-op, sin journal
+    let err = engine
+        .undo_session(Actor::User)
+        .await
+        .err()
+        .expect("sin journal");
+    assert!(matches!(err, norte_proto::Error::Unsupported));
+}
+
+#[tokio::test]
+async fn undo_delete_mode_trash_then_restore_via_engine() {
+    // MemProvider trashea con "vanish" (dest=None) → restore_trashed default
+    // Unsupported → el undo BLOQUEA limpio (no hay papelera nativa que consultar).
+    let (engine, mem, _j) = setup().await;
+    write_file(&mem, "mem:///t.txt", b"x").await;
+    let h = engine
+        .delete_with(&vp("mem:///t.txt"), DeleteMode::Trash)
+        .await
+        .expect("trash");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    let (state, r) = run_undo(&engine, Actor::User).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(r.undone, 0);
+    assert!(
+        matches!(r.blocked, Some((_, norte_proto::Error::Unsupported))),
+        "MemProvider vanish: sin restore nativo, bloquea, {:?}",
+        r.blocked
+    );
+}

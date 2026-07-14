@@ -143,7 +143,7 @@ pub struct JournalEntry {
 /// Materializa un `JournalEntry` desde una fila con el orden de columnas
 /// `seq, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref,
 /// undoes_seq` (compartido por `entries` y `revertible_for`).
-fn row_to_entry(row: sqlx::sqlite::SqliteRow) -> JournalEntry {
+fn row_to_entry(row: &sqlx::sqlite::SqliteRow) -> JournalEntry {
     JournalEntry {
         seq: row.get(0),
         actor_kind: row.get(1),
@@ -448,7 +448,7 @@ impl Journal {
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().map(row_to_entry).collect())
+        Ok(rows.iter().map(row_to_entry).collect())
     }
 
     /// Las entradas REVERTIBLES de la sesión `actor`, en orden LIFO (`seq`
@@ -470,7 +470,7 @@ impl Journal {
         .bind(actor_id)
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().map(row_to_entry).collect())
+        Ok(rows.iter().map(row_to_entry).collect())
     }
 
     /// SOLO TESTS: corrompe el `path` de una entrada sin recomputar su hash.

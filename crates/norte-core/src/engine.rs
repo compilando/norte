@@ -401,9 +401,23 @@ impl Engine {
     /// cancelable con progreso; el [`crate::UndoReport`] se llena en el
     /// `Arc<Mutex<…>>` devuelto y queda completo al terminar la Task.
     ///
+    /// El `actor` SELECCIONA qué sesión deshacer. El actor de las entradas
+    /// compensatorias es el de la Task (`User` en modo embebido = el humano que
+    /// dispara el undo); cuando M3-4 permita que un agente dispare su propio
+    /// undo habrá que threadear el actor ejecutor hasta el `TaskCtx`.
+    ///
+    /// DEUDA (M3-3): el undo NO pasa aún por el policy engine y resuelve
+    /// providers desde los schemes del propio journal — cuando exista policy,
+    /// el undo debe pasar por ella igual que las mutaciones normales (regla 9),
+    /// y no debe establecer conexiones remotas nuevas dirigidas por el journal.
+    ///
     /// # Errors
     /// [`Error::Unsupported`] si el Engine no tiene journal ([`Self::with_journal`]),
     /// o si algún path del journal no tiene provider registrado.
+    ///
+    /// # Panics
+    /// Si el `Mutex` interno del reporte queda envenenado (solo si un poseedor
+    /// previo paniqueó sosteniéndolo — no ocurre en la práctica).
     pub async fn undo_session(
         &self,
         actor: crate::journal::Actor,
