@@ -137,3 +137,15 @@ Negativas / deuda asumida:
   llega un dir gigante), medido por bench con plan B apuntado.
 - `Error::CursorExpired` es superficie nueva de taxonomía que los frontends
   deben tratar (reiniciar el listado).
+
+## Cierre de #27 (fase 10c M2)
+
+Revisado en el cierre de M2: la paginación por cursor (implementada en fase
+7f) mata #27 por diseño. El primer render de un dir de 100k ya NO drena las
+100k — pinta `FIRST_PAGE = 100` entradas, así que su coste pasa de los 254 ms
+medidos al coste de 100 entradas, holgadamente bajo el presupuesto de 200 ms
+(spec §12). El bench `primera_pagina()` de `norte-tui/benches/presupuestos.rs`
+mide ESE camino (no el drenado completo, que se conserva como vara de
+regresión). #27 queda CERRADO; la deuda residual (merge incremental con claves
+persistidas durante el fill, tuning de max_blocking_threads/TTL) vive en sus
+propias issues, no en #27.

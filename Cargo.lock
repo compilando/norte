@@ -3739,6 +3739,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bytes",
+ "criterion",
  "futures",
  "libunftp",
  "norte-connect",

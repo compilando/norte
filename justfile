@@ -67,6 +67,7 @@ it-remote:
 # Benchmarks de los presupuestos de la spec §12 (manual: tardan).
 bench:
     cargo bench -p norte-tui --bench presupuestos
+    cargo bench -p norte-core --bench copy_remoto
 
 # ---------- instalación ----------
 

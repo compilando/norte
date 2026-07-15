@@ -18,7 +18,8 @@
 //! Este run es el de CI (sin Docker): el peldaño "sftp" lo espeja `MemProvider`
 //! —el plan M2 lo prevé como espejo de los remotos— y "S3" es `ObjectProvider`
 //! sobre `services-fs` de opendal (misma lógica del provider, sin HTTP). El
-//! **nightly** (fase 10d) reejecuta ESTA cadena contra OpenSSH + MinIO reales.
+//! **nightly** (fase 10d) reejecuta ESTA cadena contra `OpenSSH` + `MinIO`
+//! reales.
 //!
 //! "Sin sorpresas" que se asertan aquí y son deterministas: fidelidad
 //! byte-exacta de contenido Y de nombres hostiles UTF-8 en CADA salto;
@@ -148,7 +149,7 @@ async fn exit_criterion_zip_via_s3_to_local() {
 }
 
 /// "Sin sorpresas": recopiar sobre un destino existente FALLA limpio
-/// (CollisionPolicy::Fail por defecto), sin corromper lo previo.
+/// (`CollisionPolicy::Fail` por defecto), sin corromper lo previo.
 #[tokio::test]
 async fn recopy_collision_fails_clean() {
     let zip = ZipSmith::new().file(b"solo.txt", b"unico").build();
