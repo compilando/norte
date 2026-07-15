@@ -3863,6 +3863,7 @@ dependencies = [
  "norte-proto",
  "norte-testkit",
  "norte-vfs",
+ "proptest",
  "tar",
  "tokio",
  "tracing",
