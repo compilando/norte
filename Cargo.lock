@@ -3684,7 +3684,7 @@ dependencies = [
 
 [[package]]
 name = "norte-cli"
-version = "0.0.0"
+version = "0.3.0-alpha.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3702,7 +3702,7 @@ dependencies = [
 
 [[package]]
 name = "norte-connect"
-version = "0.0.0"
+version = "0.3.0-alpha.1"
 dependencies = [
  "age",
  "futures",
@@ -3734,7 +3734,7 @@ dependencies = [
 
 [[package]]
 name = "norte-core"
-version = "0.0.0"
+version = "0.3.0-alpha.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3768,7 +3768,7 @@ dependencies = [
 
 [[package]]
 name = "norte-encoding"
-version = "0.0.0"
+version = "0.3.0-alpha.1"
 dependencies = [
  "chardetng",
  "encoding_rs",
@@ -3777,7 +3777,7 @@ dependencies = [
 
 [[package]]
 name = "norte-i18n"
-version = "0.0.0"
+version = "0.3.0-alpha.1"
 dependencies = [
  "fluent 0.17.0",
  "fluent-syntax 0.12.0",
@@ -3786,7 +3786,7 @@ dependencies = [
 
 [[package]]
 name = "norte-proto"
-version = "0.0.0"
+version = "0.3.0-alpha.1"
 dependencies = [
  "bitflags 2.13.0",
  "proptest",
@@ -3797,7 +3797,7 @@ dependencies = [
 
 [[package]]
 name = "norte-testkit"
-version = "0.0.0"
+version = "0.3.0-alpha.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3813,7 +3813,7 @@ dependencies = [
 
 [[package]]
 name = "norte-tui"
-version = "0.0.0"
+version = "0.3.0-alpha.1"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3844,7 +3844,7 @@ dependencies = [
 
 [[package]]
 name = "norte-vfs"
-version = "0.0.0"
+version = "0.3.0-alpha.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3856,7 +3856,7 @@ dependencies = [
 
 [[package]]
 name = "norte-vfs-archive"
-version = "0.0.0"
+version = "0.3.0-alpha.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3873,7 +3873,7 @@ dependencies = [
 
 [[package]]
 name = "norte-vfs-ftp"
-version = "0.0.0"
+version = "0.3.0-alpha.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3891,7 +3891,7 @@ dependencies = [
 
 [[package]]
 name = "norte-vfs-local"
-version = "0.0.0"
+version = "0.3.0-alpha.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3912,7 +3912,7 @@ dependencies = [
 
 [[package]]
 name = "norte-vfs-object"
-version = "0.0.0"
+version = "0.3.0-alpha.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3931,7 +3931,7 @@ dependencies = [
 
 [[package]]
 name = "norte-vfs-sftp"
-version = "0.0.0"
+version = "0.3.0-alpha.1"
 dependencies = [
  "async-trait",
  "bytes",
