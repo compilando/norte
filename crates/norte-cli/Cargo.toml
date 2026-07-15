@@ -12,6 +12,12 @@ authors.workspace = true
 name = "norte"
 path = "src/main.rs"
 
+# El CLI es un banco de pruebas de M0 (spec): NO entra en el release
+# distribuido (un solo instalador para el TUI, el producto). Se compila desde
+# fuente o con `cargo install --path crates/norte-cli`.
+[package.metadata.dist]
+dist = false
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
