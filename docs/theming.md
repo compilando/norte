@@ -5,6 +5,16 @@ norte colorea la TUI mediante TEMAS (ADR 0020). El modelo vive en el crate
 
 ## Elegir un tema
 
+### Popup interactivo (rápido)
+
+Pulsa **F9** para abrir el selector de temas: una lista de presets con
+**preview en vivo** (mover el cursor aplica el tema al vuelo). **Enter** fija el
+resaltado; **Esc** vuelve al que tenías. Es la vía cómoda para probar temas; el
+cambio dura la sesión — para fijarlo entre arranques, ponlo en `norte.toml`
+(abajo).
+
+### En la config (persistente)
+
 En `norte.toml`, sección `[ui]`:
 
 ```toml

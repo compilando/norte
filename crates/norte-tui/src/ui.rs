@@ -52,6 +52,34 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(help) = &app.help {
         draw_help(frame, help, &app.theme);
     }
+    if let Some(picker) = &app.theme_picker {
+        draw_theme_picker(frame, picker, &app.theme);
+    }
+}
+
+/// Popup selector de tema: lista de presets con el vigente resaltado (ADR
+/// 0020). El preview en vivo lo hace el bucle de eventos; aquí solo se pinta.
+fn draw_theme_picker(frame: &mut Frame<'_>, picker: &crate::app::ThemePicker, theme: &TuiTheme) {
+    let rows = u16::try_from(picker.names.len()).unwrap_or(8) + 2;
+    let area = centered(frame.area(), 34, rows.min(frame.area().height.max(3)));
+    frame.render_widget(ratatui::widgets::Clear, area);
+    let items: Vec<ListItem<'_>> = picker
+        .names
+        .iter()
+        .map(|n| ListItem::new(Line::raw(format!(" {n}"))))
+        .collect();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("theme-picker-title")))
+        .title_style(theme.role(Role::Title))
+        .title_bottom(Line::raw(format!(" {} ", t("theme-picker-hint"))))
+        .border_style(theme.role(Role::ModalBorder));
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(theme.role(Role::Selection));
+    let mut state = ListState::default();
+    state.select(Some(picker.cursor));
+    frame.render_stateful_widget(list, area, &mut state);
 }
 
 /// Overlay de ayuda a pantalla (casi) completa, por encima de todo.

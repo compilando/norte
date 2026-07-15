@@ -18,7 +18,7 @@ use norte_i18n::{t, ta};
 use norte_proto::DeleteMode;
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{
-    App, DialogOutcome, Help, Modal, Pane, TransferKind, dialog_key, sort_entries,
+    App, DialogOutcome, Help, Modal, Pane, PickerAction, TransferKind, dialog_key, sort_entries,
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::keymap::{COMMANDS, Chord, Effective, Resolution, Resolver, Screen, presets};
@@ -364,7 +364,9 @@ async fn run(
                     && key.kind == crossterm::event::KeyEventKind::Press
                 {
                     app.message = None;
-                    if let Some(help) = &mut app.help {
+                    if app.theme_picker.is_some() {
+                        on_theme_picker_key(app, key.modifiers, key.code);
+                    } else if let Some(help) = &mut app.help {
                         // Teclas de la ayuda: fijas, como los diálogos (#24).
                         // ctrl+c conserva su significado global (salir).
                         match (key.modifiers, key.code) {
@@ -439,6 +441,24 @@ fn apply_theme(app: &mut App, cfg: &config::LoadedConfig) {
             app.message = Some(e);
         }
     }
+}
+
+/// Traduce las teclas del popup de tema a una acción de dominio (la lógica
+/// vive en `App`, testeable). Fijas como los demás overlays (#24); `ctrl+c`
+/// conserva su salida global.
+fn on_theme_picker_key(app: &mut App, mods: KeyModifiers, code: KeyCode) {
+    let action = match (mods, code) {
+        (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+            app.quit = true;
+            return;
+        }
+        (KeyModifiers::NONE, KeyCode::Up | KeyCode::Char('k')) => PickerAction::Up,
+        (KeyModifiers::NONE, KeyCode::Down | KeyCode::Char('j')) => PickerAction::Down,
+        (KeyModifiers::NONE, KeyCode::Enter) => PickerAction::Confirm,
+        (KeyModifiers::NONE, KeyCode::Esc | KeyCode::F(9)) => PickerAction::Cancel,
+        _ => return,
+    };
+    app.theme_picker_input(action);
 }
 
 async fn reload_config(
@@ -773,6 +793,7 @@ async fn dispatch(
                 scroll: 0,
             });
         }
+        "app.theme" => app.open_theme_picker(),
         "task.cancel" => {
             app.message = Some(if app.board.cancel_last_running() {
                 t("msg-cancelling")

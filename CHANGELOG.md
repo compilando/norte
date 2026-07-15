@@ -17,6 +17,8 @@ independiente de esta y vive en `PROTOCOL_VERSION` (hoy `0.9.0`).
   de preset o ruta a un `.toml`), es hot-reloadable y degrada al default ante
   error. Capa `[effects]` reservada a la GPU de la GUI (M5). Ver
   [docs/theming.md](docs/theming.md).
+- **Selector de tema (popup):** `F9` abre un picker con preview EN VIVO
+  (mover = aplicar al vuelo), Enter fija, Esc revierte.
 - Roadmap reordenado: tras M2, **MT (theming) → M4 (plugins) → M3 (agéntico) →
   M5 (GUI)**.
 

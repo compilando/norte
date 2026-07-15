@@ -38,6 +38,13 @@ impl TuiTheme {
         self.theme.has_effects()
     }
 
+    /// El nombre del tema resuelto (para casar el cursor del selector con el
+    /// tema vigente).
+    #[must_use]
+    pub fn name(&self) -> Option<&str> {
+        self.theme.name.as_deref()
+    }
+
     /// El estilo ratatui de un rol semántico.
     #[must_use]
     pub fn role(&self, role: Role) -> RStyle {

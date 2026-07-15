@@ -189,6 +189,53 @@ pub struct App {
     /// Tema resuelto + profundidad de color (ADR 0020). El render lee de aquí;
     /// el hot-reload lo reemplaza. Default = preset `default`.
     pub theme: crate::theme::TuiTheme,
+    /// Selector de tema abierto (popup): None = cerrado.
+    pub theme_picker: Option<ThemePicker>,
+}
+
+/// Popup de selección de tema: lista de presets con preview EN VIVO (mover el
+/// cursor aplica el tema al vuelo; Esc revierte al que había, Enter lo fija).
+#[derive(Debug, Clone)]
+pub struct ThemePicker {
+    /// Nombres de preset a elegir.
+    pub names: Vec<String>,
+    /// Índice resaltado.
+    pub cursor: usize,
+    /// Tema que había ANTES de abrir, para revertir al cancelar.
+    pub original: crate::theme::TuiTheme,
+}
+
+impl ThemePicker {
+    /// Sube el cursor (tope arriba).
+    pub fn up(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    /// Baja el cursor (tope al último).
+    pub fn down(&mut self) {
+        if self.cursor + 1 < self.names.len() {
+            self.cursor += 1;
+        }
+    }
+
+    /// El nombre resaltado.
+    #[must_use]
+    pub fn selected(&self) -> Option<&str> {
+        self.names.get(self.cursor).map(String::as_str)
+    }
+}
+
+/// Acción del usuario sobre el popup de tema (el frontend traduce las teclas).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerAction {
+    /// Resalta el anterior (con preview).
+    Up,
+    /// Resalta el siguiente (con preview).
+    Down,
+    /// Fija el tema resaltado y cierra.
+    Confirm,
+    /// Revierte al tema previo y cierra.
+    Cancel,
 }
 
 impl App {
@@ -207,6 +254,7 @@ impl App {
             help: None,
             pending_collisions: std::collections::VecDeque::new(),
             theme: crate::theme::TuiTheme::default(),
+            theme_picker: None,
         }
     }
 
@@ -230,6 +278,76 @@ impl App {
     /// Alterna el foco entre los dos panes (Tab, keymap mc).
     pub fn switch_focus(&mut self) {
         self.focus ^= 1;
+    }
+
+    /// Abre el popup selector de tema (ADR 0020): lista de presets, cursor en el
+    /// tema vigente, con preview EN VIVO desde ya.
+    pub fn open_theme_picker(&mut self) {
+        let names: Vec<String> = norte_theme::preset_names()
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let current = self.theme.name().map(String::from);
+        let cursor = current
+            .as_ref()
+            .and_then(|c| names.iter().position(|n| n == c))
+            .unwrap_or(0);
+        self.theme_picker = Some(ThemePicker {
+            names,
+            cursor,
+            original: self.theme.clone(),
+        });
+        self.preview_theme();
+    }
+
+    /// Aplica al vuelo el tema resaltado en el popup (preview en vivo).
+    fn preview_theme(&mut self) {
+        let Some(name) = self
+            .theme_picker
+            .as_ref()
+            .and_then(|p| p.selected().map(String::from))
+        else {
+            return;
+        };
+        let depth = crate::theme::detect_depth();
+        if let Ok(theme) = crate::theme::resolve(Some(&name), depth) {
+            self.theme = theme;
+        }
+    }
+
+    /// Procesa una acción del usuario sobre el popup de tema. `Confirm` fija el
+    /// tema previsualizado; `Cancel` revierte al que había al abrir.
+    pub fn theme_picker_input(&mut self, action: PickerAction) {
+        match action {
+            PickerAction::Up => {
+                if let Some(p) = &mut self.theme_picker {
+                    p.up();
+                }
+                self.preview_theme();
+            }
+            PickerAction::Down => {
+                if let Some(p) = &mut self.theme_picker {
+                    p.down();
+                }
+                self.preview_theme();
+            }
+            PickerAction::Confirm => {
+                let name = self
+                    .theme_picker
+                    .as_ref()
+                    .and_then(|p| p.selected().map(String::from));
+                self.theme_picker = None;
+                if let Some(n) = name {
+                    self.message = Some(norte_i18n::ta("msg-theme-applied", &[("name", &n)]));
+                }
+            }
+            PickerAction::Cancel => {
+                if let Some(p) = self.theme_picker.take() {
+                    self.theme = p.original;
+                }
+                self.message = Some(norte_i18n::t("msg-theme-reverted"));
+            }
+        }
     }
 
     /// Si no hay modal abierto, abre el diálogo de la siguiente colisión
