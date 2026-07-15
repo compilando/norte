@@ -45,6 +45,10 @@ toml.workspace = true
 unftp-sbe-fs.workspace = true
 bytes.workspace = true
 norte-testkit.workspace = true
+# E2E del criterio de salida M2 (fase 10a): destino local real +
+# ObjectProvider sobre services-fs (S3 sin Docker; el nightly usa MinIO).
+norte-vfs-local.workspace = true
+opendal = { workspace = true, features = ["services-fs"] }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time", "test-util"] }
 
 [lints]
