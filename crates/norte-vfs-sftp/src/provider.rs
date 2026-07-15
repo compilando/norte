@@ -118,6 +118,15 @@ impl std::fmt::Debug for SftpProvider {
     }
 }
 
+/// Instante actual en épocas ms, para el `<id>` de la papelera lógica (ADR
+/// 0019). Antes de la época (reloj absurdo) degrada a 0 en vez de `panic`.
+fn now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
 /// FNV-1a de 128 bits: hash estable (no depende de la versión de Rust) para
 /// nombrar staging. No es cripto — el servidor sftp de test es de confianza
 /// y el hash solo necesita ser estable y único por destino.
@@ -188,13 +197,16 @@ impl Provider for SftpProvider {
     fn capabilities(&self) -> Capabilities {
         // Honestas (ADR 0013): sftp tiene symlinks y escritura en offset/
         // append (habilita el resume de ADR 0012), y se asume remoto POSIX
-        // case-sensitive. NO declara: rename atómico (v3 no lo garantiza),
-        // papelera ni server-copy.
+        // case-sensitive. Papelera LÓGICA `.norte-trash/` (ADR 0019): el
+        // remoto no tiene trash del OS, pero el `rename` remoto mueve el
+        // subárbol entero de una vez → recuperable. NO declara: rename
+        // atómico (v3 no lo garantiza) ni server-copy.
         Capabilities {
             flags: CapabilityFlags::SYMLINKS
                 | CapabilityFlags::APPEND
                 | CapabilityFlags::RANDOM_WRITE
                 | CapabilityFlags::CASE_PRESERVING
+                | CapabilityFlags::TRASH
                 // El remoto se asume POSIX (case-sensitive): declararla evita
                 // que el engine invente colisiones de caja que un servidor
                 // Linux no tiene (bytes exactos = conservador correcto).
@@ -408,6 +420,13 @@ impl Provider for SftpProvider {
             .rename(from_r, to_r)
             .await
             .map_err(|e| map_err(&e))
+    }
+
+    async fn trash(&self, p: &VPath) -> Result<(), Error> {
+        // Papelera lógica `.norte-trash/` (ADR 0019): el remoto no tiene
+        // trash del OS; el helper mueve el nodo con nuestro `rename` (mueve
+        // el subárbol entero de una vez en sftp).
+        norte_vfs::logical_trash(self, p, now_ms()).await
     }
 
     async fn read_link(&self, p: &VPath) -> Result<Vec<u8>, Error> {

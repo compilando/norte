@@ -52,3 +52,12 @@ norte_vfs::provider_contract! {
     root: MemProvider::root(),
     hostile_names: hostile(),
 }
+
+// Papelera lógica `.norte-trash/` (ADR 0019) sobre MemProvider como espejo
+// determinista: ejercita el helper `logical_trash` que sftp/object comparten,
+// contra un backing store con rename/mkdir/write completos.
+norte_vfs::logical_trash_contract! {
+    mod trash_mem,
+    factory: MemProvider::new(),
+    root: MemProvider::root(),
+}

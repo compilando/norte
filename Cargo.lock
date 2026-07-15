@@ -3848,6 +3848,7 @@ dependencies = [
  "futures",
  "norte-proto",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

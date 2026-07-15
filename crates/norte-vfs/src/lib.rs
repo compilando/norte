@@ -9,13 +9,16 @@
 
 mod contract;
 mod contract_ro;
+mod contract_trash;
 mod provider;
 mod sink;
+mod trash;
 
 pub use norte_proto as proto;
 pub use norte_proto::{ByteRange, Capabilities, CapabilityFlags, Entry, EntryKind, Error, VPath};
 pub use provider::{ByteStream, EntryStream, FollowLinks, NodeId, Provider, SymlinkKind};
 pub use sink::ByteSink;
+pub use trash::logical_trash;
 
 /// Re-exports internos para la expansión de [`provider_contract!`].
 /// NO es API: puede cambiar sin aviso.

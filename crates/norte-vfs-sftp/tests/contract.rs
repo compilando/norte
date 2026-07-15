@@ -45,3 +45,12 @@ norte_vfs::provider_contract! {
     root: SftpProvider::root(Authority::new("test:22").expect("authority válida")),
     hostile_names: hostile_names(),
 }
+
+// Papelera lógica `.norte-trash/` (ADR 0019): el `rename` remoto mueve el
+// subárbol de una vez → recuperable. La misma suite que valida el helper
+// sobre MemProvider, ahora contra el servidor sftp in-process.
+norte_vfs::logical_trash_contract! {
+    mod sftp_trash,
+    factory: fresh().await,
+    root: SftpProvider::root(Authority::new("test:22").expect("authority válida")),
+}
