@@ -1,13 +1,20 @@
 # Envoltorio fino sobre `just` (la fuente única de comandos: humanos, Claude
-# y CI corren exactamente lo mismo — ver justfile). Instala just con
-# `cargo install just` si no lo tienes.
+# y CI corren exactamente lo mismo — ver justfile).
+#
+# ¿Equipo nuevo (sin cargo/just)?  ->  make setup
 
-.PHONY: all run dev cli test t ci fmt lint cov docs watch help install uninstall
+.PHONY: all setup run dev cli test t ci fmt lint cov docs watch help install uninstall
 
 all: help
 
+# Bootstrap del entorno: rustup + toolchain pineado + just + nextest/llvm-cov/
+# deny. Idempotente. NO necesita nada previo salvo curl.
+setup:
+	bash scripts/setup.sh
+
 help:
 	@echo "norte — atajos (delegan en just):"
+	@echo "  make setup  - preparar el equipo (rustup, just, nextest, deny…)"
 	@echo "  make run    - TUI en release"
 	@echo "  make dev    - TUI en debug (iterar)"
 	@echo "  make test   - suite completa (nextest + doctests)"

@@ -15,12 +15,22 @@ IA operan de forma gobernada (MCP, policy engine, journal, auditoría).
 
 ## Desarrollo
 
+Equipo nuevo (sin `cargo`/`just`): un solo comando deja todo listo —
+
+```bash
+make setup   # rustup + toolchain pineado + just + nextest + llvm-cov + deny
+```
+
+Después:
+
 ```bash
 just ci      # fmt-check + clippy -D warnings + deny + nextest + docs (lo mismo que CI)
 just test    # solo tests (cargo nextest)
 just cov     # gate de cobertura local (85% en proto/vfs/core)
+make dev     # el TUI en debug para iterar   (make run = release)
 ```
 
+`make` es un envoltorio fino sobre `just`; ambos corren lo mismo que CI.
 Toolchain pineada en `rust-toolchain.toml`; MSRV = stable − 2, testeada en CI.
 
 ## Licencias
