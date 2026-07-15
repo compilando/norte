@@ -1,7 +1,7 @@
 //! Modelo de theming: parseo de color, degradación de profundidad y
 //! resolución de roles (ADR 0020, fase T2).
 
-use norte_theme::{Color, ColorDepth, ResolvedColor, Role, Theme};
+use norte_theme::{Color, ColorDepth, FileKind, ResolvedColor, Role, Theme, extension_of};
 use proptest::prelude::*;
 
 #[test]
@@ -96,6 +96,41 @@ fn efectos_opacos_no_rompen_el_parseo() {
     assert!(t.has_effects());
     // Y los roles siguen resolviendo por fallback.
     assert!(t.style(Role::BorderFocus).bold);
+}
+
+#[test]
+fn extension_de_nombres() {
+    assert_eq!(extension_of(b"foto.PNG"), Some(&b"PNG"[..]));
+    assert_eq!(extension_of(b"a.tar.gz"), Some(&b"gz"[..])); // último punto
+    assert_eq!(extension_of(b".bashrc"), None); // oculto sin extensión
+    assert_eq!(extension_of(b"README"), None); // sin punto
+    assert_eq!(extension_of(b"trailing."), None); // punto final
+    // Extensión con bytes no-UTF8: se devuelve cruda (regla 1).
+    assert_eq!(extension_of(&[b'x', b'.', 0xFF]), Some(&[0xFF][..]));
+}
+
+#[test]
+fn file_style_prioridad_ext_sobre_kind() {
+    let t = Theme::from_toml(
+        r##"
+        [files.kind]
+        dir = { fg = "#89b4fa" }
+        executable = { fg = "#a6e3a1", bold = true }
+        [files.ext]
+        rs = { fg = "#f74c00" }
+    "##,
+    )
+    .unwrap();
+    // Extensión gana (case-insensitive) aunque el kind sea Regular.
+    assert_eq!(
+        t.file_style(b"main.RS", FileKind::Regular).fg,
+        Some(Color::rgb(0xf7, 0x4c, 0x00))
+    );
+    // Sin extensión conocida: cae al kind.
+    let dir = t.file_style(b"src", FileKind::Dir);
+    assert_eq!(dir.fg, Some(Color::rgb(0x89, 0xb4, 0xfa)));
+    // Sin ext ni kind coloreado: rol regular (aquí, fallback vacío).
+    assert_eq!(t.file_style(b"LICENSE", FileKind::Regular).fg, None);
 }
 
 proptest! {

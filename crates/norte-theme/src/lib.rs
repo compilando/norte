@@ -24,11 +24,13 @@
 #![warn(missing_docs)]
 
 mod color;
+mod files;
 mod role;
 mod style;
 mod theme;
 
 pub use color::{Color, ColorDepth, ColorParseError, ResolvedColor};
+pub use files::{FileColors, FileKind, extension_of};
 pub use role::Role;
 pub use style::Style;
 pub use theme::{Theme, ThemeError};

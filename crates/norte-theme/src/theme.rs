@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
+use crate::files::{FileColors, FileKind};
 use crate::role::Role;
 use crate::style::Style;
 
@@ -22,6 +23,9 @@ pub struct Theme {
     /// Estilos explícitos por rol; lo que falte cae al fallback.
     #[serde(default)]
     pub roles: HashMap<Role, Style>,
+    /// Colores por tipo de archivo (`[files.kind]` / `[files.ext]`).
+    #[serde(default)]
+    pub files: FileColors,
     /// Efectos de GPU (gradientes, glow, animación…): OPACOS. Un frontend de
     /// terminal los IGNORA; la GUI de M5 los interpretará (ADR 0020 D4). Se
     /// guardan sin tipar para no romper temas cuando M5 defina el esquema.
@@ -54,6 +58,15 @@ impl Theme {
     #[must_use]
     pub fn style(&self, role: Role) -> Style {
         self.roles.get(&role).copied().unwrap_or(role.fallback())
+    }
+
+    /// El [`Style`] de una ENTRADA de fichero `name` (bytes, regla 1) de tipo
+    /// `kind` (ADR 0020 D2). Prioridad: extensión > kind > rol `regular`.
+    #[must_use]
+    pub fn file_style(&self, name: &[u8], kind: FileKind) -> Style {
+        self.files
+            .style_for(name, kind)
+            .unwrap_or_else(|| self.style(Role::Regular))
     }
 
     /// `true` si el tema tiene efectos declarados (los ignora un frontend de
