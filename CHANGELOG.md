@@ -17,6 +17,9 @@ independiente de esta y vive en `PROTOCOL_VERSION` (hoy `0.9.0`).
   de preset o ruta a un `.toml`), es hot-reloadable y degrada al default ante
   error. Capa `[effects]` reservada a la GPU de la GUI (M5). Ver
   [docs/theming.md](docs/theming.md).
+- **Temas claros + fondo del tema:** presets `gruvbox-light` (crema/amarillos)
+  y `catppuccin-latte`; rol `background` que pinta el fondo base, así un tema
+  claro se ve claro en CUALQUIER terminal (los oscuros también fijan su base).
 - **Selector de tema (popup):** `F9` abre un picker con preview EN VIVO
   (mover = aplicar al vuelo); Enter fija y **guarda** la elección en el
   `norte.toml` del usuario (preservando comentarios/formato); Esc revierte.

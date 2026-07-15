@@ -1,6 +1,7 @@
 name = "gruvbox-dark"
 
 [roles]
+background       = { bg = "#282828" }
 regular          = { fg = "#ebdbb2" }
 selection        = { fg = "#ebdbb2", bg = "#504945" }
 border-focus     = { fg = "#83a598", bold = true }

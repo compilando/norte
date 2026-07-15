@@ -13,6 +13,10 @@ use crate::style::Style;
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum Role {
+    /// Fondo BASE de toda la pantalla. Un tema claro fija aquí su `bg` claro;
+    /// el frontend lo pinta primero y el resto de estilos (solo `fg`) lo
+    /// conservan. Sin definir = fondo del terminal (comportamiento de M1).
+    Background,
     /// Texto normal / entrada de fichero por defecto.
     Regular,
     /// Fila seleccionada en un panel.
@@ -42,6 +46,7 @@ pub enum Role {
 impl Role {
     /// Todos los roles, para iterar (p. ej. validar que un preset los cubre).
     pub const ALL: &'static [Role] = &[
+        Role::Background,
         Role::Regular,
         Role::Selection,
         Role::BorderFocus,
@@ -68,9 +73,15 @@ impl Role {
                 Style::new().bold()
             }
             Role::BorderUnfocused => Style::new().dim(),
-            // Regular/Error/Warning/Info/Match: sin color por defecto (la UI de
-            // M1 no los distinguía). Un tema con color los diferencia.
-            Role::Regular | Role::Error | Role::Warning | Role::Info | Role::Match => Style::new(),
+            // Background/Regular/Error/Warning/Info/Match: sin color por defecto
+            // (la UI de M1 no los distinguía; Background sin fijar = fondo del
+            // terminal). Un tema con color los diferencia.
+            Role::Background
+            | Role::Regular
+            | Role::Error
+            | Role::Warning
+            | Role::Info
+            | Role::Match => Style::new(),
         }
     }
 }

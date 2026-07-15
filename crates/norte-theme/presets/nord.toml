@@ -1,6 +1,7 @@
 name = "nord"
 
 [roles]
+background       = { bg = "#2e3440" }
 regular          = { fg = "#d8dee9" }
 selection        = { fg = "#eceff4", bg = "#434c5e" }
 border-focus     = { fg = "#88c0d0", bold = true }

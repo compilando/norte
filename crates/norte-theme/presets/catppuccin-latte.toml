@@ -1,0 +1,37 @@
+name = "catppuccin-latte"
+
+# Catppuccin claro (Latte): fondo marfil, acentos suaves.
+
+[roles]
+background       = { bg = "#eff1f5" }
+regular          = { fg = "#4c4f69" }
+selection        = { fg = "#4c4f69", bg = "#ccd0da" }
+border-focus     = { fg = "#1e66f5", bold = true }
+border-unfocused = { fg = "#9ca0b0", dim = true }
+modal-border     = { fg = "#8839ef" }
+status-bar       = { fg = "#eff1f5", bg = "#1e66f5" }
+title            = { fg = "#1e66f5", bold = true }
+hostile-badge    = { fg = "#d20f39", bold = true }
+error            = { fg = "#d20f39" }
+warning          = { fg = "#df8e1d" }
+info             = { fg = "#1e66f5" }
+match            = { fg = "#eff1f5", bg = "#df8e1d" }
+
+[files.kind]
+dir          = { fg = "#1e66f5", bold = true }
+symlink      = { fg = "#179299" }
+executable   = { fg = "#40a02b", bold = true }
+fifo         = { fg = "#df8e1d" }
+socket       = { fg = "#8839ef" }
+block-device = { fg = "#fe640b" }
+char-device  = { fg = "#fe640b" }
+
+[files.ext]
+zip  = { fg = "#d20f39" }
+tar  = { fg = "#d20f39" }
+gz   = { fg = "#d20f39" }
+rs   = { fg = "#fe640b" }
+toml = { fg = "#df8e1d" }
+md   = { fg = "#4c4f69" }
+png  = { fg = "#8839ef" }
+jpg  = { fg = "#8839ef" }

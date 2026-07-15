@@ -24,6 +24,12 @@ const HOSTILE_BADGE: &str = "!";
 /// Pinta el frame completo: panes (o viewer) + panel de tasks + barra de
 /// estado + modal por encima.
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
+    // Fondo BASE del tema (ADR 0020): se pinta primero; los estilos de texto
+    // (solo fg) lo conservan. Sin `background` en el tema = fondo del terminal.
+    frame.render_widget(
+        Block::default().style(app.theme.role(Role::Background)),
+        frame.area(),
+    );
     if let Some(viewer) = &app.viewer {
         draw_viewer(frame, viewer, app);
         return;

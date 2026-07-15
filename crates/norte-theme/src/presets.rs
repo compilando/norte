@@ -16,6 +16,15 @@ const PRESETS: &[(&str, &str)] = &[
     ),
     ("gruvbox-dark", include_str!("../presets/gruvbox-dark.toml")),
     ("nord", include_str!("../presets/nord.toml")),
+    // Claros.
+    (
+        "gruvbox-light",
+        include_str!("../presets/gruvbox-light.toml"),
+    ),
+    (
+        "catppuccin-latte",
+        include_str!("../presets/catppuccin-latte.toml"),
+    ),
 ];
 
 /// Nombres de todos los presets embebidos (para autocompletar / validar).

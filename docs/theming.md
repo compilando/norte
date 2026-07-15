@@ -25,8 +25,8 @@ theme = "catppuccin-mocha"
 
 `theme` acepta:
 
-- El **nombre** de un preset embebido: `default`, `catppuccin-mocha`,
-  `gruvbox-dark`, `nord`.
+- El **nombre** de un preset embebido: oscuros `default`, `catppuccin-mocha`,
+  `gruvbox-dark`, `nord`; claros `gruvbox-light`, `catppuccin-latte`.
 - Una **ruta** a un fichero `.toml` propio.
 
 Sin `theme`, se aplica el preset `default` (neutro). Si el tema falla al cargar

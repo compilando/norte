@@ -4,6 +4,7 @@ name = "default"
 # Es el que se aplica cuando `[ui].theme` está ausente.
 
 [roles]
+background       = { bg = "#1c1c1c" }
 regular          = { fg = "#d0d0d0" }
 selection        = { fg = "#ffffff", bg = "#3a3a3a" }
 border-focus     = { fg = "#5fafd7", bold = true }

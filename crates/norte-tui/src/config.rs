@@ -67,7 +67,8 @@ pub struct UiSection {
     #[serde(default)]
     pub lang: Option<String>,
     /// Tema: nombre de preset embebido (`default`, `catppuccin-mocha`,
-    /// `gruvbox-dark`, `nord`) o ruta a un `.toml` propio (ADR 0020). Ausente =
+    /// `gruvbox-dark`, `nord`, y los claros `gruvbox-light`,
+    /// `catppuccin-latte`) o ruta a un `.toml` propio (ADR 0020). Ausente =
     /// preset `default`.
     #[serde(default)]
     pub theme: Option<String>,
