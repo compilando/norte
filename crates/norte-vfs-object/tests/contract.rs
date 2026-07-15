@@ -52,3 +52,12 @@ norte_vfs::provider_contract! {
     root: ObjectProvider::root("s3", Authority::new("norte-test").expect("authority válida")),
     hostile_names: hostile_names(),
 }
+
+// Papelera lógica `.norte-trash/` (ADR 0019): el `rename` de object (copy+
+// delete, recursivo para prefijos) mueve el nodo → recuperable. Misma suite
+// que valida el helper sobre Mem/sftp, ahora sobre el modelo de keys de S3.
+norte_vfs::logical_trash_contract! {
+    mod object_trash,
+    factory: fresh(),
+    root: ObjectProvider::root("s3", Authority::new("norte-test").expect("authority válida")),
+}

@@ -125,6 +125,18 @@ where
     Ok(())
 }
 
+/// Instante actual en épocas ms, el `now_ms` que [`logical_trash`] espera. Un
+/// provider sin trash del OS lo llama en su [`Provider::trash`] para sellar el
+/// `<id>` y el sidecar. Antes de la época (reloj absurdo) degrada a 0 en vez
+/// de `panic`; un valor imposiblemente grande satura a `u64::MAX`.
+#[must_use]
+pub fn now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
 /// `<id>` determinista: hex de ancho fijo del instante + sufijo de reintento.
 fn trash_id(now_ms: u64, retry: u32) -> String {
     if retry == 0 {

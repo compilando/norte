@@ -9,8 +9,8 @@
 use bytes::Bytes;
 use futures::StreamExt;
 use norte_testkit::MemProvider;
-use norte_vfs::proto::{Segment, VPath};
 use norte_vfs::Provider;
+use norte_vfs::proto::{Segment, VPath};
 
 /// Mismo instante fijo que el contrato → `<id>` determinista.
 const NOW_MS: u64 = 0x0123_4567_89ab;

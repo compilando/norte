@@ -118,15 +118,6 @@ impl std::fmt::Debug for SftpProvider {
     }
 }
 
-/// Instante actual en épocas ms, para el `<id>` de la papelera lógica (ADR
-/// 0019). Antes de la época (reloj absurdo) degrada a 0 en vez de `panic`.
-fn now_ms() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-}
-
 /// FNV-1a de 128 bits: hash estable (no depende de la versión de Rust) para
 /// nombrar staging. No es cripto — el servidor sftp de test es de confianza
 /// y el hash solo necesita ser estable y único por destino.
@@ -426,7 +417,7 @@ impl Provider for SftpProvider {
         // Papelera lógica `.norte-trash/` (ADR 0019): el remoto no tiene
         // trash del OS; el helper mueve el nodo con nuestro `rename` (mueve
         // el subárbol entero de una vez en sftp).
-        norte_vfs::logical_trash(self, p, now_ms()).await
+        norte_vfs::logical_trash(self, p, norte_vfs::now_ms()).await
     }
 
     async fn read_link(&self, p: &VPath) -> Result<Vec<u8>, Error> {

@@ -252,10 +252,14 @@ impl Provider for ObjectProvider {
         // case-preserving. SERVER_COPY = CopyObject (fase 7c, primer provider
         // del repo que lo implementa) SOLO si el backend anuncia `copy` — sin
         // ese gate, un backend sin copia haría fallar en duro un fichero que
-        // el streaming habría copiado. NO declara: APPEND/RANDOM_WRITE (S3 no
-        // tiene), SYMLINKS, RENAME_ATOMIC (copy+delete O(n)), TRASH (papelera
-        // lógica = fase 9).
-        let mut flags = CapabilityFlags::CASE_SENSITIVE | CapabilityFlags::CASE_PRESERVING;
+        // el streaming habría copiado. TRASH = papelera LÓGICA `.norte-trash/`
+        // (ADR 0019): S3 no tiene trash del OS, pero `rename` (copy+delete)
+        // mueve el objeto/prefijo → recuperable. NO declara: APPEND/
+        // RANDOM_WRITE (S3 no tiene), SYMLINKS, RENAME_ATOMIC (copy+delete
+        // O(n)).
+        let mut flags = CapabilityFlags::CASE_SENSITIVE
+            | CapabilityFlags::CASE_PRESERVING
+            | CapabilityFlags::TRASH;
         if self.server_copy {
             flags |= CapabilityFlags::SERVER_COPY;
         }
@@ -611,6 +615,15 @@ impl Provider for ObjectProvider {
         // (mismo provider por puntero), así que la copia nativa siempre aplica;
         // un error se propaga tal cual (el engine NO cae a streaming).
         Some(self.copy_object(from, to).await)
+    }
+
+    async fn trash(&self, p: &VPath) -> Result<(), Error> {
+        // Papelera lógica `.norte-trash/` (ADR 0019): S3 no tiene trash del
+        // OS; el helper mueve el nodo con nuestro `rename` = CopyObject +
+        // Delete (para un prefijo, copy-all luego delete-all, O(n) e
+        // incancelable a mitad — cota documentada, misma naturaleza que el
+        // cross-device de ADR 0009 #26).
+        norte_vfs::logical_trash(self, p, norte_vfs::now_ms()).await
     }
 }
 

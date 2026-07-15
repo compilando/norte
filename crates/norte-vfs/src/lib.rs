@@ -18,7 +18,7 @@ pub use norte_proto as proto;
 pub use norte_proto::{ByteRange, Capabilities, CapabilityFlags, Entry, EntryKind, Error, VPath};
 pub use provider::{ByteStream, EntryStream, FollowLinks, NodeId, Provider, SymlinkKind};
 pub use sink::ByteSink;
-pub use trash::logical_trash;
+pub use trash::{logical_trash, now_ms};
 
 /// Re-exports internos para la expansión de [`provider_contract!`].
 /// NO es API: puede cambiar sin aviso.
