@@ -20,6 +20,18 @@ members = [
     "crates/norte-i18n",
 ]
 
+[profile.release]
+# Binario de distribución: LTO fino + una unidad de codegen (mejor optimización)
+# + strip de símbolos. Recortan ~2-3× el tamaño sobre el release por defecto.
+# opt-level 3 se conserva: el arranque frío <50 ms del TUI es presupuesto de la
+# spec §12. `panic` se queda en UNWIND (default) A PROPÓSITO: el core supervisa
+# los panics de tasks (spec §17.7, `Internal{panic:true}`) con catch_unwind —
+# `abort` lo rompería.
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
 [workspace.package]
 version = "0.3.0-alpha.1"
 edition = "2024"
