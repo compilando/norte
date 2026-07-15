@@ -18,6 +18,7 @@ members = [
     "crates/norte-encoding",
     "crates/norte-theme",
     "crates/norte-i18n",
+    "crates/norte-plugin-host",
 ]
 
 [profile.release]
@@ -60,6 +61,7 @@ norte-tui = { path = "crates/norte-tui", version = "0.3.0-alpha.1" }
 norte-encoding = { path = "crates/norte-encoding", version = "0.3.0-alpha.1" }
 norte-i18n = { path = "crates/norte-i18n", version = "0.3.0-alpha.1" }
 norte-theme = { path = "crates/norte-theme", version = "0.3.0-alpha.1" }
+norte-plugin-host = { path = "crates/norte-plugin-host", version = "0.3.0-alpha.1" }
 
 # Externos: versiones centralizadas; cada crate opta por las que necesita
 # con justificación en la PR que las introduce (regla 8 de CLAUDE.md).

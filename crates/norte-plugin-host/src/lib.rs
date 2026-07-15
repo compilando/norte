@@ -1,0 +1,39 @@
+//! Host de plugins WASM de norte (ADR 0022): descubre plugins locales, valida
+//! sus manifiestos y modela sus capabilities y su catálogo ordenado.
+//!
+//! Esta fase (M4-P1) trae el MODELO — manifiesto, capabilities, catálogo — sin
+//! el runtime: `wasmtime` + Component Model + las interfaces WIT llegan en
+//! M4-P2. El modelo es lo que consumen tanto el runtime como el gestor de
+//! extensiones (la vista tipo `VSCode`, M4-P3).
+//!
+//! Invariante dura (spec §7.1): un plugin JAMÁS tiene `exec` — el manifiesto lo
+//! rechaza al parsear.
+//!
+//! ```
+//! use norte_plugin_host::{Manifest, Category};
+//! let m = Manifest::from_toml(r#"
+//!     [plugin]
+//!     id = "org.norte.demo"
+//!     name = "Demo"
+//!     publisher = "norte"
+//!     version = "0.1.0"
+//!     category = "command"
+//!     [capabilities]
+//!     fs-read = "scoped"
+//! "#).unwrap();
+//! assert_eq!(m.category, Category::Command);
+//! assert_eq!(m.capabilities.badges(), vec!["fs-read"]);
+//! ```
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
+mod capability;
+mod catalog;
+mod manifest;
+
+pub use capability::{Capabilities, NetCap, Scope};
+pub use catalog::{Catalog, LoadError, PluginEntry, Tier};
+pub use manifest::{
+    Category, ColumnContrib, CommandContrib, Contributions, HookContrib, Manifest, ManifestError,
+    PreviewerContrib, ProviderContrib,
+};

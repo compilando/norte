@@ -3785,6 +3785,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "norte-plugin-host"
+version = "0.3.0-alpha.1"
+dependencies = [
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
 name = "norte-proto"
 version = "0.3.0-alpha.1"
 dependencies = [
