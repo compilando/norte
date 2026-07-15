@@ -6,17 +6,29 @@
 //! [`Color`] propio (RGB de 24 bits con degradación a 256/16), [`Style`]s por
 //! [`Role`] semántico, y una capa de efectos OPACA reservada a la GPU de la
 //! GUI que un frontend de terminal ignora sin coste.
+//!
+//! ```
+//! use norte_theme::{Theme, Role, ColorDepth, ResolvedColor};
+//! let theme = Theme::from_toml(r##"
+//!     name = "demo"
+//!     [roles]
+//!     selection = { bg = "#45475a", bold = true }
+//! "##).unwrap();
+//! let sel = theme.style(Role::Selection);
+//! assert!(sel.bold);
+//! // El color degrada a la profundidad del terminal:
+//! let bg = sel.bg.unwrap().resolve(ColorDepth::Truecolor);
+//! assert_eq!(bg, ResolvedColor::Rgb(0x45, 0x47, 0x5a));
+//! ```
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-// El modelo (Color/Role/Palette/Theme + parse) llega en la fase T2; los
-// presets embebidos en T3 y los colores por tipo de archivo en T4. Este
-// scaffold fija crate, licencia y lints (ADR 0020).
+mod color;
+mod role;
+mod style;
+mod theme;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_compila() {
-        // Placeholder hasta T2: garantiza que el scaffold enlaza.
-    }
-}
+pub use color::{Color, ColorDepth, ColorParseError, ResolvedColor};
+pub use role::Role;
+pub use style::Style;
+pub use theme::{Theme, ThemeError};
