@@ -24,3 +24,4 @@ La spec evoluciona por ADR, no por edición silenciosa (spec §18).
 | [0017](0017-paginacion-cursor-fs-list.md) | Paginación por cursor de `fs.list`: stream retenido por conexión | accepted |
 | [0018](0018-provider-archive.md) | Provider archive: zip/tar read-only como directorios virtuales | accepted |
 | [0019](0019-papelera-logica-remota.md) | Papelera lógica `.norte-trash/` para providers sin trash nativo | accepted |
+| [0020](0020-theming-crate-norte-theme.md) | Theming: crate `norte-theme`, roles semánticos y degradación de color | accepted |
