@@ -84,3 +84,18 @@ Excepciones de plataforma documentadas (issues #25/#26): en Windows
 (unidad sin $Recycle.Bin, red, tamaño sobre el límite) se DESTRUYE
 dentro del delete; en freedesktop el caso cross-device degrada a
 copy+delete interno del crate (GB posibles, incancelable a mitad).
+
+## Cierre en M2 (ADR 0019)
+
+El «revisar cuando lleguen remotos/archive en M2» de arriba está
+RESUELTO por **ADR 0019** (papelera lógica `.norte-trash/`): sftp y
+object declaran ya `TRASH` (papelera lógica vía `rename`), así que el
+recíproco N-1 mejora en vez de morder —un `Trash` contra ellos RECUPERA
+en lugar de degradar o fallar `Unsupported`—. `archive` es `READ_ONLY`:
+jamás declara `TRASH` (falla en seguro). No hubo bump de protocolo: 0019
+solo hace que dos providers cumplan la capability `TRASH` ya definida
+aquí. Las excepciones #25/#26 siguen siendo del provider LOCAL (crate
+`trash`), sin cambio; 0019 las re-ancla para trazabilidad. La retención/
+GC de la papelera lógica remota (que crece hasta que M3 traiga `purge`)
+y el `list`/`restore` quedan para M3, con el sidecar `meta/` ya
+sembrado.
