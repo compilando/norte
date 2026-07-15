@@ -116,6 +116,7 @@ async fn main() -> Result<()> {
             .map_err(|e| anyhow::anyhow!("{e}"))?,
     );
     let mut app = App::new(left, right);
+    apply_theme(&mut app, &cfg);
     // Canales del modo daemon (None en embebido): tasks de otros frontends
     // y avisos de (re)conexión — se drenan en el loop principal.
     let foreign_tasks = backend.take_foreign_tasks();
@@ -426,6 +427,20 @@ async fn run(
 /// Hot-reload (ADR 0007): relee TODAS las capas; ante CUALQUIER error se
 /// conserva la config vigente y se avisa por la barra — jamás romper una
 /// sesión en marcha por un TOML a medio guardar.
+/// Resuelve `[ui].theme` (preset o ruta) y lo aplica al `App`; ante error
+/// degrada al preset por defecto y avisa (ADR 0020). El frontend no revienta
+/// por un tema malo.
+fn apply_theme(app: &mut App, cfg: &config::LoadedConfig) {
+    let depth = norte_tui::theme::detect_depth();
+    match norte_tui::theme::resolve(cfg.ui_theme.as_deref(), depth) {
+        Ok(theme) => app.theme = theme,
+        Err(e) => {
+            app.theme = norte_tui::theme::TuiTheme::default();
+            app.message = Some(e);
+        }
+    }
+}
+
 async fn reload_config(
     app: &mut App,
     resolver: &mut Resolver,
@@ -444,6 +459,9 @@ async fn reload_config(
                 *viewer_resolver = Resolver::new(viewer);
                 app.pending.clear();
                 app.message = Some(t("msg-config-reloaded"));
+                // El tema también es hot-reloadable (ADR 0020): si falla, el
+                // mensaje de error del tema pisa el de "config recargada".
+                apply_theme(app, &cfg);
             }
             Err(e) => {
                 app.message = Some(ta(

@@ -66,6 +66,11 @@ pub struct UiSection {
     /// Idioma (`es`, `en`). Ausente = negociar del entorno.
     #[serde(default)]
     pub lang: Option<String>,
+    /// Tema: nombre de preset embebido (`default`, `catppuccin-mocha`,
+    /// `gruvbox-dark`, `nord`) o ruta a un `.toml` propio (ADR 0020). Ausente =
+    /// preset `default`.
+    #[serde(default)]
+    pub theme: Option<String>,
 }
 
 /// `[keymap]` de `norte.toml`.
@@ -138,6 +143,8 @@ pub struct LoadedConfig {
     pub preset: String,
     /// Idioma de `[ui] lang` (último-gana; None = entorno).
     pub ui_lang: Option<String>,
+    /// Tema de `[ui] theme` (último-gana; None = preset default).
+    pub ui_theme: Option<String>,
     /// `[daemon] mode` (último-gana; None = embedded). Solo arranque.
     pub daemon_mode: Option<DaemonMode>,
     /// `[daemon] socket` (último-gana; None = default del OS).
@@ -155,6 +162,7 @@ pub struct LoadedConfig {
 pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
     let mut preset: Option<String> = None;
     let mut ui_lang: Option<String> = None;
+    let mut ui_theme: Option<String> = None;
     let mut daemon_mode: Option<DaemonMode> = None;
     let mut daemon_socket: Option<PathBuf> = None;
     let mut keymap_layers = Vec::new();
@@ -171,6 +179,9 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
             }
             if let Some(l) = parsed.ui.lang {
                 ui_lang = Some(l);
+            }
+            if let Some(th) = parsed.ui.theme {
+                ui_theme = Some(th);
             }
             if let Some(m) = parsed.daemon.mode {
                 daemon_mode = Some(m);
@@ -202,6 +213,7 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
     Ok(LoadedConfig {
         preset: preset.unwrap_or_else(|| DEFAULT_PRESET.to_owned()),
         ui_lang,
+        ui_theme,
         daemon_mode,
         daemon_socket,
         keymap_layers,

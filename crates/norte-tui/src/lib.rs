@@ -8,5 +8,6 @@ pub mod config;
 pub mod help;
 pub mod keymap;
 pub mod tasks;
+pub mod theme;
 pub mod ui;
 pub mod viewer;

@@ -186,6 +186,9 @@ pub struct App {
     /// (una tecla en vuelo respondería a la pregunta equivocada); se
     /// atienden en orden al cerrarse el modal actual.
     pub pending_collisions: std::collections::VecDeque<crate::tasks::RetrySpec>,
+    /// Tema resuelto + profundidad de color (ADR 0020). El render lee de aquí;
+    /// el hot-reload lo reemplaza. Default = preset `default`.
+    pub theme: crate::theme::TuiTheme,
 }
 
 impl App {
@@ -203,6 +206,7 @@ impl App {
             viewer: None,
             help: None,
             pending_collisions: std::collections::VecDeque::new(),
+            theme: crate::theme::TuiTheme::default(),
         }
     }
 
