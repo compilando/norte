@@ -1,0 +1,37 @@
+name = "default"
+
+# Tema neutro (no ligado a ninguna marca): color discreto sobre fondo oscuro.
+# Es el que se aplica cuando `[ui].theme` está ausente.
+
+[roles]
+regular          = { fg = "#d0d0d0" }
+selection        = { fg = "#ffffff", bg = "#3a3a3a" }
+border-focus     = { fg = "#5fafd7", bold = true }
+border-unfocused = { fg = "#6c6c6c", dim = true }
+modal-border     = { fg = "#af87d7" }
+status-bar       = { fg = "#1c1c1c", bg = "#5fafd7" }
+title            = { fg = "#5fafd7", bold = true }
+hostile-badge    = { fg = "#d75f5f", bold = true }
+error            = { fg = "#d75f5f" }
+warning          = { fg = "#d7af5f" }
+info             = { fg = "#5fafd7" }
+match            = { fg = "#1c1c1c", bg = "#d7af5f" }
+
+[files.kind]
+dir          = { fg = "#5fafd7", bold = true }
+symlink      = { fg = "#5fafaf" }
+executable   = { fg = "#87af5f", bold = true }
+fifo         = { fg = "#d7af5f" }
+socket       = { fg = "#af87d7" }
+block-device = { fg = "#d7875f" }
+char-device  = { fg = "#d7875f" }
+
+[files.ext]
+zip  = { fg = "#d75f5f" }
+tar  = { fg = "#d75f5f" }
+gz   = { fg = "#d75f5f" }
+rs   = { fg = "#d7875f" }
+toml = { fg = "#d7af5f" }
+md   = { fg = "#d0d0d0" }
+png  = { fg = "#af87d7" }
+jpg  = { fg = "#af87d7" }

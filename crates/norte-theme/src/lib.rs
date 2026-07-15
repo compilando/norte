@@ -25,12 +25,14 @@
 
 mod color;
 mod files;
+mod presets;
 mod role;
 mod style;
 mod theme;
 
 pub use color::{Color, ColorDepth, ColorParseError, ResolvedColor};
 pub use files::{FileColors, FileKind, extension_of};
+pub use presets::{DEFAULT_PRESET, preset_names, preset_source};
 pub use role::Role;
 pub use style::Style;
 pub use theme::{Theme, ThemeError};
