@@ -15,8 +15,10 @@ skip() { printf '\033[1;33m  ·\033[0m %s (ya está)\n' "$*"; }
 # --- 1) rustup + toolchain pineado ------------------------------------------
 if ! command -v rustup >/dev/null 2>&1; then
   info "instalando rustup (respeta rust-toolchain.toml)"
+  # SIN --no-modify-path: que rustup añada ~/.cargo/bin al PATH del shell
+  # (perfiles), para que las terminales NUEVAS tengan cargo/just sin trucos.
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-    | sh -s -- -y --default-toolchain none --no-modify-path
+    | sh -s -- -y --default-toolchain none
   # shellcheck disable=SC1091
   . "${CARGO_HOME:-$HOME/.cargo}/env"
 else
