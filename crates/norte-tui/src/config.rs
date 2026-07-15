@@ -136,6 +136,66 @@ pub fn standard_layers() -> Layers {
     Layers { dirs }
 }
 
+/// El directorio de config del USUARIO (donde se persiste una preferencia como
+/// el tema): `$XDG_CONFIG_HOME/norte` (`~/.config/norte`) o `%APPDATA%\norte`.
+/// `None` si el entorno no lo define (CI sin HOME): el caller avisa.
+#[must_use]
+pub fn user_config_dir() -> Option<PathBuf> {
+    if cfg!(windows) {
+        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("norte"))
+    } else if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        Some(PathBuf::from(xdg).join("norte"))
+    } else {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/norte"))
+    }
+}
+
+/// Fija `[ui].theme = name` en el `norte.toml` del usuario, PRESERVANDO
+/// comentarios y formato (`toml_edit`). Crea el fichero/directorio si no
+/// existen. Devuelve la ruta escrita.
+///
+/// # Errors
+/// [`std::io::Error`] si no hay dir de usuario, el TOML existente no parsea, o
+/// falla el I/O.
+pub fn persist_ui_theme(name: &str) -> std::io::Result<PathBuf> {
+    let dir = user_config_dir().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "sin directorio de config de usuario",
+        )
+    })?;
+    persist_ui_theme_to(&dir, name)
+}
+
+/// Como [`persist_ui_theme`] pero en un `dir` explícito (sin depender del
+/// entorno — la base testeable).
+///
+/// # Errors
+/// [`std::io::Error`] si el TOML existente no parsea o falla el I/O.
+pub fn persist_ui_theme_to(dir: &std::path::Path, name: &str) -> std::io::Result<PathBuf> {
+    use std::io::{Error, ErrorKind};
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join("norte.toml");
+    let mut doc = match std::fs::read_to_string(&path) {
+        Ok(s) => s
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?,
+        Err(e) if e.kind() == ErrorKind::NotFound => toml_edit::DocumentMut::new(),
+        Err(e) => return Err(e),
+    };
+    // Una tabla `[ui]` recién creada sería IMPLÍCITA (se emitiría como
+    // `ui.theme = …` en vez de bajo `[ui]`): se crea EXPLÍCITA para que el
+    // fichero nuevo tenga una sección legible; la ya existente se respeta.
+    let ui = doc.as_table_mut().entry("ui").or_insert_with(|| {
+        let mut t = toml_edit::Table::new();
+        t.set_implicit(false);
+        toml_edit::Item::Table(t)
+    });
+    ui["theme"] = toml_edit::value(name);
+    std::fs::write(&path, doc.to_string())?;
+    Ok(path)
+}
+
 /// La config ya fusionada.
 #[derive(Debug, Clone)]
 pub struct LoadedConfig {

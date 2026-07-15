@@ -365,7 +365,7 @@ async fn run(
                 {
                     app.message = None;
                     if app.theme_picker.is_some() {
-                        on_theme_picker_key(app, key.modifiers, key.code);
+                        on_theme_picker_key(app, key.modifiers, key.code).await;
                     } else if let Some(help) = &mut app.help {
                         // Teclas de la ayuda: fijas, como los diálogos (#24).
                         // ctrl+c conserva su significado global (salir).
@@ -445,8 +445,9 @@ fn apply_theme(app: &mut App, cfg: &config::LoadedConfig) {
 
 /// Traduce las teclas del popup de tema a una acción de dominio (la lógica
 /// vive en `App`, testeable). Fijas como los demás overlays (#24); `ctrl+c`
-/// conserva su salida global.
-fn on_theme_picker_key(app: &mut App, mods: KeyModifiers, code: KeyCode) {
+/// conserva su salida global. Al confirmar, PERSISTE la elección en el
+/// `norte.toml` del usuario (ADR 0020), sin bloquear el runtime.
+async fn on_theme_picker_key(app: &mut App, mods: KeyModifiers, code: KeyCode) {
     let action = match (mods, code) {
         (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
             app.quit = true;
@@ -458,7 +459,33 @@ fn on_theme_picker_key(app: &mut App, mods: KeyModifiers, code: KeyCode) {
         (KeyModifiers::NONE, KeyCode::Esc | KeyCode::F(9)) => PickerAction::Cancel,
         _ => return,
     };
+    // El nombre a persistir se toma ANTES de que Confirm cierre el popup.
+    let confirmed = (action == PickerAction::Confirm)
+        .then(|| {
+            app.theme_picker
+                .as_ref()
+                .and_then(|p| p.selected().map(String::from))
+        })
+        .flatten();
     app.theme_picker_input(action);
+    if let Some(name) = confirmed {
+        // I/O en spawn_blocking: el runtime jamás se bloquea (regla 2).
+        let n = name.clone();
+        match tokio::task::spawn_blocking(move || config::persist_ui_theme(&n)).await {
+            Ok(Ok(path)) => {
+                app.message = Some(ta(
+                    "msg-theme-saved",
+                    &[("name", &name), ("path", &path.display().to_string())],
+                ));
+            }
+            Ok(Err(e)) => {
+                // El tema YA se aplicó (sesión); solo no se pudo guardar.
+                app.message = Some(ta("msg-theme-save-failed", &[("error", &e.to_string())]));
+            }
+            // Un panic en el write es un bug nuestro: que no tumbe la TUI.
+            Err(_) => {}
+        }
+    }
 }
 
 async fn reload_config(
