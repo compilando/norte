@@ -7,6 +7,19 @@ independiente de esta y vive en `PROTOCOL_VERSION` (hoy `0.9.0`).
 
 ## [Unreleased]
 
+### Añadido
+
+- **Theming (hito MT, ADR 0020):** la TUI deja de ser monocroma. Crate nuevo
+  `norte-theme` (compartido, GUI-ready): roles semánticos, `Color` truecolor
+  con degradación a 256/16 colores según el terminal, colores por tipo de
+  archivo (kind + extensión), y presets embebidos (`default`,
+  `catppuccin-mocha`, `gruvbox-dark`, `nord`). Se elige con `[ui].theme` (nombre
+  de preset o ruta a un `.toml`), es hot-reloadable y degrada al default ante
+  error. Capa `[effects]` reservada a la GPU de la GUI (M5). Ver
+  [docs/theming.md](docs/theming.md).
+- Roadmap reordenado: tras M2, **MT (theming) → M4 (plugins) → M3 (agéntico) →
+  M5 (GUI)**.
+
 ## [0.3.0-alpha.1] — 2026-07-15
 
 Primera versión etiquetada. Cierra el hito **M2** («remotos + archivos»); el
