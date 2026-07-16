@@ -158,6 +158,28 @@ pub enum ManifestError {
     ExecForbidden,
 }
 
+/// `true` si `id` es un identificador reverse-DNS válido: uno o más segmentos
+/// `[A-Za-z0-9-]+` separados por puntos, con al menos un punto, ningún segmento
+/// vacío (ni punto inicial/final), longitud total `1..=128`.
+fn is_valid_plugin_id(id: &str) -> bool {
+    if id.is_empty() || id.len() > 128 {
+        return false;
+    }
+    let mut segments = 0_usize;
+    for segment in id.split('.') {
+        if segment.is_empty()
+            || !segment
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        {
+            return false;
+        }
+        segments += 1;
+    }
+    // Al menos un punto ⇒ al menos dos segmentos.
+    segments >= 2
+}
+
 impl Manifest {
     /// Parsea y VALIDA un `plugin.toml`.
     ///
@@ -175,8 +197,13 @@ impl Manifest {
         {
             return Err(ManifestError::ExecForbidden);
         }
-        // id reverse-DNS mínimo: no vacío y con al menos un `.`.
-        if raw.plugin.id.is_empty() || !raw.plugin.id.contains('.') {
+        // id reverse-DNS REAL: uno o más segmentos `[A-Za-z0-9-]+` separados por
+        // puntos, con al menos un punto, sin segmento vacío (ni punto inicial/
+        // final), longitud total 1..=128. Endurecido más allá de "contiene un
+        // punto" porque el id crudo del manifiesto termina en logs y en el modal
+        // de aprobación (T5): un id con saltos de línea, comillas o espacios
+        // permitiría inyección en el log o spoofing del diálogo de consentimiento.
+        if !is_valid_plugin_id(&raw.plugin.id) {
             return Err(ManifestError::Id);
         }
         Ok(Self {

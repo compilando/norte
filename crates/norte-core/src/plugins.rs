@@ -118,43 +118,91 @@ impl PluginRegistry {
             .errors
             .iter()
             .map(|e| PluginLoadError {
-                dir: e.dir.display().to_string(),
+                // Solo el NOMBRE del directorio del plugin, nunca la ruta
+                // absoluta: revelaría el home del usuario (`~/.config/norte/...`)
+                // a un agente que llame a `plugin.list`. El basename basta para
+                // que un humano identifique el plugin roto.
+                dir: e
+                    .dir
+                    .file_name()
+                    .map_or_else(|| e.dir.to_string_lossy(), |n| n.to_string_lossy())
+                    .into_owned(),
                 reason: e.error.to_string(),
             })
             .collect();
         PluginListResult { plugins, errors }
     }
 
-    /// Fija el estado `approved` de un plugin descubierto y lo persiste.
+    /// El directorio de configuración donde vive `plugins-state.toml`. Lo usa el
+    /// daemon para persistir FUERA del lock (regla 2): captura el dir bajo el
+    /// lock y escribe en `spawn_blocking`.
+    #[must_use]
+    pub fn config_dir(&self) -> &Path {
+        &self.config_dir
+    }
+
+    /// Copia del estado aprobado/activado, para persistir fuera del lock (el
+    /// daemon lo mueve a `spawn_blocking` junto a [`Self::config_dir`], regla 2).
+    #[must_use]
+    pub fn state_snapshot(&self) -> BTreeMap<String, PluginState> {
+        self.state.clone()
+    }
+
+    /// Muta EN MEMORIA el estado `approved` de un plugin descubierto, SIN I/O.
     ///
-    /// Devuelve `Ok(true)` si el plugin existe en el catálogo (y se aplicó), o
-    /// `Ok(false)` si el id es desconocido — en cuyo caso NO se persiste nada
-    /// (no se ensucia el fichero con estado de plugins fantasma).
+    /// Devuelve `true` si el plugin existe en el catálogo (y se aplicó), o
+    /// `false` si el id es desconocido — en cuyo caso no se toca nada (no se
+    /// ensucia el estado con plugins fantasma). La persistencia es
+    /// responsabilidad del llamante (daemon: `persist_state` en
+    /// `spawn_blocking`; embebido: [`Self::set_approval`]).
+    pub fn set_approval_in_memory(&mut self, id: &str, approved: bool) -> bool {
+        if !self.is_known(id) {
+            return false;
+        }
+        self.state.entry(id.to_string()).or_default().approved = approved;
+        true
+    }
+
+    /// Muta EN MEMORIA el estado `enabled`. Semántica idéntica a
+    /// [`Self::set_approval_in_memory`].
+    pub fn set_enabled_in_memory(&mut self, id: &str, enabled: bool) -> bool {
+        if !self.is_known(id) {
+            return false;
+        }
+        self.state.entry(id.to_string()).or_default().enabled = enabled;
+        true
+    }
+
+    /// Fija el estado `approved` de un plugin descubierto y lo persiste, todo en
+    /// el MISMO hilo. Es la API para el uso EMBEBIDO, que ya corre dentro de un
+    /// `spawn_blocking` (backend del frontend). El daemon NO usa esto: separa la
+    /// mutación ([`Self::set_approval_in_memory`]) de la persistencia
+    /// (`persist_state`) para no bloquear el reactor (regla 2).
+    ///
+    /// Devuelve `Ok(true)` si el plugin existe (y se aplicó+persistió), o
+    /// `Ok(false)` si el id es desconocido — sin persistir nada.
     ///
     /// # Errors
     /// Errores de I/O al re-leer o escribir `plugins-state.toml`, o
     /// [`io::ErrorKind::InvalidData`] si el fichero existente es TOML corrupto.
     pub fn set_approval(&mut self, id: &str, approved: bool) -> io::Result<bool> {
-        if !self.is_known(id) {
+        if !self.set_approval_in_memory(id, approved) {
             return Ok(false);
         }
-        self.state.entry(id.to_string()).or_default().approved = approved;
-        self.persist()?;
+        persist_state(&self.config_dir, &self.state)?;
         Ok(true)
     }
 
-    /// Fija el estado `enabled` de un plugin descubierto y lo persiste.
-    ///
-    /// Semántica de retorno idéntica a [`Self::set_approval`].
+    /// Fija el estado `enabled` de un plugin descubierto y lo persiste (uso
+    /// EMBEBIDO). Semántica de retorno idéntica a [`Self::set_approval`].
     ///
     /// # Errors
     /// Igual que [`Self::set_approval`].
     pub fn set_enabled(&mut self, id: &str, enabled: bool) -> io::Result<bool> {
-        if !self.is_known(id) {
+        if !self.set_enabled_in_memory(id, enabled) {
             return Ok(false);
         }
-        self.state.entry(id.to_string()).or_default().enabled = enabled;
-        self.persist()?;
+        persist_state(&self.config_dir, &self.state)?;
         Ok(true)
     }
 
@@ -191,35 +239,60 @@ impl PluginRegistry {
         }
         Ok(map)
     }
+}
 
-    /// Re-emite `plugins-state.toml` preservando el resto del fichero, con una
-    /// entrada por cada plugin con estado. La clave con puntos se entrecomilla.
-    fn persist(&self) -> io::Result<()> {
-        let path = self.config_dir.join(Self::STATE_FILE);
-        let mut doc = match std::fs::read_to_string(&path) {
-            Ok(s) => s
-                .parse::<DocumentMut>()
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => DocumentMut::new(),
-            Err(e) => return Err(e),
-        };
-        let root = doc.as_table_mut();
-        if !root.get("plugins").is_some_and(Item::is_table_like) {
-            root.insert("plugins", Item::Table(Table::new()));
-        }
-        // `insert` con una clave con puntos guarda la clave LITERAL; toml_edit la
-        // entrecomilla al render (no la interpreta como tablas anidadas).
-        let plugins = root["plugins"]
-            .as_table_mut()
-            .expect("plugins es una tabla: se acaba de garantizar arriba");
-        for (id, st) in &self.state {
-            let mut inline = InlineTable::new();
-            inline.insert("approved", Value::from(st.approved));
-            inline.insert("enabled", Value::from(st.enabled));
-            plugins.insert(id, Item::Value(Value::InlineTable(inline)));
-        }
-        std::fs::write(&path, doc.to_string())
+/// Re-emite `config_dir/plugins-state.toml` preservando el resto del fichero,
+/// con una entrada por cada plugin con estado. La clave con puntos se
+/// entrecomilla.
+///
+/// Es una función LIBRE (no un método) para que el daemon pueda persistir en un
+/// `spawn_blocking` a partir de un snapshot del estado, sin sostener el
+/// `Mutex<PluginRegistry>` a través del `.await` (regla 2).
+///
+/// El write es ATÓMICO: se escribe a un temporal en el MISMO directorio y luego
+/// `rename` sobre el destino. Un crash a mitad no corrompe el store durable de
+/// una decisión de seguridad (consentimiento de capabilities).
+///
+/// # Errors
+/// Errores de I/O al re-leer, escribir el temporal o renombrar; o
+/// [`io::ErrorKind::InvalidData`] si el fichero existente es TOML corrupto.
+pub(crate) fn persist_state(
+    config_dir: &Path,
+    state: &BTreeMap<String, PluginState>,
+) -> io::Result<()> {
+    let path = config_dir.join(PluginRegistry::STATE_FILE);
+    let mut doc = match std::fs::read_to_string(&path) {
+        Ok(s) => s
+            .parse::<DocumentMut>()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(e) => return Err(e),
+    };
+    let root = doc.as_table_mut();
+    if !root.get("plugins").is_some_and(Item::is_table_like) {
+        root.insert("plugins", Item::Table(Table::new()));
     }
+    // `insert` con una clave con puntos guarda la clave LITERAL; toml_edit la
+    // entrecomilla al render (no la interpreta como tablas anidadas).
+    let plugins = root["plugins"]
+        .as_table_mut()
+        .expect("plugins es una tabla: se acaba de garantizar arriba");
+    for (id, st) in state {
+        let mut inline = InlineTable::new();
+        inline.insert("approved", Value::from(st.approved));
+        inline.insert("enabled", Value::from(st.enabled));
+        plugins.insert(id, Item::Value(Value::InlineTable(inline)));
+    }
+    // Write atómico: temporal en el mismo dir (mismo filesystem → rename atómico)
+    // + rename sobre el destino. El sufijo con el pid evita pisar el temporal de
+    // otro proceso que persista a la vez.
+    let tmp = config_dir.join(format!(
+        "{}.tmp.{}",
+        PluginRegistry::STATE_FILE,
+        std::process::id()
+    ));
+    std::fs::write(&tmp, doc.to_string())?;
+    std::fs::rename(&tmp, &path)
 }
 
 #[cfg(test)]

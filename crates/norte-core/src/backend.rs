@@ -374,6 +374,14 @@ impl Backend {
     /// Aprueba (o revoca) las capabilities de un plugin (M4-P3). Embebido:
     /// discover + `set_approval` + persiste, todo en `spawn_blocking`.
     ///
+    /// # Invariante de seguridad (defensa en profundidad)
+    /// El gate "SOLO un humano aprueba" vive en la capa WIRE (el daemon, que ata
+    /// la conexión a un [`crate::journal::Actor`]). Este `Backend` embebido es la
+    /// API in-proceso del frontend HUMANO y NO recibe `Actor`: aprobar por aquí
+    /// es, por construcción, un acto del humano. Si algún día se cablea un bridge
+    /// de agente a un `Backend` embebido, habría que replicar el gate AQUÍ (no
+    /// existe hoy y no debe introducirse sin ese gate).
+    ///
     /// # Errors
     /// [`Error::NotFound`] si el id es desconocido; taxonomía del protocolo en
     /// lo demás.
@@ -402,6 +410,12 @@ impl Backend {
 
     /// Activa/desactiva un plugin ya aprobado (M4-P3). Semántica idéntica a
     /// [`Self::plugins_set_approval`].
+    ///
+    /// # Invariante de seguridad (defensa en profundidad)
+    /// Igual que [`Self::plugins_set_approval`]: el gate "solo humano" vive en la
+    /// capa wire (daemon con `Actor`); este Backend embebido es la API del
+    /// frontend humano y no recibe `Actor`. Un futuro bridge de agente a un
+    /// Backend embebido tendría que replicar el gate aquí.
     ///
     /// # Errors
     /// [`Error::NotFound`] si el id es desconocido; taxonomía del protocolo en

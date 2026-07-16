@@ -86,6 +86,60 @@ fn id_no_reverse_dns_se_rechaza() {
 }
 
 #[test]
+fn id_charset_reverse_dns_estricto() {
+    // `id_literal` = el texto EXACTO del valor TOML (ya escapado). Permite meter
+    // `\n` (escape TOML → salto de línea real en el valor) o `\"` (comilla).
+    let with_id = |id_literal: &str| {
+        format!(
+            r#"
+        [plugin]
+        id = {id_literal}
+        name = "N"
+        publisher = "p"
+        version = "0.1.0"
+        category = "hook"
+    "#
+        )
+    };
+
+    // Ids válidos: segmentos alfanuméricos con guiones, con al menos un punto.
+    assert!(Manifest::from_toml(&with_id(r#""org.norte.demo""#)).is_ok());
+    assert!(Manifest::from_toml(&with_id(r#""org.foo-bar.baz""#)).is_ok());
+
+    // Ids hostiles que SÍ parsean como TOML pero fallan el charset ⇒
+    // `ManifestError::Id` (no llegan al log ni al modal de aprobación T5):
+    //  - `\n` (escape TOML) = salto de línea real en el valor → inyección de log.
+    //  - `\"` (escape TOML) = comilla en el valor → spoofing del diálogo.
+    //  - espacios, guion-bajo, no-ASCII, punto inicial/final, segmento vacío.
+    for bad_literal in [
+        r#""org.norte.de\nmo""#,
+        r#""org.\"norte\".demo""#,
+        r#""org norte demo""#,
+        r#""org.norte.de_mo""#,
+        r#""org.norte.デモ""#,
+        r#"".org.norte""#,
+        r#""org.norte.""#,
+        r#""org..norte""#,
+        r#""orgnorte""#,
+    ] {
+        assert!(
+            matches!(
+                Manifest::from_toml(&with_id(bad_literal)),
+                Err(ManifestError::Id)
+            ),
+            "id hostil debe rechazarse como Id: {bad_literal}"
+        );
+    }
+
+    // Longitud total > 128 se rechaza.
+    let long = format!(r#""org.norte.{}""#, "a".repeat(120));
+    assert!(matches!(
+        Manifest::from_toml(&with_id(&long)),
+        Err(ManifestError::Id)
+    ));
+}
+
+#[test]
 fn net_capability_lista_hosts() {
     let m = Manifest::from_toml(
         r#"

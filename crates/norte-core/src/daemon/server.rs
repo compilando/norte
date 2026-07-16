@@ -334,8 +334,10 @@ impl Daemon {
                 // Catálogo de plugins (M4-P3). Un `plugins-state.toml` corrupto
                 // NO debe impedir arrancar el daemon (dejaría al usuario sin
                 // ninguna otra operación por un fichero de estado roto): se
-                // degrada a un registro VACÍO con aviso, y el usuario puede
-                // re-aprobar. Un catálogo ausente ya es "vacío" sin error.
+                // degrada FAIL-CLOSED a un registro VACÍO (nada aprobado ni
+                // activado) con aviso, y el usuario puede re-aprobar. La
+                // corrupción NUNCA "abre" un plugin que no estaba consentido. Un
+                // catálogo ausente ya es "vacío" sin error.
                 let plugins_root =
                     plugins_dir.unwrap_or_else(crate::connect::config_dir);
                 let plugins = crate::plugins::PluginRegistry::discover(&plugins_root)
@@ -1129,11 +1131,11 @@ async fn dispatch(
         methods::PLUGIN_LIST => handle_plugin_list(req.params, shared),
         methods::PLUGIN_SET_APPROVAL => {
             let p: methods::PluginSetApprovalParams = parse_params(req.params)?;
-            handle_plugin_set_approval(&conn.actor, &p, shared)
+            handle_plugin_set_approval(&conn.actor, &p, shared).await
         }
         methods::PLUGIN_SET_ENABLED => {
             let p: methods::PluginSetEnabledParams = parse_params(req.params)?;
-            handle_plugin_set_enabled(&conn.actor, &p, shared)
+            handle_plugin_set_enabled(&conn.actor, &p, shared).await
         }
         _ => dispatch_fs_task(req, conn.actor.clone(), shared).await,
     }
@@ -1357,8 +1359,11 @@ fn handle_plugin_list(
 /// — el mismo criterio que `policy.grant_scope`/`policy.decide`: un agente jamás
 /// consiente por el humano. Un id desconocido es `INVALID_PARAMS` (no se ensucia
 /// el estado con plugins fantasma); un fallo de persistencia, `INTERNAL_ERROR`.
-#[tracing::instrument(skip_all, fields(id = %p.id, approved = p.approved))]
-fn handle_plugin_set_approval(
+// `skip_all` SIN `id = %p.id`: el id viene crudo del wire y NO debe ir al log
+// antes de validarse contra el catálogo (inyección de log / spoofing). Se loguea
+// (info) SOLO tras confirmar que es un plugin conocido.
+#[tracing::instrument(skip_all, fields(approved = p.approved))]
+async fn handle_plugin_set_approval(
     actor: &Actor,
     p: &methods::PluginSetApprovalParams,
     shared: &Arc<Shared>,
@@ -1369,28 +1374,41 @@ fn handle_plugin_set_approval(
             "only a human (non-agent) connection may approve a plugin",
         ));
     }
-    let applied = shared
-        .plugins
-        .lock()
-        .expect("plugins lock sano")
-        .set_approval(&p.id, p.approved)
-        .map_err(|e| RpcError::protocol(codes::INTERNAL_ERROR, format!("persist: {e}")))?;
+    // Muta EN MEMORIA bajo el lock y captura el snapshot + el dir; el lock se
+    // libera al cerrar el bloque, ANTES de cualquier `.await` (regla 2: nada de
+    // I/O bloqueante en el reactor, ni sostener un std::Mutex a través de await).
+    let (applied, snapshot, dir) = {
+        let mut reg = shared.plugins.lock().expect("plugins lock sano");
+        let applied = reg.set_approval_in_memory(&p.id, p.approved);
+        (
+            applied,
+            reg.state_snapshot(),
+            reg.config_dir().to_path_buf(),
+        )
+    };
     if !applied {
         return Err(RpcError::protocol(
             codes::INVALID_PARAMS,
             "unknown plugin id",
         ));
     }
-    // Efecto de seguridad (material de auditoría M4): quién aprobó qué plugin.
-    tracing::info!("plugin (des)aprobado por el humano");
+    tokio::task::spawn_blocking(move || crate::plugins::persist_state(&dir, &snapshot))
+        .await
+        .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "persist task panicked"))?
+        .map_err(|e| RpcError::protocol(codes::INTERNAL_ERROR, format!("persist: {e}")))?;
+    // Efecto de seguridad (material de auditoría M4): plugin YA validado como
+    // conocido, así que su id es seguro para el log.
+    tracing::info!(id = %p.id, "plugin (des)aprobado por el humano");
     to_value(&methods::PluginSetApprovalResult {})
 }
 
 /// `plugin.set_enabled` (M4-P3): un HUMANO activa/desactiva un plugin ya
 /// aprobado. Misma barrera y misma semántica de retorno que
 /// [`handle_plugin_set_approval`] (id desconocido = `INVALID_PARAMS`).
-#[tracing::instrument(skip_all, fields(id = %p.id, enabled = p.enabled))]
-fn handle_plugin_set_enabled(
+// `skip_all` sin `id = %p.id`: idéntico razonamiento que
+// [`handle_plugin_set_approval`] — el id crudo del wire no va al log sin validar.
+#[tracing::instrument(skip_all, fields(enabled = p.enabled))]
+async fn handle_plugin_set_enabled(
     actor: &Actor,
     p: &methods::PluginSetEnabledParams,
     shared: &Arc<Shared>,
@@ -1401,19 +1419,27 @@ fn handle_plugin_set_enabled(
             "only a human (non-agent) connection may enable a plugin",
         ));
     }
-    let applied = shared
-        .plugins
-        .lock()
-        .expect("plugins lock sano")
-        .set_enabled(&p.id, p.enabled)
-        .map_err(|e| RpcError::protocol(codes::INTERNAL_ERROR, format!("persist: {e}")))?;
+    // Mismo patrón regla-2 que set_approval: muta bajo el lock, persiste fuera.
+    let (applied, snapshot, dir) = {
+        let mut reg = shared.plugins.lock().expect("plugins lock sano");
+        let applied = reg.set_enabled_in_memory(&p.id, p.enabled);
+        (
+            applied,
+            reg.state_snapshot(),
+            reg.config_dir().to_path_buf(),
+        )
+    };
     if !applied {
         return Err(RpcError::protocol(
             codes::INVALID_PARAMS,
             "unknown plugin id",
         ));
     }
-    tracing::info!("plugin (des)activado por el humano");
+    tokio::task::spawn_blocking(move || crate::plugins::persist_state(&dir, &snapshot))
+        .await
+        .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "persist task panicked"))?
+        .map_err(|e| RpcError::protocol(codes::INTERNAL_ERROR, format!("persist: {e}")))?;
+    tracing::info!(id = %p.id, "plugin (des)activado por el humano");
     to_value(&methods::PluginSetEnabledResult {})
 }
 
