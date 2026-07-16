@@ -525,9 +525,8 @@ impl Engine {
     /// El `actor` SELECCIONA qué sesión deshacer Y actúa como ejecutor: el gate
     /// de policy se evalúa con él y las compensaciones lo registran (así, un
     /// agente que deshace su propia sesión queda sujeto a su scope/policy, y las
-    /// compensaciones llevan el actor real — cierra la deuda M2 de M3-2 para el
-    /// caso target==performer). El caso «humano deshace la sesión de un agente»
-    /// (performer ≠ target) necesitará un parámetro de ejecutor en M3-4.
+    /// compensaciones llevan el actor real). El caso «humano deshace la sesión
+    /// de un agente» (performer ≠ target) es [`Self::undo_session_for`].
     ///
     /// El undo pasa por el gate de policy (M3-3, regla 9): cada reversa se evalúa
     /// como su `PolicyOp` inverso ANTES de resolver el provider; una denegación
@@ -546,10 +545,30 @@ impl Engine {
         &self,
         actor: crate::journal::Actor,
     ) -> Result<(TaskHandle, Arc<std::sync::Mutex<crate::UndoReport>>), Error> {
+        self.undo_session_for(&actor.clone(), actor).await
+    }
+
+    /// Como [`Self::undo_session`] pero separando QUIÉN se deshace de QUIÉN
+    /// ejecuta (M3-4, deuda M3-2): `target` selecciona las entradas del
+    /// journal a revertir; `executor` pasa el gate de policy y firma las
+    /// compensaciones. El caso humano-deshace-agente usa
+    /// `(Agent{session}, User)`: el undo no muere porque el scope del agente
+    /// haya expirado — lo ejecuta el humano.
+    ///
+    /// # Errors
+    /// Las de [`Self::undo_session`].
+    ///
+    /// # Panics
+    /// Como [`Self::undo_session`] (Mutex del reporte envenenado; no ocurre).
+    pub async fn undo_session_for(
+        &self,
+        target: &crate::journal::Actor,
+        executor: crate::journal::Actor,
+    ) -> Result<(TaskHandle, Arc<std::sync::Mutex<crate::UndoReport>>), Error> {
         let journal = self.journal.clone().ok_or(Error::Unsupported)?;
         let entries = journal
             .journal()
-            .revertible_for(&actor)
+            .revertible_for(target)
             .await
             .map_err(Error::from)?;
 
@@ -587,7 +606,7 @@ impl Engine {
             if let Some(s) = &second {
                 gate_paths.push(s);
             }
-            if let Err(err) = self.gate(&actor, undo_op, &gate_paths).await {
+            if let Err(err) = self.gate(&executor, undo_op, &gate_paths).await {
                 report.lock().expect("undo report lock").blocked = Some((e.seq, err));
                 break; // estricto: para al primer bloqueo de policy (LIFO).
             }
@@ -601,7 +620,7 @@ impl Engine {
             &key,
             TaskKind::Undo,
             Priority::Normal,
-            actor,
+            executor,
             Box::new(move |ctx| {
                 Box::pin(async move {
                     let total = plan.len() as u64;

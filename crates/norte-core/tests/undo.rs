@@ -320,3 +320,79 @@ async fn undo_delete_mode_trash_then_restore_via_engine() {
         r.blocked
     );
 }
+
+/// M3-4 T2: un HUMANO deshace la sesión de un agente cuyo scope ya no existe
+/// (expiró / nunca se renovó). El target selecciona las entradas; el EJECUTOR
+/// (User, allow-all) pasa el gate y firma las compensaciones — sin el split,
+/// el undo moría en `out-of-scope` del propio agente.
+#[tokio::test]
+async fn undo_de_sesion_de_agente_ejecutado_por_humano() {
+    use norte_core::approval::DenyAll;
+    use norte_core::{PolicyConfig, ScopeRegistry, ScopedPolicy};
+    let journal = Arc::new(SqliteJournal::new(
+        Journal::open_in_memory().await.expect("j"),
+    ));
+    // Policy REAL instalada y registro de scopes VACÍO: el agente está fuera
+    // de todo scope (como tras expirar su TTL).
+    let engine = Engine::with_journal(Arc::clone(&journal)).with_policy(
+        Arc::new(ScopedPolicy::new(
+            ScopeRegistry::new(),
+            PolicyConfig::default(),
+        )),
+        Arc::new(DenyAll),
+    );
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+
+    // Mutación del agente sembrada (patrón de undo_filters_by_actor).
+    write_file(&mem, "mem:///agent_made.txt", b"x").await;
+    let agent = Actor::Agent {
+        session: "s1".into(),
+    };
+    journal
+        .journal()
+        .record(
+            "created",
+            b"mem:///agent_made.txt",
+            None,
+            Reversal::Delete,
+            None,
+            &agent,
+        )
+        .await
+        .expect("seed");
+
+    // Sanity: el agente sin scope NO puede deshacerse a sí mismo (bloqueado
+    // por policy antes de tocar nada).
+    let (h, report) = engine
+        .undo_session(agent.clone())
+        .await
+        .expect("submit self-undo");
+    let _ = h.join().await;
+    let r = report.lock().expect("lock").clone();
+    assert!(r.blocked.is_some(), "out-of-scope bloquea el self-undo");
+    assert_eq!(r.undone, 0);
+    assert!(mem.stat(&vp("mem:///agent_made.txt")).await.is_ok());
+
+    // El humano deshace la sesión del agente: target=agente, ejecutor=User.
+    let (h, report) = engine
+        .undo_session_for(&agent, Actor::User)
+        .await
+        .expect("submit undo humano");
+    assert_eq!(h.join().await, TaskState::Completed);
+    let r = report.lock().expect("lock").clone();
+    assert_eq!(r.undone, 1);
+    assert!(r.blocked.is_none());
+    assert!(matches!(
+        mem.stat(&vp("mem:///agent_made.txt")).await,
+        Err(norte_proto::Error::NotFound)
+    ));
+
+    // La compensación la firma el EJECUTOR (User), no el agente.
+    let entries = journal.journal().entries().await.expect("entries");
+    let comp = entries
+        .iter()
+        .find(|e| e.undoes_seq.is_some())
+        .expect("hay compensatoria");
+    assert_eq!(comp.actor_kind, "user", "la firma el ejecutor humano");
+}
