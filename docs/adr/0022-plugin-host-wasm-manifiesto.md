@@ -237,3 +237,48 @@ dejaba abierta:
   el manifiesto aún no puede nombrar otro artefacto (D6).
 - **Issue #69**: la aprobación debería ligarse a un DIGEST de las capabilities
   (re-aprobar si cambian) + dedup de ids duplicados en el catálogo.
+
+## Addendum P5 (2026-07-16)
+
+**Qué se implementó (M4-P5, previewer de plugins en el viewer).** El core cablea
+la interfaz `previewer` del world al **viewer F3**, cerrando el segundo consumidor
+runtime del host (tras `command` en P4):
+
+- `PluginRegistry::resolve_previewer(mime) -> Option<(id, name, wasm, caps)>`
+  elige, **fail-closed**, el primer previewer APROBADO+ACTIVADO cuyo glob de
+  mimetypes case `mime` (un previewer no consentido jamás se elige). Barato y
+  bajo el lock; el caller lee bytes y ejecuta fuera.
+- Expuesto por wire como `plugin.preview` (proto 0.15.0). La detección de
+  mimetype es **por extensión** del nombre (`guess_mimetype`, pub(crate)). El
+  core **lee los bytes del archivo acotados a 1 MiB** y los pasa al guest (regla
+  9: el plugin no toca el FS a pelo; recibe lo que el host le entrega). El output
+  del guest se **enmascara en el viewer** con un indicador «via <plugin>».
+- **Acople `plugin.preview` ↔ `fs.read`**: `plugin.preview` solo se sirve si
+  `fs.read` está abierto — anclado en el handler (leer un archivo para
+  previsualizarlo es una lectura; no se abre una puerta nueva por la de atrás).
+- Los errores de runtime se **redactan** al cliente (taxonomía gruesa, sin ruta
+  ni detalle interno del trap).
+- **Cierre E2E con un componente WASM real**
+  (`crates/norte-core/tests/plugins_preview_e2e.rs`): descubrir → (denegar sin
+  aprobar, con el `.wasm` presente y el mimetype casando) → aprobar → activar →
+  resolver `text/plain` → EJECUTAR `examples-wasm/previewer-demo` y comprobar que
+  el render lleva la cabecera `[text/plain]` + las 3 primeras líneas (la 4.ª no).
+  `application/json` no casa `text/*` → `None`. SKIP si el target no está.
+
+**Deuda (queda fuera de P5):**
+
+- **Mimetype por SNIFFING de contenido**, no solo por extensión: un archivo sin
+  extensión (o con extensión mentirosa) no resuelve el previewer correcto.
+- **Preferencia/orden si varios previewers casan** el mismo mimetype: hoy gana el
+  primero del catálogo; falta política de prioridad y desempate.
+- **Previewer en el PANE** (columna de vista rápida), no solo en el viewer F3.
+- **Streaming del preview** para archivos grandes: hoy el core lee un bloque
+  acotado (1 MiB) y lo pasa entero; sin streaming ni paginación del contenido.
+- **Sin cap del output del guest** (**issue #68**): el guest puede devolver un
+  string arbitrariamente grande; falta un tope en el render.
+- **Las interfaces `provider`, `columns`, `hook` siguen sin wiring**: solo
+  `command` (P4) y `previewer` (P5) tienen consumidor runtime.
+- **Issue #29** (previewer plugin en el pane con syntax-highlight) queda
+  **PARCIALMENTE cubierto**: hay previewer de plugin en el viewer F3, pero no en
+  el pane ni con resaltado de sintaxis. El issue se deja ABIERTO anotando el
+  avance de P5.

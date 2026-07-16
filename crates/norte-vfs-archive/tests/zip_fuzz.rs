@@ -62,14 +62,26 @@ proptest! {
     // Menos casos: cada uno construye un zip real + runtime.
     #![proptest_config(ProptestConfig::with_cases(64))]
 
-    /// Un nombre de entrada arbitrario (sin `/` ni `\0`, no vacío, no `.`/`..`)
-    /// vuelve del listado BYTE A BYTE — el bit 11/cp437 es metadato, el nombre
-    /// crudo manda (regla 1, ADR 0018).
+    /// Un nombre de entrada arbitrario (sin `/` ni `\0`, no vacío, no `.`/`..`,
+    /// no el marcador reservado `!`) vuelve del listado BYTE A BYTE — el bit
+    /// 11/cp437 es metadato, el nombre crudo manda (regla 1, ADR 0018).
+    ///
+    /// El segmento `!` queda FUERA a sabiendas: ADR 0018 lo reserva como marcador
+    /// del scheme compuesto, así que `archive_compose` lo rechaza
+    /// (`ArchiveAddressing`) y el índice lo omite como indireccionable
+    /// (`index.rs`, "componente `!` (marcador ADR 0018)"). Un `!` a solas no es
+    /// direccionable en una ruta compuesta —limitación documentada, no pérdida
+    /// silenciosa (se registra y se cuenta como `skipped`)—, y el generador debe
+    /// respetar el mismo invariante que ya respeta para `.`/`..`.
     #[test]
     fn arbitrary_name_roundtrips_byte_exact(
         raw in proptest::collection::vec(any::<u8>(), 1..40)
-            .prop_filter("nombre legal de segmento", |b| {
-                !b.contains(&b'/') && !b.contains(&0) && b.as_slice() != b"." && b.as_slice() != b".."
+            .prop_filter("nombre legal de segmento (no marcador `!`)", |b| {
+                !b.contains(&b'/')
+                    && !b.contains(&0)
+                    && b.as_slice() != b"."
+                    && b.as_slice() != b".."
+                    && b.as_slice() != b"!"
             }),
     ) {
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
