@@ -33,6 +33,11 @@ docs:
 # Lo que corre CI.
 ci: lint test cov docs
 
+# Iteración rápida: todo el gate MENOS cobertura (cov recompila proto/vfs/core
+# instrumentados en su propio target y re-corre sus tests: ~34 s fijos incluso
+# sin cambios). El gate real pre-commit sigue siendo `just ci`.
+ci-fast: lint test docs
+
 # ---------- desarrollo: ejecutar y probar a mano ----------
 
 # El TUI (release: arranque frío <50 ms es presupuesto de la spec §12).
