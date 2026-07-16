@@ -40,6 +40,28 @@ pub struct PluginState {
     pub enabled: bool,
 }
 
+/// Fallo al ejecutar un comando de plugin. Los tres primeros variantes son el
+/// veredicto fail-closed del consentimiento (desconocido / sin aprobar /
+/// desactivado); los dos últimos, fallos de artefacto o de runtime.
+#[derive(Debug, thiserror::Error)]
+pub enum PluginRunError {
+    /// No hay ningún plugin descubierto con ese id.
+    #[error("plugin desconocido: {0}")]
+    Unknown(String),
+    /// El plugin existe pero un humano no ha aprobado sus capabilities.
+    #[error("plugin sin aprobar: {0}")]
+    NotApproved(String),
+    /// El plugin está aprobado pero desactivado.
+    #[error("plugin desactivado: {0}")]
+    Disabled(String),
+    /// El plugin no tiene `plugin.wasm` en su directorio.
+    #[error("el plugin no tiene binario en {0}")]
+    NoBinary(std::path::PathBuf),
+    /// El runtime WASM falló al compilar, instanciar o ejecutar el componente.
+    #[error("runtime: {0}")]
+    Runtime(#[from] norte_plugin_host::RuntimeError),
+}
+
 /// Registro de plugins: catálogo descubierto + estado persistido fusionado.
 #[derive(Debug)]
 pub struct PluginRegistry {
@@ -204,6 +226,43 @@ impl PluginRegistry {
         }
         persist_state(&self.config_dir, &self.state)?;
         Ok(true)
+    }
+
+    /// Ejecuta un comando de un plugin APROBADO y ACTIVADO (fail-closed: un
+    /// plugin no consentido JAMÁS se ejecuta). El `.wasm` es `<dir>/plugin.wasm`
+    /// por convención (ADR 0022 D6). Instancia con las capabilities DEL
+    /// MANIFIESTO (el sandbox de M4-P2 las hace cumplir). SÍNCRONO (compila e
+    /// instancia el componente): el caller lo corre en `spawn_blocking` (regla 2).
+    ///
+    /// # Errors
+    /// [`PluginRunError`] si el plugin no existe, no está aprobado, está
+    /// desactivado, no tiene binario, o el runtime falla.
+    pub fn run_command(
+        &self,
+        runtime: &norte_plugin_host::PluginRuntime,
+        id: &str,
+        command: &str,
+        arg: &str,
+    ) -> Result<String, PluginRunError> {
+        let entry = self
+            .catalog
+            .plugins
+            .iter()
+            .find(|p| p.manifest.id == id)
+            .ok_or_else(|| PluginRunError::Unknown(id.to_string()))?;
+        let st = self.state.get(id).copied().unwrap_or_default();
+        if !st.approved {
+            return Err(PluginRunError::NotApproved(id.to_string()));
+        }
+        if !st.enabled {
+            return Err(PluginRunError::Disabled(id.to_string()));
+        }
+        let wasm = entry.dir.join("plugin.wasm");
+        if !wasm.is_file() {
+            return Err(PluginRunError::NoBinary(wasm));
+        }
+        let mut inst = runtime.instantiate(&wasm, entry.manifest.capabilities.clone())?;
+        Ok(inst.run_command(command, arg)?)
     }
 
     /// `true` si `id` corresponde a un plugin realmente descubierto.
@@ -419,6 +478,84 @@ fs-read = "scoped"
                 enabled: false
             }),
             "el estado del id-con-puntos debe recuperarse bajo el mismo id literal"
+        );
+    }
+
+    /// Manifiesto `command` mínimo, sin capabilities especiales, para los tests
+    /// de ejecución fail-closed.
+    const CMD_MANIFEST: &str = r#"
+[plugin]
+id = "org.norte.cmd"
+name = "Cmd"
+publisher = "norte"
+version = "0.1.0"
+category = "command"
+"#;
+
+    #[test]
+    fn plugins_run_command_sin_aprobar_es_not_approved() {
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.cmd", CMD_MANIFEST);
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        let rt = norte_plugin_host::PluginRuntime::new().unwrap();
+
+        let err = reg
+            .run_command(&rt, "org.norte.cmd", "echo", "hola")
+            .unwrap_err();
+        assert!(
+            matches!(err, PluginRunError::NotApproved(ref id) if id == "org.norte.cmd"),
+            "un plugin sin aprobar JAMÁS se ejecuta: {err:?}"
+        );
+    }
+
+    #[test]
+    fn plugins_run_command_aprobado_sin_activar_es_disabled() {
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.cmd", CMD_MANIFEST);
+        let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert!(reg.set_approval_in_memory("org.norte.cmd", true));
+        let rt = norte_plugin_host::PluginRuntime::new().unwrap();
+
+        let err = reg
+            .run_command(&rt, "org.norte.cmd", "echo", "hola")
+            .unwrap_err();
+        assert!(
+            matches!(err, PluginRunError::Disabled(ref id) if id == "org.norte.cmd"),
+            "aprobado pero desactivado no se ejecuta: {err:?}"
+        );
+    }
+
+    #[test]
+    fn plugins_run_command_activado_sin_wasm_es_no_binary() {
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.cmd", CMD_MANIFEST);
+        let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert!(reg.set_approval_in_memory("org.norte.cmd", true));
+        assert!(reg.set_enabled_in_memory("org.norte.cmd", true));
+        let rt = norte_plugin_host::PluginRuntime::new().unwrap();
+
+        let err = reg
+            .run_command(&rt, "org.norte.cmd", "echo", "hola")
+            .unwrap_err();
+        assert!(
+            matches!(&err, PluginRunError::NoBinary(p) if p.ends_with("plugin.wasm")),
+            "sin plugin.wasm el runtime no arranca: {err:?}"
+        );
+    }
+
+    #[test]
+    fn plugins_run_command_id_inexistente_es_unknown() {
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.cmd", CMD_MANIFEST);
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        let rt = norte_plugin_host::PluginRuntime::new().unwrap();
+
+        let err = reg
+            .run_command(&rt, "org.norte.fantasma", "echo", "hola")
+            .unwrap_err();
+        assert!(
+            matches!(err, PluginRunError::Unknown(ref id) if id == "org.norte.fantasma"),
+            "un id desconocido es Unknown: {err:?}"
         );
     }
 

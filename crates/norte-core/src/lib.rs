@@ -21,7 +21,7 @@ mod undo;
 pub use engine::{Engine, TransferOptions};
 pub use journal::{Actor, Journal, JournalEntry, Reversal, SqliteJournal};
 pub use observer::{Mutation, MutationObserver};
-pub use plugins::PluginRegistry;
+pub use plugins::{PluginRegistry, PluginRunError};
 pub use policy::{
     AllowAll, Decision, DenyReason, OpSet, PolicyConfig, PolicyGate, PolicyOp, Scope,
     ScopeRegistry, ScopedPolicy,
