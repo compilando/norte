@@ -119,3 +119,37 @@ documentan); la gobernanza queda a medias hasta M3 (sandbox sí, policy engine
 no); el gestor de extensiones y el catálogo añaden superficie de UI. El SDK
 permisivo (Apache/MIT) para AUTORES de plugins (bindings de guest) es un crate
 aparte, futuro; `norte-plugin-host` es subsistema del core (AGPL).
+
+## Addendum P2 (2026-07-16)
+
+**Qué se implementó (M4-P2, T1–T7).** El runtime `norte-plugin-host` ejecuta
+componentes WASM reales sobre **wasmtime 46** (Component Model). El sandbox
+arranca con un WASI **vacío por defecto** (sin FS, red ni entorno): un plugin
+no ve nada que no se le conceda explícitamente. Dos de las cinco interfaces del
+plan están **end-to-end**: `previewer::render` y `command::run` (más la puerta
+de host `host-log`: `log` + `read-scoped`). El **enforcement de `fs-read` vive
+en el HOST** (ADR 0022 D4): el guest siempre puede *llamar* a `read-scoped`,
+pero si su `Capabilities` no declaró `fs-read` el host devuelve `Err` sin tocar
+recurso alguno; con `fs-read=scoped` el host resuelve el token contra los
+recursos que él mismo sembró. Se añaden **guests de ejemplo** (`previewer-demo`,
+`command-demo`) fuera del workspace (compilan a `wasm32-wasip2` con lockfile y
+perfil propios) y un **helper de build con SKIP**: si el target `wasm32-wasip2`
+no está instalado los tests de componente se saltan (no fallan); si está pero el
+guest no compila, es fallo real. `just ci` no compila los guests salvo cuando el
+test los pide y el target está presente.
+
+**Deuda (queda fuera de P2):**
+
+- **Las 3 interfaces restantes** (`provider`, `columns`, `hook`) → **P2b**.
+- **Worlds por-categoría.** Hoy el world `norte-plugin` exige AMBAS interfaces
+  (`previewer` + `command`); un guest de una sola categoría implementa la otra
+  como "no-soportada". Worlds por-categoría (para no exigir implementar
+  interfaces ajenas) → P2b.
+- **Límite de memoria/CPU por store.** Hay `TODO M4-P2b` en `runtime.rs`
+  (`Store::limiter` + fuel/epoch): un plugin hostil puede hoy consumir memoria o
+  colgarse sin tope. → P2b.
+- **Integración con el policy engine M3.** El sandbox AÍSLA (media toda
+  syscall); el gating fino `ask`/`allow`/`deny` por scope + journal/undo (ADR
+  0020) se **superpone después**, cuando el host de plugins se cablee al daemon
+  M3 (regla 9 completa). Ver D7.
+- **Gestor de extensiones (descubrimiento/instalación/UI)** → **P3**.

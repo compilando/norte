@@ -46,3 +46,48 @@ fn previewer_demo_renderiza_y_loguea() {
         inst.logs()
     );
 }
+
+#[test]
+fn command_demo_ejecuta_y_reporta_error_de_comando() {
+    let Some(wasm) = support::build_guest("command-demo") else {
+        return;
+    };
+    let rt = norte_plugin_host::PluginRuntime::new().expect("engine");
+    let mut inst = rt
+        .instantiate(&wasm, norte_plugin_host::Capabilities::default())
+        .expect("instancia");
+    assert_eq!(inst.run_command("echo", "hola").expect("echo"), "hola");
+    assert_eq!(inst.run_command("shout", "hola").expect("shout"), "HOLA");
+    let err = inst.run_command("nope", "").expect_err("desconocido");
+    assert!(
+        matches!(err, norte_plugin_host::RuntimeError::Guest(ref m) if m.contains("desconocido")),
+        "fue {err:?}"
+    );
+}
+
+#[test]
+fn fs_read_scoped_gatea_la_puerta_en_el_host() {
+    let Some(wasm) = support::build_guest("command-demo") else {
+        return;
+    };
+    let rt = norte_plugin_host::PluginRuntime::new().expect("engine");
+    // SIN fs-read: la puerta se cierra en el host aunque el guest la llame.
+    let mut sin = rt
+        .instantiate(&wasm, norte_plugin_host::Capabilities::default())
+        .expect("instancia");
+    sin.preload_scoped("demo", b"secreto".to_vec());
+    let err = sin.run_command("read", "").expect_err("sin capability");
+    assert!(
+        matches!(err, norte_plugin_host::RuntimeError::Guest(ref m) if m.contains("fs-read")),
+        "fue {err:?}"
+    );
+    // CON fs-read=scoped: la puerta se abre y devuelve el recurso sembrado.
+    let mut con = rt
+        .instantiate(
+            &wasm,
+            norte_plugin_host::Capabilities::scoped_read_for_test(),
+        )
+        .expect("instancia");
+    con.preload_scoped("demo", b"contenido".to_vec());
+    assert_eq!(con.run_command("read", "").expect("read"), "contenido");
+}
