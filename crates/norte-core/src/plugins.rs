@@ -65,6 +65,48 @@ pub enum PluginRunError {
     Runtime(#[from] norte_plugin_host::RuntimeError),
 }
 
+/// Tope de bytes que el core lee de un archivo al PREVISUALIZAR (1 MiB,
+/// anti-DoS): el handler del daemon lee como mucho esto y se lo pasa al guest.
+/// El guest de M4-P2 tiene ADEMÁS su propio límite; este es la primera barrera,
+/// en el lado del host, para no cargar un archivo enorme en memoria solo porque
+/// alguien pidió su preview.
+// Lo consume el handler `preview` del daemon (M4-P5 T3); hasta ese wiring queda
+// sin usar fuera de tests.
+#[allow(dead_code)]
+pub(crate) const PREVIEW_MAX_BYTES: u64 = 1024 * 1024;
+
+/// Adivina el mimetype por EXTENSIÓN (heurística ligera, sin dep de sniffing).
+/// Un archivo sin extensión reconocible → `application/octet-stream` (ningún
+/// previewer `text/*` lo tomará). NO lee el contenido. `pub(crate)` para el
+/// handler del daemon.
+// Lo consume el handler `preview` del daemon (M4-P5 T3); hasta ese wiring queda
+// sin usar fuera de tests.
+#[allow(dead_code)]
+pub(crate) fn guess_mimetype(path: &norte_proto::VPath) -> &'static str {
+    let ext = path
+        .file_name()
+        .map(norte_proto::Segment::as_bytes)
+        .and_then(|n| std::str::from_utf8(n).ok())
+        .and_then(|n| n.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()));
+    match ext.as_deref() {
+        Some("txt" | "md" | "rs" | "toml" | "log" | "csv" | "ini" | "conf") => "text/plain",
+        Some("json") => "application/json",
+        Some("html" | "htm") => "text/html",
+        Some("xml") => "text/xml",
+        Some("js") => "text/javascript",
+        Some("css") => "text/css",
+        _ => "application/octet-stream",
+    }
+}
+
+/// ¿El glob `pat` (`text/*` o exacto `application/json`) casa `mime`?
+fn mimetype_matches(pat: &str, mime: &str) -> bool {
+    match pat.strip_suffix("/*") {
+        Some(prefix) => mime.split('/').next() == Some(prefix),
+        None => pat == mime,
+    }
+}
+
 /// Registro de plugins: catálogo descubierto + estado persistido fusionado.
 #[derive(Debug)]
 pub struct PluginRegistry {
@@ -265,6 +307,47 @@ impl PluginRegistry {
             return Err(PluginRunError::NoBinary(id.to_string()));
         }
         Ok((wasm, entry.manifest.capabilities.clone()))
+    }
+
+    /// Resuelve el PRIMER previewer APROBADO y ACTIVADO cuyo mimetype declarado
+    /// case `mime`, devolviendo `(id, name, wasm_path, capabilities)`; `None` si
+    /// ninguno aplica. Fail-closed: un previewer no consentido jamás se elige.
+    /// Barato: el caller lee los bytes del archivo y ejecuta fuera del lock.
+    #[must_use]
+    pub fn resolve_previewer(
+        &self,
+        mime: &str,
+    ) -> Option<(
+        String,
+        String,
+        std::path::PathBuf,
+        norte_plugin_host::Capabilities,
+    )> {
+        self.catalog.plugins.iter().find_map(|e| {
+            let st = self.state.get(&e.manifest.id).copied().unwrap_or_default();
+            if !st.approved || !st.enabled {
+                return None;
+            }
+            let handles = e
+                .manifest
+                .contributions
+                .previewer
+                .iter()
+                .flat_map(|c| c.mimetypes.iter())
+                .any(|pat| mimetype_matches(pat, mime));
+            if !handles {
+                return None;
+            }
+            let wasm = e.dir.join("plugin.wasm");
+            wasm.is_file().then(|| {
+                (
+                    e.manifest.id.clone(),
+                    e.manifest.name.clone(),
+                    wasm,
+                    e.manifest.capabilities.clone(),
+                )
+            })
+        })
     }
 
     /// Ejecuta un comando de un plugin APROBADO y ACTIVADO (fail-closed: un
@@ -595,5 +678,101 @@ category = "command"
 
         let err = PluginRegistry::discover(tmp.path()).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    /// Manifiesto de un previewer que declara `text/*`.
+    const PREV_MANIFEST: &str = r#"
+[plugin]
+id = "org.norte.prev"
+name = "Prev"
+publisher = "norte"
+version = "0.1.0"
+category = "previewer"
+[[contributions.previewer]]
+mimetypes = ["text/*"]
+"#;
+
+    fn vpath(s: &str) -> norte_proto::VPath {
+        norte_proto::VPath::parse(s).unwrap()
+    }
+
+    #[test]
+    fn plugins_guess_mimetype_por_extension() {
+        assert_eq!(guess_mimetype(&vpath("file:///a.txt")), "text/plain");
+        assert_eq!(guess_mimetype(&vpath("file:///a.json")), "application/json");
+        assert_eq!(
+            guess_mimetype(&vpath("file:///a")),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            guess_mimetype(&vpath("file:///a.UNKNOWN")),
+            "application/octet-stream"
+        );
+    }
+
+    #[test]
+    fn plugins_mimetype_matches_glob_y_exacto() {
+        assert!(mimetype_matches("text/*", "text/plain"));
+        assert!(!mimetype_matches("text/*", "application/json"));
+        assert!(mimetype_matches("application/json", "application/json"));
+        // No casa parcial: prefijo textual sin la barra no es glob.
+        assert!(!mimetype_matches("application/json", "application/json5"));
+        assert!(!mimetype_matches("text/plain", "text/plai"));
+    }
+
+    #[test]
+    fn plugins_resolve_previewer_fail_closed_y_por_mimetype() {
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.prev", PREV_MANIFEST);
+        // `plugin.wasm` VACÍO: `is_file()` no valida contenido, solo presencia.
+        std::fs::write(
+            tmp.path()
+                .join("plugins")
+                .join("org.norte.prev")
+                .join("plugin.wasm"),
+            b"",
+        )
+        .unwrap();
+
+        let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
+
+        // Descubierto pero SIN aprobar/activar → fail-closed.
+        assert!(
+            reg.resolve_previewer("text/plain").is_none(),
+            "un previewer no consentido jamás se elige"
+        );
+
+        // Aprobado + activado → resuelve para el mimetype que casa el glob.
+        assert!(reg.set_approval_in_memory("org.norte.prev", true));
+        assert!(reg.set_enabled_in_memory("org.norte.prev", true));
+
+        let got = reg.resolve_previewer("text/plain");
+        assert!(got.is_some(), "text/plain casa text/*");
+        let (id, name, wasm, _caps) = got.unwrap();
+        assert_eq!(id, "org.norte.prev");
+        assert_eq!(name, "Prev");
+        assert!(wasm.ends_with("plugin.wasm"));
+
+        // Un mimetype que no casa el glob declarado → None.
+        assert!(
+            reg.resolve_previewer("application/json").is_none(),
+            "application/json no casa text/*"
+        );
+    }
+
+    #[test]
+    fn plugins_resolve_previewer_sin_wasm_es_none() {
+        let tmp = TempDir::new().unwrap();
+        // Sin escribir plugin.wasm: aunque esté consentido, no hay binario.
+        write_plugin(tmp.path(), "org.norte.prev", PREV_MANIFEST);
+
+        let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert!(reg.set_approval_in_memory("org.norte.prev", true));
+        assert!(reg.set_enabled_in_memory("org.norte.prev", true));
+
+        assert!(
+            reg.resolve_previewer("text/plain").is_none(),
+            "sin plugin.wasm no hay nada que ejecutar"
+        );
     }
 }
