@@ -54,9 +54,12 @@ pub enum PluginRunError {
     /// El plugin está aprobado pero desactivado.
     #[error("plugin desactivado: {0}")]
     Disabled(String),
-    /// El plugin no tiene `plugin.wasm` en su directorio.
-    #[error("el plugin no tiene binario en {0}")]
-    NoBinary(std::path::PathBuf),
+    /// El plugin no tiene `plugin.wasm` en su directorio. Lleva el ID (no la
+    /// ruta absoluta: revelaría el home del usuario a un agente que llame a
+    /// `plugin.run_command` — coherente con la redacción de `list()`,
+    /// security-reviewer M4-P4).
+    #[error("el plugin {0} no tiene binario (plugin.wasm)")]
+    NoBinary(String),
     /// El runtime WASM falló al compilar, instanciar o ejecutar el componente.
     #[error("runtime: {0}")]
     Runtime(#[from] norte_plugin_host::RuntimeError),
@@ -259,7 +262,7 @@ impl PluginRegistry {
         }
         let wasm = entry.dir.join("plugin.wasm");
         if !wasm.is_file() {
-            return Err(PluginRunError::NoBinary(wasm));
+            return Err(PluginRunError::NoBinary(id.to_string()));
         }
         let mut inst = runtime.instantiate(&wasm, entry.manifest.capabilities.clone())?;
         Ok(inst.run_command(command, arg)?)
@@ -538,7 +541,7 @@ category = "command"
             .run_command(&rt, "org.norte.cmd", "echo", "hola")
             .unwrap_err();
         assert!(
-            matches!(&err, PluginRunError::NoBinary(p) if p.ends_with("plugin.wasm")),
+            matches!(&err, PluginRunError::NoBinary(id) if id == "org.norte.cmd"),
             "sin plugin.wasm el runtime no arranca: {err:?}"
         );
     }
