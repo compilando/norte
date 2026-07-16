@@ -7,9 +7,11 @@
 //! - [`Client`]: conexión de frontend (initialize, call, notificaciones,
 //!   `connect_or_spawn`).
 
+pub mod approvals;
 mod client;
 mod server;
 
+pub use approvals::DaemonApprovalResolver;
 pub use client::{Client, ClientError, is_version_mismatch};
 pub use server::{Daemon, DaemonConfig};
 

@@ -9,12 +9,16 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use norte_core::approval::DenyAll;
-use norte_core::daemon::{Client, ClientError, Daemon, DaemonConfig, DaemonError};
+use norte_core::daemon::{
+    Client, ClientError, Daemon, DaemonApprovalResolver, DaemonConfig, DaemonError,
+};
 use norte_core::{Engine, PolicyConfig, ScopeRegistry, ScopedPolicy};
 use norte_proto::methods::{
     self, ClientInfo, DaemonShutdownParams, DaemonShutdownResult, FsCopyParams, FsListParams,
     FsListResult, FsStatParams, FsStatResult, FsTaskResult, GrantScopeParams, GrantScopeResult,
-    InitializeParams, RequestScopeParams, RequestScopeResult, TaskCancelParams, TaskCancelResult,
+    InitializeParams, PolicyApprovalRequired, PolicyDecideParams, PolicyDecideResult,
+    PolicyPendingResult, RequestScopeParams, RequestScopeResult, TaskCancelParams,
+    TaskCancelResult,
 };
 use norte_proto::wire::codes;
 use norte_proto::{TaskProgress, TaskState, VPath};
@@ -103,6 +107,42 @@ async fn spawn_daemon_policy() -> TestDaemon {
     let daemon = Daemon::bind_with_scopes(
         engine,
         scopes,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+        },
+    )
+    .await
+    .expect("bind");
+    let run = tokio::spawn(daemon.run());
+    TestDaemon {
+        socket,
+        run,
+        _dir: dir,
+        mem,
+    }
+}
+
+/// Daemon con `ScopedPolicy` y regla `ask` (M3-3b Task 4): dentro de scope, el
+/// gate suspende la mutación en el router de aprobaciones — el MISMO `Arc` que
+/// recibe `policy.decide` por el wire. TTL de aprobación configurable (los
+/// tests de timeout usan uno corto).
+async fn spawn_daemon_ask(approval_ttl: Duration) -> TestDaemon {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    let scopes = ScopeRegistry::new();
+    let cfg = PolicyConfig::parse("[[rule]]\naction=\"ask\"").expect("policy cfg");
+    let policy = ScopedPolicy::new(scopes.clone(), cfg);
+    // Orden del plan (riesgo 1): el resolver nace ANTES que engine y daemon.
+    let approvals = Arc::new(DaemonApprovalResolver::new(approval_ttl));
+    let engine = Arc::new(Engine::new().with_policy(Arc::new(policy), Arc::clone(&approvals) as _));
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    let daemon = Daemon::bind_with_policy(
+        engine,
+        scopes,
+        approvals,
         DaemonConfig {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
@@ -747,6 +787,337 @@ async fn grant_scope_es_humano_y_id_desconocido_falla() {
         .await
         .expect_err("id desconocido");
     assert!(matches!(err2, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+}
+
+// ---------- M3-3b Task 4: approval router (Ask round-trip) ----------
+
+fn copy_params(from: &str, to: &str) -> FsCopyParams {
+    FsCopyParams {
+        from: vp(from),
+        to: vp(to),
+        on_collision: norte_proto::CollisionPolicy::default(),
+        symlinks: norte_proto::SymlinkPolicy::default(),
+        resume: norte_proto::ResumePolicy::default(),
+        verify: norte_proto::VerifyPolicy::default(),
+    }
+}
+
+/// Concede a la sesión del `agent` un scope de `copy` sobre `mem:///proj` con
+/// el round-trip del wire (request + grant): el camino real, no un atajo.
+async fn grant_copy_scope(agent: &Client, human: &Client, session: &str) {
+    let req: RequestScopeResult = agent
+        .call(
+            methods::POLICY_REQUEST_SCOPE,
+            &RequestScopeParams {
+                session: session.into(),
+                roots: vec![vp("mem:///proj")],
+                ops: vec!["copy".into()],
+                ttl_ms: 60_000,
+            },
+        )
+        .await
+        .expect("request_scope");
+    let _: GrantScopeResult = human
+        .call(
+            methods::POLICY_GRANT_SCOPE,
+            &GrantScopeParams {
+                request_id: req.request_id,
+            },
+        )
+        .await
+        .expect("grant_scope");
+}
+
+/// Siguiente `policy.approval_required` del stream de notificaciones (ignora
+/// `task.progress` intercaladas), con tope de espera.
+async fn next_approval(human: &mut Client) -> PolicyApprovalRequired {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let n = human.notification().await.expect("canal de notifs vivo");
+            if n.method == methods::POLICY_APPROVAL_REQUIRED {
+                return serde_json::from_value::<PolicyApprovalRequired>(
+                    n.params.expect("la notif lleva params"),
+                )
+                .expect("shape de PolicyApprovalRequired");
+            }
+        }
+    })
+    .await
+    .expect("policy.approval_required llega")
+}
+
+fn assert_not_approved(err: ClientError) {
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"),
+            "PolicyDenied not-approved, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// E2E del Ask (M3-3b Task 4): la copia del agente bajo regla `ask` se
+/// suspende, el humano recibe `policy.approval_required` con el contexto (op,
+/// sesión, rutas) y su `policy.decide approve` la desbloquea.
+#[tokio::test]
+async fn ask_aprobado_desbloquea_la_copia() {
+    let d = spawn_daemon_ask(Duration::from_secs(30)).await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
+    write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
+    let agent = connected_agent(&d, "s1").await;
+    let mut human = connected_client(&d).await;
+    grant_copy_scope(&agent, &human, "s1").await;
+
+    // La copia queda suspendida en el Ask: vive en su propia task. Solo
+    // retiene el dispatch de SU conexión — el humano sigue atendido.
+    let copy = tokio::spawn(async move {
+        agent
+            .call::<_, FsTaskResult>(
+                methods::FS_COPY,
+                &copy_params("mem:///proj/src.txt", "mem:///proj/dst.txt"),
+            )
+            .await
+    });
+
+    let notif = next_approval(&mut human).await;
+    assert_eq!(notif.op, "copy");
+    assert_eq!(notif.session.as_deref(), Some("s1"));
+    assert!(
+        notif.paths.iter().any(|p| p.contains("src.txt"))
+            && notif.paths.iter().any(|p| p.contains("dst.txt")),
+        "las rutas de display viajan: {:?}",
+        notif.paths
+    );
+
+    let _: PolicyDecideResult = human
+        .call(
+            methods::POLICY_DECIDE,
+            &PolicyDecideParams {
+                approval_id: notif.approval_id,
+                approve: true,
+            },
+        )
+        .await
+        .expect("decide approve");
+    let res = copy
+        .await
+        .expect("join")
+        .expect("aprobada, la copia procede");
+    assert!(res.task_id.get() > 0);
+}
+
+/// `policy.decide approve=false` deniega: la copia responde `PolicyDenied`
+/// `not-approved` y el destino queda intacto (gate PRE-efecto).
+#[tokio::test]
+async fn ask_denegado_es_policy_denied_sin_tocar_el_fs() {
+    let d = spawn_daemon_ask(Duration::from_secs(30)).await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
+    write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
+    let agent = connected_agent(&d, "s1").await;
+    let mut human = connected_client(&d).await;
+    grant_copy_scope(&agent, &human, "s1").await;
+
+    let copy = tokio::spawn(async move {
+        agent
+            .call::<_, FsTaskResult>(
+                methods::FS_COPY,
+                &copy_params("mem:///proj/src.txt", "mem:///proj/dst.txt"),
+            )
+            .await
+    });
+    let notif = next_approval(&mut human).await;
+    let _: PolicyDecideResult = human
+        .call(
+            methods::POLICY_DECIDE,
+            &PolicyDecideParams {
+                approval_id: notif.approval_id,
+                approve: false,
+            },
+        )
+        .await
+        .expect("decide deny");
+    assert_not_approved(copy.await.expect("join").expect_err("denegada"));
+    assert!(
+        matches!(
+            d.mem.stat(&vp("mem:///proj/dst.txt")).await,
+            Err(norte_proto::Error::NotFound)
+        ),
+        "el destino no se tocó"
+    );
+
+    // Re-decidir el mismo id: la decisión lo consumió → INVALID_PARAMS.
+    let err = human
+        .call::<_, PolicyDecideResult>(
+            methods::POLICY_DECIDE,
+            &PolicyDecideParams {
+                approval_id: notif.approval_id,
+                approve: true,
+            },
+        )
+        .await
+        .expect_err("id ya decidido");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+}
+
+/// Sin decisión, el TTL vence y deniega (`not-approved`): un humano ausente no
+/// deja la operación colgada. La notificación anuncia el TTL real.
+#[tokio::test]
+async fn ask_sin_decision_vence_por_ttl() {
+    let d = spawn_daemon_ask(Duration::from_millis(200)).await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
+    write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
+    let agent = connected_agent(&d, "s1").await;
+    let mut human = connected_client(&d).await;
+    grant_copy_scope(&agent, &human, "s1").await;
+
+    let copy = tokio::spawn(async move {
+        agent
+            .call::<_, FsTaskResult>(
+                methods::FS_COPY,
+                &copy_params("mem:///proj/src.txt", "mem:///proj/dst.txt"),
+            )
+            .await
+    });
+    let notif = next_approval(&mut human).await;
+    assert_eq!(notif.ttl_ms, 200, "el TTL anunciado es el del router");
+    // Nadie decide: vence.
+    assert_not_approved(copy.await.expect("join").expect_err("TTL vencido"));
+}
+
+/// `policy.pending` resync: un frontend que conecta DESPUÉS del broadcast ve
+/// la pendiente. Y los roles se respetan: un agente ni decide ni lista
+/// (`INVALID_REQUEST`) — jamás se auto-aprueba.
+#[tokio::test]
+async fn pending_resync_y_un_agente_ni_decide_ni_lista() {
+    let d = spawn_daemon_ask(Duration::from_secs(30)).await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
+    write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
+    let agent = connected_agent(&d, "s1").await;
+    let mut human = connected_client(&d).await;
+    grant_copy_scope(&agent, &human, "s1").await;
+
+    let copy = tokio::spawn(async move {
+        agent
+            .call::<_, FsTaskResult>(
+                methods::FS_COPY,
+                &copy_params("mem:///proj/src.txt", "mem:///proj/dst.txt"),
+            )
+            .await
+    });
+    let notif = next_approval(&mut human).await;
+
+    // Un frontend NUEVO (conectó tras el broadcast) resincroniza por pending.
+    let late = connected_client(&d).await;
+    let listed: PolicyPendingResult = late
+        .call(methods::POLICY_PENDING, &serde_json::json!({}))
+        .await
+        .expect("policy.pending");
+    assert_eq!(listed.pending.len(), 1);
+    assert_eq!(listed.pending[0].approval_id, notif.approval_id);
+    assert_eq!(listed.pending[0].op, "copy");
+    assert_eq!(listed.pending[0].session.as_deref(), Some("s1"));
+
+    // Otra conexión de agente: ni decide ni lista (INVALID_REQUEST).
+    let agent2 = connected_agent(&d, "s2").await;
+    let err = agent2
+        .call::<_, PolicyDecideResult>(
+            methods::POLICY_DECIDE,
+            &PolicyDecideParams {
+                approval_id: notif.approval_id,
+                approve: true,
+            },
+        )
+        .await
+        .expect_err("un agente no decide");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
+    let err2 = agent2
+        .call::<_, PolicyPendingResult>(methods::POLICY_PENDING, &serde_json::json!({}))
+        .await
+        .expect_err("un agente no lista");
+    assert!(matches!(err2, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
+
+    // Decidir un id desconocido → INVALID_PARAMS.
+    let err3 = human
+        .call::<_, PolicyDecideResult>(
+            methods::POLICY_DECIDE,
+            &PolicyDecideParams {
+                approval_id: 9999,
+                approve: true,
+            },
+        )
+        .await
+        .expect_err("id desconocido");
+    assert!(matches!(err3, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+
+    // Desbloquea y cierra: denegada, y la lista queda vacía.
+    let _: PolicyDecideResult = human
+        .call(
+            methods::POLICY_DECIDE,
+            &PolicyDecideParams {
+                approval_id: notif.approval_id,
+                approve: false,
+            },
+        )
+        .await
+        .expect("decide deny");
+    assert_not_approved(copy.await.expect("join").expect_err("denegada"));
+    let listed: PolicyPendingResult = late
+        .call(methods::POLICY_PENDING, &serde_json::json!({}))
+        .await
+        .expect("policy.pending vacío");
+    assert!(listed.pending.is_empty());
+}
+
+/// `policy.approval_required` va SOLO a conexiones humanas (security MAJOR-1):
+/// un agente suscrito no debe enumerar pasivamente rutas/ops de OTRAS sesiones
+/// — mismo criterio que el gate User-only de `policy.pending`.
+#[tokio::test]
+async fn approval_required_no_se_difunde_a_agentes() {
+    let d = spawn_daemon_ask(Duration::from_secs(30)).await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
+    write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
+    let agent = connected_agent(&d, "s1").await;
+    // El espía conecta ANTES del Ask: su suscripción ya existe al difundir.
+    let mut spy = connected_agent(&d, "s2").await;
+    let mut human = connected_client(&d).await;
+    grant_copy_scope(&agent, &human, "s1").await;
+
+    let copy = tokio::spawn(async move {
+        agent
+            .call::<_, FsTaskResult>(
+                methods::FS_COPY,
+                &copy_params("mem:///proj/src.txt", "mem:///proj/dst.txt"),
+            )
+            .await
+    });
+    // El humano SÍ la recibe (prueba de que el broadcast ya salió)…
+    let notif = next_approval(&mut human).await;
+    // …y al agente espía no le llega en un margen holgado posterior.
+    let leaked = tokio::time::timeout(Duration::from_millis(400), async {
+        loop {
+            let n = spy.notification().await.expect("canal de notifs vivo");
+            if n.method == methods::POLICY_APPROVAL_REQUIRED {
+                return;
+            }
+        }
+    })
+    .await
+    .is_ok();
+    assert!(!leaked, "un agente jamás ve el approval_required de otro");
+
+    // Cierra: deniega y desbloquea la copia suspendida.
+    let _: PolicyDecideResult = human
+        .call(
+            methods::POLICY_DECIDE,
+            &PolicyDecideParams {
+                approval_id: notif.approval_id,
+                approve: false,
+            },
+        )
+        .await
+        .expect("decide deny");
+    assert_not_approved(copy.await.expect("join").expect_err("denegada"));
 }
 
 /// `connection.trust_host_key` (0.7.0, fase 6e) existe en el dispatch y

@@ -141,7 +141,9 @@ impl Engine {
                 let req = crate::approval::ApprovalRequest {
                     actor: actor.clone(),
                     op,
-                    paths: paths.iter().map(|p| p.to_wire()).collect(),
+                    // Redactadas como los spans (regla 10): son SOLO display
+                    // para el frontend que aprueba, jamás se reparsean.
+                    paths: paths.iter().map(|p| span_path(p)).collect(),
                 };
                 match self.approvals.request(req).await {
                     crate::approval::ApprovalOutcome::Approved => Ok(()),

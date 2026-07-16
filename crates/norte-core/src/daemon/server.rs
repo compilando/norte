@@ -21,6 +21,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::DaemonError;
+use super::approvals::DaemonApprovalResolver;
 use crate::Engine;
 use crate::engine::TransferOptions;
 use crate::journal::Actor;
@@ -105,7 +106,7 @@ struct Shared {
     /// conexión (la conexión retira la SUYA al morir — sin esto el writer
     /// task jamás terminaría: el broadcast retendría su sender). Bounded:
     /// un suscriptor que no drena pierde la suscripción, jamás acumula.
-    subscribers: Mutex<HashMap<u64, mpsc::Sender<Arc<[u8]>>>>,
+    subscribers: Mutex<HashMap<u64, Subscriber>>,
     /// Desenlaces recientes (snapshots terminales) para `task.list`.
     recent: Mutex<std::collections::VecDeque<norte_proto::TaskProgress>>,
     /// Contador de ids de conexión.
@@ -132,6 +133,13 @@ struct Shared {
     pending_scope: Mutex<HashMap<u64, PendingScope>>,
     /// Contador de `request_id` de scope (monótono).
     next_scope_req: AtomicU64,
+    /// Router de aprobaciones `Ask` (M3-3b Task 4): el MISMO objeto (`Arc`)
+    /// que el engine usa como `ApprovalResolver` — `policy.decide` aquí
+    /// despierta al gate suspendido allí. Con [`Daemon::bind`]/
+    /// [`Daemon::bind_with_scopes`] es un router huérfano (el engine no lo
+    /// conoce): `policy.pending` responde vacío y `policy.decide` no encuentra
+    /// ids — inofensivo.
+    approvals: Arc<DaemonApprovalResolver>,
 }
 
 /// Una petición de scope registrada por un agente, a la espera de que un
@@ -144,6 +152,15 @@ struct PendingScope {
     ttl_ms: u64,
 }
 
+/// Una salida de broadcast: el sender de la outbox y si la conexión es de
+/// AGENTE (M3-3b Task 4, security MAJOR-1): las notifs `policy.*` cruzan
+/// sesiones (rutas y ops de otras) y solo van a humanos — el mismo criterio
+/// que el gate de `policy.pending`. `task.progress` sigue yendo a todos.
+struct Subscriber {
+    tx: mpsc::Sender<Arc<[u8]>>,
+    is_agent: bool,
+}
+
 impl Shared {
     fn idle(&self) -> bool {
         self.connections.load(Ordering::SeqCst) == 0
@@ -151,17 +168,32 @@ impl Shared {
     }
 
     fn broadcast(&self, frame: &Arc<[u8]>) {
+        self.broadcast_filtered(frame, false);
+    }
+
+    /// Difunde SOLO a conexiones humanas (no-agente): notifs `policy.*`.
+    fn broadcast_humans(&self, frame: &Arc<[u8]>) {
+        self.broadcast_filtered(frame, true);
+    }
+
+    fn broadcast_filtered(&self, frame: &Arc<[u8]>, humans_only: bool) {
         let mut subs = self.subscribers.lock().expect("subscribers lock sano");
         // try_send: el que tiene la outbox llena pierde la suscripción (y
         // pronto la conexión, cuando su próximo response tampoco quepa) —
         // el backlog de un cliente lento jamás crece sin límite.
-        subs.retain(|conn, tx| match tx.try_send(Arc::clone(frame)) {
-            Ok(()) => true,
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                tracing::warn!(conn, "suscriptor sin drenar: expulsado del broadcast");
-                false
+        subs.retain(|conn, s| {
+            // Un agente excluido de ESTA notif conserva su suscripción.
+            if humans_only && s.is_agent {
+                return true;
             }
-            Err(mpsc::error::TrySendError::Closed(_)) => false,
+            match s.tx.try_send(Arc::clone(frame)) {
+                Ok(()) => true,
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    tracing::warn!(conn, "suscriptor sin drenar: expulsado del broadcast");
+                    false
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => false,
+            }
         });
     }
 }
@@ -211,6 +243,33 @@ impl Daemon {
     pub async fn bind_with_scopes(
         engine: Arc<Engine>,
         scopes: ScopeRegistry,
+        cfg: DaemonConfig,
+    ) -> Result<Self, DaemonError> {
+        Self::bind_with_policy(
+            engine,
+            scopes,
+            Arc::new(DaemonApprovalResolver::default()),
+            cfg,
+        )
+        .await
+    }
+
+    /// Como [`Self::bind_with_scopes`] pero además comparte el router de
+    /// aprobaciones `Ask` (M3-3b Task 4). Orden de construcción: el llamante
+    /// crea `approvals` PRIMERO, construye el engine con
+    /// `with_policy(ScopedPolicy::new(scopes.clone(), cfg), approvals.clone())`
+    /// y pasa el MISMO `Arc` aquí; este bind le instala la salida hacia los
+    /// suscriptores (broadcast de `policy.approval_required`) y enruta
+    /// `policy.decide`/`policy.pending` hacia él.
+    ///
+    /// # Errors
+    /// [`DaemonError`]: dir inseguro, root, socket ocupado por un daemon vivo,
+    /// o I/O.
+    #[tracing::instrument(skip(engine, scopes, approvals, cfg))]
+    pub async fn bind_with_policy(
+        engine: Arc<Engine>,
+        scopes: ScopeRegistry,
+        approvals: Arc<DaemonApprovalResolver>,
         cfg: DaemonConfig,
     ) -> Result<Self, DaemonError> {
         // La resolución del path por defecto puede tocar el FS (sonda de
@@ -264,25 +323,49 @@ impl Daemon {
         let listener = UnixListener::from_std(listener)?;
 
         tracing::info!(socket = %socket_path.display(), uid, "daemon enlazado");
+        let shared = Arc::new(Shared {
+            engine,
+            tasks: Mutex::new(HashMap::new()),
+            recent: Mutex::new(std::collections::VecDeque::new()),
+            subscribers: Mutex::new(HashMap::new()),
+            next_conn: AtomicUsize::new(0),
+            connections: AtomicUsize::new(0),
+            shutdown: CancellationToken::new(),
+            hard_shutdown: CancellationToken::new(),
+            uid,
+            listing_ttl: cfg.listing_ttl,
+            open_listings: Arc::new(AtomicUsize::new(0)),
+            scopes,
+            pending_scope: Mutex::new(HashMap::new()),
+            next_scope_req: AtomicU64::new(0),
+            approvals: Arc::clone(&approvals),
+        });
+        // La salida del router de aprobaciones hacia los suscriptores. `Weak`
+        // rompe el ciclo Shared → approvals → closure → Shared: muerto el
+        // daemon, un Ask tardío no difunde a nadie (y vencerá por TTL).
+        let weak = Arc::downgrade(&shared);
+        approvals.set_broadcaster(Box::new(move |notif| {
+            let Some(shared) = weak.upgrade() else { return };
+            // Si la serialización fallara (no puede: struct plano), mejor NO
+            // emitir que emitir una notif con shape corrupto.
+            let Ok(params) = serde_json::to_value(&notif) else {
+                return;
+            };
+            let n = Notification {
+                jsonrpc: norte_proto::wire::JsonRpcVersion,
+                method: methods::POLICY_APPROVAL_REQUIRED.into(),
+                params: Some(params),
+            };
+            if let Ok(frame) = encode_frame(&n) {
+                // SOLO humanos (security MAJOR-1): la notif cruza sesiones —
+                // mismo criterio que el gate User-only de `policy.pending`.
+                shared.broadcast_humans(&Arc::from(frame.into_boxed_slice()));
+            }
+        }));
         Ok(Self {
             listener,
             socket_path,
-            shared: Arc::new(Shared {
-                engine,
-                tasks: Mutex::new(HashMap::new()),
-                recent: Mutex::new(std::collections::VecDeque::new()),
-                subscribers: Mutex::new(HashMap::new()),
-                next_conn: AtomicUsize::new(0),
-                connections: AtomicUsize::new(0),
-                shutdown: CancellationToken::new(),
-                hard_shutdown: CancellationToken::new(),
-                uid,
-                listing_ttl: cfg.listing_ttl,
-                open_listings: Arc::new(AtomicUsize::new(0)),
-                scopes,
-                pending_scope: Mutex::new(HashMap::new()),
-                next_scope_req: AtomicU64::new(0),
-            }),
+            shared,
             idle_timeout: cfg.idle_timeout,
         })
     }
@@ -823,7 +906,14 @@ async fn handle_value(
                     .subscribers
                     .lock()
                     .expect("subscribers lock sano")
-                    .insert(conn_id, tx.clone());
+                    .insert(
+                        conn_id,
+                        Subscriber {
+                            tx: tx.clone(),
+                            // El actor quedó fijado server-side por ESTE initialize.
+                            is_agent: !matches!(conn.actor, crate::journal::Actor::User),
+                        },
+                    );
             }
             send(tx, &Response::from_outcome(id, response));
         }
@@ -963,6 +1053,16 @@ async fn dispatch(
             let p: methods::GrantScopeParams = parse_params(req.params)?;
             handle_grant_scope(&conn.actor, &p, shared)
         }
+        methods::POLICY_DECIDE => {
+            let p: methods::PolicyDecideParams = parse_params(req.params)?;
+            handle_policy_decide(&conn.actor, &p, shared)
+        }
+        methods::POLICY_PENDING => {
+            // Sin params definidos: null/ausencia se aceptan (ADR 0004) y
+            // cualquier objeto se IGNORA deliberadamente — añadir params en
+            // una versión futura (filtros) no debe romper servers viejos.
+            handle_policy_pending(&conn.actor, shared)
+        }
         _ => dispatch_fs_task(req, conn.actor.clone(), shared).await,
     }
 }
@@ -1070,6 +1170,53 @@ fn handle_grant_scope(
     tracing::info!(session = %req.session, ops = ?req.ops, "scope concedido a la sesión de agente");
     shared.scopes.grant(&req.session, scope);
     to_value(&methods::GrantScopeResult {})
+}
+
+/// `policy.decide` (M3-3b Task 4): un humano aprueba/deniega una pendiente.
+///
+/// Solo una conexión NO-agente decide (mismo criterio y mismo threat model que
+/// [`handle_grant_scope`]): un agente jamás aprueba su propia op — la
+/// suspensión del `Ask` sería teatro. Una decisión consume el id; repetirlo (o
+/// un id vencido/desconocido) es `INVALID_PARAMS`.
+#[tracing::instrument(skip_all, fields(approval_id = p.approval_id, approve = p.approve))]
+fn handle_policy_decide(
+    actor: &Actor,
+    p: &methods::PolicyDecideParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection may decide an approval",
+        ));
+    }
+    if !shared.approvals.decide(p.approval_id, p.approve) {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "unknown, expired or already-decided approval_id",
+        ));
+    }
+    // Efecto de seguridad (material de auditoría M3-5): quién decidió qué.
+    tracing::info!("aprobación de policy decidida por el humano");
+    to_value(&methods::PolicyDecideResult {})
+}
+
+/// `policy.pending` (M3-3b Task 4): resync de aprobaciones pendientes para un
+/// frontend que conecta DESPUÉS del broadcast. Solo humanos: la lista cruza
+/// sesiones (rutas de otras) y un agente no decide, así que tampoco lista.
+fn handle_policy_pending(
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection may list pending approvals",
+        ));
+    }
+    to_value(&methods::PolicyPendingResult {
+        pending: shared.approvals.pending(),
+    })
 }
 
 /// Instante de expiración de un scope a partir de su `ttl_ms`: clamp a
