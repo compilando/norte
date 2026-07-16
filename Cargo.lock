@@ -3898,6 +3898,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "norte-mcp"
+version = "0.3.0-alpha.1"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "norte-core",
+ "norte-proto",
+ "norte-testkit",
+ "norte-vfs",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "norte-plugin-host"
 version = "0.3.0-alpha.1"
 dependencies = [

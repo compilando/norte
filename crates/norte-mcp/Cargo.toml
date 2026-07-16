@@ -1,0 +1,28 @@
+[package]
+name = "norte-mcp"
+description = "Puente MCP (stdio) → daemon norte: los agentes gestionan archivos a través de norte, bajo policy y journal"
+license = "AGPL-3.0-only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+norte-proto.workspace = true
+norte-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+base64.workspace = true
+tokio = { workspace = true, features = ["io-std", "io-util", "rt", "macros", "time"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+bytes.workspace = true
+norte-testkit.workspace = true
+norte-vfs.workspace = true
+
+[lints]
+workspace = true
