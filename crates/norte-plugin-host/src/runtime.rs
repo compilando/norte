@@ -178,11 +178,11 @@ impl PluginInstance {
     pub fn render_preview(
         &mut self,
         mimetype: &str,
-        content: Vec<u8>,
+        content: &[u8],
     ) -> Result<String, RuntimeError> {
         let input = PreviewInput {
             mimetype: mimetype.to_owned(),
-            content,
+            content: content.to_vec(),
         };
         self.bindings
             .norte_plugin_previewer()
