@@ -354,15 +354,17 @@ fn golden_methods() {
     check_methods_policy(&fixtures);
     check_methods_session(&fixtures);
     check_methods_plugin(&fixtures);
-    assert_eq!(fixtures.len(), 52, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 55, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia plugin.* (0.13.0, M4-P3): catálogo + aprobación/activación humanas.
+#[allow(clippy::too_many_lines)]
 fn check_methods_plugin(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
-        PluginInfo, PluginListParams, PluginListResult, PluginLoadError, PluginRunCommandParams,
-        PluginRunCommandResult, PluginSetApprovalParams, PluginSetApprovalResult,
-        PluginSetEnabledParams, PluginSetEnabledResult,
+        PluginInfo, PluginListParams, PluginListResult, PluginLoadError, PluginPreviewParams,
+        PluginPreviewResult, PluginRunCommandParams, PluginRunCommandResult,
+        PluginSetApprovalParams, PluginSetApprovalResult, PluginSetEnabledParams,
+        PluginSetEnabledResult,
     };
     // `plugin.list` sin params: golden vacío, simetría con `task_list_params`.
     check_one(fixtures, "plugin_list_params", &PluginListParams {});
@@ -441,6 +443,33 @@ fn check_methods_plugin(fixtures: &BTreeMap<String, Value>) {
         "plugin_run_command_result",
         &PluginRunCommandResult {
             output: "hello, world".into(),
+        },
+    );
+    // `plugin.preview` (0.15.0, M4-P5): result poblado (los tres Some) y el
+    // vacío (todo None → `{}` por skip_serializing_if).
+    check_one(
+        fixtures,
+        "plugin_preview_params",
+        &PluginPreviewParams {
+            path: vpath("file:///home/user/doc.md"),
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_preview_result",
+        &PluginPreviewResult {
+            plugin_id: Some("org.norte.md".into()),
+            plugin_name: Some("Markdown Preview".into()),
+            output: Some("<h1>Título</h1>".into()),
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_preview_result_none",
+        &PluginPreviewResult {
+            plugin_id: None,
+            plugin_name: None,
+            output: None,
         },
     );
 }
@@ -945,10 +974,11 @@ fn method_names_frozen() {
     assert_eq!(methods::PLUGIN_SET_APPROVAL, "plugin.set_approval");
     assert_eq!(methods::PLUGIN_SET_ENABLED, "plugin.set_enabled");
     assert_eq!(methods::PLUGIN_RUN_COMMAND, "plugin.run_command");
+    assert_eq!(methods::PLUGIN_PREVIEW, "plugin.preview");
     assert_eq!(methods::FS_READ_MAX_CHUNK, 8 * 1024 * 1024);
     assert_eq!(methods::FS_LIST_MAX_PAGE, 10_000);
-    // 0.14.0: plugin.run_command (M4-P4). Aditivo sobre 0.13.x.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.14.0");
+    // 0.15.0: plugin.preview (M4-P5). Aditivo sobre 0.14.x.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.15.0");
 }
 
 #[test]

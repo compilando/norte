@@ -290,5 +290,14 @@
   },
   "plugin_run_command_result": {
     "output": "hello, world"
-  }
+  },
+  "plugin_preview_params": {
+    "path": "file:///home/user/doc.md"
+  },
+  "plugin_preview_result": {
+    "plugin_id": "org.norte.md",
+    "plugin_name": "Markdown Preview",
+    "output": "<h1>Título</h1>"
+  },
+  "plugin_preview_result_none": {}
 }

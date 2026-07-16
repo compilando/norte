@@ -61,7 +61,11 @@ use crate::{
 /// 0.14.0 (M4-P4): `plugin.run_command` — ejecuta un comando de un plugin
 /// APROBADO y ACTIVADO (el plugin corre sandboxeado; devuelve el string del
 /// comando o error). Aditivo sobre 0.13.x.
-pub const PROTOCOL_VERSION: &str = "0.14.0";
+///
+/// 0.15.0 (M4-P5): `plugin.preview` — ejecuta el primer plugin previewer
+/// APROBADO y ACTIVADO que maneje el mimetype del archivo sobre los bytes que
+/// el core lee; todo `None` = ningún previewer aplica. Aditivo sobre 0.14.x.
+pub const PROTOCOL_VERSION: &str = "0.15.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -204,6 +208,10 @@ pub const PLUGIN_SET_ENABLED: &str = "plugin.set_enabled";
 /// ACTIVADO (M4-P4); el plugin corre sandboxeado; devuelve el string del
 /// comando o error.
 pub const PLUGIN_RUN_COMMAND: &str = "plugin.run_command";
+/// `plugin.preview` — ejecuta el primer plugin previewer APROBADO y ACTIVADO
+/// que maneje el mimetype del archivo (M4-P5) sobre los bytes que el core lee;
+/// todo `None` = ningún previewer aplica (el frontend cae a la vista cruda).
+pub const PLUGIN_PREVIEW: &str = "plugin.preview";
 
 /// Params de [`FS_LIST`] (paginación por cursor desde 0.8.0, ADR 0017).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -692,4 +700,28 @@ pub struct PluginRunCommandParams {
 pub struct PluginRunCommandResult {
     /// Salida (string) que devuelve el comando del plugin.
     pub output: String,
+}
+
+/// Params de [`PLUGIN_PREVIEW`] (M4-P5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginPreviewParams {
+    /// Ruta del archivo a previsualizar (el core lee sus bytes).
+    pub path: VPath,
+}
+
+/// Result de [`PLUGIN_PREVIEW`] (M4-P5): la preview del primer previewer que
+/// aplica. Los tres campos ausentes (todo `None`) = ningún previewer maneja el
+/// mimetype; gracias a `skip_serializing_if` serializa a `{}` y el frontend
+/// cae a la vista cruda.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginPreviewResult {
+    /// Id del plugin previewer que produjo la salida.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// Nombre legible del plugin previewer que produjo la salida.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_name: Option<String>,
+    /// Salida (string) de la preview.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
 }

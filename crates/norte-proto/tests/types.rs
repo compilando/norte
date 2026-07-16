@@ -691,11 +691,11 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.14.0 (M4-P4): acepta 0.14.x (N) y 0.13.x (N-1), rechaza 0.12.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.14.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.13.0"), "N-1");
+    // 0.15.0 (M4-P5): acepta 0.15.x (N) y 0.14.x (N-1), rechaza 0.13.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.15.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.14.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.12.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.13.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -772,4 +772,32 @@ fn plugin_run_command_roundtrip() {
     );
     let r: PluginRunCommandResult = serde_json::from_str(r#"{"output":"hello, world"}"#).unwrap();
     assert_eq!(r.output, "hello, world");
+}
+
+#[test]
+fn plugin_preview_roundtrip() {
+    use norte_proto::methods::{PluginPreviewParams, PluginPreviewResult};
+    // Params con un VPath: round-trip exacto.
+    let p = PluginPreviewParams {
+        path: vpath("file:///a.txt"),
+    };
+    let back: PluginPreviewParams =
+        serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+    assert_eq!(back, p);
+    // Result POBLADO (los tres Some): round-trip exacto.
+    let full = PluginPreviewResult {
+        plugin_id: Some("org.norte.md".into()),
+        plugin_name: Some("Markdown Preview".into()),
+        output: Some("<h1>Título</h1>".into()),
+    };
+    let back_full: PluginPreviewResult =
+        serde_json::from_str(&serde_json::to_string(&full).unwrap()).unwrap();
+    assert_eq!(back_full, full);
+    // Result VACÍO: `{}` deserializa a todo None y reserializa a `{}` (ningún
+    // previewer aplica — el frontend cae a la vista cruda).
+    let none: PluginPreviewResult = serde_json::from_str("{}").unwrap();
+    assert_eq!(none.plugin_id, None);
+    assert_eq!(none.plugin_name, None);
+    assert_eq!(none.output, None);
+    assert_eq!(serde_json::to_string(&none).unwrap(), "{}");
 }
