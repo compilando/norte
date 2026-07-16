@@ -73,6 +73,9 @@ pub const PROTOCOL_VERSION: &str = "0.15.0";
 pub const INITIALIZE: &str = "initialize";
 /// `daemon.shutdown` — apaga el daemon: `graceful` (default) espera a las
 /// tasks vivas; sin graceful las cancela primero. Autenticado como todo.
+/// Solo una conexión humana (sin `agent_session`) puede apagar: para una
+/// conexión de agente es `INVALID_REQUEST`, como los demás actos de
+/// gobierno humano (p. ej. `policy.grant_scope`/`decide`/`undo_session`).
 pub const DAEMON_SHUTDOWN: &str = "daemon.shutdown";
 /// `task.list` — resync de un frontend que (re)conecta (0.5.0, fase 3):
 /// las tasks VIVAS más los desenlaces recientes que el server retiene
@@ -80,6 +83,11 @@ pub const DAEMON_SHUTDOWN: &str = "daemon.shutdown";
 /// [`TASK_PROGRESS`]. El receptor DEBE deduplicar por `task_id` (una
 /// misma task puede venir viva y su terminal en la misma respuesta si
 /// caen en la ventana del anillo).
+///
+/// Visibilidad por actor: una conexión humana ve TODAS las tasks; una
+/// conexión de agente (`agent_session` en `initialize`) SOLO las de su
+/// propia sesión — `current` lleva paths de otros actores y no se cruza.
+/// El mismo criterio enruta la notificación [`TASK_PROGRESS`].
 pub const TASK_LIST: &str = "task.list";
 /// `fs.read` — UN tramo de un archivo, en base64 (0.5.0). Para lectura de
 /// presentación (viewer); las copias JAMÁS pasan por aquí (son tasks del
@@ -167,11 +175,18 @@ pub const FS_DELETE: &str = "fs.delete";
 /// `task.cancel` — petición de cancelación cooperativa. La respuesta solo
 /// confirma la recepción; el estado final (`cancelled`, o `completed` si la
 /// Task ganó la carrera) llega por [`TASK_PROGRESS`].
+///
+/// Alcance por actor: una conexión de agente solo cancela tasks de su
+/// propia sesión; sobre una task ajena el ack es idéntico al de una task
+/// desconocida (no se filtra existencia) y la task sigue. Una conexión
+/// humana cancela cualquiera.
 pub const TASK_CANCEL: &str = "task.cancel";
 /// `connection.trust_host_key` — registra una host key SSH en el `known_hosts`
 /// tras confirmación del usuario (flujo TOFU, ADR 0015 D; 0.7.0, fase 6). Se
 /// llama tras un [`Error::HostKeyUnknown`](crate::Error::HostKeyUnknown) y
-/// antes de reintentar la conexión. Idempotente.
+/// antes de reintentar la conexión. Idempotente. Decisión de confianza
+/// HUMANA: para una conexión de agente es `INVALID_REQUEST`, como p. ej.
+/// `policy.grant_scope`/`decide`/`undo_session`.
 pub const CONNECTION_TRUST_HOST_KEY: &str = "connection.trust_host_key";
 /// `task.progress` — notificación server→client, coalescida (≤30 Hz).
 pub const TASK_PROGRESS: &str = "task.progress";
