@@ -18,6 +18,8 @@ async-trait.workspace = true
 base64.workspace = true
 futures.workspace = true
 norte-connect.workspace = true
+# Modelo de plugins (M4-P3): catálogo + manifiesto que el PluginRegistry expone.
+norte-plugin-host.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
 norte-vfs-archive.workspace = true
@@ -33,6 +35,8 @@ sqlx.workspace = true
 thiserror.workspace = true
 # Reglas declarativas de policy.toml (M3-3, spec §10): parsing con deny_unknown_fields.
 toml.workspace = true
+# Persistencia de plugins-state.toml (M4-P3): re-emisión preservando el fichero.
+toml_edit.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
