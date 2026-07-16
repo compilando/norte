@@ -193,3 +193,47 @@ CATÁLOGO local y su ESTADO de gobierno por el protocolo `plugin.*` (proto
 - **Sin sincronización daemon ↔ frontend-embebido** sobre el mismo `config_dir`:
   dos escritores concurrentes del `plugins-state.toml` no se coordinan (el
   esquema single-writer del daemon aún no cubre el modo embebido).
+
+## Addendum P4 (2026-07-16)
+
+**Qué se implementó (M4-P4, ejecución de plugins).** El core ya EJECUTA plugins
+de categoría `command` aprobados+activados, cerrando la deuda runtime que P3
+dejaba abierta:
+
+- `PluginRegistry::run_command(&rt, id, command, arg) -> Result<String, PluginRunError>`
+  (en `norte-core`) valida el consentimiento **fail-closed** (un plugin
+  desconocido / sin aprobar / desactivado / sin `plugin.wasm` JAMÁS se ejecuta —
+  `Unknown`/`NotApproved`/`Disabled`/`NoBinary`) y solo entonces instancia el
+  componente con las capabilities DEL MANIFIESTO y el **sandbox heredado de
+  M4-P2** (deadline de época, sin ambient authority, `fs-read` con enforcement
+  host-side). El binario es `<dir>/plugin.wasm` por convención (D6).
+- Expuesto por wire como `plugin.run_command` (proto 0.14.0) y por CLI
+  `norte plugin run <id> <command> [arg]`. El daemon **resuelve bajo el lock**
+  (`resolve_runnable`, barato) y **ejecuta en `spawn_blocking`** fuera del lock
+  (compilar+instanciar es pesado y síncrono, regla 2). Los errores de runtime se
+  **redactan** al cliente (taxonomía gruesa, nunca la ruta absoluta ni el detalle
+  interno del trap).
+- **Cierre E2E con un componente WASM real** (`crates/norte-core/tests/plugins_run_e2e.rs`):
+  la cadena descubrir → (denegar sin aprobar, con el `.wasm` presente) → aprobar
+  → activar → ejecutar, compilando `examples-wasm/command-demo` a
+  `wasm32-wasip2` y comprobando salida (`echo`→arg, `shout`→MAYÚSCULAS) y el
+  `Err` del guest → `Runtime`. SKIP si el target no está instalado.
+
+**Deuda (queda fuera de P4):**
+
+- **Invocación desde el TUI** (palette de comandos de plugin): necesitaría
+  exponer la LISTA de comandos de cada plugin por wire — saltado en P4. Hoy la
+  ejecución es por CLI / wire directo.
+- **Wiring de las otras cuatro interfaces** del world: `previewer` (viewer F3),
+  `provider` como scheme VFS, `columns` y `hook` — ninguna cableada aún; solo
+  `command` ejecuta.
+- **Integración fina con el policy engine M3**: las puertas FS del plugin
+  (`fs-read`/`fs-write` scoped) aún NO pasan por un gate por-op del policy engine
+  ni se anota en el journal lo que el plugin hace (regla 9 completa pendiente).
+- **Sin caché de instancias**: cada `run_command` compila+instancia el
+  componente de cero (sin `InstancePre` ni pool). Aceptable para el cierre;
+  optimización posterior.
+- **Convención `plugin.wasm` fija**: el binario es siempre `<dir>/plugin.wasm`;
+  el manifiesto aún no puede nombrar otro artefacto (D6).
+- **Issue #69**: la aprobación debería ligarse a un DIGEST de las capabilities
+  (re-aprobar si cambian) + dedup de ids duplicados en el catálogo.
