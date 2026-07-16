@@ -226,25 +226,54 @@ pub struct Journal {
 }
 
 impl Journal {
-    /// Abre (o crea) el journal en `path` con WAL + `synchronous=NORMAL`. El
-    /// fichero se restringe a modo `0600` en unix (metadatos de auditoría —
-    /// security M2).
+    /// Abre (o crea) el journal en `path` con WAL + `synchronous=NORMAL` y
+    /// **lock exclusivo del fichero** (`locking_mode=EXCLUSIVE`): el
+    /// single-writer del hash-chain (spec §4) es un MECANISMO, no una
+    /// convención — un segundo proceso sobre el mismo fichero (p. ej. dos
+    /// daemons con sockets distintos y el mismo dir de config) falla al abrir
+    /// en vez de forkear la cadena y colisionar `seq` (MAJOR-1 del
+    /// security-reviewer M3-4). El fichero se crea `0600` ANTES de conectar
+    /// (sin ventana con el umask) y su dir padre `0700`.
     ///
     /// # Errors
-    /// [`JournalError::Sqlx`] al abrir/crear; [`JournalError::Corrupt`] si el
-    /// último `entry_hash` no mide 32 bytes.
+    /// [`JournalError::Sqlx`] al abrir/crear — incluida `database is locked`
+    /// si OTRO proceso ya lo tiene abierto; [`JournalError::Corrupt`] si el
+    /// último `entry_hash` no mide 32 bytes; I/O al pre-crear fichero/dir.
     pub async fn open(path: &std::path::Path) -> Result<Self, JournalError> {
+        // Pre-creación con permisos correctos DESDE el primer byte (MINOR-1):
+        // SQLite crearía el fichero con el umask (típicamente 0644) y el
+        // chmod posterior dejaba una ventana legible. Con el fichero ya
+        // presente, `create_if_missing` es un no-op.
+        #[cfg(unix)]
+        {
+            if let Some(parent) = path.parent() {
+                let mut builder = tokio::fs::DirBuilder::new();
+                builder.recursive(true).mode(0o700);
+                builder.create(parent).await?;
+            }
+            let _ = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .open(path)
+                .await?;
+        }
         let opts = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal);
+            .synchronous(SqliteSynchronous::Normal)
+            // WAL + EXCLUSIVE es válido (single-process WAL): el lock del
+            // fichero se toma con el primer write — el CREATE TABLE del
+            // schema en `from_options` lo fuerza YA en el open.
+            .locking_mode(sqlx::sqlite::SqliteLockingMode::Exclusive);
         let this = Self::from_options(opts).await?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            // Best-effort: el fichero ya existe tras conectar. Los sidecars
-            // -wal/-shm los crea SQLite con perms derivados del principal.
+            // Cinturón por si el fichero preexistía con otros permisos. Los
+            // sidecars -wal/-shm heredan del principal.
             let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
         }
         Ok(this)
@@ -735,6 +764,24 @@ mod tests {
             Journal::open(&path).await,
             Err(JournalError::Corrupt(_))
         ));
+    }
+
+    /// El single-writer del hash-chain es un MECANISMO (MAJOR-1 security
+    /// M3-4): mientras un proceso tenga el journal abierto, un segundo `open`
+    /// del MISMO fichero falla — jamás dos escritores forkeando la cadena
+    /// (p. ej. dos daemons con sockets distintos y el mismo config dir).
+    #[tokio::test]
+    async fn second_open_of_live_journal_fails() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("j.db");
+        let vivo = Journal::open(&path).await.expect("primer open");
+        assert!(
+            matches!(Journal::open(&path).await, Err(JournalError::Sqlx(_))),
+            "el lock exclusivo rechaza al segundo escritor"
+        );
+        // Soltar el primero libera el lock: reabrir vuelve a funcionar.
+        drop(vivo);
+        let _ = Journal::open(&path).await.expect("reopen tras drop");
     }
 
     #[tokio::test]

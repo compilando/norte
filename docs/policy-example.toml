@@ -1,0 +1,30 @@
+# Punto de partida de policy para agentes (spec §10, ADR 0024).
+# Cópialo a tu dir de config como `policy.toml` (norte daemon lo carga al
+# arrancar). Sin este fichero, un agente DENTRO de su scope aún se deniega
+# (fail-closed): la regla mínima útil es `ask` para todo.
+#
+# Las reglas se evalúan en orden (la primera que matchea gana, por ruta; con
+# varias rutas decide la MÁS restrictiva) y solo aplican a agentes DENTRO de
+# su scope concedido — fuera de scope siempre es deny. Los humanos (User) no
+# se sandboxean.
+
+# Todo lo que el agente intente, pregunta al humano (modal en el TUI).
+[[rule]]
+action = "ask"
+
+# Ejemplos más finos (descomenta y ajusta; SIEMPRE antes de la catch-all):
+#
+# [[rule]]                     # copias dentro del proyecto: sin fricción
+# op = "copy"
+# path_prefix = "file:///home/tu-usuario/proyectos/x"
+# action = "allow"
+#
+# [[rule]]                     # borrado por agentes: jamás
+# op = "delete"
+# actor = "agent"
+# action = "deny"
+#
+# [[rule]]                     # nada agéntico en remotos sftp
+# scheme = "sftp"
+# actor = "agent"
+# action = "deny"

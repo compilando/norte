@@ -204,3 +204,13 @@ async fn undo_of_agent_is_blocked_when_reverse_op_denied_by_policy() {
     // No pisó: dst sigue existiendo (el undo no llegó a borrarlo).
     assert!(mem.stat(&vp("mem:///dst.txt")).await.is_ok());
 }
+
+/// El ejemplo commiteado de policy (`docs/policy-example.toml`) parsea SIEMPRE
+/// (M3-4 T4): si la sintaxis de reglas cambia, este test lo delata — el
+/// ejemplo jamás se pudre.
+#[test]
+fn policy_example_toml_parsea() {
+    let cfg = norte_core::PolicyConfig::parse(include_str!("../../../docs/policy-example.toml"))
+        .expect("el ejemplo de docs/ parsea");
+    assert!(!cfg.rules.is_empty(), "trae al menos la regla ask");
+}

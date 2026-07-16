@@ -92,3 +92,12 @@ expirado — cierra la deuda de M3-2.
   de la op de FS y del turno del LLM.
 - stdout del puente es exclusivo del transporte MCP; todo diagnóstico va a
   stderr (regla 10 aplica igual: jamás secretos/paths crudos en logs).
+- **Requisito de despliegue del sandbox** (security M3-4): cualquier proceso
+  del mismo uid que alcance el socket UDS puede conectar SIN `agent_session`
+  y ser `User` (allow-all). La contención del agente exige que su runtime
+  hable SOLO con `norte mcp serve` y nunca vea el socket directamente — p. ej.
+  el sandbox del propio agente (Claude Code sin Bash sobre el socket) o un
+  uid dedicado. La policy gobierna agentes cooperantes; no sustituye eso.
+- El journal toma un lock EXCLUSIVO del fichero al abrir (single-writer de
+  spec §4 como mecanismo): un segundo daemon con el mismo dir de config falla
+  al arrancar en vez de forkear la cadena.

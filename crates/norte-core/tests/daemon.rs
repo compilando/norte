@@ -1736,3 +1736,175 @@ async fn fs_capabilities_viaja_por_el_socket() {
         r.capabilities.flags
     );
 }
+
+// ---------- M3-4 T4: journal en el daemon + policy.undo_session ----------
+
+/// Daemon con JOURNAL (in-memory) + `ScopedPolicy` con regla `allow` + registro
+/// de scopes compartido — el escenario del daemon real de M3-4 (dueño único
+/// del journal, ADR 0024).
+async fn spawn_daemon_journal() -> TestDaemon {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    let scopes = ScopeRegistry::new();
+    let cfg = PolicyConfig::parse("[[rule]]\naction=\"allow\"").expect("policy cfg");
+    let policy = ScopedPolicy::new(scopes.clone(), cfg);
+    let journal = std::sync::Arc::new(norte_core::SqliteJournal::new(
+        norte_core::Journal::open_in_memory()
+            .await
+            .expect("journal"),
+    ));
+    let engine =
+        Arc::new(Engine::with_journal(journal).with_policy(Arc::new(policy), Arc::new(DenyAll)));
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    let daemon = Daemon::bind_with_scopes(
+        engine,
+        scopes,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+        },
+    )
+    .await
+    .expect("bind");
+    let run = tokio::spawn(daemon.run());
+    TestDaemon {
+        socket,
+        run,
+        _dir: dir,
+        mem,
+    }
+}
+
+/// Espera el estado terminal de `task_id` vía `task.list` (resync retiene
+/// desenlaces recientes), con tope.
+async fn wait_terminal(c: &Client, task_id: norte_proto::TaskId) -> norte_proto::TaskState {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let listed: methods::TaskListResult = c
+            .call(methods::TASK_LIST, &methods::TaskListParams {})
+            .await
+            .expect("task.list");
+        if let Some(t) = listed.tasks.iter().find(|t| t.task_id == task_id)
+            && t.state.is_terminal()
+        {
+            return t.state.clone();
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "la task {task_id:?} nunca terminó"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// M3-4 T4: un humano deshace por el wire la sesión completa de un agente.
+/// El agente (con scope+allow) copia; `policy.undo_session` la revierte
+/// aunque el agente ya no tenga scope (ejecutor=User).
+#[tokio::test]
+async fn policy_undo_session_revierte_lo_del_agente() {
+    let d = spawn_daemon_journal().await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
+    write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
+
+    // Scope efímero por wire y copia del agente.
+    let agent = connected_agent(&d, "s1").await;
+    let human = connected_client(&d).await;
+    let req: RequestScopeResult = agent
+        .call(
+            methods::POLICY_REQUEST_SCOPE,
+            &RequestScopeParams {
+                session: "s1".into(),
+                roots: vec![vp("mem:///proj")],
+                ops: vec!["copy".into()],
+                ttl_ms: 60_000,
+            },
+        )
+        .await
+        .expect("request_scope");
+    let _: GrantScopeResult = human
+        .call(
+            methods::POLICY_GRANT_SCOPE,
+            &GrantScopeParams {
+                request_id: req.request_id,
+            },
+        )
+        .await
+        .expect("grant");
+    let copied: FsTaskResult = agent
+        .call(
+            methods::FS_COPY,
+            &FsCopyParams {
+                from: vp("mem:///proj/src.txt"),
+                to: vp("mem:///proj/dst.txt"),
+                on_collision: norte_proto::CollisionPolicy::default(),
+                symlinks: norte_proto::SymlinkPolicy::default(),
+                resume: norte_proto::ResumePolicy::default(),
+                verify: norte_proto::VerifyPolicy::default(),
+            },
+        )
+        .await
+        .expect("copia del agente");
+    assert_eq!(
+        wait_terminal(&human, copied.task_id).await,
+        norte_proto::TaskState::Completed
+    );
+    assert!(d.mem.stat(&vp("mem:///proj/dst.txt")).await.is_ok());
+
+    // El humano deshace la sesión del agente.
+    let undone: methods::PolicyUndoSessionResult = human
+        .call(
+            methods::POLICY_UNDO_SESSION,
+            &methods::PolicyUndoSessionParams {
+                session: "s1".into(),
+            },
+        )
+        .await
+        .expect("policy.undo_session");
+    assert_eq!(
+        wait_terminal(&human, undone.task_id).await,
+        norte_proto::TaskState::Completed
+    );
+    assert!(
+        matches!(
+            d.mem.stat(&vp("mem:///proj/dst.txt")).await,
+            Err(norte_proto::Error::NotFound)
+        ),
+        "la copia del agente se revirtió"
+    );
+    assert!(
+        d.mem.stat(&vp("mem:///proj/src.txt")).await.is_ok(),
+        "el original intacto"
+    );
+}
+
+/// Roles y validación de `policy.undo_session`: un agente no lo llama
+/// (`INVALID_REQUEST`) y una sesión con formato ilegal es `INVALID_PARAMS`.
+#[tokio::test]
+async fn policy_undo_session_roles_y_validacion() {
+    let d = spawn_daemon_journal().await;
+    let agent = connected_agent(&d, "s1").await;
+    let err = agent
+        .call::<_, methods::PolicyUndoSessionResult>(
+            methods::POLICY_UNDO_SESSION,
+            &methods::PolicyUndoSessionParams {
+                session: "s1".into(),
+            },
+        )
+        .await
+        .expect_err("un agente no deshace sesiones por esta vía");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
+
+    let human = connected_client(&d).await;
+    let err2 = human
+        .call::<_, methods::PolicyUndoSessionResult>(
+            methods::POLICY_UNDO_SESSION,
+            &methods::PolicyUndoSessionParams {
+                session: "con espacios".into(),
+            },
+        )
+        .await
+        .expect_err("sesión ilegal");
+    assert!(matches!(err2, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+}

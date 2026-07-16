@@ -511,8 +511,12 @@ fn prepare_socket_dir(dir: &Path) -> Result<(), DaemonError> {
 /// 1..=64: el id viaja a journal, tracing y modales de aprobación de TODOS
 /// los frontends — un charset cerrado en la frontera vale más que confiar en
 /// que cada consumidor enmascare (que además deben, defensa en profundidad).
+/// `.`/`..` se rechazan por adelantado (MINOR-4 security M3-4): si algún día
+/// una sesión deriva un fichero (export de audit M3-5), jamás será traversal.
 fn valid_agent_session(s: &str) -> bool {
     (1..=64).contains(&s.len())
+        && s != "."
+        && s != ".."
         && s.bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
@@ -1082,6 +1086,10 @@ async fn dispatch(
             // una versión futura (filtros) no debe romper servers viejos.
             handle_policy_pending(&conn.actor, shared)
         }
+        methods::POLICY_UNDO_SESSION => {
+            let p: methods::PolicyUndoSessionParams = parse_params(req.params)?;
+            handle_policy_undo_session(&conn.actor, p, shared).await
+        }
         _ => dispatch_fs_task(req, conn.actor.clone(), shared).await,
     }
 }
@@ -1236,6 +1244,48 @@ fn handle_policy_pending(
     to_value(&methods::PolicyPendingResult {
         pending: shared.approvals.pending(),
     })
+}
+
+/// `policy.undo_session` (M3-4): un HUMANO deshace la sesión completa de un
+/// agente. Target = `Agent{session}` (selecciona las entradas del journal),
+/// ejecutor = `User` (pasa el gate y firma las compensaciones): el undo no
+/// depende de que el scope del agente siga vivo. Solo conexiones User — un
+/// agente no deshace a otros (su propia sesión, como tool = deuda ADR 0024).
+///
+/// El span NO registra la session cruda del wire (MINOR-2 del security):
+/// hasta pasar `valid_agent_session` puede llevar `\n`/ANSI y fabricar líneas
+/// de log falsas — justo en material de auditoría M3-5. Se loguea VALIDADA.
+#[tracing::instrument(skip_all)]
+async fn handle_policy_undo_session(
+    actor: &Actor,
+    p: methods::PolicyUndoSessionParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection may undo an agent session",
+        ));
+    }
+    if !valid_agent_session(&p.session) {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "session must be 1..=64 chars of [A-Za-z0-9._-]",
+        ));
+    }
+    let target = Actor::Agent { session: p.session };
+    let (handle, _report) = shared
+        .engine
+        .undo_session_for(&target, Actor::User)
+        .await
+        .map_err(RpcError::from)?;
+    // Efecto de seguridad (material de auditoría M3-5): quién deshizo a quién.
+    // La session ya pasó la validación de charset — segura de loguear.
+    if let Actor::Agent { session } = &target {
+        tracing::info!(session = %session, "undo de sesión de agente pedido por el humano");
+    }
+    let task_id = register_task_id(shared, handle)?;
+    to_value(&methods::PolicyUndoSessionResult { task_id })
 }
 
 /// Instante de expiración de un scope a partir de su `ttl_ms`: clamp a
@@ -1423,10 +1473,18 @@ async fn dispatch_fs_read(
     })
 }
 
+/// Registra la task y arranca su bomba de progreso; devuelve el resultado de
+/// wire estándar `FsTaskResult`. Ver [`register_task_id`].
+fn register_task(shared: &Arc<Shared>, handle: TaskHandle) -> Result<serde_json::Value, RpcError> {
+    let task_id = register_task_id(shared, handle)?;
+    to_value(&methods::FsTaskResult { task_id })
+}
+
 /// Registra la task y arranca su bomba de progreso: cada snapshot (≤30 Hz)
 /// sale como `task.progress` a TODOS los clientes; el estado terminal se
-/// difunde SIEMPRE y desregistra la task.
-fn register_task(shared: &Arc<Shared>, handle: TaskHandle) -> Result<serde_json::Value, RpcError> {
+/// difunde SIEMPRE y desregistra la task. Devuelve el `TaskId` (los métodos
+/// con result propio lo envuelven ellos, M3-4).
+fn register_task_id(shared: &Arc<Shared>, handle: TaskHandle) -> Result<TaskId, RpcError> {
     let task_id: TaskId = handle.id();
     let mut progress = handle.progress();
     {
@@ -1503,7 +1561,7 @@ fn register_task(shared: &Arc<Shared>, handle: TaskHandle) -> Result<serde_json:
             .remove(&task_id.get());
     });
 
-    to_value(&methods::FsTaskResult { task_id })
+    Ok(task_id)
 }
 
 #[cfg(test)]

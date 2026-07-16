@@ -179,20 +179,20 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // sin esto un `RUST_LOG=trace` volcaría `PASS <password>` de suppaftp.
     norte_core::logging::init();
 
+    // El daemon construye SU PROPIO engine (con journal+policy, M3-4): el
+    // embebido de abajo es solo para el resto de subcomandos.
+    #[cfg(unix)]
+    if let Cmd::Daemon { cmd } = cli.cmd {
+        return daemon_cmd(cmd).await;
+    }
+
     let engine = Engine::new();
     engine.register_provider(Arc::new(LocalProvider::os_root()) as Arc<dyn Provider>);
     // Conexiones remotas bajo demanda (fase 6e): connections.toml +
-    // known_hosts + secretos en el dir de config del usuario. Aplica tanto
-    // al modo embebido como al engine que sirve `norte daemon run`.
+    // known_hosts + secretos en el dir de config del usuario.
     engine.set_connector(Arc::new(norte_core::connect::ConnectionManager::new(
         norte_core::connect::config_dir(),
     )));
-
-    // El subcomando daemon usa el engine directo (ES el daemon).
-    #[cfg(unix)]
-    if let Cmd::Daemon { cmd } = cli.cmd {
-        return daemon_cmd(engine, cmd).await;
-    }
 
     let backend = make_backend(engine, cli.daemon, cli.socket).await?;
     match cli.cmd {
@@ -313,15 +313,43 @@ async fn make_backend(
 /// `norte daemon run|stop` (ADR 0011). El engine que sirve el daemon es el
 /// MISMO embebido de esta CLI: solo cambia el transporte (regla 7).
 #[cfg(unix)]
-async fn daemon_cmd(engine: Engine, cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
-    use norte_core::daemon::{Client, Daemon, DaemonConfig, default_socket_path};
+async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
+    use norte_core::daemon::{
+        Client, Daemon, DaemonApprovalResolver, DaemonConfig, default_socket_path,
+    };
     match cmd {
         DaemonCmd::Run {
             socket,
             idle_timeout,
         } => {
-            let daemon = Daemon::bind(
+            // El daemon es el dueño ÚNICO del journal (spec §4, ADR 0024) y
+            // quien instala policy + approvals: los agentes MCP se gobiernan
+            // aquí, jamás en el puente.
+            let journal_path = norte_core::connect::config_dir().join("journal.db");
+            let journal = norte_core::SqliteJournal::open(&journal_path)
+                .await
+                .context("no se pudo abrir el journal")?;
+            // policy.toml: ausente = sin reglas = un agente DENTRO de scope
+            // aún deniega (fail-closed, `no-rule`). docs/policy-example.toml
+            // trae el punto de partida (`action = "ask"`).
+            let cfg = tokio::task::spawn_blocking(norte_core::PolicyConfig::load)
+                .await
+                .context("carga de policy.toml")?
+                .context("policy.toml inválido")?;
+            let scopes = norte_core::ScopeRegistry::new();
+            let approvals = std::sync::Arc::new(DaemonApprovalResolver::default());
+            let engine = Engine::with_journal(std::sync::Arc::new(journal)).with_policy(
+                std::sync::Arc::new(norte_core::ScopedPolicy::new(scopes.clone(), cfg)),
+                std::sync::Arc::clone(&approvals) as _,
+            );
+            engine.register_provider(Arc::new(LocalProvider::os_root()) as Arc<dyn Provider>);
+            engine.set_connector(std::sync::Arc::new(
+                norte_core::connect::ConnectionManager::new(norte_core::connect::config_dir()),
+            ));
+            let daemon = Daemon::bind_with_policy(
                 std::sync::Arc::new(engine),
+                scopes,
+                approvals,
                 DaemonConfig {
                     socket_path: socket,
                     idle_timeout: (idle_timeout > 0)
