@@ -46,6 +46,9 @@ const MAX_LIVE_TASKS: usize = 512;
 /// Snapshots TERMINALES retenidos para el resync de `task.list` (un
 /// frontend que reconecta ve el desenlace de lo que se perdió).
 const RECENT_TERMINAL: usize = 64;
+/// Informes de undo retenidos para `policy.undo_report` (#71). Los undos son
+/// operaciones humanas raras: un anillo corto basta; el más viejo se expulsa.
+const UNDO_REPORTS_MAX: usize = 8;
 /// Listados paginados VIVOS retenidos por conexión (ADR 0017): cada uno es un
 /// `EntryStream` perezoso sin drenar. Al abrir el (N+1), se expulsa el más
 /// viejo (LRU). Un TUI navega 1-2 a la vez; el tope acota el coste (incluido
@@ -156,6 +159,13 @@ struct Shared {
     /// `set_enabled`) re-leen y persisten `plugins-state.toml` bajo el lock. El
     /// `Mutex` std basta: el dispatch es serial y las secciones son cortas.
     plugins: Mutex<crate::plugins::PluginRegistry>,
+    /// Informes de las últimas Tasks de undo (#71), por `task_id`: el humano
+    /// que deshizo consulta QUÉ pasó (`policy.undo_report`) — sin esto, un
+    /// undo que saltó/bloqueó todo parece «done». Anillo acotado a
+    /// [`UNDO_REPORTS_MAX`] (los undos son raros; mejor esfuerzo, como
+    /// `recent`). El `Arc` interior es EL MISMO que llena la Task en vuelo:
+    /// el informe se puede consultar en progreso (snapshot parcial).
+    undo_reports: Mutex<std::collections::VecDeque<(u64, Arc<Mutex<crate::UndoReport>>)>>,
     /// Runtime WASM compartido para ejecutar comandos de plugin (M4-P4). Se
     /// construye UNA vez en el bind (arranca un hilo "ticker" de época) y se
     /// reutiliza entre `plugin.run_command`. `Arc` porque `PluginRuntime` es
@@ -403,6 +413,7 @@ impl Daemon {
             pending_scope: Mutex::new(HashMap::new()),
             next_scope_req: AtomicU64::new(0),
             approvals: Arc::clone(&approvals),
+            undo_reports: Mutex::new(std::collections::VecDeque::new()),
             plugins: Mutex::new(plugins),
             plugin_runtime,
         });
@@ -1177,6 +1188,10 @@ async fn dispatch(
             let p: methods::PolicyUndoSessionParams = parse_params(req.params)?;
             handle_policy_undo_session(&conn.actor, p, shared).await
         }
+        methods::POLICY_UNDO_REPORT => {
+            let p: methods::PolicyUndoReportParams = parse_params(req.params)?;
+            handle_policy_undo_report(&conn.actor, &p, shared)
+        }
         // plugin.* (M4-P3): listar el catálogo (cualquier conexión) y aprobar/
         // activar (SOLO humanos — es consentir capabilities, acto de seguridad).
         methods::PLUGIN_LIST => handle_plugin_list(req.params, shared),
@@ -1405,7 +1420,7 @@ async fn handle_policy_undo_session(
         ));
     }
     let target = Actor::Agent { session: p.session };
-    let (handle, _report) = shared
+    let (handle, report) = shared
         .engine
         .undo_session_for(&target, Actor::User)
         .await
@@ -1417,7 +1432,53 @@ async fn handle_policy_undo_session(
     }
     // El dueño de la task de undo es el EJECUTOR humano (solo User llega aquí).
     let task_id = register_task_id(shared, handle, Actor::User)?;
+    // Retiene el informe para `policy.undo_report` (#71) — SOLO si la task
+    // quedó registrada. OJO honestidad: en el camino OVERLOADED de arriba la
+    // Task YA corre desde el submit y la cancelación es cooperativa — pueden
+    // aterrizar reverts reales cuyo informe se pierde (el journal sí registra
+    // las compensaciones; el cliente solo ve el OVERLOADED).
+    {
+        let mut reports = shared.undo_reports.lock().expect("undo_reports lock sano");
+        reports.push_back((task_id.get(), report));
+        while reports.len() > UNDO_REPORTS_MAX {
+            reports.pop_front();
+        }
+    }
     to_value(&methods::PolicyUndoSessionResult { task_id })
+}
+
+/// `policy.undo_report` (#71): el informe de una Task de undo — SOLO-User,
+/// como el `policy.undo_session` que lo genera (lleva `seq` del journal y
+/// motivo de bloqueo). Snapshot: definitivo con la Task terminal.
+fn handle_policy_undo_report(
+    actor: &Actor,
+    p: &methods::PolicyUndoReportParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection may read an undo report",
+        ));
+    }
+    let snapshot = {
+        let reports = shared.undo_reports.lock().expect("undo_reports lock sano");
+        let Some((_, r)) = reports.iter().find(|(id, _)| *id == p.task_id.get()) else {
+            return Err(RpcError::protocol(
+                codes::INVALID_PARAMS,
+                "unknown undo task (never an undo, or evicted from the ring)",
+            ));
+        };
+        r.lock().expect("undo report lock").clone()
+    };
+    to_value(&methods::PolicyUndoReportResult {
+        undone: snapshot.undone,
+        skipped_irreversible: snapshot.skipped_irreversible,
+        skipped_created_no_trash: snapshot.skipped_created_no_trash,
+        blocked: snapshot
+            .blocked
+            .map(|(seq, error)| methods::UndoBlocked { seq, error }),
+    })
 }
 
 /// `plugin.list` (M4-P3): el catálogo descubierto + su estado, para CUALQUIER

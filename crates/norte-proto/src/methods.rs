@@ -65,7 +65,11 @@ use crate::{
 /// 0.15.0 (M4-P5): `plugin.preview` — ejecuta el primer plugin previewer
 /// APROBADO y ACTIVADO que maneje el mimetype del archivo sobre los bytes que
 /// el core lee; todo `None` = ningún previewer aplica. Aditivo sobre 0.14.x.
-pub const PROTOCOL_VERSION: &str = "0.15.0";
+///
+/// 0.16.0 (#71): `policy.undo_report` — informe de una Task de undo (qué se
+/// deshizo, qué se saltó y por qué, dónde se bloqueó el LIFO): el humano que
+/// deshace deja de recibir un «done» a ciegas. Aditivo sobre 0.15.x.
+pub const PROTOCOL_VERSION: &str = "0.16.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -208,6 +212,14 @@ pub const POLICY_APPROVAL_REQUIRED: &str = "policy.approval_required";
 /// scopes, aprobaciones, undo) — `session.*` queda reservado para la sesión
 /// de UI (spec §11).
 pub const POLICY_UNDO_SESSION: &str = "policy.undo_session";
+/// `policy.undo_report` — informe de una Task de undo (0.16.0, #71): los
+/// contadores de [`POLICY_UNDO_SESSION`] (revertidas, saltadas y por qué) y el
+/// primer bloqueo del LIFO si lo hubo. Es un SNAPSHOT: definitivo cuando la
+/// Task es terminal ([`TASK_PROGRESS`]/[`TASK_LIST`]); antes, parcial. El
+/// server retiene los informes de las últimas Tasks de undo (anillo acotado,
+/// mejor esfuerzo): un `task_id` desconocido o expulsado es `INVALID_PARAMS`.
+/// SOLO conexiones User (misma barrera que el undo que lo genera).
+pub const POLICY_UNDO_REPORT: &str = "policy.undo_report";
 /// `plugin.list` — enumera los plugins DESCUBIERTOS más los errores de carga
 /// (M4-P3). Solo lectura y ABIERTO (cualquier conexión lo consulta): un
 /// frontend pinta el catálogo y el estado (aprobado/activo) sin mutar nada.
@@ -621,6 +633,49 @@ pub struct PolicyUndoSessionParams {
 pub struct PolicyUndoSessionResult {
     /// Task del undo.
     pub task_id: TaskId,
+}
+
+/// Params de [`POLICY_UNDO_REPORT`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyUndoReportParams {
+    /// Task de undo cuyo informe se pide (la de
+    /// [`PolicyUndoSessionResult::task_id`]).
+    pub task_id: TaskId,
+}
+
+/// Result de [`POLICY_UNDO_REPORT`]: el informe del undo. Todo cero y sin
+/// `blocked` = no había nada que deshacer SOLO si la Task terminó
+/// `Completed`: una Task `Failed`/`Cancelled` deja contadores PARCIALES con
+/// `blocked` ausente (el motivo vive en su `task.progress` terminal) — el
+/// estado de la Task se consulta aparte, este result no lo lleva.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyUndoReportResult {
+    /// Entradas revertidas con éxito.
+    pub undone: u64,
+    /// Entradas `Irreversible` saltadas (no hay nada que pisar).
+    pub skipped_irreversible: u64,
+    /// Reversas de `Created` saltadas porque el provider no tiene papelera
+    /// (#65): el nodo SIGUE en el destino — deshacerlo habría sido un borrado
+    /// permanente y el undo jamás destruye de forma irrecuperable.
+    pub skipped_created_no_trash: u64,
+    /// Primer paso donde el LIFO paró (estricto), si lo hubo. El undo va de
+    /// la entrada MÁS NUEVA hacia atrás: lo posterior al bloqueo en el
+    /// journal ya se deshizo; lo ANTERIOR a él en el journal (seq menor)
+    /// quedó SIN deshacer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked: Option<UndoBlocked>,
+}
+
+/// Un bloqueo del undo: dónde y por qué (elemento de
+/// [`PolicyUndoReportResult::blocked`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UndoBlocked {
+    /// `seq` de la entrada del journal cuya reversa bloqueó. Referencia
+    /// OPACA para el cliente: solo cobra sentido contra el journal/audit del
+    /// server (M3-5) — sirve para citarla, no para interpretarla.
+    pub seq: i64,
+    /// Motivo (taxonomía de errores del protocolo; drift/conflicto típicos).
+    pub error: crate::Error,
 }
 
 /// Un plugin descubierto (elemento de [`PluginListResult::plugins`], M4-P3).

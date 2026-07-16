@@ -465,13 +465,72 @@ async fn undo_cmd(session: &str, socket: Option<PathBuf>) -> anyhow::Result<Exit
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context(norte_i18n::ta("cli-undo-failed", &[("error", "submit")]))?;
+    let task_id = task.id();
     let outcome = run_task(task, true).await;
-    if outcome == ExitCode::SUCCESS {
-        println!(
+    if outcome != ExitCode::SUCCESS {
+        return Ok(outcome);
+    }
+    // «Done» CUALIFICADO (#71): el estado terminal de la Task es Completed
+    // incluso si el LIFO se bloqueó o todo se saltó — el informe es la ÚNICA
+    // señal de integridad. Solo un daemon N-1 (sin el método → Unsupported)
+    // degrada al mensaje simple; cualquier otro fallo del fetch NO se traga:
+    // aviso + exit≠0 (el undo pudo funcionar, pero queda sin verificar).
+    let report = match backend.undo_report(task_id).await {
+        Ok(r) => r,
+        Err(norte_proto::Error::Unsupported) => {
+            println!(
+                "{}",
+                norte_i18n::ta("cli-undo-done", &[("session", session)])
+            );
+            return Ok(outcome);
+        }
+        Err(e) => {
+            eprintln!(
+                "{}",
+                norte_i18n::ta("cli-undo-report-unavailable", &[("error", &e.to_string())])
+            );
+            return Ok(ExitCode::FAILURE);
+        }
+    };
+    println!(
+        "{}",
+        norte_i18n::ta(
+            "cli-undo-report",
+            &[
+                ("undone", &report.undone.to_string()),
+                (
+                    "skipped_irreversible",
+                    &report.skipped_irreversible.to_string(),
+                ),
+            ],
+        )
+    );
+    if report.skipped_created_no_trash > 0 {
+        eprintln!(
             "{}",
-            norte_i18n::ta("cli-undo-done", &[("session", session)])
+            norte_i18n::ta(
+                "cli-undo-left-in-place",
+                &[("count", &report.skipped_created_no_trash.to_string())],
+            )
         );
     }
+    if let Some(blocked) = report.blocked {
+        eprintln!(
+            "{}",
+            norte_i18n::ta(
+                "cli-undo-blocked",
+                &[
+                    ("seq", &blocked.seq.to_string()),
+                    ("error", &blocked.error.to_string()),
+                ],
+            )
+        );
+        return Ok(ExitCode::FAILURE);
+    }
+    println!(
+        "{}",
+        norte_i18n::ta("cli-undo-done", &[("session", session)])
+    );
     Ok(outcome)
 }
 

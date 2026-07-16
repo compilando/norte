@@ -223,7 +223,7 @@ async fn initialize_rechaza_version_incompatible() {
             },
         )
         .await
-        .expect_err("0.1.0 no es N ni N-1 de 0.15.0");
+        .expect_err("0.1.0 no es N ni N-1 de 0.16.0");
     match err {
         ClientError::Rpc(rpc) => {
             // Código PROPIO: la señal de upgrade jamás se parsea de message.
@@ -234,14 +234,14 @@ async fn initialize_rechaza_version_incompatible() {
         }
         other => panic!("esperaba Rpc, fue {other:?}"),
     }
-    // N-1 (0.14.x) SÍ entra.
+    // N-1 (0.15.x) SÍ entra.
     let c2 = Client::connect(&d.socket).await.expect("connect");
     let ok: methods::InitializeResult = c2
         .call(
             methods::INITIALIZE,
             &InitializeParams {
                 client_info: client_info(),
-                protocol_version: "0.14.2".into(),
+                protocol_version: "0.15.2".into(),
                 encodings: vec![],
                 agent_session: None,
             },
@@ -1525,7 +1525,7 @@ async fn frames_hostiles_y_formas_canonicas_crudas() {
 
     // initialize + daemon.shutdown con params null (golden canónico, M1).
     s.write_all(
-        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.14.0\",\"encodings\":[\"json\"]}}\n",
+        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.15.0\",\"encodings\":[\"json\"]}}\n",
     )
     .await
     .expect("write");
@@ -2512,4 +2512,41 @@ async fn daemon_shutdown_de_agente_es_invalid_request() {
         )
         .await
         .expect("el daemon no se apagó");
+}
+
+// ---------- #71: policy.undo_report ----------
+
+/// `policy.undo_report` es SOLO-User (misma barrera que el undo que lo
+/// genera): el informe lleva seq del journal y motivo de bloqueo.
+#[tokio::test]
+async fn undo_report_de_agente_es_invalid_request() {
+    let d = spawn_daemon(None).await;
+    let agent = connected_agent(&d, "sess-report").await;
+    let err = agent
+        .call::<_, methods::PolicyUndoReportResult>(
+            methods::POLICY_UNDO_REPORT,
+            &methods::PolicyUndoReportParams {
+                task_id: norte_proto::TaskId::new(1),
+            },
+        )
+        .await
+        .expect_err("un agente no lee informes de undo");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
+}
+
+/// Un `task_id` desconocido (o expulsado del anillo) es `INVALID_PARAMS`.
+#[tokio::test]
+async fn undo_report_task_desconocida_es_invalid_params() {
+    let d = spawn_daemon(None).await;
+    let c = connected_client(&d).await;
+    let err = c
+        .call::<_, methods::PolicyUndoReportResult>(
+            methods::POLICY_UNDO_REPORT,
+            &methods::PolicyUndoReportParams {
+                task_id: norte_proto::TaskId::new(424_242),
+            },
+        )
+        .await
+        .expect_err("sin undo no hay informe");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 }

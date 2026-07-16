@@ -345,6 +345,24 @@ impl Backend {
         }
     }
 
+    /// Informe de una Task de undo (`policy.undo_report`, #71): qué se
+    /// deshizo, qué se saltó y por qué, dónde se bloqueó el LIFO. Snapshot;
+    /// definitivo cuando la Task es terminal.
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo; `Unsupported` en embebido (sin journal, como
+    /// [`Backend::undo_session`]).
+    pub async fn undo_report(
+        &self,
+        task_id: TaskId,
+    ) -> Result<norte_proto::methods::PolicyUndoReportResult, Error> {
+        match self {
+            Self::Embedded(_) => Err(Error::Unsupported),
+            #[cfg(unix)]
+            Self::Remote(r) => r.undo_report(task_id).await,
+        }
+    }
+
     /// Catálogo de plugins descubiertos + su estado aprobado/activado (M4-P3).
     /// Embebido: descubre de [`crate::connect::config_dir`] bajo demanda (el
     /// estado vive en `plugins-state.toml`, no en memoria — no hay que retener
@@ -1123,6 +1141,30 @@ pub mod remote {
                 )
                 .await?;
             Ok(self.own_task(result.task_id, TaskKind::Undo))
+        }
+
+        /// `policy.undo_report` (#71): informe de la Task de undo. Un daemon
+        /// N-1 sin el método responde `METHOD_NOT_FOUND` → `Unsupported`, para
+        /// que el caller lo distinga de un fallo REAL (el informe es la única
+        /// señal de que un undo Completed se bloqueó o saltó — no se degrada
+        /// en silencio; mismo criterio que el resync de `policy.pending`).
+        pub(super) async fn undo_report(
+            &self,
+            task_id: TaskId,
+        ) -> Result<methods::PolicyUndoReportResult, Error> {
+            let client = self.client().await?;
+            let params = methods::PolicyUndoReportParams { task_id };
+            let call = client
+                .call::<_, methods::PolicyUndoReportResult>(methods::POLICY_UNDO_REPORT, &params);
+            match tokio::time::timeout(CALL_TIMEOUT, call).await {
+                Ok(Err(ClientError::Rpc(ref rpc)))
+                    if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
+                {
+                    Err(Error::Unsupported)
+                }
+                Ok(res) => res.map_err(to_taxonomy),
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            }
         }
 
         /// Recuerda un desenlace (anillo acotado).

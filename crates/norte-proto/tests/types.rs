@@ -691,11 +691,11 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.15.0 (M4-P5): acepta 0.15.x (N) y 0.14.x (N-1), rechaza 0.13.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.15.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.14.0"), "N-1");
+    // 0.16.0 (#71): acepta 0.16.x (N) y 0.15.x (N-1), rechaza 0.14.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.16.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.15.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.13.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.14.9"),
         "N-2 fuera de la ventana"
     );
 }

@@ -103,6 +103,22 @@ async fn wait_undo_terminal(human: &Client, task_id: norte_proto::TaskId) {
     }
 }
 
+/// Espera el terminal del undo y comprueba su informe (#71): 1 revertida,
+/// nada saltado ni bloqueado — el «done» deja de ser a ciegas.
+async fn assert_undo_report_clean(human: &Client, task_id: norte_proto::TaskId) {
+    wait_undo_terminal(human, task_id).await;
+    let report: norte_proto::methods::PolicyUndoReportResult = human
+        .call(
+            norte_proto::methods::POLICY_UNDO_REPORT,
+            &norte_proto::methods::PolicyUndoReportParams { task_id },
+        )
+        .await
+        .expect("undo_report");
+    assert_eq!(report.undone, 1, "la copia revertida se cuenta");
+    assert_eq!(report.skipped_created_no_trash, 0);
+    assert!(report.blocked.is_none(), "sin bloqueo: {report:?}");
+}
+
 /// El criterio de salida de M3, extremo a extremo.
 #[tokio::test]
 async fn criterio_de_salida_m3_agente_bajo_ask_con_undo() {
@@ -201,7 +217,8 @@ async fn criterio_de_salida_m3_agente_bajo_ask_con_undo() {
         )
         .await
         .expect("undo_session");
-    wait_undo_terminal(&human, undone.task_id).await;
+    // 6b) Terminal + informe (#71): 1 revertida, nada saltado ni bloqueado.
+    assert_undo_report_clean(&human, undone.task_id).await;
     assert!(
         matches!(
             mem.stat(&vp("mem:///proj/copia.txt")).await,

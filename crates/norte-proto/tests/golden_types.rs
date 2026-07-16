@@ -354,7 +354,7 @@ fn golden_methods() {
     check_methods_policy(&fixtures);
     check_methods_session(&fixtures);
     check_methods_plugin(&fixtures);
-    assert_eq!(fixtures.len(), 55, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 58, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia plugin.* (0.13.0, M4-P3): catálogo + aprobación/activación humanas.
@@ -485,7 +485,10 @@ fn check_methods_plugin_exec(fixtures: &BTreeMap<String, Value>) {
 
 /// Familia session.* (0.12.0, M3-4): undo de sesión de agente por el wire.
 fn check_methods_session(fixtures: &BTreeMap<String, Value>) {
-    use norte_proto::methods::{PolicyUndoSessionParams, PolicyUndoSessionResult};
+    use norte_proto::methods::{
+        PolicyUndoReportParams, PolicyUndoReportResult, PolicyUndoSessionParams,
+        PolicyUndoSessionResult, UndoBlocked,
+    };
     check_one(
         fixtures,
         "policy_undo_session_params",
@@ -498,6 +501,40 @@ fn check_methods_session(fixtures: &BTreeMap<String, Value>) {
         "policy_undo_session_result",
         &PolicyUndoSessionResult {
             task_id: norte_proto::TaskId::new(9),
+        },
+    );
+    // 0.16.0 (#71): el informe del undo por el wire.
+    check_one(
+        fixtures,
+        "policy_undo_report_params",
+        &PolicyUndoReportParams {
+            task_id: norte_proto::TaskId::new(9),
+        },
+    );
+    check_one(
+        fixtures,
+        "policy_undo_report_result",
+        &PolicyUndoReportResult {
+            undone: 3,
+            skipped_irreversible: 1,
+            skipped_created_no_trash: 2,
+            blocked: Some(UndoBlocked {
+                seq: 41,
+                error: norte_proto::Error::Conflict {
+                    conflict: norte_proto::ConflictKind::Exists,
+                },
+            }),
+        },
+    );
+    // Sin bloqueo: `blocked` se OMITE (skip_serializing_if), no `null`.
+    check_one(
+        fixtures,
+        "policy_undo_report_result_clean",
+        &PolicyUndoReportResult {
+            undone: 4,
+            skipped_irreversible: 0,
+            skipped_created_no_trash: 0,
+            blocked: None,
         },
     );
 }
@@ -978,6 +1015,7 @@ fn method_names_frozen() {
         "policy.approval_required"
     );
     assert_eq!(methods::POLICY_UNDO_SESSION, "policy.undo_session");
+    assert_eq!(methods::POLICY_UNDO_REPORT, "policy.undo_report");
     // Familia plugin.* (0.13.0, M4-P3): catálogo + gobernanza humana.
     assert_eq!(methods::PLUGIN_LIST, "plugin.list");
     assert_eq!(methods::PLUGIN_SET_APPROVAL, "plugin.set_approval");
@@ -986,8 +1024,8 @@ fn method_names_frozen() {
     assert_eq!(methods::PLUGIN_PREVIEW, "plugin.preview");
     assert_eq!(methods::FS_READ_MAX_CHUNK, 8 * 1024 * 1024);
     assert_eq!(methods::FS_LIST_MAX_PAGE, 10_000);
-    // 0.15.0: plugin.preview (M4-P5). Aditivo sobre 0.14.x.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.15.0");
+    // 0.16.0: policy.undo_report (#71). Aditivo sobre 0.15.x.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.16.0");
 }
 
 #[test]
