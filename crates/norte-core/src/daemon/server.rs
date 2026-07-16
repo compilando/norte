@@ -1573,6 +1573,14 @@ fn run_error_to_rpc(e: &crate::plugins::PluginRunError) -> RpcError {
 /// Redacción hacia el cliente (security-reviewer M4-P4/P5): un fallo de runtime
 /// puede llevar la ruta del `.wasm` o detalles de wasmtime; JAMÁS se devuelve su
 /// `Display` crudo — `INTERNAL_ERROR` genérico + el detalle SOLO al log local.
+///
+/// ABIERTO (no solo-User) A SABIENDAS y ACOPLADO a `fs.read`: este handler lee
+/// el archivo con la autoridad del daemon, igual que `fs.read`, que HOY es
+/// abierto para agentes. Como el preview devuelve una transformación con
+/// pérdida del primer MiB, es lectura estrictamente INFERIOR a la de `fs.read`
+/// crudo (sin escalada; security-reviewer M4-P5). INVARIANTE: si algún día se
+/// gatea `fs.read` por scope/actor de agente, `plugin.preview` DEBE gatearse en
+/// el MISMO cambio o se convierte en el bypass de lectura.
 // `skip_all`: `p.path` va a los campos redactados de las capas inferiores, no al
 // span de este handler (mismo criterio que run_command).
 #[tracing::instrument(skip_all)]
