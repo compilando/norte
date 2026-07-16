@@ -581,7 +581,10 @@ impl Engine {
             Vec::with_capacity(entries.len());
         for e in entries {
             let p = wire_engine(&e.path)?;
-            // Reversa de un Created BORRA → Delete (una ruta). rename_back /
+            // Reversa de un Created BORRA → Delete (una ruta), y desde #65 va
+            // SIEMPRE a papelera (o se salta): se gatea como `Trash`, no como
+            // `Permanent` — un deny de "solo-permanente" no debe parar el LIFO
+            // por una reversa que jamás borra permanente. rename_back /
             // restore_trash REUBICAN → Move con DOS endpoints (origen+destino de
             // la restauración): ambos deben pasar el gate, igual que un Move
             // normal (security M2). El segundo endpoint es `path_to` (rename) o
@@ -597,7 +600,7 @@ impl Engine {
                 ),
                 _ => (
                     crate::policy::PolicyOp::Delete {
-                        mode: DeleteMode::Permanent,
+                        mode: DeleteMode::Trash,
                     },
                     None,
                 ),
@@ -640,6 +643,12 @@ impl Engine {
                                     .lock()
                                     .expect("undo report lock")
                                     .skipped_irreversible += 1;
+                            }
+                            crate::undo::Reverted::SkippedNoTrash => {
+                                report_task
+                                    .lock()
+                                    .expect("undo report lock")
+                                    .skipped_created_no_trash += 1;
                             }
                             crate::undo::Reverted::Blocked(err) => {
                                 report_task.lock().expect("undo report lock").blocked =

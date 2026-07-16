@@ -396,3 +396,77 @@ async fn undo_de_sesion_de_agente_ejecutado_por_humano() {
         .expect("hay compensatoria");
     assert_eq!(comp.actor_kind, "user", "la firma el ejecutor humano");
 }
+
+/// #65: la reversa de un `Created` en un provider SIN cap `TRASH` (sftp/object
+/// con `logical_trash` OFF — el caso común remoto) NO cae a borrado permanente:
+/// se SALTA con contador propio y el nodo se queda. Sin `node_id` en `Created`,
+/// «lo que hoy vive en ese path» puede ser trabajo del humano posterior a la
+/// creación; el undo jamás lo destruye de forma irrecuperable.
+#[tokio::test]
+async fn undo_created_sin_trash_se_salta_no_borra_permanente() {
+    use norte_proto::CapabilityFlags;
+    let journal = Arc::new(SqliteJournal::new(
+        Journal::open_in_memory().await.expect("j"),
+    ));
+    let engine = Engine::with_journal(Arc::clone(&journal));
+    // Como MemProvider::new() pero SIN TRASH.
+    let mem = Arc::new(MemProvider::with_flags(
+        CapabilityFlags::RENAME_ATOMIC
+            | CapabilityFlags::CASE_SENSITIVE
+            | CapabilityFlags::CASE_PRESERVING
+            | CapabilityFlags::SYMLINKS,
+    ));
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+
+    write_file(&mem, "mem:///src.txt", b"x").await;
+    let h = engine
+        .copy(&vp("mem:///src.txt"), &vp("mem:///dst.txt"))
+        .await
+        .expect("copy");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    let (state, r) = run_undo(&engine, Actor::User).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(r.undone, 0);
+    assert_eq!(
+        r.skipped_created_no_trash, 1,
+        "la reversa permanente se salta y se cuenta"
+    );
+    assert!(r.blocked.is_none(), "saltar no es bloquear: el LIFO sigue");
+    assert!(
+        mem.stat(&vp("mem:///dst.txt")).await.is_ok(),
+        "el nodo creado SIGUE: jamás borrado permanente por undo"
+    );
+}
+
+/// El orden importa (#65): un DRIFT (el nodo creado ya no está) bloquea
+/// SIEMPRE, incluso sin cap `TRASH` — clasificarlo como skip tragaría la
+/// señal de divergencia del modo estricto.
+#[tokio::test]
+async fn undo_created_sin_trash_con_drift_bloquea() {
+    use norte_proto::CapabilityFlags;
+    let journal = Arc::new(SqliteJournal::new(
+        Journal::open_in_memory().await.expect("j"),
+    ));
+    let engine = Engine::with_journal(Arc::clone(&journal));
+    let mem = Arc::new(MemProvider::with_flags(
+        CapabilityFlags::RENAME_ATOMIC
+            | CapabilityFlags::CASE_SENSITIVE
+            | CapabilityFlags::CASE_PRESERVING,
+    ));
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+
+    write_file(&mem, "mem:///src.txt", b"x").await;
+    let h = engine
+        .copy(&vp("mem:///src.txt"), &vp("mem:///dst.txt"))
+        .await
+        .expect("copy");
+    assert_eq!(h.join().await, TaskState::Completed);
+    // Drift: alguien quitó el nodo por fuera del undo.
+    mem.remove(&vp("mem:///dst.txt")).await.expect("remove");
+
+    let (_state, r) = run_undo(&engine, Actor::User).await;
+    assert_eq!(r.skipped_created_no_trash, 0, "drift NO es skip");
+    let (_seq, err) = r.blocked.expect("bloquea en el drift");
+    assert!(matches!(err, norte_proto::Error::NotFound));
+}

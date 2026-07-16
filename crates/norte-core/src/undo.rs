@@ -4,11 +4,12 @@
 //!
 //! **No-clobber (estricto).** `RenameBack`/`RestoreTrash` exigen destino LIBRE
 //! antes de actuar (nunca sobrescriben). El undo de un `Created` es el caso
-//! sutil: el journal no guarda identidad del nodo, así que se deshace vía
-//! PAPELERA (recuperable) cuando el provider la soporta, para no destruir de
-//! forma irreversible un fichero que el usuario pudiera haber editado tras la
-//! creación. Deuda: identidad (`node_id`/hash) en el `Created` para un undo con
-//! verificación real.
+//! sutil: el journal no guarda identidad del nodo, así que se deshace SOLO vía
+//! PAPELERA (recuperable) — sin capability `TRASH` la entrada se salta con
+//! contador propio en el [`UndoReport`], jamás un `remove` permanente (#65):
+//! lo que hoy vive en ese path puede ser un fichero que el usuario editó tras
+//! la creación. Deuda: identidad (`node_id`/hash) en el `Created` para un undo
+//! con verificación real.
 
 use norte_proto::{CapabilityFlags, ConflictKind, Error, VPath};
 use norte_vfs::Provider;
@@ -22,6 +23,12 @@ pub struct UndoReport {
     pub undone: u64,
     /// Entradas `Irreversible` encontradas y saltadas (no hay nada que pisar).
     pub skipped_irreversible: u64,
+    /// Reversas de `Created` saltadas porque el provider NO tiene `TRASH`
+    /// (#65): deshacerlas sería un borrado PERMANENTE de «lo que hoy vive en
+    /// ese path» — sin `node_id` en el `Created`, puede ser trabajo del humano
+    /// posterior a la creación. El nodo se queda; quien quiera borrarlo lo
+    /// pide explícito (`fs.delete`).
+    pub skipped_created_no_trash: u64,
     /// Primer paso bloqueado (drift/conflicto): `seq` original + motivo. La
     /// sesión para ahí (estricto).
     pub blocked: Option<(i64, Error)>,
@@ -52,6 +59,10 @@ pub(crate) enum Reverted {
     Done,
     /// `Irreversible`: saltada.
     SkippedIrreversible,
+    /// Reversa de `Created` en provider sin `TRASH`: saltada, el nodo se
+    /// queda (#65). Sin compensación (no hubo efecto); un undo posterior
+    /// volverá a encontrarla — honesto.
+    SkippedNoTrash,
     /// Bloqueada por drift/conflicto (no se aplicó cambio de FS).
     Blocked(Error),
 }
@@ -80,30 +91,31 @@ pub(crate) async fn revert_entry(
         // (node_id/hash), así que no podemos distinguir «el fichero que el
         // agente creó» de «ese fichero con contenido que el usuario editó
         // DESPUÉS» (una edición de contenido no genera un nuevo `Created`).
-        // Por eso preferimos PAPELERA (recuperable) sobre `remove` permanente:
-        // si el usuario había modificado el nodo, su trabajo queda recuperable
-        // en la papelera en vez de destruido. Sin capability `TRASH` caemos a
-        // `remove` permanente (documentado; deuda: identidad en el `Created`).
+        // Por eso el undo va SIEMPRE por PAPELERA (recuperable): si el usuario
+        // había modificado el nodo, su trabajo queda en la papelera en vez de
+        // destruido. Sin capability `TRASH` (sftp/object con `logical_trash`
+        // OFF — el caso común remoto) NO se cae a `remove` permanente: la
+        // entrada se SALTA y el nodo se queda (#65). Deuda: identidad en el
+        // `Created` para un undo con verificación real.
         "delete" => {
+            // El stat va PRIMERO: un drift (el nodo ya no está) bloquea
+            // SIEMPRE — clasificarlo como skip-por-no-trash tragaría la
+            // señal de divergencia que el modo estricto valora.
             match provider.stat(&path).await {
                 Ok(_) => {}
                 // Ya no está: estado inesperado → bloquea (no finge éxito).
                 Err(e) => return Ok(Reverted::Blocked(e)),
             }
-            let (comp_op, comp_reversal, comp_ref) = if provider
+            if !provider
                 .capabilities()
                 .flags
                 .contains(CapabilityFlags::TRASH)
             {
-                match provider.trash(&path).await {
-                    Ok(dest) => ("trashed", Reversal::RestoreTrash, dest),
-                    Err(e) => return Ok(Reverted::Blocked(e)),
-                }
-            } else {
-                if let Err(e) = provider.remove(&path).await {
-                    return Ok(Reverted::Blocked(e));
-                }
-                ("removed", Reversal::Irreversible, None)
+                return Ok(Reverted::SkippedNoTrash);
+            }
+            let (comp_op, comp_reversal, comp_ref) = match provider.trash(&path).await {
+                Ok(dest) => ("trashed", Reversal::RestoreTrash, dest),
+                Err(e) => return Ok(Reverted::Blocked(e)),
             };
             let comp_ref_bytes = comp_ref.map(|d| d.to_wire().into_bytes());
             journal
@@ -124,6 +136,10 @@ pub(crate) async fn revert_entry(
 
         // Undo de un Renamed: devolver el nodo de `path`(destino) a
         // `path_to`(origen). El origen debe estar LIBRE.
+        //
+        // TOCTOU is_free→rename: en local lo cierra `renameat2(NOREPLACE)`;
+        // en sftp (posix-rename clobbering) y object (copy+delete) la ventana
+        // existe — deuda de providers remotos, ventana estrecha.
         "rename_back" => {
             let Some(from_bytes) = entry.path_to.as_deref() else {
                 return Ok(Reverted::Blocked(Error::InvalidPath));
