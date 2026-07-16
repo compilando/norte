@@ -208,6 +208,77 @@ pub struct App {
     pub theme: crate::theme::TuiTheme,
     /// Selector de tema abierto (popup): None = cerrado.
     pub theme_picker: Option<ThemePicker>,
+    /// Gestor de extensiones abierto (overlay del catálogo, M4-P3): None =
+    /// cerrado.
+    pub extensions: Option<ExtensionManager>,
+}
+
+/// Overlay del catálogo de extensiones (M4-P3): la lista de plugins descubierta
+/// por el core (YA ordenada por categoría e id) más los directorios que
+/// fallaron al cargar, con un cursor de selección. Regla 7: el TUI no decide
+/// nada — aprobar/activar viaja al core por el `Backend`; aquí solo se navega y
+/// se refleja el estado. El `name`/`publisher` de cada plugin son texto LIBRE
+/// de un tercero: se enmascaran con [`display_name`] al pintar (superficie de
+/// decisión de seguridad).
+#[derive(Debug, Clone)]
+pub struct ExtensionManager {
+    /// Plugins descubiertos, en el orden del core (categoría, luego id).
+    pub plugins: Vec<norte_proto::methods::PluginInfo>,
+    /// Directorios que no cargaron (diagnóstico), se pintan al final.
+    pub errors: Vec<norte_proto::methods::PluginLoadError>,
+    /// Índice del plugin resaltado.
+    pub cursor: usize,
+}
+
+impl ExtensionManager {
+    /// Sube el cursor (tope arriba).
+    pub fn up(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    /// Baja el cursor (tope al último plugin).
+    pub fn down(&mut self) {
+        let max = self.plugins.len().saturating_sub(1);
+        self.cursor = (self.cursor + 1).min(max);
+    }
+
+    /// El plugin bajo el cursor, si lo hay.
+    #[must_use]
+    pub fn selected(&self) -> Option<&norte_proto::methods::PluginInfo> {
+        self.plugins.get(self.cursor)
+    }
+
+    /// Togglea el bool LOCAL de aprobación del plugin bajo el cursor, para
+    /// feedback inmediato tras un `plugins_set_approval` OK en el Backend (la
+    /// verdad vive en el core; esto solo evita un relistado para repintar).
+    pub fn set_local_approved(&mut self, approved: bool) {
+        if let Some(p) = self.plugins.get_mut(self.cursor) {
+            p.approved = approved;
+        }
+    }
+
+    /// Análogo a [`Self::set_local_approved`] para el estado de activación.
+    pub fn set_local_enabled(&mut self, enabled: bool) {
+        if let Some(p) = self.plugins.get_mut(self.cursor) {
+            p.enabled = enabled;
+        }
+    }
+}
+
+/// Acción del usuario sobre el overlay de extensiones (el frontend traduce las
+/// teclas; el efecto —llamar al `Backend`— vive en `main`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtAction {
+    /// Resalta el anterior.
+    Up,
+    /// Resalta el siguiente.
+    Down,
+    /// Togglea la aprobación del plugin resaltado.
+    ToggleApprove,
+    /// Togglea la activación del plugin resaltado.
+    ToggleEnable,
+    /// Cierra el overlay.
+    Close,
 }
 
 /// Popup de selección de tema: lista de presets con preview EN VIVO (mover el
@@ -273,6 +344,7 @@ impl App {
             pending_approvals: std::collections::VecDeque::new(),
             theme: crate::theme::TuiTheme::default(),
             theme_picker: None,
+            extensions: None,
         }
     }
 

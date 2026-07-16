@@ -61,6 +61,89 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(picker) = &app.theme_picker {
         draw_theme_picker(frame, picker, &app.theme);
     }
+    if let Some(mgr) = &app.extensions {
+        draw_extensions(frame, mgr, &app.theme);
+    }
+}
+
+/// Overlay del catálogo de extensiones (M4-P3): la lista de plugins AGRUPADA
+/// por categoría (una cabecera al cambiar de grupo, ya que llegan ordenados)
+/// más los directorios que fallaron al cargar. CRÍTICO: `name` y `publisher`
+/// son texto LIBRE de un tercero y esto es superficie de decisión de seguridad
+/// (aprobar) — se pasan por [`display_name`] (mismo enmascarado de
+/// controles/bidi/invisibles que los panes) antes de pintar. El id ya está
+/// charset-validado en el core; name/publisher no.
+fn draw_extensions(frame: &mut Frame<'_>, mgr: &crate::app::ExtensionManager, theme: &TuiTheme) {
+    let area = centered(
+        frame.area(),
+        frame.area().width.saturating_sub(6).clamp(24, 80),
+        frame.area().height.saturating_sub(4).max(6),
+    );
+    frame.render_widget(ratatui::widgets::Clear, area);
+    let mut lines: Vec<Line<'_>> = Vec::new();
+    if mgr.plugins.is_empty() && mgr.errors.is_empty() {
+        lines.push(Line::raw(t("ext-empty")));
+    } else {
+        let mut last_cat: Option<&str> = None;
+        for (i, p) in mgr.plugins.iter().enumerate() {
+            if last_cat != Some(p.category.as_str()) {
+                last_cat = Some(p.category.as_str());
+                let (cat, _) = display_name(p.category.as_bytes());
+                lines.push(Line::styled(cat, theme.role(Role::Title)));
+            }
+            lines.push(plugin_line(p, i == mgr.cursor, theme));
+        }
+        for e in &mgr.errors {
+            let (dir, _) = display_name(e.dir.as_bytes());
+            let (reason, _) = display_name(e.reason.as_bytes());
+            lines.push(Line::styled(
+                format!(" {HOSTILE_BADGE} {dir}: {reason}"),
+                theme.role(Role::Error),
+            ));
+        }
+    }
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("ext-title")))
+        .title_style(theme.role(Role::Title))
+        .title_bottom(Line::raw(format!(" {} ", t("ext-hint"))))
+        .border_style(theme.role(Role::ModalBorder));
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// Una línea de plugin: `<nombre> v<version> [<badges>] <estado>`. `name` y
+/// `publisher` van enmascarados ([`display_name`]); badges = capabilities
+/// unidas (o `-` si vacío); estado = `✓` si activo y aviso `⚠` (rol Warning)
+/// si NO está aprobado. La línea seleccionada se resalta como el theme picker.
+fn plugin_line<'a>(
+    p: &'a norte_proto::methods::PluginInfo,
+    selected: bool,
+    theme: &TuiTheme,
+) -> Line<'a> {
+    let (name, _) = display_name(p.name.as_bytes());
+    let (version, _) = display_name(p.version.as_bytes());
+    let badges = if p.capabilities.is_empty() {
+        "-".to_owned()
+    } else {
+        p.capabilities.join(" ")
+    };
+    let cursor = if selected { ">" } else { " " };
+    let mut spans = vec![Span::raw(format!("{cursor} {name} v{version} [{badges}] "))];
+    if p.enabled {
+        spans.push(Span::styled("✓", theme.role(Role::Info)));
+        spans.push(Span::raw(" "));
+    }
+    if !p.approved {
+        spans.push(Span::styled(
+            format!("⚠ {}", t("ext-unapproved")),
+            theme.role(Role::Warning),
+        ));
+    }
+    let mut line = Line::from(spans);
+    if selected {
+        line = line.style(theme.role(Role::Selection));
+    }
+    line
 }
 
 /// Popup selector de tema: lista de presets con el vigente resaltado (ADR

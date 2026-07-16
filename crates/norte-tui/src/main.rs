@@ -18,7 +18,8 @@ use norte_i18n::{t, ta};
 use norte_proto::DeleteMode;
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{
-    App, DialogOutcome, Help, Modal, Pane, PickerAction, TransferKind, dialog_key, sort_entries,
+    App, DialogOutcome, ExtensionManager, Help, Modal, Pane, PickerAction, TransferKind,
+    dialog_key, sort_entries,
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::keymap::{COMMANDS, Chord, Effective, Resolution, Resolver, Screen, presets};
@@ -382,6 +383,8 @@ async fn run(
                     app.message = None;
                     if app.theme_picker.is_some() {
                         on_theme_picker_key(app, key.modifiers, key.code).await;
+                    } else if app.extensions.is_some() {
+                        on_extensions_key(app, backend, key.modifiers, key.code).await;
                     } else if let Some(help) = &mut app.help {
                         // Teclas de la ayuda: fijas, como los diálogos (#24).
                         // ctrl+c conserva su significado global (salir).
@@ -501,6 +504,55 @@ async fn on_theme_picker_key(app: &mut App, mods: KeyModifiers, code: KeyCode) {
             // Un panic en el write es un bug nuestro: que no tumbe la TUI.
             Err(_) => {}
         }
+    }
+}
+
+/// Teclas del overlay de extensiones (M4-P3), fijas como los demás overlays
+/// (#24); `ctrl+c` conserva su salida global. Regla 7: aprobar/activar viaja
+/// al core por el `Backend`; el bool LOCAL solo se togglea tras un OK (feedback
+/// inmediato sin relistar). El id y el estado se toman ANTES del `.await` (el
+/// borrow del `mgr` se suelta durante la llamada al backend y se re-obtiene
+/// después para reflejar el resultado).
+async fn on_extensions_key(app: &mut App, backend: &Backend, mods: KeyModifiers, code: KeyCode) {
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return;
+    }
+    let Some(mgr) = &mut app.extensions else {
+        return;
+    };
+    match code {
+        KeyCode::Up | KeyCode::Char('k') => mgr.up(),
+        KeyCode::Down | KeyCode::Char('j') => mgr.down(),
+        KeyCode::Esc | KeyCode::Char('q') => app.extensions = None,
+        KeyCode::Char('a') => {
+            // Id y estado ANTES del await (suelta el borrow de `mgr`).
+            let Some((id, cur)) = mgr.selected().map(|p| (p.id.clone(), p.approved)) else {
+                return;
+            };
+            match backend.plugins_set_approval(&id, !cur).await {
+                Ok(()) => {
+                    if let Some(mgr) = &mut app.extensions {
+                        mgr.set_local_approved(!cur);
+                    }
+                }
+                Err(e) => app.message = Some(ta("msg-error", &[("error", &e.to_string())])),
+            }
+        }
+        KeyCode::Char('e') => {
+            let Some((id, cur)) = mgr.selected().map(|p| (p.id.clone(), p.enabled)) else {
+                return;
+            };
+            match backend.plugins_set_enabled(&id, !cur).await {
+                Ok(()) => {
+                    if let Some(mgr) = &mut app.extensions {
+                        mgr.set_local_enabled(!cur);
+                    }
+                }
+                Err(e) => app.message = Some(ta("msg-error", &[("error", &e.to_string())])),
+            }
+        }
+        _ => {}
     }
 }
 
@@ -745,6 +797,7 @@ async fn submit_transfer(
 /// Ejecuta un comando nombrado (ADR 0006: los mismos nombres que verán la
 /// palette y el wire). Un error de listado en un cd NO tumba el TUI: el
 /// pane se queda donde estaba (aviso visible: barra de mensajes, issue #20).
+#[allow(clippy::too_many_lines)] // tabla de despacho comando→efecto, no API
 async fn dispatch(
     app: &mut App,
     backend: &Backend,
@@ -854,6 +907,17 @@ async fn dispatch(
             });
         }
         "app.theme" => app.open_theme_picker(),
+        "app.extensions" => match backend.plugins_list().await {
+            // El catálogo llega YA ordenado por categoría e id desde el core.
+            Ok(list) => {
+                app.extensions = Some(ExtensionManager {
+                    plugins: list.plugins,
+                    errors: list.errors,
+                    cursor: 0,
+                });
+            }
+            Err(e) => app.message = Some(ta("msg-error", &[("error", &e.to_string())])),
+        },
         "task.cancel" => {
             app.message = Some(if app.board.cancel_last_running() {
                 t("msg-cancelling")

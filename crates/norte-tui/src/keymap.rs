@@ -527,6 +527,7 @@ pub const COMMANDS: &[&str] = &[
     "nav.parent",
     "app.help",
     "app.theme",
+    "app.extensions",
     "pane.copy",
     "pane.move",
     "pane.delete",
