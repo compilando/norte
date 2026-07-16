@@ -36,6 +36,13 @@ impl CommandGuest for Demo {
                 let bytes = host_log::read_scoped("demo")?;
                 Ok(String::from_utf8_lossy(&bytes).into_owned())
             }
+            // Bucle infinito a propósito: el HOST lo corta por deadline de
+            // época (regla dura 3). Sin el enforcement, colgaría el hilo host.
+            "spin" =>
+            {
+                #[allow(clippy::empty_loop)]
+                loop {}
+            }
             other => Err(format!("comando desconocido: {other}")),
         }
     }

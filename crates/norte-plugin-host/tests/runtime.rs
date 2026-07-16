@@ -66,6 +66,26 @@ fn command_demo_ejecuta_y_reporta_error_de_comando() {
 }
 
 #[test]
+fn guest_en_bucle_trapea_por_deadline_no_cuelga_el_host() {
+    let Some(wasm) = support::build_guest("command-demo") else {
+        return;
+    };
+    // Deadline corto SOLO para el test (~1 s: 20 ticks × 50 ms) para no esperar
+    // los ~10 s del default de producción. El ticker corta el bucle → trap.
+    let rt = norte_plugin_host::PluginRuntime::with_epoch_deadline(20).expect("engine");
+    let mut inst = rt
+        .instantiate(&wasm, norte_plugin_host::Capabilities::default())
+        .expect("instancia");
+    let err = inst
+        .run_command("spin", "")
+        .expect_err("un guest en bucle debe trapear, no colgar");
+    assert!(
+        matches!(err, norte_plugin_host::RuntimeError::Trap(_)),
+        "fue {err:?}"
+    );
+}
+
+#[test]
 fn fs_read_scoped_gatea_la_puerta_en_el_host() {
     let Some(wasm) = support::build_guest("command-demo") else {
         return;

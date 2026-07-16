@@ -8,10 +8,14 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use thiserror::Error;
 use wasmtime::component::{Component, Linker, ResourceTable};
-use wasmtime::{Engine, Store};
+use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::bindings::NortePlugin;
@@ -22,6 +26,26 @@ use crate::capability::Capabilities;
 /// Tope de líneas de log que un plugin puede acumular (anti-DoS: el guest no
 /// hace crecer la memoria del host sin límite vía `host-log::log`).
 const MAX_LOGS: usize = 1024;
+
+/// Tope de caracteres por línea de log: un guest no puede hacer crecer la
+/// memoria del host con una única línea gigante (anti-DoS, complementa
+/// [`MAX_LOGS`]). Se trunca en frontera de char (no parte un code point).
+const MAX_LOG_CHARS: usize = 4096;
+
+/// Límite de memoria lineal por store del guest (64 MiB, holgado): un plugin no
+/// puede agotar la RAM del host haciendo crecer su memoria lineal sin fin.
+const MAX_STORE_MEMORY_BYTES: usize = 64 * 1024 * 1024;
+
+/// Periodo del hilo "ticker" que incrementa la época del motor. Junto con el
+/// deadline por store define el timeout de CPU efectivo (≈ deadline × periodo).
+const EPOCH_TICK: Duration = Duration::from_millis(50);
+
+/// Deadline de época por defecto en producción: ≈ [`EPOCH_TICK`] × 200 ≈ 10 s.
+/// Un guest que consuma CPU más allá de esto TRAPA (regla dura 3: nada de
+/// operaciones largas sin corte). Holgado a propósito para no matar plugins
+/// legítimos; los tests usan [`PluginRuntime::with_epoch_deadline`] con un valor
+/// mucho menor para no tardar.
+const DEFAULT_EPOCH_DEADLINE: u64 = 200;
 
 /// Fallo del runtime de plugins.
 #[derive(Debug, Error)]
@@ -49,6 +73,9 @@ pub struct HostState {
     caps: Capabilities,
     logs: Vec<String>,
     scoped_resources: HashMap<String, Vec<u8>>,
+    /// Límites de recursos del store (memoria lineal). Referenciado por
+    /// `Store::limiter` vía [`WasiView`]-adyacente closure en `instantiate`.
+    limits: StoreLimits,
 }
 
 impl WasiView for HostState {
@@ -63,7 +90,13 @@ impl WasiView for HostState {
 impl host_log::Host for HostState {
     fn log(&mut self, message: String) {
         if self.logs.len() < MAX_LOGS {
-            self.logs.push(message);
+            // Cap por línea en frontera de char (anti-DoS de línea gigante).
+            let capped = if message.chars().count() > MAX_LOG_CHARS {
+                message.chars().take(MAX_LOG_CHARS).collect()
+            } else {
+                message
+            };
+            self.logs.push(capped);
         }
     }
 
@@ -81,21 +114,72 @@ impl host_log::Host for HostState {
 }
 
 /// El motor wasmtime del host, reutilizable entre instanciaciones.
+///
+/// Arranca un hilo "ticker" que incrementa la época del motor cada `EPOCH_TICK`
+/// (50 ms); combinado con el deadline por store ([`Store::set_epoch_deadline`])
+/// da un timeout de CPU real para el guest (regla dura 3). El hilo se para
+/// limpio en [`Drop`].
 pub struct PluginRuntime {
     engine: Engine,
+    /// Ticks de época que un store puede consumir antes de trapar.
+    epoch_deadline: u64,
+    /// Señal de parada del hilo ticker.
+    ticker_stop: Arc<AtomicBool>,
+    /// Handle del hilo ticker; `take()`-ado en `Drop` para hacer join.
+    ticker: Option<JoinHandle<()>>,
 }
 
 impl PluginRuntime {
-    /// Construye el motor con el Component Model activado.
+    /// Construye el motor con el Component Model activado y el deadline de época
+    /// de producción (`DEFAULT_EPOCH_DEADLINE`, ≈ 10 s de CPU).
     ///
     /// # Errors
     /// Falla si la configuración del motor wasmtime es inválida en esta
     /// plataforma.
     pub fn new() -> Result<Self, RuntimeError> {
+        Self::with_epoch_deadline(DEFAULT_EPOCH_DEADLINE)
+    }
+
+    /// Como [`PluginRuntime::new`] pero con un deadline de época explícito (en
+    /// ticks de `EPOCH_TICK`, 50 ms). Pensado para tests que necesitan un timeout
+    /// corto (p. ej. verificar que un guest en bucle trapa sin colgar el host)
+    /// sin esperar los ~10 s del default de producción.
+    ///
+    /// # Errors
+    /// Falla si la configuración del motor wasmtime es inválida en esta
+    /// plataforma.
+    pub fn with_epoch_deadline(epoch_deadline: u64) -> Result<Self, RuntimeError> {
         let mut config = wasmtime::Config::new();
         config.wasm_component_model(true);
+        // Interrupción por época: el motor comprueba el deadline en los bordes
+        // de bucle/función del guest y trapa al superarlo (regla dura 3).
+        config.epoch_interruption(true);
         let engine = Engine::new(&config).map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
-        Ok(Self { engine })
+
+        // Hilo ticker: incrementa la época cada EPOCH_TICK hasta que Drop lo
+        // pare. `Engine` es Clone (Arc por dentro), así que el hilo comparte el
+        // mismo motor.
+        let ticker_stop = Arc::new(AtomicBool::new(false));
+        let ticker = {
+            let engine = engine.clone();
+            let stop = Arc::clone(&ticker_stop);
+            std::thread::Builder::new()
+                .name("norte-plugin-epoch".into())
+                .spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        std::thread::sleep(EPOCH_TICK);
+                        engine.increment_epoch();
+                    }
+                })
+                .map_err(|e| RuntimeError::Instantiate(e.to_string()))?
+        };
+
+        Ok(Self {
+            engine,
+            epoch_deadline,
+            ticker_stop,
+            ticker: Some(ticker),
+        })
     }
 
     /// Instancia un plugin desde un componente WASM en disco, con las
@@ -121,21 +205,45 @@ impl PluginRuntime {
         // Sandbox WASI VACÍO: sin stdio heredado, sin preopens, sin red, sin
         // env. Esta línea es el corazón del aislamiento (revísala, seguridad).
         let ctx = WasiCtxBuilder::new().build();
+        // Límite de memoria lineal por store (cierra M4-P2b): un guest no puede
+        // agotar la RAM del host. `StoreLimits` impl `ResourceLimiter`.
+        let limits = StoreLimitsBuilder::new()
+            .memory_size(MAX_STORE_MEMORY_BYTES)
+            .build();
         let state = HostState {
             ctx,
             table: ResourceTable::new(),
             caps,
             logs: Vec::new(),
             scoped_resources: HashMap::new(),
+            limits,
         };
 
-        // TODO M4-P2b: límite de memoria por store (Store::limiter +
-        // StoreLimitsBuilder) — de momento el motor usa los defaults.
         let mut store = Store::new(&self.engine, state);
+        // Enforcement del límite de memoria: el limiter apunta a `limits`.
+        store.limiter(|s: &mut HostState| &mut s.limits);
+        // Timeout de CPU: el guest trapa si consume más de `epoch_deadline`
+        // ticks de época (el hilo ticker los avanza). El trap se mapea a
+        // `RuntimeError::Trap` en run_command/render_preview.
+        store.set_epoch_deadline(self.epoch_deadline);
+
+        // Endurecimiento adicional (cap de retorno del guest, tamaño del
+        // artefacto antes de compilar, linker mínimo): issue #68.
         let bindings = NortePlugin::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
 
         Ok(PluginInstance { store, bindings })
+    }
+}
+
+impl Drop for PluginRuntime {
+    /// Para el hilo ticker limpio: señala la parada y hace join para no dejar
+    /// hilos huérfanos (ni "thread leak" en tests) al morir el runtime.
+    fn drop(&mut self) {
+        self.ticker_stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.ticker.take() {
+            let _ = handle.join();
+        }
     }
 }
 
