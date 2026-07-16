@@ -185,3 +185,43 @@ fn unsafe_free_kill(pid: u32) {
         .expect("kill disponible");
     assert!(status.success(), "kill -INT falló");
 }
+
+/// M3-4 T6: `policy grant` sin daemon en marcha falla LIMPIO (sin autoarranque
+/// — conceder un scope a un daemon que no existe no tiene sentido). El socket
+/// apunta a un path muerto en un tempdir.
+#[cfg(unix)]
+#[test]
+fn policy_grant_sin_daemon_falla_claro() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("muerto.sock");
+    let out = norte()
+        .arg("--socket")
+        .arg(&socket)
+        .arg("policy")
+        .arg("grant")
+        .arg("1")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "sin daemon debe fallar");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("daemon") || err.contains("socket"),
+        "error orientativo, fue: {err}"
+    );
+}
+
+/// `mcp serve --help` lista la opción de sesión (el subcomando existe y es
+/// coherente sin necesitar un daemon).
+#[cfg(unix)]
+#[test]
+fn mcp_serve_help_menciona_session() {
+    let out = norte()
+        .arg("mcp")
+        .arg("serve")
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let help = String::from_utf8_lossy(&out.stdout);
+    assert!(help.contains("--session"), "help: {help}");
+}

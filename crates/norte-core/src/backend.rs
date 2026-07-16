@@ -331,6 +331,19 @@ impl Backend {
             Self::Remote(r) => r.policy_decide(approval_id, approve).await,
         }
     }
+
+    /// Deshace la sesión completa de un agente como Task (`policy.undo_session`,
+    /// M3-4). Solo tiene sentido contra el daemon (dueño del journal).
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo; `Unsupported` en embebido (sin journal).
+    pub async fn undo_session(&self, session: &str) -> Result<TaskRef, Error> {
+        match self {
+            Self::Embedded(_) => Err(Error::Unsupported),
+            #[cfg(unix)]
+            Self::Remote(r) => r.undo_session(session).await,
+        }
+    }
 }
 
 /// El backend remoto (solo unix, como el daemon — ADR 0011).
@@ -848,6 +861,20 @@ pub mod remote {
                 )
                 .await?;
             Ok(self.own_task(result.task_id, TaskKind::Delete))
+        }
+
+        /// `policy.undo_session` (M3-4): un humano deshace la sesión de un
+        /// agente. Corre como Task de undo con progreso/cancel como las demás.
+        pub(super) async fn undo_session(&self, session: &str) -> Result<TaskRef, Error> {
+            let result: methods::PolicyUndoSessionResult = self
+                .call_timed(
+                    methods::POLICY_UNDO_SESSION,
+                    &methods::PolicyUndoSessionParams {
+                        session: session.to_owned(),
+                    },
+                )
+                .await?;
+            Ok(self.own_task(result.task_id, TaskKind::Undo))
         }
 
         /// Recuerda un desenlace (anillo acotado).

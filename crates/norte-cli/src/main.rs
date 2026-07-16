@@ -92,6 +92,49 @@ enum Cmd {
         #[command(subcommand)]
         cmd: DaemonCmd,
     },
+    /// Sirve MCP por stdio para agentes (Claude Code, Codex…): conecta al
+    /// daemon como sesión de agente (M3-4, ADR 0024)
+    #[cfg(unix)]
+    Mcp {
+        #[command(subcommand)]
+        cmd: McpCmd,
+    },
+    /// Gobernanza de agentes desde el lado humano (M3-4)
+    #[cfg(unix)]
+    Policy {
+        #[command(subcommand)]
+        cmd: PolicyCmd,
+    },
+    /// Deshace la sesión completa de un agente en LIFO estricto (M3-4)
+    #[cfg(unix)]
+    Undo {
+        /// Sesión de agente (la de `--session` del puente MCP)
+        session: String,
+    },
+}
+
+/// Subcomandos MCP.
+#[cfg(unix)]
+#[derive(Subcommand)]
+enum McpCmd {
+    /// Sirve MCP por stdio hasta EOF (arranca el daemon si hace falta)
+    Serve {
+        /// Id de sesión de agente (`[A-Za-z0-9._-]`, 1..=64)
+        #[arg(long, default_value = "mcp")]
+        session: String,
+    },
+}
+
+/// Subcomandos de policy (lado humano).
+#[cfg(unix)]
+#[derive(Subcommand)]
+enum PolicyCmd {
+    /// Concede una petición de scope pendiente (el `request_id` lo imprime
+    /// el agente al llamar a la tool `request_scope`)
+    Grant {
+        /// `request_id` devuelto por `request_scope`
+        request_id: u64,
+    },
 }
 
 /// Subcomandos del daemon.
@@ -185,6 +228,15 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     if let Cmd::Daemon { cmd } = cli.cmd {
         return daemon_cmd(cmd).await;
     }
+    // MCP/policy/undo hablan al daemon directamente como cliente (no van por
+    // el Backend embebido): el daemon es el dueño del journal y la policy.
+    #[cfg(unix)]
+    match cli.cmd {
+        Cmd::Mcp { cmd } => return mcp_cmd(cmd, cli.socket).await,
+        Cmd::Policy { cmd } => return policy_cmd(cmd, cli.socket).await,
+        Cmd::Undo { session } => return undo_cmd(&session, cli.socket).await,
+        _ => {}
+    }
 
     let engine = Engine::new();
     engine.register_provider(Arc::new(LocalProvider::os_root()) as Arc<dyn Provider>);
@@ -259,8 +311,126 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(run_task(task, false).await)
         }
         #[cfg(unix)]
-        Cmd::Daemon { .. } => unreachable!("manejado arriba"),
+        Cmd::Daemon { .. } | Cmd::Mcp { .. } | Cmd::Policy { .. } | Cmd::Undo { .. } => {
+            unreachable!("manejado arriba")
+        }
     }
+}
+
+/// Resuelve el socket del daemon y un `spawn_cmd` de autoarranque (este mismo
+/// binario sabe ser daemon). Sondas de FS fuera del runtime (regla 2).
+#[cfg(unix)]
+async fn socket_and_spawn(
+    socket: Option<PathBuf>,
+) -> anyhow::Result<(PathBuf, Vec<std::ffi::OsString>)> {
+    let (socket, exe) = tokio::task::spawn_blocking(move || {
+        let socket = socket.unwrap_or_else(|| norte_core::daemon::default_socket_path(None));
+        (socket, std::env::current_exe())
+    })
+    .await
+    .context("resolución del socket/exe")?;
+    let exe = exe.context("current_exe")?;
+    let spawn_cmd: Vec<std::ffi::OsString> = vec![
+        exe.into(),
+        "daemon".into(),
+        "run".into(),
+        "--socket".into(),
+        socket.clone().into(),
+    ];
+    Ok((socket, spawn_cmd))
+}
+
+/// `norte mcp serve`: sirve MCP por stdio, arrancando el daemon si hace falta.
+/// El puente conecta como sesión de agente; el tracing va a stderr (el
+/// `logging::init` global ya lo fija), stdout es EXCLUSIVO del transporte MCP.
+#[cfg(unix)]
+async fn mcp_cmd(cmd: McpCmd, socket: Option<PathBuf>) -> anyhow::Result<ExitCode> {
+    let McpCmd::Serve { session } = cmd;
+    let (socket, spawn_cmd) = socket_and_spawn(socket).await?;
+    // Autoarranque idempotente: connect_or_spawn arranca el daemon si el
+    // socket no responde, luego el puente reconecta.
+    if let Err(e) = norte_core::daemon::Client::connect_or_spawn(&socket, move || {
+        let mut cmd = std::process::Command::new(&spawn_cmd[0]);
+        cmd.args(&spawn_cmd[1..]);
+        cmd
+    })
+    .await
+    {
+        anyhow::bail!("no se pudo arrancar/alcanzar el daemon: {e}");
+    }
+    eprintln!(
+        "{}",
+        norte_i18n::ta("cli-mcp-serving", &[("session", &session)])
+    );
+    norte_mcp::bridge::serve_stdio(&socket, &session)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("el puente MCP terminó con error")?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `norte policy grant <request_id>`: un humano concede un scope pedido por un
+/// agente. Conexión User (sin `agent_session`).
+#[cfg(unix)]
+async fn policy_cmd(cmd: PolicyCmd, socket: Option<PathBuf>) -> anyhow::Result<ExitCode> {
+    use norte_core::daemon::Client;
+    let PolicyCmd::Grant { request_id } = cmd;
+    let (socket, _spawn) = socket_and_spawn(socket).await?;
+    let mut client = Client::connect(&socket)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("no hay daemon en marcha")?;
+    client
+        .initialize(norte_proto::methods::ClientInfo {
+            name: "norte-cli".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let _: norte_proto::methods::GrantScopeResult = client
+        .call(
+            norte_proto::methods::POLICY_GRANT_SCOPE,
+            &norte_proto::methods::GrantScopeParams { request_id },
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("no se pudo conceder el scope")?;
+    println!("{}", norte_i18n::t("cli-scope-granted"));
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `norte undo <session>`: un humano deshace la sesión completa de un agente.
+/// Corre como Task; se espera su terminal con Ctrl-C = cancelar (patrón `cp`).
+#[cfg(unix)]
+async fn undo_cmd(session: &str, socket: Option<PathBuf>) -> anyhow::Result<ExitCode> {
+    use norte_core::backend::remote::RemoteBackend;
+    let (socket, spawn_cmd) = socket_and_spawn(socket).await?;
+    let backend = Backend::Remote(
+        RemoteBackend::connect(
+            socket,
+            Some(spawn_cmd),
+            norte_proto::methods::ClientInfo {
+                name: "norte-cli".into(),
+                version: env!("CARGO_PKG_VERSION").into(),
+            },
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("no se pudo hablar con el daemon")?,
+    );
+    let task = backend
+        .undo_session(session)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context(norte_i18n::ta("cli-undo-failed", &[("error", "submit")]))?;
+    let outcome = run_task(task, true).await;
+    if outcome == ExitCode::SUCCESS {
+        println!(
+            "{}",
+            norte_i18n::ta("cli-undo-done", &[("session", session)])
+        );
+    }
+    Ok(outcome)
 }
 
 /// Elige el transporte (regla 7: la lógica es la misma). `--daemon`

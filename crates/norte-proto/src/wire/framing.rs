@@ -75,7 +75,10 @@ impl FrameDecoder {
             self.scanned = 0;
             self.pending_newlines = self.pending_newlines.saturating_sub(1);
             frame.pop(); // el `\n`
-            if frame.last() == Some(&b'\r') {
+            // Recorta TODOS los `\r` de framing, no solo uno: un peer que
+            // emite `\r\r\n` (o CRLF repetido) no debe dejar un `\r` colgando
+            // que reviente el parse JSON (hallazgo del fuzz de framing).
+            while frame.last() == Some(&b'\r') {
                 frame.pop();
             }
             if frame.is_empty() {

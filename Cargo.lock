@@ -3802,6 +3802,7 @@ dependencies = [
  "futures",
  "norte-core",
  "norte-i18n",
+ "norte-mcp",
  "norte-proto",
  "norte-vfs",
  "norte-vfs-local",
