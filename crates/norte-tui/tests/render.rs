@@ -121,6 +121,34 @@ fn panel_de_tasks_y_modal_se_pintan() {
     );
 }
 
+/// M4-P5: F3 con preview de plugin pinta el indicador «via <plugin>» y las
+/// líneas de la salida del plugin (ya enmascaradas).
+#[test]
+fn viewer_pinta_indicador_via_plugin_y_sus_lineas() {
+    let _ = norte_i18n::force(norte_i18n::Lang::En);
+    let dir = vp("file:///x");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir, Vec::new()),
+    );
+    app.viewer = Some(norte_tui::viewer::Viewer::with_plugin_preview(
+        vp("file:///doc.md"),
+        "Markdown".to_owned(),
+        "titulo\ncuerpo",
+    ));
+    let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let contenido = terminal.backend().to_string();
+    assert!(
+        contenido.contains("via Markdown"),
+        "indicador del previewer visible: {contenido}"
+    );
+    assert!(
+        contenido.contains("titulo") && contenido.contains("cuerpo"),
+        "las líneas del preview se pintan: {contenido}"
+    );
+}
+
 /// M3-3b T5 (encoding-auditor H1/H2/H3): el modal de aprobación pinta datos
 /// que CONTROLA el agente. Controles/bidi/invisibles → `�` con badge; cada
 /// ruta en SU línea etiquetada (jamás joiner in-band); un `from` kilométrico

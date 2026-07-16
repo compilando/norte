@@ -41,6 +41,7 @@ viewer-forced = (forzado)
 viewer-lossy = con pérdidas (�)
 viewer-truncated = [cabecera]
 viewer-binary = binario
+viewer-plugin-preview = via { $plugin }
 eol-mixed = EOL mixto
 eol-none = sin EOL
 

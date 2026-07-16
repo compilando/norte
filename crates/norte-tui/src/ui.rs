@@ -207,15 +207,27 @@ fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer, app: &App)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(frame.area());
     let (title, hostil) = path_display(&viewer.path);
-    let block = Block::default()
+    let title = if hostil {
+        format!("{HOSTILE_BADGE} {title}")
+    } else {
+        title
+    };
+    // M4-P5: indicador «via <plugin>» cuando la vista viene de un preview de
+    // plugin (el plugin_name ya viene enmascarado desde el viewer).
+    let mut block = Block::default()
         .borders(Borders::ALL)
-        .title(if hostil {
-            format!("{HOSTILE_BADGE} {title}")
-        } else {
-            title
-        })
+        .title(title)
         .title_style(app.theme.role(Role::Title))
         .border_style(app.theme.role(Role::BorderFocus));
+    if let Some(plugin) = viewer.preview_plugin() {
+        block = block.title(
+            Span::styled(
+                ta("viewer-plugin-preview", &[("plugin", plugin)]),
+                app.theme.role(Role::Info),
+            )
+            .into_right_aligned_line(),
+        );
+    }
     let inner_h = rows[0].height.saturating_sub(2) as usize;
     let lines: Vec<Line<'_>> = viewer.rows(inner_h).into_iter().map(Line::raw).collect();
     frame.render_widget(Paragraph::new(lines).block(block), rows[0]);

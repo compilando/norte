@@ -41,6 +41,7 @@ viewer-forced = (forced)
 viewer-lossy = lossy (�)
 viewer-truncated = [head]
 viewer-binary = binary
+viewer-plugin-preview = via { $plugin }
 eol-mixed = mixed EOL
 eol-none = no EOL
 

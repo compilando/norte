@@ -135,6 +135,50 @@ fn toggle_hex_reclampa_el_scroll() {
     assert!(!v.rows(5).is_empty(), "el hexview pinta algo");
 }
 
+/// M4-P5: en modo preview de plugin, `rows()` pinta la salida del plugin (no
+/// la vista cruda), `preview_plugin()` da el nombre, y el output —texto de un
+/// TERCERO— sale ENMASCARADO (controles → `�`, jamás byte crudo).
+#[test]
+fn preview_de_plugin_reemplaza_la_vista_y_enmascara() {
+    let v = Viewer::with_plugin_preview(
+        vp(),
+        "Markdown".to_owned(),
+        "linea uno\nlinea\u{7}dos\nlinea tres",
+    );
+    assert_eq!(v.preview_plugin(), Some("Markdown"));
+    assert_eq!(v.total_rows(), 3, "3 líneas partidas por \\n");
+    let rows = v.rows(10);
+    assert_eq!(rows[0], "linea uno");
+    assert_eq!(rows[2], "linea tres");
+    assert_eq!(
+        rows[1], "linea\u{FFFD}dos",
+        "el control \\u{{7}} del plugin sale enmascarado, no crudo"
+    );
+    assert!(
+        !rows[1].contains('\u{7}'),
+        "jamás el byte de control crudo: {:?}",
+        rows[1]
+    );
+}
+
+/// M4-P5: el scroll opera sobre las líneas del preview (topes incluidos).
+#[test]
+fn preview_de_plugin_scrollea_sobre_sus_lineas() {
+    use std::fmt::Write;
+    let mut out = String::new();
+    for i in 0..20 {
+        let _ = writeln!(out, "l{i}");
+    }
+    let mut v = Viewer::with_plugin_preview(vp(), "P".to_owned(), out.trim_end());
+    assert_eq!(v.total_rows(), 20);
+    v.scroll_bottom();
+    assert_eq!(v.scroll, 19);
+    v.scroll_down(5);
+    assert_eq!(v.scroll, 19, "tope inferior en el preview");
+    v.scroll_top();
+    assert_eq!(v.rows(2), vec!["l0", "l1"]);
+}
+
 /// H1 aplicado al viewer: forzar windows-1252 sobre un BOM espurio lo
 /// muestra como DATO (þÿ), no como UTF-16.
 #[test]

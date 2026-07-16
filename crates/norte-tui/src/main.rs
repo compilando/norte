@@ -947,15 +947,27 @@ const VIEW_CAP: u64 = 256 * 1024;
 /// Abre el viewer leyendo la CABECERA vía el core (regla 7), cancelable
 /// como el cd (Esc abandona, Ctrl-C sale).
 async fn open_viewer(app: &mut App, backend: &Backend, events: &mut EventStream, path: VPath) {
-    let fut = read_head(backend, &path);
+    // Fase 1 leer la cabecera, fase 2 (M4-P5) intentar el preview de un plugin.
+    // Ambas van dentro de la MISMA future para que Esc/Ctrl-C cancelen en
+    // cualquiera de las dos. Un fallo del preview NUNCA impide ver el crudo.
+    let fut = async {
+        let (bytes, truncated) = read_head(backend, &path).await?;
+        let viewer = match backend.plugin_preview(&path).await {
+            Ok(res) => match res.preview {
+                Some(p) => Viewer::with_plugin_preview(path.clone(), p.plugin_name, &p.output),
+                None => Viewer::new(path.clone(), bytes, truncated),
+            },
+            // Un plugin roto no bloquea el archivo: vista cruda de siempre.
+            Err(_) => Viewer::new(path.clone(), bytes, truncated),
+        };
+        Ok::<Viewer, Error>(viewer)
+    };
     tokio::pin!(fut);
     loop {
         tokio::select! {
             res = &mut fut => {
                 match res {
-                    Ok((bytes, truncated)) => {
-                        app.viewer = Some(Viewer::new(path.clone(), bytes, truncated));
-                    }
+                    Ok(viewer) => app.viewer = Some(viewer),
                     Err(e) => app.message = Some(ta("msg-view-error", &[("error", &e.to_string())])),
                 }
                 return;

@@ -12,6 +12,15 @@ pub const PAGE: usize = 10;
 /// Bytes por fila del hexview.
 const HEX_COLS: usize = 16;
 
+/// Preview producido por un plugin (M4-P5): reemplaza la vista cruda mientras
+/// está presente. `lines` ya enmascaradas ([`crate::app::display_name`]).
+pub struct PluginPreviewView {
+    /// Nombre legible del plugin previewer (ya enmascarado), para el indicador.
+    pub plugin_name: String,
+    /// Líneas de la salida del plugin, ya enmascaradas (texto de un TERCERO).
+    pub lines: Vec<String>,
+}
+
 /// El viewer abierto sobre un archivo.
 pub struct Viewer {
     /// El archivo mostrado.
@@ -26,6 +35,9 @@ pub struct Viewer {
     forced: Option<&'static norte_encoding::Encoding>,
     /// Primera línea visible.
     pub scroll: usize,
+    /// Preview de un plugin (M4-P5): si está, REEMPLAZA la vista cruda y la
+    /// decodificación (bytes/encoding se ignoran; `lines` ya enmascaradas).
+    plugin_preview: Option<PluginPreviewView>,
     // ---- cache de decodificación (se recomputa al cambiar encoding) ----
     text: String,
     encoding_name: &'static str,
@@ -35,24 +47,53 @@ pub struct Viewer {
 }
 
 impl Viewer {
-    /// Viewer sobre `bytes` (ya leídos): detecta encoding y binario.
-    #[must_use]
-    pub fn new(path: VPath, bytes: Vec<u8>, truncated: bool) -> Self {
-        let mut v = Self {
+    /// Struct base con todos los campos en su cero (sin decodificar aún).
+    fn base(path: VPath, bytes: Vec<u8>, truncated: bool) -> Self {
+        Self {
             path,
             bytes,
             truncated,
             hex: false,
             forced: None,
             scroll: 0,
+            plugin_preview: None,
             text: String::new(),
             encoding_name: "",
             eol: Eol::None,
             had_errors: false,
             lines: 0,
-        };
+        }
+    }
+
+    /// Viewer sobre `bytes` (ya leídos): detecta encoding y binario.
+    #[must_use]
+    pub fn new(path: VPath, bytes: Vec<u8>, truncated: bool) -> Self {
+        let mut v = Self::base(path, bytes, truncated);
         v.recompute();
         v
+    }
+
+    /// Viewer en modo preview de plugin (M4-P5): pinta la salida del plugin en
+    /// vez de la vista cruda. El `output` es texto de un TERCERO → cada línea
+    /// (partida por `\n`) y el `plugin_name` se enmascaran con
+    /// [`crate::app::display_name`] (controles/bidi/invisibles → `�`).
+    #[must_use]
+    pub fn with_plugin_preview(path: VPath, plugin_name: String, output: &str) -> Self {
+        let lines = output
+            .split('\n')
+            .map(|l| crate::app::display_name(l.as_bytes()).0)
+            .collect();
+        let plugin_name = crate::app::display_name(&plugin_name.into_bytes()).0;
+        let mut v = Self::base(path, Vec::new(), false);
+        v.plugin_preview = Some(PluginPreviewView { plugin_name, lines });
+        v
+    }
+
+    /// El nombre del plugin si el viewer está en modo preview (para el
+    /// indicador «via …» de la cabecera), o `None` si es la vista cruda.
+    #[must_use]
+    pub fn preview_plugin(&self) -> Option<&str> {
+        self.plugin_preview.as_ref().map(|p| p.plugin_name.as_str())
     }
 
     fn recompute(&mut self) {
@@ -123,7 +164,9 @@ impl Viewer {
     /// Total de filas visibles en el modo actual.
     #[must_use]
     pub fn total_rows(&self) -> usize {
-        if self.hex {
+        if let Some(p) = &self.plugin_preview {
+            p.lines.len()
+        } else if self.hex {
             self.bytes.len().div_ceil(HEX_COLS)
         } else {
             self.lines
@@ -157,7 +200,15 @@ impl Viewer {
     /// nombres (spec §6).
     #[must_use]
     pub fn rows(&self, height: usize) -> Vec<String> {
-        if self.hex {
+        if let Some(p) = &self.plugin_preview {
+            // Ya enmascaradas al construir; mismo cálculo de ventana.
+            p.lines
+                .iter()
+                .skip(self.scroll)
+                .take(height)
+                .cloned()
+                .collect()
+        } else if self.hex {
             hex_rows(&self.bytes, self.scroll, height)
         } else {
             self.text
