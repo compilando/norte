@@ -1069,6 +1069,57 @@ async fn pending_resync_y_un_agente_ni_decide_ni_lista() {
     assert!(listed.pending.is_empty());
 }
 
+/// `agent_session` se valida fail-closed en el handshake (encoding-auditor H1
+/// de T5): controles, bidi, vacío o kilométrico → `INVALID_PARAMS`. El id
+/// viaja a journal, logs y modales de aprobación — jamás lo elige libre el
+/// agente.
+#[tokio::test]
+async fn agent_session_hostil_se_rechaza_en_initialize() {
+    let d = spawn_daemon(None).await;
+    let hostiles = [
+        "s1\nmem:///fake",       // inyección de líneas
+        "s1\u{202e}ypoc",        // override RTL
+        "s1\u{1b}]0;pwned\u{7}", // OSC/ANSI
+        "",                      // vacío
+        &"a".repeat(65),         // demasiado largo
+        "con espacios",          // fuera de charset
+    ];
+    for session in hostiles {
+        let c = Client::connect(&d.socket).await.expect("connect");
+        let err = c
+            .call::<_, methods::InitializeResult>(
+                methods::INITIALIZE,
+                &InitializeParams {
+                    client_info: client_info(),
+                    protocol_version: methods::PROTOCOL_VERSION.into(),
+                    encodings: vec!["json".into()],
+                    agent_session: Some(session.into()),
+                },
+            )
+            .await
+            .expect_err("sesión hostil rechazada");
+        assert!(
+            matches!(err, ClientError::Rpc(ref rpc) if rpc.code == codes::INVALID_PARAMS),
+            "esperaba INVALID_PARAMS para {session:?}, fue {err:?}"
+        );
+    }
+    // El charset legal completo pasa.
+    let c = Client::connect(&d.socket).await.expect("connect");
+    let ok: methods::InitializeResult = c
+        .call(
+            methods::INITIALIZE,
+            &InitializeParams {
+                client_info: client_info(),
+                protocol_version: methods::PROTOCOL_VERSION.into(),
+                encodings: vec!["json".into()],
+                agent_session: Some("Agente.Claude_01-x".into()),
+            },
+        )
+        .await
+        .expect("sesión válida");
+    assert_eq!(ok.protocol_version, methods::PROTOCOL_VERSION);
+}
+
 /// `policy.approval_required` va SOLO a conexiones humanas (security MAJOR-1):
 /// un agente suscrito no debe enumerar pasivamente rutas/ops de OTRAS sesiones
 /// — mismo criterio que el gate User-only de `policy.pending`.

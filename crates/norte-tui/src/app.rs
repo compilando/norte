@@ -121,10 +121,22 @@ fn name_bytes(e: &Entry) -> &[u8] {
 }
 
 /// ¿Debe enmascararse en un terminal? Cc (controles: `\n`, ESC — ratatui
-/// los BORRA en silencio y un frontend directo los ejecutaría) y los
-/// overrides bidi Cf (spoofing RTL del orden visual).
+/// los BORRA en silencio y un frontend directo los ejecutaría), los
+/// overrides bidi Cf (spoofing RTL del orden visual) y los INVISIBLES Cf/Zl/Zp
+/// (encoding-auditor H4 de M3-3b: dos nombres visualmente idénticos que
+/// difieren en bytes engañan a un humano que aprueba "el que ya vio"):
+/// ZWSP/ZWNJ, LRM/RLM/ALM, WORD JOINER, BOM/ZWNBSP, SOFT HYPHEN, TAG chars
+/// (strings enteros invisibles) y los separadores Zl/Zp (U+2028/9, que
+/// `is_control` no coge). ZWJ (U+200D) se PERMITE a sabiendas: enmascararlo
+/// rompería los emoji compuestos legítimos (fixture `emoji_zwj_family`) —
+/// fidelidad de emoji > el residual de un twin invisible solo-ZWJ.
 fn must_mask(c: char) -> bool {
-    c.is_control() || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+    c.is_control()
+        || matches!(c,
+            '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+            | '\u{200B}' | '\u{200C}' | '\u{200E}' | '\u{200F}' | '\u{061C}'
+            | '\u{2060}' | '\u{FEFF}' | '\u{00AD}' | '\u{2028}' | '\u{2029}'
+            | '\u{E0000}'..='\u{E007F}')
 }
 
 /// Nombre listo para pintar: `(texto, hostil)`. `hostil = true` cuando el
@@ -186,6 +198,11 @@ pub struct App {
     /// (una tecla en vuelo respondería a la pregunta equivocada); se
     /// atienden en orden al cerrarse el modal actual.
     pub pending_collisions: std::collections::VecDeque<crate::tasks::RetrySpec>,
+    /// Aprobaciones de policy a la espera de diálogo (M3-3b T5): misma
+    /// disciplina que las colisiones (jamás pisar un modal abierto), pero con
+    /// PRIORIDAD sobre ellas — una aprobación tiene TTL en el daemon y una
+    /// colisión espera lo que haga falta.
+    pub pending_approvals: std::collections::VecDeque<norte_proto::methods::PolicyApprovalRequired>,
     /// Tema resuelto + profundidad de color (ADR 0020). El render lee de aquí;
     /// el hot-reload lo reemplaza. Default = preset `default`.
     pub theme: crate::theme::TuiTheme,
@@ -253,6 +270,7 @@ impl App {
             viewer: None,
             help: None,
             pending_collisions: std::collections::VecDeque::new(),
+            pending_approvals: std::collections::VecDeque::new(),
             theme: crate::theme::TuiTheme::default(),
             theme_picker: None,
         }
@@ -359,6 +377,19 @@ impl App {
             self.modal = Some(Modal::Collision { retry });
         }
     }
+
+    /// Si no hay modal abierto, abre el siguiente diálogo pendiente:
+    /// aprobaciones de policy PRIMERO (tienen TTL en el daemon), colisiones
+    /// después. Llamar tras cerrar un modal y al llegar una aprobación.
+    pub fn open_next_pending(&mut self) {
+        if self.modal.is_none()
+            && let Some(req) = self.pending_approvals.pop_front()
+        {
+            self.modal = Some(Modal::ApproveAgentOp { req });
+            return;
+        }
+        self.open_next_collision();
+    }
 }
 
 /// Estado de la ayuda (F1).
@@ -421,6 +452,16 @@ pub enum Modal {
         /// La transferencia que colisionó, lista para reenviar.
         retry: crate::tasks::RetrySpec,
     },
+    /// Aprobación de una op de AGENTE bajo regla `ask` (M3-3b T5): el daemon
+    /// difundió `policy.approval_required` y espera `policy.decide`. Las
+    /// rutas son SOLO display (redactadas server-side): jamás se reparsean.
+    /// `y` aprueba, `n`/Esc deniegan; Enter NO aprueba (aprobar una mutación
+    /// de agente no es una respuesta inocua que merezca dispararse sola —
+    /// mismo principio que la colisión).
+    ApproveAgentOp {
+        /// La aprobación pendiente tal como llegó del daemon.
+        req: norte_proto::methods::PolicyApprovalRequired,
+    },
 }
 
 /// Resultado de una tecla sobre un modal.
@@ -457,6 +498,14 @@ pub fn dialog_key(modal: &Modal, code: crossterm::event::KeyCode) -> DialogOutco
             K::Char('s') => DialogOutcome::Retry(P::Skip),
             K::Char('r') => DialogOutcome::Retry(P::RenameAuto),
             K::Char('n') => DialogOutcome::Retry(P::Newer),
+            _ => DialogOutcome::Open,
+        },
+        // `Confirmed` = aprobar, `Cancelled` = DENEGAR (con el Esc global de
+        // arriba: cerrar este diálogo ES denegar — fail-safe, el agente
+        // recibe `not-approved`). Enter deliberadamente NO aprueba.
+        Modal::ApproveAgentOp { .. } => match code {
+            K::Char('y') => DialogOutcome::Confirmed,
+            K::Char('n') => DialogOutcome::Cancelled,
             _ => DialogOutcome::Open,
         },
     }

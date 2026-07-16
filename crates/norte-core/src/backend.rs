@@ -303,6 +303,34 @@ impl Backend {
             Self::Remote(r) => r.take_conn_events(),
         }
     }
+
+    /// Canal de aprobaciones de policy pendientes (M3-3b T5): cada
+    /// `policy.approval_required` del daemon (y el resync por
+    /// `policy.pending` al (re)conectar) llega aquí para que el frontend
+    /// pregunte al humano. `None` en embebido (sin agentes que aprobar por
+    /// esta vía) o si ya se tomó.
+    pub fn take_approvals(
+        &mut self,
+    ) -> Option<mpsc::UnboundedReceiver<norte_proto::methods::PolicyApprovalRequired>> {
+        match self {
+            Self::Embedded(_) => None,
+            #[cfg(unix)]
+            Self::Remote(r) => r.take_approvals(),
+        }
+    }
+
+    /// Resuelve una aprobación pendiente (`policy.decide`, M3-3b T5).
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo; `Unsupported` en embebido (las aprobaciones
+    /// solo llegan por el canal del daemon, así que aquí no hay qué decidir).
+    pub async fn policy_decide(&self, approval_id: u64, approve: bool) -> Result<(), Error> {
+        match self {
+            Self::Embedded(_) => Err(Error::Unsupported),
+            #[cfg(unix)]
+            Self::Remote(r) => r.policy_decide(approval_id, approve).await,
+        }
+    }
 }
 
 /// El backend remoto (solo unix, como el daemon — ADR 0011).
@@ -318,6 +346,7 @@ pub mod remote {
     use norte_proto::methods::{
         self, ClientInfo, FsCapabilitiesParams, FsCapabilitiesResult, FsCopyParams, FsDeleteParams,
         FsListParams, FsListResult, FsMoveParams, FsReadParams, FsReadResult, FsTaskResult,
+        PolicyApprovalRequired, PolicyDecideParams, PolicyDecideResult, PolicyPendingResult,
         TaskCancelParams, TaskCancelResult, TaskListParams, TaskListResult,
     };
     use norte_proto::{
@@ -413,6 +442,35 @@ pub mod remote {
         foreign_rx: Mutex<Option<mpsc::UnboundedReceiver<TaskRef>>>,
         events_tx: mpsc::UnboundedSender<ConnEvent>,
         events_rx: Mutex<Option<mpsc::UnboundedReceiver<ConnEvent>>>,
+        /// Aprobaciones de policy hacia el frontend (M3-3b T5): las notifs
+        /// `policy.approval_required` de la bomba + el resync de
+        /// `policy.pending` al (re)conectar.
+        approvals_tx: mpsc::UnboundedSender<PolicyApprovalRequired>,
+        approvals_rx: Mutex<Option<mpsc::UnboundedReceiver<PolicyApprovalRequired>>>,
+        /// `approval_id`s ya entregados al frontend: la entrega del daemon es
+        /// at-least-once (broadcast + resync pueden solapar; cada reconexión
+        /// re-lista pendientes) y un prompt de SEGURIDAD duplicado confunde
+        /// (MAJOR-1 del rust-reviewer). Dedup best-effort acotado.
+        seen_approvals: Mutex<std::collections::HashSet<u64>>,
+    }
+
+    impl Inner {
+        /// Entrega una aprobación al frontend UNA sola vez por `approval_id`
+        /// (la fuente es at-least-once: broadcast + resync de cada
+        /// reconexión). El set se poda entero al tope — dedup best-effort
+        /// (escala humana), jamás memoria sin límite.
+        fn push_approval(&self, req: PolicyApprovalRequired) {
+            let mut seen = self
+                .seen_approvals
+                .lock()
+                .expect("seen_approvals lock sano");
+            if seen.len() >= 1024 {
+                seen.clear();
+            }
+            if seen.insert(req.approval_id) {
+                let _ = self.approvals_tx.send(req);
+            }
+        }
     }
 
     /// Conexión (auto-reconectante) con el daemon. Clonable: todos los
@@ -436,6 +494,7 @@ pub mod remote {
         ) -> Result<Self, Error> {
             let (foreign_tx, foreign_rx) = mpsc::unbounded_channel();
             let (events_tx, events_rx) = mpsc::unbounded_channel();
+            let (approvals_tx, approvals_rx) = mpsc::unbounded_channel();
             let backend = Self {
                 inner: Arc::new(Inner {
                     socket,
@@ -448,6 +507,9 @@ pub mod remote {
                     foreign_rx: Mutex::new(Some(foreign_rx)),
                     events_tx,
                     events_rx: Mutex::new(Some(events_rx)),
+                    approvals_tx,
+                    approvals_rx: Mutex::new(Some(approvals_rx)),
+                    seen_approvals: Mutex::new(std::collections::HashSet::new()),
                 }),
             };
             // La 1ª conexión SÍ arranca el daemon (spawn); las reconexiones
@@ -498,6 +560,38 @@ pub mod remote {
             // (posiblemente reiniciado y vacío) ya no conoce jamás recibiría
             // su terminal — su `join()` colgaría. Se resuelve `Failed`.
             self.fail_orphans(&live);
+            // Resync de aprobaciones de policy pendientes (M3-3b T5): un Ask
+            // difundido ANTES de esta conexión no se pierde. Best-effort: un
+            // daemon N-1 (sin `policy.pending`) responde METHOD_NOT_FOUND y
+            // no pasa nada; el TTL de una pendiente sin ver la deniega solo.
+            match client
+                .call::<_, PolicyPendingResult>(methods::POLICY_PENDING, &serde_json::json!({}))
+                .await
+            {
+                Ok(listed) => {
+                    for p in listed.pending {
+                        self.inner.push_approval(PolicyApprovalRequired {
+                            approval_id: p.approval_id,
+                            session: p.session,
+                            op: p.op,
+                            paths: p.paths,
+                            // El TTL restante no viaja en `policy.pending`:
+                            // 0 = desconocido (documentado en proto).
+                            ttl_ms: 0,
+                        });
+                    }
+                }
+                // Se sigue igual en ambos casos, pero un fallo real no debe
+                // confundirse en silencio con un daemon N-1 (m4 del review).
+                Err(ClientError::Rpc(ref rpc))
+                    if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
+                {
+                    tracing::debug!("daemon sin policy.pending (N-1): resync omitido");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "resync de policy.pending falló");
+                }
+            }
             Ok(notifications)
         }
 
@@ -852,6 +946,34 @@ pub mod remote {
                 .expect("events_rx lock sano")
                 .take()
         }
+
+        pub(super) fn take_approvals(
+            &self,
+        ) -> Option<mpsc::UnboundedReceiver<PolicyApprovalRequired>> {
+            self.inner
+                .approvals_rx
+                .lock()
+                .expect("approvals_rx lock sano")
+                .take()
+        }
+
+        /// `policy.decide` contra el daemon (M3-3b T5).
+        pub(super) async fn policy_decide(
+            &self,
+            approval_id: u64,
+            approve: bool,
+        ) -> Result<(), Error> {
+            let _: PolicyDecideResult = self
+                .call_timed(
+                    methods::POLICY_DECIDE,
+                    &PolicyDecideParams {
+                        approval_id,
+                        approve,
+                    },
+                )
+                .await?;
+            Ok(())
+        }
     }
 
     /// Bomba vitalicia de notificaciones (M2 del rust-reviewer). Sostiene
@@ -867,6 +989,25 @@ pub mod remote {
         loop {
             // Consumo: NUNCA se retiene un Arc a través del `recv().await`.
             while let Some(n) = notifications.recv().await {
+                // Aprobación de policy pendiente (M3-3b T5): al frontend.
+                if n.method == methods::POLICY_APPROVAL_REQUIRED {
+                    // Malformada = descartada CON traza (m3 del review): el
+                    // agente esperará su TTL y alguien debe poder saber por qué.
+                    let Some(params) = n.params else {
+                        tracing::warn!("policy.approval_required sin params: descartada");
+                        continue;
+                    };
+                    let req = match serde_json::from_value::<PolicyApprovalRequired>(params) {
+                        Ok(req) => req,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "policy.approval_required malformada");
+                            continue;
+                        }
+                    };
+                    let Some(inner) = weak.upgrade() else { return };
+                    inner.push_approval(req);
+                    continue;
+                }
                 if n.method != methods::TASK_PROGRESS {
                     continue;
                 }

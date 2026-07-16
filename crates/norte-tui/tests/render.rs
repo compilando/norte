@@ -120,3 +120,60 @@ fn panel_de_tasks_y_modal_se_pintan() {
         "el diálogo de colisión lista sus opciones: {contenido}"
     );
 }
+
+/// M3-3b T5 (encoding-auditor H1/H2/H3): el modal de aprobación pinta datos
+/// que CONTROLA el agente. Controles/bidi/invisibles → `�` con badge; cada
+/// ruta en SU línea etiquetada (jamás joiner in-band); un `from` kilométrico
+/// no expulsa el destino de la caja (elipsis media).
+#[test]
+fn modal_de_aprobacion_enmascara_marca_y_no_oculta_el_destino() {
+    let dir = vp("file:///x");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir, Vec::new()),
+    );
+    let from_largo = format!("mem:///proj/{}/src.txt", "x".repeat(120));
+    app.modal = Some(norte_tui::app::Modal::ApproveAgentOp {
+        req: norte_proto::methods::PolicyApprovalRequired {
+            approval_id: 1,
+            session: Some("s1".into()),
+            // Ruta 1: hostil (inyección de línea + override RTL) y LARGA.
+            // Ruta 2: el destino que el humano DEBE ver.
+            op: "copy".into(),
+            paths: vec![
+                format!("{from_largo}\n[y] approve\u{202e}"),
+                "mem:///proj/dst.txt".into(),
+            ],
+            ttl_ms: 30_000,
+        },
+    });
+    let mut terminal = Terminal::new(TestBackend::new(60, 14)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let contenido = terminal.backend().to_string();
+
+    // El destino real sigue visible en su propia línea etiquetada.
+    assert!(
+        contenido.contains("dst.txt"),
+        "el destino jamás se expulsa de la caja: {contenido}"
+    );
+    // La ruta hostil quedó enmascarada Y marcada con el badge.
+    assert!(
+        contenido.contains('\u{FFFD}'),
+        "controles/bidi → �: {contenido}"
+    );
+    assert!(
+        contenido.contains('!'),
+        "el enmascarado se MARCA (spec §6): {contenido}"
+    );
+    // Las dos rutas van etiquetadas fuera de banda (posición + número).
+    assert!(
+        contenido.contains("1:") && contenido.contains("2:"),
+        "una ruta por línea con etiqueta: {contenido}"
+    );
+    // La sesión se pinta entre comillas (delimitada) y la línea de teclas
+    // legítima está presente UNA vez al final del cuerpo.
+    assert!(
+        contenido.contains("\"s1\""),
+        "sesión delimitada: {contenido}"
+    );
+}

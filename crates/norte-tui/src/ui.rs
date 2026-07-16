@@ -12,7 +12,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 use crate::app::{App, Pane, display_name, path_display};
 use crate::theme::TuiTheme;
-use norte_i18n::t;
+use norte_i18n::{t, ta};
 
 /// Badge de nombre hostil: PREFIJO en columna fija (al final moriría en el
 /// truncado por ancho de ratatui y el nombre se pintaría "limpio") y en
@@ -249,21 +249,58 @@ fn draw_modal(frame: &mut Frame<'_>, modal: &crate::app::Modal, theme: &TuiTheme
                 t("modal-collision-keys")
             ),
         ),
+        Modal::ApproveAgentOp { req } => {
+            // TODO lo interpolado aquí lo controla el AGENTE (encoding-
+            // auditor H1/H2/H3 de M3-3b) y esto es una decisión humana de
+            // seguridad: session y rutas pasan por el MISMO enmascarado que
+            // los nombres de pane (controles/bidi/invisibles → �) MÁS clamp
+            // de longitud; cada ruta va en SU línea con etiqueta fuera de
+            // banda (jamás un joiner in-band que un nombre pueda imitar) y
+            // elipsis media (un from kilométrico no expulsa el destino de la
+            // caja); el enmascarado se MARCA con el badge (spec §6).
+            let session = clamp_chars(&display_name(session_bytes(req)).0, 40);
+            let op = clamp_chars(&display_name(req.op.as_bytes()).0, 16);
+            let mut lineas = vec![ta(
+                "modal-approval-body",
+                &[("session", &session), ("op", &op)],
+            )];
+            for (i, p) in req.paths.iter().enumerate() {
+                let (texto, hostil) = display_name(p.as_bytes());
+                lineas.push(ta(
+                    "modal-approval-path",
+                    &[
+                        ("badge", if hostil { HOSTILE_BADGE } else { "" }),
+                        ("n", &(i + 1).to_string()),
+                        ("path", &middle_ellipsis(&texto, 46)),
+                    ],
+                ));
+            }
+            lineas.push(t("modal-approval-keys"));
+            (t("modal-approval-title"), lineas.join("\n"))
+        }
     };
-    // Un borrado PERMANENTE tiñe el borde de aviso (rol `warning`).
+    // Un borrado PERMANENTE (o aprobar una mutación de agente) tiñe el borde
+    // de aviso (rol `warning`).
     let permanent = matches!(
         modal,
         Modal::ConfirmDelete {
             permanent: true,
             ..
-        }
+        } | Modal::ApproveAgentOp { .. }
     );
     let border = if permanent {
         theme.role(Role::Warning)
     } else {
         theme.role(Role::ModalBorder)
     };
-    let area = centered(frame.area(), 60, 6);
+    // Altura: fija salvo la aprobación (una línea POR ruta, H2 del auditor).
+    let alto = match modal {
+        Modal::ApproveAgentOp { req } => u16::try_from(req.paths.len())
+            .unwrap_or(u16::MAX)
+            .saturating_add(4),
+        _ => 6,
+    };
+    let area = centered(frame.area(), 60, alto);
     frame.render_widget(ratatui::widgets::Clear, area);
     frame.render_widget(
         Paragraph::new(cuerpo).block(
@@ -275,6 +312,40 @@ fn draw_modal(frame: &mut Frame<'_>, modal: &crate::app::Modal, theme: &TuiTheme
         ),
         area,
     );
+}
+
+/// Bytes de la sesión para display; `None` = `?`. Sin colisión con una sesión
+/// literal `"?"`: el daemon valida el charset `[A-Za-z0-9._-]` en el
+/// handshake, así que `?` no es un id alcanzable.
+fn session_bytes(req: &norte_proto::methods::PolicyApprovalRequired) -> &[u8] {
+    req.session.as_deref().map_or(b"?", str::as_bytes)
+}
+
+/// Recorta a `max` CHARS (no bytes) con `…` final. Para strings ya
+/// enmascarados que aún podrían ser kilométricos (clamp de layout, H1).
+fn clamp_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_owned();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+/// Elipsis MEDIA a `max` chars: conserva cabeza (scheme) y cola (nombre) —
+/// lo que identifica la ruta ante un humano — y marca el recorte con `…`.
+fn middle_ellipsis(s: &str, max: usize) -> String {
+    let n = s.chars().count();
+    if n <= max {
+        return s.to_owned();
+    }
+    let keep = max.saturating_sub(1);
+    let head = keep / 2;
+    let tail = keep - head;
+    let mut out: String = s.chars().take(head).collect();
+    out.push('…');
+    out.extend(s.chars().skip(n - tail));
+    out
 }
 
 fn centered(base: Rect, w: u16, h: u16) -> Rect {

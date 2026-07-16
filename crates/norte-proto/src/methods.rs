@@ -316,6 +316,11 @@ pub struct InitializeParams {
     /// mutaciones se evalúan por el policy engine (M3-3). Ausente = frontend
     /// humano (`User`, sin sandbox). El servidor liga el actor a la conexión;
     /// un cliente no puede declararse `User` por otra vía.
+    ///
+    /// El id se valida server-side fail-closed: 1..=64 chars de
+    /// `[A-Za-z0-9._-]`, si no `INVALID_PARAMS` — viaja a journal, logs y
+    /// modales de aprobación de los frontends, jamás debe ser un vector de
+    /// inyección (controles/bidi) elegido por el agente.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_session: Option<String>,
 }
@@ -504,7 +509,9 @@ pub struct PolicyApprovalRequired {
     /// Rutas implicadas (wire, redactadas). SOLO display: jamás se reparsan a
     /// una operación — la op real va ligada server-side por `approval_id`.
     pub paths: Vec<String>,
-    /// TTL de la aprobación en milisegundos.
+    /// TTL de la aprobación en milisegundos. `0` = DESCONOCIDO (p. ej. una
+    /// pendiente reconstruida del resync de `policy.pending`, que no
+    /// transporta el TTL restante): el frontend no pinta cuenta atrás.
     pub ttl_ms: u64,
 }
 

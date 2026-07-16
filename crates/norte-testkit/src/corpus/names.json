@@ -93,5 +93,20 @@
     "id": "control_escape",
     "hex": "611b5b33316d62",
     "why": "ESC embebido en nombre UTF-8 válido: inyección ANSI en cualquier frontend que imprima sin enmascarar (ls del CLI, logs, títulos de terminal) — el display debe enmascarar Cc, jamás pasarlo crudo"
+  },
+  {
+    "id": "arrow_join_spoof",
+    "hex": "6120e28692206d656d5f622e747874",
+    "why": "'a → mem_b.txt': contiene el joiner visual '→' (U+2192, legítimo, no enmascarable) — un nombre simula DOS rutas en cualquier UI que concatene con separador in-band; etiquetar fuera de banda (posición/estilo), jamás por joiner"
+  },
+  {
+    "id": "zwsp_twin",
+    "hex": "61e2808b622e747874",
+    "why": "a<ZWSP>b.txt: invisible Cf — visualmente idéntico a ab.txt; dos entradas que un humano no distingue en un diálogo de aprobación"
+  },
+  {
+    "id": "tag_chars_smuggle",
+    "hex": "61f3a08181f3a0818262",
+    "why": "TAG chars (U+E0041,U+E0042): string invisible completo contrabandeado dentro del nombre; el render debe enmascararlos"
   }
 ]

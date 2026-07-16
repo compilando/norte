@@ -413,3 +413,228 @@ async fn task_en_vuelo_no_cuelga_si_el_daemon_muere() {
         "la huérfana se resuelve, no cuelga: {state:?}"
     );
 }
+
+// ---------- approval router por el backend (M3-3b T5) ----------
+
+/// Daemon con regla `ask` + router de aprobaciones (patrón de tests/daemon.rs).
+async fn spawn_daemon_ask() -> TestDaemon {
+    use norte_core::daemon::DaemonApprovalResolver;
+    use norte_core::{PolicyConfig, ScopeRegistry, ScopedPolicy};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    let scopes = ScopeRegistry::new();
+    let cfg = PolicyConfig::parse("[[rule]]\naction=\"ask\"").expect("policy cfg");
+    let policy = ScopedPolicy::new(scopes.clone(), cfg);
+    let approvals = Arc::new(DaemonApprovalResolver::new(Duration::from_secs(30)));
+    let engine = Arc::new(Engine::new().with_policy(Arc::new(policy), Arc::clone(&approvals) as _));
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    let daemon = norte_core::daemon::Daemon::bind_with_policy(
+        engine,
+        scopes,
+        approvals,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+        },
+    )
+    .await
+    .expect("bind");
+    let run = tokio::spawn(daemon.run());
+    TestDaemon {
+        socket,
+        _run: run,
+        _dir: dir,
+        mem,
+    }
+}
+
+/// Conexión cruda de AGENTE con scope de copy sobre `mem:///proj` ya concedido
+/// (request por el agente + grant por un humano efímero).
+async fn agent_with_scope(d: &TestDaemon, session: &str) -> norte_core::daemon::Client {
+    use norte_proto::methods::{
+        self, GrantScopeParams, GrantScopeResult, InitializeParams, RequestScopeParams,
+        RequestScopeResult,
+    };
+    let agent = norte_core::daemon::Client::connect(&d.socket)
+        .await
+        .expect("connect agente");
+    let _: methods::InitializeResult = agent
+        .call(
+            methods::INITIALIZE,
+            &InitializeParams {
+                client_info: ClientInfo {
+                    name: "agent".into(),
+                    version: "0.0.0".into(),
+                },
+                protocol_version: methods::PROTOCOL_VERSION.into(),
+                encodings: vec!["json".into()],
+                agent_session: Some(session.into()),
+            },
+        )
+        .await
+        .expect("initialize agente");
+    let req: RequestScopeResult = agent
+        .call(
+            methods::POLICY_REQUEST_SCOPE,
+            &RequestScopeParams {
+                session: session.into(),
+                roots: vec![vp("mem:///proj")],
+                ops: vec!["copy".into()],
+                ttl_ms: 60_000,
+            },
+        )
+        .await
+        .expect("request_scope");
+    let mut human = norte_core::daemon::Client::connect(&d.socket)
+        .await
+        .expect("connect humano");
+    human
+        .initialize(ClientInfo {
+            name: "granter".into(),
+            version: "0.0.0".into(),
+        })
+        .await
+        .expect("initialize humano");
+    let _: GrantScopeResult = human
+        .call(
+            methods::POLICY_GRANT_SCOPE,
+            &GrantScopeParams {
+                request_id: req.request_id,
+            },
+        )
+        .await
+        .expect("grant_scope");
+    agent
+}
+
+/// Lanza el fs.copy del agente en una task propia (queda suspendido en el Ask).
+fn spawn_agent_copy(
+    agent: norte_core::daemon::Client,
+) -> tokio::task::JoinHandle<
+    Result<norte_proto::methods::FsTaskResult, norte_core::daemon::ClientError>,
+> {
+    use norte_proto::methods::{self, FsCopyParams};
+    tokio::spawn(async move {
+        agent
+            .call::<_, methods::FsTaskResult>(
+                methods::FS_COPY,
+                &FsCopyParams {
+                    from: vp("mem:///proj/src.txt"),
+                    to: vp("mem:///proj/dst.txt"),
+                    on_collision: norte_proto::CollisionPolicy::default(),
+                    symlinks: norte_proto::SymlinkPolicy::default(),
+                    resume: norte_proto::ResumePolicy::default(),
+                    verify: norte_proto::VerifyPolicy::default(),
+                },
+            )
+            .await
+    })
+}
+
+/// El camino VIVO del T5: la bomba del `RemoteBackend` enruta
+/// `policy.approval_required` al canal de `take_approvals`, y
+/// `Backend::policy_decide(approve)` desbloquea la copia del agente.
+#[tokio::test]
+async fn backend_recibe_approval_y_decide_aprueba() {
+    let d = spawn_daemon_ask().await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
+    write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
+    let mut backend = Backend::Remote(remote(&d).await);
+    let mut approvals = backend.take_approvals().expect("canal de approvals");
+
+    let agent = agent_with_scope(&d, "s1").await;
+    let copy = spawn_agent_copy(agent);
+
+    let req = tokio::time::timeout(Duration::from_secs(5), approvals.recv())
+        .await
+        .expect("approval llega")
+        .expect("canal vivo");
+    assert_eq!(req.op, "copy");
+    assert_eq!(req.session.as_deref(), Some("s1"));
+
+    backend
+        .policy_decide(req.approval_id, true)
+        .await
+        .expect("decide approve");
+    let res = tokio::time::timeout(Duration::from_secs(5), copy)
+        .await
+        .expect("no cuelga")
+        .expect("join");
+    assert!(res.expect("aprobada procede").task_id.get() > 0);
+}
+
+/// El camino de RESYNC del T5: un `RemoteBackend` que conecta DESPUÉS del
+/// broadcast recibe la pendiente vía `policy.pending` (`ttl_ms` 0 =
+/// desconocido) y puede denegarla.
+#[tokio::test]
+async fn backend_tardio_resincroniza_pendientes_y_deniega() {
+    let d = spawn_daemon_ask().await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
+    write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
+
+    let agent = agent_with_scope(&d, "s1").await;
+    let copy = spawn_agent_copy(agent);
+    // Sincroniza: espera a que el Ask esté REGISTRADO en el daemon antes de
+    // conectar el backend (sin esto, la pendiente podría llegarle por
+    // broadcast con ttl real y el assert de resync sería flaky — MAJOR-2 del
+    // rust-reviewer). Poll con un humano crudo a `policy.pending`.
+    {
+        let mut probe = norte_core::daemon::Client::connect(&d.socket)
+            .await
+            .expect("connect probe");
+        probe
+            .initialize(ClientInfo {
+                name: "probe".into(),
+                version: "0.0.0".into(),
+            })
+            .await
+            .expect("initialize probe");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let listed: norte_proto::methods::PolicyPendingResult = probe
+                .call(norte_proto::methods::POLICY_PENDING, &serde_json::json!({}))
+                .await
+                .expect("policy.pending");
+            if !listed.pending.is_empty() {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "el Ask nunca llegó a pendiente"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // El probe muere aquí: al conectar el backend, el resync es el único
+        // camino posible para la pendiente ya registrada.
+    }
+
+    // El frontend conecta TARDE: la pendiente le llega por el resync.
+    let mut backend = Backend::Remote(remote(&d).await);
+    let mut approvals = backend.take_approvals().expect("canal de approvals");
+    let req = tokio::time::timeout(Duration::from_secs(5), approvals.recv())
+        .await
+        .expect("resync entrega la pendiente")
+        .expect("canal vivo");
+    assert_eq!(req.op, "copy");
+    assert_eq!(req.ttl_ms, 0, "TTL desconocido en el resync");
+
+    backend
+        .policy_decide(req.approval_id, false)
+        .await
+        .expect("decide deny");
+    let res = tokio::time::timeout(Duration::from_secs(5), copy)
+        .await
+        .expect("no cuelga")
+        .expect("join");
+    let err = res.expect_err("denegada");
+    assert!(
+        matches!(
+            err,
+            norte_core::daemon::ClientError::Rpc(ref rpc)
+                if matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved")
+        ),
+        "PolicyDenied not-approved, fue {err:?}"
+    );
+}

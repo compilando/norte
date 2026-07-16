@@ -11,6 +11,10 @@ modal-collision-title = Colisión
 modal-collision-body = el destino ya existe:
 modal-collision-keys = [o]sobrescribir  [s]altar  [r]enombrar  [n]más nuevo  [esc]cancelar
 modal-confirm-keys = [y/enter] adelante   [n/esc] cancelar
+modal-approval-title = Aprobación de agente
+modal-approval-body = el agente "{ $session }" pide { $op }:
+modal-approval-path = { $badge }ruta { $n }: { $path }
+modal-approval-keys = [y] aprobar   [n/esc] denegar
 
 # --- Mensajes de la barra ---
 msg-done = hecho

@@ -5,7 +5,7 @@ use norte_testkit::corpus::{content_fixtures, hostile_names};
 
 #[test]
 fn corpus_counts() {
-    assert_eq!(hostile_names().len(), 19, "nombres hostiles");
+    assert_eq!(hostile_names().len(), 22, "nombres hostiles");
     assert_eq!(content_fixtures().len(), 9, "contenidos detectables");
     assert_eq!(
         norte_testkit::corpus::content_fixtures_forced().len(),

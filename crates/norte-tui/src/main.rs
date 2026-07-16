@@ -121,6 +121,7 @@ async fn main() -> Result<()> {
     // y avisos de (re)conexión — se drenan en el loop principal.
     let foreign_tasks = backend.take_foreign_tasks();
     let conn_events = backend.take_conn_events();
+    let approvals = backend.take_approvals();
     let mut help_lines = norte_tui::help::build(&browse_eff, &viewer_eff);
     let mut resolver = Resolver::new(browse_eff);
     let mut viewer_resolver = Resolver::new(viewer_eff);
@@ -145,6 +146,7 @@ async fn main() -> Result<()> {
         cfg_rx,
         foreign_tasks,
         conn_events,
+        approvals,
     )
     .await;
     ratatui::restore();
@@ -266,6 +268,9 @@ async fn run(
     mut cfg_rx: tokio::sync::mpsc::Receiver<()>,
     mut foreign_tasks: Option<tokio::sync::mpsc::UnboundedReceiver<norte_core::backend::TaskRef>>,
     mut conn_events: Option<tokio::sync::mpsc::UnboundedReceiver<ConnEvent>>,
+    mut approvals: Option<
+        tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::PolicyApprovalRequired>,
+    >,
 ) -> Result<()> {
     let mut events = EventStream::new();
     // Tick del panel de tasks: copia snapshots del watch (jamás bloquea).
@@ -312,6 +317,17 @@ async fn run(
                     ConnEvent::Lost => t("msg-daemon-lost"),
                     ConnEvent::Restored => t("msg-daemon-restored"),
                 });
+            }
+            Some(req) = async {
+                match &mut approvals {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                // Aprobación de policy pendiente (M3-3b T5): a la cola de
+                // diálogos (jamás pisa un modal abierto) y se abre si procede.
+                app.pending_approvals.push_back(req);
+                app.open_next_pending();
             }
             msg = async {
                 match &mut fill {
@@ -533,7 +549,7 @@ async fn reload_config(
 async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream) -> bool {
     let finished = app.board.tick();
     if finished.is_empty() {
-        app.open_next_collision();
+        app.open_next_pending();
         return false;
     }
     let mut refresh = false;
@@ -573,7 +589,7 @@ async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream) -> 
             _ => {}
         }
     }
-    app.open_next_collision();
+    app.open_next_pending();
     if refresh {
         refresh_panes(app, backend, events).await;
     }
@@ -640,11 +656,16 @@ async fn on_dialog_key(app: &mut App, backend: &Backend, code: KeyCode) {
         DialogOutcome::Open => {}
         DialogOutcome::Cancelled => {
             app.modal = None;
-            app.open_next_collision();
+            app.open_next_pending();
+            // Cerrar el diálogo de aprobación ES denegar (fail-safe): el
+            // agente recibe `not-approved`, jamás una espera colgada.
+            if let Modal::ApproveAgentOp { req } = modal {
+                decide_approval(app, backend, req.approval_id, false).await;
+            }
         }
         DialogOutcome::Confirmed => {
             app.modal = None;
-            app.open_next_collision();
+            app.open_next_pending();
             match modal {
                 Modal::ConfirmDelete { target, permanent } => {
                     let mode = if permanent {
@@ -664,6 +685,9 @@ async fn on_dialog_key(app: &mut App, backend: &Backend, code: KeyCode) {
                     submit_transfer(app, backend, kind, from, to, TransferOptions::default()).await;
                 }
                 Modal::Collision { .. } => {}
+                Modal::ApproveAgentOp { req } => {
+                    decide_approval(app, backend, req.approval_id, true).await;
+                }
             }
         }
         DialogOutcome::Retry(policy) => {
@@ -676,8 +700,17 @@ async fn on_dialog_key(app: &mut App, backend: &Backend, code: KeyCode) {
                 };
                 submit_transfer(app, backend, retry.kind, retry.from, retry.to, opts).await;
             }
-            app.open_next_collision();
+            app.open_next_pending();
         }
+    }
+}
+
+/// Resuelve una aprobación de policy (`policy.decide`, M3-3b T5). Un error
+/// (id ya vencido/decidido por otro frontend, daemon caído) sale por la
+/// barra: la pendiente, si sigue viva, vencerá por TTL — jamás se cuelga.
+async fn decide_approval(app: &mut App, backend: &Backend, approval_id: u64, approve: bool) {
+    if let Err(e) = backend.policy_decide(approval_id, approve).await {
+        app.message = Some(ta("msg-error", &[("error", &e.to_string())]));
     }
 }
 

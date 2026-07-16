@@ -32,6 +32,18 @@ fn collision() -> Modal {
     Modal::Collision { retry: retry() }
 }
 
+fn approval() -> Modal {
+    Modal::ApproveAgentOp {
+        req: norte_proto::methods::PolicyApprovalRequired {
+            approval_id: 7,
+            session: Some("s1".into()),
+            op: "copy".into(),
+            paths: vec!["mem:///proj/a".into(), "mem:///proj/b".into()],
+            ttl_ms: 60_000,
+        },
+    }
+}
+
 #[test]
 fn confirmacion_acepta_y_cancela() {
     for code in [KeyCode::Enter, KeyCode::Char('y')] {
@@ -80,6 +92,57 @@ fn colision_elige_politica_o_cancela() {
         dialog_key(&collision(), KeyCode::Enter),
         DialogOutcome::Open
     );
+}
+
+/// Aprobación de agente (M3-3b T5): `y` aprueba, `n`/Esc DENIEGAN (cerrar es
+/// denegar, fail-safe) y Enter NO aprueba — aprobar una mutación de agente no
+/// es respuesta inocua que merezca default (mismo principio que la colisión).
+#[test]
+fn aprobacion_aprueba_con_y_deniega_con_n_esc_y_enter_no_es_default() {
+    assert_eq!(
+        dialog_key(&approval(), KeyCode::Char('y')),
+        DialogOutcome::Confirmed
+    );
+    for code in [KeyCode::Char('n'), KeyCode::Esc] {
+        assert_eq!(dialog_key(&approval(), code), DialogOutcome::Cancelled);
+    }
+    for code in [KeyCode::Enter, KeyCode::Char('z')] {
+        assert_eq!(dialog_key(&approval(), code), DialogOutcome::Open);
+    }
+}
+
+/// Las aprobaciones hacen cola como las colisiones (jamás pisan un modal
+/// abierto) y tienen PRIORIDAD sobre ellas: una aprobación vence por TTL en
+/// el daemon; una colisión espera lo que haga falta.
+#[test]
+fn las_aprobaciones_hacen_cola_con_prioridad_sobre_colisiones() {
+    use norte_tui::app::{App, Pane};
+    let dir = vp("file:///x");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir, Vec::new()),
+    );
+    let Modal::ApproveAgentOp { req } = approval() else {
+        unreachable!()
+    };
+    app.modal = Some(confirm());
+    app.pending_collisions.push_back(retry());
+    app.pending_approvals.push_back(req);
+
+    // Con un modal abierto, nada cambia.
+    app.open_next_pending();
+    assert_eq!(app.modal, Some(confirm()), "el modal abierto no se pisa");
+
+    // Al cerrarse, la APROBACIÓN sale antes que la colisión encolada primero.
+    app.modal = None;
+    app.open_next_pending();
+    assert!(matches!(app.modal, Some(Modal::ApproveAgentOp { .. })));
+    app.modal = None;
+    app.open_next_pending();
+    assert!(matches!(app.modal, Some(Modal::Collision { .. })));
+    app.modal = None;
+    app.open_next_pending();
+    assert_eq!(app.modal, None, "colas vacías");
 }
 
 #[test]

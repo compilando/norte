@@ -507,6 +507,16 @@ fn prepare_socket_dir(dir: &Path) -> Result<(), DaemonError> {
     Ok(())
 }
 
+/// ¿Es un id de sesión de agente admisible? Charset cerrado `[A-Za-z0-9._-]`,
+/// 1..=64: el id viaja a journal, tracing y modales de aprobación de TODOS
+/// los frontends — un charset cerrado en la frontera vale más que confiar en
+/// que cada consumidor enmascare (que además deben, defensa en profundidad).
+fn valid_agent_session(s: &str) -> bool {
+    (1..=64).contains(&s.len())
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
 /// ¿Se admite a este peer? Solo el MISMO uid (spec §17.6). Root NO entra:
 /// un daemon de usuario no es superficie para procesos privilegiados.
 fn peer_allowed(peer_uid: u32, daemon_uid: u32) -> bool {
@@ -1009,7 +1019,16 @@ async fn dispatch(
             // El servidor liga el actor a la conexión (deuda M3 de 3a): una
             // conexión con `agent_session` ES una sesión de agente y se
             // sandboxea; sin él es `User` (humano). No es declarable al revés.
+            // El id se VALIDA fail-closed (encoding-auditor H1 de M3-3b): va a
+            // journal, logs y UIs de aprobación — jamás un vector de inyección
+            // de controles/bidi elegido por el agente.
             if let Some(session) = p.agent_session {
+                if !valid_agent_session(&session) {
+                    return Err(RpcError::protocol(
+                        codes::INVALID_PARAMS,
+                        "agent_session must be 1..=64 chars of [A-Za-z0-9._-]",
+                    ));
+                }
                 conn.actor = crate::journal::Actor::Agent { session };
             }
             conn.initialized = true;
