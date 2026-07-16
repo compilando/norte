@@ -691,11 +691,24 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.11.0 (M3-3b): acepta 0.11.x (N) y 0.10.x (N-1), rechaza 0.9.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.11.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.10.0"), "N-1");
+    // 0.12.0 (M3-4): acepta 0.12.x (N) y 0.11.x (N-1), rechaza 0.10.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.12.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.11.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.9.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.10.9"),
         "N-2 fuera de la ventana"
     );
+}
+
+#[test]
+fn session_undo_roundtrip() {
+    use norte_proto::methods::{PolicyUndoSessionParams, PolicyUndoSessionResult};
+    let p: PolicyUndoSessionParams = serde_json::from_str(r#"{"session":"claude"}"#).unwrap();
+    assert_eq!(p.session, "claude");
+    assert_eq!(
+        serde_json::to_string(&p).unwrap(),
+        r#"{"session":"claude"}"#
+    );
+    let r: PolicyUndoSessionResult = serde_json::from_str(r#"{"task_id":9}"#).unwrap();
+    assert_eq!(r.task_id.get(), 9);
 }

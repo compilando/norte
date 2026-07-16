@@ -76,7 +76,7 @@ que nadie revisó.
 
 ### Undo humano de sesión de agente por el wire
 
-`session.undo {session}` (proto 0.12.0, solo conexiones User) revierte la
+`policy.undo_session {session}` (proto 0.12.0, solo conexiones User) revierte la
 sesión completa de un agente en LIFO estricto. En el engine, el undo separa
 **target** (de quién son las entradas) de **ejecutor** (quién pasa el gate y
 firma las compensaciones): el humano deshace aunque el scope del agente haya

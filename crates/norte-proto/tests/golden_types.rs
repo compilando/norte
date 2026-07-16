@@ -352,7 +352,27 @@ fn golden_methods() {
     check_methods_v05(&fixtures);
     check_methods_connection(&fixtures);
     check_methods_policy(&fixtures);
-    assert_eq!(fixtures.len(), 41, "[methods.json] fixtures sin caso Rust");
+    check_methods_session(&fixtures);
+    assert_eq!(fixtures.len(), 43, "[methods.json] fixtures sin caso Rust");
+}
+
+/// Familia session.* (0.12.0, M3-4): undo de sesión de agente por el wire.
+fn check_methods_session(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{PolicyUndoSessionParams, PolicyUndoSessionResult};
+    check_one(
+        fixtures,
+        "policy_undo_session_params",
+        &PolicyUndoSessionParams {
+            session: "claude".into(),
+        },
+    );
+    check_one(
+        fixtures,
+        "policy_undo_session_result",
+        &PolicyUndoSessionResult {
+            task_id: norte_proto::TaskId::new(9),
+        },
+    );
 }
 
 /// Familia policy.* (0.11.0, M3-3b): scopes + aprobaciones + `agent_session`.
@@ -820,10 +840,21 @@ fn method_names_frozen() {
         methods::CONNECTION_TRUST_HOST_KEY,
         "connection.trust_host_key"
     );
+    // Familia policy.* (0.11.0/0.12.0): gobernanza de agentes. El pin llegó
+    // con retraso (MINOR-1 del protocol-guardian en el bump 0.12).
+    assert_eq!(methods::POLICY_REQUEST_SCOPE, "policy.request_scope");
+    assert_eq!(methods::POLICY_GRANT_SCOPE, "policy.grant_scope");
+    assert_eq!(methods::POLICY_DECIDE, "policy.decide");
+    assert_eq!(methods::POLICY_PENDING, "policy.pending");
+    assert_eq!(
+        methods::POLICY_APPROVAL_REQUIRED,
+        "policy.approval_required"
+    );
+    assert_eq!(methods::POLICY_UNDO_SESSION, "policy.undo_session");
     assert_eq!(methods::FS_READ_MAX_CHUNK, 8 * 1024 * 1024);
     assert_eq!(methods::FS_LIST_MAX_PAGE, 10_000);
-    // 0.11.0: policy engine por el protocolo (M3-3b). Aditivo sobre 0.10.x.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.11.0");
+    // 0.12.0: policy.undo_session (M3-4). Aditivo sobre 0.11.x.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.12.0");
 }
 
 #[test]

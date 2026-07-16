@@ -210,5 +210,7 @@
         "paths": ["file:///work/x"]
       }
     ]
-  }
+  },
+  "policy_undo_session_params": { "session": "claude" },
+  "policy_undo_session_result": { "task_id": 9 }
 }

@@ -49,7 +49,10 @@ use crate::{
 /// agent_session` (liga la conexión a una sesión de agente) + métodos
 /// `policy.request_scope`/`grant_scope`/`decide`/`pending` + notificación
 /// `policy.approval_required`. Aditivo sobre 0.10.x.
-pub const PROTOCOL_VERSION: &str = "0.11.0";
+///
+/// 0.12.0 (M3-4): `policy.undo_session` — un humano deshace la sesión completa de
+/// un agente (LIFO estricto, corre como Task). Aditivo sobre 0.11.x.
+pub const PROTOCOL_VERSION: &str = "0.12.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -170,6 +173,13 @@ pub const POLICY_PENDING: &str = "policy.pending";
 /// `policy.approval_required` — notificación server→client: una op `ask`
 /// espera decisión (M3-3b).
 pub const POLICY_APPROVAL_REQUIRED: &str = "policy.approval_required";
+/// `policy.undo_session` — deshace la sesión de un AGENTE completa (M3-4):
+/// un humano revierte en LIFO estricto todo lo que hizo `session`. Solo
+/// conexiones User (una sesión de agente no deshace a otras ni a sí misma
+/// por esta vía). Vive en `policy.*` (la familia de gobernanza de agentes:
+/// scopes, aprobaciones, undo) — `session.*` queda reservado para la sesión
+/// de UI (spec §11).
+pub const POLICY_UNDO_SESSION: &str = "policy.undo_session";
 
 /// Params de [`FS_LIST`] (paginación por cursor desde 0.8.0, ADR 0017).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -548,4 +558,20 @@ pub struct PendingApproval {
 pub struct PolicyPendingResult {
     /// Aprobaciones pendientes.
     pub pending: Vec<PendingApproval>,
+}
+
+/// Params de [`POLICY_UNDO_SESSION`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyUndoSessionParams {
+    /// Sesión de agente cuyas mutaciones se deshacen (mismo formato que
+    /// `agent_session` del initialize: `[A-Za-z0-9._-]`, 1..=64).
+    pub session: String,
+}
+
+/// Result de [`POLICY_UNDO_SESSION`]: el undo corre como Task (progreso por
+/// `task.progress`, cancelable con `task.cancel`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyUndoSessionResult {
+    /// Task del undo.
+    pub task_id: TaskId,
 }
