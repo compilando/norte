@@ -172,34 +172,53 @@
     "tasks": []
   },
   "initialize_params_agent": {
-    "client_info": { "name": "mcp", "version": "1" },
+    "client_info": {
+      "name": "mcp",
+      "version": "1"
+    },
     "protocol_version": "0.11.0",
     "encodings": [],
     "agent_session": "s1"
   },
   "request_scope_params": {
     "session": "s1",
-    "roots": ["file:///work"],
-    "ops": ["copy", "delete"],
+    "roots": [
+      "file:///work"
+    ],
+    "ops": [
+      "copy",
+      "delete"
+    ],
     "ttl_ms": 60000
   },
-  "request_scope_result": { "request_id": 3 },
-  "grant_scope_params": { "request_id": 3 },
+  "request_scope_result": {
+    "request_id": 3
+  },
+  "grant_scope_params": {
+    "request_id": 3
+  },
   "grant_scope_result": {},
   "policy_approval_required": {
     "approval_id": 7,
     "session": "s1",
     "op": "delete",
-    "paths": ["file:///work/x"],
+    "paths": [
+      "file:///work/x"
+    ],
     "ttl_ms": 30000
   },
-  "policy_decide_params": { "approval_id": 7, "approve": true },
+  "policy_decide_params": {
+    "approval_id": 7,
+    "approve": true
+  },
   "policy_decide_result": {},
   "pending_approval": {
     "approval_id": 7,
     "session": "s1",
     "op": "delete",
-    "paths": ["file:///work/x"]
+    "paths": [
+      "file:///work/x"
+    ]
   },
   "policy_pending_result": {
     "pending": [
@@ -207,19 +226,27 @@
         "approval_id": 7,
         "session": "s1",
         "op": "delete",
-        "paths": ["file:///work/x"]
+        "paths": [
+          "file:///work/x"
+        ]
       }
     ]
   },
-  "policy_undo_session_params": { "session": "claude" },
-  "policy_undo_session_result": { "task_id": 9 },
+  "policy_undo_session_params": {
+    "session": "claude"
+  },
+  "policy_undo_session_result": {
+    "task_id": 9
+  },
   "plugin_info": {
     "id": "org.norte.demo",
     "name": "Demo Previewer",
     "publisher": "norte",
     "version": "0.1.0",
     "category": "previewer",
-    "capabilities": ["fs-read"],
+    "capabilities": [
+      "fs-read"
+    ],
     "approved": true,
     "enabled": true
   },
@@ -231,17 +258,29 @@
         "publisher": "norte",
         "version": "0.1.0",
         "category": "previewer",
-        "capabilities": ["fs-read"],
+        "capabilities": [
+          "fs-read"
+        ],
         "approved": false,
         "enabled": false
       }
     ],
     "errors": [
-      { "dir": "/plugins/broken", "reason": "manifiesto inválido" }
+      {
+        "dir": "/plugins/broken",
+        "reason": "manifiesto inválido"
+      }
     ]
   },
-  "plugin_set_approval_params": { "id": "org.norte.demo", "approved": true },
+  "plugin_set_approval_params": {
+    "id": "org.norte.demo",
+    "approved": true
+  },
   "plugin_set_approval_result": {},
-  "plugin_set_enabled_params": { "id": "org.norte.demo", "enabled": false },
-  "plugin_set_enabled_result": {}
+  "plugin_set_enabled_params": {
+    "id": "org.norte.demo",
+    "enabled": false
+  },
+  "plugin_set_enabled_result": {},
+  "plugin_list_params": {}
 }

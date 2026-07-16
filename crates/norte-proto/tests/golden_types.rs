@@ -354,15 +354,17 @@ fn golden_methods() {
     check_methods_policy(&fixtures);
     check_methods_session(&fixtures);
     check_methods_plugin(&fixtures);
-    assert_eq!(fixtures.len(), 49, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 50, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia plugin.* (0.13.0, M4-P3): catálogo + aprobación/activación humanas.
 fn check_methods_plugin(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
-        PluginInfo, PluginListResult, PluginLoadError, PluginSetApprovalParams,
+        PluginInfo, PluginListParams, PluginListResult, PluginLoadError, PluginSetApprovalParams,
         PluginSetApprovalResult, PluginSetEnabledParams, PluginSetEnabledResult,
     };
+    // `plugin.list` sin params: golden vacío, simetría con `task_list_params`.
+    check_one(fixtures, "plugin_list_params", &PluginListParams {});
     check_one(
         fixtures,
         "plugin_info",
