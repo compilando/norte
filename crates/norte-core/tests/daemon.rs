@@ -2349,7 +2349,7 @@ async fn task_cancel_de_agente_no_toca_task_del_humano() {
     // un runner cargado — si terminara antes, el test pasaría en vacío.
     d.mem
         .faults()
-        .set_latency_per_op(Some(Duration::from_millis(250)));
+        .set_latency_per_op(Some(Duration::from_millis(500)));
     let mut human = connected_client(&d).await;
     let agent = connected_agent(&d, "sess-cancel").await;
 
@@ -2393,7 +2393,7 @@ async fn task_cancel_de_agente_cancela_la_suya() {
     // terminal sería Completed y el test fallaría por timing, no por gate.
     d.mem
         .faults()
-        .set_latency_per_op(Some(Duration::from_millis(250)));
+        .set_latency_per_op(Some(Duration::from_millis(500)));
     let mut agent = connected_agent(&d, "sess-own").await;
 
     let task: FsTaskResult = agent

@@ -38,6 +38,13 @@ struct FaultState {
     /// Las próximas `n` MUTACIONES que se apliquen devuelven error
     /// transitorio DESPUÉS de aplicar su efecto (ambigüedad post-efecto).
     ambiguous_next: u64,
+    /// `copy_native` se queda PENDIENTE mientras esté armado (simula un
+    /// multipart copy S3 de minutos): solo la cancelación del caller —
+    /// dropear el future — lo termina. Determinista, sin latencia global.
+    hold_copy_native: bool,
+    /// `true` desde que un `copy_native` ENTRÓ en el gate: el test sincroniza
+    /// su cancel con esta señal, sin sleeps a ciegas.
+    copy_native_entered: bool,
 }
 
 impl Faults {
@@ -89,6 +96,31 @@ impl Faults {
     /// otra causa NO consumen el contador.
     pub fn ambiguous_mutations(&self, n: u64) {
         self.lock().ambiguous_next = n;
+    }
+
+    /// Arma (o desarma) el gate de `copy_native`: armado, la copia nativa se
+    /// queda PENDIENTE indefinidamente — el equivalente determinista de un
+    /// multipart copy S3 de minutos (#51). El caller escapa cancelando
+    /// (dropeando el future) o desarmando el gate (`false` / [`Self::clear`],
+    /// se observa en ≤20ms); las demás operaciones no se ven afectadas.
+    pub fn hold_copy_native(&self, hold: bool) {
+        self.lock().hold_copy_native = hold;
+    }
+
+    /// `true` si algún `copy_native` ya ENTRÓ en el gate: el test espera esta
+    /// señal antes de cancelar — determinista, sin sleeps a ciegas.
+    #[must_use]
+    pub fn copy_native_entered(&self) -> bool {
+        self.lock().copy_native_entered
+    }
+
+    pub(crate) async fn copy_native_gate(&self) {
+        // Poll barato: compatible con `tokio::time::pause` y sin retener el
+        // lock a través del await.
+        self.lock().copy_native_entered = true;
+        while self.lock().hold_copy_native {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
 
     /// Borra toda la configuración de fallos.

@@ -883,6 +883,9 @@ impl MemProvider {
 
     async fn copy_native_inner(&self, from: &VPath, to: &VPath) -> Result<(), Error> {
         self.faults.op_gate().await?;
+        // Gate específico (#51): simula el multipart copy largo de S3 — se
+        // queda pendiente hasta que el test lo suelte o el caller cancele.
+        self.faults.copy_native_gate().await;
         let from_key = seg_path(from);
         let to_key = seg_path(to);
         if to_key.is_empty() {

@@ -239,6 +239,18 @@ pub trait Provider: Send + Sync {
     /// Si el destino ya existe: [`Error::Conflict`] — MISMA política que
     /// [`Self::write`]. Un backend cuyo copy nativo sobrescribe por defecto
     /// (S3 `CopyObject`) DEBE chequear antes; jamás sobrescritura silenciosa.
+    ///
+    /// **Contrato de cancelación (#51, regla 3):** el caller puede DROPEAR
+    /// este future a medias (el engine lo racea contra su token). El
+    /// implementador garantiza que un drop jamás deja en el destino un
+    /// parcial VISIBLE sin marcar (S3 cumple: `CopyObject` es atómico y un
+    /// multipart incompleto no publica objeto). Un efecto que complete
+    /// server-side DESPUÉS del drop es ambigüedad aceptada (el engine la
+    /// documenta, familia #32). OJO con implementaciones sobre
+    /// `spawn_blocking` (reflink local futuro): el drop del future NO
+    /// detiene el hilo — la copia correría hasta el final SIEMPRE y el
+    /// "después del drop" pasaría de raza rara a caso determinista; esa
+    /// implementación necesita su propio punto de cancelación.
     async fn copy_native(&self, from: &VPath, to: &VPath) -> Option<Result<(), Error>> {
         let _ = (from, to);
         None

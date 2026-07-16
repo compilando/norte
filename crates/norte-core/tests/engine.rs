@@ -1377,3 +1377,43 @@ async fn delete_trash_cancel_before_start_leaves_tree_intact() {
         other => panic!("estado inesperado: {other:?}"),
     }
 }
+
+/// #51 (regla 3): el camino `copy_native` (server-copy: multipart copy S3
+/// puede tardar minutos) DEBE observar la cancelación — no vale esperar a
+/// que el provider termine. Latencia generosa en el provider: si el engine
+/// no racea el cancel contra `copy_native`, el join devuelve Completed.
+#[tokio::test]
+async fn copy_native_es_cancelable_a_mitad() {
+    let engine = Engine::new();
+    let mem = Arc::new(MemProvider::with_flags(
+        CapabilityFlags::SERVER_COPY | CapabilityFlags::CASE_SENSITIVE,
+    ));
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    write_file(&mem, "mem:///src", b"contenido nativo").await;
+    // Gate determinista: copy_native queda PENDIENTE (multipart copy S3 de
+    // minutos); nada más se ve afectado. Solo la cancelación lo termina.
+    mem.faults().hold_copy_native(true);
+
+    let handle = engine
+        .copy(&vp("mem:///src"), &vp("mem:///dst"))
+        .await
+        .unwrap();
+    // Sincronización determinista: cancela SOLO cuando copy_native ya entró
+    // — sin esto, un runner lento cancelaría antes y el test pasaría en
+    // vacío por el checkpoint pre-copy.
+    while !mem.faults().copy_native_entered() {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    handle.cancel();
+    let state = tokio::time::timeout(std::time::Duration::from_secs(5), handle.join())
+        .await
+        .expect("la cancelación no espera al provider");
+    assert_eq!(state, TaskState::Cancelled);
+    // Trampa CLAUDE.md: destino limpio — el drop paró el efecto de verdad
+    // (la mutación del MemProvider vive DETRÁS del gate).
+    assert_eq!(
+        mem.stat(&vp("mem:///dst")).await.unwrap_err(),
+        Error::NotFound,
+        "el destino queda limpio tras cancelar el copy nativo"
+    );
+}

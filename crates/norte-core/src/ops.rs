@@ -792,16 +792,39 @@ async fn copy_file(
         .capabilities()
         .flags
         .contains(norte_proto::CapabilityFlags::SERVER_COPY)
-        && let Some(res) = src.copy_native(from, to).await
     {
-        res?;
-        // El tamaño ya lo dio el stat del origen: cero round-trips extra.
-        let size = known_size.unwrap_or(0);
-        ctx.progress.update(|p| p.bytes_done = base + size);
-        observer
-            .on_mutation(&Mutation::Created(to), &ctx.actor)
-            .await?;
-        return Ok(());
+        // Regla 3 (#51): copy_native es UN await potencialmente de minutos
+        // (multipart copy S3, opendal lo trocea solo) — se racea contra la
+        // cancelación. `biased` con el copy PRIMERO: una completación ya
+        // observada se journaliza SIEMPRE aunque el token también esté
+        // cancelado (regla 4); la cancelación no pierde latencia (el select
+        // pollea ambas ramas en cada wakeup). Dropear el future a medias
+        // jamás publica un objeto A MEDIAS (CopyObject es atómico; un
+        // multipart incompleto no publica), pero quedan dos ambigüedades
+        // documentadas (contrato en el rustdoc de `Provider::copy_native`):
+        // - partes huérfanas facturables en S3: opendal solo aborta el
+        //   multipart en su camino de error, no en drop — mismo caso que el
+        //   Drop del sink de escritura (ADR 0016 E: lifecycle rule del bucket
+        //   para AbortIncompleteMultipartUpload);
+        // - si el server completa la copia DESPUÉS del drop, el destino queda
+        //   con el objeto ÍNTEGRO sin entrada de journal (ambigüedad
+        //   post-efecto, misma familia que #32) — nunca un parcial sin marcar.
+        let native = tokio::select! {
+            biased;
+            res = src.copy_native(from, to) => res,
+            () = ctx.cancel.cancelled() => return Err(Error::Cancelled),
+        };
+        if let Some(res) = native {
+            res?;
+            // El tamaño ya lo dio el stat del origen: cero round-trips extra.
+            let size = known_size.unwrap_or(0);
+            ctx.progress.update(|p| p.bytes_done = base + size);
+            observer
+                .on_mutation(&Mutation::Created(to), &ctx.actor)
+                .await?;
+            return Ok(());
+        }
+        // `None`: el provider declinó pese al cap — cae al streaming.
     }
 
     // Resume AGNÓSTICO del provider (ADR 0012 A2): `open_resumable` con su
