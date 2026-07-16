@@ -2105,6 +2105,32 @@ async fn plugin_run_command_id_desconocido_es_invalid_params() {
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 }
 
+/// `plugin.preview` de un archivo cuando NO hay ningún previewer instalado
+/// (registro vacío, `plugins_dir: None`) devuelve `preview: None` — NO un
+/// error: ningún previewer consentido casa el mimetype, así que el frontend cae
+/// a la vista cruda. Ni siquiera se leen los bytes del archivo (la resolución
+/// falla antes). El caso con un previewer `.wasm` real es E2E de la task
+/// siguiente.
+#[tokio::test]
+async fn plugin_preview_sin_previewer_es_none() {
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///nota.txt", b"hola mundo").await;
+    let c = connected_client(&d).await;
+    let res = c
+        .call::<_, methods::PluginPreviewResult>(
+            methods::PLUGIN_PREVIEW,
+            &methods::PluginPreviewParams {
+                path: vp("mem:///nota.txt"),
+            },
+        )
+        .await
+        .expect("plugin.preview no es error cuando no hay previewer");
+    assert!(
+        res.preview.is_none(),
+        "sin previewer instalado la preview es None (vista cruda), no un error: {res:?}"
+    );
+}
+
 /// TOML deliberadamente inválido: el descubridor debe reportarlo en `errors`,
 /// no tumbar el catálogo. Un `[[[` sin cerrar no parsea.
 const BROKEN_MANIFEST: &str = "no es toml [[[";

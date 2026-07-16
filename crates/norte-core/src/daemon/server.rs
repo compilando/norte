@@ -1175,6 +1175,8 @@ async fn dispatch(
         }
         // plugin.run_command (M4-P4): ABIERTO (ejecutar no consiente nada).
         methods::PLUGIN_RUN_COMMAND => handle_plugin_run_command(req.params, shared).await,
+        // plugin.preview (M4-P5): ABIERTO (previsualizar no consiente nada).
+        methods::PLUGIN_PREVIEW => handle_plugin_preview(req.params, shared).await,
         _ => dispatch_fs_task(req, conn.actor.clone(), shared).await,
     }
 }
@@ -1551,6 +1553,94 @@ fn run_error_to_rpc(e: &crate::plugins::PluginRunError) -> RpcError {
         // tipo evoluciona: redactado, jamás el Display crudo.
         E::Runtime(_) => RpcError::protocol(codes::INTERNAL_ERROR, "plugin runtime failed"),
     }
+}
+
+/// `plugin.preview` (M4-P5): renderiza el archivo `p.path` con el PRIMER
+/// previewer consentido cuyo mimetype (adivinado por extensión) case, o devuelve
+/// `preview: None` si ninguno aplica. ABIERTO como `run_command` (previsualizar
+/// no consiente nada). Tres fases, separadas para NO cruzar el `MutexGuard` por
+/// un `.await` (regla 2):
+///
+/// 1. RESOLVER (barato) bajo el lock del registry: adivina el mimetype y elige
+///    el previewer. El guard se suelta al cerrar el bloque, ANTES de todo await.
+///    Ninguno → `preview: None` (NO error: el frontend cae a la vista cruda).
+/// 2. LEER los bytes del archivo ACOTADOS a [`PREVIEW_MAX_BYTES`](crate::plugins::PREVIEW_MAX_BYTES)
+///    vía el engine (async, fuera del lock). Un archivo ilegible (`NotFound`…)
+///    es un error HONESTO que se propaga — no un preview vacío.
+/// 3. EJECUTAR (pesado, compila WASM) FUERA del lock, en un `spawn_blocking`,
+///    con un clon del `Arc<PluginRuntime>` compartido.
+///
+/// Redacción hacia el cliente (security-reviewer M4-P4/P5): un fallo de runtime
+/// puede llevar la ruta del `.wasm` o detalles de wasmtime; JAMÁS se devuelve su
+/// `Display` crudo — `INTERNAL_ERROR` genérico + el detalle SOLO al log local.
+// `skip_all`: `p.path` va a los campos redactados de las capas inferiores, no al
+// span de este handler (mismo criterio que run_command).
+#[tracing::instrument(skip_all)]
+async fn handle_plugin_preview(
+    params: Option<serde_json::Value>,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::PluginPreviewParams = parse_params(params)?;
+    // El mimetype es `&'static str` (heurística por extensión, no lee bytes).
+    let mime = crate::plugins::guess_mimetype(&p.path);
+    // 1) Resolver bajo el lock (barato). El guard NO cruza el `.await`.
+    let resolved = {
+        let reg = shared.plugins.lock().expect("plugins lock sano");
+        reg.resolve_previewer(mime)
+    };
+    let Some((id, name, wasm, caps)) = resolved else {
+        // Ningún previewer consentido casa el mimetype: NO es error. El
+        // frontend cae a la vista cruda. Los bytes ni se leen.
+        return to_value(&methods::PluginPreviewResult { preview: None });
+    };
+
+    // 2) Leer los bytes ACOTADOS vía el engine (async, fuera del lock). Un
+    // archivo ilegible (NotFound, permisos…) es un error honesto que se propaga,
+    // no un preview silenciosamente vacío. El `len` acota en el provider; se
+    // trunca por si algún provider entrega de más.
+    let range = norte_proto::ByteRange {
+        offset: 0,
+        len: Some(crate::plugins::PREVIEW_MAX_BYTES),
+    };
+    let mut stream = shared
+        .engine
+        .read(&p.path, Some(range))
+        .await
+        .map_err(RpcError::from)?;
+    let mut bytes: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(RpcError::from)?;
+        bytes.extend_from_slice(&chunk);
+        if bytes.len() as u64 >= crate::plugins::PREVIEW_MAX_BYTES {
+            break;
+        }
+    }
+    let cap = usize::try_from(crate::plugins::PREVIEW_MAX_BYTES).unwrap_or(usize::MAX);
+    bytes.truncate(cap.min(bytes.len()));
+
+    // 3) Ejecutar fuera del lock, en spawn_blocking (regla 2). El runtime es
+    // `Send+Sync` pero no `Clone`: se clona el `Arc`. `mime` es `&'static` → se
+    // mueve tal cual al closure.
+    let runtime = Arc::clone(&shared.plugin_runtime);
+    let output = tokio::task::spawn_blocking(move || {
+        let mut inst = runtime.instantiate(&wasm, caps)?;
+        inst.render_preview(mime, &bytes)
+    })
+    .await
+    .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "preview task panicked"))?
+    .map_err(|e| {
+        // Redacción: el detalle (posible ruta del .wasm / interno de wasmtime)
+        // va SOLO al log local; al cliente, un mensaje genérico.
+        tracing::warn!(plugin = %id, error = %e, "preview runtime failed");
+        RpcError::protocol(codes::INTERNAL_ERROR, "preview runtime failed")
+    })?;
+    to_value(&methods::PluginPreviewResult {
+        preview: Some(methods::PluginPreview {
+            plugin_id: id,
+            plugin_name: name,
+            output,
+        }),
+    })
 }
 
 /// Instante de expiración de un scope a partir de su `ttl_ms`: clamp a

@@ -484,6 +484,98 @@ impl Backend {
             Self::Remote(r) => r.plugin_run_command(id, command, arg).await,
         }
     }
+
+    /// Previsualiza `path` con el PRIMER previewer consentido cuyo mimetype
+    /// (adivinado por extensión) case, o devuelve `preview: None` si ninguno
+    /// aplica (el frontend cae a la vista cruda). Un archivo ilegible es un error
+    /// honesto, no un preview vacío.
+    ///
+    /// Embebido: registro EFÍMERO por-llamada + resolución del previewer +
+    /// `PluginRuntime` nuevo, con la lectura de bytes acotada intercalada. La
+    /// resolución (discover, IO) y la ejecución (instancia WASM, síncrona) van en
+    /// `spawn_blocking` (regla 2); la lectura de bytes usa el engine async entre
+    /// medias. El coste del registro/runtime efímero se acepta igual que en
+    /// [`Self::plugin_run_command`]: el modo embebido es un frontend humano
+    /// puntual, no un servidor de plugins de alta frecuencia (ese es el daemon,
+    /// que reutiliza un registro y un runtime compartidos). Remoto:
+    /// `plugin.preview` contra el daemon.
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo; con el daemon caído,
+    /// `ProviderUnavailable{retryable:true}`. Un fallo del runtime del plugin se
+    /// entrega REDACTADO (`Internal`), sin filtrar rutas ni detalles internos.
+    pub async fn plugin_preview(
+        &self,
+        path: &VPath,
+    ) -> Result<norte_proto::methods::PluginPreviewResult, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                // 1) Resolver el previewer (discover = IO) en spawn_blocking.
+                let dir = crate::connect::config_dir();
+                let mime = crate::plugins::guess_mimetype(path);
+                let resolved = tokio::task::spawn_blocking(
+                    move || -> Result<
+                        Option<(
+                            String,
+                            String,
+                            std::path::PathBuf,
+                            norte_plugin_host::Capabilities,
+                        )>,
+                        Error,
+                    > {
+                        let reg = crate::PluginRegistry::discover(&dir)
+                            .map_err(|_| Error::Io { retryable: false })?;
+                        Ok(reg.resolve_previewer(mime))
+                    },
+                )
+                .await
+                .map_err(|_| Error::Internal { panic: true })??;
+                let Some((id, name, wasm, caps)) = resolved else {
+                    return Ok(norte_proto::methods::PluginPreviewResult { preview: None });
+                };
+
+                // 2) Leer los bytes ACOTADOS vía el engine (async). Un archivo
+                // ilegible es un error honesto que se propaga.
+                let range = ByteRange {
+                    offset: 0,
+                    len: Some(crate::plugins::PREVIEW_MAX_BYTES),
+                };
+                let mut stream = engine.read(path, Some(range)).await?;
+                let mut bytes: Vec<u8> = Vec::new();
+                while let Some(chunk) = stream.next().await {
+                    bytes.extend_from_slice(&chunk?);
+                    if bytes.len() as u64 >= crate::plugins::PREVIEW_MAX_BYTES {
+                        break;
+                    }
+                }
+                let cap = usize::try_from(crate::plugins::PREVIEW_MAX_BYTES).unwrap_or(usize::MAX);
+                bytes.truncate(cap.min(bytes.len()));
+
+                // 3) Instanciar + renderizar (síncrono, WASM) en spawn_blocking.
+                let mime_owned = mime.to_owned();
+                let output = tokio::task::spawn_blocking(move || -> Result<String, Error> {
+                    let runtime = norte_plugin_host::PluginRuntime::new()
+                        .map_err(|_| Error::Internal { panic: false })?;
+                    let mut inst = runtime
+                        .instantiate(&wasm, caps)
+                        .map_err(|_| Error::Internal { panic: false })?;
+                    inst.render_preview(&mime_owned, &bytes)
+                        .map_err(|_| Error::Internal { panic: false })
+                })
+                .await
+                .map_err(|_| Error::Internal { panic: true })??;
+                Ok(norte_proto::methods::PluginPreviewResult {
+                    preview: Some(norte_proto::methods::PluginPreview {
+                        plugin_id: id,
+                        plugin_name: name,
+                        output,
+                    }),
+                })
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.plugin_preview(path).await,
+        }
+    }
 }
 
 /// Mapea el fallo de ejecución de un plugin a la taxonomía del protocolo (modo
@@ -1219,6 +1311,20 @@ pub mod remote {
                 )
                 .await?;
             Ok(r.output)
+        }
+
+        /// `plugin.preview` contra el daemon (M4-P5): devuelve el result tal cual
+        /// (la preview, o `None`). El daemon ya redacta los fallos de runtime a
+        /// `INTERNAL_ERROR` y resuelve el previewer fail-closed.
+        pub(super) async fn plugin_preview(
+            &self,
+            path: &VPath,
+        ) -> Result<methods::PluginPreviewResult, Error> {
+            self.call_timed(
+                methods::PLUGIN_PREVIEW,
+                &methods::PluginPreviewParams { path: path.clone() },
+            )
+            .await
         }
     }
 

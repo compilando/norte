@@ -70,18 +70,12 @@ pub enum PluginRunError {
 /// El guest de M4-P2 tiene ADEMÁS su propio límite; este es la primera barrera,
 /// en el lado del host, para no cargar un archivo enorme en memoria solo porque
 /// alguien pidió su preview.
-// Lo consume el handler `preview` del daemon (M4-P5 T3); hasta ese wiring queda
-// sin usar fuera de tests.
-#[allow(dead_code)]
 pub(crate) const PREVIEW_MAX_BYTES: u64 = 1024 * 1024;
 
 /// Adivina el mimetype por EXTENSIÓN (heurística ligera, sin dep de sniffing).
 /// Un archivo sin extensión reconocible → `application/octet-stream` (ningún
 /// previewer `text/*` lo tomará). NO lee el contenido. `pub(crate)` para el
 /// handler del daemon.
-// Lo consume el handler `preview` del daemon (M4-P5 T3); hasta ese wiring queda
-// sin usar fuera de tests.
-#[allow(dead_code)]
 pub(crate) fn guess_mimetype(path: &norte_proto::VPath) -> &'static str {
     let ext = path
         .file_name()
