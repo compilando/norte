@@ -1,0 +1,20 @@
+[package]
+name = "norte-plugin-host"
+description = "Host de plugins WASM: manifiesto, capabilities y catálogo (el runtime wasmtime llega en M4-P2)"
+license = "AGPL-3.0-only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

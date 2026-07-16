@@ -1,0 +1,25 @@
+[package]
+name = "norte-theme"
+description = "Modelo de theming compartido: roles semánticos, paleta y Color truecolor con degradación 256/16, presets embebidos"
+license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+toml.workspace = true
+schemars = { workspace = true, optional = true }
+
+[features]
+# Deriva JsonSchema del modelo de tema (lo consume el dump de schema del TUI).
+schema = ["dep:schemars"]
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

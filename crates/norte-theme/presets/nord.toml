@@ -1,0 +1,35 @@
+name = "nord"
+
+[roles]
+background       = { bg = "#2e3440" }
+regular          = { fg = "#d8dee9" }
+selection        = { fg = "#eceff4", bg = "#434c5e" }
+border-focus     = { fg = "#88c0d0", bold = true }
+border-unfocused = { fg = "#4c566a", dim = true }
+modal-border     = { fg = "#b48ead" }
+status-bar       = { fg = "#2e3440", bg = "#88c0d0" }
+title            = { fg = "#88c0d0", bold = true }
+hostile-badge    = { fg = "#bf616a", bold = true }
+error            = { fg = "#bf616a" }
+warning          = { fg = "#ebcb8b" }
+info             = { fg = "#81a1c1" }
+match            = { fg = "#2e3440", bg = "#ebcb8b" }
+
+[files.kind]
+dir          = { fg = "#81a1c1", bold = true }
+symlink      = { fg = "#8fbcbb" }
+executable   = { fg = "#a3be8c", bold = true }
+fifo         = { fg = "#ebcb8b" }
+socket       = { fg = "#b48ead" }
+block-device = { fg = "#d08770" }
+char-device  = { fg = "#d08770" }
+
+[files.ext]
+zip  = { fg = "#bf616a" }
+tar  = { fg = "#bf616a" }
+gz   = { fg = "#bf616a" }
+rs   = { fg = "#d08770" }
+toml = { fg = "#ebcb8b" }
+md   = { fg = "#d8dee9" }
+png  = { fg = "#b48ead" }
+jpg  = { fg = "#b48ead" }

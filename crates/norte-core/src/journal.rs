@@ -1,4 +1,4 @@
-//! Journal transaccional (M3-1, ADR 0020): toda mutación → una entrada con
+//! Journal transaccional (M3-1, ADR 0023): toda mutación → una entrada con
 //! actor, referencia de reversa y hash-chain sobre `SQLite` (WAL).
 //!
 //! **Alcance de la integridad (importante).** El hash-chain (SHA-256 SIN clave,

@@ -12,7 +12,7 @@
 
 ## File Structure
 
-- Create: `docs/adr/0020-journal-sqlx-sqlite.md` — ADR for the structural storage dep.
+- Create: `docs/adr/0023-journal-sqlx-sqlite.md` — ADR for the structural storage dep.
 - Modify: `Cargo.toml` (workspace) + `crates/norte-core/Cargo.toml` — add `sqlx`.
 - Create: `crates/norte-core/src/journal.rs` — `Journal`, `Actor`, `Reversal`, `SqliteJournal`, hash-chain.
 - Modify: `crates/norte-core/src/observer.rs` — `on_mutation` async + `Actor` param; `NoopObserver` async.
@@ -24,9 +24,9 @@
 
 ---
 
-### Task 1: ADR 0020 — journal storage
+### Task 1: ADR 0023 — journal storage
 
-**Files:** Create `docs/adr/0020-journal-sqlx-sqlite.md`; modify `docs/adr/README.md`.
+**Files:** Create `docs/adr/0023-journal-sqlx-sqlite.md`; modify `docs/adr/README.md`.
 
 - [ ] **Step 1: Write the ADR** (MADR, mirror 0019 style)
 
@@ -62,13 +62,13 @@ deny` (MIT/Apache).
 
 Append to `docs/adr/README.md`:
 ```markdown
-| [0020](0020-journal-sqlx-sqlite.md) | Journal: sqlx sobre SQLite (WAL), hash-chain propia | accepted |
+| [0023](0023-journal-sqlx-sqlite.md) | Journal: sqlx sobre SQLite (WAL), hash-chain propia | accepted |
 ```
 
 - [ ] **Step 2: Commit**
 
 ```bash
-git add docs/adr/0020-journal-sqlx-sqlite.md docs/adr/README.md
+git add docs/adr/0023-journal-sqlx-sqlite.md docs/adr/README.md
 git commit -m "docs(adr): 0020 journal sqlx sobre SQLite WAL (M3-1a)"
 ```
 
@@ -97,7 +97,7 @@ sha2.workspace = true
 Create `crates/norte-core/src/journal.rs`:
 
 ```rust
-//! Journal transaccional (M3-1, ADR 0020): toda mutación → una entrada con
+//! Journal transaccional (M3-1, ADR 0023): toda mutación → una entrada con
 //! actor, referencia de reversa y hash-chain tamper-evident sobre SQLite (WAL).
 
 use sha2::{Digest, Sha256};

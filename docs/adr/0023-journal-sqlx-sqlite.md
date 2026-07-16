@@ -1,4 +1,4 @@
-# 0020 — Journal: sqlx sobre SQLite (WAL), hash-chain propia
+# 0023 — Journal: sqlx sobre SQLite (WAL), hash-chain propia
 
 - Estado: accepted
 - Fecha: 2026-07-14

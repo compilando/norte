@@ -1,13 +1,34 @@
 # Envoltorio fino sobre `just` (la fuente única de comandos: humanos, Claude
-# y CI corren exactamente lo mismo — ver justfile). Instala just con
-# `cargo install just` si no lo tienes.
+# y CI corren exactamente lo mismo — ver justfile).
+#
+# ¿Equipo nuevo (sin cargo/just)?  ->  make setup
 
-.PHONY: all run dev cli test t ci fmt lint cov docs watch help install uninstall
+# cargo/just/nextest viven en $CARGO_HOME/bin (~/.cargo/bin por defecto). Se
+# fuerza en el PATH de las recipes para que `make <lo-que-sea>` funcione JUSTO
+# tras `make setup`, sin reiniciar el shell (el instalador de rustup no toca el
+# PATH del shell en curso).
+CARGO_HOME ?= $(HOME)/.cargo
+export PATH := $(CARGO_HOME)/bin:$(PATH)
+
+.PHONY: all setup run dev cli test t ci fmt lint cov docs watch help install uninstall
 
 all: help
 
+# Guarda: si tras el PATH ni cargo ni just están, el problema es el setup.
+_need_just:
+	@command -v just >/dev/null 2>&1 || { \
+	  echo "ERROR: no encuentro 'just'. Corre 'make setup' (y si ya lo hiciste,"; \
+	  echo "       abre una terminal nueva o revisa que exista $(CARGO_HOME)/bin/just)."; \
+	  exit 1; }
+
+# Bootstrap del entorno: rustup + toolchain pineado + just + nextest/llvm-cov/
+# deny. Idempotente. NO necesita nada previo salvo curl.
+setup:
+	bash scripts/setup.sh
+
 help:
 	@echo "norte — atajos (delegan en just):"
+	@echo "  make setup  - preparar el equipo (rustup, just, nextest, deny…)"
 	@echo "  make run    - TUI en release"
 	@echo "  make dev    - TUI en debug (iterar)"
 	@echo "  make test   - suite completa (nextest + doctests)"
@@ -18,34 +39,34 @@ help:
 	@echo "  make uninstall - los desinstala"
 	@echo "  just cli ls /tmp          - CLI de humo (args libres via just)"
 
-run:
+run: _need_just
 	just run
 
-dev:
+dev: _need_just
 	just dev
 
-test:
+test: _need_just
 	just test
 
-ci:
+ci: _need_just
 	just ci
 
-fmt:
+fmt: _need_just
 	just fmt
 
-lint:
+lint: _need_just
 	just lint
 
-cov:
+cov: _need_just
 	just cov
 
-docs:
+docs: _need_just
 	just docs
 
-watch:
+watch: _need_just
 	just watch
 
-install:
+install: _need_just
 	just install
 
 uninstall:

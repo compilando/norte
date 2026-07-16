@@ -277,9 +277,15 @@ trait AiProvider {
 | **M0 — esqueleto** | workspace, `norte-proto`, `norte-vfs` (trait+Mem+Local), scheduler mínimo, CI 3 OS con coverage gate | copy/move/delete local con progreso y cancelación, testeado en 3 OS |
 | **M1 — TUI usable** | ratatui dual-pane, keymap engine + presets, config en capas, viewer con detección de encoding, trash | "yo lo uso a diario en vez de Yazi/mc" |
 | **M2 — remotos+archivos** | sftp, archive (zip/tar read), copy engine cross-provider con resume, object storage | copiar de sftp a zip local vía S3 sin sorpresas |
+| **MT — theming** | crate `norte-theme` compartido: roles semánticos, Color truecolor con degradación 256/16, colores por tipo de archivo, presets embebidos; capa de efectos reservada a la GPU (M5) | temas ricos en la TUI, hot-reload, y el mismo modelo listo para la GUI |
 | **M3 — agéntico** | norte-mcp server, scopes, policy engine, journal+undo, audit export | Claude Code gestiona un directorio real bajo policy `ask`, con undo de sesión completa |
 | **M4 — plugins+IA** | plugin host WASM (previewer+command), Lua scripting, norte-ai (Anthropic/OpenAI/Ollama), rename batch IA, búsqueda semántica | tercero publica un plugin sin tocar el core |
 | **M5 — GUI** | decisión GPUI vs Tauri con spike medido; primer frontend gráfico contra el mismo daemon | GUI y TUI sobre la misma sesión simultáneamente |
+
+> **Reorden (2026-07-15, ADR 0020):** tras M2, la secuencia pasa a
+> **MT (theming) → M4 (plugins) → M3 (agéntico) → M5 (GUI)** — se prioriza
+> valor para el usuario humano (theming, plugins) sobre la automatización
+> agéntica. Los criterios de salida de cada hito no cambian, solo el orden.
 
 ---
 

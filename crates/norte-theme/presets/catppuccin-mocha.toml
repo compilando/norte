@@ -1,0 +1,35 @@
+name = "catppuccin-mocha"
+
+[roles]
+background       = { bg = "#1e1e2e" }
+regular          = { fg = "#cdd6f4" }
+selection        = { fg = "#cdd6f4", bg = "#45475a" }
+border-focus     = { fg = "#89b4fa", bold = true }
+border-unfocused = { fg = "#6c7086", dim = true }
+modal-border     = { fg = "#cba6f7" }
+status-bar       = { fg = "#1e1e2e", bg = "#89b4fa" }
+title            = { fg = "#89b4fa", bold = true }
+hostile-badge    = { fg = "#f38ba8", bold = true }
+error            = { fg = "#f38ba8" }
+warning          = { fg = "#f9e2af" }
+info             = { fg = "#89b4fa" }
+match            = { fg = "#1e1e2e", bg = "#f9e2af" }
+
+[files.kind]
+dir          = { fg = "#89b4fa", bold = true }
+symlink      = { fg = "#94e2d5" }
+executable   = { fg = "#a6e3a1", bold = true }
+fifo         = { fg = "#f9e2af" }
+socket       = { fg = "#cba6f7" }
+block-device = { fg = "#fab387" }
+char-device  = { fg = "#fab387" }
+
+[files.ext]
+zip  = { fg = "#f38ba8" }
+tar  = { fg = "#f38ba8" }
+gz   = { fg = "#f38ba8" }
+rs   = { fg = "#fab387" }
+toml = { fg = "#f9e2af" }
+md   = { fg = "#cdd6f4" }
+png  = { fg = "#cba6f7" }
+jpg  = { fg = "#cba6f7" }

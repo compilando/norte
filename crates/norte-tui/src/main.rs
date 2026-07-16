@@ -18,7 +18,7 @@ use norte_i18n::{t, ta};
 use norte_proto::DeleteMode;
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{
-    App, DialogOutcome, Help, Modal, Pane, TransferKind, dialog_key, sort_entries,
+    App, DialogOutcome, Help, Modal, Pane, PickerAction, TransferKind, dialog_key, sort_entries,
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::keymap::{COMMANDS, Chord, Effective, Resolution, Resolver, Screen, presets};
@@ -116,6 +116,7 @@ async fn main() -> Result<()> {
             .map_err(|e| anyhow::anyhow!("{e}"))?,
     );
     let mut app = App::new(left, right);
+    apply_theme(&mut app, &cfg);
     // Canales del modo daemon (None en embebido): tasks de otros frontends
     // y avisos de (re)conexión — se drenan en el loop principal.
     let foreign_tasks = backend.take_foreign_tasks();
@@ -363,7 +364,9 @@ async fn run(
                     && key.kind == crossterm::event::KeyEventKind::Press
                 {
                     app.message = None;
-                    if let Some(help) = &mut app.help {
+                    if app.theme_picker.is_some() {
+                        on_theme_picker_key(app, key.modifiers, key.code).await;
+                    } else if let Some(help) = &mut app.help {
                         // Teclas de la ayuda: fijas, como los diálogos (#24).
                         // ctrl+c conserva su significado global (salir).
                         match (key.modifiers, key.code) {
@@ -426,6 +429,65 @@ async fn run(
 /// Hot-reload (ADR 0007): relee TODAS las capas; ante CUALQUIER error se
 /// conserva la config vigente y se avisa por la barra — jamás romper una
 /// sesión en marcha por un TOML a medio guardar.
+/// Resuelve `[ui].theme` (preset o ruta) y lo aplica al `App`; ante error
+/// degrada al preset por defecto y avisa (ADR 0020). El frontend no revienta
+/// por un tema malo.
+fn apply_theme(app: &mut App, cfg: &config::LoadedConfig) {
+    let depth = norte_tui::theme::detect_depth();
+    match norte_tui::theme::resolve(cfg.ui_theme.as_deref(), depth) {
+        Ok(theme) => app.theme = theme,
+        Err(e) => {
+            app.theme = norte_tui::theme::TuiTheme::default();
+            app.message = Some(e);
+        }
+    }
+}
+
+/// Traduce las teclas del popup de tema a una acción de dominio (la lógica
+/// vive en `App`, testeable). Fijas como los demás overlays (#24); `ctrl+c`
+/// conserva su salida global. Al confirmar, PERSISTE la elección en el
+/// `norte.toml` del usuario (ADR 0020), sin bloquear el runtime.
+async fn on_theme_picker_key(app: &mut App, mods: KeyModifiers, code: KeyCode) {
+    let action = match (mods, code) {
+        (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+            app.quit = true;
+            return;
+        }
+        (KeyModifiers::NONE, KeyCode::Up | KeyCode::Char('k')) => PickerAction::Up,
+        (KeyModifiers::NONE, KeyCode::Down | KeyCode::Char('j')) => PickerAction::Down,
+        (KeyModifiers::NONE, KeyCode::Enter) => PickerAction::Confirm,
+        (KeyModifiers::NONE, KeyCode::Esc | KeyCode::F(9)) => PickerAction::Cancel,
+        _ => return,
+    };
+    // El nombre a persistir se toma ANTES de que Confirm cierre el popup.
+    let confirmed = (action == PickerAction::Confirm)
+        .then(|| {
+            app.theme_picker
+                .as_ref()
+                .and_then(|p| p.selected().map(String::from))
+        })
+        .flatten();
+    app.theme_picker_input(action);
+    if let Some(name) = confirmed {
+        // I/O en spawn_blocking: el runtime jamás se bloquea (regla 2).
+        let n = name.clone();
+        match tokio::task::spawn_blocking(move || config::persist_ui_theme(&n)).await {
+            Ok(Ok(path)) => {
+                app.message = Some(ta(
+                    "msg-theme-saved",
+                    &[("name", &name), ("path", &path.display().to_string())],
+                ));
+            }
+            Ok(Err(e)) => {
+                // El tema YA se aplicó (sesión); solo no se pudo guardar.
+                app.message = Some(ta("msg-theme-save-failed", &[("error", &e.to_string())]));
+            }
+            // Un panic en el write es un bug nuestro: que no tumbe la TUI.
+            Err(_) => {}
+        }
+    }
+}
+
 async fn reload_config(
     app: &mut App,
     resolver: &mut Resolver,
@@ -444,6 +506,9 @@ async fn reload_config(
                 *viewer_resolver = Resolver::new(viewer);
                 app.pending.clear();
                 app.message = Some(t("msg-config-reloaded"));
+                // El tema también es hot-reloadable (ADR 0020): si falla, el
+                // mensaje de error del tema pisa el de "config recargada".
+                apply_theme(app, &cfg);
             }
             Err(e) => {
                 app.message = Some(ta(
@@ -755,6 +820,7 @@ async fn dispatch(
                 scroll: 0,
             });
         }
+        "app.theme" => app.open_theme_picker(),
         "task.cancel" => {
             app.message = Some(if app.board.cancel_last_running() {
                 t("msg-cancelling")

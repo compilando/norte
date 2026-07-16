@@ -1,0 +1,37 @@
+name = "gruvbox-light"
+
+# Gruvbox claro: fondo crema y los AMARILLOS/naranjas cálidos de la paleta.
+
+[roles]
+background       = { bg = "#fbf1c7" }
+regular          = { fg = "#3c3836" }
+selection        = { fg = "#3c3836", bg = "#ebdbb2" }
+border-focus     = { fg = "#b57614", bold = true }
+border-unfocused = { fg = "#a89984", dim = true }
+modal-border     = { fg = "#8f3f71" }
+status-bar       = { fg = "#fbf1c7", bg = "#b57614" }
+title            = { fg = "#af3a03", bold = true }
+hostile-badge    = { fg = "#9d0006", bold = true }
+error            = { fg = "#9d0006" }
+warning          = { fg = "#b57614" }
+info             = { fg = "#076678" }
+match            = { fg = "#fbf1c7", bg = "#b57614" }
+
+[files.kind]
+dir          = { fg = "#076678", bold = true }
+symlink      = { fg = "#427b58" }
+executable   = { fg = "#79740e", bold = true }
+fifo         = { fg = "#b57614" }
+socket       = { fg = "#8f3f71" }
+block-device = { fg = "#af3a03" }
+char-device  = { fg = "#af3a03" }
+
+[files.ext]
+zip  = { fg = "#9d0006" }
+tar  = { fg = "#9d0006" }
+gz   = { fg = "#9d0006" }
+rs   = { fg = "#af3a03" }
+toml = { fg = "#b57614" }
+md   = { fg = "#3c3836" }
+png  = { fg = "#8f3f71" }
+jpg  = { fg = "#8f3f71" }

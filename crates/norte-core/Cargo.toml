@@ -27,7 +27,7 @@ norte-vfs-sftp.workspace = true
 # El daemon (ADR 0011) serializa el dispatch JSON-RPC; mismo encoding que proto.
 serde.workspace = true
 serde_json.workspace = true
-# Journal transaccional (M3-1, ADR 0020): storage + hash-chain.
+# Journal transaccional (M3-1, ADR 0023): storage + hash-chain.
 sha2.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
@@ -55,7 +55,13 @@ norte-testkit.workspace = true
 norte-vfs-local.workspace = true
 # E2E del criterio de salida M2 (fase 10b): object-fs como remoto S3 stand-in.
 opendal = { workspace = true, features = ["services-fs"] }
+# Benchmarks del copy engine cross-provider (fase 10c).
+criterion.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time", "test-util"] }
+
+[[bench]]
+name = "copy_remoto"
+harness = false
 
 [lints]
 workspace = true

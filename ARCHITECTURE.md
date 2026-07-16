@@ -19,10 +19,12 @@ negocio: si una operación no se puede hacer vía protocolo, no existe.
 | `norte-vfs-local` | Provider del FS local por OS. **Único crate con `unsafe` permitido** (`// SAFETY:` + test) | MIT OR Apache-2.0 |
 | `norte-testkit` | `MemProvider` determinista con fallos inyectables, corpus de fixtures hostiles, estrategias proptest | MIT OR Apache-2.0 |
 | `norte-core` | Scheduler de tasks (cancelación, progreso), copy engine. En M0: lib embebida, sin daemon | AGPL-3.0-only |
+| `norte-plugin-host` | Host de plugins WASM (M4): manifiesto, capabilities, catálogo. Runtime wasmtime en M4-P2 | AGPL-3.0-only |
 | `norte-cli` | `norte ls/cp`: banco de pruebas manual del core. No es un producto | AGPL-3.0-only |
 | `norte-tui` | Frontend TUI dual-pane (ratatui). Sin lógica de negocio: proto + core embebido + libs de presentación (norte-encoding) | AGPL-3.0-only |
 | `norte-encoding` | Detección/decodificación de encodings de texto (aísla chardetng/encoding_rs) | MIT OR Apache-2.0 |
 | `norte-i18n` | Strings de UI por Fluent (es/en) para los frontends | MIT OR Apache-2.0 |
+| `norte-theme` | Modelo de theming compartido (roles semánticos, Color truecolor con degradación 256/16, presets). Sin backend de render: lo consumen TUI y GUI (M5) | MIT OR Apache-2.0 |
 
 Hitos posteriores añaden: `norte-vfs-{sftp,object,archive}`, `norte-index`,
 `norte-ai`, `norte-mcp`, `norte-plugin-host`, `norte-gui` (spec §3).

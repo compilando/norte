@@ -3,7 +3,7 @@
 - Fecha: 2026-07-14
 - Estado: diseño aprobado (pendiente plan + implementación)
 - Relacionado: spec §5/§10 (journal + undo + audit), regla dura 4 (toda mutación
-  pasa por el journal), ADR 0009 (papelera → restore), ADR 0020 (journal sqlx
+  pasa por el journal), ADR 0009 (papelera → restore), ADR 0023 (journal sqlx
   hash-chain), M3-1a/M3-1b (journal + `Reversal` persistido + `reversal_ref`).
   Criterio de salida M3: "Claude Code gestiona un dir bajo policy ask, con undo
   de sesión completa".

@@ -67,6 +67,14 @@
             "string",
             "null"
           ]
+        },
+        "theme": {
+          "default": null,
+          "description": "Tema: nombre de preset embebido (`default`, `catppuccin-mocha`,\n`gruvbox-dark`, `nord`, y los claros `gruvbox-light`,\n`catppuccin-latte`) o ruta a un `.toml` propio (ADR 0020). Ausente =\npreset `default`.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"
