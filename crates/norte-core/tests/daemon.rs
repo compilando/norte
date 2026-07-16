@@ -2272,3 +2272,244 @@ async fn plugin_gestor_e2e_lista_gobierna_y_persiste() {
         .expect_err("un agente no gobierna consentimiento");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
 }
+
+// ---------- #66: gate de actor en task.* y connection.trust_host_key ----------
+
+/// `task.list` de un AGENTE solo muestra SUS tasks: las del humano (vivas o
+/// recientes) llevan `current` con paths ajenos (NOTA-1 del security-reviewer
+/// en M3-4 T5). El humano sigue viéndolo TODO.
+#[tokio::test]
+async fn task_list_de_agente_solo_muestra_sus_tasks() {
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///humano.bin", &vec![0xAA; 3000]).await;
+    write_file(&d.mem, "mem:///agente.bin", &vec![0xBB; 3000]).await;
+    let mut human = connected_client(&d).await;
+    let mut agent = connected_agent(&d, "sess-list").await;
+
+    let ht: FsTaskResult = human
+        .call(
+            methods::FS_COPY,
+            &FsCopyParams {
+                from: vp("mem:///humano.bin"),
+                to: vp("mem:///humano2.bin"),
+                on_collision: norte_proto::CollisionPolicy::default(),
+                symlinks: norte_proto::SymlinkPolicy::default(),
+                resume: norte_proto::ResumePolicy::default(),
+                verify: norte_proto::VerifyPolicy::default(),
+            },
+        )
+        .await
+        .expect("copia del humano");
+    drain_task(&mut human, ht.task_id.get()).await;
+
+    let at: FsTaskResult = agent
+        .call(
+            methods::FS_COPY,
+            &FsCopyParams {
+                from: vp("mem:///agente.bin"),
+                to: vp("mem:///agente2.bin"),
+                on_collision: norte_proto::CollisionPolicy::default(),
+                symlinks: norte_proto::SymlinkPolicy::default(),
+                resume: norte_proto::ResumePolicy::default(),
+                verify: norte_proto::VerifyPolicy::default(),
+            },
+        )
+        .await
+        .expect("copia del agente");
+    drain_task(&mut agent, at.task_id.get()).await;
+
+    let del_humano: methods::TaskListResult = human
+        .call(methods::TASK_LIST, &methods::TaskListParams {})
+        .await
+        .expect("task.list humano");
+    let ids: Vec<u64> = del_humano.tasks.iter().map(|t| t.task_id.get()).collect();
+    assert!(ids.contains(&ht.task_id.get()), "el humano ve su task");
+    assert!(ids.contains(&at.task_id.get()), "el humano ve TODO");
+
+    let del_agente: methods::TaskListResult = agent
+        .call(methods::TASK_LIST, &methods::TaskListParams {})
+        .await
+        .expect("task.list agente");
+    let ids: Vec<u64> = del_agente.tasks.iter().map(|t| t.task_id.get()).collect();
+    assert!(ids.contains(&at.task_id.get()), "el agente ve la SUYA");
+    assert!(
+        !ids.contains(&ht.task_id.get()),
+        "el agente NO observa las tasks del humano (paths en `current`)"
+    );
+}
+
+/// `task.cancel` de un AGENTE sobre una task ajena: ack (el contrato no
+/// filtra existencia) pero SIN efecto — la copia del humano completa.
+#[tokio::test]
+async fn task_cancel_de_agente_no_toca_task_del_humano() {
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///grande.bin", &vec![0xCD; 100_000]).await;
+    // Latencia por op GENEROSA (la copia son ~4-6 ops, no proporcional al
+    // tamaño): la task sigue viva cuando llega el cancel hostil incluso en
+    // un runner cargado — si terminara antes, el test pasaría en vacío.
+    d.mem
+        .faults()
+        .set_latency_per_op(Some(Duration::from_millis(250)));
+    let mut human = connected_client(&d).await;
+    let agent = connected_agent(&d, "sess-cancel").await;
+
+    let task: FsTaskResult = human
+        .call(
+            methods::FS_COPY,
+            &FsCopyParams {
+                from: vp("mem:///grande.bin"),
+                to: vp("mem:///copia.bin"),
+                on_collision: norte_proto::CollisionPolicy::default(),
+                symlinks: norte_proto::SymlinkPolicy::default(),
+                resume: norte_proto::ResumePolicy::default(),
+                verify: norte_proto::VerifyPolicy::default(),
+            },
+        )
+        .await
+        .expect("fs.copy del humano");
+    let _: TaskCancelResult = agent
+        .call(
+            methods::TASK_CANCEL,
+            &TaskCancelParams {
+                task_id: task.task_id,
+            },
+        )
+        .await
+        .expect("ack: no se filtra existencia de tasks ajenas");
+    let seen = drain_task(&mut human, task.task_id.get()).await;
+    assert_eq!(
+        seen.last().expect("terminal").state,
+        TaskState::Completed,
+        "la cancelación de un agente sobre una task ajena NO surte efecto"
+    );
+}
+
+/// Un agente SÍ cancela su propia task (el gate no bloquea de más).
+#[tokio::test]
+async fn task_cancel_de_agente_cancela_la_suya() {
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///grande.bin", &vec![0xEF; 100_000]).await;
+    // Latencia generosa: si la copia completara antes del cancel, el
+    // terminal sería Completed y el test fallaría por timing, no por gate.
+    d.mem
+        .faults()
+        .set_latency_per_op(Some(Duration::from_millis(250)));
+    let mut agent = connected_agent(&d, "sess-own").await;
+
+    let task: FsTaskResult = agent
+        .call(
+            methods::FS_COPY,
+            &FsCopyParams {
+                from: vp("mem:///grande.bin"),
+                to: vp("mem:///copia.bin"),
+                on_collision: norte_proto::CollisionPolicy::default(),
+                symlinks: norte_proto::SymlinkPolicy::default(),
+                resume: norte_proto::ResumePolicy::default(),
+                verify: norte_proto::VerifyPolicy::default(),
+            },
+        )
+        .await
+        .expect("fs.copy del agente");
+    let _: TaskCancelResult = agent
+        .call(
+            methods::TASK_CANCEL,
+            &TaskCancelParams {
+                task_id: task.task_id,
+            },
+        )
+        .await
+        .expect("task.cancel propio");
+    let seen = drain_task(&mut agent, task.task_id.get()).await;
+    assert_eq!(
+        seen.last().expect("terminal").state,
+        TaskState::Cancelled,
+        "cancelar lo propio sigue funcionando"
+    );
+}
+
+/// `connection.trust_host_key` es una decisión de confianza HUMANA (como
+/// `grant_scope`/`decide`/`undo_session`): un agente no bendice fingerprints.
+#[tokio::test]
+async fn trust_host_key_de_agente_es_invalid_request() {
+    let d = spawn_daemon(None).await;
+    let agent = connected_agent(&d, "sess-tofu").await;
+    let err = agent
+        .call::<_, methods::ConnectionTrustHostKeyResult>(
+            methods::CONNECTION_TRUST_HOST_KEY,
+            &methods::ConnectionTrustHostKeyParams {
+                host: "example.com".into(),
+                port: Some(22),
+                algo: "ssh-ed25519".into(),
+                fingerprint: "SHA256:AAAA".into(),
+            },
+        )
+        .await
+        .expect_err("un agente no acepta host keys");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
+}
+
+/// El broadcast de `task.progress` es el MISMO leak que `task.list`: una
+/// conexión de agente no recibe el progreso (con `current`) de tasks ajenas.
+/// Otro humano sí lo sigue viendo (base de la fase 3).
+#[tokio::test]
+async fn progreso_de_task_humana_no_llega_a_conexiones_agente() {
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///src.bin", &vec![0x11; 2000]).await;
+    let human = connected_client(&d).await;
+    let mut human2 = connected_client(&d).await;
+    let mut agent = connected_agent(&d, "sess-espia").await;
+
+    let task: FsTaskResult = human
+        .call(
+            methods::FS_COPY,
+            &FsCopyParams {
+                from: vp("mem:///src.bin"),
+                to: vp("mem:///dst.bin"),
+                on_collision: norte_proto::CollisionPolicy::default(),
+                symlinks: norte_proto::SymlinkPolicy::default(),
+                resume: norte_proto::ResumePolicy::default(),
+                verify: norte_proto::VerifyPolicy::default(),
+            },
+        )
+        .await
+        .expect("fs.copy del humano");
+    // El otro humano drena hasta el terminal: en ese punto TODOS los frames
+    // de la task ya se difundieron (try_send síncrono en el mismo instante).
+    let seen = drain_task(&mut human2, task.task_id.get()).await;
+    assert_eq!(seen.last().expect("terminal").state, TaskState::Completed);
+    let colado = tokio::time::timeout(Duration::from_millis(200), agent.notification()).await;
+    assert!(
+        colado.is_err(),
+        "un agente no recibe task.progress de tasks ajenas: {colado:?}"
+    );
+}
+
+/// `daemon.shutdown` también es acto humano: sin este gate, un agente
+/// bypasea el de `task.cancel` (el hard-shutdown cancela TODAS las tasks)
+/// y tumba el daemon de la sesión (MAJOR del security-reviewer en #66).
+#[tokio::test]
+async fn daemon_shutdown_de_agente_es_invalid_request() {
+    let d = spawn_daemon(None).await;
+    let agent = connected_agent(&d, "sess-apagon").await;
+    let err = agent
+        .call::<_, DaemonShutdownResult>(
+            methods::DAEMON_SHUTDOWN,
+            &DaemonShutdownParams { graceful: false },
+        )
+        .await
+        .expect_err("un agente no apaga el daemon");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
+    // El daemon sigue vivo y sirviendo.
+    let c = connected_client(&d).await;
+    let _: FsListResult = c
+        .call(
+            methods::FS_LIST,
+            &FsListParams {
+                path: vp("mem:///"),
+                limit: None,
+                cursor: None,
+            },
+        )
+        .await
+        .expect("el daemon no se apagó");
+}

@@ -12,7 +12,13 @@
 //!   cortocircuita a `Allow`).
 //! - [`ScopeRegistry`] hoy clava por id string; namespacear por `(actor_kind,
 //!   id)` para que un Plugin no herede el scope de un Agent homónimo (m4) y
-//!   añadir `revoke(session)` para respuesta a incidentes (m7).
+//!   añadir `revoke(session)` para respuesta a incidentes (m7). Relacionado
+//!   (#66): la sesión la RECLAMA el cliente en su `initialize` — un agente
+//!   hostil-cooperante puede declarar la sesión de OTRO agente y heredar sus
+//!   scopes, ver/cancelar sus tasks y recibir su `task.progress`. Aceptado
+//!   bajo el threat model same-uid (§14, guardarraíl no sandbox); si algún
+//!   día hace falta aislar agente-de-agente, la sesión necesita prueba de
+//!   posesión (token al crearla), no solo nombre.
 //! - El resolver de `Ask` (M3-3b) DEBE aplicar TTL/timeout y ser cancelable: el
 //!   gate suspende la llamada del engine fuera del framework de Task (m5).
 //! - Escape de scope vía symlink dentro→fuera que el provider siga (m6): la

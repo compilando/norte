@@ -107,15 +107,18 @@ impl Default for DaemonConfig {
 /// Estado compartido entre conexiones.
 struct Shared {
     engine: Arc<Engine>,
-    /// Tasks vivas encoladas POR el daemon (para `task.cancel` y graceful).
-    tasks: Mutex<HashMap<u64, TaskHandle>>,
+    /// Tasks vivas encoladas POR el daemon (para `task.cancel` y graceful),
+    /// etiquetadas con el actor que las encoló: el gate de `task.list`/
+    /// `task.cancel` para conexiones de agente decide con el dueño (#66).
+    tasks: Mutex<HashMap<u64, RegisteredTask>>,
     /// Salidas de notificación de cada cliente YA inicializado, por id de
     /// conexión (la conexión retira la SUYA al morir — sin esto el writer
     /// task jamás terminaría: el broadcast retendría su sender). Bounded:
     /// un suscriptor que no drena pierde la suscripción, jamás acumula.
     subscribers: Mutex<HashMap<u64, Subscriber>>,
-    /// Desenlaces recientes (snapshots terminales) para `task.list`.
-    recent: Mutex<std::collections::VecDeque<norte_proto::TaskProgress>>,
+    /// Desenlaces recientes (snapshots terminales) para `task.list`, con el
+    /// actor dueño: el resync de un agente tampoco ve terminales ajenos (#66).
+    recent: Mutex<std::collections::VecDeque<(norte_proto::TaskProgress, Actor)>>,
     /// Contador de ids de conexión.
     next_conn: AtomicUsize,
     /// Conexiones autenticadas vivas.
@@ -173,13 +176,36 @@ struct PendingScope {
     ttl_ms: u64,
 }
 
-/// Una salida de broadcast: el sender de la outbox y si la conexión es de
-/// AGENTE (M3-3b Task 4, security MAJOR-1): las notifs `policy.*` cruzan
-/// sesiones (rutas y ops de otras) y solo van a humanos — el mismo criterio
-/// que el gate de `policy.pending`. `task.progress` sigue yendo a todos.
+/// Una salida de broadcast: el sender de la outbox y el ACTOR de la conexión
+/// (M3-3b Task 4, security MAJOR-1): las notifs `policy.*` cruzan sesiones
+/// (rutas y ops de otras) y solo van a humanos — el mismo criterio que el
+/// gate de `policy.pending`. El `task.progress` se enruta por dueño (#66):
+/// humanos siempre, un agente solo el de sus propias tasks.
 struct Subscriber {
     tx: mpsc::Sender<Arc<[u8]>>,
-    is_agent: bool,
+    /// Actor de la conexión (fijado server-side por SU `initialize`): decide
+    /// qué broadcasts recibe — `policy.*` solo humanos; el `task.progress` de
+    /// una task ajena jamás llega a un agente (#66, mismo leak que
+    /// `task.list`: `current` lleva paths de otros actores).
+    actor: Actor,
+}
+
+/// Una task viva registrada en el daemon: el handle + QUIÉN la encoló. El
+/// dueño gobierna visibilidad (`task.list`, broadcast de progreso) y
+/// cancelabilidad (`task.cancel`) frente a conexiones de agente (#66).
+struct RegisteredTask {
+    handle: TaskHandle,
+    owner: Actor,
+}
+
+/// EL criterio de visibilidad/alcance sobre tasks (#66), único para
+/// `task.list`, `task.cancel` y el broadcast de progreso: un humano observa
+/// todo; cualquier otro actor, solo lo suyo (igualdad de actor — dos
+/// conexiones de la misma sesión de agente comparten vista, coherente con
+/// `ScopeRegistry`). Un futuro dueño `Plugin` queda fail-closed: solo lo ve
+/// el humano.
+fn may_observe(viewer: &Actor, owner: &Actor) -> bool {
+    matches!(viewer, Actor::User) || viewer == owner
 }
 
 impl Shared {
@@ -188,23 +214,26 @@ impl Shared {
             && self.tasks.lock().expect("tasks lock sano").is_empty()
     }
 
-    fn broadcast(&self, frame: &Arc<[u8]>) {
-        self.broadcast_filtered(frame, false);
-    }
-
     /// Difunde SOLO a conexiones humanas (no-agente): notifs `policy.*`.
     fn broadcast_humans(&self, frame: &Arc<[u8]>) {
-        self.broadcast_filtered(frame, true);
+        self.broadcast_where(frame, |s| matches!(s.actor, Actor::User));
     }
 
-    fn broadcast_filtered(&self, frame: &Arc<[u8]>, humans_only: bool) {
+    /// Difunde el progreso de UNA task: humanos siempre; una conexión de
+    /// agente solo si la task es SUYA (mismo actor). Mismo criterio que el
+    /// filtro de `task.list` (#66).
+    fn broadcast_task_progress(&self, frame: &Arc<[u8]>, owner: &Actor) {
+        self.broadcast_where(frame, |s| may_observe(&s.actor, owner));
+    }
+
+    fn broadcast_where(&self, frame: &Arc<[u8]>, wants: impl Fn(&Subscriber) -> bool) {
         let mut subs = self.subscribers.lock().expect("subscribers lock sano");
         // try_send: el que tiene la outbox llena pierde la suscripción (y
         // pronto la conexión, cuando su próximo response tampoco quepa) —
         // el backlog de un cliente lento jamás crece sin límite.
         subs.retain(|conn, s| {
-            // Un agente excluido de ESTA notif conserva su suscripción.
-            if humans_only && s.is_agent {
+            // Un suscriptor excluido de ESTA notif conserva su suscripción.
+            if !wants(s) {
                 return true;
             }
             match s.tx.try_send(Arc::clone(frame)) {
@@ -468,8 +497,8 @@ impl Daemon {
         loop {
             if shared.hard_shutdown.is_cancelled() && !hard_done {
                 hard_done = true;
-                for handle in shared.tasks.lock().expect("tasks lock sano").values() {
-                    handle.cancel();
+                for task in shared.tasks.lock().expect("tasks lock sano").values() {
+                    task.handle.cancel();
                 }
             }
             if shared.tasks.lock().expect("tasks lock sano").is_empty() {
@@ -997,7 +1026,7 @@ async fn handle_value(
                         Subscriber {
                             tx: tx.clone(),
                             // El actor quedó fijado server-side por ESTE initialize.
-                            is_agent: !matches!(conn.actor, crate::journal::Actor::User),
+                            actor: conn.actor.clone(),
                         },
                     );
             }
@@ -1117,21 +1146,7 @@ async fn dispatch(
                 encodings: vec!["json".into()],
             })
         }
-        methods::DAEMON_SHUTDOWN => {
-            // El emisor canónico escribe `params: null` (ADR 0004) y este
-            // método es todo-opcionales: null y ausencia = defaults (M1
-            // del protocol-guardian; el golden request_null_params lo pinnea).
-            let p: methods::DaemonShutdownParams = parse_params(
-                req.params
-                    .filter(|v| !v.is_null())
-                    .or_else(|| Some(serde_json::json!({}))),
-            )?;
-            if !p.graceful {
-                shared.hard_shutdown.cancel();
-            }
-            shared.shutdown.cancel();
-            to_value(&methods::DaemonShutdownResult {})
-        }
+        methods::DAEMON_SHUTDOWN => handle_daemon_shutdown(&conn.actor, req.params, shared),
         // fs.list vive AQUÍ (no en dispatch_fs_task): necesita el ConnState
         // para retener el stream paginado entre páginas (ADR 0017).
         methods::FS_LIST => {
@@ -1179,6 +1194,35 @@ async fn dispatch(
         methods::PLUGIN_PREVIEW => handle_plugin_preview(req.params, shared).await,
         _ => dispatch_fs_task(req, conn.actor.clone(), shared).await,
     }
+}
+
+/// `daemon.shutdown` — apagar el daemon es acto humano (#66): sin este gate,
+/// el hard-shutdown cancela TODAS las tasks (bypass del gate de `task.cancel`)
+/// y tumba la sesión del humano.
+fn handle_daemon_shutdown(
+    actor: &Actor,
+    params: Option<serde_json::Value>,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection may shut down the daemon",
+        ));
+    }
+    // El emisor canónico escribe `params: null` (ADR 0004) y este método es
+    // todo-opcionales: null y ausencia = defaults (M1 del protocol-guardian;
+    // el golden request_null_params lo pinnea).
+    let p: methods::DaemonShutdownParams = parse_params(
+        params
+            .filter(|v| !v.is_null())
+            .or_else(|| Some(serde_json::json!({}))),
+    )?;
+    if !p.graceful {
+        shared.hard_shutdown.cancel();
+    }
+    shared.shutdown.cancel();
+    to_value(&methods::DaemonShutdownResult {})
 }
 
 /// `policy.request_scope` (M3-3b): un AGENTE pide un scope para SÍ mismo. La
@@ -1371,7 +1415,8 @@ async fn handle_policy_undo_session(
     if let Actor::Agent { session } = &target {
         tracing::info!(session = %session, "undo de sesión de agente pedido por el humano");
     }
-    let task_id = register_task_id(shared, handle)?;
+    // El dueño de la task de undo es el EJECUTOR humano (solo User llega aquí).
+    let task_id = register_task_id(shared, handle, Actor::User)?;
     to_value(&methods::PolicyUndoSessionResult { task_id })
 }
 
@@ -1684,10 +1729,10 @@ async fn dispatch_fs_task(
             };
             let handle = shared
                 .engine
-                .copy_with_as(&p.from, &p.to, opts, actor)
+                .copy_with_as(&p.from, &p.to, opts, actor.clone())
                 .await
                 .map_err(RpcError::from)?;
-            register_task(shared, handle)
+            register_task(shared, handle, actor)
         }
         methods::FS_MOVE => {
             let p: methods::FsMoveParams = parse_params(req.params)?;
@@ -1699,27 +1744,30 @@ async fn dispatch_fs_task(
             };
             let handle = shared
                 .engine
-                .move_with_as(&p.from, &p.to, opts, actor)
+                .move_with_as(&p.from, &p.to, opts, actor.clone())
                 .await
                 .map_err(RpcError::from)?;
-            register_task(shared, handle)
+            register_task(shared, handle, actor)
         }
         methods::FS_DELETE => {
             let p: methods::FsDeleteParams = parse_params(req.params)?;
             let handle = shared
                 .engine
-                .delete_with_as(&p.path, p.mode, actor)
+                .delete_with_as(&p.path, p.mode, actor.clone())
                 .await
                 .map_err(RpcError::from)?;
-            register_task(shared, handle)
+            register_task(shared, handle, actor)
         }
-        _ => dispatch_task_family(req, shared).await,
+        _ => dispatch_task_family(req, actor, shared).await,
     }
 }
 
 /// El resto del dispatch: `task.*` y los métodos de solo-lectura de 0.5.0.
+/// El `actor` viene de la conexión: gobierna la visibilidad de `task.list`,
+/// el alcance de `task.cancel` y quién puede bendecir host keys (#66).
 async fn dispatch_task_family(
     req: Request,
+    actor: crate::journal::Actor,
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
     match req.method.as_str() {
@@ -1732,12 +1780,16 @@ async fn dispatch_task_family(
             // Resync de un frontend que (re)conecta: tasks VIVAS + los
             // desenlaces recientes (por si su terminal se emitió mientras
             // estaba fuera); lo posterior llega por task.progress.
+            //
+            // Visibilidad por actor (#66): un humano lo ve TODO; un agente
+            // SOLO sus tasks — `current` lleva paths de otros actores.
             let mut tasks: Vec<norte_proto::TaskProgress> = shared
                 .recent
                 .lock()
                 .expect("recent lock sano")
                 .iter()
-                .cloned()
+                .filter(|(_, owner)| may_observe(&actor, owner))
+                .map(|(p, _)| p.clone())
                 .collect();
             tasks.extend(
                 shared
@@ -1745,7 +1797,8 @@ async fn dispatch_task_family(
                     .lock()
                     .expect("tasks lock sano")
                     .values()
-                    .map(|h| h.progress().borrow().clone()),
+                    .filter(|t| may_observe(&actor, &t.owner))
+                    .map(|t| t.handle.progress().borrow().clone()),
             );
             to_value(&methods::TaskListResult { tasks })
         }
@@ -1766,17 +1819,38 @@ async fn dispatch_task_family(
             let p: methods::TaskCancelParams = parse_params(req.params)?;
             // Cancelar algo terminal o desconocido NO es error (contrato
             // del método): la respuesta solo confirma la recepción.
-            if let Some(handle) = shared
+            if let Some(task) = shared
                 .tasks
                 .lock()
                 .expect("tasks lock sano")
                 .get(&p.task_id.get())
             {
-                handle.cancel();
+                // Gate de actor (#66): un agente solo cancela lo SUYO. Una
+                // task ajena se trata como desconocida — mismo ack, sin
+                // filtrar existencia. El intento sí se traza (material de
+                // auditoría M3-5), como el grant de scope.
+                if may_observe(&actor, &task.owner) {
+                    task.handle.cancel();
+                } else {
+                    tracing::warn!(
+                        task_id = p.task_id.get(),
+                        actor = ?actor,
+                        "task.cancel sobre task ajena: ignorado por el gate de actor"
+                    );
+                }
             }
             to_value(&methods::TaskCancelResult {})
         }
         methods::CONNECTION_TRUST_HOST_KEY => {
+            // Aceptar un fingerprint bajo TOFU es una decisión de confianza
+            // HUMANA, como `grant_scope`/`decide`/`undo_session` (#66): un
+            // agente jamás bendice la identidad de un host.
+            if !matches!(actor, Actor::User) {
+                return Err(RpcError::protocol(
+                    codes::INVALID_REQUEST,
+                    "only a human (non-agent) connection may trust a host key",
+                ));
+            }
             let p: methods::ConnectionTrustHostKeyParams = parse_params(req.params)?;
             // El engine delega en el conector, que RE-VERIFICA el fingerprint
             // contra la clave que el host presenta ahora (anti-TOCTOU, ADR
@@ -1838,16 +1912,25 @@ async fn dispatch_fs_read(
 
 /// Registra la task y arranca su bomba de progreso; devuelve el resultado de
 /// wire estándar `FsTaskResult`. Ver [`register_task_id`].
-fn register_task(shared: &Arc<Shared>, handle: TaskHandle) -> Result<serde_json::Value, RpcError> {
-    let task_id = register_task_id(shared, handle)?;
+fn register_task(
+    shared: &Arc<Shared>,
+    handle: TaskHandle,
+    owner: Actor,
+) -> Result<serde_json::Value, RpcError> {
+    let task_id = register_task_id(shared, handle, owner)?;
     to_value(&methods::FsTaskResult { task_id })
 }
 
 /// Registra la task y arranca su bomba de progreso: cada snapshot (≤30 Hz)
-/// sale como `task.progress` a TODOS los clientes; el estado terminal se
-/// difunde SIEMPRE y desregistra la task. Devuelve el `TaskId` (los métodos
-/// con result propio lo envuelven ellos, M3-4).
-fn register_task_id(shared: &Arc<Shared>, handle: TaskHandle) -> Result<TaskId, RpcError> {
+/// sale como `task.progress` a los humanos y al dueño (#66); el estado
+/// terminal jamás se pierde por el rate-limit (se difunde con el mismo
+/// enrutado por dueño) y desregistra la task. Devuelve el `TaskId` (los
+/// métodos con result propio lo envuelven ellos, M3-4).
+fn register_task_id(
+    shared: &Arc<Shared>,
+    handle: TaskHandle,
+    owner: Actor,
+) -> Result<TaskId, RpcError> {
     let task_id: TaskId = handle.id();
     let mut progress = handle.progress();
     {
@@ -1862,7 +1945,13 @@ fn register_task_id(shared: &Arc<Shared>, handle: TaskHandle) -> Result<TaskId, 
                 format!("too many live tasks (max {MAX_LIVE_TASKS}); retry later"),
             ));
         }
-        tasks.insert(task_id.get(), handle);
+        tasks.insert(
+            task_id.get(),
+            RegisteredTask {
+                handle,
+                owner: owner.clone(),
+            },
+        );
     }
 
     let shared_pump = Arc::clone(shared);
@@ -1876,7 +1965,7 @@ fn register_task_id(shared: &Arc<Shared>, handle: TaskHandle) -> Result<TaskId, 
             // ninguno (M1 del rust-reviewer).
             if terminal {
                 let mut recent = shared_pump.recent.lock().expect("recent lock sano");
-                recent.push_back(snapshot.clone());
+                recent.push_back((snapshot.clone(), owner.clone()));
                 while recent.len() > RECENT_TERMINAL {
                     recent.pop_front();
                 }
@@ -1887,7 +1976,7 @@ fn register_task_id(shared: &Arc<Shared>, handle: TaskHandle) -> Result<TaskId, 
                 params: serde_json::to_value(&snapshot).ok(),
             };
             if let Ok(frame) = encode_frame(&notif) {
-                shared_pump.broadcast(&Arc::from(frame.into_boxed_slice()));
+                shared_pump.broadcast_task_progress(&Arc::from(frame.into_boxed_slice()), &owner);
             }
             if terminal {
                 break;
@@ -1899,7 +1988,7 @@ fn register_task_id(shared: &Arc<Shared>, handle: TaskHandle) -> Result<TaskId, 
                 let last = progress.borrow().clone();
                 if last.state.is_terminal() {
                     let mut recent = shared_pump.recent.lock().expect("recent lock sano");
-                    recent.push_back(last.clone());
+                    recent.push_back((last.clone(), owner.clone()));
                     while recent.len() > RECENT_TERMINAL {
                         recent.pop_front();
                     }
@@ -1910,7 +1999,8 @@ fn register_task_id(shared: &Arc<Shared>, handle: TaskHandle) -> Result<TaskId, 
                     params: serde_json::to_value(&last).ok(),
                 };
                 if let Ok(frame) = encode_frame(&notif) {
-                    shared_pump.broadcast(&Arc::from(frame.into_boxed_slice()));
+                    shared_pump
+                        .broadcast_task_progress(&Arc::from(frame.into_boxed_slice()), &owner);
                 }
                 break;
             }

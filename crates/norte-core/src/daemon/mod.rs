@@ -3,7 +3,8 @@
 //! issue (el modo embebido sigue siendo el camino allí).
 //!
 //! - [`Daemon`] (server): acepta conexiones, autentica, despacha
-//!   `fs.*`/`task.*` y difunde `task.progress` a todos los clientes.
+//!   `fs.*`/`task.*` y difunde `task.progress` a los humanos y al dueño de
+//!   cada task (#66: una conexión de agente no observa tasks ajenas).
 //! - [`Client`]: conexión de frontend (initialize, call, notificaciones,
 //!   `connect_or_spawn`).
 
