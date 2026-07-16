@@ -153,6 +153,14 @@ struct Shared {
     /// `set_enabled`) re-leen y persisten `plugins-state.toml` bajo el lock. El
     /// `Mutex` std basta: el dispatch es serial y las secciones son cortas.
     plugins: Mutex<crate::plugins::PluginRegistry>,
+    /// Runtime WASM compartido para ejecutar comandos de plugin (M4-P4). Se
+    /// construye UNA vez en el bind (arranca un hilo "ticker" de época) y se
+    /// reutiliza entre `plugin.run_command`. `Arc` porque `PluginRuntime` es
+    /// `Send+Sync` pero NO `Clone` (posee el `JoinHandle` del ticker): el
+    /// handler clona el `Arc` y ejecuta la instanciación+ejecución (pesada,
+    /// síncrona) en un `spawn_blocking`, jamás en el reactor con un lock tomado
+    /// (regla 2).
+    plugin_runtime: Arc<norte_plugin_host::PluginRuntime>,
 }
 
 /// Una petición de scope registrada por un agente, a la espera de que un
@@ -288,11 +296,17 @@ impl Daemon {
         // La resolución del path por defecto puede tocar el FS (sonda de uid
         // del fallback /tmp) y el descubrimiento del catálogo de plugins lee el
         // dir de config: TODO I/O síncrono dentro del spawn_blocking (regla 2).
-        let (listener, uid, socket_path, plugins) = tokio::task::spawn_blocking({
+        let (listener, uid, socket_path, plugins, plugin_runtime) = tokio::task::spawn_blocking({
             let requested = cfg.socket_path;
             let plugins_dir = cfg.plugins_dir;
             move || -> Result<
-                (std::os::unix::net::UnixListener, u32, PathBuf, crate::plugins::PluginRegistry),
+                (
+                    std::os::unix::net::UnixListener,
+                    u32,
+                    PathBuf,
+                    crate::plugins::PluginRegistry,
+                    Arc<norte_plugin_host::PluginRuntime>,
+                ),
                 DaemonError,
             > {
                 let socket_path = requested.unwrap_or_else(|| super::default_socket_path(None));
@@ -331,24 +345,10 @@ impl Daemon {
                 }
                 // El socket mismo tampoco regala nada: 0600.
                 std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))?;
-                // Catálogo de plugins (M4-P3). Un `plugins-state.toml` corrupto
-                // NO debe impedir arrancar el daemon (dejaría al usuario sin
-                // ninguna otra operación por un fichero de estado roto): se
-                // degrada FAIL-CLOSED a un registro VACÍO (nada aprobado ni
-                // activado) con aviso, y el usuario puede re-aprobar. La
-                // corrupción NUNCA "abre" un plugin que no estaba consentido. Un
-                // catálogo ausente ya es "vacío" sin error.
-                let plugins_root =
-                    plugins_dir.unwrap_or_else(crate::connect::config_dir);
-                let plugins = crate::plugins::PluginRegistry::discover(&plugins_root)
-                    .unwrap_or_else(|e| {
-                        tracing::warn!(
-                            error = %e,
-                            "plugins-state corrupto: se arranca con catálogo vacío"
-                        );
-                        crate::plugins::PluginRegistry::empty(&plugins_root)
-                    });
-                Ok((listener, uid, socket_path, plugins))
+                // Catálogo de plugins + runtime WASM compartido (M4-P3/P4):
+                // I/O/CPU síncrono dentro del spawn_blocking (regla 2).
+                let (plugins, plugin_runtime) = discover_plugins(plugins_dir)?;
+                Ok((listener, uid, socket_path, plugins, plugin_runtime))
             }
         })
         .await
@@ -375,6 +375,7 @@ impl Daemon {
             next_scope_req: AtomicU64::new(0),
             approvals: Arc::clone(&approvals),
             plugins: Mutex::new(plugins),
+            plugin_runtime,
         });
         // La salida del router de aprobaciones hacia los suscriptores. `Weak`
         // rompe el ciclo Shared → approvals → closure → Shared: muerto el
@@ -489,6 +490,41 @@ impl Daemon {
     pub fn hard_shutdown_token(&self) -> CancellationToken {
         self.shared.hard_shutdown.clone()
     }
+}
+
+/// Descubre el catálogo de plugins y construye el runtime WASM compartido
+/// (M4-P3/P4). TODO I/O/CPU síncrono: el caller lo invoca dentro del
+/// `spawn_blocking` del bind (regla 2).
+///
+/// Un `plugins-state.toml` corrupto NO impide arrancar el daemon (dejaría al
+/// usuario sin ninguna otra operación por un fichero de estado roto): se degrada
+/// FAIL-CLOSED a un registro VACÍO (nada aprobado ni activado) con aviso, y el
+/// usuario puede re-aprobar. La corrupción NUNCA "abre" un plugin que no estaba
+/// consentido. Un catálogo ausente ya es "vacío" sin error. En cambio, un fallo
+/// al crear el runtime SÍ aborta el bind: sin runtime no se ejecuta ningún
+/// plugin (fail-closed).
+fn discover_plugins(
+    plugins_dir: Option<PathBuf>,
+) -> Result<
+    (
+        crate::plugins::PluginRegistry,
+        Arc<norte_plugin_host::PluginRuntime>,
+    ),
+    DaemonError,
+> {
+    let plugins_root = plugins_dir.unwrap_or_else(crate::connect::config_dir);
+    let plugins = crate::plugins::PluginRegistry::discover(&plugins_root).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "plugins-state corrupto: se arranca con catálogo vacío");
+        crate::plugins::PluginRegistry::empty(&plugins_root)
+    });
+    let runtime = norte_plugin_host::PluginRuntime::new()
+        .map(Arc::new)
+        .map_err(|e| {
+            DaemonError::Io(std::io::Error::other(format!(
+                "no se pudo crear el runtime de plugins: {e}"
+            )))
+        })?;
+    Ok((plugins, runtime))
 }
 
 /// Verifica (creándolo si falta) que el dir del socket es NUESTRO y 0700:
@@ -1137,6 +1173,8 @@ async fn dispatch(
             let p: methods::PluginSetEnabledParams = parse_params(req.params)?;
             handle_plugin_set_enabled(&conn.actor, &p, shared).await
         }
+        // plugin.run_command (M4-P4): ABIERTO (ejecutar no consiente nada).
+        methods::PLUGIN_RUN_COMMAND => handle_plugin_run_command(req.params, shared).await,
         _ => dispatch_fs_task(req, conn.actor.clone(), shared).await,
     }
 }
@@ -1441,6 +1479,78 @@ async fn handle_plugin_set_enabled(
         .map_err(|e| RpcError::protocol(codes::INTERNAL_ERROR, format!("persist: {e}")))?;
     tracing::info!(id = %p.id, "plugin (des)activado por el humano");
     to_value(&methods::PluginSetEnabledResult {})
+}
+
+/// `plugin.run_command` (M4-P4): ejecuta un comando de un plugin YA aprobado y
+/// activado. ABIERTO a cualquier conexión (no consiente nada: el humano ya
+/// aprobó+activó, y el sandbox WASI vacío contiene al guest).
+///
+/// Regla 2 (crítica): la EJECUCIÓN (`instantiate` compila el componente WASM +
+/// `run_command`) es síncrona y pesada. Se separa en dos:
+/// 1. RESOLVER (barato) bajo el lock del registry: valida el consentimiento y
+///    resuelve `.wasm` + capabilities. El `MutexGuard` se suelta al cerrar el
+///    bloque, ANTES del `.await`.
+/// 2. EJECUTAR (pesado) FUERA del lock, en un `spawn_blocking`, con un clon del
+///    `Arc<PluginRuntime>` compartido.
+///
+/// Redacción hacia el cliente (security-reviewer M4-P4): un fallo de runtime
+/// (`PluginRunError::Runtime`) puede llevar la ruta del `.wasm` o detalles
+/// internos de wasmtime; JAMÁS se devuelve su `Display` crudo al cliente —
+/// se responde un `INTERNAL_ERROR` genérico y el detalle va SOLO al log local.
+// `skip_all` sin `id`: el id viene crudo del wire; no va al log salvo tras
+// resolver (mismo criterio que set_approval/set_enabled).
+#[tracing::instrument(skip_all)]
+async fn handle_plugin_run_command(
+    params: Option<serde_json::Value>,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::PluginRunCommandParams = parse_params(params)?;
+    // 1) Resolver bajo el lock (barato). El guard NO cruza el `.await`.
+    let resolved = {
+        let reg = shared.plugins.lock().expect("plugins lock sano");
+        reg.resolve_runnable(&p.id)
+    };
+    let (wasm, caps) = resolved.map_err(|e| run_error_to_rpc(&e))?;
+
+    // 2) Ejecutar fuera del lock, en spawn_blocking (regla 2). El runtime es
+    // `Send+Sync` pero no `Clone`: se clona el `Arc`.
+    let runtime = Arc::clone(&shared.plugin_runtime);
+    let command = p.command.clone();
+    let arg = p.arg.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        let mut inst = runtime.instantiate(&wasm, caps)?;
+        inst.run_command(&command, &arg)
+    })
+    .await
+    .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "plugin task panicked"))?
+    .map_err(|e| {
+        // Redacción: el detalle (posible ruta del .wasm / interno de wasmtime)
+        // va SOLO al log local; al cliente, un mensaje genérico.
+        tracing::warn!(id = %p.id, error = %e, "el runtime del plugin falló");
+        RpcError::protocol(codes::INTERNAL_ERROR, "plugin runtime failed")
+    })?;
+    to_value(&methods::PluginRunCommandResult { output })
+}
+
+/// Mapea el veredicto de consentimiento de [`crate::plugins::resolve_runnable`]
+/// (nunca `Runtime`, que se maneja aparte con redacción) a un `RpcError`. Los
+/// mensajes de estos variantes NO revelan rutas (llevan el id, no el path;
+/// coherente con la redacción de `list()`), así que son seguros de propagar.
+fn run_error_to_rpc(e: &crate::plugins::PluginRunError) -> RpcError {
+    use crate::plugins::PluginRunError as E;
+    match e {
+        // Id inexistente o sin binario: error de PARÁMETRO (el cliente pidió
+        // algo que no existe/no es ejecutable).
+        E::Unknown(_) | E::NoBinary(_) => RpcError::protocol(codes::INVALID_PARAMS, e.to_string()),
+        // Sin aprobar / desactivado: la petición no es válida en este estado
+        // (el humano no ha consentido). INVALID_REQUEST con mensaje claro.
+        E::NotApproved(_) | E::Disabled(_) => {
+            RpcError::protocol(codes::INVALID_REQUEST, e.to_string())
+        }
+        // No debería llegar aquí (resolve_runnable no ejecuta), pero por si el
+        // tipo evoluciona: redactado, jamás el Display crudo.
+        E::Runtime(_) => RpcError::protocol(codes::INTERNAL_ERROR, "plugin runtime failed"),
+    }
 }
 
 /// Instante de expiración de un scope a partir de su `ttl_ms`: clamp a

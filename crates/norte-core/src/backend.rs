@@ -442,6 +442,64 @@ impl Backend {
             Self::Remote(r) => r.plugins_set_enabled(id, enabled).await,
         }
     }
+
+    /// Ejecuta un comando de un plugin YA aprobado y activado (M4-P4) y devuelve
+    /// su salida. Embebido: registro EFÍMERO por-llamada + un `PluginRuntime`
+    /// nuevo, TODO en `spawn_blocking` (la instanciación compila WASM: pesada y
+    /// síncrona, regla 2). Remoto: `plugin.run_command` contra el daemon.
+    ///
+    /// El coste de crear el runtime por-llamada se acepta igual que el registro
+    /// efímero de [`Self::plugins_list`]: el modo embebido es un frontend humano
+    /// puntual, no un servidor de plugins de alta frecuencia (ese es el daemon,
+    /// que sí reutiliza un runtime compartido).
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo; con el daemon caído,
+    /// `ProviderUnavailable{retryable:true}`. Un fallo del runtime del plugin se
+    /// entrega REDACTADO (`Internal`), sin filtrar rutas ni detalles internos.
+    pub async fn plugin_run_command(
+        &self,
+        id: &str,
+        command: &str,
+        arg: &str,
+    ) -> Result<String, Error> {
+        match self {
+            Self::Embedded(_) => {
+                let dir = crate::connect::config_dir();
+                let id = id.to_owned();
+                let command = command.to_owned();
+                let arg = arg.to_owned();
+                tokio::task::spawn_blocking(move || -> Result<String, Error> {
+                    let reg = crate::PluginRegistry::discover(&dir)
+                        .map_err(|_| Error::Io { retryable: false })?;
+                    let runtime = norte_plugin_host::PluginRuntime::new()
+                        .map_err(|_| Error::Internal { panic: false })?;
+                    reg.run_command(&runtime, &id, &command, &arg)
+                        .map_err(|e| run_error_to_taxonomy(&e))
+                })
+                .await
+                .map_err(|_| Error::Internal { panic: true })?
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.plugin_run_command(id, command, arg).await,
+        }
+    }
+}
+
+/// Mapea el fallo de ejecución de un plugin a la taxonomía del protocolo (modo
+/// EMBEBIDO). Un fallo de runtime se REDACTA a `Internal` (jamás el `Display`
+/// crudo, que puede llevar la ruta del `.wasm` o detalles de wasmtime): la
+/// misma política que el daemon aplica en el wire (security-reviewer M4-P4).
+fn run_error_to_taxonomy(e: &crate::plugins::PluginRunError) -> Error {
+    use crate::plugins::PluginRunError as E;
+    match e {
+        // Id inexistente / sin binario / no consentido: el nodo pedido no está
+        // disponible para ejecución. `NotFound` es la categoría honesta y NO
+        // revela rutas (los mensajes de estos variantes llevan el id, no el path).
+        E::Unknown(_) | E::NoBinary(_) | E::NotApproved(_) | E::Disabled(_) => Error::NotFound,
+        // Fallo del runtime: redactado, sin filtrar el detalle al frontend.
+        E::Runtime(_) => Error::Internal { panic: false },
+    }
 }
 
 /// El backend remoto (solo unix, como el daemon — ADR 0011).
@@ -1140,6 +1198,27 @@ pub mod remote {
                 )
                 .await?;
             Ok(())
+        }
+
+        /// `plugin.run_command` contra el daemon (M4-P4): devuelve la salida del
+        /// comando. El daemon ya redacta los fallos de runtime a `Internal`.
+        pub(super) async fn plugin_run_command(
+            &self,
+            id: &str,
+            command: &str,
+            arg: &str,
+        ) -> Result<String, Error> {
+            let r: methods::PluginRunCommandResult = self
+                .call_timed(
+                    methods::PLUGIN_RUN_COMMAND,
+                    &methods::PluginRunCommandParams {
+                        id: id.to_owned(),
+                        command: command.to_owned(),
+                        arg: arg.to_owned(),
+                    },
+                )
+                .await?;
+            Ok(r.output)
         }
     }
 

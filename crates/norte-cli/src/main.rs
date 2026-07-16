@@ -111,6 +111,26 @@ enum Cmd {
         /// Sesión de agente (la de `--session` del puente MCP)
         session: String,
     },
+    /// Ejecuta comandos de plugins ya aprobados+activados (M4-P4)
+    Plugin {
+        #[command(subcommand)]
+        cmd: PluginCmd,
+    },
+}
+
+/// Subcomandos de plugins.
+#[derive(Subcommand)]
+enum PluginCmd {
+    /// Ejecuta un comando de un plugin y escribe su salida a STDOUT
+    Run {
+        /// Id del plugin (reverse-DNS, p. ej. `org.norte.demo`)
+        id: String,
+        /// Comando declarado por el plugin
+        command: String,
+        /// Argumento del comando (ausente = "")
+        #[arg(default_value = "")]
+        arg: String,
+    },
 }
 
 /// Subcomandos MCP.
@@ -310,9 +330,31 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             .context(norte_i18n::t("cli-enqueue-delete"))?;
             Ok(run_task(task, false).await)
         }
+        Cmd::Plugin { cmd } => plugin_cmd(&backend, cmd).await,
         #[cfg(unix)]
         Cmd::Daemon { .. } | Cmd::Mcp { .. } | Cmd::Policy { .. } | Cmd::Undo { .. } => {
             unreachable!("manejado arriba")
+        }
+    }
+}
+
+/// `norte plugin run <id> <command> [arg]`: ejecuta un comando de un plugin YA
+/// aprobado+activado por el humano y escribe su salida a STDOUT. Va por el
+/// `Backend` elegido con los flags globales (`--daemon`/`--socket`), como el
+/// resto de operaciones (regla 7).
+async fn plugin_cmd(backend: &Backend, cmd: PluginCmd) -> anyhow::Result<ExitCode> {
+    let PluginCmd::Run { id, command, arg } = cmd;
+    match backend.plugin_run_command(&id, &command, &arg).await {
+        Ok(output) => {
+            println!("{output}");
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(e) => {
+            eprintln!(
+                "{}",
+                norte_i18n::ta("cli-plugin-run-failed", &[("error", &e.to_string())])
+            );
+            Ok(ExitCode::FAILURE)
         }
     }
 }

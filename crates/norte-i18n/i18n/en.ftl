@@ -61,6 +61,7 @@ cli-mcp-serving = MCP over stdio (session { $session }); Ctrl-D to stop
 cli-scope-granted = scope granted
 cli-undo-done = session { $session } undone
 cli-undo-failed = undo incomplete: { $error }
+cli-plugin-run-failed = plugin run failed: { $error }
 cli-daemon-stopped = shutdown requested
 cli-daemon-hard-shutdown = second signal: cancelling tasks…
 cli-hostkey-unknown = first connection to { $host }:{ $port } — unregistered host key

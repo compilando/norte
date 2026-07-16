@@ -231,22 +231,22 @@ impl PluginRegistry {
         Ok(true)
     }
 
-    /// Ejecuta un comando de un plugin APROBADO y ACTIVADO (fail-closed: un
-    /// plugin no consentido JAMÁS se ejecuta). El `.wasm` es `<dir>/plugin.wasm`
-    /// por convención (ADR 0022 D6). Instancia con las capabilities DEL
-    /// MANIFIESTO (el sandbox de M4-P2 las hace cumplir). SÍNCRONO (compila e
-    /// instancia el componente): el caller lo corre en `spawn_blocking` (regla 2).
+    /// Valida el consentimiento (fail-closed) y RESUELVE el `.wasm` +
+    /// capabilities de un plugin, SIN ejecutarlo. Es BARATO (lectura del
+    /// catálogo/estado en memoria + un `is_file`): pensado para correr bajo el
+    /// `Mutex<PluginRegistry>` del daemon, que después ejecuta lo PESADO
+    /// (`PluginRuntime::instantiate` + `run_command`, que compila el componente
+    /// WASM) FUERA del lock, en un `spawn_blocking` (regla 2). El `.wasm` es
+    /// `<dir>/plugin.wasm` por convención (ADR 0022 D6); las capabilities son
+    /// las DEL MANIFIESTO (el sandbox de M4-P2 las hace cumplir).
     ///
     /// # Errors
-    /// [`PluginRunError`] si el plugin no existe, no está aprobado, está
-    /// desactivado, no tiene binario, o el runtime falla.
-    pub fn run_command(
+    /// [`PluginRunError`] `Unknown`/`NotApproved`/`Disabled`/`NoBinary` según el
+    /// veredicto de consentimiento; nunca `Runtime` (no ejecuta nada).
+    pub fn resolve_runnable(
         &self,
-        runtime: &norte_plugin_host::PluginRuntime,
         id: &str,
-        command: &str,
-        arg: &str,
-    ) -> Result<String, PluginRunError> {
+    ) -> Result<(PathBuf, norte_plugin_host::Capabilities), PluginRunError> {
         let entry = self
             .catalog
             .plugins
@@ -264,7 +264,28 @@ impl PluginRegistry {
         if !wasm.is_file() {
             return Err(PluginRunError::NoBinary(id.to_string()));
         }
-        let mut inst = runtime.instantiate(&wasm, entry.manifest.capabilities.clone())?;
+        Ok((wasm, entry.manifest.capabilities.clone()))
+    }
+
+    /// Ejecuta un comando de un plugin APROBADO y ACTIVADO (fail-closed: un
+    /// plugin no consentido JAMÁS se ejecuta). Delega la validación en
+    /// [`Self::resolve_runnable`] y ejecuta a continuación. SÍNCRONO (compila e
+    /// instancia el componente): el caller lo corre en `spawn_blocking` (regla
+    /// 2). El daemon prefiere separar resolución (bajo lock) y ejecución (fuera
+    /// del lock) llamando a [`Self::resolve_runnable`] directamente.
+    ///
+    /// # Errors
+    /// [`PluginRunError`] si el plugin no existe, no está aprobado, está
+    /// desactivado, no tiene binario, o el runtime falla.
+    pub fn run_command(
+        &self,
+        runtime: &norte_plugin_host::PluginRuntime,
+        id: &str,
+        command: &str,
+        arg: &str,
+    ) -> Result<String, PluginRunError> {
+        let (wasm, caps) = self.resolve_runnable(id)?;
+        let mut inst = runtime.instantiate(&wasm, caps)?;
         Ok(inst.run_command(command, arg)?)
     }
 

@@ -2060,6 +2060,51 @@ async fn plugin_set_approval_id_desconocido_es_invalid_params() {
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 }
 
+/// `plugin.run_command` de un plugin SIN aprobar es `INVALID_REQUEST` y NO lo
+/// ejecuta (fail-closed): el humano no ha consentido, así que el runtime no
+/// arranca. El demo sembrado nace sin aprobar/activar (M4-P4). El caso de éxito
+/// con un `.wasm` real es E2E de la task siguiente.
+#[tokio::test]
+async fn plugin_run_command_sin_aprobar_es_invalid_request() {
+    let d = spawn_daemon_plugins().await;
+    let c = connected_client(&d).await;
+    let err = c
+        .call::<_, methods::PluginRunCommandResult>(
+            methods::PLUGIN_RUN_COMMAND,
+            &methods::PluginRunCommandParams {
+                id: "org.norte.demo".into(),
+                command: "echo".into(),
+                arg: "hola".into(),
+            },
+        )
+        .await
+        .expect_err("un plugin sin aprobar jamás se ejecuta");
+    assert!(
+        matches!(err, ClientError::Rpc(ref rpc) if rpc.code == codes::INVALID_REQUEST),
+        "sin aprobar = INVALID_REQUEST, no se ejecuta: {err:?}"
+    );
+}
+
+/// `plugin.run_command` de un id DESCONOCIDO es `INVALID_PARAMS` (el cliente
+/// pidió un plugin que no existe): no se ejecuta ni se filtra nada.
+#[tokio::test]
+async fn plugin_run_command_id_desconocido_es_invalid_params() {
+    let d = spawn_daemon_plugins().await;
+    let c = connected_client(&d).await;
+    let err = c
+        .call::<_, methods::PluginRunCommandResult>(
+            methods::PLUGIN_RUN_COMMAND,
+            &methods::PluginRunCommandParams {
+                id: "org.norte.fantasma".into(),
+                command: "echo".into(),
+                arg: String::new(),
+            },
+        )
+        .await
+        .expect_err("id desconocido");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+}
+
 /// TOML deliberadamente inválido: el descubridor debe reportarlo en `errors`,
 /// no tumbar el catálogo. Un `[[[` sin cerrar no parsea.
 const BROKEN_MANIFEST: &str = "no es toml [[[";
