@@ -282,5 +282,13 @@
     "enabled": false
   },
   "plugin_set_enabled_result": {},
-  "plugin_list_params": {}
+  "plugin_list_params": {},
+  "plugin_run_command_params": {
+    "id": "org.norte.demo",
+    "command": "greet",
+    "arg": "world"
+  },
+  "plugin_run_command_result": {
+    "output": "hello, world"
+  }
 }

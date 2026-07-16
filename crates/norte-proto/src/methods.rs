@@ -57,7 +57,11 @@ use crate::{
 /// descubiertos + errores de carga, solo lectura), `plugin.set_approval` y
 /// `plugin.set_enabled` (un humano aprueba capabilities / activa un plugin;
 /// solo conexiones User). Aditivo sobre 0.12.x.
-pub const PROTOCOL_VERSION: &str = "0.13.0";
+///
+/// 0.14.0 (M4-P4): `plugin.run_command` — ejecuta un comando de un plugin
+/// APROBADO y ACTIVADO (el plugin corre sandboxeado; devuelve el string del
+/// comando o error). Aditivo sobre 0.13.x.
+pub const PROTOCOL_VERSION: &str = "0.14.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -196,6 +200,10 @@ pub const PLUGIN_SET_APPROVAL: &str = "plugin.set_approval";
 /// `plugin.set_enabled` — un HUMANO activa o desactiva un plugin (M4-P3). SOLO
 /// conexiones User (misma barrera que [`PLUGIN_SET_APPROVAL`]).
 pub const PLUGIN_SET_ENABLED: &str = "plugin.set_enabled";
+/// `plugin.run_command` — ejecuta un comando de un plugin `command` APROBADO y
+/// ACTIVADO (M4-P4); el plugin corre sandboxeado; devuelve el string del
+/// comando o error.
+pub const PLUGIN_RUN_COMMAND: &str = "plugin.run_command";
 
 /// Params de [`FS_LIST`] (paginación por cursor desde 0.8.0, ADR 0017).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -665,3 +673,23 @@ pub struct PluginSetEnabledParams {
 /// Result de [`PLUGIN_SET_ENABLED`]: objeto vacío, reservado para extensión.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginSetEnabledResult {}
+
+/// Params de [`PLUGIN_RUN_COMMAND`] (M4-P4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginRunCommandParams {
+    /// Id del plugin que expone el comando.
+    pub id: String,
+    /// Nombre del comando a ejecutar (declarado por el plugin).
+    pub command: String,
+    /// Argumento del comando. Ausente = `""` (el default del wire): un cliente
+    /// que no lo envía ejecuta el comando sin argumento.
+    #[serde(default)]
+    pub arg: String,
+}
+
+/// Result de [`PLUGIN_RUN_COMMAND`]: la salida del comando del plugin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginRunCommandResult {
+    /// Salida (string) que devuelve el comando del plugin.
+    pub output: String,
+}

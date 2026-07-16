@@ -691,11 +691,11 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.13.0 (M4-P3): acepta 0.13.x (N) y 0.12.x (N-1), rechaza 0.11.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.13.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.12.0"), "N-1");
+    // 0.14.0 (M4-P4): acepta 0.14.x (N) y 0.13.x (N-1), rechaza 0.12.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.14.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.13.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.11.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.12.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -747,4 +747,29 @@ fn plugin_types_roundtrip() {
     let en: PluginSetEnabledParams =
         serde_json::from_str(r#"{"id":"org.norte.demo","enabled":false}"#).unwrap();
     assert!(!en.enabled);
+}
+
+#[test]
+fn plugin_run_command_roundtrip() {
+    use norte_proto::methods::{PluginRunCommandParams, PluginRunCommandResult};
+    // Con `arg` explícito: round-trip exacto.
+    let p = PluginRunCommandParams {
+        id: "org.norte.demo".into(),
+        command: "greet".into(),
+        arg: "world".into(),
+    };
+    let back: PluginRunCommandParams =
+        serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+    assert_eq!(back, p);
+    // `arg` ausente → `""` (el default), y sin skip_serializing_if SIEMPRE
+    // sale en el wire: un cliente que lo omite obtiene `arg:""` al reserializar.
+    let sin_arg: PluginRunCommandParams =
+        serde_json::from_str(r#"{"id":"org.norte.demo","command":"greet"}"#).unwrap();
+    assert_eq!(sin_arg.arg, "");
+    assert_eq!(
+        serde_json::to_string(&sin_arg).unwrap(),
+        r#"{"id":"org.norte.demo","command":"greet","arg":""}"#
+    );
+    let r: PluginRunCommandResult = serde_json::from_str(r#"{"output":"hello, world"}"#).unwrap();
+    assert_eq!(r.output, "hello, world");
 }

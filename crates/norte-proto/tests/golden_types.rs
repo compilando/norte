@@ -354,14 +354,15 @@ fn golden_methods() {
     check_methods_policy(&fixtures);
     check_methods_session(&fixtures);
     check_methods_plugin(&fixtures);
-    assert_eq!(fixtures.len(), 50, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 52, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia plugin.* (0.13.0, M4-P3): catálogo + aprobación/activación humanas.
 fn check_methods_plugin(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
-        PluginInfo, PluginListParams, PluginListResult, PluginLoadError, PluginSetApprovalParams,
-        PluginSetApprovalResult, PluginSetEnabledParams, PluginSetEnabledResult,
+        PluginInfo, PluginListParams, PluginListResult, PluginLoadError, PluginRunCommandParams,
+        PluginRunCommandResult, PluginSetApprovalParams, PluginSetApprovalResult,
+        PluginSetEnabledParams, PluginSetEnabledResult,
     };
     // `plugin.list` sin params: golden vacío, simetría con `task_list_params`.
     check_one(fixtures, "plugin_list_params", &PluginListParams {});
@@ -424,6 +425,23 @@ fn check_methods_plugin(fixtures: &BTreeMap<String, Value>) {
         fixtures,
         "plugin_set_enabled_result",
         &PluginSetEnabledResult {},
+    );
+    // `plugin.run_command` (0.14.0, M4-P4): `arg` sin skip → siempre en el wire.
+    check_one(
+        fixtures,
+        "plugin_run_command_params",
+        &PluginRunCommandParams {
+            id: "org.norte.demo".into(),
+            command: "greet".into(),
+            arg: "world".into(),
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_run_command_result",
+        &PluginRunCommandResult {
+            output: "hello, world".into(),
+        },
     );
 }
 
@@ -926,10 +944,11 @@ fn method_names_frozen() {
     assert_eq!(methods::PLUGIN_LIST, "plugin.list");
     assert_eq!(methods::PLUGIN_SET_APPROVAL, "plugin.set_approval");
     assert_eq!(methods::PLUGIN_SET_ENABLED, "plugin.set_enabled");
+    assert_eq!(methods::PLUGIN_RUN_COMMAND, "plugin.run_command");
     assert_eq!(methods::FS_READ_MAX_CHUNK, 8 * 1024 * 1024);
     assert_eq!(methods::FS_LIST_MAX_PAGE, 10_000);
-    // 0.13.0: familia plugin.* (M4-P3). Aditivo sobre 0.12.x.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.13.0");
+    // 0.14.0: plugin.run_command (M4-P4). Aditivo sobre 0.13.x.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.14.0");
 }
 
 #[test]
