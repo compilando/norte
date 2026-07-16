@@ -66,6 +66,7 @@ async fn spawn_daemon_allow() -> TestDaemon {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
+            plugins_dir: None,
         },
     )
     .await

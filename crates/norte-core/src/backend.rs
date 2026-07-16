@@ -344,6 +344,90 @@ impl Backend {
             Self::Remote(r) => r.undo_session(session).await,
         }
     }
+
+    /// Catálogo de plugins descubiertos + su estado aprobado/activado (M4-P3).
+    /// Embebido: descubre de [`crate::connect::config_dir`] bajo demanda (el
+    /// estado vive en `plugins-state.toml`, no en memoria — no hay que retener
+    /// un registro entre llamadas); remoto: `plugin.list` contra el daemon.
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo; con el daemon caído,
+    /// `ProviderUnavailable{retryable:true}`.
+    pub async fn plugins_list(&self) -> Result<norte_proto::methods::PluginListResult, Error> {
+        match self {
+            Self::Embedded(_) => {
+                // Registro EFÍMERO por-llamada (I/O sync → spawn_blocking,
+                // regla 2). La verdad vive en el fichero de estado.
+                let dir = crate::connect::config_dir();
+                tokio::task::spawn_blocking(move || {
+                    crate::PluginRegistry::discover(&dir).map(|r| r.list())
+                })
+                .await
+                .map_err(|_| Error::Internal { panic: true })?
+                .map_err(|_| Error::Io { retryable: false })
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.plugins_list().await,
+        }
+    }
+
+    /// Aprueba (o revoca) las capabilities de un plugin (M4-P3). Embebido:
+    /// discover + `set_approval` + persiste, todo en `spawn_blocking`.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] si el id es desconocido; taxonomía del protocolo en
+    /// lo demás.
+    pub async fn plugins_set_approval(&self, id: &str, approved: bool) -> Result<(), Error> {
+        match self {
+            Self::Embedded(_) => {
+                let dir = crate::connect::config_dir();
+                let id = id.to_owned();
+                let applied = tokio::task::spawn_blocking(move || {
+                    let mut reg = crate::PluginRegistry::discover(&dir)?;
+                    reg.set_approval(&id, approved)
+                })
+                .await
+                .map_err(|_| Error::Internal { panic: true })?
+                .map_err(|_| Error::Io { retryable: false })?;
+                if applied {
+                    Ok(())
+                } else {
+                    Err(Error::NotFound)
+                }
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.plugins_set_approval(id, approved).await,
+        }
+    }
+
+    /// Activa/desactiva un plugin ya aprobado (M4-P3). Semántica idéntica a
+    /// [`Self::plugins_set_approval`].
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] si el id es desconocido; taxonomía del protocolo en
+    /// lo demás.
+    pub async fn plugins_set_enabled(&self, id: &str, enabled: bool) -> Result<(), Error> {
+        match self {
+            Self::Embedded(_) => {
+                let dir = crate::connect::config_dir();
+                let id = id.to_owned();
+                let applied = tokio::task::spawn_blocking(move || {
+                    let mut reg = crate::PluginRegistry::discover(&dir)?;
+                    reg.set_enabled(&id, enabled)
+                })
+                .await
+                .map_err(|_| Error::Internal { panic: true })?
+                .map_err(|_| Error::Io { retryable: false })?;
+                if applied {
+                    Ok(())
+                } else {
+                    Err(Error::NotFound)
+                }
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.plugins_set_enabled(id, enabled).await,
+        }
+    }
 }
 
 /// El backend remoto (solo unix, como el daemon — ADR 0011).
@@ -996,6 +1080,48 @@ pub mod remote {
                     &PolicyDecideParams {
                         approval_id,
                         approve,
+                    },
+                )
+                .await?;
+            Ok(())
+        }
+
+        /// `plugin.list` contra el daemon (M4-P3).
+        pub(super) async fn plugins_list(&self) -> Result<methods::PluginListResult, Error> {
+            self.call_timed(methods::PLUGIN_LIST, &methods::PluginListParams {})
+                .await
+        }
+
+        /// `plugin.set_approval` contra el daemon (M4-P3).
+        pub(super) async fn plugins_set_approval(
+            &self,
+            id: &str,
+            approved: bool,
+        ) -> Result<(), Error> {
+            let _: methods::PluginSetApprovalResult = self
+                .call_timed(
+                    methods::PLUGIN_SET_APPROVAL,
+                    &methods::PluginSetApprovalParams {
+                        id: id.to_owned(),
+                        approved,
+                    },
+                )
+                .await?;
+            Ok(())
+        }
+
+        /// `plugin.set_enabled` contra el daemon (M4-P3).
+        pub(super) async fn plugins_set_enabled(
+            &self,
+            id: &str,
+            enabled: bool,
+        ) -> Result<(), Error> {
+            let _: methods::PluginSetEnabledResult = self
+                .call_timed(
+                    methods::PLUGIN_SET_ENABLED,
+                    &methods::PluginSetEnabledParams {
+                        id: id.to_owned(),
+                        enabled,
                     },
                 )
                 .await?;

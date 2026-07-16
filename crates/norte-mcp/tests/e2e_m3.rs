@@ -73,6 +73,7 @@ async fn spawn_ask_daemon() -> (tempfile::TempDir, std::path::PathBuf, Arc<MemPr
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
+            plugins_dir: None,
         },
     )
     .await

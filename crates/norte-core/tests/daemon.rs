@@ -69,6 +69,7 @@ async fn spawn_daemon_ttl(idle: Option<Duration>, listing_ttl: Duration) -> Test
             socket_path: Some(socket.clone()),
             idle_timeout: idle,
             listing_ttl,
+            plugins_dir: None,
         },
     )
     .await
@@ -111,6 +112,7 @@ async fn spawn_daemon_policy() -> TestDaemon {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
+            plugins_dir: None,
         },
     )
     .await
@@ -147,6 +149,7 @@ async fn spawn_daemon_ask(approval_ttl: Duration) -> TestDaemon {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
+            plugins_dir: None,
         },
     )
     .await
@@ -1395,6 +1398,7 @@ async fn dos_daemons_no_comparten_socket() {
             socket_path: Some(d.socket.clone()),
             idle_timeout: None,
             listing_ttl: std::time::Duration::from_mins(2),
+            plugins_dir: None,
         },
     )
     .await
@@ -1418,6 +1422,7 @@ async fn bind_rechaza_dir_symlink() {
             socket_path: Some(link.join("d.sock")),
             idle_timeout: None,
             listing_ttl: std::time::Duration::from_mins(2),
+            plugins_dir: None,
         },
     )
     .await
@@ -1453,6 +1458,7 @@ async fn spawn_daemon_at(socket: PathBuf) -> TestDaemon {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: std::time::Duration::from_mins(2),
+            plugins_dir: None,
         },
     )
     .await
@@ -1764,6 +1770,7 @@ async fn spawn_daemon_journal() -> TestDaemon {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
+            plugins_dir: None,
         },
     )
     .await
@@ -1907,4 +1914,148 @@ async fn policy_undo_session_roles_y_validacion() {
         .await
         .expect_err("sesión ilegal");
     assert!(matches!(err2, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+}
+
+// ---------- plugin.* (M4-P3) ----------
+
+/// Manifiesto válido mínimo (mismo del test de `norte_core::plugins`).
+const DEMO_MANIFEST: &str = r#"
+[plugin]
+id = "org.norte.demo"
+name = "Demo"
+publisher = "norte"
+version = "0.1.0"
+category = "command"
+[capabilities]
+fs-read = "scoped"
+"#;
+
+/// Daemon con `plugins_dir` apuntando a un tempdir SEMBRADO con un plugin
+/// descubrible (`plugins/org.norte.demo/plugin.toml`). JAMÁS toca el
+/// `~/.config` real: el `plugins_dir` explícito aísla el estado del test.
+async fn spawn_daemon_plugins() -> TestDaemon {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    // Raíz de plugins DENTRO del mismo tempdir (se limpia con `_dir`).
+    let plugins_root = dir.path().join("cfg");
+    let plugin_dir = plugins_root.join("plugins").join("org.norte.demo");
+    std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin");
+    std::fs::write(plugin_dir.join("plugin.toml"), DEMO_MANIFEST).expect("write manifest");
+
+    let engine = Arc::new(Engine::new());
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    let daemon = Daemon::bind(
+        engine,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+            plugins_dir: Some(plugins_root),
+        },
+    )
+    .await
+    .expect("bind");
+    let run = tokio::spawn(daemon.run());
+    TestDaemon {
+        socket,
+        run,
+        _dir: dir,
+        mem,
+    }
+}
+
+/// `plugin.list` por el socket ve el plugin sembrado, nace sin aprobar/activar.
+#[tokio::test]
+async fn plugin_list_ve_el_catalogo_sembrado() {
+    let d = spawn_daemon_plugins().await;
+    let c = connected_client(&d).await;
+    let list: methods::PluginListResult = c
+        .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
+        .await
+        .expect("plugin.list");
+    assert_eq!(list.plugins.len(), 1, "el plugin sembrado se descubre");
+    let p = &list.plugins[0];
+    assert_eq!(p.id, "org.norte.demo");
+    assert!(!p.approved, "nace sin aprobar");
+    assert!(!p.enabled, "nace sin activar");
+    assert!(list.errors.is_empty());
+}
+
+/// Un HUMANO aprueba por el socket; `plugin.list` lo refleja (y persistió, así
+/// que una NUEVA conexión también lo ve aprobado).
+#[tokio::test]
+async fn plugin_set_approval_humano_se_refleja_y_persiste() {
+    let d = spawn_daemon_plugins().await;
+    let human = connected_client(&d).await;
+    let _: methods::PluginSetApprovalResult = human
+        .call(
+            methods::PLUGIN_SET_APPROVAL,
+            &methods::PluginSetApprovalParams {
+                id: "org.norte.demo".into(),
+                approved: true,
+            },
+        )
+        .await
+        .expect("aprobación aceptada");
+
+    let list: methods::PluginListResult = human
+        .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
+        .await
+        .expect("plugin.list tras aprobar");
+    assert!(list.plugins[0].approved, "la aprobación se refleja");
+
+    // Una conexión NUEVA lee el estado persistido (mismo daemon, mismo dir).
+    let otra = connected_client(&d).await;
+    let list2: methods::PluginListResult = otra
+        .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
+        .await
+        .expect("plugin.list en otra conexión");
+    assert!(list2.plugins[0].approved, "la aprobación persistió");
+}
+
+/// Un AGENTE (conexión con `agent_session`) NO puede aprobar un plugin:
+/// consentir capabilities es acto humano de seguridad → `INVALID_REQUEST`.
+#[tokio::test]
+async fn plugin_set_approval_agente_es_invalid_request() {
+    let d = spawn_daemon_plugins().await;
+    let agent = connected_agent(&d, "claude-01").await;
+    let err = agent
+        .call::<_, methods::PluginSetApprovalResult>(
+            methods::PLUGIN_SET_APPROVAL,
+            &methods::PluginSetApprovalParams {
+                id: "org.norte.demo".into(),
+                approved: true,
+            },
+        )
+        .await
+        .expect_err("un agente no aprueba plugins");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
+
+    // Y no tocó el estado: sigue sin aprobar para un humano.
+    let human = connected_client(&d).await;
+    let list: methods::PluginListResult = human
+        .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
+        .await
+        .expect("plugin.list");
+    assert!(!list.plugins[0].approved, "el rechazo no dejó rastro");
+}
+
+/// Aprobar un id DESCONOCIDO es `INVALID_PARAMS` (no se ensucia el estado con
+/// plugins fantasma).
+#[tokio::test]
+async fn plugin_set_approval_id_desconocido_es_invalid_params() {
+    let d = spawn_daemon_plugins().await;
+    let human = connected_client(&d).await;
+    let err = human
+        .call::<_, methods::PluginSetApprovalResult>(
+            methods::PLUGIN_SET_APPROVAL,
+            &methods::PluginSetApprovalParams {
+                id: "org.norte.fantasma".into(),
+                approved: true,
+            },
+        )
+        .await
+        .expect_err("id desconocido");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 }

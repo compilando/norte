@@ -85,6 +85,12 @@ pub struct DaemonConfig {
     /// este tiempo se descarta aunque la conexión siga viva. Configurable para
     /// testear la expiración sin esperas largas.
     pub listing_ttl: Duration,
+    /// Raíz de config donde vive el catálogo de plugins
+    /// (`<dir>/plugins/<id>/plugin.toml`) y su estado (`<dir>/plugins-state.toml`),
+    /// M4-P3. `None` = [`crate::connect::config_dir`] real (la capa de usuario);
+    /// `Some(dir)` = ese directorio — para tests, SIEMPRE un tempdir, jamás el
+    /// `~/.config` real.
+    pub plugins_dir: Option<PathBuf>,
 }
 
 impl Default for DaemonConfig {
@@ -93,6 +99,7 @@ impl Default for DaemonConfig {
             socket_path: None,
             idle_timeout: Some(Duration::from_mins(5)),
             listing_ttl: Duration::from_mins(2),
+            plugins_dir: None,
         }
     }
 }
@@ -140,6 +147,12 @@ struct Shared {
     /// conoce): `policy.pending` responde vacío y `policy.decide` no encuentra
     /// ids — inofensivo.
     approvals: Arc<DaemonApprovalResolver>,
+    /// Registro de plugins descubiertos + estado aprobado/activado (M4-P3).
+    /// El descubrimiento es I/O síncrono hecho UNA vez en el bind (dentro del
+    /// `spawn_blocking`, regla 2); las mutaciones (`plugin.set_approval`/
+    /// `set_enabled`) re-leen y persisten `plugins-state.toml` bajo el lock. El
+    /// `Mutex` std basta: el dispatch es serial y las secciones son cortas.
+    plugins: Mutex<crate::plugins::PluginRegistry>,
 }
 
 /// Una petición de scope registrada por un agente, a la espera de que un
@@ -272,11 +285,16 @@ impl Daemon {
         approvals: Arc<DaemonApprovalResolver>,
         cfg: DaemonConfig,
     ) -> Result<Self, DaemonError> {
-        // La resolución del path por defecto puede tocar el FS (sonda de
-        // uid del fallback /tmp): TODO dentro del spawn_blocking (regla 2).
-        let (listener, uid, socket_path) = tokio::task::spawn_blocking({
+        // La resolución del path por defecto puede tocar el FS (sonda de uid
+        // del fallback /tmp) y el descubrimiento del catálogo de plugins lee el
+        // dir de config: TODO I/O síncrono dentro del spawn_blocking (regla 2).
+        let (listener, uid, socket_path, plugins) = tokio::task::spawn_blocking({
             let requested = cfg.socket_path;
-            move || -> Result<(std::os::unix::net::UnixListener, u32, PathBuf), DaemonError> {
+            let plugins_dir = cfg.plugins_dir;
+            move || -> Result<
+                (std::os::unix::net::UnixListener, u32, PathBuf, crate::plugins::PluginRegistry),
+                DaemonError,
+            > {
                 let socket_path = requested.unwrap_or_else(|| super::default_socket_path(None));
                 let dir = socket_path
                     .parent()
@@ -313,7 +331,22 @@ impl Daemon {
                 }
                 // El socket mismo tampoco regala nada: 0600.
                 std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))?;
-                Ok((listener, uid, socket_path))
+                // Catálogo de plugins (M4-P3). Un `plugins-state.toml` corrupto
+                // NO debe impedir arrancar el daemon (dejaría al usuario sin
+                // ninguna otra operación por un fichero de estado roto): se
+                // degrada a un registro VACÍO con aviso, y el usuario puede
+                // re-aprobar. Un catálogo ausente ya es "vacío" sin error.
+                let plugins_root =
+                    plugins_dir.unwrap_or_else(crate::connect::config_dir);
+                let plugins = crate::plugins::PluginRegistry::discover(&plugins_root)
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(
+                            error = %e,
+                            "plugins-state corrupto: se arranca con catálogo vacío"
+                        );
+                        crate::plugins::PluginRegistry::empty(&plugins_root)
+                    });
+                Ok((listener, uid, socket_path, plugins))
             }
         })
         .await
@@ -339,6 +372,7 @@ impl Daemon {
             pending_scope: Mutex::new(HashMap::new()),
             next_scope_req: AtomicU64::new(0),
             approvals: Arc::clone(&approvals),
+            plugins: Mutex::new(plugins),
         });
         // La salida del router de aprobaciones hacia los suscriptores. `Weak`
         // rompe el ciclo Shared → approvals → closure → Shared: muerto el
@@ -1090,6 +1124,17 @@ async fn dispatch(
             let p: methods::PolicyUndoSessionParams = parse_params(req.params)?;
             handle_policy_undo_session(&conn.actor, p, shared).await
         }
+        // plugin.* (M4-P3): listar el catálogo (cualquier conexión) y aprobar/
+        // activar (SOLO humanos — es consentir capabilities, acto de seguridad).
+        methods::PLUGIN_LIST => handle_plugin_list(req.params, shared),
+        methods::PLUGIN_SET_APPROVAL => {
+            let p: methods::PluginSetApprovalParams = parse_params(req.params)?;
+            handle_plugin_set_approval(&conn.actor, &p, shared)
+        }
+        methods::PLUGIN_SET_ENABLED => {
+            let p: methods::PluginSetEnabledParams = parse_params(req.params)?;
+            handle_plugin_set_enabled(&conn.actor, &p, shared)
+        }
         _ => dispatch_fs_task(req, conn.actor.clone(), shared).await,
     }
 }
@@ -1286,6 +1331,90 @@ async fn handle_policy_undo_session(
     }
     let task_id = register_task_id(shared, handle)?;
     to_value(&methods::PolicyUndoSessionResult { task_id })
+}
+
+/// `plugin.list` (M4-P3): el catálogo descubierto + su estado, para CUALQUIER
+/// conexión (listar no consiente nada). Sin params definidos (objeto vacío
+/// reservado): null/ausencia se aceptan como defaults (ADR 0004), igual que
+/// `daemon.shutdown`; un objeto cualquiera se ignora — extensión futura no
+/// rompe clientes viejos.
+fn handle_plugin_list(
+    params: Option<serde_json::Value>,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let _p: methods::PluginListParams = parse_params(
+        params
+            .filter(|v| !v.is_null())
+            .or_else(|| Some(serde_json::json!({}))),
+    )?;
+    let list = shared.plugins.lock().expect("plugins lock sano").list();
+    to_value(&list)
+}
+
+/// `plugin.set_approval` (M4-P3): un HUMANO aprueba (o revoca) las capabilities
+/// declaradas por un plugin. Aprobar es un acto de SEGURIDAD (consentir que un
+/// plugin ejerza sus capabilities), así que SOLO una conexión no-agente lo hace
+/// — el mismo criterio que `policy.grant_scope`/`policy.decide`: un agente jamás
+/// consiente por el humano. Un id desconocido es `INVALID_PARAMS` (no se ensucia
+/// el estado con plugins fantasma); un fallo de persistencia, `INTERNAL_ERROR`.
+#[tracing::instrument(skip_all, fields(id = %p.id, approved = p.approved))]
+fn handle_plugin_set_approval(
+    actor: &Actor,
+    p: &methods::PluginSetApprovalParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection may approve a plugin",
+        ));
+    }
+    let applied = shared
+        .plugins
+        .lock()
+        .expect("plugins lock sano")
+        .set_approval(&p.id, p.approved)
+        .map_err(|e| RpcError::protocol(codes::INTERNAL_ERROR, format!("persist: {e}")))?;
+    if !applied {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "unknown plugin id",
+        ));
+    }
+    // Efecto de seguridad (material de auditoría M4): quién aprobó qué plugin.
+    tracing::info!("plugin (des)aprobado por el humano");
+    to_value(&methods::PluginSetApprovalResult {})
+}
+
+/// `plugin.set_enabled` (M4-P3): un HUMANO activa/desactiva un plugin ya
+/// aprobado. Misma barrera y misma semántica de retorno que
+/// [`handle_plugin_set_approval`] (id desconocido = `INVALID_PARAMS`).
+#[tracing::instrument(skip_all, fields(id = %p.id, enabled = p.enabled))]
+fn handle_plugin_set_enabled(
+    actor: &Actor,
+    p: &methods::PluginSetEnabledParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection may enable a plugin",
+        ));
+    }
+    let applied = shared
+        .plugins
+        .lock()
+        .expect("plugins lock sano")
+        .set_enabled(&p.id, p.enabled)
+        .map_err(|e| RpcError::protocol(codes::INTERNAL_ERROR, format!("persist: {e}")))?;
+    if !applied {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "unknown plugin id",
+        ));
+    }
+    tracing::info!("plugin (des)activado por el humano");
+    to_value(&methods::PluginSetEnabledResult {})
 }
 
 /// Instante de expiración de un scope a partir de su `ttl_ms`: clamp a

@@ -71,6 +71,20 @@ impl PluginRegistry {
         })
     }
 
+    /// Un registro VACÍO anclado en `config_dir`, sin tocar el FS: catálogo sin
+    /// plugins y estado sin fusionar. Lo usa el daemon como degradación si el
+    /// descubrimiento falla (p. ej. `plugins-state.toml` corrupto): un fichero
+    /// de estado roto no debe impedir arrancar. Persistir sobre él re-crea el
+    /// estado desde cero bajo `config_dir`.
+    #[must_use]
+    pub fn empty(config_dir: &Path) -> Self {
+        Self {
+            config_dir: config_dir.to_path_buf(),
+            state: BTreeMap::new(),
+            catalog: Catalog::default(),
+        }
+    }
+
     /// El catálogo descubierto fusionado con el estado persistido, en la forma
     /// del protocolo.
     #[must_use]
