@@ -56,6 +56,16 @@ pub struct Capabilities {
 }
 
 impl Capabilities {
+    /// Capabilities con `fs-read=scoped` (para tests del enforcement).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn scoped_read_for_test() -> Self {
+        Self {
+            fs_read: Scope::Scoped,
+            ..Self::default()
+        }
+    }
+
     /// Etiquetas cortas de los permisos concedidos, para el badge del gestor
     /// (ADR 0022 D5): p. ej. `["fs-read", "net"]`.
     #[must_use]

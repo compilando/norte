@@ -27,9 +27,11 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod bindings;
 mod capability;
 mod catalog;
 mod manifest;
+mod runtime;
 
 pub use capability::{Capabilities, NetCap, Scope};
 pub use catalog::{Catalog, LoadError, PluginEntry, Tier};
@@ -37,3 +39,4 @@ pub use manifest::{
     Category, ColumnContrib, CommandContrib, Contributions, HookContrib, Manifest, ManifestError,
     PreviewerContrib, ProviderContrib,
 };
+pub use runtime::{PluginInstance, PluginRuntime, RuntimeError};
