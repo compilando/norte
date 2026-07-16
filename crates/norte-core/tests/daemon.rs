@@ -2059,3 +2059,145 @@ async fn plugin_set_approval_id_desconocido_es_invalid_params() {
         .expect_err("id desconocido");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 }
+
+/// TOML deliberadamente inválido: el descubridor debe reportarlo en `errors`,
+/// no tumbar el catálogo. Un `[[[` sin cerrar no parsea.
+const BROKEN_MANIFEST: &str = "no es toml [[[";
+
+/// Daemon apuntado a un `cfg` sembrado con un plugin VÁLIDO (`org.norte.demo`)
+/// y uno ROTO (`rota`, TOML inválido). Devuelve también la ruta `cfg` para
+/// poder abrir un `PluginRegistry` fresco sobre ella y comprobar persistencia.
+async fn spawn_daemon_plugins_ok_y_roto() -> (TestDaemon, PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cfg = dir.path().join("cfg");
+    let ok_dir = cfg.join("plugins").join("org.norte.demo");
+    let rota_dir = cfg.join("plugins").join("rota");
+    std::fs::create_dir_all(&ok_dir).expect("mkdir ok");
+    std::fs::create_dir_all(&rota_dir).expect("mkdir rota");
+    std::fs::write(ok_dir.join("plugin.toml"), DEMO_MANIFEST).expect("write manifest ok");
+    std::fs::write(rota_dir.join("plugin.toml"), BROKEN_MANIFEST).expect("write manifest roto");
+
+    let socket = dir.path().join("d.sock");
+    let engine = Arc::new(Engine::new());
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    let daemon = Daemon::bind(
+        engine,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+            plugins_dir: Some(cfg.clone()),
+        },
+    )
+    .await
+    .expect("bind");
+    let run = tokio::spawn(daemon.run());
+    let d = TestDaemon {
+        socket,
+        run,
+        _dir: dir,
+        mem,
+    };
+    (d, cfg)
+}
+
+/// E2E de cierre M4-P3: round-trip COMPLETO del gestor de extensiones por el
+/// wire — descubrimiento (válido + roto), consentimiento humano (aprobar +
+/// activar), y persistencia DURABLE releída por un `PluginRegistry` FRESCO
+/// (sin daemon). Ata catálogo + estado + errores enmascarados en un solo flujo.
+#[tokio::test]
+async fn plugin_gestor_e2e_lista_gobierna_y_persiste() {
+    // `cfg` es la raíz de config, sembrada con un plugin válido y uno roto.
+    let (d, cfg) = spawn_daemon_plugins_ok_y_roto().await;
+
+    // 1) plugin.list: un válido descubierto (sin aprobar/activar, capability
+    //    fs-read visible) y un roto reportado por su BASENAME (jamás la ruta
+    //    absoluta, que filtraría el home del usuario a un agente).
+    let human = connected_client(&d).await;
+    let list: methods::PluginListResult = human
+        .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
+        .await
+        .expect("plugin.list");
+    assert_eq!(list.plugins.len(), 1, "solo el válido carga");
+    let p = &list.plugins[0];
+    assert_eq!(p.id, "org.norte.demo");
+    assert!(!p.approved, "nace sin aprobar");
+    assert!(!p.enabled, "nace sin activar");
+    assert!(
+        p.capabilities.iter().any(|c| c == "fs-read"),
+        "la capability declarada se expone como badge: {:?}",
+        p.capabilities
+    );
+    assert_eq!(list.errors.len(), 1, "el roto se reporta, no desaparece");
+    let broken = &list.errors[0];
+    assert_eq!(broken.dir, "rota", "solo el basename, no la ruta absoluta");
+    assert!(
+        !broken.dir.contains('/'),
+        "el dir reportado nunca es una ruta: {}",
+        broken.dir
+    );
+
+    // 2) El humano aprueba y activa por el wire.
+    let _: methods::PluginSetApprovalResult = human
+        .call(
+            methods::PLUGIN_SET_APPROVAL,
+            &methods::PluginSetApprovalParams {
+                id: "org.norte.demo".into(),
+                approved: true,
+            },
+        )
+        .await
+        .expect("aprobar");
+    let _: methods::PluginSetEnabledResult = human
+        .call(
+            methods::PLUGIN_SET_ENABLED,
+            &methods::PluginSetEnabledParams {
+                id: "org.norte.demo".into(),
+                enabled: true,
+            },
+        )
+        .await
+        .expect("activar");
+
+    // 3) plugin.list lo refleja en el MISMO daemon.
+    let list: methods::PluginListResult = human
+        .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
+        .await
+        .expect("plugin.list tras consentir");
+    assert!(list.plugins[0].approved, "aprobado se refleja");
+    assert!(list.plugins[0].enabled, "activado se refleja");
+
+    // 4) PERSISTENCIA DURABLE: un registro FRESCO abierto directamente sobre
+    //    `cfg` (sin daemon) recuerda ambos flags → se escribió
+    //    `cfg/plugins-state.toml` de verdad.
+    let fresco = norte_core::PluginRegistry::discover(&cfg).expect("discover fresco");
+    let persistido = fresco.list();
+    assert_eq!(persistido.plugins.len(), 1);
+    assert!(
+        persistido.plugins[0].approved,
+        "approved persistió en plugins-state.toml"
+    );
+    assert!(
+        persistido.plugins[0].enabled,
+        "enabled persistió en plugins-state.toml"
+    );
+    assert!(
+        cfg.join("plugins-state.toml").exists(),
+        "el estado se escribió a disco"
+    );
+
+    // 5) Un AGENTE no puede aprobar (acto humano de seguridad → INVALID_REQUEST).
+    let agent = connected_agent(&d, "s1").await;
+    let err = agent
+        .call::<_, methods::PluginSetApprovalResult>(
+            methods::PLUGIN_SET_APPROVAL,
+            &methods::PluginSetApprovalParams {
+                id: "org.norte.demo".into(),
+                approved: false,
+            },
+        )
+        .await
+        .expect_err("un agente no gobierna consentimiento");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
+}

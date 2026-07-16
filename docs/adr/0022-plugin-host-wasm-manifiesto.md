@@ -153,3 +153,43 @@ test los pide y el target está presente.
   0020) se **superpone después**, cuando el host de plugins se cablee al daemon
   M3 (regla 9 completa). Ver D7.
 - **Gestor de extensiones (descubrimiento/instalación/UI)** → **P3**.
+
+## Addendum P3 (2026-07-16)
+
+**Qué se implementó (M4-P3, gestor de extensiones).** El core expone el
+CATÁLOGO local y su ESTADO de gobierno por el protocolo `plugin.*` (proto
+0.13.0), cumpliendo la regla 7 (los frontends no llevan lógica):
+
+- `PluginRegistry` (en `norte-core`) descubre `config_dir/plugins/<id>/plugin.toml`
+  vía `norte_plugin_host::Catalog`, fusiona el estado del usuario y lo sirve como
+  `plugin.list` → `PluginListResult { plugins, errors }`. El id reverse-DNS se
+  valida por charset al parsear el manifiesto (D3). Los manifiestos ROTOS no
+  tumban el catálogo: van a `errors`, y se reportan por **basename**, nunca por
+  ruta absoluta (no filtra el `~/.config` del usuario a un agente que llame
+  `plugin.list`). Las `name`/`publisher` del modal se enmascaran en la UI (el
+  autor es texto no confiable).
+- **Aprobar y activar son actos HUMANOS**: `plugin.set_approval` /
+  `plugin.set_enabled` SOLO los acepta una conexión no-agente (`Actor::User`);
+  un agente recibe `INVALID_REQUEST`. Aprobar = consentir las capabilities
+  declaradas (decisión de seguridad, D4); activar = tenerlo encendido.
+- **Persistencia ATÓMICA** en `config_dir/plugins-state.toml` (write a temporal
+  en el mismo dir + `rename`), con el id-con-puntos entrecomillado bajo `[plugins]`
+  (round-trip íntegro). El daemon separa la mutación bajo el lock de la
+  persistencia en `spawn_blocking` (regla 2).
+- **TUI overlay que solo PINTA**: el gestor de extensiones muestra catálogo,
+  categoría, capability badges y el aviso `⚠ sin aprobar`; toda decisión viaja
+  por el wire al core.
+
+**Deuda (queda fuera de P3):**
+
+- El gestor **MUESTRA y GOBIERNA** el estado (aprobado/activado) pero aún **NO
+  carga ni ejecuta** plugins: el wiring runtime (`norte-plugin-host`) ↔ core bajo
+  el policy engine M3 (regla 9 completa) es posterior. Ver D7 y Addendum P2.
+- **Sin instalar/desinstalar desde la UI**: la siembra es manual en
+  `config_dir/plugins/`. Tampoco hay **registro/índice remoto** (ver D6).
+- **Corrupción de `plugins-state.toml`**: el daemon degrada a catálogo vacío y lo
+  avisa **solo por log** (`tracing::warn`), no a la UI — un fichero roto no debe
+  impedir arrancar, pero el humano no lo ve en pantalla.
+- **Sin sincronización daemon ↔ frontend-embebido** sobre el mismo `config_dir`:
+  dos escritores concurrentes del `plugins-state.toml` no se coordinan (el
+  esquema single-writer del daemon aún no cubre el modo embebido).
