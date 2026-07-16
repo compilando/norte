@@ -353,7 +353,76 @@ fn golden_methods() {
     check_methods_connection(&fixtures);
     check_methods_policy(&fixtures);
     check_methods_session(&fixtures);
-    assert_eq!(fixtures.len(), 43, "[methods.json] fixtures sin caso Rust");
+    check_methods_plugin(&fixtures);
+    assert_eq!(fixtures.len(), 49, "[methods.json] fixtures sin caso Rust");
+}
+
+/// Familia plugin.* (0.13.0, M4-P3): catálogo + aprobación/activación humanas.
+fn check_methods_plugin(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{
+        PluginInfo, PluginListResult, PluginLoadError, PluginSetApprovalParams,
+        PluginSetApprovalResult, PluginSetEnabledParams, PluginSetEnabledResult,
+    };
+    check_one(
+        fixtures,
+        "plugin_info",
+        &PluginInfo {
+            id: "org.norte.demo".into(),
+            name: "Demo Previewer".into(),
+            publisher: "norte".into(),
+            version: "0.1.0".into(),
+            category: "previewer".into(),
+            capabilities: vec!["fs-read".into()],
+            approved: true,
+            enabled: true,
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_list_result",
+        &PluginListResult {
+            plugins: vec![PluginInfo {
+                id: "org.norte.demo".into(),
+                name: "Demo Previewer".into(),
+                publisher: "norte".into(),
+                version: "0.1.0".into(),
+                category: "previewer".into(),
+                capabilities: vec!["fs-read".into()],
+                approved: false,
+                enabled: false,
+            }],
+            errors: vec![PluginLoadError {
+                dir: "/plugins/broken".into(),
+                reason: "manifiesto inválido".into(),
+            }],
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_set_approval_params",
+        &PluginSetApprovalParams {
+            id: "org.norte.demo".into(),
+            approved: true,
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_set_approval_result",
+        &PluginSetApprovalResult {},
+    );
+    check_one(
+        fixtures,
+        "plugin_set_enabled_params",
+        &PluginSetEnabledParams {
+            id: "org.norte.demo".into(),
+            enabled: false,
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_set_enabled_result",
+        &PluginSetEnabledResult {},
+    );
 }
 
 /// Familia session.* (0.12.0, M3-4): undo de sesión de agente por el wire.
@@ -851,10 +920,14 @@ fn method_names_frozen() {
         "policy.approval_required"
     );
     assert_eq!(methods::POLICY_UNDO_SESSION, "policy.undo_session");
+    // Familia plugin.* (0.13.0, M4-P3): catálogo + gobernanza humana.
+    assert_eq!(methods::PLUGIN_LIST, "plugin.list");
+    assert_eq!(methods::PLUGIN_SET_APPROVAL, "plugin.set_approval");
+    assert_eq!(methods::PLUGIN_SET_ENABLED, "plugin.set_enabled");
     assert_eq!(methods::FS_READ_MAX_CHUNK, 8 * 1024 * 1024);
     assert_eq!(methods::FS_LIST_MAX_PAGE, 10_000);
-    // 0.12.0: policy.undo_session (M3-4). Aditivo sobre 0.11.x.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.12.0");
+    // 0.13.0: familia plugin.* (M4-P3). Aditivo sobre 0.12.x.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.13.0");
 }
 
 #[test]

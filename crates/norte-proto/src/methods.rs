@@ -52,7 +52,12 @@ use crate::{
 ///
 /// 0.12.0 (M3-4): `policy.undo_session` — un humano deshace la sesión completa de
 /// un agente (LIFO estricto, corre como Task). Aditivo sobre 0.11.x.
-pub const PROTOCOL_VERSION: &str = "0.12.0";
+///
+/// 0.13.0 (M4-P3): familia `plugin.*` — `plugin.list` (enumera plugins
+/// descubiertos + errores de carga, solo lectura), `plugin.set_approval` y
+/// `plugin.set_enabled` (un humano aprueba capabilities / activa un plugin;
+/// solo conexiones User). Aditivo sobre 0.12.x.
+pub const PROTOCOL_VERSION: &str = "0.13.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -180,6 +185,17 @@ pub const POLICY_APPROVAL_REQUIRED: &str = "policy.approval_required";
 /// scopes, aprobaciones, undo) — `session.*` queda reservado para la sesión
 /// de UI (spec §11).
 pub const POLICY_UNDO_SESSION: &str = "policy.undo_session";
+/// `plugin.list` — enumera los plugins DESCUBIERTOS más los errores de carga
+/// (M4-P3). Solo lectura y ABIERTO (cualquier conexión lo consulta): un
+/// frontend pinta el catálogo y el estado (aprobado/activo) sin mutar nada.
+pub const PLUGIN_LIST: &str = "plugin.list";
+/// `plugin.set_approval` — un HUMANO aprueba (o revoca) las capabilities de un
+/// plugin (M4-P3). SOLO conexiones User: una sesión de agente jamás se
+/// autoconcede capabilities de plugin.
+pub const PLUGIN_SET_APPROVAL: &str = "plugin.set_approval";
+/// `plugin.set_enabled` — un HUMANO activa o desactiva un plugin (M4-P3). SOLO
+/// conexiones User (misma barrera que [`PLUGIN_SET_APPROVAL`]).
+pub const PLUGIN_SET_ENABLED: &str = "plugin.set_enabled";
 
 /// Params de [`FS_LIST`] (paginación por cursor desde 0.8.0, ADR 0017).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -575,3 +591,77 @@ pub struct PolicyUndoSessionResult {
     /// Task del undo.
     pub task_id: TaskId,
 }
+
+/// Un plugin descubierto (elemento de [`PluginListResult::plugins`], M4-P3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginInfo {
+    /// Id estable del plugin (namespace inverso, p. ej. `org.norte.demo`).
+    pub id: String,
+    /// Nombre legible para mostrar.
+    pub name: String,
+    /// Publicador declarado en el manifiesto.
+    pub publisher: String,
+    /// Versión del plugin (informativa).
+    pub version: String,
+    /// Categoría (`previewer`, `indexer`…): qué papel juega en el core.
+    pub category: String,
+    /// Capabilities que el plugin solicita (p. ej. `fs-read`). Un humano las
+    /// aprueba con [`PLUGIN_SET_APPROVAL`] antes de que surtan efecto.
+    pub capabilities: Vec<String>,
+    /// `true` si un humano ya aprobó sus capabilities.
+    pub approved: bool,
+    /// `true` si un humano lo tiene activado.
+    pub enabled: bool,
+}
+
+/// Un directorio de plugin que NO se pudo cargar (elemento de
+/// [`PluginListResult::errors`], M4-P3): se reporta para diagnóstico, sin
+/// tumbar el resto del catálogo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginLoadError {
+    /// Directorio del plugin que falló (display; puede llevar bytes lossy).
+    pub dir: String,
+    /// Motivo legible del fallo (manifiesto inválido, versión no soportada…).
+    pub reason: String,
+}
+
+/// Params de [`PLUGIN_LIST`]: objeto vacío, reservado para extensión
+/// (filtros por categoría/estado llegarán aquí como campos opcionales).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginListParams {}
+
+/// Result de [`PLUGIN_LIST`]: el catálogo descubierto y los fallos de carga.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginListResult {
+    /// Plugins descubiertos y cargados (con su estado aprobado/activo).
+    pub plugins: Vec<PluginInfo>,
+    /// Directorios que fallaron al cargar (mejor esfuerzo; ver
+    /// [`PluginLoadError`]).
+    pub errors: Vec<PluginLoadError>,
+}
+
+/// Params de [`PLUGIN_SET_APPROVAL`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginSetApprovalParams {
+    /// Id del plugin a (des)aprobar.
+    pub id: String,
+    /// `true` = aprobar las capabilities, `false` = revocar.
+    pub approved: bool,
+}
+
+/// Result de [`PLUGIN_SET_APPROVAL`]: objeto vacío, reservado para extensión.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginSetApprovalResult {}
+
+/// Params de [`PLUGIN_SET_ENABLED`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginSetEnabledParams {
+    /// Id del plugin a activar/desactivar.
+    pub id: String,
+    /// `true` = activar, `false` = desactivar.
+    pub enabled: bool,
+}
+
+/// Result de [`PLUGIN_SET_ENABLED`]: objeto vacío, reservado para extensión.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginSetEnabledResult {}

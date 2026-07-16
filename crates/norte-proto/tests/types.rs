@@ -691,11 +691,11 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.12.0 (M3-4): acepta 0.12.x (N) y 0.11.x (N-1), rechaza 0.10.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.12.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.11.0"), "N-1");
+    // 0.13.0 (M4-P3): acepta 0.13.x (N) y 0.12.x (N-1), rechaza 0.11.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.13.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.12.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.10.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.11.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -711,4 +711,40 @@ fn session_undo_roundtrip() {
     );
     let r: PolicyUndoSessionResult = serde_json::from_str(r#"{"task_id":9}"#).unwrap();
     assert_eq!(r.task_id.get(), 9);
+}
+
+#[test]
+fn plugin_types_roundtrip() {
+    use norte_proto::methods::{
+        PluginInfo, PluginListParams, PluginListResult, PluginLoadError, PluginSetApprovalParams,
+        PluginSetEnabledParams,
+    };
+    // plugin.list no lleva params (objeto vacío, patrón de task.list).
+    assert_eq!(serde_json::to_string(&PluginListParams {}).unwrap(), "{}");
+    let res = PluginListResult {
+        plugins: vec![PluginInfo {
+            id: "org.norte.demo".into(),
+            name: "Demo".into(),
+            publisher: "norte".into(),
+            version: "0.1.0".into(),
+            category: "previewer".into(),
+            capabilities: vec!["fs-read".into()],
+            approved: false,
+            enabled: true,
+        }],
+        errors: vec![PluginLoadError {
+            dir: "/plugins/broken".into(),
+            reason: "manifiesto inválido".into(),
+        }],
+    };
+    let back: PluginListResult =
+        serde_json::from_str(&serde_json::to_string(&res).unwrap()).unwrap();
+    assert_eq!(back, res);
+    let ap: PluginSetApprovalParams =
+        serde_json::from_str(r#"{"id":"org.norte.demo","approved":true}"#).unwrap();
+    assert!(ap.approved);
+    assert_eq!(ap.id, "org.norte.demo");
+    let en: PluginSetEnabledParams =
+        serde_json::from_str(r#"{"id":"org.norte.demo","enabled":false}"#).unwrap();
+    assert!(!en.enabled);
 }

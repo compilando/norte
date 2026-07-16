@@ -212,5 +212,36 @@
     ]
   },
   "policy_undo_session_params": { "session": "claude" },
-  "policy_undo_session_result": { "task_id": 9 }
+  "policy_undo_session_result": { "task_id": 9 },
+  "plugin_info": {
+    "id": "org.norte.demo",
+    "name": "Demo Previewer",
+    "publisher": "norte",
+    "version": "0.1.0",
+    "category": "previewer",
+    "capabilities": ["fs-read"],
+    "approved": true,
+    "enabled": true
+  },
+  "plugin_list_result": {
+    "plugins": [
+      {
+        "id": "org.norte.demo",
+        "name": "Demo Previewer",
+        "publisher": "norte",
+        "version": "0.1.0",
+        "category": "previewer",
+        "capabilities": ["fs-read"],
+        "approved": false,
+        "enabled": false
+      }
+    ],
+    "errors": [
+      { "dir": "/plugins/broken", "reason": "manifiesto inválido" }
+    ]
+  },
+  "plugin_set_approval_params": { "id": "org.norte.demo", "approved": true },
+  "plugin_set_approval_result": {},
+  "plugin_set_enabled_params": { "id": "org.norte.demo", "enabled": false },
+  "plugin_set_enabled_result": {}
 }
