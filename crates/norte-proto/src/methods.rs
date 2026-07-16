@@ -709,19 +709,29 @@ pub struct PluginPreviewParams {
     pub path: VPath,
 }
 
+/// La preview producida por un plugin previewer: los tres campos van JUNTOS
+/// (all-or-nothing). Ver [`PluginPreviewResult`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginPreview {
+    /// Id del plugin previewer que produjo la salida.
+    pub plugin_id: String,
+    /// Nombre legible del plugin previewer (para el indicador «via …»).
+    pub plugin_name: String,
+    /// Salida (texto) de la preview.
+    pub output: String,
+}
+
 /// Result de [`PLUGIN_PREVIEW`] (M4-P5): la preview del primer previewer que
-/// aplica. Los tres campos ausentes (todo `None`) = ningún previewer maneja el
-/// mimetype; gracias a `skip_serializing_if` serializa a `{}` y el frontend
-/// cae a la vista cruda.
+/// aplica, o NADA. El `flatten` sobre un `Option` hace que el wire sea
+/// `{plugin_id,plugin_name,output}` (aplicó) o `{}` (ninguno); el TIPO Rust hace
+/// INCONSTRUIBLE un estado parcial (los tres campos van juntos en
+/// [`PluginPreview`]), y un objeto parcial del wire colapsa a `None` (sin
+/// preview, seguro) — jamás un `plugin_id` sin `output` (protocol-guardian
+/// M4-P5). `None` = ningún previewer maneja el mimetype; el frontend cae a la
+/// vista cruda.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginPreviewResult {
-    /// Id del plugin previewer que produjo la salida.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_id: Option<String>,
-    /// Nombre legible del plugin previewer que produjo la salida.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_name: Option<String>,
-    /// Salida (string) de la preview.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output: Option<String>,
+    /// La preview, o `None` si ningún previewer aplicó.
+    #[serde(flatten)]
+    pub preview: Option<PluginPreview>,
 }

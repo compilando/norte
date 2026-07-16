@@ -776,7 +776,7 @@ fn plugin_run_command_roundtrip() {
 
 #[test]
 fn plugin_preview_roundtrip() {
-    use norte_proto::methods::{PluginPreviewParams, PluginPreviewResult};
+    use norte_proto::methods::{PluginPreview, PluginPreviewParams, PluginPreviewResult};
     // Params con un VPath: round-trip exacto.
     let p = PluginPreviewParams {
         path: vpath("file:///a.txt"),
@@ -784,20 +784,31 @@ fn plugin_preview_roundtrip() {
     let back: PluginPreviewParams =
         serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
     assert_eq!(back, p);
-    // Result POBLADO (los tres Some): round-trip exacto.
+    // Result POBLADO (Some): round-trip exacto, flatten al nivel raíz.
     let full = PluginPreviewResult {
-        plugin_id: Some("org.norte.md".into()),
-        plugin_name: Some("Markdown Preview".into()),
-        output: Some("<h1>Título</h1>".into()),
+        preview: Some(PluginPreview {
+            plugin_id: "org.norte.md".into(),
+            plugin_name: "Markdown Preview".into(),
+            output: "<h1>Título</h1>".into(),
+        }),
     };
-    let back_full: PluginPreviewResult =
-        serde_json::from_str(&serde_json::to_string(&full).unwrap()).unwrap();
+    let full_json = serde_json::to_string(&full).unwrap();
+    assert!(
+        full_json.contains("\"plugin_id\":\"org.norte.md\""),
+        "flatten: {full_json}"
+    );
+    let back_full: PluginPreviewResult = serde_json::from_str(&full_json).unwrap();
     assert_eq!(back_full, full);
-    // Result VACÍO: `{}` deserializa a todo None y reserializa a `{}` (ningún
+    // Result VACÍO: `{}` deserializa a None y reserializa a `{}` (ningún
     // previewer aplica — el frontend cae a la vista cruda).
     let none: PluginPreviewResult = serde_json::from_str("{}").unwrap();
-    assert_eq!(none.plugin_id, None);
-    assert_eq!(none.plugin_name, None);
-    assert_eq!(none.output, None);
+    assert_eq!(none.preview, None);
     assert_eq!(serde_json::to_string(&none).unwrap(), "{}");
+    // Estado PARCIAL: el tipo Rust lo hace INCONSTRUIBLE (preview es un
+    // `Option<PluginPreview>` de campos requeridos); en el wire un objeto con
+    // solo algunos campos colapsa a `None` (sin preview, seguro) — jamás un
+    // `plugin_id` sin `output`.
+    let parcial: PluginPreviewResult =
+        serde_json::from_str(r#"{"plugin_id":"x"}"#).expect("parcial deserializa");
+    assert_eq!(parcial.preview, None, "un preview parcial cae a None");
 }

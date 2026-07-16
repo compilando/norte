@@ -358,13 +358,16 @@ fn golden_methods() {
 }
 
 /// Familia plugin.* (0.13.0, M4-P3): catálogo + aprobación/activación humanas.
-#[allow(clippy::too_many_lines)]
 fn check_methods_plugin(fixtures: &BTreeMap<String, Value>) {
+    check_methods_plugin_governance(fixtures);
+    check_methods_plugin_exec(fixtures);
+}
+
+/// Familia `plugin.*` de GESTIÓN (0.13.0, M4-P3): listar y aprobar/activar.
+fn check_methods_plugin_governance(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
-        PluginInfo, PluginListParams, PluginListResult, PluginLoadError, PluginPreviewParams,
-        PluginPreviewResult, PluginRunCommandParams, PluginRunCommandResult,
-        PluginSetApprovalParams, PluginSetApprovalResult, PluginSetEnabledParams,
-        PluginSetEnabledResult,
+        PluginInfo, PluginListParams, PluginListResult, PluginLoadError, PluginSetApprovalParams,
+        PluginSetApprovalResult, PluginSetEnabledParams, PluginSetEnabledResult,
     };
     // `plugin.list` sin params: golden vacío, simetría con `task_list_params`.
     check_one(fixtures, "plugin_list_params", &PluginListParams {});
@@ -428,6 +431,14 @@ fn check_methods_plugin(fixtures: &BTreeMap<String, Value>) {
         "plugin_set_enabled_result",
         &PluginSetEnabledResult {},
     );
+}
+
+/// Familia `plugin.*` de EJECUCIÓN (0.14.0/0.15.0, M4-P4/P5): ejecutar y previsualizar.
+fn check_methods_plugin_exec(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{
+        PluginPreview, PluginPreviewParams, PluginPreviewResult, PluginRunCommandParams,
+        PluginRunCommandResult,
+    };
     // `plugin.run_command` (0.14.0, M4-P4): `arg` sin skip → siempre en el wire.
     check_one(
         fixtures,
@@ -445,8 +456,8 @@ fn check_methods_plugin(fixtures: &BTreeMap<String, Value>) {
             output: "hello, world".into(),
         },
     );
-    // `plugin.preview` (0.15.0, M4-P5): result poblado (los tres Some) y el
-    // vacío (todo None → `{}` por skip_serializing_if).
+    // `plugin.preview` (0.15.0, M4-P5): result poblado (flatten al raíz) y el
+    // vacío (`None` → `{}`); un parcial es inexpresable (test en types.rs).
     check_one(
         fixtures,
         "plugin_preview_params",
@@ -458,19 +469,17 @@ fn check_methods_plugin(fixtures: &BTreeMap<String, Value>) {
         fixtures,
         "plugin_preview_result",
         &PluginPreviewResult {
-            plugin_id: Some("org.norte.md".into()),
-            plugin_name: Some("Markdown Preview".into()),
-            output: Some("<h1>Título</h1>".into()),
+            preview: Some(PluginPreview {
+                plugin_id: "org.norte.md".into(),
+                plugin_name: "Markdown Preview".into(),
+                output: "<h1>Título</h1>".into(),
+            }),
         },
     );
     check_one(
         fixtures,
         "plugin_preview_result_none",
-        &PluginPreviewResult {
-            plugin_id: None,
-            plugin_name: None,
-            output: None,
-        },
+        &PluginPreviewResult { preview: None },
     );
 }
 
