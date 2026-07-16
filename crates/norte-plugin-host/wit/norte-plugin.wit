@@ -1,0 +1,42 @@
+package norte:plugin@0.1.0;
+
+/// La puerta de host MÍNIMA (demuestra el gating host↔guest): un plugin puede
+/// pedir al host que registre una línea de log (inocua, sin capability) y leer
+/// un recurso que el host abrió bajo `fs-read=scoped` (gateado en el HOST).
+interface host-log {
+    log: func(message: string);
+
+    /// Lee un recurso que el host preparó y referenció con `token`
+    /// (fs-read=scoped). Si el plugin NO declaró fs-read, el host devuelve
+    /// Err — el enforcement vive en el HOST, no en el guest (ADR 0022 D4).
+    read-scoped: func(token: string) -> result<list<u8>, string>;
+}
+
+/// Genera una previsualización de UN recurso que el HOST ya leyó y le pasa
+/// (regla 9: el guest jamás toca el FS; recibe los bytes). Devuelve texto
+/// plano listo para pintar, o un error legible.
+interface previewer {
+    record preview-input {
+        /// Mimetype detectado por el host.
+        mimetype: string,
+        /// Contenido del recurso (el host lo leyó bajo fs-read=scoped).
+        content: list<u8>,
+    }
+    render: func(input: preview-input) -> result<string, string>;
+}
+
+/// Ejecuta un comando aportado por el plugin. `arg` es texto libre del
+/// invocador; devuelve un mensaje para la barra de estado, o un error.
+interface command {
+    run: func(id: string, arg: string) -> result<string, string>;
+}
+
+/// El world que un plugin de norte implementa. Un plugin concreto exporta las
+/// interfaces de su categoría; en M4-P2 el world exige AMBAS (`previewer` y
+/// `command`) — un guest de una sola categoría implementa la otra como
+/// no-soportada. Worlds por-categoría = deuda P2b.
+world norte-plugin {
+    import host-log;
+    export previewer;
+    export command;
+}
