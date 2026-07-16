@@ -13,6 +13,12 @@ allow = [
     "BSD-3-Clause",
     "ISC",
     "Zlib",
+    # M4-P2 (runtime wasmtime, ADR 0022): el árbol de wasmtime/cranelift y sus
+    # utilidades cap-std (winx, wiggle, cranelift-*) llevan la licencia de LLVM
+    # = Apache-2.0 con la LLVM-exception, que RELAJA Apache (elimina la cláusula
+    # de patentes sobre binarios enlazados); estrictamente MÁS permisiva que la
+    # Apache-2.0 pelada que ya permitimos. Permisiva, sin copyleft.
+    "Apache-2.0 WITH LLVM-exception",
 ]
 # notify (watcher de config, ADR 0007): CC0 = dominio público equivalente.
 # webpki-roots (raíces CA de Mozilla para FTPS, fase 6d): CDLA-Permissive-2.0

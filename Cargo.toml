@@ -21,6 +21,9 @@ members = [
     "crates/norte-plugin-host",
     "crates/norte-mcp",
 ]
+# Los guests WASM de ejemplo (M4-P2) NO son miembros del workspace: compilan a
+# wasm32-wasip2 con su propio perfil, no comparten el lockfile del host.
+exclude = ["crates/norte-plugin-host/examples-wasm"]
 
 [profile.release]
 # Binario de distribución: LTO fino + una unidad de codegen (mejor optimización)

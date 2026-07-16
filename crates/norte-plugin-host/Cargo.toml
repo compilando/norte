@@ -12,6 +12,16 @@ authors.workspace = true
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 toml.workspace = true
+# Runtime WASM de plugins (M4-P2, ADR 0022 D1): wasmtime es la dep GRANDE y
+# estructural de esta fase — ejecuta los componentes WASM del modelo de M4-P1.
+# default-features=false + runtime/component-model/cranelift/std: solo el motor
+# de ejecución, el component-model (WIT), el compilador cranelift y el std;
+# fuera quedan wat/wasm parsing, gc, etc. wasmtime-wasi 46 comparte release
+# train con wasmtime 46 (el major va sincronizado): preview2 (p2) por defecto.
+# anyhow lo exige la API de wasmtime (sus Result son anyhow::Error).
+wasmtime = { version = "46", default-features = false, features = ["runtime", "component-model", "cranelift", "std"] }
+wasmtime-wasi = "46"
+anyhow.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
