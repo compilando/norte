@@ -93,6 +93,78 @@ fn snapshot_modal_papelera_y_permanente() {
     insta::assert_snapshot!(format!("{papelera}\n===\n{permanente}"));
 }
 
+/// TOFU (#45): el modal muestra el fingerprint para comparar, y un host
+/// HOSTIL (bidi override) del servidor remoto se ENMASCARA — jamás pinta el
+/// byte crudo que podría spoofear la barra. No es snapshot: asserts directos.
+#[test]
+fn modal_trust_host_muestra_fingerprint_y_enmascara_host_hostil() {
+    let mut app = app_base();
+    app.modal = Some(Modal::TrustHostKey {
+        host: "evil\u{202E}host".into(),
+        port: Some(22),
+        algo: "ssh-ed25519".into(),
+        fingerprint: "SHA256:abc123XYZ".into(),
+        dir: vp("sftp://evilhost/"),
+    });
+    let texto = render(&app);
+    assert!(
+        texto.contains("SHA256:abc123XYZ"),
+        "el fingerprint se muestra para comparar: {texto}"
+    );
+    assert!(
+        !texto.contains('\u{202E}'),
+        "el override bidi del host NO llega al render: {texto:?}"
+    );
+    assert!(
+        texto.contains("ssh-ed25519"),
+        "el algoritmo se muestra: {texto}"
+    );
+    assert!(
+        texto.contains('!'),
+        "el host hostil lleva el badge que AVISA al usuario: {texto}"
+    );
+}
+
+/// El fingerprint hostil (el server intenta ocultar chars) se enmascara Y
+/// lleva badge: el usuario ve que la huella fue manipulada, no la aprueba a
+/// ciegas. Y un SHA256 canónico (50 chars) cabe entero SIN elipsis: lo
+/// mostrado == lo que se confía.
+#[test]
+fn modal_trust_host_fingerprint_hostil_y_sha256_completo() {
+    let mut app = app_base();
+    app.modal = Some(Modal::TrustHostKey {
+        host: "h".into(),
+        port: None,
+        algo: "ssh-ed25519".into(),
+        fingerprint: "SHA256:sp\u{202E}oof".into(),
+        dir: vp("sftp://h/"),
+    });
+    let texto = render(&app);
+    assert!(
+        !texto.contains('\u{202E}'),
+        "el bidi del fingerprint NO llega al render: {texto:?}"
+    );
+    assert!(
+        texto.contains('!'),
+        "fingerprint manipulado → badge: {texto}"
+    );
+
+    // Un SHA256 real (7 + 43 = 50 chars) cabe entero, sin truncar.
+    app.modal = Some(Modal::TrustHostKey {
+        host: "h".into(),
+        port: None,
+        algo: "ssh-ed25519".into(),
+        fingerprint: "SHA256:oXf6dQ7pC3vN2mK9tR1sB4jW8yZ0aL5eH6gU3iO7wA".into(),
+        dir: vp("sftp://h/"),
+    });
+    let texto = render(&app);
+    assert!(
+        texto.contains("SHA256:oXf6dQ7pC3vN2mK9tR1sB4jW8yZ0aL5eH6gU3iO7wA"),
+        "el SHA256 canónico se muestra COMPLETO (sin elipsis): {texto}"
+    );
+    assert!(!texto.contains('…'), "no se trunca: {texto}");
+}
+
 #[test]
 fn snapshot_viewer_texto_y_hex() {
     let mut app = app_base();

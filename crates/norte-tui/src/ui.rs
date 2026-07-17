@@ -344,35 +344,14 @@ fn draw_modal(frame: &mut Frame<'_>, modal: &crate::app::Modal, theme: &TuiTheme
                 t("modal-collision-keys")
             ),
         ),
-        Modal::ApproveAgentOp { req } => {
-            // TODO lo interpolado aquí lo controla el AGENTE (encoding-
-            // auditor H1/H2/H3 de M3-3b) y esto es una decisión humana de
-            // seguridad: session y rutas pasan por el MISMO enmascarado que
-            // los nombres de pane (controles/bidi/invisibles → �) MÁS clamp
-            // de longitud; cada ruta va en SU línea con etiqueta fuera de
-            // banda (jamás un joiner in-band que un nombre pueda imitar) y
-            // elipsis media (un from kilométrico no expulsa el destino de la
-            // caja); el enmascarado se MARCA con el badge (spec §6).
-            let session = clamp_chars(&display_name(session_bytes(req)).0, 40);
-            let op = clamp_chars(&display_name(req.op.as_bytes()).0, 16);
-            let mut lineas = vec![ta(
-                "modal-approval-body",
-                &[("session", &session), ("op", &op)],
-            )];
-            for (i, p) in req.paths.iter().enumerate() {
-                let (texto, hostil) = display_name(p.as_bytes());
-                lineas.push(ta(
-                    "modal-approval-path",
-                    &[
-                        ("badge", if hostil { HOSTILE_BADGE } else { "" }),
-                        ("n", &(i + 1).to_string()),
-                        ("path", &middle_ellipsis(&texto, 46)),
-                    ],
-                ));
-            }
-            lineas.push(t("modal-approval-keys"));
-            (t("modal-approval-title"), lineas.join("\n"))
-        }
+        Modal::ApproveAgentOp { req } => approval_modal_text(req),
+        Modal::TrustHostKey {
+            host,
+            port,
+            algo,
+            fingerprint,
+            ..
+        } => trust_host_modal_text(host, *port, algo, fingerprint),
     };
     // Un borrado PERMANENTE (o aprobar una mutación de agente) tiñe el borde
     // de aviso (rol `warning`).
@@ -382,6 +361,7 @@ fn draw_modal(frame: &mut Frame<'_>, modal: &crate::app::Modal, theme: &TuiTheme
             permanent: true,
             ..
         } | Modal::ApproveAgentOp { .. }
+            | Modal::TrustHostKey { .. }
     );
     let border = if permanent {
         theme.role(Role::Warning)
@@ -393,6 +373,8 @@ fn draw_modal(frame: &mut Frame<'_>, modal: &crate::app::Modal, theme: &TuiTheme
         Modal::ApproveAgentOp { req } => u16::try_from(req.paths.len())
             .unwrap_or(u16::MAX)
             .saturating_add(4),
+        // host + algo + fingerprint + nota + teclas (5 líneas) + bordes.
+        Modal::TrustHostKey { .. } => 9,
         _ => 6,
     };
     let area = centered(frame.area(), 60, alto);
@@ -418,6 +400,85 @@ fn session_bytes(req: &norte_proto::methods::PolicyApprovalRequired) -> &[u8] {
 
 /// Recorta a `max` CHARS (no bytes) con `…` final. Para strings ya
 /// enmascarados que aún podrían ser kilométricos (clamp de layout, H1).
+/// Texto `(título, cuerpo)` del modal de aprobación de agente (M3-3b T5).
+/// TODO lo interpolado lo controla el AGENTE (encoding-auditor H1/H2/H3) y
+/// esto es una decisión humana de seguridad: session y rutas pasan por el
+/// MISMO enmascarado que los nombres de pane (controles/bidi/invisibles → �)
+/// MÁS clamp; cada ruta va en SU línea con etiqueta fuera de banda (jamás un
+/// joiner in-band que un nombre pueda imitar) y elipsis media (un `from`
+/// kilométrico no expulsa el destino de la caja); el enmascarado se MARCA con
+/// el badge (spec §6).
+fn approval_modal_text(req: &norte_proto::methods::PolicyApprovalRequired) -> (String, String) {
+    let session = clamp_chars(&display_name(session_bytes(req)).0, 40);
+    let op = clamp_chars(&display_name(req.op.as_bytes()).0, 16);
+    let mut lineas = vec![ta(
+        "modal-approval-body",
+        &[("session", &session), ("op", &op)],
+    )];
+    for (i, p) in req.paths.iter().enumerate() {
+        let (texto, hostil) = display_name(p.as_bytes());
+        lineas.push(ta(
+            "modal-approval-path",
+            &[
+                ("badge", if hostil { HOSTILE_BADGE } else { "" }),
+                ("n", &(i + 1).to_string()),
+                ("path", &middle_ellipsis(&texto, 46)),
+            ],
+        ));
+    }
+    lineas.push(t("modal-approval-keys"));
+    (t("modal-approval-title"), lineas.join("\n"))
+}
+
+/// Texto `(título, cuerpo)` del modal TOFU (#45). host/algo/fingerprint
+/// vienen del SERVIDOR REMOTO (no confiable) y esto es una decisión de
+/// seguridad: mismo enmascarado que las rutas de agente (controles/bidi/
+/// invisibles → �) + clamp. El fingerprint legítimo es ASCII
+/// (`SHA256:<base64>`), así que el enmascarado es un no-op salvo que el
+/// server intente ocultar caracteres — en cuyo caso el � DELATA la
+/// manipulación.
+fn trust_host_modal_text(
+    host: &str,
+    port: Option<u16>,
+    algo: &str,
+    fingerprint: &str,
+) -> (String, String) {
+    let (host_txt, host_hostil) = display_name(host.as_bytes());
+    let hostport = match port {
+        Some(p) => format!("{}:{p}", clamp_chars(&host_txt, 48)),
+        None => clamp_chars(&host_txt, 48),
+    };
+    let (algo_disp, algo_hostil) = display_name(algo.as_bytes());
+    let algo_txt = clamp_chars(&algo_disp, 24);
+    let (fp_txt, fp_hostil) = display_name(fingerprint.as_bytes());
+    let lineas = [
+        ta(
+            "modal-trust-host-host",
+            &[
+                ("badge", if host_hostil { HOSTILE_BADGE } else { "" }),
+                ("host", &hostport),
+            ],
+        ),
+        ta(
+            "modal-trust-host-algo",
+            &[
+                ("badge", if algo_hostil { HOSTILE_BADGE } else { "" }),
+                ("algo", &algo_txt),
+            ],
+        ),
+        ta(
+            "modal-trust-host-fp",
+            &[
+                ("badge", if fp_hostil { HOSTILE_BADGE } else { "" }),
+                ("fingerprint", &clamp_chars(&fp_txt, 52)),
+            ],
+        ),
+        t("modal-trust-host-note"),
+        t("modal-trust-host-keys"),
+    ];
+    (t("modal-trust-host-title"), lineas.join("\n"))
+}
+
 fn clamp_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_owned();

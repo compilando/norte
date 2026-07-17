@@ -15,6 +15,12 @@ modal-approval-title = Aprobación de agente
 modal-approval-body = el agente "{ $session }" pide { $op }:
 modal-approval-path = { $badge }ruta { $n }: { $path }
 modal-approval-keys = [y] aprobar   [n/esc] denegar
+modal-trust-host-title = Host key desconocida
+modal-trust-host-host = { $badge }host: { $host }
+modal-trust-host-algo = { $badge }algoritmo: { $algo }
+modal-trust-host-fp = { $badge }huella: { $fingerprint }
+modal-trust-host-note = compárala fuera de banda antes de confiar.
+modal-trust-host-keys = [y] confiar y continuar   [n/esc] cancelar
 
 # --- Mensajes de la barra ---
 msg-done = hecho

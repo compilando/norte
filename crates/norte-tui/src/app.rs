@@ -534,6 +534,26 @@ pub enum Modal {
         /// La aprobación pendiente tal como llegó del daemon.
         req: norte_proto::methods::PolicyApprovalRequired,
     },
+    /// Primer contacto TOFU con un host SSH desconocido (#45, ADR 0015 D):
+    /// un `Error::HostKeyUnknown` al navegar a `dir`. Muestra host/algo/
+    /// fingerprint para que el usuario los COMPARE fuera de banda; `y`
+    /// confía (`connection.trust_host_key`) y reintenta la navegación,
+    /// `n`/Esc cancelan. Enter NO confía (decisión de seguridad, mismo
+    /// principio que la aprobación de agente). host/algo/fingerprint vienen
+    /// del servidor remoto (no confiable): se enmascaran al pintar.
+    TrustHostKey {
+        /// Host desnudo al que se conecta (el del `HostKeyUnknown`).
+        host: String,
+        /// Puerto (ausente = default del scheme).
+        port: Option<u16>,
+        /// Algoritmo de la clave (p. ej. `ssh-ed25519`).
+        algo: String,
+        /// Fingerprint OpenSSH `SHA256:<base64>` — la MISMA cadena que va a
+        /// `connection.trust_host_key`.
+        fingerprint: String,
+        /// La ruta remota a la que reintentar navegar tras confiar.
+        dir: VPath,
+    },
 }
 
 /// Resultado de una tecla sobre un modal.
@@ -572,10 +592,11 @@ pub fn dialog_key(modal: &Modal, code: crossterm::event::KeyCode) -> DialogOutco
             K::Char('n') => DialogOutcome::Retry(P::Newer),
             _ => DialogOutcome::Open,
         },
-        // `Confirmed` = aprobar, `Cancelled` = DENEGAR (con el Esc global de
-        // arriba: cerrar este diálogo ES denegar — fail-safe, el agente
-        // recibe `not-approved`). Enter deliberadamente NO aprueba.
-        Modal::ApproveAgentOp { .. } => match code {
+        // Decisiones de SEGURIDAD (aprobar una op de agente, o confiar en una
+        // host key TOFU #45): solo `y` confirma, `n`/Esc cancelan (con el Esc
+        // global de arriba; cerrar ES denegar — fail-safe), Enter NUNCA
+        // confirma (sin default peligroso que se dispare solo).
+        Modal::ApproveAgentOp { .. } | Modal::TrustHostKey { .. } => match code {
             K::Char('y') => DialogOutcome::Confirmed,
             K::Char('n') => DialogOutcome::Cancelled,
             _ => DialogOutcome::Open,
@@ -653,5 +674,27 @@ mod tests {
         p.loading = true;
         p.finish_listing();
         assert!(!p.loading);
+    }
+
+    /// TOFU (#45): confiar es decisión de seguridad — solo `y` confía; `n` y
+    /// Esc cancelan; Enter NO confía (sin default peligroso).
+    #[test]
+    fn trust_host_key_solo_y_confia() {
+        use crossterm::event::KeyCode as K;
+        let m = Modal::TrustHostKey {
+            host: "h".into(),
+            port: Some(22),
+            algo: "ssh-ed25519".into(),
+            fingerprint: "SHA256:AAAA".into(),
+            dir: root(),
+        };
+        assert_eq!(dialog_key(&m, K::Char('y')), DialogOutcome::Confirmed);
+        assert_eq!(dialog_key(&m, K::Char('n')), DialogOutcome::Cancelled);
+        assert_eq!(dialog_key(&m, K::Esc), DialogOutcome::Cancelled);
+        assert_eq!(
+            dialog_key(&m, K::Enter),
+            DialogOutcome::Open,
+            "Enter jamás confía en una host key"
+        );
     }
 }

@@ -401,7 +401,17 @@ async fn run(
                             _ => {}
                         }
                     } else if app.modal.is_some() {
-                        on_dialog_key(app, backend, key.code).await;
+                        // El modal TOFU (#45) puede NAVEGAR al confiar: su Cd
+                        // se aplica igual que el de un comando.
+                        match on_dialog_key(app, backend, &mut events, key.code).await {
+                            Cd::Filling(f) => fill = Some(f),
+                            Cd::Replaced(pane) => {
+                                if fill.as_ref().is_some_and(|f| f.pane == pane) {
+                                    fill = None;
+                                }
+                            }
+                            Cd::Cancelled => {}
+                        }
                     } else {
                         // Pantalla activa: el viewer tiene su contexto.
                         let active = if app.viewer.is_some() {
@@ -699,10 +709,17 @@ async fn refresh_panes(app: &mut App, backend: &Backend, events: &mut EventStrea
     }
 }
 
-/// Teclas de un modal abierto (hardcodeadas, issue #24).
-async fn on_dialog_key(app: &mut App, backend: &Backend, code: KeyCode) {
+/// Teclas de un modal abierto (hardcodeadas, issue #24). `events` es para el
+/// reintento de navegación del modal TOFU (#45): confiar en la host key
+/// relanza el `cd`, que tiene su propio loop de eventos.
+async fn on_dialog_key(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    code: KeyCode,
+) -> Cd {
     let Some(modal) = app.modal.clone() else {
-        return;
+        return Cd::Cancelled;
     };
     match dialog_key(&modal, code) {
         DialogOutcome::Open => {}
@@ -717,7 +734,10 @@ async fn on_dialog_key(app: &mut App, backend: &Backend, code: KeyCode) {
         }
         DialogOutcome::Confirmed => {
             app.modal = None;
-            app.open_next_pending();
+            // OJO (MAJOR del rust-reviewer): NO abrir la siguiente pendiente
+            // ANTES del match — el retry TOFU (`return cd`) puede reabrir un
+            // TrustHostKey y PISAR una aprobación de agente ya sacada de la
+            // cola (quedaría huérfana hasta su TTL). Se difiere al final.
             match modal {
                 Modal::ConfirmDelete { target, permanent } => {
                     let mode = if permanent {
@@ -740,7 +760,37 @@ async fn on_dialog_key(app: &mut App, backend: &Backend, code: KeyCode) {
                 Modal::ApproveAgentOp { req } => {
                     decide_approval(app, backend, req.approval_id, true).await;
                 }
+                // TOFU (#45): confía en la host key y REINTENTA la navegación.
+                Modal::TrustHostKey {
+                    host,
+                    port,
+                    algo,
+                    fingerprint,
+                    dir,
+                } => {
+                    match backend
+                        .trust_host_key(&host, port, &algo, &fingerprint)
+                        .await
+                    {
+                        Ok(()) => {
+                            // El engine re-verifica el fingerprint contra la
+                            // clave que el host presenta AHORA (anti-TOCTOU,
+                            // ADR 0015 D); si aún falla, el retry lo mostrará.
+                            let outcome = cd(app, backend, events, dir).await;
+                            // Solo abrir la siguiente pendiente si el retry NO
+                            // dejó un modal (otro HostKeyUnknown): jamás pisar.
+                            if app.modal.is_none() {
+                                app.open_next_pending();
+                            }
+                            return outcome;
+                        }
+                        Err(e) => app.message = Some(error_message(&e)),
+                    }
+                }
             }
+            // Todas las ramas salvo el retry TOFU (que ya volvió) abren aquí
+            // la siguiente pendiente, con el modal ya cerrado.
+            app.open_next_pending();
         }
         DialogOutcome::Retry(policy) => {
             app.modal = None;
@@ -755,6 +805,8 @@ async fn on_dialog_key(app: &mut App, backend: &Backend, code: KeyCode) {
             app.open_next_pending();
         }
     }
+    // Salvo el retry TOFU (que hace `return cd(...)`), un modal no navega.
+    Cd::Cancelled
 }
 
 /// Resuelve una aprobación de policy (`policy.decide`, M3-3b T5). Un error
@@ -1186,6 +1238,27 @@ async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPa
                             Some(s) => Cd::Filling(spawn_fill(pane, s)),
                             None => Cd::Replaced(pane),
                         };
+                    }
+                    // Primer contacto TOFU (#45): en vez de una línea de
+                    // error con la huella, abre el modal de confianza — `y`
+                    // confía y REINTENTA esta misma navegación.
+                    Err(Error::HostKeyUnknown {
+                        host,
+                        port,
+                        algo,
+                        fingerprint,
+                    }) => {
+                        app.modal = Some(Modal::TrustHostKey {
+                            host,
+                            port,
+                            algo,
+                            fingerprint,
+                            dir: dir.clone(),
+                        });
+                        // El pane NO se tocó (solo se abrió el modal): Cancelled
+                        // conserva un relleno en vuelo del listado anterior, que
+                        // sigue siendo válido (MINOR del rust-reviewer).
+                        return Cd::Cancelled;
                     }
                     // Un error de listado NO tumba el TUI: el pane se queda,
                     // pero un relleno previo de ESTE pane ya no aplica.

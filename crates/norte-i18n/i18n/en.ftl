@@ -15,6 +15,12 @@ modal-approval-title = Agent approval
 modal-approval-body = agent "{ $session }" requests { $op }:
 modal-approval-path = { $badge }path { $n }: { $path }
 modal-approval-keys = [y] approve   [n/esc] deny
+modal-trust-host-title = Unknown host key
+modal-trust-host-host = { $badge }host: { $host }
+modal-trust-host-algo = { $badge }algorithm: { $algo }
+modal-trust-host-fp = { $badge }fingerprint: { $fingerprint }
+modal-trust-host-note = compare it out of band before trusting.
+modal-trust-host-keys = [y] trust and continue   [n/esc] cancel
 
 # --- Status bar messages ---
 msg-done = done
