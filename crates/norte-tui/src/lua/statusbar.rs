@@ -29,13 +29,20 @@
 //! en vuelo queda INCANCELABLE (ni token ni timeout lo matan; el driver
 //! tendría que esperar el timeout duro y ABANDONAR el future).
 //!
-//! Por eso `LuaHost` lleva `run_active: Rc<Cell<bool>>` (compartido con
-//! `driver.rs`: `invoke_with_timeout` lo enciende al arrancar, `RunGuard` lo
-//! apaga en su `Drop`, TODOS los caminos incluido el abandono). Mientras
-//! `run_active` es `true`, [`super::LuaHost::statusbar`] JAMÁS llama a esta
+//! Por eso `LuaHost` lleva `run_active: Rc<Cell<u32>>` (compartido con
+//! `driver.rs`: `invoke_with_timeout` lo INCREMENTA al arrancar, el `Drop` de
+//! `CommandRun` — no `RunGuard`, que vive DENTRO del future y jamás correría
+//! si el `CommandRun` se dropea sin pollear — lo DECREMENTA, TODOS los
+//! caminos incluido el abandono). Es un CONTADOR, no un booleano
+//! (spec-review 3): el patrón natural del caller (T8) `self.run =
+//! Some(host.invoke(...))` evalúa el run nuevo (incrementa) ANTES de dropear
+//! el viejo (decrementa) — con un booleano, ese decremento del viejo
+//! apagaría la protección del nuevo que acaba de arrancar. Mientras el
+//! contador sea `!= 0`, [`super::LuaHost::statusbar`] JAMÁS llama a esta
 //! función — ni de lejos toca `set_hook`/`remove_hook` — devuelve el valor
 //! cacheado si el `StatusInput` coincide o `None` si no: la barra se
-//! CONGELA durante un comando Lua, a cambio de no poder desarmar jamás la
+//! CONGELA mientras haya algún run vivo (incluido uno ya terminado que el
+//! caller aún no ha dropeado), a cambio de no poder desarmar jamás la
 //! cancelación de un run en vuelo.
 
 use mlua::{Function, HookTriggers, Lua};
@@ -455,6 +462,86 @@ mod tests {
             h.statusbar(&input()).as_deref(),
             Some("ok"),
             "un CommandRun dropeado sin pollear no debe dejar run_active atascado"
+        );
+    }
+
+    /// Regresión (re-review 3, rust-reviewer MAJOR): el patrón natural del
+    /// caller (T8) `self.run = Some(host.invoke(...))` evalúa el RHS —
+    /// construye el run NUEVO, incrementa `run_active` — ANTES de dropear el
+    /// valor VIEJO que ocupaba el slot. Con un `run_active` booleano, el
+    /// `Drop` del viejo (que ya había terminado pero seguía vivo en el slot)
+    /// pisaría el `true` recién puesto por el nuevo, dejándolo SIN
+    /// protección: `statusbar()` podría tocar Lua mientras el run nuevo
+    /// sigue en vuelo, desarmando su hook de cancelación (mismo bug de fondo
+    /// que las regresiones de arriba, pero disparado por el ciclo de vida
+    /// del slot, no por una llamada directa a `statusbar()`). Con un
+    /// contador, el incremento del nuevo y el decremento del viejo se
+    /// compensan y el contador nunca baja a cero mientras el nuevo viva.
+    #[tokio::test]
+    async fn asignar_un_run_nuevo_sobre_el_slot_del_viejo_no_desprotege() {
+        let (backend, mem) = backend_con_origen().await;
+        let h = LuaHost::new().unwrap();
+        h.eval_layer(
+            b"norte.ui.statusbar(function() return 'ok' end)\n\
+              norte.command('trivial', function() end)\n\
+              norte.command('loop', function()\n\
+                local ok = norte.fs.copy('mem:///a', 'mem:///b')\n\
+                while true do end\n\
+              end)",
+            Layer::User,
+        )
+        .unwrap();
+
+        // Run VIEJO: trivial, se completa YA (sin latencia) pero se
+        // mantiene vivo sin dropear — pollado por REFERENCIA (`&mut old`),
+        // no consumido, para poder seguir sosteniéndolo tras el outcome
+        // (`CommandRun` es `Unpin`, así que `&mut CommandRun` es `Future`).
+        let mut old = h
+            .invoke(
+                "trivial",
+                backend.clone(),
+                ctx_mem(),
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .expect("existe");
+        let outcome_old = (&mut old).await;
+        assert!(matches!(outcome_old, crate::lua::RunOutcome::Ok { .. }));
+
+        // Latencia para que el run NUEVO quede de verdad en vuelo cuando lo
+        // sondeamos.
+        mem.faults()
+            .set_latency_per_op(Some(std::time::Duration::from_millis(200)));
+        let token = tokio_util::sync::CancellationToken::new();
+        let new = h
+            .invoke_with_timeout(
+                "loop",
+                backend.clone(),
+                ctx_mem(),
+                token.clone(),
+                std::time::Duration::from_secs(2),
+            )
+            .expect("existe");
+
+        // El patrón natural `self.run = Some(host.invoke(...))`: `new` ya
+        // se construyó (RHS evaluado) arriba; AHORA se dropea el viejo que
+        // ocupaba el slot — el orden importa, es justo lo que reproduce el
+        // bug con un booleano.
+        drop(old);
+
+        let probe = async {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            assert_eq!(
+                h.statusbar(&input()),
+                None,
+                "el run nuevo debe seguir protegido pese al Drop del viejo"
+            );
+            token.cancel();
+        };
+
+        let (outcome, ()) = tokio::join!(new, probe);
+        assert!(
+            matches!(outcome, crate::lua::RunOutcome::Cancelled),
+            "{outcome:?}"
         );
     }
 }

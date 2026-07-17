@@ -71,17 +71,30 @@ pub enum RunOutcome {
 /// Lleva `run_active` como VALOR (no solo dentro del future que envuelve):
 /// `CommandRun` existe desde el instante en que `invoke_with_timeout` lo
 /// devuelve, se pollee alguna vez o no. Su [`Drop`] es la ÚNICA fuente de
-/// verdad que apaga `run_active` — ver ahí el porqué (spec-review 2, task
-/// 7): un guard construido DENTRO del future (como `RunGuard`, más abajo)
-/// JAMÁS correría si el caller crea el `CommandRun` y lo dropea sin pollear
-/// ni una vez (el cuerpo de una `async fn` no ejecuta nada hasta el primer
-/// poll) — `run_active` quedaría atascado en `true` y la barra congelada
-/// hasta el próximo hot-reload. Con el flag en el propio tipo, ese camino es
+/// verdad que DECREMENTA `run_active` — ver ahí el porqué (spec-review 2,
+/// task 7): un guard construido DENTRO del future (como `RunGuard`, más
+/// abajo) JAMÁS correría si el caller crea el `CommandRun` y lo dropea sin
+/// pollear ni una vez (el cuerpo de una `async fn` no ejecuta nada hasta el
+/// primer poll) — `run_active` quedaría atascado y la barra congelada hasta
+/// el próximo hot-reload. Con el contador en el propio tipo, ese camino es
 /// estructuralmente imposible: no depende de la disciplina del caller (T8)
 /// de pollear hasta el final.
+///
+/// **Dropea el valor en cuanto tengas el [`RunOutcome`]** (spec-review 3):
+/// mientras un `CommandRun` ya resuelto siga vivo en algún sitio (p. ej. un
+/// slot `Option<CommandRun>` que aún no se ha puesto a `None`),
+/// `LuaHost::statusbar` lo sigue contando como «en vuelo» y la barra
+/// permanece congelada de más.
+///
+/// `run_active` es un CONTADOR (`Rc<Cell<u32>>`), no un booleano: el patrón
+/// natural del caller `self.run = Some(host.invoke(...))` evalúa el RHS
+/// (que INCREMENTA para el run nuevo) antes de dropear el valor viejo que
+/// ocupaba el slot (que DECREMENTA) — con un booleano, ese decremento del
+/// viejo pisaría el `true` que el nuevo acababa de encender, dejándolo sin
+/// protección. Con un contador ambos se compensan.
 pub struct CommandRun {
     future: Pin<Box<dyn Future<Output = RunOutcome>>>,
-    run_active: Rc<Cell<bool>>,
+    run_active: Rc<Cell<u32>>,
 }
 
 impl Future for CommandRun {
@@ -98,11 +111,13 @@ impl Drop for CommandRun {
         // abandonado a medias (drop de un future `Pending`), o jamás
         // polleado (drop inmediato tras `invoke_with_timeout`, sin await
         // alguno — el cuerpo de `run_command` nunca llegó a ejecutarse, así
-        // que ningún `RunGuard` interno corrió). `Cell::set(false)` es
-        // idempotente: si el run nunca se encendió (camino de error de
-        // `install_fs`) o si ya se apagó por otra vía, este `set` no hace
-        // daño.
-        self.run_active.set(false);
+        // que ningún `RunGuard` interno corrió). Saturante: el contador
+        // jamás debería llegar a 0 e intentar bajar más (cada `CommandRun`
+        // decrementa como mucho una vez, en SU propio Drop), pero
+        // `saturating_sub` es la defensa barata contra un futuro bug de
+        // conteo — subdesbordar un `u32` en release sería peor (wrap a
+        // `u32::MAX`, la barra JAMÁS se descongela).
+        self.run_active.set(self.run_active.get().saturating_sub(1));
     }
 }
 
@@ -209,11 +224,15 @@ impl LuaHost {
         ) {
             // Instalación a medias: se cierra el run (ningún binding parcial
             // sobrevive) y el run resuelve inmediato a Err — nunca panic. NO
-            // se enciende `run_active`: no hay hook alguno de por medio. El
-            // `CommandRun` igual lo lleva (su `Drop` lo apaga sin efecto: ya
-            // estaba en `false`).
+            // hay hook alguno de por medio en este camino, pero `run_active`
+            // se incrementa IGUAL, por simetría con el decremento
+            // incondicional del `Drop` de `CommandRun`: cada `CommandRun`
+            // que sale de aquí decrementa exactamente una vez al morir, así
+            // que cada uno debe incrementar exactamente una vez al nacer —
+            // hacerlo condicional rompería esa invariante de conteo.
             closed.set(true);
             let detail = e.to_string();
+            run_active.set(run_active.get().saturating_add(1));
             return Some(CommandRun {
                 future: Box::pin(async move {
                     RunOutcome::Err {
@@ -225,12 +244,16 @@ impl LuaHost {
             });
         }
 
-        // El run arranca AQUÍ: se enciende ANTES de devolver el valor, y su
-        // apagado vive en el `Drop` de `CommandRun` (no en un guard interno
-        // del future) — así que ni siquiera importa si el caller pollea el
-        // valor devuelto o lo dropea de inmediato (ver el rustdoc de
-        // `CommandRun`).
-        run_active.set(true);
+        // El run arranca AQUÍ: se incrementa ANTES de devolver el valor, y
+        // su decremento vive en el `Drop` de `CommandRun` (no en un guard
+        // interno del future) — así que ni siquiera importa si el caller
+        // pollea el valor devuelto o lo dropea de inmediato (ver el rustdoc
+        // de `CommandRun`). Contador, no booleano (spec-review 3): el patrón
+        // `self.run = Some(host.invoke(...))` incrementa para el run nuevo
+        // ANTES de que el `Drop` del run viejo (que ocupaba el slot)
+        // decremente — con un booleano, ese decremento pisaría el `true`
+        // recién puesto.
+        run_active.set(run_active.get().saturating_add(1));
 
         let channels = RunChannels {
             cancellers,
