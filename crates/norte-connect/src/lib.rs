@@ -24,7 +24,7 @@ pub use s3::S3Connector;
 // el core no necesita deps directas de russh-sftp/suppaftp/opendal.
 pub use opendal::Operator;
 pub use russh_sftp::client::SftpSession;
-pub use secret::{Secret, SecretResolver};
+pub use secret::{Secret, SecretResolver, journal_anchor_key};
 pub use spec::{AddressingStyle, AuthMethod, ConnectionSpec, ConnectionsFile, Endpoint, TlsMode};
 pub use ssh::SshConnector;
 pub use suppaftp::tokio::AsyncRustlsFtpStream as FtpStream;

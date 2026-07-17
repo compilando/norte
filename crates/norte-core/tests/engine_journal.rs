@@ -51,7 +51,14 @@ async fn copy_records_created_with_valid_chain() {
     assert_eq!(es[0].path, b"mem:///dst.txt");
     assert_eq!(es[0].reversal, "delete");
     assert_eq!(es[0].actor_kind, "user");
-    assert!(journal.journal().verify_chain().await.expect("verify"));
+    assert!(
+        journal
+            .journal()
+            .verify_chain()
+            .await
+            .expect("verify")
+            .is_intact()
+    );
 }
 
 #[tokio::test]
@@ -70,7 +77,14 @@ async fn move_records_renamed() {
     assert_eq!(es[0].op, "renamed");
     assert_eq!(es[0].path, b"mem:///b.txt");
     assert_eq!(es[0].path_to.as_deref(), Some(&b"mem:///a.txt"[..]));
-    assert!(journal.journal().verify_chain().await.expect("verify"));
+    assert!(
+        journal
+            .journal()
+            .verify_chain()
+            .await
+            .expect("verify")
+            .is_intact()
+    );
 }
 
 #[tokio::test]
@@ -86,7 +100,14 @@ async fn permanent_delete_records_removed_irreversible() {
     assert_eq!(last.op, "removed");
     assert_eq!(last.reversal, "irreversible");
     assert_eq!(last.reversal_ref, None);
-    assert!(journal.journal().verify_chain().await.expect("verify"));
+    assert!(
+        journal
+            .journal()
+            .verify_chain()
+            .await
+            .expect("verify")
+            .is_intact()
+    );
 }
 
 #[tokio::test]
@@ -106,5 +127,12 @@ async fn trash_records_trashed_restore() {
     assert_eq!(es[0].reversal, "restore_trash");
     // MemProvider = papelera "vanish": sin ruta recuperable.
     assert_eq!(es[0].reversal_ref, None);
-    assert!(journal.journal().verify_chain().await.expect("verify"));
+    assert!(
+        journal
+            .journal()
+            .verify_chain()
+            .await
+            .expect("verify")
+            .is_intact()
+    );
 }

@@ -358,3 +358,109 @@ mod tests {
         }
     }
 }
+
+/// Entrada del keyring para la clave de anclaje del journal (M3-5, ADR 0025).
+const ANCHOR_KEY_ACCOUNT: &str = "journal-anchor";
+
+/// Clave HMAC de las anclas del journal: la lee del keyring y, si no existe,
+/// genera 32 bytes del OS y los guarda (get-or-create, hex). A DIFERENCIA de
+/// los secretos de conexión, aquí el keyring NO es best-effort: sin él no hay
+/// anclas (la clave jamás toca disco plano — regla 10). Override por env
+/// `NORTE_ANCHOR_KEY` (64 chars hex) para headless/CI, mismo orden
+/// env → keyring que los secretos de conexión — **OJO**: en modo env la
+/// garantía frente a same-uid es CERO (el atacante del threat model lee
+/// `/proc/<pid>/environ`, y pasarla inline la deja en el historial del
+/// shell); úsala solo donde el keyring no exista y el entorno esté
+/// controlado. Carrera get-or-create: dos primeros anclajes CONCURRENTES
+/// pueden generar claves distintas (last-writer gana y el otro queda
+/// `BadMac`); tras `set_password` se RE-LEE y se devuelve lo persistido,
+/// que la acota a la ventana del propio keyring. Los mensajes de error
+/// son ESTÁTICOS (mismo criterio que [`crate::ConnectError::SecretStore`]);
+/// el detalle va por `tracing::debug` (el error del keyring no contiene la
+/// clave).
+///
+/// # Errors
+/// Keyring no disponible/sin backend, entrada ilegible, o entropía del OS.
+pub fn journal_anchor_key() -> Result<[u8; 32], crate::ConnectError> {
+    use crate::ConnectError::SecretStore;
+    // Env primero (mismo orden que los secretos de conexión, ADR 0015 C):
+    // imprescindible en headless/CI donde el keyring no tiene backend
+    // (`linux-keyring` es feature opt-in). 64 chars hex.
+    if let Ok(hexed) = std::env::var("NORTE_ANCHOR_KEY") {
+        let hexed = zeroize::Zeroizing::new(hexed);
+        return decode_anchor_key(&hexed)
+            .ok_or(SecretStore("NORTE_ANCHOR_KEY inválida (64 chars hex)"));
+    }
+    let entry = keyring::Entry::new(KEYRING_SERVICE, ANCHOR_KEY_ACCOUNT).map_err(|e| {
+        tracing::debug!(error = %e, "keyring: no se pudo abrir la entrada de anclaje");
+        SecretStore("keyring no disponible para la clave de anclaje")
+    })?;
+    match entry.get_password() {
+        Ok(hexed) => {
+            decode_anchor_key(&hexed).ok_or(SecretStore("clave de anclaje corrupta en el keyring"))
+        }
+        Err(keyring::Error::NoEntry) => {
+            let mut key = zeroize::Zeroizing::new([0u8; 32]);
+            getrandom::fill(key.as_mut()).map_err(|e| {
+                tracing::debug!(error = %e, "getrandom falló");
+                SecretStore("sin entropía del OS para la clave de anclaje")
+            })?;
+            let hexed = zeroize::Zeroizing::new(key.iter().fold(String::new(), |mut acc, b| {
+                use std::fmt::Write as _;
+                let _ = write!(acc, "{b:02x}");
+                acc
+            }));
+            entry.set_password(&hexed).map_err(|e| {
+                tracing::debug!(error = %e, "keyring: no se pudo guardar la clave de anclaje");
+                SecretStore("keyring no disponible para guardar la clave de anclaje")
+            })?;
+            // RE-LEE: si otro proceso ganó la carrera get-or-create, se
+            // devuelve la clave PERSISTIDA, no la local perdedora.
+            let persisted = zeroize::Zeroizing::new(entry.get_password().map_err(|e| {
+                tracing::debug!(error = %e, "keyring: re-lectura tras guardar falló");
+                SecretStore("keyring no disponible para la clave de anclaje")
+            })?);
+            decode_anchor_key(&persisted)
+                .ok_or(SecretStore("clave de anclaje corrupta en el keyring"))
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, "keyring: no se pudo leer la clave de anclaje");
+            Err(SecretStore(
+                "keyring no disponible para la clave de anclaje",
+            ))
+        }
+    }
+}
+
+/// Decodifica la clave hex de 64 chars; `None` si no mide o no es hex.
+fn decode_anchor_key(hexed: &str) -> Option<[u8; 32]> {
+    let bytes = hexed.as_bytes();
+    if bytes.len() != 64 {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    for (i, chunk) in bytes.chunks_exact(2).enumerate() {
+        let hi = char::from(chunk[0]).to_digit(16)?;
+        let lo = char::from(chunk[1]).to_digit(16)?;
+        key[i] = u8::try_from(hi * 16 + lo).ok()?;
+    }
+    Some(key)
+}
+
+#[cfg(test)]
+mod anchor_key_tests {
+    use super::decode_anchor_key;
+
+    #[test]
+    fn decode_round_trip_y_rechazos() {
+        let key = [0xABu8; 32];
+        let hexed: String = key.iter().fold(String::new(), |mut acc, b| {
+            use std::fmt::Write as _;
+            let _ = write!(acc, "{b:02x}");
+            acc
+        });
+        assert_eq!(decode_anchor_key(&hexed), Some(key));
+        assert_eq!(decode_anchor_key("corto"), None);
+        assert_eq!(decode_anchor_key(&"zz".repeat(32)), None);
+    }
+}

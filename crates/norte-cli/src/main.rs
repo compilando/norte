@@ -116,6 +116,45 @@ enum Cmd {
         #[command(subcommand)]
         cmd: PluginCmd,
     },
+    /// Auditoría del journal (M3-5, ADR 0025): cadena + anclas + export.
+    /// Requiere el daemon PARADO (la DB se abre en solo-lectura pero el
+    /// daemon la mantiene bloqueada en exclusiva)
+    Audit {
+        #[command(subcommand)]
+        cmd: AuditCmd,
+    },
+}
+
+/// Subcomandos de auditoría (M3-5).
+#[derive(Subcommand)]
+enum AuditCmd {
+    /// Verifica el hash-chain (cita la primera rotura) y las anclas HMAC.
+    /// SIN anclas el veredicto es FALLO (su ausencia es indistinguible de
+    /// un borrado hostil) salvo opt-out explícito
+    Verify {
+        /// Acepta un journal sin fichero de anclas (primer uso)
+        #[arg(long)]
+        allow_no_anchors: bool,
+    },
+    /// Exporta el journal a STDOUT
+    Export {
+        /// Formato de salida
+        #[arg(long, value_enum, default_value_t = AuditFormat::Jsonl)]
+        format: AuditFormat,
+    },
+    /// Ancla el head actual de la cadena (HMAC con clave del keyring) y
+    /// escribe la línea a STDOUT — guárdala TAMBIÉN fuera de esta máquina:
+    /// la copia externa es lo que hace detectable un recorte del fichero
+    Anchor,
+}
+
+/// Formato del export de auditoría.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum AuditFormat {
+    /// Una línea JSON por entrada (estable, para máquinas)
+    Jsonl,
+    /// CSV RFC 4180 con fórmulas neutralizadas (para humanos)
+    Csv,
 }
 
 /// Subcomandos de plugins.
@@ -257,6 +296,10 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Cmd::Undo { session } => return undo_cmd(&session, cli.socket).await,
         _ => {}
     }
+    // Audit lee la DB del journal directamente (solo-lectura, daemon parado).
+    if let Cmd::Audit { cmd } = cli.cmd {
+        return audit_cmd(cmd).await;
+    }
 
     let engine = Engine::new();
     engine.register_provider(Arc::new(LocalProvider::os_root()) as Arc<dyn Provider>);
@@ -331,11 +374,226 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(run_task(task, false).await)
         }
         Cmd::Plugin { cmd } => plugin_cmd(&backend, cmd).await,
+        Cmd::Audit { .. } => unreachable!("manejado arriba"),
         #[cfg(unix)]
         Cmd::Daemon { .. } | Cmd::Mcp { .. } | Cmd::Policy { .. } | Cmd::Undo { .. } => {
             unreachable!("manejado arriba")
         }
     }
+}
+
+/// `norte audit <verify|export|anchor>` (M3-5, ADR 0025): opera sobre la DB
+/// del journal en SOLO-LECTURA. Con el daemon corriendo, `SQLite` devuelve
+/// `database is locked` (su lock es exclusivo): el mensaje lo dice claro.
+async fn audit_cmd(cmd: AuditCmd) -> anyhow::Result<ExitCode> {
+    use norte_core::{Journal, audit};
+    let dir = norte_core::connect::config_dir();
+    let journal_path = dir.join("journal.db");
+    let anchors_path = dir.join("journal-anchors.jsonl");
+    let journal = Journal::open_read_only(&journal_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context(norte_i18n::t("cli-audit-open-failed"))?;
+    match cmd {
+        AuditCmd::Export { format } => {
+            let entries = journal
+                .entries()
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))
+                .context(norte_i18n::t("cli-audit-open-failed"))?;
+            let out = match format {
+                AuditFormat::Jsonl => audit::export_jsonl(&entries),
+                AuditFormat::Csv => audit::export_csv(&entries),
+            };
+            print!("{out}");
+            Ok(ExitCode::SUCCESS)
+        }
+        AuditCmd::Anchor => {
+            // Jamás se ancla una cadena YA rota detectable: el ancla fijaría
+            // historia mala como «buena».
+            if let norte_core::ChainStatus::Broken { first_bad_seq } = journal
+                .verify_chain()
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+            {
+                eprintln!(
+                    "{}",
+                    norte_i18n::ta(
+                        "cli-audit-chain-broken",
+                        &[("seq", &first_bad_seq.to_string())],
+                    )
+                );
+                return Ok(ExitCode::FAILURE);
+            }
+            let Some((seq, head)) = journal.head().await.map_err(|e| anyhow::anyhow!("{e}"))?
+            else {
+                println!("{}", norte_i18n::t("cli-audit-empty"));
+                return Ok(ExitCode::SUCCESS);
+            };
+            // La clave del keyring puede bloquear (D-Bus/prompt): fuera del
+            // reactor (regla 2).
+            let key = tokio::task::spawn_blocking(norte_core::connect::journal_anchor_key)
+                .await
+                .map_err(|_| anyhow::anyhow!("keyring task panicked"))?
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let line = audit::anchor_line(&key, &audit::Anchor { seq, head });
+            append_line_0600(&anchors_path, &line).await?;
+            // La línea sale por stdout A PROPÓSITO: la copia EXTERNA de las
+            // anclas (log remoto, otro host) es lo que hace detectable el
+            // recorte del fichero local (ADR 0025).
+            println!("{line}");
+            println!(
+                "{}",
+                norte_i18n::ta("cli-audit-anchored", &[("seq", &seq.to_string())])
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        AuditCmd::Verify { allow_no_anchors } => {
+            audit_verify(&journal, &anchors_path, allow_no_anchors).await
+        }
+    }
+}
+
+/// `norte audit verify`: cadena (cita la primera rotura, B2) + anclas +
+/// COBERTURA (hasta qué seq llegan las anclas Ok — el recorte del fichero de
+/// anclas se manifiesta como cobertura que retrocede). Sin anclas = FALLO
+/// salvo `--allow-no-anchors`: la ausencia es indistinguible de un borrado
+/// hostil (H1 del security-reviewer).
+async fn audit_verify(
+    journal: &norte_core::Journal,
+    anchors_path: &std::path::Path,
+    allow_no_anchors: bool,
+) -> anyhow::Result<ExitCode> {
+    use norte_core::{ChainStatus, audit};
+    let head_seq = match journal
+        .verify_chain()
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    {
+        ChainStatus::Broken { first_bad_seq } => {
+            eprintln!(
+                "{}",
+                norte_i18n::ta(
+                    "cli-audit-chain-broken",
+                    &[("seq", &first_bad_seq.to_string())],
+                )
+            );
+            return Ok(ExitCode::FAILURE);
+        }
+        ChainStatus::Intact { entries } => {
+            println!(
+                "{}",
+                norte_i18n::ta("cli-audit-chain-ok", &[("entries", &entries.to_string())])
+            );
+            journal
+                .head()
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+                .map(|(seq, _)| seq)
+        }
+    };
+    let lines = match tokio::fs::read_to_string(&anchors_path).await {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let msg = norte_i18n::t("cli-audit-no-anchors");
+            if allow_no_anchors {
+                println!("{msg}");
+                return Ok(ExitCode::SUCCESS);
+            }
+            // Ausencia = fallo por defecto: un atacante sin clave puede
+            // BORRAR el fichero; solo el humano decide que «no hay» es ok.
+            eprintln!("{msg}");
+            return Ok(ExitCode::FAILURE);
+        }
+        Err(e) => return Err(e).context("journal-anchors.jsonl"),
+    };
+    let key = tokio::task::spawn_blocking(norte_core::connect::journal_anchor_key)
+        .await
+        .map_err(|_| anyhow::anyhow!("keyring task panicked"))?
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    // UN snapshot de la cadena para todo el veredicto (sin TOCTOU entre el
+    // verify de arriba y los contrastes de anclas).
+    let hash_by_seq: std::collections::HashMap<i64, [u8; 32]> = journal
+        .entries()
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .into_iter()
+        .filter_map(|e| e.entry_hash.try_into().ok().map(|h: [u8; 32]| (e.seq, h)))
+        .collect();
+    let report = audit::verify_anchors(&key, &lines, &hash_by_seq);
+    for (line_no, verdict) in &report.bad {
+        let Some(detail) = verdict_detail(verdict) else {
+            continue;
+        };
+        eprintln!(
+            "{}",
+            norte_i18n::ta(
+                "cli-audit-anchor-bad",
+                &[("line", &line_no.to_string()), ("detail", &detail)],
+            )
+        );
+    }
+    // Cobertura SIEMPRE visible: anclas hasta X, cadena hasta Y. Un recorte
+    // del fichero de anclas retrocede X sin tocar la cadena.
+    println!(
+        "{}",
+        norte_i18n::ta(
+            "cli-audit-coverage",
+            &[
+                (
+                    "anchored",
+                    &report
+                        .max_ok_seq
+                        .map_or_else(|| "-".into(), |s| s.to_string()),
+                ),
+                (
+                    "head",
+                    &head_seq.map_or_else(|| "-".into(), |s| s.to_string()),
+                ),
+            ],
+        )
+    );
+    if !report.bad.is_empty() {
+        return Ok(ExitCode::FAILURE);
+    }
+    println!(
+        "{}",
+        norte_i18n::ta(
+            "cli-audit-anchors-ok",
+            &[("count", &report.checked.to_string())],
+        )
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Traduce un veredicto NO-Ok de ancla a su mensaje Fluent.
+fn verdict_detail(verdict: &norte_core::audit::AnchorVerdict) -> Option<String> {
+    use norte_core::audit::AnchorVerdict;
+    Some(match verdict {
+        AnchorVerdict::BadLine => norte_i18n::t("cli-audit-verdict-bad-line"),
+        AnchorVerdict::BadMac => norte_i18n::t("cli-audit-verdict-bad-mac"),
+        AnchorVerdict::MissingSeq(a) => {
+            norte_i18n::ta("cli-audit-verdict-missing", &[("seq", &a.seq.to_string())])
+        }
+        AnchorVerdict::HashMismatch(a) => {
+            norte_i18n::ta("cli-audit-verdict-mismatch", &[("seq", &a.seq.to_string())])
+        }
+        AnchorVerdict::Ok(_) => return None,
+    })
+}
+
+/// Appendea una línea (+`\n`) a `path`, creándolo `0600` si no existe.
+async fn append_line_0600(path: &std::path::Path, line: &str) -> anyhow::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let mut opts = tokio::fs::OpenOptions::new();
+    opts.append(true).create(true);
+    #[cfg(unix)]
+    opts.mode(0o600);
+    let mut f = opts.open(path).await.context("journal-anchors.jsonl")?;
+    f.write_all(line.as_bytes()).await?;
+    f.write_all(b"\n").await?;
+    f.flush().await?;
+    Ok(())
 }
 
 /// `norte plugin run <id> <command> [arg]`: ejecuta un comando de un plugin YA

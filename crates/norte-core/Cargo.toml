@@ -31,6 +31,7 @@ serde.workspace = true
 serde_json.workspace = true
 # Journal transaccional (M3-1, ADR 0023): storage + hash-chain.
 sha2.workspace = true
+hmac.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 # Reglas declarativas de policy.toml (M3-3, spec §10): parsing con deny_unknown_fields.

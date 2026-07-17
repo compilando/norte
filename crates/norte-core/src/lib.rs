@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod approval;
+pub mod audit;
 pub mod backend;
 pub mod connect;
 #[cfg(unix)]
@@ -19,7 +20,7 @@ mod scheduler;
 mod undo;
 
 pub use engine::{Engine, TransferOptions};
-pub use journal::{Actor, Journal, JournalEntry, Reversal, SqliteJournal};
+pub use journal::{Actor, ChainStatus, Journal, JournalEntry, Reversal, SqliteJournal};
 pub use observer::{Mutation, MutationObserver};
 pub use plugins::{PluginRegistry, PluginRunError};
 pub use policy::{

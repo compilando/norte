@@ -5,9 +5,11 @@
 //! genesis fijo) detecta corrupción y ediciones INGENUAS —las que no recomputan
 //! la cadena—. NO es tamper-evidence frente a un atacante con acceso de
 //! escritura a la DB: reescritura total, truncación de COLA y rollback pasan
-//! [`Journal::verify_chain`]. La evidencia criptográfica real (firma/anclaje del
-//! head) es audit **M3-5** (issue #63). Hasta entonces, «detección de corrupción
-//! y ediciones ingenuas», no tamper-evidence.
+//! [`Journal::verify_chain`]. Las **anclas HMAC** (M3-5, ADR 0025, módulo
+//! [`crate::audit`]) acotan esa ventana: fabricar historia exige ADEMÁS la
+//! clave del keyring y re-anclar. Sigue SIN cubrir: atacante con acceso al
+//! keyring, mutaciones entre el último ancla y el ataque, destrucción del
+//! fichero de anclas (copia externa recomendada).
 
 use std::str::FromStr;
 
@@ -120,6 +122,11 @@ impl Reversal {
 pub struct JournalEntry {
     /// Secuencia monótona asignada al registrar.
     pub seq: i64,
+    /// Milisegundos UTC del registro (reloj del daemon al journalizar).
+    pub ts_ms: i64,
+    /// Hash de la entrada en la cadena (32 bytes) — el audit lo cruza con
+    /// las anclas (ADR 0025).
+    pub entry_hash: Vec<u8>,
     /// Origen: `"user" | "agent" | "plugin"`.
     pub actor_kind: String,
     /// Id de sesión del agente / id del plugin, si aplica.
@@ -141,19 +148,46 @@ pub struct JournalEntry {
 }
 
 /// Materializa un `JournalEntry` desde una fila con el orden de columnas
-/// `seq, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref,
-/// undoes_seq` (compartido por `entries` y `revertible_for`).
+/// `seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to,
+/// reversal, reversal_ref, undoes_seq` (compartido por `entries` y
+/// `revertible_for`).
 fn row_to_entry(row: &sqlx::sqlite::SqliteRow) -> JournalEntry {
     JournalEntry {
         seq: row.get(0),
-        actor_kind: row.get(1),
-        actor_id: row.get(2),
-        op: row.get(3),
-        path: row.get(4),
-        path_to: row.get(5),
-        reversal: row.get(6),
-        reversal_ref: row.get(7),
-        undoes_seq: row.get(8),
+        ts_ms: row.get(1),
+        entry_hash: row.get(2),
+        actor_kind: row.get(3),
+        actor_id: row.get(4),
+        op: row.get(5),
+        path: row.get(6),
+        path_to: row.get(7),
+        reversal: row.get(8),
+        reversal_ref: row.get(9),
+        undoes_seq: row.get(10),
+    }
+}
+
+/// Veredicto de [`Journal::verify_chain`] (B2 de #63): si la cadena se
+/// rompió, DÓNDE — el audit lo cita en vez de un booleano mudo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChainStatus {
+    /// Cadena íntegra.
+    Intact {
+        /// Entradas verificadas.
+        entries: u64,
+    },
+    /// Primera entrada cuyo encadenado o hash no casa.
+    Broken {
+        /// `seq` de la primera rotura.
+        first_bad_seq: i64,
+    },
+}
+
+impl ChainStatus {
+    /// `true` si la cadena está íntegra.
+    #[must_use]
+    pub fn is_intact(&self) -> bool {
+        matches!(self, ChainStatus::Intact { .. })
     }
 }
 
@@ -287,6 +321,37 @@ impl Journal {
         Self::from_options(SqliteConnectOptions::from_str("sqlite::memory:")?).await
     }
 
+    /// Abre el journal en SOLO-LECTURA para el audit (M3-5): sin crear, sin
+    /// schema, sin `locking_mode=EXCLUSIVE`. OJO: el daemon abre la DB con
+    /// lock EXCLUSIVO de `SQLite` — con el daemon corriendo, este open (o la
+    /// primera query) falla con `database is locked`; el audit se corre con
+    /// el daemon parado. `record` sobre este handle falla (readonly), por
+    /// diseño.
+    ///
+    /// # Errors
+    /// [`JournalError::Sqlx`] al abrir/consultar (incluida `database is
+    /// locked` con el daemon vivo, y fichero inexistente).
+    pub async fn open_read_only(path: &std::path::Path) -> Result<Self, JournalError> {
+        let opts = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(false)
+            .read_only(true)
+            .journal_mode(SqliteJournalMode::Wal);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await?;
+        // Sin CREATE TABLE (readonly): si el fichero no es un journal, la
+        // primera query fallará con su error real — no se enmascara.
+        Ok(Self {
+            pool,
+            chain: Mutex::new(ChainState {
+                last_seq: 0,
+                last_hash: [0u8; 32],
+            }),
+        })
+    }
+
     async fn from_options(opts: SqliteConnectOptions) -> Result<Self, JournalError> {
         // Pool de 1 conexión: un solo escritor (in-memory exige max=1 para no
         // perder la DB entre conexiones).
@@ -414,13 +479,14 @@ impl Journal {
         Ok(row.get(0))
     }
 
-    /// Recorre la cadena recomputando cada hash; `false` si hay una rotura de
-    /// encadenado o una edición ingenua. NO detecta reescritura completa,
-    /// truncación de cola ni rollback (keyless — ver módulo, issue #63).
+    /// Recorre la cadena recomputando cada hash. `Broken` señala la PRIMERA
+    /// entrada cuyo encadenado o hash no casa (B2 de #63: el audit la cita).
+    /// Keyless: NO detecta reescritura completa, truncación de cola ni
+    /// rollback — esa cobertura la dan las anclas HMAC (ADR 0025).
     ///
     /// # Errors
     /// [`JournalError::Sqlx`].
-    pub async fn verify_chain(&self) -> Result<bool, JournalError> {
+    pub async fn verify_chain(&self) -> Result<ChainStatus, JournalError> {
         let rows = sqlx::query(
             "SELECT seq, ts_ms, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, prev_hash, entry_hash \
              FROM journal ORDER BY seq ASC",
@@ -428,7 +494,9 @@ impl Journal {
         .fetch_all(&self.pool)
         .await?;
         let mut prev = [0u8; 32];
+        let mut verified: u64 = 0;
         for row in rows {
+            let seq: i64 = row.get(0);
             let actor_kind: String = row.get(2);
             let actor_id: Option<String> = row.get(3);
             let op: String = row.get(4);
@@ -440,10 +508,10 @@ impl Journal {
             let stored_prev: Vec<u8> = row.get(10);
             let stored_hash: Vec<u8> = row.get(11);
             if stored_prev != prev {
-                return Ok(false); // rotura de encadenado
+                return Ok(ChainStatus::Broken { first_bad_seq: seq });
             }
             let rec = Record {
-                seq: row.get(0),
+                seq,
                 ts_ms: row.get(1),
                 actor_kind: &actor_kind,
                 actor_id: actor_id.as_deref(),
@@ -456,11 +524,51 @@ impl Journal {
             };
             let computed = chain_hash(&prev, &rec);
             if computed[..] != stored_hash[..] {
-                return Ok(false);
+                return Ok(ChainStatus::Broken { first_bad_seq: seq });
             }
             prev = computed;
+            verified += 1;
         }
-        Ok(true)
+        Ok(ChainStatus::Intact { entries: verified })
+    }
+
+    /// Head de la cadena: `(seq, entry_hash)` de la ÚLTIMA entrada (`None`
+    /// con el journal vacío). Es lo que un ancla HMAC firma (ADR 0025).
+    ///
+    /// # Errors
+    /// [`JournalError::Sqlx`]; [`JournalError::Corrupt`] si el hash
+    /// almacenado no mide 32 bytes.
+    pub async fn head(&self) -> Result<Option<(i64, [u8; 32])>, JournalError> {
+        let row = sqlx::query("SELECT seq, entry_hash FROM journal ORDER BY seq DESC LIMIT 1")
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(row) = row else { return Ok(None) };
+        let seq: i64 = row.get(0);
+        let blob: Vec<u8> = row.get(1);
+        let hash: [u8; 32] = blob
+            .try_into()
+            .map_err(|_| JournalError::Corrupt("entry_hash del head no mide 32 bytes"))?;
+        Ok(Some((seq, hash)))
+    }
+
+    /// Hash de la entrada `seq` (`None` si no existe). El audit lo contrasta
+    /// con cada ancla DESPUÉS de un [`Journal::verify_chain`] `Intact` (ADR
+    /// 0025): con la cadena verificada, el hash almacenado ES el recomputado.
+    ///
+    /// # Errors
+    /// [`JournalError::Sqlx`]; [`JournalError::Corrupt`] si el blob no mide
+    /// 32 bytes.
+    pub async fn entry_hash_at(&self, seq: i64) -> Result<Option<[u8; 32]>, JournalError> {
+        let row = sqlx::query("SELECT entry_hash FROM journal WHERE seq = ?")
+            .bind(seq)
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(row) = row else { return Ok(None) };
+        let blob: Vec<u8> = row.get(0);
+        let hash: [u8; 32] = blob
+            .try_into()
+            .map_err(|_| JournalError::Corrupt("entry_hash no mide 32 bytes"))?;
+        Ok(Some(hash))
     }
 
     /// Vuelca todas las entradas en orden de `seq`. Materializa en memoria:
@@ -472,7 +580,7 @@ impl Journal {
     /// [`JournalError::Sqlx`].
     pub async fn entries(&self) -> Result<Vec<JournalEntry>, JournalError> {
         let rows = sqlx::query(
-            "SELECT seq, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq \
+            "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq \
              FROM journal ORDER BY seq ASC",
         )
         .fetch_all(&self.pool)
@@ -489,7 +597,7 @@ impl Journal {
     pub async fn revertible_for(&self, actor: &Actor) -> Result<Vec<JournalEntry>, JournalError> {
         let (actor_kind, actor_id) = actor.parts();
         let rows = sqlx::query(
-            "SELECT seq, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq \
+            "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq \
              FROM journal \
              WHERE undoes_seq IS NULL AND actor_kind = ? AND actor_id IS ? \
                AND seq NOT IN (SELECT undoes_seq FROM journal WHERE undoes_seq IS NOT NULL) \
@@ -719,7 +827,10 @@ mod tests {
             2
         );
         assert_eq!(j.count().await.expect("count"), 2);
-        assert!(j.verify_chain().await.expect("verify"), "cadena íntegra");
+        assert!(
+            j.verify_chain().await.expect("verify").is_intact(),
+            "cadena íntegra"
+        );
     }
 
     #[tokio::test]
@@ -738,7 +849,11 @@ mod tests {
         j.corrupt_path_for_test(1, b"file:///HACKED")
             .await
             .expect("corrupt");
-        assert!(!j.verify_chain().await.expect("verify"), "se detecta");
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Broken { first_bad_seq: 1 },
+            "se detecta Y se cita dónde (B2)"
+        );
     }
 
     #[tokio::test]
@@ -817,7 +932,7 @@ mod tests {
             .expect("insert");
         assert_eq!(seq, 3, "el seq continúa tras reabrir");
         assert_eq!(j.count().await.expect("count"), 3);
-        assert!(j.verify_chain().await.expect("verify"));
+        assert!(j.verify_chain().await.expect("verify").is_intact());
     }
 
     #[tokio::test]
@@ -844,7 +959,11 @@ mod tests {
         // seq asignado bajo el lock → cadena consistente pese a 32 concurrentes.
         assert_eq!(obs.journal.count().await.expect("count"), 32);
         assert!(
-            obs.journal.verify_chain().await.expect("verify"),
+            obs.journal
+                .verify_chain()
+                .await
+                .expect("verify")
+                .is_intact(),
             "sin falso-manipulado bajo concurrencia (security M1)"
         );
     }
@@ -1042,8 +1161,88 @@ mod tests {
             "orden LIFO (DESC)"
         );
         assert!(
-            j.verify_chain().await.expect("verify"),
+            j.verify_chain().await.expect("verify").is_intact(),
             "chain íntegra con undoes_seq"
+        );
+    }
+
+    /// M3-5 (ADR 0025): la truncación de COLA pasa `verify_chain` (debilidad
+    /// keyless PINNEADA aquí a propósito) — y el ancla HMAC la detecta.
+    #[tokio::test]
+    async fn ancla_detecta_truncacion_de_cola_que_la_cadena_no_ve() {
+        let j = Journal::open_in_memory().await.expect("open");
+        for w in [&b"file:///a"[..], b"file:///b", b"file:///c"] {
+            j.record("created", w, None, Reversal::Delete, None, &Actor::User)
+                .await
+                .expect("rec");
+        }
+        let (seq, head) = j.head().await.expect("head").expect("no vacio");
+        assert_eq!(seq, 3);
+        assert_eq!(
+            j.entry_hash_at(seq).await.expect("hash_at"),
+            Some(head),
+            "head() y entry_hash_at coinciden"
+        );
+        let key = [7u8; 32];
+        let line = crate::audit::anchor_line(&key, &crate::audit::Anchor { seq, head });
+
+        // ATAQUE: el atacante borra la ultima entrada (rollback de cola).
+        sqlx::query("DELETE FROM journal WHERE seq = 3")
+            .execute(&j.pool)
+            .await
+            .expect("delete");
+        assert!(
+            j.verify_chain().await.expect("verify").is_intact(),
+            "keyless NO ve la truncacion de cola (por eso existen las anclas)"
+        );
+        // El ancla si: el seq anclado ya no existe.
+        let at = j.entry_hash_at(seq).await.expect("hash_at");
+        assert_eq!(
+            crate::audit::verify_anchor_line(&key, &line, at),
+            crate::audit::AnchorVerdict::MissingSeq(crate::audit::Anchor { seq, head })
+        );
+    }
+
+    /// `open_read_only` (M3-5): lee lo mismo que el handle de escritura y
+    /// RECHAZA `record` (readonly por diseño). File-backed: cubre el camino
+    /// WAL real del audit.
+    #[tokio::test]
+    async fn open_read_only_lee_y_rechaza_escrituras() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("j.db");
+        let j = Journal::open(&path).await.expect("open rw");
+        j.record(
+            "created",
+            b"file:///a",
+            None,
+            Reversal::Delete,
+            None,
+            &Actor::User,
+        )
+        .await
+        .expect("rec");
+        let head_rw = j.head().await.expect("head").expect("no vacio");
+        drop(j);
+
+        let ro = Journal::open_read_only(&path).await.expect("open ro");
+        assert_eq!(ro.entries().await.expect("entries").len(), 1);
+        assert_eq!(ro.head().await.expect("head"), Some(head_rw));
+        assert!(
+            ro.verify_chain().await.expect("verify").is_intact(),
+            "la cadena verifica igual en solo-lectura"
+        );
+        assert!(
+            ro.record(
+                "created",
+                b"file:///b",
+                None,
+                Reversal::Delete,
+                None,
+                &Actor::User
+            )
+            .await
+            .is_err(),
+            "record sobre readonly DEBE fallar"
         );
     }
 }

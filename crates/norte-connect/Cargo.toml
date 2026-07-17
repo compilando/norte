@@ -47,6 +47,9 @@ toml.workspace = true
 tracing.workspace = true
 zeroize.workspace = true
 
+# Clave de anclaje del journal (M3-5, ADR 0025): 32 bytes del OS.
+getrandom.workspace = true
+
 [features]
 # Keyring de Linux (Secret Service) vía libdbus C: opt-in — exige
 # `libdbus-1-dev` + `pkg-config` al construir. Off por defecto (CI/headless

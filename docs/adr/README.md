@@ -28,3 +28,5 @@ La spec evoluciona por ADR, no por edición silenciosa (spec §18).
 | [0021](0021-distribucion-cargo-dist.md) | Distribución: binarios prebuilt e instalador `curl \| sh` con cargo-dist | accepted |
 | [0022](0022-plugin-host-wasm-manifiesto.md) | Plugin host WASM: runtime, manifiesto, capabilities y los tres niveles | accepted |
 | [0023](0023-journal-sqlx-sqlite.md) | Journal: sqlx sobre SQLite (WAL), hash-chain propia | accepted |
+| [0024](0024-norte-mcp-puente-stdio.md) | norte-mcp: puente MCP stdio → daemon, sin SDK | accepted |
+| [0025](0025-journal-anclaje-hmac-audit-export.md) | Journal: anclaje HMAC del head + audit export (M3-5) | accepted |

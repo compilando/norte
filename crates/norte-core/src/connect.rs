@@ -49,6 +49,10 @@ pub trait RemoteConnector: Send + Sync {
     ) -> Result<(), Error>;
 }
 
+// Clave de anclaje del journal (M3-5, ADR 0025): vive en norte-connect (el
+// dominio de secretos/keyring, regla 10); el CLI la usa vía este re-export.
+pub use norte_connect::journal_anchor_key;
+
 /// Directorio de config del usuario para `connections.toml` / `known_hosts` /
 /// `secrets.age`: `$NORTE_CONFIG_DIR` (override explícito) →
 /// `$XDG_CONFIG_HOME/norte` → `~/.config/norte` (unix) / `%APPDATA%\norte`

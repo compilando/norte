@@ -283,7 +283,12 @@ async fn undo_cancellation_is_clean() {
     // entrada), nunca a mitad de una — la cadena sigue íntegra.
     mem.faults().set_latency_per_op(None);
     assert!(
-        journal.journal().verify_chain().await.expect("verify"),
+        journal
+            .journal()
+            .verify_chain()
+            .await
+            .expect("verify")
+            .is_intact(),
         "hash-chain íntegra tras cancelar"
     );
 }

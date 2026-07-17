@@ -93,6 +93,13 @@ suppaftp = "10"
 # transitivas reqwest/reqsign/quick-xml bajo cargo-deny.
 opendal = { version = "0.58", default-features = false, features = ["services-s3", "http-transport-reqwest", "executors-tokio"] }
 sha2 = "0.10"
+# Anclas HMAC del head del journal (M3-5, ADR 0025): hermana RustCrypto de
+# sha2 (ya presente), sin transitivas nuevas. Alternativa evaluada: firmar
+# con ed25519 — dep pesada sin ganancia en un daemon mono-usuario.
+hmac = "0.12"
+# Generación de la clave de anclaje (M3-5): entropía del OS, YA en el árbol
+# como transitiva (0.3.x); explícita solo en norte-connect.
+getrandom = "0.3"
 # Journal transaccional (M3-1, ADR 0020): SQLite WAL, async, runtime queries.
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
 # Provider archive (fase 8, ADR 0018): parsers de formato hostil battle-tested

@@ -4130,6 +4130,7 @@ version = "0.3.0-alpha.1"
 dependencies = [
  "age",
  "futures",
+ "getrandom 0.3.4",
  "hyper-util",
  "keyring",
  "libunftp",
@@ -4165,6 +4166,7 @@ dependencies = [
  "bytes",
  "criterion",
  "futures",
+ "hmac 0.12.1",
  "libunftp",
  "norte-connect",
  "norte-plugin-host",
