@@ -536,7 +536,7 @@ async fn on_extensions_key(app: &mut App, backend: &Backend, mods: KeyModifiers,
                         mgr.set_local_approved(!cur);
                     }
                 }
-                Err(e) => app.message = Some(ta("msg-error", &[("error", &e.to_string())])),
+                Err(e) => app.message = Some(error_message(&e)),
             }
         }
         KeyCode::Char('e') => {
@@ -549,7 +549,7 @@ async fn on_extensions_key(app: &mut App, backend: &Backend, mods: KeyModifiers,
                         mgr.set_local_enabled(!cur);
                     }
                 }
-                Err(e) => app.message = Some(ta("msg-error", &[("error", &e.to_string())])),
+                Err(e) => app.message = Some(error_message(&e)),
             }
         }
         _ => {}
@@ -632,9 +632,9 @@ async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream) -> 
                 } else if let (Error::Conflict { .. }, Some(retry)) = (&error, fin.retry) {
                     app.pending_collisions.push_back(retry);
                 } else {
-                    // Render por CATEGORÍA (spec §17.7): Display estable,
-                    // jamás strings del OS.
-                    app.message = Some(ta("msg-error", &[("error", &error.to_string())]));
+                    // Render por CATEGORÍA localizado (spec §17.7, #20):
+                    // jamás el Display inglés ni strings del OS.
+                    app.message = Some(error_message(&error));
                     refresh = true;
                 }
             }
@@ -672,7 +672,7 @@ async fn refresh_panes(app: &mut App, backend: &Backend, events: &mut EventStrea
                             pane.loading = false;
                         }
                         // Sin silencio: el dir pudo desaparecer (issue #20).
-                        Err(e) => app.message = Some(ta("msg-refresh-error", &[("error", &e.to_string())])),
+                        Err(e) => app.message = Some(ta("msg-refresh-error", &[("error", &error_category(&e))])),
                     }
                     break;
                 }
@@ -730,7 +730,7 @@ async fn on_dialog_key(app: &mut App, backend: &Backend, code: KeyCode) {
                             app.board
                                 .push_full(task, None, (!permanent).then(|| target.clone()));
                         }
-                        Err(e) => app.message = Some(ta("msg-error", &[("error", &e.to_string())])),
+                        Err(e) => app.message = Some(error_message(&e)),
                     }
                 }
                 Modal::ConfirmTransfer { kind, from, to } => {
@@ -762,7 +762,7 @@ async fn on_dialog_key(app: &mut App, backend: &Backend, code: KeyCode) {
 /// barra: la pendiente, si sigue viva, vencerá por TTL — jamás se cuelga.
 async fn decide_approval(app: &mut App, backend: &Backend, approval_id: u64, approve: bool) {
     if let Err(e) = backend.policy_decide(approval_id, approve).await {
-        app.message = Some(ta("msg-error", &[("error", &e.to_string())]));
+        app.message = Some(error_message(&e));
     }
 }
 
@@ -790,7 +790,7 @@ async fn submit_transfer(
                 opts,
             }),
         ),
-        Err(e) => app.message = Some(ta("msg-error", &[("error", &e.to_string())])),
+        Err(e) => app.message = Some(error_message(&e)),
     }
 }
 
@@ -844,6 +844,10 @@ async fn dispatch(
             };
             if let Some(parent) = parent {
                 cd_outcome = cd(app, backend, events, parent).await;
+            } else {
+                // Raíz `/` o raíz de unidad Windows (`parent()` = None): antes
+                // era un no-op SILENCIOSO (#20). Ahora avisa por la barra.
+                app.message = Some(t("msg-nav-at-top"));
             }
         }
         "pane.copy" | "pane.move" => {
@@ -916,7 +920,7 @@ async fn dispatch(
                     cursor: 0,
                 });
             }
-            Err(e) => app.message = Some(ta("msg-error", &[("error", &e.to_string())])),
+            Err(e) => app.message = Some(error_message(&e)),
         },
         "task.cancel" => {
             app.message = Some(if app.board.cancel_last_running() {
@@ -968,7 +972,7 @@ async fn open_viewer(app: &mut App, backend: &Backend, events: &mut EventStream,
             res = &mut fut => {
                 match res {
                     Ok(viewer) => app.viewer = Some(viewer),
-                    Err(e) => app.message = Some(ta("msg-view-error", &[("error", &e.to_string())])),
+                    Err(e) => app.message = Some(ta("msg-view-error", &[("error", &error_category(&e))])),
                 }
                 return;
             }
@@ -1040,6 +1044,50 @@ async fn listing(backend: &Backend, dir: &VPath) -> Result<Vec<Entry>, Error> {
     let mut entries = backend.list(dir).await?;
     sort_entries(&mut entries);
     Ok(entries)
+}
+
+/// Texto LOCALIZADO de la CATEGORÍA de un [`Error`] del protocolo (spec
+/// §17.7, #20): cada categoría mapea a una clave Fluent — jamás el `Display`
+/// inglés hardcodeado ni un string del OS. Los campos con detalle (host,
+/// `rule`, retryable…) se DESCARTAN por patrón: `PolicyDenied` no expone la
+/// regla concreta (vocabulario cerrado); `HostKeyUnknown`/`Mismatch` no
+/// filtran el host (además un `Display` con host arbitrario sería un vector
+/// bidi/control en la barra). Una categoría futura (`Unknown`, cliente N-1)
+/// cae a `err-unknown`.
+fn error_category(e: &Error) -> String {
+    use norte_proto::ConflictKind;
+    let key = match e {
+        Error::NotFound => "err-not-found",
+        Error::PermissionDenied => "err-permission-denied",
+        Error::Conflict { conflict } => match conflict {
+            ConflictKind::Exists => "err-conflict-exists",
+            ConflictKind::CaseCollision => "err-conflict-case",
+            ConflictKind::Normalization => "err-conflict-normalization",
+            ConflictKind::TypeMismatch => "err-conflict-type",
+            _ => "err-conflict",
+        },
+        Error::ProviderUnavailable { .. } => "err-provider-unavailable",
+        Error::NoSpace => "err-no-space",
+        Error::Io { .. } => "err-io",
+        Error::Cancelled => "err-cancelled",
+        Error::PolicyDenied { .. } => "err-policy-denied",
+        Error::EncodingLoss => "err-encoding-loss",
+        Error::Unsupported => "err-unsupported",
+        Error::InvalidPath => "err-invalid-path",
+        Error::Internal { .. } => "err-internal",
+        Error::Loop => "err-loop",
+        Error::Corrupt => "err-corrupt",
+        Error::HostKeyUnknown { .. } => "err-host-key-unknown",
+        Error::HostKeyMismatch { .. } => "err-host-key-mismatch",
+        Error::CursorExpired => "err-cursor-expired",
+        _ => "err-unknown",
+    };
+    t(key)
+}
+
+/// Mensaje de barra `error: <categoría>` (envuelve [`error_category`]).
+fn error_message(e: &Error) -> String {
+    ta("msg-error", &[("error", &error_category(e))])
 }
 
 /// Primera página de `dir` (hasta [`FIRST_PAGE`]) más el stream con el RESTO
@@ -1142,7 +1190,7 @@ async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPa
                     // Un error de listado NO tumba el TUI: el pane se queda,
                     // pero un relleno previo de ESTE pane ya no aplica.
                     Err(e) => {
-                        app.message = Some(ta("msg-error", &[("error", &e.to_string())]));
+                        app.message = Some(error_message(&e));
                         return Cd::Replaced(app.focus());
                     }
                 }
@@ -1166,6 +1214,69 @@ async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPa
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod error_message_tests {
+    use super::error_message;
+    use norte_proto::{ConflictKind, Error};
+
+    /// Cada categoría rinde un mensaje LOCALIZADO propio — jamás el `Display`
+    /// inglés hardcodeado del proto (#20, spec §17.7).
+    #[test]
+    fn cada_categoria_tiene_mensaje_propio_no_display() {
+        let _ = norte_i18n::force(norte_i18n::Lang::Es);
+        let nf = error_message(&Error::NotFound);
+        assert!(nf.contains("no encontrado"), "localizado ES: {nf}");
+        assert!(
+            !nf.contains("not found"),
+            "NO es el Display inglés del proto: {nf}"
+        );
+        // Las variantes de Conflict se distinguen entre sí.
+        let exists = error_message(&Error::Conflict {
+            conflict: ConflictKind::Exists,
+        });
+        let case = error_message(&Error::Conflict {
+            conflict: ConflictKind::CaseCollision,
+        });
+        assert_ne!(exists, case, "cada ConflictKind rinde distinto");
+        // PolicyDenied jamás filtra la regla concreta (vocabulario cerrado).
+        let pd = error_message(&Error::PolicyDenied {
+            rule: "scope-expired".into(),
+        });
+        assert!(
+            !pd.contains("scope-expired"),
+            "la regla concreta NO se muestra: {pd}"
+        );
+    }
+
+    /// Una categoría futura desconocida cae a `err-unknown`, jamás vacía.
+    #[test]
+    fn categoria_desconocida_cae_a_unknown() {
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
+        let u = error_message(&Error::Unknown);
+        assert!(u.contains("unknown error"), "{u}");
+    }
+
+    /// `error_category` (la base de TODOS los renders de la barra) jamás
+    /// filtra el host de un `HostKeyUnknown` — un host hostil con override
+    /// bidi sería un spoof de la barra — ni la `rule` de un `PolicyDenied`.
+    #[test]
+    fn categoria_no_filtra_host_hostil_ni_rule() {
+        use super::error_category;
+        let hk = error_category(&Error::HostKeyUnknown {
+            host: "evil\u{202E}host".into(),
+            port: Some(22),
+            algo: "ssh-ed25519".into(),
+            fingerprint: "SHA256:AAAA".into(),
+        });
+        assert!(!hk.contains("evil"), "el host NO se muestra: {hk:?}");
+        assert!(!hk.contains('\u{202E}'), "sin bidi en la barra: {hk:?}");
+        let pd = error_category(&Error::PolicyDenied {
+            rule: "scope-expired".into(),
+        });
+        assert!(!pd.contains("scope-expired"), "la regla NO se filtra: {pd}");
     }
 }
 
