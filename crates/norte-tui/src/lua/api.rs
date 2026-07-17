@@ -10,6 +10,7 @@ use mlua::{Function, Lua};
 use norte_core::backend::Backend;
 
 use super::fs::{self, PaneCtx, RunCancellers};
+use super::statusbar::{self, StatusInput};
 
 /// Capa de origen de un `init.lua` (precedencia ASCENDENTE, ADR 0007).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -53,6 +54,11 @@ pub enum LuaLoadError {
 #[derive(Default)]
 struct Registry {
     commands: HashMap<String, (Layer, Function)>,
+    /// Hook de `norte.ui.statusbar`, si algún `init.lua` lo definió (task 7).
+    /// A diferencia de `commands`, NO lleva capa: la semántica es «último
+    /// eval que lo definió gana», sin precedencia de capa ni warning de
+    /// pisado (documentado en `eval_layer`).
+    statusbar: Option<Function>,
 }
 
 /// El anfitrión Lua del TUI. `!Send` — vive en el main task.
@@ -62,6 +68,17 @@ pub struct LuaHost {
     registry: Rc<RefCell<Registry>>,
     /// Guard de reentrada: `true` mientras `eval_layer` está en curso.
     loading: Cell<bool>,
+    /// `true` tras un fallo del hook de statusbar (presupuesto agotado o
+    /// error de runtime): `statusbar()` devuelve `None` sin tocar Lua hasta
+    /// que este host se reconstruya entero (hot-reload, task 8).
+    statusbar_disabled: Cell<bool>,
+    /// Detalle diagnóstico CRUDO del último fallo del hook (task 7): el
+    /// wiring (task 8) lo consume UNA VEZ vía `statusbar_error()` para
+    /// pintarlo en la barra saneado.
+    statusbar_error: RefCell<Option<String>>,
+    /// Cache de la última invocación: mismo `StatusInput` (`PartialEq`) =
+    /// misma salida, sin reinvocar el script.
+    statusbar_cache: RefCell<Option<(StatusInput, Option<String>)>>,
 }
 
 /// RAII: repone `loading` a `false` al salir de `eval_layer` por cualquier
@@ -94,6 +111,45 @@ fn command_outside_load(_lua: &Lua, _args: (String, Function)) -> mlua::Result<(
     ))
 }
 
+/// Función instalada como `norte.ui.statusbar` fuera de una carga en curso:
+/// mismo espíritu que [`command_outside_load`] — sin staging activo, un
+/// intento de registrar el hook fuera de `eval_layer` es un error explícito.
+fn statusbar_outside_load(_lua: &Lua, _f: Function) -> mlua::Result<()> {
+    Err(mlua::Error::RuntimeError(
+        "norte.ui.statusbar solo se puede llamar durante la carga de init.lua".to_string(),
+    ))
+}
+
+/// Instala el staging temporal de `norte.ui.statusbar` para ESTA carga
+/// (colgado de `ui`, mismo flag `active` que `norte.command` — una
+/// referencia capturada por el script muere con la carga igual que él).
+///
+/// A diferencia de `norte.command`, redefinir el hook VARIAS veces dentro de
+/// la MISMA carga no es un error: la última llamada dentro del staging
+/// gana (un script puede reasignar su propio hook a placer mientras se
+/// evalúa). El staging devuelto se fusiona con el registro real al final de
+/// `eval_layer`, solo si la carga tuvo éxito.
+fn stage_statusbar(
+    lua: &Lua,
+    ui: &mlua::Table,
+    active: &Rc<Cell<bool>>,
+) -> mlua::Result<Rc<RefCell<Option<Function>>>> {
+    let staging: Rc<RefCell<Option<Function>>> = Rc::default();
+    let staging_for_closure = Rc::clone(&staging);
+    let active = Rc::clone(active);
+    let f = lua.create_function(move |_lua, f: Function| {
+        if !active.get() {
+            return Err(mlua::Error::RuntimeError(
+                "norte.ui.statusbar solo se puede llamar durante la carga de init.lua".to_string(),
+            ));
+        }
+        *staging_for_closure.borrow_mut() = Some(f);
+        Ok(())
+    })?;
+    ui.set("statusbar", f)?;
+    Ok(staging)
+}
+
 impl LuaHost {
     /// Crea un anfitrión nuevo: stdlib Lua completa (ADR 0026, sin sandbox —
     /// es config de usuario, no software de terceros) + tabla `norte` con
@@ -107,6 +163,7 @@ impl LuaHost {
 
         let norte = lua.create_table()?;
         let ui = lua.create_table()?;
+        ui.set("statusbar", lua.create_function(statusbar_outside_load)?)?;
         norte.set("ui", ui)?;
         norte.set("command", lua.create_function(command_outside_load)?)?;
         lua.globals().set("norte", norte)?;
@@ -115,6 +172,9 @@ impl LuaHost {
             lua,
             registry,
             loading: Cell::new(false),
+            statusbar_disabled: Cell::new(false),
+            statusbar_error: RefCell::new(None),
+            statusbar_cache: RefCell::new(None),
         })
     }
 
@@ -146,6 +206,13 @@ impl LuaHost {
     ///   `eval_layer` retorne (p. ej. desde el cuerpo de un comando ya
     ///   registrado), la llamada falla igual — nunca escribe en un staging
     ///   huérfano.
+    /// - `norte.ui.statusbar(f)` (task 7) sigue el mismo staging/bandera
+    ///   `active` que `norte.command` (muere igual con la carga), pero su
+    ///   fusión es MÁS SIMPLE: sin capas ni warnings. Si esta carga llamó a
+    ///   `norte.ui.statusbar`, su función pisa a la que hubiera (de esta
+    ///   misma capa o de otra) sin más; si no la llamó, el hook previo (si
+    ///   lo hay) sobrevive intacto. Es decir: "el último `eval_layer` que
+    ///   define el hook, gana", con independencia del orden de capas.
     ///
     /// # Errors
     /// Cualquier error de sintaxis o runtime de Lua, incluyendo los que
@@ -198,6 +265,11 @@ impl LuaHost {
             .set("command", command_fn)
             .map_err(LuaLoadError::Lua)?;
 
+        // Staging del hook de statusbar (task 7), ver `stage_statusbar`.
+        let ui: mlua::Table = norte.get("ui").map_err(LuaLoadError::Lua)?;
+        let statusbar_staging =
+            stage_statusbar(&self.lua, &ui, &active).map_err(LuaLoadError::Lua)?;
+
         let layer_name = match layer {
             Layer::System => "init.lua (sistema)",
             Layer::User => "init.lua (usuario)",
@@ -218,8 +290,13 @@ impl LuaHost {
             .lua
             .create_function(command_outside_load)
             .and_then(|f| norte.set("command", f));
+        let restore_statusbar = self
+            .lua
+            .create_function(statusbar_outside_load)
+            .and_then(|f| ui.set("statusbar", f));
         exec_result.map_err(LuaLoadError::Lua)?;
         restore.map_err(LuaLoadError::Lua)?;
+        restore_statusbar.map_err(LuaLoadError::Lua)?;
 
         // INVARIANT: desde aquí hasta que se suelta `registry`, jamás se
         // llama a Lua (ni `exec`, ni se invoca una `Function`) — el borrow
@@ -252,6 +329,22 @@ impl LuaHost {
                 }
             }
         }
+        // Fusión del hook de statusbar (task 7): si ESTA carga lo definió,
+        // pisa al anterior sin más — a diferencia de `commands`, aquí no hay
+        // precedencia de capa ni warning; "último eval que lo define gana"
+        // (documentado en el rustdoc de `eval_layer`). Si esta capa no llamó
+        // a `norte.ui.statusbar`, el hook previo (de otra capa) sobrevive.
+        //
+        // El cache de `statusbar()` queda invalidado al cambiar el hook: sin
+        // esto, un `eval_layer` posterior sobre un host YA VIVO (p. ej. la
+        // capa `Project`, evaluada tras resolver el modal TOFU — task 8 — en
+        // un host que ya venía sirviendo `statusbar()` con las capas
+        // `System`/`User`) podría devolver la respuesta cacheada del hook
+        // VIEJO si el `StatusInput` no cambió entretanto.
+        if let Some(f) = statusbar_staging.borrow_mut().take() {
+            registry.statusbar = Some(f);
+            *self.statusbar_cache.borrow_mut() = None;
+        }
 
         Ok(warnings)
     }
@@ -263,6 +356,62 @@ impl LuaHost {
         let mut names: Vec<String> = registry.commands.keys().cloned().collect();
         names.sort();
         names
+    }
+
+    /// Pinta el hook de statusbar del `init.lua` activo con el snapshot
+    /// `input`, si hay uno registrado (task 7).
+    ///
+    /// Camino rápido: si el hook está deshabilitado (fallo previo) o no hay
+    /// ninguno registrado, `None` inmediato sin tocar Lua. Si `input` es
+    /// IGUAL (`PartialEq`) al de la última llamada exitosa, se devuelve la
+    /// respuesta cacheada sin reinvocar el script — pensado para llamarse en
+    /// cada vuelta de render.
+    ///
+    /// La llamada real corre bajo un presupuesto de instrucciones
+    /// (`statusbar::call_hook`) y es SÍNCRONA: si se agota el presupuesto,
+    /// el script revienta en runtime, o devuelve algo que no coacciona a
+    /// string, el hook queda DESHABILITADO para el resto de la vida de este
+    /// host (hasta el próximo hot-reload, que reconstruye el `LuaHost`
+    /// entero) y esta llamada devuelve `None`. El detalle del fallo queda
+    /// disponible una vez vía [`Self::statusbar_error`].
+    ///
+    /// La salida en éxito pasa por `crate::app::detail_for_bar` — jamás
+    /// bidi/controles crudos ni una barra desbordada por un string largo.
+    #[must_use]
+    pub fn statusbar(&self, input: &StatusInput) -> Option<String> {
+        if self.statusbar_disabled.get() {
+            return None;
+        }
+        if let Some((prev_input, prev_out)) = self.statusbar_cache.borrow().as_ref()
+            && prev_input == input
+        {
+            return prev_out.clone();
+        }
+        // Borrow suelto ANTES de llamar a Lua (mismo invariant que
+        // `command_fn`/`eval_layer`).
+        let f = self.registry.borrow().statusbar.clone()?;
+        match statusbar::call_hook(&self.lua, &f, input) {
+            Ok(raw) => {
+                let out = Some(crate::app::detail_for_bar(&raw));
+                *self.statusbar_cache.borrow_mut() = Some((input.clone(), out.clone()));
+                out
+            }
+            Err(e) => {
+                // Deshabilitado: NO se cachea (documentado — `statusbar()`
+                // vuelve a devolver `None` directo la próxima vez, sin pasar
+                // por el cache).
+                self.statusbar_disabled.set(true);
+                *self.statusbar_error.borrow_mut() = Some(e.to_string());
+                None
+            }
+        }
+    }
+
+    /// Detalle diagnóstico CRUDO del último fallo del hook de statusbar, si
+    /// lo hay. CONSUME (`take`): el wiring (task 8) lo pinta en la barra
+    /// saneado UNA sola vez.
+    pub fn statusbar_error(&self) -> Option<String> {
+        self.statusbar_error.borrow_mut().take()
     }
 
     /// SOLO para tests del crate: instala `norte.fs`/`norte.pane`/

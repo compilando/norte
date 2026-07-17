@@ -9,10 +9,11 @@
 mod api; // task 2
 mod driver; // task 5
 mod fs; // task 4
-// mod statusbar;  // task 7
+mod statusbar; // task 7
 mod trust; // task 6
 
 pub use api::{Layer, LuaHost, LuaLoadError, LuaWarning};
 pub use driver::{CommandRun, DEFAULT_TIMEOUT, RunOutcome};
 pub use fs::PaneCtx;
+pub use statusbar::StatusInput;
 pub use trust::{TrustDecision, TrustStore};
