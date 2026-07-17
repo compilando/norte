@@ -43,9 +43,19 @@ const MAX_PARSE_ERRORS: u32 = 16;
 const MAX_CONNECTIONS: usize = 256;
 /// Tasks vivas simultáneas encoladas vía el daemon.
 const MAX_LIVE_TASKS: usize = 512;
+/// Sub-tope de tasks vivas de AGENTES — todas las sesiones juntas (#70): un
+/// agente glotón no agota el cupo global; el humano conserva SIEMPRE
+/// headroom (`MAX_LIVE_TASKS - MAX_LIVE_TASKS_AGENTS`). Por CLASE, no por
+/// sesión: aislar agente-de-agente es la deuda m4 (policy.rs).
+const MAX_LIVE_TASKS_AGENTS: usize = 384;
 /// Snapshots TERMINALES retenidos para el resync de `task.list` (un
 /// frontend que reconecta ve el desenlace de lo que se perdió).
 const RECENT_TERMINAL: usize = 64;
+/// Sub-tope de slots de `recent` para terminales de AGENTES (#70): una
+/// ráfaga de tasks triviales de agente expulsa las suyas más viejas, jamás
+/// los desenlaces del humano (que conserva ≥ `RECENT_TERMINAL -
+/// RECENT_TERMINAL_AGENTS` slots).
+const RECENT_TERMINAL_AGENTS: usize = 32;
 /// Informes de undo retenidos para `policy.undo_report` (#71). Los undos son
 /// operaciones humanas raras: un anillo corto basta; el más viejo se expulsa.
 const UNDO_REPORTS_MAX: usize = 8;
@@ -206,6 +216,33 @@ struct Subscriber {
 struct RegisteredTask {
     handle: TaskHandle,
     owner: Actor,
+}
+
+/// Empuja un terminal al anillo `recent` respetando los topes por clase
+/// (#70): un terminal de agente expulsa antes al MÁS VIEJO de su clase si
+/// los agentes ya ocupan [`RECENT_TERMINAL_AGENTS`] slots; el tope global
+/// [`RECENT_TERMINAL`] solo puede comerse entradas del humano cuando es el
+/// propio humano quien desborda (los agentes nunca pasan de su sub-tope).
+fn push_recent(
+    recent: &mut std::collections::VecDeque<(norte_proto::TaskProgress, Actor)>,
+    snapshot: norte_proto::TaskProgress,
+    owner: &Actor,
+) {
+    if !matches!(owner, Actor::User) {
+        let agents = recent
+            .iter()
+            .filter(|(_, o)| !matches!(o, Actor::User))
+            .count();
+        if agents >= RECENT_TERMINAL_AGENTS
+            && let Some(pos) = recent.iter().position(|(_, o)| !matches!(o, Actor::User))
+        {
+            recent.remove(pos);
+        }
+    }
+    recent.push_back((snapshot, owner.clone()));
+    while recent.len() > RECENT_TERMINAL {
+        recent.pop_front();
+    }
 }
 
 /// EL criterio de visibilidad/alcance sobre tasks (#66), único para
@@ -2006,6 +2043,21 @@ fn register_task_id(
                 format!("too many live tasks (max {MAX_LIVE_TASKS}); retry later"),
             ));
         }
+        // Sub-tope por clase (#70): las tasks de agentes (todas las sesiones)
+        // no agotan el cupo global — el humano conserva su headroom.
+        if !matches!(owner, Actor::User)
+            && tasks
+                .values()
+                .filter(|t| !matches!(t.owner, Actor::User))
+                .count()
+                >= MAX_LIVE_TASKS_AGENTS
+        {
+            handle.cancel();
+            return Err(RpcError::protocol(
+                codes::OVERLOADED,
+                format!("too many live agent tasks (max {MAX_LIVE_TASKS_AGENTS}); retry later"),
+            ));
+        }
         tasks.insert(
             task_id.get(),
             RegisteredTask {
@@ -2026,10 +2078,7 @@ fn register_task_id(
             // ninguno (M1 del rust-reviewer).
             if terminal {
                 let mut recent = shared_pump.recent.lock().expect("recent lock sano");
-                recent.push_back((snapshot.clone(), owner.clone()));
-                while recent.len() > RECENT_TERMINAL {
-                    recent.pop_front();
-                }
+                push_recent(&mut recent, snapshot.clone(), &owner);
             }
             let notif = Notification {
                 jsonrpc: norte_proto::wire::JsonRpcVersion,
@@ -2049,10 +2098,7 @@ fn register_task_id(
                 let last = progress.borrow().clone();
                 if last.state.is_terminal() {
                     let mut recent = shared_pump.recent.lock().expect("recent lock sano");
-                    recent.push_back((last.clone(), owner.clone()));
-                    while recent.len() > RECENT_TERMINAL {
-                        recent.pop_front();
-                    }
+                    push_recent(&mut recent, last.clone(), &owner);
                 }
                 let notif = Notification {
                     jsonrpc: norte_proto::wire::JsonRpcVersion,

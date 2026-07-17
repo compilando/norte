@@ -2550,3 +2550,127 @@ async fn undo_report_task_desconocida_es_invalid_params() {
         .expect_err("sin undo no hay informe");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 }
+
+// ---------- #70: topes por clase (reserva para el humano) ----------
+
+/// Los desenlaces de un AGENTE ocupan como mucho la mitad del anillo
+/// `recent`: una ráfaga de tasks triviales de agente NO expulsa los
+/// terminales del humano del resync de `task.list` (#70).
+#[tokio::test]
+async fn terminales_de_agente_no_desplazan_los_del_humano() {
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///h.bin", &[0xAA; 100]).await;
+    let mut human = connected_client(&d).await;
+    let mut agent = connected_agent(&d, "sess-ruido").await;
+
+    // 1) El humano completa UNA task.
+    let ht: FsTaskResult = human
+        .call(
+            methods::FS_COPY,
+            &FsCopyParams {
+                from: vp("mem:///h.bin"),
+                to: vp("mem:///h2.bin"),
+                on_collision: norte_proto::CollisionPolicy::default(),
+                symlinks: norte_proto::SymlinkPolicy::default(),
+                resume: norte_proto::ResumePolicy::default(),
+                verify: norte_proto::VerifyPolicy::default(),
+            },
+        )
+        .await
+        .expect("copia humana");
+    drain_task(&mut human, ht.task_id.get()).await;
+
+    // 2) El agente completa MÁS tasks que el anillo entero (64).
+    for i in 0..70u32 {
+        let at: FsTaskResult = agent
+            .call(
+                methods::FS_COPY,
+                &FsCopyParams {
+                    from: vp("mem:///h.bin"),
+                    to: vp(&format!("mem:///a{i}.bin")),
+                    on_collision: norte_proto::CollisionPolicy::default(),
+                    symlinks: norte_proto::SymlinkPolicy::default(),
+                    resume: norte_proto::ResumePolicy::default(),
+                    verify: norte_proto::VerifyPolicy::default(),
+                },
+            )
+            .await
+            .expect("copia del agente");
+        drain_task(&mut agent, at.task_id.get()).await;
+    }
+
+    // 3) El terminal del humano SIGUE en su resync.
+    let listed: methods::TaskListResult = human
+        .call(methods::TASK_LIST, &methods::TaskListParams {})
+        .await
+        .expect("task.list");
+    assert!(
+        listed.tasks.iter().any(|t| t.task_id == ht.task_id),
+        "el ruido del agente no expulsa el desenlace del humano"
+    );
+}
+
+/// Las tasks VIVAS de agentes tienen sub-tope: aunque lo agoten, el humano
+/// sigue pudiendo encolar (#70). El agente que se pasa recibe OVERLOADED.
+#[tokio::test]
+async fn tasks_vivas_de_agente_no_agotan_el_cupo_del_humano() {
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///src.bin", &[0xBB; 100]).await;
+    // Las tasks del agente quedan vivas: la primera bloqueada en latencia,
+    // el resto encoladas en el scheduler (registradas = vivas).
+    d.mem
+        .faults()
+        .set_latency_per_op(Some(Duration::from_mins(2)));
+    let human = connected_client(&d).await;
+    let agent = connected_agent(&d, "sess-gloton").await;
+
+    // El agente encola hasta su sub-tope (384): todas aceptadas.
+    for i in 0..384u32 {
+        let _: FsTaskResult = agent
+            .call(
+                methods::FS_COPY,
+                &FsCopyParams {
+                    from: vp("mem:///src.bin"),
+                    to: vp(&format!("mem:///d{i}.bin")),
+                    on_collision: norte_proto::CollisionPolicy::default(),
+                    symlinks: norte_proto::SymlinkPolicy::default(),
+                    resume: norte_proto::ResumePolicy::default(),
+                    verify: norte_proto::VerifyPolicy::default(),
+                },
+            )
+            .await
+            .unwrap_or_else(|e| panic!("copia {i} del agente aceptada: {e:?}"));
+    }
+    // La 385ª del agente: OVERLOADED (su clase está llena).
+    let err = agent
+        .call::<_, FsTaskResult>(
+            methods::FS_COPY,
+            &FsCopyParams {
+                from: vp("mem:///src.bin"),
+                to: vp("mem:///glotón.bin"),
+                on_collision: norte_proto::CollisionPolicy::default(),
+                symlinks: norte_proto::SymlinkPolicy::default(),
+                resume: norte_proto::ResumePolicy::default(),
+                verify: norte_proto::VerifyPolicy::default(),
+            },
+        )
+        .await
+        .expect_err("el sub-tope de agentes corta");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::OVERLOADED));
+
+    // El humano SIGUE pudiendo encolar: su reserva no se toca.
+    let _: FsTaskResult = human
+        .call(
+            methods::FS_COPY,
+            &FsCopyParams {
+                from: vp("mem:///src.bin"),
+                to: vp("mem:///humano.bin"),
+                on_collision: norte_proto::CollisionPolicy::default(),
+                symlinks: norte_proto::SymlinkPolicy::default(),
+                resume: norte_proto::ResumePolicy::default(),
+                verify: norte_proto::VerifyPolicy::default(),
+            },
+        )
+        .await
+        .expect("la reserva del humano sobrevive al agente glotón");
+}
