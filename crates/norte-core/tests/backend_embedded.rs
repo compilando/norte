@@ -108,6 +108,21 @@ async fn embedded_cancel_via_canceller() {
 }
 
 #[tokio::test]
+async fn embedded_clonado_comparte_engine_y_stat_funciona() {
+    let (backend, mem) = embedded();
+    write_file(&mem, "mem:///f", b"x").await;
+
+    // El clon debe compartir el mismo Engine (Arc), no montar uno nuevo.
+    let clone = backend.clone();
+    let entry = clone.stat(&vp("mem:///f")).await.expect("stat");
+    assert_eq!(entry.size, Some(1));
+
+    // El original sigue funcionando tras clonar (no se movió el Arc).
+    let entry2 = backend.stat(&vp("mem:///f")).await.expect("stat original");
+    assert_eq!(entry2.size, Some(1));
+}
+
+#[tokio::test]
 async fn embedded_errores_son_taxonomia() {
     let (backend, _mem) = embedded();
     assert_eq!(

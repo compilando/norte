@@ -133,6 +133,20 @@ pub enum Backend {
     Remote(remote::RemoteBackend),
 }
 
+impl Clone for Backend {
+    /// Clon BARATO: comparte engine/conexión (Arc interno en ambas variantes).
+    /// OJO: los canales one-shot (`take_foreign_tasks`, `take_conn_events`,
+    /// `take_approvals`) son del PRIMER dueño — un clon (p. ej. para
+    /// scripting Lua, tasks 4-5) no debe llamarlos.
+    fn clone(&self) -> Self {
+        match self {
+            Self::Embedded(e) => Self::Embedded(Arc::clone(e)),
+            #[cfg(unix)]
+            Self::Remote(r) => Self::Remote(r.clone()),
+        }
+    }
+}
+
 impl Backend {
     /// Listado de un directorio como STREAM perezoso (ADR 0017). Embebido =
     /// el stream del engine tal cual; remoto = primera página EAGER (paridad
@@ -195,6 +209,18 @@ impl Backend {
             Self::Embedded(engine) => engine.capabilities(path).await,
             #[cfg(unix)]
             Self::Remote(r) => r.capabilities(path).await,
+        }
+    }
+
+    /// Metadatos de un nodo (`fs.stat`).
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo.
+    pub async fn stat(&self, path: &VPath) -> Result<Entry, Error> {
+        match self {
+            Self::Embedded(engine) => engine.stat(path).await,
+            #[cfg(unix)]
+            Self::Remote(r) => r.stat(path).await,
         }
     }
 
@@ -285,7 +311,8 @@ impl Backend {
     }
 
     /// Canal de tasks FORÁNEAS (encoladas por otros frontends de la misma
-    /// sesión). `None` en embebido o si ya se tomó.
+    /// sesión). `None` en embebido o si ya se tomó. Solo el dueño original de
+    /// la conexión debe llamarlo; un clon (scripting) no.
     pub fn take_foreign_tasks(&mut self) -> Option<mpsc::UnboundedReceiver<TaskRef>> {
         match self {
             Self::Embedded(_) => None,
@@ -295,7 +322,8 @@ impl Backend {
     }
 
     /// Canal de eventos de conexión (aviso de reconexión). `None` en
-    /// embebido o si ya se tomó.
+    /// embebido o si ya se tomó. Solo el dueño original de la conexión debe
+    /// llamarlo; un clon (scripting) no.
     pub fn take_conn_events(&mut self) -> Option<mpsc::UnboundedReceiver<ConnEvent>> {
         match self {
             Self::Embedded(_) => None,
@@ -308,7 +336,8 @@ impl Backend {
     /// `policy.approval_required` del daemon (y el resync por
     /// `policy.pending` al (re)conectar) llega aquí para que el frontend
     /// pregunte al humano. `None` en embebido (sin agentes que aprobar por
-    /// esta vía) o si ya se tomó.
+    /// esta vía) o si ya se tomó. Solo el dueño original de la conexión debe
+    /// llamarlo; un clon (scripting) no.
     pub fn take_approvals(
         &mut self,
     ) -> Option<mpsc::UnboundedReceiver<norte_proto::methods::PolicyApprovalRequired>> {
@@ -624,9 +653,9 @@ pub mod remote {
     use futures::StreamExt as _;
     use norte_proto::methods::{
         self, ClientInfo, FsCapabilitiesParams, FsCapabilitiesResult, FsCopyParams, FsDeleteParams,
-        FsListParams, FsListResult, FsMoveParams, FsReadParams, FsReadResult, FsTaskResult,
-        PolicyApprovalRequired, PolicyDecideParams, PolicyDecideResult, PolicyPendingResult,
-        TaskCancelParams, TaskCancelResult, TaskListParams, TaskListResult,
+        FsListParams, FsListResult, FsMoveParams, FsReadParams, FsReadResult, FsStatParams,
+        FsStatResult, FsTaskResult, PolicyApprovalRequired, PolicyDecideParams, PolicyDecideResult,
+        PolicyPendingResult, TaskCancelParams, TaskCancelResult, TaskListParams, TaskListResult,
     };
     use norte_proto::{
         ByteRange, Capabilities, DeleteMode, Entry, Error, TaskId, TaskKind, TaskProgress,
@@ -991,6 +1020,13 @@ pub mod remote {
                 )
                 .await?;
             Ok(r.capabilities)
+        }
+
+        pub(super) async fn stat(&self, path: &VPath) -> Result<Entry, Error> {
+            let r: FsStatResult = self
+                .call_timed(methods::FS_STAT, &FsStatParams { path: path.clone() })
+                .await?;
+            Ok(r.entry)
         }
 
         pub(super) async fn trust_host_key(
