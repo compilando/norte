@@ -21,7 +21,7 @@ use std::rc::Rc;
 use mlua::{Lua, MultiValue, Value};
 use norte_core::TransferOptions;
 use norte_core::backend::{Backend, TaskCanceller};
-use norte_proto::{DeleteMode, Entry, EntryKind, Scheme, Segment, TaskState, VPath};
+use norte_proto::{DeleteMode, Entry, EntryKind, Error, Scheme, Segment, TaskState, VPath};
 
 use crate::app::error_key;
 
@@ -43,8 +43,11 @@ pub struct PaneCtx {
 /// todos si el usuario aborta — regla 3).
 pub type RunCancellers = Rc<RefCell<Vec<TaskCanceller>>>;
 
-/// Clave estable para un path que no parsea.
-const ERR_INVALID_PATH: &str = "err-invalid-path";
+/// Tope de mensajes acumulados por run: un script en bucle no crece la cola
+/// sin límite. Al alcanzarlo, los siguientes se DESCARTAN y el último
+/// acumulado se sustituye por `"…"` como marca visible de desbordamiento
+/// (la longitud jamás pasa del tope).
+const MESSAGES_MAX: usize = 64;
 
 /// bytes de Lua → [`VPath`].
 ///
@@ -62,16 +65,22 @@ const ERR_INVALID_PATH: &str = "err-invalid-path";
 /// como wire, así que un nombre crudo que parezca percent-encoding (`%41`)
 /// se decodifica; para nombres hostiles con `%` el camino seguro es el
 /// relativo o el byte string no-UTF8 tal cual salió de `list`.
+///
+/// NO existen las formas POSIX: ni `.`/`..` (un [`Segment`] los rechaza —
+/// jamás traversal) ni `/abs` con barra inicial (sería un segmento vacío =
+/// inválido). Para un absoluto, usa la forma wire completa o construye sobre
+/// `norte.pane.cwd()`/`other_cwd()`.
 fn to_vpath(base: &VPath, raw: &[u8]) -> Result<VPath, &'static str> {
+    let invalid = || error_key(&Error::InvalidPath);
     let sep = raw.windows(3).position(|w| w == b"://");
     let Some(sep) = sep else {
         // Relativo: cada segmento crudo colgado de `base`.
         if raw.is_empty() {
-            return Err(ERR_INVALID_PATH);
+            return Err(invalid());
         }
         let mut path = base.clone();
         for seg in raw.split(|&b| b == b'/') {
-            path = path.join(Segment::new(seg).map_err(|_| ERR_INVALID_PATH)?);
+            path = path.join(Segment::new(seg).map_err(|_| invalid())?);
         }
         return Ok(path);
     };
@@ -80,7 +89,7 @@ fn to_vpath(base: &VPath, raw: &[u8]) -> Result<VPath, &'static str> {
     {
         return Ok(p);
     }
-    parse_raw_absolute(raw, sep).ok_or(ERR_INVALID_PATH)
+    parse_raw_absolute(raw, sep).ok_or_else(invalid)
 }
 
 /// Forma absoluta a nivel de BYTES: `scheme://[authority]/seg/…` con los
@@ -152,15 +161,16 @@ fn entry_table(lua: &Lua, e: &Entry) -> mlua::Result<mlua::Table> {
     Ok(t)
 }
 
-/// Desenlace terminal de una Task → retorno Lua de la mutación.
+/// Desenlace terminal de una Task → retorno Lua de la mutación. Todas las
+/// claves salen de [`error_key`] — cero literales duplicados del vocabulario.
 fn finish(lua: &Lua, state: &TaskState) -> mlua::Result<MultiValue> {
     match state {
         TaskState::Completed => Ok(ok_mv(Value::Boolean(true))),
-        TaskState::Cancelled => err_mv(lua, "err-cancelled"),
+        TaskState::Cancelled => err_mv(lua, error_key(&Error::Cancelled)),
         TaskState::Failed { error } => err_mv(lua, error_key(error)),
         // `join` solo devuelve terminales; un estado de protocolo más nuevo
         // (`Unknown`) o uno imposible cae a err-unknown, jamás panic.
-        _ => err_mv(lua, "err-unknown"),
+        _ => err_mv(lua, error_key(&Error::Unknown)),
     }
 }
 
@@ -170,8 +180,25 @@ fn finish(lua: &Lua, state: &TaskState) -> mlua::Result<MultiValue> {
 /// del run cambian cada vez); reinstalar pisa las tablas anteriores.
 ///
 /// `messages` acumula los `norte.ui.message(s)` del run (bytes → String
-/// lossy); el CONSUMIDOR (driver, task 8) los vuelca a la barra pasándolos
-/// por `detail_for_bar` (mask + tope) — aquí no se sanea, se acumula.
+/// lossy, tope [`MESSAGES_MAX`]); el CONSUMIDOR (driver, task 8) los vuelca
+/// a la barra pasándolos por `detail_for_bar` (mask + tope) — aquí no se
+/// sanea, se acumula.
+///
+/// **Ventana de Task huérfana (deuda #74, solo `Backend::Remote`):** el
+/// canceller de cada mutación se registra tras volver el RPC de submit. Si
+/// el driver ABANDONA el future del run (timeout duro / fin de la gracia)
+/// con ese submit en vuelo, la Task nace en el daemon sin canceller
+/// registrado y el abort no la cancela. NO es una fuga de gobierno: sigue
+/// bajo journal/policy/undo y visible (y cancelable a mano) en el panel de
+/// tasks. La reconciliación queda en la issue #74 — aquí solo se documenta.
+///
+/// **Hazard del stash (responsabilidad del DRIVER, task 5):** un script
+/// puede guardar `norte.fs.copy` en un global y llamarlo en un run
+/// POSTERIOR; esa referencia rancia pushearía cancellers al run viejo y
+/// resolvería relativos contra un `ctx` congelado obsoleto. El driver lo
+/// corta instalando bindings FRESCOS en cada `invoke` (esta función pisa las
+/// tablas) y decidirá en T5 el flag «run cerrado» que invalide las clausuras
+/// capturadas — mismo patrón que `norte.command` en `api.rs`.
 #[allow(clippy::too_many_lines)] // wiring de bindings uno a uno, sin lógica
 pub(crate) fn install_fs(
     lua: &Lua,
@@ -260,7 +287,11 @@ pub(crate) fn install_fs(
                     match submitted {
                         Ok(task) => {
                             // ANTES del join: si el usuario aborta el run, el
-                            // driver puede cancelar esta Task en vuelo.
+                            // driver puede cancelar esta Task en vuelo. OJO:
+                            // si el driver ABANDONA el future con el submit
+                            // remoto aún en vuelo, la Task nace sin canceller
+                            // registrado (ventana documentada en install_fs,
+                            // deuda #74).
                             cancellers.borrow_mut().push(task.canceller());
                             finish(&lua, &task.join().await)
                         }
@@ -288,6 +319,8 @@ pub(crate) fn install_fs(
                     // (spec M4 Lua) — un script no borra irreversible.
                     match backend.delete(&p, DeleteMode::Trash).await {
                         Ok(task) => {
+                            // Misma ventana de submit remoto abandonado que
+                            // en copy/move (deuda #74).
                             cancellers.borrow_mut().push(task.canceller());
                             finish(&lua, &task.join().await)
                         }
@@ -346,9 +379,14 @@ pub(crate) fn install_fs(
     ui.set(
         "message",
         lua.create_function(move |_, s: mlua::String| {
-            messages
-                .borrow_mut()
-                .push(String::from_utf8_lossy(&s.as_bytes()).into_owned());
+            let mut msgs = messages.borrow_mut();
+            if msgs.len() < MESSAGES_MAX {
+                msgs.push(String::from_utf8_lossy(&s.as_bytes()).into_owned());
+            } else if let Some(last) = msgs.last_mut() {
+                // Tope alcanzado: se descarta y se marca el desbordamiento
+                // (ver MESSAGES_MAX).
+                "…".clone_into(last);
+            }
             Ok(())
         })?,
     )?;
@@ -396,10 +434,38 @@ mod tests {
         for raw in [&b""[..], b"a//b", b"..", b"a\x00b", b"mem://\xFF/x"] {
             assert_eq!(
                 to_vpath(&base, raw),
-                Err(ERR_INVALID_PATH),
+                Err(error_key(&Error::InvalidPath)),
                 "{}",
                 String::from_utf8_lossy(raw)
             );
         }
+    }
+
+    /// `norte.ui.message` tiene tope: un script en bucle no crece la cola
+    /// sin límite; el desbordamiento queda MARCADO (último = "…").
+    #[test]
+    fn message_tiene_tope_y_marca_desbordamiento() {
+        let lua = Lua::new();
+        let norte = lua.create_table().unwrap();
+        norte.set("ui", lua.create_table().unwrap()).unwrap();
+        lua.globals().set("norte", norte).unwrap();
+
+        let backend = Backend::Embedded(std::sync::Arc::new(norte_core::Engine::new()));
+        let ctx = PaneCtx {
+            cwd: vp("mem:///"),
+            other_cwd: vp("mem:///"),
+            selection: vec![],
+            current: None,
+        };
+        let messages: Rc<RefCell<Vec<String>>> = Rc::default();
+        install_fs(&lua, backend, ctx, Rc::default(), Rc::clone(&messages)).unwrap();
+
+        lua.load("for i = 1, 100 do norte.ui.message('m' .. i) end")
+            .exec()
+            .unwrap();
+        let msgs = messages.borrow();
+        assert_eq!(msgs.len(), MESSAGES_MAX, "jamás por encima del tope");
+        assert_eq!(msgs.last().unwrap(), "…", "desbordamiento marcado");
+        assert_eq!(msgs[0], "m1", "los primeros se conservan");
     }
 }

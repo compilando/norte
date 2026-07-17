@@ -1,5 +1,9 @@
-//! Estado puro del TUI: panes, cursor y presentación de nombres. Máquina
-//! testeable sin terminal — el render (`ui`) y el I/O (`main`) viven aparte.
+//! Estado puro del TUI (panes, cursor, presentación de nombres) y la
+//! presentación de ERRORES para la barra (#73): categorías Fluent
+//! ([`error_key`]/[`error_category`] y compañía) + saneado de detalle
+//! ([`detail_for_bar`]). Máquina testeable sin terminal — el render (`ui`)
+//! y el I/O (`main`) viven aparte; los scripts Lua (M4) consumen de aquí la
+//! clave ESTABLE de [`error_key`].
 
 use norte_i18n::{t, ta};
 use norte_proto::{Entry, EntryKind, Error, VPath};
