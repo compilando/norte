@@ -7,7 +7,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use futures::StreamExt;
 use norte_core::{Engine, TransferOptions};
-use norte_proto::{Error, ResumePolicy, TaskState, VPath};
+use norte_proto::{Error, ResumePolicy, TaskState, VPath, VerifyPolicy};
 use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
@@ -179,6 +179,138 @@ async fn resume_descarta_parcial_mas_largo_que_el_origen() {
         read_all(&*mem, "mem:///dst.bin").await.unwrap(),
         b"abc",
         "el parcial pasado se descartó; el destino es el origen actual"
+    );
+}
+
+fn resume_hash() -> TransferOptions {
+    TransferOptions {
+        resume: ResumePolicy::On,
+        verify: VerifyPolicy::Hash,
+        ..TransferOptions::default()
+    }
+}
+
+/// #35 — verify=Hash caza lo que Length NO puede: el origen CAMBIÓ pero
+/// conserva el MISMO tamaño. Length reanudaría sobre un prefijo obsoleto
+/// (destino corrupto: prefijo viejo + sufijo nuevo); Hash compara el prefijo
+/// y descarta el parcial, empezando de cero.
+#[tokio::test]
+async fn hash_descarta_parcial_de_origen_cambiado_mismo_tamano() {
+    let (engine, mem) = engine_with_mem();
+    // Parcial de 5 bytes de un origen VIEJO.
+    let (mut sink, _) = mem.open_resumable(&vp("mem:///dst.bin")).await.unwrap();
+    sink.write(Bytes::from_static(b"VIEJO")).await.unwrap();
+    sink.keep().await.unwrap();
+
+    // El origen ACTUAL mide lo MISMO (10 bytes) pero su prefijo difiere.
+    write_file(&mem, "mem:///src.bin", b"nuevo12345").await;
+    let handle = engine
+        .copy_with(&vp("mem:///src.bin"), &vp("mem:///dst.bin"), resume_hash())
+        .await
+        .unwrap();
+    assert_eq!(handle.join().await, TaskState::Completed);
+    assert_eq!(
+        read_all(&*mem, "mem:///dst.bin").await.unwrap(),
+        b"nuevo12345",
+        "Hash detectó el prefijo obsoleto y recopió entero"
+    );
+}
+
+/// #35 — verify=Hash sobre un provider SIN `partial_digest` (default `None`)
+/// degrada a Length: NO puede comparar prefijos, así que un parcial más
+/// corto que el origen se REANUDA (comportamiento Length), no se descarta.
+#[tokio::test]
+async fn hash_sin_digest_degrada_a_length() {
+    use async_trait::async_trait;
+    use norte_proto::{ByteRange, Capabilities, Entry};
+    use norte_vfs::{ByteSink, ByteStream, EntryStream};
+
+    // Delega TODO en Mem (incluido open_resumable/keep: reanuda de verdad)
+    // salvo partial_digest, que queda en el default `None` del trait.
+    struct NoDigest(Arc<MemProvider>);
+    #[async_trait]
+    impl Provider for NoDigest {
+        fn scheme(&self) -> &str {
+            self.0.scheme()
+        }
+        fn capabilities(&self) -> Capabilities {
+            self.0.capabilities()
+        }
+        async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
+            self.0.stat(p).await
+        }
+        async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
+            self.0.list(p).await
+        }
+        async fn read(&self, p: &VPath, r: Option<ByteRange>) -> Result<ByteStream, Error> {
+            self.0.read(p, r).await
+        }
+        async fn write(&self, p: &VPath) -> Result<Box<dyn ByteSink>, Error> {
+            self.0.write(p).await
+        }
+        async fn open_resumable(&self, p: &VPath) -> Result<(Box<dyn ByteSink>, u64), Error> {
+            self.0.open_resumable(p).await
+        }
+        async fn mkdir(&self, p: &VPath) -> Result<(), Error> {
+            self.0.mkdir(p).await
+        }
+        async fn remove(&self, p: &VPath) -> Result<(), Error> {
+            self.0.remove(p).await
+        }
+        async fn rename(&self, a: &VPath, b: &VPath) -> Result<(), Error> {
+            self.0.rename(a, b).await
+        }
+        // partial_digest NO se sobreescribe: default `None`.
+    }
+
+    let engine = Engine::new();
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::new(NoDigest(Arc::clone(&mem))) as Arc<dyn Provider>);
+
+    // Parcial "VIEJO" (5) de un origen viejo; el actual mide LO MISMO (10).
+    let (mut sink, _) = mem.open_resumable(&vp("mem:///dst.bin")).await.unwrap();
+    sink.write(Bytes::from_static(b"VIEJO")).await.unwrap();
+    sink.keep().await.unwrap();
+    write_file(&mem, "mem:///src.bin", b"nuevo12345").await;
+
+    let handle = engine
+        .copy_with(&vp("mem:///src.bin"), &vp("mem:///dst.bin"), resume_hash())
+        .await
+        .unwrap();
+    assert_eq!(handle.join().await, TaskState::Completed);
+    // Sin digest, Hash degrada a Length: el prefijo obsoleto SE CONSERVA
+    // (Length no lo caza) → "VIEJO" + "12345". Es el comportamiento
+    // documentado de la degradación, no un bug del test.
+    assert_eq!(
+        read_all(&*mem, "mem:///dst.bin").await.unwrap(),
+        b"VIEJO12345",
+        "sin partial_digest, Hash se comporta como Length (reanuda el prefijo)"
+    );
+}
+
+/// #35 — verify=Hash con el origen INTACTO reanuda de verdad: el prefijo
+/// casa, el parcial se conserva y solo se copia el resto.
+#[tokio::test]
+async fn hash_reanuda_si_el_prefijo_casa() {
+    let (engine, mem) = engine_with_mem();
+    let content = b"mismo prefijo + resto".to_vec();
+    // Parcial con el prefijo REAL del origen (7 bytes).
+    let (mut sink, _) = mem.open_resumable(&vp("mem:///dst.bin")).await.unwrap();
+    sink.write(Bytes::copy_from_slice(&content[..7]))
+        .await
+        .unwrap();
+    sink.keep().await.unwrap();
+
+    write_file(&mem, "mem:///src.bin", &content).await;
+    let handle = engine
+        .copy_with(&vp("mem:///src.bin"), &vp("mem:///dst.bin"), resume_hash())
+        .await
+        .unwrap();
+    assert_eq!(handle.join().await, TaskState::Completed);
+    assert_eq!(
+        read_all(&*mem, "mem:///dst.bin").await.unwrap(),
+        content,
+        "prefijo íntegro: reanudó y completó correcto"
     );
 }
 

@@ -14,6 +14,8 @@ bytes.workspace = true
 futures.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
+# SHA-256 del staging para VerifyPolicy::Hash (#35).
+sha2.workspace = true
 # La lib solo habla sftp sobre un stream ya establecido; russh-sftp es agnóstico
 # del transporte y NO arrastra russh/rsa. El transporte SSH (`russh`) lo usa solo
 # el test nightly `openssh` → es dev-dependency hasta que fase 6 cablee connect()

@@ -9,6 +9,7 @@ use futures::{FutureExt, StreamExt};
 use norte_proto::SymlinkPolicy;
 use norte_proto::{
     CollisionPolicy, ConflictKind, DeleteMode, Entry, EntryKind, Error, Segment, VPath,
+    VerifyPolicy,
 };
 use norte_vfs::{Provider, SymlinkKind};
 use tokio_util::sync::CancellationToken;
@@ -766,12 +767,96 @@ async fn copy_file_retrying(
     }
 }
 
+/// SHA-256 de los primeros `len` bytes del ORIGEN (#35, `VerifyPolicy::Hash`):
+/// se compara con el digest del staging del destino para decidir si el
+/// parcial sigue siendo válido. Lee `origen[0..len]` por stream (el mismo
+/// coste que Length ahorra: Hash re-LEE el prefijo del origen, pero no lo
+/// re-ESCRIBE).
+///
+/// `Ok(Some(d))` = digest del prefijo; `Ok(None)` = el origen es MÁS CORTO
+/// que `len` (no hay prefijo que casar → el caller descarta). Un error REAL
+/// de lectura (transitorio, permisos) se PROPAGA con `Err` — jamás se
+/// confunde con "origen corto", que destruiría el parcial (M1 del reviewer).
+/// Chequea cancelación por chunk (regla 3, M2 del reviewer): un parcial de
+/// GiB no bloquea la Task.
+async fn hash_source_prefix(
+    src: &dyn Provider,
+    from: &VPath,
+    len: u64,
+    ctx: &TaskCtx,
+) -> Result<Option<[u8; 32]>, Error> {
+    use sha2::{Digest, Sha256};
+    let range = norte_proto::ByteRange {
+        offset: 0,
+        len: Some(len),
+    };
+    let mut stream = src.read(from, Some(range)).await?;
+    let mut hasher = Sha256::new();
+    let mut seen: u64 = 0;
+    while let Some(item) = stream.next().await {
+        if ctx.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let chunk = item?;
+        // El origen podría entregar de más si ignora el `len`: recorta al
+        // prefijo exacto para que el digest cubra SOLO `origen[..len]`.
+        let take = usize::try_from(len - seen)
+            .unwrap_or(chunk.len())
+            .min(chunk.len());
+        hasher.update(&chunk[..take]);
+        seen += take as u64;
+        if seen >= len {
+            break;
+        }
+    }
+    if seen < len {
+        return Ok(None); // origen más corto que el parcial
+    }
+    Ok(Some(hasher.finalize().into()))
+}
+
+/// ¿Descartar el parcial reanudable y empezar de cero? Decide según
+/// `VerifyPolicy` (#35): Length compara tamaños; Hash compara el digest del
+/// prefijo del origen con el del staging (si el provider lo expone, si no
+/// degrada a Length).
+#[allow(clippy::too_many_arguments)]
+async fn should_discard_partial(
+    src: &dyn Provider,
+    dst: &dyn Provider,
+    from: &VPath,
+    to: &VPath,
+    already: u64,
+    known_size: Option<u64>,
+    verify: VerifyPolicy,
+    ctx: &TaskCtx,
+) -> Result<bool, Error> {
+    // Un parcial más largo que el origen nunca cuadra (ambas políticas), y
+    // ahorra hashear: el origen cambió/encogió.
+    if known_size.is_some_and(|size| already > size) {
+        return Ok(true);
+    }
+    if already == 0 || verify == VerifyPolicy::Length {
+        return Ok(false);
+    }
+    // Hash: sin digest del staging el provider no permite verificar → degrada
+    // a Length (el check de tamaño de arriba ya se aplicó).
+    let Some(partial_dig) = dst.partial_digest(to, already).await? else {
+        return Ok(false);
+    };
+    // `None` = origen más corto que el parcial → descartar. Un error REAL se
+    // propaga (`?`): jamás se traga como "descartar" (M1 del reviewer).
+    match hash_source_prefix(src, from, already, ctx).await? {
+        Some(src_dig) => Ok(src_dig != partial_dig),
+        None => Ok(true),
+    }
+}
+
 /// Copia UN archivo: `copy_native` si el provider (el mismo a ambos lados)
 /// declara `SERVER_COPY`; si no, streaming con cancelación por chunk.
 ///
 /// `base` = `bytes_done` ANTES de este archivo (para recomponer el progreso
 /// al reanudar). Con resume: abre `open_resumable`, descarta el parcial si
-/// es más largo que el origen (`verify`), lee el origen desde `already`, y
+/// no cuadra con el origen (`verify`, #35), lee el origen desde `already`, y
 /// en cancelación/fallo CONSERVA el parcial (`keep`) en vez de abortar.
 #[allow(clippy::too_many_arguments)] // función interna del módulo, no API
 async fn copy_file(
@@ -835,13 +920,16 @@ async fn copy_file(
     // Abre el sink: reanudable (con offset ya durable) o fresco.
     let (mut sink, already) = if resume {
         let (sink, already) = dst.open_resumable(to).await?;
-        // Verify=Length: un parcial más largo que el origen no cuadra
-        // (origen cambió/encogió) — se descarta y se empieza de cero.
-        // (Verify=Hash queda wire-completo pero se trata como Length en
-        // fase 4: leer el parcial exige API que llega con S3, issue #35.)
-        if let Some(size) = known_size
-            && already > size
-        {
+        // ¿Descartar el parcial y empezar de cero? El origen pudo cambiar
+        // bajo los pies entre invocaciones (ADR 0012, #35):
+        //   - Length: un parcial más largo que el origen no cuadra.
+        //   - Hash: el prefijo `origen[..already]` no casa byte-a-byte con el
+        //     del parcial. Si el provider no expone digest del staging,
+        //     DEGRADA a Length (documentado en el trait).
+        let discard =
+            should_discard_partial(src, dst, from, to, already, known_size, opts.verify, ctx)
+                .await?;
+        if discard {
             // Propagar el fallo de abort (M2 del rust-reviewer): tragarlo y
             // seguir dejaría bytes obsoletos y el destino saldría corrupto.
             sink.abort().await?;

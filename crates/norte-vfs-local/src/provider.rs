@@ -1009,6 +1009,43 @@ impl Provider for LocalProvider {
         }))
     }
 
+    async fn partial_digest(&self, p: &VPath, len: u64) -> Result<Option<[u8; 32]>, Error> {
+        use std::io::Read as _;
+
+        use sha2::{Digest, Sha256};
+        self.ensure_caps().await;
+        // Mismo staging estable que open_resumable (#35): SHA-256 de sus
+        // primeros `len` bytes. I/O síncrono en spawn_blocking (regla 2).
+        let partial_native = self.native(&stable_partial_vpath(p)?)?;
+        blocking(move || {
+            let file = match std::fs::File::open(&partial_native) {
+                Ok(f) => f,
+                // Sin staging = sin digest (el engine degrada a Length).
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(e) => return Err(map_io(&e)),
+            };
+            let mut reader = file.take(len);
+            let mut hasher = Sha256::new();
+            let mut buf = vec![0u8; 64 * 1024];
+            let mut seen: u64 = 0;
+            loop {
+                let n = reader.read(&mut buf).map_err(|e| map_io(&e))?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buf[..n]);
+                seen += n as u64;
+            }
+            // El staging es más corto que `len` (raro: `len` viene de
+            // open_resumable): sin prefijo completo, degrada a Length.
+            if seen < len {
+                return Ok(None);
+            }
+            Ok(Some(hasher.finalize().into()))
+        })
+        .await
+    }
+
     async fn open_resumable(&self, p: &VPath) -> Result<(Box<dyn ByteSink>, u64), Error> {
         self.ensure_caps().await;
         let final_native = self.native(p)?;

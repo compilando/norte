@@ -270,6 +270,38 @@ macro_rules! provider_contract {
                 );
             }
 
+            /// `partial_digest` del staging conservado == SHA-256 de esos
+            /// bytes (#35). Permisivo: un provider sin digest (default `None`)
+            /// se auto-salta — degrada a Length, correcto. Verifica el
+            /// invariante staging↔digest en TODA la matriz, no solo en Mem.
+            #[tokio::test]
+            async fn contract_partial_digest_matches_staged_bytes() {
+                use sha2::{Digest, Sha256};
+                let p = $factory;
+                let root: VPath = $root;
+                let f = child(&root, b"digest-check");
+                let (mut sink, _) = p.open_resumable(&f).await.expect("open");
+                sink.write(Bytes::from_static(b"digest me")).await.expect("write");
+                sink.keep().await.expect("keep");
+
+                match p.partial_digest(&f, 9).await.expect("partial_digest") {
+                    None => {
+                        // Provider sin digest del staging (o sin reanudación):
+                        // degrada a Length, aceptable.
+                        eprintln!("skip: el provider no expone partial_digest");
+                    }
+                    Some(d) => {
+                        let expected: [u8; 32] = Sha256::digest(b"digest me").into();
+                        assert_eq!(d, expected, "el digest cubre los bytes del staging");
+                        // Un prefijo más corto hashea SOLO ese prefijo.
+                        if let Some(d3) = p.partial_digest(&f, 3).await.expect("digest 3") {
+                            let e3: [u8; 32] = Sha256::digest(b"dig").into();
+                            assert_eq!(d3, e3, "el digest respeta `len`");
+                        }
+                    }
+                }
+            }
+
             #[tokio::test]
             async fn contract_write_collision_is_conflict() {
                 let p = $factory;

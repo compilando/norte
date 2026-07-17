@@ -23,6 +23,8 @@ opendal.workspace = true
 tokio = { workspace = true, features = ["rt"] }
 
 [dev-dependencies]
+# SHA-256 para el test contractual de partial_digest (#35).
+sha2.workspace = true
 # services-fs: harness del CONTRATO (misma lógica del provider sin HTTP; el
 # spike de 7b midió que s3s-fs pierde markers de dir vacío y nombres largos).
 # services-memory no: sin atomic_write_dir ni semántica de fs POSIX.

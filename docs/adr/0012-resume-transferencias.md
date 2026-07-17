@@ -142,11 +142,18 @@ Negativas / deuda asumida:
 - Un `.norte-partial` reanudable que nunca se reanuda es basura hasta el GC
   (manual vía comando, o el journal/daemon-idle de M3 lo barrerá); el GC de
   fase 4 es por edad y prefijo, sin saber si «pertenece» a una copia viva.
-- `verify=Hash` relee `already` bytes de ambos lados: coste O(parcial) al
-  reanudar — por eso es opt-in; `Length` es el default barato. El engine de
-  fase 4 lo trata como `Length` (leer el parcial exige superficie nueva —
-  digest del staging — que encaja con S3/ETags en fase 7): wire-completo,
-  engine parcial (patrón `Ask` de M1), issue #35.
+- `verify=Hash` relee el prefijo `already` del ORIGEN y lo compara con el
+  digest del staging del destino: coste O(parcial) al reanudar — por eso es
+  opt-in; `Length` es el default barato. **Implementado (#35):** el trait gana
+  `Provider::partial_digest(p, len) -> Option<[u8;32]>` (SHA-256 del staging);
+  el engine hashea `origen[..already]` y descarta el parcial si no casa
+  (origen cambió con el MISMO tamaño — lo que `Length` NO caza). Estado por
+  provider: **local y sftp lo implementan** (tienen staging estable
+  reencontrable); **object/S3 y archive** heredan el default `None` (S3 no
+  persiste el multipart entre invocaciones — sin staging que digerir; archive
+  es read-only) y degradan limpio a `Length`; los ETags por parte de S3
+  encajarán como digest natural si algún día se persiste el multipart. La
+  suite contractual verifica el invariante staging↔digest en toda la matriz.
 - `keep` añade un tercer estado terminal al sink (commit/abort/keep): la
   suite contractual crece y todo provider nuevo lo implementa (o hereda el
   default `keep=abort`).

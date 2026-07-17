@@ -640,6 +640,29 @@ impl Provider for MemProvider {
         }))
     }
 
+    async fn partial_digest(&self, p: &VPath, len: u64) -> Result<Option<[u8; 32]>, Error> {
+        use sha2::{Digest, Sha256};
+        self.faults.op_gate().await?;
+        let key = seg_path(p);
+        if key.is_empty() {
+            return Err(Error::InvalidPath);
+        }
+        let lk = self.lookup();
+        let tree = self.lock();
+        let canon = canonical_key(&tree, lk, &key).ok_or(Error::NotFound)?;
+        // Sin staging = sin digest (el engine degrada a Length). Con staging,
+        // hashea EXACTAMENTE los primeros `len` bytes (`len` jamás excede lo
+        // que open_resumable reportó, así que el slice es válido).
+        let Some(buffer) = tree.partials.get(&canon) else {
+            return Ok(None);
+        };
+        let n = usize::try_from(len)
+            .unwrap_or(buffer.len())
+            .min(buffer.len());
+        let digest = Sha256::digest(&buffer[..n]);
+        Ok(Some(digest.into()))
+    }
+
     async fn open_resumable(&self, p: &VPath) -> Result<(Box<dyn ByteSink>, u64), Error> {
         self.faults.op_gate().await?;
         let key = seg_path(p);

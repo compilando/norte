@@ -359,6 +359,44 @@ impl Provider for SftpProvider {
         }))
     }
 
+    async fn partial_digest(&self, p: &VPath, len: u64) -> Result<Option<[u8; 32]>, Error> {
+        use sha2::{Digest, Sha256};
+        use tokio::io::AsyncReadExt as _;
+        // Mismo staging estable que open_resumable (#35): SHA-256 de sus
+        // primeros `len` bytes.
+        let staging = self.stable_partial(p)?;
+        // Sin staging = sin digest (el engine degrada a Length). El servidor
+        // puede señalar la ausencia de varias formas; cualquier fallo al abrir
+        // el staging efímero se trata como "no hay".
+        let Ok(mut file) = self
+            .session
+            .open_with_flags(&staging, OpenFlags::READ)
+            .await
+        else {
+            return Ok(None);
+        };
+        let mut hasher = Sha256::new();
+        let mut remaining = len;
+        let mut buf = vec![0u8; 64 * 1024];
+        while remaining > 0 {
+            let want = usize::try_from(remaining.min(buf.len() as u64)).unwrap_or(buf.len());
+            let n = file
+                .read(&mut buf[..want])
+                .await
+                .map_err(|_| Error::Io { retryable: false })?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+            remaining -= n as u64;
+        }
+        if remaining > 0 {
+            // Staging más corto que `len`: sin prefijo completo → Length.
+            return Ok(None);
+        }
+        Ok(Some(hasher.finalize().into()))
+    }
+
     async fn open_resumable(&self, p: &VPath) -> Result<(Box<dyn ByteSink>, u64), Error> {
         let final_remote = self.remote(p)?;
         self.check_final_absent(&final_remote).await?;

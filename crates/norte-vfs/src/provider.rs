@@ -214,6 +214,23 @@ pub trait Provider: Send + Sync {
         Ok((self.write(p).await?, 0))
     }
 
+    /// SHA-256 de los PRIMEROS `len` bytes del staging reanudable de `p`
+    /// (#35, `VerifyPolicy::Hash`): el engine lo compara con el hash del
+    /// mismo prefijo del ORIGEN antes de reanudar — si no casan, el origen
+    /// cambió bajo los pies y el parcial se descarta.
+    ///
+    /// `Ok(None)` = no hay digest disponible → el engine degrada `Hash` a
+    /// `Length` (descarta solo si el parcial es más largo que el origen). Dos
+    /// causas: el provider no expone digest (default), o NO hay staging para
+    /// `p` ahora mismo. Un provider con staging local (local/sftp) o multipart
+    /// (S3, `ETag` por parte) devuelve `Some`. `len` jamás excede lo que
+    /// `open_resumable` reportó como durable; si aun así lo excediera, se
+    /// hashea lo disponible y (si es menos) se devuelve `None`.
+    async fn partial_digest(&self, p: &VPath, len: u64) -> Result<Option<[u8; 32]>, Error> {
+        let _ = (p, len);
+        Ok(None)
+    }
+
     /// Crea UN directorio (el padre debe existir; `mkdir -p` lo compone el core).
     /// Si ya existe: [`Error::Conflict`].
     async fn mkdir(&self, p: &VPath) -> Result<(), Error>;

@@ -22,6 +22,8 @@ suppaftp = { workspace = true, features = ["tokio", "tokio-rustls-aws-lc-rs"] }
 tokio = { workspace = true, features = ["io-util", "net", "sync"] }
 
 [dev-dependencies]
+# SHA-256 para el test contractual de partial_digest (#35).
+sha2.workspace = true
 libunftp.workspace = true
 norte-testkit.workspace = true
 tempfile.workspace = true
