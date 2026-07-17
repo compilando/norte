@@ -637,6 +637,7 @@ impl Provider for MemProvider {
             written: 0,
             tree: Arc::clone(&self.tree),
             lookup: lk,
+            faults: Arc::clone(&self.faults),
         }))
     }
 
@@ -690,6 +691,7 @@ impl Provider for MemProvider {
                 written: 0,
                 tree: Arc::clone(&self.tree),
                 lookup: lk,
+                faults: Arc::clone(&self.faults),
             }),
             already,
         ))
@@ -949,6 +951,7 @@ struct MemSink {
     written: usize,
     tree: Arc<Mutex<Tree>>,
     lookup: Lookup,
+    faults: Arc<Faults>,
 }
 
 #[async_trait]
@@ -989,6 +992,13 @@ impl ByteSink for MemSink {
                 id,
             },
         );
+        drop(tree);
+        // El commit YA aplicó (rename staging→final): si hay una carga
+        // ambigua armada, devuelve transitorio DESPUÉS del efecto (#32.1) —
+        // el "timeout tras rename" de un provider remoto.
+        if self.faults.take_ambiguous() {
+            return Err(Error::ProviderUnavailable { retryable: true });
+        }
         Ok(())
     }
 

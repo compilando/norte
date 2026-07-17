@@ -51,9 +51,12 @@ async fn backoff_or_cancel(cancel: &CancellationToken, attempt: u32) -> Result<(
 /// Las MUTACIONES no pasan por aquí: tras un fallo transitorio su efecto
 /// pudo haberse aplicado (timeout post-commit en remotos) y reintentarlas a
 /// ciegas duplicaría efectos o mentiría al journal — usan los wrappers
-/// `*_retrying` con desambiguación por operación (issue #17). Deuda
-/// restante con issue: el COMMIT del write y el evento `Created` del mkdir
-/// ambiguo (#32); `trash` no se reintenta (una op del OS, #32).
+/// `*_retrying` con desambiguación por operación (issue #17). El COMMIT del
+/// write ambiguo también se desambigua (#32.1, en [`copy_file`]: presencia +
+/// tamaño del destino). Deuda restante (#32): el `Created` del mkdir ambiguo
+/// (exige pre-stat, +1 stat/dir — solo deja un dir vacío de más, jamás
+/// pérdida) y el retry de `trash` (op del OS; el `dest` del journal se
+/// perdería en el reintento).
 async fn with_retry<'a, T: 'a>(
     cancel: &CancellationToken,
     mut op: impl FnMut() -> futures::future::BoxFuture<'a, Result<T, Error>>,
@@ -989,7 +992,43 @@ async fn copy_file(
         release(sink, to, resume).await;
         return Err(Error::Cancelled);
     }
-    sink.commit().await?;
+    // Tamaño del fichero commiteado = lo escrito en ESTA copia (`written`)
+    // menos la `base` de progreso previa a este archivo. Es el testigo para
+    // desambiguar un commit que aplicó pero devolvió transitorio (#32.1).
+    let final_size = written - base;
+    match sink.commit().await {
+        Ok(()) => {}
+        // El commit (rename staging→final) pudo APLICARSE antes de devolver
+        // un error transitorio (#32.1): sin esto, el retry recopia y su
+        // commit no-replace da `Conflict` → task FALLIDA con el archivo bien
+        // copiado y SIN `Created` (regla 4). Se desambigua por presencia +
+        // tamaño: si `to` existe con el tamaño esperado, fue nuestra
+        // escritura → cuenta como éxito. Si no aparece, el commit no aplicó y
+        // se propaga el transitorio (el retry recopia limpio).
+        //
+        // SUPUESTOS (reviewer): `to` está garantizado LIBRE al empezar
+        // (`resolve_collision` lo asegura en toda política) y hay un único
+        // escritor por task — así, un `to` del tamaño esperado SOLO puede ser
+        // nuestra escritura (jamás reclama un fichero ajeno). Limitaciones
+        // residuales, fail-safe (propagan el transitorio → como antes del
+        // fix): un provider cuyo `stat` no reporte `size` (`None`), o un
+        // episodio transitorio que también agote el `stat`, no confirman y
+        // recaen en el camino de fallo.
+        Err(e) if is_transient(&e) => {
+            match with_retry(&ctx.cancel, || dst.stat(to).boxed()).await {
+                // Aplicó: `to` existe con el tamaño esperado → cae al Created.
+                Ok(entry) if entry.size == Some(final_size) => {}
+                // Cancelado durante la comprobación: propaga cancelación.
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
+                // No aplicó (NotFound), existe pero no cuadra, o el stat
+                // falló: no lo reclamamos — propaga el transitorio (el retry
+                // recopia limpio, o el usuario reintenta contra el estado
+                // real).
+                _ => return Err(e),
+            }
+        }
+        Err(e) => return Err(e),
+    }
     observer
         .on_mutation(&Mutation::Created(to), &ctx.actor)
         .await?;

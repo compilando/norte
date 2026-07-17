@@ -136,3 +136,55 @@ async fn trash_records_trashed_restore() {
             .is_intact()
     );
 }
+
+/// #32.1 — un COMMIT del write que APLICA (rename staging→final) pero
+/// devuelve transitorio no debe fallar la task ni perder el `Created`: se
+/// desambigua por presencia+tamaño del destino. Antes: el retry recopiaba,
+/// su commit no-replace daba Conflict → task FALLIDA con el archivo bien
+/// copiado y sin evento en el journal (regla 4).
+#[tokio::test]
+async fn commit_ambiguo_no_pierde_el_created() {
+    let (engine, mem, journal) = setup().await;
+    write_file(&mem, "mem:///src.bin", b"contenido de prueba").await;
+    // El PRÓXIMO commit aplica su efecto y devuelve transitorio (una vez).
+    mem.faults().ambiguous_mutations(1);
+
+    let h = engine
+        .copy(&vp("mem:///src.bin"), &vp("mem:///dst.bin"))
+        .await
+        .expect("copy");
+    assert_eq!(
+        h.join().await,
+        TaskState::Completed,
+        "el commit aplicó: la task no debe fallar por el transitorio"
+    );
+    // El destino existe con el tamaño del origen.
+    assert_eq!(
+        mem.stat(&vp("mem:///dst.bin")).await.unwrap().size,
+        Some(19)
+    );
+    // Y HAY exactamente un `Created` (regla 4): el undo lo conocerá.
+    let es = journal.journal().entries().await.expect("entries");
+    assert_eq!(es.len(), 1, "un único Created pese al commit ambiguo");
+    assert_eq!(es[0].op, "created");
+    assert_eq!(es[0].path, b"mem:///dst.bin");
+}
+
+/// #32.1 con archivo 0-byte: `final_size == 0` desambigua igual (el destino
+/// existe con tamaño 0), un único `Created`.
+#[tokio::test]
+async fn commit_ambiguo_archivo_vacio() {
+    let (engine, mem, journal) = setup().await;
+    write_file(&mem, "mem:///vacio.bin", b"").await;
+    mem.faults().ambiguous_mutations(1);
+
+    let h = engine
+        .copy(&vp("mem:///vacio.bin"), &vp("mem:///dst.bin"))
+        .await
+        .expect("copy");
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert_eq!(mem.stat(&vp("mem:///dst.bin")).await.unwrap().size, Some(0));
+    let es = journal.journal().entries().await.expect("entries");
+    assert_eq!(es.len(), 1);
+    assert_eq!(es[0].op, "created");
+}
