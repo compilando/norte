@@ -396,42 +396,7 @@ impl Daemon {
                 ),
                 DaemonError,
             > {
-                let socket_path = requested.unwrap_or_else(|| super::default_socket_path(None));
-                let dir = socket_path
-                    .parent()
-                    .ok_or(DaemonError::InsecureDir {
-                        reason: "el socket necesita un directorio padre",
-                    })?
-                    .to_path_buf();
-                prepare_socket_dir(&dir)?;
-                // ¿Hay un daemon VIVO? Un connect lo delata; un socket
-                // huérfano (crash previo) da ECONNREFUSED y se retira.
-                match std::os::unix::net::UnixStream::connect(&socket_path) {
-                    Ok(_) => return Err(DaemonError::AlreadyRunning),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(_) => match std::fs::remove_file(&socket_path) {
-                        Ok(()) => {}
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(e) => return Err(e.into()),
-                    },
-                }
-                let listener = match std::os::unix::net::UnixListener::bind(&socket_path) {
-                    Ok(l) => l,
-                    Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-                        return Err(DaemonError::AlreadyRunning);
-                    }
-                    Err(e) => return Err(e.into()),
-                };
-                // Nuestro euid = el dueño del socket que ACABAMOS de crear
-                // (sin unsafe, regla 5). Solo el mismo uid podrá hablar.
-                let md = std::fs::metadata(&socket_path)?;
-                let uid = md.uid();
-                if uid == 0 {
-                    let _ = std::fs::remove_file(&socket_path);
-                    return Err(DaemonError::Root);
-                }
-                // El socket mismo tampoco regala nada: 0600.
-                std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))?;
+                let (listener, uid, socket_path) = bind_socket(requested)?;
                 // Catálogo de plugins + runtime WASM compartido (M4-P3/P4):
                 // I/O/CPU síncrono dentro del spawn_blocking (regla 2).
                 let (plugins, plugin_runtime) = discover_plugins(plugins_dir)?;
@@ -615,9 +580,123 @@ fn discover_plugins(
     Ok((plugins, runtime))
 }
 
+/// Prepara el dir, enlaza el socket UDS y lo endurece (0600, no-root),
+/// re-verificando la identidad del dir tras el bind (#34.2). `requested`
+/// `None` = fallback por defecto (con mensaje accionable sobre `/tmp`,
+/// #34.1). Síncrono: se llama dentro del `spawn_blocking` del bind (regla 2).
+fn bind_socket(
+    requested: Option<PathBuf>,
+) -> Result<(std::os::unix::net::UnixListener, u32, PathBuf), DaemonError> {
+    let defaulted = requested.is_none();
+    let socket_path = requested.unwrap_or_else(|| super::default_socket_path(None));
+    let dir = socket_path
+        .parent()
+        .ok_or(DaemonError::InsecureDir {
+            reason: "el socket necesita un directorio padre",
+        })?
+        .to_path_buf();
+    // #34.1: sobre el fallback /tmp, un dir inseguro (squat) sale con mensaje
+    // ACCIONABLE en vez del InsecureDir opaco.
+    let dir_id = prepare_socket_dir(&dir).map_err(|e| match e {
+        DaemonError::InsecureDir { reason } if is_default_tmp_fallback(&socket_path, defaulted) => {
+            DaemonError::UnusableDefaultDir {
+                path: dir.clone(),
+                reason,
+            }
+        }
+        other => other,
+    })?;
+    // ¿Hay un daemon VIVO? Un connect lo delata; un socket huérfano (crash
+    // previo) da ECONNREFUSED y se retira.
+    match std::os::unix::net::UnixStream::connect(&socket_path) {
+        Ok(_) => return Err(DaemonError::AlreadyRunning),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => match std::fs::remove_file(&socket_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        },
+    }
+    let listener = match std::os::unix::net::UnixListener::bind(&socket_path) {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            return Err(DaemonError::AlreadyRunning);
+        }
+        Err(e) => return Err(e.into()),
+    };
+    // #34.2 (TOCTOU): detecta el swap COMÚN (rm+recreate cambia el inode) del
+    // dir entre prepare y bind; si cambió, el socket recién creado vive en un
+    // dir ajeno — se retira y se aborta. NO es barrera total (reuso de inodo,
+    // swap posterior): la integridad del canal la garantiza el peer-cred
+    // bilateral, ver `DirIdentity`. La ventana bind→este check no es
+    // explotable (el accept-loop no arranca hasta que este helper retorna Ok).
+    if let Err(e) = dir_id.verify_unchanged(&dir) {
+        let _ = std::fs::remove_file(&socket_path);
+        return Err(e);
+    }
+    // Nuestro euid = el dueño del socket que ACABAMOS de crear (sin unsafe,
+    // regla 5). Solo el mismo uid podrá hablar.
+    let md = std::fs::metadata(&socket_path)?;
+    let uid = md.uid();
+    if uid == 0 {
+        let _ = std::fs::remove_file(&socket_path);
+        return Err(DaemonError::Root);
+    }
+    // El socket mismo tampoco regala nada: 0600.
+    std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))?;
+    Ok((listener, uid, socket_path))
+}
+
+/// Identidad de un directorio: `(dev, ino)`. Capturada al validar el dir del
+/// socket y re-verificada tras el bind — un REEMPLAZO común del dir bajo el
+/// mismo path durante la ventana prepare→bind (TOCTOU sin sticky bit en
+/// /tmp, #34.2) cambia el inode y se detecta.
+///
+/// ALCANCE (defensa en profundidad, no barrera total): (a) el chequeo por
+/// PATH es intrínsecamente racy — cada `of` re-statea; (b) el reuso de inodo
+/// (ext4/tmpfs reciclan un ino liberado al instante) puede dar `(dev, ino)`
+/// idénticos tras un rm+recreate; (c) es one-shot: no cubre un swap
+/// POSTERIOR durante la vida del socket. La garantía REAL contra un daemon
+/// impostor en un dir squatteado es el peer-cred BILATERAL (server:
+/// `peer_allowed`; cliente: `Client::authenticated` rechaza un socket cuyo
+/// dueño no es su uid). El cierre total exigiría anclar a fd (openat/
+/// fstatat), que en std pide `unsafe`/dep — fuera de alcance (regla 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DirIdentity {
+    dev: u64,
+    ino: u64,
+}
+
+impl DirIdentity {
+    /// Identidad del dir en `path` SIN seguir symlinks del último componente.
+    fn of(path: &Path) -> Result<Self, DaemonError> {
+        let md = std::fs::symlink_metadata(path)?;
+        Ok(Self {
+            dev: md.dev(),
+            ino: md.ino(),
+        })
+    }
+
+    /// `Ok` si `path` sigue siendo el MISMO objeto de FS (dev+ino) que esta
+    /// identidad; `InsecureDir` si fue reemplazado (o desapareció).
+    fn verify_unchanged(self, path: &Path) -> Result<(), DaemonError> {
+        let now = Self::of(path).map_err(|_| DaemonError::InsecureDir {
+            reason: "el dir del socket desapareció durante el bind",
+        })?;
+        if now == self {
+            Ok(())
+        } else {
+            Err(DaemonError::InsecureDir {
+                reason: "el dir del socket fue reemplazado durante el bind",
+            })
+        }
+    }
+}
+
 /// Verifica (creándolo si falta) que el dir del socket es NUESTRO y 0700:
-/// jamás symlink, jamás de otro uid, jamás accesible a otros.
-fn prepare_socket_dir(dir: &Path) -> Result<(), DaemonError> {
+/// jamás symlink, jamás de otro uid, jamás accesible a otros. Devuelve la
+/// [`DirIdentity`] validada para re-comprobar tras el bind (#34.2).
+fn prepare_socket_dir(dir: &Path) -> Result<DirIdentity, DaemonError> {
     match std::fs::create_dir_all(dir) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -664,7 +743,24 @@ fn prepare_socket_dir(dir: &Path) -> Result<(), DaemonError> {
             reason: "el dir del socket pertenece a otro usuario",
         });
     }
-    Ok(())
+    Ok(DirIdentity {
+        dev: md.dev(),
+        ino: md.ino(),
+    })
+}
+
+/// `true` si `path` es el fallback por defecto en `/tmp/norte-<uid>/…` (solo
+/// cuando el path se tomó por defecto (`defaulted=true`), sin `--socket`).
+/// El fallback es squat-eable (#34.1): un mensaje accionable pide fijar
+/// `XDG_RUNTIME_DIR` o pasar `--socket`, en vez del `InsecureDir` opaco.
+fn is_default_tmp_fallback(path: &Path, defaulted: bool) -> bool {
+    defaulted
+        && path.parent().is_some_and(|dir| {
+            dir.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("norte-"))
+                && dir.parent() == Some(Path::new("/tmp"))
+        })
 }
 
 /// ¿Es un id de sesión de agente admisible? Charset cerrado `[A-Za-z0-9._-]`,
@@ -2201,7 +2297,9 @@ fn register_task_id(
 
 #[cfg(test)]
 mod tests {
-    use super::peer_allowed;
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::{DirIdentity, is_default_tmp_fallback, peer_allowed, prepare_socket_dir};
 
     /// La política de admisión es EXACTAMENTE mismo-uid: ni root entra.
     #[test]
@@ -2209,5 +2307,56 @@ mod tests {
         assert!(peer_allowed(1000, 1000));
         assert!(!peer_allowed(1001, 1000));
         assert!(!peer_allowed(0, 1000), "root NO es el usuario del daemon");
+    }
+
+    /// #34.2 (TOCTOU): la identidad del dir se captura y un REEMPLAZO del dir
+    /// entre prepare y bind (mismo path, otro inode) se detecta.
+    #[test]
+    fn dir_identity_detecta_reemplazo_del_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sub = tmp.path().join("sock-dir");
+        std::fs::create_dir(&sub).expect("mkdir");
+        let id = prepare_socket_dir(&sub).expect("dir válido");
+        // Sin cambios: la identidad casa.
+        assert!(id.verify_unchanged(&sub).is_ok());
+        // Reemplazo (rm + recreate) = nuevo inode → detectado.
+        std::fs::remove_dir(&sub).expect("rmdir");
+        std::fs::create_dir(&sub).expect("recreate");
+        std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        assert!(
+            id.verify_unchanged(&sub).is_err(),
+            "un dir reemplazado bajo el mismo path NO debe pasar"
+        );
+    }
+
+    /// La captura de identidad es estable entre llamadas al MISMO dir.
+    #[test]
+    fn dir_identity_estable_para_el_mismo_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let a = DirIdentity::of(tmp.path()).expect("stat a");
+        let b = DirIdentity::of(tmp.path()).expect("stat b");
+        assert_eq!(a, b);
+    }
+
+    /// #34.1 (squat /tmp): solo el fallback `/tmp/norte-<uid>/…` (XDG vacío)
+    /// merece el mensaje accionable; un `XDG_RUNTIME_DIR` real o un `--socket`
+    /// explícito, no.
+    #[test]
+    fn detecta_solo_el_fallback_de_tmp() {
+        use std::path::Path;
+        assert!(is_default_tmp_fallback(
+            Path::new("/tmp/norte-1000/daemon.sock"),
+            true
+        ));
+        // No es fallback si el path NO vino por defecto (--socket explícito).
+        assert!(!is_default_tmp_fallback(
+            Path::new("/tmp/norte-1000/daemon.sock"),
+            false
+        ));
+        // Ni un XDG real que resultara vivir bajo /run.
+        assert!(!is_default_tmp_fallback(
+            Path::new("/run/user/1000/norte/daemon.sock"),
+            true
+        ));
     }
 }

@@ -146,6 +146,17 @@ rust-reviewer):
   agentes al socket — gating de política por cliente para `daemon.shutdown`
   y `task.cancel` (hoy: mismo uid = mismo poder, correcto para frontends
   de confianza; insuficiente para agentes, M3/M4).
+- **Hardening #34 (aplicado, cierre parcial)**: (1) el fallback `/tmp`
+  squatteado da error ACCIONABLE (`UnusableDefaultDir`: fija
+  `XDG_RUNTIME_DIR` o pasa `--socket`) en vez del `InsecureDir` opaco; (2)
+  la identidad `(dev, ino)` del dir se re-verifica tras el `bind` para
+  detectar el swap común (rm+recreate) en la ventana prepare→bind.
+  **Residual anotado (no cerrado)**: el chequeo por PATH es racy, el reuso
+  de inodo puede dar `(dev, ino)` idénticos, y no cubre un swap durante la
+  vida del socket. La integridad del canal la garantiza el **peer-cred
+  bilateral** (server `peer_allowed` + cliente `Client::authenticated`); el
+  cierre total del TOCTOU exigiría anclaje a fd (`openat`/`fstatat` =
+  `unsafe`/dep, contra la regla 5) — fuera de alcance a propósito.
 
 Fase 3 (0.5.0, `task.list`/`fs.read`/`fs.capabilities` + backend unificado):
 

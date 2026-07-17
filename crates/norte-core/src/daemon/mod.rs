@@ -33,6 +33,21 @@ pub enum DaemonError {
         /// Qué comprobación falló.
         reason: &'static str,
     },
+    /// El dir por defecto en `/tmp/norte-<uid>` no es utilizable (#34.1):
+    /// típicamente pre-ocupado por otro usuario (`squat`, denegación de
+    /// disponibilidad no de integridad: el daemon rehúsa secuestrarlo).
+    /// Accionable: fijar `XDG_RUNTIME_DIR` (el camino soportado) o pasar
+    /// `--socket <ruta>` a un dir propio.
+    #[error(
+        "el dir del socket por defecto ({path}) no es utilizable ({reason}); \
+         fija XDG_RUNTIME_DIR o pasa --socket <ruta>"
+    )]
+    UnusableDefaultDir {
+        /// El path del dir fallback que no se pudo usar.
+        path: std::path::PathBuf,
+        /// Qué comprobación falló.
+        reason: &'static str,
+    },
     /// Ya hay un daemon vivo escuchando en el socket.
     #[error("ya hay un daemon escuchando en el socket")]
     AlreadyRunning,
