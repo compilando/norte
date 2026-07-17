@@ -7,6 +7,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use mlua::{Function, Lua};
+use norte_core::backend::Backend;
+
+use super::fs::{self, PaneCtx, RunCancellers};
 
 /// Capa de origen de un `init.lua` (precedencia ASCENDENTE, ADR 0007).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -260,6 +263,36 @@ impl LuaHost {
         let mut names: Vec<String> = registry.commands.keys().cloned().collect();
         names.sort();
         names
+    }
+
+    /// SOLO para tests del crate: instala `norte.fs`/`norte.pane`/
+    /// `norte.ui.message` con cancellers/messages frescos (sin driver ni
+    /// token: nada cancela) y evalúa `src` como chunk async. El camino real
+    /// de ejecución es `invoke` (task 5) — mismo `install_fs`, este helper
+    /// solo ahorra el driver en los tests de bindings.
+    ///
+    /// Conversión del retorno del chunk: entero → ese `i64`; `true` → 1;
+    /// nil/nada/otro → 0.
+    ///
+    /// # Errors
+    /// Cualquier error de instalación de los bindings o de evaluación del
+    /// chunk (sintaxis o runtime).
+    #[doc(hidden)]
+    pub async fn run_script_for_test(
+        &self,
+        backend: Backend,
+        ctx: PaneCtx,
+        src: &[u8],
+    ) -> Result<i64, LuaLoadError> {
+        let cancellers: RunCancellers = Rc::default();
+        let messages: Rc<RefCell<Vec<String>>> = Rc::default();
+        fs::install_fs(&self.lua, backend, ctx, cancellers, messages)?;
+        let value: mlua::Value = self.lua.load(src).eval_async().await?;
+        Ok(match value {
+            mlua::Value::Integer(i) => i,
+            mlua::Value::Boolean(true) => 1,
+            _ => 0,
+        })
     }
 
     /// Sólo para tests: recupera la `Function` registrada bajo `name`, si
