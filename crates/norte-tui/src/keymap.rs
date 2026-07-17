@@ -265,7 +265,7 @@ pub enum Screen {
 /// # Errors
 /// [`KeymapError::Toml`] si no parsea o hay claves desconocidas.
 pub fn parse_keymap(s: &str) -> Result<KeymapFile, KeymapError> {
-    toml::from_str(s).map_err(|e| KeymapError::Toml(e.to_string()))
+    toml::from_str(s).map_err(|e| KeymapError::Toml(crate::config::toml_diag(s, &e)))
 }
 
 /// Resultado de empujar una tecla al [`Resolver`].

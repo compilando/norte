@@ -19,7 +19,7 @@ use norte_proto::DeleteMode;
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{
     App, DialogOutcome, ExtensionManager, Help, Modal, Pane, PickerAction, TransferKind,
-    dialog_key, sort_entries,
+    dialog_key, display_name, sort_entries,
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::keymap::{COMMANDS, Chord, Effective, Resolution, Resolver, Screen, presets};
@@ -236,23 +236,52 @@ async fn make_backend(
 
 /// Resuelve el preset (flag > config > default) y pliega las capas de
 /// keymap (ADR 0007) para las DOS pantallas (browse y viewer).
+/// Error tipado del montaje de keymaps (#73): cada variante mapea a una
+/// clave Fluent en [`keymaps_error_category`] — nada de contextos anyhow
+/// castellanos hardcodeados en la barra. El `Display` (thiserror) solo sale
+/// por stderr en el arranque, antes de levantar la TUI.
+#[derive(Debug, thiserror::Error)]
+enum KeymapsError {
+    /// El preset pedido (CLI o config) no existe.
+    #[error("preset desconocido {name:?}; disponibles: {available}")]
+    UnknownPreset {
+        /// Lo pedido.
+        name: String,
+        /// Los que sí existen, ya unidos para display.
+        available: String,
+    },
+    /// Una capa de keymap no valida contra los comandos.
+    #[error("keymap inválido: {detail}")]
+    Invalid {
+        /// Diagnóstico del validador ([`norte_tui::keymap::KeymapError`]).
+        detail: String,
+    },
+}
+
 fn build_keymaps(
     cfg: &config::LoadedConfig,
     cli_preset: Option<&str>,
-) -> Result<(Effective, Effective)> {
+) -> Result<(Effective, Effective), KeymapsError> {
     let preset_name = cli_preset.unwrap_or(&cfg.preset);
     let presets = presets();
     let (_, preset) = presets
         .iter()
         .find(|(n, _)| *n == preset_name)
-        .with_context(|| {
-            let nombres: Vec<&str> = presets.iter().map(|(n, _)| *n).collect();
-            format!("preset desconocido {preset_name:?}; disponibles: {nombres:?}")
+        .ok_or_else(|| KeymapsError::UnknownPreset {
+            name: preset_name.to_owned(),
+            available: presets
+                .iter()
+                .map(|(n, _)| *n)
+                .collect::<Vec<_>>()
+                .join(", "),
         })?;
+    let invalid = |e: norte_tui::keymap::KeymapError| KeymapsError::Invalid {
+        detail: e.to_string(),
+    };
     let browse = Effective::build_for(preset, &cfg.keymap_layers, COMMANDS, Screen::Browse)
-        .context("keymap inválido")?;
+        .map_err(invalid)?;
     let viewer = Effective::build_for(preset, &cfg.keymap_layers, COMMANDS, Screen::Viewer)
-        .context("keymap inválido")?;
+        .map_err(invalid)?;
     Ok((browse, viewer))
 }
 
@@ -467,7 +496,9 @@ fn apply_theme(app: &mut App, cfg: &config::LoadedConfig) {
         Ok(theme) => app.theme = theme,
         Err(e) => {
             app.theme = norte_tui::theme::TuiTheme::default();
-            app.message = Some(e);
+            // Por categoría Fluent (#73): jamás el Display del OS ni el
+            // diagnóstico crudo (el spec puede venir de un `./.norte` ajeno).
+            app.message = Some(theme_error_category(&e));
         }
     }
 }
@@ -502,14 +533,23 @@ async fn on_theme_picker_key(app: &mut App, mods: KeyModifiers, code: KeyCode) {
         let n = name.clone();
         match tokio::task::spawn_blocking(move || config::persist_ui_theme(&n)).await {
             Ok(Ok(path)) => {
+                // El path deriva de XDG_CONFIG_HOME/APPDATA (entorno):
+                // saneado como cualquier detalle (#73).
                 app.message = Some(ta(
                     "msg-theme-saved",
-                    &[("name", &name), ("path", &path.display().to_string())],
+                    &[
+                        ("name", &name),
+                        ("path", &detail_for_bar(&path.display().to_string())),
+                    ],
                 ));
             }
             Ok(Err(e)) => {
-                // El tema YA se aplicó (sesión); solo no se pudo guardar.
-                app.message = Some(ta("msg-theme-save-failed", &[("error", &e.to_string())]));
+                // El tema YA se aplicó (sesión); solo no se pudo guardar. A
+                // la barra va la CATEGORÍA, jamás el Display del OS (#73).
+                app.message = Some(ta(
+                    "msg-theme-save-failed",
+                    &[("error", &io_error_category(&e))],
+                ));
             }
             // Un panic en el write es un bug nuestro: que no tumbe la TUI.
             Err(_) => {}
@@ -591,11 +631,16 @@ async fn reload_config(
             Err(e) => {
                 app.message = Some(ta(
                     "msg-config-not-applied",
-                    &[("error", &format!("{e:#}"))],
+                    &[("error", &keymaps_error_category(&e))],
                 ));
             }
         },
-        Err(e) => app.message = Some(ta("msg-config-not-applied", &[("error", &e.to_string())])),
+        Err(e) => {
+            app.message = Some(ta(
+                "msg-config-not-applied",
+                &[("error", &config_error_category(&e))],
+            ));
+        }
     }
 }
 
@@ -1142,6 +1187,94 @@ fn error_message(e: &Error) -> String {
     ta("msg-error", &[("error", &error_category(e))])
 }
 
+/// Tope del detalle diagnóstico en la barra (una línea; un TOML hostil puede
+/// citar valores kilométricos).
+const DETAIL_MAX_CHARS: usize = 160;
+
+/// Detalle diagnóstico listo para la barra (#73): enmascarado como un nombre
+/// ([`display_name`]: lossy marcado, sin controles/bidi/invisibles) y con
+/// tope [`DETAIL_MAX_CHARS`] (recorte marcado con `…`).
+fn detail_for_bar(detail: &str) -> String {
+    let (masked, _) = display_name(detail.as_bytes());
+    let mut out: String = masked.chars().take(DETAIL_MAX_CHARS).collect();
+    if masked.chars().nth(DETAIL_MAX_CHARS).is_some() {
+        out.push('…');
+    }
+    out
+}
+
+/// Categoría LOCALIZADA de un error de io LOCAL (#73): `ErrorKind` → clave
+/// Fluent — jamás el `Display` del OS, que el SO localiza a su antojo
+/// («Permission denied (os error 13)»; regla 1).
+fn io_error_category(e: &std::io::Error) -> String {
+    let key = match e.kind() {
+        std::io::ErrorKind::NotFound => "err-not-found",
+        std::io::ErrorKind::PermissionDenied => "err-permission-denied",
+        std::io::ErrorKind::StorageFull => "err-no-space",
+        _ => "err-io",
+    };
+    t(key)
+}
+
+/// Categoría LOCALIZADA de un [`config::ConfigError`] (#73): path propio
+/// (lossy explícito + mask) y, en el caso TOML, el diagnóstico del parser
+/// saneado por [`detail_for_bar`] — la posición («at line N») es lo
+/// accionable. El io subyacente va por [`io_error_category`].
+fn config_error_category(e: &config::ConfigError) -> String {
+    match e {
+        config::ConfigError::Io { path, source } => ta(
+            "err-config-io",
+            &[
+                ("path", &detail_for_bar(&path.display().to_string())),
+                ("error", &io_error_category(source)),
+            ],
+        ),
+        config::ConfigError::Toml { path, message } => ta(
+            "err-config-parse",
+            &[
+                ("path", &detail_for_bar(&path.display().to_string())),
+                ("detail", &detail_for_bar(message)),
+            ],
+        ),
+    }
+}
+
+/// Categoría LOCALIZADA de un [`norte_tui::theme::ResolveError`] (#73),
+/// espejo de [`config_error_category`]. El `spec` puede venir de la capa
+/// `./.norte` de un repo AJENO: siempre por [`detail_for_bar`].
+fn theme_error_category(e: &norte_tui::theme::ResolveError) -> String {
+    use norte_tui::theme::ResolveError;
+    match e {
+        ResolveError::Io { spec, source } => ta(
+            "err-config-io",
+            &[
+                ("path", &detail_for_bar(spec)),
+                ("error", &io_error_category(source)),
+            ],
+        ),
+        ResolveError::Parse { spec, detail } => ta(
+            "err-config-parse",
+            &[
+                ("path", &detail_for_bar(spec)),
+                ("detail", &detail_for_bar(detail)),
+            ],
+        ),
+    }
+}
+
+/// Categoría LOCALIZADA de un [`KeymapsError`] (#73).
+fn keymaps_error_category(e: &KeymapsError) -> String {
+    match e {
+        KeymapsError::UnknownPreset { name, available } => ta(
+            "err-keymap-preset-unknown",
+            &[("name", &detail_for_bar(name)), ("available", available)],
+        ),
+        KeymapsError::Invalid { detail } => {
+            ta("err-keymap-invalid", &[("detail", &detail_for_bar(detail))])
+        }
+    }
+}
+
 /// Primera página de `dir` (hasta [`FIRST_PAGE`]) más el stream con el RESTO
 /// (o `None` si el dir cabía en la primera página). El primer render no espera
 /// al listado entero (ADR 0017). Regla 7: el TUI no toca el FS.
@@ -1292,7 +1425,10 @@ async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPa
 
 #[cfg(test)]
 mod error_message_tests {
-    use super::error_message;
+    use super::{
+        DETAIL_MAX_CHARS, KeymapsError, config, config_error_category, detail_for_bar,
+        error_message, io_error_category, keymaps_error_category, theme_error_category,
+    };
     use norte_proto::{ConflictKind, Error};
 
     /// Cada categoría rinde un mensaje LOCALIZADO propio — jamás el `Display`
@@ -1350,6 +1486,98 @@ mod error_message_tests {
             rule: "scope-expired".into(),
         });
         assert!(!pd.contains("scope-expired"), "la regla NO se filtra: {pd}");
+    }
+
+    /// #73: un error LOCAL de io va por categoría Fluent — jamás el
+    /// `Display` del OS («Permission denied (os error 13)», que el SO
+    /// localiza a su antojo — regla 1).
+    #[test]
+    fn categoria_io_local_no_filtra_el_display_del_os() {
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
+        let e = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let s = io_error_category(&e);
+        assert!(s.contains("permission denied"), "{s}");
+        assert!(!s.contains("os error"), "sin string del OS: {s}");
+        let full = std::io::Error::from(std::io::ErrorKind::StorageFull);
+        let s = io_error_category(&full);
+        assert!(s.contains("no space"), "kind con clave propia: {s}");
+    }
+
+    /// #73: `ConfigError` rinde categoría localizada + path; el diagnóstico
+    /// del parser se conserva (la posición es lo accionable) pero pasa por
+    /// `display_name` — jamás bidi/controles crudos en la barra — y con tope.
+    #[test]
+    fn categoria_config_no_filtra_el_diagnostico_del_parser() {
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
+        let e = config::ConfigError::Toml {
+            path: "/etc/norte/config.toml".into(),
+            message: "unknown field `colr\u{202E}` at line 3".into(),
+        };
+        let s = config_error_category(&e);
+        assert!(s.contains("config.toml"), "el path SÍ se muestra: {s}");
+        assert!(s.contains("line 3"), "la posición es lo accionable: {s}");
+        assert!(!s.contains('\u{202E}'), "sin bidi en la barra: {s}");
+        let e = config::ConfigError::Io {
+            path: "/etc/norte/config.toml".into(),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        };
+        let s = config_error_category(&e);
+        assert!(s.contains("permission denied"), "io por categoría: {s}");
+        assert!(!s.contains("os error"), "sin string del OS: {s}");
+    }
+
+    /// #73 (ALTA-1 del encoding-auditor): el pipeline de TEMAS tenía el
+    /// mismo bug — spec hostil (puede venir del `./.norte` de un repo AJENO)
+    /// y Display del OS, crudos a la barra vía `apply_theme`.
+    #[test]
+    fn categoria_tema_no_filtra_spec_hostil_ni_os() {
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
+        let e = norte_tui::theme::ResolveError::Io {
+            spec: "temas/\u{202E}x.toml".into(),
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        };
+        let s = theme_error_category(&e);
+        assert!(!s.contains("os error"), "sin string del OS: {s}");
+        assert!(!s.contains('\u{202E}'), "sin bidi en la barra: {s}");
+        assert!(s.contains("not found"), "io por categoría: {s}");
+        let e = norte_tui::theme::ResolveError::Parse {
+            spec: "nord".into(),
+            detail: "role `panel\u{202E}` desconocido".into(),
+        };
+        let s = theme_error_category(&e);
+        assert!(s.contains("nord"), "el spec saneado sí se muestra: {s}");
+        assert!(!s.contains('\u{202E}'), "detalle enmascarado: {s}");
+    }
+
+    /// #73: un diagnóstico kilométrico (un TOML hostil puede citar valores
+    /// arbitrarios) sale RECORTADO — la barra es una línea.
+    #[test]
+    fn el_detalle_del_parser_tiene_tope() {
+        let s = detail_for_bar(&"x".repeat(1000));
+        assert!(s.chars().count() <= DETAIL_MAX_CHARS + 1, "{}", s.len());
+        assert!(s.ends_with('…'), "recorte marcado: {s}");
+    }
+
+    /// #73: el error de keymaps se localiza por Fluent (los contextos anyhow
+    /// castellanos hardcodeados violaban la convención de i18n).
+    #[test]
+    fn error_de_keymap_se_localiza_con_el_nombre_del_preset() {
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
+        let s = keymaps_error_category(&KeymapsError::UnknownPreset {
+            name: "vintage".into(),
+            available: "cua, orthodox".into(),
+        });
+        assert!(s.contains("vintage"), "el nombre pedido es accionable: {s}");
+        assert!(s.contains("cua, orthodox"), "y los disponibles: {s}");
+        assert!(
+            !s.contains("preset desconocido"),
+            "sin castellano fijo: {s}"
+        );
+        let s = keymaps_error_category(&KeymapsError::Invalid {
+            detail: "conflicto en F5".into(),
+        });
+        assert!(s.contains("invalid keymap"), "localizado: {s}");
+        assert!(s.contains("F5"), "el detalle diagnóstico se conserva: {s}");
     }
 }
 

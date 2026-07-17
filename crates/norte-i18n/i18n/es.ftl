@@ -51,6 +51,10 @@ err-host-key-unknown = host key desconocida (primer contacto)
 err-host-key-mismatch = host key NO COINCIDE — posible MITM
 err-cursor-expired = el listado expiró; refresca
 err-unknown = error desconocido
+err-config-io = no se pudo leer { $path }: { $error }
+err-config-parse = TOML inválido en { $path }: { $detail }
+err-keymap-preset-unknown = preset desconocido { $name }; disponibles: { $available }
+err-keymap-invalid = keymap inválido: { $detail }
 # Ya en la cima: no hay directorio padre (raíz `/` o raíz de unidad Windows).
 msg-nav-at-top = ya estás en la cima
 msg-refresh-error = refresh: { $error }

@@ -105,6 +105,21 @@ pub enum ConfigError {
     },
 }
 
+/// Diagnóstico COMPACTO de un error de `toml`: posición + mensaje semántico.
+/// El `Display` multilínea del crate cita ENTERA la línea del fichero —
+/// contenido potencialmente hostil/kilométrico que además desplazaría lo
+/// accionable («unknown field …», que va al final) fuera del tope de la
+/// barra (#73).
+pub(crate) fn toml_diag(raw: &str, e: &toml::de::Error) -> String {
+    match e.span() {
+        Some(s) => {
+            let line = 1 + raw[..s.start.min(raw.len())].matches('\n').count();
+            format!("line {line}: {}", e.message())
+        }
+        None => e.message().to_owned(),
+    }
+}
+
 /// Los directorios de capas, en precedencia ASCENDENTE.
 #[derive(Debug, Clone)]
 pub struct Layers {
@@ -233,7 +248,7 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
         if let Some(raw) = read_optional(&norte)? {
             let parsed: NorteToml = toml::from_str(&raw).map_err(|e| ConfigError::Toml {
                 path: norte.clone(),
-                message: e.to_string(),
+                message: toml_diag(&raw, &e),
             })?;
             if let Some(p) = parsed.keymap.preset {
                 preset = Some(p);
@@ -459,4 +474,31 @@ fn snapshot(layers: &Layers) -> Vec<(PathBuf, std::time::SystemTime, u64)> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod toml_diag_tests {
+    use super::*;
+
+    /// #73: el diagnóstico compacto conserva posición + mensaje semántico y
+    /// NO cita la línea del fichero — un TOML hostil puede meter valores
+    /// kilométricos/bidi que desplazarían lo accionable fuera del tope de la
+    /// barra (hallazgo MEDIA-1 del encoding-auditor).
+    #[test]
+    fn toml_diag_compacto_sin_citar_el_contenido() {
+        let hostil = format!("v = \"{}\u{202E}\"\nbad", "x".repeat(300));
+        let e = toml::from_str::<NorteToml>(&hostil).expect_err("no parsea");
+        let d = toml_diag(&hostil, &e);
+        assert!(!d.contains("xxx"), "no cita el contenido: {d}");
+        assert!(!d.contains('\u{202E}'), "sin bidi: {d}");
+        assert!(d.len() < 200, "compacto ({} bytes): {d}", d.len());
+        assert!(d.contains("line "), "la posición sobrevive: {d}");
+    }
+
+    /// El span puede faltar (errores semánticos sin posición): mensaje solo.
+    #[test]
+    fn toml_diag_sin_span_no_panica() {
+        let e = toml::from_str::<NorteToml>("keymap = 3").expect_err("no valida");
+        let _ = toml_diag("keymap = 3", &e);
+    }
 }
