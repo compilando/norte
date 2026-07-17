@@ -79,6 +79,22 @@ pub struct LuaHost {
     /// Cache de la última invocación: mismo `StatusInput` (`PartialEq`) =
     /// misma salida, sin reinvocar el script.
     statusbar_cache: RefCell<Option<(StatusInput, Option<String>)>>,
+    /// `true` mientras un comando (`driver.rs`) está en vuelo — desde que
+    /// `invoke_with_timeout` arranca hasta que su `RunGuard` se dropea (todo
+    /// camino: retorno normal, cancelación o abandono por timeout).
+    ///
+    /// Compartido por `Rc` con `driver.rs` (ver [`Self::run_active_handle`]):
+    /// la ranura de hook de mlua (`ExtraData::hook_callback`/`hook_thread`)
+    /// es ÚNICA por instancia — compartida entre el estado principal y TODAS
+    /// las corrutinas, pese a que la API expone `Lua::set_hook` y
+    /// `Thread::set_hook` como si fueran independientes. Mientras un run
+    /// está en vuelo, su corrutina tiene un `Thread::set_hook` propio armado
+    /// para cancelación (regla 3); si `statusbar()` llamara
+    /// `Lua::set_hook`/`remove_hook` encima, el trampolín en C del driver se
+    /// autodesarmaría en silencio la próxima vez que disparase (mismatch de
+    /// `hook_thread`) — un bucle Lua puro en vuelo quedaría INCANCELABLE.
+    /// Ver el módulo `statusbar` para el detalle completo.
+    run_active: Rc<Cell<bool>>,
 }
 
 /// RAII: repone `loading` a `false` al salir de `eval_layer` por cualquier
@@ -175,6 +191,7 @@ impl LuaHost {
             statusbar_disabled: Cell::new(false),
             statusbar_error: RefCell::new(None),
             statusbar_cache: RefCell::new(None),
+            run_active: Rc::new(Cell::new(false)),
         })
     }
 
@@ -367,13 +384,23 @@ impl LuaHost {
     /// respuesta cacheada sin reinvocar el script — pensado para llamarse en
     /// cada vuelta de render.
     ///
-    /// La llamada real corre bajo un presupuesto de instrucciones
-    /// (`statusbar::call_hook`) y es SÍNCRONA: si se agota el presupuesto,
-    /// el script revienta en runtime, o devuelve algo que no coacciona a
-    /// string, el hook queda DESHABILITADO para el resto de la vida de este
-    /// host (hasta el próximo hot-reload, que reconstruye el `LuaHost`
-    /// entero) y esta llamada devuelve `None`. El detalle del fallo queda
-    /// disponible una vez vía [`Self::statusbar_error`].
+    /// **Un comando en vuelo (`run_active`) CONGELA la barra:** mientras
+    /// `driver.rs` tiene un run vivo, esta función JAMÁS toca Lua — ni de
+    /// lejos `set_hook`/`remove_hook` — devuelve el cache si `input`
+    /// coincide o `None` si no. La ranura de hook de mlua es ÚNICA por
+    /// instancia (compartida entre el estado principal y TODAS las
+    /// corrutinas); solaparse con el `Thread::set_hook` de cancelación del
+    /// run en vuelo lo desarmaría en silencio — ver el módulo `statusbar` y
+    /// el ADR/spec-review de la task 7 para el detalle completo.
+    ///
+    /// La llamada real (solo si NO hay run en vuelo) corre bajo un
+    /// presupuesto de instrucciones (`statusbar::call_hook`) y es SÍNCRONA:
+    /// si se agota el presupuesto, el script revienta en runtime, o devuelve
+    /// algo que no coacciona a string, el hook queda DESHABILITADO para el
+    /// resto de la vida de este host (hasta el próximo hot-reload, que
+    /// reconstruye el `LuaHost` entero) y esta llamada devuelve `None`. El
+    /// detalle del fallo queda disponible una vez vía
+    /// [`Self::statusbar_error`].
     ///
     /// La salida en éxito pasa por `crate::app::detail_for_bar` — jamás
     /// bidi/controles crudos ni una barra desbordada por un string largo.
@@ -386,6 +413,12 @@ impl LuaHost {
             && prev_input == input
         {
             return prev_out.clone();
+        }
+        if self.run_active.get() {
+            // Run en vuelo: NUNCA tocar Lua (ver rustdoc de arriba y el
+            // módulo `statusbar`). Sin cache que coincida (comprobado justo
+            // encima), lo único honesto es `None` — la barra se congela.
+            return None;
         }
         // Borrow suelto ANTES de llamar a Lua (mismo invariant que
         // `command_fn`/`eval_layer`).
@@ -471,6 +504,14 @@ impl LuaHost {
     /// el driver: hook de instrucciones + `install_fs` por invocación.
     pub(super) fn lua_handle(&self) -> Lua {
         self.lua.clone()
+    }
+
+    /// Handle compartido (mismo `Rc`, no una copia) del flag `run_active`
+    /// (ver el campo). El driver lo enciende al arrancar un run y lo apaga
+    /// en el `Drop` de su `RunGuard` — el mismo `Rc` para que `statusbar()`
+    /// vea el estado real, no una copia congelada.
+    pub(super) fn run_active_handle(&self) -> Rc<Cell<bool>> {
+        Rc::clone(&self.run_active)
     }
 }
 

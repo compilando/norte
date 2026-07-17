@@ -84,6 +84,16 @@ impl Future for CommandRun {
 ///   compartida; limpiarla evita que sobreviva al run (el estado Lua es
 ///   COMPARTIDO entre runs y con el statusbar);
 /// - cierra el run (`closed = true`): los bindings fs stasheados mueren;
+/// - apaga `run_active` (task 7, spec-review): mientras esté encendido,
+///   `LuaHost::statusbar` se niega a tocar Lua — la ranura de hook de mlua
+///   es ÚNICA por instancia (`ExtraData::hook_callback`/`hook_thread`,
+///   compartida entre el estado principal y TODAS las corrutinas, pese a
+///   que `Lua::set_hook`/`Thread::set_hook` parezcan independientes); si el
+///   statusbar llamara `set_hook`/`remove_hook` con este run vivo, el
+///   trampolín en C del hook de cancelación de ABAJO se autodesarmaría en
+///   silencio la próxima vez que disparase (mismatch de `hook_thread`) — un
+///   bucle Lua puro quedaría INCANCELABLE. Apagarlo aquí, en el `Drop`,
+///   cubre TODOS los caminos de salida, incluido el abandono;
 /// - cancela los cancellers registrados (doble-cancel inofensivo: token ya
 ///   cancelado o task terminal son no-op; cubre el abandono por timeout,
 ///   donde ninguna otra vía las cancelaría).
@@ -91,12 +101,14 @@ struct RunGuard {
     lua: Lua,
     closed: Rc<Cell<bool>>,
     cancellers: RunCancellers,
+    run_active: Rc<Cell<bool>>,
 }
 
 impl Drop for RunGuard {
     fn drop(&mut self) {
         self.lua.remove_hook();
         self.closed.set(true);
+        self.run_active.set(false);
         // Defensivo: un panic en Drop es abort. Hoy ningún borrow de
         // `cancellers` cruza un await (invariant de fs.rs), pero si un
         // cambio futuro lo rompiera y el future se abandonara con el borrow
@@ -108,6 +120,16 @@ impl Drop for RunGuard {
             }
         }
     }
+}
+
+/// Canales/flags compartidos de un run, agrupados en un solo valor para no
+/// desbordar el número de argumentos de `run_command` (cada uno es un
+/// `Rc`/`Rc<RefCell<_>>` barato de mover).
+struct RunChannels {
+    cancellers: RunCancellers,
+    messages: Rc<RefCell<Vec<String>>>,
+    closed: Rc<Cell<bool>>,
+    run_active: Rc<Cell<bool>>,
 }
 
 impl LuaHost {
@@ -151,6 +173,7 @@ impl LuaHost {
         // Borrow del registro SUELTO antes de tocar Lua (invariant).
         let f = self.command_fn(name)?;
         let lua = self.lua_handle();
+        let run_active = self.run_active_handle();
         let cancellers: RunCancellers = Rc::default();
         let messages: Rc<RefCell<Vec<String>>> = Rc::default();
         let closed: Rc<Cell<bool>> = Rc::default();
@@ -164,7 +187,8 @@ impl LuaHost {
             Rc::clone(&closed),
         ) {
             // Instalación a medias: se cierra el run (ningún binding parcial
-            // sobrevive) y el run resuelve inmediato a Err — nunca panic.
+            // sobrevive) y el run resuelve inmediato a Err — nunca panic. NO
+            // se enciende `run_active`: no hay hook alguno de por medio.
             closed.set(true);
             let detail = e.to_string();
             return Some(CommandRun(Box::pin(async move {
@@ -175,8 +199,24 @@ impl LuaHost {
             })));
         }
 
+        // El run arranca AQUÍ, no en el primer poll del `CommandRun`
+        // devuelto (el cuerpo de una `async fn` no corre hasta que se
+        // pollea): el contrato de este módulo (wiring T8) es que todo
+        // `CommandRun` se guarda y se pollea hasta un desenlace terminal —
+        // nunca se crea y se descarta sin pollear. Si eso cambiara, el
+        // `RunGuard` (que solo se construye dentro de `run_command`, en el
+        // primer poll) jamás correría y `run_active` quedaría atascado en
+        // `true`, congelando la barra para siempre.
+        run_active.set(true);
+
+        let channels = RunChannels {
+            cancellers,
+            messages,
+            closed,
+            run_active,
+        };
         Some(CommandRun(Box::pin(run_command(
-            lua, f, token, timeout, cancellers, messages, closed,
+            lua, f, token, timeout, channels,
         ))))
     }
 }
@@ -195,17 +235,23 @@ async fn run_command(
     f: mlua::Function,
     token: CancellationToken,
     timeout: Duration,
-    cancellers: RunCancellers,
-    messages: Rc<RefCell<Vec<String>>>,
-    closed: Rc<Cell<bool>>,
+    channels: RunChannels,
 ) -> RunOutcome {
+    let RunChannels {
+        cancellers,
+        messages,
+        closed,
+        run_active,
+    } = channels;
     // El guard vive DENTRO del future: si el driver lo abandona (drop en los
     // brazos de gracia/deadline… o el caller dropea el CommandRun), el Drop
-    // corre igual y el estado Lua compartido queda limpio.
+    // corre igual y el estado Lua compartido queda limpio (incluido
+    // `run_active`, task 7).
     let _guard = RunGuard {
         lua: lua.clone(),
         closed,
         cancellers: Rc::clone(&cancellers),
+        run_active,
     };
 
     let take_messages = || std::mem::take(&mut *messages.borrow_mut());
