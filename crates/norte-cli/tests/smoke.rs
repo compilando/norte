@@ -144,10 +144,31 @@ fn cp_sigint_cancels_cleanly() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(120));
-    // SIGINT al proceso, como un Ctrl-C real.
-    // Invariante: pid de un hijo recién creado siempre es válido.
-    unsafe_free_kill(child.id());
+    // Espera a que la copia haya ARRANCADO (el dst aparece) antes de señalar:
+    // un sleep fijo era flaky — bajo carga, SIGINT podía llegar ANTES de que
+    // el CLI instalara su handler de Ctrl-C, matándolo por señal (sin exit
+    // code). Cuando el dst existe, el proceso booteó y el handler está vivo.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut started = false;
+    loop {
+        if dst.exists() {
+            started = true;
+            break;
+        }
+        // ¿Ya terminó (400 ficheros pequeños: carrera legítima)?
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    if started {
+        // SIGINT al proceso, como un Ctrl-C real.
+        // Invariante: pid de un hijo recién creado siempre es válido.
+        unsafe_free_kill(child.id());
+    }
     let status = child.wait().unwrap();
 
     match status.code() {
