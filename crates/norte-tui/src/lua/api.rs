@@ -22,7 +22,9 @@ pub enum Layer {
 /// Aviso no-fatal de carga (se muestra por barra, no aborta).
 #[derive(Debug, Clone)]
 pub struct LuaWarning {
-    /// Detalle legible (el caller lo sanea antes de pintarlo).
+    /// Payload diagnóstico, NUNCA se pinta crudo: el caller lo enruta por
+    /// una clave Fluent + `detail_for_bar` (patrón #73) para localizarlo y
+    /// sanearlo antes de mostrarlo.
     pub detail: String,
 }
 
@@ -34,6 +36,13 @@ pub enum LuaLoadError {
     /// `mlua::Error::RuntimeError` desde `norte.command`).
     #[error(transparent)]
     Lua(#[from] mlua::Error),
+
+    /// Se llamó a [`LuaHost::eval_layer`] mientras otra carga ya estaba en
+    /// curso en el mismo host. Hoy no hay forma de disparar esto desde Lua
+    /// (ningún binding invoca `eval_layer` desde dentro del runtime), pero
+    /// el guard existe para cuando `driver.rs` (task 5) lo exponga.
+    #[error("eval_layer no es reentrante: ya hay una carga en curso")]
+    Reentrant,
 }
 
 /// Comandos ya confirmados en el registro (capa que los definió + la
@@ -46,7 +55,20 @@ struct Registry {
 /// El anfitrión Lua del TUI. `!Send` — vive en el main task.
 pub struct LuaHost {
     lua: Lua,
+    // Rc: el driver (task 5) clona el handle del registry para invoke.
     registry: Rc<RefCell<Registry>>,
+    /// Guard de reentrada: `true` mientras `eval_layer` está en curso.
+    loading: Cell<bool>,
+}
+
+/// RAII: repone `loading` a `false` al salir de `eval_layer` por cualquier
+/// vía (retorno normal o cualquiera de los `?` tempranos).
+struct LoadingGuard<'a>(&'a Cell<bool>);
+
+impl Drop for LoadingGuard<'_> {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
 }
 
 /// Charset de nombres de comando (mismo espíritu que `agent_session`):
@@ -86,21 +108,33 @@ impl LuaHost {
         norte.set("command", lua.create_function(command_outside_load)?)?;
         lua.globals().set("norte", norte)?;
 
-        Ok(Self { lua, registry })
+        Ok(Self {
+            lua,
+            registry,
+            loading: Cell::new(false),
+        })
     }
 
     /// Evalúa el código fuente de un `init.lua` como perteneciente a `layer`.
     ///
     /// Semántica:
+    /// - NO es reentrante: si ya hay una carga en curso en este host,
+    ///   devuelve [`LuaLoadError::Reentrant`] sin tocar nada.
     /// - Durante la evaluación, `norte.command(name, f)` registra en un
     ///   *staging* nuevo (no en el registro real); un nombre inválido o
     ///   duplicado EN EL MISMO STAGING es error inmediato.
     /// - Si la carga falla (sintaxis, runtime, o `norte.command` rechazó
     ///   algo), el registro real queda intacto — el staging se descarta.
     /// - Si la carga tiene éxito, el staging se fusiona con el registro
-    ///   real: una capa posterior siempre gana; si pisa un comando de una
-    ///   capa estrictamente anterior se emite un [`LuaWarning`]. Re-evaluar
-    ///   la MISMA capa (reload) pisa sin warning.
+    ///   real nombre a nombre:
+    ///   - Si el nombre no existía, o existía en una capa estrictamente
+    ///     ANTERIOR, la nueva definición se instala (en el segundo caso con
+    ///     un [`LuaWarning`] de pisado).
+    ///   - Si existía en la MISMA capa (reload), se instala sin warning.
+    ///   - Si existía en una capa estrictamente POSTERIOR (p. ej. se
+    ///     re-evalúa `System` después de que `User` ya definiera el mismo
+    ///     nombre), la nueva definición se IGNORA — la precedencia nunca se
+    ///     invierte — y se emite un [`LuaWarning`] explicando el descarte.
     /// - Tras evaluar (éxito o error), la ranura global `norte.command`
     ///   vuelve a apuntar a una función que devuelve error si se llama fuera
     ///   de una carga. Además, la propia clausura de esta llamada queda
@@ -112,8 +146,15 @@ impl LuaHost {
     ///
     /// # Errors
     /// Cualquier error de sintaxis o runtime de Lua, incluyendo los que
-    /// `norte.command` genera para nombres inválidos o duplicados.
+    /// `norte.command` genera para nombres inválidos o duplicados, y
+    /// [`LuaLoadError::Reentrant`] si ya hay una carga en curso.
     pub fn eval_layer(&self, source: &[u8], layer: Layer) -> Result<Vec<LuaWarning>, LuaLoadError> {
+        if self.loading.get() {
+            return Err(LuaLoadError::Reentrant);
+        }
+        self.loading.set(true);
+        let _guard = LoadingGuard(&self.loading);
+
         let staging: Rc<RefCell<Vec<(String, Function)>>> = Rc::new(RefCell::new(Vec::new()));
         // Bandera de "sesión de carga activa": la clausura instalada abajo
         // la comprueba en cada llamada, no solo la ranura global. Así, una
@@ -165,27 +206,48 @@ impl LuaHost {
         // comandos aunque conserve una referencia viva (Rc compartido); (2)
         // la ranura global `norte.command` vuelve a apuntar a una función
         // que rechaza cualquier llamada fuera de una carga en curso.
+        //
+        // OJO: construimos `restore` como un `Result` SIN propagarlo aquí
+        // (nada de `?` en esta zona) para no enmascarar `exec_result` — si
+        // ambos fallan, el error de la carga real es el que importa.
         active.set(false);
-        let restore = norte.set(
-            "command",
-            self.lua
-                .create_function(command_outside_load)
-                .map_err(LuaLoadError::Lua)?,
-        );
+        let restore = self
+            .lua
+            .create_function(command_outside_load)
+            .and_then(|f| norte.set("command", f));
         exec_result.map_err(LuaLoadError::Lua)?;
         restore.map_err(LuaLoadError::Lua)?;
 
+        // INVARIANT: desde aquí hasta que se suelta `registry`, jamás se
+        // llama a Lua (ni `exec`, ni se invoca una `Function`) — el borrow
+        // mutable del registro debe quedar libre antes de volver a tocar el
+        // runtime, o una reentrada lo encontraría prestado.
         let mut warnings = Vec::new();
         let mut registry = self.registry.borrow_mut();
         for (name, f) in staging.borrow_mut().drain(..) {
-            if let Some((prev_layer, _)) = registry.commands.get(&name)
-                && *prev_layer < layer
-            {
-                warnings.push(LuaWarning {
-                    detail: format!("comando {name} redefinido por una capa posterior"),
-                });
+            match registry.commands.get(&name) {
+                Some((prev_layer, _)) if *prev_layer > layer => {
+                    // Una capa anterior (p. ej. System re-evaluada) no puede
+                    // pisar a una posterior ya establecida (p. ej. User): la
+                    // precedencia nunca se invierte. Se descarta con aviso.
+                    warnings.push(LuaWarning {
+                        detail: format!(
+                            "comando {name} ignorado: ya definido por una capa posterior"
+                        ),
+                    });
+                }
+                Some((prev_layer, _)) if *prev_layer < layer => {
+                    warnings.push(LuaWarning {
+                        detail: format!("comando {name} redefinido por una capa posterior"),
+                    });
+                    registry.commands.insert(name, (layer, f));
+                }
+                // `None` (nombre nuevo) o misma capa (reload): instala sin
+                // warning.
+                _ => {
+                    registry.commands.insert(name, (layer, f));
+                }
             }
-            registry.commands.insert(name, (layer, f));
         }
 
         Ok(warnings)
@@ -294,5 +356,85 @@ mod tests {
             !h.commands().contains(&"ghost".to_string()),
             "no debe colarse en el registro"
         );
+    }
+
+    #[test]
+    fn capa_anterior_reevaluada_no_pisa_a_la_posterior() {
+        let h = host();
+        h.eval_layer(b"norte.command('x', function() end)", Layer::User)
+            .expect("user define x primero");
+        let before = h.command_fn("x").expect("x registrado por User");
+
+        let w = h
+            .eval_layer(b"norte.command('x', function() end)", Layer::System)
+            .expect("system se re-evalua despues, no es error de carga");
+        assert_eq!(
+            w.len(),
+            1,
+            "debe avisar de que la redefinicion de una capa anterior se ignora"
+        );
+
+        let after = h.command_fn("x").expect("x sigue registrado");
+        assert_eq!(
+            before, after,
+            "la definicion de User (posterior) no puede ser pisada por System (anterior)"
+        );
+        assert_eq!(h.commands().len(), 1);
+    }
+
+    #[test]
+    fn reload_de_la_misma_capa_pisa_sin_warning() {
+        let h = host();
+        h.eval_layer(b"norte.command('x', function() end)", Layer::User)
+            .expect("primera carga");
+        let w = h
+            .eval_layer(b"norte.command('x', function() end)", Layer::User)
+            .expect("reload de la misma capa");
+        assert!(w.is_empty(), "recargar la misma capa no debe avisar");
+        assert_eq!(h.commands().len(), 1);
+    }
+
+    #[test]
+    fn norte_command_via_ranura_global_tras_la_carga_falla() {
+        let h = host();
+        h.eval_layer(
+            b"norte.command('trigger2', function() norte.command('ghost2', function() end) end)",
+            Layer::User,
+        )
+        .expect("carga ok");
+
+        let trigger = h.command_fn("trigger2").expect("trigger2 registrado");
+        let result: mlua::Result<()> = trigger.call(());
+        assert!(
+            result.is_err(),
+            "norte.command (via ranura global) fuera de una carga debe fallar"
+        );
+        assert!(!h.commands().contains(&"ghost2".to_string()));
+    }
+
+    #[test]
+    fn nombre_valido_con_charset_completo_y_longitud_maxima() {
+        let h = host();
+        // Cubre minuscula, digito, '.', '_' y '-'; exactamente 64 bytes.
+        let name: String = "a.b_c-9".chars().cycle().take(64).collect();
+        assert_eq!(name.len(), 64);
+
+        let src = format!("norte.command('{name}', function() end)");
+        let w = h
+            .eval_layer(src.as_bytes(), Layer::User)
+            .expect("charset completo y longitud 64 son validos");
+        assert!(w.is_empty());
+        assert!(h.commands().contains(&name));
+    }
+
+    #[test]
+    fn eval_layer_no_es_reentrante() {
+        let h = host();
+        // No hay hoy binding que dispare esto desde dentro de Lua; se
+        // fuerza el estado directamente para probar el guard en sí.
+        h.loading.set(true);
+        let err = h.eval_layer(b"norte.command('x', function() end)", Layer::User);
+        assert!(matches!(err, Err(LuaLoadError::Reentrant)));
+        h.loading.set(false);
     }
 }
