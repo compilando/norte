@@ -2,7 +2,7 @@
 //! ENTERO en hot-reload (jamás estado a medias); un comando en vuelo retiene
 //! el estado viejo vía sus handles clonados (mlua es un handle Rc).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -101,20 +101,38 @@ impl LuaHost {
     ///   real: una capa posterior siempre gana; si pisa un comando de una
     ///   capa estrictamente anterior se emite un [`LuaWarning`]. Re-evaluar
     ///   la MISMA capa (reload) pisa sin warning.
-    /// - Tras evaluar (éxito o error), `norte.command` vuelve a apuntar a
-    ///   una función que devuelve error si se llama fuera de una carga —
-    ///   nunca queda capturado el staging de esta llamada.
+    /// - Tras evaluar (éxito o error), la ranura global `norte.command`
+    ///   vuelve a apuntar a una función que devuelve error si se llama fuera
+    ///   de una carga. Además, la propia clausura de esta llamada queda
+    ///   invalidada por una bandera compartida: si el script capturó una
+    ///   referencia (`local c = norte.command`) y la invoca DESPUÉS de que
+    ///   `eval_layer` retorne (p. ej. desde el cuerpo de un comando ya
+    ///   registrado), la llamada falla igual — nunca escribe en un staging
+    ///   huérfano.
     ///
     /// # Errors
     /// Cualquier error de sintaxis o runtime de Lua, incluyendo los que
     /// `norte.command` genera para nombres inválidos o duplicados.
     pub fn eval_layer(&self, source: &[u8], layer: Layer) -> Result<Vec<LuaWarning>, LuaLoadError> {
         let staging: Rc<RefCell<Vec<(String, Function)>>> = Rc::new(RefCell::new(Vec::new()));
+        // Bandera de "sesión de carga activa": la clausura instalada abajo
+        // la comprueba en cada llamada, no solo la ranura global. Así, una
+        // referencia capturada por el script (`local c = norte.command`) y
+        // invocada más tarde — p. ej. desde el cuerpo de un comando ya
+        // registrado — muere con la carga igual que la ranura global.
+        let active = Rc::new(Cell::new(true));
 
         let staging_for_closure = Rc::clone(&staging);
+        let active_for_closure = Rc::clone(&active);
         let command_fn = self
             .lua
             .create_function(move |_lua, (name, f): (String, Function)| {
+                if !active_for_closure.get() {
+                    return Err(mlua::Error::RuntimeError(
+                        "norte.command solo se puede llamar durante la carga de init.lua"
+                            .to_string(),
+                    ));
+                }
                 if !valid_name(&name) {
                     return Err(mlua::Error::RuntimeError(format!(
                         "nombre de comando inválido: {name:?} (esperado [a-z0-9._-]{{1,64}})"
@@ -143,8 +161,11 @@ impl LuaHost {
         };
         let exec_result = self.lua.load(source).set_name(layer_name).exec();
 
-        // Pase lo que pase, `norte.command` deja de apuntar a este staging:
-        // fuera de una carga en curso siempre es un error explícito.
+        // Pase lo que pase: (1) la clausura de esta llamada deja de aceptar
+        // comandos aunque conserve una referencia viva (Rc compartido); (2)
+        // la ranura global `norte.command` vuelve a apuntar a una función
+        // que rechaza cualquier llamada fuera de una carga en curso.
+        active.set(false);
         let restore = norte.set(
             "command",
             self.lua
@@ -177,6 +198,18 @@ impl LuaHost {
         let mut names: Vec<String> = registry.commands.keys().cloned().collect();
         names.sort();
         names
+    }
+
+    /// Sólo para tests: recupera la `Function` registrada bajo `name`, si
+    /// existe, para poder invocarla directamente y comprobar su
+    /// comportamiento (p. ej. una clausura capturada de una carga cerrada).
+    #[cfg(test)]
+    fn command_fn(&self, name: &str) -> Option<Function> {
+        self.registry
+            .borrow()
+            .commands
+            .get(name)
+            .map(|(_, f)| f.clone())
     }
 }
 
@@ -239,5 +272,27 @@ mod tests {
         h.eval_layer(b"norte.command('ok', function() end)", Layer::User)
             .expect("la capa siguiente carga");
         assert_eq!(h.commands(), vec!["ok".to_string()]);
+    }
+
+    #[test]
+    fn referencia_capturada_al_staging_muere_con_la_carga() {
+        let h = host();
+        h.eval_layer(
+            b"local c = norte.command\n\
+              norte.command('trigger', function() c('ghost', function() end) end)",
+            Layer::User,
+        )
+        .expect("carga ok");
+
+        let trigger = h.command_fn("trigger").expect("trigger registrado");
+        let result: mlua::Result<()> = trigger.call(());
+        assert!(
+            result.is_err(),
+            "la referencia capturada a norte.command debe fallar tras cerrar la carga"
+        );
+        assert!(
+            !h.commands().contains(&"ghost".to_string()),
+            "no debe colarse en el registro"
+        );
     }
 }
