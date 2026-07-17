@@ -21,7 +21,7 @@ use norte_proto::methods::{
     TaskCancelResult,
 };
 use norte_proto::wire::codes;
-use norte_proto::{TaskProgress, TaskState, VPath};
+use norte_proto::{Error, TaskProgress, TaskState, VPath};
 use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
@@ -2732,4 +2732,73 @@ async fn cerrar_conexion_libera_sus_listings_retenidos() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+// ---------- #64: muerte del peer durante un Ask suspendido ----------
+
+/// #64: la MUERTE del peticionario cancela su Ask suspendido — la pendiente
+/// NO queda zombi hasta el TTL. El dispatch se racea contra la vida del
+/// socket: al morir el peer se dropea el future del gate y su guard RAII
+/// retira la pendiente del router.
+#[tokio::test]
+async fn muerte_del_peer_cancela_su_ask_suspendido() {
+    // TTL LARGO a propósito: solo la muerte del peer puede limpiar a tiempo.
+    let d = spawn_daemon_ask(Duration::from_secs(30)).await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
+    write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
+    let agent = connected_agent(&d, "s1").await;
+    let mut human = connected_client(&d).await;
+    grant_copy_scope(&agent, &human, "s1").await;
+
+    let copy = tokio::spawn(async move {
+        let _ = agent
+            .call::<_, FsTaskResult>(
+                methods::FS_COPY,
+                &copy_params("mem:///proj/src.txt", "mem:///proj/dst.txt"),
+            )
+            .await;
+        agent
+    });
+    let notif = next_approval(&mut human).await;
+    let listed: PolicyPendingResult = human
+        .call(methods::POLICY_PENDING, &serde_json::json!({}))
+        .await
+        .expect("policy.pending");
+    assert!(
+        listed
+            .pending
+            .iter()
+            .any(|p| p.approval_id == notif.approval_id),
+        "la pendiente existe mientras el peticionario vive"
+    );
+
+    // Muere el peticionario: abortar la task dropea su Client → EOF.
+    copy.abort();
+    let _ = copy.await;
+
+    // La pendiente desaparece PRONTO — no a los 30s del TTL.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let listed: PolicyPendingResult = human
+            .call(methods::POLICY_PENDING, &serde_json::json!({}))
+            .await
+            .expect("policy.pending");
+        if !listed
+            .pending
+            .iter()
+            .any(|p| p.approval_id == notif.approval_id)
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "pendiente ZOMBI: la muerte del peer no canceló su Ask (#64)"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // Y el destino jamás se tocó (el gate murió ANTES del efecto).
+    assert!(matches!(
+        d.mem.stat(&vp("mem:///proj/dst.txt")).await,
+        Err(Error::NotFound)
+    ));
 }

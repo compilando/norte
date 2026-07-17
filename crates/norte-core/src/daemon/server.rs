@@ -48,6 +48,11 @@ const MAX_LIVE_TASKS: usize = 512;
 /// headroom (`MAX_LIVE_TASKS - MAX_LIVE_TASKS_AGENTS`). Por CLASE, no por
 /// sesión: aislar agente-de-agente es la deuda m4 (policy.rs).
 const MAX_LIVE_TASKS_AGENTS: usize = 384;
+/// Frames parseados EN COLA entre el reader y el dispatch de una conexión
+/// (#64). Pequeño a propósito: el dispatch es serial y los clientes son
+/// request/response — el valor del inbox es que el READER siga vivo durante
+/// un dispatch suspendido (Ask) para observar la muerte del peer.
+const INBOX_FRAMES: usize = 16;
 /// Snapshots TERMINALES retenidos para el resync de `task.list` (un
 /// frontend que reconecta ve el desenlace de lo que se perdió).
 const RECENT_TERMINAL: usize = 64;
@@ -927,7 +932,7 @@ fn cursor_expired() -> RpcError {
 }
 
 async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::Result<()> {
-    let (mut reader, mut writer) = stream.into_split();
+    let (reader, mut writer) = stream.into_split();
 
     // Toda escritura (respuestas Y broadcast) sale por un único canal
     // BOUNDED: jamás dos frames entrelazados y jamás memoria sin límite
@@ -943,62 +948,51 @@ async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::
     });
 
     let conn_id = shared.next_conn.fetch_add(1, Ordering::SeqCst) as u64;
-    let mut decoder = FrameDecoder::new();
-    let mut buf = vec![0u8; 64 * 1024];
+    // #64: la LECTURA vive en su propia task alimentando un inbox acotado —
+    // durante un dispatch SUSPENDIDO (el Ask de policy) el socket se sigue
+    // leyendo, y un EOF/reset del peer cancela `peer_gone`: el dispatch en
+    // vuelo se dropea y sus guards RAII limpian (la pendiente de aprobación
+    // deja de ser zombi hasta el TTL). El dispatch sigue SERIAL (orden de
+    // frames = orden de ejecución); solo cambia QUIÉN lee.
+    let peer_gone = CancellationToken::new();
+    let (inbox_tx, mut inbox_rx) = mpsc::channel::<serde_json::Value>(INBOX_FRAMES);
+    let reader_task = tokio::spawn(read_frames(
+        reader,
+        tx.clone(),
+        inbox_tx,
+        peer_gone.clone(),
+        shared.shutdown.clone(),
+    ));
+
     let mut conn = ConnState::new();
-    let mut parse_errors = 0u32;
     // Reap de listados paginados expirados en una conexión viva-pero-muda
-    // (además del barrido perezoso en cada fs.list): un peer que abre un
-    // listado y no lo continúa no retiene el stream (ni su hilo blocking) más
-    // allá del TTL.
+    // (además del barrido perezoso en cada fs.list). OJO: entre dispatches —
+    // un dispatch suspendido sigue reteniendo el tick (mitigado por el
+    // barrido perezoso del siguiente fs.list, nota MINOR-3 de M3-3b).
     let mut sweep = tokio::time::interval(LISTING_SWEEP);
     sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let result: std::io::Result<()> = 'conn: loop {
-        let n = tokio::select! {
-            r = reader.read(&mut buf) => match r {
-                Ok(n) => n,
-                // El camino de error TAMBIÉN pasa por la limpieza común
-                // (M1 del rust-reviewer: sin esto, suscripción y writer
-                // quedaban vivos tras un ECONNRESET).
-                Err(e) => break 'conn Err(e),
+    let result: std::io::Result<()> = loop {
+        tokio::select! {
+            msg = inbox_rx.recv() => match msg {
+                // El reader terminó (EOF, error o shutdown) y el inbox se
+                // drenó: la conexión acaba por el camino de limpieza común.
+                None => break Ok(()),
+                Some(value) => {
+                    tokio::select! {
+                        biased;
+                        // Un dispatch que puede completar, completa (la
+                        // respuesta ya calculada gana a la carrera con la
+                        // muerte del peer)...
+                        () = handle_value(value, conn_id, &tx, &mut conn, shared) => {}
+                        // ...pero uno SUSPENDIDO muere con su peticionario.
+                        () = peer_gone.cancelled() => break Ok(()),
+                    }
+                }
             },
-            () = shared.shutdown.cancelled() => break 'conn Ok(()),
+            () = shared.shutdown.cancelled() => break Ok(()),
             _ = sweep.tick() => {
                 conn.sweep_expired(shared.listing_ttl);
-                continue;
             }
-        };
-        if n == 0 {
-            break Ok(());
-        }
-        if decoder.push(&buf[..n]).is_err() {
-            let resp = Response::err(
-                None,
-                RpcError::protocol(codes::PARSE_ERROR, "frame too large"),
-            );
-            send(&tx, &resp);
-            break Ok(());
-        }
-        while let Some(frame) = decoder.next_frame() {
-            // JSON roto = -32700; JSON válido que no es envelope = -32600
-            // (M2 del protocol-guardian).
-            let value: serde_json::Value = match serde_json::from_slice(&frame) {
-                Ok(v) => v,
-                Err(e) => {
-                    parse_errors += 1;
-                    if parse_errors > MAX_PARSE_ERRORS {
-                        break 'conn Ok(());
-                    }
-                    let resp = Response::err(
-                        None,
-                        RpcError::protocol(codes::PARSE_ERROR, format!("invalid JSON: {e}")),
-                    );
-                    send(&tx, &resp);
-                    continue;
-                }
-            };
-            parse_errors = 0;
-            handle_value(value, conn_id, &tx, &mut conn, shared).await;
         }
     };
 
@@ -1024,8 +1018,78 @@ async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::
         }
     }
     drop(tx);
+    // Cerrar el inbox termina al reader si aún vive (su `send` falla).
+    drop(inbox_rx);
     let _ = writer_task.await;
-    result
+    // El error de LECTURA (p. ej. ECONNRESET) se propaga como antes.
+    match reader_task.await {
+        Ok(read_result) => result.and(read_result),
+        Err(_) => result,
+    }
+}
+
+/// Loop de LECTURA de una conexión (#64): decodifica frames y los encola al
+/// dispatch. Vive aunque el dispatch esté suspendido; a CUALQUIER salida
+/// (EOF, reset, framing hostil, shutdown) el `DropGuard` cancela `peer_gone`
+/// y el dispatch en vuelo se aborta. Nota: un peer que hiciera half-close
+/// (shutdown del lado de escritura esperando aún la respuesta) se trata como
+/// muerto — ningún cliente de norte lo hace.
+async fn read_frames(
+    mut reader: tokio::net::unix::OwnedReadHalf,
+    tx: mpsc::Sender<Arc<[u8]>>,
+    inbox: mpsc::Sender<serde_json::Value>,
+    peer_gone: CancellationToken,
+    shutdown: CancellationToken,
+) -> std::io::Result<()> {
+    let _gone = peer_gone.drop_guard();
+    let mut decoder = FrameDecoder::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut parse_errors = 0u32;
+    loop {
+        let n = tokio::select! {
+            r = reader.read(&mut buf) => r?,
+            () = shutdown.cancelled() => return Ok(()),
+        };
+        if n == 0 {
+            return Ok(());
+        }
+        if decoder.push(&buf[..n]).is_err() {
+            let resp = Response::err(
+                None,
+                RpcError::protocol(codes::PARSE_ERROR, "frame too large"),
+            );
+            send(&tx, &resp);
+            return Ok(());
+        }
+        while let Some(frame) = decoder.next_frame() {
+            // JSON roto = -32700; JSON válido que no es envelope = -32600
+            // (M2 del protocol-guardian).
+            let value: serde_json::Value = match serde_json::from_slice(&frame) {
+                Ok(v) => v,
+                Err(e) => {
+                    parse_errors += 1;
+                    if parse_errors > MAX_PARSE_ERRORS {
+                        return Ok(());
+                    }
+                    let resp = Response::err(
+                        None,
+                        RpcError::protocol(codes::PARSE_ERROR, format!("invalid JSON: {e}")),
+                    );
+                    send(&tx, &resp);
+                    continue;
+                }
+            };
+            parse_errors = 0;
+            // Backpressure: con el inbox lleno el reader espera aquí (mismo
+            // throttling que el dispatch inline daba); la detección de EOF
+            // durante un Ask exige que el peer no tenga >INBOX_FRAMES frames
+            // en vuelo — los clientes de norte son request/response.
+            if inbox.send(value).await.is_err() {
+                // El dispatch murió (shutdown): nada que encolar.
+                return Ok(());
+            }
+        }
+    }
 }
 
 /// Maneja UN mensaje JSON ya parseado de la conexión. La clasificación es
@@ -1836,6 +1900,11 @@ async fn dispatch_fs_task(
                 .copy_with_as(&p.from, &p.to, opts, actor.clone())
                 .await
                 .map_err(RpcError::from)?;
+            // INVARIANTE (#64): CERO `.await` entre el submit del engine y
+            // este register — un dispatch dropeado por la muerte del peer
+            // jamás deja una Task corriendo FUERA de `shared.tasks` (sin
+            // task.list/cancel, sin contar contra MAX_LIVE_TASKS). Quien
+            // añada un await aquí rompe esa garantía.
             register_task(shared, handle, actor)
         }
         methods::FS_MOVE => {

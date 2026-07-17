@@ -6,11 +6,14 @@
 //! la policy. Los tipos del wire MCP se construyen con `serde_json::json!`
 //! (NO son los `Response` de norte-proto: solo comparten el framing NDJSON).
 
+use std::sync::Arc;
+
 use base64::Engine as _;
 use norte_core::daemon::{Client, ClientError};
 use norte_proto::methods;
 use norte_proto::{ByteRange, DeleteMode, VPath};
 use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
 
 /// Versión MCP que respondemos, fija (ADR 0024).
 const MCP_VERSION: &str = "2025-06-18";
@@ -74,7 +77,7 @@ impl Bridge {
     /// serializada (`None` para notificaciones — MCP 2025-06-18 no tiene
     /// batches, así que un request produce EXACTAMENTE una respuesta).
     /// Separado de stdio para que los tests lo conduzcan sin proceso.
-    pub async fn handle_line(&mut self, line: &str) -> Option<String> {
+    pub async fn handle_line(&self, line: &str) -> Option<String> {
         let msg: Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(e) => {
@@ -104,19 +107,24 @@ impl Bridge {
             ),
             "ping" => rpc_result(&id, &json!({})),
             "tools/list" => rpc_result(&id, &json!({"tools": tool_defs()})),
-            "tools/call" => {
-                let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-                let args = params.get("arguments").cloned().unwrap_or(json!({}));
-                match self.call_tool(name, &args).await {
-                    Ok(v) => rpc_result(&id, &tool_content(&v, false)),
-                    // Error de TOOL: el agente lo LEE (isError) y reacciona —
-                    // p. ej. pedir scope tras un out-of-scope.
-                    Err(text) => rpc_result(&id, &tool_content(&json!(text), true)),
-                }
-            }
+            "tools/call" => self.tools_call(&id, &params).await,
             other => rpc_error(&id, -32601, &format!("unknown method: {other}")),
         };
         Some(out)
+    }
+
+    /// `tools/call` completo: ejecuta la tool y devuelve la respuesta MCP
+    /// serializada. Es la unidad que el transporte concurrente (#67) despacha
+    /// a su propia task.
+    pub async fn tools_call(&self, id: &Value, params: &Value) -> String {
+        let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+        let args = params.get("arguments").cloned().unwrap_or(json!({}));
+        match self.call_tool(name, &args).await {
+            Ok(v) => rpc_result(id, &tool_content(&v, false)),
+            // Error de TOOL: el agente lo LEE (isError) y reacciona —
+            // p. ej. pedir scope tras un out-of-scope.
+            Err(text) => rpc_result(id, &tool_content(&json!(text), true)),
+        }
     }
 
     /// Despacha una tool a su método de wire. `Err(texto)` = fallo de tool
@@ -549,35 +557,95 @@ fn tool_defs() -> Value {
 /// (MINOR-2 del security-reviewer) — se descarta y se responde `-32700`.
 pub const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 
+/// Tools/call CONCURRENTES en vuelo por transporte (#67): un cliente MCP
+/// razonable lleva 1-2; el tope corta a un cliente desbocado con un error
+/// de respuesta, jamás acumulando tasks sin límite.
+pub const MAX_INFLIGHT_TOOLS: usize = 8;
+
 /// Sirve MCP por stdio hasta EOF (el agente cierra el pipe al terminar). Un
 /// mensaje por línea (NDJSON, el transporte stdio de MCP; tope
 /// [`MAX_LINE_BYTES`]). stdout es EXCLUSIVO del transporte: cualquier
 /// diagnóstico va por tracing (el binario debe fijar el subscriber a
 /// stderr).
 ///
-/// LIMITACIÓN conocida (issue #67): el dispatch es SERIAL — un tool mutante
-/// que espera su Task (o una aprobación `ask`) retiene el transporte entero,
-/// incluido `ping`. Para agentes con un tool en vuelo a la vez (el caso MCP
-/// típico) es correcto; la concurrencia por-request queda anotada.
-///
 /// # Errors
 /// I/O de stdio o la conexión/handshake inicial con el daemon.
 pub async fn serve_stdio(socket: &std::path::Path, session: &str) -> Result<(), BridgeError> {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    let mut bridge = Bridge::connect(socket, session).await?;
+    let bridge = Bridge::connect(socket, session).await?;
     tracing::info!(session, "puente MCP conectado al daemon");
-    let mut stdin = BufReader::new(tokio::io::stdin());
-    let mut stdout = tokio::io::stdout();
+    let stdin = tokio::io::BufReader::new(tokio::io::stdin());
+    let stdout = tokio::io::stdout();
+    serve_transport(bridge, stdin, stdout).await
+}
+
+/// Transporte del puente sobre CUALQUIER par lectura/escritura (#67): las
+/// `tools/call` se despachan a tasks CONCURRENTES (tope
+/// [`MAX_INFLIGHT_TOOLS`]) y las respuestas salen por un canal único hacia
+/// el writer — jamás dos líneas entrelazadas. Un tool suspendido (ask de
+/// policy, `wait_terminal` de una task larga) ya no retiene `ping` ni
+/// `notifications/cancelled`. OJO: concurrentes EN EL PUENTE — el daemon
+/// sirve su conexión en SERIE, así que dos tools que lo toquen se encolan
+/// allí; lo que queda siempre vivo es lo que no toca el daemon
+/// (ping/initialize/tools\/list/cancelled). `notifications/cancelled {requestId}` aborta
+/// el tool en vuelo SIN respuesta (spec MCP); la Task del daemon subyacente
+/// sigue viva y GOBERNADA (journal + undo) — solo se abandona la espera.
+///
+/// # Errors
+/// I/O del transporte.
+///
+/// # Panics
+/// Nunca: los `expect` de los locks documentan la invariante de poisoning
+/// (nada paniquea con ellos tomados).
+pub async fn serve_transport<R, W>(
+    bridge: Bridge,
+    mut reader: R,
+    writer: W,
+) -> Result<(), BridgeError>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let bridge = Arc::new(bridge);
+    // Salida única: respuestas inline y de tasks compiten por el canal, el
+    // writer serializa líneas completas.
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(64);
+    let writer_task = tokio::spawn(async move {
+        let mut writer = writer;
+        while let Some(out) = out_rx.recv().await {
+            if writer.write_all(out.as_bytes()).await.is_err()
+                || writer.write_all(b"\n").await.is_err()
+                || writer.flush().await.is_err()
+            {
+                break;
+            }
+        }
+    });
+    // Tools en vuelo, por id serializado: `notifications/cancelled` cancela
+    // su token; el guard del task retira la entrada al terminar.
+    let inflight: Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>> =
+        Arc::default();
+
     let mut line: Vec<u8> = Vec::new();
     // `true` = la línea actual ya excedió el tope: se drena hasta el `\n`
     // sin acumular y se responde -32700 al cerrarse.
     let mut overflow = false;
-    loop {
-        // fill_buf/consume a mano: `read_until` acumularía sin tope.
+    let result: Result<(), BridgeError> = loop {
+        // fill_buf/consume a mano: `read_until` acumularía sin tope. La
+        // lectura se racea contra la muerte del WRITER (stdout roto): sin
+        // salida no se despachan más tools con efectos (m3 del review).
         let (nl_at, used) = {
-            let chunk = stdin.fill_buf().await?;
+            let chunk = tokio::select! {
+                r = reader.fill_buf() => match r {
+                    Ok(c) => c,
+                    // Un error de lectura TAMBIÉN pasa por el teardown común
+                    // (cancelar in-flight, drenar writer) — B3 del review.
+                    Err(e) => break Err(e.into()),
+                },
+                () = out_tx.closed() => break Ok(()),
+            };
             if chunk.is_empty() {
-                break; // EOF
+                break Ok(()); // EOF
             }
             let nl_at = chunk.iter().position(|&b| b == b'\n');
             let take = nl_at.unwrap_or(chunk.len());
@@ -591,29 +659,147 @@ pub async fn serve_stdio(socket: &std::path::Path, session: &str) -> Result<(), 
             }
             (nl_at, nl_at.map_or(chunk.len(), |i| i + 1))
         };
-        stdin.consume(used);
+        reader.consume(used);
         if nl_at.is_none() {
             continue;
         }
         // Línea completa.
-        let response = if overflow {
+        if overflow {
             overflow = false;
-            Some(rpc_error(&Value::Null, -32700, "line too long"))
-        } else {
-            let text = String::from_utf8_lossy(&line).into_owned();
-            line.clear();
-            if text.trim().is_empty() {
-                None
+            let _ = out_tx
+                .send(rpc_error(&Value::Null, -32700, "line too long"))
+                .await;
+            continue;
+        }
+        let text = String::from_utf8_lossy(&line).into_owned();
+        line.clear();
+        if text.trim().is_empty() {
+            continue;
+        }
+        dispatch_line(&bridge, &text, &out_tx, &inflight).await;
+    };
+    tracing::info!("fin del transporte (EOF/errores): puente terminado");
+    // Teardown COMÚN a todos los caminos: los tools en vuelo se abandonan
+    // (el peer ya no leerá sus respuestas) y el writer se drena.
+    for (_, token) in inflight.lock().expect("inflight lock sano").drain() {
+        token.cancel();
+    }
+    drop(out_tx);
+    let _ = writer_task.await;
+    result
+}
+
+/// Clave de correlación MCP: el `id` JSON serializado (número o string).
+fn id_key(id: &Value) -> String {
+    id.to_string()
+}
+
+/// Retira la entrada de `inflight` a CUALQUIER salida de la task del tool
+/// (respuesta, cancel o panic) — mismo patrón RAII que `PendingGuard`.
+struct InflightGuard {
+    key: String,
+    map: Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        self.map
+            .lock()
+            .expect("inflight lock sano")
+            .remove(&self.key);
+    }
+}
+
+/// Clasifica y despacha UNA línea (#67): lo barato responde inline; un
+/// `tools/call` se va a su task con token de cancelación.
+async fn dispatch_line(
+    bridge: &Arc<Bridge>,
+    text: &str,
+    out_tx: &tokio::sync::mpsc::Sender<String>,
+    inflight: &Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
+) {
+    let msg: Value = match serde_json::from_str(text) {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = out_tx
+                .send(rpc_error(
+                    &Value::Null,
+                    -32700,
+                    &format!("parse error: {e}"),
+                ))
+                .await;
+            return;
+        }
+    };
+    let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
+    let Some(id) = msg.get("id").cloned() else {
+        // Notificación: `cancelled` aborta el tool en vuelo; el resto
+        // (initialized…) se ignora sin respuesta (JSON-RPC).
+        if method == "notifications/cancelled"
+            && let Some(req_id) = msg.pointer("/params/requestId")
+            && let Some(token) = inflight
+                .lock()
+                .expect("inflight lock sano")
+                .remove(&id_key(req_id))
+        {
+            token.cancel();
+        }
+        return;
+    };
+    if method == "tools/call" {
+        let params = msg.get("params").cloned().unwrap_or(Value::Null);
+        let token = CancellationToken::new();
+        // El lock vive en su propio scope SIN awaits (Send del future). La
+        // admisión es por ENTRY VACANTE: un id repetido en vuelo NO
+        // sobrescribe (sobrescribir dejaría el token anterior huérfano y el
+        // tope seria bypasseable reutilizando el mismo id — A1 del
+        // security-reviewer).
+        let admission = {
+            let mut map = inflight.lock().expect("inflight lock sano");
+            if map.len() >= MAX_INFLIGHT_TOOLS {
+                Err("too many concurrent tool calls")
             } else {
-                bridge.handle_line(&text).await
+                match map.entry(id_key(&id)) {
+                    std::collections::hash_map::Entry::Occupied(_) => {
+                        Err("duplicate request id already in flight")
+                    }
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(token.clone());
+                        Ok(())
+                    }
+                }
             }
         };
-        if let Some(out) = response {
-            stdout.write_all(out.as_bytes()).await?;
-            stdout.write_all(b"\n").await?;
-            stdout.flush().await?;
+        if let Err(msg) = admission {
+            let _ = out_tx.send(rpc_error(&id, -32000, msg)).await;
+            return;
         }
+        let bridge = Arc::clone(bridge);
+        let out_tx = out_tx.clone();
+        let guard = InflightGuard {
+            key: id_key(&id),
+            map: Arc::clone(inflight),
+        };
+        tokio::spawn(async move {
+            // El guard retira la entrada a CUALQUIER salida — incluido un
+            // panic de la tool (sin él, 8 panics agotarían el transporte
+            // para siempre; M1 del rust-reviewer).
+            let _guard = guard;
+            tokio::select! {
+                biased;
+                out = bridge.tools_call(&id, &params) => {
+                    let _ = out_tx.send(out).await;
+                }
+                // Cancelado: SIN respuesta (spec MCP) — la espera se
+                // abandona; la Task del daemon sigue, gobernada.
+                () = token.cancelled() => {}
+            }
+        });
+        return;
     }
-    tracing::info!("EOF de stdin: el agente cerró; puente terminado");
-    Ok(())
+    // Lo barato (initialize/ping/tools/list/desconocido) responde inline:
+    // jamás bloquea (no toca el daemon).
+    if let Some(out) = bridge.handle_line(text).await {
+        let _ = out_tx.send(out).await;
+    }
 }

@@ -90,7 +90,7 @@ fn grant_proj(d: &TestDaemon, session: &str) {
 }
 
 /// `tools/call` por el puente; devuelve `(texto, is_error)` del content MCP.
-async fn call_tool(b: &mut Bridge, name: &str, args: serde_json::Value) -> (String, bool) {
+async fn call_tool(b: &Bridge, name: &str, args: serde_json::Value) -> (String, bool) {
     let req = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 42,
@@ -114,7 +114,7 @@ async fn call_tool(b: &mut Bridge, name: &str, args: serde_json::Value) -> (Stri
 #[tokio::test]
 async fn initialize_ping_y_tools_list() {
     let d = spawn_daemon_allow().await;
-    let mut b = Bridge::connect(&d.socket, "claude").await.expect("connect");
+    let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
 
     let out = b
         .handle_line(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}"#)
@@ -182,25 +182,15 @@ async fn list_dir_y_stat_leen_sin_scope() {
     let d = spawn_daemon_allow().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/a.txt", b"hola").await;
-    let mut b = Bridge::connect(&d.socket, "claude").await.expect("connect");
+    let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
 
-    let (out, err) = call_tool(
-        &mut b,
-        "list_dir",
-        serde_json::json!({"path": "mem:///proj"}),
-    )
-    .await;
+    let (out, err) = call_tool(&b, "list_dir", serde_json::json!({"path": "mem:///proj"})).await;
     assert!(!err, "{out}");
     let v: serde_json::Value = serde_json::from_str(&out).expect("payload json");
     assert_eq!(v["entries"][0]["path"], "mem:///proj/a.txt");
     assert_eq!(v["entries"][0]["kind"], "file");
 
-    let (out, err) = call_tool(
-        &mut b,
-        "stat",
-        serde_json::json!({"path": "mem:///proj/a.txt"}),
-    )
-    .await;
+    let (out, err) = call_tool(&b, "stat", serde_json::json!({"path": "mem:///proj/a.txt"})).await;
     assert!(!err, "{out}");
     let v: serde_json::Value = serde_json::from_str(&out).expect("payload json");
     assert_eq!(v["size"], 4);
@@ -212,10 +202,10 @@ async fn read_file_texto_y_binario_fiel() {
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/texto.txt", b"hola \xc3\xb1").await;
     write_file(&d.mem, "mem:///proj/crudo.bin", &[0x68, 0xE9, 0x00, 0xFF]).await;
-    let mut b = Bridge::connect(&d.socket, "claude").await.expect("connect");
+    let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
 
     let (out, err) = call_tool(
-        &mut b,
+        &b,
         "read_file",
         serde_json::json!({"path": "mem:///proj/texto.txt"}),
     )
@@ -227,7 +217,7 @@ async fn read_file_texto_y_binario_fiel() {
     assert_eq!(v["eof"], true);
 
     let (out, err) = call_tool(
-        &mut b,
+        &b,
         "read_file",
         serde_json::json!({"path": "mem:///proj/crudo.bin"}),
     )
@@ -246,11 +236,11 @@ async fn copy_con_scope_completa_y_fuera_de_scope_es_accionable() {
     let d = spawn_daemon_allow().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
-    let mut b = Bridge::connect(&d.socket, "claude").await.expect("connect");
+    let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
 
     // Sin scope: el error de tool es ACCIONABLE (menciona request_scope).
     let (out, err) = call_tool(
-        &mut b,
+        &b,
         "copy",
         serde_json::json!({"from": "mem:///proj/src.txt", "to": "mem:///proj/dst.txt"}),
     )
@@ -264,7 +254,7 @@ async fn copy_con_scope_completa_y_fuera_de_scope_es_accionable() {
     // Con scope: completa y el archivo existe.
     grant_proj(&d, "claude");
     let (out, err) = call_tool(
-        &mut b,
+        &b,
         "copy",
         serde_json::json!({"from": "mem:///proj/src.txt", "to": "mem:///proj/dst.txt"}),
     )
@@ -276,12 +266,7 @@ async fn copy_con_scope_completa_y_fuera_de_scope_es_accionable() {
 
     // task_status del task recién terminado (retenido en recientes).
     let task_id = v["task_id"].as_u64().expect("task_id");
-    let (out, err) = call_tool(
-        &mut b,
-        "task_status",
-        serde_json::json!({"task_id": task_id}),
-    )
-    .await;
+    let (out, err) = call_tool(&b, "task_status", serde_json::json!({"task_id": task_id})).await;
     assert!(!err, "{out}");
     let v: serde_json::Value = serde_json::from_str(&out).expect("payload");
     assert_eq!(v["state"], "completed");
@@ -293,13 +278,13 @@ async fn delete_default_trash_y_permanent_explicito() {
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/victima.txt", b"x").await;
     grant_proj(&d, "claude");
-    let mut b = Bridge::connect(&d.socket, "claude").await.expect("connect");
+    let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
 
     // Default trash: la papelera lógica del testkit lo acepta — completa y
     // la víctima desaparece de la vista (RECUPERABLE: el journal registra
     // Trashed con destino; el undo de M3-2 restaura desde ahí).
     let (out, err) = call_tool(
-        &mut b,
+        &b,
         "delete",
         serde_json::json!({"path": "mem:///proj/victima.txt"}),
     )
@@ -316,7 +301,7 @@ async fn delete_default_trash_y_permanent_explicito() {
     // con la policy de ejemplo esto sería un ask/deny).
     write_file(&d.mem, "mem:///proj/victima2.txt", b"x").await;
     let (out, err) = call_tool(
-        &mut b,
+        &b,
         "delete",
         serde_json::json!({"path": "mem:///proj/victima2.txt", "mode": "permanent"}),
     )
@@ -331,7 +316,7 @@ async fn delete_default_trash_y_permanent_explicito() {
 
     // Modo inventado → error de tool, sin llamar al daemon.
     let (out, err) = call_tool(
-        &mut b,
+        &b,
         "delete",
         serde_json::json!({"path": "mem:///proj/x", "mode": "shred"}),
     )
@@ -343,9 +328,9 @@ async fn delete_default_trash_y_permanent_explicito() {
 #[tokio::test]
 async fn request_scope_devuelve_id_y_hint_humano() {
     let d = spawn_daemon_allow().await;
-    let mut b = Bridge::connect(&d.socket, "claude").await.expect("connect");
+    let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
     let (out, err) = call_tool(
-        &mut b,
+        &b,
         "request_scope",
         serde_json::json!({"roots": ["mem:///proj"], "ops": ["copy"], "ttl_ms": 60000}),
     )
@@ -365,17 +350,12 @@ async fn request_scope_devuelve_id_y_hint_humano() {
 #[tokio::test]
 async fn vpath_invalido_es_error_de_tool_local() {
     let d = spawn_daemon_allow().await;
-    let mut b = Bridge::connect(&d.socket, "claude").await.expect("connect");
-    let (out, err) = call_tool(
-        &mut b,
-        "stat",
-        serde_json::json!({"path": "no-es-un-vpath"}),
-    )
-    .await;
+    let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
+    let (out, err) = call_tool(&b, "stat", serde_json::json!({"path": "no-es-un-vpath"})).await;
     assert!(err);
     assert!(out.contains("invalid VPath"), "{out}");
     // Tool desconocida → error de tool (no de protocolo).
-    let (out, err) = call_tool(&mut b, "write_file", serde_json::json!({})).await;
+    let (out, err) = call_tool(&b, "write_file", serde_json::json!({})).await;
     assert!(err);
     assert!(out.contains("unknown tool"), "{out}");
 }
@@ -397,10 +377,10 @@ async fn move_renombra_dentro_del_scope() {
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/viejo.txt", b"hola").await;
     grant_proj(&d, "claude");
-    let mut b = Bridge::connect(&d.socket, "claude").await.expect("connect");
+    let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
 
     let (out, err) = call_tool(
-        &mut b,
+        &b,
         "move",
         serde_json::json!({"from": "mem:///proj/viejo.txt", "to": "mem:///proj/nuevo.txt"}),
     )
@@ -428,7 +408,7 @@ async fn nombre_hostil_round_trip_byte_fiel_por_el_puente() {
         "claude",
         Scope::forever(vec![vp("mem:///proj"), vp("mem:///dst")], OpSet::all()),
     );
-    let mut b = Bridge::connect(&d.socket, "claude").await.expect("connect");
+    let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
 
     for n in norte_testkit::corpus::hostile_names() {
         // Origen = BYTES, sin pasar por String en ningún momento.
@@ -441,12 +421,8 @@ async fn nombre_hostil_round_trip_byte_fiel_por_el_puente() {
         sink.commit().await.expect("commit");
 
         // 1) list_dir emite el wire form fiel (nunca U+FFFD).
-        let (out, err) = call_tool(
-            &mut b,
-            "list_dir",
-            serde_json::json!({"path": "mem:///proj"}),
-        )
-        .await;
+        let (out, err) =
+            call_tool(&b, "list_dir", serde_json::json!({"path": "mem:///proj"})).await;
         assert!(!err, "{}: {out}", n.id);
         let v: serde_json::Value = serde_json::from_str(&out).expect("payload");
         let wire = v["entries"]
@@ -469,7 +445,7 @@ async fn nombre_hostil_round_trip_byte_fiel_por_el_puente() {
             wire.strip_prefix("mem:///proj/").expect("hijo de proj")
         );
         let (out, err) = call_tool(
-            &mut b,
+            &b,
             "copy",
             serde_json::json!({"from": wire, "to": dst_wire}),
         )
@@ -501,9 +477,9 @@ async fn read_file_frontera_multibyte_cae_a_base64_fiel() {
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     // "año…": offset=1,len=1 corta la ñ (0xC3 0xB1) → chunk [0xC3].
     write_file(&d.mem, "mem:///proj/texto.txt", "año 2026\n".as_bytes()).await;
-    let mut b = Bridge::connect(&d.socket, "claude").await.expect("connect");
+    let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
     let (out, err) = call_tool(
-        &mut b,
+        &b,
         "read_file",
         serde_json::json!({"path": "mem:///proj/texto.txt", "offset": 1, "len": 1}),
     )
@@ -525,11 +501,11 @@ async fn args_mal_tipados_son_error_no_degradacion() {
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/f.txt", b"x").await;
     grant_proj(&d, "claude");
-    let mut b = Bridge::connect(&d.socket, "claude").await.expect("connect");
+    let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
 
     // mode numérico: NO cae a trash en silencio.
     let (out, err) = call_tool(
-        &mut b,
+        &b,
         "delete",
         serde_json::json!({"path": "mem:///proj/f.txt", "mode": 123}),
     )
@@ -543,7 +519,7 @@ async fn args_mal_tipados_son_error_no_degradacion() {
 
     // offset float: NO lee desde 0 fingiendo aplicarlo.
     let (out, err) = call_tool(
-        &mut b,
+        &b,
         "read_file",
         serde_json::json!({"path": "mem:///proj/f.txt", "offset": 2.5}),
     )
@@ -553,7 +529,7 @@ async fn args_mal_tipados_son_error_no_degradacion() {
 
     // limit string: error, no ignorado.
     let (out, err) = call_tool(
-        &mut b,
+        &b,
         "list_dir",
         serde_json::json!({"path": "mem:///proj", "limit": "muchos"}),
     )

@@ -29,7 +29,7 @@ async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
 }
 
 /// `tools/call` por el puente → `(texto, is_error)`.
-async fn call_tool(b: &mut Bridge, name: &str, args: serde_json::Value) -> (String, bool) {
+async fn call_tool(b: &Bridge, name: &str, args: serde_json::Value) -> (String, bool) {
     let req = serde_json::json!({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": name, "arguments": args},
@@ -135,13 +135,13 @@ async fn criterio_de_salida_m3_agente_bajo_ask_con_undo() {
         .expect("initialize humano");
 
     // --- El AGENTE: puente MCP declarando la sesión ---
-    let mut agent = Bridge::connect(&socket, "claude")
+    let agent = Bridge::connect(&socket, "claude")
         .await
         .expect("connect agente");
 
     // 1) El agente pide scope para su proyecto.
     let (out, err) = call_tool(
-        &mut agent,
+        &agent,
         "request_scope",
         serde_json::json!({"roots": ["mem:///proj"], "ops": ["copy"], "ttl_ms": 60000}),
     )
@@ -164,7 +164,7 @@ async fn criterio_de_salida_m3_agente_bajo_ask_con_undo() {
     //    seguir atendido para aprobar).
     let copy = tokio::spawn(async move {
         let r = call_tool(
-            &mut agent,
+            &agent,
             "copy",
             serde_json::json!({"from": "mem:///proj/informe.txt", "to": "mem:///proj/copia.txt"}),
         )
@@ -195,7 +195,7 @@ async fn criterio_de_salida_m3_agente_bajo_ask_con_undo() {
         .expect("decide approve");
 
     // 5) La copia procede; el destino existe.
-    let (mut agent, (out, err)) = tokio::time::timeout(Duration::from_secs(5), copy)
+    let (agent, (out, err)) = tokio::time::timeout(Duration::from_secs(5), copy)
         .await
         .expect("no cuelga")
         .expect("join");
@@ -233,7 +233,7 @@ async fn criterio_de_salida_m3_agente_bajo_ask_con_undo() {
 
     // 7) Fuera de scope SIGUE cerrado: la concesión no fue un cheque en blanco.
     let (out, err) = call_tool(
-        &mut agent,
+        &agent,
         "copy",
         serde_json::json!({"from": "mem:///proj/informe.txt", "to": "mem:///fuera.txt"}),
     )

@@ -165,12 +165,13 @@ impl DaemonApprovalResolver {
 /// `policy.pending` mostraría para siempre. Tras un `decide` el remove es un
 /// no-op benigno.
 ///
-/// OJO (límite conocido, issue #64): la MUERTE de la conexión peticionaria NO
-/// cancela este future — el dispatch del daemon corre inline y no observa el
-/// EOF mientras el Ask suspende. Una pendiente de un peer muerto vive como
-/// zombi hasta su TTL: `policy.pending` la muestra, y un humano que la aprueba
-/// ejecuta una mutación cuyo resultado cae a una outbox muerta (dirección
-/// segura: lo aprobó un humano informado; jamás se aprueba de más).
+/// La MUERTE de la conexión peticionaria SÍ cancela este future (#64,
+/// resuelto): la lectura del socket vive en su propia task y un EOF/reset
+/// cancela `peer_gone`, dropeando el dispatch suspendido → este guard retira
+/// la pendiente. (Punto ciego residual acotado: si el peer dejó >`INBOX_FRAMES`
+/// frames en vuelo, el reader queda bloqueado en el envío al inbox y no
+/// observa el EOF hasta que el Ask resuelva por TTL — los clientes de norte
+/// son request/response, así que no aplica.)
 ///
 /// [`request`]: ApprovalResolver::request
 struct PendingGuard {
