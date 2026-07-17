@@ -207,7 +207,7 @@ impl ArchiveIndex {
         // build entero se descarta al primer exceso.
         if self.nodes.len() > limits.max_entries {
             tracing::warn!(max = limits.max_entries, "índice supera max_entries");
-            return Err(Error::Io { retryable: false });
+            return Err(Error::Corrupt);
         }
         Ok(())
     }
@@ -348,7 +348,7 @@ mod tests {
         i.insert_entry(b"dos", file_node(), &l).expect("ok");
         assert_eq!(
             i.insert_entry(b"tres", file_node(), &l).unwrap_err(),
-            Error::Io { retryable: false }
+            Error::Corrupt
         );
     }
 

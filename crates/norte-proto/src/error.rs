@@ -135,6 +135,16 @@ pub enum Error {
     /// de la spec §17.9; issue #31). Un cliente N-1 degrada a `Unknown`.
     #[error("symlink loop")]
     Loop,
+    /// Contenedor/formato ROTO o fuera de los límites estructurales (0.17.0,
+    /// #58): un zip/tar corrupto o truncado, o uno que excede los topes
+    /// anti-bomba del índice (ADR 0018 D2) — en este último caso el
+    /// contenedor puede ser VÁLIDO: norte rehúsa indexarlo por límites
+    /// locales. No es un fallo de I/O (reintentar no ayuda; un fallo del
+    /// provider subyacente se propaga con su propia categoría, jamás como
+    /// `Corrupt`); la UX honesta es «no es un contenedor válido». Un cliente
+    /// N-1 degrada a `Unknown`.
+    #[error("corrupt or invalid container/format")]
+    Corrupt,
     /// Host key SSH DESCONOCIDA en el primer contacto (TOFU — ADR 0015 D). El
     /// frontend muestra el `fingerprint` y, si el usuario confía, llama a
     /// `connection.trust_host_key` y reintenta. Un cliente N-1 degrada a

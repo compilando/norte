@@ -382,7 +382,7 @@ impl Provider for ArchiveProvider {
         let node = index.nodes.get(&key).ok_or(Error::NotFound)?;
         match (&node.kind, &node.link_target) {
             (EntryKind::Symlink, Some(target)) => Ok(target.clone()),
-            (EntryKind::Symlink, None) => Err(Error::Io { retryable: false }),
+            (EntryKind::Symlink, None) => Err(Error::Corrupt),
             _ => Err(Error::Conflict {
                 conflict: ConflictKind::TypeMismatch,
             }),

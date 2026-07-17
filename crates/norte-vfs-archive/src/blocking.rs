@@ -114,6 +114,15 @@ impl Seek for ProviderReader {
     }
 }
 
+/// Recupera el [`norte_proto::Error`] del provider INTERIOR si este
+/// `io::Error` lo envuelve ([`ProviderReader::fetch_block`] lo mete en
+/// `io::Error::other`): un corte de red a mitad de parseo es IO genuino del
+/// interior y DEBE propagarse verbatim — `Corrupt` queda reservado para el
+/// formato roto de verdad (#58).
+pub(crate) fn inner_proto_error(e: &std::io::Error) -> Option<norte_proto::Error> {
+    e.get_ref()?.downcast_ref::<norte_proto::Error>().cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -69,7 +69,12 @@ use crate::{
 /// 0.16.0 (#71): `policy.undo_report` — informe de una Task de undo (qué se
 /// deshizo, qué se saltó y por qué, dónde se bloqueó el LIFO): el humano que
 /// deshace deja de recibir un «done» a ciegas. Aditivo sobre 0.15.x.
-pub const PROTOCOL_VERSION: &str = "0.16.0";
+///
+/// 0.17.0 (#58): `Error::Corrupt` — contenedor/formato roto o fuera de los
+/// límites anti-bomba (antes se forzaba a `Io{retryable:false}`, ADR 0018
+/// D2): UX honesta («no es un zip válido») y telemetría. Aditivo sobre
+/// 0.16.x (un cliente N-1 degrada el kind a `Unknown`).
+pub const PROTOCOL_VERSION: &str = "0.17.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver

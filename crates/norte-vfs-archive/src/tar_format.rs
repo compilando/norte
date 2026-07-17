@@ -70,7 +70,7 @@ pub(crate) fn build_index<R: Read + Seek>(
                     // Con seek los datos no se leen: un tar truncado se
                     // detecta validando el locator, no tropezando con EOF.
                     tracing::warn!("tar truncado: entrada promete datos más allá del contenedor");
-                    return Err(Error::Io { retryable: false });
+                    return Err(Error::Corrupt);
                 }
                 Node {
                     kind: EntryKind::File,
@@ -99,7 +99,7 @@ pub(crate) fn build_index<R: Read + Seek>(
                 max = limits.max_entries,
                 "tar supera el presupuesto de omitidas"
             );
-            return Err(Error::Io { retryable: false });
+            return Err(Error::Corrupt);
         }
     }
     if index.skipped > 0 {
@@ -112,8 +112,13 @@ pub(crate) fn build_index<R: Read + Seek>(
 }
 
 fn corrupt(e: &std::io::Error) -> Error {
+    // IO genuino del provider interior (corte de red a mitad de parseo):
+    // se propaga VERBATIM, jamás se disfraza de Corrupt (#58).
+    if let Some(inner) = crate::blocking::inner_proto_error(e) {
+        return inner;
+    }
     tracing::warn!(error = %e, "tar corrupto o ilegible");
-    Error::Io { retryable: false }
+    Error::Corrupt
 }
 
 #[cfg(test)]
@@ -147,7 +152,7 @@ mod tests {
 
     /// Un locator que promete datos fuera del contenedor = truncado.
     #[test]
-    fn locator_fuera_del_contenedor_es_io() {
+    fn locator_fuera_del_contenedor_es_corrupt() {
         let bytes = norte_testkit::TarSmith::new()
             .file(b"grande.bin", &[7u8; 2000])
             .build();
@@ -161,6 +166,6 @@ mod tests {
             &limits(),
             &cancel,
         );
-        assert_eq!(got.map(|_| ()).unwrap_err(), Error::Io { retryable: false });
+        assert_eq!(got.map(|_| ()).unwrap_err(), Error::Corrupt);
     }
 }

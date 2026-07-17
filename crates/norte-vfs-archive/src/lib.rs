@@ -23,7 +23,7 @@
 //! - **Rename atómico / trash / paths máximos**: no aplica — `READ_ONLY`;
 //!   toda mutación responde [`Error::Unsupported`](norte_proto::Error).
 //! - **Anti-bomba**: [`Limits`] acota entradas/nombre/profundidad del
-//!   índice; superarlos es `Io { retryable: false }`.
+//!   índice; superarlos es `Corrupt`.
 //! - **Caché**: índice por archivo (LRU cap 8), invalidado por
 //!   `(mtime_ms, size)` del contenedor; `mtime` desconocido = siempre stale.
 #![forbid(unsafe_code)]

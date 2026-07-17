@@ -57,6 +57,9 @@
     "kind": "io",
     "retryable": true
   },
+  "corrupt": {
+    "kind": "corrupt"
+  },
   "loop": {
     "kind": "loop"
   },

@@ -90,7 +90,7 @@ pub(crate) fn build_index<R: Read + Seek>(
         && claimed > limits.max_entries as u64
     {
         tracing::warn!(claimed, max = limits.max_entries, "EOCD supera max_entries");
-        return Err(Error::Io { retryable: false });
+        return Err(Error::Corrupt);
     }
     let mut archive = zip::ZipArchive::new(reader).map_err(|e| corrupt(&e))?;
     if archive.len() > limits.max_entries {
@@ -100,7 +100,7 @@ pub(crate) fn build_index<R: Read + Seek>(
             max = limits.max_entries,
             "zip supera max_entries"
         );
-        return Err(Error::Io { retryable: false });
+        return Err(Error::Corrupt);
     }
     let mut index = ArchiveIndex::new(generation);
     // Mitigación H1 (auditoría 8e): zip 5.x indexa el central directory por
@@ -156,7 +156,7 @@ pub(crate) fn build_index<R: Read + Seek>(
                 max = limits.max_entries,
                 "zip supera el presupuesto de omitidas"
             );
-            return Err(Error::Io { retryable: false });
+            return Err(Error::Corrupt);
         }
     }
     if index.skipped > 0 {
@@ -225,11 +225,21 @@ pub(crate) fn read_entry<R: Read + Seek>(
 }
 
 fn corrupt(e: &zip::result::ZipError) -> Error {
+    // El brazo Io puede envolver un fallo del provider interior: delega en
+    // el mismo criterio que `corrupt_io` (#58).
+    if let zip::result::ZipError::Io(io) = e {
+        return corrupt_io(io);
+    }
     tracing::warn!(error = %e, "zip corrupto o ilegible");
-    Error::Io { retryable: false }
+    Error::Corrupt
 }
 
 fn corrupt_io(e: &std::io::Error) -> Error {
+    // IO genuino del provider interior (corte de red a mitad de parseo):
+    // se propaga VERBATIM, jamás se disfraza de Corrupt (#58).
+    if let Some(inner) = crate::blocking::inner_proto_error(e) {
+        return inner;
+    }
     tracing::warn!(error = %e, "error de IO leyendo entrada zip");
-    Error::Io { retryable: false }
+    Error::Corrupt
 }

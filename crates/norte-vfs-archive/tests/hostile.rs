@@ -58,22 +58,22 @@ fn seg(b: &[u8]) -> Segment {
 }
 
 #[tokio::test]
-async fn tar_truncado_es_io_no_retryable() {
+async fn tar_truncado_es_corrupt() {
     let mut tar = TarSmith::new().file(b"grande.bin", &[7u8; 2000]).build();
     tar.truncate(700); // corta a mitad de los datos + sin bloques de cierre
     let (p, root) = common::tar_provider(&tar).await;
     match p.list(&root).await.map(|_| ()) {
-        Err(Error::Io { retryable: false }) => {}
-        other => panic!("esperaba Io no-retryable, fue {other:?}"),
+        Err(Error::Corrupt) => {}
+        other => panic!("esperaba Corrupt, fue {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn basura_no_tar_es_io() {
+async fn basura_no_tar_es_corrupt() {
     let (p, root) = common::tar_provider(b"esto no es un tar\x00\x01").await;
     match p.list(&root).await.map(|_| ()) {
-        Err(Error::Io { retryable: false }) => {}
-        other => panic!("esperaba Io, fue {other:?}"),
+        Err(Error::Corrupt) => {}
+        other => panic!("esperaba Corrupt, fue {other:?}"),
     }
 }
 
@@ -91,8 +91,8 @@ async fn max_entries_corta_el_indexado() {
     };
     let (p, root) = common::tar_provider_with_limits(&tar, limits).await;
     match p.list(&root).await.map(|_| ()) {
-        Err(Error::Io { retryable: false }) => {}
-        other => panic!("esperaba Io por bomba de entradas, fue {other:?}"),
+        Err(Error::Corrupt) => {}
+        other => panic!("esperaba Corrupt por bomba de entradas, fue {other:?}"),
     }
 }
 
@@ -250,4 +250,27 @@ async fn tipos_raros_se_listan_como_other_sin_read() {
         list_names(&p, &root).await,
         vec![b"d".to_vec(), b"s".to_vec()]
     );
+}
+
+/// #58: un fallo del provider INTERIOR (corte de red a mitad de indexado) es
+/// IO genuino y se propaga VERBATIM — jamás se disfraza de «tar corrupto».
+/// `Corrupt` queda reservado para el formato roto de verdad.
+#[tokio::test]
+async fn fallo_del_provider_interior_no_se_disfraza_de_corrupt() {
+    let tar = TarSmith::new().file(b"ok.txt", b"bien").build();
+    let (mem, path) = common::seed_container(b"fixture.tar", &tar).await;
+    let faults = mem.faults();
+    let root = VPath::archive_compose("tar", &path, &[]).expect("compose");
+    let p = ArchiveProvider::with_limits(mem, Format::Tar, "tar+mem", Limits::default());
+    // El corte llega a MITAD del parseo (tras las ops previas del índice:
+    // stat de generación + primeras lecturas), no antes: es el camino que
+    // atraviesa los helpers `corrupt()` del formato.
+    for n in 0..8u64 {
+        faults.clear();
+        faults.disconnect_after(n);
+        match p.list(&root).await.map(|_| ()) {
+            Err(Error::ProviderUnavailable { retryable: true }) | Ok(()) => {}
+            other => panic!("con disconnect_after({n}) el IO del interior se disfrazó: {other:?}"),
+        }
+    }
 }

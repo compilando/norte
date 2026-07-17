@@ -130,8 +130,8 @@ async fn eocd_mentiroso_corta_sin_pagar_el_indice() {
     };
     let (p, root) = common::zip_provider_with_limits(&zip, limits).await;
     match p.list(&root).await.map(|_| ()) {
-        Err(Error::Io { retryable: false }) => {}
-        other => panic!("esperaba Io por EOCD mentiroso, fue {other:?}"),
+        Err(Error::Corrupt) => {}
+        other => panic!("esperaba Corrupt por EOCD mentiroso, fue {other:?}"),
     }
 }
 
@@ -143,14 +143,14 @@ async fn zip_vacio_y_basura() {
     // Basura sin EOCD: Io.
     let (p, root) = common::zip_provider(b"no soy un zip").await;
     match p.list(&root).await.map(|_| ()) {
-        Err(Error::Io { retryable: false }) => {}
-        other => panic!("esperaba Io, fue {other:?}"),
+        Err(Error::Corrupt) => {}
+        other => panic!("esperaba Corrupt, fue {other:?}"),
     }
     // Contenedor de 0 bytes: Io.
     let (p, root) = common::zip_provider(b"").await;
     match p.list(&root).await.map(|_| ()) {
-        Err(Error::Io { retryable: false }) => {}
-        other => panic!("esperaba Io con 0 bytes, fue {other:?}"),
+        Err(Error::Corrupt) => {}
+        other => panic!("esperaba Corrupt con 0 bytes, fue {other:?}"),
     }
 }
 

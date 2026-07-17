@@ -198,6 +198,7 @@ fn golden_error() {
             ("not_found", Error::NotFound),
             ("permission_denied", Error::PermissionDenied),
             ("loop", Error::Loop),
+            ("corrupt", Error::Corrupt),
             (
                 "conflict_exists",
                 Error::Conflict {
@@ -1024,8 +1025,8 @@ fn method_names_frozen() {
     assert_eq!(methods::PLUGIN_PREVIEW, "plugin.preview");
     assert_eq!(methods::FS_READ_MAX_CHUNK, 8 * 1024 * 1024);
     assert_eq!(methods::FS_LIST_MAX_PAGE, 10_000);
-    // 0.16.0: policy.undo_report (#71). Aditivo sobre 0.15.x.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.16.0");
+    // 0.17.0: Error::Corrupt (#58). Aditivo sobre 0.16.x.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.17.0");
 }
 
 #[test]
