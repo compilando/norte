@@ -421,4 +421,40 @@ mod tests {
             "el detalle del fallo queda para la barra"
         );
     }
+
+    /// Regresión (re-review de la task 7): si el caller (T8 o cualquier
+    /// futuro) crea un `CommandRun` y lo dropea SIN pollearlo ni una vez, el
+    /// cuerpo de la `async fn run_command` JAMÁS empieza a ejecutarse — así
+    /// que ningún guard interno de esa función corre nunca. Si `run_active`
+    /// dependiera de un guard construido DENTRO del future, quedaría
+    /// atascado en `true` para siempre (la barra congelada hasta el próximo
+    /// hot-reload). `CommandRun` debe apagarlo estructuralmente en su propio
+    /// `Drop`, sin depender de que se pollee.
+    #[tokio::test]
+    async fn command_run_dropeado_sin_pollear_no_congela_la_statusbar() {
+        let (backend, _mem) = backend_con_origen().await;
+        let h = LuaHost::new().unwrap();
+        h.eval_layer(
+            b"norte.ui.statusbar(function() return 'ok' end)\n\
+              norte.command('loop', function() while true do end end)",
+            Layer::User,
+        )
+        .unwrap();
+
+        let run = h
+            .invoke(
+                "loop",
+                backend,
+                ctx_mem(),
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .expect("existe");
+        drop(run); // JAMÁS polleado: el cuerpo de la async fn nunca corrió.
+
+        assert_eq!(
+            h.statusbar(&input()).as_deref(),
+            Some("ok"),
+            "un CommandRun dropeado sin pollear no debe dejar run_active atascado"
+        );
+    }
 }

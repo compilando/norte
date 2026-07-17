@@ -67,13 +67,42 @@ pub enum RunOutcome {
 
 /// Future de un run de comando (!Send: mlua vive en el main task). Se
 /// obtiene de [`LuaHost::invoke`] y el main loop lo pollea inline.
-pub struct CommandRun(Pin<Box<dyn Future<Output = RunOutcome>>>);
+///
+/// Lleva `run_active` como VALOR (no solo dentro del future que envuelve):
+/// `CommandRun` existe desde el instante en que `invoke_with_timeout` lo
+/// devuelve, se pollee alguna vez o no. Su [`Drop`] es la ÚNICA fuente de
+/// verdad que apaga `run_active` — ver ahí el porqué (spec-review 2, task
+/// 7): un guard construido DENTRO del future (como `RunGuard`, más abajo)
+/// JAMÁS correría si el caller crea el `CommandRun` y lo dropea sin pollear
+/// ni una vez (el cuerpo de una `async fn` no ejecuta nada hasta el primer
+/// poll) — `run_active` quedaría atascado en `true` y la barra congelada
+/// hasta el próximo hot-reload. Con el flag en el propio tipo, ese camino es
+/// estructuralmente imposible: no depende de la disciplina del caller (T8)
+/// de pollear hasta el final.
+pub struct CommandRun {
+    future: Pin<Box<dyn Future<Output = RunOutcome>>>,
+    run_active: Rc<Cell<bool>>,
+}
 
 impl Future for CommandRun {
     type Output = RunOutcome;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<RunOutcome> {
-        self.0.as_mut().poll(cx)
+        self.future.as_mut().poll(cx)
+    }
+}
+
+impl Drop for CommandRun {
+    fn drop(&mut self) {
+        // Cubre los TRES caminos: polleado hasta un desenlace terminal,
+        // abandonado a medias (drop de un future `Pending`), o jamás
+        // polleado (drop inmediato tras `invoke_with_timeout`, sin await
+        // alguno — el cuerpo de `run_command` nunca llegó a ejecutarse, así
+        // que ningún `RunGuard` interno corrió). `Cell::set(false)` es
+        // idempotente: si el run nunca se encendió (camino de error de
+        // `install_fs`) o si ya se apagó por otra vía, este `set` no hace
+        // daño.
+        self.run_active.set(false);
     }
 }
 
@@ -84,31 +113,24 @@ impl Future for CommandRun {
 ///   compartida; limpiarla evita que sobreviva al run (el estado Lua es
 ///   COMPARTIDO entre runs y con el statusbar);
 /// - cierra el run (`closed = true`): los bindings fs stasheados mueren;
-/// - apaga `run_active` (task 7, spec-review): mientras esté encendido,
-///   `LuaHost::statusbar` se niega a tocar Lua — la ranura de hook de mlua
-///   es ÚNICA por instancia (`ExtraData::hook_callback`/`hook_thread`,
-///   compartida entre el estado principal y TODAS las corrutinas, pese a
-///   que `Lua::set_hook`/`Thread::set_hook` parezcan independientes); si el
-///   statusbar llamara `set_hook`/`remove_hook` con este run vivo, el
-///   trampolín en C del hook de cancelación de ABAJO se autodesarmaría en
-///   silencio la próxima vez que disparase (mismatch de `hook_thread`) — un
-///   bucle Lua puro quedaría INCANCELABLE. Apagarlo aquí, en el `Drop`,
-///   cubre TODOS los caminos de salida, incluido el abandono;
 /// - cancela los cancellers registrados (doble-cancel inofensivo: token ya
 ///   cancelado o task terminal son no-op; cubre el abandono por timeout,
 ///   donde ninguna otra vía las cancelaría).
+///
+/// NO toca `run_active` (task 7, spec-review 2): esa responsabilidad vive
+/// ahora en el `Drop` de [`CommandRun`] — este guard corre DENTRO del
+/// future, así que un `CommandRun` jamás polleado lo dejaría sin ejecutar
+/// jamás (ver el rustdoc de `CommandRun`).
 struct RunGuard {
     lua: Lua,
     closed: Rc<Cell<bool>>,
     cancellers: RunCancellers,
-    run_active: Rc<Cell<bool>>,
 }
 
 impl Drop for RunGuard {
     fn drop(&mut self) {
         self.lua.remove_hook();
         self.closed.set(true);
-        self.run_active.set(false);
         // Defensivo: un panic en Drop es abort. Hoy ningún borrow de
         // `cancellers` cruza un await (invariant de fs.rs), pero si un
         // cambio futuro lo rompiera y el future se abandonara con el borrow
@@ -129,7 +151,6 @@ struct RunChannels {
     cancellers: RunCancellers,
     messages: Rc<RefCell<Vec<String>>>,
     closed: Rc<Cell<bool>>,
-    run_active: Rc<Cell<bool>>,
 }
 
 impl LuaHost {
@@ -188,36 +209,38 @@ impl LuaHost {
         ) {
             // Instalación a medias: se cierra el run (ningún binding parcial
             // sobrevive) y el run resuelve inmediato a Err — nunca panic. NO
-            // se enciende `run_active`: no hay hook alguno de por medio.
+            // se enciende `run_active`: no hay hook alguno de por medio. El
+            // `CommandRun` igual lo lleva (su `Drop` lo apaga sin efecto: ya
+            // estaba en `false`).
             closed.set(true);
             let detail = e.to_string();
-            return Some(CommandRun(Box::pin(async move {
-                RunOutcome::Err {
-                    detail,
-                    messages: Vec::new(),
-                }
-            })));
+            return Some(CommandRun {
+                future: Box::pin(async move {
+                    RunOutcome::Err {
+                        detail,
+                        messages: Vec::new(),
+                    }
+                }),
+                run_active,
+            });
         }
 
-        // El run arranca AQUÍ, no en el primer poll del `CommandRun`
-        // devuelto (el cuerpo de una `async fn` no corre hasta que se
-        // pollea): el contrato de este módulo (wiring T8) es que todo
-        // `CommandRun` se guarda y se pollea hasta un desenlace terminal —
-        // nunca se crea y se descarta sin pollear. Si eso cambiara, el
-        // `RunGuard` (que solo se construye dentro de `run_command`, en el
-        // primer poll) jamás correría y `run_active` quedaría atascado en
-        // `true`, congelando la barra para siempre.
+        // El run arranca AQUÍ: se enciende ANTES de devolver el valor, y su
+        // apagado vive en el `Drop` de `CommandRun` (no en un guard interno
+        // del future) — así que ni siquiera importa si el caller pollea el
+        // valor devuelto o lo dropea de inmediato (ver el rustdoc de
+        // `CommandRun`).
         run_active.set(true);
 
         let channels = RunChannels {
             cancellers,
             messages,
             closed,
-            run_active,
         };
-        Some(CommandRun(Box::pin(run_command(
-            lua, f, token, timeout, channels,
-        ))))
+        Some(CommandRun {
+            future: Box::pin(run_command(lua, f, token, timeout, channels)),
+            run_active,
+        })
     }
 }
 
@@ -241,17 +264,17 @@ async fn run_command(
         cancellers,
         messages,
         closed,
-        run_active,
     } = channels;
     // El guard vive DENTRO del future: si el driver lo abandona (drop en los
-    // brazos de gracia/deadline… o el caller dropea el CommandRun), el Drop
-    // corre igual y el estado Lua compartido queda limpio (incluido
-    // `run_active`, task 7).
+    // brazos de gracia/deadline… o el caller dropea el CommandRun ya
+    // polleado al menos una vez), el Drop corre igual y el estado Lua
+    // compartido queda limpio. `run_active` NO vive aquí (ver el rustdoc de
+    // `CommandRun`/`RunGuard`) — este guard nunca correría si el
+    // `CommandRun` se dropea sin pollear ni una vez.
     let _guard = RunGuard {
         lua: lua.clone(),
         closed,
         cancellers: Rc::clone(&cancellers),
-        run_active,
     };
 
     let take_messages = || std::mem::take(&mut *messages.borrow_mut());
