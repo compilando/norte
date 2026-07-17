@@ -71,6 +71,12 @@ const MAX_OPEN_LISTINGS: usize = 8;
 /// ENTERO en línea (libera el hilo al instante) en vez de retenerse: bajo
 /// presión del MISMO uid, la paginación degrada a listado-completo, jamás a
 /// agotar el pool. Coste de una llamada lenta, nunca corrupción ni truncado.
+///
+/// INVARIANTE de tuning (#53 M1): este tope debe quedar ≤ la mitad del pool
+/// blocking del runtime (default de tokio: 512) — cada listing retenido de
+/// vfs-local puede parkear UN hilo del pool en `blocking_send`, y el resto
+/// del daemon (sqlx, plugins, fs local) necesita su margen. Si algún día se
+/// sube, o el binario fija `max_blocking_threads`, revisar juntos.
 const GLOBAL_MAX_LISTINGS: usize = 256;
 /// Peticiones de scope PENDIENTES retenidas en TODO el daemon (M3-3b): tope
 /// GLOBAL. Debajo, cada conexión tiene su propio sub-cap

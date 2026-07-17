@@ -2674,3 +2674,62 @@ async fn tasks_vivas_de_agente_no_agotan_el_cupo_del_humano() {
         .await
         .expect("la reserva del humano sobrevive al agente glotón");
 }
+
+/// #53 (M2, regla 3 + DoD): cerrar una conexión con listings retenidos los
+/// SUELTA (RAII: drop de `ConnState` → drop de `OpenListing` → guard
+/// decrementa el tope global y muere el productor). Observable extremo-a-
+/// extremo por la degradación del tope global: saturado, `fs.list` paginado
+/// degrada a listado-completo (`next_cursor=None`); liberado, vuelve a
+/// paginar.
+#[tokio::test]
+async fn cerrar_conexion_libera_sus_listings_retenidos() {
+    let d = spawn_daemon(None).await;
+    for i in 0..3u32 {
+        write_file(&d.mem, &format!("mem:///f{i}.bin"), b"x").await;
+    }
+    let page = |c: &'static str| FsListParams {
+        path: vp(c),
+        limit: Some(1),
+        cursor: None,
+    };
+
+    // Satura el tope GLOBAL (256): 32 conexiones × 8 listings retenidos.
+    let mut hoarders = Vec::new();
+    for _ in 0..32 {
+        let c = connected_client(&d).await;
+        for _ in 0..8 {
+            let r: FsListResult = c
+                .call(methods::FS_LIST, &page("mem:///"))
+                .await
+                .expect("fs.list");
+            assert!(r.next_cursor.is_some(), "retenido (aún bajo el tope)");
+        }
+        hoarders.push(c);
+    }
+    // Saturado: una página nueva DEGRADA a listado-completo (no retiene).
+    let probe = connected_client(&d).await;
+    let r: FsListResult = probe
+        .call(methods::FS_LIST, &page("mem:///"))
+        .await
+        .expect("fs.list degradado");
+    assert!(r.next_cursor.is_none(), "saturado degrada a completo");
+    assert_eq!(r.entries.len(), 3, "degradado = TODO el listado");
+
+    // Cae UNA conexión acaparadora: sus 8 listings deben soltarse (RAII).
+    drop(hoarders.pop());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let r: FsListResult = probe
+            .call(methods::FS_LIST, &page("mem:///"))
+            .await
+            .expect("fs.list tras liberar");
+        if r.next_cursor.is_some() {
+            break; // volvió a paginar: el tope global bajó — liberado.
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "los listings de la conexión muerta no se liberaron"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
