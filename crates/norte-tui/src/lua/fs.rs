@@ -15,7 +15,7 @@
 //! (push y soltar) y jamás se mantienen a través de una llamada a Lua ni de
 //! un `.await` — mismo invariant que el registry de `api.rs`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use mlua::{Lua, MultiValue, Value};
@@ -192,13 +192,18 @@ fn finish(lua: &Lua, state: &TaskState) -> mlua::Result<MultiValue> {
 /// bajo journal/policy/undo y visible (y cancelable a mano) en el panel de
 /// tasks. La reconciliación queda en la issue #74 — aquí solo se documenta.
 ///
-/// **Hazard del stash (responsabilidad del DRIVER, task 5):** un script
-/// puede guardar `norte.fs.copy` en un global y llamarlo en un run
-/// POSTERIOR; esa referencia rancia pushearía cancellers al run viejo y
-/// resolvería relativos contra un `ctx` congelado obsoleto. El driver lo
-/// corta instalando bindings FRESCOS en cada `invoke` (esta función pisa las
-/// tablas) y decidirá en T5 el flag «run cerrado» que invalide las clausuras
-/// capturadas — mismo patrón que `norte.command` en `api.rs`.
+/// **Hazard del stash — CERRADO por el flag `closed`:** un script puede
+/// guardar `norte.fs.copy` en un global y llamarlo en un run POSTERIOR; esa
+/// referencia rancia pushearía cancellers al run viejo y resolvería
+/// relativos contra un `ctx` congelado obsoleto. El driver instala bindings
+/// FRESCOS en cada `invoke` (esta función pisa las tablas) y, además, cada
+/// binding de `norte.fs` comprueba `closed` AL ENTRAR: si el run que lo creó
+/// ya terminó (el driver lo pone a `true` SIEMPRE al salir, guard RAII), el
+/// binding devuelve `nil, err-unsupported` («binding de un run cerrado») —
+/// mismo patrón que la bandera de `norte.command` en `api.rs`. Los bindings
+/// de `norte.pane`/`norte.ui.message` no lo comprueban: son un snapshot
+/// congelado / un acumulador que muere con el run — rancios pero inofensivos
+/// (sin efectos sobre el FS ni sobre los cancellers).
 #[allow(clippy::too_many_lines)] // wiring de bindings uno a uno, sin lógica
 pub(crate) fn install_fs(
     lua: &Lua,
@@ -206,6 +211,7 @@ pub(crate) fn install_fs(
     ctx: PaneCtx,
     cancellers: RunCancellers,
     messages: Rc<RefCell<Vec<String>>>,
+    closed: Rc<Cell<bool>>,
 ) -> mlua::Result<()> {
     let norte: mlua::Table = lua.globals().get("norte")?;
     let fs = lua.create_table()?;
@@ -214,12 +220,18 @@ pub(crate) fn install_fs(
     {
         let backend = backend.clone();
         let cwd = ctx.cwd.clone();
+        let closed = Rc::clone(&closed);
         fs.set(
             "list",
             lua.create_async_function(move |lua, path: mlua::String| {
                 let backend = backend.clone();
                 let cwd = cwd.clone();
+                let closed = Rc::clone(&closed);
                 async move {
+                    // Binding de un run cerrado (stash): muerto, ver rustdoc.
+                    if closed.get() {
+                        return err_mv(&lua, error_key(&Error::Unsupported));
+                    }
                     let dir = match to_vpath(&cwd, &path.as_bytes()) {
                         Ok(p) => p,
                         Err(key) => return err_mv(&lua, key),
@@ -241,12 +253,18 @@ pub(crate) fn install_fs(
     {
         let backend = backend.clone();
         let cwd = ctx.cwd.clone();
+        let closed = Rc::clone(&closed);
         fs.set(
             "stat",
             lua.create_async_function(move |lua, path: mlua::String| {
                 let backend = backend.clone();
                 let cwd = cwd.clone();
+                let closed = Rc::clone(&closed);
                 async move {
+                    // Binding de un run cerrado (stash): muerto, ver rustdoc.
+                    if closed.get() {
+                        return err_mv(&lua, error_key(&Error::Unsupported));
+                    }
                     let p = match to_vpath(&cwd, &path.as_bytes()) {
                         Ok(p) => p,
                         Err(key) => return err_mv(&lua, key),
@@ -265,13 +283,19 @@ pub(crate) fn install_fs(
         let backend = backend.clone();
         let cwd = ctx.cwd.clone();
         let cancellers = Rc::clone(&cancellers);
+        let closed = Rc::clone(&closed);
         fs.set(
             key,
             lua.create_async_function(move |lua, (src, dst): (mlua::String, mlua::String)| {
                 let backend = backend.clone();
                 let cwd = cwd.clone();
                 let cancellers = Rc::clone(&cancellers);
+                let closed = Rc::clone(&closed);
                 async move {
+                    // Binding de un run cerrado (stash): muerto, ver rustdoc.
+                    if closed.get() {
+                        return err_mv(&lua, error_key(&Error::Unsupported));
+                    }
                     let (from, to) = match (
                         to_vpath(&cwd, &src.as_bytes()),
                         to_vpath(&cwd, &dst.as_bytes()),
@@ -302,7 +326,7 @@ pub(crate) fn install_fs(
         )?;
     }
     {
-        // Último uso: `backend` y `cancellers` se MUEVEN a esta clausura.
+        // Último uso: `backend`, `cancellers` y `closed` se MUEVEN aquí.
         let cwd = ctx.cwd.clone();
         fs.set(
             "delete",
@@ -310,7 +334,12 @@ pub(crate) fn install_fs(
                 let backend = backend.clone();
                 let cwd = cwd.clone();
                 let cancellers = Rc::clone(&cancellers);
+                let closed = Rc::clone(&closed);
                 async move {
+                    // Binding de un run cerrado (stash): muerto, ver rustdoc.
+                    if closed.get() {
+                        return err_mv(&lua, error_key(&Error::Unsupported));
+                    }
                     let p = match to_vpath(&cwd, &path.as_bytes()) {
                         Ok(p) => p,
                         Err(key) => return err_mv(&lua, key),
@@ -458,7 +487,15 @@ mod tests {
             current: None,
         };
         let messages: Rc<RefCell<Vec<String>>> = Rc::default();
-        install_fs(&lua, backend, ctx, Rc::default(), Rc::clone(&messages)).unwrap();
+        install_fs(
+            &lua,
+            backend,
+            ctx,
+            Rc::default(),
+            Rc::clone(&messages),
+            Rc::default(),
+        )
+        .unwrap();
 
         lua.load("for i = 1, 100 do norte.ui.message('m' .. i) end")
             .exec()

@@ -286,25 +286,42 @@ impl LuaHost {
     ) -> Result<i64, LuaLoadError> {
         let cancellers: RunCancellers = Rc::default();
         let messages: Rc<RefCell<Vec<String>>> = Rc::default();
-        fs::install_fs(&self.lua, backend, ctx, cancellers, messages)?;
-        let value: mlua::Value = self.lua.load(src).eval_async().await?;
-        Ok(match value {
+        // El helper es un run completo: sus bindings se CIERRAN al terminar
+        // (mismo contrato que `invoke`) — un stash desde aquí también muere.
+        let closed: Rc<Cell<bool>> = Rc::default();
+        fs::install_fs(
+            &self.lua,
+            backend,
+            ctx,
+            cancellers,
+            messages,
+            Rc::clone(&closed),
+        )?;
+        let result: mlua::Result<mlua::Value> = self.lua.load(src).eval_async().await;
+        closed.set(true);
+        Ok(match result? {
             mlua::Value::Integer(i) => i,
             mlua::Value::Boolean(true) => 1,
             _ => 0,
         })
     }
 
-    /// Sólo para tests: recupera la `Function` registrada bajo `name`, si
-    /// existe, para poder invocarla directamente y comprobar su
-    /// comportamiento (p. ej. una clausura capturada de una carga cerrada).
-    #[cfg(test)]
-    fn command_fn(&self, name: &str) -> Option<Function> {
+    /// Recupera la `Function` registrada bajo `name`, si existe. La usa el
+    /// driver (`invoke`) — y los tests, para invocar una clausura capturada
+    /// de una carga cerrada. El borrow del registro se SUELTA antes de
+    /// devolver (invariant: jamás llamar a Lua con el registro prestado).
+    pub(super) fn command_fn(&self, name: &str) -> Option<Function> {
         self.registry
             .borrow()
             .commands
             .get(name)
             .map(|(_, f)| f.clone())
+    }
+
+    /// Handle clonado del estado Lua (mlua es un handle `Rc` barato). Para
+    /// el driver: hook de instrucciones + `install_fs` por invocación.
+    pub(super) fn lua_handle(&self) -> Lua {
+        self.lua.clone()
     }
 }
 
