@@ -215,7 +215,8 @@ impl Backend {
     /// Metadatos de un nodo (`fs.stat`).
     ///
     /// # Errors
-    /// Taxonomía del protocolo.
+    /// Taxonomía del protocolo; con el daemon caído,
+    /// `ProviderUnavailable{retryable:true}`.
     pub async fn stat(&self, path: &VPath) -> Result<Entry, Error> {
         match self {
             Self::Embedded(engine) => engine.stat(path).await,
@@ -747,14 +748,11 @@ pub mod remote {
         /// `own_task` los consulta para no esperar un progreso que ya pasó.
         finished: Mutex<std::collections::VecDeque<TaskProgress>>,
         foreign_tx: mpsc::UnboundedSender<TaskRef>,
-        foreign_rx: Mutex<Option<mpsc::UnboundedReceiver<TaskRef>>>,
         events_tx: mpsc::UnboundedSender<ConnEvent>,
-        events_rx: Mutex<Option<mpsc::UnboundedReceiver<ConnEvent>>>,
         /// Aprobaciones de policy hacia el frontend (M3-3b T5): las notifs
         /// `policy.approval_required` de la bomba + el resync de
         /// `policy.pending` al (re)conectar.
         approvals_tx: mpsc::UnboundedSender<PolicyApprovalRequired>,
-        approvals_rx: Mutex<Option<mpsc::UnboundedReceiver<PolicyApprovalRequired>>>,
         /// `approval_id`s ya entregados al frontend: la entrega del daemon es
         /// at-least-once (broadcast + resync pueden solapar; cada reconexión
         /// re-lista pendientes) y un prompt de SEGURIDAD duplicado confunde
@@ -782,10 +780,37 @@ pub mod remote {
     }
 
     /// Conexión (auto-reconectante) con el daemon. Clonable: todos los
-    /// clones comparten conexión, watches y canales.
-    #[derive(Clone)]
+    /// clones comparten conexión y watches (`inner`), pero los tres canales
+    /// one-shot de abajo son POR INSTANCIA — ver el `impl Clone` manual.
     pub struct RemoteBackend {
         inner: Arc<Inner>,
+        /// Canal de tasks FORÁNEAS. `Some` solo en la instancia que aún no
+        /// lo tomó; un clon nace con `None` (no puede robárselo al dueño).
+        foreign_rx: Mutex<Option<mpsc::UnboundedReceiver<TaskRef>>>,
+        /// Canal de eventos de conexión. Mismo invariante que `foreign_rx`.
+        events_rx: Mutex<Option<mpsc::UnboundedReceiver<ConnEvent>>>,
+        /// Canal de aprobaciones de policy. Mismo invariante que `foreign_rx`.
+        approvals_rx: Mutex<Option<mpsc::UnboundedReceiver<PolicyApprovalRequired>>>,
+    }
+
+    impl Clone for RemoteBackend {
+        /// Clon ESTRUCTURAL (no derive): comparte `inner` (conexión, watches,
+        /// los tres `_tx`) vía `Arc`, pero los tres receptores nacen `None`.
+        /// Antes vivían dentro de `Inner` (compartido) y un clon podía
+        /// `take_*` y robárselos al dueño real (p. ej. la TUI) — el `ask` de
+        /// policy caducaría a `deny` en silencio sin que nadie lo viera
+        /// (MAJOR del rust-reviewer sobre e408373). Los usos INTERNOS que
+        /// clonan `RemoteBackend` (`TaskCanceller::Remote`, `PageState` del
+        /// `list_stream`, etc.) jamás llaman `take_*`, así que `None` es
+        /// también el valor correcto para ellos.
+        fn clone(&self) -> Self {
+            Self {
+                inner: Arc::clone(&self.inner),
+                foreign_rx: Mutex::new(None),
+                events_rx: Mutex::new(None),
+                approvals_rx: Mutex::new(None),
+            }
+        }
     }
 
     impl RemoteBackend {
@@ -812,13 +837,13 @@ pub mod remote {
                     watches: Mutex::new(HashMap::new()),
                     finished: Mutex::new(std::collections::VecDeque::new()),
                     foreign_tx,
-                    foreign_rx: Mutex::new(Some(foreign_rx)),
                     events_tx,
-                    events_rx: Mutex::new(Some(events_rx)),
                     approvals_tx,
-                    approvals_rx: Mutex::new(Some(approvals_rx)),
                     seen_approvals: Mutex::new(std::collections::HashSet::new()),
                 }),
+                foreign_rx: Mutex::new(Some(foreign_rx)),
+                events_rx: Mutex::new(Some(events_rx)),
+                approvals_rx: Mutex::new(Some(approvals_rx)),
             };
             // La 1ª conexión SÍ arranca el daemon (spawn); las reconexiones
             // NO (M3 del rust-reviewer: reconectar jamás debe resucitar un
@@ -1285,26 +1310,17 @@ pub mod remote {
         }
 
         pub(super) fn take_foreign_tasks(&self) -> Option<mpsc::UnboundedReceiver<TaskRef>> {
-            self.inner
-                .foreign_rx
-                .lock()
-                .expect("foreign_rx lock sano")
-                .take()
+            self.foreign_rx.lock().expect("foreign_rx lock sano").take()
         }
 
         pub(super) fn take_conn_events(&self) -> Option<mpsc::UnboundedReceiver<ConnEvent>> {
-            self.inner
-                .events_rx
-                .lock()
-                .expect("events_rx lock sano")
-                .take()
+            self.events_rx.lock().expect("events_rx lock sano").take()
         }
 
         pub(super) fn take_approvals(
             &self,
         ) -> Option<mpsc::UnboundedReceiver<PolicyApprovalRequired>> {
-            self.inner
-                .approvals_rx
+            self.approvals_rx
                 .lock()
                 .expect("approvals_rx lock sano")
                 .take()
@@ -1446,11 +1462,25 @@ pub mod remote {
                     continue;
                 };
                 let Some(inner) = weak.upgrade() else { return };
-                RemoteBackend { inner }.route(snapshot);
+                // Wrapper EFÍMERO solo para reusar `route` (&self) — jamás
+                // llama take_*, así que los tres `None` son correctos.
+                RemoteBackend {
+                    inner,
+                    foreign_rx: Mutex::new(None),
+                    events_rx: Mutex::new(None),
+                    approvals_rx: Mutex::new(None),
+                }
+                .route(snapshot);
             }
             // Conexión muerta. Si ya no queda backend externo, salir.
             let Some(inner) = weak.upgrade() else { return };
-            let backend = RemoteBackend { inner };
+            // Wrapper EFÍMERO (jamás llama take_*): los tres `None` son correctos.
+            let backend = RemoteBackend {
+                inner,
+                foreign_rx: Mutex::new(None),
+                events_rx: Mutex::new(None),
+                approvals_rx: Mutex::new(None),
+            };
             *backend.inner.client.write().await = None;
             let _ = backend.inner.events_tx.send(ConnEvent::Lost);
             drop(backend);
@@ -1463,7 +1493,13 @@ pub mod remote {
                 attempt += 1;
                 tokio::time::sleep(Duration::from_millis(delay)).await;
                 let Some(inner) = weak.upgrade() else { return };
-                let backend = RemoteBackend { inner };
+                // Wrapper EFÍMERO (jamás llama take_*): los tres `None` son correctos.
+                let backend = RemoteBackend {
+                    inner,
+                    foreign_rx: Mutex::new(None),
+                    events_rx: Mutex::new(None),
+                    approvals_rx: Mutex::new(None),
+                };
                 match backend.establish(false).await {
                     Ok(rx) => {
                         let _ = backend.inner.events_tx.send(ConnEvent::Restored);

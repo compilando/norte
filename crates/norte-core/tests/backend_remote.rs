@@ -131,6 +131,31 @@ async fn remote_copy_list_read_capabilities_como_el_embebido() {
         .await
         .expect("capabilities");
     assert!(caps.flags.contains(CapabilityFlags::TRASH));
+
+    // stat (fs.stat, M4 Lua T3)
+    let entry = backend.stat(&vp("mem:///dst.bin")).await.expect("stat");
+    assert_eq!(entry.size, Some(16));
+}
+
+/// Un clon de `Backend::Remote` comparte conexión/watches pero NO puede
+/// robarle al dueño original los canales one-shot (`take_foreign_tasks`,
+/// `take_conn_events`, `take_approvals`): si el clon los tomara, la TUI
+/// dueña se quedaría sin canal y los `ask` de policy caducarían a `deny`
+/// en silencio (MAJOR del rust-reviewer sobre e408373). El orden importa:
+/// el clon intenta robar ANTES que el dueño reclame los suyos.
+#[tokio::test]
+async fn un_clon_no_roba_los_canales_del_dueno() {
+    let d = spawn_daemon().await;
+    let mut backend = Backend::Remote(remote(&d).await);
+    let mut clone = backend.clone();
+
+    assert!(clone.take_foreign_tasks().is_none());
+    assert!(clone.take_conn_events().is_none());
+    assert!(clone.take_approvals().is_none());
+
+    assert!(backend.take_foreign_tasks().is_some());
+    assert!(backend.take_conn_events().is_some());
+    assert!(backend.take_approvals().is_some());
 }
 
 /// Dos frontends, la misma sesión: el backend B ve como FORÁNEA la task
