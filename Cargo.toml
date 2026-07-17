@@ -228,6 +228,13 @@ assert_cmd = "2"
 # presupuestos (cold start <50 ms; 100k listado <200 ms a primer render).
 insta = "1"
 criterion = { version = "0.8", default-features = false }
+# Scripting Lua embebido en el TUI (M4, ADR 0026): mlua con Lua 5.4 VENDORIZADO
+# (C propio, sin depender del liblua del sistema) + `async` (corrutinas
+# polleadas inline en el loop del TUI, los futures de mlua son !Send) +
+# `serialize` (paso de tablas Lua <-> serde para la API `norte.*`). Alternativa
+# evaluada: crate `norte-lua` aparte (circularidad con tipos del App hoy) y
+# Lua en el core (contradice spec §7.2, scripting de usuario en el daemon).
+mlua = { version = "0.10", features = ["lua54", "vendored", "async", "serialize"] }
 
 [workspace.lints.rust]
 missing_docs = "warn"

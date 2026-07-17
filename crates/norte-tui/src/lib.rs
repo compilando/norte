@@ -7,6 +7,7 @@ pub mod app;
 pub mod config;
 pub mod help;
 pub mod keymap;
+pub mod lua;
 pub mod tasks;
 pub mod theme;
 pub mod ui;

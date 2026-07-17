@@ -16,6 +16,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 crossterm = { workspace = true, features = ["event-stream"] }
 futures.workspace = true
+mlua.workspace = true
 norte-core.workspace = true
 norte-encoding.workspace = true
 norte-i18n.workspace = true
