@@ -88,12 +88,18 @@ async fn invoke_desconocido_es_none() {
 async fn cancelar_mata_el_script_y_sus_tasks() {
     let (backend, mem) = backend_mem();
     write_file(&mem, "mem:///a", b"x").await;
+    // Frente 1 de verdad: con latencia por operación, la Task de copia sigue
+    // EN VUELO cuando llega el cancel (sin latencia completaría en
+    // microsegundos y el canceller cancelaría una task ya terminal).
+    mem.faults()
+        .set_latency_per_op(Some(Duration::from_millis(200)));
     let h = LuaHost::new().expect("lua");
-    // Script que copia y luego SE QUEDA en bucle Lua puro (sin puntos await):
-    // el token debe matarlo vía hook de instrucciones, no solo por await.
+    // El copy devuelve nil (cancelado) → el script cae al bucle Lua puro
+    // (sin puntos await): el token debe matarlo vía hook de instrucciones,
+    // no solo por await. Un solo run ejercita AMBOS frentes.
     h.eval_layer(
         b"norte.command('loop', function()\n\
-            assert(norte.fs.copy('mem:///a', 'mem:///b'))\n\
+            local ok = norte.fs.copy('mem:///a', 'mem:///b')\n\
             while true do end\n\
           end)",
         Layer::User,
@@ -109,6 +115,16 @@ async fn cancelar_mata_el_script_y_sus_tasks() {
     };
     let (outcome, ()) = tokio::join!(run, cancel);
     assert!(matches!(outcome, RunOutcome::Cancelled), "{outcome:?}");
+
+    // Frente 1 verificado: la Task de copia murió cancelada ANTES de
+    // completar — el destino no existe (con ~200ms/op y cancel a los 100ms,
+    // el commit no pudo ocurrir; si el canceller no funcionara, la copia
+    // completaría y `mem:///b` existiría).
+    mem.faults().clear();
+    assert!(
+        backend.stat(&vp("mem:///b")).await.is_err(),
+        "la Task en vuelo debía morir cancelada, no completar"
+    );
 
     // El hook de instrucciones NO puede quedar puesto: el estado Lua es
     // compartido y un run posterior debe funcionar con normalidad.

@@ -97,8 +97,15 @@ impl Drop for RunGuard {
     fn drop(&mut self) {
         self.lua.remove_hook();
         self.closed.set(true);
-        for c in self.cancellers.borrow().iter() {
-            c.cancel();
+        // Defensivo: un panic en Drop es abort. Hoy ningún borrow de
+        // `cancellers` cruza un await (invariant de fs.rs), pero si un
+        // cambio futuro lo rompiera y el future se abandonara con el borrow
+        // vivo, este Drop NO debe rematar el proceso — mejor saltarse el
+        // doble-cancel (best-effort) que abortar.
+        if let Ok(cs) = self.cancellers.try_borrow() {
+            for c in cs.iter() {
+                c.cancel();
+            }
         }
     }
 }
@@ -271,8 +278,19 @@ async fn run_command(
             // el call en vuelo (drop al salir; un submit remoto puede quedar
             // sin canceller — deuda #74).
             () = &mut grace, if cancel_requested => break RunOutcome::Cancelled,
-            // Timeout duro: ABANDONA igual (deuda #74 ídem).
-            () = &mut deadline => break RunOutcome::TimedOut,
+            // Timeout duro: ABANDONA igual (deuda #74 ídem). Si el usuario
+            // ya había cancelado (cancel en t≈timeout, con la gracia aún
+            // corriendo), el desenlace honesto es Cancelled, no TimedOut —
+            // quien canceló no debe ver «se agotó el tiempo». La carrera es
+            // difícil de forzar en test sin un script clavado en C (el hook
+            // mata bucles Lua puros en microsegundos): solo el fix.
+            () = &mut deadline => {
+                break if cancel_requested {
+                    RunOutcome::Cancelled
+                } else {
+                    RunOutcome::TimedOut
+                };
+            }
         }
     }
     // El guard limpia (remove_hook + closed + cancel) también en este camino.
