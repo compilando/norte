@@ -227,6 +227,42 @@ fn comando_desconocido_es_error_de_carga() {
     }
 }
 
+/// M4 Lua (T8): un binding a `lua:<nombre>` pasa la validación aunque el
+/// nombre no esté en COMMANDS — el registro Lua es dinámico (runtime); un
+/// comando lua no registrado NO es error de keymap (al invocar, la barra
+/// avisa con `err-lua-unknown`). El NOMBRE sí se valida con el mismo charset
+/// que `norte.command` (`[a-z0-9._-]{1,64}`): un binding a un nombre que
+/// jamás podría registrarse es config rota diagnosticable, no un binding
+/// muerto en silencio.
+#[test]
+fn lua_prefijado_pasa_la_validacion_de_comandos() {
+    let preset = r#"
+        [pane]
+        keymap = [{ on = ["x"], run = "lua:mi-comando.v2" }]
+    "#;
+    let mut r = Resolver::new(eff(preset, None).expect("lua: con nombre válido pasa"));
+    assert_eq!(
+        r.push(parse_chord("x").unwrap()),
+        Resolution::Run("lua:mi-comando.v2".into()),
+        "el binding resuelve al comando lua: completo"
+    );
+
+    // Nombres fuera del charset [a-z0-9._-]{1,64}: error de CARGA.
+    let largo = format!("lua:{}", "a".repeat(65));
+    for bad in ["lua:", "lua:Mayuscula", "lua:con espacio", largo.as_str()] {
+        let preset = format!(
+            r#"
+            [pane]
+            keymap = [{{ on = ["x"], run = "{bad}" }}]
+            "#
+        );
+        match eff(&preset, None) {
+            Err(KeymapError::UnknownCommand { .. }) => {}
+            other => panic!("esperaba UnknownCommand para {bad:?}, fue {other:?}"),
+        }
+    }
+}
+
 #[test]
 fn capas_yazi_prepend_pisa_y_append_solo_anade() {
     let preset = r#"

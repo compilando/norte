@@ -21,6 +21,8 @@ modal-trust-host-algo = { $badge }algoritmo: { $algo }
 modal-trust-host-fp = { $badge }huella: { $fingerprint }
 modal-trust-host-note = compárala fuera de banda antes de confiar.
 modal-trust-host-keys = [y] confiar y continuar   [n/esc] cancelar
+modal-lua-trust-title = ¿Ejecutar el init.lua del proyecto?
+modal-lua-trust-body = { $path } (sha256 { $hash }) se ejecutará CON TUS PERMISOS. El script de un repo clonado puede hacer todo lo que tú puedas. y = confiar y ejecutar · n/Esc = denegar (se recuerda hasta que el fichero cambie)
 
 # --- Mensajes de la barra ---
 msg-done = hecho
@@ -55,6 +57,13 @@ err-config-io = no se pudo leer { $path }: { $error }
 err-config-parse = TOML inválido en { $path }: { $detail }
 err-keymap-preset-unknown = preset desconocido { $name }; disponibles: { $available }
 err-keymap-invalid = keymap inválido: { $detail }
+# --- Scripting Lua (M4, ADR 0026) — detalles SIEMPRE por detail_for_bar ---
+err-lua-load = init.lua ({ $layer }): { $detail }
+err-lua-unknown = comando Lua desconocido: { $name }
+err-lua-command = el comando Lua falló: { $detail }
+err-lua-cancelled = comando Lua cancelado
+err-lua-timeout = el comando Lua agotó el tiempo
+err-lua-statusbar = statusbar Lua deshabilitada: { $detail }
 # Ya en la cima: no hay directorio padre (raíz `/` o raíz de unidad Windows).
 msg-nav-at-top = ya estás en la cima
 msg-refresh-error = refresh: { $error }
@@ -66,6 +75,9 @@ msg-config-not-applied = config NO aplicada: { $error }
 msg-config-polling = config: vigilancia degradada a polling
 msg-no-trash-here = sin papelera aquí: F8 de nuevo para permanente
 msg-list-incomplete = listado incompleto: se cortó al rellenar
+msg-lua-busy = ya hay un comando Lua en marcha (encolado)
+msg-lua-denied-changed = el init.lua del proyecto se denegó; ha cambiado (no se carga)
+msg-lua-symlink = el init.lua del proyecto es un symlink; no se carga
 pane-loading = cargando… ({ $n })
 
 # --- Panel de tasks ---

@@ -216,6 +216,16 @@ pub struct App {
     /// Gestor de extensiones abierto (overlay del catálogo, M4-P3): None =
     /// cerrado.
     pub extensions: Option<ExtensionManager>,
+    /// TOFU Lua pendiente (M4, [`Modal::TrustLuaInit`]): path CANÓNICO del
+    /// `init.lua` de proyecto + los BYTES leídos una sola vez. Al resolver
+    /// el modal se registra la decisión y, si se aprueba, se evalúan ESTOS
+    /// bytes — jamás se relee el disco entre el check y el eval
+    /// (anti-TOCTOU).
+    pub lua_pending_trust: Option<(std::path::PathBuf, Vec<u8>)>,
+    /// Salida del hook `norte.ui.statusbar` del `init.lua` activo (M4 Lua),
+    /// YA saneada por el host (`detail_for_bar`). `Some` sustituye la línea
+    /// default de la barra del pane con foco; `None` = barra normal.
+    pub lua_status: Option<String>,
 }
 
 /// Overlay del catálogo de extensiones (M4-P3): la lista de plugins descubierta
@@ -350,6 +360,8 @@ impl App {
             theme: crate::theme::TuiTheme::default(),
             theme_picker: None,
             extensions: None,
+            lua_pending_trust: None,
+            lua_status: None,
         }
     }
 
@@ -559,6 +571,21 @@ pub enum Modal {
         /// La ruta remota a la que reintentar navegar tras confiar.
         dir: VPath,
     },
+    /// TOFU del `./.norte/init.lua` de PROYECTO (M4 Lua, ADR 0026): un repo
+    /// AJENO trae un script que correría con los permisos del usuario —
+    /// primer contacto pregunta. `y` confía y evalúa, `n`/Esc deniegan
+    /// (persistido por (path, hash) hasta que el fichero cambie); Enter NO
+    /// aprueba (decisión de seguridad, mismo principio que
+    /// [`Modal::ApproveAgentOp`]). Los BYTES aprobados viven en
+    /// [`App::lua_pending_trust`] (anti-TOCTOU: lo aprobado = lo evaluado).
+    TrustLuaInit {
+        /// Path del script YA SANEADO por quien construye el modal
+        /// (`detail_for_bar`): solo display, jamás se reparsea.
+        path: String,
+        /// sha256 abreviado (8 hex) del contenido, para correlar con el
+        /// `lua-trust.toml` a ojo.
+        hash_abbrev: String,
+    },
 }
 
 /// Resultado de una tecla sobre un modal.
@@ -601,11 +628,13 @@ pub fn dialog_key(modal: &Modal, code: crossterm::event::KeyCode) -> DialogOutco
         // host key TOFU #45): solo `y` confirma, `n`/Esc cancelan (con el Esc
         // global de arriba; cerrar ES denegar — fail-safe), Enter NUNCA
         // confirma (sin default peligroso que se dispare solo).
-        Modal::ApproveAgentOp { .. } | Modal::TrustHostKey { .. } => match code {
-            K::Char('y') => DialogOutcome::Confirmed,
-            K::Char('n') => DialogOutcome::Cancelled,
-            _ => DialogOutcome::Open,
-        },
+        Modal::ApproveAgentOp { .. } | Modal::TrustHostKey { .. } | Modal::TrustLuaInit { .. } => {
+            match code {
+                K::Char('y') => DialogOutcome::Confirmed,
+                K::Char('n') => DialogOutcome::Cancelled,
+                _ => DialogOutcome::Open,
+            }
+        }
     }
 }
 
@@ -870,6 +899,26 @@ mod tests {
             dialog_key(&m, K::Enter),
             DialogOutcome::Open,
             "Enter jamás confía en una host key"
+        );
+    }
+
+    /// TOFU Lua (M4): mismo contrato que la host key — ejecutar el script de
+    /// un repo ajeno es decisión de seguridad: solo `y` confía; `n` y Esc
+    /// deniegan; Enter NO decide.
+    #[test]
+    fn trust_lua_init_solo_y_confia_y_enter_no_decide() {
+        use crossterm::event::KeyCode as K;
+        let m = Modal::TrustLuaInit {
+            path: "repo/.norte/init.lua".into(),
+            hash_abbrev: "ab12cd34".into(),
+        };
+        assert_eq!(dialog_key(&m, K::Char('y')), DialogOutcome::Confirmed);
+        assert_eq!(dialog_key(&m, K::Char('n')), DialogOutcome::Cancelled);
+        assert_eq!(dialog_key(&m, K::Esc), DialogOutcome::Cancelled);
+        assert_eq!(
+            dialog_key(&m, K::Enter),
+            DialogOutcome::Open,
+            "Enter jamás aprueba ejecutar un script ajeno"
         );
     }
 }

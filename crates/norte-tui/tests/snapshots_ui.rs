@@ -93,6 +93,19 @@ fn snapshot_modal_papelera_y_permanente() {
     insta::assert_snapshot!(format!("{papelera}\n===\n{permanente}"));
 }
 
+/// TOFU Lua (M4, ADR 0026): la forma exacta del modal de confianza del
+/// `./.norte/init.lua` queda congelada — path saneado + sha256 abreviado +
+/// aviso de que corre con los permisos del usuario.
+#[test]
+fn snapshot_modal_trust_lua_init() {
+    let mut app = app_base();
+    app.modal = Some(Modal::TrustLuaInit {
+        path: "repo/.norte/init.lua".into(),
+        hash_abbrev: "ab12cd34".into(),
+    });
+    insta::assert_snapshot!(render(&app));
+}
+
 /// TOFU (#45): el modal muestra el fingerprint para comparar, y un host
 /// HOSTIL (bidi override) del servidor remoto se ENMASCARA — jamás pinta el
 /// byte crudo que podría spoofear la barra. No es snapshot: asserts directos.

@@ -400,7 +400,19 @@ impl Effective {
                     sequence: format!("{:?}", raw.on),
                 });
             }
-            if !known_commands.contains(&raw.run.as_str()) {
+            // `lua:<nombre>` (M4 Lua, T8): el registro de comandos Lua es
+            // DINÁMICO (runtime), así que no se valida contra
+            // `known_commands` — solo el charset del nombre (la MISMA
+            // `valid_name` de `norte.command`, una sola fuente). Un comando
+            // lua no registrado al invocar NO es error de keymap: la barra
+            // avisa con `err-lua-unknown`.
+            if let Some(lua_name) = raw.run.strip_prefix("lua:") {
+                if !crate::lua::valid_name(lua_name) {
+                    return Err(KeymapError::UnknownCommand {
+                        run: raw.run.clone(),
+                    });
+                }
+            } else if !known_commands.contains(&raw.run.as_str()) {
                 return Err(KeymapError::UnknownCommand {
                     run: raw.run.clone(),
                 });

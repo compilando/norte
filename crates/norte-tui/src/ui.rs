@@ -352,6 +352,16 @@ fn draw_modal(frame: &mut Frame<'_>, modal: &crate::app::Modal, theme: &TuiTheme
             fingerprint,
             ..
         } => trust_host_modal_text(host, *port, algo, fingerprint),
+        // TOFU Lua (M4): `path` viene YA saneado por el constructor del
+        // modal (`detail_for_bar`); el cuerpo es un solo mensaje largo y el
+        // Paragraph de este modal lleva wrap (abajo).
+        Modal::TrustLuaInit { path, hash_abbrev } => (
+            t("modal-lua-trust-title"),
+            ta(
+                "modal-lua-trust-body",
+                &[("path", path.as_str()), ("hash", hash_abbrev.as_str())],
+            ),
+        ),
     };
     // Un borrado PERMANENTE (o aprobar una mutación de agente) tiñe el borde
     // de aviso (rol `warning`).
@@ -362,6 +372,7 @@ fn draw_modal(frame: &mut Frame<'_>, modal: &crate::app::Modal, theme: &TuiTheme
             ..
         } | Modal::ApproveAgentOp { .. }
             | Modal::TrustHostKey { .. }
+            | Modal::TrustLuaInit { .. }
     );
     let border = if permanent {
         theme.role(Role::Warning)
@@ -375,20 +386,26 @@ fn draw_modal(frame: &mut Frame<'_>, modal: &crate::app::Modal, theme: &TuiTheme
             .saturating_add(4),
         // host + algo + fingerprint + nota + teclas (5 líneas) + bordes.
         Modal::TrustHostKey { .. } => 9,
+        // Un mensaje largo con wrap (~4 líneas a 58 cols) + bordes.
+        Modal::TrustLuaInit { .. } => 8,
         _ => 6,
     };
     let area = centered(frame.area(), 60, alto);
     frame.render_widget(ratatui::widgets::Clear, area);
-    frame.render_widget(
-        Paragraph::new(cuerpo).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(titulo)
-                .title_style(theme.role(Role::Title))
-                .border_style(border),
-        ),
-        area,
+    let mut cuerpo = Paragraph::new(cuerpo).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(titulo)
+            .title_style(theme.role(Role::Title))
+            .border_style(border),
     );
+    // Solo este modal envuelve: su cuerpo es UN mensaje largo; el resto ya
+    // viene troceado por líneas (y el wrap podría partir un path por
+    // cualquier char, cosa que los modales de rutas evitan con elipsis).
+    if matches!(modal, Modal::TrustLuaInit { .. }) {
+        cuerpo = cuerpo.wrap(ratatui::widgets::Wrap { trim: false });
+    }
+    frame.render_widget(cuerpo, area);
 }
 
 /// Bytes de la sesión para display; `None` = `?`. Sin colisión con una sesión
@@ -584,10 +601,13 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         format!("  [{} …]", app.pending)
     };
     // Un mensaje pendiente (error por categoría, resultado) desplaza al
-    // resto de la barra hasta la siguiente tecla (issue #20).
-    let text = match &app.message {
-        Some(msg) => format!(" {msg}"),
-        None => format!(" {marca}{dir_texto}  {pos}/{total}{seq}"),
+    // resto de la barra hasta la siguiente tecla (issue #20). Sin mensaje,
+    // el hook Lua de statusbar (M4, ya saneado por el host) sustituye la
+    // línea default del pane con foco.
+    let text = match (&app.message, &app.lua_status) {
+        (Some(msg), _) => format!(" {msg}"),
+        (None, Some(lua)) => format!(" {lua}{seq}"),
+        (None, None) => format!(" {marca}{dir_texto}  {pos}/{total}{seq}"),
     };
     frame.render_widget(
         Paragraph::new(text).style(app.theme.role(Role::StatusBar)),

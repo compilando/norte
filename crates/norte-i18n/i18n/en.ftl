@@ -21,6 +21,8 @@ modal-trust-host-algo = { $badge }algorithm: { $algo }
 modal-trust-host-fp = { $badge }fingerprint: { $fingerprint }
 modal-trust-host-note = compare it out of band before trusting.
 modal-trust-host-keys = [y] trust and continue   [n/esc] cancel
+modal-lua-trust-title = Run project init.lua?
+modal-lua-trust-body = { $path } (sha256 { $hash }) will run WITH YOUR PERMISSIONS. A cloned repo's script can do anything you can. y = trust and run · n/Esc = deny (remembered until the file changes)
 
 # --- Status bar messages ---
 msg-done = done
@@ -56,6 +58,13 @@ err-config-io = cannot read { $path }: { $error }
 err-config-parse = invalid TOML in { $path }: { $detail }
 err-keymap-preset-unknown = unknown preset { $name }; available: { $available }
 err-keymap-invalid = invalid keymap: { $detail }
+# --- Lua scripting (M4, ADR 0026) — detalles SIEMPRE por detail_for_bar ---
+err-lua-load = init.lua ({ $layer }): { $detail }
+err-lua-unknown = unknown Lua command: { $name }
+err-lua-command = Lua command failed: { $detail }
+err-lua-cancelled = Lua command cancelled
+err-lua-timeout = Lua command timed out
+err-lua-statusbar = Lua statusbar disabled: { $detail }
 # Ya en la cima: no hay directorio padre (raíz `/` o raíz de unidad Windows).
 msg-nav-at-top = already at the top
 msg-view-error = view: { $error }
@@ -66,6 +75,9 @@ msg-config-not-applied = config NOT applied: { $error }
 msg-config-polling = config: watching degraded to polling
 msg-no-trash-here = no trash here: F8 again for permanent
 msg-list-incomplete = incomplete listing: cut off while filling
+msg-lua-busy = a Lua command is already running (queued)
+msg-lua-denied-changed = project init.lua previously denied; it has changed (not loaded)
+msg-lua-symlink = project init.lua is a symlink; not loaded
 pane-loading = loading… ({ $n })
 
 # --- Task panel ---

@@ -119,8 +119,9 @@ impl Drop for LoadingGuard<'_> {
 }
 
 /// Charset de nombres de comando (mismo espíritu que `agent_session`):
-/// `[a-z0-9._-]{1,64}`.
-fn valid_name(name: &str) -> bool {
+/// `[a-z0-9._-]{1,64}`. `pub(crate)`: el keymap (T8) valida con ESTA misma
+/// función los bindings `lua:<nombre>` — una sola fuente, cero deriva.
+pub(crate) fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
         && name.bytes().all(|b| {

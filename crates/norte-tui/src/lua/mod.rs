@@ -12,6 +12,7 @@ mod fs; // task 4
 mod statusbar; // task 7
 mod trust; // task 6
 
+pub(crate) use api::valid_name;
 pub use api::{Layer, LuaHost, LuaLoadError, LuaWarning};
 pub use driver::{CommandRun, DEFAULT_TIMEOUT, RunOutcome};
 pub use fs::PaneCtx;
