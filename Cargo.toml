@@ -201,6 +201,15 @@ windows-sys = "0.61"
 # normalización, issue #8): NFC real, no un fold casero. unicode-rs,
 # MIT/Apache; transitivas: solo tinyvec.
 unicode-normalization = "0.1"
+# Matchers de fs.search (M4 live search): familia ripgrep, MIT/Apache,
+# mantenidas por BurntSushi, YA transitivas en el árbol → pasan a directas.
+# regex: matcher de nombre/contenido con .size_limit anti-ReDoS (la bomba se
+# rechaza al compilar, jamás cuelga). globset: glob de nombre (la lib de
+# ripgrep; un glob a mano = bugs de escape/clase). memchr: memmem para la
+# aguja multi-encoding de contenido (SIMD, búsqueda bytes-contra-bytes).
+regex = "1"
+globset = "0.4"
+memchr = "2"
 
 # Solo dev
 proptest = "1"

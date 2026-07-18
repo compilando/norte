@@ -21,6 +21,9 @@ norte-connect.workspace = true
 # Modelo de plugins (M4-P3): catálogo + manifiesto que el PluginRegistry expone.
 norte-plugin-host.workspace = true
 norte-proto.workspace = true
+# Matchers de fs.search (M4 live search): detección/decodificación de encoding
+# de la aguja (transcodificación multi-encoding) y NFC del nombre.
+norte-encoding.workspace = true
 norte-vfs.workspace = true
 norte-vfs-archive.workspace = true
 norte-vfs-ftp.workspace = true
@@ -34,6 +37,13 @@ sha2.workspace = true
 hmac.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
+# Matchers puros de fs.search (M4 live search, ver justificación en el
+# Cargo.toml del workspace): glob/regex de nombre + aguja multi-encoding.
+regex.workspace = true
+globset.workspace = true
+memchr.workspace = true
+# NFC del fold de nombre (misma disciplina que el quick search del TUI).
+unicode-normalization.workspace = true
 # Reglas declarativas de policy.toml (M3-3, spec §10): parsing con deny_unknown_fields.
 toml.workspace = true
 # Persistencia de plugins-state.toml (M4-P3): re-emisión preservando el fichero.

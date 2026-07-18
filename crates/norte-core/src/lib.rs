@@ -17,6 +17,7 @@ pub mod plugins;
 pub mod policy;
 mod progress;
 mod scheduler;
+pub mod search;
 mod undo;
 
 pub use engine::{Engine, TransferOptions};
