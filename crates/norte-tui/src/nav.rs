@@ -4,7 +4,7 @@
 //! IDENTIDAD de las entradas sigue siendo el `VPath` en bytes — operar usa
 //! siempre `entries[índice_real]`.
 
-use norte_proto::Entry;
+use norte_proto::{Entry, VPath};
 use unicode_normalization::UnicodeNormalization;
 
 /// Modo del quick search (`[ui] quick_search`, default filtro).
@@ -18,6 +18,12 @@ pub enum Mode {
 }
 
 /// Nombre → clave de comparación: lossy del último segmento, NFC, lowercase.
+///
+/// Coste: una `String` nueva por entrada y por keystroke (recompute
+/// completo en cada char); cacheo diferido a #77 (misma zona que la sort
+/// key de `extend_listing`, app.rs). `to_lowercase` es case-folding simple
+/// de Rust, NO full Unicode case-folding — consciente, suficiente para
+/// substring UX de tipeo.
 fn fold(name: &[u8]) -> String {
     String::from_utf8_lossy(name)
         .nfc()
@@ -26,7 +32,8 @@ fn fold(name: &[u8]) -> String {
 }
 
 /// Índices de `entries` cuyo nombre contiene `query` (misma normalización
-/// en ambos lados). `query` en bytes crudos (viene del input tal cual).
+/// en ambos lados, ver [`fold`]). `query` en bytes crudos (viene del input
+/// tal cual).
 #[must_use]
 pub fn matches(query: &[u8], entries: &[Entry]) -> Vec<usize> {
     let q = fold(query);
@@ -53,16 +60,18 @@ pub struct QuickSearch {
 }
 
 impl QuickSearch {
-    /// Arranca un quick search vacío en el modo dado; `entries` fija el
-    /// listado inicial (query vacía = todo visible).
+    /// Arranca un quick search vacío en el modo dado sobre `entries`: query
+    /// vacía, `visible` se calcula ya mismo (query vacía = todo visible).
     #[must_use]
-    pub fn new(mode: Mode) -> Self {
-        Self {
+    pub fn new(mode: Mode, entries: &[Entry]) -> Self {
+        let mut q = Self {
             query: Vec::new(),
             mode,
             visible: Vec::new(),
             pos: 0,
-        }
+        };
+        q.recompute(entries);
+        q
     }
 
     /// Recalcula `visible` a partir de la query actual sobre `entries`.
@@ -101,14 +110,22 @@ impl QuickSearch {
         self.pos = 0;
     }
 
-    /// Recalcula `visible` conservando la selección: recuerda el índice
-    /// real seleccionado y lo re-busca en el nuevo `visible`; si murió
-    /// (ya no casa / fue removido), clampa dentro del nuevo rango.
-    pub fn refresh(&mut self, entries: &[Entry]) {
-        let selected_real = self.visible.get(self.pos).copied();
+    /// Recalcula `visible` sobre el `entries` YA mutado (lote nuevo del
+    /// fill, o un re-sort completo — `Pane::extend_listing` re-sortea el
+    /// listado entero en cada lote) conservando la selección por
+    /// IDENTIDAD, no por índice: un índice recordado de ANTES del sort
+    /// puede apuntar a otra entrada tras él.
+    ///
+    /// `prev_selected` es el `VPath` de la entrada seleccionada ANTES de
+    /// la mutación — el caller lo captura vía
+    /// `entries[selected_entry_index()?].path.clone()` antes de mutar
+    /// `entries`. Se re-busca ese path dentro del nuevo `visible`; si
+    /// murió (ya no casa / fue removido) o no había selección previa,
+    /// clampa dentro del nuevo rango.
+    pub fn refresh(&mut self, entries: &[Entry], prev_selected: Option<&VPath>) {
         self.recompute(entries);
-        if let Some(real) = selected_real
-            && let Some(new_pos) = self.visible.iter().position(|&i| i == real)
+        if let Some(prev) = prev_selected
+            && let Some(new_pos) = self.visible.iter().position(|&i| entries[i].path == *prev)
         {
             self.pos = new_pos;
             return;
@@ -214,14 +231,15 @@ mod tests {
     fn bytes_no_utf8_no_rompen_y_no_casan_en_falso() {
         let entries = vec![e("mem:///%FF%FE"), e("mem:///normal.txt")];
         assert_eq!(matches(b"norm", &entries), vec![1]);
-        // La entrada hostil sigue filtrable por lo que su lossy muestra (�):
-        let _ = matches("\u{FFFD}".as_bytes(), &entries); // no panica
+        // La entrada hostil sigue filtrable por lo que su lossy muestra (�)
+        // — contrato testeado, no solo "no panica".
+        assert_eq!(matches("\u{FFFD}".as_bytes(), &entries), vec![0]);
     }
 
     #[test]
     fn estado_filtro_navega_y_confirma() {
         let entries = vec![e("mem:///a1"), e("mem:///b"), e("mem:///a2")];
-        let mut q = QuickSearch::new(Mode::Filter);
+        let mut q = QuickSearch::new(Mode::Filter, &entries);
         q.push_char('a', &entries);
         assert_eq!(q.visible(), &[0, 2]);
         q.down();
@@ -233,7 +251,7 @@ mod tests {
     #[test]
     fn modo_salto_tab_con_wrap() {
         let entries = vec![e("mem:///ab"), e("mem:///zz"), e("mem:///ac")];
-        let mut q = QuickSearch::new(Mode::Jump);
+        let mut q = QuickSearch::new(Mode::Jump, &entries);
         q.push_char('a', &entries);
         assert_eq!(q.selected_entry_index(), Some(0));
         q.next_match();
@@ -245,11 +263,36 @@ mod tests {
     #[test]
     fn reaplicar_tras_lote_nuevo_conserva_seleccion_si_sobrevive() {
         let mut entries = vec![e("mem:///a1")];
-        let mut q = QuickSearch::new(Mode::Filter);
+        let mut q = QuickSearch::new(Mode::Filter, &entries);
         q.push_char('a', &entries);
+        let prev = q.selected_entry_index().map(|i| entries[i].path.clone());
         entries.push(e("mem:///a2")); // llega un lote del fill
-        q.refresh(&entries);
+        q.refresh(&entries, prev.as_ref());
         assert_eq!(q.visible(), &[0, 1]);
         assert_eq!(q.selected_entry_index(), Some(0), "la selección no salta");
+    }
+
+    #[test]
+    fn refresh_sobrevive_a_un_resort() {
+        // review MAJOR: la selección se conserva por IDENTIDAD (VPath), no
+        // por índice — `Pane::extend_listing` re-sortea el listado completo
+        // en cada lote (app.rs), así que un índice recordado apunta a OTRA
+        // entrada tras el sort.
+        let mut entries = vec![e("mem:///a1"), e("mem:///a2")];
+        let mut q = QuickSearch::new(Mode::Filter, &entries);
+        q.push_char('a', &entries);
+        q.down(); // selecciona a2 (índice real 1)
+        assert_eq!(q.selected_entry_index(), Some(1));
+        let prev = q.selected_entry_index().map(|i| entries[i].path.clone());
+
+        // El lote re-sortea: a2 pasa a índice real 0, a1 a índice real 1.
+        entries.swap(0, 1);
+        q.refresh(&entries, prev.as_ref());
+
+        assert_eq!(
+            q.selected_entry_index().map(|i| entries[i].path.clone()),
+            prev,
+            "la selección sigue en el MISMO path tras el resort, no en el mismo índice"
+        );
     }
 }
