@@ -11,9 +11,9 @@ use std::path::Path;
 use norte_proto::methods::{
     ClientInfo, DaemonShutdownParams, DaemonShutdownResult, FsCapabilitiesParams,
     FsCapabilitiesResult, FsCopyParams, FsDeleteParams, FsListParams, FsListResult, FsMoveParams,
-    FsReadParams, FsReadResult, FsStatParams, FsStatResult, FsTaskResult, InitializeParams,
-    InitializeResult, ServerInfo, TaskCancelParams, TaskCancelResult, TaskListParams,
-    TaskListResult,
+    FsReadParams, FsReadResult, FsSearchParams, FsStatParams, FsStatResult, FsTaskResult,
+    InitializeParams, InitializeResult, MatchInfo, SearchHits, ServerInfo, TaskCancelParams,
+    TaskCancelResult, TaskListParams, TaskListResult,
 };
 use norte_proto::{
     ByteRange, Capabilities, CapabilityFlags, CollisionPolicy, ConflictKind, Entry, EntryKind,
@@ -355,7 +355,7 @@ fn golden_methods() {
     check_methods_policy(&fixtures);
     check_methods_session(&fixtures);
     check_methods_plugin(&fixtures);
-    assert_eq!(fixtures.len(), 58, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 61, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia plugin.* (0.13.0, M4-P3): catálogo + aprobación/activación humanas.
@@ -736,6 +736,7 @@ fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
             task_id: TaskId::new(7),
         },
     );
+    check_methods_search(fixtures);
     check_one(
         fixtures,
         "task_cancel_params",
@@ -744,6 +745,48 @@ fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
         },
     );
     check_one(fixtures, "task_cancel_result", &TaskCancelResult {});
+}
+
+/// `fs.search` + `search.hits` (0.18.0, M4 live search).
+fn check_methods_search(fixtures: &BTreeMap<String, Value>) {
+    check_one(
+        fixtures,
+        "fs_search_params",
+        &FsSearchParams {
+            root: vpath("file:///home/user"),
+            name_glob: Some("*.rs".to_owned()),
+            name_regex: Some("^ma.n\\.rs$".to_owned()),
+            content: Some("año".to_owned()),
+            content_regex: Some("a.o".to_owned()),
+            case_sensitive: true,
+            max_hits: Some(100),
+        },
+    );
+    check_one(
+        fixtures,
+        "search_hits",
+        &SearchHits {
+            task_id: TaskId::new(7),
+            entries: vec![Entry {
+                path: vpath("file:///home/user/doc.txt"),
+                kind: EntryKind::File,
+                size: Some(1234),
+                mtime_ms: Some(1_720_000_000_000),
+            }],
+            matches: Some(vec![MatchInfo {
+                line: Some(3),
+                preview: Some("hay un año aquí".to_owned()),
+            }]),
+        },
+    );
+    check_one(
+        fixtures,
+        "match_info",
+        &MatchInfo {
+            line: Some(3),
+            preview: Some("hay un año aquí".to_owned()),
+        },
+    );
 }
 
 /// fs.copy/fs.move (con resume/verify de 0.6.0, ADR 0012).
@@ -1025,8 +1068,12 @@ fn method_names_frozen() {
     assert_eq!(methods::PLUGIN_PREVIEW, "plugin.preview");
     assert_eq!(methods::FS_READ_MAX_CHUNK, 8 * 1024 * 1024);
     assert_eq!(methods::FS_LIST_MAX_PAGE, 10_000);
-    // 0.17.0: Error::Corrupt (#58). Aditivo sobre 0.16.x.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.17.0");
+    // 0.18.0 (M4 live search): fs.search + search.hits + TaskKind::Search.
+    // Aditivo sobre 0.17.x.
+    assert_eq!(methods::FS_SEARCH, "fs.search");
+    assert_eq!(methods::SEARCH_HITS, "search.hits");
+    assert_eq!(methods::SEARCH_HITS_MAX_BATCH, 256);
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.18.0");
 }
 
 #[test]

@@ -212,6 +212,7 @@ fn task_kind_wire_strings() {
         (TaskKind::Move, "\"move\""),
         (TaskKind::Delete, "\"delete\""),
         (TaskKind::Undo, "\"undo\""),
+        (TaskKind::Search, "\"search\""),
     ] {
         assert_eq!(serde_json::to_string(&kind).unwrap(), wire);
     }
@@ -691,11 +692,12 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.17.0 (#58): acepta 0.17.x (N) y 0.16.x (N-1), rechaza 0.15.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.17.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.16.0"), "N-1");
+    // 0.18.0 (M4 live search): acepta 0.18.x (N) y 0.17.x (N-1), rechaza
+    // 0.16.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.18.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.17.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.15.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.16.9"),
         "N-2 fuera de la ventana"
     );
 }

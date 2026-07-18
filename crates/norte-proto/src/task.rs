@@ -61,10 +61,18 @@ pub enum TaskKind {
     /// kinds nuevos por versión negociada (o asumir descarte silencioso en
     /// broadcast y proteger el resync de `task.list`).
     Undo,
+    /// Búsqueda viva por nombre y/o contenido bajo un subtree (`fs.search`,
+    /// M4 live search). Lectura pura (regla 4 no aplica): sin journal.
+    ///
+    /// OJO (compat): esta variante entra en 0.18.0. Un cliente 0.17.x (N-1) NO la
+    /// conoce y su parse de `TaskKind` FALLA al recibirla — el `serde(other)` de
+    /// abajo protege a ESTE proto (0.18+) frente a kinds de 0.19+, no
+    /// retroactivamente al 0.17 (mismo aviso que [`TaskKind::Undo`]).
+    Search,
     /// Clase desconocida: un daemon N+1 (0.11+) envió un kind que ESTE proto no
     /// conoce → se acepta como genérica en vez de fallar el parse (forward-compat
     /// desde 0.10, como [`TaskState::Unknown`]). No cubre el borde hacia atrás
-    /// 0.9→0.10 (ver `Undo`).
+    /// 0.9→0.10 (ver `Undo`) ni 0.17→0.18 (ver `Search`).
     #[serde(other)]
     Unknown,
 }

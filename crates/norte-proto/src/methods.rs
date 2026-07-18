@@ -74,7 +74,13 @@ use crate::{
 /// límites anti-bomba (antes se forzaba a `Io{retryable:false}`, ADR 0018
 /// D2): UX honesta («no es un zip válido») y telemetría. Aditivo sobre
 /// 0.16.x (un cliente N-1 degrada el kind a `Unknown`).
-pub const PROTOCOL_VERSION: &str = "0.17.0";
+///
+/// 0.18.0 (M4 live search): `fs.search` + `search.hits` + `TaskKind::Search`
+/// — búsqueda viva por nombre (glob/regex) y contenido (literal/regex
+/// multi-encoding) bajo un subtree, streaming como Task cancelable. Aditivo
+/// sobre 0.17.x (un cliente N-1 no conoce `fs.search`/`search.hits` y ve
+/// `TaskKind::Search` como `Unknown`, como el resto de kinds nuevos).
+pub const PROTOCOL_VERSION: &str = "0.18.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -181,6 +187,28 @@ pub const FS_MOVE: &str = "fs.move";
 /// `fs.delete` — borrado como Task: papelera (default) o permanente
 /// (recursivo post-order) — ADR 0009.
 pub const FS_DELETE: &str = "fs.delete";
+/// `fs.search` — búsqueda viva bajo un subtree (spec §17.1a): nombre por
+/// glob O regex, contenido por literal O regex. Devuelve una Task
+/// (`TaskKind::Search`); los hits llegan por la notificación
+/// [`SEARCH_HITS`] SOLO a la conexión que la lanzó. Cancelable con
+/// `task.cancel`. Al menos un criterio; glob y regex EXCLUYENTES por eje.
+///
+/// Result = el [`FsTaskResult`] EXISTENTE (`{task_id}`), como
+/// `fs.copy`/`fs.move`/`fs.delete` — cero struct nuevo para el result.
+///
+/// Mapeo de [`TaskProgress`](crate::TaskProgress) durante la búsqueda:
+/// `entries_done` cuenta las entradas ESCANEADAS por el walker (no los
+/// hits); el resto del mapeo (bytes/current) lo documenta el walker — ver
+/// `Engine::search_as`.
+pub const FS_SEARCH: &str = "fs.search";
+/// `search.hits` — notificación server→client con un LOTE de resultados de
+/// [`FS_SEARCH`]. SOLO viaja a la conexión que lanzó la búsqueda (jamás
+/// broadcast, mismo criterio direccional que
+/// [`POLICY_APPROVAL_REQUIRED`]).
+pub const SEARCH_HITS: &str = "search.hits";
+/// Tope de entries por notificación [`SEARCH_HITS`] (coalescing
+/// server-side, mismo espíritu que [`FS_LIST_MAX_PAGE`]).
+pub const SEARCH_HITS_MAX_BATCH: usize = 256;
 /// `task.cancel` — petición de cancelación cooperativa. La respuesta solo
 /// confirma la recepción; el estado final (`cancelled`, o `completed` si la
 /// Task ganó la carrera) llega por [`TASK_PROGRESS`].
@@ -354,6 +382,59 @@ pub struct FsDeleteParams {
 pub struct FsTaskResult {
     /// Id de la Task encolada.
     pub task_id: TaskId,
+}
+
+/// Params de [`FS_SEARCH`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsSearchParams {
+    /// Raíz del walk (subtree entero).
+    pub root: VPath,
+    /// Glob sobre el NOMBRE (último segmento), p.ej. `*.rs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_glob: Option<String>,
+    /// Regex sobre el nombre. Excluyente con `name_glob`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_regex: Option<String>,
+    /// Texto literal a buscar en el CONTENIDO (multi-encoding: la aguja se
+    /// transcodifica, el pajar jamás se decodifica entero).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// Regex sobre el contenido (solo ficheros que el detector dé como
+    /// texto). Excluyente con `content`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_regex: Option<String>,
+    /// Sensible a mayúsculas (default false; el matching de nombre es
+    /// sobre el lossy en NFC — misma disciplina que el quick search).
+    #[serde(default)]
+    pub case_sensitive: bool,
+    /// Tope de hits: alcanzado, la Task completa con `truncated`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_hits: Option<u32>,
+}
+
+/// Un lote de resultados de [`SEARCH_HITS`]. `matches` alineado 1:1 con
+/// `entries` cuando la búsqueda es de contenido (None si es solo nombre).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchHits {
+    /// Task dueña (correlación con `fs.search` → `task_id`).
+    pub task_id: TaskId,
+    /// Entradas que casan.
+    pub entries: Vec<Entry>,
+    /// Contexto del match de contenido, alineado con `entries`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matches: Option<Vec<MatchInfo>>,
+}
+
+/// Contexto de UN match de contenido.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MatchInfo {
+    /// Línea (1-based) del primer match, si se computó.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u64>,
+    /// La línea del match decodificada lossy y RECORTADA server-side
+    /// (tope fijo; el TUI la sanea igualmente con `detail_for_bar`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
 }
 
 /// Identidad de un cliente (va en [`InitializeParams`]).
