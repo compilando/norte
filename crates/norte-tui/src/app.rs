@@ -120,13 +120,18 @@ impl Pane {
     }
 
     /// Cierra el quick search fijando el cursor REAL a la selección (Enter:
-    /// la op siguiente parte de ahí). Sin matches, cierra sin mover nada.
-    pub fn quick_confirm(&mut self) {
+    /// la op siguiente parte de ahí). Devuelve `true` si FIJÓ selección:
+    /// sin matches cierra sin mover nada y devuelve `false` — el caller no
+    /// debe despachar nada sobre el cursor real, que apunta a una entrada
+    /// que el usuario NO veía (la lista filtrada estaba vacía).
+    pub fn quick_confirm(&mut self) -> bool {
         if let Some(q) = self.quick.take()
             && let Some(i) = q.selected_entry_index()
         {
             self.cursor = i;
+            return true;
         }
+        false
     }
 
     /// Índices REALES visibles bajo el filtro; `None` = sin filtro (quick
@@ -1076,6 +1081,24 @@ mod tests {
         p.quick_char('a');
         p.extend_listing(vec![file("a2"), file("zz")]);
         assert_eq!(p.quick_visible().unwrap().len(), 2, "a2 entra, zz no");
+    }
+
+    /// review MAJOR T4: con el filtro SIN matches la pantalla lista vacío —
+    /// Enter jamás debe actuar sobre la entrada del cursor real (invisible
+    /// para el usuario). `quick_confirm` devuelve false y no toca el cursor.
+    #[test]
+    fn enter_sin_matches_no_actua_sobre_entrada_invisible() {
+        let mut p = pane_con(&["a1", "b", "a2"]);
+        p.cursor = 1;
+        p.quick_start(crate::nav::Mode::Filter);
+        p.quick_char('x'); // cero matches
+        assert!(p.selected().is_none(), "sin matches no hay selección");
+        assert!(
+            !p.quick_confirm(),
+            "confirmar sin matches NO fija selección"
+        );
+        assert!(p.quick.is_none(), "el quick search sí se cierra");
+        assert_eq!(p.cursor, 1, "el cursor real queda intacto");
     }
 
     /// Modo salto: el listado NO cambia; teclear mueve el cursor REAL al

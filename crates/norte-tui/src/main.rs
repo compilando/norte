@@ -570,20 +570,25 @@ async fn run(
                                     // Confirma (cursor real = seleccionado) y
                                     // REUSA el camino de nav.enter: un dir (o
                                     // contenedor) entra, un fichero se queda.
-                                    app.focused_mut().quick_confirm();
-                                    match dispatch(
-                                        app, backend, &mut events, help_lines, quick_mode,
-                                        "nav.enter",
-                                    )
-                                    .await
-                                    {
-                                        Cd::Filling(f) => fill = Some(f),
-                                        Cd::Replaced(pane) => {
-                                            if fill.as_ref().is_some_and(|f| f.pane == pane) {
-                                                fill = None;
+                                    // `false` = el filtro no tenía matches:
+                                    // solo cierra — jamás despachar sobre una
+                                    // entrada que el usuario no veía (review
+                                    // MAJOR T4).
+                                    if app.focused_mut().quick_confirm() {
+                                        match dispatch(
+                                            app, backend, &mut events, help_lines, quick_mode,
+                                            "nav.enter",
+                                        )
+                                        .await
+                                        {
+                                            Cd::Filling(f) => fill = Some(f),
+                                            Cd::Replaced(pane) => {
+                                                if fill.as_ref().is_some_and(|f| f.pane == pane) {
+                                                    fill = None;
+                                                }
                                             }
+                                            Cd::Cancelled => {}
                                         }
-                                        Cd::Cancelled => {}
                                     }
                                     continue;
                                 }

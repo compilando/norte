@@ -561,16 +561,13 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, them
         .title(title);
     // Quick search activo (spec 2026-07-18): línea de input al pie del pane
     // `/{query} n/m` (+ «parcial» si el fill sigue: filtra sobre lo YA
-    // drenado, jamás en silencio). La query se pinta lossy simple SIN mask:
-    // la tecleó el USUARIO desde su teclado (push_char), no es texto de un
-    // tercero que pueda colar controles/bidi — a diferencia de los nombres.
+    // drenado, jamás en silencio). La query pasa por el MISMO mask que los
+    // nombres (review MINOR-1 T4): «la tecleó el usuario» se rompe con un
+    // PASTE — sin bracketed paste llega como stream de Chars y un nombre
+    // hostil pegado pintaría bidi/invisibles crudos en el borde.
     if let Some(q) = &pane.quick {
-        let mut input = format!(
-            " /{} {}/{}",
-            q.query_display(),
-            q.visible().len(),
-            pane.entries.len()
-        );
+        let (query, _) = display_name(q.query_display().as_bytes());
+        let mut input = format!(" /{} {}/{}", query, q.visible().len(), pane.entries.len());
         if pane.loading {
             input.push(' ');
             input.push_str(&t("quicksearch-partial"));
@@ -626,6 +623,14 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let pane = app.focused();
     let total = pane.entries.len();
     let pos = if total == 0 { 0 } else { pane.cursor + 1 };
+    // Con el FILTRO activo la selección no es el cursor real: un `pos/total`
+    // sería engañoso (review MINOR-2 T4) — se suprime; el pie del pane ya
+    // da el contador honesto `n/m`.
+    let pos_total = if pane.quick_visible().is_some() {
+        String::new()
+    } else {
+        format!("  {pos}/{total}")
+    };
     let (dir_texto, dir_hostil) = path_display(&pane.dir);
     let marca = if dir_hostil { HOSTILE_BADGE } else { "" };
     // Sin chuleta de teclas: mentiría según el preset (el which-key overlay
@@ -642,7 +647,7 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let text = match (&app.message, &app.lua_status) {
         (Some(msg), _) => format!(" {msg}"),
         (None, Some(lua)) => format!(" {lua}{seq}"),
-        (None, None) => format!(" {marca}{dir_texto}  {pos}/{total}{seq}"),
+        (None, None) => format!(" {marca}{dir_texto}{pos_total}{seq}"),
     };
     frame.render_widget(
         Paragraph::new(text).style(app.theme.role(Role::StatusBar)),
