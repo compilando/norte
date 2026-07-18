@@ -249,6 +249,10 @@ pub fn persist_ui_theme_to(dir: &std::path::Path, name: &str) -> std::io::Result
 /// persistir no debe rechazar un path que el propio `norte` todavía no
 /// sabe interpretar (p.ej. un scheme nuevo de un provider futuro).
 ///
+/// BLOQUEANTE: hace I/O de FS síncrono. El caller (T5) DEBE envolverla en
+/// `tokio::task::spawn_blocking` — el runtime jamás se bloquea (regla 2),
+/// mismo patrón que `persist_ui_theme` en `main.rs`.
+///
 /// # Errors
 /// [`std::io::Error`] si el TOML existente no parsea, `hotlist` existe
 /// pero no es un array de tablas, o falla el I/O.
@@ -290,7 +294,14 @@ pub fn persist_hotlist_add(dir: &Path, name: &str, wire_path: &str) -> std::io::
 /// Retira la entrada `[[hotlist]]` de nombre `name` del `norte.toml` de
 /// `dir`, PRESERVANDO comentarios y formato. `name` inexistente (o
 /// `norte.toml`/`hotlist` inexistentes) es NO-OP documentado: no hay nada
-/// que borrar, no es un error.
+/// que borrar, no es un error — y crucialmente NO reescribe el fichero
+/// (review MINOR-1: escribir sin cambios toca el mtime → el watcher de
+/// `config::watch` lo confunde con una edición real y dispara un
+/// hot-reload fantasma).
+///
+/// BLOQUEANTE: hace I/O de FS síncrono. El caller (T5) DEBE envolverla en
+/// `tokio::task::spawn_blocking` — el runtime jamás se bloquea (regla 2),
+/// mismo patrón que `persist_ui_theme` en `main.rs`.
 ///
 /// # Errors
 /// [`std::io::Error`] si el TOML existente no parsea o falla el I/O.
@@ -305,14 +316,19 @@ pub fn persist_hotlist_remove(dir: &Path, name: &str) -> std::io::Result<PathBuf
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(path),
         Err(e) => return Err(e),
     };
+    // Solo se escribe si `retain` REALMENTE quitó algo — comparar
+    // longitudes antes/después en vez de escribir incondicionalmente.
     if let Some(arr) = doc
         .as_table_mut()
         .get_mut("hotlist")
         .and_then(toml_edit::Item::as_array_of_tables_mut)
     {
+        let before = arr.len();
         arr.retain(|t| t.get("name").and_then(|v| v.as_str()) != Some(name));
+        if arr.len() != before {
+            std::fs::write(&path, doc.to_string())?;
+        }
     }
-    std::fs::write(&path, doc.to_string())?;
     Ok(path)
 }
 
@@ -337,10 +353,13 @@ pub struct HotlistItem {
 const ERR_INVALID_PATH: &str = "err-invalid-path";
 
 /// Valida `entry.path` a [`VPath`] y lo fusiona en `items`: si ya hay una
-/// entrada con el mismo `name` (de una capa ANTERIOR), la reemplaza — la
-/// capa posterior gana, igual que el resto de la config (última-gana),
-/// pero conservando la posición original para que el orden del popup no
-/// salte al editar solo el `path` de un favorito ya existente. Si no
+/// entrada con el mismo `name`, la reemplaza — sea de una capa ANTERIOR
+/// (la capa posterior gana, igual que el resto de la config), sea de un
+/// `[[hotlist]]` PREVIO dentro de la MISMA capa (TOML no impide repetir
+/// `name` en un array de tablas; `load` llama a esta función una vez por
+/// entrada, en orden de aparición, así que la ÚLTIMA gana también
+/// intra-capa). Conserva la posición original para que el orden del popup
+/// no salte al editar solo el `path` de un favorito ya existente. Si no
 /// existía, se añade al final.
 fn merge_hotlist_entry(items: &mut Vec<HotlistItem>, entry: HotlistEntry) {
     let target = VPath::parse(&entry.path).map_err(|_| ERR_INVALID_PATH.to_owned());
@@ -736,10 +755,32 @@ mod hotlist_tests {
     fn hotlist_remove_de_nombre_inexistente_es_no_op() {
         let dir = tempfile::tempdir().unwrap();
         persist_hotlist_add(dir.path(), "trabajo", "file:///a").unwrap();
+        let path = dir.path().join("norte.toml");
+        // Comentario a mano: si el no-op reescribiera el fichero, toml_edit
+        // podría reformatearlo igual — la prueba fuerte no es "no falla",
+        // es "el CONTENIDO no cambia ni un byte" (review MINOR-1: mtime es
+        // flaky por granularidad del FS, el contenido no).
+        let mut s = std::fs::read_to_string(&path).unwrap();
+        s.push_str("# nota manual\n");
+        std::fs::write(&path, &s).unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
         // No debe fallar aunque "fantasma" no exista (documentado: no-op).
         persist_hotlist_remove(dir.path(), "fantasma").unwrap();
-        let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
-        assert!(s.contains("trabajo"), "{s}");
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(before, after, "no-op no reescribe: contenido byte-idéntico");
+        assert!(after.contains("trabajo"), "{after}");
+    }
+
+    #[test]
+    fn hotlist_remove_sin_seccion_hotlist_es_no_op_y_no_reescribe() {
+        // `norte.toml` existe pero SIN `[[hotlist]]` en absoluto: el no-op
+        // tampoco debe tocar el fichero (mismo MINOR-1).
+        let dir = tempfile::tempdir().unwrap();
+        let content = "# sin hotlist\n[ui]\ntheme = \"nord\"\n";
+        std::fs::write(dir.path().join("norte.toml"), content).unwrap();
+        persist_hotlist_remove(dir.path(), "lo-que-sea").unwrap();
+        let after = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert_eq!(content, after, "sin `hotlist`: contenido intacto");
     }
 
     #[test]
@@ -834,6 +875,32 @@ mod hotlist_tests {
             cfg.hotlist[0].target.as_ref().unwrap(),
             &VPath::parse("file:///nuevo").unwrap(),
             "la capa posterior (usuario) gana sobre sistema"
+        );
+    }
+
+    /// review MINOR-2: el dedup por `name` también aplica DENTRO de la
+    /// MISMA capa — TOML no impide repetir `[[hotlist]] name = "..."` dos
+    /// veces en el mismo array; la última aparición gana (ver rustdoc de
+    /// `merge_hotlist_entry`).
+    #[test]
+    fn hotlist_nombre_duplicado_dentro_de_la_misma_capa_la_ultima_aparicion_gana() {
+        let usuario = tempfile::tempdir().unwrap();
+        std::fs::write(
+            usuario.path().join("norte.toml"),
+            "[[hotlist]]\nname = \"trabajo\"\npath = \"file:///viejo\"\n\n\
+             [[hotlist]]\nname = \"trabajo\"\npath = \"file:///nuevo\"\n",
+        )
+        .unwrap();
+        let proyecto = tempfile::tempdir().unwrap();
+        let layers = Layers {
+            dirs: vec![usuario.path().to_path_buf(), proyecto.path().to_path_buf()],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.hotlist.len(), 1, "mismo nombre intra-capa, una entrada");
+        assert_eq!(
+            cfg.hotlist[0].target.as_ref().unwrap(),
+            &VPath::parse("file:///nuevo").unwrap(),
+            "la última aparición dentro de la capa gana"
         );
     }
 

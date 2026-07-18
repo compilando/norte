@@ -361,4 +361,23 @@ mod tests {
             "retirada tras NotFound"
         );
     }
+
+    /// review MINOR-3: el rustdoc de `push` promete que un mismo dir en
+    /// posiciones NO consecutivas SÍ puede repetirse, y `remove` retira
+    /// TODAS las ocurrencias — pínchalo con un caso A→B→A explícito.
+    #[test]
+    fn historial_permite_repetidos_no_consecutivos_y_remove_retira_todas() {
+        let mut h = History::default();
+        h.push(vp("mem:///a"));
+        h.push(vp("mem:///b"));
+        h.push(vp("mem:///a")); // NO consecutivo con el primer "a" (hay "b" en medio)
+        let contar_a = |h: &History| h.entries().iter().filter(|p| **p == vp("mem:///a")).count();
+        assert_eq!(
+            contar_a(&h),
+            2,
+            "repetido no consecutivo: dos apariciones de a"
+        );
+        h.remove(&vp("mem:///a"));
+        assert_eq!(contar_a(&h), 0, "remove retira TODAS las ocurrencias");
+    }
 }
