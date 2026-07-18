@@ -4,6 +4,8 @@
 //! IDENTIDAD de las entradas sigue siendo el `VPath` en bytes — operar usa
 //! siempre `entries[índice_real]`.
 
+use std::collections::VecDeque;
+
 use norte_proto::{Entry, VPath};
 use unicode_normalization::UnicodeNormalization;
 
@@ -188,10 +190,57 @@ impl QuickSearch {
     }
 }
 
+/// Tope de directorios retenidos en el historial de un pane (spec
+/// 2026-07-18: sesión, no persistido — a diferencia de la hotlist).
+const HISTORY_MAX: usize = 30;
+
+/// Historial de directorios visitados por UN pane. Cada `cd` EXITOSO
+/// empuja el dir ANTERIOR (main.rs, brazos `Cd::Filling`/`Cd::Replaced`);
+/// `Alt+↓` lo recorre en un popup (T5). Vive en memoria del proceso, no en
+/// `norte.toml` — a propósito, fuera de alcance de la spec (§Fuera de
+/// alcance).
+#[derive(Debug, Default)]
+pub struct History {
+    /// Más reciente al frente.
+    deque: VecDeque<VPath>,
+}
+
+impl History {
+    /// Empuja `path` al frente. Dedup CONSECUTIVO: si `path` ya es el más
+    /// reciente, no-op — evita repetir el mismo dir en cd's redundantes
+    /// (p.ej. refrescar el pane). Un mismo dir en posiciones NO
+    /// consecutivas del historial sí puede repetirse (visitarlo, irse,
+    /// volver): es historial de sesión, no un conjunto.
+    pub fn push(&mut self, path: VPath) {
+        if self.deque.front() == Some(&path) {
+            return;
+        }
+        self.deque.push_front(path);
+        self.deque.truncate(HISTORY_MAX);
+    }
+
+    /// Retira TODAS las ocurrencias de `path` (p.ej. tras un `cd` fallido
+    /// con `NotFound` al navegar desde el popup — la spec dice "se
+    /// RETIRA si el cd falla con `NotFound`").
+    pub fn remove(&mut self, path: &VPath) {
+        self.deque.retain(|p| p != path);
+    }
+
+    /// Entradas, más reciente primero.
+    #[must_use]
+    pub fn entries(&self) -> &VecDeque<VPath> {
+        &self.deque
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use norte_proto::{Entry, EntryKind, VPath};
+
+    fn vp(wire: &str) -> VPath {
+        VPath::parse(wire).expect("wire")
+    }
 
     // Entry NO deriva Default y `mtime_ms` es el nombre real del campo
     // (no `mtime`) — ver crates/norte-proto/src/entry.rs.
@@ -293,6 +342,23 @@ mod tests {
             q.selected_entry_index().map(|i| entries[i].path.clone()),
             prev,
             "la selección sigue en el MISMO path tras el resort, no en el mismo índice"
+        );
+    }
+
+    #[test]
+    fn historial_push_dedup_tope_y_retirada() {
+        let mut h = History::default();
+        for i in 0..40 {
+            h.push(vp(&format!("mem:///d{i}")));
+        }
+        assert_eq!(h.entries().len(), 30, "tope");
+        assert_eq!(h.entries()[0], vp("mem:///d39"), "más reciente primero");
+        h.push(vp("mem:///d39"));
+        assert_eq!(h.entries().len(), 30, "dedup consecutivo");
+        h.remove(&vp("mem:///d39"));
+        assert!(
+            !h.entries().contains(&vp("mem:///d39")),
+            "retirada tras NotFound"
         );
     }
 }

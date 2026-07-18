@@ -41,6 +41,25 @@
       },
       "type": "object"
     },
+    "HotlistEntry": {
+      "additionalProperties": false,
+      "description": "Una entrada de `[[hotlist]]` en `norte.toml`, tal cual en disco. `path`\nes la forma wire sin validar (`scheme://…`; remotos válidos) — se\nvalida a [`VPath`] al fusionar capas en [`load`], NUNCA aquí: una\nentrada rota se degrada por entrada (ver [`HotlistItem`]), no debe\ntumbar el parseo de todo `norte.toml`.",
+      "properties": {
+        "name": {
+          "description": "Nombre mostrado en el popup (`Ctrl+D`).",
+          "type": "string"
+        },
+        "path": {
+          "description": "Path en forma wire, sin validar todavía.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "path"
+      ],
+      "type": "object"
+    },
     "KeymapSection": {
       "additionalProperties": false,
       "description": "`[keymap]` de `norte.toml`.",
@@ -68,6 +87,14 @@
             "null"
           ]
         },
+        "quick_search": {
+          "default": null,
+          "description": "Modo del quick search (`/`, spec 2026-07-18): `\"filter\"` (default,\nel listado se reduce) o `\"jump\"` (el cursor salta, el listado no\ncambia). Cualquier otro valor es config rota (ADR 0007: error\nclaro, jamás degradación silenciosa) — validado en [`load`], no\naquí, porque el diagnóstico necesita el `path` del archivo culpable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "theme": {
           "default": null,
           "description": "Tema: nombre de preset embebido (`default`, `catppuccin-mocha`,\n`gruvbox-dark`, `nord`, y los claros `gruvbox-light`,\n`catppuccin-latte`) o ruta a un `.toml` propio (ADR 0020). Ausente =\npreset `default`.",
@@ -87,6 +114,13 @@
     "daemon": {
       "$ref": "#/$defs/DaemonSection",
       "description": "Sección del daemon (fase 3 M2)."
+    },
+    "hotlist": {
+      "description": "Hotlist de directorios favoritos (`Ctrl+D`, spec 2026-07-18). Se\nACUMULA entre capas (no último-gana como los escalares) salvo la\ncapa proyecto, que queda excluida al fusionar en [`load`] — ver el\ncomentario ahí. Ausente = sin favoritos en esta capa.",
+      "items": {
+        "$ref": "#/$defs/HotlistEntry"
+      },
+      "type": "array"
     },
     "keymap": {
       "$ref": "#/$defs/KeymapSection",
