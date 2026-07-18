@@ -443,8 +443,11 @@ pub struct MatchInfo {
     /// Línea (1-based) del primer match, si se computó.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<u64>,
-    /// La línea del match decodificada lossy y RECORTADA server-side
-    /// (tope fijo; el TUI la sanea igualmente con `detail_for_bar`).
+    /// La línea del match decodificada lossy y saneada EN ORIGEN
+    /// (controles/bidi/invisibles enmascarados a `U+FFFD`, luego recorte a un
+    /// tope fijo de chars). El consumidor puede pintarla directa —jamás llegan
+    /// ANSI ni overrides bidi crudos por wire— aunque el TUI sigue pasándola
+    /// por `detail_for_bar` como cinturón.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<String>,
 }

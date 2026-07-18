@@ -498,6 +498,50 @@ async fn remote_search_como_el_embebido() {
     assert_eq!(join_ref(task).await, TaskState::Completed);
 }
 
+/// M1 (encoding, MEDIA): el nombre hostil cruza el WIRE byte-EXACTO. Un
+/// fichero de nombre `[0xFF, 0xFE]` (no-UTF8, jamás decodificable) sembrado en
+/// el árbol vuelve por el daemon real con sus bytes intactos —el mismo assert
+/// que el embebido, ahora cruzando la serialización JSON-RPC (regla dura §1:
+/// nombres = bytes, jamás se asume UTF-8).
+#[tokio::test]
+async fn remote_search_preserva_nombre_no_utf8_byte_exacto() {
+    let d = spawn_daemon().await;
+    let seg = norte_proto::Segment::new(vec![0xFF, 0xFE]).expect("segmento válido");
+    let hostil = MemProvider::root().join(seg);
+    let mut sink = d.mem.write(&hostil).await.expect("write abre");
+    sink.write(Bytes::new()).await.expect("chunk vacío");
+    sink.commit().await.expect("commit publica");
+    let backend = Backend::Remote(remote(&d).await);
+
+    let (task, mut rx) = backend
+        .search(FsSearchParams {
+            root: vp("mem:///"),
+            name_glob: Some("*".into()),
+            name_regex: None,
+            content: None,
+            content_regex: None,
+            case_sensitive: false,
+            max_hits: None,
+        })
+        .await
+        .expect("search");
+
+    let mut names: Vec<Vec<u8>> = Vec::new();
+    while let Some(hits) = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("un lote o el cierre antes del timeout")
+    {
+        for e in hits.entries {
+            names.push(e.path.file_name().expect("con nombre").as_bytes().to_vec());
+        }
+    }
+    assert_eq!(join_ref(task).await, TaskState::Completed);
+    assert!(
+        names.iter().any(|n| n.as_slice() == [0xFF, 0xFE]),
+        "el nombre no-UTF8 sobrevivió el wire byte-exacto: {names:?}"
+    );
+}
+
 /// Dos búsquedas CONCURRENTES en la MISMA conexión no mezclan sus lotes: el
 /// enrutado por `task_id` entrega a cada `rx` solo SUS hits (subtrees y globs
 /// disjuntos → cero solape observable si el enrutado es correcto).

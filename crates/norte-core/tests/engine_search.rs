@@ -310,13 +310,14 @@ async fn contenido_encoding_aware_tres_ficheros() {
     }
     write_file(&mem, "mem:///year_utf16bom.txt", &u16).await;
     // CJK en UTF-8: contiene 0xF1 como byte LÍDER (U+44001) — NO debe casar
-    // la aguja latina corta con la búsqueda encoding-aware.
-    write_file(
-        &mem,
-        "mem:///cjk_utf8.txt",
-        "汉字 \u{44001} texto\n".as_bytes(),
-    )
-    .await;
+    // la aguja latina corta con la búsqueda encoding-aware. Fixture canónica
+    // del corpus (`cjk_utf8_lead_f1`), no un literal ad-hoc.
+    let cjk = norte_testkit::corpus::content_fixtures()
+        .into_iter()
+        .find(|f| f.id == "cjk_utf8_lead_f1")
+        .expect("fixture en el corpus");
+    assert!(cjk.bytes.contains(&0xF1), "0xF1 líder");
+    write_file(&mem, "mem:///cjk_utf8.txt", &cjk.bytes).await;
 
     let mut p = params("mem:///");
     p.content = Some("año".to_owned());
@@ -330,6 +331,47 @@ async fn contenido_encoding_aware_tres_ficheros() {
             disp("mem:///year_utf16bom.txt"),
         ],
         "Latin-1 y UTF-16-BOM casan; el CJK-UTF8 no (falso positivo evitado)"
+    );
+}
+
+// A1 (encoding, ALTA): saneo EN ORIGEN del preview ──────────────────────────
+/// Un match cuyo preview lleva RLO + isolate sin cerrar + ESC+OSC + C0 crudo
+/// (fixture canónica `preview_bidi_ctrl_injection`) DEBE salir por wire ya
+/// saneado: ningún char de `is_terminal_hazard` sobrevive (el consumidor —
+/// tool MCP de fs.search — lo pintaría directo). Regla §6: jamás controles/
+/// bidi crudos, y aplica al PRODUCTOR.
+#[tokio::test]
+async fn preview_de_contenido_hostil_sale_saneado_en_origen() {
+    let fixture = norte_testkit::corpus::content_fixtures()
+        .into_iter()
+        .find(|f| f.id == "preview_bidi_ctrl_injection")
+        .expect("fixture en el corpus");
+    let (engine, mem) = setup();
+    write_file(&mem, "mem:///hostil.txt", &fixture.bytes).await;
+
+    let mut p = params("mem:///");
+    p.content = Some("aguja".to_owned());
+    let (h, rx) = engine.search_as(p, Actor::User).await.expect("search");
+    let hits = drain(rx).await;
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    let preview = hits
+        .iter()
+        .find_map(|(_, m)| m.as_ref().and_then(|m| m.preview.clone()))
+        .expect("hay preview del match");
+    // La aguja limpia sigue ahí, pero ningún hazard crudo.
+    assert!(
+        preview.contains("aguja"),
+        "conserva el texto legible: {preview:?}"
+    );
+    assert!(
+        !preview.chars().any(norte_encoding::is_terminal_hazard),
+        "el preview no lleva controles/bidi/invisibles crudos: {preview:?}"
+    );
+    // Y lo enmascarado salió como U+FFFD (marcado, no borrado en silencio).
+    assert!(
+        preview.contains('\u{FFFD}'),
+        "los hazards salen como �: {preview:?}"
     );
 }
 

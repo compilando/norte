@@ -823,10 +823,23 @@ fn line_contains(line: &str, needle: &str, case_sensitive: bool) -> bool {
     }
 }
 
-/// Recorta el preview a `PREVIEW_MAX_CHARS` caracteres (por char, no byte —
-/// jamás parte un char multibyte).
+/// Sanea el preview EN ORIGEN y lo recorta a `PREVIEW_MAX_CHARS`. El orden
+/// importa: enmascara PRIMERO (controles/bidi/invisibles → `U+FFFD` vía
+/// [`norte_encoding::mask_terminal_hazards`]) y recorta DESPUÉS, así el corte
+/// nunca parte dentro de un isolate bidi (ya es `U+FFFD`) ni deja un override
+/// sin cerrar. El productor NO manda jamás hazards crudos por wire (spec §6):
+/// un consumidor (p. ej. la tool MCP de `fs.search`) puede pintar el preview
+/// directo sin ejecutar ANSI ni sufrir spoofing de orden visual.
+///
+/// El recorte es por char, no por byte (jamás parte un char multibyte). Sigue
+/// sin ser consciente de grafema/celda de terminal (un cluster combinante o un
+/// char de doble ancho puede quedar cortado por el borde): el saneo-primero
+/// elimina el riesgo BIDI concreto; grafema/celda queda ligado a #79/#81.
 fn trim_preview(line: &str) -> String {
-    line.chars().take(PREVIEW_MAX_CHARS).collect()
+    norte_encoding::mask_terminal_hazards(line)
+        .chars()
+        .take(PREVIEW_MAX_CHARS)
+        .collect()
 }
 
 /// Extrae la línea que contiene el offset `pos` dentro de `buf` (entre los
@@ -932,10 +945,11 @@ mod tests {
         assert!(n.find_in(&mut Overlap::default(), b"&#960;").is_none());
     }
 
-    // NOTA deuda T3 (fixtures de corpus, ficheros reales): `year_latin1`,
-    // `year_utf16bom`, `cjk_utf8_no_casa_aguja_latin_corta` entran al corpus de
-    // norte-testkit cuando el walker de contenido exista. Aquí solo se fija el
-    // COMPORTAMIENTO de los matchers con bytes sintéticos.
+    // Los casos de corpus con ficheros reales YA existen sobre el walker de
+    // contenido (`engine_search.rs`: `contenido_encoding_aware_tres_ficheros`),
+    // y la fixture canónica del falso positivo CJK vive en el corpus de
+    // norte-testkit (`cjk_utf8_lead_f1`). Aquí solo se fija el COMPORTAMIENTO
+    // de los matchers con bytes sintéticos.
 
     #[test]
     fn falso_positivo_de_aguja_latina_corta_es_limite_de_literal() {

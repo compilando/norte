@@ -326,3 +326,57 @@ pub fn encode_lossless(enc: &'static Encoding, text: &str) -> Option<Vec<u8>> {
     }
     Some(bytes.into_owned())
 }
+
+/// ¿Es `c` un peligro para un terminal? Cc (controles: `\n`, ESC — un
+/// frontend directo los EJECUTARÍA: inyección ANSI/OSC), los overrides bidi
+/// Cf (spoofing RTL del orden visual: `202A..=202E`, `2066..=2069`) y los
+/// INVISIBLES Cf/Zl/Zp (dos textos visualmente idénticos que difieren en
+/// bytes engañan a un humano): ZWSP/ZWNJ, LRM/RLM/ALM, WORD JOINER,
+/// BOM/ZWNBSP, SOFT HYPHEN, TAG chars (strings enteros invisibles) y los
+/// separadores Zl/Zp (`U+2028`/`U+2029`, que `is_control` no coge).
+///
+/// ZWJ (`U+200D`) se PERMITE a sabiendas: enmascararlo rompería los emoji
+/// compuestos legítimos — fidelidad de emoji > el residual de un twin
+/// invisible solo-ZWJ.
+///
+/// Fuente ÚNICA del set (spec §6: jamás controles/bidi crudos en superficies
+/// de terminal). La consumen el saneo de preview de `fs.search` (productor,
+/// en origen) y el `display_name`/`must_mask` de la TUI.
+///
+/// ```
+/// use norte_encoding::is_terminal_hazard;
+/// assert!(is_terminal_hazard('\u{202E}')); // RLO (bidi)
+/// assert!(is_terminal_hazard('\u{001B}')); // ESC (control)
+/// assert!(is_terminal_hazard('\u{FEFF}')); // BOM/ZWNBSP (invisible)
+/// assert!(!is_terminal_hazard('\u{200D}')); // ZWJ permitido (emoji)
+/// assert!(!is_terminal_hazard('a'));
+/// ```
+#[must_use]
+pub fn is_terminal_hazard(c: char) -> bool {
+    c.is_control()
+        || matches!(c,
+            '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+            | '\u{200B}' | '\u{200C}' | '\u{200E}' | '\u{200F}' | '\u{061C}'
+            | '\u{2060}' | '\u{FEFF}' | '\u{00AD}' | '\u{2028}' | '\u{2029}'
+            | '\u{E0000}'..='\u{E007F}')
+}
+
+/// Reemplaza cada char de [`is_terminal_hazard`] por `U+FFFD` (`�`). Sanea
+/// EN ORIGEN un texto destinado a pintarse: controles, overrides bidi e
+/// invisibles jamás salen crudos. Mismo set y misma decisión ZWJ que
+/// [`is_terminal_hazard`].
+///
+/// ```
+/// use norte_encoding::mask_terminal_hazards;
+/// // RLO + isolate sin cerrar + ESC+OSC + C0 → todos a U+FFFD:
+/// let out = mask_terminal_hazards("ok \u{202E}\u{2066}\u{1B}]0;x\u{07}\u{01}");
+/// assert_eq!(out, "ok \u{FFFD}\u{FFFD}\u{FFFD}]0;x\u{FFFD}\u{FFFD}");
+/// // ZWJ (emoji) se preserva:
+/// assert_eq!(mask_terminal_hazards("a\u{200D}b"), "a\u{200D}b");
+/// ```
+#[must_use]
+pub fn mask_terminal_hazards(s: &str) -> String {
+    s.chars()
+        .map(|c| if is_terminal_hazard(c) { '\u{FFFD}' } else { c })
+        .collect()
+}

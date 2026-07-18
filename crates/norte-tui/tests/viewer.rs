@@ -17,10 +17,20 @@ fn texto_del_corpus_se_ve_decodificado() {
         let v = Viewer::new(vp(), f.bytes.clone(), false);
         assert!(!v.hex, "{}: texto, no hexview", f.id);
         let rows = v.rows(10);
+        // El viewer NEUTRALIZA los controles a `�` al pintar (`render_line`):
+        // el corpus incluye una fixture con controles crudos
+        // (`preview_bidi_ctrl_injection`), así que el esperado es la primera
+        // línea decodificada con esa misma neutralización (los fixtures limpios
+        // no tienen controles → esperado idéntico al decoded).
+        let esperado: Option<String> = f.decoded.lines().next().map(|l| {
+            l.chars()
+                .map(|c| if c.is_control() { '\u{FFFD}' } else { c })
+                .collect()
+        });
         assert_eq!(
-            rows.first().map(String::as_str),
-            f.decoded.lines().next(),
-            "{}: primera línea decodificada",
+            rows.first().cloned(),
+            esperado,
+            "{}: primera línea decodificada (controles neutralizados)",
             f.id
         );
         assert!(

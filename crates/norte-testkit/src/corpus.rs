@@ -1,5 +1,5 @@
 //! Corpus canónico de fixtures hostiles (spec §6.1/§12): 25 nombres de
-//! archivo + 9 contenidos detectables + 3 solo-forzables. TODO crate que toque paths o
+//! archivo + 11 contenidos detectables + 3 solo-forzables. TODO crate que toque paths o
 //! texto testea contra ESTE corpus — las fixtures nuevas entran aquí (regla
 //! de CLAUDE.md: test-first en bugs de encoding).
 
@@ -62,7 +62,7 @@ pub struct ContentFixture {
     pub decoded: &'static str,
 }
 
-/// Los 9 contenidos canónicos DETECTABLES. Texto base: `"año 2026\n"` (ñ fuera de ASCII),
+/// Los 11 contenidos canónicos DETECTABLES. Texto base: `"año 2026\n"` (ñ fuera de ASCII),
 /// `"テスト\n"` para Shift-JIS, o `"it’s\n"` para la zona divergente
 /// 0x80–0x9F de windows-1252. Generados en código: deterministas,
 /// autodocumentados, sin binarios opacos en el repo.
@@ -154,8 +154,43 @@ pub fn content_fixtures() -> Vec<ContentFixture> {
             },
             decoded: TEXT,
         },
+        ContentFixture {
+            // Falso positivo de la aguja LEGACY de 1 byte: "ñ" en
+            // windows-1252/ISO-8859-15 = 0xF1, que en UTF-8 aparece como byte
+            // LÍDER de una secuencia de 4 bytes. `F1 84 80 81` = U+44001: el
+            // modo literal a-ciegas casa 0xF1 POR AZAR; la búsqueda
+            // ENCODING-AWARE (aguja = 0xC3 0xB1) NO. Canoniza el límite que
+            // hasta ahora solo vivía inline en engine_search.rs.
+            id: "cjk_utf8_lead_f1",
+            encoding: "utf-8",
+            bytes: CJK_UTF8_LEAD_F1.as_bytes().to_vec(),
+            decoded: CJK_UTF8_LEAD_F1,
+        },
+        ContentFixture {
+            // Inyección por el PREVIEW de fs.search: la aguja + RLO (202E) +
+            // isolate (2066) SIN cerrar + ESC+OSC (`\x1b]0;pwn\x07`, cambia el
+            // título del terminal) + un C0 crudo (SOH). Un consumidor que
+            // pinte el preview directo ejecutaría el ANSI y vería el orden
+            // visual falsificado. El productor DEBE sanearlo en origen
+            // (mask_terminal_hazards): ningún char de is_terminal_hazard
+            // sobrevive. UTF-8 válido y sin NUL → detectable como texto.
+            id: "preview_bidi_ctrl_injection",
+            encoding: "utf-8",
+            bytes: PREVIEW_BIDI_CTRL_INJECTION.as_bytes().to_vec(),
+            decoded: PREVIEW_BIDI_CTRL_INJECTION,
+        },
     ]
 }
+
+/// Línea con `0xF1` como byte líder de un char de 4 bytes (`U+44001`): la
+/// aguja latina corta `ñ` (0xF1 en legacy) casa por azar en modo a-ciegas.
+pub(crate) const CJK_UTF8_LEAD_F1: &str = "汉字 \u{44001} texto\n";
+
+/// Línea hostil para el preview de `fs.search`: aguja `aguja` + RLO + isolate
+/// sin cerrar + ESC+OSC + C0 crudo. Ningún char de terminal-hazard debe
+/// sobrevivir al saneo en origen.
+pub(crate) const PREVIEW_BIDI_CTRL_INJECTION: &str =
+    "aguja \u{202E}reovni\u{2066} \u{1B}]0;pwn\u{07}\u{01}fin\n";
 
 fn hex_decode(s: &str) -> Vec<u8> {
     assert!(s.len().is_multiple_of(2), "hex de longitud par: {s}");

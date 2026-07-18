@@ -1,4 +1,4 @@
-//! Sanidad del corpus canónico: 37 fixtures (25 nombres + 9+3 contenidos),
+//! Sanidad del corpus canónico: 39 fixtures (25 nombres + 11+3 contenidos),
 //! nombres válidos como segmentos `VPath`, contenidos con la forma declarada.
 
 use norte_testkit::corpus::{content_fixtures, hostile_names};
@@ -6,7 +6,7 @@ use norte_testkit::corpus::{content_fixtures, hostile_names};
 #[test]
 fn corpus_counts() {
     assert_eq!(hostile_names().len(), 25, "nombres hostiles");
-    assert_eq!(content_fixtures().len(), 9, "contenidos detectables");
+    assert_eq!(content_fixtures().len(), 11, "contenidos detectables");
     assert_eq!(
         norte_testkit::corpus::content_fixtures_forced().len(),
         3,
@@ -98,6 +98,25 @@ fn contents_match_declared_shape() {
             "gb18030" => {
                 assert_eq!(&c.bytes[..4], b"\x95\x32\x82\x36", "4 bytes de GB18030");
                 assert!(c.decoded.starts_with('\u{20000}'), "zona exclusiva");
+            }
+            "cjk_utf8_lead_f1" => {
+                // UTF-8 válido con 0xF1 como byte LÍDER de un char de 4 bytes.
+                assert_eq!(std::str::from_utf8(&c.bytes).unwrap(), c.decoded);
+                assert!(c.bytes.contains(&0xF1), "0xF1 líder presente");
+                assert!(
+                    c.decoded.contains('\u{44001}'),
+                    "el char de 4 bytes (F1 84 80 81) está"
+                );
+            }
+            "preview_bidi_ctrl_injection" => {
+                // UTF-8 válido (decodifica exacto) pero PLAGADO de hazards de
+                // terminal: RLO, isolate sin cerrar, ESC+OSC y un C0 crudo.
+                assert_eq!(std::str::from_utf8(&c.bytes).unwrap(), c.decoded);
+                assert!(!c.bytes.contains(&0x00), "sin NUL: detectable como texto");
+                assert!(
+                    c.decoded.chars().any(char::is_control) && c.decoded.contains('\u{202E}'),
+                    "lleva controles y bidi crudos (el productor DEBE sanear)"
+                );
             }
             "koi8_r" => {
                 assert!(std::str::from_utf8(&c.bytes).is_err());

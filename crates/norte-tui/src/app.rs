@@ -424,23 +424,19 @@ fn name_bytes(e: &Entry) -> &[u8] {
     e.path.file_name().map_or(b"", |n| n.as_bytes())
 }
 
-/// ¿Debe enmascararse en un terminal? Cc (controles: `\n`, ESC — ratatui
-/// los BORRA en silencio y un frontend directo los ejecutaría), los
-/// overrides bidi Cf (spoofing RTL del orden visual) y los INVISIBLES Cf/Zl/Zp
-/// (encoding-auditor H4 de M3-3b: dos nombres visualmente idénticos que
-/// difieren en bytes engañan a un humano que aprueba "el que ya vio"):
-/// ZWSP/ZWNJ, LRM/RLM/ALM, WORD JOINER, BOM/ZWNBSP, SOFT HYPHEN, TAG chars
-/// (strings enteros invisibles) y los separadores Zl/Zp (U+2028/9, que
-/// `is_control` no coge). ZWJ (U+200D) se PERMITE a sabiendas: enmascararlo
-/// rompería los emoji compuestos legítimos (fixture `emoji_zwj_family`) —
-/// fidelidad de emoji > el residual de un twin invisible solo-ZWJ.
+/// ¿Debe enmascararse en un terminal? DELEGA en
+/// [`norte_encoding::is_terminal_hazard`] (fuente ÚNICA del set — antes vivía
+/// atrapado aquí; ahora lo comparte con el saneo de preview de `fs.search`).
+/// Cubre Cc (controles: `\n`, ESC — ratatui los BORRA en silencio y un
+/// frontend directo los ejecutaría), los overrides bidi Cf (spoofing RTL del
+/// orden visual) y los INVISIBLES Cf/Zl/Zp (encoding-auditor H4 de M3-3b: dos
+/// nombres visualmente idénticos que difieren en bytes engañan a un humano que
+/// aprueba "el que ya vio"): ZWSP/ZWNJ, LRM/RLM/ALM, WORD JOINER, BOM/ZWNBSP,
+/// SOFT HYPHEN, TAG chars y los separadores Zl/Zp. ZWJ (U+200D) se PERMITE a
+/// sabiendas: enmascararlo rompería los emoji compuestos legítimos (fixture
+/// `emoji_zwj_family`) — fidelidad de emoji > el residual de un twin invisible.
 fn must_mask(c: char) -> bool {
-    c.is_control()
-        || matches!(c,
-            '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
-            | '\u{200B}' | '\u{200C}' | '\u{200E}' | '\u{200F}' | '\u{061C}'
-            | '\u{2060}' | '\u{FEFF}' | '\u{00AD}' | '\u{2028}' | '\u{2029}'
-            | '\u{E0000}'..='\u{E007F}')
+    norte_encoding::is_terminal_hazard(c)
 }
 
 /// Nombre listo para pintar: `(texto, hostil)`. `hostil = true` cuando el
