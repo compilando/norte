@@ -225,18 +225,18 @@ impl ScopeRegistry {
     /// si SOLO scopes ya vencidos habrían cubierto la raíz (un expirado que ni
     /// la cubre no produce `Expired`); `OutOfScope` si ninguno la cubre.
     ///
-    /// Es el gate de lectura de `fs.search` para agentes (liveSearch T4,
-    /// security): `fs.search` amplifica la lectura (una llamada sobre `/`
-    /// exfiltraría previews de todo el árbol), así que un `Agent` solo busca
-    /// bajo un scope concedido. `fs.list`/`fs.read` siguen SIN este gate (deuda
-    /// #80: M3 solo gateó mutaciones).
+    /// Es el gate de lectura de TODOS los reads de agente (fs.search T4 +
+    /// fs.list/read/stat/capabilities + plugin.preview, #80): un `Agent` solo
+    /// lee bajo un scope concedido de su sesión; un `User` no se sandboxea. La
+    /// fuente única que los consulta es `daemon::read_gate`.
     ///
-    /// CAVEAT (op-independiente): al ignorar el [`OpSet`], un scope de SOLO
-    /// `delete` bajo `/tmp` concede lectura de `/tmp`. Hoy es inocuo (search es
-    /// el único consumidor y su alternativa sería negar toda lectura), pero al
-    /// cerrar #80 —gatear también `fs.read`/`fs.list`— NO basta `covers_read`:
-    /// hay que exigir una op de lectura (p. ej. un `PolicyOp::Read`), o un grant
-    /// de `delete` desbloquearía lectura de todo el subtree.
+    /// CAVEAT ACEPTADO (op-independiente, decisión oscar en
+    /// `2026-07-18-gate-lectura-agentes-design.md` §1): al ignorar el
+    /// [`OpSet`], un scope de SOLO `delete`/`mkdir` bajo `/tmp` concede lectura
+    /// de `/tmp`. Se aceptó a sabiendas: leer es estrictamente menos que
+    /// cualquier mutación y `copy`/`move`/`delete` YA implican leer; el residual
+    /// `delete`/`mkdir`-sin-lectura es raro. Least-privilege puro (write-only-
+    /// no-read) exigiría un `PolicyOp::Read` — fuera de alcance de #80.
     ///
     /// # Panics
     /// Solo si el lock interno queda envenenado.

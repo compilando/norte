@@ -951,6 +951,9 @@ async fn handle_fs_list(
     conn: &mut ConnState,
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
+    // El gate de lectura (#80) lo aplica el ARM del dispatch, fuera de este
+    // span instrumentado (no filtra el path a la traza en una denegación).
+
     // Barrido perezoso antes de tocar el mapa (además del periódico).
     conn.sweep_expired(shared.listing_ttl);
 
@@ -1397,6 +1400,11 @@ async fn dispatch(
         // para retener el stream paginado entre páginas (ADR 0017).
         methods::FS_LIST => {
             let p: methods::FsListParams = parse_params(req.params)?;
+            // Gate de lectura (#80) AQUÍ, FUERA del span instrumentado de
+            // `handle_fs_list` (que lleva `path` en sus fields): una denegación
+            // no debe filtrar el path a la traza. Basta el ARRANQUE — la
+            // continuación por cursor es del MISMO path ya validado.
+            read_gate(&conn.actor, &p.path, shared)?;
             handle_fs_list(p, conn, shared).await
         }
         // policy.* con round-trip humano (M3-3b): request/grant de scope. Viven
@@ -1441,7 +1449,7 @@ async fn dispatch(
         // plugin.run_command (M4-P4): ABIERTO (ejecutar no consiente nada).
         methods::PLUGIN_RUN_COMMAND => handle_plugin_run_command(req.params, shared).await,
         // plugin.preview (M4-P5): ABIERTO (previsualizar no consiente nada).
-        methods::PLUGIN_PREVIEW => handle_plugin_preview(req.params, shared).await,
+        methods::PLUGIN_PREVIEW => handle_plugin_preview(req.params, &conn.actor, shared).await,
         _ => dispatch_fs_task(req, conn_id, conn.actor.clone(), shared).await,
     }
 }
@@ -1919,17 +1927,21 @@ fn run_error_to_rpc(e: &crate::plugins::PluginRunError) -> RpcError {
 /// el archivo con la autoridad del daemon, igual que `fs.read`, que HOY es
 /// abierto para agentes. Como el preview devuelve una transformación con
 /// pérdida del primer MiB, es lectura estrictamente INFERIOR a la de `fs.read`
-/// crudo (sin escalada; security-reviewer M4-P5). INVARIANTE: si algún día se
-/// gatea `fs.read` por scope/actor de agente, `plugin.preview` DEBE gatearse en
-/// el MISMO cambio o se convierte en el bypass de lectura.
+/// crudo (sin escalada; security-reviewer M4-P5). INVARIANTE (cumplida en #80):
+/// `plugin.preview` gatea con el MISMO [`read_gate`] que `fs.read` — un agente
+/// solo previsualiza bajo su scope; si no, sería el bypass de lectura.
 // `skip_all`: `p.path` va a los campos redactados de las capas inferiores, no al
 // span de este handler (mismo criterio que run_command).
 #[tracing::instrument(skip_all)]
 async fn handle_plugin_preview(
     params: Option<serde_json::Value>,
+    actor: &Actor,
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::PluginPreviewParams = parse_params(params)?;
+    // Gate de lectura (#80): preview LEE el archivo con la autoridad del daemon;
+    // sin este gate un agente sin scope exfiltraría contenido esquivando fs.read.
+    read_gate(actor, &p.path, shared)?;
     // El mimetype es `&'static str` (heurística por extensión, no lee bytes).
     let mime = crate::plugins::guess_mimetype(&p.path);
     // 1) Resolver bajo el lock (barato). El guard NO cruza el `.await`.
@@ -2001,6 +2013,52 @@ fn scope_deadline(ttl_ms: u64) -> Instant {
     now.checked_add(Duration::from_millis(ms)).unwrap_or(now)
 }
 
+/// Gate de LECTURA para agentes (cierra #80). Fuente ÚNICA del criterio que
+/// hoy consultan `fs.list`/`fs.read`/`fs.stat`/`fs.capabilities` y `fs.search`:
+/// un `Actor::Agent` solo lee bajo un scope VIVO de su sesión
+/// ([`ScopeRegistry::covers_read`], membresía de raíz independiente de op —
+/// leer es estrictamente menos que cualquier mutación); un `User` (humano) no
+/// se sandboxea; CUALQUIER otro actor (`Plugin` hoy, o variantes futuras) se
+/// deniega SIN excepción (default-deny para lo que aún no sabemos gobernar; de
+/// ahí el `allow` del lint —nombrar `Plugin` dejaría pasar sin gate una
+/// variante futura—). El veredicto es `PolicyDenied` con la categoría gruesa
+/// del vocabulario cerrado ([`DenyReason::rule_id`]), jamás la regla concreta
+/// ni el `path` (sin fuga en el error ni en la traza de auditoría M3-5).
+///
+/// Simétrico con el gate de MUTACIONES de M3 (`Engine::gate`): la IA es un
+/// ciudadano, no un dueño (spec §1.5).
+fn read_gate(
+    actor: &Actor,
+    path: &norte_proto::VPath,
+    shared: &Arc<Shared>,
+) -> Result<(), RpcError> {
+    use crate::policy::{DenyReason, ScopeVerdict};
+    #[allow(clippy::match_wildcard_for_single_variants)]
+    let denied: Option<DenyReason> = match actor {
+        Actor::User => None,
+        Actor::Agent { session } => {
+            match shared.scopes.covers_read(session, path, Instant::now()) {
+                ScopeVerdict::Within => None,
+                ScopeVerdict::Expired => Some(DenyReason::ScopeExpired),
+                ScopeVerdict::OutOfScope => Some(DenyReason::OutOfScope),
+            }
+        }
+        _ => Some(DenyReason::OutOfScope),
+    };
+    if let Some(reason) = denied {
+        // Trazable (auditoría M3-5), como el gate de mutaciones. Solo la
+        // categoría gruesa y el actor: jamás el path denegado.
+        tracing::warn!(
+            rule = reason.rule_id(),
+            "lectura sin scope: denegada (default-deny)"
+        );
+        return Err(RpcError::from(norte_proto::Error::PolicyDenied {
+            rule: reason.rule_id().to_owned(),
+        }));
+    }
+    Ok(())
+}
+
 /// `fs.search` (0.18.0, live search): búsqueda recursiva de nombre/contenido
 /// bajo `root` como Task cancelable. Los HITS llegan por `search.hits` SOLO a
 /// la conexión `conn_id` que la lanzó (envío dirigido, jamás broadcast — son
@@ -2031,39 +2089,9 @@ async fn handle_fs_search(
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::FsSearchParams = parse_params(params)?;
 
-    // Gate de lectura DEFAULT-DENY: solo el humano (`User`) busca sin scope; un
-    // `Agent` debe caer bajo un scope de lectura de su sesión; CUALQUIER otro
-    // actor (`Plugin` hoy, o variantes futuras) se deniega SIN excepción. El
-    // wildcard es deliberado —default-deny para lo que aún no sabemos gobernar—;
-    // de ahí el `allow` del lint (nombrar `Plugin` dejaría pasar sin gate una
-    // variante futura). NOTA LOAD-BEARING: este gate acota `fs.search`, pero el
-    // confinamiento REAL de la lectura del agente depende de #80 —`fs.read`/
-    // `fs.list`/`fs.stat` siguen SIN gate de scope (M3 solo gateó mutaciones)—.
-    use crate::policy::{DenyReason, ScopeVerdict};
-    #[allow(clippy::match_wildcard_for_single_variants)]
-    let denied: Option<DenyReason> = match actor {
-        Actor::User => None,
-        Actor::Agent { session } => {
-            match shared.scopes.covers_read(session, &p.root, Instant::now()) {
-                ScopeVerdict::Within => None,
-                ScopeVerdict::Expired => Some(DenyReason::ScopeExpired),
-                ScopeVerdict::OutOfScope => Some(DenyReason::OutOfScope),
-            }
-        }
-        _ => Some(DenyReason::OutOfScope),
-    };
-    if let Some(reason) = denied {
-        // Trazable (material de auditoría M3-5), como el gate de mutaciones.
-        tracing::warn!(
-            rule = reason.rule_id(),
-            "fs.search sin scope de lectura: denegado (default-deny)"
-        );
-        // Mismo camino que una copia fuera de scope: PolicyDenied viaja como
-        // taxonomía en `data` (categoría gruesa, jamás la regla concreta).
-        return Err(RpcError::from(norte_proto::Error::PolicyDenied {
-            rule: reason.rule_id().to_owned(),
-        }));
-    }
+    // Gate de lectura (default-deny para agentes fuera de scope): el mismo
+    // [`read_gate`] que `fs.list`/`fs.read`/`fs.stat`/`fs.capabilities` (#80).
+    read_gate(actor, &p.root, shared)?;
 
     // Validación de criterios ANTES de la Task: compila los matchers para
     // recuperar el diagnóstico saneado y responder INVALID_PARAMS sin crear
@@ -2122,6 +2150,7 @@ async fn dispatch_fs_task(
         methods::FS_SEARCH => handle_fs_search(req.params, conn_id, &actor, shared).await,
         methods::FS_STAT => {
             let p: methods::FsStatParams = parse_params(req.params)?;
+            read_gate(&actor, &p.path, shared)?; // #80
             let entry = shared.engine.stat(&p.path).await.map_err(RpcError::from)?;
             to_value(&methods::FsStatResult { entry })
         }
@@ -2215,10 +2244,12 @@ async fn dispatch_task_family(
         }
         methods::FS_READ => {
             let p: methods::FsReadParams = parse_params(req.params)?;
+            read_gate(&actor, &p.path, shared)?; // #80
             dispatch_fs_read(p, shared).await
         }
         methods::FS_CAPABILITIES => {
             let p: methods::FsCapabilitiesParams = parse_params(req.params)?;
+            read_gate(&actor, &p.path, shared)?; // #80: revela existencia/tipo
             let capabilities = shared
                 .engine
                 .capabilities(&p.path)

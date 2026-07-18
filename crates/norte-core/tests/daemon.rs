@@ -3131,3 +3131,173 @@ async fn agente_scope_no_cubre_root() {
         other => panic!("esperaba Rpc, fue {other:?}"),
     }
 }
+
+/// Asevera que una lectura da `PolicyDenied` out-of-scope (helper de #80).
+async fn assert_read_denied(agent: &Client, method: &str, params: &impl serde::Serialize) {
+    let err = agent
+        .call::<_, serde_json::Value>(method, params)
+        .await
+        .expect_err("sin scope no lee");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
+            "{method}: PolicyDenied out-of-scope, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("{method}: esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// #80: las LECTURAS (`list`/`read`/`stat`/`capabilities`) gatean por scope
+/// para agentes, igual que las mutaciones. Sin scope da `PolicyDenied`; con un
+/// scope que cubre la raíz (op-independiente: un grant de `copy` basta) da OK.
+#[tokio::test]
+async fn agente_sin_scope_no_lee_y_con_scope_si() {
+    let d = spawn_daemon_policy().await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
+    write_file(&d.mem, "mem:///proj/a.txt", b"hola").await;
+    let agent = connected_agent(&d, "s1").await;
+
+    // 1) Sin scope: los cuatro reads denegados.
+    assert_read_denied(
+        &agent,
+        methods::FS_LIST,
+        &FsListParams {
+            path: vp("mem:///proj"),
+            limit: None,
+            cursor: None,
+        },
+    )
+    .await;
+    assert_read_denied(
+        &agent,
+        methods::FS_STAT,
+        &FsStatParams {
+            path: vp("mem:///proj/a.txt"),
+        },
+    )
+    .await;
+    assert_read_denied(
+        &agent,
+        methods::FS_READ,
+        &methods::FsReadParams {
+            path: vp("mem:///proj/a.txt"),
+            range: None,
+        },
+    )
+    .await;
+    assert_read_denied(
+        &agent,
+        methods::FS_CAPABILITIES,
+        &methods::FsCapabilitiesParams {
+            path: vp("mem:///proj"),
+        },
+    )
+    .await;
+
+    // 2) Un humano concede scope sobre mem:///proj (op copy — cubre lectura).
+    let human = connected_client(&d).await;
+    grant_copy_scope(&agent, &human, "s1").await;
+
+    // 3) Ahora los cuatro reads proceden.
+    let list: FsListResult = agent
+        .call(
+            methods::FS_LIST,
+            &FsListParams {
+                path: vp("mem:///proj"),
+                limit: None,
+                cursor: None,
+            },
+        )
+        .await
+        .expect("con scope lista");
+    assert_eq!(list.entries.len(), 1);
+    let stat: FsStatResult = agent
+        .call(
+            methods::FS_STAT,
+            &FsStatParams {
+                path: vp("mem:///proj/a.txt"),
+            },
+        )
+        .await
+        .expect("con scope statea");
+    assert_eq!(stat.entry.size, Some(4));
+    let read: methods::FsReadResult = agent
+        .call(
+            methods::FS_READ,
+            &methods::FsReadParams {
+                path: vp("mem:///proj/a.txt"),
+                range: None,
+            },
+        )
+        .await
+        .expect("con scope lee");
+    assert!(!read.content_b64.is_empty(), "leyó algo con scope");
+    let _caps: methods::FsCapabilitiesResult = agent
+        .call(
+            methods::FS_CAPABILITIES,
+            &methods::FsCapabilitiesParams {
+                path: vp("mem:///proj"),
+            },
+        )
+        .await
+        .expect("con scope capabilities");
+}
+
+/// #80 (bypass CRÍTICO cerrado): `plugin.preview` LEE el archivo con la
+/// autoridad del daemon — sin gate sería la puerta lateral a `fs.read`. Un
+/// agente sin scope no previsualiza; con scope, procede (sin previewer casando
+/// = `None`, no error, pero PASA el gate).
+#[tokio::test]
+async fn agente_sin_scope_no_preview() {
+    let d = spawn_daemon_policy().await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
+    write_file(&d.mem, "mem:///proj/nota.txt", b"secreto").await;
+    let agent = connected_agent(&d, "s1").await;
+
+    assert_read_denied(
+        &agent,
+        methods::PLUGIN_PREVIEW,
+        &methods::PluginPreviewParams {
+            path: vp("mem:///proj/nota.txt"),
+        },
+    )
+    .await;
+
+    let human = connected_client(&d).await;
+    grant_copy_scope(&agent, &human, "s1").await;
+    // Con scope: pasa el gate (sin previewer instalado → preview None, no error).
+    let res: methods::PluginPreviewResult = agent
+        .call(
+            methods::PLUGIN_PREVIEW,
+            &methods::PluginPreviewParams {
+                path: vp("mem:///proj/nota.txt"),
+            },
+        )
+        .await
+        .expect("con scope el gate deja pasar");
+    assert!(res.preview.is_none());
+}
+
+/// #80: un HUMANO (User) lee sin scope — no se sandboxea, simetría con las
+/// mutaciones (User = allow-all).
+#[tokio::test]
+async fn humano_lee_sin_scope() {
+    let d = spawn_daemon_policy().await;
+    d.mem.mkdir(&vp("mem:///x")).await.expect("mkdir");
+    write_file(&d.mem, "mem:///x/f.txt", b"hi").await;
+    let human = connected_client(&d).await;
+
+    let list: FsListResult = human
+        .call(
+            methods::FS_LIST,
+            &FsListParams {
+                path: vp("mem:///x"),
+                limit: None,
+                cursor: None,
+            },
+        )
+        .await
+        .expect("humano lista sin scope");
+    assert_eq!(list.entries.len(), 1);
+}

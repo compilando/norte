@@ -176,12 +176,13 @@ async fn initialize_ping_y_tools_list() {
 }
 
 #[tokio::test]
-async fn list_dir_y_stat_leen_sin_scope() {
-    // Las LECTURAS no pasan por el gate (policy gobierna mutaciones): un
-    // agente sin scope puede mirar. (Endurecerlo = decisión futura de spec.)
+async fn list_dir_y_stat_leen_bajo_scope() {
+    // Las LECTURAS pasan por el gate de scope igual que las mutaciones (#80):
+    // un agente lee SOLO bajo un scope concedido. Aquí se concede antes.
     let d = spawn_daemon_allow().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/a.txt", b"hola").await;
+    grant_proj(&d, "claude");
     let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
 
     let (out, err) = call_tool(&b, "list_dir", serde_json::json!({"path": "mem:///proj"})).await;
@@ -196,12 +197,39 @@ async fn list_dir_y_stat_leen_sin_scope() {
     assert_eq!(v["size"], 4);
 }
 
+/// #80: un agente SIN scope recibe la denegación ACCIONABLE (menciona
+/// `request_scope`) en las lecturas, igual que ya la recibe en `copy`.
+#[tokio::test]
+async fn lecturas_sin_scope_son_accionables() {
+    let d = spawn_daemon_allow().await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
+    write_file(&d.mem, "mem:///proj/a.txt", b"hola").await;
+    let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
+
+    for (tool, args) in [
+        ("list_dir", serde_json::json!({"path": "mem:///proj"})),
+        ("stat", serde_json::json!({"path": "mem:///proj/a.txt"})),
+        (
+            "read_file",
+            serde_json::json!({"path": "mem:///proj/a.txt"}),
+        ),
+    ] {
+        let (out, err) = call_tool(&b, tool, args).await;
+        assert!(err, "{tool}: sin scope debe fallar");
+        assert!(
+            out.contains("out-of-scope") && out.contains("request_scope"),
+            "{tool}: error accionable, fue: {out}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn read_file_texto_y_binario_fiel() {
     let d = spawn_daemon_allow().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/texto.txt", b"hola \xc3\xb1").await;
     write_file(&d.mem, "mem:///proj/crudo.bin", &[0x68, 0xE9, 0x00, 0xFF]).await;
+    grant_proj(&d, "claude");
     let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
 
     let (out, err) = call_tool(
@@ -477,6 +505,7 @@ async fn read_file_frontera_multibyte_cae_a_base64_fiel() {
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     // "año…": offset=1,len=1 corta la ñ (0xC3 0xB1) → chunk [0xC3].
     write_file(&d.mem, "mem:///proj/texto.txt", "año 2026\n".as_bytes()).await;
+    grant_proj(&d, "claude"); // #80: leer exige scope
     let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
     let (out, err) = call_tool(
         &b,

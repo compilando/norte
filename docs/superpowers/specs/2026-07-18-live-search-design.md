@@ -179,13 +179,11 @@ round-trip real contra sftp/daemon queda cubierto por los tests de T4/T5
   reusar el campo existente para no ampliar `TaskProgress`.
 - **Gate de scope de lectura para agentes**: `fs.search` gatea con
   `ScopeRegistry::covers_read` (`daemon/server.rs`), el mismo criterio que
-  se documentó para `fs.list`. Pero **`fs.list`/`fs.read` en sí AÚN no
-  están gateados** (deuda **#80** — `policy.rs` lo señala explícitamente:
-  cerrar #80 no basta con `covers_read` solo, hace falta cablear los
-  handlers de lectura). Mientras #80 siga abierta, el confinamiento real
-  de un agente por scope depende de que se cierre esa deuda: `fs.search`
-  por sí sola gatea correctamente, pero un agente sin scope podría seguir
-  leyendo directo si el frontend se lo permite.
+  `fs.list`/`fs.read`/`fs.stat`/`fs.capabilities`. **#80 CERRADA** (2026-07-18,
+  spec `2026-07-18-gate-lectura-agentes-design.md`): el helper `read_gate`
+  es la fuente única y los 4 reads + search lo consultan. El confinamiento
+  de lectura del agente por scope ya es REAL — un agente sin scope no lee
+  nada, igual que no muta.
 - **Preview de contenido NO surface en el pane v1**: el pane virtual es
   una vista PLANA tipo listing normal (feed-to-listbox) — `MatchInfo`
   (línea + preview recortado) viaja por el wire y se calcula server-side,

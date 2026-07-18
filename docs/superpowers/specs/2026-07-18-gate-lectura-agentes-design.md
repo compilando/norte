@@ -1,7 +1,10 @@
 # Gate de lectura para agentes (cierra #80) — diseño
 
 - Fecha: 2026-07-18
-- Estado: aprobado (oscar); pendiente de plan
+- Estado: **IMPLEMENTADO** (2026-07-18, inline en `daemon/server.rs`
+  `read_gate` + los 4 handlers; `handle_fs_search` lo reusa; tests en
+  `daemon.rs` y `mcp/bridge.rs`; #80 cerrada). Se ejecutó inline (un helper
+  + 5 call-sites + tests), no por plan de subagentes, por tamaño.
 - Contexto: issue #80 (ALTA, LOAD-BEARING). M3 gateó las MUTACIONES
   (fs.copy/move/delete) para `Actor::Agent`; las LECTURAS quedaron abiertas
   por simetría con el humano. `fs.search` (live search T4) rompió esa apuesta
