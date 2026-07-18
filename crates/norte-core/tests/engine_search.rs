@@ -6,12 +6,16 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use bytes::Bytes;
+use futures::StreamExt;
 use norte_core::{Actor, Engine};
 use norte_proto::methods::{FsSearchParams, MatchInfo, SearchHits};
-use norte_proto::{Entry, TaskState, VPath};
+use norte_proto::{
+    ByteRange, Capabilities, Entry, EntryKind, Error as ProtoError, TaskState, VPath,
+};
 use norte_testkit::MemProvider;
-use norte_vfs::Provider;
+use norte_vfs::{ByteSink, ByteStream, EntryStream, Provider};
 use tokio::sync::mpsc::Receiver;
 
 fn vp(wire: &str) -> VPath {
@@ -327,4 +331,101 @@ async fn contenido_encoding_aware_tres_ficheros() {
         ],
         "Latin-1 y UTF-16-BOM casan; el CJK-UTF8 no (falso positivo evitado)"
     );
+}
+
+// 10 (security T4, MEDIA) ──────────────────────────────────────────────────
+/// Provider que delega en un `MemProvider` real pero, al listar `inject_under`,
+/// AÑADE entradas fabricadas cuyo path está FUERA del subtree — simula un
+/// provider con bug (o malicioso) que devuelve NO-descendientes. `run_walk`
+/// debe ignorarlas por completo (defensa en profundidad: el scope de la
+/// búsqueda es invariante DURO del core, no confía en la corrección del list).
+struct RogueList {
+    inner: Arc<MemProvider>,
+    inject_under: VPath,
+    inject: Vec<Entry>,
+}
+
+#[async_trait]
+impl Provider for RogueList {
+    fn scheme(&self) -> &str {
+        self.inner.scheme()
+    }
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+    async fn stat(&self, p: &VPath) -> Result<Entry, ProtoError> {
+        self.inner.stat(p).await
+    }
+    async fn list(&self, p: &VPath) -> Result<EntryStream, ProtoError> {
+        let mut inner = self.inner.list(p).await?;
+        let mut items: Vec<Result<Entry, ProtoError>> = Vec::new();
+        while let Some(e) = inner.next().await {
+            items.push(e);
+        }
+        // Inyecta los no-descendientes SOLO al listar el dir del ataque.
+        if p == &self.inject_under {
+            for e in &self.inject {
+                items.push(Ok(e.clone()));
+            }
+        }
+        Ok(Box::pin(futures::stream::iter(items)))
+    }
+    async fn read(&self, p: &VPath, range: Option<ByteRange>) -> Result<ByteStream, ProtoError> {
+        self.inner.read(p, range).await
+    }
+    async fn write(&self, p: &VPath) -> Result<Box<dyn ByteSink>, ProtoError> {
+        self.inner.write(p).await
+    }
+    async fn mkdir(&self, p: &VPath) -> Result<(), ProtoError> {
+        self.inner.mkdir(p).await
+    }
+    async fn remove(&self, p: &VPath) -> Result<(), ProtoError> {
+        self.inner.remove(p).await
+    }
+    async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), ProtoError> {
+        self.inner.rename(from, to).await
+    }
+}
+
+#[tokio::test]
+async fn walk_ignora_entradas_fuera_del_root_aunque_el_provider_las_liste() {
+    let mem = Arc::new(MemProvider::new());
+    // Dentro del root del ataque: un fichero genuino con la aguja.
+    mkdir(&mem, "mem:///proj").await;
+    write_file(&mem, "mem:///proj/inside.txt", "año dentro".as_bytes()).await;
+    // FUERA del root: un fichero con la aguja y un dir con un hijo con la aguja.
+    write_file(&mem, "mem:///secret.txt", "año secreto".as_bytes()).await;
+    mkdir(&mem, "mem:///other").await;
+    write_file(&mem, "mem:///other/hidden.txt", "año oculto".as_bytes()).await;
+
+    // El provider inyecta esos no-descendientes al listar mem:///proj.
+    let rogue = Arc::new(RogueList {
+        inner: Arc::clone(&mem),
+        inject_under: vp("mem:///proj"),
+        inject: vec![
+            Entry {
+                path: vp("mem:///secret.txt"),
+                kind: EntryKind::File,
+                size: None,
+                mtime_ms: None,
+            },
+            Entry {
+                path: vp("mem:///other"),
+                kind: EntryKind::Dir,
+                size: None,
+                mtime_ms: None,
+            },
+        ],
+    });
+    let engine = Engine::new();
+    engine.register_provider(rogue as Arc<dyn Provider>);
+
+    let mut p = params("mem:///proj");
+    p.content = Some("año".into());
+    let (h, rx) = engine.search_as(p, Actor::User).await.expect("search");
+    let hits = drain(rx).await;
+    assert_eq!(h.join().await, TaskState::Completed);
+    // SOLO el descendiente genuino: los no-descendientes jamás se leen (secret)
+    // ni se descienden (other/hidden). El confinamiento no depende del provider.
+    assert_eq!(paths(&hits), vec![disp("mem:///proj/inside.txt")]);
 }

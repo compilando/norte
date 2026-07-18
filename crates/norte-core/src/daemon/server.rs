@@ -2031,26 +2031,38 @@ async fn handle_fs_search(
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::FsSearchParams = parse_params(params)?;
 
-    // Gate de lectura: un agente solo busca bajo un scope concedido a su sesión.
-    if let Actor::Agent { session } = actor {
-        use crate::policy::{DenyReason, ScopeVerdict};
-        let reason = match shared.scopes.covers_read(session, &p.root, Instant::now()) {
-            ScopeVerdict::Within => None,
-            ScopeVerdict::Expired => Some(DenyReason::ScopeExpired),
-            ScopeVerdict::OutOfScope => Some(DenyReason::OutOfScope),
-        };
-        if let Some(reason) = reason {
-            // Trazable (material de auditoría M3-5), como el gate de mutaciones.
-            tracing::warn!(
-                rule = reason.rule_id(),
-                "fs.search fuera del scope de lectura del agente: denegado"
-            );
-            // Mismo camino que una copia fuera de scope: PolicyDenied viaja como
-            // taxonomía en `data` (categoría gruesa, jamás la regla concreta).
-            return Err(RpcError::from(norte_proto::Error::PolicyDenied {
-                rule: reason.rule_id().to_owned(),
-            }));
+    // Gate de lectura DEFAULT-DENY: solo el humano (`User`) busca sin scope; un
+    // `Agent` debe caer bajo un scope de lectura de su sesión; CUALQUIER otro
+    // actor (`Plugin` hoy, o variantes futuras) se deniega SIN excepción. El
+    // wildcard es deliberado —default-deny para lo que aún no sabemos gobernar—;
+    // de ahí el `allow` del lint (nombrar `Plugin` dejaría pasar sin gate una
+    // variante futura). NOTA LOAD-BEARING: este gate acota `fs.search`, pero el
+    // confinamiento REAL de la lectura del agente depende de #80 —`fs.read`/
+    // `fs.list`/`fs.stat` siguen SIN gate de scope (M3 solo gateó mutaciones)—.
+    use crate::policy::{DenyReason, ScopeVerdict};
+    #[allow(clippy::match_wildcard_for_single_variants)]
+    let denied: Option<DenyReason> = match actor {
+        Actor::User => None,
+        Actor::Agent { session } => {
+            match shared.scopes.covers_read(session, &p.root, Instant::now()) {
+                ScopeVerdict::Within => None,
+                ScopeVerdict::Expired => Some(DenyReason::ScopeExpired),
+                ScopeVerdict::OutOfScope => Some(DenyReason::OutOfScope),
+            }
         }
+        _ => Some(DenyReason::OutOfScope),
+    };
+    if let Some(reason) = denied {
+        // Trazable (material de auditoría M3-5), como el gate de mutaciones.
+        tracing::warn!(
+            rule = reason.rule_id(),
+            "fs.search sin scope de lectura: denegado (default-deny)"
+        );
+        // Mismo camino que una copia fuera de scope: PolicyDenied viaja como
+        // taxonomía en `data` (categoría gruesa, jamás la regla concreta).
+        return Err(RpcError::from(norte_proto::Error::PolicyDenied {
+            rule: reason.rule_id().to_owned(),
+        }));
     }
 
     // Validación de criterios ANTES de la Task: compila los matchers para

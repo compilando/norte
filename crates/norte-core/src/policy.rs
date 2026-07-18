@@ -231,6 +231,13 @@ impl ScopeRegistry {
     /// bajo un scope concedido. `fs.list`/`fs.read` siguen SIN este gate (deuda
     /// #80: M3 solo gateó mutaciones).
     ///
+    /// CAVEAT (op-independiente): al ignorar el [`OpSet`], un scope de SOLO
+    /// `delete` bajo `/tmp` concede lectura de `/tmp`. Hoy es inocuo (search es
+    /// el único consumidor y su alternativa sería negar toda lectura), pero al
+    /// cerrar #80 —gatear también `fs.read`/`fs.list`— NO basta `covers_read`:
+    /// hay que exigir una op de lectura (p. ej. un `PolicyOp::Read`), o un grant
+    /// de `delete` desbloquearía lectura de todo el subtree.
+    ///
     /// # Panics
     /// Solo si el lock interno queda envenenado.
     #[must_use]

@@ -514,6 +514,11 @@ pub async fn run_walk(
     let mut hits: usize = 0;
 
     let mut queue: VecDeque<VPath> = VecDeque::new();
+    // Frontera DURA del walk: NO confiamos en que `provider.list` solo devuelva
+    // descendientes byte-genuinos del dir. Toda entrada se re-verifica contra
+    // `confine` con `is_under` (defensa en profundidad, security T4); un provider
+    // con bug (o malicioso) que liste un path fuera del root jamás filtra.
+    let confine = root.clone();
     queue.push_back(root);
 
     while let Some(dir) = queue.pop_front() {
@@ -544,6 +549,14 @@ pub async fn run_walk(
                 ctx.progress.update(|p| p.entries_done += 1);
                 continue;
             };
+            // Cinturón-y-tirantes: una entrada cuyo path NO cae bajo el root del
+            // walk se ignora POR COMPLETO — ni descenso, ni contenido, ni hit de
+            // nombre, ni se filtra en `current` (que se difunde). El scope de la
+            // búsqueda es invariante del core, no de la corrección del provider.
+            if !crate::policy::is_under(&confine, &entry.path) {
+                ctx.progress.update(|p| p.entries_done += 1);
+                continue;
+            }
             ctx.progress.update(|p| {
                 p.entries_done += 1;
                 p.current = Some(entry.path.clone());
