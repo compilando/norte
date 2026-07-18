@@ -63,6 +63,18 @@ fn snapshot_navegacion() {
     insta::assert_snapshot!(render(&app_base()));
 }
 
+/// Quick search en modo filtro (spec 2026-07-18): el pane izquierdo lista
+/// SOLO los matches, con la línea de input `/{query} n/m` al pie y el
+/// cursor sobre la selección filtrada; el derecho sigue intacto.
+#[test]
+fn snapshot_quick_search_filtro() {
+    let mut app = app_base();
+    let pane = app.focused_mut();
+    pane.quick_start(norte_tui::nav::Mode::Filter);
+    pane.quick_char('s');
+    insta::assert_snapshot!(render(&app));
+}
+
 #[test]
 fn snapshot_modal_colision() {
     let mut app = app_base();

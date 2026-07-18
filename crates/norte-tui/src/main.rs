@@ -28,6 +28,7 @@ use norte_tui::keymap::{COMMANDS, Chord, Effective, Resolution, Resolver, Screen
 use norte_tui::lua::{
     CommandRun, Layer, LuaHost, PaneCtx, RunOutcome, StatusInput, TrustDecision, TrustStore,
 };
+use norte_tui::nav;
 use norte_tui::tasks::RetrySpec;
 use norte_tui::ui;
 use norte_tui::viewer::Viewer;
@@ -165,6 +166,7 @@ async fn main() -> Result<()> {
         &mut help_lines,
         layers,
         cli_preset,
+        cfg.quick_search_mode,
         cfg_rx,
         foreign_tasks,
         conn_events,
@@ -296,6 +298,9 @@ async fn run(
     help_lines: &mut Vec<String>,
     layers: Layers,
     cli_preset: Option<String>,
+    // Modo del quick search (`[ui] quick_search`): vive en el run loop como
+    // el preset CLI y se actualiza en el hot-reload de config.
+    mut quick_mode: nav::Mode,
     mut cfg_rx: tokio::sync::mpsc::Receiver<()>,
     mut foreign_tasks: Option<tokio::sync::mpsc::UnboundedReceiver<norte_core::backend::TaskRef>>,
     mut conn_events: Option<tokio::sync::mpsc::UnboundedReceiver<ConnEvent>>,
@@ -450,6 +455,7 @@ async fn run(
                     help_lines,
                     &layers,
                     cli_preset.as_deref(),
+                    &mut quick_mode,
                 )
                 .await;
                 // Hot-reload del scripting Lua (ADR 0026): host NUEVO entero
@@ -516,6 +522,74 @@ async fn run(
                             token.cancel();
                             continue;
                         }
+                        // Quick search ACTIVO en el pane con foco (BROWSE):
+                        // sus teclas se comen ANTES del resolver — un char
+                        // (incluida otra `/`) alimenta la query y jamás
+                        // re-entra al keymap (sin recursión). El RESTO de
+                        // teclas (F5, F8, F3, Tab en Filter…) NO se consume:
+                        // cae al resolver y opera sobre `selected()` ya
+                        // filtrado — feed-to-listbox gratis.
+                        if app.viewer.is_none() && app.focused().quick.is_some() {
+                            let jump = app
+                                .focused()
+                                .quick
+                                .as_ref()
+                                .is_some_and(|q| q.mode() == nav::Mode::Jump);
+                            // SHIFT pasa (una mayúscula llega como
+                            // Char('A')+SHIFT y el char ya viene tal cual);
+                            // ctrl/alt caen al resolver (ctrl+c sigue
+                            // saliendo).
+                            let plain = key.modifiers.is_empty()
+                                || key.modifiers == KeyModifiers::SHIFT;
+                            match key.code {
+                                KeyCode::Char(c) if plain => {
+                                    app.focused_mut().quick_char(c);
+                                    continue;
+                                }
+                                KeyCode::Backspace if plain => {
+                                    app.focused_mut().quick_backspace();
+                                    continue;
+                                }
+                                KeyCode::Up if plain => {
+                                    app.focused_mut().quick_up();
+                                    continue;
+                                }
+                                KeyCode::Down if plain => {
+                                    app.focused_mut().quick_down();
+                                    continue;
+                                }
+                                KeyCode::Tab if plain && jump => {
+                                    app.focused_mut().quick_next();
+                                    continue;
+                                }
+                                KeyCode::Esc if plain => {
+                                    app.focused_mut().quick_cancel();
+                                    continue;
+                                }
+                                KeyCode::Enter if plain => {
+                                    // Confirma (cursor real = seleccionado) y
+                                    // REUSA el camino de nav.enter: un dir (o
+                                    // contenedor) entra, un fichero se queda.
+                                    app.focused_mut().quick_confirm();
+                                    match dispatch(
+                                        app, backend, &mut events, help_lines, quick_mode,
+                                        "nav.enter",
+                                    )
+                                    .await
+                                    {
+                                        Cd::Filling(f) => fill = Some(f),
+                                        Cd::Replaced(pane) => {
+                                            if fill.as_ref().is_some_and(|f| f.pane == pane) {
+                                                fill = None;
+                                            }
+                                        }
+                                        Cd::Cancelled => {}
+                                    }
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
                         // Pantalla activa: el viewer tiene su contexto.
                         let active = if app.viewer.is_some() {
                             &mut *viewer_resolver
@@ -538,7 +612,9 @@ async fn run(
                                     );
                                     continue;
                                 }
-                                match dispatch(app, backend, &mut events, help_lines, &cmd).await {
+                                match dispatch(app, backend, &mut events, help_lines, quick_mode, &cmd)
+                                    .await
+                                {
                                     // Nuevo relleno: suelta el anterior (su rx
                                     // dropeado mata su drenador → suelta el
                                     // stream, regla 3).
@@ -693,6 +769,7 @@ async fn on_extensions_key(app: &mut App, backend: &Backend, mods: KeyModifiers,
     }
 }
 
+#[allow(clippy::too_many_arguments)] // wiring del hot-reload, no API
 async fn reload_config(
     app: &mut App,
     resolver: &mut Resolver,
@@ -700,10 +777,15 @@ async fn reload_config(
     help_lines: &mut Vec<String>,
     layers: &Layers,
     cli_preset: Option<&str>,
+    quick_mode: &mut nav::Mode,
 ) {
     match config::load_async(layers.clone()).await {
         Ok(cfg) => match build_keymaps(&cfg, cli_preset) {
             Ok((browse, viewer)) => {
+                // El modo del quick search sigue a la config vigente (solo
+                // afecta a quick searches NUEVOS; uno abierto conserva el
+                // suyo). Mismo criterio que el tema: solo si TODO aplicó.
+                *quick_mode = cfg.quick_search_mode;
                 // Bindings `lua:` descartados del keymap de PROYECTO
                 // (seguridad — mismo aviso que en el arranque; máximo
                 // porque `global` se fusiona en ambas pantallas).
@@ -1232,16 +1314,11 @@ async fn refresh_panes(app: &mut App, backend: &Backend, events: &mut EventStrea
             tokio::select! {
                 res = &mut fut => {
                     match res {
-                        Ok(entries) => {
-                            let pane = &mut app.panes[i];
-                            let cursor = pane.cursor.min(entries.len().saturating_sub(1));
-                            pane.entries = entries;
-                            pane.cursor = cursor;
-                            // El listado es COMPLETO: si venía de un cd paginado
-                            // a medio rellenar, ya no está cargando (el run loop
-                            // suelta el drenador tras este refresh).
-                            pane.loading = false;
-                        }
+                        // El listado es COMPLETO: si venía de un cd paginado a
+                        // medio rellenar, ya no está cargando (el run loop
+                        // suelta el drenador tras este refresh). Un quick
+                        // search vivo se re-aplica dentro (índices nuevos).
+                        Ok(entries) => app.panes[i].refresh_listing(entries),
                         // Sin silencio: el dir pudo desaparecer (issue #20).
                         Err(e) => app.message = Some(ta("msg-refresh-error", &[("error", &error_category(&e))])),
                     }
@@ -1418,6 +1495,7 @@ async fn dispatch(
     backend: &Backend,
     events: &mut EventStream,
     help_lines: &[String],
+    quick_mode: nav::Mode,
     cmd: &str,
 ) -> Cd {
     // Solo los cd (nav.enter/nav.parent) tocan el relleno en background; el
@@ -1426,6 +1504,10 @@ async fn dispatch(
     match cmd {
         "app.quit" => app.quit = true,
         "pane.switch" => app.switch_focus(),
+        // `/` (spec 2026-07-18): arranca el quick search en el modo de la
+        // config. Con uno ya activo las teclas se comen antes del resolver,
+        // así que este brazo solo corre para ABRIRLO — sin recursión.
+        "pane.quick-search" => app.focused_mut().quick_start(quick_mode),
         "cursor.up" => app.focused_mut().move_up(1),
         "cursor.down" => app.focused_mut().move_down(1),
         "cursor.page-up" => app.focused_mut().move_up(PAGE),

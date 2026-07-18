@@ -554,19 +554,54 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, them
             norte_i18n::ta("pane-loading", &[("n", &pane.entries.len().to_string())])
         );
     }
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
         .title_style(theme.role(Role::Title))
         .title(title);
-    let items: Vec<ListItem<'_>> = pane.entries.iter().map(|e| entry_item(e, theme)).collect();
+    // Quick search activo (spec 2026-07-18): línea de input al pie del pane
+    // `/{query} n/m` (+ «parcial» si el fill sigue: filtra sobre lo YA
+    // drenado, jamás en silencio). La query se pinta lossy simple SIN mask:
+    // la tecleó el USUARIO desde su teclado (push_char), no es texto de un
+    // tercero que pueda colar controles/bidi — a diferencia de los nombres.
+    if let Some(q) = &pane.quick {
+        let mut input = format!(
+            " /{} {}/{}",
+            q.query_display(),
+            q.visible().len(),
+            pane.entries.len()
+        );
+        if pane.loading {
+            input.push(' ');
+            input.push_str(&t("quicksearch-partial"));
+        }
+        input.push(' ');
+        block = block.title_bottom(Line::styled(input, theme.role(Role::Title)));
+    }
+    // Filtro activo: SOLO los índices visibles, con el cursor visual en la
+    // posición DENTRO del filtrado. En Jump (quick_visible = None) el
+    // listado va entero y manda el cursor real.
+    let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = match pane.quick_visible() {
+        Some(vis) => (
+            vis.iter()
+                .filter_map(|&i| pane.entries.get(i))
+                .map(|e| entry_item(e, theme))
+                .collect(),
+            pane.quick
+                .as_ref()
+                .and_then(crate::nav::QuickSearch::selected_entry_index)
+                .and_then(|s| vis.iter().position(|&i| i == s)),
+        ),
+        None => (
+            pane.entries.iter().map(|e| entry_item(e, theme)).collect(),
+            (!pane.entries.is_empty()).then_some(pane.cursor),
+        ),
+    };
     let list = List::new(items)
         .block(block)
         .highlight_style(theme.role(Role::Selection));
     let mut state = ListState::default();
-    if !pane.entries.is_empty() {
-        state.select(Some(pane.cursor));
-    }
+    state.select(selected);
     frame.render_stateful_widget(list, area, &mut state);
 }
 
