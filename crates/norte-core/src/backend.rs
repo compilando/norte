@@ -763,11 +763,16 @@ pub mod remote {
 
         /// Recuerda que `id` llegó a terminal (acotado: un backstop borra todo
         /// si crece sin límite, jamás memoria ilimitada ante un daemon hostil).
-        fn mark_terminated(&mut self, id: u64) {
+        /// Devuelve `true` solo en la INSERCIÓN nueva: el caller agenda la
+        /// retirada una única vez, sin duplicarla ante terminales repetidos
+        /// (bomba + resync de `task.list`). El set SOLO acumula terminales de
+        /// BÚSQUEDA (ver `route`), así que el tope 256 es realista (haría falta
+        /// 256 búsquedas concurrentes para que el `clear` borre una marca viva).
+        fn mark_terminated(&mut self, id: u64) -> bool {
             if self.terminated.len() >= 256 {
                 self.terminated.clear();
             }
-            self.terminated.insert(id);
+            self.terminated.insert(id)
         }
     }
 
@@ -1054,22 +1059,31 @@ pub mod remote {
             let id = snapshot.task_id;
             // Búsqueda terminal: programa la retirada de su route TRAS la gracia
             // (deja pasar los `search.hits` rezagados; ver `SEARCH_ROUTE_GRACE`).
-            // Se marca `terminated` SIEMPRE bajo el lock: si el terminal adelantó
-            // al registro del route (no hay route todavía), `search` verá la
-            // marca y programará la retirada él. Así ninguna de las dos órdenes
-            // deja el route colgado. El lock de `search_routes` es independiente
-            // del de `watches`; se toma y suelta aquí, sin anidar.
-            if snapshot.state.is_terminal() {
-                let has_route = {
+            // FILTRO POR KIND (obligatorio): solo se marca `terminated` para
+            // terminales de BÚSQUEDA. Si se marcara todo, los terminales de
+            // copy/move/delete/list ajenos llenarían el set y el `clear(256)`
+            // podría borrar la marca de una búsqueda viva justo entre su
+            // terminal y el registro de su route → route colgado (sender leak).
+            // La marca se toma SIEMPRE bajo el lock: si el terminal adelantó al
+            // registro del route (aún no hay route), `search` verá la marca y
+            // programará la retirada él. Así ninguna de las dos órdenes lo deja
+            // colgado. Se agenda SOLO en la inserción nueva (`mark_terminated`
+            // devuelve `true`) y con route vivo: un terminal duplicado
+            // (bomba + resync) no vuelve a agendar. El lock de `search_routes`
+            // es independiente del de `watches`; se toma y suelta aquí, sin
+            // anidar. Mejora futura: un cierre ESTRUCTURAL (sentinela «search
+            // done» tras drenar los hits) evitaría la gracia por tiempo.
+            if snapshot.state.is_terminal() && snapshot.kind == TaskKind::Search {
+                let schedule = {
                     let mut sr = self
                         .inner
                         .search_routes
                         .lock()
                         .expect("search_routes lock sano");
-                    sr.mark_terminated(id.get());
-                    sr.routes.contains_key(&id.get())
+                    let newly = sr.mark_terminated(id.get());
+                    newly && sr.routes.contains_key(&id.get())
                 };
-                if has_route {
+                if schedule {
                     schedule_search_route_removal(&self.inner, id.get());
                 }
             }
@@ -1329,27 +1343,37 @@ pub mod remote {
             let result: FsTaskResult = self.call_timed(methods::FS_SEARCH, &params).await?;
             let id = result.task_id;
             let (tx, rx) = mpsc::channel::<SearchHits>(SEARCH_HITS_BUF);
-            let already_terminal = {
+            let (already_terminal, discarded) = {
                 let mut sr = self
                     .inner
                     .search_routes
                     .lock()
                     .expect("search_routes lock sano");
-                // Drena los lotes que se adelantaron al registro (en orden).
+                // Drena los lotes que se adelantaron al registro (en orden). El
+                // buffer se dimensiona para absorber el arranque; si aun así se
+                // llenara, un lote de UI se pierde (honesto). El log va DESPUÉS
+                // de soltar el guard: este lock lo toma también la bomba (ruta
+                // caliente) y no debe esperar por un `tracing::warn!`.
+                let mut discarded = 0usize;
                 if let Some(early) = sr.pending.remove(&id.get()) {
                     for hits in early {
-                        // El buffer se dimensiona para absorber el arranque; si
-                        // aun así se llenara, un lote de UI se pierde (honesto).
-                        if let Err(e) = tx.try_send(hits) {
-                            tracing::warn!(task_id = id.get(), error = %e, "search.hits de arranque descartado");
+                        if tx.try_send(hits).is_err() {
+                            discarded += 1;
                         }
                     }
                 }
                 sr.routes.insert(id.get(), tx);
                 // ¿El terminal ADELANTÓ al registro? Entonces `route` no pudo
                 // programar la retirada (aún no había route): la programa `search`.
-                sr.terminated.contains(&id.get())
+                (sr.terminated.contains(&id.get()), discarded)
             };
+            if discarded > 0 {
+                tracing::warn!(
+                    task_id = id.get(),
+                    discarded,
+                    "search.hits de arranque descartados (buffer del cliente lleno)"
+                );
+            }
             if already_terminal {
                 schedule_search_route_removal(&self.inner, id.get());
             }
@@ -1761,6 +1785,101 @@ pub mod remote {
                     Err(_) => {}
                 }
             };
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn test_inner() -> Arc<Inner> {
+            let (foreign_tx, _fr) = mpsc::unbounded_channel();
+            let (events_tx, _er) = mpsc::unbounded_channel();
+            let (approvals_tx, _ar) = mpsc::unbounded_channel();
+            Arc::new(Inner {
+                socket: PathBuf::from("/nonexistent/test.sock"),
+                spawn_cmd: None,
+                client_info: ClientInfo {
+                    name: "test".into(),
+                    version: "0".into(),
+                },
+                client: tokio::sync::RwLock::new(None),
+                watches: Mutex::new(HashMap::new()),
+                finished: Mutex::new(std::collections::VecDeque::new()),
+                foreign_tx,
+                events_tx,
+                approvals_tx,
+                seen_approvals: Mutex::new(std::collections::HashSet::new()),
+                search_routes: Mutex::new(SearchRoutes::default()),
+            })
+        }
+
+        fn progress(id: u64, kind: TaskKind, state: TaskState) -> TaskProgress {
+            TaskProgress {
+                task_id: TaskId::new(id),
+                kind,
+                state,
+                bytes_done: 0,
+                bytes_total: None,
+                entries_done: 0,
+                entries_total: None,
+                current: None,
+            }
+        }
+
+        fn backend_for(inner: Arc<Inner>) -> RemoteBackend {
+            RemoteBackend {
+                inner,
+                foreign_rx: Mutex::new(None),
+                events_rx: Mutex::new(None),
+                approvals_rx: Mutex::new(None),
+            }
+        }
+
+        /// FIX RAÍZ del review: `route` marca `terminated` SOLO para terminales
+        /// de búsqueda. Un terminal de copy/move/delete/list ajeno jamás entra
+        /// (si lo hiciera, ≥256 de ellos entre el terminal de una búsqueda y el
+        /// registro de su route dispararían el `clear` y perderían la marca →
+        /// route colgado). Y un terminal de SEARCH sí se recuerda, para que
+        /// `search` agende la retirada aunque el terminal se le adelante.
+        #[test]
+        fn route_solo_cuenta_terminales_de_busqueda() {
+            let inner = test_inner();
+            let backend = backend_for(Arc::clone(&inner));
+
+            backend.route(progress(7, TaskKind::Copy, TaskState::Completed));
+            backend.route(progress(8, TaskKind::Delete, TaskState::Completed));
+            assert!(
+                inner
+                    .search_routes
+                    .lock()
+                    .expect("lock")
+                    .terminated
+                    .is_empty(),
+                "los terminales no-search jamás entran en `terminated`"
+            );
+
+            backend.route(progress(9, TaskKind::Search, TaskState::Completed));
+            assert!(
+                inner
+                    .search_routes
+                    .lock()
+                    .expect("lock")
+                    .terminated
+                    .contains(&9),
+                "el terminal de búsqueda queda marcado para que `search` lo vea"
+            );
+        }
+
+        /// H2/H3: `mark_terminated` solo devuelve `true` en la inserción nueva,
+        /// así la retirada se agenda UNA vez (un terminal duplicado —bomba +
+        /// resync— no vuelve a spawnear la task de gracia).
+        #[test]
+        fn mark_terminated_solo_true_en_insercion_nueva() {
+            let mut sr = SearchRoutes::default();
+            assert!(sr.mark_terminated(1), "primera vez: recién insertada");
+            assert!(!sr.mark_terminated(1), "repetida: no reagenda");
+            assert!(sr.mark_terminated(2), "otro id: recién insertado");
         }
     }
 }
