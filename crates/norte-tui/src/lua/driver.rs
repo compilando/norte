@@ -194,8 +194,8 @@ impl LuaHost {
     ///
     /// Cancelación (regla 3): al cancelar `token` se cancelan las Tasks del
     /// engine registradas por el run Y el hook de instrucciones de la
-    /// corrutina (instalado desde el arranque, ver [`HOOK_EVERY`]) pasa a
-    /// errar — mata bucles Lua puros; si en [`CANCEL_GRACE`] el script no ha
+    /// corrutina (instalado desde el arranque, ver `HOOK_EVERY`) pasa a
+    /// errar — mata bucles Lua puros; si en `CANCEL_GRACE` el script no ha
     /// muerto (clavado en C, p. ej. `os.execute`), o si vence `timeout`, el
     /// driver ABANDONA el future (drop) — el guard interno limpia hook y
     /// cierra el run igualmente.
@@ -275,7 +275,7 @@ impl LuaHost {
 ///
 /// El comando corre en una corrutina propia (`Thread`) con su hook de
 /// instrucciones instalado ANTES de arrancar (los hooks son por thread, ver
-/// [`HOOK_EVERY`]): en régimen normal el hook CEDE el control al executor;
+/// `HOOK_EVERY`): en régimen normal el hook CEDE el control al executor;
 /// tras la petición de cancelación (bandera compartida `cancel_flag`) pasa a
 /// ERRAR y la corrutina muere en como mucho `HOOK_EVERY` instrucciones Lua.
 async fn run_command(

@@ -191,7 +191,7 @@ fn finish(lua: &Lua, state: &TaskState) -> mlua::Result<MultiValue> {
 /// `%` literal del nombre (`informe%20final.pdf`) hacia otro fichero.
 ///
 /// `messages` acumula los `norte.ui.message(s)` del run (bytes → String
-/// lossy, tope [`MESSAGES_MAX`]); el CONSUMIDOR (driver, task 8) los vuelca
+/// lossy, tope `MESSAGES_MAX`); el CONSUMIDOR (driver, task 8) los vuelca
 /// a la barra pasándolos por `detail_for_bar` (mask + tope) — aquí no se
 /// sanea, se acumula.
 ///

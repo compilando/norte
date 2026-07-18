@@ -264,7 +264,7 @@ impl LuaHost {
     ///
     /// # Precondición (rust-review T8)
     /// Ningún `CommandRun` de ESTE host en vuelo: la carga corre bajo un
-    /// presupuesto de instrucciones ([`EVAL_BUDGET`], `Lua::set_hook`) y la
+    /// presupuesto de instrucciones (`EVAL_BUDGET`, `Lua::set_hook`) y la
     /// ranura de hook de mlua es ÚNICA por instancia (ver `statusbar.rs`) —
     /// instalarlo desarmaría el hook de cancelación del run. Se COMPRUEBA
     /// (`run_active`, fail-closed → [`LuaLoadError::RunInFlight`]), no solo
@@ -278,7 +278,7 @@ impl LuaHost {
     /// # Errors
     /// Cualquier error de sintaxis o runtime de Lua — incluyendo los que
     /// `norte.command` genera para nombres inválidos o duplicados, y el
-    /// presupuesto de carga agotado ([`EVAL_BUDGET`]: un `while true do
+    /// presupuesto de carga agotado (`EVAL_BUDGET`: un `while true do
     /// end` en el top-level muere con error, jamás congela el TUI) —,
     /// [`LuaLoadError::Reentrant`] si ya hay una carga en curso y
     /// [`LuaLoadError::RunInFlight`] si hay un run en vuelo.
@@ -342,7 +342,7 @@ impl LuaHost {
             Layer::User => "init.lua (usuario)",
             Layer::Project => "init.lua (proyecto)",
         };
-        // Presupuesto de la carga (rust-review T8, [`EVAL_BUDGET`]): el hook
+        // Presupuesto de la carga (rust-review T8, `EVAL_BUDGET`): el hook
         // ERRA al primer disparo y el chunk muere con error de carga — un
         // init.lua roto jamás congela el run loop. Guard RAII (el MISMO
         // HookGuard de statusbar.rs, una sola pieza): remove_hook pase lo
