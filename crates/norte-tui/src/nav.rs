@@ -46,7 +46,7 @@ fn fold(name: &[u8]) -> String {
 }
 
 /// Índices de `entries` cuyo nombre contiene `query` (misma normalización
-/// en ambos lados, ver [`fold`]). `query` en bytes crudos (viene del input
+/// en ambos lados, ver `fold`). `query` en bytes crudos (viene del input
 /// tal cual).
 #[must_use]
 pub fn matches(query: &[u8], entries: &[Entry]) -> Vec<usize> {

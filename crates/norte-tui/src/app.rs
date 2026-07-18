@@ -326,7 +326,7 @@ pub fn display_name(bytes: &[u8]) -> (String, bool) {
 /// TEXTO es el MISMO que el del flag — `display_lossy` solo tapa Cc+bidi y
 /// dejaba ZWSP/TAG crudos (twins invisibles idénticos, ambos con badge).
 /// Nota ZWNJ: proto lo PERMITE en `display_lossy` (legítimo en persa);
-/// [`must_mask`] lo enmascara — aquí gana `must_mask` a sabiendas: en la TUI
+/// `must_mask` lo enmascara — aquí gana `must_mask` a sabiendas: en la TUI
 /// un twin invisible en una superficie de decisión pesa más que la
 /// fidelidad tipográfica (el badge ya delata la alteración).
 #[must_use]
@@ -769,7 +769,7 @@ impl App {
 
     /// Abre el popup de navegación (spec 2026-07-18): historial del pane
     /// con foco (más reciente primero) o la copia de hotlist. Los items se
-    /// construyen YA saneados aquí ([`nav_item_display`]); una entrada de
+    /// construyen YA saneados aquí (`nav_item_display`); una entrada de
     /// hotlist inválida se muestra con su aviso y destino `None`.
     pub fn open_nav_popup(&mut self, kind: NavPopupKind) {
         let items: Vec<NavItem> = match kind {
@@ -1275,7 +1275,7 @@ mod tests {
     }
 
     /// Encoding MEDIA-2: el TEXTO de `path_display` no puede contener NINGÚN
-    /// char del set [`must_mask`] — el flag ya salía de `display_name`
+    /// char del set `must_mask` — el flag ya salía de `display_name`
     /// (criterio amplio), pero el texto era `display_lossy` (solo Cc+bidi):
     /// ZWSP/TAG crudos pintaban twins invisibles idénticos en los popups de
     /// navegación, ambos con badge. Corpus-driven: todo nombre hostil
