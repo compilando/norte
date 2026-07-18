@@ -1,6 +1,9 @@
 //! Benchmarks de los presupuestos de la spec §12 (fase 10):
 //! - arranque frío (config + keymaps + listado + primer draw) < 50 ms
 //! - listado de 100k entradas hasta primer render < 200 ms
+//! - hook Lua de statusbar (M4 Lua T9): cacheada ≈ nada (< 1 µs), no
+//!   cacheada con script trivial < 1 ms (el presupuesto DURO es por
+//!   instrucciones: 50k, `lua/statusbar.rs`)
 //!
 //! `just bench` los corre; criterion imprime medias — compara contra el
 //! presupuesto a ojo (gates duros de tiempo en CI = flakiness).
@@ -136,5 +139,47 @@ fn bench_list_100k(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(presupuestos, bench_cold_start, bench_list_100k);
+/// Hook Lua de statusbar (M4 Lua): la llamada CACHEADA (mismo `StatusInput`)
+/// se dispara en cada vuelta de render y debe ser despreciable; la NO
+/// cacheada (snapshot cambiado) reinvoca el script bajo su presupuesto de
+/// instrucciones.
+fn bench_lua_statusbar(c: &mut Criterion) {
+    use norte_tui::lua::{Layer, LuaHost, StatusInput};
+
+    let host = LuaHost::new().expect("lua");
+    host.eval_layer(
+        b"norte.ui.statusbar(function(s) return s.entries .. ' entradas en ' .. s.cwd end)",
+        Layer::User,
+    )
+    .expect("hook de statusbar");
+    let input = StatusInput {
+        cwd: b"mem:///un/dir".to_vec(),
+        selected: 3,
+        selected_bytes: 4096,
+        entries: 1234,
+        tasks: 0,
+    };
+    assert!(host.statusbar(&input).is_some(), "el hook responde");
+
+    c.bench_function("lua_statusbar_cacheada", |b| {
+        b.iter(|| black_box(host.statusbar(black_box(&input))));
+    });
+    let mut n = 0usize;
+    c.bench_function("lua_statusbar_no_cacheada", |b| {
+        b.iter(|| {
+            // Snapshot distinto en cada vuelta: bust del cache, reinvoca.
+            n += 1;
+            let mut i = input.clone();
+            i.selected = n;
+            black_box(host.statusbar(&i))
+        });
+    });
+}
+
+criterion_group!(
+    presupuestos,
+    bench_cold_start,
+    bench_list_100k,
+    bench_lua_statusbar
+);
 criterion_main!(presupuestos);

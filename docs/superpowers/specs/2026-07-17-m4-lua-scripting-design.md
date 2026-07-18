@@ -1,7 +1,8 @@
 # M4 — Lua scripting (comandos + statusbar) — diseño
 
 - Fecha: 2026-07-17
-- Estado: aprobado (oscar, conversación 2026-07-17)
+- Estado: IMPLEMENTADO (2026-07-17/18, plan T1–T9; ver «Desviaciones de la
+  implementación» al final)
 - Contexto: spec §7.2 (mlua, API síncrona sobre el protocolo, permisos del
   usuario sin sandbox), §8 (paridad keymap ↔ palette ↔ scripting ↔ agente),
   ADR 0022 (tabla de niveles: Scripts = Lua del usuario, no sandbox, config
@@ -169,3 +170,75 @@ Con un `init.lua` de usuario: una tecla dispara un comando Lua que lista,
 copia y renombra vía engine (visible en journal y deshecho con undo), la
 statusbar custom pinta, Esc cancela limpio, y un `./.norte/init.lua` de un
 repo ajeno NO se ejecuta sin aprobación explícita.
+
+## Desviaciones de la implementación (2026-07-18)
+
+Lo implementado (plan T1–T9, commits 13f7c9d..HEAD) difiere de este diseño
+en los puntos siguientes — el resto es fiel:
+
+1. **`norte.fs.mkdir` NO se expone.** Ni `Backend` ni `Engine` tienen mkdir
+   hoy (verificado 2026-07-17); exponerlo exigiría lógica en el frontend
+   (regla 7) o un atajo fuera del journal (regla 4). Retirado de v1;
+   documentado en `lua/fs.rs`.
+2. **Cancelación de bucles Lua puros: hook de instrucciones con YIELD sobre
+   una corrutina (`Thread`) explícita**, no el sketch «`set_hook` al
+   cancelar» del plan (T5), inviable en mlua 0.10.5: la ranura de hook es
+   ÚNICA por instancia (`ExtraData::hook_callback`/`hook_thread`,
+   compartida entre el estado principal y TODAS las corrutinas — la doc de
+   mlua: «cannot have more than one hook function set at a time»), y
+   `Lua::set_hook` a posteriori apunta al estado principal, jamás
+   dispararía dentro del run. El driver crea la corrutina, le instala
+   `Thread::set_hook` ANTES de arrancarla (cada 4096 instrucciones: cede
+   con `VmState::Yield` en régimen normal — así el `select!` del poll llega
+   a correr — y ERRA cuando la bandera de cancelación está encendida) y la
+   pollea inline. Detalle completo en `lua/statusbar.rs` (módulo doc) y
+   `lua/driver.rs`.
+3. **`run_active` (contador `Rc<Cell<u32>>`) + statusbar CONGELADA durante
+   runs.** Consecuencia directa de la ranura única: `LuaHost::statusbar`
+   jamás toca Lua (ni `set_hook`/`remove_hook`) mientras algún `CommandRun`
+   viva — devuelve el cache si el snapshot coincide o `None` (barra
+   congelada). Contador y no booleano: el patrón del caller
+   `self.run = Some(host.invoke(...))` incrementa por el run nuevo antes de
+   que el `Drop` del viejo decremente. Por lo mismo, `eval_layer` con un
+   run en vuelo se RECHAZA (`LuaLoadError::RunInFlight`, fail-closed) — la
+   carga corre bajo su propio hook de presupuesto y pisaría el de
+   cancelación.
+4. **`EVAL_BUDGET` (carga bajo presupuesto):** además del presupuesto del
+   hook de statusbar (50k), la propia carga de un `init.lua` corre bajo un
+   tope de 10 M instrucciones — un `while true do end` en el top-level
+   muere con error de carga, jamás congela el run loop del TUI.
+5. **Trust: `DeniedPathChanged` = deny SILENCIOSO.** Un `init.lua` denegado
+   cuyo hash cambia NO vuelve a `Unknown` (re-preguntar en cada edición
+   sería fatiga de modal que acaba en «sí»): queda denegado con aviso
+   distinto (`msg` propio), y solo se re-pregunta borrando la entrada del
+   store. Además, los checks de symlink (`.norte` y `init.lua` verificados
+   con `symlink_metadata`) viven en el CALLER (`main.rs`, bajo
+   `spawn_blocking`), no en `trust.rs` — un symlink a un proyecto ya
+   confiado no ejecuta nada (aviso `msg-lua-symlink`).
+6. **Cola FIFO en el run loop del TUI (`main.rs`), no en el driver**, tope
+   `LUA_QUEUE_MAX = 8`; llena = DESCARTE con aviso (decir «encolado»
+   mentiría). `invoke` documenta que la serialización es responsabilidad
+   del caller.
+7. **Deuda #74 (Task huérfana, solo `Backend::Remote`):** si el driver
+   ABANDONA el future del run (timeout duro / fin de la gracia de
+   cancelación) con un submit RPC en vuelo, esa Task nace en el daemon sin
+   canceller registrado. No es fuga de gobierno (journal/policy/undo y
+   cancelable a mano en el panel de tasks); la reconciliación queda en #74.
+8. **Ambigüedad `%` en paths absolutos UTF-8, asumida y documentada**
+   (`lua/fs.rs::to_vpath`): un absoluto (`scheme://…`) que sea UTF-8 válido
+   se interpreta como forma wire (percent-decoding) — así lo que devuelven
+   `list`/`selection` hace round-trip —; un nombre crudo que PAREZCA
+   percent-encoding (`%41`) se decodificaría. Para nombres hostiles con `%`
+   el camino seguro es el relativo o el byte string no-UTF8 tal cual salió
+   de `list`.
+9. **Presupuesto de statusbar: por instrucciones (50k por llamada al hook;
+   10 M la carga), y bench añadido** en `benches/presupuestos.rs`
+   (`lua_statusbar_{cacheada,no_cacheada}`). Medido 2026-07-18: cacheada
+   ≈ 21 ns, no cacheada (script trivial) ≈ 1.7 µs — muy dentro del
+   presupuesto orientativo del plan (< 1 µs cacheada / < 1 ms no cacheada;
+   la cacheada a 21 ns es cache-hit puro, el «< 1 µs» era conservador).
+
+E2E del criterio de salida: `crates/norte-tui/tests/lua_e2e.rs` (init.lua
+realista con `basename` byte a byte, copia renombrada byte-exacta, nombre
+hostil `0xFF`, cancelación limpia E2E y rastro deshacible en el journal —
+`revertible_for(User)` no vacío tras el run).

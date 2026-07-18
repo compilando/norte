@@ -941,3 +941,5 @@ if let Some(name) = cmd.strip_prefix("lua:") {
 - Cobertura spec: carga/trust (T6+T8), registro (T2), API fs/pane/ui bytes (T3+T4), driver/cancelación/timeout/FIFO (T5+T8), statusbar+presupuesto+mask (T7), errores Fluent (T8), tests 1-7 de la spec (T2/T5/T6/T7/T8/T9), ADR+deny (T1). `norte.fs.mkdir`: condicionado a que Backend lo exponga — desviación documentada si no (T4).
 - Tipos consistentes: `LuaHost::{new, eval_layer, commands, invoke, invoke_with_timeout, statusbar, statusbar_error}`, `Layer`, `PaneCtx`, `RunOutcome`, `TrustStore::{open, check, record}`, `TrustDecision` — nombres únicos en todo el plan.
 - Sin placeholders: los `/* … */` de T4/T5 van acompañados de contrato exacto (firmas, semántica, estructura del select pineado) — decisión consciente: el detalle mecánico de mlua se resuelve contra la doc del crate en el momento (versión exacta se fija en T1).
+
+> Ejecutado 2026-07-17/18: ver sección «Desviaciones de la implementación» de la spec; el sketch del hook de T5 era inviable (ranura única de hook de mlua 0.10.5 — el driver usa Thread explícito con yield periódico).
