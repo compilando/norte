@@ -284,6 +284,16 @@ impl Shared {
         self.broadcast_where(frame, |s| may_observe(&s.actor, owner));
     }
 
+    /// Envía un frame a UNA conexión concreta (los hits de una `fs.search` son
+    /// del que la lanzó — jamás broadcast, security T4). No-op si la conexión
+    /// murió o ya no está suscrita; mismo criterio de expulsión que
+    /// [`Self::broadcast_where`]: un dueño que no drena su outbox (llena) pierde
+    /// la suscripción y morirá en su próximo response — el backlog nunca crece
+    /// sin límite.
+    fn send_to_conn(&self, conn_id: u64, frame: &Arc<[u8]>) {
+        send_to_conn_impl(&self.subscribers, conn_id, frame);
+    }
+
     fn broadcast_where(&self, frame: &Arc<[u8]>, wants: impl Fn(&Subscriber) -> bool) {
         let mut subs = self.subscribers.lock().expect("subscribers lock sano");
         // try_send: el que tiene la outbox llena pierde la suscripción (y
@@ -303,6 +313,27 @@ impl Shared {
                 Err(mpsc::error::TrySendError::Closed(_)) => false,
             }
         });
+    }
+}
+
+/// Núcleo testeable de [`Shared::send_to_conn`]: envía `frame` a la conexión
+/// `conn_id` de `subs` (si existe) y RETIRA la entrada si su receptor murió o
+/// no drena (outbox llena) — mismo criterio de expulsión que el broadcast.
+fn send_to_conn_impl(subs: &Mutex<HashMap<u64, Subscriber>>, conn_id: u64, frame: &Arc<[u8]>) {
+    let mut subs = subs.lock().expect("subscribers lock sano");
+    let remove = match subs.get(&conn_id) {
+        None => return,
+        Some(s) => match s.tx.try_send(Arc::clone(frame)) {
+            Ok(()) => false,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                tracing::warn!(conn = conn_id, "dueño de búsqueda sin drenar: expulsado");
+                true
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => true,
+        },
+    };
+    if remove {
+        subs.remove(&conn_id);
     }
 }
 
@@ -1219,7 +1250,7 @@ async fn handle_value(
             // El dispatch respeta el shutdown (regla 3): un fs.list
             // gigante no retiene el apagado.
             let response = tokio::select! {
-                r = dispatch(req, conn, shared) => r,
+                r = dispatch(req, conn_id, conn, shared) => r,
                 () = shared.shutdown.cancelled() => {
                     Err(RpcError::protocol(
                         codes::INTERNAL_ERROR,
@@ -1297,6 +1328,7 @@ fn to_value<T: serde::Serialize>(v: &T) -> Result<serde_json::Value, RpcError> {
 #[tracing::instrument(skip_all, fields(method = %req.method))]
 async fn dispatch(
     req: Request,
+    conn_id: u64,
     conn: &mut ConnState,
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
@@ -1410,7 +1442,7 @@ async fn dispatch(
         methods::PLUGIN_RUN_COMMAND => handle_plugin_run_command(req.params, shared).await,
         // plugin.preview (M4-P5): ABIERTO (previsualizar no consiente nada).
         methods::PLUGIN_PREVIEW => handle_plugin_preview(req.params, shared).await,
-        _ => dispatch_fs_task(req, conn.actor.clone(), shared).await,
+        _ => dispatch_fs_task(req, conn_id, conn.actor.clone(), shared).await,
     }
 }
 
@@ -1969,15 +2001,113 @@ fn scope_deadline(ttl_ms: u64) -> Instant {
     now.checked_add(Duration::from_millis(ms)).unwrap_or(now)
 }
 
+/// `fs.search` (0.18.0, live search): búsqueda recursiva de nombre/contenido
+/// bajo `root` como Task cancelable. Los HITS llegan por `search.hits` SOLO a
+/// la conexión `conn_id` que la lanzó (envío dirigido, jamás broadcast — son
+/// suyos).
+///
+/// GATE DE LECTURA PARA AGENTES (security, liveSearch T4): `fs.search`
+/// amplifica la lectura — una sola llamada sobre `/` exfiltraría previews de
+/// TODO el árbol. Por eso un `Actor::Agent` solo busca si `root` cae bajo un
+/// scope VIVO de su sesión ([`ScopeRegistry::covers_read`]); fuera de él es
+/// `PolicyDenied` con la categoría gruesa del vocabulario cerrado
+/// ([`DenyReason::rule_id`]), jamás la regla concreta. Un `User` (humano) no se
+/// sandboxea: simetría con `fs.list`/`fs.read`, que HOY siguen abiertos para
+/// agentes — deuda #80 (M3 solo gateó mutaciones; search es el primer read
+/// acotado).
+///
+/// Criterios inválidos (glob/regex que no compilan, cero criterios, ejes
+/// excluyentes) → `INVALID_PARAMS` SIN crear Task, con el diagnóstico del
+/// compilador (es el propio input del requester, no una fuga). Muerte del peer
+/// a mitad: la Task ya está registrada y se gobierna por `task.cancel` como una
+/// copia (#64 acota la ventana del dispatch dropeado); la bomba de hits muere
+/// sola cuando el walker cierra el canal.
+#[tracing::instrument(skip_all, fields(actor = ?actor))]
+async fn handle_fs_search(
+    params: Option<serde_json::Value>,
+    conn_id: u64,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::FsSearchParams = parse_params(params)?;
+
+    // Gate de lectura: un agente solo busca bajo un scope concedido a su sesión.
+    if let Actor::Agent { session } = actor {
+        use crate::policy::{DenyReason, ScopeVerdict};
+        let reason = match shared.scopes.covers_read(session, &p.root, Instant::now()) {
+            ScopeVerdict::Within => None,
+            ScopeVerdict::Expired => Some(DenyReason::ScopeExpired),
+            ScopeVerdict::OutOfScope => Some(DenyReason::OutOfScope),
+        };
+        if let Some(reason) = reason {
+            // Trazable (material de auditoría M3-5), como el gate de mutaciones.
+            tracing::warn!(
+                rule = reason.rule_id(),
+                "fs.search fuera del scope de lectura del agente: denegado"
+            );
+            // Mismo camino que una copia fuera de scope: PolicyDenied viaja como
+            // taxonomía en `data` (categoría gruesa, jamás la regla concreta).
+            return Err(RpcError::from(norte_proto::Error::PolicyDenied {
+                rule: reason.rule_id().to_owned(),
+            }));
+        }
+    }
+
+    // Validación de criterios ANTES de la Task: compila los matchers para
+    // recuperar el diagnóstico saneado y responder INVALID_PARAMS sin crear
+    // Task (`search_as` los recompila —barato— y devolvería un error opaco). El
+    // detalle es el mensaje del compilador de glob/regex: input del requester.
+    if let Err(e) = crate::search::SearchMatchers::compile(&p) {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            format!("invalid search criteria: {e}"),
+        ));
+    }
+
+    let (handle, mut rx) = shared
+        .engine
+        .search_as(p, actor.clone())
+        .await
+        .map_err(RpcError::from)?;
+    // INVARIANTE (#64): CERO `.await` entre el submit del engine (dentro de
+    // `search_as`) y este register — la Task jamás corre FUERA de `shared.tasks`
+    // (con task.list/cancel y contando contra los topes). Quien añada un await
+    // aquí rompe esa garantía.
+    let task_id = register_task_id(shared, handle, actor.clone())?;
+
+    // Bomba de HITS: drena el canal del walker y enruta cada lote como
+    // `search.hits` SOLO al dueño. Muere sola cuando el walker cierra `tx`
+    // (terminal, cancel o receptor —el propio dueño— desaparecido).
+    let shared_pump = Arc::clone(shared);
+    tokio::spawn(async move {
+        while let Some(hits) = rx.recv().await {
+            let notif = Notification {
+                jsonrpc: norte_proto::wire::JsonRpcVersion,
+                method: methods::SEARCH_HITS.into(),
+                params: serde_json::to_value(&hits).ok(),
+            };
+            if let Ok(frame) = encode_frame(&notif) {
+                shared_pump.send_to_conn(conn_id, &Arc::from(frame.into_boxed_slice()));
+            }
+        }
+    });
+
+    to_value(&methods::FsTaskResult { task_id })
+}
+
 /// Las familias `fs.*`/`task.*` del dispatch (separadas por tamaño). El
 /// `actor` viene de la conexión (M3-3b): las mutaciones se journalizan y
 /// evalúan bajo él.
 async fn dispatch_fs_task(
     req: Request,
+    conn_id: u64,
     actor: crate::journal::Actor,
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
     match req.method.as_str() {
+        // fs.search (0.18.0): los HITS son del que la lanzó → necesita conn_id
+        // para el envío dirigido (jamás broadcast).
+        methods::FS_SEARCH => handle_fs_search(req.params, conn_id, &actor, shared).await,
         methods::FS_STAT => {
             let p: methods::FsStatParams = parse_params(req.params)?;
             let entry = shared.engine.stat(&p.path).await.map_err(RpcError::from)?;
@@ -2300,6 +2430,58 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::{DirIdentity, is_default_tmp_fallback, peer_allowed, prepare_socket_dir};
+
+    /// `send_to_conn` es envío DIRIGIDO (los hits de una búsqueda son del que la
+    /// lanzó): solo la conexión destino recibe; una conexión desconocida es
+    /// no-op; una conexión cuyo receptor murió se retira del mapa (mismo criterio
+    /// de expulsión que el broadcast — no acumula backlog).
+    #[test]
+    fn send_to_conn_solo_al_destino_y_retira_los_muertos() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        use tokio::sync::mpsc;
+
+        use super::{Subscriber, send_to_conn_impl};
+        use crate::journal::Actor;
+
+        let subs = Mutex::new(HashMap::new());
+        let (tx1, mut rx1) = mpsc::channel::<Arc<[u8]>>(4);
+        let (tx2, mut rx2) = mpsc::channel::<Arc<[u8]>>(4);
+        subs.lock().expect("lock").insert(
+            1u64,
+            Subscriber {
+                tx: tx1,
+                actor: Actor::User,
+            },
+        );
+        subs.lock().expect("lock").insert(
+            2u64,
+            Subscriber {
+                tx: tx2,
+                actor: Actor::User,
+            },
+        );
+        let frame: Arc<[u8]> = Arc::from(vec![1u8, 2, 3].into_boxed_slice());
+
+        // Solo la conexión 1 recibe.
+        send_to_conn_impl(&subs, 1, &frame);
+        assert!(rx1.try_recv().is_ok(), "el destino recibe");
+        assert!(rx2.try_recv().is_err(), "el otro NO recibe");
+
+        // Conexión desconocida: no-op sin panic, sin tocar el mapa.
+        send_to_conn_impl(&subs, 99, &frame);
+        assert_eq!(subs.lock().expect("lock").len(), 2);
+
+        // Receptor muerto: la conexión se retira del mapa.
+        drop(rx1);
+        send_to_conn_impl(&subs, 1, &frame);
+        assert!(
+            !subs.lock().expect("lock").contains_key(&1),
+            "la conexión con receptor cerrado se retira"
+        );
+        assert!(subs.lock().expect("lock").contains_key(&2), "la viva sigue");
+    }
 
     /// La política de admisión es EXACTAMENTE mismo-uid: ni root entra.
     #[test]

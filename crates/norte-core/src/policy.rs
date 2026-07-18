@@ -216,6 +216,47 @@ impl ScopeRegistry {
             ScopeVerdict::OutOfScope
         }
     }
+
+    /// Membresía de RAÍZ para una lectura recursiva (`fs.search`), INDEPENDIENTE
+    /// de la op: `Within` si ALGÚN scope VIVO de la sesión tiene un root con
+    /// `is_under(root, path)`. A diferencia de [`Self::permits`], no consulta el
+    /// [`OpSet`]: la búsqueda es lectura y no mapea a un [`PolicyOp`] concreto —
+    /// el criterio es la simple contención en la frontera concedida. `Expired`
+    /// si SOLO scopes ya vencidos habrían cubierto la raíz (un expirado que ni
+    /// la cubre no produce `Expired`); `OutOfScope` si ninguno la cubre.
+    ///
+    /// Es el gate de lectura de `fs.search` para agentes (liveSearch T4,
+    /// security): `fs.search` amplifica la lectura (una llamada sobre `/`
+    /// exfiltraría previews de todo el árbol), así que un `Agent` solo busca
+    /// bajo un scope concedido. `fs.list`/`fs.read` siguen SIN este gate (deuda
+    /// #80: M3 solo gateó mutaciones).
+    ///
+    /// # Panics
+    /// Solo si el lock interno queda envenenado.
+    #[must_use]
+    pub fn covers_read(&self, session: &str, path: &VPath, now: Instant) -> ScopeVerdict {
+        let map = self.inner.lock().expect("scope registry lock");
+        let Some(scopes) = map.get(session) else {
+            return ScopeVerdict::OutOfScope;
+        };
+        let mut saw_expired = false;
+        for s in scopes {
+            // Solo cuenta un scope que REALMENTE cubre la raíz; la op se ignora.
+            if !s.roots.iter().any(|r| is_under(r, path)) {
+                continue;
+            }
+            if s.is_expired(now) {
+                saw_expired = true;
+            } else {
+                return ScopeVerdict::Within;
+            }
+        }
+        if saw_expired {
+            ScopeVerdict::Expired
+        } else {
+            ScopeVerdict::OutOfScope
+        }
+    }
 }
 
 /// Veredicto del motor.
@@ -429,5 +470,85 @@ mod tests {
         };
         let d = pol.evaluate(&agent, PolicyOp::Copy, &[&vp("file:///a/x")]);
         assert!(matches!(d, Decision::Deny(DenyReason::ScopeExpired)));
+    }
+
+    #[test]
+    fn covers_read_es_membresia_de_raiz_independiente_de_op() {
+        let reg = ScopeRegistry::new();
+        // Scope con SOLO `copy` (sin ninguna op de lectura): covers_read NO mira
+        // la op — basta que la raíz contenga el path (fs.search es lectura, no
+        // mapea a PolicyOp).
+        reg.grant(
+            "s1",
+            Scope::forever(vec![vp("mem:///proj")], OpSet::of(&["copy"])),
+        );
+        let now = Instant::now();
+        assert_eq!(
+            reg.covers_read("s1", &vp("mem:///proj/sub/x"), now),
+            ScopeVerdict::Within,
+        );
+        assert_eq!(
+            reg.covers_read("s1", &vp("mem:///proj"), now),
+            ScopeVerdict::Within,
+            "la propia raíz cuenta"
+        );
+        assert_eq!(
+            reg.covers_read("s1", &vp("mem:///otro"), now),
+            ScopeVerdict::OutOfScope,
+        );
+        // Sesión sin ningún scope: fuera de scope.
+        assert_eq!(
+            reg.covers_read("s2", &vp("mem:///proj"), now),
+            ScopeVerdict::OutOfScope,
+        );
+    }
+
+    #[test]
+    fn covers_read_solo_expirados_que_cubren_la_raiz_dan_expired() {
+        let reg = ScopeRegistry::new();
+        let past = Instant::now()
+            .checked_sub(std::time::Duration::from_secs(1))
+            .expect("instante en el pasado");
+        // Scope YA expirado que cubre la raíz buscada.
+        reg.grant(
+            "s1",
+            Scope {
+                roots: vec![vp("mem:///proj")],
+                ops: OpSet::all(),
+                expires_at: Some(past),
+            },
+        );
+        let now = Instant::now();
+        assert_eq!(
+            reg.covers_read("s1", &vp("mem:///proj/x"), now),
+            ScopeVerdict::Expired,
+        );
+        // Un scope expirado que NO cubre la raíz → OutOfScope, no Expired: el
+        // veredicto Expired solo lo produce un scope que HABRÍA cubierto.
+        assert_eq!(
+            reg.covers_read("s1", &vp("mem:///otra/x"), now),
+            ScopeVerdict::OutOfScope,
+        );
+    }
+
+    #[test]
+    fn covers_read_vivo_gana_a_expirado_bajo_la_misma_raiz() {
+        let reg = ScopeRegistry::new();
+        let past = Instant::now()
+            .checked_sub(std::time::Duration::from_secs(1))
+            .expect("pasado");
+        reg.grant(
+            "s1",
+            Scope {
+                roots: vec![vp("mem:///proj")],
+                ops: OpSet::all(),
+                expires_at: Some(past),
+            },
+        );
+        reg.grant("s1", Scope::forever(vec![vp("mem:///proj")], OpSet::all()));
+        assert_eq!(
+            reg.covers_read("s1", &vp("mem:///proj/x"), Instant::now()),
+            ScopeVerdict::Within,
+        );
     }
 }

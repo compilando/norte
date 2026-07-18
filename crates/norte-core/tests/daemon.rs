@@ -15,13 +15,13 @@ use norte_core::daemon::{
 use norte_core::{Engine, PolicyConfig, ScopeRegistry, ScopedPolicy};
 use norte_proto::methods::{
     self, ClientInfo, DaemonShutdownParams, DaemonShutdownResult, FsCopyParams, FsListParams,
-    FsListResult, FsStatParams, FsStatResult, FsTaskResult, GrantScopeParams, GrantScopeResult,
-    InitializeParams, PolicyApprovalRequired, PolicyDecideParams, PolicyDecideResult,
-    PolicyPendingResult, RequestScopeParams, RequestScopeResult, TaskCancelParams,
-    TaskCancelResult,
+    FsListResult, FsSearchParams, FsStatParams, FsStatResult, FsTaskResult, GrantScopeParams,
+    GrantScopeResult, InitializeParams, PolicyApprovalRequired, PolicyDecideParams,
+    PolicyDecideResult, PolicyPendingResult, RequestScopeParams, RequestScopeResult, SearchHits,
+    TaskCancelParams, TaskCancelResult,
 };
 use norte_proto::wire::codes;
-use norte_proto::{Error, TaskProgress, TaskState, VPath};
+use norte_proto::{Entry, Error, TaskProgress, TaskState, VPath};
 use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
@@ -2801,4 +2801,333 @@ async fn muerte_del_peer_cancela_su_ask_suspendido() {
         d.mem.stat(&vp("mem:///proj/dst.txt")).await,
         Err(Error::NotFound)
     ));
+}
+
+// ---------- fs.search (liveSearch T4) ----------
+
+/// Params de `fs.search` con solo un glob de nombre (helper de test).
+fn search_by_name(root: &str, name_glob: &str) -> FsSearchParams {
+    FsSearchParams {
+        root: vp(root),
+        name_glob: Some(name_glob.into()),
+        name_regex: None,
+        content: None,
+        content_regex: None,
+        case_sensitive: false,
+        max_hits: None,
+    }
+}
+
+/// Drena `search.hits` + `task.progress` de una búsqueda hasta su terminal.
+/// Tras ver el terminal sigue vaciando brevemente los `search.hits` ya
+/// encolados (la bomba de hits y la de progreso son tasks distintas: el orden
+/// entre el último lote y el terminal no está garantizado). Devuelve las
+/// entries acumuladas y el estado terminal.
+async fn drain_search(c: &mut Client, task_id: u64) -> (Vec<Entry>, TaskState) {
+    let mut hits: Vec<Entry> = Vec::new();
+    let mut terminal: Option<TaskState> = None;
+    loop {
+        // Antes del terminal, esperamos generoso; después, solo drenamos lo ya
+        // encolado (el walker terminó, no llegará nada nuevo).
+        let to = if terminal.is_some() {
+            Duration::from_millis(400)
+        } else {
+            Duration::from_secs(5)
+        };
+        let n = match tokio::time::timeout(to, c.notification()).await {
+            Ok(Some(n)) => n,
+            Ok(None) => break,
+            Err(_) => {
+                assert!(terminal.is_some(), "timeout esperando la búsqueda");
+                break;
+            }
+        };
+        if n.method == methods::SEARCH_HITS {
+            let sh: SearchHits =
+                serde_json::from_value(n.params.expect("params")).expect("SearchHits");
+            if sh.task_id.get() == task_id {
+                hits.extend(sh.entries);
+            }
+        } else if n.method == methods::TASK_PROGRESS {
+            let p: TaskProgress =
+                serde_json::from_value(n.params.expect("params")).expect("TaskProgress");
+            if p.task_id.get() == task_id && p.state.is_terminal() {
+                terminal = Some(p.state);
+            }
+        }
+    }
+    (hits, terminal.expect("estado terminal de la búsqueda"))
+}
+
+/// Round-trip: A lanza `fs.search`, recibe `FsTaskResult`, luego `search.hits`
+/// con sus entries y un `task.progress` terminal Completed.
+#[tokio::test]
+async fn fs_search_round_trip() {
+    let d = spawn_daemon(None).await;
+    d.mem.mkdir(&vp("mem:///sub")).await.expect("mkdir");
+    write_file(&d.mem, "mem:///x.rs", b"fn main() {}").await;
+    write_file(&d.mem, "mem:///y.txt", b"nope").await;
+    write_file(&d.mem, "mem:///sub/z.rs", b"mod z;").await;
+    let mut c = connected_client(&d).await;
+
+    let task: FsTaskResult = c
+        .call(methods::FS_SEARCH, &search_by_name("mem:///", "*.rs"))
+        .await
+        .expect("fs.search");
+    assert!(task.task_id.get() > 0);
+
+    let (hits, state) = drain_search(&mut c, task.task_id.get()).await;
+    assert_eq!(state, TaskState::Completed);
+    let mut names: Vec<String> = hits
+        .iter()
+        .map(|e| {
+            String::from_utf8_lossy(e.path.file_name().expect("nombre").as_bytes()).into_owned()
+        })
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["x.rs".to_string(), "z.rs".to_string()]);
+}
+
+/// Los hits van SOLO al dueño: A busca, B (otra conexión) jamás recibe un
+/// `search.hits` (aunque sí ve el `task.progress`, que se difunde a humanos).
+#[tokio::test]
+async fn fs_search_hits_solo_al_dueno() {
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///a.rs", b"x").await;
+    write_file(&d.mem, "mem:///b.rs", b"y").await;
+    let mut a = connected_client(&d).await;
+    let mut b = connected_client(&d).await;
+
+    let task: FsTaskResult = a
+        .call(methods::FS_SEARCH, &search_by_name("mem:///", "*.rs"))
+        .await
+        .expect("fs.search de A");
+    let task_id = task.task_id.get();
+
+    // B observa hasta el terminal de la task de A y NUNCA ve un search.hits.
+    let mut b_saw_hits = false;
+    loop {
+        let notif = tokio::time::timeout(Duration::from_secs(5), b.notification())
+            .await
+            .expect("notif de B antes del timeout")
+            .expect("conexión de B viva");
+        if notif.method == methods::SEARCH_HITS {
+            b_saw_hits = true;
+        } else if notif.method == methods::TASK_PROGRESS {
+            let prog: TaskProgress =
+                serde_json::from_value(notif.params.expect("params")).expect("TaskProgress");
+            if prog.task_id.get() == task_id && prog.state.is_terminal() {
+                break;
+            }
+        }
+    }
+    assert!(!b_saw_hits, "B jamás recibe los hits de la búsqueda de A");
+
+    // A sí los recibió.
+    let (hits, state) = drain_search(&mut a, task_id).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(hits.len(), 2);
+}
+
+/// Criterios vacíos: `INVALID_PARAMS` con detalle y SIN crear Task.
+#[tokio::test]
+async fn fs_search_params_invalidos_no_crean_task() {
+    let d = spawn_daemon(None).await;
+    let c = connected_client(&d).await;
+    let params = FsSearchParams {
+        root: vp("mem:///"),
+        name_glob: None,
+        name_regex: None,
+        content: None,
+        content_regex: None,
+        case_sensitive: false,
+        max_hits: None,
+    };
+    let err = c
+        .call::<_, FsTaskResult>(methods::FS_SEARCH, &params)
+        .await
+        .expect_err("sin criterios");
+    match err {
+        ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
+        other => panic!("esperaba Rpc INVALID_PARAMS, fue {other:?}"),
+    }
+    // Ninguna task viva ni reciente: la validación falló ANTES del submit.
+    let list: FsListResult = c
+        .call(
+            methods::FS_LIST,
+            &FsListParams {
+                path: vp("mem:///"),
+                limit: None,
+                cursor: None,
+            },
+        )
+        .await
+        .expect("fs.list");
+    let _ = list; // (sin entradas sembradas)
+    let tasks: methods::TaskListResult = c
+        .call(methods::TASK_LIST, &methods::TaskListParams::default())
+        .await
+        .expect("task.list");
+    assert!(tasks.tasks.is_empty(), "no se creó ninguna Task");
+}
+
+/// Un glob de nombre malformado también es `INVALID_PARAMS` (diagnóstico del
+/// compilador del propio requester).
+#[tokio::test]
+async fn fs_search_glob_invalido_es_invalid_params() {
+    let d = spawn_daemon(None).await;
+    let c = connected_client(&d).await;
+    let err = c
+        .call::<_, FsTaskResult>(methods::FS_SEARCH, &search_by_name("mem:///", "a[b"))
+        .await
+        .expect_err("glob roto");
+    match err {
+        ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
+        other => panic!("esperaba Rpc INVALID_PARAMS, fue {other:?}"),
+    }
+}
+
+/// Cancelación por el wire: A busca (con latencia), manda `task.cancel` →
+/// terminal Cancelled; la task sale de las vivas (no fuga).
+#[tokio::test]
+async fn fs_search_cancel_por_wire() {
+    let d = spawn_daemon(None).await;
+    d.mem
+        .faults()
+        .set_latency_per_op(Some(Duration::from_millis(20)));
+    for i in 0..200 {
+        write_file(&d.mem, &format!("mem:///f{i}.rs"), b"x").await;
+    }
+    let mut c = connected_client(&d).await;
+
+    let task: FsTaskResult = c
+        .call(methods::FS_SEARCH, &search_by_name("mem:///", "*.rs"))
+        .await
+        .expect("fs.search");
+    let _: TaskCancelResult = c
+        .call(
+            methods::TASK_CANCEL,
+            &TaskCancelParams {
+                task_id: task.task_id,
+            },
+        )
+        .await
+        .expect("task.cancel");
+    let (_hits, state) = drain_search(&mut c, task.task_id.get()).await;
+    assert_eq!(state, TaskState::Cancelled);
+
+    // No queda como task VIVA (solo puede aparecer su terminal en `recent`).
+    let list: methods::TaskListResult = c
+        .call(methods::TASK_LIST, &methods::TaskListParams::default())
+        .await
+        .expect("task.list");
+    assert!(
+        list.tasks
+            .iter()
+            .all(|t| t.task_id != task.task_id || t.state.is_terminal()),
+        "la task no sigue viva"
+    );
+}
+
+/// Gate de lectura de agentes: sin scope, `fs.search` es `PolicyDenied`
+/// out-of-scope; con un scope concedido que cubre el root, procede.
+#[tokio::test]
+async fn agente_fuera_de_scope_no_busca() {
+    let d = spawn_daemon_policy().await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
+    write_file(&d.mem, "mem:///proj/a.rs", b"x").await;
+    let mut agent = connected_agent(&d, "s1").await;
+
+    // 1) Sin scope: denegado por el gate de lectura.
+    let err = agent
+        .call::<_, FsTaskResult>(methods::FS_SEARCH, &search_by_name("mem:///proj", "*.rs"))
+        .await
+        .expect_err("sin scope no busca");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
+            "PolicyDenied out-of-scope, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+
+    // 2) Un humano concede scope sobre mem:///proj (round-trip request/grant).
+    let req: RequestScopeResult = agent
+        .call(
+            methods::POLICY_REQUEST_SCOPE,
+            &RequestScopeParams {
+                session: "s1".into(),
+                roots: vec![vp("mem:///proj")],
+                ops: vec!["copy".into()],
+                ttl_ms: 60_000,
+            },
+        )
+        .await
+        .expect("request_scope");
+    let human = connected_client(&d).await;
+    let _grant: GrantScopeResult = human
+        .call(
+            methods::POLICY_GRANT_SCOPE,
+            &GrantScopeParams {
+                request_id: req.request_id,
+            },
+        )
+        .await
+        .expect("grant_scope");
+
+    // 3) Ahora la búsqueda bajo el scope procede.
+    let task: FsTaskResult = agent
+        .call(methods::FS_SEARCH, &search_by_name("mem:///proj", "*.rs"))
+        .await
+        .expect("con scope busca");
+    let (hits, state) = drain_search(&mut agent, task.task_id.get()).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(hits.len(), 1);
+}
+
+/// Un scope que cubre `mem:///a` NO habilita buscar en `mem:///b`.
+#[tokio::test]
+async fn agente_scope_no_cubre_root() {
+    let d = spawn_daemon_policy().await;
+    d.mem.mkdir(&vp("mem:///a")).await.expect("mkdir a");
+    d.mem.mkdir(&vp("mem:///b")).await.expect("mkdir b");
+    let agent = connected_agent(&d, "s1").await;
+
+    let req: RequestScopeResult = agent
+        .call(
+            methods::POLICY_REQUEST_SCOPE,
+            &RequestScopeParams {
+                session: "s1".into(),
+                roots: vec![vp("mem:///a")],
+                ops: vec!["copy".into()],
+                ttl_ms: 60_000,
+            },
+        )
+        .await
+        .expect("request_scope");
+    let human = connected_client(&d).await;
+    let _grant: GrantScopeResult = human
+        .call(
+            methods::POLICY_GRANT_SCOPE,
+            &GrantScopeParams {
+                request_id: req.request_id,
+            },
+        )
+        .await
+        .expect("grant_scope");
+
+    // Scope en /a, búsqueda en /b → out-of-scope.
+    let err = agent
+        .call::<_, FsTaskResult>(methods::FS_SEARCH, &search_by_name("mem:///b", "*"))
+        .await
+        .expect_err("scope /a no cubre /b");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
+            "PolicyDenied out-of-scope, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
 }
