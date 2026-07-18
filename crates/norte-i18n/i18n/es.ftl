@@ -80,6 +80,7 @@ msg-lua-busy = ya hay un comando Lua en marcha (encolado)
 msg-lua-queue-full = comando Lua descartado: cola llena
 msg-lua-denied-changed = el init.lua del proyecto se denegó; ha cambiado (no se carga)
 msg-lua-symlink = el init.lua del proyecto es un symlink; no se carga
+msg-lua-keymap-project = keymap.toml del proyecto: { $n } binding(s) lua: ignorados (sin trust)
 pane-loading = cargando… ({ $n })
 
 # --- Panel de tasks ---

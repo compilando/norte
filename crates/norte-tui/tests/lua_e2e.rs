@@ -23,8 +23,9 @@ use norte_vfs::Provider;
 /// SIN patrones Lua (`string.match`/`find` con patrón tratarían `%` y bytes
 /// no-UTF8 como sintaxis — aquí solo aritmética de bytes, robusto ante
 /// cualquier nombre). Los paths de `norte.pane.*` llegan en forma wire
-/// (ASCII, percent-encoded), así que la concatenación absoluta re-parsea
-/// como wire — round-trip exacto también para el nombre hostil `0xFF`.
+/// (UTF-8; bytes no-UTF8, controles y `%` van percent-escapados), así que
+/// la concatenación absoluta re-parsea como wire — round-trip exacto
+/// también para el nombre hostil `0xFF`.
 const INIT_LUA: &[u8] = br"
     local function basename(p)
       local i = #p
@@ -152,7 +153,10 @@ async fn nombre_hostil_bytes_crudos_round_trip() {
 /// vuelo cuando llega el Esc-equivalente (`token.cancel`). El run muere
 /// `Cancelled` y el destino NO aparece (mismo patrón que `lua_driver.rs`,
 /// pero atravesando el comando real del usuario).
-#[tokio::test]
+/// `start_paused`: latencia inyectada y cancel usan timers tokio — con el
+/// reloj pausado el runtime avanza el tiempo al quedar ocioso (determinista
+/// e instantáneo, sin carreras de wall-clock).
+#[tokio::test(start_paused = true)]
 async fn esc_cancela_limpio_sin_destino_a_medias() {
     let (backend, mem) = backend_mem().await;
     write_file(&mem, "mem:///a", b"contenido de a").await;
@@ -212,8 +216,15 @@ async fn el_copy_del_comando_deja_rastro_deshacible_en_el_journal() {
         .revertible_for(&Actor::User)
         .await
         .expect("revertible_for");
+    // Endurecido (rust review): no basta "no vacío" — ALGUNA entrada
+    // revertible es EXACTAMENTE la de este copy: actor User y el path del
+    // DESTINO creado (`dst/copia-a`, forma wire).
     assert!(
-        !revertibles.is_empty(),
-        "el rastro es deshacible (revertible para User)"
+        revertibles.iter().any(|e| {
+            e.actor_kind == "user"
+                && e.op == "created"
+                && e.path == vp("mem:///dst/copia-a").to_wire().into_bytes()
+        }),
+        "la entrada revertible del copy referencia el destino: {revertibles:?}"
     );
 }

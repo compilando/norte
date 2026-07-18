@@ -42,9 +42,10 @@ pub enum LuaLoadError {
     Lua(#[from] mlua::Error),
 
     /// Se llamó a [`LuaHost::eval_layer`] mientras otra carga ya estaba en
-    /// curso en el mismo host. Hoy no hay forma de disparar esto desde Lua
-    /// (ningún binding invoca `eval_layer` desde dentro del runtime), pero
-    /// el guard existe para cuando `driver.rs` (task 5) lo exponga.
+    /// curso en el mismo host. Ningún binding invoca `eval_layer` desde
+    /// dentro del runtime, así que hoy no es alcanzable desde Lua: el guard
+    /// es defensa en profundidad (una reentrada encontraría el staging y el
+    /// registro a medias).
     #[error("eval_layer no es reentrante: ya hay una carga en curso")]
     Reentrant,
 

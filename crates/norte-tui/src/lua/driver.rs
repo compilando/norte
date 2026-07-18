@@ -23,7 +23,9 @@ use tokio_util::sync::CancellationToken;
 use super::api::LuaHost;
 use super::fs::{self, PaneCtx, RunCancellers};
 
-/// Timeout duro por defecto de un run (v1; configurable en v2, ver spec).
+/// Timeout duro por defecto de un run: contrato DOCUMENTADO de
+/// [`LuaHost::invoke`] (por eso es `pub`, reexportado en `lua`);
+/// configurable en v2 (ver spec).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Gracia tras pedir cancelación: margen para que el hook de instrucciones

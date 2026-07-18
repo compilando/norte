@@ -243,7 +243,7 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
     let mut daemon_socket: Option<PathBuf> = None;
     let mut keymap_layers = Vec::new();
     let mut sources = Vec::new();
-    for dir in &layers.dirs {
+    for (i, dir) in layers.dirs.iter().enumerate() {
         let norte = dir.join("norte.toml");
         if let Some(raw) = read_optional(&norte)? {
             let parsed: NorteToml = toml::from_str(&raw).map_err(|e| ConfigError::Toml {
@@ -269,10 +269,19 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
         }
         let keymap = dir.join("keymap.toml");
         if let Some(raw) = read_optional(&keymap)? {
-            let parsed = parse_keymap(&raw).map_err(|e| ConfigError::Toml {
+            let mut parsed = parse_keymap(&raw).map_err(|e| ConfigError::Toml {
                 path: keymap.clone(),
                 message: e.to_string(),
             })?;
+            // La ÚLTIMA capa es la de PROYECTO (`./.norte`, misma convención
+            // posicional que las capas Lua de main.rs; deuda #75: `Layers`
+            // debería llevar el kind por dir). Su keymap carga SIN trust,
+            // así que se marca: `Effective::build_for` descarta sus
+            // bindings `lua:` (un repo hostil no dirige la ejecución de
+            // comandos Lua del usuario) — con aviso, jamás en silencio.
+            if i + 1 == layers.dirs.len() {
+                parsed.mark_project();
+            }
             // Diagnóstico con ARCHIVO (ADR 0007): una capa de usuario no
             // admite `keymap` — eso es de presets (prepend/append aquí).
             if parsed.has_full_keymap() {

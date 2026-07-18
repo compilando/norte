@@ -101,6 +101,13 @@ async fn main() -> Result<()> {
     };
     let _ = norte_i18n::force(lang);
     let (browse_eff, viewer_eff) = build_keymaps(&cfg, cli_preset.as_deref())?;
+    // Bindings `lua:` descartados del keymap.toml de PROYECTO (seguridad,
+    // review M4 Lua): se avisa tras crear la App, jamás descarte mudo. El
+    // contexto `global` se fusiona en AMBAS pantallas, así que el máximo es
+    // el recuento sin dobles (un binding global cuenta en las dos).
+    let discarded_lua = browse_eff
+        .discarded_lua_bindings()
+        .max(viewer_eff.discarded_lua_bindings());
 
     let mut backend = make_backend(&cfg, cli_daemon, cli_socket).await?;
 
@@ -139,6 +146,13 @@ async fn main() -> Result<()> {
     let watch = config::watch(&layers, cfg_tx).await;
     if watch.mode == WatchMode::Polling {
         app.message = Some(t("msg-config-polling"));
+    }
+    // DESPUÉS del aviso de polling: el de seguridad no debe quedar pisado.
+    if discarded_lua > 0 {
+        app.message = Some(ta(
+            "msg-lua-keymap-project",
+            &[("n", &discarded_lua.to_string())],
+        ));
     }
 
     let mut terminal = ratatui::init();
@@ -690,6 +704,12 @@ async fn reload_config(
     match config::load_async(layers.clone()).await {
         Ok(cfg) => match build_keymaps(&cfg, cli_preset) {
             Ok((browse, viewer)) => {
+                // Bindings `lua:` descartados del keymap de PROYECTO
+                // (seguridad — mismo aviso que en el arranque; máximo
+                // porque `global` se fusiona en ambas pantallas).
+                let discarded_lua = browse
+                    .discarded_lua_bindings()
+                    .max(viewer.discarded_lua_bindings());
                 // La ayuda refleja el keymap VIGENTE: se reconstruye aquí.
                 *help_lines = norte_tui::help::build(&browse, &viewer);
                 app.help = None;
@@ -700,6 +720,13 @@ async fn reload_config(
                 // El tema también es hot-reloadable (ADR 0020): si falla, el
                 // mensaje de error del tema pisa el de "config recargada".
                 apply_theme(app, &cfg);
+                // ÚLTIMO: el aviso de seguridad no debe quedar pisado.
+                if discarded_lua > 0 {
+                    app.message = Some(ta(
+                        "msg-lua-keymap-project",
+                        &[("n", &discarded_lua.to_string())],
+                    ));
+                }
             }
             Err(e) => {
                 app.message = Some(ta(
@@ -827,8 +854,8 @@ async fn load_lua(app: &mut App, layers: &Layers) -> Option<LuaHost> {
     let last = layers.dirs.len().saturating_sub(1);
     for (i, dir) in layers.dirs.iter().enumerate() {
         // Mismo orden que la config: la última capa es la de proyecto.
-        // deuda: Layers debería llevar el kind por dir; posicional falla el
-        // LABEL en Windows sin ProgramData (APPDATA quedaría como "system").
+        // deuda #75: Layers debería llevar el kind por dir; posicional falla
+        // el LABEL en Windows sin ProgramData (APPDATA quedaría "system").
         let layer = if i == last {
             Layer::Project
         } else if i == 0 {
@@ -979,7 +1006,10 @@ async fn load_lua_project(app: &mut App, host: &LuaHost, dir: std::path::PathBuf
                 return;
             }
             let hash = sha2::Sha256::digest(&bytes);
-            let hash_abbrev = hash.iter().take(4).fold(String::new(), |mut s, b| {
+            // 16 bytes = 32 hex = 128 bits (security review M4 Lua): el
+            // humano compara LO QUE VE — forjar una colisión de 32 bits
+            // (8 hex) cuesta minutos; 128 bits es imposible en la práctica.
+            let hash_abbrev = hash.iter().take(16).fold(String::new(), |mut s, b| {
                 use std::fmt::Write as _;
                 let _ = write!(s, "{b:02x}");
                 s

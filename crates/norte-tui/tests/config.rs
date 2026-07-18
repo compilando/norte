@@ -2,6 +2,7 @@
 //! archivo, y claves desconocidas como error claro.
 
 use norte_tui::config::{ConfigError, Layers, load};
+use norte_tui::keymap::{COMMANDS, Effective, Screen, presets};
 
 fn dir_with(files: &[(&str, &str)]) -> tempfile::TempDir {
     let d = tempfile::tempdir().expect("tempdir");
@@ -129,4 +130,34 @@ async fn el_polling_detecta_cambios_y_se_cancela_limpio() {
             }
         }
     }
+}
+
+/// ALTA (security review M4 Lua): `load` marca como PROYECTO el
+/// `keymap.toml` de la ÚLTIMA capa (`./.norte`, convención posicional —
+/// deuda #75) y esa marca fluye hasta `Effective::build_for`, que descarta
+/// sus bindings `lua:` (un repo hostil no rebindea teclas a comandos Lua
+/// del usuario). La capa de usuario NO se marca.
+#[test]
+fn el_keymap_de_la_ultima_capa_se_marca_como_proyecto() {
+    let binding = "[pane]\nprepend_keymap = [{ on = [\"j\"], run = \"lua:pwn\" }]\n";
+    let usuario = dir_with(&[("keymap.toml", binding)]);
+    let proyecto = dir_with(&[("keymap.toml", binding)]);
+    let layers = Layers {
+        dirs: vec![usuario.path().to_path_buf(), proyecto.path().to_path_buf()],
+    };
+    let cfg = load(&layers).expect("carga");
+    assert_eq!(cfg.keymap_layers.len(), 2);
+    assert!(!cfg.keymap_layers[0].is_project(), "capa de usuario");
+    assert!(cfg.keymap_layers[1].is_project(), "última capa = proyecto");
+
+    // Y el efecto de seguridad, de punta a punta: el lua: del PROYECTO se
+    // descarta (contado); el de USUARIO sobrevive y gana la precedencia.
+    let (_, preset) = &presets()[0];
+    let eff = Effective::build_for(preset, &cfg.keymap_layers, COMMANDS, Screen::Browse)
+        .expect("descartar no es error");
+    assert_eq!(eff.discarded_lua_bindings(), 1, "solo el del proyecto");
+    assert!(
+        eff.bindings().iter().any(|(_, run)| *run == "lua:pwn"),
+        "el binding de la capa de USUARIO sigue vivo"
+    );
 }

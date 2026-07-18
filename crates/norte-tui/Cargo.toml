@@ -47,6 +47,9 @@ proptest.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 norte-vfs.workspace = true
+# test-util: `start_paused` en los tests con timers (deterministas, sin
+# carreras de wall-clock). Solo dev — no entra en el binario.
+tokio = { workspace = true, features = ["test-util"] }
 
 [[bench]]
 name = "presupuestos"

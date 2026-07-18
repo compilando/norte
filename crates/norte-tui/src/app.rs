@@ -582,8 +582,9 @@ pub enum Modal {
         /// Path del script YA SANEADO por quien construye el modal
         /// (`detail_for_bar`): solo display, jamás se reparsea.
         path: String,
-        /// sha256 abreviado (8 hex) del contenido, para correlar con el
-        /// `lua-trust.toml` a ojo.
+        /// sha256 abreviado (32 hex = 128 bits — forjar una colisión corta
+        /// cuesta minutos; el humano compara lo que ve) del contenido, para
+        /// correlar con el `lua-trust.toml` a ojo.
         hash_abbrev: String,
     },
 }

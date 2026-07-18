@@ -61,10 +61,15 @@ const MESSAGES_MAX: usize = 64;
 ///   segmento entra CRUDO (sin percent-decoding — un nombre con `%` literal
 ///   no se corrompe).
 ///
-/// Ambigüedad asumida y documentada: un path absoluto UTF-8 se interpreta
-/// como wire, así que un nombre crudo que parezca percent-encoding (`%41`)
-/// se decodifica; para nombres hostiles con `%` el camino seguro es el
-/// relativo o el byte string no-UTF8 tal cual salió de `list`.
+/// Ambigüedad asumida y documentada (encoding review M4 Lua): un path
+/// absoluto UTF-8 se interpreta como wire, así que un nombre que CONTENGA
+/// percent-escapes válidos se decodifica — y no hace falta que sea hostil:
+/// un nombre UTF-8 normal de descargas (`informe%20final.pdf`) concatenado
+/// como absoluto (`cwd .. '/' .. name`) se decodificaría a
+/// `informe final.pdf` y operaría sobre el fichero EQUIVOCADO. El camino
+/// seguro para ABSOLUTOS es `entry.path` (la forma wire completa que
+/// devuelven `list`/`stat`/`selection`: round-trip exacto); el `name`
+/// crudo es para uso RELATIVO (sin `://`, donde jamás se decodifica).
 ///
 /// NO existen las formas POSIX: ni `.`/`..` (un [`Segment`] los rechaza —
 /// jamás traversal) ni `/abs` con barra inicial (sería un segmento vacío =
@@ -178,6 +183,12 @@ fn finish(lua: &Lua, state: &TaskState) -> mlua::Result<MultiValue> {
 /// global YA existente (la crea `LuaHost::new`; `ui` ya existe y aquí solo
 /// gana `message`). Se llama POR INVOCACIÓN (el snapshot `ctx` y los canales
 /// del run cambian cada vez); reinstalar pisa las tablas anteriores.
+///
+/// **Consejo de API para scripts** (ambigüedad `%`, ver [`to_vpath`]): para
+/// referirse a una entrada por su forma ABSOLUTA usa siempre `entry.path`
+/// (wire completo, round-trip exacto); `entry.name` (bytes crudos) es para
+/// construir paths RELATIVOS — concatenarlo en un absoluto decodificaría un
+/// `%` literal del nombre (`informe%20final.pdf`) hacia otro fichero.
 ///
 /// `messages` acumula los `norte.ui.message(s)` del run (bytes → String
 /// lossy, tope [`MESSAGES_MAX`]); el CONSUMIDOR (driver, task 8) los vuelca

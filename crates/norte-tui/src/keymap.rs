@@ -237,6 +237,17 @@ pub struct KeymapFile {
     pane: RawSection,
     #[serde(default)]
     viewer: RawSection,
+    /// `true` si esta capa es la de PROYECTO (`./.norte`) — contenido
+    /// potencialmente AJENO (viene con un repo clonado) que se carga SIN
+    /// trust. Un keymap de proyecto NO puede bindear `lua:`:
+    /// [`Effective::build_for`] descarta esos bindings (contados en
+    /// [`Effective::discarded_lua_bindings`]) — rebindear una tecla común a
+    /// un comando del `init.lua` del USUARIO (sin sandbox) sería ejecución
+    /// dirigida por el repo sin confirmación alguna. No viene del TOML
+    /// (`serde(skip)`): lo marca `config::load` por posición de capa
+    /// (deuda #75: `Layers` debería llevar el kind por dir).
+    #[serde(skip)]
+    project: bool,
 }
 
 impl KeymapFile {
@@ -247,6 +258,19 @@ impl KeymapFile {
         !self.global.keymap.is_empty()
             || !self.pane.keymap.is_empty()
             || !self.viewer.keymap.is_empty()
+    }
+
+    /// Marca esta capa como la de PROYECTO (ver el campo `project`): sus
+    /// bindings `lua:` se descartan al fusionar. La llama `config::load`
+    /// con el `keymap.toml` de `./.norte`.
+    pub fn mark_project(&mut self) {
+        self.project = true;
+    }
+
+    /// ¿Es la capa de proyecto? (ver [`Self::mark_project`]).
+    #[must_use]
+    pub fn is_project(&self) -> bool {
+        self.project
     }
 }
 
@@ -285,6 +309,43 @@ pub enum Resolution {
 #[derive(Debug, Clone)]
 pub struct Effective {
     bindings: Vec<(Vec<Chord>, String)>,
+    /// Bindings `lua:` DESCARTADOS por venir de la capa de proyecto
+    /// (seguridad, ver [`KeymapFile::mark_project`]). El caller lo pinta
+    /// una vez por barra (`msg-lua-keymap-project`) — jamás descarte mudo.
+    discarded_lua_bindings: usize,
+}
+
+/// Fusión de un contexto (ADR 0006/0007): prepends de capa superior primero
+/// (ganan), luego el preset, luego los appends (superiores antes). Los
+/// bindings `lua:` de una capa de PROYECTO se DESCARTAN aquí, contados en
+/// `discarded_lua` (seguridad: ver [`KeymapFile::mark_project`] — el
+/// keymap de un repo ajeno no puede dirigir la ejecución de comandos Lua).
+fn merge_ctx<'a>(
+    preset: &'a KeymapFile,
+    layers: &'a [KeymapFile],
+    get: fn(&KeymapFile) -> &RawSection,
+    discarded_lua: &mut usize,
+) -> Vec<&'a RawBinding> {
+    let mut out = Vec::new();
+    let mut push = |layer_project: bool, b: &'a RawBinding, out: &mut Vec<&'a RawBinding>| {
+        if layer_project && b.run.starts_with("lua:") {
+            *discarded_lua += 1;
+        } else {
+            out.push(b);
+        }
+    };
+    for l in layers.iter().rev() {
+        for b in &get(l).prepend_keymap {
+            push(l.project, b, &mut out);
+        }
+    }
+    out.extend(get(preset).keymap.iter());
+    for l in layers.iter().rev() {
+        for b in &get(l).append_keymap {
+            push(l.project, b, &mut out);
+        }
+    }
+    out
 }
 
 impl Effective {
@@ -354,31 +415,24 @@ impl Effective {
                 }
             }
         }
-        let merge_ctx = |get: fn(&KeymapFile) -> &RawSection| -> Vec<&RawBinding> {
-            // Prepends de capa superior primero (ganan), luego el preset,
-            // luego los appends (superiores antes).
-            layers
-                .iter()
-                .rev()
-                .flat_map(|l| get(l).prepend_keymap.iter())
-                .chain(get(preset).keymap.iter())
-                .chain(
-                    layers
-                        .iter()
-                        .rev()
-                        .flat_map(|l| get(l).append_keymap.iter()),
-                )
-                .collect()
-        };
         // Entre contextos: el específico de la pantalla antes que global.
+        // La fusión (con el descarte de `lua:` de la capa de proyecto) vive
+        // en [`merge_ctx`].
         let specific: fn(&KeymapFile) -> &RawSection = match screen {
             Screen::Browse => |f| &f.pane,
             Screen::Viewer => |f| &f.viewer,
         };
-        let ordered: Vec<&RawBinding> = merge_ctx(specific)
-            .into_iter()
-            .chain(merge_ctx(|f| &f.global))
-            .collect();
+        let mut discarded_lua_bindings = 0usize;
+        let ordered: Vec<&RawBinding> =
+            merge_ctx(preset, layers, specific, &mut discarded_lua_bindings)
+                .into_iter()
+                .chain(merge_ctx(
+                    preset,
+                    layers,
+                    |f| &f.global,
+                    &mut discarded_lua_bindings,
+                ))
+                .collect();
 
         let mut seen: HashSet<Vec<Chord>> = HashSet::new();
         let mut bindings: Vec<(Vec<Chord>, String)> = Vec::new();
@@ -435,7 +489,19 @@ impl Effective {
                 }
             }
         }
-        Ok(Self { bindings })
+        Ok(Self {
+            bindings,
+            discarded_lua_bindings,
+        })
+    }
+
+    /// Bindings `lua:` descartados por venir de la capa de PROYECTO (`./
+    /// .norte`, sin trust — seguridad, ver [`KeymapFile::mark_project`]).
+    /// El caller (main) lo pinta una vez por barra; los rebinds de proyecto
+    /// a builtins NO cuentan aquí (siguen funcionando).
+    #[must_use]
+    pub fn discarded_lua_bindings(&self) -> usize {
+        self.discarded_lua_bindings
     }
 
     /// Los bindings efectivos, en orden de precedencia: secuencia ya

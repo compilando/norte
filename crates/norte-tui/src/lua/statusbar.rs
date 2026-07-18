@@ -273,7 +273,10 @@ mod tests {
     /// `statusbar()` llame a Lua durante el run, así que devolvería
     /// `Some("1")` en vez de `None` (verificado manualmente quitando el
     /// guard).
-    #[tokio::test]
+    /// `start_paused`: la latencia inyectada y el probe usan timers tokio —
+    /// con el reloj pausado el runtime AVANZA el tiempo al quedar ocioso:
+    /// determinista e instantáneo, sin carreras de wall-clock (rust review).
+    #[tokio::test(start_paused = true)]
     async fn statusbar_no_toca_lua_con_run_en_vuelo() {
         let (backend, mem) = backend_con_origen().await;
         mem.faults()
@@ -333,7 +336,8 @@ mod tests {
     /// Verificado en rojo quitando temporalmente el `if self.run_active.get()`
     /// de `LuaHost::statusbar`: el outcome pasa a `TimedOut` (la cancelación
     /// no llega a tiempo porque el hook del driver quedó inerte).
-    #[tokio::test]
+    /// `start_paused`: ver [`statusbar_no_toca_lua_con_run_en_vuelo`].
+    #[tokio::test(start_paused = true)]
     async fn cancelar_sigue_funcionando_tras_statusbar_durante_run() {
         let (backend, mem) = backend_con_origen().await;
         mem.faults()
@@ -478,7 +482,8 @@ mod tests {
     /// del slot, no por una llamada directa a `statusbar()`). Con un
     /// contador, el incremento del nuevo y el decremento del viejo se
     /// compensan y el contador nunca baja a cero mientras el nuevo viva.
-    #[tokio::test]
+    /// `start_paused`: ver [`statusbar_no_toca_lua_con_run_en_vuelo`].
+    #[tokio::test(start_paused = true)]
     async fn asignar_un_run_nuevo_sobre_el_slot_del_viejo_no_desprotege() {
         let (backend, mem) = backend_con_origen().await;
         let h = LuaHost::new().unwrap();

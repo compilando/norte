@@ -108,5 +108,15 @@
     "id": "tag_chars_smuggle",
     "hex": "61f3a08181f3a0818262",
     "why": "TAG chars (U+E0041,U+E0042): string invisible completo contrabandeado dentro del nombre; el render debe enmascararlos"
+  },
+  {
+    "id": "percent_lookalike_download",
+    "hex": "61253230622e747874",
+    "why": "a%20b.txt: nombre UTF-8 NORMAL (estilo descargas) cuyo % literal PARECE percent-encoding — concatenado como path absoluto wire se decodificaria a 'a b.txt' y operaria sobre el fichero equivocado; la ruta segura es el wire completo (entry.path)"
+  },
+  {
+    "id": "percent_bad_escape",
+    "hex": "31303025",
+    "why": "100%: % final que NO es un escape valido — un decodificador ingenuo revienta o lo traga en silencio; el wire debe re-escaparlo (%25) y hacer round-trip byte-exacto"
   }
 ]

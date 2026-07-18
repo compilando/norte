@@ -227,16 +227,33 @@ en los puntos siguientes — el resto es fiel:
 8. **Ambigüedad `%` en paths absolutos UTF-8, asumida y documentada**
    (`lua/fs.rs::to_vpath`): un absoluto (`scheme://…`) que sea UTF-8 válido
    se interpreta como forma wire (percent-decoding) — así lo que devuelven
-   `list`/`selection` hace round-trip —; un nombre crudo que PAREZCA
-   percent-encoding (`%41`) se decodificaría. Para nombres hostiles con `%`
-   el camino seguro es el relativo o el byte string no-UTF8 tal cual salió
-   de `list`.
+   `list`/`selection` hace round-trip. Consecuencia (encoding review): un
+   nombre UTF-8 NORMAL con `%` literal (estilo descargas:
+   `informe%20final.pdf`) concatenado como absoluto (`cwd .. '/' .. name`)
+   se decodifica y opera sobre el fichero EQUIVOCADO. El camino seguro para
+   ABSOLUTOS es `entry.path` (el wire completo de `list`/`stat`, round-trip
+   exacto); el `name` crudo es SOLO para paths RELATIVOS (sin `://`, donde
+   jamás se decodifica). Pinneado en el corpus
+   (`percent_lookalike_download`) y en `tests/lua_fs.rs`.
 9. **Presupuesto de statusbar: por instrucciones (50k por llamada al hook;
    10 M la carga), y bench añadido** en `benches/presupuestos.rs`
    (`lua_statusbar_{cacheada,no_cacheada}`). Medido 2026-07-18: cacheada
    ≈ 21 ns, no cacheada (script trivial) ≈ 1.7 µs — muy dentro del
    presupuesto orientativo del plan (< 1 µs cacheada / < 1 ms no cacheada;
    la cacheada a 21 ns es cache-hit puro, el «< 1 µs» era conservador).
+
+10. **`lua:` en el `keymap.toml` de PROYECTO se DESCARTA** (security review
+    global, ALTA): `./.norte/keymap.toml` carga SIN trust (es config de
+    keymap, no código), así que sus bindings `lua:` se ignoran con aviso
+    por barra (`msg-lua-keymap-project`) — sin esto, un repo hostil
+    rebindearía una tecla común (`j`, `enter`) a un comando del `init.lua`
+    del USUARIO (sin sandbox, cwd = el repo). Los rebinds de proyecto a
+    builtins siguen funcionando. La capa se marca posicionalmente en
+    `config::load` (`KeymapFile::mark_project`, deuda #75) y el descarte
+    vive en `Effective::build_for`.
+11. **Hash del modal TOFU: 32 hex (128 bits)**, no un abreviado corto
+    (security review): el humano compara LO QUE VE — forjar una colisión
+    de 32 bits cuesta minutos.
 
 E2E del criterio de salida: `crates/norte-tui/tests/lua_e2e.rs` (init.lua
 realista con `basename` byte a byte, copia renombrada byte-exacta, nombre

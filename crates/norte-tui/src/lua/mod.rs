@@ -4,13 +4,13 @@
 //! `Backend` → engine: journal + policy + undo. `io.*`/`os.*` crudos NO
 //! dejan rastro (documentado; como un shell).
 //!
-//! Los submódulos se activan por tasks del plan
-//! (`docs/superpowers/plans/2026-07-17-m4-lua-scripting.md`):
-mod api; // task 2
-mod driver; // task 5
-mod fs; // task 4
-mod statusbar; // task 7
-mod trust; // task 6
+//! Diseño y desviaciones:
+//! `docs/superpowers/specs/2026-07-17-m4-lua-scripting-design.md`.
+mod api;
+mod driver;
+mod fs;
+mod statusbar;
+mod trust;
 
 pub(crate) use api::valid_name;
 pub use api::{Layer, LuaHost, LuaLoadError, LuaWarning};

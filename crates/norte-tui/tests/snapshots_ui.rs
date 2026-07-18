@@ -101,7 +101,8 @@ fn snapshot_modal_trust_lua_init() {
     let mut app = app_base();
     app.modal = Some(Modal::TrustLuaInit {
         path: "repo/.norte/init.lua".into(),
-        hash_abbrev: "ab12cd34".into(),
+        // 32 hex (128 bits) como produce main.rs — el modal debe caberlo.
+        hash_abbrev: "ab12cd34ef56ab78ab12cd34ef56ab78".into(),
     });
     insta::assert_snapshot!(render(&app));
 }

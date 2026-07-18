@@ -499,3 +499,68 @@ fn bindings_expuestos_reflejan_las_capas() {
         "el append del usuario aparece en la ayuda: {b:?}"
     );
 }
+
+/// ALTA (security review M4 Lua): `./.norte/keymap.toml` carga SIN trust,
+/// así que un repo hostil podría rebindear una tecla común (`j`, `enter`) a
+/// un comando `lua:` del init.lua de USUARIO (sin sandbox, sin confirmación,
+/// con cwd = el repo hostil). Los bindings `lua:` originados en la capa de
+/// PROYECTO se DESCARTAN (contados para el aviso de barra); los rebinds de
+/// proyecto a builtins siguen funcionando; el mismo binding en una capa de
+/// usuario SÍ resuelve.
+#[test]
+fn lua_de_keymap_de_proyecto_se_descarta_con_aviso() {
+    let preset = parse_keymap(
+        r#"
+        [pane]
+        keymap = [{ on = ["j"], run = "cursor.down" }]
+    "#,
+    )
+    .unwrap();
+    let capa = r#"
+        [pane]
+        prepend_keymap = [{ on = ["j"], run = "lua:pwn" }]
+    "#;
+
+    // Capa de PROYECTO: el binding lua: se descarta — la tecla cae al
+    // builtin del preset — y queda contado para el aviso.
+    let mut proyecto = parse_keymap(capa).unwrap();
+    proyecto.mark_project();
+    let eff = Effective::build_layered(&preset, std::slice::from_ref(&proyecto), COMANDOS)
+        .expect("descartar no es error de carga");
+    assert_eq!(eff.discarded_lua_bindings(), 1, "contado para el aviso");
+    let mut r = Resolver::new(eff);
+    assert_eq!(
+        r.push(parse_chord("j").unwrap()),
+        Resolution::Run("cursor.down".into()),
+        "la tecla cae al builtin, jamás al lua: del proyecto"
+    );
+
+    // El MISMO binding en capa de USUARIO (sin marcar): resuelve normal.
+    let usuario = parse_keymap(capa).unwrap();
+    let eff = Effective::build_layered(&preset, std::slice::from_ref(&usuario), COMANDOS).unwrap();
+    assert_eq!(eff.discarded_lua_bindings(), 0);
+    let mut r = Resolver::new(eff);
+    assert_eq!(
+        r.push(parse_chord("j").unwrap()),
+        Resolution::Run("lua:pwn".into()),
+        "en capa de usuario el binding lua: es legítimo"
+    );
+
+    // Rebind de proyecto a un BUILTIN: sigue funcionando (el descarte es
+    // SOLO de `lua:` — config de proyecto inocua no se rompe).
+    let mut proyecto = parse_keymap(
+        r#"
+        [pane]
+        prepend_keymap = [{ on = ["x"], run = "cursor.up" }]
+    "#,
+    )
+    .unwrap();
+    proyecto.mark_project();
+    let eff = Effective::build_layered(&preset, std::slice::from_ref(&proyecto), COMANDOS).unwrap();
+    assert_eq!(eff.discarded_lua_bindings(), 0);
+    let mut r = Resolver::new(eff);
+    assert_eq!(
+        r.push(parse_chord("x").unwrap()),
+        Resolution::Run("cursor.up".into())
+    );
+}
