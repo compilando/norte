@@ -360,7 +360,9 @@ const ERR_INVALID_PATH: &str = "err-invalid-path";
 /// entrada, en orden de aparición, así que la ÚLTIMA gana también
 /// intra-capa). Conserva la posición original para que el orden del popup
 /// no salte al editar solo el `path` de un favorito ya existente. Si no
-/// existía, se añade al final.
+/// existía, se añade al final. Las claves (`name`) comparan byte-exactas
+/// SIN normalizar (la identidad jamás se normaliza); twins NFC/NFD conviven
+/// como filas distintas — decisión consciente.
 fn merge_hotlist_entry(items: &mut Vec<HotlistItem>, entry: HotlistEntry) {
     let target = VPath::parse(&entry.path).map_err(|_| ERR_INVALID_PATH.to_owned());
     if let Some(existing) = items.iter_mut().find(|it| it.name == entry.name) {
@@ -457,7 +459,10 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
             // igual que el `mark_project()` del keymap más abajo). Un
             // `./.norte/norte.toml` de un repo ajeno no debe poder
             // inyectar favoritos en la sesión del usuario (spec
-            // 2026-07-18, decisión 3).
+            // 2026-07-18, decisión 3). Los ESCALARES de UI (quick_search,
+            // theme, lang) SÍ se honran desde proyecto: son config
+            // estructural de presentación (coherente con theme), no data
+            // que dirija navegación como la hotlist.
             if i + 1 != layers.dirs.len() {
                 for entry in parsed.hotlist {
                     merge_hotlist_entry(&mut hotlist, entry);
@@ -901,6 +906,48 @@ mod hotlist_tests {
             cfg.hotlist[0].target.as_ref().unwrap(),
             &VPath::parse("file:///nuevo").unwrap(),
             "la última aparición dentro de la capa gana"
+        );
+    }
+
+    /// Pin encoding BAJA-1a: un `name` hostil (comilla, salto de línea, un
+    /// `[[hotlist]]` embebido y un override bidi) sobrevive el round-trip
+    /// add → load BYTE-IDÉNTICO como UNA sola entrada — `toml_edit` escapa,
+    /// jamás inyecta TOML — y esa misma clave la retira con remove.
+    #[test]
+    fn hotlist_round_trip_name_hostil_byte_identico() {
+        let usuario = tempfile::tempdir().unwrap();
+        let name = "fa\"vo\n[[hotlist]]\u{202E}rito";
+        persist_hotlist_add(usuario.path(), name, "file:///x").unwrap();
+        let proyecto = tempfile::tempdir().unwrap();
+        let layers = Layers {
+            dirs: vec![usuario.path().to_path_buf(), proyecto.path().to_path_buf()],
+        };
+        let cfg = load(&layers).expect("el name hostil no rompe el TOML");
+        assert_eq!(cfg.hotlist.len(), 1, "UNA entrada, sin inyección");
+        assert_eq!(cfg.hotlist[0].name, name, "name byte-idéntico");
+        persist_hotlist_remove(usuario.path(), name).unwrap();
+        let cfg = load(&layers).expect("carga tras remove");
+        assert!(cfg.hotlist.is_empty(), "la clave hostil retira su entrada");
+    }
+
+    /// Pin encoding BAJA-1b: el wire de un `VPath` con segmento no-UTF8
+    /// (0xFF 0xFE) round-tripea add → load con `target` Ok y bytes exactos.
+    #[test]
+    fn hotlist_round_trip_path_no_utf8_bytes_exactos() {
+        let usuario = tempfile::tempdir().unwrap();
+        let vp = VPath::parse("file:///%FF%FE").unwrap();
+        persist_hotlist_add(usuario.path(), "bin", &vp.to_wire()).unwrap();
+        let proyecto = tempfile::tempdir().unwrap();
+        let layers = Layers {
+            dirs: vec![usuario.path().to_path_buf(), proyecto.path().to_path_buf()],
+        };
+        let cfg = load(&layers).expect("carga");
+        let target = cfg.hotlist[0].target.as_ref().expect("target Ok");
+        assert_eq!(target, &vp);
+        assert_eq!(
+            target.file_name().unwrap().as_bytes(),
+            &[0xFF, 0xFE],
+            "los bytes crudos sobreviven el round-trip por TOML"
         );
     }
 

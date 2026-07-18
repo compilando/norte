@@ -554,7 +554,13 @@ async fn run(
                         // re-entra al keymap (sin recursión). El RESTO de
                         // teclas (F5, F8, F3, Tab en Filter…) NO se consume:
                         // cae al resolver y opera sobre `selected()` ya
-                        // filtrado — feed-to-listbox gratis.
+                        // filtrado — feed-to-listbox gratis. Decisión
+                        // consciente: las teclas de navegación NO
+                        // interceptadas (PageUp/PageDown/Home/End) también
+                        // caen al resolver y mueven el CURSOR REAL, que con
+                        // el filtro activo es invisible; al cancelar (Esc)
+                        // reaparece donde lo dejaron. Conectarlas a la
+                        // selección del filtro no compensa el estado extra.
                         if app.viewer.is_none() && app.focused().quick.is_some() {
                             let jump = app
                                 .focused()
@@ -810,7 +816,7 @@ async fn on_nav_popup_key(
                     input.push(c);
                 }
             }
-            KeyCode::Backspace => {
+            KeyCode::Backspace if plain => {
                 if let Some(input) = &mut popup.name_input {
                     input.pop();
                 }

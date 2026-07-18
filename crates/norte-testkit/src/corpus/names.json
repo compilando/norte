@@ -118,5 +118,10 @@
     "id": "percent_bad_escape",
     "hex": "31303025",
     "why": "100%: % final que NO es un escape valido — un decodificador ingenuo revienta o lo traga en silencio; el wire debe re-escaparlo (%25) y hacer round-trip byte-exacto"
+  },
+  {
+    "id": "nfd_uppercase_composed_only_lowercase",
+    "hex": "4acc8c2e747874",
+    "why": "J+U+030C: sin precompuesta MAYÚSCULA, la minúscula ǰ (U+01F0) sí existe — un case-fold que no re-normaliza NFC tras minusculizar pierde la equivalencia canónica"
   }
 ]

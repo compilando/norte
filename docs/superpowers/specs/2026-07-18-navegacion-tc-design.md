@@ -1,7 +1,8 @@
 # Navegación TC (quick search, historial, hotlist) — diseño
 
 - Fecha: 2026-07-18
-- Estado: aprobado (oscar); pendiente de plan
+- Estado: IMPLEMENTADO (2026-07-18, commits 2b7fc96..cc21cce + cierre de
+  reviews; ver «Desviaciones de la implementación»)
 - Contexto: petición «moverme por los archivos como Total Commander».
   Proyecto hermano: `2026-07-18-live-search-design.md` (Alt+F7), que se
   implementa DESPUÉS de este. Frontend puro — cero cambio de protocolo
@@ -108,3 +109,40 @@ search (llegará gratis al ser un listing normal); breadcrumb/drive bar.
 `/pro` filtra el listado a lo que casa y Enter entra; `Alt+↓` vuelve al
 dir anterior; `Ctrl+D` + `a` guarda el cwd con nombre y sobrevive a
 reiniciar; todo funciona igual sobre un dir sftp remoto.
+
+## Desviaciones de la implementación (2026-07-18)
+
+- **Preset vim: `ctrl+b`, no `ctrl+d`, para `pane.hotlist`**: en vim
+  `ctrl+d` ya es `cursor.page-down` (half-page) — colisión; `ctrl+b`
+  estaba libre (anotado en `keymap_presets/vim.toml`).
+- **`quick_cancel` (Esc) no mueve el cursor real**: cerrar el filtro
+  restaura el listado con el cursor donde estaba antes de abrirlo. Las
+  teclas de navegación no interceptadas (PageUp/PageDown/Home/End) caen al
+  resolver y mueven ese cursor real invisible bajo el filtro — decisión
+  consciente, documentada en el bloque de intercepción de `main.rs`.
+- **Jump + Enter sin matches opera sobre el cursor visible**: en modo Jump
+  el listado no cambia y el cursor real es el visible; solo Filter sin
+  matches degrada a no-op (jamás operar sobre lo que el usuario no ve).
+- **`NavItem` con clave congelada**: el popup es una snapshot — display
+  saneado, destino parseado y (en hotlist) el `name` crudo viajan DENTRO
+  del item al abrirse; un hot-reload bajo el popup no puede desviar el
+  borrado (`d`) a otra fila (review MAJOR T5).
+- **El push del historial vive dentro de `cd()`**, no por call-site: cubre
+  nav.enter/nav.parent, quick-Enter, retry TOFU y los propios popups; solo
+  el brazo de éxito empuja, y un cd al mismo dir no ensucia.
+- **`Cd::Failed` es un desenlace nuevo del cd**: porta el error para que el
+  popup de historial retire la entrada en `NotFound`. Su criterio
+  conservador (soltar también el fill del pane VIGENTE) deja `loading`
+  colgado y un «(parcial)» engañoso — issue #78.
+- **`fold` re-normaliza NFC DESPUÉS del lowercase** (review encoding
+  MEDIA-1): minusculizar puede componer donde la mayúscula no componía
+  (J+U+030C → ǰ U+01F0); fixture `nfd_uppercase_composed_only_lowercase`
+  en el corpus. Solo equivalencia canónica: NFKC fuera a sabiendas.
+- **`path_display` se construye por segmentos con `display_name`** (review
+  encoding MEDIA-2), no con `display_lossy` del proto: mismo criterio de
+  enmascarado en texto y flag (ZWSP/TAG jamás crudos en los popups); el
+  prefijo `⟨scheme authority⟩/` calca el formato del proto. ZWNJ diverge:
+  proto lo permite, la TUI lo enmascara.
+- **Issues abiertos**: #77 (cachear el fold NFC por entrada — hoy una
+  `String` por entrada×keystroke×lote), #78 (`Cd::Failed` suelta el fill
+  del pane vigente: `loading` colgado).

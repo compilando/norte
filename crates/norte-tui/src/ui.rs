@@ -18,7 +18,10 @@ use norte_i18n::{t, ta};
 /// truncado por ancho de ratatui y el nombre se pintaría "limpio") y en
 /// ASCII (`⚠` es ambiguous-width: 2 celdas en muchos terminales). Va
 /// estilado (rol `hostile-badge`) — fuera de banda: un archivo llamado "! x"
-/// no lo imita.
+/// no lo imita. EXCEPCIÓN documentada: los popups de navegación llevan el
+/// badge in-band dentro del display del item (como los títulos de modal);
+/// un favorito llamado "! x" puede imitarlo — superficie de solo-lectura
+/// propia del usuario, riesgo aceptado.
 pub(crate) const HOSTILE_BADGE: &str = "!";
 
 /// Pinta el frame completo: panes (o viewer) + panel de tasks + barra de
@@ -81,11 +84,33 @@ fn draw_nav_popup(frame: &mut Frame<'_>, popup: &crate::app::NavPopup, theme: &T
         NavPopupKind::History => t("history-title"),
         NavPopupKind::Hotlist => t("hotlist-title"),
     };
+    // El footer se construye ANTES para dimensionar el popup con su ancho
+    // REAL (celdas unicode vía `Line::width`, no bytes): 64 de mínimo — el
+    // footer de teclas de hotlist en ES son 60 celdas y a 60 el borde lo
+    // truncaría («cerra…») — y crece si el footer (p.ej. un nombre largo en
+    // el input) lo necesita.
+    let footer: Option<Line<'_>> = if let Some(input) = &popup.name_input {
+        let (masked, _) = display_name(input.as_bytes());
+        Some(Line::raw(format!(
+            " {} {masked}_ ",
+            t("hotlist-name-prompt")
+        )))
+    } else if popup.kind == NavPopupKind::Hotlist {
+        Some(Line::raw(format!(" {} ", t("hotlist-keys"))))
+    } else {
+        None
+    };
+    let footer_w = footer.as_ref().map_or(0, Line::width);
+    let ancho = u16::try_from(footer_w.saturating_add(4))
+        .unwrap_or(u16::MAX)
+        .max(64);
     let rows = u16::try_from(popup.items().len().max(1)).unwrap_or(8) + 2;
-    // 64 y no 60: el footer de teclas de hotlist en ES son 60 celdas y a 60
-    // el borde lo truncaría («cerra…»).
-    let area = centered(frame.area(), 64, rows.min(frame.area().height.max(3)));
+    let area = centered(frame.area(), ancho, rows.min(frame.area().height.max(3)));
     frame.render_widget(ratatui::widgets::Clear, area);
+    // Items largos: elipsis MEDIA (cabeza + cola, como los modales de
+    // rutas) al ancho interior — el truncado derecho de ratatui haría
+    // indistinguibles dos rutas con prefijo común (BAJA-3).
+    let inner = usize::from(area.width.saturating_sub(3));
     let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = if popup.items().is_empty() {
         let empty = match popup.kind {
             NavPopupKind::History => t("history-empty"),
@@ -97,7 +122,12 @@ fn draw_nav_popup(frame: &mut Frame<'_>, popup: &crate::app::NavPopup, theme: &T
             popup
                 .items()
                 .iter()
-                .map(|it| ListItem::new(Line::raw(format!(" {}", it.display))))
+                .map(|it| {
+                    ListItem::new(Line::raw(format!(
+                        " {}",
+                        middle_ellipsis(&it.display, inner)
+                    )))
+                })
                 .collect(),
             Some(popup.cursor()),
         )
@@ -107,14 +137,8 @@ fn draw_nav_popup(frame: &mut Frame<'_>, popup: &crate::app::NavPopup, theme: &T
         .title(format!(" {title} "))
         .title_style(theme.role(Role::Title))
         .border_style(theme.role(Role::ModalBorder));
-    if let Some(input) = &popup.name_input {
-        let (masked, _) = display_name(input.as_bytes());
-        block = block.title_bottom(Line::raw(format!(
-            " {} {masked}_ ",
-            t("hotlist-name-prompt")
-        )));
-    } else if popup.kind == NavPopupKind::Hotlist {
-        block = block.title_bottom(Line::raw(format!(" {} ", t("hotlist-keys"))));
+    if let Some(footer) = footer {
+        block = block.title_bottom(footer);
     }
     let list = List::new(items)
         .block(block)

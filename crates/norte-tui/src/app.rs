@@ -316,12 +316,40 @@ pub fn display_name(bytes: &[u8]) -> (String, bool) {
     (texto, lossy || masked)
 }
 
-/// Path completo listo para pintar: `display_lossy` + marca si CUALQUIER
-/// segmento saldría alterado (mismo criterio que [`display_name`]).
+/// Path completo listo para pintar: prefijo `⟨scheme authority⟩/` (formato
+/// calcado EXACTO de `VPath::display_lossy`, proto vpath.rs — con segmentos
+/// limpios ambos textos coinciden) + cada segmento por [`display_name`], y
+/// marca si CUALQUIER segmento saldría alterado.
+///
+/// El texto se construye segmento a segmento con `display_name` (no con
+/// `display_lossy`, review encoding MEDIA-2): el criterio de enmascarado del
+/// TEXTO es el MISMO que el del flag — `display_lossy` solo tapa Cc+bidi y
+/// dejaba ZWSP/TAG crudos (twins invisibles idénticos, ambos con badge).
+/// Nota ZWNJ: proto lo PERMITE en `display_lossy` (legítimo en persa);
+/// [`must_mask`] lo enmascara — aquí gana `must_mask` a sabiendas: en la TUI
+/// un twin invisible en una superficie de decisión pesa más que la
+/// fidelidad tipográfica (el badge ya delata la alteración).
 #[must_use]
 pub fn path_display(p: &VPath) -> (String, bool) {
-    let hostil = p.segments().any(|s| display_name(s).1);
-    (p.display_lossy(), hostil)
+    let mut out = String::from("⟨");
+    out.push_str(p.scheme());
+    if let Some(a) = p.authority() {
+        out.push(' ');
+        out.push_str(a);
+    }
+    out.push_str("⟩/");
+    let mut hostil = false;
+    let mut first = true;
+    for seg in p.segments() {
+        if !first {
+            out.push('/');
+        }
+        first = false;
+        let (texto, h) = display_name(seg);
+        hostil |= h;
+        out.push_str(&texto);
+    }
+    (out, hostil)
 }
 
 /// Estado completo del TUI: dos panes y el foco.
@@ -1244,6 +1272,39 @@ mod tests {
             .iter()
             .map(|e| String::from_utf8_lossy(e.path.file_name().unwrap().as_bytes()).into_owned())
             .collect()
+    }
+
+    /// Encoding MEDIA-2: el TEXTO de `path_display` no puede contener NINGÚN
+    /// char del set [`must_mask`] — el flag ya salía de `display_name`
+    /// (criterio amplio), pero el texto era `display_lossy` (solo Cc+bidi):
+    /// ZWSP/TAG crudos pintaban twins invisibles idénticos en los popups de
+    /// navegación, ambos con badge. Corpus-driven: todo nombre hostil
+    /// canónico, como segmento de un `VPath` real.
+    #[test]
+    fn path_display_jamas_pinta_chars_enmascarables() {
+        for n in norte_testkit::corpus::hostile_names() {
+            let p = root().join(norte_proto::Segment::new(n.bytes.clone()).unwrap());
+            let (texto, _) = path_display(&p);
+            assert!(
+                !texto.chars().any(must_mask),
+                "{}: el texto de path_display no lleva chars de must_mask: {texto:?}",
+                n.id
+            );
+        }
+    }
+
+    /// El prefijo `⟨scheme authority⟩/` de `path_display` calca EXACTO el
+    /// formato de `VPath::display_lossy` (proto vpath.rs): con segmentos
+    /// limpios ambos textos son idénticos — los snapshots de panes no
+    /// cambian.
+    #[test]
+    fn path_display_calca_el_prefijo_de_display_lossy() {
+        let limpio = VPath::parse("sftp://oscar-host/docs/notas.txt").unwrap();
+        assert_eq!(path_display(&limpio).0, limpio.display_lossy());
+        let sin_auth = VPath::parse("mem:///a/b").unwrap();
+        assert_eq!(path_display(&sin_auth).0, sin_auth.display_lossy());
+        let raiz = root();
+        assert_eq!(path_display(&raiz).0, raiz.display_lossy());
     }
 
     /// `extend_listing` re-ordena TODO el listado (primera página + lote).

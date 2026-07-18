@@ -106,6 +106,26 @@ fn snapshot_popup_hotlist() {
     insta::assert_snapshot!(render(&app));
 }
 
+/// BAJA-3: los items largos del popup de navegación van con elipsis MEDIA
+/// (cabeza + cola, como los modales de rutas), no truncado derecho: dos
+/// entradas de historial con un prefijo común más ancho que el popup deben
+/// rendir displays DISTINTOS — la cola (el nombre, lo que identifica la
+/// ruta ante un humano) sobrevive.
+#[test]
+fn popup_items_largos_con_elipsis_media_siguen_distinguibles() {
+    let mut app = app_base();
+    let prefijo = "x".repeat(70); // > 62 celdas interiores del popup
+    app.history[0].push(vp(&format!("file:///{prefijo}/uno.txt")));
+    app.history[0].push(vp(&format!("file:///{prefijo}/dos.txt")));
+    app.open_nav_popup(norte_tui::app::NavPopupKind::History);
+    let texto = render(&app);
+    assert!(
+        texto.contains("uno.txt") && texto.contains("dos.txt"),
+        "las colas distintas sobreviven al recorte (elipsis media): {texto}"
+    );
+    assert!(texto.contains('…'), "el recorte se marca: {texto}");
+}
+
 #[test]
 fn snapshot_modal_colision() {
     let mut app = app_base();

@@ -19,7 +19,18 @@ pub enum Mode {
     Jump,
 }
 
-/// Nombre → clave de comparación: lossy del último segmento, NFC, lowercase.
+/// Nombre → clave de comparación: lossy del último segmento, NFC,
+/// lowercase, y NFC OTRA VEZ.
+///
+/// La segunda NFC no es redundante: minusculizar puede sacar el resultado
+/// de NFC cuando la precompuesta solo existe en minúscula (J+U+030C no
+/// compone, pero su minúscula j+U+030C compone a ǰ U+01F0) — sin
+/// re-normalizar, la aguja compuesta y el nombre descompuesto no casarían
+/// (equivalencia canónica rota, review encoding MEDIA-1).
+///
+/// Solo equivalencia CANÓNICA (NFC): half-width katakana, ligaduras y demás
+/// equivalencias de COMPATIBILIDAD (NFKC) quedan FUERA a sabiendas — «ﬁ» no
+/// casa con «fi»; normalizarlas cambiaría de familia de equivalencia.
 ///
 /// Coste: una `String` nueva por entrada y por keystroke (recompute
 /// completo en cada char); cacheo diferido a #77 (misma zona que la sort
@@ -30,6 +41,7 @@ fn fold(name: &[u8]) -> String {
     String::from_utf8_lossy(name)
         .nfc()
         .flat_map(char::to_lowercase)
+        .nfc()
         .collect()
 }
 
@@ -210,7 +222,10 @@ impl History {
     /// reciente, no-op — evita repetir el mismo dir en cd's redundantes
     /// (p.ej. refrescar el pane). Un mismo dir en posiciones NO
     /// consecutivas del historial sí puede repetirse (visitarlo, irse,
-    /// volver): es historial de sesión, no un conjunto.
+    /// volver): es historial de sesión, no un conjunto. El dedup compara
+    /// `VPath` byte-exacto SIN normalizar (la identidad jamás se
+    /// normaliza); twins NFC/NFD conviven como filas distintas — decisión
+    /// consciente.
     pub fn push(&mut self, path: VPath) {
         if self.deque.front() == Some(&path) {
             return;
@@ -273,6 +288,21 @@ mod tests {
             matches("año".as_bytes(), &entries),
             vec![0],
             "NFD casa con aguja NFC"
+        );
+    }
+
+    #[test]
+    fn fold_re_normaliza_nfc_tras_el_lowercase() {
+        // Encoding MEDIA-1: J + U+030C (combining caron) NO tiene forma
+        // precompuesta MAYÚSCULA, pero su minúscula ǰ (U+01F0) SÍ existe.
+        // Un fold que no re-normaliza NFC tras minusculizar deja
+        // "j\u{030C}" (descompuesto) y la aguja "ǰ" (compuesta) no casa:
+        // se pierde la equivalencia canónica.
+        let entries = vec![e("mem:///J%CC%8C.txt")];
+        assert_eq!(
+            matches("ǰ".as_bytes(), &entries),
+            vec![0],
+            "la aguja precompuesta ǰ (U+01F0) casa con J+U+030C"
         );
     }
 
