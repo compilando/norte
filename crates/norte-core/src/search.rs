@@ -24,7 +24,18 @@
 //! viceversa). Inherente a la búsqueda literal sin decodificar; no se corrige
 //! en v1.
 
-use norte_encoding::{Encoding, encode_lossless, needle_cycle};
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::time::Duration;
+
+use futures::StreamExt;
+use norte_encoding::{Detection, Encoding, encode_lossless, needle_cycle};
+use norte_proto::methods::{FsSearchParams, MatchInfo, SEARCH_HITS_MAX_BATCH, SearchHits};
+use norte_proto::{Entry, EntryKind, Error, Segment, TaskId, VPath};
+use norte_vfs::{ByteStream, Provider};
+use tokio::sync::mpsc;
+use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 use unicode_normalization::UnicodeNormalization;
 
 /// Tope del programa regex compilado (anti-ReDoS): una regex cuya máquina
@@ -43,6 +54,13 @@ pub enum SearchError {
     /// La regex (de nombre o contenido) no compila o excede el `size_limit`.
     #[error("regex inválida: {0}")]
     BadRegex(String),
+    /// Ningún criterio de búsqueda (ni nombre ni contenido).
+    #[error("sin criterios de búsqueda")]
+    NoCriteria,
+    /// Dos criterios excluyentes del MISMO eje (`name_glob`+`name_regex`, o
+    /// `content`+`content_regex`).
+    #[error("criterios excluyentes: {0}")]
+    Conflicting(&'static str),
 }
 
 /// Fold de nombre para el eje GLOB: `lossy → NFC → (lowercase → NFC)`. La 2ª
@@ -205,6 +223,20 @@ impl ContentNeedle {
         if n.needles.is_empty() { None } else { Some(n) }
     }
 
+    /// Los needles transcodificados `(encoding, bytes)`. El walker (T3) los
+    /// consume en un scan con rastreo de línea/offset que [`Self::find_in`] no
+    /// expone (necesita `pos` y `\n` acumulados para el `line`/`preview`).
+    #[must_use]
+    pub fn needles(&self) -> &[(&'static Encoding, Vec<u8>)] {
+        &self.needles
+    }
+
+    /// Longitud del needle más largo (dimensiona el solape entre chunks).
+    #[must_use]
+    pub fn max_len(&self) -> usize {
+        self.max_len
+    }
+
     /// Busca la aguja en `tail_anterior + chunk` con `memmem`; devuelve el
     /// offset del primer match dentro de ese buffer combinado (o `None`).
     /// Actualiza `ov` reteniendo los últimos `max_len - 1` bytes para que una
@@ -264,6 +296,491 @@ impl ContentRegex {
     pub fn is_match(&self, line: &str) -> bool {
         self.re.is_match(line)
     }
+}
+
+// ── Walker de fs.search (T3): recorre un subtree y emite hits en lotes. ────
+
+/// Flush por tiempo del lote de hits (calca `FILL_INTERVAL` del TUI): un lote
+/// no vacío se envía al pasar este intervalo aunque no llene el batch, para
+/// que el pane virtual "gotee" resultados en vivo.
+const FLUSH_INTERVAL: Duration = Duration::from_millis(100);
+/// Tope de caracteres del `preview` de un match (recorte server-side).
+const PREVIEW_MAX_CHARS: usize = 160;
+
+/// Criterio de contenido ya compilado.
+enum ContentSpec {
+    /// Sin búsqueda de contenido (solo nombre).
+    None,
+    /// Literal multi-encoding (la aguja se transcodifica por fichero según el
+    /// encoding detectado; el texto crudo se retiene para el modo decode de
+    /// UTF-16, ver [`run_walk`]).
+    Literal(String),
+    /// Regex sobre el contenido decodificado por líneas.
+    Regex(ContentRegex),
+}
+
+/// Criterios de [`FsSearchParams`] ya validados y COMPILADOS (matchers de
+/// nombre/contenido). Se construye ANTES de la Task: un glob/regex inválido o
+/// una combinación ilegal es un error del REQUEST, no un fallo de la Task.
+pub struct SearchMatchers {
+    name: Option<NameMatcher>,
+    content: ContentSpec,
+    case_sensitive: bool,
+    /// Tope de hits (ya convertido a `usize`); `None` = sin tope.
+    max_hits: Option<usize>,
+}
+
+impl SearchMatchers {
+    /// Valida y compila los criterios de `params`.
+    ///
+    /// # Errors
+    /// - [`SearchError::NoCriteria`] si no hay ningún criterio.
+    /// - [`SearchError::Conflicting`] si se dan `name_glob`+`name_regex`, o
+    ///   `content`+`content_regex` (excluyentes por eje).
+    /// - [`SearchError::BadGlob`]/[`SearchError::BadRegex`] si un patrón no
+    ///   compila (o excede el `size_limit` anti-ReDoS).
+    pub fn compile(params: &FsSearchParams) -> Result<Self, SearchError> {
+        if params.name_glob.is_some() && params.name_regex.is_some() {
+            return Err(SearchError::Conflicting(
+                "name_glob y name_regex son excluyentes",
+            ));
+        }
+        if params.content.is_some() && params.content_regex.is_some() {
+            return Err(SearchError::Conflicting(
+                "content y content_regex son excluyentes",
+            ));
+        }
+        let cs = params.case_sensitive;
+        let name = match (&params.name_glob, &params.name_regex) {
+            (Some(g), _) => Some(NameMatcher::glob(g, cs)?),
+            (_, Some(r)) => Some(NameMatcher::regex(r, cs)?),
+            _ => None,
+        };
+        // Una aguja de contenido VACÍA no es un criterio (casaría con todo):
+        // se trata como ausente para el cómputo de "al menos un criterio".
+        let content = if let Some(c) = &params.content {
+            if c.is_empty() {
+                ContentSpec::None
+            } else {
+                ContentSpec::Literal(c.clone())
+            }
+        } else if let Some(r) = &params.content_regex {
+            ContentSpec::Regex(ContentRegex::new(r, cs)?)
+        } else {
+            ContentSpec::None
+        };
+        if name.is_none() && matches!(content, ContentSpec::None) {
+            return Err(SearchError::NoCriteria);
+        }
+        Ok(Self {
+            name,
+            content,
+            case_sensitive: cs,
+            max_hits: params.max_hits.map(|m| m as usize),
+        })
+    }
+
+    /// `true` si hay criterio de contenido (el walker debe leer ficheros).
+    fn searches_content(&self) -> bool {
+        !matches!(self.content, ContentSpec::None)
+    }
+}
+
+/// Lote de hits en construcción; `matches` solo se puebla en búsquedas de
+/// contenido (alineado 1:1 con `entries`).
+struct Batch {
+    task_id: TaskId,
+    content: bool,
+    entries: Vec<Entry>,
+    matches: Vec<MatchInfo>,
+}
+
+impl Batch {
+    fn new(task_id: TaskId, content: bool) -> Self {
+        Self {
+            task_id,
+            content,
+            entries: Vec::new(),
+            matches: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, entry: Entry, info: Option<MatchInfo>) {
+        self.entries.push(entry);
+        if self.content {
+            self.matches.push(info.unwrap_or(MatchInfo {
+                line: None,
+                preview: None,
+            }));
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Extrae el lote acumulado como [`SearchHits`], dejando el buffer vacío.
+    fn take(&mut self) -> SearchHits {
+        SearchHits {
+            task_id: self.task_id,
+            entries: std::mem::take(&mut self.entries),
+            matches: if self.content {
+                Some(std::mem::take(&mut self.matches))
+            } else {
+                None
+            },
+        }
+    }
+}
+
+/// Envía el lote pendiente (si lo hay). `Err(())` = el receptor murió (el
+/// dueño de la búsqueda se fue): el walker debe terminar limpio.
+async fn flush(tx: &mpsc::Sender<SearchHits>, batch: &mut Batch) -> Result<(), ()> {
+    if batch.is_empty() {
+        return Ok(());
+    }
+    tx.send(batch.take()).await.map_err(|_| ())
+}
+
+/// Recorre el subtree bajo `root` en BFS (iterativo, sin recursión — una
+/// jerarquía hostilmente profunda no revienta la pila) emitiendo lotes de
+/// hits por `tx`. Lectura pura: sin journal, sin mutaciones.
+///
+/// - **Cancelación** (regla 3): `ctx.cancel` se chequea por directorio, por
+///   entrada y por chunk de contenido; al cancelar devuelve
+///   [`Error::Cancelled`] (→ `TaskState::Cancelled`) y `tx` se dropea (el
+///   canal se cierra).
+/// - **Symlinks**: NO se siguen para descender (evita ciclos); un symlink SÍ
+///   cuenta como candidato de NOMBRE, pero nunca se lee su contenido.
+/// - **Errores por entrada**: un `list`/`read` que falla se SALTA (cuenta como
+///   entrada examinada) y la búsqueda continúa — un subdir ilegible no aborta.
+/// - **`max_hits`**: alcanzado el tope, envía lo pendiente y termina
+///   `Completed` (no `Failed`); el cliente infiere "truncada" comparando el
+///   total recibido con `max_hits`.
+/// - **Progreso**: `entries_done` = entradas examinadas (incluidas las
+///   saltadas por error); `bytes_done` = nº de hits acumulados (reutiliza el
+///   campo, no hay bytes reales en una búsqueda); `current` = última entrada
+///   vista.
+/// - **Coalescing**: los hits se acumulan hasta [`SEARCH_HITS_MAX_BATCH`] o se
+///   drenan cada [`FLUSH_INTERVAL`] (lo que ocurra antes).
+///
+/// # Errors
+/// [`Error::Cancelled`] si se canceló; jamás propaga errores por-entrada (se
+/// saltan). El `root` ilegible cuenta como un salto más (Completed con 0 hits).
+pub async fn run_walk(
+    provider: Arc<dyn Provider>,
+    root: VPath,
+    matchers: SearchMatchers,
+    tx: mpsc::Sender<SearchHits>,
+    ctx: &crate::scheduler::TaskCtx,
+) -> Result<(), Error> {
+    let task_id = ctx.progress.snapshot().task_id;
+    let content_search = matchers.searches_content();
+    let mut batch = Batch::new(task_id, content_search);
+    let mut last_flush = Instant::now();
+    let mut hits: usize = 0;
+
+    let mut queue: VecDeque<VPath> = VecDeque::new();
+    queue.push_back(root);
+
+    while let Some(dir) = queue.pop_front() {
+        if ctx.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        // Directorio ilegible: se salta (cuenta como examinado) y sigue.
+        let Ok(mut stream) = provider.list(&dir).await else {
+            ctx.progress.update(|p| p.entries_done += 1);
+            continue;
+        };
+        while let Some(item) = stream.next().await {
+            // Flush por tiempo/tamaño en CADA iteración (aunque la entrada no
+            // sea hit): así el pane gotea en vivo incluso escaneando fallos.
+            if !batch.is_empty()
+                && (batch.len() >= SEARCH_HITS_MAX_BATCH || last_flush.elapsed() >= FLUSH_INTERVAL)
+            {
+                if flush(&tx, &mut batch).await.is_err() {
+                    return Ok(()); // receptor muerto: termina limpio.
+                }
+                last_flush = Instant::now();
+            }
+            if ctx.cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            let Ok(entry) = item else {
+                ctx.progress.update(|p| p.entries_done += 1);
+                continue;
+            };
+            ctx.progress.update(|p| {
+                p.entries_done += 1;
+                p.current = Some(entry.path.clone());
+            });
+
+            // Descenso: dirs sí; symlinks NO (candidato de nombre, no se sigue).
+            if entry.kind == EntryKind::Dir {
+                queue.push_back(entry.path.clone());
+            }
+
+            // Filtro de nombre (barato) antes de tocar el contenido.
+            let name_bytes = entry.path.file_name().map_or(&[][..], Segment::as_bytes);
+            let name_ok = matchers.name.as_ref().is_none_or(|m| m.matches(name_bytes));
+            if !name_ok {
+                continue;
+            }
+
+            let info = if content_search {
+                // El contenido solo tiene sentido en ficheros regulares.
+                if entry.kind != EntryKind::File {
+                    continue;
+                }
+                match search_content(&*provider, &entry.path, &matchers, &ctx.cancel).await {
+                    Ok(Some(info)) => Some(info),
+                    Err(Error::Cancelled) => return Err(Error::Cancelled),
+                    // No casa (o binario), o ilegible: en ambos casos se salta.
+                    Ok(None) | Err(_) => continue,
+                }
+            } else {
+                None
+            };
+
+            batch.push(entry, info);
+            hits += 1;
+            ctx.progress.update(|p| p.bytes_done = hits as u64);
+
+            if matchers.max_hits.is_some_and(|max| hits >= max) {
+                // Truncado: drena lo pendiente y COMPLETA.
+                let _ = flush(&tx, &mut batch).await;
+                return Ok(());
+            }
+        }
+    }
+    let _ = flush(&tx, &mut batch).await;
+    Ok(())
+}
+
+/// Busca el criterio de contenido en UN fichero, en streaming. Devuelve el
+/// contexto del primer match (`line`/`preview`) o `None` (no casa / binario /
+/// vacío).
+async fn search_content(
+    provider: &dyn Provider,
+    path: &VPath,
+    matchers: &SearchMatchers,
+    cancel: &CancellationToken,
+) -> Result<Option<MatchInfo>, Error> {
+    let mut stream = provider.read(path, None).await?;
+    // Primer chunk NO vacío para la detección de encoding.
+    let first = loop {
+        match stream.next().await {
+            Some(Ok(c)) if c.is_empty() => {}
+            Some(Ok(c)) => break c,
+            Some(Err(e)) => return Err(e),
+            None => return Ok(None), // fichero vacío: nada que casar.
+        }
+    };
+    if cancel.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
+    let enc = match norte_encoding::detect(first.as_ref()) {
+        Detection::Text { encoding, .. } => encoding,
+        // Binario (NUL sin BOM): NO se busca contenido (spec §17.1a).
+        Detection::Binary => return Ok(None),
+    };
+    let cs = matchers.case_sensitive;
+    match &matchers.content {
+        ContentSpec::None => Ok(None),
+        ContentSpec::Literal(text) => {
+            // UTF-16 (BOM): la aguja no se transcodifica a UTF-16 (needle_cycle
+            // lo excluye), así que estos ficheros se enrutan por DECODE por
+            // líneas — jamás casarían en el scan de bytes.
+            if is_utf16(enc) {
+                let needle = text.clone();
+                scan_decode_lines(enc, first.to_vec(), stream, cancel, move |line| {
+                    line_contains(line, &needle, cs)
+                })
+                .await
+            } else {
+                match ContentNeedle::for_encoding(text, cs, enc) {
+                    Some(needle) => scan_bytes(&needle, enc, first.to_vec(), stream, cancel).await,
+                    None => Ok(None), // aguja vacía tras encode: sin match útil
+                }
+            }
+        }
+        ContentSpec::Regex(re) => {
+            let re = re.clone();
+            scan_decode_lines(enc, first.to_vec(), stream, cancel, move |line| {
+                re.is_match(line)
+            })
+            .await
+        }
+    }
+}
+
+/// Scan LITERAL byte-contra-byte con la aguja multi-encoding y solape entre
+/// chunks; rastrea la línea (contando `\n`) para el contexto del match. Es la
+/// misma mecánica que [`ContentNeedle::find_in`] pero inline, porque necesita
+/// `pos` y los `\n` acumulados para computar `line`/`preview` (que `find_in`
+/// no expone).
+async fn scan_bytes(
+    needle: &ContentNeedle,
+    enc: &'static Encoding,
+    first: Vec<u8>,
+    mut stream: ByteStream,
+    cancel: &CancellationToken,
+) -> Result<Option<MatchInfo>, Error> {
+    let mut tail: Vec<u8> = Vec::new();
+    // `\n` en los bytes que YA dejaron el `tail` (front del fichero committeado).
+    let mut committed_nl: u64 = 0;
+    let mut chunk = Some(first);
+    loop {
+        let c = match chunk.take() {
+            Some(c) => c,
+            None => match stream.next().await {
+                Some(Ok(c)) => c.to_vec(),
+                Some(Err(e)) => return Err(e),
+                None => break,
+            },
+        };
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        // buf = tail_anterior ++ chunk (el match, si cae, está aquí).
+        let mut buf = std::mem::take(&mut tail);
+        buf.extend_from_slice(&c);
+        let mut hit: Option<usize> = None;
+        for (_e, n) in needle.needles() {
+            if let Some(pos) = memchr::memmem::find(&buf, n) {
+                hit = Some(hit.map_or(pos, |h: usize| h.min(pos)));
+            }
+        }
+        if let Some(pos) = hit {
+            let line = committed_nl + count_nl(&buf[..pos]) + 1;
+            let preview = extract_line_preview(&buf, pos, enc);
+            return Ok(Some(MatchInfo {
+                line: Some(line),
+                preview: Some(preview),
+            }));
+        }
+        // Retiene los últimos `max_len-1` bytes (solape); el resto se committea.
+        let keep = needle.max_len().saturating_sub(1).min(buf.len());
+        let split = buf.len() - keep;
+        committed_nl += count_nl(&buf[..split]);
+        tail = buf[split..].to_vec();
+    }
+    Ok(None)
+}
+
+/// Scan por líneas DECODIFICADAS: acumula bytes, parte en `\n` (byte 0x0A,
+/// inequívoco en ASCII/UTF-8/legacy) y decodifica cada línea con `enc` para
+/// aplicar `matches`. Usado por `content_regex` y por el literal en UTF-16.
+async fn scan_decode_lines(
+    enc: &'static Encoding,
+    first: Vec<u8>,
+    mut stream: ByteStream,
+    cancel: &CancellationToken,
+    mut matches: impl FnMut(&str) -> bool,
+) -> Result<Option<MatchInfo>, Error> {
+    let mut raw: Vec<u8> = Vec::new();
+    let mut line_no: u64 = 0;
+    let mut chunk = Some(first);
+    loop {
+        let c = match chunk.take() {
+            Some(c) => c,
+            None => match stream.next().await {
+                Some(Ok(c)) => c.to_vec(),
+                Some(Err(e)) => return Err(e),
+                None => break,
+            },
+        };
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        for &b in &c {
+            if b == b'\n' {
+                line_no += 1;
+                if let Some(info) = check_line(&raw, enc, line_no, &mut matches) {
+                    return Ok(Some(info));
+                }
+                raw.clear();
+            } else {
+                raw.push(b);
+            }
+        }
+    }
+    // Última línea sin `\n` final.
+    if !raw.is_empty() {
+        line_no += 1;
+        if let Some(info) = check_line(&raw, enc, line_no, &mut matches) {
+            return Ok(Some(info));
+        }
+    }
+    Ok(None)
+}
+
+/// Decodifica `raw` con `enc`, recorta el `\r` de CRLF y aplica `matches`;
+/// devuelve el contexto si casa.
+fn check_line(
+    raw: &[u8],
+    enc: &'static Encoding,
+    line_no: u64,
+    matches: &mut impl FnMut(&str) -> bool,
+) -> Option<MatchInfo> {
+    let decoded = norte_encoding::decode(raw, enc, true).text;
+    let line = decoded.strip_suffix('\r').unwrap_or(&decoded);
+    if matches(line) {
+        Some(MatchInfo {
+            line: Some(line_no),
+            preview: Some(trim_preview(line)),
+        })
+    } else {
+        None
+    }
+}
+
+/// `true` si `line` contiene `needle` (con fold de caja simple si
+/// `!case_sensitive`).
+fn line_contains(line: &str, needle: &str, case_sensitive: bool) -> bool {
+    if case_sensitive {
+        line.contains(needle)
+    } else {
+        line.to_lowercase().contains(&needle.to_lowercase())
+    }
+}
+
+/// Recorta el preview a [`PREVIEW_MAX_CHARS`] caracteres (por char, no byte —
+/// jamás parte un char multibyte).
+fn trim_preview(line: &str) -> String {
+    line.chars().take(PREVIEW_MAX_CHARS).collect()
+}
+
+/// Extrae la línea que contiene el offset `pos` dentro de `buf` (entre los
+/// `\n` que la rodean, o los bordes del buffer), decodificada y recortada.
+/// Límite: si la línea empezó antes del `tail` retenido (línea más larga que
+/// el solape), el preview queda recortado por la izquierda — best-effort.
+fn extract_line_preview(buf: &[u8], pos: usize, enc: &'static Encoding) -> String {
+    let start = buf[..pos]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map_or(0, |i| i + 1);
+    let end = buf[pos..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .map_or(buf.len(), |i| pos + i);
+    let decoded = norte_encoding::decode(&buf[start..end], enc, true).text;
+    let line = decoded.strip_suffix('\r').unwrap_or(&decoded);
+    trim_preview(line)
+}
+
+/// Nº de `\n` en `bytes`.
+fn count_nl(bytes: &[u8]) -> u64 {
+    memchr::memchr_iter(b'\n', bytes).count() as u64
+}
+
+/// `true` si `enc` es UTF-16 (LE o BE) — se enruta por decode, no por byte-scan.
+fn is_utf16(enc: &'static Encoding) -> bool {
+    enc.name().starts_with("UTF-16")
 }
 
 #[cfg(test)]

@@ -30,6 +30,10 @@ struct FaultState {
     latency_per_op: Option<Duration>,
     fail_read_at: Option<(SegPath, usize)>,
     fail_write_at: Option<(SegPath, usize)>,
+    /// El `list` de este path (byte-exacto) falla con `Error::Io`; el resto del
+    /// árbol se lista normal. Para un walker que debe SEGUIR pese a un subdir
+    /// ilegible (fs.search).
+    fail_list_at: Option<SegPath>,
     /// `Some(n)`: quedan `n` operaciones antes de la desconexión.
     disconnect_after: Option<u64>,
     /// Las próximas `n` operaciones fallan retryable (indisponibilidad
@@ -69,6 +73,14 @@ impl Faults {
     /// Clave byte-exacta, sin fold de caja (ver [`Self::fail_read_at`]).
     pub fn fail_write_at(&self, path: &VPath, byte_n: usize) {
         self.lock().fail_write_at = Some((seg_path(path), byte_n));
+    }
+
+    /// El `list` de `path` (clave byte-exacta, sin fold de caja) falla con
+    /// [`Error::Io`](norte_proto::Error::Io) `{retryable: true}`; los demás
+    /// directorios se listan normal. Para testear que un walker (fs.search)
+    /// SIGUE ante un subdir ilegible.
+    pub fn fail_list_at(&self, path: &VPath) {
+        self.lock().fail_list_at = Some(seg_path(path));
     }
 
     /// Tras `n` operaciones más, TODA operación devuelve
@@ -170,6 +182,11 @@ impl Faults {
             Some((p, n)) if p == key => Some(*n),
             _ => None,
         }
+    }
+
+    /// `true` si el `list` de `key` debe fallar (fallo inyectado byte-exacto).
+    pub(crate) fn list_fails_for(&self, key: &SegPath) -> bool {
+        self.lock().fail_list_at.as_ref() == Some(key)
     }
 
     /// Snapshot del fallo de escritura para `path`, si aplica.

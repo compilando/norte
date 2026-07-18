@@ -196,10 +196,19 @@ pub const FS_DELETE: &str = "fs.delete";
 /// Result = el [`FsTaskResult`] EXISTENTE (`{task_id}`), como
 /// `fs.copy`/`fs.move`/`fs.delete` — cero struct nuevo para el result.
 ///
-/// Mapeo de [`TaskProgress`](crate::TaskProgress) durante la búsqueda:
-/// `entries_done` cuenta las entradas ESCANEADAS por el walker (no los
-/// hits); el resto del mapeo (bytes/current) lo documenta el walker — ver
-/// `Engine::search_as`.
+/// Mapeo de [`TaskProgress`](crate::TaskProgress) durante la búsqueda (lo
+/// implementa `norte_core::search::run_walk`):
+/// - `entries_done` = entradas ESCANEADAS por el walker (incluidas las
+///   saltadas por un `list`/`read` con error), NO los hits.
+/// - `bytes_done` = nº de HITS acumulados: una búsqueda no mueve bytes, así
+///   que el campo se reutiliza como contador de resultados (el frontend lo
+///   pinta como "N hits").
+/// - `entries_total`/`bytes_total` = `None` (un walk no conoce su tamaño de
+///   antemano); `current` = última entrada vista.
+///
+/// `max_hits` alcanzado ⇒ la Task termina `Completed` (jamás `Failed`); el
+/// cliente infiere "truncada" comparando el total de hits recibidos con
+/// `max_hits`.
 pub const FS_SEARCH: &str = "fs.search";
 /// `search.hits` — notificación server→client con un LOTE de resultados de
 /// [`FS_SEARCH`]. SOLO viaja a la conexión que lanzó la búsqueda (jamás

@@ -317,6 +317,68 @@ impl Engine {
         self.provider_for(p).await?.read(p, range).await
     }
 
+    /// Búsqueda viva bajo un subtree (spec §17.1a, M4): Task cancelable
+    /// ([`TaskKind::Search`]) + canal `mpsc` de lotes de hits. El nombre casa
+    /// por glob O regex, el contenido por literal multi-encoding O regex; al
+    /// menos un criterio, glob/regex y `content`/`content_regex` excluyentes por
+    /// eje. Los matchers se COMPILAN aquí, ANTES de la Task: un patrón inválido
+    /// o una combinación ilegal es un error del REQUEST (no un fallo de la Task
+    /// ya lanzada).
+    ///
+    /// **Gate de policy**: NINGUNO. `fs.search` es LECTURA pura y se trata
+    /// EXACTAMENTE como `fs.list`/`fs.read`, que NO pasan por el gate del engine
+    /// (las lecturas son directas — ver [`Self::list`]/[`Self::read`] y
+    /// `handle_fs_list` en el daemon, que llaman al provider sin `PolicyOp`). No
+    /// existe un `PolicyOp` de lectura; introducir uno solo para `search` haría
+    /// que un agente pudiese LISTAR pero no BUSCAR el mismo subtree, una
+    /// asimetría sin sentido. El `actor` se propaga a la Task (por consistencia
+    /// con las mutaciones y para auditoría futura), pero no gatea nada.
+    ///
+    /// **Mapeo de progreso** (lo consume el TUI): `entries_done` = entradas
+    /// examinadas (incluidas las saltadas por error); `bytes_done` = nº de hits
+    /// acumulados (no hay bytes reales en una búsqueda — se reutiliza el campo);
+    /// `current` = última entrada vista. `max_hits` alcanzado ⇒ `Completed` (no
+    /// `Failed`), el cliente infiere "truncada" comparando el total con el tope.
+    ///
+    /// # Errors
+    /// [`Error::InvalidPath`] si los criterios no validan/compilan (el daemon lo
+    /// traduce a `INVALID_PARAMS`; el detalle saneado lo obtiene con
+    /// [`crate::search::SearchMatchers::compile`], que devuelve el mensaje del
+    /// compilador de glob/regex). [`Error::Unsupported`] si el scheme del `root`
+    /// no tiene provider registrado.
+    pub async fn search_as(
+        &self,
+        params: norte_proto::methods::FsSearchParams,
+        actor: crate::journal::Actor,
+    ) -> Result<
+        (
+            TaskHandle,
+            tokio::sync::mpsc::Receiver<norte_proto::methods::SearchHits>,
+        ),
+        Error,
+    > {
+        let matchers = crate::search::SearchMatchers::compile(&params).map_err(|e| {
+            tracing::debug!(error = %e, "criterios de fs.search inválidos");
+            Error::InvalidPath
+        })?;
+        let provider = self.provider_for(&params.root).await?;
+        let root = params.root;
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let key = root.scheme().to_owned();
+        let handle = self.sched.submit(
+            &key,
+            TaskKind::Search,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| {
+                Box::pin(async move {
+                    crate::search::run_walk(provider, root, matchers, tx, &ctx).await
+                })
+            }),
+        );
+        Ok((handle, rx))
+    }
+
     /// Copia (recursiva si es dir) como Task, con las políticas por defecto
     /// (`Fail` + `Preserve`).
     ///
