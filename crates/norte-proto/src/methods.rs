@@ -407,7 +407,10 @@ pub struct FsSearchParams {
     /// sobre el lossy en NFC — misma disciplina que el quick search).
     #[serde(default)]
     pub case_sensitive: bool,
-    /// Tope de hits: alcanzado, la Task completa con `truncated`.
+    /// Tope de hits: alcanzado, la Task completa (`Completed`, no `Failed`).
+    /// No hay flag `truncated` en el wire — el cliente infiere la
+    /// truncación comparando el total de hits recibidos contra `max_hits`
+    /// (== implica truncada).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_hits: Option<u32>,
 }

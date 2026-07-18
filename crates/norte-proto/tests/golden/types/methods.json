@@ -122,6 +122,10 @@
     "case_sensitive": true,
     "max_hits": 100
   },
+  "fs_search_params_minimo": {
+    "root": "file:///home/user",
+    "case_sensitive": false
+  },
   "fs_stat_params": {
     "path": "file:///home/user/doc.txt"
   },

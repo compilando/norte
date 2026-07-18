@@ -355,7 +355,7 @@ fn golden_methods() {
     check_methods_policy(&fixtures);
     check_methods_session(&fixtures);
     check_methods_plugin(&fixtures);
-    assert_eq!(fixtures.len(), 61, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 62, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia plugin.* (0.13.0, M4-P3): catálogo + aprobación/activación humanas.
@@ -760,6 +760,19 @@ fn check_methods_search(fixtures: &BTreeMap<String, Value>) {
             content_regex: Some("a.o".to_owned()),
             case_sensitive: true,
             max_hits: Some(100),
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_search_params_minimo",
+        &FsSearchParams {
+            root: vpath("file:///home/user"),
+            name_glob: None,
+            name_regex: None,
+            content: None,
+            content_regex: None,
+            case_sensitive: false,
+            max_hits: None,
         },
     );
     check_one(
