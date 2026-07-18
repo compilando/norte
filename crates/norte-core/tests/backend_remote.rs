@@ -12,13 +12,30 @@ use norte_core::Engine;
 use norte_core::backend::remote::RemoteBackend;
 use norte_core::backend::{Backend, ConnEvent, TaskRef};
 use norte_core::daemon::{Daemon, DaemonConfig};
-use norte_proto::methods::ClientInfo;
+use norte_proto::methods::{ClientInfo, FsSearchParams, SearchHits};
 use norte_proto::{ByteRange, CapabilityFlags, TaskState, VPath};
 use norte_testkit::MemProvider;
 use norte_vfs::Provider;
+use tokio::sync::mpsc;
 
 fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("wire válido de test")
+}
+
+/// Drena el canal de hits hasta su CIERRE (con tope de tiempo: si el route no
+/// se retirase, esto colgaría). Devuelve los paths de display, ordenados.
+async fn drain_search(mut rx: mpsc::Receiver<SearchHits>) -> Vec<String> {
+    let mut got = Vec::new();
+    while let Some(hits) = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("un lote o el cierre del canal antes del timeout")
+    {
+        for e in hits.entries {
+            got.push(e.path.display_lossy());
+        }
+    }
+    got.sort();
+    got
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
@@ -439,6 +456,103 @@ async fn task_en_vuelo_no_cuelga_si_el_daemon_muere() {
         matches!(state, TaskState::Failed { .. } | TaskState::Cancelled),
         "la huérfana se resuelve, no cuelga: {state:?}"
     );
+}
+
+// ---------- fs.search remoto (live search T5) ----------
+
+/// `Backend::search` remoto = misma superficie que el embebido: los hits
+/// llegan por la notificación `search.hits`, la bomba del `RemoteBackend` los
+/// enruta por `task_id` al `rx` que devuelve `search`, y el `rx` se cierra al
+/// terminal (retirada del route con gracia). Mismo árbol y mismo resultado que
+/// `embedded_search_stream_de_hits`.
+#[tokio::test]
+async fn remote_search_como_el_embebido() {
+    let d = spawn_daemon().await;
+    write_file(&d.mem, "mem:///a.rs", b"").await;
+    write_file(&d.mem, "mem:///b.txt", b"").await;
+    d.mem.mkdir(&vp("mem:///sub")).await.expect("mkdir");
+    write_file(&d.mem, "mem:///sub/c.rs", b"").await;
+    let backend = Backend::Remote(remote(&d).await);
+
+    let (task, rx) = backend
+        .search(FsSearchParams {
+            root: vp("mem:///"),
+            name_glob: Some("*.rs".into()),
+            name_regex: None,
+            content: None,
+            content_regex: None,
+            case_sensitive: false,
+            max_hits: None,
+        })
+        .await
+        .expect("search");
+
+    let got = drain_search(rx).await;
+    assert_eq!(
+        got,
+        vec![
+            vp("mem:///a.rs").display_lossy(),
+            vp("mem:///sub/c.rs").display_lossy()
+        ]
+    );
+    assert_eq!(join_ref(task).await, TaskState::Completed);
+}
+
+/// Dos búsquedas CONCURRENTES en la MISMA conexión no mezclan sus lotes: el
+/// enrutado por `task_id` entrega a cada `rx` solo SUS hits (subtrees y globs
+/// disjuntos → cero solape observable si el enrutado es correcto).
+#[tokio::test]
+async fn remote_dos_busquedas_no_se_cruzan() {
+    let d = spawn_daemon().await;
+    d.mem.mkdir(&vp("mem:///da")).await.expect("mkdir da");
+    d.mem.mkdir(&vp("mem:///db")).await.expect("mkdir db");
+    write_file(&d.mem, "mem:///da/a1.rs", b"").await;
+    write_file(&d.mem, "mem:///da/a2.rs", b"").await;
+    write_file(&d.mem, "mem:///db/b1.txt", b"").await;
+    let backend = Backend::Remote(remote(&d).await);
+
+    let (t1, rx1) = backend
+        .search(FsSearchParams {
+            root: vp("mem:///da"),
+            name_glob: Some("*.rs".into()),
+            name_regex: None,
+            content: None,
+            content_regex: None,
+            case_sensitive: false,
+            max_hits: None,
+        })
+        .await
+        .expect("search da");
+    let (t2, rx2) = backend
+        .search(FsSearchParams {
+            root: vp("mem:///db"),
+            name_glob: Some("*.txt".into()),
+            name_regex: None,
+            content: None,
+            content_regex: None,
+            case_sensitive: false,
+            max_hits: None,
+        })
+        .await
+        .expect("search db");
+
+    let g1 = drain_search(rx1).await;
+    let g2 = drain_search(rx2).await;
+    assert_eq!(
+        g1,
+        vec![
+            vp("mem:///da/a1.rs").display_lossy(),
+            vp("mem:///da/a2.rs").display_lossy()
+        ],
+        "rx1 solo ve los .rs de da"
+    );
+    assert_eq!(
+        g2,
+        vec![vp("mem:///db/b1.txt").display_lossy()],
+        "rx2 solo ve el .txt de db"
+    );
+    assert_eq!(join_ref(t1).await, TaskState::Completed);
+    assert_eq!(join_ref(t2).await, TaskState::Completed);
 }
 
 // ---------- approval router por el backend (M3-3b T5) ----------

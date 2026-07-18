@@ -7,6 +7,7 @@ use bytes::Bytes;
 use norte_core::Engine;
 use norte_core::TransferOptions;
 use norte_core::backend::Backend;
+use norte_proto::methods::FsSearchParams;
 use norte_proto::{ByteRange, CapabilityFlags, DeleteMode, Error, TaskState, VPath};
 use norte_testkit::MemProvider;
 use norte_vfs::Provider;
@@ -120,6 +121,48 @@ async fn embedded_clonado_comparte_engine_y_stat_funciona() {
     // El original sigue funcionando tras clonar (no se movió el Arc).
     let entry2 = backend.stat(&vp("mem:///f")).await.expect("stat original");
     assert_eq!(entry2.size, Some(1));
+}
+
+/// `Backend::search` embebido = passthrough al walker del engine como
+/// `Actor::User`: devuelve `(TaskRef, rx)` y los lotes de hits llegan por el
+/// canal directo (el walker cierra `tx` al terminar, así que `rx` se cierra
+/// solo). Mismo contrato que el remoto (ver `backend_remote.rs`).
+#[tokio::test]
+async fn embedded_search_stream_de_hits() {
+    let (backend, mem) = embedded();
+    write_file(&mem, "mem:///a.rs", b"").await;
+    write_file(&mem, "mem:///b.txt", b"").await;
+    mem.mkdir(&vp("mem:///sub")).await.expect("mkdir");
+    write_file(&mem, "mem:///sub/c.rs", b"").await;
+
+    let (task, mut rx) = backend
+        .search(FsSearchParams {
+            root: vp("mem:///"),
+            name_glob: Some("*.rs".into()),
+            name_regex: None,
+            content: None,
+            content_regex: None,
+            case_sensitive: false,
+            max_hits: None,
+        })
+        .await
+        .expect("search");
+
+    let mut got = Vec::new();
+    while let Some(hits) = rx.recv().await {
+        for e in hits.entries {
+            got.push(e.path.display_lossy());
+        }
+    }
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            vp("mem:///a.rs").display_lossy(),
+            vp("mem:///sub/c.rs").display_lossy()
+        ]
+    );
+    assert_eq!(task.join().await, TaskState::Completed);
 }
 
 #[tokio::test]
