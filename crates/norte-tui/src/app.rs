@@ -38,6 +38,11 @@ pub struct Pane {
     /// [`Pane::virtual_search`]): decide qué variante `search-status-*` pinta
     /// la barra. El run loop lo actualiza al llegar el estado terminal.
     pub search_state: SearchState,
+    /// Categoría del error de una búsqueda que FALLÓ (`SearchState::Failed`),
+    /// ya localizada y saneada: la barra la pinta de forma PERSISTENTE
+    /// (`search-status-failed`) tras limpiarse `App::message` — un fallo no
+    /// puede degradar a «done» en la siguiente tecla (review MINOR-2).
+    pub search_error: Option<String>,
 }
 
 /// Estado de presentación de una búsqueda viva (`Alt+F7`, liveSearch T6): el
@@ -72,6 +77,7 @@ impl Pane {
             quick: None,
             virtual_search: false,
             search_state: SearchState::Running,
+            search_error: None,
         }
     }
 
@@ -88,6 +94,7 @@ impl Pane {
         self.quick = None;
         self.virtual_search = true;
         self.search_state = SearchState::Running;
+        self.search_error = None;
     }
 
     /// La entrada seleccionada: con quick search en modo Filter, la

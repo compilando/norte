@@ -785,18 +785,31 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         format!(" {msg}")
     } else if pane.virtual_search {
         use crate::app::SearchState;
-        // `Failed` cae a `done` aquí: el error concreto ya viaja por
-        // `app.message` (error_message) y ese brazo gana arriba.
-        let key = match pane.search_state {
-            SearchState::Running => "search-status-running",
-            SearchState::Truncated => "search-status-truncated",
-            SearchState::Cancelled => "search-status-cancelled",
-            SearchState::Done | SearchState::Failed => "search-status-done",
-        };
-        format!(
-            " {}{seq}",
-            ta(key, &[("n", &pane.entries.len().to_string())])
-        )
+        // `Failed` es PERSISTENTE (review MINOR-2): tras limpiarse
+        // `app.message`, el pane sigue pintando `search-status-failed` con la
+        // categoría del error (guardada en `search_error`) — un fallo jamás
+        // degrada a «done» en la siguiente tecla.
+        if pane.search_state == SearchState::Failed {
+            format!(
+                " {}{seq}",
+                ta(
+                    "search-status-failed",
+                    &[("error", pane.search_error.as_deref().unwrap_or(""))],
+                )
+            )
+        } else {
+            let key = match pane.search_state {
+                SearchState::Running => "search-status-running",
+                SearchState::Truncated => "search-status-truncated",
+                SearchState::Cancelled => "search-status-cancelled",
+                // `Failed` ya se trató arriba; `Done` es el resto.
+                SearchState::Done | SearchState::Failed => "search-status-done",
+            };
+            format!(
+                " {}{seq}",
+                ta(key, &[("n", &pane.entries.len().to_string())])
+            )
+        }
     } else if let Some(lua) = &app.lua_status {
         format!(" {lua}{seq}")
     } else {

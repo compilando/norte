@@ -136,6 +136,32 @@ fn apply_cd(fill: &mut Option<Fill>, outcome: Cd) {
     }
 }
 
+/// Aplica un mensaje del drenador de paginación (ADR 0017) al pane. Si el pane
+/// pasó a modo virtual de búsqueda (Alt+F7 sobre un dir aún paginándose,
+/// review MAJOR T6), el fill quedó OBSOLETO —`begin_search` vació las
+/// entries— y su drenador alimentaría el listado REAL como si fueran hits (el
+/// propio root de la búsqueda colándose entre resultados): se suelta el fill y
+/// se DESCARTA el lote. Cinturón simétrico al drain-guard de [`drain_search`];
+/// el tirante es soltar el fill en `launch_search`.
+fn apply_fill_msg(app: &mut App, fill: &mut Option<Fill>, pane: usize, msg: Option<FillMsg>) {
+    if app.panes[pane].virtual_search {
+        *fill = None;
+        return;
+    }
+    match msg {
+        Some(FillMsg::Batch(batch)) => app.panes[pane].extend_listing(batch),
+        Some(FillMsg::Failed) => {
+            app.panes[pane].finish_listing();
+            app.message = Some(t("msg-list-incomplete"));
+            *fill = None;
+        }
+        None => {
+            app.panes[pane].finish_listing();
+            *fill = None;
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Args: preset posicional (`norte-tui vim`, capa MÁS alta sobre
@@ -447,18 +473,7 @@ async fn run(
                 // Lote del drenador del listado paginado (ADR 0017): al pane
                 // que lo abrió. `None` = canal cerrado (fin del drenado).
                 let pane = fill.as_ref().map_or(0, |f| f.pane);
-                match msg {
-                    Some(FillMsg::Batch(batch)) => app.panes[pane].extend_listing(batch),
-                    Some(FillMsg::Failed) => {
-                        app.panes[pane].finish_listing();
-                        app.message = Some(t("msg-list-incomplete"));
-                        fill = None;
-                    }
-                    None => {
-                        app.panes[pane].finish_listing();
-                        fill = None;
-                    }
-                }
+                apply_fill_msg(app, &mut fill, pane, msg);
             }
             hits = async {
                 // Solo se drena mientras el run sigue vivo (`Running`): un
@@ -568,7 +583,8 @@ async fn run(
                         if let Some(params) =
                             on_search_dialog_key(app, key.modifiers, key.code)
                         {
-                            launch_search(app, backend, &mut search_run, params).await;
+                            launch_search(app, backend, &mut fill, &mut search_run, params)
+                                .await;
                         }
                     } else if let Some(help) = &mut app.help {
                         // Teclas de la ayuda: fijas, como los diálogos (#24).
@@ -1594,6 +1610,13 @@ async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream) -> 
 /// (tras un delete queda en la siguiente entrada — semántica ortodoxa).
 async fn refresh_panes(app: &mut App, backend: &Backend, events: &mut EventStream) {
     for i in 0..app.panes.len() {
+        // Un pane en modo virtual de búsqueda (liveSearch T6) NO se
+        // auto-refresca: `refresh_listing` lo sacaría del modo virtual y el
+        // `reap` cancelaría la Task sin que el usuario saliera (review
+        // MINOR-1). Sus hits viven fuera del FS: no hay dir real que recargar.
+        if app.panes[i].virtual_search {
+            continue;
+        }
         let dir = app.panes[i].dir.clone();
         let fut = listing(backend, &dir);
         tokio::pin!(fut);
@@ -1792,9 +1815,11 @@ fn on_search_dialog_key(
     // escriben en los campos.
     let plain = mods.is_empty() || mods == KeyModifiers::SHIFT;
     match code {
-        KeyCode::F(2) => dialog.toggle_regex(),
-        KeyCode::F(3) => dialog.toggle_case(),
-        KeyCode::Tab => dialog.toggle_field(),
+        // Toggles/Tab exigen `plain` (sin ctrl/alt): un Ctrl+F2 no togglea
+        // (review MINOR-4), igual que el resto de la captura del diálogo.
+        KeyCode::F(2) if plain => dialog.toggle_regex(),
+        KeyCode::F(3) if plain => dialog.toggle_case(),
+        KeyCode::Tab if plain => dialog.toggle_field(),
         KeyCode::Char(c) if plain => dialog.push_char(c),
         KeyCode::Backspace if plain => dialog.backspace(),
         KeyCode::Esc => app.search_dialog = None,
@@ -1845,6 +1870,7 @@ fn search_params(dialog: &SearchDialog, root: VPath) -> FsSearchParams {
 async fn launch_search(
     app: &mut App,
     backend: &Backend,
+    fill: &mut Option<Fill>,
     search_run: &mut Option<SearchRun>,
     params: FsSearchParams,
 ) {
@@ -1856,6 +1882,13 @@ async fn launch_search(
             app.search_dialog = None;
             app.message = None;
             app.panes[pane].begin_search(root);
+            // El pane pasa a virtual: un relleno paginado en vuelo de ESTE
+            // pane (dir aún cargándose) alimentaría el listado real como hits
+            // (review MAJOR T6) — se suelta ya (tirante; `apply_fill_msg` es
+            // el cinturón por si llega un lote antes).
+            if fill.as_ref().is_some_and(|f| f.pane == pane) {
+                *fill = None;
+            }
             // Un run previo (raro: el diálogo se cierra al lanzar) se cancela.
             if let Some(old) = search_run.replace(SearchRun {
                 task,
@@ -1890,6 +1923,9 @@ fn drain_search(app: &mut App, search_run: &mut Option<SearchRun>, hits: Option<
     };
     if let Some(batch) = hits {
         if app.panes[s.pane].virtual_search {
+            // v1 vista PLANA (per plan): se descarta `batch.matches`
+            // (line/preview del match de contenido). Surfacing del preview en
+            // el pane o la barra = follow-up (issue #81).
             let n = batch.entries.len();
             app.panes[s.pane].extend_listing(batch.entries);
             s.hits += n;
@@ -1902,11 +1938,13 @@ fn drain_search(app: &mut App, search_run: &mut Option<SearchRun>, hits: Option<
         let state = finalize_search_state(s);
         s.state = state;
         app.panes[s.pane].search_state = state;
-        // El error concreto va por la barra (categoría), jamás el pane; el
-        // pane conserva los hits parciales visibles.
+        // El detalle concreto va a la barra UNA vez (error_message); el pane
+        // guarda la CATEGORÍA para pintar `search-status-failed` de forma
+        // persistente tras limpiarse el mensaje (review MINOR-2).
         if state == SearchState::Failed {
             let mut rx = s.task.progress();
             if let norte_proto::TaskState::Failed { error } = rx.borrow_and_update().state.clone() {
+                app.panes[s.pane].search_error = Some(error_category(&error));
                 app.message = Some(error_message(&error));
             }
         }
@@ -2452,5 +2490,61 @@ mod archive_nav_tests {
         assert!(archive_root_for(&entry("file:///d/x.zip", EntryKind::Symlink)).is_none());
         // Ya compuesto (zip dentro de tar): v1 sin anidar → no-op.
         assert!(archive_root_for(&entry("tar+file:///a.tar/!/i.zip", EntryKind::File)).is_none());
+    }
+}
+
+#[cfg(test)]
+mod search_fill_tests {
+    use super::{App, Fill, FillMsg, Pane, apply_fill_msg};
+    use norte_proto::{Entry, EntryKind, Segment, VPath};
+
+    fn vp(w: &str) -> VPath {
+        VPath::parse(w).expect("wire de test")
+    }
+
+    fn file(dir: &VPath, name: &str) -> Entry {
+        Entry {
+            path: dir.join(Segment::new(name.as_bytes().to_vec()).unwrap()),
+            kind: EntryKind::File,
+            size: Some(1),
+            mtime_ms: None,
+        }
+    }
+
+    /// review MAJOR T6: un dir grande PAGINÁNDOSE (fill vivo) + `Alt+F7` sobre
+    /// ese pane → `begin_search` lo marca virtual y lo vacía; un lote POSTERIOR
+    /// del drenador del listado REAL jamás debe entrar en el pane virtual (se
+    /// colaría como hit — el propio root de la búsqueda entre los resultados).
+    #[test]
+    fn fill_no_contamina_el_pane_virtual() {
+        let root = vp("file:///d");
+        let mut app = App::new(
+            Pane::new(root.clone(), vec![]),
+            Pane::new(root.clone(), vec![]),
+        );
+        // Relleno paginado vivo del pane 0 (dir aún cargándose).
+        let (_tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
+        let mut fill = Some(Fill { pane: 0, rx });
+        // Alt+F7 sobre el pane 0: pasa a virtual y se vacía.
+        app.panes[0].begin_search(root.clone());
+        // Llega un lote del drenador del listado REAL.
+        apply_fill_msg(
+            &mut app,
+            &mut fill,
+            0,
+            Some(FillMsg::Batch(vec![
+                file(&root, "real1"),
+                file(&root, "real2"),
+            ])),
+        );
+        assert!(
+            app.panes[0].entries.is_empty(),
+            "el listado real NO entra en el pane virtual"
+        );
+        assert!(fill.is_none(), "el fill obsoleto se suelta");
+        assert!(
+            app.panes[0].virtual_search,
+            "el pane sigue en modo búsqueda"
+        );
     }
 }

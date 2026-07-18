@@ -75,6 +75,22 @@ fn snapshot_quick_search_filtro() {
     insta::assert_snapshot!(render(&app));
 }
 
+/// Diálogo de búsqueda viva (`Alt+F7`, liveSearch T6): campo de nombre con
+/// texto (cursor `_`), toggles regex/case y la raíz del walk. El `cwd` lleva
+/// un override bidi: sale ENMASCARADO y con el badge (jamás bidi crudo en el
+/// borde, spec §6) — verifica el saneado del modal.
+#[test]
+fn snapshot_search_dialog() {
+    let mut app = app_base();
+    app.panes[0].dir = vp("file:///casa/evil%E2%80%AEdir");
+    app.open_search_dialog();
+    let dialog = app.search_dialog.as_mut().expect("diálogo abierto");
+    for c in "*.rs".chars() {
+        dialog.push_char(c);
+    }
+    insta::assert_snapshot!(render(&app));
+}
+
 /// Pane virtual de búsqueda viva (`Alt+F7`, liveSearch T6): el pane con foco
 /// lista los HITS que van llegando (nombre plano, `VPath` completo bajo el
 /// capó) y la barra pinta `search-status-running` («buscando…»); el otro pane
