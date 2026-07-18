@@ -97,7 +97,7 @@ fn draw_nav_popup(frame: &mut Frame<'_>, popup: &crate::app::NavPopup, theme: &T
             popup
                 .items()
                 .iter()
-                .map(|(s, _)| ListItem::new(Line::raw(format!(" {s}"))))
+                .map(|it| ListItem::new(Line::raw(format!(" {}", it.display))))
                 .collect(),
             Some(popup.cursor()),
         )

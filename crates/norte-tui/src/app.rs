@@ -394,19 +394,35 @@ pub enum NavPopupKind {
     Hotlist,
 }
 
+/// Un item del popup de navegación, CONGELADO al construirse en
+/// [`App::open_nav_popup`]: display ya saneado, destino ya parseado y (en
+/// hotlist) la clave cruda del favorito. El popup es una snapshot a
+/// propósito — todo lo que una tecla necesita viaja dentro del item, nada
+/// se re-resuelve contra un estado que pudo cambiar debajo.
+#[derive(Debug, Clone)]
+pub struct NavItem {
+    /// Display YA saneado, listo para pintar.
+    pub display: String,
+    /// Destino parseado; `None` = entrada de hotlist inválida (se muestra
+    /// con su aviso, no navega).
+    pub target: Option<VPath>,
+    /// `name` CRUDO del favorito — la clave del borrado con `d`
+    /// ([`App::nav_popup_selected_hotlist_name`]), congelada al abrir: un
+    /// hot-reload puede mutar `App::hotlist` bajo el popup y el borrado
+    /// debe caer sobre lo MOSTRADO, jamás sobre lo que ahora ocupe ese
+    /// índice en la lista nueva (review MAJOR T5). `None` en historial.
+    pub hotlist_name: Option<String>,
+}
+
 /// Popup de navegación (`Alt+↓` historial / `Ctrl+D` hotlist). Los `items`
-/// se construyen YA saneados en [`App::open_nav_popup`] (display listo para
-/// pintar, destino parseado): el render no re-decide nada y Enter no
-/// re-parsea nada. Destino `None` = entrada de hotlist inválida (se muestra
-/// con su aviso, no navega).
+/// se construyen YA saneados en [`App::open_nav_popup`] (ver [`NavItem`]):
+/// el render no re-decide nada y Enter no re-parsea nada.
 #[derive(Debug, Clone)]
 pub struct NavPopup {
     /// Historial u hotlist (decide título, footer y las teclas `a`/`d`).
     pub kind: NavPopupKind,
-    /// `(display saneado, destino)`. INVARIANTE en Hotlist: el índice i
-    /// corresponde 1:1 con `App::hotlist[i]` (la clave del borrado con `d`,
-    /// ver [`App::nav_popup_selected_hotlist_name`]).
-    items: Vec<(String, Option<VPath>)>,
+    /// Items congelados al abrir.
+    items: Vec<NavItem>,
     /// Índice resaltado.
     cursor: usize,
     /// Input de nombre abierto (`a` en hotlist): captura imprimibles antes
@@ -427,9 +443,9 @@ impl NavPopup {
         }
     }
 
-    /// Items `(display saneado, destino)` para el render.
+    /// Items congelados para el render.
     #[must_use]
-    pub fn items(&self) -> &[(String, Option<VPath>)] {
+    pub fn items(&self) -> &[NavItem] {
         &self.items
     }
 
@@ -441,7 +457,7 @@ impl NavPopup {
 
     /// El item resaltado, si lo hay.
     #[must_use]
-    pub fn selected(&self) -> Option<&(String, Option<VPath>)> {
+    pub fn selected(&self) -> Option<&NavItem> {
         self.items.get(self.cursor)
     }
 }
@@ -728,21 +744,39 @@ impl App {
     /// construyen YA saneados aquí ([`nav_item_display`]); una entrada de
     /// hotlist inválida se muestra con su aviso y destino `None`.
     pub fn open_nav_popup(&mut self, kind: NavPopupKind) {
-        let items: Vec<(String, Option<VPath>)> = match kind {
+        let items: Vec<NavItem> = match kind {
             NavPopupKind::History => self.history[self.focus]
                 .entries()
                 .iter()
-                .map(|p| (nav_item_display(None, p), Some(p.clone())))
+                .map(|p| NavItem {
+                    display: nav_item_display(None, p),
+                    target: Some(p.clone()),
+                    hotlist_name: None,
+                })
                 .collect(),
             NavPopupKind::Hotlist => self
                 .hotlist
                 .iter()
                 .map(|h| {
-                    if let Ok(p) = &h.target {
+                    let (display, target) = if let Ok(p) = &h.target {
                         (nav_item_display(Some(&h.name), p), Some(p.clone()))
                     } else {
-                        let (name, _) = display_name(h.name.as_bytes());
-                        (format!("{name} {}", t("hotlist-invalid")), None)
+                        // review MINOR T5: el flag hostil del name NO se
+                        // descarta — una inválida con name bidi también
+                        // lleva el badge (mismo criterio que el resto).
+                        let (name, hostil) = display_name(h.name.as_bytes());
+                        let aviso = t("hotlist-invalid");
+                        let display = if hostil {
+                            format!("{} {name} {aviso}", crate::ui::HOSTILE_BADGE)
+                        } else {
+                            format!("{name} {aviso}")
+                        };
+                        (display, None)
+                    };
+                    NavItem {
+                        display,
+                        target,
+                        hotlist_name: Some(h.name.clone()),
                     }
                 })
                 .collect(),
@@ -780,7 +814,7 @@ impl App {
                     .nav_popup
                     .as_ref()
                     .and_then(NavPopup::selected)
-                    .and_then(|(_, t)| t.clone());
+                    .and_then(|it| it.target.clone());
                 if target.is_some() {
                     self.nav_popup = None;
                 }
@@ -811,15 +845,13 @@ impl App {
 
     /// El `name` CRUDO del favorito seleccionado (la clave que necesita
     /// `persist_hotlist_remove` — el display del item va saneado y NO sirve
-    /// como clave). Se apoya en el invariante índice-a-índice de
-    /// [`NavPopup::items`]. `None` fuera del popup de hotlist o sin items.
+    /// como clave). Sale de la clave CONGELADA en el propio item
+    /// ([`NavItem::hotlist_name`]): jamás se indexa `App::hotlist`, que un
+    /// hot-reload pudo mutar bajo el popup (review MAJOR T5 — borraría
+    /// otro favorito). `None` en historial o sin items.
     #[must_use]
     pub fn nav_popup_selected_hotlist_name(&self) -> Option<String> {
-        let p = self.nav_popup.as_ref()?;
-        if p.kind != NavPopupKind::Hotlist {
-            return None;
-        }
-        self.hotlist.get(p.cursor).map(|h| h.name.clone())
+        self.nav_popup.as_ref()?.selected()?.hotlist_name.clone()
     }
 
     /// Refleja en la copia local un favorito YA persistido con éxito
@@ -1414,7 +1446,7 @@ mod tests {
         app.open_nav_popup(NavPopupKind::History);
         assert_eq!(app.nav_popup.as_ref().unwrap().items().len(), 2);
         assert_eq!(
-            app.nav_popup.as_ref().unwrap().selected().unwrap().1,
+            app.nav_popup.as_ref().unwrap().selected().unwrap().target,
             Some(vp("mem:///dos")),
             "más reciente primero"
         );
@@ -1442,11 +1474,12 @@ mod tests {
             target: Err("err-invalid-path".into()),
         }];
         app.open_nav_popup(NavPopupKind::Hotlist);
-        let (display, dest) = app.nav_popup.as_ref().unwrap().selected().unwrap().clone();
-        assert!(dest.is_none(), "inválida no navega");
+        let item = app.nav_popup.as_ref().unwrap().selected().unwrap().clone();
+        assert!(item.target.is_none(), "inválida no navega");
         assert!(
-            display.contains(&norte_i18n::t("hotlist-invalid")),
-            "el aviso de inválida se pinta: {display}"
+            item.display.contains(&norte_i18n::t("hotlist-invalid")),
+            "el aviso de inválida se pinta: {}",
+            item.display
         );
         assert_eq!(app.nav_popup_input(PickerAction::Confirm), None);
         assert!(app.nav_popup.is_some(), "el popup NO se cierra");
@@ -1489,7 +1522,36 @@ mod tests {
         assert_eq!(app.hotlist.len(), 1);
         let p = app.nav_popup.as_ref().unwrap();
         assert_eq!(p.items().len(), 1, "el popup se refresca tras borrar");
-        assert_eq!(p.selected().unwrap().1, Some(vp("mem:///dos")));
+        assert_eq!(p.selected().unwrap().target, Some(vp("mem:///dos")));
+    }
+
+    /// review MAJOR T5: un hot-reload con el popup abierto muta
+    /// `App.hotlist` mientras el usuario ve la snapshot VIEJA (items
+    /// congelados a propósito) — `d` debe borrar lo MOSTRADO (clave
+    /// congelada en el item), jamás lo que ahora ocupa ese índice en la
+    /// lista nueva (borraría OTRO favorito: pérdida de config).
+    #[test]
+    fn d_con_popup_desincronizado_borra_el_mostrado() {
+        let mut app = app_dos_panes();
+        app.hotlist = vec![
+            crate::config::HotlistItem {
+                name: "uno".into(),
+                target: Ok(vp("mem:///uno")),
+            },
+            crate::config::HotlistItem {
+                name: "dos".into(),
+                target: Ok(vp("mem:///dos")),
+            },
+        ];
+        app.open_nav_popup(NavPopupKind::Hotlist);
+        // Cursor en 0: el usuario VE "uno". Simula el hot-reload que quitó
+        // "uno" de la config (la copia en App cambia, el popup no).
+        app.hotlist.remove(0);
+        assert_eq!(
+            app.nav_popup_selected_hotlist_name().as_deref(),
+            Some("uno"),
+            "la clave es la CONGELADA del popup, no App.hotlist[cursor]"
+        );
     }
 
     /// En el popup de HISTORIAL no hay input de nombre ni name de hotlist.
@@ -1532,7 +1594,36 @@ mod tests {
         let mut app = app_dos_panes();
         app.history[0].push(vp("mem:///evil%E2%80%AEdir"));
         app.open_nav_popup(NavPopupKind::History);
-        let (display, _) = app.nav_popup.as_ref().unwrap().selected().unwrap().clone();
+        let display = app
+            .nav_popup
+            .as_ref()
+            .unwrap()
+            .selected()
+            .unwrap()
+            .display
+            .clone();
+        assert!(!display.contains('\u{202E}'), "sin bidi crudo: {display:?}");
+        assert!(display.starts_with('!'), "badge prefijo: {display}");
+    }
+
+    /// review MINOR T5: una entrada INVÁLIDA con name hostil también lleva
+    /// el badge (antes el flag de `display_name` se descartaba en ese brazo).
+    #[test]
+    fn hotlist_invalida_con_name_hostil_lleva_badge() {
+        let mut app = app_dos_panes();
+        app.hotlist = vec![crate::config::HotlistItem {
+            name: "evil\u{202E}name".into(),
+            target: Err("err-invalid-path".into()),
+        }];
+        app.open_nav_popup(NavPopupKind::Hotlist);
+        let display = app
+            .nav_popup
+            .as_ref()
+            .unwrap()
+            .selected()
+            .unwrap()
+            .display
+            .clone();
         assert!(!display.contains('\u{202E}'), "sin bidi crudo: {display:?}");
         assert!(display.starts_with('!'), "badge prefijo: {display}");
     }
