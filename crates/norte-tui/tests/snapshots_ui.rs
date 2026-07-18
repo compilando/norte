@@ -75,6 +75,37 @@ fn snapshot_quick_search_filtro() {
     insta::assert_snapshot!(render(&app));
 }
 
+/// Popup de historial (spec 2026-07-18, `Alt+↓`): dirs del pane con foco,
+/// más reciente primero, con el cursor arriba.
+#[test]
+fn snapshot_popup_historial() {
+    let mut app = app_base();
+    app.history[0].push(vp("file:///casa/docs"));
+    app.history[0].push(vp("file:///proyectos"));
+    app.open_nav_popup(norte_tui::app::NavPopupKind::History);
+    insta::assert_snapshot!(render(&app));
+}
+
+/// Popup de hotlist (`Ctrl+D`): entrada válida con `name — path`, entrada
+/// INVÁLIDA con su aviso (degradación por entrada, no revienta), y el
+/// footer de teclas `[enter]/[a]/[d]/[esc]`.
+#[test]
+fn snapshot_popup_hotlist() {
+    let mut app = app_base();
+    app.hotlist = vec![
+        norte_tui::config::HotlistItem {
+            name: "trabajo".into(),
+            target: Ok(vp("file:///home/o/work")),
+        },
+        norte_tui::config::HotlistItem {
+            name: "rota".into(),
+            target: Err("err-invalid-path".into()),
+        },
+    ];
+    app.open_nav_popup(norte_tui::app::NavPopupKind::Hotlist);
+    insta::assert_snapshot!(render(&app));
+}
+
 #[test]
 fn snapshot_modal_colision() {
     let mut app = app_base();

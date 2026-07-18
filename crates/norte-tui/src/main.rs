@@ -19,9 +19,9 @@ use norte_i18n::{t, ta};
 use norte_proto::DeleteMode;
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{
-    App, DialogOutcome, ExtensionManager, Help, KeymapsError, Modal, Pane, PickerAction,
-    TransferKind, config_error_category, detail_for_bar, dialog_key, error_category, error_message,
-    io_error_category, keymaps_error_category, sort_entries, theme_error_category,
+    App, DialogOutcome, ExtensionManager, Help, KeymapsError, Modal, NavPopupKind, Pane,
+    PickerAction, TransferKind, config_error_category, detail_for_bar, dialog_key, error_category,
+    error_message, io_error_category, keymaps_error_category, sort_entries, theme_error_category,
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::keymap::{COMMANDS, Chord, Effective, Resolution, Resolver, Screen, presets};
@@ -75,11 +75,33 @@ struct Fill {
 enum Cd {
     /// El pane se reemplazó y su RESTO se rellena en background.
     Filling(Fill),
-    /// El pane `usize` se reemplazó y ya está completo (o el cd falló): un
-    /// relleno anterior de ESE pane queda obsoleto y hay que soltarlo.
+    /// El pane `usize` se reemplazó y ya está completo: un relleno anterior
+    /// de ESE pane queda obsoleto y hay que soltarlo.
     Replaced(usize),
+    /// El cd del pane `usize` FALLÓ al listar: el pane se quedó donde
+    /// estaba (el error ya salió por la barra), pero un relleno previo de
+    /// ese pane se suelta igual (criterio conservador de siempre). El error
+    /// VIAJA para quien navega desde el popup de historial (spec
+    /// 2026-07-18: `NotFound` retira la entrada).
+    Failed(usize, Error),
     /// El cd se abandonó (Esc/Ctrl-C): nada cambió, el relleno sigue.
     Cancelled,
+}
+
+/// Aplica el desenlace de un cd al relleno paginado en curso: uno nuevo lo
+/// sustituye (el rx anterior dropeado mata su drenador → suelta el stream,
+/// regla 3); un reemplazo o fallo del MISMO pane lo suelta (su drenador
+/// quedaría obsoleto); un cd abandonado no toca nada.
+fn apply_cd(fill: &mut Option<Fill>, outcome: Cd) {
+    match outcome {
+        Cd::Filling(f) => *fill = Some(f),
+        Cd::Replaced(pane) | Cd::Failed(pane, _) => {
+            if fill.as_ref().is_some_and(|f| f.pane == pane) {
+                *fill = None;
+            }
+        }
+        Cd::Cancelled => {}
+    }
 }
 
 #[tokio::main]
@@ -133,6 +155,9 @@ async fn main() -> Result<()> {
     );
     let mut app = App::new(left, right);
     apply_theme(&mut app, &cfg);
+    // Copia de la hotlist en el App (spec 2026-07-18): la fuente del popup
+    // `Ctrl+D`; se refresca en cada hot-reload OK (`reload_config`).
+    app.hotlist = cfg.hotlist.clone();
     // Canales del modo daemon (None en embebido): tasks de otros frontends
     // y avisos de (re)conexión — se drenan en el loop principal.
     let foreign_tasks = backend.take_foreign_tasks();
@@ -477,6 +502,14 @@ async fn run(
                         on_theme_picker_key(app, key.modifiers, key.code).await;
                     } else if app.extensions.is_some() {
                         on_extensions_key(app, backend, key.modifiers, key.code).await;
+                    } else if app.nav_popup.is_some() {
+                        // Popup historial/hotlist (spec 2026-07-18): Enter
+                        // sobre un item NAVEGA por el flujo de cd normal —
+                        // su desenlace toca el relleno como cualquier cd.
+                        let outcome =
+                            on_nav_popup_key(app, backend, &mut events, key.modifiers, key.code)
+                                .await;
+                        apply_cd(&mut fill, outcome);
                     } else if let Some(help) = &mut app.help {
                         // Teclas de la ayuda: fijas, como los diálogos (#24).
                         // ctrl+c conserva su significado global (salir).
@@ -501,15 +534,8 @@ async fn run(
                         }
                         // El modal TOFU (#45) puede NAVEGAR al confiar: su Cd
                         // se aplica igual que el de un comando.
-                        match on_dialog_key(app, backend, &mut events, key.code).await {
-                            Cd::Filling(f) => fill = Some(f),
-                            Cd::Replaced(pane) => {
-                                if fill.as_ref().is_some_and(|f| f.pane == pane) {
-                                    fill = None;
-                                }
-                            }
-                            Cd::Cancelled => {}
-                        }
+                        let outcome = on_dialog_key(app, backend, &mut events, key.code).await;
+                        apply_cd(&mut fill, outcome);
                     } else {
                         // Esc con un comando Lua en vuelo (BROWSE: sin modal
                         // ni overlay, y NO en el viewer): pide cancelación
@@ -575,20 +601,12 @@ async fn run(
                                     // entrada que el usuario no veía (review
                                     // MAJOR T4).
                                     if app.focused_mut().quick_confirm() {
-                                        match dispatch(
+                                        let outcome = dispatch(
                                             app, backend, &mut events, help_lines, quick_mode,
                                             "nav.enter",
                                         )
-                                        .await
-                                        {
-                                            Cd::Filling(f) => fill = Some(f),
-                                            Cd::Replaced(pane) => {
-                                                if fill.as_ref().is_some_and(|f| f.pane == pane) {
-                                                    fill = None;
-                                                }
-                                            }
-                                            Cd::Cancelled => {}
-                                        }
+                                        .await;
+                                        apply_cd(&mut fill, outcome);
                                     }
                                     continue;
                                 }
@@ -617,22 +635,10 @@ async fn run(
                                     );
                                     continue;
                                 }
-                                match dispatch(app, backend, &mut events, help_lines, quick_mode, &cmd)
-                                    .await
-                                {
-                                    // Nuevo relleno: suelta el anterior (su rx
-                                    // dropeado mata su drenador → suelta el
-                                    // stream, regla 3).
-                                    Cd::Filling(f) => fill = Some(f),
-                                    // El pane se reemplazó sin relleno: invalida
-                                    // uno anterior de ESE pane (no aplicaría).
-                                    Cd::Replaced(pane) => {
-                                        if fill.as_ref().is_some_and(|f| f.pane == pane) {
-                                            fill = None;
-                                        }
-                                    }
-                                    Cd::Cancelled => {}
-                                }
+                                let outcome =
+                                    dispatch(app, backend, &mut events, help_lines, quick_mode, &cmd)
+                                        .await;
+                                apply_cd(&mut fill, outcome);
                             }
                             Resolution::Pending(_) => {
                                 app.pending = active
@@ -774,6 +780,165 @@ async fn on_extensions_key(app: &mut App, backend: &Backend, mods: KeyModifiers,
     }
 }
 
+/// Teclas del popup de navegación (historial `Alt+↓` / hotlist `Ctrl+D`),
+/// fijas como los demás overlays (#24); `ctrl+c` conserva su salida global.
+/// Con `name_input` activo los imprimibles/backspace se capturan ANTES que
+/// nada. Enter sobre un item válido NAVEGA por el flujo de cd normal; si el
+/// cd desde el HISTORIAL falla con `NotFound`, la entrada se retira (spec
+/// 2026-07-18) — la de hotlist NO (es config del usuario: se avisa y queda).
+async fn on_nav_popup_key(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    mods: KeyModifiers,
+    code: KeyCode,
+) -> Cd {
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return Cd::Cancelled;
+    }
+    let Some(popup) = &mut app.nav_popup else {
+        return Cd::Cancelled;
+    };
+    let kind = popup.kind;
+    // SHIFT pasa (mayúsculas llegan como Char+SHIFT); ctrl/alt no escriben.
+    let plain = mods.is_empty() || mods == KeyModifiers::SHIFT;
+    if popup.name_input.is_some() {
+        match code {
+            KeyCode::Char(c) if plain => {
+                if let Some(input) = &mut popup.name_input {
+                    input.push(c);
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(input) = &mut popup.name_input {
+                    input.pop();
+                }
+            }
+            KeyCode::Esc => popup.name_input = None,
+            KeyCode::Enter => {
+                let name = popup.name_input.take().unwrap_or_default();
+                // Input vacío = cancela (plan T5): no hay favorito sin nombre.
+                if !name.is_empty() {
+                    hotlist_add(app, &name).await;
+                }
+            }
+            _ => {}
+        }
+        return Cd::Cancelled;
+    }
+    match code {
+        KeyCode::Up => {
+            app.nav_popup_input(PickerAction::Up);
+        }
+        KeyCode::Down => {
+            app.nav_popup_input(PickerAction::Down);
+        }
+        KeyCode::Esc => {
+            app.nav_popup_input(PickerAction::Cancel);
+        }
+        KeyCode::Char('a') if plain && kind == NavPopupKind::Hotlist => {
+            app.nav_popup_open_name_input();
+        }
+        KeyCode::Char('d') if plain && kind == NavPopupKind::Hotlist => {
+            if let Some(name) = app.nav_popup_selected_hotlist_name() {
+                hotlist_remove(app, &name).await;
+            }
+        }
+        KeyCode::Enter => {
+            // Confirm sobre un item inválido/vacío es no-op (el popup sigue).
+            if let Some(path) = app.nav_popup_input(PickerAction::Confirm) {
+                let pane = app.focus();
+                let outcome = cd(app, backend, events, path.clone()).await;
+                if kind == NavPopupKind::History
+                    && matches!(&outcome, Cd::Failed(_, Error::NotFound))
+                {
+                    // El dir ya no existe: fuera del historial. La barra ya
+                    // muestra el error normal del cd fallido.
+                    app.history[pane].remove(&path);
+                }
+                return outcome;
+            }
+        }
+        _ => {}
+    }
+    Cd::Cancelled
+}
+
+/// `config::user_config_dir()` o el MISMO io `NotFound` que fabrica
+/// `persist_ui_theme` sin entorno (CI pelada): la barra lo pinta como
+/// `err-not-found` vía categoría (#73), clave existente y razonable.
+fn user_config_dir_io() -> std::io::Result<std::path::PathBuf> {
+    config::user_config_dir().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "sin directorio de config de usuario",
+        )
+    })
+}
+
+/// Persiste el favorito `name` = cwd del pane con foco en el `norte.toml`
+/// del USUARIO (`spawn_blocking`, regla 2 — `persist_hotlist_add` es
+/// bloqueante por contrato). Solo si el disco fue bien se refresca la copia
+/// en `App` (consistencia con disco) y sale `msg-hotlist-saved`; un fallo
+/// io sale por categoría y la copia NO se toca.
+async fn hotlist_add(app: &mut App, name: &str) {
+    let target = app.focused().dir.clone();
+    let wire = target.to_wire();
+    let n = name.to_owned();
+    let res = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        let dir = user_config_dir_io()?;
+        config::persist_hotlist_add(&dir, &n, &wire)?;
+        Ok(())
+    })
+    .await;
+    match res {
+        Ok(Ok(())) => {
+            app.hotlist_apply_saved(name, target);
+            // El name lo tecleó el usuario, pero un PASTE puede colar
+            // bidi/controles: por `detail_for_bar` como todo detalle (#73).
+            app.message = Some(ta("msg-hotlist-saved", &[("name", &detail_for_bar(name))]));
+        }
+        Ok(Err(e)) => {
+            app.message = Some(ta(
+                "msg-hotlist-persist-failed",
+                &[("error", &io_error_category(&e))],
+            ));
+        }
+        // Un panic al persistir es un bug NUESTRO: que reviente visible
+        // (criterio del binario, mismo que `config::load_async`).
+        Err(e) => std::panic::resume_unwind(e.into_panic()),
+    }
+}
+
+/// Retira el favorito `name` del `norte.toml` del USUARIO (`spawn_blocking`,
+/// regla 2). Mismo contrato de consistencia que [`hotlist_add`].
+async fn hotlist_remove(app: &mut App, name: &str) {
+    let n = name.to_owned();
+    let res = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        let dir = user_config_dir_io()?;
+        config::persist_hotlist_remove(&dir, &n)?;
+        Ok(())
+    })
+    .await;
+    match res {
+        Ok(Ok(())) => {
+            app.hotlist_apply_removed(name);
+            app.message = Some(ta(
+                "msg-hotlist-removed",
+                &[("name", &detail_for_bar(name))],
+            ));
+        }
+        Ok(Err(e)) => {
+            app.message = Some(ta(
+                "msg-hotlist-persist-failed",
+                &[("error", &io_error_category(&e))],
+            ));
+        }
+        Err(e) => std::panic::resume_unwind(e.into_panic()),
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // wiring del hot-reload, no API
 async fn reload_config(
     app: &mut App,
@@ -791,6 +956,9 @@ async fn reload_config(
                 // afecta a quick searches NUEVOS; uno abierto conserva el
                 // suyo). Mismo criterio que el tema: solo si TODO aplicó.
                 *quick_mode = cfg.quick_search_mode;
+                // La copia de hotlist también (un popup abierto conserva su
+                // snapshot hasta reabrirse — items congelados a propósito).
+                app.hotlist.clone_from(&cfg.hotlist);
                 // Bindings `lua:` descartados del keymap de PROYECTO
                 // (seguridad — mismo aviso que en el arranque; máximo
                 // porque `global` se fusiona en ambas pantallas).
@@ -1513,6 +1681,11 @@ async fn dispatch(
         // config. Con uno ya activo las teclas se comen antes del resolver,
         // así que este brazo solo corre para ABRIRLO — sin recursión.
         "pane.quick-search" => app.focused_mut().quick_start(quick_mode),
+        // `Alt+↓` / `Ctrl+D` (spec 2026-07-18): con el popup abierto sus
+        // teclas se comen antes del resolver (patrón overlay) — estos
+        // brazos solo corren para ABRIRLO.
+        "pane.history" => app.open_nav_popup(NavPopupKind::History),
+        "pane.hotlist" => app.open_nav_popup(NavPopupKind::Hotlist),
         "cursor.up" => app.focused_mut().move_up(1),
         "cursor.down" => app.focused_mut().move_down(1),
         "cursor.page-up" => app.focused_mut().move_up(PAGE),
@@ -1828,6 +2001,12 @@ fn spawn_fill(pane: usize, mut stream: EntryStream) -> Fill {
 /// future del listado detiene al productor del provider (testeado en
 /// vfs-local). El resto de teclas se descartan mientras dura el cd.
 async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPath) -> Cd {
+    // Historial (spec 2026-07-18): el dir ANTERIOR se captura AQUÍ y se
+    // empuja solo en el brazo de ÉXITO (el pane se reemplazó de verdad).
+    // Al vivir dentro de `cd` cubre TODOS los caminos que navegan —
+    // nav.enter/nav.parent, quick-Enter (dispatch nav.enter), retry TOFU y
+    // los popups de historial/hotlist — sin repetirlo por call-site.
+    let prev = app.focused().dir.clone();
     let fut = first_page(backend, &dir);
     tokio::pin!(fut);
     loop {
@@ -1839,6 +2018,12 @@ async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPa
                         let more = stream.is_some();
                         app.focused_mut().begin_listing(dir.clone(), first, more);
                         let pane = app.focus();
+                        // Un cd al MISMO dir (refresh-like) no ensucia el
+                        // historial; el dedup consecutivo de `push` cubre
+                        // el resto de redundancias.
+                        if prev != dir {
+                            app.history[pane].push(prev);
+                        }
                         // Si queda stream, un drenador lo rellena en background.
                         return match stream {
                             Some(s) => Cd::Filling(spawn_fill(pane, s)),
@@ -1867,10 +2052,11 @@ async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPa
                         return Cd::Cancelled;
                     }
                     // Un error de listado NO tumba el TUI: el pane se queda,
-                    // pero un relleno previo de ESTE pane ya no aplica.
+                    // pero un relleno previo de ESTE pane ya no aplica. El
+                    // error se PORTA en el desenlace (popup de historial).
                     Err(e) => {
                         app.message = Some(error_message(&e));
-                        return Cd::Replaced(app.focus());
+                        return Cd::Failed(app.focus(), e);
                     }
                 }
             }

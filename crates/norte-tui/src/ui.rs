@@ -19,7 +19,7 @@ use norte_i18n::{t, ta};
 /// ASCII (`⚠` es ambiguous-width: 2 celdas en muchos terminales). Va
 /// estilado (rol `hostile-badge`) — fuera de banda: un archivo llamado "! x"
 /// no lo imita.
-const HOSTILE_BADGE: &str = "!";
+pub(crate) const HOSTILE_BADGE: &str = "!";
 
 /// Pinta el frame completo: panes (o viewer) + panel de tasks + barra de
 /// estado + modal por encima.
@@ -64,6 +64,64 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(mgr) = &app.extensions {
         draw_extensions(frame, mgr, &app.theme);
     }
+    if let Some(popup) = &app.nav_popup {
+        draw_nav_popup(frame, popup, &app.theme);
+    }
+}
+
+/// Popup de navegación (spec 2026-07-18): historial `Alt+↓` / hotlist
+/// `Ctrl+D`, calcando [`draw_theme_picker`]. Los items llegan YA saneados
+/// de [`crate::app::App::open_nav_popup`] — aquí solo se pintan. El footer
+/// de teclas solo aplica a hotlist (`a`/`d`); con el input de nombre activo
+/// lo sustituye la línea `nombre: …` (el input pasa por el MISMO mask que
+/// la query del quick search: un paste hostil no pinta bidi crudo).
+fn draw_nav_popup(frame: &mut Frame<'_>, popup: &crate::app::NavPopup, theme: &TuiTheme) {
+    use crate::app::NavPopupKind;
+    let title = match popup.kind {
+        NavPopupKind::History => t("history-title"),
+        NavPopupKind::Hotlist => t("hotlist-title"),
+    };
+    let rows = u16::try_from(popup.items().len().max(1)).unwrap_or(8) + 2;
+    // 64 y no 60: el footer de teclas de hotlist en ES son 60 celdas y a 60
+    // el borde lo truncaría («cerra…»).
+    let area = centered(frame.area(), 64, rows.min(frame.area().height.max(3)));
+    frame.render_widget(ratatui::widgets::Clear, area);
+    let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = if popup.items().is_empty() {
+        let empty = match popup.kind {
+            NavPopupKind::History => t("history-empty"),
+            NavPopupKind::Hotlist => t("hotlist-empty"),
+        };
+        (vec![ListItem::new(Line::raw(format!(" {empty}")))], None)
+    } else {
+        (
+            popup
+                .items()
+                .iter()
+                .map(|(s, _)| ListItem::new(Line::raw(format!(" {s}"))))
+                .collect(),
+            Some(popup.cursor()),
+        )
+    };
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {title} "))
+        .title_style(theme.role(Role::Title))
+        .border_style(theme.role(Role::ModalBorder));
+    if let Some(input) = &popup.name_input {
+        let (masked, _) = display_name(input.as_bytes());
+        block = block.title_bottom(Line::raw(format!(
+            " {} {masked}_ ",
+            t("hotlist-name-prompt")
+        )));
+    } else if popup.kind == NavPopupKind::Hotlist {
+        block = block.title_bottom(Line::raw(format!(" {} ", t("hotlist-keys"))));
+    }
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(theme.role(Role::Selection));
+    let mut state = ListState::default();
+    state.select(selected);
+    frame.render_stateful_widget(list, area, &mut state);
 }
 
 /// Overlay del catálogo de extensiones (M4-P3): la lista de plugins AGRUPADA
