@@ -622,6 +622,9 @@ pub const COMMANDS: &[&str] = &[
     "viewer.encoding",
     "viewer.encoding-auto",
     "viewer.hex",
+    "pane.quick-search",
+    "pane.history",
+    "pane.hotlist",
 ];
 
 /// Id de Fluent con la descripción de un comando (`app.quit` →
