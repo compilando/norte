@@ -70,6 +70,57 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(popup) = &app.nav_popup {
         draw_nav_popup(frame, popup, &app.theme);
     }
+    if let Some(dialog) = &app.search_dialog {
+        draw_search_dialog(frame, dialog, &app.focused().dir, &app.theme);
+    }
+}
+
+/// Diálogo de búsqueda viva (`Alt+F7`, liveSearch T6): dos campos de texto
+/// (nombre/contenido) con un `_` en el activo, los dos toggles regex/case y la
+/// raíz del walk (el `cwd` del pane, no editable) — todo saneado, jamás
+/// bidi/controles crudos (los campos pasan por [`display_name`], la raíz por
+/// [`path_display`]; un paste hostil no pinta invisibles en el borde).
+fn draw_search_dialog(
+    frame: &mut Frame<'_>,
+    dialog: &crate::app::SearchDialog,
+    root: &norte_proto::VPath,
+    theme: &TuiTheme,
+) {
+    use crate::app::SearchField;
+    let on_txt = |b: bool| if b { t("on-yes") } else { t("on-no") };
+    let field = |label: &str, value: &str, active: bool| {
+        let (masked, _) = display_name(value.as_bytes());
+        let cursor = if active { "_" } else { "" };
+        format!("{label} {masked}{cursor}")
+    };
+    let name_active = dialog.field == SearchField::Name;
+    let (root_txt, root_hostil) = path_display(root);
+    let root_line = if root_hostil {
+        format!("{HOSTILE_BADGE} {root_txt}")
+    } else {
+        root_txt
+    };
+    let cuerpo = [
+        field(&t("search-name"), &dialog.name, name_active),
+        field(&t("search-content"), &dialog.content, !name_active),
+        ta("search-regex", &[("on", &on_txt(dialog.regex))]),
+        ta("search-case", &[("on", &on_txt(dialog.case))]),
+        middle_ellipsis(&root_line, 56),
+        t("search-hint"),
+    ]
+    .join("\n");
+    let area = centered(frame.area(), 60, 8);
+    frame.render_widget(ratatui::widgets::Clear, area);
+    frame.render_widget(
+        Paragraph::new(cuerpo).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" {} ", t("search-title")))
+                .title_style(theme.role(Role::Title))
+                .border_style(theme.role(Role::ModalBorder)),
+        ),
+        area,
+    );
 }
 
 /// Popup de navegación (spec 2026-07-18): historial `Alt+↓` / hotlist
@@ -726,13 +777,30 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         format!("  [{} …]", app.pending)
     };
     // Un mensaje pendiente (error por categoría, resultado) desplaza al
-    // resto de la barra hasta la siguiente tecla (issue #20). Sin mensaje,
-    // el hook Lua de statusbar (M4, ya saneado por el host) sustituye la
-    // línea default del pane con foco.
-    let text = match (&app.message, &app.lua_status) {
-        (Some(msg), _) => format!(" {msg}"),
-        (None, Some(lua)) => format!(" {lua}{seq}"),
-        (None, None) => format!(" {marca}{dir_texto}{pos_total}{seq}"),
+    // resto de la barra hasta la siguiente tecla (issue #20). Sin mensaje: un
+    // pane de búsqueda viva (liveSearch T6) pinta `search-status-*` (los hits
+    // = `entries.len()`); si no, el hook Lua de statusbar (M4, ya saneado por
+    // el host) sustituye la línea default del pane con foco.
+    let text = if let Some(msg) = &app.message {
+        format!(" {msg}")
+    } else if pane.virtual_search {
+        use crate::app::SearchState;
+        // `Failed` cae a `done` aquí: el error concreto ya viaja por
+        // `app.message` (error_message) y ese brazo gana arriba.
+        let key = match pane.search_state {
+            SearchState::Running => "search-status-running",
+            SearchState::Truncated => "search-status-truncated",
+            SearchState::Cancelled => "search-status-cancelled",
+            SearchState::Done | SearchState::Failed => "search-status-done",
+        };
+        format!(
+            " {}{seq}",
+            ta(key, &[("n", &pane.entries.len().to_string())])
+        )
+    } else if let Some(lua) = &app.lua_status {
+        format!(" {lua}{seq}")
+    } else {
+        format!(" {marca}{dir_texto}{pos_total}{seq}")
     };
     frame.render_widget(
         Paragraph::new(text).style(app.theme.role(Role::StatusBar)),

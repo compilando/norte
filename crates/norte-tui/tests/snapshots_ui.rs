@@ -75,6 +75,33 @@ fn snapshot_quick_search_filtro() {
     insta::assert_snapshot!(render(&app));
 }
 
+/// Pane virtual de búsqueda viva (`Alt+F7`, liveSearch T6): el pane con foco
+/// lista los HITS que van llegando (nombre plano, `VPath` completo bajo el
+/// capó) y la barra pinta `search-status-running` («buscando…»); el otro pane
+/// sigue normal.
+#[test]
+fn snapshot_search_pane_virtual() {
+    let mut app = app_base();
+    let raiz = vp("file:///casa");
+    let pane = app.focused_mut();
+    pane.begin_search(raiz.clone());
+    pane.extend_listing(vec![
+        entry(
+            &vp("file:///casa/src"),
+            b"main.rs",
+            EntryKind::File,
+            Some(120),
+        ),
+        entry(
+            &vp("file:///casa/docs"),
+            "a\u{00F1}o.txt".as_bytes(),
+            EntryKind::File,
+            Some(88),
+        ),
+    ]);
+    insta::assert_snapshot!(render(&app));
+}
+
 /// Popup de historial (spec 2026-07-18, `Alt+↓`): dirs del pane con foco,
 /// más reciente primero, con el cursor arriba.
 #[test]

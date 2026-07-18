@@ -30,6 +30,7 @@ keymap = [
     { on = ["f3"], run = "pane.view" },
     { on = ["/"], run = "pane.quick-search" },
     { on = ["alt+down"], run = "pane.history" },
+    { on = ["alt+f7"], run = "pane.search" },
     { on = ["ctrl+d"], run = "pane.hotlist" },
 ]
 

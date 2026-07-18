@@ -25,6 +25,39 @@ pub struct Pane {
     /// En modo Filter la SELECCIÓN vive dentro del estado (el cursor real no
     /// se mueve hasta confirmar); en Jump el cursor real salta directo.
     pub quick: Option<crate::nav::QuickSearch>,
+    /// El pane muestra los HITS de una búsqueda viva (`Alt+F7`, liveSearch),
+    /// no un listado de directorio real: `dir` es la RAÍZ del walk y las
+    /// `entries` son los resultados que van llegando por streaming
+    /// ([`Pane::extend_listing`], reusando el molde de paginación). Con él la
+    /// barra de estado pinta `search-status-*` en vez del `pos/total` normal;
+    /// cualquier `cd`/refresh normal lo apaga (los listados reales lo ponen a
+    /// `false`). `F5`/`F8`/`F3` operan sobre el hit bajo el cursor SOLOS
+    /// ([`Pane::selected`] da la `Entry` con su `VPath` completo).
+    pub virtual_search: bool,
+    /// Estado de presentación de la búsqueda viva (solo significativo con
+    /// [`Pane::virtual_search`]): decide qué variante `search-status-*` pinta
+    /// la barra. El run loop lo actualiza al llegar el estado terminal.
+    pub search_state: SearchState,
+}
+
+/// Estado de presentación de una búsqueda viva (`Alt+F7`, liveSearch T6): el
+/// run loop lo refleja en [`Pane::search_state`] para que la barra elija la
+/// variante `search-status-*`. `Failed` no se pinta en la barra del pane (el
+/// error concreto viaja por [`App::message`] vía `error_message`); se
+/// conserva la variante por completitud del estado del run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SearchState {
+    /// El walker sigue emitiendo hits.
+    #[default]
+    Running,
+    /// Terminó y no se alcanzó el tope de hits.
+    Done,
+    /// Terminó por alcanzar `max_hits` (resultados posiblemente incompletos).
+    Truncated,
+    /// El usuario canceló (los hits ya llegados se conservan).
+    Cancelled,
+    /// La Task de búsqueda falló (el error va por la barra de mensajes).
+    Failed,
 }
 
 impl Pane {
@@ -37,7 +70,24 @@ impl Pane {
             cursor: 0,
             loading: false,
             quick: None,
+            virtual_search: false,
+            search_state: SearchState::Running,
         }
+    }
+
+    /// Arranca el pane virtual de una búsqueda viva (`Alt+F7`, liveSearch T6):
+    /// `root` es la raíz del walk, las entries empiezan vacías y los hits
+    /// entran por [`Pane::extend_listing`] como un listado paginado. Marca el
+    /// pane como virtual (la barra pinta `search-status-running`) y mata
+    /// cualquier quick search vivo (filtraba OTRA cosa).
+    pub fn begin_search(&mut self, root: VPath) {
+        self.dir = root;
+        self.entries = Vec::new();
+        self.cursor = 0;
+        self.loading = false;
+        self.quick = None;
+        self.virtual_search = true;
+        self.search_state = SearchState::Running;
     }
 
     /// La entrada seleccionada: con quick search en modo Filter, la
@@ -185,6 +235,7 @@ impl Pane {
         self.cursor = 0;
         self.loading = false;
         self.quick = None;
+        self.virtual_search = false;
     }
 
     /// Primera página de un listado paginado: reemplaza el contenido y MARCA
@@ -196,6 +247,7 @@ impl Pane {
         self.cursor = 0;
         self.loading = more;
         self.quick = None;
+        self.virtual_search = false;
     }
 
     /// Añade un lote del drenador: re-ordena TODO y re-ancla el cursor al path
@@ -242,10 +294,103 @@ impl Pane {
         self.cursor = self.cursor.min(entries.len().saturating_sub(1));
         self.entries = entries;
         self.loading = false;
+        self.virtual_search = false;
         if let Some(q) = &mut self.quick {
             q.refresh(&self.entries, quick_prev.as_ref());
         }
         self.quick_sync_jump();
+    }
+}
+
+/// Campo de texto activo del diálogo de búsqueda (`Alt+F7`, liveSearch T6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchField {
+    /// Patrón sobre el NOMBRE (glob o regex).
+    Name,
+    /// Texto/regex sobre el CONTENIDO.
+    Content,
+}
+
+/// Diálogo de búsqueda viva (`Alt+F7`, liveSearch T6): dos campos de texto
+/// (nombre y contenido) y dos toggles (regex, case). El `regex` decide, por
+/// eje, glob-vs-regex (nombre) y literal-vs-regex (contenido) al construir los
+/// [`FsSearchParams`](norte_proto::methods::FsSearchParams) en el run loop.
+/// La raíz del walk es el `cwd` del pane con foco (no editable, se muestra en
+/// el modal). Sus teclas van hardcodeadas como los demás overlays (#24).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchDialog {
+    /// Patrón de nombre (glob o, con `regex`, regex).
+    pub name: String,
+    /// Texto de contenido (literal o, con `regex`, regex).
+    pub content: String,
+    /// Campo que recibe los imprimibles/backspace (Tab alterna).
+    pub field: SearchField,
+    /// `F2`: interpreta ambos patrones como regex en vez de glob/literal.
+    pub regex: bool,
+    /// `F3`: matching sensible a mayúsculas.
+    pub case: bool,
+}
+
+impl Default for SearchDialog {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            content: String::new(),
+            field: SearchField::Name,
+            regex: false,
+            case: false,
+        }
+    }
+}
+
+impl SearchDialog {
+    /// Diálogo vacío con el foco en el campo de nombre.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// El campo de texto activo, mutable.
+    fn active_mut(&mut self) -> &mut String {
+        match self.field {
+            SearchField::Name => &mut self.name,
+            SearchField::Content => &mut self.content,
+        }
+    }
+
+    /// Un carácter imprimible al campo activo.
+    pub fn push_char(&mut self, c: char) {
+        self.active_mut().push(c);
+    }
+
+    /// Backspace en el campo activo.
+    pub fn backspace(&mut self) {
+        self.active_mut().pop();
+    }
+
+    /// Tab: alterna el campo activo Name ⇄ Content.
+    pub fn toggle_field(&mut self) {
+        self.field = match self.field {
+            SearchField::Name => SearchField::Content,
+            SearchField::Content => SearchField::Name,
+        };
+    }
+
+    /// F2: alterna glob/literal ⇄ regex (aplica a AMBOS ejes).
+    pub fn toggle_regex(&mut self) {
+        self.regex = !self.regex;
+    }
+
+    /// F3: alterna sensibilidad a mayúsculas.
+    pub fn toggle_case(&mut self) {
+        self.case = !self.case;
+    }
+
+    /// ¿Hay algún criterio no vacío? Enter no lanza si ambos campos están
+    /// vacíos (una búsqueda sin criterio es un no-op con aviso).
+    #[must_use]
+    pub fn has_criteria(&self) -> bool {
+        !self.name.is_empty() || !self.content.is_empty()
     }
 }
 
@@ -411,6 +556,9 @@ pub struct App {
     pub hotlist: Vec<crate::config::HotlistItem>,
     /// Popup de navegación abierto (historial/hotlist): None = cerrado.
     pub nav_popup: Option<NavPopup>,
+    /// Diálogo de búsqueda viva abierto (`Alt+F7`, liveSearch T6): None =
+    /// cerrado. Captura imprimibles como el `name_input` del popup de nav.
+    pub search_dialog: Option<SearchDialog>,
 }
 
 /// Qué popup de navegación está abierto (spec 2026-07-18).
@@ -649,7 +797,14 @@ impl App {
             ],
             hotlist: Vec::new(),
             nav_popup: None,
+            search_dialog: None,
         }
+    }
+
+    /// Abre el diálogo de búsqueda viva (`Alt+F7`, liveSearch T6) vacío. La
+    /// raíz del walk se resuelve al lanzar (cwd del pane con foco).
+    pub fn open_search_dialog(&mut self) {
+        self.search_dialog = Some(SearchDialog::new());
     }
 
     /// Índice del pane con foco (0 = izquierda, 1 = derecha).
@@ -1729,6 +1884,88 @@ mod tests {
             DialogOutcome::Open,
             "Enter jamás aprueba ejecutar un script ajeno"
         );
+    }
+
+    /// Diálogo de búsqueda (liveSearch T6): Tab alterna el campo activo y los
+    /// imprimibles/backspace caen en el campo con foco.
+    #[test]
+    fn search_dialog_tab_y_edicion_por_campo() {
+        let mut d = SearchDialog::new();
+        assert_eq!(d.field, SearchField::Name);
+        d.push_char('*');
+        d.push_char('x');
+        assert_eq!(d.name, "*x");
+        assert_eq!(d.content, "");
+        d.toggle_field();
+        assert_eq!(d.field, SearchField::Content);
+        d.push_char('a');
+        d.push_char('b');
+        d.backspace();
+        assert_eq!(d.content, "a");
+        assert_eq!(d.name, "*x", "backspace solo tocó el campo activo");
+        d.toggle_field();
+        assert_eq!(d.field, SearchField::Name);
+    }
+
+    /// Los toggles (F2 regex / F3 case) alternan sus flags de forma
+    /// independiente.
+    #[test]
+    fn search_dialog_toggles_regex_y_case() {
+        let mut d = SearchDialog::new();
+        assert!(!d.regex && !d.case);
+        d.toggle_regex();
+        assert!(d.regex && !d.case);
+        d.toggle_case();
+        assert!(d.regex && d.case);
+        d.toggle_regex();
+        assert!(!d.regex && d.case);
+    }
+
+    /// Validación del criterio: sin ningún campo no hay búsqueda; basta con
+    /// uno (nombre O contenido) para que la haya.
+    #[test]
+    fn search_dialog_criterio_no_vacio() {
+        let mut d = SearchDialog::new();
+        assert!(!d.has_criteria(), "ambos vacíos: no lanza");
+        d.push_char('*');
+        assert!(d.has_criteria(), "solo nombre basta");
+        let mut d = SearchDialog::new();
+        d.toggle_field();
+        d.push_char('a');
+        assert!(d.has_criteria(), "solo contenido basta");
+    }
+
+    /// `begin_search` marca el pane como virtual, vacía las entries y resetea
+    /// el estado a `Running`; `extend_listing` alimenta los hits SIN apagar el
+    /// modo virtual (los hits siguen siendo de una búsqueda).
+    #[test]
+    fn begin_search_marca_virtual_y_extend_conserva() {
+        let mut p = pane_con(&["basura"]);
+        p.begin_search(root());
+        assert!(p.virtual_search);
+        assert_eq!(p.search_state, SearchState::Running);
+        assert!(p.entries.is_empty(), "los hits empiezan vacíos");
+        p.extend_listing(vec![file("hit1"), file("hit2")]);
+        assert!(p.virtual_search, "extend no apaga el modo virtual");
+        assert_eq!(names(&p), vec!["hit1", "hit2"]);
+    }
+
+    /// Un listado NORMAL (cd/refresh) apaga el modo virtual de búsqueda.
+    #[test]
+    fn listados_normales_apagan_el_modo_virtual() {
+        let mut p = pane_con(&[]);
+        p.begin_search(root());
+        assert!(p.virtual_search);
+        p.begin_listing(root(), vec![file("a")], false);
+        assert!(!p.virtual_search, "begin_listing apaga virtual");
+
+        p.begin_search(root());
+        p.set_listing(root(), vec![file("a")]);
+        assert!(!p.virtual_search, "set_listing apaga virtual");
+
+        p.begin_search(root());
+        p.refresh_listing(vec![file("a")]);
+        assert!(!p.virtual_search, "refresh_listing apaga virtual");
     }
 }
 

@@ -13,15 +13,17 @@ use anyhow::{Context, Result};
 use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
 use futures::StreamExt;
 use norte_core::backend::EntryStream;
-use norte_core::backend::{Backend, ConnEvent};
+use norte_core::backend::{Backend, ConnEvent, TaskRef};
 use norte_core::{Engine, TransferOptions};
 use norte_i18n::{t, ta};
 use norte_proto::DeleteMode;
+use norte_proto::methods::{FsSearchParams, SearchHits};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{
     App, DialogOutcome, ExtensionManager, Help, KeymapsError, Modal, NavPopupKind, Pane,
-    PickerAction, TransferKind, config_error_category, detail_for_bar, dialog_key, error_category,
-    error_message, io_error_category, keymaps_error_category, sort_entries, theme_error_category,
+    PickerAction, SearchDialog, SearchState, TransferKind, config_error_category, detail_for_bar,
+    dialog_key, error_category, error_message, io_error_category, keymaps_error_category,
+    sort_entries, theme_error_category,
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::keymap::{COMMANDS, Chord, Effective, Resolution, Resolver, Screen, presets};
@@ -53,6 +55,36 @@ const FILL_BATCH: usize = 4096;
 /// listado remoto lento (páginas por RTT) el usuario ve progreso y el
 /// contador `cargando… (n)` avanza en vez de saltar de 4096 en 4096.
 const FILL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Tope por defecto de hits de una búsqueda viva (`Alt+F7`, liveSearch T6):
+/// el diálogo v1 no expone el campo, así que se fija un tope razonable —
+/// acota la memoria del pane virtual (los hits se acumulan en `entries`) y
+/// hace alcanzable el estado `Truncated`. Al llegar, la Task completa y la
+/// barra pinta «truncada».
+const SEARCH_MAX_HITS: u32 = 10_000;
+
+/// Una búsqueda viva EN CURSO (`Alt+F7`, liveSearch T6): la Task cancelable,
+/// el canal de lotes de hits y el pane virtual que los muestra. Molde `Fill`:
+/// vive en el run loop, se drena en el `select!` y se suelta al salir del modo
+/// virtual (un `cd`) cancelando la Task (regla 3).
+struct SearchRun {
+    /// Task de `fs.search` (cancelable con `TaskRef::cancel`).
+    task: TaskRef,
+    /// Canal de lotes de hits (embebido: lo cierra el walker; remoto: la
+    /// bomba del `RemoteBackend` lo cierra al terminal).
+    rx: tokio::sync::mpsc::Receiver<SearchHits>,
+    /// Pane que muestra los hits (índice en `App::panes`).
+    pane: usize,
+    /// Directorio ANTERIOR del pane, para restaurarlo al salir del modo
+    /// virtual (Esc tras terminar).
+    prev_dir: VPath,
+    /// Hits acumulados (== `panes[pane].entries.len()`, contador propio para
+    /// no depender del re-sort del pane).
+    hits: usize,
+    /// Estado del run: `Running` mientras el walker emite; terminal tras
+    /// cerrarse el canal (se lee del `TaskProgress`).
+    state: SearchState,
+}
 
 /// Mensaje del drenador de un listado paginado al run loop.
 enum FillMsg {
@@ -342,6 +374,9 @@ async fn run(
     let mut reload_at: Option<tokio::time::Instant> = None;
     // Listado paginado rellenándose en background (ADR 0017): a lo sumo uno.
     let mut fill: Option<Fill> = None;
+    // Búsqueda viva en curso (liveSearch T6): a lo sumo una (el pane virtual
+    // es uno). Molde `Fill`: se drena en el select y se suelta al salir.
+    let mut search_run: Option<SearchRun> = None;
     // Scripting Lua (M4, ADR 0026): host por capas con trust TOFU. Como
     // `fill`, el estado vive en el run loop. El run en vuelo (a lo sumo UNO:
     // el estado Lua es uno) se pollea inline en el select — `CommandRun` es
@@ -366,6 +401,10 @@ async fn run(
                 // rust-reviewer).
                 if on_tick(app, backend, &mut events).await {
                     fill = None;
+                    // Un refresh de panes (refresh_listing) apaga el modo
+                    // virtual del pane de búsqueda: suelta el run (su drenador
+                    // alimentaría un listado real) y cancela si sigue vivo.
+                    reap_search_run(app, &mut search_run);
                 }
             }
             Some(task) = async {
@@ -420,6 +459,17 @@ async fn run(
                         fill = None;
                     }
                 }
+            }
+            hits = async {
+                // Solo se drena mientras el run sigue vivo (`Running`): un
+                // canal cerrado devolvería `None` en bucle (spin) — al leer el
+                // `None` se pasa a terminal y este brazo queda pendiente.
+                match &mut search_run {
+                    Some(s) if s.state == SearchState::Running => s.rx.recv().await,
+                    _ => std::future::pending().await,
+                }
+            } => {
+                drain_search(app, &mut search_run, hits);
             }
             outcome = async {
                 match &mut lua_run {
@@ -510,6 +560,16 @@ async fn run(
                             on_nav_popup_key(app, backend, &mut events, key.modifiers, key.code)
                                 .await;
                         apply_cd(&mut fill, outcome);
+                    } else if app.search_dialog.is_some() {
+                        // Diálogo Alt+F7 (liveSearch T6): captura imprimibles
+                        // como los demás overlays; Enter con criterio lanza la
+                        // búsqueda (abre el pane virtual) — el resto de teclas
+                        // no navegan.
+                        if let Some(params) =
+                            on_search_dialog_key(app, key.modifiers, key.code)
+                        {
+                            launch_search(app, backend, &mut search_run, params).await;
+                        }
                     } else if let Some(help) = &mut app.help {
                         // Teclas de la ayuda: fijas, como los diálogos (#24).
                         // ctrl+c conserva su significado global (salir).
@@ -547,6 +607,51 @@ async fn run(
                         {
                             token.cancel();
                             continue;
+                        }
+                        // Pane virtual de búsqueda (liveSearch T6): con un
+                        // search_run en el pane con foco (y sin quick vivo),
+                        // Esc y Enter tienen semántica propia ANTES del
+                        // resolver. El RESTO de teclas (cursor, F5/F8/F3…) cae
+                        // al resolver y opera sobre el hit bajo el cursor.
+                        if app.viewer.is_none()
+                            && key.modifiers.is_empty()
+                            && app.focused().quick.is_none()
+                            && app.focused().virtual_search
+                            && search_run
+                                .as_ref()
+                                .is_some_and(|s| s.pane == app.focus())
+                        {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    // Task viva → cancela (hits conservados,
+                                    // pasará a Cancelled al cerrarse el canal).
+                                    // Ya terminada → sale del modo virtual
+                                    // restaurando el dir anterior.
+                                    on_search_escape(
+                                        app,
+                                        backend,
+                                        &mut events,
+                                        &mut fill,
+                                        &mut search_run,
+                                    )
+                                    .await;
+                                    continue;
+                                }
+                                KeyCode::Enter => {
+                                    // Enter sobre un hit: cd al PADRE del hit y
+                                    // cursor sobre él (sale del modo virtual).
+                                    on_search_enter(
+                                        app,
+                                        backend,
+                                        &mut events,
+                                        &mut fill,
+                                        &mut search_run,
+                                    )
+                                    .await;
+                                    continue;
+                                }
+                                _ => {}
+                            }
                         }
                         // Quick search ACTIVO en el pane con foco (BROWSE):
                         // sus teclas se comen ANTES del resolver — un char
@@ -645,6 +750,9 @@ async fn run(
                                     dispatch(app, backend, &mut events, help_lines, quick_mode, &cmd)
                                         .await;
                                 apply_cd(&mut fill, outcome);
+                                // Un cd (nav.parent…) apagó el modo virtual del
+                                // pane de búsqueda: suelta el run y cancela.
+                                reap_search_run(app, &mut search_run);
                             }
                             Resolution::Pending(_) => {
                                 app.pending = active
@@ -1665,6 +1773,230 @@ async fn submit_transfer(
     }
 }
 
+/// Traduce una tecla del diálogo de búsqueda (`Alt+F7`, liveSearch T6) a un
+/// efecto sobre `App::search_dialog`. Teclas fijas como los demás overlays
+/// (#24); `ctrl+c` conserva su salida global. Devuelve `Some(params)` SOLO
+/// cuando Enter con algún criterio no vacío debe LANZAR la búsqueda (el caller
+/// cierra el diálogo y abre el pane virtual); Enter sin criterio avisa y sigue.
+fn on_search_dialog_key(
+    app: &mut App,
+    mods: KeyModifiers,
+    code: KeyCode,
+) -> Option<FsSearchParams> {
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return None;
+    }
+    let dialog = app.search_dialog.as_mut()?;
+    // SHIFT pasa (mayúsculas/símbolos llegan como Char+SHIFT); ctrl/alt no
+    // escriben en los campos.
+    let plain = mods.is_empty() || mods == KeyModifiers::SHIFT;
+    match code {
+        KeyCode::F(2) => dialog.toggle_regex(),
+        KeyCode::F(3) => dialog.toggle_case(),
+        KeyCode::Tab => dialog.toggle_field(),
+        KeyCode::Char(c) if plain => dialog.push_char(c),
+        KeyCode::Backspace if plain => dialog.backspace(),
+        KeyCode::Esc => app.search_dialog = None,
+        KeyCode::Enter => {
+            if dialog.has_criteria() {
+                let root = app.focused().dir.clone();
+                return Some(search_params(app.search_dialog.as_ref()?, root));
+            }
+            // Ambos campos vacíos: no-op con aviso (una búsqueda sin criterio
+            // no tiene sentido). El diálogo sigue abierto.
+            app.message = Some(t("search-empty"));
+        }
+        _ => {}
+    }
+    None
+}
+
+/// Construye los [`FsSearchParams`] del diálogo: el toggle `regex` decide, por
+/// eje, `name_glob` vs `name_regex` y `content` vs `content_regex`; un campo
+/// vacío no aporta criterio. `max_hits` se fija al tope por defecto
+/// ([`SEARCH_MAX_HITS`]) — el diálogo v1 no lo expone.
+fn search_params(dialog: &SearchDialog, root: VPath) -> FsSearchParams {
+    let (name_glob, name_regex) = match (dialog.name.is_empty(), dialog.regex) {
+        (true, _) => (None, None),
+        (false, false) => (Some(dialog.name.clone()), None),
+        (false, true) => (None, Some(dialog.name.clone())),
+    };
+    let (content, content_regex) = match (dialog.content.is_empty(), dialog.regex) {
+        (true, _) => (None, None),
+        (false, false) => (Some(dialog.content.clone()), None),
+        (false, true) => (None, Some(dialog.content.clone())),
+    };
+    FsSearchParams {
+        root,
+        name_glob,
+        name_regex,
+        content,
+        content_regex,
+        case_sensitive: dialog.case,
+        max_hits: Some(SEARCH_MAX_HITS),
+    }
+}
+
+/// Lanza la búsqueda: `backend.search` → Err deja el diálogo abierto y avisa
+/// por la barra (`search-status-failed`); Ok cierra el diálogo, guarda el dir
+/// anterior, arranca el pane virtual y registra el [`SearchRun`] (cancelando
+/// uno previo — el pane virtual es uno).
+async fn launch_search(
+    app: &mut App,
+    backend: &Backend,
+    search_run: &mut Option<SearchRun>,
+    params: FsSearchParams,
+) {
+    let pane = app.focus();
+    let root = params.root.clone();
+    match backend.search(params).await {
+        Ok((task, rx)) => {
+            let prev_dir = app.panes[pane].dir.clone();
+            app.search_dialog = None;
+            app.message = None;
+            app.panes[pane].begin_search(root);
+            // Un run previo (raro: el diálogo se cierra al lanzar) se cancela.
+            if let Some(old) = search_run.replace(SearchRun {
+                task,
+                rx,
+                pane,
+                prev_dir,
+                hits: 0,
+                state: SearchState::Running,
+            }) {
+                old.task.cancel();
+            }
+        }
+        // Criterios inválidos u otro fallo del daemon/engine: el diálogo
+        // SIGUE abierto (el usuario corrige) y el detalle va saneado a la
+        // barra (categoría del error — jamás el patrón crudo).
+        Err(e) => {
+            app.message = Some(ta(
+                "search-status-failed",
+                &[("error", &detail_for_bar(&error_category(&e)))],
+            ));
+        }
+    }
+}
+
+/// Aplica un lote de hits (o el cierre del canal) al pane virtual. Un lote
+/// llega mientras el pane siga en modo virtual; si un `cd` lo apagó, se suelta
+/// el run (su drenador alimentaría un listado real) cancelando la Task.
+/// `None` = fin del stream: se lee el estado terminal y se refleja en el pane.
+fn drain_search(app: &mut App, search_run: &mut Option<SearchRun>, hits: Option<SearchHits>) {
+    let Some(s) = search_run else {
+        return;
+    };
+    if let Some(batch) = hits {
+        if app.panes[s.pane].virtual_search {
+            let n = batch.entries.len();
+            app.panes[s.pane].extend_listing(batch.entries);
+            s.hits += n;
+        } else {
+            s.task.cancel();
+            *search_run = None;
+        }
+    } else {
+        // Canal cerrado: el walker terminó. Estado terminal no bloqueante.
+        let state = finalize_search_state(s);
+        s.state = state;
+        app.panes[s.pane].search_state = state;
+        // El error concreto va por la barra (categoría), jamás el pane; el
+        // pane conserva los hits parciales visibles.
+        if state == SearchState::Failed {
+            let mut rx = s.task.progress();
+            if let norte_proto::TaskState::Failed { error } = rx.borrow_and_update().state.clone() {
+                app.message = Some(error_message(&error));
+            }
+        }
+    }
+}
+
+/// Lee el estado terminal de un [`SearchRun`] del `TaskProgress` (no
+/// bloqueante) y lo mapea a [`SearchState`]. `Completed` con los hits al tope
+/// = `Truncated`; sin tope = `Done`. Un canal cerrado sin estado terminal aún
+/// publicado (carrera) se trata como `Done` (el walker ya no emite).
+fn finalize_search_state(s: &SearchRun) -> SearchState {
+    let mut rx = s.task.progress();
+    match rx.borrow_and_update().state.clone() {
+        norte_proto::TaskState::Cancelled => SearchState::Cancelled,
+        norte_proto::TaskState::Failed { .. } => SearchState::Failed,
+        norte_proto::TaskState::Completed if s.hits >= SEARCH_MAX_HITS as usize => {
+            SearchState::Truncated
+        }
+        _ => SearchState::Done,
+    }
+}
+
+/// Esc en el pane virtual de búsqueda (liveSearch T6): con la Task viva pide
+/// cancelación (los hits ya llegados se conservan; el estado pasará a
+/// `Cancelled` al cerrarse el canal); ya terminada, sale del modo virtual
+/// restaurando el dir anterior con un `cd` normal.
+async fn on_search_escape(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    fill: &mut Option<Fill>,
+    search_run: &mut Option<SearchRun>,
+) {
+    let Some(s) = search_run.as_ref() else {
+        return;
+    };
+    if s.state == SearchState::Running {
+        s.task.cancel();
+        return;
+    }
+    let prev = s.prev_dir.clone();
+    *search_run = None;
+    let outcome = cd(app, backend, events, prev).await;
+    apply_cd(fill, outcome);
+}
+
+/// Enter sobre un hit del pane virtual (liveSearch T6): cd al PADRE del hit y
+/// deja el cursor sobre él (por path, si ya está en la primera página).
+/// Cancela la Task si sigue viva y sale del modo virtual.
+async fn on_search_enter(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    fill: &mut Option<Fill>,
+    search_run: &mut Option<SearchRun>,
+) {
+    let Some(hit) = app.focused().selected().map(|e| e.path.clone()) else {
+        return;
+    };
+    let Some(parent) = hit.parent() else {
+        return;
+    };
+    if let Some(s) = search_run.as_ref()
+        && s.state == SearchState::Running
+    {
+        s.task.cancel();
+    }
+    *search_run = None;
+    let pane = app.focus();
+    let outcome = cd(app, backend, events, parent).await;
+    apply_cd(fill, outcome);
+    // Re-ancla el cursor sobre el hit por path (el cd resetea a 0); si cayó
+    // en una página aún no drenada, el cursor se queda arriba (v1).
+    if let Some(i) = app.panes[pane].entries.iter().position(|e| e.path == hit) {
+        app.panes[pane].cursor = i;
+    }
+}
+
+/// Suelta el [`SearchRun`] si su pane SALIÓ del modo virtual (un `cd`/refresh
+/// lo apagó): su drenador alimentaría un listado real. Cancela la Task si
+/// sigue viva (regla 3).
+fn reap_search_run(app: &App, search_run: &mut Option<SearchRun>) {
+    if let Some(s) = search_run.as_ref()
+        && !app.panes[s.pane].virtual_search
+    {
+        s.task.cancel();
+        *search_run = None;
+    }
+}
+
 /// Ejecuta un comando nombrado (ADR 0006: los mismos nombres que verán la
 /// palette y el wire). Un error de listado en un cd NO tumba el TUI: el
 /// pane se queda donde estaba (aviso visible: barra de mensajes, issue #20).
@@ -1692,6 +2024,10 @@ async fn dispatch(
         // brazos solo corren para ABRIRLO.
         "pane.history" => app.open_nav_popup(NavPopupKind::History),
         "pane.hotlist" => app.open_nav_popup(NavPopupKind::Hotlist),
+        // `Alt+F7` (liveSearch T6): abre el diálogo de búsqueda viva. Con él
+        // abierto sus teclas se comen antes del resolver (patrón overlay) —
+        // este brazo solo corre para ABRIRLO.
+        "pane.search" => app.open_search_dialog(),
         "cursor.up" => app.focused_mut().move_up(1),
         "cursor.down" => app.focused_mut().move_down(1),
         "cursor.page-up" => app.focused_mut().move_up(PAGE),
