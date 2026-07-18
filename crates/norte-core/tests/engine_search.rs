@@ -226,6 +226,68 @@ async fn criterios_invalidos_fallan_antes_de_la_task() {
     assert!(engine.search_as(p, Actor::User).await.is_err());
 }
 
+/// Codifica `s` a UTF-16 con BOM (LE o BE).
+fn utf16_bom(s: &str, le: bool) -> Vec<u8> {
+    let mut out = if le {
+        vec![0xFF, 0xFE]
+    } else {
+        vec![0xFE, 0xFF]
+    };
+    for cu in s.encode_utf16() {
+        out.extend_from_slice(&if le {
+            cu.to_le_bytes()
+        } else {
+            cu.to_be_bytes()
+        });
+    }
+    out
+}
+
+// review MAJOR ── el match en una línea ≥2 de un UTF-16 NO se pierde ────────
+#[tokio::test]
+async fn utf16_match_en_linea_posterior_le_y_be() {
+    let (engine, mem) = setup();
+    // "x\naño\n": el match está en la LÍNEA 2 — cortar por el byte 0x0A crudo
+    // desalinearía los pares y perdería el match (regresión del review).
+    write_file(&mem, "mem:///le.txt", &utf16_bom("x\naño\n", true)).await;
+    write_file(&mem, "mem:///be.txt", &utf16_bom("x\naño\n", false)).await;
+
+    let mut p = params("mem:///");
+    p.content = Some("año".to_owned());
+    let (h, rx) = engine.search_as(p, Actor::User).await.expect("search");
+    let hits = drain(rx).await;
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert_eq!(
+        paths(&hits),
+        vec![disp("mem:///be.txt"), disp("mem:///le.txt")]
+    );
+    // Y la línea reportada es la 2 (no la 1).
+    for (_, m) in &hits {
+        assert_eq!(m.as_ref().and_then(|m| m.line), Some(2));
+    }
+}
+
+// review MINOR-1 ── una línea gigante no explota la RAM (se trunca) ─────────
+#[tokio::test]
+async fn linea_gigante_se_trunca_pero_casa_al_inicio() {
+    let (engine, mem) = setup();
+    // Regex de contenido → ruta decode-por-líneas. Línea única de 4 MiB con la
+    // aguja al PRINCIPIO: debe casar aunque la línea se trunque para el match.
+    let mut giant = b"MATCH_ME ".to_vec();
+    giant.extend(std::iter::repeat_n(b'a', 4 * 1024 * 1024));
+    write_file(&mem, "mem:///huge.txt", &giant).await;
+
+    let mut p = params("mem:///");
+    p.content_regex = Some("MATCH_ME".to_owned());
+    let (h, rx) = engine.search_as(p, Actor::User).await.expect("search");
+    let hits = drain(rx).await;
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert_eq!(paths(&hits), vec![disp("mem:///huge.txt")]);
+    // El preview está acotado (no vuelca 4 MiB).
+    let preview = hits[0].1.as_ref().and_then(|m| m.preview.clone()).unwrap();
+    assert!(preview.chars().count() <= 160);
+}
+
 // 7 ── caso encoding-aware de los tres ficheros (deuda T2) ─────────────────
 #[tokio::test]
 async fn contenido_encoding_aware_tres_ficheros() {

@@ -123,6 +123,59 @@ fn run_decoder(
     }
 }
 
+/// Decodificador con ESTADO para consumir un fichero por chunks respetando
+/// las secuencias multibyte partidas por el borde de un chunk (a diferencia de
+/// [`decode`], que decodifica un buffer completo de una vez). Imprescindible
+/// para partir en `'\n'` sobre el TEXTO decodificado: en UTF-16 el `LF` es
+/// `0A 00`/`00 0A` y cortar por el byte crudo `0x0A` desalinea los pares.
+///
+/// El BOM inicial se consume (no aparece en la salida), igual que [`decode`].
+///
+/// ```
+/// use norte_encoding::{Encoding, StreamDecoder};
+/// let utf16le = Encoding::for_label(b"utf-16le").unwrap();
+/// let mut dec = StreamDecoder::new(utf16le);
+/// let mut out = String::new();
+/// // "hi" en UTF-16LE con BOM, partido a mitad de un code unit.
+/// dec.feed(&[0xFF, 0xFE, 0x68], false, &mut out); // BOM + 'h' incompleto
+/// dec.feed(&[0x00, 0x69, 0x00], true, &mut out);  // resto de 'h' + 'i'
+/// assert_eq!(out, "hi");
+/// ```
+pub struct StreamDecoder {
+    decoder: encoding_rs::Decoder,
+    encoding: &'static Encoding,
+}
+
+impl StreamDecoder {
+    /// Crea un decodificador con estado para `encoding` (honra el BOM inicial).
+    #[must_use]
+    pub fn new(encoding: &'static Encoding) -> Self {
+        Self {
+            decoder: encoding.new_decoder(),
+            encoding,
+        }
+    }
+
+    /// El encoding de este decodificador.
+    #[must_use]
+    pub fn encoding(&self) -> &'static Encoding {
+        self.encoding
+    }
+
+    /// Decodifica `bytes` y APPENDEA el texto a `out`, reteniendo internamente
+    /// cualquier secuencia multibyte incompleta del final para el próximo
+    /// `feed`. `last = true` en el chunk final vacía lo pendiente (los bytes
+    /// colgando salen como `�`). Los bytes inválidos se sustituyen por `�`.
+    pub fn feed(&mut self, bytes: &[u8], last: bool, out: &mut String) {
+        out.reserve(
+            self.decoder
+                .max_utf8_buffer_length(bytes.len())
+                .unwrap_or(bytes.len()),
+        );
+        let _ = self.decoder.decode_to_string(bytes, out, last);
+    }
+}
+
 /// Fin de línea dominante de un texto (para la status bar del viewer).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Eol {

@@ -306,6 +306,11 @@ impl ContentRegex {
 const FLUSH_INTERVAL: Duration = Duration::from_millis(100);
 /// Tope de caracteres del `preview` de un match (recorte server-side).
 const PREVIEW_MAX_CHARS: usize = 160;
+/// Cota de RAM por línea en la ruta decode (`scan_decode_lines`): una línea
+/// sin `'\n'` que rebasa este tamaño se evalúa TRUNCADA a este prefijo y el
+/// resto se descarta hasta el próximo `'\n'` (evita volcar un fichero de una
+/// sola línea gigante en memoria).
+const LINE_MATCH_CAP: usize = 1 << 20;
 
 /// Criterio de contenido ya compilado.
 enum ContentSpec {
@@ -437,13 +442,37 @@ impl Batch {
     }
 }
 
-/// Envía el lote pendiente (si lo hay). `Err(())` = el receptor murió (el
-/// dueño de la búsqueda se fue): el walker debe terminar limpio.
-async fn flush(tx: &mpsc::Sender<SearchHits>, batch: &mut Batch) -> Result<(), ()> {
+/// Desenlace de un [`flush`].
+enum FlushOutcome {
+    /// Enviado (o nada que enviar): sigue el walk.
+    Continue,
+    /// El receptor murió (dueño de la búsqueda se fue): termina limpio.
+    ReceiverGone,
+    /// Cancelado mientras el `send` estaba bloqueado (backpressure): termina
+    /// como `Cancelled` (regla 3).
+    Cancelled,
+}
+
+/// Envía el lote pendiente (si lo hay). Un `send` bloqueado por backpressure
+/// (canal lleno + receptor lento) NO ignora la cancelación: se hace `select`
+/// contra `ctx.cancel`.
+async fn flush(
+    tx: &mpsc::Sender<SearchHits>,
+    batch: &mut Batch,
+    cancel: &CancellationToken,
+) -> FlushOutcome {
     if batch.is_empty() {
-        return Ok(());
+        return FlushOutcome::Continue;
     }
-    tx.send(batch.take()).await.map_err(|_| ())
+    let hits = batch.take();
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => FlushOutcome::Cancelled,
+        r = tx.send(hits) => match r {
+            Ok(()) => FlushOutcome::Continue,
+            Err(_) => FlushOutcome::ReceiverGone,
+        },
+    }
 }
 
 /// Recorre el subtree bajo `root` en BFS (iterativo, sin recursión — una
@@ -502,10 +531,11 @@ pub async fn run_walk(
             if !batch.is_empty()
                 && (batch.len() >= SEARCH_HITS_MAX_BATCH || last_flush.elapsed() >= FLUSH_INTERVAL)
             {
-                if flush(&tx, &mut batch).await.is_err() {
-                    return Ok(()); // receptor muerto: termina limpio.
+                match flush(&tx, &mut batch, &ctx.cancel).await {
+                    FlushOutcome::Continue => last_flush = Instant::now(),
+                    FlushOutcome::ReceiverGone => return Ok(()), // termina limpio
+                    FlushOutcome::Cancelled => return Err(Error::Cancelled),
                 }
-                last_flush = Instant::now();
             }
             if ctx.cancel.is_cancelled() {
                 return Err(Error::Cancelled);
@@ -551,13 +581,13 @@ pub async fn run_walk(
             ctx.progress.update(|p| p.bytes_done = hits as u64);
 
             if matchers.max_hits.is_some_and(|max| hits >= max) {
-                // Truncado: drena lo pendiente y COMPLETA.
-                let _ = flush(&tx, &mut batch).await;
+                // Truncado: drena lo pendiente y COMPLETA (el tope se alcanzó).
+                let _ = flush(&tx, &mut batch, &ctx.cancel).await;
                 return Ok(());
             }
         }
     }
-    let _ = flush(&tx, &mut batch).await;
+    let _ = flush(&tx, &mut batch, &ctx.cancel).await;
     Ok(())
 }
 
@@ -672,9 +702,17 @@ async fn scan_bytes(
     Ok(None)
 }
 
-/// Scan por líneas DECODIFICADAS: acumula bytes, parte en `\n` (byte 0x0A,
-/// inequívoco en ASCII/UTF-8/legacy) y decodifica cada línea con `enc` para
-/// aplicar `matches`. Usado por `content_regex` y por el literal en UTF-16.
+/// Scan por líneas DECODIFICADAS con un decodificador de ESTADO: parte en
+/// `'\n'` sobre el TEXTO decodificado, no sobre el byte crudo 0x0A. Crítico
+/// para UTF-16 (el `LF` es `0A 00`/`00 0A`: cortar por el byte suelto
+/// desalinea los pares y pierde el match de cualquier línea ≥2). Usado por
+/// `content_regex` y por el literal en UTF-16.
+///
+/// **Cota de RAM** ([`LINE_MATCH_CAP`]): una línea sin `'\n'` que supera el
+/// tope (minificados, CSV de una línea) se evalúa TRUNCADA a ese prefijo y el
+/// resto se descarta hasta el próximo `'\n'` — un match más allá del tope en
+/// una única línea gigante se pierde (límite documentado; el preview ya se
+/// acota a [`PREVIEW_MAX_CHARS`]).
 async fn scan_decode_lines(
     enc: &'static Encoding,
     first: Vec<u8>,
@@ -682,65 +720,88 @@ async fn scan_decode_lines(
     cancel: &CancellationToken,
     mut matches: impl FnMut(&str) -> bool,
 ) -> Result<Option<MatchInfo>, Error> {
-    let mut raw: Vec<u8> = Vec::new();
+    let mut decoder = norte_encoding::StreamDecoder::new(enc);
+    let mut pending = String::new();
     let mut line_no: u64 = 0;
+    // `true` mientras se descartan los bytes de una línea ya truncada/evaluada.
+    let mut skipping = false;
     let mut chunk = Some(first);
     loop {
-        let c = match chunk.take() {
-            Some(c) => c,
+        let (bytes, last) = match chunk.take() {
+            Some(c) => (c, false),
             None => match stream.next().await {
-                Some(Ok(c)) => c.to_vec(),
+                Some(Ok(c)) => (c.to_vec(), false),
                 Some(Err(e)) => return Err(e),
-                None => break,
+                None => (Vec::new(), true),
             },
         };
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        for &b in &c {
-            if b == b'\n' {
-                line_no += 1;
-                if let Some(info) = check_line(&raw, enc, line_no, &mut matches) {
-                    return Ok(Some(info));
-                }
-                raw.clear();
-            } else {
-                raw.push(b);
+        decoder.feed(&bytes, last, &mut pending);
+
+        // Líneas completas (por el '\n' del texto decodificado).
+        while let Some(nl) = pending.find('\n') {
+            let line: String = pending.drain(..=nl).collect();
+            line_no += 1;
+            if skipping {
+                // La línea gigante ya se evaluó truncada: solo se cuenta.
+                skipping = false;
+                continue;
+            }
+            let l = strip_eol(&line);
+            if matches(l) {
+                return Ok(Some(MatchInfo {
+                    line: Some(line_no),
+                    preview: Some(trim_preview(l)),
+                }));
             }
         }
-    }
-    // Última línea sin `\n` final.
-    if !raw.is_empty() {
-        line_no += 1;
-        if let Some(info) = check_line(&raw, enc, line_no, &mut matches) {
-            return Ok(Some(info));
+
+        // Línea sin '\n' que rebasa el tope: evalúala truncada y descarta el
+        // resto hasta el próximo '\n' (cota de RAM).
+        if !skipping && pending.len() > LINE_MATCH_CAP {
+            let l = strip_eol(&pending);
+            if matches(l) {
+                return Ok(Some(MatchInfo {
+                    line: Some(line_no + 1),
+                    preview: Some(trim_preview(l)),
+                }));
+            }
+            pending.clear();
+            skipping = true;
+        } else if skipping {
+            pending.clear();
+        }
+
+        if last {
+            // Última línea sin `\n` final.
+            if !skipping && !pending.is_empty() {
+                line_no += 1;
+                let l = strip_eol(&pending);
+                if matches(l) {
+                    return Ok(Some(MatchInfo {
+                        line: Some(line_no),
+                        preview: Some(trim_preview(l)),
+                    }));
+                }
+            }
+            return Ok(None);
         }
     }
-    Ok(None)
 }
 
-/// Decodifica `raw` con `enc`, recorta el `\r` de CRLF y aplica `matches`;
-/// devuelve el contexto si casa.
-fn check_line(
-    raw: &[u8],
-    enc: &'static Encoding,
-    line_no: u64,
-    matches: &mut impl FnMut(&str) -> bool,
-) -> Option<MatchInfo> {
-    let decoded = norte_encoding::decode(raw, enc, true).text;
-    let line = decoded.strip_suffix('\r').unwrap_or(&decoded);
-    if matches(line) {
-        Some(MatchInfo {
-            line: Some(line_no),
-            preview: Some(trim_preview(line)),
-        })
-    } else {
-        None
-    }
+/// Recorta el `\n`/`\r` finales (CRLF) de una línea drenada.
+fn strip_eol(line: &str) -> &str {
+    let line = line.strip_suffix('\n').unwrap_or(line);
+    line.strip_suffix('\r').unwrap_or(line)
 }
 
-/// `true` si `line` contiene `needle` (con fold de caja simple si
-/// `!case_sensitive`).
+/// `true` si `line` contiene `needle`. NOTA: el fold de caja de esta ruta
+/// (decode-por-líneas, UTF-16/`content_regex`) es `to_lowercase` simple, NO el
+/// mismo que el byte-scan literal, que transcodifica variantes de caja por
+/// `needle_cycle`. Difieren en casos de caja no triviales (p. ej. `ß`/`SS`);
+/// asimetría consciente entre las dos rutas de contenido.
 fn line_contains(line: &str, needle: &str, case_sensitive: bool) -> bool {
     if case_sensitive {
         line.contains(needle)
