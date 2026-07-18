@@ -1,17 +1,30 @@
 //! Matchers PUROS de fs.search (spec 2026-07-18 live search): sin I/O, sin
 //! Tasks. Los consume el walker de T3.
 //!
-//! - **Nombre**: `lossy → NFC (+ lowercase si case-insensitive) → NFC` contra
-//!   glob o regex — la MISMA disciplina que el quick search del TUI
+//! - **Nombre (eje GLOB)**: `lossy → NFC (+ lowercase si case-insensitive) →
+//!   NFC` — la MISMA disciplina que el quick search del TUI
 //!   (`norte-tui/src/nav.rs::fold`). La 2ª NFC es crítica: `to_lowercase`
 //!   puede reintroducir formas descompuestas (p.ej. `J̌`→`ǰ`). La identidad
 //!   del fichero JAMÁS se normaliza; esto es matching de DISPLAY.
+//! - **Nombre (eje REGEX)**: NFC sobre input y patrón, pero la insensibilidad
+//!   de caja la resuelve el MOTOR de `regex` (case folding simple ASCII/
+//!   Unicode del propio motor) — NO el mismo fold que el glob. Difiere en
+//!   casos como `İ`/`i` o `ß`/`ss` (el motor no los pliega igual que
+//!   `to_lowercase`). Consciente y suficiente.
 //! - **Contenido**: la AGUJA se transcodifica a los encodings candidatos de
-//!   `norte-encoding::reload_cycle()` que la representen SIN pérdida; el pajar
-//!   se busca bytes-contra-bytes con `memmem` por chunks con SOLAPE — jamás se
-//!   decodifica el fichero entero (spec §17.1a).
+//!   `norte_encoding::needle_cycle()` (a-ciegas) que la representen SIN
+//!   pérdida (`encode_lossless`); el pajar se busca bytes-contra-bytes con
+//!   `memmem` por chunks con SOLAPE — jamás se decodifica el fichero entero
+//!   (spec §17.1a). Modo ENCODING-AWARE ([`ContentNeedle::for_encoding`])
+//!   para cuando T3 ya detectó el encoding del fichero.
+//!
+//! **Límite NFC/NFD del contenido**: la búsqueda de contenido es
+//! bytes-contra-bytes, sensible a la FORMA de normalización — un fichero en
+//! NFD (típico de macOS) puede no casar una aguja tecleada en NFC (y
+//! viceversa). Inherente a la búsqueda literal sin decodificar; no se corrige
+//! en v1.
 
-use norte_encoding::{Encoding, reload_cycle};
+use norte_encoding::{Encoding, encode_lossless, needle_cycle};
 use unicode_normalization::UnicodeNormalization;
 
 /// Tope del programa regex compilado (anti-ReDoS): una regex cuya máquina
@@ -113,60 +126,83 @@ impl NameMatcher {
     }
 }
 
-/// Los encodings a los que se transcodifica la AGUJA. `reload_cycle()` menos
-/// UTF-16: un literal de texto en UTF-16 mete bytes NUL (que además el
-/// detector clasifica como binario y el walker salta), así que sus bytes solo
-/// añadirían ruido/falsos positivos sin cubrir ningún caso real (decisión v1,
-/// spec §17.1a).
-fn needle_encodings() -> impl Iterator<Item = &'static Encoding> {
-    // Filtrado por nombre: norte-encoding aísla `encoding_rs` a propósito (no
-    // re-exporta las constantes UTF_16*); `Encoding::name()` es API pública.
-    reload_cycle()
-        .iter()
-        .copied()
-        .filter(|e| e.name() != "UTF-16LE" && e.name() != "UTF-16BE")
-}
-
-/// Aguja LITERAL de contenido, ya transcodificada a los bytes de cada encoding
-/// candidato que la representa sin pérdida. La búsqueda es bytes-contra-bytes
-/// (jamás decodifica el pajar).
+/// Aguja LITERAL de contenido, ya transcodificada a los bytes de uno o más
+/// encodings que la representan sin pérdida (pares `(encoding, bytes)`). La
+/// búsqueda es bytes-contra-bytes (jamás decodifica el pajar).
+///
+/// Dos modos:
+/// - [`ContentNeedle::literal`]: A-CIEGAS — la aguja en TODOS los encodings de
+///   `needle_cycle()`. Fallback cuando la detección del fichero es incierta.
+///   **Trade-off**: una aguja legacy corta (p.ej. `ñ`→1 byte `0xF1` en
+///   windows-1252) casa POR AZAR bytes que en otro encoding forman parte de
+///   una secuencia distinta (0xF1 es byte líder de un char de 4 bytes en
+///   UTF-8) — falsos positivos. Ver el test que fija ese límite.
+/// - [`ContentNeedle::for_encoding`]: ENCODING-AWARE — la aguja SOLO en el
+///   encoding detectado (+ UTF-8). T3 lo usa tras `norte_encoding::detect`
+///   para eliminar el falso positivo del modo a-ciegas.
 #[derive(Debug, Clone)]
 pub struct ContentNeedle {
-    /// Cada variante = la aguja codificada en un encoding (dedup).
-    needles: Vec<Vec<u8>>,
+    /// Pares `(encoding de origen, bytes)`: el encoding acompaña a la aguja
+    /// para que el consumidor (T3) sea encoding-aware; `find_in` solo usa los
+    /// bytes. Dedup por bytes.
+    needles: Vec<(&'static Encoding, Vec<u8>)>,
     /// Longitud del needle más largo (dimensiona el solape entre chunks).
     max_len: usize,
 }
 
 impl ContentNeedle {
-    /// Construye la aguja. Con `!case_sensitive` añade las variantes en
-    /// minúsculas y mayúsculas del texto ANTES de codificar (fold simple: solo
-    /// cubre agujas de una caja homogénea; una aguja en caja MIXTA en el pajar
-    /// es best-effort — v1 documentada). Cada variante se codifica a cada
-    /// encoding candidato (`needle_encodings`) que la mapee SIN pérdida; los
-    /// encodings con caracteres no mapeables se descartan.
-    #[must_use]
-    pub fn literal(text: &str, case_sensitive: bool) -> Self {
-        let mut variants: Vec<String> = vec![text.to_string()];
+    /// Variantes de caja del texto: el propio texto, y con `!case_sensitive`
+    /// también minúsculas y mayúsculas ANTES de codificar (fold simple: cubre
+    /// agujas de caja HOMOGÉNEA; una aguja en caja mixta en el pajar es
+    /// best-effort — v1 documentada).
+    fn case_variants(text: &str, case_sensitive: bool) -> Vec<String> {
+        let mut variants = vec![text.to_string()];
         if !case_sensitive {
             variants.push(text.to_lowercase());
             variants.push(text.to_uppercase());
         }
-        let mut needles: Vec<Vec<u8>> = Vec::new();
-        for variant in variants {
-            for enc in needle_encodings() {
-                let (bytes, _enc, had_unmappable) = enc.encode(&variant);
-                if had_unmappable || bytes.is_empty() {
-                    continue;
-                }
-                let bytes = bytes.into_owned();
-                if !needles.contains(&bytes) {
-                    needles.push(bytes);
+        variants
+    }
+
+    /// Construye la aguja codificando cada variante de caja a cada encoding de
+    /// `encs` que la mapee SIN pérdida ([`encode_lossless`]); dedup por bytes.
+    fn build(text: &str, case_sensitive: bool, encs: &[&'static Encoding]) -> Self {
+        let variants = Self::case_variants(text, case_sensitive);
+        let mut needles: Vec<(&'static Encoding, Vec<u8>)> = Vec::new();
+        for variant in &variants {
+            for &enc in encs {
+                if let Some(bytes) = encode_lossless(enc, variant)
+                    && !needles.iter().any(|(_, b)| *b == bytes)
+                {
+                    needles.push((enc, bytes));
                 }
             }
         }
-        let max_len = needles.iter().map(Vec::len).max().unwrap_or(0);
+        let max_len = needles.iter().map(|(_, b)| b.len()).max().unwrap_or(0);
         Self { needles, max_len }
+    }
+
+    /// Aguja A-CIEGAS: transcodificada a TODOS los encodings de
+    /// `norte_encoding::needle_cycle()` que la representen sin pérdida.
+    /// Fallback cuando el encoding del fichero es incierto; asume el
+    /// trade-off de falsos positivos por agujas legacy cortas (ver doc del
+    /// tipo).
+    #[must_use]
+    pub fn literal(text: &str, case_sensitive: bool) -> Self {
+        Self::build(text, case_sensitive, needle_cycle())
+    }
+
+    /// Aguja ENCODING-AWARE: solo en `enc` (el encoding YA detectado del
+    /// fichero) MÁS siempre UTF-8 (red de seguridad si el detector se
+    /// equivocó hacia un legacy con ASCII común). Devuelve `None` si el texto
+    /// es vacío (ninguna aguja útil). Para un fichero detectado como UTF-16
+    /// pásale `UTF_16LE`/`BE`: `encode_lossless` cae a UTF-8 (gotcha WHATWG),
+    /// así que T3 debe buscar en el texto DECODIFICADO, no aquí — la aguja
+    /// UTF-8 es lo mejor disponible en ese caso.
+    #[must_use]
+    pub fn for_encoding(text: &str, case_sensitive: bool, enc: &'static Encoding) -> Option<Self> {
+        let n = Self::build(text, case_sensitive, &[enc, norte_encoding::UTF_8]);
+        if n.needles.is_empty() { None } else { Some(n) }
     }
 
     /// Busca la aguja en `tail_anterior + chunk` con `memmem`; devuelve el
@@ -180,7 +216,7 @@ impl ContentNeedle {
         let mut buf = std::mem::take(&mut ov.tail);
         buf.extend_from_slice(chunk);
         let mut hit: Option<usize> = None;
-        for needle in &self.needles {
+        for (_enc, needle) in &self.needles {
             if let Some(pos) = memchr::memmem::find(&buf, needle) {
                 hit = Some(hit.map_or(pos, |h: usize| h.min(pos)));
             }
@@ -303,5 +339,60 @@ mod tests {
         // numérica "&#960;". Ese encoding se DESCARTA (unmappable), así que su
         // representación lossy JAMÁS se convierte en un needle → no casa.
         assert!(n.find_in(&mut Overlap::default(), b"&#960;").is_none());
+    }
+
+    // NOTA deuda T3 (fixtures de corpus, ficheros reales): `year_latin1`,
+    // `year_utf16bom`, `cjk_utf8_no_casa_aguja_latin_corta` entran al corpus de
+    // norte-testkit cuando el walker de contenido exista. Aquí solo se fija el
+    // COMPORTAMIENTO de los matchers con bytes sintéticos.
+
+    #[test]
+    fn falso_positivo_de_aguja_latina_corta_es_limite_de_literal() {
+        // "ñ" en windows-1252/ISO-8859-15 = 1 byte 0xF1. En contenido UTF-8
+        // CJK, 0xF1 aparece como byte LÍDER de una secuencia de 4 bytes
+        // (U+40000..U+7FFFF) → el modo a-ciegas (`literal`) casa POR AZAR.
+        // Límite conocido y documentado del modo multi-aguja.
+        let cjk_utf8 = b"texto \xF1\x84\x80\x81 fin"; // char U+44001 (F1 84 80 81)
+        let multi = ContentNeedle::literal("ñ", false);
+        assert!(
+            multi.find_in(&mut Overlap::default(), cjk_utf8).is_some(),
+            "límite conocido: la aguja legacy de 1 byte casa por azar"
+        );
+        // ENCODING-AWARE con el encoding DETECTADO (UTF-8) NO tiene el falso
+        // positivo: busca 0xC3 0xB1 / 0xC3 0x91, ausentes en ese contenido.
+        let aware =
+            ContentNeedle::for_encoding("ñ", false, norte_encoding::UTF_8).expect("aguja no vacía");
+        assert!(aware.find_in(&mut Overlap::default(), cjk_utf8).is_none());
+    }
+
+    #[test]
+    fn for_encoding_dirigida_encuentra_en_su_encoding() {
+        let w1252 = norte_encoding::Encoding::for_label(b"windows-1252").unwrap();
+        // Fichero detectado windows-1252: la aguja dirigida encuentra 0xF1.
+        let aware = ContentNeedle::for_encoding("año", false, w1252).expect("aguja");
+        assert!(
+            aware
+                .find_in(&mut Overlap::default(), b"un a\xF1o legacy")
+                .is_some()
+        );
+        // Y también su forma UTF-8 (red de seguridad incluida siempre).
+        assert!(
+            aware
+                .find_in(&mut Overlap::default(), "un año utf8".as_bytes())
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn utf16_con_bom_no_lo_cubre_la_aguja_literal_limite_documentado() {
+        // Fichero genuinamente UTF-16LE con BOM: "año" = FF FE 61 00 F1 00
+        // 6F 00. La aguja literal NO codifica a UTF-16 (needle_cycle lo
+        // excluye; `encode_lossless` a UTF-16 cae a UTF-8 por la regla WHATWG),
+        // así que NO casa — los bytes UTF-8/legacy no son contiguos entre los
+        // NUL. Límite documentado: T3 enruta los ficheros UTF-16-con-BOM por
+        // DECODIFICACIÓN (deuda corpus: `year_utf16bom`).
+        let utf16_bom = b"\xFF\xFE\x61\x00\xF1\x00\x6F\x00";
+        let n = ContentNeedle::literal("año", false);
+        assert!(n.find_in(&mut Overlap::default(), utf16_bom).is_none());
     }
 }

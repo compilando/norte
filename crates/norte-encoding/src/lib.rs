@@ -212,3 +212,64 @@ pub fn reload_cycle() -> &'static [&'static Encoding] {
     ];
     CYCLE
 }
+
+/// Los encodings a los que transcodificar una AGUJA para búsqueda literal
+/// de contenido (fs.search): [`reload_cycle`] MENOS UTF-16LE/BE.
+///
+/// La decisión vive JUNTO a los datos (no en el consumidor por nombre).
+/// Codificar a UTF-16 con `encoding_rs` NO produce bytes UTF-16: la regla
+/// WHATWG «output encoding» mapea UTF-16LE/BE a UTF-8 (ver el gotcha de
+/// [`encode_lossless`]), así que como aguja solo duplicarían la de UTF-8 —
+/// inútiles. Un literal en un fichero GENUINAMENTE UTF-16 se busca
+/// decodificando el fichero (el detector da UTF-16-con-BOM como texto;
+/// sin-BOM cae a binario y el walker lo salta), no con una aguja cruda.
+///
+/// ```
+/// assert!(norte_encoding::needle_cycle().len() == norte_encoding::reload_cycle().len() - 2);
+/// ```
+#[must_use]
+pub fn needle_cycle() -> &'static [&'static Encoding] {
+    const CYCLE: &[&Encoding] = &[
+        encoding_rs::UTF_8,
+        encoding_rs::WINDOWS_1252,
+        encoding_rs::ISO_8859_15,
+        encoding_rs::GB18030,
+        encoding_rs::SHIFT_JIS,
+        encoding_rs::EUC_JP,
+        encoding_rs::BIG5,
+        encoding_rs::KOI8_R,
+    ];
+    CYCLE
+}
+
+/// Codifica `text` a `enc` SIN pérdida: `None` si algún carácter no es
+/// mapeable en ese encoding, o si el resultado es vacío. Encapsula el gotcha
+/// de `encoding_rs::Encoding::encode` (que en un unmappable emite una
+/// referencia numérica HTML `&#NNN;` en vez de fallar) exponiendo un
+/// contrato honesto: bytes representables o nada.
+///
+/// **Gotcha UTF-16 → UTF-8**: `encoding_rs` sigue la regla WHATWG «get an
+/// output encoding» — UTF-16LE/BE y `replacement` son encodings SOLO de
+/// decodificación, y al codificar se sustituyen por UTF-8. Así,
+/// `encode_lossless(UTF_16LE, "A")` devuelve los bytes UTF-8 `[0x41]`, NO los
+/// UTF-16 `[0x41, 0x00]`. Consecuencia: esta función jamás produce bytes
+/// UTF-16 reales; para buscar en un fichero genuinamente UTF-16 hay que
+/// decodificarlo. Por eso [`needle_cycle`] excluye UTF-16 (solo duplicaría la
+/// aguja UTF-8).
+///
+/// ```
+/// use norte_encoding::{encode_lossless, UTF_8};
+/// let w1252 = norte_encoding::Encoding::for_label(b"windows-1252").unwrap();
+/// assert_eq!(encode_lossless(UTF_8, "año").unwrap(), "año".as_bytes());
+/// assert_eq!(encode_lossless(w1252, "año").unwrap(), b"a\xF1o");
+/// // π no es mapeable en windows-1252 → None (jamás el "&#960;" lossy):
+/// assert!(encode_lossless(w1252, "π").is_none());
+/// ```
+#[must_use]
+pub fn encode_lossless(enc: &'static Encoding, text: &str) -> Option<Vec<u8>> {
+    let (bytes, _enc, had_unmappable) = enc.encode(text);
+    if had_unmappable || bytes.is_empty() {
+        return None;
+    }
+    Some(bytes.into_owned())
+}
