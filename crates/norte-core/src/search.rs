@@ -466,7 +466,7 @@ async fn flush(tx: &mpsc::Sender<SearchHits>, batch: &mut Batch) -> Result<(), (
 ///   campo, no hay bytes reales en una búsqueda); `current` = última entrada
 ///   vista.
 /// - **Coalescing**: los hits se acumulan hasta [`SEARCH_HITS_MAX_BATCH`] o se
-///   drenan cada [`FLUSH_INTERVAL`] (lo que ocurra antes).
+///   drenan cada `FLUSH_INTERVAL` (lo que ocurra antes).
 ///
 /// # Errors
 /// [`Error::Cancelled`] si se canceló; jamás propaga errores por-entrada (se
@@ -749,7 +749,7 @@ fn line_contains(line: &str, needle: &str, case_sensitive: bool) -> bool {
     }
 }
 
-/// Recorta el preview a [`PREVIEW_MAX_CHARS`] caracteres (por char, no byte —
+/// Recorta el preview a `PREVIEW_MAX_CHARS` caracteres (por char, no byte —
 /// jamás parte un char multibyte).
 fn trim_preview(line: &str) -> String {
     line.chars().take(PREVIEW_MAX_CHARS).collect()
