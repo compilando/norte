@@ -441,8 +441,11 @@ async fn run(
                 // Hot-reload del scripting Lua (ADR 0026): host NUEVO entero
                 // (jamás estado a medias). Un `CommandRun` en vuelo retiene
                 // el estado VIEJO vía sus handles clonados (documentado en
-                // `lua::api`) y no se toca; statusbar/estado renacen.
+                // `lua::api`) y no se toca; statusbar/estado renacen. La
+                // cola también: sus nombres apuntaban al registro viejo
+                // (y si `load_lua` dio None, no quedaría quién drenarla).
                 lua_host = load_lua(app, &layers).await;
+                lua_queue.clear();
             }
             maybe = events.next() => {
                 let Some(event) = maybe else { return Ok(()); };
@@ -824,6 +827,8 @@ async fn load_lua(app: &mut App, layers: &Layers) -> Option<LuaHost> {
     let last = layers.dirs.len().saturating_sub(1);
     for (i, dir) in layers.dirs.iter().enumerate() {
         // Mismo orden que la config: la última capa es la de proyecto.
+        // deuda: Layers debería llevar el kind por dir; posicional falla el
+        // LABEL en Windows sin ProgramData (APPDATA quedaría como "system").
         let layer = if i == last {
             Layer::Project
         } else if i == 0 {
@@ -938,13 +943,7 @@ async fn load_lua_project(app: &mut App, host: &LuaHost, dir: std::path::PathBuf
     let Some(state) = state_dir() else {
         // Sin dir de estado no hay store; sin store no hay TOFU; sin TOFU el
         // script de proyecto NO corre (fail-closed) — con aviso.
-        app.message = Some(ta(
-            "err-lua-load",
-            &[
-                ("layer", "project"),
-                ("detail", "no state dir (XDG_STATE_HOME/HOME)"),
-            ],
-        ));
+        app.message = Some(t("err-lua-no-state-dir"));
         return;
     };
     let store_path = state.join("lua-trust.toml");
@@ -1023,13 +1022,17 @@ async fn resolve_lua_trust(app: &mut App, host: Option<&LuaHost>, code: KeyCode)
             store.record(&rec_path, &rec_bytes, allow)
         })
         .await;
-        // `Ok(Ok)` = persistido; `Err(_)` (panic al persistir) es bug
-        // nuestro y no tumba la TUI — la decisión de ESTA sesión ya vale.
-        if let Ok(Err(e)) = record {
-            app.message = Some(ta(
-                "err-lua-load",
-                &[("layer", "project"), ("detail", &io_error_category(&e))],
-            ));
+        match record {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                app.message = Some(ta(
+                    "err-lua-load",
+                    &[("layer", "project"), ("detail", &io_error_category(&e))],
+                ));
+            }
+            // Un panic al persistir es un bug NUESTRO: que reviente visible
+            // (mismo criterio que los demás spawn_blocking de este binario).
+            Err(e) => std::panic::resume_unwind(e.into_panic()),
         }
         if allow && let Some(host) = host {
             eval_lua_layer(app, host, &bytes, Layer::Project);
@@ -1084,8 +1087,11 @@ fn run_lua_command(
     if lua_run.is_some() {
         if lua_queue.len() < LUA_QUEUE_MAX {
             lua_queue.push_back(name.to_owned());
+            app.message = Some(t("msg-lua-busy"));
+        } else {
+            // Cola llena = DESCARTE: decirlo («encolado» mentiría).
+            app.message = Some(t("msg-lua-queue-full"));
         }
-        app.message = Some(t("msg-lua-busy"));
         return;
     }
     *lua_run = start_lua_run(app, host, backend, name);

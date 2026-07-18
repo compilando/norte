@@ -74,8 +74,9 @@ pub struct StatusInput {
 /// hook vive en una ranura del estado Lua COMPARTIDA con el resto del host
 /// (comandos incluidos, `driver.rs`); dejarlo puesto tras un error o un
 /// panic-catch contaminaría cualquier llamada síncrona posterior sobre el
-/// mismo estado.
-struct HookGuard<'a>(&'a Lua);
+/// mismo estado. `pub(super)`: lo reutiliza también el presupuesto de
+/// `eval_layer` (`api.rs`) — una sola pieza para el patrón.
+pub(super) struct HookGuard<'a>(pub(super) &'a Lua);
 
 impl Drop for HookGuard<'_> {
     fn drop(&mut self) {

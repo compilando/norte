@@ -65,6 +65,7 @@ err-lua-command = Lua command failed: { $detail }
 err-lua-cancelled = Lua command cancelled
 err-lua-timeout = Lua command timed out
 err-lua-statusbar = Lua statusbar disabled: { $detail }
+err-lua-no-state-dir = project init.lua not loaded: no state directory (XDG_STATE_HOME/HOME)
 # Ya en la cima: no hay directorio padre (raíz `/` o raíz de unidad Windows).
 msg-nav-at-top = already at the top
 msg-view-error = view: { $error }
@@ -76,6 +77,7 @@ msg-config-polling = config: watching degraded to polling
 msg-no-trash-here = no trash here: F8 again for permanent
 msg-list-incomplete = incomplete listing: cut off while filling
 msg-lua-busy = a Lua command is already running (queued)
+msg-lua-queue-full = Lua command discarded: queue full
 msg-lua-denied-changed = project init.lua previously denied; it has changed (not loaded)
 msg-lua-symlink = project init.lua is a symlink; not loaded
 pane-loading = loading… ({ $n })

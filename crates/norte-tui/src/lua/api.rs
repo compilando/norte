@@ -47,6 +47,15 @@ pub enum LuaLoadError {
     /// el guard existe para cuando `driver.rs` (task 5) lo exponga.
     #[error("eval_layer no es reentrante: ya hay una carga en curso")]
     Reentrant,
+
+    /// Se llamó a [`LuaHost::eval_layer`] con algún `CommandRun` de ESTE
+    /// host en vuelo: la carga corre bajo un hook de presupuesto y la
+    /// ranura de hook de mlua es ÚNICA por instancia — instalarlo pisaría
+    /// en silencio el hook de cancelación de la corrutina del run (ver el
+    /// módulo `statusbar`). Fail-closed: mejor rechazar la carga (visible)
+    /// que un run incancelable.
+    #[error("eval_layer con un run en vuelo: la carga pisaría el hook de cancelación")]
+    RunInFlight,
 }
 
 /// Comandos ya confirmados en el registro (capa que los definió + la
@@ -117,6 +126,15 @@ impl Drop for LoadingGuard<'_> {
         self.0.set(false);
     }
 }
+
+/// Presupuesto de instrucciones de UNA carga (`eval_layer`, rust-review
+/// T8): un `init.lua` roto (`while true do end` en el top-level) NO puede
+/// congelar el run loop del TUI (sin draw, sin Esc, terminal en raw mode al
+/// matar el proceso). 10 M instrucciones es DELIBERADAMENTE generoso: una
+/// carga legítima define comandos y poco más (miles de instrucciones, no
+/// millones) — ni un init.lua barroco lo roza, y en hardware actual se
+/// agota en decenas de ms, no en segundos.
+const EVAL_BUDGET: u32 = 10_000_000;
 
 /// Charset de nombres de comando (mismo espíritu que `agent_session`):
 /// `[a-z0-9._-]{1,64}`. `pub(crate)`: el keymap (T8) valida con ESTA misma
@@ -243,13 +261,32 @@ impl LuaHost {
     ///   lo hay) sobrevive intacto. Es decir: "el último `eval_layer` que
     ///   define el hook, gana", con independencia del orden de capas.
     ///
+    /// # Precondición (rust-review T8)
+    /// Ningún `CommandRun` de ESTE host en vuelo: la carga corre bajo un
+    /// presupuesto de instrucciones ([`EVAL_BUDGET`], `Lua::set_hook`) y la
+    /// ranura de hook de mlua es ÚNICA por instancia (ver `statusbar.rs`) —
+    /// instalarlo desarmaría el hook de cancelación del run. Se COMPRUEBA
+    /// (`run_active`, fail-closed → [`LuaLoadError::RunInFlight`]), no solo
+    /// se documenta. Los callers del TUI la cumplen casi siempre por
+    /// construcción: `load_lua` evalúa sobre un host recién nacido, y un
+    /// run en vuelo a través de un hot-reload retiene el host VIEJO (otra
+    /// instancia); el residual (la cola FIFO arranca un run en el host
+    /// nuevo mientras el modal TOFU sigue abierto) cae aquí con error
+    /// visible en vez de dejar un run incancelable.
+    ///
     /// # Errors
-    /// Cualquier error de sintaxis o runtime de Lua, incluyendo los que
-    /// `norte.command` genera para nombres inválidos o duplicados, y
-    /// [`LuaLoadError::Reentrant`] si ya hay una carga en curso.
+    /// Cualquier error de sintaxis o runtime de Lua — incluyendo los que
+    /// `norte.command` genera para nombres inválidos o duplicados, y el
+    /// presupuesto de carga agotado ([`EVAL_BUDGET`]: un `while true do
+    /// end` en el top-level muere con error, jamás congela el TUI) —,
+    /// [`LuaLoadError::Reentrant`] si ya hay una carga en curso y
+    /// [`LuaLoadError::RunInFlight`] si hay un run en vuelo.
     pub fn eval_layer(&self, source: &[u8], layer: Layer) -> Result<Vec<LuaWarning>, LuaLoadError> {
         if self.loading.get() {
             return Err(LuaLoadError::Reentrant);
+        }
+        if self.run_active.get() != 0 {
+            return Err(LuaLoadError::RunInFlight);
         }
         self.loading.set(true);
         let _guard = LoadingGuard(&self.loading);
@@ -304,7 +341,25 @@ impl LuaHost {
             Layer::User => "init.lua (usuario)",
             Layer::Project => "init.lua (proyecto)",
         };
-        let exec_result = self.lua.load(source).set_name(layer_name).exec();
+        // Presupuesto de la carga (rust-review T8, [`EVAL_BUDGET`]): el hook
+        // ERRA al primer disparo y el chunk muere con error de carga — un
+        // init.lua roto jamás congela el run loop. Guard RAII (el MISMO
+        // HookGuard de statusbar.rs, una sola pieza): remove_hook pase lo
+        // que pase, también si exec() erra. Instalarlo es seguro porque no
+        // hay run en vuelo (comprobado arriba: la ranura de hook es única
+        // por instancia).
+        let exec_result = {
+            self.lua.set_hook(
+                mlua::HookTriggers::new().every_nth_instruction(EVAL_BUDGET),
+                |_, _| {
+                    Err(mlua::Error::RuntimeError(
+                        "init.lua: presupuesto de instrucciones de carga agotado".to_string(),
+                    ))
+                },
+            );
+            let _guard = statusbar::HookGuard(&self.lua);
+            self.lua.load(source).set_name(layer_name).exec()
+        };
 
         // Pase lo que pase: (1) la clausura de esta llamada deja de aceptar
         // comandos aunque conserve una referencia viva (Rc compartido); (2)
@@ -685,6 +740,23 @@ mod tests {
         assert!(h.commands().contains(&name));
     }
 
+    /// MAJOR (rust-review T8): un `init.lua` con un bucle infinito NO puede
+    /// congelar la carga (correría en el run loop del TUI: sin draw, sin
+    /// Esc, terminal en raw mode al matar el proceso). El presupuesto de
+    /// instrucciones de `eval_layer` lo mata con error de carga; el host
+    /// sigue usable después.
+    #[test]
+    fn init_lua_con_bucle_infinito_no_congela_la_carga() {
+        let h = host();
+        assert!(
+            h.eval_layer(b"while true do end", Layer::User).is_err(),
+            "presupuesto agotado = error de carga, jamás cuelgue"
+        );
+        h.eval_layer(b"norte.command('ok', function() end)", Layer::User)
+            .expect("el host sigue usable tras agotar el presupuesto");
+        assert_eq!(h.commands(), vec!["ok".to_string()]);
+    }
+
     #[test]
     fn eval_layer_no_es_reentrante() {
         let h = host();
@@ -694,5 +766,19 @@ mod tests {
         let err = h.eval_layer(b"norte.command('x', function() end)", Layer::User);
         assert!(matches!(err, Err(LuaLoadError::Reentrant)));
         h.loading.set(false);
+    }
+
+    /// La precondición «sin run en vuelo» se COMPRUEBA (fail-closed): con
+    /// `run_active != 0`, cargar pisaría el hook de cancelación del run —
+    /// se rechaza con error visible en vez de dejar un run incancelable.
+    #[test]
+    fn eval_layer_con_run_en_vuelo_se_rechaza() {
+        let h = host();
+        h.run_active.set(1);
+        let err = h.eval_layer(b"norte.command('x', function() end)", Layer::User);
+        assert!(matches!(err, Err(LuaLoadError::RunInFlight)));
+        h.run_active.set(0);
+        h.eval_layer(b"norte.command('x', function() end)", Layer::User)
+            .expect("sin run en vuelo la carga vuelve a pasar");
     }
 }

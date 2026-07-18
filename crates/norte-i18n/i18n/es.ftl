@@ -64,6 +64,7 @@ err-lua-command = el comando Lua falló: { $detail }
 err-lua-cancelled = comando Lua cancelado
 err-lua-timeout = el comando Lua agotó el tiempo
 err-lua-statusbar = statusbar Lua deshabilitada: { $detail }
+err-lua-no-state-dir = init.lua del proyecto no cargado: sin directorio de estado (XDG_STATE_HOME/HOME)
 # Ya en la cima: no hay directorio padre (raíz `/` o raíz de unidad Windows).
 msg-nav-at-top = ya estás en la cima
 msg-refresh-error = refresh: { $error }
@@ -76,6 +77,7 @@ msg-config-polling = config: vigilancia degradada a polling
 msg-no-trash-here = sin papelera aquí: F8 de nuevo para permanente
 msg-list-incomplete = listado incompleto: se cortó al rellenar
 msg-lua-busy = ya hay un comando Lua en marcha (encolado)
+msg-lua-queue-full = comando Lua descartado: cola llena
 msg-lua-denied-changed = el init.lua del proyecto se denegó; ha cambiado (no se carga)
 msg-lua-symlink = el init.lua del proyecto es un symlink; no se carga
 pane-loading = cargando… ({ $n })
