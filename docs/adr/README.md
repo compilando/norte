@@ -30,3 +30,5 @@ La spec evoluciona por ADR, no por edición silenciosa (spec §18).
 | [0023](0023-journal-sqlx-sqlite.md) | Journal: sqlx sobre SQLite (WAL), hash-chain propia | accepted |
 | [0024](0024-norte-mcp-puente-stdio.md) | norte-mcp: puente MCP stdio → daemon, sin SDK | accepted |
 | [0025](0025-journal-anclaje-hmac-audit-export.md) | Journal: anclaje HMAC del head + audit export (M3-5) | accepted |
+| [0026](0026-lua-scripting-mlua.md) | Lua scripting embebido con mlua (M4) | accepted |
+| [0027](0027-gui-gpui-go-no-go.md) | GUI: GPUI go/no-go (M5 spike) | accepted |

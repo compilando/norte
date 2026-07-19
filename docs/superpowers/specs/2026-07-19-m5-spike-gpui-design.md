@@ -1,7 +1,12 @@
 # M5 hito 1 — spike GPUI (go/no-go) — diseño
 
 - Fecha: 2026-07-19
-- Estado: aprobado (oscar); pendiente de plan
+- Estado: **COMPLETO** (T1–T7 implementados; spike cerrado 2026-07-19).
+- Resultado: **GO** — los 4 criterios cumplidos (listado real por el daemon,
+  GUI+TUI simultáneas, norte-theme por tipo al byte, medición sin números
+  prohibitivos); GPUI compila con stable 1.96.1 (sin nightly), renderiza en
+  Linux y el theming compartido cruza a la GPU sin retrabajo. Arranca el MVP
+  (M5 hito 2). Medición y decisión en `docs/adr/0027-gui-gpui-go-no-go.md`.
 - Contexto: spec §18.3 («GUI: GPUI. Asumimos API inestable a cambio de
   rendimiento… spike de validación al inicio de M5, presupuesto 2 semanas»),
   tabla de milestones M5 («decisión GPUI vs Tauri con spike medido; primer
