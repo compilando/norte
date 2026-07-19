@@ -35,3 +35,12 @@ anyhow = "1"
 # del 2026-07-19 (rama main). El `rust-toolchain.toml` de Zed en ese rev pinea
 # stable 1.95.0 + edition 2024, así que debería compilar con nuestra 1.96.1.
 gpui = { git = "https://github.com/zed-industries/zed", rev = "f14fea9bf3c93797d5161f7440ed418655bc6c57" }
+
+# En este rev GPUI se partió en dos: `gpui` (núcleo: App/Window/Element) y
+# `gpui_platform` (capa de plataforma que provee `application()` = selección de
+# backend nativo por OS). Los ejemplos de GPUI (`crates/gpui/examples/*.rs`)
+# arrancan con `gpui_platform::application().run(...)`, no con un `gpui::App::new`
+# que en este rev NO existe (solo `Application::with_platform`). En Linux el
+# backend real vive en `gpui_linux`, gateado por las features `wayland`/`x11` —
+# por eso las pedimos aquí (sin ellas no habría ningún backend que compilar/abrir).
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "f14fea9bf3c93797d5161f7440ed418655bc6c57", features = ["wayland", "x11"] }

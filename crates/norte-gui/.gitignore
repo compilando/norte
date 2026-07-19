@@ -1,0 +1,4 @@
+# norte-gui está EXCLUIDO del workspace y se construye en su propio directorio,
+# generando este `target/` local (el `/target` del .gitignore raíz solo cubre el
+# del workspace). No lo versionamos.
+/target
