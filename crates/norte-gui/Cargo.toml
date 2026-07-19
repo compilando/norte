@@ -1,0 +1,37 @@
+# norte-gui — SPIKE M5 (hito 1). Binario GPUI EXCLUIDO del workspace (ver el
+# `exclude` del Cargo.toml raíz). NO comparte el lockfile ni el gate del core:
+# se verifica a mano con `cargo build` DENTRO de este directorio. Regla 7: solo
+# habla `norte-proto` (vía el `RemoteBackend` de `norte-core`); read-only.
+#
+# El crate NO hereda del workspace (está excluido) → edition/version standalone,
+# sin `*.workspace = true` ni `rust-version` heredado.
+[package]
+name = "norte-gui"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[[bin]]
+name = "norte-gui"
+path = "src/main.rs"
+
+[dependencies]
+# Crates internos por PATH (no por el alias del workspace, que este crate no ve).
+norte-core = { path = "../norte-core" }
+norte-proto = { path = "../norte-proto" }
+norte-theme = { path = "../norte-theme" }
+
+# Runtime async para el backend remoto (el render de GPUI corre en su propio
+# executor; el I/O del daemon va en un runtime tokio aparte — T4).
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+anyhow = "1"
+
+# GPUI de Zed. NO está en crates.io como `gpui` estable → dep git pineada por
+# SHA completo (criterio 4 del ADR: registrar rev + fecha). Licencia: Apache-2.0
+# (el crate excluido no pasa por `cargo deny`; el ADR 0027 lo registra).
+#
+# rev f14fea9bf3c93797d5161f7440ed418655bc6c57 — commit de zed-industries/zed
+# del 2026-07-19 (rama main). El `rust-toolchain.toml` de Zed en ese rev pinea
+# stable 1.95.0 + edition 2024, así que debería compilar con nuestra 1.96.1.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "f14fea9bf3c93797d5161f7440ed418655bc6c57" }

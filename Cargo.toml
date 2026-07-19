@@ -23,7 +23,9 @@ members = [
 ]
 # Los guests WASM de ejemplo (M4-P2) NO son miembros del workspace: compilan a
 # wasm32-wasip2 con su propio perfil, no comparten el lockfile del host.
-exclude = ["crates/norte-plugin-host/examples-wasm"]
+# norte-gui (M5 spike): EXCLUIDO — GPUI puede exigir nightly/deps GPU pesadas;
+# jamás debe contaminar el gate del core (regla 7: solo habla norte-proto).
+exclude = ["crates/norte-plugin-host/examples-wasm", "crates/norte-gui"]
 
 [profile.release]
 # Binario de distribución: LTO fino + una unidad de codegen (mejor optimización)
