@@ -14,7 +14,9 @@
 
 mod display;
 pub mod nav;
+mod pane;
 mod sort;
 
 pub use display::{display_name, path_display};
+pub use pane::PaneState;
 pub use sort::sort_entries;
