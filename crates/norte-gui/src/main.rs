@@ -1,87 +1,151 @@
-//! norte-gui — SPIKE M5 (hito 1), Task 2: ventana GPUI mínima.
+//! norte-gui — SPIKE M5 (hito 1). Binario GPUI que pinta un dir REAL del daemon.
 //!
-//! Objetivo: abrir UNA ventana nativa con el texto estático «norte-gui». Sin
-//! daemon, sin theming, sin listado — eso llega en T3/T4/T5. Aquí solo se valida
-//! que el render de GPUI arranca en este entorno Linux (o se registra por qué no,
-//! como dato del criterio 4 del spike).
+//! - T2: ventana GPUI mínima (validó render en Linux).
+//! - T3: `theme_map::to_gpui_rgba` (mapeo norte-theme → color GPUI, con test).
+//! - **T4 (este): conectar al daemon + pintar el listado** (criterio 1 del ADR).
 //!
 //! API descubierta contra los ejemplos del rev pineado de GPUI
-//! (`crates/gpui/examples/hello_world.rs` en zed-industries/zed
+//! (`crates/gpui/examples/{hello_world,testing}.rs` en zed-industries/zed
 //! @ f14fea9bf3c93797d5161f7440ed418655bc6c57):
 //!
-//! - **`App`** (en los ejemplos `cx: &mut App`): el contexto global de la
-//!   aplicación. Se obtiene dentro del callback de `run`. Desde él se abren
-//!   ventanas (`open_window`) y se activa la app (`activate`).
-//! - **`Window`**: cada ventana nativa. `open_window` recibe unas `WindowOptions`
-//!   (posición/tamaño) y una closure constructora del *root view*.
-//! - **root view / `Render`**: el contenido de la ventana es una *entity* (aquí
-//!   `NorteGui`) que implementa el trait `Render`; su método `render` devuelve un
-//!   árbol de elementos (`div()...child(...)`) — el equivalente GPUI a un árbol
-//!   DOM con layout flex.
-//!
-//! `application()` vive en el crate hermano `gpui_platform` (ver Cargo.toml): es
-//! quien elige el backend nativo real (`gpui_linux` con wayland/x11 en Linux) y
-//! devuelve un `gpui::Application` listo para `.run(...)`.
+//! - **`App`**: contexto global; abre ventanas (`open_window`), activa la app.
+//! - **`Window`** + root view (`Render`): el contenido es una *entity* (`NorteGui`)
+//!   cuyo `render` devuelve un árbol de elementos (`div()…child(…)`).
+//! - **async → UI**: `cx.spawn(async move |this, cx| { … this.update(cx, |view, cx|
+//!   { …; cx.notify(); }) })` (patrón de `examples/testing.rs`). El `RemoteBackend`
+//!   (tokio) corre en un hilo aparte con su runtime; el resultado llega por un
+//!   `oneshot` que se `.await`-ea dentro del `cx.spawn`. Así el render nunca se
+//!   bloquea esperando al daemon (ver `backend_task.rs`).
 
 use gpui::{
-    App, Bounds, Context, SharedString, Window, WindowBounds, WindowOptions, div, prelude::*, px,
-    rgb, size,
+    App, Bounds, Context, IntoElement, ParentElement, Render, SharedString, Styled, Window,
+    WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
 use gpui_platform::application;
 
+use norte_proto::{Entry, EntryKind};
+
+mod backend_task;
 mod theme_map;
 
-/// El *root view* de la ventana: una entity con estado mínimo (el texto a pintar)
-/// que GPUI vuelve a renderizar cuando cambia. Para el spike el estado es
-/// constante — un `SharedString` (string barato de clonar, el tipo de texto de
-/// GPUI) con «norte-gui».
+/// Estado de la carga del listado. La ventana re-renderiza cuando cambia
+/// (`cx.notify()` tras el `update`).
+enum LoadState {
+    /// Aún conectando/listando contra el daemon.
+    Connecting,
+    /// Listado recibido del daemon.
+    Loaded(Vec<Entry>),
+    /// Falló (daemon caído, `NotFound`, config inválida…). NUNCA panic:
+    /// el mensaje se pinta en la ventana.
+    Failed(String),
+}
+
+/// El *root view* de la ventana: mantiene el estado de la carga y lo pinta.
 struct NorteGui {
-    texto: SharedString,
+    state: LoadState,
+}
+
+impl NorteGui {
+    /// Construye el view en estado «conectando» y arranca la carga en segundo
+    /// plano. La config (socket/dir) sale de entorno; si ni eso resuelve, se
+    /// nace directamente en `Failed` (sin lanzar el hilo).
+    fn new(cx: &mut Context<Self>) -> Self {
+        match backend_task::LoadConfig::from_env() {
+            Ok(cfg) => {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                backend_task::spawn_load(cfg, tx);
+                // GPUI async → UI: espera el resultado del hilo tokio y re-renderiza.
+                cx.spawn(async move |this, cx| {
+                    let outcome = rx.await;
+                    this.update(cx, |view, cx| {
+                        view.state = match outcome {
+                            Ok(Ok(entries)) => LoadState::Loaded(entries),
+                            Ok(Err(msg)) => LoadState::Failed(msg),
+                            // El emisor se soltó sin enviar (hilo abortado): raro.
+                            Err(_) => LoadState::Failed("carga interrumpida".into()),
+                        };
+                        cx.notify();
+                    })
+                    .ok();
+                })
+                .detach();
+                Self {
+                    state: LoadState::Connecting,
+                }
+            }
+            Err(e) => Self {
+                state: LoadState::Failed(format!("config inválida: {e}")),
+            },
+        }
+    }
+}
+
+/// Nombre de una entrada para display: bytes del último segmento → UTF-8 lossy →
+/// saneado por la fuente ÚNICA (`mask_terminal_hazards`). Regla 1: los bytes
+/// no-UTF8 no rompen (van a `U+FFFD`), nunca se asume UTF-8 ni se hace `unwrap`.
+fn display_name(entry: &Entry) -> String {
+    let bytes = entry
+        .path
+        .file_name()
+        .map_or(&b""[..], norte_proto::Segment::as_bytes);
+    let lossy = String::from_utf8_lossy(bytes);
+    norte_encoding::mask_terminal_hazards(&lossy)
+}
+
+/// Indicador de tipo minimalista (el color por tipo llega en T5): «/» dir,
+/// «@» symlink, nada para archivo, «?» para lo demás.
+fn kind_indicator(kind: EntryKind) -> &'static str {
+    match kind {
+        EntryKind::Dir => "/",
+        EntryKind::Symlink => "@",
+        EntryKind::File => "",
+        EntryKind::Other => "?",
+    }
+}
+
+/// Una fila de la lista: nombre saneado + indicador de tipo.
+fn entry_row(entry: &Entry) -> impl IntoElement {
+    let texto: SharedString =
+        format!("{}{}", display_name(entry), kind_indicator(entry.kind)).into();
+    div().py(px(2.0)).child(texto)
 }
 
 impl Render for NorteGui {
-    /// Construye el árbol de elementos de la ventana. `div()` es el elemento
-    /// contenedor; las llamadas encadenadas son estilo (flex, colores, tamaño) al
-    /// modo utility-CSS. `.child(...)` cuelga el texto estático dentro.
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
+        // Contenedor: columna vertical con fondo oscuro y texto claro (sin
+        // theming por tipo aún; llega en T5).
+        let base = div()
             .flex()
             .flex_col()
-            .justify_center()
-            .items_center()
             .size_full()
-            // Fondo gris oscuro y texto claro: sin theming aún (llega en T5); solo
-            // que el texto se lea sobre el fondo.
             .bg(rgb(0x1e1e1e))
-            .text_xl()
             .text_color(rgb(0xffffff))
-            .child(self.texto.clone())
+            .p(px(12.0))
+            .gap(px(2.0));
+
+        match &self.state {
+            LoadState::Connecting => base.child(SharedString::from("conectando…")),
+            LoadState::Failed(msg) => base.child(SharedString::from(format!("error: {msg}"))),
+            LoadState::Loaded(entries) if entries.is_empty() => {
+                base.child(SharedString::from("(directorio vacío)"))
+            }
+            LoadState::Loaded(entries) => base.children(entries.iter().map(entry_row)),
+        }
     }
 }
 
 fn main() {
-    // `application()` construye el `gpui::Application` con el backend nativo de
-    // este OS. `.run(closure)` arranca el run-loop de la plataforma (bloquea la
-    // vida de la app) y nos entrega el `App` global una vez inicializado.
     application().run(|cx: &mut App| {
-        // Ventana centrada de 500x300 px en la pantalla primaria (`None`).
-        let bounds = Bounds::centered(None, size(px(500.0), px(300.0)), cx);
+        let bounds = Bounds::centered(None, size(px(500.0), px(600.0)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            // Constructor del root view: `cx.new(...)` crea la entity `NorteGui`
-            // que GPUI gestionará y renderizará.
-            |_window, cx| {
-                cx.new(|_cx| NorteGui {
-                    texto: "norte-gui".into(),
-                })
-            },
+            |_window, cx| cx.new(NorteGui::new),
         )
         .expect("no se pudo abrir la ventana GPUI");
 
-        // Trae la app al frente / la marca como activa (como en los ejemplos).
         cx.activate(true);
     });
 }

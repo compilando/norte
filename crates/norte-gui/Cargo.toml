@@ -21,6 +21,11 @@ path = "src/main.rs"
 norte-core = { path = "../norte-core" }
 norte-proto = { path = "../norte-proto" }
 norte-theme = { path = "../norte-theme" }
+# `mask_terminal_hazards` = fuente ÚNICA de saneado de nombres para display
+# (regla 1: bytes no-UTF8 no rompen). `vpath_from_native` = cwd → VPath `file://`
+# igual que la TUI. Ambos por path (crates internos, no vía el alias del workspace).
+norte-encoding = { path = "../norte-encoding" }
+norte-vfs-local = { path = "../norte-vfs-local" }
 
 # Runtime async para el backend remoto (el render de GPUI corre en su propio
 # executor; el I/O del daemon va en un runtime tokio aparte — T4).
