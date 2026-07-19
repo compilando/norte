@@ -84,6 +84,13 @@ struct NorteGui {
     query: [String; 2],
     /// Último error de carga por pane (banner), o `None` si el listado está OK.
     errors: [Option<String>; 2],
+    /// Contador de generación por pane: cada `cd` (incluido el `begin_loading`)
+    /// lo incrementa y captura el valor. Un `fs.list` en vuelo lleva su
+    /// generación; al llegar solo se aplica si sigue vigente. Así un cd viejo
+    /// (A) que termina TARDE no pisa el listado de un cd nuevo (B) lanzado en el
+    /// mismo pane — robusto incluso ante A→B→A, que un simple compare de `dir`
+    /// no distingue (ver `generation_is_current`).
+    generation: [u64; 2],
     /// Tema cacheado UNA vez (parsea TOML; no es gratis por-frame).
     theme: Theme,
     /// Socket del daemon; cada `cd` abre una conexión fresca (ver
@@ -114,6 +121,7 @@ impl NorteGui {
                     focus: 0,
                     query: [String::new(), String::new()],
                     errors: [None, None],
+                    generation: [0, 0],
                     theme,
                     socket,
                     focus_handle,
@@ -137,6 +145,7 @@ impl NorteGui {
                         Some(format!("config inválida: {e}")),
                         Some(format!("config inválida: {e}")),
                     ],
+                    generation: [0, 0],
                     theme,
                     socket: PathBuf::new(),
                     focus_handle,
@@ -150,22 +159,46 @@ impl NorteGui {
     /// en el hilo de render (ordenado con `sort_entries`). Un error deja el pane
     /// vacío con banner, jamás panic.
     fn cd(&mut self, pane: usize, dir: VPath, cx: &mut Context<Self>) {
+        // Nueva generación para ESTE cd: invalida cualquier list en vuelo del
+        // pane (un resultado anterior llegará con generación vieja y se
+        // descartará en el apply).
+        self.generation[pane] = self.generation[pane].wrapping_add(1);
+        let generation = self.generation[pane];
+
         self.panes[pane].begin_loading(dir.clone());
         self.errors[pane] = None;
         self.query[pane].clear();
 
         let (tx, rx) = tokio::sync::oneshot::channel();
-        backend_task::spawn_list(self.socket.clone(), dir, pane, tx);
+        backend_task::spawn_list(self.socket.clone(), dir, pane, generation, tx);
 
         cx.spawn(async move |this, cx| {
             let result = rx.await;
             this.update(cx, |view, cx| {
-                match result {
-                    Ok(PaneListOutcome {
-                        pane,
-                        dir,
-                        outcome: Ok(entries),
-                    }) => {
+                let Ok(PaneListOutcome {
+                    pane,
+                    generation,
+                    dir,
+                    outcome,
+                }) = result
+                else {
+                    // El emisor se soltó sin enviar (hilo abortado): raro.
+                    return;
+                };
+                // GUARD de generación: si el pane ya está en un cd más nuevo,
+                // este resultado es stale y se DESCARTA (no pisa el listado
+                // vigente ni resetea cursor/filtro).
+                if !generation_is_current(view.generation[pane], generation) {
+                    if std::env::var_os("NORTE_GUI_DEBUG").is_some() {
+                        eprintln!(
+                            "[norte-gui] pane {pane}: resultado stale (gen {generation} != {}) descartado",
+                            view.generation[pane],
+                        );
+                    }
+                    return;
+                }
+                match outcome {
+                    Ok(entries) => {
                         let mut entries = entries;
                         norte_frontend::sort_entries(&mut entries);
                         view.panes[pane].set_listing(dir, entries);
@@ -179,17 +212,11 @@ impl NorteGui {
                             );
                         }
                     }
-                    Ok(PaneListOutcome {
-                        pane,
-                        dir,
-                        outcome: Err(msg),
-                    }) => {
+                    Err(msg) => {
                         // Limpia el estado de carga (dir vacío) + banner.
                         view.panes[pane].set_listing(dir, Vec::new());
                         view.errors[pane] = Some(msg);
                     }
-                    // El emisor se soltó sin enviar (hilo abortado): raro.
-                    Err(_) => {}
                 }
                 cx.notify();
             })
@@ -518,6 +545,16 @@ fn single_char(s: Option<&str>) -> Option<char> {
     }
 }
 
+/// ¿Sigue vigente el resultado de un `fs.list`? Solo si su generación coincide
+/// con la vigente del pane: un cd más nuevo ya incrementó el contador, dejando
+/// stale a cualquier list en vuelo anterior. Comparar la generación (y no el
+/// `dir`) es robusto ante A→B→A — dos cds distintos al MISMO dir tienen
+/// generaciones distintas, un dir-compare los confundiría.
+#[must_use]
+fn generation_is_current(current: u64, incoming: u64) -> bool {
+    current == incoming
+}
+
 /// Componente vertical del delta de scroll (líneas o píxeles → f32).
 fn scroll_y(delta: ScrollDelta) -> f32 {
     match delta {
@@ -587,4 +624,34 @@ fn main() {
 
         cx.activate(true);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::generation_is_current;
+
+    /// El guard de generación: dos cds sobre el mismo pane (A luego B) →
+    /// B incrementa la generación vigente; cuando A (viejo) llega tarde, su
+    /// generación ya no coincide y su resultado se descarta, aunque A→B→A
+    /// vuelva al mismo dir.
+    #[test]
+    fn resultado_stale_se_descarta_por_generacion() {
+        // gen vigente del pane tras dos cds: 2. El outcome del primer cd (gen 1)
+        // es stale.
+        let vigente = 2u64;
+        assert!(
+            !generation_is_current(vigente, 1),
+            "un resultado de gen 1 con el pane en gen 2 debe descartarse"
+        );
+        // El outcome del cd vigente (gen 2) sí se aplica.
+        assert!(
+            generation_is_current(vigente, 2),
+            "el resultado de la generación vigente se aplica"
+        );
+        // A→B→A: el segundo A es gen 3, no la 1 del primero; el primer A (gen 1)
+        // sigue stale aunque el dir coincida.
+        let tras_a_b_a = 3u64;
+        assert!(!generation_is_current(tras_a_b_a, 1));
+        assert!(generation_is_current(tras_a_b_a, 3));
+    }
 }

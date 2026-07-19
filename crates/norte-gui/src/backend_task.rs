@@ -26,13 +26,18 @@ use norte_proto::{Entry, VPath};
 /// el log del hilo de carga, no en la UI.
 pub type ListOutcome = Result<Vec<Entry>, String>;
 
-/// Resultado de un listado ETIQUETADO con el pane destino (0|1) y el `VPath`
-/// que se pidió. El índice deja que el hilo de render aplique el listado al
-/// pane correcto; el `VPath` deja anclar el resultado al directorio que se
-/// listó (un cd posterior no debe verse pisado por un resultado viejo).
+/// Resultado de un listado ETIQUETADO con el pane destino (0|1), la generación
+/// del cd que lo pidió y el `VPath` que se listó. El índice deja aplicar el
+/// listado al pane correcto; la `generation` deja al hilo de render DESCARTAR un
+/// resultado obsoleto (un cd más nuevo en el mismo pane ya avanzó el contador,
+/// ver `main::generation_is_current`) — robusto ante A→B→A, que un simple
+/// compare de `dir` no distingue; el `dir` solo se usa para pintar/`set_listing`
+/// una vez que el resultado se acepta.
 pub struct PaneListOutcome {
     /// Pane destino (0|1).
     pub pane: usize,
+    /// Generación del cd que originó este listado (guard anti-stale).
+    pub generation: u64,
     /// Directorio que se listó (el que estaba en `begin_loading`).
     pub dir: VPath,
     /// Entradas o error aplanado.
@@ -100,17 +105,25 @@ async fn connect_and_list(
 }
 
 /// Lanza un hilo con su propio runtime tokio que conecta al `socket`, lista
-/// `dir` y envía el resultado (etiquetado con `pane` y `dir`) por `tx`. No
-/// bloquea al llamante (el hilo de render de GPUI).
+/// `dir` y envía el resultado (etiquetado con `pane`, `generation` y `dir`) por
+/// `tx`. No bloquea al llamante (el hilo de render de GPUI).
 ///
 /// El runtime muere al terminar `block_on` (la bomba interna del `RemoteBackend`
 /// se aborta con él): el listado ya se drenó, no queda nada vivo. Si el daemon
 /// no está, `connect` devuelve `ProviderUnavailable` → mensaje de error, jamás
 /// panic.
+///
+/// DEUDA (spike, reviewer T4 MINOR — documentado, no implementado):
+/// - `new_multi_thread` es excesivo para un solo `list` secuencial:
+///   `new_current_thread` bastaría (el `RemoteBackend` no necesita más hilos).
+/// - El hilo NO es cancelable: un `cd` viejo lento sigue corriendo hasta drenar
+///   aunque su resultado ya se descarte por generación (ver `PaneListOutcome`).
+///   El guard evita el DAÑO (no pisa estado), no el trabajo desperdiciado.
 pub fn spawn_list(
     socket: PathBuf,
     dir: VPath,
     pane: usize,
+    generation: u64,
     tx: tokio::sync::oneshot::Sender<PaneListOutcome>,
 ) {
     std::thread::spawn(move || {
@@ -133,6 +146,11 @@ pub fn spawn_list(
             }
         }
         // El receptor pudo soltarse (ventana cerrada antes de tiempo): ignora.
-        let _ = tx.send(PaneListOutcome { pane, dir, outcome });
+        let _ = tx.send(PaneListOutcome {
+            pane,
+            generation,
+            dir,
+            outcome,
+        });
     });
 }
