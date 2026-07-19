@@ -1,7 +1,24 @@
 # GUI-a — navegación dual-pane (M5 hito 2, sub-proyecto 1) — diseño
 
 - Fecha: 2026-07-19
-- Estado: aprobado (oscar); pendiente de plan
+- Estado: **IMPLEMENTADO** (T1–T5, cerrado 2026-07-19; commits 651949e..T5).
+  Desviaciones (deuda anotada, no bloqueante):
+  - El `Pane` de la TUI NO se unificó sobre `PaneState`: la TUI mantiene su
+    copia de la mecánica cursor+quick (render) en vez de consumir el
+    `PaneState` compartido. Deuda **#82** (unificar). YAGNI: GUI-a solo pedía
+    que el saneado/sort/QuickSearch fueran de fuente única, ya cumplido.
+  - `RemoteBackend` NO compartido entre panes: cada `cd` reconecta al daemon
+    (runtime tokio por listado). Deuda T4 documentada en `backend_task.rs`;
+    el hilo del listado no es cancelable (se descarta por guard de generación,
+    no por cancelación real).
+  - El eco del quick query se enmascara con `is_terminal_hazard` en AMBOS
+    frontends (fix de review T5); la GUI mantiene su propio espejo `query`
+    de render, no consume `QuickSearch::query_display()` directamente.
+  - `norte-gui` EXCLUIDO del workspace (spike GPUI): fuera de `just ci`; se
+    verifica con `cargo build/test/clippy` dentro de su dir. Limitación de
+    verificación: sin automatización de input Wayland/XTEST, la navegación
+    real se probó a mano contra `norte daemon run`.
+- Estado previo: aprobado (oscar); pendiente de plan
 - Contexto: M5 hito 2 = MVP de la GUI (spec §283, criterio de salida M5:
   «GUI y TUI sobre la misma sesión simultáneamente» — ya demostrado read-only
   en el spike, ADR 0027 GO). El MVP es un MILESTONE, descompuesto en

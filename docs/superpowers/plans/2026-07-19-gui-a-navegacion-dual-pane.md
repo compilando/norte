@@ -141,8 +141,8 @@ Trabaja DENTRO de crates/norte-gui/ (excluido). NO hay tests de render (polític
 
 - [ ] **Step 1: reviewers** (el controller orquesta): rust-reviewer sobre el rango (norte-frontend nuevo + el refactor de la TUI + norte-gui) — foco en que la extracción no cambió comportamiento (re-exports correctos), reglas duras, PaneState limpio. encoding-auditor sobre display/sort/QuickSearch/PaneState movidos (tocan bytes de nombres — que el saneado/NFC no se degradó al mover). Aplicar hallazgos con TDD.
 - [ ] **Step 2: gate** — `just ci` EXIT=0 (norte-frontend + norte-tui en el workspace; norte-gui excluido, verificado aparte con `cargo build -p norte-gui`). OJO links rustdoc a items privados (varios cierres tropezaron ahí — revisa `[`x`]` antes).
-- [ ] **Step 3: cerrar spec** — estado → IMPLEMENTADO + desviaciones (p.ej. Pane de la TUI no unificado sobre PaneState, deuda anotada).
-- [ ] **Step 4: Commit + push** — `test: cierre GUI-a — reviewers + gate (GUI-a T5)` + push del rango.
+- [x] **Step 3: cerrar spec** — estado → IMPLEMENTADO + desviaciones (Pane de la TUI no unificado sobre PaneState = deuda #82, RemoteBackend no compartido, verificación Wayland/XTEST limitada).
+- [x] **Step 4: Commit + push** — `test: cierre GUI-a — reviewers + gate (GUI-a T5)` + push del rango.
 
 ---
 
