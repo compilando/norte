@@ -290,4 +290,49 @@ mod tests {
         assert!(p.quick_visible().is_none());
         assert_eq!(p.dir(), &VPath::parse("mem:///otro").unwrap());
     }
+
+    #[test]
+    fn page_se_mueve_con_clamp() {
+        let mut p = pane(&["a", "b", "c"]);
+        p.page_down(100); // clamp en len-1
+        assert_eq!(p.cursor(), 2);
+        p.page_up(100); // clamp en 0
+        assert_eq!(p.cursor(), 0);
+
+        let mut vacia = pane(&[]);
+        vacia.page_down(100); // no-op, sin panic
+        assert_eq!(vacia.cursor(), 0);
+        vacia.page_up(100);
+        assert_eq!(vacia.cursor(), 0);
+    }
+
+    #[test]
+    fn begin_loading_deja_estado_transitorio() {
+        let mut p = pane(&["a", "b", "c"]);
+        p.cursor_down();
+        p.begin_loading(VPath::parse("mem:///nuevo").unwrap());
+        assert!(p.entries().is_empty());
+        assert!(p.loading());
+        assert!(p.selected().is_none());
+        assert_eq!(p.dir(), &VPath::parse("mem:///nuevo").unwrap());
+
+        p.set_listing(
+            VPath::parse("mem:///nuevo").unwrap(),
+            vec![e("mem:///nuevo/x", EntryKind::File)],
+        );
+        assert!(!p.loading());
+        assert_eq!(p.cursor(), 0);
+        assert!(p.selected().is_some());
+    }
+
+    #[test]
+    fn end_en_lista_vacia_no_panica() {
+        let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), vec![]);
+        p.home();
+        p.end();
+        p.cursor_down();
+        p.cursor_up();
+        assert_eq!(p.cursor(), 0);
+        assert!(p.selected().is_none());
+    }
 }
