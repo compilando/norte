@@ -29,6 +29,8 @@ use gpui::{
 };
 use gpui_platform::application;
 
+mod theme_map;
+
 /// El *root view* de la ventana: una entity con estado mínimo (el texto a pintar)
 /// que GPUI vuelve a renderizar cuando cambia. Para el spike el estado es
 /// constante — un `SharedString` (string barato de clonar, el tipo de texto de
