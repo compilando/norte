@@ -4293,6 +4293,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "norte-frontend"
+version = "0.3.0-alpha.1"
+dependencies = [
+ "norte-encoding",
+ "norte-proto",
+ "norte-testkit",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "norte-i18n"
 version = "0.3.0-alpha.1"
 dependencies = [
@@ -4385,6 +4395,7 @@ dependencies = [
  "mlua",
  "norte-core",
  "norte-encoding",
+ "norte-frontend",
  "norte-i18n",
  "norte-proto",
  "norte-testkit",
