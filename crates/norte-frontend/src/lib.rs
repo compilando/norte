@@ -13,6 +13,7 @@
 #![warn(missing_docs)]
 
 mod display;
+pub mod nav;
 mod sort;
 
 pub use display::{display_name, path_display};
