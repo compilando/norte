@@ -26,6 +26,19 @@ use norte_proto::{Entry, VPath};
 /// el log del hilo de carga, no en la UI.
 pub type ListOutcome = Result<Vec<Entry>, String>;
 
+/// Resultado de un listado ETIQUETADO con el pane destino (0|1) y el `VPath`
+/// que se pidió. El índice deja que el hilo de render aplique el listado al
+/// pane correcto; el `VPath` deja anclar el resultado al directorio que se
+/// listó (un cd posterior no debe verse pisado por un resultado viejo).
+pub struct PaneListOutcome {
+    /// Pane destino (0|1).
+    pub pane: usize,
+    /// Directorio que se listó (el que estaba en `begin_loading`).
+    pub dir: VPath,
+    /// Entradas o error aplanado.
+    pub outcome: ListOutcome,
+}
+
 /// Config resuelta de entorno: a qué socket y qué dir listar.
 pub struct LoadConfig {
     /// Socket UDS del daemon.
@@ -63,11 +76,18 @@ impl LoadConfig {
     }
 }
 
-/// Conecta al daemon (sin autoarrancarlo) y lista `cfg.dir`. Async; corre sobre
-/// un runtime tokio (ver [`spawn_load`]).
-async fn connect_and_list(cfg: &LoadConfig) -> Result<Vec<Entry>, norte_proto::Error> {
+/// Conecta al daemon (sin autoarrancarlo) y lista `dir`. Reusable: cada cd la
+/// invoca de nuevo (conexión fresca por listado — el spike no comparte el
+/// `RemoteBackend` entre cds porque su bomba interna vive atada al runtime tokio
+/// que la creó, y GPUI corre en otro executor; reconectar es simple y correcto,
+/// compartir es optimización posterior). Async; corre sobre un runtime tokio
+/// (ver [`spawn_list`]).
+async fn connect_and_list(
+    socket: &std::path::Path,
+    dir: &VPath,
+) -> Result<Vec<Entry>, norte_proto::Error> {
     let remote = norte_core::backend::remote::RemoteBackend::connect(
-        cfg.socket.clone(),
+        socket.to_path_buf(),
         None, // exige daemon ya corriendo
         ClientInfo {
             name: "norte-gui".into(),
@@ -76,38 +96,43 @@ async fn connect_and_list(cfg: &LoadConfig) -> Result<Vec<Entry>, norte_proto::E
     )
     .await?;
     // `Backend::list` drena el stream paginado a un Vec completo.
-    Backend::Remote(remote).list(&cfg.dir).await
+    Backend::Remote(remote).list(dir).await
 }
 
-/// Lanza un hilo con su propio runtime tokio que conecta+lista y envía el
-/// resultado por `tx`. No bloquea al llamante (el hilo de render de GPUI).
+/// Lanza un hilo con su propio runtime tokio que conecta al `socket`, lista
+/// `dir` y envía el resultado (etiquetado con `pane` y `dir`) por `tx`. No
+/// bloquea al llamante (el hilo de render de GPUI).
 ///
 /// El runtime muere al terminar `block_on` (la bomba interna del `RemoteBackend`
 /// se aborta con él): el listado ya se drenó, no queda nada vivo. Si el daemon
 /// no está, `connect` devuelve `ProviderUnavailable` → mensaje de error, jamás
 /// panic.
-pub fn spawn_load(cfg: LoadConfig, tx: tokio::sync::oneshot::Sender<ListOutcome>) {
+pub fn spawn_list(
+    socket: PathBuf,
+    dir: VPath,
+    pane: usize,
+    tx: tokio::sync::oneshot::Sender<PaneListOutcome>,
+) {
     std::thread::spawn(move || {
         let outcome = match tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
         {
             Ok(rt) => rt
-                .block_on(connect_and_list(&cfg))
+                .block_on(connect_and_list(&socket, &dir))
                 .map_err(|e| format!("{e}")),
             Err(e) => Err(format!("no se pudo crear el runtime tokio: {e}")),
         };
         if std::env::var_os("NORTE_GUI_DEBUG").is_some() {
             match &outcome {
                 Ok(entries) => eprintln!(
-                    "[norte-gui] listado recibido del daemon: {} entradas de {}",
+                    "[norte-gui] pane {pane}: listado recibido del daemon: {} entradas de {dir}",
                     entries.len(),
-                    cfg.dir
                 ),
-                Err(e) => eprintln!("[norte-gui] carga falló: {e}"),
+                Err(e) => eprintln!("[norte-gui] pane {pane}: carga de {dir} falló: {e}"),
             }
         }
         // El receptor pudo soltarse (ventana cerrada antes de tiempo): ignora.
-        let _ = tx.send(outcome);
+        let _ = tx.send(PaneListOutcome { pane, dir, outcome });
     });
 }

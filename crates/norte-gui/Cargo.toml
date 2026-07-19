@@ -26,6 +26,10 @@ norte-theme = { path = "../norte-theme" }
 # igual que la TUI. Ambos por path (crates internos, no vía el alias del workspace).
 norte-encoding = { path = "../norte-encoding" }
 norte-vfs-local = { path = "../norte-vfs-local" }
+# Lógica de presentación compartida (GUI-a T1-T3): PaneState (cursor + quick
+# search), display_name/sort_entries. Por path (crate del workspace, pero este
+# binario está excluido → no puede usar el alias `.workspace`).
+norte-frontend = { path = "../norte-frontend" }
 
 # Runtime async para el backend remoto (el render de GPUI corre en su propio
 # executor; el I/O del daemon va en un runtime tokio aparte — T4).

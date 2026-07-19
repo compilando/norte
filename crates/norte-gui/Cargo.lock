@@ -5035,6 +5035,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "norte-frontend"
+version = "0.3.0-alpha.1"
+dependencies = [
+ "norte-encoding",
+ "norte-proto",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "norte-gui"
 version = "0.0.0"
 dependencies = [
@@ -5043,6 +5052,7 @@ dependencies = [
  "gpui_platform",
  "norte-core",
  "norte-encoding",
+ "norte-frontend",
  "norte-proto",
  "norte-theme",
  "norte-vfs-local",
