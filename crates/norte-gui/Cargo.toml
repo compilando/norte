@@ -53,3 +53,9 @@ gpui = { git = "https://github.com/zed-industries/zed", rev = "f14fea9bf3c93797d
 # backend real vive en `gpui_linux`, gateado por las features `wayland`/`x11` —
 # por eso las pedimos aquí (sin ellas no habría ningún backend que compilar/abrir).
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "f14fea9bf3c93797d5161f7440ed418655bc6c57", features = ["wayland", "x11"] }
+
+[dev-dependencies]
+# Corpus canónico de fixtures hostiles (`row_label` contra los 25 nombres,
+# review encoding GAP). Por path como el resto — este crate excluido no ve el
+# alias `.workspace`. Apache/MIT, sin GPU.
+norte-testkit = { path = "../norte-testkit" }

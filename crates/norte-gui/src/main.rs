@@ -25,16 +25,17 @@
 //! - **async → UI**: `cx.spawn` + `this.update` + `cx.notify()`, con un
 //!   `tokio::oneshot` que cruza desde el hilo tokio del `RemoteBackend` (ver
 //!   `backend_task.rs`).
+#![forbid(unsafe_code)]
 
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Bounds, Context, FocusHandle, IntoElement, KeyDownEvent,
-    MouseButton, MouseDownEvent, ParentElement, Render, ScrollDelta, ScrollWheelEvent,
-    SharedString, Styled, Window, WindowBounds, WindowOptions,
+    App, Bounds, Context, FocusHandle, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    ParentElement, Render, ScrollDelta, ScrollWheelEvent, SharedString, Styled, Window,
+    WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
 use gpui_platform::application;
 use std::path::PathBuf;
 
-use norte_frontend::{nav::Mode, PaneState};
+use norte_frontend::{PaneState, nav::Mode};
 use norte_proto::{Entry, EntryKind, Segment, VPath};
 use norte_theme::{FileKind, Role, Theme};
 
@@ -43,7 +44,7 @@ mod input;
 mod theme_map;
 
 use backend_task::PaneListOutcome;
-use input::{key_to_action, Action};
+use input::{Action, key_to_action};
 
 /// Badge local que prefija un nombre alterado en el display (regla 1 / spec §6:
 /// display siempre lossy y MARCADO). No hay `ui.rs` de la TUI aquí, así que la
@@ -467,15 +468,29 @@ impl NorteGui {
                 .children(rows),
         );
 
-        // Línea `/{query}` al pie si el quick search está activo.
+        // Línea `/{query}` al pie si el quick search está activo. La query la
+        // tecleó el usuario, pero con IME/paste puede llegar con bidi/invisibles
+        // crudos (review encoding BAJA): se sanea AL PINTAR, una sola vez, con
+        // el mismo criterio que `display_name` (`is_terminal_hazard`) — nunca
+        // se guarda saneada porque el filtro compara contra el nombre real.
         if pane.quick_visible().is_some() {
+            let query_display: String = self.query[i]
+                .chars()
+                .map(|c| {
+                    if norte_encoding::is_terminal_hazard(c) {
+                        '\u{FFFD}'
+                    } else {
+                        c
+                    }
+                })
+                .collect();
             col = col.child(
                 div()
                     .px(px(4.0))
                     .py(px(1.0))
                     .bg(rgb(HEADER_BG))
                     .text_color(rgb(QUICK_FG))
-                    .child(SharedString::from(format!("/{}", self.query[i]))),
+                    .child(SharedString::from(format!("/{query_display}"))),
             );
         }
 
@@ -503,17 +518,7 @@ impl NorteGui {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let bytes = entry.path.file_name().map_or(&b""[..], Segment::as_bytes);
-        let (name, hostile) = norte_frontend::display_name(bytes);
-        let label = format!(
-            "{}{}{}",
-            if hostile {
-                format!("{HOSTILE_BADGE} ")
-            } else {
-                String::new()
-            },
-            name,
-            kind_indicator(entry.kind),
-        );
+        let label = row_label(bytes, entry.kind);
         let color = entry_color(&self.theme, entry);
         let dir_target = (entry.kind == EntryKind::Dir).then(|| entry.path.clone());
 
@@ -561,6 +566,25 @@ fn scroll_y(delta: ScrollDelta) -> f32 {
         ScrollDelta::Pixels(p) => f32::from(p.y),
         ScrollDelta::Lines(p) => p.y,
     }
+}
+
+/// Etiqueta completa de una fila: badge hostil (si `display_name` marcó el
+/// nombre) + nombre saneado + indicador de tipo. Extraída como función PURA
+/// (sin GPUI) para poder testearla contra el corpus hostil de `norte-testkit`
+/// sin levantar ventana/GPU (review encoding GAP).
+#[must_use]
+fn row_label(bytes: &[u8], kind: EntryKind) -> String {
+    let (name, hostile) = norte_frontend::display_name(bytes);
+    format!(
+        "{}{}{}",
+        if hostile {
+            format!("{HOSTILE_BADGE} ")
+        } else {
+            String::new()
+        },
+        name,
+        kind_indicator(kind),
+    )
 }
 
 /// Indicador de tipo: «/» dir, «@» symlink, nada para archivo, «?» para lo demás.
@@ -628,7 +652,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::generation_is_current;
+    use super::{generation_is_current, row_label};
+    use norte_proto::EntryKind;
 
     /// El guard de generación: dos cds sobre el mismo pane (A luego B) →
     /// B incrementa la generación vigente; cuando A (viejo) llega tarde, su
@@ -653,5 +678,38 @@ mod tests {
         let tras_a_b_a = 3u64;
         assert!(!generation_is_current(tras_a_b_a, 1));
         assert!(generation_is_current(tras_a_b_a, 3));
+    }
+
+    /// `row_label` sobre TODO el corpus hostil de `norte-testkit`: la etiqueta
+    /// pintada jamás lleva un carácter de `is_terminal_hazard` crudo (bidi,
+    /// control, invisible) — el saneado de `display_name` cubre la fila
+    /// entera, no solo el nombre suelto (review encoding GAP, sin GPU).
+    #[test]
+    fn row_label_nunca_deja_hazards_crudos_del_corpus_hostil() {
+        for fixture in norte_testkit::corpus::hostile_names() {
+            let label = row_label(&fixture.bytes, EntryKind::File);
+            assert!(
+                !label.chars().any(norte_encoding::is_terminal_hazard),
+                "{}: row_label dejó un hazard crudo en {label:?}",
+                fixture.id,
+            );
+        }
+    }
+
+    /// El badge hostil (`⚠`) aparece cuando `display_name` marca el nombre
+    /// como alterado — no se pierde la señal de "esto no es exactamente el
+    /// byte original" al extraer `row_label`.
+    #[test]
+    fn row_label_badge_cuando_display_name_es_hostil() {
+        for fixture in norte_testkit::corpus::hostile_names() {
+            let (_, hostile) = norte_frontend::display_name(&fixture.bytes);
+            let label = row_label(&fixture.bytes, EntryKind::File);
+            assert_eq!(
+                label.starts_with(super::HOSTILE_BADGE),
+                hostile,
+                "{}: badge debe aparecer sii display_name es hostil (label={label:?})",
+                fixture.id,
+            );
+        }
     }
 }

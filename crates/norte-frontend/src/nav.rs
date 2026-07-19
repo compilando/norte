@@ -190,10 +190,24 @@ impl QuickSearch {
     }
 
     /// Query para pintar en pantalla (lossy — el usuario la tecleó, no
-    /// forma parte de la identidad de ninguna entrada).
+    /// forma parte de la identidad de ninguna entrada). Enmascarada con
+    /// [`norte_encoding::is_terminal_hazard`] (review encoding BAJA): sin
+    /// bracketed paste un IME/paste hostil llega como stream de `push_char`
+    /// y pintaría bidi/invisibles crudos en el borde — el filtrado en sí
+    /// (`matches`/`fold`) sigue operando sobre `self.query` SIN sanear, solo
+    /// el texto que se pinta pasa por aquí.
     #[must_use]
     pub fn query_display(&self) -> String {
-        String::from_utf8_lossy(&self.query).into_owned()
+        String::from_utf8_lossy(&self.query)
+            .chars()
+            .map(|c| {
+                if norte_encoding::is_terminal_hazard(c) {
+                    '\u{FFFD}'
+                } else {
+                    c
+                }
+            })
+            .collect()
     }
 
     /// Modo activo (Filter o Jump).
@@ -323,6 +337,23 @@ mod tests {
             q.selected_entry_index().map(|i| entries[i].path.clone()),
             prev,
             "la selección sigue en el MISMO path tras el resort, no en el mismo índice"
+        );
+    }
+
+    #[test]
+    fn query_display_enmascara_hazards() {
+        // review encoding BAJA: un RLO (U+202E) tecleado/pegado no debe salir
+        // crudo en el eco `/{query}` — se empuja char a char, como llegaría de
+        // un stream de input real (sin bracketed paste).
+        let entries = vec![e("mem:///normal.txt")];
+        let mut q = QuickSearch::new(Mode::Filter, &entries);
+        for c in "a\u{202E}b".chars() {
+            q.push_char(c, &entries);
+        }
+        let display = q.query_display();
+        assert!(
+            !display.chars().any(norte_encoding::is_terminal_hazard),
+            "query_display dejó un hazard crudo: {display:?}"
         );
     }
 }
