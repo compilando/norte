@@ -504,28 +504,19 @@ impl NorteGui {
         }
         // Éxito/cancelación/fallo-no-conflicto: relista los dirs afectados
         // (read-after-write).
-        let affected: Vec<VPath> = match &op {
-            // Copy: solo cambia el destino; el origen queda intacto (no pises
-            // su cursor/marcas relistándolo).
-            PendingOp::Transfer {
-                kind: TransferKind::Copy,
-                to,
-                ..
-            } => to.parent().into_iter().collect(),
-            // Move: desaparece del origen y aparece en el destino.
-            PendingOp::Transfer { from, to, .. } => {
-                [from.parent(), to.parent()].into_iter().flatten().collect()
-            }
-            PendingOp::Delete { path, .. } => path.parent().into_iter().collect(),
-        };
-        self.relist_dirs(&affected, cx);
+        self.relist_dirs(&affected_dirs(&op), cx);
     }
 
     /// Relista cualquier pane cuyo `dir` esté en `dirs` (read-after-write).
+    ///
+    /// #84: si el pane YA está cargando ese mismo dir (un relist para él
+    /// acaba de arrancar), se SALTA — un burst de N tasks terminales sobre
+    /// el mismo dir (p. ej. N marcas copiadas de golpe) coalesce a UN solo
+    /// `fs.list` en vez de N redundantes.
     fn relist_dirs(&mut self, dirs: &[VPath], cx: &mut Context<Self>) {
         for pane in 0..2 {
             let cur = self.panes[pane].dir().clone();
-            if dirs.contains(&cur) {
+            if dirs.contains(&cur) && !self.panes[pane].loading() {
                 self.cd(pane, cur, cx);
             }
         }
@@ -564,17 +555,23 @@ impl NorteGui {
     }
 
     /// `task.cancel`: cancela la primera task NO terminal (sin navegación de
-    /// franja todavía — deuda). En la práctica hay una op activa a la vez.
-    /// Extraído del viejo brazo `Action::CancelTask` de `on_key` (GUI-c T3).
+    /// franja todavía — deuda #85/T7, F9 se queda en "primera cancelable").
+    /// En la práctica hay una op activa a la vez. Extraído del viejo brazo
+    /// `Action::CancelTask` de `on_key` (GUI-c T3); la selección en sí vive
+    /// en [`first_cancelable`] (pura, #85).
     fn cancel_first_task(&mut self) {
-        let target = self.task_order.iter().copied().find(|id| {
-            self.task_progress
-                .get(id)
-                .is_some_and(|p| !p.state.is_terminal())
-        });
-        if let Some(id) = target {
+        if let Some(id) = first_cancelable(&self.task_order, &self.task_progress) {
             let _ = self.cmds.send(SessionCmd::Cancel(id));
         }
+    }
+
+    /// `task.dismiss` (#83): quita de la franja TODAS las tasks TERMINALES
+    /// (`state.is_terminal()`). Las `Completed` ya se autopodan al llegar
+    /// (ver `apply_event`); esto cubre `Failed`/`Cancelled`, que hasta ahora
+    /// se acumulaban en la franja para siempre. Delega la mutación pura a
+    /// [`retain_active`] (testeable sin GPUI).
+    fn dismiss_terminal_tasks(&mut self) {
+        retain_active(&mut self.task_order, &mut self.task_progress);
     }
 
     /// Ejecuta un comando del keymap (contexto Browse) sobre el estado.
@@ -602,6 +599,7 @@ impl NorteGui {
             "pane.move" => self.open_transfer_modal(TransferKind::Move),
             "pane.delete" => self.open_delete_modal(),
             "task.cancel" => self.cancel_first_task(),
+            "task.dismiss" => self.dismiss_terminal_tasks(),
             "pane.view" => self.open_viewer(cx),
             _ => {} // comando desconocido en runtime: no-op (el keymap ya validó)
         }
@@ -1299,6 +1297,54 @@ fn conflict_kind_of(state: &norte_proto::TaskState) -> Option<norte_proto::Confl
     }
 }
 
+/// Directorios afectados por una `PendingOp` YA terminada, para el
+/// read-after-write de `on_task_terminal` (#85, extraída del brazo que vivía
+/// inline ahí): `Copy` solo el destino (el origen queda intacto — no pisar
+/// su cursor/marcas relistándolo sin necesidad); `Move` ambos (desaparece
+/// del origen, aparece en el destino); `Delete` el padre del path borrado.
+/// Filtra los `None` (una raíz sin padre no relista nada). PURA (sin GPUI):
+/// testeable sin levantar ventana.
+#[must_use]
+fn affected_dirs(op: &PendingOp) -> Vec<VPath> {
+    match op {
+        PendingOp::Transfer {
+            kind: TransferKind::Copy,
+            to,
+            ..
+        } => to.parent().into_iter().collect(),
+        PendingOp::Transfer { from, to, .. } => {
+            [from.parent(), to.parent()].into_iter().flatten().collect()
+        }
+        PendingOp::Delete { path, .. } => path.parent().into_iter().collect(),
+    }
+}
+
+/// La primera task, en orden de llegada de `order`, que NO está en estado
+/// terminal (#85, extraída de `cancel_first_task`, `task.cancel`/F9): sin
+/// navegación de franja todavía (deuda T7) — en la práctica hay una op
+/// activa a la vez. PURA (sin GPUI): testeable sin levantar ventana.
+#[must_use]
+fn first_cancelable(
+    order: &[norte_proto::TaskId],
+    progress: &std::collections::HashMap<norte_proto::TaskId, norte_proto::TaskProgress>,
+) -> Option<norte_proto::TaskId> {
+    order
+        .iter()
+        .copied()
+        .find(|id| progress.get(id).is_some_and(|p| !p.state.is_terminal()))
+}
+
+/// Retiene solo las tasks NO terminales en `order` y `progress`, mutando
+/// ambos in place (#83, `task.dismiss`): usada por `dismiss_terminal_tasks`.
+/// PURA (sin GPUI): testeable sin levantar ventana.
+fn retain_active(
+    order: &mut Vec<norte_proto::TaskId>,
+    progress: &mut std::collections::HashMap<norte_proto::TaskId, norte_proto::TaskProgress>,
+) {
+    order.retain(|id| progress.get(id).is_some_and(|p| !p.state.is_terminal()));
+    progress.retain(|_, p| !p.state.is_terminal());
+}
+
 /// ¿Sigue vigente el resultado de un `fs.list`? Solo si su generación coincide
 /// con la vigente del pane: un cd más nuevo ya incrementó el contador, dejando
 /// stale a cualquier list en vuelo anterior. Comparar la generación (y no el
@@ -1660,7 +1706,10 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_viewer_command, generation_is_current, row_label, viewer_status};
+    use super::{
+        affected_dirs, apply_viewer_command, first_cancelable, generation_is_current,
+        retain_active, row_label, viewer_status,
+    };
     use norte_frontend::viewer::Viewer;
     use norte_proto::{EntryKind, VPath};
 
@@ -1940,5 +1989,120 @@ mod tests {
         let scroll_antes = v.scroll;
         assert!(apply_viewer_command(&mut v, "comando.inventado"));
         assert_eq!(v.scroll, scroll_antes);
+    }
+
+    /// `affected_dirs` (#85): un `Copy` solo relista el DESTINO — el origen
+    /// queda intacto, no hace falta pisar su cursor/marcas.
+    #[test]
+    fn affected_dirs_copy_solo_destino() {
+        use super::{PendingOp, TransferKind};
+        use norte_core::TransferOptions;
+        let op = PendingOp::Transfer {
+            kind: TransferKind::Copy,
+            from: VPath::parse("mem:///a/x.txt").unwrap(),
+            to: VPath::parse("mem:///b/x.txt").unwrap(),
+            opts: TransferOptions::default(),
+        };
+        assert_eq!(affected_dirs(&op), vec![VPath::parse("mem:///b").unwrap()]);
+    }
+
+    /// `affected_dirs`: un `Move` relista AMBOS — desaparece del origen,
+    /// aparece en el destino.
+    #[test]
+    fn affected_dirs_move_ambos() {
+        use super::{PendingOp, TransferKind};
+        use norte_core::TransferOptions;
+        let op = PendingOp::Transfer {
+            kind: TransferKind::Move,
+            from: VPath::parse("mem:///a/x.txt").unwrap(),
+            to: VPath::parse("mem:///b/x.txt").unwrap(),
+            opts: TransferOptions::default(),
+        };
+        assert_eq!(
+            affected_dirs(&op),
+            vec![
+                VPath::parse("mem:///a").unwrap(),
+                VPath::parse("mem:///b").unwrap(),
+            ]
+        );
+    }
+
+    /// `affected_dirs`: un `Delete` relista el PADRE del path borrado.
+    #[test]
+    fn affected_dirs_delete_padre() {
+        use super::PendingOp;
+        use norte_proto::DeleteMode;
+        let op = PendingOp::Delete {
+            path: VPath::parse("mem:///a/x.txt").unwrap(),
+            mode: DeleteMode::Trash,
+        };
+        assert_eq!(affected_dirs(&op), vec![VPath::parse("mem:///a").unwrap()]);
+    }
+
+    /// Construye un `TaskProgress` mínimo con `id`/`state` dados (helper de
+    /// los tests de `first_cancelable`/`retain_active`, #85/#83).
+    fn task_progress_with(id: u64, state: norte_proto::TaskState) -> norte_proto::TaskProgress {
+        norte_proto::TaskProgress {
+            task_id: norte_proto::TaskId::new(id),
+            kind: norte_proto::TaskKind::Copy,
+            state,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: None,
+            current: None,
+        }
+    }
+
+    /// `first_cancelable` (#85): salta las terminales en orden de llegada y
+    /// toma la primera task activa.
+    #[test]
+    fn first_cancelable_salta_terminales_y_toma_la_primera_activa() {
+        use norte_proto::{TaskId, TaskState};
+        let mut progress = std::collections::HashMap::new();
+        progress.insert(TaskId::new(1), task_progress_with(1, TaskState::Completed));
+        progress.insert(TaskId::new(2), task_progress_with(2, TaskState::Running));
+        progress.insert(TaskId::new(3), task_progress_with(3, TaskState::Running));
+        let order = vec![TaskId::new(1), TaskId::new(2), TaskId::new(3)];
+        assert_eq!(
+            first_cancelable(&order, &progress),
+            Some(TaskId::new(2)),
+            "salta la 1 (terminal) y toma la 2 (primera activa en orden)"
+        );
+    }
+
+    /// `first_cancelable`: `None` si todas las tasks de `order` están en
+    /// estado terminal (nada que cancelar).
+    #[test]
+    fn first_cancelable_none_si_todas_terminales() {
+        use norte_proto::{TaskId, TaskState};
+        let mut progress = std::collections::HashMap::new();
+        progress.insert(TaskId::new(1), task_progress_with(1, TaskState::Completed));
+        progress.insert(TaskId::new(2), task_progress_with(2, TaskState::Cancelled));
+        let order = vec![TaskId::new(1), TaskId::new(2)];
+        assert_eq!(first_cancelable(&order, &progress), None);
+    }
+
+    /// `retain_active` (#83, `task.dismiss`): quita de `order`/`progress`
+    /// TODAS las tasks terminales (Completed/Cancelled/Failed), conserva las
+    /// activas (Running) en ambos.
+    #[test]
+    fn retain_active_quita_terminales_conserva_activas() {
+        use norte_proto::{TaskId, TaskState};
+        let mut progress = std::collections::HashMap::new();
+        progress.insert(TaskId::new(1), task_progress_with(1, TaskState::Completed));
+        progress.insert(TaskId::new(2), task_progress_with(2, TaskState::Running));
+        progress.insert(TaskId::new(3), task_progress_with(3, TaskState::Cancelled));
+        let mut order = vec![TaskId::new(1), TaskId::new(2), TaskId::new(3)];
+
+        retain_active(&mut order, &mut progress);
+
+        assert_eq!(
+            order,
+            vec![TaskId::new(2)],
+            "solo la task activa queda en order"
+        );
+        assert_eq!(progress.len(), 1, "solo la task activa queda en progress");
+        assert!(progress.contains_key(&TaskId::new(2)));
     }
 }
