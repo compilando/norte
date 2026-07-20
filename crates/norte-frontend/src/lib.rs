@@ -17,6 +17,7 @@ pub mod keymap;
 pub mod nav;
 mod pane;
 mod sort;
+pub mod viewer;
 
 pub use display::{display_name, path_display};
 pub use pane::PaneState;
