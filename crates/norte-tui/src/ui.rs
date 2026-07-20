@@ -371,7 +371,7 @@ fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer, app: &App)
     );
     let text = match &app.message {
         Some(msg) => format!(" {msg}"),
-        None => format!(" {}  {pos}", viewer.status()),
+        None => format!(" {}  {pos}", crate::viewer::status(viewer)),
     };
     frame.render_widget(
         Paragraph::new(text).style(app.theme.role(Role::StatusBar)),
