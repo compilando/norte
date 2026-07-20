@@ -53,15 +53,25 @@ fn orthodox() -> KeymapFile {
 /// Directorios de capa en precedencia ASCENDENTE (sistema → usuario → proyecto),
 /// como la TUI: `/etc/norte` (o `%ProgramData%`), config dir XDG, `./.norte`.
 /// `NORTE_CONFIG_DIR` fuerza la capa de usuario (tests/headless).
-fn layer_dirs() -> Vec<(PathBuf, bool)> {
+/// El dir de config del USUARIO desde el entorno: `NORTE_CONFIG_DIR` →
+/// `$XDG_CONFIG_HOME/norte` → `~/.config/norte`. Aislado para que los tests
+/// inyecten el dir directo (`build_effectives_from`) sin mutar el entorno
+/// global — en edición 2024 `env::set_var` es `unsafe` y el crate es
+/// `forbid(unsafe_code)`.
+fn env_user_dir() -> Option<PathBuf> {
+    std::env::var_os("NORTE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(|x| PathBuf::from(x).join("norte")))
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/norte")))
+}
+
+/// Dirs de capa en precedencia ASCENDENTE dado el dir de usuario resuelto:
+/// `/etc/norte` (sistema) → `user` → `./.norte` (proyecto).
+fn layer_dirs(user: Option<PathBuf>) -> Vec<(PathBuf, bool)> {
     // (dir, es_proyecto)
     let mut v = Vec::new();
     #[cfg(unix)]
     v.push((PathBuf::from("/etc/norte"), false));
-    let user = std::env::var_os("NORTE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(|x| PathBuf::from(x).join("norte")))
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/norte")));
     if let Some(u) = user {
         v.push((u, false));
     }
@@ -80,9 +90,21 @@ fn all_commands() -> Vec<&'static str> {
 /// # Errors
 /// El primer `KeymapError` de una capa.
 pub fn build_effectives() -> Result<(Effective, Effective), KeymapError> {
+    build_effectives_from(env_user_dir())
+}
+
+/// Igual que [`build_effectives`] pero con el dir de config del usuario EXPLÍCITO
+/// (inyección: `main` pasa el del entorno vía [`build_effectives`]; los tests
+/// pasan un scratch dir sin mutar el entorno).
+///
+/// # Errors
+/// El primer `KeymapError` de una capa.
+pub fn build_effectives_from(
+    user_dir: Option<PathBuf>,
+) -> Result<(Effective, Effective), KeymapError> {
     let preset = orthodox();
     let mut layers: Vec<KeymapFile> = Vec::new();
-    for (dir, is_project) in layer_dirs() {
+    for (dir, is_project) in layer_dirs(user_dir) {
         let path = dir.join("keymap.toml");
         if let Ok(src) = std::fs::read_to_string(&path) {
             let mut kf = parse_keymap(&src)?;
@@ -257,10 +279,8 @@ prepend_keymap = [{ on = ["j"], run = "cursor.down" }, { on = ["k"], run = "curs
 "#,
         )
         .unwrap();
-        // SAFETY/concurrencia: proceso-por-test de nextest (ver `scratch_dir`).
-        std::env::set_var("NORTE_CONFIG_DIR", &dir);
-        let (eff, _viewer) = build_effectives().expect("capa válida: carga sin error");
-        std::env::remove_var("NORTE_CONFIG_DIR");
+        let (eff, _viewer) =
+            build_effectives_from(Some(dir.clone())).expect("capa válida: carga sin error");
 
         let mut r = norte_frontend::keymap::Resolver::new(eff);
         assert_eq!(
@@ -287,9 +307,7 @@ prepend_keymap = [{ on = ["z"], run = "comando.inventado" }]
 "#,
         )
         .unwrap();
-        std::env::set_var("NORTE_CONFIG_DIR", &dir);
-        let result = build_effectives();
-        std::env::remove_var("NORTE_CONFIG_DIR");
+        let result = build_effectives_from(Some(dir.clone()));
         assert!(
             matches!(result, Err(KeymapError::UnknownCommand { .. })),
             "esperaba UnknownCommand, fue {result:?}"
@@ -311,9 +329,8 @@ prepend_keymap = [{ on = ["z"], run = "lua:foo" }]
 "#,
         )
         .unwrap();
-        std::env::set_var("NORTE_CONFIG_DIR", &dir);
-        let (eff, _viewer) = build_effectives().expect("lua: con nombre válido carga");
-        std::env::remove_var("NORTE_CONFIG_DIR");
+        let (eff, _viewer) =
+            build_effectives_from(Some(dir.clone())).expect("lua: con nombre válido carga");
 
         let mut r = norte_frontend::keymap::Resolver::new(eff);
         assert_eq!(

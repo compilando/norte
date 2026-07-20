@@ -235,18 +235,18 @@ async fn open_viewer(
 ) {
     // `Err` (preview falló) o `Ok` sin previewer aplicable: cae a la vista
     // cruda igual, sin distinguir el motivo aquí.
-    if let Ok(res) = backend.plugin_preview(&path).await {
-        if let Some(p) = res.preview {
-            let _ = tx.send(SessionEvent::ViewerOpened {
-                path,
-                content: ViewerContent::Plugin {
-                    plugin_name: p.plugin_name,
-                    output: p.output,
-                },
-                generation,
-            });
-            return;
-        }
+    if let Ok(res) = backend.plugin_preview(&path).await
+        && let Some(p) = res.preview
+    {
+        let _ = tx.send(SessionEvent::ViewerOpened {
+            path,
+            content: ViewerContent::Plugin {
+                plugin_name: p.plugin_name,
+                output: p.output,
+            },
+            generation,
+        });
+        return;
     }
     let budget = norte_proto::methods::FS_READ_MAX_CHUNK;
     match backend

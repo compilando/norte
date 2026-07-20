@@ -674,15 +674,15 @@ impl NorteGui {
     /// estado «abriendo visor…» del render mientras llega la respuesta.
     fn open_viewer(&mut self, _cx: &mut Context<Self>) {
         let f = self.focus;
-        if let Some(e) = self.panes[f].selected() {
-            if e.kind == EntryKind::File {
-                self.viewer_gen = self.viewer_gen.wrapping_add(1);
-                self.viewer_loading = true;
-                let _ = self.cmds.send(SessionCmd::OpenViewer {
-                    path: e.path.clone(),
-                    generation: self.viewer_gen,
-                });
-            }
+        if let Some(e) = self.panes[f].selected()
+            && e.kind == EntryKind::File
+        {
+            self.viewer_gen = self.viewer_gen.wrapping_add(1);
+            self.viewer_loading = true;
+            let _ = self.cmds.send(SessionCmd::OpenViewer {
+                path: e.path.clone(),
+                generation: self.viewer_gen,
+            });
         }
     }
 
@@ -771,13 +771,13 @@ impl NorteGui {
     fn maybe_open_quick(&mut self, ks: &gpui::Keystroke) {
         let f = self.focus;
         let ch = single_char(ks.key_char.as_deref()).or_else(|| single_char(Some(&ks.key)));
-        if let Some(c) = ch {
-            if c.is_alphanumeric() {
-                self.panes[f].quick_start(Mode::Filter);
-                self.query[f].clear();
-                self.panes[f].quick_char(c);
-                self.query[f].push(c);
-            }
+        if let Some(c) = ch
+            && c.is_alphanumeric()
+        {
+            self.panes[f].quick_start(Mode::Filter);
+            self.query[f].clear();
+            self.panes[f].quick_char(c);
+            self.query[f].push(c);
         }
     }
 
@@ -968,10 +968,10 @@ impl NorteGui {
         self.panes[pane].home();
         self.panes[pane].page_down(idx);
         self.follow_cursor(pane);
-        if click_count >= 2 {
-            if let Some(dir) = dir_target {
-                self.cd(pane, dir, cx);
-            }
+        if click_count >= 2
+            && let Some(dir) = dir_target
+        {
+            self.cd(pane, dir, cx);
         }
         cx.notify();
     }
@@ -1189,7 +1189,11 @@ impl NorteGui {
         highlighted: bool,
         marked: bool,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+        // ed. 2024: RPIT captura TODOS los lifetimes en scope; `render_row` NO
+        // retiene préstamos (clona nombre/color, el listener es 'static), así
+        // que acota la captura a vacío para no atrapar el `&entry` (que en el
+        // processor de `uniform_list` es un clon local que escaparía).
+    ) -> impl IntoElement + use<> {
         let bytes = entry.path.file_name().map_or(&b""[..], Segment::as_bytes);
         let mut label = row_label(bytes, entry.kind);
         if marked {
