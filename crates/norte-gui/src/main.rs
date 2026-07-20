@@ -183,10 +183,16 @@ impl NorteGui {
 
         let ((browse_eff, viewer_eff), keymap_error) = match keymap::build_effectives() {
             Ok(pair) => (pair, None),
-            Err(e) => (
-                keymap::build_effectives_preset_only(),
-                Some(format!("keymap: {e}")),
-            ),
+            Err(e) => {
+                let error = e.to_string();
+                (
+                    keymap::build_effectives_preset_only(),
+                    Some(norte_i18n::ta(
+                        "gui-banner-keymap-error",
+                        &[("error", error.as_str())],
+                    )),
+                )
+            }
         };
         let resolver = norte_frontend::keymap::Resolver::new(browse_eff);
         let viewer_resolver = norte_frontend::keymap::Resolver::new(viewer_eff);
@@ -248,10 +254,14 @@ impl NorteGui {
                     ],
                     focus: 0,
                     query: [String::new(), String::new()],
-                    errors: [
-                        Some(format!("config inválida: {e}")),
-                        Some(format!("config inválida: {e}")),
-                    ],
+                    errors: {
+                        let error = e.to_string();
+                        let msg = norte_i18n::ta(
+                            "gui-banner-config-invalid",
+                            &[("error", error.as_str())],
+                        );
+                        [Some(msg.clone()), Some(msg)]
+                    },
                     generation: [0, 0],
                     relist_pending: [false, false],
                     theme,
@@ -370,8 +380,14 @@ impl NorteGui {
             }
             SessionEvent::SubmitFailed { op, error } => {
                 // Rechazo inmediato: banner en el pane activo (los conflictos
-                // reales llegan por Task terminal Failed, ver abajo).
-                self.errors[self.focus] = Some(format!("operación rechazada: {error}"));
+                // reales llegan por Task terminal Failed, ver abajo). El
+                // `Display` del `Error` categórico es seguro de interpolar
+                // (taxonomía cerrada, sin bytes crudos — auditado en GUI-b).
+                let error = error.to_string();
+                self.errors[self.focus] = Some(norte_i18n::ta(
+                    "gui-banner-op-rejected",
+                    &[("error", error.as_str())],
+                ));
                 let _ = op; // la op no se reintenta automáticamente.
             }
             SessionEvent::Task(p) => {
@@ -433,7 +449,10 @@ impl NorteGui {
                 } else {
                     name
                 };
-                self.errors[self.focus] = Some(format!("visor {name}: {error}"));
+                self.errors[self.focus] = Some(norte_i18n::ta(
+                    "gui-banner-viewer-error",
+                    &[("name", name.as_str()), ("error", error.as_str())],
+                ));
             }
             SessionEvent::ConnectFailed(msg) => {
                 // Sin esto `loading` queda clavado en `true` (nunca llega un
@@ -1027,19 +1046,26 @@ impl NorteGui {
 
         // Estado transitorio: cargando / error / vacío.
         if pane.loading() {
-            col = col.child(div().px(px(4.0)).child(SharedString::from("cargando…")));
+            col = col.child(
+                div()
+                    .px(px(4.0))
+                    .child(SharedString::from(norte_i18n::t("gui-loading"))),
+            );
         } else if let Some(err) = &self.errors[i] {
             col = col.child(
                 div()
                     .px(px(4.0))
                     .text_color(rgb(ERR_FG))
-                    .child(SharedString::from(format!("error: {err}"))),
+                    .child(SharedString::from(norte_i18n::ta(
+                        "gui-banner-error",
+                        &[("error", err.as_str())],
+                    ))),
             );
         } else if pane.entries().is_empty() {
             col = col.child(
                 div()
                     .px(px(4.0))
-                    .child(SharedString::from("(directorio vacío)")),
+                    .child(SharedString::from(norte_i18n::t("gui-dir-empty"))),
             );
         }
 
@@ -1140,7 +1166,7 @@ impl NorteGui {
             .px(px(4.0))
             .py(px(2.0));
         if self.task_order.is_empty() {
-            return strip.child(SharedString::from("(sin tasks)"));
+            return strip.child(SharedString::from(norte_i18n::t("gui-tasks-empty")));
         }
         for id in self.task_order.iter() {
             let Some(p) = self.task_progress.get(id) else {
@@ -1176,7 +1202,13 @@ impl NorteGui {
             path_txt
         };
         if let Some(plugin) = v.preview_plugin() {
-            header.push_str(&format!("  via {plugin}"));
+            // Reusa la clave de la TUI (`viewer-plugin-preview` = "via { $plugin
+            // }"): mismo indicador «via <plugin>», ya localizado.
+            header.push_str("  ");
+            header.push_str(&norte_i18n::ta(
+                "viewer-plugin-preview",
+                &[("plugin", plugin)],
+            ));
         }
         let status = viewer_status(v);
 
@@ -1237,11 +1269,11 @@ impl NorteGui {
     /// tocar bytes de usuario aquí), más el pie de teclas fijo por variante.
     fn render_modal(&self, m: &Modal) -> impl IntoElement {
         let lines = modal_lines(m);
-        let footer = match m {
-            Modal::ConfirmTransfer { .. } => "y confirmar   n/Esc cancelar",
-            Modal::ConfirmDelete { .. } => "y confirmar   p alternar permanente   n/Esc cancelar",
-            Modal::ConflictResolve { .. } => "o sobrescribir   s saltar   c/Esc cancelar",
-        };
+        let footer = norte_i18n::t(match m {
+            Modal::ConfirmTransfer { .. } => "gui-modal-footer-transfer",
+            Modal::ConfirmDelete { .. } => "gui-modal-footer-delete",
+            Modal::ConflictResolve { .. } => "gui-modal-footer-conflict",
+        });
         // La línea de modo (índice 1 en ConfirmDelete) se alerta en rojo si es
         // borrado PERMANENTE.
         let alert_line = matches!(
@@ -1416,32 +1448,37 @@ fn kind_indicator(kind: EntryKind) -> &'static str {
     }
 }
 
-/// Línea de una task para la franja: `[copy] 42% running X`. `X` = la entrada
-/// en curso saneada con `display_name` (jamás bytes crudos). PURA (sin GPUI).
+/// Línea de una task para la franja: `[copy] 42% running X`. `kind`/`state`
+/// van por Fluent (GUI-e T1, `gui-task-kind-*`/`gui-task-state-*`); `X` = la
+/// entrada en curso saneada con `display_name` (jamás bytes crudos). PURA
+/// (sin GPUI).
 #[must_use]
 fn task_line(p: &norte_proto::TaskProgress) -> String {
+    use norte_i18n::t;
     use norte_proto::{TaskKind, TaskState};
-    let kind = match p.kind {
-        TaskKind::Copy => "copy",
-        TaskKind::Move => "move",
-        TaskKind::Delete => "delete",
-        TaskKind::Undo => "undo",
-        TaskKind::Search => "search",
-        TaskKind::Unknown => "task",
-    };
+    let kind = t(match p.kind {
+        TaskKind::Copy => "gui-task-kind-copy",
+        TaskKind::Move => "gui-task-kind-move",
+        TaskKind::Delete => "gui-task-kind-delete",
+        TaskKind::Undo => "gui-task-kind-undo",
+        TaskKind::Search => "gui-task-kind-search",
+        TaskKind::Unknown => "gui-task-kind-unknown",
+    });
     let pct = match p.entries_total {
-        Some(t) if t > 0 => format!("{}%", p.entries_done.saturating_mul(100) / t),
+        Some(total) if total > 0 => {
+            format!("{}%", p.entries_done.saturating_mul(100) / total)
+        }
         _ => "…".to_string(),
     };
-    let state = match &p.state {
-        TaskState::Pending => "pending",
-        TaskState::Running => "running",
-        TaskState::Paused => "paused",
-        TaskState::Completed => "done",
-        TaskState::Cancelled => "cancelled",
-        TaskState::Failed { .. } => "failed",
-        _ => "?",
-    };
+    let state = t(match &p.state {
+        TaskState::Pending => "gui-task-state-pending",
+        TaskState::Running => "gui-task-state-running",
+        TaskState::Paused => "gui-task-state-paused",
+        TaskState::Completed => "gui-task-state-done",
+        TaskState::Cancelled => "gui-task-state-cancelled",
+        TaskState::Failed { .. } => "gui-task-state-failed",
+        _ => "gui-task-state-unknown",
+    });
     let current = p
         .current
         .as_ref()
@@ -1464,8 +1501,8 @@ fn task_line(p: &norte_proto::TaskProgress) -> String {
 const MODAL_ITEM_LIMIT: usize = 10;
 
 /// Hasta [`MODAL_ITEM_LIMIT`] nombres saneados (`display_name` por el nombre
-/// de archivo, jamás bytes crudos); si sobran, una línea final "… y N más".
-/// PURA (sin GPUI).
+/// de archivo, jamás bytes crudos); si sobran, una línea final localizada
+/// (`gui-modal-more`, GUI-e T1). PURA (sin GPUI).
 fn item_lines(items: &[VPath]) -> Vec<String> {
     let mut lines: Vec<String> = items
         .iter()
@@ -1481,23 +1518,27 @@ fn item_lines(items: &[VPath]) -> Vec<String> {
         })
         .collect();
     if items.len() > MODAL_ITEM_LIMIT {
-        lines.push(format!("… y {} más", items.len() - MODAL_ITEM_LIMIT));
+        let n = (items.len() - MODAL_ITEM_LIMIT).to_string();
+        lines.push(norte_i18n::ta("gui-modal-more", &[("n", n.as_str())]));
     }
     lines
 }
 
 /// Líneas de texto del cuerpo del modal activo (título + detalle), YA
-/// SANEADAS con `display_name`/`path_display` (jamás bytes crudos). PURA (sin
-/// GPUI): testeable contra el corpus hostil sin levantar ventana. El pie de
-/// teclas es fijo (sin contenido de usuario) y lo pinta `render_modal`
-/// directamente, no vive aquí.
+/// SANEADAS con `display_name`/`path_display` (jamás bytes crudos). Los
+/// verbos/título/modo van por Fluent (GUI-e T1, `gui-modal-*`); el `conflict`
+/// (`ConflictKind`) se interpola por su `Display` categórico (mismo criterio
+/// que el `Error` de los banners: taxonomía cerrada, sin bytes de usuario —
+/// ya auditado). PURA (sin GPUI): testeable contra el corpus hostil sin
+/// levantar ventana. El pie de teclas es fijo (sin contenido de usuario) y lo
+/// pinta `render_modal` directamente, no vive aquí.
 #[must_use]
 fn modal_lines(m: &Modal) -> Vec<String> {
     match m {
         Modal::ConfirmTransfer { kind, items, to } => {
-            let verb = match kind {
-                TransferKind::Copy => "Copiar",
-                TransferKind::Move => "Mover",
+            let title_key = match kind {
+                TransferKind::Copy => "gui-modal-copy-title",
+                TransferKind::Move => "gui-modal-move-title",
             };
             let (to_txt, to_hostile) = norte_frontend::path_display(to);
             let to_line = if to_hostile {
@@ -1505,15 +1546,24 @@ fn modal_lines(m: &Modal) -> Vec<String> {
             } else {
                 to_txt
             };
-            let mut lines = vec![format!("{verb} {} elemento(s) → {to_line}", items.len())];
+            let n = items.len().to_string();
+            let mut lines = vec![norte_i18n::ta(
+                title_key,
+                &[("n", n.as_str()), ("to", to_line.as_str())],
+            )];
             lines.extend(item_lines(items));
             lines
         }
         Modal::ConfirmDelete { items, permanent } => {
-            let mode = if *permanent { "PERMANENTE" } else { "PAPELERA" };
+            let mode = norte_i18n::t(if *permanent {
+                "gui-modal-mode-permanent"
+            } else {
+                "gui-modal-mode-trash"
+            });
+            let n = items.len().to_string();
             let mut lines = vec![
-                format!("Borrar {} elemento(s)", items.len()),
-                mode.to_string(),
+                norte_i18n::ta("gui-modal-delete-title", &[("n", n.as_str())]),
+                mode,
             ];
             lines.extend(item_lines(items));
             lines
@@ -1532,8 +1582,12 @@ fn modal_lines(m: &Modal) -> Vec<String> {
             } else {
                 to_txt
             };
+            let conflict_txt = conflict.to_string();
             vec![
-                format!("Conflicto: {conflict}"),
+                norte_i18n::ta(
+                    "gui-modal-conflict-title",
+                    &[("conflict", conflict_txt.as_str())],
+                ),
                 format!("{from_line} → {to_line}"),
             ]
         }
@@ -1563,36 +1617,40 @@ fn apply_viewer_command(v: &mut norte_frontend::viewer::Viewer, cmd: &str) -> bo
     true
 }
 
-/// Barra de estado del visor, en español (i18n de la GUI = GUI-e). Compone
-/// desde los getters del `Viewer` core (encoding/binario, forzado, EOL,
-/// lossy, truncado) — el usuario SIEMPRE sabe qué ve (spec §6). Fn pura
+/// Barra de estado del visor (GUI-e T1: por Fluent, UNIFICADA con
+/// `norte_tui::viewer::status` — mismas claves `viewer-*`/`eol-*` de
+/// `norte-i18n`). Compone desde los getters del `Viewer` core (encoding/
+/// binario, forzado, EOL, lossy, truncado) — el usuario SIEMPRE sabe qué ve
+/// (spec §6). LF/CRLF/CR son literales técnicos (no i18n). Fn pura
 /// (testeable sin GPUI); el render solo mapea su salida + `v.rows()`.
 #[must_use]
 fn viewer_status(v: &norte_frontend::viewer::Viewer) -> String {
     use norte_encoding::Eol;
+    use norte_i18n::t;
     let mut out = if v.encoding_name().is_empty() {
-        "binario".to_string()
+        t("viewer-binary")
     } else {
         v.encoding_name().to_owned()
     };
     if v.is_forced() {
-        out.push_str(" (forzado)");
+        out.push(' ');
+        out.push_str(&t("viewer-forced"));
     }
     if !v.hex {
         let eol = match v.eol() {
-            Eol::Lf => "LF",
-            Eol::CrLf => "CRLF",
-            Eol::Cr => "CR",
-            Eol::Mixed => "EOL mixto",
-            Eol::None => "sin EOL",
+            Eol::Lf => "LF".to_owned(),
+            Eol::CrLf => "CRLF".to_owned(),
+            Eol::Cr => "CR".to_owned(),
+            Eol::Mixed => t("eol-mixed"),
+            Eol::None => t("eol-none"),
         };
         out.push_str(&format!("  {eol}"));
     }
     if v.had_errors() {
-        out.push_str("  con pérdidas");
+        out.push_str(&format!("  {}", t("viewer-lossy")));
     }
     if v.truncated {
-        out.push_str("  truncado");
+        out.push_str(&format!("  {}", t("viewer-truncated")));
     }
     out
 }
@@ -1666,7 +1724,7 @@ impl Render for NorteGui {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(SharedString::from("abriendo visor…")),
+                    .child(SharedString::from(norte_i18n::t("gui-viewer-opening"))),
             );
         } else {
             let panes_row = div()
@@ -1713,6 +1771,12 @@ impl Render for NorteGui {
 }
 
 fn main() {
+    // Idioma (GUI-e T1): mismo patrón que la TUI (`crates/norte-tui/src/
+    // main.rs`), sin flag CLI — solo entorno (`NORTE_LANG` > `LC_ALL` >
+    // `LC_MESSAGES` > `LANG`). Debe ir ANTES de construir la ventana: los
+    // banners de arranque (`keymap_error`, config inválida) ya salen
+    // localizados desde `NorteGui::new`.
+    let _ = norte_i18n::force(norte_i18n::Lang::from_env());
     application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1000.0), px(640.0)), cx);
         cx.open_window(
@@ -1895,11 +1959,58 @@ mod tests {
         }
     }
 
-    /// `viewer_status` (GUI-d T3) sobre un archivo de texto: encoding
-    /// detectado + EOL, sin marcas de forzado/errores/truncado (todas en su
-    /// cero).
+    /// GUI-e T1 (i18n): con el locale forzado a ES, el modal de borrado
+    /// PERMANENTE sale con el título/modo localizados (`Borrar N
+    /// elemento(s)`/`PERMANENTE`, claves `gui-modal-delete-title`/
+    /// `gui-modal-mode-permanent`) Y, sobre TODO el corpus hostil de
+    /// `norte-testkit`, la línea del item saneado sigue sin un
+    /// `is_terminal_hazard` crudo — el paso por Fluent no reintroduce bytes
+    /// crudos (mismo criterio que `modal_lines_nunca_deja_hazards_crudos_del_
+    /// corpus_hostil`, ahora con i18n de por medio).
+    #[test]
+    fn modal_i18n_es_localiza_y_no_deja_hazards_con_nombre_hostil() {
+        let _ = norte_i18n::force(norte_i18n::Lang::Es);
+        use super::Modal;
+        use norte_proto::Segment;
+        for fixture in norte_testkit::corpus::hostile_names() {
+            let seg = match Segment::new(fixture.bytes.clone()) {
+                Ok(s) => s,
+                Err(_) => continue, // bytes no válidos como segmento (/, NUL, ., ..)
+            };
+            let item = VPath::parse("mem:///").unwrap().join(seg);
+            let m = Modal::ConfirmDelete {
+                items: vec![item],
+                permanent: true,
+            };
+            let lines = super::modal_lines(&m);
+            assert!(
+                lines[0].contains("Borrar") && lines[0].contains('1'),
+                "{}: título no localizado en ES: {:?}",
+                fixture.id,
+                lines[0],
+            );
+            assert_eq!(
+                lines[1], "PERMANENTE",
+                "{}: modo no localizado en ES: {:?}",
+                fixture.id, lines[1],
+            );
+            for line in &lines {
+                assert!(
+                    !line.chars().any(norte_encoding::is_terminal_hazard),
+                    "{}: modal_lines(i18n ES) dejó un hazard crudo en {line:?}",
+                    fixture.id,
+                );
+            }
+        }
+    }
+
+    /// `viewer_status` (GUI-d T3, i18n GUI-e T1) sobre un archivo de texto:
+    /// encoding detectado + EOL, sin marcas de forzado/errores/truncado
+    /// (todas en su cero). Locale fijado a ES (determinismo — el proceso de
+    /// nextest es fresco por test, `norte_i18n::force` es de una sola vez).
     #[test]
     fn viewer_status_texto_limpio() {
+        let _ = norte_i18n::force(norte_i18n::Lang::Es);
         let v = Viewer::new(vp(), b"hola\n".to_vec(), false);
         let s = viewer_status(&v);
         assert!(s.contains("UTF-8"), "{s}");
@@ -1909,29 +2020,35 @@ mod tests {
         assert!(!s.contains("pérdidas"), "{s}");
     }
 
-    /// `viewer_status` sobre un binario: cae a "binario" (sin nombre de
-    /// encoding ni EOL, que no aplica en hexview).
+    /// `viewer_status` sobre un binario: cae a `t("viewer-binary")` (sin
+    /// nombre de encoding ni EOL, que no aplica en hexview). Locale ES.
     #[test]
     fn viewer_status_binario() {
+        let _ = norte_i18n::force(norte_i18n::Lang::Es);
         let png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
         let v = Viewer::new(vp(), png, false);
         let s = viewer_status(&v);
         assert_eq!(s, "binario", "sin EOL en hexview: {s}");
     }
 
-    /// `viewer_status` marca "truncado" cuando el viewer se abrió con el tope
+    /// `viewer_status` marca "[cabecera]" (clave `viewer-truncated`,
+    /// UNIFICADA con la TUI: la palabra cambia respecto al viejo literal
+    /// "truncado" de la GUI, GUI-e T1) cuando el viewer se abrió con el tope
     /// de lectura alcanzado — el usuario SIEMPRE sabe que puede haber más
-    /// archivo (spec §6).
+    /// archivo (spec §6). Locale ES.
     #[test]
     fn viewer_status_truncado() {
+        let _ = norte_i18n::force(norte_i18n::Lang::Es);
         let v = Viewer::new(vp(), b"hola\n".to_vec(), true);
-        assert!(viewer_status(&v).contains("truncado"));
+        assert!(viewer_status(&v).contains("cabecera"));
     }
 
-    /// `viewer_status` marca "(forzado)" tras `cycle_encoding` («recargar
-    /// como…»), y lo pierde tras `reset_encoding`.
+    /// `viewer_status` marca "(forzado)" (clave `viewer-forced`) tras
+    /// `cycle_encoding` («recargar como…»), y lo pierde tras
+    /// `reset_encoding`. Locale ES.
     #[test]
     fn viewer_status_forzado_round_trip() {
+        let _ = norte_i18n::force(norte_i18n::Lang::Es);
         let mut v = Viewer::new(vp(), b"hola\n".to_vec(), false);
         v.cycle_encoding();
         assert!(viewer_status(&v).contains("forzado"));
@@ -1943,9 +2060,12 @@ mod tests {
     /// encoding y el texto EOL son literales fijos (sin bytes de usuario), así
     /// que basta un caso — no hace falta el corpus hostil completo (a
     /// diferencia de `row_label`/`task_line`, que sí interpolan nombres de
-    /// archivo).
+    /// archivo). Locale ES fijado: el catálogo es texto humano estático en
+    /// ambos locales (paridad la verifica `norte-i18n`), sin bytes de usuario
+    /// en ningún caso.
     #[test]
     fn viewer_status_sin_hazards_crudos() {
+        let _ = norte_i18n::force(norte_i18n::Lang::Es);
         for (bytes, truncated) in [
             (b"hola\n".to_vec(), false),
             (b"\x89PNG\r\n\x1a\n".to_vec(), true),
