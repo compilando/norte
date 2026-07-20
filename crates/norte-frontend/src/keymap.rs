@@ -768,6 +768,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_chord_rechaza_tokens_multi_codepoint_sin_partir() {
+        // Un token que NO es exactamente un char (é descompuesto = e+U+0301,
+        // o un emoji ZWJ) se rechaza limpio, jamás se trunca a medias.
+        assert!(matches!(
+            parse_chord("e\u{0301}"),
+            Err(KeymapError::BadChord { .. })
+        ));
+        assert!(matches!(
+            parse_chord("👨\u{200d}👩\u{200d}👧"),
+            Err(KeymapError::BadChord { .. })
+        ));
+    }
+
+    #[test]
     fn resuelve_secuencias_multi_tecla() {
         let preset = r#"
             [pane]

@@ -177,6 +177,12 @@ mod tests {
             ))
         );
         assert_eq!(gpui_chord("f99", false, false, false, None), None);
+        // Un `key_char` compuesto (dead-key/IME multi-codepoint) → None, jamás
+        // un `Char` parcial (é descompuesto = e + U+0301).
+        assert_eq!(
+            gpui_chord("e", false, false, false, Some("e\u{0301}")),
+            None
+        );
     }
 
     /// Un directorio de scratch único por test, para `NORTE_CONFIG_DIR`
