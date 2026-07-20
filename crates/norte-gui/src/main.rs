@@ -41,6 +41,8 @@ use norte_theme::{FileKind, Role, Theme};
 
 mod backend_task;
 mod input;
+#[allow(dead_code)] // (GUI-b T5) allow temporal: main aún no consume estos tipos; se retira en T5.
+mod modal;
 mod theme_map;
 
 use backend_task::PaneListOutcome;
