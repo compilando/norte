@@ -252,7 +252,12 @@ impl Viewer {
 const TAB_WIDTH: usize = 8;
 
 /// Prepara una línea para el terminal: tabs a espacios (tab stops de
-/// [`TAB_WIDTH`]) y controles restantes a `�`.
+/// [`TAB_WIDTH`]) y el resto de HAZARDS enmascarados a `�` — MISMA política que
+/// los nombres (`is_terminal_hazard`: controles C0/C1, overrides/aislantes bidi,
+/// invisibles, separadores Zl/Zp, TAG chars). `is_control()` a secas dejaba
+/// pasar bidi (U+202E) e invisibles (ZWSP) crudos: un `.txt` con RLO falsificaba
+/// el orden visual (Trojan Source, CVE-2021-42574) en la GUI GPUI —que reordena
+/// bidi en el shaping— y en terminales que honran bidi (encoding-auditor GUI-d).
 fn render_line(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut col = 0usize;
@@ -263,7 +268,7 @@ fn render_line(line: &str) -> String {
                 out.push(' ');
             }
             col = next;
-        } else if c.is_control() {
+        } else if norte_encoding::is_terminal_hazard(c) {
             out.push('\u{FFFD}');
             col += 1;
         } else {
@@ -346,6 +351,26 @@ mod tests {
             v.rows(2)[0],
             "rojo:\u{FFFD}[31mX",
             "ESC visible como \u{FFFD}"
+        );
+    }
+
+    /// Trojan Source (CVE-2021-42574): un archivo de TEXTO UTF-8 válido con RLO
+    /// (U+202E), isolate (U+2066), ZWSP (U+200B) y separador Zl (U+2028) — el
+    /// viewer de texto debe enmascararlos a `�`, no dejarlos pasar (`is_control`
+    /// solo cubría C0/C1; ahora `is_terminal_hazard`). GPUI reordena bidi.
+    #[test]
+    fn viewer_de_texto_no_pinta_bidi_ni_invisibles_crudos() {
+        let hostile = "aguja \u{202E}reovni\u{2066} z\u{200B}w\u{2028}fin"
+            .as_bytes()
+            .to_vec();
+        let v = Viewer::new(vp(), hostile, false);
+        assert!(!v.hex, "es texto UTF-8, no binario");
+        assert!(
+            !v.rows(8)
+                .iter()
+                .flat_map(|r| r.chars())
+                .any(norte_encoding::is_terminal_hazard),
+            "el viewer de texto no puede pintar bidi/invisibles crudos"
         );
     }
 

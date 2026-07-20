@@ -28,7 +28,13 @@ fn texto_del_corpus_se_ve_decodificado() {
         // no tienen controles → esperado idéntico al decoded).
         let esperado: Option<String> = f.decoded.lines().next().map(|l| {
             l.chars()
-                .map(|c| if c.is_control() { '\u{FFFD}' } else { c })
+                .map(|c| {
+                    if norte_encoding::is_terminal_hazard(c) {
+                        '\u{FFFD}'
+                    } else {
+                        c
+                    }
+                })
                 .collect()
         });
         assert_eq!(
