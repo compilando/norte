@@ -158,6 +158,12 @@ struct NorteGui {
     conflict_backlog: Vec<(modal::PendingTransfer, norte_proto::ConflictKind)>,
     /// Orden de llegada de las tasks (render estable; `task_progress` no ordena).
     task_order: Vec<norte_proto::TaskId>,
+    /// Cursor de la franja de tasks (#91): índice dentro de `task_order` que
+    /// F9 (`task.cancel`) cancela y `render_task_strip` resalta. Se mueve con
+    /// `task.next`/`task.prev` y se CLAMPA a `task_order.len()-1` cuando la
+    /// franja se poda (Completed autopodadas / `task.dismiss`) — jamás indexa
+    /// fuera de rango (ver `clamp_task_cursor`).
+    task_cursor: usize,
     /// Handle de scroll de la lista virtualizada de cada pane (issue #87): debe
     /// persistir entre renders (no se puede recrear cada frame) para que
     /// `scroll_to_item` (llamado tras mover el cursor) tenga efecto.
@@ -239,6 +245,7 @@ impl NorteGui {
                     task_progress: std::collections::HashMap::new(),
                     conflict_backlog: Vec::new(),
                     task_order: Vec::new(),
+                    task_cursor: 0,
                     scrolls: [
                         UniformListScrollHandle::new(),
                         UniformListScrollHandle::new(),
@@ -289,6 +296,7 @@ impl NorteGui {
                     task_progress: std::collections::HashMap::new(),
                     conflict_backlog: Vec::new(),
                     task_order: Vec::new(),
+                    task_cursor: 0,
                     scrolls: [
                         UniformListScrollHandle::new(),
                         UniformListScrollHandle::new(),
@@ -425,6 +433,7 @@ impl NorteGui {
                     ) {
                         self.task_progress.remove(&id);
                         self.task_order.retain(|t| *t != id);
+                        self.clamp_task_cursor();
                     }
                 }
             }
@@ -614,14 +623,34 @@ impl NorteGui {
         }
     }
 
-    /// `task.cancel`: cancela la primera task NO terminal (sin navegación de
-    /// franja todavía — deuda #85/T7, F9 se queda en "primera cancelable").
-    /// En la práctica hay una op activa a la vez. Extraído del viejo brazo
-    /// `Action::CancelTask` de `on_key` (GUI-c T3); la selección en sí vive
-    /// en [`first_cancelable`] (pura, #85).
-    fn cancel_first_task(&mut self) {
-        if let Some(id) = first_cancelable(&self.task_order, &self.task_progress) {
+    /// `task.cancel` (#91): cancela la task bajo el cursor de la franja
+    /// (`task_cursor`) SI no es terminal; si la franja está vacía o el cursor
+    /// apunta a una terminal, cae a la primera cancelable ([`first_cancelable`])
+    /// — F9 siempre hace algo sensato. La selección bajo cursor vive en
+    /// [`task_at_cursor`] (pura, #91); el fallback en [`first_cancelable`]
+    /// (pura, #85).
+    fn cancel_task_under_cursor(&mut self) {
+        let under_cursor = task_at_cursor(&self.task_order, self.task_cursor).filter(|id| {
+            self.task_progress
+                .get(id)
+                .is_some_and(|p| !p.state.is_terminal())
+        });
+        let target =
+            under_cursor.or_else(|| first_cancelable(&self.task_order, &self.task_progress));
+        if let Some(id) = target {
             let _ = self.cmds.send(SessionCmd::Cancel(id));
+        }
+    }
+
+    /// Clampa `task_cursor` a un índice válido de `task_order` tras podar la
+    /// franja (Completed autopodadas / `task.dismiss`): si el cursor quedó
+    /// más allá del último, lo baja al último (o a 0 si la franja se vació).
+    /// Así ni `cancel_task_under_cursor` ni `render_task_strip` indexan fuera
+    /// de rango.
+    fn clamp_task_cursor(&mut self) {
+        let max = self.task_order.len().saturating_sub(1);
+        if self.task_cursor > max {
+            self.task_cursor = max;
         }
     }
 
@@ -632,6 +661,7 @@ impl NorteGui {
     /// [`retain_active`] (testeable sin GPUI).
     fn dismiss_terminal_tasks(&mut self) {
         retain_active(&mut self.task_order, &mut self.task_progress);
+        self.clamp_task_cursor();
     }
 
     /// Ejecuta un comando del keymap (contexto Browse) sobre el estado.
@@ -658,7 +688,13 @@ impl NorteGui {
             "pane.copy" => self.open_transfer_modal(TransferKind::Copy),
             "pane.move" => self.open_transfer_modal(TransferKind::Move),
             "pane.delete" => self.open_delete_modal(),
-            "task.cancel" => self.cancel_first_task(),
+            "task.cancel" => self.cancel_task_under_cursor(),
+            "task.next" => {
+                if !self.task_order.is_empty() {
+                    self.task_cursor = (self.task_cursor + 1).min(self.task_order.len() - 1);
+                }
+            }
+            "task.prev" => self.task_cursor = self.task_cursor.saturating_sub(1),
             "task.dismiss" => self.dismiss_terminal_tasks(),
             "pane.view" => self.open_viewer(cx),
             _ => {} // comando desconocido en runtime: no-op (el keymap ya validó)
@@ -901,9 +937,9 @@ impl NorteGui {
                     self.run_command(&cmd, cx);
                 }
                 norte_frontend::keymap::Resolution::Pending(_) => {
-                    // Secuencia en curso: nada que ejecutar todavía. La GUI
-                    // no pinta indicador de pendiente (el preset actual es
-                    // todo de una sola tecla; deuda si se añaden secuencias).
+                    // Secuencia en curso: nada que ejecutar todavía. El
+                    // indicador de secuencia pendiente lo pinta `render` al
+                    // pie leyendo `resolver.pending()` (#91).
                     resolution_dbg = "pending";
                 }
                 norte_frontend::keymap::Resolution::Reset => {
@@ -1238,8 +1274,11 @@ impl NorteGui {
     }
 
     /// Franja de tasks al pie: una fila por task en orden de llegada (kind + % +
-    /// estado + entrada en curso saneada). Sin resaltado (deuda: navegación de
-    /// franja, T7).
+    /// estado + entrada en curso saneada). La fila bajo el cursor de franja
+    /// (`task_cursor`, #91) se resalta (`SEL_BG`, como el cursor de pane) y se
+    /// marca `aria_selected`; F9 cancela esa fila. El cursor se clampa aquí a
+    /// un índice válido (la franja encoge al podar Completed/dismiss) — jamás
+    /// indexa fuera de rango.
     fn render_task_strip(&self) -> impl IntoElement {
         let mut strip = div()
             .id("task-strip")
@@ -1255,17 +1294,25 @@ impl NorteGui {
         if self.task_order.is_empty() {
             return strip.child(SharedString::from(norte_i18n::t("gui-tasks-empty")));
         }
-        for id in self.task_order.iter() {
+        // Clamp defensivo por si el cursor quedó tras la última poda antes de un
+        // relayout (el campo se clampa al podar, pero render no debe asumirlo).
+        let cursor = self.task_cursor.min(self.task_order.len() - 1);
+        for (i, id) in self.task_order.iter().enumerate() {
             let Some(p) = self.task_progress.get(id) else {
                 continue;
             };
             let line = task_line(p);
-            let row = div()
+            let selected = i == cursor;
+            let mut row = div()
                 .id(format!("task-row-{}", id.get()))
                 .role(gpui::Role::ListItem)
                 .aria_label(line.clone())
+                .aria_selected(selected)
                 .px(px(2.0))
                 .child(SharedString::from(line));
+            if selected {
+                row = row.bg(rgb(SEL_BG));
+            }
             strip = strip.child(row);
         }
         strip
@@ -1477,9 +1524,9 @@ fn affected_dirs(op: &PendingOp) -> Vec<VPath> {
 }
 
 /// La primera task, en orden de llegada de `order`, que NO está en estado
-/// terminal (#85, extraída de `cancel_first_task`, `task.cancel`/F9): sin
-/// navegación de franja todavía (deuda T7) — en la práctica hay una op
-/// activa a la vez. PURA (sin GPUI): testeable sin levantar ventana.
+/// terminal (#85). FALLBACK de `task.cancel`/F9 cuando el cursor de franja
+/// apunta a una terminal o la franja está vacía (#91, ver
+/// `cancel_task_under_cursor`). PURA (sin GPUI): testeable sin levantar ventana.
 #[must_use]
 fn first_cancelable(
     order: &[norte_proto::TaskId],
@@ -1489,6 +1536,23 @@ fn first_cancelable(
         .iter()
         .copied()
         .find(|id| progress.get(id).is_some_and(|p| !p.state.is_terminal()))
+}
+
+/// La task en el índice `cursor` de `order`, o `None` si `order` está vacío o
+/// el índice cae fuera (#91, para `task.cancel` bajo cursor). Defensiva: no
+/// asume que `cursor` sea válido (aunque `clamp_task_cursor` lo mantenga así),
+/// solo indexa con `get`. PURA (sin GPUI): testeable sin levantar ventana.
+#[must_use]
+fn task_at_cursor(order: &[norte_proto::TaskId], cursor: usize) -> Option<norte_proto::TaskId> {
+    order.get(cursor).copied()
+}
+
+/// Texto del indicador de secuencia multi-tecla pendiente (#91): cada chord
+/// pendiente por su `Display`, seguido de un espacio (`"g g "`), o vacío si no
+/// hay secuencia en curso. PURA (sin GPUI): testeable sin levantar ventana.
+#[must_use]
+fn pending_hint(chords: &[norte_frontend::keymap::Chord]) -> String {
+    chords.iter().map(|c| format!("{c} ")).collect()
 }
 
 /// Retiene solo las tasks NO terminales en `order` y `progress`, mutando
@@ -1871,6 +1935,29 @@ impl Render for NorteGui {
             root = root.child(panes_row).child(self.render_task_strip());
         }
 
+        // Indicador de secuencia multi-tecla en curso (#91): si el resolver
+        // ACTIVO (el del visor cuando está abierto, si no el de Browse — mismo
+        // criterio de ruteo que `on_key`) tiene una secuencia pendiente
+        // (`pending()` no vacío), pinta al pie los chords tecleados +«…». El
+        // preset orthodox no trae secuencias, así que esto se ejerce con un
+        // `keymap.toml` de usuario que ligue una (p. ej. `g g`).
+        let active_resolver = if self.viewer.is_some() {
+            &self.viewer_resolver
+        } else {
+            &self.resolver
+        };
+        let pending = active_resolver.pending();
+        if !pending.is_empty() {
+            root = root.child(
+                div()
+                    .px(px(4.0))
+                    .py(px(1.0))
+                    .bg(rgb(HEADER_BG))
+                    .text_color(rgb(QUICK_FG))
+                    .child(SharedString::from(format!("{}…", pending_hint(pending)))),
+            );
+        }
+
         // Overlay del modal activo: sin esto F5/F6/F8 capturaban teclado pero
         // no pintaban nada (el borrado se confirmaba a ciegas — CRITICAL).
         // Scrim oscuro sobre TODO el root (`.absolute().inset_0()`, contenedor
@@ -1928,8 +2015,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        affected_dirs, apply_viewer_command, first_cancelable, generation_is_current,
-        retain_active, row_label, viewer_header, viewer_status,
+        affected_dirs, apply_viewer_command, first_cancelable, generation_is_current, pending_hint,
+        retain_active, row_label, task_at_cursor, viewer_header, viewer_status,
     };
     use norte_frontend::viewer::Viewer;
     use norte_proto::{EntryKind, VPath};
@@ -2394,6 +2481,37 @@ mod tests {
         progress.insert(TaskId::new(2), task_progress_with(2, TaskState::Cancelled));
         let order = vec![TaskId::new(1), TaskId::new(2)];
         assert_eq!(first_cancelable(&order, &progress), None);
+    }
+
+    /// `task_at_cursor` (#91): devuelve la task en el índice dado, y `None`
+    /// para un índice fuera de rango o una franja vacía (defensivo).
+    #[test]
+    fn task_at_cursor_indexa_o_none_fuera_de_rango() {
+        use norte_proto::TaskId;
+        let order = vec![TaskId::new(10), TaskId::new(20), TaskId::new(30)];
+        assert_eq!(task_at_cursor(&order, 0), Some(TaskId::new(10)));
+        assert_eq!(task_at_cursor(&order, 2), Some(TaskId::new(30)));
+        assert_eq!(task_at_cursor(&order, 3), None, "fuera de rango → None");
+        assert_eq!(task_at_cursor(&[], 0), None, "franja vacía → None");
+    }
+
+    /// `pending_hint` (#91): los chords pendientes por su `Display` con espacio
+    /// final (`"g g "`); vacío → cadena vacía.
+    #[test]
+    fn pending_hint_formatea_los_chords_o_vacio() {
+        use norte_frontend::keymap::{Chord, KeyCode, Mods};
+        assert_eq!(pending_hint(&[]), "", "sin pendiente → vacío");
+        let g = Chord::new(Mods::default(), KeyCode::Char('g'));
+        assert_eq!(pending_hint(&[g]), "g ");
+        assert_eq!(pending_hint(&[g, g]), "g g ");
+        let ctrl_k = Chord::new(
+            Mods {
+                ctrl: true,
+                ..Default::default()
+            },
+            KeyCode::Char('k'),
+        );
+        assert_eq!(pending_hint(&[ctrl_k, g]), "ctrl+k g ");
     }
 
     /// `retain_active` (#83, `task.dismiss`): quita de `order`/`progress`

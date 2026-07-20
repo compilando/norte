@@ -25,6 +25,8 @@ pub const COMMANDS: &[&str] = &[
     "pane.move",
     "pane.delete",
     "task.cancel",
+    "task.next",
+    "task.prev",
     "task.dismiss",
     "pane.view",
 ];

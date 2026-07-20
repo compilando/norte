@@ -24,6 +24,8 @@ keymap = [
     { on = ["f8"], run = "pane.delete" },
     { on = ["delete"], run = "pane.delete" },
     { on = ["f9"], run = "task.cancel" },
+    { on = ["ctrl+n"], run = "task.next" },
+    { on = ["ctrl+p"], run = "task.prev" },
     { on = ["ctrl+l"], run = "task.dismiss" },
     { on = ["f3"], run = "pane.view" },
 ]
