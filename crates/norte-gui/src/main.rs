@@ -116,6 +116,11 @@ struct NorteGui {
     /// mismo pane — robusto incluso ante A→B→A, que un simple compare de `dir`
     /// no distingue (ver `generation_is_current`).
     generation: [u64; 2],
+    /// Relist coalescido pendiente por pane (#84): un read-after-write que se
+    /// saltó porque el pane YA cargaba ese dir se re-dispara al aterrizar la
+    /// list en vuelo — así la list superviviente no puede preceder a escrituras
+    /// posteriores del burst (correctitud) sin pagar N lists redundantes.
+    relist_pending: [bool; 2],
     /// Tema cacheado UNA vez (parsea TOML; no es gratis por-frame).
     theme: Theme,
     /// Canal hacia el hilo de sesión (conexión persistente al daemon, ver
@@ -202,6 +207,7 @@ impl NorteGui {
                     query: [String::new(), String::new()],
                     errors: [None, None],
                     generation: [0, 0],
+                    relist_pending: [false, false],
                     theme,
                     cmds: cmd_tx,
                     focus_handle,
@@ -247,6 +253,7 @@ impl NorteGui {
                         Some(format!("config inválida: {e}")),
                     ],
                     generation: [0, 0],
+                    relist_pending: [false, false],
                     theme,
                     cmds: cmd_tx,
                     focus_handle,
@@ -349,6 +356,13 @@ impl NorteGui {
                         self.panes[pane].set_listing(dir, Vec::new());
                         self.errors[pane] = Some(msg);
                     }
+                }
+                // Coalesce (#84): si se saltó un relist mientras este list volaba,
+                // re-relista ahora (una sola vez; el dir ya no está `loading`).
+                if self.relist_pending[pane] {
+                    self.relist_pending[pane] = false;
+                    let cur = self.panes[pane].dir().clone();
+                    self.cd(pane, cur, cx);
                 }
             }
             SessionEvent::Submitted { task_id, op } => {
@@ -509,14 +523,24 @@ impl NorteGui {
 
     /// Relista cualquier pane cuyo `dir` esté en `dirs` (read-after-write).
     ///
-    /// #84: si el pane YA está cargando ese mismo dir (un relist para él
-    /// acaba de arrancar), se SALTA — un burst de N tasks terminales sobre
-    /// el mismo dir (p. ej. N marcas copiadas de golpe) coalesce a UN solo
-    /// `fs.list` en vez de N redundantes.
+    /// #84: si el pane YA está cargando ese mismo dir, NO duplica la list —
+    /// marca `relist_pending` para RE-relistar cuando aterrice (la list en
+    /// vuelo pudo leer el dir antes de escrituras posteriores del burst). Un
+    /// burst de N tasks terminales sobre el mismo dir coalesce a la list en
+    /// vuelo + UNA re-list final, no N redundantes, sin dejar el pane stale.
     fn relist_dirs(&mut self, dirs: &[VPath], cx: &mut Context<Self>) {
         for pane in 0..2 {
             let cur = self.panes[pane].dir().clone();
-            if dirs.contains(&cur) && !self.panes[pane].loading() {
+            if !dirs.contains(&cur) {
+                continue;
+            }
+            if self.panes[pane].loading() {
+                // Coalesce (#84): ya hay una list en vuelo para este dir. NO la
+                // dupliques, pero MARCA que hay que re-relistar al aterrizar —
+                // esa list pudo leer el dir ANTES de las escrituras de este
+                // burst; el re-relist final garantiza ver el estado completo.
+                self.relist_pending[pane] = true;
+            } else {
                 self.cd(pane, cur, cx);
             }
         }
