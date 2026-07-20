@@ -1284,21 +1284,7 @@ impl NorteGui {
             .as_ref()
             .expect("render_viewer: self.viewer es Some (invariante del caller, ver `render`)");
 
-        let (path_txt, path_hostile) = norte_frontend::path_display(&v.path);
-        let mut header = if path_hostile {
-            format!("{HOSTILE_BADGE} {path_txt}")
-        } else {
-            path_txt
-        };
-        if let Some(plugin) = v.preview_plugin() {
-            // Reusa la clave de la TUI (`viewer-plugin-preview` = "via { $plugin
-            // }"): mismo indicador «via <plugin>», ya localizado.
-            header.push_str("  ");
-            header.push_str(&norte_i18n::ta(
-                "viewer-plugin-preview",
-                &[("plugin", plugin)],
-            ));
-        }
+        let header = viewer_header(v);
         let status = viewer_status(v);
 
         // Filas que caben en el viewport real, menos la cabecera+status
@@ -1734,6 +1720,31 @@ fn apply_viewer_command(v: &mut norte_frontend::viewer::Viewer, cmd: &str) -> bo
 /// binario, forzado, EOL, lossy, truncado) — el usuario SIEMPRE sabe qué ve
 /// (spec §6). LF/CRLF/CR son literales técnicos (no i18n). Fn pura
 /// (testeable sin GPUI); el render solo mapea su salida + `v.rows()`.
+/// Cabecera/nombre accesible del visor: el path SANEADO (`path_display` + badge
+/// hostil) + «via <plugin>» si es preview de plugin (el nombre del plugin YA
+/// viene enmascarado por `with_plugin_preview`). Fn PURA para poder testear
+/// contra el corpus hostil que la composición no reintroduce hazards crudos
+/// (defensa en profundidad: es a la vez el título visual Y el `aria_label` a11y
+/// — un lector de pantalla jamás debe leer bidi/controles crudos).
+#[must_use]
+fn viewer_header(v: &norte_frontend::viewer::Viewer) -> String {
+    let (path_txt, path_hostile) = norte_frontend::path_display(&v.path);
+    let mut header = if path_hostile {
+        format!("{HOSTILE_BADGE} {path_txt}")
+    } else {
+        path_txt
+    };
+    if let Some(plugin) = v.preview_plugin() {
+        // Reusa la clave de la TUI (`viewer-plugin-preview` = "via { $plugin }").
+        header.push_str("  ");
+        header.push_str(&norte_i18n::ta(
+            "viewer-plugin-preview",
+            &[("plugin", plugin)],
+        ));
+    }
+    header
+}
+
 #[must_use]
 fn viewer_status(v: &norte_frontend::viewer::Viewer) -> String {
     use norte_encoding::Eol;
@@ -1914,7 +1925,7 @@ fn main() {
 mod tests {
     use super::{
         affected_dirs, apply_viewer_command, first_cancelable, generation_is_current,
-        retain_active, row_label, viewer_status,
+        retain_active, row_label, viewer_header, viewer_status,
     };
     use norte_frontend::viewer::Viewer;
     use norte_proto::{EntryKind, VPath};
@@ -2195,6 +2206,42 @@ mod tests {
                 "viewer_status dejó un hazard crudo en {s:?}"
             );
         }
+    }
+
+    /// `viewer_header` (título + `aria_label` a11y): ni una ruta hostil ni un
+    /// nombre de plugin hostil dejan un hazard crudo en la cabecera compuesta —
+    /// un lector de pantalla jamás debe leer bidi/controles crudos (encoding H1).
+    #[test]
+    fn viewer_header_sin_hazards_con_ruta_y_plugin_hostiles() {
+        use norte_proto::{Segment, VPath};
+        let _ = norte_i18n::force(norte_i18n::Lang::Es);
+        for fixture in norte_testkit::corpus::hostile_names() {
+            let seg = match Segment::new(fixture.bytes.clone()) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let path = VPath::parse("mem:///").unwrap().join(seg);
+            let raw = Viewer::new(path, b"x".to_vec(), false);
+            assert!(
+                !viewer_header(&raw)
+                    .chars()
+                    .any(norte_encoding::is_terminal_hazard),
+                "{}: header con ruta hostil dejó un hazard",
+                fixture.id
+            );
+        }
+        // Nombre de plugin hostil (UTF-8 válido con bidi RLO + invisible ZWSP).
+        let prev = Viewer::with_plugin_preview(
+            VPath::parse("mem:///a").unwrap(),
+            "plug\u{202E}in\u{200B}".to_string(),
+            "salida",
+        );
+        assert!(
+            !viewer_header(&prev)
+                .chars()
+                .any(norte_encoding::is_terminal_hazard),
+            "header con plugin hostil dejó un hazard"
+        );
     }
 
     /// `apply_viewer_command`: scroll (down/up), hex toggle y close, sobre un
