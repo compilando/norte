@@ -27,6 +27,23 @@
 //!   `on_click`) para no exigir un `.id()` estable por fila.
 //! - **async → UI**: `cx.spawn` + `this.update` + `cx.notify()`, con un canal
 //!   `tokio::mpsc` que cruza desde el hilo de sesión tokio (ver `session.rs`).
+//! - **Accesibilidad (AccessKit, GUI-e T2)**: `div().id(...)` (convierte a
+//!   `Stateful<Div>`, único que implementa `StatefulInteractiveElement`) +
+//!   `.role(gpui::Role::X)` + `.aria_label(...)`/`.aria_description(...)`/
+//!   `.aria_selected(...)`/`.aria_toggled(...)`, EXACTO idioma de
+//!   `crates/gpui/examples/a11y.rs` (rev f14fea9) — sin `a11y_synthetic_children`:
+//!   `.aria_label` ya adjunta el nombre accesible (`write_a11y_info` en
+//!   `div.rs` llama `node.set_label(...)` desde ahí), así que la ruta
+//!   `A11ySubtreeBuilder` no hace falta para este pase. `gpui::Role`/
+//!   `gpui::Toggled` son el re-export de `accesskit` que ya trae `gpui`
+//!   (`pub use accesskit;` en `gpui.rs`) — CALIFICADOS siempre como
+//!   `gpui::Role`/`gpui::Toggled` porque `norte_theme::Role` (tema de
+//!   colores) ya ocupa el nombre corto `Role` en este módulo. Los nodos a11y
+//!   solo los materializa GPUI cuando `Window::is_a11y_active()` es `true`
+//!   (un AT real conectado al bus AT-SPI) — eso NO lo controla esta capa;
+//!   `.role()`/`.aria_label()` son metadata barata que se fija SIEMPRE
+//!   (coherente con "roles on divs are cheap, can be unconditional"). Volcado
+//!   estructural sin lector: F12 bajo `NORTE_GUI_DEBUG` (ver `on_key`).
 #![forbid(unsafe_code)]
 
 use gpui::{
@@ -769,8 +786,34 @@ impl NorteGui {
     /// ctrl/alt) → fallthrough al filtro (`quick_key`); (3) si no,
     /// `keymap::gpui_chord` → `resolver.push` → `run_command`, o
     /// `maybe_open_quick` si es un imprimible sin binding.
-    fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let ks = &event.keystroke;
+
+        // Volcado estructural del árbol a11y (Step 3, GUI-e T2): F12 SOLO
+        // bajo `NORTE_GUI_DEBUG` (si la variable no está, F12 sigue su curso
+        // normal — no está en el preset orthodox, así que hoy es no-op, sin
+        // regresión). Permite inspeccionar roles/labels sin un lector de
+        // pantalla real. `is_a11y_active()` refleja si el bus AT-SPI activó
+        // DE VERDAD el árbol — GPUI no expone una forma de forzarlo desde la
+        // app (solo `App::new_inaccessible` para forzar lo contrario), así
+        // que en un dev box sin AT conectado el volcado trae normalmente solo
+        // el nodo raíz. Para forzarlo en Linux sin instalar un lector de
+        // pantalla, se puede activar la propiedad que dispara la activación
+        // en `accesskit_unix` (`ScreenReaderEnabled` en `org.a11y.Status`):
+        //   busctl --user set-property org.a11y.Bus /org/a11y/bus \
+        //     org.a11y.Status ScreenReaderEnabled b true
+        // Verificación con AT real (orca/AT-SPI) queda para oscar (Linux).
+        if std::env::var_os("NORTE_GUI_DEBUG").is_some() && ks.key == "f12" {
+            eprintln!(
+                "[norte-gui] a11y activo={} árbol={}",
+                window.is_a11y_active(),
+                window
+                    .debug_a11y_tree_json()
+                    .unwrap_or_else(|| "(sin datos)".to_string()),
+            );
+            cx.notify();
+            return;
+        }
 
         // Con un modal abierto, la tecla va al modal (captura fija).
         if let Some(m) = &mut self.modal {
@@ -1017,6 +1060,29 @@ impl NorteGui {
         .track_scroll(&self.scrolls[i])
         .flex_1();
 
+        // Envuelve la lista (NO el `uniform_list` directamente: su propio id
+        // "entries-{i}" alimenta el scroll/measure virtualizado — pisarlo con
+        // `.id()` para colgar el role sería arriesgar esa identidad) en un div
+        // `Role::List` con el nombre accesible «panel izquierdo/derecho»
+        // (i18n `gui-a11y-pane-*`, GUI-e T2). El pane con foco se marca
+        // `aria_selected` (el primitivo disponible más cercano a "lista
+        // activa" — no hay un rol dedicado de "pane" en AccessKit).
+        let pane_a11y_label = norte_i18n::t(if i == 0 {
+            "gui-a11y-pane-left"
+        } else {
+            "gui-a11y-pane-right"
+        });
+        let list = div()
+            .id(format!("pane-list-{i}"))
+            .role(gpui::Role::List)
+            .aria_label(pane_a11y_label)
+            .aria_selected(focused)
+            .flex_1()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .child(list);
+
         let mut col = div()
             .flex_1()
             .flex()
@@ -1132,7 +1198,21 @@ impl NorteGui {
         let color = entry_color(&self.theme, entry);
         let dir_target = (entry.kind == EntryKind::Dir).then(|| entry.path.clone());
 
+        // `Role::ListItem` con nombre accesible = `label` YA saneado (mismo
+        // texto que se pinta — regla 1, jamás bytes crudos). La selección
+        // bajo cursor (`highlighted`) es `aria_selected`; la marca de
+        // multi-selección (`marked`, ortogonal a la selección) es
+        // `aria_toggled`, como pide el plan de GUI-e T2.
         let mut row = div()
+            .id(format!("row-{pane}-{idx}"))
+            .role(gpui::Role::ListItem)
+            .aria_label(label.clone())
+            .aria_selected(highlighted)
+            .aria_toggled(if marked {
+                gpui::Toggled::True
+            } else {
+                gpui::Toggled::False
+            })
             .h(px(ROW_H))
             .px(px(4.0))
             .py(px(1.0))
@@ -1158,6 +1238,9 @@ impl NorteGui {
     /// franja, T7).
     fn render_task_strip(&self) -> impl IntoElement {
         let mut strip = div()
+            .id("task-strip")
+            .role(gpui::Role::List)
+            .aria_label(norte_i18n::t("gui-a11y-tasks"))
             .flex()
             .flex_col()
             .max_h(px(120.0))
@@ -1172,7 +1255,13 @@ impl NorteGui {
             let Some(p) = self.task_progress.get(id) else {
                 continue;
             };
-            let row = div().px(px(2.0)).child(SharedString::from(task_line(p)));
+            let line = task_line(p);
+            let row = div()
+                .id(format!("task-row-{}", id.get()))
+                .role(gpui::Role::ListItem)
+                .aria_label(line.clone())
+                .px(px(2.0))
+                .child(SharedString::from(line));
             strip = strip.child(row);
         }
         strip
@@ -1233,7 +1322,15 @@ impl NorteGui {
                         .child(SharedString::from(row))
                 }));
 
+        // `Role::Document` + nombre accesible = cabecera saneada (path +
+        // «via <plugin>» si aplica); la barra de estado va como
+        // `aria_description` (información suplementaria, se anuncia DESPUÉS
+        // del nombre — mismo criterio que el ejemplo de gpui para hints).
         div()
+            .id("viewer")
+            .role(gpui::Role::Document)
+            .aria_label(header.clone())
+            .aria_description(status.clone())
             .flex_1()
             .flex()
             .flex_col()
@@ -1269,6 +1366,16 @@ impl NorteGui {
     /// tocar bytes de usuario aquí), más el pie de teclas fijo por variante.
     fn render_modal(&self, m: &Modal) -> impl IntoElement {
         let lines = modal_lines(m);
+        // Nombre accesible = título (1.ª línea, siempre presente); el resto
+        // (cuerpo saneado por `modal_lines`, ítems/mode/conflict) va como
+        // `aria_description` — un lector anuncia diálogo → título → cuerpo.
+        // `.get(1..)` (no indexado directo) por si `lines` alguna vez trajera
+        // solo el título (defensivo, sin panic).
+        let a11y_label = lines.first().cloned().unwrap_or_default();
+        let a11y_description = lines
+            .get(1..)
+            .map(|rest| rest.join("; "))
+            .unwrap_or_default();
         let footer = norte_i18n::t(match m {
             Modal::ConfirmTransfer { .. } => "gui-modal-footer-transfer",
             Modal::ConfirmDelete { .. } => "gui-modal-footer-delete",
@@ -1286,6 +1393,10 @@ impl NorteGui {
         .then_some(1);
 
         let mut panel = div()
+            .id("modal")
+            .role(gpui::Role::Dialog)
+            .aria_label(a11y_label)
+            .aria_description(a11y_description)
             .flex()
             .flex_col()
             .min_w(px(360.0))
@@ -1684,7 +1795,14 @@ impl Render for NorteGui {
         // sin virtualizar). Ver issue #87.
         let _t0 = std::time::Instant::now();
 
+        // Raíz: `Role::Application` (idioma del ejemplo `a11y.rs`, div "root").
+        // `.aria_label("norte")` es el nombre del producto (proper noun, como
+        // el título de una ventana) — no pasa por Fluent a propósito, igual
+        // que el resto del chrome de norte no localiza su propio nombre.
         let mut root = div()
+            .id("root")
+            .role(gpui::Role::Application)
+            .aria_label("norte")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
             .flex()
