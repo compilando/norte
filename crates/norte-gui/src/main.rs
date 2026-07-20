@@ -318,6 +318,11 @@ impl NorteGui {
                     self.cd(f, dir, cx);
                 }
             }
+            Action::ToggleMark
+            | Action::Copy
+            | Action::Move
+            | Action::Delete
+            | Action::CancelTask => {}
         }
         if std::env::var_os("NORTE_GUI_DEBUG").is_some() {
             let nf = self.focus;

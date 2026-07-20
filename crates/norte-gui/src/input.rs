@@ -34,6 +34,16 @@ pub enum Action {
     Esc,
     /// Enter: confirma el quick / entra al directorio seleccionado.
     Enter,
+    /// Togglea la marca de la entrada bajo el cursor (Insert).
+    ToggleMark,
+    /// Copia la selección/marcas al pane destino (F5).
+    Copy,
+    /// Mueve la selección/marcas al pane destino (F6).
+    Move,
+    /// Borra la selección/marcas (F8/Delete).
+    Delete,
+    /// Cancela la task seleccionada en la franja (F9).
+    CancelTask,
     /// Tecla sin binding.
     None,
 }
@@ -59,6 +69,11 @@ pub fn key_to_action(key: &str, quick_active: bool) -> Action {
         "backspace" => Action::Backspace,
         "escape" => Action::Esc,
         "enter" => Action::Enter,
+        "insert" => Action::ToggleMark,
+        "f5" => Action::Copy,
+        "f6" => Action::Move,
+        "f8" | "delete" => Action::Delete,
+        "f9" => Action::CancelTask,
         // El espacio llega con nombre "space", no como carácter suelto.
         "space" => printable(' ', quick_active),
         _ => {
@@ -142,7 +157,21 @@ mod tests {
     #[test]
     fn teclas_desconocidas_o_multichar_son_none() {
         assert_eq!(key_to_action("f1", false), Action::None);
-        assert_eq!(key_to_action("insert", true), Action::None);
         assert_eq!(key_to_action("", true), Action::None);
+    }
+
+    #[test]
+    fn teclas_de_mutacion_mapean_igual_con_o_sin_quick() {
+        for &(key, action) in &[
+            ("insert", Action::ToggleMark),
+            ("f5", Action::Copy),
+            ("f6", Action::Move),
+            ("f8", Action::Delete),
+            ("delete", Action::Delete),
+            ("f9", Action::CancelTask),
+        ] {
+            assert_eq!(key_to_action(key, false), action, "{key} sin quick");
+            assert_eq!(key_to_action(key, true), action, "{key} con quick");
+        }
     }
 }
