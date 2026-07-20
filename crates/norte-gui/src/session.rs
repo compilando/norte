@@ -12,12 +12,16 @@
 //! executor: solo registran un waker). Un daemon caído en `connect` emite
 //! [`SessionEvent::ConnectFailed`], jamás panic.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
-use norte_core::backend::{Backend, remote::RemoteBackend};
+use norte_core::backend::{Backend, TaskCanceller, TaskRef, remote::RemoteBackend};
 use norte_proto::methods::ClientInfo;
-use norte_proto::{Entry, VPath};
+use norte_proto::{Entry, Error, TaskId, TaskProgress, TaskState, VPath};
 use tokio::sync::mpsc;
+
+use crate::modal::{PendingOp, TransferKind};
 
 /// Config resuelta del entorno (socket + dir inicial). Idéntica a la del spike
 /// (movida de `backend_task.rs`).
@@ -63,6 +67,14 @@ pub enum SessionCmd {
         /// Directorio a listar.
         dir: VPath,
     },
+    /// Lanza una operación mutante (copy/move/delete) como task.
+    Submit(PendingOp),
+    /// Cancela una task en curso (`task.cancel`, fire-and-forget).
+    // allow(dead_code): aún sin constructor — `Action::CancelTask` es no-op
+    // hasta la task de la franja de tasks (GUI-b, posterior a esta), que
+    // sabrá qué `TaskId` está seleccionado y mandará este comando.
+    #[allow(dead_code)]
+    Cancel(TaskId),
 }
 
 /// Evento del hilo de sesión hacia la GUI.
@@ -80,6 +92,23 @@ pub enum SessionEvent {
     },
     /// La conexión inicial con el daemon falló (mensaje ya renderizable).
     ConnectFailed(String),
+    /// La op fue aceptada; su task corre con este id (para mapear progreso →
+    /// operación en la GUI).
+    Submitted {
+        /// Id de la task recién creada.
+        task_id: TaskId,
+        /// La operación que la originó (para read-after-write y reintento).
+        op: PendingOp,
+    },
+    /// La op fue RECHAZADA antes de crear task (path inválido, unsupported…).
+    SubmitFailed {
+        /// La operación rechazada.
+        op: PendingOp,
+        /// El error tipado (la GUI decide: banner o modal de conflicto).
+        error: Error,
+    },
+    /// Snapshot de progreso de una task (incl. estado terminal).
+    Task(TaskProgress),
 }
 
 /// Arranca el hilo de sesión: conecta al `socket` UNA vez y sirve `cmd_rx`,
@@ -109,6 +138,8 @@ pub fn spawn(
                     return;
                 }
             };
+            let cancellers: Arc<Mutex<HashMap<TaskId, TaskCanceller>>> =
+                Arc::new(Mutex::new(HashMap::new()));
             while let Some(cmd) = cmd_rx.recv().await {
                 match cmd {
                     SessionCmd::List {
@@ -128,6 +159,15 @@ pub fn spawn(
                             });
                         });
                     }
+                    SessionCmd::Submit(op) => {
+                        submit(&remote, op, &event_tx, &cancellers).await;
+                    }
+                    SessionCmd::Cancel(id) => {
+                        // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
+                        if let Some(c) = cancellers.lock().unwrap().get(&id) {
+                            c.cancel();
+                        }
+                    }
                 }
             }
         });
@@ -145,4 +185,75 @@ async fn connect(socket: &Path) -> Result<RemoteBackend, norte_proto::Error> {
         },
     )
     .await
+}
+
+/// Lanza una op mutante y arranca su forwarder de progreso, o emite
+/// `SubmitFailed` si el daemon la rechaza de entrada.
+async fn submit(
+    remote: &RemoteBackend,
+    op: PendingOp,
+    event_tx: &mpsc::UnboundedSender<SessionEvent>,
+    cancellers: &Arc<Mutex<HashMap<TaskId, TaskCanceller>>>,
+) {
+    let backend = Backend::Remote(remote.clone());
+    let res = match &op {
+        PendingOp::Transfer {
+            kind: TransferKind::Copy,
+            from,
+            to,
+            opts,
+        } => backend.copy(from, to, *opts).await,
+        PendingOp::Transfer {
+            kind: TransferKind::Move,
+            from,
+            to,
+            opts,
+        } => backend.move_(from, to, *opts).await,
+        PendingOp::Delete { path, mode } => backend.delete(path, *mode).await,
+    };
+    match res {
+        Ok(task) => {
+            let id = task.id();
+            // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
+            cancellers.lock().unwrap().insert(id, task.canceller());
+            let _ = event_tx.send(SessionEvent::Submitted { task_id: id, op });
+            let tx = event_tx.clone();
+            let cancellers = Arc::clone(cancellers);
+            tokio::spawn(async move { forward_progress(task, &tx, &cancellers).await });
+        }
+        Err(error) => {
+            let _ = event_tx.send(SessionEvent::SubmitFailed { op, error });
+        }
+    }
+}
+
+/// Reenvía cada snapshot de progreso de `task` como `SessionEvent::Task` hasta
+/// el terminal; de-registra el canceller al salir. Si la conexión muere sin
+/// desenlace, sintetiza un terminal `Failed{ProviderUnavailable}` reusando el
+/// último snapshot (mismos id/kind).
+async fn forward_progress(
+    task: TaskRef,
+    tx: &mpsc::UnboundedSender<SessionEvent>,
+    cancellers: &Arc<Mutex<HashMap<TaskId, TaskCanceller>>>,
+) {
+    let id = task.id();
+    let mut rx = task.progress();
+    loop {
+        let snap = rx.borrow().clone();
+        let terminal = snap.state.is_terminal();
+        let _ = tx.send(SessionEvent::Task(snap.clone()));
+        if terminal {
+            break;
+        }
+        if rx.changed().await.is_err() {
+            let mut dead = snap;
+            dead.state = TaskState::Failed {
+                error: Error::ProviderUnavailable { retryable: true },
+            };
+            let _ = tx.send(SessionEvent::Task(dead));
+            break;
+        }
+    }
+    // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
+    cancellers.lock().unwrap().remove(&id);
 }

@@ -38,12 +38,12 @@ use norte_proto::{Entry, EntryKind, Segment, VPath};
 use norte_theme::{FileKind, Role, Theme};
 
 mod input;
-#[allow(dead_code)] // (GUI-b T5) allow temporal: main aún no consume estos tipos; se retira en T5.
 mod modal;
 mod session;
 mod theme_map;
 
 use input::{Action, key_to_action};
+use modal::{Modal, ModalOutcome, PendingOp, PendingTransfer, TransferKind};
 use session::{LoadConfig, SessionCmd, SessionEvent};
 
 /// Badge local que prefija un nombre alterado en el display (regla 1 / spec §6:
@@ -99,6 +99,17 @@ struct NorteGui {
     cmds: tokio::sync::mpsc::UnboundedSender<SessionCmd>,
     /// Handle de foco del root: sin él los `KeyDownEvent` no llegan.
     focus_handle: FocusHandle,
+    /// Modal activo (confirmación/conflicto), o `None`.
+    modal: Option<modal::Modal>,
+    /// Tasks en curso/terminadas por id, con la op que las originó (para el
+    /// read-after-write posterior y el reintento de conflicto).
+    inflight: std::collections::HashMap<norte_proto::TaskId, modal::PendingOp>,
+    /// Último snapshot de progreso por task.
+    task_progress: std::collections::HashMap<norte_proto::TaskId, norte_proto::TaskProgress>,
+    /// Conflictos pendientes de resolver cuando ya hay un modal abierto (cola
+    /// simple: se drenan al cerrar el modal actual). Evita que un 2.º conflicto
+    /// pise al 1.º y se pierda sin aviso.
+    conflict_backlog: Vec<(modal::PendingTransfer, norte_proto::ConflictKind)>,
 }
 
 impl NorteGui {
@@ -130,6 +141,10 @@ impl NorteGui {
                     theme,
                     cmds: cmd_tx,
                     focus_handle,
+                    modal: None,
+                    inflight: std::collections::HashMap::new(),
+                    task_progress: std::collections::HashMap::new(),
+                    conflict_backlog: Vec::new(),
                 };
                 gui.spawn_event_loop(event_rx, cx);
                 gui.cd(0, dir.clone(), cx);
@@ -160,6 +175,10 @@ impl NorteGui {
                     theme,
                     cmds: cmd_tx,
                     focus_handle,
+                    modal: None,
+                    inflight: std::collections::HashMap::new(),
+                    task_progress: std::collections::HashMap::new(),
+                    conflict_backlog: Vec::new(),
                 }
             }
         }
@@ -246,6 +265,24 @@ impl NorteGui {
                     }
                 }
             }
+            SessionEvent::Submitted { task_id, op } => {
+                self.inflight.insert(task_id, op);
+            }
+            SessionEvent::SubmitFailed { op, error } => {
+                // Rechazo inmediato: banner en el pane activo (los conflictos
+                // reales llegan por Task terminal Failed, ver abajo).
+                self.errors[self.focus] = Some(format!("operación rechazada: {error}"));
+                let _ = op; // la op no se reintenta automáticamente.
+            }
+            SessionEvent::Task(p) => {
+                let id = p.task_id;
+                let terminal = p.state.is_terminal();
+                let conflict = conflict_kind_of(&p.state);
+                self.task_progress.insert(id, p);
+                if terminal {
+                    self.on_task_terminal(id, conflict);
+                }
+            }
             SessionEvent::ConnectFailed(msg) => {
                 // Sin esto `loading` queda clavado en `true` (nunca llega un
                 // `Listed` que lo baje) y el render pinta "cargando…" para
@@ -261,11 +298,99 @@ impl NorteGui {
         }
     }
 
+    /// Abre el modal de copia/movimiento: origen = marcas/cursor del pane
+    /// activo, destino = dir del pane inactivo. No-op si no hay nada que mover.
+    fn open_transfer_modal(&mut self, kind: TransferKind) {
+        let f = self.focus;
+        let items = self.panes[f].marked_paths();
+        if items.is_empty() {
+            return;
+        }
+        let to = self.panes[1 - f].dir().clone();
+        self.modal = Some(Modal::ConfirmTransfer { kind, items, to });
+    }
+
+    /// Abre el modal de borrado sobre las marcas/cursor del pane activo.
+    fn open_delete_modal(&mut self) {
+        let f = self.focus;
+        let items = self.panes[f].marked_paths();
+        if items.is_empty() {
+            return;
+        }
+        self.modal = Some(Modal::ConfirmDelete {
+            items,
+            permanent: false,
+        });
+    }
+
+    /// Abre el modal de conflicto, o lo encola si ya hay un modal abierto.
+    fn queue_conflict(&mut self, pending: PendingTransfer, conflict: norte_proto::ConflictKind) {
+        if self.modal.is_some() {
+            self.conflict_backlog.push((pending, conflict));
+        } else {
+            self.modal = Some(Modal::ConflictResolve { pending, conflict });
+        }
+    }
+
+    /// Al cerrar un modal, abre el siguiente conflicto encolado (si hay).
+    fn open_next_conflict(&mut self) {
+        if self.modal.is_some() {
+            return;
+        }
+        if let Some((pending, conflict)) = self.conflict_backlog.pop() {
+            self.modal = Some(Modal::ConflictResolve { pending, conflict });
+        }
+    }
+
+    /// Una task llegó a estado terminal: si falló por conflicto, abre (o
+    /// encola) el modal de resolución con la op original; si no, retira la op
+    /// de `inflight`. (El re-listado read-after-write lo añade una task
+    /// posterior.)
+    fn on_task_terminal(
+        &mut self,
+        id: norte_proto::TaskId,
+        conflict: Option<norte_proto::ConflictKind>,
+    ) {
+        let Some(op) = self.inflight.remove(&id) else {
+            return;
+        };
+        if let (
+            Some(kind),
+            PendingOp::Transfer {
+                kind: tk, from, to, ..
+            },
+        ) = (conflict, op)
+        {
+            self.queue_conflict(PendingTransfer { kind: tk, from, to }, kind);
+        }
+    }
+
     /// Maneja una tecla en el pane con foco (ver `input::key_to_action` para el
     /// mapeo puro; aquí solo la EJECUCIÓN, que sí depende del estado vivo del
     /// pane).
     fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let ks = &event.keystroke;
+
+        // Con un modal abierto, la tecla va al modal (captura fija).
+        if let Some(m) = &mut self.modal {
+            match modal::on_key(m, &ks.key) {
+                ModalOutcome::Ignored | ModalOutcome::StayOpen => {}
+                ModalOutcome::Dismiss => {
+                    self.modal = None;
+                    self.open_next_conflict();
+                }
+                ModalOutcome::Submit(ops) => {
+                    self.modal = None;
+                    for op in ops {
+                        let _ = self.cmds.send(SessionCmd::Submit(op));
+                    }
+                    self.open_next_conflict();
+                }
+            }
+            cx.notify();
+            return;
+        }
+
         let f = self.focus;
         let quick_active = self.panes[f].quick_visible().is_some();
         let mods = ks.modifiers;
@@ -353,11 +478,11 @@ impl NorteGui {
                     self.cd(f, dir, cx);
                 }
             }
-            Action::ToggleMark
-            | Action::Copy
-            | Action::Move
-            | Action::Delete
-            | Action::CancelTask => {}
+            Action::ToggleMark => self.panes[f].toggle_mark(),
+            Action::Copy => self.open_transfer_modal(TransferKind::Copy),
+            Action::Move => self.open_transfer_modal(TransferKind::Move),
+            Action::Delete => self.open_delete_modal(),
+            Action::CancelTask => {} // la franja lo cablea en una task posterior; aquí no-op.
         }
         if std::env::var_os("NORTE_GUI_DEBUG").is_some() {
             let nf = self.focus;
@@ -590,6 +715,18 @@ fn single_char(s: Option<&str>) -> Option<char> {
     }
 }
 
+/// El `ConflictKind` de un estado terminal fallido por conflicto, o `None` si
+/// el estado no es `Failed{Conflict}`. Puro: testeable sin GPUI.
+#[must_use]
+fn conflict_kind_of(state: &norte_proto::TaskState) -> Option<norte_proto::ConflictKind> {
+    match state {
+        norte_proto::TaskState::Failed {
+            error: norte_proto::Error::Conflict { conflict, .. },
+        } => Some(*conflict),
+        _ => None,
+    }
+}
+
 /// ¿Sigue vigente el resultado de un `fs.list`? Solo si su generación coincide
 /// con la vigente del pane: un cd más nuevo ya incrementó el contador, dejando
 /// stale a cualquier list en vuelo anterior. Comparar la generación (y no el
@@ -751,5 +888,20 @@ mod tests {
                 fixture.id,
             );
         }
+    }
+
+    /// `conflict_kind_of` extrae el subtipo de un `Failed{Conflict}`, y `None`
+    /// para cualquier otro estado (incluidos otros `Failed` sin conflicto).
+    #[test]
+    fn conflict_kind_of_extrae_el_subtipo() {
+        use norte_proto::{ConflictKind, Error, TaskState};
+        let s = TaskState::Failed {
+            error: Error::Conflict {
+                conflict: ConflictKind::Exists,
+            },
+        };
+        assert_eq!(super::conflict_kind_of(&s), Some(ConflictKind::Exists));
+        assert_eq!(super::conflict_kind_of(&TaskState::Completed), None);
+        assert_eq!(super::conflict_kind_of(&TaskState::Cancelled), None);
     }
 }
