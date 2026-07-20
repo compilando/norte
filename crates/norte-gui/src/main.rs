@@ -1083,6 +1083,12 @@ fn entry_color(theme: &Theme, entry: &Entry) -> gpui::Rgba {
 
 impl Render for NorteGui {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Instrumentación (medición del lag, gated por NORTE_GUI_DEBUG): tiempo
+        // de CONSTRUCCIÓN del árbol de elementos (nuestro coste; el layout/paint
+        // de GPUI ocurre después de devolver). Si escala con las entradas, el
+        // culpable es el O(N)-por-frame (display_name/tema recomputados por fila
+        // sin virtualizar). Ver issue #87.
+        let _t0 = std::time::Instant::now();
         let panes_row = div()
             .flex_1()
             .flex()
@@ -1120,6 +1126,16 @@ impl Render for NorteGui {
                     .justify_center()
                     .bg(rgba(0x000000aa))
                     .child(self.render_modal(m)),
+            );
+        }
+
+        if std::env::var_os("NORTE_GUI_DEBUG").is_some() {
+            eprintln!(
+                "[norte-gui] render construido en {}µs (panes: {}+{} entradas, modal={})",
+                _t0.elapsed().as_micros(),
+                self.panes[0].entries().len(),
+                self.panes[1].entries().len(),
+                self.modal.is_some(),
             );
         }
 
