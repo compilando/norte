@@ -4299,6 +4299,10 @@ dependencies = [
  "norte-encoding",
  "norte-proto",
  "norte-testkit",
+ "schemars 1.2.1",
+ "serde",
+ "thiserror 2.0.18",
+ "toml 0.9.12+spec-1.1.0",
  "unicode-normalization",
 ]
 

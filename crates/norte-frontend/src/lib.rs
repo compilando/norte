@@ -13,6 +13,7 @@
 #![warn(missing_docs)]
 
 mod display;
+pub mod keymap;
 pub mod nav;
 mod pane;
 mod sort;
