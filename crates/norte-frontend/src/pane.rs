@@ -15,6 +15,7 @@
 
 use crate::nav::{Mode, QuickSearch};
 use norte_proto::{Entry, VPath};
+use std::collections::HashSet;
 
 /// Estado no-render de un pane: directorio, entradas (ya ordenadas por el
 /// caller con [`sort_entries`](crate::sort_entries)), cursor y quick search.
@@ -30,6 +31,7 @@ pub struct PaneState {
     cursor: usize,
     loading: bool,
     quick: Option<QuickSearch>,
+    marks: HashSet<VPath>,
 }
 
 impl PaneState {
@@ -44,6 +46,7 @@ impl PaneState {
             cursor: 0,
             loading: false,
             quick: None,
+            marks: HashSet::new(),
         }
     }
 
@@ -55,6 +58,7 @@ impl PaneState {
         self.cursor = 0;
         self.loading = false;
         self.quick = None;
+        self.marks.clear();
     }
 
     /// Marca el pane como cargando `dir`: entradas vacías, `loading=true`, sin
@@ -68,6 +72,7 @@ impl PaneState {
         self.cursor = 0;
         self.loading = true;
         self.quick = None;
+        self.marks.clear();
     }
 
     /// Sube el cursor una posición (tope en 0). No-op si la lista está vacía.
@@ -221,6 +226,54 @@ impl PaneState {
             .filter(|q| q.mode() == Mode::Filter)
             .map(QuickSearch::visible)
     }
+
+    /// Togglea la marca de la entrada seleccionada (respeta el filtro quick:
+    /// marca la entrada VISIBLE bajo la selección). No-op si no hay selección.
+    pub fn toggle_mark(&mut self) {
+        let Some(path) = self.selected().map(|e| e.path.clone()) else {
+            return;
+        };
+        if !self.marks.remove(&path) {
+            self.marks.insert(path);
+        }
+    }
+
+    /// ¿Está marcada esta entrada? (por su `VPath` absoluto).
+    #[must_use]
+    pub fn is_marked(&self, entry: &Entry) -> bool {
+        self.marks.contains(&entry.path)
+    }
+
+    /// Cuántas entradas marcadas.
+    #[must_use]
+    pub fn marks_len(&self) -> usize {
+        self.marks.len()
+    }
+
+    /// Los `VPath` sobre los que opera la acción: las marcas (en el ORDEN de
+    /// `entries`, determinista), o la selección (respeta el filtro quick) si
+    /// no hay marcas (vacío si tampoco hay selección). Fuente única de "sobre
+    /// qué opera la op".
+    #[must_use]
+    pub fn marked_paths(&self) -> Vec<VPath> {
+        if self.marks.is_empty() {
+            return self
+                .selected()
+                .map(|e| e.path.clone())
+                .into_iter()
+                .collect();
+        }
+        self.entries
+            .iter()
+            .filter(|e| self.marks.contains(&e.path))
+            .map(|e| e.path.clone())
+            .collect()
+    }
+
+    /// Limpia todas las marcas.
+    pub fn clear_marks(&mut self) {
+        self.marks.clear();
+    }
 }
 
 #[cfg(test)]
@@ -334,5 +387,122 @@ mod tests {
         p.cursor_up();
         assert_eq!(p.cursor(), 0);
         assert!(p.selected().is_none());
+    }
+
+    #[test]
+    fn toggle_marca_y_desmarca_la_entrada_bajo_cursor() {
+        let mut p = pane(&["a", "b", "c"]);
+        p.cursor_down(); // cursor en "b"
+        assert_eq!(p.marks_len(), 0);
+        p.toggle_mark();
+        assert_eq!(p.marks_len(), 1);
+        assert!(p.is_marked(&e("mem:///b", EntryKind::File)));
+        assert!(!p.is_marked(&e("mem:///a", EntryKind::File)));
+        p.toggle_mark(); // desmarca
+        assert_eq!(p.marks_len(), 0);
+        assert!(!p.is_marked(&e("mem:///b", EntryKind::File)));
+    }
+
+    #[test]
+    fn marked_paths_sin_marcas_devuelve_el_target_del_cursor() {
+        let mut p = pane(&["a", "b", "c"]);
+        p.cursor_down(); // "b"
+        assert_eq!(p.marked_paths(), vec![VPath::parse("mem:///b").unwrap()]);
+    }
+
+    #[test]
+    fn marked_paths_con_marcas_en_orden_de_entries() {
+        let mut p = pane(&["a", "b", "c"]);
+        p.cursor_down();
+        p.cursor_down();
+        p.toggle_mark(); // marca "c"
+        p.home();
+        p.toggle_mark(); // marca "a"
+        // Orden = el de `entries` (determinista), no el de inserción.
+        assert_eq!(
+            p.marked_paths(),
+            vec![
+                VPath::parse("mem:///a").unwrap(),
+                VPath::parse("mem:///c").unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn set_listing_limpia_las_marcas() {
+        let mut p = pane(&["a", "b"]);
+        p.toggle_mark();
+        assert_eq!(p.marks_len(), 1);
+        p.set_listing(
+            VPath::parse("mem:///otro").unwrap(),
+            vec![e("mem:///otro/x", EntryKind::File)],
+        );
+        assert_eq!(p.marks_len(), 0);
+    }
+
+    #[test]
+    fn begin_loading_limpia_las_marcas() {
+        let mut p = pane(&["a", "b"]);
+        p.toggle_mark();
+        p.begin_loading(VPath::parse("mem:///nuevo").unwrap());
+        assert_eq!(p.marks_len(), 0);
+    }
+
+    #[test]
+    fn toggle_bajo_filtro_marca_la_seleccion_visible() {
+        let mut p = pane(&["alfa", "beta", "alto"]);
+        p.quick_start(crate::nav::Mode::Filter);
+        p.quick_char('a'); // "alfa" y "alto" visibles; selección = "alfa"
+        p.toggle_mark();
+        assert!(p.is_marked(&e("mem:///alfa", EntryKind::File)));
+        assert!(!p.is_marked(&e("mem:///beta", EntryKind::File)));
+    }
+
+    #[test]
+    fn marca_identidad_por_bytes_del_path_nombre_hostil() {
+        // Un nombre con bytes NO-UTF8 (0xFF): la marca lo distingue por su
+        // VPath exacto, sin degradar a lossy (regla 1).
+        let hostile = VPath::parse("mem:///")
+            .unwrap()
+            .join(norte_proto::Segment::new(vec![0xFF, 0xFE]).unwrap());
+        let benign = VPath::parse("mem:///a").unwrap();
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                Entry {
+                    path: hostile.clone(),
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                },
+                Entry {
+                    path: benign.clone(),
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                },
+            ],
+        );
+        p.toggle_mark(); // marca la hostil (cursor 0)
+        assert!(p.marks.contains(&hostile));
+        assert!(!p.marks.contains(&benign));
+        assert_eq!(p.marked_paths(), vec![hostile]);
+    }
+
+    #[test]
+    fn clear_marks_vacia_el_set() {
+        let mut p = pane(&["a", "b"]);
+        p.toggle_mark();
+        p.cursor_down();
+        p.toggle_mark();
+        assert_eq!(p.marks_len(), 2);
+        p.clear_marks();
+        assert_eq!(p.marks_len(), 0);
+    }
+
+    #[test]
+    fn marked_paths_sin_entries_ni_marcas_es_vacio() {
+        let p = PaneState::new(VPath::parse("mem:///").unwrap(), vec![]);
+        assert!(p.marked_paths().is_empty());
     }
 }
