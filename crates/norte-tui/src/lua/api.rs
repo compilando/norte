@@ -138,9 +138,13 @@ impl Drop for LoadingGuard<'_> {
 const EVAL_BUDGET: u32 = 10_000_000;
 
 /// Charset de nombres de comando (mismo espíritu que `agent_session`):
-/// `[a-z0-9._-]{1,64}`. `pub(crate)`: el keymap (T8) valida con ESTA misma
-/// función los bindings `lua:<nombre>` — una sola fuente, cero deriva.
-pub(crate) fn valid_name(name: &str) -> bool {
+/// `[a-z0-9._-]{1,64}`. Usado por el runtime Lua (`norte.command`) para
+/// validar el nombre registrado en `eval_layer`. El charset está MIRRORED
+/// (GUI-c T2) en `norte_frontend::keymap::valid_lua_name` — el motor de
+/// keymap compartido valida los bindings `lua:<nombre>` con su propia
+/// copia (no puede depender de `norte-tui`, que depende de él); son dos
+/// funciones idénticas por diseño, no una deriva accidental.
+fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
         && name.bytes().all(|b| {

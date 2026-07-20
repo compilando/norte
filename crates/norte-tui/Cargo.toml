@@ -57,8 +57,10 @@ harness = false
 
 [features]
 # Generación de los JSON Schema publicados (golden test de docs/schema);
-# fuera del binario final (ADR 0007).
-schema = ["dep:schemars"]
+# fuera del binario final (ADR 0007). `KeymapFile` vive en `norte-frontend`
+# desde GUI-c T2 — su derive `JsonSchema` está tras la MISMA feature ahí, así
+# que hay que reenviarla o `schema_for!` no compila.
+schema = ["dep:schemars", "norte-frontend/schema"]
 
 [[test]]
 name = "schema"

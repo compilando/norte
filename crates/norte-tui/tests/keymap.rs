@@ -1,12 +1,13 @@
-//! Tests del keymap engine (ADR 0006): parseo, fusión Yazi, prefix-free
-//! al cargar y resolución determinista por trie.
+//! Tests de integración del keymap de la TUI (ADR 0006): parseo, fusión
+//! Yazi, prefix-free al cargar y resolución determinista por trie. Ejercen
+//! el motor COMPARTIDO de [`norte_frontend::keymap`] A TRAVÉS del re-export
+//! de `norte_tui::keymap` (GUI-c T2) — no una copia local: si la extracción
+//! rompiera algo, estos tests lo cazarían igual que antes.
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use norte_tui::keymap::{COMMANDS as COMANDOS, KeyCode};
 use norte_tui::keymap::{
-    Chord, Effective, KeymapError, Resolution, Resolver, parse_chord, parse_keymap,
+    Chord, Effective, KeymapError, Mods, Resolution, Resolver, parse_chord, parse_keymap,
 };
-
-use norte_tui::keymap::COMMANDS as COMANDOS;
 
 fn eff(preset: &str, user: Option<&str>) -> Result<Effective, KeymapError> {
     let preset = parse_keymap(preset)?;
@@ -18,39 +19,82 @@ fn eff(preset: &str, user: Option<&str>) -> Result<Effective, KeymapError> {
 fn parse_de_chords() {
     assert_eq!(
         parse_chord("f5").unwrap(),
-        Chord::new(KeyModifiers::NONE, KeyCode::F(5))
+        Chord::new(Mods::default(), KeyCode::F(5))
     );
     assert_eq!(
         parse_chord("ctrl+c").unwrap(),
-        Chord::new(KeyModifiers::CONTROL, KeyCode::Char('c'))
+        Chord::new(
+            Mods {
+                ctrl: true,
+                ..Default::default()
+            },
+            KeyCode::Char('c')
+        )
     );
     assert_eq!(
         parse_chord("alt+enter").unwrap(),
-        Chord::new(KeyModifiers::ALT, KeyCode::Enter)
+        Chord::new(
+            Mods {
+                alt: true,
+                ..Default::default()
+            },
+            KeyCode::Enter
+        )
     );
     // Mayúscula: el char YA codifica shift.
     assert_eq!(
         parse_chord("G").unwrap(),
-        Chord::new(KeyModifiers::NONE, KeyCode::Char('G'))
+        Chord::new(Mods::default(), KeyCode::Char('G'))
     );
     assert_eq!(
         parse_chord("shift+f5").unwrap(),
-        Chord::new(KeyModifiers::SHIFT, KeyCode::F(5))
+        Chord::new(
+            Mods {
+                shift: true,
+                ..Default::default()
+            },
+            KeyCode::F(5)
+        )
     );
     for s in ["", "ctrl+", "megatecla", "ctrl+ctrl+c", "f99"] {
         assert!(parse_chord(s).is_err(), "{s:?} debe fallar");
     }
 }
 
+/// El chord canónico ([`Chord::new`], re-exportado desde
+/// `norte_frontend::keymap`) descarta `shift` en teclas `Char` — el
+/// carácter YA lo codifica (`'G'` vs `'g'`) — pero lo conserva en el resto
+/// (p. ej. `shift+f5`). Este era el comportamiento de `Chord::from_event`
+/// (crossterm) antes de GUI-c T2; ahora vive en el propio `Chord::new`
+/// neutro y el adaptador `chord_from_crossterm` lo hereda gratis.
 #[test]
-fn eventos_char_con_shift_se_normalizan() {
-    // crossterm entrega Char('G') CON el modificador SHIFT: el chord
-    // canónico lo descarta (el char ya lo codifica).
-    let c = Chord::from_event(KeyModifiers::SHIFT, KeyCode::Char('G'));
-    assert_eq!(c, Chord::new(KeyModifiers::NONE, KeyCode::Char('G')));
+fn chord_new_normaliza_shift_en_chars_pero_no_en_otras_teclas() {
+    let c = Chord::new(
+        Mods {
+            shift: true,
+            ..Default::default()
+        },
+        KeyCode::Char('G'),
+    );
+    assert_eq!(c, Chord::new(Mods::default(), KeyCode::Char('G')));
     // En teclas no-char, shift ES información.
-    let f = Chord::from_event(KeyModifiers::SHIFT, KeyCode::F(5));
-    assert_eq!(f, Chord::new(KeyModifiers::SHIFT, KeyCode::F(5)));
+    let f = Chord::new(
+        Mods {
+            shift: true,
+            ..Default::default()
+        },
+        KeyCode::F(5),
+    );
+    assert_eq!(
+        f,
+        Chord::new(
+            Mods {
+                shift: true,
+                ..Default::default()
+            },
+            KeyCode::F(5)
+        )
+    );
 }
 
 #[test]

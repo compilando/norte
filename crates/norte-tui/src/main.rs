@@ -26,7 +26,9 @@ use norte_tui::app::{
     sort_entries, theme_error_category,
 };
 use norte_tui::config::{self, Layers, WatchMode};
-use norte_tui::keymap::{COMMANDS, Chord, Effective, Resolution, Resolver, Screen, presets};
+use norte_tui::keymap::{
+    COMMANDS, Effective, Resolution, Resolver, Screen, chord_from_crossterm, presets,
+};
 use norte_tui::lua::{
     CommandRun, Layer, LuaHost, PaneCtx, RunOutcome, StatusInput, TrustDecision, TrustStore,
 };
@@ -746,39 +748,56 @@ async fn run(
                         } else {
                             &mut *resolver
                         };
-                        match active.push(Chord::from_event(key.modifiers, key.code)) {
-                            Resolution::Run(cmd) => {
-                                app.pending.clear();
-                                // `lua:<nombre>` (M4): al despachador Lua —
-                                // jamás a `dispatch` (no es comando fijo).
-                                if let Some(name) = cmd.strip_prefix("lua:") {
-                                    run_lua_command(
-                                        app,
-                                        lua_host.as_ref(),
-                                        backend,
-                                        name,
-                                        &mut lua_run,
-                                        &mut lua_queue,
-                                    );
-                                    continue;
+                        // Teclas que el keymap no modela (Media, BackTab,
+                        // CapsLock…) no llegan al resolver como chord, pero
+                        // el trato SÍ es el mismo que un `Resolution::Reset`:
+                        // `active.reset()` rompe cualquier secuencia
+                        // pendiente EN EL RESOLVER (no solo el `app.pending`
+                        // de pantalla) — antes `from_event` siempre empujaba
+                        // un chord (aunque exótico) y el `Miss` resultante
+                        // limpiaba el pending interno; `chord_from_crossterm`
+                        // devuelve `None` en su lugar, así que el reset hay
+                        // que pedirlo explícito, jamás dejar la secuencia a
+                        // medias viva.
+                        if let Some(chord) = chord_from_crossterm(key.modifiers, key.code) {
+                            match active.push(chord) {
+                                Resolution::Run(cmd) => {
+                                    app.pending.clear();
+                                    // `lua:<nombre>` (M4): al despachador Lua —
+                                    // jamás a `dispatch` (no es comando fijo).
+                                    if let Some(name) = cmd.strip_prefix("lua:") {
+                                        run_lua_command(
+                                            app,
+                                            lua_host.as_ref(),
+                                            backend,
+                                            name,
+                                            &mut lua_run,
+                                            &mut lua_queue,
+                                        );
+                                        continue;
+                                    }
+                                    let outcome = dispatch(
+                                        app, backend, &mut events, help_lines, quick_mode, &cmd,
+                                    )
+                                    .await;
+                                    apply_cd(&mut fill, outcome);
+                                    // Un cd (nav.parent…) apagó el modo virtual del
+                                    // pane de búsqueda: suelta el run y cancela.
+                                    reap_search_run(app, &mut search_run);
                                 }
-                                let outcome =
-                                    dispatch(app, backend, &mut events, help_lines, quick_mode, &cmd)
-                                        .await;
-                                apply_cd(&mut fill, outcome);
-                                // Un cd (nav.parent…) apagó el modo virtual del
-                                // pane de búsqueda: suelta el run y cancela.
-                                reap_search_run(app, &mut search_run);
+                                Resolution::Pending(_) => {
+                                    app.pending = active
+                                        .pending()
+                                        .iter()
+                                        .map(ToString::to_string)
+                                        .collect::<Vec<_>>()
+                                        .join(" ");
+                                }
+                                Resolution::Reset => app.pending.clear(),
                             }
-                            Resolution::Pending(_) => {
-                                app.pending = active
-                                    .pending()
-                                    .iter()
-                                    .map(ToString::to_string)
-                                    .collect::<Vec<_>>()
-                                    .join(" ");
-                            }
-                            Resolution::Reset => app.pending.clear(),
+                        } else {
+                            active.reset();
+                            app.pending.clear();
                         }
                     }
                 }

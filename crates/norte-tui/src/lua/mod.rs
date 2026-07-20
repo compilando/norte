@@ -12,7 +12,6 @@ mod fs;
 mod statusbar;
 mod trust;
 
-pub(crate) use api::valid_name;
 pub use api::{Layer, LuaHost, LuaLoadError, LuaWarning};
 pub use driver::{CommandRun, DEFAULT_TIMEOUT, RunOutcome};
 pub use fs::PaneCtx;

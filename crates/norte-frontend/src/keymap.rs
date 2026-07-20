@@ -640,6 +640,12 @@ impl Resolver {
         &self.pending
     }
 
+    /// Rompe cualquier secuencia pendiente (una tecla no modelada por el
+    /// frontend equivale a un miss: cancela el multi-tecla en curso).
+    pub fn reset(&mut self) {
+        self.pending.clear();
+    }
+
     /// Empuja una tecla. Con secuencia pendiente, `Esc` SIEMPRE cancela
     /// (jamás ejecuta un binding); sin pendiente, `Esc` es una tecla más.
     pub fn push(&mut self, chord: Chord) -> Resolution {
@@ -1239,6 +1245,38 @@ keymap = [{ on = ["x"], run = "foo.bar" }]"#,
         assert!(matches!(
             Effective::build(&preset, None, &["otro.cmd"]),
             Err(KeymapError::UnknownCommand { .. })
+        ));
+    }
+
+    /// Regresión GUI-c T2 review: una tecla que el FRONTEND no modela
+    /// (p. ej. crossterm `BackTab`/`Media`, adaptada a `None`) debe romper
+    /// cualquier secuencia multi-tecla en curso — el viejo `from_event`
+    /// SIEMPRE empujaba al resolver (aunque fuera con un chord exótico que
+    /// jamás casaba), lo que producía un `Miss` y limpiaba el pending. Un
+    /// adaptador que devuelve `Option` y un caller que simplemente
+    /// descarta el `None` deja el pending INTERNO intacto — `reset()` es
+    /// el equivalente explícito al `Miss` que el adaptador ya no puede
+    /// producir por sí solo.
+    #[test]
+    fn reset_rompe_la_secuencia_pendiente() {
+        let kf = parse_keymap(
+            r#"[pane]
+keymap = [{ on = ["g", "g"], run = "cursor.top" }]"#,
+        )
+        .unwrap();
+        let eff = Effective::build_for(&kf, &[], &["cursor.top"], Screen::Browse).unwrap();
+        let mut r = Resolver::new(eff);
+        assert!(matches!(
+            r.push(Chord::new(Mods::default(), KeyCode::Char('g'))),
+            Resolution::Pending(_)
+        ));
+        r.reset();
+        // Tras reset, un solo 'g' vuelve a estar pendiente (la secuencia
+        // se rompió: si NO se hubiera roto, este segundo 'g' dispararía
+        // Run("cursor.top") en vez de Pending(1)).
+        assert!(matches!(
+            r.push(Chord::new(Mods::default(), KeyCode::Char('g'))),
+            Resolution::Pending(_)
         ));
     }
 }
