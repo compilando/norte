@@ -200,6 +200,15 @@ mod tests {
     }
 
     #[test]
+    fn dest_for_no_pliega_nfd_a_nfc() {
+        let src = VPath::parse("mem:///")
+            .unwrap()
+            .join(norte_proto::Segment::new(vec![0x65, 0xCC, 0x81]).unwrap());
+        let dest = dest_for(&vp("mem:///dst"), &src).expect("tiene nombre");
+        assert_eq!(dest.file_name().unwrap().as_bytes(), &[0x65, 0xCC, 0x81]);
+    }
+
+    #[test]
     fn confirm_transfer_y_produce_una_op_por_item() {
         let mut m = Modal::ConfirmTransfer {
             kind: TransferKind::Copy,

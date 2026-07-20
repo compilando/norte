@@ -505,4 +505,39 @@ mod tests {
         let p = PaneState::new(VPath::parse("mem:///").unwrap(), vec![]);
         assert!(p.marked_paths().is_empty());
     }
+
+    #[test]
+    fn marcas_distinguen_gemelos_nfc_y_nfd_sin_plegar() {
+        // é en NFC (0xC3 0xA9) vs NFD (0x65 0xCC 0x81): bytes distintos, misma
+        // forma visual. La marca NO debe plegarlos (trampa macOS: preserva bytes).
+        let nfc = VPath::parse("mem:///")
+            .unwrap()
+            .join(norte_proto::Segment::new(vec![0xC3, 0xA9]).unwrap());
+        let nfd = VPath::parse("mem:///")
+            .unwrap()
+            .join(norte_proto::Segment::new(vec![0x65, 0xCC, 0x81]).unwrap());
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                Entry {
+                    path: nfc.clone(),
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                },
+                Entry {
+                    path: nfd.clone(),
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                },
+            ],
+        );
+        p.toggle_mark();
+        p.cursor_down();
+        p.toggle_mark();
+        assert_eq!(p.marks_len(), 2, "nfc y nfd son DOS marcas distintas");
+        assert!(p.marks.contains(&nfc));
+        assert!(p.marks.contains(&nfd));
+    }
 }

@@ -23,8 +23,7 @@ use tokio::sync::mpsc;
 
 use crate::modal::{PendingOp, TransferKind};
 
-/// Config resuelta del entorno (socket + dir inicial). Idéntica a la del spike
-/// (movida de `backend_task.rs`).
+/// Config resuelta del entorno (socket + dir inicial).
 pub struct LoadConfig {
     /// Socket UDS del daemon.
     pub socket: PathBuf,
@@ -70,10 +69,6 @@ pub enum SessionCmd {
     /// Lanza una operación mutante (copy/move/delete) como task.
     Submit(PendingOp),
     /// Cancela una task en curso (`task.cancel`, fire-and-forget).
-    // allow(dead_code): aún sin constructor — `Action::CancelTask` es no-op
-    // hasta la task de la franja de tasks (GUI-b, posterior a esta), que
-    // sabrá qué `TaskId` está seleccionado y mandará este comando.
-    #[allow(dead_code)]
     Cancel(TaskId),
 }
 

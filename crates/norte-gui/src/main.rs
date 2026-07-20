@@ -29,7 +29,7 @@
 use gpui::{
     App, Bounds, Context, FocusHandle, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
     ParentElement, Render, ScrollDelta, ScrollWheelEvent, SharedString, Styled, Window,
-    WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    WindowBounds, WindowOptions, div, prelude::*, px, rgb, rgba, size,
 };
 use gpui_platform::application;
 
@@ -69,6 +69,13 @@ const BORDER_UNFOCUS: u32 = 0x3a3a3a;
 const SEL_BG: u32 = 0x264f78;
 const ERR_FG: u32 = 0xf87171;
 const QUICK_FG: u32 = 0xfbbf24;
+/// Fondo de una fila MARCADA (distinto de `SEL_BG`, que es la selección bajo
+/// cursor — marca y selección son ortogonales, ver `render_row`).
+const MARK_BG: u32 = 0x3d3315;
+
+/// Marcador de fila con marca (prefijo visible; el bool lo expone
+/// `PaneState::is_marked`, la GUI solo lo pinta).
+const MARK_MARKER: &str = "●";
 
 /// El *root view*: dos panes navegables, cuál tiene el foco, el tema cacheado y
 /// el canal hacia el hilo de sesión persistente (para relistar en cada `cd`).
@@ -110,6 +117,8 @@ struct NorteGui {
     /// simple: se drenan al cerrar el modal actual). Evita que un 2.º conflicto
     /// pise al 1.º y se pierda sin aviso.
     conflict_backlog: Vec<(modal::PendingTransfer, norte_proto::ConflictKind)>,
+    /// Orden de llegada de las tasks (render estable; `task_progress` no ordena).
+    task_order: Vec<norte_proto::TaskId>,
 }
 
 impl NorteGui {
@@ -145,6 +154,7 @@ impl NorteGui {
                     inflight: std::collections::HashMap::new(),
                     task_progress: std::collections::HashMap::new(),
                     conflict_backlog: Vec::new(),
+                    task_order: Vec::new(),
                 };
                 gui.spawn_event_loop(event_rx, cx);
                 gui.cd(0, dir.clone(), cx);
@@ -179,6 +189,7 @@ impl NorteGui {
                     inflight: std::collections::HashMap::new(),
                     task_progress: std::collections::HashMap::new(),
                     conflict_backlog: Vec::new(),
+                    task_order: Vec::new(),
                 }
             }
         }
@@ -211,7 +222,7 @@ impl NorteGui {
             while let Some(ev) = rx.recv().await {
                 let alive = this
                     .update(cx, |view, cx| {
-                        view.apply_event(ev);
+                        view.apply_event(ev, cx);
                         cx.notify();
                     })
                     .is_ok();
@@ -224,7 +235,7 @@ impl NorteGui {
     }
 
     /// Aplica UN evento de sesión al estado.
-    fn apply_event(&mut self, ev: SessionEvent) {
+    fn apply_event(&mut self, ev: SessionEvent, cx: &mut Context<Self>) {
         match ev {
             SessionEvent::Listed {
                 pane,
@@ -278,9 +289,21 @@ impl NorteGui {
                 let id = p.task_id;
                 let terminal = p.state.is_terminal();
                 let conflict = conflict_kind_of(&p.state);
+                if !self.task_progress.contains_key(&id) {
+                    self.task_order.push(id);
+                }
                 self.task_progress.insert(id, p);
                 if terminal {
-                    self.on_task_terminal(id, conflict);
+                    self.on_task_terminal(id, conflict, cx);
+                    // Poda las tasks completadas OK (crecimiento acotado); los
+                    // fallos/cancelaciones se quedan visibles (dismiss-key = deuda).
+                    if matches!(
+                        self.task_progress.get(&id).map(|p| &p.state),
+                        Some(norte_proto::TaskState::Completed)
+                    ) {
+                        self.task_progress.remove(&id);
+                        self.task_order.retain(|t| *t != id);
+                    }
                 }
             }
             SessionEvent::ConnectFailed(msg) => {
@@ -342,26 +365,54 @@ impl NorteGui {
         }
     }
 
-    /// Una task llegó a estado terminal: si falló por conflicto, abre (o
-    /// encola) el modal de resolución con la op original; si no, retira la op
-    /// de `inflight`. (El re-listado read-after-write lo añade una task
-    /// posterior.)
+    /// Una task llegó a terminal: si falló por conflicto, encola/abre el modal
+    /// de resolución; en éxito/cancelación/fallo-no-conflicto relista los dirs
+    /// afectados (read-after-write). Retira la op de `inflight` en todos los
+    /// caminos.
     fn on_task_terminal(
         &mut self,
         id: norte_proto::TaskId,
         conflict: Option<norte_proto::ConflictKind>,
+        cx: &mut Context<Self>,
     ) {
         let Some(op) = self.inflight.remove(&id) else {
             return;
         };
-        if let (
-            Some(kind),
-            PendingOp::Transfer {
+        if let Some(kind) = conflict {
+            if let PendingOp::Transfer {
                 kind: tk, from, to, ..
-            },
-        ) = (conflict, op)
-        {
-            self.queue_conflict(PendingTransfer { kind: tk, from, to }, kind);
+            } = op
+            {
+                self.queue_conflict(PendingTransfer { kind: tk, from, to }, kind);
+            }
+            return;
+        }
+        // Éxito/cancelación/fallo-no-conflicto: relista los dirs afectados
+        // (read-after-write).
+        let affected: Vec<VPath> = match &op {
+            // Copy: solo cambia el destino; el origen queda intacto (no pises
+            // su cursor/marcas relistándolo).
+            PendingOp::Transfer {
+                kind: TransferKind::Copy,
+                to,
+                ..
+            } => to.parent().into_iter().collect(),
+            // Move: desaparece del origen y aparece en el destino.
+            PendingOp::Transfer { from, to, .. } => {
+                [from.parent(), to.parent()].into_iter().flatten().collect()
+            }
+            PendingOp::Delete { path, .. } => path.parent().into_iter().collect(),
+        };
+        self.relist_dirs(&affected, cx);
+    }
+
+    /// Relista cualquier pane cuyo `dir` esté en `dirs` (read-after-write).
+    fn relist_dirs(&mut self, dirs: &[VPath], cx: &mut Context<Self>) {
+        for pane in 0..2 {
+            let cur = self.panes[pane].dir().clone();
+            if dirs.contains(&cur) {
+                self.cd(pane, cur, cx);
+            }
         }
     }
 
@@ -482,7 +533,18 @@ impl NorteGui {
             Action::Copy => self.open_transfer_modal(TransferKind::Copy),
             Action::Move => self.open_transfer_modal(TransferKind::Move),
             Action::Delete => self.open_delete_modal(),
-            Action::CancelTask => {} // la franja lo cablea en una task posterior; aquí no-op.
+            Action::CancelTask => {
+                // Cancela la primera task NO terminal (sin navegación de franja
+                // todavía — deuda). En la práctica hay una op activa a la vez.
+                let target = self.task_order.iter().copied().find(|id| {
+                    self.task_progress
+                        .get(id)
+                        .is_some_and(|p| !p.state.is_terminal())
+                });
+                if let Some(id) = target {
+                    let _ = self.cmds.send(SessionCmd::Cancel(id));
+                }
+            }
         }
         if std::env::var_os("NORTE_GUI_DEBUG").is_some() {
             let nf = self.focus;
@@ -564,7 +626,8 @@ impl NorteGui {
                 .map(|&j| {
                     let e = &pane.entries()[j];
                     let hl = sel_path.as_ref() == Some(&e.path);
-                    self.render_row(i, j, e, hl, cx)
+                    let marked = pane.is_marked(e);
+                    self.render_row(i, j, e, hl, marked, cx)
                 })
                 .collect(),
             None => pane
@@ -573,7 +636,8 @@ impl NorteGui {
                 .enumerate()
                 .map(|(j, e)| {
                     let hl = sel_path.as_ref() == Some(&e.path);
-                    self.render_row(i, j, e, hl, cx)
+                    let marked = pane.is_marked(e);
+                    self.render_row(i, j, e, hl, marked, cx)
                 })
                 .collect(),
         };
@@ -672,18 +736,23 @@ impl NorteGui {
         )
     }
 
-    /// Pinta una fila: badge hostil + nombre saneado + indicador de tipo,
-    /// coloreado por tipo de archivo; fondo resaltado si es la selección.
+    /// Pinta una fila: marcador de marca + badge hostil + nombre saneado +
+    /// indicador de tipo, coloreado por tipo de archivo; fondo distinto si está
+    /// marcada, resaltado (que gana) si es la selección bajo cursor.
     fn render_row(
         &self,
         pane: usize,
         idx: usize,
         entry: &Entry,
         highlighted: bool,
+        marked: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let bytes = entry.path.file_name().map_or(&b""[..], Segment::as_bytes);
-        let label = row_label(bytes, entry.kind);
+        let mut label = row_label(bytes, entry.kind);
+        if marked {
+            label = format!("{MARK_MARKER} {label}");
+        }
         let color = entry_color(&self.theme, entry);
         let dir_target = (entry.kind == EntryKind::Dir).then(|| entry.path.clone());
 
@@ -693,6 +762,9 @@ impl NorteGui {
             .text_color(color)
             .truncate()
             .child(SharedString::from(label));
+        if marked {
+            row = row.bg(rgb(MARK_BG));
+        }
         if highlighted {
             row = row.bg(rgb(SEL_BG));
         }
@@ -701,6 +773,97 @@ impl NorteGui {
             cx.listener(move |this, ev: &MouseDownEvent, _w, cx| {
                 this.on_row_click(pane, idx, dir_target.clone(), ev.click_count, cx);
             }),
+        )
+    }
+
+    /// Franja de tasks al pie: una fila por task en orden de llegada (kind + % +
+    /// estado + entrada en curso saneada). Sin resaltado (deuda: navegación de
+    /// franja, T7).
+    fn render_task_strip(&self) -> impl IntoElement {
+        let mut strip = div()
+            .flex()
+            .flex_col()
+            .max_h(px(120.0))
+            .overflow_hidden()
+            .bg(rgb(HEADER_BG))
+            .px(px(4.0))
+            .py(px(2.0));
+        if self.task_order.is_empty() {
+            return strip.child(SharedString::from("(sin tasks)"));
+        }
+        for id in self.task_order.iter() {
+            let Some(p) = self.task_progress.get(id) else {
+                continue;
+            };
+            let row = div().px(px(2.0)).child(SharedString::from(task_line(p)));
+            strip = strip.child(row);
+        }
+        strip
+    }
+
+    /// Pinta el panel del modal activo (overlay centrado, ver `render`): título
+    /// y cuerpo saneados por [`modal_lines`] (mapeados 1:1 a divs, sin volver a
+    /// tocar bytes de usuario aquí), más el pie de teclas fijo por variante.
+    fn render_modal(&self, m: &Modal) -> impl IntoElement {
+        let lines = modal_lines(m);
+        let footer = match m {
+            Modal::ConfirmTransfer { .. } => "y confirmar   n/Esc cancelar",
+            Modal::ConfirmDelete { .. } => "y confirmar   p alternar permanente   n/Esc cancelar",
+            Modal::ConflictResolve { .. } => "o sobrescribir   s saltar   c/Esc cancelar",
+        };
+        // La línea de modo (índice 1 en ConfirmDelete) se alerta en rojo si es
+        // borrado PERMANENTE.
+        let alert_line = matches!(
+            m,
+            Modal::ConfirmDelete {
+                permanent: true,
+                ..
+            }
+        )
+        .then_some(1);
+
+        let mut panel = div()
+            .flex()
+            .flex_col()
+            .min_w(px(360.0))
+            .max_w(px(560.0))
+            .max_h(px(360.0))
+            .overflow_hidden()
+            .border_2()
+            .border_color(rgb(BORDER_FOCUS))
+            .bg(rgb(HEADER_BG))
+            .text_color(rgb(FG))
+            .px(px(12.0))
+            .py(px(8.0))
+            .gap(px(2.0));
+
+        let mut lines = lines.into_iter();
+        if let Some(title) = lines.next() {
+            panel = panel.child(
+                div()
+                    .px(px(2.0))
+                    .py(px(1.0))
+                    .bg(rgb(BORDER_FOCUS))
+                    .text_color(rgb(FG))
+                    .truncate()
+                    .child(SharedString::from(title)),
+            );
+        }
+        for (i, line) in lines.enumerate() {
+            let mut row = div().truncate().child(SharedString::from(line));
+            if Some(i + 1) == alert_line {
+                row = row.text_color(rgb(ERR_FG));
+            }
+            panel = panel.child(row);
+        }
+
+        panel.child(
+            div()
+                .mt(px(4.0))
+                .px(px(2.0))
+                .py(px(1.0))
+                .bg(rgb(SEL_BG))
+                .child(SharedString::from(footer)),
         )
     }
 }
@@ -774,6 +937,130 @@ fn kind_indicator(kind: EntryKind) -> &'static str {
     }
 }
 
+/// Línea de una task para la franja: `[copy] 42% running X`. `X` = la entrada
+/// en curso saneada con `display_name` (jamás bytes crudos). PURA (sin GPUI).
+#[must_use]
+fn task_line(p: &norte_proto::TaskProgress) -> String {
+    use norte_proto::{TaskKind, TaskState};
+    let kind = match p.kind {
+        TaskKind::Copy => "copy",
+        TaskKind::Move => "move",
+        TaskKind::Delete => "delete",
+        TaskKind::Undo => "undo",
+        TaskKind::Search => "search",
+        TaskKind::Unknown => "task",
+    };
+    let pct = match p.entries_total {
+        Some(t) if t > 0 => format!("{}%", p.entries_done.saturating_mul(100) / t),
+        _ => "…".to_string(),
+    };
+    let state = match &p.state {
+        TaskState::Pending => "pending",
+        TaskState::Running => "running",
+        TaskState::Paused => "paused",
+        TaskState::Completed => "done",
+        TaskState::Cancelled => "cancelled",
+        TaskState::Failed { .. } => "failed",
+        _ => "?",
+    };
+    let current = p
+        .current
+        .as_ref()
+        .and_then(|v| v.file_name().map(norte_proto::Segment::as_bytes))
+        .map(|b| {
+            let (name, hostile) = norte_frontend::display_name(b);
+            if hostile {
+                format!("{HOSTILE_BADGE} {name}")
+            } else {
+                name
+            }
+        })
+        .unwrap_or_default();
+    format!("[{kind}] {pct} {state} {current}")
+        .trim_end()
+        .to_string()
+}
+
+/// Cuántos items lista `modal_lines` antes de resumir el resto en "… y N más".
+const MODAL_ITEM_LIMIT: usize = 10;
+
+/// Hasta [`MODAL_ITEM_LIMIT`] nombres saneados (`display_name` por el nombre
+/// de archivo, jamás bytes crudos); si sobran, una línea final "… y N más".
+/// PURA (sin GPUI).
+fn item_lines(items: &[VPath]) -> Vec<String> {
+    let mut lines: Vec<String> = items
+        .iter()
+        .take(MODAL_ITEM_LIMIT)
+        .map(|p| {
+            let bytes = p.file_name().map_or(&b""[..], Segment::as_bytes);
+            let (name, hostile) = norte_frontend::display_name(bytes);
+            if hostile {
+                format!("{HOSTILE_BADGE} {name}")
+            } else {
+                name
+            }
+        })
+        .collect();
+    if items.len() > MODAL_ITEM_LIMIT {
+        lines.push(format!("… y {} más", items.len() - MODAL_ITEM_LIMIT));
+    }
+    lines
+}
+
+/// Líneas de texto del cuerpo del modal activo (título + detalle), YA
+/// SANEADAS con `display_name`/`path_display` (jamás bytes crudos). PURA (sin
+/// GPUI): testeable contra el corpus hostil sin levantar ventana. El pie de
+/// teclas es fijo (sin contenido de usuario) y lo pinta `render_modal`
+/// directamente, no vive aquí.
+#[must_use]
+fn modal_lines(m: &Modal) -> Vec<String> {
+    match m {
+        Modal::ConfirmTransfer { kind, items, to } => {
+            let verb = match kind {
+                TransferKind::Copy => "Copiar",
+                TransferKind::Move => "Mover",
+            };
+            let (to_txt, to_hostile) = norte_frontend::path_display(to);
+            let to_line = if to_hostile {
+                format!("{HOSTILE_BADGE} {to_txt}")
+            } else {
+                to_txt
+            };
+            let mut lines = vec![format!("{verb} {} elemento(s) → {to_line}", items.len())];
+            lines.extend(item_lines(items));
+            lines
+        }
+        Modal::ConfirmDelete { items, permanent } => {
+            let mode = if *permanent { "PERMANENTE" } else { "PAPELERA" };
+            let mut lines = vec![
+                format!("Borrar {} elemento(s)", items.len()),
+                mode.to_string(),
+            ];
+            lines.extend(item_lines(items));
+            lines
+        }
+        Modal::ConflictResolve { pending, conflict } => {
+            let from_bytes = pending.from.file_name().map_or(&b""[..], Segment::as_bytes);
+            let (from_txt, from_hostile) = norte_frontend::display_name(from_bytes);
+            let from_line = if from_hostile {
+                format!("{HOSTILE_BADGE} {from_txt}")
+            } else {
+                from_txt
+            };
+            let (to_txt, to_hostile) = norte_frontend::path_display(&pending.to);
+            let to_line = if to_hostile {
+                format!("{HOSTILE_BADGE} {to_txt}")
+            } else {
+                to_txt
+            };
+            vec![
+                format!("Conflicto: {conflict}"),
+                format!("{from_line} → {to_line}"),
+            ]
+        }
+    }
+}
+
 /// Mapea el tipo de nodo del protocolo al tipo de archivo del tema. `File`/
 /// `Other` → `Regular` (proto no trae `st_mode`; el theming por extensión sigue
 /// aplicando encima).
@@ -796,18 +1083,47 @@ fn entry_color(theme: &Theme, entry: &Entry) -> gpui::Rgba {
 
 impl Render for NorteGui {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
+        let panes_row = div()
+            .flex_1()
+            .flex()
+            .flex_row()
+            .overflow_hidden()
+            .gap(px(2.0))
+            .child(self.render_pane(0, cx))
+            .child(self.render_pane(1, cx));
+
+        let mut root = div()
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
             .flex()
-            .flex_row()
+            .flex_col()
             .size_full()
             .bg(rgb(BG))
             .text_color(rgb(FG))
-            .gap(px(2.0))
             .p(px(4.0))
-            .child(self.render_pane(0, cx))
-            .child(self.render_pane(1, cx))
+            .gap(px(2.0))
+            .child(panes_row)
+            .child(self.render_task_strip());
+
+        // Overlay del modal activo: sin esto F5/F6/F8 capturaban teclado pero
+        // no pintaban nada (el borrado se confirmaba a ciegas — CRITICAL).
+        // Scrim oscuro sobre TODO el root (`.absolute().inset_0()`, contenedor
+        // de posicionamiento por defecto en GPUI: `Position::Relative`) con el
+        // panel centrado encima.
+        if let Some(m) = &self.modal {
+            root = root.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(rgba(0x000000aa))
+                    .child(self.render_modal(m)),
+            );
+        }
+
+        root
     }
 }
 
@@ -903,5 +1219,86 @@ mod tests {
         assert_eq!(super::conflict_kind_of(&s), Some(ConflictKind::Exists));
         assert_eq!(super::conflict_kind_of(&TaskState::Completed), None);
         assert_eq!(super::conflict_kind_of(&TaskState::Cancelled), None);
+    }
+
+    /// `task_line` sobre TODO el corpus hostil de `norte-testkit`: la línea
+    /// pintada en la franja de tasks jamás lleva un carácter de
+    /// `is_terminal_hazard` crudo, ni siquiera cuando la entrada en curso trae
+    /// bytes hostiles (review encoding).
+    #[test]
+    fn task_line_nunca_deja_hazards_crudos_del_corpus_hostil() {
+        use norte_proto::{Segment, TaskId, TaskKind, TaskProgress, TaskState, VPath};
+        for fixture in norte_testkit::corpus::hostile_names() {
+            let seg = match Segment::new(fixture.bytes.clone()) {
+                Ok(s) => s,
+                Err(_) => continue, // bytes no válidos como segmento (/, NUL, ., ..)
+            };
+            let current = VPath::parse("mem:///").unwrap().join(seg);
+            let p = TaskProgress {
+                task_id: TaskId::new(1),
+                kind: TaskKind::Copy,
+                state: TaskState::Running,
+                bytes_done: 0,
+                bytes_total: None,
+                entries_done: 1,
+                entries_total: Some(2),
+                current: Some(current),
+            };
+            let line = super::task_line(&p);
+            assert!(
+                !line.chars().any(norte_encoding::is_terminal_hazard),
+                "{}: task_line dejó un hazard crudo en {line:?}",
+                fixture.id,
+            );
+        }
+    }
+
+    /// `modal_lines` sobre TODO el corpus hostil, para las TRES variantes de
+    /// `Modal`: ninguna línea del panel deja un `is_terminal_hazard` crudo
+    /// (título, item saneado, o el `from → to` de un conflicto) — mismo patrón
+    /// que `task_line_nunca_deja_hazards_crudos_del_corpus_hostil` (review
+    /// encoding: el modal es la superficie que confirma un BORRADO a ciegas si
+    /// se pinta mal).
+    #[test]
+    fn modal_lines_nunca_deja_hazards_crudos_del_corpus_hostil() {
+        use super::{Modal, PendingTransfer, TransferKind};
+        use norte_proto::{ConflictKind, Segment, VPath};
+        for fixture in norte_testkit::corpus::hostile_names() {
+            let seg = match Segment::new(fixture.bytes.clone()) {
+                Ok(s) => s,
+                Err(_) => continue, // bytes no válidos como segmento (/, NUL, ., ..)
+            };
+            let item = VPath::parse("mem:///").unwrap().join(seg);
+            let to = VPath::parse("mem:///dst").unwrap();
+
+            let modals = [
+                Modal::ConfirmTransfer {
+                    kind: TransferKind::Copy,
+                    items: vec![item.clone()],
+                    to: to.clone(),
+                },
+                Modal::ConfirmDelete {
+                    items: vec![item.clone()],
+                    permanent: true,
+                },
+                Modal::ConflictResolve {
+                    pending: PendingTransfer {
+                        kind: TransferKind::Copy,
+                        from: item.clone(),
+                        to: to.clone(),
+                    },
+                    conflict: ConflictKind::Exists,
+                },
+            ];
+            for m in &modals {
+                for line in super::modal_lines(m) {
+                    assert!(
+                        !line.chars().any(norte_encoding::is_terminal_hazard),
+                        "{}: modal_lines dejó un hazard crudo en {line:?}",
+                        fixture.id,
+                    );
+                }
+            }
+        }
     }
 }
