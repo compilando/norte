@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use norte_core::backend::{remote::RemoteBackend, Backend, TaskCanceller, TaskRef};
+use norte_core::backend::{Backend, TaskCanceller, TaskRef, remote::RemoteBackend};
 use norte_proto::methods::ClientInfo;
 use norte_proto::{Entry, Error, TaskId, TaskProgress, TaskState, VPath};
 use tokio::sync::mpsc;

@@ -3,7 +3,7 @@
 //! nombre-de-tecla-GPUI → `Chord` neutro. El MOTOR es `norte_frontend::keymap`.
 
 use norte_frontend::keymap::{
-    parse_keymap, Chord, Effective, KeyCode, KeymapError, KeymapFile, Mods, Screen,
+    Chord, Effective, KeyCode, KeymapError, KeymapFile, Mods, Screen, parse_keymap,
 };
 use std::path::PathBuf;
 

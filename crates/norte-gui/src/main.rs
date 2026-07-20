@@ -30,16 +30,16 @@
 #![forbid(unsafe_code)]
 
 use gpui::{
-    div, prelude::*, px, rgb, rgba, size, uniform_list, App, Bounds, Context, FocusHandle,
-    IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, ParentElement, Render, ScrollDelta,
-    ScrollStrategy, ScrollWheelEvent, SharedString, Styled, UniformListScrollHandle, Window,
-    WindowBounds, WindowOptions,
+    App, Bounds, Context, FocusHandle, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    ParentElement, Render, ScrollDelta, ScrollStrategy, ScrollWheelEvent, SharedString, Styled,
+    UniformListScrollHandle, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, rgba,
+    size, uniform_list,
 };
 use gpui_platform::application;
 
 use std::ops::Range;
 
-use norte_frontend::{nav::Mode, PaneState};
+use norte_frontend::{PaneState, nav::Mode};
 use norte_proto::{Entry, EntryKind, Segment, VPath};
 use norte_theme::{FileKind, Role, Theme};
 
