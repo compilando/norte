@@ -1,7 +1,33 @@
 # GUI-b — mutaciones dual-pane (M5 hito 2, sub-proyecto 2) — diseño
 
 - Fecha: 2026-07-20
-- Estado: **aprobado** (oscar); pendiente de plan
+- Estado: **IMPLEMENTADO** (T1–T7, cerrado 2026-07-20; commits 5dbc767..48c2b16,
+  rama `gui-b-mutaciones`). `just ci` EXIT=0; norte-gui 24 tests + norte-frontend
+  27 tests + clippy limpio. Reviewers aplicados: rust (por task + final),
+  encoding (T3/final/render), security (T5).
+  **Verificación GUI interactiva PENDIENTE de oscar** (headless: los subagentes
+  no abren ventana GPUI): copy/move/delete real entre panes, progreso en la
+  franja, cancel (F9→dest limpio/`.norte-partial`), conflicto (overwrite/skip),
+  modal visible con nombre hostil saneado.
+  Desviaciones (deuda anotada, no bloqueante):
+  - Marcas por `VPath` ABSOLUTO completo (no "bytes del nombre"): `Entry` ya
+    lleva el path absoluto, y `VPath` es `Hash+Eq` byte-exacto — más simple y
+    sin ambigüedad. Tests de identidad hostil (`0xFF`) + gemelos NFC/NFD.
+  - Conflicto detectado en el TERMINAL de la task (`Failed{Conflict}`), no en el
+    submit (`copy` solo devuelve `Err` inmediato en rechazos pre-task). Multi-
+    conflicto resuelto con **cola simple** (`conflict_backlog`), no pérdida
+    silenciosa (spec §Decisión: "cola simple si colisionan").
+  - `SubmitFailed` va a banner sin reintento automático; el banner usa el foco
+    del momento de llegada (async) — puede caer en el pane que no lanzó la op.
+  - Read-after-write: Copy relista SOLO el destino (no pisa cursor/marcas del
+    origen); Move ambos; Delete el dir del path.
+  - Franja: poda solo `Completed`; `Failed`/`Cancelled` quedan visibles (deuda
+    **#83**: dismiss/TTL + navegación). Bulk = N tasks → N relists (deuda **#84**).
+  - Cobertura: `forward_progress`/`on_task_terminal` sin test de harness real
+    (requieren `TaskRef` interno de norte-core); lo puro sí (deuda **#85**).
+  - `norte-gui` pinnea edición 2021 vs workspace 2024 → fmt drift recurrente +
+    sin let-chains (deuda **#86**).
+- Estado previo: aprobado (oscar); plan `docs/superpowers/plans/2026-07-20-gui-b-mutaciones-dual-pane.md`
 - Contexto: M5 hito 2 = MVP de la GUI. Sub-proyectos: **GUI-a** (navegación
   dual-pane read-only, IMPLEMENTADO, spec `2026-07-19-gui-a-...`), **GUI-b**
   (este, mutaciones), GUI-c (keymap configurable), GUI-d (viewer), GUI-e
