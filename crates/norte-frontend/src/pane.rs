@@ -2,16 +2,16 @@
 //! (GPUI) consume [`PaneState`] como su modelo de un panel navegable: cursor,
 //! quick search y el listado actual, sin una sola dependencia de UI.
 //!
-//! El `Pane` de la TUI (`norte-tui::app`) mantiene por ahora su PROPIA copia de
-//! esta lógica (cursor + quick entrelazados con el estado de render y de
-//! búsqueda viva): ya está testeada y funciona, así que GUI-a no la
-//! refactoriza (YAGNI, spec §2). La duplicación es la mecánica de cursor
-//! (clamps triviales), no lógica de negocio; unificar el `Pane` de la TUI
-//! sobre `PaneState` es deuda anotada (issue #82).
+//! El `Pane` de la TUI (`norte-tui::app`) embebe este `PaneState` y le delega
+//! toda la mecánica pura de cursor + quick search (#82 cerrado): la
+//! duplicación se eliminó; la TUI solo añade su estado de render, scroll de
+//! ratatui y búsqueda viva ENCIMA de `PaneState`.
 //!
-//! GUI-a lista el directorio de una sola vez (sin fill paginado): por eso aquí
-//! NO hay contrato de refresh-tras-lote (el streaming incremental de la TUI
-//! vía [`crate::nav::QuickSearch::refresh`] es optimización posterior).
+//! Incluye el contrato de refresh-tras-lote para el fill paginado (ADR 0017):
+//! [`PaneState::extend`] (añade un lote, re-ordena y re-ancla el cursor por
+//! path), [`PaneState::refill`] (reemplaza el listado del mismo dir con clamp)
+//! y [`PaneState::refresh_quick`] (re-aplica el filtro vivo). La GUI hoy lista
+//! de una sola vez y no los usa; la TUI sí.
 
 use crate::nav::{Mode, QuickSearch};
 use norte_proto::{Entry, VPath};

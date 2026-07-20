@@ -43,9 +43,12 @@ anyhow = "1"
 # decodifica los bytes ya leídos por la sesión a un frame RGBA que se convierte
 # a `gpui::RenderImage`. TAMAÑO: sin coste extra — `image` ya entra transitiva
 # por GPUI (misma 0.25.x resuelta en el lockfile); la declaramos DIRECTA con las
-# mismas features (mismos codecs que soportamos) para no depender de un detalle
-# interno de GPUI. `default-features = false`: solo los 5 codecs que detectamos,
-# nada de rayon/formatos exóticos. ALTERNATIVA descartada: escribir a fichero
+# features de los 5 codecs que detectamos, para no depender de un detalle
+# interno de GPUI. OJO: cargo UNIFICA features en el grafo — como GPUI también
+# depende de `image`, la superficie real de codecs la fija la UNIÓN (GPUI +
+# nosotros), no solo estos 5; `default-features = false` aquí es por estabilidad
+# de API de la dep DIRECTA, no reduce la superficie que ya trae GPUI.
+# ALTERNATIVA descartada: escribir a fichero
 # temporal y renderizar por path (más frágil, deja basura, y aquí el render
 # in-memory de GPUI —`img(Arc<RenderImage>)`— es limpio).
 image = { version = "0.25", default-features = false, features = [

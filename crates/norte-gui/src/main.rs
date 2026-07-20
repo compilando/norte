@@ -1852,11 +1852,14 @@ fn viewer_header(v: &norte_frontend::viewer::Viewer) -> String {
     header
 }
 
-/// Presupuesto de píxeles del preview de imagen (~64 MP): por encima se rechaza
-/// (bomba de descompresión → OOM). Los bytes ya vienen acotados por la sesión a
-/// `FS_READ_MAX_CHUNK`, pero un PNG diminuto puede declarar dimensiones enormes;
-/// por eso se comprueban las dimensiones (solo la cabecera) ANTES de decodificar.
-const MAX_IMAGE_PIXELS: u64 = 64_000_000;
+/// Presupuesto de píxeles del preview de imagen (~32 MP, cubre 8K de sobra): por
+/// encima se rechaza (bomba de descompresión → OOM). Los bytes ya vienen
+/// acotados por la sesión a `FS_READ_MAX_CHUNK`, pero un PNG diminuto puede
+/// declarar dimensiones enormes; por eso se comprueban las dimensiones (solo la
+/// cabecera) ANTES de decodificar. OJO al PICO transitorio: `into_rgba8()` puede
+/// allocar una 2.ª copia mientras coexiste con el buffer del decoder, así que el
+/// pico real ≈ 32 MP × 4 × 2 ≈ 256 MiB (una sola imagen cacheada a la vez).
+const MAX_IMAGE_PIXELS: u64 = 32_000_000;
 
 /// Imagen del viewer decodificada UNA vez al abrir (cache en [`NorteGui`]): en
 /// modo imagen la GUI la pinta. `Unreadable` = no se pudo decodificar (truncada,
@@ -1894,8 +1897,17 @@ fn decode_image_preview(bytes: &[u8]) -> ImagePreview {
     if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
         return ImagePreview::Unreadable;
     }
-    // 2) Decode completo → RGBA8 → BGRA in-place.
-    let Ok(decoded) = image::load_from_memory(bytes) else {
+    // 2) Decode completo con Limits (defensa en profundidad: acota las
+    //    allocaciones INTERNAS del codec, no solo las dimensiones declaradas) →
+    //    RGBA8 → BGRA in-place.
+    let Ok(mut reader) = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()
+    else {
+        return ImagePreview::Unreadable;
+    };
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(MAX_IMAGE_PIXELS.saturating_mul(4));
+    reader.limits(limits);
+    let Ok(decoded) = reader.decode() else {
         return ImagePreview::Unreadable;
     };
     let mut rgba = decoded.into_rgba8();
