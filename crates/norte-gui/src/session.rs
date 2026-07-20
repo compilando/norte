@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use norte_core::backend::{Backend, TaskCanceller, TaskRef, remote::RemoteBackend};
+use norte_core::backend::{remote::RemoteBackend, Backend, TaskCanceller, TaskRef};
 use norte_proto::methods::ClientInfo;
 use norte_proto::{Entry, Error, TaskId, TaskProgress, TaskState, VPath};
 use tokio::sync::mpsc;
@@ -70,6 +70,35 @@ pub enum SessionCmd {
     Submit(PendingOp),
     /// Cancela una task en curso (`task.cancel`, fire-and-forget).
     Cancel(TaskId),
+    /// Abre el visor de `path`: intenta un previewer de plugin, si no lee bytes.
+    OpenViewer {
+        /// Archivo a abrir en el visor.
+        path: VPath,
+        /// Generación del open (guard anti-stale, como `List`): un
+        /// `ViewerOpened`/`ViewerFailed` con una generación vieja se
+        /// descarta en `apply_event` (un F3 tardío no reabre por sorpresa
+        /// encima de lo que el usuario esté haciendo).
+        generation: u64,
+    },
+}
+
+/// Contenido del viewer que cruza a la GUI (GUI-d T3).
+pub enum ViewerContent {
+    /// Salida de un previewer de plugin (texto + nombre).
+    Plugin {
+        /// Nombre legible del plugin previewer (para el indicador «via …»).
+        plugin_name: String,
+        /// Salida del plugin (texto), sin sanear todavía — la sanea el
+        /// `Viewer` core al construirse (`with_plugin_preview`).
+        output: String,
+    },
+    /// Bytes crudos (posiblemente truncados al presupuesto).
+    Raw {
+        /// Los bytes leídos (acotados a `FS_READ_MAX_CHUNK`).
+        bytes: Vec<u8>,
+        /// `true` si se alcanzó el tope de lectura: puede haber más archivo.
+        truncated: bool,
+    },
 }
 
 /// Evento del hilo de sesión hacia la GUI.
@@ -104,6 +133,24 @@ pub enum SessionEvent {
     },
     /// Snapshot de progreso de una task (incl. estado terminal).
     Task(TaskProgress),
+    /// El visor de `path` está listo con su contenido.
+    ViewerOpened {
+        /// Archivo mostrado.
+        path: VPath,
+        /// Preview de plugin o bytes crudos.
+        content: ViewerContent,
+        /// Generación del `OpenViewer` que lo pidió (guard anti-stale).
+        generation: u64,
+    },
+    /// No se pudo abrir el visor de `path` (error ya renderizable).
+    ViewerFailed {
+        /// Archivo que se intentó abrir.
+        path: VPath,
+        /// Mensaje ya renderizable.
+        error: String,
+        /// Generación del `OpenViewer` que lo pidió (guard anti-stale).
+        generation: u64,
+    },
 }
 
 /// Arranca el hilo de sesión: conecta al `socket` UNA vez y sirve `cmd_rx`,
@@ -163,10 +210,71 @@ pub fn spawn(
                             c.cancel();
                         }
                     }
+                    SessionCmd::OpenViewer { path, generation } => {
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        tokio::spawn(
+                            async move { open_viewer(&backend, path, generation, &tx).await },
+                        );
+                    }
                 }
             }
         });
     });
+}
+
+/// Intenta un previewer de plugin; si ninguno aplica, lee bytes acotados. El
+/// `truncated` se estima con el tope de lectura alcanzado (más bytes de los
+/// leídos podrían quedar pendientes). `generation` viaja intacta a los
+/// eventos (guard anti-stale de `apply_event`, como `List`).
+async fn open_viewer(
+    backend: &Backend,
+    path: VPath,
+    generation: u64,
+    tx: &mpsc::UnboundedSender<SessionEvent>,
+) {
+    // `Err` (preview falló) o `Ok` sin previewer aplicable: cae a la vista
+    // cruda igual, sin distinguir el motivo aquí.
+    if let Ok(res) = backend.plugin_preview(&path).await {
+        if let Some(p) = res.preview {
+            let _ = tx.send(SessionEvent::ViewerOpened {
+                path,
+                content: ViewerContent::Plugin {
+                    plugin_name: p.plugin_name,
+                    output: p.output,
+                },
+                generation,
+            });
+            return;
+        }
+    }
+    let budget = norte_proto::methods::FS_READ_MAX_CHUNK;
+    match backend
+        .read(
+            &path,
+            Some(norte_proto::ByteRange {
+                offset: 0,
+                len: Some(budget),
+            }),
+        )
+        .await
+    {
+        Ok(bytes) => {
+            let truncated = bytes.len() as u64 >= budget; // leímos el tope: puede haber más.
+            let _ = tx.send(SessionEvent::ViewerOpened {
+                path,
+                content: ViewerContent::Raw { bytes, truncated },
+                generation,
+            });
+        }
+        Err(e) => {
+            let _ = tx.send(SessionEvent::ViewerFailed {
+                path,
+                error: format!("{e}"),
+                generation,
+            });
+        }
+    }
 }
 
 /// Conecta al daemon (sin autoarrancarlo).

@@ -3,7 +3,7 @@
 //! nombre-de-tecla-GPUI → `Chord` neutro. El MOTOR es `norte_frontend::keymap`.
 
 use norte_frontend::keymap::{
-    Chord, Effective, KeyCode, KeymapError, KeymapFile, Mods, Screen, parse_keymap,
+    parse_keymap, Chord, Effective, KeyCode, KeymapError, KeymapFile, Mods, Screen,
 };
 use std::path::PathBuf;
 
@@ -25,6 +25,21 @@ pub const COMMANDS: &[&str] = &[
     "pane.move",
     "pane.delete",
     "task.cancel",
+    "pane.view",
+];
+
+/// Comandos del contexto Viewer (pantalla del visor F3).
+pub const VIEWER_COMMANDS: &[&str] = &[
+    "viewer.close",
+    "viewer.up",
+    "viewer.down",
+    "viewer.page-up",
+    "viewer.page-down",
+    "viewer.top",
+    "viewer.bottom",
+    "viewer.encoding",
+    "viewer.encoding-auto",
+    "viewer.hex",
 ];
 
 /// El preset orthodox de la GUI, parseado. Panics solo si el TOML embebido es
@@ -53,13 +68,17 @@ fn layer_dirs() -> Vec<(PathBuf, bool)> {
     v
 }
 
-/// Construye el `Effective` del contexto Browse: preset orthodox + capas
-/// `keymap.toml` presentes. Un keymap.toml inválido NO tumba la GUI: devuelve
-/// el error (el caller cae al preset con banner). Fail-SAFE, no fail-closed.
+/// La unión de comandos de Browse + Viewer (para validar el keymap ENTERO —
+/// `build_for` mezcla `global` con el contexto de la pantalla).
+fn all_commands() -> Vec<&'static str> {
+    COMMANDS.iter().chain(VIEWER_COMMANDS).copied().collect()
+}
+
+/// Construye los dos `Effective` (Browse y Viewer) desde el preset + capas.
 ///
 /// # Errors
-/// El primer `KeymapError` de una capa (parse/chord/comando/prefijo).
-pub fn build_effective() -> Result<Effective, KeymapError> {
+/// El primer `KeymapError` de una capa.
+pub fn build_effectives() -> Result<(Effective, Effective), KeymapError> {
     let preset = orthodox();
     let mut layers: Vec<KeymapFile> = Vec::new();
     for (dir, is_project) in layer_dirs() {
@@ -72,21 +91,21 @@ pub fn build_effective() -> Result<Effective, KeymapError> {
             layers.push(kf);
         } // ausente/no legible: la capa no aporta.
     }
-    Effective::build_for(&preset, &layers, COMMANDS, Screen::Browse)
+    let cmds = all_commands();
+    let browse = Effective::build_for(&preset, &layers, &cmds, Screen::Browse)?;
+    let viewer = Effective::build_for(&preset, &layers, &cmds, Screen::Viewer)?;
+    Ok((browse, viewer))
 }
 
-/// El `Effective` construido SOLO con el preset orthodox, sin capas — el
-/// fallback cuando una capa de usuario/proyecto está rota (`build_effective`
-/// devolvió `Err`): la GUI sigue arrancando con las teclas por defecto.
-///
-/// # Panics
-/// Nunca en la práctica: el preset embebido es fijo y lo cubre
-/// `preset_orthodox_valido_y_construye`; un panic aquí sería un preset roto
-/// que el propio test ya habría cazado antes de llegar a producción.
+/// Fallback: los dos `Effective` SOLO del preset (no puede fallar — test).
 #[must_use]
-pub fn build_effective_preset_only() -> Effective {
-    Effective::build_for(&orthodox(), &[], COMMANDS, Screen::Browse)
-        .expect("preset orthodox válido")
+pub fn build_effectives_preset_only() -> (Effective, Effective) {
+    let preset = orthodox();
+    let cmds = all_commands();
+    (
+        Effective::build_for(&preset, &[], &cmds, Screen::Browse).expect("preset browse válido"),
+        Effective::build_for(&preset, &[], &cmds, Screen::Viewer).expect("preset viewer válido"),
+    )
 }
 
 /// Adaptador: nombre de tecla GPUI (+mods +key_char) → `Chord` neutro. `None`
@@ -150,10 +169,35 @@ mod tests {
         Effective::build_for(p, l, COMMANDS, Screen::Browse)
     }
 
+    /// `build_effectives` (GUI-d T3): el preset orthodox construye AMBOS
+    /// contextos (Browse + Viewer) sin error, y el visor resuelve F3 a
+    /// `viewer.close` (el bind de cierre del preset).
     #[test]
-    fn build_effective_preset_only_no_panica() {
-        // Cubre la invariante que documenta el `.expect` de la función.
-        let _ = build_effective_preset_only();
+    fn build_effectives_preset_ok_y_viewer_resuelve_f3() {
+        let (browse, viewer) = build_effectives().expect("preset orthodox: ambos contextos OK");
+        let mut rb = norte_frontend::keymap::Resolver::new(browse);
+        assert_eq!(
+            rb.push(Chord::new(Mods::default(), KeyCode::F(3))),
+            norte_frontend::keymap::Resolution::Run("pane.view".into()),
+            "F3 en Browse abre el visor"
+        );
+        let mut rv = norte_frontend::keymap::Resolver::new(viewer);
+        assert_eq!(
+            rv.push(Chord::new(Mods::default(), KeyCode::F(3))),
+            norte_frontend::keymap::Resolution::Run("viewer.close".into()),
+            "F3 en Viewer cierra el visor"
+        );
+        assert_eq!(
+            rv.push(Chord::new(Mods::default(), KeyCode::Esc)),
+            norte_frontend::keymap::Resolution::Run("viewer.close".into())
+        );
+    }
+
+    /// `build_effectives_preset_only` no puede fallar (test de la invariante
+    /// documentada en su `.expect`).
+    #[test]
+    fn build_effectives_preset_only_no_panica() {
+        let _ = build_effectives_preset_only();
     }
 
     #[test]
@@ -197,10 +241,11 @@ mod tests {
         d
     }
 
-    /// `build_effective` con `NORTE_CONFIG_DIR` apuntando a una capa que
+    /// `build_effectives` con `NORTE_CONFIG_DIR` apuntando a una capa que
     /// rebindea `j`/`k` a cursor.down/up (spec del plan, verificación
-    /// manual Step 6, automatizada aquí): el `Effective` resultante resuelve
-    /// esas teclas al comando de la capa, no al preset (que no las bindea).
+    /// manual Step 6, automatizada aquí): el `Effective` de Browse resultante
+    /// resuelve esas teclas al comando de la capa, no al preset (que no las
+    /// bindea).
     #[test]
     fn build_effective_carga_la_capa_de_usuario_via_norte_config_dir() {
         let dir = scratch_dir("rebind");
@@ -213,7 +258,7 @@ prepend_keymap = [{ on = ["j"], run = "cursor.down" }, { on = ["k"], run = "curs
         .unwrap();
         // SAFETY/concurrencia: proceso-por-test de nextest (ver `scratch_dir`).
         std::env::set_var("NORTE_CONFIG_DIR", &dir);
-        let eff = build_effective().expect("capa válida: carga sin error");
+        let (eff, _viewer) = build_effectives().expect("capa válida: carga sin error");
         std::env::remove_var("NORTE_CONFIG_DIR");
 
         let mut r = norte_frontend::keymap::Resolver::new(eff);
@@ -228,7 +273,7 @@ prepend_keymap = [{ on = ["j"], run = "cursor.down" }, { on = ["k"], run = "curs
         );
     }
 
-    /// Una capa con un comando desconocido: `build_effective` devuelve
+    /// Una capa con un comando desconocido: `build_effectives` devuelve
     /// `Err` (el caller en `main.rs` cae al preset + banner, T3 Step 3) —
     /// jamás un binding muerto en silencio.
     #[test]
@@ -242,7 +287,7 @@ prepend_keymap = [{ on = ["z"], run = "comando.inventado" }]
         )
         .unwrap();
         std::env::set_var("NORTE_CONFIG_DIR", &dir);
-        let result = build_effective();
+        let result = build_effectives();
         std::env::remove_var("NORTE_CONFIG_DIR");
         assert!(
             matches!(result, Err(KeymapError::UnknownCommand { .. })),
@@ -266,7 +311,7 @@ prepend_keymap = [{ on = ["z"], run = "lua:foo" }]
         )
         .unwrap();
         std::env::set_var("NORTE_CONFIG_DIR", &dir);
-        let eff = build_effective().expect("lua: con nombre válido carga");
+        let (eff, _viewer) = build_effectives().expect("lua: con nombre válido carga");
         std::env::remove_var("NORTE_CONFIG_DIR");
 
         let mut r = norte_frontend::keymap::Resolver::new(eff);

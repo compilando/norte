@@ -30,16 +30,16 @@
 #![forbid(unsafe_code)]
 
 use gpui::{
-    App, Bounds, Context, FocusHandle, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    ParentElement, Render, ScrollDelta, ScrollStrategy, ScrollWheelEvent, SharedString, Styled,
-    UniformListScrollHandle, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, rgba,
-    size, uniform_list,
+    div, prelude::*, px, rgb, rgba, size, uniform_list, App, Bounds, Context, FocusHandle,
+    IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, ParentElement, Render, ScrollDelta,
+    ScrollStrategy, ScrollWheelEvent, SharedString, Styled, UniformListScrollHandle, Window,
+    WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 
 use std::ops::Range;
 
-use norte_frontend::{PaneState, nav::Mode};
+use norte_frontend::{nav::Mode, PaneState};
 use norte_proto::{Entry, EntryKind, Segment, VPath};
 use norte_theme::{FileKind, Role, Theme};
 
@@ -63,8 +63,15 @@ const PAGE: usize = 10;
 
 /// Alto FIJO de cada fila (px), requerido por `uniform_list` (issue #87): sin
 /// una altura uniforme no puede medir un elemento y derivar el resto por
-/// aritmética en vez de layout completo.
+/// aritmética en vez de layout completo. También usado por el visor (F3),
+/// que NO usa `uniform_list` (ver `render_viewer`) pero sí quiere filas de
+/// alto uniforme.
 const ROW_H: f32 = 22.0;
+
+/// Filas de chrome que le restamos al alto del viewport para derivar cuántas
+/// filas de contenido pedirle a `Viewer::rows` en `render_viewer`: cabecera +
+/// barra de estado (una fila cada una) + margen de redondeo.
+const VIEWER_CHROME_ROWS: usize = 3;
 
 // Colores del chrome del dual-pane (constantes locales; el color por TIPO de
 // archivo sí sale del tema, ver `entry_color`). El theming completo del chrome
@@ -141,6 +148,22 @@ struct NorteGui {
     /// el mensaje para el banner. `resolver` en ese caso corre solo con el
     /// preset (`keymap::build_effective_preset_only`) — la GUI sigue viva.
     keymap_error: Option<String>,
+    /// El visor abierto (F3), o `None` = dual-pane (o cargando, ver
+    /// `viewer_loading`). `v.scroll` (dentro del `Viewer` core) es el ÚNICO
+    /// dueño del scroll del visor — sin lista virtualizada de GPUI de por
+    /// medio (`Viewer::rows(height)` ya está acotado a `height` filas, O(H)
+    /// no O(total): issue #87 no aplica aquí, a diferencia de los panes).
+    viewer: Option<norte_frontend::viewer::Viewer>,
+    /// Resolver del contexto Viewer (teclas del visor, GUI-d T3).
+    viewer_resolver: norte_frontend::keymap::Resolver,
+    /// Generación del `OpenViewer` en vuelo (guard anti-stale, como
+    /// `generation` de los panes): un `ViewerOpened`/`ViewerFailed` con una
+    /// generación vieja se descarta (F3 tardío no reabre por sorpresa; dos
+    /// F3 seguidos no encolan dos aperturas).
+    viewer_gen: u64,
+    /// `true` mientras un `OpenViewer` está en vuelo (para el estado
+    /// «abriendo visor…» del render, ver `render`).
+    viewer_loading: bool,
 }
 
 impl NorteGui {
@@ -153,13 +176,15 @@ impl NorteGui {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
-        let (resolver, keymap_error) = match keymap::build_effective() {
-            Ok(eff) => (norte_frontend::keymap::Resolver::new(eff), None),
+        let ((browse_eff, viewer_eff), keymap_error) = match keymap::build_effectives() {
+            Ok(pair) => (pair, None),
             Err(e) => (
-                norte_frontend::keymap::Resolver::new(keymap::build_effective_preset_only()),
+                keymap::build_effectives_preset_only(),
                 Some(format!("keymap: {e}")),
             ),
         };
+        let resolver = norte_frontend::keymap::Resolver::new(browse_eff);
+        let viewer_resolver = norte_frontend::keymap::Resolver::new(viewer_eff);
 
         match LoadConfig::from_env() {
             Ok(cfg) => {
@@ -191,6 +216,10 @@ impl NorteGui {
                     ],
                     resolver,
                     keymap_error,
+                    viewer: None,
+                    viewer_resolver,
+                    viewer_gen: 0,
+                    viewer_loading: false,
                 };
                 gui.spawn_event_loop(event_rx, cx);
                 gui.cd(0, dir.clone(), cx);
@@ -232,6 +261,10 @@ impl NorteGui {
                     ],
                     resolver,
                     keymap_error,
+                    viewer: None,
+                    viewer_resolver,
+                    viewer_gen: 0,
+                    viewer_loading: false,
                 }
             }
         }
@@ -347,6 +380,46 @@ impl NorteGui {
                         self.task_order.retain(|t| *t != id);
                     }
                 }
+            }
+            SessionEvent::ViewerOpened {
+                path,
+                content,
+                generation,
+            } => {
+                // Guard anti-stale (como `Listed`): un open tardío (F3 dos
+                // veces, o un read lento tras cerrar el visor) ya no coincide
+                // con la generación vigente — se descarta sin tocar el
+                // estado actual.
+                if generation != self.viewer_gen {
+                    return;
+                }
+                use norte_frontend::viewer::Viewer;
+                use session::ViewerContent;
+                self.viewer_loading = false;
+                self.viewer = Some(match content {
+                    ViewerContent::Plugin {
+                        plugin_name,
+                        output,
+                    } => Viewer::with_plugin_preview(path, plugin_name, &output),
+                    ViewerContent::Raw { bytes, truncated } => Viewer::new(path, bytes, truncated),
+                });
+            }
+            SessionEvent::ViewerFailed {
+                path,
+                error,
+                generation,
+            } => {
+                if generation != self.viewer_gen {
+                    return;
+                }
+                self.viewer_loading = false;
+                let (name, hostile) = norte_frontend::path_display(&path);
+                let name = if hostile {
+                    format!("{HOSTILE_BADGE} {name}")
+                } else {
+                    name
+                };
+                self.errors[self.focus] = Some(format!("visor {name}: {error}"));
             }
             SessionEvent::ConnectFailed(msg) => {
                 // Sin esto `loading` queda clavado en `true` (nunca llega un
@@ -529,10 +602,48 @@ impl NorteGui {
             "pane.move" => self.open_transfer_modal(TransferKind::Move),
             "pane.delete" => self.open_delete_modal(),
             "task.cancel" => self.cancel_first_task(),
+            "pane.view" => self.open_viewer(cx),
             _ => {} // comando desconocido en runtime: no-op (el keymap ya validó)
         }
         // Tras un movimiento de cursor, sigue el scroll (issue #87).
         self.follow_cursor(f);
+    }
+
+    /// Abre el visor sobre la entrada seleccionada si es un archivo (F3 sobre
+    /// un dir/symlink/otro = no-op — el visor solo lee archivos). Avanza
+    /// `viewer_gen` (invalida cualquier open anterior en vuelo — dos F3
+    /// seguidos no encolan dos aperturas) y marca `viewer_loading` para el
+    /// estado «abriendo visor…» del render mientras llega la respuesta.
+    fn open_viewer(&mut self, _cx: &mut Context<Self>) {
+        let f = self.focus;
+        if let Some(e) = self.panes[f].selected() {
+            if e.kind == EntryKind::File {
+                self.viewer_gen = self.viewer_gen.wrapping_add(1);
+                self.viewer_loading = true;
+                let _ = self.cmds.send(SessionCmd::OpenViewer {
+                    path: e.path.clone(),
+                    generation: self.viewer_gen,
+                });
+            }
+        }
+    }
+
+    /// Ejecuta un comando del contexto Viewer sobre `self.viewer`: delega el
+    /// efecto puro a [`apply_viewer_command`] (testeable sin GPUI). `v.scroll`
+    /// es el ÚNICO dueño del scroll (sin `uniform_list`/handle de por medio,
+    /// ver el campo `viewer` del struct) — no hace falta seguir nada aparte.
+    /// `"viewer.close"` también avanza `viewer_gen` y baja `viewer_loading`:
+    /// así un `ViewerOpened` tardío que llegue DESPUÉS de cerrar no reabre
+    /// por sorpresa (su generación ya quedó vieja).
+    fn run_viewer_command(&mut self, cmd: &str, _cx: &mut Context<Self>) {
+        let Some(v) = self.viewer.as_mut() else {
+            return;
+        };
+        if !apply_viewer_command(v, cmd) {
+            self.viewer = None;
+            self.viewer_gen = self.viewer_gen.wrapping_add(1);
+            self.viewer_loading = false;
+        }
     }
 
     /// Maneja UNA tecla dentro del quick search (filtro activo): tipeo →
@@ -635,6 +746,34 @@ impl NorteGui {
                     }
                     self.open_next_conflict();
                 }
+            }
+            cx.notify();
+            return;
+        }
+
+        // Visor abierto: las teclas van al contexto Viewer (no hay modal/quick
+        // aquí — el visor y el dual-pane son pantallas mutuamente excluyentes).
+        if self.viewer.is_some() {
+            if ks.modifiers.platform {
+                cx.notify();
+                return;
+            }
+            if let Some(chord) = keymap::gpui_chord(
+                &ks.key,
+                ks.modifiers.control,
+                ks.modifiers.alt,
+                ks.modifiers.shift,
+                ks.key_char.as_deref(),
+            ) {
+                match self.viewer_resolver.push(chord) {
+                    norte_frontend::keymap::Resolution::Run(cmd) => {
+                        self.run_viewer_command(&cmd, cx);
+                    }
+                    norte_frontend::keymap::Resolution::Pending(_) => {}
+                    norte_frontend::keymap::Resolution::Reset => {}
+                }
+            } else {
+                self.viewer_resolver.reset();
             }
             cx.notify();
             return;
@@ -769,6 +908,22 @@ impl NorteGui {
                 self.panes[pane].cursor_down();
             }
             self.follow_cursor(pane);
+        }
+        cx.notify();
+    }
+
+    /// Rueda del ratón sobre el visor abierto: mueve `v.scroll` (única fuente
+    /// de verdad del scroll del visor, ver el campo `viewer`). No-op si el
+    /// visor no está abierto (guard defensivo; en la práctica solo se
+    /// registra sobre el contenedor de `render_viewer`).
+    fn on_viewer_scroll(&mut self, delta: ScrollDelta, cx: &mut Context<Self>) {
+        if let Some(v) = self.viewer.as_mut() {
+            let y = scroll_y(delta);
+            if y > 0.0 {
+                v.scroll_up(1);
+            } else if y < 0.0 {
+                v.scroll_down(1);
+            }
         }
         cx.notify();
     }
@@ -973,6 +1128,86 @@ impl NorteGui {
             strip = strip.child(row);
         }
         strip
+    }
+
+    /// Pinta el visor a pantalla COMPLETA (F3): cabecera (path saneado +
+    /// «via <plugin>» si es preview de plugin) + `v.rows(h)` (una fila por
+    /// `div`, SIN `uniform_list`: `Viewer::rows(height)` ya está acotado a
+    /// `height` filas — ventana desde `v.scroll`, O(H) no O(total) — issue
+    /// #87 no aplica aquí, a diferencia de los panes, que sí listan TODAS las
+    /// entradas del dir) + barra de estado (`viewer_status`, fn pura). `h` se
+    /// deriva del alto real del viewport de la ventana. `v.scroll` es el
+    /// ÚNICO dueño del scroll (la rueda lo mueve vía `on_viewer_scroll`,
+    /// registrada sobre el contenedor).
+    fn render_viewer(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // INVARIANTE: solo se llama desde `render` cuando `self.viewer` es
+        // `Some` (comprobado justo antes de esta llamada).
+        let v = self
+            .viewer
+            .as_ref()
+            .expect("render_viewer: self.viewer es Some (invariante del caller, ver `render`)");
+
+        let (path_txt, path_hostile) = norte_frontend::path_display(&v.path);
+        let mut header = if path_hostile {
+            format!("{HOSTILE_BADGE} {path_txt}")
+        } else {
+            path_txt
+        };
+        if let Some(plugin) = v.preview_plugin() {
+            header.push_str(&format!("  via {plugin}"));
+        }
+        let status = viewer_status(v);
+
+        // Filas que caben en el viewport real, menos la cabecera+status
+        // (`VIEWER_CHROME_ROWS`); el sobrante (redondeo, chrome del root) lo
+        // recorta `overflow_hidden` del contenedor. Mínimo 1: una ventana
+        // minúscula no debe pedir un rango vacío a `v.rows`.
+        let viewport_rows = (f32::from(window.viewport_size().height) / ROW_H) as usize;
+        let h = viewport_rows.saturating_sub(VIEWER_CHROME_ROWS).max(1);
+
+        let rows =
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .children(v.rows(h).into_iter().map(|row| {
+                    div()
+                        .h(px(ROW_H))
+                        .px(px(4.0))
+                        .truncate()
+                        .child(SharedString::from(row))
+                }));
+
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .border_2()
+            .border_color(rgb(BORDER_FOCUS))
+            .bg(rgb(PANE_BG_FOCUS))
+            .child(
+                div()
+                    .px(px(4.0))
+                    .py(px(2.0))
+                    .bg(rgb(HEADER_BG))
+                    .truncate()
+                    .child(SharedString::from(header)),
+            )
+            .child(rows)
+            .child(
+                div()
+                    .px(px(4.0))
+                    .py(px(1.0))
+                    .bg(rgb(HEADER_BG))
+                    .text_color(rgb(QUICK_FG))
+                    .truncate()
+                    .child(SharedString::from(status)),
+            )
+            .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, _w, cx| {
+                this.on_viewer_scroll(ev.delta, cx);
+            }))
     }
 
     /// Pinta el panel del modal activo (overlay centrado, ver `render`): título
@@ -1235,6 +1470,63 @@ fn modal_lines(m: &Modal) -> Vec<String> {
     }
 }
 
+/// Aplica UN comando del contexto Viewer sobre `v` (la parte PURA de
+/// `run_viewer_command`, sin GPUI — testeable sola). Devuelve `false` para
+/// `"viewer.close"` (el caller debe soltar `self.viewer = None`; con `v`
+/// prestado no se puede hacer aquí), `true` en cualquier otro caso (incluido
+/// un comando desconocido, no-op).
+fn apply_viewer_command(v: &mut norte_frontend::viewer::Viewer, cmd: &str) -> bool {
+    use norte_frontend::viewer::PAGE as VPAGE;
+    match cmd {
+        "viewer.close" => return false,
+        "viewer.up" => v.scroll_up(1),
+        "viewer.down" => v.scroll_down(1),
+        "viewer.page-up" => v.scroll_up(VPAGE),
+        "viewer.page-down" => v.scroll_down(VPAGE),
+        "viewer.top" => v.scroll_top(),
+        "viewer.bottom" => v.scroll_bottom(),
+        "viewer.encoding" => v.cycle_encoding(),
+        "viewer.encoding-auto" => v.reset_encoding(),
+        "viewer.hex" => v.toggle_hex(),
+        _ => {} // comando desconocido en runtime: no-op (el keymap ya validó)
+    }
+    true
+}
+
+/// Barra de estado del visor, en español (i18n de la GUI = GUI-e). Compone
+/// desde los getters del `Viewer` core (encoding/binario, forzado, EOL,
+/// lossy, truncado) — el usuario SIEMPRE sabe qué ve (spec §6). Fn pura
+/// (testeable sin GPUI); el render solo mapea su salida + `v.rows()`.
+#[must_use]
+fn viewer_status(v: &norte_frontend::viewer::Viewer) -> String {
+    use norte_encoding::Eol;
+    let mut out = if v.encoding_name().is_empty() {
+        "binario".to_string()
+    } else {
+        v.encoding_name().to_owned()
+    };
+    if v.is_forced() {
+        out.push_str(" (forzado)");
+    }
+    if !v.hex {
+        let eol = match v.eol() {
+            Eol::Lf => "LF",
+            Eol::CrLf => "CRLF",
+            Eol::Cr => "CR",
+            Eol::Mixed => "EOL mixto",
+            Eol::None => "sin EOL",
+        };
+        out.push_str(&format!("  {eol}"));
+    }
+    if v.had_errors() {
+        out.push_str("  con pérdidas");
+    }
+    if v.truncated {
+        out.push_str("  truncado");
+    }
+    out
+}
+
 /// Mapea el tipo de nodo del protocolo al tipo de archivo del tema. `File`/
 /// `Other` → `Regular` (proto no trae `st_mode`; el theming por extensión sigue
 /// aplicando encima).
@@ -1256,21 +1548,13 @@ fn entry_color(theme: &Theme, entry: &Entry) -> gpui::Rgba {
 }
 
 impl Render for NorteGui {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Instrumentación (medición del lag, gated por NORTE_GUI_DEBUG): tiempo
         // de CONSTRUCCIÓN del árbol de elementos (nuestro coste; el layout/paint
         // de GPUI ocurre después de devolver). Si escala con las entradas, el
         // culpable es el O(N)-por-frame (display_name/tema recomputados por fila
         // sin virtualizar). Ver issue #87.
         let _t0 = std::time::Instant::now();
-        let panes_row = div()
-            .flex_1()
-            .flex()
-            .flex_row()
-            .overflow_hidden()
-            .gap(px(2.0))
-            .child(self.render_pane(0, cx))
-            .child(self.render_pane(1, cx));
 
         let mut root = div()
             .track_focus(&self.focus_handle)
@@ -1300,7 +1584,31 @@ impl Render for NorteGui {
             );
         }
 
-        root = root.child(panes_row).child(self.render_task_strip());
+        // Visor (F3) a pantalla completa, el estado «abriendo…» mientras
+        // llega, o el dual-pane: pantallas mutuamente excluyentes (ver
+        // `on_key`, que enruta al visor primero cuando ya está abierto).
+        if self.viewer.is_some() {
+            root = root.child(self.render_viewer(window, cx));
+        } else if self.viewer_loading {
+            root = root.child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(SharedString::from("abriendo visor…")),
+            );
+        } else {
+            let panes_row = div()
+                .flex_1()
+                .flex()
+                .flex_row()
+                .overflow_hidden()
+                .gap(px(2.0))
+                .child(self.render_pane(0, cx))
+                .child(self.render_pane(1, cx));
+            root = root.child(panes_row).child(self.render_task_strip());
+        }
 
         // Overlay del modal activo: sin esto F5/F6/F8 capturaban teclado pero
         // no pintaban nada (el borrado se confirmaba a ciegas — CRITICAL).
@@ -1352,8 +1660,13 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{generation_is_current, row_label};
-    use norte_proto::EntryKind;
+    use super::{apply_viewer_command, generation_is_current, row_label, viewer_status};
+    use norte_frontend::viewer::Viewer;
+    use norte_proto::{EntryKind, VPath};
+
+    fn vp() -> VPath {
+        VPath::parse("mem:///a.txt").unwrap()
+    }
 
     /// El guard de generación: dos cds sobre el mismo pane (A luego B) →
     /// B incrementa la generación vigente; cuando A (viejo) llega tarde, su
@@ -1507,5 +1820,125 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// `viewer_status` (GUI-d T3) sobre un archivo de texto: encoding
+    /// detectado + EOL, sin marcas de forzado/errores/truncado (todas en su
+    /// cero).
+    #[test]
+    fn viewer_status_texto_limpio() {
+        let v = Viewer::new(vp(), b"hola\n".to_vec(), false);
+        let s = viewer_status(&v);
+        assert!(s.contains("UTF-8"), "{s}");
+        assert!(s.contains("LF"), "{s}");
+        assert!(!s.contains("forzado"), "{s}");
+        assert!(!s.contains("truncado"), "{s}");
+        assert!(!s.contains("pérdidas"), "{s}");
+    }
+
+    /// `viewer_status` sobre un binario: cae a "binario" (sin nombre de
+    /// encoding ni EOL, que no aplica en hexview).
+    #[test]
+    fn viewer_status_binario() {
+        let png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
+        let v = Viewer::new(vp(), png, false);
+        let s = viewer_status(&v);
+        assert_eq!(s, "binario", "sin EOL en hexview: {s}");
+    }
+
+    /// `viewer_status` marca "truncado" cuando el viewer se abrió con el tope
+    /// de lectura alcanzado — el usuario SIEMPRE sabe que puede haber más
+    /// archivo (spec §6).
+    #[test]
+    fn viewer_status_truncado() {
+        let v = Viewer::new(vp(), b"hola\n".to_vec(), true);
+        assert!(viewer_status(&v).contains("truncado"));
+    }
+
+    /// `viewer_status` marca "(forzado)" tras `cycle_encoding` («recargar
+    /// como…»), y lo pierde tras `reset_encoding`.
+    #[test]
+    fn viewer_status_forzado_round_trip() {
+        let mut v = Viewer::new(vp(), b"hola\n".to_vec(), false);
+        v.cycle_encoding();
+        assert!(viewer_status(&v).contains("forzado"));
+        v.reset_encoding();
+        assert!(!viewer_status(&v).contains("forzado"));
+    }
+
+    /// `viewer_status` NUNCA deja un `is_terminal_hazard` crudo: el nombre del
+    /// encoding y el texto EOL son literales fijos (sin bytes de usuario), así
+    /// que basta un caso — no hace falta el corpus hostil completo (a
+    /// diferencia de `row_label`/`task_line`, que sí interpolan nombres de
+    /// archivo).
+    #[test]
+    fn viewer_status_sin_hazards_crudos() {
+        for (bytes, truncated) in [
+            (b"hola\n".to_vec(), false),
+            (b"\x89PNG\r\n\x1a\n".to_vec(), true),
+        ] {
+            let v = Viewer::new(vp(), bytes, truncated);
+            let s = viewer_status(&v);
+            assert!(
+                !s.chars().any(norte_encoding::is_terminal_hazard),
+                "viewer_status dejó un hazard crudo en {s:?}"
+            );
+        }
+    }
+
+    /// `apply_viewer_command`: scroll (down/up), hex toggle y close, sobre un
+    /// `Viewer` de texto multilinea. `"viewer.close"` devuelve `false` (el
+    /// caller suelta `self.viewer`) sin tocar el estado del `Viewer`; el
+    /// resto devuelve `true` y muta como el método correspondiente de
+    /// `Viewer`.
+    #[test]
+    fn apply_viewer_command_scroll_hex_y_close() {
+        use std::fmt::Write;
+        let mut texto = String::new();
+        for i in 0..50 {
+            let _ = writeln!(texto, "linea {i}");
+        }
+        let mut v = Viewer::new(vp(), texto.into_bytes(), false);
+        assert_eq!(v.scroll, 0);
+
+        assert!(apply_viewer_command(&mut v, "viewer.down"));
+        assert_eq!(v.scroll, 1, "viewer.down avanza una fila");
+
+        assert!(apply_viewer_command(&mut v, "viewer.page-down"));
+        assert_eq!(
+            v.scroll,
+            1 + norte_frontend::viewer::PAGE,
+            "viewer.page-down avanza PAGE filas"
+        );
+
+        assert!(apply_viewer_command(&mut v, "viewer.up"));
+        assert_eq!(
+            v.scroll,
+            norte_frontend::viewer::PAGE,
+            "viewer.up retrocede 1"
+        );
+
+        assert!(apply_viewer_command(&mut v, "viewer.top"));
+        assert_eq!(v.scroll, 0, "viewer.top vuelve al principio");
+
+        assert!(apply_viewer_command(&mut v, "viewer.bottom"));
+        assert_eq!(v.scroll, v.total_rows() - 1, "viewer.bottom va al final");
+
+        assert!(!v.hex, "texto: no arranca en hexview");
+        assert!(apply_viewer_command(&mut v, "viewer.hex"));
+        assert!(v.hex, "viewer.hex activa el hexview");
+        assert!(apply_viewer_command(&mut v, "viewer.hex"));
+        assert!(!v.hex, "viewer.hex es un toggle");
+
+        assert!(
+            !apply_viewer_command(&mut v, "viewer.close"),
+            "viewer.close devuelve false: el caller suelta self.viewer"
+        );
+
+        // Comando desconocido: no-op, sigue devolviendo true (el keymap ya
+        // validó el nombre; run_command tiene el mismo contrato para Browse).
+        let scroll_antes = v.scroll;
+        assert!(apply_viewer_command(&mut v, "comando.inventado"));
+        assert_eq!(v.scroll, scroll_antes);
     }
 }

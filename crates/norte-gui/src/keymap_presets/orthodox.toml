@@ -24,4 +24,21 @@ keymap = [
     { on = ["f8"], run = "pane.delete" },
     { on = ["delete"], run = "pane.delete" },
     { on = ["f9"], run = "task.cancel" },
+    { on = ["f3"], run = "pane.view" },
+]
+
+[viewer]
+keymap = [
+    { on = ["esc"], run = "viewer.close" },
+    { on = ["f3"], run = "viewer.close" },
+    { on = ["f10"], run = "viewer.close" },
+    { on = ["up"], run = "viewer.up" },
+    { on = ["down"], run = "viewer.down" },
+    { on = ["pgup"], run = "viewer.page-up" },
+    { on = ["pgdn"], run = "viewer.page-down" },
+    { on = ["home"], run = "viewer.top" },
+    { on = ["end"], run = "viewer.bottom" },
+    { on = ["f8"], run = "viewer.encoding" },
+    { on = ["ctrl+r"], run = "viewer.encoding-auto" },
+    { on = ["f4"], run = "viewer.hex" },
 ]
