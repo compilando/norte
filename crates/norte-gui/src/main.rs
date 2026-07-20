@@ -28,10 +28,13 @@
 
 use gpui::{
     App, Bounds, Context, FocusHandle, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    ParentElement, Render, ScrollDelta, ScrollWheelEvent, SharedString, Styled, Window,
-    WindowBounds, WindowOptions, div, prelude::*, px, rgb, rgba, size,
+    ParentElement, Render, ScrollDelta, ScrollStrategy, ScrollWheelEvent, SharedString, Styled,
+    UniformListScrollHandle, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, rgba,
+    size, uniform_list,
 };
 use gpui_platform::application;
+
+use std::ops::Range;
 
 use norte_frontend::{PaneState, nav::Mode};
 use norte_proto::{Entry, EntryKind, Segment, VPath};
@@ -55,6 +58,11 @@ const HOSTILE_BADGE: &str = "⚠";
 /// Salto de página (↑↓ de 10 en 10) — orden de magnitud de una pantalla del
 /// spike; el fill/scroll fino es optimización posterior.
 const PAGE: usize = 10;
+
+/// Alto FIJO de cada fila (px), requerido por `uniform_list` (issue #87): sin
+/// una altura uniforme no puede medir un elemento y derivar el resto por
+/// aritmética en vez de layout completo.
+const ROW_H: f32 = 22.0;
 
 // Colores del chrome del dual-pane (constantes locales; el color por TIPO de
 // archivo sí sale del tema, ver `entry_color`). El theming completo del chrome
@@ -119,6 +127,10 @@ struct NorteGui {
     conflict_backlog: Vec<(modal::PendingTransfer, norte_proto::ConflictKind)>,
     /// Orden de llegada de las tasks (render estable; `task_progress` no ordena).
     task_order: Vec<norte_proto::TaskId>,
+    /// Handle de scroll de la lista virtualizada de cada pane (issue #87): debe
+    /// persistir entre renders (no se puede recrear cada frame) para que
+    /// `scroll_to_item` (llamado tras mover el cursor) tenga efecto.
+    scrolls: [UniformListScrollHandle; 2],
 }
 
 impl NorteGui {
@@ -155,6 +167,10 @@ impl NorteGui {
                     task_progress: std::collections::HashMap::new(),
                     conflict_backlog: Vec::new(),
                     task_order: Vec::new(),
+                    scrolls: [
+                        UniformListScrollHandle::new(),
+                        UniformListScrollHandle::new(),
+                    ],
                 };
                 gui.spawn_event_loop(event_rx, cx);
                 gui.cd(0, dir.clone(), cx);
@@ -190,6 +206,10 @@ impl NorteGui {
                     task_progress: std::collections::HashMap::new(),
                     conflict_backlog: Vec::new(),
                     task_order: Vec::new(),
+                    scrolls: [
+                        UniformListScrollHandle::new(),
+                        UniformListScrollHandle::new(),
+                    ],
                 }
             }
         }
@@ -416,6 +436,13 @@ impl NorteGui {
         }
     }
 
+    /// Tras mover el cursor de `pane`, hace que la lista virtualizada
+    /// (`uniform_list`, issue #87) lo mantenga visible — scroll no-estricto:
+    /// no-op si ya está en pantalla.
+    fn follow_cursor(&self, pane: usize) {
+        self.scrolls[pane].scroll_to_item(self.panes[pane].cursor(), ScrollStrategy::Nearest);
+    }
+
     /// Maneja una tecla en el pane con foco (ver `input::key_to_action` para el
     /// mapeo puro; aquí solo la EJECUCIÓN, que sí depende del estado vivo del
     /// pane).
@@ -460,6 +487,7 @@ impl NorteGui {
                     self.panes[f].quick_up();
                 } else {
                     self.panes[f].cursor_up();
+                    self.follow_cursor(f);
                 }
             }
             Action::Down => {
@@ -467,6 +495,7 @@ impl NorteGui {
                     self.panes[f].quick_down();
                 } else {
                     self.panes[f].cursor_down();
+                    self.follow_cursor(f);
                 }
             }
             // Home/End/Page saltan el cursor REAL: sin efecto con el filtro
@@ -474,21 +503,25 @@ impl NorteGui {
             Action::Home => {
                 if !quick_active {
                     self.panes[f].home();
+                    self.follow_cursor(f);
                 }
             }
             Action::End => {
                 if !quick_active {
                     self.panes[f].end();
+                    self.follow_cursor(f);
                 }
             }
             Action::PageUp => {
                 if !quick_active {
                     self.panes[f].page_up(PAGE);
+                    self.follow_cursor(f);
                 }
             }
             Action::PageDown => {
                 if !quick_active {
                     self.panes[f].page_down(PAGE);
+                    self.follow_cursor(f);
                 }
             }
             Action::Char(c) => {
@@ -525,6 +558,12 @@ impl NorteGui {
                         .map(|e| e.path.clone())
                 };
                 self.query[f].clear();
+                // `quick_confirm` fija el cursor real al índice absoluto del
+                // match; si es un archivo (sin `cd`) la lista se re-renderiza
+                // con el cursor movido pero el scroll quedaría arriba —
+                // inocuo llamarlo siempre: un `cd` también resetea el scroll
+                // (review, caso borde #2).
+                self.follow_cursor(f);
                 if let Some(dir) = target {
                     self.cd(f, dir, cx);
                 }
@@ -583,6 +622,7 @@ impl NorteGui {
         self.query[pane].clear();
         self.panes[pane].home();
         self.panes[pane].page_down(idx);
+        self.follow_cursor(pane);
         if click_count >= 2 {
             if let Some(dir) = dir_target {
                 self.cd(pane, dir, cx);
@@ -591,14 +631,22 @@ impl NorteGui {
         cx.notify();
     }
 
-    /// Rueda del ratón sobre un pane: le da el foco y mueve el cursor.
+    /// Rueda del ratón sobre un pane: le da el foco y mueve el cursor. Con
+    /// filtro quick activo NO mueve el cursor real (mismo guard que
+    /// `on_key`): la lista virtualizada indexa por posición VISIBLE
+    /// (`0..vis.len()`), pero `follow_cursor` usa el cursor ABSOLUTO — sin
+    /// este guard la rueda desplazaría la lista filtrada a una posición
+    /// espuria (review, caso borde #1).
     fn on_pane_scroll(&mut self, pane: usize, delta: ScrollDelta, cx: &mut Context<Self>) {
         self.focus = pane;
-        let y = scroll_y(delta);
-        if y > 0.0 {
-            self.panes[pane].cursor_up();
-        } else if y < 0.0 {
-            self.panes[pane].cursor_down();
+        if self.panes[pane].quick_visible().is_none() {
+            let y = scroll_y(delta);
+            if y > 0.0 {
+                self.panes[pane].cursor_up();
+            } else if y < 0.0 {
+                self.panes[pane].cursor_down();
+            }
+            self.follow_cursor(pane);
         }
         cx.notify();
     }
@@ -615,32 +663,41 @@ impl NorteGui {
             path_txt
         };
 
-        // La entrada resaltada = la seleccionada (respeta el filtro). Se compara
-        // por path (único dentro de un listado) para no depender del índice.
-        let sel_path = pane.selected().map(|e| e.path.clone());
+        // Cuenta de items de la lista virtualizada (issue #87): respeta el
+        // filtro quick (solo los índices visibles) o TODAS las entradas.
+        // `uniform_list` solo invoca el processor de abajo para el rango
+        // VISIBLE, así que esto es O(1) por frame — el O(N) desapareció.
+        let item_count = pane
+            .quick_visible()
+            .map_or_else(|| pane.entries().len(), <[usize]>::len);
 
-        // Filas visibles: solo `quick_visible()` si filtrando, si no todo.
-        let rows: Vec<_> = match pane.quick_visible() {
-            Some(idxs) => idxs
-                .iter()
-                .map(|&j| {
-                    let e = &pane.entries()[j];
-                    let hl = sel_path.as_ref() == Some(&e.path);
-                    let marked = pane.is_marked(e);
-                    self.render_row(i, j, e, hl, marked, cx)
-                })
-                .collect(),
-            None => pane
-                .entries()
-                .iter()
-                .enumerate()
-                .map(|(j, e)| {
-                    let hl = sel_path.as_ref() == Some(&e.path);
-                    let marked = pane.is_marked(e);
-                    self.render_row(i, j, e, hl, marked, cx)
-                })
-                .collect(),
-        };
+        let list = uniform_list(
+            SharedString::from(format!("entries-{i}")),
+            item_count,
+            cx.processor(move |this, range: Range<usize>, _window, cx| {
+                let pane = &this.panes[i];
+                let sel_path = pane.selected().map(|e| e.path.clone());
+                // Mapea el rango (índices dentro de la lista VISIBLE) a índices
+                // ABSOLUTOS de `entries()`, respetando el filtro quick.
+                let abs: Vec<usize> = match pane.quick_visible() {
+                    Some(vis) => range.filter_map(|k| vis.get(k).copied()).collect(),
+                    None => range.collect(),
+                };
+                abs.into_iter()
+                    .map(|j| {
+                        // Clona la entrada (barata: VPath + kind + dos
+                        // Option) para no retener un préstamo de `this.panes`
+                        // mientras se llama a `this.render_row` más abajo.
+                        let e = this.panes[i].entries()[j].clone();
+                        let hl = sel_path.as_ref() == Some(&e.path);
+                        let marked = this.panes[i].is_marked(&e);
+                        this.render_row(i, j, &e, hl, marked, cx)
+                    })
+                    .collect()
+            }),
+        )
+        .track_scroll(&self.scrolls[i])
+        .flex_1();
 
         let mut col = div()
             .flex_1()
@@ -687,15 +744,9 @@ impl NorteGui {
             );
         }
 
-        // Lista de entradas.
-        col = col.child(
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .overflow_hidden()
-                .children(rows),
-        );
+        // Lista de entradas, virtualizada (issue #87): `uniform_list` solo
+        // construye el rango visible, no las N entradas del dir.
+        col = col.child(list);
 
         // Línea `/{query}` al pie si el quick search está activo. La query la
         // tecleó el usuario, pero con IME/paste puede llegar con bidi/invisibles
@@ -757,6 +808,7 @@ impl NorteGui {
         let dir_target = (entry.kind == EntryKind::Dir).then(|| entry.path.clone());
 
         let mut row = div()
+            .h(px(ROW_H))
             .px(px(4.0))
             .py(px(1.0))
             .text_color(color)
