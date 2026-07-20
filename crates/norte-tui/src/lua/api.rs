@@ -139,17 +139,13 @@ const EVAL_BUDGET: u32 = 10_000_000;
 
 /// Charset de nombres de comando (mismo espíritu que `agent_session`):
 /// `[a-z0-9._-]{1,64}`. Usado por el runtime Lua (`norte.command`) para
-/// validar el nombre registrado en `eval_layer`. El charset está MIRRORED
-/// (GUI-c T2) en `norte_frontend::keymap::valid_lua_name` — el motor de
-/// keymap compartido valida los bindings `lua:<nombre>` con su propia
-/// copia (no puede depender de `norte-tui`, que depende de él); son dos
-/// funciones idénticas por diseño, no una deriva accidental.
+/// validar el nombre registrado en `eval_layer`. FUENTE ÚNICA (#88):
+/// delega en `norte_frontend::keymap::valid_lua_name` — el mismo charset que
+/// el motor de keymap usa para validar los bindings `lua:<nombre>`, así no
+/// pueden derivar. (El motor no puede depender de `norte-tui`, que depende de
+/// él; la dirección de reuso es tui→frontend.)
 fn valid_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 64
-        && name.bytes().all(|b| {
-            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')
-        })
+    norte_frontend::keymap::valid_lua_name(name)
 }
 
 /// Función instalada como `norte.command` fuera de una carga en curso: no

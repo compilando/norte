@@ -410,10 +410,13 @@ fn merge_ctx<'a>(
     out
 }
 
-/// Charset de un nombre de comando Lua (`lua:<nombre>`). Espeja
-/// `norte_tui::lua::valid_name`; el motor lo usa solo para VALIDAR el
-/// binding, no ejecuta Lua (eso es del frontend que tenga host).
-fn valid_lua_name(name: &str) -> bool {
+/// Charset de un nombre de comando Lua (`lua:<nombre>`): `[a-z0-9._-]{1,64}`.
+/// FUENTE ÚNICA (#88): el motor lo usa para validar el binding `lua:<nombre>`,
+/// y el runtime Lua de un frontend con host (la TUI, `norte.command`) lo reusa
+/// para validar el nombre registrado — así el charset no puede derivar entre
+/// «lo que el keymap acepta» y «lo que el runtime registra».
+#[must_use]
+pub fn valid_lua_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
         && name.bytes().all(|b| {
