@@ -10,7 +10,7 @@
 CARGO_HOME ?= $(HOME)/.cargo
 export PATH := $(CARGO_HOME)/bin:$(PATH)
 
-.PHONY: all setup run dev cli test t ci fmt lint cov docs watch help install uninstall
+.PHONY: all setup run dev gui cli test t ci fmt lint cov docs watch help install uninstall
 
 all: help
 
@@ -31,6 +31,7 @@ help:
 	@echo "  make setup  - preparar el equipo (rustup, just, nextest, deny…)"
 	@echo "  make run    - TUI en release"
 	@echo "  make dev    - TUI en debug (iterar)"
+	@echo "  make gui    - GUI GPUI (excluida del workspace; exige 'norte daemon run')"
 	@echo "  make test   - suite completa (nextest + doctests)"
 	@echo "  make ci     - lo mismo que CI: lint + test + cobertura + docs"
 	@echo "  make fmt    - formatear"
@@ -44,6 +45,9 @@ run: _need_just
 
 dev: _need_just
 	just dev
+
+gui: _need_just
+	just gui
 
 test: _need_just
 	just test

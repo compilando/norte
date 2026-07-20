@@ -48,6 +48,13 @@ run:
 dev:
     cargo run -p norte-tui
 
+# La GUI (GPUI). EXCLUIDA del workspace (spike M5, regla 7) → --manifest-path,
+# NUNCA entra en `just ci`. Es siempre por daemon: arranca antes `norte daemon
+# run`. Dir inicial vía `NORTE_DIR=file:///ruta just gui`; socket vía
+# `NORTE_SOCKET`. Args libres: `just gui --release`.
+gui *args:
+    cargo run --manifest-path crates/norte-gui/Cargo.toml {{args}}
+
 # El CLI de humo (paths NATIVOS): `just cli ls /tmp`, `just cli cp a b`…
 cli *args:
     cargo run -p norte-cli -- {{args}}
