@@ -1,7 +1,29 @@
 # GUI-c — keymap configurable (M5 hito 2, sub-proyecto 3) — diseño
 
 - Fecha: 2026-07-20
-- Estado: **aprobado** (oscar); pendiente de plan
+- Estado: **IMPLEMENTADO** (T1–T4, cerrado 2026-07-20; commits 6ca356b..341b12f,
+  rama `gui-c-keymap`). `just ci` EXIT=0; norte-frontend 47 tests + norte-tui
+  207 + norte-gui 24 + clippy limpio. Reviewers rust (por task) + encoding
+  (adaptadores de chord: `char` correcto, sin truncado) aplicados.
+  **Verificación GUI interactiva PENDIENTE de oscar** (headless), pero los checks
+  del plan Step 6 están AUTOMATIZADOS (tests e2e vía `NORTE_CONFIG_DIR`: rebind
+  j/k, comando desconocido→error, `lua:` inerte).
+  Desviaciones (deuda anotada):
+  - El motor exigió un tipo de tecla NEUTRO (`KeyCode`/`Mods`/`Chord` sin
+    crossterm); adaptadores `chord_from_crossterm` (TUI) y `gpui_chord` (GUI).
+    Fix de review T2: `Resolver::reset()` — una tecla no modelada (`None` del
+    adaptador) rompe la secuencia multi-tecla (paridad con el `from_event` viejo).
+  - Preset GUI orthodox PROPIO (solo comandos de la GUI): salir = **F10**/ctrl+c
+    (NO `q` — una letra suelta abriría quick-search, el modelo type-to-filter de
+    la GUI). Modales con teclas FIJAS; quick-search fallthrough.
+  - `input.rs`/`key_to_action` BORRADOS (huérfanos tras el rewire del resolver).
+  - Guard `platform` (Super/Cmd) en `on_key`: no rutea al resolver (evita que
+    Cmd+q colapse a `q`).
+  - `Resolution::Pending` sin indicador visual en la GUI (no hay secuencias
+    multi-tecla en el preset; deuda si se añaden). Hot-reload, contexto viewer,
+    host Lua, cheatsheet, i18n = fuera de alcance (GUI-d/e). Charset `valid_name`
+    duplicado motor↔lua = **issue #88**.
+- Estado previo: aprobado (oscar); plan `docs/superpowers/plans/2026-07-20-gui-c-keymap-configurable.md`
 - Contexto: M5 hito 2 = MVP de la GUI. Sub-proyectos: GUI-a (nav read-only, IMPLEMENTADO),
   GUI-b (mutaciones, IMPLEMENTADO+merge), **GUI-c** (este, keymap configurable),
   GUI-d (viewer), GUI-e (i18n+AccessKit). Construye sobre `crates/norte-gui` (EXCLUIDO
