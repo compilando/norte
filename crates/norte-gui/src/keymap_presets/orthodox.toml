@@ -1,0 +1,27 @@
+# Preset orthodox de la GUI (contexto Browse). Comandos: solo los de norte-gui.
+[global]
+keymap = [
+    # Salir con F10 (mc clásico) o ctrl+c — NO una letra suelta, que abriría
+    # quick-search.
+    { on = ["f10"], run = "app.quit" },
+    { on = ["ctrl+c"], run = "app.quit" },
+    { on = ["tab"], run = "pane.switch" },
+]
+
+[pane]
+keymap = [
+    { on = ["up"], run = "cursor.up" },
+    { on = ["down"], run = "cursor.down" },
+    { on = ["pgup"], run = "cursor.page-up" },
+    { on = ["pgdn"], run = "cursor.page-down" },
+    { on = ["home"], run = "cursor.top" },
+    { on = ["end"], run = "cursor.bottom" },
+    { on = ["enter"], run = "nav.enter" },
+    { on = ["backspace"], run = "nav.parent" },
+    { on = ["insert"], run = "mark.toggle" },
+    { on = ["f5"], run = "pane.copy" },
+    { on = ["f6"], run = "pane.move" },
+    { on = ["f8"], run = "pane.delete" },
+    { on = ["delete"], run = "pane.delete" },
+    { on = ["f9"], run = "task.cancel" },
+]

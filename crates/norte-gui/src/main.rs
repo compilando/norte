@@ -15,9 +15,12 @@
 //!   Self::on_key))`. El root pide foco en `new` (`window.focus(&handle, cx)`),
 //!   así los `KeyDownEvent` llegan al root. `KeyDownEvent.keystroke.key` es el
 //!   nombre de la tecla (`"up"`, `"tab"`, `"escape"`, `"a"`…, ver
-//!   `input::key_to_action`); `key_char` el carácter realmente tecleado
+//!   `keymap::gpui_chord`); `key_char` el carácter realmente tecleado
 //!   (fidelidad de layout/shift). Descubierto en
-//!   `crates/gpui/examples/{focus_visible,input}.rs`.
+//!   `crates/gpui/examples/{focus_visible,input}.rs`. Las teclas de
+//!   navegación/mutación se resuelven vía el motor de keymap compartido
+//!   (GUI-c T3, `norte_frontend::keymap`) — configurable por capas, NO
+//!   hardcodeadas.
 //! - **Ratón**: `div().on_mouse_down(MouseButton::Left, cx.listener(...))` con
 //!   `MouseDownEvent.click_count` (1 = foco+cursor, 2 = `cd`). `on_scroll_wheel`
 //!   con `ScrollWheelEvent.delta` mueve el cursor. Se usa `on_mouse_down` (no
@@ -40,12 +43,11 @@ use norte_frontend::{PaneState, nav::Mode};
 use norte_proto::{Entry, EntryKind, Segment, VPath};
 use norte_theme::{FileKind, Role, Theme};
 
-mod input;
+mod keymap;
 mod modal;
 mod session;
 mod theme_map;
 
-use input::{Action, key_to_action};
 use modal::{Modal, ModalOutcome, PendingOp, PendingTransfer, TransferKind};
 use session::{LoadConfig, SessionCmd, SessionEvent};
 
@@ -131,6 +133,14 @@ struct NorteGui {
     /// persistir entre renders (no se puede recrear cada frame) para que
     /// `scroll_to_item` (llamado tras mover el cursor) tenga efecto.
     scrolls: [UniformListScrollHandle; 2],
+    /// Motor de resolución de teclas (GUI-c T3): preset orthodox + capas del
+    /// usuario, ya validado. Cada tecla que no la consume el modal/quick pasa
+    /// por aquí (`keymap::gpui_chord` → `resolver.push`).
+    resolver: norte_frontend::keymap::Resolver,
+    /// Si la carga del keymap efectivo falló (capa de usuario/proyecto rota):
+    /// el mensaje para el banner. `resolver` en ese caso corre solo con el
+    /// preset (`keymap::build_effective_preset_only`) — la GUI sigue viva.
+    keymap_error: Option<String>,
 }
 
 impl NorteGui {
@@ -142,6 +152,14 @@ impl NorteGui {
         let theme = Theme::preset_default();
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
+
+        let (resolver, keymap_error) = match keymap::build_effective() {
+            Ok(eff) => (norte_frontend::keymap::Resolver::new(eff), None),
+            Err(e) => (
+                norte_frontend::keymap::Resolver::new(keymap::build_effective_preset_only()),
+                Some(format!("keymap: {e}")),
+            ),
+        };
 
         match LoadConfig::from_env() {
             Ok(cfg) => {
@@ -171,6 +189,8 @@ impl NorteGui {
                         UniformListScrollHandle::new(),
                         UniformListScrollHandle::new(),
                     ],
+                    resolver,
+                    keymap_error,
                 };
                 gui.spawn_event_loop(event_rx, cx);
                 gui.cd(0, dir.clone(), cx);
@@ -210,6 +230,8 @@ impl NorteGui {
                         UniformListScrollHandle::new(),
                         UniformListScrollHandle::new(),
                     ],
+                    resolver,
+                    keymap_error,
                 }
             }
         }
@@ -443,9 +465,158 @@ impl NorteGui {
         self.scrolls[pane].scroll_to_item(self.panes[pane].cursor(), ScrollStrategy::Nearest);
     }
 
-    /// Maneja una tecla en el pane con foco (ver `input::key_to_action` para el
-    /// mapeo puro; aquí solo la EJECUCIÓN, que sí depende del estado vivo del
-    /// pane).
+    /// `nav.enter`: confirma el quick search si está abierto (fija el cursor
+    /// real al match) y, si la entrada resultante es un directorio, hace `cd`.
+    /// Extraído del viejo brazo `Action::Enter` de `on_key` (GUI-c T3).
+    fn activate_enter(&mut self, cx: &mut Context<Self>) {
+        let f = self.focus;
+        let target = {
+            let pane = &mut self.panes[f];
+            if pane.quick_visible().is_some() {
+                pane.quick_confirm();
+            }
+            pane.selected()
+                .filter(|e| e.kind == EntryKind::Dir)
+                .map(|e| e.path.clone())
+        };
+        self.query[f].clear();
+        // `quick_confirm` fija el cursor real al índice absoluto del match;
+        // si es un archivo (sin `cd`) la lista se re-renderiza con el cursor
+        // movido pero el scroll quedaría arriba — inocuo llamarlo siempre: un
+        // `cd` también resetea el scroll (review, caso borde #2).
+        self.follow_cursor(f);
+        if let Some(dir) = target {
+            self.cd(f, dir, cx);
+        }
+    }
+
+    /// `task.cancel`: cancela la primera task NO terminal (sin navegación de
+    /// franja todavía — deuda). En la práctica hay una op activa a la vez.
+    /// Extraído del viejo brazo `Action::CancelTask` de `on_key` (GUI-c T3).
+    fn cancel_first_task(&mut self) {
+        let target = self.task_order.iter().copied().find(|id| {
+            self.task_progress
+                .get(id)
+                .is_some_and(|p| !p.state.is_terminal())
+        });
+        if let Some(id) = target {
+            let _ = self.cmds.send(SessionCmd::Cancel(id));
+        }
+    }
+
+    /// Ejecuta un comando del keymap (contexto Browse) sobre el estado.
+    /// Reemplaza el `key_to_action` hardcodeado para las acciones nombradas
+    /// (GUI-c T3): `on_key` resuelve la tecla vía `resolver` y llama aquí.
+    fn run_command(&mut self, cmd: &str, cx: &mut Context<Self>) {
+        let f = self.focus;
+        match cmd {
+            "app.quit" => cx.quit(),
+            "pane.switch" => self.focus = 1 - self.focus,
+            "cursor.up" => self.panes[f].cursor_up(),
+            "cursor.down" => self.panes[f].cursor_down(),
+            "cursor.top" => self.panes[f].home(),
+            "cursor.bottom" => self.panes[f].end(),
+            "cursor.page-up" => self.panes[f].page_up(PAGE),
+            "cursor.page-down" => self.panes[f].page_down(PAGE),
+            "nav.enter" => self.activate_enter(cx),
+            "nav.parent" => {
+                if let Some(p) = self.panes[f].dir().parent() {
+                    self.cd(f, p, cx);
+                }
+            }
+            "mark.toggle" => self.panes[f].toggle_mark(),
+            "pane.copy" => self.open_transfer_modal(TransferKind::Copy),
+            "pane.move" => self.open_transfer_modal(TransferKind::Move),
+            "pane.delete" => self.open_delete_modal(),
+            "task.cancel" => self.cancel_first_task(),
+            _ => {} // comando desconocido en runtime: no-op (el keymap ya validó)
+        }
+        // Tras un movimiento de cursor, sigue el scroll (issue #87).
+        self.follow_cursor(f);
+    }
+
+    /// Maneja UNA tecla dentro del quick search (filtro activo): tipeo →
+    /// filtro, Backspace lo acorta, Esc lo cancela, ↑↓ mueven la selección
+    /// del quick, Enter confirma. Devuelve `true` si la tecla se consumió
+    /// (el caller NO debe pasarla al resolver de keymap) — extraído del
+    /// viejo despacho de `Action::{Char,Backspace,Esc,Up,Down,Enter}` de
+    /// `on_key` (GUI-c T3, contrato del plan: quick abierto = fallthrough,
+    /// no binding).
+    fn quick_key(&mut self, ks: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
+        let f = self.focus;
+        match ks.key.as_str() {
+            "backspace" => {
+                self.panes[f].quick_backspace();
+                self.query[f].pop();
+                true
+            }
+            "escape" => {
+                self.panes[f].quick_cancel();
+                self.query[f].clear();
+                true
+            }
+            "up" => {
+                self.panes[f].quick_up();
+                true
+            }
+            "down" => {
+                self.panes[f].quick_down();
+                true
+            }
+            "enter" => {
+                self.activate_enter(cx);
+                true
+            }
+            // Home/End/Page saltan el cursor REAL: sin efecto con el filtro
+            // abierto (la selección vive en el quick, que solo tiene ↑↓) —
+            // se CONSUMEN aquí como no-op, no caen al keymap (que sí movería
+            // el cursor real por debajo del filtro).
+            "home" | "end" | "pageup" | "pagedown" => true,
+            _ => {
+                // Imprimible: fidelidad al carácter REALMENTE tecleado
+                // (`key_char`, respeta shift/layout); `"space"` llega con
+                // nombre, no como carácter suelto.
+                let ch = if ks.key == "space" {
+                    Some(' ')
+                } else {
+                    single_char(ks.key_char.as_deref()).or_else(|| single_char(Some(&ks.key)))
+                };
+                match ch {
+                    Some(c) if !c.is_control() => {
+                        self.panes[f].quick_char(c);
+                        self.query[f].push(c);
+                        true
+                    }
+                    _ => false,
+                }
+            }
+        }
+    }
+
+    /// Sin binding de keymap (`Resolution::Reset`) y quick CERRADO: un
+    /// carácter imprimible ALFANUMÉRICO abre el quick search (mismo criterio
+    /// que el viejo `input::printable` con `quick_active = false` — un signo
+    /// de puntuación o el espacio sueltos NO abren búsqueda por accidente).
+    /// Teclas de navegación con nombre (`"up"`, `"f5"`…) nunca llegan aquí
+    /// con más de un carácter, así que el filtro por longitud ya las excluye.
+    fn maybe_open_quick(&mut self, ks: &gpui::Keystroke) {
+        let f = self.focus;
+        let ch = single_char(ks.key_char.as_deref()).or_else(|| single_char(Some(&ks.key)));
+        if let Some(c) = ch {
+            if c.is_alphanumeric() {
+                self.panes[f].quick_start(Mode::Filter);
+                self.query[f].clear();
+                self.panes[f].quick_char(c);
+                self.query[f].push(c);
+            }
+        }
+    }
+
+    /// Maneja una tecla en el pane con foco (GUI-c T3, contrato del plan):
+    /// (1) modal abierto → captura fija; (2) quick search activo (sin
+    /// ctrl/alt) → fallthrough al filtro (`quick_key`); (3) si no,
+    /// `keymap::gpui_chord` → `resolver.push` → `run_command`, o
+    /// `maybe_open_quick` si es un imprimible sin binding.
     fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let ks = &event.keystroke;
 
@@ -472,137 +643,88 @@ impl NorteGui {
         let f = self.focus;
         let quick_active = self.panes[f].quick_visible().is_some();
         let mods = ks.modifiers;
+        let mut resolution_dbg = "n/a";
 
-        // Un imprimible con Ctrl/Alt/Super es un atajo, no filtro: descártalo.
-        let action = match key_to_action(&ks.key, quick_active) {
-            Action::Char(_) if mods.control || mods.alt || mods.platform => Action::None,
-            other => other,
-        };
+        // (2) Quick search activo Y sin ctrl/alt: el tipeo va al FILTRO, no
+        // al keymap (un ctrl+algo con el filtro abierto sigue siendo un
+        // comando — p. ej. ctrl+c). Si `quick_key` consume la tecla, termina
+        // aquí (contrato del plan GUI-c T3).
+        if quick_active && !(mods.control || mods.alt || mods.platform) && self.quick_key(ks, cx) {
+            self.debug_log_key(&ks.key, "quick");
+            cx.notify();
+            return;
+        }
 
-        match action {
-            Action::None => return,
-            Action::Tab => self.focus = 1 - self.focus,
-            Action::Up => {
-                if quick_active {
-                    self.panes[f].quick_up();
-                } else {
-                    self.panes[f].cursor_up();
-                    self.follow_cursor(f);
+        // Super/Cmd no lo modela el keymap (`gpui_chord` solo recibe
+        // ctrl/alt/shift): no lo rutees al resolver — evita que Cmd+q
+        // colapse al chord `q` desnudo y dispare su binding (MINOR 2,
+        // review T3).
+        if mods.platform {
+            cx.notify();
+            return;
+        }
+
+        // (3) keymap: nombre GPUI → Chord → resolver.
+        if let Some(chord) = keymap::gpui_chord(
+            &ks.key,
+            mods.control,
+            mods.alt,
+            mods.shift,
+            ks.key_char.as_deref(),
+        ) {
+            match self.resolver.push(chord) {
+                norte_frontend::keymap::Resolution::Run(cmd) => {
+                    resolution_dbg = "run";
+                    self.run_command(&cmd, cx);
                 }
-            }
-            Action::Down => {
-                if quick_active {
-                    self.panes[f].quick_down();
-                } else {
-                    self.panes[f].cursor_down();
-                    self.follow_cursor(f);
+                norte_frontend::keymap::Resolution::Pending(_) => {
+                    // Secuencia en curso: nada que ejecutar todavía. La GUI
+                    // no pinta indicador de pendiente (el preset actual es
+                    // todo de una sola tecla; deuda si se añaden secuencias).
+                    resolution_dbg = "pending";
                 }
-            }
-            // Home/End/Page saltan el cursor REAL: sin efecto con el filtro
-            // abierto (la selección vive en el quick, que solo tiene ↑↓).
-            Action::Home => {
-                if !quick_active {
-                    self.panes[f].home();
-                    self.follow_cursor(f);
-                }
-            }
-            Action::End => {
-                if !quick_active {
-                    self.panes[f].end();
-                    self.follow_cursor(f);
-                }
-            }
-            Action::PageUp => {
-                if !quick_active {
-                    self.panes[f].page_up(PAGE);
-                    self.follow_cursor(f);
-                }
-            }
-            Action::PageDown => {
-                if !quick_active {
-                    self.panes[f].page_down(PAGE);
-                    self.follow_cursor(f);
-                }
-            }
-            Action::Char(c) => {
-                // Fidelidad: el carácter REALMENTE tecleado (respeta shift y
-                // layout) va en `key_char`; si no está, cae al de `key`.
-                let ch = single_char(ks.key_char.as_deref()).unwrap_or(c);
-                if !quick_active {
-                    self.panes[f].quick_start(Mode::Filter);
-                    self.query[f].clear();
-                }
-                self.panes[f].quick_char(ch);
-                self.query[f].push(ch);
-            }
-            Action::Backspace => {
-                if quick_active {
-                    self.panes[f].quick_backspace();
-                    self.query[f].pop();
-                } else if let Some(parent) = self.panes[f].dir().parent() {
-                    self.cd(f, parent, cx);
-                }
-            }
-            Action::Esc => {
-                self.panes[f].quick_cancel();
-                self.query[f].clear();
-            }
-            Action::Enter => {
-                let target = {
-                    let pane = &mut self.panes[f];
-                    if pane.quick_visible().is_some() {
-                        pane.quick_confirm();
+                norte_frontend::keymap::Resolution::Reset => {
+                    resolution_dbg = "reset";
+                    // Sin binding: si es un imprimible sin ctrl/alt/super,
+                    // ABRE el quick search.
+                    if !(mods.control || mods.alt || mods.platform) {
+                        self.maybe_open_quick(ks);
                     }
-                    pane.selected()
-                        .filter(|e| e.kind == EntryKind::Dir)
-                        .map(|e| e.path.clone())
-                };
-                self.query[f].clear();
-                // `quick_confirm` fija el cursor real al índice absoluto del
-                // match; si es un archivo (sin `cd`) la lista se re-renderiza
-                // con el cursor movido pero el scroll quedaría arriba —
-                // inocuo llamarlo siempre: un `cd` también resetea el scroll
-                // (review, caso borde #2).
-                self.follow_cursor(f);
-                if let Some(dir) = target {
-                    self.cd(f, dir, cx);
                 }
             }
-            Action::ToggleMark => self.panes[f].toggle_mark(),
-            Action::Copy => self.open_transfer_modal(TransferKind::Copy),
-            Action::Move => self.open_transfer_modal(TransferKind::Move),
-            Action::Delete => self.open_delete_modal(),
-            Action::CancelTask => {
-                // Cancela la primera task NO terminal (sin navegación de franja
-                // todavía — deuda). En la práctica hay una op activa a la vez.
-                let target = self.task_order.iter().copied().find(|id| {
-                    self.task_progress
-                        .get(id)
-                        .is_some_and(|p| !p.state.is_terminal())
-                });
-                if let Some(id) = target {
-                    let _ = self.cmds.send(SessionCmd::Cancel(id));
-                }
-            }
+        } else {
+            // El adaptador no modela la tecla (rara/exótica): rompe
+            // cualquier secuencia pendiente, como un Miss del resolver
+            // (ver el test `reset_rompe_la_secuencia_pendiente` del motor).
+            self.resolver.reset();
         }
-        if std::env::var_os("NORTE_GUI_DEBUG").is_some() {
-            let nf = self.focus;
-            let pane = &self.panes[nf];
-            let sel = pane
-                .selected()
-                .and_then(|e| e.path.file_name())
-                .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
-                .unwrap_or_default();
-            eprintln!(
-                "[norte-gui] key={:?} -> action={:?} | focus={nf} dir={} cursor={} quick={:?} sel={sel:?}",
-                ks.key,
-                action,
-                pane.dir(),
-                pane.cursor(),
-                self.query[nf],
-            );
-        }
+
+        self.debug_log_key(&ks.key, resolution_dbg);
         cx.notify();
+    }
+
+    /// Log de diagnóstico (`NORTE_GUI_DEBUG`) de una tecla procesada: la
+    /// tecla cruda de GPUI + qué rama la resolvió (`"quick"`/`"run"`/
+    /// `"pending"`/`"reset"`), más el estado del pane con foco. Extraído del
+    /// viejo log inline de `on_key` (GUI-c T3: ya no hay un `Action` único
+    /// que loguear).
+    fn debug_log_key(&self, key: &str, via: &str) {
+        if std::env::var_os("NORTE_GUI_DEBUG").is_none() {
+            return;
+        }
+        let nf = self.focus;
+        let pane = &self.panes[nf];
+        let sel = pane
+            .selected()
+            .and_then(|e| e.path.file_name())
+            .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+            .unwrap_or_default();
+        eprintln!(
+            "[norte-gui] key={key:?} via={via} | focus={nf} dir={} cursor={} quick={:?} sel={sel:?}",
+            pane.dir(),
+            pane.cursor(),
+            self.query[nf],
+        );
     }
 
     /// Click en una fila: foco a ese pane + cursor a esa fila; doble-click sobre
@@ -1159,9 +1281,26 @@ impl Render for NorteGui {
             .bg(rgb(BG))
             .text_color(rgb(FG))
             .p(px(4.0))
-            .gap(px(2.0))
-            .child(panes_row)
-            .child(self.render_task_strip());
+            .gap(px(2.0));
+
+        // Banner de keymap roto (GUI-c T3): una capa de usuario/proyecto con
+        // TOML inválido, tecla mal formada, comando desconocido o secuencia
+        // ambigua no tumba la GUI — corre con el preset orthodox puro
+        // (`keymap::build_effective_preset_only`, fijado en `new`) y avisa
+        // aquí una vez por sesión.
+        if let Some(msg) = &self.keymap_error {
+            root = root.child(
+                div()
+                    .px(px(4.0))
+                    .py(px(2.0))
+                    .bg(rgb(HEADER_BG))
+                    .text_color(rgb(ERR_FG))
+                    .truncate()
+                    .child(SharedString::from(msg.clone())),
+            );
+        }
+
+        root = root.child(panes_row).child(self.render_task_strip());
 
         // Overlay del modal activo: sin esto F5/F6/F8 capturaban teclado pero
         // no pintaban nada (el borrado se confirmaba a ciegas — CRITICAL).
