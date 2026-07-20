@@ -55,6 +55,28 @@ dev:
 gui *args:
     cargo run --manifest-path crates/norte-gui/Cargo.toml {{args}}
 
+# La GUI en UN solo comando: arranca un daemon EFÍMERO (socket propio, sin
+# idle-shutdown), lanza la GUI contra él, y para el daemon al cerrar la ventana.
+# Para probar sin gestionar el daemon a mano. Dir inicial vía
+# `NORTE_DIR=file:///ruta just gui-demo`. Args extra van a la GUI (`--release`).
+gui-demo *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sockdir="${XDG_RUNTIME_DIR:-/tmp}/norte-gui-demo"
+    sock="$sockdir/daemon.sock"
+    mkdir -p "$sockdir"; chmod 700 "$sockdir"; rm -f "$sock"
+    echo "[gui-demo] compilando daemon + GUI…"
+    cargo build -q -p norte-cli
+    cargo build -q --manifest-path crates/norte-gui/Cargo.toml
+    echo "[gui-demo] arrancando daemon efímero en $sock"
+    cargo run -q -p norte-cli -- daemon run --socket "$sock" --idle-timeout 0 &
+    dpid=$!
+    trap 'kill "$dpid" 2>/dev/null || true' EXIT INT TERM
+    for _ in $(seq 1 100); do [ -S "$sock" ] && break; sleep 0.1; done
+    [ -S "$sock" ] || { echo "[gui-demo] el daemon no abrió el socket a tiempo"; exit 1; }
+    echo "[gui-demo] lanzando GUI (cierra la ventana para parar el daemon)"
+    NORTE_SOCKET="$sock" cargo run --manifest-path crates/norte-gui/Cargo.toml {{args}}
+
 # El CLI de humo (paths NATIVOS): `just cli ls /tmp`, `just cli cp a b`…
 cli *args:
     cargo run -p norte-cli -- {{args}}

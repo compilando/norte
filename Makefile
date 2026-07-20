@@ -10,7 +10,7 @@
 CARGO_HOME ?= $(HOME)/.cargo
 export PATH := $(CARGO_HOME)/bin:$(PATH)
 
-.PHONY: all setup run dev gui cli test t ci fmt lint cov docs watch help install uninstall
+.PHONY: all setup run dev gui gui-demo cli test t ci fmt lint cov docs watch help install uninstall
 
 all: help
 
@@ -48,6 +48,9 @@ dev: _need_just
 
 gui: _need_just
 	just gui
+
+gui-demo: _need_just
+	just gui-demo
 
 test: _need_just
 	just test
