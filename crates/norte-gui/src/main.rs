@@ -22,9 +22,8 @@
 //!   `MouseDownEvent.click_count` (1 = foco+cursor, 2 = `cd`). `on_scroll_wheel`
 //!   con `ScrollWheelEvent.delta` mueve el cursor. Se usa `on_mouse_down` (no
 //!   `on_click`) para no exigir un `.id()` estable por fila.
-//! - **async → UI**: `cx.spawn` + `this.update` + `cx.notify()`, con un
-//!   `tokio::oneshot` que cruza desde el hilo tokio del `RemoteBackend` (ver
-//!   `backend_task.rs`).
+//! - **async → UI**: `cx.spawn` + `this.update` + `cx.notify()`, con un canal
+//!   `tokio::mpsc` que cruza desde el hilo de sesión tokio (ver `session.rs`).
 #![forbid(unsafe_code)]
 
 use gpui::{
@@ -33,20 +32,19 @@ use gpui::{
     WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
 use gpui_platform::application;
-use std::path::PathBuf;
 
 use norte_frontend::{PaneState, nav::Mode};
 use norte_proto::{Entry, EntryKind, Segment, VPath};
 use norte_theme::{FileKind, Role, Theme};
 
-mod backend_task;
 mod input;
 #[allow(dead_code)] // (GUI-b T5) allow temporal: main aún no consume estos tipos; se retira en T5.
 mod modal;
+mod session;
 mod theme_map;
 
-use backend_task::PaneListOutcome;
 use input::{Action, key_to_action};
+use session::{LoadConfig, SessionCmd, SessionEvent};
 
 /// Badge local que prefija un nombre alterado en el display (regla 1 / spec §6:
 /// display siempre lossy y MARCADO). No hay `ui.rs` de la TUI aquí, así que la
@@ -73,7 +71,7 @@ const ERR_FG: u32 = 0xf87171;
 const QUICK_FG: u32 = 0xfbbf24;
 
 /// El *root view*: dos panes navegables, cuál tiene el foco, el tema cacheado y
-/// el socket del daemon (para relistar en cada `cd`).
+/// el canal hacia el hilo de sesión persistente (para relistar en cada `cd`).
 struct NorteGui {
     /// Los dos panes (modelo puro compartido con la TUI).
     panes: [PaneState; 2],
@@ -96,9 +94,9 @@ struct NorteGui {
     generation: [u64; 2],
     /// Tema cacheado UNA vez (parsea TOML; no es gratis por-frame).
     theme: Theme,
-    /// Socket del daemon; cada `cd` abre una conexión fresca (ver
-    /// `backend_task`).
-    socket: PathBuf,
+    /// Canal hacia el hilo de sesión (conexión persistente al daemon, ver
+    /// `session.rs`): cada `cd` manda un `SessionCmd::List`, jamás reconecta.
+    cmds: tokio::sync::mpsc::UnboundedSender<SessionCmd>,
     /// Handle de foco del root: sin él los `KeyDownEvent` no llegan.
     focus_handle: FocusHandle,
 }
@@ -113,9 +111,13 @@ impl NorteGui {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
-        match backend_task::LoadConfig::from_env() {
+        match LoadConfig::from_env() {
             Ok(cfg) => {
-                let backend_task::LoadConfig { socket, dir } = cfg;
+                let LoadConfig { socket, dir } = cfg;
+                let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+                let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+                session::spawn(socket, cmd_rx, event_tx);
+
                 let mut gui = Self {
                     panes: [
                         PaneState::new(dir.clone(), Vec::new()),
@@ -126,9 +128,10 @@ impl NorteGui {
                     errors: [None, None],
                     generation: [0, 0],
                     theme,
-                    socket,
+                    cmds: cmd_tx,
                     focus_handle,
                 };
+                gui.spawn_event_loop(event_rx, cx);
                 gui.cd(0, dir.clone(), cx);
                 gui.cd(1, dir, cx);
                 gui
@@ -137,6 +140,11 @@ impl NorteGui {
                 // INVARIANTE: "file:///" es un VPath raíz siempre válido; solo
                 // es un placeholder para pintar el banner de error.
                 let placeholder = VPath::parse("file:///").expect("'file:///' es un VPath válido");
+                // Sin config resuelta no hay socket que conectar: el canal de
+                // comandos nace sin sesión al otro lado (receptor soltado),
+                // `cd` seguirá funcionando sin panic (el `send` simplemente
+                // falla en silencio, no hay `cd` de por medio aquí).
+                let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel();
                 Self {
                     panes: [
                         PaneState::new(placeholder.clone(), Vec::new()),
@@ -150,82 +158,107 @@ impl NorteGui {
                     ],
                     generation: [0, 0],
                     theme,
-                    socket: PathBuf::new(),
+                    cmds: cmd_tx,
                     focus_handle,
                 }
             }
         }
     }
 
-    /// Cambia el directorio de `pane` a `dir`: lo marca como cargando y lanza el
-    /// `fs.list` en segundo plano; el resultado llega por `oneshot` y se aplica
-    /// en el hilo de render (ordenado con `sort_entries`). Un error deja el pane
-    /// vacío con banner, jamás panic.
-    fn cd(&mut self, pane: usize, dir: VPath, cx: &mut Context<Self>) {
-        // Nueva generación para ESTE cd: invalida cualquier list en vuelo del
-        // pane (un resultado anterior llegará con generación vieja y se
-        // descartará en el apply).
+    /// Cambia el directorio de `pane` a `dir`: lo marca como cargando y manda
+    /// un `List` al hilo de sesión; el resultado llega por el drenador de
+    /// eventos (`spawn_event_loop`) y se aplica con el guard de generación.
+    fn cd(&mut self, pane: usize, dir: VPath, _cx: &mut Context<Self>) {
         self.generation[pane] = self.generation[pane].wrapping_add(1);
         let generation = self.generation[pane];
-
         self.panes[pane].begin_loading(dir.clone());
         self.errors[pane] = None;
         self.query[pane].clear();
+        let _ = self.cmds.send(SessionCmd::List {
+            pane,
+            generation,
+            dir,
+        });
+    }
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        backend_task::spawn_list(self.socket.clone(), dir, pane, generation, tx);
-
+    /// Drena los eventos del hilo de sesión y los aplica al estado (UN solo
+    /// `cx.spawn` para toda la vida de la ventana). Sale si la entidad muere.
+    fn spawn_event_loop(
+        &self,
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<SessionEvent>,
+        cx: &mut Context<Self>,
+    ) {
         cx.spawn(async move |this, cx| {
-            let result = rx.await;
-            this.update(cx, |view, cx| {
-                let Ok(PaneListOutcome {
-                    pane,
-                    generation,
-                    dir,
-                    outcome,
-                }) = result
-                else {
-                    // El emisor se soltó sin enviar (hilo abortado): raro.
-                    return;
-                };
+            while let Some(ev) = rx.recv().await {
+                let alive = this
+                    .update(cx, |view, cx| {
+                        view.apply_event(ev);
+                        cx.notify();
+                    })
+                    .is_ok();
+                if !alive {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Aplica UN evento de sesión al estado.
+    fn apply_event(&mut self, ev: SessionEvent) {
+        match ev {
+            SessionEvent::Listed {
+                pane,
+                generation,
+                dir,
+                outcome,
+            } => {
                 // GUARD de generación: si el pane ya está en un cd más nuevo,
                 // este resultado es stale y se DESCARTA (no pisa el listado
                 // vigente ni resetea cursor/filtro).
-                if !generation_is_current(view.generation[pane], generation) {
+                if !generation_is_current(self.generation[pane], generation) {
                     if std::env::var_os("NORTE_GUI_DEBUG").is_some() {
                         eprintln!(
                             "[norte-gui] pane {pane}: resultado stale (gen {generation} != {}) descartado",
-                            view.generation[pane],
+                            self.generation[pane],
                         );
                     }
-                    return;
+                    return; // stale: un cd más nuevo ya avanzó la generación.
                 }
                 match outcome {
                     Ok(entries) => {
                         let mut entries = entries;
                         norte_frontend::sort_entries(&mut entries);
-                        view.panes[pane].set_listing(dir, entries);
-                        view.errors[pane] = None;
-                        view.query[pane].clear();
+                        self.panes[pane].set_listing(dir, entries);
+                        self.errors[pane] = None;
+                        self.query[pane].clear();
                         if std::env::var_os("NORTE_GUI_DEBUG").is_some() {
                             eprintln!(
                                 "[norte-gui] pane {pane} aplicó listado: {} entradas, cursor={}",
-                                view.panes[pane].entries().len(),
-                                view.panes[pane].cursor(),
+                                self.panes[pane].entries().len(),
+                                self.panes[pane].cursor(),
                             );
                         }
                     }
                     Err(msg) => {
-                        // Limpia el estado de carga (dir vacío) + banner.
-                        view.panes[pane].set_listing(dir, Vec::new());
-                        view.errors[pane] = Some(msg);
+                        self.panes[pane].set_listing(dir, Vec::new());
+                        self.errors[pane] = Some(msg);
                     }
                 }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+            }
+            SessionEvent::ConnectFailed(msg) => {
+                // Sin esto `loading` queda clavado en `true` (nunca llega un
+                // `Listed` que lo baje) y el render pinta "cargando…" para
+                // siempre, suprimiendo el banner de error (ver `render_pane`).
+                // `set_listing` baja `loading` y vacía entries preservando el
+                // `dir` vigente del pane.
+                for pane in 0..2 {
+                    let dir = self.panes[pane].dir().clone();
+                    self.panes[pane].set_listing(dir, Vec::new());
+                    self.errors[pane] = Some(msg.clone());
+                }
+            }
+        }
     }
 
     /// Maneja una tecla en el pane con foco (ver `input::key_to_action` para el

@@ -54,7 +54,7 @@ nada, no abre socket propio, no tiene keymap.
 
 ## Variables de entorno
 
-`backend_task::LoadConfig::from_env` (`src/backend_task.rs`) resuelve la
+`session::LoadConfig::from_env` (`src/session.rs`) resuelve la
 config del daemon a listar:
 
 | Variable | Significado | Default si falta |
