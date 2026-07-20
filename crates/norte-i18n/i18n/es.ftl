@@ -229,6 +229,7 @@ gui-loading = cargando…
 gui-dir-empty = (directorio vacío)
 gui-tasks-empty = (sin tasks)
 gui-viewer-opening = abriendo visor…
+gui-viewer-image-unreadable = imagen ilegible
 gui-a11y-pane-left = panel izquierdo
 gui-a11y-pane-right = panel derecho
 gui-a11y-tasks = tareas en curso

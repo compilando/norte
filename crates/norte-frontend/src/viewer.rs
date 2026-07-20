@@ -15,6 +15,60 @@ pub const PAGE: usize = 10;
 /// Bytes por fila del hexview.
 const HEX_COLS: usize = 16;
 
+/// Formato de imagen RECONOCIDO por bytes mágicos (no por extensión: el viewer
+/// lee CONTENIDO, spec §6). El core NO decodifica (sin dep `image`): solo
+/// reconoce y entrega los bytes crudos al frontend, que decide si sabe pintarlos
+/// (la GUI GPUI decodifica y muestra la imagen; la TUI cae a hexview vía `rows`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageFmt {
+    /// PNG (`\x89PNG\r\n\x1a\n`).
+    Png,
+    /// JPEG (`\xFF\xD8\xFF`).
+    Jpeg,
+    /// GIF (`GIF87a` / `GIF89a`).
+    Gif,
+    /// BMP (`BM`).
+    Bmp,
+    /// WebP (contenedor RIFF con marca `WEBP`).
+    Webp,
+}
+
+impl ImageFmt {
+    /// Etiqueta técnica para la barra de estado (literal, no i18n).
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            ImageFmt::Png => "PNG",
+            ImageFmt::Jpeg => "JPEG",
+            ImageFmt::Gif => "GIF",
+            ImageFmt::Bmp => "BMP",
+            ImageFmt::Webp => "WebP",
+        }
+    }
+}
+
+/// Reconoce un formato de imagen por sus bytes MÁGICOS (spec §6: el viewer lee
+/// CONTENIDO, jamás confía en la extensión). Puro y barato: solo mira la
+/// cabecera, no decodifica ni valida el resto. `None` si no es ninguno de los
+/// formatos soportados. La decodificación real (y su validación) la hace el
+/// frontend; un falso positivo aquí se cae al fallback del frontend, no rompe.
+#[must_use]
+pub fn image_format(bytes: &[u8]) -> Option<ImageFmt> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some(ImageFmt::Png)
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some(ImageFmt::Jpeg)
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some(ImageFmt::Gif)
+    } else if bytes.starts_with(b"BM") {
+        Some(ImageFmt::Bmp)
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some(ImageFmt::Webp)
+    } else {
+        None
+    }
+}
+
 /// Preview producido por un plugin (M4-P5): reemplaza la vista cruda mientras
 /// está presente. `lines` ya enmascaradas ([`crate::display_name`]).
 pub struct PluginPreviewView {
@@ -32,8 +86,13 @@ pub struct Viewer {
     bytes: Vec<u8>,
     /// `true` si el archivo seguía (solo se leyó la cabecera).
     pub truncated: bool,
-    /// Hexview activo (automático en binarios; toggle manual).
+    /// Hexview activo (automático en binarios NO-imagen; toggle manual).
     pub hex: bool,
+    /// Formato de imagen reconocido por bytes mágicos (`recompute`), o `None`.
+    /// Cuando es `Some` y no hay encoding forzado, el viewer está en modo
+    /// imagen: la GUI la pinta ([`Viewer::is_image`]); frontends sin render de
+    /// imagen (TUI) caen a hexview (los bytes siguen disponibles vía `rows`).
+    image: Option<ImageFmt>,
     /// Encoding forzado por «recargar como…» (None = detección).
     forced: Option<&'static norte_encoding::Encoding>,
     /// Primera línea visible.
@@ -57,6 +116,7 @@ impl Viewer {
             bytes,
             truncated,
             hex: false,
+            image: None,
             forced: None,
             scroll: 0,
             plugin_preview: None,
@@ -124,8 +184,14 @@ impl Viewer {
             self.encoding_name = encoding.name();
             self.had_errors = had_errors;
             self.hex = false;
+            // Texto (o forzado a texto): no es una imagen a mostrar como tal.
+            self.image = None;
         } else {
-            // Binario: jamás decodificar a ciegas (spec §6) — hexview.
+            // Binario: jamás decodificar a ciegas (spec §6) — hexview. Además
+            // reconocemos si es una imagen (bytes mágicos) para que la GUI la
+            // PINTE ([`Viewer::is_image`]); el hexview sigue activo como fallback
+            // de los frontends sin render de imagen (TUI) — `rows` no cambia.
+            self.image = image_format(&self.bytes);
             self.hex = true;
             self.encoding_name = "";
             self.eol = Eol::None;
@@ -246,6 +312,33 @@ impl Viewer {
     pub fn is_forced(&self) -> bool {
         self.forced.is_some()
     }
+
+    /// `true` si el contenido es una imagen reconocida (bytes mágicos) y no se
+    /// ha forzado una decodificación de texto («recargar como…»). El frontend
+    /// con render de imagen (GUI) PINTA la imagen; el resto (TUI) ignora esto y
+    /// usa `rows` (hexview). El core NO decodifica: solo reconoce. Nota: NO
+    /// depende de `hex` — un frontend gráfico muestra siempre la imagen; el
+    /// hexview crudo sigue disponible por `rows` para quien no sepa pintarla.
+    #[must_use]
+    pub fn is_image(&self) -> bool {
+        self.plugin_preview.is_none() && self.image.is_some()
+    }
+
+    /// El formato de imagen reconocido (para la barra de estado), o `None` si
+    /// no está en modo imagen. Solo `Some` cuando [`Viewer::is_image`].
+    #[must_use]
+    pub fn image_kind(&self) -> Option<ImageFmt> {
+        self.is_image().then_some(self.image).flatten()
+    }
+
+    /// Los bytes crudos de la imagen para que el frontend los decodifique
+    /// (regla 7: el core no decodifica), o `None` si no está en modo imagen.
+    /// Pueden estar TRUNCADOS (`self.truncated`): el decodificador del frontend
+    /// debe tolerar un decode fallido y caer a un estado de error, no romper.
+    #[must_use]
+    pub fn image_bytes(&self) -> Option<&[u8]> {
+        self.is_image().then_some(self.bytes.as_slice())
+    }
 }
 
 /// Ancho de tab del viewer (fijo en M1).
@@ -322,20 +415,90 @@ mod tests {
     }
 
     #[test]
-    fn binario_cae_a_hexview_y_el_toggle_vuelve() {
-        let png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
-        let mut v = Viewer::new(vp(), png, false);
+    fn binario_no_imagen_cae_a_hexview_y_el_toggle_vuelve() {
+        // Binario que NO es ninguna imagen reconocida → hexview automático.
+        let bin = b"\x00\x01\x02\x03NUL\x00\x00payload".to_vec();
+        let mut v = Viewer::new(vp(), bin, false);
         assert!(v.hex, "NUL sin BOM = hexview automático (spec §6)");
+        assert!(!v.is_image(), "no es una imagen reconocida");
         let rows = v.rows(4);
         assert!(rows[0].starts_with("00000000"), "offset: {}", rows[0]);
-        assert!(rows[0].contains("89 50 4e 47"), "hex: {}", rows[0]);
-        assert!(rows[0].contains("PNG"), "gutter ascii: {}", rows[0]);
+        assert!(rows[0].contains("00 01 02 03"), "hex: {}", rows[0]);
         // Toggle manual: sale del hex (texto vacío en binario, pero es SU
         // decisión); x de nuevo vuelve.
         v.toggle_hex();
         assert!(!v.hex);
         v.toggle_hex();
         assert!(v.hex);
+    }
+
+    /// `image_format` reconoce cada formato soportado por bytes MÁGICOS y
+    /// devuelve `None` en no-imágenes y en cabeceras truncadas.
+    #[test]
+    fn image_format_reconoce_por_bytes_magicos() {
+        use super::{ImageFmt, image_format};
+        assert_eq!(
+            image_format(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"),
+            Some(ImageFmt::Png)
+        );
+        assert_eq!(
+            image_format(b"\xFF\xD8\xFF\xE0\x00\x10JFIF"),
+            Some(ImageFmt::Jpeg)
+        );
+        assert_eq!(image_format(b"GIF87a\x01\x00"), Some(ImageFmt::Gif));
+        assert_eq!(image_format(b"GIF89a\x01\x00"), Some(ImageFmt::Gif));
+        assert_eq!(image_format(b"BM\x8a\x00\x00\x00"), Some(ImageFmt::Bmp));
+        assert_eq!(
+            image_format(b"RIFF\x24\x00\x00\x00WEBPVP8 "),
+            Some(ImageFmt::Webp)
+        );
+        // No-imagen (texto plano) → None.
+        assert_eq!(image_format(b"hola mundo\n"), None);
+        // RIFF sin marca WEBP (p. ej. WAV) → None.
+        assert_eq!(image_format(b"RIFF\x24\x00\x00\x00WAVEfmt "), None);
+        // Cabecera PNG truncada (solo 4 bytes) → None: el prefijo no completa.
+        assert_eq!(image_format(b"\x89PNG"), None);
+        // RIFF truncado (<12 bytes) → None sin panic por slicing.
+        assert_eq!(image_format(b"RIFF\x24\x00\x00\x00"), None);
+    }
+
+    /// Una imagen reconocida se marca como imagen (`is_image`/`image_kind`/
+    /// `image_bytes` la exponen para que la GUI la pinte) SIN dejar de tener el
+    /// hexview crudo disponible en `rows` (fallback de la TUI, que no pinta
+    /// imágenes). «recargar como…» fuerza texto y sale del modo imagen.
+    #[test]
+    fn imagen_reconocida_se_marca_y_conserva_el_hex_de_fallback() {
+        use super::ImageFmt;
+        let png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
+        let mut v = Viewer::new(vp(), png.clone(), false);
+        assert!(v.is_image(), "PNG → imagen");
+        assert_eq!(v.image_kind(), Some(ImageFmt::Png));
+        assert_eq!(v.image_bytes(), Some(png.as_slice()));
+        // El hexview crudo sigue disponible para frontends sin render (TUI).
+        assert!(v.hex, "hexview de fallback activo");
+        assert!(
+            v.rows(1)[0].contains("89 50 4e 47"),
+            "fallback hex disponible"
+        );
+        // «recargar como…» fuerza texto: sale del modo imagen.
+        v.cycle_encoding();
+        assert!(!v.is_image(), "forzado a texto → no imagen");
+        assert_eq!(v.image_kind(), None);
+        assert_eq!(v.image_bytes(), None);
+        v.reset_encoding();
+        assert!(v.is_image(), "reset vuelve a detección → imagen");
+    }
+
+    /// Una imagen TRUNCADA sigue reconociéndose por su cabecera (los bytes
+    /// mágicos van al principio): `is_image` y `truncated` a la vez — la GUI
+    /// decide si el decode parcial sale o cae a «imagen ilegible».
+    #[test]
+    fn imagen_truncada_se_reconoce_por_la_cabecera() {
+        let png_head = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00".to_vec();
+        let v = Viewer::new(vp(), png_head, true);
+        assert!(v.is_image());
+        assert!(v.truncated);
+        assert!(v.image_bytes().is_some());
     }
 
     /// H4/H5 de la auditoría: tabs EXPANDIDOS (ratatui los borraría) y ESC

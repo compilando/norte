@@ -48,9 +48,9 @@
 
 use gpui::{
     App, Bounds, Context, FocusHandle, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    ParentElement, Render, ScrollDelta, ScrollStrategy, ScrollWheelEvent, SharedString, Styled,
-    UniformListScrollHandle, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, rgba,
-    size, uniform_list,
+    ParentElement, Render, RenderImage, ScrollDelta, ScrollStrategy, ScrollWheelEvent,
+    SharedString, Styled, UniformListScrollHandle, Window, WindowBounds, WindowOptions, div, img,
+    prelude::*, px, rgb, rgba, size, uniform_list,
 };
 use gpui_platform::application;
 
@@ -182,6 +182,11 @@ struct NorteGui {
     /// medio (`Viewer::rows(height)` ya está acotado a `height` filas, O(H)
     /// no O(total): issue #87 no aplica aquí, a diferencia de los panes).
     viewer: Option<norte_frontend::viewer::Viewer>,
+    /// Imagen decodificada del visor (cache): `Some` sólo cuando el `viewer`
+    /// abierto es una imagen (se decodifica UNA vez en `ViewerOpened`, no en
+    /// cada frame). `None` en texto/hex/plugin o sin visor. El render la usa
+    /// cuando `viewer.is_image()`; un decode fallido queda como `Unreadable`.
+    viewer_image: Option<ImagePreview>,
     /// Resolver del contexto Viewer (teclas del visor, GUI-d T3).
     viewer_resolver: norte_frontend::keymap::Resolver,
     /// Generación del `OpenViewer` en vuelo (guard anti-stale, como
@@ -253,6 +258,7 @@ impl NorteGui {
                     resolver,
                     keymap_error,
                     viewer: None,
+                    viewer_image: None,
                     viewer_resolver,
                     viewer_gen: 0,
                     viewer_loading: false,
@@ -304,6 +310,7 @@ impl NorteGui {
                     resolver,
                     keymap_error,
                     viewer: None,
+                    viewer_image: None,
                     viewer_resolver,
                     viewer_gen: 0,
                     viewer_loading: false,
@@ -452,13 +459,16 @@ impl NorteGui {
                 use norte_frontend::viewer::Viewer;
                 use session::ViewerContent;
                 self.viewer_loading = false;
-                self.viewer = Some(match content {
+                let v = match content {
                     ViewerContent::Plugin {
                         plugin_name,
                         output,
                     } => Viewer::with_plugin_preview(path, plugin_name, &output),
                     ViewerContent::Raw { bytes, truncated } => Viewer::new(path, bytes, truncated),
-                });
+                };
+                // Decodifica la imagen UNA vez (no en cada frame de render).
+                self.viewer_image = v.image_bytes().map(decode_image_preview);
+                self.viewer = Some(v);
             }
             SessionEvent::ViewerFailed {
                 path,
@@ -735,6 +745,7 @@ impl NorteGui {
         };
         if !apply_viewer_command(v, cmd) {
             self.viewer = None;
+            self.viewer_image = None;
             self.viewer_gen = self.viewer_gen.wrapping_add(1);
             self.viewer_loading = false;
         }
@@ -1336,7 +1347,13 @@ impl NorteGui {
             .expect("render_viewer: self.viewer es Some (invariante del caller, ver `render`)");
 
         let header = viewer_header(v);
-        let status = viewer_status(v);
+        // En modo imagen el estado lo compone `image_status` (formato + dims o
+        // «ilegible»); si no, el estado de texto/hex habitual.
+        let status = if v.is_image() {
+            image_status(v, self.viewer_image.as_ref())
+        } else {
+            viewer_status(v)
+        };
 
         // Filas que caben en el viewport real, menos la cabecera+status
         // (`VIEWER_CHROME_ROWS`); el sobrante (redondeo, chrome del root) lo
@@ -1345,19 +1362,41 @@ impl NorteGui {
         let viewport_rows = (f32::from(window.viewport_size().height) / ROW_H) as usize;
         let h = viewport_rows.saturating_sub(VIEWER_CHROME_ROWS).max(1);
 
-        let rows =
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .overflow_hidden()
-                .children(v.rows(h).into_iter().map(|row| {
-                    div()
-                        .h(px(ROW_H))
-                        .px(px(4.0))
-                        .truncate()
-                        .child(SharedString::from(row))
-                }));
+        // Cuerpo del visor: en modo imagen, el elemento `img` (o un aviso si el
+        // decode falló); si no, las filas de texto/hex. `object_fit` de GPUI es
+        // `Contain` por defecto → conserva el aspecto y centra sin recortar.
+        let body =
+            if v.is_image() {
+                // Contenedor con tamaño real (`flex_1`) que centra el contenido; el
+                // `img` se acota con `max_w_full`/`max_h_full` RELATIVOS a él (por
+                // eso es hijo directo, sin envoltorio auto-dimensionado). `object_fit`
+                // por defecto de GPUI es `Contain` → conserva el aspecto sin recortar.
+                let container = div()
+                    .flex_1()
+                    .flex()
+                    .justify_center()
+                    .items_center()
+                    .overflow_hidden();
+                match &self.viewer_image {
+                    Some(ImagePreview::Ready { image, .. }) => {
+                        container.child(img(std::sync::Arc::clone(image)).max_w_full().max_h_full())
+                    }
+                    // `Unreadable` o cache ausente → aviso i18n, jamás panic/OOM.
+                    _ => container.child(SharedString::from(norte_i18n::t(
+                        "gui-viewer-image-unreadable",
+                    ))),
+                }
+            } else {
+                div().flex_1().flex().flex_col().overflow_hidden().children(
+                    v.rows(h).into_iter().map(|row| {
+                        div()
+                            .h(px(ROW_H))
+                            .px(px(4.0))
+                            .truncate()
+                            .child(SharedString::from(row))
+                    }),
+                )
+            };
 
         // `Role::Document` + nombre accesible = cabecera saneada (path +
         // «via <plugin>» si aplica); la barra de estado va como
@@ -1383,7 +1422,7 @@ impl NorteGui {
                     .truncate()
                     .child(SharedString::from(header)),
             )
-            .child(rows)
+            .child(body)
             .child(
                 div()
                     .px(px(4.0))
@@ -1813,6 +1852,85 @@ fn viewer_header(v: &norte_frontend::viewer::Viewer) -> String {
     header
 }
 
+/// Presupuesto de píxeles del preview de imagen (~64 MP): por encima se rechaza
+/// (bomba de descompresión → OOM). Los bytes ya vienen acotados por la sesión a
+/// `FS_READ_MAX_CHUNK`, pero un PNG diminuto puede declarar dimensiones enormes;
+/// por eso se comprueban las dimensiones (solo la cabecera) ANTES de decodificar.
+const MAX_IMAGE_PIXELS: u64 = 64_000_000;
+
+/// Imagen del viewer decodificada UNA vez al abrir (cache en [`NorteGui`]): en
+/// modo imagen la GUI la pinta. `Unreadable` = no se pudo decodificar (truncada,
+/// corrupta o excede [`MAX_IMAGE_PIXELS`]) → el render cae a un aviso i18n. Nunca
+/// se decodifica en `render_viewer` (se haría en cada frame): se hace al abrir.
+enum ImagePreview {
+    /// Decodificada: frame BGRA listo para `img(Arc<RenderImage>)` + dimensiones.
+    Ready {
+        /// El frame decodificado (compartido con GPUI, que cachea la textura).
+        image: std::sync::Arc<RenderImage>,
+        /// Ancho en píxeles (para la barra de estado).
+        width: u32,
+        /// Alto en píxeles (para la barra de estado).
+        height: u32,
+    },
+    /// El decode falló (truncada/corrupta/excede el presupuesto).
+    Unreadable,
+}
+
+/// Decodifica los bytes de una imagen a un [`RenderImage`] de GPUI, con guardia
+/// anti-bomba: primero lee SOLO las dimensiones (cabecera) y rechaza por encima
+/// de [`MAX_IMAGE_PIXELS`] antes de asignar el buffer; luego decodifica a RGBA8 y
+/// permuta a BGRA (el orden que espera `RenderImage`). Cualquier fallo (formato,
+/// truncado, presupuesto) → [`ImagePreview::Unreadable`]; jamás panic ni OOM.
+/// Para GIF/WebP animados se muestra el primer frame (preview estático).
+fn decode_image_preview(bytes: &[u8]) -> ImagePreview {
+    // 1) Dimensiones desde la cabecera, sin decodificar el cuerpo.
+    let dims = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()
+        .and_then(|r| r.into_dimensions().ok());
+    let Some((width, height)) = dims else {
+        return ImagePreview::Unreadable;
+    };
+    if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
+        return ImagePreview::Unreadable;
+    }
+    // 2) Decode completo → RGBA8 → BGRA in-place.
+    let Ok(decoded) = image::load_from_memory(bytes) else {
+        return ImagePreview::Unreadable;
+    };
+    let mut rgba = decoded.into_rgba8();
+    for px in rgba.chunks_exact_mut(4) {
+        px.swap(0, 2);
+    }
+    let frame = image::Frame::new(rgba);
+    let image = std::sync::Arc::new(RenderImage::new(vec![frame]));
+    ImagePreview::Ready {
+        image,
+        width,
+        height,
+    }
+}
+
+/// Barra de estado en modo imagen: formato + dimensiones (`PNG  1920×1080`), o
+/// el formato + «imagen ilegible» si el decode falló; añade el marcador de
+/// truncado si la lectura se quedó en la cabecera. Formato/dimensiones son
+/// literales técnicos (no i18n), como LF/CRLF en `viewer_status`.
+#[must_use]
+fn image_status(v: &norte_frontend::viewer::Viewer, preview: Option<&ImagePreview>) -> String {
+    let fmt = v
+        .image_kind()
+        .map_or("", norte_frontend::viewer::ImageFmt::label);
+    let mut out = match preview {
+        Some(ImagePreview::Ready { width, height, .. }) => format!("{fmt}  {width}×{height}"),
+        _ => format!("{fmt}  {}", norte_i18n::t("gui-viewer-image-unreadable")),
+    };
+    if v.truncated {
+        out.push_str("  ");
+        out.push_str(&norte_i18n::t("viewer-truncated"));
+    }
+    out
+}
+
 #[must_use]
 fn viewer_status(v: &norte_frontend::viewer::Viewer) -> String {
     use norte_encoding::Eol;
@@ -2015,8 +2133,9 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        affected_dirs, apply_viewer_command, first_cancelable, generation_is_current, pending_hint,
-        retain_active, row_label, task_at_cursor, viewer_header, viewer_status,
+        ImagePreview, affected_dirs, apply_viewer_command, decode_image_preview, first_cancelable,
+        generation_is_current, image_status, pending_hint, retain_active, row_label,
+        task_at_cursor, viewer_header, viewer_status,
     };
     use norte_frontend::viewer::Viewer;
     use norte_proto::{EntryKind, VPath};
@@ -2240,15 +2359,72 @@ mod tests {
         assert!(!s.contains("pérdidas"), "{s}");
     }
 
-    /// `viewer_status` sobre un binario: cae a `t("viewer-binary")` (sin
-    /// nombre de encoding ni EOL, que no aplica en hexview). Locale ES.
+    /// `viewer_status` sobre un binario NO-imagen: cae a `t("viewer-binary")`
+    /// (sin nombre de encoding ni EOL, que no aplica en hexview). Locale ES.
     #[test]
     fn viewer_status_binario() {
         let _ = norte_i18n::force(norte_i18n::Lang::Es);
-        let png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
-        let v = Viewer::new(vp(), png, false);
+        let bin = b"\x00\x01\x02\x03payload\x00".to_vec();
+        let v = Viewer::new(vp(), bin, false);
+        assert!(v.hex && !v.is_image(), "binario no-imagen = hexview");
         let s = viewer_status(&v);
         assert_eq!(s, "binario", "sin EOL en hexview: {s}");
+    }
+
+    /// `image_status` compone formato + dimensiones cuando el decode va bien,
+    /// y formato + «imagen ilegible» cuando falla; con marcador de truncado si
+    /// aplica. Usa un PNG 1×1 real generado por el crate `image`. Locale ES.
+    #[test]
+    fn image_status_formato_y_dimensiones() {
+        let _ = norte_i18n::force(norte_i18n::Lang::Es);
+        // PNG 1×1 real (evita fixtures binarias en el árbol).
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]))
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .expect("encode PNG de test");
+        let png = buf.into_inner();
+        let v = Viewer::new(vp(), png.clone(), false);
+        assert!(v.is_image());
+        let preview = decode_image_preview(&png);
+        assert!(
+            matches!(
+                preview,
+                ImagePreview::Ready {
+                    width: 1,
+                    height: 1,
+                    ..
+                }
+            ),
+            "decode 1×1"
+        );
+        assert_eq!(image_status(&v, Some(&preview)), "PNG  1×1");
+        // Bytes truncados (solo la cabecera mágica): reconocido como imagen,
+        // pero el decode falla → «imagen ilegible», sin panic.
+        let head = b"\x89PNG\r\n\x1a\n\x00\x00".to_vec();
+        let vt = Viewer::new(vp(), head.clone(), true);
+        assert!(vt.is_image());
+        let bad = decode_image_preview(&head);
+        assert!(matches!(bad, ImagePreview::Unreadable));
+        let s = image_status(&vt, Some(&bad));
+        assert!(s.starts_with("PNG  imagen ilegible"), "{s}");
+        assert!(s.contains("cabecera"), "marcador de truncado: {s}");
+    }
+
+    /// Guardia anti-bomba: un PNG que declara dimensiones enormes (> presupuesto
+    /// de píxeles) se rechaza en la cabecera, antes de asignar el buffer.
+    #[test]
+    fn decode_rechaza_por_presupuesto_de_pixeles() {
+        // Cabecera PNG válida con IHDR declarando 60000×60000 (= 3.6 GP).
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(&[0, 0, 0, 13]); // len chunk IHDR
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&60_000u32.to_be_bytes()); // width
+        png.extend_from_slice(&60_000u32.to_be_bytes()); // height
+        png.extend_from_slice(&[8, 6, 0, 0, 0]); // bit depth/color/…
+        assert!(matches!(
+            decode_image_preview(&png),
+            ImagePreview::Unreadable
+        ));
     }
 
     /// `viewer_status` marca "[cabecera]" (clave `viewer-truncated`,

@@ -39,6 +39,23 @@ norte-i18n = { path = "../norte-i18n" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 anyhow = "1"
 
+# Preview de imágenes en el viewer F3 (PNG/JPEG/GIF/BMP/WebP). QUÉ aporta:
+# decodifica los bytes ya leídos por la sesión a un frame RGBA que se convierte
+# a `gpui::RenderImage`. TAMAÑO: sin coste extra — `image` ya entra transitiva
+# por GPUI (misma 0.25.x resuelta en el lockfile); la declaramos DIRECTA con las
+# mismas features (mismos codecs que soportamos) para no depender de un detalle
+# interno de GPUI. `default-features = false`: solo los 5 codecs que detectamos,
+# nada de rayon/formatos exóticos. ALTERNATIVA descartada: escribir a fichero
+# temporal y renderizar por path (más frágil, deja basura, y aquí el render
+# in-memory de GPUI —`img(Arc<RenderImage>)`— es limpio).
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "gif",
+    "bmp",
+    "webp",
+] }
+
 # GPUI de Zed. NO está en crates.io como `gpui` estable → dep git pineada por
 # SHA completo (criterio 4 del ADR: registrar rev + fecha). Licencia: Apache-2.0
 # (el crate excluido no pasa por `cargo deny`; el ADR 0027 lo registra).

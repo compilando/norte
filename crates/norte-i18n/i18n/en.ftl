@@ -229,6 +229,7 @@ gui-loading = loading…
 gui-dir-empty = (empty directory)
 gui-tasks-empty = (no tasks)
 gui-viewer-opening = opening viewer…
+gui-viewer-image-unreadable = unreadable image
 gui-a11y-pane-left = left pane
 gui-a11y-pane-right = right pane
 gui-a11y-tasks = tasks in progress
