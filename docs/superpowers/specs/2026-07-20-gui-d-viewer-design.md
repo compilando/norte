@@ -1,7 +1,30 @@
 # GUI-d — viewer F3 (M5 hito 2, sub-proyecto 4) — diseño
 
 - Fecha: 2026-07-20
-- Estado: **aprobado** (oscar); pendiente de plan
+- Estado: **IMPLEMENTADO** (T1–T4, cerrado 2026-07-20; commits 9b38fe8..ce8e0b8,
+  rama `gui-d-viewer`). `just ci` EXIT=0; norte-frontend + norte-tui + norte-gui
+  30 tests verdes + clippy limpio. Reviewers rust (por task) + encoding
+  aplicados. **Verificación GUI interactiva PENDIENTE de oscar** (headless).
+  Desviaciones (deuda anotada):
+  - **encoding ALTA (H1) corregida**: `render_line` del viewer de texto
+    enmascaraba solo `is_control()` (Cc), dejando pasar bidi (U+202E)/invisibles
+    (ZWSP)/Zl-Zp/TAG crudos → Trojan Source (CVE-2021-42574), y GPUI reordena
+    bidi. Cambiado a `is_terminal_hazard` (misma política que los nombres);
+    arregla AMBOS frontends. Test + fixture bidi. Era preexistente en la TUI,
+    se estrenó en la GUI.
+  - `render_viewer` NO usa `uniform_list` (el `Viewer::rows(h)` ventana desde
+    `v.scroll`, modelo cursor, no índice absoluto → desajuste con uniform_list):
+    pinta `v.rows(H)` PLANO (H = alto del viewport / ROW_H), bounded a H filas
+    (O(H), no O(total); #87 no aplica), `v.scroll` único dueño + rueda cableada.
+  - `OpenViewer` con guard de generación (`viewer_gen`) + estado «abriendo
+    visor…»: un `ViewerOpened` tardío (read lento) no abre el visor por sorpresa;
+    cerrar invalida el pending.
+  - `plugin.preview` primero → `fs.read` acotado (`FS_READ_MAX_CHUNK`);
+    `truncated` = tope alcanzado (heurística conservadora). Status del visor en
+    ES hardcodeado hasta GUI-e (el `Viewer` core se extrajo SIN i18n; TUI compone
+    con Fluent). Dos resolvers (Browse+Viewer) validados contra la unión de
+    comandos. `ByteRange` = `{offset, len: Option<u64>}`.
+- Estado previo: aprobado (oscar); plan `docs/superpowers/plans/2026-07-20-gui-d-viewer.md`
 - Contexto: M5 hito 2 = MVP de la GUI. Sub-proyectos: GUI-a (nav), GUI-b
   (mutaciones), GUI-c (keymap) — IMPLEMENTADOS en main; **GUI-d** (este, viewer),
   GUI-e (i18n+AccessKit). Construye sobre `crates/norte-gui` (EXCLUIDO) +
