@@ -80,7 +80,7 @@ struct SearchRun {
     /// Directorio ANTERIOR del pane, para restaurarlo al salir del modo
     /// virtual (Esc tras terminar).
     prev_dir: VPath,
-    /// Hits acumulados (== `panes[pane].entries.len()`, contador propio para
+    /// Hits acumulados (== `panes[pane].entries().len()`, contador propio para
     /// no depender del re-sort del pane).
     hits: usize,
     /// Estado del run: `Running` mientras el walker emite; terminal tras
@@ -633,7 +633,7 @@ async fn run(
                         // al resolver y opera sobre el hit bajo el cursor.
                         if app.viewer.is_none()
                             && key.modifiers.is_empty()
-                            && app.focused().quick.is_none()
+                            && app.focused().quick().is_none()
                             && app.focused().virtual_search
                             && search_run
                                 .as_ref()
@@ -684,11 +684,10 @@ async fn run(
                         // el filtro activo es invisible; al cancelar (Esc)
                         // reaparece donde lo dejaron. Conectarlas a la
                         // selección del filtro no compensa el estado extra.
-                        if app.viewer.is_none() && app.focused().quick.is_some() {
+                        if app.viewer.is_none() && app.focused().quick().is_some() {
                             let jump = app
                                 .focused()
-                                .quick
-                                .as_ref()
+                                .quick()
                                 .is_some_and(|q| q.mode() == nav::Mode::Jump);
                             // SHIFT pasa (una mayúscula llega como
                             // Char('A')+SHIFT y el char ya viene tal cual);
@@ -1032,7 +1031,7 @@ fn user_config_dir_io() -> std::io::Result<std::path::PathBuf> {
 /// en `App` (consistencia con disco) y sale `msg-hotlist-saved`; un fallo
 /// io sale por categoría y la copia NO se toca.
 async fn hotlist_add(app: &mut App, name: &str) {
-    let target = app.focused().dir.clone();
+    let target = app.focused().dir().clone();
     let wire = target.to_wire();
     let n = name.to_owned();
     let res = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
@@ -1490,8 +1489,8 @@ fn start_lua_run(
     let other = &app.panes[1 - app.focus()];
     let current = pane.selected().map(|e| e.path.clone());
     let ctx = PaneCtx {
-        cwd: pane.dir.clone(),
-        other_cwd: other.dir.clone(),
+        cwd: pane.dir().clone(),
+        other_cwd: other.dir().clone(),
         selection: current.clone().into_iter().collect(),
         current,
     };
@@ -1543,11 +1542,11 @@ fn refresh_lua_status(app: &mut App, lua_host: Option<&LuaHost>) {
     };
     let pane = app.focused();
     let input = StatusInput {
-        cwd: pane.dir.to_wire().into_bytes(),
-        selected: pane.cursor,
+        cwd: pane.dir().to_wire().into_bytes(),
+        selected: pane.cursor(),
         // Sin multi-selección: los bytes de la entrada bajo el cursor.
         selected_bytes: pane.selected().and_then(|e| e.size).unwrap_or(0),
-        entries: pane.entries.len(),
+        entries: pane.entries().len(),
         tasks: app
             .board
             .rows()
@@ -1636,7 +1635,7 @@ async fn refresh_panes(app: &mut App, backend: &Backend, events: &mut EventStrea
         if app.panes[i].virtual_search {
             continue;
         }
-        let dir = app.panes[i].dir.clone();
+        let dir = app.panes[i].dir().clone();
         let fut = listing(backend, &dir);
         tokio::pin!(fut);
         loop {
@@ -1844,7 +1843,7 @@ fn on_search_dialog_key(
         KeyCode::Esc => app.search_dialog = None,
         KeyCode::Enter => {
             if dialog.has_criteria() {
-                let root = app.focused().dir.clone();
+                let root = app.focused().dir().clone();
                 return Some(search_params(app.search_dialog.as_ref()?, root));
             }
             // Ambos campos vacíos: no-op con aviso (una búsqueda sin criterio
@@ -1897,7 +1896,7 @@ async fn launch_search(
     let root = params.root.clone();
     match backend.search(params).await {
         Ok((task, rx)) => {
-            let prev_dir = app.panes[pane].dir.clone();
+            let prev_dir = app.panes[pane].dir().clone();
             app.search_dialog = None;
             app.message = None;
             app.panes[pane].begin_search(root);
@@ -2037,8 +2036,8 @@ async fn on_search_enter(
     apply_cd(fill, outcome);
     // Re-ancla el cursor sobre el hit por path (el cd resetea a 0); si cayó
     // en una página aún no drenada, el cursor se queda arriba (v1).
-    if let Some(i) = app.panes[pane].entries.iter().position(|e| e.path == hit) {
-        app.panes[pane].cursor = i;
+    if let Some(i) = app.panes[pane].entries().iter().position(|e| e.path == hit) {
+        app.panes[pane].set_cursor(i);
     }
 }
 
@@ -2111,7 +2110,7 @@ async fn dispatch(
             // Salir de la raíz interior de un archivo = el dir que CONTIENE
             // al contenedor (el padre sintáctico sería un compuesto sin
             // marcador: malformado, ADR 0018).
-            let dir = &app.focused().dir;
+            let dir = app.focused().dir();
             let parent = match dir.archive_split() {
                 Ok(Some(aref)) if aref.inner.is_empty() => aref.outer.parent(),
                 _ => dir.parent(),
@@ -2134,7 +2133,7 @@ async fn dispatch(
             let other = &app.panes[1 - app.focus()];
             let target = app.focused().selected().and_then(|e| {
                 let name = e.path.file_name()?.clone();
-                Some((e.path.clone(), other.dir.join(name)))
+                Some((e.path.clone(), other.dir().join(name)))
             });
             if let Some((from, to)) = target {
                 app.modal = Some(Modal::ConfirmTransfer { kind, from, to });
@@ -2405,7 +2404,7 @@ async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPa
     // Al vivir dentro de `cd` cubre TODOS los caminos que navegan —
     // nav.enter/nav.parent, quick-Enter (dispatch nav.enter), retry TOFU y
     // los popups de historial/hotlist — sin repetirlo por call-site.
-    let prev = app.focused().dir.clone();
+    let prev = app.focused().dir().clone();
     let fut = first_page(backend, &dir);
     tokio::pin!(fut);
     loop {
@@ -2557,7 +2556,7 @@ mod search_fill_tests {
             ])),
         );
         assert!(
-            app.panes[0].entries.is_empty(),
+            app.panes[0].entries().is_empty(),
             "el listado real NO entra en el pane virtual"
         );
         assert!(fill.is_none(), "el fill obsoleto se suelta");

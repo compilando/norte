@@ -119,7 +119,7 @@ fn bench_list_100k(c: &mut Criterion) {
         b.iter(|| {
             let entries = primera_pagina(&rt, &engine, &root);
             let mut pane = Pane::new(root.clone(), entries);
-            pane.loading = true; // el resto se rellenaría en background
+            pane.set_loading(true); // el resto se rellenaría en background
             let app = App::new(pane, Pane::new(root.clone(), Vec::new()));
             draw_once(&app);
         });

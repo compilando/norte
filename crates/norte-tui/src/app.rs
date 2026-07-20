@@ -9,22 +9,21 @@ use norte_i18n::{t, ta};
 use norte_proto::{Entry, Error, VPath};
 
 /// Un panel: directorio actual y sus entradas YA ordenadas.
+///
+/// La mecánica PURA de un pane —directorio, entradas, cursor, `loading` y
+/// quick search— vive UNA sola vez en [`norte_frontend::PaneState`],
+/// compartida con la GUI (#82): el `Pane` de la TUI la EMBEBE en su campo
+/// `state` (privado) y delega en ella
+/// (`dir`/`entries`/`cursor`/`selected`/`move_*`/`quick_*`…). Lo propio de la
+/// TUI —la búsqueda viva (`virtual_search`, `search_state`, `search_error`) y
+/// el fill paginado (ADR 0017, [`Pane::extend_listing`] y compañía)— se queda
+/// aquí, encima de ese estado.
 #[derive(Debug)]
 pub struct Pane {
-    /// Directorio listado.
-    pub dir: VPath,
-    /// Entradas ordenadas ([`sort_entries`]).
-    pub entries: Vec<Entry>,
-    /// Índice bajo el cursor (0 incluso con lista vacía).
-    pub cursor: usize,
-    /// El listado se está RELLENANDO en background (paginación, ADR 0017): la
-    /// primera página ya se pintó y llegan más entradas. La UI lo marca — un
-    /// listado incompleto JAMÁS es silencioso.
-    pub loading: bool,
-    /// Quick search vivo (`/`, spec 2026-07-18): `None` = navegación normal.
-    /// En modo Filter la SELECCIÓN vive dentro del estado (el cursor real no
-    /// se mueve hasta confirmar); en Jump el cursor real salta directo.
-    pub quick: Option<crate::nav::QuickSearch>,
+    /// Estado no-render compartido (cursor + quick + listado). Privado: se
+    /// accede por los delegados ([`Pane::dir`], [`Pane::entries`], …) para que
+    /// el invariante del cursor lo custodie `PaneState`.
+    state: norte_frontend::PaneState,
     /// El pane muestra los HITS de una búsqueda viva (`Alt+F7`, liveSearch),
     /// no un listado de directorio real: `dir` es la RAÍZ del walk y las
     /// `entries` son los resultados que van llegando por streaming
@@ -70,31 +69,46 @@ impl Pane {
     #[must_use]
     pub fn new(dir: VPath, entries: Vec<Entry>) -> Self {
         Self {
-            dir,
-            entries,
-            cursor: 0,
-            loading: false,
-            quick: None,
+            state: norte_frontend::PaneState::new(dir, entries),
             virtual_search: false,
             search_state: SearchState::Running,
             search_error: None,
         }
     }
 
-    /// Arranca el pane virtual de una búsqueda viva (`Alt+F7`, liveSearch T6):
-    /// `root` es la raíz del walk, las entries empiezan vacías y los hits
-    /// entran por [`Pane::extend_listing`] como un listado paginado. Marca el
-    /// pane como virtual (la barra pinta `search-status-running`) y mata
-    /// cualquier quick search vivo (filtraba OTRA cosa).
-    pub fn begin_search(&mut self, root: VPath) {
-        self.dir = root;
-        self.entries = Vec::new();
-        self.cursor = 0;
-        self.loading = false;
-        self.quick = None;
-        self.virtual_search = true;
-        self.search_state = SearchState::Running;
-        self.search_error = None;
+    // --- Delegados de solo-lectura sobre el estado compartido (#82) ---
+
+    /// Directorio listado.
+    #[must_use]
+    pub fn dir(&self) -> &VPath {
+        self.state.dir()
+    }
+
+    /// Entradas ordenadas ([`sort_entries`]).
+    #[must_use]
+    pub fn entries(&self) -> &[Entry] {
+        self.state.entries()
+    }
+
+    /// Índice bajo el cursor real (0 incluso con lista vacía).
+    #[must_use]
+    pub fn cursor(&self) -> usize {
+        self.state.cursor()
+    }
+
+    /// El listado se está RELLENANDO en background (paginación, ADR 0017): la
+    /// primera página ya se pintó y llegan más entradas. La UI lo marca — un
+    /// listado incompleto JAMÁS es silencioso.
+    #[must_use]
+    pub fn loading(&self) -> bool {
+        self.state.loading()
+    }
+
+    /// Quick search vivo (`/`, spec 2026-07-18) para el render; `None` =
+    /// navegación normal.
+    #[must_use]
+    pub fn quick(&self) -> Option<&crate::nav::QuickSearch> {
+        self.state.quick()
     }
 
     /// La entrada seleccionada: con quick search en modo Filter, la
@@ -105,75 +119,53 @@ impl Pane {
     /// mueve el cursor real), la entrada bajo el cursor.
     #[must_use]
     pub fn selected(&self) -> Option<&Entry> {
-        if let Some(q) = &self.quick
-            && q.mode() == crate::nav::Mode::Filter
-        {
-            return self.entries.get(q.selected_entry_index()?);
-        }
-        self.entries.get(self.cursor)
+        self.state.selected()
     }
+
+    /// Índices REALES visibles bajo el filtro; `None` = sin filtro (quick
+    /// inactivo, o modo Jump: el listado se pinta entero).
+    #[must_use]
+    pub fn quick_visible(&self) -> Option<&[usize]> {
+        self.state.quick_visible()
+    }
+
+    // --- Delegados de mutación de cursor + quick (#82) ---
 
     /// Arranca el quick search (`/`) en `mode` sobre las entries actuales.
     pub fn quick_start(&mut self, mode: crate::nav::Mode) {
-        self.quick = Some(crate::nav::QuickSearch::new(mode, &self.entries));
-    }
-
-    /// En Jump el cursor REAL sigue a la selección del quick search (el
-    /// listado no cambia; saltar ES mover el cursor). En Filter, no-op.
-    fn quick_sync_jump(&mut self) {
-        if let Some(q) = &self.quick
-            && q.mode() == crate::nav::Mode::Jump
-            && let Some(i) = q.selected_entry_index()
-        {
-            self.cursor = i;
-        }
+        self.state.quick_start(mode);
     }
 
     /// Un carácter tecleado con el quick search activo.
     pub fn quick_char(&mut self, c: char) {
-        if let Some(q) = &mut self.quick {
-            q.push_char(c, &self.entries);
-            self.quick_sync_jump();
-        }
+        self.state.quick_char(c);
     }
 
     /// Backspace con el quick search activo.
     pub fn quick_backspace(&mut self) {
-        if let Some(q) = &mut self.quick {
-            q.backspace(&self.entries);
-            self.quick_sync_jump();
-        }
+        self.state.quick_backspace();
     }
 
     /// Selección del quick search una posición abajo.
     pub fn quick_down(&mut self) {
-        if let Some(q) = &mut self.quick {
-            q.down();
-            self.quick_sync_jump();
-        }
+        self.state.quick_down();
     }
 
     /// Selección del quick search una posición arriba.
     pub fn quick_up(&mut self) {
-        if let Some(q) = &mut self.quick {
-            q.up();
-            self.quick_sync_jump();
-        }
+        self.state.quick_up();
     }
 
     /// Siguiente match con wrap (Tab en modo Jump).
     pub fn quick_next(&mut self) {
-        if let Some(q) = &mut self.quick {
-            q.next_match();
-            self.quick_sync_jump();
-        }
+        self.state.quick_next();
     }
 
     /// Cierra el quick search SIN tocar el cursor real: en Filter el listado
     /// completo vuelve con el cursor donde estaba (el filtro nunca lo movió
     /// — test del plan); en Jump el cursor se queda donde saltó.
     pub fn quick_cancel(&mut self) {
-        self.quick = None;
+        self.state.quick_cancel();
     }
 
     /// Cierra el quick search fijando el cursor REAL a la selección (Enter:
@@ -184,64 +176,58 @@ impl Pane {
     /// entradas (el listado se pinta ENTERO: el cursor real es visible por
     /// definición — edge de T4, observación del reviewer).
     pub fn quick_confirm(&mut self) -> bool {
-        let Some(q) = self.quick.take() else {
-            return false;
-        };
-        if let Some(i) = q.selected_entry_index() {
-            self.cursor = i;
-            return true;
-        }
-        q.mode() == crate::nav::Mode::Jump && !self.entries.is_empty()
-    }
-
-    /// Índices REALES visibles bajo el filtro; `None` = sin filtro (quick
-    /// inactivo, o modo Jump: el listado se pinta entero).
-    #[must_use]
-    pub fn quick_visible(&self) -> Option<&[usize]> {
-        self.quick
-            .as_ref()
-            .filter(|q| q.mode() == crate::nav::Mode::Filter)
-            .map(crate::nav::QuickSearch::visible)
-    }
-
-    /// Path de la entrada seleccionada DENTRO del quick search, capturado
-    /// ANTES de mutar/re-sortear `entries` (contrato de
-    /// [`crate::nav::QuickSearch::refresh`]: los índices de antes del sort
-    /// no identifican nada).
-    fn quick_prev_selected(&self) -> Option<VPath> {
-        let i = self.quick.as_ref()?.selected_entry_index()?;
-        Some(self.entries.get(i)?.path.clone())
+        self.state.quick_confirm()
     }
 
     /// Sube el cursor `n` posiciones (con tope en 0).
     pub fn move_up(&mut self, n: usize) {
-        self.cursor = self.cursor.saturating_sub(n);
+        self.state.page_up(n);
     }
 
     /// Baja el cursor `n` posiciones (con tope en la última entrada).
     pub fn move_down(&mut self, n: usize) {
-        let max = self.entries.len().saturating_sub(1);
-        self.cursor = (self.cursor + n).min(max);
+        self.state.page_down(n);
     }
 
     /// Cursor a la primera entrada.
     pub fn move_to_start(&mut self) {
-        self.cursor = 0;
+        self.state.home();
     }
 
     /// Cursor a la última entrada.
     pub fn move_to_end(&mut self) {
-        self.cursor = self.entries.len().saturating_sub(1);
+        self.state.end();
+    }
+
+    /// Fija el cursor REAL a `i` (con tope en la última entrada): re-anclar
+    /// tras localizar un índice concreto, p. ej. un hit de búsqueda.
+    pub fn set_cursor(&mut self, i: usize) {
+        self.state.set_cursor(i);
+    }
+
+    // --- Listado + búsqueda viva (propio de la TUI, encima del estado) ---
+
+    /// Marca (o desmarca) el flag de carga de un fill paginado (ADR 0017).
+    pub fn set_loading(&mut self, loading: bool) {
+        self.state.set_loading(loading);
+    }
+
+    /// Arranca el pane virtual de una búsqueda viva (`Alt+F7`, liveSearch T6):
+    /// `root` es la raíz del walk, las entries empiezan vacías y los hits
+    /// entran por [`Pane::extend_listing`] como un listado paginado. Marca el
+    /// pane como virtual (la barra pinta `search-status-running`) y mata
+    /// cualquier quick search vivo (filtraba OTRA cosa).
+    pub fn begin_search(&mut self, root: VPath) {
+        self.state.set_listing(root, Vec::new());
+        self.virtual_search = true;
+        self.search_state = SearchState::Running;
+        self.search_error = None;
     }
 
     /// Reemplaza el contenido tras un cd/refresh, reseteando el cursor.
     /// Un quick search vivo muere: filtraba OTRO listado.
     pub fn set_listing(&mut self, dir: VPath, entries: Vec<Entry>) {
-        self.dir = dir;
-        self.entries = entries;
-        self.cursor = 0;
-        self.loading = false;
-        self.quick = None;
+        self.state.set_listing(dir, entries);
         self.virtual_search = false;
     }
 
@@ -249,11 +235,8 @@ impl Pane {
     /// que faltan entradas por llegar (ADR 0017). El drenador irá llamando a
     /// [`Pane::extend_listing`] y, al terminar, [`Pane::finish_listing`].
     pub fn begin_listing(&mut self, dir: VPath, first_page: Vec<Entry>, more: bool) {
-        self.dir = dir;
-        self.entries = first_page;
-        self.cursor = 0;
-        self.loading = more;
-        self.quick = None;
+        self.state.set_listing(dir, first_page);
+        self.state.set_loading(more);
         self.virtual_search = false;
     }
 
@@ -262,34 +245,17 @@ impl Pane {
     /// para que rellenar no mueva la selección del usuario bajo sus pies. Un
     /// quick search vivo se RE-APLICA sobre el listado nuevo (spec: el filtro
     /// no se congela mientras el fill sigue), conservando su selección por
-    /// path — capturado ANTES del sort, que invalida los índices.
+    /// path. La mecánica pura vive en [`norte_frontend::PaneState::extend`].
     pub fn extend_listing(&mut self, batch: Vec<Entry>) {
-        if batch.is_empty() {
-            return;
-        }
-        let quick_prev = self.quick_prev_selected();
-        let selected = self.entries.get(self.cursor).map(|e| e.path.clone());
-        self.entries.extend(batch);
-        sort_entries(&mut self.entries);
-        self.cursor = match selected.and_then(|p| self.entries.iter().position(|e| e.path == p)) {
-            Some(i) => i,
-            None => self.cursor.min(self.entries.len().saturating_sub(1)),
-        };
-        if let Some(q) = &mut self.quick {
-            q.refresh(&self.entries, quick_prev.as_ref());
-        }
-        self.quick_sync_jump();
+        self.state.extend(batch);
     }
 
     /// El drenador terminó: el listado ya está completo. El quick search se
     /// re-aplica por contrato (hoy no muta entries: refresh barato; si algún
     /// día el cierre re-sortea, el filtro no se queda con índices muertos).
     pub fn finish_listing(&mut self) {
-        let quick_prev = self.quick_prev_selected();
-        self.loading = false;
-        if let Some(q) = &mut self.quick {
-            q.refresh(&self.entries, quick_prev.as_ref());
-        }
+        self.state.set_loading(false);
+        self.state.refresh_quick();
     }
 
     /// Listado COMPLETO nuevo del MISMO dir (refresh tras una mutación):
@@ -297,15 +263,9 @@ impl Pane {
     /// siguiente entrada — semántica ortodoxa) y quick search re-aplicado
     /// por path (los índices del listado viejo no identifican nada).
     pub fn refresh_listing(&mut self, entries: Vec<Entry>) {
-        let quick_prev = self.quick_prev_selected();
-        self.cursor = self.cursor.min(entries.len().saturating_sub(1));
-        self.entries = entries;
-        self.loading = false;
+        self.state.refill(entries);
+        self.state.set_loading(false);
         self.virtual_search = false;
-        if let Some(q) = &mut self.quick {
-            q.refresh(&self.entries, quick_prev.as_ref());
-        }
-        self.quick_sync_jump();
     }
 }
 
@@ -1334,7 +1294,7 @@ mod tests {
     }
 
     fn names(p: &Pane) -> Vec<String> {
-        p.entries
+        p.entries()
             .iter()
             .map(|e| String::from_utf8_lossy(e.path.file_name().unwrap().as_bytes()).into_owned())
             .collect()
@@ -1346,7 +1306,7 @@ mod tests {
         let mut first = vec![file("b.txt"), file("d.txt")];
         sort_entries(&mut first);
         let mut p = Pane::new(root(), first);
-        p.loading = true;
+        p.set_loading(true);
         p.extend_listing(vec![file("a.txt"), file("c.txt")]);
         assert_eq!(names(&p), vec!["a.txt", "b.txt", "c.txt", "d.txt"]);
     }
@@ -1358,7 +1318,7 @@ mod tests {
         let mut first = vec![file("m.txt"), file("z.txt")];
         sort_entries(&mut first);
         let mut p = Pane::new(root(), first);
-        p.cursor = 1; // "z.txt"
+        p.set_cursor(1); // "z.txt"
         // Llega un lote de nombres que ordenan ANTES: z.txt se desplaza.
         p.extend_listing(vec![file("a.txt"), file("b.txt")]);
         assert_eq!(names(&p), vec!["a.txt", "b.txt", "m.txt", "z.txt"]);
@@ -1372,19 +1332,19 @@ mod tests {
     #[test]
     fn extend_vacio_es_noop() {
         let mut p = Pane::new(root(), vec![file("a.txt")]);
-        p.cursor = 0;
+        p.set_cursor(0);
         p.extend_listing(vec![]);
         assert_eq!(names(&p), vec!["a.txt"]);
-        assert_eq!(p.cursor, 0);
+        assert_eq!(p.cursor(), 0);
     }
 
     /// `finish_listing` limpia el flag de carga.
     #[test]
     fn finish_limpia_loading() {
         let mut p = Pane::new(root(), vec![]);
-        p.loading = true;
+        p.set_loading(true);
         p.finish_listing();
-        assert!(!p.loading);
+        assert!(!p.loading());
     }
 
     fn vp(wire: &str) -> VPath {
@@ -1429,8 +1389,8 @@ mod tests {
         p.quick_char('a');
         p.quick_down();
         p.quick_confirm();
-        assert!(p.quick.is_none(), "confirmar cierra el quick search");
-        assert_eq!(p.cursor, 2, "cursor real = índice real de a2");
+        assert!(p.quick().is_none(), "confirmar cierra el quick search");
+        assert_eq!(p.cursor(), 2, "cursor real = índice real de a2");
         assert_eq!(p.selected().unwrap().path, vp("mem:///a2"));
     }
 
@@ -1451,7 +1411,7 @@ mod tests {
     #[test]
     fn enter_sin_matches_no_actua_sobre_entrada_invisible() {
         let mut p = pane_con(&["a1", "b", "a2"]);
-        p.cursor = 1;
+        p.set_cursor(1);
         p.quick_start(crate::nav::Mode::Filter);
         p.quick_char('x'); // cero matches
         assert!(p.selected().is_none(), "sin matches no hay selección");
@@ -1459,8 +1419,8 @@ mod tests {
             !p.quick_confirm(),
             "confirmar sin matches NO fija selección"
         );
-        assert!(p.quick.is_none(), "el quick search sí se cierra");
-        assert_eq!(p.cursor, 1, "el cursor real queda intacto");
+        assert!(p.quick().is_none(), "el quick search sí se cierra");
+        assert_eq!(p.cursor(), 1, "el cursor real queda intacto");
     }
 
     /// Modo salto: el listado NO cambia; teclear mueve el cursor REAL al
@@ -1470,15 +1430,15 @@ mod tests {
         let mut p = pane_con(&["ab", "zz", "ac"]);
         p.quick_start(crate::nav::Mode::Jump);
         p.quick_char('a');
-        assert_eq!(p.cursor, 0, "salta al primer match");
+        assert_eq!(p.cursor(), 0, "salta al primer match");
         assert!(
             p.quick_visible().is_none(),
             "en salto el listado queda intacto"
         );
         p.quick_next();
-        assert_eq!(p.cursor, 2, "Tab: siguiente match");
+        assert_eq!(p.cursor(), 2, "Tab: siguiente match");
         p.quick_next();
-        assert_eq!(p.cursor, 0, "wrap");
+        assert_eq!(p.cursor(), 0, "wrap");
         assert_eq!(p.selected().unwrap().path, vp("mem:///ab"));
     }
 
@@ -1507,15 +1467,15 @@ mod tests {
     #[test]
     fn enter_en_jump_sin_matches_opera_sobre_el_cursor_visible() {
         let mut p = pane_con(&["a1", "b"]);
-        p.cursor = 1;
+        p.set_cursor(1);
         p.quick_start(crate::nav::Mode::Jump);
         p.quick_char('x'); // cero matches; el listado no cambió
         assert!(
             p.quick_confirm(),
             "en Jump el cursor real ES visible: Enter opera"
         );
-        assert!(p.quick.is_none(), "el quick search se cierra");
-        assert_eq!(p.cursor, 1, "el cursor real queda donde estaba");
+        assert!(p.quick().is_none(), "el quick search se cierra");
+        assert_eq!(p.cursor(), 1, "el cursor real queda donde estaba");
 
         // Con el pane VACÍO ni Jump confirma (no hay nada visible).
         let mut vacio = pane_con(&[]);
@@ -1822,7 +1782,7 @@ mod tests {
         p.begin_search(root());
         assert!(p.virtual_search);
         assert_eq!(p.search_state, SearchState::Running);
-        assert!(p.entries.is_empty(), "los hits empiezan vacíos");
+        assert!(p.entries().is_empty(), "los hits empiezan vacíos");
         p.extend_listing(vec![file("hit1"), file("hit2")]);
         assert!(p.virtual_search, "extend no apaga el modo virtual");
         assert_eq!(names(&p), vec!["hit1", "hit2"]);

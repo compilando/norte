@@ -82,7 +82,12 @@ fn snapshot_quick_search_filtro() {
 #[test]
 fn snapshot_search_dialog() {
     let mut app = app_base();
-    app.panes[0].dir = vp("file:///casa/evil%E2%80%AEdir");
+    // Fija el cwd hostil del pane con foco reconstruyéndolo (mismo listado y
+    // cursor que `app_base`): el `Pane` ya no expone `dir` como campo — su
+    // estado puro vive en `norte_frontend::PaneState` (#82).
+    let entries = app.panes[0].entries().to_vec();
+    app.panes[0] = Pane::new(vp("file:///casa/evil%E2%80%AEdir"), entries);
+    app.panes[0].move_down(1);
     app.open_search_dialog();
     let dialog = app.search_dialog.as_mut().expect("diálogo abierto");
     for c in "*.rs".chars() {

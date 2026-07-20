@@ -60,17 +60,17 @@ fn cursor_navega_con_topes() {
         (b"b", EntryKind::File),
         (b"c", EntryKind::File),
     ]);
-    assert_eq!(p.cursor, 0);
+    assert_eq!(p.cursor(), 0);
     p.move_up(1);
-    assert_eq!(p.cursor, 0, "tope superior");
+    assert_eq!(p.cursor(), 0, "tope superior");
     p.move_down(1);
-    assert_eq!(p.cursor, 1);
+    assert_eq!(p.cursor(), 1);
     p.move_down(100);
-    assert_eq!(p.cursor, 2, "tope inferior");
+    assert_eq!(p.cursor(), 2, "tope inferior");
     p.move_to_end();
-    assert_eq!(p.cursor, 2);
+    assert_eq!(p.cursor(), 2);
     p.move_to_start();
-    assert_eq!(p.cursor, 0);
+    assert_eq!(p.cursor(), 0);
 }
 
 #[test]
@@ -79,7 +79,7 @@ fn cursor_en_pane_vacio_no_revienta() {
     p.move_down(1);
     p.move_up(1);
     p.move_to_end();
-    assert_eq!(p.cursor, 0);
+    assert_eq!(p.cursor(), 0);
     assert!(p.selected().is_none());
 }
 

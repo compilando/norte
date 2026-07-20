@@ -274,6 +274,89 @@ impl PaneState {
     pub fn clear_marks(&mut self) {
         self.marks.clear();
     }
+
+    /// Fija el cursor real a `i` con clamp (jamás fuera de rango). Para re-anclar
+    /// tras localizar un índice concreto (p. ej. un hit de búsqueda). (#82)
+    pub fn set_cursor(&mut self, i: usize) {
+        let max = self.entries.len().saturating_sub(1);
+        self.cursor = i.min(max);
+    }
+
+    /// Marca/desmarca el pane como cargando SIN tocar el resto del estado: un
+    /// fill paginado (ADR 0017) pinta la primera página y sigue (`true`), baja
+    /// el flag al terminar (`false`). (#82)
+    pub fn set_loading(&mut self, loading: bool) {
+        self.loading = loading;
+    }
+
+    /// Siguiente match con wrap (Tab en modo [`Mode::Jump`]): mueve la selección
+    /// del quick al match siguiente y, en Jump, arrastra el cursor real. No-op
+    /// sin quick search. (#82)
+    pub fn quick_next(&mut self) {
+        if let Some(q) = &mut self.quick {
+            q.next_match();
+            self.quick_sync_jump();
+        }
+    }
+
+    /// El quick search vivo (para que el render pinte la query y su contador);
+    /// `None` = navegación normal. Solo lectura. (#82)
+    #[must_use]
+    pub fn quick(&self) -> Option<&QuickSearch> {
+        self.quick.as_ref()
+    }
+
+    /// El path de la entrada seleccionada DENTRO del quick search, capturado
+    /// ANTES de mutar/re-ordenar `entries` (contrato de [`QuickSearch::refresh`]:
+    /// los índices previos al sort no identifican nada). (#82)
+    fn quick_selected_path(&self) -> Option<VPath> {
+        let i = self.quick.as_ref()?.selected_entry_index()?;
+        Some(self.entries.get(i)?.path.clone())
+    }
+
+    /// Añade `batch` a un listado paginado en curso (ADR 0017), RE-ORDENA con
+    /// [`sort_entries`](crate::sort_entries) y reconcilia: re-ancla el cursor al
+    /// PATH seleccionado (clamp por índice si desapareció) y RE-APLICA el quick
+    /// por path. Lote vacío = no-op. (#82)
+    pub fn extend(&mut self, batch: Vec<Entry>) {
+        if batch.is_empty() {
+            return;
+        }
+        let quick_prev = self.quick_selected_path();
+        let anchor = self.entries.get(self.cursor).map(|e| e.path.clone());
+        self.entries.extend(batch);
+        crate::sort_entries(&mut self.entries);
+        self.cursor = anchor
+            .and_then(|p| self.entries.iter().position(|e| e.path == p))
+            .unwrap_or_else(|| self.cursor.min(self.entries.len().saturating_sub(1)));
+        if let Some(q) = &mut self.quick {
+            q.refresh(&self.entries, quick_prev.as_ref());
+        }
+        self.quick_sync_jump();
+    }
+
+    /// Reemplaza el listado COMPLETO del MISMO dir (refresh tras mutación):
+    /// conserva el cursor por ÍNDICE con clamp (tras un delete queda en la
+    /// siguiente entrada — ortodoxo) y RE-APLICA el quick por path. No toca el
+    /// flag de carga. (#82)
+    pub fn refill(&mut self, entries: Vec<Entry>) {
+        let quick_prev = self.quick_selected_path();
+        self.cursor = self.cursor.min(entries.len().saturating_sub(1));
+        self.entries = entries;
+        if let Some(q) = &mut self.quick {
+            q.refresh(&self.entries, quick_prev.as_ref());
+        }
+        self.quick_sync_jump();
+    }
+
+    /// RE-APLICA el quick vivo sobre las entradas ACTUALES (sin cambiarlas ni
+    /// mover el cursor real): cierra un fill cuyo cierre podría re-ordenar. (#82)
+    pub fn refresh_quick(&mut self) {
+        let quick_prev = self.quick_selected_path();
+        if let Some(q) = &mut self.quick {
+            q.refresh(&self.entries, quick_prev.as_ref());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -539,5 +622,132 @@ mod tests {
         assert_eq!(p.marks_len(), 2, "nfc y nfd son DOS marcas distintas");
         assert!(p.marks.contains(&nfc));
         assert!(p.marks.contains(&nfd));
+    }
+
+    #[test]
+    fn set_cursor_fija_con_clamp() {
+        let mut p = pane(&["a", "b", "c"]);
+        p.set_cursor(2);
+        assert_eq!(p.cursor(), 2);
+        p.set_cursor(99); // clamp en len-1
+        assert_eq!(p.cursor(), 2);
+        p.set_cursor(0);
+        assert_eq!(p.cursor(), 0);
+
+        let mut vacia = pane(&[]);
+        vacia.set_cursor(5); // no-op, sin panic
+        assert_eq!(vacia.cursor(), 0);
+    }
+
+    #[test]
+    fn set_loading_togglea_el_flag() {
+        let mut p = pane(&["a"]);
+        assert!(!p.loading());
+        p.set_loading(true);
+        assert!(p.loading());
+        p.set_loading(false);
+        assert!(!p.loading());
+    }
+
+    #[test]
+    fn quick_next_mueve_el_cursor_real_con_wrap() {
+        let mut p = pane(&["ab", "zz", "ac"]);
+        p.quick_start(crate::nav::Mode::Jump);
+        p.quick_char('a');
+        assert_eq!(p.cursor(), 0, "salta al primer match");
+        assert!(p.quick_visible().is_none(), "en salto el listado va entero");
+        p.quick_next();
+        assert_eq!(p.cursor(), 2, "Tab: siguiente match");
+        p.quick_next();
+        assert_eq!(p.cursor(), 0, "wrap");
+    }
+
+    #[test]
+    fn quick_getter_expone_la_query_viva() {
+        let mut p = pane(&["a"]);
+        assert!(p.quick().is_none());
+        p.quick_start(crate::nav::Mode::Filter);
+        p.quick_char('a');
+        assert_eq!(p.quick().unwrap().mode(), crate::nav::Mode::Filter);
+        p.quick_cancel();
+        assert!(p.quick().is_none());
+    }
+
+    /// `extend` re-ordena TODO y re-ancla el cursor al PATH seleccionado.
+    #[test]
+    fn extend_reordena_y_reancla_por_path() {
+        let mut first = vec![
+            e("mem:///m", EntryKind::File),
+            e("mem:///z", EntryKind::File),
+        ];
+        crate::sort_entries(&mut first);
+        let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), first);
+        p.set_cursor(1); // "z"
+        p.extend(vec![
+            e("mem:///a", EntryKind::File),
+            e("mem:///b", EntryKind::File),
+        ]);
+        let orden: Vec<_> = p
+            .entries()
+            .iter()
+            .map(|e| e.path.file_name().unwrap().as_bytes().to_vec())
+            .collect();
+        assert_eq!(
+            orden,
+            vec![b"a".to_vec(), b"b".to_vec(), b"m".to_vec(), b"z".to_vec()]
+        );
+        assert_eq!(
+            p.selected().unwrap().path,
+            VPath::parse("mem:///z").unwrap(),
+            "la selección sigue el path pese al re-orden"
+        );
+    }
+
+    #[test]
+    fn extend_vacio_es_noop() {
+        let mut p = pane(&["a"]);
+        p.extend(vec![]);
+        assert_eq!(p.entries().len(), 1);
+        assert_eq!(p.cursor(), 0);
+    }
+
+    /// `extend` re-aplica el filtro vivo sobre el listado nuevo.
+    #[test]
+    fn extend_reaplica_el_filtro() {
+        let mut p = pane(&["a1"]);
+        p.quick_start(crate::nav::Mode::Filter);
+        p.quick_char('a');
+        p.extend(vec![
+            e("mem:///a2", EntryKind::File),
+            e("mem:///zz", EntryKind::File),
+        ]);
+        assert_eq!(p.quick_visible().unwrap().len(), 2, "a2 entra, zz no");
+    }
+
+    /// `refill` conserva el cursor por índice con clamp y re-aplica el filtro.
+    #[test]
+    fn refill_conserva_cursor_por_indice_con_clamp() {
+        let mut p = pane(&["a", "b", "c"]);
+        p.set_cursor(2); // "c"
+        p.refill(vec![
+            e("mem:///a", EntryKind::File),
+            e("mem:///b", EntryKind::File),
+        ]);
+        assert_eq!(p.cursor(), 1, "clamp a la última entrada del listado nuevo");
+        assert_eq!(p.entries().len(), 2);
+    }
+
+    /// `refresh_quick` re-aplica el filtro sin tocar entries ni cursor real.
+    #[test]
+    fn refresh_quick_no_toca_entries_ni_cursor() {
+        let mut p = pane(&["a1", "a2"]);
+        p.quick_start(crate::nav::Mode::Filter);
+        p.quick_char('a');
+        let antes: Vec<_> = p.entries().to_vec();
+        let cur = p.cursor();
+        p.refresh_quick();
+        assert_eq!(p.entries(), antes.as_slice());
+        assert_eq!(p.cursor(), cur);
+        assert_eq!(p.quick_visible().unwrap().len(), 2);
     }
 }

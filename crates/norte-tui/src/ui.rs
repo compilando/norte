@@ -71,7 +71,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         draw_nav_popup(frame, popup, &app.theme);
     }
     if let Some(dialog) = &app.search_dialog {
-        draw_search_dialog(frame, dialog, &app.focused().dir, &app.theme);
+        draw_search_dialog(frame, dialog, app.focused().dir(), &app.theme);
     }
 }
 
@@ -674,7 +674,7 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, them
     } else {
         theme.role(Role::BorderUnfocused)
     };
-    let (title, title_hostil) = path_display(&pane.dir);
+    let (title, title_hostil) = path_display(pane.dir());
     let mut title = if title_hostil {
         format!("{HOSTILE_BADGE} {title}")
     } else {
@@ -682,12 +682,12 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, them
     };
     // Un listado RELLENÁNDOSE (paginación, ADR 0017) se marca SIEMPRE: un
     // listado incompleto jamás es silencioso.
-    if pane.loading {
+    if pane.loading() {
         use std::fmt::Write as _;
         let _ = write!(
             title,
             " [{}]",
-            norte_i18n::ta("pane-loading", &[("n", &pane.entries.len().to_string())])
+            norte_i18n::ta("pane-loading", &[("n", &pane.entries().len().to_string())])
         );
     }
     let mut block = Block::default()
@@ -701,10 +701,10 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, them
     // nombres (review MINOR-1 T4): «la tecleó el usuario» se rompe con un
     // PASTE — sin bracketed paste llega como stream de Chars y un nombre
     // hostil pegado pintaría bidi/invisibles crudos en el borde.
-    if let Some(q) = &pane.quick {
+    if let Some(q) = pane.quick() {
         let (query, _) = display_name(q.query_display().as_bytes());
-        let mut input = format!(" /{} {}/{}", query, q.visible().len(), pane.entries.len());
-        if pane.loading {
+        let mut input = format!(" /{} {}/{}", query, q.visible().len(), pane.entries().len());
+        if pane.loading() {
             input.push(' ');
             input.push_str(&t("quicksearch-partial"));
         }
@@ -717,17 +717,19 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, them
     let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = match pane.quick_visible() {
         Some(vis) => (
             vis.iter()
-                .filter_map(|&i| pane.entries.get(i))
+                .filter_map(|&i| pane.entries().get(i))
                 .map(|e| entry_item(e, theme))
                 .collect(),
-            pane.quick
-                .as_ref()
+            pane.quick()
                 .and_then(crate::nav::QuickSearch::selected_entry_index)
                 .and_then(|s| vis.iter().position(|&i| i == s)),
         ),
         None => (
-            pane.entries.iter().map(|e| entry_item(e, theme)).collect(),
-            (!pane.entries.is_empty()).then_some(pane.cursor),
+            pane.entries()
+                .iter()
+                .map(|e| entry_item(e, theme))
+                .collect(),
+            (!pane.entries().is_empty()).then_some(pane.cursor()),
         ),
     };
     let list = List::new(items)
@@ -757,8 +759,8 @@ fn entry_item<'a>(entry: &'a norte_proto::Entry, theme: &TuiTheme) -> ListItem<'
 
 fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let pane = app.focused();
-    let total = pane.entries.len();
-    let pos = if total == 0 { 0 } else { pane.cursor + 1 };
+    let total = pane.entries().len();
+    let pos = if total == 0 { 0 } else { pane.cursor() + 1 };
     // Con el FILTRO activo la selección no es el cursor real: un `pos/total`
     // sería engañoso (review MINOR-2 T4) — se suprime; el pie del pane ya
     // da el contador honesto `n/m`.
@@ -767,7 +769,7 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     } else {
         format!("  {pos}/{total}")
     };
-    let (dir_texto, dir_hostil) = path_display(&pane.dir);
+    let (dir_texto, dir_hostil) = path_display(pane.dir());
     let marca = if dir_hostil { HOSTILE_BADGE } else { "" };
     // Sin chuleta de teclas: mentiría según el preset (el which-key overlay
     // llega en fase 5). La secuencia pendiente SÍ se pinta (ADR 0006).
@@ -807,7 +809,7 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
             };
             format!(
                 " {}{seq}",
-                ta(key, &[("n", &pane.entries.len().to_string())])
+                ta(key, &[("n", &pane.entries().len().to_string())])
             )
         }
     } else if let Some(lua) = &app.lua_status {
