@@ -22,6 +22,10 @@ pub enum Format {
     Tar,
     /// zip stored+deflate. Lectura descomprimiendo en hilo blocking.
     Zip,
+    /// tar.gz/tgz (ADR 0028, #55): capa gz OPACA sobre tar — índice
+    /// secuencial (`entries()`, sin `Seek`) y lectura forward-decode
+    /// (descarta hasta el offset con un decoder fresco por lectura).
+    TarGz,
 }
 
 impl Format {
@@ -29,6 +33,7 @@ impl Format {
         match self {
             Self::Tar => "tar",
             Self::Zip => "zip",
+            Self::TarGz => "tar+gz",
         }
     }
 }
@@ -267,6 +272,13 @@ impl ArchiveProvider {
             Format::Zip => {
                 crate::zip_format::build_index(reader, container_len, generation, &limits, &cancel)
             }
+            Format::TarGz => {
+                // Sin `container_len` como cota del locator (ADR 0028): ese
+                // tamaño es el COMPRIMIDO y no acota nada del stream
+                // descomprimido — el truncamiento se detecta en el read.
+                crate::targz_format::build_index_gz(reader, generation, &limits, &cancel)
+                    .map(|idx| (idx, None))
+            }
         })
         .await;
         guard.disarm();
@@ -503,6 +515,25 @@ impl Provider for ArchiveProvider {
                         }
                     };
                     crate::zip_format::read_entry(archive, entry_index, req_off, req_len, &tx);
+                }));
+                Ok(futures::stream::poll_fn(move |cx| rx.poll_recv(cx)).boxed())
+            }
+            Locator::Gz { offset, .. } => {
+                // Forward-decode: gz no es seekable — descarta hasta el
+                // offset y sirve el tramo. O(descomprimido-hasta-offset) por
+                // read, documentado (ADR 0028); spool/restart-points = issue
+                // de deuda. Drop del stream = el send falla = el hilo
+                // termina (regla 3).
+                let reader = ProviderReader::new(
+                    tokio::runtime::Handle::current(),
+                    Arc::clone(&self.inner),
+                    aref.outer.clone(),
+                    cached.index.generation.1.unwrap_or(0),
+                );
+                let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+                let skip = offset + req_off;
+                drop(tokio::task::spawn_blocking(move || {
+                    crate::targz_format::read_entry_gz(reader, skip, req_len, &tx);
                 }));
                 Ok(futures::stream::poll_fn(move |cx| rx.poll_recv(cx)).boxed())
             }

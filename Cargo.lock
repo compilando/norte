@@ -4440,6 +4440,7 @@ version = "0.3.0-alpha.1"
 dependencies = [
  "async-trait",
  "bytes",
+ "flate2",
  "futures",
  "norte-proto",
  "norte-testkit",

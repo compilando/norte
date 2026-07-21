@@ -21,6 +21,13 @@ pub struct Limits {
     /// por read, comportamiento pre-caché). Gobierna memoria persistente,
     /// no el indexado.
     pub max_cd_bytes: u64,
+    /// Presupuesto TOTAL de bytes DESCOMPRIMIDOS del PASE DE ÍNDICE de un
+    /// `tar+gz` (ADR 0028, #55): una gzip bomb es CPU infinita aunque la
+    /// memoria del pipeline sea streaming (el decoder nunca materializa el
+    /// contenido completo) — este tope corta el INDEXADO. El `read` de una
+    /// entrada ya está acotado por el tamaño de la propia entrada y no lo
+    /// consulta. Sin efecto en `Format::Tar`/`Format::Zip`.
+    pub max_decompressed_bytes: u64,
 }
 
 impl Default for Limits {
@@ -30,6 +37,7 @@ impl Default for Limits {
             max_name_bytes: 4_096,
             max_depth: 64,
             max_cd_bytes: 8 * 1024 * 1024,
+            max_decompressed_bytes: 64 * 1024 * 1024 * 1024,
         }
     }
 }
@@ -43,6 +51,15 @@ pub(crate) enum Locator {
     /// zip: índice de la entrada en el central directory — `read`
     /// descomprime en un hilo blocking (stored/deflate).
     Zip { index: usize },
+    /// tar.gz/tgz (ADR 0028, #55): gz no es seekable — `read` es
+    /// FORWARD-DECODE desde un decoder fresco que descarta hasta `offset`.
+    /// `offset`/`size` son del stream DESCOMPRIMIDO, NO de bytes del
+    /// contenedor comprimido (a diferencia de `Tar`); no se validan contra
+    /// el tamaño del contenedor al indexar (ese tamaño es el COMPRIMIDO y
+    /// no acota nada del stream descomprimido) — el truncamiento se detecta
+    /// fail-loud en el propio `read` (EOF prematuro), jamás datos cortos en
+    /// silencio.
+    Gz { offset: u64, size: u64 },
 }
 
 /// Un nodo del árbol virtual.

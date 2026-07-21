@@ -124,6 +124,11 @@ tar = { version = "0.4", default-features = false }
 # responde Unsupported. Alternativas evaluadas: rc-zip/async_zip (menos
 # ejercitados contra zips hostiles reales).
 zip = { version = "5", default-features = false, features = ["deflate"] }
+# tar.gz/tgz (#55, ADR 0028): dep DIRECTA de norte-vfs-archive para el
+# `MultiGzDecoder` del índice secuencial de `tar+gz` — ya transitiva vía
+# `zip` (deflate-flate2-zlib-rs) con el MISMO backend zlib-rs; explícita
+# aquí para no arrastrar el backend `rust_backend`/miniz_oxide por defecto.
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 # Fase 6 (ADR 0015, connections/secretos): keyring del OS (Secret Service/
 # Keychain/Credential Manager, el estándar cross-platform); age (fichero
 # cifrado de secretos headless, auditado); zeroize (borrar secretos de memoria,

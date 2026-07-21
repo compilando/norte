@@ -17,6 +17,54 @@ fn secs_to_ms(secs: u64) -> Option<i64> {
     i64::try_from(secs).ok()?.checked_mul(1000)
 }
 
+/// Forma de una entrada de tar clasificada por sus HEADERS (sin tocar los
+/// datos): compartida por el índice plano (`entries_with_seek`, este módulo)
+/// y el de tar.gz (`entries()`, [`targz_format`](crate::targz_format) — ADR
+/// 0028, #55). Cada builder decide el `Locator` de un `File` — contiguo
+/// (plano) u offset DESCOMPRIMIDO (gz) — y valida su propio presupuesto; el
+/// resto (dir/symlink/other, nombre, mtime, filtro de `pax_global_header`)
+/// es IDÉNTICO entre ambos formatos.
+pub(crate) enum EntryShape {
+    /// Directorio.
+    Dir,
+    /// Symlink; target crudo (`None` si el header no lo trae).
+    Symlink(Option<Vec<u8>>),
+    /// Archivo regular. `offset` es del stream que el `Archive` está
+    /// recorriendo (bytes del contenedor en tar plano; bytes DESCOMPRIMIDOS
+    /// en tar.gz — la interpretación es responsabilidad del caller).
+    File { offset: u64, size: u64 },
+    /// Hardlinks, devices, fifos, GNU sparse…: sin locator (read →
+    /// `Unsupported`).
+    Other,
+}
+
+/// Clasifica una entrada de tar por sus headers. `None` = meta ya
+/// consumida por el iterador que debe saltarse del índice (`g` =
+/// `pax_global_header`: el iterador del crate `tar` consume L/K/x
+/// automáticamente pero NO `g` — sin este filtro, todo tar de `git archive`
+/// listaría un `pax_global_header` fantasma, auditoría 8e H5).
+pub(crate) fn classify_entry<R: Read>(
+    entry: &tar::Entry<'_, R>,
+) -> Option<(Vec<u8>, Option<i64>, EntryShape)> {
+    if entry.header().entry_type() == tar::EntryType::XGlobalHeader {
+        return None;
+    }
+    let raw_name = entry.path_bytes().to_vec();
+    let header = entry.header();
+    let kind = header.entry_type();
+    let mtime_ms = header.mtime().ok().and_then(secs_to_ms);
+    let shape = match kind {
+        tar::EntryType::Directory => EntryShape::Dir,
+        tar::EntryType::Symlink => EntryShape::Symlink(entry.link_name_bytes().map(|b| b.to_vec())),
+        tar::EntryType::Regular | tar::EntryType::Continuous => EntryShape::File {
+            offset: entry.raw_file_position(),
+            size: entry.size(),
+        },
+        _ => EntryShape::Other,
+    };
+    Some((raw_name, mtime_ms, shape))
+}
+
 /// Construye el índice recorriendo los HEADERS del tar (`entries_with_seek`:
 /// los datos se saltan con `Seek`, no se descargan — sobre un provider
 /// remoto el coste es O(headers), no O(tamaño)).
@@ -41,28 +89,19 @@ pub(crate) fn build_index<R: Read + Seek>(
             return Err(Error::Cancelled);
         }
         let entry = entry.map_err(|e| corrupt(&e))?;
-        // El iterador del crate `tar` consume L/K/x (longname/pax local)
-        // pero NO `g`: sin esto, todo tar de `git archive` listaría un
-        // `pax_global_header` fantasma (auditoría 8e, H5).
-        if entry.header().entry_type() == tar::EntryType::XGlobalHeader {
-            continue;
-        }
-        let raw_name = entry.path_bytes().to_vec();
-        let header = entry.header();
-        let kind = header.entry_type();
-        let mtime_ms = header.mtime().ok().and_then(secs_to_ms);
-        let node = match kind {
-            tar::EntryType::Directory => Node::dir(mtime_ms),
-            tar::EntryType::Symlink => Node {
+        let Some((raw_name, mtime_ms, shape)) = classify_entry(&entry) else {
+            continue; // meta ya consumida por el iterador (pax_global_header)
+        };
+        let node = match shape {
+            EntryShape::Dir => Node::dir(mtime_ms),
+            EntryShape::Symlink(link_target) => Node {
                 kind: EntryKind::Symlink,
                 size: None,
                 mtime_ms,
                 locator: None,
-                link_target: entry.link_name_bytes().map(|b| b.to_vec()),
+                link_target,
             },
-            tar::EntryType::Regular | tar::EntryType::Continuous => {
-                let size = entry.size();
-                let offset = entry.raw_file_position();
+            EntryShape::File { offset, size } => {
                 if offset
                     .checked_add(size)
                     .is_none_or(|end| end > container_len)
@@ -80,10 +119,7 @@ pub(crate) fn build_index<R: Read + Seek>(
                     link_target: None,
                 }
             }
-            // Hardlinks, devices, fifos, GNU sparse…: se listan como Other
-            // sin locator (read → Unsupported). Los tipos meta (long name,
-            // pax headers) ya los consumió el iterador del crate `tar`.
-            _ => Node {
+            EntryShape::Other => Node {
                 kind: EntryKind::Other,
                 size: None,
                 mtime_ms,

@@ -59,3 +59,29 @@ pub async fn tar_provider_with_limits(bytes: &[u8], limits: Limits) -> (ArchiveP
     let provider = ArchiveProvider::with_limits(mem, Format::Tar, "tar+mem", limits);
     (provider, root)
 }
+
+/// Gzipea bytes ya armados (p. ej. un tar de `TarSmith`) en un único
+/// miembro gzip (#55, ADR 0028).
+pub fn gzip(bytes: &[u8]) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    enc.write_all(bytes).expect("write gz");
+    enc.finish().expect("finish gz")
+}
+
+/// Provider tar.gz sobre un contenedor `gzip(tar_bytes)` recién sembrado +
+/// la raíz interior (#55, ADR 0028).
+pub async fn targz_provider(gz_bytes: &[u8]) -> (ArchiveProvider, VPath) {
+    targz_provider_with_limits(gz_bytes, Limits::default()).await
+}
+
+/// Como [`targz_provider`] con límites propios (tests de bomba/cancelación).
+pub async fn targz_provider_with_limits(
+    gz_bytes: &[u8],
+    limits: Limits,
+) -> (ArchiveProvider, VPath) {
+    let (mem, path) = seed_container(b"fixture.tar.gz", gz_bytes).await;
+    let root = VPath::archive_compose("tar+gz", &path, &[]).expect("compose");
+    let provider = ArchiveProvider::with_limits(mem, Format::TarGz, "tar+gz+mem", limits);
+    (provider, root)
+}
