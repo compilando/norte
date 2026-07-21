@@ -62,7 +62,7 @@ pub enum VPathError {
 /// la lista es cambio de protocolo. `tar+gz` es un token COMPUESTO (contiene
 /// un `+` propio): la capa gzip es opaca dentro del formato, no un mecanismo
 /// general de capas (eso queda diferido a #56). La resolución es
-/// longest-match contra esta whitelist (ver [`scheme_format_prefix`]):
+/// longest-match contra esta whitelist (`scheme_format_prefix`):
 /// `tar+gz+file` es formato `tar+gz` sobre `file`, nunca formato `tar` sobre
 /// un interior huérfano `gz+file`. Reserva normativa: ningún provider
 /// registra schemes que empiecen por `<formato>+`.
@@ -571,7 +571,7 @@ fn scheme_format_prefix(scheme: &str) -> Option<&str> {
         .copied()
 }
 
-/// Wrapper público de [`scheme_format_prefix`] para frontends (CLI/TUI) que
+/// Wrapper público del prefijo de formato para frontends (CLI/TUI) que
 /// necesitan reconocer un scheme de archivo-como-directorio (p. ej. para
 /// aceptar URLs `tar+gz+file://…`) sin duplicar la gramática de longest-match
 /// contra [`ARCHIVE_FORMATS`] (ADR 0028, #55).
