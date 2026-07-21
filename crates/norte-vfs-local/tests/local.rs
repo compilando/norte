@@ -241,6 +241,38 @@ async fn mtime_is_recent_and_positive() {
     assert!(mtime < 4_102_444_800_000, "mtime sospechoso: {mtime}");
 }
 
+/// #52: el listado no statea (kind por `d_type`, size/mtime None); `stat()`
+/// sigue trayendo los metadatos completos on-demand.
+#[tokio::test]
+async fn list_es_lazy_y_stat_hidrata() {
+    let (p, root, _) = provider();
+    let f = child(&root, b"cinco");
+    let mut sink = p.write(&f).await.unwrap();
+    sink.write(Bytes::from_static(b"12345")).await.unwrap();
+    sink.commit().await.unwrap();
+
+    let entries: Vec<norte_proto::Entry> = p
+        .list(&root)
+        .await
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+        .await;
+    let e = entries
+        .iter()
+        .find(|e| e.path.file_name().unwrap().as_bytes() == b"cinco")
+        .expect("listado");
+    assert_eq!(e.kind, norte_proto::EntryKind::File);
+    assert!(
+        e.size.is_none() && e.mtime_ms.is_none(),
+        "listado lazy (#52)"
+    );
+
+    let st = p.stat(&f).await.expect("stat");
+    assert_eq!(st.size, Some(5));
+    assert!(st.mtime_ms.is_some());
+}
+
 /// Case-rename (`caja` → `CAJA`) en FS case-insensitive: el "destino" es el
 /// propio origen con otra caja y debe proceder (issue #2: en Windows M0
 /// devolvía `Conflict` por no poder comprobar la identidad real del archivo).

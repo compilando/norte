@@ -687,9 +687,26 @@ impl Provider for LocalProvider {
                 let item = dent.map_err(|e| map_io(&e)).and_then(|d| {
                     let seg = Segment::new(os_to_bytes(&d.file_name()))
                         .map_err(|_| Error::InvalidPath)?;
-                    // DirEntry::metadata NO sigue symlinks: describe el link.
-                    let md = d.metadata().map_err(|e| map_io(&e))?;
-                    Ok(entry_from(base_vpath.join(seg), &md))
+                    // #52: kind por d_type del readdir (std solo statea con
+                    // DT_UNKNOWN); size/mtime LAZY (None = «no lo sé»,
+                    // contrato de Entry) — el copy engine hidrata sus hojas
+                    // (hydrate_plan) y la UI sondea la enfocada.
+                    let ft = d.file_type().map_err(|e| map_io(&e))?;
+                    let kind = if ft.is_symlink() {
+                        EntryKind::Symlink
+                    } else if ft.is_dir() {
+                        EntryKind::Dir
+                    } else if ft.is_file() {
+                        EntryKind::File
+                    } else {
+                        EntryKind::Other
+                    };
+                    Ok(Entry {
+                        path: base_vpath.join(seg),
+                        kind,
+                        size: None,
+                        mtime_ms: None,
+                    })
                 });
                 let stop = item.is_err();
                 if tx.blocking_send(item).is_err() {
