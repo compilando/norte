@@ -68,3 +68,44 @@ async fn indexado_concurrente_coalesce_en_un_build() {
         "8 lists concurrentes frías = los reads de UN solo build (single-flight)"
     );
 }
+
+/// #61.3: el `read` caliente reutiliza el `ZipArchive` ya parseado por
+/// `index_for` — no vuelve a materializar el central directory.
+#[tokio::test(flavor = "multi_thread")]
+async fn read_caliente_no_reparsea_el_central_directory() {
+    // a.txt vive en el bloque 0 del ProviderReader (BLOCK=256 KiB); el
+    // relleno de 300 KB empuja el central directory a la cola (bloque >=1).
+    // Sin cache, ZipArchive::new relee la cola en CADA read -> delta >= 2.
+    let relleno: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+    let bytes = norte_testkit::ZipSmith::new()
+        .file(b"a.txt", b"hola")
+        .file(b"relleno.bin", &relleno)
+        .build();
+    assert!(
+        bytes.len() > 262_144,
+        "el central directory debe caer fuera del bloque 0"
+    );
+
+    let (mem, path) = common::seed_container(b"fixture.zip", &bytes).await;
+    let root = VPath::archive_compose("zip", &path, &[]).expect("compose");
+    let provider = ArchiveProvider::with_limits(
+        Arc::clone(&mem) as Arc<dyn Provider>,
+        Format::Zip,
+        "zip+mem",
+        Limits::default(),
+    );
+    let entry_path = root.join(norte_proto::Segment::new(b"a.txt".to_vec()).expect("seg"));
+
+    // Calienta el índice (y con él, el CD cacheado).
+    provider.stat(&entry_path).await.expect("stat");
+    let antes = mem.faults().read_calls();
+    let chunks: Vec<_> = provider
+        .read(&entry_path, None)
+        .await
+        .expect("read")
+        .collect()
+        .await;
+    assert!(chunks.iter().all(Result::is_ok));
+    let delta = mem.faults().read_calls() - antes;
+    assert_eq!(delta, 1, "read caliente = solo el bloque de datos, sin CD");
+}

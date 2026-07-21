@@ -77,14 +77,16 @@ fn eocd_entry_count<R: Read + Seek>(reader: &mut R, len: u64) -> Option<u64> {
 }
 
 /// Construye el índice desde el central directory (`by_index_raw`: nunca
-/// descomprime). `cancel` se chequea por entrada (regla 3).
+/// descomprime). `cancel` se chequea por entrada (regla 3). Devuelve también
+/// el `ZipArchive` ya parseado (#61): el caller lo cachea junto al índice
+/// para que un `read` caliente lo clone en vez de re-parsear el CD.
 pub(crate) fn build_index<R: Read + Seek>(
     mut reader: R,
     container_len: u64,
     generation: (Option<i64>, Option<u64>),
     limits: &Limits,
     cancel: &Arc<AtomicBool>,
-) -> Result<ArchiveIndex, Error> {
+) -> Result<(ArchiveIndex, zip::ZipArchive<R>), Error> {
     let claimed = eocd_entry_count(&mut reader, container_len);
     if let Some(claimed) = claimed
         && claimed > limits.max_entries as u64
@@ -165,15 +167,35 @@ pub(crate) fn build_index<R: Read + Seek>(
             "entradas omitidas del índice (nombres hostiles/límites); detalle en debug"
         );
     }
-    Ok(index)
+    Ok((index, archive))
+}
+
+/// Abre el archive en el hilo blocking; si el CD está roto, reporta por el
+/// canal y devuelve `None` (el caller retorna). Solo se usa en el camino
+/// frío de `read` (sin `ZipArchive` cacheado, p. ej. generación desconocida).
+pub(crate) fn open_archive<R: Read + Seek>(
+    reader: R,
+    tx: &tokio::sync::mpsc::Sender<Result<bytes::Bytes, Error>>,
+) -> Option<zip::ZipArchive<R>> {
+    match zip::ZipArchive::new(reader) {
+        Ok(a) => Some(a),
+        Err(e) => {
+            let _ = tx.blocking_send(Err(corrupt(&e)));
+            None
+        }
+    }
 }
 
 /// Lee la entrada `index` descomprimiendo en streaming hacia `tx`. El caller
 /// aplica el range SOBRE los bytes descomprimidos vía `skip`/`take`. Si el
 /// receptor muere (drop del stream = cancelación, regla 3), `blocking_send`
 /// falla y el hilo termina en el siguiente chunk.
+///
+/// `archive` viene YA PARSEADO (#61): del cache (clon barato, CD compartido
+/// por Arc interno) o del camino frío vía [`open_archive`] — nunca se
+/// reconstruye aquí.
 pub(crate) fn read_entry<R: Read + Seek>(
-    reader: R,
+    mut archive: zip::ZipArchive<R>,
     entry_index: usize,
     skip: u64,
     take: u64,
@@ -182,10 +204,6 @@ pub(crate) fn read_entry<R: Read + Seek>(
     let send_err = |tx: &tokio::sync::mpsc::Sender<Result<bytes::Bytes, Error>>, e: Error| {
         // Mejor esfuerzo: si el receptor murió, no hay a quién contárselo.
         let _ = tx.blocking_send(Err(e));
-    };
-    let mut archive = match zip::ZipArchive::new(reader) {
-        Ok(a) => a,
-        Err(e) => return send_err(tx, corrupt(&e)),
     };
     let mut file = match archive.by_index(entry_index) {
         Ok(f) => f,

@@ -33,10 +33,27 @@ impl Format {
     }
 }
 
+/// Índice + central directory del zip ya parseado (`None` en tar). Misma
+/// clave y misma generación: la invalidación existente los gobierna juntos.
+#[derive(Clone)]
+struct CachedContainer {
+    index: Arc<ArchiveIndex>,
+    zip: Option<zip::ZipArchive<ProviderReader>>,
+}
+
+// `zip::ZipArchive` comparte el central directory por Arc interno; `Clone`
+// con `R: Clone` es la base del cache (#61). Si una subida de `zip` lo
+// rompe, que lo diga el compilador aquí y no una regresión de perf
+// silenciosa.
+const _: fn() = || {
+    fn assert_clone<T: Clone>() {}
+    let _ = assert_clone::<zip::ZipArchive<ProviderReader>>;
+};
+
 /// Caché LRU mínima de índices: clave = wire canónico del exterior. Cap fijo
 /// (ADR 0018): RAII — al morir el provider muere todo.
 struct IndexCache {
-    map: HashMap<String, Arc<ArchiveIndex>>,
+    map: HashMap<String, CachedContainer>,
     /// Orden de uso (el último es el más reciente).
     order: Vec<String>,
 }
@@ -60,21 +77,21 @@ impl IndexCache {
         &mut self,
         key: &str,
         generation: (Option<i64>, Option<u64>),
-    ) -> Option<Arc<ArchiveIndex>> {
+    ) -> Option<CachedContainer> {
         let hit = self.map.get(key)?;
         // mtime desconocido = SIEMPRE stale (ADR 0018): sin validador no
         // hay caché que valga.
-        if hit.generation != generation || generation.0.is_none() {
+        if hit.index.generation != generation || generation.0.is_none() {
             self.map.remove(key);
             self.order.retain(|k| k != key);
             return None;
         }
-        let hit = Arc::clone(hit);
+        let hit = hit.clone();
         self.touch(key);
         Some(hit)
     }
 
-    fn put(&mut self, key: &str, index: Arc<ArchiveIndex>) {
+    fn put(&mut self, key: &str, container: CachedContainer) {
         if self.map.len() >= CACHE_CAP
             && !self.map.contains_key(key)
             && let Some(evict) = self.order.first().cloned()
@@ -82,7 +99,7 @@ impl IndexCache {
             self.map.remove(&evict);
             self.order.retain(|k| k != &evict);
         }
-        self.map.insert(key.to_owned(), index);
+        self.map.insert(key.to_owned(), container);
         self.touch(key);
     }
 }
@@ -163,7 +180,7 @@ impl ArchiveProvider {
     }
 
     /// El índice del contenedor, de caché o reconstruido (`spawn_blocking`).
-    async fn index_for(&self, aref: &ArchiveRef) -> Result<Arc<ArchiveIndex>, Error> {
+    async fn index_for(&self, aref: &ArchiveRef) -> Result<CachedContainer, Error> {
         let outer = self.outer_stat(aref).await?;
         let generation = (outer.mtime_ms, outer.size);
         let key = aref.outer.to_wire();
@@ -207,14 +224,16 @@ impl ArchiveProvider {
         let joined = tokio::task::spawn_blocking(move || match format {
             Format::Tar => {
                 crate::tar_format::build_index(reader, container_len, generation, &limits, &cancel)
+                    .map(|idx| (idx, None))
             }
             Format::Zip => {
                 crate::zip_format::build_index(reader, container_len, generation, &limits, &cancel)
+                    .map(|(idx, archive)| (idx, Some(archive)))
             }
         })
         .await;
         guard.disarm();
-        let index = match joined
+        let (index, zip) = match joined
             .map_err(|e| {
                 if e.is_panic() {
                     Error::Internal { panic: true }
@@ -225,25 +244,28 @@ impl ArchiveProvider {
             })
             .and_then(|r| r)
         {
-            Ok(i) => i,
+            Ok(v) => v,
             Err(e) => {
                 drop(build_guard);
                 self.prune_building(&key, &build_lock);
                 return Err(e);
             }
         };
-        let index = Arc::new(index);
+        let container = CachedContainer {
+            index: Arc::new(index),
+            zip,
+        };
         // Sin mtime no hay validador: get() lo daría siempre por stale —
         // no gastes un slot LRU en un índice inrecuperable.
         if generation.0.is_some() {
             self.cache
                 .lock()
                 .expect("cache lock sano")
-                .put(&key, Arc::clone(&index));
+                .put(&key, container.clone());
         }
         drop(build_guard);
         self.prune_building(&key, &build_lock);
-        Ok(index)
+        Ok(container)
     }
 
     /// Poda la entrada de `building` si nadie más la retiene (2 = el map + el
@@ -303,8 +325,8 @@ impl Provider for ArchiveProvider {
 
     async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
         let aref = self.split(p)?;
-        let index = self.index_for(&aref).await?;
-        index.entry_for(p, &Self::inner_key(&aref))
+        let cached = self.index_for(&aref).await?;
+        cached.index.entry_for(p, &Self::inner_key(&aref))
     }
 
     /// Listado de un dir del árbol virtual.
@@ -322,7 +344,8 @@ impl Provider for ArchiveProvider {
     /// Info-ZIP 0x7075 válido SUSTITUYE el nombre del header (H3).
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
         let aref = self.split(p)?;
-        let index = self.index_for(&aref).await?;
+        let cached = self.index_for(&aref).await?;
+        let index = &cached.index;
         let key = Self::inner_key(&aref);
         if !key.is_empty() {
             match index.nodes.get(&key) {
@@ -349,7 +372,8 @@ impl Provider for ArchiveProvider {
 
     async fn read(&self, p: &VPath, range: Option<ByteRange>) -> Result<ByteStream, Error> {
         let aref = self.split(p)?;
-        let index = self.index_for(&aref).await?;
+        let cached = self.index_for(&aref).await?;
+        let index = &cached.index;
         let key = Self::inner_key(&aref);
         if key.is_empty() {
             return Err(Error::Conflict {
@@ -395,20 +419,30 @@ impl Provider for ArchiveProvider {
             Locator::Zip { index: entry_index } => {
                 // Descompresión en hilo blocking → canal acotado → stream.
                 // Drop del stream = el send falla = el hilo termina (regla 3).
+                let cached_zip = cached.zip.clone();
                 let reader = ProviderReader::new(
                     tokio::runtime::Handle::current(),
                     Arc::clone(&self.inner),
                     aref.outer.clone(),
                     // El tamaño de la MISMA generación que el índice: vista
                     // coherente aunque el contenedor cambie por debajo.
-                    index.generation.1.unwrap_or(0),
+                    cached.index.generation.1.unwrap_or(0),
                 );
                 let (tx, mut rx) = tokio::sync::mpsc::channel(4);
                 // El JoinHandle se suelta a propósito: la vida del hilo la
                 // gobierna el canal, no el caller (huérfano acotado a 4
                 // chunks de 64 KiB tras el drop).
                 drop(tokio::task::spawn_blocking(move || {
-                    crate::zip_format::read_entry(reader, entry_index, req_off, req_len, &tx);
+                    let archive = match cached_zip {
+                        // CD ya parseado (#61): clon barato (Arc interno),
+                        // cero re-parse del central directory.
+                        Some(a) => a,
+                        None => match crate::zip_format::open_archive(reader, &tx) {
+                            Some(a) => a,
+                            None => return,
+                        },
+                    };
+                    crate::zip_format::read_entry(archive, entry_index, req_off, req_len, &tx);
                 }));
                 Ok(futures::stream::poll_fn(move |cx| rx.poll_recv(cx)).boxed())
             }
@@ -417,7 +451,8 @@ impl Provider for ArchiveProvider {
 
     async fn read_link(&self, p: &VPath) -> Result<Vec<u8>, Error> {
         let aref = self.split(p)?;
-        let index = self.index_for(&aref).await?;
+        let cached = self.index_for(&aref).await?;
+        let index = &cached.index;
         let key = Self::inner_key(&aref);
         if key.is_empty() {
             return Err(Error::Conflict {
