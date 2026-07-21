@@ -550,6 +550,7 @@ impl Provider for MemProvider {
         range: Option<norte_proto::ByteRange>,
     ) -> Result<ByteStream, Error> {
         self.faults.op_gate().await?;
+        self.faults.count_read();
         let key = seg_path(p);
         let lk = self.lookup();
         let tree = self.lock();
