@@ -19,6 +19,6 @@ mod pane;
 mod sort;
 pub mod viewer;
 
-pub use display::{display_name, path_display};
+pub use display::{display_name, display_name_with, path_display};
 pub use pane::PaneState;
 pub use sort::sort_entries;

@@ -9,6 +9,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Show names as… (#57):** `Alt+E` cycles a per-pane reinterpretation of
+  non-UTF-8 file names for display (cp437, cp866, Shift-JIS, GBK,
+  windows-1252), with a chardetng suggestion as the first step. Display only:
+  bytes never change, reinterpreted names keep their hostile badge, and the
+  status bar shows the active mode persistently. Valid UTF-8 names are never
+  reinterpreted.
+
 - **Omitted-entries badge for archives (#93, protocol 0.22.0):** listings of
   zip/tar/tar.gz containers now report how many entries the index omitted
   (hostile names, anti-bomb limits) through the new optional

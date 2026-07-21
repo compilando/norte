@@ -31,6 +31,7 @@ keymap = [
     { on = ["/"], run = "pane.quick-search" },
     { on = ["alt+down"], run = "pane.history" },
     { on = ["alt+f7"], run = "pane.search" },
+    { on = ["alt+e"], run = "pane.names-encoding" },
     { on = ["ctrl+d"], run = "pane.hotlist" },
 ]
 

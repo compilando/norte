@@ -149,6 +149,9 @@ cli-inline-password = la URL no debe llevar el password inline (user:pass@…); 
 cli-connection-degraded = ⚠ { $scheme }://{ $host }: sesión SIN cifrar (el servidor rechazó AUTH TLS, tls="allow"). Datos y credenciales viajan en claro.
 status-connection-degraded = ⚠ { $scheme }://{ $host } — texto plano
 status-archive-skipped = ⚠ { $n } entradas omitidas (nombres hostiles/límites)
+status-names-encoding = nombres: { $enc }
+msg-names-encoding = nombres mostrados como { $enc } (solo display; los bytes no cambian)
+msg-names-encoding-off = nombres tal cual (reinterpretación apagada)
 cli-ls-skipped = aviso: { $n } entradas del contenedor omitidas del índice (nombres hostiles/límites)
 
 # --- Ayuda (F1) — construida del keymap efectivo ---
@@ -206,6 +209,7 @@ help-cmd-viewer-page-down = bajar una página
 help-cmd-viewer-top = ir al principio
 help-cmd-viewer-bottom = ir al final
 help-cmd-viewer-encoding = recargar como… (siguiente encoding)
+help-cmd-pane-names-encoding = ver nombres como… (cp437/cp866/Shift-JIS/GBK/…; solo display)
 help-cmd-viewer-encoding-auto = volver a la detección automática
 help-cmd-viewer-hex = alternar vista hexadecimal
 help-cmd-pane-search = buscar por nombre/contenido (Alt+F7)

@@ -233,3 +233,60 @@ fn modal_de_aprobacion_enmascara_marca_y_no_oculta_el_destino() {
         "sesión delimitada: {contenido}"
     );
 }
+
+/// #57: con `pane.names-encoding` activo, un nombre cirílico en cp866 se
+/// PINTA legible (Папка), conserva su badge hostil (el texto difiere de los
+/// bytes) y la barra indica el modo de forma persistente. El ciclo:
+/// None → sugerido (IBM866 con estas muestras) → … → None.
+#[test]
+fn reinterpretar_nombres_pinta_legible_con_badge_e_indicador() {
+    let dir = vp("file:///x");
+    // "Папка" en cp866: no-UTF8 → lossy sin reinterpretar.
+    let entries = vec![Entry {
+        path: dir.join(Segment::new(b"\x8f\xa0\xaf\xaa\xa0".to_vec()).unwrap()),
+        kind: EntryKind::File,
+        size: Some(1),
+        mtime_ms: None,
+    }];
+    let mut app = App::new(Pane::new(dir.clone(), entries), Pane::new(dir, Vec::new()));
+
+    // Primer ciclo: la sugerencia de chardetng sobre el listado (IBM866).
+    let label = app.panes[0].cycle_name_encoding();
+    assert_eq!(label, Some("IBM866"), "sugerido por las muestras cp866");
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let contenido = terminal.backend().to_string();
+    assert!(
+        contenido.contains("Папка"),
+        "nombre reinterpretado legible: {contenido}"
+    );
+    assert!(
+        contenido.contains("! "),
+        "badge hostil conservado (el texto no son los bytes): {contenido}"
+    );
+    assert!(
+        contenido.contains("IBM866"),
+        "indicador persistente en la barra: {contenido}"
+    );
+
+    // M1 del review: el ciclo da la VUELTA COMPLETA — desde la sugerencia
+    // (IBM866) se visitan TODOS los demás encodings, cp437 incluido, y se
+    // apaga exactamente al regresar al punto de entrada.
+    let mut visitados = vec!["IBM866"];
+    while let Some(label) = app.panes[0].cycle_name_encoding() {
+        visitados.push(label);
+        assert!(visitados.len() <= 5, "el ciclo debe cerrarse en None");
+    }
+    assert_eq!(
+        visitados,
+        ["IBM866", "Shift_JIS", "GBK", "windows-1252", "cp437"],
+        "vuelta completa con wrap: cp437 alcanzable desde cualquier entrada"
+    );
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let apagado = terminal.backend().to_string();
+    assert!(
+        apagado.contains('\u{FFFD}'),
+        "apagado = lossy de siempre: {apagado}"
+    );
+}
