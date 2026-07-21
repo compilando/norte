@@ -165,7 +165,7 @@ impl PaneState {
     /// Un carácter tecleado con el quick search activo.
     pub fn quick_char(&mut self, c: char) {
         if let Some(q) = &mut self.quick {
-            q.push_char(c, &self.entries);
+            q.push_char(c);
             self.quick_sync_jump();
         }
     }
@@ -173,7 +173,7 @@ impl PaneState {
     /// Backspace con el quick search activo.
     pub fn quick_backspace(&mut self) {
         if let Some(q) = &mut self.quick {
-            q.backspace(&self.entries);
+            q.backspace();
             self.quick_sync_jump();
         }
     }
