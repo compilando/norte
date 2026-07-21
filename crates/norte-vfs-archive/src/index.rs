@@ -247,7 +247,11 @@ impl ArchiveIndex {
         // build entero se descarta al primer exceso.
         if self.nodes.len() > limits.max_entries {
             tracing::warn!(max = limits.max_entries, "índice supera max_entries");
-            return Err(Error::Corrupt);
+            // #95.3: límite LOCAL, no corrupción — el contenedor puede ser
+            // perfectamente válido; norte rehúsa pagarlo.
+            return Err(Error::LimitExceeded {
+                limit: "entries".into(),
+            });
         }
         Ok(())
     }
@@ -388,7 +392,9 @@ mod tests {
         i.insert_entry(b"dos", file_node(), &l).expect("ok");
         assert_eq!(
             i.insert_entry(b"tres", file_node(), &l).unwrap_err(),
-            Error::Corrupt
+            Error::LimitExceeded {
+                limit: "entries".into()
+            }
         );
     }
 

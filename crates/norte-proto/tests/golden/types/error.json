@@ -60,6 +60,10 @@
   "corrupt": {
     "kind": "corrupt"
   },
+  "limit_exceeded_entries": {
+    "kind": "limit_exceeded",
+    "limit": "entries"
+  },
   "loop": {
     "kind": "loop"
   },

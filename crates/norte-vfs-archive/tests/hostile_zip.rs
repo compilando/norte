@@ -129,9 +129,14 @@ async fn eocd_mentiroso_corta_sin_pagar_el_indice() {
         ..Limits::default()
     };
     let (p, root) = common::zip_provider_with_limits(&zip, limits).await;
+    // #95.3: el corte por anuncio del EOCD es LimitExceeded, no Corrupt — en
+    // este punto no se sabe si el EOCD miente o el zip es legítimo y enorme
+    // (y precisamente se rehúsa a pagar el índice para averiguarlo).
     match p.list(&root).await.map(|_| ()) {
-        Err(Error::Corrupt) => {}
-        other => panic!("esperaba Corrupt por EOCD mentiroso, fue {other:?}"),
+        Err(Error::LimitExceeded { limit }) if limit == "entries" => {}
+        other => {
+            panic!("esperaba LimitExceeded(entries) por EOCD anunciando de más, fue {other:?}")
+        }
     }
 }
 

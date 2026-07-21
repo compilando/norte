@@ -200,6 +200,12 @@ fn golden_error() {
             ("loop", Error::Loop),
             ("corrupt", Error::Corrupt),
             (
+                "limit_exceeded_entries",
+                Error::LimitExceeded {
+                    limit: "entries".into(),
+                },
+            ),
+            (
                 "conflict_exists",
                 Error::Conflict {
                     conflict: ConflictKind::Exists,
@@ -1133,7 +1139,9 @@ fn method_names_frozen() {
     assert!(norte_proto::ARCHIVE_FORMATS.contains(&"tar+gz"));
     // 0.22.0 (#93): campo opcional `skipped` en FsListResult. No añade
     // método/notificación — el bump señala el metadato aditivo del listado.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.22.0");
+    // 0.23.0 (#95): variante Error::LimitExceeded{limit} (vocab cerrado
+    // entries/decompressed-bytes/cd-bytes) — límite local ≠ Corrupt.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.23.0");
 }
 
 #[test]

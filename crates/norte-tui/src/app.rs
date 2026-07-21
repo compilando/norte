@@ -1175,6 +1175,9 @@ pub fn error_key(e: &Error) -> &'static str {
         Error::Internal { .. } => "err-internal",
         Error::Loop => "err-loop",
         Error::Corrupt => "err-corrupt",
+        // #95.3: límite local ≠ corrupción. El sub-vocabulario (`entries`/
+        // `decompressed-bytes`) es diagnóstico, no UX: una sola clave.
+        Error::LimitExceeded { .. } => "err-limit-exceeded",
         Error::HostKeyUnknown { .. } => "err-host-key-unknown",
         Error::HostKeyMismatch { .. } => "err-host-key-mismatch",
         Error::CursorExpired => "err-cursor-expired",

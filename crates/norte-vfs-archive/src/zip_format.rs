@@ -99,7 +99,12 @@ pub(crate) fn build_index<R: Read + Seek>(
         && claimed > limits.max_entries as u64
     {
         tracing::warn!(claimed, max = limits.max_entries, "EOCD supera max_entries");
-        return Err(Error::Corrupt);
+        // #95.3: puede ser un EOCD mentiroso O un zip legítimo enorme — no
+        // se sabe sin pagar el índice, y precisamente se rehúsa a pagarlo:
+        // límite local, no un veredicto de corrupción.
+        return Err(Error::LimitExceeded {
+            limit: "entries".into(),
+        });
     }
     let mut archive = zip::ZipArchive::new(reader).map_err(|e| corrupt(&e))?;
     if archive.len() > limits.max_entries {
@@ -109,7 +114,9 @@ pub(crate) fn build_index<R: Read + Seek>(
             max = limits.max_entries,
             "zip supera max_entries"
         );
-        return Err(Error::Corrupt);
+        return Err(Error::LimitExceeded {
+            limit: "entries".into(),
+        });
     }
     let mut index = ArchiveIndex::new(generation);
     // Mitigación H1 (auditoría 8e): zip 5.x indexa el central directory por

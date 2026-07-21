@@ -135,7 +135,9 @@ pub(crate) fn build_index<R: Read + Seek>(
                 max = limits.max_entries,
                 "tar supera el presupuesto de omitidas"
             );
-            return Err(Error::Corrupt);
+            return Err(Error::LimitExceeded {
+                limit: "entries".into(),
+            });
         }
     }
     if index.skipped > 0 {

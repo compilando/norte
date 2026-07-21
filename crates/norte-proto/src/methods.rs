@@ -98,7 +98,13 @@ use crate::{
 /// providers archive). Aditivo sobre 0.21.x: ausente cuando no aplica (un
 /// cliente N-1 lo ignora como campo desconocido; sin él degrada a lo de
 /// antes, el contador solo vivía en logs).
-pub const PROTOCOL_VERSION: &str = "0.22.0";
+///
+/// 0.23.0 (#95): variante [`Error::LimitExceeded`](crate::Error::LimitExceeded)
+/// `{limit}` — exceder un tope anti-bomba LOCAL deja de disfrazarse de
+/// `Corrupt` (mentira para un contenedor legítimo enorme). Aditiva sobre
+/// 0.22.x: un cliente N-1 la degrada a `Error::Unknown` (error genérico,
+/// misma UX gruesa que antes).
+pub const PROTOCOL_VERSION: &str = "0.23.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver

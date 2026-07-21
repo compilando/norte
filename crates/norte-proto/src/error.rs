@@ -135,16 +135,31 @@ pub enum Error {
     /// de la spec §17.9; issue #31). Un cliente N-1 degrada a `Unknown`.
     #[error("symlink loop")]
     Loop,
-    /// Contenedor/formato ROTO o fuera de los límites estructurales (0.17.0,
-    /// #58): un zip/tar corrupto o truncado, o uno que excede los topes
-    /// anti-bomba del índice (ADR 0018 D2) — en este último caso el
-    /// contenedor puede ser VÁLIDO: norte rehúsa indexarlo por límites
-    /// locales. No es un fallo de I/O (reintentar no ayuda; un fallo del
-    /// provider subyacente se propaga con su propia categoría, jamás como
-    /// `Corrupt`); la UX honesta es «no es un contenedor válido». Un cliente
-    /// N-1 degrada a `Unknown`.
+    /// Contenedor/formato ROTO (0.17.0, #58): un zip/tar corrupto, truncado
+    /// o estructuralmente mentiroso. No es un fallo de I/O (reintentar no
+    /// ayuda; un fallo del provider subyacente se propaga con su propia
+    /// categoría, jamás como `Corrupt`); la UX honesta es «no es un
+    /// contenedor válido». Desde 0.23.0 (#95) exceder los topes anti-bomba
+    /// LOCALES ya no es `Corrupt`: es [`Error::LimitExceeded`] — el
+    /// contenedor puede ser perfectamente válido. Un cliente N-1 degrada a
+    /// `Unknown`.
     #[error("corrupt or invalid container/format")]
     Corrupt,
+    /// El contenedor excede un LÍMITE LOCAL anti-bomba del índice (0.23.0,
+    /// #95, ADR 0018 D2). Distinto de [`Error::Corrupt`]: el contenedor
+    /// puede ser VÁLIDO (un tar.gz legítimo enorme) — norte REHÚSA pagar su
+    /// coste con los límites vigentes, no lo declara roto. Un cliente N-1
+    /// degrada a `Unknown` (misma UX gruesa que el `Corrupt` de antes).
+    #[error("container exceeds local limit: {limit}")]
+    LimitExceeded {
+        /// QUÉ límite se excedió — vocabulario CERRADO, comparable por
+        /// igualdad (nunca el valor numérico, que es configuración local):
+        /// `"entries"` (entradas del índice — o anunciadas por el EOCD — por
+        /// encima de `max_entries`, presupuesto de omitidas incluido),
+        /// `"decompressed-bytes"` (inflado acumulado por encima de
+        /// `max_decompressed_bytes`).
+        limit: String,
+    },
     /// Host key SSH DESCONOCIDA en el primer contacto (TOFU — ADR 0015 D). El
     /// frontend muestra el `fingerprint` y, si el usuario confía, llama a
     /// `connection.trust_host_key` y reintenta. Un cliente N-1 degrada a

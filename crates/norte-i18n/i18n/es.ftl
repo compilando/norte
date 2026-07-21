@@ -49,6 +49,7 @@ err-invalid-path = ruta inválida
 err-internal = error interno
 err-loop = ciclo de symlinks
 err-corrupt = no es un archivo/contenedor válido
+err-limit-exceeded = el contenedor excede los límites locales de seguridad (no se abre)
 err-host-key-unknown = host key desconocida (primer contacto)
 err-host-key-mismatch = host key NO COINCIDE — posible MITM
 err-cursor-expired = el listado expiró; refresca
