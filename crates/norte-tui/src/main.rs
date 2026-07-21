@@ -2649,6 +2649,30 @@ mod archive_nav_tests {
             "zip+file"
         );
     }
+
+    /// Candado de encoding (#55, review): `ends_ci` es de BYTES y el compose
+    /// no pasa por String — un nombre NO-UTF8 terminado en `.tgz` compone
+    /// bien y sus bytes crudos sobreviven el wire (regla 1). Si alguien
+    /// "simplifica" mañana con `to_str()`/lossy, esto se pone rojo.
+    #[test]
+    fn archive_root_for_targz_nombre_no_utf8() {
+        for wire in [
+            "file:///d/%FF%FE.tgz",
+            "file:///d/a%F1o.TGZ",
+            "file:///d/%FF.tar.gz",
+        ] {
+            let root = archive_root_for(&entry(wire, EntryKind::File))
+                .unwrap_or_else(|| panic!("{wire} debería ser navegable"));
+            assert_eq!(root.scheme(), "tar+gz+file", "wire={wire}");
+        }
+        assert_eq!(
+            archive_root_for(&entry("file:///d/%FF%FE.tgz", EntryKind::File))
+                .expect("no-UTF8 navegable")
+                .to_wire(),
+            "tar+gz+file:///d/%FF%FE.tgz/!",
+            "los bytes crudos sobreviven el compose"
+        );
+    }
 }
 
 #[cfg(test)]
