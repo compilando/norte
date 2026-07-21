@@ -356,7 +356,7 @@ fn golden_methods() {
     check_methods_session(&fixtures);
     check_methods_plugin(&fixtures);
     check_methods_rpc(&fixtures);
-    assert_eq!(fixtures.len(), 63, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 64, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia de la CAPA RPC (0.19.0, #72): `rpc.cancel`.
@@ -641,7 +641,9 @@ fn check_methods_policy(fixtures: &BTreeMap<String, Value>) {
 
 /// Familia connection.* (0.7.0, fase 6): `trust_host_key` del flujo TOFU.
 fn check_methods_connection(fixtures: &BTreeMap<String, Value>) {
-    use norte_proto::methods::{ConnectionTrustHostKeyParams, ConnectionTrustHostKeyResult};
+    use norte_proto::methods::{
+        ConnectionDegraded, ConnectionTrustHostKeyParams, ConnectionTrustHostKeyResult,
+    };
     check_one(
         fixtures,
         "connection_trust_host_key_params",
@@ -667,6 +669,16 @@ fn check_methods_connection(fixtures: &BTreeMap<String, Value>) {
         fixtures,
         "connection_trust_host_key_result",
         &ConnectionTrustHostKeyResult { trusted: true },
+    );
+    check_one(
+        fixtures,
+        "connection_degraded",
+        &ConnectionDegraded {
+            scheme: "ftp".into(),
+            host: "backup.example".into(),
+            reason: "tls-auth-rejected".into(),
+            detail: None,
+        },
     );
 }
 
@@ -1102,7 +1114,9 @@ fn method_names_frozen() {
     assert_eq!(methods::SEARCH_HITS_MAX_BATCH, 256);
     // 0.19.0 (#72): rpc.cancel { id }. Aditivo sobre 0.18.x.
     assert_eq!(methods::RPC_CANCEL, "rpc.cancel");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.19.0");
+    // 0.20.0 (#44): connection.degraded (server→client). Aditivo sobre 0.19.x.
+    assert_eq!(methods::CONNECTION_DEGRADED, "connection.degraded");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.20.0");
 }
 
 #[test]

@@ -692,14 +692,36 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.19.0 (#72 rpc.cancel): acepta 0.19.x (N) y 0.18.x (N-1), rechaza
-    // 0.17.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.19.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.18.0"), "N-1");
+    // 0.20.0 (#44 connection.degraded): acepta 0.20.x (N) y 0.19.x (N-1),
+    // rechaza 0.18.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.20.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.19.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.17.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.18.9"),
         "N-2 fuera de la ventana"
     );
+}
+
+#[test]
+fn connection_degraded_round_trip_y_detail_omitido() {
+    use norte_proto::methods::ConnectionDegraded;
+    let sin = ConnectionDegraded {
+        scheme: "ftp".into(),
+        host: "h".into(),
+        reason: "tls-auth-rejected".into(),
+        detail: None,
+    };
+    assert_eq!(
+        serde_json::to_value(&sin).unwrap(),
+        serde_json::json!({"scheme":"ftp","host":"h","reason":"tls-auth-rejected"}),
+    );
+    let con = ConnectionDegraded {
+        detail: Some("server rejected AUTH TLS".into()),
+        ..sin.clone()
+    };
+    let back: ConnectionDegraded =
+        serde_json::from_value(serde_json::to_value(&con).unwrap()).unwrap();
+    assert_eq!(back, con);
 }
 
 #[test]

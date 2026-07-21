@@ -417,6 +417,9 @@ pub struct App {
     /// YA saneada por el host (`detail_for_bar`). `Some` sustituye la línea
     /// default de la barra del pane con foco; `None` = barra normal.
     pub lua_status: Option<String>,
+    /// #44: sesión remota degradada a texto plano; indicador PERSISTENTE en la
+    /// status bar (a diferencia de `message`, que es transitorio).
+    pub connection_warning: Option<String>,
     /// Historial de directorios por pane (spec 2026-07-18, `Alt+↓`): mismo
     /// índice que `panes`. Vive en `App` y no en `Pane` (el historial no es
     /// estado de render): cada cd EXITOSO empuja el dir anterior (main.rs).
@@ -662,6 +665,7 @@ impl App {
             extensions: None,
             lua_pending_trust: None,
             lua_status: None,
+            connection_warning: None,
             history: [
                 crate::nav::History::default(),
                 crate::nav::History::default(),

@@ -847,6 +847,11 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         }
     } else if let Some(lua) = &app.lua_status {
         format!(" {lua}{seq}")
+    } else if let Some(warn) = &app.connection_warning {
+        // #44: sesión remota degradada a texto plano. PERSISTENTE (como
+        // `search-status-failed`): sobrevive a las teclas — sin `message`, sin
+        // búsqueda viva y sin hook Lua sigue avisando en cada frame.
+        format!(" {warn}{seq}")
     } else {
         format!(" {marca}{dir_texto}{pos_total}{seq}")
     };

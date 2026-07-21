@@ -53,6 +53,9 @@ pub struct Engine {
     /// Establece providers remotos bajo demanda (fase 6e, ADR 0015). Sin
     /// conector, un scheme sin provider registrado es `Unsupported` (M0/M1).
     connector: RwLock<Option<Arc<dyn crate::connect::RemoteConnector>>>,
+    /// Observa los avisos de conexión (#44: degradación TLS). Sin observer, los
+    /// avisos se dropean (el `tracing::warn!` del connector persiste en el log).
+    connection_observer: RwLock<Option<Arc<dyn crate::connect::ConnectionObserver>>>,
     sched: Scheduler,
     observer: Arc<dyn MutationObserver>,
     /// Fuente de LECTURA del journal para el undo (M3-2). `None` = sin journal
@@ -82,6 +85,7 @@ impl Engine {
         Self {
             providers: RwLock::new(HashMap::new()),
             connector: RwLock::new(None),
+            connection_observer: RwLock::new(None),
             sched: Scheduler::new(4),
             observer,
             journal: None,
@@ -97,6 +101,7 @@ impl Engine {
         Self {
             providers: RwLock::new(HashMap::new()),
             connector: RwLock::new(None),
+            connection_observer: RwLock::new(None),
             sched: Scheduler::new(4),
             observer: Arc::clone(&journal) as Arc<dyn MutationObserver>,
             journal: Some(journal),
@@ -176,6 +181,19 @@ impl Engine {
     /// Nunca en la práctica: solo por envenenamiento del lock interno.
     pub fn set_connector(&self, connector: Arc<dyn crate::connect::RemoteConnector>) {
         *self.connector.write().expect("connector lock sano") = Some(connector);
+    }
+
+    /// Instala el observer de avisos de conexión (#44): el engine le entrega
+    /// cada `ConnectionWarning` de un establecimiento remoto. Sin observer, los
+    /// avisos se dropean (el `tracing::warn!` del connector sigue en el log).
+    ///
+    /// # Panics
+    /// Nunca en la práctica: solo por envenenamiento del lock interno.
+    pub fn set_connection_observer(&self, observer: Arc<dyn crate::connect::ConnectionObserver>) {
+        *self
+            .connection_observer
+            .write()
+            .expect("connection_observer lock sano") = Some(observer);
     }
 
     /// Registra la host key de `host:port` tras confirmación explícita del
@@ -266,7 +284,7 @@ impl Engine {
         // un host que acepta TCP y calla colgaría la operación para siempre
         // (regla 3). La cancelación fina llegará al mover el connect dentro
         // de la Task (issue #47).
-        let provider = tokio::time::timeout(
+        let connected = tokio::time::timeout(
             CONNECT_TIMEOUT,
             connector.connect(p.scheme(), authority),
         )
@@ -275,6 +293,21 @@ impl Engine {
             tracing::warn!(scheme = %p.scheme(), "timeout estableciendo la conexión remota");
             Error::ProviderUnavailable { retryable: true }
         })??;
+        // #44: emite los avisos (una vez por establecimiento; un connect
+        // duplicado por carrera —#47— re-avisa, aceptable). Sin observer, se
+        // dropean (el warn! del connector persiste en el log).
+        if !connected.warnings.is_empty()
+            && let Some(obs) = self
+                .connection_observer
+                .read()
+                .expect("connection_observer lock sano")
+                .clone()
+        {
+            for w in &connected.warnings {
+                obs.on_connection_warning(w);
+            }
+        }
+        let provider = connected.provider;
         // Double-check bajo el write lock: si otra petición concurrente
         // registró primero, se conserva LA SUYA (una clave = una sesión) y la
         // recién creada se suelta — su Drop cierra la sesión de más (deuda de

@@ -16,7 +16,7 @@ mod spec;
 mod ssh;
 
 pub use error::ConnectError;
-pub use ftp::FtpConnector;
+pub use ftp::{FtpConnectOutcome, FtpConnector};
 pub use known_hosts::KnownHostsStore;
 pub use s3::S3Connector;
 // Re-exports: los tipos que `SftpProvider::new`/`FtpProvider::new`/

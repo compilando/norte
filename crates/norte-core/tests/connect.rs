@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use norte_core::Engine;
-use norte_core::connect::RemoteConnector;
+use norte_core::connect::{
+    Connected, ConnectionObserver, ConnectionWarning, ConnectionWarningReason, RemoteConnector,
+};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_testkit::MemProvider;
 use norte_vfs::Provider;
@@ -67,6 +69,8 @@ struct FakeConnector {
     trusts: AtomicUsize,
     /// `true` = el primer connect devuelve `HostKeyUnknown` hasta trust.
     tofu: std::sync::Mutex<bool>,
+    /// Avisos que el connect devuelve al establecer (#44: default vacío).
+    warn_on_connect: Vec<ConnectionWarning>,
 }
 
 impl FakeConnector {
@@ -75,13 +79,22 @@ impl FakeConnector {
             connects: AtomicUsize::new(0),
             trusts: AtomicUsize::new(0),
             tofu: std::sync::Mutex::new(tofu),
+            warn_on_connect: Vec::new(),
+        }
+    }
+
+    /// Como [`Self::new`] pero cada connect devuelve estos avisos (#44).
+    fn with_warnings(warnings: Vec<ConnectionWarning>) -> Self {
+        Self {
+            warn_on_connect: warnings,
+            ..Self::new(false)
         }
     }
 }
 
 #[async_trait]
 impl RemoteConnector for FakeConnector {
-    async fn connect(&self, scheme: &str, authority: &str) -> Result<Arc<dyn Provider>, Error> {
+    async fn connect(&self, scheme: &str, authority: &str) -> Result<Connected, Error> {
         self.connects.fetch_add(1, Ordering::SeqCst);
         assert_eq!(scheme, "sftp");
         if *self.tofu.lock().unwrap() {
@@ -92,7 +105,10 @@ impl RemoteConnector for FakeConnector {
                 fingerprint: "SHA256:xyz".into(),
             });
         }
-        Ok(Arc::new(EcoProvider))
+        Ok(Connected {
+            provider: Arc::new(EcoProvider),
+            warnings: self.warn_on_connect.clone(),
+        })
     }
 
     async fn trust_host_key(
@@ -191,7 +207,7 @@ struct HangingConnector;
 
 #[async_trait]
 impl RemoteConnector for HangingConnector {
-    async fn connect(&self, _s: &str, _a: &str) -> Result<Arc<dyn Provider>, Error> {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
         std::future::pending().await
     }
     async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
@@ -241,4 +257,65 @@ async fn trust_sin_conector_es_unsupported() {
         .await
         .unwrap_err();
     assert!(matches!(err, Error::Unsupported), "fue {err:?}");
+}
+
+/// Observer de avisos de conexión que acumula lo recibido (#44).
+struct RecordingObserver {
+    seen: Arc<std::sync::Mutex<Vec<ConnectionWarning>>>,
+}
+
+impl ConnectionObserver for RecordingObserver {
+    fn on_connection_warning(&self, warning: &ConnectionWarning) {
+        self.seen
+            .lock()
+            .expect("lock de test")
+            .push(warning.clone());
+    }
+}
+
+/// #44: un connect que degrada TLS entrega el aviso al observer instalado,
+/// EXACTAMENTE una vez por establecimiento (el provider se cachea después).
+#[tokio::test]
+async fn observer_recibe_el_aviso_de_degradacion() {
+    let engine = Engine::new();
+    let warning = ConnectionWarning {
+        scheme: "sftp".into(),
+        host: "a.example".into(),
+        reason: ConnectionWarningReason::TlsAuthRejected,
+    };
+    let conn = Arc::new(FakeConnector::with_warnings(vec![warning.clone()]));
+    engine.set_connector(conn.clone());
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    engine.set_connection_observer(Arc::new(RecordingObserver { seen: seen.clone() }));
+
+    // Primer acceso: establece la conexión y emite el aviso.
+    engine
+        .stat(&vp("sftp://a.example/x"))
+        .await
+        .expect("stat 1");
+    // Segundo acceso al mismo host: cacheado, NO re-establece → no re-avisa.
+    engine
+        .stat(&vp("sftp://a.example/y"))
+        .await
+        .expect("stat 2");
+
+    let got = seen.lock().expect("lock de test");
+    assert_eq!(*got, vec![warning], "exactamente un aviso, una vez");
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 1, "cacheado");
+}
+
+/// #44: un connect SIN avisos jamás llama al observer.
+#[tokio::test]
+async fn observer_no_se_llama_sin_avisos() {
+    let engine = Engine::new();
+    let conn = Arc::new(FakeConnector::new(false));
+    engine.set_connector(conn.clone());
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    engine.set_connection_observer(Arc::new(RecordingObserver { seen: seen.clone() }));
+
+    engine.stat(&vp("sftp://a.example/x")).await.expect("stat");
+    assert!(
+        seen.lock().expect("lock de test").is_empty(),
+        "sin degradación no hay aviso"
+    );
 }

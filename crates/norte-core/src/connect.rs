@@ -28,12 +28,13 @@ use norte_vfs_sftp::SftpProvider;
 /// [`ConnectionManager`].
 #[async_trait]
 pub trait RemoteConnector: Send + Sync {
-    /// Conecta y construye el provider para `scheme://authority`.
+    /// Conecta y construye el provider para `scheme://authority`, junto a los
+    /// avisos de seguridad emitidos al establecerlo (#44: degradación TLS).
     ///
     /// # Errors
     /// [`Error::HostKeyUnknown`]/[`Error::HostKeyMismatch`] (flujo TOFU, ADR
     /// 0015 D) o la categoría a la que degrade el fallo de conexión.
-    async fn connect(&self, scheme: &str, authority: &str) -> Result<Arc<dyn Provider>, Error>;
+    async fn connect(&self, scheme: &str, authority: &str) -> Result<Connected, Error>;
 
     /// Registra la host key de `host:port` tras la confirmación EXPLÍCITA del
     /// usuario (método `connection.trust_host_key`); re-verifica el
@@ -47,6 +48,52 @@ pub trait RemoteConnector: Send + Sync {
         port: Option<u16>,
         fingerprint: &str,
     ) -> Result<(), Error>;
+}
+
+/// Causa de una degradación de seguridad al conectar (#44). Vocabulario CERRADO:
+/// su `wire()` es el `reason` de [`norte_proto::methods::ConnectionDegraded`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionWarningReason {
+    /// FTP `tls="allow"`: el servidor rechazó `AUTH TLS` → sesión en claro.
+    TlsAuthRejected,
+}
+
+impl ConnectionWarningReason {
+    /// El string de wire (cerrado y contractual; ver `ConnectionDegraded.reason`).
+    #[must_use]
+    pub fn wire(self) -> &'static str {
+        match self {
+            ConnectionWarningReason::TlsAuthRejected => "tls-auth-rejected",
+        }
+    }
+}
+
+/// Un aviso de seguridad producido al establecer una sesión remota (#44). El
+/// `host` va SIN userinfo (regla 10) por construcción — es el `Endpoint.host`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionWarning {
+    /// Scheme de la sesión (p. ej. `"ftp"`).
+    pub scheme: String,
+    /// Host, sin userinfo.
+    pub host: String,
+    /// Causa.
+    pub reason: ConnectionWarningReason,
+}
+
+/// La sesión establecida + los avisos de seguridad emitidos al establecerla.
+pub struct Connected {
+    /// El provider vivo.
+    pub provider: Arc<dyn Provider>,
+    /// Avisos (p. ej. degradación TLS); vacío en el caso normal.
+    pub warnings: Vec<ConnectionWarning>,
+}
+
+/// Observa los avisos de conexión (#44): el daemon lo implementa para difundir
+/// `connection.degraded`; la CLI embebida para imprimir por stderr. Inyectado en
+/// el [`Engine`](crate::Engine) con `set_connection_observer`.
+pub trait ConnectionObserver: Send + Sync {
+    /// Un aviso ocurrió al establecer una sesión. Best-effort, no bloqueante.
+    fn on_connection_warning(&self, warning: &ConnectionWarning);
 }
 
 // Clave de anclaje del journal (M3-5, ADR 0025): vive en norte-connect (el
@@ -125,16 +172,13 @@ impl ConnectionManager {
     ///
     /// # Errors
     /// `Error::NotFound` si el nombre no existe; los de la conexión.
-    pub async fn connect_named(
-        &self,
-        name: &str,
-    ) -> Result<(String, String, Arc<dyn Provider>), Error> {
+    pub async fn connect_named(&self, name: &str) -> Result<(String, String, Connected), Error> {
         let file = self.load_connections().await?;
         let spec = file.connections.get(name).ok_or(Error::NotFound)?.clone();
         let ep = spec.endpoint().map_err(log_and_map)?;
         let authority = authority_of(&ep);
-        let provider = self.establish(&spec, Some(name)).await?;
-        Ok((ep.scheme, authority, provider))
+        let connected = self.establish(&spec, Some(name)).await?;
+        Ok((ep.scheme, authority, connected))
     }
 
     /// Carga `connections.toml` (I/O síncrona → `spawn_blocking`, regla 2).
@@ -153,8 +197,9 @@ impl ConnectionManager {
         &self,
         spec: &ConnectionSpec,
         name: Option<&str>,
-    ) -> Result<Arc<dyn Provider>, Error> {
+    ) -> Result<Connected, Error> {
         let ep = spec.endpoint().map_err(log_and_map)?;
+        let mut warnings: Vec<ConnectionWarning> = Vec::new();
         // El secreto solo se resuelve si el método de auth lo puede usar
         // (password/access-key siempre; key para la passphrase). Agent no
         // lleva secreto (en s3, agent = cadena ambiente de opendal).
@@ -174,9 +219,12 @@ impl ConnectionManager {
                     .await
                     .map_err(log_and_map)?;
                 // Base "/": los segmentos del VPath son absolutos del server.
-                Ok(Arc::new(
-                    SftpProvider::new(session, "/").with_logical_trash(spec.logical_trash),
-                ))
+                Ok(Connected {
+                    provider: Arc::new(
+                        SftpProvider::new(session, "/").with_logical_trash(spec.logical_trash),
+                    ),
+                    warnings,
+                })
             }
             "ftp" => {
                 // DOS conexiones: control principal + lectura dedicada — la
@@ -191,8 +239,23 @@ impl ConnectionManager {
                     .connect(spec, secret.as_ref())
                     .await
                     .map_err(log_and_map)?;
-                let provider = FtpProvider::with_reader(main, reader, "/").await?;
-                Ok(Arc::new(provider))
+                // #44: si el control principal cayó a claro (tls="allow" +
+                // AUTH TLS rechazado), se surfacea la degradación al usuario.
+                // Basta `main`: ambas conexiones comparten el MISMO `spec`, así
+                // que degradan juntas o ninguna — mirar `reader.tls_degraded`
+                // solo duplicaría el aviso (rust m2).
+                if main.tls_degraded {
+                    warnings.push(ConnectionWarning {
+                        scheme: ep.scheme.clone(),
+                        host: ep.host.clone(),
+                        reason: ConnectionWarningReason::TlsAuthRejected,
+                    });
+                }
+                let provider = FtpProvider::with_reader(main.stream, reader.stream, "/").await?;
+                Ok(Connected {
+                    provider: Arc::new(provider),
+                    warnings,
+                })
             }
             "s3" => {
                 // El S3Connector construye y SONDEA el Operator (fail-fast); el
@@ -202,9 +265,12 @@ impl ConnectionManager {
                     .connect(spec, secret.as_ref())
                     .await
                     .map_err(log_and_map)?;
-                Ok(Arc::new(
-                    ObjectProvider::new(op, "s3").with_logical_trash(spec.logical_trash),
-                ))
+                Ok(Connected {
+                    provider: Arc::new(
+                        ObjectProvider::new(op, "s3").with_logical_trash(spec.logical_trash),
+                    ),
+                    warnings,
+                })
             }
             _ => Err(Error::Unsupported),
         }
@@ -217,7 +283,7 @@ impl RemoteConnector for ConnectionManager {
     // que el VPath haya aceptado se rechaza al parsear la conexión, pero el
     // span se abriría ANTES (regla 10). Se loguea redactado tras el parse.
     #[tracing::instrument(level = "info", skip_all)]
-    async fn connect(&self, scheme: &str, authority: &str) -> Result<Arc<dyn Provider>, Error> {
+    async fn connect(&self, scheme: &str, authority: &str) -> Result<Connected, Error> {
         let url = format!("{scheme}://{authority}");
         let file = self.load_connections().await?;
         let (name, spec) = resolve_spec(&file, &url).map_err(log_and_map)?;

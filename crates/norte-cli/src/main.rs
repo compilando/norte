@@ -309,8 +309,15 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         norte_core::connect::config_dir(),
     )));
 
-    let backend = make_backend(engine, cli.daemon, cli.socket).await?;
-    match cli.cmd {
+    let mut backend = make_backend(engine, cli.daemon, cli.socket).await?;
+    // #44: toma el canal de avisos de degradación ANTES de correr el comando
+    // (en embebido esto INSTALA el observer, que dispara síncrono dentro del
+    // establecimiento; en remoto toma el receptor del pump del daemon). Se
+    // drena a stderr tras el comando — "nunca silencioso" (ADR 0015 F). En
+    // remoto es best-effort: el pump es concurrente y el aviso también queda
+    // en el `tracing::warn!` del daemon.
+    let mut degraded = backend.take_degraded();
+    let result = match cli.cmd {
         Cmd::Ls { path, json } => ls(&backend, &path, json).await,
         Cmd::Connect { target } => connect_cmd(&backend, &target, cli.daemon).await,
         Cmd::Cp {
@@ -378,6 +385,29 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         #[cfg(unix)]
         Cmd::Daemon { .. } | Cmd::Mcp { .. } | Cmd::Policy { .. } | Cmd::Undo { .. } => {
             unreachable!("manejado arriba")
+        }
+    };
+    report_degradations(&mut degraded);
+    result
+}
+
+/// Drena a stderr los avisos de degradación TLS acumulados (#44) — "nunca
+/// silencioso" (ADR 0015 F). Best-effort en modo daemon (el pump es concurrente
+/// y el aviso también queda en el `tracing::warn!` del daemon).
+fn report_degradations(
+    degraded: &mut Option<
+        tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionDegraded>,
+    >,
+) {
+    if let Some(rx) = degraded.as_mut() {
+        while let Ok(d) = rx.try_recv() {
+            eprintln!(
+                "{}",
+                norte_i18n::ta(
+                    "cli-connection-degraded",
+                    &[("scheme", d.scheme.as_str()), ("host", d.host.as_str())],
+                )
+            );
         }
     }
 }
@@ -800,6 +830,9 @@ async fn make_backend(
     socket: Option<PathBuf>,
 ) -> anyhow::Result<Backend> {
     if !daemon {
+        // #44: los avisos de degradación se drenan en el dispatch (top-level)
+        // vía `Backend::take_degraded`, que en embebido instala el observer del
+        // canal — misma vía que en modo daemon (rust M1 + security m1).
         return Ok(Backend::Embedded(Arc::new(engine)));
     }
     #[cfg(not(unix))]

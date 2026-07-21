@@ -1,4 +1,9 @@
 {
+  "connection_degraded": {
+    "host": "backup.example",
+    "reason": "tls-auth-rejected",
+    "scheme": "ftp"
+  },
   "connection_trust_host_key_params": {
     "algo": "ssh-ed25519",
     "fingerprint": "SHA256:abc123def456",

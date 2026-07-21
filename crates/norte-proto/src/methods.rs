@@ -84,7 +84,11 @@ use crate::{
 /// 0.19.0 (#72): notificación `rpc.cancel { id }` (client→server) — retira la
 /// request en vuelo suspendida en un Ask de policy. Aditiva sobre 0.18.x (un
 /// cliente/daemon N-1 la ignora; degrada al Ask zombi hasta TTL, no rompe).
-pub const PROTOCOL_VERSION: &str = "0.19.0";
+///
+/// 0.20.0 (#44): notificación `connection.degraded` (server→client) — una sesión
+/// remota se estableció con seguridad degradada (FTP `tls="allow"` → plano).
+/// Aditiva sobre 0.19.x (un cliente N-1 la ignora; solo-log, no rompe).
+pub const PROTOCOL_VERSION: &str = "0.20.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -238,6 +242,13 @@ pub const TASK_CANCEL: &str = "task.cancel";
 /// HUMANA: para una conexión de agente es `INVALID_REQUEST`, como p. ej.
 /// `policy.grant_scope`/`decide`/`undo_session`.
 pub const CONNECTION_TRUST_HOST_KEY: &str = "connection.trust_host_key";
+/// `connection.degraded` — notificación server→client (#44): una sesión remota
+/// se estableció con seguridad DEGRADADA (hoy: FTP con `tls="allow"` cayó a
+/// texto plano porque el servidor rechazó `AUTH TLS`). Solo informa (el usuario
+/// debe SABER que la sesión es en claro, ADR 0015 F "nunca silencioso"); no pide
+/// decisión. Se difunde solo a conexiones humanas. Un cliente N-1 la ignora
+/// (notif desconocida, ADR 0004) — degrada al comportamiento previo (solo log).
+pub const CONNECTION_DEGRADED: &str = "connection.degraded";
 /// `task.progress` — notificación server→client, coalescida (≤30 Hz).
 pub const TASK_PROGRESS: &str = "task.progress";
 /// `policy.request_scope` — un agente pide un scope (rutas+ops+TTL, M3-3b).
@@ -648,6 +659,27 @@ pub struct ConnectionTrustHostKeyResult {
     /// `true` si la clave quedó registrada (idempotente: `true` también si ya
     /// estaba). `false` reservado para un futuro rechazo por política.
     pub trusted: bool,
+}
+
+/// Notificación [`CONNECTION_DEGRADED`] (server→client): una sesión remota se
+/// estableció con seguridad degradada. Las rutas/host van REDACTADOS (rule 10):
+/// `host` jamás lleva userinfo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectionDegraded {
+    /// Scheme de la sesión (p. ej. `"ftp"`).
+    pub scheme: String,
+    /// Host de la sesión, SIN userinfo (rule 10).
+    pub host: String,
+    /// Causa, vocabulario CERRADO comparable por igualdad (como
+    /// `PolicyDenied.rule`). Valor actual: `"tls-auth-rejected"` (el servidor
+    /// rechazó `AUTH TLS` bajo `tls="allow"`; la sesión viaja en claro). El
+    /// conjunto puede CRECER de forma aditiva: un consumidor que reciba un
+    /// `reason` DESCONOCIDO debe degradar con gracia (mensaje genérico de
+    /// "sesión degradada" apoyándose en `detail`), jamás rechazar la notif.
+    pub reason: String,
+    /// Detalle humano opcional (presentación, jamás contrato).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// Params de [`POLICY_REQUEST_SCOPE`] (M3-3b): un agente pide un scope.
