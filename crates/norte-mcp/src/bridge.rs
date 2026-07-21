@@ -24,6 +24,9 @@ const TASK_WAIT: std::time::Duration = std::time::Duration::from_mins(10);
 /// Intervalo del poll de `task.list` esperando el terminal.
 const TASK_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
+/// Celda del id JSON-RPC de la `fs.*` mutante en vuelo de un tool (#72).
+type DaemonIdCell = Arc<std::sync::OnceLock<u64>>;
+
 /// Errores del ciclo de vida del puente (conexión/transporte). Los errores
 /// de una TOOL no llegan aquí: viajan como `isError: true` en el result MCP
 /// (el agente puede leerlos y reaccionar).
@@ -107,7 +110,7 @@ impl Bridge {
             ),
             "ping" => rpc_result(&id, &json!({})),
             "tools/list" => rpc_result(&id, &json!({"tools": tool_defs()})),
-            "tools/call" => self.tools_call(&id, &params).await,
+            "tools/call" => self.tools_call(&id, &params, &Arc::default()).await,
             other => rpc_error(&id, -32601, &format!("unknown method: {other}")),
         };
         Some(out)
@@ -116,10 +119,10 @@ impl Bridge {
     /// `tools/call` completo: ejecuta la tool y devuelve la respuesta MCP
     /// serializada. Es la unidad que el transporte concurrente (#67) despacha
     /// a su propia task.
-    pub async fn tools_call(&self, id: &Value, params: &Value) -> String {
+    pub async fn tools_call(&self, id: &Value, params: &Value, daemon_id: &DaemonIdCell) -> String {
         let name = params.get("name").and_then(Value::as_str).unwrap_or("");
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
-        match self.call_tool(name, &args).await {
+        match self.call_tool(name, &args, daemon_id).await {
             Ok(v) => rpc_result(id, &tool_content(&v, false)),
             // Error de TOOL: el agente lo LEE (isError) y reacciona —
             // p. ej. pedir scope tras un out-of-scope.
@@ -129,13 +132,18 @@ impl Bridge {
 
     /// Despacha una tool a su método de wire. `Err(texto)` = fallo de tool
     /// (viaja como `isError`, jamás rompe el transporte).
-    async fn call_tool(&self, name: &str, args: &Value) -> Result<Value, String> {
+    async fn call_tool(
+        &self,
+        name: &str,
+        args: &Value,
+        daemon_id: &DaemonIdCell,
+    ) -> Result<Value, String> {
         match name {
             "list_dir" => self.tool_list_dir(args).await,
             "stat" => self.tool_stat(args).await,
             "read_file" => self.tool_read_file(args).await,
-            "copy" | "move" => self.tool_transfer(name, args).await,
-            "delete" => self.tool_delete(args).await,
+            "copy" | "move" => self.tool_transfer(name, args, daemon_id).await,
+            "delete" => self.tool_delete(args, daemon_id).await,
             "task_status" => self.tool_task_status(args).await,
             "request_scope" => self.tool_request_scope(args).await,
             other => Err(format!("unknown tool: {other}")),
@@ -223,11 +231,16 @@ impl Bridge {
     /// `copy` y `move` comparten cuerpo pero cada uno serializa SU tipo de
     /// params (M3 del rust-reviewer: reutilizar `FsCopyParams` para `fs.move`
     /// funcionaba por coincidencia de shape — divergencia futura invisible).
-    async fn tool_transfer(&self, name: &str, args: &Value) -> Result<Value, String> {
+    async fn tool_transfer(
+        &self,
+        name: &str,
+        args: &Value,
+        daemon_id: &DaemonIdCell,
+    ) -> Result<Value, String> {
         let from = vpath_arg(args, "from")?;
         let to = vpath_arg(args, "to")?;
         let r: methods::FsTaskResult = if name == "copy" {
-            self.call(
+            self.call_tracked(
                 methods::FS_COPY,
                 &methods::FsCopyParams {
                     from,
@@ -237,10 +250,11 @@ impl Bridge {
                     resume: norte_proto::ResumePolicy::default(),
                     verify: norte_proto::VerifyPolicy::default(),
                 },
+                daemon_id,
             )
             .await?
         } else {
-            self.call(
+            self.call_tracked(
                 methods::FS_MOVE,
                 &methods::FsMoveParams {
                     from,
@@ -250,13 +264,14 @@ impl Bridge {
                     resume: norte_proto::ResumePolicy::default(),
                     verify: norte_proto::VerifyPolicy::default(),
                 },
+                daemon_id,
             )
             .await?
         };
         self.wait_terminal(r.task_id).await
     }
 
-    async fn tool_delete(&self, args: &Value) -> Result<Value, String> {
+    async fn tool_delete(&self, args: &Value, daemon_id: &DaemonIdCell) -> Result<Value, String> {
         let path = vpath_arg(args, "path")?;
         let mode = match args.get("mode") {
             // Default TRASH (spec §10): un borrado agéntico es SIEMPRE
@@ -271,7 +286,11 @@ impl Bridge {
             }
         };
         let r: methods::FsTaskResult = self
-            .call(methods::FS_DELETE, &methods::FsDeleteParams { path, mode })
+            .call_tracked(
+                methods::FS_DELETE,
+                &methods::FsDeleteParams { path, mode },
+                daemon_id,
+            )
             .await?;
         self.wait_terminal(r.task_id).await
     }
@@ -345,16 +364,31 @@ impl Bridge {
         self.client
             .call(method, params)
             .await
-            .map_err(|e| match e {
-                ClientError::Rpc(rpc) => match rpc.data {
-                    Some(norte_proto::Error::PolicyDenied { ref rule }) => format!(
-                        "denied by policy ({rule}). If out-of-scope, call request_scope and ask the human to grant it."
-                    ),
-                    Some(err) => format!("{err}"),
-                    None => format!("rpc error {}: {}", rpc.code, rpc.message),
-                },
-                other => format!("daemon unreachable: {other}"),
+            .map_err(map_client_err)
+    }
+
+    /// Como [`Self::call`], pero registra el id JSON-RPC asignado en
+    /// `daemon_id` (una celda `OnceLock`) ANTES de suspenderse — para que el
+    /// handler de `notifications/cancelled` pueda reenviar un `rpc.cancel` de
+    /// esa request mientras sigue suspendida en un Ask (#72).
+    async fn call_tracked<P, R>(
+        &self,
+        method: &str,
+        params: &P,
+        daemon_id: &DaemonIdCell,
+    ) -> Result<R, String>
+    where
+        P: serde::Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        self.client
+            .call_tracked(method, params, |id| {
+                // OnceLock: el PRIMER `fs.*` mutante de este tool fija el id;
+                // los polls de task.list posteriores NO lo pisan.
+                let _ = daemon_id.set(id);
             })
+            .await
+            .map_err(map_client_err)
     }
 
     /// Espera el estado terminal de `task_id` por poll de `task.list`. La
@@ -389,6 +423,34 @@ impl Bridge {
             }
             tokio::time::sleep(TASK_POLL).await;
         }
+    }
+
+    /// Reenvía al daemon un `rpc.cancel` de la request `daemon_id` (#72): si
+    /// esa `fs.*` sigue suspendida en un Ask, el daemon la retira (fail-closed).
+    /// Best-effort: un id ya resuelto es no-op en el daemon; un canal muerto se
+    /// descarta. El daemon gobierna: comprometer el puente NO salta la policy.
+    pub fn cancel_daemon_request(&self, daemon_id: u64) {
+        let _ = self.client.notify(
+            methods::RPC_CANCEL,
+            &methods::RpcCancelParams {
+                id: norte_proto::wire::RequestId::Num(daemon_id),
+            },
+        );
+    }
+}
+
+/// Traduce un error del `Client` al texto de tool (la taxonomía en `data`;
+/// un `PolicyDenied` sale ACCIONABLE). Compartido por `call` y `call_tracked`.
+fn map_client_err(e: ClientError) -> String {
+    match e {
+        ClientError::Rpc(rpc) => match rpc.data {
+            Some(norte_proto::Error::PolicyDenied { ref rule }) => format!(
+                "denied by policy ({rule}). If out-of-scope, call request_scope and ask the human to grant it."
+            ),
+            Some(err) => format!("{err}"),
+            None => format!("rpc error {}: {}", rpc.code, rpc.message),
+        },
+        other => format!("daemon unreachable: {other}"),
     }
 }
 
@@ -562,6 +624,14 @@ pub const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 /// de respuesta, jamás acumulando tasks sin límite.
 pub const MAX_INFLIGHT_TOOLS: usize = 8;
 
+/// Un tool en vuelo (#67 + #72): su token de cancelación local y la celda con
+/// el id JSON-RPC de su `fs.*` mutante (para reenviar `rpc.cancel` al daemon).
+#[derive(Clone)]
+struct InflightTool {
+    token: CancellationToken,
+    daemon_id: DaemonIdCell,
+}
+
 /// Sirve MCP por stdio hasta EOF (el agente cierra el pipe al terminar). Un
 /// mensaje por línea (NDJSON, el transporte stdio de MCP; tope
 /// [`MAX_LINE_BYTES`]). stdout es EXCLUSIVO del transporte: cualquier
@@ -623,7 +693,7 @@ where
     });
     // Tools en vuelo, por id serializado: `notifications/cancelled` cancela
     // su token; el guard del task retira la entrada al terminar.
-    let inflight: Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>> =
+    let inflight: Arc<std::sync::Mutex<std::collections::HashMap<String, InflightTool>>> =
         Arc::default();
 
     let mut line: Vec<u8> = Vec::new();
@@ -681,8 +751,13 @@ where
     tracing::info!("fin del transporte (EOF/errores): puente terminado");
     // Teardown COMÚN a todos los caminos: los tools en vuelo se abandonan
     // (el peer ya no leerá sus respuestas) y el writer se drena.
-    for (_, token) in inflight.lock().expect("inflight lock sano").drain() {
-        token.cancel();
+    for (_, tool) in inflight.lock().expect("inflight lock sano").drain() {
+        tool.token.cancel();
+        // #72: si el tool tenía una fs.* mutante en vuelo, reenvía su
+        // rpc.cancel — retira el Ask suspendido en vez de esperar al TTL.
+        if let Some(&daemon_id) = tool.daemon_id.get() {
+            bridge.cancel_daemon_request(daemon_id);
+        }
     }
     drop(out_tx);
     let _ = writer_task.await;
@@ -698,7 +773,7 @@ fn id_key(id: &Value) -> String {
 /// (respuesta, cancel o panic) — mismo patrón RAII que `PendingGuard`.
 struct InflightGuard {
     key: String,
-    map: Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
+    map: Arc<std::sync::Mutex<std::collections::HashMap<String, InflightTool>>>,
 }
 
 impl Drop for InflightGuard {
@@ -716,7 +791,7 @@ async fn dispatch_line(
     bridge: &Arc<Bridge>,
     text: &str,
     out_tx: &tokio::sync::mpsc::Sender<String>,
-    inflight: &Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
+    inflight: &Arc<std::sync::Mutex<std::collections::HashMap<String, InflightTool>>>,
 ) {
     let msg: Value = match serde_json::from_str(text) {
         Ok(v) => v,
@@ -737,18 +812,29 @@ async fn dispatch_line(
         // (initialized…) se ignora sin respuesta (JSON-RPC).
         if method == "notifications/cancelled"
             && let Some(req_id) = msg.pointer("/params/requestId")
-            && let Some(token) = inflight
+            && let Some(tool) = inflight
                 .lock()
                 .expect("inflight lock sano")
                 .remove(&id_key(req_id))
         {
-            token.cancel();
+            tool.token.cancel();
+            // #72: si el tool había lanzado una fs.* mutante contra el daemon,
+            // reenvía un rpc.cancel de ESA request — retira su Ask suspendido en
+            // vez de dejarlo zombi hasta el TTL. Un id aún sin fijar (tool que no
+            // llegó a llamar al daemon) = nada que cancelar.
+            if let Some(&daemon_id) = tool.daemon_id.get() {
+                bridge.cancel_daemon_request(daemon_id);
+            }
         }
         return;
     };
     if method == "tools/call" {
         let params = msg.get("params").cloned().unwrap_or(Value::Null);
         let token = CancellationToken::new();
+        // Celda del id JSON-RPC de la fs.* mutante del tool (#72): se comparte
+        // entre la task del tool (que lo fija) y el handler de cancelled (que
+        // lo lee para reenviar rpc.cancel).
+        let daemon_id: DaemonIdCell = Arc::default();
         // El lock vive en su propio scope SIN awaits (Send del future). La
         // admisión es por ENTRY VACANTE: un id repetido en vuelo NO
         // sobrescribe (sobrescribir dejaría el token anterior huérfano y el
@@ -764,7 +850,10 @@ async fn dispatch_line(
                         Err("duplicate request id already in flight")
                     }
                     std::collections::hash_map::Entry::Vacant(e) => {
-                        e.insert(token.clone());
+                        e.insert(InflightTool {
+                            token: token.clone(),
+                            daemon_id: Arc::clone(&daemon_id),
+                        });
                         Ok(())
                     }
                 }
@@ -787,7 +876,7 @@ async fn dispatch_line(
             let _guard = guard;
             tokio::select! {
                 biased;
-                out = bridge.tools_call(&id, &params) => {
+                out = bridge.tools_call(&id, &params, &daemon_id) => {
                     let _ = out_tx.send(out).await;
                 }
                 // Cancelado: SIN respuesta (spec MCP) — la espera se
