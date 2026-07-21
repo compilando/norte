@@ -47,11 +47,28 @@ fn fold(name: &[u8]) -> String {
         .collect()
 }
 
-/// Folds precomputados de `entries` (índice-paralelo). Ver [`fold`].
-fn fold_names(entries: &[Entry]) -> Vec<String> {
+/// [`fold`] con la reinterpretación de nombres del pane (#98/F1): un nombre
+/// NO-UTF8 bajo `Some(enc)` se pliega sobre el MISMO texto que el usuario
+/// VE ([`decode_name`](norte_encoding::decode_name), la regla de
+/// `display_name_with`) — teclear «п» encuentra la entrada que el pane pinta
+/// «Папка». Sin reinterpretación (o nombre UTF-8 válido): el fold lossy de
+/// siempre.
+fn fold_with(name: &[u8], enc: Option<norte_encoding::NameEncoding>) -> String {
+    match (enc, std::str::from_utf8(name)) {
+        (Some(e), Err(_)) => norte_encoding::decode_name(name, e)
+            .nfc()
+            .flat_map(char::to_lowercase)
+            .nfc()
+            .collect(),
+        _ => fold(name),
+    }
+}
+
+/// Folds precomputados de `entries` (índice-paralelo). Ver [`fold_with`].
+fn fold_names(entries: &[Entry], enc: Option<norte_encoding::NameEncoding>) -> Vec<String> {
     entries
         .iter()
-        .map(|e| fold(e.path.file_name().map_or(&b""[..], |s| s.as_bytes())))
+        .map(|e| fold_with(e.path.file_name().map_or(&b""[..], |s| s.as_bytes()), enc))
         .collect()
 }
 
@@ -101,22 +118,42 @@ pub struct QuickSearch {
     visible: Vec<usize>,
     /// Posición de la selección DENTRO de `visible`.
     pos: usize,
+    /// Reinterpretación de nombres vigente al plegar (#98/F1): los folds se
+    /// computan sobre el texto que el usuario VE. Cambiarla exige re-plegar
+    /// ([`QuickSearch::set_name_encoding`]).
+    enc: Option<norte_encoding::NameEncoding>,
 }
 
 impl QuickSearch {
     /// Arranca un quick search vacío en el modo dado sobre `entries`: query
     /// vacía, `visible` se calcula ya mismo (query vacía = todo visible).
+    /// `enc` = la reinterpretación de nombres del pane (#57), para que el
+    /// filtro case contra el texto PINTADO.
     #[must_use]
-    pub fn new(mode: Mode, entries: &[Entry]) -> Self {
+    pub fn new(mode: Mode, entries: &[Entry], enc: Option<norte_encoding::NameEncoding>) -> Self {
         let mut q = Self {
             query: Vec::new(),
             mode,
-            folds: fold_names(entries),
+            folds: fold_names(entries, enc),
             visible: Vec::new(),
             pos: 0,
+            enc,
         };
         q.recompute();
         q
+    }
+
+    /// Cambia la reinterpretación de nombres y RE-PLIEGA el cache (#98/F1):
+    /// el único otro punto de invalidación además de `new`/`refresh`.
+    /// Mismo contrato de selección que [`QuickSearch::refresh`].
+    pub fn set_name_encoding(
+        &mut self,
+        enc: Option<norte_encoding::NameEncoding>,
+        entries: &[Entry],
+        prev_selected: Option<&VPath>,
+    ) {
+        self.enc = enc;
+        self.refresh(entries, prev_selected);
     }
 
     /// Recalcula `visible` a partir de la query actual sobre `self.folds`
@@ -174,7 +211,7 @@ impl QuickSearch {
     /// de invalidación (#77): los índices de `visible` refieren al
     /// `entries` del último `new`/`refresh`.
     pub fn refresh(&mut self, entries: &[Entry], prev_selected: Option<&VPath>) {
-        self.folds = fold_names(entries);
+        self.folds = fold_names(entries, self.enc);
         self.recompute();
         if let Some(prev) = prev_selected
             && let Some(new_pos) = self.visible.iter().position(|&i| entries[i].path == *prev)
@@ -320,7 +357,7 @@ mod tests {
     #[test]
     fn estado_filtro_navega_y_confirma() {
         let entries = vec![e("mem:///a1"), e("mem:///b"), e("mem:///a2")];
-        let mut q = QuickSearch::new(Mode::Filter, &entries);
+        let mut q = QuickSearch::new(Mode::Filter, &entries, None);
         q.push_char('a');
         assert_eq!(q.visible(), &[0, 2]);
         q.down();
@@ -332,7 +369,7 @@ mod tests {
     #[test]
     fn modo_salto_tab_con_wrap() {
         let entries = vec![e("mem:///ab"), e("mem:///zz"), e("mem:///ac")];
-        let mut q = QuickSearch::new(Mode::Jump, &entries);
+        let mut q = QuickSearch::new(Mode::Jump, &entries, None);
         q.push_char('a');
         assert_eq!(q.selected_entry_index(), Some(0));
         q.next_match();
@@ -344,7 +381,7 @@ mod tests {
     #[test]
     fn reaplicar_tras_lote_nuevo_conserva_seleccion_si_sobrevive() {
         let mut entries = vec![e("mem:///a1")];
-        let mut q = QuickSearch::new(Mode::Filter, &entries);
+        let mut q = QuickSearch::new(Mode::Filter, &entries, None);
         q.push_char('a');
         let prev = q.selected_entry_index().map(|i| entries[i].path.clone());
         entries.push(e("mem:///a2")); // llega un lote del fill
@@ -360,7 +397,7 @@ mod tests {
         // en cada lote (app.rs), así que un índice recordado apunta a OTRA
         // entrada tras el sort.
         let mut entries = vec![e("mem:///a1"), e("mem:///a2")];
-        let mut q = QuickSearch::new(Mode::Filter, &entries);
+        let mut q = QuickSearch::new(Mode::Filter, &entries, None);
         q.push_char('a');
         q.down(); // selecciona a2 (índice real 1)
         assert_eq!(q.selected_entry_index(), Some(1));
@@ -383,7 +420,7 @@ mod tests {
         // crudo en el eco `/{query}` — se empuja char a char, como llegaría de
         // un stream de input real (sin bracketed paste).
         let entries = vec![e("mem:///normal.txt")];
-        let mut q = QuickSearch::new(Mode::Filter, &entries);
+        let mut q = QuickSearch::new(Mode::Filter, &entries, None);
         for c in "a\u{202E}b".chars() {
             q.push_char(c);
         }
@@ -399,7 +436,7 @@ mod tests {
         // El cache de folds (#77) debe renovarse en refresh: una entrada que
         // llega en un lote POSTERIOR tiene que casar con el siguiente keystroke.
         let mut entries = vec![e("mem:///zzz")];
-        let mut q = QuickSearch::new(Mode::Filter, &entries);
+        let mut q = QuickSearch::new(Mode::Filter, &entries, None);
         entries.push(e("mem:///nuevo.txt")); // lote del fill
         q.refresh(&entries, None);
         q.push_char('n');
@@ -423,7 +460,7 @@ mod tests {
             e("mem:///%FF%FE"),        // no-UTF8
         ];
         for needle in ["año", "ǰ", "\u{FFFD}"] {
-            let mut q = QuickSearch::new(Mode::Filter, &entries);
+            let mut q = QuickSearch::new(Mode::Filter, &entries, None);
             for c in needle.chars() {
                 q.push_char(c);
             }

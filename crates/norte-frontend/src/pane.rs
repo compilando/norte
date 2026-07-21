@@ -37,6 +37,17 @@ pub struct PaneState {
     loading: bool,
     quick: Option<QuickSearch>,
     marks: HashSet<VPath>,
+    /// Reinterpretación de NOMBRES no-UTF8 para display (#57, spec §6.1):
+    /// `Some(enc)` = «ver nombres como enc» — SOLO display, los bytes jamás
+    /// se mutan (regla 1). Compartida por los frontends (#98/m2): el quick
+    /// search pliega sobre el texto reinterpretado y los renders la leen
+    /// vía [`PaneState::name_encoding`]. Persistente por pane.
+    name_encoding: Option<norte_encoding::NameEncoding>,
+    /// Índice del ciclo por el que ENTRÓ la reinterpretación activa (la
+    /// sugerencia de chardetng, o 0): el ciclo da la VUELTA COMPLETA y se
+    /// apaga al volver aquí — sin esto, los encodings anteriores a la
+    /// sugerencia serían inalcanzables (M1 del review #57).
+    name_encoding_entry: usize,
 }
 
 impl PaneState {
@@ -55,7 +66,63 @@ impl PaneState {
             loading: false,
             quick: None,
             marks: HashSet::new(),
+            name_encoding: None,
+            name_encoding_entry: 0,
         }
+    }
+
+    /// Reinterpretación de nombres activa (#57): los renders pintan con ella
+    /// ([`crate::display_name_with`]) y el quick search pliega sobre el
+    /// mismo texto.
+    #[must_use]
+    pub fn name_encoding(&self) -> Option<norte_encoding::NameEncoding> {
+        self.name_encoding
+    }
+
+    /// Cicla la reinterpretación de nombres (#57): `None` → (sugerencia de
+    /// chardetng sobre los nombres no-UTF8 del listado, si cae en el ciclo;
+    /// si no, cp437) → VUELTA COMPLETA al ciclo — todos los encodings
+    /// alcanzables desde cualquier sugerencia — → `None` al regresar al
+    /// punto de entrada. Un quick search vivo se RE-PLIEGA sobre el texto
+    /// nuevo (#98/F1: el filtro casa contra lo que se VE). Devuelve la
+    /// etiqueta a anunciar (`None` = modo apagado).
+    pub fn cycle_name_encoding(&mut self) -> Option<&'static str> {
+        let cycle = norte_encoding::name_reinterpret_cycle();
+        self.name_encoding = match self.name_encoding {
+            None => {
+                let raws: Vec<&[u8]> = self
+                    .entries
+                    .iter()
+                    .filter_map(|e| e.path.file_name().map(norte_proto::Segment::as_bytes))
+                    .filter(|b| std::str::from_utf8(b).is_err())
+                    .collect();
+                let sugerido = norte_encoding::suggest_name_encoding(&raws);
+                let entry = sugerido
+                    .and_then(|s| cycle.iter().position(|e| *e == s))
+                    .unwrap_or(0);
+                self.name_encoding_entry = entry;
+                Some(cycle[entry])
+            }
+            Some(cur) => match cycle.iter().position(|e| *e == cur) {
+                Some(i) => {
+                    let next = (i + 1) % cycle.len();
+                    // Vuelta completada: apagar (el ciclo siempre acaba en
+                    // off, pase por donde pase la sugerencia de entrada).
+                    (next != self.name_encoding_entry).then(|| cycle[next])
+                }
+                // Valor fuera del ciclo (imposible hoy): apagar.
+                None => None,
+            },
+        };
+        // #98/F1: el cache de folds del quick vivo quedó plegado con el
+        // encoding anterior — re-plegar conservando la selección.
+        let prev = self.quick_selected_path();
+        let enc = self.name_encoding;
+        if let Some(q) = &mut self.quick {
+            q.set_name_encoding(enc, &self.entries, prev.as_ref());
+        }
+        self.quick_sync_jump();
+        self.name_encoding.map(|e| e.label())
     }
 
     /// Reemplaza el contenido tras un cd/refresh: resetea el cursor a 0, apaga
@@ -158,9 +225,10 @@ impl PaneState {
         self.loading
     }
 
-    /// Arranca el quick search en `mode` sobre las entries actuales.
+    /// Arranca el quick search en `mode` sobre las entries actuales, plegando
+    /// con la reinterpretación de nombres vigente (#98/F1).
     pub fn quick_start(&mut self, mode: Mode) {
-        self.quick = Some(QuickSearch::new(mode, &self.entries));
+        self.quick = Some(QuickSearch::new(mode, &self.entries, self.name_encoding));
     }
 
     /// En [`Mode::Jump`] el cursor REAL sigue a la selección del quick search
@@ -972,5 +1040,54 @@ mod tests {
         assert_eq!(p.entries(), antes.as_slice());
         assert_eq!(p.cursor(), cur);
         assert_eq!(p.quick_visible().unwrap().len(), 2);
+    }
+
+    /// #98/F1 (fixture `cp866_papka` del corpus): el quick search casa
+    /// contra el texto que el usuario VE. Con reinterpretación IBM866
+    /// activa, teclear «п» encuentra la entrada pintada «Папка» — y el
+    /// cache de folds se invalida en AMBOS caminos: quick vivo al ciclar
+    /// (`set_name_encoding`) y quick arrancado después (`new` con enc).
+    #[test]
+    fn quick_search_casa_contra_el_texto_reinterpretado() {
+        let papka = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == "cp866_papka")
+            .expect("fixture del corpus")
+            .bytes;
+        let dir = VPath::parse("mem:///").unwrap();
+        let seg = norte_proto::Segment::new(papka).unwrap();
+        let entries = vec![
+            Entry {
+                path: dir.join(seg),
+                kind: EntryKind::File,
+                size: None,
+                mtime_ms: None,
+            },
+            e("mem:///otro.txt", EntryKind::File),
+        ];
+
+        // Camino 1: quick VIVO, luego ciclar — el fold se re-pliega.
+        let mut p = PaneState::new(dir.clone(), entries.clone());
+        p.quick_start(Mode::Filter);
+        p.quick_char('\u{043f}'); // п
+        assert_eq!(
+            p.quick_visible().map(<[usize]>::len),
+            Some(0),
+            "sin reinterpretar, п no casa contra el lossy"
+        );
+        // Cicla hasta IBM866 (la sugerencia con estas muestras).
+        assert_eq!(p.cycle_name_encoding(), Some("IBM866"));
+        assert_eq!(
+            p.quick_visible().map(<[usize]>::len),
+            Some(1),
+            "con IBM866 el filtro casa contra «Папка»"
+        );
+
+        // Camino 2: ciclar primero, quick después (folds nacen con enc).
+        let mut p = PaneState::new(dir, entries);
+        assert_eq!(p.cycle_name_encoding(), Some("IBM866"));
+        p.quick_start(Mode::Filter);
+        p.quick_char('\u{043f}');
+        assert_eq!(p.quick_visible().map(<[usize]>::len), Some(1));
     }
 }

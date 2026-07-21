@@ -96,6 +96,19 @@ pub fn display_name_with(
 /// fidelidad tipográfica (el badge ya delata la alteración).
 #[must_use]
 pub fn path_display(p: &VPath) -> (String, bool) {
+    path_display_with(p, None)
+}
+
+/// [`path_display`] con reinterpretación opcional (#98/F2): cada segmento
+/// pasa por [`display_name_with`] — las superficies de DECISIÓN (modales de
+/// confirmar/colisión, título del viewer, dir de la barra) muestran el mismo
+/// texto por el que el usuario navega, no el lossy crudo. Mismo contrato de
+/// badge: cualquier segmento alterado (incluida la reinterpretación) marca.
+#[must_use]
+pub fn path_display_with(
+    p: &VPath,
+    reinterpret: Option<norte_encoding::NameEncoding>,
+) -> (String, bool) {
     let mut out = String::from("⟨");
     out.push_str(p.scheme());
     if let Some(a) = p.authority() {
@@ -110,7 +123,7 @@ pub fn path_display(p: &VPath) -> (String, bool) {
             out.push('/');
         }
         first = false;
-        let (texto, h) = display_name(seg);
+        let (texto, h) = display_name_with(seg, reinterpret);
         hostil |= h;
         out.push_str(&texto);
     }
