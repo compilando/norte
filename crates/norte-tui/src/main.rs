@@ -105,6 +105,28 @@ struct Fill {
     rx: tokio::sync::mpsc::Receiver<FillMsg>,
 }
 
+/// Sonda one-shot de stat on-focus (#52): hidrata size/mtime de la entrada
+/// seleccionada cuando el listado lazy los dejó en None. A lo sumo UNA en
+/// vuelo; dedup por path (un stat fallido no se reintenta hasta cambiar la
+/// selección — sin martillear un provider roto).
+struct StatProbe {
+    pane: usize,
+    path: VPath,
+    rx: tokio::sync::oneshot::Receiver<Option<Entry>>,
+}
+
+/// Lanza la sonda de `StatProbe`: clona el `Backend` (barato, Arc interno) y
+/// el path para que la task no retenga el préstamo del run loop.
+fn spawn_stat_probe(backend: &Backend, pane: usize, path: VPath) -> StatProbe {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let b = backend.clone();
+    let p = path.clone();
+    tokio::spawn(async move {
+        let _ = tx.send(b.stat(&p).await.ok());
+    });
+    StatProbe { pane, path, rx }
+}
+
 /// Desenlace de un `cd`, para que el run loop actualice el relleno vivo.
 enum Cd {
     /// El pane se reemplazó y su RESTO se rellena en background.
@@ -425,6 +447,10 @@ async fn run(
     let mut lua_host = load_lua(app, &layers).await;
     let mut lua_run: Option<(CommandRun, CancellationToken)> = None;
     let mut lua_queue: VecDeque<String> = VecDeque::new();
+    // Sonda de stat on-focus (#52, listado lazy): a lo sumo una en vuelo,
+    // dedup por path (no reintenta un stat fallido hasta cambiar selección).
+    let mut stat_probe: Option<StatProbe> = None;
+    let mut last_probed: Option<VPath> = None;
     loop {
         // Barra Lua en cada vuelta, ANTES del draw (cacheada en el host).
         refresh_lua_status(app, lua_host.as_ref());
@@ -433,6 +459,15 @@ async fn run(
         terminal.draw(|f| ui::draw(f, app))?;
         if app.quit {
             return Ok(());
+        }
+        // #52: listado lazy — la entrada enfocada sin size se hidrata con una
+        // sonda one-shot (máx. una en vuelo; dedup por path).
+        if stat_probe.is_none()
+            && let Some((pane_idx, path)) = app.focused_needs_stat()
+            && last_probed.as_ref() != Some(&path)
+        {
+            stat_probe = Some(spawn_stat_probe(backend, pane_idx, path.clone()));
+            last_probed = Some(path);
         }
         tokio::select! {
             _ = tick.tick() => {
@@ -491,6 +526,21 @@ async fn run(
                     "status-connection-degraded",
                     &[("scheme", d.scheme.as_str()), ("host", d.host.as_str())],
                 ));
+            }
+            res = async {
+                match &mut stat_probe {
+                    Some(pr) => (&mut pr.rx).await.ok().flatten(),
+                    None => std::future::pending().await,
+                }
+            } => {
+                // Sonda de stat on-focus (#52): se limpia SIEMPRE (haya dado
+                // `Some` o el stat fallara/canal se cerrara) — la dedup por
+                // `last_probed` evita reintentar hasta cambiar la selección.
+                if let Some(pr) = stat_probe.take()
+                    && let Some(entry) = res
+                {
+                    app.panes[pr.pane].hydrate(&pr.path, entry.size, entry.mtime_ms);
+                }
             }
             msg = async {
                 match &mut fill {
