@@ -123,5 +123,20 @@
     "id": "nfd_uppercase_composed_only_lowercase",
     "hex": "4acc8c2e747874",
     "why": "J+U+030C: sin precompuesta MAYÚSCULA, la minúscula ǰ (U+01F0) sí existe — un case-fold que no re-normaliza NFC tras minusculizar pierde la equivalencia canónica"
+  },
+  {
+    "id": "cp866_papka",
+    "hex": "8fa0afaaa0",
+    "why": "Папка en cp866: objetivo de la reinterpretación (#57) — pinea quick search y modales bajo un name encoding activo"
+  },
+  {
+    "id": "w1252_c1_controls",
+    "hex": "818d8f909d",
+    "why": "bytes que windows-1252 decodifica a controles C1: la reinterpretación jamás debe pintarlos crudos (must_mask via is_control)"
+  },
+  {
+    "id": "utf8_accidental_cp866",
+    "hex": "d0b0",
+    "why": "bytes cp866 que TAMBIÉN son UTF-8 válido ('а' cirílica): la reinterpretación NO los toca (regla mixto-sin-mojibake) — indistinguible sin metadatos"
   }
 ]

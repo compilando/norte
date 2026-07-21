@@ -19,6 +19,12 @@ pub struct RetrySpec {
     pub to: VPath,
     /// Opciones del intento que falló.
     pub opts: TransferOptions,
+    /// Reinterpretación de nombres del pane ORIGEN, capturada al LANZAR la
+    /// operación (#98/M1): el modal de colisión llega async — el usuario
+    /// puede haber cambiado de pane o ciclado el encoding entre el submit y
+    /// la notificación, y el modal debe pintar el mismo texto por el que se
+    /// navegó, no el del pane que tenga el foco al llegar.
+    pub name_encoding: Option<norte_encoding::NameEncoding>,
 }
 
 /// Una fila del panel.

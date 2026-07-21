@@ -133,6 +133,7 @@ fn panel_de_tasks_y_modal_se_pintan() {
             from: dir.join(Segment::new(b"a".to_vec()).unwrap()),
             to: dir.join(Segment::new(b"b".to_vec()).unwrap()),
             opts: norte_core::TransferOptions::default(),
+            name_encoding: None,
         },
     });
 
@@ -288,5 +289,42 @@ fn reinterpretar_nombres_pinta_legible_con_badge_e_indicador() {
     assert!(
         apagado.contains('\u{FFFD}'),
         "apagado = lossy de siempre: {apagado}"
+    );
+}
+
+/// #98/F2: las superficies de DECISIÓN siguen la reinterpretación del pane —
+/// el modal de confirmar borrado sobre la entrada cp866 pinta «Папка» (lo
+/// mismo por lo que el usuario navegó), no «�����», con el badge conservado.
+#[test]
+fn modal_de_confirmacion_sigue_la_reinterpretacion() {
+    let dir = vp("file:///x");
+    let papka = norte_testkit::corpus::hostile_names()
+        .into_iter()
+        .find(|n| n.id == "cp866_papka")
+        .expect("fixture del corpus")
+        .bytes;
+    let target = dir.join(Segment::new(papka).unwrap());
+    let entries = vec![Entry {
+        path: target.clone(),
+        kind: EntryKind::File,
+        size: Some(1),
+        mtime_ms: None,
+    }];
+    let mut app = App::new(Pane::new(dir.clone(), entries), Pane::new(dir, Vec::new()));
+    assert_eq!(app.panes[0].cycle_name_encoding(), Some("IBM866"));
+    app.modal = Some(norte_tui::app::Modal::ConfirmDelete {
+        target,
+        permanent: false,
+    });
+    let mut terminal = Terminal::new(TestBackend::new(80, 12)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let contenido = terminal.backend().to_string();
+    assert!(
+        contenido.contains("Папка"),
+        "el modal pinta el texto por el que se navegó: {contenido}"
+    );
+    assert!(
+        !contenido.contains("�����"),
+        "no el lossy crudo: {contenido}"
     );
 }

@@ -96,6 +96,27 @@ pub fn display_name_with(
 /// fidelidad tipográfica (el badge ya delata la alteración).
 #[must_use]
 pub fn path_display(p: &VPath) -> (String, bool) {
+    path_display_with(p, None)
+}
+
+/// [`path_display`] con reinterpretación opcional (#98/F2): cada segmento
+/// pasa por [`display_name_with`] — las superficies de DECISIÓN (modales de
+/// confirmar/colisión, título del viewer, dir de la barra) muestran el mismo
+/// texto por el que el usuario navega, no el lossy crudo. Mismo contrato de
+/// badge: cualquier segmento alterado (incluida la reinterpretación) marca.
+///
+/// ```
+/// use norte_encoding::NameEncoding;
+/// use norte_frontend::path_display_with;
+/// let p = norte_proto::VPath::parse("mem:///CAF%90.TXT").unwrap();
+/// let (texto, hostil) = path_display_with(&p, Some(NameEncoding::Cp437));
+/// assert_eq!((texto.as_str(), hostil), ("⟨mem⟩/CAFÉ.TXT", true));
+/// ```
+#[must_use]
+pub fn path_display_with(
+    p: &VPath,
+    reinterpret: Option<norte_encoding::NameEncoding>,
+) -> (String, bool) {
     let mut out = String::from("⟨");
     out.push_str(p.scheme());
     if let Some(a) = p.authority() {
@@ -110,7 +131,7 @@ pub fn path_display(p: &VPath) -> (String, bool) {
             out.push('/');
         }
         first = false;
-        let (texto, h) = display_name(seg);
+        let (texto, h) = display_name_with(seg, reinterpret);
         hostil |= h;
         out.push_str(&texto);
     }
@@ -134,13 +155,47 @@ mod tests {
     /// canónico, como segmento de un `VPath` real.
     #[test]
     fn path_display_jamas_pinta_chars_enmascarables() {
-        for n in norte_testkit::corpus::hostile_names() {
-            let p = root().join(norte_proto::Segment::new(n.bytes.clone()).unwrap());
-            let (texto, _) = path_display(&p);
-            assert!(
-                !texto.chars().any(must_mask),
-                "{}: el texto de path_display no lleva chars de must_mask: {texto:?}",
-                n.id
+        // #98/F2 del audit: el sweep itera TAMBIÉN todo el ciclo de
+        // reinterpretación — sin esto, `w1252_c1_controls` era inerte (con
+        // enc=None los bytes caen a U+FFFD ANTES de que must_mask vea los
+        // controles C1 que windows-1252 sí decodifica: U+009D es OSC).
+        let encs = std::iter::once(None).chain(
+            norte_encoding::name_reinterpret_cycle()
+                .iter()
+                .copied()
+                .map(Some),
+        );
+        for enc in encs {
+            for n in norte_testkit::corpus::hostile_names() {
+                let p = root().join(norte_proto::Segment::new(n.bytes.clone()).unwrap());
+                let (texto, _) = path_display_with(&p, enc);
+                assert!(
+                    !texto.chars().any(must_mask),
+                    "{} bajo {enc:?}: sin chars de must_mask: {texto:?}",
+                    n.id
+                );
+            }
+        }
+    }
+
+    /// #98 (fixture `utf8_accidental_cp866`): bytes legacy que TAMBIÉN son
+    /// UTF-8 válido («а» cirílica) JAMÁS se reinterpretan — bajo cualquier
+    /// encoding del ciclo salen intactos y sin badge (regla mixto-sin-
+    /// mojibake, indistinguible sin metadatos).
+    #[test]
+    fn utf8_accidental_no_se_reinterpreta_bajo_ningun_encoding() {
+        let accidental = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == "utf8_accidental_cp866")
+            .expect("fixture del corpus")
+            .bytes;
+        for enc in norte_encoding::name_reinterpret_cycle() {
+            let (texto, hostil) = display_name_with(&accidental, Some(*enc));
+            assert_eq!(
+                (texto.as_str(), hostil),
+                ("а", false),
+                "{}: UTF-8 válido intacto",
+                enc.label()
             );
         }
     }

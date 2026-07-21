@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use unicode_width::UnicodeWidthChar;
 
-use crate::app::{App, Pane, display_name, path_display};
+use crate::app::{App, Pane, display_name};
 use crate::theme::TuiTheme;
 use norte_i18n::{t, ta};
 
@@ -57,7 +57,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     draw_tasks(frame, rows[1], app);
     draw_status(frame, rows[2], app);
     if let Some(modal) = &app.modal {
-        draw_modal(frame, modal, &app.theme);
+        draw_modal(frame, modal, &app.theme, app.focused().name_encoding());
     }
     if let Some(help) = &app.help {
         draw_help(frame, help, &app.theme);
@@ -72,7 +72,13 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         draw_nav_popup(frame, popup, &app.theme);
     }
     if let Some(dialog) = &app.search_dialog {
-        draw_search_dialog(frame, dialog, app.focused().dir(), &app.theme);
+        draw_search_dialog(
+            frame,
+            dialog,
+            app.focused().dir(),
+            app.focused().name_encoding(),
+            &app.theme,
+        );
     }
 }
 
@@ -85,6 +91,7 @@ fn draw_search_dialog(
     frame: &mut Frame<'_>,
     dialog: &crate::app::SearchDialog,
     root: &norte_proto::VPath,
+    enc: Option<norte_encoding::NameEncoding>,
     theme: &TuiTheme,
 ) {
     use crate::app::SearchField;
@@ -95,7 +102,9 @@ fn draw_search_dialog(
         format!("{label} {masked}{cursor}")
     };
     let name_active = dialog.field == SearchField::Name;
-    let (root_txt, root_hostil) = path_display(root);
+    // #98/F4: la raíz del walk es superficie de decisión — sigue la
+    // reinterpretación del pane (la barra de abajo pinta el mismo dir así).
+    let (root_txt, root_hostil) = norte_frontend::path_display_with(root, enc);
     let root_line = if root_hostil {
         format!("{HOSTILE_BADGE} {root_txt}")
     } else {
@@ -340,7 +349,8 @@ fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer, app: &App)
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(frame.area());
-    let (title, hostil) = path_display(&viewer.path);
+    let (title, hostil) =
+        norte_frontend::path_display_with(&viewer.path, app.focused().name_encoding());
     let title = if hostil {
         format!("{HOSTILE_BADGE} {title}")
     } else {
@@ -434,7 +444,18 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
 }
 
 /// Caja centrada del modal.
-fn draw_modal(frame: &mut Frame<'_>, modal: &crate::app::Modal, theme: &TuiTheme) {
+/// `reinterpret` = enc del pane con FOCO al pintar: correcto para los
+/// modales SÍNCRONOS (confirmar copy/move/delete se crea desde el pane con
+/// foco y un modal abierto congela el foco — creación ≡ draw). Los ASYNC
+/// (colisión) llevan su enc capturado al lanzar (`RetrySpec`, #98/M1). Los
+/// paths de agentes (`ApproveAgentOp`) JAMÁS se reinterpretan: otra
+/// frontera de confianza (van por `display_name` crudo a propósito).
+fn draw_modal(
+    frame: &mut Frame<'_>,
+    modal: &crate::app::Modal,
+    theme: &TuiTheme,
+    reinterpret: Option<norte_encoding::NameEncoding>,
+) {
     use crate::app::{Modal, TransferKind};
     let (titulo, cuerpo): (String, String) = match modal {
         Modal::ConfirmDelete { target, permanent } => (
@@ -447,7 +468,7 @@ fn draw_modal(frame: &mut Frame<'_>, modal: &crate::app::Modal, theme: &TuiTheme
                 "{}
 {}
 {}",
-                path_display(target).0,
+                norte_frontend::path_display_with(target, reinterpret).0,
                 if *permanent {
                     t("modal-delete-permanent-warning")
                 } else {
@@ -465,11 +486,13 @@ fn draw_modal(frame: &mut Frame<'_>, modal: &crate::app::Modal, theme: &TuiTheme
                 "{}
 → {}
 {}",
-                path_display(from).0,
-                path_display(to).0,
+                norte_frontend::path_display_with(from, reinterpret).0,
+                norte_frontend::path_display_with(to, reinterpret).0,
                 t("modal-confirm-keys")
             ),
         ),
+        // #98/M1: la colisión llega ASYNC — usa el enc capturado al LANZAR
+        // la operación (RetrySpec), jamás el del pane con foco al llegar.
         Modal::Collision { retry } => (
             t("modal-collision-title"),
             format!(
@@ -477,7 +500,7 @@ fn draw_modal(frame: &mut Frame<'_>, modal: &crate::app::Modal, theme: &TuiTheme
 {}
 {}",
                 t("modal-collision-body"),
-                path_display(&retry.to).0,
+                norte_frontend::path_display_with(&retry.to, retry.name_encoding).0,
                 t("modal-collision-keys")
             ),
         ),
@@ -707,7 +730,7 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, them
     } else {
         theme.role(Role::BorderUnfocused)
     };
-    let (title, title_hostil) = path_display(pane.dir());
+    let (title, title_hostil) = norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
     let mut title = if title_hostil {
         format!("{HOSTILE_BADGE} {title}")
     } else {
@@ -747,7 +770,7 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, them
     // Filtro activo: SOLO los índices visibles, con el cursor visual en la
     // posición DENTRO del filtrado. En Jump (quick_visible = None) el
     // listado va entero y manda el cursor real.
-    let reinterpret = pane.name_encoding;
+    let reinterpret = pane.name_encoding();
     let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = match pane.quick_visible() {
         Some(vis) => (
             vis.iter()
@@ -810,7 +833,8 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     } else {
         format!("  {pos}/{total}")
     };
-    let (dir_texto, dir_hostil) = path_display(pane.dir());
+    let (dir_texto, dir_hostil) =
+        norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
     let marca = if dir_hostil { HOSTILE_BADGE } else { "" };
     // Sin chuleta de teclas: mentiría según el preset (el which-key overlay
     // llega en fase 5). La secuencia pendiente SÍ se pinta (ADR 0006).
@@ -876,7 +900,7 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         // #57: modo de reinterpretación activo — PERSISTENTE mientras dure
         // (los nombres pintados no son los bytes; el usuario debe saberlo
         // en todo momento, no solo en el mensaje del toggle).
-        let nombres = match pane.name_encoding {
+        let nombres = match pane.name_encoding() {
             Some(enc) => format!("  {}", ta("status-names-encoding", &[("enc", enc.label())])),
             None => String::new(),
         };

@@ -48,20 +48,6 @@ pub struct Pane {
     /// `n > 0` — un listado incompleto jamás es silencioso (paralelo del
     /// contrato de [`Pane::loading`]). `None` = no aplica/desconocido.
     pub skipped: Option<u64>,
-    /// Reinterpretación de NOMBRES no-UTF8 para display (#57, spec §6.1):
-    /// `Some(enc)` = «ver nombres como enc» — SOLO display, los bytes jamás
-    /// se mutan (regla 1) y cada nombre reinterpretado conserva su badge
-    /// hostil. Persistente por pane (como TC): la barra lo indica mientras
-    /// esté activo; `pane.names-encoding` lo cicla (None → sugerido/cp437 →
-    /// … → None).
-    pub name_encoding: Option<norte_encoding::NameEncoding>,
-    /// Índice del ciclo por el que ENTRÓ la reinterpretación activa (la
-    /// sugerencia de chardetng, o 0): el ciclo da la VUELTA completa —
-    /// (i+1) % len — y se apaga al volver aquí. Sin esto, los encodings
-    /// anteriores a la sugerencia serían inalcanzables (M1 del review #57:
-    /// con sugerencia IBM866, cp437 — el caso estrella — no se podía
-    /// elegir). Solo significativo con `name_encoding = Some`.
-    name_encoding_entry: usize,
 }
 
 /// Estado de presentación de una búsqueda viva (`Alt+F7`, liveSearch T6): el
@@ -96,46 +82,21 @@ impl Pane {
             search_state: SearchState::Running,
             search_error: None,
             skipped: None,
-            name_encoding: None,
-            name_encoding_entry: 0,
         }
     }
 
-    /// Cicla la reinterpretación de nombres (#57): `None` → (sugerencia de
-    /// chardetng sobre los nombres no-UTF8 del listado, si cae en el ciclo;
-    /// si no, cp437) → VUELTA COMPLETA al ciclo — todos los encodings son
-    /// alcanzables desde cualquier sugerencia — → `None` al regresar al
-    /// punto de entrada. Devuelve la etiqueta a anunciar en la barra
-    /// (`None` = «auto/bytes», modo apagado).
+    /// Cicla la reinterpretación de nombres (#57): delegado puro — la
+    /// mecánica (sugerencia, vuelta completa del ciclo, re-pliegue del quick
+    /// vivo) vive en [`norte_frontend::PaneState::cycle_name_encoding`]
+    /// (#98/m2: la GUI la reusa tal cual).
     pub fn cycle_name_encoding(&mut self) -> Option<&'static str> {
-        let cycle = norte_encoding::name_reinterpret_cycle();
-        self.name_encoding = match self.name_encoding {
-            None => {
-                let raws: Vec<&[u8]> = self
-                    .entries()
-                    .iter()
-                    .filter_map(|e| e.path.file_name().map(norte_proto::Segment::as_bytes))
-                    .filter(|b| std::str::from_utf8(b).is_err())
-                    .collect();
-                let sugerido = norte_encoding::suggest_name_encoding(&raws);
-                let entry = sugerido
-                    .and_then(|s| cycle.iter().position(|e| *e == s))
-                    .unwrap_or(0);
-                self.name_encoding_entry = entry;
-                Some(cycle[entry])
-            }
-            Some(cur) => match cycle.iter().position(|e| *e == cur) {
-                Some(i) => {
-                    let next = (i + 1) % cycle.len();
-                    // Vuelta completada: apagar (el ciclo siempre acaba en
-                    // off, pase por donde pase la sugerencia de entrada).
-                    (next != self.name_encoding_entry).then(|| cycle[next])
-                }
-                // Valor fuera del ciclo (imposible hoy): apagar.
-                None => None,
-            },
-        };
-        self.name_encoding.map(|e| e.label())
+        self.state.cycle_name_encoding()
+    }
+
+    /// Reinterpretación de nombres activa (#57), para render.
+    #[must_use]
+    pub fn name_encoding(&self) -> Option<norte_encoding::NameEncoding> {
+        self.state.name_encoding()
     }
 
     // --- Delegados de solo-lectura sobre el estado compartido (#82) ---
@@ -593,8 +554,14 @@ impl NavPopup {
 /// Display de un item del popup de navegación: `[name — ]path` con el badge
 /// hostil como PREFIJO si cualquier parte saldría alterada (mismo criterio
 /// que los panes: lossy y MARCADO, spec §6).
-fn nav_item_display(name: Option<&str>, path: &VPath) -> String {
-    let (texto, path_hostil) = path_display(path);
+fn nav_item_display(
+    name: Option<&str>,
+    path: &VPath,
+    enc: Option<norte_encoding::NameEncoding>,
+) -> String {
+    // #98/F4: los popups son superficie de DECISIÓN (elegir destino de
+    // salto) — siguen la reinterpretación del pane con foco, como la barra.
+    let (texto, path_hostil) = norte_frontend::path_display_with(path, enc);
     let (prefix, name_hostil) = match name {
         Some(n) => {
             let (nt, nh) = display_name(n.as_bytes());
@@ -888,12 +855,13 @@ impl App {
     /// construyen YA saneados aquí (`nav_item_display`); una entrada de
     /// hotlist inválida se muestra con su aviso y destino `None`.
     pub fn open_nav_popup(&mut self, kind: NavPopupKind) {
+        let enc = self.focused().name_encoding();
         let items: Vec<NavItem> = match kind {
             NavPopupKind::History => self.history[self.focus]
                 .entries()
                 .iter()
                 .map(|p| NavItem {
-                    display: nav_item_display(None, p),
+                    display: nav_item_display(None, p, enc),
                     target: Some(p.clone()),
                     hotlist_name: None,
                 })
@@ -903,7 +871,7 @@ impl App {
                 .iter()
                 .map(|h| {
                     let (display, target) = if let Ok(p) = &h.target {
-                        (nav_item_display(Some(&h.name), p), Some(p.clone()))
+                        (nav_item_display(Some(&h.name), p, enc), Some(p.clone()))
                     } else {
                         // review MINOR T5: el flag hostil del name NO se
                         // descarta — una inválida con name bidi también
