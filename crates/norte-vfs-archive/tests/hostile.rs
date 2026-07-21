@@ -422,3 +422,97 @@ async fn tar_passthrough_corto_es_corrupt_no_datos_cortos() {
     assert!(stream.next().await.is_none());
     assert!(stream.next().await.is_none());
 }
+
+/// #60 (H6): GNU longname — el header lleva el nombre TRUNCADO a 100 pero
+/// `path_bytes()` del crate aplica el longname byte-exacto. Ningún test
+/// compilaba este camino: el nombre 255 del corpus, vía longname, debe
+/// listarse ENTERO y leerse.
+#[tokio::test]
+async fn gnu_longname_roundtrip_nombre_255_del_corpus() {
+    let largo = norte_testkit::corpus::hostile_names()
+        .into_iter()
+        .find(|n| n.id == "name_max_255")
+        .expect("fixture del corpus")
+        .bytes;
+    assert_eq!(largo.len(), 255);
+    let tar = TarSmith::new()
+        .file_gnu_longname(&largo, b"contenido-largo")
+        .file(b"corto.txt", b"x")
+        .build();
+    let (p, root) = common::tar_provider(&tar).await;
+    let names = list_names(&p, &root).await;
+    assert!(
+        names.contains(&largo),
+        "el nombre de 255 bytes se lista BYTE-EXACTO vía longname"
+    );
+    assert_eq!(
+        read_all(&p, &root.join(seg(&largo)), None).await,
+        b"contenido-largo"
+    );
+}
+
+/// #60: override pax `path=` con bytes NO-UTF8 — el crate aplica el path
+/// del record pax byte-exacto (pax real exige UTF-8; los tars hostiles no).
+#[tokio::test]
+async fn pax_path_no_utf8_roundtrip() {
+    let nombre = b"docs/caf\xe9.txt"; // é en Latin-1 dentro de un path pax
+    let tar = TarSmith::new().file_pax_path(nombre, b"pax!").build();
+    let (p, root) = common::tar_provider(&tar).await;
+    let docs = list_names(&p, &root).await;
+    assert_eq!(
+        docs,
+        vec![b"docs".to_vec()],
+        "el dir implícito del pax path"
+    );
+    assert_eq!(
+        read_all(&p, &root.join(seg(b"docs")).join(seg(b"caf\xe9.txt")), None).await,
+        b"pax!"
+    );
+}
+
+/// #60: zip-slip VÍA longname — un traversal que no cabe en el header ustar
+/// (>100 bytes) llega entero por el longname y debe OMITIRSE igual que el
+/// corto (contando en skipped), jamás colarse por venir del camino largo.
+#[tokio::test]
+async fn zip_slip_via_longname_se_omite() {
+    // MAJOR del audit: el prefijo truncado a 100 debe ser BENIGNO — el
+    // traversal vive SOLO más allá del truncado. Con el longname roto, el
+    // header benigno «aaa…» se colaría en el listado y skipped sería 0:
+    // ambos asserts fallan ruidoso (probado con mutante que suprime la L).
+    let mut evil = vec![b'a'; 100];
+    evil.extend_from_slice(b"/../../../etc/passwd");
+    let tar = TarSmith::new()
+        .file_gnu_longname(&evil, b"slip")
+        .file(b"ok.txt", b"bien")
+        .build();
+    let (p, root) = common::tar_provider(&tar).await;
+    let names = list_names(&p, &root).await;
+    assert!(
+        !names.contains(&vec![b'a'; 100]),
+        "el nombre truncado benigno NO se cuela"
+    );
+    assert_eq!(names, vec![b"ok.txt".to_vec()]);
+    assert_eq!(
+        p.list_skipped(&root).await.expect("skipped"),
+        Some(1),
+        "el traversal del longname cuenta como omitida"
+    );
+}
+
+/// #60 (H5, pin directo vía `entry_raw`): un `pax_global_header` (typeflag
+/// `g`, lo que emite `git archive`) NO fantasmea en el listado — el
+/// iterador del crate no lo consume solo y el filtro de `classify_entry` lo
+/// descarta.
+#[tokio::test]
+async fn pax_global_header_crudo_no_fantasmea() {
+    let tar = TarSmith::new()
+        .entry_raw(b'g', b"pax_global_header", b"23 comment=git archive\n")
+        .file(b"real.txt", b"si")
+        .build();
+    let (p, root) = common::tar_provider(&tar).await;
+    assert_eq!(list_names(&p, &root).await, vec![b"real.txt".to_vec()]);
+    assert_eq!(
+        read_all(&p, &root.join(seg(b"real.txt")), None).await,
+        b"si"
+    );
+}
