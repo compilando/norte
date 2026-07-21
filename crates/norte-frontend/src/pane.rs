@@ -14,11 +14,13 @@
 //! de una sola vez y no los usa; la TUI sí.
 
 use crate::nav::{Mode, QuickSearch};
+use crate::sort::SortKey;
 use norte_proto::{Entry, VPath};
 use std::collections::HashSet;
 
-/// Estado no-render de un pane: directorio, entradas (ya ordenadas por el
-/// caller con [`sort_entries`](crate::sort_entries)), cursor y quick search.
+/// Estado no-render de un pane: directorio, entradas (normalizadas
+/// internamente — ya no exige orden previo del caller, ver [`PaneState::new`]),
+/// cursor y quick search.
 ///
 /// El cursor es un índice en `entries` (0 incluso con lista vacía). Con un
 /// quick search en modo [`Mode::Filter`] activo, la SELECCIÓN vive dentro del
@@ -28,6 +30,9 @@ use std::collections::HashSet;
 pub struct PaneState {
     dir: VPath,
     entries: Vec<Entry>,
+    /// Claves de orden persistidas, índice-paralelas a `entries` (#54): el
+    /// fill mergea lotes O(n+m) sin recomputar la clave NFC de lo ya listado.
+    sort_keys: Vec<SortKey>,
     cursor: usize,
     loading: bool,
     quick: Option<QuickSearch>,
@@ -35,14 +40,17 @@ pub struct PaneState {
 }
 
 impl PaneState {
-    /// Pane sobre `dir` con `entries` (ordénalas antes con
-    /// [`sort_entries`](crate::sort_entries)). Cursor en 0, sin quick search,
-    /// sin carga pendiente.
+    /// Pane sobre `dir` con `entries` (se normalizan internamente: ya no hace
+    /// falta ordenarlas antes — el contrato "ordénalas antes" deja de ser
+    /// footgun, ver [`sort_entries`](crate::sort_entries) para el criterio).
+    /// Cursor en 0, sin quick search, sin carga pendiente.
     #[must_use]
     pub fn new(dir: VPath, entries: Vec<Entry>) -> Self {
+        let (entries, sort_keys) = crate::sort::sort_with_keys(entries);
         Self {
             dir,
             entries,
+            sort_keys,
             cursor: 0,
             loading: false,
             quick: None,
@@ -52,9 +60,12 @@ impl PaneState {
 
     /// Reemplaza el contenido tras un cd/refresh: resetea el cursor a 0, apaga
     /// el `loading` y MATA cualquier quick search vivo (filtraba OTRO listado).
+    /// Normaliza `entries` internamente (mismo contrato que [`PaneState::new`]).
     pub fn set_listing(&mut self, dir: VPath, entries: Vec<Entry>) {
+        let (entries, sort_keys) = crate::sort::sort_with_keys(entries);
         self.dir = dir;
         self.entries = entries;
+        self.sort_keys = sort_keys;
         self.cursor = 0;
         self.loading = false;
         self.quick = None;
@@ -69,6 +80,7 @@ impl PaneState {
     pub fn begin_loading(&mut self, dir: VPath) {
         self.dir = dir;
         self.entries = Vec::new();
+        self.sort_keys = Vec::new();
         self.cursor = 0;
         self.loading = true;
         self.quick = None;
@@ -314,18 +326,21 @@ impl PaneState {
         Some(self.entries.get(i)?.path.clone())
     }
 
-    /// Añade `batch` a un listado paginado en curso (ADR 0017), RE-ORDENA con
-    /// [`sort_entries`](crate::sort_entries) y reconcilia: re-ancla el cursor al
-    /// PATH seleccionado (clamp por índice si desapareció) y RE-APLICA el quick
-    /// por path. Lote vacío = no-op. (#82)
+    /// Añade `batch` a un listado paginado en curso (ADR 0017): #54 mergea
+    /// O(n+m) con las claves NFC PERSISTIDAS (`sort_keys`) — el lote se ordena
+    /// solo y se mergea de forma estable contra lo ya listado, mismo orden
+    /// final que [`sort_entries`](crate::sort_entries) sobre el total, sin
+    /// recomputar la clave de lo que ya estaba. Reconcilia: re-ancla el cursor
+    /// al PATH seleccionado (clamp por índice si desapareció) y RE-APLICA el
+    /// quick por path. Lote vacío = no-op. (#82)
     pub fn extend(&mut self, batch: Vec<Entry>) {
         if batch.is_empty() {
             return;
         }
         let quick_prev = self.quick_selected_path();
         let anchor = self.entries.get(self.cursor).map(|e| e.path.clone());
-        self.entries.extend(batch);
-        crate::sort_entries(&mut self.entries);
+        let (batch, batch_keys) = crate::sort::sort_with_keys(batch);
+        crate::sort::merge_keyed(&mut self.entries, &mut self.sort_keys, batch, batch_keys);
         self.cursor = anchor
             .and_then(|p| self.entries.iter().position(|e| e.path == p))
             .unwrap_or_else(|| self.cursor.min(self.entries.len().saturating_sub(1)));
@@ -338,11 +353,15 @@ impl PaneState {
     /// Reemplaza el listado COMPLETO del MISMO dir (refresh tras mutación):
     /// conserva el cursor por ÍNDICE con clamp (tras un delete queda en la
     /// siguiente entrada — ortodoxo) y RE-APLICA el quick por path. No toca el
-    /// flag de carga. (#82)
+    /// flag de carga. Normaliza `entries` internamente (#54: cierra el mismo
+    /// footgun que `new`/`set_listing` — idempotente si el caller ya venía
+    /// ordenado). (#82)
     pub fn refill(&mut self, entries: Vec<Entry>) {
         let quick_prev = self.quick_selected_path();
+        let (entries, sort_keys) = crate::sort::sort_with_keys(entries);
         self.cursor = self.cursor.min(entries.len().saturating_sub(1));
         self.entries = entries;
+        self.sort_keys = sort_keys;
         if let Some(q) = &mut self.quick {
             q.refresh(&self.entries, quick_prev.as_ref());
         }
@@ -576,7 +595,10 @@ mod tests {
                 },
             ],
         );
-        p.toggle_mark(); // marca la hostil (cursor 0)
+        // #54: `new` normaliza — orden por bytes crudos pone "a" (0x61) antes
+        // que 0xFF, así que la hostil queda en el índice 1, no en el cursor 0.
+        p.cursor_down();
+        p.toggle_mark(); // marca la hostil
         assert!(p.marks.contains(&hostile));
         assert!(!p.marks.contains(&benign));
         assert_eq!(p.marked_paths(), vec![hostile]);
@@ -661,13 +683,27 @@ mod tests {
 
     #[test]
     fn quick_next_mueve_el_cursor_real_con_wrap() {
-        let mut p = pane(&["ab", "zz", "ac"]);
+        // #54: `new` normaliza (dirs primero, alfabético dentro del grupo).
+        // "aa"(dir) y "ac"(file) casan con 'a'; "bb"(dir) queda en medio (no
+        // casa) para seguir probando que Tab SALTA el no-match intermedio.
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///aa", EntryKind::Dir),
+                e("mem:///bb", EntryKind::Dir),
+                e("mem:///ac", EntryKind::File),
+            ],
+        );
         p.quick_start(crate::nav::Mode::Jump);
         p.quick_char('a');
         assert_eq!(p.cursor(), 0, "salta al primer match");
         assert!(p.quick_visible().is_none(), "en salto el listado va entero");
         p.quick_next();
-        assert_eq!(p.cursor(), 2, "Tab: siguiente match");
+        assert_eq!(
+            p.cursor(),
+            2,
+            "Tab: siguiente match, salta el no-match intermedio"
+        );
         p.quick_next();
         assert_eq!(p.cursor(), 0, "wrap");
     }
@@ -710,6 +746,128 @@ mod tests {
             p.selected().unwrap().path,
             VPath::parse("mem:///z").unwrap(),
             "la selección sigue el path pese al re-orden"
+        );
+    }
+
+    /// #54: el merge incremental produce EXACTAMENTE el mismo orden que
+    /// `sort_entries` sobre el total (dirs primero, NFC, empate por bytes) —
+    /// incluidos NFD/NFC mezclados y no-UTF8.
+    #[test]
+    fn extend_merge_equivale_a_sort_completo() {
+        let lotes: Vec<Vec<Entry>> = vec![
+            vec![
+                e("mem:///zeta", EntryKind::File),
+                e("mem:///Adir", EntryKind::Dir),
+            ],
+            vec![e("mem:///an%CC%83o", EntryKind::File)], // NFD
+            vec![
+                e("mem:///a%C3%B1o2", EntryKind::File), // NFC
+                e("mem:///%FF%FE", EntryKind::File),    // no-UTF8
+            ],
+            vec![e("mem:///Bdir", EntryKind::Dir)],
+            // Sobrelargo (>255 bytes): el orden no tiene camino especial por
+            // longitud, pero que quede pineado en la equivalencia.
+            vec![e(&format!("mem:///{}", "x".repeat(300)), EntryKind::File)],
+        ];
+        let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), Vec::new());
+        for lote in lotes.clone() {
+            p.extend(lote);
+        }
+        let mut plano: Vec<Entry> = lotes.into_iter().flatten().collect();
+        crate::sort_entries(&mut plano);
+        assert_eq!(p.entries(), plano.as_slice(), "merge ≡ sort completo");
+    }
+
+    /// El contrato "ordénalas antes" deja de ser footgun: `set_listing`/`new`
+    /// normalizan internamente (claves + orden) — un caller desordenado ya
+    /// no rompe el invariante del merge.
+    #[test]
+    fn set_listing_normaliza_aunque_llegue_desordenado() {
+        let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), Vec::new());
+        p.set_listing(
+            VPath::parse("mem:///d").unwrap(),
+            vec![
+                e("mem:///d/z", EntryKind::File),
+                e("mem:///d/a", EntryKind::File),
+            ],
+        );
+        assert_eq!(p.entries()[0].path, VPath::parse("mem:///d/a").unwrap());
+        // Y el extend posterior sigue mergeando bien sobre esa base.
+        p.extend(vec![e("mem:///d/m", EntryKind::File)]);
+        let names: Vec<_> = p.entries().iter().map(|x| x.path.clone()).collect();
+        assert_eq!(
+            names,
+            vec![
+                VPath::parse("mem:///d/a").unwrap(),
+                VPath::parse("mem:///d/m").unwrap(),
+                VPath::parse("mem:///d/z").unwrap(),
+            ]
+        );
+    }
+
+    /// Empate de clave NFC entre lotes (misma forma normalizada, bytes
+    /// crudos distintos: NFD en el lote 1 vs NFC en el lote 2) — el
+    /// desempate lo decide `name_bytes` crudo, igual que `sort_entries`, NO
+    /// el orden de llegada del merge (que solo desempata IZQUIERDA=empate
+    /// exacto de clave, y aquí las claves NFC coinciden pero los bytes no).
+    #[test]
+    fn extend_desempata_por_bytes_crudos_igual_que_sort_completo() {
+        let nfd = e("mem:///an%CC%83o", EntryKind::File); // "año" NFD
+        let nfc = e("mem:///a%C3%B1o", EntryKind::File); // "año" NFC
+        let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), Vec::new());
+        p.extend(vec![nfd.clone()]);
+        p.extend(vec![nfc.clone()]);
+        let mut plano = vec![nfd, nfc];
+        crate::sort_entries(&mut plano);
+        assert_eq!(
+            p.entries(),
+            plano.as_slice(),
+            "el empate de clave NFC entre lotes se resuelve igual que sort_entries"
+        );
+    }
+
+    /// ADVERSARIAL A (mutación, review encoding #54): la NFC llega ANTES que
+    /// la NFD — el orden de llegada CONTRADICE el desempate por bytes crudos
+    /// (NFD `61 6E CC 83` < NFC `61 C3 B1`). Un merge sin `.then_with(bytes)`
+    /// pasaría el test gemelo de arriba (allí llegada y bytes coinciden) pero
+    /// muere aquí.
+    #[test]
+    fn adversarial_nfc_llega_antes_que_nfd() {
+        let nfd = e("mem:///an%CC%83o", EntryKind::File);
+        let nfc = e("mem:///a%C3%B1o", EntryKind::File);
+        let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), Vec::new());
+        p.extend(vec![nfc.clone()]);
+        p.extend(vec![nfd.clone()]);
+        let mut plano = vec![nfc, nfd];
+        crate::sort_entries(&mut plano);
+        assert_eq!(p.entries(), plano.as_slice());
+        assert_eq!(
+            p.entries()[0].path,
+            VPath::parse("mem:///an%CC%83o").unwrap(),
+            "NFD primero por bytes crudos, no por orden de llegada"
+        );
+    }
+
+    /// ADVERSARIAL B (mutación, review encoding #54): inversión NFC↔bytes.
+    /// NFD "ñu" = `6E CC 83 75`, "o" = `6F`: por clave NFC (`C3 B1 75`)
+    /// ñu > o, pero por bytes crudos ñu < o. Un `cmp_keyed` que use los
+    /// bytes como clave PRIMARIA (ignorando la NFC persistida) invierte el
+    /// orden — spec §6.1 rota en macOS/NFD sin que el resto de la suite lo
+    /// note. Cruza frontera de lote a propósito.
+    #[test]
+    fn adversarial_inversion_nfc_vs_bytes_entre_lotes() {
+        let nfd_enye = e("mem:///n%CC%83u", EntryKind::File);
+        let o = e("mem:///o", EntryKind::File);
+        let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), Vec::new());
+        p.extend(vec![nfd_enye.clone()]);
+        p.extend(vec![o.clone()]);
+        let mut plano = vec![nfd_enye, o];
+        crate::sort_entries(&mut plano);
+        assert_eq!(p.entries(), plano.as_slice());
+        assert_eq!(
+            p.entries()[0].path,
+            VPath::parse("mem:///o").unwrap(),
+            "'o' primero: la clave primaria es NFC, no los bytes crudos"
         );
     }
 

@@ -23,7 +23,7 @@ use norte_tui::app::{
     App, DialogOutcome, ExtensionManager, Help, KeymapsError, Modal, NavPopupKind, Pane,
     PickerAction, SearchDialog, SearchState, TransferKind, config_error_category, detail_for_bar,
     dialog_key, error_category, error_message, io_error_category, keymaps_error_category,
-    sort_entries, theme_error_category,
+    theme_error_category,
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::keymap::{
@@ -2405,13 +2405,13 @@ fn archive_root_for(e: &norte_proto::Entry) -> Option<VPath> {
     VPath::archive_compose(format, &e.path, &[]).ok()
 }
 
-/// Listado COMPLETO y ordenado de `dir` (para `refresh_panes` tras una
-/// mutación: conserva el cursor por índice). Una entrada con error corta el
-/// listado — mejor un error honesto que un listado silenciosamente incompleto.
+/// Listado COMPLETO de `dir` (para `refresh_panes` tras una mutación:
+/// conserva el cursor por índice). Una entrada con error corta el listado —
+/// mejor un error honesto que un listado silenciosamente incompleto. #54: NO
+/// ordena aquí — `refresh_listing`/`PaneState::refill` normalizan
+/// internamente, un sort manual sería trabajo duplicado.
 async fn listing(backend: &Backend, dir: &VPath) -> Result<Vec<Entry>, Error> {
-    let mut entries = backend.list(dir).await?;
-    sort_entries(&mut entries);
-    Ok(entries)
+    backend.list(dir).await
 }
 
 /// Primera página de `dir` (hasta [`FIRST_PAGE`]) más el stream con el RESTO
@@ -2506,8 +2506,9 @@ async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPa
         tokio::select! {
             res = &mut fut => {
                 match res {
-                    Ok((mut first, stream)) => {
-                        sort_entries(&mut first);
+                    Ok((first, stream)) => {
+                        // #54: NO ordenamos aquí — `begin_listing` ->
+                        // `PaneState::set_listing` normaliza internamente.
                         let more = stream.is_some();
                         app.focused_mut().begin_listing(dir.clone(), first, more);
                         let pane = app.focus();

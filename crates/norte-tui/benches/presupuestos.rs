@@ -15,7 +15,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use norte_core::Engine;
 use norte_frontend::PaneState;
 use norte_proto::{Entry, EntryKind, VPath};
-use norte_tui::app::{App, Pane, sort_entries};
+use norte_tui::app::{App, Pane};
 use norte_tui::config::{Layers, load};
 use norte_tui::keymap::{COMMANDS, Effective, Screen, presets};
 use norte_tui::ui;
@@ -23,7 +23,9 @@ use norte_vfs_local::LocalProvider;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
-/// Drena el listado ENTERO + sort (vara de regresión del coste total).
+/// Drena el listado ENTERO (vara de regresión del coste total). #54: NO
+/// ordena aquí — `Pane::new` (vía `PaneState::new`) normaliza internamente;
+/// ordenar aquí también sería trabajo duplicado y falsearía el bench.
 fn listar(rt: &tokio::runtime::Runtime, engine: &Engine, dir: &VPath) -> Vec<Entry> {
     use futures::StreamExt;
     rt.block_on(async {
@@ -32,13 +34,13 @@ fn listar(rt: &tokio::runtime::Runtime, engine: &Engine, dir: &VPath) -> Vec<Ent
         while let Some(item) = stream.next().await {
             out.push(item.expect("entry"));
         }
-        sort_entries(&mut out);
         out
     })
 }
 
-/// PRIMERA página (hasta 100) + sort: el camino real del primer render con
+/// PRIMERA página (hasta 100): el camino real del primer render con
 /// paginación (ADR 0017). No drena las 100k — es lo que #27 mide de verdad.
+/// #54: NO ordena aquí, mismo motivo que [`listar`].
 fn primera_pagina(rt: &tokio::runtime::Runtime, engine: &Engine, dir: &VPath) -> Vec<Entry> {
     use futures::StreamExt;
     rt.block_on(async {
@@ -50,7 +52,6 @@ fn primera_pagina(rt: &tokio::runtime::Runtime, engine: &Engine, dir: &VPath) ->
                 None => break,
             }
         }
-        sort_entries(&mut out);
         out
     })
 }
