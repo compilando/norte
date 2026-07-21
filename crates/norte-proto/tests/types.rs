@@ -692,12 +692,12 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.20.0 (#44 connection.degraded): acepta 0.20.x (N) y 0.19.x (N-1),
-    // rechaza 0.18.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.20.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.19.0"), "N-1");
+    // 0.21.0 (#55 tar+gz, ADR 0028): acepta 0.21.x (N) y 0.20.x (N-1),
+    // rechaza 0.19.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.21.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.20.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.18.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.19.9"),
         "N-2 fuera de la ventana"
     );
 }

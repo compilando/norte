@@ -54,12 +54,19 @@ pub enum VPathError {
     ArchiveAddressing,
 }
 
-/// Tokens de formato de archivo-como-directorio reconocidos (ADR 0018).
+/// Tokens de formato de archivo-como-directorio reconocidos (ADR 0018,
+/// ADR 0028 para `tar+gz`).
 ///
-/// Un scheme es compuesto si y solo si su prefijo hasta el primer `+` está
-/// aquí; ampliar la lista es cambio de protocolo. Reserva normativa: ningún
-/// provider registra schemes que empiecen por `<formato>+`.
-pub const ARCHIVE_FORMATS: &[&str] = &["zip", "tar"];
+/// Un scheme es compuesto si y solo si su prefijo hasta el `+` que lo separa
+/// del scheme interior coincide EXACTAMENTE con uno de estos tokens; ampliar
+/// la lista es cambio de protocolo. `tar+gz` es un token COMPUESTO (contiene
+/// un `+` propio): la capa gzip es opaca dentro del formato, no un mecanismo
+/// general de capas (eso queda diferido a #56). La resolución es
+/// longest-match contra esta whitelist (`scheme_format_prefix`):
+/// `tar+gz+file` es formato `tar+gz` sobre `file`, nunca formato `tar` sobre
+/// un interior huérfano `gz+file`. Reserva normativa: ningún provider
+/// registra schemes que empiecen por `<formato>+`.
+pub const ARCHIVE_FORMATS: &[&str] = &["zip", "tar", "tar+gz"];
 
 /// Referencia desmontada de un path de archivo-como-directorio (ADR 0018):
 /// `<formato>+<scheme>://auth/<exterior>/!/<interior>`.
@@ -420,12 +427,17 @@ impl VPath {
     ///
     /// # Errors
     /// [`VPathError::ArchiveAddressing`] si `format` no está en
-    /// [`ARCHIVE_FORMATS`], si `outer` ya es compuesto (v1 = una capa), o
-    /// si `outer`/`inner` contienen un segmento `!` literal (el exterior
-    /// no sería direccionable; el interior, incontrastable con el índice,
-    /// que omite esos componentes). [`VPathError::InvalidScheme`] si la
-    /// concatenación no forma un scheme válido (imposible con formatos de
-    /// la whitelist; defensa en profundidad).
+    /// [`ARCHIVE_FORMATS`], si `outer` ya es compuesto (v1 = una capa), si
+    /// `outer`/`inner` contienen un segmento `!` literal (el exterior no
+    /// sería direccionable; el interior, incontrastable con el índice, que
+    /// omite esos componentes), o si el scheme resultante NO re-resuelve a
+    /// `format` por longest-match (ambigüedad de token compuesto: p. ej.
+    /// `archive_compose("tar", <outer de scheme "gz+mem">, …)` formaría
+    /// `tar+gz+mem`, que [`Self::archive_split`] leería como formato
+    /// `tar+gz` sobre `mem`, no como `tar` sobre `gz+mem` — se rechaza para
+    /// sostener la garantía de roundtrip, ADR 0028). [`VPathError::InvalidScheme`]
+    /// si la concatenación no forma un scheme válido (imposible con formatos
+    /// de la whitelist; defensa en profundidad).
     ///
     /// # Panics
     /// Nunca en la práctica: `!` es un segmento válido por construcción.
@@ -440,6 +452,17 @@ impl VPath {
         if scheme_format_prefix(outer.scheme()).is_some() {
             return Err(VPathError::ArchiveAddressing);
         }
+        let composed_scheme = format!("{format}+{}", outer.scheme());
+        // Guardia de roundtrip (ADR 0028): con tokens compuestos como
+        // `tar+gz`, anteponer `format` al scheme de `outer` puede formar un
+        // scheme que el longest-match de `scheme_format_prefix` resuelve a
+        // OTRO formato (ver ejemplo en el rustdoc de arriba). Si no
+        // re-resuelve exactamente a `format`, `archive_split` jamás podría
+        // deshacer este compose tal y como se pidió: se rechaza aquí en vez
+        // de fabricar un path que rompe su propio contrato.
+        if scheme_format_prefix(&composed_scheme) != Some(format) {
+            return Err(VPathError::ArchiveAddressing);
+        }
         let marker = || Segment::new(MARKER.to_vec()).expect("`!` es segmento válido");
         if outer.segments.iter().any(|s| s.as_bytes() == MARKER)
             || inner.iter().any(|s| s.as_bytes() == MARKER)
@@ -450,7 +473,7 @@ impl VPath {
         segments.push(marker());
         segments.extend_from_slice(inner);
         Ok(Self {
-            scheme: Scheme::new(&format!("{format}+{}", outer.scheme()))?,
+            scheme: Scheme::new(&composed_scheme)?,
             authority: outer.authority.clone(),
             segments,
         })
@@ -529,11 +552,44 @@ fn is_display_hazard(c: char) -> bool {
 /// El segmento marcador de ADR 0018.
 const MARKER: &[u8] = b"!";
 
-/// El token de formato si `scheme` es compuesto (`zip+file` → `Some("zip")`);
-/// `None` si el prefijo hasta el primer `+` no es un formato registrado.
+/// El token de formato si `scheme` es compuesto (`zip+file` → `Some("zip")`,
+/// `tar+gz+file` → `Some("tar+gz")`); `None` si ningún prefijo de
+/// [`ARCHIVE_FORMATS`] encaja.
+///
+/// LONGEST-MATCH, no `split_once('+')`: un token puede contener `+` propio
+/// (`tar+gz`), así que cortar en el primer `+` dejaría `tar+gz+file` como
+/// formato `tar` sobre un interior huérfano `gz+file`. Se prueban TODOS los
+/// formatos de la whitelist y se queda con el más largo que encaje como
+/// prefijo seguido de `+` (ADR 0028).
 fn scheme_format_prefix(scheme: &str) -> Option<&str> {
-    let (prefix, _) = scheme.split_once('+')?;
-    ARCHIVE_FORMATS.contains(&prefix).then_some(prefix)
+    ARCHIVE_FORMATS
+        .iter()
+        .filter(|f| {
+            scheme.len() > f.len() && scheme.as_bytes()[f.len()] == b'+' && scheme.starts_with(*f)
+        })
+        .max_by_key(|f| f.len())
+        .copied()
+}
+
+/// Wrapper público del prefijo de formato para frontends (CLI/TUI) que
+/// necesitan reconocer un scheme de archivo-como-directorio (p. ej. para
+/// aceptar URLs `tar+gz+file://…`) sin duplicar la gramática de longest-match
+/// contra [`ARCHIVE_FORMATS`] (ADR 0028, #55).
+///
+/// Puramente sintáctico, igual que [`VPath::archive_split`]: no valida que
+/// el exterior nombre un archivo real, y `Some` no implica un marcador `!`
+/// bien formado (eso lo valida `archive_split`/`archive_compose`).
+///
+/// ```
+/// use norte_proto::scheme_archive_format;
+/// assert_eq!(scheme_archive_format("tar+gz+file"), Some("tar+gz"));
+/// assert_eq!(scheme_archive_format("zip+file"), Some("zip"));
+/// assert_eq!(scheme_archive_format("s3+v2.x-y"), None); // provider, no archivo
+/// assert_eq!(scheme_archive_format("file"), None);
+/// ```
+#[must_use]
+pub fn scheme_archive_format(scheme: &str) -> Option<&str> {
+    scheme_format_prefix(scheme)
 }
 
 impl fmt::Debug for VPath {

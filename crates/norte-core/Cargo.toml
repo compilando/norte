@@ -72,6 +72,9 @@ norte-vfs-local.workspace = true
 opendal = { workspace = true, features = ["services-fs"] }
 # Benchmarks del copy engine cross-provider (fase 10c).
 criterion.workspace = true
+# gzip de fixtures .tar.gz para el E2E del engine (#55) — mismo backend
+# (zlib-rs) que la dep directa de norte-vfs-archive, sin duplicar backend.
+flate2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time", "test-util"] }
 
 [[bench]]

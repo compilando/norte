@@ -249,6 +249,7 @@ impl Engine {
             let format = match aref.format.as_str() {
                 "tar" => norte_vfs_archive::Format::Tar,
                 "zip" => norte_vfs_archive::Format::Zip,
+                "tar+gz" => norte_vfs_archive::Format::TarGz,
                 // Formato de la whitelist de proto sin provider aquí: una
                 // versión de core más vieja que el proto. Honesto: no sé.
                 _ => return Err(Error::Unsupported),

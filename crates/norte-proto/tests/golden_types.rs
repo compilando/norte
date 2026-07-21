@@ -1116,7 +1116,11 @@ fn method_names_frozen() {
     assert_eq!(methods::RPC_CANCEL, "rpc.cancel");
     // 0.20.0 (#44): connection.degraded (server→client). Aditivo sobre 0.19.x.
     assert_eq!(methods::CONNECTION_DEGRADED, "connection.degraded");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.20.0");
+    // 0.21.0 (#55, ADR 0028): tar+gz en ARCHIVE_FORMATS (longest-match). No
+    // añade método/notificación nueva — el bump señala la capacidad de
+    // interpretar schemes `tar+gz+…`.
+    assert!(norte_proto::ARCHIVE_FORMATS.contains(&"tar+gz"));
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.21.0");
 }
 
 #[test]

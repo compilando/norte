@@ -2391,6 +2391,12 @@ async fn read_head(backend: &Backend, path: &VPath) -> Result<(Vec<u8>, bool), E
 /// contenedor en v1 (decisión consciente: exigiría resolver el target por
 /// stat del core; issue de fase 8g).
 fn archive_root_for(e: &norte_proto::Entry) -> Option<VPath> {
+    // Extensiones cuyo sufijo no coincide con el token del formato (#55):
+    // `tar+gz` no tiene un `.tar+gz` real en el mundo, la gente escribe
+    // `.tgz`/`.tar.gz`. Se comprueban ANTES del genérico `.{formato}` — un
+    // `.tar.gz` no casaría de todos modos con `.tar` (termina en `.gz`), así
+    // que el orden es defensivo, no estrictamente necesario hoy.
+    const EXT_ALIASES: &[(&[u8], &str)] = &[(b".tar.gz", "tar+gz"), (b".tgz", "tar+gz")];
     fn ends_ci(name: &[u8], suffix: &[u8]) -> bool {
         name.len() >= suffix.len() && name[name.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
     }
@@ -2398,9 +2404,16 @@ fn archive_root_for(e: &norte_proto::Entry) -> Option<VPath> {
         return None;
     }
     let name = e.path.file_name()?.as_bytes();
-    let format = norte_proto::ARCHIVE_FORMATS
+    let format = EXT_ALIASES
         .iter()
-        .find(|f| ends_ci(name, format!(".{f}").as_bytes()))?;
+        .find(|(suffix, _)| ends_ci(name, suffix))
+        .map(|(_, format)| *format)
+        .or_else(|| {
+            norte_proto::ARCHIVE_FORMATS
+                .iter()
+                .find(|f| ends_ci(name, format!(".{f}").as_bytes()))
+                .copied()
+        })?;
     // Falla (exterior con `!`, ya compuesto…): no es navegable — Enter no-op.
     VPath::archive_compose(format, &e.path, &[]).ok()
 }
@@ -2604,6 +2617,61 @@ mod archive_nav_tests {
         assert!(archive_root_for(&entry("file:///d/x.zip", EntryKind::Symlink)).is_none());
         // Ya compuesto (zip dentro de tar): v1 sin anidar → no-op.
         assert!(archive_root_for(&entry("tar+file:///a.tar/!/i.zip", EntryKind::File)).is_none());
+    }
+
+    /// #55: `.tgz`/`.tar.gz` no coinciden con el token `tar+gz` vía el
+    /// genérico `.{formato}` (el `+` no está en la extensión de archivo) —
+    /// `EXT_ALIASES` los mapea explícitamente, case-insensitive, antes del
+    /// genérico. `.tar`/`.zip` planos siguen funcionando sin pasar por el
+    /// alias (`.tar.gz` NO debe casar `.tar`: termina en `.gz`).
+    #[test]
+    fn archive_root_for_extensiones_targz() {
+        for wire in [
+            "file:///d/a.tgz",
+            "file:///d/a.tar.gz",
+            "file:///d/A.TAR.GZ",
+        ] {
+            let root = archive_root_for(&entry(wire, EntryKind::File))
+                .unwrap_or_else(|| panic!("{wire} debería ser navegable"));
+            assert_eq!(root.scheme(), "tar+gz+file", "wire={wire}");
+        }
+        // Extensiones planas siguen funcionando (no capturadas por el alias).
+        assert_eq!(
+            archive_root_for(&entry("file:///d/a.tar", EntryKind::File))
+                .expect("tar plano sigue")
+                .scheme(),
+            "tar+file"
+        );
+        assert_eq!(
+            archive_root_for(&entry("file:///d/a.zip", EntryKind::File))
+                .expect("zip plano sigue")
+                .scheme(),
+            "zip+file"
+        );
+    }
+
+    /// Candado de encoding (#55, review): `ends_ci` es de BYTES y el compose
+    /// no pasa por String — un nombre NO-UTF8 terminado en `.tgz` compone
+    /// bien y sus bytes crudos sobreviven el wire (regla 1). Si alguien
+    /// "simplifica" mañana con `to_str()`/lossy, esto se pone rojo.
+    #[test]
+    fn archive_root_for_targz_nombre_no_utf8() {
+        for wire in [
+            "file:///d/%FF%FE.tgz",
+            "file:///d/a%F1o.TGZ",
+            "file:///d/%FF.tar.gz",
+        ] {
+            let root = archive_root_for(&entry(wire, EntryKind::File))
+                .unwrap_or_else(|| panic!("{wire} debería ser navegable"));
+            assert_eq!(root.scheme(), "tar+gz+file", "wire={wire}");
+        }
+        assert_eq!(
+            archive_root_for(&entry("file:///d/%FF%FE.tgz", EntryKind::File))
+                .expect("no-UTF8 navegable")
+                .to_wire(),
+            "tar+gz+file:///d/%FF%FE.tgz/!",
+            "los bytes crudos sobreviven el compose"
+        );
     }
 }
 

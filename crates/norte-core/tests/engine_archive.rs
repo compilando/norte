@@ -65,6 +65,45 @@ async fn lee_dentro_de_un_zip() {
     assert_eq!(out, b"desde el zip");
 }
 
+/// Gzipea `bytes` en un único miembro gzip (mismo idioma que
+/// `norte-vfs-archive/tests/common::gzip`, no reexportado fuera del crate).
+fn gzip(bytes: &[u8]) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    enc.write_all(bytes).expect("write gz");
+    enc.finish().expect("finish gz")
+}
+
+/// #55: `tar+gz` compuesto (`tar+gz+mem://…`) resuelve por el mismo camino
+/// del Engine que `tar`/`zip` — wiring del match de `provider_for` (ADR
+/// 0028). List + read byte-exacto a través del provider compuesto real.
+#[tokio::test]
+async fn lista_y_lee_dentro_de_un_targz() {
+    let tar = TarSmith::new()
+        .file(b"docs/x.txt", b"dentro del tgz")
+        .build();
+    let tgz = gzip(&tar);
+    let engine = engine_with_container("a.tar.gz", &tgz).await;
+    let entries: Vec<_> = engine
+        .list(&vp("tar+gz+mem:///a.tar.gz/!"))
+        .await
+        .expect("list raíz interior")
+        .map(|e| e.expect("entrada ok"))
+        .collect()
+        .await;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].path.to_wire(), "tar+gz+mem:///a.tar.gz/!/docs");
+    let mut stream = engine
+        .read(&vp("tar+gz+mem:///a.tar.gz/!/docs/x.txt"), None)
+        .await
+        .expect("read interior");
+    let mut out = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        out.extend_from_slice(&chunk.expect("chunk ok"));
+    }
+    assert_eq!(out, b"dentro del tgz");
+}
+
 #[tokio::test]
 async fn el_arbol_virtual_declara_read_only() {
     let tar = TarSmith::new().file(b"x", b"1").build();

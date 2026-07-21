@@ -88,7 +88,11 @@ use crate::{
 /// 0.20.0 (#44): notificación `connection.degraded` (server→client) — una sesión
 /// remota se estableció con seguridad degradada (FTP `tls="allow"` → plano).
 /// Aditiva sobre 0.19.x (un cliente N-1 la ignora; solo-log, no rompe).
-pub const PROTOCOL_VERSION: &str = "0.20.0";
+///
+/// 0.21.0 (#55, ADR 0028): `tar+gz` en `ARCHIVE_FORMATS`, resolución
+/// longest-match, helper `scheme_archive_format`. Aditivo sobre 0.20.x — un
+/// peer 0.20 ve `tar+gz+…` como Unsupported, sin corrupción.
+pub const PROTOCOL_VERSION: &str = "0.21.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver

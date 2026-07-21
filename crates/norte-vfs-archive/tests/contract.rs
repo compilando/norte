@@ -60,6 +60,29 @@ norte_vfs::readonly_provider_contract! {
     hostile_names: hostile_names(),
 }
 
+// ---------- tar+gz (#55, ADR 0028): mismo árbol canónico, gzipeado ----------
+
+fn fresh_targz() -> ArchiveProvider {
+    futures::executor::block_on(async {
+        let gz = common::gzip(&canonical_tar());
+        let (provider, _) = common::targz_provider(&gz).await;
+        provider
+    })
+}
+
+fn targz_root() -> VPath {
+    let path = norte_testkit::MemProvider::root()
+        .join(norte_proto::Segment::new(b"fixture.tar.gz".to_vec()).expect("seg"));
+    VPath::archive_compose("tar+gz", &path, &[]).expect("compose")
+}
+
+norte_vfs::readonly_provider_contract! {
+    mod targz_ro,
+    factory: fresh_targz(),
+    root: targz_root(),
+    hostile_names: hostile_names(),
+}
+
 // ---------- zip: corpus hostil COMPLETO (sin el filtro de 100 bytes) ----------
 
 fn zip_hostile_names() -> Vec<Vec<u8>> {

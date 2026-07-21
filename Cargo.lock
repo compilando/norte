@@ -4246,6 +4246,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "criterion",
+ "flate2",
  "futures",
  "globset",
  "hmac 0.12.1",
@@ -4440,6 +4441,7 @@ version = "0.3.0-alpha.1"
 dependencies = [
  "async-trait",
  "bytes",
+ "flate2",
  "futures",
  "norte-proto",
  "norte-testkit",

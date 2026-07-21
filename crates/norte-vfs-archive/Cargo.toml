@@ -18,6 +18,10 @@ norte-vfs.workspace = true
 # adaptador Read+Seek que puentea al Provider interior con block_on).
 tar.workspace = true
 zip.workspace = true
+# tar.gz/tgz (#55, ADR 0028): `MultiGzDecoder` sobre el `ProviderReader` para
+# el índice secuencial de `tar+gz` (gz no es seekable). Backend zlib-rs
+# (calca el que ya activa `zip`/deflate — sin duplicar backends de compresión).
+flate2.workspace = true
 # `rt`: Handle::current().block_on en los hilos blocking del índice/lectura.
 # `sync`: canal acotado que puentea la descompresión zip → ByteStream (el
 # drop del receptor corta el hilo: cancelación de la regla 3).

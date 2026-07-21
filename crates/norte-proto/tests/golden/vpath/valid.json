@@ -126,13 +126,31 @@
     "display": "⟨zip+file⟩/a.zip/!/x/!/y"
   },
   {
-    "description": "ADR 0018: compuesto SOBRE un provider cuyo scheme legítimo lleva + — la whitelist corta en el primer + y el resto es del provider",
+    "description": "ADR 0018: compuesto SOBRE un provider cuyo scheme legítimo lleva + — la whitelist resuelve por longest-match (ADR 0028) y el resto es del provider",
     "wire": "zip+s3+v2.x-y://bucket/key.zip/!/x",
     "canonical_wire": "zip+s3+v2.x-y://bucket/key.zip/!/x",
     "scheme": "zip+s3+v2.x-y",
     "authority": "bucket",
     "segments_hex": ["6b65792e7a6970", "21", "78"],
     "display": "⟨zip+s3+v2.x-y bucket⟩/key.zip/!/x"
+  },
+  {
+    "description": "ADR 0028 (#55): tar+gz token COMPUESTO — longest-match resuelve formato tar+gz sobre file, no tar sobre un interior huérfano gz+file",
+    "wire": "tar+gz+file:///home/o/a.tgz/!/x",
+    "canonical_wire": "tar+gz+file:///home/o/a.tgz/!/x",
+    "scheme": "tar+gz+file",
+    "authority": null,
+    "segments_hex": ["686f6d65", "6f", "612e74677a", "21", "78"],
+    "display": "⟨tar+gz+file⟩/home/o/a.tgz/!/x"
+  },
+  {
+    "description": "ADR 0028 (#55): tar+gz sobre un provider con authority (mismo patrón que el caso tar+sftp de ADR 0018, raíz del interior = marcador final)",
+    "wire": "tar+gz+sftp://user@host:22/d/a.tgz/!",
+    "canonical_wire": "tar+gz+sftp://user@host:22/d/a.tgz/!",
+    "scheme": "tar+gz+sftp",
+    "authority": "user@host:22",
+    "segments_hex": ["64", "612e74677a", "21"],
+    "display": "⟨tar+gz+sftp user@host:22⟩/d/a.tgz/!"
   },
   {
     "description": "ADR 0018: un ! suelto en un path PLANO es un nombre normal (compose lo rechaza como exterior; el wire no)",

@@ -558,6 +558,95 @@ fn archive_split_scheme_interior_vacio_es_err() {
     );
 }
 
+// ---------- tar+gz: token compuesto, longest-match (ADR 0028, #55) ----------
+
+#[test]
+fn targz_compose_y_split_roundtrip() {
+    let outer = path("file:///home/o/a.tgz");
+    let p = VPath::archive_compose("tar+gz", &outer, &[seg(b"x")]).expect("compose tar+gz");
+    assert_eq!(p.to_wire(), "tar+gz+file:///home/o/a.tgz/!/x");
+    let r = p
+        .archive_split()
+        .expect("split bien formado")
+        .expect("es compuesto");
+    assert_eq!(r.format, "tar+gz");
+    assert_eq!(r.outer, outer);
+    assert_eq!(r.outer.scheme(), "file");
+    assert_eq!(r.inner, vec![seg(b"x")]);
+}
+
+#[test]
+fn targz_no_confunde_prefijo_tar() {
+    // Longest-match: NO debe leerse como formato `tar` con un interior
+    // huérfano `gz+file` (lo que daría `split_once('+')`).
+    let r = path("tar+gz+file:///a.tgz/!/x")
+        .archive_split()
+        .expect("split bien formado")
+        .expect("es compuesto");
+    assert_eq!(r.format, "tar+gz");
+    assert_ne!(r.format, "tar");
+    assert_eq!(r.outer.scheme(), "file");
+    assert_eq!(r.outer.to_wire(), "file:///a.tgz");
+}
+
+#[test]
+fn gz_solo_no_es_compuesto() {
+    // `gz` no es un formato registrado (solo existe como sufijo de `tar+gz`):
+    // un scheme `gz+file` es, sintácticamente, un provider legítimo no compuesto.
+    assert!(path("gz+file:///x").archive_split().expect("ok").is_none());
+}
+
+#[test]
+fn targz_interior_compuesto_rechazado() {
+    // La guardia de anidamiento (v1 = una capa) sigue vigente sobre el
+    // interior UNA VEZ quitado el token completo `tar+gz`.
+    assert!(
+        path("tar+gz+tar+file:///a.tar/!/x")
+            .archive_split()
+            .is_err()
+    );
+    assert!(
+        path("tar+gz+zip+file:///a.zip/!/x")
+            .archive_split()
+            .is_err()
+    );
+}
+
+#[test]
+fn compose_outer_compuesto_sigue_rechazado() {
+    let outer = path("file:///a.tgz");
+    let composed = VPath::archive_compose("tar+gz", &outer, &[]).expect("capa 1");
+    assert!(VPath::archive_compose("zip", &composed, &[]).is_err());
+}
+
+#[test]
+fn compose_outer_compuesto_sigue_rechazado_simetrico() {
+    // Caso simétrico al anterior: componer `tar+gz` sobre un outer ya
+    // compuesto por `zip` también se rechaza (misma línea de guardia,
+    // ejercitada con el formato compuesto en el rol de exterior/interior
+    // invertido respecto al test de arriba).
+    let outer = path("file:///a.zip");
+    let composed = VPath::archive_compose("zip", &outer, &[]).expect("capa 1");
+    assert!(VPath::archive_compose("tar+gz", &composed, &[]).is_err());
+}
+
+#[test]
+fn archive_compose_rechaza_roundtrip_ambiguo_con_tar_gz() {
+    // BLOCKER hallado por protocol-guardian: `outer` con scheme "gz+mem" NO
+    // es compuesto por sí mismo (`gz` solo no es un formato registrado), así
+    // que la guardia de anidamiento existente lo deja pasar. Pero componer
+    // "tar" sobre él formaría el scheme "tar+gz+mem", que
+    // `scheme_format_prefix` (longest-match) resuelve como formato "tar+gz"
+    // sobre "mem" — NO como "tar" sobre "gz+mem". Esto rompería la garantía
+    // de roundtrip del rustdoc de `archive_compose` si se permitiera: debe
+    // rechazarse.
+    let outer = path("gz+mem:///x");
+    assert!(
+        VPath::archive_compose("tar", &outer, &[]).is_err(),
+        "compose debe rechazar la ambigüedad tar+(gz+mem) vs (tar+gz)+mem"
+    );
+}
+
 #[test]
 fn display_lossy_masks_bidi_override() {
     // U+202E (RIGHT-TO-LEFT OVERRIDE, bytes E2 80 AE) NO es is_control pero

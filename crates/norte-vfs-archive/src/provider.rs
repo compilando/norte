@@ -22,6 +22,10 @@ pub enum Format {
     Tar,
     /// zip stored+deflate. Lectura descomprimiendo en hilo blocking.
     Zip,
+    /// tar.gz/tgz (ADR 0028, #55): capa gz OPACA sobre tar — índice
+    /// secuencial (`entries()`, sin `Seek`) y lectura forward-decode
+    /// (descarta hasta el offset con un decoder fresco por lectura).
+    TarGz,
 }
 
 impl Format {
@@ -29,6 +33,7 @@ impl Format {
         match self {
             Self::Tar => "tar",
             Self::Zip => "zip",
+            Self::TarGz => "tar+gz",
         }
     }
 }
@@ -59,6 +64,19 @@ struct IndexCache {
 }
 
 const CACHE_CAP: usize = 8;
+
+/// Techo de lecturas forward-decode de `tar+gz` CONCURRENTES por provider
+/// (FIX-2, security MAJOR, #55 review). El descarte hasta `offset` en
+/// `read_entry_gz` puede pinnear un hilo de `spawn_blocking` durante
+/// MINUTOS (hasta `Limits::max_decompressed_bytes` de inflate real) — N
+/// lecturas profundas concurrentes son N hilos bloqueados simultáneamente
+/// sobre el pool de `spawn_blocking` de tokio, que es COMPARTIDO por TODO
+/// el runtime del daemon (journal, otros providers, tareas de fondo…), no
+/// exclusivo de este provider: sin tope, un cliente que dispara muchas
+/// lecturas profundas de un `tar+gz` grande hambrea el pool blocking entero
+/// (`DoS`). El [`tokio::sync::Semaphore`] pone un tope duro: las lecturas
+/// EXCEDENTES se ENCOLAN (esperan su turno), nunca se rechazan.
+const GZ_READ_CONCURRENCY: usize = 4;
 
 impl IndexCache {
     fn new() -> Self {
@@ -117,6 +135,10 @@ pub struct ArchiveProvider {
     /// los concurrentes esperan el lock y releen la caché. El map se poda
     /// cuando el último interesado suelta su Arc.
     building: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Tope de concurrencia del forward-decode `tar+gz` (FIX-2, #55
+    /// review): ver [`GZ_READ_CONCURRENCY`]. Sin efecto en `Tar`/`Zip`
+    /// (esos `read` no pasan por este semáforo).
+    gz_read_permits: Arc<tokio::sync::Semaphore>,
 }
 
 impl ArchiveProvider {
@@ -154,6 +176,7 @@ impl ArchiveProvider {
             limits,
             cache: Mutex::new(IndexCache::new()),
             building: Mutex::new(HashMap::new()),
+            gz_read_permits: Arc::new(tokio::sync::Semaphore::new(GZ_READ_CONCURRENCY)),
         }
     }
 
@@ -266,6 +289,13 @@ impl ArchiveProvider {
             }
             Format::Zip => {
                 crate::zip_format::build_index(reader, container_len, generation, &limits, &cancel)
+            }
+            Format::TarGz => {
+                // Sin `container_len` como cota del locator (ADR 0028): ese
+                // tamaño es el COMPRIMIDO y no acota nada del stream
+                // descomprimido — el truncamiento se detecta en el read.
+                crate::targz_format::build_index_gz(reader, generation, &limits, &cancel)
+                    .map(|idx| (idx, None))
             }
         })
         .await;
@@ -503,6 +533,43 @@ impl Provider for ArchiveProvider {
                         }
                     };
                     crate::zip_format::read_entry(archive, entry_index, req_off, req_len, &tx);
+                }));
+                Ok(futures::stream::poll_fn(move |cx| rx.poll_recv(cx)).boxed())
+            }
+            Locator::Gz { offset, .. } => {
+                // Forward-decode: gz no es seekable — descarta hasta el
+                // offset y sirve el tramo. O(descomprimido-hasta-offset) por
+                // read, documentado (ADR 0028); spool/restart-points = issue
+                // de deuda. Drop del stream = el send falla = el hilo
+                // termina (regla 3).
+                //
+                // FIX-2 (security MAJOR, #55 review): el descarte puede
+                // pinnear el hilo blocking minutos — acota la concurrencia
+                // agregada con el semáforo (ver `GZ_READ_CONCURRENCY`).
+                // Las lecturas EXCEDENTES se ENCOLAN aquí (await), nunca se
+                // rechazan.
+                let permit = Arc::clone(&self.gz_read_permits)
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| {
+                        // El semáforo nunca se `close()`a en la vida de este
+                        // provider (no hay ningún caller que lo cierre) —
+                        // inalcanzable en la práctica; fail-safe explícito
+                        // en vez de un `expect` que podría panicar si algo
+                        // cambia en el futuro.
+                        Error::Cancelled
+                    })?;
+                let reader = ProviderReader::new(
+                    tokio::runtime::Handle::current(),
+                    Arc::clone(&self.inner),
+                    aref.outer.clone(),
+                    cached.index.generation.1.unwrap_or(0),
+                );
+                let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+                let skip = offset + req_off;
+                drop(tokio::task::spawn_blocking(move || {
+                    let _permit = permit; // se libera cuando el hilo termina
+                    crate::targz_format::read_entry_gz(reader, skip, req_len, &tx);
                 }));
                 Ok(futures::stream::poll_fn(move |cx| rx.poll_recv(cx)).boxed())
             }
