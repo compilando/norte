@@ -1,101 +1,76 @@
-# 0009 — Papelera: crate `trash`, capability y degradación explícita
+# 0009 - Trash support and explicit permanent-delete fallback
 
-- Estado: accepted
-- Fecha: 2026-07-11
-- Decisores: oscar (dirección), Claude (propuesta técnica)
-- Relacionado: spec §5 («Papelera universal»), plan M1 fase 8, ADR 0005.
+- Status: accepted
+- Date: 2026-07-11
+- Decision makers: Oscar González
+- Related: specification section 5, M1 phase 8, ADR 0005
 
-## Contexto y problema
+## Context
 
-La spec exige trash nativo donde exista (freedesktop, Recycle Bin,
-macOS) y «degradación explícita a borrado permanente con aviso» donde
-no. Borrar es LA operación peligrosa de un file manager: la semántica
-tiene que ser inequívoca en el wire, en el engine y en la UI.
+The specification requires native trash on freedesktop systems, Windows, and
+macOS, with an explicit warning before falling back to permanent deletion.
+Delete semantics must be unambiguous in the protocol, engine, and UI.
 
-## Opciones consideradas
+## Options considered
 
-### A. Implementación nativa
+### Native implementation
 
-- **A1 — propia**: freedesktop es una spec asumible (info files,
-  topdirs, cross-device), pero Recycle Bin exige COM (`IFileOperation`)
-  y macOS `NSFileManager` vía objc — tres integraciones de plataforma
-  con esquinas oscuras, para reimplementar algo que existe.
-- **A2 — crate `trash` 5.x** (MIT, mantenido, MSRV 1.85 ≤ la nuestra):
-  cubre los tres OS, y en linux/windows ofrece `os_limited::{list,
-  purge, restore}` — la base del «restaurar» de M3. Alternativa
-  evaluada y descartada: A1 (coste alto, valor nulo).
+- Implement three platform integrations in-house: freedesktop trash metadata,
+  Windows `IFileOperation`, and macOS `NSFileManager`.
+- Use the maintained MIT-licensed `trash` 5.x crate, whose MSRV is below
+  norte's and whose Linux/Windows extensions include list, purge, and restore.
 
-### B. Semántica de degradación
+### Fallback semantics
 
-- **B1 — el engine degrada solo** (sin papelera → borra permanente):
-  «explícito» dejaría de serlo — un cliente pediría trash y perdería
-  datos permanentemente sin enterarse.
-- **B2 — el engine JAMÁS degrada**: `DeleteMode::Trash` sin capability
-  `TRASH` = `Unsupported`. El FRONTEND consulta capabilities, avisa
-  («borrado PERMANENTE: aquí no hay papelera») y reenvía con
-  `Permanent` si el usuario confirma. La degradación es una decisión de
-  usuario informado, nunca del sistema.
+- Let the engine silently turn an unsupported trash request into permanent
+  deletion. This contradicts the requirement for an explicit choice and can
+  lose data unexpectedly.
+- Make `DeleteMode::Trash` return `Unsupported` when the provider lacks `TRASH`.
+  A frontend may warn the user and send a second request with `Permanent` after
+  confirmation.
 
-## Decisión
+## Decision
 
-- **A2 + B2.** Trait: `Provider::trash(p)` (default `Unsupported`);
-  `LocalProvider` lo implementa con el crate `trash` en
-  `spawn_blocking` y declara `CapabilityFlags::TRASH`; `MemProvider`
-  también (papelera lógica: el subárbol desaparece — suficiente para el
-  contrato).
-- **Wire (0.2.0 → 0.3.0)**: flag `TRASH` (1<<7) y
-  `FsDeleteParams.mode: DeleteMode { Trash, Permanent }` con
-  `#[serde(default)]` = **Trash** — el default del protocolo es el
-  SEGURO; un cliente 0.2 que no manda `mode` obtiene papelera (mejora
-  recuperable, jamás pérdida sorpresa). `Permanent` es la elección
-  explícita.
-- **Task**: `Trash` es UNA operación sobre la raíz (el OS mueve el
-  árbol entero — sin walk, cancelable antes de disparar); `Permanent`
-  conserva el walk post-order actual. El journal (M3) registra la
-  entrada como `Removed` con restauración vía `os_limited::restore`
-  donde exista.
-- **TUI**: F8 = papelera si el provider la declara (diálogo normal);
-  sin capability, el MISMO diálogo pasa a rojo/aviso «PERMANENTE» y
-  reenvía `Permanent`. `shift+f8` = permanente explícito siempre.
-- **CLI**: `norte rm` sigue siendo permanente (banco de pruebas del
-  engine, documentado).
+- Use the `trash` crate. Add `Provider::trash(path)`, defaulting to
+  `Unsupported`. `LocalProvider` runs the platform call in `spawn_blocking` and
+  advertises `TRASH`; `MemProvider` implements a logical equivalent for tests.
+- In protocol 0.3.0, add the `TRASH` capability and
+  `FsDeleteParams.mode: DeleteMode { Trash, Permanent }`. The optional field
+  defaults to `Trash`, making the protocol's default recoverable.
+- A trash task performs one operation on the root rather than walking the tree,
+  and can be cancelled before dispatch. Permanent deletion retains the existing
+  post-order walk. The future journal records a removal and, where supported,
+  restoration through the crate's platform API.
+- In the TUI, F8 requests trash when available. Without the capability, the
+  confirmation explicitly says **PERMANENT** and resubmits with `Permanent`.
+  Shift-F8 always requests permanent deletion.
+- `norte rm`, an engine test-bed command, remains permanently destructive and is
+  documented as such.
 
-## Consecuencias
+## Consequences
 
-Positivas: default seguro en el wire; degradación con usuario informado
-(spec literal); M3 hereda list/restore/purge del mismo crate; una sola
-integración de plataforma auditada.
+- The wire format has a safe default, and permanent fallback requires an
+  informed user decision.
+- M3 can build list, restore, and purge on the same platform integration.
+- A client must gate trash on the provider's `TRASH` capability, not its own
+  protocol version. A pre-0.3 core ignores the new `mode` field and would delete
+  permanently, but it never advertises `TRASH`, so a conforming client warns and
+  sends `Permanent` explicitly.
+- Conversely, a 0.2 client against a 0.3 core fails safely with `Unsupported` on
+  a provider without trash.
+- Platform dependencies from the `trash` crate enter the local provider.
+- Native trash reports a single unit of progress. Some platform operations are
+  not cancellable after dispatch. In particular, Windows may permanently delete
+  an item that the Recycle Bin cannot accept, and freedesktop cross-device trash
+  may perform an internal copy and delete.
 
-Negativas / deuda: **skew de versiones** — contra un core <0.3, `mode`
-se IGNORA (tolerancia de structs, ADR 0004) y el borrado es PERMANENTE:
-los clientes DEBEN condicionar `Trash` a la capability `TRASH` (que un
-core <0.3 jamás anuncia), NUNCA a su propia versión de protocolo — el
-frontend conforme muestra el aviso de permanente y envía `Permanent`.
-Recíproco N-1: un cliente 0.2 contra core 0.3 en un provider SIN `TRASH`
-pasa de "delete funciona (permanente)" a `Unsupported` duro — falla en
-seguro (en M1 no muerde: local y Mem declaran `TRASH`; revisar cuando
-lleguen remotos/archive en M2). `trash` arrastra deps de plataforma
-(objc2/windows);
-en providers remotos (M2) no hay trash nativo — la «papelera lógica
-`.norte-trash/`» de la spec queda para M2 con los remotos; el borrado
-Trash no reporta progreso granular (una op del OS): entries_total = 1.
-Excepciones de plataforma documentadas (issues #25/#26): en Windows
-`FOF_NO_UI` auto-responde el «nuke warning» — un ítem no reciclable
-(unidad sin $Recycle.Bin, red, tamaño sobre el límite) se DESTRUYE
-dentro del delete; en freedesktop el caso cross-device degrada a
-copy+delete interno del crate (GB posibles, incancelable a mitad).
+## M2 follow-up: ADR 0019
 
-## Cierre en M2 (ADR 0019)
+ADR 0019 resolves remote-provider behaviour by adding logical
+`.norte-trash/` support to SFTP and object storage. Both now advertise the
+existing `TRASH` capability; the read-only archive provider does not. No protocol
+bump was required.
 
-El «revisar cuando lleguen remotos/archive en M2» de arriba está
-RESUELTO por **ADR 0019** (papelera lógica `.norte-trash/`): sftp y
-object declaran ya `TRASH` (papelera lógica vía `rename`), así que el
-recíproco N-1 mejora en vez de morder —un `Trash` contra ellos RECUPERA
-en lugar de degradar o fallar `Unsupported`—. `archive` es `READ_ONLY`:
-jamás declara `TRASH` (falla en seguro). No hubo bump de protocolo: 0019
-solo hace que dos providers cumplan la capability `TRASH` ya definida
-aquí. Las excepciones #25/#26 siguen siendo del provider LOCAL (crate
-`trash`), sin cambio; 0019 las re-ancla para trazabilidad. La retención/
-GC de la papelera lógica remota (que crece hasta que M3 traiga `purge`)
-y el `list`/`restore` quedan para M3, con el sidecar `.norte-info` ya
-sembrado.
+Remote logical-trash retention, garbage collection, list, and restore remain
+future work, with `.norte-info` metadata already preserving the origin. Local
+platform exceptions remain tracked separately.

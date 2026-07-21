@@ -1,13 +1,16 @@
 ---
-description: Scaffolding de un provider VFS nuevo con suite contractual enganchada
-argument-hint: <scheme, p.ej. sftp>
+description: Scaffold a VFS provider and connect it to the provider conformance suite
+argument-hint: <scheme, for example sftp>
 ---
-Crea el provider VFS para scheme `$ARGUMENTS`:
+Create the VFS provider for the `$ARGUMENTS` scheme:
 
-1. Crate `crates/norte-vfs-$ARGUMENTS` (usa el scaffolding de /new-crate; licencia Apache-2.0 OR MIT).
-2. Impl del trait `Provider` con `todo!()` documentados por método.
-3. Declaración de `Capabilities` honesta (empieza conservador).
-4. Test de contrato ya enganchado: `norte_vfs::provider_contract! { name: $ARGUMENTS, setup: ... }`.
-5. Checklist de semántica en el rustdoc del crate, a rellenar antes del primer release:
-   symlinks, case-sensitivity, rename atómico, trash, paths máximos, encoding de nombres.
-6. Recuerda: los providers NO se conocen entre sí; nada de deps a otros providers.
+1. Create `crates/norte-vfs-$ARGUMENTS` with `/new-crate`; use the
+   `Apache-2.0 OR MIT` license.
+2. Implement the `Provider` trait with a documented `todo!()` for each method.
+3. Declare an accurate, conservative initial `Capabilities` value.
+4. Connect the conformance suite with
+   `norte_vfs::provider_contract! { name: $ARGUMENTS, setup: ... }`.
+5. Add a crate-level rustdoc checklist for symlinks, case sensitivity, atomic
+   rename, trash, maximum paths, and filename encoding. Resolve it before the
+   first release.
+6. Do not add dependencies on other providers. Providers are independent.

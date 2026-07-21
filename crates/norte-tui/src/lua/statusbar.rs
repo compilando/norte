@@ -7,8 +7,7 @@
 //! resto de la vida de este host (se re-habilita solo con un `LuaHost`
 //! nuevo, hot-reload, task 8).
 //!
-//! Contexto heredado de T5 (spec de la task, corregido tras revisión — ver
-//! `docs/superpowers/plans/2026-07-17-m4-lua-scripting.md` T7): `Lua::set_hook`
+//! Contexto heredado de T5, corregido tras revisión: `Lua::set_hook`
 //! instala en el estado PRINCIPAL; `Function::call` SÍNCRONO corre en ese
 //! mismo estado (a diferencia de `call_async`, que corre en una corrutina
 //! propia) — por eso el hook del estado principal SÍ dispara aquí.

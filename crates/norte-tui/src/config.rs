@@ -1,11 +1,12 @@
-//! Config en capas (ADR 0007): defaults → sistema → usuario → proyecto →
-//! flags. Escalares: último-gana por campo; `keymap.toml`: las capas se
-//! ACUMULAN y se pliegan en el keymap efectivo (ADR 0006). Config rota =
-//! error con archivo y campo; en hot-reload, se conserva lo vigente.
+//! Layered configuration (ADR 0007): defaults, system, user, project, then
+//! command-line flags. Scalar fields use last-present-value wins. `keymap.toml`
+//! layers accumulate into the effective keymap (ADR 0006). Invalid startup
+//! configuration reports the file and field; hot reload retains the last valid
+//! configuration.
 //!
-//! Exención deliberada de la regla 2: la config del PROPIO frontend se lee
-//! con `std::fs` (leerla vía providers sería circular — la config decide
-//! cómo arranca el TUI). Desde contexto async, usar [`load_async`].
+//! This module deliberately reads the frontend's own configuration with
+//! `std::fs`; using providers would be circular because configuration selects
+//! how the TUI starts. Async callers use [`load_async`].
 
 use std::path::{Path, PathBuf};
 
@@ -15,101 +16,103 @@ use serde::Deserialize;
 use crate::keymap::{KeymapFile, parse_keymap};
 use crate::nav;
 
-/// Preset por defecto (decisión 2026-07-10).
+/// Default keymap preset (decision from 2026-07-10).
 pub const DEFAULT_PRESET: &str = "orthodox";
 
-/// `norte.toml`: la config general.
+/// General configuration from `norte.toml`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct NorteToml {
-    /// Sección de keymap.
+    /// Keymap settings.
     #[serde(default)]
     pub keymap: KeymapSection,
-    /// Sección de UI.
+    /// User-interface settings.
     #[serde(default)]
     pub ui: UiSection,
-    /// Sección del daemon (fase 3 M2).
+    /// Daemon settings.
     #[serde(default)]
     pub daemon: DaemonSection,
-    /// Hotlist de directorios favoritos (`Ctrl+D`, spec 2026-07-18). Se
-    /// ACUMULA entre capas (no último-gana como los escalares) salvo la
-    /// capa proyecto, que queda excluida al fusionar en [`load`] — ver el
-    /// comentario ahí. Ausente = sin favoritos en esta capa.
+    /// Favourite directories shown by `Ctrl+D`.
+    ///
+    /// Entries accumulate across layers instead of replacing lower-layer
+    /// values. The project layer is excluded while [`load`] merges the list.
+    /// An absent value contributes no favourites from that layer.
     #[serde(default)]
     pub hotlist: Vec<HotlistEntry>,
 }
 
-/// Una entrada de `[[hotlist]]` en `norte.toml`, tal cual en disco. `path`
-/// es la forma wire sin validar (`scheme://…`; remotos válidos) — se
-/// valida a [`VPath`] al fusionar capas en [`load`], NUNCA aquí: una
-/// entrada rota se degrada por entrada (ver [`HotlistItem`]), no debe
-/// tumbar el parseo de todo `norte.toml`.
+/// One `[[hotlist]]` entry as stored in `norte.toml`.
+///
+/// `path` contains an unvalidated wire value such as `scheme://...`, including
+/// valid remote schemes. [`load`] validates it as a [`VPath`] while merging
+/// layers. One invalid entry is handled independently and does not prevent the
+/// rest of `norte.toml` from loading.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct HotlistEntry {
-    /// Nombre mostrado en el popup (`Ctrl+D`).
+    /// Name displayed in the `Ctrl+D` popup.
     pub name: String,
-    /// Path en forma wire, sin validar todavía.
+    /// Path in wire form, not yet validated.
     pub path: String,
 }
 
-/// `[daemon]` de `norte.toml` (ADR 0011). El modo se decide EN EL
-/// ARRANQUE: no participa del hot-reload (cambiar de transporte en
-/// caliente = reiniciar).
+/// The `[daemon]` section of `norte.toml` (ADR 0011).
+///
+/// Transport mode is selected at startup and is not hot reloaded. Changing it
+/// requires restarting the frontend.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct DaemonSection {
-    /// `embedded` (default: arranque instantáneo) o `daemon`.
+    /// `embedded` for immediate startup (the default), or `daemon`.
     #[serde(default)]
     pub mode: Option<DaemonMode>,
-    /// Socket del daemon; ausente = el default del OS.
+    /// Daemon socket path. When absent, use the operating-system default.
     #[serde(default)]
     pub socket: Option<PathBuf>,
 }
 
-/// Transporte del core (regla 7: solo cambia el transporte).
+/// Core transport. This changes transport only, not behaviour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum DaemonMode {
     /// Core in-process (default).
     Embedded,
-    /// Contra el daemon UDS (solo unix, ADR 0011).
+    /// Connect to the Unix-domain-socket daemon (Unix only; ADR 0011).
     Daemon,
 }
 
-/// `[ui]` de `norte.toml`.
+/// The `[ui]` section of `norte.toml`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct UiSection {
-    /// Idioma (`es`, `en`). Ausente = negociar del entorno.
+    /// Language (`es` or `en`). When absent, negotiate from the environment.
     #[serde(default)]
     pub lang: Option<String>,
-    /// Tema: nombre de preset embebido (`default`, `catppuccin-mocha`,
-    /// `gruvbox-dark`, `nord`, y los claros `gruvbox-light`,
-    /// `catppuccin-latte`) o ruta a un `.toml` propio (ADR 0020). Ausente =
-    /// preset `default`.
+    /// Theme preset name (`default`, `catppuccin-mocha`, `gruvbox-dark`,
+    /// `nord`, `gruvbox-light`, or `catppuccin-latte`) or a path to a custom
+    /// TOML theme (ADR 0020). When absent, use `default`.
     #[serde(default)]
     pub theme: Option<String>,
-    /// Modo del quick search (`/`, spec 2026-07-18): `"filter"` (default,
-    /// el listado se reduce) o `"jump"` (el cursor salta, el listado no
-    /// cambia). Cualquier otro valor es config rota (ADR 0007: error
-    /// claro, jamás degradación silenciosa) — validado en [`load`], no
-    /// aquí, porque el diagnóstico necesita el `path` del archivo culpable.
+    /// Quick-search mode for `/`: `"filter"` narrows the listing (the default),
+    /// while `"jump"` moves the cursor without changing the listing.
+    ///
+    /// [`load`] rejects other values so its diagnostic can include the source
+    /// configuration path. Invalid values never silently fall back.
     #[serde(default)]
     pub quick_search: Option<String>,
 }
 
-/// `[keymap]` de `norte.toml`.
+/// The `[keymap]` section of `norte.toml`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct KeymapSection {
-    /// Preset base (`orthodox`, `vim`, `cua`). Ausente = capa anterior.
+    /// Base preset (`orthodox`, `vim`, or `cua`). Inherit when absent.
     #[serde(default)]
     pub preset: Option<String>,
 }

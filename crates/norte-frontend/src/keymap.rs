@@ -252,7 +252,7 @@ pub fn parse_chord(s: &str) -> Result<Chord, KeymapError> {
     Ok(Chord { mods, code })
 }
 
-/// Un binding tal como viene del TOML.
+/// One binding as represented in TOML.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -261,8 +261,8 @@ struct RawBinding {
     run: String,
 }
 
-/// Las tres listas de una sección (preset: `keymap`; usuario:
-/// `prepend_keymap`/`append_keymap` — modelo Yazi, spec §12).
+/// The three binding lists in a section: `keymap` for presets and
+/// `prepend_keymap`/`append_keymap` for user layers.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -275,7 +275,7 @@ struct RawSection {
     append_keymap: Vec<RawBinding>,
 }
 
-/// Un `keymap.toml` parseado (preset de fábrica o capa de usuario).
+/// A parsed `keymap.toml` preset or user layer.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]

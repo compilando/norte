@@ -1,16 +1,16 @@
 ---
-description: Crea un ADR nuevo en docs/adr/ con formato MADR y numeración secuencial
-argument-hint: <título de la decisión>
+description: Create a sequentially numbered MADR architecture decision record under docs/adr/
+argument-hint: <decision title>
 ---
-Crea un ADR para: $ARGUMENTS
+Create an ADR for: $ARGUMENTS
 
-1. Lista `docs/adr/` y toma el siguiente número secuencial (NNNN, 4 dígitos).
-2. Crea `docs/adr/NNNN-<slug-kebab>.md` con formato MADR:
-   - Título, estado (proposed/accepted/superseded), fecha, decisores.
-   - Contexto y problema.
-   - Opciones consideradas (mínimo 2, con pros/contras).
-   - Decisión y justificación.
-   - Consecuencias (positivas y negativas).
-3. Añade la entrada al índice `docs/adr/README.md` (créalo si no existe).
-4. Deja el cambio staged con mensaje preparado: `docs(adr): NNNN <título>`.
-   No commitees sin confirmación.
+1. List `docs/adr/` and select the next four-digit number.
+2. Create `docs/adr/NNNN-<kebab-case-slug>.md` in MADR format with:
+   - title, status (proposed, accepted, or superseded), date, and decision makers;
+   - context and problem statement;
+   - at least two options, including their advantages and drawbacks;
+   - the decision and rationale;
+   - positive and negative consequences.
+3. Add the ADR to `docs/adr/README.md`, creating the index if necessary.
+4. Stage the changes and prepare the message `docs(adr): NNNN <title>`.
+   Do not commit without confirmation.

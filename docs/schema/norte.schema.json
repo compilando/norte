@@ -1,7 +1,7 @@
 {
   "$defs": {
     "DaemonMode": {
-      "description": "Transporte del core (regla 7: solo cambia el transporte).",
+      "description": "Core transport. This changes transport only, not behaviour.",
       "oneOf": [
         {
           "const": "embedded",
@@ -10,14 +10,14 @@
         },
         {
           "const": "daemon",
-          "description": "Contra el daemon UDS (solo unix, ADR 0011).",
+          "description": "Connect to the Unix-domain-socket daemon (Unix only; ADR 0011).",
           "type": "string"
         }
       ]
     },
     "DaemonSection": {
       "additionalProperties": false,
-      "description": "`[daemon]` de `norte.toml` (ADR 0011). El modo se decide EN EL\nARRANQUE: no participa del hot-reload (cambiar de transporte en\ncaliente = reiniciar).",
+      "description": "The `[daemon]` section of `norte.toml` (ADR 0011).\n\nTransport mode is selected at startup and is not hot reloaded. Changing it\nrequires restarting the frontend.",
       "properties": {
         "mode": {
           "anyOf": [
@@ -28,11 +28,11 @@
               "type": "null"
             }
           ],
-          "description": "`embedded` (default: arranque instantáneo) o `daemon`."
+          "description": "`embedded` for immediate startup (the default), or `daemon`."
         },
         "socket": {
           "default": null,
-          "description": "Socket del daemon; ausente = el default del OS.",
+          "description": "Daemon socket path. When absent, use the operating-system default.",
           "type": [
             "string",
             "null"
@@ -43,14 +43,14 @@
     },
     "HotlistEntry": {
       "additionalProperties": false,
-      "description": "Una entrada de `[[hotlist]]` en `norte.toml`, tal cual en disco. `path`\nes la forma wire sin validar (`scheme://…`; remotos válidos) — se\nvalida a [`VPath`] al fusionar capas en [`load`], NUNCA aquí: una\nentrada rota se degrada por entrada (ver [`HotlistItem`]), no debe\ntumbar el parseo de todo `norte.toml`.",
+      "description": "One `[[hotlist]]` entry as stored in `norte.toml`.\n\n`path` contains an unvalidated wire value such as `scheme://...`, including\nvalid remote schemes. [`load`] validates it as a [`VPath`] while merging\nlayers. One invalid entry is handled independently and does not prevent the\nrest of `norte.toml` from loading.",
       "properties": {
         "name": {
-          "description": "Nombre mostrado en el popup (`Ctrl+D`).",
+          "description": "Name displayed in the `Ctrl+D` popup.",
           "type": "string"
         },
         "path": {
-          "description": "Path en forma wire, sin validar todavía.",
+          "description": "Path in wire form, not yet validated.",
           "type": "string"
         }
       },
@@ -62,11 +62,11 @@
     },
     "KeymapSection": {
       "additionalProperties": false,
-      "description": "`[keymap]` de `norte.toml`.",
+      "description": "The `[keymap]` section of `norte.toml`.",
       "properties": {
         "preset": {
           "default": null,
-          "description": "Preset base (`orthodox`, `vim`, `cua`). Ausente = capa anterior.",
+          "description": "Base preset (`orthodox`, `vim`, or `cua`). Inherit when absent.",
           "type": [
             "string",
             "null"
@@ -77,11 +77,11 @@
     },
     "UiSection": {
       "additionalProperties": false,
-      "description": "`[ui]` de `norte.toml`.",
+      "description": "The `[ui]` section of `norte.toml`.",
       "properties": {
         "lang": {
           "default": null,
-          "description": "Idioma (`es`, `en`). Ausente = negociar del entorno.",
+          "description": "Language (`es` or `en`). When absent, negotiate from the environment.",
           "type": [
             "string",
             "null"
@@ -89,7 +89,7 @@
         },
         "quick_search": {
           "default": null,
-          "description": "Modo del quick search (`/`, spec 2026-07-18): `\"filter\"` (default,\nel listado se reduce) o `\"jump\"` (el cursor salta, el listado no\ncambia). Cualquier otro valor es config rota (ADR 0007: error\nclaro, jamás degradación silenciosa) — validado en [`load`], no\naquí, porque el diagnóstico necesita el `path` del archivo culpable.",
+          "description": "Quick-search mode for `/`: `\"filter\"` narrows the listing (the default),\nwhile `\"jump\"` moves the cursor without changing the listing.\n\n[`load`] rejects other values so its diagnostic can include the source\nconfiguration path. Invalid values never silently fall back.",
           "type": [
             "string",
             "null"
@@ -97,7 +97,7 @@
         },
         "theme": {
           "default": null,
-          "description": "Tema: nombre de preset embebido (`default`, `catppuccin-mocha`,\n`gruvbox-dark`, `nord`, y los claros `gruvbox-light`,\n`catppuccin-latte`) o ruta a un `.toml` propio (ADR 0020). Ausente =\npreset `default`.",
+          "description": "Theme preset name (`default`, `catppuccin-mocha`, `gruvbox-dark`,\n`nord`, `gruvbox-light`, or `catppuccin-latte`) or a path to a custom\nTOML theme (ADR 0020). When absent, use `default`.",
           "type": [
             "string",
             "null"
@@ -109,14 +109,14 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "`norte.toml`: la config general.",
+  "description": "General configuration from `norte.toml`.",
   "properties": {
     "daemon": {
       "$ref": "#/$defs/DaemonSection",
-      "description": "Sección del daemon (fase 3 M2)."
+      "description": "Daemon settings."
     },
     "hotlist": {
-      "description": "Hotlist de directorios favoritos (`Ctrl+D`, spec 2026-07-18). Se\nACUMULA entre capas (no último-gana como los escalares) salvo la\ncapa proyecto, que queda excluida al fusionar en [`load`] — ver el\ncomentario ahí. Ausente = sin favoritos en esta capa.",
+      "description": "Favourite directories shown by `Ctrl+D`.\n\nEntries accumulate across layers instead of replacing lower-layer\nvalues. The project layer is excluded while [`load`] merges the list.\nAn absent value contributes no favourites from that layer.",
       "items": {
         "$ref": "#/$defs/HotlistEntry"
       },
@@ -124,11 +124,11 @@
     },
     "keymap": {
       "$ref": "#/$defs/KeymapSection",
-      "description": "Sección de keymap."
+      "description": "Keymap settings."
     },
     "ui": {
       "$ref": "#/$defs/UiSection",
-      "description": "Sección de UI."
+      "description": "User-interface settings."
     }
   },
   "title": "NorteToml",

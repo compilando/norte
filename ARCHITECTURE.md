@@ -1,55 +1,77 @@
-# ARCHITECTURE — norte
+# Architecture
 
-Mapa mental del repo en una página (estilo matklad). La spec completa vive en
-`docs/spec/norte-spec.md`; las decisiones, en `docs/adr/`.
+This is a one-page map of the repository. The full design is in the
+[project specification](docs/spec/norte-spec.md), and significant decisions
+are recorded as [ADRs](docs/adr/README.md).
 
-## Qué es
+## System overview
 
-File manager ortodoxo *headless-core*: un core en Rust que expone un protocolo
-JSON-RPC y un VFS universal; encima, frontends intercambiables (TUI/GUI/CLI) y
-agentes IA gobernados (MCP + policy + journal). Ningún frontend tiene lógica de
-negocio: si una operación no se puede hacer vía protocolo, no existe.
+norte is an orthodox file manager with a headless Rust core. The core exposes a
+JSON-RPC protocol and a provider-independent virtual filesystem. The TUI, GUI,
+CLI, and agent integrations are clients of that core.
 
-## Crates (estado M0)
+Frontends contain no business logic. If an operation is not available through
+the protocol, a frontend cannot provide it.
 
-| Crate | Qué es | Licencia |
-|---|---|---|
-| `norte-proto` | Tipos del wire format (serde). Sin lógica. Cambiar esto = cambiar el protocolo: golden test + bump + revisión doble | MIT OR Apache-2.0 |
-| `norte-vfs` | El contrato central: trait `Provider`, `VPath` (re-export), streams, capabilities, suite contractual | MIT OR Apache-2.0 |
-| `norte-vfs-local` | Provider del FS local por OS. **Único crate con `unsafe` permitido** (`// SAFETY:` + test) | MIT OR Apache-2.0 |
-| `norte-testkit` | `MemProvider` determinista con fallos inyectables, corpus de fixtures hostiles, estrategias proptest | MIT OR Apache-2.0 |
-| `norte-core` | Scheduler de tasks (cancelación, progreso), copy engine. En M0: lib embebida, sin daemon | AGPL-3.0-only |
-| `norte-plugin-host` | Host de plugins WASM (M4): manifiesto, capabilities, catálogo. Runtime wasmtime en M4-P2 | AGPL-3.0-only |
-| `norte-cli` | `norte ls/cp`: banco de pruebas manual del core. No es un producto | AGPL-3.0-only |
-| `norte-tui` | Frontend TUI dual-pane (ratatui). Sin lógica de negocio: proto + core embebido + libs de presentación (norte-encoding) | AGPL-3.0-only |
-| `norte-encoding` | Detección/decodificación de encodings de texto (aísla chardetng/encoding_rs) | MIT OR Apache-2.0 |
-| `norte-i18n` | Strings de UI por Fluent (es/en) para los frontends | MIT OR Apache-2.0 |
-| `norte-theme` | Modelo de theming compartido (roles semánticos, Color truecolor con degradación 256/16, presets). Sin backend de render: lo consumen TUI y GUI (M5) | MIT OR Apache-2.0 |
+## Workspace crates
 
-Hitos posteriores añaden: `norte-vfs-{sftp,object,archive}`, `norte-index`,
-`norte-ai`, `norte-mcp`, `norte-plugin-host`, `norte-gui` (spec §3).
+| Crate | Responsibility | License |
+| --- | --- | --- |
+| `norte-proto` | Serializable wire types. Any change is a protocol change and requires updated golden tests, a version bump, and an additional review. | MIT OR Apache-2.0 |
+| `norte-vfs` | The central `Provider` contract, `VPath`, streams, capabilities, and the shared provider conformance suite. | MIT OR Apache-2.0 |
+| `norte-vfs-local` | Platform-specific local-filesystem provider. This is the only crate where `unsafe` may be used, and every use requires a `// SAFETY:` explanation and a test. | MIT OR Apache-2.0 |
+| `norte-vfs-sftp` | SFTP provider, including hostile-server containment and byte-safe names. | MIT OR Apache-2.0 |
+| `norte-vfs-object` | Object-storage provider, with S3 as the first supported backend. | MIT OR Apache-2.0 |
+| `norte-vfs-archive` | Read-only ZIP and TAR provider. | MIT OR Apache-2.0 |
+| `norte-testkit` | Deterministic `MemProvider`, injectable failures, hostile fixtures, and proptest strategies. | MIT OR Apache-2.0 |
+| `norte-core` | Task scheduling, transfers, sessions, policy enforcement, journaling, and the daemon. | AGPL-3.0-only |
+| `norte-plugin-host` | WASM plugin manifests, capabilities, catalogue, and runtime. | AGPL-3.0-only |
+| `norte-cli` | A command-line client and manual core test bed. | AGPL-3.0-only |
+| `norte-tui` | The ratatui dual-pane terminal frontend. | AGPL-3.0-only |
+| `norte-gui` | The GPUI graphical frontend. | AGPL-3.0-only |
+| `norte-frontend` | UI-independent state and behaviour shared by the TUI and GUI. | MIT OR Apache-2.0 |
+| `norte-encoding` | Text encoding detection and decoding. | MIT OR Apache-2.0 |
+| `norte-i18n` | Fluent localization resources shared by the frontends. | MIT OR Apache-2.0 |
+| `norte-theme` | Semantic theme roles, true-colour values, terminal fallbacks, and bundled presets. | MIT OR Apache-2.0 |
 
-## Reglas de dependencia (enforcement: cargo-deny + revisión)
+Other subsystems include `norte-index`, `norte-ai`, and `norte-mcp`.
 
+## Dependency rules
+
+The main dependency direction is:
+
+```text
+proto  <-  vfs  <-  { providers, testkit, core }  <-  clients
 ```
-proto  ←  vfs  ←  { vfs-local, testkit, core }  ←  cli
-```
 
-- Los frontends solo dependen de `norte-proto` (+ `norte-core` en modo embebido).
-- Los providers VFS no se conocen entre sí.
-- `norte-testkit` es dev-dependency de quien lo necesite; nunca dependencia normal.
+- Frontends use `norte-proto` and shared presentation crates. Embedded mode may
+  also use `norte-core`.
+- VFS providers do not depend on or call one another.
+- `norte-testkit` is a development dependency, never a runtime dependency.
+- Agent and plugin operations always pass through the core and policy engine.
 
-## Invariantes que no se negocian
+These boundaries are enforced through workspace configuration, `cargo-deny`,
+tests, and review.
 
-1. Nombres de archivo = **bytes** (`VPath`); UTF-8 solo para display, lossy y marcado.
-2. Nada de I/O bloqueante en contexto async: FS local vía `spawn_blocking` (ADR 0002).
-3. Toda operación larga es una Task con `CancellationToken` chequeado en el inner loop.
-4. Cancelar deja el destino limpio o `.norte-partial`; jamás un archivo a medias sin marcar.
-5. Errores tipados por taxonomía (spec §17.7); los frontends renderizan por categoría.
+## Non-negotiable invariants
 
-## Dónde está cada cosa
+1. Filenames are bytes. `VPath` preserves them; UTF-8 conversion is only for
+   display and must make lossy conversion visible.
+2. Blocking I/O never runs directly in an async context. Local filesystem work
+   uses `spawn_blocking` or helpers from `norte-vfs-local`.
+3. Every long-running operation is a task whose inner loop checks its
+   `CancellationToken`.
+4. Cancellation leaves either a clean destination or a marked
+   `.norte-partial` file, never an unmarked partial result.
+5. Errors follow the protocol taxonomy. Frontends render error categories
+   instead of parsing messages.
+6. Every mutation is journalled and carries enough information to undo it, or
+   is explicitly marked irreversible with a reason.
 
-- Comandos de desarrollo: `justfile` (CI corre exactamente `just ci`).
-- Decisiones de arquitectura: `docs/adr/` (MADR; se crean con `/adr`).
-- Corpus de casos hostiles: `crates/norte-testkit/fixtures/`.
-- Ecosistema Claude Code (agentes, hooks, commands): `.claude/` + `CLAUDE.md`.
+## Repository guide
+
+- Development commands: `justfile`
+- Architecture decisions: `docs/adr/`
+- Protocol schemas: `docs/schema/`
+- Hostile test corpus: `crates/norte-testkit/fixtures/`
+- Claude Code project configuration: `.claude/` and `CLAUDE.md`

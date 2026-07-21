@@ -1,30 +1,31 @@
-# Punto de partida de policy para agentes (spec §10, ADR 0024).
-# Cópialo a tu dir de config como `policy.toml` (norte daemon lo carga al
-# arrancar). Sin este fichero, un agente DENTRO de su scope aún se deniega
-# (fail-closed): la regla mínima útil es `ask` para todo.
+# Starting policy for agent clients (specification section 10, ADR 0024).
+# Copy this file to your configuration directory as `policy.toml`; the daemon
+# loads it at startup. Without a policy file, an agent is denied even inside a
+# granted scope. A useful minimal policy asks for every operation.
 #
-# Las reglas se evalúan en orden (la primera que matchea gana, por ruta; con
-# varias rutas decide la MÁS restrictiva) y solo aplican a agentes DENTRO de
-# su scope concedido — fuera de scope siempre es deny. Los humanos (User) no
-# se sandboxean.
+# Rules are evaluated in order and the first path match wins. When an operation
+# has several paths, the most restrictive result applies. Rules apply only to
+# agents inside an already granted scope; access outside that scope is always
+# denied. Human (`User`) clients are not sandboxed by these rules.
 
-# Todo lo que el agente intente, pregunta al humano (modal en el TUI).
+# Ask a person to approve every attempted agent operation in the TUI.
 [[rule]]
 action = "ask"
 
-# Ejemplos más finos (descomenta y ajusta; SIEMPRE antes de la catch-all):
+# More specific examples belong before the catch-all rule above. Move the
+# catch-all to the end, then uncomment and adjust the rules you need.
 #
-# [[rule]]                     # copias dentro del proyecto: sin fricción
+# [[rule]]                     # Allow copies within one project
 # op = "copy"
-# path_prefix = "file:///home/tu-usuario/proyectos/x"
+# path_prefix = "file:///home/your-user/projects/x"
 # action = "allow"
 #
-# [[rule]]                     # borrado por agentes: jamás
+# [[rule]]                     # Never let agents delete
 # op = "delete"
 # actor = "agent"
 # action = "deny"
 #
-# [[rule]]                     # nada agéntico en remotos sftp
+# [[rule]]                     # Deny all agent operations over SFTP
 # scheme = "sftp"
 # actor = "agent"
 # action = "deny"

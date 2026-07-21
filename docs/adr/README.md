@@ -1,35 +1,36 @@
-# ADRs — norte
+# Architecture decision records
 
-Decisiones de arquitectura en formato MADR. Se crean con el comando `/adr`.
-La spec evoluciona por ADR, no por edición silenciosa (spec §18).
+ADRs use the MADR structure and are created with the `/adr` project command.
+The specification evolves through explicit decisions rather than undocumented
+edits.
 
-| Nº | Título | Estado |
-|----|--------|--------|
-| [0001](0001-vpath-representacion-wire.md) | Representación de VPath y su wire format | accepted |
-| [0002](0002-runtime-async-blocking-io.md) | Runtime async y modelo de I/O bloqueante | accepted |
-| [0003](0003-workspace-lints-licencias.md) | Estructura del workspace, lints y licencias | accepted |
-| [0004](0004-convenciones-wire-protocolo.md) | Convenciones de wire del protocolo v0 | accepted |
-| [0005](0005-provider-ancho-politicas-engine.md) | Ensanchado del contrato Provider y políticas del copy engine | accepted |
-| [0006](0006-keymap-resolucion.md) | Semántica de resolución del keymap engine | accepted |
-| [0007](0007-config-capas-hot-reload.md) | Config en capas: precedencia y hot-reload | accepted |
-| [0008](0008-norte-encoding-frontera.md) | norte-encoding: frontera de detección/decodificación | accepted |
-| [0009](0009-trash.md) | Papelera: crate trash, capability y degradación explícita | accepted |
-| [0010](0010-frontera-core-plugin-config.md) | Frontera core/plugin/config para extensiones | accepted |
-| [0011](0011-envelope-jsonrpc-daemon.md) | Envelope JSON-RPC 2.0, framing, transporte y daemon | accepted |
-| [0012](0012-resume-transferencias.md) | Resume de transferencias: `.norte-partial`, reanudación y GC | accepted |
-| [0013](0013-provider-sftp.md) | Provider SFTP: russh, contención del servidor hostil y testing | accepted |
-| [0014](0014-provider-ftp.md) | Provider FTP: suppaftp, MLSD, testing in-process y cleartext | accepted |
-| [0015](0015-conexiones-y-secretos.md) | Conexiones y secretos: connections.toml, keyring, TOFU, ed25519 | accepted |
-| [0016](0016-provider-object-storage.md) | Provider de object storage: opendal, modelo de keys y S3 primero | accepted |
-| [0017](0017-paginacion-cursor-fs-list.md) | Paginación por cursor de `fs.list`: stream retenido por conexión | accepted |
-| [0018](0018-provider-archive.md) | Provider archive: zip/tar read-only como directorios virtuales | accepted |
-| [0019](0019-papelera-logica-remota.md) | Papelera lógica `.norte-trash/` en providers remotos | accepted |
-| [0020](0020-theming-crate-norte-theme.md) | Theming: crate `norte-theme`, roles semánticos y degradación de color | accepted |
-| [0021](0021-distribucion-cargo-dist.md) | Distribución: binarios prebuilt e instalador `curl \| sh` con cargo-dist | accepted |
-| [0022](0022-plugin-host-wasm-manifiesto.md) | Plugin host WASM: runtime, manifiesto, capabilities y los tres niveles | accepted |
-| [0023](0023-journal-sqlx-sqlite.md) | Journal: sqlx sobre SQLite (WAL), hash-chain propia | accepted |
-| [0024](0024-norte-mcp-puente-stdio.md) | norte-mcp: puente MCP stdio → daemon, sin SDK | accepted |
-| [0025](0025-journal-anclaje-hmac-audit-export.md) | Journal: anclaje HMAC del head + audit export (M3-5) | accepted |
-| [0026](0026-lua-scripting-mlua.md) | Lua scripting embebido con mlua (M4) | accepted |
-| [0027](0027-gui-gpui-go-no-go.md) | GUI: GPUI go/no-go (M5 spike) | accepted |
-| [0028](0028-targz-formato-compuesto.md) | tar.gz como formato compuesto `tar+gz` (capa opaca) | accepted |
+| No. | Decision | Status |
+| --- | --- | --- |
+| [0001](0001-vpath-wire-format.md) | VPath representation and wire format | accepted |
+| [0002](0002-async-runtime-blocking-io.md) | Async runtime and blocking I/O | accepted |
+| [0003](0003-workspace-lints-licenses.md) | Workspace structure, lint policy, and crate licenses | accepted |
+| [0004](0004-protocol-wire-conventions.md) | Protocol v0 wire conventions and evolution | accepted |
+| [0005](0005-provider-contract-copy-policies.md) | Provider contract expansion and copy policies | accepted |
+| [0006](0006-keymap-resolution.md) | Keymap resolution semantics | accepted |
+| [0007](0007-layered-config-hot-reload.md) | Layered configuration and hot reload | accepted |
+| [0008](0008-norte-encoding-boundary.md) | The norte-encoding boundary | accepted |
+| [0009](0009-trash.md) | Trash support and explicit permanent-delete fallback | accepted |
+| [0010](0010-core-plugin-config-boundaries.md) | Extension boundaries between core, plugins, and configuration | accepted |
+| [0011](0011-jsonrpc-envelope-daemon.md) | JSON-RPC envelope, framing, transport, and daemon lifecycle | accepted |
+| [0012](0012-resumable-transfers.md) | Resumable transfers, `.norte-partial`, and garbage collection | accepted |
+| [0013](0013-sftp-provider.md) | SFTP provider, hostile-server containment, and testing | accepted |
+| [0014](0014-ftp-provider.md) | FTP provider, MLSD, in-process testing, and cleartext risks | accepted |
+| [0015](0015-connections-secrets.md) | Connections, secrets, TOFU, and Ed25519 | accepted |
+| [0016](0016-object-storage-provider.md) | Object storage with OpenDAL and an S3-first key model | accepted |
+| [0017](0017-fs-list-cursor-pagination.md) | Connection-scoped cursor pagination for `fs.list` | accepted |
+| [0018](0018-archive-provider.md) | Read-only ZIP/TAR archives as virtual directories | accepted |
+| [0019](0019-remote-logical-trash.md) | Logical `.norte-trash/` for remote providers | accepted |
+| [0020](0020-norte-theme.md) | Shared semantic themes and terminal colour fallback | accepted |
+| [0021](0021-cargo-dist-releases.md) | Prebuilt releases and cargo-dist installers | accepted |
+| [0022](0022-wasm-plugin-host-manifest.md) | WASM plugin host, manifest, capabilities, and extension levels | accepted |
+| [0023](0023-sqlite-journal-hash-chain.md) | SQLite WAL journal with an application-level hash chain | accepted |
+| [0024](0024-norte-mcp-stdio-bridge.md) | SDK-free MCP stdio bridge to the daemon | accepted |
+| [0025](0025-journal-hmac-anchors-audit-export.md) | HMAC journal-head anchoring and audit export | accepted |
+| [0026](0026-lua-scripting-mlua.md) | Embedded Lua scripting with mlua | accepted |
+| [0027](0027-gpui-feasibility.md) | GPUI feasibility decision for the GUI | accepted |
+| [0028](0028-targz-compound-format.md) | `tar+gz` as an opaque compound archive format | accepted |

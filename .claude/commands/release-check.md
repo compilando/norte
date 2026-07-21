@@ -1,13 +1,17 @@
 ---
-description: Dry-run de release — semver, deny, changelog, docs, schema del protocolo
+description: Run a release dry run covering semver, licenses, advisories, changelog, docs, and protocol schemas
 ---
-Ejecuta el checklist de release sin publicar nada:
+Run the release checklist without publishing:
 
-1. `cargo semver-checks` (si está instalado; si no, avisa y continúa).
-2. `cargo deny check` (licencias + advisories).
-3. Changelog: verifica que release-plz derivaría entradas de los commits desde el último tag.
-4. `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`.
-5. Regenera el JSON Schema del protocolo y diffea contra `norte-proto/schema/`;
-   cualquier diff sin bump de versión de protocolo es BLOCKER.
-6. `just ci` completo.
-Informe final: GO / NO-GO con lista de bloqueos.
+1. Run `cargo semver-checks` when installed; report its absence and continue
+   otherwise.
+2. Run `cargo deny check` for licenses and advisories.
+3. Confirm that release-plz can derive changelog entries from commits since the
+   latest tag.
+4. Run `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`.
+5. Regenerate the protocol JSON Schema and compare it with
+   `norte-proto/schema/`. Any change without a protocol version bump is a
+   BLOCKER.
+6. Run the complete `just ci` suite.
+
+Return GO or NO-GO and list every blocker.

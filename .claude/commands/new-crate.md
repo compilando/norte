@@ -1,14 +1,16 @@
 ---
-description: Scaffolding de un crate nuevo del workspace con lints y licencia correctos
-argument-hint: <nombre del crate, p.ej. norte-vfs-sftp>
+description: Scaffold a workspace crate with the required lints and license
+argument-hint: <crate name, for example norte-vfs-sftp>
 ---
-Crea el crate `$ARGUMENTS` en `crates/`:
+Create `$ARGUMENTS` under `crates/`:
 
-1. `Cargo.toml` con `lints.workspace = true`, versión 0.0.0, y licencia según
-   la tabla de la spec §16.2: Apache-2.0 OR MIT para proto/vfs*/testkit/SDK;
-   AGPL-3.0-only para core/frontends. Copia los ficheros `LICENSE-*` que toquen.
-2. `src/lib.rs` con `#![forbid(unsafe_code)]` (salvo norte-vfs-local),
-   `#![warn(missing_docs)]`, doc de crate de una línea.
-3. Módulo de tests vacío y, si es provider, hueco para `provider_contract!`.
-4. Alta en `[workspace.members]` y entrada nueva en `ARCHITECTURE.md`.
-5. Verifica: `cargo build -p $ARGUMENTS && cargo clippy -p $ARGUMENTS`.
+1. Add a `Cargo.toml` with `lints.workspace = true`, version `0.0.0`, and the
+   license from specification section 16.2: `Apache-2.0 OR MIT` for protocol,
+   VFS, testkit, and SDK crates; `AGPL-3.0-only` for the core and frontends. Copy
+   the applicable `LICENSE-*` files.
+2. Add `src/lib.rs` with `#![forbid(unsafe_code)]` (except for
+   `norte-vfs-local`), `#![warn(missing_docs)]`, and a one-line crate doc.
+3. Add an empty test module and, for a provider, a placeholder for
+   `provider_contract!`.
+4. Add the crate to `[workspace.members]` and to `ARCHITECTURE.md`.
+5. Run `cargo build -p $ARGUMENTS` and `cargo clippy -p $ARGUMENTS`.

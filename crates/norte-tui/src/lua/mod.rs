@@ -4,8 +4,7 @@
 //! `Backend` → engine: journal + policy + undo. `io.*`/`os.*` crudos NO
 //! dejan rastro (documentado; como un shell).
 //!
-//! Diseño y desviaciones:
-//! `docs/superpowers/specs/2026-07-17-m4-lua-scripting-design.md`.
+//! The durable design decisions live in ADR 0026.
 mod api;
 mod driver;
 mod fs;

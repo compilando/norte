@@ -1,13 +1,14 @@
 ---
-description: Añade una fixture hostil al corpus canónico de norte-testkit
-argument-hint: <descripción del caso, p.ej. "nombre con surrogate sin parear">
+description: Add a hostile fixture to the canonical norte-testkit corpus
+argument-hint: <case description, for example "filename with an unpaired surrogate">
 ---
-Añade al corpus de `norte-testkit` una fixture para: $ARGUMENTS
+Add a `norte-testkit` fixture for: $ARGUMENTS
 
-1. Genera los bytes exactos (en `fixtures/names.toml` como hex si es nombre;
-   en `fixtures/content/` como fichero binario si es contenido).
-2. Documenta: qué caso real representa, en qué OS/provider aparece, y qué
-   bug prevendría (referencia issue si existe).
-3. Añádela a `fixtures::hostile_names()` / `fixtures::content_corpus()` según toque.
-4. Comprueba que la suite contractual la recoge (el roundtrip nuevo corre en Mem y local).
-5. Regla del proyecto: todo bug de encoding/paths entra aquí ANTES del fix (test-first).
+1. Store the exact bytes in `fixtures/names.toml` as hexadecimal for a filename,
+   or under `fixtures/content/` for binary content.
+2. Document the real-world case, affected operating system or provider, and the
+   regression it prevents. Link an issue when one exists.
+3. Add it to `fixtures::hostile_names()` or `fixtures::content_corpus()`.
+4. Confirm that the provider conformance suite exercises the new round trip
+   against both memory and local providers.
+5. Add the fixture and failing test before fixing an encoding or path bug.

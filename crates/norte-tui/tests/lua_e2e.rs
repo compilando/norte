@@ -1,5 +1,4 @@
-//! E2E del criterio de salida de la spec M4 Lua
-//! (`docs/superpowers/specs/2026-07-17-m4-lua-scripting-design.md`): un
+//! E2E del criterio de salida M4 Lua descrito en ADR 0026: un
 //! `init.lua` REALISTA registra un comando que copia la selección al otro
 //! pane renombrando (`copia-<basename>`), todo vía `Backend` → engine
 //! (journal + policy + undo); sin terminal (patrón `backend_mem` de

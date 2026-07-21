@@ -1,380 +1,414 @@
-# NORTE — Especificación fundacional (v0.2)
+# norte foundational specification (v0.2)
 
-> Codename provisional: **norte** (homenaje a Norton Commander; palabra española; corto, minúscula, CLI-friendly). Sustituible.
+> `norte` is a working name inspired by Norton Commander. ADRs take precedence
+> when this document and an accepted decision differ.
 
-**Elevator pitch.** Un file manager ortodoxo de nueva generación con arquitectura *headless-core*: un daemon en Rust que expone un protocolo estable y un VFS universal, sobre el que se montan frontends intercambiables (TUI, GUI, CLI) y sobre el que los agentes de IA operan de forma gobernada (MCP, aprobaciones, journal, auditoría). "El Zed de los file managers".
+norte is an orthodox file manager built around a headless Rust core. The core
+provides a stable protocol and a provider-independent virtual filesystem. TUI,
+GUI, and CLI frontends are clients of the same core, as are AI agents connected
+through governed MCP access.
 
----
+## 1. Design principles
 
-## 1. Principios de diseño (no negociables)
+1. **Build the headless core first.** Frontends contain no business logic. An
+   operation that is unavailable through the protocol does not exist.
+2. **Make I/O asynchronous and cancellable.** Long-running operations are tasks
+   with progress, priority, and cancellation. The UI remains responsive.
+3. **Treat bytes as the source of truth.** Filenames are not assumed to be
+   UTF-8. UTF-8 is a display view, never a lossy storage representation.
+4. **Make mutations reversible or explicitly irreversible.** A transactional
+   journal, trash, and undo cover normal operations. Irreversible actions
+   require a stronger confirmation.
+5. **Treat AI as a client, not an owner.** Agents use the same protocol as
+   people, pass through allow/ask/deny policy, and leave a complete audit trail.
+6. **Provide safe defaults and deep configuration.** Configuration is layered
+   and hot reloaded; keymaps ship with orthodox, Vim, and CUA presets.
+7. **Design for testing.** The VFS is a trait, deterministic memory providers
+   support fault injection, and coverage and property tests are CI gates.
+8. **Support Linux, macOS, and Windows deliberately.** Platform-specific path,
+   normalization, permission, and filesystem cases have dedicated tests.
 
-1. **Core headless primero.** Ningún frontend tiene lógica de negocio. Si una operación no se puede hacer vía protocolo, no existe.
-2. **Async en la base.** Toda I/O es asíncrona y cancelable. La UI nunca se bloquea. Toda operación de larga duración es una *Task* con progreso, prioridad y cancelación.
-3. **Los bytes son la verdad.** Los nombres de archivo NO son UTF-8. La representación interna es bytes/OsString; UTF-8 es solo una vista para display. Ningún path se corrompe jamás por un roundtrip.
-4. **Toda mutación es reversible o explícitamente irreversible.** Journal transaccional, papelera propia multiplataforma, undo. Las operaciones irreversibles (shred, rm en remoto sin trash) se marcan y requieren confirmación reforzada.
-5. **La IA es un ciudadano, no un dueño.** Los agentes operan a través del mismo protocolo que los humanos, sujetos a un policy engine (allow/ask/deny), con audit trail completo. Nunca acceso directo al filesystem por debajo del core.
-6. **Ultra-configurable, con defaults sanos.** Config en capas, presets de keybindings (orthodox/vim/CUA), todo remapeable, hot-reload.
-7. **Testeable por construcción.** El VFS es un trait; existe un provider en memoria determinista para tests. Cobertura y property-based testing como gate de CI, no como aspiración.
-8. **Compat es una feature.** Windows, macOS y Linux son first-class desde el commit 1 (CI matrix en los tres). Los edge cases de cada OS (paths largos de Windows, NFD de macOS, permisos POSIX) tienen tests dedicados.
+Version 1 does not attempt device synchronization, a distributed database,
+first-party cloud storage, or mobile clients.
 
-**Anti-objetivos (v1):** sync entre dispositivos, base de datos distribuida (la tumba de Spacedrive), cloud storage propio, mobile.
+## 2. System architecture
 
----
-
-## 2. Arquitectura general
-
-```
-┌────────────┐  ┌────────────┐  ┌────────────┐  ┌──────────────┐
-│ norte-tui  │  │ norte-gui  │  │ norte-cli  │  │ Agentes IA   │
-│ (ratatui)  │  │ (fase 2)   │  │ (scripting)│  │ (via MCP)    │
-└─────┬──────┘  └─────┬──────┘  └─────┬──────┘  └──────┬───────┘
-      │   Protocolo norte (JSON-RPC 2.0)  │      MCP (stdio/HTTP)
-      └───────────────┴───────────────────┴─────────────┘
-                        │
-                ┌───────▼────────┐
-                │   norte-core    │  daemon: sesiones, tasks,
-                │                 │  policy engine, journal,
-                │  ┌───────────┐  │  config, plugin host
-                │  │ Scheduler │  │
-                │  └───────────┘  │
-                └───────┬────────┘
-        ┌───────────────┼────────────────┐
-  ┌─────▼─────┐   ┌─────▼─────┐   ┌──────▼──────┐
-  │ norte-vfs │   │norte-index│   │  norte-ai   │
-  │ providers │   │ (SQLite,  │   │ (providers  │
-  │ local/sftp│   │ búsqueda, │   │ LLM/embed)  │
-  │ s3/archive│   │ embeddings│   │             │
-  └───────────┘   └───────────┘   └─────────────┘
-```
-
-- **Modo embebido y modo daemon.** El core puede correr in-process (el TUI lo linka como lib para arranque instantáneo, caso Yazi) o como daemon compartido (varios frontends contra la misma sesión, caso agentes + GUI simultáneos). Misma API en ambos: el protocolo se abstrae sobre un transporte `InProcess | UnixSocket | NamedPipe | Tcp(loopback)`.
-- **Sesiones.** Un cliente abre una sesión con capacidades negociadas (versión de protocolo, features). El estado de panes/tabs vive en el core → un agente puede "ver" los mismos panes que el humano.
-
----
-
-## 3. Separación en proyectos (cargo workspace)
-
-Monorepo con workspace Cargo. Cada crate con responsabilidad única, API pública mínima y tests propios.
-
-| Crate | Responsabilidad | Deps clave |
-|---|---|---|
-| `norte-proto` | Tipos del protocolo (serde), versionado, sin lógica | serde |
-| `norte-vfs` | Trait `Provider`, tipos VFS (`VPath`, `Entry`, `Capabilities`) | tokio, bytes |
-| `norte-vfs-local` | Provider filesystem local (por OS) | tokio, cfg(windows/unix) |
-| `norte-vfs-sftp` | SFTP/SSH | russh |
-| `norte-vfs-object` | S3/GCS/Azure (una crate, backends feature-gated) | opendal |
-| `norte-vfs-archive` | ZIP/TAR/7z/RAR(read) como directorios virtuales | zip, tar, sevenz-rust |
-| `norte-index` | Metadatos, búsqueda, tags, embeddings (SQLite) | rusqlite, tantivy? |
-| `norte-plugin-host` | Runtime WASM (wasmtime), WIT, permisos | wasmtime |
-| `norte-ai` | Trait `AiProvider` + implementaciones | reqwest, eventsource |
-| `norte-mcp` | Servidor MCP (core como tool provider) y cliente MCP | rmcp |
-| `norte-core` | Daemon: sesiones, scheduler, policy, journal, config | todo lo anterior |
-| `norte-tui` | Frontend terminal | ratatui, crossterm |
-| `norte-cli` | Cliente headless (`norte cp`, `norte ls --json`) | clap |
-| `norte-testkit` | Provider en memoria, fixtures, estrategias proptest | proptest |
-| `norte-gui` | Fase 2 (GPUI o Tauri; decisión diferida) | — |
-
-Reglas de dependencia: los frontends solo dependen de `norte-proto` (+ core en modo embebido). Los providers VFS no se conocen entre sí. `norte-ai` no conoce el VFS (recibe contenido, no rutas). Enforcement con `cargo-deny` + lint de dependencias en CI.
-
----
-
-## 4. Async en la base
-
-- **Runtime:** tokio multi-thread. FS local vía `spawn_blocking` con pool dimensionado (o `tokio-uring` en Linux tras benchmark, detrás de feature flag).
-- **Modelo de Task.** Toda operación no instantánea (>10 ms estimados) se materializa como `Task`:
-
-```rust
-struct Task {
-  id: TaskId,
-  kind: TaskKind,          // Copy, Move, Delete, Search, Hash, Index, AiJob…
-  state: Queued|Running|Paused|Done|Failed|Cancelled,
-  progress: { bytes_done, bytes_total, items_done, items_total, current_item },
-  priority: Low|Normal|High|UserInteractive,
-  cancel: CancellationToken,
-  parent: Option<TaskId>,  // árboles de tareas (copy dir → subtareas)
-}
+```text
+ TUI       GUI       CLI       MCP agents
+  |         |         |            |
+  +---------+---------+------------+
+       norte protocol / MCP bridge
+                  |
+             norte-core
+    sessions, tasks, policy, journal
+          /          |          \
+       VFS         index         AI
+    providers      SQLite     providers
 ```
 
-- **Scheduler:** colas por prioridad, límites de concurrencia por provider (p.ej. SFTP max 4 streams; disco local max N según media detectada), pausa/reanudación, reordenación por el usuario. Conflictos (dos escrituras al mismo destino) se serializan por lock de ruta.
-- **Cancelación cooperativa:** todo provider debe chequear el token en su inner loop; test obligatorio por provider: "cancelar copia de archivo grande deja el destino limpio (sin parciales) o marcado `.norte-partial`".
-- **Backpressure:** streams de lectura/escritura con buffers acotados; los eventos de progreso al frontend se coalescen (máx 30 Hz por task).
-- **Eventos:** el core emite notificaciones (protocolo) para cambios de FS (watchers: `notify` crate, polling en remotos), progreso de tasks, cambios de config. Los frontends son puramente reactivos.
+The core can run in process for a low-latency standalone client or as a shared
+daemon for multiple simultaneous clients. Both modes expose the same logical
+API through an in-process channel, Unix-domain socket, or Windows named pipe.
 
----
+A client initializes a session by negotiating protocol versions and
+capabilities. Session state belongs to the core so another authorized client can
+observe the same panes, selections, and tasks.
 
-## 5. VFS: el contrato central
+## 3. Cargo workspace
 
-```rust
-#[async_trait]
-trait Provider: Send + Sync {
-  fn scheme(&self) -> &str;                    // "file", "sftp", "s3", "zip"…
-  fn capabilities(&self) -> Capabilities;      // ver abajo
-  async fn stat(&self, p: &VPath) -> Result<Entry>;
-  async fn list(&self, p: &VPath, opts: ListOpts) -> Result<EntryStream>;
-  async fn read(&self, p: &VPath, range: Option<Range>) -> Result<ByteStream>;
-  async fn write(&self, p: &VPath, opts: WriteOpts) -> Result<ByteSink>;
-  async fn mkdir(&self, p: &VPath) -> Result<()>;
-  async fn remove(&self, p: &VPath, opts: RemoveOpts) -> Result<()>;
-  async fn rename(&self, from: &VPath, to: &VPath) -> Result<()>;      // mismo provider
-  async fn copy_native(&self, from: &VPath, to: &VPath) -> Option<Result<()>>; // server-side copy si existe (S3, SFTP ext, reflink/clonefile local)
-  async fn watch(&self, p: &VPath) -> Result<EventStream>;             // opcional por capability
-}
-```
+Each crate has one responsibility, a small public API, and its own tests.
 
-- **`VPath` = URI + bytes.** `scheme://authority/<segmentos en bytes>`. Los segmentos se almacenan como bytes crudos; nunca se fuerza UTF-8. Display siempre lossy y marcado (`�` + tooltip con hex).
-- **`Capabilities`** (bitflags): `WATCH, RENAME_ATOMIC, SERVER_COPY, TRASH, SYMLINKS, HARDLINKS, PERMISSIONS_POSIX, XATTR, ADS(NTFS), CASE_SENSITIVE, CASE_PRESERVING, MAX_PATH(n), RANDOM_WRITE, APPEND…` Las operaciones compuestas del core (copy entre providers, move cross-provider = copy+verify+delete) consultan capabilities para elegir estrategia y para pintar la UI (p.ej. ocultar "permisos" en S3).
-- **Copy engine (en core, no en providers):** streaming con verificación opcional (hash), preservación de metadatos según capabilities (mtime, permisos, xattr, ADS), política de colisiones (ask/overwrite/skip/rename-auto/newer), reintentos con backoff en remotos, resume de transferencias interrumpidas (`.norte-partial` + offset).
-- **Archivos como directorios:** `zip://<vpath-del-zip>!/ruta/interna`. Lectura v1; escritura (add/delete en ZIP) v1.1. Anidamiento soportado (zip dentro de tar) con límite de profundidad configurable.
-- **Papelera universal:** trash nativo donde exista (freedesktop, Recycle Bin, macOS); en providers sin trash, papelera lógica propia (`.norte-trash/` opcional por conexión) o degradación explícita a borrado permanente con aviso.
+| Crate | Responsibility |
+| --- | --- |
+| `norte-proto` | Versioned Serde wire types and schemas; no business logic. |
+| `norte-vfs` | `Provider`, `VPath`, entries, streams, and capabilities. |
+| `norte-vfs-local` | Platform-specific local filesystem provider. |
+| `norte-vfs-sftp` | SSH/SFTP provider. |
+| `norte-vfs-object` | Feature-gated object-storage backends, starting with S3. |
+| `norte-vfs-archive` | ZIP and TAR archives as read-only virtual directories. |
+| `norte-index` | SQLite metadata, search, tags, and embeddings. |
+| `norte-plugin-host` | WASM Component Model runtime, WIT interfaces, and permissions. |
+| `norte-ai` | Model-provider abstraction and implementations. |
+| `norte-mcp` | MCP bridge between agent clients and the daemon. |
+| `norte-core` | Sessions, scheduler, policy, journal, configuration, and daemon. |
+| `norte-frontend` | Presentation-independent state shared by official frontends. |
+| `norte-tui` | ratatui terminal frontend. |
+| `norte-gui` | GPUI graphical frontend. |
+| `norte-cli` | Headless command-line client. |
+| `norte-testkit` | Memory providers, fixtures, and proptest strategies. |
 
----
+Frontends depend on the protocol and presentation crates, plus the core in
+embedded mode. Providers do not depend on each other. AI providers receive
+content, not filesystem paths. Workspace configuration and cargo-deny enforce
+these boundaries.
 
-## 6. Codificación de archivos y juegos de caracteres
+## 4. Tasks and asynchronous I/O
 
-Dos problemas distintos, tratados por separado. Esta sección es crítica: aquí es donde los FM mediocres corrompen datos.
+Tokio is the shared multi-threaded runtime. `norte-vfs-local` moves synchronous
+filesystem calls to `spawn_blocking`; a future feature may use io_uring if
+benchmarks justify a second path.
 
-### 6.1 Nombres de archivo
+Any operation expected to take more than roughly 10 ms is represented as a
+task with:
 
-| OS/Contexto | Realidad | Política norte |
-|---|---|---|
-| Linux/Unix | bytes arbitrarios (salvo `/` y NUL), sin encoding garantizado | Almacenar bytes tal cual. Decodificar para display con UTF-8 → lossy si falla, badge "nombre no-UTF8" + acción "reparar nombre" (transcodificar desde encoding elegido/detectado) |
-| Windows | UTF-16 con posibles *unpaired surrogates* | `OsString`/WTF-8 internamente; roundtrip garantizado; display lossy |
-| macOS | UTF-8 normalizado NFD por HFS+/APFS | Conservar la forma original en bytes; **comparaciones y búsqueda siempre normalizando a NFC** |
-| Windows paths largos | límite 260 salvo prefijo `\\?\` | Prefijo `\\?\` automático y transparente; tests con paths >260 |
-| Case | NTFS/APFS case-insensitive-preserving, ext4 sensitive | Detección por capability y por sondeo; las colisiones de copia se evalúan según el FS *destino* |
-| ZIP entries | cp437 histórico vs flag UTF-8 (bit 11) vs encodings locales (CP866, Shift-JIS, GBK…) | Respetar flag UTF-8; si no, detección (chardetng) con override manual por-archivo ("reinterpretar nombres como…") — la killer feature de TC que casi nadie clona bien |
+- a stable ID and kind;
+- pending, running, paused, completed, failed, or cancelled state;
+- byte and item progress plus the current item;
+- low, normal, high, or user-interactive priority;
+- cooperative cancellation;
+- an optional parent for task trees.
 
-Normalización Unicode: opción global `unicode_compare = nfc|nfd|none` (default nfc) para ordenación, búsqueda y detección de duplicados; nunca se renombra en disco sin acción explícita del usuario.
+The scheduler enforces priority and per-provider concurrency, and serializes
+conflicting writes by destination. Providers check cancellation in inner loops.
+Bounded channels provide backpressure, and progress notifications are coalesced
+to no more than 30 updates per second per task.
 
-### 6.2 Contenido (viewer/editor/preview)
+Every provider must prove that cancelling a large copy leaves either a clean
+destination or a clearly marked `.norte-partial` file.
 
-- **Detección:** BOM primero; después `chardetng` sobre muestra inicial (64 KiB) + heurísticas (binario si NUL density > umbral). Resultado expuesto en la UI y siempre corregible a mano (menú "recargar como… UTF-8 / Latin-1 / Windows-1252 / Shift-JIS / …", lista completa de `encoding_rs`, que cubre todo el universo WHATWG).
-- **Transcodificación:** vía `encoding_rs` en streaming (archivos grandes sin cargar en RAM). Operación "convertir encoding" como Task, con detección de pérdida (caracteres no mapeables → abortar o sustituir, a elección).
-- **EOL:** detección LF/CRLF/CR/mixto; visible en status bar; conversión como operación explícita.
-- **Preview de texto:** siempre a través del detector; jamás asumir UTF-8. Hexview integrado como fallback universal.
-- **Tests:** corpus de fixtures con archivos reales en UTF-8/16LE/16BE (con y sin BOM), Latin-1, Windows-1252, Shift-JIS, GB18030, KOI8-R, más nombres de archivo hostiles (bytes inválidos, NFD, surrogates, emoji, RTL, espacios finales, puntos finales en Windows). `norte-testkit` los provee a todos los crates.
+## 5. Virtual filesystem
 
----
+The `Provider` trait supplies stat, list, ranged read, write, mkdir, remove,
+rename, server-side copy, trash, symlink, and watch operations where supported.
+Exact signatures evolve through ADRs and the versioned protocol.
 
-## 7. Sistema de plugins
+`VPath` combines a scheme, optional authority, and raw-byte segments. Its wire
+form uses lossless percent encoding. Display is explicitly lossy and marks
+undecodable bytes. See ADR 0001.
 
-Dos niveles, deliberadamente:
+Capabilities describe behaviour such as watching, atomic rename, server-side
+copy, trash, symlinks, POSIX permissions, xattrs, NTFS alternate streams, case
+sensitivity, read-only access, random writes, and append. Composite core
+operations select strategies from these capabilities and frontends use them to
+disable unavailable actions.
 
-### 7.1 Plugins WASM (extensión seria, sandboxed)
-- **Runtime:** wasmtime + Component Model (WIT). Los plugins se compilan desde cualquier lenguaje con toolchain WASM (Rust, Go, AssemblyScript, Python via componentize-py).
-- **Interfaces WIT expuestas (world `norte:plugin`):**
-  - `previewer` — genera preview (texto estructurado, imagen, tabla) para mimetypes declarados.
-  - `provider` — ¡providers VFS de terceros como plugins! (p.ej. WebDAV, Google Drive, un ERP interno). Misma interfaz del §5 vía WIT.
-  - `command` — comandos invocables desde palette/keybinding, con acceso a la API de sesión (panes, selección, tasks).
-  - `columns` — columnas custom en el listado (estilo TC content plugins: EXIF, duración de vídeo, git status).
-  - `hook` — before/after de operaciones (p.ej. escaneo antivirus pre-copy, DLP).
-- **Permisos por manifiesto** (`plugin.toml`): declaración de capabilities (`fs-read:scoped`, `fs-write:scoped`, `net:hosts=[…]`, `ai:chat`, `exec:none`). El usuario aprueba en la instalación; el host WASM las hace cumplir (WASI preview2 + capabilities propias). Sin permiso declarado no hay syscall: sandbox real, no promesa.
-- **Distribución:** registro git-based (índice tipo crates.io minimal) + instalación desde archivo/URL. Firmado con sigstore (fase 1.1).
+The core copy engine provides streaming, optional verification, metadata
+preservation, collision policies, retry with backoff, and resumable transfers.
+Cross-provider moves are copy, verify, then delete.
 
-### 7.2 Scripting Lua (glue ligero, config viva)
-- `mlua` embebido para: keybindings programáticos, automatizaciones de usuario, linemode/statusbar custom. API síncrona de alto nivel sobre el protocolo (como Yazi, que ha validado el modelo).
-- El scripting Lua corre con los permisos del usuario (no sandboxed); es config, no software de terceros. La distinción se documenta con claridad.
+Archives use compound schemes and a `!` boundary between the container and
+internal path. ZIP, TAR, and TAR.GZ are currently read-only. Archive nesting and
+writes remain later work.
 
-### 7.3 Integración externa clásica
-- Openers/tools externos declarativos por mimetype+OS (como Yazi/TC): `openers.toml`. Variables `%f %F %d` etc. Esto no es un plugin, es config.
+Local providers use the native trash facility. Remote providers may opt into a
+logical `.norte-trash/`; otherwise a frontend must obtain explicit confirmation
+before requesting permanent deletion.
 
----
+## 6. Names and text encodings
+
+Filename representation and file-content decoding are separate concerns.
+
+### 6.1 Filenames
+
+| Environment | Reality | norte policy |
+| --- | --- | --- |
+| Linux and Unix | Arbitrary bytes except `/` and NUL. | Preserve bytes; mark lossy display and offer explicit name repair. |
+| Windows | UTF-16 may contain unpaired surrogates. | Preserve with `OsString`/WTF-8 and use the `\\?\` prefix for long paths. |
+| macOS | HFS+/APFS commonly expose NFD names. | Preserve original bytes; compare and search using NFC. |
+| Case-insensitive filesystems | Case may be preserved but not distinguished. | Detect destination behaviour and evaluate collisions there. |
+| ZIP | Names may be UTF-8, CP437, or a legacy local encoding. | Honour the UTF-8 flag and otherwise retain honest byte-level behaviour with manual override. |
+
+Unicode comparison may be configured as NFC, NFD, or none, with NFC as the
+default. Comparison never renames an item on disk.
+
+### 6.2 File content
+
+- Detect a BOM first, then inspect a bounded sample with `chardetng` and binary
+  heuristics. Always show the selected encoding and allow manual override.
+- Decode and transcode incrementally with `encoding_rs`; large files are not
+  loaded in full. A conversion reports unrepresentable characters before the
+  user chooses whether to abort or replace them.
+- Detect LF, CRLF, CR, and mixed endings and expose conversion as an explicit
+  operation.
+- Route every text preview through the detector and use a hex view as the
+  universal fallback.
+- Maintain fixtures for UTF-8, UTF-16, Latin-1, Windows-1252, Shift-JIS,
+  GB18030, KOI8-R, invalid bytes, NFD, surrogates, emoji, RTL names, and
+  platform-hostile trailing characters.
+
+## 7. Extensions
+
+### 7.1 WASM plugins
+
+Plugins use Wasmtime and the Component Model. WIT interfaces cover previewers,
+providers, commands, columns, and operation hooks. A `plugin.toml` manifest
+declares scoped filesystem, network-host, AI, and execution capabilities. The
+host mediates every capability through WASI and norte policy; undeclared access
+is unavailable, not merely discouraged.
+
+Local `.wasm` installation is the initial distribution model. Registry and
+signature design are deferred until real demand.
+
+### 7.2 Lua scripts
+
+Embedded Lua provides user automation, programmable keybindings, and custom
+status behaviour. Scripts are user configuration, not third-party sandboxed
+software. Raw Lua `io` and `os` functions have the user's operating-system
+permissions; `norte.*` filesystem calls pass through the core, journal, and
+policy engine. Project-local scripts require explicit hash-based trust.
+
+### 7.3 External programs
+
+`openers.toml` maps MIME types and operating systems to user-chosen external
+commands. Openers are declarative configuration, not plugins.
 
 ## 8. Keybindings
 
-- **Modelo:** mapa `(contexto, secuencia) → acción`. Secuencias multi-tecla (chords) estilo vim/emacs: `g g`, `space c e`. Contextos jerárquicos: `global > pane > dialog > preview > editor > task-manager`; resolución del más específico al más general, determinista.
-- **Acciones = comandos del protocolo.** Todo keybinding invoca un comando nombrado (`pane.copy`, `sel.invert`, `ai.rename-batch`) con args opcionales. Los comandos de plugins se mapean igual (`plugin:git.stage`). Consecuencia: paridad total palette ↔ teclado ↔ scripting ↔ agente.
-- **Presets de fábrica:** `orthodox` (F3 view, F5 copy, F6 move, Tab cambia pane — sagrado), `vim` (hjkl, modos visual/normal), `cua` (Ctrl+C/V, flechas). Se elige en el onboarding; se mezclan por capas.
-- **Config:** `keymap.toml` con `prepend_keymap`/`append_keymap` (modelo Yazi, probado) sobre el preset. Hot-reload. Detección de conflictos con warning (comando `norte doctor keymap`).
-- **Discoverability:** which-key overlay tras 500 ms en secuencia incompleta; palette (Ctrl+P) con fuzzy search de todos los comandos mostrando su binding actual; cheatsheet exportable.
-- **Internacionalización de teclado:** capturar por keycode físico con fallback a layout lógico (config `keyboard.capture = logical|physical`) — los teclados ES/DE/FR agradecen no heredar los dolores de vim con `[`.
+A binding maps a context and sequence to a named command. Contexts are
+hierarchical and resolve from most specific to most general. Sequences are
+deterministic and prefix-free within an effective context stack; ADR 0006
+defines exact merge and resolution behaviour.
 
----
+Protocol-style command names provide parity across keyboard input, the command
+palette, Lua, and agent clients. Bundled presets are `orthodox`, `vim`, and
+`cua`; `orthodox` is the default. User TOML layers prepend and append bindings
+and are hot reloaded. The command palette lists every command and its current
+binding.
 
-## 9. Providers de IA
+Keyboard capture should support logical and physical modes so non-US layouts
+can choose predictable behaviour.
 
-- **Trait único:**
+## 9. AI providers
 
-```rust
-#[async_trait]
-trait AiProvider {
-  fn id(&self) -> &str;                       // "anthropic", "openai", "vertex", "ollama", "openai-compat"
-  fn models(&self) -> Vec<ModelInfo>;
-  async fn chat(&self, req: ChatRequest) -> Result<ChatStream>;   // streaming SSE
-  async fn embed(&self, req: EmbedRequest) -> Result<Vec<Embedding>>;  // opcional
-  fn capabilities(&self) -> AiCaps;           // tools, vision, json_mode, embed
-}
-```
+`AiProvider` exposes model metadata, streaming chat, optional embeddings, and
+capabilities such as tools, vision, and structured output. Planned integrations
+include Anthropic, OpenAI, Google Gemini/Vertex, local Ollama/llama.cpp, and a
+generic OpenAI-compatible endpoint.
 
-- **Implementaciones v1:** Anthropic, OpenAI, Google (Gemini API + Vertex con ADC — tu caso GCP corporativo), Ollama/llama.cpp local, y genérico OpenAI-compatible (cubre vLLM, LM Studio, Mistral, etc.).
-- **Credenciales:** keyring del OS (Keychain/Credential Manager/Secret Service); nunca en config plano; soporte de env vars y de ADC/instance metadata para entornos corporativos.
-- **Routing por función:** config asigna modelo a cada caso de uso (`ai.rename.model`, `ai.summarize.model`, `ai.embed.model`) — barato/local para lo masivo, potente para lo puntual.
-- **Privacidad por diseño:** IA 100 % opt-in; indicador visible de "qué se envió" (payload inspector); reglas de exclusión (`ai.deny_paths`, glob) que el core hace cumplir antes de que ningún byte salga; modo `local-only` que deshabilita providers remotos globalmente.
-- **Funciones IA v1 (todas como comandos normales, mapeables):** rename batch por descripción natural (con preview diff obligatorio), resumen/explicación de archivo en preview, clasificación/organización sugerida (plan → aprobación → tasks), búsqueda semántica sobre `norte-index` (embeddings locales por defecto: fastembed/ONNX; remotos opcionales).
+Credentials live in the operating-system keyring, environment variables, or
+cloud-native identity; never in plain configuration. Configuration selects a
+model per task so bulk work can use inexpensive local models and focused work
+can use a larger remote model.
 
----
+AI is opt-in. The UI shows exactly what will leave the machine, the core
+enforces denied paths before content reaches a provider, and local-only mode
+disables remote providers. AI-assisted rename and organization always produce a
+reviewable plan that the existing mutation engine executes.
 
-## 10. Integración agéntica (el diferencial)
+## 10. Agent access
 
-- **norte-mcp (server).** El core expone un servidor MCP (stdio y streamable HTTP) con tools: `list_dir, stat, read_file, write_file, copy, move, delete, mkdir, search, archive_extract, task_status, request_scope…` Cualquier agente (Claude Code, Codex CLI, agentes custom) gestiona archivos *a través de norte*, no contra el FS desnudo.
-- **Scopes.** Un agente se conecta y solicita un scope: conjunto de rutas (globs) + operaciones permitidas + TTL. El humano lo concede desde el frontend (o por policy pre-aprobada). Fuera de scope, el core deniega — no es prompt engineering, es enforcement.
-- **Policy engine.** Reglas declarativas (TOML/JSON) evaluadas por operación: `allow | ask | deny`, con condiciones (ruta, tamaño, extensión, provider, agente, hora). Ejemplos: `write dentro de ~/proyectos/x → allow`, `delete recursivo → ask siempre`, `cualquier op en sftp://prod → deny para agentes`. Modo `ask` empuja una aprobación interactiva al frontend con diff/preview de la operación.
-- **Journal transaccional + undo.** Toda mutación (humana o agéntica) se registra en un journal (SQLite, WAL): op, origen (usuario/agente/plugin), antes/después, hash. Deshacer por operación o por *sesión de agente completa* ("revertir todo lo que hizo el agente X desde las 10:31"). Los borrados agénticos van SIEMPRE a trash/staging, nunca directos.
-- **Audit trail exportable.** Hash-chain sobre el journal (integridad verificable), export CSV/JSONL. Este es el ángulo enterprise/compliance: visibilidad y gobernanza de agentes sobre filesystem — nadie lo ofrece hoy con enforcement real.
-- **norte como cliente MCP (dirección inversa).** El chat/asistente embebido del frontend puede consumir MCP servers externos (p.ej. un MCP de Jira) — fase 1.1, la prioridad es ser servidor.
-- **Modo "copilot de sesión".** El asistente ve el estado de sesión (panes, selección, tasks) vía el mismo protocolo y propone comandos que se ejecutan tras aprobación — dogfooding de la tesis "el agente es un cliente más".
+`norte-mcp` is an unprivileged stdio bridge to the daemon. It exposes only
+operations already available in the norte wire protocol. Agents therefore use
+norte instead of bypassing it with direct filesystem access.
 
----
+An agent requests a time-limited scope containing allowed paths and operations.
+The human grants it through a client or a pre-approved policy. The core rejects
+access outside the scope.
 
-## 11. Protocolo norte
+Policy rules evaluate the path, size, extension, provider, actor, and other
+context to return `allow`, `ask`, or `deny`. `ask` suspends the operation and
+pushes a preview to an interactive frontend.
 
-- **Base:** JSON-RPC 2.0 sobre transporte pluggable (in-process channel, UDS, named pipe, TCP loopback opcional). MessagePack como encoding alternativo negociable (perf en listados enormes).
-- **Handshake:** `initialize(client_info, protocol_version, requested_caps) → server_caps`. Versionado semántico del protocolo; el core soporta N y N-1.
-- **Familias de métodos:** `session.*` (panes, tabs, selección, cwd), `fs.*` (mapea al VFS), `task.*` (list, cancel, pause, reprioritize), `config.*`, `plugin.*`, `ai.*`, `policy.*` (aprobaciones pendientes), `index.*` (search, tags).
-- **Notificaciones (server→client):** `fs.changed`, `task.progress` (coalescido), `policy.approval_required`, `config.reloaded`, `session.updated`.
-- **Listados grandes:** paginación por cursor + streaming incremental (el TUI pinta las primeras 100 entradas en <16 ms aunque el dir tenga 500k).
-- **Especificación como artefacto:** el protocolo se define en un IDL propio mínimo (o directamente los tipos serde de `norte-proto` + JSON Schema generado) publicado y versionado — terceros pueden escribir frontends sin leer el código del core.
+Every mutation records the human, agent, or plugin actor, before/after data,
+and reversal information in SQLite. Users can undo an operation or an entire
+agent session. Agent deletes use recoverable trash or staging by default.
 
----
+The journal supports verified export to CSV and JSONL. Its hash chain detects
+corruption; HMAC anchors provide tamper evidence within the documented threat
+model.
 
-## 12. Testing (full, en serio)
+## 11. Protocol
 
-- **Unit tests** en cada crate, obligatorios para toda lógica de decisión (estrategias de copy, resolución de keymaps, policy engine, detección de encoding). Objetivo: ≥85 % líneas en crates de lógica (`core`, `vfs`, `proto`), medido con `cargo-llvm-cov`, gate en CI.
-- **Property-based (proptest):** roundtrips de `VPath` (bytes arbitrarios → serialize → parse → idénticos), normalización Unicode, resolución de keybindings (ninguna secuencia ambigua), planificador de colisiones de copia. `norte-testkit` publica las estrategias (`arb_hostile_filename()`, `arb_vpath()`).
-- **Provider en memoria (`MemProvider`):** FS simulado determinista con inyección de fallos (latencia, EIO en byte N, desconexión) para testear el copy engine, cancelación y resume sin tocar disco.
-- **Integration tests:** contra FS real en tmpdir (los tres OS, CI matrix GitHub Actions), y contra servicios reales en contenedor vía testcontainers: `sftp` (openssh), `s3` (MinIO). Casos obligatorios: cancelación limpia, resume, colisiones en FS case-insensitive, paths >260 en Windows, nombres NFD en macOS.
-- **Golden tests del protocolo:** fixtures request/response versionadas; cualquier cambio de wire format rompe un test y exige bump de versión.
-- **Fuzzing (`cargo-fuzz`):** parsers de entrada no confiable — nombres de entradas ZIP, detección de encoding, config TOML, mensajes JSON-RPC.
-- **Tests de plugins:** harness que carga un plugin WASM de referencia y verifica el enforcement de permisos (un plugin sin `net` que intenta abrir socket → trap, test rojo si no).
-- **Snapshot tests del TUI (`insta`):** render de pantallas clave a texto, diffs revisables.
-- **Benchmarks (`criterion`) + regresión:** listar 100k entradas, copy 10 GiB local, cold start. Presupuestos: cold start TUI <50 ms, listado 100k <200 ms hasta primer render.
+The base protocol is JSON-RPC 2.0 over an in-process channel, Unix-domain
+socket, or named pipe. NDJSON framing is bounded. An `initialize` handshake
+negotiates client information, protocol version, and capabilities; the core
+supports N and N-1 where the protocol version permits it.
 
----
+Method families cover sessions, filesystems, tasks, configuration, plugins,
+AI, policy, and indexing. Server notifications report filesystem changes, task
+progress, approval requests, configuration reloads, and session updates.
 
-## 13. Configuración
+Large listings use cursor pagination and incremental rendering. A frontend can
+paint the first page without waiting for a complete directory.
 
-- **Capas (menor a mayor precedencia):** defaults compilados → `/etc/norte` (sistema) → `~/.config/norte` (usuario) → `.norte/` (por-directorio/proyecto, opt-in) → flags CLI.
-- **Formato TOML**, dividido: `norte.toml` (general), `keymap.toml`, `theme.toml`, `openers.toml`, `ai.toml`, `policy.toml`, `connections.toml` (remotos; secretos en keyring, aquí solo referencias).
-- **Hot-reload** con watcher + notificación a clientes; validación con JSON Schema publicado (autocompletado en editores gratis).
-- **`norte doctor`:** diagnóstico de config, conflictos de keymap, permisos de plugins, conectividad de providers.
+Serde types in `norte-proto` are the source of truth. Generated JSON Schemas and
+golden fixtures are versioned release artifacts.
 
----
+## 12. Testing
 
-## 14. Seguridad
+- Unit-test every decision point. Maintain at least 85% line coverage in core,
+  VFS, and protocol crates with cargo-llvm-cov as a CI gate.
+- Property-test `VPath` round trips, Unicode comparison, keymap resolution, and
+  collision planning.
+- Use deterministic memory providers with injected latency, short writes,
+  disconnections, and errors to test transfers, cancellation, resume, journal,
+  and undo without disk access.
+- Run integration tests on real temporary filesystems across Linux, macOS, and
+  Windows. Run SFTP and S3 service tests with containers in nightly CI.
+- Version protocol request/response fixtures. Any wire change requires an
+  intentional protocol decision and version review.
+- Fuzz untrusted parsers: archive names, encoding detection, TOML
+  configuration, and JSON-RPC framing.
+- Test WASM capability denial with a reference guest.
+- Snapshot important TUI screens and benchmark startup, large listings, and
+  transfer throughput.
 
-- Secretos solo en keyring; memoria con `zeroize` donde aplique.
-- Plugins WASM: sandbox por capabilities (§7); sin `exec` jamás desde plugin (solo openers declarativos de usuario).
-- Agentes: enforcement por scope+policy en el core (§10); rate limits por sesión de agente.
-- Supply chain: `cargo-deny` (licencias+advisories), `cargo-audit` en CI, lockfile estricto, releases firmadas, SBOM (CycloneDX) por release.
-- Threat model documentado en `SECURITY.md` desde v0.1 (incluye: plugin malicioso, agente prompt-injected, servidor SFTP hostil con nombres trampa `../../`, archivo ZIP bomb — límites de descompresión).
+Target budgets are a sub-50 ms TUI cold start and first render of a 100,000-entry
+listing within 200 ms.
 
----
+## 13. Configuration
 
-## 15. Roadmap por hitos
+Layers apply from lowest to highest precedence: compiled defaults, system, user,
+project-local `.norte/`, and CLI flags. Project-local configuration is opt-in
+where it can execute code.
 
-| Hito | Contenido | Criterio de salida |
-|---|---|---|
-| **M0 — esqueleto** | workspace, `norte-proto`, `norte-vfs` (trait+Mem+Local), scheduler mínimo, CI 3 OS con coverage gate | copy/move/delete local con progreso y cancelación, testeado en 3 OS |
-| **M1 — TUI usable** | ratatui dual-pane, keymap engine + presets, config en capas, viewer con detección de encoding, trash | "yo lo uso a diario en vez de Yazi/mc" |
-| **M2 — remotos+archivos** | sftp, archive (zip/tar read), copy engine cross-provider con resume, object storage | copiar de sftp a zip local vía S3 sin sorpresas |
-| **MT — theming** | crate `norte-theme` compartido: roles semánticos, Color truecolor con degradación 256/16, colores por tipo de archivo, presets embebidos; capa de efectos reservada a la GPU (M5) | temas ricos en la TUI, hot-reload, y el mismo modelo listo para la GUI |
-| **M3 — agéntico** | norte-mcp server, scopes, policy engine, journal+undo, audit export | Claude Code gestiona un directorio real bajo policy `ask`, con undo de sesión completa |
-| **M4 — plugins+IA** | plugin host WASM (previewer+command), Lua scripting, norte-ai (Anthropic/OpenAI/Ollama), rename batch IA, búsqueda semántica | tercero publica un plugin sin tocar el core |
-| **M5 — GUI** | decisión GPUI vs Tauri con spike medido; primer frontend gráfico contra el mismo daemon | GUI y TUI sobre la misma sesión simultáneamente |
+TOML files separate general configuration, keymaps, themes, openers, AI,
+policy, and connections. Connection files contain references, never secrets.
+Published JSON Schemas support validation and editor completion. Hot reload
+retains the last complete valid configuration on error.
 
-> **Reorden (2026-07-15, ADR 0020):** tras M2, la secuencia pasa a
-> **MT (theming) → M4 (plugins) → M3 (agéntico) → M5 (GUI)** — se prioriza
-> valor para el usuario humano (theming, plugins) sobre la automatización
-> agéntica. Los criterios de salida de cada hito no cambian, solo el orden.
+`norte doctor` diagnoses configuration, keymap conflicts, plugin permissions,
+and provider connectivity.
 
----
+## 14. Security
 
-## 16. Decisiones resueltas (v0.2)
+- Keep secrets in the system keyring or another explicitly configured resolver;
+  use `zeroize` where appropriate.
+- Mediate WASM through declared capabilities. Plugins never receive general
+  process execution.
+- Enforce agent scopes and policy in the core, with per-session rate limits.
+- Use cargo-deny and security advisories in CI, a committed lockfile, signed
+  releases, and a release SBOM.
+- Maintain `SECURITY.md` with threats including malicious plugins,
+  prompt-injected agents, hostile remote servers, path traversal, and archive
+  bombs.
 
-1. **Nombre:** pendiente de elección final; candidatos evaluados en Anexo A. El codename de trabajo sigue siendo `norte` hasta decisión.
-2. **Licencia (modelo Zed):** `norte-proto`, `norte-vfs*`, `norte-testkit` y el SDK de plugins → **Apache-2.0/MIT dual** (maximiza ecosistema: cualquiera puede escribir frontends, providers y plugins sin fricción legal). `norte-core` y frontends oficiales → **AGPL-3.0** con **CLA** que reserva a la entidad titular la posibilidad de licenciamiento comercial (open-core: features enterprise futuras — SSO, policy centralizada, audit remoto — como módulos propietarios sobre el core AGPL). Archivo `LICENSE-*` por crate desde el commit 1; el CLA vía CLA-assistant.
-3. **GUI: GPUI.** Asumimos API inestable a cambio de rendimiento y coherencia con la tesis "Zed de los file managers". Mitigación: el frontend solo habla `norte-proto`, así que un cambio de framework nunca toca el core; spike de validación al inicio de M5 igualmente (presupuesto: 2 semanas).
-4. **Índice: SQLite + FTS5 en v1.** Un solo motor de almacenamiento (journal, index, tags, embeddings vía sqlite-vec) simplifica ops, backup y tests. `tantivy` queda como upgrade path documentado en ADR si FTS5 se queda corto en corpus >1M archivos.
-5. **RAR: solo lectura, para siempre, y vía delegación.** Nada de linkar unrar (licencia vírica no-libre): extracción delegada a binario externo (`unrar`/`7z`) si está presente, detectado en runtime, con degradación limpia ("instala X para soporte RAR"). Cero contaminación de licencia en el árbol.
-6. **Telemetría: ninguna, ni opt-in.** Declarado en README y web. Los diagnósticos son locales (`norte doctor --report` genera un archivo que el usuario adjunta manualmente si quiere).
+## 15. Milestones
 
----
+| Milestone | Scope | Exit criterion |
+| --- | --- | --- |
+| **M0: foundation** | Workspace, protocol and VFS traits, memory/local providers, scheduler, and three-OS CI. | Local copy, move, and delete with tested progress and cancellation. |
+| **M1: usable TUI** | Dual panes, keymaps, layered config, encoding-aware viewer, and trash. | Maintainers can use it daily in place of mc/Yazi. |
+| **M2: remotes and archives** | SFTP, ZIP/TAR, cross-provider resume, and object storage. | A remote/archive/S3/local transfer completes without hidden data loss. |
+| **MT: themes** | Shared semantic themes, terminal fallback, presets, and hot reload. | Rich TUI themes use the same model prepared for the GUI. |
+| **M4: plugins and AI** | WASM previewers/commands, Lua, model providers, AI rename, and semantic search. | A third party can ship a plugin without changing the core. |
+| **M3: governed agents** | MCP bridge, scopes, policy, journal, undo, and audit export. | An agent manages a real directory under `ask` policy with full-session undo. |
+| **M5: GUI** | Measured GPUI spike followed by the first graphical frontend. | GUI and TUI use the same daemon session simultaneously. |
 
-## 17. Gaps detectados en la revisión (incorporados al alcance)
+ADR 0020 reordered the work after M2 to themes, plugins, governed agents, then
+GUI. The scope and exit criteria did not change.
 
-Funcionalidad que el spec v0.1 no cubría y que un commander serio no puede omitir:
+## 16. Product decisions
 
-**17.1 Búsqueda (comando, no solo índice).** Dos modos: (a) *live search* sobre VFS — nombre por glob/regex/fuzzy y contenido tipo grep, streaming de resultados como Task cancelable, **consciente de encodings** (busca "año" en archivos Latin-1 y UTF-8 por igual, transcodificando la aguja, no el pajar); (b) búsqueda indexada (FTS5 + semántica) sobre `norte-index`. Resultados como "pane virtual" operable (seleccionar y copiar/borrar desde resultados, estilo TC).
+1. `norte` remains the working name pending a final branding decision.
+2. Protocol, VFS, testkit, and plugin SDK crates use dual MIT/Apache-2.0.
+   The core and official frontends use AGPL-3.0-only.
+3. GPUI is the selected GUI toolkit after the measured spike in ADR 0027.
+4. SQLite with FTS5 is the first index and storage engine. Tantivy remains a
+   possible upgrade if a corpus above one million files demonstrates a need.
+5. RAR remains read-only through optional delegation to an installed `unrar` or
+   `7z` executable; non-free code does not enter the dependency graph.
+6. norte collects no telemetry. Diagnostic reports are generated locally and
+   shared only when a user chooses to do so.
 
-**17.2 Comparación y sincronización de directorios.** Feature sagrada del género: diff de dos panes (por nombre/tamaño/mtime/hash), vista de diferencias, sync unidireccional/bidireccional con preview del plan como lista de operaciones aprobables (reutiliza el mismo mecanismo de "plan → aprobación → tasks" del agéntico). Comparación de archivos delegable a herramienta externa o viewer diff propio (v1.1).
+## 17. Required product capabilities
 
-**17.3 Multi-rename (no-IA).** Herramienta clásica de rename masivo: patrones con contadores `[N]`, slices `[N3-6]`, regex con grupos, cambio de mayúsculas, limpieza de caracteres; preview con detección de colisiones ANTES de ejecutar; deshacer como una sola transacción del journal. (El rename IA del §9 genera entradas para este mismo motor: un solo ejecutor, dos generadores.)
+- **Live and indexed search:** stream cancellable name/content searches across
+  VFS providers, with encoding-aware text matching, and expose results as an
+  operable virtual pane.
+- **Directory comparison and synchronization:** compare panes by metadata or
+  hash and produce an approved one-way or two-way operation plan.
+- **Batch rename:** support counters, slices, regular expressions, case changes,
+  and character cleanup with collision preview and transactional undo. AI rename
+  feeds the same executor.
+- **Volumes and mounts:** enumerate platform volumes, show free space, support
+  removable media and safe ejection, and expose drive switching as commands.
+- **First-class selection:** preserve selections by entry identity across sorts
+  and refreshes; support pattern add/remove, inversion, saved selections, and
+  independent view filters.
+- **Daemon lifecycle:** start on demand, shut down after configurable idle time,
+  upgrade gracefully, authenticate local peers, and never run as root. Loopback
+  TCP requires a token.
+- **Stable errors:** map platform/provider failures to documented typed protocol
+  errors. A task panic fails that task and produces a local report rather than
+  terminating the daemon.
+- **Local observability:** structured tracing by task and session, rotating local
+  logs, and inspectable task traces; nothing leaves the machine.
+- **Filesystem edge cases:** explicit symlink policy, cycle detection, sparse
+  files, Windows reparse points, and bounded retry for locked files.
+- **Shell integration:** cd-on-quit wrappers, file-picker mode, and opening a
+  terminal in the active pane.
+- **Git awareness:** ship status as an official columns plugin, not a Git client
+  in the core.
+- **Localization and accessibility:** Fluent resources for English and Spanish,
+  textual cues that do not rely only on colour, high-contrast themes, and
+  AccessKit in the GUI.
+- **Packaging:** reproducible cargo-dist builds, signed artifacts, common package
+  managers, and update notification without unattended installation.
 
-**17.4 Volúmenes y puntos de montaje.** Enumeración de unidades (Windows: letras + UNC; macOS: /Volumes; Linux: mounts + GVfs/udisks2), espacio libre en status bar, detección de medios extraíbles, eyección segura. Cambio de unidad como comando de primer nivel (Alt+F1/F2 en preset orthodox).
+## 18. Engineering contract
 
-**17.5 Selección como objeto de primera clase.** Modelo de selección persistente por pane (sobrevive a re-sorts y refreshes por identidad de entrada, no por índice), selección por patrón (`+`/`-` de TC), inversión, guardado/restauración de selecciones, y filtros de vista (mostrar solo `*.rs`) distintos de la selección.
+- Record architectural changes as MADR documents under `docs/adr/`; do not
+  silently rewrite this specification.
+- Use short-lived branches, focused pull requests, squash merges, and keep
+  `main` releasable.
+- Follow Conventional Commits and release-plz.
+- A change is done when code, appropriate tests, public API documentation,
+  release notes, and all local CI checks are complete.
+- Require an additional owner review for protocol and policy changes.
+- Pin the Rust toolchain, test stable minus two, forbid unsafe code outside the
+  local provider, and treat Clippy warnings as errors.
+- Use typed library errors, reserve anyhow for binaries, and avoid unchecked
+  unwrap/expect outside documented invariants.
+- Run cargo-semver-checks, cargo-deny, documentation builds, coverage, and the
+  three-OS test matrix in CI.
+- Keep hostile fixtures in `norte-testkit` and add regressions to that corpus
+  before their fixes.
+- Publish generated protocol and configuration schemas with releases.
 
-**17.6 Ciclo de vida del daemon.** Autoarranque bajo demanda (el primer cliente lo lanza), shutdown por inactividad configurable, upgrade sin drama (el daemon viejo rechaza clientes nuevos con versión mayor y se despide cuando termina sus tasks; `norte daemon restart --graceful`), **autenticación de socket** por peer credentials (SO_PEERCRED/named pipe SID) — solo el mismo usuario; TCP loopback requiere token. Un daemon por usuario, nunca root.
+## Appendix A: working-name candidates
 
-**17.7 Taxonomía de errores.** Enum de error del protocolo estable y documentado (`NotFound, PermissionDenied, Conflict{kind}, ProviderUnavailable{retryable}, Cancelled, PolicyDenied{rule}, EncodingLoss…`) con mapeo por-OS/provider en el borde. Los frontends renderizan errores por categoría, no parseando strings. Política de panics: un panic en un task no tumba el daemon (task supervisado → estado `Failed{panic}` + issue-ready report local).
+Names should be pronounceable in English and Spanish, short enough for a CLI,
+available across package ecosystems, and suggest navigation or organization.
 
-**17.8 Observabilidad local.** `tracing` estructurado en todo el core con spans por task/sesión; log rotativo local (`~/.local/state/norte/`); `norte task inspect <id>` vuelca la traza de una operación. Flamegraphs de dev con `tracing-flame`. Nada sale de la máquina (coherente con §16.6).
+| Name | Rationale | Risk |
+| --- | --- | --- |
+| **norte** | A direct Norton Commander reference; also means direction or bearing. | Common word and moderate searchability. |
+| **rumbo** | Means heading or course and directly suggests navigation. | Existing travel brands. |
+| **estiba** | The careful arrangement of cargo, close to the file-organization domain. | Less obvious pronunciation for English speakers. |
+| **veta** | Short and distinctive; suggests following a vein of data. | Abstract meaning. |
+| **derrota** | Classical nautical Spanish for a plotted route. | Common modern meaning is defeat. |
+| **faro** | A guide or signal. | Strong collision with Grafana Faro. |
 
-**17.9 Symlinks, hardlinks y casos raros del FS.** Semántica explícita: copiar symlink = preguntar (follow/preserve/skip) con default configurable; detección de ciclos en recorridos (visited set por (dev,inode)/file_id); sparse files preservados donde el API lo permita; junctions/reparse points de Windows tratados como symlinks con badge propio; archivos abiertos/bloqueados en Windows → estrategia retry + informe, nunca cuelgue.
-
-**17.10 Integración shell.** Wrapper `cd-on-quit` para bash/zsh/fish/PowerShell (modelo `y()` de Yazi), `norte --choose-files` como file-picker invocable por otras apps (protocolo portal en Linux: xdg-desktop-portal, fase 1.1), apertura de terminal en el cwd del pane activo.
-
-**17.11 Git-awareness (columna, no cliente).** Estado git por entrada como columna/badge (modificado/untracked/ignored) vía plugin oficial `columns` — dogfooding del plugin system; norte no es un cliente git.
-
-**17.12 i18n del propio producto.** Strings del TUI/GUI vía Fluent (`fluent-rs`), es/en desde v1 (ventaja: mercado hispanohablante desatendido en tooling de este nivel). Los docs en inglés primero (alcance global), README bilingüe.
-
-**17.13 Accesibilidad.** TUI: no depender solo de color (badges textuales), temas de alto contraste, anchos compatibles con screen readers de terminal. GUI (M5): AccessKit desde el diseño, no retrofit.
-
-**17.14 Empaquetado y releases.** Cross-compile reproducible (cargo-dist), canales stable/nightly, binarios firmados (notarización macOS, Authenticode Windows — presupuestar certificados), paquetes: Homebrew, winget, Scoop, AUR, Nix flake, .deb/.rpm. Auto-update: solo notificación en v1 (nunca auto-instalar; coherencia con postura de confianza).
-
----
-
-## 18. Mejores prácticas de ingeniería (contrato del proyecto)
-
-**Proceso y gobierno**
-- **ADRs obligatorios** (`docs/adr/NNNN-*.md`, formato MADR) para toda decisión de arquitectura; el spec evoluciona por ADR, no por edición silenciosa. Los ADR 0001–0006 nacen del §16.
-- **Trunk-based development**: ramas cortas (<3 días), PR pequeñas (<400 líneas diff netas objetivo), squash-merge, `main` siempre verde y releasable.
-- **Conventional Commits** + `release-plz` (changelog y versionado automáticos por crate).
-- **Definition of Done** de una PR: código + tests (unit y, si toca borde, integration) + docs (rustdoc de API pública, mdBook si es user-facing) + entrada de changelog + sin warnings. Sin excepciones "luego lo testeo".
-- **CODEOWNERS** por crate; `norte-proto` y `policy` requieren revisión doble (superficie de compatibilidad y seguridad).
-
-**Rust**
-- Toolchain fijada (`rust-toolchain.toml`), MSRV declarada y testeada en CI (política: stable − 2).
-- `#![forbid(unsafe_code)]` en todos los crates salvo `norte-vfs-local` (syscalls por OS), donde cada `unsafe` lleva comentario `// SAFETY:` y test.
-- Clippy en modo `pedantic` + `warnings = deny` en CI; excepciones solo con `#[allow]` justificado en línea.
-- Errores: `thiserror` en libs (tipos concretos), `anyhow` solo en binarios; nunca `unwrap()`/`expect()` fuera de tests salvo invariantes comentadas.
-- API pública auditada con `cargo-semver-checks` en CI (romper semver rompe el build).
-- `cargo-deny` (licencias, advisories, duplicados), presupuesto de dependencias: añadir una dep nueva al core requiere justificación en la PR (tamaño, mantenimiento, alternativas).
-- Docs: `#![warn(missing_docs)]` en crates de API (`proto`, `vfs`, SDK plugins); ejemplos compilables (doctests) en todo trait público.
-
-**Calidad continua**
-- CI matrix: {ubuntu, macos, windows} × {stable, MSRV}; jobs: fmt, clippy, test, coverage-gate (≥85 % crates de lógica), semver-checks, deny, docs build, bench-smoke.
-- Nightly job: fuzzing corto (10 min por target), tests de integración con testcontainers (sftp/minio), benchmarks completos con detección de regresión (>10 % → issue automática).
-- Fixtures hostiles versionadas en `norte-testkit` como corpus canónico; añadir un bug de encoding/paths al corpus es parte del fix (test-first para regresiones).
-
-**Documentación**
-- mdBook de usuario (instalación, keymaps, config, plugins) + mdBook de contribuidor (arquitectura, protocolo, cómo escribir un provider/plugin) desde M1.
-- El protocolo publica su JSON Schema generado en cada release (`norte-proto/schema/`).
-- `ARCHITECTURE.md` estilo matklad en la raíz: el mapa mental del repo en una página.
-
----
-
-## Anexo A — Candidatos a nombre
-
-Criterios: pronunciable en ES/EN, ≤6 letras para el binario, sin colisión fuerte en crates.io/brew/GitHub, dominio razonable, evoca el género (navegación/orden) sin ser genérico.
-
-| Nombre | Racional | Riesgos |
-|---|---|---|
-| **norte** | Homenaje directo a Norton Commander; "rumbo, referencia"; español universal | Común como palabra; SEO regular; `norte.dev` posiblemente libre |
-| **rumbo** | "Heading/course": navegación pura; sonoro en EN | Marcas de viajes existentes; verificar crates.io |
-| **estiba** | Colocación ordenada de la carga (estibar): materialista, exacto al dominio "ordenar archivos" | Menos obvio para anglófonos ("es-TEE-ba") |
-| **veta** | Veta/filón: seguir la veta de los datos; corto, fuerte | Abstracto; colisiones menores |
-| **derrota** | En náutica clásica, "derrota" = ruta trazada; guiño culto | En español coloquial significa "defeat": arriesgado, aunque memorable |
-| **faro** | Guía, señal | Colisión dura: Grafana Faro. Descartable |
-
-Recomendación: **norte** (primera opción) o **estiba** (si quieres algo más propio y registrable). Decisión antes de M0 para fijar crates, org de GitHub y dominio.
+The working recommendation remains **norte**, with **estiba** as the more
+distinctive fallback.

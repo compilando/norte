@@ -2,7 +2,7 @@
   "$defs": {
     "RawBinding": {
       "additionalProperties": false,
-      "description": "Un binding tal como viene del TOML.",
+      "description": "One binding as represented in TOML.",
       "properties": {
         "on": {
           "items": {
@@ -22,7 +22,7 @@
     },
     "RawSection": {
       "additionalProperties": false,
-      "description": "Las tres listas de una sección (preset: `keymap`; usuario:\n`prepend_keymap`/`append_keymap` — modelo Yazi, spec §12).",
+      "description": "The three binding lists in a section: `keymap` for presets and\n`prepend_keymap`/`append_keymap` for user layers.",
       "properties": {
         "append_keymap": {
           "items": {
@@ -48,7 +48,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Un `keymap.toml` parseado (preset de fábrica o capa de usuario).",
+  "description": "A parsed `keymap.toml` preset or user layer.",
   "properties": {
     "global": {
       "$ref": "#/$defs/RawSection"

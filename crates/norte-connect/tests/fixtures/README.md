@@ -1,12 +1,14 @@
-# Fixtures de test de norte-connect
+# norte-connect test fixtures
 
 ## `id_rsa_test`
 
-Clave privada RSA **generada exclusivamente para tests** (nunca usada en
-ningún sistema real, sin valor como secreto). Existe para probar que el
-conector **rechaza** claves RSA (`ConnectError::KeyUnsupported`, ADR 0015 E,
-issue #36 / RUSTSEC-2023-0071): no se puede generar en tiempo de test porque
-el keygen RSA en modo debug tarda decenas de segundos.
+This private RSA key was generated exclusively for tests. It has never been
+used by a real system and has no value as a secret.
 
-Si un escáner de secretos (gitleaks, GitHub secret scanning) la señala,
-es un falso positivo esperado: añadidla a su allowlist.
+The fixture verifies that the connector rejects RSA keys with
+`ConnectError::KeyUnsupported` (ADR 0015 E, issue #36, and
+RUSTSEC-2023-0071). Generating an RSA key during each debug test run would add
+tens of seconds to the suite.
+
+Secret scanners such as Gitleaks or GitHub secret scanning may report this file.
+That is an expected false positive; add this fixture to the scanner's allowlist.

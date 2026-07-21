@@ -1,82 +1,88 @@
 # Changelog
 
-Todos los cambios notables de norte. Formato basado en
-[Keep a Changelog](https://keepachangelog.com/es/1.1.0/); versionado
-[SemVer](https://semver.org/lang/es/). La versión del PROTOCOLO (wire) es
-independiente de esta y vive en `PROTOCOL_VERSION` (hoy `0.9.0`).
+All notable changes to norte are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases follow
+[Semantic Versioning](https://semver.org/). The wire protocol is versioned
+independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
-### Añadido
+### Added
 
-- **Theming (hito MT, ADR 0020):** la TUI deja de ser monocroma. Crate nuevo
-  `norte-theme` (compartido, GUI-ready): roles semánticos, `Color` truecolor
-  con degradación a 256/16 colores según el terminal, colores por tipo de
-  archivo (kind + extensión), y presets embebidos (`default`,
-  `catppuccin-mocha`, `gruvbox-dark`, `nord`). Se elige con `[ui].theme` (nombre
-  de preset o ruta a un `.toml`), es hot-reloadable y degrada al default ante
-  error. Capa `[effects]` reservada a la GPU de la GUI (M5). Ver
-  [docs/theming.md](docs/theming.md).
-- **Temas claros + fondo del tema:** presets `gruvbox-light` (crema/amarillos)
-  y `catppuccin-latte`; rol `background` que pinta el fondo base, así un tema
-  claro se ve claro en CUALQUIER terminal (los oscuros también fijan su base).
-- **Selector de tema (popup):** `F9` abre un picker con preview EN VIVO
-  (mover = aplicar al vuelo); Enter fija y **guarda** la elección en el
-  `norte.toml` del usuario (preservando comentarios/formato); Esc revierte.
-- Roadmap reordenado: tras M2, **MT (theming) → M4 (plugins) → M3 (agéntico) →
-  M5 (GUI)**.
+- **Themes (MT milestone, ADR 0020):** the TUI now uses the shared
+  `norte-theme` crate. It provides semantic roles, true-colour values with
+  256- and 16-colour terminal fallbacks, styles by node type and extension, and
+  bundled presets (`default`, `catppuccin-mocha`, `gruvbox-dark`, and `nord`).
+  Select a preset or a custom TOML file with `[ui].theme`. The setting is hot
+  reloaded and falls back to `default` on error. An `[effects]` section is
+  reserved for the GPU-backed GUI. See [the theme guide](docs/theming.md).
+- **Light themes and explicit backgrounds:** added `gruvbox-light` and
+  `catppuccin-latte`, plus a `background` role so both light and dark themes
+  control the terminal's base colour.
+- **Theme picker:** press `F9` to preview bundled themes. Enter applies and
+  saves the choice to the user's `norte.toml` without discarding comments or
+  formatting; Esc restores the previous theme.
+- **Roadmap update:** after M2, the planned order became MT (themes), M4
+  (plugins), M3 (agent integration), and M5 (GUI).
 
-## [0.3.0-alpha.1] — 2026-07-15
+## [0.3.0-alpha.1] - 2026-07-15
 
-Primera versión etiquetada. Cierra el hito **M2** («remotos + archivos»); el
-producto es un file manager ortodoxo usable para local, remotos y archivos
-comprimidos. **Alpha**: los tests de daemon/socket se validan en CI (no en todo
-entorno local); interfaz y config aún pueden cambiar.
+The first tagged release completes the M2 milestone: remote providers and
+archives. norte can manage local files, remote storage, and compressed archives.
+This is an alpha release; the interface and configuration may still change,
+and some daemon/socket tests are only available in CI environments.
 
-### Añadido
+### Added
 
-**M2 — remotos + archivos**
-- Provider **sftp** (russh): capabilities honestas, contención de servidor
-  hostil (nombres `../../`, symlinks trampa), nombres como bytes.
-- Provider **object storage / S3** (opendal): `CopyObject` server-side,
-  paginación por cursor de listados enormes, keys UTF-8 byte-exactas.
-- Provider **archive** zip/tar **read-only** como directorios virtuales
-  (`zip+…!/ruta`): encoding de nombres ZIP honesto (bit 11/cp437), límites
-  anti zip-bomb.
-- **Copy engine cross-provider** con **resume** (`.norte-partial` + offset;
-  multipart en S3), contrato anti-sobrescritura contra el destino.
-- **Papelera lógica remota** `.norte-trash/` para providers sin trash del OS
-  (sftp, object), con sidecar de procedencia bytes-safe.
-- **Daemon JSON-RPC 2.0** sobre UDS/named pipe (auth por peer credentials,
-  jamás root), envelope + framing NDJSON, autoarranque y shutdown por
-  inactividad; frontends eligen embebido o daemon.
-- **Conexiones + secretos**: `connections.toml` (solo referencias), keyring del
-  OS, TOFU de host keys SSH.
-- E2E del criterio de salida (`zip+remoto → S3 → local`), fuzz de framing y
-  nombres ZIP, benchmarks del copy engine, nightly con testcontainers.
+#### M2: remote providers and archives
 
-**M1 — TUI usable**
-- TUI ratatui de dos paneles, motor de keymaps + presets, config en capas con
-  hot-reload, viewer con detección de encoding, papelera con degradación
-  explícita a borrado permanente.
-- Strings de UI por Fluent (es/en).
+- SFTP provider based on `russh`, with accurate capabilities, byte-safe names,
+  and containment for hostile names and symlinks.
+- Object-storage provider based on `opendal`, with server-side S3 copies,
+  cursor pagination for large listings, and byte-exact UTF-8 keys.
+- Read-only ZIP and TAR provider that exposes archives as virtual directories
+  (`zip+...!/path`), honours ZIP filename encoding, and enforces zip-bomb
+  limits.
+- Cross-provider copy engine with resumable `.norte-partial` files, multipart
+  S3 support, and destination-side overwrite protection.
+- Remote logical trash at `.norte-trash/` for providers without an operating
+  system trash facility, including byte-safe origin metadata.
+- JSON-RPC 2.0 daemon over Unix-domain sockets or Windows named pipes, with
+  peer-credential authentication, NDJSON framing, automatic startup, and idle
+  shutdown. Frontends can use embedded or daemon mode.
+- Connection profiles and secret handling through `connections.toml`, system
+  keyrings, and trust on first use for SSH host keys.
+- End-to-end coverage of the release criterion (remote ZIP to S3 to local),
+  framing and ZIP-name fuzzing, copy benchmarks, and nightly tests using
+  testcontainers.
 
-**M0 — esqueleto**
-- Workspace Cargo, `norte-proto` (tipos del protocolo), `norte-vfs` (trait
-  `Provider` + `VPath` en bytes), scheduler de tasks con cancelación limpia,
-  copy/move/delete local con progreso, CI en 3 OS con gate de coverage.
+#### M1: usable terminal interface
 
-### Notas
-- Nombres de archivo tratados como **bytes** en todo el stack (nunca se asume
-  UTF-8); paths hostiles en el corpus canónico de `norte-testkit`.
-- Licencias por crate: `norte-proto`/`norte-vfs*`/`norte-testkit` Apache-2.0 o
-  MIT; `norte-core` y frontends AGPL-3.0.
+- A ratatui dual-pane TUI, configurable keymaps, layered hot-reloaded
+  configuration, an encoding-aware viewer, and explicit fallback when trash is
+  unavailable.
+- Fluent localization resources for English and Spanish.
 
-### Pendiente (próximos hitos)
-- **M3** agéntico: servidor MCP, policy engine, journal + undo de sesión,
-  audit export.
-- Escritura dentro de archivos zip; `list`/`restore`/`purge` de la papelera
-  lógica; GUI (M5).
+#### M0: foundation
+
+- Cargo workspace, protocol and VFS crates, byte-preserving `VPath`, cancellable
+  task scheduling, local copy/move/delete with progress, and CI on three
+  operating systems.
+
+### Notes
+
+- Filenames remain bytes throughout the stack. The canonical `norte-testkit`
+  corpus covers hostile and non-UTF-8 paths.
+- `norte-proto`, `norte-vfs*`, and `norte-testkit` are available under either
+  Apache-2.0 or MIT. `norte-core` and the official frontends are
+  AGPL-3.0-only.
+
+### Planned
+
+- Agent-facing MCP server, policy engine, journal, session undo, and audit
+  export.
+- Writes inside ZIP archives; list, restore, and purge operations for logical
+  trash; and the M5 GUI.
 
 [Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.1...HEAD
 [0.3.0-alpha.1]: https://github.com/compilando/norte/releases/tag/v0.3.0-alpha.1
