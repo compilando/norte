@@ -292,3 +292,28 @@ async fn gzip_por_partes_produce_el_mismo_resultado() {
         b"partes"
     );
 }
+
+/// #60: GNU longname TAMBIÉN por el camino tar.gz (`entries()` secuencial,
+/// sin Seek) — `classify_entry` es compartido pero el iterador no: el nombre
+/// de 255 bytes del corpus se lista byte-exacto y se lee.
+#[tokio::test]
+async fn gnu_longname_roundtrip_por_targz() {
+    let largo = norte_testkit::corpus::hostile_names()
+        .into_iter()
+        .find(|n| n.id == "name_max_255")
+        .expect("fixture del corpus")
+        .bytes;
+    let tar = TarSmith::new()
+        .file_gnu_longname(&largo, b"gz-largo")
+        .build();
+    let gz = common::gzip(&tar);
+    let (p, root) = common::targz_provider(&gz).await;
+    let seg = norte_proto::Segment::new(largo).expect("seg");
+    let f = root.join(seg);
+    let mut stream = p.read(&f, None).await.expect("read");
+    let mut out = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        out.extend_from_slice(&chunk.expect("chunk ok"));
+    }
+    assert_eq!(out, b"gz-largo");
+}

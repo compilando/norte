@@ -13,7 +13,10 @@ use norte_proto::{Entry, EntryKind, Error, Segment, VPath};
 pub struct Limits {
     /// Tope de entradas indexadas (las omitidas por hostiles no cuentan).
     pub max_entries: usize,
-    /// Tope de bytes del nombre COMPLETO de una entrada.
+    /// Tope de bytes del nombre COMPLETO de una entrada. Nota anti-bomba
+    /// (#60/D2): el crate `tar` MATERIALIZA un GNU longname entero en RAM
+    /// ANTES de que este check lo vea — acotado por el tamaño del propio
+    /// contenedor (el longname son datos de una entrada), no por este tope.
     pub max_name_bytes: usize,
     /// Tope de componentes de path de una entrada.
     pub max_depth: usize,

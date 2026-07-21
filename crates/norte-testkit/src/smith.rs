@@ -221,14 +221,44 @@ impl ZipSmith {
 }
 
 enum TarEntry {
-    File { name: Vec<u8>, data: Vec<u8> },
-    Dir { name: Vec<u8> },
-    Symlink { name: Vec<u8>, target: Vec<u8> },
+    File {
+        name: Vec<u8>,
+        data: Vec<u8>,
+    },
+    Dir {
+        name: Vec<u8>,
+    },
+    Symlink {
+        name: Vec<u8>,
+        target: Vec<u8>,
+    },
+    /// Archivo con nombre LARGO vía GNU longname (#60): entrada `L`
+    /// («`././@LongLink`», datos = nombre real + NUL) seguida del archivo con
+    /// el nombre TRUNCADO a 100 en su header.
+    GnuLongName {
+        name: Vec<u8>,
+        data: Vec<u8>,
+    },
+    /// Archivo con override pax `path=` (#60): entrada `x` con el record
+    /// pax seguida del archivo con nombre placeholder.
+    PaxPath {
+        name: Vec<u8>,
+        data: Vec<u8>,
+    },
+    /// Entrada CRUDA con typeflag arbitrario (#60): pins de metadatos que
+    /// el iterador del crate `tar` consume o debe filtrar (`g` =
+    /// `pax_global_header`, H5).
+    Raw {
+        typeflag: u8,
+        name: Vec<u8>,
+        data: Vec<u8>,
+    },
 }
 
-/// Forja de bytes tar (ustar plano). Nombres > 100 bytes: PANIC — la forja
-/// no implementa GNU longname; los nombres largos del corpus se cubren por
-/// zip (asimetría documentada, precedente del harness MinIO/255).
+/// Forja de bytes tar (ustar plano + GNU longname y pax `path=` desde #60).
+/// Un header ustar solo admite 100 bytes de nombre: los largos van por
+/// [`TarSmith::file_gnu_longname`] / [`TarSmith::file_pax_path`]; `file`
+/// con nombre >100 sigue PANICANDO (contrato de forja explícito).
 ///
 /// ```
 /// let bytes = norte_testkit::TarSmith::new()
@@ -279,6 +309,42 @@ impl TarSmith {
         self
     }
 
+    /// Archivo con nombre de CUALQUIER longitud vía GNU longname (#60, H6):
+    /// entrada `L` con el nombre real como datos + el archivo con el nombre
+    /// truncado a 100 en su header ustar — como GNU tar de verdad.
+    #[must_use]
+    pub fn file_gnu_longname(mut self, name: &[u8], data: &[u8]) -> Self {
+        self.entries.push(TarEntry::GnuLongName {
+            name: name.to_vec(),
+            data: data.to_vec(),
+        });
+        self
+    }
+
+    /// Archivo con override pax `path=` (#60, H6): entrada `x` con el record
+    /// `LEN path=NOMBRE\n` (bytes crudos — pax real exige UTF-8, los tars
+    /// hostiles no) + el archivo con nombre placeholder.
+    #[must_use]
+    pub fn file_pax_path(mut self, name: &[u8], data: &[u8]) -> Self {
+        self.entries.push(TarEntry::PaxPath {
+            name: name.to_vec(),
+            data: data.to_vec(),
+        });
+        self
+    }
+
+    /// Entrada cruda con `typeflag` arbitrario (#60): p. ej. `b'g'` para
+    /// pinear el filtro de `pax_global_header` (H5).
+    #[must_use]
+    pub fn entry_raw(mut self, typeflag: u8, name: &[u8], data: &[u8]) -> Self {
+        self.entries.push(TarEntry::Raw {
+            typeflag,
+            name: name.to_vec(),
+            data: data.to_vec(),
+        });
+        self
+    }
+
     /// Los bytes del tar completo (headers de 512 + datos + 2 bloques cero).
     ///
     /// # Panics
@@ -287,40 +353,73 @@ impl TarSmith {
     pub fn build(self) -> Vec<u8> {
         let mut out = Vec::new();
         for entry in &self.entries {
-            let (name, data, typeflag, link): (&[u8], &[u8], u8, &[u8]) = match entry {
-                TarEntry::File { name, data } => (name, data, b'0', &[]),
-                TarEntry::Dir { name } => (name, &[], b'5', &[]),
-                TarEntry::Symlink { name, target } => (name, &[], b'2', target),
-            };
-            assert!(
-                name.len() <= 100 && link.len() <= 100,
-                "TarSmith no forja nombres >100 bytes (usa zip para el corpus largo)"
-            );
-            let mut header = [0u8; 512];
-            header[..name.len()].copy_from_slice(name);
-            header[100..107].copy_from_slice(b"0000644"); // mode
-            header[108..115].copy_from_slice(b"0000000"); // uid
-            header[116..123].copy_from_slice(b"0000000"); // gid
-            let size_field = format!("{:011o}", data.len());
-            header[124..135].copy_from_slice(size_field.as_bytes());
-            header[136..147].copy_from_slice(b"00000000000"); // mtime 1970
-            header[148..156].copy_from_slice(b"        "); // chksum en blanco
-            header[156] = typeflag;
-            header[157..157 + link.len()].copy_from_slice(link);
-            header[257..262].copy_from_slice(b"ustar");
-            header[263..265].copy_from_slice(b"00");
-            let sum: u32 = header.iter().map(|&b| u32::from(b)).sum();
-            let chk = format!("{sum:06o}\0 ");
-            header[148..156].copy_from_slice(chk.as_bytes());
-            out.extend_from_slice(&header);
-            out.extend_from_slice(data);
-            let resto = data.len() % 512;
-            if resto != 0 {
-                out.extend(std::iter::repeat_n(0u8, 512 - resto));
+            match entry {
+                TarEntry::File { name, data } => emit_tar(&mut out, name, data, b'0', &[]),
+                TarEntry::Dir { name } => emit_tar(&mut out, name, &[], b'5', &[]),
+                TarEntry::Symlink { name, target } => emit_tar(&mut out, name, &[], b'2', target),
+                TarEntry::GnuLongName { name, data } => {
+                    // GNU longname: entrada `L` con el nombre real + NUL como
+                    // datos; el header del archivo lleva el nombre truncado.
+                    let mut long = name.clone();
+                    long.push(0);
+                    emit_tar(&mut out, b"././@LongLink", &long, b'L', &[]);
+                    emit_tar(&mut out, &name[..name.len().min(100)], data, b'0', &[]);
+                }
+                TarEntry::PaxPath { name, data } => {
+                    // Record pax `LEN path=NOMBRE\n` con LEN = longitud TOTAL
+                    // del record (dígitos incluidos) — el clásico cálculo
+                    // iterativo del formato.
+                    let base = " path=".len() + name.len() + 1;
+                    let mut len = base + 1;
+                    while len.to_string().len() + base != len {
+                        len = len.to_string().len() + base;
+                    }
+                    let mut record = format!("{len} path=").into_bytes();
+                    record.extend_from_slice(name);
+                    record.push(b'\n');
+                    emit_tar(&mut out, b"PaxHeader/x", &record, b'x', &[]);
+                    emit_tar(&mut out, b"placeholder", data, b'0', &[]);
+                }
+                TarEntry::Raw {
+                    typeflag,
+                    name,
+                    data,
+                } => emit_tar(&mut out, name, data, *typeflag, &[]),
             }
         }
         out.extend(std::iter::repeat_n(0u8, 1024));
         out
+    }
+}
+
+/// Emite UN header ustar de 512 + datos + padding. `name`/`link` ≤ 100
+/// bytes (panic: contrato de forja, ver doc de [`TarSmith`]).
+fn emit_tar(out: &mut Vec<u8>, name: &[u8], data: &[u8], typeflag: u8, link: &[u8]) {
+    assert!(
+        name.len() <= 100 && link.len() <= 100,
+        "TarSmith no forja headers con nombre >100 bytes (usa file_gnu_longname/file_pax_path)"
+    );
+    let mut header = [0u8; 512];
+    header[..name.len()].copy_from_slice(name);
+    header[100..107].copy_from_slice(b"0000644"); // mode
+    header[108..115].copy_from_slice(b"0000000"); // uid
+    header[116..123].copy_from_slice(b"0000000"); // gid
+    let size_field = format!("{:011o}", data.len());
+    header[124..135].copy_from_slice(size_field.as_bytes());
+    header[136..147].copy_from_slice(b"00000000000"); // mtime 1970
+    header[148..156].copy_from_slice(b"        "); // chksum en blanco
+    header[156] = typeflag;
+    header[157..157 + link.len()].copy_from_slice(link);
+    header[257..262].copy_from_slice(b"ustar");
+    header[263..265].copy_from_slice(b"00");
+    let sum: u32 = header.iter().map(|&b| u32::from(b)).sum();
+    let chk = format!("{sum:06o}\0 ");
+    header[148..156].copy_from_slice(chk.as_bytes());
+    out.extend_from_slice(&header);
+    out.extend_from_slice(data);
+    let resto = data.len() % 512;
+    if resto != 0 {
+        out.extend(std::iter::repeat_n(0u8, 512 - resto));
     }
 }
 
@@ -376,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "no forja nombres >100")]
+    #[should_panic(expected = "no forja headers con nombre >100")]
     fn tar_nombre_largo_panica() {
         let _ = TarSmith::new().file(&[b'a'; 101], b"").build();
     }
