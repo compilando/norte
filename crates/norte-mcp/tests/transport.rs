@@ -188,6 +188,102 @@ async fn cancelled_abandona_el_tool_en_vuelo_sin_respuesta() {
     );
 }
 
+/// #72 (e2e): el agente cancela su tools/call suspendido en un Ask → el puente
+/// reenvía rpc.cancel → el daemon RETIRA el Ask. El humano ya NO puede
+/// aprobar-para-ejecutar: policy.pending queda vacío y un policy.decide tardío
+/// no crea el destino. (≠ #67, que solo abandonaba la espera local dejando el
+/// Ask zombi hasta el TTL.)
+#[tokio::test]
+async fn cancel_del_agente_retira_el_ask_el_humano_no_ejecuta() {
+    let (_dir, socket, mem) = spawn_ask_daemon().await;
+    let (mut w, mut r) = spawn_transport(&socket).await;
+    let human = grant_scope_via_transport(&mut w, &mut r, &socket).await;
+
+    // El agente lanza el copy: queda suspendido en el Ask (nadie decide aún).
+    send_line(&mut w, &copy_call(10)).await;
+
+    // Espera DETERMINISTA a que el Ask esté genuinamente suspendido: sondea
+    // policy.pending hasta verlo no vacío (jamás un sleep fijo).
+    let approval_id = {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let res: norte_proto::methods::PolicyPendingResult = human
+                .call(norte_proto::methods::POLICY_PENDING, &serde_json::json!({}))
+                .await
+                .expect("policy.pending");
+            if let Some(p) = res.pending.first() {
+                break p.approval_id;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "el Ask nunca apareció en policy.pending"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    };
+
+    // El agente CANCELA su tools/call en vuelo.
+    send_line(
+        &mut w,
+        &serde_json::json!({"jsonrpc":"2.0","method":"notifications/cancelled",
+            "params":{"requestId":10}}),
+    )
+    .await;
+
+    // El Ask debe RETIRARSE: policy.pending vuelve a vacío. Sondeo con deadline.
+    {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let res: norte_proto::methods::PolicyPendingResult = human
+                .call(norte_proto::methods::POLICY_PENDING, &serde_json::json!({}))
+                .await
+                .expect("policy.pending");
+            if res.pending.is_empty() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "el Ask quedó ZOMBI: el rpc.cancel no se reenvió (#72)"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    // Un policy.decide TARDÍO no debe ejecutar nada (la pending ya no existe):
+    // Err u Ok ambos aceptables — lo que importa es el efecto en el FS.
+    let _ = human
+        .call::<_, norte_proto::methods::PolicyDecideResult>(
+            norte_proto::methods::POLICY_DECIDE,
+            &norte_proto::methods::PolicyDecideParams {
+                approval_id,
+                approve: true,
+            },
+        )
+        .await;
+
+    // Deja aflorar cualquier ejecución errónea antes de comprobar el FS.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        matches!(
+            mem.stat(&vp("mem:///proj/b.txt")).await,
+            Err(norte_proto::Error::NotFound)
+        ),
+        "b.txt no debe existir tras la retirada del Ask"
+    );
+
+    // El transporte sigue vivo tras todo el intercambio.
+    send_line(
+        &mut w,
+        &serde_json::json!({"jsonrpc":"2.0","id":12,"method":"ping"}),
+    )
+    .await;
+    let resp = read_json(&mut r).await;
+    assert_eq!(
+        resp["id"], 12,
+        "el transporte sigue vivo tras el cancel: {resp}"
+    );
+}
+
 /// #67 (regla 3): EOF del peer con un tool SUSPENDIDO termina el transporte
 /// limpio — cancela lo en vuelo, drena el writer, retorna dentro de un
 /// timeout (jamás cuelga en el join del writer).

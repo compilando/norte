@@ -692,12 +692,12 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.18.0 (M4 live search): acepta 0.18.x (N) y 0.17.x (N-1), rechaza
-    // 0.16.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.18.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.17.0"), "N-1");
+    // 0.19.0 (#72 rpc.cancel): acepta 0.19.x (N) y 0.18.x (N-1), rechaza
+    // 0.17.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.19.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.18.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.16.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.17.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -813,4 +813,23 @@ fn plugin_preview_roundtrip() {
     let parcial: PluginPreviewResult =
         serde_json::from_str(r#"{"plugin_id":"x"}"#).expect("parcial deserializa");
     assert_eq!(parcial.preview, None, "un preview parcial cae a None");
+}
+
+#[test]
+fn rpc_cancel_params_round_trip_num_y_str() {
+    use norte_proto::methods::RpcCancelParams;
+    use norte_proto::wire::RequestId;
+    for id in [RequestId::Num(42), RequestId::Str("abc".into())] {
+        let p = RpcCancelParams { id: id.clone() };
+        let wire = serde_json::to_string(&p).expect("serializa");
+        let back: RpcCancelParams = serde_json::from_str(&wire).expect("deserializa");
+        assert_eq!(back.id, id);
+    }
+    assert_eq!(
+        serde_json::to_value(RpcCancelParams {
+            id: RequestId::Num(7)
+        })
+        .unwrap(),
+        serde_json::json!({"id": 7}),
+    );
 }

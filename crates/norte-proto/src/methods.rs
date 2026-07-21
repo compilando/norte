@@ -80,7 +80,11 @@ use crate::{
 /// multi-encoding) bajo un subtree, streaming como Task cancelable. Aditivo
 /// sobre 0.17.x (un cliente N-1 no conoce `fs.search`/`search.hits` y ve
 /// `TaskKind::Search` como `Unknown`, como el resto de kinds nuevos).
-pub const PROTOCOL_VERSION: &str = "0.18.0";
+///
+/// 0.19.0 (#72): notificación `rpc.cancel { id }` (client→server) — retira la
+/// request en vuelo suspendida en un Ask de policy. Aditiva sobre 0.18.x (un
+/// cliente/daemon N-1 la ignora; degrada al Ask zombi hasta TTL, no rompe).
+pub const PROTOCOL_VERSION: &str = "0.19.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -281,6 +285,18 @@ pub const PLUGIN_RUN_COMMAND: &str = "plugin.run_command";
 /// que maneje el mimetype del archivo (M4-P5) sobre los bytes que el core lee;
 /// todo `None` = ningún previewer aplica (el frontend cae a la vista cruda).
 pub const PLUGIN_PREVIEW: &str = "plugin.preview";
+/// `rpc.cancel` — notificación client→server (#72): retira la request en
+/// vuelo cuyo `id` JSON-RPC se indica. Best-effort y SIN respuesta: la
+/// confirmación real es que la request cancelada responde con su desenlace
+/// ([`Error::Cancelled`](crate::Error::Cancelled) si estaba suspendida en un
+/// Ask de policy). Es puramente de la CAPA RPC (no `policy.*`): cancela una
+/// request, no una aprobación (el peticionario no conoce el `approval_id`, que
+/// va al humano). En M3 el único camino largo suspendible en el dispatch es el
+/// Ask; una op larga ya-Task se cancela con [`TASK_CANCEL`]. Un `id`
+/// desconocido, ya resuelto o no suspendido = no-op benigno. Un daemon N-1 que
+/// no la conozca la descarta en silencio (notificación desconocida, ADR 0004):
+/// degrada al comportamiento previo (Ask zombi hasta el TTL), no rompe.
+pub const RPC_CANCEL: &str = "rpc.cancel";
 
 /// Params de [`FS_LIST`] (paginación por cursor desde 0.8.0, ADR 0017).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -718,6 +734,18 @@ pub struct PendingApproval {
 pub struct PolicyPendingResult {
     /// Aprobaciones pendientes.
     pub pending: Vec<PendingApproval>,
+}
+
+/// Params de [`RPC_CANCEL`] (#72): el id de la request en vuelo a cancelar.
+///
+/// El `id` es el mismo tipo que [`crate::wire::RequestId`] — número (emisor
+/// canónico) o string (tolerancia JSON-RPC). No se valida contra un mapa aquí
+/// (es una notificación best-effort): el daemon lo coteja con sus requests en
+/// vuelo y un id sin correspondencia es un no-op.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RpcCancelParams {
+    /// Id JSON-RPC de la request a cancelar.
+    pub id: crate::wire::RequestId,
 }
 
 /// Params de [`POLICY_UNDO_SESSION`].

@@ -53,6 +53,16 @@ const MAX_LIVE_TASKS_AGENTS: usize = 384;
 /// request/response — el valor del inbox es que el READER siga vivo durante
 /// un dispatch suspendido (Ask) para observar la muerte del peer.
 const INBOX_FRAMES: usize = 16;
+/// Tope de frames DIFERIDOS durante un dispatch en vuelo (#72): frames que
+/// llegan mientras una request se procesa (típicamente un Ask suspendido) y no
+/// son su `rpc.cancel` se bufferizan hasta este tope. Alcanzado, el brazo de
+/// lectura del inner-select se deshabilita y el reader vuelve a hacer
+/// backpressure sobre el socket (como antes de #72): la memoria total queda
+/// acotada a `INBOX_FRAMES + MAX_DEFERRED_FRAMES` en vez de crecer sin límite
+/// mientras el peer hace pipeline durante su propio Ask (MAJOR del
+/// security-reviewer). Un cliente request/response normal jamás lo roza (0-1
+/// diferidos); solo un peer semi-hostil bajo un Ask no-aprobado lo alcanza.
+const MAX_DEFERRED_FRAMES: usize = 16;
 /// Snapshots TERMINALES retenidos para el resync de `task.list` (un
 /// frontend que reconecta ve el desenlace de lo que se perdió).
 const RECENT_TERMINAL: usize = 64;
@@ -1095,34 +1105,87 @@ async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::
     ));
 
     let mut conn = ConnState::new();
+    // #72: tokens de cancelación de las requests cancelables en vuelo.
+    let inflight_cancel: InflightCancel = Arc::default();
     // Reap de listados paginados expirados en una conexión viva-pero-muda
     // (además del barrido perezoso en cada fs.list). OJO: entre dispatches —
     // un dispatch suspendido sigue reteniendo el tick (mitigado por el
     // barrido perezoso del siguiente fs.list, nota MINOR-3 de M3-3b).
     let mut sweep = tokio::time::interval(LISTING_SWEEP);
     sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // #72: frames leídos del inbox DURANTE un dispatch en vuelo que NO son un
+    // rpc.cancel de la request en vuelo se bufferizan aquí y se procesan tras
+    // el desenlace — el dispatch sigue SERIAL (orden de frames = orden de
+    // ejecución). Un agente MCP no pipelinea, así que en la práctica el único
+    // frame durante un Ask es el cancel o el EOF.
+    let mut pending_frames: std::collections::VecDeque<serde_json::Value> =
+        std::collections::VecDeque::new();
     let result: std::io::Result<()> = loop {
-        tokio::select! {
-            msg = inbox_rx.recv() => match msg {
-                // El reader terminó (EOF, error o shutdown) y el inbox se
-                // drenó: la conexión acaba por el camino de limpieza común.
-                None => break Ok(()),
-                Some(value) => {
-                    tokio::select! {
-                        biased;
-                        // Un dispatch que puede completar, completa (la
-                        // respuesta ya calculada gana a la carrera con la
-                        // muerte del peer)...
-                        () = handle_value(value, conn_id, &tx, &mut conn, shared) => {}
-                        // ...pero uno SUSPENDIDO muere con su peticionario.
-                        () = peer_gone.cancelled() => break Ok(()),
+        // Siguiente frame: primero el búfer local, luego el inbox (con
+        // shutdown/sweep atendidos SOLO entre dispatches, como antes de #72).
+        let value = if let Some(v) = pending_frames.pop_front() {
+            v
+        } else {
+            tokio::select! {
+                msg = inbox_rx.recv() => match msg {
+                    None => break Ok(()),
+                    Some(v) => v,
+                },
+                () = shared.shutdown.cancelled() => break Ok(()),
+                _ = sweep.tick() => {
+                    conn.sweep_expired(shared.listing_ttl);
+                    continue;
+                }
+            }
+        };
+        // Despacha vigilando el inbox en paralelo (#72 + #64).
+        let dispatch = handle_value(value, conn_id, &tx, &mut conn, shared, &inflight_cancel);
+        tokio::pin!(dispatch);
+        let peer_died = loop {
+            tokio::select! {
+                biased;
+                // Un dispatch que completa, completa (incluida la respuesta
+                // Cancelled del withdrawal): gana a la muerte del peer.
+                () = &mut dispatch => break false,
+                // Un dispatch SUSPENDIDO muere con su peticionario (#64).
+                () = peer_gone.cancelled() => break true,
+                // Frames que llegan mientras este dispatch sigue en vuelo —
+                // SOLO mientras el búfer de diferidos no esté al tope: en el
+                // tope este brazo se deshabilita y el reader vuelve a hacer
+                // backpressure sobre el socket (cota anti memoria sin límite,
+                // MAJOR del security-reviewer #72). Un cancel que quedara detrás
+                // de un flood no se lee (el Ask vencerá por TTL) — aceptable:
+                // el pipelining bajo un Ask no-aprobado es el caso semi-hostil.
+                msg = inbox_rx.recv(), if pending_frames.len() < MAX_DEFERRED_FRAMES => match msg {
+                    // El reader terminó (EOF/shutdown): DROPEA el dispatch en
+                    // vuelo (sus guards limpian) y cierra por el camino común.
+                    // En la práctica `peer_gone` (biased, arriba) gana antes;
+                    // este brazo es defensivo — jamás esperar a un dispatch
+                    // suspendido aquí (colgaría hasta el TTL).
+                    None => break true,
+                    Some(frame) => {
+                        if let Some(id) = rpc_cancel_id(&frame) {
+                            // rpc.cancel: dispara el token de esa request si
+                            // está en vuelo. NO rompe la conexión (a diferencia
+                            // de peer_gone). Id desconocido/ya resuelto = no-op.
+                            if let Some(tok) = inflight_cancel
+                                .lock()
+                                .expect("inflight_cancel lock sano")
+                                .get(&id)
+                            {
+                                tok.cancel();
+                            }
+                        } else {
+                            // Cualquier otro frame: se procesa TRAS el
+                            // desenlace (dispatch serial).
+                            pending_frames.push_back(frame);
+                        }
                     }
                 }
-            },
-            () = shared.shutdown.cancelled() => break Ok(()),
-            _ = sweep.tick() => {
-                conn.sweep_expired(shared.listing_ttl);
             }
+        };
+        if peer_died {
+            break Ok(());
         }
     };
 
@@ -1222,6 +1285,46 @@ async fn read_frames(
     }
 }
 
+/// Tokens de cancelación de las requests en vuelo cancelables (#72), por id
+/// JSON-RPC. Vive FUERA de `ConnState` (que `handle_value` toma `&mut`): el
+/// inner loop de `serve_connection` lo consulta EN PARALELO a un dispatch en
+/// vuelo para disparar el token de un `rpc.cancel`. `Arc<Mutex<…>>` porque hay
+/// dos dueños concurrentes: el loop (dispara) y `handle_value` (registra/retira).
+type InflightCancel = Arc<Mutex<HashMap<RequestId, CancellationToken>>>;
+
+/// Guard RAII del token en vuelo (#72): retira el id del mapa a CUALQUIER
+/// salida del dispatch (respuesta normal, withdrawal por cancel, shutdown, o
+/// drop por muerte del peer) — jamás un token huérfano que un `rpc.cancel`
+/// tardío dispararía sobre una request ya resuelta.
+struct InflightCancelGuard {
+    map: InflightCancel,
+    id: RequestId,
+}
+
+impl Drop for InflightCancelGuard {
+    fn drop(&mut self) {
+        self.map
+            .lock()
+            .expect("inflight_cancel lock sano")
+            .remove(&self.id);
+    }
+}
+
+/// Extrae el `id` de un frame `rpc.cancel` ya parseado (#72), o `None` si el
+/// frame no es un `rpc.cancel` bien formado. Se aplica a los frames leídos del
+/// inbox DURANTE un dispatch en vuelo — clasificación estructural sobre el
+/// `Value`, sin deserializar el envelope entero. `rpc.cancel` está especificado
+/// SOLO como notificación (sin id de envelope); un frame en forma de Request con
+/// ese método se consumiría aquí igualmente (benigno: nunca se responde), pero
+/// ningún cliente lo emite así.
+fn rpc_cancel_id(value: &serde_json::Value) -> Option<RequestId> {
+    if value.get("method").and_then(serde_json::Value::as_str) != Some(methods::RPC_CANCEL) {
+        return None;
+    }
+    let id = value.get("params")?.get("id")?;
+    serde_json::from_value::<RequestId>(id.clone()).ok()
+}
+
 /// Maneja UN mensaje JSON ya parseado de la conexión. La clasificación es
 /// estructural para que un id de tipo ilegal NUNCA muera en silencio como
 /// notification (M3 del guardian).
@@ -1231,6 +1334,7 @@ async fn handle_value(
     tx: &mpsc::Sender<Arc<[u8]>>,
     conn: &mut ConnState,
     shared: &Arc<Shared>,
+    inflight_cancel: &InflightCancel,
 ) {
     match classify(&value) {
         MessageKind::Request => {
@@ -1250,15 +1354,48 @@ async fn handle_value(
             };
             let id = req.id.clone();
             let was_initialized = conn.initialized;
-            // El dispatch respeta el shutdown (regla 3): un fs.list
-            // gigante no retiene el apagado.
-            let response = tokio::select! {
-                r = dispatch(req, conn_id, conn, shared) => r,
-                () = shared.shutdown.cancelled() => {
-                    Err(RpcError::protocol(
+            // #72: fs.copy/move/delete pueden suspenderse en un Ask de policy.
+            // Se registra un token por su id para que un `rpc.cancel` (leído
+            // por el loop de serve_connection en paralelo) retire el Ask
+            // dropeando este dispatch — el gate muere PRE-efecto (su
+            // PendingGuard limpia policy.pending) y JAMÁS aprueba (fail-closed
+            // por construcción: dropear un future no puede devolver Approved).
+            let cancelable = matches!(
+                req.method.as_str(),
+                methods::FS_COPY | methods::FS_MOVE | methods::FS_DELETE
+            );
+            let response = if cancelable {
+                let cancel = CancellationToken::new();
+                inflight_cancel
+                    .lock()
+                    .expect("inflight_cancel lock sano")
+                    .insert(id.clone(), cancel.clone());
+                let _cancel_guard = InflightCancelGuard {
+                    map: Arc::clone(inflight_cancel),
+                    id: id.clone(),
+                };
+                tokio::select! {
+                    biased;
+                    // Una op que COMPLETA (aprobada, o rechazada por policy)
+                    // gana a un cancel simultáneo: no se retira lo ya resuelto.
+                    r = dispatch(req, conn_id, conn, shared) => r,
+                    () = shared.shutdown.cancelled() => Err(RpcError::protocol(
                         codes::INTERNAL_ERROR,
                         "daemon shutting down",
-                    ))
+                    )),
+                    // El agente retiró la request suspendida en el Ask: estado
+                    // limpio garantizado (gate pre-efecto), sin filtrar policy.
+                    () = cancel.cancelled() => Err(RpcError::from(norte_proto::Error::Cancelled)),
+                }
+            } else {
+                // El dispatch respeta el shutdown (regla 3): un fs.list
+                // gigante no retiene el apagado.
+                tokio::select! {
+                    r = dispatch(req, conn_id, conn, shared) => r,
+                    () = shared.shutdown.cancelled() => Err(RpcError::protocol(
+                        codes::INTERNAL_ERROR,
+                        "daemon shutting down",
+                    )),
                 }
             };
             // La suscripción al broadcast nace CON el handshake (nota del
