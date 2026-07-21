@@ -4246,6 +4246,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "criterion",
+ "flate2",
  "futures",
  "globset",
  "hmac 0.12.1",

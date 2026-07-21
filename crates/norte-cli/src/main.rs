@@ -997,14 +997,20 @@ const REMOTE_SCHEMES: [&str; 3] = ["sftp://", "ftp://", "s3://"];
 /// (la reserva normativa garantiza que ningún provider legítimo empieza
 /// así, test abajo): un path local raro tipo `zip+dir/sub://y` sigue
 /// siendo nativo.
+///
+/// Delegado en `norte_proto::scheme_archive_format` (longest-match, #55) en
+/// vez de reimplementar la gramática con `split_once('+')`: un token puede
+/// contener `+` propio (`tar+gz`), y duplicar la whitelist aquí divergiría
+/// en cuanto proto gane un formato compuesto nuevo.
 fn is_archive_url(s: &str) -> bool {
     let Some((scheme, _)) = s.split_once("://") else {
         return false;
     };
-    let Some((fmt, inner)) = scheme.split_once('+') else {
+    let Some(fmt) = norte_proto::scheme_archive_format(scheme) else {
         return false;
     };
-    norte_proto::ARCHIVE_FORMATS.contains(&fmt) && !inner.is_empty() && !inner.contains('/')
+    let inner = &scheme[fmt.len() + 1..];
+    !inner.is_empty() && !inner.contains('/')
 }
 
 fn vpath(path: &std::path::Path) -> anyhow::Result<VPath> {
@@ -1278,5 +1284,19 @@ mod tests {
         for nativo in ["zip+dir/sub://y", "tar+xz", "zip+://x"] {
             assert!(!is_archive_url(nativo), "{nativo} debe ser nativo");
         }
+    }
+
+    /// #55: `tar+gz` es un TOKEN COMPUESTO en la whitelist de proto —
+    /// `is_archive_url` debe reconocerlo vía `scheme_archive_format`
+    /// (longest-match), no reimplementando la gramática con `split_once('+')`
+    /// (eso dejaría un interior huérfano tipo `gz+file` para casos con más de
+    /// un nivel, y duplica una whitelist que ya vive en proto — regla 8).
+    #[test]
+    fn is_archive_url_reconoce_targz_compuesto() {
+        assert!(is_archive_url("tar+gz+file://x"));
+        assert!(is_archive_url("tar+gz+sftp://h/a.tgz/!/x"));
+        // El wire completo enruta por el parser y compone el scheme real.
+        let p = vpath(std::path::Path::new("tar+gz+file:///a.tgz/!/x")).expect("parsea");
+        assert_eq!(p.scheme(), "tar+gz+file");
     }
 }
