@@ -16,6 +16,11 @@ pub struct Limits {
     pub max_name_bytes: usize,
     /// Tope de componentes de path de una entrada.
     pub max_depth: usize,
+    /// Tope del central directory RETENIDO en caché (#61): por encima, el
+    /// índice se construye igual pero el CD parseado no se cachea (re-parse
+    /// por read, comportamiento pre-caché). Gobierna memoria persistente,
+    /// no el indexado.
+    pub max_cd_bytes: u64,
 }
 
 impl Default for Limits {
@@ -24,6 +29,7 @@ impl Default for Limits {
             max_entries: 500_000,
             max_name_bytes: 4_096,
             max_depth: 64,
+            max_cd_bytes: 8 * 1024 * 1024,
         }
     }
 }

@@ -109,3 +109,54 @@ async fn read_caliente_no_reparsea_el_central_directory() {
     let delta = mem.faults().read_calls() - antes;
     assert_eq!(delta, 1, "read caliente = solo el bloque de datos, sin CD");
 }
+
+/// #61 MAJOR-2: un central directory por encima de `max_cd_bytes` NO se
+/// cachea — cada `read` reabre el `ZipArchive` (comportamiento pre-caché),
+/// aunque el ÍNDICE (que respeta sus propios límites, no ligados a bytes de
+/// CD) se siga sirviendo de caché normalmente.
+#[tokio::test(flavor = "multi_thread")]
+async fn cd_sobre_el_tope_no_se_cachea_y_relee_en_cada_read() {
+    // Mismo fixture que el test de arriba: el CD cae fuera del bloque 0.
+    let relleno: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+    let bytes = norte_testkit::ZipSmith::new()
+        .file(b"a.txt", b"hola")
+        .file(b"relleno.bin", &relleno)
+        .build();
+    assert!(bytes.len() > 262_144);
+
+    let (mem, path) = common::seed_container(b"fixture.zip", &bytes).await;
+    let root = VPath::archive_compose("zip", &path, &[]).expect("compose");
+    // Tope minúsculo a propósito: el CD real de este fixture (2 entradas,
+    // ~46 bytes fijos + nombre cada una) ronda ~110 bytes — muy por encima
+    // de 80, así que jamás se cachea (MAJOR-2).
+    let limits = Limits {
+        max_cd_bytes: 80,
+        ..Limits::default()
+    };
+    let provider = ArchiveProvider::with_limits(
+        Arc::clone(&mem) as Arc<dyn Provider>,
+        Format::Zip,
+        "zip+mem",
+        limits,
+    );
+    let entry_path = root.join(norte_proto::Segment::new(b"a.txt".to_vec()).expect("seg"));
+
+    // Calienta el ÍNDICE (que sí cachea): el `ZipArchive` no, por el tope.
+    provider.stat(&entry_path).await.expect("stat");
+
+    for intento in 0..2 {
+        let antes = mem.faults().read_calls();
+        let mut stream = provider.read(&entry_path, None).await.expect("read");
+        let mut out = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            out.extend_from_slice(&chunk.expect("chunk ok"));
+        }
+        assert_eq!(out, b"hola", "contenido correcto pese a no cachear el CD");
+        let delta = mem.faults().read_calls() - antes;
+        assert!(
+            delta >= 2,
+            "intento {intento}: CD sobre el tope debe reabrir el ZipArchive \
+             en cada read (delta={delta}, no cacheado)"
+        );
+    }
+}

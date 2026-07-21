@@ -150,7 +150,8 @@ impl Faults {
         self.lock().read_calls += 1;
     }
 
-    /// Borra toda la configuración de fallos.
+    /// Borra toda la configuración de fallos. También reinicia el contador
+    /// de [`Self::read_calls`] (vía `FaultState::default()`).
     pub fn clear(&self) {
         *self.lock() = FaultState::default();
     }
