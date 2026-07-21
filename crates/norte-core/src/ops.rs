@@ -637,7 +637,8 @@ pub(crate) async fn copy_task(
             if opts.symlinks == SymlinkPolicy::Follow
                 && probe_symlink_target(&*src, &from, &ctx.cancel).await? == TargetKind::Dir
             {
-                let plan = walk_following(&*src, &from, true, &ctx.cancel).await?;
+                let mut plan = walk_following(&*src, &from, true, &ctx.cancel).await?;
+                hydrate_plan(&*src, &mut plan, &ctx.cancel).await?;
                 return copy_tree(&src, &dst, &from, &to, &plan, opts, &observer, ctx)
                     .await
                     .map(|_skipped| ());
@@ -651,13 +652,41 @@ pub(crate) async fn copy_task(
             Ok(())
         }
         EntryKind::Dir => {
-            let plan = plan_for(&*src, &from, opts, &ctx.cancel).await?;
+            let mut plan = plan_for(&*src, &from, opts, &ctx.cancel).await?;
+            hydrate_plan(&*src, &mut plan, &ctx.cancel).await?;
             copy_tree(&src, &dst, &from, &to, &plan, opts, &observer, ctx)
                 .await
                 .map(|_skipped| ())
         }
         EntryKind::Other => Err(Error::Unsupported),
     }
+}
+
+/// #52: el listado local es lazy (`size`/`mtime_ms` en `None`). El progreso
+/// (`bytes_total`), `CollisionPolicy::Newer` y la conservación del mtime del
+/// symlink necesitan los metadatos ANTES de copiar: stat-ea SOLO las hojas
+/// File/Symlink a las que les falte algo. Un stat fallido deja `None` (el
+/// copy real reportará el error de verdad al tocar esa hoja): barra
+/// subestimada ≠ copia rota.
+async fn hydrate_plan(
+    src: &dyn Provider,
+    plan: &mut [PlanEntry],
+    cancel: &CancellationToken,
+) -> Result<(), Error> {
+    for pe in plan.iter_mut() {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let e = &mut pe.entry;
+        if matches!(e.kind, EntryKind::File | EntryKind::Symlink)
+            && (e.size.is_none() || e.mtime_ms.is_none())
+            && let Ok(st) = src.stat(&e.path).await
+        {
+            e.size = e.size.or(st.size);
+            e.mtime_ms = e.mtime_ms.or(st.mtime_ms);
+        }
+    }
+    Ok(())
 }
 
 /// Copia el árbol `from` → `to` según un plan YA walkeado (el walk es del
@@ -1272,7 +1301,8 @@ async fn move_by_copy(
             ctx.progress.update(|p| p.entries_done = 2);
             Ok(())
         }
-        Some(plan) => {
+        Some(mut plan) => {
+            hydrate_plan(&*src, &mut plan, &ctx.cancel).await?;
             let skipped = copy_tree(&src, &dst, &from, &to, &plan, opts, &observer, ctx).await?;
             // Fase delete: el total crece con los pasos de borrado (la barra
             // sigue monótona; copy_tree ya contó los suyos).
