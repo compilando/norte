@@ -395,6 +395,9 @@ async fn tar_passthrough_corto_es_corrupt_no_datos_cortos() {
         total += item.expect("chunk sano").len();
     }
     assert_eq!(total, 1000);
+    // M1 del review: pollear tras Ready(None) no panica (stream fused).
+    assert!(stream.next().await.is_none());
+    assert!(stream.next().await.is_none());
 
     // Armado: el interior corta a la mitad SIN error → Corrupt, no silencio.
     armado.store(true, Ordering::Relaxed);
@@ -414,4 +417,8 @@ async fn tar_passthrough_corto_es_corrupt_no_datos_cortos() {
         Some(Error::Corrupt) => assert_eq!(vistos, 500, "los parciales llegan, luego el error"),
         other => panic!("esperaba Corrupt tras {vistos} bytes, fue {other:?}"),
     }
+    // Tras el Err: un None limpio y poll-after-None seguro (fused), jamás
+    // un segundo Err ni un panic.
+    assert!(stream.next().await.is_none());
+    assert!(stream.next().await.is_none());
 }

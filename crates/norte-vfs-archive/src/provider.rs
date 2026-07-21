@@ -147,37 +147,48 @@ pub struct ArchiveProvider {
 /// pread sin error) o entrega de más (provider interior mentiroso), el
 /// consumidor recibe `Error::Corrupt`, jamás datos cortos o de sobra en
 /// silencio. Un `Err` del interior se propaga verbatim y corta el stream.
-fn expect_exact(inner: ByteStream, expected: u64) -> ByteStream {
+/// `container` = display YA REDACTADO del contenedor (para las trazas).
+fn expect_exact(inner: ByteStream, expected: u64, container: String) -> ByteStream {
+    // Estado: el stream interior va en Option — en los estados terminales se
+    // SUELTA al instante (m1 del review: un interior remoto puede pinnear
+    // buffers/slot de conexión hasta que el caller dropee el wrapper).
     futures::stream::unfold(
-        (inner, 0u64, false),
-        move |(mut stream, got, terminado)| async move {
-            if terminado {
-                return None;
-            }
+        (Some(inner), 0u64, container),
+        move |(stream, got, container)| async move {
+            let mut stream = stream?;
             match stream.next().await {
                 Some(Ok(chunk)) => {
                     let got = got + chunk.len() as u64;
                     if got > expected {
-                        tracing::warn!(got, expected, "tar passthrough entrega bytes DE MÁS");
-                        return Some((Err(Error::Corrupt), (stream, got, true)));
+                        tracing::warn!(
+                            got,
+                            expected,
+                            %container,
+                            "tar passthrough entrega bytes DE MÁS"
+                        );
+                        return Some((Err(Error::Corrupt), (None, got, container)));
                     }
-                    Some((Ok(chunk), (stream, got, false)))
+                    Some((Ok(chunk), (Some(stream), got, container)))
                 }
-                Some(Err(e)) => Some((Err(e), (stream, got, true))),
+                Some(Err(e)) => Some((Err(e), (None, got, container))),
                 None => {
                     if got < expected {
                         tracing::warn!(
                             got,
                             expected,
+                            %container,
                             "tar passthrough corto: contenedor truncado/mutado bajo el read"
                         );
-                        return Some((Err(Error::Corrupt), (stream, got, true)));
+                        return Some((Err(Error::Corrupt), (None, got, container)));
                     }
                     None
                 }
             }
         },
     )
+    // M1 del review: Unfold PANICA si se pollea tras Ready(None) — fused,
+    // como el resto de ByteStreams de este crate (poll_fn/iter/empty).
+    .fuse()
     .boxed()
 }
 
@@ -556,7 +567,7 @@ impl Provider for ArchiveProvider {
                         }),
                     )
                     .await?;
-                Ok(expect_exact(inner, req_len))
+                Ok(expect_exact(inner, req_len, aref.outer.display_lossy()))
             }
             Locator::Zip { index: entry_index } => {
                 // Descompresión en hilo blocking → canal acotado → stream.
