@@ -121,6 +121,10 @@ pub struct MemProvider {
     norm: Normalization,
     /// `false` = simula un backend sin identidad estable (`node_id` = None).
     node_ids: bool,
+    /// Valor fijo que devuelve `list_skipped` (#93): simula un provider
+    /// archive que omitió entradas de su índice. `None` (default) = backend
+    /// que lista todo lo que existe.
+    list_skipped: Option<u64>,
     tree: Arc<Mutex<Tree>>,
     faults: Arc<Faults>,
 }
@@ -174,9 +178,19 @@ impl MemProvider {
             },
             norm: Normalization::default(),
             node_ids: true,
+            list_skipped: None,
             tree: Arc::new(Mutex::new(Tree::default())),
             faults: Arc::new(Faults::default()),
         }
+    }
+
+    /// Simula un provider de CONTENEDOR que omitió `n` entradas de su índice
+    /// (#93): `list_skipped` devuelve `Ok(Some(n))` para cualquier path. Para
+    /// testear el plumbing daemon/Backend/frontends sin un archive real.
+    #[must_use]
+    pub fn with_list_skipped(mut self, n: u64) -> Self {
+        self.list_skipped = Some(n);
+        self
     }
 
     /// Simula un backend SIN identidad de nodo estable (object storage,
@@ -500,6 +514,11 @@ impl Provider for MemProvider {
             volume: 0,
             index: u128::from(node.id()),
         }))
+    }
+
+    async fn list_skipped(&self, p: &VPath) -> Result<Option<u64>, Error> {
+        let _ = p;
+        Ok(self.list_skipped)
     }
 
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {

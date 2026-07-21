@@ -381,8 +381,8 @@ impl NorteGui {
                 }
                 match outcome {
                     Ok(entries) => {
-                        let mut entries = entries;
-                        norte_frontend::sort_entries(&mut entries);
+                        // set_listing ya normaliza (ordena) internamente (#54);
+                        // pre-ordenar aquí era un doble sort (#94).
                         self.panes[pane].set_listing(dir, entries);
                         self.errors[pane] = None;
                         self.query[pane].clear();

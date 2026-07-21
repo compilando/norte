@@ -898,6 +898,10 @@ struct OpenListing {
     path: norte_proto::VPath,
     stream: norte_vfs::EntryStream,
     last_used: std::time::Instant,
+    /// Omitidas del índice del contenedor (#93), capturado al ABRIR el
+    /// listado: cada página lo repite (el cliente puede engancharse en
+    /// cualquiera; el total es por-contenedor, no por página).
+    skipped: Option<u64>,
     /// Decrementa el contador GLOBAL al soltarse el listado (remove/evict/
     /// sweep/muerte de la conexión): contabilidad RAII, sin decrementos
     /// dispersos (M1 del rust-reviewer).
@@ -1023,49 +1027,28 @@ async fn handle_fs_list(
 
     // Continuación: el cursor es el id opaco de un listado retenido.
     if let Some(cur) = &p.cursor {
-        // Cursor no-numérico o desconocido = expirado (el cliente reinicia).
-        let id: u64 = cur.parse().map_err(|_| cursor_expired())?;
-        let drained = {
-            let listing = conn.listings.get_mut(&id).ok_or_else(cursor_expired)?;
-            if listing.path != p.path {
-                return Err(RpcError::protocol(
-                    codes::INVALID_PARAMS,
-                    "cursor does not belong to this path",
-                ));
-            }
-            drain_page(&mut listing.stream, cap, &mut entries).await
-        };
-        return match drained {
-            Ok(Drained::More) => {
-                // Se conserva bajo el MISMO id (el cliente reusa el cursor).
-                if let Some(l) = conn.listings.get_mut(&id) {
-                    l.last_used = now;
-                }
-                Ok(to_value(&methods::FsListResult {
-                    entries,
-                    next_cursor: Some(id.to_string()),
-                })?)
-            }
-            Ok(Drained::Done) => {
-                conn.listings.remove(&id);
-                to_value(&methods::FsListResult {
-                    entries,
-                    next_cursor: None,
-                })
-            }
-            Err(e) => {
-                conn.listings.remove(&id);
-                Err(RpcError::from(e))
-            }
-        };
+        return continue_listing(cur, &p.path, cap, now, conn, entries).await;
     }
 
     // Listado NUEVO (sin cursor).
     let mut stream = shared.engine.list(&p.path).await.map_err(RpcError::from)?;
+    // Omitidas del contenedor (#93), capturado UNA vez al abrir (el índice
+    // archive ya está caliente tras el `list`). Un error aquí NO tumba un
+    // listado que ya abrió: degrada a `None` (= desconocido, lo de antes) —
+    // pero con traza (el punto de #93 es no callar listados incompletos).
+    let skipped = shared
+        .engine
+        .list_skipped(&p.path)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "list_skipped falló; omitidas = desconocido");
+            None
+        });
     match drain_page(&mut stream, cap, &mut entries).await {
         Ok(Drained::Done) => to_value(&methods::FsListResult {
             entries,
             next_cursor: None,
+            skipped,
         }),
         Ok(Drained::More) => {
             // Presión GLOBAL (M1): por encima del tope no se retiene — se drena
@@ -1078,6 +1061,7 @@ async fn handle_fs_list(
                         return to_value(&methods::FsListResult {
                             entries,
                             next_cursor: None,
+                            skipped,
                         });
                     }
                     Err(e) => return Err(RpcError::from(e)),
@@ -1093,6 +1077,7 @@ async fn handle_fs_list(
                     path: p.path,
                     stream,
                     last_used: now,
+                    skipped,
                     _guard: ListingGuard {
                         global: Arc::clone(&shared.open_listings),
                     },
@@ -1101,9 +1086,65 @@ async fn handle_fs_list(
             to_value(&methods::FsListResult {
                 entries,
                 next_cursor: Some(id.to_string()),
+                skipped,
             })
         }
         Err(e) => Err(RpcError::from(e)),
+    }
+}
+
+/// Continuación de un listado retenido (el brazo con `cursor` de
+/// [`handle_fs_list`], separado por tamaño): valida cursor↔path, drena la
+/// página y decide retener (More) o cerrar (Done/error). El `skipped` del
+/// open del listado se repite en cada página (#93).
+async fn continue_listing(
+    cursor: &str,
+    path: &norte_proto::VPath,
+    cap: Option<usize>,
+    now: std::time::Instant,
+    conn: &mut ConnState,
+    mut entries: Vec<norte_proto::Entry>,
+) -> Result<serde_json::Value, RpcError> {
+    // Cursor no-numérico o desconocido = expirado (el cliente reinicia).
+    let id: u64 = cursor.parse().map_err(|_| cursor_expired())?;
+    let (drained, skipped) = {
+        let listing = conn.listings.get_mut(&id).ok_or_else(cursor_expired)?;
+        if listing.path != *path {
+            return Err(RpcError::protocol(
+                codes::INVALID_PARAMS,
+                "cursor does not belong to this path",
+            ));
+        }
+        let skipped = listing.skipped;
+        (
+            drain_page(&mut listing.stream, cap, &mut entries).await,
+            skipped,
+        )
+    };
+    match drained {
+        Ok(Drained::More) => {
+            // Se conserva bajo el MISMO id (el cliente reusa el cursor).
+            if let Some(l) = conn.listings.get_mut(&id) {
+                l.last_used = now;
+            }
+            to_value(&methods::FsListResult {
+                entries,
+                next_cursor: Some(id.to_string()),
+                skipped,
+            })
+        }
+        Ok(Drained::Done) => {
+            conn.listings.remove(&id);
+            to_value(&methods::FsListResult {
+                entries,
+                next_cursor: None,
+                skipped,
+            })
+        }
+        Err(e) => {
+            conn.listings.remove(&id);
+            Err(RpcError::from(e))
+        }
     }
 }
 

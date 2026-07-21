@@ -172,12 +172,29 @@ impl Backend {
     /// de errores: `NotFound`/`TypeMismatch` en el `Result`, no como primer
     /// item) + páginas siguientes por cursor. Soltar el stream lo cancela.
     ///
+    /// Devuelve además las omitidas del CONTENEDOR (#93): entradas que su
+    /// índice descartó por nombres hostiles/límites (providers archive) y que
+    /// por tanto JAMÁS saldrán del stream. `None` = no aplica (el backend
+    /// lista todo lo que existe). Disponible al abrir en ambos modos: el
+    /// embebido consulta el índice ya caliente; el remoto lo trae la primera
+    /// página (todas la repiten).
+    ///
     /// # Errors
     /// Taxonomía del protocolo; con el daemon caído,
     /// `ProviderUnavailable{retryable:true}`.
-    pub async fn list_stream(&self, dir: &VPath) -> Result<EntryStream, Error> {
+    pub async fn list_stream(&self, dir: &VPath) -> Result<(EntryStream, Option<u64>), Error> {
         match self {
-            Self::Embedded(engine) => engine.list(dir).await,
+            Self::Embedded(engine) => {
+                let stream = engine.list(dir).await?;
+                // Best-effort: un fallo aquí no tumba un listado que ya abrió
+                // (mismo contrato que el daemon) — degrada a "desconocido",
+                // pero JAMÁS en silencio (el punto de #93 es la señal).
+                let skipped = engine.list_skipped(dir).await.unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "list_skipped falló; omitidas = desconocido");
+                    None
+                });
+                Ok((stream, skipped))
+            }
             #[cfg(unix)]
             Self::Remote(r) => r.list_stream(dir).await,
         }
@@ -191,12 +208,22 @@ impl Backend {
     /// Taxonomía del protocolo; con el daemon caído,
     /// `ProviderUnavailable{retryable:true}`.
     pub async fn list(&self, dir: &VPath) -> Result<Vec<Entry>, Error> {
-        let mut stream = self.list_stream(dir).await?;
+        Ok(self.list_with_skipped(dir).await?.0)
+    }
+
+    /// [`Backend::list`] + las omitidas del contenedor (#93) — para frontends
+    /// que quieran señalizarlas (`ls` de la CLI).
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo; con el daemon caído,
+    /// `ProviderUnavailable{retryable:true}`.
+    pub async fn list_with_skipped(&self, dir: &VPath) -> Result<(Vec<Entry>, Option<u64>), Error> {
+        let (mut stream, skipped) = self.list_stream(dir).await?;
         let mut entries = Vec::new();
         while let Some(item) = stream.next().await {
             entries.push(item?);
         }
-        Ok(entries)
+        Ok((entries, skipped))
     }
 
     /// Lectura de PRESENTACIÓN (viewer): junta el rango pedido en memoria.
@@ -1202,7 +1229,12 @@ pub mod remote {
 
         /// Listado remoto como stream perezoso: primera página EAGER (paridad
         /// de errores) + `try_unfold` sobre el `next_cursor`. Sin deps nuevas.
-        pub(super) async fn list_stream(&self, dir: &VPath) -> Result<EntryStream, Error> {
+        /// El `skipped` del contenedor (#93) viaja en cada página — basta el
+        /// de la primera (un daemon N-1 no lo manda: `None` = desconocido).
+        pub(super) async fn list_stream(
+            &self,
+            dir: &VPath,
+        ) -> Result<(EntryStream, Option<u64>), Error> {
             // Primera página síncrona: un `NotFound`/`TypeMismatch` sale en el
             // Result, no como primer item del stream (paridad con el embebido).
             let first: FsListResult = self
@@ -1215,6 +1247,7 @@ pub mod remote {
                     },
                 )
                 .await?;
+            let skipped = first.skipped;
             let done = first.next_cursor.is_none();
             let state = PageState {
                 backend: self.clone(),
@@ -1223,7 +1256,10 @@ pub mod remote {
                 cursor: first.next_cursor,
                 done,
             };
-            Ok(futures::stream::try_unfold(state, page_step).boxed())
+            Ok((
+                futures::stream::try_unfold(state, page_step).boxed(),
+                skipped,
+            ))
         }
 
         pub(super) async fn capabilities(&self, path: &VPath) -> Result<Capabilities, Error> {

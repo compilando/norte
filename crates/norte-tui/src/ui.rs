@@ -853,7 +853,19 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         // búsqueda viva y sin hook Lua sigue avisando en cada frame.
         format!(" {warn}{seq}")
     } else {
-        format!(" {marca}{dir_texto}{pos_total}{seq}")
+        // #93: el contenedor omitió entradas de su índice — el listado que
+        // se ve NO es todo lo que el archivo contiene. Persistente mientras
+        // el pane esté dentro (paralelo del badge hostil, jamás silencioso).
+        let omitidas = match pane.skipped {
+            Some(n) if n > 0 => {
+                format!(
+                    "  {}",
+                    ta("status-archive-skipped", &[("n", &n.to_string())])
+                )
+            }
+            _ => String::new(),
+        };
+        format!(" {marca}{dir_texto}{pos_total}{omitidas}{seq}")
     };
     frame.render_widget(
         Paragraph::new(text).style(app.theme.role(Role::StatusBar)),

@@ -72,6 +72,13 @@ pub type ByteStream = BoxStream<'static, Result<Bytes, Error>>;
 ///
 /// // Objeto-seguro: el core registra providers así.
 /// let _boxed: Box<dyn Provider> = Box::new(NullProvider);
+///
+/// // Default de `list_skipped` (#93): un backend que lista todo lo que
+/// // existe responde `Ok(None)` — nada que señalizar. `Some(0)` = contenedor
+/// // indexado sin omisiones; `Some(n)` = n entradas invisibles del listado.
+/// let p = VPath::parse("null:///").unwrap();
+/// let skipped = futures::executor::block_on(NullProvider.list_skipped(&p)).unwrap();
+/// assert_eq!(skipped, None);
 /// ```
 #[async_trait]
 pub trait Provider: Send + Sync {
@@ -88,6 +95,21 @@ pub trait Provider: Send + Sync {
     /// Listado no recursivo de un directorio, como stream perezoso.
     /// El orden es el del backend, sin garantía.
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error>;
+
+    /// Total de entradas del CONTENEDOR bajo `p` omitidas de su índice
+    /// (#93): nombres que no mapean a segmentos `VPath` válidos o entradas
+    /// recortadas por límites anti-bomba (providers archive, ADR 0018 C2).
+    /// Es un total POR CONTENEDOR — las omitidas no tienen ruta
+    /// representable donde atribuirse, así que el mismo valor aplica a
+    /// cualquier dir de ese contenedor.
+    ///
+    /// `Ok(None)` (default) = no aplica: este backend lista todo lo que
+    /// existe (filesystems, remotos). `Ok(Some(0))` = contenedor indexado
+    /// sin omisiones. Los frontends solo señalizan `Some(n)` con `n > 0`.
+    async fn list_skipped(&self, p: &VPath) -> Result<Option<u64>, Error> {
+        let _ = p;
+        Ok(None)
+    }
 
     /// Contenido de un archivo como stream de chunks. `range: None` = el
     /// archivo completo; con rango, desde `offset` hasta `len` bytes (o EOF,
