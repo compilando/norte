@@ -23,6 +23,16 @@ use crate::spec::{AuthMethod, ConnectionSpec, TlsMode};
 /// Puerto FTP por defecto cuando la URL no lo lleva.
 const FTP_PORT: u16 = 21;
 
+/// Resultado de [`FtpConnector::connect`] (#44): el stream + si la sesión se
+/// DEGRADÓ a texto plano (solo posible con `tls="allow"` y el servidor
+/// rechazando `AUTH TLS`). El llamante (core) surfacea la degradación al usuario.
+pub struct FtpConnectOutcome {
+    /// El stream de control ya logueado.
+    pub stream: AsyncRustlsFtpStream,
+    /// `true` si `tls="allow"` cayó a claro por rechazo de `AUTH TLS`.
+    pub tls_degraded: bool,
+}
+
 /// Conector FTP/FTPS.
 #[derive(Debug, Clone, Default)]
 pub struct FtpConnector {
@@ -54,7 +64,7 @@ impl FtpConnector {
         &self,
         spec: &ConnectionSpec,
         secret: Option<&Secret>,
-    ) -> Result<AsyncRustlsFtpStream, ConnectError> {
+    ) -> Result<FtpConnectOutcome, ConnectError> {
         let ep = spec.endpoint()?;
         if ep.scheme != "ftp" {
             return Err(ConnectError::InvalidUrl(format!(
@@ -105,6 +115,7 @@ impl FtpConnector {
         };
 
         let stream = dial(&ep.host, port).await?;
+        let mut tls_degraded = false;
         let mut stream = match (spec.tls, tls) {
             (TlsMode::Require, Some(tls)) => match secure(stream, tls, &ep.host).await {
                 Ok(s) => s,
@@ -125,6 +136,7 @@ impl FtpConnector {
                         "el servidor no ofrece FTPS; DEGRADANDO a FTP en claro (tls = \"allow\") \
                          — sin protección ante un atacante activo"
                     );
+                    tls_degraded = true;
                     // into_secure consumió la conexión: rediscar en plano.
                     dial(&ep.host, port).await?
                 }
@@ -147,7 +159,10 @@ impl FtpConnector {
         // suppaftp copia la password a su propio String (límite de la API);
         // el lado norte viaja zeroizado y jamás se loguea (regla 10).
         match stream.login(user.as_str(), pass.as_str()).await {
-            Ok(()) => Ok(stream),
+            Ok(()) => Ok(FtpConnectOutcome {
+                stream,
+                tls_degraded,
+            }),
             // CUALQUIER respuesta inesperada al login va a AuthFailed sin
             // interpolar el body: el servidor controla ese texto y puede
             // ecoar la password que acaba de recibir (regla 10 — el sink a

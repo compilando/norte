@@ -128,11 +128,12 @@ async fn ftps_require_conecta_y_valida_cert() {
     let conn = FtpConnector {
         extra_root_ca: Some(cert),
     };
-    let mut stream = conn
+    let mut out = conn
         .connect(&spec(port, TlsMode::Require), Some(&secret_anon()))
         .await
         .unwrap();
-    let pwd = stream.pwd().await.expect("sesión operativa tras FTPS");
+    assert!(!out.tls_degraded, "require jamás degrada");
+    let pwd = out.stream.pwd().await.expect("sesión operativa tras FTPS");
     assert_eq!(pwd, "/");
 }
 
@@ -166,11 +167,16 @@ async fn allow_degrada_a_plano_si_no_hay_tls() {
     let dir = tempfile::tempdir().unwrap();
     let port = servidor(dir.path(), None).await;
     let conn = FtpConnector::default();
-    let mut stream = conn
+    let mut out = conn
         .connect(&spec(port, TlsMode::Allow), Some(&secret_anon()))
         .await
         .unwrap();
-    assert_eq!(stream.pwd().await.expect("sesión plana operativa"), "/");
+    // #44: la degradación se SEÑALIZA (el core la surfacea al usuario).
+    assert!(
+        out.tls_degraded,
+        "allow cayó a claro → debe marcar la degradación"
+    );
+    assert_eq!(out.stream.pwd().await.expect("sesión plana operativa"), "/");
 }
 
 /// `plain` es opt-in explícito: conecta en claro (con aviso por tracing).
@@ -179,11 +185,13 @@ async fn plain_es_optin_explicito() {
     let dir = tempfile::tempdir().unwrap();
     let port = servidor(dir.path(), None).await;
     let conn = FtpConnector::default();
-    let mut stream = conn
+    let mut out = conn
         .connect(&spec(port, TlsMode::Plain), Some(&secret_anon()))
         .await
         .unwrap();
-    assert_eq!(stream.pwd().await.expect("sesión plana operativa"), "/");
+    // plain es claro por elección, NO una degradación (#44).
+    assert!(!out.tls_degraded, "plain no es una degradación");
+    assert_eq!(out.stream.pwd().await.expect("sesión plana operativa"), "/");
 }
 
 /// Password incorrecta (530) → `AuthFailed { user, host }`, sin secreto.
@@ -283,8 +291,8 @@ async fn agent_es_anonimo_sin_secreto() {
         tls: TlsMode::Plain,
         ..Default::default()
     };
-    let mut stream = conn.connect(&spec, None).await.unwrap();
-    assert_eq!(stream.pwd().await.expect("sesión anónima"), "/");
+    let mut out = conn.connect(&spec, None).await.unwrap();
+    assert_eq!(out.stream.pwd().await.expect("sesión anónima"), "/");
 }
 
 /// `auth = "key"` no existe en FTP: error de config local, sin tocar la red.

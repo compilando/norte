@@ -177,11 +177,12 @@ async fn sftp_tofu_trust_y_provider() {
     mgr.trust_host_key(host, *p, fingerprint)
         .await
         .expect("trust");
-    let provider = mgr
+    let connected = mgr
         .connect("sftp", &format!("{USER}@127.0.0.1:{port}"))
         .await
         .expect("connect tras trust");
-    assert_eq!(provider.scheme(), "sftp");
+    assert_eq!(connected.provider.scheme(), "sftp");
+    assert!(connected.warnings.is_empty(), "sftp no degrada TLS");
 
     // connect_named usa la misma entrada (y la clave ya es de confianza).
     let (scheme, authority, _prov) = mgr.connect_named("trabajo").await.expect("connect_named");
@@ -254,11 +255,13 @@ async fn ftp_establece_provider_con_dos_conexiones() {
     )
     .unwrap();
     let mgr = ConnectionManager::new(cfg.path());
-    let provider = mgr
+    let connected = mgr
         .connect("ftp", &format!("anonymous@127.0.0.1:{port}"))
         .await
         .expect("connect ftp");
-    assert_eq!(provider.scheme(), "ftp");
+    assert_eq!(connected.provider.scheme(), "ftp");
+    // tls = "plain" es claro por elección, NO una degradación (#44).
+    assert!(connected.warnings.is_empty(), "plain no es degradación");
 }
 
 /// Un scheme que el manager no sabe conectar es Unsupported.
