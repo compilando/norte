@@ -33,11 +33,12 @@ pub enum Mode {
 /// equivalencias de COMPATIBILIDAD (NFKC) quedan FUERA a sabiendas — «ﬁ» no
 /// casa con «fi»; normalizarlas cambiaría de familia de equivalencia.
 ///
-/// Coste: una `String` nueva por entrada y por keystroke (recompute
-/// completo en cada char); cacheo diferido a #77 (misma zona que la sort
-/// key de `extend_listing`, app.rs). `to_lowercase` es case-folding simple
-/// de Rust, NO full Unicode case-folding — consciente, suficiente para
-/// substring UX de tipeo.
+/// Coste: el fold por entrada se CACHEA en `QuickSearch::folds` (#77) —
+/// un recompute completo por mutación del listado (`new` / `refresh`),
+/// no por keystroke; los keystrokes (`push_char`/`backspace`)
+/// solo pliegan la query. `to_lowercase` es case-folding simple de Rust,
+/// NO full Unicode case-folding — consciente, suficiente para substring
+/// UX de tipeo.
 fn fold(name: &[u8]) -> String {
     String::from_utf8_lossy(name)
         .nfc()
@@ -46,9 +47,33 @@ fn fold(name: &[u8]) -> String {
         .collect()
 }
 
+/// Folds precomputados de `entries` (índice-paralelo). Ver [`fold`].
+fn fold_names(entries: &[Entry]) -> Vec<String> {
+    entries
+        .iter()
+        .map(|e| fold(e.path.file_name().map_or(&b""[..], |s| s.as_bytes())))
+        .collect()
+}
+
+/// Matching sobre folds YA precomputados (camino caliente del keystroke).
+fn matches_folded(query_folded: &str, folds: &[String]) -> Vec<usize> {
+    folds
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.contains(query_folded))
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// Índices de `entries` cuyo nombre contiene `query` (misma normalización
 /// en ambos lados, ver `fold`). `query` en bytes crudos (viene del input
 /// tal cual).
+///
+/// Conveniencia SIN cache: pliega `entries` entero en cada llamada (en
+/// streaming — pico de memoria de UN fold, no N). El estado cacheado
+/// (camino caliente del keystroke) vive dentro de [`QuickSearch`] — esta
+/// función es para el caller ocasional (tests, un solo cálculo puntual),
+/// no para el bucle de tipeo.
 #[must_use]
 pub fn matches(query: &[u8], entries: &[Entry]) -> Vec<usize> {
     let q = fold(query);
@@ -68,6 +93,10 @@ pub fn matches(query: &[u8], entries: &[Entry]) -> Vec<usize> {
 pub struct QuickSearch {
     query: Vec<u8>,
     mode: Mode,
+    /// Claves de comparación por entrada (índice-paralelas a `entries`),
+    /// recomputadas UNA vez por mutación del listado (`new`/`refresh`), no
+    /// por keystroke (#77).
+    folds: Vec<String>,
     /// Índices REALES en `entries` que casan (query vacía = todos).
     visible: Vec<usize>,
     /// Posición de la selección DENTRO de `visible`.
@@ -82,34 +111,37 @@ impl QuickSearch {
         let mut q = Self {
             query: Vec::new(),
             mode,
+            folds: fold_names(entries),
             visible: Vec::new(),
             pos: 0,
         };
-        q.recompute(entries);
+        q.recompute();
         q
     }
 
-    /// Recalcula `visible` a partir de la query actual sobre `entries`.
-    fn recompute(&mut self, entries: &[Entry]) {
+    /// Recalcula `visible` a partir de la query actual sobre `self.folds`
+    /// (el cache YA vigente — no toca `entries`).
+    fn recompute(&mut self) {
         self.visible = if self.query.is_empty() {
-            (0..entries.len()).collect()
+            (0..self.folds.len()).collect()
         } else {
-            matches(&self.query, entries)
+            matches_folded(&fold(&self.query), &self.folds)
         };
     }
 
-    /// Añade un carácter tecleado a la query y recalcula.
-    pub fn push_char(&mut self, c: char, entries: &[Entry]) {
+    /// Añade un carácter tecleado a la query y recalcula. Solo pliega la
+    /// query — el fold de las entradas ya está cacheado en `self.folds`.
+    pub fn push_char(&mut self, c: char) {
         let mut buf = [0u8; 4];
         self.query
             .extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
-        self.recompute(entries);
+        self.recompute();
         self.pos = 0;
     }
 
     /// Retira el último byte tecleado (borra por char UTF-8 completo) y
     /// recalcula. Query vacía tras el borrado = todo visible.
-    pub fn backspace(&mut self, entries: &[Entry]) {
+    pub fn backspace(&mut self) {
         if self.query.is_empty() {
             return;
         }
@@ -121,7 +153,7 @@ impl QuickSearch {
             cut -= 1;
         }
         self.query.truncate(cut);
-        self.recompute(entries);
+        self.recompute();
         self.pos = 0;
     }
 
@@ -137,8 +169,13 @@ impl QuickSearch {
     /// `entries`. Se re-busca ese path dentro del nuevo `visible`; si
     /// murió (ya no casa / fue removido) o no había selección previa,
     /// clampa dentro del nuevo rango.
+    ///
+    /// Además renueva el cache `folds` — junto a `new`, es el ÚNICO punto
+    /// de invalidación (#77): los índices de `visible` refieren al
+    /// `entries` del último `new`/`refresh`.
     pub fn refresh(&mut self, entries: &[Entry], prev_selected: Option<&VPath>) {
-        self.recompute(entries);
+        self.folds = fold_names(entries);
+        self.recompute();
         if let Some(prev) = prev_selected
             && let Some(new_pos) = self.visible.iter().position(|&i| entries[i].path == *prev)
         {
@@ -284,11 +321,11 @@ mod tests {
     fn estado_filtro_navega_y_confirma() {
         let entries = vec![e("mem:///a1"), e("mem:///b"), e("mem:///a2")];
         let mut q = QuickSearch::new(Mode::Filter, &entries);
-        q.push_char('a', &entries);
+        q.push_char('a');
         assert_eq!(q.visible(), &[0, 2]);
         q.down();
         assert_eq!(q.selected_entry_index(), Some(2), "segundo match");
-        q.backspace(&entries);
+        q.backspace();
         assert_eq!(q.visible(), &[0, 1, 2], "query vacía = todo visible");
     }
 
@@ -296,7 +333,7 @@ mod tests {
     fn modo_salto_tab_con_wrap() {
         let entries = vec![e("mem:///ab"), e("mem:///zz"), e("mem:///ac")];
         let mut q = QuickSearch::new(Mode::Jump, &entries);
-        q.push_char('a', &entries);
+        q.push_char('a');
         assert_eq!(q.selected_entry_index(), Some(0));
         q.next_match();
         assert_eq!(q.selected_entry_index(), Some(2));
@@ -308,7 +345,7 @@ mod tests {
     fn reaplicar_tras_lote_nuevo_conserva_seleccion_si_sobrevive() {
         let mut entries = vec![e("mem:///a1")];
         let mut q = QuickSearch::new(Mode::Filter, &entries);
-        q.push_char('a', &entries);
+        q.push_char('a');
         let prev = q.selected_entry_index().map(|i| entries[i].path.clone());
         entries.push(e("mem:///a2")); // llega un lote del fill
         q.refresh(&entries, prev.as_ref());
@@ -324,7 +361,7 @@ mod tests {
         // entrada tras el sort.
         let mut entries = vec![e("mem:///a1"), e("mem:///a2")];
         let mut q = QuickSearch::new(Mode::Filter, &entries);
-        q.push_char('a', &entries);
+        q.push_char('a');
         q.down(); // selecciona a2 (índice real 1)
         assert_eq!(q.selected_entry_index(), Some(1));
         let prev = q.selected_entry_index().map(|i| entries[i].path.clone());
@@ -348,12 +385,53 @@ mod tests {
         let entries = vec![e("mem:///normal.txt")];
         let mut q = QuickSearch::new(Mode::Filter, &entries);
         for c in "a\u{202E}b".chars() {
-            q.push_char(c, &entries);
+            q.push_char(c);
         }
         let display = q.query_display();
         assert!(
             !display.chars().any(norte_encoding::is_terminal_hazard),
             "query_display dejó un hazard crudo: {display:?}"
         );
+    }
+
+    #[test]
+    fn push_char_usa_los_folds_del_ultimo_refresh() {
+        // El cache de folds (#77) debe renovarse en refresh: una entrada que
+        // llega en un lote POSTERIOR tiene que casar con el siguiente keystroke.
+        let mut entries = vec![e("mem:///zzz")];
+        let mut q = QuickSearch::new(Mode::Filter, &entries);
+        entries.push(e("mem:///nuevo.txt")); // lote del fill
+        q.refresh(&entries, None);
+        q.push_char('n');
+        assert_eq!(
+            q.visible(),
+            &[1],
+            "el fold de la entrada nueva está en el cache"
+        );
+    }
+
+    #[test]
+    fn el_cache_pliega_igual_que_matches_sobre_el_corpus_hostil() {
+        // Pin anti-divergencia (review encoding #77): el camino cacheado
+        // (new/refresh→push_char) y el sin cache (`matches`) deben dar
+        // EXACTAMENTE lo mismo sobre el corpus hostil — un fast-path futuro
+        // que optimice solo el cache pasaría el corpus (que entra por
+        // `matches`) mientras rompe el bucle de tipeo real.
+        let entries = vec![
+            e("mem:///an%CC%83o.txt"), // NFD
+            e("mem:///J%CC%8C.txt"),   // sin precompuesta mayúscula
+            e("mem:///%FF%FE"),        // no-UTF8
+        ];
+        for needle in ["año", "ǰ", "\u{FFFD}"] {
+            let mut q = QuickSearch::new(Mode::Filter, &entries);
+            for c in needle.chars() {
+                q.push_char(c);
+            }
+            assert_eq!(
+                q.visible(),
+                matches(needle.as_bytes(), &entries).as_slice(),
+                "cache y camino directo divergen para {needle:?}"
+            );
+        }
     }
 }
