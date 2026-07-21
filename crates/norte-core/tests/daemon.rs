@@ -2938,6 +2938,188 @@ async fn rpc_cancel_retira_el_ask_suspendido_sin_matar_la_conexion() {
     assert_eq!(st.entry.size, Some(4));
 }
 
+/// #72 (carrera A): el `rpc.cancel` GANA a un `policy.decide` posterior. El
+/// agente retira su fs.copy suspendida; cuando el humano intenta aprobarla
+/// después, la pendiente ya no existe → `policy.decide` responde
+/// `INVALID_PARAMS` (no un ok silencioso) y el destino jamás se toca.
+#[tokio::test]
+async fn cancel_gana_a_un_decide_posterior() {
+    // TTL LARGO: solo el rpc.cancel puede retirar el Ask a tiempo.
+    let d = spawn_daemon_ask(Duration::from_secs(30)).await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
+    write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
+    let agent = Arc::new(connected_agent(&d, "s1").await);
+    let mut human = connected_client(&d).await;
+    grant_copy_scope(&agent, &human, "s1").await;
+
+    let id_slot = Arc::new(std::sync::Mutex::new(None::<u64>));
+    let agent_copy = Arc::clone(&agent);
+    let slot = Arc::clone(&id_slot);
+    let copy = tokio::spawn(async move {
+        agent_copy
+            .call_tracked::<_, FsTaskResult>(
+                methods::FS_COPY,
+                &copy_params("mem:///proj/src.txt", "mem:///proj/dst.txt"),
+                move |id| *slot.lock().expect("id lock") = Some(id),
+            )
+            .await
+    });
+
+    // El humano ve el Ask (la copia está suspendida): sincroniza la carrera.
+    let notif = next_approval(&mut human).await;
+
+    // ACCIÓN 1 (única "primera"): el agente RETIRA la request suspendida.
+    let id = loop {
+        if let Some(id) = *id_slot.lock().expect("id lock") {
+            break id;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    agent
+        .notify(
+            methods::RPC_CANCEL,
+            &methods::RpcCancelParams {
+                id: norte_proto::wire::RequestId::Num(id),
+            },
+        )
+        .expect("rpc.cancel notify");
+
+    // La fs.copy responde Cancelled (fail-closed: jamás aprobada).
+    match copy.await.expect("join de la copia") {
+        Err(ClientError::Rpc(rpc)) => {
+            assert_eq!(rpc.code, codes::APP_ERROR);
+            assert_eq!(rpc.data, Some(Error::Cancelled));
+        }
+        other => panic!("esperaba Cancelled, fue {other:?}"),
+    }
+
+    // ACCIÓN 2 (llega TARDE): el humano intenta aprobar la ya-retirada. La
+    // pendiente no existe → INVALID_PARAMS, no un ok silencioso.
+    let decide: Result<PolicyDecideResult, ClientError> = human
+        .call(
+            methods::POLICY_DECIDE,
+            &PolicyDecideParams {
+                approval_id: notif.approval_id,
+                approve: true,
+            },
+        )
+        .await;
+    match decide {
+        Err(ClientError::Rpc(rpc)) => assert_eq!(
+            rpc.code,
+            codes::INVALID_PARAMS,
+            "decide sobre pendiente retirada debe ser INVALID_PARAMS"
+        ),
+        other => panic!("esperaba INVALID_PARAMS, fue {other:?}"),
+    }
+
+    // El destino jamás se ejecutó.
+    assert!(matches!(
+        d.mem.stat(&vp("mem:///proj/dst.txt")).await,
+        Err(Error::NotFound)
+    ));
+}
+
+/// #72 (carrera B): el `policy.decide` GANA a un `rpc.cancel` posterior. El
+/// humano aprueba antes de que llegue la retirada; la copia procede como Task
+/// gobernada y el `rpc.cancel` de la request YA resuelta es un no-op benigno
+/// que no perturba la conexión del agente.
+#[tokio::test]
+async fn decide_gana_a_un_cancel_posterior() {
+    let d = spawn_daemon_ask(Duration::from_secs(30)).await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
+    write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
+    let agent = Arc::new(connected_agent(&d, "s1").await);
+    let mut human = connected_client(&d).await;
+    grant_copy_scope(&agent, &human, "s1").await;
+
+    let id_slot = Arc::new(std::sync::Mutex::new(None::<u64>));
+    let agent_copy = Arc::clone(&agent);
+    let slot = Arc::clone(&id_slot);
+    let copy = tokio::spawn(async move {
+        agent_copy
+            .call_tracked::<_, FsTaskResult>(
+                methods::FS_COPY,
+                &copy_params("mem:///proj/src.txt", "mem:///proj/dst.txt"),
+                move |id| *slot.lock().expect("id lock") = Some(id),
+            )
+            .await
+    });
+
+    // El humano ve el Ask y APRUEBA (acción "primera").
+    let notif = next_approval(&mut human).await;
+    let _: PolicyDecideResult = human
+        .call(
+            methods::POLICY_DECIDE,
+            &PolicyDecideParams {
+                approval_id: notif.approval_id,
+                approve: true,
+            },
+        )
+        .await
+        .expect("decide approve");
+
+    // Aprobada → la copia procede: joins Ok con task_id asignado.
+    let res = copy
+        .await
+        .expect("join de la copia")
+        .expect("aprobada, la copia procede");
+    assert!(res.task_id.get() > 0);
+
+    // ACCIÓN 2 (llega TARDE): rpc.cancel de la request YA resuelta. No-op
+    // benigno — NO debe perturbar la conexión del agente.
+    let id = loop {
+        if let Some(id) = *id_slot.lock().expect("id lock") {
+            break id;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    agent
+        .notify(
+            methods::RPC_CANCEL,
+            &methods::RpcCancelParams {
+                id: norte_proto::wire::RequestId::Num(id),
+            },
+        )
+        .expect("rpc.cancel notify");
+
+    // La conexión del agente sigue viva y atiende: prueba del no-op benigno.
+    let st: FsStatResult = agent
+        .call(
+            methods::FS_STAT,
+            &FsStatParams {
+                path: vp("mem:///proj/src.txt"),
+            },
+        )
+        .await
+        .expect("la conexión sigue viva tras el rpc.cancel de una request resuelta");
+    assert_eq!(st.entry.size, Some(4));
+}
+
+/// #72 (borde): `rpc.cancel` de un id DESCONOCIDO (nada en vuelo) es un no-op
+/// benigno — ni cuelga ni rompe la conexión. Cubre también el caso de un
+/// `rpc.cancel` errante mientras NADA está suspendido.
+#[tokio::test]
+async fn rpc_cancel_de_id_desconocido_es_no_op() {
+    let d = spawn_daemon_ask(Duration::from_secs(30)).await;
+    let agent = connected_agent(&d, "s1").await;
+
+    agent
+        .notify(
+            methods::RPC_CANCEL,
+            &methods::RpcCancelParams {
+                id: norte_proto::wire::RequestId::Num(9999),
+            },
+        )
+        .expect("rpc.cancel notify");
+
+    // La conexión sigue sirviendo: el cancel de un id inexistente se dropea.
+    let _: methods::TaskListResult = agent
+        .call(methods::TASK_LIST, &methods::TaskListParams {})
+        .await
+        .expect("la conexión sigue viva tras un rpc.cancel de id desconocido");
+}
+
 // ---------- fs.search (liveSearch T4) ----------
 
 /// Params de `fs.search` con solo un glob de nombre (helper de test).
