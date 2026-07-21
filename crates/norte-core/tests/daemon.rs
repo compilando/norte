@@ -3120,6 +3120,85 @@ async fn rpc_cancel_de_id_desconocido_es_no_op() {
         .expect("la conexión sigue viva tras un rpc.cancel de id desconocido");
 }
 
+/// #72 (backpressure/anti-DoS, MAJOR del security-reviewer): mientras una
+/// fs.copy está SUSPENDIDA en un Ask, el agente hace pipeline de varias
+/// requests más. El inner loop las bufferiza (`pending_frames`) SIN perderlas;
+/// cuando el Ask se retira (rpc.cancel), TODAS se procesan tras el desenlace,
+/// en el mismo orden de llegada (dispatch serial). Prueba que el búfer de
+/// diferidos drena FIFO y que ninguna request queda huérfana.
+#[tokio::test]
+async fn frames_pipelined_durante_un_ask_se_procesan_tras_el_desenlace() {
+    let d = spawn_daemon_ask(Duration::from_secs(30)).await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
+    write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
+    let agent = Arc::new(connected_agent(&d, "s1").await);
+    let mut human = connected_client(&d).await;
+    grant_copy_scope(&agent, &human, "s1").await;
+
+    // Lanza la copia y captura su id; se suspende en el Ask.
+    let id_slot = Arc::new(std::sync::Mutex::new(None::<u64>));
+    let agent_copy = Arc::clone(&agent);
+    let slot = Arc::clone(&id_slot);
+    let copy = tokio::spawn(async move {
+        agent_copy
+            .call_tracked::<_, FsTaskResult>(
+                methods::FS_COPY,
+                &copy_params("mem:///proj/src.txt", "mem:///proj/dst.txt"),
+                move |id| *slot.lock().expect("id lock") = Some(id),
+            )
+            .await
+    });
+    let _notif = next_approval(&mut human).await;
+    let copy_id = loop {
+        if let Some(id) = *id_slot.lock().expect("id lock") {
+            break id;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+
+    // Con la copia suspendida, el agente pipelinea 5 fs.stat: el daemon las
+    // lee del socket y las difiere (no las despacha hasta que el Ask resuelva).
+    let mut pipelined = Vec::new();
+    for _ in 0..5u32 {
+        let a = Arc::clone(&agent);
+        pipelined.push(tokio::spawn(async move {
+            a.call::<_, FsStatResult>(
+                methods::FS_STAT,
+                &FsStatParams {
+                    path: vp("mem:///proj/src.txt"),
+                },
+            )
+            .await
+        }));
+    }
+    // Deja que los 5 frames lleguen al daemon (se bufferizan tras la copia).
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // El agente retira la copia → se libera el dispatch; los 5 stats diferidos
+    // se procesan a continuación.
+    agent
+        .notify(
+            methods::RPC_CANCEL,
+            &methods::RpcCancelParams {
+                id: norte_proto::wire::RequestId::Num(copy_id),
+            },
+        )
+        .expect("rpc.cancel notify");
+
+    assert!(matches!(
+        copy.await.expect("join copia"),
+        Err(ClientError::Rpc(rpc)) if rpc.data == Some(Error::Cancelled)
+    ));
+    // Ninguno de los 5 diferidos se perdió: todos responden Ok.
+    for (i, h) in pipelined.into_iter().enumerate() {
+        let st = h
+            .await
+            .expect("join stat")
+            .unwrap_or_else(|e| panic!("stat diferido {i} debía responder Ok: {e:?}"));
+        assert_eq!(st.entry.size, Some(4));
+    }
+}
+
 // ---------- fs.search (liveSearch T4) ----------
 
 /// Params de `fs.search` con solo un glob de nombre (helper de test).

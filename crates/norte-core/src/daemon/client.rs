@@ -228,7 +228,10 @@ impl Client {
     /// Como [`Self::call`], pero invoca `on_id` con el id JSON-RPC asignado
     /// ANTES de esperar la respuesta — para que el llamante lo correlacione
     /// (p. ej. enviar un `rpc.cancel` de esa request mientras sigue en vuelo,
-    /// #72).
+    /// #72). `on_id` corre ANTES de serializar/enviar: en los caminos de error
+    /// (conexión ya cerrada, canal muerto) el id reportado NO llegó al wire, así
+    /// que no corresponde a ninguna request en vuelo — un `rpc.cancel` de ese id
+    /// es un no-op benigno en el daemon.
     ///
     /// # Errors
     /// Iguales que [`Self::call`].

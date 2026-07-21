@@ -53,6 +53,16 @@ const MAX_LIVE_TASKS_AGENTS: usize = 384;
 /// request/response — el valor del inbox es que el READER siga vivo durante
 /// un dispatch suspendido (Ask) para observar la muerte del peer.
 const INBOX_FRAMES: usize = 16;
+/// Tope de frames DIFERIDOS durante un dispatch en vuelo (#72): frames que
+/// llegan mientras una request se procesa (típicamente un Ask suspendido) y no
+/// son su `rpc.cancel` se bufferizan hasta este tope. Alcanzado, el brazo de
+/// lectura del inner-select se deshabilita y el reader vuelve a hacer
+/// backpressure sobre el socket (como antes de #72): la memoria total queda
+/// acotada a `INBOX_FRAMES + MAX_DEFERRED_FRAMES` en vez de crecer sin límite
+/// mientras el peer hace pipeline durante su propio Ask (MAJOR del
+/// security-reviewer). Un cliente request/response normal jamás lo roza (0-1
+/// diferidos); solo un peer semi-hostil bajo un Ask no-aprobado lo alcanza.
+const MAX_DEFERRED_FRAMES: usize = 16;
 /// Snapshots TERMINALES retenidos para el resync de `task.list` (un
 /// frontend que reconecta ve el desenlace de lo que se perdió).
 const RECENT_TERMINAL: usize = 64;
@@ -1139,14 +1149,20 @@ async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::
                 () = &mut dispatch => break false,
                 // Un dispatch SUSPENDIDO muere con su peticionario (#64).
                 () = peer_gone.cancelled() => break true,
-                // Frames que llegan mientras este dispatch sigue en vuelo:
-                msg = inbox_rx.recv() => match msg {
-                    // El reader terminó (EOF/shutdown): deja completar el
-                    // dispatch y cierra por el camino común.
-                    None => {
-                        (&mut dispatch).await;
-                        break true;
-                    }
+                // Frames que llegan mientras este dispatch sigue en vuelo —
+                // SOLO mientras el búfer de diferidos no esté al tope: en el
+                // tope este brazo se deshabilita y el reader vuelve a hacer
+                // backpressure sobre el socket (cota anti memoria sin límite,
+                // MAJOR del security-reviewer #72). Un cancel que quedara detrás
+                // de un flood no se lee (el Ask vencerá por TTL) — aceptable:
+                // el pipelining bajo un Ask no-aprobado es el caso semi-hostil.
+                msg = inbox_rx.recv(), if pending_frames.len() < MAX_DEFERRED_FRAMES => match msg {
+                    // El reader terminó (EOF/shutdown): DROPEA el dispatch en
+                    // vuelo (sus guards limpian) y cierra por el camino común.
+                    // En la práctica `peer_gone` (biased, arriba) gana antes;
+                    // este brazo es defensivo — jamás esperar a un dispatch
+                    // suspendido aquí (colgaría hasta el TTL).
+                    None => break true,
                     Some(frame) => {
                         if let Some(id) = rpc_cancel_id(&frame) {
                             // rpc.cancel: dispara el token de esa request si
@@ -1297,7 +1313,10 @@ impl Drop for InflightCancelGuard {
 /// Extrae el `id` de un frame `rpc.cancel` ya parseado (#72), o `None` si el
 /// frame no es un `rpc.cancel` bien formado. Se aplica a los frames leídos del
 /// inbox DURANTE un dispatch en vuelo — clasificación estructural sobre el
-/// `Value`, sin deserializar el envelope entero.
+/// `Value`, sin deserializar el envelope entero. `rpc.cancel` está especificado
+/// SOLO como notificación (sin id de envelope); un frame en forma de Request con
+/// ese método se consumiría aquí igualmente (benigno: nunca se responde), pero
+/// ningún cliente lo emite así.
 fn rpc_cancel_id(value: &serde_json::Value) -> Option<RequestId> {
     if value.get("method").and_then(serde_json::Value::as_str) != Some(methods::RPC_CANCEL) {
         return None;
