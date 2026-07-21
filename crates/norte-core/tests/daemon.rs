@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use bytes::Bytes;
 use norte_core::approval::DenyAll;
 use norte_core::daemon::{
@@ -14,14 +15,14 @@ use norte_core::daemon::{
 };
 use norte_core::{Engine, PolicyConfig, ScopeRegistry, ScopedPolicy};
 use norte_proto::methods::{
-    self, ClientInfo, DaemonShutdownParams, DaemonShutdownResult, FsCopyParams, FsListParams,
-    FsListResult, FsSearchParams, FsStatParams, FsStatResult, FsTaskResult, GrantScopeParams,
-    GrantScopeResult, InitializeParams, PolicyApprovalRequired, PolicyDecideParams,
-    PolicyDecideResult, PolicyPendingResult, RequestScopeParams, RequestScopeResult, SearchHits,
-    TaskCancelParams, TaskCancelResult,
+    self, ClientInfo, ConnectionDegraded, DaemonShutdownParams, DaemonShutdownResult, FsCopyParams,
+    FsListParams, FsListResult, FsSearchParams, FsStatParams, FsStatResult, FsTaskResult,
+    GrantScopeParams, GrantScopeResult, InitializeParams, PolicyApprovalRequired,
+    PolicyDecideParams, PolicyDecideResult, PolicyPendingResult, RequestScopeParams,
+    RequestScopeResult, SearchHits, TaskCancelParams, TaskCancelResult,
 };
 use norte_proto::wire::codes;
-use norte_proto::{Entry, Error, TaskProgress, TaskState, VPath};
+use norte_proto::{Entry, EntryKind, Error, TaskProgress, TaskState, VPath};
 use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
@@ -223,7 +224,7 @@ async fn initialize_rechaza_version_incompatible() {
             },
         )
         .await
-        .expect_err("0.1.0 no es N ni N-1 de 0.19.0");
+        .expect_err("0.1.0 no es N ni N-1 de 0.20.0");
     match err {
         ClientError::Rpc(rpc) => {
             // Código PROPIO: la señal de upgrade jamás se parsea de message.
@@ -234,14 +235,14 @@ async fn initialize_rechaza_version_incompatible() {
         }
         other => panic!("esperaba Rpc, fue {other:?}"),
     }
-    // N-1 (0.18.x) SÍ entra.
+    // N-1 (0.19.x) SÍ entra.
     let c2 = Client::connect(&d.socket).await.expect("connect");
     let ok: methods::InitializeResult = c2
         .call(
             methods::INITIALIZE,
             &InitializeParams {
                 client_info: client_info(),
-                protocol_version: "0.18.2".into(),
+                protocol_version: "0.19.2".into(),
                 encodings: vec![],
                 agent_session: None,
             },
@@ -1547,7 +1548,7 @@ async fn frames_hostiles_y_formas_canonicas_crudas() {
 
     // initialize + daemon.shutdown con params null (golden canónico, M1).
     s.write_all(
-        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.18.0\",\"encodings\":[\"json\"]}}\n",
+        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.19.0\",\"encodings\":[\"json\"]}}\n",
     )
     .await
     .expect("write");
@@ -3696,4 +3697,179 @@ async fn humano_lee_sin_scope() {
         .await
         .expect("humano lista sin scope");
     assert_eq!(list.entries.len(), 1);
+}
+
+// ---------- #44: connection.degraded (solo humanos) ----------
+
+/// Provider remoto trivial: responde a CUALQUIER path con un directorio. Es el
+/// stand-in de la sesión establecida por el conector falso (mismo criterio que
+/// el `EcoProvider` de `connect.rs`); su único cometido es que el connect
+/// TENGA ÉXITO — el resultado del `fs.stat` no importa, sí que el aviso se haya
+/// difundido antes del response.
+struct EcoProvider;
+
+#[async_trait]
+impl Provider for EcoProvider {
+    fn scheme(&self) -> &'static str {
+        "ftp"
+    }
+    fn capabilities(&self) -> norte_proto::Capabilities {
+        norte_proto::Capabilities {
+            flags: norte_proto::CapabilityFlags::empty(),
+            max_path: None,
+        }
+    }
+    async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
+        Ok(Entry {
+            path: p.clone(),
+            kind: EntryKind::Dir,
+            size: None,
+            mtime_ms: None,
+        })
+    }
+    async fn list(&self, _p: &VPath) -> Result<norte_vfs::EntryStream, Error> {
+        Err(Error::Unsupported)
+    }
+    async fn read(
+        &self,
+        _p: &VPath,
+        _range: Option<norte_proto::ByteRange>,
+    ) -> Result<norte_vfs::ByteStream, Error> {
+        Err(Error::Unsupported)
+    }
+    async fn write(&self, _p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
+        Err(Error::Unsupported)
+    }
+    async fn mkdir(&self, _p: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+    async fn remove(&self, _p: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+    async fn rename(&self, _from: &VPath, _to: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+}
+
+/// Conector falso que SIEMPRE degrada: cada connect devuelve un provider vivo
+/// ([`EcoProvider`]) más un aviso `TlsAuthRejected` para `backup.example`.
+struct DegradingConnector {
+    mem: Arc<MemProvider>,
+}
+
+#[async_trait]
+impl norte_core::connect::RemoteConnector for DegradingConnector {
+    async fn connect(
+        &self,
+        scheme: &str,
+        _authority: &str,
+    ) -> Result<norte_core::connect::Connected, norte_proto::Error> {
+        // El provider vivo responde `stat`; `mem` queda como testigo de que el
+        // conector puede sostener uno propio si hiciera falta.
+        let _ = &self.mem;
+        Ok(norte_core::connect::Connected {
+            provider: Arc::new(EcoProvider) as Arc<dyn Provider>,
+            warnings: vec![norte_core::connect::ConnectionWarning {
+                scheme: scheme.to_owned(),
+                host: "backup.example".to_owned(),
+                reason: norte_core::connect::ConnectionWarningReason::TlsAuthRejected,
+            }],
+        })
+    }
+    async fn trust_host_key(
+        &self,
+        _h: &str,
+        _p: Option<u16>,
+        _f: &str,
+    ) -> Result<(), norte_proto::Error> {
+        Ok(())
+    }
+}
+
+/// Daemon cuyo engine tiene inyectado un [`DegradingConnector`]: cualquier
+/// acceso a `ftp://backup.example/…` establece una sesión degradada.
+async fn spawn_daemon_degrading() -> TestDaemon {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    let engine = Arc::new(Engine::new());
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    engine.set_connector(Arc::new(DegradingConnector {
+        mem: Arc::clone(&mem),
+    }));
+    let daemon = Daemon::bind(
+        engine,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+            plugins_dir: None,
+        },
+    )
+    .await
+    .expect("bind");
+    let run = tokio::spawn(daemon.run());
+    TestDaemon {
+        socket,
+        run,
+        _dir: dir,
+        mem,
+    }
+}
+
+/// Siguiente `connection.degraded` del stream (ignora otras notifs), con tope.
+async fn next_degraded(c: &mut Client) -> ConnectionDegraded {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let n = c.notification().await.expect("canal de notifs vivo");
+            if n.method == methods::CONNECTION_DEGRADED {
+                return serde_json::from_value::<ConnectionDegraded>(
+                    n.params.expect("la notif lleva params"),
+                )
+                .expect("shape de ConnectionDegraded");
+            }
+        }
+    })
+    .await
+    .expect("connection.degraded llega")
+}
+
+/// #44: al degradarse una sesión remota, el humano recibe `connection.degraded`
+/// (scheme/host/reason del vocabulario cerrado); una conexión de agente NO —
+/// es info de seguridad para el usuario, no para el agente (mismo criterio que
+/// `policy.*`).
+#[tokio::test]
+async fn degradacion_de_conexion_solo_a_humanos() {
+    let d = spawn_daemon_degrading().await;
+    let mut human = connected_client(&d).await;
+    let mut agent = connected_agent(&d, "s1").await;
+
+    // El humano dispara el connect perezoso a la sesión degradada. El aviso se
+    // difunde de forma SÍNCRONA dentro del dispatch, ANTES de escribir el
+    // response de este `fs.stat`: cuando el `call` retorna, el broadcast ya
+    // ocurrió (mismo argumento que `progreso_de_task_humana_no_llega_a_...`).
+    let _stat: FsStatResult = human
+        .call(
+            methods::FS_STAT,
+            &FsStatParams {
+                path: vp("ftp://backup.example/"),
+            },
+        )
+        .await
+        .expect("fs.stat dispara el connect degradado");
+
+    let deg = next_degraded(&mut human).await;
+    assert_eq!(deg.scheme, "ftp");
+    assert_eq!(deg.host, "backup.example");
+    assert_eq!(deg.reason, "tls-auth-rejected");
+    assert_eq!(deg.detail, None);
+
+    // El agente NO la recibe. El broadcast fue síncrono y previo al response ya
+    // recibido: no queda ningún camino diferido que se la entregue tarde → un
+    // tope corto sin frame es robusto (no flaky).
+    let colado = tokio::time::timeout(Duration::from_millis(200), agent.notification()).await;
+    assert!(
+        colado.is_err(),
+        "un agente no recibe connection.degraded: {colado:?}"
+    );
 }

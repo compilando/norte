@@ -276,6 +276,42 @@ fn may_observe(viewer: &Actor, owner: &Actor) -> bool {
     matches!(viewer, Actor::User) || viewer == owner
 }
 
+/// Observer de avisos de conexión del daemon (#44): codifica cada aviso como
+/// `connection.degraded` y lo difunde SOLO a humanos (como `policy.*`). `Weak`
+/// rompe el ciclo Shared→engine→observer→Shared.
+struct DaemonConnectionObserver {
+    shared: std::sync::Weak<Shared>,
+}
+
+impl crate::connect::ConnectionObserver for DaemonConnectionObserver {
+    fn on_connection_warning(&self, w: &crate::connect::ConnectionWarning) {
+        let Some(shared) = self.shared.upgrade() else {
+            return;
+        };
+        let notif = norte_proto::methods::ConnectionDegraded {
+            scheme: w.scheme.clone(),
+            host: w.host.clone(),
+            reason: w.reason.wire().to_owned(),
+            detail: None,
+        };
+        // Si la serialización fallara (no puede: struct plano), mejor NO emitir
+        // que emitir una notif con shape corrupto.
+        let Ok(params) = serde_json::to_value(&notif) else {
+            return;
+        };
+        let n = Notification {
+            jsonrpc: norte_proto::wire::JsonRpcVersion,
+            method: methods::CONNECTION_DEGRADED.into(),
+            params: Some(params),
+        };
+        if let Ok(frame) = encode_frame(&n) {
+            // Solo humanos: la sesión degradada es info de seguridad para el
+            // usuario, no para el agente (mismo criterio que policy.*).
+            shared.broadcast_humans(&Arc::from(frame.into_boxed_slice()));
+        }
+    }
+}
+
 impl Shared {
     fn idle(&self) -> bool {
         self.connections.load(Ordering::SeqCst) == 0
@@ -493,6 +529,13 @@ impl Daemon {
                 shared.broadcast_humans(&Arc::from(frame.into_boxed_slice()));
             }
         }));
+        // #44: avisos de conexión (degradación TLS) → `connection.degraded` SOLO
+        // a humanos. `Weak` rompe el ciclo Shared → engine → observer → Shared.
+        shared
+            .engine
+            .set_connection_observer(Arc::new(DaemonConnectionObserver {
+                shared: Arc::downgrade(&shared),
+            }));
         Ok(Self {
             listener,
             socket_path,
