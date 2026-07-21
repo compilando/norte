@@ -113,28 +113,35 @@ enum Cd {
     /// de ESE pane queda obsoleto y hay que soltarlo.
     Replaced(usize),
     /// El cd del pane `usize` FALLÓ al listar: el pane se quedó donde
-    /// estaba (el error ya salió por la barra), pero un relleno previo de
-    /// ese pane se suelta igual (criterio conservador de siempre). El error
+    /// estaba (el error ya salió por la barra) sobre su listado ANTERIOR, así
+    /// que un relleno previo de ese pane SIGUE siendo válido y se conserva
+    /// (#78: soltarlo dejaba el pane colgado en `loading=true` —con
+    /// «(parcial)» en la quick-search— sin drenador que lo apagara). El error
     /// VIAJA para quien navega desde el popup de historial (spec
-    /// 2026-07-18: `NotFound` retira la entrada).
-    Failed(usize, Error),
+    /// 2026-07-18: `NotFound` retira la entrada). Sin el índice de pane: al no
+    /// tocar ya el relleno (#78) nadie lo consulta.
+    Failed(Error),
     /// El cd se abandonó (Esc/Ctrl-C): nada cambió, el relleno sigue.
     Cancelled,
 }
 
 /// Aplica el desenlace de un cd al relleno paginado en curso: uno nuevo lo
 /// sustituye (el rx anterior dropeado mata su drenador → suelta el stream,
-/// regla 3); un reemplazo o fallo del MISMO pane lo suelta (su drenador
-/// quedaría obsoleto); un cd abandonado no toca nada.
+/// regla 3); un REEMPLAZO del MISMO pane lo suelta (su drenador drenaría el
+/// listado viejo sobre el nuevo); un FALLO o un cd ABANDONADO no tocan el pane
+/// —sigue en su listado anterior, cuyo relleno continúa siendo válido— así que
+/// no tocan el fill (#78).
 fn apply_cd(fill: &mut Option<Fill>, outcome: Cd) {
     match outcome {
         Cd::Filling(f) => *fill = Some(f),
-        Cd::Replaced(pane) | Cd::Failed(pane, _) => {
+        Cd::Replaced(pane) => {
             if fill.as_ref().is_some_and(|f| f.pane == pane) {
                 *fill = None;
             }
         }
-        Cd::Cancelled => {}
+        // El pane no cambió: su relleno (si lo había) sigue drenando el mismo
+        // listado. Soltarlo aquí lo dejaba colgado en `loading=true` (#78).
+        Cd::Failed(..) | Cd::Cancelled => {}
     }
 }
 
@@ -998,8 +1005,7 @@ async fn on_nav_popup_key(
             if let Some(path) = app.nav_popup_input(PickerAction::Confirm) {
                 let pane = app.focus();
                 let outcome = cd(app, backend, events, path.clone()).await;
-                if kind == NavPopupKind::History
-                    && matches!(&outcome, Cd::Failed(_, Error::NotFound))
+                if kind == NavPopupKind::History && matches!(&outcome, Cd::Failed(Error::NotFound))
                 {
                     // El dir ya no existe: fuera del historial. La barra ya
                     // muestra el error normal del cd fallido.
@@ -2454,7 +2460,7 @@ async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPa
                     // error se PORTA en el desenlace (popup de historial).
                     Err(e) => {
                         app.message = Some(error_message(&e));
-                        return Cd::Failed(app.focus(), e);
+                        return Cd::Failed(e);
                     }
                 }
             }
@@ -2564,5 +2570,52 @@ mod search_fill_tests {
             app.panes[0].virtual_search,
             "el pane sigue en modo búsqueda"
         );
+    }
+}
+
+#[cfg(test)]
+mod apply_cd_tests {
+    use super::{Cd, Fill, FillMsg, apply_cd};
+    use norte_proto::Error;
+
+    fn fill(pane: usize) -> Fill {
+        let (_tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
+        Fill { pane, rx }
+    }
+
+    /// Un REEMPLAZO del mismo pane suelta su relleno obsoleto.
+    #[test]
+    fn replaced_suelta_el_fill_del_pane() {
+        let mut f = Some(fill(0));
+        apply_cd(&mut f, Cd::Replaced(0));
+        assert!(f.is_none(), "el fill del listado viejo se suelta");
+    }
+
+    /// Un reemplazo de OTRO pane no toca el relleno vivo.
+    #[test]
+    fn replaced_de_otro_pane_no_toca() {
+        let mut f = Some(fill(0));
+        apply_cd(&mut f, Cd::Replaced(1));
+        assert!(f.is_some(), "el fill del pane 0 sobrevive");
+    }
+
+    /// #78: un cd FALLIDO NO suelta el relleno — el pane sigue en su listado
+    /// anterior, que se sigue rellenando (soltarlo lo colgaba en loading).
+    #[test]
+    fn failed_conserva_el_fill() {
+        let mut f = Some(fill(0));
+        apply_cd(&mut f, Cd::Failed(Error::NotFound));
+        assert!(
+            f.is_some(),
+            "el fill del listado anterior sigue vivo tras un cd fallido"
+        );
+    }
+
+    /// Un cd abandonado no toca nada.
+    #[test]
+    fn cancelled_conserva_el_fill() {
+        let mut f = Some(fill(0));
+        apply_cd(&mut f, Cd::Cancelled);
+        assert!(f.is_some());
     }
 }

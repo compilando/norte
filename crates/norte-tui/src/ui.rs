@@ -9,6 +9,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use unicode_width::UnicodeWidthChar;
 
 use crate::app::{App, Pane, display_name, path_display};
 use crate::theme::TuiTheme;
@@ -641,19 +642,51 @@ fn clamp_chars(s: &str, max: usize) -> String {
     out
 }
 
-/// Elipsis MEDIA a `max` chars: conserva cabeza (scheme) y cola (nombre) —
-/// lo que identifica la ruta ante un humano — y marca el recorte con `…`.
+/// Elipsis MEDIA a `max` CELDAS de terminal: conserva cabeza (scheme) y cola
+/// (nombre) —lo que identifica la ruta ante un humano— y marca el recorte con
+/// `…`. Presupuesta por ANCHO DE CELDA (CJK/emoji ocupan 2 columnas), no por
+/// chars: contar chars desbordaba `max` con nombres densos y ratatui
+/// re-truncaba por la DERECHA, comiéndose justo la cola que la elipsis media
+/// existe para preservar (#79). Para ASCII (celdas == chars) el resultado es
+/// idéntico al anterior.
 fn middle_ellipsis(s: &str, max: usize) -> String {
-    let n = s.chars().count();
-    if n <= max {
+    let cell = |c: char| UnicodeWidthChar::width(c).unwrap_or(0);
+    if s.chars().map(cell).sum::<usize>() <= max {
         return s.to_owned();
     }
-    let keep = max.saturating_sub(1);
-    let head = keep / 2;
-    let tail = keep - head;
-    let mut out: String = s.chars().take(head).collect();
+    // Una celda para el `…`; el resto se reparte cabeza/cola. Cada mitad
+    // acumula chars mientras el siguiente QUEPA entero en su presupuesto: un
+    // char ancho que no cabe se descarta (nunca se parte una celda).
+    let budget = max.saturating_sub(1);
+    let head_budget = budget / 2;
+    let tail_budget = budget - head_budget;
+
+    let mut head = String::new();
+    let mut used = 0usize;
+    for c in s.chars() {
+        let w = cell(c);
+        if used + w > head_budget {
+            break;
+        }
+        used += w;
+        head.push(c);
+    }
+
+    let mut tail: Vec<char> = Vec::new();
+    let mut used_tail = 0usize;
+    for c in s.chars().rev() {
+        let w = cell(c);
+        if used_tail + w > tail_budget {
+            break;
+        }
+        used_tail += w;
+        tail.push(c);
+    }
+    tail.reverse();
+
+    let mut out = head;
     out.push('…');
-    out.extend(s.chars().skip(n - tail));
+    out.extend(tail);
     out
 }
 
@@ -821,4 +854,61 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         Paragraph::new(text).style(app.theme.role(Role::StatusBar)),
         area,
     );
+}
+
+#[cfg(test)]
+mod ellipsis_tests {
+    use super::middle_ellipsis;
+    use unicode_width::UnicodeWidthStr;
+
+    /// Una cadena que ya cabe en `max` celdas vuelve intacta.
+    #[test]
+    fn cabe_intacta() {
+        assert_eq!(middle_ellipsis("file:///d/a.txt", 46), "file:///d/a.txt");
+    }
+
+    /// ASCII que desborda: comportamiento idéntico al anterior (celdas==chars),
+    /// cabeza + `…` + cola, sin exceder `max`.
+    #[test]
+    fn ascii_conserva_cabeza_y_cola() {
+        let s = "file:///muy/larga/ruta/hacia/un/archivo/final.txt";
+        let out = middle_ellipsis(s, 20);
+        assert!(out.contains('…'));
+        assert!(out.starts_with("file:"), "conserva el scheme (cabeza)");
+        let cola = out.rsplit_once('…').expect("hay elipsis").1;
+        assert!(
+            !cola.is_empty() && s.ends_with(cola),
+            "la cola es un sufijo REAL del original: {out:?}"
+        );
+        assert!(out.width() <= 20, "no excede el ancho: {out:?}");
+    }
+
+    /// CJK (cada char = 2 celdas): NUNCA excede `max` celdas y CONSERVA la
+    /// cola —el bug #79 la perdía porque presupuestaba por chars—.
+    #[test]
+    fn cjk_no_excede_y_conserva_cola() {
+        let s = "日本語".repeat(20); // 60 chars, 120 celdas
+        let out = middle_ellipsis(&s, 21);
+        assert!(out.width() <= 21, "ancho {} > 21 en {out:?}", out.width());
+        assert!(out.contains('…'));
+        assert!(out.ends_with('語'), "la cola sobrevive: {out:?}");
+        assert!(out.starts_with('日'), "la cabeza sobrevive: {out:?}");
+    }
+
+    /// Emoji ancho (2 celdas): tampoco desborda.
+    #[test]
+    fn emoji_no_excede() {
+        let s = "a😀b😀c😀d😀e😀f😀g";
+        let out = middle_ellipsis(s, 9);
+        assert!(out.width() <= 9, "ancho {} en {out:?}", out.width());
+        assert!(out.contains('…'));
+    }
+
+    /// `max` menor que un solo char ancho: no se parte la celda → solo `…`.
+    #[test]
+    fn max_menor_que_un_char_ancho() {
+        let out = middle_ellipsis("日本", 1);
+        assert_eq!(out, "…");
+        assert!(out.width() <= 1);
+    }
 }

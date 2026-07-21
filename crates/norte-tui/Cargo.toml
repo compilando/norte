@@ -36,6 +36,11 @@ sha2.workspace = true
 toml.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tokio-util.workspace = true
+# Ancho de CELDA de terminal para la elipsis media (#79): CJK/emoji ocupan 2
+# columnas y presupuestar por chars desborda el ancho → ratatui recorta por la
+# derecha comiéndose la cola. `unicode-width` es la herramienta estándar (la
+# usa la propia ratatui, misma versión ya en el árbol), MIT/Apache, mantenida.
+unicode-width = "0.2"
 
 [dev-dependencies]
 bytes.workspace = true
