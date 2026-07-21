@@ -145,10 +145,17 @@ pub(crate) fn build_index_gz<R: Read>(
 /// descarte largo (offset grande dentro de una entrada) también debe ser
 /// cancelable (regla 3; a diferencia del descarte de zip, que es corto por
 /// la ventana de deflate) — y luego sirve `take` en chunks de 64 KiB por el
-/// canal acotado. EOF antes de completar el descarte es pread fuera de
-/// rango (stream vacío, sin error, mismo criterio que zip); EOF a mitad de
-/// `take` es contenedor truncado bajo datos que el índice prometió: error
-/// por el canal, jamás datos cortos en silencio.
+/// canal acotado.
+///
+/// EOF prematuro es FAIL-LOUD en AMBAS fases, `skip` Y `take` (fix de
+/// review #55: la fase de descarte devolvía silenciosamente un stream vacío
+/// — INCORRECTO). El caller (`ArchiveProvider::read`) ya recortó `req_off`
+/// contra `entry_size` ANTES de lanzar este hilo (semántica pread): un EOF
+/// aquí NUNCA es "offset legítimamente fuera de la entrada" (eso ya lo
+/// filtró el caller) — solo puede significar contenedor truncado o mutado
+/// bajo nuestros pies (el mismo evento que documenta
+/// [`ProviderReader::read`](crate::blocking::ProviderReader)), jamás datos
+/// cortos en silencio.
 pub(crate) fn read_entry_gz<R: Read>(
     reader: R,
     skip: u64,
@@ -169,7 +176,14 @@ pub(crate) fn read_entry_gz<R: Read>(
         }
         let want = buf.len().min(usize::try_from(to_skip).unwrap_or(buf.len()));
         match decoder.read(&mut buf[..want]) {
-            Ok(0) => return, // EOF antes del offset: stream vacío (pread)
+            Ok(0) => {
+                // FIX-1 (rust+security MAJOR, #55 review): el caller YA
+                // recortó `req_off` contra `entry_size` — un EOF aquí solo
+                // puede ser contenedor truncado/mutado bajo nuestros pies,
+                // jamás un offset legítimamente vacío. Fail-loud, igual que
+                // el EOF prematuro de la fase `take`.
+                return send_err(tx, Error::Corrupt);
+            }
             Ok(n) => to_skip -= n as u64,
             Err(e) => return send_err(tx, corrupt(&e)),
         }
@@ -325,5 +339,111 @@ mod tests {
         };
         let got = build_index_gz(Cursor::new(gz), (Some(0), Some(1)), &tight, &cancel);
         assert_eq!(got.map(|_| ()).unwrap_err(), Error::Corrupt);
+    }
+
+    /// FIX-1 (rust+security MAJOR, #55 review): EOF durante el DESCARTE
+    /// (`skip`) debe ser fail-loud, no un stream vacío silencioso. `skip`
+    /// aquí supera lo que el gz truncado puede entregar — antes del fix esto
+    /// devolvía Ok(()) sin ningún mensaje por el canal (indistinguible de
+    /// "no hay más datos porque el receptor cerró"); ahora debe llegar
+    /// exactamente UN mensaje `Err(Corrupt)`.
+    #[test]
+    fn eof_durante_el_descarte_es_corrupt_no_vacio() {
+        let tar = norte_testkit::TarSmith::new()
+            .file(b"grande.bin", &[7u8; 4000])
+            .build();
+        let gz = gzip(&tar);
+        // Corta el gz a la mitad: el decoder no puede entregar los 4000
+        // bytes descomprimidos que `skip` pide.
+        let truncated = gz[..gz.len() / 2].to_vec();
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        read_entry_gz(Cursor::new(truncated), 3_900, 10, &tx);
+        drop(tx);
+
+        match rx.blocking_recv() {
+            Some(Err(Error::Corrupt)) => {}
+            other => panic!(
+                "esperaba EXACTAMENTE un Err(Corrupt) por EOF durante el descarte, fue {other:?}"
+            ),
+        }
+        assert!(
+            rx.blocking_recv().is_none(),
+            "ni un byte de datos tras el EOF prematuro: jamás cortos en silencio"
+        );
+    }
+
+    /// Reader que arma `cancel` (el MISMO que recibe `build_index_gz`) tras
+    /// servir sus primeros `arm_after` bytes CRUDOS (comprimidos): simula
+    /// una cancelación real EN MEDIO del pipeline de descompresión —
+    /// distinto del test `cancelacion_corta_el_indexado` de arriba, que
+    /// arma el flag ANTES de arrancar (corta en la PRIMERISIMA lectura, sin
+    /// que el build haya progresado nada todavía). FIX-4 (rust MINOR-3a,
+    /// #55 review).
+    struct ArmCancelAfter<R> {
+        inner: R,
+        served: u64,
+        arm_after: u64,
+        cancel: Arc<AtomicBool>,
+    }
+
+    impl<R: Read> Read for ArmCancelAfter<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            self.served += n as u64;
+            if self.served >= self.arm_after {
+                self.cancel.store(true, Ordering::Relaxed);
+            }
+            Ok(n)
+        }
+    }
+
+    /// FIX-4 (rust MINOR-3a, #55 review): cancelación DESPUÉS de que el
+    /// pipeline ya sirvió bytes reales (no antes de que arranque el build) —
+    /// el resultado sigue siendo `Cancelled`, NUNCA `Corrupt`. También
+    /// valida la cadena `source()` de FIX-3: la señal atraviesa flate2 +
+    /// tar-rs sin perder su identidad, aunque quede reenvuelta por el
+    /// camino.
+    #[test]
+    fn cancelacion_a_mitad_del_pipeline_es_cancelled_no_corrupt() {
+        // Contenido de ALTA entropía (xorshift32, no un patrón periódico):
+        // deflate no puede comprimir ruido genuino, así que el gz resultante
+        // es ~proporcional al tamaño descomprimido — evita que TODO el gz
+        // quepa en un solo buffer interno de flate2 (lo que dejaría
+        // `served` saltar de 0 al total en una sola lectura y perdería el
+        // matiz "a mitad").
+        let mut state: u32 = 0x2545_F491;
+        let contenido: Vec<u8> = (0..2_000_000u32)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                (state & 0xFF) as u8
+            })
+            .collect();
+        let tar = norte_testkit::TarSmith::new()
+            .file(b"grande.bin", &contenido)
+            .file(b"segunda.bin", b"x")
+            .build();
+        let gz = gzip(&tar);
+        let gz_len = gz.len() as u64;
+        assert!(
+            gz_len > 100_000,
+            "contenido poco compresible: el gz debe seguir siendo grande"
+        );
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let reader = ArmCancelAfter {
+            inner: Cursor::new(gz),
+            served: 0,
+            arm_after: gz_len / 2, // a mitad del stream comprimido
+            cancel: Arc::clone(&cancel),
+        };
+        let got = build_index_gz(reader, (Some(0), Some(1)), &limits(), &cancel);
+        assert_eq!(
+            got.map(|_| ()).unwrap_err(),
+            Error::Cancelled,
+            "cancelación a mitad del pipeline: Cancelled, NO Corrupt"
+        );
     }
 }

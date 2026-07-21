@@ -8,12 +8,14 @@
 mod common;
 
 use std::io::Write as _;
+use std::sync::Arc;
+use std::time::Duration;
 
 use futures::StreamExt;
 use norte_proto::{ByteRange, Error, Segment, VPath};
 use norte_testkit::TarSmith;
 use norte_vfs::Provider;
-use norte_vfs_archive::{ArchiveProvider, Limits};
+use norte_vfs_archive::{ArchiveProvider, Format, Limits};
 
 fn seg(b: &[u8]) -> Segment {
     Segment::new(b.to_vec()).expect("seg")
@@ -211,6 +213,67 @@ async fn basura_tras_el_gzip_se_ignora() {
         b"contenido",
         "el contenido válido se lee igual; la basura tras el último miembro se ignora"
     );
+}
+
+/// #58 (mismo criterio que tar/zip) + FIX-3 (rust MINOR-2, #55 review): un
+/// fallo GENUINO del provider INTERIOR (desconexión a mitad del índice) se
+/// propaga VERBATIM aunque haya atravesado flate2 + tar-rs (que pueden
+/// reenvolver el `io::Error` original) — jamás se disfraza de `Corrupt`.
+#[tokio::test]
+async fn fallo_del_provider_interior_no_se_disfraza_de_corrupt() {
+    let tar = TarSmith::new().file(b"ok.txt", b"bien").build();
+    let gz = common::gzip(&tar);
+    let (mem, path) = common::seed_container(b"fixture.tar.gz", &gz).await;
+    let faults = mem.faults();
+    let root = VPath::archive_compose("tar+gz", &path, &[]).expect("compose");
+    let p = ArchiveProvider::with_limits(mem, Format::TarGz, "tar+gz+mem", Limits::default());
+    // El corte llega a distintos puntos del parseo (índice + descompresión);
+    // en NINGUNO debe verse disfrazado de "tar.gz corrupto".
+    for n in 0..8u64 {
+        faults.clear();
+        faults.disconnect_after(n);
+        match p.list(&root).await.map(|_| ()) {
+            Err(Error::ProviderUnavailable { retryable: true }) | Ok(()) => {}
+            other => panic!("con disconnect_after({n}) el IO del interior se disfrazó: {other:?}"),
+        }
+    }
+}
+
+/// FIX-2 (security MAJOR, #55 review): el semáforo de concurrencia del
+/// forward-decode ENCOLA las lecturas excedentes, nunca las rechaza. Fuego
+/// `GZ_READ_CONCURRENCY` (4) + 2 lecturas concurrentes de la MISMA entrada con
+/// latencia inyectada en el provider interior (simula el hilo pinneado real
+/// sin necesitar un contenedor gigante) y verifica que TODAS completan con
+/// el contenido correcto.
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrencia_de_lecturas_gz_se_encola_no_se_rechaza() {
+    let tar = TarSmith::new().file(b"a.txt", b"contenido corto").build();
+    let gz = common::gzip(&tar);
+    let (mem, path) = common::seed_container(b"fixture.tar.gz", &gz).await;
+    mem.faults()
+        .set_latency_per_op(Some(Duration::from_millis(15)));
+    let root = VPath::archive_compose("tar+gz", &path, &[]).expect("compose");
+    let p = Arc::new(ArchiveProvider::with_limits(
+        mem,
+        Format::TarGz,
+        "tar+gz+mem",
+        Limits::default(),
+    ));
+    let f = root.join(seg(b"a.txt"));
+
+    let mut handles = Vec::new();
+    for _ in 0..6u32 {
+        let p = Arc::clone(&p);
+        let f = f.clone();
+        handles.push(tokio::spawn(async move { read_all(&p, &f, None).await }));
+    }
+    for h in handles {
+        assert_eq!(
+            h.await.expect("join"),
+            b"contenido corto",
+            "toda lectura por encima del tope de concurrencia debe ENCOLARSE y completar, no fallar"
+        );
+    }
 }
 
 /// Content-Encoding real de flate2 vía `write::GzEncoder` en varios

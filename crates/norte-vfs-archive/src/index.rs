@@ -24,9 +24,26 @@ pub struct Limits {
     /// Presupuesto TOTAL de bytes DESCOMPRIMIDOS del PASE DE ÍNDICE de un
     /// `tar+gz` (ADR 0028, #55): una gzip bomb es CPU infinita aunque la
     /// memoria del pipeline sea streaming (el decoder nunca materializa el
-    /// contenido completo) — este tope corta el INDEXADO. El `read` de una
-    /// entrada ya está acotado por el tamaño de la propia entrada y no lo
-    /// consulta. Sin efecto en `Format::Tar`/`Format::Zip`.
+    /// contenido completo) — este tope corta el INDEXADO. Sin efecto en
+    /// `Format::Tar`/`Format::Zip`.
+    ///
+    /// El `read` de una entrada NO está acotado por el tamaño DECLARADO de
+    /// esa entrada (FIX de review #55: la afirmación anterior era FALSA):
+    /// `size` puede ser tan grande como este mismo presupuesto lo permita,
+    /// y el forward-decode arranca SIEMPRE desde el byte 0 del stream — el
+    /// coste real de un `read` es O(offset ABSOLUTO en el descomprimido),
+    /// documentado junto a `Locator::Gz`. La cota real es INDIRECTA: si el
+    /// `offset`/`size` de una entrada excediera este presupuesto, el PASE
+    /// DE ÍNDICE ya habría fallado al intentar saltar su cuerpo para
+    /// localizar la siguiente entrada (invariante: «entrada
+    /// sobre-presupuesto ⇒ el índice ENTERO falla, `Corrupt`») — un
+    /// locator solo llega a `read` si su posición YA fue verificada bajo
+    /// este mismo tope durante el indexado.
+    ///
+    /// Superarlo hoy se reporta como `Error::Corrupt` (igual que
+    /// `max_entries`/`max_name_bytes`/`max_depth`): deuda de un error de
+    /// recurso diferenciado (issue futura) que distinga "formato roto" de
+    /// "excede límites locales por diseño".
     pub max_decompressed_bytes: u64,
 }
 

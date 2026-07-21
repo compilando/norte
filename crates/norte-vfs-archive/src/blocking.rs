@@ -131,11 +131,38 @@ impl Seek for ProviderReader {
 
 /// Recupera el [`norte_proto::Error`] del provider INTERIOR si este
 /// `io::Error` lo envuelve ([`ProviderReader::fetch_block`] lo mete en
-/// `io::Error::other`): un corte de red a mitad de parseo es IO genuino del
-/// interior y DEBE propagarse verbatim — `Corrupt` queda reservado para el
-/// formato roto de verdad (#58).
+/// `io::Error::other`, y el `CountingReader` de `targz_format` hace lo
+/// mismo con `Cancelled`/`Corrupt` de la bomba): un corte de red a mitad de
+/// parseo es IO genuino del interior y DEBE propagarse verbatim — `Corrupt`
+/// queda reservado para el formato roto de verdad (#58).
+///
+/// FIX-3 (rust MINOR-2, #55 review): camina la cadena `source()` COMPLETA,
+/// no solo el `io::Error` más externo. Parsers como `tar`/`flate2` pueden
+/// reenvolver el error del reader interior dentro de su propio tipo (o
+/// dentro de un `io::Error` NUEVO que a su vez envuelve al original) antes
+/// de que llegue aquí — un downcast de un solo nivel se lo perdería y lo
+/// disfrazaría de `Corrupt`. En cada salto de la cadena se prueba (a) si el
+/// eslabón ES directamente un `norte_proto::Error`, y (b) si es un
+/// `io::Error` cuyo `get_ref()` lo envuelve.
 pub(crate) fn inner_proto_error(e: &std::io::Error) -> Option<norte_proto::Error> {
-    e.get_ref()?.downcast_ref::<norte_proto::Error>().cloned()
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    // Tope defensivo: ninguna cadena de error real de este crate anida más
+    // de un puñado de niveles; corta ante un ciclo patológico en vez de
+    // colgarse.
+    for _ in 0..16 {
+        let err = current?;
+        if let Some(proto_err) = err.downcast_ref::<norte_proto::Error>() {
+            return Some(proto_err.clone());
+        }
+        if let Some(io_err) = err.downcast_ref::<std::io::Error>()
+            && let Some(inner) = io_err.get_ref()
+            && let Some(proto_err) = inner.downcast_ref::<norte_proto::Error>()
+        {
+            return Some(proto_err.clone());
+        }
+        current = err.source();
+    }
+    None
 }
 
 #[cfg(test)]
