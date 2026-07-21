@@ -105,6 +105,40 @@ struct Fill {
     rx: tokio::sync::mpsc::Receiver<FillMsg>,
 }
 
+/// Sonda one-shot de stat on-focus (#52): hidrata size/mtime de la entrada
+/// seleccionada cuando el listado lazy los dejó en None. A lo sumo UNA en
+/// vuelo; dedup por `(pane, path)` (un stat fallido no se reintenta hasta
+/// cambiar la selección — sin martillear un provider roto). Acotada con
+/// timeout (`STAT_PROBE_TIMEOUT`): un provider colgado no bloquea la sonda
+/// para siempre.
+struct StatProbe {
+    pane: usize,
+    path: VPath,
+    rx: tokio::sync::oneshot::Receiver<Option<Entry>>,
+}
+
+/// Tope del stat de la sonda on-focus (#52, MINOR-1): un provider remoto
+/// colgado no debe dejar la sonda en vuelo indefinidamente — vencido el
+/// plazo se trata como fallo (entrada se queda en `None`, no se reintenta
+/// hasta cambiar la selección).
+const STAT_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Lanza la sonda de `StatProbe`: clona el `Backend` (barato, Arc interno) y
+/// el path para que la task no retenga el préstamo del run loop.
+fn spawn_stat_probe(backend: &Backend, pane: usize, path: VPath) -> StatProbe {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let b = backend.clone();
+    let p = path.clone();
+    tokio::spawn(async move {
+        let res = tokio::time::timeout(STAT_PROBE_TIMEOUT, b.stat(&p))
+            .await
+            .ok()
+            .and_then(Result::ok);
+        let _ = tx.send(res);
+    });
+    StatProbe { pane, path, rx }
+}
+
 /// Desenlace de un `cd`, para que el run loop actualice el relleno vivo.
 enum Cd {
     /// El pane se reemplazó y su RESTO se rellena en background.
@@ -131,10 +165,16 @@ enum Cd {
 /// listado viejo sobre el nuevo); un FALLO o un cd ABANDONADO no tocan el pane
 /// —sigue en su listado anterior, cuyo relleno continúa siendo válido— así que
 /// no tocan el fill (#78).
-fn apply_cd(fill: &mut Option<Fill>, outcome: Cd) {
+fn apply_cd(fill: &mut Option<Fill>, last_probed: &mut Option<(usize, VPath)>, outcome: Cd) {
     match outcome {
-        Cd::Filling(f) => *fill = Some(f),
+        Cd::Filling(f) => {
+            // Listado nuevo (lazy): la dedup de la sonda #52 caduca — la
+            // misma entrada re-enfocada debe poder re-hidratarse.
+            *last_probed = None;
+            *fill = Some(f);
+        }
         Cd::Replaced(pane) => {
+            *last_probed = None;
             if fill.as_ref().is_some_and(|f| f.pane == pane) {
                 *fill = None;
             }
@@ -425,6 +465,12 @@ async fn run(
     let mut lua_host = load_lua(app, &layers).await;
     let mut lua_run: Option<(CommandRun, CancellationToken)> = None;
     let mut lua_queue: VecDeque<String> = VecDeque::new();
+    // Sonda de stat on-focus (#52, listado lazy): a lo sumo una en vuelo,
+    // dedup por (pane, path) — dos panes sobre el MISMO dir deben hidratar
+    // cada uno la suya (no reintenta un stat fallido hasta cambiar
+    // selección).
+    let mut stat_probe: Option<StatProbe> = None;
+    let mut last_probed: Option<(usize, VPath)> = None;
     loop {
         // Barra Lua en cada vuelta, ANTES del draw (cacheada en el host).
         refresh_lua_status(app, lua_host.as_ref());
@@ -434,6 +480,15 @@ async fn run(
         if app.quit {
             return Ok(());
         }
+        // #52: listado lazy — la entrada enfocada sin size se hidrata con una
+        // sonda one-shot (máx. una en vuelo; dedup por (pane, path)).
+        if stat_probe.is_none()
+            && let Some((pane_idx, path)) = app.focused_needs_stat()
+            && last_probed.as_ref() != Some(&(pane_idx, path.clone()))
+        {
+            last_probed = Some((pane_idx, path.clone()));
+            stat_probe = Some(spawn_stat_probe(backend, pane_idx, path));
+        }
         tokio::select! {
             _ = tick.tick() => {
                 // Un refresh de panes (mutación terminada) reescribe AMBOS
@@ -442,6 +497,10 @@ async fn run(
                 // rust-reviewer).
                 if on_tick(app, backend, &mut events).await {
                     fill = None;
+                    // Un refresh re-lazifica las entries (nuevo listado): la
+                    // dedup previa quedaría bloqueando un re-probe legítimo
+                    // de la MISMA selección (MAJOR-1).
+                    last_probed = None;
                     // Un refresh de panes (refresh_listing) apaga el modo
                     // virtual del pane de búsqueda: suelta el run (su drenador
                     // alimentaría un listado real) y cancela si sigue vivo.
@@ -491,6 +550,21 @@ async fn run(
                     "status-connection-degraded",
                     &[("scheme", d.scheme.as_str()), ("host", d.host.as_str())],
                 ));
+            }
+            res = async {
+                match &mut stat_probe {
+                    Some(pr) => (&mut pr.rx).await.ok().flatten(),
+                    None => std::future::pending().await,
+                }
+            } => {
+                // Sonda de stat on-focus (#52): se limpia SIEMPRE (haya dado
+                // `Some` o el stat fallara/canal se cerrara) — la dedup por
+                // `last_probed` evita reintentar hasta cambiar la selección.
+                if let Some(pr) = stat_probe.take()
+                    && let Some(entry) = res
+                {
+                    app.panes[pr.pane].hydrate(&pr.path, entry.size, entry.mtime_ms);
+                }
             }
             msg = async {
                 match &mut fill {
@@ -602,7 +676,7 @@ async fn run(
                         let outcome =
                             on_nav_popup_key(app, backend, &mut events, key.modifiers, key.code)
                                 .await;
-                        apply_cd(&mut fill, outcome);
+                        apply_cd(&mut fill, &mut last_probed, outcome);
                     } else if app.search_dialog.is_some() {
                         // Diálogo Alt+F7 (liveSearch T6): captura imprimibles
                         // como los demás overlays; Enter con criterio lanza la
@@ -639,7 +713,7 @@ async fn run(
                         // El modal TOFU (#45) puede NAVEGAR al confiar: su Cd
                         // se aplica igual que el de un comando.
                         let outcome = on_dialog_key(app, backend, &mut events, key.code).await;
-                        apply_cd(&mut fill, outcome);
+                        apply_cd(&mut fill, &mut last_probed, outcome);
                     } else {
                         // Esc con un comando Lua en vuelo (BROWSE: sin modal
                         // ni overlay, y NO en el viewer): pide cancelación
@@ -676,6 +750,7 @@ async fn run(
                                         backend,
                                         &mut events,
                                         &mut fill,
+                                        &mut last_probed,
                                         &mut search_run,
                                     )
                                     .await;
@@ -689,6 +764,7 @@ async fn run(
                                         backend,
                                         &mut events,
                                         &mut fill,
+                                        &mut last_probed,
                                         &mut search_run,
                                     )
                                     .await;
@@ -760,7 +836,7 @@ async fn run(
                                             "nav.enter",
                                         )
                                         .await;
-                                        apply_cd(&mut fill, outcome);
+                                        apply_cd(&mut fill, &mut last_probed, outcome);
                                     }
                                     continue;
                                 }
@@ -805,7 +881,7 @@ async fn run(
                                         app, backend, &mut events, help_lines, quick_mode, &cmd,
                                     )
                                     .await;
-                                    apply_cd(&mut fill, outcome);
+                                    apply_cd(&mut fill, &mut last_probed, outcome);
                                     // Un cd (nav.parent…) apagó el modo virtual del
                                     // pane de búsqueda: suelta el run y cancela.
                                     reap_search_run(app, &mut search_run);
@@ -2011,6 +2087,7 @@ async fn on_search_escape(
     backend: &Backend,
     events: &mut EventStream,
     fill: &mut Option<Fill>,
+    last_probed: &mut Option<(usize, VPath)>,
     search_run: &mut Option<SearchRun>,
 ) {
     let Some(s) = search_run.as_ref() else {
@@ -2023,7 +2100,7 @@ async fn on_search_escape(
     let prev = s.prev_dir.clone();
     *search_run = None;
     let outcome = cd(app, backend, events, prev).await;
-    apply_cd(fill, outcome);
+    apply_cd(fill, last_probed, outcome);
 }
 
 /// Enter sobre un hit del pane virtual (liveSearch T6): cd al PADRE del hit y
@@ -2034,6 +2111,7 @@ async fn on_search_enter(
     backend: &Backend,
     events: &mut EventStream,
     fill: &mut Option<Fill>,
+    last_probed: &mut Option<(usize, VPath)>,
     search_run: &mut Option<SearchRun>,
 ) {
     let Some(hit) = app.focused().selected().map(|e| e.path.clone()) else {
@@ -2050,7 +2128,7 @@ async fn on_search_enter(
     *search_run = None;
     let pane = app.focus();
     let outcome = cd(app, backend, events, parent).await;
-    apply_cd(fill, outcome);
+    apply_cd(fill, last_probed, outcome);
     // Re-ancla el cursor sobre el hit por path (el cd resetea a 0); si cayó
     // en una página aún no drenada, el cursor se queda arriba (v1).
     if let Some(i) = app.panes[pane].entries().iter().position(|e| e.path == hit) {
@@ -2598,7 +2676,8 @@ mod apply_cd_tests {
     #[test]
     fn replaced_suelta_el_fill_del_pane() {
         let mut f = Some(fill(0));
-        apply_cd(&mut f, Cd::Replaced(0));
+        let mut lp = None;
+        apply_cd(&mut f, &mut lp, Cd::Replaced(0));
         assert!(f.is_none(), "el fill del listado viejo se suelta");
     }
 
@@ -2606,7 +2685,8 @@ mod apply_cd_tests {
     #[test]
     fn replaced_de_otro_pane_no_toca() {
         let mut f = Some(fill(0));
-        apply_cd(&mut f, Cd::Replaced(1));
+        let mut lp = None;
+        apply_cd(&mut f, &mut lp, Cd::Replaced(1));
         assert!(f.is_some(), "el fill del pane 0 sobrevive");
     }
 
@@ -2615,7 +2695,8 @@ mod apply_cd_tests {
     #[test]
     fn failed_conserva_el_fill() {
         let mut f = Some(fill(0));
-        apply_cd(&mut f, Cd::Failed(Error::NotFound));
+        let mut lp = None;
+        apply_cd(&mut f, &mut lp, Cd::Failed(Error::NotFound));
         assert!(
             f.is_some(),
             "el fill del listado anterior sigue vivo tras un cd fallido"
@@ -2626,7 +2707,8 @@ mod apply_cd_tests {
     #[test]
     fn cancelled_conserva_el_fill() {
         let mut f = Some(fill(0));
-        apply_cd(&mut f, Cd::Cancelled);
+        let mut lp = None;
+        apply_cd(&mut f, &mut lp, Cd::Cancelled);
         assert!(f.is_some());
     }
 }

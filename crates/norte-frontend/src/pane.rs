@@ -357,6 +357,16 @@ impl PaneState {
             q.refresh(&self.entries, quick_prev.as_ref());
         }
     }
+
+    /// Hidrata size/mtime de la entrada `path` (stat on-demand, #52). No-op si
+    /// la entrada ya no está (un refresh la pisó). No reordena: size/mtime no
+    /// participan en el sort.
+    pub fn hydrate(&mut self, path: &VPath, size: Option<u64>, mtime_ms: Option<i64>) {
+        if let Some(e) = self.entries.iter_mut().find(|e| &e.path == path) {
+            e.size = e.size.or(size);
+            e.mtime_ms = e.mtime_ms.or(mtime_ms);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -735,6 +745,61 @@ mod tests {
         ]);
         assert_eq!(p.cursor(), 1, "clamp a la última entrada del listado nuevo");
         assert_eq!(p.entries().len(), 2);
+    }
+
+    /// #52: hydrate por path rellena size/mtime de la entrada viva; un path
+    /// desconocido es no-op; el orden no cambia (size/mtime no ordenan).
+    #[test]
+    fn hydrate_rellena_sin_reordenar_y_es_noop_si_no_esta() {
+        let mut entries = vec![
+            e("mem:///a", EntryKind::File),
+            e("mem:///b", EntryKind::File),
+            e("mem:///c", EntryKind::File),
+        ];
+        entries[1].size = Some(999); // "b" ya venía hidratada
+        crate::sort_entries(&mut entries);
+        let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), entries);
+
+        p.hydrate(&VPath::parse("mem:///a").unwrap(), Some(5), Some(1000));
+        p.hydrate(&VPath::parse("mem:///b").unwrap(), Some(1), Some(2)); // or-semantics: no pisa
+        p.hydrate(&VPath::parse("mem:///no-existe").unwrap(), Some(7), Some(7)); // no-op
+
+        let orden: Vec<_> = p
+            .entries()
+            .iter()
+            .map(|e| e.path.file_name().unwrap().as_bytes().to_vec())
+            .collect();
+        assert_eq!(
+            orden,
+            vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()],
+            "hydrate no reordena"
+        );
+
+        let a = p
+            .entries()
+            .iter()
+            .find(|e| e.path == VPath::parse("mem:///a").unwrap())
+            .unwrap();
+        assert_eq!(a.size, Some(5));
+        assert_eq!(a.mtime_ms, Some(1000));
+
+        let b = p
+            .entries()
+            .iter()
+            .find(|e| e.path == VPath::parse("mem:///b").unwrap())
+            .unwrap();
+        assert_eq!(
+            b.size,
+            Some(999),
+            "or-semantics: el valor previo se conserva"
+        );
+
+        let c = p
+            .entries()
+            .iter()
+            .find(|e| e.path == VPath::parse("mem:///c").unwrap())
+            .unwrap();
+        assert_eq!(c.size, None, "sin hydrate para c, sigue None");
     }
 
     /// `refresh_quick` re-aplica el filtro sin tocar entries ni cursor real.

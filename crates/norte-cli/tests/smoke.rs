@@ -40,6 +40,39 @@ fn ls_json_lists_entries() {
     );
 }
 
+/// #52: el listado local es lazy (`size`/`mtime_ms` en `None`); `ls`
+/// hidrata con un stat serial antes de imprimir — MAJOR-2, restaura el
+/// output pre-#52. Cubre --json (campo no-null) y texto (columna no vacía).
+#[test]
+fn ls_hidrata_size_lazy() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("uno.txt"), b"contenido").unwrap();
+
+    let json_out = norte()
+        .arg("ls")
+        .arg(dir.path())
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(json_out.status.success());
+    let parsed: serde_json::Value = serde_json::from_slice(&json_out.stdout).expect("JSON válido");
+    let entries = parsed.as_array().expect("array de entradas");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0]["size"].as_u64(),
+        Some(9),
+        "size hidratado, no null: {entries:?}"
+    );
+
+    let text_out = norte().arg("ls").arg(dir.path()).output().unwrap();
+    assert!(text_out.status.success());
+    let stdout = String::from_utf8_lossy(&text_out.stdout);
+    let line = stdout.lines().next().expect("una línea de salida");
+    let cols: Vec<&str> = line.split('\t').collect();
+    assert_eq!(cols.first(), Some(&"-"), "marker de File");
+    assert_eq!(cols.get(1), Some(&"9"), "columna size no vacía: {line}");
+}
+
 #[test]
 fn ls_missing_dir_fails() {
     let dir = tempfile::tempdir().unwrap();

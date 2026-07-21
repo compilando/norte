@@ -6,7 +6,7 @@
 //! clave ESTABLE de [`error_key`].
 
 use norte_i18n::{t, ta};
-use norte_proto::{Entry, Error, VPath};
+use norte_proto::{Entry, EntryKind, Error, VPath};
 
 /// Un panel: directorio actual y sus entradas YA ordenadas.
 ///
@@ -248,6 +248,13 @@ impl Pane {
     /// path. La mecánica pura vive en [`norte_frontend::PaneState::extend`].
     pub fn extend_listing(&mut self, batch: Vec<Entry>) {
         self.state.extend(batch);
+    }
+
+    /// Hidrata size/mtime de la entrada `path` con el resultado de una sonda
+    /// de stat on-focus (#52, listado lazy). No reordena; no-op si la entrada
+    /// ya no está. Delegado puro a [`norte_frontend::PaneState::hydrate`].
+    pub fn hydrate(&mut self, path: &VPath, size: Option<u64>, mtime_ms: Option<i64>) {
+        self.state.hydrate(path, size, mtime_ms);
     }
 
     /// El drenador terminó: el listado ya está completo. El quick search se
@@ -692,6 +699,14 @@ impl App {
     #[must_use]
     pub fn focused(&self) -> &Pane {
         &self.panes[self.focus]
+    }
+
+    /// (índice, path) de la entrada File enfocada sin `size`: candidata a la
+    /// sonda de stat on-focus (#52, listado lazy).
+    #[must_use]
+    pub fn focused_needs_stat(&self) -> Option<(usize, VPath)> {
+        let e = self.focused().selected()?;
+        (e.kind == EntryKind::File && e.size.is_none()).then(|| (self.focus(), e.path.clone()))
     }
 
     /// El pane con foco, mutable.
@@ -1349,6 +1364,34 @@ mod tests {
         p.set_loading(true);
         p.finish_listing();
         assert!(!p.loading());
+    }
+
+    /// #52: `focused_needs_stat` señala la entrada File enfocada SIN `size`
+    /// (candidata a la sonda lazy). Ya hidratada o siendo un Dir, no aplica.
+    #[test]
+    fn focused_needs_stat_solo_file_lazy() {
+        let mut lazy = file("a.txt");
+        lazy.size = None;
+        let mut app = App::new(
+            Pane::new(root(), vec![lazy.clone()]),
+            Pane::new(root(), vec![]),
+        );
+        assert_eq!(
+            app.focused_needs_stat(),
+            Some((0, lazy.path.clone())),
+            "File sin size es candidato"
+        );
+
+        // Ya hidratada: deja de ser candidata.
+        app.panes[0].hydrate(&lazy.path, Some(5), None);
+        assert!(app.focused_needs_stat().is_none(), "ya tiene size");
+
+        // Un Dir jamás se sondea, aunque venga sin size.
+        let mut dir_lazy = file("b");
+        dir_lazy.kind = EntryKind::Dir;
+        dir_lazy.size = None;
+        app.panes[0] = Pane::new(root(), vec![dir_lazy]);
+        assert!(app.focused_needs_stat().is_none(), "un Dir no se sondea");
     }
 
     fn vp(wire: &str) -> VPath {

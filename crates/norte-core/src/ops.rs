@@ -637,7 +637,8 @@ pub(crate) async fn copy_task(
             if opts.symlinks == SymlinkPolicy::Follow
                 && probe_symlink_target(&*src, &from, &ctx.cancel).await? == TargetKind::Dir
             {
-                let plan = walk_following(&*src, &from, true, &ctx.cancel).await?;
+                let mut plan = walk_following(&*src, &from, true, &ctx.cancel).await?;
+                hydrate_plan(&*src, &mut plan, ctx).await?;
                 return copy_tree(&src, &dst, &from, &to, &plan, opts, &observer, ctx)
                     .await
                     .map(|_skipped| ());
@@ -651,13 +652,51 @@ pub(crate) async fn copy_task(
             Ok(())
         }
         EntryKind::Dir => {
-            let plan = plan_for(&*src, &from, opts, &ctx.cancel).await?;
+            let mut plan = plan_for(&*src, &from, opts, &ctx.cancel).await?;
+            hydrate_plan(&*src, &mut plan, ctx).await?;
             copy_tree(&src, &dst, &from, &to, &plan, opts, &observer, ctx)
                 .await
                 .map(|_skipped| ())
         }
         EntryKind::Other => Err(Error::Unsupported),
     }
+}
+
+/// #52: el listado local es lazy (`size`/`mtime_ms` en `None`). El progreso
+/// (`bytes_total`), `CollisionPolicy::Newer` y la conservación del mtime del
+/// symlink necesitan los metadatos ANTES de copiar: stat-ea SOLO las hojas a
+/// las que les falte algo (un `Symlink` nunca tiene `size` — solo le falta
+/// `mtime_ms`, así que no se re-statea por eso). Un stat fallido deja `None`:
+/// la barra queda subestimada y, bajo `CollisionPolicy::Newer`, la colisión
+/// degrada a `Conflict{Exists}` (sin mtime comparable no se adivina, ADR
+/// 0005) — fail-closed, nunca pérdida de datos.
+async fn hydrate_plan(
+    src: &dyn Provider,
+    plan: &mut [PlanEntry],
+    ctx: &TaskCtx,
+) -> Result<(), Error> {
+    for pe in plan.iter_mut() {
+        if ctx.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let e = &mut pe.entry;
+        let needs = match e.kind {
+            EntryKind::File => e.size.is_none() || e.mtime_ms.is_none(),
+            EntryKind::Symlink => e.mtime_ms.is_none(),
+            _ => false,
+        };
+        if needs {
+            // Progreso solo cuando REALMENTE hay stat de por medio: en un
+            // provider no-lazy `needs` es casi siempre falso y no queremos
+            // 100k updates de la barra que no aportan nada (MINOR-5).
+            ctx.progress.update(|p| p.current = Some(e.path.clone()));
+            if let Ok(st) = src.stat(&e.path).await {
+                e.size = e.size.or(st.size);
+                e.mtime_ms = e.mtime_ms.or(st.mtime_ms);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Copia el árbol `from` → `to` según un plan YA walkeado (el walk es del
@@ -1272,7 +1311,8 @@ async fn move_by_copy(
             ctx.progress.update(|p| p.entries_done = 2);
             Ok(())
         }
-        Some(plan) => {
+        Some(mut plan) => {
+            hydrate_plan(&*src, &mut plan, ctx).await?;
             let skipped = copy_tree(&src, &dst, &from, &to, &plan, opts, &observer, ctx).await?;
             // Fase delete: el total crece con los pasos de borrado (la barra
             // sigue monótona; copy_tree ya contó los suyos).
@@ -1603,8 +1643,11 @@ async fn walk_following(
                                 via_link: true,
                             });
                             // Dir SINTÉTICO: la copia crea un dir real en
-                            // el destino; el mtime del link se conserva
-                            // como referencia.
+                            // el destino. El mtime de referencia viene del
+                            // `entry` del link tal cual lo dio el listado —
+                            // con un listado local lazy (#52) hoy es casi
+                            // siempre `None` (`hydrate_plan` no toca Dirs);
+                            // ningún consumidor lo lee todavía.
                             out.push(PlanEntry {
                                 entry: Entry {
                                     path: entry.path,

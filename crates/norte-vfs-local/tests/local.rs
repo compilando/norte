@@ -241,6 +241,92 @@ async fn mtime_is_recent_and_positive() {
     assert!(mtime < 4_102_444_800_000, "mtime sospechoso: {mtime}");
 }
 
+/// #52: el listado no statea (kind por `d_type`, size/mtime None); `stat()`
+/// sigue trayendo los metadatos completos on-demand.
+#[tokio::test]
+async fn list_es_lazy_y_stat_hidrata() {
+    let (p, root, _) = provider();
+    let f = child(&root, b"cinco");
+    let mut sink = p.write(&f).await.unwrap();
+    sink.write(Bytes::from_static(b"12345")).await.unwrap();
+    sink.commit().await.unwrap();
+
+    let entries: Vec<norte_proto::Entry> = p
+        .list(&root)
+        .await
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+        .await;
+    let e = entries
+        .iter()
+        .find(|e| e.path.file_name().unwrap().as_bytes() == b"cinco")
+        .expect("listado");
+    assert_eq!(e.kind, norte_proto::EntryKind::File);
+    assert!(
+        e.size.is_none() && e.mtime_ms.is_none(),
+        "listado lazy (#52)"
+    );
+
+    let st = p.stat(&f).await.expect("stat");
+    assert_eq!(st.size, Some(5));
+    assert!(st.mtime_ms.is_some());
+}
+
+/// Encoding B2: round-trip corpus hostil list→stat. La hidratación lazy
+/// (#52) statea con los BYTES que devolvió el `list`, no con los que se
+/// pidieron al crear el archivo — en un FS que normaliza (APFS/NFD) esos
+/// dos difieren y un stat con los bytes "originales" podría fallar o, peor,
+/// acertar por casualidad sin probar nada. Por cada nombre del corpus: si el
+/// OS lo acepta, listar el dir y statear TODOS los paths que devolvió,
+/// esperando `size == Some(1)`.
+#[tokio::test]
+async fn list_lazy_stat_hidrata_nombres_del_corpus() {
+    for name in norte_testkit::corpus::hostile_names() {
+        let (p, root, _guard) = provider();
+        let f = child(&root, &name.bytes);
+        // Rechazo limpio del OS al nombre: skip (no es lo que este test
+        // prueba — ver prop_filename_bytes_survive_fs para esa cobertura).
+        let Ok(mut sink) = p.write(&f).await else {
+            continue;
+        };
+        sink.write(Bytes::from_static(b"1")).await.expect("chunk");
+        match sink.commit().await {
+            Ok(()) => {}
+            Err(norte_proto::Error::InvalidPath | norte_proto::Error::Conflict { .. }) => {
+                continue;
+            }
+            Err(e) => panic!("{}: commit inesperado: {e:?}", name.id),
+        }
+
+        let listed: Vec<norte_proto::VPath> = p
+            .list(&root)
+            .await
+            .unwrap_or_else(|e| panic!("{}: list: {e:?}", name.id))
+            .map(|r| r.unwrap_or_else(|e| panic!("{}: entrada: {e:?}", name.id)))
+            .map(|e| e.path)
+            .collect()
+            .await;
+        assert!(
+            !listed.is_empty(),
+            "{}: el listado debe ver el archivo recién escrito",
+            name.id
+        );
+        for path in &listed {
+            let st = p
+                .stat(path)
+                .await
+                .unwrap_or_else(|e| panic!("{}: stat de {path:?}: {e:?}", name.id));
+            assert_eq!(
+                st.size,
+                Some(1),
+                "{}: stat de un path LISTADO debe hidratar el tamaño real",
+                name.id
+            );
+        }
+    }
+}
+
 /// Case-rename (`caja` → `CAJA`) en FS case-insensitive: el "destino" es el
 /// propio origen con otra caja y debe proceder (issue #2: en Windows M0
 /// devolvía `Conflict` por no poder comprobar la identidad real del archivo).
