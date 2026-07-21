@@ -28,6 +28,14 @@ members = [
 # jamás debe contaminar el gate del core (regla 7: solo habla norte-proto).
 exclude = ["crates/norte-plugin-host/examples-wasm", "crates/norte-gui"]
 
+# Dev/test: debuginfo SOLO de tablas de líneas (backtraces + nº de línea, que es
+# lo que este proyecto depura vía `tracing`; no gdb con inspección de variables).
+# Recorta el debuginfo ~5-10× → target de cientos de G a decenas, y codegen más
+# rápido. `profile.test` hereda de `dev`. Deps incluidas (el árbol wasmtime es el
+# grueso). Si alguna vez hace falta depurar con gdb, subir `debug` puntualmente.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 # Binario de distribución: LTO fino + una unidad de codegen (mejor optimización)
 # + strip de símbolos. Recortan ~2-3× el tamaño sobre el release por defecto.

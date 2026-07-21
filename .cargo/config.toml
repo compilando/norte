@@ -1,0 +1,6 @@
+# Linker lld para el target host (mucho más rápido linkando los muchos binarios
+# de test del workspace que el `ld` por defecto). Solo el target de Linux x86_64:
+# el target wasm32-wasip2 de los guests de plugin usa su propio linker y NO debe
+# recibir este flag. `ld.lld` viene con el toolchain LLVM del sistema.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
