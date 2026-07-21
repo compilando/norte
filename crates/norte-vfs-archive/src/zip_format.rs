@@ -103,7 +103,7 @@ pub(crate) fn build_index<R: Read + Seek>(
         // se sabe sin pagar el índice, y precisamente se rehúsa a pagarlo:
         // límite local, no un veredicto de corrupción.
         return Err(Error::LimitExceeded {
-            limit: "entries".into(),
+            limit: Error::LIMIT_ENTRIES.into(),
         });
     }
     let mut archive = zip::ZipArchive::new(reader).map_err(|e| corrupt(&e))?;
@@ -115,7 +115,7 @@ pub(crate) fn build_index<R: Read + Seek>(
             "zip supera max_entries"
         );
         return Err(Error::LimitExceeded {
-            limit: "entries".into(),
+            limit: Error::LIMIT_ENTRIES.into(),
         });
     }
     let mut index = ArchiveIndex::new(generation);
@@ -172,7 +172,11 @@ pub(crate) fn build_index<R: Read + Seek>(
                 max = limits.max_entries,
                 "zip supera el presupuesto de omitidas"
             );
-            return Err(Error::Corrupt);
+            // #95.3 (MAJOR-1 del review): mismo criterio que tar/targz — el
+            // presupuesto de omitidas es un límite LOCAL, no corrupción.
+            return Err(Error::LimitExceeded {
+                limit: Error::LIMIT_ENTRIES.into(),
+            });
         }
     }
     if index.skipped > 0 {

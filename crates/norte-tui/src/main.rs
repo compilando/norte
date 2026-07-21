@@ -351,7 +351,16 @@ async fn make_backend(
         if cfg.archive_max_entries.is_some() || cfg.archive_max_decompressed_bytes.is_some() {
             let mut limits = norte_core::ArchiveLimits::default();
             if let Some(n) = cfg.archive_max_entries {
-                limits.max_entries = usize::try_from(n).unwrap_or(usize::MAX);
+                // Saturación HACIA ARRIBA (solo posible en 32-bit con un
+                // valor > u32::MAX): jamás recorta un límite a un valor
+                // pequeño por wrap — pero que no sea silenciosa.
+                limits.max_entries = usize::try_from(n).unwrap_or_else(|_| {
+                    // Pre-TUI (aún sin raw mode): stderr es visible.
+                    eprintln!(
+                        "norte: [archive] max_entries={n} satura a usize::MAX en esta plataforma"
+                    );
+                    usize::MAX
+                });
             }
             if let Some(b) = cfg.archive_max_decompressed_bytes {
                 limits.max_decompressed_bytes = b;

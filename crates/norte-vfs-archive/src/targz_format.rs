@@ -55,7 +55,7 @@ impl<R: Read> Read for CountingReader<R> {
             // #95.3: bomba O backup legítimo enorme — límite local honesto.
             // `inner_proto_error` lo desenvuelve de la cadena io::Error.
             return Err(std::io::Error::other(Error::LimitExceeded {
-                limit: "decompressed-bytes".into(),
+                limit: Error::LIMIT_DECOMPRESSED_BYTES.into(),
             }));
         }
         Ok(n)
@@ -132,7 +132,7 @@ pub(crate) fn build_index_gz<R: Read>(
                 "tar.gz supera el presupuesto de omitidas"
             );
             return Err(Error::LimitExceeded {
-                limit: "entries".into(),
+                limit: Error::LIMIT_ENTRIES.into(),
             });
         }
     }
@@ -347,7 +347,7 @@ mod tests {
         assert_eq!(
             got.map(|_| ()).unwrap_err(),
             Error::LimitExceeded {
-                limit: "decompressed-bytes".into()
+                limit: Error::LIMIT_DECOMPRESSED_BYTES.into()
             }
         );
     }

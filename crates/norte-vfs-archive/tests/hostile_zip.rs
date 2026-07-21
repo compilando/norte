@@ -418,3 +418,24 @@ async fn zip_deflate_corto_con_crc_consistente_es_corrupt_no_datos_cortos() {
         }
     }
 }
+
+/// #95.3 (MAJOR-1 del review): el presupuesto de omitidas del zip es un
+/// límite LOCAL — muchas entradas hostiles con `max_entries` apretado deben
+/// fallar `LimitExceeded("entries")`, no `Corrupt` (paridad con tar/targz).
+#[tokio::test]
+async fn zip_presupuesto_de_omitidas_es_limit_exceeded() {
+    let mut smith = ZipSmith::new();
+    for i in 0..5u32 {
+        // Traversal: cada una se OMITE (cuenta en skipped, no en el índice).
+        smith = smith.file(format!("../evil{i}").as_bytes(), b"x");
+    }
+    let limits = Limits {
+        max_entries: 2,
+        ..Limits::default()
+    };
+    let (p, root) = common::zip_provider_with_limits(&smith.build(), limits).await;
+    match p.list(&root).await.map(|_| ()) {
+        Err(Error::LimitExceeded { limit }) if limit == "entries" => {}
+        other => panic!("esperaba LimitExceeded(entries) por omitidas, fue {other:?}"),
+    }
+}

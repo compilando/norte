@@ -154,10 +154,12 @@ pub enum Error {
     LimitExceeded {
         /// QUÉ límite se excedió — vocabulario CERRADO, comparable por
         /// igualdad (nunca el valor numérico, que es configuración local):
-        /// `"entries"` (entradas del índice — o anunciadas por el EOCD — por
-        /// encima de `max_entries`, presupuesto de omitidas incluido),
-        /// `"decompressed-bytes"` (inflado acumulado por encima de
-        /// `max_decompressed_bytes`).
+        /// [`Error::LIMIT_ENTRIES`] (entradas del índice — o anunciadas por
+        /// el EOCD — por encima de `max_entries`, presupuesto de omitidas
+        /// incluido) o [`Error::LIMIT_DECOMPRESSED_BYTES`] (inflado
+        /// acumulado por encima de `max_decompressed_bytes`). Los emisores
+        /// usan las constantes, jamás literales sueltos (fuente única, pin
+        /// en tests).
         limit: String,
     },
     /// Host key SSH DESCONOCIDA en el primer contacto (TOFU — ADR 0015 D). El
@@ -205,4 +207,21 @@ pub enum Error {
     #[error("unknown error category (newer protocol)")]
     #[serde(other)]
     Unknown,
+}
+
+impl Error {
+    /// Vocabulario de [`Error::LimitExceeded`]: entradas del índice (o
+    /// anunciadas por el EOCD) por encima de `max_entries`, presupuesto de
+    /// omitidas incluido. Fuente ÚNICA — los emisores no escriben literales.
+    ///
+    /// ```
+    /// use norte_proto::Error;
+    /// let e = Error::LimitExceeded { limit: Error::LIMIT_ENTRIES.into() };
+    /// assert_eq!(serde_json::to_string(&e).unwrap(),
+    ///            r#"{"kind":"limit_exceeded","limit":"entries"}"#);
+    /// ```
+    pub const LIMIT_ENTRIES: &'static str = "entries";
+    /// Vocabulario de [`Error::LimitExceeded`]: inflado acumulado por encima
+    /// de `max_decompressed_bytes` (gzip bomb o contenedor legítimo enorme).
+    pub const LIMIT_DECOMPRESSED_BYTES: &'static str = "decompressed-bytes";
 }

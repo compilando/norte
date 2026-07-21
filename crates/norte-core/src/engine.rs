@@ -282,6 +282,9 @@ impl Engine {
             // rechaza anidamiento en v1): recursión de profundidad 1.
             let inner = Box::pin(self.provider_for(&aref.outer)).await?;
             tracing::debug!(scheme = %p.scheme(), %key, "componiendo provider de archivo");
+            // expect: envenenado = otro hilo panicó a mitad de escritura —
+            // irrecuperable, misma convención que el resto de locks del
+            // engine (ver `# Panics` de `set_archive_limits`).
             let limits = *self
                 .archive_limits
                 .read()
