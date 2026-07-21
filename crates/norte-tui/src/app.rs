@@ -65,7 +65,9 @@ pub enum SearchState {
 }
 
 impl Pane {
-    /// Pane sobre `dir` con `entries` (ordénalas antes con [`sort_entries`]).
+    /// Pane sobre `dir` con `entries`: #54, ya no hace falta ordenarlas antes
+    /// — [`norte_frontend::PaneState::new`] normaliza internamente (dirs
+    /// primero, NFC, empate por bytes, ver [`sort_entries`]).
     #[must_use]
     pub fn new(dir: VPath, entries: Vec<Entry>) -> Self {
         Self {
@@ -1398,8 +1400,10 @@ mod tests {
         VPath::parse(wire).expect("wire de test")
     }
 
-    /// Pane sobre `mem://` con archivos en el ORDEN dado (sin sort: los
-    /// tests del quick search razonan sobre índices reales conocidos).
+    /// Pane sobre `mem://` con archivos nombrados como se pida: #54, `Pane`
+    /// (vía `PaneState::new`) normaliza el orden internamente (dirs primero,
+    /// NFC, empate por bytes) — los tests del quick search razonan sobre el
+    /// índice real YA ORDENADO, no sobre el orden de llegada de `names`.
     fn pane_con(names: &[&str]) -> Pane {
         Pane::new(root(), names.iter().map(|n| file(n)).collect())
     }
@@ -1437,7 +1441,8 @@ mod tests {
         p.quick_down();
         p.quick_confirm();
         assert!(p.quick().is_none(), "confirmar cierra el quick search");
-        assert_eq!(p.cursor(), 2, "cursor real = índice real de a2");
+        // #54: normalizado, el orden real es [a1, a2, b] — a2 al índice 1.
+        assert_eq!(p.cursor(), 1, "cursor real = índice real de a2");
         assert_eq!(p.selected().unwrap().path, vp("mem:///a2"));
     }
 
@@ -1474,6 +1479,7 @@ mod tests {
     /// primer match y Tab (`quick_next`) al siguiente con wrap.
     #[test]
     fn quick_jump_mueve_el_cursor_real() {
+        // #54: normalizado, el orden real es [ab, ac, zz] — ab y ac casan.
         let mut p = pane_con(&["ab", "zz", "ac"]);
         p.quick_start(crate::nav::Mode::Jump);
         p.quick_char('a');
@@ -1483,7 +1489,7 @@ mod tests {
             "en salto el listado queda intacto"
         );
         p.quick_next();
-        assert_eq!(p.cursor(), 2, "Tab: siguiente match");
+        assert_eq!(p.cursor(), 1, "Tab: siguiente match");
         p.quick_next();
         assert_eq!(p.cursor(), 0, "wrap");
         assert_eq!(p.selected().unwrap().path, vp("mem:///ab"));
