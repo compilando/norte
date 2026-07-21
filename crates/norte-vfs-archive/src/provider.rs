@@ -96,6 +96,10 @@ pub struct ArchiveProvider {
     inner: Arc<dyn Provider>,
     limits: Limits,
     cache: Mutex<IndexCache>,
+    /// Single-flight de construcción de índice (#61): un builder por clave;
+    /// los concurrentes esperan el lock y releen la caché. El map se poda
+    /// cuando el último interesado suelta su Arc.
+    building: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl ArchiveProvider {
@@ -132,6 +136,7 @@ impl ArchiveProvider {
             inner,
             limits,
             cache: Mutex::new(IndexCache::new()),
+            building: Mutex::new(HashMap::new()),
         }
     }
 
@@ -168,6 +173,24 @@ impl ArchiveProvider {
                 return Ok(hit);
             }
         }
+        let build_lock = {
+            let mut building = self.building.lock().expect("building lock sano");
+            Arc::clone(
+                building
+                    .entry(key.clone())
+                    .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+            )
+        };
+        let build_guard = build_lock.lock().await;
+        // Double-check: otro caller pudo construir mientras esperábamos.
+        {
+            let mut cache = self.cache.lock().expect("cache lock sano");
+            if let Some(hit) = cache.get(&key, generation) {
+                drop(build_guard);
+                self.prune_building(&key, &build_lock);
+                return Ok(hit);
+            }
+        }
         let container_len = outer.size.unwrap_or(0);
         let reader = ProviderReader::new(
             tokio::runtime::Handle::current(),
@@ -191,14 +214,24 @@ impl ArchiveProvider {
         })
         .await;
         guard.disarm();
-        let index = joined.map_err(|e| {
-            if e.is_panic() {
-                Error::Internal { panic: true }
-            } else {
-                // Runtime en shutdown: cancelación, no bug (spec §17.7).
-                Error::Cancelled
+        let index = match joined
+            .map_err(|e| {
+                if e.is_panic() {
+                    Error::Internal { panic: true }
+                } else {
+                    // Runtime en shutdown: cancelación, no bug (spec §17.7).
+                    Error::Cancelled
+                }
+            })
+            .and_then(|r| r)
+        {
+            Ok(i) => i,
+            Err(e) => {
+                drop(build_guard);
+                self.prune_building(&key, &build_lock);
+                return Err(e);
             }
-        })??;
+        };
         let index = Arc::new(index);
         // Sin mtime no hay validador: get() lo daría siempre por stale —
         // no gastes un slot LRU en un índice inrecuperable.
@@ -208,7 +241,19 @@ impl ArchiveProvider {
                 .expect("cache lock sano")
                 .put(&key, Arc::clone(&index));
         }
+        drop(build_guard);
+        self.prune_building(&key, &build_lock);
         Ok(index)
+    }
+
+    /// Poda la entrada de `building` si nadie más la retiene (2 = el map + el
+    /// caller). Si un caller muere cancelado con el guard tomado, la entrada
+    /// sobrevive hasta la siguiente poda — acotado por claves activas, no fuga.
+    fn prune_building(&self, key: &str, lock: &Arc<tokio::sync::Mutex<()>>) {
+        let mut building = self.building.lock().expect("building lock sano");
+        if Arc::strong_count(lock) == 2 {
+            building.remove(key);
+        }
     }
 
     fn inner_key(aref: &ArchiveRef) -> InnerPath {
