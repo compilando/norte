@@ -1034,12 +1034,16 @@ async fn handle_fs_list(
     let mut stream = shared.engine.list(&p.path).await.map_err(RpcError::from)?;
     // Omitidas del contenedor (#93), capturado UNA vez al abrir (el índice
     // archive ya está caliente tras el `list`). Un error aquí NO tumba un
-    // listado que ya abrió: degrada a `None` (= desconocido, lo de antes).
+    // listado que ya abrió: degrada a `None` (= desconocido, lo de antes) —
+    // pero con traza (el punto de #93 es no callar listados incompletos).
     let skipped = shared
         .engine
         .list_skipped(&p.path)
         .await
-        .unwrap_or_default();
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "list_skipped falló; omitidas = desconocido");
+            None
+        });
     match drain_page(&mut stream, cap, &mut entries).await {
         Ok(Drained::Done) => to_value(&methods::FsListResult {
             entries,

@@ -36,6 +36,10 @@ fn name_bytes(e: &Entry) -> &[u8] {
 /// Clave de orden PERSISTIBLE de una entry (#54): grupo (dirs primero) +
 /// forma NFC del nombre. El desempate por bytes crudos NO se materializa —
 /// se lee del propio `Entry` al comparar (una alloc menos por entrada).
+/// OJO: `PartialEq`/`Eq` derivados son REPRESENTACIONALES, no semánticos
+/// (#94): un nombre ya-NFC (`nfc: None`) y su gemelo NFD (`nfc: Some(..)`)
+/// tienen la MISMA clave efectiva pero `!=` como structs. Nada compara
+/// `SortKey`s por igualdad para lógica — solo [`cmp_keyed`] define el orden.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SortKey {
     not_dir: bool,
@@ -54,7 +58,20 @@ pub(crate) fn sort_key(e: &Entry) -> SortKey {
 
 /// Comparación total (clave, entry): clave y, en empate, bytes crudos del
 /// nombre — EXACTAMENTE el mismo orden que [`sort_entries`].
+///
+/// INVARIANTE: cada clave DEBE haberse computado de SU entry emparejada
+/// ([`sort_key`]). Desde #94 el emparejamiento es load-bearing para la clave
+/// PRIMARIA (un `None` se resuelve leyendo la entry) — una clave ajena ya no
+/// corrompe solo el desempate, corrompe el orden en silencio.
 pub(crate) fn cmp_keyed(a: (&SortKey, &Entry), b: (&SortKey, &Entry)) -> std::cmp::Ordering {
+    debug_assert!(
+        a.0.not_dir == (a.1.kind != EntryKind::Dir),
+        "clave↔entry desparejadas"
+    );
+    debug_assert!(
+        b.0.not_dir == (b.1.kind != EntryKind::Dir),
+        "clave↔entry desparejadas"
+    );
     let nfc_a = a.0.nfc.as_deref().unwrap_or_else(|| name_bytes(a.1));
     let nfc_b = b.0.nfc.as_deref().unwrap_or_else(|| name_bytes(b.1));
     (a.0.not_dir, nfc_a)
@@ -151,7 +168,16 @@ mod tests {
     /// cuando la forma NFC difiere de los bytes crudos (p.ej. NFD).
     #[test]
     fn sort_key_no_materializa_nfc_en_el_caso_comun() {
-        for w in ["mem:///ascii.txt", "mem:///a%C3%B1o", "mem:///%FF%FE"] {
+        // El caso q+U+0300 es quick-check=Maybe pero SÍ es NFC (no hay
+        // precompuesta): mata al mutante `is_nfc_quick(..) == Yes`, que
+        // materializaría toda marca combinante y regresaría el cero-alloc
+        // en silencio (encoding-auditor m1).
+        for w in [
+            "mem:///ascii.txt",
+            "mem:///a%C3%B1o",
+            "mem:///%FF%FE",
+            "mem:///q%CC%80",
+        ] {
             let k = sort_key(&e(w, EntryKind::File));
             assert_eq!(k.nfc, None, "{w}: nfc==bytes crudos, no debe alocar");
         }
@@ -160,6 +186,14 @@ mod tests {
             nfd.nfc.as_deref(),
             Some("año".as_bytes()),
             "NFD materializa su forma NFC"
+        );
+        // Singleton U+212B (ANGSTROM SIGN) → U+00C5 "Å": NFC difiere sin
+        // ser el caso NFD clásico — debe materializar.
+        let singleton = sort_key(&e("mem:///%E2%84%AB", EntryKind::File));
+        assert_eq!(
+            singleton.nfc.as_deref(),
+            Some("Å".as_bytes()),
+            "singleton materializa su forma NFC"
         );
     }
 

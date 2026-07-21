@@ -9,6 +9,19 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Omitted-entries badge for archives (#93, protocol 0.22.0):** listings of
+  zip/tar/tar.gz containers now report how many entries the index omitted
+  (hostile names, anti-bomb limits) through the new optional
+  `FsListResult.skipped` field. The TUI shows a persistent status-bar badge
+  ("N entries omitted") and `norte ls` prints a warning to stderr — an
+  incomplete listing is never silent.
+
+### Changed
+
+- **Listing sort keys allocate less (#94):** the persisted NFC sort key is
+  only materialised when it differs from the raw name bytes (non-ASCII NFD
+  names); ASCII, already-NFC, and non-UTF-8 names no longer allocate.
+
 - **Themes (MT milestone, ADR 0020):** the TUI now uses the shared
   `norte-theme` crate. It provides semantic roles, true-colour values with
   256- and 16-colour terminal fallbacks, styles by node type and extension, and

@@ -187,8 +187,12 @@ impl Backend {
             Self::Embedded(engine) => {
                 let stream = engine.list(dir).await?;
                 // Best-effort: un fallo aquí no tumba un listado que ya abrió
-                // (mismo contrato que el daemon) — degrada a "desconocido".
-                let skipped = engine.list_skipped(dir).await.unwrap_or_default();
+                // (mismo contrato que el daemon) — degrada a "desconocido",
+                // pero JAMÁS en silencio (el punto de #93 es la señal).
+                let skipped = engine.list_skipped(dir).await.unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "list_skipped falló; omitidas = desconocido");
+                    None
+                });
                 Ok((stream, skipped))
             }
             #[cfg(unix)]

@@ -72,6 +72,13 @@ pub type ByteStream = BoxStream<'static, Result<Bytes, Error>>;
 ///
 /// // Objeto-seguro: el core registra providers así.
 /// let _boxed: Box<dyn Provider> = Box::new(NullProvider);
+///
+/// // Default de `list_skipped` (#93): un backend que lista todo lo que
+/// // existe responde `Ok(None)` — nada que señalizar. `Some(0)` = contenedor
+/// // indexado sin omisiones; `Some(n)` = n entradas invisibles del listado.
+/// let p = VPath::parse("null:///").unwrap();
+/// let skipped = futures::executor::block_on(NullProvider.list_skipped(&p)).unwrap();
+/// assert_eq!(skipped, None);
 /// ```
 #[async_trait]
 pub trait Provider: Send + Sync {
