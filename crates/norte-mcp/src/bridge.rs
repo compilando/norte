@@ -520,7 +520,7 @@ fn tool_defs() -> Value {
     json!([
         {
             "name": "list_dir",
-            "description": "List a directory managed by norte. Returns entries (path/kind/size/mtime_ms) and next_cursor when paginated.",
+            "description": "List a directory managed by norte. Returns entries (path/kind/size/mtime_ms) and next_cursor when paginated. size/mtime_ms may be null (lazy listing); use stat for a specific path.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

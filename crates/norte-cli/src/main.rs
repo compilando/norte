@@ -1134,13 +1134,29 @@ async fn connect_cmd(backend: &Backend, target: &str, daemon: bool) -> anyhow::R
 
 async fn ls(backend: &Backend, path: &std::path::Path, json: bool) -> anyhow::Result<ExitCode> {
     let target = vpath(path)?;
-    let entries: Vec<Entry> = match backend.list(&target).await {
+    let mut entries: Vec<Entry> = match backend.list(&target).await {
         // Primer contacto TOFU: confirmar y reintentar UNA vez.
         Err(e) if tofu_confirm(backend, &e).await? => backend.list(&target).await,
         other => other,
     }
     .map_err(|e| anyhow::anyhow!("{e}"))
     .context(norte_i18n::t("cli-list-failed"))?;
+    // #52: el listado local es lazy (size/mtime_ms en None). `ls` es un
+    // comando de UNA sola pasada (no hay foco que hidrate luego, como en la
+    // TUI): se hidrata aquí, serial, ANTES de imprimir — restaura el output
+    // pre-#52 (texto y --json) al costo pre-#52 (un stat por File) — solo para
+    // Files: Dir/Symlink emiten null en --json (su mtime no es contrato de
+    // `ls`). Un stat fallido deja `None` (columna/campo vacíos): jamás
+    // aborta el listado.
+    for e in &mut entries {
+        if e.kind == EntryKind::File
+            && (e.size.is_none() || e.mtime_ms.is_none())
+            && let Ok(st) = backend.stat(&e.path).await
+        {
+            e.size = e.size.or(st.size);
+            e.mtime_ms = e.mtime_ms.or(st.mtime_ms);
+        }
+    }
     if json {
         // Forma wire (lossless); el consumidor decodifica con el codec.
         serde_json::to_writer_pretty(std::io::stdout().lock(), &entries)
