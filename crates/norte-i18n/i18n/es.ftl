@@ -145,6 +145,7 @@ cli-connect-daemon-unsupported = `norte connect` todavía no funciona con --daem
 cli-invalid-url = URL remota inválida: { $url }
 cli-confirm-read = lectura de confirmación
 cli-inline-password = la URL no debe llevar el password inline (user:pass@…); el secreto va por el keyring/env/secrets.age
+cli-connection-degraded = ⚠ { $scheme }://{ $host }: sesión SIN cifrar (el servidor rechazó AUTH TLS, tls="allow"). Datos y credenciales viajan en claro.
 
 # --- Ayuda (F1) — construida del keymap efectivo ---
 help-title = Ayuda — teclas activas

@@ -145,6 +145,7 @@ cli-connect-daemon-unsupported = `norte connect` does not work with --daemon yet
 cli-invalid-url = invalid remote URL: { $url }
 cli-confirm-read = confirmation read
 cli-inline-password = the URL must not carry an inline password (user:pass@…); secrets go through the keyring/env/secrets.age
+cli-connection-degraded = ⚠ { $scheme }://{ $host }: UNENCRYPTED session (server rejected AUTH TLS, tls="allow"). Data and credentials travel in cleartext.
 
 # --- Help (F1) — built from the effective keymap ---
 help-title = Help — active keys

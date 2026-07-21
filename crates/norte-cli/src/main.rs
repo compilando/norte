@@ -309,10 +309,10 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         norte_core::connect::config_dir(),
     )));
 
-    let backend = make_backend(engine, cli.daemon, cli.socket).await?;
+    let mut backend = make_backend(engine, cli.daemon, cli.socket).await?;
     match cli.cmd {
         Cmd::Ls { path, json } => ls(&backend, &path, json).await,
-        Cmd::Connect { target } => connect_cmd(&backend, &target, cli.daemon).await,
+        Cmd::Connect { target } => connect_cmd(&mut backend, &target, cli.daemon).await,
         Cmd::Cp {
             src,
             dst,
@@ -800,6 +800,9 @@ async fn make_backend(
     socket: Option<PathBuf>,
 ) -> anyhow::Result<Backend> {
     if !daemon {
+        // #44: la CLI embebida ES quien conecta (no hay daemon que medie); un
+        // observer directo imprime los avisos de degradación por stderr.
+        engine.set_connection_observer(Arc::new(CliStderrObserver));
         return Ok(Backend::Embedded(Arc::new(engine)));
     }
     #[cfg(not(unix))]
@@ -1063,10 +1066,29 @@ async fn tofu_confirm(backend: &Backend, err: &norte_proto::Error) -> anyhow::Re
     Ok(true)
 }
 
+/// Observer de avisos de conexión de la CLI embebida (#44): imprime por stderr
+/// (el daemon no media; el proceso CLI ES el que conecta). Nunca silencioso.
+struct CliStderrObserver;
+impl norte_core::connect::ConnectionObserver for CliStderrObserver {
+    fn on_connection_warning(&self, w: &norte_core::connect::ConnectionWarning) {
+        eprintln!(
+            "{}",
+            norte_i18n::ta(
+                "cli-connection-degraded",
+                &[("scheme", w.scheme.as_str()), ("host", w.host.as_str())]
+            )
+        );
+    }
+}
+
 /// `norte connect <nombre|url>`: establece la conexión (disparando el flujo
 /// TOFU si es el primer contacto) y confirma. El valor duradero es el
 /// registro de la host key + la validación de credenciales.
-async fn connect_cmd(backend: &Backend, target: &str, daemon: bool) -> anyhow::Result<ExitCode> {
+async fn connect_cmd(
+    backend: &mut Backend,
+    target: &str,
+    daemon: bool,
+) -> anyhow::Result<ExitCode> {
     if daemon {
         // La resolución por nombre lee el config LOCAL; contra un daemon
         // remoto la semántica cambia — se difiere (mínimo viable, ADR 0015 G).
@@ -1092,6 +1114,19 @@ async fn connect_cmd(backend: &Backend, target: &str, daemon: bool) -> anyhow::R
     result
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context(norte_i18n::t("cli-connect-failed"))?;
+    // #44: en modo remoto el daemon difundió connection.degraded ANTES de la
+    // respuesta de capabilities (outbox ordenada); drénalos ahora a stderr.
+    if let Some(mut rx) = backend.take_degraded() {
+        while let Ok(d) = rx.try_recv() {
+            eprintln!(
+                "{}",
+                norte_i18n::ta(
+                    "cli-connection-degraded",
+                    &[("scheme", d.scheme.as_str()), ("host", d.host.as_str())]
+                )
+            );
+        }
+    }
     println!(
         "{}",
         norte_i18n::ta("cli-connect-ok", &[("target", target)])
