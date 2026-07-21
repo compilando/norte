@@ -13,7 +13,8 @@ use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use norte_core::Engine;
-use norte_proto::{Entry, VPath};
+use norte_frontend::PaneState;
+use norte_proto::{Entry, EntryKind, VPath};
 use norte_tui::app::{App, Pane, sort_entries};
 use norte_tui::config::{Layers, load};
 use norte_tui::keymap::{COMMANDS, Effective, Screen, presets};
@@ -139,6 +140,41 @@ fn bench_list_100k(c: &mut Criterion) {
     group.finish();
 }
 
+/// #54: coste TOTAL del camino extend por lotes (lo que el bench de drenado
+/// no captura: ahí se ordena UNA vez al final; el fill real re-ordenaba en
+/// cada lote). 100k entries sintéticas en lotes de 4096 → ~24 extends.
+/// PURO CPU (sin FS ni engine): mide solo `PaneState::extend`.
+fn bench_fill_100k(c: &mut Criterion) {
+    let dir = VPath::parse("mem:///bench").expect("wire");
+    let all: Vec<Entry> = (0..100_000)
+        .map(|i| Entry {
+            // Mezcla dirs/files y nombres desordenados (peor caso del merge
+            // que el orden de llegada del FS, ya semi-ordenado).
+            path: VPath::parse(&format!("mem:///bench/f{:06}", (i * 7919) % 100_000))
+                .expect("wire"),
+            kind: if i % 8 == 0 {
+                EntryKind::Dir
+            } else {
+                EntryKind::File
+            },
+            size: None,
+            mtime_ms: None,
+        })
+        .collect();
+    let mut group = c.benchmark_group("fill");
+    group.sample_size(10);
+    group.bench_function("cien_mil_extend_por_lotes", |b| {
+        b.iter(|| {
+            let mut pane = PaneState::new(dir.clone(), Vec::new());
+            for chunk in all.chunks(4096) {
+                pane.extend(chunk.to_vec());
+            }
+            black_box(pane.entries().len())
+        });
+    });
+    group.finish();
+}
+
 /// Hook Lua de statusbar (M4 Lua): la llamada CACHEADA (mismo `StatusInput`)
 /// se dispara en cada vuelta de render y debe ser despreciable; la NO
 /// cacheada (snapshot cambiado) reinvoca el script bajo su presupuesto de
@@ -180,6 +216,7 @@ criterion_group!(
     presupuestos,
     bench_cold_start,
     bench_list_100k,
+    bench_fill_100k,
     bench_lua_statusbar
 );
 criterion_main!(presupuestos);
