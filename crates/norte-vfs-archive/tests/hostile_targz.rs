@@ -298,9 +298,13 @@ async fn gzip_por_partes_produce_el_mismo_resultado() {
 /// de 255 bytes del corpus se lista byte-exacto y se lee.
 #[tokio::test]
 async fn gnu_longname_roundtrip_por_targz() {
+    // MEDIUM del audit: la variante MULTIBYTE (85×あ) — el truncado a 100
+    // parte una secuencia UTF-8 (100 = 33×3+1): si el crate usara el nombre
+    // del header en vez del longname, el listado saldría con un nombre
+    // inválido-UTF8 distinto y el read fallaría — canario incorporado.
     let largo = norte_testkit::corpus::hostile_names()
         .into_iter()
-        .find(|n| n.id == "name_max_255")
+        .find(|n| n.id == "name_max_255_multibyte")
         .expect("fixture del corpus")
         .bytes;
     let tar = TarSmith::new()

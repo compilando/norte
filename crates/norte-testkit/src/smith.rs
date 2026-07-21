@@ -410,6 +410,9 @@ fn emit_tar(out: &mut Vec<u8>, name: &[u8], data: &[u8], typeflag: u8, link: &[u
     header[148..156].copy_from_slice(b"        "); // chksum en blanco
     header[156] = typeflag;
     header[157..157 + link.len()].copy_from_slice(link);
+    // Magic POSIX («ustar\0» + «00») también en la entrada L: GNU tar real
+    // emite el magic old-GNU («ustar  \0») — tar-rs honra la L con ambos
+    // (nit del audit #60; un parser que exija el magic GNU divergiría).
     header[257..262].copy_from_slice(b"ustar");
     header[263..265].copy_from_slice(b"00");
     let sum: u32 = header.iter().map(|&b| u32::from(b)).sum();
@@ -478,5 +481,36 @@ mod tests {
     #[should_panic(expected = "no forja headers con nombre >100")]
     fn tar_nombre_largo_panica() {
         let _ = TarSmith::new().file(&[b'a'; 101], b"").build();
+    }
+
+    /// #60 (INFO del audit): el LEN del record pax en las transiciones de
+    /// dígitos — base 97 → LEN 99 (2 dígitos), base 98 → 101 (salta el 100
+    /// imposible), base 99 → 102. El record emitido mide EXACTAMENTE su LEN.
+    #[test]
+    fn pax_len_en_transiciones_de_digitos() {
+        for name_len in [91usize, 92, 93, 13] {
+            let name = vec![b'n'; name_len];
+            let tar = TarSmith::new().file_pax_path(&name, b"d").build();
+            // La entrada x es el primer header: sus datos empiezan en 512.
+            let size = usize::from_str_radix(
+                std::str::from_utf8(&tar[124..135])
+                    .unwrap()
+                    .trim_end_matches('\0')
+                    .trim(),
+                8,
+            )
+            .expect("size octal");
+            let record = &tar[512..512 + size];
+            let espacio = record.iter().position(|&b| b == b' ').expect("LEN espacio");
+            let len: usize = std::str::from_utf8(&record[..espacio])
+                .unwrap()
+                .parse()
+                .expect("LEN decimal");
+            assert_eq!(
+                len,
+                record.len(),
+                "name_len={name_len}: LEN == longitud real"
+            );
+        }
     }
 }

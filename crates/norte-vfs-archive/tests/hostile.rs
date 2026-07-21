@@ -475,18 +475,27 @@ async fn pax_path_no_utf8_roundtrip() {
 /// corto (contando en skipped), jamás colarse por venir del camino largo.
 #[tokio::test]
 async fn zip_slip_via_longname_se_omite() {
-    let mut evil = b"../".to_vec();
-    evil.extend(std::iter::repeat_n(b'x', 120));
+    // MAJOR del audit: el prefijo truncado a 100 debe ser BENIGNO — el
+    // traversal vive SOLO más allá del truncado. Con el longname roto, el
+    // header benigno «aaa…» se colaría en el listado y skipped sería 0:
+    // ambos asserts fallan ruidoso (probado con mutante que suprime la L).
+    let mut evil = vec![b'a'; 100];
+    evil.extend_from_slice(b"/../../../etc/passwd");
     let tar = TarSmith::new()
         .file_gnu_longname(&evil, b"slip")
         .file(b"ok.txt", b"bien")
         .build();
     let (p, root) = common::tar_provider(&tar).await;
-    assert_eq!(list_names(&p, &root).await, vec![b"ok.txt".to_vec()]);
+    let names = list_names(&p, &root).await;
+    assert!(
+        !names.contains(&vec![b'a'; 100]),
+        "el nombre truncado benigno NO se cuela"
+    );
+    assert_eq!(names, vec![b"ok.txt".to_vec()]);
     assert_eq!(
         p.list_skipped(&root).await.expect("skipped"),
         Some(1),
-        "el traversal largo cuenta como omitida"
+        "el traversal del longname cuenta como omitida"
     );
 }
 
@@ -497,7 +506,7 @@ async fn zip_slip_via_longname_se_omite() {
 #[tokio::test]
 async fn pax_global_header_crudo_no_fantasmea() {
     let tar = TarSmith::new()
-        .entry_raw(b'g', b"pax_global_header", b"52 comment=git archive\n")
+        .entry_raw(b'g', b"pax_global_header", b"23 comment=git archive\n")
         .file(b"real.txt", b"si")
         .build();
     let (p, root) = common::tar_provider(&tar).await;
