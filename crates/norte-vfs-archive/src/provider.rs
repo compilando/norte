@@ -141,6 +141,46 @@ pub struct ArchiveProvider {
     gz_read_permits: Arc<tokio::sync::Semaphore>,
 }
 
+/// Envuelve un stream passthrough con un contador ENTREGADO-vs-PROMETIDO
+/// (#97): el índice prometió `expected` bytes — si el stream interior
+/// termina antes (contenedor truncado/mutado bajo nuestros pies, semántica
+/// pread sin error) o entrega de más (provider interior mentiroso), el
+/// consumidor recibe `Error::Corrupt`, jamás datos cortos o de sobra en
+/// silencio. Un `Err` del interior se propaga verbatim y corta el stream.
+fn expect_exact(inner: ByteStream, expected: u64) -> ByteStream {
+    futures::stream::unfold(
+        (inner, 0u64, false),
+        move |(mut stream, got, terminado)| async move {
+            if terminado {
+                return None;
+            }
+            match stream.next().await {
+                Some(Ok(chunk)) => {
+                    let got = got + chunk.len() as u64;
+                    if got > expected {
+                        tracing::warn!(got, expected, "tar passthrough entrega bytes DE MÁS");
+                        return Some((Err(Error::Corrupt), (stream, got, true)));
+                    }
+                    Some((Ok(chunk), (stream, got, false)))
+                }
+                Some(Err(e)) => Some((Err(e), (stream, got, true))),
+                None => {
+                    if got < expected {
+                        tracing::warn!(
+                            got,
+                            expected,
+                            "tar passthrough corto: contenedor truncado/mutado bajo el read"
+                        );
+                        return Some((Err(Error::Corrupt), (stream, got, true)));
+                    }
+                    None
+                }
+            }
+        },
+    )
+    .boxed()
+}
+
 impl ArchiveProvider {
     /// Provider con los límites por defecto. `scheme` es el compuesto
     /// completo (`tar+file`); debe empezar por el token del formato.
@@ -501,8 +541,13 @@ impl Provider for ArchiveProvider {
         }
         match *locator {
             Locator::Tar { offset, .. } => {
-                // Passthrough: datos contiguos sin comprimir.
-                self.inner
+                // Passthrough: datos contiguos sin comprimir. Con contador
+                // entregado-vs-prometido (#97): un contenedor truncado/mutado
+                // BAJO el read termina corto con semántica pread y sin error
+                // — la clase exacta de silencio que zip (#95.4) y targz
+                // (FIX-1 #55) ya fail-loudean.
+                let inner = self
+                    .inner
                     .read(
                         &aref.outer,
                         Some(ByteRange {
@@ -510,7 +555,8 @@ impl Provider for ArchiveProvider {
                             len: Some(req_len),
                         }),
                     )
-                    .await
+                    .await?;
+                Ok(expect_exact(inner, req_len))
             }
             Locator::Zip { index: entry_index } => {
                 // Descompresión en hilo blocking → canal acotado → stream.

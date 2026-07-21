@@ -302,3 +302,116 @@ async fn fallo_del_provider_interior_no_se_disfraza_de_corrupt() {
         }
     }
 }
+
+/// #97: el passthrough de tar (datos contiguos) con un contenedor que se
+/// TRUNCA bajo el read — el provider interior termina el stream corto con
+/// semántica pread y SIN error (como un FS real): el lector debe recibir
+/// `Corrupt` tras los bytes parciales, jamás un fichero corto en silencio
+/// (paridad con zip #95.4 y targz FIX-1).
+#[tokio::test]
+async fn tar_passthrough_corto_es_corrupt_no_datos_cortos() {
+    use bytes::Bytes;
+    use norte_proto::{ByteRange as BR, Capabilities, Entry as PEntry};
+    use norte_vfs::{ByteStream, EntryStream as ES};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Delegado a Mem que, ARMADO, corta cada stream de read a la mitad de
+    /// sus chunks — sin error, como un contenedor mutado bajo los pies.
+    struct Truncating {
+        inner: MemProvider,
+        armado: std::sync::Arc<AtomicBool>,
+    }
+    #[async_trait::async_trait]
+    impl norte_vfs::Provider for Truncating {
+        // La firma del trait es `-> &str`; literal correcto aquí.
+        #[allow(clippy::unnecessary_literal_bound)]
+        fn scheme(&self) -> &str {
+            "mem"
+        }
+        fn capabilities(&self) -> Capabilities {
+            self.inner.capabilities()
+        }
+        async fn stat(&self, p: &VPath) -> Result<PEntry, Error> {
+            self.inner.stat(p).await
+        }
+        async fn list(&self, p: &VPath) -> Result<ES, Error> {
+            self.inner.list(p).await
+        }
+        async fn write(&self, p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
+            norte_vfs::Provider::write(&self.inner, p).await
+        }
+        async fn mkdir(&self, p: &VPath) -> Result<(), Error> {
+            self.inner.mkdir(p).await
+        }
+        async fn remove(&self, p: &VPath) -> Result<(), Error> {
+            self.inner.remove(p).await
+        }
+        async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), Error> {
+            self.inner.rename(from, to).await
+        }
+        async fn read(&self, p: &VPath, range: Option<BR>) -> Result<ByteStream, Error> {
+            let stream = self.inner.read(p, range).await?;
+            if !self.armado.load(Ordering::Relaxed) {
+                return Ok(stream);
+            }
+            // Junta y corta a la MITAD de los bytes pedidos: fin limpio.
+            let todos: Vec<Result<Bytes, Error>> = stream.collect().await;
+            let mut bytes: Vec<u8> = Vec::new();
+            for c in todos {
+                bytes.extend_from_slice(&c.expect("chunk ok"));
+            }
+            bytes.truncate(bytes.len() / 2);
+            Ok(futures::stream::iter(vec![Ok(Bytes::from(bytes))]).boxed())
+        }
+    }
+
+    let tar = TarSmith::new().file(b"datos.bin", &[7u8; 1000]).build();
+    let mem = MemProvider::new();
+    let root = MemProvider::root();
+    let container = root.join(seg(b"c.tar"));
+    {
+        let mut sink = norte_vfs::Provider::write(&mem, &container)
+            .await
+            .expect("write abre");
+        sink.write(bytes::Bytes::from(tar)).await.expect("chunk");
+        sink.commit().await.expect("commit");
+    }
+    let armado = std::sync::Arc::new(AtomicBool::new(false));
+    let provider = ArchiveProvider::new(
+        std::sync::Arc::new(Truncating {
+            inner: mem,
+            armado: std::sync::Arc::clone(&armado),
+        }),
+        Format::Tar,
+        "tar+mem",
+    );
+    let interior = VPath::parse("tar+mem:///c.tar/!/datos.bin").expect("wire");
+
+    // Sano: roundtrip completo (el índice queda caliente).
+    assert_eq!(provider.read(&interior, None).await.map(|_| ()), Ok(()));
+    let mut stream = provider.read(&interior, None).await.expect("read sano");
+    let mut total = 0usize;
+    while let Some(item) = stream.next().await {
+        total += item.expect("chunk sano").len();
+    }
+    assert_eq!(total, 1000);
+
+    // Armado: el interior corta a la mitad SIN error → Corrupt, no silencio.
+    armado.store(true, Ordering::Relaxed);
+    let mut stream = provider.read(&interior, None).await.expect("read abre");
+    let mut vistos = 0usize;
+    let mut fallo = None;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(c) => vistos += c.len(),
+            Err(e) => {
+                fallo = Some(e);
+                break;
+            }
+        }
+    }
+    match fallo {
+        Some(Error::Corrupt) => assert_eq!(vistos, 500, "los parciales llegan, luego el error"),
+        other => panic!("esperaba Corrupt tras {vistos} bytes, fue {other:?}"),
+    }
+}
