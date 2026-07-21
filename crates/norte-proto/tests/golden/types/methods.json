@@ -353,5 +353,6 @@
     "plugin_name": "Markdown Preview",
     "output": "<h1>Título</h1>"
   },
-  "plugin_preview_result_none": {}
+  "plugin_preview_result_none": {},
+  "rpc_cancel_params": {"id": 7}
 }

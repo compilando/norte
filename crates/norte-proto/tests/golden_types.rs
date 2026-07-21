@@ -355,7 +355,21 @@ fn golden_methods() {
     check_methods_policy(&fixtures);
     check_methods_session(&fixtures);
     check_methods_plugin(&fixtures);
-    assert_eq!(fixtures.len(), 62, "[methods.json] fixtures sin caso Rust");
+    check_methods_rpc(&fixtures);
+    assert_eq!(fixtures.len(), 63, "[methods.json] fixtures sin caso Rust");
+}
+
+/// Familia de la CAPA RPC (0.19.0, #72): `rpc.cancel`.
+fn check_methods_rpc(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::RpcCancelParams;
+    use norte_proto::wire::RequestId;
+    check_one(
+        fixtures,
+        "rpc_cancel_params",
+        &RpcCancelParams {
+            id: RequestId::Num(7),
+        },
+    );
 }
 
 /// Familia plugin.* (0.13.0, M4-P3): catálogo + aprobación/activación humanas.
@@ -1086,7 +1100,9 @@ fn method_names_frozen() {
     assert_eq!(methods::FS_SEARCH, "fs.search");
     assert_eq!(methods::SEARCH_HITS, "search.hits");
     assert_eq!(methods::SEARCH_HITS_MAX_BATCH, 256);
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.18.0");
+    // 0.19.0 (#72): rpc.cancel { id }. Aditivo sobre 0.18.x.
+    assert_eq!(methods::RPC_CANCEL, "rpc.cancel");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.19.0");
 }
 
 #[test]
