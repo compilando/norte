@@ -23,4 +23,7 @@ pub use task::{TaskId, TaskKind, TaskProgress, TaskState};
 pub use transfer::{
     ByteRange, CollisionPolicy, DeleteMode, ResumePolicy, SymlinkPolicy, VerifyPolicy,
 };
-pub use vpath::{ARCHIVE_FORMATS, ArchiveRef, Authority, Scheme, Segment, VPath, VPathError};
+pub use vpath::{
+    ARCHIVE_FORMATS, ArchiveRef, Authority, Scheme, Segment, VPath, VPathError,
+    scheme_archive_format,
+};

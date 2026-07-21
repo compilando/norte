@@ -172,6 +172,18 @@ proptest! {
         inner_bytes in proptest::collection::vec(arb_segment_bytes(), 0..6),
         format in proptest::sample::select(norte_proto::ARCHIVE_FORMATS),
     ) {
+        // `outer` y `format` se generan de forma independiente: con tokens
+        // compuestos como `tar+gz` en la whitelist, algunas combinaciones
+        // (p. ej. format="tar" sobre un outer de scheme "gz+algo") formarían
+        // un scheme ambiguo que `archive_compose` rechaza a propósito (ver
+        // `archive_compose_rechaza_roundtrip_ambiguo_con_tar_gz` en
+        // `tests/vpath.rs`, ADR 0028) — no es representativo del roundtrip
+        // que esta propiedad ejercita, así que la combinación se descarta en
+        // vez de fabricar un panic espurio del `.expect()`.
+        prop_assume!(
+            norte_proto::scheme_archive_format(&format!("{format}+{}", outer.scheme()))
+                == Some(format)
+        );
         let inner: Vec<Segment> = inner_bytes
             .into_iter()
             .filter(|b| b.as_slice() != b"!")
