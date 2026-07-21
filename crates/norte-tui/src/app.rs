@@ -55,6 +55,13 @@ pub struct Pane {
     /// esté activo; `pane.names-encoding` lo cicla (None → sugerido/cp437 →
     /// … → None).
     pub name_encoding: Option<norte_encoding::NameEncoding>,
+    /// Índice del ciclo por el que ENTRÓ la reinterpretación activa (la
+    /// sugerencia de chardetng, o 0): el ciclo da la VUELTA completa —
+    /// (i+1) % len — y se apaga al volver aquí. Sin esto, los encodings
+    /// anteriores a la sugerencia serían inalcanzables (M1 del review #57:
+    /// con sugerencia IBM866, cp437 — el caso estrella — no se podía
+    /// elegir). Solo significativo con `name_encoding = Some`.
+    name_encoding_entry: usize,
 }
 
 /// Estado de presentación de una búsqueda viva (`Alt+F7`, liveSearch T6): el
@@ -90,13 +97,16 @@ impl Pane {
             search_error: None,
             skipped: None,
             name_encoding: None,
+            name_encoding_entry: 0,
         }
     }
 
     /// Cicla la reinterpretación de nombres (#57): `None` → (sugerencia de
     /// chardetng sobre los nombres no-UTF8 del listado, si cae en el ciclo;
-    /// si no, el primero) → resto del ciclo → `None`. Devuelve la etiqueta
-    /// a anunciar en la barra (`None` = «auto/bytes», modo apagado).
+    /// si no, cp437) → VUELTA COMPLETA al ciclo — todos los encodings son
+    /// alcanzables desde cualquier sugerencia — → `None` al regresar al
+    /// punto de entrada. Devuelve la etiqueta a anunciar en la barra
+    /// (`None` = «auto/bytes», modo apagado).
     pub fn cycle_name_encoding(&mut self) -> Option<&'static str> {
         let cycle = norte_encoding::name_reinterpret_cycle();
         self.name_encoding = match self.name_encoding {
@@ -107,16 +117,23 @@ impl Pane {
                     .filter_map(|e| e.path.file_name().map(norte_proto::Segment::as_bytes))
                     .filter(|b| std::str::from_utf8(b).is_err())
                     .collect();
-                Some(norte_encoding::suggest_name_encoding(&raws).unwrap_or(cycle[0]))
+                let sugerido = norte_encoding::suggest_name_encoding(&raws);
+                let entry = sugerido
+                    .and_then(|s| cycle.iter().position(|e| *e == s))
+                    .unwrap_or(0);
+                self.name_encoding_entry = entry;
+                Some(cycle[entry])
             }
-            Some(cur) => {
-                let idx = cycle.iter().position(|e| *e == cur);
-                match idx {
-                    Some(i) if i + 1 < cycle.len() => Some(cycle[i + 1]),
-                    // Final del ciclo (o un valor fuera de él): apagar.
-                    _ => None,
+            Some(cur) => match cycle.iter().position(|e| *e == cur) {
+                Some(i) => {
+                    let next = (i + 1) % cycle.len();
+                    // Vuelta completada: apagar (el ciclo siempre acaba en
+                    // off, pase por donde pase la sugerencia de entrada).
+                    (next != self.name_encoding_entry).then(|| cycle[next])
                 }
-            }
+                // Valor fuera del ciclo (imposible hoy): apagar.
+                None => None,
+            },
         };
         self.name_encoding.map(|e| e.label())
     }

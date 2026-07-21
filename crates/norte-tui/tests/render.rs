@@ -270,12 +270,19 @@ fn reinterpretar_nombres_pinta_legible_con_badge_e_indicador() {
         "indicador persistente en la barra: {contenido}"
     );
 
-    // El ciclo termina apagándose (vuelta a None).
-    let mut vueltas = 0;
-    while app.panes[0].cycle_name_encoding().is_some() {
-        vueltas += 1;
-        assert!(vueltas < 10, "el ciclo debe cerrarse en None");
+    // M1 del review: el ciclo da la VUELTA COMPLETA — desde la sugerencia
+    // (IBM866) se visitan TODOS los demás encodings, cp437 incluido, y se
+    // apaga exactamente al regresar al punto de entrada.
+    let mut visitados = vec!["IBM866"];
+    while let Some(label) = app.panes[0].cycle_name_encoding() {
+        visitados.push(label);
+        assert!(visitados.len() <= 5, "el ciclo debe cerrarse en None");
     }
+    assert_eq!(
+        visitados,
+        ["IBM866", "Shift_JIS", "GBK", "windows-1252", "cp437"],
+        "vuelta completa con wrap: cp437 alcanzable desde cualquier entrada"
+    );
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     let apagado = terminal.backend().to_string();
     assert!(

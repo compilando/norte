@@ -397,6 +397,12 @@ pub enum NameEncoding {
 
 impl NameEncoding {
     /// Etiqueta corta para UI (`cp437`, `IBM866`, `Shift_JIS`…).
+    ///
+    /// ```
+    /// use norte_encoding::NameEncoding;
+    /// assert_eq!(NameEncoding::Cp437.label(), "cp437");
+    /// assert_eq!(NameEncoding::Rs(encoding_rs::GBK).label(), "GBK");
+    /// ```
     #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
@@ -469,10 +475,18 @@ pub fn name_reinterpret_cycle() -> &'static [NameEncoding] {
 }
 
 /// Sugiere un encoding del ciclo para un conjunto de NOMBRES no-UTF8
-/// (chardetng sobre la concatenación). `None` = sin sugerencia útil (la
+/// (chardetng sobre las muestras). `None` = sin sugerencia útil (la
 /// adivinanza cayó fuera del ciclo — p. ej. UTF-8 — o no hay muestras).
-/// cp437 jamás se sugiere (chardetng no lo modela); el menú lo ofrece
-/// siempre como primera opción manual.
+/// cp437 jamás se sugiere (chardetng no lo modela); el ciclo del frontend
+/// da la vuelta completa, así que sigue siendo alcanzable a mano.
+///
+/// ```
+/// use norte_encoding::{NameEncoding, suggest_name_encoding};
+/// // "Папка" en cp866 → IBM866 (miembro del ciclo):
+/// let s = suggest_name_encoding(&[b"\x8f\xa0\xaf\xaa\xa0"]);
+/// assert_eq!(s, Some(NameEncoding::Rs(encoding_rs::IBM866)));
+/// assert_eq!(suggest_name_encoding(&[]), None);
+/// ```
 #[must_use]
 pub fn suggest_name_encoding(samples: &[&[u8]]) -> Option<NameEncoding> {
     if samples.is_empty() {
@@ -480,7 +494,12 @@ pub fn suggest_name_encoding(samples: &[&[u8]]) -> Option<NameEncoding> {
     }
     let mut det = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Deny);
     for (i, s) in samples.iter().enumerate() {
-        det.feed(s, i + 1 == samples.len());
+        det.feed(s, false);
+        // Separador ASCII neutro entre muestras (F3 del audit): sin él, un
+        // lead byte colgante al final de un nombre se emparejaría con el
+        // primer byte del siguiente, fabricando secuencias multibyte
+        // fantasma que sesgan la adivinanza.
+        det.feed(b" ", i + 1 == samples.len());
     }
     let guess = det.guess(None, chardetng::Utf8Detection::Deny);
     name_reinterpret_cycle()

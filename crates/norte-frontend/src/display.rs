@@ -54,6 +54,17 @@ pub fn display_name(bytes: &[u8]) -> (String, bool) {
 /// contenedor mixto (entradas UTF-8 + entradas cp866) reinterpretar las
 /// UTF-8 fabricaría mojibake donde no había problema. El enmascarado de
 /// hazards aplica igual en ambos caminos.
+///
+/// ```
+/// use norte_encoding::NameEncoding;
+/// use norte_frontend::display_name_with;
+/// // No-UTF8 en cp437: decodifica Y marca (el texto no son los bytes).
+/// let (texto, hostil) = display_name_with(b"CAF\x90.TXT", Some(NameEncoding::Cp437));
+/// assert_eq!((texto.as_str(), hostil), ("CAFÉ.TXT", true));
+/// // UTF-8 válido: JAMÁS se reinterpreta (contenedor mixto sin mojibake).
+/// let (texto, hostil) = display_name_with("año.txt".as_bytes(), Some(NameEncoding::Cp437));
+/// assert_eq!((texto.as_str(), hostil), ("año.txt", false));
+/// ```
 #[must_use]
 pub fn display_name_with(
     bytes: &[u8],
