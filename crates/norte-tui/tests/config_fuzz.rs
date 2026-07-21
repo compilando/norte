@@ -4,7 +4,7 @@
 //! mutaciones de configs reales — puede panicar el parseo ni la
 //! construcción del keymap; solo Ok o error tipado.
 
-use norte_tui::config::Layers;
+use norte_tui::config::{Layer, Layers};
 use norte_tui::keymap::{COMMANDS, Effective, parse_keymap, presets};
 use proptest::prelude::*;
 
@@ -57,6 +57,8 @@ proptest! {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("norte.toml"), &norte).unwrap();
         std::fs::write(d.path().join("keymap.toml"), &keymap).unwrap();
-        let _ = norte_tui::config::load(&Layers { dirs: vec![d.path().to_path_buf()] });
+        let _ = norte_tui::config::load(&Layers {
+            dirs: vec![(d.path().to_path_buf(), Layer::User)],
+        });
     }
 }

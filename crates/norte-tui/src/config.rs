@@ -150,11 +150,30 @@ pub(crate) fn toml_diag(raw: &str, e: &toml::de::Error) -> String {
     }
 }
 
-/// Los directorios de capas, en precedencia ASCENDENTE.
+/// Clase de una capa de config (ADR 0007), en precedencia ASCENDENTE. Se
+/// lleva POR DIR en [`Layers`] (deuda #75) en vez de inferirse por la
+/// POSICIÓN en `dirs`: en Windows sin `%ProgramData%` la capa `System` está
+/// ausente, así que `%APPDATA%` (`User`) caería en el índice 0 y la
+/// inferencia posicional la etiquetaría como `System`. `Layer` reexporta
+/// por `crate::lua` para el `init.lua` (config es dueña del concepto de
+/// capa; el scripting solo lo consume).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Layer {
+    /// `/etc/norte` (o `%ProgramData%\norte`).
+    System,
+    /// `$XDG_CONFIG_HOME/norte` (`~/.config/norte`; `%APPDATA%\norte`).
+    User,
+    /// `./.norte` — SOLO tras trust (ADR 0026).
+    Project,
+}
+
+/// Los directorios de capas, en precedencia ASCENDENTE, cada uno con su
+/// [`Layer`] (deuda #75: el kind viaja POR DIR, no se infiere por posición).
 #[derive(Debug, Clone)]
 pub struct Layers {
-    /// sistema → usuario → proyecto (los ausentes simplemente no aportan).
-    pub dirs: Vec<PathBuf>,
+    /// sistema → usuario → proyecto (los ausentes simplemente no aportan),
+    /// cada dir etiquetado con su clase de capa.
+    pub dirs: Vec<(PathBuf, Layer)>,
 }
 
 /// Capas estándar (ADR 0007): `/etc/norte` (`%ProgramData%\norte`),
@@ -165,20 +184,20 @@ pub fn standard_layers() -> Layers {
     let mut dirs = Vec::new();
     if cfg!(windows) {
         if let Some(pd) = std::env::var_os("ProgramData") {
-            dirs.push(PathBuf::from(pd).join("norte"));
+            dirs.push((PathBuf::from(pd).join("norte"), Layer::System));
         }
         if let Some(appdata) = std::env::var_os("APPDATA") {
-            dirs.push(PathBuf::from(appdata).join("norte"));
+            dirs.push((PathBuf::from(appdata).join("norte"), Layer::User));
         }
     } else {
-        dirs.push(PathBuf::from("/etc/norte"));
+        dirs.push((PathBuf::from("/etc/norte"), Layer::System));
         if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-            dirs.push(PathBuf::from(xdg).join("norte"));
+            dirs.push((PathBuf::from(xdg).join("norte"), Layer::User));
         } else if let Some(home) = std::env::var_os("HOME") {
-            dirs.push(PathBuf::from(home).join(".config/norte"));
+            dirs.push((PathBuf::from(home).join(".config/norte"), Layer::User));
         }
     }
-    dirs.push(PathBuf::from(".norte"));
+    dirs.push((PathBuf::from(".norte"), Layer::Project));
     Layers { dirs }
 }
 
@@ -413,7 +432,7 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
     let mut quick_search_mode = nav::Mode::default();
     let mut hotlist: Vec<HotlistItem> = Vec::new();
     let mut sources = Vec::new();
-    for (i, dir) in layers.dirs.iter().enumerate() {
+    for (dir, kind) in &layers.dirs {
         let norte = dir.join("norte.toml");
         if let Some(raw) = read_optional(&norte)? {
             let parsed: NorteToml = toml::from_str(&raw).map_err(|e| ConfigError::Toml {
@@ -454,16 +473,14 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
                 daemon_socket = Some(sock);
             }
             // La hotlist se acumula de TODAS las capas MENOS la de
-            // proyecto (última posicional, deuda #75: `Layers` debería
-            // llevar el kind por dir en vez de inferirlo por posición,
-            // igual que el `mark_project()` del keymap más abajo). Un
-            // `./.norte/norte.toml` de un repo ajeno no debe poder
-            // inyectar favoritos en la sesión del usuario (spec
-            // 2026-07-18, decisión 3). Los ESCALARES de UI (quick_search,
-            // theme, lang) SÍ se honran desde proyecto: son config
-            // estructural de presentación (coherente con theme), no data
-            // que dirija navegación como la hotlist.
-            if i + 1 != layers.dirs.len() {
+            // proyecto (deuda #75 cerrada: el kind viaja POR DIR, ya no se
+            // infiere por posición). Un `./.norte/norte.toml` de un repo
+            // ajeno no debe poder inyectar favoritos en la sesión del
+            // usuario (spec 2026-07-18, decisión 3). Los ESCALARES de UI
+            // (quick_search, theme, lang) SÍ se honran desde proyecto: son
+            // config estructural de presentación (coherente con theme), no
+            // data que dirija navegación como la hotlist.
+            if *kind != Layer::Project {
                 for entry in parsed.hotlist {
                     merge_hotlist_entry(&mut hotlist, entry);
                 }
@@ -476,13 +493,12 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
                 path: keymap.clone(),
                 message: e.to_string(),
             })?;
-            // La ÚLTIMA capa es la de PROYECTO (`./.norte`, misma convención
-            // posicional que las capas Lua de main.rs; deuda #75: `Layers`
-            // debería llevar el kind por dir). Su keymap carga SIN trust,
-            // así que se marca: `Effective::build_for` descarta sus
-            // bindings `lua:` (un repo hostil no dirige la ejecución de
-            // comandos Lua del usuario) — con aviso, jamás en silencio.
-            if i + 1 == layers.dirs.len() {
+            // La capa de PROYECTO (`./.norte`) carga SIN trust, así que se
+            // marca (deuda #75 cerrada: el kind viaja POR DIR):
+            // `Effective::build_for` descarta sus bindings `lua:` (un repo
+            // hostil no dirige la ejecución de comandos Lua del usuario) —
+            // con aviso, jamás en silencio.
+            if *kind == Layer::Project {
                 parsed.mark_project();
             }
             // Diagnóstico con ARCHIVO (ADR 0007): una capa de usuario no
@@ -587,7 +603,7 @@ pub async fn watch(layers: &Layers, tx: tokio::sync::mpsc::Sender<()>) -> Watch 
         })
         .ok()?;
         let mut watching = false;
-        for dir in &layers2.dirs {
+        for (dir, _kind) in &layers2.dirs {
             if dir.is_dir()
                 && watcher
                     .watch(dir, notify::RecursiveMode::NonRecursive)
@@ -676,7 +692,7 @@ fn spawn_poll(
 /// tamaño caza escrituras dentro de la granularidad del mtime del FS.
 fn snapshot(layers: &Layers) -> Vec<(PathBuf, std::time::SystemTime, u64)> {
     let mut out = Vec::new();
-    for dir in &layers.dirs {
+    for (dir, _kind) in &layers.dirs {
         for name in ["norte.toml", "keymap.toml"] {
             let p = dir.join(name);
             if let Ok(md) = std::fs::metadata(&p)
@@ -790,9 +806,9 @@ mod hotlist_tests {
 
     #[test]
     fn hotlist_se_carga_de_todas_las_capas_menos_proyecto() {
-        // Dos dirs: "usuario" con una entrada, "proyecto" (ÚLTIMA capa) con
-        // otra — la de proyecto NO debe entrar (spec: "un repo ajeno no
-        // inyecta favoritos"), y la de usuario sí.
+        // Dos dirs: capa `User` con una entrada, capa `Project` con otra —
+        // la de proyecto NO debe entrar (spec: "un repo ajeno no inyecta
+        // favoritos"), y la de usuario sí.
         let usuario = tempfile::tempdir().unwrap();
         std::fs::write(
             usuario.path().join("norte.toml"),
@@ -806,7 +822,10 @@ mod hotlist_tests {
         )
         .unwrap();
         let layers = Layers {
-            dirs: vec![usuario.path().to_path_buf(), proyecto.path().to_path_buf()],
+            dirs: vec![
+                (usuario.path().to_path_buf(), Layer::User),
+                (proyecto.path().to_path_buf(), Layer::Project),
+            ],
         };
         let cfg = load(&layers).expect("carga");
         assert_eq!(
@@ -834,12 +853,15 @@ mod hotlist_tests {
              [[hotlist]]\nname = \"sana\"\npath = \"file:///ok\"\n",
         )
         .unwrap();
-        // Layers de un solo dir = ese dir es la capa proyecto (posicional,
-        // deuda #75) — para que la entrada "de usuario" cuente aquí, hace
-        // falta una capa DESPUÉS de ella; se añade una capa proyecto vacía.
+        // La entrada va en una capa `User` (que SÍ aporta hotlist); la capa
+        // `Project` (un repo ajeno) se añade vacía para comprobar que su
+        // ausencia de favoritos no altera el resultado.
         let proyecto = tempfile::tempdir().unwrap();
         let layers = Layers {
-            dirs: vec![usuario.path().to_path_buf(), proyecto.path().to_path_buf()],
+            dirs: vec![
+                (usuario.path().to_path_buf(), Layer::User),
+                (proyecto.path().to_path_buf(), Layer::Project),
+            ],
         };
         let cfg = load(&layers).expect("la carga NO falla por una entrada rota");
         assert_eq!(cfg.hotlist.len(), 2);
@@ -869,9 +891,9 @@ mod hotlist_tests {
         let proyecto = tempfile::tempdir().unwrap();
         let layers = Layers {
             dirs: vec![
-                sistema.path().to_path_buf(),
-                usuario.path().to_path_buf(),
-                proyecto.path().to_path_buf(),
+                (sistema.path().to_path_buf(), Layer::System),
+                (usuario.path().to_path_buf(), Layer::User),
+                (proyecto.path().to_path_buf(), Layer::Project),
             ],
         };
         let cfg = load(&layers).expect("carga");
@@ -898,7 +920,10 @@ mod hotlist_tests {
         .unwrap();
         let proyecto = tempfile::tempdir().unwrap();
         let layers = Layers {
-            dirs: vec![usuario.path().to_path_buf(), proyecto.path().to_path_buf()],
+            dirs: vec![
+                (usuario.path().to_path_buf(), Layer::User),
+                (proyecto.path().to_path_buf(), Layer::Project),
+            ],
         };
         let cfg = load(&layers).expect("carga");
         assert_eq!(cfg.hotlist.len(), 1, "mismo nombre intra-capa, una entrada");
@@ -920,7 +945,10 @@ mod hotlist_tests {
         persist_hotlist_add(usuario.path(), name, "file:///x").unwrap();
         let proyecto = tempfile::tempdir().unwrap();
         let layers = Layers {
-            dirs: vec![usuario.path().to_path_buf(), proyecto.path().to_path_buf()],
+            dirs: vec![
+                (usuario.path().to_path_buf(), Layer::User),
+                (proyecto.path().to_path_buf(), Layer::Project),
+            ],
         };
         let cfg = load(&layers).expect("el name hostil no rompe el TOML");
         assert_eq!(cfg.hotlist.len(), 1, "UNA entrada, sin inyección");
@@ -939,7 +967,10 @@ mod hotlist_tests {
         persist_hotlist_add(usuario.path(), "bin", &vp.to_wire()).unwrap();
         let proyecto = tempfile::tempdir().unwrap();
         let layers = Layers {
-            dirs: vec![usuario.path().to_path_buf(), proyecto.path().to_path_buf()],
+            dirs: vec![
+                (usuario.path().to_path_buf(), Layer::User),
+                (proyecto.path().to_path_buf(), Layer::Project),
+            ],
         };
         let cfg = load(&layers).expect("carga");
         let target = cfg.hotlist[0].target.as_ref().expect("target Ok");
@@ -960,7 +991,7 @@ mod hotlist_tests {
         )
         .unwrap();
         let layers = Layers {
-            dirs: vec![dir.path().to_path_buf()],
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
         let cfg = load(&layers).expect("carga");
         assert_eq!(cfg.quick_search_mode, crate::nav::Mode::Jump);
@@ -981,7 +1012,7 @@ mod hotlist_tests {
         )
         .unwrap();
         let layers = Layers {
-            dirs: vec![dir.path().to_path_buf()],
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
         let err = load(&layers).expect_err("config rota es error (ADR 0007)");
         assert!(matches!(err, ConfigError::Toml { .. }));

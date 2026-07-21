@@ -1,7 +1,7 @@
 //! Tests de la config en capas (ADR 0007): precedencia, diagnóstico con
 //! archivo, y claves desconocidas como error claro.
 
-use norte_tui::config::{ConfigError, Layers, load};
+use norte_tui::config::{ConfigError, Layer, Layers, load};
 use norte_tui::keymap::{COMMANDS, Effective, Screen, presets};
 
 fn dir_with(files: &[(&str, &str)]) -> tempfile::TempDir {
@@ -38,9 +38,9 @@ fn el_ultimo_gana_por_campo_y_las_capas_de_keymap_se_acumulan() {
     )]);
     let layers = Layers {
         dirs: vec![
-            sistema.path().to_path_buf(),
-            usuario.path().to_path_buf(),
-            proyecto.path().to_path_buf(),
+            (sistema.path().to_path_buf(), Layer::System),
+            (usuario.path().to_path_buf(), Layer::User),
+            (proyecto.path().to_path_buf(), Layer::Project),
         ],
     };
     let cfg = load(&layers).expect("carga");
@@ -59,7 +59,7 @@ fn el_ultimo_gana_por_campo_y_las_capas_de_keymap_se_acumulan() {
 fn toml_roto_nombra_el_archivo() {
     let mala = dir_with(&[("norte.toml", "esto no es toml ===")]);
     match load(&Layers {
-        dirs: vec![mala.path().to_path_buf()],
+        dirs: vec![(mala.path().to_path_buf(), Layer::User)],
     }) {
         Err(ConfigError::Toml { path, .. }) => {
             assert!(
@@ -75,7 +75,7 @@ fn toml_roto_nombra_el_archivo() {
 fn clave_desconocida_es_error_claro() {
     let mala = dir_with(&[("norte.toml", "[keymap]\npresett = \"vim\"\n")]);
     match load(&Layers {
-        dirs: vec![mala.path().to_path_buf()],
+        dirs: vec![(mala.path().to_path_buf(), Layer::User)],
     }) {
         Err(ConfigError::Toml { path, .. }) => {
             assert!(path.ends_with("norte.toml"));
@@ -88,7 +88,10 @@ fn clave_desconocida_es_error_claro() {
 fn dir_sin_archivos_no_molesta() {
     let vacia = dir_with(&[]);
     let cfg = load(&Layers {
-        dirs: vec![vacia.path().to_path_buf(), "/no/existe/en/absoluto".into()],
+        dirs: vec![
+            (vacia.path().to_path_buf(), Layer::User),
+            ("/no/existe/en/absoluto".into(), Layer::Project),
+        ],
     })
     .expect("capas ausentes = defaults");
     assert_eq!(cfg.preset, "orthodox");
@@ -100,7 +103,7 @@ fn dir_sin_archivos_no_molesta() {
 async fn el_polling_detecta_cambios_y_se_cancela_limpio() {
     let d = dir_with(&[("norte.toml", "[keymap]\npreset = \"vim\"\n")]);
     let layers = Layers {
-        dirs: vec![d.path().to_path_buf()],
+        dirs: vec![(d.path().to_path_buf(), Layer::User)],
     };
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
     let watch = norte_tui::config::watch_polling(&layers, tx, std::time::Duration::from_millis(20));
@@ -133,17 +136,20 @@ async fn el_polling_detecta_cambios_y_se_cancela_limpio() {
 }
 
 /// ALTA (security review M4 Lua): `load` marca como PROYECTO el
-/// `keymap.toml` de la ÚLTIMA capa (`./.norte`, convención posicional —
-/// deuda #75) y esa marca fluye hasta `Effective::build_for`, que descarta
-/// sus bindings `lua:` (un repo hostil no rebindea teclas a comandos Lua
-/// del usuario). La capa de usuario NO se marca.
+/// `keymap.toml` de la capa `Layer::Project` (`./.norte`; deuda #75 cerrada:
+/// el kind viaja POR DIR) y esa marca fluye hasta `Effective::build_for`,
+/// que descarta sus bindings `lua:` (un repo hostil no rebindea teclas a
+/// comandos Lua del usuario). La capa de usuario NO se marca.
 #[test]
 fn el_keymap_de_la_ultima_capa_se_marca_como_proyecto() {
     let binding = "[pane]\nprepend_keymap = [{ on = [\"j\"], run = \"lua:pwn\" }]\n";
     let usuario = dir_with(&[("keymap.toml", binding)]);
     let proyecto = dir_with(&[("keymap.toml", binding)]);
     let layers = Layers {
-        dirs: vec![usuario.path().to_path_buf(), proyecto.path().to_path_buf()],
+        dirs: vec![
+            (usuario.path().to_path_buf(), Layer::User),
+            (proyecto.path().to_path_buf(), Layer::Project),
+        ],
     };
     let cfg = load(&layers).expect("carga");
     assert_eq!(cfg.keymap_layers.len(), 2);

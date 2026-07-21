@@ -12,16 +12,10 @@ use norte_core::backend::Backend;
 use super::fs::{self, PaneCtx, RunCancellers};
 use super::statusbar::{self, StatusInput};
 
-/// Capa de origen de un `init.lua` (precedencia ASCENDENTE, ADR 0007).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Layer {
-    /// `/etc/norte` (o `ProgramData`).
-    System,
-    /// `~/.config/norte`.
-    User,
-    /// `./.norte` — SOLO tras trust (ADR 0026).
-    Project,
-}
+/// Capa de origen de un `init.lua` (precedencia ASCENDENTE, ADR 0007). El
+/// tipo lo posee [`crate::config`] (dueña del concepto de capa; deuda #75):
+/// aquí solo se reexporta para el scripting.
+pub use crate::config::Layer;
 
 /// Aviso no-fatal de carga (se muestra por barra, no aborta).
 #[derive(Debug, Clone)]

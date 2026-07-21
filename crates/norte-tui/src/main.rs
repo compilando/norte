@@ -1260,18 +1260,10 @@ async fn load_lua(app: &mut App, layers: &Layers) -> Option<LuaHost> {
             return None;
         }
     };
-    let last = layers.dirs.len().saturating_sub(1);
-    for (i, dir) in layers.dirs.iter().enumerate() {
-        // Mismo orden que la config: la última capa es la de proyecto.
-        // deuda #75: Layers debería llevar el kind por dir; posicional falla
-        // el LABEL en Windows sin ProgramData (APPDATA quedaría "system").
-        let layer = if i == last {
-            Layer::Project
-        } else if i == 0 {
-            Layer::System
-        } else {
-            Layer::User
-        };
+    for &(ref dir, layer) in &layers.dirs {
+        // El kind viaja POR DIR (deuda #75 cerrada): antes se infería por
+        // posición y el LABEL fallaba en Windows sin ProgramData (APPDATA
+        // quedaba "system").
         if layer == Layer::Project {
             load_lua_project(app, &host, dir.clone()).await;
         } else {
