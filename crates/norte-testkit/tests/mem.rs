@@ -671,3 +671,16 @@ async fn symlink_unknown_con_targets_hostiles() {
         .unwrap();
     assert_eq!(mem.symlink_kind_of(&link), Some(SymlinkKind::Dir));
 }
+
+#[tokio::test]
+async fn faults_cuenta_las_llamadas_a_read() {
+    // Observabilidad #61: el contador de reads permite a los tests de caché
+    // asertar "N ops concurrentes = los reads de UN solo build".
+    let mem = MemProvider::new();
+    write_file(&mem, "mem:///f", b"data").await;
+    let faults = mem.faults();
+    assert_eq!(faults.read_calls(), 0);
+    let _ = read_all(&mem, "mem:///f").await.expect("read");
+    let _ = read_all(&mem, "mem:///f").await.expect("read");
+    assert_eq!(faults.read_calls(), 2);
+}

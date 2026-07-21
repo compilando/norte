@@ -72,6 +72,21 @@ impl ProviderReader {
     }
 }
 
+impl Clone for ProviderReader {
+    /// Lector independiente sobre el MISMO contenedor: posición a 0 y caché
+    /// de bloque VACÍA (clonar no arrastra hasta 256 KiB de bloque).
+    fn clone(&self) -> Self {
+        Self {
+            handle: self.handle.clone(),
+            inner: Arc::clone(&self.inner),
+            path: self.path.clone(),
+            len: self.len,
+            pos: 0,
+            block: None,
+        }
+    }
+}
+
 impl Read for ProviderReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if self.pos >= self.len || buf.is_empty() {

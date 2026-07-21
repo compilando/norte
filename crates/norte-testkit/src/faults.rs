@@ -49,6 +49,8 @@ struct FaultState {
     /// `true` desde que un `copy_native` ENTRÓ en el gate: el test sincroniza
     /// su cancel con esta señal, sin sleeps a ciegas.
     copy_native_entered: bool,
+    /// Nº de llamadas a `Provider::read` atendidas (contador, no fallo).
+    read_calls: u64,
 }
 
 impl Faults {
@@ -135,7 +137,21 @@ impl Faults {
         }
     }
 
-    /// Borra toda la configuración de fallos.
+    /// Nº de llamadas a `Provider::read` atendidas (no bytes ni chunks):
+    /// observabilidad para tests de coalescing/caché (#61). Cuenta también
+    /// las lecturas que luego fallan por fallo inyectado; no cuenta las
+    /// rechazadas por `op_gate` (desconexión).
+    #[must_use]
+    pub fn read_calls(&self) -> u64 {
+        self.lock().read_calls
+    }
+
+    pub(crate) fn count_read(&self) {
+        self.lock().read_calls += 1;
+    }
+
+    /// Borra toda la configuración de fallos. También reinicia el contador
+    /// de [`Self::read_calls`] (vía `FaultState::default()`).
     pub fn clear(&self) {
         *self.lock() = FaultState::default();
     }

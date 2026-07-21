@@ -39,13 +39,16 @@ fn dos_to_ms(dt: zip::DateTime) -> Option<i64> {
     secs.checked_mul(1000)
 }
 
-/// Preflight barato ANTES de `ZipArchive::new`: el contador de entradas del
-/// EOCD (el propio `new()` materializa el central directory entero — una
-/// bomba de índice hay que cortarla antes de pagarla). `None` = sin
-/// preflight (zip64, EOCD no localizable, firma solo en el comentario…):
-/// es una optimización, el `len()` post-parse sigue cortando bombas y
-/// `ZipArchive::new` decide qué es corrupto.
-fn eocd_entry_count<R: Read + Seek>(reader: &mut R, len: u64) -> Option<u64> {
+/// Preflight barato ANTES de `ZipArchive::new`: cuenta de entradas Y tamaño
+/// del central directory, ambos leídos del EOCD (el propio `new()`
+/// materializa el CD entero — una bomba de índice O de memoria retenida
+/// (#61 MAJOR-2) hay que cortarla antes de pagarla). `None` = sin preflight
+/// (zip64, EOCD no localizable, firma solo en el comentario…): es una
+/// optimización, el `len()` post-parse sigue cortando bombas de entradas y
+/// `ZipArchive::new` decide qué es corrupto; para el tope de bytes cacheados
+/// (`max_cd_bytes`) un preflight desconocido se trata fail-closed (no se
+/// cachea) en `build_index`.
+fn eocd_preflight<R: Read + Seek>(reader: &mut R, len: u64) -> Option<(u64, u64)> {
     const EOCD_SIG: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
     // EOCD = 22 bytes + comentario ≤ 65535: la firma vive en la última ventana.
     let window = 22u64 + 65_535;
@@ -67,25 +70,31 @@ fn eocd_entry_count<R: Read + Seek>(reader: &mut R, len: u64) -> Option<u64> {
         let cd_size = u32::from_le_bytes(buf[pos + 12..pos + 16].try_into().ok()?);
         let cd_off = u32::from_le_bytes(buf[pos + 16..pos + 20].try_into().ok()?);
         if count == u16::MAX || cd_off == u32::MAX || cd_size == u32::MAX {
-            return None; // zip64: el contador real vive en el EOCD64
+            return None; // zip64: el contador/tamaño real vive en el EOCD64
         }
         if u64::from(cd_off) + u64::from(cd_size) == start + pos as u64 {
-            return Some(u64::from(count));
+            return Some((u64::from(count), u64::from(cd_size)));
         }
     }
     None
 }
 
 /// Construye el índice desde el central directory (`by_index_raw`: nunca
-/// descomprime). `cancel` se chequea por entrada (regla 3).
+/// descomprime). `cancel` se chequea por entrada (regla 3). Devuelve también
+/// el `ZipArchive` ya parseado (#61) SI su central directory cabe bajo
+/// `limits.max_cd_bytes` — por encima (o si el preflight no pudo medirlo,
+/// fail-closed) el índice se construye igual pero `None`: el caller no lo
+/// cachea y un `read` posterior vuelve a parsear (comportamiento pre-caché,
+/// #61 MAJOR-2 — el tope gobierna memoria RETENIDA, no el indexado).
 pub(crate) fn build_index<R: Read + Seek>(
     mut reader: R,
     container_len: u64,
     generation: (Option<i64>, Option<u64>),
     limits: &Limits,
     cancel: &Arc<AtomicBool>,
-) -> Result<ArchiveIndex, Error> {
-    let claimed = eocd_entry_count(&mut reader, container_len);
+) -> Result<(ArchiveIndex, Option<zip::ZipArchive<R>>), Error> {
+    let preflight = eocd_preflight(&mut reader, container_len);
+    let claimed = preflight.map(|(count, _)| count);
     if let Some(claimed) = claimed
         && claimed > limits.max_entries as u64
     {
@@ -165,15 +174,49 @@ pub(crate) fn build_index<R: Read + Seek>(
             "entradas omitidas del índice (nombres hostiles/límites); detalle en debug"
         );
     }
-    Ok(index)
+    // MAJOR-2 (#61): el CD parseado solo se cachea si cabe bajo el tope de
+    // memoria retenida. `cd_size` desconocido (preflight None: zip64, EOCD
+    // no localizable…) se trata como "excede" — fail-closed, ya que no hay
+    // forma de verificar el presupuesto.
+    let cd_size = preflight.map(|(_, size)| size);
+    let cacheable = cd_size.is_some_and(|size| size <= limits.max_cd_bytes);
+    if !cacheable {
+        tracing::debug!(
+            ?cd_size,
+            max_cd_bytes = limits.max_cd_bytes,
+            "central directory no cacheado (tope de memoria retenida, #61)"
+        );
+    }
+    Ok((index, cacheable.then_some(archive)))
+}
+
+/// Abre el archive en el hilo blocking; si el CD está roto, reporta por el
+/// canal y devuelve `None` (el caller retorna). Camino frío de `read`: sin
+/// `ZipArchive` cacheado (generación desconocida, MINOR-4; o CD por encima
+/// de `max_cd_bytes`, MAJOR-2 — ambos #61).
+pub(crate) fn open_archive<R: Read + Seek>(
+    reader: R,
+    tx: &tokio::sync::mpsc::Sender<Result<bytes::Bytes, Error>>,
+) -> Option<zip::ZipArchive<R>> {
+    match zip::ZipArchive::new(reader) {
+        Ok(a) => Some(a),
+        Err(e) => {
+            let _ = tx.blocking_send(Err(corrupt(&e)));
+            None
+        }
+    }
 }
 
 /// Lee la entrada `index` descomprimiendo en streaming hacia `tx`. El caller
 /// aplica el range SOBRE los bytes descomprimidos vía `skip`/`take`. Si el
 /// receptor muere (drop del stream = cancelación, regla 3), `blocking_send`
 /// falla y el hilo termina en el siguiente chunk.
+///
+/// `archive` viene YA PARSEADO (#61): del cache (clon barato, CD compartido
+/// por Arc interno) o del camino frío vía [`open_archive`] — nunca se
+/// reconstruye aquí.
 pub(crate) fn read_entry<R: Read + Seek>(
-    reader: R,
+    mut archive: zip::ZipArchive<R>,
     entry_index: usize,
     skip: u64,
     take: u64,
@@ -182,10 +225,6 @@ pub(crate) fn read_entry<R: Read + Seek>(
     let send_err = |tx: &tokio::sync::mpsc::Sender<Result<bytes::Bytes, Error>>, e: Error| {
         // Mejor esfuerzo: si el receptor murió, no hay a quién contárselo.
         let _ = tx.blocking_send(Err(e));
-    };
-    let mut archive = match zip::ZipArchive::new(reader) {
-        Ok(a) => a,
-        Err(e) => return send_err(tx, corrupt(&e)),
     };
     let mut file = match archive.by_index(entry_index) {
         Ok(f) => f,
