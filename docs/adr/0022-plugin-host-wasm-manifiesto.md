@@ -282,3 +282,48 @@ runtime del host (tras `command` en P4):
   **PARCIALMENTE cubierto**: hay previewer de plugin en el viewer F3, pero no en
   el pane ni con resaltado de sintaxis. El issue se deja ABIERTO anotando el
   avance de P5.
+
+## Addendum P2b/P4 hardening (2026-07-21) — cierra #68 y #69
+
+Endurecimiento de la deuda de seguridad aceptada en P2/P4. Misma frontera de
+confianza (escritura al `config_dir` del usuario = plantar el plugin), pero
+cerrada fail-closed; el sandbox de P2 contiene la ejecución en cualquier caso.
+
+**Issue #69 (confused-deputy aprobar↔ejecutar):**
+- **Aprobación ligada a un DIGEST del MANIFIESTO.** La aprobación deja de ser un
+  booleano por id: al aprobar se ancla `sha256` de la forma CANÓNICA del
+  manifiesto (`Manifest::approval_digest`) — no solo `[capabilities]` sino también
+  `category` y `contributions`, es decir CUÁNDO y CÓMO se dispara el plugin
+  (mimetypes del previewer, ids de comando, schemes…). Así un `plugin.toml`
+  reeditado de `command` a `previewer` (o con mimetypes ampliados) manteniendo las
+  mismas capabilities deja de casar y re-pide consentimiento, en vez de
+  auto-ejecutarse en el viewer F3 sin aprobación. Forma determinista: tags de enum
+  estables, cadenas longitud-prefijadas, hosts de red como conjunto ordenado y
+  DEDUPLICADO. Se persiste como `digest` en `plugins-state.toml`. En
+  `list`/`resolve_*` la aprobación es EFECTIVA solo si el digest anclado casa el
+  del manifiesto ACTUAL; si cambió en disco tras aprobar → `NotApproved`
+  (re-consentimiento). Una aprobación heredada SIN digest (estado previo a esta
+  defensa) también se trata como no vigente: fail-closed.
+- **Dedup de ids duplicados.** `Catalog::load_dir` rechaza (fail-closed) TODOS
+  los directorios que compartan `plugin.id` con `ManifestError::DuplicateId`; un
+  segundo dir no puede reclamar la aprobación del primero. Antes `find()` tomaba
+  el primero en orden inestable.
+- **Symlink del binario (defensa en profundidad).** `plugin.wasm` se canonicaliza
+  y se verifica que cae DENTRO del dir del plugin; si escapa (symlink a `/etc/…`
+  o a otro plugin) → `NoBinary`. Menor: quien escribe el symlink ya puede
+  reemplazar el binario entero (misma frontera).
+
+**Issue #68 (endurecimiento del runtime):**
+- **Cap del valor de retorno del guest** (`MAX_RETURN_BYTES` = 4 MiB): `run_command`
+  y `render_preview` rechazan fail-loud (`ReturnTooLarge`) por encima, sin crecer
+  la memoria del host ni truncar a medias.
+- **Cap del artefacto antes de compilar** (`MAX_ARTIFACT_BYTES` = 64 MiB): se mira
+  `metadata().len()` ANTES de `Component::from_file`; por encima → `ArtifactTooLarge`
+  sin gastar CPU/memoria de cranelift.
+- **Linker mínimo: EVALUADO y DESCARTADO reducirlo.** Los guests `wasm32-wasip2`
+  compilados con la std de Rust importan la superficie WASI estándar (wasi:cli,
+  io, clocks, random, filesystem…) para su runtime; recortar el linker rompería
+  la instanciación de guests legítimos sin ganar seguridad. El aislamiento real
+  no es la ausencia de imports sino el `WasiCtx` VACÍO (sin preopens/stdio/red/
+  env): esas interfaces existen pero no conceden ninguna capacidad. Se mantiene
+  `add_to_linker_sync` completo, documentado en `runtime.rs`.

@@ -12,6 +12,11 @@ authors.workspace = true
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 toml.workspace = true
+# Digest de las capabilities aprobadas (issue #69, defensa confused-deputy): un
+# sha256 de la forma canónica del bloque `[capabilities]` que se guarda JUNTO a
+# la aprobación; si el manifiesto cambia en disco tras aprobar, el digest deja de
+# casar y el host re-pide consentimiento. Misma dep de hashing que el journal.
+sha2.workspace = true
 # Runtime WASM de plugins (M4-P2, ADR 0022 D1): wasmtime es la dep GRANDE y
 # estructural de esta fase — ejecuta los componentes WASM del modelo de M4-P1.
 # default-features=false + runtime/component-model/cranelift/std: solo el motor

@@ -226,3 +226,123 @@ fn catalogo_dir_inexistente_es_vacio() {
     let cat = Catalog::load_dir(std::path::Path::new("/no/existe/seguro/norte"));
     assert!(cat.plugins.is_empty() && cat.errors.is_empty());
 }
+
+#[test]
+fn approval_digest_incluye_category_y_contributions_no_solo_capabilities() {
+    // Issue #69 (MINOR 1): el digest de aprobación cubre category + contributions
+    // (cuándo/cómo se dispara), no solo [capabilities]. Un manifiesto reeditado
+    // que cambie esos campos MANTENIENDO las capabilities debe mover el digest
+    // (→ re-consentimiento fail-closed), o pasaría a auto-dispararse sin aprobar.
+    let command = Manifest::from_toml(
+        r#"
+        [plugin]
+        id = "org.norte.x"
+        name = "X"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "command"
+        [capabilities]
+        fs-read = "scoped"
+    "#,
+    )
+    .unwrap();
+
+    // MISMAS capabilities, pero category previewer (con un entry de mimetypes).
+    let previewer = Manifest::from_toml(
+        r#"
+        [plugin]
+        id = "org.norte.x"
+        name = "X"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "previewer"
+        [contributions]
+        previewer = [{ mimetypes = ["text/*"] }]
+        [capabilities]
+        fs-read = "scoped"
+    "#,
+    )
+    .unwrap();
+
+    // MISMA category previewer + mismas capabilities, pero mimetypes AMPLIADOS.
+    let previewer_wide = Manifest::from_toml(
+        r#"
+        [plugin]
+        id = "org.norte.x"
+        name = "X"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "previewer"
+        [contributions]
+        previewer = [{ mimetypes = ["text/*", "application/*"] }]
+        [capabilities]
+        fs-read = "scoped"
+    "#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        command.capabilities.digest(),
+        previewer.capabilities.digest(),
+        "las capabilities son idénticas (control del test)"
+    );
+    assert_ne!(
+        command.approval_digest(),
+        previewer.approval_digest(),
+        "cambiar la category mueve el digest de aprobación"
+    );
+    assert_ne!(
+        previewer.approval_digest(),
+        previewer_wide.approval_digest(),
+        "ampliar los mimetypes del entry mueve el digest de aprobación"
+    );
+    // Determinista y estable para un manifiesto dado.
+    assert_eq!(command.approval_digest(), command.approval_digest());
+}
+
+#[test]
+fn catalogo_rechaza_ids_duplicados_en_dos_directorios() {
+    // Issue #69: dos directorios distintos declaran el MISMO `plugin.id`. Un
+    // segundo dir no puede reclamar la aprobación del primero para colar su
+    // `plugin.wasm`. Se rechazan AMBOS (fail-closed), no se elige "el primero".
+    let root = tempfile::tempdir().unwrap();
+    let dupe = r#"
+        [plugin]
+        id = "org.norte.clash"
+        name = "Clash"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "command"
+    "#;
+    // Dos subdirectorios con nombres distintos pero el mismo id declarado.
+    write_plugin(root.path(), "dir-a", dupe);
+    write_plugin(root.path(), "dir-b", dupe);
+    // Y uno legítimo con id único: no debe verse afectado por la colisión ajena.
+    write_plugin(
+        root.path(),
+        "solo",
+        r#"
+        [plugin]
+        id = "org.norte.solo"
+        name = "Solo"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "command"
+    "#,
+    );
+
+    let cat = Catalog::load_dir(root.path());
+    assert_eq!(
+        cat.plugins.len(),
+        1,
+        "solo el id único carga; los colisionantes se rechazan"
+    );
+    assert_eq!(cat.plugins[0].manifest.id, "org.norte.solo");
+    assert_eq!(cat.errors.len(), 2, "ambos directorios del id duplicado");
+    assert!(
+        cat.errors
+            .iter()
+            .all(|e| matches!(&e.error, ManifestError::DuplicateId(id) if id == "org.norte.clash")),
+        "los dos errores son DuplicateId del id colisionante"
+    );
+}

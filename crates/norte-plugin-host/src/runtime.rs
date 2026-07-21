@@ -36,6 +36,21 @@ const MAX_LOG_CHARS: usize = 4096;
 /// puede agotar la RAM del host haciendo crecer su memoria lineal sin fin.
 const MAX_STORE_MEMORY_BYTES: usize = 64 * 1024 * 1024;
 
+/// Tope del valor de RETORNO del guest (`run_command`/`render_preview`), en
+/// bytes (issue #68): un guest no puede hacer crecer la memoria del host
+/// devolviendo una `String` gigante. 4 MiB es holgado para texto de preview o un
+/// mensaje de barra de estado, y coherente con el tope de lectura de 1 MiB del
+/// core al previsualizar. Por encima se RECHAZA (fail-loud), no se trunca a
+/// medias — un valor cortado no es el que el plugin quiso devolver.
+const MAX_RETURN_BYTES: usize = 4 * 1024 * 1024;
+
+/// Tope del tamaño del ARTEFACTO `.wasm` en disco ANTES de compilarlo (issue
+/// #68): compilar un componente con cranelift cuesta CPU y memoria proporcional
+/// al tamaño; no se gasta ese trabajo en un artefacto arbitrariamente grande. 64
+/// MiB es amplísimo para un componente legítimo (los guests de ejemplo pesan
+/// cientos de KiB). Por encima se rechaza sin llegar a `Component::from_file`.
+const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Periodo del hilo "ticker" que incrementa la época del motor. Junto con el
 /// deadline por store define el timeout de CPU efectivo (≈ deadline × periodo).
 const EPOCH_TICK: Duration = Duration::from_millis(50);
@@ -62,6 +77,49 @@ pub enum RuntimeError {
     /// El guest devolvió un `Err` legible desde su lógica.
     #[error("error del plugin: {0}")]
     Guest(String),
+    /// El artefacto `.wasm` en disco supera el tope `MAX_ARTIFACT_BYTES`: se
+    /// rechaza ANTES de compilarlo (issue #68).
+    #[error("artefacto demasiado grande: {len} bytes (máx {cap})")]
+    ArtifactTooLarge {
+        /// Tamaño real del `.wasm` en disco.
+        len: u64,
+        /// Tope permitido (`MAX_ARTIFACT_BYTES`).
+        cap: u64,
+    },
+    /// El valor de retorno del guest supera el tope `MAX_RETURN_BYTES` (issue
+    /// #68): se rechaza fail-loud en vez de crecer la memoria del host.
+    #[error("valor de retorno del plugin demasiado grande: {len} bytes (máx {cap})")]
+    ReturnTooLarge {
+        /// Longitud del valor devuelto por el guest.
+        len: usize,
+        /// Tope permitido (`MAX_RETURN_BYTES`).
+        cap: usize,
+    },
+}
+
+/// Aplica el tope de tamaño al valor de retorno del guest (issue #68). Fail-loud:
+/// por encima de [`MAX_RETURN_BYTES`] devuelve [`RuntimeError::ReturnTooLarge`]
+/// en vez de entregar (o truncar) la cadena.
+fn cap_return_value(value: String) -> Result<String, RuntimeError> {
+    if value.len() > MAX_RETURN_BYTES {
+        return Err(RuntimeError::ReturnTooLarge {
+            len: value.len(),
+            cap: MAX_RETURN_BYTES,
+        });
+    }
+    Ok(value)
+}
+
+/// Comprueba que el artefacto en disco no excede [`MAX_ARTIFACT_BYTES`] (issue
+/// #68). Separada para poder testear la decisión sin escribir un fichero enorme.
+fn check_artifact_size(len: u64) -> Result<(), RuntimeError> {
+    if len > MAX_ARTIFACT_BYTES {
+        return Err(RuntimeError::ArtifactTooLarge {
+            len,
+            cap: MAX_ARTIFACT_BYTES,
+        });
+    }
+    Ok(())
 }
 
 /// El estado que vive en el `Store<T>` de wasmtime: contexto WASI (vacío),
@@ -186,6 +244,8 @@ impl PluginRuntime {
     /// `caps` declaradas y un sandbox WASI VACÍO.
     ///
     /// # Errors
+    /// - [`RuntimeError::ArtifactTooLarge`] si el `.wasm` en disco supera
+    ///   `MAX_ARTIFACT_BYTES` (se rechaza antes de compilar).
     /// - [`RuntimeError::Component`] si el artefacto no es un componente válido.
     /// - [`RuntimeError::Instantiate`] si el linker o la instanciación fallan.
     pub fn instantiate(
@@ -193,10 +253,29 @@ impl PluginRuntime {
         wasm_path: &Path,
         caps: Capabilities,
     ) -> Result<PluginInstance, RuntimeError> {
+        // Cap del artefacto ANTES de compilar (issue #68): un `.wasm` gigante no
+        // debe gastar CPU/memoria de cranelift. `metadata` es una llamada barata
+        // que no lee el contenido; el propio `Component::from_file` fallará luego
+        // si el fichero desaparece entre medias.
+        let len = std::fs::metadata(wasm_path)
+            .map_err(|e| RuntimeError::Component(e.to_string()))?
+            .len();
+        check_artifact_size(len)?;
+
         let component = Component::from_file(&self.engine, wasm_path)
             .map_err(|e| RuntimeError::Component(e.to_string()))?;
 
         let mut linker: Linker<HostState> = Linker::new(&self.engine);
+        // Linker WASI COMPLETO a propósito (issue #68, punto 3 — evaluado y
+        // DESCARTADO reducirlo): los guests se compilan a `wasm32-wasip2` con la
+        // std de Rust, que importa la superficie estándar (wasi:cli, wasi:io,
+        // wasi:clocks, wasi:random, wasi:filesystem…) para su runtime (panic,
+        // asignación, formateo). Recortar el linker haría fallar la
+        // instanciación de guests legítimos por "import no satisfecho", sin ganar
+        // seguridad: el aislamiento REAL no es la ausencia de imports en el
+        // linker sino el `WasiCtx` VACÍO de abajo — sin preopens, stdio, red ni
+        // env, esas interfaces existen pero no conceden NINGUNA capacidad. La
+        // puerta con estado (`fs-read` scoped) la sigue gateando el HOST.
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
         host_log::add_to_linker::<HostState, wasmtime::component::HasSelf<_>>(&mut linker, |s| s)
@@ -227,8 +306,6 @@ impl PluginRuntime {
         // `RuntimeError::Trap` en run_command/render_preview.
         store.set_epoch_deadline(self.epoch_deadline);
 
-        // Endurecimiento adicional (cap de retorno del guest, tamaño del
-        // artefacto antes de compilar, linker mínimo): issue #68.
         let bindings = NortePlugin::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
 
@@ -283,6 +360,8 @@ impl PluginInstance {
     /// # Errors
     /// - [`RuntimeError::Trap`] si el guest atrapa.
     /// - [`RuntimeError::Guest`] si el guest devuelve un `Err` de lógica.
+    /// - [`RuntimeError::ReturnTooLarge`] si el texto devuelto supera
+    ///   `MAX_RETURN_BYTES`.
     pub fn render_preview(
         &mut self,
         mimetype: &str,
@@ -292,11 +371,13 @@ impl PluginInstance {
             mimetype: mimetype.to_owned(),
             content: content.to_vec(),
         };
-        self.bindings
+        let out = self
+            .bindings
             .norte_plugin_previewer()
             .call_render(&mut self.store, &input)
             .map_err(|e| RuntimeError::Trap(e.to_string()))?
-            .map_err(RuntimeError::Guest)
+            .map_err(RuntimeError::Guest)?;
+        cap_return_value(out)
     }
 
     /// Invoca el export `command::run` del guest.
@@ -304,11 +385,48 @@ impl PluginInstance {
     /// # Errors
     /// - [`RuntimeError::Trap`] si el guest atrapa.
     /// - [`RuntimeError::Guest`] si el guest devuelve un `Err` de lógica.
+    /// - [`RuntimeError::ReturnTooLarge`] si el texto devuelto supera
+    ///   `MAX_RETURN_BYTES`.
     pub fn run_command(&mut self, id: &str, arg: &str) -> Result<String, RuntimeError> {
-        self.bindings
+        let out = self
+            .bindings
             .norte_plugin_command()
             .call_run(&mut self.store, id, arg)
             .map_err(|e| RuntimeError::Trap(e.to_string()))?
-            .map_err(RuntimeError::Guest)
+            .map_err(RuntimeError::Guest)?;
+        cap_return_value(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cap_return_value_pasa_por_debajo_del_tope() {
+        let ok = "x".repeat(MAX_RETURN_BYTES);
+        assert_eq!(cap_return_value(ok.clone()).unwrap().len(), ok.len());
+    }
+
+    #[test]
+    fn cap_return_value_rechaza_por_encima_del_tope() {
+        let big = "x".repeat(MAX_RETURN_BYTES + 1);
+        let err = cap_return_value(big).unwrap_err();
+        assert!(
+            matches!(err, RuntimeError::ReturnTooLarge { len, cap }
+                if len == MAX_RETURN_BYTES + 1 && cap == MAX_RETURN_BYTES),
+            "fue {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_artifact_size_acepta_en_el_tope_y_rechaza_por_encima() {
+        assert!(check_artifact_size(MAX_ARTIFACT_BYTES).is_ok());
+        let err = check_artifact_size(MAX_ARTIFACT_BYTES + 1).unwrap_err();
+        assert!(
+            matches!(err, RuntimeError::ArtifactTooLarge { len, cap }
+                if len == MAX_ARTIFACT_BYTES + 1 && cap == MAX_ARTIFACT_BYTES),
+            "fue {err:?}"
+        );
     }
 }

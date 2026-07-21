@@ -32,12 +32,18 @@ use toml_edit::{DocumentMut, InlineTable, Item, Table, Value};
 
 /// Estado que el usuario fija sobre un plugin descubierto. Ausente = ambos
 /// `false` (descubierto pero sin aprobar ni activar).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PluginState {
     /// Un humano aprobó las capabilities declaradas.
     pub approved: bool,
     /// Un humano lo tiene activado.
     pub enabled: bool,
+    /// Digest (hex sha256) de las capabilities que el humano vio al aprobar
+    /// (issue #69, defensa confused-deputy TOCTOU). `None` = aprobación sin
+    /// digest anclado (estado heredado de antes de esta defensa, o sin aprobar):
+    /// se trata fail-closed como NO-casante, forzando un re-consentimiento. Al
+    /// aprobar se fija al digest ACTUAL del manifiesto; al revocar se limpia.
+    pub approved_digest: Option<String>,
 }
 
 /// Fallo al ejecutar un comando de plugin. Los tres primeros variantes son el
@@ -155,7 +161,7 @@ impl PluginRegistry {
             .plugins
             .iter()
             .map(|e| {
-                let st = self.state.get(&e.manifest.id).copied().unwrap_or_default();
+                let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
                 PluginInfo {
                     id: e.manifest.id.clone(),
                     name: e.manifest.name.clone(),
@@ -169,7 +175,11 @@ impl PluginRegistry {
                         .into_iter()
                         .map(String::from)
                         .collect(),
-                    approved: st.approved,
+                    // Aprobación EFECTIVA (issue #69): `approved` en el fichero
+                    // pero con el digest de capabilities CASANDO el del manifiesto
+                    // actual. Si las capabilities cambiaron en disco tras aprobar,
+                    // la UI ve `approved = false` y vuelve a pedir consentimiento.
+                    approved: Self::approval_is_current(&st, &e.manifest),
                     enabled: st.enabled,
                 }
             })
@@ -217,10 +227,18 @@ impl PluginRegistry {
     /// responsabilidad del llamante (daemon: `persist_state` en
     /// `spawn_blocking`; embebido: [`Self::set_approval`]).
     pub fn set_approval_in_memory(&mut self, id: &str, approved: bool) -> bool {
-        if !self.is_known(id) {
+        // Se ancla el digest de las capabilities que el humano está viendo AHORA
+        // (issue #69): si el `plugin.toml` cambia después, el digest dejará de
+        // casar y `resolve_*` re-pedirá consentimiento. Requiere que el id exista
+        // en el catálogo (de lo contrario no hay manifiesto que digestar).
+        let Some(digest) = self.current_digest(id) else {
             return false;
-        }
-        self.state.entry(id.to_string()).or_default().approved = approved;
+        };
+        let st = self.state.entry(id.to_string()).or_default();
+        st.approved = approved;
+        // Al aprobar se guarda el digest visto; al revocar se limpia (una futura
+        // re-aprobación volverá a anclarlo).
+        st.approved_digest = approved.then_some(digest);
         true
     }
 
@@ -289,17 +307,18 @@ impl PluginRegistry {
             .iter()
             .find(|p| p.manifest.id == id)
             .ok_or_else(|| PluginRunError::Unknown(id.to_string()))?;
-        let st = self.state.get(id).copied().unwrap_or_default();
-        if !st.approved {
+        let st = self.state.get(id).cloned().unwrap_or_default();
+        // Fail-closed: sin aprobación vigente cuyo digest CASE las capabilities
+        // actuales (issue #69), se trata como sin aprobar — aunque el flag
+        // `approved` siga a `true` en disco (el manifiesto cambió tras aprobar).
+        if !Self::approval_is_current(&st, &entry.manifest) {
             return Err(PluginRunError::NotApproved(id.to_string()));
         }
         if !st.enabled {
             return Err(PluginRunError::Disabled(id.to_string()));
         }
-        let wasm = entry.dir.join("plugin.wasm");
-        if !wasm.is_file() {
-            return Err(PluginRunError::NoBinary(id.to_string()));
-        }
+        let wasm = Self::verified_wasm(&entry.dir)
+            .ok_or_else(|| PluginRunError::NoBinary(id.to_string()))?;
         Ok((wasm, entry.manifest.capabilities.clone()))
     }
 
@@ -318,8 +337,10 @@ impl PluginRegistry {
         norte_plugin_host::Capabilities,
     )> {
         self.catalog.plugins.iter().find_map(|e| {
-            let st = self.state.get(&e.manifest.id).copied().unwrap_or_default();
-            if !st.approved || !st.enabled {
+            let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
+            // Fail-closed con digest vigente (issue #69): un previewer cuyo
+            // manifiesto cambió tras aprobar NO se elige hasta re-consentir.
+            if !Self::approval_is_current(&st, &e.manifest) || !st.enabled {
                 return None;
             }
             let handles = e
@@ -332,15 +353,13 @@ impl PluginRegistry {
             if !handles {
                 return None;
             }
-            let wasm = e.dir.join("plugin.wasm");
-            wasm.is_file().then(|| {
-                (
-                    e.manifest.id.clone(),
-                    e.manifest.name.clone(),
-                    wasm,
-                    e.manifest.capabilities.clone(),
-                )
-            })
+            let wasm = Self::verified_wasm(&e.dir)?;
+            Some((
+                e.manifest.id.clone(),
+                e.manifest.name.clone(),
+                wasm,
+                e.manifest.capabilities.clone(),
+            ))
         })
     }
 
@@ -371,6 +390,44 @@ impl PluginRegistry {
         self.catalog.plugins.iter().any(|e| e.manifest.id == id)
     }
 
+    /// Digest actual del MANIFIESTO de `id` en el catálogo (capabilities +
+    /// category + contributions), o `None` si el id no está descubierto (issue
+    /// #69).
+    fn current_digest(&self, id: &str) -> Option<String> {
+        self.catalog
+            .plugins
+            .iter()
+            .find(|e| e.manifest.id == id)
+            .map(|e| e.manifest.approval_digest())
+    }
+
+    /// `true` si la aprobación es VIGENTE (issue #69): el humano aprobó Y el
+    /// digest anclado casa el del manifiesto actual (no solo sus capabilities,
+    /// también `category`/`contributions` — cuándo/cómo se dispara). Un
+    /// `approved_digest` ausente (aprobación heredada sin ancla) NUNCA casa →
+    /// re-consentimiento.
+    fn approval_is_current(st: &PluginState, manifest: &norte_plugin_host::Manifest) -> bool {
+        st.approved && st.approved_digest.as_deref() == Some(manifest.approval_digest().as_str())
+    }
+
+    /// Resuelve `<dir>/plugin.wasm` y verifica, canonicalizando, que el binario
+    /// real cae DENTRO del directorio del plugin (issue #69, defensa en
+    /// profundidad contra un `plugin.wasm` que sea un symlink a `/etc/...` o a
+    /// otro plugin). `None` si no existe, no es fichero o escapa del dir. Nota:
+    /// quien puede escribir el symlink ya puede reemplazar el binario entero
+    /// (misma frontera de confianza), por eso es defensa en profundidad, no una
+    /// barrera fuerte. Devuelve la ruta CANÓNICA (ya resuelta) para no re-seguir
+    /// enlaces al abrirla.
+    fn verified_wasm(dir: &Path) -> Option<PathBuf> {
+        let wasm = dir.join("plugin.wasm");
+        if !wasm.is_file() {
+            return None;
+        }
+        let canon_wasm = wasm.canonicalize().ok()?;
+        let canon_dir = dir.canonicalize().ok()?;
+        canon_wasm.starts_with(&canon_dir).then_some(canon_wasm)
+    }
+
     /// Lee el estado persistido. Ausente = vacío; corrupto = `InvalidData`.
     fn read_state(path: &Path) -> io::Result<BTreeMap<String, PluginState>> {
         let src = match std::fs::read_to_string(path) {
@@ -388,11 +445,13 @@ impl PluginRegistry {
                     continue;
                 };
                 let flag = |name: &str| tbl.get(name).and_then(Item::as_bool).unwrap_or(false);
+                let digest = tbl.get("digest").and_then(Item::as_str).map(str::to_owned);
                 map.insert(
                     key.to_string(),
                     PluginState {
                         approved: flag("approved"),
                         enabled: flag("enabled"),
+                        approved_digest: digest,
                     },
                 );
             }
@@ -441,6 +500,12 @@ pub(crate) fn persist_state(
         let mut inline = InlineTable::new();
         inline.insert("approved", Value::from(st.approved));
         inline.insert("enabled", Value::from(st.enabled));
+        // El digest de capabilities anclado a la aprobación (issue #69) persiste
+        // junto al flag; sin él una re-discover no podría revalidar el
+        // consentimiento y forzaría re-aprobar en cada arranque.
+        if let Some(digest) = &st.approved_digest {
+            inline.insert("digest", Value::from(digest.clone()));
+        }
         plugins.insert(id, Item::Value(Value::InlineTable(inline)));
     }
     // Write atómico: temporal en el mismo dir (mismo filesystem → rename atómico)
@@ -571,14 +636,15 @@ fs-read = "scoped"
 
         // Y una discover fresca recupera el MISMO id con su estado.
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
-        let st = reg.state.get("org.norte.demo").copied();
+        let st = reg.state.get("org.norte.demo").cloned().unwrap();
+        assert!(st.approved && !st.enabled);
+        // El digest del manifiesto anclado al aprobar (issue #69) también
+        // sobrevive al round-trip y casa el manifiesto actual.
+        let manifest = norte_plugin_host::Manifest::from_toml(DEMO_MANIFEST).unwrap();
         assert_eq!(
-            st,
-            Some(PluginState {
-                approved: true,
-                enabled: false
-            }),
-            "el estado del id-con-puntos debe recuperarse bajo el mismo id literal"
+            st.approved_digest.as_deref(),
+            Some(manifest.approval_digest().as_str()),
+            "el digest del manifiesto debe persistir y casar el manifiesto"
         );
     }
 
@@ -767,6 +833,159 @@ mimetypes = ["text/*"]
         assert!(
             reg.resolve_previewer("text/plain").is_none(),
             "sin plugin.wasm no hay nada que ejecutar"
+        );
+    }
+
+    /// Sobrescribe el `plugin.toml` de `<config>/plugins/<id>/` con `src`.
+    fn rewrite_manifest(config_dir: &Path, id: &str, src: &str) {
+        std::fs::write(config_dir.join("plugins").join(id).join("plugin.toml"), src).unwrap();
+    }
+
+    /// Manifiesto `command` SIN capabilities peligrosas (para el test TOCTOU).
+    const TOCTOU_BEFORE: &str = r#"
+[plugin]
+id = "org.norte.toctou"
+name = "TOCTOU"
+publisher = "norte"
+version = "0.1.0"
+category = "command"
+"#;
+
+    /// El MISMO plugin, pero con capabilities AMPLIADAS (fs-read + net) que el
+    /// humano nunca aprobó.
+    const TOCTOU_AFTER: &str = r#"
+[plugin]
+id = "org.norte.toctou"
+name = "TOCTOU"
+publisher = "norte"
+version = "0.1.0"
+category = "command"
+[capabilities]
+fs-read = "scoped"
+net = { hosts = ["evil.example"] }
+"#;
+
+    #[test]
+    fn plugins_capabilities_cambiadas_tras_aprobar_re_piden_consentimiento() {
+        // Issue #69: el humano aprueba unas capabilities; luego el plugin.toml
+        // cambia en disco a otras más amplias y ocurre un nuevo discover. La
+        // aprobación (flag true en disco) NO debe valer para las capabilities
+        // NUEVAS: el digest anclado ya no casa → NotApproved (re-consentimiento).
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.toctou", TOCTOU_BEFORE);
+        {
+            let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
+            assert!(reg.set_approval("org.norte.toctou", true).unwrap());
+            assert!(reg.set_enabled("org.norte.toctou", true).unwrap());
+        }
+
+        // El atacante reescribe el manifiesto con capabilities ampliadas.
+        rewrite_manifest(tmp.path(), "org.norte.toctou", TOCTOU_AFTER);
+
+        // Nueva discover: lee el estado (approved=true + digest VIEJO) y el
+        // manifiesto NUEVO.
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+
+        // list() muestra la aprobación como NO vigente (la UI re-pide consentir).
+        let info = &reg.list().plugins[0];
+        assert!(
+            !info.approved,
+            "capabilities cambiadas ⇒ aprobación efectiva=false"
+        );
+        assert!(
+            info.capabilities.iter().any(|c| c == "net"),
+            "y muestra las capabilities NUEVAS para que el humano las vea"
+        );
+
+        // Y resolve_runnable rechaza fail-closed con NotApproved.
+        let err = reg.resolve_runnable("org.norte.toctou").unwrap_err();
+        assert!(
+            matches!(err, PluginRunError::NotApproved(ref id) if id == "org.norte.toctou"),
+            "el digest anclado ya no casa: {err:?}"
+        );
+
+        // Re-aprobar re-ancla el digest a las capabilities NUEVAS y vuelve a
+        // resolver (el humano consintió lo que ahora hay).
+        let mut reg = reg;
+        assert!(reg.set_approval("org.norte.toctou", true).unwrap());
+        assert!(reg.list().plugins[0].approved);
+    }
+
+    #[test]
+    fn plugins_aprobacion_heredada_sin_digest_re_pide_consentimiento() {
+        // Estado persistido de ANTES de la defensa (issue #69): approved=true sin
+        // `digest`. Fail-closed: se trata como no vigente hasta re-aprobar.
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.cmd", CMD_MANIFEST);
+        std::fs::write(
+            tmp.path().join("plugins-state.toml"),
+            "[plugins]\n\"org.norte.cmd\" = { approved = true, enabled = true }\n",
+        )
+        .unwrap();
+
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert!(
+            !reg.list().plugins[0].approved,
+            "aprobación sin digest anclado no es vigente"
+        );
+        let err = reg.resolve_runnable("org.norte.cmd").unwrap_err();
+        assert!(
+            matches!(err, PluginRunError::NotApproved(_)),
+            "fail-closed sin digest: {err:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugins_wasm_symlink_fuera_del_dir_es_no_binary() {
+        // Issue #69 (defensa en profundidad): `plugin.wasm` es un symlink que
+        // apunta FUERA del directorio del plugin. Se rechaza (NoBinary), no se
+        // ejecuta un binario ajeno.
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.cmd", CMD_MANIFEST);
+        // Un binario "de fuera" (contenido irrelevante: el symlink se rechaza
+        // antes de intentar compilarlo).
+        let outside = tmp.path().join("ajeno.wasm");
+        std::fs::write(&outside, b"binario ajeno").unwrap();
+        let link = tmp
+            .path()
+            .join("plugins")
+            .join("org.norte.cmd")
+            .join("plugin.wasm");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert!(reg.set_approval_in_memory("org.norte.cmd", true));
+        assert!(reg.set_enabled_in_memory("org.norte.cmd", true));
+
+        let err = reg.resolve_runnable("org.norte.cmd").unwrap_err();
+        assert!(
+            matches!(err, PluginRunError::NoBinary(ref id) if id == "org.norte.cmd"),
+            "un plugin.wasm que escapa del dir se rechaza: {err:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugins_wasm_symlink_dentro_del_dir_se_acepta() {
+        // Un symlink que resuelve DENTRO del dir del plugin es legítimo (p. ej.
+        // un build que enlaza al artefacto real junto a él).
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.cmd", CMD_MANIFEST);
+        let plugin_dir = tmp.path().join("plugins").join("org.norte.cmd");
+        let real = plugin_dir.join("real.wasm");
+        std::fs::write(&real, b"artefacto").unwrap();
+        std::os::unix::fs::symlink(&real, plugin_dir.join("plugin.wasm")).unwrap();
+
+        let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert!(reg.set_approval_in_memory("org.norte.cmd", true));
+        assert!(reg.set_enabled_in_memory("org.norte.cmd", true));
+
+        // resolve_runnable no debe fallar por NoBinary (llega a devolver la ruta).
+        let resolved = reg.resolve_runnable("org.norte.cmd");
+        assert!(
+            resolved.is_ok(),
+            "un symlink dentro del dir es válido: {resolved:?}"
         );
     }
 }

@@ -35,6 +35,18 @@ impl Category {
             Category::Hook => "hook",
         }
     }
+
+    /// Byte canónico y estable para el digest de aprobación (issue #69). NO se
+    /// usa el discriminante del enum (podría reordenarse) sino un valor fijo.
+    fn digest_tag(self) -> u8 {
+        match self {
+            Category::Previewer => 0,
+            Category::Provider => 1,
+            Category::Command => 2,
+            Category::Columns => 3,
+            Category::Hook => 4,
+        }
+    }
 }
 
 /// Un previewer declarado: los mimetypes que sabe pintar.
@@ -103,6 +115,48 @@ pub struct Contributions {
     pub hook: Vec<HookContrib>,
 }
 
+impl Contributions {
+    /// Alimenta un hasher con la forma CANÓNICA de las contribuciones, SIN
+    /// finalizar (issue #69). Son los campos que deciden CUÁNDO/CÓMO se dispara
+    /// el plugin (mimetypes del previewer, ids de comando, schemes de provider,
+    /// eventos de hook): cambiarlos manteniendo las mismas capabilities NO debe
+    /// conservar la aprobación (si no, un `command` reeditado a `previewer`
+    /// pasaría a auto-ejecutarse en el viewer sobre ficheros que casen). El orden
+    /// se preserva (no se ordena): un reorden dispara re-consentimiento —
+    /// conservador y fail-closed. Cada sección va con su nº de entradas y cada
+    /// cadena longitud-prefijada (sin ambigüedad entre secciones).
+    fn update_digest(&self, h: &mut sha2::Sha256) {
+        use crate::capability::update_str;
+        use sha2::Digest;
+
+        h.update((self.previewer.len() as u64).to_le_bytes());
+        for c in &self.previewer {
+            h.update((c.mimetypes.len() as u64).to_le_bytes());
+            for m in &c.mimetypes {
+                update_str(h, m);
+            }
+        }
+        h.update((self.command.len() as u64).to_le_bytes());
+        for c in &self.command {
+            update_str(h, &c.id);
+            update_str(h, &c.title);
+        }
+        h.update((self.columns.len() as u64).to_le_bytes());
+        for c in &self.columns {
+            update_str(h, &c.id);
+            update_str(h, &c.header);
+        }
+        h.update((self.provider.len() as u64).to_le_bytes());
+        for c in &self.provider {
+            update_str(h, &c.scheme);
+        }
+        h.update((self.hook.len() as u64).to_le_bytes());
+        for c in &self.hook {
+            update_str(h, &c.on);
+        }
+    }
+}
+
 /// Bloque `[plugin]` del manifiesto.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -156,6 +210,13 @@ pub enum ManifestError {
     /// `exec` distinto de `none`: PROHIBIDO (spec §7.1, invariante dura).
     #[error("capability `exec` prohibida: debe ser `none` (o ausente)")]
     ExecForbidden,
+    /// Dos o más directorios declaran el MISMO `plugin.id` (issue #69): se
+    /// rechazan TODOS (fail-closed). Un segundo directorio no puede reclamar el
+    /// id de un plugin aprobado para colar su propio `plugin.wasm`.
+    #[error(
+        "id duplicado: `{0}` aparece en más de un directorio de plugins (rechazado por seguridad)"
+    )]
+    DuplicateId(String),
 }
 
 /// `true` si `id` es un identificador reverse-DNS válido: uno o más segmentos
@@ -215,5 +276,33 @@ impl Manifest {
             contributions: raw.contributions,
             capabilities: raw.capabilities,
         })
+    }
+
+    /// Digest hex (sha256) de la forma CANÓNICA del manifiesto para ANCLAR la
+    /// aprobación del humano (issue #69, defensa confused-deputy TOCTOU). Cubre
+    /// no solo las `[capabilities]` (lo que el host hace cumplir) sino también la
+    /// `category` y las `contributions` — los campos que deciden CUÁNDO y CÓMO se
+    /// dispara el plugin (mimetypes, ids de comando, schemes…). Así, un
+    /// `plugin.toml` reeditado que cambie de `command` a `previewer`, o que
+    /// amplíe los mimetypes, MANTENIENDO las mismas capabilities, deja de casar el
+    /// digest y fuerza re-consentimiento (si no, pasaría a auto-ejecutarse en el
+    /// viewer sin que el humano lo aprobara para eso).
+    ///
+    /// La forma es determinista y no ambigua (tags de enum estables, cadenas
+    /// longitud-prefijadas, hosts de red como conjunto ordenado y deduplicado).
+    /// El id y el nombre/publisher/versión NO entran: la aprobación se indexa por
+    /// id (cambiarlo es otro plugin) y el resto es cosmético — lo que importa para
+    /// la seguridad es qué hace y cuándo se dispara.
+    #[must_use]
+    pub fn approval_digest(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        // Prefijo de dominio + versión del esquema: si cambia la forma canónica,
+        // los digests viejos no colisionan con los nuevos.
+        h.update(b"norte-plugin-manifest:v1\n");
+        h.update([self.category.digest_tag()]);
+        self.contributions.update_digest(&mut h);
+        self.capabilities.update_digest(&mut h);
+        crate::capability::hex_lower(&h.finalize())
     }
 }

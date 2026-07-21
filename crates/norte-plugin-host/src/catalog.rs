@@ -1,6 +1,7 @@
 //! Catálogo de plugins (ADR 0022 D5/D6): descubre los `.wasm` locales y sus
 //! manifiestos, y los ordena por categoría para el gestor de extensiones.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::manifest::{Category, Manifest, ManifestError};
@@ -61,6 +62,11 @@ impl Catalog {
         let Ok(entries) = std::fs::read_dir(root) else {
             return cat;
         };
+        // Se recogen los manifiestos válidos aparte para poder DEDUPLICAR por id
+        // antes de aceptarlos: dos directorios con el mismo `plugin.id` son un
+        // vector de confused-deputy (issue #69) — el segundo podría reclamar la
+        // aprobación del primero. Se rechazan TODOS los colisionantes (fail-closed).
+        let mut parsed: Vec<(Manifest, PathBuf)> = Vec::new();
         for entry in entries.flatten() {
             let dir = entry.path();
             if !dir.is_dir() {
@@ -71,13 +77,30 @@ impl Catalog {
                 continue; // sin plugin.toml no es un plugin (no es error)
             };
             match Manifest::from_toml(&src) {
-                Ok(manifest) => cat.plugins.push(PluginEntry {
+                Ok(manifest) => parsed.push((manifest, dir)),
+                Err(error) => cat.errors.push(LoadError { dir, error }),
+            }
+        }
+        // Cuenta de ocurrencias por id: un id que aparece más de una vez es
+        // ambiguo y se rechaza en todos sus directorios.
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for (manifest, _) in &parsed {
+            *counts.entry(manifest.id.clone()).or_insert(0) += 1;
+        }
+        for (manifest, dir) in parsed {
+            if counts.get(&manifest.id).copied().unwrap_or(0) > 1 {
+                let id = manifest.id.clone();
+                cat.errors.push(LoadError {
+                    dir,
+                    error: ManifestError::DuplicateId(id),
+                });
+            } else {
+                cat.plugins.push(PluginEntry {
                     manifest,
                     dir,
                     enabled: false,
                     approved: false,
-                }),
-                Err(error) => cat.errors.push(LoadError { dir, error }),
+                });
             }
         }
         cat.plugins.sort_by(|a, b| {

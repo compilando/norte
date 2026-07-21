@@ -23,6 +23,28 @@ fn cargar_un_no_componente_falla_claro() {
 }
 
 #[test]
+fn artefacto_demasiado_grande_se_rechaza_antes_de_compilar() {
+    // Un `.wasm` que supera el tope (issue #68) se rechaza sin llegar a
+    // `Component::from_file`. Se crea un fichero DISPERSO (`set_len`) para no
+    // escribir de verdad decenas de MiB: `metadata().len()` devuelve el tamaño
+    // lógico, que es lo que mira el cap.
+    let rt = PluginRuntime::new().expect("engine");
+    let dir = tempfile::tempdir().unwrap();
+    let fake = dir.path().join("gigante.wasm");
+    let f = std::fs::File::create(&fake).unwrap();
+    // 64 MiB + 1: justo por encima de MAX_ARTIFACT_BYTES.
+    f.set_len(64 * 1024 * 1024 + 1).unwrap();
+    drop(f);
+    let err = rt
+        .instantiate(&fake, Capabilities::default())
+        .expect_err("artefacto sobredimensionado");
+    assert!(
+        matches!(err, RuntimeError::ArtifactTooLarge { .. }),
+        "fue {err:?}"
+    );
+}
+
+#[test]
 fn previewer_demo_renderiza_y_loguea() {
     let Some(wasm) = support::build_guest("previewer-demo") else {
         return;
