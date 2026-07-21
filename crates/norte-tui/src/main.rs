@@ -230,6 +230,8 @@ async fn main() -> Result<()> {
     let foreign_tasks = backend.take_foreign_tasks();
     let conn_events = backend.take_conn_events();
     let approvals = backend.take_approvals();
+    // #44: avisos `connection.degraded` del daemon → indicador persistente.
+    let degraded = backend.take_degraded();
     let mut help_lines = norte_tui::help::build(&browse_eff, &viewer_eff);
     let mut resolver = Resolver::new(browse_eff);
     let mut viewer_resolver = Resolver::new(viewer_eff);
@@ -263,6 +265,7 @@ async fn main() -> Result<()> {
         foreign_tasks,
         conn_events,
         approvals,
+        degraded,
     )
     .await;
     ratatui::restore();
@@ -399,6 +402,9 @@ async fn run(
     mut approvals: Option<
         tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::PolicyApprovalRequired>,
     >,
+    mut degraded: Option<
+        tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionDegraded>,
+    >,
 ) -> Result<()> {
     let mut events = EventStream::new();
     // Tick del panel de tasks: copia snapshots del watch (jamás bloquea).
@@ -472,6 +478,19 @@ async fn run(
                 // diálogos (jamás pisa un modal abierto) y se abre si procede.
                 app.pending_approvals.push_back(req);
                 app.open_next_pending();
+            }
+            Some(d) = async {
+                match &mut degraded {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                // #44: sesión remota degradó a texto plano — indicador
+                // PERSISTENTE en la status bar (no pisa `message` transitorio).
+                app.connection_warning = Some(ta(
+                    "status-connection-degraded",
+                    &[("scheme", d.scheme.as_str()), ("host", d.host.as_str())],
+                ));
             }
             msg = async {
                 match &mut fill {
