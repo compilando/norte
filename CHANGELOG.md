@@ -14,7 +14,10 @@ independently through `PROTOCOL_VERSION`.
   windows-1252), with a chardetng suggestion as the first step. Display only:
   bytes never change, reinterpreted names keep their hostile badge, and the
   status bar shows the active mode persistently. Valid UTF-8 names are never
-  reinterpreted.
+  reinterpreted. Quick search matches against the reinterpreted text (typing
+  "П" finds the entry shown as "Папка"), and decision surfaces — confirm and
+  collision dialogs, viewer title, navigation popups, the search dialog root —
+  follow the pane's active reinterpretation (#98).
 
 - **Omitted-entries badge for archives (#93, protocol 0.22.0):** listings of
   zip/tar/tar.gz containers now report how many entries the index omitted

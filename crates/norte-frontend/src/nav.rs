@@ -48,18 +48,24 @@ fn fold(name: &[u8]) -> String {
 }
 
 /// [`fold`] con la reinterpretación de nombres del pane (#98/F1): un nombre
-/// NO-UTF8 bajo `Some(enc)` se pliega sobre el MISMO texto que el usuario
-/// VE ([`decode_name`](norte_encoding::decode_name), la regla de
+/// NO-UTF8 bajo `Some(enc)` se pliega sobre el texto DECODIFICADO
+/// ([`decode_name`](norte_encoding::decode_name), la regla de
 /// `display_name_with`) — teclear «п» encuentra la entrada que el pane pinta
 /// «Папка». Sin reinterpretación (o nombre UTF-8 válido): el fold lossy de
 /// siempre.
+///
+/// UN solo pipeline (F1 del audit): la rama enc DELEGA en [`fold`] — el
+/// doble-NFC (caso J+U+030C) queda pineado para ambos caminos por la misma
+/// fixture; duplicarlo aquí era un mutante irrematable hasta que el ciclo
+/// gane un encoding con combinantes (windows-1258).
+///
+/// Divergencia CONSCIENTE con el texto pintado (F3 del audit): se pliega el
+/// decodificado SIN enmascarar — un hazard enmascarado a `�` en pantalla no
+/// casa tecleando `�` (misma asimetría pre-existente del camino lossy con
+/// controles embebidos en UTF-8 válido). Los folds jamás se pintan.
 fn fold_with(name: &[u8], enc: Option<norte_encoding::NameEncoding>) -> String {
     match (enc, std::str::from_utf8(name)) {
-        (Some(e), Err(_)) => norte_encoding::decode_name(name, e)
-            .nfc()
-            .flat_map(char::to_lowercase)
-            .nfc()
-            .collect(),
+        (Some(e), Err(_)) => fold(norte_encoding::decode_name(name, e).as_bytes()),
         _ => fold(name),
     }
 }
@@ -90,7 +96,9 @@ fn matches_folded(query_folded: &str, folds: &[String]) -> Vec<usize> {
 /// streaming — pico de memoria de UN fold, no N). El estado cacheado
 /// (camino caliente del keystroke) vive dentro de [`QuickSearch`] — esta
 /// función es para el caller ocasional (tests, un solo cálculo puntual),
-/// no para el bucle de tipeo.
+/// no para el bucle de tipeo. NO aplica la reinterpretación de nombres
+/// (#57): para casar contra el texto reinterpretado usa [`QuickSearch`]
+/// (que recibe el encoding del pane).
 #[must_use]
 pub fn matches(query: &[u8], entries: &[Entry]) -> Vec<usize> {
     let q = fold(query);

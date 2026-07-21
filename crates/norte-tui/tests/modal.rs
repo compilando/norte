@@ -25,6 +25,7 @@ fn retry() -> RetrySpec {
         from: vp("file:///a"),
         to: vp("file:///b"),
         opts: TransferOptions::default(),
+        name_encoding: None,
     }
 }
 

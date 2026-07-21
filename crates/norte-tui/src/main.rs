@@ -1916,15 +1916,21 @@ async fn submit_transfer(
         TransferKind::Move => backend.move_(&from, &to, opts).await,
     };
     match res {
-        Ok(task) => app.board.push(
-            task,
-            Some(RetrySpec {
-                kind,
-                from,
-                to,
-                opts,
-            }),
-        ),
+        Ok(task) => {
+            // #98/M1: el enc del pane origen viaja con el retry — la
+            // colisión llega async y el foco puede haber cambiado.
+            let name_encoding = app.focused().name_encoding();
+            app.board.push(
+                task,
+                Some(RetrySpec {
+                    kind,
+                    from,
+                    to,
+                    opts,
+                    name_encoding,
+                }),
+            );
+        }
         Err(e) => app.message = Some(error_message(&e)),
     }
 }

@@ -554,8 +554,14 @@ impl NavPopup {
 /// Display de un item del popup de navegación: `[name — ]path` con el badge
 /// hostil como PREFIJO si cualquier parte saldría alterada (mismo criterio
 /// que los panes: lossy y MARCADO, spec §6).
-fn nav_item_display(name: Option<&str>, path: &VPath) -> String {
-    let (texto, path_hostil) = path_display(path);
+fn nav_item_display(
+    name: Option<&str>,
+    path: &VPath,
+    enc: Option<norte_encoding::NameEncoding>,
+) -> String {
+    // #98/F4: los popups son superficie de DECISIÓN (elegir destino de
+    // salto) — siguen la reinterpretación del pane con foco, como la barra.
+    let (texto, path_hostil) = norte_frontend::path_display_with(path, enc);
     let (prefix, name_hostil) = match name {
         Some(n) => {
             let (nt, nh) = display_name(n.as_bytes());
@@ -849,12 +855,13 @@ impl App {
     /// construyen YA saneados aquí (`nav_item_display`); una entrada de
     /// hotlist inválida se muestra con su aviso y destino `None`.
     pub fn open_nav_popup(&mut self, kind: NavPopupKind) {
+        let enc = self.focused().name_encoding();
         let items: Vec<NavItem> = match kind {
             NavPopupKind::History => self.history[self.focus]
                 .entries()
                 .iter()
                 .map(|p| NavItem {
-                    display: nav_item_display(None, p),
+                    display: nav_item_display(None, p, enc),
                     target: Some(p.clone()),
                     hotlist_name: None,
                 })
@@ -864,7 +871,7 @@ impl App {
                 .iter()
                 .map(|h| {
                     let (display, target) = if let Ok(p) = &h.target {
-                        (nav_item_display(Some(&h.name), p), Some(p.clone()))
+                        (nav_item_display(Some(&h.name), p, enc), Some(p.clone()))
                     } else {
                         // review MINOR T5: el flag hostil del name NO se
                         // descarta — una inválida con name bidi también

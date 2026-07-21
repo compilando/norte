@@ -133,6 +133,7 @@ fn panel_de_tasks_y_modal_se_pintan() {
             from: dir.join(Segment::new(b"a".to_vec()).unwrap()),
             to: dir.join(Segment::new(b"b".to_vec()).unwrap()),
             opts: norte_core::TransferOptions::default(),
+            name_encoding: None,
         },
     });
 

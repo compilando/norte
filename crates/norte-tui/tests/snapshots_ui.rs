@@ -183,6 +183,7 @@ fn snapshot_modal_colision() {
             from: vp("file:///casa/notas.txt"),
             to: vp("file:///otro/notas.txt"),
             opts: TransferOptions::default(),
+            name_encoding: None,
         },
     });
     insta::assert_snapshot!(render(&app));
