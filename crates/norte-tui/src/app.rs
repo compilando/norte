@@ -42,6 +42,12 @@ pub struct Pane {
     /// (`search-status-failed`) tras limpiarse `App::message` — un fallo no
     /// puede degradar a «done» en la siguiente tecla (review MINOR-2).
     pub search_error: Option<String>,
+    /// Omitidas del CONTENEDOR del listado actual (#93): entradas que el
+    /// índice del provider archive descartó (nombres hostiles/límites) y que
+    /// por tanto NO están en `entries`. La barra lo señaliza con `Some(n)`,
+    /// `n > 0` — un listado incompleto jamás es silencioso (paralelo del
+    /// contrato de [`Pane::loading`]). `None` = no aplica/desconocido.
+    pub skipped: Option<u64>,
 }
 
 /// Estado de presentación de una búsqueda viva (`Alt+F7`, liveSearch T6): el
@@ -75,6 +81,7 @@ impl Pane {
             virtual_search: false,
             search_state: SearchState::Running,
             search_error: None,
+            skipped: None,
         }
     }
 
@@ -231,15 +238,24 @@ impl Pane {
     pub fn set_listing(&mut self, dir: VPath, entries: Vec<Entry>) {
         self.state.set_listing(dir, entries);
         self.virtual_search = false;
+        self.skipped = None;
     }
 
     /// Primera página de un listado paginado: reemplaza el contenido y MARCA
     /// que faltan entradas por llegar (ADR 0017). El drenador irá llamando a
     /// [`Pane::extend_listing`] y, al terminar, [`Pane::finish_listing`].
-    pub fn begin_listing(&mut self, dir: VPath, first_page: Vec<Entry>, more: bool) {
+    /// `skipped` = omitidas del contenedor (#93), del open del listado.
+    pub fn begin_listing(
+        &mut self,
+        dir: VPath,
+        first_page: Vec<Entry>,
+        more: bool,
+        skipped: Option<u64>,
+    ) {
         self.state.set_listing(dir, first_page);
         self.state.set_loading(more);
         self.virtual_search = false;
+        self.skipped = skipped;
     }
 
     /// Añade un lote del drenador: re-ordena TODO y re-ancla el cursor al path
@@ -1847,7 +1863,7 @@ mod tests {
         let mut p = pane_con(&[]);
         p.begin_search(root());
         assert!(p.virtual_search);
-        p.begin_listing(root(), vec![file("a")], false);
+        p.begin_listing(root(), vec![file("a")], false, None);
         assert!(!p.virtual_search, "begin_listing apaga virtual");
 
         p.begin_search(root());

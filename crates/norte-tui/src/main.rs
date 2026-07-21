@@ -2428,22 +2428,23 @@ async fn listing(backend: &Backend, dir: &VPath) -> Result<Vec<Entry>, Error> {
 }
 
 /// Primera página de `dir` (hasta [`FIRST_PAGE`]) más el stream con el RESTO
-/// (o `None` si el dir cabía en la primera página). El primer render no espera
-/// al listado entero (ADR 0017). Regla 7: el TUI no toca el FS.
+/// (o `None` si el dir cabía en la primera página) y las omitidas del
+/// contenedor (#93). El primer render no espera al listado entero (ADR 0017).
+/// Regla 7: el TUI no toca el FS.
 async fn first_page(
     backend: &Backend,
     dir: &VPath,
-) -> Result<(Vec<Entry>, Option<EntryStream>), Error> {
-    let mut stream = backend.list_stream(dir).await?;
+) -> Result<(Vec<Entry>, Option<EntryStream>, Option<u64>), Error> {
+    let (mut stream, skipped) = backend.list_stream(dir).await?;
     let mut first = Vec::with_capacity(FIRST_PAGE);
     while first.len() < FIRST_PAGE {
         match stream.next().await {
             Some(item) => first.push(item?),
             // El dir cabía en la primera página: no hay resto que drenar.
-            None => return Ok((first, None)),
+            None => return Ok((first, None, skipped)),
         }
     }
-    Ok((first, Some(stream)))
+    Ok((first, Some(stream), skipped))
 }
 
 /// Arranca el drenador del RESTO del listado: envía lotes coalescidos al run
@@ -2519,11 +2520,12 @@ async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPa
         tokio::select! {
             res = &mut fut => {
                 match res {
-                    Ok((first, stream)) => {
+                    Ok((first, stream, skipped)) => {
                         // #54: NO ordenamos aquí — `begin_listing` ->
                         // `PaneState::set_listing` normaliza internamente.
                         let more = stream.is_some();
-                        app.focused_mut().begin_listing(dir.clone(), first, more);
+                        app.focused_mut()
+                            .begin_listing(dir.clone(), first, more, skipped);
                         let pane = app.focus();
                         // Un cd al MISMO dir (refresh-like) no ensucia el
                         // historial; el dedup consecutivo de `push` cubre

@@ -224,7 +224,7 @@ async fn initialize_rechaza_version_incompatible() {
             },
         )
         .await
-        .expect_err("0.1.0 no es N ni N-1 de 0.21.0");
+        .expect_err("0.1.0 no es N ni N-1 de 0.22.0");
     match err {
         ClientError::Rpc(rpc) => {
             // Código PROPIO: la señal de upgrade jamás se parsea de message.
@@ -235,14 +235,14 @@ async fn initialize_rechaza_version_incompatible() {
         }
         other => panic!("esperaba Rpc, fue {other:?}"),
     }
-    // N-1 (0.20.x) SÍ entra.
+    // N-1 (0.21.x) SÍ entra.
     let c2 = Client::connect(&d.socket).await.expect("connect");
     let ok: methods::InitializeResult = c2
         .call(
             methods::INITIALIZE,
             &InitializeParams {
                 client_info: client_info(),
-                protocol_version: "0.20.2".into(),
+                protocol_version: "0.21.2".into(),
                 encodings: vec![],
                 agent_session: None,
             },
@@ -386,6 +386,63 @@ async fn fs_list_paginado_concatena_igual_que_completo() {
     a.sort();
     b.sort();
     assert_eq!(a, b, "paginado == completo");
+}
+
+/// #93: `skipped` (omitidas del contenedor) viaja en el result de `fs.list` y
+/// se REPITE en cada página (el cliente puede engancharse en cualquiera). Con
+/// un provider normal (sin omitidas) el campo va ausente (`None`).
+#[tokio::test]
+async fn fs_list_skipped_viaja_en_todas_las_paginas() {
+    // Daemon con un MemProvider que simula un contenedor con 7 omitidas.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    let engine = Arc::new(Engine::new());
+    let mem = Arc::new(MemProvider::new().with_list_skipped(7));
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    let daemon = Daemon::bind(
+        engine,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+            plugins_dir: None,
+        },
+    )
+    .await
+    .expect("bind");
+    let run = tokio::spawn(daemon.run());
+    let d = TestDaemon {
+        socket,
+        run,
+        _dir: dir,
+        mem,
+    };
+    seed(&d.mem, 5).await;
+    let c = connected_client(&d).await;
+
+    // Listado completo (sin cursor): lo lleva.
+    let completo = list_page(&c, "mem:///", None, None).await;
+    assert_eq!(completo.skipped, Some(7));
+
+    // Paginado: TODAS las páginas lo repiten (primera, intermedias y última).
+    let mut cursor = None;
+    let mut paginas = 0;
+    loop {
+        let page = list_page(&c, "mem:///", Some(2), cursor).await;
+        assert_eq!(page.skipped, Some(7), "página {paginas}");
+        paginas += 1;
+        match page.next_cursor {
+            Some(cur) => cursor = Some(cur),
+            None => break,
+        }
+    }
+    assert!(paginas >= 3, "hubo continuaciones de verdad");
+
+    // Provider sin omitidas (spawn normal): el campo va ausente.
+    let d2 = spawn_daemon(None).await;
+    seed(&d2.mem, 1).await;
+    let c2 = connected_client(&d2).await;
+    assert_eq!(list_page(&c2, "mem:///", None, None).await.skipped, None);
 }
 
 /// `limit = 0` es error de params (evita páginas vacías en bucle).
@@ -1548,7 +1605,7 @@ async fn frames_hostiles_y_formas_canonicas_crudas() {
 
     // initialize + daemon.shutdown con params null (golden canónico, M1).
     s.write_all(
-        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.20.0\",\"encodings\":[\"json\"]}}\n",
+        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.21.0\",\"encodings\":[\"json\"]}}\n",
     )
     .await
     .expect("write");

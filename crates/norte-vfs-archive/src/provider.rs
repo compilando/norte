@@ -456,6 +456,16 @@ impl Provider for ArchiveProvider {
         Ok(futures::stream::iter(entries).boxed())
     }
 
+    /// Total de omitidas del índice del CONTENEDOR de `p` (#93): las que
+    /// cuenta el `skipped` del índice interno (nombres hostiles/límites
+    /// por-entrada, contrato de [`Self::list`]). Reutiliza el índice
+    /// cacheado — tras un `list` es una consulta barata.
+    async fn list_skipped(&self, p: &VPath) -> Result<Option<u64>, Error> {
+        let aref = self.split(p)?;
+        let cached = self.index_for(&aref).await?;
+        Ok(Some(cached.index.skipped))
+    }
+
     async fn read(&self, p: &VPath, range: Option<ByteRange>) -> Result<ByteStream, Error> {
         let aref = self.split(p)?;
         let cached = self.index_for(&aref).await?;

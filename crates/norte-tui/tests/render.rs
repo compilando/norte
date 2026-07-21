@@ -64,6 +64,34 @@ fn la_secuencia_pendiente_se_ve_en_la_status_bar() {
     );
 }
 
+/// #93: un contenedor con entradas omitidas de su índice lo señaliza en la
+/// status bar («N entradas omitidas») — un listado incompleto jamás es
+/// silencioso. `Some(0)`/`None` no pintan nada.
+#[test]
+fn omitidas_del_contenedor_se_ven_en_la_status_bar() {
+    let dir = vp("file:///x");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir.clone(), Vec::new()),
+    );
+    app.panes[0].begin_listing(dir.clone(), Vec::new(), false, Some(3));
+    let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let con_badge = terminal.backend().to_string();
+    assert!(
+        con_badge.contains('3') && con_badge.contains("omit"),
+        "badge de omitidas visible: {con_badge}"
+    );
+
+    // Some(0) = contenedor indexado SIN omisiones: nada que señalizar.
+    app.panes[0].begin_listing(dir, Vec::new(), false, Some(0));
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    assert!(
+        !terminal.backend().to_string().contains("omit"),
+        "sin omitidas no hay badge"
+    );
+}
+
 /// F3.1 de la auditoría: el badge va en PREFIJO porque al final moriría en
 /// el truncado por ancho — un nombre hostil LARGO en un pane estrecho debe
 /// seguir marcado.

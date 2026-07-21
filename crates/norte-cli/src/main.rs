@@ -1140,13 +1140,22 @@ async fn connect_cmd(backend: &Backend, target: &str, daemon: bool) -> anyhow::R
 
 async fn ls(backend: &Backend, path: &std::path::Path, json: bool) -> anyhow::Result<ExitCode> {
     let target = vpath(path)?;
-    let mut entries: Vec<Entry> = match backend.list(&target).await {
-        // Primer contacto TOFU: confirmar y reintentar UNA vez.
-        Err(e) if tofu_confirm(backend, &e).await? => backend.list(&target).await,
-        other => other,
+    let (mut entries, skipped): (Vec<Entry>, Option<u64>) =
+        match backend.list_with_skipped(&target).await {
+            // Primer contacto TOFU: confirmar y reintentar UNA vez.
+            Err(e) if tofu_confirm(backend, &e).await? => backend.list_with_skipped(&target).await,
+            other => other,
+        }
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context(norte_i18n::t("cli-list-failed"))?;
+    // #93: el contenedor omitió entradas de su índice — el listado NO es todo
+    // lo que el archivo contiene. A stderr (no contamina stdout ni --json).
+    if let Some(n) = skipped.filter(|&n| n > 0) {
+        eprintln!(
+            "{}",
+            norte_i18n::ta("cli-ls-skipped", &[("n", &n.to_string())])
+        );
     }
-    .map_err(|e| anyhow::anyhow!("{e}"))
-    .context(norte_i18n::t("cli-list-failed"))?;
     // #52: el listado local es lazy (size/mtime_ms en None). `ls` es un
     // comando de UNA sola pasada (no hay foco que hidrate luego, como en la
     // TUI): se hidrata aquí, serial, ANTES de imprimir — restaura el output

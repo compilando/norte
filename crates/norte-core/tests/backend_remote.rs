@@ -106,6 +106,43 @@ async fn join_ref(task: TaskRef) -> TaskState {
         .expect("terminal antes del timeout")
 }
 
+/// #93: `skipped` del contenedor llega por AMBOS modos del Backend — el
+/// remoto lo trae la primera página de `fs.list`; el embebido consulta el
+/// provider. Sin omitidas: `None` (el badge no se pinta).
+#[tokio::test]
+async fn list_skipped_llega_por_ambos_modos() {
+    let mem = Arc::new(MemProvider::new().with_list_skipped(3));
+    let d = spawn_daemon_with(tempfile::tempdir().expect("tempdir"), Arc::clone(&mem)).await;
+    write_file(&d.mem, "mem:///a.txt", b"x").await;
+
+    let remoto = Backend::Remote(remote(&d).await);
+    let (entries, skipped) = remoto
+        .list_with_skipped(&vp("mem:///"))
+        .await
+        .expect("list remoto");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(skipped, Some(3), "remoto: viaja en la página de fs.list");
+
+    let engine = Arc::new(Engine::new());
+    engine.register_provider(mem as Arc<dyn Provider>);
+    let embebido = Backend::Embedded(engine);
+    let (_, skipped) = embebido
+        .list_with_skipped(&vp("mem:///"))
+        .await
+        .expect("list embebido");
+    assert_eq!(skipped, Some(3), "embebido: consulta el provider");
+
+    // Provider sin omitidas: None en ambos modos.
+    let d2 = spawn_daemon().await;
+    write_file(&d2.mem, "mem:///b.txt", b"y").await;
+    let remoto2 = Backend::Remote(remote(&d2).await);
+    let (_, skipped) = remoto2
+        .list_with_skipped(&vp("mem:///"))
+        .await
+        .expect("list remoto sin omitidas");
+    assert_eq!(skipped, None);
+}
+
 // ---------- superficie unificada ----------
 
 #[tokio::test]

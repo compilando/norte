@@ -356,7 +356,7 @@ fn golden_methods() {
     check_methods_session(&fixtures);
     check_methods_plugin(&fixtures);
     check_methods_rpc(&fixtures);
-    assert_eq!(fixtures.len(), 64, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 65, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia de la CAPA RPC (0.19.0, #72): `rpc.cancel`.
@@ -714,6 +714,7 @@ fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
         &FsListResult {
             entries: vec![sample_entry.clone()],
             next_cursor: None,
+            skipped: None,
         },
     );
     check_one(
@@ -722,6 +723,16 @@ fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
         &FsListResult {
             entries: vec![sample_entry.clone()],
             next_cursor: Some("3".to_owned()),
+            skipped: None,
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_list_result_con_skipped",
+        &FsListResult {
+            entries: vec![sample_entry.clone()],
+            next_cursor: None,
+            skipped: Some(3),
         },
     );
     check_one(
@@ -1120,7 +1131,9 @@ fn method_names_frozen() {
     // añade método/notificación nueva — el bump señala la capacidad de
     // interpretar schemes `tar+gz+…`.
     assert!(norte_proto::ARCHIVE_FORMATS.contains(&"tar+gz"));
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.21.0");
+    // 0.22.0 (#93): campo opcional `skipped` en FsListResult. No añade
+    // método/notificación — el bump señala el metadato aditivo del listado.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.22.0");
 }
 
 #[test]

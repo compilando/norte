@@ -337,6 +337,16 @@ impl Engine {
         self.provider_for(p).await?.list(p).await
     }
 
+    /// Total de entradas omitidas del índice del contenedor de `p` (#93),
+    /// `None` si el provider lista todo lo que existe (ver
+    /// [`norte_vfs::Provider::list_skipped`]).
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si no hay provider para el scheme; los del provider.
+    pub async fn list_skipped(&self, p: &VPath) -> Result<Option<u64>, Error> {
+        self.provider_for(p).await?.list_skipped(p).await
+    }
+
     /// Lectura de un archivo como stream (directa, sin Task), con rango
     /// opcional — el viewer lee cabeceras de archivos enormes sin tragarse
     /// el resto (ADR 0005).

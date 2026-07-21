@@ -57,6 +57,34 @@ fn seg(b: &[u8]) -> Segment {
     Segment::new(b.to_vec()).expect("seg")
 }
 
+/// #93: `list_skipped` expone el `skipped` del índice del contenedor —
+/// `Some(n)` con las hostiles contadas, `Some(0)` en un tar limpio. Es lo que
+/// el frontend señaliza como badge («N entradas omitidas»).
+#[tokio::test]
+async fn list_skipped_expone_las_omitidas_del_indice() {
+    let hostil = TarSmith::new()
+        .file(b"../evil", b"slip")
+        .file(b"ok.txt", b"bien")
+        .build();
+    let (p, root) = common::tar_provider(&hostil).await;
+    assert_eq!(
+        p.list_skipped(&root).await.expect("list_skipped"),
+        Some(1),
+        "la entrada traversal omitida debe contarse"
+    );
+    // También desde un subpath del contenedor (el total es por-contenedor).
+    assert_eq!(
+        p.list_skipped(&root.join(seg(b"ok.txt")))
+            .await
+            .expect("ok"),
+        Some(1)
+    );
+
+    let limpio = TarSmith::new().file(b"a.txt", b"x").build();
+    let (p, root) = common::tar_provider(&limpio).await;
+    assert_eq!(p.list_skipped(&root).await.expect("ok"), Some(0));
+}
+
 #[tokio::test]
 async fn tar_truncado_es_corrupt() {
     let mut tar = TarSmith::new().file(b"grande.bin", &[7u8; 2000]).build();

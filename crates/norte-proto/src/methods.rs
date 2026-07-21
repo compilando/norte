@@ -92,7 +92,13 @@ use crate::{
 /// 0.21.0 (#55, ADR 0028): `tar+gz` en `ARCHIVE_FORMATS`, resolución
 /// longest-match, helper `scheme_archive_format`. Aditivo sobre 0.20.x — un
 /// peer 0.20 ve `tar+gz+…` como Unsupported, sin corrupción.
-pub const PROTOCOL_VERSION: &str = "0.21.0";
+///
+/// 0.22.0 (#93): campo opcional `skipped` en [`FsListResult`] — total de
+/// entradas del CONTENEDOR omitidas del índice (nombres hostiles/límites,
+/// providers archive). Aditivo sobre 0.21.x: ausente cuando no aplica (un
+/// cliente N-1 lo ignora como campo desconocido; sin él degrada a lo de
+/// antes, el contador solo vivía en logs).
+pub const PROTOCOL_VERSION: &str = "0.22.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -344,6 +350,15 @@ pub struct FsListResult {
     /// cliente 0.7 lo ignora (campo desconocido para él).
     #[serde(default)]
     pub next_cursor: Option<String>,
+    /// Entradas del CONTENEDOR omitidas de TODO su índice (#93, desde
+    /// 0.22.0): nombres hostiles/límites anti-bomba de un provider archive
+    /// (ADR 0018 C2). Es un total POR CONTENEDOR, no por página ni por
+    /// directorio (las omitidas no tienen ruta representable donde
+    /// atribuirse): cada página del listado repite el mismo valor. Ausente
+    /// (`None`) = no aplica o desconocido; los clientes solo deben
+    /// señalizarlo cuando es `Some(n)` con `n > 0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<u64>,
 }
 
 /// Params de [`FS_STAT`].

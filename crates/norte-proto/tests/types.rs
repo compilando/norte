@@ -622,6 +622,14 @@ fn fs_list_result_tolera_next_cursor_ausente() {
     use norte_proto::methods::FsListResult;
     let r: FsListResult = serde_json::from_str(r#"{"entries":[]}"#).expect("next_cursor ausente");
     assert!(r.next_cursor.is_none());
+    // `skipped` (0.22, #93) ausente = None; y un emisor 0.22 lo OMITE cuando
+    // es None (skip_serializing_if — jamás `"skipped": null` en el wire).
+    assert!(r.skipped.is_none());
+    assert!(
+        !serde_json::to_string(&r)
+            .expect("serializable")
+            .contains("skipped")
+    );
     // Y un campo DESCONOCIDO (0.9 → 0.8) no rompe la deserialización.
     let r2: FsListResult = serde_json::from_str(r#"{"entries":[],"campo_futuro":42}"#)
         .expect("campo desconocido tolerado");
@@ -692,12 +700,12 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.21.0 (#55 tar+gz, ADR 0028): acepta 0.21.x (N) y 0.20.x (N-1),
-    // rechaza 0.19.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.21.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.20.0"), "N-1");
+    // 0.22.0 (#93 skipped en fs.list): acepta 0.22.x (N) y 0.21.x (N-1),
+    // rechaza 0.20.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.22.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.21.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.19.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.20.9"),
         "N-2 fuera de la ventana"
     );
 }
