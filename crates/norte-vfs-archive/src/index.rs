@@ -5,9 +5,10 @@ use std::collections::{BTreeSet, HashMap};
 
 use norte_proto::{Entry, EntryKind, Error, Segment, VPath};
 
-/// Límites de construcción del índice (ADR 0018 D2). Constantes en v1;
-/// configurables = issue. Overridables en tests vía
-/// [`ArchiveProvider::with_limits`](crate::ArchiveProvider::with_limits).
+/// Límites de construcción del índice (ADR 0018 D2). Configurables desde
+/// #95.2 vía [`ArchiveProvider::with_limits`](crate::ArchiveProvider::with_limits)
+/// (el engine los compone desde `Engine::set_archive_limits`; los frontends
+/// desde la sección `[archive]` de `norte.toml`).
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
     /// Tope de entradas indexadas (las omitidas por hostiles no cuentan).

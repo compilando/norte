@@ -16,7 +16,25 @@ independently through `PROTOCOL_VERSION`.
   ("N entries omitted") and `norte ls` prints a warning to stderr — an
   incomplete listing is never silent.
 
+- **Configurable archive limits (#95):** the new `[archive]` section of
+  `norte.toml` (`max_entries`, `max_decompressed_bytes`) lowers the anti-bomb
+  limits for browsing containers. The project layer (`./.norte`) is ignored
+  for this section — a foreign repository must not be able to raise safety
+  limits.
+
 ### Changed
+
+- **Honest resource errors for archives (#95, protocol 0.23.0):** a container
+  that exceeds a local anti-bomb limit now fails with the new `limit_exceeded`
+  error (closed vocabulary: `entries`, `decompressed-bytes`) instead of
+  masquerading as `corrupt` — a legitimate huge tar.gz is not "corrupt".
+  Older clients degrade to a generic error.
+
+### Fixed
+
+- **Silent short reads from zip entries (#95):** a zip whose central directory
+  promises more bytes than the deflate stream delivers now fails loudly with
+  `corrupt` mid-stream instead of silently returning a partial file.
 
 - **Listing sort keys allocate less (#94):** the persisted NFC sort key is
   only materialised when it differs from the raw name bytes (non-ASCII NFD

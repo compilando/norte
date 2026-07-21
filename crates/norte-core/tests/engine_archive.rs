@@ -201,3 +201,35 @@ async fn copy_hacia_dentro_de_un_archivo_falla_unsupported() {
         other => panic!("esperaba Failed(Unsupported), fue {other:?}"),
     }
 }
+
+/// #95.2: `Engine::set_archive_limits` gobierna los providers compuestos —
+/// con `max_entries` bajado, un tar de 3 entradas responde
+/// `LimitExceeded("entries")` en vez de listarse. Con los defaults, el
+/// mismo tar se lista sin drama.
+#[tokio::test]
+async fn set_archive_limits_gobierna_la_composicion() {
+    let tar = TarSmith::new()
+        .file(b"uno", b"1")
+        .file(b"dos", b"2")
+        .file(b"tres", b"3")
+        .build();
+    let engine = engine_with_container("a.tar", &tar).await;
+    engine.set_archive_limits(norte_core::ArchiveLimits {
+        max_entries: 1,
+        ..norte_core::ArchiveLimits::default()
+    });
+    match engine.list(&vp("tar+mem:///a.tar/!")).await.map(|_| ()) {
+        Err(Error::LimitExceeded { limit }) if limit == "entries" => {}
+        other => panic!("esperaba LimitExceeded(entries), fue {other:?}"),
+    }
+
+    // Sin tocar límites: el mismo contenedor se lista entero.
+    let engine = engine_with_container("a.tar", &tar).await;
+    let n = engine
+        .list(&vp("tar+mem:///a.tar/!"))
+        .await
+        .expect("list con defaults")
+        .count()
+        .await;
+    assert_eq!(n, 3);
+}

@@ -69,6 +69,12 @@ pub struct Engine {
     /// Resuelve un `Ask` de policy. Default [`DenyAll`](crate::approval::DenyAll)
     /// (headless fail-closed).
     approvals: Arc<dyn crate::approval::ApprovalResolver>,
+    /// Límites anti-bomba de los providers archive compuestos (#95.2).
+    /// Default [`norte_vfs_archive::Limits::default`]; el operador los baja
+    /// vía [`Self::set_archive_limits`] ANTES de la primera navegación a un
+    /// contenedor (los providers compuestos se cachean con los límites
+    /// vigentes en su primer uso).
+    archive_limits: RwLock<norte_vfs_archive::Limits>,
 }
 
 impl Engine {
@@ -91,7 +97,24 @@ impl Engine {
             journal: None,
             policy: Arc::new(crate::policy::AllowAll),
             approvals: Arc::new(crate::approval::DenyAll),
+            archive_limits: RwLock::new(norte_vfs_archive::Limits::default()),
         }
+    }
+
+    /// Fija los límites anti-bomba de los providers archive (#95.2, canal
+    /// config→provider del ADR 0018). Llamar en el ARRANQUE, antes de la
+    /// primera navegación a un contenedor: un `ArchiveProvider` ya compuesto
+    /// (cacheado por scheme) conserva los límites con los que nació.
+    ///
+    /// # Panics
+    /// Si el lock interno está envenenado (otro hilo hizo panic a mitad de
+    /// escritura) — irrecuperable, mismo criterio que el resto de locks del
+    /// engine.
+    pub fn set_archive_limits(&self, limits: norte_vfs_archive::Limits) {
+        *self
+            .archive_limits
+            .write()
+            .expect("archive_limits lock sano") = limits;
     }
 
     /// Engine cuyo observer Y fuente de undo es el mismo `SqliteJournal` (M3-2).
@@ -107,6 +130,7 @@ impl Engine {
             journal: Some(journal),
             policy: Arc::new(crate::policy::AllowAll),
             approvals: Arc::new(crate::approval::DenyAll),
+            archive_limits: RwLock::new(norte_vfs_archive::Limits::default()),
         }
     }
 
@@ -258,11 +282,17 @@ impl Engine {
             // rechaza anidamiento en v1): recursión de profundidad 1.
             let inner = Box::pin(self.provider_for(&aref.outer)).await?;
             tracing::debug!(scheme = %p.scheme(), %key, "componiendo provider de archivo");
-            let provider: Arc<dyn Provider> = Arc::new(norte_vfs_archive::ArchiveProvider::new(
-                inner,
-                format,
-                p.scheme().to_owned(),
-            ));
+            let limits = *self
+                .archive_limits
+                .read()
+                .expect("archive_limits lock sano");
+            let provider: Arc<dyn Provider> =
+                Arc::new(norte_vfs_archive::ArchiveProvider::with_limits(
+                    inner,
+                    format,
+                    p.scheme().to_owned(),
+                    limits,
+                ));
             // Mismo double-check que los remotos: si otra petición registró
             // primero, gana la suya (el ArchiveProvider extra solo es RAM).
             let mut providers = self.providers.write().expect("providers lock sano");

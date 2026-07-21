@@ -345,6 +345,19 @@ async fn make_backend(
     let want_daemon = cli_daemon || cfg.daemon_mode == Some(config::DaemonMode::Daemon);
     if !want_daemon {
         let engine = Engine::new();
+        // #95.2: límites anti-bomba de archives desde `[archive]` (capas de
+        // usuario, jamás la de proyecto). Antes de cualquier navegación: los
+        // providers compuestos se cachean con los límites de su primer uso.
+        if cfg.archive_max_entries.is_some() || cfg.archive_max_decompressed_bytes.is_some() {
+            let mut limits = norte_core::ArchiveLimits::default();
+            if let Some(n) = cfg.archive_max_entries {
+                limits.max_entries = usize::try_from(n).unwrap_or(usize::MAX);
+            }
+            if let Some(b) = cfg.archive_max_decompressed_bytes {
+                limits.max_decompressed_bytes = b;
+            }
+            engine.set_archive_limits(limits);
+        }
         engine.register_provider(Arc::new(LocalProvider::os_root()));
         // Conexiones remotas (fase 6e): un path sftp://…/ftp://… navegable si
         // la host key ya es de confianza. La CONFIRMACIÓN TOFU interactiva

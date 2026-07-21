@@ -33,6 +33,9 @@ pub struct NorteToml {
     /// Daemon settings.
     #[serde(default)]
     pub daemon: DaemonSection,
+    /// Archive-provider limits (`[archive]`, #95.2).
+    #[serde(default)]
+    pub archive: ArchiveSection,
     /// Favourite directories shown by `Ctrl+D`.
     ///
     /// Entries accumulate across layers instead of replacing lower-layer
@@ -56,6 +59,22 @@ pub struct HotlistEntry {
     pub name: String,
     /// Path in wire form, not yet validated.
     pub path: String,
+}
+
+/// The `[archive]` section of `norte.toml` (#95.2): local anti-bomb limits
+/// for browsing zip/tar/tar.gz containers. Absent values keep the compiled
+/// defaults. Applied at startup on the embedded engine only — a container
+/// that exceeds them fails with `LimitExceeded`, never silently truncates.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ArchiveSection {
+    /// Maximum indexed entries per container (default 500000).
+    #[serde(default)]
+    pub max_entries: Option<u64>,
+    /// Decompression budget in bytes for indexing a `tar.gz` (default 64 GiB).
+    #[serde(default)]
+    pub max_decompressed_bytes: Option<u64>,
 }
 
 /// The `[daemon]` section of `norte.toml` (ADR 0011).
@@ -417,6 +436,10 @@ pub struct LoadedConfig {
     /// Hotlist fusionada de TODAS las capas menos la de proyecto (ver
     /// [`load`]). Nombre duplicado entre capas: la posterior gana.
     pub hotlist: Vec<HotlistItem>,
+    /// `[archive] max_entries` (último-gana; None = default compilado).
+    pub archive_max_entries: Option<u64>,
+    /// `[archive] max_decompressed_bytes` (último-gana; None = default).
+    pub archive_max_decompressed_bytes: Option<u64>,
     /// Archivos que participaron (para el watcher y los diagnósticos).
     pub sources: Vec<PathBuf>,
 }
@@ -434,6 +457,8 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
     let mut keymap_layers = Vec::new();
     let mut quick_search_mode = nav::Mode::default();
     let mut hotlist: Vec<HotlistItem> = Vec::new();
+    let mut archive_max_entries: Option<u64> = None;
+    let mut archive_max_decompressed_bytes: Option<u64> = None;
     let mut sources = Vec::new();
     for (dir, kind) in &layers.dirs {
         let norte = dir.join("norte.toml");
@@ -488,6 +513,19 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
                     merge_hotlist_entry(&mut hotlist, entry);
                 }
             }
+            // `[archive]` (#95.2) TAMPOCO se honra desde proyecto: son
+            // límites de SEGURIDAD anti-bomba — un `./.norte/norte.toml` de
+            // un repo ajeno no debe poder SUBIRLOS y desarmar la protección
+            // justo donde viven los contenedores hostiles (mismo criterio
+            // fail-closed que la hotlist).
+            if *kind != Layer::Project {
+                if let Some(n) = parsed.archive.max_entries {
+                    archive_max_entries = Some(n);
+                }
+                if let Some(b) = parsed.archive.max_decompressed_bytes {
+                    archive_max_decompressed_bytes = Some(b);
+                }
+            }
             sources.push(norte);
         }
         let keymap = dir.join("keymap.toml");
@@ -526,6 +564,8 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
         keymap_layers,
         quick_search_mode,
         hotlist,
+        archive_max_entries,
+        archive_max_decompressed_bytes,
         sources,
     })
 }
