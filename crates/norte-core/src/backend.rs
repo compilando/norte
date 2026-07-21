@@ -136,8 +136,8 @@ pub enum Backend {
 impl Clone for Backend {
     /// Clon BARATO: comparte engine/conexión (Arc interno en ambas variantes).
     /// OJO: los canales one-shot (`take_foreign_tasks`, `take_conn_events`,
-    /// `take_approvals`) son del PRIMER dueño — un clon (p. ej. para
-    /// scripting Lua, tasks 4-5) no debe llamarlos.
+    /// `take_approvals`, `take_degraded`) son del PRIMER dueño — un clon
+    /// (p. ej. para scripting Lua, tasks 4-5) no debe llamarlos.
     fn clone(&self) -> Self {
         match self {
             Self::Embedded(e) => Self::Embedded(Arc::clone(e)),
@@ -385,6 +385,18 @@ impl Backend {
             Self::Embedded(_) => None,
             #[cfg(unix)]
             Self::Remote(r) => r.take_approvals(),
+        }
+    }
+
+    /// Receptor de avisos `connection.degraded` (#44). `None` en `Embedded`
+    /// (la CLI embebida usa un observer directo, ver componente E2).
+    pub fn take_degraded(
+        &mut self,
+    ) -> Option<mpsc::UnboundedReceiver<norte_proto::methods::ConnectionDegraded>> {
+        match self {
+            Self::Embedded(_) => None,
+            #[cfg(unix)]
+            Self::Remote(r) => r.take_degraded(),
         }
     }
 
@@ -692,11 +704,11 @@ pub mod remote {
     use base64::Engine as _;
     use futures::StreamExt as _;
     use norte_proto::methods::{
-        self, ClientInfo, FsCapabilitiesParams, FsCapabilitiesResult, FsCopyParams, FsDeleteParams,
-        FsListParams, FsListResult, FsMoveParams, FsReadParams, FsReadResult, FsSearchParams,
-        FsStatParams, FsStatResult, FsTaskResult, PolicyApprovalRequired, PolicyDecideParams,
-        PolicyDecideResult, PolicyPendingResult, SearchHits, TaskCancelParams, TaskCancelResult,
-        TaskListParams, TaskListResult,
+        self, ClientInfo, ConnectionDegraded, FsCapabilitiesParams, FsCapabilitiesResult,
+        FsCopyParams, FsDeleteParams, FsListParams, FsListResult, FsMoveParams, FsReadParams,
+        FsReadResult, FsSearchParams, FsStatParams, FsStatResult, FsTaskResult,
+        PolicyApprovalRequired, PolicyDecideParams, PolicyDecideResult, PolicyPendingResult,
+        SearchHits, TaskCancelParams, TaskCancelResult, TaskListParams, TaskListResult,
     };
     use norte_proto::{
         ByteRange, Capabilities, DeleteMode, Entry, Error, TaskId, TaskKind, TaskProgress,
@@ -851,6 +863,9 @@ pub mod remote {
         /// `policy.approval_required` de la bomba + el resync de
         /// `policy.pending` al (re)conectar.
         approvals_tx: mpsc::UnboundedSender<PolicyApprovalRequired>,
+        /// Avisos `connection.degraded` (#44) hacia el frontend: cada notif de
+        /// la bomba se reenvía por aquí (mismo patrón que `approvals_tx`).
+        degraded_tx: mpsc::UnboundedSender<ConnectionDegraded>,
         /// `approval_id`s ya entregados al frontend: la entrega del daemon es
         /// at-least-once (broadcast + resync pueden solapar; cada reconexión
         /// re-lista pendientes) y un prompt de SEGURIDAD duplicado confunde
@@ -880,10 +895,15 @@ pub mod remote {
                 let _ = self.approvals_tx.send(req);
             }
         }
+
+        /// Encola un aviso `connection.degraded` (#44) hacia el frontend.
+        fn push_degraded(&self, d: ConnectionDegraded) {
+            let _ = self.degraded_tx.send(d);
+        }
     }
 
     /// Conexión (auto-reconectante) con el daemon. Clonable: todos los
-    /// clones comparten conexión y watches (`inner`), pero los tres canales
+    /// clones comparten conexión y watches (`inner`), pero los canales
     /// one-shot de abajo son POR INSTANCIA — ver el `impl Clone` manual.
     pub struct RemoteBackend {
         inner: Arc<Inner>,
@@ -894,11 +914,14 @@ pub mod remote {
         events_rx: Mutex<Option<mpsc::UnboundedReceiver<ConnEvent>>>,
         /// Canal de aprobaciones de policy. Mismo invariante que `foreign_rx`.
         approvals_rx: Mutex<Option<mpsc::UnboundedReceiver<PolicyApprovalRequired>>>,
+        /// Canal de avisos `connection.degraded` (#44). Mismo invariante que
+        /// `foreign_rx`.
+        degraded_rx: Mutex<Option<mpsc::UnboundedReceiver<ConnectionDegraded>>>,
     }
 
     impl Clone for RemoteBackend {
         /// Clon ESTRUCTURAL (no derive): comparte `inner` (conexión, watches,
-        /// los tres `_tx`) vía `Arc`, pero los tres receptores nacen `None`.
+        /// los `_tx`) vía `Arc`, pero los receptores nacen `None`.
         /// Antes vivían dentro de `Inner` (compartido) y un clon podía
         /// `take_*` y robárselos al dueño real (p. ej. la TUI) — el `ask` de
         /// policy caducaría a `deny` en silencio sin que nadie lo viera
@@ -912,6 +935,7 @@ pub mod remote {
                 foreign_rx: Mutex::new(None),
                 events_rx: Mutex::new(None),
                 approvals_rx: Mutex::new(None),
+                degraded_rx: Mutex::new(None),
             }
         }
     }
@@ -931,6 +955,7 @@ pub mod remote {
             let (foreign_tx, foreign_rx) = mpsc::unbounded_channel();
             let (events_tx, events_rx) = mpsc::unbounded_channel();
             let (approvals_tx, approvals_rx) = mpsc::unbounded_channel();
+            let (degraded_tx, degraded_rx) = mpsc::unbounded_channel();
             let backend = Self {
                 inner: Arc::new(Inner {
                     socket,
@@ -942,12 +967,14 @@ pub mod remote {
                     foreign_tx,
                     events_tx,
                     approvals_tx,
+                    degraded_tx,
                     seen_approvals: Mutex::new(std::collections::HashSet::new()),
                     search_routes: Mutex::new(SearchRoutes::default()),
                 }),
                 foreign_rx: Mutex::new(Some(foreign_rx)),
                 events_rx: Mutex::new(Some(events_rx)),
                 approvals_rx: Mutex::new(Some(approvals_rx)),
+                degraded_rx: Mutex::new(Some(degraded_rx)),
             };
             // La 1ª conexión SÍ arranca el daemon (spawn); las reconexiones
             // NO (M3 del rust-reviewer: reconectar jamás debe resucitar un
@@ -1516,6 +1543,15 @@ pub mod remote {
                 .take()
         }
 
+        /// Se lleva el receptor de avisos `connection.degraded` (#44). Uno solo
+        /// (el primer dueño), como los otros `take_*`.
+        pub(super) fn take_degraded(&self) -> Option<mpsc::UnboundedReceiver<ConnectionDegraded>> {
+            self.degraded_rx
+                .lock()
+                .expect("degraded_rx lock sano")
+                .take()
+        }
+
         /// `policy.decide` contra el daemon (M3-3b T5).
         pub(super) async fn policy_decide(
             &self,
@@ -1670,6 +1706,7 @@ pub mod remote {
     /// externo se suelta, `Inner` se libera, el `Client` interno cierra la
     /// conexión, `recv()` devuelve `None` y la bomba SALE — sin ciclo de
     /// Arc ni reconexión eterna.
+    #[allow(clippy::too_many_lines)] // tabla de despacho notif→destino + reconexión
     async fn pump_loop(
         weak: Weak<Inner>,
         mut notifications: mpsc::UnboundedReceiver<norte_proto::wire::Notification>,
@@ -1694,6 +1731,24 @@ pub mod remote {
                     };
                     let Some(inner) = weak.upgrade() else { return };
                     inner.push_approval(req);
+                    continue;
+                }
+                // Aviso de sesión degradada (#44): al frontend. Malformada =
+                // descartada CON traza (mismo trato que la aprobación).
+                if n.method == methods::CONNECTION_DEGRADED {
+                    let Some(params) = n.params else {
+                        tracing::warn!("connection.degraded sin params: descartada");
+                        continue;
+                    };
+                    let d = match serde_json::from_value::<ConnectionDegraded>(params) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "connection.degraded malformada");
+                            continue;
+                        }
+                    };
+                    let Some(inner) = weak.upgrade() else { return };
+                    inner.push_degraded(d);
                     continue;
                 }
                 // Lote de hits de una búsqueda viva (live search T5): al `rx`
@@ -1729,6 +1784,7 @@ pub mod remote {
                     foreign_rx: Mutex::new(None),
                     events_rx: Mutex::new(None),
                     approvals_rx: Mutex::new(None),
+                    degraded_rx: Mutex::new(None),
                 }
                 .route(snapshot);
             }
@@ -1740,6 +1796,7 @@ pub mod remote {
                 foreign_rx: Mutex::new(None),
                 events_rx: Mutex::new(None),
                 approvals_rx: Mutex::new(None),
+                degraded_rx: Mutex::new(None),
             };
             *backend.inner.client.write().await = None;
             // El stream de hits de una búsqueda NO sobrevive a la reconexión:
@@ -1774,6 +1831,7 @@ pub mod remote {
                     foreign_rx: Mutex::new(None),
                     events_rx: Mutex::new(None),
                     approvals_rx: Mutex::new(None),
+                    degraded_rx: Mutex::new(None),
                 };
                 match backend.establish(false).await {
                     Ok(rx) => {
@@ -1796,6 +1854,7 @@ pub mod remote {
             let (foreign_tx, _fr) = mpsc::unbounded_channel();
             let (events_tx, _er) = mpsc::unbounded_channel();
             let (approvals_tx, _ar) = mpsc::unbounded_channel();
+            let (degraded_tx, _dr) = mpsc::unbounded_channel();
             Arc::new(Inner {
                 socket: PathBuf::from("/nonexistent/test.sock"),
                 spawn_cmd: None,
@@ -1809,6 +1868,7 @@ pub mod remote {
                 foreign_tx,
                 events_tx,
                 approvals_tx,
+                degraded_tx,
                 seen_approvals: Mutex::new(std::collections::HashSet::new()),
                 search_routes: Mutex::new(SearchRoutes::default()),
             })
@@ -1833,6 +1893,7 @@ pub mod remote {
                 foreign_rx: Mutex::new(None),
                 events_rx: Mutex::new(None),
                 approvals_rx: Mutex::new(None),
+                degraded_rx: Mutex::new(None),
             }
         }
 
@@ -1880,6 +1941,58 @@ pub mod remote {
             assert!(sr.mark_terminated(1), "primera vez: recién insertada");
             assert!(!sr.mark_terminated(1), "repetida: no reagenda");
             assert!(sr.mark_terminated(2), "otro id: recién insertado");
+        }
+
+        /// #44: la seam de `connection.degraded` refleja la de aprobaciones —
+        /// `push_degraded` (lo que hace el arm de la bomba) entrega en el
+        /// receptor que `take_degraded` se lleva UNA vez.
+        #[test]
+        fn degraded_push_llega_a_take_degraded() {
+            let (degraded_tx, degraded_rx) = mpsc::unbounded_channel();
+            let (foreign_tx, _fr) = mpsc::unbounded_channel();
+            let (events_tx, _er) = mpsc::unbounded_channel();
+            let (approvals_tx, _ar) = mpsc::unbounded_channel();
+            let inner = Arc::new(Inner {
+                socket: PathBuf::from("/nonexistent/test.sock"),
+                spawn_cmd: None,
+                client_info: ClientInfo {
+                    name: "test".into(),
+                    version: "0".into(),
+                },
+                client: tokio::sync::RwLock::new(None),
+                watches: Mutex::new(HashMap::new()),
+                finished: Mutex::new(std::collections::VecDeque::new()),
+                foreign_tx,
+                events_tx,
+                approvals_tx,
+                degraded_tx,
+                seen_approvals: Mutex::new(std::collections::HashSet::new()),
+                search_routes: Mutex::new(SearchRoutes::default()),
+            });
+            let backend = RemoteBackend {
+                inner: Arc::clone(&inner),
+                foreign_rx: Mutex::new(None),
+                events_rx: Mutex::new(None),
+                approvals_rx: Mutex::new(None),
+                degraded_rx: Mutex::new(Some(degraded_rx)),
+            };
+
+            inner.push_degraded(ConnectionDegraded {
+                scheme: "ftp".into(),
+                host: "example.test".into(),
+                reason: "tls-auth-rejected".into(),
+                detail: None,
+            });
+
+            let mut rx = backend.take_degraded().expect("primer dueño se lo lleva");
+            let got = rx.try_recv().expect("el aviso llegó al receptor");
+            assert_eq!(got.scheme, "ftp");
+            assert_eq!(got.reason, "tls-auth-rejected");
+            // Uno solo: un segundo `take_*` ve `None` (como los otros canales).
+            assert!(
+                backend.take_degraded().is_none(),
+                "el receptor es one-shot, igual que take_approvals"
+            );
         }
     }
 }
