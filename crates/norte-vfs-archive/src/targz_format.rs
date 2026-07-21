@@ -52,7 +52,11 @@ impl<R: Read> Read for CountingReader<R> {
                 max = self.max,
                 "tar.gz supera el presupuesto de descompresión del índice (bomba)"
             );
-            return Err(std::io::Error::other(Error::Corrupt));
+            // #95.3: bomba O backup legítimo enorme — límite local honesto.
+            // `inner_proto_error` lo desenvuelve de la cadena io::Error.
+            return Err(std::io::Error::other(Error::LimitExceeded {
+                limit: Error::LIMIT_DECOMPRESSED_BYTES.into(),
+            }));
         }
         Ok(n)
     }
@@ -127,7 +131,9 @@ pub(crate) fn build_index_gz<R: Read>(
                 max = limits.max_entries,
                 "tar.gz supera el presupuesto de omitidas"
             );
-            return Err(Error::Corrupt);
+            return Err(Error::LimitExceeded {
+                limit: Error::LIMIT_ENTRIES.into(),
+            });
         }
     }
     if index.skipped > 0 {
@@ -338,7 +344,12 @@ mod tests {
             ..Limits::default()
         };
         let got = build_index_gz(Cursor::new(gz), (Some(0), Some(1)), &tight, &cancel);
-        assert_eq!(got.map(|_| ()).unwrap_err(), Error::Corrupt);
+        assert_eq!(
+            got.map(|_| ()).unwrap_err(),
+            Error::LimitExceeded {
+                limit: Error::LIMIT_DECOMPRESSED_BYTES.into()
+            }
+        );
     }
 
     /// FIX-1 (rust+security MAJOR, #55 review): EOF durante el DESCARTE

@@ -1,5 +1,32 @@
 {
   "$defs": {
+    "ArchiveSection": {
+      "additionalProperties": false,
+      "description": "The `[archive]` section of `norte.toml` (#95.2): local anti-bomb limits\nfor browsing zip/tar/tar.gz containers. Absent values keep the compiled\ndefaults. Applied at startup on the embedded engine only — a container\nthat exceeds them fails with `LimitExceeded`, never silently truncates.",
+      "properties": {
+        "max_decompressed_bytes": {
+          "default": null,
+          "description": "Decompression budget in bytes for indexing a `tar.gz` (default 64 GiB).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_entries": {
+          "default": null,
+          "description": "Maximum indexed entries per container (default 500000).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "DaemonMode": {
       "description": "Core transport. This changes transport only, not behaviour.",
       "oneOf": [
@@ -111,6 +138,10 @@
   "additionalProperties": false,
   "description": "General configuration from `norte.toml`.",
   "properties": {
+    "archive": {
+      "$ref": "#/$defs/ArchiveSection",
+      "description": "Archive-provider limits (`[archive]`, #95.2)."
+    },
     "daemon": {
       "$ref": "#/$defs/DaemonSection",
       "description": "Daemon settings."

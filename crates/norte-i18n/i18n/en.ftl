@@ -50,6 +50,7 @@ err-invalid-path = invalid path
 err-internal = internal error
 err-loop = symlink loop
 err-corrupt = not a valid archive/container
+err-limit-exceeded = container exceeds local safety limits (not opened)
 err-host-key-unknown = unknown host key (first contact)
 err-host-key-mismatch = host key MISMATCH — possible MITM
 err-cursor-expired = the listing expired; refresh

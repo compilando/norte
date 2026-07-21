@@ -5,9 +5,10 @@ use std::collections::{BTreeSet, HashMap};
 
 use norte_proto::{Entry, EntryKind, Error, Segment, VPath};
 
-/// Límites de construcción del índice (ADR 0018 D2). Constantes en v1;
-/// configurables = issue. Overridables en tests vía
-/// [`ArchiveProvider::with_limits`](crate::ArchiveProvider::with_limits).
+/// Límites de construcción del índice (ADR 0018 D2). Configurables desde
+/// #95.2 vía [`ArchiveProvider::with_limits`](crate::ArchiveProvider::with_limits)
+/// (el engine los compone desde `Engine::set_archive_limits`; los frontends
+/// desde la sección `[archive]` de `norte.toml`).
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
     /// Tope de entradas indexadas (las omitidas por hostiles no cuentan).
@@ -36,14 +37,16 @@ pub struct Limits {
     /// `offset`/`size` de una entrada excediera este presupuesto, el PASE
     /// DE ÍNDICE ya habría fallado al intentar saltar su cuerpo para
     /// localizar la siguiente entrada (invariante: «entrada
-    /// sobre-presupuesto ⇒ el índice ENTERO falla, `Corrupt`») — un
-    /// locator solo llega a `read` si su posición YA fue verificada bajo
-    /// este mismo tope durante el indexado.
+    /// sobre-presupuesto ⇒ el índice ENTERO falla») — un locator solo llega
+    /// a `read` si su posición YA fue verificada bajo este mismo tope
+    /// durante el indexado.
     ///
-    /// Superarlo hoy se reporta como `Error::Corrupt` (igual que
-    /// `max_entries`/`max_name_bytes`/`max_depth`): deuda de un error de
-    /// recurso diferenciado (issue futura) que distinga "formato roto" de
-    /// "excede límites locales por diseño".
+    /// Superarlo se reporta como `Error::LimitExceeded`
+    /// (`LIMIT_DECOMPRESSED_BYTES`) desde #95.3 — límite local honesto, no
+    /// un veredicto de corrupción (`max_entries` ídem con `LIMIT_ENTRIES`;
+    /// `max_name_bytes`/`max_depth` OMITEN la entrada como hostil, cuentan
+    /// en `skipped` y no fallan el índice salvo por presupuesto de
+    /// omitidas).
     pub max_decompressed_bytes: u64,
 }
 
@@ -247,7 +250,11 @@ impl ArchiveIndex {
         // build entero se descarta al primer exceso.
         if self.nodes.len() > limits.max_entries {
             tracing::warn!(max = limits.max_entries, "índice supera max_entries");
-            return Err(Error::Corrupt);
+            // #95.3: límite LOCAL, no corrupción — el contenedor puede ser
+            // perfectamente válido; norte rehúsa pagarlo.
+            return Err(Error::LimitExceeded {
+                limit: Error::LIMIT_ENTRIES.into(),
+            });
         }
         Ok(())
     }
@@ -388,7 +395,9 @@ mod tests {
         i.insert_entry(b"dos", file_node(), &l).expect("ok");
         assert_eq!(
             i.insert_entry(b"tres", file_node(), &l).unwrap_err(),
-            Error::Corrupt
+            Error::LimitExceeded {
+                limit: Error::LIMIT_ENTRIES.into()
+            }
         );
     }
 

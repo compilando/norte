@@ -16,11 +16,11 @@ independently through `PROTOCOL_VERSION`.
   ("N entries omitted") and `norte ls` prints a warning to stderr — an
   incomplete listing is never silent.
 
-### Changed
-
-- **Listing sort keys allocate less (#94):** the persisted NFC sort key is
-  only materialised when it differs from the raw name bytes (non-ASCII NFD
-  names); ASCII, already-NFC, and non-UTF-8 names no longer allocate.
+- **Configurable archive limits (#95):** the new `[archive]` section of
+  `norte.toml` (`max_entries`, `max_decompressed_bytes`) lowers the anti-bomb
+  limits for browsing containers. The project layer (`./.norte`) is ignored
+  for this section — a foreign repository must not be able to raise safety
+  limits.
 
 - **Themes (MT milestone, ADR 0020):** the TUI now uses the shared
   `norte-theme` crate. It provides semantic roles, true-colour values with
@@ -37,6 +37,24 @@ independently through `PROTOCOL_VERSION`.
   formatting; Esc restores the previous theme.
 - **Roadmap update:** after M2, the planned order became MT (themes), M4
   (plugins), M3 (agent integration), and M5 (GUI).
+
+### Changed
+
+- **Honest resource errors for archives (#95, protocol 0.23.0):** a container
+  that exceeds a local anti-bomb limit now fails with the new `limit_exceeded`
+  error (closed vocabulary: `entries`, `decompressed-bytes`) instead of
+  masquerading as `corrupt` — a legitimate huge tar.gz is not "corrupt".
+  Older clients degrade to a generic error.
+
+- **Listing sort keys allocate less (#94):** the persisted NFC sort key is
+  only materialised when it differs from the raw name bytes (non-ASCII NFD
+  names); ASCII, already-NFC, and non-UTF-8 names no longer allocate.
+
+### Fixed
+
+- **Silent short reads from zip entries (#95):** a zip whose central directory
+  promises more bytes than the deflate stream delivers now fails loudly with
+  `corrupt` mid-stream instead of silently returning a partial file.
 
 ## [0.3.0-alpha.1] - 2026-07-15
 

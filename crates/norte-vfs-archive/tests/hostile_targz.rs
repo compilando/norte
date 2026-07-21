@@ -170,8 +170,8 @@ async fn bomba_de_descompresion_corta_por_limite() {
     };
     let (p, root) = common::targz_provider_with_limits(&gz, limits).await;
     match p.list(&root).await.map(|_| ()) {
-        Err(Error::Corrupt) => {}
-        other => panic!("esperaba Corrupt por bomba de descompresión, fue {other:?}"),
+        Err(Error::LimitExceeded { limit }) if limit == "decompressed-bytes" => {}
+        other => panic!("esperaba LimitExceeded(decompressed-bytes), fue {other:?}"),
     }
 }
 

@@ -200,6 +200,18 @@ fn golden_error() {
             ("loop", Error::Loop),
             ("corrupt", Error::Corrupt),
             (
+                "limit_exceeded_entries",
+                Error::LimitExceeded {
+                    limit: Error::LIMIT_ENTRIES.into(),
+                },
+            ),
+            (
+                "limit_exceeded_decompressed_bytes",
+                Error::LimitExceeded {
+                    limit: Error::LIMIT_DECOMPRESSED_BYTES.into(),
+                },
+            ),
+            (
                 "conflict_exists",
                 Error::Conflict {
                     conflict: ConflictKind::Exists,
@@ -1133,7 +1145,15 @@ fn method_names_frozen() {
     assert!(norte_proto::ARCHIVE_FORMATS.contains(&"tar+gz"));
     // 0.22.0 (#93): campo opcional `skipped` en FsListResult. No añade
     // método/notificación — el bump señala el metadato aditivo del listado.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.22.0");
+    // 0.23.0 (#95): variante Error::LimitExceeded{limit} — límite local ≠
+    // Corrupt. Vocabulario CERRADO pineado aquí: SOLO las dos constantes
+    // (cd-bytes NO existe — max_cd_bytes solo gatea el cacheo del CD).
+    assert_eq!(norte_proto::Error::LIMIT_ENTRIES, "entries");
+    assert_eq!(
+        norte_proto::Error::LIMIT_DECOMPRESSED_BYTES,
+        "decompressed-bytes"
+    );
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.23.0");
 }
 
 #[test]

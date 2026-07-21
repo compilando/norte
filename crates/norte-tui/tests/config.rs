@@ -167,3 +167,34 @@ fn el_keymap_de_la_ultima_capa_se_marca_como_proyecto() {
         "el binding de la capa de USUARIO sigue vivo"
     );
 }
+
+/// #95.2: `[archive]` se fusiona último-gana entre capas de CONFIANZA y la
+/// capa de proyecto se IGNORA — un `./.norte/norte.toml` de un repo ajeno no
+/// puede subir los límites anti-bomba justo donde viven los contenedores
+/// hostiles (mismo criterio fail-closed que la hotlist).
+#[test]
+fn archive_limits_ultimo_gana_y_proyecto_no_los_toca() {
+    let sistema = dir_with(&[(
+        "norte.toml",
+        "[archive]\nmax_entries = 1000\nmax_decompressed_bytes = 4096\n",
+    )]);
+    let usuario = dir_with(&[("norte.toml", "[archive]\nmax_entries = 50\n")]);
+    let proyecto = dir_with(&[(
+        "norte.toml",
+        "[archive]\nmax_entries = 999999999\nmax_decompressed_bytes = 999999999\n",
+    )]);
+    let layers = Layers {
+        dirs: vec![
+            (sistema.path().to_path_buf(), Layer::System),
+            (usuario.path().to_path_buf(), Layer::User),
+            (proyecto.path().to_path_buf(), Layer::Project),
+        ],
+    };
+    let cfg = load(&layers).expect("carga");
+    assert_eq!(cfg.archive_max_entries, Some(50), "usuario pisa sistema");
+    assert_eq!(
+        cfg.archive_max_decompressed_bytes,
+        Some(4096),
+        "campo no pisado conserva la capa inferior"
+    );
+}

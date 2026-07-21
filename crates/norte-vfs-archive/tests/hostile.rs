@@ -119,8 +119,8 @@ async fn max_entries_corta_el_indexado() {
     };
     let (p, root) = common::tar_provider_with_limits(&tar, limits).await;
     match p.list(&root).await.map(|_| ()) {
-        Err(Error::Corrupt) => {}
-        other => panic!("esperaba Corrupt por bomba de entradas, fue {other:?}"),
+        Err(Error::LimitExceeded { limit }) if limit == "entries" => {}
+        other => panic!("esperaba LimitExceeded(entries), fue {other:?}"),
     }
 }
 

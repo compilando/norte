@@ -99,7 +99,12 @@ pub(crate) fn build_index<R: Read + Seek>(
         && claimed > limits.max_entries as u64
     {
         tracing::warn!(claimed, max = limits.max_entries, "EOCD supera max_entries");
-        return Err(Error::Corrupt);
+        // #95.3: puede ser un EOCD mentiroso O un zip legítimo enorme — no
+        // se sabe sin pagar el índice, y precisamente se rehúsa a pagarlo:
+        // límite local, no un veredicto de corrupción.
+        return Err(Error::LimitExceeded {
+            limit: Error::LIMIT_ENTRIES.into(),
+        });
     }
     let mut archive = zip::ZipArchive::new(reader).map_err(|e| corrupt(&e))?;
     if archive.len() > limits.max_entries {
@@ -109,7 +114,9 @@ pub(crate) fn build_index<R: Read + Seek>(
             max = limits.max_entries,
             "zip supera max_entries"
         );
-        return Err(Error::Corrupt);
+        return Err(Error::LimitExceeded {
+            limit: Error::LIMIT_ENTRIES.into(),
+        });
     }
     let mut index = ArchiveIndex::new(generation);
     // Mitigación H1 (auditoría 8e): zip 5.x indexa el central directory por
@@ -165,7 +172,11 @@ pub(crate) fn build_index<R: Read + Seek>(
                 max = limits.max_entries,
                 "zip supera el presupuesto de omitidas"
             );
-            return Err(Error::Corrupt);
+            // #95.3 (MAJOR-1 del review): mismo criterio que tar/targz — el
+            // presupuesto de omitidas es un límite LOCAL, no corrupción.
+            return Err(Error::LimitExceeded {
+                limit: Error::LIMIT_ENTRIES.into(),
+            });
         }
     }
     if index.skipped > 0 {
@@ -236,7 +247,11 @@ pub(crate) fn read_entry<R: Read + Seek>(
     while to_skip > 0 {
         let want = buf.len().min(usize::try_from(to_skip).unwrap_or(buf.len()));
         match file.read(&mut buf[..want]) {
-            Ok(0) => return, // EOF antes del offset: stream vacío (pread)
+            // #95.4 (paridad con el FIX-1 de targz): el caller YA recortó
+            // `req_off` contra `entry_size` — un EOF aquí solo puede ser
+            // contenedor truncado/mutado bajo nuestros pies, jamás un offset
+            // legítimamente vacío. Fail-loud, no stream vacío en silencio.
+            Ok(0) => return send_err(tx, Error::Corrupt),
             Ok(n) => to_skip -= n as u64,
             Err(e) => return send_err(tx, corrupt_io(&e)),
         }
@@ -247,7 +262,10 @@ pub(crate) fn read_entry<R: Read + Seek>(
             .len()
             .min(usize::try_from(remaining).unwrap_or(buf.len()));
         match file.read(&mut buf[..want]) {
-            Ok(0) => return,
+            // Premature EOF a mitad de la entrada: el índice prometió `size`
+            // bytes y el deflate no los tiene — datos cortos JAMÁS en
+            // silencio (#95.4).
+            Ok(0) => return send_err(tx, Error::Corrupt),
             Ok(n) => {
                 remaining -= n as u64;
                 if tx

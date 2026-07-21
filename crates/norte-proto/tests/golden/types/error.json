@@ -60,6 +60,14 @@
   "corrupt": {
     "kind": "corrupt"
   },
+  "limit_exceeded_decompressed_bytes": {
+    "kind": "limit_exceeded",
+    "limit": "decompressed-bytes"
+  },
+  "limit_exceeded_entries": {
+    "kind": "limit_exceeded",
+    "limit": "entries"
+  },
   "loop": {
     "kind": "loop"
   },
