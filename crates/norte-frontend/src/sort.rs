@@ -9,16 +9,24 @@ use norte_proto::{Entry, EntryKind};
 pub fn sort_entries(entries: &mut [Entry]) {
     entries.sort_by_cached_key(|e| {
         let name = name_bytes(e);
-        (e.kind != EntryKind::Dir, nfc_key(name), name.to_vec())
+        (
+            e.kind != EntryKind::Dir,
+            nfc_key(name).unwrap_or_else(|| name.to_vec()),
+            name.to_vec(),
+        )
     });
 }
 
-fn nfc_key(name: &[u8]) -> Vec<u8> {
-    use unicode_normalization::UnicodeNormalization;
-    match std::str::from_utf8(name) {
-        Ok(s) => s.nfc().collect::<String>().into_bytes(),
-        Err(_) => name.to_vec(),
+/// Forma NFC del nombre como clave de orden, o `None` cuando coincide byte a
+/// byte con el nombre crudo (ASCII, ya-NFC o no-UTF8) — el caso abrumadoramente
+/// común, que así no materializa nada (#94).
+fn nfc_key(name: &[u8]) -> Option<Vec<u8>> {
+    use unicode_normalization::{UnicodeNormalization, is_nfc};
+    let s = std::str::from_utf8(name).ok()?;
+    if is_nfc(s) {
+        return None;
     }
+    Some(s.nfc().collect::<String>().into_bytes())
 }
 
 fn name_bytes(e: &Entry) -> &[u8] {
@@ -31,7 +39,10 @@ fn name_bytes(e: &Entry) -> &[u8] {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SortKey {
     not_dir: bool,
-    nfc: Vec<u8>,
+    /// `None` = la clave NFC son los bytes crudos del nombre (caso común:
+    /// ASCII, ya-NFC o no-UTF8) — se leen del propio `Entry` al comparar,
+    /// sin materializar ~una alloc por entrada (#94).
+    nfc: Option<Vec<u8>>,
 }
 
 pub(crate) fn sort_key(e: &Entry) -> SortKey {
@@ -44,8 +55,10 @@ pub(crate) fn sort_key(e: &Entry) -> SortKey {
 /// Comparación total (clave, entry): clave y, en empate, bytes crudos del
 /// nombre — EXACTAMENTE el mismo orden que [`sort_entries`].
 pub(crate) fn cmp_keyed(a: (&SortKey, &Entry), b: (&SortKey, &Entry)) -> std::cmp::Ordering {
-    (a.0.not_dir, &a.0.nfc)
-        .cmp(&(b.0.not_dir, &b.0.nfc))
+    let nfc_a = a.0.nfc.as_deref().unwrap_or_else(|| name_bytes(a.1));
+    let nfc_b = b.0.nfc.as_deref().unwrap_or_else(|| name_bytes(b.1));
+    (a.0.not_dir, nfc_a)
+        .cmp(&(b.0.not_dir, nfc_b))
         .then_with(|| name_bytes(a.1).cmp(name_bytes(b.1)))
 }
 
@@ -131,6 +144,23 @@ mod tests {
             size: None,
             mtime_ms: None,
         }
+    }
+
+    /// Pin del contrato de `SortKey.nfc` (#94): `None` en el caso común
+    /// (ASCII, ya-NFC, no-UTF8) — cero allocs persistidas — y `Some` SOLO
+    /// cuando la forma NFC difiere de los bytes crudos (p.ej. NFD).
+    #[test]
+    fn sort_key_no_materializa_nfc_en_el_caso_comun() {
+        for w in ["mem:///ascii.txt", "mem:///a%C3%B1o", "mem:///%FF%FE"] {
+            let k = sort_key(&e(w, EntryKind::File));
+            assert_eq!(k.nfc, None, "{w}: nfc==bytes crudos, no debe alocar");
+        }
+        let nfd = sort_key(&e("mem:///an%CC%83o", EntryKind::File));
+        assert_eq!(
+            nfd.nfc.as_deref(),
+            Some("año".as_bytes()),
+            "NFD materializa su forma NFC"
+        );
     }
 
     /// Equivalencia determinista (sin proptest como dev-dep en este crate,
