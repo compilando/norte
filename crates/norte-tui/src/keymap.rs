@@ -84,6 +84,7 @@ pub const COMMANDS: &[&str] = &[
     "pane.history",
     "pane.hotlist",
     "pane.search",
+    "pane.names-encoding",
 ];
 
 /// Id de Fluent con la descripción de un comando (`app.quit` →

@@ -747,11 +747,12 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, them
     // Filtro activo: SOLO los índices visibles, con el cursor visual en la
     // posición DENTRO del filtrado. En Jump (quick_visible = None) el
     // listado va entero y manda el cursor real.
+    let reinterpret = pane.name_encoding;
     let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = match pane.quick_visible() {
         Some(vis) => (
             vis.iter()
                 .filter_map(|&i| pane.entries().get(i))
-                .map(|e| entry_item(e, theme))
+                .map(|e| entry_item(e, theme, reinterpret))
                 .collect(),
             pane.quick()
                 .and_then(crate::nav::QuickSearch::selected_entry_index)
@@ -760,7 +761,7 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, them
         None => (
             pane.entries()
                 .iter()
-                .map(|e| entry_item(e, theme))
+                .map(|e| entry_item(e, theme, reinterpret))
                 .collect(),
             (!pane.entries().is_empty()).then_some(pane.cursor()),
         ),
@@ -773,9 +774,16 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, them
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-fn entry_item<'a>(entry: &'a norte_proto::Entry, theme: &TuiTheme) -> ListItem<'a> {
+fn entry_item<'a>(
+    entry: &'a norte_proto::Entry,
+    theme: &TuiTheme,
+    reinterpret: Option<norte_encoding::NameEncoding>,
+) -> ListItem<'a> {
     let name = entry.path.file_name().map_or(&[][..], |n| n.as_bytes());
-    let (texto, hostil) = display_name(name);
+    // #57: con reinterpretación activa, los nombres no-UTF8 se decodifican
+    // con el encoding elegido (display-only; el badge hostil se conserva —
+    // el texto pintado difiere de los bytes reales).
+    let (texto, hostil) = norte_frontend::display_name_with(name, reinterpret);
     let marker = match entry.kind {
         EntryKind::Dir => "/",
         EntryKind::Symlink => "@",
@@ -865,7 +873,14 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
             }
             _ => String::new(),
         };
-        format!(" {marca}{dir_texto}{pos_total}{omitidas}{seq}")
+        // #57: modo de reinterpretación activo — PERSISTENTE mientras dure
+        // (los nombres pintados no son los bytes; el usuario debe saberlo
+        // en todo momento, no solo en el mensaje del toggle).
+        let nombres = match pane.name_encoding {
+            Some(enc) => format!("  {}", ta("status-names-encoding", &[("enc", enc.label())])),
+            None => String::new(),
+        };
+        format!(" {marca}{dir_texto}{pos_total}{omitidas}{nombres}{seq}")
     };
     frame.render_widget(
         Paragraph::new(text).style(app.theme.role(Role::StatusBar)),

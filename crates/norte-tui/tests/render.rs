@@ -233,3 +233,53 @@ fn modal_de_aprobacion_enmascara_marca_y_no_oculta_el_destino() {
         "sesión delimitada: {contenido}"
     );
 }
+
+/// #57: con `pane.names-encoding` activo, un nombre cirílico en cp866 se
+/// PINTA legible (Папка), conserva su badge hostil (el texto difiere de los
+/// bytes) y la barra indica el modo de forma persistente. El ciclo:
+/// None → sugerido (IBM866 con estas muestras) → … → None.
+#[test]
+fn reinterpretar_nombres_pinta_legible_con_badge_e_indicador() {
+    let dir = vp("file:///x");
+    // "Папка" en cp866: no-UTF8 → lossy sin reinterpretar.
+    let entries = vec![Entry {
+        path: dir.join(Segment::new(b"\x8f\xa0\xaf\xaa\xa0".to_vec()).unwrap()),
+        kind: EntryKind::File,
+        size: Some(1),
+        mtime_ms: None,
+    }];
+    let mut app = App::new(Pane::new(dir.clone(), entries), Pane::new(dir, Vec::new()));
+
+    // Primer ciclo: la sugerencia de chardetng sobre el listado (IBM866).
+    let label = app.panes[0].cycle_name_encoding();
+    assert_eq!(label, Some("IBM866"), "sugerido por las muestras cp866");
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let contenido = terminal.backend().to_string();
+    assert!(
+        contenido.contains("Папка"),
+        "nombre reinterpretado legible: {contenido}"
+    );
+    assert!(
+        contenido.contains("! "),
+        "badge hostil conservado (el texto no son los bytes): {contenido}"
+    );
+    assert!(
+        contenido.contains("IBM866"),
+        "indicador persistente en la barra: {contenido}"
+    );
+
+    // El ciclo termina apagándose (vuelta a None).
+    let mut vueltas = 0;
+    while app.panes[0].cycle_name_encoding().is_some() {
+        vueltas += 1;
+        assert!(vueltas < 10, "el ciclo debe cerrarse en None");
+    }
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let apagado = terminal.backend().to_string();
+    assert!(
+        apagado.contains('\u{FFFD}'),
+        "apagado = lossy de siempre: {apagado}"
+    );
+}

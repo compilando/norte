@@ -1,6 +1,5 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
-assertion_line: 284
 expression: "format!(\"{arriba}\\n===\\n{}\", render(&app))"
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
@@ -23,10 +22,11 @@ expression: "format!(\"{arriba}\\n===\\n{}\", render(&app))"
 ===
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
 "│ ┌ Ayuda — teclas activas — [esc/q/f1] cerrar   [↑/↓/pgup/pgdn] desplazar ──┐ │"
+"│ │  tab            cambiar de pane                                          │ │"
 "│ │  f1             esta ayuda                                               │ │"
 "│ │  f9             elegir tema                                              │ │"
-"│ │  f12            gestor de extensiones                                    │ │"
-"│!│                                                                          │ │"
+"│!│  f12            gestor de extensiones                                    │ │"
+"│ │                                                                          │ │"
 "│ │── Viewer ──                                                              │ │"
 "│ │  q              cerrar el viewer                                         │ │"
 "│ │  esc            cerrar el viewer                                         │ │"
@@ -34,6 +34,5 @@ expression: "format!(\"{arriba}\\n===\\n{}\", render(&app))"
 "│ │  f10            cerrar el viewer                                         │ │"
 "│ │  up             subir una línea                                          │ │"
 "│ │  down           bajar una línea                                          │ │"
-"│ │  pgup           subir una página                                         │ │"
 "└─└──────────────────────────────────────────────────────────────────────────┘─┘"
 " ⟨file⟩/casa  2/5                                                               "

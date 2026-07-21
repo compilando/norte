@@ -2300,6 +2300,15 @@ async fn dispatch(
                 scroll: 0,
             });
         }
+        "pane.names-encoding" => {
+            // #57: cicla la reinterpretación de nombres no-UTF8 del pane con
+            // foco (display-only, regla 1). El anuncio va por la barra.
+            let label = app.focused_mut().cycle_name_encoding();
+            app.message = Some(match label {
+                Some(enc) => ta("msg-names-encoding", &[("enc", enc)]),
+                None => t("msg-names-encoding-off"),
+            });
+        }
         "app.theme" => app.open_theme_picker(),
         "app.extensions" => match backend.plugins_list().await {
             // El catálogo llega YA ordenado por categoría e id desde el core.

@@ -48,6 +48,13 @@ pub struct Pane {
     /// `n > 0` — un listado incompleto jamás es silencioso (paralelo del
     /// contrato de [`Pane::loading`]). `None` = no aplica/desconocido.
     pub skipped: Option<u64>,
+    /// Reinterpretación de NOMBRES no-UTF8 para display (#57, spec §6.1):
+    /// `Some(enc)` = «ver nombres como enc» — SOLO display, los bytes jamás
+    /// se mutan (regla 1) y cada nombre reinterpretado conserva su badge
+    /// hostil. Persistente por pane (como TC): la barra lo indica mientras
+    /// esté activo; `pane.names-encoding` lo cicla (None → sugerido/cp437 →
+    /// … → None).
+    pub name_encoding: Option<norte_encoding::NameEncoding>,
 }
 
 /// Estado de presentación de una búsqueda viva (`Alt+F7`, liveSearch T6): el
@@ -82,7 +89,36 @@ impl Pane {
             search_state: SearchState::Running,
             search_error: None,
             skipped: None,
+            name_encoding: None,
         }
+    }
+
+    /// Cicla la reinterpretación de nombres (#57): `None` → (sugerencia de
+    /// chardetng sobre los nombres no-UTF8 del listado, si cae en el ciclo;
+    /// si no, el primero) → resto del ciclo → `None`. Devuelve la etiqueta
+    /// a anunciar en la barra (`None` = «auto/bytes», modo apagado).
+    pub fn cycle_name_encoding(&mut self) -> Option<&'static str> {
+        let cycle = norte_encoding::name_reinterpret_cycle();
+        self.name_encoding = match self.name_encoding {
+            None => {
+                let raws: Vec<&[u8]> = self
+                    .entries()
+                    .iter()
+                    .filter_map(|e| e.path.file_name().map(norte_proto::Segment::as_bytes))
+                    .filter(|b| std::str::from_utf8(b).is_err())
+                    .collect();
+                Some(norte_encoding::suggest_name_encoding(&raws).unwrap_or(cycle[0]))
+            }
+            Some(cur) => {
+                let idx = cycle.iter().position(|e| *e == cur);
+                match idx {
+                    Some(i) if i + 1 < cycle.len() => Some(cycle[i + 1]),
+                    // Final del ciclo (o un valor fuera de él): apagar.
+                    _ => None,
+                }
+            }
+        };
+        self.name_encoding.map(|e| e.label())
     }
 
     // --- Delegados de solo-lectura sobre el estado compartido (#82) ---

@@ -149,6 +149,9 @@ cli-inline-password = the URL must not carry an inline password (user:pass@…);
 cli-connection-degraded = ⚠ { $scheme }://{ $host }: UNENCRYPTED session (server rejected AUTH TLS, tls="allow"). Data and credentials travel in cleartext.
 status-connection-degraded = ⚠ { $scheme }://{ $host } — plaintext
 status-archive-skipped = ⚠ { $n } entries omitted (hostile names/limits)
+status-names-encoding = names: { $enc }
+msg-names-encoding = names shown as { $enc } (display only; bytes unchanged)
+msg-names-encoding-off = names shown as-is (reinterpretation off)
 cli-ls-skipped = warning: { $n } container entries omitted from the index (hostile names/limits)
 
 # --- Help (F1) — built from the effective keymap ---
@@ -206,6 +209,7 @@ help-cmd-viewer-page-down = page down
 help-cmd-viewer-top = go to top
 help-cmd-viewer-bottom = go to bottom
 help-cmd-viewer-encoding = reload as… (next encoding)
+help-cmd-pane-names-encoding = show names as… (cp437/cp866/Shift-JIS/GBK; display only)
 help-cmd-viewer-encoding-auto = back to auto-detection
 help-cmd-viewer-hex = toggle hex view
 help-cmd-pane-search = search by name/content (Alt+F7)

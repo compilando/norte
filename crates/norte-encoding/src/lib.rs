@@ -380,3 +380,111 @@ pub fn mask_terminal_hazards(s: &str) -> String {
         .map(|c| if is_terminal_hazard(c) { '\u{FFFD}' } else { c })
         .collect()
 }
+
+/// Encoding para REINTERPRETAR nombres de archivo como texto (#57, spec
+/// §6.1, fila ZIP): SOLO display — los bytes del nombre jamás se mutan
+/// (regla 1) y la elección es una acción explícita del usuario («ver
+/// nombres como…»), nunca una decodificación a ciegas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameEncoding {
+    /// IBM cp437 (DOS US), el legado clásico de los zip pre-Unicode.
+    /// `encoding_rs` NO lo trae (WHATWG no lo incluye): tabla propia TOTAL
+    /// (los 256 bytes mapean, la decodificación jamás falla).
+    Cp437,
+    /// Un encoding de `encoding_rs` (IBM866, `Shift_JIS`, GBK…).
+    Rs(&'static Encoding),
+}
+
+impl NameEncoding {
+    /// Etiqueta corta para UI (`cp437`, `IBM866`, `Shift_JIS`…).
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Cp437 => "cp437",
+            Self::Rs(e) => e.name(),
+        }
+    }
+}
+
+/// cp437, mitad alta (0x80–0xFF). La mitad baja es ASCII tal cual (los
+/// controles 0x00–0x1F se dejan como controles: el enmascarado de display
+/// los tapa aguas arriba, igual que en un nombre UTF-8 con controles).
+const CP437_HIGH: [char; 128] = [
+    'Ç', 'ü', 'é', 'â', 'ä', 'à', 'å', 'ç', 'ê', 'ë', 'è', 'ï', 'î', 'ì', 'Ä', 'Å', 'É', 'æ', 'Æ',
+    'ô', 'ö', 'ò', 'û', 'ù', 'ÿ', 'Ö', 'Ü', '¢', '£', '¥', '₧', 'ƒ', 'á', 'í', 'ó', 'ú', 'ñ', 'Ñ',
+    'ª', 'º', '¿', '⌐', '¬', '½', '¼', '¡', '«', '»', '░', '▒', '▓', '│', '┤', '╡', '╢', '╖', '╕',
+    '╣', '║', '╗', '╝', '╜', '╛', '┐', '└', '┴', '┬', '├', '─', '┼', '╞', '╟', '╚', '╔', '╩', '╦',
+    '╠', '═', '╬', '╧', '╨', '╤', '╥', '╙', '╘', '╒', '╓', '╫', '╪', '┘', '┌', '█', '▄', '▌', '▐',
+    '▀', 'α', 'ß', 'Γ', 'π', 'Σ', 'σ', 'µ', 'τ', 'Φ', 'Θ', 'Ω', 'δ', '∞', 'φ', 'ε', '∩', '≡', '±',
+    '≥', '≤', '⌠', '⌡', '÷', '≈', '°', '∙', '·', '√', 'ⁿ', '²', '■', '\u{00A0}',
+];
+
+/// Decodifica un NOMBRE con `enc` para display. TOTAL: siempre produce
+/// texto (cp437 mapea los 256 bytes; `encoding_rs` sustituye lo inválido
+/// por `U+FFFD`). El saneado de hazards (controles/bidi/invisibles) es del
+/// CALLER de display, igual que con nombres UTF-8.
+///
+/// ```
+/// use norte_encoding::{NameEncoding, decode_name};
+/// // "CAFÉ.TXT" en cp437 (É = 0x90):
+/// assert_eq!(decode_name(b"CAF\x90.TXT", NameEncoding::Cp437), "CAFÉ.TXT");
+/// // Cirílico en IBM866:
+/// let ruso = decode_name(b"\x8f\xa0\xaf\xaa\xa0", NameEncoding::Rs(encoding_rs::IBM866));
+/// assert_eq!(ruso, "Папка");
+/// ```
+#[must_use]
+pub fn decode_name(bytes: &[u8], enc: NameEncoding) -> String {
+    match enc {
+        NameEncoding::Cp437 => bytes
+            .iter()
+            .map(|&b| {
+                if b < 0x80 {
+                    b as char
+                } else {
+                    CP437_HIGH[(b - 0x80) as usize]
+                }
+            })
+            .collect(),
+        NameEncoding::Rs(e) => e.decode_without_bom_handling(bytes).0.into_owned(),
+    }
+}
+
+/// El ciclo de «ver nombres como…» (#57): los encodings de nombres que un
+/// usuario real necesita probar sobre un zip/tar pre-Unicode. cp437 primero
+/// (el default histórico del formato zip cuando el bit 11 está apagado).
+///
+/// ```
+/// assert_eq!(norte_encoding::name_reinterpret_cycle().len(), 5);
+/// ```
+#[must_use]
+pub fn name_reinterpret_cycle() -> &'static [NameEncoding] {
+    const CYCLE: &[NameEncoding] = &[
+        NameEncoding::Cp437,
+        NameEncoding::Rs(encoding_rs::IBM866),
+        NameEncoding::Rs(encoding_rs::SHIFT_JIS),
+        NameEncoding::Rs(encoding_rs::GBK),
+        NameEncoding::Rs(encoding_rs::WINDOWS_1252),
+    ];
+    CYCLE
+}
+
+/// Sugiere un encoding del ciclo para un conjunto de NOMBRES no-UTF8
+/// (chardetng sobre la concatenación). `None` = sin sugerencia útil (la
+/// adivinanza cayó fuera del ciclo — p. ej. UTF-8 — o no hay muestras).
+/// cp437 jamás se sugiere (chardetng no lo modela); el menú lo ofrece
+/// siempre como primera opción manual.
+#[must_use]
+pub fn suggest_name_encoding(samples: &[&[u8]]) -> Option<NameEncoding> {
+    if samples.is_empty() {
+        return None;
+    }
+    let mut det = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Deny);
+    for (i, s) in samples.iter().enumerate() {
+        det.feed(s, i + 1 == samples.len());
+    }
+    let guess = det.guess(None, chardetng::Utf8Detection::Deny);
+    name_reinterpret_cycle()
+        .iter()
+        .copied()
+        .find(|e| matches!(e, NameEncoding::Rs(rs) if *rs == guess))
+}

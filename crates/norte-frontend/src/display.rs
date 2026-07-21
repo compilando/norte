@@ -44,6 +44,32 @@ pub fn display_name(bytes: &[u8]) -> (String, bool) {
     (texto, lossy || masked)
 }
 
+/// [`display_name`] con REINTERPRETACIÓN opcional (#57, spec §6.1): con
+/// `Some(enc)`, un nombre NO-UTF8 se decodifica con `enc` para display en
+/// vez de al lossy `�` — los bytes jamás se mutan (regla 1) y el flag
+/// hostil queda en `true` (el texto pintado DIFIERE del nombre real: es
+/// una VISTA elegida por el usuario, el badge lo delata igual).
+///
+/// Un nombre UTF-8 VÁLIDO no se reinterpreta nunca: ya es texto — en un
+/// contenedor mixto (entradas UTF-8 + entradas cp866) reinterpretar las
+/// UTF-8 fabricaría mojibake donde no había problema. El enmascarado de
+/// hazards aplica igual en ambos caminos.
+#[must_use]
+pub fn display_name_with(
+    bytes: &[u8],
+    reinterpret: Option<norte_encoding::NameEncoding>,
+) -> (String, bool) {
+    let (Some(enc), Err(_)) = (reinterpret, std::str::from_utf8(bytes)) else {
+        return display_name(bytes);
+    };
+    let decoded = norte_encoding::decode_name(bytes, enc);
+    let texto: String = decoded
+        .chars()
+        .map(|c| if must_mask(c) { '\u{FFFD}' } else { c })
+        .collect();
+    (texto, true)
+}
+
 /// Path completo listo para pintar: prefijo `⟨scheme authority⟩/` (formato
 /// calcado EXACTO de `VPath::display_lossy`, proto vpath.rs — con segmentos
 /// limpios ambos textos coinciden) + cada segmento por [`display_name`], y
@@ -106,6 +132,34 @@ mod tests {
                 n.id
             );
         }
+    }
+
+    /// #57: la reinterpretación decodifica SOLO nombres no-UTF8 (display),
+    /// conserva el badge hostil, jamás toca un nombre UTF-8 válido y el
+    /// enmascarado de hazards sobrevive a la decodificación (un cp437 que
+    /// produzca un char de control no se pinta crudo).
+    #[test]
+    fn display_name_with_reinterpreta_solo_no_utf8_y_enmascara() {
+        use norte_encoding::NameEncoding;
+        // "CAFÉ.TXT" en cp437 (É = 0x90): decodifica y MARCA.
+        let (texto, hostil) = display_name_with(b"CAF\x90.TXT", Some(NameEncoding::Cp437));
+        assert_eq!(texto, "CAFÉ.TXT");
+        assert!(hostil, "reinterpretado = pintado difiere de los bytes");
+        // UTF-8 válido: intacto aunque haya reinterpretación activa.
+        let (texto, hostil) = display_name_with("año.txt".as_bytes(), Some(NameEncoding::Cp437));
+        assert_eq!(texto, "año.txt");
+        assert!(!hostil);
+        // None = display_name de siempre (lossy marcado).
+        assert_eq!(
+            display_name_with(b"\xFF\xFE", None),
+            display_name(b"\xFF\xFE")
+        );
+        // Hazards post-decodificación: IBM866 decodifica 0x1B… no — 0x1B es
+        // ASCII (ESC pasa tal cual por la mitad baja de cp437): debe salir
+        // enmascarado, jamás un ESC crudo en el terminal.
+        let (texto, hostil) = display_name_with(b"\x1b]0;x\x90", Some(NameEncoding::Cp437));
+        assert!(!texto.contains('\u{1b}'), "ESC jamás crudo: {texto:?}");
+        assert!(hostil);
     }
 
     /// El prefijo `⟨scheme authority⟩/` de `path_display` calca EXACTO el

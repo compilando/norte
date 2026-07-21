@@ -35,6 +35,7 @@ keymap = [
     { on = ["/"], run = "pane.quick-search" },
     { on = ["alt+down"], run = "pane.history" },
     { on = ["alt+f7"], run = "pane.search" },
+    { on = ["alt+e"], run = "pane.names-encoding" },
     # ctrl+d ya es cursor.page-down (vim half-page) en este preset — colisión;
     # ctrl+b (libre aquí) para pane.hotlist. Anotado en la spec (navTC T3/T6).
     { on = ["ctrl+b"], run = "pane.hotlist" },
