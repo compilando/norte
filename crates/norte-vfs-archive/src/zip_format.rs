@@ -236,7 +236,11 @@ pub(crate) fn read_entry<R: Read + Seek>(
     while to_skip > 0 {
         let want = buf.len().min(usize::try_from(to_skip).unwrap_or(buf.len()));
         match file.read(&mut buf[..want]) {
-            Ok(0) => return, // EOF antes del offset: stream vacío (pread)
+            // #95.4 (paridad con el FIX-1 de targz): el caller YA recortó
+            // `req_off` contra `entry_size` — un EOF aquí solo puede ser
+            // contenedor truncado/mutado bajo nuestros pies, jamás un offset
+            // legítimamente vacío. Fail-loud, no stream vacío en silencio.
+            Ok(0) => return send_err(tx, Error::Corrupt),
             Ok(n) => to_skip -= n as u64,
             Err(e) => return send_err(tx, corrupt_io(&e)),
         }
@@ -247,7 +251,10 @@ pub(crate) fn read_entry<R: Read + Seek>(
             .len()
             .min(usize::try_from(remaining).unwrap_or(buf.len()));
         match file.read(&mut buf[..want]) {
-            Ok(0) => return,
+            // Premature EOF a mitad de la entrada: el índice prometió `size`
+            // bytes y el deflate no los tiene — datos cortos JAMÁS en
+            // silencio (#95.4).
+            Ok(0) => return send_err(tx, Error::Corrupt),
             Ok(n) => {
                 remaining -= n as u64;
                 if tx

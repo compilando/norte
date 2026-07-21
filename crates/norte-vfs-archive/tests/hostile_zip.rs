@@ -332,3 +332,84 @@ async fn pin_h1_colapso_lossy_del_crate_zip() {
         "última gana dentro del crate (shadowing documentado)"
     );
 }
+
+/// Drena un read esperando que el stream FALLE; devuelve (`bytes_ok`, error).
+async fn read_hasta_fallo(p: &ArchiveProvider, f: &VPath) -> (usize, Option<Error>) {
+    let mut stream = p.read(f, None).await.expect("read abre");
+    let mut vistos = 0usize;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(chunk) => vistos += chunk.len(),
+            Err(e) => return (vistos, Some(e)),
+        }
+    }
+    (vistos, None)
+}
+
+/// Robustez: una entrada cuyo CD promete más bytes de los que el CONTENEDOR
+/// tiene falla `Corrupt` (aquí ya lo cazaba el CRC del crate `zip` al agotar
+/// el reader — el pin del camino silencioso es el test de abajo).
+#[tokio::test]
+async fn zip_entrada_que_promete_mas_bytes_que_el_contenedor_es_corrupt() {
+    let mut bytes = ZipSmith::new().file(b"corta.bin", &[9u8; 100]).build();
+    // Cirugía sobre el CD (única entrada): comp/uncomp pasan a 1 MiB — muy
+    // por encima del final del contenedor. El local header queda como está
+    // (el crate `zip` lee con los tamaños del CD).
+    let cd = bytes
+        .windows(4)
+        .position(|w| w == [0x50, 0x4b, 0x01, 0x02])
+        .expect("firma del CD");
+    let lie = (1u32 << 20).to_le_bytes();
+    bytes[cd + 20..cd + 24].copy_from_slice(&lie); // compressed size
+    bytes[cd + 24..cd + 28].copy_from_slice(&lie); // uncompressed size
+    let (p, root) = common::zip_provider(&bytes).await;
+    let (vistos, fallo) = read_hasta_fallo(&p, &root.join(seg(b"corta.bin"))).await;
+    match fallo {
+        Some(Error::Corrupt) => {}
+        other => panic!("esperaba Corrupt (vistos {vistos} bytes), fue {other:?}"),
+    }
+}
+
+/// #95.4 — EL camino silencioso (paridad con el FIX-1 de targz): deflate que
+/// termina LIMPIO (bloque final válido) antes del `uncompressed_size` que el
+/// CD promete, con CRC consistente con los datos CORTOS. El crate `zip` no
+/// tiene nada que objetar (deflate válido, CRC ok) → el take-loop ve `Ok(0)`
+/// con `remaining > 0`. Antes del fix devolvía un fichero parcial SIN RUIDO;
+/// ahora es `Corrupt`.
+#[tokio::test]
+async fn zip_deflate_corto_con_crc_consistente_es_corrupt_no_datos_cortos() {
+    // Deflate raw VÁLIDO de solo 2 bytes.
+    let cortos = b"AB";
+    let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+    enc.write_all(cortos).expect("deflate");
+    let deflated = enc.finish().expect("finish");
+    // ZipSmith escribe comp=uncomp=len(deflated) y crc de los bytes crudos:
+    // cirugía en LOCAL y CD — uncomp miente 100, crc = crc32(descomprimido).
+    let mut crc = flate2::Crc::new();
+    crc.update(cortos);
+    let crc_ok = crc.sum().to_le_bytes();
+    let mut bytes = ZipSmith::new()
+        .file_raw(b"corta.bin", &deflated, 8, 0)
+        .build();
+    let lie = 100u32.to_le_bytes();
+    let local = bytes
+        .windows(4)
+        .position(|w| w == [0x50, 0x4b, 0x03, 0x04])
+        .expect("firma local");
+    bytes[local + 14..local + 18].copy_from_slice(&crc_ok);
+    bytes[local + 22..local + 26].copy_from_slice(&lie); // uncomp (local)
+    let cd = bytes
+        .windows(4)
+        .position(|w| w == [0x50, 0x4b, 0x01, 0x02])
+        .expect("firma del CD");
+    bytes[cd + 16..cd + 20].copy_from_slice(&crc_ok);
+    bytes[cd + 24..cd + 28].copy_from_slice(&lie); // uncomp (CD)
+    let (p, root) = common::zip_provider(&bytes).await;
+    let (vistos, fallo) = read_hasta_fallo(&p, &root.join(seg(b"corta.bin"))).await;
+    match fallo {
+        Some(Error::Corrupt) => {}
+        other => {
+            panic!("esperaba Corrupt, fue {other:?} con {vistos} bytes — datos cortos en silencio")
+        }
+    }
+}
