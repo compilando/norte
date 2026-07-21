@@ -241,6 +241,9 @@ impl ConnectionManager {
                     .map_err(log_and_map)?;
                 // #44: si el control principal cayó a claro (tls="allow" +
                 // AUTH TLS rechazado), se surfacea la degradación al usuario.
+                // Basta `main`: ambas conexiones comparten el MISMO `spec`, así
+                // que degradan juntas o ninguna — mirar `reader.tls_degraded`
+                // solo duplicaría el aviso (rust m2).
                 if main.tls_degraded {
                     warnings.push(ConnectionWarning {
                         scheme: ep.scheme.clone(),

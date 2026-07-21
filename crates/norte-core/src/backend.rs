@@ -124,6 +124,25 @@ pub enum ConnEvent {
     Restored,
 }
 
+/// Observer de avisos de conexión (#44) que los reenvía por un canal: la vía
+/// del `Backend::Embedded` para que una CLI/TUI EN PROCESO surface la
+/// degradación igual que en modo daemon (donde el observer difunde por wire).
+/// Mapea el `ConnectionWarning` del core al `ConnectionDegraded` del wire.
+struct ChannelConnectionObserver {
+    tx: mpsc::UnboundedSender<norte_proto::methods::ConnectionDegraded>,
+}
+
+impl crate::connect::ConnectionObserver for ChannelConnectionObserver {
+    fn on_connection_warning(&self, w: &crate::connect::ConnectionWarning) {
+        let _ = self.tx.send(norte_proto::methods::ConnectionDegraded {
+            scheme: w.scheme.clone(),
+            host: w.host.clone(),
+            reason: w.reason.wire().to_owned(),
+            detail: None,
+        });
+    }
+}
+
 /// El core detrás de una única superficie (regla 7).
 pub enum Backend {
     /// Core in-process: arranque instantáneo, sin daemon.
@@ -388,13 +407,22 @@ impl Backend {
         }
     }
 
-    /// Receptor de avisos `connection.degraded` (#44). `None` en `Embedded`
-    /// (la CLI embebida usa un observer directo, ver componente E2).
+    /// Receptor de avisos `connection.degraded` (#44). En `Remote` viene del
+    /// pump del daemon; en `Embedded` INSTALA un observer en el engine que
+    /// empuja a un canal — así AMBOS modos surfacean la degradación de forma
+    /// uniforme (rust MAJOR M1 + security m1: antes el embebido era silencioso).
+    /// One-shot por su naturaleza (instala/toma una vez); en `Embedded` el
+    /// aviso es SÍNCRONO (el observer dispara dentro del `provider_for` del
+    /// comando en curso), así que un drenado posterior lo ve sin carrera.
     pub fn take_degraded(
         &mut self,
     ) -> Option<mpsc::UnboundedReceiver<norte_proto::methods::ConnectionDegraded>> {
         match self {
-            Self::Embedded(_) => None,
+            Self::Embedded(engine) => {
+                let (tx, rx) = mpsc::unbounded_channel();
+                engine.set_connection_observer(Arc::new(ChannelConnectionObserver { tx }));
+                Some(rx)
+            }
             #[cfg(unix)]
             Self::Remote(r) => r.take_degraded(),
         }
