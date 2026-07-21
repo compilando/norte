@@ -222,7 +222,31 @@ impl Client {
         P: serde::Serialize,
         R: serde::de::DeserializeOwned,
     {
+        self.call_tracked(method, params, |_| {}).await
+    }
+
+    /// Como [`Self::call`], pero invoca `on_id` con el id JSON-RPC asignado
+    /// ANTES de esperar la respuesta — para que el llamante lo correlacione
+    /// (p. ej. enviar un `rpc.cancel` de esa request mientras sigue en vuelo,
+    /// #72).
+    ///
+    /// # Errors
+    /// Iguales que [`Self::call`].
+    ///
+    /// # Panics
+    /// Nunca: el lock interno no puede envenenarse.
+    pub async fn call_tracked<P, R>(
+        &self,
+        method: &str,
+        params: &P,
+        on_id: impl FnOnce(u64),
+    ) -> Result<R, ClientError>
+    where
+        P: serde::Serialize,
+        R: serde::de::DeserializeOwned,
+    {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        on_id(id);
         let params = serde_json::to_value(params)?;
         let req = Request {
             jsonrpc: JsonRpcVersion,
@@ -248,6 +272,24 @@ impl Client {
         }
         let value = rx.await.map_err(|_| ClientError::ConnectionClosed)??;
         Ok(serde_json::from_value(value)?)
+    }
+
+    /// Envía una notificación JSON-RPC (sin id, sin respuesta): fire-and-forget.
+    /// La usa el puente para reenviar `rpc.cancel` (#72). Si la conexión ya
+    /// murió, se descarta en silencio (best-effort, como el propio `rpc.cancel`).
+    ///
+    /// # Errors
+    /// [`ClientError`] solo si los params no serializan; un canal muerto NO es
+    /// error (best-effort).
+    pub fn notify<P: serde::Serialize>(&self, method: &str, params: &P) -> Result<(), ClientError> {
+        let notif = Notification {
+            jsonrpc: JsonRpcVersion,
+            method: method.to_owned(),
+            params: Some(serde_json::to_value(params)?),
+        };
+        let frame = encode_frame(&notif)?;
+        let _ = self.frames_out.send(frame); // canal muerto = no-op best-effort
+        Ok(())
     }
 
     /// Siguiente notificación del server (`task.progress`…). `None` =

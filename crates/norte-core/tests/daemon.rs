@@ -303,6 +303,28 @@ async fn fs_list_y_stat_responden_por_el_socket() {
     assert_eq!(stat.entry.size, Some(4));
 }
 
+#[tokio::test]
+async fn call_tracked_reporta_el_id_asignado() {
+    let d = spawn_daemon(None).await;
+    let client = connected_client(&d).await;
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+    let s = std::sync::Arc::clone(&seen);
+    // fs.stat de un path inexistente: da igual el desenlace (Err), lo que se
+    // comprueba es que on_id se invocó exactamente una vez con un id > 0.
+    let _res: Result<norte_proto::methods::FsStatResult, _> = client
+        .call_tracked(
+            norte_proto::methods::FS_STAT,
+            &norte_proto::methods::FsStatParams {
+                path: vp("mem:///nope"),
+            },
+            move |id| s.lock().expect("lock").push(id),
+        )
+        .await;
+    let seen = seen.lock().expect("lock");
+    assert_eq!(seen.len(), 1, "on_id se invoca exactamente una vez");
+    assert!(seen[0] > 0, "id asignado > 0");
+}
+
 // ---------- paginación de fs.list (ADR 0017) ----------
 
 /// Una página de `fs.list` con `limit`/`cursor`.
