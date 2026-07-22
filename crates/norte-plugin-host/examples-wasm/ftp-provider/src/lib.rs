@@ -93,10 +93,15 @@ impl Guest for FtpProvider {
     }
 
     fn capabilities() -> Caps {
-        // El adapter host mapea read_only=false → sin READ_ONLY. Los demás flags
-        // (APPEND/CASE_*) no viajan por la interfaz WIT stage-2; el adapter los
-        // fija por su cuenta. Para el contrato basta read_only=false.
-        Caps { read_only: false }
+        // Honestas (ADR 0014): remoto POSIX case-sensitive y case-preserving.
+        // NO declara symlinks/trash/server-copy (el adapter los mapea a ausente
+        // → Unsupported), ni resume (el adapter usa el open_resumable por
+        // defecto, que no reanuda). Sin READ_ONLY (escribible).
+        Caps {
+            read_only: false,
+            case_sensitive: true,
+            case_preserving: true,
+        }
     }
 
     fn stat(segments: Vec<Vec<u8>>) -> Result<Entry, VfsError> {

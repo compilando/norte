@@ -94,7 +94,11 @@ impl Guest for Mem {
     }
 
     fn capabilities() -> Caps {
-        Caps { read_only: true }
+        Caps {
+            read_only: true,
+            case_sensitive: true,
+            case_preserving: true,
+        }
     }
 
     fn stat(p: Vec<Vec<u8>>) -> Result<Entry, VfsError> {

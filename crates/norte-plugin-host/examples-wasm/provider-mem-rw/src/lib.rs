@@ -71,7 +71,11 @@ impl Guest for Mem {
     }
 
     fn capabilities() -> Caps {
-        Caps { read_only: false }
+        Caps {
+            read_only: false,
+            case_sensitive: true,
+            case_preserving: true,
+        }
     }
 
     fn stat(p: PathSegs) -> Result<Entry, VfsError> {

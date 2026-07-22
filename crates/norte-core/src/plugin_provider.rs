@@ -79,11 +79,19 @@ impl PluginProvider {
         scheme: impl Into<String>,
     ) -> Result<Self, RuntimeError> {
         let guest = inst.capabilities()?;
-        let flags = if guest.read_only {
-            CapabilityFlags::READ_ONLY
-        } else {
-            CapabilityFlags::empty()
-        };
+        // Proyecta los flags que el guest declara honestamente (los ausentes se
+        // quedan sin poner → capability ausente). Symlinks/trash/server-copy no
+        // viajan por la interfaz WIT → el adapter los deja fuera (Unsupported).
+        let mut flags = CapabilityFlags::empty();
+        if guest.read_only {
+            flags |= CapabilityFlags::READ_ONLY;
+        }
+        if guest.case_sensitive {
+            flags |= CapabilityFlags::CASE_SENSITIVE;
+        }
+        if guest.case_preserving {
+            flags |= CapabilityFlags::CASE_PRESERVING;
+        }
         Ok(Self {
             _runtime: runtime,
             inst: Arc::new(Mutex::new(inst)),

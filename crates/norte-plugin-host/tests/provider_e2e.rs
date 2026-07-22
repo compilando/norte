@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use norte_plugin_host::{provider_iface::EntryKind, Capabilities, PluginRuntime};
+use norte_plugin_host::{Capabilities, PluginRuntime, provider_iface::EntryKind};
 
 /// Segmentos de un path desde `&[&[u8]]`.
 fn segs(parts: &[&[u8]]) -> Vec<Vec<u8>> {

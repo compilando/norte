@@ -94,10 +94,20 @@ interface provider {
         other,
     }
 
-    /// Capabilities proyectadas (stage 2: solo el flag de solo-lectura; el set
-    /// completo llega con el camino de escritura).
+    /// Capabilities proyectadas. Además del flag de solo-lectura, el guest
+    /// declara HONESTAMENTE (fase 10a) la sensibilidad y preservación de caja
+    /// (deciden qué casos de colisión de caja aplican en la suite contractual).
+    /// Un flag que el guest no ponga se traduce a "capability ausente" en el
+    /// adapter host. (Resume/APPEND no viaja: el adapter usa el `open_resumable`
+    /// por defecto del trait, que NO reanuda — declararlo mentiría.)
     record caps {
+        /// Solo-lectura: el adapter rechaza toda mutación.
         read-only: bool,
+        /// El backend distingue `Caja` de `caja` (POSIX). Sin él, el adapter
+        /// asume case-insensitive y la suite exige `CaseCollision`.
+        case-sensitive: bool,
+        /// El backend preserva la caja de los nombres al crearlos.
+        case-preserving: bool,
     }
 
     /// Una página de entradas + el cursor OPACO de la siguiente (`none` = fin).
