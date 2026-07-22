@@ -98,7 +98,7 @@ pub enum RuntimeError {
 }
 
 /// Aplica el tope de tamaño al valor de retorno del guest (issue #68). Fail-loud:
-/// por encima de [`MAX_RETURN_BYTES`] devuelve [`RuntimeError::ReturnTooLarge`]
+/// por encima de `MAX_RETURN_BYTES` devuelve [`RuntimeError::ReturnTooLarge`]
 /// en vez de entregar (o truncar) la cadena.
 fn cap_return_value(value: String) -> Result<String, RuntimeError> {
     if value.len() > MAX_RETURN_BYTES {
@@ -485,7 +485,7 @@ impl ProviderInstance {
     pub fn list_dir(
         &mut self,
         segments: &[Vec<u8>],
-        cursor: Option<u32>,
+        cursor: Option<&[u8]>,
     ) -> Result<Result<provider_iface::Page, provider_iface::VfsError>, RuntimeError> {
         self.bindings
             .norte_plugin_provider()
@@ -494,13 +494,17 @@ impl ProviderInstance {
     }
 
     /// Un RANGO acotado de un fichero (equiv. un chunk del `ByteStream`): a lo
-    /// sumo `len` bytes desde `offset`. Se aplica ADEMÁS el tope defensivo
-    /// [`MAX_RETURN_BYTES`] al valor devuelto (un guest hostil no infla la
-    /// memoria del host más allá de lo pedido).
+    /// sumo `len` bytes desde `offset`. Se RECHAZA fail-loud
+    /// ([`RuntimeError::ReturnTooLarge`]) un valor devuelto mayor que
+    /// `MAX_RETURN_BYTES` — no es un guard de asignación (el valor ya se
+    /// materializó en memoria del host al bajar del guest; la cota transitoria
+    /// real es el límite de 64 MiB del store), sino un rechazo honesto. Deuda
+    /// stage-2b: `list_dir`/`stat` aún NO acotan el nº de entradas / longitud de
+    /// nombres — el adapter host `Provider` lo hará al reensamblar.
     ///
     /// # Errors
     /// [`RuntimeError::Trap`] si el guest atrapa; [`RuntimeError::ReturnTooLarge`]
-    /// si el guest devuelve más de [`MAX_RETURN_BYTES`].
+    /// si el guest devuelve más de `MAX_RETURN_BYTES`.
     pub fn read(
         &mut self,
         segments: &[Vec<u8>],

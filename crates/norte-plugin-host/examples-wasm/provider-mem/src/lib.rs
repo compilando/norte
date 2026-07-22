@@ -28,9 +28,11 @@ enum NodeKind {
     Dir,
 }
 
-/// Un nombre hostil sembrado en `/hostile` (bytes no-UTF8): su contenido son
-/// sus propios bytes (contrato).
+/// Nombres hostiles sembrados en `/hostile`: bytes no-UTF8 (`a\xff\xfeb`) y un
+/// nombre con un `/` INTERIOR (`a/b` — un solo segmento) que prueba que el
+/// modelo de segmentos NO trata el `/` como separador. Contenido = sus bytes.
 const HOSTILE: &[u8] = b"a\xff\xfeb";
+const HOSTILE_SLASH: &[u8] = b"a/b";
 
 /// Resuelve un path (segmentos) al nodo del árbol, o `None` si no existe.
 fn resolve(path: &[Vec<u8>]) -> Option<Node> {
@@ -52,13 +54,17 @@ fn resolve_named(path: &[Vec<u8>]) -> Option<Node> {
             (b"hello.txt", NodeKind::File),
             (b"sub", NodeKind::Dir),
         ])),
-        (1, Some(b"hostile")) => Some(Node::Dir(&[(HOSTILE, NodeKind::File)])),
+        (1, Some(b"hostile")) => Some(Node::Dir(&[
+            (HOSTILE, NodeKind::File),
+            (HOSTILE_SLASH, NodeKind::File),
+        ])),
         (2, Some(b"docs")) => match seg(1) {
             Some(b"hello.txt") => Some(Node::File(b"hola norte\n")),
             Some(b"sub") => Some(Node::Dir(&[(b"nested.bin", NodeKind::File)])),
             _ => None,
         },
         (2, Some(b"hostile")) if seg(1) == Some(HOSTILE) => Some(Node::File(HOSTILE)),
+        (2, Some(b"hostile")) if seg(1) == Some(HOSTILE_SLASH) => Some(Node::File(HOSTILE_SLASH)),
         (3, Some(b"docs")) if seg(1) == Some(b"sub") && seg(2) == Some(b"nested.bin") => {
             Some(Node::File(&[0x00, 0x01, 0x02, 0xff]))
         }
@@ -98,15 +104,23 @@ impl Guest for Mem {
         }
     }
 
-    fn list_dir(p: Vec<Vec<u8>>, cursor: Option<u32>) -> Result<Page, VfsError> {
+    fn list_dir(p: Vec<Vec<u8>>, cursor: Option<Vec<u8>>) -> Result<Page, VfsError> {
         let children = match resolve(&p) {
             Some(Node::Dir(kids)) => kids,
             Some(Node::File(_)) => return Err(VfsError::Unsupported), // list de un fichero
             None => return Err(VfsError::NotFound),
         };
-        // Paginación real (páginas de 2) para ejercitar el cursor.
+        // Paginación real (páginas de 2) para ejercitar el cursor. El cursor es
+        // OPACO (bytes): este guest codifica el índice de inicio en 4 bytes LE;
+        // un cursor con otra longitud es basura → CursorExpired.
         const PAGE: usize = 2;
-        let start = cursor.unwrap_or(0) as usize;
+        let start = match cursor {
+            None => 0usize,
+            Some(bytes) => match <[u8; 4]>::try_from(bytes.as_slice()) {
+                Ok(b) => u32::from_le_bytes(b) as usize,
+                Err(_) => return Err(VfsError::CursorExpired),
+            },
+        };
         let mut out = Vec::new();
         for (name, kind) in children.iter().skip(start).take(PAGE) {
             // El size de un hijo se resuelve mirando su nodo (una llamada de
@@ -127,7 +141,7 @@ impl Guest for Mem {
         }
         let next = start + out.len();
         let next_cursor = if next < children.len() {
-            Some(next as u32)
+            Some((next as u32).to_le_bytes().to_vec())
         } else {
             None
         };

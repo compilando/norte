@@ -21,6 +21,9 @@ fn segs(parts: &[&[u8]]) -> Vec<Vec<u8>> {
     parts.iter().map(|p| p.to_vec()).collect()
 }
 
+// Un solo test (una sola compilación del guest, ~1.7 s) que recorre todo el
+// camino de lectura: de ahí su longitud.
+#[allow(clippy::too_many_lines)]
 #[test]
 fn provider_wit_e2e_wasm_real() {
     let Some(wasm) = build_guest("provider-mem") else {
@@ -70,9 +73,9 @@ fn provider_wit_e2e_wasm_real() {
         .expect("list sin trap")
         .expect("raíz lista");
     assert_eq!(p1.entries.len(), 2, "primera página = 2 entradas");
-    let cursor = p1.next_cursor.expect("hay segunda página");
+    let cursor = p1.next_cursor.clone().expect("hay segunda página");
     let p2 = inst
-        .list_dir(&[], Some(cursor))
+        .list_dir(&[], Some(&cursor))
         .expect("list sin trap")
         .expect("raíz página 2");
     assert_eq!(p2.entries.len(), 1, "segunda página = 1 entrada");
@@ -108,6 +111,21 @@ fn provider_wit_e2e_wasm_real() {
         .expect("read sin trap")
         .expect("legible");
     assert!(eof.is_empty(), "offset en EOF = chunk vacío");
+    // Offset/len HOSTILES (u64::MAX): el clamping del guest (usize::try_from +
+    // saturating + min) no debe panicar en un guest de 32 bits.
+    let huge_off = inst
+        .read(&segs(&[b"docs", b"hello.txt"]), u64::MAX, u64::MAX)
+        .expect("read sin trap")
+        .expect("legible");
+    assert!(huge_off.is_empty(), "offset u64::MAX = vacío, sin panic");
+    let huge_len = inst
+        .read(&segs(&[b"docs", b"hello.txt"]), 0, u64::MAX)
+        .expect("read sin trap")
+        .expect("legible");
+    assert_eq!(
+        huge_len, b"hola norte\n",
+        "len u64::MAX se acota al fichero"
+    );
 
     // fichero vacío: read da vacío; stat da size 0.
     assert_eq!(
@@ -118,14 +136,20 @@ fn provider_wit_e2e_wasm_real() {
     // NOMBRE HOSTIL byte-exacto (regla 1): /hostile/<a\xff\xfeb> existe, se
     // lista con sus bytes crudos, y su contenido son esos mismos bytes.
     let hostile: &[u8] = b"a\xff\xfeb";
+    let slash: &[u8] = b"a/b"; // `/` INTERIOR: un solo segmento, no un separador
     let hp = inst
         .list_dir(&segs(&[b"hostile"]), None)
         .expect("list sin trap")
         .expect("hostile lista");
-    assert_eq!(hp.entries.len(), 1);
-    assert_eq!(
-        hp.entries[0].name, hostile,
+    assert_eq!(hp.entries.len(), 2);
+    let names: Vec<&[u8]> = hp.entries.iter().map(|e| e.name.as_slice()).collect();
+    assert!(
+        names.contains(&hostile),
         "el nombre no-UTF8 cruza el WIT byte a byte"
+    );
+    assert!(
+        names.contains(&slash),
+        "un nombre con `/` interior es UN segmento, no dos"
     );
     let hbytes = inst
         .read(&segs(&[b"hostile", hostile]), 0, 100)
@@ -135,6 +159,13 @@ fn provider_wit_e2e_wasm_real() {
         hbytes, hostile,
         "el contenido hostil round-trip byte-exacto"
     );
+    // El `/` interior se lee como UN segmento: si el WIT lo tratara como
+    // separador, este path tendría 3 segmentos y no resolvería.
+    let sbytes = inst
+        .read(&segs(&[b"hostile", slash]), 0, 100)
+        .expect("read sin trap")
+        .expect("legible");
+    assert_eq!(sbytes, slash, "el `/` interior no parte el segmento");
 }
 
 /// Compila `examples-wasm/<name>/` a `wasm32-wasip2` (release). `None` (SKIP) si
