@@ -110,18 +110,54 @@ fn os_root_base(bytes: &[u8]) -> Result<PathBuf, Error> {
         drive.push(std::path::MAIN_SEPARATOR_STR);
         return Ok(PathBuf::from(drive));
     }
-    if is_unc_or_verbatim_prefix(bytes) {
+    if is_bare_windows_prefix(bytes) {
+        // WTF-8 → OsString SIN las restricciones de segmento (el prefijo
+        // lleva `\` y `:` legítimamente); reutiliza el decodificador sin
+        // restricciones de `link_target_to_os`. La FORMA ya la validó
+        // `is_bare_windows_prefix` (una sola componente Prefix, no gorda).
         return Ok(PathBuf::from(link_target_to_os(bytes)?));
     }
     Err(Error::InvalidPath)
 }
 
-/// `true` si los bytes son un prefijo Windows UNC/verbatim/dispositivo:
-/// empiezan por `\\` (dos backslashes). Reconocedor a nivel de bytes —
-/// compilado en todo OS y testeable en Linux; en Windows estos bytes vienen
-/// de `Component::Prefix::as_os_str` (`\\server\share`, `\\?\C:`, `\\.\…`).
-fn is_unc_or_verbatim_prefix(bytes: &[u8]) -> bool {
-    bytes.starts_with(br"\\")
+/// `true` si los bytes son EXACTAMENTE un prefijo de raíz Windows «desnudo»
+/// (una sola componente `Prefix`, SIN cola de path): UNC `\\server\share`,
+/// verbatim-disk `\\?\C:` o verbatim-UNC `\\?\UNC\server\share`. Reconocedor
+/// a nivel de bytes — compilado y testeado en todo OS; en Windows estos
+/// bytes vienen de `Component::Prefix::as_os_str`.
+///
+/// Rechaza a propósito (más estricto que `std`, review #22):
+/// - el namespace de DISPOSITIVO `\\.\…` (I/O de disco/pipe crudo, no
+///   navegación — regresión de mínimo privilegio),
+/// - un primer segmento GORDO con cola (`\\?\C:\Windows\…`): expandiría a
+///   varias componentes nativas saltándose el guard por-segmento de
+///   `bytes_to_os` (que rechaza `\`/`:`),
+/// - formas verbatim raras (Volume GUID): fail-closed a `InvalidPath`, jamás
+///   un path nativo malformado.
+fn is_bare_windows_prefix(bytes: &[u8]) -> bool {
+    if let Some(rest) = bytes.strip_prefix(br"\\?\") {
+        // Verbatim-UNC `\\?\UNC\server\share`.
+        if let Some(unc) = rest.strip_prefix(br"UNC\") {
+            return is_bare_unc_body(unc);
+        }
+        // Verbatim-disk `\\?\C:` — letra de unidad + `:`, nada más.
+        return rest.len() == 2 && rest[0].is_ascii_alphabetic() && rest[1] == b':';
+    }
+    if let Some(unc) = bytes.strip_prefix(br"\\") {
+        return is_bare_unc_body(unc);
+    }
+    false
+}
+
+/// `server\share` con ambos no vacíos y SIN más `\` (exactamente dos
+/// componentes). `server` no puede ser `.` (dispositivo) ni `?` (marcador
+/// verbatim): esos van por otras ramas o se rechazan.
+fn is_bare_unc_body(body: &[u8]) -> bool {
+    let mut parts = body.split(|&b| b == b'\\');
+    let (Some(server), Some(share), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    !server.is_empty() && !share.is_empty() && server != b"." && server != b"?"
 }
 
 /// Convierte un path NATIVO absoluto a `VPath` (`file:///…`), byte a byte.
@@ -196,28 +232,48 @@ pub(crate) fn verbatim(p: PathBuf) -> PathBuf {
 
 #[cfg(test)]
 mod root_base_tests {
-    use super::{is_unc_or_verbatim_prefix, os_root_base};
+    use super::{is_bare_windows_prefix, os_root_base};
     use norte_proto::Error;
 
     #[test]
-    fn clasifica_prefijos_unc_y_verbatim() {
-        assert!(is_unc_or_verbatim_prefix(br"\\server\share"));
-        assert!(is_unc_or_verbatim_prefix(br"\\?\C:"));
-        assert!(is_unc_or_verbatim_prefix(br"\\.\PhysicalDrive0"));
-        // Un solo backslash NO es un prefijo UNC/verbatim.
-        assert!(!is_unc_or_verbatim_prefix(br"\single"));
-        assert!(!is_unc_or_verbatim_prefix(b"C:"));
-        assert!(!is_unc_or_verbatim_prefix(b"normal"));
+    fn acepta_solo_prefijos_desnudos_unc_y_verbatim() {
+        // UNC y verbatim «desnudos» (una sola componente Prefix): aceptados.
+        assert!(is_bare_windows_prefix(br"\\server\share"));
+        assert!(is_bare_windows_prefix(br"\\wsl$\Ubuntu")); // \\wsl$ del issue
+        assert!(is_bare_windows_prefix(br"\\?\C:"));
+        assert!(is_bare_windows_prefix(br"\\?\UNC\server\share"));
     }
 
     #[test]
-    fn os_root_base_acepta_unidad_y_unc() {
+    fn rechaza_dispositivo_gordos_y_malformados() {
+        // Namespace de dispositivo: I/O crudo, NO navegación (review #22).
+        assert!(!is_bare_windows_prefix(br"\\.\PhysicalDrive0"));
+        assert!(!is_bare_windows_prefix(br"\\.\C:"));
+        // Primer segmento GORDO con cola: saltaría el guard por-segmento.
+        assert!(!is_bare_windows_prefix(br"\\?\C:\Windows"));
+        assert!(!is_bare_windows_prefix(br"\\server\share\dir"));
+        // UNC incompleto / malformado.
+        assert!(!is_bare_windows_prefix(br"\\server"));
+        assert!(!is_bare_windows_prefix(br"\\"));
+        assert!(!is_bare_windows_prefix(br"\single"));
+        assert!(!is_bare_windows_prefix(b"C:"));
+        assert!(!is_bare_windows_prefix(b"normal"));
+    }
+
+    #[test]
+    fn os_root_base_acepta_unidad_y_unc_desnudo() {
         // Unidad: aceptada, con su separador restituido.
         let drive = os_root_base(b"C:").expect("unidad válida");
         assert!(drive.to_string_lossy().starts_with("C:"));
-        // #22: el prefijo UNC ya no se rechaza (antes = no-arranque del TUI).
+        // #22: el prefijo UNC desnudo ya no se rechaza (antes = no-arranque).
         assert!(os_root_base(br"\\server\share").is_ok());
         assert!(os_root_base(br"\\?\C:").is_ok());
+        // Pero un fat/dispositivo SÍ se rechaza (mínimo privilegio).
+        assert_eq!(
+            os_root_base(br"\\.\PhysicalDrive0"),
+            Err(Error::InvalidPath)
+        );
+        assert_eq!(os_root_base(br"\\?\C:\Windows"), Err(Error::InvalidPath));
     }
 
     #[test]
@@ -226,6 +282,23 @@ mod root_base_tests {
         assert_eq!(os_root_base(b"Users"), Err(Error::InvalidPath));
         assert_eq!(os_root_base(b"C"), Err(Error::InvalidPath));
         assert_eq!(os_root_base(b""), Err(Error::InvalidPath));
+    }
+
+    /// #22: round-trip nativo real de un cwd UNC (SOLO Windows: `to_native`
+    /// bajo raíz vacía es camino `cfg!(windows)`, y la clasificación
+    /// `Component::Prefix` es semántica de Windows). Bloquea la corrección
+    /// cuando la CI corra en Windows; en Linux este test no compila el cuerpo.
+    #[cfg(windows)]
+    #[test]
+    fn unc_cwd_round_trip_byte_exacto() {
+        use super::{to_native, vpath_from_native};
+        use std::path::Path;
+        let native = Path::new(r"\\server\share\dir");
+        let vpath = vpath_from_native(native).expect("vpath desde UNC");
+        // El primer segmento es el prefijo desnudo, `dir` va aparte.
+        let back = to_native(Path::new(""), &vpath).expect("to_native UNC");
+        // verbatim() canoniza UNC → \\?\UNC\server\share\dir (mismo fichero).
+        assert_eq!(back, Path::new(r"\\?\UNC\server\share\dir"));
     }
 }
 
