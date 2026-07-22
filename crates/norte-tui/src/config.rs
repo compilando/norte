@@ -75,6 +75,8 @@ pub struct ArchiveSection {
     /// Decompression budget in bytes for indexing a `tar.gz` (default 64 GiB).
     #[serde(default)]
     pub max_decompressed_bytes: Option<u64>,
+    /// `[archive] max_nesting` (#56): tope de capas de archivo anidadas.
+    pub max_nesting: Option<usize>,
 }
 
 /// The `[daemon]` section of `norte.toml` (ADR 0011).
@@ -440,6 +442,8 @@ pub struct LoadedConfig {
     pub archive_max_entries: Option<u64>,
     /// `[archive] max_decompressed_bytes` (último-gana; None = default).
     pub archive_max_decompressed_bytes: Option<u64>,
+    /// `[archive] max_nesting` (#56, último-gana; None = default).
+    pub archive_max_nesting: Option<usize>,
     /// Archivos que participaron (para el watcher y los diagnósticos).
     pub sources: Vec<PathBuf>,
 }
@@ -459,6 +463,7 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
     let mut hotlist: Vec<HotlistItem> = Vec::new();
     let mut archive_max_entries: Option<u64> = None;
     let mut archive_max_decompressed_bytes: Option<u64> = None;
+    let mut archive_max_nesting: Option<usize> = None;
     let mut sources = Vec::new();
     for (dir, kind) in &layers.dirs {
         let norte = dir.join("norte.toml");
@@ -525,6 +530,9 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
                 if let Some(b) = parsed.archive.max_decompressed_bytes {
                     archive_max_decompressed_bytes = Some(b);
                 }
+                if let Some(n) = parsed.archive.max_nesting {
+                    archive_max_nesting = Some(n);
+                }
             }
             sources.push(norte);
         }
@@ -566,6 +574,7 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
         hotlist,
         archive_max_entries,
         archive_max_decompressed_bytes,
+        archive_max_nesting,
         sources,
     })
 }

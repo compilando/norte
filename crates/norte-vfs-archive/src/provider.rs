@@ -116,6 +116,11 @@ impl IndexCache {
 /// Provider read-only que sirve el contenido de archivos comprimidos que
 /// viven en OTRO provider (composición, ADR 0018 B2). Un instance sirve UN
 /// scheme compuesto (`tar+file`, `tar+sftp`…) sobre UN provider interior.
+/// Caveat de anidamiento (#56): la generación del caché de una capa ANIDADA
+/// es el (mtime, size) de la entrada DENTRO del archivo exterior — reemplazar
+/// el contenedor exterior con entradas de metadatos idénticos puede servir un
+/// índice interior rancio hasta la evicción; el CRC de lecturas completas
+/// (#59) y los short-reads fail-loud son el cinturón.
 pub struct ArchiveProvider {
     scheme: String,
     format: Format,

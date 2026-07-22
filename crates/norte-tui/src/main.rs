@@ -348,7 +348,10 @@ async fn make_backend(
         // #95.2: límites anti-bomba de archives desde `[archive]` (capas de
         // usuario, jamás la de proyecto). Antes de cualquier navegación: los
         // providers compuestos se cachean con los límites de su primer uso.
-        if cfg.archive_max_entries.is_some() || cfg.archive_max_decompressed_bytes.is_some() {
+        if cfg.archive_max_entries.is_some()
+            || cfg.archive_max_decompressed_bytes.is_some()
+            || cfg.archive_max_nesting.is_some()
+        {
             let mut limits = norte_core::ArchiveLimits::default();
             if let Some(n) = cfg.archive_max_entries {
                 // Saturación HACIA ARRIBA (solo posible en 32-bit con un
@@ -364,6 +367,9 @@ async fn make_backend(
             }
             if let Some(b) = cfg.archive_max_decompressed_bytes {
                 limits.max_decompressed_bytes = b;
+            }
+            if let Some(n) = cfg.archive_max_nesting {
+                limits.max_nesting = n;
             }
             engine.set_archive_limits(limits);
         }
@@ -2670,8 +2676,14 @@ mod archive_nav_tests {
         // Un dir llamado x.zip NO es contenedor; un symlink tampoco (v1).
         assert!(archive_root_for(&entry("file:///d/x.zip", EntryKind::Dir)).is_none());
         assert!(archive_root_for(&entry("file:///d/x.zip", EntryKind::Symlink)).is_none());
-        // Ya compuesto (zip dentro de tar): v1 sin anidar → no-op.
-        assert!(archive_root_for(&entry("tar+file:///a.tar/!/i.zip", EntryKind::File)).is_none());
+        // #56 (antes v1 = no-op): Enter sobre un zip DENTRO de un tar
+        // compone una capa más — anidamiento navegable.
+        assert_eq!(
+            archive_root_for(&entry("tar+file:///a.tar/!/i.zip", EntryKind::File))
+                .expect("anidado navegable")
+                .to_wire(),
+            "zip+tar+file:///a.tar/!/i.zip/!"
+        );
     }
 
     /// #55: `.tgz`/`.tar.gz` no coinciden con el token `tar+gz` vía el

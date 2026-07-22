@@ -104,7 +104,18 @@ use crate::{
 /// `Corrupt` (mentira para un contenedor legítimo enorme). Aditiva sobre
 /// 0.22.x: un cliente N-1 la degrada a `Error::Unknown` (error genérico,
 /// misma UX gruesa que antes).
-pub const PROTOCOL_VERSION: &str = "0.23.0";
+///
+/// 0.24.0 (#56, ADR 0018 A3): direccionamiento de archivo MULTI-CAPA —
+/// `zip+tar+file:///b.tar/!/i.zip/!/f` (resolución derecha→izquierda: el
+/// formato más a la izquierda es la capa más externa y corta en su ÚLTIMO
+/// marcador; interior plano conserva la regla v1 del primero).
+/// `archive_compose` acepta un exterior que sea a su vez un path de archivo
+/// bien formado; nuevo `Error::LIMIT_NESTING` en el vocabulario de
+/// `LimitExceeded` (tope de capas, lo gobierna el engine). Aditivo sobre
+/// 0.23.x: un peer N-1 rechaza los paths anidados como
+/// `ArchiveAddressing`→`InvalidPath` (direccionamiento nuevo, jamás
+/// resignifica uno viejo — los paths de UNA capa se resuelven idéntico).
+pub const PROTOCOL_VERSION: &str = "0.24.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver

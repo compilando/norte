@@ -198,4 +198,44 @@ proptest! {
         // prop_reparse_idempotent).
         prop_assert_eq!(VPath::parse(&p.to_wire()).expect("wire válido"), p);
     }
+
+    /// #56: roundtrip por CAPAS — componer una segunda capa sobre un path de
+    /// archivo bien formado y pelarla devuelve exactamente lo compuesto, y
+    /// la capa de abajo queda intacta.
+    #[test]
+    fn prop_archive_nested_two_layers_roundtrip(
+        outer in arb_archive_outer(),
+        inner1_bytes in proptest::collection::vec(arb_segment_bytes(), 1..4),
+        inner2_bytes in proptest::collection::vec(arb_segment_bytes(), 0..4),
+        f1 in proptest::sample::select(norte_proto::ARCHIVE_FORMATS),
+        f2 in proptest::sample::select(norte_proto::ARCHIVE_FORMATS),
+    ) {
+        prop_assume!(
+            norte_proto::scheme_archive_format(&format!("{f1}+{}", outer.scheme()))
+                == Some(f1)
+        );
+        // La capa 2 se antepone al scheme YA compuesto: misma guardia de
+        // ambigüedad (p. ej. f2="tar" sobre "gz+…" resolvería "tar+gz").
+        prop_assume!(
+            norte_proto::scheme_archive_format(&format!("{f2}+{f1}+{}", outer.scheme()))
+                == Some(f2)
+        );
+        let seg_ok = |b: &Vec<u8>| b.as_slice() != b"!";
+        let inner1: Vec<Segment> = inner1_bytes.into_iter().filter(seg_ok)
+            .map(|b| Segment::new(b).expect("estrategia válida")).collect();
+        let inner2: Vec<Segment> = inner2_bytes.into_iter().filter(seg_ok)
+            .map(|b| Segment::new(b).expect("estrategia válida")).collect();
+        prop_assume!(!inner1.is_empty()); // la capa 1 nombra un contenedor real
+        let capa1 = VPath::archive_compose(f1, &outer, &inner1).expect("capa 1");
+        let capa2 = VPath::archive_compose(f2, &capa1, &inner2).expect("capa 2");
+        let r = capa2.archive_split().expect("bien formado").expect("compuesto");
+        prop_assert_eq!(r.format.as_str(), f2);
+        prop_assert_eq!(&r.outer, &capa1);
+        prop_assert_eq!(r.inner, inner2);
+        let r1 = r.outer.archive_split().expect("bien formada").expect("compuesta");
+        prop_assert_eq!(r1.format.as_str(), f1);
+        prop_assert_eq!(r1.outer, outer);
+        prop_assert_eq!(r1.inner, inner1);
+        prop_assert_eq!(VPath::parse(&capa2.to_wire()).expect("wire válido"), capa2);
+    }
 }

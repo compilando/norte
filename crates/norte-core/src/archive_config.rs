@@ -18,9 +18,13 @@ struct NorteToml {
 /// compilado. Tolerante a campos futuros (un daemon viejo no revienta).
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(default)]
+// Los nombres calcan las claves TOML de `[archive]` (contrato con el
+// usuario), no se renombran por estilo.
+#[allow(clippy::struct_field_names)]
 struct ArchiveSection {
     max_entries: Option<u64>,
     max_decompressed_bytes: Option<u64>,
+    max_nesting: Option<usize>,
 }
 
 /// Parsea los overrides de `[archive]` de un `norte.toml`. `None` = sin
@@ -33,7 +37,7 @@ struct ArchiveSection {
 fn parse(s: &str) -> Result<Option<Limits>, toml::de::Error> {
     let cfg: NorteToml = toml::from_str(s)?;
     let a = cfg.archive;
-    if a.max_entries.is_none() && a.max_decompressed_bytes.is_none() {
+    if a.max_entries.is_none() && a.max_decompressed_bytes.is_none() && a.max_nesting.is_none() {
         return Ok(None);
     }
     let mut limits = Limits::default();
@@ -50,6 +54,9 @@ fn parse(s: &str) -> Result<Option<Limits>, toml::de::Error> {
     }
     if let Some(b) = a.max_decompressed_bytes {
         limits.max_decompressed_bytes = b;
+    }
+    if let Some(n) = a.max_nesting {
+        limits.max_nesting = n;
     }
     Ok(Some(limits))
 }

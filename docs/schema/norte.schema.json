@@ -23,6 +23,15 @@
             "integer",
             "null"
           ]
+        },
+        "max_nesting": {
+          "description": "`[archive] max_nesting` (#56): tope de capas de archivo anidadas.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "type": "object"

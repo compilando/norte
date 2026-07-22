@@ -118,17 +118,73 @@ async fn el_arbol_virtual_declara_read_only() {
     );
 }
 
+/// #56 (antes: v1 rechazaba con InvalidPath): zip DENTRO de tar navega y
+/// lee byte-exacto — el engine compone capa a capa (recursión de
+/// `provider_for`) y el interior comprimido del zip se sirve por rangos sobre
+/// la capa tar (componible, ADR 0018 A3).
 #[tokio::test]
-async fn anidado_es_invalid_path_v1() {
-    let engine = engine_with_container("a.tar", b"da igual").await;
+async fn zip_dentro_de_tar_lista_y_lee() {
+    use norte_testkit::ZipSmith;
+    let zip = ZipSmith::new()
+        .file(b"uno.txt", b"contenido interior")
+        .build();
+    let tar = TarSmith::new().file(b"i.zip", &zip).build();
+    let engine = engine_with_container("a.tar", &tar).await;
+
+    let names: Vec<Vec<u8>> = engine
+        .list(&vp("zip+tar+mem:///a.tar/!/i.zip/!"))
+        .await
+        .expect("list anidado")
+        .map(|e| {
+            e.expect("entry")
+                .path
+                .segments()
+                .last()
+                .expect("segmento")
+                .to_vec()
+        })
+        .collect()
+        .await;
+    assert_eq!(names, vec![b"uno.txt".to_vec()]);
+
+    let mut stream = engine
+        .read(&vp("zip+tar+mem:///a.tar/!/i.zip/!/uno.txt"), None)
+        .await
+        .expect("read anidado");
+    let mut got = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        got.extend_from_slice(&chunk.expect("chunk"));
+    }
     assert_eq!(
-        engine
-            .stat(&vp("zip+tar+mem:///a.tar/!/i.zip/!/x"))
-            .await
-            .unwrap_err(),
-        Error::InvalidPath,
-        "archive_split rechaza anidamiento en v1 (ADR 0018)"
+        got, b"contenido interior",
+        "byte-exacto a través de 2 capas"
     );
+}
+
+/// #56: el tope de capas (`max_nesting`) corta ANTES de componer — con el
+/// tope en 1, un path de dos capas responde `LimitExceeded("nesting")`.
+#[tokio::test]
+async fn anidamiento_sobre_el_tope_es_limit_exceeded() {
+    use norte_testkit::ZipSmith;
+    let zip = ZipSmith::new().file(b"uno.txt", b"x").build();
+    let tar = TarSmith::new().file(b"i.zip", &zip).build();
+    let engine = engine_with_container("a.tar", &tar).await;
+    engine.set_archive_limits(norte_core::ArchiveLimits {
+        max_nesting: 1,
+        ..norte_core::ArchiveLimits::default()
+    });
+    match engine
+        .stat(&vp("zip+tar+mem:///a.tar/!/i.zip/!/uno.txt"))
+        .await
+    {
+        Err(Error::LimitExceeded { limit }) if limit == "nesting" => {}
+        other => panic!("esperaba LimitExceeded(nesting), fue {other:?}"),
+    }
+    // La capa ÚNICA sigue funcionando bajo el mismo tope.
+    engine
+        .stat(&vp("tar+mem:///a.tar/!/i.zip"))
+        .await
+        .expect("una capa dentro del tope");
 }
 
 #[tokio::test]

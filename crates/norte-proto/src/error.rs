@@ -224,4 +224,8 @@ impl Error {
     /// Vocabulario de [`Error::LimitExceeded`]: inflado acumulado por encima
     /// de `max_decompressed_bytes` (gzip bomb o contenedor legítimo enorme).
     pub const LIMIT_DECOMPRESSED_BYTES: &'static str = "decompressed-bytes";
+    /// Vocabulario de [`Error::LimitExceeded`] (#56, proto 0.24): capas de
+    /// archivo anidadas por encima de `max_nesting` (lo gobierna el engine —
+    /// el direccionamiento en sí es ilimitado sintácticamente).
+    pub const LIMIT_NESTING: &'static str = "nesting";
 }

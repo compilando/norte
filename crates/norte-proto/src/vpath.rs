@@ -61,7 +61,8 @@ pub enum VPathError {
 /// del scheme interior coincide EXACTAMENTE con uno de estos tokens; ampliar
 /// la lista es cambio de protocolo. `tar+gz` es un token COMPUESTO (contiene
 /// un `+` propio): la capa gzip es opaca dentro del formato, no un mecanismo
-/// general de capas (eso queda diferido a #56). La resolución es
+/// general de capas (el anidamiento GENERAL es #56: formatos encadenados,
+/// `zip+tar+file`, cada capa con su marcador). La resolución es
 /// longest-match contra esta whitelist (`scheme_format_prefix`):
 /// `tar+gz+file` es formato `tar+gz` sobre `file`, nunca formato `tar` sobre
 /// un interior huérfano `gz+file`. Reserva normativa: ningún provider
@@ -449,7 +450,16 @@ impl VPath {
         if !ARCHIVE_FORMATS.contains(&format) {
             return Err(VPathError::ArchiveAddressing);
         }
-        if scheme_format_prefix(outer.scheme()).is_some() {
+        // #56: un exterior COMPUESTO es legal si y solo si es a su vez un
+        // path de archivo BIEN FORMADO (su propio split resuelve) — anidar
+        // una capa más. Un exterior plano con marcadores sigue prohibido
+        // (chequeo de abajo).
+        let outer_nested = match outer.archive_split() {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(_) => return Err(VPathError::ArchiveAddressing),
+        };
+        if scheme_format_prefix(outer.scheme()).is_some() && !outer_nested {
             return Err(VPathError::ArchiveAddressing);
         }
         let composed_scheme = format!("{format}+{}", outer.scheme());
@@ -464,7 +474,9 @@ impl VPath {
             return Err(VPathError::ArchiveAddressing);
         }
         let marker = || Segment::new(MARKER.to_vec()).expect("`!` es segmento válido");
-        if outer.segments.iter().any(|s| s.as_bytes() == MARKER)
+        // El interior JAMÁS lleva marcador; el exterior solo los lleva si es
+        // un path de archivo bien formado (#56 — sus marcadores son suyos).
+        if (!outer_nested && outer.segments.iter().any(|s| s.as_bytes() == MARKER))
             || inner.iter().any(|s| s.as_bytes() == MARKER)
         {
             return Err(VPathError::ArchiveAddressing);
@@ -472,20 +484,34 @@ impl VPath {
         let mut segments = outer.segments.clone();
         segments.push(marker());
         segments.extend_from_slice(inner);
-        Ok(Self {
+        let composed = Self {
             scheme: Scheme::new(&composed_scheme)?,
             authority: outer.authority.clone(),
             segments,
-        })
+        };
+        // Guardia de roundtrip EXTENDIDA (#56): el split del resultado debe
+        // devolver EXACTAMENTE lo compuesto (formato, exterior, interior) —
+        // con capas anidadas la elección de marcador (primera/última) tiene
+        // que deshacer este compose tal cual, o se rechaza aquí.
+        match composed.archive_split() {
+            Ok(Some(r)) if r.format == format && r.outer == *outer && r.inner == inner => {
+                Ok(composed)
+            }
+            _ => Err(VPathError::ArchiveAddressing),
+        }
     }
 
-    /// Deshace [`Self::archive_compose`]: `Ok(None)` si el scheme no es
-    /// compuesto (el prefijo hasta el primer `+` no es un formato de
-    /// [`ARCHIVE_FORMATS`] — `s3+v2.x-y` es un scheme de provider
-    /// legítimo, no un archivo). Corta en el PRIMER segmento `!`; los `!`
-    /// posteriores quedan en el interior (el índice del provider jamás
-    /// los contiene → `NotFound` aguas abajo). Puramente sintáctico: no
-    /// valida que el exterior nombre un archivo.
+    /// Deshace [`Self::archive_compose`] UNA capa: `Ok(None)` si el scheme
+    /// no es compuesto (el prefijo hasta el primer `+` no es un formato de
+    /// [`ARCHIVE_FORMATS`] — `s3+v2.x-y` es un scheme de provider legítimo,
+    /// no un archivo). Con el interior PLANO corta en el PRIMER segmento
+    /// `!` (regla v1: los `!` posteriores quedan en el interior, cuyo
+    /// índice jamás los contiene → `NotFound` aguas abajo); con el interior
+    /// a su vez COMPUESTO (#56, ADR 0018 A3: `zip+tar+file`) corta en el
+    /// ÚLTIMO — los marcadores anteriores pertenecen a las capas de abajo y
+    /// el exterior devuelto se pela recursivamente. Puramente sintáctico:
+    /// no valida que el exterior nombre un archivo ni que la capa honda
+    /// tenga su marcador (eso falla limpio al usarla).
     ///
     /// ```
     /// use norte_proto::VPath;
@@ -493,24 +519,38 @@ impl VPath {
     /// assert!(plano.archive_split().unwrap().is_none());
     /// ```
     ///
+    /// ```
+    /// use norte_proto::VPath;
+    /// // #56: dos capas — la externa (zip) toma el último marcador.
+    /// let anidado = VPath::parse("zip+tar+file:///b.tar/!/i.zip/!/f").unwrap();
+    /// let r = anidado.archive_split().unwrap().unwrap();
+    /// assert_eq!(r.format, "zip");
+    /// assert_eq!(r.outer.to_wire(), "tar+file:///b.tar/!/i.zip");
+    /// ```
+    ///
     /// # Errors
     /// [`VPathError::ArchiveAddressing`] si el scheme es compuesto pero no
     /// hay marcador `!` en el path. [`VPathError::InvalidScheme`] si tras
-    /// quitar el formato el scheme interior es a su vez compuesto
-    /// (anidamiento, fuera de v1 — ADR 0018) o queda vacío.
+    /// quitar el formato el scheme interior queda vacío.
     pub fn archive_split(&self) -> Result<Option<ArchiveRef>, VPathError> {
         let Some(format) = scheme_format_prefix(self.scheme.as_str()) else {
             return Ok(None);
         };
         let inner_scheme = &self.scheme.as_str()[format.len() + 1..];
-        if scheme_format_prefix(inner_scheme).is_some() {
-            return Err(VPathError::InvalidScheme);
+        // #56 (ADR 0018 A3, resolución derecha→izquierda): con un interior a
+        // su vez COMPUESTO, esta capa (la más externa) corta en el ÚLTIMO
+        // marcador — los anteriores pertenecen a las capas de abajo. Con un
+        // interior PLANO se conserva la regla v1 (PRIMER marcador): los `!`
+        // extra van al interior, cuyo índice jamás los contiene → NotFound
+        // aguas abajo — un marcador rogue NUNCA re-direcciona el exterior
+        // hacia un objeto real llamado `!` del provider plano.
+        let nested = scheme_format_prefix(inner_scheme).is_some();
+        let marker_pos = if nested {
+            self.segments.iter().rposition(|s| s.as_bytes() == MARKER)
+        } else {
+            self.segments.iter().position(|s| s.as_bytes() == MARKER)
         }
-        let marker_pos = self
-            .segments
-            .iter()
-            .position(|s| s.as_bytes() == MARKER)
-            .ok_or(VPathError::ArchiveAddressing)?;
+        .ok_or(VPathError::ArchiveAddressing)?;
         Ok(Some(ArchiveRef {
             format: format.to_owned(),
             outer: Self {

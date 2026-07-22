@@ -1366,6 +1366,8 @@ mod tests {
     fn is_archive_url_reconoce_targz_compuesto() {
         assert!(is_archive_url("tar+gz+file://x"));
         assert!(is_archive_url("tar+gz+sftp://h/a.tgz/!/x"));
+        // #56: anidado multi-capa también enruta por el parser wire.
+        assert!(is_archive_url("zip+tar+file:///b.tar/!/i.zip/!/f"));
         // El wire completo enruta por el parser y compone el scheme real.
         let p = vpath(std::path::Path::new("tar+gz+file:///a.tgz/!/x")).expect("parsea");
         assert_eq!(p.scheme(), "tar+gz+file");

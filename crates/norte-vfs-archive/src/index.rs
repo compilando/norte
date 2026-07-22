@@ -55,6 +55,13 @@ pub struct Limits {
     /// en `skipped` y no fallan el índice salvo por presupuesto de
     /// omitidas).
     pub max_decompressed_bytes: u64,
+    /// Tope de CAPAS de archivo anidadas (#56, ADR 0018 A3): `1` = solo
+    /// `zip+file` plano, `2` = zip dentro de tar, etc. Lo aplica el ENGINE
+    /// antes de componer (el direccionamiento es sintácticamente ilimitado);
+    /// superarlo responde `Error::LimitExceeded` (`LIMIT_NESTING`). Cada
+    /// capa por encima de un `tar+gz` paga forward-decode por lectura — el
+    /// default es deliberadamente corto.
+    pub max_nesting: usize,
 }
 
 impl Default for Limits {
@@ -66,6 +73,7 @@ impl Default for Limits {
             max_depth: 64,
             max_cd_bytes: 8 * 1024 * 1024,
             max_decompressed_bytes: 64 * 1024 * 1024 * 1024,
+            max_nesting: 3,
         }
     }
 }
