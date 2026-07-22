@@ -34,6 +34,23 @@ pub struct TaskRef {
 }
 
 impl TaskRef {
+    /// SOLO para tests de frontends (#85): un `TaskRef` SINTÉTICO respaldado
+    /// por un `watch` del propio test — permite testear la lógica
+    /// async/stateful de un frontend (síntesis de terminal en muerte de
+    /// conexión, de-registro del canceller, read-after-write) sin engine ni
+    /// daemon. El canceller es un token suelto (cancel = no-op observable
+    /// vía `token.is_cancelled()` si el test conserva el clon). No es API
+    /// estable: `doc(hidden)`, puede cambiar sin bump.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn synthetic_for_tests(id: TaskId, rx: watch::Receiver<TaskProgress>) -> Self {
+        Self {
+            id,
+            rx,
+            canceller: TaskCanceller::Embedded(CancellationToken::new()),
+        }
+    }
+
     /// Id de la task.
     #[must_use]
     pub fn id(&self) -> TaskId {

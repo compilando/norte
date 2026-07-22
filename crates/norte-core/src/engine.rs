@@ -288,8 +288,9 @@ impl Engine {
                 // versión de core más vieja que el proto. Honesto: no sé.
                 _ => return Err(Error::Unsupported),
             };
-            // El exterior jamás lleva prefijo de formato (archive_split
-            // rechaza anidamiento en v1): recursión de profundidad 1.
+            // #56: el exterior puede ser a su vez un path de archivo —
+            // recursión capa a capa, acotada por el gate max_nesting de
+            // arriba (jamás ilimitada).
             let inner = Box::pin(self.provider_for(&aref.outer)).await?;
             tracing::debug!(scheme = %p.scheme(), %key, "componiendo provider de archivo");
             // expect: envenenado = otro hilo panicó a mitad de escritura —

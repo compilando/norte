@@ -112,9 +112,10 @@ use crate::{
 /// `archive_compose` acepta un exterior que sea a su vez un path de archivo
 /// bien formado; nuevo `Error::LIMIT_NESTING` en el vocabulario de
 /// `LimitExceeded` (tope de capas, lo gobierna el engine). Aditivo sobre
-/// 0.23.x: un peer N-1 rechaza los paths anidados como
-/// `ArchiveAddressing`→`InvalidPath` (direccionamiento nuevo, jamás
-/// resignifica uno viejo — los paths de UNA capa se resuelven idéntico).
+/// 0.23.x: un peer N-1 rechaza los paths anidados limpio (su
+/// `archive_split` daba `InvalidScheme` ante un interior compuesto →
+/// `InvalidPath` en el wire) — direccionamiento nuevo, jamás resignifica
+/// uno viejo: los paths de UNA capa se resuelven idéntico.
 pub const PROTOCOL_VERSION: &str = "0.24.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método

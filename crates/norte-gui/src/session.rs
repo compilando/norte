@@ -442,3 +442,113 @@ pub(crate) fn decode_image(bytes: &[u8]) -> ImageDecode {
         height,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};
+
+    fn snap(id: TaskId, state: TaskState) -> TaskProgress {
+        TaskProgress {
+            task_id: id,
+            kind: TaskKind::Copy,
+            state,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: None,
+            current: None,
+        }
+    }
+
+    fn id(n: u64) -> TaskId {
+        TaskId::new(n)
+    }
+
+    /// #85: la conexión muere SIN desenlace (el watch se cierra) —
+    /// `forward_progress` sintetiza un terminal `Failed{ProviderUnavailable}`
+    /// reusando id/kind del último snapshot y DE-REGISTRA el canceller.
+    #[tokio::test]
+    async fn forward_progress_sintetiza_terminal_en_muerte_de_conexion() {
+        let tid = id(7);
+        let (watch_tx, watch_rx) = tokio::sync::watch::channel(snap(tid, TaskState::Running));
+        let task = TaskRef::synthetic_for_tests(tid, watch_rx);
+        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
+        let cancellers: Arc<Mutex<HashMap<TaskId, TaskCanceller>>> = Arc::default();
+        cancellers.lock().unwrap().insert(tid, task.canceller());
+
+        let fut = {
+            let cancellers = Arc::clone(&cancellers);
+            let ev_tx = ev_tx.clone();
+            tokio::spawn(async move { forward_progress(task, &ev_tx, &cancellers).await })
+        };
+        // Muerte de la conexión: el emisor del watch desaparece.
+        drop(watch_tx);
+        fut.await.expect("join");
+
+        // Primer evento: el snapshot vivo tal cual.
+        let SessionEvent::Task(first) = ev_rx.try_recv().expect("snapshot inicial") else {
+            panic!("esperaba SessionEvent::Task");
+        };
+        assert_eq!(first.state, TaskState::Running);
+        // Segundo: el terminal SINTETIZADO (mismos id/kind, Failed honesto).
+        let SessionEvent::Task(dead) = ev_rx.try_recv().expect("terminal sintetizado") else {
+            panic!("esperaba SessionEvent::Task");
+        };
+        assert_eq!(dead.task_id, tid);
+        assert_eq!(dead.kind, TaskKind::Copy);
+        assert!(
+            matches!(
+                dead.state,
+                TaskState::Failed {
+                    error: norte_proto::Error::ProviderUnavailable { retryable: true }
+                }
+            ),
+            "fue {:?}",
+            dead.state
+        );
+        assert!(
+            cancellers.lock().unwrap().is_empty(),
+            "el canceller se de-registra también en el camino de muerte"
+        );
+    }
+
+    /// #85: un terminal REAL publicado por el watch llega como evento y
+    /// de-registra el canceller, sin terminal sintetizado de más.
+    #[tokio::test]
+    async fn forward_progress_terminal_real_desregistra_sin_extra() {
+        let tid = id(9);
+        let (watch_tx, watch_rx) = tokio::sync::watch::channel(snap(tid, TaskState::Running));
+        let task = TaskRef::synthetic_for_tests(tid, watch_rx);
+        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
+        let cancellers: Arc<Mutex<HashMap<TaskId, TaskCanceller>>> = Arc::default();
+        cancellers.lock().unwrap().insert(tid, task.canceller());
+
+        let fut = {
+            let cancellers = Arc::clone(&cancellers);
+            let ev_tx = ev_tx.clone();
+            tokio::spawn(async move { forward_progress(task, &ev_tx, &cancellers).await })
+        };
+        watch_tx
+            .send(snap(tid, TaskState::Completed))
+            .expect("terminal");
+        fut.await.expect("join");
+
+        let mut states = Vec::new();
+        while let Ok(SessionEvent::Task(p)) = ev_rx.try_recv() {
+            states.push(p.state);
+        }
+        assert_eq!(
+            states.last(),
+            Some(&TaskState::Completed),
+            "el último evento es el terminal real: {states:?}"
+        );
+        assert!(
+            !states
+                .iter()
+                .any(|s| matches!(s, TaskState::Failed { .. })),
+            "sin terminal sintetizado de más: {states:?}"
+        );
+        assert!(cancellers.lock().unwrap().is_empty());
+    }
+}
