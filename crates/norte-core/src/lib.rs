@@ -11,6 +11,7 @@ pub mod connect;
 #[cfg(unix)]
 pub mod daemon;
 mod engine;
+pub mod ftp_plugin;
 pub mod journal;
 pub mod logging;
 mod observer;

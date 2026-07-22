@@ -278,9 +278,32 @@ impl PluginRuntime {
         Ok(ProviderInstance { store, bindings })
     }
 
+    /// Como [`Self::instantiate_provider`] pero desde los BYTES de un componente
+    /// en memoria (ADR 0033: el guest FTP va EMBEBIDO en el binario de norte, ya
+    /// que el target `wasm32-wasip2` puede faltar en el host de compilación).
+    /// Aplica el MISMO sandbox y límites. NO comprueba `check_artifact_size`: el
+    /// artefacto es first-party y confiable (no es un `.wasm` de terceros).
+    ///
+    /// # Errors
+    /// [`RuntimeError::Component`] si los bytes no son un componente válido;
+    /// [`RuntimeError::Instantiate`] si el linker o la instanciación fallan.
+    pub fn instantiate_provider_bytes(
+        &self,
+        bytes: &[u8],
+        caps: Capabilities,
+    ) -> Result<ProviderInstance, RuntimeError> {
+        use crate::bindings::provider_world::NorteProvider;
+        let component = Component::from_binary(&self.engine, bytes)
+            .map_err(|e| RuntimeError::Component(e.to_string()))?;
+        let (mut store, linker) = self.prepare_common(caps)?;
+        let bindings = NorteProvider::instantiate(&mut store, &component, &linker)
+            .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
+        Ok(ProviderInstance { store, bindings })
+    }
+
     /// Prepara el `Store` (sandbox WASI vacío + límites + deadline) y el
     /// `Linker` (WASI + `host-log`) comunes a cualquier world, y carga el
-    /// componente. El world concreto lo instancia el caller.
+    /// componente DESDE DISCO. El world concreto lo instancia el caller.
     fn prepare(
         &self,
         wasm_path: &Path,
@@ -297,7 +320,18 @@ impl PluginRuntime {
 
         let component = Component::from_file(&self.engine, wasm_path)
             .map_err(|e| RuntimeError::Component(e.to_string()))?;
+        let (store, linker) = self.prepare_common(caps)?;
+        Ok((store, component, linker))
+    }
 
+    /// El `Store` (sandbox WASI vacío + límites + deadline) y el `Linker` (WASI
+    /// + `host-log`) comunes a cualquier world, SIN cargar el componente — el
+    /// caller trae su `Component` (de disco vía [`Self::prepare`] o de bytes
+    /// embebidos vía [`Self::instantiate_provider_bytes`], ADR 0033).
+    fn prepare_common(
+        &self,
+        caps: Capabilities,
+    ) -> Result<(Store<HostState>, Linker<HostState>), RuntimeError> {
         let mut linker: Linker<HostState> = Linker::new(&self.engine);
         // Linker WASI COMPLETO a propósito (issue #68, punto 3 — evaluado y
         // DESCARTADO reducirlo): los guests se compilan a `wasm32-wasip2` con la
@@ -367,7 +401,7 @@ impl PluginRuntime {
         // `RuntimeError::Trap` en run_command/render_preview.
         store.set_epoch_deadline(self.epoch_deadline);
 
-        Ok((store, component, linker))
+        Ok((store, linker))
     }
 }
 

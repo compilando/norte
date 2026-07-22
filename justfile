@@ -5,6 +5,15 @@ default: ci
 fmt:
     cargo fmt --all
 
+# Recompila el guest ftp-provider a wasm32-wasip2 y actualiza el artefacto
+# EMBEBIDO en norte-core (ADR 0033). Correr tras tocar el guest ftp-provider o
+# la interfaz WIT `provider`.
+build-ftp-wasm:
+    cargo build --release --target wasm32-wasip2 \
+        --manifest-path crates/norte-plugin-host/examples-wasm/ftp-provider/Cargo.toml
+    cp crates/norte-plugin-host/examples-wasm/ftp-provider/target/wasm32-wasip2/release/ftp_provider.wasm \
+        crates/norte-core/resources/ftp-provider.wasm
+
 fmt-check:
     cargo fmt --all -- --check
 

@@ -51,7 +51,33 @@ impl PluginProvider {
         host_caps: HostCaps,
         scheme: impl Into<String>,
     ) -> Result<Self, RuntimeError> {
-        let mut inst = runtime.instantiate_provider(wasm, host_caps)?;
+        let inst = runtime.instantiate_provider(wasm, host_caps)?;
+        Self::from_instance(runtime, inst, scheme)
+    }
+
+    /// Como [`Self::new`] pero instanciando el guest desde los BYTES de un
+    /// componente EMBEBIDO (ADR 0033): el guest FTP va `include_bytes!`-ado en
+    /// `norte-core` porque el target `wasm32-wasip2` puede faltar en el host de
+    /// compilación.
+    ///
+    /// # Errors
+    /// [`RuntimeError`] si los bytes no instancian o `capabilities` atrapa.
+    pub fn from_bytes(
+        runtime: PluginRuntime,
+        bytes: &[u8],
+        host_caps: HostCaps,
+        scheme: impl Into<String>,
+    ) -> Result<Self, RuntimeError> {
+        let inst = runtime.instantiate_provider_bytes(bytes, host_caps)?;
+        Self::from_instance(runtime, inst, scheme)
+    }
+
+    /// Cachea las capabilities del guest y monta el adapter.
+    fn from_instance(
+        runtime: PluginRuntime,
+        mut inst: ProviderInstance,
+        scheme: impl Into<String>,
+    ) -> Result<Self, RuntimeError> {
         let guest = inst.capabilities()?;
         let flags = if guest.read_only {
             CapabilityFlags::READ_ONLY
@@ -67,6 +93,34 @@ impl PluginProvider {
                 max_path: None,
             },
         })
+    }
+
+    /// Configura la conexión del guest-provider (#30 stage 3c): endpoint YA
+    /// resuelto por el host, credenciales y base. Se llama UNA vez tras
+    /// construir, antes de usar el provider. Un guest sin conexión (mem) lo
+    /// implementa como no-op.
+    ///
+    /// # Errors
+    /// El error lógico del guest (mapeado) o un fallo del runtime.
+    pub async fn configure(
+        &self,
+        endpoint: String,
+        user: String,
+        password: String,
+        base: String,
+    ) -> Result<(), Error> {
+        use norte_plugin_host::provider_iface::ProviderConfig;
+        self.call(move |g| {
+            g.configure(ProviderConfig {
+                endpoint,
+                user,
+                password,
+                base,
+            })
+            .map_err(|e| map_runtime_error(&e))?
+            .map_err(map_vfs_error)
+        })
+        .await
     }
 
     /// Los segmentos crudos de `p` (el path que entiende el guest). El root del
@@ -125,7 +179,7 @@ fn map_vfs_error(e: provider_iface::VfsError) -> Error {
 /// Fallo del runtime del guest. Solo un TRAP es panic-clase (el guest crasheó);
 /// un rechazo controlado (tope de retorno, deadline, instanciación) es un fallo
 /// interno NO-panic.
-fn map_runtime_error(e: &RuntimeError) -> Error {
+pub(crate) fn map_runtime_error(e: &RuntimeError) -> Error {
     Error::Internal {
         panic: matches!(e, RuntimeError::Trap(_)),
     }
