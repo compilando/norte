@@ -849,3 +849,75 @@ async fn observer_no_se_llama_sin_avisos() {
         "sin degradación no hay aviso"
     );
 }
+
+/// Conector secuencial: la llamada N sigue el guion `steps` (falla rápida o
+/// espera puerta y conecta).
+struct SeqConnector {
+    connects: AtomicUsize,
+    gate: tokio::sync::Semaphore,
+}
+
+#[async_trait]
+impl RemoteConnector for SeqConnector {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+        let n = self.connects.fetch_add(1, Ordering::SeqCst) + 1;
+        if n == 1 {
+            // Fallo ACCIONABLE (sin cooldown): el reintento marca al instante.
+            return Err(Error::PermissionDenied);
+        }
+        let _permit = self.gate.acquire().await.expect("gate viva");
+        Ok(Connected {
+            provider: Arc::new(EcoProvider),
+            warnings: Vec::new(),
+        })
+    }
+    async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+/// BLOCKER review #47: un waiter RANCIO (su job ya terminó y publicó) que se
+/// dropea sin re-pollearse NO descuenta waiters de un job NUEVO bajo la
+/// misma clave — el guard lleva el id del job al que se suscribió. Sin el
+/// fix, el drop de A cancelaba el dial de B y B veía `Internal{panic:true}`.
+#[tokio::test]
+async fn guard_rancio_no_cancela_el_dial_nuevo() {
+    let engine = Arc::new(Engine::new());
+    let conn = Arc::new(SeqConnector {
+        connects: AtomicUsize::new(0),
+        gate: tokio::sync::Semaphore::new(0),
+    });
+    engine.set_connector(conn.clone());
+    let p = vp("sftp://h/x");
+
+    // A: un solo poll (job 1 spawneado, guard de A vivo); el job 1 falla y
+    // publica SIN que A se re-pollee.
+    let mut fut_a = Box::pin(engine.stat(&p));
+    assert!(futures::poll!(fut_a.as_mut()).is_pending(), "A suscrito");
+    while conn.connects.load(Ordering::SeqCst) < 1 {
+        tokio::task::yield_now().await;
+    }
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+
+    // B: arranca el job 2 (dial en puerta).
+    let e2 = Arc::clone(&engine);
+    let p2 = p.clone();
+    let b = tokio::spawn(async move { e2.stat(&p2).await });
+    while conn.connects.load(Ordering::SeqCst) < 2 {
+        tokio::task::yield_now().await;
+    }
+
+    // A se DROPEA con su guard rancio: no debe tocar el job 2.
+    drop(fut_a);
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    conn.gate.add_permits(1);
+    let res = tokio::time::timeout(std::time::Duration::from_secs(5), b)
+        .await
+        .expect("B no cuelga")
+        .expect("join");
+    res.expect("B conecta: el guard rancio no canceló su dial");
+}

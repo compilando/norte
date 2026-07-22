@@ -310,8 +310,10 @@ impl Engine {
         let (cache_key, alias) = match connector.canonical_authority(p.scheme(), authority).await {
             Some(canonical) if canonical != authority => {
                 let ckey = format!("{}://{canonical}", p.scheme());
-                if let Some(prov) = self.sessions.lookup(&ckey) {
-                    self.sessions.alias(key, &prov);
+                // alias_current re-lee la canónica BAJO el lock: si la
+                // sesión cayó entre el lookup y aquí, jamás re-inserta un
+                // Arc muerto como alias (sec MAJOR-2 del review #47).
+                if let Some(prov) = self.sessions.alias_current(&ckey, key.clone()) {
                     return Ok(prov);
                 }
                 (ckey, Some(key))

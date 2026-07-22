@@ -80,6 +80,10 @@ pub type ByteStream = BoxStream<'static, Result<Bytes, Error>>;
 /// let skipped = futures::executor::block_on(NullProvider.list_skipped(&p)).unwrap();
 /// assert_eq!(skipped, None);
 /// ```
+// OJO mantenimiento: todo método NUEVO de este trait (aunque tenga default)
+// debe delegarse también en `SessionProvider` (norte-core/src/sessions.rs) —
+// si no, las sesiones remotas cacheadas servirían el DEFAULT en vez del
+// provider vivo, sin error de compilación. Hay un test de completitud allí.
 #[async_trait]
 pub trait Provider: Send + Sync {
     /// El scheme que sirve este provider (`file`, `sftp`, `mem`…).

@@ -55,11 +55,42 @@ the whole lifecycle:
 
 - A dead session costs exactly one failed user operation before healing.
 - No wire change: everything is engine-internal; `Connected` is unchanged.
-- The dial job may outlive an abandoned waiter and still cache a completed
-  session (handshake not wasted; no side effects beyond a live session).
 - The suffix rule for composite drag relies on composite schemes being
   `{fmt}+{scheme}` from the proto whitelist; authorities cannot contain
   `://`, so false positives are impossible.
 - Sessions still never expire while healthy; if idle-server resource use
   ever matters, an idle TTL can be added inside `SessionPool` without
   touching callers.
+
+### Hardening from review (applied)
+
+- `WaiterGuard` carries the job id it subscribed to: a stale guard (its job
+  already finished) never decrements — much less cancels — a replacement job
+  under the same key.
+- Eviction is pointer-driven with no key gate: every map entry holding the
+  dead wrapper's `Arc` is swept, including an orphaned alias whose canonical
+  key already fell. Composite providers are themselves wrapped in
+  `SessionProvider`, so a composite the sweep missed self-evicts on its
+  first failed operation instead of living forever.
+- The alias fast path re-reads the canonical entry under the write lock
+  (`alias_current`): a dead `Arc` retained from an earlier lookup is never
+  re-inserted.
+- A dial job publishes/caches only while it is still the current job for its
+  key (checked under the `connecting` lock; lock order fixed as
+  `connecting → providers → cooldown`). An abandoned job that completed
+  anyway is dropped, never clobbering a replacement session. Waiters that
+  join an in-flight dial contribute their alias spellings, registered on
+  publish.
+- The cooldown map is pruned on access, capped at 256 entries (oldest-out),
+  and the backoff step decays back to 1 s after a long quiet gap. Only the
+  current job escalates it. Eviction logs redact userinfo from keys.
+
+### Known accepted window
+
+`canonical_authority` and the dial's `connect` load `connections.toml`
+independently; a config edit landing between them can cache a session under
+a spelling resolved from the older file until that session is evicted. The
+window is milliseconds long, requires a concurrent local config write, and
+never crosses identities silently in one load (explicit-user URLs must match
+the entry user). Folding both resolutions into one load would require
+`Connected` to carry the effective authority — deferred until a real need.
