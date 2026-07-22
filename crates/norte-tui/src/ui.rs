@@ -872,8 +872,22 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 // `Failed` ya se trató arriba; `Done` es el resto.
                 SearchState::Done | SearchState::Failed => "search-status-done",
             };
+            // #81: contexto del match de contenido del hit BAJO EL CURSOR
+            // (línea + preview — saneado en origen por el core; se pasa por
+            // detail_for_bar como cinturón, mismo criterio que los errores).
+            let hit = pane
+                .entries()
+                .get(pane.cursor())
+                .and_then(|e| pane.search_matches.get(&e.path))
+                .map_or_else(String::new, |m| {
+                    let linea = m.line.map_or_else(String::new, |l| format!(":{l}"));
+                    let preview = m.preview.as_deref().map_or_else(String::new, |p| {
+                        format!(" {}", crate::app::detail_for_bar(p))
+                    });
+                    format!("  [{linea}{preview}]")
+                });
             format!(
-                " {}{seq}",
+                " {}{hit}{seq}",
                 ta(key, &[("n", &pane.entries().len().to_string())])
             )
         }

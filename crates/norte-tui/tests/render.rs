@@ -328,3 +328,38 @@ fn modal_de_confirmacion_sigue_la_reinterpretacion() {
         "no el lossy crudo: {contenido}"
     );
 }
+
+/// #81: el contexto del match de contenido (línea + preview) del hit BAJO EL
+/// CURSOR se pinta en la barra del pane virtual — saneado (un preview hostil
+/// jamás pinta controles crudos).
+#[test]
+fn preview_del_match_bajo_el_cursor_en_la_barra() {
+    let dir = vp("file:///casa");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir.clone(), Vec::new()),
+    );
+    let hit = Entry {
+        path: dir.join(Segment::new(b"main.rs".to_vec()).unwrap()),
+        kind: EntryKind::File,
+        size: Some(120),
+        mtime_ms: None,
+    };
+    let pane = app.focused_mut();
+    pane.begin_search(dir);
+    pane.extend_listing(vec![hit.clone()]);
+    pane.search_matches.insert(
+        hit.path,
+        norte_proto::methods::MatchInfo {
+            line: Some(42),
+            preview: Some("fn main() { hola }".into()),
+        },
+    );
+    let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let contenido = terminal.backend().to_string();
+    assert!(
+        contenido.contains(":42") && contenido.contains("hola"),
+        "línea y preview del hit en la barra: {contenido}"
+    );
+}
