@@ -102,25 +102,29 @@ async fn remove_retrying(
     }
 }
 
-/// `mkdir` con reintentos (issue #17). La ambigüedad post-efecto NO se
-/// resuelve aquí: un `Conflict` tras fallo transitorio puede ser nuestro
-/// dir fantasma O uno preexistente — indistinguibles sin pre-stat. Se
-/// devuelve `Conflict` y la política del caller decide: merge lo absorbe
-/// ([`ensure_dir`]); `Fail`/`Ask` fallan EN SEGURO. Deuda journal
-/// documentada: si el dir era nuestro no habrá evento `Created` — el undo
-/// de M3 dejará un dir vacío de más, jamás pérdida (issue #32).
+/// `mkdir` con reintentos y desambiguación (#32.2). CONTRATO: el caller ya
+/// verificó que el destino NO preexistía (pre-stat de [`ensure_dir`]) — con
+/// esa garantía, un `Conflict` tras un fallo transitorio es nuestra primera
+/// aplicación (o un tercero concurrente en la ventana, indistinguible y
+/// igual de inofensivo: el undo de un dir con contenido ajeno falla limpio
+/// en `remove`) y cuenta como ÉXITO, con su `Created` para el journal. Un
+/// `Conflict` SIN transitorio previo sí es colisión real (carrera externa):
+/// se propaga y la política del caller decide.
 async fn mkdir_retrying(
     p: &dyn Provider,
     path: &VPath,
     cancel: &CancellationToken,
 ) -> Result<(), Error> {
     let mut attempt = 0u32;
+    let mut ambiguous = false;
     loop {
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
         match p.mkdir(path).await {
+            Err(Error::Conflict { .. }) if ambiguous => return Ok(()),
             Err(e) if attempt < MAX_RETRIES && is_transient(&e) && !cancel.is_cancelled() => {
+                ambiguous = true;
                 backoff_or_cancel(cancel, attempt).await?;
                 attempt += 1;
             }
@@ -465,6 +469,13 @@ async fn overwrite_existing(
 
 /// Crea el dir destino, o lo ACEPTA si ya existe como dir y la política
 /// permite merge (spec: copiar dir sobre dir = fusionar, política por hoja).
+///
+/// #32.2 — pre-stat del destino ANTES del primer mkdir: es la ÚNICA forma de
+/// distinguir, tras un fallo transitorio, nuestro dir fantasma de uno
+/// preexistente — con él, el `Created` del dir ambiguo llega al journal
+/// (regla 4) y el undo lo conoce. Coste honesto: +1 stat por dir NUEVO; para
+/// un dir preexistente bajo merge es neutro o mejor (el stat sustituye al
+/// mkdir fallido + stat del camino viejo).
 async fn ensure_dir(
     dst: &dyn Provider,
     to: &VPath,
@@ -472,6 +483,25 @@ async fn ensure_dir(
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
+    let pre = match with_retry(&ctx.cancel, || dst.stat(to).boxed()).await {
+        Ok(e) => Some(e),
+        Err(Error::NotFound) => None,
+        Err(e) => return Err(e),
+    };
+    if let Some(existing) = pre {
+        // Preexistente: JAMÁS Created (no es nuestro; el undo no lo toca).
+        return if existing.kind != EntryKind::Dir {
+            Err(Error::Conflict {
+                conflict: ConflictKind::TypeMismatch,
+            })
+        } else if merge_allowed(opts.on_collision) {
+            Ok(())
+        } else {
+            Err(Error::Conflict {
+                conflict: ConflictKind::Exists,
+            })
+        };
+    }
     match mkdir_retrying(dst, to, &ctx.cancel).await {
         Ok(()) => {
             observer
@@ -479,6 +509,9 @@ async fn ensure_dir(
                 .await?;
             Ok(())
         }
+        // Conflict SIN ambigüedad: un tercero creó el dir entre nuestro
+        // pre-stat y el mkdir (carrera externa). Merge lo absorbe SIN
+        // Created (no es nuestro); Fail/Ask fallan en seguro.
         Err(Error::Conflict { .. }) if merge_allowed(opts.on_collision) => {
             let existing = with_retry(&ctx.cancel, || dst.stat(to).boxed()).await?;
             if existing.kind == EntryKind::Dir {

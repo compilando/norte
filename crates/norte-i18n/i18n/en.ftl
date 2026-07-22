@@ -265,3 +265,5 @@ gui-task-state-done = done
 gui-task-state-cancelled = cancelled
 gui-task-state-failed = failed
 gui-task-state-unknown = ?
+cli-gc-result = swept { $n } orphaned partials under { $dir }
+cli-gc-remote-unsupported = `norte gc` does not work with --daemon yet (use embedded mode)

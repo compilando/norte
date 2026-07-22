@@ -248,6 +248,536 @@ async fn connect_concurrente_no_duplica_registro() {
     assert_eq!(conn.connects.load(Ordering::SeqCst), antes);
 }
 
+/// Conector con puerta: `connect` cuenta la llamada y espera a que el test
+/// abra la puerta — permite tener DOS waiters pendientes del mismo dial.
+struct GatedConnector {
+    connects: AtomicUsize,
+    gate: tokio::sync::Semaphore,
+}
+
+impl GatedConnector {
+    fn new() -> Self {
+        Self {
+            connects: AtomicUsize::new(0),
+            gate: tokio::sync::Semaphore::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl RemoteConnector for GatedConnector {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+        self.connects.fetch_add(1, Ordering::SeqCst);
+        let _permit = self.gate.acquire().await.expect("gate viva");
+        Ok(Connected {
+            provider: Arc::new(EcoProvider),
+            warnings: Vec::new(),
+        })
+    }
+    async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+/// #47: dos peticiones concurrentes al mismo host esperan el MISMO dial —
+/// exactamente UN connect, jamás una sesión duplicada transitoria.
+#[tokio::test]
+async fn connect_concurrente_es_single_flight() {
+    let engine = Arc::new(Engine::new());
+    let conn = Arc::new(GatedConnector::new());
+    engine.set_connector(conn.clone());
+
+    let e1 = Arc::clone(&engine);
+    let t1 = tokio::spawn(async move { e1.stat(&vp("sftp://h/x")).await });
+    let e2 = Arc::clone(&engine);
+    let t2 = tokio::spawn(async move { e2.stat(&vp("sftp://h/y")).await });
+    // Espera a que el dial haya arrancado (los dos stats ya en vuelo).
+    while conn.connects.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+    tokio::task::yield_now().await;
+    conn.gate.add_permits(2);
+    t1.await.expect("join").expect("stat 1");
+    t2.await.expect("join").expect("stat 2");
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 1, "un solo dial");
+}
+
+/// Marca `cancelled` cuando el future del connect se DROPEA a mitad.
+struct DropProbe(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for DropProbe {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Conector colgado que detecta la cancelación (drop del future en vuelo).
+struct ProbedHangingConnector {
+    started: AtomicUsize,
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait]
+impl RemoteConnector for ProbedHangingConnector {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        let _probe = DropProbe(self.cancelled.clone());
+        std::future::pending().await
+    }
+    async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+/// #47: si TODOS los waiters abandonan (drop del future — p. ej. `rpc.cancel`
+/// dropea el dispatch, #72), el dial en vuelo se CANCELA y la clave queda
+/// limpia: un acceso posterior vuelve a marcar.
+#[tokio::test]
+async fn abandono_de_todos_los_waiters_cancela_el_dial() {
+    let engine = Arc::new(Engine::new());
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let conn = Arc::new(ProbedHangingConnector {
+        started: AtomicUsize::new(0),
+        cancelled: cancelled.clone(),
+    });
+    engine.set_connector(conn.clone());
+
+    let e1 = Arc::clone(&engine);
+    let waiter = tokio::spawn(async move { e1.stat(&vp("sftp://h/x")).await });
+    while conn.started.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+    waiter.abort();
+    let _ = waiter.await;
+    // El job procesa la cancelación en su propia task: dale turnos.
+    for _ in 0..50 {
+        if cancelled.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(cancelled.load(Ordering::SeqCst), "el dial se canceló");
+
+    // La clave quedó limpia: el siguiente acceso vuelve a marcar (no se
+    // queda esperando a un job zombi).
+    let e2 = Arc::clone(&engine);
+    let again = tokio::spawn(async move { e2.stat(&vp("sftp://h/x")).await });
+    for _ in 0..500 {
+        if conn.started.load(Ordering::SeqCst) >= 2 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        conn.started.load(Ordering::SeqCst),
+        2,
+        "re-marca tras limpiar"
+    );
+    again.abort();
+    let _ = again.await;
+}
+
+/// Conector programable: falla con `ProviderUnavailable` mientras
+/// `failures` > 0, luego conecta.
+struct FlakyConnector {
+    connects: AtomicUsize,
+    failures: AtomicUsize,
+}
+
+#[async_trait]
+impl RemoteConnector for FlakyConnector {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+        self.connects.fetch_add(1, Ordering::SeqCst);
+        if self
+            .failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |f| f.checked_sub(1))
+            .is_ok()
+        {
+            return Err(Error::ProviderUnavailable { retryable: true });
+        }
+        Ok(Connected {
+            provider: Arc::new(EcoProvider),
+            warnings: Vec::new(),
+        })
+    }
+    async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+/// #47: un fallo transitorio del dial entra en negative-cache con backoff
+/// exponencial (1s → 2s → … tope 30s): reintentar dentro de la ventana
+/// responde el error cacheado SIN volver a marcar.
+#[tokio::test(start_paused = true)]
+async fn fallo_transitorio_entra_en_cooldown_con_backoff() {
+    let engine = Engine::new();
+    let conn = Arc::new(FlakyConnector {
+        connects: AtomicUsize::new(0),
+        failures: AtomicUsize::new(usize::MAX), // siempre falla
+    });
+    engine.set_connector(conn.clone());
+    let p = vp("sftp://h/x");
+
+    let err = engine.stat(&p).await.unwrap_err();
+    assert!(matches!(
+        err,
+        Error::ProviderUnavailable { retryable: true }
+    ));
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 1);
+
+    // Dentro de la ventana (1s): cacheado, sin dial.
+    let err = engine.stat(&p).await.unwrap_err();
+    assert!(matches!(
+        err,
+        Error::ProviderUnavailable { retryable: true }
+    ));
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 1, "en cooldown");
+
+    // Pasada la ventana: re-marca (y falla otra vez → ventana 2s).
+    tokio::time::advance(std::time::Duration::from_millis(1100)).await;
+    let _ = engine.stat(&p).await.unwrap_err();
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 2);
+
+    // 1s después: la ventana ya es de 2s — sigue cacheado.
+    tokio::time::advance(std::time::Duration::from_millis(1100)).await;
+    let _ = engine.stat(&p).await.unwrap_err();
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 2, "ventana doblada");
+
+    // Otro segundo más: expira y re-marca.
+    tokio::time::advance(std::time::Duration::from_millis(1100)).await;
+    let _ = engine.stat(&p).await.unwrap_err();
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 3);
+}
+
+/// #47: un connect que al fin entra LIMPIA el cooldown de la clave; la
+/// sesión queda cacheada (accesos posteriores no marcan).
+#[tokio::test(start_paused = true)]
+async fn exito_limpia_el_cooldown() {
+    let engine = Engine::new();
+    let conn = Arc::new(FlakyConnector {
+        connects: AtomicUsize::new(0),
+        failures: AtomicUsize::new(1), // falla solo la primera
+    });
+    engine.set_connector(conn.clone());
+    let p = vp("sftp://h/x");
+
+    let _ = engine.stat(&p).await.unwrap_err();
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 1);
+    tokio::time::advance(std::time::Duration::from_millis(1100)).await;
+    engine.stat(&p).await.expect("segundo dial conecta");
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 2);
+    // Cacheado: sin más dials.
+    engine.stat(&p).await.expect("cacheado");
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 2);
+}
+
+/// Provider que se puede ENVENENAR: tras `poison`, toda operación devuelve
+/// `ProviderUnavailable` (sesión muerta: server reiniciado, red caída).
+struct FlipProvider {
+    poisoned: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait]
+impl Provider for FlipProvider {
+    fn scheme(&self) -> &'static str {
+        "sftp"
+    }
+    fn capabilities(&self) -> norte_proto::Capabilities {
+        norte_proto::Capabilities {
+            flags: norte_proto::CapabilityFlags::empty(),
+            max_path: None,
+        }
+    }
+    async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
+        if self.poisoned.load(Ordering::SeqCst) {
+            return Err(Error::ProviderUnavailable { retryable: true });
+        }
+        Ok(Entry {
+            path: p.clone(),
+            kind: EntryKind::Dir,
+            size: None,
+            mtime_ms: None,
+        })
+    }
+    async fn list(&self, _p: &VPath) -> Result<norte_vfs::EntryStream, Error> {
+        Err(Error::Unsupported)
+    }
+    async fn read(
+        &self,
+        _p: &VPath,
+        _range: Option<norte_proto::ByteRange>,
+    ) -> Result<norte_vfs::ByteStream, Error> {
+        Err(Error::Unsupported)
+    }
+    async fn write(&self, _p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
+        Err(Error::Unsupported)
+    }
+    async fn mkdir(&self, _p: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+    async fn remove(&self, _p: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+    async fn rename(&self, _from: &VPath, _to: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+}
+
+/// Conector que entrega una sesión FRESCA por dial y guarda el interruptor
+/// de veneno de cada una.
+struct RevivingConnector {
+    connects: AtomicUsize,
+    poisons: std::sync::Mutex<Vec<Arc<std::sync::atomic::AtomicBool>>>,
+}
+
+#[async_trait]
+impl RemoteConnector for RevivingConnector {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+        self.connects.fetch_add(1, Ordering::SeqCst);
+        let poisoned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.poisons.lock().unwrap().push(poisoned.clone());
+        Ok(Connected {
+            provider: Arc::new(FlipProvider { poisoned }),
+            warnings: Vec::new(),
+        })
+    }
+    async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+/// #47: una sesión que empieza a devolver `ProviderUnavailable` se EVICTA de
+/// la caché — el siguiente acceso reconecta (reconexión perezosa), sin
+/// reinicio del proceso ni entrada zombi para siempre.
+#[tokio::test]
+async fn sesion_muerta_se_evicta_y_reconecta() {
+    let engine = Engine::new();
+    let conn = Arc::new(RevivingConnector {
+        connects: AtomicUsize::new(0),
+        poisons: std::sync::Mutex::new(Vec::new()),
+    });
+    engine.set_connector(conn.clone());
+    let p = vp("sftp://h/x");
+
+    engine.stat(&p).await.expect("sesión 1 viva");
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 1);
+
+    // Muere la sesión: el error se propaga TAL CUAL al caller…
+    conn.poisons.lock().unwrap()[0].store(true, Ordering::SeqCst);
+    let err = engine.stat(&p).await.unwrap_err();
+    assert!(matches!(
+        err,
+        Error::ProviderUnavailable { retryable: true }
+    ));
+
+    // …y la clave quedó evictada: el siguiente acceso reconecta.
+    engine.stat(&p).await.expect("reconectado");
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 2, "re-dial");
+}
+
+/// Conector con canónica fija: `h` y `oscar@h` son la MISMA identidad.
+struct CanonConnector {
+    connects: AtomicUsize,
+}
+
+#[async_trait]
+impl RemoteConnector for CanonConnector {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+        self.connects.fetch_add(1, Ordering::SeqCst);
+        Ok(Connected {
+            provider: Arc::new(EcoProvider),
+            warnings: Vec::new(),
+        })
+    }
+    async fn canonical_authority(&self, _scheme: &str, authority: &str) -> Option<String> {
+        assert!(authority == "h" || authority == "oscar@h");
+        Some("oscar@h".to_string())
+    }
+    async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+/// #47 (dedup canónica): `sftp://host` que hereda `oscar@` de la config y
+/// `sftp://oscar@host` son la misma identidad — UNA sesión, en ambos órdenes.
+#[tokio::test]
+async fn dedup_canonica_no_abre_segunda_sesion() {
+    // Orden 1: primero la forma sin usuario.
+    let engine = Engine::new();
+    let conn = Arc::new(CanonConnector {
+        connects: AtomicUsize::new(0),
+    });
+    engine.set_connector(conn.clone());
+    engine.stat(&vp("sftp://h/x")).await.expect("stat 1");
+    engine.stat(&vp("sftp://oscar@h/x")).await.expect("stat 2");
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 1, "una sesión");
+
+    // Orden 2: primero la canónica.
+    let engine = Engine::new();
+    let conn = Arc::new(CanonConnector {
+        connects: AtomicUsize::new(0),
+    });
+    engine.set_connector(conn.clone());
+    engine.stat(&vp("sftp://oscar@h/x")).await.expect("stat 1");
+    engine.stat(&vp("sftp://h/x")).await.expect("stat 2");
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 1, "una sesión");
+}
+
+/// Sesión que sirve UN zip en `/a.zip` (stat+read con rango) y se puede
+/// envenenar — el mínimo para componer un provider archive encima.
+struct ZipHostProvider {
+    zip: bytes::Bytes,
+    poisoned: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ZipHostProvider {
+    fn check(&self) -> Result<(), Error> {
+        if self.poisoned.load(Ordering::SeqCst) {
+            return Err(Error::ProviderUnavailable { retryable: true });
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Provider for ZipHostProvider {
+    fn scheme(&self) -> &'static str {
+        "sftp"
+    }
+    fn capabilities(&self) -> norte_proto::Capabilities {
+        norte_proto::Capabilities {
+            flags: norte_proto::CapabilityFlags::empty(),
+            max_path: None,
+        }
+    }
+    async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
+        self.check()?;
+        if p.segments().last() == Some(b"a.zip".as_slice()) {
+            return Ok(Entry {
+                path: p.clone(),
+                kind: EntryKind::File,
+                size: Some(self.zip.len() as u64),
+                mtime_ms: None,
+            });
+        }
+        Ok(Entry {
+            path: p.clone(),
+            kind: EntryKind::Dir,
+            size: None,
+            mtime_ms: None,
+        })
+    }
+    async fn list(&self, _p: &VPath) -> Result<norte_vfs::EntryStream, Error> {
+        self.check()?;
+        Err(Error::Unsupported)
+    }
+    async fn read(
+        &self,
+        _p: &VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> Result<norte_vfs::ByteStream, Error> {
+        self.check()?;
+        let total = self.zip.len() as u64;
+        let (off, len) = match range {
+            None => (0, total),
+            Some(r) => {
+                let off = r.offset.min(total);
+                (off, r.len.unwrap_or(total - off).min(total - off))
+            }
+        };
+        let (a, b) = (
+            usize::try_from(off).expect("test: rango pequeño"),
+            usize::try_from(off + len).expect("test: rango pequeño"),
+        );
+        let chunk = self.zip.slice(a..b);
+        Ok(Box::pin(futures::stream::iter(vec![Ok(chunk)])))
+    }
+    async fn write(&self, _p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
+        Err(Error::Unsupported)
+    }
+    async fn mkdir(&self, _p: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+    async fn remove(&self, _p: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+    async fn rename(&self, _from: &VPath, _to: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+}
+
+/// Conector que sirve por dial N un zip con el miembro `dial-N.txt`, y
+/// guarda el interruptor de veneno de cada sesión.
+struct ZipReviving {
+    connects: AtomicUsize,
+    poisons: std::sync::Mutex<Vec<Arc<std::sync::atomic::AtomicBool>>>,
+}
+
+#[async_trait]
+impl RemoteConnector for ZipReviving {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+        let n = self.connects.fetch_add(1, Ordering::SeqCst) + 1;
+        let member = format!("dial-{n}.txt");
+        let zip = norte_testkit::ZipSmith::new()
+            .file(member.as_bytes(), b"contenido")
+            .build();
+        let poisoned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.poisons.lock().unwrap().push(poisoned.clone());
+        Ok(Connected {
+            provider: Arc::new(ZipHostProvider {
+                zip: bytes::Bytes::from(zip),
+                poisoned,
+            }),
+            warnings: Vec::new(),
+        })
+    }
+    async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+/// #62: evictar una sesión ARRASTRA los providers archive compuestos sobre
+/// ella (`zip+sftp://h` cachea el Arc de `sftp://h` — dejarlo serviría el
+/// índice de una conexión muerta).
+#[tokio::test]
+async fn evictar_sesion_arrastra_archive_compuestos() {
+    use futures::StreamExt;
+
+    let engine = Engine::new();
+    let conn = Arc::new(ZipReviving {
+        connects: AtomicUsize::new(0),
+        poisons: std::sync::Mutex::new(Vec::new()),
+    });
+    engine.set_connector(conn.clone());
+
+    let names = |entries: Vec<Result<Entry, Error>>| -> Vec<String> {
+        entries
+            .into_iter()
+            .map(|e| {
+                let e = e.expect("entry");
+                String::from_utf8_lossy(e.path.segments().last().expect("segmento")).into_owned()
+            })
+            .collect()
+    };
+
+    // Sesión 1: el compuesto zip+sftp sirve el índice del dial 1.
+    let inner = VPath::archive_compose("zip", &vp("sftp://h/a.zip"), &[]).expect("compose");
+    let got = names(engine.list(&inner).await.expect("list 1").collect().await);
+    assert_eq!(got, vec!["dial-1.txt".to_string()]);
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 1);
+
+    // Muere la sesión → una op directa la evicta…
+    conn.poisons.lock().unwrap()[0].store(true, Ordering::SeqCst);
+    let err = engine.stat(&vp("sftp://h/x")).await.unwrap_err();
+    assert!(matches!(err, Error::ProviderUnavailable { .. }));
+
+    // …y el COMPUESTO cayó con ella: el siguiente list reconecta (dial 2)
+    // y recompone — sirve el índice NUEVO, no el del zip muerto.
+    let got = names(engine.list(&inner).await.expect("list 2").collect().await);
+    assert_eq!(got, vec!["dial-2.txt".to_string()], "compuesto arrastrado");
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 2);
+}
+
 /// `trust_host_key` sin conector configurado es Unsupported, no un panic.
 #[tokio::test]
 async fn trust_sin_conector_es_unsupported() {
@@ -318,4 +848,76 @@ async fn observer_no_se_llama_sin_avisos() {
         seen.lock().expect("lock de test").is_empty(),
         "sin degradación no hay aviso"
     );
+}
+
+/// Conector secuencial: la llamada N sigue el guion `steps` (falla rápida o
+/// espera puerta y conecta).
+struct SeqConnector {
+    connects: AtomicUsize,
+    gate: tokio::sync::Semaphore,
+}
+
+#[async_trait]
+impl RemoteConnector for SeqConnector {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+        let n = self.connects.fetch_add(1, Ordering::SeqCst) + 1;
+        if n == 1 {
+            // Fallo ACCIONABLE (sin cooldown): el reintento marca al instante.
+            return Err(Error::PermissionDenied);
+        }
+        let _permit = self.gate.acquire().await.expect("gate viva");
+        Ok(Connected {
+            provider: Arc::new(EcoProvider),
+            warnings: Vec::new(),
+        })
+    }
+    async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+/// BLOCKER review #47: un waiter RANCIO (su job ya terminó y publicó) que se
+/// dropea sin re-pollearse NO descuenta waiters de un job NUEVO bajo la
+/// misma clave — el guard lleva el id del job al que se suscribió. Sin el
+/// fix, el drop de A cancelaba el dial de B y B veía `Internal{panic:true}`.
+#[tokio::test]
+async fn guard_rancio_no_cancela_el_dial_nuevo() {
+    let engine = Arc::new(Engine::new());
+    let conn = Arc::new(SeqConnector {
+        connects: AtomicUsize::new(0),
+        gate: tokio::sync::Semaphore::new(0),
+    });
+    engine.set_connector(conn.clone());
+    let p = vp("sftp://h/x");
+
+    // A: un solo poll (job 1 spawneado, guard de A vivo); el job 1 falla y
+    // publica SIN que A se re-pollee.
+    let mut fut_a = Box::pin(engine.stat(&p));
+    assert!(futures::poll!(fut_a.as_mut()).is_pending(), "A suscrito");
+    while conn.connects.load(Ordering::SeqCst) < 1 {
+        tokio::task::yield_now().await;
+    }
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+
+    // B: arranca el job 2 (dial en puerta).
+    let e2 = Arc::clone(&engine);
+    let p2 = p.clone();
+    let b = tokio::spawn(async move { e2.stat(&p2).await });
+    while conn.connects.load(Ordering::SeqCst) < 2 {
+        tokio::task::yield_now().await;
+    }
+
+    // A se DROPEA con su guard rancio: no debe tocar el job 2.
+    drop(fut_a);
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    conn.gate.add_permits(1);
+    let res = tokio::time::timeout(std::time::Duration::from_secs(5), b)
+        .await
+        .expect("B no cuelga")
+        .expect("join");
+    res.expect("B conecta: el guard rancio no canceló su dial");
 }

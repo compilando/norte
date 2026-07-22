@@ -1,7 +1,6 @@
 //! [`Engine`]: la API embebida del core (M0). El daemon JSON-RPC (M1)
 //! envolverá esta misma API; los frontends no contienen lógica de negocio.
 
-use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use norte_proto::{
@@ -13,10 +12,7 @@ use norte_vfs::{EntryStream, Provider};
 use crate::observer::{MutationObserver, NoopObserver};
 use crate::ops;
 use crate::scheduler::{Priority, Scheduler, TaskHandle};
-
-/// Tope para ESTABLECER una conexión remota (dial+TOFU+auth+subsistema).
-/// Generoso a propósito: cubre redes lentas sin colgar indefinidamente.
-const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+use crate::sessions::SessionPool;
 
 /// Opciones de una copia/movimiento (ADR 0005): qué hacer ante colisiones
 /// y con los symlinks. `Default` = el comportamiento estricto de M0
@@ -46,10 +42,11 @@ pub struct TransferOptions {
 /// Lecturas (`stat`/`list`) son directas; mutaciones (`copy`/`move_`/
 /// `delete`) son Tasks con progreso y cancelación.
 pub struct Engine {
-    /// Clave: el scheme (`"file"`, providers de proceso) o
-    /// `"scheme://authority"` (remotos establecidos bajo demanda — un
-    /// provider remoto envuelve UNA sesión a UN host, fase 6e).
-    providers: RwLock<HashMap<String, Arc<dyn Provider>>>,
+    /// Caché de providers + ciclo de vida de las sesiones remotas (#47):
+    /// providers de proceso por scheme, remotos por `scheme://authority`
+    /// (una sesión por host, con single-flight/evicción/backoff) y archive
+    /// compuestos por `fmt+scheme://authority`.
+    sessions: SessionPool,
     /// Establece providers remotos bajo demanda (fase 6e, ADR 0015). Sin
     /// conector, un scheme sin provider registrado es `Unsupported` (M0/M1).
     connector: RwLock<Option<Arc<dyn crate::connect::RemoteConnector>>>,
@@ -89,7 +86,7 @@ impl Engine {
     #[must_use]
     pub fn with_observer(observer: Arc<dyn MutationObserver>) -> Self {
         Self {
-            providers: RwLock::new(HashMap::new()),
+            sessions: SessionPool::new(),
             connector: RwLock::new(None),
             connection_observer: RwLock::new(None),
             sched: Scheduler::new(4),
@@ -122,7 +119,7 @@ impl Engine {
     #[must_use]
     pub fn with_journal(journal: Arc<crate::journal::SqliteJournal>) -> Self {
         Self {
-            providers: RwLock::new(HashMap::new()),
+            sessions: SessionPool::new(),
             connector: RwLock::new(None),
             connection_observer: RwLock::new(None),
             sched: Scheduler::new(4),
@@ -190,11 +187,7 @@ impl Engine {
     /// # Panics
     /// Nunca en la práctica: solo por envenenamiento del lock interno.
     pub fn register_provider(&self, provider: Arc<dyn Provider>) {
-        let scheme = provider.scheme().to_owned();
-        self.providers
-            .write()
-            .expect("providers lock sano")
-            .insert(scheme, provider);
+        self.sessions.register_process(provider);
     }
 
     /// Configura el conector de providers remotos (fase 6e, ADR 0015 A):
@@ -255,16 +248,13 @@ impl Engine {
 
     async fn provider_for(&self, p: &VPath) -> Result<Arc<dyn Provider>, Error> {
         let key = Self::provider_key(p);
-        {
-            let providers = self.providers.read().expect("providers lock sano");
-            // Primero el provider de proceso registrado para el scheme entero
-            // (local, mem de tests): tiene prioridad y no dispara conexiones.
-            if let Some(prov) = providers.get(p.scheme()) {
-                return Ok(Arc::clone(prov));
-            }
-            if let Some(prov) = providers.get(&key) {
-                return Ok(Arc::clone(prov));
-            }
+        // Primero el provider de proceso registrado para el scheme entero
+        // (local, mem de tests): tiene prioridad y no dispara conexiones.
+        if let Some(prov) = self.sessions.lookup(p.scheme()) {
+            return Ok(prov);
+        }
+        if let Some(prov) = self.sessions.lookup(&key) {
+            return Ok(prov);
         }
         // Archivos como directorios (ADR 0018): scheme compuesto = provider
         // por composición sobre el provider del CONTENEDOR. Antes del
@@ -296,13 +286,9 @@ impl Engine {
                     p.scheme().to_owned(),
                     limits,
                 ));
-            // Mismo double-check que los remotos: si otra petición registró
-            // primero, gana la suya (el ArchiveProvider extra solo es RAM).
-            let mut providers = self.providers.write().expect("providers lock sano");
-            let entry = providers
-                .entry(key)
-                .or_insert_with(|| Arc::clone(&provider));
-            return Ok(Arc::clone(entry));
+            // Double-check en el pool: si otra petición registró primero,
+            // gana la suya (el ArchiveProvider extra solo es RAM).
+            return Ok(self.sessions.insert_composite(key, provider));
         }
         let connector = self
             .connector
@@ -313,45 +299,32 @@ impl Engine {
         let Some(authority) = p.authority() else {
             return Err(Error::Unsupported);
         };
-        // Fuera del lock: conectar puede tardar (red, TOFU). Con TIMEOUT: el
-        // connect ocurre ANTES de existir una Task cancelable — sin límite,
-        // un host que acepta TCP y calla colgaría la operación para siempre
-        // (regla 3). La cancelación fina llegará al mover el connect dentro
-        // de la Task (issue #47).
-        let connected = tokio::time::timeout(
-            CONNECT_TIMEOUT,
-            connector.connect(p.scheme(), authority),
-        )
-        .await
-        .map_err(|_| {
-            tracing::warn!(scheme = %p.scheme(), "timeout estableciendo la conexión remota");
-            Error::ProviderUnavailable { retryable: true }
-        })??;
-        // #44: emite los avisos (una vez por establecimiento; un connect
-        // duplicado por carrera —#47— re-avisa, aceptable). Sin observer, se
-        // dropean (el warn! del connector persiste en el log).
-        if !connected.warnings.is_empty()
-            && let Some(obs) = self
-                .connection_observer
-                .read()
-                .expect("connection_observer lock sano")
-                .clone()
-        {
-            for w in &connected.warnings {
-                obs.on_connection_warning(w);
+        let observer = self
+            .connection_observer
+            .read()
+            .expect("connection_observer lock sano")
+            .clone();
+        // Dedup canónica (#47): resuelve la forma canónica ANTES de marcar
+        // (lectura local de connections.toml) — un alias de una sesión viva
+        // acierta aquí y jamás abre una segunda.
+        let (cache_key, alias) = match connector.canonical_authority(p.scheme(), authority).await {
+            Some(canonical) if canonical != authority => {
+                let ckey = format!("{}://{canonical}", p.scheme());
+                // alias_current re-lee la canónica BAJO el lock: si la
+                // sesión cayó entre el lookup y aquí, jamás re-inserta un
+                // Arc muerto como alias (sec MAJOR-2 del review #47).
+                if let Some(prov) = self.sessions.alias_current(&ckey, key.clone()) {
+                    return Ok(prov);
+                }
+                (ckey, Some(key))
             }
-        }
-        let provider = connected.provider;
-        // Double-check bajo el write lock: si otra petición concurrente
-        // registró primero, se conserva LA SUYA (una clave = una sesión) y la
-        // recién creada se suelta — su Drop cierra la sesión de más (deuda de
-        // single-flight/evicción: issue #47; la sesión duplicada es coste,
-        // no riesgo — mismo uid, mismas credenciales).
-        let mut providers = self.providers.write().expect("providers lock sano");
-        let entry = providers
-            .entry(key)
-            .or_insert_with(|| Arc::clone(&provider));
-        Ok(Arc::clone(entry))
+            _ => (key, None),
+        };
+        // El dial va en el pool (#47): single-flight por clave, timeout,
+        // cancelable por drop del waiter, backoff de fallos transitorios.
+        self.sessions
+            .connect_remote(cache_key, alias, p.scheme(), authority, connector, observer)
+            .await
     }
 
     /// Metadatos de un nodo (directo, sin Task).

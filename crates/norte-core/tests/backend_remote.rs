@@ -861,3 +861,113 @@ async fn backend_tardio_resincroniza_pendientes_y_deniega() {
         "PolicyDenied not-approved, fue {err:?}"
     );
 }
+
+// ---------- #74: submit abandonado → rpc.cancel del dispatch en vuelo ------
+
+/// Conector colgado con sonda de drop: `cancelled` se enciende cuando el
+/// future del dial se DROPEA a mitad (la cancelación #47 del pool).
+struct ProbedHangingConnector {
+    started: std::sync::atomic::AtomicUsize,
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+struct DropProbe(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for DropProbe {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl norte_core::connect::RemoteConnector for ProbedHangingConnector {
+    async fn connect(
+        &self,
+        _s: &str,
+        _a: &str,
+    ) -> Result<norte_core::connect::Connected, norte_proto::Error> {
+        self.started
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let _probe = DropProbe(self.cancelled.clone());
+        std::future::pending().await
+    }
+    async fn trust_host_key(
+        &self,
+        _h: &str,
+        _p: Option<u16>,
+        _f: &str,
+    ) -> Result<(), norte_proto::Error> {
+        Ok(())
+    }
+}
+
+/// #74: dropear el future de un submit remoto EN VUELO envía `rpc.cancel`
+/// (guard drop-based del backend, patrón #72) — el dispatch del daemon muere
+/// PRE-efecto (aquí, cancelando el dial #47) y la Task jamás nace huérfana
+/// sin canceller. Es la ventana del driver Lua que ABANDONA el run con el
+/// submit en vuelo.
+#[tokio::test]
+async fn submit_abandonado_envia_rpc_cancel_y_mata_el_dispatch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    let engine = Arc::new(Engine::new());
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let conn = Arc::new(ProbedHangingConnector {
+        started: std::sync::atomic::AtomicUsize::new(0),
+        cancelled: cancelled.clone(),
+    });
+    engine.set_connector(conn.clone());
+    let daemon = Daemon::bind(
+        engine,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+            plugins_dir: None,
+        },
+    )
+    .await
+    .expect("bind");
+    let _run = tokio::spawn(daemon.run());
+    let backend = Backend::Remote(
+        RemoteBackend::connect(
+            socket,
+            None,
+            ClientInfo {
+                name: "backend-test".into(),
+                version: "0.0.0".into(),
+            },
+        )
+        .await
+        .expect("connect"),
+    );
+
+    let b2 = backend.clone();
+    let submit = tokio::spawn(async move {
+        b2.copy(
+            &vp("sftp://h/a"),
+            &vp("sftp://h/b"),
+            norte_core::TransferOptions::default(),
+        )
+        .await
+    });
+    // El dispatch está EN el dial (fs.copy en vuelo, sin respuesta).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while conn.started.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        assert!(tokio::time::Instant::now() < deadline, "el dial no arrancó");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // El caller ABANDONA el future del submit (p. ej. gracia del driver Lua
+    // agotada): el guard debe enviar rpc.cancel con el id en vuelo.
+    submit.abort();
+    let _ = submit.await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "el dispatch del daemon sigue vivo: el abandono no envió rpc.cancel (#74)"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}

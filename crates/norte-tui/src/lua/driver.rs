@@ -5,9 +5,9 @@
 //!
 //! Un script clavado en C (`os.execute`) no responde a ninguno: timeout duro
 //! y el driver ABANDONA el future (drop); el estado Lua se tira en el
-//! próximo reload. Los caminos de abandono (gracia/deadline) pueden dejar un
-//! submit remoto en vuelo sin canceller registrado — deuda #74, documentada
-//! en [`super::fs::install_fs`].
+//! próximo reload. Abandonar con un submit remoto en vuelo ya NO deja una
+//! Task huérfana: el drop del binding dispara el guard `rpc.cancel` del
+//! backend (#74, patrón #72) y el dispatch del daemon muere pre-efecto.
 
 use std::cell::{Cell, RefCell};
 use std::future::Future;
@@ -369,10 +369,10 @@ async fn run_command(
                     .reset(tokio::time::Instant::now() + CANCEL_GRACE);
             }
             // Gracia agotada (script clavado en C, inmune al hook): ABANDONA
-            // el call en vuelo (drop al salir; un submit remoto puede quedar
-            // sin canceller — deuda #74).
+            // el call en vuelo (drop al salir; un submit remoto en vuelo se
+            // retira solo — guard rpc.cancel del backend, #74).
             () = &mut grace, if cancel_requested => break RunOutcome::Cancelled,
-            // Timeout duro: ABANDONA igual (deuda #74 ídem). Si el usuario
+            // Timeout duro: ABANDONA igual (#74 ídem). Si el usuario
             // ya había cancelado (cancel en t≈timeout, con la gracia aún
             // corriendo), el desenlace honesto es Cancelled, no TimedOut —
             // quien canceló no debe ver «se agotó el tiempo». La carrera es

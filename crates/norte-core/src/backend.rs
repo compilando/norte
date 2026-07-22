@@ -329,6 +329,26 @@ impl Backend {
         }
     }
 
+    /// GC de staging `.norte-partial` huérfano bajo `dir` (#11, ADR 0012):
+    /// operación PUNTUAL, no una Task ni una mutación del journal. Devuelve
+    /// cuántos barrió.
+    ///
+    /// # Errors
+    /// En `Remote` es [`Error::Unsupported`]: no existe (aún) un método de
+    /// wire para el GC — exponerlo exige un cambio de protocolo, diferido
+    /// hasta que haya demanda. En `Embedded`, los del provider.
+    pub async fn gc_partials(
+        &self,
+        dir: &VPath,
+        older_than: std::time::Duration,
+    ) -> Result<usize, Error> {
+        match self {
+            Self::Embedded(engine) => engine.gc_partials(dir, older_than).await,
+            #[cfg(unix)]
+            Self::Remote(_) => Err(Error::Unsupported),
+        }
+    }
+
     /// Búsqueda viva (`fs.search`, live search): devuelve la Task
     /// ([`TaskRef`], cancelable con `TaskRef::cancel`) y el STREAM de lotes de
     /// hits ([`norte_proto::methods::SearchHits`]).
@@ -889,6 +909,36 @@ pub mod remote {
 
     /// Mapea el error del cliente RPC a la taxonomía (el contrato de los
     /// frontends es SIEMPRE la taxonomía, spec §17.7).
+    /// Guard drop-based de un submit remoto (#74): si cae ARMADO con un id
+    /// capturado, notifica `rpc.cancel {id}` (sync, best-effort — `notify`
+    /// solo encola el frame; canal muerto = no-op). `armed=false` tras
+    /// recibir la respuesta.
+    struct CancelOnAbandon {
+        client: Arc<Client>,
+        /// Id de la request en vuelo; `0` = aún sin asignar (el contador del
+        /// [`Client`] arranca en 1 — jamás emite 0).
+        id: Arc<std::sync::atomic::AtomicU64>,
+        armed: bool,
+    }
+
+    impl Drop for CancelOnAbandon {
+        fn drop(&mut self) {
+            if !self.armed {
+                return;
+            }
+            let id = self.id.load(std::sync::atomic::Ordering::SeqCst);
+            if id == 0 {
+                return;
+            }
+            let _ = self.client.notify(
+                methods::RPC_CANCEL,
+                &methods::RpcCancelParams {
+                    id: norte_proto::wire::RequestId::Num(id),
+                },
+            );
+        }
+    }
+
     fn to_taxonomy(e: ClientError) -> Error {
         match e {
             // La taxonomía viaja en data (ADR 0011): se entrega tal cual.
@@ -1227,6 +1277,47 @@ pub mod remote {
             }
         }
 
+        /// Como [`Self::call_timed`] pero CANCEL-ON-DROP (#74, patrón #72):
+        /// si este future se dropea (o expira el timeout) con la request aún
+        /// EN VUELO, envía `rpc.cancel {id}` best-effort — el dispatch del
+        /// daemon muere PRE-efecto y la Task no nace huérfana sin canceller
+        /// (la ventana del driver Lua que abandona el run con el submit en
+        /// vuelo). Un id cuyo dispatch YA terminó es un no-op en el daemon.
+        /// Solo lo usan las MUTACIONES (fs.copy/move/delete): son las únicas
+        /// que el daemon envuelve en su brazo de cancelación (#72).
+        async fn call_timed_guarded<P, R>(&self, method: &str, params: &P) -> Result<R, Error>
+        where
+            P: serde::Serialize,
+            R: serde::de::DeserializeOwned,
+        {
+            let client = self.client().await?;
+            let mut guard = CancelOnAbandon {
+                client: std::sync::Arc::clone(&client),
+                id: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                armed: true,
+            };
+            let id_cell = std::sync::Arc::clone(&guard.id);
+            let res = match tokio::time::timeout(
+                CALL_TIMEOUT,
+                client.call_tracked(method, params, |id| {
+                    // El contador del Client arranca en 1: `0` = «aún sin id».
+                    id_cell.store(id, std::sync::atomic::Ordering::SeqCst);
+                }),
+            )
+            .await
+            {
+                Ok(res) => res.map_err(to_taxonomy),
+                // Timeout: el guard queda ARMADO — el return lo dropea y el
+                // rpc.cancel viaja (antes, el dispatch seguía corriendo
+                // server-side sin nadie escuchando).
+                Err(_) => return Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            // Respuesta recibida (ok o error del RPC): ya no hay nada que
+            // cancelar — desarmar para no cancelar un id reutilizable.
+            guard.armed = false;
+            res
+        }
+
         /// Listado remoto como stream perezoso: primera página EAGER (paridad
         /// de errores) + `try_unfold` sobre el `next_cursor`. Sin deps nuevas.
         /// El `skipped` del contenedor (#93) viaja en cada página — basta el
@@ -1364,7 +1455,7 @@ pub mod remote {
             opts: TransferOptions,
         ) -> Result<TaskRef, Error> {
             let result: FsTaskResult = if method == methods::FS_COPY {
-                self.call_timed(
+                self.call_timed_guarded(
                     method,
                     &FsCopyParams {
                         from: from.clone(),
@@ -1377,7 +1468,7 @@ pub mod remote {
                 )
                 .await?
             } else {
-                self.call_timed(
+                self.call_timed_guarded(
                     method,
                     &FsMoveParams {
                         from: from.clone(),
@@ -1404,7 +1495,7 @@ pub mod remote {
             mode: DeleteMode,
         ) -> Result<TaskRef, Error> {
             let result: FsTaskResult = self
-                .call_timed(
+                .call_timed_guarded(
                     methods::FS_DELETE,
                     &FsDeleteParams {
                         path: path.clone(),

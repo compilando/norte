@@ -200,6 +200,22 @@ fn map_err(e: &russh_sftp::client::error::Error) -> Error {
 /// Reconstruye una [`Entry`] a partir de la `Metadata` de sftp sobre el
 /// `VPath` pedido (la authority/scheme se preservan — la identidad del path
 /// en el wire no cambia por pasar por el provider).
+/// ¿`name` tiene la FORMA exacta de un staging sftp? (#11) Estrecho a las
+/// dos formas de ESTE provider — jamás el prefijo suelto (H2):
+/// - estable: prefijo + exactamente 32 hex ([`SftpProvider`] resumable)
+/// - efímero: prefijo + `eph.` + dígitos (contador de `write`)
+fn is_norte_partial(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix(PARTIAL_PREFIX) else {
+        return false;
+    };
+    let is_hex = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b);
+    if rest.len() == 32 && rest.bytes().all(is_hex) {
+        return true;
+    }
+    rest.strip_prefix("eph.")
+        .is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+}
+
 fn entry_from(path: VPath, md: &russh_sftp::protocol::FileAttributes) -> Entry {
     let kind = if md.is_symlink() {
         EntryKind::Symlink
@@ -478,6 +494,55 @@ impl Provider for SftpProvider {
                 .await
                 .map_err(|e| map_err(&e))
         }
+    }
+
+    /// GC de staging huérfano (#11, ADR 0012): barre los `.norte-partial.*`
+    /// de `dir` cuya mtime supera `older_than`, reconocidos por su FORMA
+    /// exacta (`is_norte_partial`) — un archivo real del usuario con el
+    /// prefijo jamás se toca (H2). Los nombres del staging son ASCII por
+    /// construcción: la decodificación lossy de russh-sftp (#37) no puede
+    /// producir un falso positivo (U+FFFD no matchea la forma).
+    async fn gc_partials(
+        &self,
+        dir: &VPath,
+        older_than: std::time::Duration,
+    ) -> Result<usize, Error> {
+        let parent = self.remote(dir)?;
+        let dirents = self
+            .session
+            .read_dir(&parent)
+            .await
+            .map_err(|e| map_err(&e))?;
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut removed = 0usize;
+        for dent in dirents {
+            let name = dent.file_name();
+            if !is_norte_partial(&name) {
+                continue;
+            }
+            // Edad por mtime (sftp v3: segundos u32); sin mtime legible se
+            // deja (conservador, como el provider local).
+            let old = dent
+                .metadata()
+                .mtime
+                .is_some_and(|m| now_secs.saturating_sub(u64::from(m)) >= older_than.as_secs());
+            if !old {
+                continue;
+            }
+            let path = if parent.ends_with('/') {
+                format!("{parent}{name}")
+            } else {
+                format!("{parent}/{name}")
+            };
+            // Un fallo individual cuenta como no-borrado, sin abortar.
+            if self.session.remove_file(&path).await.is_ok() {
+                removed += 1;
+            }
+        }
+        Ok(removed)
     }
 
     async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), Error> {
