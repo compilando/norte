@@ -12,7 +12,7 @@ wit_bindgen::generate!({
 });
 
 use exports::norte::plugin::provider::{
-    Caps, Entry, EntryKind, Guest, GuestWriter, Page, VfsError, Writer,
+    Caps, Entry, EntryKind, Guest, GuestWriter, Page, ProviderConfig, VfsError, Writer,
 };
 
 struct Mem;
@@ -88,6 +88,11 @@ fn len_u64(b: &[u8]) -> u64 {
 }
 
 impl Guest for Mem {
+    fn configure(_cfg: ProviderConfig) -> Result<(), VfsError> {
+        // El provider en memoria no establece conexión: no-op.
+        Ok(())
+    }
+
     fn capabilities() -> Caps {
         Caps { read_only: true }
     }

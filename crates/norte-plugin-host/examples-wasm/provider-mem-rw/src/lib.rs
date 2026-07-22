@@ -15,7 +15,7 @@ wit_bindgen::generate!({
 });
 
 use exports::norte::plugin::provider::{
-    Caps, Entry, EntryKind, Guest, GuestWriter, Page, VfsError, Writer,
+    Caps, Entry, EntryKind, Guest, GuestWriter, Page, ProviderConfig, VfsError, Writer,
 };
 
 /// Path = sus segmentos (bytes crudos). La raíz es la lista vacía.
@@ -65,6 +65,11 @@ fn is_dir(fs: &HashMap<PathSegs, Node>, p: &[Vec<u8>]) -> bool {
 struct Mem;
 
 impl Guest for Mem {
+    fn configure(_cfg: ProviderConfig) -> Result<(), VfsError> {
+        // El provider en memoria no establece conexión: no-op.
+        Ok(())
+    }
+
     fn capabilities() -> Caps {
         Caps { read_only: false }
     }

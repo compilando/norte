@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use norte_plugin_host::{Capabilities, PluginRuntime, provider_iface::EntryKind};
+use norte_plugin_host::{provider_iface::EntryKind, Capabilities, PluginRuntime};
 
 /// Segmentos de un path desde `&[&[u8]]`.
 fn segs(parts: &[&[u8]]) -> Vec<Vec<u8>> {
@@ -35,6 +35,18 @@ fn provider_wit_e2e_wasm_real() {
     let mut inst = rt
         .instantiate_provider(&wasm, Capabilities::default())
         .expect("instanciar el provider");
+
+    // configure (#30 stage 3c): el mem-provider lo implementa como no-op; aquí
+    // solo se verifica que el binding host↔guest round-trippea sin trap.
+    let cfg = norte_plugin_host::provider_iface::ProviderConfig {
+        endpoint: String::new(),
+        user: String::new(),
+        password: String::new(),
+        base: String::new(),
+    };
+    inst.configure(cfg)
+        .expect("configure sin trap")
+        .expect("mem configure es no-op");
 
     // capabilities: read-only.
     assert!(

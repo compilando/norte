@@ -555,6 +555,23 @@ impl ProviderInstance {
         Ok(out)
     }
 
+    /// Configura la conexión del guest-provider (#30 stage 3c): endpoint YA
+    /// resuelto por el host, credenciales y base. El `Ok` interno es el
+    /// resultado lógico del guest; el `Err` externo es un trap. Un provider sin
+    /// conexión (mem) lo implementa como no-op.
+    ///
+    /// # Errors
+    /// [`RuntimeError::Trap`] si el guest atrapa.
+    pub fn configure(
+        &mut self,
+        cfg: provider_iface::ProviderConfig,
+    ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
+        self.bindings
+            .norte_plugin_provider()
+            .call_configure(&mut self.store, &cfg)
+            .map_err(|e| RuntimeError::Trap(e.to_string()))
+    }
+
     // ---- escritura (#30 stage 2b-write) ----
 
     /// Abre un `writer` transaccional sobre `segments` (equiv.
