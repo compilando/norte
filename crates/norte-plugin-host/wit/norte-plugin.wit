@@ -1,9 +1,13 @@
-// Bump 0.1.0 → 0.2.0: aditivo — se añade la interfaz `provider` + world
-// `norte-provider` (#30 stage 2). El contrato estable previewer/command/host-log
-// no cambia. Nota de versión: el wit-parser en el árbol no soporta paquetes
-// anidados, así que `provider` (en evolución) comparte paquete con el estable;
-// cuando `provider` se estabilice (stage 3) se separará a su propio paquete vía
-// layout `wit/deps/` (review protocol-guardian; documentado en ADR 0032).
+// Versionado: 0.1.0 → 0.2.0 añadió la interfaz `provider` + world
+// `norte-provider` (#30 stage 2); 0.2.0 → 0.3.0 añadió el camino de escritura
+// (writer resource + open-writer/make-dir/remove/rename). Para previewer/command/
+// host-log es ADITIVO (no cambian). Para un GUEST de `provider` es un cambio
+// ROMPEDOR (un guest a 0.2.0 ya no satisface el world 0.3.0: le faltan exports);
+// es seguro porque `provider` es pre-release y no hay guests publicados — el bump
+// de minor bajo 0.x codifica exactamente "ruptura permitida". `provider` (en
+// evolución) comparte paquete con el estable porque el wit-parser del árbol
+// (0.239) no soporta paquetes anidados; cuando se estabilice (stage 3) se separa
+// a su propio paquete vía layout `wit/deps/` (protocol-guardian; ADR 0032).
 package norte:plugin@0.3.0;
 
 /// La puerta de host MÍNIMA (demuestra el gating host↔guest): un plugin puede

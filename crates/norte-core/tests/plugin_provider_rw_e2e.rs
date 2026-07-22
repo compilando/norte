@@ -103,6 +103,20 @@ async fn plugin_provider_camino_de_escritura() {
     p.rename(&hello, &renombrado).await.expect("rename");
     assert_eq!(p.stat(&hello).await.unwrap_err(), Error::NotFound);
     assert_eq!(read_all(&p, &renombrado).await.unwrap(), b"hola norte\n");
+
+    // ---- regla 1: un NOMBRE no-UTF8 (Segment válido) round-trip por write y
+    // rename byte-exacto ----
+    let hostil = child(&root, b"h\xff\xfe.bin");
+    let mut sink = p.write(&hostil).await.expect("abre writer nombre hostil");
+    sink.write(Bytes::from_static(b"x")).await.expect("chunk");
+    sink.commit().await.expect("commit");
+    assert!(p.stat(&hostil).await.is_ok(), "el nombre no-UTF8 se crea");
+    let hostil2 = child(&root, b"h\xfe\xff.mov");
+    p.rename(&hostil, &hostil2)
+        .await
+        .expect("rename nombre hostil");
+    assert_eq!(p.stat(&hostil).await.unwrap_err(), Error::NotFound);
+    assert_eq!(read_all(&p, &hostil2).await.unwrap(), b"x");
 }
 
 fn build_guest(name: &str) -> Option<PathBuf> {

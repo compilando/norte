@@ -100,8 +100,8 @@ impl PluginProvider {
 }
 
 /// Traduce el error lógico del guest a la taxonomía del protocolo. `other` y
-/// las variantes de escritura (aún no alcanzables en stage 2) caen a `Internal`
-/// no-panic (categoría gruesa, sin inventar detalle).
+/// `other` cae a `Internal` no-panic (categoría gruesa, sin inventar detalle);
+/// `conflict`/`no-space` (alcanzables en el camino de escritura) se mapean fiel.
 fn map_vfs_error(e: provider_iface::VfsError) -> Error {
     use provider_iface::VfsError as V;
     match e {
@@ -353,13 +353,30 @@ impl Provider for PluginProvider {
 
 /// `ByteSink` (#30 stage 2b-write) respaldado por un `writer` resource del
 /// guest: `write` añade un chunk, `commit`/`abort` publican o descartan y
-/// SIEMPRE liberan el handle. Soltar el sink sin commit/abort deja el handle en
-/// la tabla de recursos del store hasta que el provider muera (best-effort, como
-/// permite el contrato — solo commit/abort explícitos garantizan la limpieza).
+/// liberan el handle (salvo si el guest atrapa — el trap envenena la instancia,
+/// que se descarta). Soltar el sink sin commit/abort dispara un `abort`+drop
+/// best-effort en [`Drop`] (contrato de `ByteSink`; síncrono con `try_lock`).
 struct PluginByteSink {
     inst: Arc<Mutex<ProviderInstance>>,
-    /// `Some` mientras el handle no se haya liberado; `commit`/`abort` lo toman.
+    /// `Some` mientras el handle no se haya liberado; `commit`/`abort`/`Drop` lo
+    /// toman.
     writer: Option<norte_plugin_host::WriterHandle>,
+}
+
+impl Drop for PluginByteSink {
+    fn drop(&mut self) {
+        // Best-effort (contrato de `ByteSink`): soltar sin commit/abort limpia
+        // el staging del guest. Síncrono (las llamadas al guest lo son) con
+        // `try_lock` — jamás bloquea: en Drop no hay ninguna op en vuelo sobre
+        // este sink, y si por lo que fuera el mutex estuviera tomado, se cede el
+        // handle a la tabla de recursos del store hasta que el provider muera.
+        if let Some(w) = self.writer.take()
+            && let Ok(mut g) = self.inst.try_lock()
+        {
+            let _ = g.writer_abort(w);
+            let _ = g.writer_drop(w);
+        }
+    }
 }
 
 impl PluginByteSink {
@@ -401,7 +418,8 @@ impl ByteSink for PluginByteSink {
                 .writer_commit(w)
                 .map_err(|e| map_runtime_error(&e))?
                 .map_err(map_vfs_error);
-            // El handle se libera SIEMPRE, incluso si el commit falló.
+            // El handle se libera tras un commit lógico (OK o VfsError); si el
+            // guest ATRAPÓ, `?` ya salió y la instancia envenenada se descarta.
             let _ = g.writer_drop(w);
             r
         })

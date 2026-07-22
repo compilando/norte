@@ -130,8 +130,12 @@ El WIT es un contrato de wire (Component Model). Disciplina:
 
 - **Un cambio de la interfaz bumpea el paquete.** Añadir `provider` +
   `norte-provider` subió `norte:plugin@0.1.0 → 0.2.0`; el camino de escritura
-  (writer resource + make-dir/remove/rename) subió `0.2.0 → 0.3.0` (todo
-  aditivo — previewer/command/host-log intactos).
+  (writer resource + make-dir/remove/rename) subió `0.2.0 → 0.3.0`. Para
+  previewer/command/host-log es ADITIVO. Para un GUEST de `provider`, en cambio,
+  añadir items a una interfaz EXPORTADA es ROMPEDOR (un guest a 0.2.0 no
+  satisface el world 0.3.0); es seguro porque `provider` es pre-release sin
+  guests publicados y el bump de minor bajo 0.x codifica "ruptura permitida" —
+  el único guest se bumpea en lockstep.
 - **`provider` está en EVOLUCIÓN** (stage 3 añade escritura, hace crecer `caps`
   y `vfs-error`, y sus `record`/`enum` WIT no son forward-extensibles). Idealmente
   viviría en su **propio paquete** (`norte:provider@…`) para versionar
