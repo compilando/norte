@@ -248,6 +248,135 @@ async fn connect_concurrente_no_duplica_registro() {
     assert_eq!(conn.connects.load(Ordering::SeqCst), antes);
 }
 
+/// Conector con puerta: `connect` cuenta la llamada y espera a que el test
+/// abra la puerta — permite tener DOS waiters pendientes del mismo dial.
+struct GatedConnector {
+    connects: AtomicUsize,
+    gate: tokio::sync::Semaphore,
+}
+
+impl GatedConnector {
+    fn new() -> Self {
+        Self {
+            connects: AtomicUsize::new(0),
+            gate: tokio::sync::Semaphore::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl RemoteConnector for GatedConnector {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+        self.connects.fetch_add(1, Ordering::SeqCst);
+        let _permit = self.gate.acquire().await.expect("gate viva");
+        Ok(Connected {
+            provider: Arc::new(EcoProvider),
+            warnings: Vec::new(),
+        })
+    }
+    async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+/// #47: dos peticiones concurrentes al mismo host esperan el MISMO dial —
+/// exactamente UN connect, jamás una sesión duplicada transitoria.
+#[tokio::test]
+async fn connect_concurrente_es_single_flight() {
+    let engine = Arc::new(Engine::new());
+    let conn = Arc::new(GatedConnector::new());
+    engine.set_connector(conn.clone());
+
+    let e1 = Arc::clone(&engine);
+    let t1 = tokio::spawn(async move { e1.stat(&vp("sftp://h/x")).await });
+    let e2 = Arc::clone(&engine);
+    let t2 = tokio::spawn(async move { e2.stat(&vp("sftp://h/y")).await });
+    // Espera a que el dial haya arrancado (los dos stats ya en vuelo).
+    while conn.connects.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+    tokio::task::yield_now().await;
+    conn.gate.add_permits(2);
+    t1.await.expect("join").expect("stat 1");
+    t2.await.expect("join").expect("stat 2");
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 1, "un solo dial");
+}
+
+/// Marca `cancelled` cuando el future del connect se DROPEA a mitad.
+struct DropProbe(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for DropProbe {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Conector colgado que detecta la cancelación (drop del future en vuelo).
+struct ProbedHangingConnector {
+    started: AtomicUsize,
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait]
+impl RemoteConnector for ProbedHangingConnector {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        let _probe = DropProbe(self.cancelled.clone());
+        std::future::pending().await
+    }
+    async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+/// #47: si TODOS los waiters abandonan (drop del future — p. ej. `rpc.cancel`
+/// dropea el dispatch, #72), el dial en vuelo se CANCELA y la clave queda
+/// limpia: un acceso posterior vuelve a marcar.
+#[tokio::test]
+async fn abandono_de_todos_los_waiters_cancela_el_dial() {
+    let engine = Arc::new(Engine::new());
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let conn = Arc::new(ProbedHangingConnector {
+        started: AtomicUsize::new(0),
+        cancelled: cancelled.clone(),
+    });
+    engine.set_connector(conn.clone());
+
+    let e1 = Arc::clone(&engine);
+    let waiter = tokio::spawn(async move { e1.stat(&vp("sftp://h/x")).await });
+    while conn.started.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+    waiter.abort();
+    let _ = waiter.await;
+    // El job procesa la cancelación en su propia task: dale turnos.
+    for _ in 0..50 {
+        if cancelled.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(cancelled.load(Ordering::SeqCst), "el dial se canceló");
+
+    // La clave quedó limpia: el siguiente acceso vuelve a marcar (no se
+    // queda esperando a un job zombi).
+    let e2 = Arc::clone(&engine);
+    let again = tokio::spawn(async move { e2.stat(&vp("sftp://h/x")).await });
+    for _ in 0..500 {
+        if conn.started.load(Ordering::SeqCst) >= 2 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        conn.started.load(Ordering::SeqCst),
+        2,
+        "re-marca tras limpiar"
+    );
+    again.abort();
+    let _ = again.await;
+}
+
 /// `trust_host_key` sin conector configurado es Unsupported, no un panic.
 #[tokio::test]
 async fn trust_sin_conector_es_unsupported() {
