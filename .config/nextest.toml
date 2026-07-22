@@ -1,0 +1,15 @@
+# Configuración de nextest del gate (`just ci`).
+
+# Los tests de FTP in-process (norte-connect) arrancan libunftp sobre sockets
+# TCP reales con puerto EFÍMERO (patrón bind-then-drop, trampa conocida): bajo
+# alta concurrencia otro test puede robar el puerto en la ventana entre el
+# drop y el re-bind, o el arranque del servidor se pasa del timeout por
+# contención de CPU. Se agrupan en un test-group serial (1 hilo) — el resto
+# del workspace sigue en paralelo. No cambia QUÉ se testea, solo el
+# scheduling.
+[test-groups]
+ftp-serial = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(norte-connect) and binary(ftp)'
+test-group = 'ftp-serial'

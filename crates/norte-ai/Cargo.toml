@@ -1,0 +1,35 @@
+[package]
+name = "norte-ai"
+description = "Abstracción de proveedores de modelos (AiProvider): chat streaming, embeddings y capabilities — Anthropic, Ollama y OpenAI-compatible (ADR 0031)"
+license = "AGPL-3.0-only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+futures.workspace = true
+tokio = { workspace = true, features = ["rt", "net", "io-util", "time"] }
+bytes.workspace = true
+async-trait.workspace = true
+bitflags = { workspace = true }
+# Cliente HTTP (ADR 0031, regla 8): reqwest ya vive en el árbol como
+# transitiva de opendal con la MISMA pila rustls/aws-lc-rs; aquí pasa a dep
+# directa (streaming SSE/NDJSON de los proveedores). default-features=false:
+# solo json+stream+rustls — sin cookies, sin proxies del sistema, sin gzip.
+reqwest = { workspace = true }
+# El Secret zeroizing se INYECTA desde el core (spec §9: las credenciales
+# jamás viven en config ni las lee este crate; resolución env→keyring→age en
+# norte-connect, que ya es AGPL como este crate).
+norte-connect.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

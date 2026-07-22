@@ -4173,6 +4173,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "norte-ai"
+version = "0.3.0-alpha.1"
+dependencies = [
+ "async-trait",
+ "bitflags 2.13.0",
+ "bytes",
+ "futures",
+ "norte-connect",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "norte-cli"
 version = "0.3.0-alpha.1"
 dependencies = [
@@ -6017,6 +6034,8 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
+ "serde",
+ "serde_json",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
