@@ -15,6 +15,7 @@
 mod display;
 pub mod keymap;
 pub mod nav;
+pub mod openers;
 mod pane;
 mod sort;
 pub mod viewer;

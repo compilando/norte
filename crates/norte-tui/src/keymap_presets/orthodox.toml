@@ -28,6 +28,7 @@ keymap = [
     { on = ["shift+f8"], run = "pane.delete-permanent" },
     { on = ["ctrl+k"], run = "task.cancel" },
     { on = ["f3"], run = "pane.view" },
+    { on = ["f4"], run = "pane.open" },
     { on = ["/"], run = "pane.quick-search" },
     { on = ["alt+down"], run = "pane.history" },
     { on = ["alt+f7"], run = "pane.search" },

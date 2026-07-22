@@ -11,5 +11,5 @@
 mod native_path;
 mod provider;
 
-pub use native_path::vpath_from_native;
+pub use native_path::{vpath_from_native, vpath_to_native};
 pub use provider::LocalProvider;

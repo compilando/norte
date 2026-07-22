@@ -267,6 +267,8 @@ async fn main() -> Result<()> {
     // Copia de la hotlist en el App (spec 2026-07-18): la fuente del popup
     // `Ctrl+D`; se refresca en cada hot-reload OK (`reload_config`).
     app.hotlist = cfg.hotlist.clone();
+    // Openers declarativos (#28): fuente de `pane.open` (F4).
+    app.openers = cfg.openers.clone();
     // Canales del modo daemon (None en embebido): tasks de otros frontends
     // y avisos de (re)conexión — se drenan en el loop principal.
     let foreign_tasks = backend.take_foreign_tasks();
@@ -915,6 +917,13 @@ async fn run(
                                     // Un cd (nav.parent…) apagó el modo virtual del
                                     // pane de búsqueda: suelta el run y cancela.
                                     reap_search_run(app, &mut search_run);
+                                    // #28: `pane.open` dejó un comando externo
+                                    // resuelto — el run loop (dueño de la
+                                    // terminal) sondea el binario y lo lanza.
+                                    if let Some((program, argv)) = app.pending_open.take() {
+                                        app.message =
+                                            Some(launch_opener(terminal, program, argv).await);
+                                    }
                                 }
                                 Resolution::Pending(_) => {
                                     app.pending = active
@@ -1238,6 +1247,8 @@ async fn reload_config(
                 // La copia de hotlist también (un popup abierto conserva su
                 // snapshot hasta reabrirse — items congelados a propósito).
                 app.hotlist.clone_from(&cfg.hotlist);
+                // Openers (#28): recargados con el resto de la config.
+                app.openers = cfg.openers.clone();
                 // Bindings `lua:` descartados del keymap de PROYECTO
                 // (seguridad — mismo aviso que en el arranque; máximo
                 // porque `global` se fusiona en ambas pantallas).
@@ -2200,6 +2211,116 @@ fn reap_search_run(app: &App, search_run: &mut Option<SearchRun>) {
     }
 }
 
+/// Resuelve el opener (#28) del fichero seleccionado y, si TODO valida, deja
+/// el `(programa, argv)` en `app.pending_open` para que el run loop lo lance
+/// (es dueño de la terminal). Cada fallo va a la barra — degradación limpia,
+/// jamás un lanzamiento a ciegas: sin fichero (no-op), remoto/archivo
+/// (`msg-open-remote`), sin opener para el mime (`msg-open-no-opener`), o
+/// binario ausente (`msg-open-missing-program`).
+fn resolve_opener(app: &mut App) {
+    use norte_frontend::openers;
+    let Some(path) = app
+        .focused()
+        .selected()
+        .filter(|e| matches!(e.kind, EntryKind::File | EntryKind::Symlink))
+        .map(|e| e.path.clone())
+    else {
+        return;
+    };
+    // Ruta nativa: SOLO `file://` local; archive/sftp/s3 → sin path nativo.
+    let Ok(native) = norte_vfs_local::vpath_to_native(&path) else {
+        app.message = Some(t("msg-open-remote"));
+        return;
+    };
+    let mime = openers::guess_mime(
+        path.file_name()
+            .map_or(&[][..], norte_proto::Segment::as_bytes),
+    );
+    let Some(opener) = app.openers.resolve(mime) else {
+        app.message = Some(ta("msg-open-no-opener", &[("mime", mime)]));
+        return;
+    };
+    let program = opener.program().to_owned();
+    // La sonda del binario en el PATH (`program_available`) es I/O de disco:
+    // NO se hace aquí (camino async) — el run loop la corre en spawn_blocking
+    // junto al lanzamiento (regla 2).
+    // `%d` = el directorio del pane (nativo); si por lo que sea no convierte,
+    // el padre del propio fichero.
+    let dir = norte_vfs_local::vpath_to_native(app.focused().dir()).unwrap_or_else(|_| {
+        native
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default()
+    });
+    app.pending_open = Some((program, opener.argv(&[&native], &dir)));
+}
+
+/// Sondea el binario del opener en el PATH (#28) — I/O de disco en
+/// `spawn_blocking`, JAMÁS en el executor async (regla 2) — y, si existe,
+/// suspende el TUI y lo lanza. Devuelve el mensaje de barra LOCALIZADO del
+/// resultado (binario ausente / lanzado / fallo de spawn).
+async fn launch_opener(
+    terminal: &mut ratatui::DefaultTerminal,
+    program: String,
+    argv: Vec<std::ffi::OsString>,
+) -> String {
+    let prog = program.clone();
+    let available =
+        tokio::task::spawn_blocking(move || norte_frontend::openers::program_available(&prog))
+            .await
+            .unwrap_or(false);
+    if !available {
+        return ta("msg-open-missing-program", &[("program", &program)]);
+    }
+    match run_opener(terminal, argv).await {
+        Ok(_) => ta("msg-open-launched", &[("program", &program)]),
+        Err(e) => ta(
+            "msg-open-failed",
+            &[("program", &program), ("error", &e.to_string())],
+        ),
+    }
+}
+
+/// Suspende el TUI (sale de la pantalla alternativa + raw mode), lanza el
+/// comando externo con stdio HEREDADO (el usuario interactúa con `bat`/editor
+/// directamente) y espera su fin en `spawn_blocking` (regla 2). La terminal se
+/// restaura SIEMPRE una vez que se dejó el modo TUI — falle el hijo, se rompa
+/// el join o falle una syscall intermedia — para no dejarla en raw-off. #28.
+async fn run_opener(
+    terminal: &mut ratatui::DefaultTerminal,
+    argv: Vec<std::ffi::OsString>,
+) -> std::io::Result<std::process::ExitStatus> {
+    use crossterm::terminal::{
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    };
+    // Invariante: `Opener::argv` siempre empuja el binario (`command[0]`), y
+    // `parse` rechaza `command` vacío — así `argv[0]` nunca panica.
+    debug_assert!(
+        !argv.is_empty(),
+        "el argv de un opener siempre trae el binario"
+    );
+    disable_raw_mode()?;
+    // A partir de aquí la terminal está fuera del modo TUI: restaurar pase lo
+    // que pase antes de devolver.
+    crossterm::execute!(std::io::stdout(), LeaveAlternateScreen)?;
+    let child = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .status()
+    })
+    .await;
+    let mut restore = || -> std::io::Result<()> {
+        crossterm::execute!(std::io::stdout(), EnterAlternateScreen)?;
+        enable_raw_mode()?;
+        terminal.clear()
+    };
+    let restored = restore();
+    // El resultado del hijo prima; si además falló la restauración, se propaga.
+    let status = child.map_err(std::io::Error::other)?;
+    restored?;
+    status
+}
+
 /// Ejecuta un comando nombrado (ADR 0006: los mismos nombres que verán la
 /// palette y el wire). Un error de listado en un cd NO tumba el TUI: el
 /// pane se queda donde estaba (aviso visible: barra de mensajes, issue #20).
@@ -2314,6 +2435,7 @@ async fn dispatch(
                 open_viewer(app, backend, events, path).await;
             }
         }
+        "pane.open" => resolve_opener(app),
         "viewer.close" => app.viewer = None,
         "viewer.up" => viewer_do(app, |v| v.scroll_up(1)),
         "viewer.down" => viewer_do(app, |v| v.scroll_down(1)),

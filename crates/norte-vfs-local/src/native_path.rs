@@ -160,6 +160,43 @@ fn is_bare_unc_body(body: &[u8]) -> bool {
     !server.is_empty() && !share.is_empty() && server != b"." && server != b"?"
 }
 
+/// Convierte un `VPath` `file://` (sin authority) a su path NATIVO — la
+/// inversa de [`vpath_from_native`]. La base es la raíz del OS (igual que
+/// [`crate::LocalProvider::os_root`]): `/` en unix; en Windows la unidad/UNC
+/// que viaje en el primer segmento. Byte a byte (regla 1).
+///
+/// Uso: un frontend que necesita la ruta real para lanzar un programa
+/// externo (opener, #28) sobre un fichero local.
+///
+/// # Errors
+/// [`Error::InvalidPath`] si el scheme no es `file`, si lleva authority (es
+/// de OTRO provider), o si algún segmento no es representable nativamente.
+///
+/// ```
+/// use norte_proto::{Scheme, Segment, VPath};
+/// let vp = VPath::root(Scheme::new("file").unwrap(), None)
+///     .join(Segment::new(b"etc".to_vec()).unwrap())
+///     .join(Segment::new(b"hosts".to_vec()).unwrap());
+/// # #[cfg(unix)]
+/// assert_eq!(
+///     norte_vfs_local::vpath_to_native(&vp).unwrap(),
+///     std::path::Path::new("/etc/hosts")
+/// );
+/// ```
+pub fn vpath_to_native(p: &VPath) -> Result<PathBuf, Error> {
+    if p.scheme() != "file" || p.authority().is_some() {
+        return Err(Error::InvalidPath);
+    }
+    // Misma base que `LocalProvider::os_root`: vacía en Windows (el primer
+    // segmento es la unidad/UNC), `/` en unix.
+    let base = if cfg!(windows) {
+        PathBuf::new()
+    } else {
+        PathBuf::from("/")
+    };
+    to_native(&base, p)
+}
+
 /// Convierte un path NATIVO absoluto a `VPath` (`file:///…`), byte a byte.
 /// La inversa de la resolución de [`crate::LocalProvider::os_root`].
 ///
@@ -274,6 +311,22 @@ mod root_base_tests {
             Err(Error::InvalidPath)
         );
         assert_eq!(os_root_base(br"\\?\C:\Windows"), Err(Error::InvalidPath));
+    }
+
+    /// #28 encoding: un nombre con bytes NO-UTF8 sobrevive byte a byte por el
+    /// round-trip nativo → `vpath_to_native` → nativo (unix). Guard del inverso
+    /// de `vpath_from_native` a nivel de fixture.
+    #[cfg(unix)]
+    #[test]
+    fn vpath_to_native_round_trip_bytes_no_utf8() {
+        use super::vpath_to_native;
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        use std::path::Path;
+        let native = Path::new(OsStr::from_bytes(b"/x/\xff\xfe.txt"));
+        let vpath = super::vpath_from_native(native).expect("vpath");
+        let back = vpath_to_native(&vpath).expect("nativo");
+        assert_eq!(back.as_os_str().as_bytes(), b"/x/\xff\xfe.txt");
     }
 
     #[test]

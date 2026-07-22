@@ -491,6 +491,13 @@ pub struct App {
     /// Diálogo de búsqueda viva abierto (`Alt+F7`, liveSearch T6): None =
     /// cerrado. Captura imprimibles como el `name_input` del popup de nav.
     pub search_dialog: Option<SearchDialog>,
+    /// Openers declarativos fusionados (#28): clonados en arranque y en cada
+    /// hot-reload OK. Fuente de `pane.open` (F4). Vacío = sin openers.
+    pub openers: norte_frontend::openers::OpenersConfig,
+    /// Comando externo resuelto por `pane.open` y pendiente de lanzar (#28):
+    /// `(programa, argv)`. `dispatch` lo fija tras validar; el run loop —
+    /// dueño de la terminal — suspende el TUI, lo ejecuta y restaura.
+    pub pending_open: Option<(String, Vec<std::ffi::OsString>)>,
 }
 
 /// Qué popup de navegación está abierto (spec 2026-07-18).
@@ -737,6 +744,8 @@ impl App {
             hotlist: Vec::new(),
             nav_popup: None,
             search_dialog: None,
+            openers: norte_frontend::openers::OpenersConfig::empty(),
+            pending_open: None,
         }
     }
 
