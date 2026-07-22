@@ -188,3 +188,69 @@ async fn commit_ambiguo_archivo_vacio() {
     assert_eq!(es.len(), 1);
     assert_eq!(es[0].op, "created");
 }
+
+/// #32.2 — mkdir ambiguo: el mkdir del dir destino APLICA su efecto y
+/// devuelve transitorio; el retry ve `Conflict`. Antes: bajo política Fail
+/// la task FALLABA con el dir bien creado, y bajo merge completaba pero SIN
+/// `Created` del dir (el undo de M3 no lo conocía). Ahora `ensure_dir`
+/// pre-statea el destino: si NO preexistía, el Conflict ambiguo es nuestra
+/// primera aplicación — la task completa y el journal registra el dir.
+#[tokio::test]
+async fn mkdir_ambiguo_no_pierde_el_created() {
+    let (engine, mem, journal) = setup().await;
+    mem.mkdir(&vp("mem:///d")).await.expect("mkdir src");
+    write_file(&mem, "mem:///d/f.bin", b"contenido").await;
+    // La PRÓXIMA mutación (el mkdir de mem:///d2) aplica y da transitorio.
+    mem.faults().ambiguous_mutations(1);
+
+    let h = engine
+        .copy(&vp("mem:///d"), &vp("mem:///d2"))
+        .await
+        .expect("copy");
+    assert_eq!(
+        h.join().await,
+        TaskState::Completed,
+        "el mkdir aplicó: la task no debe fallar por el transitorio"
+    );
+    // El árbol copió entero.
+    assert_eq!(
+        mem.stat(&vp("mem:///d2/f.bin")).await.unwrap().size,
+        Some(9)
+    );
+    // Y el journal tiene el `Created` del DIR (regla 4): el undo lo conoce.
+    let es = journal.journal().entries().await.expect("entries");
+    let dir_created = es
+        .iter()
+        .filter(|e| e.op == "created" && e.path == b"mem:///d2")
+        .count();
+    assert_eq!(dir_created, 1, "un único Created del dir ambiguo: {es:?}");
+}
+
+/// #32.2 (contracara): un dir destino PREEXISTENTE bajo merge sigue SIN
+/// `Created` — el pre-stat sabe que no es nuestro y el undo jamás lo tocará.
+#[tokio::test]
+async fn mkdir_sobre_dir_preexistente_no_emite_created() {
+    let (engine, mem, journal) = setup().await;
+    mem.mkdir(&vp("mem:///d")).await.expect("mkdir src");
+    write_file(&mem, "mem:///d/f.bin", b"contenido").await;
+    mem.mkdir(&vp("mem:///d2")).await.expect("dst preexistente");
+
+    let h = engine
+        .copy_with(
+            &vp("mem:///d"),
+            &vp("mem:///d2"),
+            norte_core::TransferOptions {
+                on_collision: norte_proto::CollisionPolicy::Overwrite,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("copy");
+    assert_eq!(h.join().await, TaskState::Completed);
+    let es = journal.journal().entries().await.expect("entries");
+    assert!(
+        !es.iter()
+            .any(|e| e.op == "created" && e.path == b"mem:///d2"),
+        "un dir preexistente jamás gana Created: {es:?}"
+    );
+}

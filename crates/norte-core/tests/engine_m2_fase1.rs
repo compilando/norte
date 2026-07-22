@@ -279,11 +279,12 @@ async fn mkdir_ambiguo_bajo_merge_completa_la_copia() {
     assert_eq!(read_all(&*mem, "mem:///dst/f").await.unwrap(), b"data");
 }
 
-/// Mismo timeout post-efecto bajo `Fail`: el engine NO adivina — Conflict,
-/// fail-safe documentado (el dir quedó creado; el usuario reintenta y ve
-/// el estado real).
+/// Mismo timeout post-efecto bajo `Fail`: con el pre-stat de #32.2 el
+/// engine YA no adivina — SABE que el destino no preexistía, así que el
+/// Conflict del retry es nuestra primera aplicación: la copia COMPLETA
+/// (antes: Conflict fail-safe con el dir bien creado y la task fallida).
 #[tokio::test]
-async fn mkdir_ambiguo_bajo_fail_es_conflict() {
+async fn mkdir_ambiguo_bajo_fail_completa() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///src")).await.unwrap();
     write_file(&mem, "mem:///src/f", b"data").await;
@@ -293,12 +294,8 @@ async fn mkdir_ambiguo_bajo_fail_es_conflict() {
         .copy(&vp("mem:///src"), &vp("mem:///dst"))
         .await
         .unwrap();
-    match handle.join().await {
-        TaskState::Failed {
-            error: Error::Conflict { .. },
-        } => {}
-        other => panic!("esperaba Conflict fail-safe, fue {other:?}"),
-    }
+    assert_eq!(handle.join().await, TaskState::Completed);
+    assert_eq!(read_all(&*mem, "mem:///dst/f").await.unwrap(), b"data");
 }
 
 /// Timeout POST-efecto al preservar un symlink: el reintento ve `Conflict`,
