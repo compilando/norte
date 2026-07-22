@@ -98,3 +98,23 @@ default per task routing). Search: embed the query, brute-force cosine top-k
   unjournaled mutation (regla 4 intact by construction).
 - Gemini/Vertex, vision, tool-use and prompt-side file CONTENT (beyond
   names) stay out of v1; each needs its own denied-paths/consent review.
+
+### Hardening from the security review (applied)
+
+- `OllamaProvider::is_local()` derives the flag from the configured
+  `base_url` host and returns `true` only for loopback (`127.0.0.0/8`,
+  `::1`, `localhost`). A remote host configured as an ollama provider is
+  NOT local, so `local_only` refuses it — the flag was unconditionally
+  `true` and let a remote endpoint bypass `local_only`.
+- The core caps the accumulated model reply at 512 KiB (a legitimate
+  `[{from,to}]` plan fits with room to spare) — the per-line 1 MiB cap in
+  the HTTP layer did not bound the total, so an endless stream of small
+  deltas could OOM the process.
+- `ai_rename_plan` omits from the prompt any listed entry whose path is
+  under a `denied_prefix` — the gate only checks the root `dir`, so a
+  denied directory that is a direct child of `dir` would otherwise have
+  its name leaked in the basenames.
+- `validate_rename_reply` rejects a `to` containing `\` (Windows path
+  separator → traversal), in addition to the POSIX cases `Segment`
+  already rejects.
+

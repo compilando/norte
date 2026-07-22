@@ -32,22 +32,31 @@ pub struct OllamaProvider {
     base_url: String,
     model: String,
     client: reqwest::Client,
+    /// `true` solo si el `base_url` apunta a loopback (`127.0.0.0/8`, `::1`,
+    /// `localhost`). Un host remoto configurado como ollama NO es local — el
+    /// gate `local_only` del core lo rechaza (security MAJOR del review #M4:
+    /// `is_local()` incondicional dejaba exfiltrar nombres a un host remoto).
+    local: bool,
 }
 
 impl OllamaProvider {
     /// Construye el proveedor. `base_url` `None` = el daemon local por
-    /// defecto (`http://127.0.0.1:11434`). Sin secreto: Ollama es local.
+    /// defecto (`http://127.0.0.1:11434`). Sin secreto: Ollama es local. El
+    /// flag `is_local` se DERIVA del host del `base_url` (solo loopback).
     #[must_use]
     pub fn new(base_url: Option<String>, model: String) -> Self {
+        let base_url = base_url
+            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
+            .trim_end_matches('/')
+            .to_string();
+        let local = base_url_is_loopback(&base_url);
         Self {
-            base_url: base_url
-                .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
-                .trim_end_matches('/')
-                .to_string(),
+            base_url,
             model,
             // Client::new() solo panica si la pila TLS no inicializa; con
             // rustls compilado estático es un invariante del build.
             client: reqwest::Client::new(),
+            local,
         }
     }
 
@@ -77,6 +86,25 @@ impl OllamaProvider {
             body["options"] = json!({ "num_predict": n });
         }
         Ok(body)
+    }
+}
+
+/// `true` si el host del `base_url` es loopback (`127.0.0.0/8`, `::1`,
+/// `localhost`). Un `base_url` sin host parseable = NO local (fail-closed:
+/// ante la duda, el gate `local_only` lo rechaza). No hace resolución DNS —
+/// un nombre que no sea literalmente `localhost` se trata como remoto.
+fn base_url_is_loopback(base_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(base_url) else {
+        return false;
+    };
+    match url.host_str() {
+        Some("localhost") => true,
+        Some(h) => h
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback()),
+        None => false,
     }
 }
 
@@ -120,7 +148,7 @@ impl AiProvider for OllamaProvider {
     }
 
     fn is_local(&self) -> bool {
-        true
+        self.local
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(provider = "ollama"))]
@@ -273,5 +301,22 @@ mod tests {
         let p = provider(&srv.base_url);
         let err = chat_err(&p, ChatRequest::new(vec![ChatMessage::user("x")])).await;
         assert!(matches!(err, AiError::Http { status: 500 }), "{err:?}");
+    }
+
+    /// security MAJOR #M4: `is_local()` es `true` SOLO para loopback. Un host
+    /// remoto configurado como ollama NO es local → el gate `local_only` del
+    /// core lo rechaza.
+    #[test]
+    fn is_local_solo_loopback() {
+        let loc = |u: &str| OllamaProvider::new(Some(u.into()), "m".into()).is_local();
+        assert!(loc("http://127.0.0.1:11434"));
+        assert!(loc("http://localhost:11434"));
+        assert!(loc("http://[::1]:11434"));
+        assert!(loc("http://127.0.0.5"));
+        assert!(!loc("http://attacker.example:11434"));
+        assert!(!loc("http://10.0.0.9:11434"));
+        assert!(!loc("http://192.168.1.5:11434"));
+        // Default (None) es loopback.
+        assert!(OllamaProvider::new(None, "m".into()).is_local());
     }
 }

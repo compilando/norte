@@ -187,3 +187,68 @@ async fn respuesta_hostil_no_produce_plan_parcial() {
     write_file(&mem, "mem:///d/A").await;
     assert!(engine.ai_rename_plan(&vp("mem:///d"), "x").await.is_err());
 }
+
+struct CapturingAi {
+    captured: Arc<std::sync::Mutex<String>>,
+}
+#[async_trait]
+impl AiProvider for CapturingAi {
+    #[allow(clippy::unnecessary_literal_bound)]
+    fn id(&self) -> &str {
+        "cap"
+    }
+    fn capabilities(&self) -> AiCaps {
+        AiCaps::STREAMING
+    }
+    fn is_local(&self) -> bool {
+        true
+    }
+    async fn chat(&self, req: ChatRequest) -> Result<ChatStream, AiError> {
+        self.captured
+            .lock()
+            .unwrap()
+            .clone_from(&req.messages[0].content);
+        Ok(futures::stream::iter(vec![Ok("[]".to_owned())]).boxed())
+    }
+    async fn list_models(&self) -> Result<Vec<ModelInfo>, AiError> {
+        Ok(vec![])
+    }
+}
+
+/// security MINOR #M4: el nombre de un dir HIJO bajo un `denied_prefix` no
+/// sale al proveedor — se omite del listado antes de construir el prompt (el
+/// gate solo comprueba el `dir` raíz).
+#[tokio::test]
+async fn child_bajo_denied_prefix_no_sale() {
+    let cfg = AiConfig {
+        enabled: true,
+        denied_prefixes: vec![vp("mem:///work/secret")],
+        ..Default::default()
+    };
+    // El proveedor CAPTURA el prompt para verificar que 'secret' no aparece.
+    let captured = Arc::new(std::sync::Mutex::new(String::new()));
+    let engine = Engine::new();
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    engine.set_ai_provider(Arc::new(CapturingAi {
+        captured: Arc::clone(&captured),
+    }));
+    engine.set_ai_config(cfg);
+    mkdirp(&mem, "mem:///work").await;
+    mkdirp(&mem, "mem:///work/secret").await;
+    write_file(&mem, "mem:///work/visible.txt").await;
+
+    engine
+        .ai_rename_plan(&vp("mem:///work"), "x")
+        .await
+        .expect("plan (vacío)");
+    let prompt = captured.lock().unwrap().clone();
+    assert!(
+        prompt.contains("visible.txt"),
+        "el visible sí sale: {prompt}"
+    );
+    assert!(
+        !prompt.contains("secret"),
+        "el dir denegado NO debe salir: {prompt}"
+    );
+}

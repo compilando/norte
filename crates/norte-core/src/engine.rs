@@ -414,6 +414,9 @@ impl Engine {
     ) -> Result<crate::ai::RenamePlan, Error> {
         use futures::StreamExt;
 
+        /// Tope del reply acumulado (#M4 security): ver el bucle de drenado.
+        const MAX_REPLY_BYTES: usize = 512 * 1024;
+
         let provider = self
             .ai_provider
             .read()
@@ -438,11 +441,24 @@ impl Engine {
         }
 
         // Nombres base de los archivos del dir (a través del provider, jamás
-        // el FS directo — regla 9).
+        // el FS directo — regla 9). Se OMITE toda entrada cuya ruta caiga
+        // bajo un `denied_prefix` (security MINOR del review #M4: el nombre
+        // de un dir denegado que sea hijo directo de `dir` no debe salir —
+        // el gate solo comprueba `dir`).
+        let denied = {
+            let config = self.ai_config.read().expect("ai_config lock sano");
+            config.denied_prefixes.clone()
+        };
         let mut stream = self.list(dir).await?;
         let mut names = Vec::new();
         while let Some(item) = stream.next().await {
             let entry = item?;
+            if denied
+                .iter()
+                .any(|prefix| crate::policy::is_under(prefix, &entry.path))
+            {
+                continue;
+            }
             if let Some(name) = entry.path.file_name() {
                 names.push(name.clone());
             }
@@ -454,9 +470,21 @@ impl Engine {
             .chat(req)
             .await
             .map_err(|e| ai_to_proto_error(&e))?;
+        // Cota del reply (security MAJOR del review #M4): un endpoint
+        // comprometido/MITM puede stremear deltas sub-1MiB sin fin (el tope
+        // por línea de http.rs no acota el ACUMULADO) → OOM. Un plan
+        // `[{from,to}]` legítimo cabe de sobra en 512 KiB.
         let mut reply = String::new();
         while let Some(delta) = chat.next().await {
-            reply.push_str(&delta.map_err(|e| ai_to_proto_error(&e))?);
+            let delta = delta.map_err(|e| ai_to_proto_error(&e))?;
+            if reply.len() + delta.len() > MAX_REPLY_BYTES {
+                tracing::warn!(
+                    max = MAX_REPLY_BYTES,
+                    "respuesta del proveedor de IA sobre el tope; abortando"
+                );
+                return Err(Error::Internal { panic: false });
+            }
+            reply.push_str(&delta);
         }
         crate::ai::validate_rename_reply(&reply, &names).map_err(|e| ai_to_proto_error(&e))
     }

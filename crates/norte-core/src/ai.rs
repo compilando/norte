@@ -363,14 +363,15 @@ pub fn validate_rename_reply(reply: &str, inputs: &[Segment]) -> Result<RenamePl
                 "`from` marcador de archivo prohibido".into(),
             ));
         }
-        // `to`: Segment rechaza `/`, `..`, `.`, NUL, vacío. `!` se rechaza
-        // aparte (marcador de archivo-como-directorio, ADR 0018).
+        // `to`: Segment rechaza `/`, `..`, `.`, NUL, vacío. `!` (marcador de
+        // archivo-como-directorio, ADR 0018) y `\` se rechazan aparte: el
+        // backslash es separador en Windows → traversal (`..\evil`), y el
+        // camino IA es superficie nueva por la que llegan bytes hostiles
+        // (security MINOR del review #M4).
         let to = Segment::new(r.to.clone().into_bytes())
             .map_err(|_| AiError::Protocol(format!("`to` inválido: {:?}", r.to)))?;
-        if to.as_bytes() == b"!" {
-            return Err(AiError::Protocol(
-                "`to` marcador de archivo prohibido".into(),
-            ));
+        if to.as_bytes() == b"!" || to.as_bytes().contains(&b'\\') {
+            return Err(AiError::Protocol(format!("`to` prohibido: {:?}", r.to)));
         }
         if !froms.insert(from.as_bytes().to_vec()) {
             return Err(AiError::Protocol(format!("`from` duplicado: {:?}", r.from)));
@@ -524,6 +525,9 @@ mod tests {
         assert!(validate_rename_reply(r#"[{"from":"A","to":"a/b"}]"#, &inputs).is_err());
         assert!(validate_rename_reply(r#"[{"from":"A","to":".."}]"#, &inputs).is_err());
         assert!(validate_rename_reply(r#"[{"from":"A","to":"!"}]"#, &inputs).is_err());
+        // security MINOR #M4: backslash = traversal en Windows.
+        assert!(validate_rename_reply(r#"[{"from":"A","to":"..\\evil"}]"#, &inputs).is_err());
+        assert!(validate_rename_reply(r#"[{"from":"A","to":"a\\b"}]"#, &inputs).is_err());
     }
 
     #[test]
