@@ -67,7 +67,13 @@ impl PluginProvider {
 
     /// Los segmentos crudos de `p` (el path que entiende el guest). El root del
     /// provider es scheme-only, así que los segmentos del `VPath` son el path.
+    /// La authority (si la hubiera) NO se proyecta — el root es scheme-only por
+    /// contrato; se afirma en debug.
     fn segments(p: &VPath) -> Vec<Vec<u8>> {
+        debug_assert!(
+            p.authority().is_none(),
+            "PluginProvider asume un root scheme-only (sin authority)"
+        );
         p.segments().map(<[u8]>::to_vec).collect()
     }
 
@@ -112,10 +118,18 @@ fn map_vfs_error(e: provider_iface::VfsError) -> Error {
     }
 }
 
-/// Un trap / fallo del runtime del guest = fallo interno (panic-clase).
-fn map_runtime_error(_e: RuntimeError) -> Error {
-    Error::Internal { panic: true }
+/// Fallo del runtime del guest. Solo un TRAP es panic-clase (el guest crasheó);
+/// un rechazo controlado (tope de retorno, deadline, instanciación) es un fallo
+/// interno NO-panic.
+fn map_runtime_error(e: &RuntimeError) -> Error {
+    Error::Internal {
+        panic: matches!(e, RuntimeError::Trap(_)),
+    }
 }
+
+/// Tope de entradas que el adapter reensambla de un `list` antes de fallar
+/// fail-loud — un guest hostil no cuelga el host paginando sin fin.
+const MAX_LIST_ENTRIES: usize = 1_000_000;
 
 fn map_kind(k: provider_iface::EntryKind) -> EntryKind {
     use provider_iface::EntryKind as K;
@@ -143,7 +157,7 @@ impl Provider for PluginProvider {
         self.call(move |g| {
             let e = g
                 .stat(&segs)
-                .map_err(map_runtime_error)?
+                .map_err(|e| map_runtime_error(&e))?
                 .map_err(map_vfs_error)?;
             Ok(Entry {
                 path,
@@ -168,16 +182,21 @@ impl Provider for PluginProvider {
                 loop {
                     let page = g
                         .list_dir(&segs, cursor.as_deref())
-                        .map_err(map_runtime_error)?
+                        .map_err(|e| map_runtime_error(&e))?
                         .map_err(map_vfs_error)?;
                     for e in page.entries {
                         // El modelo de segmentos del WIT es MÁS permisivo que
                         // `VPath`: un nombre con `/` (o NUL, `.`/`..`) es válido
-                        // como bytes pero NO como `Segment`. Se OMITE — no tiene
-                        // ruta representable donde vivir (mismo criterio que los
-                        // providers archive, #93). Deuda stage-2b: contarlo en
-                        // `list_skipped`.
-                        let Ok(seg) = Segment::new(e.name) else {
+                        // como bytes pero NO como `Segment`. Se OMITE con warn
+                        // — no tiene ruta representable donde vivir (mismo
+                        // criterio que los providers archive, #93). Deuda
+                        // stage-2b: contarlo y exponerlo por `list_skipped`.
+                        let name = e.name;
+                        let Ok(seg) = Segment::new(name.clone()) else {
+                            tracing::warn!(
+                                name = ?String::from_utf8_lossy(&name),
+                                "nombre del provider no representable como VPath: omitido"
+                            );
                             continue;
                         };
                         out.push(Entry {
@@ -186,6 +205,12 @@ impl Provider for PluginProvider {
                             size: e.size,
                             mtime_ms: None,
                         });
+                        // Cota anti-DoS: un guest hostil no reensambla sin fin.
+                        if out.len() > MAX_LIST_ENTRIES {
+                            return Err(Error::LimitExceeded {
+                                limit: Error::LIMIT_ENTRIES.to_owned(),
+                            });
+                        }
                     }
                     match page.next_cursor {
                         Some(c) => cursor = Some(c),
@@ -204,42 +229,54 @@ impl Provider for PluginProvider {
             None => (0u64, None),
             Some(r) => (r.offset, r.len),
         };
-        // Reensamblado EAGER del ByteStream: se lee por rangos acotados hasta
-        // EOF (chunk corto/vacío) o hasta cubrir `len`.
-        let bytes: Vec<u8> = self
-            .call(move |g| {
+        // Reensamblado LAZY: cada poll lee UN chunk acotado del guest en
+        // spawn_blocking — jamás se bufferiza el fichero entero (regla 2 + cota
+        // de memoria: un guest hostil no infla la RAM del host, cada llamada
+        // está acotada por `want` y por el deadline de época). El error de
+        // apertura (fichero inexistente, dir) llega como el primer item del
+        // stream. Estado: (instancia, segmentos, offset, bytes ya leídos).
+        let inst = Arc::clone(&self.inst);
+        let stream = stream::try_unfold(
+            (inst, segs, offset, 0u64),
+            move |(inst, segs, off, done)| async move {
                 const CHUNK: u64 = 64 * 1024;
-                let mut out: Vec<u8> = Vec::new();
-                let mut off = offset;
-                loop {
-                    let want = match limit {
-                        Some(l) => {
-                            let remaining = l.saturating_sub(out.len() as u64);
-                            if remaining == 0 {
-                                break;
-                            }
-                            remaining.min(CHUNK)
+                let want = match limit {
+                    Some(l) => {
+                        let remaining = l.saturating_sub(done);
+                        if remaining == 0 {
+                            return Ok(None);
                         }
-                        None => CHUNK,
-                    };
-                    let chunk = g
-                        .read(&segs, off, want)
-                        .map_err(map_runtime_error)?
-                        .map_err(map_vfs_error)?;
-                    if chunk.is_empty() {
-                        break; // EOF
+                        remaining.min(CHUNK)
                     }
-                    let n = chunk.len() as u64;
-                    out.extend_from_slice(&chunk);
-                    off = off.saturating_add(n);
-                    if n < want {
-                        break; // short read = EOF
-                    }
+                    None => CHUNK,
+                };
+                let inst2 = Arc::clone(&inst);
+                let segs2 = segs.clone();
+                let chunk: Vec<u8> = tokio::task::spawn_blocking(move || {
+                    let mut g = inst2.lock().map_err(|_| Error::Internal { panic: true })?;
+                    g.read(&segs2, off, want)
+                        .map_err(|e| map_runtime_error(&e))?
+                        .map_err(map_vfs_error)
+                })
+                .await
+                .map_err(|_| Error::Internal { panic: true })??;
+                if chunk.is_empty() {
+                    return Ok(None); // EOF
                 }
-                Ok(out)
-            })
-            .await?;
-        Ok(stream::once(async move { Ok(Bytes::from(bytes)) }).boxed())
+                // Un guest hostil que devuelve MÁS que `want` se recorta: el
+                // rango pedido manda (contrato de `ByteRange`).
+                let mut chunk = chunk;
+                if chunk.len() as u64 > want {
+                    chunk.truncate(usize::try_from(want).unwrap_or(usize::MAX));
+                }
+                let n = chunk.len() as u64;
+                Ok(Some((
+                    Bytes::from(chunk),
+                    (inst, segs, off.saturating_add(n), done + n),
+                )))
+            },
+        );
+        Ok(stream.boxed())
     }
 
     // ---- mutaciones: vetadas en stage 2 (guest read-only) ----
