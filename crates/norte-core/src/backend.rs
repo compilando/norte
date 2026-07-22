@@ -329,6 +329,26 @@ impl Backend {
         }
     }
 
+    /// GC de staging `.norte-partial` huérfano bajo `dir` (#11, ADR 0012):
+    /// operación PUNTUAL, no una Task ni una mutación del journal. Devuelve
+    /// cuántos barrió.
+    ///
+    /// # Errors
+    /// En `Remote` es [`Error::Unsupported`]: no existe (aún) un método de
+    /// wire para el GC — exponerlo exige un cambio de protocolo, diferido
+    /// hasta que haya demanda. En `Embedded`, los del provider.
+    pub async fn gc_partials(
+        &self,
+        dir: &VPath,
+        older_than: std::time::Duration,
+    ) -> Result<usize, Error> {
+        match self {
+            Self::Embedded(engine) => engine.gc_partials(dir, older_than).await,
+            #[cfg(unix)]
+            Self::Remote(_) => Err(Error::Unsupported),
+        }
+    }
+
     /// Búsqueda viva (`fs.search`, live search): devuelve la Task
     /// ([`TaskRef`], cancelable con `TaskRef::cancel`) y el STREAM de lotes de
     /// hits ([`norte_proto::methods::SearchHits`]).

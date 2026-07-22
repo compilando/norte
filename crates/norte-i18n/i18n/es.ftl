@@ -265,3 +265,5 @@ gui-task-state-done = done
 gui-task-state-cancelled = cancelled
 gui-task-state-failed = failed
 gui-task-state-unknown = ?
+cli-gc-result = barridos { $n } parciales huérfanos bajo { $dir }
+cli-gc-remote-unsupported = `norte gc` aún no funciona con --daemon (usa el modo embebido)

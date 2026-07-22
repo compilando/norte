@@ -116,6 +116,17 @@ enum Cmd {
         #[command(subcommand)]
         cmd: PluginCmd,
     },
+    /// Barre staging `.norte-partial` huérfano de un directorio (#11, ADR
+    /// 0012). NO recursivo, no toca archivos del usuario (reconoce el
+    /// staging por su forma exacta). Solo en modo embebido
+    Gc {
+        /// Directorio a barrer
+        path: PathBuf,
+        /// Antigüedad mínima en horas (una reanudación EN CURSO no debe
+        /// barrerse: usa un umbral holgado)
+        #[arg(long, default_value_t = 24)]
+        older_than_hours: u64,
+    },
     /// Auditoría del journal (M3-5, ADR 0025): cadena + anclas + export.
     /// Requiere el daemon PARADO (la DB se abre en solo-lectura pero el
     /// daemon la mantiene bloqueada en exclusiva)
@@ -363,6 +374,10 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             .context(norte_i18n::t("cli-enqueue-move"))?;
             Ok(run_task(task, false).await)
         }
+        Cmd::Gc {
+            path,
+            older_than_hours,
+        } => gc_cmd(&backend, cli.daemon, &path, older_than_hours).await,
         Cmd::Rm { path } => {
             let target = vpath(&path)?;
             let task = match backend
@@ -1011,6 +1026,35 @@ fn is_archive_url(s: &str) -> bool {
     };
     let inner = &scheme[fmt.len() + 1..];
     !inner.is_empty() && !inner.contains('/')
+}
+
+/// `norte gc`: barre staging `.norte-partial` huérfano (#11, ADR 0012).
+/// Solo embebido: el wire no expone (aún) el GC — con `--daemon` el error
+/// es accionable, no un `Unsupported` seco.
+async fn gc_cmd(
+    backend: &Backend,
+    daemon: bool,
+    path: &std::path::Path,
+    older_than_hours: u64,
+) -> anyhow::Result<ExitCode> {
+    let dir = vpath(path)?;
+    let older = std::time::Duration::from_secs(older_than_hours.saturating_mul(3600));
+    match backend.gc_partials(&dir, older).await {
+        Ok(n) => {
+            println!(
+                "{}",
+                norte_i18n::ta(
+                    "cli-gc-result",
+                    &[("n", &n.to_string()), ("dir", &dir.display_lossy())],
+                )
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(norte_proto::Error::Unsupported) if daemon => {
+            anyhow::bail!("{}", norte_i18n::t("cli-gc-remote-unsupported"))
+        }
+        Err(e) => Err(anyhow::anyhow!("{e}")),
+    }
 }
 
 fn vpath(path: &std::path::Path) -> anyhow::Result<VPath> {
