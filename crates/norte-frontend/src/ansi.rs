@@ -32,8 +32,18 @@ pub type StyledLine = Vec<StyledSpan>;
 
 /// Parsea `input` (salida de un previewer) a líneas con estilo, interpretando
 /// SOLO SGR de color de primer plano y DESCARTANDO cualquier otra secuencia de
-/// escape o control (saneado — ver el módulo). Las líneas se separan por `\n`;
-/// un `\r` final de línea se ignora (CRLF). Siempre devuelve al menos una línea.
+/// escape (saneado — ver el módulo). Las líneas se separan por `\n`; un `\r`
+/// final de línea se ignora (CRLF). Siempre devuelve al menos una línea.
+///
+/// ```
+/// use norte_frontend::ansi::{parse_sgr, StyledSpan};
+/// // Un tramo rojo de 24 bits + un OSC hostil (fija el título): el color se
+/// // conserva, el OSC se descarta entero.
+/// let out = parse_sgr("\x1b[38;2;255;0;0mhi\x1b]0;PWNED\x07\x1b[0m fin");
+/// assert_eq!(out.len(), 1);
+/// assert_eq!(out[0][0], StyledSpan { text: "hi".into(), fg: Some((255, 0, 0)) });
+/// assert_eq!(out[0][1], StyledSpan { text: " fin".into(), fg: None });
+/// ```
 #[must_use]
 pub fn parse_sgr(input: &str) -> Vec<StyledLine> {
     let mut lines: Vec<StyledLine> = Vec::new();

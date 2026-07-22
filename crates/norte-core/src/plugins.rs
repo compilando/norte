@@ -78,6 +78,30 @@ pub enum PluginRunError {
 /// alguien pidió su preview.
 pub(crate) const PREVIEW_MAX_BYTES: u64 = 1024 * 1024;
 
+/// Decodifica los bytes ACOTADOS de un fichero para pasárselos al previewer
+/// (§6.2, #29): el texto detectado (por `norte-encoding`) viaja como UTF-8 —
+/// jamás bytes crudos sobre los que el guest asuma UTF-8 — y un binario
+/// (sin encoding de texto) cae a los bytes tal cual (un guest de texto hará su
+/// propio lossy). `bytes` YA viene acotado a [`PREVIEW_MAX_BYTES`].
+///
+/// Limitación conocida (#101): si la decodificación fue LOSSY (`had_errors`),
+/// el `�` resultante NO se marca al usuario en modo preview (el raw viewer sí
+/// lo señala) — surfacear el aviso exige un campo en `PluginPreview` (wire).
+pub(crate) fn decode_for_preview(bytes: Vec<u8>) -> Vec<u8> {
+    // `< CAP` = el fichero cabía entero (si == CAP pudo quedar truncado: se
+    // trata como incompleto, dirección segura — a lo sumo se omite el último
+    // char multibyte, jamás se corrompe con `�`).
+    let complete = (bytes.len() as u64) < PREVIEW_MAX_BYTES;
+    match norte_encoding::detect(&bytes) {
+        norte_encoding::Detection::Text { encoding, .. } => {
+            norte_encoding::decode(&bytes, encoding, complete)
+                .text
+                .into_bytes()
+        }
+        norte_encoding::Detection::Binary => bytes,
+    }
+}
+
 /// Adivina el mimetype por EXTENSIÓN (heurística ligera, sin dep de sniffing).
 /// Un archivo sin extensión reconocible → `application/octet-stream` (ningún
 /// previewer `text/*` lo tomará). NO lee el contenido. `pub(crate)` para el
@@ -524,6 +548,26 @@ pub(crate) fn persist_state(
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// #29/§6.2: `decode_for_preview` entrega TEXTO decodificado al previewer.
+    #[test]
+    fn decode_for_preview_texto_utf8_pasa_igual() {
+        assert_eq!(decode_for_preview(b"hola mundo".to_vec()), b"hola mundo");
+    }
+
+    #[test]
+    fn decode_for_preview_utf16le_bom_se_decodifica_a_utf8() {
+        // BOM UTF-16LE (FF FE) + "hi" → detect Text, decode a UTF-8 "hi".
+        let utf16 = vec![0xFF, 0xFE, b'h', 0x00, b'i', 0x00];
+        assert_eq!(decode_for_preview(utf16), b"hi");
+    }
+
+    #[test]
+    fn decode_for_preview_binario_pasa_los_bytes_crudos() {
+        // Cabecera PNG (controles + NUL): detect Binary → bytes tal cual.
+        let png = b"\x89PNG\r\n\x1a\n\x00\x00\x00".to_vec();
+        assert_eq!(decode_for_preview(png.clone()), png);
+    }
 
     /// Manifiesto válido mínimo (copiado del doctest de `norte-plugin-host`).
     const DEMO_MANIFEST: &str = r#"
