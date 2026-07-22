@@ -16,6 +16,8 @@ authors.workspace = true
 async-trait.workspace = true
 # fs.read del daemon devuelve bytes en base64 (JSON no lleva bytes crudos).
 base64.workspace = true
+# Chunks del ByteStream que reensambla PluginProvider (#30).
+bytes.workspace = true
 futures.workspace = true
 norte-connect.workspace = true
 # Modelo de plugins (M4-P3): catálogo + manifiesto que el PluginRegistry expone.

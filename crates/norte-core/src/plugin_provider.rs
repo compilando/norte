@@ -1,0 +1,275 @@
+//! Adapter [`PluginProvider`] (#30 stage 2b, ADR 0032): expone un
+//! guest-provider WASM como un [`norte_vfs::Provider`] normal. REENSAMBLA los
+//! streams del trait a partir de las llamadas ACOTADAS del guest — `list`
+//! paginando hasta agotar el cursor, `read` leyendo por rango hasta EOF. SOLO
+//! LECTURA en stage 2: las mutaciones responden [`Error::Unsupported`].
+//!
+//! Cada llamada al guest es SÍNCRONA (wasmtime) y serializada por un `Mutex`;
+//! se ejecuta en `spawn_blocking` para no bloquear el executor async (regla 2).
+//! El `PluginProvider` mantiene vivo el [`PluginRuntime`] (su ticker de época
+//! gobierna el deadline de CPU del guest).
+
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+use bytes::Bytes;
+use futures::stream::{self, StreamExt};
+use norte_plugin_host::{
+    Capabilities as HostCaps, PluginRuntime, ProviderInstance, RuntimeError, provider_iface,
+};
+use norte_vfs::proto::{
+    ByteRange, Capabilities, CapabilityFlags, ConflictKind, Entry, EntryKind, Error, Segment, VPath,
+};
+use norte_vfs::{ByteSink, ByteStream, EntryStream, Provider, SymlinkKind};
+
+/// Un provider VFS respaldado por un plugin WASM que exporta la interfaz WIT
+/// `provider` (#30). Ver el módulo.
+pub struct PluginProvider {
+    /// Mantiene vivo el ticker de época (deadline de CPU del guest).
+    _runtime: PluginRuntime,
+    /// La instancia del guest; el `Mutex` serializa sus llamadas síncronas.
+    inst: Arc<Mutex<ProviderInstance>>,
+    /// Scheme que sirve este provider (p. ej. `mem`, `ftp`).
+    scheme: String,
+    /// Capabilities cacheadas al construir (`Provider::capabilities` es sync).
+    caps: Capabilities,
+}
+
+impl PluginProvider {
+    /// Instancia el guest `wasm` bajo `host_caps` y cachea sus capabilities.
+    ///
+    /// # Errors
+    /// [`RuntimeError`] si el artefacto no instancia o la llamada a
+    /// `capabilities` atrapa.
+    pub fn new(
+        runtime: PluginRuntime,
+        wasm: &Path,
+        host_caps: HostCaps,
+        scheme: impl Into<String>,
+    ) -> Result<Self, RuntimeError> {
+        let mut inst = runtime.instantiate_provider(wasm, host_caps)?;
+        let guest = inst.capabilities()?;
+        let flags = if guest.read_only {
+            CapabilityFlags::READ_ONLY
+        } else {
+            CapabilityFlags::empty()
+        };
+        Ok(Self {
+            _runtime: runtime,
+            inst: Arc::new(Mutex::new(inst)),
+            scheme: scheme.into(),
+            caps: Capabilities {
+                flags,
+                max_path: None,
+            },
+        })
+    }
+
+    /// Los segmentos crudos de `p` (el path que entiende el guest). El root del
+    /// provider es scheme-only, así que los segmentos del `VPath` son el path.
+    fn segments(p: &VPath) -> Vec<Vec<u8>> {
+        p.segments().map(<[u8]>::to_vec).collect()
+    }
+
+    /// Ejecuta una llamada al guest en `spawn_blocking` (regla 2), serializada
+    /// por el `Mutex`. Un `JoinError` (panic del hilo bloqueante) se mapea a
+    /// `Internal`.
+    async fn call<T, F>(&self, f: F) -> Result<T, Error>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut ProviderInstance) -> Result<T, Error> + Send + 'static,
+    {
+        let inst = Arc::clone(&self.inst);
+        tokio::task::spawn_blocking(move || {
+            let mut guard = inst.lock().map_err(|_| Error::Internal { panic: true })?;
+            f(&mut guard)
+        })
+        .await
+        .map_err(|_| Error::Internal { panic: true })?
+    }
+}
+
+/// Traduce el error lógico del guest a la taxonomía del protocolo. `other` y
+/// las variantes de escritura (aún no alcanzables en stage 2) caen a `Internal`
+/// no-panic (categoría gruesa, sin inventar detalle).
+fn map_vfs_error(e: provider_iface::VfsError) -> Error {
+    use provider_iface::VfsError as V;
+    match e {
+        V::NotFound => Error::NotFound,
+        V::PermissionDenied => Error::PermissionDenied,
+        V::Unsupported => Error::Unsupported,
+        V::InvalidPath => Error::InvalidPath,
+        V::Io => Error::Io { retryable: false },
+        V::Corrupt => Error::Corrupt,
+        V::CursorExpired => Error::CursorExpired,
+        V::ProviderUnavailable => Error::ProviderUnavailable { retryable: false },
+        V::Loop => Error::Loop,
+        V::Conflict => Error::Conflict {
+            conflict: ConflictKind::Unknown,
+        },
+        V::NoSpace => Error::NoSpace,
+        V::Other => Error::Internal { panic: false },
+    }
+}
+
+/// Un trap / fallo del runtime del guest = fallo interno (panic-clase).
+fn map_runtime_error(_e: RuntimeError) -> Error {
+    Error::Internal { panic: true }
+}
+
+fn map_kind(k: provider_iface::EntryKind) -> EntryKind {
+    use provider_iface::EntryKind as K;
+    match k {
+        K::File => EntryKind::File,
+        K::Dir => EntryKind::Dir,
+        K::Symlink => EntryKind::Symlink,
+        K::Other => EntryKind::Other,
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for PluginProvider {
+    fn scheme(&self) -> &str {
+        &self.scheme
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.caps
+    }
+
+    async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
+        let segs = Self::segments(p);
+        let path = p.clone();
+        self.call(move |g| {
+            let e = g
+                .stat(&segs)
+                .map_err(map_runtime_error)?
+                .map_err(map_vfs_error)?;
+            Ok(Entry {
+                path,
+                kind: map_kind(e.kind),
+                size: e.size,
+                mtime_ms: None,
+            })
+        })
+        .await
+    }
+
+    async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
+        let segs = Self::segments(p);
+        let dir = p.clone();
+        // Reensamblado EAGER: se agotan todas las páginas del cursor y se
+        // devuelve un stream sobre el Vec (stage 2 de-risk; lazy = optimización
+        // posterior). El árbol de un contrato es pequeño.
+        let entries: Vec<Entry> = self
+            .call(move |g| {
+                let mut out = Vec::new();
+                let mut cursor: Option<Vec<u8>> = None;
+                loop {
+                    let page = g
+                        .list_dir(&segs, cursor.as_deref())
+                        .map_err(map_runtime_error)?
+                        .map_err(map_vfs_error)?;
+                    for e in page.entries {
+                        // El modelo de segmentos del WIT es MÁS permisivo que
+                        // `VPath`: un nombre con `/` (o NUL, `.`/`..`) es válido
+                        // como bytes pero NO como `Segment`. Se OMITE — no tiene
+                        // ruta representable donde vivir (mismo criterio que los
+                        // providers archive, #93). Deuda stage-2b: contarlo en
+                        // `list_skipped`.
+                        let Ok(seg) = Segment::new(e.name) else {
+                            continue;
+                        };
+                        out.push(Entry {
+                            path: dir.join(seg),
+                            kind: map_kind(e.kind),
+                            size: e.size,
+                            mtime_ms: None,
+                        });
+                    }
+                    match page.next_cursor {
+                        Some(c) => cursor = Some(c),
+                        None => break,
+                    }
+                }
+                Ok(out)
+            })
+            .await?;
+        Ok(stream::iter(entries.into_iter().map(Ok)).boxed())
+    }
+
+    async fn read(&self, p: &VPath, range: Option<ByteRange>) -> Result<ByteStream, Error> {
+        let segs = Self::segments(p);
+        let (offset, limit) = match range {
+            None => (0u64, None),
+            Some(r) => (r.offset, r.len),
+        };
+        // Reensamblado EAGER del ByteStream: se lee por rangos acotados hasta
+        // EOF (chunk corto/vacío) o hasta cubrir `len`.
+        let bytes: Vec<u8> = self
+            .call(move |g| {
+                const CHUNK: u64 = 64 * 1024;
+                let mut out: Vec<u8> = Vec::new();
+                let mut off = offset;
+                loop {
+                    let want = match limit {
+                        Some(l) => {
+                            let remaining = l.saturating_sub(out.len() as u64);
+                            if remaining == 0 {
+                                break;
+                            }
+                            remaining.min(CHUNK)
+                        }
+                        None => CHUNK,
+                    };
+                    let chunk = g
+                        .read(&segs, off, want)
+                        .map_err(map_runtime_error)?
+                        .map_err(map_vfs_error)?;
+                    if chunk.is_empty() {
+                        break; // EOF
+                    }
+                    let n = chunk.len() as u64;
+                    out.extend_from_slice(&chunk);
+                    off = off.saturating_add(n);
+                    if n < want {
+                        break; // short read = EOF
+                    }
+                }
+                Ok(out)
+            })
+            .await?;
+        Ok(stream::once(async move { Ok(Bytes::from(bytes)) }).boxed())
+    }
+
+    // ---- mutaciones: vetadas en stage 2 (guest read-only) ----
+
+    async fn write(&self, _p: &VPath) -> Result<Box<dyn ByteSink>, Error> {
+        Err(Error::Unsupported)
+    }
+
+    async fn mkdir(&self, _p: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+
+    async fn remove(&self, _p: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+
+    async fn rename(&self, _from: &VPath, _to: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+
+    async fn trash(&self, _p: &VPath) -> Result<Option<VPath>, Error> {
+        Err(Error::Unsupported)
+    }
+
+    async fn symlink(
+        &self,
+        _link: &VPath,
+        _target: &[u8],
+        _kind: SymlinkKind,
+    ) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+}
