@@ -2139,9 +2139,9 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ImagePreview, affected_dirs, apply_viewer_command, first_cancelable,
-        generation_is_current, image_preview_from, image_status, pending_hint, retain_active,
-        row_label, task_at_cursor, viewer_header, viewer_status,
+        ImagePreview, affected_dirs, apply_viewer_command, first_cancelable, generation_is_current,
+        image_preview_from, image_status, pending_hint, retain_active, row_label, task_at_cursor,
+        viewer_header, viewer_status,
     };
     use norte_frontend::viewer::Viewer;
     use norte_proto::{EntryKind, VPath};
