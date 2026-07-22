@@ -7,6 +7,7 @@ use norte_proto::EntryKind;
 use norte_theme::Role;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use unicode_width::UnicodeWidthChar;
@@ -373,7 +374,29 @@ fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer, app: &App)
         );
     }
     let inner_h = rows[0].height.saturating_sub(2) as usize;
-    let lines: Vec<Line<'_>> = viewer.rows(inner_h).into_iter().map(Line::raw).collect();
+    // #29: un preview de plugin trae color (ANSI-SGR ya saneado); se pinta con
+    // Color::Rgb. El resto (texto/hex) va en el color del tema.
+    let lines: Vec<Line<'_>> = match viewer.plugin_styled_rows(inner_h) {
+        Some(styled) => styled
+            .into_iter()
+            .map(|line| {
+                Line::from(
+                    line.iter()
+                        .map(|span| {
+                            let s = Span::raw(span.text.clone());
+                            match span.fg {
+                                Some((r, g, b)) => {
+                                    s.style(Style::default().fg(Color::Rgb(r, g, b)))
+                                }
+                                None => s,
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect(),
+        None => viewer.rows(inner_h).into_iter().map(Line::raw).collect(),
+    };
     frame.render_widget(Paragraph::new(lines).block(block), rows[0]);
     let pos = format!(
         "{}/{}",
