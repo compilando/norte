@@ -623,6 +623,157 @@ async fn dedup_canonica_no_abre_segunda_sesion() {
     assert_eq!(conn.connects.load(Ordering::SeqCst), 1, "una sesión");
 }
 
+/// Sesión que sirve UN zip en `/a.zip` (stat+read con rango) y se puede
+/// envenenar — el mínimo para componer un provider archive encima.
+struct ZipHostProvider {
+    zip: bytes::Bytes,
+    poisoned: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ZipHostProvider {
+    fn check(&self) -> Result<(), Error> {
+        if self.poisoned.load(Ordering::SeqCst) {
+            return Err(Error::ProviderUnavailable { retryable: true });
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Provider for ZipHostProvider {
+    fn scheme(&self) -> &'static str {
+        "sftp"
+    }
+    fn capabilities(&self) -> norte_proto::Capabilities {
+        norte_proto::Capabilities {
+            flags: norte_proto::CapabilityFlags::empty(),
+            max_path: None,
+        }
+    }
+    async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
+        self.check()?;
+        if p.segments().last() == Some(b"a.zip".as_slice()) {
+            return Ok(Entry {
+                path: p.clone(),
+                kind: EntryKind::File,
+                size: Some(self.zip.len() as u64),
+                mtime_ms: None,
+            });
+        }
+        Ok(Entry {
+            path: p.clone(),
+            kind: EntryKind::Dir,
+            size: None,
+            mtime_ms: None,
+        })
+    }
+    async fn list(&self, _p: &VPath) -> Result<norte_vfs::EntryStream, Error> {
+        self.check()?;
+        Err(Error::Unsupported)
+    }
+    async fn read(
+        &self,
+        _p: &VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> Result<norte_vfs::ByteStream, Error> {
+        self.check()?;
+        let total = self.zip.len() as u64;
+        let (off, len) = match range {
+            None => (0, total),
+            Some(r) => {
+                let off = r.offset.min(total);
+                (off, r.len.unwrap_or(total - off).min(total - off))
+            }
+        };
+        let chunk = self.zip.slice(off as usize..(off + len) as usize);
+        Ok(Box::pin(futures::stream::iter(vec![Ok(chunk)])))
+    }
+    async fn write(&self, _p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
+        Err(Error::Unsupported)
+    }
+    async fn mkdir(&self, _p: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+    async fn remove(&self, _p: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+    async fn rename(&self, _from: &VPath, _to: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+}
+
+/// Conector que sirve por dial N un zip con el miembro `dial-N.txt`, y
+/// guarda el interruptor de veneno de cada sesión.
+struct ZipReviving {
+    connects: AtomicUsize,
+    poisons: std::sync::Mutex<Vec<Arc<std::sync::atomic::AtomicBool>>>,
+}
+
+#[async_trait]
+impl RemoteConnector for ZipReviving {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+        let n = self.connects.fetch_add(1, Ordering::SeqCst) + 1;
+        let member = format!("dial-{n}.txt");
+        let zip = norte_testkit::ZipSmith::new()
+            .file(member.as_bytes(), b"contenido")
+            .build();
+        let poisoned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.poisons.lock().unwrap().push(poisoned.clone());
+        Ok(Connected {
+            provider: Arc::new(ZipHostProvider {
+                zip: bytes::Bytes::from(zip),
+                poisoned,
+            }),
+            warnings: Vec::new(),
+        })
+    }
+    async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+/// #62: evictar una sesión ARRASTRA los providers archive compuestos sobre
+/// ella (`zip+sftp://h` cachea el Arc de `sftp://h` — dejarlo serviría el
+/// índice de una conexión muerta).
+#[tokio::test]
+async fn evictar_sesion_arrastra_archive_compuestos() {
+    use futures::StreamExt;
+
+    let engine = Engine::new();
+    let conn = Arc::new(ZipReviving {
+        connects: AtomicUsize::new(0),
+        poisons: std::sync::Mutex::new(Vec::new()),
+    });
+    engine.set_connector(conn.clone());
+
+    let names = |entries: Vec<Result<Entry, Error>>| -> Vec<String> {
+        entries
+            .into_iter()
+            .map(|e| {
+                let e = e.expect("entry");
+                String::from_utf8_lossy(e.path.segments().last().expect("segmento")).into_owned()
+            })
+            .collect()
+    };
+
+    // Sesión 1: el compuesto zip+sftp sirve el índice del dial 1.
+    let inner = VPath::archive_compose("zip", &vp("sftp://h/a.zip"), &[]).expect("compose");
+    let got = names(engine.list(&inner).await.expect("list 1").collect().await);
+    assert_eq!(got, vec!["dial-1.txt".to_string()]);
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 1);
+
+    // Muere la sesión → una op directa la evicta…
+    conn.poisons.lock().unwrap()[0].store(true, Ordering::SeqCst);
+    let err = engine.stat(&vp("sftp://h/x")).await.unwrap_err();
+    assert!(matches!(err, Error::ProviderUnavailable { .. }));
+
+    // …y el COMPUESTO cayó con ella: el siguiente list reconecta (dial 2)
+    // y recompone — sirve el índice NUEVO, no el del zip muerto.
+    let got = names(engine.list(&inner).await.expect("list 2").collect().await);
+    assert_eq!(got, vec!["dial-2.txt".to_string()], "compuesto arrastrado");
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 2);
+}
+
 /// `trust_host_key` sin conector configurado es Unsupported, no un panic.
 #[tokio::test]
 async fn trust_sin_conector_es_unsupported() {
