@@ -55,6 +55,20 @@ pub struct Limits {
     /// en `skipped` y no fallan el índice salvo por presupuesto de
     /// omitidas).
     pub max_decompressed_bytes: u64,
+    /// Presupuesto de bytes DESCOMPRIMIDOS del SPOOL de un contenedor
+    /// `tar+gz` caliente (#95.1): a partir de la segunda lectura de un mismo
+    /// contenedor, el provider descomprime el stream ENTERO una vez a un
+    /// fichero temporal ANÓNIMO y las lecturas siguientes son seeks locales
+    /// O(1) en vez de forward-decode O(offset). Un contenedor cuyo
+    /// descomprimido supera este tope NO se spoolea (se recuerda como
+    /// no-spooleable hasta que cambie de generación) y sus lecturas siguen
+    /// pagando el forward-decode de siempre. `0` DESACTIVA el spool.
+    ///
+    /// Todavía NO expuesto en la sección `[archive]` de `norte.toml` (el
+    /// canal de config llega en una fase posterior); hoy solo es ajustable
+    /// por código vía
+    /// [`ArchiveProvider::with_limits`](crate::ArchiveProvider::with_limits).
+    pub spool_max_bytes: u64,
     /// Tope de CAPAS de archivo anidadas (#56, ADR 0018 A3): `1` = solo
     /// `zip+file` plano, `2` = zip dentro de tar, etc. Lo aplica el ENGINE
     /// antes de componer (el direccionamiento es sintácticamente ilimitado);
@@ -73,6 +87,7 @@ impl Default for Limits {
             max_depth: 64,
             max_cd_bytes: 8 * 1024 * 1024,
             max_decompressed_bytes: 64 * 1024 * 1024 * 1024,
+            spool_max_bytes: 1024 * 1024 * 1024,
             max_nesting: 3,
         }
     }

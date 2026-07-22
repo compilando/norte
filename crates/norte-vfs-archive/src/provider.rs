@@ -69,6 +69,128 @@ const CACHE_CAP: usize = 8;
 /// EXCEDENTES se ENCOLAN (esperan su turno), nunca se rechazan.
 const GZ_READ_CONCURRENCY: usize = 4;
 
+/// `(mtime_ms, size)` del contenedor exterior: la moneda de invalidación de
+/// caché/spool en todo este módulo.
+type Generation = (Option<i64>, Option<u64>);
+
+/// Umbral de calor del spool (#95.1): en la lectura gz N.º
+/// `SPOOL_HEAT_THRESHOLD` de un mismo contenedor (misma generación) se
+/// construye el spool descomprimido.
+const SPOOL_HEAT_THRESHOLD: u32 = 2;
+
+/// Tope de entradas del mapa de calor. Es solo una heurística: al llenarse
+/// se expulsa una entrada arbitraria.
+const SPOOL_HEAT_CAP: usize = 32;
+
+/// Centinela en el mapa de calor: contenedor NO spooleable (su descomprimido
+/// supera `Limits::spool_max_bytes`) — no se reintenta el build hasta que
+/// cambie de generación. `saturating_add` lo deja clavado aquí.
+const SPOOL_UNSPOOLABLE: u32 = u32::MAX;
+
+/// El spool de UN contenedor `tar+gz` caliente (#95.1): su stream gz entero
+/// DESCOMPRIMIDO en un fichero temporal, para que las lecturas repetidas
+/// sean seeks locales O(1) en vez de forward-decode O(offset).
+struct Spool {
+    /// Wire canónico del contenedor exterior (misma clave que `IndexCache`).
+    key: String,
+    /// Generación del contenedor al spoolar — la invalidación.
+    generation: Generation,
+    /// Fichero de [`tempfile::tempfile()`]: ANÓNIMO — nace ya unlinked, el
+    /// SO recupera el espacio al morir el último descriptor y JAMÁS tiene
+    /// pathname (cero superficie de ataque por nombre de staging). Va bajo
+    /// `Mutex` porque el cursor del fd es COMPARTIDO (un `try_clone` es un
+    /// dup: mismo offset) — cada chunk re-seekea a posición ABSOLUTA bajo
+    /// el lock, así dos lecturas concurrentes del spool no se pisan.
+    file: Arc<Mutex<std::fs::File>>,
+    /// Bytes descomprimidos totales del spool.
+    len: u64,
+}
+
+/// Estado compartido del spool (#95.1). Vive en un `Arc` porque los hilos
+/// `spawn_blocking` que construyen/instalan el spool necesitan `'static`.
+struct SpoolState {
+    /// Slot ÚNICO por provider (v1): el último contenedor caliente gana —
+    /// otro contenedor que se caliente REEMPLAZA al anterior.
+    slot: tokio::sync::Mutex<Option<Spool>>,
+    /// Calor por contenedor: nº de lecturas gz de la generación vista. La
+    /// generación nueva resetea el contador (y des-marca un no-spooleable);
+    /// las entradas de generaciones viejas se podan así, oportunistamente.
+    heat: Mutex<HashMap<String, (Generation, u32)>>,
+    /// Build en curso (clave del contenedor). Los competidores NO esperan:
+    /// caen a forward-decode — solo un hilo paga el build.
+    building: Mutex<Option<String>>,
+}
+
+impl SpoolState {
+    fn new() -> Self {
+        Self {
+            slot: tokio::sync::Mutex::new(None),
+            heat: Mutex::new(HashMap::new()),
+            building: Mutex::new(None),
+        }
+    }
+
+    /// Suma una lectura al calor de `key` y devuelve el contador resultante.
+    fn bump_heat(&self, key: &str, generation: Generation) -> u32 {
+        let mut heat = self.heat.lock().expect("heat lock sano");
+        if heat.len() >= SPOOL_HEAT_CAP
+            && !heat.contains_key(key)
+            && let Some(victim) = heat.keys().next().cloned()
+        {
+            heat.remove(&victim);
+        }
+        let e = heat.entry(key.to_owned()).or_insert((generation, 0));
+        if e.0 != generation {
+            *e = (generation, 0);
+        }
+        e.1 = e.1.saturating_add(1);
+        e.1
+    }
+
+    /// Negative-cache: el descomprimido de `key` supera el presupuesto —
+    /// no reintentar el build mientras dure esta generación.
+    fn mark_unspoolable(&self, key: &str, generation: Generation) {
+        self.heat
+            .lock()
+            .expect("heat lock sano")
+            .insert(key.to_owned(), (generation, SPOOL_UNSPOOLABLE));
+    }
+
+    /// Reclama el flag de build para `key`. `None` = otro build en curso
+    /// (el caller cae a forward-decode, jamás espera).
+    fn try_claim_build(self: &Arc<Self>, key: &str) -> Option<SpoolBuildClaim> {
+        let mut building = self.building.lock().expect("building lock sano");
+        if building.is_some() {
+            return None;
+        }
+        *building = Some(key.to_owned());
+        Some(SpoolBuildClaim {
+            state: Arc::clone(self),
+        })
+    }
+}
+
+/// RAII del flag de build (#95.1): lo limpia en drop pase lo que pase —
+/// éxito, abort, panic del hilo, o closure de `spawn_blocking` descartada
+/// sin ejecutar (shutdown del runtime). Solo puede existir UNO a la vez
+/// (transición `None → Some` bajo el lock), así que limpiar sin comparar
+/// es correcto.
+struct SpoolBuildClaim {
+    state: Arc<SpoolState>,
+}
+
+impl SpoolBuildClaim {
+    fn state(&self) -> &SpoolState {
+        &self.state
+    }
+}
+
+impl Drop for SpoolBuildClaim {
+    fn drop(&mut self) {
+        *self.state.building.lock().expect("building lock sano") = None;
+    }
+}
+
 impl IndexCache {
     fn new() -> Self {
         Self {
@@ -137,6 +259,9 @@ pub struct ArchiveProvider {
     /// [`GZ_READ_CONCURRENCY`]. `Tar` y las lecturas sin descarte no pasan
     /// por aquí.
     gz_read_permits: Arc<tokio::sync::Semaphore>,
+    /// Spool de tar.gz calientes (#95.1): slot único + calor + flag de
+    /// build. En `Arc` para los hilos blocking (ver [`SpoolState`]).
+    spool: Arc<SpoolState>,
 }
 
 /// Envuelve un stream passthrough con un contador ENTREGADO-vs-PROMETIDO
@@ -226,6 +351,7 @@ impl ArchiveProvider {
             cache: Mutex::new(IndexCache::new()),
             building: Mutex::new(HashMap::new()),
             gz_read_permits: Arc::new(tokio::sync::Semaphore::new(GZ_READ_CONCURRENCY)),
+            spool: Arc::new(SpoolState::new()),
         }
     }
 
@@ -404,6 +530,275 @@ impl ArchiveProvider {
             crate::zip_format::read_entry(reader, &plan, &tx);
         }));
         Ok(futures::stream::poll_fn(move |cx| rx.poll_recv(cx)).boxed())
+    }
+
+    /// Lectura tar.gz (#95.1). Tres caminos:
+    ///
+    /// 1. **Spool hit** (contenedor caliente, misma generación): sirve el
+    ///    tramo con seeks locales del tempfile — sin descompresión, SIN
+    ///    semáforo (no pinnea nada).
+    /// 2. **Lectura que cruza el umbral de calor**: construye el spool
+    ///    DENTRO del mismo hilo blocking (bajo el permit gz que la lectura
+    ///    ya paga) y sirve el tramo desde él. Los competidores durante el
+    ///    build caen al camino 3, jamás esperan.
+    /// 3. **Forward-decode** (frío, presupuesto 0, sin mtime, no-spooleable
+    ///    o build ajeno en curso): el camino de siempre — descarta hasta el
+    ///    offset con un decoder fresco (ADR 0028), bajo el semáforo FIX-2.
+    ///
+    /// Drop del stream = el send falla / `is_closed` corta = el hilo
+    /// termina (regla 3), en los tres caminos.
+    async fn read_gz(
+        &self,
+        aref: &ArchiveRef,
+        cached: &CachedContainer,
+        offset: u64,
+        req_off: u64,
+        req_len: u64,
+    ) -> Result<norte_vfs::ByteStream, Error> {
+        let key = aref.outer.to_wire();
+        let generation = cached.index.generation;
+        // Posición ABSOLUTA del tramo en el stream descomprimido.
+        let start = offset + req_off;
+
+        // Camino 1: spool vigente. mtime desconocido = JAMÁS spool (sin
+        // validador no hay caché que valga — mismo criterio que IndexCache).
+        if generation.0.is_some() {
+            let mut slot = self.spool.slot.lock().await;
+            if let Some(s) = slot.as_ref()
+                && s.key == key
+            {
+                if s.generation == generation {
+                    let file = Arc::clone(&s.file);
+                    let spool_len = s.len;
+                    drop(slot);
+                    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+                    drop(tokio::task::spawn_blocking(move || {
+                        serve_from_spool(&file, spool_len, start, req_len, &tx);
+                    }));
+                    return Ok(futures::stream::poll_fn(move |cx| rx.poll_recv(cx)).boxed());
+                }
+                // Mismo contenedor, generación vieja: ya no sirve a nadie —
+                // suéltalo ya (libera el disco) y que el calor arranque de
+                // cero para la generación nueva.
+                tracing::debug!(
+                    container = %aref.outer.display_lossy(),
+                    "spool descartado: el contenedor cambió de generación"
+                );
+                *slot = None;
+            }
+        }
+
+        // Calor + decisión de build (camino 2 vs 3).
+        let claim = if generation.0.is_some() && self.limits.spool_max_bytes > 0 {
+            let n = self.spool.bump_heat(&key, generation);
+            if n >= SPOOL_HEAT_THRESHOLD && n != SPOOL_UNSPOOLABLE {
+                self.spool.try_claim_build(&key)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // FIX-2 (security MAJOR, #55 review): descarte/descompresión pueden
+        // pinnear el hilo blocking minutos — acota la concurrencia agregada
+        // con el semáforo (ver `GZ_READ_CONCURRENCY`). Las lecturas
+        // EXCEDENTES se ENCOLAN aquí (await), nunca se rechazan. El build
+        // del spool corre bajo el MISMO permit de la lectura que lo dispara.
+        let permit = Arc::clone(&self.gz_read_permits)
+            .acquire_owned()
+            .await
+            .map_err(|_| {
+                // El semáforo nunca se `close()`a en la vida de este
+                // provider (no hay ningún caller que lo cierre) —
+                // inalcanzable en la práctica; fail-safe explícito en vez
+                // de un `expect` que podría panicar si algo cambia.
+                Error::Cancelled
+            })?;
+        let reader = ProviderReader::new(
+            tokio::runtime::Handle::current(),
+            Arc::clone(&self.inner),
+            aref.outer.clone(),
+            generation.1.unwrap_or(0),
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        if let Some(claim) = claim {
+            let job = SpoolBuildJob {
+                claim,
+                key,
+                generation,
+                budget: self.limits.spool_max_bytes,
+                start,
+                len: req_len,
+                container: aref.outer.display_lossy(),
+            };
+            drop(tokio::task::spawn_blocking(move || {
+                let _permit = permit; // se libera cuando el hilo termina
+                build_spool_and_serve(job, reader, &tx);
+            }));
+        } else {
+            drop(tokio::task::spawn_blocking(move || {
+                let _permit = permit; // se libera cuando el hilo termina
+                crate::targz_format::read_entry_gz(reader, start, req_len, &tx);
+            }));
+        }
+        Ok(futures::stream::poll_fn(move |cx| rx.poll_recv(cx)).boxed())
+    }
+}
+
+/// Parámetros del build+serve del spool (#95.1), de una pieza para el hilo
+/// blocking.
+struct SpoolBuildJob {
+    claim: SpoolBuildClaim,
+    key: String,
+    generation: Generation,
+    budget: u64,
+    /// Posición absoluta del tramo pedido en el stream descomprimido.
+    start: u64,
+    /// Longitud del tramo pedido.
+    len: u64,
+    /// Display YA redactado del contenedor (solo trazas).
+    container: String,
+}
+
+/// Construye el spool (forward-decode COMPLETO del contenedor al tempfile
+/// anónimo) y, si sale bien, lo instala como slot único del provider y
+/// sirve el tramo pedido desde él. Cualquier abort degrada con honestidad:
+/// receptor muerto = nada que servir; sobre-presupuesto = negative-cache +
+/// forward-decode; fallo de build = forward-decode (si el contenedor está
+/// roto de verdad, la relectura fallará con el error correcto por el camino
+/// de siempre). El flag de build lo suelta el drop de `job.claim` en TODOS
+/// los caminos (RAII).
+fn build_spool_and_serve(
+    job: SpoolBuildJob,
+    reader: ProviderReader,
+    tx: &tokio::sync::mpsc::Sender<Result<bytes::Bytes, Error>>,
+) {
+    use crate::targz_format::{SpoolAbort, read_entry_gz, spool_gz};
+    let mut file = match tempfile::tempfile() {
+        Ok(f) => f,
+        Err(e) => {
+            // Sin tempfile no hay spool; la lectura sigue por forward-decode.
+            tracing::warn!(
+                error = %e,
+                container = %job.container,
+                "sin tempfile para el spool tar.gz; forward-decode"
+            );
+            drop(job.claim);
+            return read_entry_gz(reader, job.start, job.len, tx);
+        }
+    };
+    // Reader FRESCO para el build (`Clone` resetea posición y caché de
+    // bloque); el original queda para el fallback si el build aborta.
+    let probe = || tx.is_closed();
+    match spool_gz(reader.clone(), job.budget, &probe, &mut file) {
+        Ok(len) => {
+            let file = Arc::new(Mutex::new(file));
+            let spool = Spool {
+                key: job.key,
+                generation: job.generation,
+                file: Arc::clone(&file),
+                len,
+            };
+            // blocking_lock: estamos en un hilo de `spawn_blocking`, jamás
+            // dentro del runtime async (donde panicaría).
+            *job.claim.state().slot.blocking_lock() = Some(spool);
+            tracing::debug!(
+                bytes = len,
+                container = %job.container,
+                "spool tar.gz construido e instalado"
+            );
+            drop(job.claim);
+            serve_from_spool(&file, len, job.start, job.len, tx);
+        }
+        Err(SpoolAbort::Cancelled) => {
+            // Receptor muerto: descarta el parcial sin ruido (regla 3). El
+            // drop del claim libera el flag; el drop del tempfile, el disco.
+            tracing::debug!(
+                container = %job.container,
+                "build del spool tar.gz cancelado (receptor muerto)"
+            );
+        }
+        Err(SpoolAbort::OverBudget) => {
+            job.claim.state().mark_unspoolable(&job.key, job.generation);
+            tracing::warn!(
+                budget = job.budget,
+                container = %job.container,
+                "descomprimido supera spool_max_bytes: contenedor no spooleable"
+            );
+            drop(job.claim);
+            read_entry_gz(reader, job.start, job.len, tx);
+        }
+        Err(SpoolAbort::Io(e)) => {
+            tracing::warn!(
+                error = %e,
+                container = %job.container,
+                "build del spool tar.gz falló; forward-decode"
+            );
+            drop(job.claim);
+            read_entry_gz(reader, job.start, job.len, tx);
+        }
+    }
+}
+
+/// Sirve `[start, start+len)` del fichero de spool en chunks de 64 KiB por
+/// el canal acotado. Cada chunk re-seekea a posición ABSOLUTA bajo el lock
+/// del fichero (el cursor del fd es compartido — ver [`Spool::file`]).
+/// Short read = `Corrupt` fail-loud: el índice prometió bytes que el spool
+/// no tiene (contenedor y spool no cuadran) — jamás datos cortos en
+/// silencio. El caller ya recortó el tramo contra el tamaño de la ENTRADA
+/// (semántica pread), igual que en `read_entry_gz`.
+fn serve_from_spool(
+    file: &Mutex<std::fs::File>,
+    spool_len: u64,
+    start: u64,
+    len: u64,
+    tx: &tokio::sync::mpsc::Sender<Result<bytes::Bytes, Error>>,
+) {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let send_err = |e: Error| {
+        // Mejor esfuerzo: si el receptor murió, no hay a quién contárselo.
+        let _ = tx.blocking_send(Err(e));
+    };
+    if start.checked_add(len).is_none_or(|end| end > spool_len) {
+        tracing::warn!(start, len, spool_len, "tramo pedido fuera del spool");
+        return send_err(Error::Corrupt);
+    }
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut pos = start;
+    let mut remaining = len;
+    while remaining > 0 {
+        if tx.is_closed() {
+            tracing::debug!("lectura de spool cancelada (receptor muerto)");
+            return;
+        }
+        let want = buf
+            .len()
+            .min(usize::try_from(remaining).unwrap_or(buf.len()));
+        let got = {
+            let mut f = file.lock().expect("spool file lock sano");
+            f.seek(SeekFrom::Start(pos))
+                .and_then(|_| f.read(&mut buf[..want]))
+        };
+        match got {
+            // EOF antes de servir el tramo prometido: short read del spool.
+            Ok(0) => return send_err(Error::Corrupt),
+            Ok(n) => {
+                pos += n as u64;
+                remaining -= n as u64;
+                if tx
+                    .blocking_send(Ok(bytes::Bytes::copy_from_slice(&buf[..n])))
+                    .is_err()
+                {
+                    tracing::debug!("lectura de spool cancelada (receptor muerto)");
+                    return;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "IO del fichero de spool");
+                return send_err(Error::Io { retryable: true });
+            }
+        }
     }
 }
 
@@ -629,41 +1024,7 @@ impl Provider for ArchiveProvider {
                 .await
             }
             Locator::Gz { offset, .. } => {
-                // Forward-decode: gz no es seekable — descarta hasta el
-                // offset y sirve el tramo. O(descomprimido-hasta-offset) por
-                // read, documentado (ADR 0028); spool/restart-points = issue
-                // de deuda. Drop del stream = el send falla = el hilo
-                // termina (regla 3).
-                //
-                // FIX-2 (security MAJOR, #55 review): el descarte puede
-                // pinnear el hilo blocking minutos — acota la concurrencia
-                // agregada con el semáforo (ver `GZ_READ_CONCURRENCY`).
-                // Las lecturas EXCEDENTES se ENCOLAN aquí (await), nunca se
-                // rechazan.
-                let permit = Arc::clone(&self.gz_read_permits)
-                    .acquire_owned()
-                    .await
-                    .map_err(|_| {
-                        // El semáforo nunca se `close()`a en la vida de este
-                        // provider (no hay ningún caller que lo cierre) —
-                        // inalcanzable en la práctica; fail-safe explícito
-                        // en vez de un `expect` que podría panicar si algo
-                        // cambia en el futuro.
-                        Error::Cancelled
-                    })?;
-                let reader = ProviderReader::new(
-                    tokio::runtime::Handle::current(),
-                    Arc::clone(&self.inner),
-                    aref.outer.clone(),
-                    cached.index.generation.1.unwrap_or(0),
-                );
-                let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-                let skip = offset + req_off;
-                drop(tokio::task::spawn_blocking(move || {
-                    let _permit = permit; // se libera cuando el hilo termina
-                    crate::targz_format::read_entry_gz(reader, skip, req_len, &tx);
-                }));
-                Ok(futures::stream::poll_fn(move |cx| rx.poll_recv(cx)).boxed())
+                self.read_gz(&aref, &cached, offset, req_off, req_len).await
             }
         }
     }

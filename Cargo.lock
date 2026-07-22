@@ -4434,6 +4434,7 @@ dependencies = [
  "norte-vfs",
  "proptest",
  "tar",
+ "tempfile",
  "tokio",
  "tracing",
 ]

@@ -27,6 +27,9 @@ flate2.workspace = true
 # `sync`: canal acotado que puentea la descompresión zip → ByteStream (el
 # drop del receptor corta el hilo: cancelación de la regla 3).
 tokio = { workspace = true, features = ["rt", "sync"] }
+# Fichero ANÓNIMO (ya unlinked, sin pathname) para el spool descomprimido
+# de tar.gz calientes (#95.1); ya estaba centralizado en el workspace.
+tempfile.workspace = true
 # warn! de entradas hostiles omitidas (ADR 0018 C2: omitir CON señal).
 tracing.workspace = true
 

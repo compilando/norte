@@ -221,6 +221,65 @@ pub(crate) fn read_entry_gz<R: Read>(
     }
 }
 
+/// Por qué abortó [`spool_gz`] sin producir un spool completo.
+#[derive(Debug)]
+pub(crate) enum SpoolAbort {
+    /// `tx_probe` devolvió `true` (receptor muerto): nadie espera el
+    /// resultado — descartar el parcial sin ruido (regla 3).
+    Cancelled,
+    /// El descomprimido superó el presupuesto (`Limits::spool_max_bytes`):
+    /// el contenedor es no-spooleable — el caller lo recuerda y las
+    /// lecturas siguen por forward-decode.
+    OverBudget,
+    /// Error genuino: decoder (gz roto/IO del provider interior, ya
+    /// desenvuelto verbatim vía [`corrupt`]) o escritura al fichero de
+    /// spool (disco lleno). El caller decide si propaga o degrada a
+    /// forward-decode.
+    Io(Error),
+}
+
+/// Descomprime el stream gz COMPLETO de un contenedor (desde el offset 0,
+/// mismo `MultiGzDecoder` que [`read_entry_gz`]) al fichero `out`: el spool
+/// de #95.1. Devuelve el total de bytes descomprimidos escritos.
+///
+/// `tx_probe` se consulta ANTES de cada chunk (`true` = abortar): el caller
+/// le pasa el `tx.is_closed()` de su canal de entrega — un receptor muerto
+/// corta la construcción igual que corta el forward-decode (regla 3).
+/// Superar `budget` aborta con [`SpoolAbort::OverBudget`] sin seguir
+/// pagando descompresión (mismo criterio anti-bomba que el pase de índice).
+pub(crate) fn spool_gz<R: Read>(
+    src: R,
+    budget: u64,
+    tx_probe: &dyn Fn() -> bool,
+    out: &mut std::fs::File,
+) -> Result<u64, SpoolAbort> {
+    use std::io::Write as _;
+    let mut decoder = MultiGzDecoder::new(src);
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut total: u64 = 0;
+    loop {
+        if tx_probe() {
+            return Err(SpoolAbort::Cancelled);
+        }
+        match decoder.read(&mut buf) {
+            Ok(0) => return Ok(total),
+            Ok(n) => {
+                total += n as u64;
+                if total > budget {
+                    return Err(SpoolAbort::OverBudget);
+                }
+                if let Err(e) = out.write_all(&buf[..n]) {
+                    // Escritura local del spool (disco lleno…): no pasa por
+                    // `corrupt` — no es el contenedor, es nuestro tempfile.
+                    tracing::warn!(error = %e, "fallo escribiendo el spool tar.gz");
+                    return Err(SpoolAbort::Io(Error::Io { retryable: true }));
+                }
+            }
+            Err(e) => return Err(SpoolAbort::Io(corrupt(&e))),
+        }
+    }
+}
+
 fn corrupt(e: &std::io::Error) -> Error {
     // IO genuino del provider interior (corte de red a mitad de parseo) O
     // señal envuelta por `CountingReader` (`Cancelled`/`Corrupt` de bomba):

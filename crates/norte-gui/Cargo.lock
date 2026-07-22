@@ -5181,6 +5181,7 @@ dependencies = [
  "norte-proto",
  "norte-vfs",
  "tar",
+ "tempfile",
  "tokio",
  "tracing",
 ]
