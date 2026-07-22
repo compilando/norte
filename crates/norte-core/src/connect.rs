@@ -14,14 +14,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use norte_connect::{
-    AuthMethod, ConnectionSpec, ConnectionsFile, FtpConnector, S3Connector, Secret, SecretResolver,
-    SshConnector,
+    AuthMethod, ConnectionSpec, ConnectionsFile, S3Connector, Secret, SecretResolver, SshConnector,
 };
 use norte_proto::Error;
 use norte_vfs::Provider;
-use norte_vfs_ftp::FtpProvider;
 use norte_vfs_object::ObjectProvider;
 use norte_vfs_sftp::SftpProvider;
+
+use crate::ftp_plugin::connect_ftp_plugin;
 
 /// Establece providers remotos bajo demanda. El Engine lo consulta cuando un
 /// `VPath` remoto no tiene provider cacheado; la implementación real es
@@ -70,6 +70,9 @@ pub trait RemoteConnector: Send + Sync {
 pub enum ConnectionWarningReason {
     /// FTP `tls="allow"`: el servidor rechazó `AUTH TLS` → sesión en claro.
     TlsAuthRejected,
+    /// FTP-por-plugin (ADR 0033): la sesión es SIEMPRE en claro — FTPS es deuda
+    /// (aws-lc-rs no compila a wasm). Credenciales y datos sin cifrar.
+    FtpPlaintext,
 }
 
 impl ConnectionWarningReason {
@@ -78,6 +81,7 @@ impl ConnectionWarningReason {
     pub fn wire(self) -> &'static str {
         match self {
             ConnectionWarningReason::TlsAuthRejected => "tls-auth-rejected",
+            ConnectionWarningReason::FtpPlaintext => "ftp-plaintext",
         }
     }
 }
@@ -162,19 +166,22 @@ pub struct ConnectionManager {
     config_dir: PathBuf,
     secrets: SecretResolver,
     ssh: SshConnector,
-    ftp: FtpConnector,
     s3: S3Connector,
 }
 
 impl ConnectionManager {
     /// Manager anclado en `config_dir` (ver [`config_dir()`] para el default).
+    ///
+    /// FTP ya no lleva un conector aquí: `ftp://` va por el provider-plugin
+    /// ([`crate::ftp_plugin`], ADR 0033), que establece la conexión dentro del
+    /// guest WASM. El [`norte_connect::FtpConnector`] (TLS host-side) queda
+    /// reservado para un futuro FTPS terminado en el host (deuda).
     #[must_use]
     pub fn new(config_dir: impl Into<PathBuf>) -> Self {
         let dir: PathBuf = config_dir.into();
         Self {
             secrets: SecretResolver::new(&dir),
             ssh: SshConnector::new(&dir),
-            ftp: FtpConnector::new(),
             s3: S3Connector::new(),
             config_dir: dir,
         }
@@ -241,31 +248,32 @@ impl ConnectionManager {
                 })
             }
             "ftp" => {
-                // DOS conexiones: control principal + lectura dedicada — la
-                // copia FTP→FTP mismo host no deadlockea (issue #39 B1).
-                let main = self
-                    .ftp
-                    .connect(spec, secret.as_ref())
-                    .await
-                    .map_err(log_and_map)?;
-                let reader = self
-                    .ftp
-                    .connect(spec, secret.as_ref())
-                    .await
-                    .map_err(log_and_map)?;
-                // #44: si el control principal cayó a claro (tls="allow" +
-                // AUTH TLS rechazado), se surfacea la degradación al usuario.
-                // Basta `main`: ambas conexiones comparten el MISMO `spec`, así
-                // que degradan juntas o ninguna — mirar `reader.tls_degraded`
-                // solo duplicaría el aviso (rust m2).
-                if main.tls_degraded {
-                    warnings.push(ConnectionWarning {
-                        scheme: ep.scheme.clone(),
-                        host: ep.host.clone(),
-                        reason: ConnectionWarningReason::TlsAuthRejected,
-                    });
-                }
-                let provider = FtpProvider::with_reader(main.stream, reader.stream, "/").await?;
+                // FTP-por-plugin (ADR 0033): el guest WASM establece la conexión
+                // sobre `wasi:sockets` gateado. El host resuelve DNS (con filtro
+                // anti-SSRF), concede `net` a la IP y llama a `configure`. Sin
+                // TLS (FTPS = deuda): SIEMPRE en claro → se avisa al usuario.
+                let user = ep.user.clone().unwrap_or_else(|| "anonymous".to_string());
+                let password = match (spec.auth, secret.as_ref()) {
+                    (AuthMethod::Password, Some(s)) => s.expose().to_string(),
+                    // Convención guest: login anónimo.
+                    (AuthMethod::Agent, _) => "anonymous".to_string(),
+                    (AuthMethod::Password, None) => {
+                        return Err(log_and_map(norte_connect::ConnectError::Secret {
+                            conn: ep.host.clone(),
+                        }));
+                    }
+                    // key/access-key no existen en FTP.
+                    (AuthMethod::Key | AuthMethod::AccessKey, _) => {
+                        return Err(Error::Unsupported);
+                    }
+                };
+                let port = ep.port.unwrap_or(21);
+                warnings.push(ConnectionWarning {
+                    scheme: ep.scheme.clone(),
+                    host: ep.host.clone(),
+                    reason: ConnectionWarningReason::FtpPlaintext,
+                });
+                let provider = connect_ftp_plugin(&ep.host, port, &user, &password, "/").await?;
                 Ok(Connected {
                     provider: Arc::new(provider),
                     warnings,

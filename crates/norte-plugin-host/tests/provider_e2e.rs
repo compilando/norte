@@ -44,7 +44,7 @@ fn provider_wit_e2e_wasm_real() {
         password: String::new(),
         base: String::new(),
     };
-    inst.configure(cfg)
+    inst.configure(&cfg)
         .expect("configure sin trap")
         .expect("mem configure es no-op");
 

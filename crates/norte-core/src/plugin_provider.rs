@@ -119,7 +119,7 @@ impl PluginProvider {
     ) -> Result<(), Error> {
         use norte_plugin_host::provider_iface::ProviderConfig;
         self.call(move |g| {
-            g.configure(ProviderConfig {
+            g.configure(&ProviderConfig {
                 endpoint,
                 user,
                 password,

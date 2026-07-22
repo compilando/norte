@@ -25,7 +25,7 @@ the protocol, a frontend cannot provide it.
 | `norte-vfs-archive` | Read-only ZIP and TAR provider. | MIT OR Apache-2.0 |
 | `norte-testkit` | Deterministic `MemProvider`, injectable failures, hostile fixtures, and proptest strategies. | MIT OR Apache-2.0 |
 | `norte-core` | Task scheduling, transfers, sessions, policy enforcement, journaling, and the daemon. | AGPL-3.0-only |
-| `norte-plugin-host` | WASM plugin manifests, capabilities, catalogue, and runtime. | AGPL-3.0-only |
+| `norte-plugin-host` | WASM plugin manifests, capabilities, catalogue, and runtime. Hosts the first-party FTP provider guest (`examples-wasm/ftp-provider`), which replaces the former `norte-vfs-ftp` crate (ADR 0033). | AGPL-3.0-only |
 | `norte-ai` | Model-provider abstraction (`AiProvider`) and implementations: Anthropic, Ollama, OpenAI-compatible. | AGPL-3.0-only |
 | `norte-cli` | A command-line client and manual core test bed. | AGPL-3.0-only |
 | `norte-tui` | The ratatui dual-pane terminal frontend. | AGPL-3.0-only |

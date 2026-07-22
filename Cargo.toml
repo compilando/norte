@@ -7,7 +7,6 @@ members = [
     "crates/norte-vfs",
     "crates/norte-vfs-local",
     "crates/norte-vfs-sftp",
-    "crates/norte-vfs-ftp",
     "crates/norte-vfs-object",
     "crates/norte-vfs-archive",
     "crates/norte-connect",
@@ -67,7 +66,6 @@ norte-proto = { path = "crates/norte-proto", version = "0.3.0-alpha.1" }
 norte-vfs = { path = "crates/norte-vfs", version = "0.3.0-alpha.1" }
 norte-vfs-local = { path = "crates/norte-vfs-local", version = "0.3.0-alpha.1" }
 norte-vfs-sftp = { path = "crates/norte-vfs-sftp", version = "0.3.0-alpha.1" }
-norte-vfs-ftp = { path = "crates/norte-vfs-ftp", version = "0.3.0-alpha.1" }
 norte-vfs-object = { path = "crates/norte-vfs-object", version = "0.3.0-alpha.1" }
 norte-vfs-archive = { path = "crates/norte-vfs-archive", version = "0.3.0-alpha.1" }
 norte-connect = { path = "crates/norte-connect", version = "0.3.0-alpha.1" }

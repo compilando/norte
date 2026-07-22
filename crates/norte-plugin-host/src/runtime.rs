@@ -324,9 +324,9 @@ impl PluginRuntime {
         Ok((store, component, linker))
     }
 
-    /// El `Store` (sandbox WASI vacío + límites + deadline) y el `Linker` (WASI
-    /// + `host-log`) comunes a cualquier world, SIN cargar el componente — el
-    /// caller trae su `Component` (de disco vía [`Self::prepare`] o de bytes
+    /// El `Store` (sandbox WASI vacío, límites y deadline) y el `Linker` (WASI
+    /// más `host-log`) comunes a cualquier world, SIN cargar el componente: el
+    /// caller trae su `Component` (de disco vía [`Self::prepare`], o de bytes
     /// embebidos vía [`Self::instantiate_provider_bytes`], ADR 0033).
     fn prepare_common(
         &self,
@@ -598,11 +598,11 @@ impl ProviderInstance {
     /// [`RuntimeError::Trap`] si el guest atrapa.
     pub fn configure(
         &mut self,
-        cfg: provider_iface::ProviderConfig,
+        cfg: &provider_iface::ProviderConfig,
     ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
         self.bindings
             .norte_plugin_provider()
-            .call_configure(&mut self.store, &cfg)
+            .call_configure(&mut self.store, cfg)
             .map_err(|e| RuntimeError::Trap(e.to_string()))
     }
 

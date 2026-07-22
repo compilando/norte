@@ -23,10 +23,10 @@ const FTP_PROVIDER_WASM: &[u8] = include_bytes!("../resources/ftp-provider.wasm"
 
 /// Rangos de IP que JAMÁS deben alcanzarse desde un guest (anti-SSRF): loopback
 /// (salvo destino localhost explícito — ver `connect_ftp_plugin`), link-local
-/// (169.254/16, fe80::/10) y el rango de metadata de nube (169.254.169.254 cae
-/// en link-local). Se filtra en el HOST tras resolver DNS, antes de conceder
-/// `net` (el guest resuelve por IP; sin este filtro un hostname malicioso que
-/// resuelva a metadata sería alcanzable).
+/// (`169.254.0.0/16`, `fe80::/10`) y el rango de metadata de nube
+/// (`169.254.169.254` cae en link-local). Se filtra en el HOST tras resolver
+/// DNS, antes de conceder `net` (el guest resuelve por IP; sin este filtro un
+/// hostname malicioso que resuelva a metadata sería alcanzable).
 fn is_forbidden_ip(ip: IpAddr, allow_loopback: bool) -> bool {
     match ip {
         IpAddr::V4(v4) => {
@@ -49,16 +49,14 @@ fn is_forbidden_ip(ip: IpAddr, allow_loopback: bool) -> bool {
 }
 
 /// Resuelve `host` a una IP (el guest conecta por IP; no tiene DNS) y la filtra
-/// contra los rangos prohibidos (SSRF). `allow_loopback` deja pasar 127.0.0.1/::1
-/// solo cuando el host destino es explícitamente loopback (tests, túneles
-/// locales) — jamás por un hostname que resuelva sorpresivamente a loopback.
+/// contra los rangos prohibidos (SSRF). `allow_loopback` deja pasar
+/// `127.0.0.1`/`::1` solo cuando el host destino es explícitamente loopback
+/// (tests, túneles locales) — jamás por un hostname que resuelva sorpresivamente
+/// a loopback.
 fn resolve_ip(host: &str, port: u16) -> Result<IpAddr, Error> {
     use std::net::ToSocketAddrs;
     // Si el usuario pidió literalmente loopback, se permite el destino loopback.
-    let allow_loopback = host
-        .parse::<IpAddr>()
-        .map(|ip| ip.is_loopback())
-        .unwrap_or(false)
+    let allow_loopback = host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
         || host.eq_ignore_ascii_case("localhost");
     let ip = (host, port)
         .to_socket_addrs()

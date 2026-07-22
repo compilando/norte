@@ -29,7 +29,6 @@ norte-encoding.workspace = true
 norte-vfs.workspace = true
 norte-vfs-archive.workspace = true
 norte-ai.workspace = true
-norte-vfs-ftp.workspace = true
 norte-vfs-object.workspace = true
 norte-vfs-sftp.workspace = true
 # El daemon (ADR 0011) serializa el dispatch JSON-RPC; mismo encoding que proto.

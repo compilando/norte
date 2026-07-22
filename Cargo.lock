@@ -4263,7 +4263,6 @@ dependencies = [
  "norte-testkit",
  "norte-vfs",
  "norte-vfs-archive",
- "norte-vfs-ftp",
  "norte-vfs-local",
  "norte-vfs-object",
  "norte-vfs-sftp",
@@ -4458,25 +4457,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "norte-vfs-ftp"
-version = "0.3.0-alpha.1"
-dependencies = [
- "async-trait",
- "bytes",
- "futures",
- "libunftp",
- "norte-proto",
- "norte-testkit",
- "norte-vfs",
- "sha2 0.10.9",
- "suppaftp",
- "tempfile",
- "testcontainers",
- "tokio",
- "unftp-sbe-fs",
 ]
 
 [[package]]

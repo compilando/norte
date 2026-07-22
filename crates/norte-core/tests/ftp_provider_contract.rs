@@ -14,7 +14,6 @@
 //! tiempo de test — el `.wasm` ya está dentro del binario.
 #![cfg(target_os = "linux")]
 
-use std::io::Write;
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::time::Duration;
