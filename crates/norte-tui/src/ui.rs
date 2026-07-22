@@ -902,7 +902,7 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         // #93: el contenedor omitió entradas de su índice — el listado que
         // se ve NO es todo lo que el archivo contiene. Persistente mientras
         // el pane esté dentro (paralelo del badge hostil, jamás silencioso).
-        let omitidas = match pane.skipped {
+        let omitidas = match pane.skipped() {
             Some(n) if n > 0 => {
                 format!(
                     "  {}",

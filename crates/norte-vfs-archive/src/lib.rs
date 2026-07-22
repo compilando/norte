@@ -33,6 +33,7 @@ mod index;
 mod provider;
 mod tar_format;
 mod targz_format;
+mod zip_cd;
 mod zip_format;
 
 pub use index::Limits;

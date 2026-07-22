@@ -260,6 +260,26 @@ impl Engine {
         // por composición sobre el provider del CONTENEDOR. Antes del
         // connector: el interior puede ser local o una conexión ya viva.
         if let Some(aref) = p.archive_split().map_err(|_| Error::InvalidPath)? {
+            // #56: tope de CAPAS anidadas ANTES de componer nada — cuenta
+            // los tokens de formato del scheme (pelado izquierda→derecha,
+            // mismo longest-match que el split).
+            let mut layers = 0usize;
+            let mut sch = p.scheme();
+            while let Some(f) = norte_proto::scheme_archive_format(sch) {
+                layers += 1;
+                sch = &sch[f.len() + 1..];
+            }
+            let max_nesting = self
+                .archive_limits
+                .read()
+                .expect("archive_limits lock sano")
+                .max_nesting;
+            if layers > max_nesting {
+                tracing::warn!(layers, max_nesting, "anidamiento de archivo sobre el tope");
+                return Err(Error::LimitExceeded {
+                    limit: Error::LIMIT_NESTING.into(),
+                });
+            }
             let format = match aref.format.as_str() {
                 "tar" => norte_vfs_archive::Format::Tar,
                 "zip" => norte_vfs_archive::Format::Zip,
@@ -268,8 +288,9 @@ impl Engine {
                 // versión de core más vieja que el proto. Honesto: no sé.
                 _ => return Err(Error::Unsupported),
             };
-            // El exterior jamás lleva prefijo de formato (archive_split
-            // rechaza anidamiento en v1): recursión de profundidad 1.
+            // #56: el exterior puede ser a su vez un path de archivo —
+            // recursión capa a capa, acotada por el gate max_nesting de
+            // arriba (jamás ilimitada).
             let inner = Box::pin(self.provider_for(&aref.outer)).await?;
             tracing::debug!(scheme = %p.scheme(), %key, "componiendo provider de archivo");
             // expect: envenenado = otro hilo panicó a mitad de escritura —

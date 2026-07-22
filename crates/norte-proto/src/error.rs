@@ -156,10 +156,14 @@ pub enum Error {
         /// igualdad (nunca el valor numérico, que es configuración local):
         /// [`Error::LIMIT_ENTRIES`] (entradas del índice — o anunciadas por
         /// el EOCD — por encima de `max_entries`, presupuesto de omitidas
-        /// incluido) o [`Error::LIMIT_DECOMPRESSED_BYTES`] (inflado
-        /// acumulado por encima de `max_decompressed_bytes`). Los emisores
-        /// usan las constantes, jamás literales sueltos (fuente única, pin
-        /// en tests).
+        /// incluido), [`Error::LIMIT_DECOMPRESSED_BYTES`] (inflado
+        /// acumulado por encima de `max_decompressed_bytes`) o
+        /// [`Error::LIMIT_NESTING`] (capas de archivo anidadas por encima
+        /// de `max_nesting`, #56/proto 0.24). Los emisores usan las
+        /// constantes, jamás literales sueltos (fuente única, pin en
+        /// tests). Forward-compat: un token DESCONOCIDO (peer más nuevo)
+        /// se trata como límite genérico — mostrar el string tal cual,
+        /// jamás fallar el parse ni adivinar.
         limit: String,
     },
     /// Host key SSH DESCONOCIDA en el primer contacto (TOFU — ADR 0015 D). El
@@ -224,4 +228,8 @@ impl Error {
     /// Vocabulario de [`Error::LimitExceeded`]: inflado acumulado por encima
     /// de `max_decompressed_bytes` (gzip bomb o contenedor legítimo enorme).
     pub const LIMIT_DECOMPRESSED_BYTES: &'static str = "decompressed-bytes";
+    /// Vocabulario de [`Error::LimitExceeded`] (#56, proto 0.24): capas de
+    /// archivo anidadas por encima de `max_nesting` (lo gobierna el engine —
+    /// el direccionamiento en sí es ilimitado sintácticamente).
+    pub const LIMIT_NESTING: &'static str = "nesting";
 }

@@ -43,17 +43,13 @@ async fn read_all(p: &ArchiveProvider, f: &VPath, range: Option<ByteRange>) -> V
     out
 }
 
-/// Un zip deflate REAL (escrito por el crate `zip`): `ZipSmith` solo forja
-/// stored; la descompresión de verdad se ejercita con esto.
-fn deflate_zip(name: &str, data: &[u8]) -> Vec<u8> {
-    let mut cursor = std::io::Cursor::new(Vec::new());
-    let mut w = zip::ZipWriter::new(&mut cursor);
-    let opts = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
-    w.start_file(name, opts).expect("start_file");
-    w.write_all(data).expect("write_all");
-    w.finish().expect("finish");
-    cursor.into_inner()
+/// Un zip deflate REAL: los bytes comprimidos los produce flate2 y la
+/// estructura la forja `ZipSmith` (#59: sin el crate `zip` ni en tests).
+fn deflate_zip(name: &[u8], data: &[u8]) -> Vec<u8> {
+    let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+    enc.write_all(data).expect("deflate");
+    let deflated = enc.finish().expect("finish");
+    ZipSmith::new().file_deflate(name, data, &deflated).build()
 }
 
 #[tokio::test]
@@ -192,7 +188,7 @@ async fn cifrado_y_metodo_raro_se_listan_pero_no_se_leen() {
 async fn deflate_real_roundtrip_y_rangos() {
     // Datos compresibles y grandes (varios chunks de 64 KiB del lector).
     let data: Vec<u8> = (0..500_000u32).map(|i| (i % 7) as u8).collect();
-    let zip = deflate_zip("grande.bin", &data);
+    let zip = deflate_zip(b"grande.bin", &data);
     let (p, root) = common::zip_provider(&zip).await;
     let f = root.join(seg(b"grande.bin"));
     assert_eq!(
@@ -243,7 +239,7 @@ async fn deflate_real_roundtrip_y_rangos() {
 #[tokio::test(flavor = "multi_thread")]
 async fn drop_del_stream_cancela_la_descompresion() {
     let data: Vec<u8> = (0..4_000_000u32).map(|i| (i % 13) as u8).collect();
-    let zip = deflate_zip("enorme.bin", &data);
+    let zip = deflate_zip(b"enorme.bin", &data);
     let (p, root) = common::zip_provider(&zip).await;
     let f = root.join(seg(b"enorme.bin"));
     let mut stream = p.read(&f, None).await.expect("read");
@@ -318,23 +314,159 @@ async fn firma_eocd_falsa_en_el_comentario_no_rompe() {
 }
 
 #[tokio::test]
-async fn pin_h1_colapso_lossy_del_crate_zip() {
-    // PIN de bug upstream (H1, issue de deuda 8g): zip 5.x indexa el CD por
-    // el nombre DECODIFICADO — dos nombres crudos distintos que decodifican
-    // al mismo U+FFFD colapsan en UNA entrada (última gana) ANTES de que
-    // norte los vea. Cuando un upgrade del crate lo arregle, este test se
-    // pondrá rojo y podremos listar ambas byte-exactas.
+async fn h1_nombres_que_colapsan_en_lossy_ya_no_colapsan() {
+    // H1 (#59): el crate `zip` indexaba el CD por el nombre DECODIFICADO —
+    // dos nombres crudos distintos que decodifican al mismo U+FFFD
+    // colapsaban en UNA entrada (última gana) antes de que norte los viera.
+    // Con el parser propio del CD ambos nombres viven byte-exactos.
     let zip = ZipSmith::new()
         .file_utf8(b"lossy-\xff.txt", b"PRIMERO")
         .file_utf8(b"lossy-\xfe.txt", b"SEGUNDO")
         .build();
     let (p, root) = common::zip_provider(&zip).await;
-    let names = list_names(&p, &root).await;
-    assert_eq!(names.len(), 1, "el crate colapsó las dos entradas (pin)");
     assert_eq!(
-        read_all(&p, &root.join(seg(&names[0])), None).await,
-        b"SEGUNDO",
-        "última gana dentro del crate (shadowing documentado)"
+        list_names(&p, &root).await,
+        vec![b"lossy-\xfe.txt".to_vec(), b"lossy-\xff.txt".to_vec()],
+        "las dos entradas listan byte-exactas, sin colapso lossy"
+    );
+    assert_eq!(
+        p.list_skipped(&root).await.expect("skipped"),
+        Some(0),
+        "nada se omitió ni se perdió"
+    );
+    assert_eq!(
+        read_all(&p, &root.join(seg(b"lossy-\xff.txt")), None).await,
+        b"PRIMERO"
+    );
+    assert_eq!(
+        read_all(&p, &root.join(seg(b"lossy-\xfe.txt")), None).await,
+        b"SEGUNDO"
+    );
+}
+
+/// Extra field 0x7075 (Info-ZIP unicode path) VÁLIDO: versión 1 + crc32 del
+/// nombre del header + nombre unicode alternativo.
+fn extra_7075(unicode: &[u8], header_name: &[u8]) -> Vec<u8> {
+    let mut crc = flate2::Crc::new();
+    crc.update(header_name);
+    let mut body = vec![1u8]; // versión
+    body.extend_from_slice(&crc.sum().to_le_bytes());
+    body.extend_from_slice(unicode);
+    let mut out = 0x7075u16.to_le_bytes().to_vec();
+    out.extend_from_slice(
+        &u16::try_from(body.len())
+            .expect("extra corto")
+            .to_le_bytes(),
+    );
+    out.extend_from_slice(&body);
+    out
+}
+
+#[tokio::test]
+async fn extra_7075_valido_jamas_sustituye_el_nombre() {
+    // H3 (#59): el crate `zip` SUSTITUÍA el nombre del CD por el del extra
+    // 0x7075 cuando su crc validaba. El parser propio lo ignora por diseño:
+    // los bytes del CD mandan (regla 1).
+    let extra = extra_7075(b"impostor.txt", b"nombre-cd.txt");
+    let zip = ZipSmith::new()
+        .file_with_extra(b"nombre-cd.txt", b"contenido", &extra)
+        .build();
+    let (p, root) = common::zip_provider(&zip).await;
+    assert_eq!(
+        list_names(&p, &root).await,
+        vec![b"nombre-cd.txt".to_vec()],
+        "el nombre CRUDO del CD manda; el 0x7075 se ignora"
+    );
+    assert_eq!(
+        read_all(&p, &root.join(seg(b"nombre-cd.txt")), None).await,
+        b"contenido"
+    );
+}
+
+#[tokio::test]
+async fn extra_7075_invalido_no_mata_el_archivo() {
+    // H3 (#59): un 0x7075 malformado (size que desborda el blob) abortaba
+    // el archive ENTERO en el crate `zip`. Ahora: record truncado = se deja
+    // de caminar el blob y la entrada sobrevive con su nombre del CD.
+    let mut extra = 0x7075u16.to_le_bytes().to_vec();
+    extra.extend_from_slice(&200u16.to_le_bytes()); // promete 200, hay 3
+    extra.extend_from_slice(&[1, 2, 3]);
+    let zip = ZipSmith::new()
+        .file_with_extra(b"superviviente.txt", b"vivo", &extra)
+        .file(b"vecina.txt", b"tambien")
+        .build();
+    let (p, root) = common::zip_provider(&zip).await;
+    assert_eq!(
+        list_names(&p, &root).await,
+        vec![b"superviviente.txt".to_vec(), b"vecina.txt".to_vec()]
+    );
+    assert_eq!(
+        read_all(&p, &root.join(seg(b"superviviente.txt")), None).await,
+        b"vivo"
+    );
+}
+
+#[tokio::test]
+async fn zip64_eocd_cuenta_y_lee() {
+    // zip64 (#59): EOCD con marcadores → locator → EOCD64. La entrada lista
+    // y lee byte-exacta.
+    let zip = ZipSmith::new()
+        .file(b"z64.txt", b"contenido-64")
+        .build_zip64();
+    let (p, root) = common::zip_provider(&zip).await;
+    assert_eq!(list_names(&p, &root).await, vec![b"z64.txt".to_vec()]);
+    assert_eq!(
+        read_all(&p, &root.join(seg(b"z64.txt")), None).await,
+        b"contenido-64"
+    );
+
+    // Y una cuenta zip64 mentirosa por encima de max_entries corta ANTES de
+    // pagar el CD (el hueco del preflight u16 queda cerrado, #59).
+    let liar = ZipSmith::new()
+        .file(b"z64.txt", b"x")
+        .build_zip64_lying_count(1_000_000);
+    let limits = Limits {
+        max_entries: 100,
+        ..Limits::default()
+    };
+    let (p, root) = common::zip_provider_with_limits(&liar, limits).await;
+    match p.list(&root).await.map(|_| ()) {
+        Err(Error::LimitExceeded { limit }) if limit == "entries" => {}
+        other => panic!("esperaba LimitExceeded(entries) por EOCD64 mentiroso, fue {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn crc_mentiroso_en_lectura_completa_es_corrupt() {
+    // #59: la lectura COMPLETA (el camino de copia) verifica el CRC del CD
+    // sobre los bytes servidos — un CD que miente termina en Err(Corrupt)
+    // como ÚLTIMO item del stream, jamás datos corruptos en silencio.
+    let mut bytes = ZipSmith::new().file(b"mentira.bin", b"contenido").build();
+    let cd = bytes
+        .windows(4)
+        .position(|w| w == [0x50, 0x4b, 0x01, 0x02])
+        .expect("firma del CD");
+    bytes[cd + 16..cd + 20].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes()); // crc falso
+    let (p, root) = common::zip_provider(&bytes).await;
+    let f = root.join(seg(b"mentira.bin"));
+    let (vistos, fallo) = read_hasta_fallo(&p, &f).await;
+    match fallo {
+        Some(Error::Corrupt) => {}
+        other => panic!("esperaba Corrupt por CRC mentiroso (vistos {vistos}), fue {other:?}"),
+    }
+    // Un range PARCIAL de la misma entrada no puede verificarse sin
+    // descomprimir la entrada entera: sirve los bytes sin CRC (documentado).
+    assert_eq!(
+        read_all(
+            &p,
+            &f,
+            Some(ByteRange {
+                offset: 1,
+                len: Some(3)
+            })
+        )
+        .await,
+        b"ont"
     );
 }
 
@@ -438,4 +570,155 @@ async fn zip_presupuesto_de_omitidas_es_limit_exceeded() {
         Err(Error::LimitExceeded { limit }) if limit == "entries" => {}
         other => panic!("esperaba LimitExceeded(entries) por omitidas, fue {other:?}"),
     }
+}
+
+/// enc MAJOR-1 (review #59, bug CONFIRMADO pre-fix): una entrada STORED cuyo
+/// CD miente `uncomp > comp` habría servido bytes VECINOS del contenedor en
+/// un ranged read (el local header de al lado salía como contenido, en
+/// silencio). APPNOTE exige comp == uncomp para stored: fail-loud `Corrupt`
+/// en CUALQUIER lectura, jamás datos ajenos atribuidos a la entrada.
+#[tokio::test]
+async fn stored_con_uncomp_mentiroso_es_corrupt_jamas_bytes_vecinos() {
+    let mut zip = ZipSmith::new().file(b"peq.txt", b"hola").build();
+    // Cirugía: infla el uncomp_size del CD (offset +24 del record 0x02014b50)
+    // de 4 a 40. El comp_size (+20) queda en 4: la mentira exacta del bug.
+    let cd = zip
+        .windows(4)
+        .position(|w| w == [0x50, 0x4b, 0x01, 0x02])
+        .expect("CD record");
+    assert_eq!(
+        u32::from_le_bytes(zip[cd + 24..cd + 28].try_into().expect("u32")),
+        4,
+        "uncomp original"
+    );
+    zip[cd + 24..cd + 28].copy_from_slice(&40u32.to_le_bytes());
+
+    let (provider, root) = common::zip_provider(&zip).await;
+    let path = root.join(Segment::new(b"peq.txt".to_vec()).expect("seg"));
+    // Ranged read MÁS ALLÁ de los datos reales: antes devolvía bytes del
+    // local header vecino con err=None; ahora Corrupt.
+    let mut stream = provider
+        .read(
+            &path,
+            Some(ByteRange {
+                offset: 10,
+                len: Some(8),
+            }),
+        )
+        .await
+        .expect("read abre (el plan se valida en el hilo)");
+    let mut err = None;
+    let mut got = Vec::new();
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(b) => got.extend_from_slice(&b),
+            Err(e) => {
+                err = Some(e);
+                break;
+            }
+        }
+    }
+    assert!(matches!(err, Some(Error::Corrupt)), "fue {err:?}");
+    assert!(got.is_empty(), "ni un byte vecino en silencio: {got:x?}");
+}
+
+/// rust MAJOR-1 (review #59, regla 3): dropear el stream durante la fase de
+/// DESCARTE de un deflate ranged (que no envía nada al canal) corta el hilo
+/// blocking — sin el chequeo de canal cerrado, seguiría descomprimiendo el
+/// skip entero para nadie.
+#[tokio::test]
+async fn drop_del_stream_durante_el_descarte_corta_el_hilo() {
+    // 4 MiB INCOMPRESIBLES (xorshift determinista): comp ≈ uncomp, así el
+    // descarte de ~4 MiB descomprimidos exige leer ~16 bloques de 256 KiB
+    // del contenedor — señal medible en Faults::read_calls.
+    let mut data = vec![0u8; 4 * 1024 * 1024];
+    let mut x = 0x2545_F491_4F6C_DD1Du64;
+    for b in &mut data {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            *b = x as u8;
+        }
+    }
+    let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::fast());
+    enc.write_all(&data).expect("deflate");
+    let deflated = enc.finish().expect("finish");
+    let zip = ZipSmith::new()
+        .file_deflate(b"big.bin", &data, &deflated)
+        .build();
+
+    let (mem, path) = common::seed_container(b"fixture.zip", &zip).await;
+    let root = VPath::archive_compose("zip", &path, &[]).expect("compose");
+    let provider = ArchiveProvider::with_limits(
+        std::sync::Arc::clone(&mem) as std::sync::Arc<dyn Provider>,
+        norte_vfs_archive::Format::Zip,
+        "zip+mem",
+        Limits::default(),
+    );
+    let entry = root.join(Segment::new(b"big.bin".to_vec()).expect("seg"));
+    // Warm-up del índice (sus lecturas no cuentan para la aserción).
+    let _ = provider.stat(&entry).await.expect("stat");
+    let base = mem.faults().read_calls();
+
+    // Ranged read con skip PROFUNDO… y drop inmediato del stream.
+    let stream = provider
+        .read(
+            &entry,
+            Some(ByteRange {
+                offset: 3_900_000,
+                len: Some(16),
+            }),
+        )
+        .await
+        .expect("read abre");
+    drop(stream);
+
+    // Espera a que el contador se ESTABILICE (el hilo blocking muere solo).
+    let mut last = mem.faults().read_calls();
+    for _ in 0..200 {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let now = mem.faults().read_calls();
+        if now == last {
+            break;
+        }
+        last = now;
+    }
+    let spent = last.saturating_sub(base);
+    // Con el fix: data_offset (1 bloque) + a lo sumo un par de iteraciones
+    // del descarte antes de ver el canal cerrado. Sin el fix: ~16 bloques
+    // del contenedor (el descarte entero).
+    assert!(
+        spent <= 6,
+        "el descarte siguió tras el drop: {spent} lecturas"
+    );
+}
+
+/// Pin de la decisión #59 (rust MAJOR-3 / enc MINOR-4): un zip con datos
+/// PREPENDADOS (self-extractor) se rechaza `Corrupt` — la aceptación exige
+/// la auto-consistencia exacta del EOCD (`cd_off + cd_size == pos`), que es
+/// precisamente lo que hace sólido el rechazo de firmas falsas en el
+/// comentario (H9). Decisión consciente, no accidente: el "offset fudge" de
+/// Info-ZIP queda como feature futura si aparece demanda real.
+#[tokio::test]
+async fn zip_con_datos_prependados_se_rechaza_documentado() {
+    let zip = ZipSmith::new().file(b"a.txt", b"x").build();
+    let mut sfx = b"#!/bin/sh\necho stub\n".to_vec();
+    sfx.extend_from_slice(&zip);
+    let (provider, root) = common::zip_provider(&sfx).await;
+    // El fallo puede salir del list directo o del stream: acepta ambos.
+    if let Err(e) = provider.list(&root).await {
+        assert!(matches!(e, Error::Corrupt), "fue {e:?}");
+        return;
+    }
+    let mut stream = provider.list(&root).await.expect("list");
+    let mut got_err = None;
+    while let Some(item) = stream.next().await {
+        if let Err(e) = item {
+            got_err = Some(e);
+            break;
+        }
+    }
+    assert!(matches!(got_err, Some(Error::Corrupt)), "fue {got_err:?}");
 }

@@ -42,12 +42,6 @@ pub struct Pane {
     /// (`search-status-failed`) tras limpiarse `App::message` — un fallo no
     /// puede degradar a «done» en la siguiente tecla (review MINOR-2).
     pub search_error: Option<String>,
-    /// Omitidas del CONTENEDOR del listado actual (#93): entradas que el
-    /// índice del provider archive descartó (nombres hostiles/límites) y que
-    /// por tanto NO están en `entries`. La barra lo señaliza con `Some(n)`,
-    /// `n > 0` — un listado incompleto jamás es silencioso (paralelo del
-    /// contrato de [`Pane::loading`]). `None` = no aplica/desconocido.
-    pub skipped: Option<u64>,
     /// Contexto del match de contenido por hit de la búsqueda viva (#81):
     /// `path → (línea, preview YA saneado en origen)`. Solo significativo con
     /// [`Pane::virtual_search`]; la barra lo pinta para el hit bajo el
@@ -86,7 +80,6 @@ impl Pane {
             virtual_search: false,
             search_state: SearchState::Running,
             search_error: None,
-            skipped: None,
             search_matches: std::collections::HashMap::new(),
         }
     }
@@ -264,7 +257,7 @@ impl Pane {
         self.state.set_listing(dir, entries);
         self.virtual_search = false;
         self.search_matches.clear();
-        self.skipped = None;
+        self.state.set_skipped(None);
     }
 
     /// Primera página de un listado paginado: reemplaza el contenido y MARCA
@@ -282,7 +275,7 @@ impl Pane {
         self.state.set_loading(more);
         self.virtual_search = false;
         self.search_matches.clear();
-        self.skipped = skipped;
+        self.state.set_skipped(skipped);
     }
 
     /// Añade un lote del drenador: re-ordena TODO y re-ancla el cursor al path
@@ -319,6 +312,18 @@ impl Pane {
         self.state.set_loading(false);
         self.virtual_search = false;
         self.search_matches.clear();
+    }
+
+    /// Omitidas del contenedor del listado actual (#93/#96): delegado puro a
+    /// [`norte_frontend::PaneState::skipped`]. La barra pinta `Some(n)`, n>0.
+    #[must_use]
+    pub fn skipped(&self) -> Option<u64> {
+        self.state.skipped()
+    }
+
+    /// Fija las omitidas frescas (#96) — ver `PaneState::set_skipped`.
+    pub fn set_skipped(&mut self, skipped: Option<u64>) {
+        self.state.set_skipped(skipped);
     }
 }
 

@@ -348,7 +348,10 @@ async fn make_backend(
         // #95.2: límites anti-bomba de archives desde `[archive]` (capas de
         // usuario, jamás la de proyecto). Antes de cualquier navegación: los
         // providers compuestos se cachean con los límites de su primer uso.
-        if cfg.archive_max_entries.is_some() || cfg.archive_max_decompressed_bytes.is_some() {
+        if cfg.archive_max_entries.is_some()
+            || cfg.archive_max_decompressed_bytes.is_some()
+            || cfg.archive_max_nesting.is_some()
+        {
             let mut limits = norte_core::ArchiveLimits::default();
             if let Some(n) = cfg.archive_max_entries {
                 // Saturación HACIA ARRIBA (solo posible en 32-bit con un
@@ -364,6 +367,9 @@ async fn make_backend(
             }
             if let Some(b) = cfg.archive_max_decompressed_bytes {
                 limits.max_decompressed_bytes = b;
+            }
+            if let Some(n) = cfg.archive_max_nesting {
+                limits.max_nesting = n;
             }
             engine.set_archive_limits(limits);
         }
@@ -1761,7 +1767,13 @@ async fn refresh_panes(app: &mut App, backend: &Backend, events: &mut EventStrea
                         // medio rellenar, ya no está cargando (el run loop
                         // suelta el drenador tras este refresh). Un quick
                         // search vivo se re-aplica dentro (índices nuevos).
-                        Ok(entries) => app.panes[i].refresh_listing(entries),
+                        Ok((entries, skipped)) => {
+                            app.panes[i].refresh_listing(entries);
+                            // #96: el refresh trae las omitidas FRESCAS — sin
+                            // esto, el badge conservaba el valor del listado
+                            // anterior (rancio) tras una mutación.
+                            app.panes[i].set_skipped(skipped);
+                        }
                         // Sin silencio: el dir pudo desaparecer (issue #20).
                         Err(e) => app.message = Some(ta("msg-refresh-error", &[("error", &error_category(&e))])),
                     }
@@ -2470,8 +2482,8 @@ fn archive_root_for(e: &norte_proto::Entry) -> Option<VPath> {
 /// mejor un error honesto que un listado silenciosamente incompleto. #54: NO
 /// ordena aquí — `refresh_listing`/`PaneState::refill` normalizan
 /// internamente, un sort manual sería trabajo duplicado.
-async fn listing(backend: &Backend, dir: &VPath) -> Result<Vec<Entry>, Error> {
-    backend.list(dir).await
+async fn listing(backend: &Backend, dir: &VPath) -> Result<(Vec<Entry>, Option<u64>), Error> {
+    backend.list_with_skipped(dir).await
 }
 
 /// Primera página de `dir` (hasta [`FIRST_PAGE`]) más el stream con el RESTO
@@ -2664,8 +2676,14 @@ mod archive_nav_tests {
         // Un dir llamado x.zip NO es contenedor; un symlink tampoco (v1).
         assert!(archive_root_for(&entry("file:///d/x.zip", EntryKind::Dir)).is_none());
         assert!(archive_root_for(&entry("file:///d/x.zip", EntryKind::Symlink)).is_none());
-        // Ya compuesto (zip dentro de tar): v1 sin anidar → no-op.
-        assert!(archive_root_for(&entry("tar+file:///a.tar/!/i.zip", EntryKind::File)).is_none());
+        // #56 (antes v1 = no-op): Enter sobre un zip DENTRO de un tar
+        // compone una capa más — anidamiento navegable.
+        assert_eq!(
+            archive_root_for(&entry("tar+file:///a.tar/!/i.zip", EntryKind::File))
+                .expect("anidado navegable")
+                .to_wire(),
+            "zip+tar+file:///a.tar/!/i.zip/!"
+        );
     }
 
     /// #55: `.tgz`/`.tar.gz` no coinciden con el token `tar+gz` vía el

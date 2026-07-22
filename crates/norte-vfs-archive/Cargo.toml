@@ -15,17 +15,21 @@ futures.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
 # Parsers SYNC de formato (regla 2: corren en spawn_blocking sobre un
-# adaptador Read+Seek que puentea al Provider interior con block_on).
+# adaptador Read+Seek que puentea al Provider interior con block_on). El
+# central directory de zip lo parsea el módulo propio `zip_cd` (#59): el
+# crate `zip` quedó fuera (colapso lossy H1 / sustitución 0x7075 H3).
 tar.workspace = true
-zip.workspace = true
-# tar.gz/tgz (#55, ADR 0028): `MultiGzDecoder` sobre el `ProviderReader` para
-# el índice secuencial de `tar+gz` (gz no es seekable). Backend zlib-rs
-# (calca el que ya activa `zip`/deflate — sin duplicar backends de compresión).
+# flate2 (backend zlib-rs, sin C): deflate de las entradas zip (#59, con el
+# `Crc` de crc32fast re-exportado para verificar lecturas completas) y
+# `MultiGzDecoder` del índice secuencial de tar.gz (#55, ADR 0028).
 flate2.workspace = true
 # `rt`: Handle::current().block_on en los hilos blocking del índice/lectura.
 # `sync`: canal acotado que puentea la descompresión zip → ByteStream (el
 # drop del receptor corta el hilo: cancelación de la regla 3).
 tokio = { workspace = true, features = ["rt", "sync"] }
+# Fichero ANÓNIMO (ya unlinked, sin pathname) para el spool descomprimido
+# de tar.gz calientes (#95.1); ya estaba centralizado en el workspace.
+tempfile.workspace = true
 # warn! de entradas hostiles omitidas (ADR 0018 C2: omitir CON señal).
 tracing.workspace = true
 

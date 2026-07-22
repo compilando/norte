@@ -114,16 +114,13 @@ hmac = "0.12"
 getrandom = "0.3"
 # Journal transaccional (M3-1, ADR 0020): SQLite WAL, async, runtime queries.
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
-# Provider archive (fase 8, ADR 0018): parsers de formato hostil battle-tested
-# y puro Rust. `tar` (ustar/GNU/pax; alternativa hand-rolled = deuda de
-# seguridad permanente); `zip` default-features=false + deflate (flate2/
-# miniz_oxide, sin C): stored+deflate v1, cifrado/bzip2/zstd fuera.
+# Provider archive (fase 8, ADR 0018): `tar` battle-tested y puro Rust
+# (ustar/GNU/pax; alternativa hand-rolled = deuda de seguridad permanente).
 tar = { version = "0.4", default-features = false }
-# zip (fase 8e, ADR 0018): stored+deflate v1 (flate2/miniz_oxide, sin C);
-# cifrado/bzip2/zstd fuera de features — esas entradas se listan pero read
-# responde Unsupported. Alternativas evaluadas: rc-zip/async_zip (menos
-# ejercitados contra zips hostiles reales).
-zip = { version = "5", default-features = false, features = ["deflate"] }
+# zip: dep RETIRADA en #59 (ADR 0030) — el crate indexaba el central
+# directory por el nombre DECODIFICADO (colapso lossy H1) y un extra 0x7075
+# inválido mataba el archivo entero (H3); norte-vfs-archive parsea el CD
+# crudo él mismo (zip_cd.rs) y lee stored/deflate vía flate2.
 # tar.gz/tgz (#55, ADR 0028): dep DIRECTA de norte-vfs-archive para el
 # `MultiGzDecoder` del índice secuencial de `tar+gz` — ya transitiva vía
 # `zip` (deflate-flate2-zlib-rs) con el MISMO backend zlib-rs; explícita

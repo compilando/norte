@@ -110,12 +110,13 @@ async fn read_caliente_no_reparsea_el_central_directory() {
     assert_eq!(delta, 1, "read caliente = solo el bloque de datos, sin CD");
 }
 
-/// #61 MAJOR-2: un central directory por encima de `max_cd_bytes` NO se
-/// cachea — cada `read` reabre el `ZipArchive` (comportamiento pre-caché),
-/// aunque el ÍNDICE (que respeta sus propios límites, no ligados a bytes de
-/// CD) se siga sirviendo de caché normalmente.
+/// #59 (antes #61 MAJOR-2): `max_cd_bytes` queda OBSOLETO — el CD se parsea
+/// en streaming al indexar y el locator zip es autocontenido, así que un
+/// `read` jamás relee el central directory, ni siquiera con un tope
+/// minúsculo. Cada read caliente cuesta exactamente el bloque de datos
+/// (local header + datos de `a.txt` viven en el bloque 0 del lector).
 #[tokio::test(flavor = "multi_thread")]
-async fn cd_sobre_el_tope_no_se_cachea_y_relee_en_cada_read() {
+async fn max_cd_bytes_obsoleto_el_read_jamas_relee_el_cd() {
     // Mismo fixture que el test de arriba: el CD cae fuera del bloque 0.
     let relleno: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
     let bytes = norte_testkit::ZipSmith::new()
@@ -126,10 +127,11 @@ async fn cd_sobre_el_tope_no_se_cachea_y_relee_en_cada_read() {
 
     let (mem, path) = common::seed_container(b"fixture.zip", &bytes).await;
     let root = VPath::archive_compose("zip", &path, &[]).expect("compose");
-    // Tope minúsculo a propósito: el CD real de este fixture (2 entradas,
-    // ~46 bytes fijos + nombre cada una) ronda ~110 bytes — muy por encima
-    // de 80, así que jamás se cachea (MAJOR-2).
+    // Tope minúsculo a propósito (el CD real ronda ~110 bytes): antes de
+    // #59 esto forzaba a reabrir el `ZipArchive` en cada read; ahora el
+    // campo no se consulta y el coste es idéntico al camino cacheado.
     let limits = Limits {
+        #[allow(deprecated)] // pin del campo obsoleto (#59)
         max_cd_bytes: 80,
         ..Limits::default()
     };
@@ -141,7 +143,7 @@ async fn cd_sobre_el_tope_no_se_cachea_y_relee_en_cada_read() {
     );
     let entry_path = root.join(norte_proto::Segment::new(b"a.txt".to_vec()).expect("seg"));
 
-    // Calienta el ÍNDICE (que sí cachea): el `ZipArchive` no, por el tope.
+    // Calienta el ÍNDICE (única estructura cacheada desde #59).
     provider.stat(&entry_path).await.expect("stat");
 
     for intento in 0..2 {
@@ -151,12 +153,12 @@ async fn cd_sobre_el_tope_no_se_cachea_y_relee_en_cada_read() {
         while let Some(chunk) = stream.next().await {
             out.extend_from_slice(&chunk.expect("chunk ok"));
         }
-        assert_eq!(out, b"hola", "contenido correcto pese a no cachear el CD");
+        assert_eq!(out, b"hola", "contenido correcto con max_cd_bytes ínfimo");
         let delta = mem.faults().read_calls() - antes;
-        assert!(
-            delta >= 2,
-            "intento {intento}: CD sobre el tope debe reabrir el ZipArchive \
-             en cada read (delta={delta}, no cacheado)"
+        assert_eq!(
+            delta, 1,
+            "intento {intento}: solo el bloque de datos — el CD jamás se \
+             relee en un read (#59, locator autocontenido)"
         );
     }
 }

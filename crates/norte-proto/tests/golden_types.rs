@@ -1153,7 +1153,10 @@ fn method_names_frozen() {
         norte_proto::Error::LIMIT_DECOMPRESSED_BYTES,
         "decompressed-bytes"
     );
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.23.0");
+    // 0.24.0 (#56): direccionamiento multi-capa + tope de anidamiento en el
+    // vocabulario de LimitExceeded (tres constantes, sigue CERRADO).
+    assert_eq!(norte_proto::Error::LIMIT_NESTING, "nesting");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.24.0");
 }
 
 #[test]

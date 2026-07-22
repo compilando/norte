@@ -2,9 +2,10 @@
 //!
 //! Las fixtures de zip/tar son CÓDIGO, no binarios commiteados: control
 //! byte a byte (nombres crudos cp437, bit 11 mentiroso, zip-slip, EOCD
-//! falso) sin `.gitattributes` ni regeneradores. Solo formato `stored`
-//! (sin compresión): lo que se testea aquí es estructura y nombres; la
-//! descompresión real la cubren los tests del provider con el crate `zip`.
+//! falso) sin `.gitattributes` ni regeneradores. La forja no comprime:
+//! `stored` por defecto; una entrada deflate real va por
+//! [`ZipSmith::file_deflate`] con los bytes YA comprimidos por el caller
+//! (#59 — la descompresión la ejercitan los tests del provider).
 
 /// CRC-32 (IEEE, reflejado) bit a bit — suficiente para fixtures.
 fn crc32(data: &[u8]) -> u32 {
@@ -43,6 +44,32 @@ enum ZipEntry {
         method: u16,
         flags: u16,
     },
+    /// Entrada `stored` con un extra field CRUDO en el CENTRAL directory
+    /// (#59: 0x7075 Info-ZIP, zip64 forjado, basura arbitraria). El local
+    /// header queda SIN extra: lo que se testea vive en el CD.
+    WithExtra {
+        name: Vec<u8>,
+        data: Vec<u8>,
+        extra: Vec<u8>,
+    },
+    /// Entrada deflate REAL (#59): `deflated` son los bytes YA comprimidos
+    /// (el caller los produce, p. ej. con flate2 — esta forja no comprime);
+    /// crc y tamaño sin comprimir se calculan de `uncomp`.
+    Deflate {
+        name: Vec<u8>,
+        uncomp: Vec<u8>,
+        deflated: Vec<u8>,
+    },
+}
+
+/// Qué final lleva el zip forjado: EOCD clásico o cadena zip64 (#59).
+enum ZipEnd {
+    /// EOCD de 22 bytes; `claimed` fuerza una cuenta mentirosa.
+    Classic { claimed: Option<u16> },
+    /// EOCD64 + locator + EOCD con marcadores (`0xFFFF`/`0xFFFF_FFFF`):
+    /// cuenta/tamaño/offset reales SOLO en el EOCD64. `claimed` fuerza una
+    /// cuenta mentirosa de 64 bits en el EOCD64.
+    Zip64 { claimed: Option<u64> },
 }
 
 /// Forja de bytes ZIP entrada a entrada. Ver el módulo para el porqué.
@@ -115,6 +142,32 @@ impl ZipSmith {
         self
     }
 
+    /// Archivo `stored` con un extra field CRUDO en su entrada del CENTRAL
+    /// directory (#59): 0x7075 Info-ZIP unicode path, zip64 forjado o
+    /// basura arbitraria. El local header queda SIN extra.
+    #[must_use]
+    pub fn file_with_extra(mut self, name: &[u8], data: &[u8], extra: &[u8]) -> Self {
+        self.entries.push(ZipEntry::WithExtra {
+            name: name.to_vec(),
+            data: data.to_vec(),
+            extra: extra.to_vec(),
+        });
+        self
+    }
+
+    /// Archivo `deflate` REAL (#59): `deflated` son los bytes YA comprimidos
+    /// (el caller los produce con flate2 — esta forja no comprime); crc y
+    /// tamaño sin comprimir salen de `uncomp`.
+    #[must_use]
+    pub fn file_deflate(mut self, name: &[u8], uncomp: &[u8], deflated: &[u8]) -> Self {
+        self.entries.push(ZipEntry::Deflate {
+            name: name.to_vec(),
+            uncomp: uncomp.to_vec(),
+            deflated: deflated.to_vec(),
+        });
+        self
+    }
+
     /// Comentario del EOCD (bytes arbitrarios — incluso firmas EOCD falsas,
     /// el clásico que rompe localizadores ingenuos).
     #[must_use]
@@ -126,44 +179,52 @@ impl ZipSmith {
     /// Los bytes del ZIP completo (local headers + central directory + EOCD).
     #[must_use]
     pub fn build(self) -> Vec<u8> {
-        self.build_with_count(None)
+        self.build_end(&ZipEnd::Classic { claimed: None })
     }
 
     /// Como [`Self::build`] pero el EOCD MIENTE: declara `claimed` entradas
     /// (bomba de índice barata: anuncia millones sin pagarlos).
     #[must_use]
     pub fn build_lying_eocd(self, claimed: u16) -> Vec<u8> {
-        self.build_with_count(Some(claimed))
+        self.build_end(&ZipEnd::Classic {
+            claimed: Some(claimed),
+        })
+    }
+
+    /// Como [`Self::build`] pero con final zip64 (#59): EOCD64 + locator +
+    /// EOCD con marcadores (`0xFFFF`/`0xFFFF_FFFF`) — cuenta/tamaño/offset
+    /// reales SOLO en el EOCD64.
+    #[must_use]
+    pub fn build_zip64(self) -> Vec<u8> {
+        self.build_end(&ZipEnd::Zip64 { claimed: None })
+    }
+
+    /// Como [`Self::build_zip64`] pero el EOCD64 MIENTE la cuenta (bomba de
+    /// índice zip64: el preflight u16 clásico no la veía, #59).
+    #[must_use]
+    pub fn build_zip64_lying_count(self, claimed: u64) -> Vec<u8> {
+        self.build_end(&ZipEnd::Zip64 {
+            claimed: Some(claimed),
+        })
     }
 
     #[allow(clippy::cast_possible_truncation)] // fixtures pequeñas por diseño
-    fn build_with_count(self, claimed: Option<u16>) -> Vec<u8> {
+    fn build_end(self, end: &ZipEnd) -> Vec<u8> {
         let mut out = Vec::new();
         let mut central = Vec::new();
         let real_count = self.entries.len() as u16;
         for entry in &self.entries {
-            let (name, data, flags, method) = match entry {
-                ZipEntry::File {
-                    name,
-                    data,
-                    utf8_flag,
-                } => (
-                    name,
-                    data.as_slice(),
-                    if *utf8_flag { 1u16 << 11 } else { 0 },
-                    0u16,
-                ),
-                ZipEntry::Dir { name } => (name, &[][..], 0, 0),
-                ZipEntry::Raw {
-                    name,
-                    data,
-                    method,
-                    flags,
-                } => (name, data.as_slice(), *flags, *method),
-            };
+            let ZipWire {
+                name,
+                payload,
+                flags,
+                method,
+                crc,
+                uncomp_len,
+                extra,
+            } = entry.wire();
             let offset = out.len() as u32;
-            let crc = crc32(data);
-            let size = data.len() as u32;
+            let comp_len = payload.len() as u32;
             // Local file header.
             out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
             out.extend_from_slice(&20u16.to_le_bytes()); // version needed
@@ -172,12 +233,12 @@ impl ZipSmith {
             out.extend_from_slice(&DOS_TIME.to_le_bytes());
             out.extend_from_slice(&DOS_DATE.to_le_bytes());
             out.extend_from_slice(&crc.to_le_bytes());
-            out.extend_from_slice(&size.to_le_bytes()); // comprimido
-            out.extend_from_slice(&size.to_le_bytes()); // sin comprimir
+            out.extend_from_slice(&comp_len.to_le_bytes()); // comprimido
+            out.extend_from_slice(&uncomp_len.to_le_bytes()); // sin comprimir
             out.extend_from_slice(&(name.len() as u16).to_le_bytes());
             out.extend_from_slice(&0u16.to_le_bytes()); // extra
             out.extend_from_slice(name);
-            out.extend_from_slice(data);
+            out.extend_from_slice(payload);
             // Central directory entry.
             central.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
             central.extend_from_slice(&20u16.to_le_bytes()); // made by
@@ -187,36 +248,158 @@ impl ZipSmith {
             central.extend_from_slice(&DOS_TIME.to_le_bytes());
             central.extend_from_slice(&DOS_DATE.to_le_bytes());
             central.extend_from_slice(&crc.to_le_bytes());
-            central.extend_from_slice(&size.to_le_bytes());
-            central.extend_from_slice(&size.to_le_bytes());
+            central.extend_from_slice(&comp_len.to_le_bytes());
+            central.extend_from_slice(&uncomp_len.to_le_bytes());
             central.extend_from_slice(&(name.len() as u16).to_le_bytes());
-            central.extend_from_slice(&0u16.to_le_bytes()); // extra
+            central.extend_from_slice(&(extra.len() as u16).to_le_bytes());
             central.extend_from_slice(&0u16.to_le_bytes()); // comment
             central.extend_from_slice(&0u16.to_le_bytes()); // disk
             central.extend_from_slice(&0u16.to_le_bytes()); // internal attrs
             let external: u32 = match entry {
                 ZipEntry::Dir { .. } => 0x10, // bit de directorio DOS
-                ZipEntry::File { .. } | ZipEntry::Raw { .. } => 0,
+                _ => 0,
             };
             central.extend_from_slice(&external.to_le_bytes());
             central.extend_from_slice(&offset.to_le_bytes());
             central.extend_from_slice(name);
+            central.extend_from_slice(extra);
         }
-        let cd_offset = out.len() as u32;
-        let cd_size = central.len() as u32;
+        let cd_offset = out.len() as u64;
+        let cd_size = central.len() as u64;
         out.extend_from_slice(&central);
-        // EOCD.
-        let count = claimed.unwrap_or(real_count);
-        out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
-        out.extend_from_slice(&0u16.to_le_bytes()); // disco
-        out.extend_from_slice(&0u16.to_le_bytes()); // disco del CD
-        out.extend_from_slice(&count.to_le_bytes());
-        out.extend_from_slice(&count.to_le_bytes());
-        out.extend_from_slice(&cd_size.to_le_bytes());
-        out.extend_from_slice(&cd_offset.to_le_bytes());
+        emit_zip_end(&mut out, end, real_count, cd_offset, cd_size);
         out.extend_from_slice(&(self.comment.len() as u16).to_le_bytes());
         out.extend_from_slice(&self.comment);
         out
+    }
+}
+
+/// Los campos ya resueltos que una entrada aporta al local header y al CD.
+struct ZipWire<'a> {
+    name: &'a [u8],
+    /// Bytes escritos tras el local header (comprimidos si `Deflate`).
+    payload: &'a [u8],
+    flags: u16,
+    method: u16,
+    /// CRC declarado (del contenido SIN comprimir).
+    crc: u32,
+    /// Tamaño sin comprimir declarado.
+    uncomp_len: u32,
+    /// Extra field del CD (el local va SIEMPRE sin extra).
+    extra: &'a [u8],
+}
+
+impl ZipEntry {
+    #[allow(clippy::cast_possible_truncation)] // fixtures pequeñas por diseño
+    fn wire(&self) -> ZipWire<'_> {
+        match self {
+            ZipEntry::File {
+                name,
+                data,
+                utf8_flag,
+            } => ZipWire {
+                name,
+                payload: data,
+                flags: if *utf8_flag { 1u16 << 11 } else { 0 },
+                method: 0,
+                crc: crc32(data),
+                uncomp_len: data.len() as u32,
+                extra: &[],
+            },
+            ZipEntry::Dir { name } => ZipWire {
+                name,
+                payload: &[],
+                flags: 0,
+                method: 0,
+                crc: crc32(&[]),
+                uncomp_len: 0,
+                extra: &[],
+            },
+            ZipEntry::Raw {
+                name,
+                data,
+                method,
+                flags,
+            } => ZipWire {
+                name,
+                payload: data,
+                flags: *flags,
+                method: *method,
+                crc: crc32(data),
+                uncomp_len: data.len() as u32,
+                extra: &[],
+            },
+            ZipEntry::WithExtra { name, data, extra } => ZipWire {
+                name,
+                payload: data,
+                flags: 0,
+                method: 0,
+                crc: crc32(data),
+                uncomp_len: data.len() as u32,
+                extra,
+            },
+            ZipEntry::Deflate {
+                name,
+                uncomp,
+                deflated,
+            } => ZipWire {
+                name,
+                payload: deflated,
+                flags: 0,
+                method: 8,
+                crc: crc32(uncomp),
+                uncomp_len: uncomp.len() as u32,
+                extra: &[],
+            },
+        }
+    }
+}
+
+/// Emite el final del zip: EOCD clásico o cadena EOCD64 + locator + EOCD
+/// con marcadores (#59). El comentario lo escribe el caller a continuación.
+#[allow(clippy::cast_possible_truncation)] // fixtures pequeñas por diseño
+fn emit_zip_end(out: &mut Vec<u8>, end: &ZipEnd, real_count: u16, cd_offset: u64, cd_size: u64) {
+    match end {
+        ZipEnd::Classic { claimed } => {
+            let count = claimed.unwrap_or(real_count);
+            out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes()); // disco
+            out.extend_from_slice(&0u16.to_le_bytes()); // disco del CD
+            out.extend_from_slice(&count.to_le_bytes());
+            out.extend_from_slice(&count.to_le_bytes());
+            out.extend_from_slice(&(cd_size as u32).to_le_bytes());
+            out.extend_from_slice(&(cd_offset as u32).to_le_bytes());
+        }
+        ZipEnd::Zip64 { claimed } => {
+            let count = claimed.unwrap_or(u64::from(real_count));
+            let eocd64_pos = out.len() as u64;
+            // EOCD64 (56 bytes: tamaño del record = 44, lo que sigue a
+            // los 12 primeros).
+            out.extend_from_slice(&0x0606_4b50u32.to_le_bytes());
+            out.extend_from_slice(&44u64.to_le_bytes()); // size of record
+            out.extend_from_slice(&45u16.to_le_bytes()); // made by
+            out.extend_from_slice(&45u16.to_le_bytes()); // needed
+            out.extend_from_slice(&0u32.to_le_bytes()); // disco
+            out.extend_from_slice(&0u32.to_le_bytes()); // disco del CD
+            out.extend_from_slice(&count.to_le_bytes()); // en este disco
+            out.extend_from_slice(&count.to_le_bytes()); // total
+            out.extend_from_slice(&cd_size.to_le_bytes());
+            out.extend_from_slice(&cd_offset.to_le_bytes());
+            // Locator del EOCD64 (20 bytes, JUSTO antes del EOCD).
+            out.extend_from_slice(&0x0706_4b50u32.to_le_bytes());
+            out.extend_from_slice(&0u32.to_le_bytes()); // disco del EOCD64
+            out.extend_from_slice(&eocd64_pos.to_le_bytes());
+            out.extend_from_slice(&1u32.to_le_bytes()); // discos totales
+            // EOCD clásico con MARCADORES: los valores reales viven en
+            // el EOCD64.
+            out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes()); // disco
+            out.extend_from_slice(&0u16.to_le_bytes()); // disco del CD
+            out.extend_from_slice(&u16::MAX.to_le_bytes());
+            out.extend_from_slice(&u16::MAX.to_le_bytes());
+            out.extend_from_slice(&u32::MAX.to_le_bytes());
+            out.extend_from_slice(&u32::MAX.to_le_bytes());
+        }
     }
 }
 
@@ -458,6 +641,64 @@ mod tests {
         let z = ZipSmith::new().file(b"x", b"").build_lying_eocd(60_000);
         let eocd = &z[z.len() - 22..];
         assert_eq!(u16::from_le_bytes([eocd[10], eocd[11]]), 60_000);
+    }
+
+    #[test]
+    fn zip64_estructura_coherente() {
+        let z = ZipSmith::new().file(b"a", b"data").build_zip64();
+        // EOCD final con MARCADORES.
+        let eocd = &z[z.len() - 22..];
+        assert_eq!(&eocd[..4], b"PK\x05\x06");
+        assert_eq!(u16::from_le_bytes([eocd[10], eocd[11]]), u16::MAX);
+        assert_eq!(
+            u32::from_le_bytes([eocd[16], eocd[17], eocd[18], eocd[19]]),
+            u32::MAX
+        );
+        // Locator 20 bytes antes: apunta a un EOCD64 con la cuenta real.
+        let loc = &z[z.len() - 42..z.len() - 22];
+        assert_eq!(&loc[..4], b"PK\x06\x07");
+        let eocd64_pos =
+            usize::try_from(u64::from_le_bytes(loc[8..16].try_into().unwrap())).unwrap();
+        assert_eq!(&z[eocd64_pos..eocd64_pos + 4], b"PK\x06\x06");
+        let count = u64::from_le_bytes(z[eocd64_pos + 32..eocd64_pos + 40].try_into().unwrap());
+        assert_eq!(count, 1);
+        // La cuenta mentirosa vive en el EOCD64, no en el EOCD.
+        let liar = ZipSmith::new()
+            .file(b"a", b"d")
+            .build_zip64_lying_count(9_000_000);
+        let loc = &liar[liar.len() - 42..liar.len() - 22];
+        let pos = usize::try_from(u64::from_le_bytes(loc[8..16].try_into().unwrap())).unwrap();
+        assert_eq!(
+            u64::from_le_bytes(liar[pos + 32..pos + 40].try_into().unwrap()),
+            9_000_000
+        );
+    }
+
+    #[test]
+    fn zip_extra_solo_en_el_cd() {
+        let extra = [0x75u8, 0x70, 0x03, 0x00, 0x01, 0x02, 0x03]; // id 0x7075
+        let z = ZipSmith::new().file_with_extra(b"n", b"d", &extra).build();
+        // Local header: extra_len = 0 (el extra vive SOLO en el CD).
+        assert_eq!(u16::from_le_bytes([z[28], z[29]]), 0);
+        // CD: extra_len = 7 y los bytes están tras el nombre.
+        let cd = z.windows(4).position(|w| w == b"PK\x01\x02").expect("cd");
+        assert_eq!(u16::from_le_bytes([z[cd + 30], z[cd + 31]]), 7);
+        assert_eq!(&z[cd + 46 + 1..cd + 46 + 1 + 7], &extra);
+    }
+
+    #[test]
+    fn zip_deflate_declara_tamanos_reales() {
+        // "deflated" simulado más corto que el contenido: comp != uncomp.
+        let z = ZipSmith::new()
+            .file_deflate(b"f", b"0123456789", b"XYZ")
+            .build();
+        let cd = z.windows(4).position(|w| w == b"PK\x01\x02").expect("cd");
+        assert_eq!(u16::from_le_bytes([z[cd + 10], z[cd + 11]]), 8, "method");
+        let comp = u32::from_le_bytes(z[cd + 20..cd + 24].try_into().unwrap());
+        let uncomp = u32::from_le_bytes(z[cd + 24..cd + 28].try_into().unwrap());
+        assert_eq!((comp, uncomp), (3, 10));
+        let crc = u32::from_le_bytes(z[cd + 16..cd + 20].try_into().unwrap());
+        assert_eq!(crc, crc32(b"0123456789"), "crc del contenido SIN comprimir");
     }
 
     #[test]

@@ -23,7 +23,11 @@
     "canonical_wire": "file:///home/oscar/año.txt",
     "scheme": "file",
     "authority": null,
-    "segments_hex": ["686f6d65", "6f73636172", "61c3b16f2e747874"],
+    "segments_hex": [
+      "686f6d65",
+      "6f73636172",
+      "61c3b16f2e747874"
+    ],
     "display": "⟨file⟩/home/oscar/año.txt"
   },
   {
@@ -32,7 +36,10 @@
     "canonical_wire": "sftp://host:22/dir/f.txt",
     "scheme": "sftp",
     "authority": "host:22",
-    "segments_hex": ["646972", "662e747874"],
+    "segments_hex": [
+      "646972",
+      "662e747874"
+    ],
     "display": "⟨sftp host:22⟩/dir/f.txt"
   },
   {
@@ -41,7 +48,9 @@
     "canonical_wire": "file:///A",
     "scheme": "file",
     "authority": null,
-    "segments_hex": ["41"],
+    "segments_hex": [
+      "41"
+    ],
     "display": "⟨file⟩/A"
   },
   {
@@ -50,7 +59,9 @@
     "canonical_wire": "file:///informe%FF%FE.dat",
     "scheme": "file",
     "authority": null,
-    "segments_hex": ["696e666f726d65fffe2e646174"],
+    "segments_hex": [
+      "696e666f726d65fffe2e646174"
+    ],
     "display": "⟨file⟩/informe��.dat"
   },
   {
@@ -59,7 +70,9 @@
     "canonical_wire": "file:///50%25",
     "scheme": "file",
     "authority": null,
-    "segments_hex": ["353025"],
+    "segments_hex": [
+      "353025"
+    ],
     "display": "⟨file⟩/50%"
   },
   {
@@ -68,7 +81,9 @@
     "canonical_wire": "file:///%FF",
     "scheme": "file",
     "authority": null,
-    "segments_hex": ["ff"],
+    "segments_hex": [
+      "ff"
+    ],
     "display": "⟨file⟩/�"
   },
   {
@@ -77,7 +92,9 @@
     "canonical_wire": "file:///�",
     "scheme": "file",
     "authority": null,
-    "segments_hex": ["efbfbd"],
+    "segments_hex": [
+      "efbfbd"
+    ],
     "display": "⟨file⟩/�"
   },
   {
@@ -86,7 +103,9 @@
     "canonical_wire": "s3+v2.x-y://bucket/key",
     "scheme": "s3+v2.x-y",
     "authority": "bucket",
-    "segments_hex": ["6b6579"],
+    "segments_hex": [
+      "6b6579"
+    ],
     "display": "⟨s3+v2.x-y bucket⟩/key"
   },
   {
@@ -95,7 +114,14 @@
     "canonical_wire": "zip+file:///home/o/a.zip/!/docs/x.txt",
     "scheme": "zip+file",
     "authority": null,
-    "segments_hex": ["686f6d65", "6f", "612e7a6970", "21", "646f6373", "782e747874"],
+    "segments_hex": [
+      "686f6d65",
+      "6f",
+      "612e7a6970",
+      "21",
+      "646f6373",
+      "782e747874"
+    ],
     "display": "⟨zip+file⟩/home/o/a.zip/!/docs/x.txt"
   },
   {
@@ -104,7 +130,11 @@
     "canonical_wire": "zip+file:///a.zip/!/x",
     "scheme": "zip+file",
     "authority": null,
-    "segments_hex": ["612e7a6970", "21", "78"],
+    "segments_hex": [
+      "612e7a6970",
+      "21",
+      "78"
+    ],
     "display": "⟨zip+file⟩/a.zip/!/x"
   },
   {
@@ -113,7 +143,11 @@
     "canonical_wire": "tar+sftp://user@host:22/d/a.tar/!",
     "scheme": "tar+sftp",
     "authority": "user@host:22",
-    "segments_hex": ["64", "612e746172", "21"],
+    "segments_hex": [
+      "64",
+      "612e746172",
+      "21"
+    ],
     "display": "⟨tar+sftp user@host:22⟩/d/a.tar/!"
   },
   {
@@ -122,7 +156,13 @@
     "canonical_wire": "zip+file:///a.zip/!/x/!/y",
     "scheme": "zip+file",
     "authority": null,
-    "segments_hex": ["612e7a6970", "21", "78", "21", "79"],
+    "segments_hex": [
+      "612e7a6970",
+      "21",
+      "78",
+      "21",
+      "79"
+    ],
     "display": "⟨zip+file⟩/a.zip/!/x/!/y"
   },
   {
@@ -131,7 +171,11 @@
     "canonical_wire": "zip+s3+v2.x-y://bucket/key.zip/!/x",
     "scheme": "zip+s3+v2.x-y",
     "authority": "bucket",
-    "segments_hex": ["6b65792e7a6970", "21", "78"],
+    "segments_hex": [
+      "6b65792e7a6970",
+      "21",
+      "78"
+    ],
     "display": "⟨zip+s3+v2.x-y bucket⟩/key.zip/!/x"
   },
   {
@@ -140,7 +184,13 @@
     "canonical_wire": "tar+gz+file:///home/o/a.tgz/!/x",
     "scheme": "tar+gz+file",
     "authority": null,
-    "segments_hex": ["686f6d65", "6f", "612e74677a", "21", "78"],
+    "segments_hex": [
+      "686f6d65",
+      "6f",
+      "612e74677a",
+      "21",
+      "78"
+    ],
     "display": "⟨tar+gz+file⟩/home/o/a.tgz/!/x"
   },
   {
@@ -149,7 +199,11 @@
     "canonical_wire": "tar+gz+sftp://user@host:22/d/a.tgz/!",
     "scheme": "tar+gz+sftp",
     "authority": "user@host:22",
-    "segments_hex": ["64", "612e74677a", "21"],
+    "segments_hex": [
+      "64",
+      "612e74677a",
+      "21"
+    ],
     "display": "⟨tar+gz+sftp user@host:22⟩/d/a.tgz/!"
   },
   {
@@ -158,7 +212,26 @@
     "canonical_wire": "file:///dir/!/config",
     "scheme": "file",
     "authority": null,
-    "segments_hex": ["646972", "21", "636f6e666967"],
+    "segments_hex": [
+      "646972",
+      "21",
+      "636f6e666967"
+    ],
     "display": "⟨file⟩/dir/!/config"
+  },
+  {
+    "description": "#56 (ADR 0018 A3): anidamiento multi-capa — zip dentro de tar; la capa externa (zip) corta en el ULTIMO marcador, la interior (tar, interior plano) en el primero",
+    "wire": "zip+tar+file:///b.tar/!/inner.zip/!/doc.txt",
+    "canonical_wire": "zip+tar+file:///b.tar/!/inner.zip/!/doc.txt",
+    "scheme": "zip+tar+file",
+    "authority": null,
+    "segments_hex": [
+      "622e746172",
+      "21",
+      "696e6e65722e7a6970",
+      "21",
+      "646f632e747874"
+    ],
+    "display": "⟨zip+tar+file⟩/b.tar/!/inner.zip/!/doc.txt"
   }
 ]

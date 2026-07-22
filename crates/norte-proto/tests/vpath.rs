@@ -452,11 +452,13 @@ fn archive_compose_rechaza_formato_desconocido() {
 }
 
 #[test]
-fn archive_compose_rechaza_exterior_ya_compuesto() {
-    // v1 una capa (ADR 0018): componer sobre un path ya compuesto = anidar.
+fn archive_compose_acepta_exterior_compuesto_bien_formado() {
+    // #56 (antes v1 rechazaba): componer sobre un path YA compuesto y bien
+    // formado = anidar una capa más.
     let outer = path("file:///a.zip");
-    let composed = VPath::archive_compose("zip", &outer, &[]).expect("capa 1");
-    assert!(VPath::archive_compose("tar", &composed, &[]).is_err());
+    let composed = VPath::archive_compose("zip", &outer, &[seg(b"i.tar")]).expect("capa 1");
+    let nested = VPath::archive_compose("tar", &composed, &[]).expect("capa 2 anidada");
+    assert_eq!(nested.to_wire(), "tar+zip+file:///a.zip/!/i.tar/!");
 }
 
 #[test]
@@ -502,12 +504,65 @@ fn archive_split_sin_marcador_es_err() {
 }
 
 #[test]
-fn archive_split_anidado_es_err_v1() {
-    assert!(
-        path("zip+tar+file:///a.tar/!/i.zip/!/x")
-            .archive_split()
-            .is_err()
+fn archive_split_anidado_pela_una_capa() {
+    // #56 (ADR 0018 A3): resolución derecha→izquierda — la capa MÁS externa
+    // (formato más a la izquierda) corta en el ÚLTIMO marcador; el exterior
+    // resultante es a su vez un path de archivo (se pela recursivamente).
+    let r = path("zip+tar+file:///a.tar/!/i.zip/!/x")
+        .archive_split()
+        .expect("ok")
+        .expect("compuesto");
+    assert_eq!(r.format, "zip");
+    assert_eq!(r.outer.to_wire(), "tar+file:///a.tar/!/i.zip");
+    assert_eq!(r.inner, vec![seg(b"x")]);
+    // La capa interior se pela con la regla v1 (interior plano = PRIMER
+    // marcador).
+    let r2 = r.outer.archive_split().expect("ok").expect("compuesto");
+    assert_eq!(r2.format, "tar");
+    assert_eq!(r2.outer.to_wire(), "file:///a.tar");
+    assert_eq!(r2.inner, vec![seg(b"i.zip")]);
+}
+
+#[test]
+fn archive_split_anidado_marcador_rogue_va_al_interior_de_la_capa_honda() {
+    // Tres marcadores en un path de dos capas: la capa zip toma el ÚLTIMO,
+    // la capa tar (interior PLANO) corta en el PRIMERO — el `!` sobrante
+    // queda como segmento del interior de tar (su índice jamás lo contiene
+    // → NotFound aguas abajo, jamás direcciona un objeto real).
+    let r = path("zip+tar+file:///a.tar/!/i.zip/!/x/!/rogue")
+        .archive_split()
+        .expect("ok")
+        .expect("compuesto");
+    assert_eq!(r.inner, vec![seg(b"rogue")]);
+    let r2 = r.outer.archive_split().expect("ok").expect("compuesto");
+    assert_eq!(r2.outer.to_wire(), "file:///a.tar");
+    assert_eq!(r2.inner, vec![seg(b"i.zip"), seg(b"!"), seg(b"x")]);
+}
+
+#[test]
+fn archive_compose_anidado_roundtrip() {
+    // #56: componer SOBRE un path de archivo bien formado es legal; el
+    // roundtrip pela capa a capa exactamente lo compuesto.
+    let outer = path("file:///a.tar");
+    let capa1 = VPath::archive_compose("tar", &outer, &[seg(b"i.zip")]).expect("capa tar");
+    let capa2 =
+        VPath::archive_compose("zip", &capa1, &[seg(b"docs"), seg(b"x.txt")]).expect("capa zip");
+    assert_eq!(
+        capa2.to_wire(),
+        "zip+tar+file:///a.tar/!/i.zip/!/docs/x.txt"
     );
+    let r = capa2.archive_split().expect("ok").expect("compuesto");
+    assert_eq!(r.format, "zip");
+    assert_eq!(r.outer, capa1);
+    assert_eq!(r.inner, vec![seg(b"docs"), seg(b"x.txt")]);
+}
+
+#[test]
+fn archive_compose_sigue_rechazando_marcador_en_exterior_plano() {
+    // La relajación de #56 es SOLO para exteriores que son a su vez paths
+    // de archivo bien formados: un exterior PLANO con `!` sigue prohibido.
+    let outer = path("file:///a.zip/!/x");
+    assert!(VPath::archive_compose("zip", &outer, &[]).is_err());
 }
 
 #[test]
@@ -597,37 +652,50 @@ fn gz_solo_no_es_compuesto() {
 }
 
 #[test]
-fn targz_interior_compuesto_rechazado() {
-    // La guardia de anidamiento (v1 = una capa) sigue vigente sobre el
-    // interior UNA VEZ quitado el token completo `tar+gz`.
-    assert!(
-        path("tar+gz+tar+file:///a.tar/!/x")
-            .archive_split()
-            .is_err()
-    );
-    assert!(
-        path("tar+gz+zip+file:///a.zip/!/x")
-            .archive_split()
-            .is_err()
-    );
+fn targz_interior_compuesto_pela_como_capa_externa() {
+    // #56 (antes v1 rechazaba): el token completo `tar+gz` se quita primero
+    // (longest-match) y el interior compuesto se pela recursivamente. Con UN
+    // solo marcador, esta capa lo toma entero: el exterior queda SIN
+    // marcador y su propio split falla aguas abajo (malformado honesto).
+    let r = path("tar+gz+tar+file:///a.tar/!/x")
+        .archive_split()
+        .expect("ok")
+        .expect("compuesto");
+    assert_eq!(r.format, "tar+gz");
+    assert_eq!(r.outer.to_wire(), "tar+file:///a.tar");
+    assert_eq!(r.inner, vec![seg(b"x")]);
+    assert!(r.outer.archive_split().is_err(), "capa honda sin marcador");
+    let r = path("tar+gz+zip+file:///a.zip/!/x")
+        .archive_split()
+        .expect("ok")
+        .expect("compuesto");
+    assert_eq!(r.format, "tar+gz");
+    assert_eq!(r.outer.scheme(), "zip+file");
 }
 
 #[test]
-fn compose_outer_compuesto_sigue_rechazado() {
+fn compose_zip_sobre_targz_anida() {
+    // #56 (antes v1 rechazaba): zip sobre tar.gz = dos capas.
     let outer = path("file:///a.tgz");
-    let composed = VPath::archive_compose("tar+gz", &outer, &[]).expect("capa 1");
-    assert!(VPath::archive_compose("zip", &composed, &[]).is_err());
+    let composed = VPath::archive_compose("tar+gz", &outer, &[seg(b"i.zip")]).expect("capa 1");
+    let nested = VPath::archive_compose("zip", &composed, &[seg(b"f")]).expect("capa 2");
+    assert_eq!(nested.to_wire(), "zip+tar+gz+file:///a.tgz/!/i.zip/!/f");
+    let r = nested.archive_split().expect("ok").expect("compuesto");
+    assert_eq!(r.format, "zip");
+    assert_eq!(r.outer, composed);
 }
 
 #[test]
-fn compose_outer_compuesto_sigue_rechazado_simetrico() {
-    // Caso simétrico al anterior: componer `tar+gz` sobre un outer ya
-    // compuesto por `zip` también se rechaza (misma línea de guardia,
-    // ejercitada con el formato compuesto en el rol de exterior/interior
-    // invertido respecto al test de arriba).
+fn compose_targz_sobre_zip_anida_simetrico() {
+    // #56, simétrico: `tar+gz` sobre un outer compuesto por `zip` anida —
+    // y el longest-match del split devuelve `tar+gz`, jamás `tar` sobre un
+    // interior huérfano `gz+zip+file` (la guardia de roundtrip lo garantiza).
     let outer = path("file:///a.zip");
-    let composed = VPath::archive_compose("zip", &outer, &[]).expect("capa 1");
-    assert!(VPath::archive_compose("tar+gz", &composed, &[]).is_err());
+    let composed = VPath::archive_compose("zip", &outer, &[seg(b"i.tgz")]).expect("capa 1");
+    let nested = VPath::archive_compose("tar+gz", &composed, &[]).expect("capa 2");
+    let r = nested.archive_split().expect("ok").expect("compuesto");
+    assert_eq!(r.format, "tar+gz");
+    assert_eq!(r.outer, composed);
 }
 
 #[test]

@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod approval;
+pub mod archive_config;
 pub mod audit;
 pub mod backend;
 pub mod connect;

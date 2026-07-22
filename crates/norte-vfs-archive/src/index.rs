@@ -20,10 +20,14 @@ pub struct Limits {
     pub max_name_bytes: usize,
     /// Tope de componentes de path de una entrada.
     pub max_depth: usize,
-    /// Tope del central directory RETENIDO en caché (#61): por encima, el
-    /// índice se construye igual pero el CD parseado no se cachea (re-parse
-    /// por read, comportamiento pre-caché). Gobierna memoria persistente,
-    /// no el indexado.
+    /// OBSOLETO desde #59: el central directory se parsea en STREAMING
+    /// (jamás se materializa ni se retiene — el locator zip es
+    /// autocontenido), así que ya no hay memoria de CD que gobernar. El
+    /// campo se conserva por compatibilidad de API y NO se consulta.
+    /// Histórico: era el tope del CD retenido en caché (#61).
+    #[deprecated(
+        note = "obsoleto desde #59 (ADR 0030): el CD se parsea en streaming, nada se retiene — el campo no se consulta"
+    )]
     pub max_cd_bytes: u64,
     /// Presupuesto TOTAL de bytes DESCOMPRIMIDOS del PASE DE ÍNDICE de un
     /// `tar+gz` (ADR 0028, #55): una gzip bomb es CPU infinita aunque la
@@ -51,9 +55,31 @@ pub struct Limits {
     /// en `skipped` y no fallan el índice salvo por presupuesto de
     /// omitidas).
     pub max_decompressed_bytes: u64,
+    /// Presupuesto de bytes DESCOMPRIMIDOS del SPOOL de un contenedor
+    /// `tar+gz` caliente (#95.1): a partir de la segunda lectura de un mismo
+    /// contenedor, el provider descomprime el stream ENTERO una vez a un
+    /// fichero temporal ANÓNIMO y las lecturas siguientes son seeks locales
+    /// O(1) en vez de forward-decode O(offset). Un contenedor cuyo
+    /// descomprimido supera este tope NO se spoolea (se recuerda como
+    /// no-spooleable hasta que cambie de generación) y sus lecturas siguen
+    /// pagando el forward-decode de siempre. `0` DESACTIVA el spool.
+    ///
+    /// Todavía NO expuesto en la sección `[archive]` de `norte.toml` (el
+    /// canal de config llega en una fase posterior); hoy solo es ajustable
+    /// por código vía
+    /// [`ArchiveProvider::with_limits`](crate::ArchiveProvider::with_limits).
+    pub spool_max_bytes: u64,
+    /// Tope de CAPAS de archivo anidadas (#56, ADR 0018 A3): `1` = solo
+    /// `zip+file` plano, `2` = zip dentro de tar, etc. Lo aplica el ENGINE
+    /// antes de componer (el direccionamiento es sintácticamente ilimitado);
+    /// superarlo responde `Error::LimitExceeded` (`LIMIT_NESTING`). Cada
+    /// capa por encima de un `tar+gz` paga forward-decode por lectura — el
+    /// default es deliberadamente corto.
+    pub max_nesting: usize,
 }
 
 impl Default for Limits {
+    #[allow(deprecated)] // inicializa el campo obsoleto por compat de API
     fn default() -> Self {
         Self {
             max_entries: 500_000,
@@ -61,6 +87,8 @@ impl Default for Limits {
             max_depth: 64,
             max_cd_bytes: 8 * 1024 * 1024,
             max_decompressed_bytes: 64 * 1024 * 1024 * 1024,
+            spool_max_bytes: 1024 * 1024 * 1024,
+            max_nesting: 3,
         }
     }
 }
@@ -71,9 +99,22 @@ pub(crate) enum Locator {
     /// tar: los datos son CONTIGUOS y sin comprimir — `read` es un range
     /// passthrough al provider interior.
     Tar { offset: u64, size: u64 },
-    /// zip: índice de la entrada en el central directory — `read`
-    /// descomprime en un hilo blocking (stored/deflate).
-    Zip { index: usize },
+    /// zip (#59): locator AUTOCONTENIDO — todo lo que `read` necesita sin
+    /// retener ningún objeto de archive ni re-parsear el CD: el LOCAL
+    /// header en `header_offset` resuelve el offset real de datos y la
+    /// descompresión (stored/deflate) corre en un hilo blocking.
+    Zip {
+        /// Offset del LOCAL header en el contenedor.
+        header_offset: u64,
+        /// Método de compresión (0 stored / 8 deflate).
+        method: u16,
+        /// CRC-32 declarado por el CD (verificado en lecturas completas).
+        crc32: u32,
+        /// Tamaño comprimido.
+        comp_size: u64,
+        /// Tamaño descomprimido.
+        uncomp_size: u64,
+    },
     /// tar.gz/tgz (ADR 0028, #55): gz no es seekable — `read` es
     /// FORWARD-DECODE desde un decoder fresco que descarta hasta `offset`.
     /// `offset`/`size` son del stream DESCOMPRIMIDO, NO de bytes del

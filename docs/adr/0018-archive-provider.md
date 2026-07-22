@@ -87,3 +87,20 @@ container. Skipped hostile entries are not visible until frontends expose the
 count. Remote ZIP range reads can be chatty, partly mitigated by index and block
 caches. The `zip` and `tar` dependencies are preferred to security-sensitive
 hand-written parsers.
+
+## Addendum — Nesting (v2, #56, proto 0.24)
+
+Multi-layer addressing is now implemented as reserved by A3: the leftmost
+format token is the outermost layer and splits at its LAST `!` marker; a
+plain interior keeps the v1 first-marker rule (a rogue extra `!` lands in
+the interior and fails as `NotFound`, never re-addressing the outer path).
+`archive_compose` accepts an outer that is itself a well-formed archive
+path; the roundtrip guard extends to layers. The engine bounds depth with
+`Limits::max_nesting` (default 3, `[archive] max_nesting`), answering
+`LimitExceeded("nesting")` before composing anything.
+
+Known caveat: a nested layer's cache generation is the (mtime, size) of the
+entry INSIDE the outer archive — replacing the outer container with
+same-metadata entries can serve a stale inner index until eviction; the
+full-read CRC (#59) and fail-loud short reads are the backstop. Reads above
+a `tar+gz` layer forward-decode per access (#95.1 spool remains the fix).
