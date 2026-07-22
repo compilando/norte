@@ -324,18 +324,25 @@ impl PluginRuntime {
         // red (revísala, seguridad).
         let mut ctx_builder = WasiCtxBuilder::new();
         if let Some(net) = &caps.net {
-            // Allow-list por HOST resuelto: se compara el `SocketAddr` contra la
-            // ip y contra `ip:puerto` de la lista. Sin DNS en el guest
-            // (`allow_ip_name_lookup(false)`): se conecta por IP y el allow-list
-            // es por IP — resolver hostnames es competencia del wiring de stage
-            // 3b (el host resuelve y pasa la IP).
+            // Allow-list por HOST resuelto. SOLO conexiones TCP SALIENTES
+            // (`TcpConnect`): se rechazan bind/listen y TODO UDP — un provider de
+            // red conecta, no escucha ni manda datagramas (mínimo privilegio,
+            // review security). Una entrada `ip:puerto` fija el puerto; una de
+            // solo `ip` autoriza CUALQUIER puerto de ese host — es deliberado (el
+            // FTP pasivo negocia puertos de datos DINÁMICOS, no acotables a
+            // priori) y el humano lo ve al aprobar el manifiesto. Sin DNS en el
+            // guest (`allow_ip_name_lookup(false)`): se conecta por IP y el
+            // allow-list es por IP; resolver hostnames + deny-list de
+            // link-local/metadata (169.254/fe80) es del wiring de stage 3b.
             let allowed: std::collections::HashSet<String> = net.hosts.iter().cloned().collect();
-            ctx_builder.socket_addr_check(move |addr, _use| {
-                let ok =
-                    allowed.contains(&addr.ip().to_string()) || allowed.contains(&addr.to_string());
-                Box::pin(async move { ok })
+            ctx_builder.socket_addr_check(move |addr, use_| {
+                let permitted = matches!(use_, wasmtime_wasi::sockets::SocketAddrUse::TcpConnect)
+                    && (allowed.contains(&addr.ip().to_string())
+                        || allowed.contains(&addr.to_string()));
+                Box::pin(async move { permitted })
             });
             ctx_builder.allow_ip_name_lookup(false);
+            ctx_builder.allow_udp(false);
         }
         let ctx = ctx_builder.build();
         // Límite de memoria lineal por store (cierra M4-P2b): un guest no puede

@@ -69,7 +69,11 @@ impl Scope {
 /// Permiso de red: una allow-list de hosts.
 #[derive(Debug, Clone, Deserialize)]
 pub struct NetCap {
-    /// Hosts a los que el plugin puede conectar (exacto, sin comodines por ahora).
+    /// Hosts a los que el plugin puede conectar por TCP SALIENTE (exacto, sin
+    /// comodines). Una entrada `ip:puerto` autoriza SOLO ese puerto; una de solo
+    /// `ip` autoriza CUALQUIER puerto de ese host (necesario para el FTP pasivo,
+    /// que negocia puertos de datos dinámicos) — el humano lo ve al aprobar. Sin
+    /// DNS: se conecta por IP (resolución de hostnames = stage 3b, #30).
     pub hosts: Vec<String>,
 }
 
