@@ -1,5 +1,11 @@
-# Preset CUA (flechas + convenciones de escritorio). Ctrl+C saldrá del
-# preset cuando la fase 5 lo rebindee a copy (con Ctrl+Q como salida).
+# Preset CUA (flechas + convenciones de escritorio).
+#
+# Decisión #23: Ctrl+C queda como SALIR (emergencia universal), NO como copy.
+# `pane.copy` de norte es "copiar al otro pane" (modelo ortodoxo de dos
+# paneles), no un copy-al-portapapeles: ligarlo a Ctrl+C sorprendería y, sobre
+# todo, DIVERGIRÍA del Ctrl-C hardcodeado que aborta el cd / refresh_panes
+# (esos loops transitorios no consultan el keymap). Copy se queda en F5.
+# Ctrl+Q y F10 también salen.
 
 [global]
 keymap = [
