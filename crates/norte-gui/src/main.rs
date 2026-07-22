@@ -380,10 +380,14 @@ impl NorteGui {
                     return; // stale: un cd más nuevo ya avanzó la generación.
                 }
                 match outcome {
-                    Ok(entries) => {
+                    Ok((entries, skipped)) => {
                         // set_listing ya normaliza (ordena) internamente (#54);
                         // pre-ordenar aquí era un doble sort (#94).
                         self.panes[pane].set_listing(dir, entries);
+                        // #96: badge de omitidas del contenedor (#93) — un
+                        // listado incompleto jamás es silencioso, tampoco
+                        // en la GUI.
+                        self.panes[pane].set_skipped(skipped);
                         self.errors[pane] = None;
                         self.query[pane].clear();
                         if std::env::var_os("NORTE_GUI_DEBUG").is_some() {
@@ -447,6 +451,7 @@ impl NorteGui {
             SessionEvent::ViewerOpened {
                 path,
                 content,
+                image,
                 generation,
             } => {
                 // Guard anti-stale (como `Listed`): un open tardío (F3 dos
@@ -466,8 +471,9 @@ impl NorteGui {
                     } => Viewer::with_plugin_preview(path, plugin_name, &output),
                     ViewerContent::Raw { bytes, truncated } => Viewer::new(path, bytes, truncated),
                 };
-                // Decodifica la imagen UNA vez (no en cada frame de render).
-                self.viewer_image = v.image_bytes().map(decode_image_preview);
+                // #92: la imagen llega YA decodificada del hilo de sesión —
+                // aquí solo se envuelve en el tipo de render (O(1), sin jank).
+                self.viewer_image = image.map(image_preview_from);
                 self.viewer = Some(v);
             }
             SessionEvent::ViewerFailed {
@@ -1182,6 +1188,22 @@ impl NorteGui {
             );
         }
 
+        // #96: el contenedor omitió entradas de su índice (#93) — el listado
+        // que se ve NO es todo lo que el archivo contiene. Mismo contrato que
+        // el badge de la status bar del TUI (clave i18n compartida), jamás
+        // silencioso; solo se pinta `Some(n)` con n > 0.
+        if let Some(n) = pane.skipped().filter(|n| *n > 0) {
+            col = col.child(
+                div()
+                    .px(px(4.0))
+                    .text_color(rgb(QUICK_FG))
+                    .child(SharedString::from(norte_i18n::ta(
+                        "status-archive-skipped",
+                        &[("n", &n.to_string())],
+                    ))),
+            );
+        }
+
         // Lista de entradas, virtualizada (issue #87): `uniform_list` solo
         // construye el rango visible, no las N entradas del dir.
         col = col.child(list);
@@ -1852,19 +1874,11 @@ fn viewer_header(v: &norte_frontend::viewer::Viewer) -> String {
     header
 }
 
-/// Presupuesto de píxeles del preview de imagen (~32 MP, cubre 8K de sobra): por
-/// encima se rechaza (bomba de descompresión → OOM). Los bytes ya vienen
-/// acotados por la sesión a `FS_READ_MAX_CHUNK`, pero un PNG diminuto puede
-/// declarar dimensiones enormes; por eso se comprueban las dimensiones (solo la
-/// cabecera) ANTES de decodificar. OJO al PICO transitorio: `into_rgba8()` puede
-/// allocar una 2.ª copia mientras coexiste con el buffer del decoder, así que el
-/// pico real ≈ 32 MP × 4 × 2 ≈ 256 MiB (una sola imagen cacheada a la vez).
-const MAX_IMAGE_PIXELS: u64 = 32_000_000;
-
-/// Imagen del viewer decodificada UNA vez al abrir (cache en [`NorteGui`]): en
-/// modo imagen la GUI la pinta. `Unreadable` = no se pudo decodificar (truncada,
-/// corrupta o excede [`MAX_IMAGE_PIXELS`]) → el render cae a un aviso i18n. Nunca
-/// se decodifica en `render_viewer` (se haría en cada frame): se hace al abrir.
+/// Imagen del viewer decodificada UNA vez al abrir (en el HILO DE SESIÓN,
+/// #92 — aquí solo se envuelve): en modo imagen la GUI la pinta. `Unreadable`
+/// = el decode falló (truncada, corrupta o excede el presupuesto de
+/// `session::decode_image`) → el render cae a un aviso i18n. Nunca se
+/// decodifica en `render_viewer` (sería cada frame) NI en este hilo (jank).
 enum ImagePreview {
     /// Decodificada: frame BGRA listo para `img(Arc<RenderImage>)` + dimensiones.
     Ready {
@@ -1879,47 +1893,27 @@ enum ImagePreview {
     Unreadable,
 }
 
-/// Decodifica los bytes de una imagen a un [`RenderImage`] de GPUI, con guardia
-/// anti-bomba: primero lee SOLO las dimensiones (cabecera) y rechaza por encima
-/// de [`MAX_IMAGE_PIXELS`] antes de asignar el buffer; luego decodifica a RGBA8 y
-/// permuta a BGRA (el orden que espera `RenderImage`). Cualquier fallo (formato,
-/// truncado, presupuesto) → [`ImagePreview::Unreadable`]; jamás panic ni OOM.
-/// Para GIF/WebP animados se muestra el primer frame (preview estático).
-fn decode_image_preview(bytes: &[u8]) -> ImagePreview {
-    // 1) Dimensiones desde la cabecera, sin decodificar el cuerpo.
-    let dims = image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .ok()
-        .and_then(|r| r.into_dimensions().ok());
-    let Some((width, height)) = dims else {
-        return ImagePreview::Unreadable;
-    };
-    if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
-        return ImagePreview::Unreadable;
-    }
-    // 2) Decode completo con Limits (defensa en profundidad: acota las
-    //    allocaciones INTERNAS del codec, no solo las dimensiones declaradas) →
-    //    RGBA8 → BGRA in-place.
-    let Ok(mut reader) = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()
-    else {
-        return ImagePreview::Unreadable;
-    };
-    let mut limits = image::Limits::default();
-    limits.max_alloc = Some(MAX_IMAGE_PIXELS.saturating_mul(4));
-    reader.limits(limits);
-    let Ok(decoded) = reader.decode() else {
-        return ImagePreview::Unreadable;
-    };
-    let mut rgba = decoded.into_rgba8();
-    for px in rgba.chunks_exact_mut(4) {
-        px.swap(0, 2);
-    }
-    let frame = image::Frame::new(rgba);
-    let image = std::sync::Arc::new(RenderImage::new(vec![frame]));
-    ImagePreview::Ready {
-        image,
-        width,
-        height,
+/// Envuelve el frame BGRA ya decodificado por la sesión (#92) en el tipo de
+/// render de GPUI. O(1) sobre los datos (mueve el buffer, sin re-decode); un
+/// buffer inconsistente (len ≠ w×h×4, imposible salvo bug) cae a
+/// `Unreadable`, jamás panic.
+fn image_preview_from(d: session::ImageDecode) -> ImagePreview {
+    match d {
+        session::ImageDecode::Ready(di) => {
+            let (width, height) = (di.width, di.height);
+            let Some(buf) =
+                image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(width, height, di.bgra)
+            else {
+                return ImagePreview::Unreadable;
+            };
+            let image = std::sync::Arc::new(RenderImage::new(vec![image::Frame::new(buf)]));
+            ImagePreview::Ready {
+                image,
+                width,
+                height,
+            }
+        }
+        session::ImageDecode::Unreadable => ImagePreview::Unreadable,
     }
 }
 
@@ -2145,9 +2139,9 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ImagePreview, affected_dirs, apply_viewer_command, decode_image_preview, first_cancelable,
-        generation_is_current, image_status, pending_hint, retain_active, row_label,
-        task_at_cursor, viewer_header, viewer_status,
+        ImagePreview, affected_dirs, apply_viewer_command, first_cancelable,
+        generation_is_current, image_preview_from, image_status, pending_hint, retain_active,
+        row_label, task_at_cursor, viewer_header, viewer_status,
     };
     use norte_frontend::viewer::Viewer;
     use norte_proto::{EntryKind, VPath};
@@ -2397,7 +2391,7 @@ mod tests {
         let png = buf.into_inner();
         let v = Viewer::new(vp(), png.clone(), false);
         assert!(v.is_image());
-        let preview = decode_image_preview(&png);
+        let preview = image_preview_from(crate::session::decode_image(&png));
         assert!(
             matches!(
                 preview,
@@ -2415,7 +2409,7 @@ mod tests {
         let head = b"\x89PNG\r\n\x1a\n\x00\x00".to_vec();
         let vt = Viewer::new(vp(), head.clone(), true);
         assert!(vt.is_image());
-        let bad = decode_image_preview(&head);
+        let bad = image_preview_from(crate::session::decode_image(&head));
         assert!(matches!(bad, ImagePreview::Unreadable));
         let s = image_status(&vt, Some(&bad));
         assert!(s.starts_with("PNG  imagen ilegible"), "{s}");
@@ -2434,7 +2428,7 @@ mod tests {
         png.extend_from_slice(&60_000u32.to_be_bytes()); // height
         png.extend_from_slice(&[8, 6, 0, 0, 0]); // bit depth/color/…
         assert!(matches!(
-            decode_image_preview(&png),
+            image_preview_from(crate::session::decode_image(&png)),
             ImagePreview::Unreadable
         ));
     }

@@ -111,8 +111,9 @@ pub enum SessionEvent {
         generation: u64,
         /// Directorio listado.
         dir: VPath,
-        /// Entradas o error aplanado a String (ya renderizable).
-        outcome: Result<Vec<Entry>, String>,
+        /// Entradas + omitidas del contenedor (#93/#96) o error aplanado a
+        /// String (ya renderizable).
+        outcome: Result<(Vec<Entry>, Option<u64>), String>,
     },
     /// La conexión inicial con el daemon falló (mensaje ya renderizable).
     ConnectFailed(String),
@@ -139,6 +140,10 @@ pub enum SessionEvent {
         path: VPath,
         /// Preview de plugin o bytes crudos.
         content: ViewerContent,
+        /// Imagen YA decodificada en el hilo de sesión (#92: el decode caro
+        /// jamás corre en el hilo de UI). `None` = el contenido no es una
+        /// imagen reconocida (o vino de un previewer plugin).
+        image: Option<ImageDecode>,
         /// Generación del `OpenViewer` que lo pidió (guard anti-stale).
         generation: u64,
     },
@@ -192,7 +197,10 @@ pub fn spawn(
                         let backend = Backend::Remote(remote.clone());
                         let tx = event_tx.clone();
                         tokio::spawn(async move {
-                            let outcome = backend.list(&dir).await.map_err(|e| format!("{e}"));
+                            let outcome = backend
+                                .list_with_skipped(&dir)
+                                .await
+                                .map_err(|e| format!("{e}"));
                             let _ = tx.send(SessionEvent::Listed {
                                 pane,
                                 generation,
@@ -244,6 +252,7 @@ async fn open_viewer(
                 plugin_name: p.plugin_name,
                 output: p.output,
             },
+            image: None,
             generation,
         });
         return;
@@ -261,9 +270,16 @@ async fn open_viewer(
     {
         Ok(bytes) => {
             let truncated = bytes.len() as u64 >= budget; // leímos el tope: puede haber más.
+            // #92: decode de imagen AQUÍ (hilo de sesión), no en el handler
+            // de UI — una imagen cara (JPEG progresivo cerca del tope) ya no
+            // congela el frame. Solo bytes que el viewer pintará como imagen.
+            let image = norte_frontend::viewer::image_format(&bytes)
+                .is_some()
+                .then(|| decode_image(&bytes));
             let _ = tx.send(SessionEvent::ViewerOpened {
                 path,
                 content: ViewerContent::Raw { bytes, truncated },
+                image,
                 generation,
             });
         }
@@ -359,4 +375,70 @@ async fn forward_progress(
     }
     // INVARIANTE: el Mutex nunca se envenena (sin panic bajo lock).
     cancellers.lock().unwrap().remove(&id);
+}
+
+/// Presupuesto de píxeles del preview de imagen (#92, movido del hilo de UI):
+/// `into_rgba8` alloca ancho×alto×4 y puede coexistir con el buffer del
+/// decoder — pico real ≈ 32 MP × 4 × 2 ≈ 256 MiB (una sola imagen a la vez).
+const MAX_IMAGE_PIXELS: u64 = 32_000_000;
+
+/// Frame BGRA crudo decodificado en el hilo de sesión (#92): la UI solo lo
+/// ENVUELVE en su tipo de render (O(1)), jamás decodifica.
+pub struct DecodedImage {
+    /// Píxeles BGRA8 (ancho×alto×4 bytes).
+    pub bgra: Vec<u8>,
+    /// Ancho en píxeles.
+    pub width: u32,
+    /// Alto en píxeles.
+    pub height: u32,
+}
+
+/// Resultado del decode de sesión (#92): espejo transportable de la
+/// distinción Ready/Unreadable del preview de la UI.
+pub enum ImageDecode {
+    /// Decodificada y lista para envolver en el render.
+    Ready(DecodedImage),
+    /// El decode falló (truncada/corrupta/excede el presupuesto): la UI
+    /// pinta el aviso i18n, sin reintentar.
+    Unreadable,
+}
+
+/// Decodifica bytes de imagen a BGRA8 con guardia anti-bomba (#92): primero
+/// SOLO las dimensiones de la cabecera (rechazo por encima de
+/// [`MAX_IMAGE_PIXELS`] antes de allocar), luego decode con
+/// `image::Limits` (acota las allocaciones internas del codec) → RGBA8 →
+/// BGRA in-place. Cualquier fallo → [`ImageDecode::Unreadable`]; jamás panic
+/// ni OOM. GIF/WebP animados: primer frame (preview estático).
+pub(crate) fn decode_image(bytes: &[u8]) -> ImageDecode {
+    let dims = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()
+        .and_then(|r| r.into_dimensions().ok());
+    let Some((width, height)) = dims else {
+        return ImageDecode::Unreadable;
+    };
+    if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
+        return ImageDecode::Unreadable;
+    }
+    let Ok(mut reader) = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()
+    else {
+        return ImageDecode::Unreadable;
+    };
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(MAX_IMAGE_PIXELS.saturating_mul(4));
+    reader.limits(limits);
+    let Ok(decoded) = reader.decode() else {
+        return ImageDecode::Unreadable;
+    };
+    let mut rgba = decoded.into_rgba8();
+    for px in rgba.chunks_exact_mut(4) {
+        px.swap(0, 2);
+    }
+    // Dimensiones REALES del decode (la cabecera pudo mentir a la baja).
+    let (width, height) = rgba.dimensions();
+    ImageDecode::Ready(DecodedImage {
+        bgra: rgba.into_raw(),
+        width,
+        height,
+    })
 }
