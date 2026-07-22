@@ -377,6 +377,100 @@ async fn abandono_de_todos_los_waiters_cancela_el_dial() {
     let _ = again.await;
 }
 
+/// Conector programable: falla con `ProviderUnavailable` mientras
+/// `failures` > 0, luego conecta.
+struct FlakyConnector {
+    connects: AtomicUsize,
+    failures: AtomicUsize,
+}
+
+#[async_trait]
+impl RemoteConnector for FlakyConnector {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+        self.connects.fetch_add(1, Ordering::SeqCst);
+        if self
+            .failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |f| f.checked_sub(1))
+            .is_ok()
+        {
+            return Err(Error::ProviderUnavailable { retryable: true });
+        }
+        Ok(Connected {
+            provider: Arc::new(EcoProvider),
+            warnings: Vec::new(),
+        })
+    }
+    async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+/// #47: un fallo transitorio del dial entra en negative-cache con backoff
+/// exponencial (1s → 2s → … tope 30s): reintentar dentro de la ventana
+/// responde el error cacheado SIN volver a marcar.
+#[tokio::test(start_paused = true)]
+async fn fallo_transitorio_entra_en_cooldown_con_backoff() {
+    let engine = Engine::new();
+    let conn = Arc::new(FlakyConnector {
+        connects: AtomicUsize::new(0),
+        failures: AtomicUsize::new(usize::MAX), // siempre falla
+    });
+    engine.set_connector(conn.clone());
+    let p = vp("sftp://h/x");
+
+    let err = engine.stat(&p).await.unwrap_err();
+    assert!(matches!(
+        err,
+        Error::ProviderUnavailable { retryable: true }
+    ));
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 1);
+
+    // Dentro de la ventana (1s): cacheado, sin dial.
+    let err = engine.stat(&p).await.unwrap_err();
+    assert!(matches!(
+        err,
+        Error::ProviderUnavailable { retryable: true }
+    ));
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 1, "en cooldown");
+
+    // Pasada la ventana: re-marca (y falla otra vez → ventana 2s).
+    tokio::time::advance(std::time::Duration::from_millis(1100)).await;
+    let _ = engine.stat(&p).await.unwrap_err();
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 2);
+
+    // 1s después: la ventana ya es de 2s — sigue cacheado.
+    tokio::time::advance(std::time::Duration::from_millis(1100)).await;
+    let _ = engine.stat(&p).await.unwrap_err();
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 2, "ventana doblada");
+
+    // Otro segundo más: expira y re-marca.
+    tokio::time::advance(std::time::Duration::from_millis(1100)).await;
+    let _ = engine.stat(&p).await.unwrap_err();
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 3);
+}
+
+/// #47: un connect que al fin entra LIMPIA el cooldown de la clave; la
+/// sesión queda cacheada (accesos posteriores no marcan).
+#[tokio::test(start_paused = true)]
+async fn exito_limpia_el_cooldown() {
+    let engine = Engine::new();
+    let conn = Arc::new(FlakyConnector {
+        connects: AtomicUsize::new(0),
+        failures: AtomicUsize::new(1), // falla solo la primera
+    });
+    engine.set_connector(conn.clone());
+    let p = vp("sftp://h/x");
+
+    let _ = engine.stat(&p).await.unwrap_err();
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 1);
+    tokio::time::advance(std::time::Duration::from_millis(1100)).await;
+    engine.stat(&p).await.expect("segundo dial conecta");
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 2);
+    // Cacheado: sin más dials.
+    engine.stat(&p).await.expect("cacheado");
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 2);
+}
+
 /// `trust_host_key` sin conector configurado es Unsupported, no un panic.
 #[tokio::test]
 async fn trust_sin_conector_es_unsupported() {
