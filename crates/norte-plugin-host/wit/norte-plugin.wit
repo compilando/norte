@@ -4,7 +4,7 @@
 // anidados, así que `provider` (en evolución) comparte paquete con el estable;
 // cuando `provider` se estabilice (stage 3) se separará a su propio paquete vía
 // layout `wit/deps/` (review protocol-guardian; documentado en ADR 0032).
-package norte:plugin@0.2.0;
+package norte:plugin@0.3.0;
 
 /// La puerta de host MÍNIMA (demuestra el gating host↔guest): un plugin puede
 /// pedir al host que registre una línea de log (inocua, sin capability) y leer
@@ -115,6 +115,31 @@ interface provider {
     /// Lee un RANGO acotado (equiv. una porción del `ByteStream`): a lo sumo
     /// `len` bytes desde `offset`. Un chunk más corto que `len` = EOF.
     read: func(segments: list<list<u8>>, offset: u64, len: u64) -> result<list<u8>, vfs-error>;
+
+    /// Escritura TRANSACCIONAL (#30 stage 2b-write): proyección de
+    /// `norte_vfs::ByteSink`. `open-writer` devuelve un `writer` (staging propio
+    /// del guest; el path final NO existe hasta `commit`); `write` añade un
+    /// chunk; `commit` publica atómicamente; `abort` descarta el staging. Soltar
+    /// el `writer` sin commit debe limpiar (best-effort). El host reensambla el
+    /// `ByteSink` sobre este recurso.
+    resource writer {
+        write: func(chunk: list<u8>) -> result<_, vfs-error>;
+        commit: func() -> result<_, vfs-error>;
+        abort: func() -> result<_, vfs-error>;
+    }
+
+    /// Abre un `writer` transaccional sobre el path (equiv. `Provider::write`).
+    open-writer: func(segments: list<list<u8>>) -> result<writer, vfs-error>;
+
+    /// Crea un directorio (equiv. `Provider::mkdir`).
+    make-dir: func(segments: list<list<u8>>) -> result<_, vfs-error>;
+
+    /// Borra una entrada (equiv. `Provider::remove`).
+    remove: func(segments: list<list<u8>>) -> result<_, vfs-error>;
+
+    /// Renombra/mueve (equiv. `Provider::rename`). (`from`/`to` son palabras
+    /// reservadas del WIT — de ahí `src`/`dst`.)
+    rename: func(src: list<list<u8>>, dst: list<list<u8>>) -> result<_, vfs-error>;
 }
 
 /// World de un plugin-provider (#30 stage 2): expone `provider` e importa

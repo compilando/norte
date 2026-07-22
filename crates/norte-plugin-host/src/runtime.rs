@@ -14,7 +14,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use thiserror::Error;
-use wasmtime::component::{Component, Linker, ResourceTable};
+use wasmtime::component::{Component, Linker, ResourceAny, ResourceTable};
 use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
@@ -525,6 +525,124 @@ impl ProviderInstance {
             });
         }
         Ok(out)
+    }
+
+    // ---- escritura (#30 stage 2b-write) ----
+
+    /// Abre un `writer` transaccional sobre `segments` (equiv.
+    /// `Provider::write`). Devuelve el handle del recurso del guest; el caller
+    /// DEBE liberarlo con [`Self::writer_drop`] tras `commit`/`abort`.
+    ///
+    /// # Errors
+    /// [`RuntimeError::Trap`] si el guest atrapa.
+    pub fn open_writer(
+        &mut self,
+        segments: &[Vec<u8>],
+    ) -> Result<Result<ResourceAny, provider_iface::VfsError>, RuntimeError> {
+        self.bindings
+            .norte_plugin_provider()
+            .call_open_writer(&mut self.store, segments)
+            .map_err(|e| RuntimeError::Trap(e.to_string()))
+    }
+
+    /// Añade un chunk al staging del `writer`.
+    ///
+    /// # Errors
+    /// [`RuntimeError::Trap`] si el guest atrapa.
+    pub fn writer_write(
+        &mut self,
+        writer: ResourceAny,
+        chunk: &[u8],
+    ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
+        self.bindings
+            .norte_plugin_provider()
+            .writer()
+            .call_write(&mut self.store, writer, chunk)
+            .map_err(|e| RuntimeError::Trap(e.to_string()))
+    }
+
+    /// Publica el staging del `writer` en el path final.
+    ///
+    /// # Errors
+    /// [`RuntimeError::Trap`] si el guest atrapa.
+    pub fn writer_commit(
+        &mut self,
+        writer: ResourceAny,
+    ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
+        self.bindings
+            .norte_plugin_provider()
+            .writer()
+            .call_commit(&mut self.store, writer)
+            .map_err(|e| RuntimeError::Trap(e.to_string()))
+    }
+
+    /// Descarta el staging del `writer` sin publicar.
+    ///
+    /// # Errors
+    /// [`RuntimeError::Trap`] si el guest atrapa.
+    pub fn writer_abort(
+        &mut self,
+        writer: ResourceAny,
+    ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
+        self.bindings
+            .norte_plugin_provider()
+            .writer()
+            .call_abort(&mut self.store, writer)
+            .map_err(|e| RuntimeError::Trap(e.to_string()))
+    }
+
+    /// Libera el handle del `writer` (drop del recurso del guest). Se llama
+    /// SIEMPRE tras `commit`/`abort`.
+    ///
+    /// # Errors
+    /// [`RuntimeError::Trap`] si el drop del guest atrapa.
+    pub fn writer_drop(&mut self, writer: ResourceAny) -> Result<(), RuntimeError> {
+        writer
+            .resource_drop(&mut self.store)
+            .map_err(|e| RuntimeError::Trap(e.to_string()))
+    }
+
+    /// Crea un directorio (equiv. `Provider::mkdir`).
+    ///
+    /// # Errors
+    /// [`RuntimeError::Trap`] si el guest atrapa.
+    pub fn make_dir(
+        &mut self,
+        segments: &[Vec<u8>],
+    ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
+        self.bindings
+            .norte_plugin_provider()
+            .call_make_dir(&mut self.store, segments)
+            .map_err(|e| RuntimeError::Trap(e.to_string()))
+    }
+
+    /// Borra una entrada (equiv. `Provider::remove`).
+    ///
+    /// # Errors
+    /// [`RuntimeError::Trap`] si el guest atrapa.
+    pub fn remove(
+        &mut self,
+        segments: &[Vec<u8>],
+    ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
+        self.bindings
+            .norte_plugin_provider()
+            .call_remove(&mut self.store, segments)
+            .map_err(|e| RuntimeError::Trap(e.to_string()))
+    }
+
+    /// Renombra/mueve (equiv. `Provider::rename`).
+    ///
+    /// # Errors
+    /// [`RuntimeError::Trap`] si el guest atrapa.
+    pub fn rename(
+        &mut self,
+        src: &[Vec<u8>],
+        dst: &[Vec<u8>],
+    ) -> Result<Result<(), provider_iface::VfsError>, RuntimeError> {
+        self.bindings
+            .norte_plugin_provider()
+            .call_rename(&mut self.store, src, dst)
+            .map_err(|e| RuntimeError::Trap(e.to_string()))
     }
 }
 

@@ -11,7 +11,9 @@ wit_bindgen::generate!({
     path: "wit",
 });
 
-use exports::norte::plugin::provider::{Caps, Entry, EntryKind, Guest, Page, VfsError};
+use exports::norte::plugin::provider::{
+    Caps, Entry, EntryKind, Guest, GuestWriter, Page, VfsError, Writer,
+};
 
 struct Mem;
 
@@ -163,6 +165,41 @@ impl Guest for Mem {
         let want = usize::try_from(len).unwrap_or(usize::MAX);
         let end = start.saturating_add(want).min(data.len());
         Ok(data[start..end].to_vec())
+    }
+
+    // ---- escritura: este guest es READ-ONLY → todo Unsupported (#30 stage
+    // 2b-write). El writer resource se declara pero jamás se construye.
+    type Writer = NoWriter;
+
+    fn open_writer(_s: Vec<Vec<u8>>) -> Result<Writer, VfsError> {
+        Err(VfsError::Unsupported)
+    }
+
+    fn make_dir(_s: Vec<Vec<u8>>) -> Result<(), VfsError> {
+        Err(VfsError::Unsupported)
+    }
+
+    fn remove(_s: Vec<Vec<u8>>) -> Result<(), VfsError> {
+        Err(VfsError::Unsupported)
+    }
+
+    fn rename(_src: Vec<Vec<u8>>, _dst: Vec<Vec<u8>>) -> Result<(), VfsError> {
+        Err(VfsError::Unsupported)
+    }
+}
+
+/// Writer inalcanzable de un guest read-only (nunca se construye).
+struct NoWriter;
+
+impl GuestWriter for NoWriter {
+    fn write(&self, _chunk: Vec<u8>) -> Result<(), VfsError> {
+        Err(VfsError::Unsupported)
+    }
+    fn commit(&self) -> Result<(), VfsError> {
+        Err(VfsError::Unsupported)
+    }
+    fn abort(&self) -> Result<(), VfsError> {
+        Err(VfsError::Unsupported)
     }
 }
 

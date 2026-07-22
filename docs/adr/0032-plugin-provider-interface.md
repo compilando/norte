@@ -129,8 +129,9 @@ in the host adapter, a guest, and the `net` capability — the staged work below
 El WIT es un contrato de wire (Component Model). Disciplina:
 
 - **Un cambio de la interfaz bumpea el paquete.** Añadir `provider` +
-  `norte-provider` subió `norte:plugin@0.1.0 → 0.2.0` (aditivo — previewer/
-  command/host-log intactos).
+  `norte-provider` subió `norte:plugin@0.1.0 → 0.2.0`; el camino de escritura
+  (writer resource + make-dir/remove/rename) subió `0.2.0 → 0.3.0` (todo
+  aditivo — previewer/command/host-log intactos).
 - **`provider` está en EVOLUCIÓN** (stage 3 añade escritura, hace crecer `caps`
   y `vfs-error`, y sus `record`/`enum` WIT no son forward-extensibles). Idealmente
   viviría en su **propio paquete** (`norte:provider@…`) para versionar
@@ -166,9 +167,17 @@ El WIT es un contrato de wire (Component Model). Disciplina:
   representable as a `VPath` `Segment` (e.g. contains `/`) is OMITTED by the
   adapter (like archive providers, #93); counting it via `list_skipped` is
   stage-2b debt.
-- **Stage 2b-write (remaining):** the write path — a `writer` resource in the
-  WIT (`open`/`write`/`commit`/`abort`) projecting `ByteSink`, its host wiring,
-  and the full RW `provider_contract!`. Then a non-read-only guest.
+- **Stage 2b-write — DONE:** the write path — a `writer` resource in the WIT
+  (`write`/`commit`/`abort`) + `open-writer`/`make-dir`/`remove`/`rename`
+  (package bumped to `0.3.0`), the host `ProviderInstance` resource wiring
+  (`ResourceAny` handle + `writer_drop`), a `PluginByteSink` projecting the
+  transactional `ByteSink` onto the guest resource, and the adapter's mutations
+  now DELEGATED (a read-only guest returns `Unsupported`). A writable
+  `provider-mem-rw` guest + a write E2E (write/commit staging, abort,
+  mkdir/remove/rename, byte-exact hostile content) — green. Remaining before
+  #30's contract-complete: run the full RW `provider_contract!` macro (deferred
+  — it needs the wasm target at test time and can't SKIP; the write E2E mirrors
+  its checks) and wire `list_skipped` for the dropped non-`Segment` names.
 - **Stage 3 (network + FTP):** the `net` capability + `wasi:sockets` wiring
   (own security review), port `norte-vfs-ftp`'s protocol logic into the guest,
   pass `provider_contract!` over a real FTP server, then retire the in-tree
