@@ -580,7 +580,7 @@ mod tests {
 
     /// #100.2: una entrada del CD declara un `comment_len` que su `cd_size`
     /// no cubre — el walk se queda corto a mitad del comentario por-entrada.
-    /// Pin de `skipped != comment_len → Corrupt` (ZipSmith emitía siempre
+    /// Pin de `skipped != comment_len → Corrupt` (`ZipSmith` emitía siempre
     /// `comment_len == 0`, y el mutante que borra el chequeo sobrevivía).
     #[test]
     fn cd_comment_truncado_es_corrupt() {
