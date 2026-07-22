@@ -108,6 +108,18 @@ impl Capabilities {
         }
     }
 
+    /// Capabilities SOLO con red: un allow-list de `hosts` a los que el guest
+    /// puede conectar (#30 stage 3). El resto de permisos quedan en su cero
+    /// (sin fs, sin ai, sin exec). Lo usa el wiring de un provider de red y sus
+    /// tests; el `exec` privado impide construir el struct desde fuera.
+    #[must_use]
+    pub fn with_net(hosts: Vec<String>) -> Self {
+        Self {
+            net: Some(NetCap { hosts }),
+            ..Self::default()
+        }
+    }
+
     /// Digest hex (sha256) de la forma CANÓNICA de estas capabilities (issue
     /// #69). El host lo guarda JUNTO a la aprobación del humano; si el
     /// `plugin.toml` cambia en disco tras aprobar y un `discover` posterior trae

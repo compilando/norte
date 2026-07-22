@@ -314,9 +314,30 @@ impl PluginRuntime {
         host_log::add_to_linker::<HostState, wasmtime::component::HasSelf<_>>(&mut linker, |s| s)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
 
-        // Sandbox WASI VACÍO: sin stdio heredado, sin preopens, sin red, sin
-        // env. Esta línea es el corazón del aislamiento (revísala, seguridad).
-        let ctx = WasiCtxBuilder::new().build();
+        // Sandbox WASI: sin stdio heredado, sin preopens, sin env. La RED se
+        // concede SOLO si la capability `net` está declarada, y aun así
+        // RESTRINGIDA a los hosts del allow-list (#30 stage 3a). Sin `net`, el
+        // `socket_addr_check` por defecto RECHAZA toda dirección (fail-closed) —
+        // el guest existe con `wasi:sockets` linkado pero sin ninguna conexión
+        // concedida (mismo principio que `fs-read`: el linker completo, la
+        // capacidad la da el HOST). Esta línea es el corazón del aislamiento de
+        // red (revísala, seguridad).
+        let mut ctx_builder = WasiCtxBuilder::new();
+        if let Some(net) = &caps.net {
+            // Allow-list por HOST resuelto: se compara el `SocketAddr` contra la
+            // ip y contra `ip:puerto` de la lista. Sin DNS en el guest
+            // (`allow_ip_name_lookup(false)`): se conecta por IP y el allow-list
+            // es por IP — resolver hostnames es competencia del wiring de stage
+            // 3b (el host resuelve y pasa la IP).
+            let allowed: std::collections::HashSet<String> = net.hosts.iter().cloned().collect();
+            ctx_builder.socket_addr_check(move |addr, _use| {
+                let ok =
+                    allowed.contains(&addr.ip().to_string()) || allowed.contains(&addr.to_string());
+                Box::pin(async move { ok })
+            });
+            ctx_builder.allow_ip_name_lookup(false);
+        }
+        let ctx = ctx_builder.build();
         // Límite de memoria lineal por store (cierra M4-P2b): un guest no puede
         // agotar la RAM del host. `StoreLimits` impl `ResourceLimiter`.
         let limits = StoreLimitsBuilder::new()
