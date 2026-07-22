@@ -85,6 +85,9 @@ enum ZipEnd {
 pub struct ZipSmith {
     entries: Vec<ZipEntry>,
     comment: Vec<u8>,
+    /// #100.2: la ÚLTIMA entrada del CD declara este `comment_len` sin
+    /// escribir sus bytes — un CD truncado a mitad del comentario por-entrada.
+    cd_comment_len_lie: Option<u16>,
 }
 
 impl ZipSmith {
@@ -176,6 +179,16 @@ impl ZipSmith {
         self
     }
 
+    /// La ÚLTIMA entrada del CD declara `len` bytes de comentario por-entrada
+    /// SIN escribirlos: el `cd_size` del EOCD no los cubre, así el walk del CD
+    /// se queda corto a mitad del comentario (#100.2 — pin de
+    /// `skipped != comment_len → Corrupt`). Sin entradas es un no-op.
+    #[must_use]
+    pub fn cd_comment_len_lie(mut self, len: u16) -> Self {
+        self.cd_comment_len_lie = Some(len);
+        self
+    }
+
     /// Los bytes del ZIP completo (local headers + central directory + EOCD).
     #[must_use]
     pub fn build(self) -> Vec<u8> {
@@ -213,7 +226,8 @@ impl ZipSmith {
         let mut out = Vec::new();
         let mut central = Vec::new();
         let real_count = self.entries.len() as u16;
-        for entry in &self.entries {
+        let last_idx = self.entries.len().wrapping_sub(1);
+        for (idx, entry) in self.entries.iter().enumerate() {
             let ZipWire {
                 name,
                 payload,
@@ -252,7 +266,14 @@ impl ZipSmith {
             central.extend_from_slice(&uncomp_len.to_le_bytes());
             central.extend_from_slice(&(name.len() as u16).to_le_bytes());
             central.extend_from_slice(&(extra.len() as u16).to_le_bytes());
-            central.extend_from_slice(&0u16.to_le_bytes()); // comment
+            // Comentario por-entrada: 0 salvo la mentira del #100.2 en la
+            // última entrada (declara bytes que NO se escriben en el CD).
+            let entry_comment_len = if idx == last_idx {
+                self.cd_comment_len_lie.unwrap_or(0)
+            } else {
+                0
+            };
+            central.extend_from_slice(&entry_comment_len.to_le_bytes()); // comment
             central.extend_from_slice(&0u16.to_le_bytes()); // disk
             central.extend_from_slice(&0u16.to_le_bytes()); // internal attrs
             let external: u32 = match entry {

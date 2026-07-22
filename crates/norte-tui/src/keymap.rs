@@ -153,6 +153,35 @@ mod tests {
         }
     }
 
+    /// Decisión #23 pineada: en el preset `cua`, Ctrl+C SALE (emergencia
+    /// universal) — jamás copy. `pane.copy` se queda en F5. Ligar Ctrl+C a
+    /// copy divergiría del Ctrl-C hardcodeado que aborta el cd/refresh (loops
+    /// transitorios que no consultan el keymap). Este test fija la decisión:
+    /// quien intente rebindear Ctrl+C a copy rompe aquí y ve el porqué.
+    #[test]
+    fn cua_ctrl_c_es_salir_no_copy() {
+        let cua = presets()
+            .into_iter()
+            .find(|(n, _)| *n == "cua")
+            .expect("preset cua")
+            .1;
+        let eff = Effective::build_for(&cua, &[], COMMANDS, Screen::Browse).expect("cua efectivo");
+        let mut r = Resolver::new(eff);
+        let ctrl_c = Chord::new(
+            Mods {
+                ctrl: true,
+                ..Default::default()
+            },
+            KeyCode::Char('c'),
+        );
+        assert_eq!(r.push(ctrl_c), Resolution::Run("app.quit".to_owned()));
+        // Copy vive en F5, no en un chord de Ctrl.
+        assert_eq!(
+            r.push(Chord::new(Mods::default(), KeyCode::F(5))),
+            Resolution::Run("pane.copy".to_owned())
+        );
+    }
+
     #[test]
     fn help_id_reemplaza_puntos_por_guiones() {
         assert_eq!(help_id("app.quit"), "help-cmd-app-quit");
