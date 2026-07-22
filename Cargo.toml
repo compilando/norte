@@ -21,6 +21,7 @@ members = [
     "crates/norte-i18n",
     "crates/norte-plugin-host",
     "crates/norte-mcp",
+    "crates/norte-ai",
 ]
 # Los guests WASM de ejemplo (M4-P2) NO son miembros del workspace: compilan a
 # wasm32-wasip2 con su propio perfil, no comparten el lockfile del host.
@@ -79,6 +80,7 @@ norte-i18n = { path = "crates/norte-i18n", version = "0.3.0-alpha.1" }
 norte-theme = { path = "crates/norte-theme", version = "0.3.0-alpha.1" }
 norte-plugin-host = { path = "crates/norte-plugin-host", version = "0.3.0-alpha.1" }
 norte-mcp = { path = "crates/norte-mcp", version = "0.3.0-alpha.1" }
+norte-ai = { path = "crates/norte-ai", version = "0.3.0-alpha.1" }
 
 # Externos: versiones centralizadas; cada crate opta por las que necesita
 # con justificación en la PR que las introduce (regla 8 de CLAUDE.md).
@@ -103,6 +105,14 @@ suppaftp = "10"
 # smithy igual de grande, sin camino GCS/Azure) y firma sigv4 a mano
 # (reqsign/rusty-s3 — deuda de mantenimiento permanente). Dep GRANDE:
 # transitivas reqwest/reqsign/quick-xml bajo cargo-deny.
+# Cliente HTTP directo de norte-ai (ADR 0031): MISMA versión (0.13) y MISMO
+# backend cripto (aws-lc-rs) que la reqwest transitiva de opendal — una sola
+# reqwest y un solo CryptoProvider de rustls en el árbol. La feature `rustls`
+# de reqwest 0.13 tira de aws-lc-rs; con `rustls-tls` de 0.12 se colaba `ring`
+# como segundo provider y rustls no podía autodetectar el default (rompía los
+# tests FTPS de norte-connect por unificación de features del workspace).
+# Sin defaults: sin cookies/proxy del sistema/compresión.
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 opendal = { version = "0.58", default-features = false, features = ["services-s3", "http-transport-reqwest", "executors-tokio"] }
 sha2 = "0.10"
 # Anclas HMAC del head del journal (M3-5, ADR 0025): hermana RustCrypto de

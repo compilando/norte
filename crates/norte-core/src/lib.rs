@@ -2,6 +2,7 @@
 //! y (en M0) modo embebido como biblioteca — el daemon llega en hitos posteriores.
 #![forbid(unsafe_code)]
 
+pub mod ai;
 pub mod approval;
 pub mod archive_config;
 pub mod audit;

@@ -26,6 +26,7 @@ the protocol, a frontend cannot provide it.
 | `norte-testkit` | Deterministic `MemProvider`, injectable failures, hostile fixtures, and proptest strategies. | MIT OR Apache-2.0 |
 | `norte-core` | Task scheduling, transfers, sessions, policy enforcement, journaling, and the daemon. | AGPL-3.0-only |
 | `norte-plugin-host` | WASM plugin manifests, capabilities, catalogue, and runtime. | AGPL-3.0-only |
+| `norte-ai` | Model-provider abstraction (`AiProvider`) and implementations: Anthropic, Ollama, OpenAI-compatible. | AGPL-3.0-only |
 | `norte-cli` | A command-line client and manual core test bed. | AGPL-3.0-only |
 | `norte-tui` | The ratatui dual-pane terminal frontend. | AGPL-3.0-only |
 | `norte-gui` | The GPUI graphical frontend. | AGPL-3.0-only |
@@ -34,7 +35,7 @@ the protocol, a frontend cannot provide it.
 | `norte-i18n` | Fluent localization resources shared by the frontends. | MIT OR Apache-2.0 |
 | `norte-theme` | Semantic theme roles, true-colour values, terminal fallbacks, and bundled presets. | MIT OR Apache-2.0 |
 
-Other subsystems include `norte-index`, `norte-ai`, and `norte-mcp`.
+Other subsystems include `norte-index` and `norte-mcp`.
 
 ## Dependency rules
 
