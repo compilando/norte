@@ -154,11 +154,21 @@ El WIT es un contrato de wire (Component Model). Disciplina:
 ## Staging
 
 - **Stage 1 (this ADR):** interface + projection design; decisions recorded.
-- **Stage 2 (no network):** land the `provider` WIT interface, the
-  `PluginProvider` host adapter, and a **`MemProvider`-backed guest** that
-  passes `provider_contract!`. Proves the async→sync projection in isolation,
-  with zero network attack surface. Reviewers: protocol-guardian (the WIT is a
-  wire contract), rust, encoding (paths/names as bytes round-trip).
+- **Stage 2a (WIT + host wire) — DONE** (commit `ee2737e`): the `provider` WIT
+  interface + `norte-provider` world + `ProviderInstance` host wrappers + a
+  `provider-mem` read-only guest + a wire round-trip E2E (paths/names as bytes,
+  hostile-name byte-exact). Reviewers protocol-guardian/encoding/rust applied.
+- **Stage 2b-read — DONE:** the `PluginProvider` adapter (`norte-core`) that
+  `impl`s `norte_vfs::Provider`, reassembling the async streams from the
+  bounded guest calls (paginated `list`, ranged `read`), and a target-gated
+  E2E that runs the full **read** contract (the same checks as
+  `readonly_provider_contract!`) against it — green. Finding: a WIT name not
+  representable as a `VPath` `Segment` (e.g. contains `/`) is OMITTED by the
+  adapter (like archive providers, #93); counting it via `list_skipped` is
+  stage-2b debt.
+- **Stage 2b-write (remaining):** the write path — a `writer` resource in the
+  WIT (`open`/`write`/`commit`/`abort`) projecting `ByteSink`, its host wiring,
+  and the full RW `provider_contract!`. Then a non-read-only guest.
 - **Stage 3 (network + FTP):** the `net` capability + `wasi:sockets` wiring
   (own security review), port `norte-vfs-ftp`'s protocol logic into the guest,
   pass `provider_contract!` over a real FTP server, then retire the in-tree
