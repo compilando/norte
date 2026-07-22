@@ -578,6 +578,22 @@ mod tests {
         assert_eq!(data_offset(&mut fr, 0, flen), Err(Error::Corrupt));
     }
 
+    /// #100.2: una entrada del CD declara un `comment_len` que su `cd_size`
+    /// no cubre — el walk se queda corto a mitad del comentario por-entrada.
+    /// Pin de `skipped != comment_len → Corrupt` (ZipSmith emitía siempre
+    /// `comment_len == 0`, y el mutante que borra el chequeo sobrevivía).
+    #[test]
+    fn cd_comment_truncado_es_corrupt() {
+        let bytes = ZipSmith::new()
+            .file(b"real.txt", b"ok")
+            .cd_comment_len_lie(10)
+            .build();
+        let mut reader = Cursor::new(bytes.clone());
+        let eocd = locate_eocd(&mut reader, bytes.len() as u64).expect("eocd válido");
+        let got = parse_cd(&mut reader, &eocd, &no_cancel(), |_| Ok(()));
+        assert_eq!(got.map(|_| ()).unwrap_err(), Error::Corrupt);
+    }
+
     #[test]
     fn cancelacion_corta_el_walk() {
         let bytes = ZipSmith::new().file(b"a", b"x").file(b"b", b"y").build();

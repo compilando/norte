@@ -5007,6 +5007,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 
 [[package]]
+name = "norte-ai"
+version = "0.3.0-alpha.1"
+dependencies = [
+ "async-trait",
+ "bitflags 2.13.0",
+ "bytes",
+ "futures",
+ "norte-connect",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "norte-connect"
 version = "0.3.0-alpha.1"
 dependencies = [
@@ -5039,6 +5056,7 @@ dependencies = [
  "globset",
  "hmac 0.12.1",
  "memchr",
+ "norte-ai",
  "norte-connect",
  "norte-encoding",
  "norte-plugin-host",
@@ -7013,6 +7031,8 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
+ "serde",
+ "serde_json",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
