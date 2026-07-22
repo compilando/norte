@@ -304,10 +304,24 @@ impl Engine {
             .read()
             .expect("connection_observer lock sano")
             .clone();
+        // Dedup canónica (#47): resuelve la forma canónica ANTES de marcar
+        // (lectura local de connections.toml) — un alias de una sesión viva
+        // acierta aquí y jamás abre una segunda.
+        let (cache_key, alias) = match connector.canonical_authority(p.scheme(), authority).await {
+            Some(canonical) if canonical != authority => {
+                let ckey = format!("{}://{canonical}", p.scheme());
+                if let Some(prov) = self.sessions.lookup(&ckey) {
+                    self.sessions.alias(key, &prov);
+                    return Ok(prov);
+                }
+                (ckey, Some(key))
+            }
+            _ => (key, None),
+        };
         // El dial va en el pool (#47): single-flight por clave, timeout,
         // cancelable por drop del waiter, backoff de fallos transitorios.
         self.sessions
-            .connect_remote(key, None, p.scheme(), authority, connector, observer)
+            .connect_remote(cache_key, alias, p.scheme(), authority, connector, observer)
             .await
     }
 

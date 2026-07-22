@@ -36,6 +36,20 @@ pub trait RemoteConnector: Send + Sync {
     /// 0015 D) o la categoría a la que degrade el fallo de conexión.
     async fn connect(&self, scheme: &str, authority: &str) -> Result<Connected, Error>;
 
+    /// La forma CANÓNICA de `authority` para esta conexión (#47, dedup): la
+    /// authority con el usuario/puerto EFECTIVOS que usaría el connect —
+    /// `sftp://host` que hereda `oscar@` de `connections.toml` canonicaliza a
+    /// `oscar@host`, y un puerto default explícito se normaliza fuera. El
+    /// Engine cachea la sesión bajo la clave canónica (+ alias la pedida):
+    /// dos formas de la misma identidad = UNA sesión.
+    ///
+    /// Resolución LOCAL y barata (sin red). `None` (default) = sin opinión:
+    /// el Engine cachea bajo la authority pedida tal cual.
+    async fn canonical_authority(&self, scheme: &str, authority: &str) -> Option<String> {
+        let _ = (scheme, authority);
+        None
+    }
+
     /// Registra la host key de `host:port` tras la confirmación EXPLÍCITA del
     /// usuario (método `connection.trust_host_key`); re-verifica el
     /// fingerprint contra la clave real (anti-TOCTOU, en `norte-connect`).
@@ -294,6 +308,15 @@ impl RemoteConnector for ConnectionManager {
         self.establish(&spec, name.as_deref()).await
     }
 
+    // skip_all por la misma razón que `connect`: la authority cruda puede
+    // llevar userinfo que el parse rechazará después (regla 10).
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn canonical_authority(&self, scheme: &str, authority: &str) -> Option<String> {
+        let url = format!("{scheme}://{authority}");
+        let file = self.load_connections().await.ok()?;
+        canonical_from_file(&file, &url)
+    }
+
     #[tracing::instrument(level = "info", skip(self))]
     async fn trust_host_key(
         &self,
@@ -362,14 +385,36 @@ fn resolve_spec(
     Ok((None, ad_hoc))
 }
 
-fn effective_port(ep: &norte_connect::Endpoint) -> u16 {
-    // Constante de matching (nunca viaja): s3 no lleva puerto en la authority
-    // (443 nominal); sftp=22, ftp=21.
-    ep.port.unwrap_or(match ep.scheme.as_str() {
+/// Puerto default del scheme — constante de matching (nunca viaja): s3 no
+/// lleva puerto en la authority (443 nominal); sftp=22, ftp=21.
+fn default_port(scheme: &str) -> u16 {
+    match scheme {
         "sftp" => 22,
         "s3" => 443,
         _ => 21,
-    })
+    }
+}
+
+fn effective_port(ep: &norte_connect::Endpoint) -> u16 {
+    ep.port.unwrap_or_else(|| default_port(&ep.scheme))
+}
+
+/// La forma canónica de dedup (#47): la authority del endpoint RESUELTO
+/// (usuario efectivo incluido) con el puerto default normalizado fuera —
+/// `sftp://h:22` y `sftp://h` canonicalizan igual.
+fn canonical_authority_of(ep: &norte_connect::Endpoint) -> String {
+    let mut canon = ep.clone();
+    if canon.port == Some(default_port(&canon.scheme)) {
+        canon.port = None;
+    }
+    authority_of(&canon)
+}
+
+/// La canónica de `url` contra un `connections.toml` ya cargado (separado de
+/// [`ConnectionManager::canonical_authority`] para testear puro).
+fn canonical_from_file(file: &ConnectionsFile, url: &str) -> Option<String> {
+    let (_name, spec) = resolve_spec(file, url).ok()?;
+    Some(canonical_authority_of(&spec.endpoint().ok()?))
 }
 
 /// La authority canónica de un endpoint (con el puerto solo si es explícito):
@@ -542,6 +587,36 @@ mod tests {
             addressing: None,
             logical_trash: false,
         }
+    }
+
+    /// #47: la canónica hereda el usuario de la entrada y normaliza fuera el
+    /// puerto default — dos formas de la misma identidad, una clave.
+    #[test]
+    fn canonica_hereda_usuario_y_normaliza_puerto() {
+        let f = file(CONNS);
+        assert_eq!(
+            canonical_from_file(&f, "sftp://work.example:2222").as_deref(),
+            Some("oscar@work.example:2222"),
+        );
+        assert_eq!(
+            canonical_from_file(&f, "sftp://oscar@work.example:2222").as_deref(),
+            Some("oscar@work.example:2222"),
+        );
+        // Puerto default explícito se cae de la canónica.
+        assert_eq!(
+            canonical_from_file(&f, "ftp://backup.example:21").as_deref(),
+            Some("backup.example"),
+        );
+        // Ad-hoc sin entrada: canónica = la propia forma normalizada.
+        assert_eq!(
+            canonical_from_file(&f, "sftp://nadie@otro.example:22").as_deref(),
+            Some("nadie@otro.example"),
+        );
+        // s3: la authority es el bucket, sin puerto.
+        assert_eq!(
+            canonical_from_file(&f, "s3://mi-bucket").as_deref(),
+            Some("mi-bucket"),
+        );
     }
 
     #[test]

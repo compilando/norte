@@ -575,6 +575,54 @@ async fn sesion_muerta_se_evicta_y_reconecta() {
     assert_eq!(conn.connects.load(Ordering::SeqCst), 2, "re-dial");
 }
 
+/// Conector con canónica fija: `h` y `oscar@h` son la MISMA identidad.
+struct CanonConnector {
+    connects: AtomicUsize,
+}
+
+#[async_trait]
+impl RemoteConnector for CanonConnector {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+        self.connects.fetch_add(1, Ordering::SeqCst);
+        Ok(Connected {
+            provider: Arc::new(EcoProvider),
+            warnings: Vec::new(),
+        })
+    }
+    async fn canonical_authority(&self, _scheme: &str, authority: &str) -> Option<String> {
+        assert!(authority == "h" || authority == "oscar@h");
+        Some("oscar@h".to_string())
+    }
+    async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+/// #47 (dedup canónica): `sftp://host` que hereda `oscar@` de la config y
+/// `sftp://oscar@host` son la misma identidad — UNA sesión, en ambos órdenes.
+#[tokio::test]
+async fn dedup_canonica_no_abre_segunda_sesion() {
+    // Orden 1: primero la forma sin usuario.
+    let engine = Engine::new();
+    let conn = Arc::new(CanonConnector {
+        connects: AtomicUsize::new(0),
+    });
+    engine.set_connector(conn.clone());
+    engine.stat(&vp("sftp://h/x")).await.expect("stat 1");
+    engine.stat(&vp("sftp://oscar@h/x")).await.expect("stat 2");
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 1, "una sesión");
+
+    // Orden 2: primero la canónica.
+    let engine = Engine::new();
+    let conn = Arc::new(CanonConnector {
+        connects: AtomicUsize::new(0),
+    });
+    engine.set_connector(conn.clone());
+    engine.stat(&vp("sftp://oscar@h/x")).await.expect("stat 1");
+    engine.stat(&vp("sftp://h/x")).await.expect("stat 2");
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 1, "una sesión");
+}
+
 /// `trust_host_key` sin conector configurado es Unsupported, no un panic.
 #[tokio::test]
 async fn trust_sin_conector_es_unsupported() {
