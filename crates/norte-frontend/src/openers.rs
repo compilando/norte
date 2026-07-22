@@ -41,7 +41,9 @@ pub struct Opener {
     /// argv plantilla: `["bat", "--paging=always", "%f"]`. El primer token es
     /// el binario; los códigos de campo `%f`/`%F`/`%d` se sustituyen SOLO como
     /// tokens completos (nunca dentro de un literal — así una ruta no-UTF8
-    /// jamás se concatena con texto y se preserva byte a byte, regla 1).
+    /// jamás se concatena con texto y se preserva byte a byte, regla 1). Un
+    /// código de campo EMBEBIDO en un literal (`--file=%f`) NO se expande: se
+    /// pasa tal cual como argumento literal (usa un token propio en su lugar).
     command: Vec<String>,
 }
 
@@ -107,6 +109,16 @@ impl OpenersConfig {
 
     /// Como [`Self::resolve`] pero con el OS explícito (testeable sin depender
     /// del OS del runner).
+    ///
+    /// ```
+    /// use norte_frontend::openers::OpenersConfig;
+    /// let cfg = OpenersConfig::parse(
+    ///     "[[opener]]\nmime = \"text/*\"\ncommand = [\"bat\", \"%f\"]\n",
+    /// )
+    /// .unwrap();
+    /// assert_eq!(cfg.resolve_for("text/html", "linux").unwrap().program(), "bat");
+    /// assert!(cfg.resolve_for("application/pdf", "linux").is_none());
+    /// ```
     #[must_use]
     pub fn resolve_for(&self, mime: &str, os: &str) -> Option<&Opener> {
         let matches = |o: &&Opener| mimetype_matches(&o.mime, mime);
@@ -131,6 +143,11 @@ impl Opener {
     /// Sustitución SOLO de tokens completos y byte-safe: una ruta viaja como
     /// `OsStr` sin pasar por `String` (regla 1). Un código de campo cuyo input
     /// esté vacío se OMITE (no se lanza el binario con un token literal `%f`).
+    ///
+    /// Seguridad: el caller pasa rutas ABSOLUTAS (`vpath_to_native`), que
+    /// empiezan por `/` (o `\\?\…` en Windows). Eso impide que un nombre hostil
+    /// tipo `-rf` o `--config=…` se cuele como FLAG del programa destino: cada
+    /// código de campo es un solo elemento del argv Y nunca empieza por `-`.
     #[must_use]
     pub fn argv(&self, files: &[&Path], dir: &Path) -> Vec<std::ffi::OsString> {
         let mut out = Vec::with_capacity(self.command.len());
@@ -189,13 +206,27 @@ fn is_executable(p: &Path) -> bool {
 /// Adivina el mimetype por EXTENSIÓN (heurística ligera, sin sniffing ni
 /// lectura de contenido). Copia LOCAL del criterio de `norte-core` (el crate
 /// de frontend no depende del core): sin extensión reconocible →
-/// `application/octet-stream`. Opera sobre bytes crudos (regla 1): una
+/// `application/octet-stream`.
+///
+/// Opera sobre bytes crudos (regla 1): se parte por el ÚLTIMO `.` a nivel de
+/// bytes y solo la EXTENSIÓN se valida como UTF-8 — un nombre con stem no-UTF8
+/// pero extensión ASCII (`caf\xe9\xff.txt`) sí detecta `text/plain`. Una
 /// extensión no-UTF8 no casa nada.
+///
+/// ```
+/// use norte_frontend::openers::guess_mime;
+/// assert_eq!(guess_mime(b"notes.md"), "text/plain");
+/// assert_eq!(guess_mime(b"sin_extension"), "application/octet-stream");
+/// // stem no-UTF8 + extensión ASCII: la extensión manda.
+/// assert_eq!(guess_mime(b"caf\xe9\xff.pdf"), "application/pdf");
+/// ```
 #[must_use]
 pub fn guess_mime(name: &[u8]) -> &'static str {
-    let ext = std::str::from_utf8(name)
-        .ok()
-        .and_then(|n| n.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()));
+    let ext = name
+        .iter()
+        .rposition(|&b| b == b'.')
+        .and_then(|dot| std::str::from_utf8(&name[dot + 1..]).ok())
+        .map(str::to_ascii_lowercase);
     match ext.as_deref() {
         Some("txt" | "md" | "rs" | "toml" | "log" | "csv" | "ini" | "conf") => "text/plain",
         Some("json") => "application/json",
@@ -368,6 +399,9 @@ command = ["open", "-t", "%f"]
         assert_eq!(guess_mime(b"sin_ext"), "application/octet-stream");
         // Extensión no-UTF8: no casa nada.
         assert_eq!(guess_mime(b"a.\xff\xfe"), "application/octet-stream");
+        // Stem no-UTF8 pero extensión ASCII: la extensión manda (byte-split).
+        assert_eq!(guess_mime(b"caf\xe9\xff.txt"), "text/plain");
+        assert_eq!(guess_mime(b"\xff\xff.png"), "image/png");
     }
 
     #[test]

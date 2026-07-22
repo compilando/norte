@@ -313,6 +313,22 @@ mod root_base_tests {
         assert_eq!(os_root_base(br"\\?\C:\Windows"), Err(Error::InvalidPath));
     }
 
+    /// #28 encoding: un nombre con bytes NO-UTF8 sobrevive byte a byte por el
+    /// round-trip nativo → `vpath_to_native` → nativo (unix). Guard del inverso
+    /// de `vpath_from_native` a nivel de fixture.
+    #[cfg(unix)]
+    #[test]
+    fn vpath_to_native_round_trip_bytes_no_utf8() {
+        use super::vpath_to_native;
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        use std::path::Path;
+        let native = Path::new(OsStr::from_bytes(b"/x/\xff\xfe.txt"));
+        let vpath = super::vpath_from_native(native).expect("vpath");
+        let back = vpath_to_native(&vpath).expect("nativo");
+        assert_eq!(back.as_os_str().as_bytes(), b"/x/\xff\xfe.txt");
+    }
+
     #[test]
     fn os_root_base_rechaza_primer_segmento_no_prefijo() {
         // Ni unidad ni UNC: un nombre normal como raíz del OS es InvalidPath.
