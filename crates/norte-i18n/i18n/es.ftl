@@ -152,6 +152,11 @@ status-archive-skipped = ⚠ { $n } entradas omitidas (nombres hostiles/límites
 status-names-encoding = nombres: { $enc }
 msg-names-encoding = nombres mostrados como { $enc } (solo display; los bytes no cambian)
 msg-names-encoding-off = nombres tal cual (reinterpretación apagada)
+msg-open-no-opener = sin opener configurado para { $mime } (ver openers.toml)
+msg-open-missing-program = el opener necesita `{ $program }` — no instalado
+msg-open-remote = los openers solo funcionan con archivos locales
+msg-open-launched = abierto con { $program }
+msg-open-failed = no se pudo lanzar { $program }: { $error }
 cli-ls-skipped = aviso: { $n } entradas del contenedor omitidas del índice (nombres hostiles/límites)
 
 # --- Ayuda (F1) — construida del keymap efectivo ---
@@ -197,6 +202,7 @@ help-cmd-pane-move = mover la selección al otro pane
 help-cmd-pane-delete = borrar (papelera si la hay)
 help-cmd-pane-delete-permanent = borrar PERMANENTE
 help-cmd-pane-view = ver el archivo seleccionado
+help-cmd-pane-open = abrir el archivo seleccionado con un programa externo (openers.toml)
 help-cmd-pane-quick-search = quick search en el pane (filtro/salto)
 help-cmd-pane-history = historial de directorios
 help-cmd-pane-hotlist = directorios favoritos

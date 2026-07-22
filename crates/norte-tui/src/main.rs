@@ -267,6 +267,8 @@ async fn main() -> Result<()> {
     // Copia de la hotlist en el App (spec 2026-07-18): la fuente del popup
     // `Ctrl+D`; se refresca en cada hot-reload OK (`reload_config`).
     app.hotlist = cfg.hotlist.clone();
+    // Openers declarativos (#28): fuente de `pane.open` (F4).
+    app.openers = cfg.openers.clone();
     // Canales del modo daemon (None en embebido): tasks de otros frontends
     // y avisos de (re)conexión — se drenan en el loop principal.
     let foreign_tasks = backend.take_foreign_tasks();
@@ -915,6 +917,20 @@ async fn run(
                                     // Un cd (nav.parent…) apagó el modo virtual del
                                     // pane de búsqueda: suelta el run y cancela.
                                     reap_search_run(app, &mut search_run);
+                                    // #28: `pane.open` dejó un comando externo
+                                    // resuelto — suspender el TUI y lanzarlo aquí
+                                    // (el run loop es dueño de la terminal).
+                                    if let Some((program, argv)) = app.pending_open.take() {
+                                        app.message = Some(match run_opener(terminal, argv).await {
+                                            Ok(_) => {
+                                                ta("msg-open-launched", &[("program", &program)])
+                                            }
+                                            Err(e) => ta(
+                                                "msg-open-failed",
+                                                &[("program", &program), ("error", &e.to_string())],
+                                            ),
+                                        });
+                                    }
                                 }
                                 Resolution::Pending(_) => {
                                     app.pending = active
@@ -1238,6 +1254,8 @@ async fn reload_config(
                 // La copia de hotlist también (un popup abierto conserva su
                 // snapshot hasta reabrirse — items congelados a propósito).
                 app.hotlist.clone_from(&cfg.hotlist);
+                // Openers (#28): recargados con el resto de la config.
+                app.openers = cfg.openers.clone();
                 // Bindings `lua:` descartados del keymap de PROYECTO
                 // (seguridad — mismo aviso que en el arranque; máximo
                 // porque `global` se fusiona en ambas pantallas).
@@ -2200,6 +2218,78 @@ fn reap_search_run(app: &App, search_run: &mut Option<SearchRun>) {
     }
 }
 
+/// Resuelve el opener (#28) del fichero seleccionado y, si TODO valida, deja
+/// el `(programa, argv)` en `app.pending_open` para que el run loop lo lance
+/// (es dueño de la terminal). Cada fallo va a la barra — degradación limpia,
+/// jamás un lanzamiento a ciegas: sin fichero (no-op), remoto/archivo
+/// (`msg-open-remote`), sin opener para el mime (`msg-open-no-opener`), o
+/// binario ausente (`msg-open-missing-program`).
+fn resolve_opener(app: &mut App) {
+    use norte_frontend::openers;
+    let Some(path) = app
+        .focused()
+        .selected()
+        .filter(|e| matches!(e.kind, EntryKind::File | EntryKind::Symlink))
+        .map(|e| e.path.clone())
+    else {
+        return;
+    };
+    // Ruta nativa: SOLO `file://` local; archive/sftp/s3 → sin path nativo.
+    let Ok(native) = norte_vfs_local::vpath_to_native(&path) else {
+        app.message = Some(t("msg-open-remote"));
+        return;
+    };
+    let mime = openers::guess_mime(
+        path.file_name()
+            .map_or(&[][..], norte_proto::Segment::as_bytes),
+    );
+    let Some(opener) = app.openers.resolve(mime) else {
+        app.message = Some(ta("msg-open-no-opener", &[("mime", mime)]));
+        return;
+    };
+    let program = opener.program().to_owned();
+    if !openers::program_available(&program) {
+        app.message = Some(ta("msg-open-missing-program", &[("program", &program)]));
+        return;
+    }
+    // `%d` = el directorio del pane (nativo); si por lo que sea no convierte,
+    // el padre del propio fichero.
+    let dir = norte_vfs_local::vpath_to_native(app.focused().dir()).unwrap_or_else(|_| {
+        native
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default()
+    });
+    app.pending_open = Some((program, opener.argv(&[&native], &dir)));
+}
+
+/// Suspende el TUI (sale de la pantalla alternativa + raw mode), lanza el
+/// comando externo con stdio HEREDADO (el usuario interactúa con `bat`/editor
+/// directamente), espera su fin en `spawn_blocking` (regla 2: la espera
+/// bloqueante no vive en el executor async) y restaura la terminal — pase lo
+/// que pase con el hijo. #28.
+async fn run_opener(
+    terminal: &mut ratatui::DefaultTerminal,
+    argv: Vec<std::ffi::OsString>,
+) -> std::io::Result<std::process::ExitStatus> {
+    use crossterm::terminal::{
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    };
+    disable_raw_mode()?;
+    crossterm::execute!(std::io::stdout(), LeaveAlternateScreen)?;
+    let status = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .status()
+    })
+    .await
+    .map_err(std::io::Error::other)?;
+    crossterm::execute!(std::io::stdout(), EnterAlternateScreen)?;
+    enable_raw_mode()?;
+    terminal.clear()?;
+    status
+}
+
 /// Ejecuta un comando nombrado (ADR 0006: los mismos nombres que verán la
 /// palette y el wire). Un error de listado en un cd NO tumba el TUI: el
 /// pane se queda donde estaba (aviso visible: barra de mensajes, issue #20).
@@ -2314,6 +2404,7 @@ async fn dispatch(
                 open_viewer(app, backend, events, path).await;
             }
         }
+        "pane.open" => resolve_opener(app),
         "viewer.close" => app.viewer = None,
         "viewer.up" => viewer_do(app, |v| v.scroll_up(1)),
         "viewer.down" => viewer_do(app, |v| v.scroll_down(1)),

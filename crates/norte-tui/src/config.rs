@@ -15,6 +15,7 @@ use serde::Deserialize;
 
 use crate::keymap::{KeymapFile, parse_keymap};
 use crate::nav;
+use norte_frontend::openers::OpenersConfig;
 
 /// Default keymap preset (decision from 2026-07-10).
 pub const DEFAULT_PRESET: &str = "orthodox";
@@ -446,6 +447,71 @@ pub struct LoadedConfig {
     pub archive_max_nesting: Option<usize>,
     /// Archivos que participaron (para el watcher y los diagnósticos).
     pub sources: Vec<PathBuf>,
+    /// Openers declarativos fusionados (#28): SOLO capas sistema/usuario
+    /// (la de PROYECTO se ignora fail-closed — un repo hostil no inyecta
+    /// comandos externos). Usuario gana sobre sistema.
+    pub openers: OpenersConfig,
+}
+
+/// Carga la capa `keymap.toml` de `dir` (ADR 0006/0007); `None` si no existe.
+/// La capa de PROYECTO se marca (`mark_project`) para que `Effective` descarte
+/// sus bindings `lua:` (seguridad #75). Una capa de usuario no admite la lista
+/// `keymap` completa (eso es de presets): es error con archivo culpable.
+///
+/// # Errors
+/// [`ConfigError::Toml`] si no parsea o usa `keymap` en una capa.
+fn load_keymap_layer(
+    dir: &Path,
+    kind: Layer,
+    sources: &mut Vec<PathBuf>,
+) -> Result<Option<KeymapFile>, ConfigError> {
+    let keymap = dir.join("keymap.toml");
+    let Some(raw) = read_optional(&keymap)? else {
+        return Ok(None);
+    };
+    let mut parsed = parse_keymap(&raw).map_err(|e| ConfigError::Toml {
+        path: keymap.clone(),
+        message: e.to_string(),
+    })?;
+    if kind == Layer::Project {
+        parsed.mark_project();
+    }
+    if parsed.has_full_keymap() {
+        return Err(ConfigError::Toml {
+            path: keymap,
+            message:
+                "una capa de config no admite `keymap`: usa prepend_keymap/append_keymap (ADR 0006)"
+                    .to_owned(),
+        });
+    }
+    sources.push(keymap);
+    Ok(Some(parsed))
+}
+
+/// Carga y parsea `openers.toml` de una capa (#28); `None` si el fichero no
+/// existe o la capa es de PROYECTO (fail-closed — un `./.norte/openers.toml`
+/// de un repo hostil no debe lanzar binarios externos).
+///
+/// # Errors
+/// [`ConfigError::Toml`] con el archivo culpable si no parsea.
+fn load_openers(
+    dir: &Path,
+    kind: Layer,
+    sources: &mut Vec<PathBuf>,
+) -> Result<Option<OpenersConfig>, ConfigError> {
+    if kind == Layer::Project {
+        return Ok(None);
+    }
+    let openers_path = dir.join("openers.toml");
+    let Some(raw) = read_optional(&openers_path)? else {
+        return Ok(None);
+    };
+    let parsed = OpenersConfig::parse(&raw).map_err(|e| ConfigError::Toml {
+        path: openers_path.clone(),
+        message: e.to_string(),
+    })?;
+    sources.push(openers_path);
+    Ok(Some(parsed))
 }
 
 /// Carga y fusiona todas las capas (ADR 0007).
@@ -464,6 +530,7 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
     let mut archive_max_entries: Option<u64> = None;
     let mut archive_max_decompressed_bytes: Option<u64> = None;
     let mut archive_max_nesting: Option<usize> = None;
+    let mut openers = OpenersConfig::empty();
     let mut sources = Vec::new();
     for (dir, kind) in &layers.dirs {
         let norte = dir.join("norte.toml");
@@ -536,31 +603,13 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
             }
             sources.push(norte);
         }
-        let keymap = dir.join("keymap.toml");
-        if let Some(raw) = read_optional(&keymap)? {
-            let mut parsed = parse_keymap(&raw).map_err(|e| ConfigError::Toml {
-                path: keymap.clone(),
-                message: e.to_string(),
-            })?;
-            // La capa de PROYECTO (`./.norte`) carga SIN trust, así que se
-            // marca (deuda #75 cerrada: el kind viaja POR DIR):
-            // `Effective::build_for` descarta sus bindings `lua:` (un repo
-            // hostil no dirige la ejecución de comandos Lua del usuario) —
-            // con aviso, jamás en silencio.
-            if *kind == Layer::Project {
-                parsed.mark_project();
-            }
-            // Diagnóstico con ARCHIVO (ADR 0007): una capa de usuario no
-            // admite `keymap` — eso es de presets (prepend/append aquí).
-            if parsed.has_full_keymap() {
-                return Err(ConfigError::Toml {
-                    path: keymap,
-                    message: "una capa de config no admite `keymap`: usa                               prepend_keymap/append_keymap (ADR 0006)"
-                        .to_owned(),
-                });
-            }
+        if let Some(parsed) = load_keymap_layer(dir, *kind, &mut sources)? {
             keymap_layers.push(parsed);
-            sources.push(keymap);
+        }
+        // Openers (#28): la capa superior (usuario) se antepone y gana el
+        // empate en `resolve`; la de PROYECTO se ignora dentro de load_openers.
+        if let Some(parsed) = load_openers(dir, *kind, &mut sources)? {
+            openers.extend_front(parsed);
         }
     }
     Ok(LoadedConfig {
@@ -575,6 +624,7 @@ pub fn load(layers: &Layers) -> Result<LoadedConfig, ConfigError> {
         archive_max_entries,
         archive_max_decompressed_bytes,
         archive_max_nesting,
+        openers,
         sources,
     })
 }
@@ -983,6 +1033,73 @@ mod hotlist_tests {
             cfg.hotlist[0].target.as_ref().unwrap(),
             &VPath::parse("file:///nuevo").unwrap(),
             "la última aparición dentro de la capa gana"
+        );
+    }
+
+    /// #28 seguridad: un `openers.toml` en la capa de PROYECTO (`./.norte`) se
+    /// IGNORA fail-closed — un repo hostil no puede inyectar un binario que se
+    /// ejecute al pulsar F4. La capa de USUARIO sí se honra.
+    #[test]
+    fn openers_de_proyecto_se_ignoran_usuario_se_honra() {
+        let usuario = tempfile::tempdir().unwrap();
+        std::fs::write(
+            usuario.path().join("openers.toml"),
+            "[[opener]]\nmime = \"text/*\"\ncommand = [\"bat\", \"%f\"]\n",
+        )
+        .unwrap();
+        let proyecto = tempfile::tempdir().unwrap();
+        std::fs::write(
+            proyecto.path().join("openers.toml"),
+            "[[opener]]\nmime = \"text/*\"\ncommand = [\"curl-malicioso\", \"%f\"]\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (usuario.path().to_path_buf(), Layer::User),
+                (proyecto.path().to_path_buf(), Layer::Project),
+            ],
+        };
+        let cfg = load(&layers).expect("carga");
+        // Resuelve al opener del USUARIO, jamás al del proyecto.
+        assert_eq!(
+            cfg.openers
+                .resolve_for("text/plain", "linux")
+                .unwrap()
+                .program(),
+            "bat",
+            "el opener de proyecto se ignora fail-closed"
+        );
+    }
+
+    /// #28: entre capas, la superior (usuario) gana el empate de mimetype.
+    #[test]
+    fn openers_usuario_gana_sobre_sistema() {
+        let sistema = tempfile::tempdir().unwrap();
+        std::fs::write(
+            sistema.path().join("openers.toml"),
+            "[[opener]]\nmime = \"text/*\"\ncommand = [\"less\", \"%f\"]\n",
+        )
+        .unwrap();
+        let usuario = tempfile::tempdir().unwrap();
+        std::fs::write(
+            usuario.path().join("openers.toml"),
+            "[[opener]]\nmime = \"text/*\"\ncommand = [\"bat\", \"%f\"]\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (sistema.path().to_path_buf(), Layer::System),
+                (usuario.path().to_path_buf(), Layer::User),
+            ],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(
+            cfg.openers
+                .resolve_for("text/plain", "linux")
+                .unwrap()
+                .program(),
+            "bat",
+            "la capa de usuario (superior) gana"
         );
     }
 

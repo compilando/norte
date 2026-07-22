@@ -152,6 +152,11 @@ status-archive-skipped = ⚠ { $n } entries omitted (hostile names/limits)
 status-names-encoding = names: { $enc }
 msg-names-encoding = names shown as { $enc } (display only; bytes unchanged)
 msg-names-encoding-off = names shown as-is (reinterpretation off)
+msg-open-no-opener = no opener configured for { $mime } (see openers.toml)
+msg-open-missing-program = opener needs `{ $program }` — not installed
+msg-open-remote = openers only work on local files
+msg-open-launched = opened with { $program }
+msg-open-failed = could not launch { $program }: { $error }
 cli-ls-skipped = warning: { $n } container entries omitted from the index (hostile names/limits)
 
 # --- Help (F1) — built from the effective keymap ---
@@ -197,6 +202,7 @@ help-cmd-pane-move = move selection to the other pane
 help-cmd-pane-delete = delete (trash when available)
 help-cmd-pane-delete-permanent = PERMANENT delete
 help-cmd-pane-view = view the selected file
+help-cmd-pane-open = open the selected file with an external program (openers.toml)
 help-cmd-pane-quick-search = quick search in pane (filter/jump)
 help-cmd-pane-history = directory history
 help-cmd-pane-hotlist = favorite directories

@@ -61,6 +61,17 @@ impl OpenersConfig {
         Self::default()
     }
 
+    /// Antepone los openers de `higher` (capa de MAYOR precedencia): en un
+    /// empate de mimetype+OS, la capa superior gana ([`Self::resolve`] casa la
+    /// primera entrada). Lo usa el frontend al fusionar capas (usuario sobre
+    /// sistema); la capa de PROYECTO se excluye antes de llamar aquí — un repo
+    /// hostil no debe inyectar comandos externos que se ejecuten.
+    pub fn extend_front(&mut self, higher: OpenersConfig) {
+        let mut merged = higher.openers;
+        merged.append(&mut self.openers);
+        self.openers = merged;
+    }
+
     /// Parsea un `openers.toml`.
     ///
     /// # Errors

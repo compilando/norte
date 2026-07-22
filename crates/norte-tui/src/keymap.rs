@@ -69,6 +69,7 @@ pub const COMMANDS: &[&str] = &[
     "pane.delete",
     "pane.delete-permanent",
     "pane.view",
+    "pane.open",
     "task.cancel",
     "viewer.close",
     "viewer.up",
