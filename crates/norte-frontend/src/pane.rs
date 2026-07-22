@@ -48,6 +48,14 @@ pub struct PaneState {
     /// apaga al volver aquí — sin esto, los encodings anteriores a la
     /// sugerencia serían inalcanzables (M1 del review #57).
     name_encoding_entry: usize,
+    /// Omitidas del CONTENEDOR del listado actual (#93/#96): entradas que el
+    /// índice del provider archive descartó (nombres hostiles/límites) y que
+    /// por tanto NO están en `entries` — un listado incompleto jamás es
+    /// silencioso. `None` = no aplica/desconocido; los frontends solo pintan
+    /// `Some(n)` con `n > 0`. Se resetea con cada listado nuevo
+    /// ([`Self::set_listing`]); el caller lo fija con el valor FRESCO de su
+    /// `list_with_skipped`/`list_stream`.
+    skipped: Option<u64>,
 }
 
 impl PaneState {
@@ -68,6 +76,7 @@ impl PaneState {
             marks: HashSet::new(),
             name_encoding: None,
             name_encoding_entry: 0,
+            skipped: None,
         }
     }
 
@@ -137,6 +146,9 @@ impl PaneState {
         self.loading = false;
         self.quick = None;
         self.marks.clear();
+        // #96: las omitidas eran del listado ANTERIOR; el caller fija las
+        // frescas con `set_skipped` si su fuente las trae.
+        self.skipped = None;
     }
 
     /// Marca el pane como cargando `dir`: entradas vacías, `loading=true`, sin
@@ -152,6 +164,21 @@ impl PaneState {
         self.loading = true;
         self.quick = None;
         self.marks.clear();
+        self.skipped = None;
+    }
+
+    /// Omitidas del contenedor del listado actual (#93/#96) — ver el campo.
+    #[must_use]
+    pub fn skipped(&self) -> Option<u64> {
+        self.skipped
+    }
+
+    /// Fija las omitidas FRESCAS del listado actual (#96): llamar tras
+    /// [`Self::set_listing`]/[`Self::refill`] con el valor de la MISMA
+    /// respuesta de listado (`list_with_skipped`/`list_stream`) — nunca
+    /// arrastrar el de un listado anterior.
+    pub fn set_skipped(&mut self, skipped: Option<u64>) {
+        self.skipped = skipped;
     }
 
     /// Sube el cursor una posición (tope en 0). No-op si la lista está vacía.
