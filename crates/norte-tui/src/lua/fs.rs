@@ -195,13 +195,15 @@ fn finish(lua: &Lua, state: &TaskState) -> mlua::Result<MultiValue> {
 /// a la barra pasándolos por `detail_for_bar` (mask + tope) — aquí no se
 /// sanea, se acumula.
 ///
-/// **Ventana de Task huérfana (deuda #74, solo `Backend::Remote`):** el
-/// canceller de cada mutación se registra tras volver el RPC de submit. Si
+/// **Ventana de Task huérfana (#74, solo `Backend::Remote`) — CERRADA:** el
+/// canceller de cada mutación se registra tras volver el RPC de submit; si
 /// el driver ABANDONA el future del run (timeout duro / fin de la gracia)
-/// con ese submit en vuelo, la Task nace en el daemon sin canceller
-/// registrado y el abort no la cancela. NO es una fuga de gobierno: sigue
-/// bajo journal/policy/undo y visible (y cancelable a mano) en el panel de
-/// tasks. La reconciliación queda en la issue #74 — aquí solo se documenta.
+/// con ese submit en vuelo, el drop del binding dispara el guard del
+/// backend, que envía `rpc.cancel {id}` (patrón #72) — el dispatch del
+/// daemon muere PRE-efecto y la Task no nace. Ventana residual mínima: si
+/// el dispatch ya había terminado cuando llega el cancel, la Task existe
+/// pero es huérfana solo del canceller — sigue bajo journal/policy/undo y
+/// cancelable a mano en el panel de tasks.
 ///
 /// **Hazard del stash — CERRADO por el flag `closed`:** un script puede
 /// guardar `norte.fs.copy` en un global y llamarlo en un run POSTERIOR; esa
@@ -322,11 +324,10 @@ pub(crate) fn install_fs(
                     match submitted {
                         Ok(task) => {
                             // ANTES del join: si el usuario aborta el run, el
-                            // driver puede cancelar esta Task en vuelo. OJO:
-                            // si el driver ABANDONA el future con el submit
-                            // remoto aún en vuelo, la Task nace sin canceller
-                            // registrado (ventana documentada en install_fs,
-                            // deuda #74).
+                            // driver puede cancelar esta Task en vuelo. Un
+                            // ABANDONO con el submit remoto aún en vuelo lo
+                            // retira el guard rpc.cancel del backend (#74,
+                            // ver rustdoc de install_fs).
                             cancellers.borrow_mut().push(task.canceller());
                             finish(&lua, &task.join().await)
                         }
@@ -359,8 +360,8 @@ pub(crate) fn install_fs(
                     // (spec M4 Lua) — un script no borra irreversible.
                     match backend.delete(&p, DeleteMode::Trash).await {
                         Ok(task) => {
-                            // Misma ventana de submit remoto abandonado que
-                            // en copy/move (deuda #74).
+                            // Mismo guard de submit abandonado que en
+                            // copy/move (#74).
                             cancellers.borrow_mut().push(task.canceller());
                             finish(&lua, &task.join().await)
                         }
