@@ -4255,6 +4255,7 @@ dependencies = [
  "hmac 0.12.1",
  "libunftp",
  "memchr",
+ "norte-ai",
  "norte-connect",
  "norte-encoding",
  "norte-plugin-host",

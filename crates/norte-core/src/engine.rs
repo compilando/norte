@@ -72,6 +72,13 @@ pub struct Engine {
     /// contenedor (los providers compuestos se cachean con los límites
     /// vigentes en su primer uso).
     archive_limits: RwLock<norte_vfs_archive::Limits>,
+    /// Proveedor de IA para el rename revisable (M4-A2, ADR 0031). `None` =
+    /// sin IA (`ai_rename_plan` → `Unsupported`). Inyectado con
+    /// [`Self::set_ai_provider`].
+    ai_provider: RwLock<Option<norte_ai::SharedAiProvider>>,
+    /// Config `[ai]` (opt-in/local-only/denied-paths). Default deshabilitado
+    /// → el gate rechaza toda operación de IA.
+    ai_config: RwLock<crate::ai::AiConfig>,
 }
 
 impl Engine {
@@ -95,6 +102,8 @@ impl Engine {
             policy: Arc::new(crate::policy::AllowAll),
             approvals: Arc::new(crate::approval::DenyAll),
             archive_limits: RwLock::new(norte_vfs_archive::Limits::default()),
+            ai_provider: RwLock::new(None),
+            ai_config: RwLock::new(crate::ai::AiConfig::default()),
         }
     }
 
@@ -128,6 +137,8 @@ impl Engine {
             policy: Arc::new(crate::policy::AllowAll),
             approvals: Arc::new(crate::approval::DenyAll),
             archive_limits: RwLock::new(norte_vfs_archive::Limits::default()),
+            ai_provider: RwLock::new(None),
+            ai_config: RwLock::new(crate::ai::AiConfig::default()),
         }
     }
 
@@ -362,6 +373,92 @@ impl Engine {
     /// [`Error::Unsupported`] si no hay provider para el scheme; los del provider.
     pub async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
         self.provider_for(p).await?.list(p).await
+    }
+
+    /// Inyecta el proveedor de IA para el rename revisable (M4-A2, ADR 0031).
+    ///
+    /// # Panics
+    /// Solo por envenenamiento del lock interno (irrecuperable).
+    pub fn set_ai_provider(&self, provider: norte_ai::SharedAiProvider) {
+        *self.ai_provider.write().expect("ai_provider lock sano") = Some(provider);
+    }
+
+    /// Fija la config `[ai]` (opt-in/local-only/denied-paths). Sin ella el
+    /// gate rechaza toda operación de IA (default deshabilitado).
+    ///
+    /// # Panics
+    /// Solo por envenenamiento del lock interno.
+    pub fn set_ai_config(&self, config: crate::ai::AiConfig) {
+        *self.ai_config.write().expect("ai_config lock sano") = config;
+    }
+
+    /// Sugiere un plan de rename REVISABLE para los archivos de `dir` según
+    /// `instruction` (spec §9, ADR 0031). NO muta nada — el plan es el
+    /// producto; aplicarlo es N `fs.move` gobernados (journal + undo +
+    /// policy). El gate opt-in se evalúa ANTES de que ningún nombre salga al
+    /// proveedor; los nombres hostiles (no-UTF8) se rechazan fail-loud sin
+    /// enviarse.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si no hay proveedor de IA instalado;
+    /// [`Error::PolicyDenied`] si el gate rechaza (IA off, local-only sobre
+    /// remoto, o `dir` bajo un `denied_prefix`); los del listado o del
+    /// proveedor mapeados a la taxonomía del wire.
+    ///
+    /// # Panics
+    /// Solo por envenenamiento de un lock interno (irrecuperable).
+    pub async fn ai_rename_plan(
+        &self,
+        dir: &VPath,
+        instruction: &str,
+    ) -> Result<crate::ai::RenamePlan, Error> {
+        use futures::StreamExt;
+
+        let provider = self
+            .ai_provider
+            .read()
+            .expect("ai_provider lock sano")
+            .clone()
+            .ok_or(Error::Unsupported)?;
+
+        // Gate PRE-contenido: nada sale hasta que pasa (spec §9). El clon de
+        // la config evita retener el lock a través de los await.
+        {
+            let config = self.ai_config.read().expect("ai_config lock sano").clone();
+            crate::ai::AiGate::new(&config)
+                .check(crate::ai::AiOp::Rename, provider.is_local(), &[dir])
+                .map_err(|reason| Error::PolicyDenied {
+                    rule: match reason {
+                        crate::ai::AiDenied::Disabled => "ai-disabled",
+                        crate::ai::AiDenied::LocalOnly => "ai-local-only",
+                        crate::ai::AiDenied::DeniedPath => "ai-denied-path",
+                    }
+                    .to_owned(),
+                })?;
+        }
+
+        // Nombres base de los archivos del dir (a través del provider, jamás
+        // el FS directo — regla 9).
+        let mut stream = self.list(dir).await?;
+        let mut names = Vec::new();
+        while let Some(item) = stream.next().await {
+            let entry = item?;
+            if let Some(name) = entry.path.file_name() {
+                names.push(name.clone());
+            }
+        }
+
+        let req = crate::ai::build_rename_prompt(&names, instruction)
+            .map_err(|e| ai_to_proto_error(&e))?;
+        let mut chat = provider
+            .chat(req)
+            .await
+            .map_err(|e| ai_to_proto_error(&e))?;
+        let mut reply = String::new();
+        while let Some(delta) = chat.next().await {
+            reply.push_str(&delta.map_err(|e| ai_to_proto_error(&e))?);
+        }
+        crate::ai::validate_rename_reply(&reply, &names).map_err(|e| ai_to_proto_error(&e))
     }
 
     /// Total de entradas omitidas del índice del contenedor de `p` (#93),
@@ -809,6 +906,25 @@ fn span_path(p: &VPath) -> String {
             format!("<{} ***>", p.scheme())
         }
         _ => p.display_lossy().clone(),
+    }
+}
+
+/// Mapea un [`norte_ai::AiError`] a la taxonomía del wire (M4-A2). El detalle
+/// (mensajes del proveedor, que jamás contienen la clave por construcción)
+/// queda en el log; el wire lleva la categoría.
+fn ai_to_proto_error(e: &norte_ai::AiError) -> Error {
+    use norte_ai::AiError as A;
+    match e {
+        A::Auth => Error::PermissionDenied,
+        A::Cancelled => Error::Cancelled,
+        A::Unsupported => Error::Unsupported,
+        A::RateLimited { .. } | A::Transport(_) => Error::ProviderUnavailable { retryable: true },
+        // Http/Protocol y cualquier variante futura (AiError es
+        // non_exhaustive): categoría gruesa, detalle al log.
+        _ => {
+            tracing::warn!(error = %e, "proveedor de IA: respuesta o estado inesperado");
+            Error::Internal { panic: false }
+        }
     }
 }
 

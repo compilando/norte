@@ -116,6 +116,12 @@ enum Cmd {
         #[command(subcommand)]
         cmd: PluginCmd,
     },
+    /// Sugerencias de IA (M4, ADR 0031). Opt-in por `[ai]` de norte.toml;
+    /// SIEMPRE produce un plan REVISABLE que confirmas antes de aplicar
+    Ai {
+        #[command(subcommand)]
+        cmd: AiCmd,
+    },
     /// Barre staging `.norte-partial` huérfano de un directorio (#11, ADR
     /// 0012). NO recursivo, no toca archivos del usuario (reconoce el
     /// staging por su forma exacta). Solo en modo embebido
@@ -133,6 +139,22 @@ enum Cmd {
     Audit {
         #[command(subcommand)]
         cmd: AuditCmd,
+    },
+}
+
+/// Subcomandos de IA (M4-A2).
+#[derive(Subcommand)]
+enum AiCmd {
+    /// Propone un rename por lote de los archivos de un dir según una
+    /// instrucción; imprime el plan y pide confirmación antes de aplicar
+    Rename {
+        /// Directorio cuyos archivos renombrar
+        dir: PathBuf,
+        /// Instrucción en lenguaje natural (p. ej. "a minúsculas")
+        instruction: String,
+        /// Aplica sin preguntar (por defecto se confirma — es revisable)
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -305,6 +327,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Cmd::Mcp { cmd } => return mcp_cmd(cmd, cli.socket).await,
         Cmd::Policy { cmd } => return policy_cmd(cmd, cli.socket).await,
         Cmd::Undo { session } => return undo_cmd(&session, cli.socket).await,
+        Cmd::Ai { cmd } => return ai_cmd(cmd).await,
         _ => {}
     }
     // Audit lee la DB del journal directamente (solo-lectura, daemon parado).
@@ -396,7 +419,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(run_task(task, false).await)
         }
         Cmd::Plugin { cmd } => plugin_cmd(&backend, cmd).await,
-        Cmd::Audit { .. } => unreachable!("manejado arriba"),
+        Cmd::Audit { .. } | Cmd::Ai { .. } => unreachable!("manejado arriba"),
         #[cfg(unix)]
         Cmd::Daemon { .. } | Cmd::Mcp { .. } | Cmd::Policy { .. } | Cmd::Undo { .. } => {
             unreachable!("manejado arriba")
@@ -1044,6 +1067,102 @@ async fn apply_archive_limits(engine: &Engine) -> anyhow::Result<()> {
         engine.set_archive_limits(limits);
     }
     Ok(())
+}
+
+/// `norte ai rename`: sugiere un rename por lote REVISABLE (M4-A2, ADR
+/// 0031). Embebido: construye un engine con el proveedor de `[ai]`, pide el
+/// plan (el gate opt-in/local-only/denied-paths corta ANTES de que ningún
+/// nombre salga), lo IMPRIME y confirma antes de aplicar. Aplicar = N
+/// `move_` gobernados (journal + undo + policy) — el plan es el producto.
+async fn ai_cmd(cmd: AiCmd) -> anyhow::Result<ExitCode> {
+    let AiCmd::Rename {
+        dir,
+        instruction,
+        yes,
+    } = cmd;
+    let dir = vpath(&dir)?;
+
+    let engine = Engine::new();
+    engine.register_provider(Arc::new(LocalProvider::os_root()) as Arc<dyn Provider>);
+    engine.set_connector(Arc::new(norte_core::connect::ConnectionManager::new(
+        norte_core::connect::config_dir(),
+    )));
+
+    let config = tokio::task::spawn_blocking(norte_core::ai::AiConfig::load)
+        .await
+        .context("carga de [ai]")?
+        .context("[ai] inválido en norte.toml")?;
+    let Some(pcfg) = config.rename_provider_config().cloned() else {
+        anyhow::bail!(
+            "sin proveedor de IA para el rename: define [ai.providers.<n>] y \
+             rename_provider en norte.toml (ADR 0031)"
+        );
+    };
+    // El core resuelve el secreto (env → keyring → age) y construye el
+    // proveedor; el CLI no toca norte-connect ni ve la clave (regla 10).
+    let provider = norte_core::ai::resolve_and_build(&pcfg, norte_core::connect::config_dir())
+        .await
+        .map_err(|e| anyhow::anyhow!("proveedor de IA: {e}"))?;
+    engine.set_ai_provider(provider);
+    engine.set_ai_config(config);
+
+    let plan = engine
+        .ai_rename_plan(&dir, &instruction)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    if plan.entries.is_empty() {
+        println!("{}", norte_i18n::t("cli-ai-rename-empty"));
+        return Ok(ExitCode::SUCCESS);
+    }
+    println!("{}", norte_i18n::t("cli-ai-rename-plan"));
+    for e in &plan.entries {
+        println!(
+            "  {} → {}",
+            String::from_utf8_lossy(e.from.as_bytes()),
+            String::from_utf8_lossy(e.to.as_bytes())
+        );
+    }
+
+    if !yes {
+        use std::io::Write as _;
+        eprint!("{} ", norte_i18n::t("cli-ai-rename-confirm"));
+        std::io::stderr().flush().ok();
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).ok();
+        let ans = line.trim().to_ascii_lowercase();
+        if ans != "y" && ans != "s" {
+            println!("{}", norte_i18n::t("cli-ai-rename-abort"));
+            return Ok(ExitCode::SUCCESS);
+        }
+    }
+
+    // Aplica cada entrada como un move_ gobernado (journal + undo + policy).
+    let mut ok = 0usize;
+    for e in &plan.entries {
+        let to = dir.join(e.to.clone());
+        let from = dir.join(e.from.clone());
+        match engine.move_(&from, &to).await {
+            Ok(task) => match task.join().await {
+                TaskState::Completed => ok += 1,
+                other => eprintln!(
+                    "norte: {} → {}: {other:?}",
+                    String::from_utf8_lossy(e.from.as_bytes()),
+                    String::from_utf8_lossy(e.to.as_bytes())
+                ),
+            },
+            Err(err) => eprintln!(
+                "norte: {} → {}: {err}",
+                String::from_utf8_lossy(e.from.as_bytes()),
+                String::from_utf8_lossy(e.to.as_bytes())
+            ),
+        }
+    }
+    println!(
+        "{}",
+        norte_i18n::ta("cli-ai-rename-done", &[("n", &ok.to_string())])
+    );
+    Ok(ExitCode::SUCCESS)
 }
 
 /// `norte gc`: barre staging `.norte-partial` huérfano (#11, ADR 0012).
