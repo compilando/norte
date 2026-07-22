@@ -126,9 +126,11 @@ pub struct ArchiveProvider {
     /// los concurrentes esperan el lock y releen la caché. El map se poda
     /// cuando el último interesado suelta su Arc.
     building: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
-    /// Tope de concurrencia del forward-decode `tar+gz` (FIX-2, #55
-    /// review): ver [`GZ_READ_CONCURRENCY`]. Sin efecto en `Tar`/`Zip`
-    /// (esos `read` no pasan por este semáforo).
+    /// Tope de concurrencia de las lecturas con DESCARTE descomprimido:
+    /// el forward-decode `tar+gz` (FIX-2, #55 review) y, desde #59, los
+    /// deflate RANGED de zip (skip>0 — deflate no tiene seek). Ver
+    /// [`GZ_READ_CONCURRENCY`]. `Tar` y las lecturas sin descarte no pasan
+    /// por aquí.
     gz_read_permits: Arc<tokio::sync::Semaphore>,
 }
 
@@ -357,6 +359,47 @@ impl ArchiveProvider {
     fn inner_key(aref: &ArchiveRef) -> InnerPath {
         aref.inner.iter().map(|s| s.as_bytes().to_vec()).collect()
     }
+
+    /// Lectura zip (#59): descompresión en hilo blocking → canal acotado →
+    /// stream; lector FRESCO por lectura, locator autocontenido — sin
+    /// archive retenido ni re-parse del CD. Drop del stream = el send falla
+    /// (fase de entrega) o el chequeo de canal cerrado corta el DESCARTE
+    /// (rust MAJOR-1 del review #59) = el hilo termina (regla 3).
+    async fn read_zip(
+        &self,
+        aref: &ArchiveRef,
+        plan: crate::zip_format::ReadPlan,
+    ) -> Result<norte_vfs::ByteStream, Error> {
+        let handle = tokio::runtime::Handle::current();
+        let inner = Arc::clone(&self.inner);
+        let outer_path = aref.outer.clone();
+        let outer_len = plan.container_len;
+        // rust MAJOR-1 (#59 review): un deflate RANGED descarta O(skip)
+        // descomprimiendo en el hilo blocking (deflate no tiene seek) —
+        // misma inanición del pool que el forward-decode gz (#55 FIX-2):
+        // comparte su semáforo. stored y lecturas sin descarte no lo pagan.
+        let permit = if plan.method == 8 && plan.skip > 0 {
+            Some(
+                Arc::clone(&self.gz_read_permits)
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| Error::Cancelled)?,
+            )
+        } else {
+            None
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        // El JoinHandle se suelta a propósito: la vida del hilo la gobierna
+        // el canal, no el caller — el huérfano tras un drop está acotado por
+        // el canal (4 chunks) en la fase de entrega Y por el chequeo de
+        // canal cerrado en la fase de descarte.
+        drop(tokio::task::spawn_blocking(move || {
+            let _permit = permit; // se libera cuando el hilo termina
+            let reader = ProviderReader::new(handle, inner, outer_path, outer_len);
+            crate::zip_format::read_entry(reader, &plan, &tx);
+        }));
+        Ok(futures::stream::poll_fn(move |cx| rx.poll_recv(cx)).boxed())
+    }
 }
 
 /// Guard RAII del single-flight (MAJOR-1, #61): registra (o reutiliza) el
@@ -563,35 +606,22 @@ impl Provider for ArchiveProvider {
                 comp_size,
                 uncomp_size,
             } => {
-                // Descompresión en hilo blocking → canal acotado → stream.
-                // Drop del stream = el send falla = el hilo termina (regla
-                // 3). El locator es AUTOCONTENIDO (#59): lector fresco por
-                // lectura, sin archive retenido ni re-parse del CD.
-                let handle = tokio::runtime::Handle::current();
-                let inner = Arc::clone(&self.inner);
-                let outer_path = aref.outer.clone();
-                // El tamaño de la MISMA generación que el índice: vista
-                // coherente aunque el contenedor cambie por debajo.
-                let outer_len = cached.index.generation.1.unwrap_or(0);
-                let plan = crate::zip_format::ReadPlan {
-                    header_offset,
-                    method,
-                    crc32,
-                    comp_size,
-                    uncomp_size,
-                    container_len: outer_len,
-                    skip: req_off,
-                    take: req_len,
-                };
-                let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-                // El JoinHandle se suelta a propósito: la vida del hilo la
-                // gobierna el canal, no el caller (huérfano acotado a 4
-                // chunks de 64 KiB tras el drop).
-                drop(tokio::task::spawn_blocking(move || {
-                    let reader = ProviderReader::new(handle, inner, outer_path, outer_len);
-                    crate::zip_format::read_entry(reader, &plan, &tx);
-                }));
-                Ok(futures::stream::poll_fn(move |cx| rx.poll_recv(cx)).boxed())
+                self.read_zip(
+                    &aref,
+                    crate::zip_format::ReadPlan {
+                        header_offset,
+                        method,
+                        crc32,
+                        comp_size,
+                        uncomp_size,
+                        // El tamaño de la MISMA generación que el índice:
+                        // vista coherente aunque el contenedor cambie.
+                        container_len: cached.index.generation.1.unwrap_or(0),
+                        skip: req_off,
+                        take: req_len,
+                    },
+                )
+                .await
             }
             Locator::Gz { offset, .. } => {
                 // Forward-decode: gz no es seekable — descarta hasta el

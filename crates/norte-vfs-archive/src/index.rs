@@ -25,6 +25,9 @@ pub struct Limits {
     /// autocontenido), así que ya no hay memoria de CD que gobernar. El
     /// campo se conserva por compatibilidad de API y NO se consulta.
     /// Histórico: era el tope del CD retenido en caché (#61).
+    #[deprecated(
+        note = "obsoleto desde #59 (ADR 0030): el CD se parsea en streaming, nada se retiene — el campo no se consulta"
+    )]
     pub max_cd_bytes: u64,
     /// Presupuesto TOTAL de bytes DESCOMPRIMIDOS del PASE DE ÍNDICE de un
     /// `tar+gz` (ADR 0028, #55): una gzip bomb es CPU infinita aunque la
@@ -55,6 +58,7 @@ pub struct Limits {
 }
 
 impl Default for Limits {
+    #[allow(deprecated)] // inicializa el campo obsoleto por compat de API
     fn default() -> Self {
         Self {
             max_entries: 500_000,

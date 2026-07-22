@@ -571,3 +571,154 @@ async fn zip_presupuesto_de_omitidas_es_limit_exceeded() {
         other => panic!("esperaba LimitExceeded(entries) por omitidas, fue {other:?}"),
     }
 }
+
+/// enc MAJOR-1 (review #59, bug CONFIRMADO pre-fix): una entrada STORED cuyo
+/// CD miente `uncomp > comp` habría servido bytes VECINOS del contenedor en
+/// un ranged read (el local header de al lado salía como contenido, en
+/// silencio). APPNOTE exige comp == uncomp para stored: fail-loud `Corrupt`
+/// en CUALQUIER lectura, jamás datos ajenos atribuidos a la entrada.
+#[tokio::test]
+async fn stored_con_uncomp_mentiroso_es_corrupt_jamas_bytes_vecinos() {
+    let mut zip = ZipSmith::new().file(b"peq.txt", b"hola").build();
+    // Cirugía: infla el uncomp_size del CD (offset +24 del record 0x02014b50)
+    // de 4 a 40. El comp_size (+20) queda en 4: la mentira exacta del bug.
+    let cd = zip
+        .windows(4)
+        .position(|w| w == [0x50, 0x4b, 0x01, 0x02])
+        .expect("CD record");
+    assert_eq!(
+        u32::from_le_bytes(zip[cd + 24..cd + 28].try_into().expect("u32")),
+        4,
+        "uncomp original"
+    );
+    zip[cd + 24..cd + 28].copy_from_slice(&40u32.to_le_bytes());
+
+    let (provider, root) = common::zip_provider(&zip).await;
+    let path = root.join(Segment::new(b"peq.txt".to_vec()).expect("seg"));
+    // Ranged read MÁS ALLÁ de los datos reales: antes devolvía bytes del
+    // local header vecino con err=None; ahora Corrupt.
+    let mut stream = provider
+        .read(
+            &path,
+            Some(ByteRange {
+                offset: 10,
+                len: Some(8),
+            }),
+        )
+        .await
+        .expect("read abre (el plan se valida en el hilo)");
+    let mut err = None;
+    let mut got = Vec::new();
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(b) => got.extend_from_slice(&b),
+            Err(e) => {
+                err = Some(e);
+                break;
+            }
+        }
+    }
+    assert!(matches!(err, Some(Error::Corrupt)), "fue {err:?}");
+    assert!(got.is_empty(), "ni un byte vecino en silencio: {got:x?}");
+}
+
+/// rust MAJOR-1 (review #59, regla 3): dropear el stream durante la fase de
+/// DESCARTE de un deflate ranged (que no envía nada al canal) corta el hilo
+/// blocking — sin el chequeo de canal cerrado, seguiría descomprimiendo el
+/// skip entero para nadie.
+#[tokio::test]
+async fn drop_del_stream_durante_el_descarte_corta_el_hilo() {
+    // 4 MiB INCOMPRESIBLES (xorshift determinista): comp ≈ uncomp, así el
+    // descarte de ~4 MiB descomprimidos exige leer ~16 bloques de 256 KiB
+    // del contenedor — señal medible en Faults::read_calls.
+    let mut data = vec![0u8; 4 * 1024 * 1024];
+    let mut x = 0x2545_F491_4F6C_DD1Du64;
+    for b in &mut data {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            *b = x as u8;
+        }
+    }
+    let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::fast());
+    enc.write_all(&data).expect("deflate");
+    let deflated = enc.finish().expect("finish");
+    let zip = ZipSmith::new()
+        .file_deflate(b"big.bin", &data, &deflated)
+        .build();
+
+    let (mem, path) = common::seed_container(b"fixture.zip", &zip).await;
+    let root = VPath::archive_compose("zip", &path, &[]).expect("compose");
+    let provider = ArchiveProvider::with_limits(
+        std::sync::Arc::clone(&mem) as std::sync::Arc<dyn Provider>,
+        norte_vfs_archive::Format::Zip,
+        "zip+mem",
+        Limits::default(),
+    );
+    let entry = root.join(Segment::new(b"big.bin".to_vec()).expect("seg"));
+    // Warm-up del índice (sus lecturas no cuentan para la aserción).
+    let _ = provider.stat(&entry).await.expect("stat");
+    let base = mem.faults().read_calls();
+
+    // Ranged read con skip PROFUNDO… y drop inmediato del stream.
+    let stream = provider
+        .read(
+            &entry,
+            Some(ByteRange {
+                offset: 3_900_000,
+                len: Some(16),
+            }),
+        )
+        .await
+        .expect("read abre");
+    drop(stream);
+
+    // Espera a que el contador se ESTABILICE (el hilo blocking muere solo).
+    let mut last = mem.faults().read_calls();
+    for _ in 0..200 {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let now = mem.faults().read_calls();
+        if now == last {
+            break;
+        }
+        last = now;
+    }
+    let spent = last.saturating_sub(base);
+    // Con el fix: data_offset (1 bloque) + a lo sumo un par de iteraciones
+    // del descarte antes de ver el canal cerrado. Sin el fix: ~16 bloques
+    // del contenedor (el descarte entero).
+    assert!(
+        spent <= 6,
+        "el descarte siguió tras el drop: {spent} lecturas"
+    );
+}
+
+/// Pin de la decisión #59 (rust MAJOR-3 / enc MINOR-4): un zip con datos
+/// PREPENDADOS (self-extractor) se rechaza `Corrupt` — la aceptación exige
+/// la auto-consistencia exacta del EOCD (`cd_off + cd_size == pos`), que es
+/// precisamente lo que hace sólido el rechazo de firmas falsas en el
+/// comentario (H9). Decisión consciente, no accidente: el "offset fudge" de
+/// Info-ZIP queda como feature futura si aparece demanda real.
+#[tokio::test]
+async fn zip_con_datos_prependados_se_rechaza_documentado() {
+    let zip = ZipSmith::new().file(b"a.txt", b"x").build();
+    let mut sfx = b"#!/bin/sh\necho stub\n".to_vec();
+    sfx.extend_from_slice(&zip);
+    let (provider, root) = common::zip_provider(&sfx).await;
+    // El fallo puede salir del list directo o del stream: acepta ambos.
+    if let Err(e) = provider.list(&root).await {
+        assert!(matches!(e, Error::Corrupt), "fue {e:?}");
+        return;
+    }
+    let mut stream = provider.list(&root).await.expect("list");
+    let mut got_err = None;
+    while let Some(item) = stream.next().await {
+        if let Err(e) = item {
+            got_err = Some(e);
+            break;
+        }
+    }
+    assert!(matches!(got_err, Some(Error::Corrupt)), "fue {got_err:?}");
+}

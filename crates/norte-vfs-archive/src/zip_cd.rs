@@ -209,6 +209,8 @@ fn resolve_extra(extra: &[u8], comp32: u32, uncomp32: u32, off32: u32) -> Option
     let mut comp = u64::from(comp32);
     let mut uncomp = u64::from(uncomp32);
     let mut off = u64::from(off32);
+    let any_marker = comp32 == u32::MAX || uncomp32 == u32::MAX || off32 == u32::MAX;
+    let mut resolved = false;
     let mut pos = 0usize;
     while pos + 4 <= extra.len() {
         let id = le16(extra, pos);
@@ -217,10 +219,13 @@ fn resolve_extra(extra: &[u8], comp32: u32, uncomp32: u32, off32: u32) -> Option
         if end > extra.len() {
             break; // record truncado: valores del CD, la entrada sobrevive
         }
-        if id == 0x0001 {
+        if id == 0x0001 && !resolved {
             // zip64: valores u64 en orden APPNOTE — uncomp, comp, header
             // offset (el nº de disco u32 va al final, ignorado) — SOLO para
             // los campos cuyo valor del CD es el marcador 0xFFFF_FFFF.
+            // Interop documentada (estilo Go archive/zip): un writer no
+            // conforme que emita el triple completo marcando solo algunos
+            // campos se malinterpreta — estricto a propósito.
             let mut body = &extra[pos + 4..end];
             for (needed, slot) in [
                 (uncomp32 == u32::MAX, &mut uncomp),
@@ -235,9 +240,18 @@ fn resolve_extra(extra: &[u8], comp32: u32, uncomp32: u32, off32: u32) -> Option
                     body = &body[8..];
                 }
             }
+            // El PRIMER record 0x0001 manda (review #59): un segundo no
+            // puede re-escribir los valores (ambigüedad hostil).
+            resolved = true;
         }
         // 0x7075 y demás ids: ignorados (ver doc del módulo).
         pos = end;
+    }
+    if any_marker && !resolved {
+        // Campos marcados 0xFFFF_FFFF sin NINGÚN record 0x0001: el CD
+        // promete zip64 y no lo entrega — hostil (antes el literal
+        // 0xFFFFFFFF se colaba como tamaño/offset mentira).
+        return None;
     }
     Some((comp, uncomp, off))
 }
@@ -462,6 +476,49 @@ mod tests {
         extra.extend_from_slice(&4u16.to_le_bytes());
         extra.extend_from_slice(&[0u8; 4]);
         assert!(resolve_extra(&extra, 0, u32::MAX, 0).is_none());
+    }
+
+    /// enc MAJOR-2 (review #59): el caso CANÓNICO — los TRES campos
+    /// marcados, tres valores distintos — pinea el orden APPNOTE completo
+    /// (uncomp, comp, offset). Una permutación de comp/uncomp aquí es
+    /// exactamente el mutante que sobrevivía a la suite.
+    #[test]
+    fn extra_zip64_tres_marcadores_orden_canonico() {
+        let mut extra = 0x0001u16.to_le_bytes().to_vec();
+        extra.extend_from_slice(&24u16.to_le_bytes());
+        extra.extend_from_slice(&111u64.to_le_bytes()); // uncomp
+        extra.extend_from_slice(&222u64.to_le_bytes()); // comp
+        extra.extend_from_slice(&333u64.to_le_bytes()); // header offset
+        let got = resolve_extra(&extra, u32::MAX, u32::MAX, u32::MAX).expect("válido");
+        assert_eq!(got, (222, 111, 333), "(comp, uncomp, off) exactos");
+    }
+
+    /// Review #59: campos MARCADOS sin ningún record 0x0001 en el extra —
+    /// el CD promete zip64 y no lo entrega: hostil (antes el literal
+    /// 0xFFFFFFFF se colaba como tamaño mentira de 4 GiB−1).
+    #[test]
+    fn extra_zip64_marcador_sin_record_es_hostil() {
+        // Extra con solo un 0x7075 (ignorado): el marcador queda sin valor.
+        let mut extra = 0x7075u16.to_le_bytes().to_vec();
+        extra.extend_from_slice(&1u16.to_le_bytes());
+        extra.push(1);
+        assert!(resolve_extra(&extra, u32::MAX, 0, 0).is_none());
+        // Extra VACÍO con marcador: ídem.
+        assert!(resolve_extra(&[], 0, u32::MAX, 0).is_none());
+    }
+
+    /// Review #59: el PRIMER record 0x0001 manda — un segundo record no
+    /// re-escribe los valores (ambigüedad hostil resuelta conservadora).
+    #[test]
+    fn extra_zip64_primer_record_gana() {
+        let mut extra = Vec::new();
+        for v in [77u64, 99u64] {
+            extra.extend_from_slice(&0x0001u16.to_le_bytes());
+            extra.extend_from_slice(&8u16.to_le_bytes());
+            extra.extend_from_slice(&v.to_le_bytes());
+        }
+        let got = resolve_extra(&extra, 5, u32::MAX, 7).expect("válido");
+        assert_eq!(got, (5, 77, 7), "el primer record fija uncomp");
     }
 
     #[test]

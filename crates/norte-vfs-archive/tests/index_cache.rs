@@ -131,6 +131,7 @@ async fn max_cd_bytes_obsoleto_el_read_jamas_relee_el_cd() {
     // #59 esto forzaba a reabrir el `ZipArchive` en cada read; ahora el
     // campo no se consulta y el coste es idéntico al camino cacheado.
     let limits = Limits {
+        #[allow(deprecated)] // pin del campo obsoleto (#59)
         max_cd_bytes: 80,
         ..Limits::default()
     };

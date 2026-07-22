@@ -95,6 +95,18 @@ pub(crate) fn build_index<R: Read + Seek>(
         );
         index.skipped += eocd.count.saturating_sub(stats.parsed);
     }
+    // rust MINOR-1 (#59 review): las hostiles del parser (zip64 malformado)
+    // y el delta del EOCD entran DESPUÉS del walk — el presupuesto de
+    // omitidas se re-aplica aquí, mismo criterio que dentro del walk.
+    if index.skipped > limits.max_entries as u64 {
+        tracing::warn!(
+            max = limits.max_entries,
+            "zip supera el presupuesto de omitidas (post-walk)"
+        );
+        return Err(Error::LimitExceeded {
+            limit: Error::LIMIT_ENTRIES.into(),
+        });
+    }
     if index.skipped > 0 {
         tracing::warn!(
             skipped = index.skipped,
@@ -152,8 +164,22 @@ pub(crate) fn read_entry<R: Read + Seek>(
     let crc = (plan.skip == 0 && plan.take == plan.uncomp_size).then(flate2::Crc::new);
     match plan.method {
         0 => {
-            // stored: bytes tal cual en el contenedor — seek directo al
-            // tramo pedido, sin fase de descarte.
+            // stored: APPNOTE exige comp == uncomp. Un CD que miente
+            // (`uncomp > comp`) haría que un RANGED read sirviera bytes
+            // vecinos del contenedor en silencio (encoding MAJOR-1 del
+            // review #59 — el crate viejo acotaba por comp_size): rechazo
+            // fail-loud, jamás datos ajenos atribuidos a la entrada.
+            if plan.comp_size != plan.uncomp_size {
+                tracing::warn!(
+                    comp = plan.comp_size,
+                    uncomp = plan.uncomp_size,
+                    "entrada stored con tamaños inconsistentes en el CD"
+                );
+                let _ = tx.blocking_send(Err(Error::Corrupt));
+                return;
+            }
+            // Bytes tal cual en el contenedor — seek directo al tramo
+            // pedido, sin fase de descarte.
             let available = plan.uncomp_size.saturating_sub(plan.skip).min(plan.take);
             let Some(start) = data.checked_add(plan.skip) else {
                 let _ = tx.blocking_send(Err(Error::Corrupt));
@@ -205,6 +231,14 @@ fn pump<R: Read>(
     let mut buf = vec![0u8; 64 * 1024];
     let mut to_skip = to_skip;
     while to_skip > 0 {
+        // La fase de DESCARTE no envía nada al canal: sin este chequeo, un
+        // caller que dropea el stream a mitad de un skip profundo (deflate
+        // ranged sobre una entrada zip64) dejaría el hilo blocking clavado
+        // descomprimiendo para nadie (rust MAJOR-1 del review #59; regla 3).
+        if tx.is_closed() {
+            tracing::debug!("lectura zip cancelada durante el descarte (receptor muerto)");
+            return;
+        }
         let want = buf.len().min(usize::try_from(to_skip).unwrap_or(buf.len()));
         match src.read(&mut buf[..want]) {
             Ok(0) => return send_err(tx, Error::Corrupt),
