@@ -242,8 +242,10 @@ async fn main() -> Result<()> {
     let mut backend = make_backend(&cfg, cli_daemon, cli_socket).await?;
 
     let cwd = std::env::current_dir().context("cwd")?;
-    // Deuda conocida: en Windows un cwd UNC (\\server\share) no es
-    // representable todavía y esto aborta con error claro (issue #22).
+    // Un cwd UNC de Windows (\\server\share, \\wsl$\…) ya round-trip-ea:
+    // vpath_from_native lo mete como primer segmento y to_native lo restituye
+    // como base de la raíz del OS (#22). Un cwd irrepresentable aún da error
+    // claro en vez de un panic.
     let start = norte_vfs_local::vpath_from_native(&cwd)
         .map_err(|e| anyhow::anyhow!("cwd no representable como VPath: {e}"))?;
     let left = Pane::new(

@@ -83,11 +83,11 @@ pub(crate) fn to_native(base: &Path, p: &VPath) -> Result<PathBuf, Error> {
         let Some(first) = segs.next() else {
             return Err(Error::InvalidPath);
         };
-        // El prefijo de unidad es el ÚNICO lugar donde ':' es legal: no pasa
-        // por bytes_to_os (que lo rechaza como ADS en nombres).
-        let mut drive = drive_prefix_to_os(first)?;
-        drive.push(std::path::MAIN_SEPARATOR_STR);
-        PathBuf::from(drive)
+        // El primer segmento es el prefijo de la raíz del OS: unidad (`C:`)
+        // o UNC/verbatim (`\\server\share`, `\\?\…`). No pasa por
+        // bytes_to_os (que rechaza `\`/`:` como separador/ADS en nombres):
+        // el prefijo es el único sitio donde son legales.
+        os_root_base(first)?
     } else {
         base.to_path_buf()
     };
@@ -97,15 +97,31 @@ pub(crate) fn to_native(base: &Path, p: &VPath) -> Result<PathBuf, Error> {
     Ok(verbatim(out))
 }
 
-/// Prefijo de unidad de Windows (`X:`) desde su segmento. UNC como primer
-/// segmento no está soportado en M0 (deuda: paths `\\\\server\\share`).
-fn drive_prefix_to_os(bytes: &[u8]) -> Result<OsString, Error> {
+/// Base `PathBuf` de la raíz del OS Windows desde el primer segmento del
+/// `VPath`: unidad `X:` (con su separador restituido, evita el path
+/// drive-relative `C:Users`) o prefijo UNC/verbatim `\\…` (#22 — un cwd
+/// `\\server\share` ya no aborta el arranque; [`verbatim`] lo normaliza
+/// luego a `\\?\UNC\…`). El prefijo se reconstruye SIN las restricciones de
+/// segmento porque legítimamente contiene `\` y `:`.
+fn os_root_base(bytes: &[u8]) -> Result<PathBuf, Error> {
     if bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
         let s = std::str::from_utf8(bytes).map_err(|_| Error::InvalidPath)?;
-        Ok(OsString::from(s))
-    } else {
-        Err(Error::InvalidPath)
+        let mut drive = OsString::from(s);
+        drive.push(std::path::MAIN_SEPARATOR_STR);
+        return Ok(PathBuf::from(drive));
     }
+    if is_unc_or_verbatim_prefix(bytes) {
+        return Ok(PathBuf::from(link_target_to_os(bytes)?));
+    }
+    Err(Error::InvalidPath)
+}
+
+/// `true` si los bytes son un prefijo Windows UNC/verbatim/dispositivo:
+/// empiezan por `\\` (dos backslashes). Reconocedor a nivel de bytes —
+/// compilado en todo OS y testeable en Linux; en Windows estos bytes vienen
+/// de `Component::Prefix::as_os_str` (`\\server\share`, `\\?\C:`, `\\.\…`).
+fn is_unc_or_verbatim_prefix(bytes: &[u8]) -> bool {
+    bytes.starts_with(br"\\")
 }
 
 /// Convierte un path NATIVO absoluto a `VPath` (`file:///…`), byte a byte.
@@ -176,6 +192,41 @@ pub(crate) fn verbatim(p: PathBuf) -> PathBuf {
     let mut s = OsString::from(r"\\?\");
     s.push(p.as_os_str());
     PathBuf::from(s)
+}
+
+#[cfg(test)]
+mod root_base_tests {
+    use super::{is_unc_or_verbatim_prefix, os_root_base};
+    use norte_proto::Error;
+
+    #[test]
+    fn clasifica_prefijos_unc_y_verbatim() {
+        assert!(is_unc_or_verbatim_prefix(br"\\server\share"));
+        assert!(is_unc_or_verbatim_prefix(br"\\?\C:"));
+        assert!(is_unc_or_verbatim_prefix(br"\\.\PhysicalDrive0"));
+        // Un solo backslash NO es un prefijo UNC/verbatim.
+        assert!(!is_unc_or_verbatim_prefix(br"\single"));
+        assert!(!is_unc_or_verbatim_prefix(b"C:"));
+        assert!(!is_unc_or_verbatim_prefix(b"normal"));
+    }
+
+    #[test]
+    fn os_root_base_acepta_unidad_y_unc() {
+        // Unidad: aceptada, con su separador restituido.
+        let drive = os_root_base(b"C:").expect("unidad válida");
+        assert!(drive.to_string_lossy().starts_with("C:"));
+        // #22: el prefijo UNC ya no se rechaza (antes = no-arranque del TUI).
+        assert!(os_root_base(br"\\server\share").is_ok());
+        assert!(os_root_base(br"\\?\C:").is_ok());
+    }
+
+    #[test]
+    fn os_root_base_rechaza_primer_segmento_no_prefijo() {
+        // Ni unidad ni UNC: un nombre normal como raíz del OS es InvalidPath.
+        assert_eq!(os_root_base(b"Users"), Err(Error::InvalidPath));
+        assert_eq!(os_root_base(b"C"), Err(Error::InvalidPath));
+        assert_eq!(os_root_base(b""), Err(Error::InvalidPath));
+    }
 }
 
 /// WTF-8 (spec de Simon Sapin): UTF-8 más surrogates sueltos
