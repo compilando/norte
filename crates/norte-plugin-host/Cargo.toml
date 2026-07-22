@@ -30,6 +30,11 @@ anyhow.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Servidor FTP in-process para el E2E del stack de red (#30 stage 3b): mismo
+# harness que norte-vfs-ftp, sin Docker. Solo dev.
+libunftp.workspace = true
+unftp-sbe-fs.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [lints]
 workspace = true
