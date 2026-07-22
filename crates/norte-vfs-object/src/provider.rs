@@ -244,6 +244,35 @@ impl std::fmt::Debug for ObjectProvider {
 }
 
 /// Mapea el error de opendal a la taxonomía del protocolo (spec §17.7).
+/// Sufijo VALIDADO de una entrada listada relativo a `from_dir` (#49): la
+/// contención anti-servidor-mentiroso del rename de prefijo — `None` = el
+/// propio dir listado (se salta); `Err(InvalidPath)` = la entrada sale del
+/// prefijo o trae componentes ilegales (lossy `�`, `.`/`..`/vacío). Las keys
+/// de copy/delete se RECONSTRUYEN siempre desde este sufijo, jamás se ecoa
+/// el path del servidor.
+fn validated_suffix<'a>(from_dir: &str, path: &'a str) -> Result<Option<&'a str>, Error> {
+    if path == from_dir {
+        return Ok(None);
+    }
+    let Some(suffix) = path.strip_prefix(from_dir) else {
+        return Err(Error::InvalidPath);
+    };
+    if suffix.contains('\u{FFFD}') {
+        return Err(Error::InvalidPath);
+    }
+    // Cada segmento del sufijo (recursivo → puede llevar `/`; un subdir
+    // acaba en `/`) debe ser un nombre legal.
+    let trimmed = suffix.strip_suffix('/').unwrap_or(suffix);
+    if trimmed.is_empty()
+        || trimmed
+            .split('/')
+            .any(|c| c.is_empty() || c == "." || c == "..")
+    {
+        return Err(Error::InvalidPath);
+    }
+    Ok(Some(suffix))
+}
+
 fn map_err(e: &opendal::Error) -> Error {
     match e.kind() {
         ErrorKind::NotFound => Error::NotFound,
@@ -563,77 +592,102 @@ impl Provider for ObjectProvider {
                 .map_err(|e| map_err(&e))?;
             return self.op.delete(&from_key).await.map_err(|e| map_err(&e));
         }
-        // Dir = prefijo entero: copy-all LUEGO delete-all — un fallo a mitad
-        // deja duplicados, jamás pérdida. No atómico y O(n); el prefijo se
-        // materializa en memoria (cota documentada, streaming → issue #49).
-        let from_dir = format!("{from_key}/");
-        let to_dir = format!("{to_key}/");
+        // Dir = prefijo entero: copy-all EN STREAMING (#49: sin materializar
+        // el prefijo — pico de memoria O(dirs), no O(objetos)) y LUEGO
+        // borrado con re-list + deleter batcheado. El invariante se
+        // conserva: la fase de copia DRENA el lister entero antes del primer
+        // delete — un fallo a mitad deja duplicados, jamás pérdida.
+        //
         // Sufijos VALIDADOS relativos a `from_dir`, NUNCA la key ecoada: un
         // servidor mentiroso podría listar keys fuera del prefijo y hacer
         // que copy/delete operen (y BORREN) fuera del árbol — misma
-        // contención que `list()`. La key de operación se RECONSTRUYE desde
-        // el sufijo validado, jamás se ecoa.
+        // contención que `list()`. Por eso el borrado NO usa
+        // `Operator::remove_all` (borra lo que el servidor ecoe, sin
+        // contención): re-lista y RECONSTRUYE cada key desde el sufijo
+        // validado, con el `Deleter` de opendal batcheando por debajo
+        // (DeleteObjects en S3).
+        let from_dir = format!("{from_key}/");
+        let to_dir = format!("{to_key}/");
+        // Fase 0 — PRE-VALIDACIÓN streaming (BLOCKER histórico de los
+        // reviewers: un listado hostil corta con CERO mutaciones): se drena
+        // el lister validando cada sufijo SIN copiar nada — O(1) de memoria,
+        // un sweep de LIST extra (n/1000 requests) frente a n copies. Una
+        // entrada hostil COLADA entre este sweep y la copia corta a mitad de
+        // la fase 1: deja duplicados (jamás pérdida) y jamás una key ecoada.
         let mut lister = self
             .op
             .lister_with(&from_dir)
             .recursive(true)
             .await
             .map_err(|e| map_err(&e))?;
-        let mut suffixes: Vec<(String, bool)> = Vec::new();
         while let Some(oe) = lister.try_next().await.map_err(|e| map_err(&e))? {
-            let path = oe.path();
-            if path == from_dir {
-                continue; // el propio dir listado
-            }
-            let Some(suffix) = path.strip_prefix(&from_dir) else {
-                return Err(Error::InvalidPath);
-            };
-            if suffix.contains('\u{FFFD}') {
-                return Err(Error::InvalidPath);
-            }
-            // Cada segmento del sufijo (recursivo → puede llevar `/`; un
-            // subdir acaba en `/`) debe ser un nombre legal.
-            let trimmed = suffix.strip_suffix('/').unwrap_or(suffix);
-            if trimmed.is_empty()
-                || trimmed
-                    .split('/')
-                    .any(|c| c.is_empty() || c == "." || c == "..")
-            {
-                return Err(Error::InvalidPath);
-            }
-            suffixes.push((suffix.to_string(), oe.metadata().mode().is_dir()));
+            let _ = validated_suffix(&from_dir, oe.path())?;
         }
-        // Copia (dirs = create_dir en destino; el recursivo de services-fs
-        // incluye subdirs, el de S3 markers como objetos con mode DIR —
-        // ambos van por create_dir).
-        for (suffix, is_dir) in &suffixes {
-            let dst = format!("{to_dir}{suffix}");
-            if *is_dir {
-                self.op.create_dir(&dst).await.map_err(|e| map_err(&e))?;
-            } else {
-                let real_src = format!("{from_dir}{suffix}");
+        // Fase 1 — copia streaming (dirs = create_dir en destino; el
+        // recursivo de services-fs incluye subdirs, el de S3 markers como
+        // objetos con mode DIR — ambos van por create_dir).
+        let mut lister = self
+            .op
+            .lister_with(&from_dir)
+            .recursive(true)
+            .await
+            .map_err(|e| map_err(&e))?;
+        while let Some(oe) = lister.try_next().await.map_err(|e| map_err(&e))? {
+            let Some(suffix) = validated_suffix(&from_dir, oe.path())? else {
+                continue; // el propio dir listado
+            };
+            if oe.metadata().mode().is_dir() {
                 self.op
-                    .copy(&real_src, &dst)
+                    .create_dir(&format!("{to_dir}{suffix}"))
+                    .await
+                    .map_err(|e| map_err(&e))?;
+            } else {
+                self.op
+                    .copy(&format!("{from_dir}{suffix}"), &format!("{to_dir}{suffix}"))
                     .await
                     .map_err(|e| map_err(&e))?;
             }
         }
         self.op.create_dir(&to_dir).await.map_err(|e| map_err(&e))?;
-        // Borrado: ficheros primero, dirs después (en profundidad inversa:
-        // un dir de fs solo se borra vacío). Key SIEMPRE reconstruida.
-        for (suffix, is_dir) in &suffixes {
-            if !is_dir {
-                self.op
-                    .delete(&format!("{from_dir}{suffix}"))
-                    .await
-                    .map_err(|e| map_err(&e))?;
+        // Fase 2 — borrado con re-list: ficheros primero (batcheados),
+        // dirs después en profundidad inversa (un dir de fs solo se borra
+        // vacío; O(dirs) en memoria, la fracción diminuta del árbol).
+        //
+        // Guard anti-pérdida: un fichero solo se borra si su DESTINO existe
+        // — un objeto COLADO por otro cliente entre las dos fases no fue
+        // copiado y queda SIN MOVER en el origen (rename de prefijo no
+        // atómico, documentado), jamás borrado sin copia.
+        let mut lister = self
+            .op
+            .lister_with(&from_dir)
+            .recursive(true)
+            .await
+            .map_err(|e| map_err(&e))?;
+        let mut deleter = self.op.deleter().await.map_err(|e| map_err(&e))?;
+        let mut dirs: Vec<String> = Vec::new();
+        while let Some(oe) = lister.try_next().await.map_err(|e| map_err(&e))? {
+            let Some(suffix) = validated_suffix(&from_dir, oe.path())? else {
+                continue;
+            };
+            if oe.metadata().mode().is_dir() {
+                dirs.push(suffix.to_owned());
+                continue;
             }
+            let dst = format!("{to_dir}{suffix}");
+            if !self.op.exists(&dst).await.map_err(|e| map_err(&e))? {
+                tracing::warn!(
+                    suffix,
+                    "objeto colado durante el rename de prefijo: queda SIN MOVER en el origen"
+                );
+                continue;
+            }
+            deleter
+                .delete(format!("{from_dir}{suffix}"))
+                .await
+                .map_err(|e| map_err(&e))?;
         }
-        let mut dirs: Vec<&String> = suffixes
-            .iter()
-            .filter(|(_, d)| *d)
-            .map(|(s, _)| s)
-            .collect();
+        // Flush del batch de ficheros ANTES de tocar dirs (fs exige vacío).
+        deleter.close().await.map_err(|e| map_err(&e))?;
         dirs.sort_by_key(|s| std::cmp::Reverse(s.len()));
         for suffix in dirs {
             self.op
