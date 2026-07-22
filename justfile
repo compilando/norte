@@ -116,3 +116,10 @@ install:
 uninstall:
     cargo uninstall norte-tui
     cargo uninstall norte-cli
+
+# Gate PROPIO de norte-gui (M5): el crate está EXCLUIDO del workspace a
+# propósito (GPUI = deps GPU pesadas; regla 7: solo habla norte-proto) y
+# `just ci` no lo cubre — este es su gate a un comando. Correrlo al tocar
+# norte-gui o cualquier crate que la GUI consume (frontend/proto/core).
+gui-ci:
+    cd crates/norte-gui && cargo nextest run && cargo clippy --all-targets -- -D warnings && cargo fmt --check

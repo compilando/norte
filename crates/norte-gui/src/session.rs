@@ -544,9 +544,7 @@ mod tests {
             "el último evento es el terminal real: {states:?}"
         );
         assert!(
-            !states
-                .iter()
-                .any(|s| matches!(s, TaskState::Failed { .. })),
+            !states.iter().any(|s| matches!(s, TaskState::Failed { .. })),
             "sin terminal sintetizado de más: {states:?}"
         );
         assert!(cancellers.lock().unwrap().is_empty());
