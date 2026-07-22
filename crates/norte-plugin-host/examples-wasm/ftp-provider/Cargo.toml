@@ -1,0 +1,27 @@
+# Guest WASM (#30 stage 3c): el provider FTP COMPLETO en un guest. suppaftp SYNC
+# sobre wasi:sockets, TODAS las ops del trait Provider proyectadas a la interfaz
+# WIT `provider`, con las defensas anti-inyección CR/LF del provider nativo. Sin
+# TLS (aws-lc-rs no compila a wasm; FTPS = deuda). Reemplaza a norte-vfs-ftp.
+# NO es miembro del workspace (target wasm32-wasip2 aparte).
+[workspace]
+
+[package]
+name = "ftp-provider"
+edition = "2021"
+version = "0.0.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+# sync FtpStream, sin TLS: default-features=false deja fuera async y toda pila
+# criptográfica (aws-lc-rs/native-tls no compilan a wasm32-wasip2). Versión 10 =
+# la MISMA que el provider nativo (norte-vfs-ftp), para portar su API 1:1
+# (ListParser, variantes de FtpError).
+suppaftp = { version = "10", default-features = false }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
