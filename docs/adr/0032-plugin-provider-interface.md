@@ -124,6 +124,33 @@ interface provider {
 This interface is **not** added to the `norte-plugin` world yet: doing so pulls
 in the host adapter, a guest, and the `net` capability — the staged work below.
 
+## Versionado del WIT (review protocol-guardian)
+
+El WIT es un contrato de wire (Component Model). Disciplina:
+
+- **Un cambio de la interfaz bumpea el paquete.** Añadir `provider` +
+  `norte-provider` subió `norte:plugin@0.1.0 → 0.2.0` (aditivo — previewer/
+  command/host-log intactos).
+- **`provider` está en EVOLUCIÓN** (stage 3 añade escritura, hace crecer `caps`
+  y `vfs-error`, y sus `record`/`enum` WIT no son forward-extensibles). Idealmente
+  viviría en su **propio paquete** (`norte:provider@…`) para versionar
+  independiente del contrato ESTABLE de previewer/command. El wit-parser en el
+  árbol (0.239) **no soporta paquetes anidados** en un mismo fichero ni un
+  segundo paquete suelto en el mismo directorio; separarlo exige el layout
+  `wit/deps/`. Decisión: se pospone la separación a **stage 3**, cuando la
+  interfaz se estabiliza y el churn cesa; hasta entonces comparte
+  `norte:plugin` y cada cambio de `provider` bumpea el paquete común (coste
+  aceptado: previewer/command no fijan versión, así que un bump no rompe sus
+  guests).
+- **`vfs-error` es un `enum` CERRADO**, no el `Unknown` forward-compatible de
+  `norte_proto::Error`: añadir una variante es un cambio de wire. Por eso se
+  incluyen ya las variantes relevantes al camino de lectura (`cursor-expired`,
+  `provider-unavailable`, `loop`, `conflict`, `no-space`) — para no tener que
+  romper el wire al mapearlas. El flag `retryable` de `io`/`provider-unavailable`
+  se difiere a stage 3 (exigirá migrar el `enum` a un `variant`).
+- **Cursor OPACO** (`list<u8>`), no un índice `u32`: un token de continuación
+  remoto (S3/FTP) o el cursor expirable de #27 no caben en un entero.
+
 ## Staging
 
 - **Stage 1 (this ADR):** interface + projection design; decisions recorded.

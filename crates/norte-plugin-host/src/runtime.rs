@@ -98,7 +98,7 @@ pub enum RuntimeError {
 }
 
 /// Aplica el tope de tamaño al valor de retorno del guest (issue #68). Fail-loud:
-/// por encima de [`MAX_RETURN_BYTES`] devuelve [`RuntimeError::ReturnTooLarge`]
+/// por encima de `MAX_RETURN_BYTES` devuelve [`RuntimeError::ReturnTooLarge`]
 /// en vez de entregar (o truncar) la cadena.
 fn cap_return_value(value: String) -> Result<String, RuntimeError> {
     if value.len() > MAX_RETURN_BYTES {
@@ -253,6 +253,39 @@ impl PluginRuntime {
         wasm_path: &Path,
         caps: Capabilities,
     ) -> Result<PluginInstance, RuntimeError> {
+        let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        let bindings = NortePlugin::instantiate(&mut store, &component, &linker)
+            .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
+        Ok(PluginInstance { store, bindings })
+    }
+
+    /// Instancia un guest PROVIDER (world `norte-provider`, #30 stage 2) con el
+    /// MISMO sandbox y límites que [`Self::instantiate`]. Devuelve una
+    /// [`ProviderInstance`] para llamar a sus exports (`capabilities`/`stat`/
+    /// `list-dir`/`read`).
+    ///
+    /// # Errors
+    /// Igual que [`Self::instantiate`].
+    pub fn instantiate_provider(
+        &self,
+        wasm_path: &Path,
+        caps: Capabilities,
+    ) -> Result<ProviderInstance, RuntimeError> {
+        use crate::bindings::provider_world::NorteProvider;
+        let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        let bindings = NorteProvider::instantiate(&mut store, &component, &linker)
+            .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
+        Ok(ProviderInstance { store, bindings })
+    }
+
+    /// Prepara el `Store` (sandbox WASI vacío + límites + deadline) y el
+    /// `Linker` (WASI + `host-log`) comunes a cualquier world, y carga el
+    /// componente. El world concreto lo instancia el caller.
+    fn prepare(
+        &self,
+        wasm_path: &Path,
+        caps: Capabilities,
+    ) -> Result<(Store<HostState>, Component, Linker<HostState>), RuntimeError> {
         // Cap del artefacto ANTES de compilar (issue #68): un `.wasm` gigante no
         // debe gastar CPU/memoria de cranelift. `metadata` es una llamada barata
         // que no lee el contenido; el propio `Component::from_file` fallará luego
@@ -306,10 +339,7 @@ impl PluginRuntime {
         // `RuntimeError::Trap` en run_command/render_preview.
         store.set_epoch_deadline(self.epoch_deadline);
 
-        let bindings = NortePlugin::instantiate(&mut store, &component, &linker)
-            .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
-
-        Ok(PluginInstance { store, bindings })
+        Ok((store, component, linker))
     }
 }
 
@@ -395,6 +425,106 @@ impl PluginInstance {
             .map_err(|e| RuntimeError::Trap(e.to_string()))?
             .map_err(RuntimeError::Guest)?;
         cap_return_value(out)
+    }
+}
+
+/// Tipos del export `provider` (records/enums generados: `Entry`, `Page`,
+/// `Caps`, `VfsError`, `EntryKind`) — re-exportados para que el adapter host
+/// los use sin cavar en el módulo de bindings generado (#30 stage 2).
+pub use crate::bindings::provider_world::exports::norte::plugin::provider as provider_iface;
+
+/// Una instancia viva de un guest PROVIDER (#30 stage 2, world
+/// `norte-provider`): su `Store` (estado host + sandbox) y los bindings para
+/// llamar a los exports de la interfaz `provider`. Cada método es UNA llamada
+/// síncrona al guest; el adapter host (`Provider`) reensambla los streams
+/// llamando en bucle (list paginado, read por rango).
+pub struct ProviderInstance {
+    store: Store<HostState>,
+    bindings: crate::bindings::provider_world::NorteProvider,
+}
+
+impl std::fmt::Debug for ProviderInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderInstance").finish_non_exhaustive()
+    }
+}
+
+impl ProviderInstance {
+    /// Las capabilities que el guest declara (stage 2: solo `read-only`).
+    ///
+    /// # Errors
+    /// [`RuntimeError::Trap`] si el guest atrapa.
+    pub fn capabilities(&mut self) -> Result<provider_iface::Caps, RuntimeError> {
+        self.bindings
+            .norte_plugin_provider()
+            .call_capabilities(&mut self.store)
+            .map_err(|e| RuntimeError::Trap(e.to_string()))
+    }
+
+    /// `stat` de una entrada por sus segmentos. El `Ok` interno es el resultado
+    /// LÓGICO del guest (`Entry` o `VfsError`); el `Err` externo es un trap.
+    ///
+    /// # Errors
+    /// [`RuntimeError::Trap`] si el guest atrapa.
+    pub fn stat(
+        &mut self,
+        segments: &[Vec<u8>],
+    ) -> Result<Result<provider_iface::Entry, provider_iface::VfsError>, RuntimeError> {
+        self.bindings
+            .norte_plugin_provider()
+            .call_stat(&mut self.store, segments)
+            .map_err(|e| RuntimeError::Trap(e.to_string()))
+    }
+
+    /// Una PÁGINA del listado de un directorio (equiv. un tramo del
+    /// `EntryStream`). `cursor` = `None` empieza; el `next-cursor` de la página
+    /// alimenta la siguiente llamada.
+    ///
+    /// # Errors
+    /// [`RuntimeError::Trap`] si el guest atrapa.
+    pub fn list_dir(
+        &mut self,
+        segments: &[Vec<u8>],
+        cursor: Option<&[u8]>,
+    ) -> Result<Result<provider_iface::Page, provider_iface::VfsError>, RuntimeError> {
+        self.bindings
+            .norte_plugin_provider()
+            .call_list_dir(&mut self.store, segments, cursor)
+            .map_err(|e| RuntimeError::Trap(e.to_string()))
+    }
+
+    /// Un RANGO acotado de un fichero (equiv. un chunk del `ByteStream`): a lo
+    /// sumo `len` bytes desde `offset`. Se RECHAZA fail-loud
+    /// ([`RuntimeError::ReturnTooLarge`]) un valor devuelto mayor que
+    /// `MAX_RETURN_BYTES` — no es un guard de asignación (el valor ya se
+    /// materializó en memoria del host al bajar del guest; la cota transitoria
+    /// real es el límite de 64 MiB del store), sino un rechazo honesto. Deuda
+    /// stage-2b: `list_dir`/`stat` aún NO acotan el nº de entradas / longitud de
+    /// nombres — el adapter host `Provider` lo hará al reensamblar.
+    ///
+    /// # Errors
+    /// [`RuntimeError::Trap`] si el guest atrapa; [`RuntimeError::ReturnTooLarge`]
+    /// si el guest devuelve más de `MAX_RETURN_BYTES`.
+    pub fn read(
+        &mut self,
+        segments: &[Vec<u8>],
+        offset: u64,
+        len: u64,
+    ) -> Result<Result<Vec<u8>, provider_iface::VfsError>, RuntimeError> {
+        let out = self
+            .bindings
+            .norte_plugin_provider()
+            .call_read(&mut self.store, segments, offset, len)
+            .map_err(|e| RuntimeError::Trap(e.to_string()))?;
+        if let Ok(bytes) = &out
+            && bytes.len() > MAX_RETURN_BYTES
+        {
+            return Err(RuntimeError::ReturnTooLarge {
+                len: bytes.len(),
+                cap: MAX_RETURN_BYTES,
+            });
+        }
+        Ok(out)
     }
 }
 

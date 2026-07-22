@@ -39,4 +39,4 @@ pub use manifest::{
     Category, ColumnContrib, CommandContrib, Contributions, HookContrib, Manifest, ManifestError,
     PreviewerContrib, ProviderContrib,
 };
-pub use runtime::{PluginInstance, PluginRuntime, RuntimeError};
+pub use runtime::{PluginInstance, PluginRuntime, ProviderInstance, RuntimeError, provider_iface};
