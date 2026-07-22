@@ -1,0 +1,22 @@
+# Guest WASM (#30 stage 2): un provider-mem READ-ONLY sobre un árbol en memoria
+# — dogfood de la interfaz WIT `provider` (ADR 0032). Prueba la proyección
+# async→sync (list paginado, read por rango) SIN red. NO es miembro del
+# workspace. Manifiesto AUTÓNOMO: empty `[workspace]`.
+[workspace]
+
+[package]
+name = "provider-mem"
+edition = "2021"
+version = "0.0.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+strip = true

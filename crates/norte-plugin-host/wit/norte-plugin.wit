@@ -40,3 +40,70 @@ world norte-plugin {
     export previewer;
     export command;
 }
+
+/// Interfaz `provider` (#30, ADR 0032): proyección SÍNCRONA del trait
+/// `norte_vfs::Provider`. El streaming async se proyecta a llamadas ACOTADAS
+/// (list paginado, read por rango) que el host reensambla. Los paths y nombres
+/// cruzan como BYTES CRUDOS (regla 1) — un `path` es su lista de segmentos, un
+/// segmento es su lista de bytes; jamás un `string` (que forzaría UTF-8). ESTA
+/// ETAPA (stage 2) es solo-lectura y sin red: de-risk de la proyección.
+interface provider {
+    /// Tipo de una entrada del árbol.
+    enum entry-kind { file, dir, symlink, other }
+
+    /// Una entrada listada/consultada. `name` en bytes crudos (regla 1).
+    record entry {
+        name: list<u8>,
+        kind: entry-kind,
+        size: option<u64>,
+    }
+
+    /// Error del provider: proyección de `norte_proto::Error` (la taxonomía
+    /// sobrevive el round-trip). `other` = categoría futura / no mapeada.
+    enum vfs-error {
+        not-found,
+        permission-denied,
+        unsupported,
+        invalid-path,
+        io,
+        corrupt,
+        other,
+    }
+
+    /// Capabilities proyectadas (stage 2: solo el flag de solo-lectura; el set
+    /// completo llega con el camino de escritura).
+    record caps {
+        read-only: bool,
+    }
+
+    /// Una lista de páginas de entradas + el cursor de la siguiente (`none` =
+    /// fin). Un `path` es su lista de segmentos (cada uno, bytes crudos); la
+    /// raíz es la lista vacía.
+    record page {
+        entries: list<entry>,
+        next-cursor: option<u32>,
+    }
+
+    /// Capabilities del provider.
+    capabilities: func() -> caps;
+
+    /// Metadatos de una entrada (equiv. `Provider::stat`).
+    stat: func(segments: list<list<u8>>) -> result<entry, vfs-error>;
+
+    /// Lista PAGINADA (equiv. `Provider::list`): una página + el cursor de la
+    /// siguiente. El host reensambla el `EntryStream` llamando en bucle.
+    /// (`list` es palabra reservada del WIT — de ahí `list-dir`.)
+    list-dir: func(segments: list<list<u8>>, cursor: option<u32>) -> result<page, vfs-error>;
+
+    /// Lee un RANGO acotado (equiv. una porción del `ByteStream`): a lo sumo
+    /// `len` bytes desde `offset`. Un chunk más corto que `len` = EOF.
+    read: func(segments: list<list<u8>>, offset: u64, len: u64) -> result<list<u8>, vfs-error>;
+}
+
+/// World de un plugin-provider (#30 stage 2): expone la interfaz `provider`.
+/// Separado de `norte-plugin` (worlds por-categoría) — un guest de provider no
+/// implementa previewer/command.
+world norte-provider {
+    import host-log;
+    export provider;
+}
