@@ -1,8 +1,12 @@
 //! Adapter [`PluginProvider`] (#30 stage 2b, ADR 0032): expone un
 //! guest-provider WASM como un [`norte_vfs::Provider`] normal. REENSAMBLA los
 //! streams del trait a partir de las llamadas ACOTADAS del guest — `list`
-//! paginando hasta agotar el cursor, `read` leyendo por rango hasta EOF. SOLO
-//! LECTURA en stage 2: las mutaciones responden [`Error::Unsupported`].
+//! paginando hasta agotar el cursor, `read` leyendo por rango hasta EOF. Las
+//! mutaciones se DELEGAN al guest: `write` proyecta el [`ByteSink`]
+//! transaccional sobre el `writer` resource del guest (staging → commit/abort),
+//! y `mkdir`/`remove`/`rename` llaman a sus funciones. Un guest read-only
+//! responde [`Error::Unsupported`] en todas y el adapter lo propaga; `trash`/
+//! `symlink` no están en la interfaz WIT → Unsupported directo.
 //!
 //! Cada llamada al guest es SÍNCRONA (wasmtime) y serializada por un `Mutex`;
 //! se ejecuta en `spawn_blocking` para no bloquear el executor async (regla 2).
@@ -96,8 +100,8 @@ impl PluginProvider {
 }
 
 /// Traduce el error lógico del guest a la taxonomía del protocolo. `other` y
-/// las variantes de escritura (aún no alcanzables en stage 2) caen a `Internal`
-/// no-panic (categoría gruesa, sin inventar detalle).
+/// `other` cae a `Internal` no-panic (categoría gruesa, sin inventar detalle);
+/// `conflict`/`no-space` (alcanzables en el camino de escritura) se mapean fiel.
 fn map_vfs_error(e: provider_iface::VfsError) -> Error {
     use provider_iface::VfsError as V;
     match e {
@@ -279,24 +283,60 @@ impl Provider for PluginProvider {
         Ok(stream.boxed())
     }
 
-    // ---- mutaciones: vetadas en stage 2 (guest read-only) ----
+    // ---- mutaciones: se DELEGAN al guest (#30 stage 2b-write). Un guest
+    // read-only responde Unsupported en cada una y el adapter lo propaga; uno
+    // escribible hace el trabajo. ----
 
-    async fn write(&self, _p: &VPath) -> Result<Box<dyn ByteSink>, Error> {
-        Err(Error::Unsupported)
+    async fn write(&self, p: &VPath) -> Result<Box<dyn ByteSink>, Error> {
+        let segs = Self::segments(p);
+        // Abre el writer transaccional del guest (staging propio; el path final
+        // no existe hasta commit — contrato de ByteSink).
+        let handle = self
+            .call(move |g| {
+                g.open_writer(&segs)
+                    .map_err(|e| map_runtime_error(&e))?
+                    .map_err(map_vfs_error)
+            })
+            .await?;
+        Ok(Box::new(PluginByteSink {
+            inst: Arc::clone(&self.inst),
+            writer: Some(handle),
+        }))
     }
 
-    async fn mkdir(&self, _p: &VPath) -> Result<(), Error> {
-        Err(Error::Unsupported)
+    async fn mkdir(&self, p: &VPath) -> Result<(), Error> {
+        let segs = Self::segments(p);
+        self.call(move |g| {
+            g.make_dir(&segs)
+                .map_err(|e| map_runtime_error(&e))?
+                .map_err(map_vfs_error)
+        })
+        .await
     }
 
-    async fn remove(&self, _p: &VPath) -> Result<(), Error> {
-        Err(Error::Unsupported)
+    async fn remove(&self, p: &VPath) -> Result<(), Error> {
+        let segs = Self::segments(p);
+        self.call(move |g| {
+            g.remove(&segs)
+                .map_err(|e| map_runtime_error(&e))?
+                .map_err(map_vfs_error)
+        })
+        .await
     }
 
-    async fn rename(&self, _from: &VPath, _to: &VPath) -> Result<(), Error> {
-        Err(Error::Unsupported)
+    async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), Error> {
+        let src = Self::segments(from);
+        let dst = Self::segments(to);
+        self.call(move |g| {
+            g.rename(&src, &dst)
+                .map_err(|e| map_runtime_error(&e))?
+                .map_err(map_vfs_error)
+        })
+        .await
     }
 
+    // `trash`/`symlink` no están en la interfaz WIT `provider` (stage 2): un
+    // guest no los ofrece → Unsupported directo.
     async fn trash(&self, _p: &VPath) -> Result<Option<VPath>, Error> {
         Err(Error::Unsupported)
     }
@@ -308,5 +348,96 @@ impl Provider for PluginProvider {
         _kind: SymlinkKind,
     ) -> Result<(), Error> {
         Err(Error::Unsupported)
+    }
+}
+
+/// `ByteSink` (#30 stage 2b-write) respaldado por un `writer` resource del
+/// guest: `write` añade un chunk, `commit`/`abort` publican o descartan y
+/// liberan el handle (salvo si el guest atrapa — el trap envenena la instancia,
+/// que se descarta). Soltar el sink sin commit/abort dispara un `abort`+drop
+/// best-effort en [`Drop`] (contrato de `ByteSink`; síncrono con `try_lock`).
+struct PluginByteSink {
+    inst: Arc<Mutex<ProviderInstance>>,
+    /// `Some` mientras el handle no se haya liberado; `commit`/`abort`/`Drop` lo
+    /// toman.
+    writer: Option<norte_plugin_host::WriterHandle>,
+}
+
+impl Drop for PluginByteSink {
+    fn drop(&mut self) {
+        // Best-effort (contrato de `ByteSink`): soltar sin commit/abort limpia
+        // el staging del guest. Síncrono (las llamadas al guest lo son) con
+        // `try_lock` — jamás bloquea: en Drop no hay ninguna op en vuelo sobre
+        // este sink, y si por lo que fuera el mutex estuviera tomado, se cede el
+        // handle a la tabla de recursos del store hasta que el provider muera.
+        if let Some(w) = self.writer.take()
+            && let Ok(mut g) = self.inst.try_lock()
+        {
+            let _ = g.writer_abort(w);
+            let _ = g.writer_drop(w);
+        }
+    }
+}
+
+impl PluginByteSink {
+    /// Ejecuta una op sobre el writer en `spawn_blocking` (regla 2).
+    async fn call<F>(inst: &Arc<Mutex<ProviderInstance>>, f: F) -> Result<(), Error>
+    where
+        F: FnOnce(&mut ProviderInstance) -> Result<(), Error> + Send + 'static,
+    {
+        let inst = Arc::clone(inst);
+        tokio::task::spawn_blocking(move || {
+            let mut guard = inst.lock().map_err(|_| Error::Internal { panic: true })?;
+            f(&mut guard)
+        })
+        .await
+        .map_err(|_| Error::Internal { panic: true })?
+    }
+}
+
+#[async_trait::async_trait]
+impl ByteSink for PluginByteSink {
+    async fn write(&mut self, chunk: Bytes) -> Result<(), Error> {
+        let Some(w) = self.writer else {
+            return Err(Error::Internal { panic: false }); // usado tras consumir
+        };
+        Self::call(&self.inst, move |g| {
+            g.writer_write(w, &chunk)
+                .map_err(|e| map_runtime_error(&e))?
+                .map_err(map_vfs_error)
+        })
+        .await
+    }
+
+    async fn commit(mut self: Box<Self>) -> Result<(), Error> {
+        let Some(w) = self.writer.take() else {
+            return Err(Error::Internal { panic: false });
+        };
+        Self::call(&self.inst, move |g| {
+            let r = g
+                .writer_commit(w)
+                .map_err(|e| map_runtime_error(&e))?
+                .map_err(map_vfs_error);
+            // El handle se libera tras un commit lógico (OK o VfsError); si el
+            // guest ATRAPÓ, `?` ya salió y la instancia envenenada se descarta.
+            let _ = g.writer_drop(w);
+            r
+        })
+        .await
+    }
+
+    async fn abort(mut self: Box<Self>) -> Result<(), Error> {
+        let Some(w) = self.writer.take() else {
+            return Err(Error::Internal { panic: false });
+        };
+        Self::call(&self.inst, move |g| {
+            let r = g
+                .writer_abort(w)
+                .map_err(|e| map_runtime_error(&e))?
+                .map_err(map_vfs_error);
+            let _ = g.writer_drop(w);
+            r
+        })
+        .await
     }
 }
