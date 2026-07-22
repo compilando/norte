@@ -920,6 +920,7 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
                 std::sync::Arc::clone(&approvals) as _,
             );
             engine.register_provider(Arc::new(LocalProvider::os_root()) as Arc<dyn Provider>);
+            apply_archive_limits(&engine).await?;
             engine.set_connector(std::sync::Arc::new(
                 norte_core::connect::ConnectionManager::new(norte_core::connect::config_dir()),
             ));
@@ -1026,6 +1027,23 @@ fn is_archive_url(s: &str) -> bool {
     };
     let inner = &scheme[fmt.len() + 1..];
     !inner.is_empty() && !inner.contains('/')
+}
+
+/// #95: el daemon honra `[archive]` de norte.toml (capa usuario) — antes
+/// servía con los defaults compilados y ni operador ni policy podían bajar
+/// los límites anti-bomba para agentes. Fail-loud: un norte.toml roto
+/// aborta el arranque (mismo criterio que policy.toml).
+#[cfg(unix)]
+async fn apply_archive_limits(engine: &Engine) -> anyhow::Result<()> {
+    if let Some(limits) =
+        tokio::task::spawn_blocking(norte_core::archive_config::load_archive_limits)
+            .await
+            .context("carga de norte.toml")?
+            .context("norte.toml inválido ([archive])")?
+    {
+        engine.set_archive_limits(limits);
+    }
+    Ok(())
 }
 
 /// `norte gc`: barre staging `.norte-partial` huérfano (#11, ADR 0012).
