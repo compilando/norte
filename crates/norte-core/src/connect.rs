@@ -460,6 +460,21 @@ fn log_and_map(e: norte_connect::ConnectError) -> Error {
 mod tests {
     use super::*;
 
+    /// Pin del vocabulario CERRADO de `ConnectionWarningReason::wire()` (va al
+    /// `ConnectionDegraded.reason` del wire; protocol-guardian). Cambiar un
+    /// string aquí es un cambio de contrato: este test lo obliga a ser deliberado.
+    #[test]
+    fn connection_warning_wire_vocabulary_is_pinned() {
+        assert_eq!(
+            ConnectionWarningReason::TlsAuthRejected.wire(),
+            "tls-auth-rejected"
+        );
+        assert_eq!(
+            ConnectionWarningReason::FtpPlaintext.wire(),
+            "ftp-plaintext"
+        );
+    }
+
     fn file(toml: &str) -> ConnectionsFile {
         toml::from_str(toml).expect("toml válido")
     }

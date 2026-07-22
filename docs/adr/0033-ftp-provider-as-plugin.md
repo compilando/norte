@@ -38,9 +38,19 @@ Add `configure(provider-config) -> result<_, vfs-error>` to the `provider`
 interface. `provider-config` carries `endpoint` (already resolved `ip:port`),
 `user`, `password`, and `base` (the remote root). The host calls it exactly once
 after instantiation, before using the provider. Providers that hold no
-connection (the in-memory guests) implement it as a no-op. Adding an export to a
-pre-release interface is a breaking change for guests, encoded as the `0.3.0 →
-0.4.0` minor bump (no published guests exist).
+connection (the in-memory guests) implement it as a no-op.
+
+The same `0.3.0 → 0.4.0` bump also **grows the `caps` record from one field to
+three** (`case-sensitive`, `case-preserving`), so the host adapter can project
+capabilities honestly — without them the adapter assumed case-insensitivity and
+the shared `provider_contract!` demanded `CaseCollision` against a POSIX
+case-sensitive backend. WIT records have no optional fields or defaults, so this
+is an independent breaking change to `capabilities() -> caps`. Both breaks ride
+the single bump: `0.4.0` was never published and `provider` is pre-release, so
+one minor bump covers them. (The shared package means the *stable*
+previewer/command surface also breaks N-1 for third-party guests under wasmtime's
+0.x semver — the known ADR 0032 debt, resolved when `provider` is split to its
+own `wit/deps/` package.)
 
 Credentials cross into guest sandbox memory. This is inherent: the guest
 performs the `login`. Over plaintext FTP the password is already exposed on the
@@ -97,3 +107,30 @@ unlike a third-party plugin loaded from disk).
   wasm), so the native provider's dedicated read connection for same-host FTP→FTP
   copies (issue #39 B1) is not reproduced. Same-host FTP→FTP copy is not a
   contract requirement; filed as debt.
+- **No socket timeout / cancellation (debt).** The wasmtime epoch deadline only
+  traps *guest* code, not a guest blocked inside a wasip2 socket syscall. A
+  stalled server therefore holds the `spawn_blocking` thread (and the instance
+  mutex) indefinitely; task cancellation only drops the future. The native async
+  provider was drop-cancellable. Mitigation (future): wrap the adapter's
+  `spawn_blocking` call in `tokio::time::timeout` and mark the provider
+  unavailable on expiry, accepting a leaked worker thread.
+- **Capability honesty (debt).** The adapter cannot project `RESUME`/`APPEND`
+  (the WIT `writer` has no resume), so the guest declares neither and the shared
+  contract's resume cases self-skip. Restoring resume needs a resumable-writer
+  WIT surface, tracked alongside the read-stream resource.
+- **wasm32 4 GiB size ceiling (debt).** `suppaftp` parses file sizes into
+  `usize`; the guest is always `wasm32-wasip2` (32-bit `usize`), so a size ≥ 4
+  GiB fails to parse. On MLSD servers this fails loud (the whole page returns
+  `Io`, the file is unlistable); on ancient no-MLSD servers the LIST line is
+  dropped like a header, making the file invisible — a `commit`/`rename` could
+  then silently land over it. Modern servers (the `libunftp` target) use MLSD, so
+  the failure is loud there. The real fix extracts the size fact as raw `u64`
+  guest-side instead of trusting `File::size() -> usize`; deferred.
+- **`mtime` dropped (debt).** The WIT `entry` record has no mtime field, so the
+  adapter reports `None` for FTP mtimes (the native provider surfaced them).
+  A future pre-release WIT bump can add `mtime-ms: option<s64>`.
+- **No-MLSD name comparison is byte-exact (inherited).** On a
+  normalization-insensitive server without MLSD, a stat of the NFC form of a name
+  the server stored as NFD returns a fail-safe `NotFound` (never a silent match).
+  Consistent with the declared case-sensitive POSIX assumption; a normalization-
+  aware secondary compare (returning `Conflict`) is future work.

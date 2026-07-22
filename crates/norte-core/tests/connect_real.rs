@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use norte_connect::{Secret, SecretResolver};
-use norte_core::connect::{ConnectionManager, RemoteConnector, named_url};
+use norte_core::connect::{ConnectionManager, ConnectionWarningReason, RemoteConnector, named_url};
 use norte_proto::Error;
 use russh::server::{Auth, Msg, Session};
 use russh::{Channel, ChannelId};
@@ -215,10 +215,12 @@ async fn trust_con_huella_falsa_es_mismatch() {
     assert!(matches!(err, Error::HostKeyMismatch { .. }), "fue {err:?}");
 }
 
-/// Camino ftp: la entrada con `tls = "plain"` (opt-in) conecta DOS veces
-/// (control + lectura dedicada, #39) y construye el provider.
+/// Camino ftp (#30 stage 3c, ADR 0033): `ftp://` va por el provider-plugin
+/// WASM. El manager resuelve la IP, instancia el guest embebido y lo configura
+/// contra el servidor; el provider resultante sirve el scheme `ftp` y SIEMPRE
+/// avisa `FtpPlaintext` (FTPS = deuda, la sesión es en claro).
 #[tokio::test]
-async fn ftp_establece_provider_con_dos_conexiones() {
+async fn ftp_establece_provider_por_plugin() {
     use libunftp::ServerBuilder;
     use unftp_sbe_fs::Filesystem;
 
@@ -259,9 +261,21 @@ async fn ftp_establece_provider_con_dos_conexiones() {
         .connect("ftp", &format!("anonymous@127.0.0.1:{port}"))
         .await
         .expect("connect ftp");
-    assert_eq!(connected.provider.scheme(), "ftp");
-    // tls = "plain" es claro por elección, NO una degradación (#44).
-    assert!(connected.warnings.is_empty(), "plain no es degradación");
+    assert_eq!(norte_vfs::Provider::scheme(&*connected.provider), "ftp");
+    // FTP-por-plugin es SIEMPRE en claro (FTPS = deuda): un aviso FtpPlaintext.
+    assert!(
+        connected
+            .warnings
+            .iter()
+            .any(|w| w.reason == ConnectionWarningReason::FtpPlaintext),
+        "el ftp-por-plugin avisa FtpPlaintext, fue {:?}",
+        connected.warnings
+    );
+    // Y el provider LISTA de verdad la raíz (el guest configuró y conecta).
+    let root = norte_proto::VPath::root(norte_proto::Scheme::new("ftp").unwrap(), None);
+    let _stream = norte_vfs::Provider::list(&*connected.provider, &root)
+        .await
+        .expect("lista la raíz remota");
 }
 
 /// Un scheme que el manager no sabe conectar es Unsupported.

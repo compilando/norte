@@ -8,11 +8,15 @@
 //! `RefCell<Option<Session>>`, no en `Arc<Mutex>`. Nombres crudos en bytes
 //! (regla 1); FTP exige UTF-8 → un nombre no representable es `invalid-path`.
 //!
-//! DEUDA (per-chunk RETR): la interfaz WIT `read(segs, offset, len)` es acotada
-//! y NO puede sostener una conexión de datos viva entre llamadas (no hay recurso
-//! de read-stream). Cada `read` hace un ciclo REST+RETR completo drenando hasta
-//! EOF → O(n²) de transferencia si el host lee un fichero grande a trozos. El
-//! provider nativo async sí sostenía el RETR; aquí es inherente a la proyección.
+//! DEUDA (per-chunk RETR, ADR 0033): la interfaz WIT `read(segs, offset, len)`
+//! es acotada y NO puede sostener una conexión de datos viva entre llamadas (no
+//! hay recurso de read-stream). Cada `read` hace un ciclo REST+RETR completo
+//! drenando hasta EOF → O(n²) de transferencia si el host lee un fichero grande
+//! a trozos. El provider nativo async sí sostenía el RETR; el fix real es un
+//! recurso `reader` en el WIT (espejo de `writer`). DEUDA (timeout/cancelación,
+//! ADR 0033): una lectura/connect bloqueada en el socket del guest no la corta
+//! el epoch deadline (solo traba código guest), y el hilo `spawn_blocking` del
+//! host queda retenido — mitigación futura: `tokio::time::timeout` en el adapter.
 
 use std::cell::RefCell;
 use std::io::{Read, Write};
@@ -166,9 +170,11 @@ impl Guest for FtpProvider {
                 }
                 // suppaftp decodifica los nombres con `from_utf8_lossy`: un byte
                 // no-UTF8 llega ya sustituido por U+FFFD e irrecuperable →
-                // rechazo LIMPIO (regla 1, ADR 0014 D2). Un `/` inyectado busca
-                // escapar la base.
-                if name.contains('\u{FFFD}') || name.contains('/') {
+                // rechazo LIMPIO (regla 1, ADR 0014 D2). Un `/` o NUL inyectados
+                // por un servidor hostil buscan escapar/truncar la ruta: se falla
+                // la página LOUD en vez de dejar que el adapter los descarte en
+                // silencio (encoding M2).
+                if name.contains('\u{FFFD}') || name.contains(['/', '\0']) {
                     return Err(VfsError::InvalidPath);
                 }
                 entries.push(entry_from_file(name.as_bytes().to_vec(), &f));
@@ -202,30 +208,46 @@ impl Guest for FtpProvider {
             let want = usize::try_from(len).unwrap_or(usize::MAX);
             let mut out = Vec::new();
             let mut buf = [0u8; 8192];
+            // Un error de lectura NO puede hacer `?` aquí (rust review B1):
+            // saltaría el `finalize_retr_stream` de abajo, dejando la respuesta
+            // 226/426 PENDIENTE en el control → la siguiente op la leería como
+            // suya y una mutación fallida podría reportarse como OK. Se marca y
+            // se sale del bucle para finalizar SIEMPRE.
+            let mut read_err = false;
             while out.len() < want {
-                let n = reader.read(&mut buf).map_err(|_| VfsError::Io)?;
-                if n == 0 {
-                    break; // EOF antes de `want`
-                }
-                let take = n.min(want - out.len());
-                out.extend_from_slice(&buf[..take]);
-                if out.len() >= want {
-                    // Rango acotado ya entregado: FTP no sabe parar un RETR a
-                    // media (va offset→EOF; ABOR desincronizaría el control), así
-                    // que se DRENA el resto de la conexión de datos.
-                    while let Ok(m) = reader.read(&mut buf) {
-                        if m == 0 {
-                            break;
-                        }
+                match reader.read(&mut buf) {
+                    Ok(0) => break, // EOF
+                    Ok(n) => {
+                        let take = n.min(want - out.len());
+                        out.extend_from_slice(&buf[..take]);
                     }
-                    break;
+                    Err(_) => {
+                        read_err = true;
+                        break;
+                    }
                 }
             }
-            // Cierra la conexión de datos y lee la respuesta de transferencia; sin
-            // esto el control quedaría desincronizado para la siguiente op.
-            s.ftp
-                .finalize_retr_stream(reader)
-                .map_err(|e| map_err(&e))?;
+            // FTP no sabe parar un RETR a media (va offset→EOF; ABOR
+            // desincronizaría el control): se DRENA el resto de la conexión de
+            // datos SIEMPRE (best-effort) antes de finalizar — así el rango
+            // acotado, el EOF natural y el error dejan el control sano. (Coste
+            // O(n²) del drenado por chunk: deuda documentada, ADR 0033.)
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+            }
+            // Cierra la conexión de datos y lee la respuesta de transferencia
+            // SIEMPRE (todos los caminos de salida). En el camino feliz se ignora
+            // el error de finalize (los bytes ya están; un cierre abrupto de la
+            // conexión de datos tras un RETR completo no debe fallar la lectura,
+            // rust review m5). Si hubo error de lectura, se reporta Io.
+            let fin = s.ftp.finalize_retr_stream(reader);
+            if read_err {
+                return Err(VfsError::Io);
+            }
+            let _ = fin;
             Ok(out)
         })
     }
@@ -361,10 +383,17 @@ fn remote(base: &str, segments: &[Vec<u8>]) -> Result<String, VfsError> {
     let mut out = String::from(base);
     for seg in segments {
         let name = std::str::from_utf8(seg).map_err(|_| VfsError::InvalidPath)?;
-        if name.contains('/') || name == "." || name == ".." {
+        // Un segmento vacío haría un path con `//` que aliasa al padre (encoding
+        // M1); `/`/`.`/`..` escaparían la base. El `Segment` del host ya los
+        // rechaza, pero el guest revalida (bytes crudos en el WIT).
+        if name.is_empty() || name.contains('/') || name == "." || name == ".." {
             return Err(VfsError::InvalidPath);
         }
-        if name.contains(['\r', '\n']) {
+        // CR/LF inyectarían un comando FTP; NUL trunca paths en servidores en C.
+        // El `Segment` del host ya rechaza NUL, pero el guest revalida (la
+        // interfaz WIT cruza bytes crudos): defensa en profundidad, misma que
+        // `configure` aplica a `base` (rust review m2 / security LOW).
+        if name.contains(['\r', '\n', '\0']) {
             return Err(VfsError::InvalidPath);
         }
         // NAME_MAX: la mayoría de FS rechazan >255 bytes con ENAMETOOLONG; el

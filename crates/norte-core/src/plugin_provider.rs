@@ -131,15 +131,15 @@ impl PluginProvider {
         .await
     }
 
-    /// Los segmentos crudos de `p` (el path que entiende el guest). El root del
-    /// provider es scheme-only, así que los segmentos del `VPath` son el path.
-    /// La authority (si la hubiera) NO se proyecta — el root es scheme-only por
-    /// contrato; se afirma en debug.
+    /// Los segmentos crudos de `p` (el path que entiende el guest). Solo los
+    /// SEGMENTOS cruzan al guest; la authority (`ftp://user@host:port/…`, que el
+    /// engine sí incluye al enrutar una conexión remota) NO se proyecta — el
+    /// guest ya está atado a UNA conexión vía `configure`, así que el path que le
+    /// interesa es relativo a esa raíz. Un provider local scheme-only (mem) no
+    /// lleva authority y da lo mismo. (Antes había un `debug_assert!` de
+    /// authority ausente: era un invariante FALSO — los paths de FTP enrutados
+    /// por el engine SÍ llevan authority y panicaban en debug; encoding H1.)
     fn segments(p: &VPath) -> Vec<Vec<u8>> {
-        debug_assert!(
-            p.authority().is_none(),
-            "PluginProvider asume un root scheme-only (sin authority)"
-        );
         p.segments().map(<[u8]>::to_vec).collect()
     }
 
@@ -174,7 +174,10 @@ fn map_vfs_error(e: provider_iface::VfsError) -> Error {
         V::Io => Error::Io { retryable: false },
         V::Corrupt => Error::Corrupt,
         V::CursorExpired => Error::CursorExpired,
-        V::ProviderUnavailable => Error::ProviderUnavailable { retryable: false },
+        // Transitorio remoto (TCP/servidor caído): reintentable — el scheduler
+        // reintenta en vez de fallar en duro (rust review m1; el enum WIT no
+        // transporta el flag `retryable`, así que se fija al mapear de vuelta).
+        V::ProviderUnavailable => Error::ProviderUnavailable { retryable: true },
         V::Loop => Error::Loop,
         V::Conflict => Error::Conflict {
             conflict: ConflictKind::Unknown,

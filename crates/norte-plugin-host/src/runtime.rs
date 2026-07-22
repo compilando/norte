@@ -281,11 +281,12 @@ impl PluginRuntime {
     /// Como [`Self::instantiate_provider`] pero desde los BYTES de un componente
     /// en memoria (ADR 0033: el guest FTP va EMBEBIDO en el binario de norte, ya
     /// que el target `wasm32-wasip2` puede faltar en el host de compilación).
-    /// Aplica el MISMO sandbox y límites. NO comprueba `check_artifact_size`: el
-    /// artefacto es first-party y confiable (no es un `.wasm` de terceros).
+    /// Aplica el MISMO sandbox y límites que la ruta de disco, incluido el cap
+    /// de tamaño del artefacto.
     ///
     /// # Errors
-    /// [`RuntimeError::Component`] si los bytes no son un componente válido;
+    /// [`RuntimeError::ArtifactTooLarge`] si los bytes exceden el tope;
+    /// [`RuntimeError::Component`] si no son un componente válido;
     /// [`RuntimeError::Instantiate`] si el linker o la instanciación fallan.
     pub fn instantiate_provider_bytes(
         &self,
@@ -293,6 +294,9 @@ impl PluginRuntime {
         caps: Capabilities,
     ) -> Result<ProviderInstance, RuntimeError> {
         use crate::bindings::provider_world::NorteProvider;
+        // El artefacto embebido es first-party, pero el cap cuesta nada y protege
+        // a un futuro caller que pase bytes de terceros (rust review m3).
+        check_artifact_size(bytes.len() as u64)?;
         let component = Component::from_binary(&self.engine, bytes)
             .map_err(|e| RuntimeError::Component(e.to_string()))?;
         let (mut store, linker) = self.prepare_common(caps)?;

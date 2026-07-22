@@ -708,11 +708,13 @@ pub struct ConnectionDegraded {
     /// Host de la sesión, SIN userinfo (rule 10).
     pub host: String,
     /// Causa, vocabulario CERRADO comparable por igualdad (como
-    /// `PolicyDenied.rule`). Valor actual: `"tls-auth-rejected"` (el servidor
-    /// rechazó `AUTH TLS` bajo `tls="allow"`; la sesión viaja en claro). El
-    /// conjunto puede CRECER de forma aditiva: un consumidor que reciba un
-    /// `reason` DESCONOCIDO debe degradar con gracia (mensaje genérico de
-    /// "sesión degradada" apoyándose en `detail`), jamás rechazar la notif.
+    /// `PolicyDenied.rule`). Valores actuales: `"tls-auth-rejected"` (el servidor
+    /// rechazó `AUTH TLS` bajo `tls="allow"`; la sesión viaja en claro) y
+    /// `"ftp-plaintext"` (FTP-por-plugin, ADR 0033: FTPS es deuda, la sesión es
+    /// SIEMPRE en claro). El conjunto puede CRECER de forma aditiva: un consumidor
+    /// que reciba un `reason` DESCONOCIDO debe degradar con gracia (mensaje
+    /// genérico de "sesión degradada" apoyándose en `detail`), jamás rechazar la
+    /// notif.
     pub reason: String,
     /// Detalle humano opcional (presentación, jamás contrato).
     #[serde(default, skip_serializing_if = "Option::is_none")]

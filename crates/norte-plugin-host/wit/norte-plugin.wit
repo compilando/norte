@@ -1,16 +1,25 @@
 // Versionado: 0.1.0 → 0.2.0 añadió la interfaz `provider` + world
 // `norte-provider` (#30 stage 2); 0.2.0 → 0.3.0 añadió el camino de escritura
-// (writer resource + open-writer/make-dir/remove/rename); 0.3.0 → 0.4.0 añadió
-// `configure` a `provider` (#30 stage 3c): un provider que ESTABLECE SU PROPIA
-// conexión (FTP sobre wasi:sockets) recibe endpoint+credenciales+base. Para
-// previewer/command/host-log es ADITIVO (no cambian). Para un GUEST de
-// `provider` es ROMPEDOR (un guest a 0.3.0 ya no satisface el world 0.4.0: le
-// falta el export `configure`); es seguro porque `provider` es pre-release y no
-// hay guests publicados — el bump de minor bajo 0.x codifica exactamente
-// "ruptura permitida". `provider` (en evolución) comparte paquete con el estable
-// porque el wit-parser del árbol (0.239) no soporta paquetes anidados; cuando se
-// estabilice se separa a su propio paquete vía layout `wit/deps/`
-// (protocol-guardian; ADR 0032).
+// (writer resource + open-writer/make-dir/remove/rename); 0.3.0 → 0.4.0 (#30
+// stage 3c) tiene DOS rupturas para un guest de `provider`, ambas cubiertas por
+// el único bump (0.4.0 nunca se publicó):
+//   1. `configure(provider-config)`: un provider que ESTABLECE SU PROPIA
+//      conexión (FTP sobre wasi:sockets) recibe endpoint+credenciales+base. Un
+//      guest a 0.3.0 no exporta `configure` → no satisface el world 0.4.0.
+//   2. `caps` pasó de 1 a 3 campos (`case-sensitive`, `case-preserving`): los
+//      records WIT no tienen campos opcionales ni defaults, así que cambia la
+//      forma canónica-ABI de `capabilities() -> caps` — ROMPEDOR por sí solo.
+// Es seguro porque `provider` es pre-release y no hay guests publicados — el bump
+// de minor bajo 0.x codifica exactamente "ruptura permitida".
+// AVISO (no del todo aditivo para el resto): previewer/command/host-log no
+// cambian de TEXTO, pero la versión del paquete viaja en cada nombre de interfaz
+// versionado (`norte:plugin/previewer@0.4.0`…). Bajo el semver de wasmtime para
+// 0.x, un guest de terceros previewer/command compilado contra `@0.3.0` NO
+// instancia en el host 0.4.0. Es la deuda conocida del paquete compartido (ADR
+// 0032): cuando `provider` se estabilice se separa a su propio paquete vía
+// layout `wit/deps/` (el wit-parser del árbol, 0.239, no soporta paquetes
+// anidados), y solo entonces la superficie estable deja de romperse con
+// `provider`. protocol-guardian.
 package norte:plugin@0.4.0;
 
 /// La puerta de host MÍNIMA (demuestra el gating host↔guest): un plugin puede

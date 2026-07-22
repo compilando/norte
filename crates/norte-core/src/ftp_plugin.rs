@@ -39,6 +39,17 @@ fn is_forbidden_ip(ip: IpAddr, allow_loopback: bool) -> bool {
                 || v4.is_broadcast()
         }
         IpAddr::V6(v6) => {
+            // IPv4-mapped (`::ffff:a.b.c.d`): en un host dual-stack el kernel
+            // enruta el connect a la IPv4 embebida, así que
+            // `::ffff:169.254.169.254` alcanzaría la metadata saltándose los
+            // checks IPv6 (security HIGH). Se canonicaliza a la IPv4 y se evalúa
+            // con las reglas v4 — cierra loopback/link-local/RFC1918 mapeados.
+            // Solo `to_ipv4_mapped` (no `to_ipv4`): esta última también convierte
+            // `::1`→`0.0.0.1`, que dejaría de verse como loopback; los IPv4-compat
+            // (deprecados, no enrutados a v4) los cubren los checks v6 de abajo.
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return is_forbidden_ip(IpAddr::V4(mapped), allow_loopback);
+            }
             (v6.is_loopback() && !allow_loopback)
                 || v6.is_unspecified()
                 || v6.is_multicast()
@@ -151,6 +162,31 @@ mod tests {
             IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)),
             false
         ));
+    }
+
+    #[test]
+    fn ipv4_mapped_ipv6_does_not_bypass_the_denylist() {
+        // security HIGH: `::ffff:169.254.169.254` (metadata de nube) NO debe
+        // colarse como IPv6 "no prohibida" — se canonicaliza a la IPv4.
+        let metadata: IpAddr = "::ffff:169.254.169.254".parse().unwrap();
+        assert!(
+            is_forbidden_ip(metadata, false),
+            "metadata mapeada bloqueada"
+        );
+        let mapped_loop: IpAddr = "::ffff:127.0.0.1".parse().unwrap();
+        assert!(
+            is_forbidden_ip(mapped_loop, false),
+            "loopback mapeado bloqueado"
+        );
+        assert!(
+            !is_forbidden_ip(mapped_loop, true),
+            "loopback mapeado permitido con el flag explícito"
+        );
+        // `::1` sigue viéndose como loopback v6 (to_ipv4_mapped no lo toca).
+        assert!(is_forbidden_ip("::1".parse().unwrap(), false));
+        // Una IPv4 pública mapeada pasa, igual que su forma v4 directa.
+        let mapped_pub: IpAddr = "::ffff:93.184.216.34".parse().unwrap();
+        assert!(!is_forbidden_ip(mapped_pub, false));
     }
 
     #[test]
