@@ -149,22 +149,29 @@ async fn nombre_no_utf8_en_servidor_no_se_corrompe() {
     path.push(std::ffi::OsStr::from_bytes(raw_name));
     std::fs::write(&path, b"x").expect("sembrar el fichero no-UTF8 en el FS del servidor");
 
-    // list de la raíz: o falla LIMPIO (InvalidPath) o salta la entrada, pero
-    // NUNCA devuelve un nombre con U+FFFD.
+    // list de la raíz: el guest falla la PÁGINA LIMPIO (InvalidPath) al topar el
+    // nombre lossy — comportamiento fail-loud correcto (el difunto provider hacía
+    // igual). O bien `list()` devuelve ese error directo, o abre y algún item es
+    // InvalidPath; en NINGÚN caso emite un nombre con U+FFFD (0xEF 0xBF 0xBD).
     let root = ftp_root();
-    let mut stream = p.list(&root).await.expect("list abre");
     let mut saw_replacement = false;
-    while let Some(entry) = stream.next().await {
-        match entry {
-            Ok(e) => {
-                let bytes = e.path.file_name().expect("con nombre").as_bytes().to_vec();
-                if bytes.windows(3).any(|w| w == [0xEF, 0xBF, 0xBD]) {
-                    saw_replacement = true;
+    match p.list(&root).await {
+        // Rechazo limpio ANTES de abrir el stream: aceptable (fail-loud).
+        Err(norte_proto::Error::InvalidPath) => {}
+        Err(e) => panic!("error inesperado al abrir list: {e:?}"),
+        Ok(mut stream) => {
+            while let Some(entry) = stream.next().await {
+                match entry {
+                    Ok(e) => {
+                        let bytes = e.path.file_name().expect("con nombre").as_bytes().to_vec();
+                        if bytes.windows(3).any(|w| w == [0xEF, 0xBF, 0xBD]) {
+                            saw_replacement = true;
+                        }
+                    }
+                    Err(norte_proto::Error::InvalidPath) => {}
+                    Err(e) => panic!("error inesperado listando: {e:?}"),
                 }
             }
-            // Rechazo limpio del listado por el nombre lossy: aceptable.
-            Err(norte_proto::Error::InvalidPath) => {}
-            Err(e) => panic!("error inesperado listando: {e:?}"),
         }
     }
     assert!(
