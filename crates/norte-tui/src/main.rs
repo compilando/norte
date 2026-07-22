@@ -2062,9 +2062,19 @@ fn drain_search(app: &mut App, search_run: &mut Option<SearchRun>, hits: Option<
     };
     if let Some(batch) = hits {
         if app.panes[s.pane].virtual_search {
-            // v1 vista PLANA (per plan): se descarta `batch.matches`
-            // (line/preview del match de contenido). Surfacing del preview en
-            // el pane o la barra = follow-up (issue #81).
+            // #81: el contexto del match (línea + preview, saneado EN ORIGEN
+            // por el core) se guarda por path — la barra lo pinta para el
+            // hit bajo el cursor. Vista del pane sigue plana (v1).
+            if let Some(infos) = batch.matches {
+                // Contrato del wire: alineado 1:1. Un server bug que mande
+                // menos matches truncaría el zip EN SILENCIO — ruido en dev.
+                debug_assert_eq!(batch.entries.len(), infos.len(), "matches desalineados");
+                for (e, info) in batch.entries.iter().zip(infos) {
+                    app.panes[s.pane]
+                        .search_matches
+                        .insert(e.path.clone(), info);
+                }
+            }
             let n = batch.entries.len();
             app.panes[s.pane].extend_listing(batch.entries);
             s.hits += n;

@@ -48,6 +48,11 @@ pub struct Pane {
     /// `n > 0` — un listado incompleto jamás es silencioso (paralelo del
     /// contrato de [`Pane::loading`]). `None` = no aplica/desconocido.
     pub skipped: Option<u64>,
+    /// Contexto del match de contenido por hit de la búsqueda viva (#81):
+    /// `path → (línea, preview YA saneado en origen)`. Solo significativo con
+    /// [`Pane::virtual_search`]; la barra lo pinta para el hit bajo el
+    /// cursor. Se limpia al salir del modo virtual (cd/listado real).
+    pub search_matches: std::collections::HashMap<VPath, norte_proto::methods::MatchInfo>,
 }
 
 /// Estado de presentación de una búsqueda viva (`Alt+F7`, liveSearch T6): el
@@ -82,6 +87,7 @@ impl Pane {
             search_state: SearchState::Running,
             search_error: None,
             skipped: None,
+            search_matches: std::collections::HashMap::new(),
         }
     }
 
@@ -245,6 +251,11 @@ impl Pane {
         self.virtual_search = true;
         self.search_state = SearchState::Running;
         self.search_error = None;
+        // #81 (MAJOR-4 del review): re-lanzar Alt+F7 sin cd de por medio no
+        // debe arrastrar previews de la búsqueda ANTERIOR (un hit de la
+        // query B solo-nombre pintaría el :línea de la query A) ni crecer
+        // el mapa sin límite entre búsquedas.
+        self.search_matches.clear();
     }
 
     /// Reemplaza el contenido tras un cd/refresh, reseteando el cursor.
@@ -252,6 +263,7 @@ impl Pane {
     pub fn set_listing(&mut self, dir: VPath, entries: Vec<Entry>) {
         self.state.set_listing(dir, entries);
         self.virtual_search = false;
+        self.search_matches.clear();
         self.skipped = None;
     }
 
@@ -269,6 +281,7 @@ impl Pane {
         self.state.set_listing(dir, first_page);
         self.state.set_loading(more);
         self.virtual_search = false;
+        self.search_matches.clear();
         self.skipped = skipped;
     }
 
@@ -305,6 +318,7 @@ impl Pane {
         self.state.refill(entries);
         self.state.set_loading(false);
         self.virtual_search = false;
+        self.search_matches.clear();
     }
 }
 

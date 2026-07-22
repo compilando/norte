@@ -17,6 +17,7 @@ norte-vfs.workspace = true
 # El Operator llega INYECTADO ya configurado (bucket/region/credenciales en
 # norte-connect, fase 7d — ADR 0016 B); el provider jamás ve el secreto.
 opendal.workspace = true
+tracing.workspace = true
 # Solo `rt`: el Drop del sink aborta el multipart huérfano best-effort vía
 # Handle::try_current().spawn() — el abort es una llamada de red, no un unlink
 # síncrono como en local.

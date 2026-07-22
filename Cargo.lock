@@ -4511,6 +4511,7 @@ dependencies = [
  "tempfile",
  "testcontainers",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
