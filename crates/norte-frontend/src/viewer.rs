@@ -70,12 +70,15 @@ pub fn image_format(bytes: &[u8]) -> Option<ImageFmt> {
 }
 
 /// Preview producido por un plugin (M4-P5): reemplaza la vista cruda mientras
-/// está presente. `lines` ya enmascaradas ([`crate::display_name`]).
+/// está presente. Líneas con estilo (#29): la salida del plugin se parsea con
+/// el saneador ANSI-SGR ([`crate::ansi::parse_sgr`]) — que DESCARTA cualquier
+/// escape peligroso y deja solo color de primer plano — y cada tramo se
+/// enmascara ([`crate::display_name`]): texto de un TERCERO, jamás confiado.
 pub struct PluginPreviewView {
     /// Nombre legible del plugin previewer (ya enmascarado), para el indicador.
     pub plugin_name: String,
-    /// Líneas de la salida del plugin, ya enmascaradas (texto de un TERCERO).
-    pub lines: Vec<String>,
+    /// Líneas con color, saneadas y enmascaradas.
+    styled: Vec<crate::ansi::StyledLine>,
 }
 
 /// El viewer abierto sobre un archivo.
@@ -137,19 +140,41 @@ impl Viewer {
     }
 
     /// Viewer en modo preview de plugin (M4-P5): pinta la salida del plugin en
-    /// vez de la vista cruda. El `output` es texto de un TERCERO → cada línea
-    /// (partida por `\n`) y el `plugin_name` se enmascaran con
-    /// [`crate::display_name`] (controles/bidi/invisibles → `�`).
+    /// vez de la vista cruda. El `output` es texto de un TERCERO: se pasa por el
+    /// saneador ANSI-SGR (#29 — [`crate::ansi::parse_sgr`]: descarta escapes
+    /// peligrosos, deja solo color de primer plano) y CADA tramo se enmascara
+    /// con [`crate::display_name`] (controles/bidi/invisibles → `�`); el
+    /// `plugin_name` igual.
     #[must_use]
     pub fn with_plugin_preview(path: VPath, plugin_name: String, output: &str) -> Self {
-        let lines = output
-            .split('\n')
-            .map(|l| crate::display_name(l.as_bytes()).0)
+        let styled = crate::ansi::parse_sgr(output)
+            .into_iter()
+            .map(|line| {
+                line.into_iter()
+                    .map(|span| crate::ansi::StyledSpan {
+                        text: crate::display_name(span.text.as_bytes()).0,
+                        fg: span.fg,
+                    })
+                    .collect()
+            })
             .collect();
         let plugin_name = crate::display_name(&plugin_name.into_bytes()).0;
         let mut v = Self::base(path, Vec::new(), false);
-        v.plugin_preview = Some(PluginPreviewView { plugin_name, lines });
+        v.plugin_preview = Some(PluginPreviewView {
+            plugin_name,
+            styled,
+        });
         v
+    }
+
+    /// Las filas visibles del preview de plugin CON estilo (#29), desde
+    /// `scroll`; `None` si el viewer no está en modo preview de plugin. El
+    /// frontend traduce [`crate::ansi::Rgb`] a su tipo de color y las pinta.
+    #[must_use]
+    pub fn plugin_styled_rows(&self, height: usize) -> Option<Vec<&crate::ansi::StyledLine>> {
+        self.plugin_preview
+            .as_ref()
+            .map(|p| p.styled.iter().skip(self.scroll).take(height).collect())
     }
 
     /// El nombre del plugin si el viewer está en modo preview (para el
@@ -234,7 +259,7 @@ impl Viewer {
     #[must_use]
     pub fn total_rows(&self) -> usize {
         if let Some(p) = &self.plugin_preview {
-            p.lines.len()
+            p.styled.len()
         } else if self.hex {
             self.bytes.len().div_ceil(HEX_COLS)
         } else {
@@ -270,12 +295,13 @@ impl Viewer {
     #[must_use]
     pub fn rows(&self, height: usize) -> Vec<String> {
         if let Some(p) = &self.plugin_preview {
-            // Ya enmascaradas al construir; mismo cálculo de ventana.
-            p.lines
+            // Texto plano derivado de los tramos con estilo (fallback sin
+            // color; el render con color va por `plugin_styled_rows`).
+            p.styled
                 .iter()
                 .skip(self.scroll)
                 .take(height)
-                .cloned()
+                .map(|line| line.iter().map(|s| s.text.as_str()).collect())
                 .collect()
         } else if self.hex {
             hex_rows(&self.bytes, self.scroll, height)

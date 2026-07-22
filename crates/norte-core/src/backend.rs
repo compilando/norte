@@ -742,6 +742,20 @@ impl Backend {
                 let cap = usize::try_from(crate::plugins::PREVIEW_MAX_BYTES).unwrap_or(usize::MAX);
                 bytes.truncate(cap.min(bytes.len()));
 
+                // 2.5) §6.2 (#29): el previewer recibe TEXTO ya decodificado
+                // por la detección del core — jamás bytes crudos sobre los que
+                // asumir UTF-8. Un binario (sin encoding de texto) cae a los
+                // bytes tal cual (un guest de texto hará su propio lossy).
+                let complete = (bytes.len() as u64) < crate::plugins::PREVIEW_MAX_BYTES;
+                let content: Vec<u8> = match norte_encoding::detect(&bytes) {
+                    norte_encoding::Detection::Text { encoding, .. } => {
+                        norte_encoding::decode(&bytes, encoding, complete)
+                            .text
+                            .into_bytes()
+                    }
+                    norte_encoding::Detection::Binary => bytes,
+                };
+
                 // 3) Instanciar + renderizar (síncrono, WASM) en spawn_blocking.
                 let mime_owned = mime.to_owned();
                 let output = tokio::task::spawn_blocking(move || -> Result<String, Error> {
@@ -750,7 +764,7 @@ impl Backend {
                     let mut inst = runtime
                         .instantiate(&wasm, caps)
                         .map_err(|_| Error::Internal { panic: false })?;
-                    inst.render_preview(&mime_owned, &bytes)
+                    inst.render_preview(&mime_owned, &content)
                         .map_err(|_| Error::Internal { panic: false })
                 })
                 .await

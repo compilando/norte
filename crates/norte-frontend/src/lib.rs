@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod ansi;
 mod display;
 pub mod keymap;
 pub mod nav;
