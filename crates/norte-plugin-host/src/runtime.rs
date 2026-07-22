@@ -314,9 +314,37 @@ impl PluginRuntime {
         host_log::add_to_linker::<HostState, wasmtime::component::HasSelf<_>>(&mut linker, |s| s)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
 
-        // Sandbox WASI VACÍO: sin stdio heredado, sin preopens, sin red, sin
-        // env. Esta línea es el corazón del aislamiento (revísala, seguridad).
-        let ctx = WasiCtxBuilder::new().build();
+        // Sandbox WASI: sin stdio heredado, sin preopens, sin env. La RED se
+        // concede SOLO si la capability `net` está declarada, y aun así
+        // RESTRINGIDA a los hosts del allow-list (#30 stage 3a). Sin `net`, el
+        // `socket_addr_check` por defecto RECHAZA toda dirección (fail-closed) —
+        // el guest existe con `wasi:sockets` linkado pero sin ninguna conexión
+        // concedida (mismo principio que `fs-read`: el linker completo, la
+        // capacidad la da el HOST). Esta línea es el corazón del aislamiento de
+        // red (revísala, seguridad).
+        let mut ctx_builder = WasiCtxBuilder::new();
+        if let Some(net) = &caps.net {
+            // Allow-list por HOST resuelto. SOLO conexiones TCP SALIENTES
+            // (`TcpConnect`): se rechazan bind/listen y TODO UDP — un provider de
+            // red conecta, no escucha ni manda datagramas (mínimo privilegio,
+            // review security). Una entrada `ip:puerto` fija el puerto; una de
+            // solo `ip` autoriza CUALQUIER puerto de ese host — es deliberado (el
+            // FTP pasivo negocia puertos de datos DINÁMICOS, no acotables a
+            // priori) y el humano lo ve al aprobar el manifiesto. Sin DNS en el
+            // guest (`allow_ip_name_lookup(false)`): se conecta por IP y el
+            // allow-list es por IP; resolver hostnames + deny-list de
+            // link-local/metadata (169.254/fe80) es del wiring de stage 3b.
+            let allowed: std::collections::HashSet<String> = net.hosts.iter().cloned().collect();
+            ctx_builder.socket_addr_check(move |addr, use_| {
+                let permitted = matches!(use_, wasmtime_wasi::sockets::SocketAddrUse::TcpConnect)
+                    && (allowed.contains(&addr.ip().to_string())
+                        || allowed.contains(&addr.to_string()));
+                Box::pin(async move { permitted })
+            });
+            ctx_builder.allow_ip_name_lookup(false);
+            ctx_builder.allow_udp(false);
+        }
+        let ctx = ctx_builder.build();
         // Límite de memoria lineal por store (cierra M4-P2b): un guest no puede
         // agotar la RAM del host. `StoreLimits` impl `ResourceLimiter`.
         let limits = StoreLimitsBuilder::new()
