@@ -277,7 +277,13 @@ fn spawn_dial_job(job: DialJob) {
                         obs.on_connection_warning(w);
                     }
                 }
-                let provider = Arc::clone(&connected.provider);
+                // La sesión entra al pool ENVUELTA: se auto-evicta cuando
+                // una operación la encuentre muerta (ProviderUnavailable).
+                let provider: Arc<dyn Provider> = Arc::new(SessionProvider {
+                    inner: connected.provider,
+                    key: job.cache_key.clone(),
+                    pool: job.pool.clone(),
+                });
                 {
                     let mut providers = pool.providers.write().expect("providers lock sano");
                     providers.insert(job.cache_key.clone(), Arc::clone(&provider));
@@ -324,5 +330,174 @@ fn remove_own_entry(pool: &PoolInner, key: &str, id: u64) {
     let mut connecting = pool.connecting.lock().expect("connecting lock sano");
     if connecting.get(key).is_some_and(|j| j.id == id) {
         connecting.remove(key);
+    }
+}
+
+impl PoolInner {
+    /// Evicta la sesión de `key` si el wrapper que lo pide SIGUE siendo la
+    /// entrada vigente (ptr-check: una sesión más nueva bajo la misma clave
+    /// jamás se pisa). Barre también las claves-alias (mismo Arc, dedup
+    /// canónica) y los providers archive compuestos sobre esta sesión
+    /// (`{fmt}+{clave}`, #62 — el wrapper de archivo cachea el Arc de la
+    /// sesión: dejarlo sería servir un índice de una conexión muerta).
+    fn evict_session(&self, key: &str, wrapper_ptr: *const ()) {
+        let mut providers = self.providers.write().expect("providers lock sano");
+        let Some(current) = providers.get(key) else {
+            return;
+        };
+        if Arc::as_ptr(current).cast::<()>() != wrapper_ptr {
+            return;
+        }
+        let session_keys: Vec<String> = providers
+            .iter()
+            .filter(|(_, v)| Arc::as_ptr(v).cast::<()>() == wrapper_ptr)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in &session_keys {
+            providers.remove(k);
+        }
+        let composite_keys: Vec<String> = providers
+            .keys()
+            .filter(|ck| {
+                session_keys.iter().any(|k| {
+                    ck.len() > k.len() + 1 && ck.ends_with(k) && {
+                        // sufijo `+{k}` exacto (el scheme compuesto es
+                        // `fmt+scheme`): evita falsos positivos.
+                        ck.as_bytes()[ck.len() - k.len() - 1] == b'+'
+                    }
+                })
+            })
+            .cloned()
+            .collect();
+        for ck in &composite_keys {
+            providers.remove(ck);
+        }
+        tracing::warn!(
+            clave = %key,
+            alias = session_keys.len().saturating_sub(1),
+            compuestos = composite_keys.len(),
+            "sesión remota evictada (ProviderUnavailable); el siguiente acceso reconecta"
+        );
+    }
+}
+
+/// Envuelve la sesión remota cacheada: si una operación devuelve
+/// [`Error::ProviderUnavailable`], se auto-evicta del pool (la sesión está
+/// muerta; el siguiente acceso reconecta). El error se propaga TAL CUAL.
+///
+/// v1: solo los `Result` de las LLAMADAS evictan — un error dentro de un
+/// stream (`list`/`read`) o sink ya entregado no llega aquí (la siguiente
+/// llamada directa sobre la sesión muerta sí evicta).
+struct SessionProvider {
+    inner: Arc<dyn Provider>,
+    /// La clave CANÓNICA bajo la que vive en el pool.
+    key: String,
+    pool: Weak<PoolInner>,
+}
+
+impl SessionProvider {
+    fn observe<T>(&self, r: Result<T, Error>) -> Result<T, Error> {
+        if let Err(Error::ProviderUnavailable { .. }) = &r {
+            if let Some(pool) = self.pool.upgrade() {
+                pool.evict_session(&self.key, std::ptr::from_ref(self).cast::<()>());
+            }
+        }
+        r
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for SessionProvider {
+    fn scheme(&self) -> &str {
+        self.inner.scheme()
+    }
+    fn capabilities(&self) -> norte_proto::Capabilities {
+        self.inner.capabilities()
+    }
+    async fn stat(&self, p: &norte_proto::VPath) -> Result<norte_proto::Entry, Error> {
+        self.observe(self.inner.stat(p).await)
+    }
+    async fn list(&self, p: &norte_proto::VPath) -> Result<norte_vfs::EntryStream, Error> {
+        self.observe(self.inner.list(p).await)
+    }
+    async fn list_skipped(&self, p: &norte_proto::VPath) -> Result<Option<u64>, Error> {
+        self.observe(self.inner.list_skipped(p).await)
+    }
+    async fn read(
+        &self,
+        p: &norte_proto::VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> Result<norte_vfs::ByteStream, Error> {
+        self.observe(self.inner.read(p, range).await)
+    }
+    async fn node_id(
+        &self,
+        p: &norte_proto::VPath,
+        follow: norte_vfs::FollowLinks,
+    ) -> Result<Option<norte_vfs::NodeId>, Error> {
+        self.observe(self.inner.node_id(p, follow).await)
+    }
+    async fn read_link(&self, p: &norte_proto::VPath) -> Result<Vec<u8>, Error> {
+        self.observe(self.inner.read_link(p).await)
+    }
+    async fn trash(&self, p: &norte_proto::VPath) -> Result<Option<norte_proto::VPath>, Error> {
+        self.observe(self.inner.trash(p).await)
+    }
+    async fn gc_partials(
+        &self,
+        dir: &norte_proto::VPath,
+        older_than: Duration,
+    ) -> Result<usize, Error> {
+        self.observe(self.inner.gc_partials(dir, older_than).await)
+    }
+    async fn restore_trashed(&self, original: &norte_proto::VPath) -> Result<(), Error> {
+        self.observe(self.inner.restore_trashed(original).await)
+    }
+    async fn symlink(
+        &self,
+        link: &norte_proto::VPath,
+        target: &[u8],
+        kind: norte_vfs::SymlinkKind,
+    ) -> Result<(), Error> {
+        self.observe(self.inner.symlink(link, target, kind).await)
+    }
+    async fn write(&self, p: &norte_proto::VPath) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
+        self.observe(self.inner.write(p).await)
+    }
+    async fn open_resumable(
+        &self,
+        p: &norte_proto::VPath,
+    ) -> Result<(Box<dyn norte_vfs::ByteSink>, u64), Error> {
+        self.observe(self.inner.open_resumable(p).await)
+    }
+    async fn partial_digest(
+        &self,
+        p: &norte_proto::VPath,
+        len: u64,
+    ) -> Result<Option<[u8; 32]>, Error> {
+        self.observe(self.inner.partial_digest(p, len).await)
+    }
+    async fn mkdir(&self, p: &norte_proto::VPath) -> Result<(), Error> {
+        self.observe(self.inner.mkdir(p).await)
+    }
+    async fn remove(&self, p: &norte_proto::VPath) -> Result<(), Error> {
+        self.observe(self.inner.remove(p).await)
+    }
+    async fn rename(
+        &self,
+        from: &norte_proto::VPath,
+        to: &norte_proto::VPath,
+    ) -> Result<(), Error> {
+        self.observe(self.inner.rename(from, to).await)
+    }
+    async fn copy_native(
+        &self,
+        from: &norte_proto::VPath,
+        to: &norte_proto::VPath,
+    ) -> Option<Result<(), Error>> {
+        self.inner
+            .copy_native(from, to)
+            .await
+            .map(|r| self.observe(r))
     }
 }

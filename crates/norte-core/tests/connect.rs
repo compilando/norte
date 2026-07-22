@@ -471,6 +471,110 @@ async fn exito_limpia_el_cooldown() {
     assert_eq!(conn.connects.load(Ordering::SeqCst), 2);
 }
 
+/// Provider que se puede ENVENENAR: tras `poison`, toda operación devuelve
+/// `ProviderUnavailable` (sesión muerta: server reiniciado, red caída).
+struct FlipProvider {
+    poisoned: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait]
+impl Provider for FlipProvider {
+    fn scheme(&self) -> &'static str {
+        "sftp"
+    }
+    fn capabilities(&self) -> norte_proto::Capabilities {
+        norte_proto::Capabilities {
+            flags: norte_proto::CapabilityFlags::empty(),
+            max_path: None,
+        }
+    }
+    async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
+        if self.poisoned.load(Ordering::SeqCst) {
+            return Err(Error::ProviderUnavailable { retryable: true });
+        }
+        Ok(Entry {
+            path: p.clone(),
+            kind: EntryKind::Dir,
+            size: None,
+            mtime_ms: None,
+        })
+    }
+    async fn list(&self, _p: &VPath) -> Result<norte_vfs::EntryStream, Error> {
+        Err(Error::Unsupported)
+    }
+    async fn read(
+        &self,
+        _p: &VPath,
+        _range: Option<norte_proto::ByteRange>,
+    ) -> Result<norte_vfs::ByteStream, Error> {
+        Err(Error::Unsupported)
+    }
+    async fn write(&self, _p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
+        Err(Error::Unsupported)
+    }
+    async fn mkdir(&self, _p: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+    async fn remove(&self, _p: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+    async fn rename(&self, _from: &VPath, _to: &VPath) -> Result<(), Error> {
+        Err(Error::Unsupported)
+    }
+}
+
+/// Conector que entrega una sesión FRESCA por dial y guarda el interruptor
+/// de veneno de cada una.
+struct RevivingConnector {
+    connects: AtomicUsize,
+    poisons: std::sync::Mutex<Vec<Arc<std::sync::atomic::AtomicBool>>>,
+}
+
+#[async_trait]
+impl RemoteConnector for RevivingConnector {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+        self.connects.fetch_add(1, Ordering::SeqCst);
+        let poisoned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.poisons.lock().unwrap().push(poisoned.clone());
+        Ok(Connected {
+            provider: Arc::new(FlipProvider { poisoned }),
+            warnings: Vec::new(),
+        })
+    }
+    async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+/// #47: una sesión que empieza a devolver `ProviderUnavailable` se EVICTA de
+/// la caché — el siguiente acceso reconecta (reconexión perezosa), sin
+/// reinicio del proceso ni entrada zombi para siempre.
+#[tokio::test]
+async fn sesion_muerta_se_evicta_y_reconecta() {
+    let engine = Engine::new();
+    let conn = Arc::new(RevivingConnector {
+        connects: AtomicUsize::new(0),
+        poisons: std::sync::Mutex::new(Vec::new()),
+    });
+    engine.set_connector(conn.clone());
+    let p = vp("sftp://h/x");
+
+    engine.stat(&p).await.expect("sesión 1 viva");
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 1);
+
+    // Muere la sesión: el error se propaga TAL CUAL al caller…
+    conn.poisons.lock().unwrap()[0].store(true, Ordering::SeqCst);
+    let err = engine.stat(&p).await.unwrap_err();
+    assert!(matches!(
+        err,
+        Error::ProviderUnavailable { retryable: true }
+    ));
+
+    // …y la clave quedó evictada: el siguiente acceso reconecta.
+    engine.stat(&p).await.expect("reconectado");
+    assert_eq!(conn.connects.load(Ordering::SeqCst), 2, "re-dial");
+}
+
 /// `trust_host_key` sin conector configurado es Unsupported, no un panic.
 #[tokio::test]
 async fn trust_sin_conector_es_unsupported() {
