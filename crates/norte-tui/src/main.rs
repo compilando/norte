@@ -2066,6 +2066,9 @@ fn drain_search(app: &mut App, search_run: &mut Option<SearchRun>, hits: Option<
             // por el core) se guarda por path — la barra lo pinta para el
             // hit bajo el cursor. Vista del pane sigue plana (v1).
             if let Some(infos) = batch.matches {
+                // Contrato del wire: alineado 1:1. Un server bug que mande
+                // menos matches truncaría el zip EN SILENCIO — ruido en dev.
+                debug_assert_eq!(batch.entries.len(), infos.len(), "matches desalineados");
                 for (e, info) in batch.entries.iter().zip(infos) {
                     app.panes[s.pane]
                         .search_matches

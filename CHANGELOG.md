@@ -9,6 +9,10 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Content-match preview in live search (#81):** with a content search
+  active, the status bar shows the line number and a sanitised preview of the
+  match for the hit under the cursor.
+
 - **Show names as… (#57):** `Alt+E` cycles a per-pane reinterpretation of
   non-UTF-8 file names for display (cp437, cp866, Shift-JIS, GBK,
   windows-1252), with a chardetng suggestion as the first step. Display only:
@@ -49,6 +53,13 @@ independently through `PROTOCOL_VERSION`.
   (plugins), M3 (agent integration), and M5 (GUI).
 
 ### Changed
+
+- **Streaming prefix rename on object storage (#49):** renaming an S3 prefix
+  no longer materialises the whole tree in memory (peak is now proportional
+  to the number of directories) and deletes in batches (`DeleteObjects`).
+  The operation stays non-atomic: an object created concurrently under the
+  source prefix during the rename is left unmoved; a concurrent overwrite of
+  an already-copied object can be lost.
 
 - **Honest resource errors for archives (#95, protocol 0.23.0):** a container
   that exceeds a local anti-bomb limit now fails with the new `limit_exceeded`

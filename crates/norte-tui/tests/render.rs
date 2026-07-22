@@ -352,7 +352,7 @@ fn preview_del_match_bajo_el_cursor_en_la_barra() {
         hit.path,
         norte_proto::methods::MatchInfo {
             line: Some(42),
-            preview: Some("fn main() { hola }".into()),
+            preview: Some("fn main() { hola }\u{1b}[31m\u{202e}".into()),
         },
     );
     let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal");
@@ -361,5 +361,11 @@ fn preview_del_match_bajo_el_cursor_en_la_barra() {
     assert!(
         contenido.contains(":42") && contenido.contains("hola"),
         "línea y preview del hit en la barra: {contenido}"
+    );
+    // El cinturón (detail_for_bar) enmascara: ESC/bidi jamás crudos aunque
+    // un core buggy los colara en el preview.
+    assert!(
+        !contenido.contains('\u{1b}') && !contenido.contains('\u{202e}'),
+        "controles/bidi enmascarados en la barra: {contenido:?}"
     );
 }

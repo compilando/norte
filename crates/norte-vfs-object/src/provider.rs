@@ -243,7 +243,6 @@ impl std::fmt::Debug for ObjectProvider {
     }
 }
 
-/// Mapea el error de opendal a la taxonomía del protocolo (spec §17.7).
 /// Sufijo VALIDADO de una entrada listada relativo a `from_dir` (#49): la
 /// contención anti-servidor-mentiroso del rename de prefijo — `None` = el
 /// propio dir listado (se salta); `Err(InvalidPath)` = la entrada sale del
@@ -273,6 +272,7 @@ fn validated_suffix<'a>(from_dir: &str, path: &'a str) -> Result<Option<&'a str>
     Ok(Some(suffix))
 }
 
+/// Mapea el error de opendal a la taxonomía del protocolo (spec §17.7).
 fn map_err(e: &opendal::Error) -> Error {
     match e.kind() {
         ErrorKind::NotFound => Error::NotFound,
@@ -653,16 +653,27 @@ impl Provider for ObjectProvider {
         // dirs después en profundidad inversa (un dir de fs solo se borra
         // vacío; O(dirs) en memoria, la fracción diminuta del árbol).
         //
-        // Guard anti-pérdida: un fichero solo se borra si su DESTINO existe
-        // — un objeto COLADO por otro cliente entre las dos fases no fue
-        // copiado y queda SIN MOVER en el origen (rename de prefijo no
-        // atómico, documentado), jamás borrado sin copia.
+        // Guard del colado: un fichero solo se borra si su DESTINO existe —
+        // una KEY NUEVA colada por otro cliente entre las dos fases no fue
+        // copiada y queda SIN MOVER en el origen. OJO al overclaim (review
+        // #49 MAJOR-2): una SOBRESCRITURA colada de una key YA copiada sí se
+        // pierde (el dst v1 existe → se borra el src v2) — inherente al
+        // rename no atómico; el conditional delete por ETag sería el fix
+        // fino donde el backend lo soporte.
+        //
+        // Presupuesto de requests (documentado a propósito): n HEAD
+        // secuenciales + n/1000 DeleteObjects + 3 sweeps de LIST. El HEAD
+        // por fichero es el precio del guard; la ganancia de #49 es la
+        // MEMORIA O(dirs) y el batch del delete, no menos round-trips.
         let mut lister = self
             .op
             .lister_with(&from_dir)
             .recursive(true)
             .await
             .map_err(|e| map_err(&e))?;
+        // Un `?` (o el drop del future, regla 3) suelta el `deleter` sin
+        // close(): los deletes encolados sin flush se DESCARTAN — quedan
+        // duplicados en el origen, jamás pérdida (el invariante de siempre).
         let mut deleter = self.op.deleter().await.map_err(|e| map_err(&e))?;
         let mut dirs: Vec<String> = Vec::new();
         while let Some(oe) = lister.try_next().await.map_err(|e| map_err(&e))? {
@@ -675,8 +686,11 @@ impl Provider for ObjectProvider {
             }
             let dst = format!("{to_dir}{suffix}");
             if !self.op.exists(&dst).await.map_err(|e| map_err(&e))? {
+                // escape_debug: el sufijo es legal pero puede llevar
+                // controles/ANSI — jamás crudo al log (convención VPath
+                // redactado).
                 tracing::warn!(
-                    suffix,
+                    suffix = %suffix.escape_debug(),
                     "objeto colado durante el rename de prefijo: queda SIN MOVER en el origen"
                 );
                 continue;
@@ -861,6 +875,43 @@ impl Drop for ObjectSink {
             handle.spawn(async move {
                 let _ = w.abort().await;
             });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validated_suffix;
+    use norte_proto::Error;
+
+    /// #49: la contención del rename, caso a caso — el helper es la única
+    /// puerta por la que un path ecoado se convierte en key de operación.
+    #[test]
+    fn validated_suffix_contiene_lo_hostil() {
+        let d = "src/";
+        // El propio dir listado: se salta, no es error.
+        assert_eq!(validated_suffix(d, "src/"), Ok(None));
+        // Legales: fichero, subdir (con `/` final), anidado.
+        assert_eq!(validated_suffix(d, "src/a.txt"), Ok(Some("a.txt")));
+        assert_eq!(validated_suffix(d, "src/sub/"), Ok(Some("sub/")));
+        assert_eq!(validated_suffix(d, "src/sub/b"), Ok(Some("sub/b")));
+        // Hostiles: fuera del prefijo, absoluto, traversal, segmento
+        // vacío, lossy.
+        for hostil in [
+            "otra/x",
+            "/etc/passwd",
+            "src/../victima",
+            "src/a/../b",
+            "src//oculto",
+            "src/./x",
+            "src/caf\u{FFFD}.txt",
+            "src",
+        ] {
+            assert_eq!(
+                validated_suffix(d, hostil),
+                Err(Error::InvalidPath),
+                "{hostil}"
+            );
         }
     }
 }

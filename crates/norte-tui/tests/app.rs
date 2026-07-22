@@ -191,3 +191,25 @@ fn tab_alterna_el_foco_entre_los_dos_panes() {
     app.focused_mut().move_down(1);
     assert!(!app.quit);
 }
+
+/// #81 (MAJOR-4 del review): re-lanzar la búsqueda SIN cd de por medio no
+/// arrastra previews de la anterior — un hit de la query B solo-nombre
+/// pintaría el :línea de la query A.
+#[test]
+fn begin_search_limpia_los_previews_anteriores() {
+    let mut p = pane_with(&[(b"a.rs", EntryKind::File)]);
+    let root = vp("file:///casa");
+    p.begin_search(root.clone());
+    p.search_matches.insert(
+        root.join(norte_proto::Segment::new(b"a.rs".to_vec()).unwrap()),
+        norte_proto::methods::MatchInfo {
+            line: Some(7),
+            preview: Some("vieja".into()),
+        },
+    );
+    p.begin_search(root);
+    assert!(
+        p.search_matches.is_empty(),
+        "el mapa se limpia al reiniciar la búsqueda"
+    );
+}

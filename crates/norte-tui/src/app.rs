@@ -251,6 +251,11 @@ impl Pane {
         self.virtual_search = true;
         self.search_state = SearchState::Running;
         self.search_error = None;
+        // #81 (MAJOR-4 del review): re-lanzar Alt+F7 sin cd de por medio no
+        // debe arrastrar previews de la búsqueda ANTERIOR (un hit de la
+        // query B solo-nombre pintaría el :línea de la query A) ni crecer
+        // el mapa sin límite entre búsquedas.
+        self.search_matches.clear();
     }
 
     /// Reemplaza el contenido tras un cd/refresh, reseteando el cursor.
