@@ -1,183 +1,99 @@
-//! Indexado y lectura de zip (crate `zip`). SYNC: corre en `spawn_blocking`
-//! sobre un [`ProviderReader`](crate::blocking::ProviderReader).
+//! Indexado y lectura de zip sobre el parser PROPIO del central directory
+//! ([`zip_cd`](crate::zip_cd), #59). SYNC: corre en `spawn_blocking` sobre
+//! un [`ProviderReader`](crate::blocking::ProviderReader).
 //!
-//! Nombres: `name_raw()` — bytes crudos SIEMPRE (regla 1). El bit 11 (UTF-8)
-//! no se usa para decodificar nada; la reinterpretación manual de display es
-//! feature futura (issue de fase 8g).
+//! Nombres: bytes crudos del CD SIEMPRE (regla 1). El bit 11 (UTF-8) no se
+//! usa para decodificar nada y el extra 0x7075 se ignora por diseño; la
+//! reinterpretación manual de display es feature futura (issue de fase 8g).
+//! El locator de una entrada es AUTOCONTENIDO (`Locator::Zip`): la lectura
+//! resuelve el offset de datos desde el LOCAL header y descomprime con
+//! flate2 — sin objeto de archive retenido ni re-parse del CD.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use norte_proto::{EntryKind, Error};
 
 use crate::index::{ArchiveIndex, Limits, Locator, Node};
+use crate::zip_cd;
 
-/// Época civil → días desde 1970-01-01 (algoritmo de Howard Hinnant).
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = (m + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
-/// `DateTime` DOS del zip → ms desde epoch. El DOS time no lleva zona: se
-/// interpreta como UTC (aproximación documentada; issue de deuda 8g).
-fn dos_to_ms(dt: zip::DateTime) -> Option<i64> {
-    let days = days_from_civil(
-        i64::from(dt.year()),
-        i64::from(dt.month()),
-        i64::from(dt.day()),
-    );
-    let secs = days * 86_400
-        + i64::from(dt.hour()) * 3_600
-        + i64::from(dt.minute()) * 60
-        + i64::from(dt.second());
-    secs.checked_mul(1000)
-}
-
-/// Preflight barato ANTES de `ZipArchive::new`: cuenta de entradas Y tamaño
-/// del central directory, ambos leídos del EOCD (el propio `new()`
-/// materializa el CD entero — una bomba de índice O de memoria retenida
-/// (#61 MAJOR-2) hay que cortarla antes de pagarla). `None` = sin preflight
-/// (zip64, EOCD no localizable, firma solo en el comentario…): es una
-/// optimización, el `len()` post-parse sigue cortando bombas de entradas y
-/// `ZipArchive::new` decide qué es corrupto; para el tope de bytes cacheados
-/// (`max_cd_bytes`) un preflight desconocido se trata fail-closed (no se
-/// cachea) en `build_index`.
-fn eocd_preflight<R: Read + Seek>(reader: &mut R, len: u64) -> Option<(u64, u64)> {
-    const EOCD_SIG: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
-    // EOCD = 22 bytes + comentario ≤ 65535: la firma vive en la última ventana.
-    let window = 22u64 + 65_535;
-    let start = len.saturating_sub(window);
-    let take = usize::try_from(len - start).ok()?;
-    reader.seek(SeekFrom::Start(start)).ok()?;
-    let mut buf = vec![0u8; take];
-    reader.read_exact(&mut buf).ok()?;
-    // Un comentario puede CONTENER la firma (H9): el candidato solo vale si
-    // su cd_offset+cd_size apunta exactamente a su propia posición. Si no,
-    // sigue buscando hacia atrás.
-    let mut search = buf.len();
-    while let Some(pos) = buf[..search].windows(4).rposition(|w| w == EOCD_SIG) {
-        search = pos;
-        if pos + 22 > buf.len() {
-            continue;
-        }
-        let count = u16::from_le_bytes([buf[pos + 10], buf[pos + 11]]);
-        let cd_size = u32::from_le_bytes(buf[pos + 12..pos + 16].try_into().ok()?);
-        let cd_off = u32::from_le_bytes(buf[pos + 16..pos + 20].try_into().ok()?);
-        if count == u16::MAX || cd_off == u32::MAX || cd_size == u32::MAX {
-            return None; // zip64: el contador/tamaño real vive en el EOCD64
-        }
-        if u64::from(cd_off) + u64::from(cd_size) == start + pos as u64 {
-            return Some((u64::from(count), u64::from(cd_size)));
-        }
-    }
-    None
-}
-
-/// Construye el índice desde el central directory (`by_index_raw`: nunca
-/// descomprime). `cancel` se chequea por entrada (regla 3). Devuelve también
-/// el `ZipArchive` ya parseado (#61) SI su central directory cabe bajo
-/// `limits.max_cd_bytes` — por encima (o si el preflight no pudo medirlo,
-/// fail-closed) el índice se construye igual pero `None`: el caller no lo
-/// cachea y un `read` posterior vuelve a parsear (comportamiento pre-caché,
-/// #61 MAJOR-2 — el tope gobierna memoria RETENIDA, no el indexado).
+/// Construye el índice recorriendo el central directory en streaming
+/// (jamás materializado, #59). `cancel` se chequea por entrada (regla 3).
+/// La cuenta del EOCD/EOCD64 corta ANTES de pagar el CD si supera
+/// `max_entries` (#95.3: `LimitExceeded`, no `Corrupt` — puede ser un EOCD
+/// mentiroso O un zip legítimo enorme; se rehúsa a averiguarlo). Un EOCD
+/// que miente a la baja también corta: las entradas REALES cuentan durante
+/// el walk.
 pub(crate) fn build_index<R: Read + Seek>(
     mut reader: R,
     container_len: u64,
     generation: (Option<i64>, Option<u64>),
     limits: &Limits,
     cancel: &Arc<AtomicBool>,
-) -> Result<(ArchiveIndex, Option<zip::ZipArchive<R>>), Error> {
-    let preflight = eocd_preflight(&mut reader, container_len);
-    let claimed = preflight.map(|(count, _)| count);
-    if let Some(claimed) = claimed
-        && claimed > limits.max_entries as u64
-    {
-        tracing::warn!(claimed, max = limits.max_entries, "EOCD supera max_entries");
-        // #95.3: puede ser un EOCD mentiroso O un zip legítimo enorme — no
-        // se sabe sin pagar el índice, y precisamente se rehúsa a pagarlo:
-        // límite local, no un veredicto de corrupción.
-        return Err(Error::LimitExceeded {
-            limit: Error::LIMIT_ENTRIES.into(),
-        });
-    }
-    let mut archive = zip::ZipArchive::new(reader).map_err(|e| corrupt(&e))?;
-    if archive.len() > limits.max_entries {
-        // zip64 (el preflight u16 no lo cubre) o EOCD mentiroso a la baja.
+) -> Result<ArchiveIndex, Error> {
+    let eocd = zip_cd::locate_eocd(&mut reader, container_len)?;
+    if eocd.count > limits.max_entries as u64 {
         tracing::warn!(
-            entries = archive.len(),
+            claimed = eocd.count,
             max = limits.max_entries,
-            "zip supera max_entries"
+            "EOCD supera max_entries"
         );
         return Err(Error::LimitExceeded {
             limit: Error::LIMIT_ENTRIES.into(),
         });
     }
     let mut index = ArchiveIndex::new(generation);
-    // Mitigación H1 (auditoría 8e): zip 5.x indexa el central directory por
-    // el nombre DECODIFICADO (lossy) — dos nombres crudos distintos que
-    // decodifican igual COLAPSAN antes de que norte los vea (y el último
-    // gana: shadowing). En no-zip64 el colapso se detecta comparando el
-    // contador del EOCD con lo materializado; fix real = parser propio del
-    // CD (issue upstream, deuda 8g).
-    if let Some(claimed) = claimed
-        && claimed != archive.len() as u64
-    {
-        let lost = claimed.saturating_sub(archive.len() as u64);
-        index.skipped += lost;
-        tracing::warn!(
-            claimed,
-            materialized = archive.len(),
-            "el crate zip colapsó entradas por decode lossy de nombres (H1)"
-        );
-    }
-    for i in 0..archive.len() {
-        if cancel.load(Ordering::Relaxed) {
-            tracing::debug!("indexado zip cancelado");
-            return Err(Error::Cancelled);
-        }
-        let file = archive.by_index_raw(i).map_err(|e| corrupt(&e))?;
-        let raw_name = file.name_raw().to_vec();
-        let mtime_ms = file.last_modified().and_then(dos_to_ms);
-        // Kind desde los BYTES, jamás desde `file.is_dir()`: el crate zip lo
-        // decide sobre el nombre DECODIFICADO y trata `\` final como dir —
-        // un file legal `trailing\` quedaría ilegible (auditoría 8e, H2).
-        let node = if raw_name.last() == Some(&b'/') {
-            Node::dir(mtime_ms)
+    let stats = zip_cd::parse_cd(&mut reader, &eocd, cancel, |entry| {
+        // Kind desde los BYTES crudos, jamás desde metadatos decodificados:
+        // solo `/` final es dir (`\` final es un file legal — H2).
+        let node = if entry.name_raw.last() == Some(&b'/') {
+            Node::dir(entry.mtime_ms)
         } else {
-            let readable = !file.encrypted()
-                && matches!(
-                    file.compression(),
-                    zip::CompressionMethod::Stored | zip::CompressionMethod::Deflated
-                );
+            let readable = entry.flags & 1 == 0 && (entry.method == 0 || entry.method == 8);
             Node {
                 kind: EntryKind::File,
-                size: Some(file.size()),
-                mtime_ms,
+                size: Some(entry.uncomp_size),
+                mtime_ms: entry.mtime_ms,
                 // Sin locator: se LISTA (metadatos) pero read → Unsupported
                 // (cifrado o método fuera de stored/deflate, ADR 0018).
-                locator: readable.then_some(Locator::Zip { index: i }),
+                locator: readable.then_some(Locator::Zip {
+                    header_offset: entry.header_offset,
+                    method: entry.method,
+                    crc32: entry.crc32,
+                    comp_size: entry.comp_size,
+                    uncomp_size: entry.uncomp_size,
+                }),
                 link_target: None,
             }
         };
-        drop(file);
-        index.insert_entry(&raw_name, node, limits)?;
+        index.insert_entry(&entry.name_raw, node, limits)?;
         if index.skipped > limits.max_entries as u64 {
             tracing::warn!(
                 max = limits.max_entries,
                 "zip supera el presupuesto de omitidas"
             );
-            // #95.3 (MAJOR-1 del review): mismo criterio que tar/targz — el
-            // presupuesto de omitidas es un límite LOCAL, no corrupción.
+            // #95.3: mismo criterio que tar/targz — el presupuesto de
+            // omitidas es un límite LOCAL, no corrupción.
             return Err(Error::LimitExceeded {
                 limit: Error::LIMIT_ENTRIES.into(),
             });
         }
+        Ok(())
+    })?;
+    index.skipped += stats.hostile_skipped;
+    if eocd.count != stats.parsed {
+        // Un EOCD que miente a la ALTA es metadato rancio, no fatal: las
+        // entradas que anuncia y no existen cuentan como omitidas (señal).
+        // A la baja ya lo cubrió el presupuesto durante el walk. Nota #59:
+        // el colapso lossy del crate `zip` (H1) ya no puede ocurrir — esta
+        // divergencia solo puede venir del propio EOCD.
+        tracing::warn!(
+            claimed = eocd.count,
+            parsed = stats.parsed,
+            "la cuenta del EOCD no coincide con el central directory"
+        );
+        index.skipped += eocd.count.saturating_sub(stats.parsed);
     }
     if index.skipped > 0 {
         tracing::warn!(
@@ -185,75 +101,115 @@ pub(crate) fn build_index<R: Read + Seek>(
             "entradas omitidas del índice (nombres hostiles/límites); detalle en debug"
         );
     }
-    // MAJOR-2 (#61): el CD parseado solo se cachea si cabe bajo el tope de
-    // memoria retenida. `cd_size` desconocido (preflight None: zip64, EOCD
-    // no localizable…) se trata como "excede" — fail-closed, ya que no hay
-    // forma de verificar el presupuesto.
-    let cd_size = preflight.map(|(_, size)| size);
-    let cacheable = cd_size.is_some_and(|size| size <= limits.max_cd_bytes);
-    if !cacheable {
-        tracing::debug!(
-            ?cd_size,
-            max_cd_bytes = limits.max_cd_bytes,
-            "central directory no cacheado (tope de memoria retenida, #61)"
-        );
-    }
-    Ok((index, cacheable.then_some(archive)))
+    Ok(index)
 }
 
-/// Abre el archive en el hilo blocking; si el CD está roto, reporta por el
-/// canal y devuelve `None` (el caller retorna). Camino frío de `read`: sin
-/// `ZipArchive` cacheado (generación desconocida, MINOR-4; o CD por encima
-/// de `max_cd_bytes`, MAJOR-2 — ambos #61).
-pub(crate) fn open_archive<R: Read + Seek>(
-    reader: R,
+/// Parámetros de una lectura zip (#59): el locator autocontenido más el
+/// recorte del range que el caller YA aplicó sobre bytes descomprimidos.
+pub(crate) struct ReadPlan {
+    /// Offset del LOCAL header en el contenedor.
+    pub header_offset: u64,
+    /// Método de compresión (0 stored / 8 deflate — el locator solo existe
+    /// para esos dos).
+    pub method: u16,
+    /// CRC-32 que el CD declara (verificado SOLO en lecturas completas).
+    pub crc32: u32,
+    /// Tamaño comprimido (acota el `Take` del decoder).
+    pub comp_size: u64,
+    /// Tamaño descomprimido que el CD promete.
+    pub uncomp_size: u64,
+    /// Tamaño del contenedor (misma generación que el índice).
+    pub container_len: u64,
+    /// Bytes descomprimidos a saltar (range del caller).
+    pub skip: u64,
+    /// Bytes descomprimidos a entregar (range del caller, ya recortado
+    /// contra el tamaño de la entrada).
+    pub take: u64,
+}
+
+/// Lee una entrada hacia `tx` resolviendo el offset de datos desde el LOCAL
+/// header — sin archive retenido ni re-parse del CD (#59). stored va con
+/// seek directo; deflate descomprime en streaming (el range se aplica sobre
+/// los bytes DESCOMPRIMIDOS vía skip/take). En lecturas COMPLETAS (el
+/// camino de copia) el CRC del CD se verifica sobre los bytes servidos: un
+/// mismatch cierra el stream con `Err(Corrupt)` como último item. Un range
+/// parcial NO se verifica (documentado: exigiría descomprimir la entrada
+/// entera). Si el receptor muere (drop del stream = cancelación, regla 3),
+/// `blocking_send` falla y el hilo termina en el siguiente chunk.
+pub(crate) fn read_entry<R: Read + Seek>(
+    mut reader: R,
+    plan: &ReadPlan,
     tx: &tokio::sync::mpsc::Sender<Result<bytes::Bytes, Error>>,
-) -> Option<zip::ZipArchive<R>> {
-    match zip::ZipArchive::new(reader) {
-        Ok(a) => Some(a),
+) {
+    let data = match zip_cd::data_offset(&mut reader, plan.header_offset, plan.container_len) {
+        Ok(o) => o,
         Err(e) => {
-            let _ = tx.blocking_send(Err(corrupt(&e)));
-            None
+            let _ = tx.blocking_send(Err(e));
+            return;
+        }
+    };
+    // CRC solo en lecturas completas: skip==0 y take==tamaño de la entrada.
+    let crc = (plan.skip == 0 && plan.take == plan.uncomp_size).then(flate2::Crc::new);
+    match plan.method {
+        0 => {
+            // stored: bytes tal cual en el contenedor — seek directo al
+            // tramo pedido, sin fase de descarte.
+            let available = plan.uncomp_size.saturating_sub(plan.skip).min(plan.take);
+            let Some(start) = data.checked_add(plan.skip) else {
+                let _ = tx.blocking_send(Err(Error::Corrupt));
+                return;
+            };
+            if let Err(e) = reader.seek(SeekFrom::Start(start)) {
+                let _ = tx.blocking_send(Err(zip_cd::corrupt_io(&e)));
+                return;
+            }
+            pump(&mut reader, 0, available, crc, plan.crc32, tx);
+        }
+        8 => {
+            if let Err(e) = reader.seek(SeekFrom::Start(data)) {
+                let _ = tx.blocking_send(Err(zip_cd::corrupt_io(&e)));
+                return;
+            }
+            // El Take acota el decoder al tramo comprimido de ESTA entrada:
+            // un deflate mentiroso no puede arrastrar bytes de la siguiente.
+            let mut decoder = flate2::read::DeflateDecoder::new(reader.take(plan.comp_size));
+            pump(&mut decoder, plan.skip, plan.take, crc, plan.crc32, tx);
+        }
+        other => {
+            // Inalcanzable con locators del índice (readable ⇒ 0|8):
+            // defensivo, jamás panic.
+            tracing::warn!(method = other, "método zip sin soporte en read");
+            let _ = tx.blocking_send(Err(Error::Unsupported));
         }
     }
 }
 
-/// Lee la entrada `index` descomprimiendo en streaming hacia `tx`. El caller
-/// aplica el range SOBRE los bytes descomprimidos vía `skip`/`take`. Si el
-/// receptor muere (drop del stream = cancelación, regla 3), `blocking_send`
-/// falla y el hilo termina en el siguiente chunk.
-///
-/// `archive` viene YA PARSEADO (#61): del cache (clon barato, CD compartido
-/// por Arc interno) o del camino frío vía [`open_archive`] — nunca se
-/// reconstruye aquí.
-pub(crate) fn read_entry<R: Read + Seek>(
-    mut archive: zip::ZipArchive<R>,
-    entry_index: usize,
-    skip: u64,
+/// Bombea `take` bytes (tras descartar `to_skip`) de `src` al canal en
+/// chunks de 64 KiB. `Ok(0)` en CUALQUIERA de las dos fases → `Corrupt`
+/// (#95.4: el caller ya recortó el range contra el tamaño de la entrada —
+/// un EOF aquí solo puede ser contenedor truncado/mutado bajo nuestros
+/// pies, jamás datos cortos en silencio). Con `crc` activo (lectura
+/// completa) el mismatch final se envía como ÚLTIMO item `Err(Corrupt)`.
+fn pump<R: Read>(
+    src: &mut R,
+    to_skip: u64,
     take: u64,
+    mut crc: Option<flate2::Crc>,
+    expected_crc: u32,
     tx: &tokio::sync::mpsc::Sender<Result<bytes::Bytes, Error>>,
 ) {
     let send_err = |tx: &tokio::sync::mpsc::Sender<Result<bytes::Bytes, Error>>, e: Error| {
         // Mejor esfuerzo: si el receptor murió, no hay a quién contárselo.
         let _ = tx.blocking_send(Err(e));
     };
-    let mut file = match archive.by_index(entry_index) {
-        Ok(f) => f,
-        Err(e) => return send_err(tx, corrupt(&e)),
-    };
-    // Saltar `skip` bytes descomprimidos (deflate no tiene seek).
-    let mut to_skip = skip;
     let mut buf = vec![0u8; 64 * 1024];
+    let mut to_skip = to_skip;
     while to_skip > 0 {
         let want = buf.len().min(usize::try_from(to_skip).unwrap_or(buf.len()));
-        match file.read(&mut buf[..want]) {
-            // #95.4 (paridad con el FIX-1 de targz): el caller YA recortó
-            // `req_off` contra `entry_size` — un EOF aquí solo puede ser
-            // contenedor truncado/mutado bajo nuestros pies, jamás un offset
-            // legítimamente vacío. Fail-loud, no stream vacío en silencio.
+        match src.read(&mut buf[..want]) {
             Ok(0) => return send_err(tx, Error::Corrupt),
             Ok(n) => to_skip -= n as u64,
-            Err(e) => return send_err(tx, corrupt_io(&e)),
+            Err(e) => return send_err(tx, zip_cd::corrupt_io(&e)),
         }
     }
     let mut remaining = take;
@@ -261,13 +217,15 @@ pub(crate) fn read_entry<R: Read + Seek>(
         let want = buf
             .len()
             .min(usize::try_from(remaining).unwrap_or(buf.len()));
-        match file.read(&mut buf[..want]) {
-            // Premature EOF a mitad de la entrada: el índice prometió `size`
-            // bytes y el deflate no los tiene — datos cortos JAMÁS en
-            // silencio (#95.4).
+        match src.read(&mut buf[..want]) {
+            // Premature EOF a mitad de la entrada: el índice prometió
+            // `size` bytes y no están — datos cortos JAMÁS en silencio.
             Ok(0) => return send_err(tx, Error::Corrupt),
             Ok(n) => {
                 remaining -= n as u64;
+                if let Some(crc) = crc.as_mut() {
+                    crc.update(&buf[..n]);
+                }
                 if tx
                     .blocking_send(Ok(bytes::Bytes::copy_from_slice(&buf[..n])))
                     .is_err()
@@ -276,27 +234,13 @@ pub(crate) fn read_entry<R: Read + Seek>(
                     return;
                 }
             }
-            Err(e) => return send_err(tx, corrupt_io(&e)),
+            Err(e) => return send_err(tx, zip_cd::corrupt_io(&e)),
         }
     }
-}
-
-fn corrupt(e: &zip::result::ZipError) -> Error {
-    // El brazo Io puede envolver un fallo del provider interior: delega en
-    // el mismo criterio que `corrupt_io` (#58).
-    if let zip::result::ZipError::Io(io) = e {
-        return corrupt_io(io);
+    if let Some(crc) = crc
+        && crc.sum() != expected_crc
+    {
+        tracing::warn!("CRC del CD no coincide con los bytes servidos");
+        send_err(tx, Error::Corrupt);
     }
-    tracing::warn!(error = %e, "zip corrupto o ilegible");
-    Error::Corrupt
-}
-
-fn corrupt_io(e: &std::io::Error) -> Error {
-    // IO genuino del provider interior (corte de red a mitad de parseo):
-    // se propaga VERBATIM, jamás se disfraza de Corrupt (#58).
-    if let Some(inner) = crate::blocking::inner_proto_error(e) {
-        return inner;
-    }
-    tracing::warn!(error = %e, "error de IO leyendo entrada zip");
-    Error::Corrupt
 }

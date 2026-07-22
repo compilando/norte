@@ -20,10 +20,11 @@ pub struct Limits {
     pub max_name_bytes: usize,
     /// Tope de componentes de path de una entrada.
     pub max_depth: usize,
-    /// Tope del central directory RETENIDO en caché (#61): por encima, el
-    /// índice se construye igual pero el CD parseado no se cachea (re-parse
-    /// por read, comportamiento pre-caché). Gobierna memoria persistente,
-    /// no el indexado.
+    /// OBSOLETO desde #59: el central directory se parsea en STREAMING
+    /// (jamás se materializa ni se retiene — el locator zip es
+    /// autocontenido), así que ya no hay memoria de CD que gobernar. El
+    /// campo se conserva por compatibilidad de API y NO se consulta.
+    /// Histórico: era el tope del CD retenido en caché (#61).
     pub max_cd_bytes: u64,
     /// Presupuesto TOTAL de bytes DESCOMPRIMIDOS del PASE DE ÍNDICE de un
     /// `tar+gz` (ADR 0028, #55): una gzip bomb es CPU infinita aunque la
@@ -71,9 +72,22 @@ pub(crate) enum Locator {
     /// tar: los datos son CONTIGUOS y sin comprimir — `read` es un range
     /// passthrough al provider interior.
     Tar { offset: u64, size: u64 },
-    /// zip: índice de la entrada en el central directory — `read`
-    /// descomprime en un hilo blocking (stored/deflate).
-    Zip { index: usize },
+    /// zip (#59): locator AUTOCONTENIDO — todo lo que `read` necesita sin
+    /// retener ningún objeto de archive ni re-parsear el CD: el LOCAL
+    /// header en `header_offset` resuelve el offset real de datos y la
+    /// descompresión (stored/deflate) corre en un hilo blocking.
+    Zip {
+        /// Offset del LOCAL header en el contenedor.
+        header_offset: u64,
+        /// Método de compresión (0 stored / 8 deflate).
+        method: u16,
+        /// CRC-32 declarado por el CD (verificado en lecturas completas).
+        crc32: u32,
+        /// Tamaño comprimido.
+        comp_size: u64,
+        /// Tamaño descomprimido.
+        uncomp_size: u64,
+    },
     /// tar.gz/tgz (ADR 0028, #55): gz no es seekable — `read` es
     /// FORWARD-DECODE desde un decoder fresco que descarta hasta `offset`.
     /// `offset`/`size` son del stream DESCOMPRIMIDO, NO de bytes del

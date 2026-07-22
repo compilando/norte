@@ -38,22 +38,13 @@ impl Format {
     }
 }
 
-/// Índice + central directory del zip ya parseado (`None` en tar). Misma
-/// clave y misma generación: la invalidación existente los gobierna juntos.
+/// El índice cacheado de UN contenedor. Desde #59 es SOLO el índice (el
+/// locator zip es autocontenido: no se retiene ningún objeto de archive);
+/// el struct conserva el nombre para minimizar churn.
 #[derive(Clone)]
 struct CachedContainer {
     index: Arc<ArchiveIndex>,
-    zip: Option<zip::ZipArchive<ProviderReader>>,
 }
-
-// `zip::ZipArchive` comparte el central directory por Arc interno; `Clone`
-// con `R: Clone` es la base del cache (#61). Si una subida de `zip` lo
-// rompe, que lo diga el compilador aquí y no una regresión de perf
-// silenciosa.
-const _: fn() = || {
-    fn assert_clone<T: Clone>() {}
-    let _ = assert_clone::<zip::ZipArchive<ProviderReader>>;
-};
 
 /// Caché LRU mínima de índices: clave = wire canónico del exterior. Cap fijo
 /// (ADR 0018): RAII — al morir el provider muere todo.
@@ -311,10 +302,9 @@ impl ArchiveProvider {
         Ok(container)
     }
 
-    /// Construye el índice (y, en zip, el `ZipArchive` cacheable) en un hilo
-    /// `spawn_blocking`. Sin caché ni single-flight propios: lo comparten el
-    /// camino con lock de `index_for` y el atajo MINOR-4 de generación
-    /// desconocida.
+    /// Construye el índice en un hilo `spawn_blocking`. Sin caché ni
+    /// single-flight propios: lo comparten el camino con lock de
+    /// `index_for` y el atajo MINOR-4 de generación desconocida.
     async fn build_blocking(
         &self,
         aref: &ArchiveRef,
@@ -336,7 +326,6 @@ impl ArchiveProvider {
         let joined = tokio::task::spawn_blocking(move || match format {
             Format::Tar => {
                 crate::tar_format::build_index(reader, container_len, generation, &limits, &cancel)
-                    .map(|idx| (idx, None))
             }
             Format::Zip => {
                 crate::zip_format::build_index(reader, container_len, generation, &limits, &cancel)
@@ -346,12 +335,11 @@ impl ArchiveProvider {
                 // tamaño es el COMPRIMIDO y no acota nada del stream
                 // descomprimido — el truncamiento se detecta en el read.
                 crate::targz_format::build_index_gz(reader, generation, &limits, &cancel)
-                    .map(|idx| (idx, None))
             }
         })
         .await;
         guard.disarm();
-        let (index, zip) = joined
+        let index = joined
             .map_err(|e| {
                 if e.is_panic() {
                     Error::Internal { panic: true }
@@ -363,7 +351,6 @@ impl ArchiveProvider {
             .and_then(|r| r)?;
         Ok(CachedContainer {
             index: Arc::new(index),
-            zip,
         })
     }
 
@@ -475,10 +462,10 @@ impl Provider for ArchiveProvider {
     /// última gana; conflicto file-vs-dir: gana dir (un file en posición de
     /// ancestro asciende a dir).
     ///
-    /// Caveats zip conocidos (auditoría 8e; upstream, con issue): el crate
-    /// `zip` colapsa nombres crudos distintos que decodifican igual (H1 —
-    /// detectado y contado en `skipped` para no-zip64) y un extra field
-    /// Info-ZIP 0x7075 válido SUSTITUYE el nombre del header (H3).
+    /// Desde #59 el CD de zip se parsea con parser PROPIO: nombres crudos
+    /// distintos que decodifican igual NO colapsan (H1 cerrado) y el extra
+    /// Info-ZIP 0x7075 se ignora por diseño — jamás sustituye el nombre ni
+    /// mata el archivo (H3 cerrado).
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
         let aref = self.split(p)?;
         let cached = self.index_for(&aref).await?;
@@ -569,37 +556,40 @@ impl Provider for ArchiveProvider {
                     .await?;
                 Ok(expect_exact(inner, req_len, aref.outer.display_lossy()))
             }
-            Locator::Zip { index: entry_index } => {
+            Locator::Zip {
+                header_offset,
+                method,
+                crc32,
+                comp_size,
+                uncomp_size,
+            } => {
                 // Descompresión en hilo blocking → canal acotado → stream.
-                // Drop del stream = el send falla = el hilo termina (regla 3).
-                let cached_zip = cached.zip.clone();
-                // MINOR-5 (#61): el `ProviderReader` solo hace falta en el
-                // camino frío (sin CD cacheado) — construirlo aquí evita el
-                // Arc::clone/VPath::clone cuando el archive cacheado ya
-                // resuelve la lectura entera.
+                // Drop del stream = el send falla = el hilo termina (regla
+                // 3). El locator es AUTOCONTENIDO (#59): lector fresco por
+                // lectura, sin archive retenido ni re-parse del CD.
                 let handle = tokio::runtime::Handle::current();
                 let inner = Arc::clone(&self.inner);
                 let outer_path = aref.outer.clone();
                 // El tamaño de la MISMA generación que el índice: vista
                 // coherente aunque el contenedor cambie por debajo.
                 let outer_len = cached.index.generation.1.unwrap_or(0);
+                let plan = crate::zip_format::ReadPlan {
+                    header_offset,
+                    method,
+                    crc32,
+                    comp_size,
+                    uncomp_size,
+                    container_len: outer_len,
+                    skip: req_off,
+                    take: req_len,
+                };
                 let (tx, mut rx) = tokio::sync::mpsc::channel(4);
                 // El JoinHandle se suelta a propósito: la vida del hilo la
                 // gobierna el canal, no el caller (huérfano acotado a 4
                 // chunks de 64 KiB tras el drop).
                 drop(tokio::task::spawn_blocking(move || {
-                    // CD ya parseado (#61): clon barato (Arc interno), cero
-                    // re-parse del central directory. Si no, camino frío.
-                    let archive = if let Some(a) = cached_zip {
-                        a
-                    } else {
-                        let reader = ProviderReader::new(handle, inner, outer_path, outer_len);
-                        match crate::zip_format::open_archive(reader, &tx) {
-                            Some(a) => a,
-                            None => return,
-                        }
-                    };
-                    crate::zip_format::read_entry(archive, entry_index, req_off, req_len, &tx);
+                    let reader = ProviderReader::new(handle, inner, outer_path, outer_len);
+                    crate::zip_format::read_entry(reader, &plan, &tx);
                 }));
                 Ok(futures::stream::poll_fn(move |cx| rx.poll_recv(cx)).boxed())
             }
