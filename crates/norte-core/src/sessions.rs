@@ -397,10 +397,10 @@ struct SessionProvider {
 
 impl SessionProvider {
     fn observe<T>(&self, r: Result<T, Error>) -> Result<T, Error> {
-        if let Err(Error::ProviderUnavailable { .. }) = &r {
-            if let Some(pool) = self.pool.upgrade() {
-                pool.evict_session(&self.key, std::ptr::from_ref(self).cast::<()>());
-            }
+        if let Err(Error::ProviderUnavailable { .. }) = &r
+            && let Some(pool) = self.pool.upgrade()
+        {
+            pool.evict_session(&self.key, std::ptr::from_ref(self).cast::<()>());
         }
         r
     }

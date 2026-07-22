@@ -685,7 +685,11 @@ impl Provider for ZipHostProvider {
                 (off, r.len.unwrap_or(total - off).min(total - off))
             }
         };
-        let chunk = self.zip.slice(off as usize..(off + len) as usize);
+        let (a, b) = (
+            usize::try_from(off).expect("test: rango pequeño"),
+            usize::try_from(off + len).expect("test: rango pequeño"),
+        );
+        let chunk = self.zip.slice(a..b);
         Ok(Box::pin(futures::stream::iter(vec![Ok(chunk)])))
     }
     async fn write(&self, _p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
