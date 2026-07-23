@@ -10,11 +10,16 @@
 #![warn(missing_docs)]
 
 pub mod dirs;
+pub mod load;
 pub mod schema;
 
 pub use dirs::{
     Layer, Layers, config_dir, standard_layers, standard_layers_from, user_config_dir,
     user_config_dir_from,
+};
+pub use load::{
+    AiSettings, CommonConfig, HotlistItem, QuickSearch, load, persist_hotlist_add,
+    persist_hotlist_remove, persist_ui_theme, persist_ui_theme_to,
 };
 pub use schema::{
     AiProviderEntry, AiSection, ArchiveSection, ConfigError, DEFAULT_PRESET, DaemonMode,

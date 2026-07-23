@@ -29,7 +29,7 @@ pub struct NorteToml {
     /// Favourite directories shown by `Ctrl+D`.
     ///
     /// Entries accumulate across layers instead of replacing lower-layer
-    /// values. The project layer is excluded while the load module (Task 5)
+    /// values. The project layer is excluded while [`crate::load::load`]
     /// merges the list. An absent value contributes no favourites from that
     /// layer.
     #[serde(default)]
@@ -44,7 +44,7 @@ pub struct NorteToml {
 /// One `[[hotlist]]` entry as stored in `norte.toml`.
 ///
 /// `path` contains an unvalidated wire value such as `scheme://...`, including
-/// valid remote schemes. The load module (Task 5) validates it as a `VPath`
+/// valid remote schemes. [`crate::load::load`] validates it as a `VPath`
 /// while merging layers. One invalid entry is handled independently and does
 /// not prevent the rest of `norte.toml` from loading.
 #[derive(Debug, Clone, Deserialize)]
@@ -118,7 +118,7 @@ pub struct UiSection {
     /// Quick-search mode for `/`: `"filter"` narrows the listing (the default),
     /// while `"jump"` moves the cursor without changing the listing.
     ///
-    /// The load module (Task 5) rejects other values so its diagnostic can
+    /// [`crate::load::load`] rejects other values so its diagnostic can
     /// include the source configuration path. Invalid values never silently
     /// fall back.
     #[serde(default)]
@@ -150,7 +150,7 @@ pub struct AiSection {
     #[serde(default)]
     pub local_only: Option<bool>,
     /// Prefixes whose content/names never leave the process. Wire strings;
-    /// validated to `VPath` during merge (the load module, Task 5). Merge is
+    /// validated to `VPath` during merge ([`crate::load::load`]). Merge is
     /// a UNION across layers, not last-wins: a deny never disappears by
     /// adding a layer (ADR 0035).
     #[serde(default)]
@@ -209,9 +209,7 @@ pub enum ConfigError {
 /// accionable («unknown field …», que va al final) fuera del tope de la
 /// barra (#73).
 ///
-/// Only exercised by tests until the merge/load module (Task 5) wires it
-/// into `load`'s error path — hence the explicit `allow`.
-#[allow(dead_code)]
+/// Wired into [`crate::load::load`]'s error path.
 pub(crate) fn toml_diag(raw: &str, e: &toml::de::Error) -> String {
     match e.span() {
         Some(s) => {
