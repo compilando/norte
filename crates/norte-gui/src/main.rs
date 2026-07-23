@@ -47,9 +47,10 @@
 #![forbid(unsafe_code)]
 
 use gpui::{
-    App, Bounds, Context, FocusHandle, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    ParentElement, Render, RenderImage, ScrollDelta, ScrollStrategy, ScrollWheelEvent,
-    SharedString, Styled, UniformListScrollHandle, Window, WindowBounds, WindowOptions, div, img,
+    App, Bounds, BoxShadow, Context, FocusHandle, IntoElement, KeyDownEvent, MouseButton,
+    MouseDownEvent, ParentElement, Pixels, Render, RenderImage, ScrollDelta, ScrollStrategy,
+    ScrollWheelEvent, SharedString, Styled, UniformListScrollHandle, Window, WindowBounds,
+    WindowOptions, canvas, div, fill, hsla, img, linear_color_stop, linear_gradient, point,
     prelude::*, px, rgb, rgba, size, uniform_list,
 };
 use gpui_platform::application;
@@ -133,6 +134,12 @@ struct NorteGui {
     relist_pending: [bool; 2],
     /// Tema cacheado UNA vez (parsea TOML; no es gratis por-frame).
     theme: Theme,
+    /// Interpretación de `theme.effects` (ADR 0036, G1 Task 4), resuelta UNA
+    /// vez junto a `theme` (mismo lugar, `new`) — nunca por frame. `None`
+    /// cuando el tema no declara `[effects]`: cada rama de `render()` que
+    /// pinta un efecto está detrás de un `if let Some`, así que un tema sin
+    /// `[effects]` deja el árbol de render byte-idéntico al de antes de G1.
+    effects: Option<effects::EffectsV1>,
     /// Canal hacia el hilo de sesión (conexión persistente al daemon, ver
     /// `session.rs`): cada `cd` manda un `SessionCmd::List`, jamás reconecta.
     cmds: tokio::sync::mpsc::UnboundedSender<SessionCmd>,
@@ -236,6 +243,11 @@ impl NorteGui {
                 Theme::preset_default()
             }
         };
+        // Resuelto UNA vez, junto al tema (ver doc del campo `effects`): el
+        // único lugar donde este tema puede cambiar es aquí, en el arranque
+        // (grep de `self.theme`/`theme:` en el resto del archivo — no hay
+        // selector de tema en caliente en esta GUI).
+        let effects = effects::EffectsV1::from_theme(&theme);
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
@@ -274,6 +286,7 @@ impl NorteGui {
                     generation: [0, 0],
                     relist_pending: [false, false],
                     theme,
+                    effects,
                     cmds: cmd_tx,
                     focus_handle,
                     modal: None,
@@ -328,6 +341,7 @@ impl NorteGui {
                     generation: [0, 0],
                     relist_pending: [false, false],
                     theme,
+                    effects,
                     cmds: cmd_tx,
                     focus_handle,
                     modal: None,
@@ -1347,7 +1361,7 @@ impl NorteGui {
         if marked {
             label = format!("{MARK_MARKER} {label}");
         }
-        let color = entry_color(&self.theme, entry);
+        let color = entry_color(&self.theme, entry, self.effects.and_then(|e| e.glow));
         let dir_target = (entry.kind == EntryKind::Dir).then(|| entry.path.clone());
 
         // `Role::ListItem` con nombre accesible = `label` YA saneado (mismo
@@ -2159,12 +2173,116 @@ fn file_kind_of(kind: EntryKind) -> FileKind {
 }
 
 /// Color de texto de una entrada: extensión > kind > rol `regular`, con blanco
-/// de fallback. `Theme::file_style` ya resuelve la prioridad.
-fn entry_color(theme: &Theme, entry: &Entry) -> gpui::Rgba {
+/// de fallback. `Theme::file_style` ya resuelve la prioridad. `glow`: el
+/// post-proceso de brillo de G1 (ADR 0036 decisión 3) — `entry_color` es el
+/// único sitio de color POR FILA, así que el glow entra aquí en vez de en
+/// `ChromeColors` (que se resuelve una vez por frame, no por fila).
+fn entry_color(theme: &Theme, entry: &Entry, glow: Option<effects::Glow>) -> gpui::Rgba {
     let name = entry.path.file_name().map_or(&b""[..], Segment::as_bytes);
     let style = theme.file_style(name, file_kind_of(entry.kind));
     let fg = style.fg.or_else(|| theme.style(Role::Regular).fg);
-    fg.map_or_else(|| rgb(0xffffff), theme_map::to_gpui_rgba)
+    let color = fg.map_or_else(|| rgb(0xffffff), theme_map::to_gpui_rgba);
+    glowed(color, glow)
+}
+
+/// Aplica el brillo v1 de G1 (ADR 0036 decisión 3): `lerp(fg, white, strength
+/// times 0.25)` por canal, canal `a` intacto (el glow no toca la opacidad).
+/// `g = None` es un no-op explícito — así todo call-site puede pasar
+/// `self.effects.and_then(|e| e.glow)` sin ramificar. Costo: 3
+/// multiplicaciones por canal, aceptable incluso por-fila (ver
+/// `entry_color`).
+fn glowed(c: gpui::Rgba, g: Option<effects::Glow>) -> gpui::Rgba {
+    let Some(g) = g else { return c };
+    let t = g.strength * 0.25;
+    gpui::Rgba {
+        r: c.r + (1.0 - c.r) * t,
+        g: c.g + (1.0 - c.g) * t,
+        b: c.b + (1.0 - c.b) * t,
+        a: c.a,
+    }
+}
+
+/// Pinta las scanlines (ADR 0036 / G1 Task 4): franjas horizontales de 1px
+/// cada `spacing_px`, negro puro a `opacity`. Primitivas de escena crudas
+/// (`Window::paint_quad`) en vez de un `div()` por línea a propósito: en una
+/// ventana típica (~600-900px de alto) con `spacing_px` en `[2, 16]` esto es
+/// entre ~40 y ~450 quads por frame — barato como primitiva de pintado, pero
+/// hubiera sido cientos de elementos GPUI reales (layout+medida+arena) si
+/// cada línea fuera un `div()`, que es justo lo que el plan G1 descarta.
+fn paint_scanlines(window: &mut Window, bounds: Bounds<Pixels>, s: Option<effects::Scanlines>) {
+    let Some(s) = s else { return };
+    let spacing = px(f32::from(s.spacing_px));
+    let color = hsla(0.0, 0.0, 0.0, s.opacity);
+    let bottom = bounds.origin.y + bounds.size.height;
+    let mut y = bounds.origin.y;
+    while y < bottom {
+        let line = Bounds {
+            origin: point(bounds.origin.x, y),
+            size: size(bounds.size.width, px(1.0)),
+        };
+        window.paint_quad(fill(line, color));
+        y += spacing;
+    }
+}
+
+/// Pinta la viñeta (ADR 0036 / G1 Task 4) como 4 bandas de borde, cada una
+/// con un `linear_gradient` de 2 paradas (negro a `strength` en el borde →
+/// transparente hacia el centro). `gpui::linear_gradient` en este rev es una
+/// línea recta de 2 paradas (`crates/gpui/src/color.rs`), sin repetición ni
+/// N paradas — no hay radial ni "viñeta real" disponible en la API de
+/// pintado sin un shader a medida; 4 bandas de borde es la aproximación
+/// honesta más simple que SÍ ofrece. El alcance de cada banda (18% de su
+/// dimensión) es una constante ajustada a ojo, sin mandato del ADR — se
+/// documenta aquí, no allí.
+///
+/// Ángulos: la convención de `linear_gradient` es la de CSS
+/// (`0.`=hacia arriba, giro horario) — la PRIMERA parada se ancla en el
+/// extremo OPUESTO al ángulo, la última en el extremo que el ángulo señala.
+/// Así, banda superior (negro en el borde superior, transparente hacia
+/// abajo) pide ángulo 180 (que apunta "hacia abajo", ancla el negro arriba);
+/// simétrico para las otras tres.
+fn paint_vignette(window: &mut Window, bounds: Bounds<Pixels>, v: Option<effects::Vignette>) {
+    let Some(v) = v else { return };
+    // Los porcentajes de parada IMPORTAN aunque `linear_gradient` reciba los
+    // colores posicionalmente (`from`/`to`): el shader usa el `percentage`
+    // propio de cada `LinearColorStop` para re-normalizar `t` — si no
+    // coincide con la posición (`from` en 0.0, `to` en 1.0), `t` sale
+    // invertido (`1 - t`), que fue exactamente el bug detectado en el smoke
+    // manual (negro en el borde INTERNO de la banda en vez del externo).
+    let black = linear_color_stop(hsla(0.0, 0.0, 0.0, v.strength), 0.0);
+    let transparent = linear_color_stop(hsla(0.0, 0.0, 0.0, 0.0), 1.0);
+    let reach_y = bounds.size.height * 0.18;
+    let reach_x = bounds.size.width * 0.18;
+
+    let top = Bounds {
+        origin: bounds.origin,
+        size: size(bounds.size.width, reach_y),
+    };
+    window.paint_quad(fill(top, linear_gradient(180.0, black, transparent)));
+
+    let bottom_band = Bounds {
+        origin: point(
+            bounds.origin.x,
+            bounds.origin.y + bounds.size.height - reach_y,
+        ),
+        size: size(bounds.size.width, reach_y),
+    };
+    window.paint_quad(fill(bottom_band, linear_gradient(0.0, black, transparent)));
+
+    let left = Bounds {
+        origin: bounds.origin,
+        size: size(reach_x, bounds.size.height),
+    };
+    window.paint_quad(fill(left, linear_gradient(90.0, black, transparent)));
+
+    let right = Bounds {
+        origin: point(
+            bounds.origin.x + bounds.size.width - reach_x,
+            bounds.origin.y,
+        ),
+        size: size(reach_x, bounds.size.height),
+    };
+    window.paint_quad(fill(right, linear_gradient(270.0, black, transparent)));
 }
 
 // Colores del chrome del dual-pane; pre-C2 look, usados SOLO como fallback
@@ -2263,6 +2381,24 @@ impl ChromeColors {
             mark_bg: chrome(theme, Role::Mark, false, MARK_BG),
         }
     }
+
+    /// Aplica el glow de G1 (ADR 0036 decisión 3) a cada campo FG — BG queda
+    /// intacto, incluido `mark_bg` (es un fondo, pese al nombre). Builder
+    /// consumidor: el ÚNICO sitio donde `ChromeColors` recibe el
+    /// post-proceso de brillo, llamado una vez por frame justo tras
+    /// `resolve` (ver `render`) — nunca por fila (eso es `entry_color`).
+    /// `g = None` es un no-op (cada campo pasa por `glowed`, que ya lo trata
+    /// como identidad), así que los call-sites no necesitan ramificar.
+    fn with_glow(mut self, g: Option<effects::Glow>) -> Self {
+        self.fg = glowed(self.fg, g);
+        self.header_fg = glowed(self.header_fg, g);
+        self.border_focus = glowed(self.border_focus, g);
+        self.border_unfocus = glowed(self.border_unfocus, g);
+        self.sel_fg = self.sel_fg.map(|c| glowed(c, g));
+        self.err_fg = glowed(self.err_fg, g);
+        self.quick_fg = glowed(self.quick_fg, g);
+        self
+    }
 }
 
 impl Render for NorteGui {
@@ -2277,7 +2413,8 @@ impl Render for NorteGui {
         // Paleta de chrome resuelta UNA vez por frame (ver doc de
         // `ChromeColors`): `render_row` corre por cada fila visible y no debe
         // resolver el tema por fila.
-        let chrome = ChromeColors::resolve(&self.theme);
+        let chrome =
+            ChromeColors::resolve(&self.theme).with_glow(self.effects.and_then(|e| e.glow));
 
         // Raíz: `Role::Application` (idioma del ejemplo `a11y.rs`, div "root").
         // `.aria_label("norte")` es el nombre del producto (proper noun, como
@@ -2296,6 +2433,27 @@ impl Render for NorteGui {
             .text_color(chrome.fg)
             .p(px(4.0))
             .gap(px(2.0));
+
+        // Bezel (ADR 0036 / G1 Task 4): radio de esquina paramétrico —
+        // `Styled::rounded(AbsoluteLength)` acepta un `px(n)` cualquiera (a
+        // diferencia de los `rounded_lg`/`rounded_full` fijos de Tailwind
+        // que trae GPUI, ver `crates/gpui_macros/src/styles.rs`
+        // `corner_prefixes`), así que no hace falta cuantizar `radius_px` a
+        // un preset. `inset`: `BoxShadow` en este rev SÍ trae un flag
+        // `inset` real (`crates/gpui/src/style.rs`, pinta DENTRO del
+        // bounds), así que el marco es una sombra insertada de verdad, no
+        // un borde disfrazándola.
+        if let Some(b) = self.effects.and_then(|e| e.bezel) {
+            root = root.rounded(px(f32::from(b.radius_px)));
+            if b.inset {
+                root = root.shadow(vec![
+                    BoxShadow::new(px(0.0), px(0.0), hsla(0.0, 0.0, 0.0, 0.55))
+                        .blur_radius(px(8.0))
+                        .spread_radius(px(-3.0))
+                        .inset(),
+                ]);
+            }
+        }
 
         // Banner de arranque (GUI-c T3 + C2 revisión): keymap roto, config
         // inválida, tema inválido o preset desconocido — ninguno tumba la
@@ -2390,6 +2548,42 @@ impl Render for NorteGui {
                     .justify_center()
                     .bg(rgba(0x000000aa))
                     .child(self.render_modal(m, &chrome)),
+            );
+        }
+
+        // Overlay de efectos (ADR 0036 / G1 Task 4): scanlines + viñeta,
+        // pintados AL FINAL (por encima del scrim del modal, si hay uno —
+        // un CRT tiene su viñeta siempre encima, modal incluido). Un solo
+        // `canvas()` (no un `div()` por línea de scanline: cientos de
+        // elementos GPUI reales sería un costo por-frame de verdad; un
+        // `PaintQuad` es una primitiva de escena cruda, barata incluso en
+        // cientos — ver `paint_scanlines`).
+        //
+        // Transparencia al input POR CONSTRUCCIÓN, no por una API opt-out:
+        // `gpui::canvas` (`crates/gpui/src/elements/canvas.rs`, rev
+        // f14fea9) es un `Element` que jamás llama `Window::insert_hitbox`
+        // — ni en `prepaint` ni en `paint`. El despacho de mouse de GPUI
+        // solo considera los hitboxes que un elemento registró durante su
+        // `prepaint` (`Div`/`Interactivity::should_insert_hitbox` decide
+        // caso a caso si vale la pena para UN div interactivo,
+        // `crates/gpui/src/elements/div.rs`); un `canvas` sin listeners no
+        // participa en absoluto en el hit-test, así que no puede capturar
+        // clicks/scroll/teclas sin importar lo que pinte. Confirmado en el
+        // smoke manual (Task 4 paso 5): click selecciona fila, la rueda
+        // mueve el pane y las teclas actúan con scanlines+viñeta activos.
+        if let Some(eff) = self.effects
+            && (eff.scanlines.is_some() || eff.vignette.is_some())
+        {
+            root = root.child(
+                canvas(
+                    move |_bounds, _window, _cx| {},
+                    move |bounds, (), window, _cx| {
+                        paint_scanlines(window, bounds, eff.scanlines);
+                        paint_vignette(window, bounds, eff.vignette);
+                    },
+                )
+                .absolute()
+                .inset_0(),
             );
         }
 
@@ -2615,13 +2809,14 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::effects;
     use super::{
         BANNER_DETAIL_MAX_CHARS, BG, BORDER_FOCUS, BORDER_UNFOCUS, ERR_FG, FG, HEADER_BG, MARK_BG,
         PANE_BG, PANE_BG_FOCUS, QUICK_FG, SEL_BG,
     };
     use super::{
         ChromeColors, ImagePreview, affected_dirs, apply_viewer_command, banner_safe,
-        confirm_quit_task_count, first_cancelable, generation_is_current, has_pending_work,
+        confirm_quit_task_count, first_cancelable, generation_is_current, glowed, has_pending_work,
         image_preview_from, image_status, keymap_error_detail, modal_footer_colors,
         modal_panel_colors, modal_title_colors, pending_hint, retain_active, row_label,
         task_at_cursor, unknown_preset_banner, viewer_header, viewer_status,
@@ -3538,5 +3733,56 @@ mod tests {
             0,
             "nada en absoluto → 0, tal cual (el gate ni siquiera abriría el modal)"
         );
+    }
+
+    /// G1 Task 4 pin: el tema por defecto no declara `[effects]`, así que
+    /// `self.effects` (poblado en `new` con esta misma llamada) nace `None`
+    /// — cada rama de `render()` que pinta un efecto está detrás de un
+    /// `if let Some`, así que esto basta para que el árbol de render sea
+    /// byte-idéntico al de antes de G1 (identidad por construcción, no algo
+    /// que un test de render tenga que reverificar).
+    #[test]
+    fn sin_effects_no_hay_overlay() {
+        let t = norte_theme::Theme::preset_default();
+        assert!(effects::EffectsV1::from_theme(&t).is_none());
+    }
+
+    /// G1 Task 4 pin: el preset `retro-crt` (Task 2) trae las 4 claves —
+    /// bezel incluido, distinto del test más granular de `effects.rs`
+    /// (que solo cubre scanlines) — este confirma que EL RENDER tiene todo
+    /// lo que necesita para pintar overlay + bezel + glow a la vez.
+    #[test]
+    fn retro_crt_activa_effects() {
+        let t = norte_theme::Theme::preset("retro-crt")
+            .unwrap()
+            .expect("preset registrado");
+        let e = effects::EffectsV1::from_theme(&t).expect("retro-crt trae [effects]");
+        assert!(e.scanlines.is_some(), "scanlines");
+        assert!(e.vignette.is_some(), "vignette");
+        assert!(e.glow.is_some(), "glow");
+        assert!(e.bezel.is_some(), "bezel");
+    }
+
+    /// `glowed` (ADR 0036 decisión 3): `lerp(fg, white, strength * 0.25)` por
+    /// canal, canal `a` sin tocar. `strength = 1.0` sobre negro puro debe dar
+    /// ~0.25 en los tres canales (el máximo de brillo del esquema v1, no
+    /// blanco puro — el glow es sutil a propósito). `g = None` es la
+    /// identidad exacta.
+    #[test]
+    fn glowed_lerp_correcto() {
+        let black = gpui::Rgba {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        };
+        let g = glowed(black, Some(effects::Glow { strength: 1.0 }));
+        assert!((g.r - 0.25).abs() < 1e-6, "r ~0.25, got {}", g.r);
+        assert!((g.g - 0.25).abs() < 1e-6, "g ~0.25, got {}", g.g);
+        assert!((g.b - 0.25).abs() < 1e-6, "b ~0.25, got {}", g.b);
+        assert!((g.a - 1.0).abs() < 1e-6, "alpha jamás se toca");
+
+        let c = gpui::rgb(0x336699);
+        assert_eq!(glowed(c, None), c, "sin glow, identidad exacta");
     }
 }

@@ -64,14 +64,6 @@
 //! `NORTE_GUI_DEBUG`: they always go to stderr, prefixed `[norte-gui]` like
 //! every other diagnostic line this crate emits.
 
-// This module's public API is exercised only by its own tests until the G1
-// plan's render-integration task (`docs/superpowers/plans/2026-07-23-g1-effects-retro-crt.md`
-// Task 4) wires `EffectsV1::from_theme` into `NorteGui`'s render path. `norte-gui`
-// is a binary crate, so `pub` alone does not silence `dead_code` the way it
-// would in a library — every code path here is already covered by the test
-// module below, so this is a scope allowance, not a correctness gap.
-#![allow(dead_code)]
-
 const SCANLINES_OPACITY_RANGE: (f32, f32) = (0.0, 0.35);
 const SCANLINES_SPACING_RANGE: (u8, u8) = (2, 16);
 const VIGNETTE_STRENGTH_RANGE: (f32, f32) = (0.0, 0.6);
