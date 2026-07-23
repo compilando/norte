@@ -79,6 +79,10 @@ pub struct Engine {
     /// Config `[ai]` (opt-in/local-only/denied-paths). Default deshabilitado
     /// → el gate rechaza toda operación de IA.
     ai_config: RwLock<crate::ai::AiConfig>,
+    /// Índice de búsqueda (M4, ADR 0034). `None` = sin índice
+    /// (`index.*` → `Unsupported`, fail-closed como la IA). Inyectado con
+    /// [`Self::with_index`]; lo instala el daemon.
+    index: Option<Arc<norte_index::Index>>,
 }
 
 impl Engine {
@@ -104,6 +108,7 @@ impl Engine {
             archive_limits: RwLock::new(norte_vfs_archive::Limits::default()),
             ai_provider: RwLock::new(None),
             ai_config: RwLock::new(crate::ai::AiConfig::default()),
+            index: None,
         }
     }
 
@@ -139,6 +144,7 @@ impl Engine {
             archive_limits: RwLock::new(norte_vfs_archive::Limits::default()),
             ai_provider: RwLock::new(None),
             ai_config: RwLock::new(crate::ai::AiConfig::default()),
+            index: None,
         }
     }
 
@@ -152,6 +158,14 @@ impl Engine {
     ) -> Self {
         self.policy = policy;
         self.approvals = approvals;
+        self
+    }
+
+    /// Instala el índice de búsqueda (M4, ADR 0034). Sin él, `index.*` responde
+    /// `Unsupported` (fail-closed). Lo instala el daemon (single-writer del DB).
+    #[must_use]
+    pub fn with_index(mut self, index: Arc<norte_index::Index>) -> Self {
+        self.index = Some(index);
         self
     }
 
@@ -573,6 +587,76 @@ impl Engine {
             }),
         );
         Ok((handle, rx))
+    }
+
+    /// (Re)construye el índice de `root` como Task cancelable (M4, ADR 0034).
+    /// Camina el provider (lectura; como `fs.search`, sin gate de mutación) y
+    /// alimenta [`norte_index::Index::build`]. El `report` se rellena al
+    /// completar (patrón del `undo_session`).
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si no hay índice instalado ([`Self::with_index`])
+    /// o el scheme del `root` no tiene provider.
+    ///
+    /// # Panics
+    /// Solo si el lock interno del `report` está envenenado (otro hilo hizo panic
+    /// a mitad de escritura) — irrecuperable, mismo criterio que los demás locks.
+    pub async fn index_build_as(
+        &self,
+        root: VPath,
+        actor: crate::journal::Actor,
+    ) -> Result<
+        (
+            TaskHandle,
+            Arc<std::sync::Mutex<Option<norte_index::BuildReport>>>,
+        ),
+        Error,
+    > {
+        let index = self.index.clone().ok_or(Error::Unsupported)?;
+        let provider = self.provider_for(&root).await?;
+        let key = root.scheme().to_owned();
+        let report = Arc::new(std::sync::Mutex::new(None));
+        let report_task = Arc::clone(&report);
+        let handle = self.sched.submit(
+            &key,
+            TaskKind::Index,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| {
+                Box::pin(async move {
+                    let entries =
+                        crate::index_build::walk_for_index(provider, root.clone(), &ctx).await?;
+                    let r = index
+                        .build(&root, entries, &ctx.cancel)
+                        .await
+                        .map_err(|e| {
+                            tracing::warn!(error = %e, "index.build falló");
+                            Error::Io { retryable: false }
+                        })?;
+                    *report_task.lock().expect("report lock sano") = Some(r);
+                    Ok(())
+                })
+            }),
+        );
+        Ok((handle, report))
+    }
+
+    /// Consulta el índice de `root` por `text` (M4). Lectura directa (no Task).
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si no hay índice; error del índice mapeado a `Io`.
+    pub async fn index_query_as(
+        &self,
+        root: &VPath,
+        text: &str,
+        limit: u32,
+        _actor: crate::journal::Actor,
+    ) -> Result<Vec<norte_index::IndexHit>, Error> {
+        let index = self.index.clone().ok_or(Error::Unsupported)?;
+        index.query(root, text, limit).await.map_err(|e| {
+            tracing::debug!(error = %e, "index.query falló");
+            Error::Io { retryable: false }
+        })
     }
 
     /// Copia (recursiva si es dir) como Task, con las políticas por defecto
