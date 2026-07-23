@@ -286,6 +286,13 @@ pub struct KeymapFile {
     pane: RawSection,
     #[serde(default)]
     viewer: RawSection,
+    /// Contexto `dialog` (H1, issue #24): teclas de modales/overlays
+    /// (confirmación, aprobación, popups de navegación…) como keymap de
+    /// datos en vez de handlers ad hoc — la ayuda generada nunca puede
+    /// desincronizarse de un rebind. Se fusiona con `global` igual que
+    /// `pane`/`viewer` (ver [`Screen::Dialog`]).
+    #[serde(default)]
+    dialog: RawSection,
     /// `true` si esta capa es la de PROYECTO (`./.norte`) — contenido
     /// potencialmente AJENO (viene con un repo clonado) que se carga SIN
     /// trust. Un keymap de proyecto NO puede bindear `lua:`:
@@ -309,6 +316,7 @@ impl KeymapFile {
         !self.global.keymap.is_empty()
             || !self.pane.keymap.is_empty()
             || !self.viewer.keymap.is_empty()
+            || !self.dialog.keymap.is_empty()
     }
 
     /// Marca esta capa como la de PROYECTO (ver el campo `project`): sus
@@ -326,13 +334,18 @@ impl KeymapFile {
 }
 
 /// Pantalla activa: decide qué contexto específico se fusiona con
-/// `global` (ADR 0006; el stack crece con la UI — dialog es issue #24).
+/// `global` (ADR 0006; el stack crece con la UI).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     /// Los dos panes (contexto `pane`).
     Browse,
     /// El viewer (contexto `viewer`, fase 7).
     Viewer,
+    /// Modales/overlays (contexto `dialog`, H1 — issue #24): confirmación,
+    /// aprobación, popups de navegación… cada overlay declara su propio
+    /// ALLOWLIST de qué `dialog.*` comandos soporta (la semántica de
+    /// seguridad vive en código, no aquí).
+    Dialog,
 }
 
 /// Diagnóstico compacto de un error de parseo TOML: `"line N: msg"` si el
@@ -526,7 +539,7 @@ impl Effective {
         // Cada capa admite SOLO sus listas (revisión fase 4): descartar en
         // silencio la lista equivocada sería el "comportamiento raro" que
         // el ADR prohíbe.
-        for section in [&preset.global, &preset.pane, &preset.viewer] {
+        for section in [&preset.global, &preset.pane, &preset.viewer, &preset.dialog] {
             if !(section.prepend_keymap.is_empty() && section.append_keymap.is_empty()) {
                 return Err(KeymapError::WrongLayerKey {
                     layer: "preset",
@@ -535,7 +548,7 @@ impl Effective {
             }
         }
         for layer in layers {
-            for section in [&layer.global, &layer.pane, &layer.viewer] {
+            for section in [&layer.global, &layer.pane, &layer.viewer, &layer.dialog] {
                 if !section.keymap.is_empty() {
                     return Err(KeymapError::WrongLayerKey {
                         layer: "usuario",
@@ -550,6 +563,7 @@ impl Effective {
         let specific: fn(&KeymapFile) -> &RawSection = match screen {
             Screen::Browse => |f| &f.pane,
             Screen::Viewer => |f| &f.viewer,
+            Screen::Dialog => |f| &f.dialog,
         };
         let mut discarded_lua_bindings = 0usize;
         let ordered: Vec<(&RawBinding, Origin)> =
@@ -1495,6 +1509,54 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
             Err(KeymapError::BadChord { .. }) => {}
             other => panic!("esperaba BadChord, fue {other:?}"),
         }
+    }
+
+    /// H1 (#24): el contexto `dialog` existe — un preset con [dialog]
+    /// construye y resuelve para `Screen::Dialog`.
+    #[test]
+    fn dialog_context_se_parsea_y_construye() {
+        let preset =
+            parse_keymap("[dialog]\nkeymap = [{ on = [\"y\"], run = \"dialog.approve\" }]\n")
+                .unwrap();
+        let eff = Effective::build_for(&preset, &[], &["dialog.approve"], Screen::Dialog)
+            .expect("construye");
+        let mut r = Resolver::new(eff);
+        assert_eq!(
+            r.push(Chord::new(Mods::default(), KeyCode::Char('y'))),
+            Resolution::Run("dialog.approve".into())
+        );
+    }
+
+    /// Una capa de usuario extiende [dialog] con prepend y GANA.
+    #[test]
+    fn capa_puede_extender_dialog() {
+        let preset =
+            parse_keymap("[dialog]\nkeymap = [{ on = [\"y\"], run = \"dialog.approve\" }]\n")
+                .unwrap();
+        let layer =
+            parse_keymap("[dialog]\nprepend_keymap = [{ on = [\"y\"], run = \"dialog.deny\" }]\n")
+                .unwrap();
+        let eff = Effective::build_for(
+            &preset,
+            &[layer],
+            &["dialog.approve", "dialog.deny"],
+            Screen::Dialog,
+        )
+        .expect("construye");
+        let mut r = Resolver::new(eff);
+        assert_eq!(
+            r.push(Chord::new(Mods::default(), KeyCode::Char('y'))),
+            Resolution::Run("dialog.deny".into())
+        );
+    }
+
+    /// Capa con `keymap` completo en [dialog]: error, como en el resto.
+    #[test]
+    fn has_full_keymap_ve_dialog() {
+        let layer =
+            parse_keymap("[dialog]\nkeymap = [{ on = [\"y\"], run = \"dialog.approve\" }]\n")
+                .unwrap();
+        assert!(layer.has_full_keymap());
     }
 }
 

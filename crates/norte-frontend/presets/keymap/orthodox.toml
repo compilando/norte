@@ -52,3 +52,22 @@ keymap = [
     { on = ["E"], run = "viewer.encoding-auto" },
     { on = ["x"], run = "viewer.hex" },
 ]
+
+[dialog]
+keymap = [
+    { on = ["enter"], run = "dialog.confirm" },
+    { on = ["y"], run = "dialog.approve" },
+    { on = ["n"], run = "dialog.deny" },
+    { on = ["esc"], run = "dialog.cancel" },
+    { on = ["o"], run = "dialog.overwrite" },
+    { on = ["s"], run = "dialog.skip" },
+    { on = ["r"], run = "dialog.rename" },
+    { on = ["w"], run = "dialog.newer" },
+    { on = ["up"], run = "dialog.up" },
+    { on = ["down"], run = "dialog.down" },
+    { on = ["pgup"], run = "dialog.page-up" },
+    { on = ["pgdn"], run = "dialog.page-down" },
+    { on = ["a"], run = "dialog.add" },
+    { on = ["e"], run = "dialog.toggle-enabled" },
+    { on = ["d"], run = "dialog.remove" },
+]
