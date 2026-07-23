@@ -36,6 +36,13 @@ norte-config = { path = "../norte-config", version = "0.3.0-alpha.1" }
 # Strings de UI por Fluent (GUI-e T1): mismos bundles es/en que la TUI
 # (`crates/norte-i18n/i18n/*.ftl`), por path como el resto de los internos.
 norte-i18n = { path = "../norte-i18n" }
+# `norte-theme` keeps `Theme.effects` as an opaque `toml::Value` (ADR 0020
+# D4); the GUI-only `EffectsV1` interpreter (ADR 0036, `src/effects.rs`)
+# reads it directly, so this crate needs the same `toml` crate `norte-theme`
+# uses to talk about the same `Value`/`Table` types. Version pinned to match
+# `norte-theme`'s `toml.workspace = true` (0.9, per the root Cargo.toml) so
+# the type resolves to the identical crate across the graph.
+toml = "0.9"
 
 # Runtime async para el backend remoto (el render de GPUI corre en su propio
 # executor; el I/O del daemon va en un runtime tokio aparte — T4).

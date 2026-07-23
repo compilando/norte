@@ -60,6 +60,7 @@ use norte_frontend::{PaneState, nav::Mode};
 use norte_proto::{Entry, EntryKind, Segment, VPath};
 use norte_theme::{FileKind, Role, Theme};
 
+mod effects;
 mod keymap;
 mod modal;
 mod session;
