@@ -65,6 +65,15 @@ struct CachedRead {
     reader: Box<dyn std::io::Read>,
 }
 
+/// Metadatos mínimos de una entrada, agnósticos del backend de parse (MLSD
+/// self-parse o `ls -l` de suppaftp). Reemplaza el `File` de suppaftp en la
+/// superficie de [`stat_remote`] para que el size sea u64 (no el `usize` de
+/// suppaftp, techo 4 GiB en wasm32, #30 H2).
+struct StatEntry {
+    kind: EntryKind,
+    size: Option<u64>,
+}
+
 thread_local! {
     static SESSION: RefCell<Option<Session>> = const { RefCell::new(None) };
 }
@@ -163,7 +172,11 @@ impl Guest for FtpProvider {
             }
             let remote = remote(&s.base, &segments)?;
             match stat_remote(&mut s.ftp, &remote, s.has_mlsd, &s.base)? {
-                Some(f) => Ok(entry_from_file(last_name(&segments), &f)),
+                Some(st) => Ok(Entry {
+                    name: last_name(&segments),
+                    kind: st.kind,
+                    size: st.size,
+                }),
                 None => Err(VfsError::NotFound),
             }
         })
@@ -180,48 +193,54 @@ impl Guest for FtpProvider {
             }
             .map_err(|e| map_err(&e))?;
             let mut entries = Vec::new();
+            // suppaftp decodifica los nombres con `from_utf8_lossy`: un byte no-UTF8
+            // llega ya sustituido por U+FFFD e irrecuperable → rechazo LIMPIO (regla
+            // 1, ADR 0014 D2). Un `/` o NUL inyectados por un servidor hostil buscan
+            // escapar/truncar la ruta: se falla la página LOUD (encoding M2).
+            let reject = |name: &str| name.contains('\u{FFFD}') || name.contains(['/', '\0']);
             for line in lines {
                 // Cota defensiva de nuestra materialización (issue #40).
                 if entries.len() >= MAX_LIST_ENTRIES {
                     return Err(VfsError::Io);
                 }
-                let parsed = if s.has_mlsd {
-                    ListParser::parse_mlsd(&line).ok()
-                } else {
-                    parse_list_line(&line)
-                };
-                let f = match parsed {
-                    Some(f) => f,
-                    // MLSD es machine-readable: una línea ilegible es anómala y
-                    // corta el listado (no a ciegas).
-                    None if s.has_mlsd => return Err(VfsError::Io),
-                    // `ls -l`: líneas no parseables (cabecera `total N`) se
-                    // descartan, no cortan.
-                    None => continue,
-                };
-                // Nombre: en MLSD se saca CRUDO de la línea (RFC 3659 `facts SP
-                // pathname`); en LIST, del parse `ls -l`.
-                let name = if s.has_mlsd {
-                    let Some((_, n)) = line.split_once(' ') else {
+                // Ramas separadas para que cada `name` sea dueño de su lifetime
+                // (el `f.name()` de LIST toma prestado de `f`, que muere al salir).
+                if s.has_mlsd {
+                    // MLSD self-parse (#30 H2): (kind, size u64, nombre crudo).
+                    let Some((kind, size, name)) = parse_mlsd_facts(&line) else {
+                        // MLSD machine-readable: una línea ilegible es anómala.
                         return Err(VfsError::Io);
                     };
-                    n
+                    if name == "." || name == ".." {
+                        continue;
+                    }
+                    if reject(name) {
+                        return Err(VfsError::InvalidPath);
+                    }
+                    entries.push(Entry {
+                        name: name.as_bytes().to_vec(),
+                        kind,
+                        size,
+                    });
                 } else {
-                    f.name()
-                };
-                if name == "." || name == ".." {
-                    continue;
+                    // `ls -l`: líneas no parseables (cabecera `total N`) se descartan.
+                    let Some(f) = parse_list_line(&line) else {
+                        continue;
+                    };
+                    let name = f.name();
+                    if name == "." || name == ".." {
+                        continue;
+                    }
+                    if reject(name) {
+                        return Err(VfsError::InvalidPath);
+                    }
+                    let st = stat_entry_from_file(&f);
+                    entries.push(Entry {
+                        name: name.as_bytes().to_vec(),
+                        kind: st.kind,
+                        size: st.size,
+                    });
                 }
-                // suppaftp decodifica los nombres con `from_utf8_lossy`: un byte
-                // no-UTF8 llega ya sustituido por U+FFFD e irrecuperable →
-                // rechazo LIMPIO (regla 1, ADR 0014 D2). Un `/` o NUL inyectados
-                // por un servidor hostil buscan escapar/truncar la ruta: se falla
-                // la página LOUD en vez de dejar que el adapter los descarte en
-                // silencio (encoding M2).
-                if name.contains('\u{FFFD}') || name.contains(['/', '\0']) {
-                    return Err(VfsError::InvalidPath);
-                }
-                entries.push(entry_from_file(name.as_bytes().to_vec(), &f));
             }
             Ok(Page {
                 entries,
@@ -245,7 +264,7 @@ impl Guest for FtpProvider {
                 // Rechaza dir (leerlo es error) y ausente (NotFound).
                 match stat_remote(&mut s.ftp, &remote, s.has_mlsd, &s.base)? {
                     None => return Err(VfsError::NotFound),
-                    Some(f) if f.is_directory() => return Err(VfsError::Conflict),
+                    Some(st) if st.kind == EntryKind::Dir => return Err(VfsError::Conflict),
                     Some(_) => {}
                 }
                 // REST offset (resume/rango): posiciona el inicio del RETR.
@@ -352,9 +371,9 @@ impl Guest for FtpProvider {
             flush_cached_read(s);
             let remote = remote(&s.base, &segments)?;
             // Saber si es dir para elegir RMD vs DELE.
-            let f =
+            let st =
                 stat_remote(&mut s.ftp, &remote, s.has_mlsd, &s.base)?.ok_or(VfsError::NotFound)?;
-            if f.is_directory() {
+            if st.kind == EntryKind::Dir {
                 s.ftp.rmdir(&remote).map_err(|e| map_err(&e))
             } else {
                 s.ftp.rm(&remote).map_err(|e| map_err(&e))
@@ -525,8 +544,62 @@ fn parse_list_line(line: &str) -> Option<File> {
         .or_else(|| ListParser::parse_dos(line).ok())
 }
 
-/// Un `Entry` WIT desde un `File` de suppaftp. `name` en bytes crudos.
-fn entry_from_file(name: Vec<u8>, f: &File) -> Entry {
+/// Parsea una línea MLSD/MLST (RFC 3659: `[facts] SP pathname`). Devuelve
+/// `(kind, size, raw_name)`: `kind` del fact `type`, `size` como u64 (`None` si
+/// el fact `size` falta o no es numérico — un dir lo omite), `raw_name` tras el
+/// PRIMER espacio (crudo; el caller aplica el rechazo U+FFFD/`/`/NUL). Reemplaza
+/// a `ListParser::parse_mlsd`/`parse_mlst` de suppaftp, que parsea el size a
+/// `usize` (techo 4 GiB en wasm32) y truncaba el nombre en `;` (#30 H2). `None`
+/// si la línea no tiene la forma `facts SP name` (sin espacio, o nombre vacío).
+fn parse_mlsd_facts(line: &str) -> Option<(EntryKind, Option<u64>, &str)> {
+    let (facts, name) = line.split_once(' ')?;
+    if name.is_empty() {
+        return None;
+    }
+    let mut kind = EntryKind::File; // default si falta `type`
+    let mut size = None;
+    for fact in facts.split(';') {
+        let Some((key, value)) = fact.split_once('=') else {
+            continue;
+        };
+        if key.eq_ignore_ascii_case("type") {
+            kind = match value.to_ascii_lowercase().as_str() {
+                "dir" | "cdir" | "pdir" => EntryKind::Dir,
+                "file" => EntryKind::File,
+                "link" => EntryKind::Symlink,
+                _ => EntryKind::Other,
+            };
+        } else if key.eq_ignore_ascii_case("size") {
+            size = value.parse::<u64>().ok();
+        }
+    }
+    Some((kind, size, name))
+}
+
+/// Nombre de una línea `ls -l` de forma TOLERANTE, SÓLO para la salvaguarda
+/// anti-overwrite (nunca como nombre real): `perms links owner group size mon day
+/// time name` → el nombre es todo tras el 8º campo separado por whitespace.
+/// `None` si la línea tiene <9 campos (p. ej. una cabecera `total N`). Los
+/// nombres con espacio inicial se pierden (límite conocido de `ls -l`).
+fn ls_l_name(line: &str) -> Option<&str> {
+    // Salta 8 campos (cada uno = token + su whitespace siguiente).
+    let mut rest = line;
+    for _ in 0..8 {
+        let trimmed = rest.trim_start();
+        let end = trimmed.find(char::is_whitespace)?;
+        rest = &trimmed[end..];
+    }
+    let name = rest.trim_start();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// `StatEntry` desde un `File` de suppaftp (rama LIST; el size sale del `usize`
+/// de suppaftp — límite 4 GiB aceptado para servidores SIN MLSD).
+fn stat_entry_from_file(f: &File) -> StatEntry {
     let kind = if f.is_symlink() {
         EntryKind::Symlink
     } else if f.is_directory() {
@@ -537,24 +610,24 @@ fn entry_from_file(name: Vec<u8>, f: &File) -> Entry {
         EntryKind::Other
     };
     let size = (kind == EntryKind::File).then(|| f.size() as u64);
-    Entry { name, kind, size }
+    StatEntry { kind, size }
 }
 
-/// `stat` de `remote`: con MLSD `MLST` directo; sin MLSD, `LIST` del DIRECTORIO
-/// padre + búsqueda por nombre (universal — pure-ftpd; ADR 0014 C). `None` = no
-/// existe. Port sync directo del `stat_remote` nativo.
+/// `stat` de `remote`: con MLSD `MLST` directo (self-parse, size u64); sin MLSD,
+/// `LIST` del DIRECTORIO padre + búsqueda por nombre (universal — pure-ftpd; ADR
+/// 0014 C). `None` = no existe.
 fn stat_remote(
     ftp: &mut FtpStream,
     remote: &str,
     has_mlsd: bool,
     base: &str,
-) -> Result<Option<File>, VfsError> {
+) -> Result<Option<StatEntry>, VfsError> {
     if has_mlsd {
         return match ftp.mlst(Some(remote)) {
-            Ok(line) => {
-                let f = ListParser::parse_mlst(&line).map_err(|_| VfsError::Io)?;
-                Ok(Some(f))
-            }
+            Ok(line) => match parse_mlsd_facts(&line) {
+                Some((kind, size, _name)) => Ok(Some(StatEntry { kind, size })),
+                None => Err(VfsError::Io), // MLST ilegible = anómalo
+            },
             Err(e) => match map_err(&e) {
                 VfsError::NotFound => Ok(None),
                 other => Err(other),
@@ -585,17 +658,31 @@ fn stat_remote(
         }
     };
     for line in lines {
-        let Some(f) = parse_list_line(&line) else {
-            continue;
-        };
-        // El nombre del servidor viene lossy: un no-UTF8 (U+FFFD) jamás casa un
-        // `child` UTF-8 de forma fiable → se salta (fail-loud), no se compara.
-        let n = f.name();
-        if n.contains('\u{FFFD}') {
-            continue;
-        }
-        if n == child {
-            return Ok(Some(f));
+        match parse_list_line(&line) {
+            Some(f) => {
+                // El nombre del servidor viene lossy: un no-UTF8 (U+FFFD) jamás
+                // casa un `child` UTF-8 de forma fiable → se salta, no se compara.
+                let n = f.name();
+                if n.contains('\u{FFFD}') {
+                    continue;
+                }
+                if n == child {
+                    return Ok(Some(stat_entry_from_file(&f)));
+                }
+            }
+            // Salvaguarda anti-overwrite (#30 H2): una línea `ls -l` que NO parsea
+            // (p. ej. size ≥ 4 GiB rompe el parse `usize` de suppaftp) pero cuyo
+            // nombre casa `child` NO se descarta en silencio — se falla LOUD, así
+            // `exists()` no dice "no existe" y write/rename/mkdir no sobrescriben
+            // un fichero invisible. Cabeceras `total N` (ls_l_name=None) siguen
+            // descartándose.
+            None => {
+                if let Some(n) = ls_l_name(&line) {
+                    if !n.contains('\u{FFFD}') && n == child {
+                        return Err(VfsError::Io);
+                    }
+                }
+            }
         }
     }
     Ok(None)
@@ -613,3 +700,64 @@ fn create_empty(ftp: &mut FtpStream, remote: &str) -> Result<(), VfsError> {
 }
 
 export!(FtpProvider);
+
+#[cfg(test)]
+mod parse_tests {
+    use super::{ls_l_name, parse_mlsd_facts, EntryKind};
+
+    #[test]
+    fn mlsd_facts_size_u64_beyond_4gib() {
+        // 5 GiB = 5368709120 > u32::MAX: suppaftp lo rompía; aquí es u64 exacto.
+        let line = "type=file;size=5368709120;modify=20200101000000; big.bin";
+        let (kind, size, name) = parse_mlsd_facts(line).expect("parsea");
+        assert_eq!(kind, EntryKind::File);
+        assert_eq!(size, Some(5_368_709_120));
+        assert_eq!(name, "big.bin");
+    }
+
+    #[test]
+    fn mlsd_facts_dir_without_size() {
+        let (kind, size, name) =
+            parse_mlsd_facts("type=dir;modify=20200101000000; sub").expect("dir");
+        assert_eq!(kind, EntryKind::Dir);
+        assert_eq!(size, None);
+        assert_eq!(name, "sub");
+    }
+
+    #[test]
+    fn mlsd_facts_name_with_semicolon_survives() {
+        // El nombre va tras el PRIMER espacio: un `;` en el nombre NO lo trunca.
+        let (_, _, name) = parse_mlsd_facts("type=file;size=1; a;b.txt").expect("parsea");
+        assert_eq!(name, "a;b.txt");
+    }
+
+    #[test]
+    fn mlsd_facts_missing_type_defaults_file_and_unknown_is_other() {
+        assert_eq!(parse_mlsd_facts("size=1; f").unwrap().0, EntryKind::File);
+        assert_eq!(parse_mlsd_facts("type=cdir; .").unwrap().0, EntryKind::Dir);
+        assert_eq!(
+            parse_mlsd_facts("type=slink; x").unwrap().0,
+            EntryKind::Other
+        );
+    }
+
+    #[test]
+    fn mlsd_facts_rejects_malformed() {
+        assert!(parse_mlsd_facts("no-space-no-name").is_none());
+        assert!(parse_mlsd_facts("type=file;size=1; ").is_none()); // nombre vacío
+    }
+
+    #[test]
+    fn ls_l_name_extracts_after_eight_fields() {
+        let n = ls_l_name("-rw-r--r-- 1 owner group 5368709120 Jan 12 10:00 big.bin");
+        assert_eq!(n, Some("big.bin"));
+        let n2 = ls_l_name("-rw-r--r-- 1 o g 5 Jan 12 10:00 con espacios.txt");
+        assert_eq!(n2, Some("con espacios.txt"));
+    }
+
+    #[test]
+    fn ls_l_name_rejects_header_and_short() {
+        assert_eq!(ls_l_name("total 8"), None);
+        assert_eq!(ls_l_name(""), None);
+    }
+}
