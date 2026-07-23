@@ -44,6 +44,9 @@ The user config directory resolves, in order:
 3. Windows: `%APPDATA%\norte`,
 4. `$HOME/.config/norte`.
 
+An empty `NORTE_CONFIG_DIR` counts as unset, same as an empty
+`XDG_CONFIG_HOME`.
+
 Every consumer — core, daemon, CLI, TUI, GUI — uses this single resolver.
 
 ### `NORTE_CONFIG_DIR` is hermetic
@@ -102,3 +105,6 @@ The crate is `MIT OR Apache-2.0`, following the shared-library pattern of
 - One resolver means the TUI no longer splits its configuration across two
   roots when `NORTE_CONFIG_DIR` is set, and the GUI gains the Windows branch
   for free.
+- `norte-config` deliberately reads with `std::fs` at startup rather than
+  through a `Provider` — providers would be circular, since configuration
+  selects how a frontend starts (ADR 0010's rule 2 carve-out).

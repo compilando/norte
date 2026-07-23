@@ -30,12 +30,20 @@ pub struct Layers {
     pub dirs: Vec<(PathBuf, Layer)>,
 }
 
-/// The user config dir, resolved from an injectable environment (tests pass
-/// a closure; production wrappers pass [`std::env::var_os`]). Precedence
-/// (ADR 0035): `NORTE_CONFIG_DIR` → `XDG_CONFIG_HOME/norte` (non-empty) →
-/// `%APPDATA%\norte` (Windows) → `$HOME/.config/norte`.
-pub fn user_config_dir_from(get: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    if let Some(d) = get("NORTE_CONFIG_DIR") {
+/// Test seam behind [`user_config_dir_from`]: same resolution, but with the
+/// target platform selected explicitly instead of baked in via
+/// `cfg!(windows)`. This lets the Windows branch be pinned by a test suite
+/// that only ever runs on Linux CI. Not general API — call
+/// [`user_config_dir_from`] instead.
+#[doc(hidden)]
+#[must_use]
+pub fn user_config_dir_on(
+    windows: bool,
+    get: &impl Fn(&str) -> Option<OsString>,
+) -> Option<PathBuf> {
+    if let Some(d) = get("NORTE_CONFIG_DIR")
+        && !d.is_empty()
+    {
         return Some(PathBuf::from(d));
     }
     if let Some(d) = get("XDG_CONFIG_HOME")
@@ -43,12 +51,37 @@ pub fn user_config_dir_from(get: &dyn Fn(&str) -> Option<OsString>) -> Option<Pa
     {
         return Some(PathBuf::from(d).join("norte"));
     }
-    if cfg!(windows)
-        && let Some(d) = get("APPDATA")
-    {
+    if windows && let Some(d) = get("APPDATA") {
         return Some(PathBuf::from(d).join("norte"));
     }
     get("HOME").map(|h| PathBuf::from(h).join(".config").join("norte"))
+}
+
+/// The user config dir, resolved from an injectable environment (tests pass
+/// a closure; production wrappers pass [`std::env::var_os`]). Precedence
+/// (ADR 0035): `NORTE_CONFIG_DIR` (non-empty) → `XDG_CONFIG_HOME/norte`
+/// (non-empty) → `%APPDATA%\norte` (Windows) → `$HOME/.config/norte`. An
+/// empty `NORTE_CONFIG_DIR` counts as unset, same as an empty
+/// `XDG_CONFIG_HOME`.
+///
+/// # Example
+///
+/// ```
+/// use norte_config::user_config_dir_from;
+/// use std::ffi::OsString;
+/// use std::path::PathBuf;
+///
+/// let get = |k: &str| -> Option<OsString> {
+///     match k {
+///         "NORTE_CONFIG_DIR" => Some(OsString::from("/custom")),
+///         _ => None,
+///     }
+/// };
+/// assert_eq!(user_config_dir_from(&get), Some(PathBuf::from("/custom")));
+/// ```
+#[must_use]
+pub fn user_config_dir_from(get: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    user_config_dir_on(cfg!(windows), get)
 }
 
 /// The user config dir from the process environment; `None` when the
@@ -59,34 +92,46 @@ pub fn user_config_dir() -> Option<PathBuf> {
 }
 
 /// Infallible variant for core paths (`connections.toml`, `journal.db`, …):
-/// falls back to `./.config/norte` like the historic
-/// `norte_core::connect::config_dir` did.
+/// falls back to `./.config/norte`.
 #[must_use]
 pub fn config_dir() -> PathBuf {
     user_config_dir().unwrap_or_else(|| PathBuf::from(".").join(".config").join("norte"))
 }
 
-/// Standard layers (ADR 0007/0035) from an injectable environment.
-/// `NORTE_CONFIG_DIR` set ⇒ hermetic: only that dir (User) + `./.norte`.
-pub fn standard_layers_from(get: &dyn Fn(&str) -> Option<OsString>) -> Layers {
+/// Test seam behind [`standard_layers_from`]: same layering, but with the
+/// target platform selected explicitly. Not general API — call
+/// [`standard_layers_from`] instead.
+#[doc(hidden)]
+#[must_use]
+pub fn standard_layers_on(windows: bool, get: &impl Fn(&str) -> Option<OsString>) -> Layers {
     let mut dirs = Vec::new();
-    if let Some(over) = get("NORTE_CONFIG_DIR") {
+    if let Some(over) = get("NORTE_CONFIG_DIR")
+        && !over.is_empty()
+    {
         dirs.push((PathBuf::from(over), Layer::User));
         dirs.push((PathBuf::from(".norte"), Layer::Project));
         return Layers { dirs };
     }
-    if cfg!(windows) {
+    if windows {
         if let Some(pd) = get("ProgramData") {
             dirs.push((PathBuf::from(pd).join("norte"), Layer::System));
         }
     } else {
         dirs.push((PathBuf::from("/etc/norte"), Layer::System));
     }
-    if let Some(user) = user_config_dir_from(get) {
+    if let Some(user) = user_config_dir_on(windows, get) {
         dirs.push((user, Layer::User));
     }
     dirs.push((PathBuf::from(".norte"), Layer::Project));
     Layers { dirs }
+}
+
+/// Standard layers (ADR 0007/0035) from an injectable environment.
+/// A non-empty `NORTE_CONFIG_DIR` makes this hermetic: only that dir (User)
+/// + `./.norte`, no system layer.
+#[must_use]
+pub fn standard_layers_from(get: &impl Fn(&str) -> Option<OsString>) -> Layers {
+    standard_layers_on(cfg!(windows), get)
 }
 
 /// Standard layers from the process environment.
@@ -162,6 +207,82 @@ mod tests {
             vec![
                 (PathBuf::from("/etc/norte"), Layer::System),
                 (PathBuf::from("/home/u/.config/norte"), Layer::User),
+                (PathBuf::from(".norte"), Layer::Project),
+            ]
+        );
+    }
+
+    /// MAJOR-1 fix: an empty `NORTE_CONFIG_DIR` (e.g. inherited unset-but-
+    /// exported from a parent shell) must count as unset, not as an override
+    /// pointing at the empty path — otherwise `config_dir()` would resolve to
+    /// `""` and hermetic layering would read the process cwd.
+    #[test]
+    fn norte_config_dir_vacio_cuenta_como_no_definido() {
+        let e = env(&[("NORTE_CONFIG_DIR", ""), ("HOME", "/home/u")]);
+        assert_eq!(
+            user_config_dir_from(&e),
+            Some(PathBuf::from("/home/u/.config/norte"))
+        );
+        #[cfg(unix)]
+        {
+            let l = standard_layers_from(&e);
+            assert_eq!(
+                l.dirs,
+                vec![
+                    (PathBuf::from("/etc/norte"), Layer::System),
+                    (PathBuf::from("/home/u/.config/norte"), Layer::User),
+                    (PathBuf::from(".norte"), Layer::Project),
+                ]
+            );
+        }
+    }
+
+    // MAJOR-2 fix: the Windows branches are unreachable behind `cfg!(windows)`
+    // on Linux-only CI, so they pin behavior through the explicit `_on` seam
+    // instead of the `cfg!(windows)`-driven `_from` wrappers.
+
+    #[test]
+    fn windows_xdg_gana_a_appdata() {
+        let e = env(&[
+            ("XDG_CONFIG_HOME", "/xdg"),
+            ("APPDATA", r"C:\Users\u\AppData\Roaming"),
+            ("HOME", "/home/u"),
+        ]);
+        let d = user_config_dir_on(true, &e);
+        assert_eq!(d, Some(PathBuf::from("/xdg").join("norte")));
+    }
+
+    #[test]
+    fn windows_appdata_gana_a_home_sin_xdg() {
+        let e = env(&[
+            ("APPDATA", r"C:\Users\u\AppData\Roaming"),
+            ("HOME", "/home/u"),
+        ]);
+        let d = user_config_dir_on(true, &e);
+        assert_eq!(
+            d,
+            Some(PathBuf::from(r"C:\Users\u\AppData\Roaming").join("norte"))
+        );
+    }
+
+    #[test]
+    fn windows_standard_layers_con_programdata_y_appdata() {
+        let e = env(&[
+            ("ProgramData", r"C:\ProgramData"),
+            ("APPDATA", r"C:\Users\u\AppData\Roaming"),
+        ]);
+        let l = standard_layers_on(true, &e);
+        assert_eq!(
+            l.dirs,
+            vec![
+                (
+                    PathBuf::from(r"C:\ProgramData").join("norte"),
+                    Layer::System
+                ),
+                (
+                    PathBuf::from(r"C:\Users\u\AppData\Roaming").join("norte"),
+                    Layer::User
+                ),
                 (PathBuf::from(".norte"), Layer::Project),
             ]
         );
