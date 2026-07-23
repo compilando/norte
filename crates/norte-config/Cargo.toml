@@ -1,0 +1,34 @@
+[package]
+name = "norte-config"
+description = "Layered configuration for norte (ADR 0007/0035): shared dir resolution, strict norte.toml schema, scalar merge, watch"
+license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+norte-proto.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+schemars = { workspace = true, features = ["derive"], optional = true }
+notify = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt", "time", "sync"], optional = true }
+tokio-util = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+
+[features]
+# JSON Schema generation for docs/schema goldens (ADR 0007).
+schema = ["dep:schemars"]
+# Live config watching (notify + polling fallback). Frontends enable it;
+# core/CLI do not need it.
+watch = ["dep:notify", "dep:tokio", "dep:tokio-util"]
+
+[lints]
+workspace = true

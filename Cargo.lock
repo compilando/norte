@@ -4209,6 +4209,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "norte-config"
+version = "0.3.0-alpha.1"
+dependencies = [
+ "norte-proto",
+ "notify",
+ "schemars 1.2.1",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "toml 0.9.12+spec-1.1.0",
+ "toml_edit",
+]
+
+[[package]]
 name = "norte-connect"
 version = "0.3.0-alpha.1"
 dependencies = [
