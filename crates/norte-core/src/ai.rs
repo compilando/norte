@@ -64,8 +64,9 @@ pub enum AiConfigError {
     BadPrefix(String),
     /// Error de lectura del fichero, o de `norte-config` (TOML roto,
     /// `denied_prefix` inválido, tipos incorrectos) desde que el parseo se
-    /// delegó (ADR 0035) — no solo `NotFound`.
-    #[error("io error reading norte.toml: {0}")]
+    /// delegó (ADR 0035) — no solo `NotFound`; el mensaje es genérico
+    /// porque este variant también carga fallos de parseo, no solo de I/O.
+    #[error("config error: {0}")]
     Io(#[from] std::io::Error),
 }
 
@@ -114,13 +115,11 @@ impl AiConfig {
     /// Like [`AiConfig::load`] with explicit layers (test injection).
     ///
     /// # Errors
-    /// [`AiConfigError`] if any layer's TOML is invalid.
+    /// Any layer that exists but does not parse strictly, or cannot be
+    /// read.
     pub fn load_from(layers: &norte_config::Layers) -> Result<Self, AiConfigError> {
         let cfg = norte_config::load(layers).map_err(|e| {
-            AiConfigError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                e.to_string(),
-            ))
+            AiConfigError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
         })?;
         Ok(Self::from_settings(cfg.ai))
     }
@@ -400,6 +399,39 @@ mod tests {
             dirs: vec![(dir.path().to_path_buf(), norte_config::Layer::User)],
         };
         AiConfig::load_from(&layers)
+    }
+
+    /// Pins that `from_settings` sees the MERGED result across layers, not
+    /// just the last one read: System enables IA and declares provider `x`
+    /// with an old model; User overrides only the model, by name.
+    #[test]
+    fn dos_capas_se_mezclan_por_nombre_de_proveedor() {
+        let sistema = tempfile::tempdir().unwrap();
+        std::fs::write(
+            sistema.path().join("norte.toml"),
+            "[ai]\nenabled = true\n[ai.providers.x]\nkind = \"ollama\"\nmodel = \"viejo\"\n",
+        )
+        .unwrap();
+        let usuario = tempfile::tempdir().unwrap();
+        std::fs::write(
+            usuario.path().join("norte.toml"),
+            "[ai.providers.x]\nkind = \"ollama\"\nmodel = \"nuevo\"\n",
+        )
+        .unwrap();
+        let layers = norte_config::Layers {
+            dirs: vec![
+                (sistema.path().to_path_buf(), norte_config::Layer::System),
+                (usuario.path().to_path_buf(), norte_config::Layer::User),
+            ],
+        };
+        let cfg = AiConfig::load_from(&layers).expect("carga");
+        assert!(cfg.enabled);
+        let x = cfg
+            .providers
+            .iter()
+            .find(|p| p.name == "x")
+            .expect("proveedor x presente");
+        assert_eq!(x.model, "nuevo");
     }
 
     #[test]

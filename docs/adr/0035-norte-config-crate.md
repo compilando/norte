@@ -41,7 +41,7 @@ The user config directory resolves, in order:
 
 1. `NORTE_CONFIG_DIR` (if set),
 2. `XDG_CONFIG_HOME/norte` (if `XDG_CONFIG_HOME` is set and non-empty),
-3. Windows: `%APPDATA%\norte`,
+3. Windows: `%APPDATA%\norte` then `%USERPROFILE%\.config\norte`,
 4. `$HOME/.config/norte`.
 
 An empty `NORTE_CONFIG_DIR` counts as unset, same as an empty

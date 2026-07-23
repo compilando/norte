@@ -51,8 +51,18 @@ pub fn user_config_dir_on(
     {
         return Some(PathBuf::from(d).join("norte"));
     }
-    if windows && let Some(d) = get("APPDATA") {
-        return Some(PathBuf::from(d).join("norte"));
+    if windows {
+        if let Some(d) = get("APPDATA") {
+            return Some(PathBuf::from(d).join("norte"));
+        }
+        // No `%APPDATA%` (unusual, but seen in constrained/service
+        // environments): the pre-migration core resolver fell back to
+        // `home_dir()`, which on Windows resolves via `%USERPROFILE%`. Keep
+        // that same fallback here before the generic `$HOME` below (which a
+        // stock Windows shell rarely sets).
+        if let Some(up) = get("USERPROFILE") {
+            return Some(PathBuf::from(up).join(".config").join("norte"));
+        }
     }
     get("HOME").map(|h| PathBuf::from(h).join(".config").join("norte"))
 }
@@ -60,9 +70,9 @@ pub fn user_config_dir_on(
 /// The user config dir, resolved from an injectable environment (tests pass
 /// a closure; production wrappers pass [`std::env::var_os`]). Precedence
 /// (ADR 0035): `NORTE_CONFIG_DIR` (non-empty) → `XDG_CONFIG_HOME/norte`
-/// (non-empty) → `%APPDATA%\norte` (Windows) → `$HOME/.config/norte`. An
-/// empty `NORTE_CONFIG_DIR` counts as unset, same as an empty
-/// `XDG_CONFIG_HOME`.
+/// (non-empty) → `%APPDATA%\norte` (Windows) → `%USERPROFILE%\.config\norte`
+/// (Windows, no `%APPDATA%`) → `$HOME/.config/norte`. An empty
+/// `NORTE_CONFIG_DIR` counts as unset, same as an empty `XDG_CONFIG_HOME`.
 ///
 /// # Example
 ///
@@ -262,6 +272,21 @@ mod tests {
         assert_eq!(
             d,
             Some(PathBuf::from(r"C:\Users\u\AppData\Roaming").join("norte"))
+        );
+    }
+
+    /// MINOR-4 fix: without `%APPDATA%` (unusual but seen in constrained
+    /// environments), fall back to `%USERPROFILE%\.config\norte` — the
+    /// pre-migration core resolver used `home_dir()`, which resolves via
+    /// `%USERPROFILE%` on Windows; losing that fallback would be a
+    /// regression for those environments.
+    #[test]
+    fn windows_sin_appdata_cae_a_userprofile() {
+        let e = env(&[("USERPROFILE", r"C:\Users\u")]);
+        let d = user_config_dir_on(true, &e);
+        assert_eq!(
+            d,
+            Some(PathBuf::from(r"C:\Users\u").join(".config").join("norte"))
         );
     }
 

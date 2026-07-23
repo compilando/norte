@@ -13,7 +13,7 @@ use norte_vfs_archive::Limits;
 /// silent typo.
 pub fn load_archive_limits_from(layers: &norte_config::Layers) -> std::io::Result<Option<Limits>> {
     let cfg = norte_config::load(layers)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     if cfg.archive_max_entries.is_none()
         && cfg.archive_max_decompressed_bytes.is_none()
         && cfg.archive_max_nesting.is_none()
@@ -138,5 +138,45 @@ mod tests {
             dirs: vec![(user.path().to_path_buf(), norte_config::Layer::User)],
         };
         assert!(load_archive_limits_from(&layers).is_err());
+    }
+
+    /// Boundary pin: broken TOML syntax in a layer is a hard error, not a
+    /// silent `None` (fail-loud carries over from the pre-migration parser).
+    #[test]
+    fn toml_roto_es_error_fail_loud() {
+        let user = tempfile::tempdir().unwrap();
+        std::fs::write(user.path().join("norte.toml"), "[archive\n").unwrap();
+        let layers = norte_config::Layers {
+            dirs: vec![(user.path().to_path_buf(), norte_config::Layer::User)],
+        };
+        assert!(load_archive_limits_from(&layers).is_err());
+    }
+
+    /// Boundary pin: a field with the wrong TOML type is a hard error, not a
+    /// silently-ignored override.
+    #[test]
+    fn tipo_malo_es_error_fail_loud() {
+        let user = tempfile::tempdir().unwrap();
+        std::fs::write(
+            user.path().join("norte.toml"),
+            "[archive]\nmax_entries = \"muchas\"\n",
+        )
+        .unwrap();
+        let layers = norte_config::Layers {
+            dirs: vec![(user.path().to_path_buf(), norte_config::Layer::User)],
+        };
+        assert!(load_archive_limits_from(&layers).is_err());
+    }
+
+    /// Boundary pin: an empty `[archive]` section (present, no fields) is
+    /// still `Ok(None)` — presence of the section alone is not an override.
+    #[test]
+    fn seccion_archive_vacia_es_none() {
+        let user = tempfile::tempdir().unwrap();
+        std::fs::write(user.path().join("norte.toml"), "[archive]\n").unwrap();
+        let layers = norte_config::Layers {
+            dirs: vec![(user.path().to_path_buf(), norte_config::Layer::User)],
+        };
+        assert!(load_archive_limits_from(&layers).expect("carga").is_none());
     }
 }
