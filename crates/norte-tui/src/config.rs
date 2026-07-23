@@ -5,8 +5,8 @@
 
 pub use norte_config::{
     ConfigError, DEFAULT_PRESET, DaemonMode, HotlistItem, Layer, Layers, NorteToml, Watch,
-    WatchMode, config_dir, persist_hotlist_add, persist_hotlist_remove, persist_ui_theme,
-    persist_ui_theme_to, standard_layers, user_config_dir, watch, watch_polling,
+    WatchMode, persist_hotlist_add, persist_hotlist_remove, persist_ui_theme, persist_ui_theme_to,
+    standard_layers, user_config_dir, watch, watch_polling,
 };
 pub use norte_frontend::config::{FrontendConfig as LoadedConfig, load};
 
