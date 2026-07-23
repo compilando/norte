@@ -100,6 +100,12 @@ mod sp {
     pub const S: f32 = 4.0;
     pub const M: f32 = 8.0;
     pub const L: f32 = 12.0;
+
+    /// Redondeo de fila (listado/franja de tasks) — GP review: nombra los dos
+    /// `px(...)` de `.rounded(...)` que antes eran literales dispersos.
+    pub const RADIUS_ROW: f32 = 3.0;
+    /// Redondeo de panel flotante (modal) — más pronunciado que una fila.
+    pub const RADIUS_PANEL: f32 = 6.0;
 }
 
 /// El *root view*: dos panes navegables, cuál tiene el foco, el tema cacheado y
@@ -278,35 +284,65 @@ impl NorteGui {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
-        let ((browse_eff, viewer_eff), keymap_error) = match keymap::build_effectives(&preset_name)
-        {
-            Ok(pair) => (pair, startup_banner),
-            Err(e) => {
-                let msg = norte_i18n::ta(
-                    "gui-banner-keymap-error",
-                    &[("error", keymap_error_detail(&e).as_str())],
-                );
-                (
-                    keymap::build_effectives_preset_only(&preset_name),
-                    Some(push_banner(startup_banner, msg)),
-                )
-            }
-        };
+        let ((browse_eff, viewer_eff), mut keymap_error) =
+            match keymap::build_effectives(&preset_name) {
+                Ok(pair) => (pair, startup_banner),
+                Err(e) => {
+                    let msg = norte_i18n::ta(
+                        "gui-banner-keymap-error",
+                        &[("error", keymap_error_detail(&e).as_str())],
+                    );
+                    (
+                        keymap::build_effectives_preset_only(&preset_name),
+                        Some(push_banner(startup_banner, msg)),
+                    )
+                }
+            };
         let resolver = norte_frontend::keymap::Resolver::new(browse_eff);
         let viewer_resolver = norte_frontend::keymap::Resolver::new(viewer_eff);
 
-        // Tipografía (GP): resuelta UNA vez aquí, junto al resto de la
-        // sesión — config inválida (rama `Err` de `loaded`) degrada a la
-        // fuente/tamaño por defecto, igual que el resto del arranque
+        // Tipografía (GP; GP review fix 2): resuelta UNA vez aquí, junto al
+        // resto de la sesión. `Context<Self>` derefa a `App` (ver
+        // `gpui::app::context::Context::deref`), así que el `TextSystem`
+        // YA es alcanzable en este constructor — no hace falta mover la
+        // resolución a otro sitio. Cada familia de `[ui]` se valida contra
+        // el fontdb REAL (`all_font_names()`, que incluye "JetBrains Mono"
+        // porque `main` ya la registró vía `add_fonts` antes de abrir la
+        // ventana) antes de pasarla a `FontSet::resolve`; una familia
+        // desconocida sustituye al default Y deja un aviso en el banner de
+        // arranque (mismo acumulador que config/tema/keymap/effects).
+        // Config inválida (rama `Err` de `loaded`) degrada a los defaults
+        // sin intentar validar nada — igual que el resto del arranque
         // (nunca aborta por esto).
-        let fonts = match loaded {
-            Ok(cfg) => FontSet::resolve(
-                cfg.common.ui_font.as_deref(),
-                cfg.common.ui_mono_font.as_deref(),
-                cfg.common.ui_font_size,
+        let known_font_families = cx.text_system().all_font_names();
+        let (ui_family, mono_family, font_size) = match loaded {
+            Ok(cfg) => {
+                let (ui, ui_warn) = validated_family(
+                    cfg.common.ui_font.as_deref(),
+                    &known_font_families,
+                    ".SystemUIFont",
+                );
+                let (mono, mono_warn) = validated_family(
+                    cfg.common.ui_mono_font.as_deref(),
+                    &known_font_families,
+                    "JetBrains Mono",
+                );
+                for warn in [ui_warn, mono_warn].into_iter().flatten() {
+                    let msg = norte_i18n::ta(
+                        "gui-banner-font-unknown",
+                        &[("family", banner_safe(&warn).as_str())],
+                    );
+                    keymap_error = Some(push_banner(keymap_error, msg));
+                }
+                (ui, mono, cfg.common.ui_font_size)
+            }
+            Err(_) => (
+                ".SystemUIFont".to_owned(),
+                "JetBrains Mono".to_owned(),
+                None,
             ),
-            Err(_) => FontSet::resolve(None, None, None),
         };
+        let fonts = FontSet::resolve(&ui_family, &mono_family, font_size);
 
         match LoadConfig::from_env() {
             Ok(cfg) => {
@@ -1435,7 +1471,7 @@ impl NorteGui {
             // Redondeo sutil (GP): constante en TODAS las filas en vez de
             // condicionarlo a selección/hover — más barato (un solo estilo,
             // sin ramas) y visualmente inapreciable en una fila sin fondo.
-            .rounded(px(3.0))
+            .rounded(px(sp::RADIUS_ROW))
             .cursor_pointer()
             .text_color(color)
             .truncate()
@@ -1513,14 +1549,14 @@ impl NorteGui {
                 // horizontal que una fila de pane.
                 .px(px(sp::S))
                 // Mismo tratamiento que `render_row` (redondeo constante,
-                // cursor + hover gateados fuera de la fila bajo cursor de
-                // franja) — consistencia visual entre las dos únicas listas
-                // de fila-por-fila de la GUI, aunque hoy el click en una fila
-                // de tasks no hace nada (F9 cancela por teclado, ver
-                // `task_cursor`); es una afirmación visual honesta de "esto
-                // es una lista", no una promesa de acción al click.
-                .rounded(px(3.0))
-                .cursor_pointer()
+                // hover gateado fuera de la fila bajo cursor de franja) —
+                // consistencia visual entre las dos únicas listas de
+                // fila-por-fila de la GUI. GP review: SIN `.cursor_pointer()`
+                // aquí — a diferencia de `render_row` (que sí navega al
+                // click), el click en una fila de tasks no hace nada (F9
+                // cancela por teclado, ver `task_cursor`); un cursor de mano
+                // habría sido una afordancia falsa.
+                .rounded(px(sp::RADIUS_ROW))
                 .child(SharedString::from(line));
             if selected {
                 row = row.bg(chrome.sel_bg);
@@ -1709,7 +1745,7 @@ impl NorteGui {
             .border_color(chrome.border_focus)
             // Esquinas redondeadas (GP): distingue el panel flotante del
             // resto del chrome, que va todo en ángulo recto.
-            .rounded(px(6.0))
+            .rounded(px(sp::RADIUS_PANEL))
             .px(px(sp::L))
             .py(px(sp::M))
             .gap(px(sp::XS));
@@ -2439,14 +2475,34 @@ fn chrome(theme: &Theme, role: Role, fg: bool, fallback: u32) -> gpui::Rgba {
     c.map_or(gpui::rgb(fallback), theme_map::to_gpui_rgba)
 }
 
-/// Tipografía resuelta para la sesión (GP): fuente de chrome (UI) para
-/// cabeceras/banners/franja de tasks y fuente mono para listados/visor —
-/// alineación de columnas (tamaños, hex del visor) exige ancho fijo, algo que
-/// una fuente UI proporcional no garantiza. Se construye UNA vez en `new` a
-/// partir de `[ui]` (`cfg.common.ui_font`/`ui_mono_font`/`ui_font_size`); una
-/// familia de usuario lleva SIEMPRE un fallback a la fuente empaquetada por
-/// defecto, así que una familia mal tecleada degrada al look por defecto, no
-/// a una fuente arbitraria del sistema (`family_with_fallback`).
+/// Tipografía resuelta para la sesión (GP; corregido en la revisión final del
+/// GP, hallazgo CRÍTICO): fuente de chrome (UI) para cabeceras/banners/franja
+/// de tasks y fuente mono para listados/visor — alineación de columnas
+/// (tamaños, hex del visor) exige ancho fijo, algo que una fuente UI
+/// proporcional no garantiza. Se construye UNA vez en `new` a partir de
+/// `[ui]` (`cfg.common.ui_font`/`ui_mono_font`/`ui_font_size`).
+///
+/// Mecanismo REAL (auditado contra GPUI en la rev `f14fea9` — el comentario
+/// viejo de este módulo afirmaba lo contrario y era FALSO):
+/// - **mono**: "JetBrains Mono", bundled DENTRO del binario (`include_bytes!`
+///   en `main`, registrada con `cx.text_system().add_fonts(...)` antes de
+///   abrir la ventana) — GPUI no embebe ninguna fuente propia; `.ZedMono` es
+///   solo un ALIAS de nombre hacia el fontdb del SISTEMA (en la práctica
+///   resuelve a "Lilex" si esa familia está instalada — casi nunca lo está).
+///   Bundlear la fuente es lo único que hace el mono default resoluble
+///   SIEMPRE, en cualquier máquina.
+/// - **ui**: sigue siendo `.SystemUIFont` — un alias de GPUI que camina su
+///   pila global de fuentes de chrome (algún sans del sistema, depende de la
+///   plataforma). Para el chrome cualquier sans razonable sirve, así que no
+///   hace falta bundlear nada aquí.
+/// - **familias de usuario** (`[ui] font`/`mono_font`): validadas contra el
+///   fontdb real (`cx.text_system().all_font_names()`, en `NorteGui::new`,
+///   ver [`validated_family`]) — una familia que no exporta ese nombre
+///   sustituye al default Y deja un aviso en el banner de arranque
+///   (`gui-banner-font-unknown`), en vez de construir un `Font` cuya familia
+///   primaria simplemente no existe (lo que antes degradaba en silencio a
+///   cualquier fuente que GPUI encontrara al resolver, típicamente
+///   proporcional).
 struct FontSet {
     /// Fuente de chrome: cabeceras de pane/visor, banners, franja de tasks.
     ui: gpui::Font,
@@ -2461,35 +2517,61 @@ struct FontSet {
 }
 
 impl FontSet {
-    /// Resuelve el set a partir de los tres escalares de `[ui]` (ya
-    /// validados por `norte-config`). `None` en cualquiera = el default
-    /// documentado en el campo correspondiente.
-    fn resolve(font: Option<&str>, mono_font: Option<&str>, font_size: Option<f32>) -> Self {
+    /// Construye el set a partir de familias YA VALIDADAS (ver
+    /// [`validated_family`] — el caller, `NorteGui::new`, resuelve la
+    /// familia final ANTES de llamar aquí; esta función no conoce el fontdb,
+    /// así que es pura y testable sin un `TextSystem`) y el tamaño base
+    /// (`None` = default de `[ui] font_size`).
+    fn resolve(ui_family: &str, mono_family: &str, font_size: Option<f32>) -> Self {
         let size = font_size.unwrap_or(14.0);
         let row_h = (size * 1.5).round().max(18.0);
         Self {
-            ui: family_with_fallback(font, ".SystemUIFont"),
-            mono: family_with_fallback(mono_font, ".ZedMono"),
+            ui: family_with_fallback(ui_family, ".SystemUIFont"),
+            mono: family_with_fallback(mono_family, "JetBrains Mono"),
             size: gpui::px(size),
             row_h: gpui::px(row_h),
         }
     }
 }
 
-/// Familia de usuario con la fuente empaquetada como fallback EXPLÍCITO
-/// (`Font::fallbacks`); `None` = la fuente empaquetada directamente, sin
-/// fallback (no hace falta: ya es el default). `.SystemUIFont`/`.ZedMono` son
-/// nombres reservados de GPUI (siempre resolubles, ver comentario de rev en
-/// la cabecera del módulo) — jamás caen a una fuente arbitraria del sistema
-/// que el usuario no pidió.
-fn family_with_fallback(family: Option<&str>, bundled: &'static str) -> gpui::Font {
-    match family {
-        None => gpui::font(bundled),
-        Some(f) => {
-            let mut font = gpui::font(f);
-            font.fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![bundled.to_owned()]));
-            font
-        }
+/// Construye el `Font` de `family`. Cuando `family` difiere de `default` (una
+/// familia de usuario, ya validada contra el fontdb real por
+/// [`validated_family`] — jamás una familia inexistente, eso ahora se
+/// sustituye ANTES de llegar aquí), adjunta `default` como
+/// `Font::fallbacks`: cobertura per-glifo dentro de esa familia (p. ej. un
+/// glifo que "Custom Mono" no tenga cae al glifo equivalente de "JetBrains
+/// Mono"), NUNCA una fuente de repuesto para una familia primaria rota — si
+/// `family` no existiera, la resolución de fuente de GPUI ignoraría este
+/// `fallbacks` (es una cadena sobre las CARAS de la familia primaria) y
+/// caminaría su pila global en su lugar, que es exactamente el hallazgo
+/// CRÍTICO que este fix cierra.
+fn family_with_fallback(family: &str, default: &'static str) -> gpui::Font {
+    let mut font = gpui::font(family);
+    if family != default {
+        font.fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![default.to_owned()]));
+    }
+    font
+}
+
+/// Valida `requested` contra `known` (el fontdb REAL —
+/// `cx.text_system().all_font_names()`, ver `NorteGui::new`): `None` o una
+/// familia ausente de `known` caen a `default` (mono: `"JetBrains Mono"`,
+/// bundled — siempre presente; ui: `".SystemUIFont"`). Devuelve la familia
+/// resuelta más, si hubo sustitución por familia DESCONOCIDA (no por `None`
+/// — eso es simplemente "sin config", no un error de usuario), el nombre
+/// pedido para el banner de arranque (`gui-banner-font-unknown`).
+///
+/// Pura a propósito (GP review fix 2): sin esto, la ÚNICA forma de probar la
+/// sustitución de familia sería levantar un `TextSystem` de GPUI completo.
+fn validated_family(
+    requested: Option<&str>,
+    known: &[String],
+    default: &'static str,
+) -> (String, Option<String>) {
+    match requested {
+        None => (default.to_owned(), None),
+        Some(f) if known.iter().any(|k| k == f) => (f.to_owned(), None),
+        Some(f) => (default.to_owned(), Some(f.to_owned())),
     }
 }
 
@@ -2986,6 +3068,31 @@ fn main() {
     let _ = norte_i18n::force(lang);
 
     application().run(move |cx: &mut App| {
+        // Fuente mono bundled (GP review, hallazgo CRÍTICO): registrada
+        // ANTES de abrir la ventana para que `NorteGui::new` (que resuelve
+        // `FontSet` en su primer frame) ya la vea en
+        // `cx.text_system().all_font_names()`. Sin esto ".ZedMono" es solo un
+        // alias hacia una familia del SISTEMA ("Lilex") que en general no
+        // está instalada — GPUI no embebe fuentes propias — y la GUI
+        // degradaba en silencio a una fuente proporcional cualquiera para
+        // los listados, rompiendo la alineación de columnas. `add_fonts`
+        // devuelve `Result`: un fallo (excepcional — los bytes son estáticos
+        // y vienen de un TTF válido) se loguea y se sigue: la validación de
+        // familia de `NorteGui::new` no encuentra "JetBrains Mono" en el
+        // fontdb en ese caso y cae honestamente al alias `.SystemUIFont`
+        // (ver `validated_family`), en vez de fingir que el mono bundled
+        // existe.
+        if let Err(e) = cx.text_system().add_fonts(vec![
+            std::borrow::Cow::Borrowed(
+                include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf").as_slice(),
+            ),
+            std::borrow::Cow::Borrowed(
+                include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf").as_slice(),
+            ),
+        ]) {
+            eprintln!("[norte-gui] no se pudo registrar la fuente JetBrains Mono empaquetada: {e}");
+        }
+
         let bounds = Bounds::centered(None, size(px(1000.0), px(640.0)), cx);
         cx.open_window(
             WindowOptions {
@@ -3012,7 +3119,7 @@ mod tests {
         confirm_quit_task_count, first_cancelable, generation_is_current, glowed, has_pending_work,
         image_preview_from, image_status, keymap_error_detail, modal_footer_colors,
         modal_panel_colors, modal_title_colors, pending_hint, retain_active, row_label,
-        task_at_cursor, unknown_preset_banner, viewer_header, viewer_status,
+        task_at_cursor, unknown_preset_banner, validated_family, viewer_header, viewer_status,
     };
     use norte_frontend::viewer::Viewer;
     use norte_proto::{EntryKind, VPath};
@@ -4026,27 +4133,30 @@ mod tests {
         );
     }
 
-    /// Sin config, `FontSet` cae a las familias empaquetadas de GPUI
-    /// (`.SystemUIFont`/`.ZedMono`, siempre resolubles — ver rustdoc del
-    /// módulo) y al tamaño/alto por defecto.
+    /// Con las familias default (ya resueltas — `FontSet::resolve` ya no
+    /// valida nada, ver `validated_family`), `FontSet` cae a la fuente mono
+    /// BUNDLED ("JetBrains Mono", GP review CRÍTICO — ya no `.ZedMono`, que
+    /// era un alias de sistema casi siempre irresoluble) y al alias de chrome
+    /// `.SystemUIFont`, más el tamaño/alto por defecto.
     #[test]
     fn fontset_defaults() {
-        let f = FontSet::resolve(None, None, None);
+        let f = FontSet::resolve(".SystemUIFont", "JetBrains Mono", None);
         assert_eq!(f.ui.family.as_ref(), ".SystemUIFont");
-        assert_eq!(f.mono.family.as_ref(), ".ZedMono");
+        assert_eq!(f.mono.family.as_ref(), "JetBrains Mono");
         assert_eq!(f.size, gpui::px(14.0));
         assert_eq!(f.row_h, gpui::px(21.0));
     }
 
-    /// Una familia de usuario ocupa `family`, pero lleva SIEMPRE la fuente
-    /// empaquetada de fallback — así una familia mal tecleada degrada al
-    /// look por defecto, no a una fuente arbitraria del sistema.
+    /// Una familia YA VALIDADA (distinta del default) ocupa `family`, pero
+    /// lleva el default como `Font::fallbacks` — cobertura per-glifo, no un
+    /// mecanismo de "familia rota degrada a esto" (esa degradación ahora
+    /// vive en `validated_family`, ANTES de llegar aquí).
     #[test]
-    fn fontset_familia_usuario_con_fallback() {
-        let f = FontSet::resolve(None, Some("Nope Mono"), None);
-        assert_eq!(f.mono.family.as_ref(), "Nope Mono");
+    fn fontset_familia_custom_lleva_fallback_al_default() {
+        let f = FontSet::resolve(".SystemUIFont", "Custom Mono", None);
+        assert_eq!(f.mono.family.as_ref(), "Custom Mono");
         let fb = f.mono.fallbacks.as_ref().expect("fallback presente");
-        assert_eq!(fb.fallback_list(), [".ZedMono".to_owned()]);
+        assert_eq!(fb.fallback_list(), ["JetBrains Mono".to_owned()]);
     }
 
     /// El piso de 18px evita filas ilegiblemente finas con tamaños de fuente
@@ -4054,7 +4164,41 @@ mod tests {
     /// el piso vive aquí porque `FontSet` no conoce ese rango).
     #[test]
     fn row_h_minimo() {
-        let f = FontSet::resolve(None, None, Some(8.0));
+        let f = FontSet::resolve(".SystemUIFont", "JetBrains Mono", Some(8.0));
         assert_eq!(f.row_h, gpui::px(18.0));
+    }
+
+    /// `validated_family` (GP review fix 2): sin request, cae al default sin
+    /// aviso — no es un error de usuario, es "sin config".
+    #[test]
+    fn familia_sin_pedido_cae_al_default_sin_avisar() {
+        let known = ["JetBrains Mono".to_owned(), "Iosevka".to_owned()];
+        let (resolved, warn) = validated_family(None, &known, "JetBrains Mono");
+        assert_eq!(resolved, "JetBrains Mono");
+        assert!(warn.is_none());
+    }
+
+    /// `validated_family` (GP review fix 2): una familia que SÍ está en el
+    /// fontdb real se conserva tal cual, sin aviso.
+    #[test]
+    fn familia_conocida_se_conserva_sin_avisar() {
+        let known = ["JetBrains Mono".to_owned(), "Iosevka".to_owned()];
+        let (resolved, warn) = validated_family(Some("Iosevka"), &known, "JetBrains Mono");
+        assert_eq!(resolved, "Iosevka");
+        assert!(warn.is_none());
+    }
+
+    /// `validated_family` (GP review fix 2, test pedido explícitamente por el
+    /// review): una familia AUSENTE del fontdb real cae al default Y devuelve
+    /// el nombre pedido para el banner de arranque — nunca construye un
+    /// `Font` sobre una familia primaria inexistente (el hallazgo CRÍTICO
+    /// original: la resolución entonces caminaba la pila global de GPUI en
+    /// silencio).
+    #[test]
+    fn familia_desconocida_cae_al_default_y_avisa() {
+        let known = ["JetBrains Mono".to_owned(), "Iosevka".to_owned()];
+        let (resolved, warn) = validated_family(Some("NopeFont 9000"), &known, "JetBrains Mono");
+        assert_eq!(resolved, "JetBrains Mono");
+        assert_eq!(warn.as_deref(), Some("NopeFont 9000"));
     }
 }

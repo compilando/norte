@@ -286,3 +286,4 @@ gui-banner-theme-parse = theme { $spec }: { $detail }
 gui-banner-config-io = configuration { $path }: { $error }
 gui-banner-config-parse = configuration { $path }: { $detail }
 gui-banner-effects-key-skipped = theme effects: skipped { $key }
+gui-banner-font-unknown = font { $family } not found; using the default

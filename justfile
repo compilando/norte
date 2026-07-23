@@ -39,8 +39,17 @@ cov:
 docs:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
+# Chequeo barato de norte-gui (GP review): el crate está EXCLUIDO del
+# workspace (regla 7 / GPU pesada), así que `cargo check --workspace` NUNCA
+# lo toca — un bump de proto/frontend/core podía romper la GUI sin que nada
+# lo notara hasta correr `gui-ci` a mano. Solo `cargo check` (no el gate
+# completo `gui-ci`: nextest+clippy+fmt son caros para correr en cada `just
+# ci`) — suficiente para atrapar una API rota.
+check-gui:
+    cd crates/norte-gui && cargo check
+
 # Lo que corre CI.
-ci: lint test cov docs
+ci: lint test cov docs check-gui
 
 # Iteración rápida: todo el gate MENOS cobertura (cov recompila proto/vfs/core
 # instrumentados en su propio target y re-corre sus tests: ~34 s fijos incluso
