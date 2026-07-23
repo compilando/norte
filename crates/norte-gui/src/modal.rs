@@ -68,6 +68,18 @@ pub enum Modal {
         /// Subtipo de conflicto (para pintar el motivo).
         conflict: ConflictKind,
     },
+    /// Confirmar `app.quit` habiendo trabajo pendiente (revisión C2/G0
+    /// IMPORTANT 3): tasks visibles en la franja y/o marcas activas se
+    /// perderían de la vista (las tasks siguen en el daemon; las marcas son
+    /// solo de sesión) si se cierra sin avisar. Contadores puramente
+    /// informativos (para el título del modal, ver `modal_lines` en
+    /// `main.rs`) — `on_key` no los necesita.
+    ConfirmQuit {
+        /// Tasks visibles en la franja (`task_progress.len()`).
+        tasks: usize,
+        /// Suma de marcas activas en ambos panes.
+        marks: usize,
+    },
 }
 
 /// La transferencia que originó un conflicto (para reemitir con otra política).
@@ -92,6 +104,10 @@ pub enum ModalOutcome {
     Dismiss,
     /// Cierra el modal y manda estas operaciones al daemon.
     Submit(Vec<PendingOp>),
+    /// Confirma `app.quit` (revisión C2/G0 IMPORTANT 3): el caller (`main.rs`)
+    /// debe cerrar la ventana (`cx.quit()`) — este módulo es puro y no puede
+    /// hacerlo por sí mismo.
+    Quit,
 }
 
 /// Destino absoluto de un item copiado/movido a `to_dir`: `to_dir` + nombre del
@@ -163,6 +179,13 @@ pub fn on_key(modal: &mut Modal, key: &str) -> ModalOutcome {
                 },
             }])
         }
+        // Los contadores son solo para el título (main.rs); "y" no los
+        // necesita — confirma sin importar cuántos sean.
+        Modal::ConfirmQuit { .. } => match key {
+            "y" => ModalOutcome::Quit,
+            "n" | "escape" => ModalOutcome::Dismiss,
+            _ => ModalOutcome::Ignored,
+        },
     }
 }
 
@@ -335,5 +358,18 @@ mod tests {
         };
         assert_eq!(on_key(&mut m, "c"), ModalOutcome::Dismiss);
         assert_eq!(on_key(&mut m, "escape"), ModalOutcome::Dismiss);
+    }
+
+    /// Revisión C2/G0 IMPORTANT 3: "y" confirma la salida (el caller en
+    /// `main.rs` hace `cx.quit()` al ver `ModalOutcome::Quit` — este módulo
+    /// no puede tocar GPUI); "n"/Esc cancelan; cualquier otra tecla se
+    /// ignora (el modal sigue abierto).
+    #[test]
+    fn confirm_quit_y_confirma_n_o_escape_cancelan() {
+        let mut m = Modal::ConfirmQuit { tasks: 2, marks: 1 };
+        assert_eq!(on_key(&mut m, "y"), ModalOutcome::Quit);
+        assert_eq!(on_key(&mut m, "n"), ModalOutcome::Dismiss);
+        assert_eq!(on_key(&mut m, "escape"), ModalOutcome::Dismiss);
+        assert_eq!(on_key(&mut m, "x"), ModalOutcome::Ignored);
     }
 }

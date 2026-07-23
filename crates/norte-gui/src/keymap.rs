@@ -49,20 +49,78 @@ pub const VIEWER_COMMANDS: &[&str] = &[
     "viewer.hex",
 ];
 
+/// Los nombres de preset que el catálogo compartido conoce (espejo del
+/// `["orthodox", "vim", "cua"]` hardcodeado en `norte-tui/src/keymap.rs::
+/// presets()` — el catálogo (`norte_frontend::keymap::presets`) no expone un
+/// listado, solo `source(name)`). Fuente del mensaje "disponibles" del aviso
+/// de preset desconocido (revisión C2/G0 IMPORTANT 2) y de
+/// [`is_known_preset`].
+pub const KNOWN_PRESETS: &[&str] = &["orthodox", "vim", "cua"];
+
+/// ¿`name` es uno de los presets embebidos? (revisión C2/G0 IMPORTANT 2): el
+/// catálogo compartido documenta "nombre desconocido → cae al default +
+/// avisa" pero `norte_frontend::keymap::presets::source` solo devuelve
+/// `None` — el AVISO es responsabilidad del caller (`main.rs`, antes de
+/// llamar a `build_effectives`, que ya degrada en silencio vía [`preset`]).
+#[must_use]
+pub fn is_known_preset(name: &str) -> bool {
+    norte_frontend::keymap::presets::source(name).is_some()
+}
+
 /// Preset por nombre, tomado del catálogo COMPARTIDO
 /// `norte_frontend::keymap::presets` (decisión de diseño C2/G0: el preset
 /// compartido es canónico — la GUI adopta sus chords para ir alineada con la
 /// TUI; su viejo `keymap_presets/orthodox.toml` privado, con drift a nivel de
 /// chord, queda retirado). Un nombre desconocido cae al ORTHODOX compartido
-/// (mismo contrato que antes: fuente embebida, jamás I/O).
+/// (mismo contrato que antes: fuente embebida, jamás I/O) — el AVISO de esa
+/// degradación lo emite el caller vía [`is_known_preset`], no esta función.
 ///
 /// # Panics
 /// Solo si el TOML embebido (constante en tiempo de compilación) fuera
-/// inválido — lo cubre un test para los tres presets de fábrica.
+/// inválido — lo cubre un test para los tres presets de fábrica. El pánico
+/// culpa al preset REALMENTE resuelto (`resolved`), NUNCA al `name` pedido
+/// por el usuario: con un `name` desconocido ya se resolvió a `"orthodox"`
+/// ANTES de parsear, así que un TOML embebido roto sería el de orthodox, no
+/// el del nombre inventado (revisión C2/G0 MINOR 6).
 fn preset(name: &str) -> KeymapFile {
-    let src = norte_frontend::keymap::presets::source(name)
-        .unwrap_or(norte_frontend::keymap::presets::ORTHODOX);
-    parse_keymap(src).unwrap_or_else(|e| panic!("preset {name} embebido inválido: {e}"))
+    let (resolved, src) = match norte_frontend::keymap::presets::source(name) {
+        Some(src) => (name, src),
+        None => ("orthodox", norte_frontend::keymap::presets::ORTHODOX),
+    };
+    parse_keymap(src).unwrap_or_else(|e| panic!("preset {resolved} embebido inválido: {e}"))
+}
+
+/// Supplemento de chords EXCLUSIVOS de la GUI (revisión C2/G0 CRITICAL 1):
+/// los presets compartidos no conocen comandos que solo existen aquí
+/// (`mark.toggle`, `task.next/prev/dismiss`) ni el chord `delete` extra para
+/// `pane.delete` que traía el viejo preset privado retirado — sin este
+/// supplemento esos comandos quedarían INALCANZABLES por teclado (regresión
+/// real: existían en `keymap_presets/orthodox.toml`, borrado al adoptar el
+/// preset compartido). Cada chord aquí replica EXACTO el que traía ese
+/// fichero (`git show 80e234d^:crates/norte-gui/src/keymap_presets/
+/// orthodox.toml`). Es una CAPA (`prepend_keymap`, no `keymap`): se fusiona
+/// en [`build_effectives_layers`]/[`build_effectives_preset_only`] con la
+/// precedencia MÁS BAJA (primer elemento del vector de capas — ver
+/// `merge_ctx`, que da prioridad al ÚLTIMO), así que una capa de
+/// usuario/proyecto que rebindee estas mismas teclas sigue ganando.
+///
+/// # Panics
+/// Solo si el TOML embebido (constante) fuera inválido — cubierto por
+/// [`todo_comando_gui_es_alcanzable_desde_el_preset_default`] (indirectamente,
+/// vía `build_effectives`/`build_effectives_preset_only`, que la invocan
+/// siempre).
+fn gui_supplement() -> KeymapFile {
+    const TOML: &str = r#"
+[pane]
+prepend_keymap = [
+    { on = ["insert"], run = "mark.toggle" },
+    { on = ["ctrl+n"], run = "task.next" },
+    { on = ["ctrl+p"], run = "task.prev" },
+    { on = ["ctrl+l"], run = "task.dismiss" },
+    { on = ["delete"], run = "pane.delete" },
+]
+"#;
+    parse_keymap(TOML).unwrap_or_else(|e| panic!("supplemento GUI embebido inválido: {e}"))
 }
 
 /// La unión de comandos de Browse + Viewer (para validar el keymap ENTERO —
@@ -118,6 +176,11 @@ pub fn build_effectives_from(
 /// preset bindings to commands the GUI lacks are skipped instead of failing
 /// the whole load (design decision C2/G0: shared preset is canonical).
 ///
+/// The GUI-only [`gui_supplement`] goes in FIRST (lowest precedence, see
+/// `merge_ctx`: the LAST layer wins) so a user/project `keymap.toml` can
+/// still rebind `insert`/`ctrl+n`/`ctrl+p`/`ctrl+l`/`delete` on top of it
+/// (revisión C2/G0 CRITICAL 1).
+///
 /// # Errors
 /// The first `KeymapError` from any layer.
 fn build_effectives_layers(
@@ -125,7 +188,7 @@ fn build_effectives_layers(
     preset_name: &str,
 ) -> Result<(Effective, Effective), KeymapError> {
     let preset = preset(preset_name);
-    let mut kfs: Vec<KeymapFile> = Vec::new();
+    let mut kfs: Vec<KeymapFile> = vec![gui_supplement()];
     // La GUI no expone diagnósticos de "qué ficheros se cargaron" (a
     // diferencia de la TUI): las fuentes se descartan tras el préstamo.
     let mut sources = Vec::new();
@@ -142,17 +205,21 @@ fn build_effectives_layers(
     Ok((browse, viewer))
 }
 
-/// Fallback: los dos `Effective` SOLO del preset `preset_name` (no puede
-/// fallar — test), sin capas de usuario/proyecto (que es justo lo que se
-/// descarta cuando [`build_effectives`] falló).
+/// Fallback: los dos `Effective` del preset `preset_name` + [`gui_supplement`]
+/// (no puede fallar — test), sin capas de usuario/proyecto (que es justo lo
+/// que se descarta cuando [`build_effectives`] falló). El supplemento SIGUE
+/// aplicando aquí: si no, una capa de usuario rota tumbaría también
+/// `mark.toggle`/`task.next`/`task.prev`/`task.dismiss` en el fallback
+/// (revisión C2/G0 CRITICAL 1 — misma clase de regresión).
 #[must_use]
 pub fn build_effectives_preset_only(preset_name: &str) -> (Effective, Effective) {
     let preset = preset(preset_name);
+    let supplement = [gui_supplement()];
     let cmds = all_commands();
     (
-        Effective::build_for_subset(&preset, &[], &cmds, Screen::Browse)
+        Effective::build_for_subset(&preset, &supplement, &cmds, Screen::Browse)
             .expect("preset browse válido"),
-        Effective::build_for_subset(&preset, &[], &cmds, Screen::Viewer)
+        Effective::build_for_subset(&preset, &supplement, &cmds, Screen::Viewer)
             .expect("preset viewer válido"),
     )
 }
@@ -272,6 +339,109 @@ mod tests {
             r.push(Chord::new(Mods::default(), KeyCode::F(3))),
             norte_frontend::keymap::Resolution::Run("pane.view".into()),
             "F3 en el preset vim (pane) resuelve a pane.view"
+        );
+    }
+
+    /// Pin PERMANENTE de la clase de regresión (revisión C2/G0 CRITICAL 1):
+    /// adoptar el preset compartido dejó SIN chord a `mark.toggle`,
+    /// `task.next`, `task.prev` y `task.dismiss` (el preset compartido no
+    /// conoce esos comandos GUI-only) hasta que se añadió
+    /// [`gui_supplement`]. Este test recorre TODO el catálogo de la GUI
+    /// (`COMMANDS` + `VIEWER_COMMANDS`) contra el efectivo POR DEFECTO
+    /// (preset orthodox + supplemento, sin capas de usuario) y exige que
+    /// cada comando tenga AL MENOS un chord.
+    ///
+    /// Sin exenciones: cotejado a mano contra el viejo preset privado
+    /// retirado (`git show 80e234d^:crates/norte-gui/src/keymap_presets/
+    /// orthodox.toml`), la combinación preset compartido + supplemento
+    /// cubre el catálogo COMPLETO — los 10 `VIEWER_COMMANDS` ya estaban
+    /// enteros en el `[viewer]` del preset compartido (nada que suplir); de
+    /// `COMMANDS`, solo `mark.toggle`/`task.next`/`task.prev`/
+    /// `task.dismiss` faltaban, y los cuatro los repone el supplemento.
+    #[test]
+    fn todo_comando_gui_es_alcanzable_desde_el_preset_default() {
+        let (browse, viewer) = build_effectives_from("orthodox", None)
+            .expect("preset por defecto + supplemento: construye");
+        let browse_cmds: std::collections::HashSet<&str> =
+            browse.bindings().iter().map(|(_, cmd)| *cmd).collect();
+        let viewer_cmds: std::collections::HashSet<&str> =
+            viewer.bindings().iter().map(|(_, cmd)| *cmd).collect();
+        for cmd in COMMANDS {
+            assert!(
+                browse_cmds.contains(cmd),
+                "comando Browse {cmd:?} sin NINGÚN chord en el efectivo por defecto"
+            );
+        }
+        for cmd in VIEWER_COMMANDS {
+            assert!(
+                viewer_cmds.contains(cmd),
+                "comando Viewer {cmd:?} sin NINGÚN chord en el efectivo por defecto"
+            );
+        }
+    }
+
+    /// El supplemento reproduce EXACTO los 5 chords del viejo preset privado
+    /// (mismo `on` — verificado contra `git show 80e234d^:.../orthodox.toml`
+    /// en el comentario de [`gui_supplement`]), incluido `delete` como
+    /// alt-chord de `pane.delete` (que YA alcanza por `f8` del preset
+    /// compartido — este chord es paridad, no cobertura nueva).
+    #[test]
+    fn gui_supplement_reproduce_los_chords_del_viejo_preset_privado() {
+        let (browse, _viewer) = build_effectives_from("orthodox", None).expect("construye");
+        let mut r = norte_frontend::keymap::Resolver::new(browse);
+        let cases = [
+            (KeyCode::Insert, "mark.toggle"),
+            (KeyCode::Delete, "pane.delete"),
+        ];
+        for (code, cmd) in cases {
+            assert_eq!(
+                r.push(Chord::new(Mods::default(), code)),
+                norte_frontend::keymap::Resolution::Run(cmd.into()),
+                "{code:?} debe resolver a {cmd:?}"
+            );
+        }
+        let ctrl_cases = [
+            (KeyCode::Char('n'), "task.next"),
+            (KeyCode::Char('p'), "task.prev"),
+            (KeyCode::Char('l'), "task.dismiss"),
+        ];
+        for (code, cmd) in ctrl_cases {
+            let chord = Chord::new(
+                Mods {
+                    ctrl: true,
+                    ..Default::default()
+                },
+                code,
+            );
+            assert_eq!(
+                r.push(chord),
+                norte_frontend::keymap::Resolution::Run(cmd.into()),
+                "ctrl+{code:?} debe resolver a {cmd:?}"
+            );
+        }
+    }
+
+    /// El supplemento tiene precedencia MÁS BAJA que una capa de
+    /// usuario/proyecto (revisión C2/G0 CRITICAL 1): rebindear `insert` en
+    /// una capa de usuario gana sobre `insert`→`mark.toggle` del
+    /// supplemento.
+    #[test]
+    fn capa_de_usuario_puede_rebindear_encima_del_supplemento() {
+        let dir = scratch_dir("supplement-override");
+        std::fs::write(
+            dir.join("keymap.toml"),
+            r#"[pane]
+prepend_keymap = [{ on = ["insert"], run = "cursor.up" }]
+"#,
+        )
+        .unwrap();
+        let (browse, _viewer) = build_effectives_from("orthodox", Some(dir.clone()))
+            .expect("capa válida: carga sin error");
+        let mut r = norte_frontend::keymap::Resolver::new(browse);
+        assert_eq!(
+            r.push(Chord::new(Mods::default(), KeyCode::Insert)),
+            norte_frontend::keymap::Resolution::Run("cursor.up".into()),
+            "la capa de usuario rebindeó insert por encima del supplemento"
         );
     }
 

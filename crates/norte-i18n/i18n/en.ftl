@@ -278,3 +278,5 @@ cli-ai-rename-empty = the model proposed no renames
 cli-ai-rename-confirm = Apply these renames? [y/N]
 cli-ai-rename-abort = aborted; nothing was renamed
 cli-ai-rename-done = renamed { $n } file(s)
+gui-modal-quit-title = Quit with { $tasks } task(s) running and { $marks } mark(s)?
+gui-modal-footer-quit = y confirm   n/Esc cancel

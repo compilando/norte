@@ -278,3 +278,5 @@ cli-ai-rename-empty = el modelo no propuso ningún renombrado
 cli-ai-rename-confirm = ¿Aplicar estos renombrados? [s/N]
 cli-ai-rename-abort = cancelado; no se renombró nada
 cli-ai-rename-done = renombrados { $n } archivo(s)
+gui-modal-quit-title = ¿Salir con { $tasks } tarea(s) en curso y { $marks } marca(s)?
+gui-modal-footer-quit = y confirmar   n/Esc cancelar

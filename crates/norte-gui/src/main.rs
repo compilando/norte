@@ -227,22 +227,25 @@ impl NorteGui {
                 None,
                 Some(norte_i18n::ta(
                     "gui-banner-config-invalid",
-                    &[("error", e.to_string().as_str())],
+                    &[("error", banner_safe(&e.to_string()).as_str())],
                 )),
             ),
         };
+
+        // Preset desconocido (revisión C2/G0 IMPORTANT 2): ver
+        // `unknown_preset_banner` — debe ir ANTES de construir el keymap.
+        if let Some(msg) = unknown_preset_banner(&preset_name) {
+            startup_banner = Some(push_banner(startup_banner, msg));
+        }
 
         let theme = match norte_frontend::theme::resolve_theme(theme_spec.as_deref()) {
             Ok(theme) => theme,
             Err(e) => {
                 let msg = norte_i18n::ta(
                     "gui-banner-config-invalid",
-                    &[("error", e.to_string().as_str())],
+                    &[("error", banner_safe(&e.to_string()).as_str())],
                 );
-                startup_banner = Some(match startup_banner {
-                    Some(prev) => format!("{prev}; {msg}"),
-                    None => msg,
-                });
+                startup_banner = Some(push_banner(startup_banner, msg));
                 Theme::preset_default()
             }
         };
@@ -253,15 +256,13 @@ impl NorteGui {
         {
             Ok(pair) => (pair, startup_banner),
             Err(e) => {
-                let error = e.to_string();
-                let msg = norte_i18n::ta("gui-banner-keymap-error", &[("error", error.as_str())]);
-                let combined = match startup_banner {
-                    Some(prev) => format!("{prev}; {msg}"),
-                    None => msg,
-                };
+                let msg = norte_i18n::ta(
+                    "gui-banner-keymap-error",
+                    &[("error", banner_safe(&e.to_string()).as_str())],
+                );
                 (
                     keymap::build_effectives_preset_only(&preset_name),
-                    Some(combined),
+                    Some(push_banner(startup_banner, msg)),
                 )
             }
         };
@@ -723,13 +724,30 @@ impl NorteGui {
         self.clamp_task_cursor();
     }
 
+    /// `app.quit` (revisión C2/G0 IMPORTANT 3): con trabajo pendiente
+    /// (tasks visibles en la franja o marcas activas), abre
+    /// [`Modal::ConfirmQuit`] en vez de cerrar de inmediato — "y" en el
+    /// modal manda `ModalOutcome::Quit`, que el dispatcher de `on_key` ya
+    /// traduce a `cx.quit()`. Estado vacío: cierra YA (paridad con la TUI,
+    /// que jamás confirma — `crates/norte-tui/src/main.rs` hace
+    /// `app.quit = true` sin preguntar).
+    fn quit_or_confirm(&mut self, cx: &mut Context<Self>) {
+        let tasks = self.task_progress.len();
+        let marks = self.panes[0].marks_len() + self.panes[1].marks_len();
+        if has_pending_work(tasks, marks) {
+            self.modal = Some(Modal::ConfirmQuit { tasks, marks });
+        } else {
+            cx.quit();
+        }
+    }
+
     /// Ejecuta un comando del keymap (contexto Browse) sobre el estado.
     /// Reemplaza el `key_to_action` hardcodeado para las acciones nombradas
     /// (GUI-c T3): `on_key` resuelve la tecla vía `resolver` y llama aquí.
     fn run_command(&mut self, cmd: &str, cx: &mut Context<Self>) {
         let f = self.focus;
         match cmd {
-            "app.quit" => cx.quit(),
+            "app.quit" => self.quit_or_confirm(cx),
             "pane.switch" => self.focus = 1 - self.focus,
             "cursor.up" => self.panes[f].cursor_up(),
             "cursor.down" => self.panes[f].cursor_down(),
@@ -926,6 +944,7 @@ impl NorteGui {
                     }
                     self.open_next_conflict();
                 }
+                ModalOutcome::Quit => cx.quit(),
             }
             cx.notify();
             return;
@@ -1521,6 +1540,7 @@ impl NorteGui {
             Modal::ConfirmTransfer { .. } => "gui-modal-footer-transfer",
             Modal::ConfirmDelete { .. } => "gui-modal-footer-delete",
             Modal::ConflictResolve { .. } => "gui-modal-footer-conflict",
+            Modal::ConfirmQuit { .. } => "gui-modal-footer-quit",
         });
         // La línea de modo (índice 1 en ConfirmDelete) se alerta en rojo si es
         // borrado PERMANENTE.
@@ -1668,6 +1688,18 @@ fn retain_active(
 ) {
     order.retain(|id| progress.get(id).is_some_and(|p| !p.state.is_terminal()));
     progress.retain(|_, p| !p.state.is_terminal());
+}
+
+/// ¿Hay trabajo que se perdería de vista si la GUI cierra AHORA? (revisión
+/// C2/G0 IMPORTANT 3): `tasks` = tasks visibles en la franja (las
+/// `Completed` ya se autopodan al llegar — lo que queda son en vuelo o
+/// terminales-sin-descartar; cerrar no las cancela, pero deja de poder verlas
+/// ni cancelarlas desde esta ventana); `marks` = marcas activas en CUALQUIER
+/// pane (solo de sesión — se pierden de verdad al cerrar). Puro: no decide
+/// la UI, solo la condición.
+#[must_use]
+fn has_pending_work(tasks: usize, marks: usize) -> bool {
+    tasks > 0 || marks > 0
 }
 
 /// ¿Sigue vigente el resultado de un `fs.list`? Solo si su generación coincide
@@ -1859,6 +1891,17 @@ fn modal_lines(m: &Modal) -> Vec<String> {
                 ),
                 format!("{from_line} → {to_line}"),
             ]
+        }
+        Modal::ConfirmQuit { tasks, marks } => {
+            // Contadores puros (`usize`), sin bytes de usuario — nada que
+            // sanear aquí, a diferencia del resto de modales.
+            vec![norte_i18n::ta(
+                "gui-modal-quit-title",
+                &[
+                    ("tasks", tasks.to_string().as_str()),
+                    ("marks", marks.to_string().as_str()),
+                ],
+            )]
         }
     }
 }
@@ -2059,21 +2102,29 @@ impl Render for NorteGui {
             .p(px(4.0))
             .gap(px(2.0));
 
-        // Banner de keymap roto (GUI-c T3): una capa de usuario/proyecto con
-        // TOML inválido, tecla mal formada, comando desconocido o secuencia
-        // ambigua no tumba la GUI — corre con el preset orthodox puro
-        // (`keymap::build_effective_preset_only`, fijado en `new`) y avisa
-        // aquí una vez por sesión.
+        // Banner de arranque (GUI-c T3 + C2 revisión): keymap roto, config
+        // inválida, tema inválido o preset desconocido — ninguno tumba la
+        // GUI, todos avisan aquí una vez por sesión. `keymap_error` puede
+        // traer VARIOS mensajes unidos por `'\n'` (`push_banner`, MINOR 5):
+        // un div truncado POR LÍNEA en vez de un separador textual — así
+        // cada aviso se lee entero (hasta el ancho) sin competir por el
+        // mismo renglón.
         if let Some(msg) = &self.keymap_error {
-            root = root.child(
-                div()
-                    .px(px(4.0))
-                    .py(px(2.0))
-                    .bg(rgb(HEADER_BG))
-                    .text_color(rgb(ERR_FG))
-                    .truncate()
-                    .child(SharedString::from(msg.clone())),
-            );
+            let mut banner = div()
+                .flex()
+                .flex_col()
+                .bg(rgb(HEADER_BG))
+                .text_color(rgb(ERR_FG));
+            for line in msg.split('\n') {
+                banner = banner.child(
+                    div()
+                        .px(px(4.0))
+                        .py(px(1.0))
+                        .truncate()
+                        .child(SharedString::from(line.to_owned())),
+                );
+            }
+            root = root.child(banner);
         }
 
         // Visor (F3) a pantalla completa, el estado «abriendo…» mientras
@@ -2157,6 +2208,52 @@ impl Render for NorteGui {
     }
 }
 
+/// Sanea un mensaje de error para el banner de arranque (revisión C2/G0
+/// MINOR 4): la config (o el nombre del preset) puede venir de la capa de
+/// PROYECTO (`./.norte` de un repo AJENO/clonado) y los diagnósticos citan
+/// fragmentos crudos del propio fichero — bidi/invisibles sin enmascarar
+/// serían un hazard de terminal. Reusa el MISMO saneo que el resto de
+/// superficies de esta GUI (`norte_frontend::display_name`, vía bytes: el
+/// mismo camino que un nombre de fichero hostil).
+fn banner_safe(s: &str) -> String {
+    norte_frontend::display_name(s.as_bytes()).0
+}
+
+/// Añade `msg` al banner de arranque acumulado (revisión C2/G0 MINOR 5): UN
+/// mensaje por LÍNEA — sin separador textual (nada de `"; "` ni una frase
+/// localizada de por medio): `render` (ver el bloque `keymap_error`) parte
+/// por `'\n'` y pinta cada mensaje en su propio div truncado, así que el
+/// salto de línea YA es la separación visual.
+fn push_banner(existing: Option<String>, msg: String) -> String {
+    match existing {
+        Some(prev) => format!("{prev}\n{msg}"),
+        None => msg,
+    }
+}
+
+/// Aviso de preset desconocido (revisión C2/G0 IMPORTANT 2): la TUI ERRA
+/// ruidosamente (`KeymapsError::UnknownPreset`,
+/// `norte-tui/src/app.rs::keymaps_error_category`); `keymap::preset` aquí
+/// degrada EN SILENCIO al orthodox compartido (contrato del catálogo: "cae
+/// al default + avisa" — el aviso es cosa del CALLER, ver
+/// `keymap::is_known_preset`). `None` si `preset_name` es uno de los tres
+/// presets embebidos; si no, el mensaje LISTO para el banner (misma clave
+/// Fluent compartida que ya usa esa categoría de error de la TUI,
+/// `err-keymap-preset-unknown`). Extraída pura (sin GPUI) para test directo.
+fn unknown_preset_banner(preset_name: &str) -> Option<String> {
+    if keymap::is_known_preset(preset_name) {
+        return None;
+    }
+    let available = keymap::KNOWN_PRESETS.join(", ");
+    Some(norte_i18n::ta(
+        "err-keymap-preset-unknown",
+        &[
+            ("name", banner_safe(preset_name).as_str()),
+            ("available", available.as_str()),
+        ],
+    ))
+}
+
 fn main() {
     // Configuración real (C2): capas compartidas — escalares + keymap.
     // Bloqueante A PROPÓSITO: arranque, antes de que exista la ventana; no
@@ -2202,8 +2299,8 @@ fn main() {
 mod tests {
     use super::{
         ImagePreview, affected_dirs, apply_viewer_command, first_cancelable, generation_is_current,
-        image_preview_from, image_status, pending_hint, retain_active, row_label, task_at_cursor,
-        viewer_header, viewer_status,
+        has_pending_work, image_preview_from, image_status, pending_hint, retain_active, row_label,
+        task_at_cursor, unknown_preset_banner, viewer_header, viewer_status,
     };
     use norte_frontend::viewer::Viewer;
     use norte_proto::{EntryKind, VPath};
@@ -2725,6 +2822,34 @@ mod tests {
         progress.insert(TaskId::new(2), task_progress_with(2, TaskState::Cancelled));
         let order = vec![TaskId::new(1), TaskId::new(2)];
         assert_eq!(first_cancelable(&order, &progress), None);
+    }
+
+    /// Revisión C2/G0 IMPORTANT 3: solo tasks + solo marcas + ambos + ninguno
+    /// — cada combinación por separado, no solo el `||` agregado.
+    #[test]
+    fn has_pending_work_tasks_o_marcas_o_ninguno() {
+        assert!(!has_pending_work(0, 0), "nada pendiente → false");
+        assert!(has_pending_work(1, 0), "solo tasks → true");
+        assert!(has_pending_work(0, 1), "solo marcas → true");
+        assert!(has_pending_work(3, 2), "ambos → true");
+    }
+
+    /// Revisión C2/G0 IMPORTANT 2: los tres presets de fábrica NO avisan;
+    /// uno inventado sí, con su propio nombre y la lista de disponibles en
+    /// el mensaje (accionable, no un aviso mudo).
+    #[test]
+    fn preset_desconocido_avisa() {
+        for name in ["orthodox", "vim", "cua"] {
+            assert!(
+                unknown_preset_banner(name).is_none(),
+                "preset de fábrica {name:?}: no debe avisar"
+            );
+        }
+        let msg = unknown_preset_banner("vintage").expect("nombre desconocido: avisa");
+        assert!(msg.contains("vintage"), "nombra lo pedido: {msg}");
+        assert!(msg.contains("orthodox"), "lista lo disponible: {msg}");
+        assert!(msg.contains("vim"), "lista lo disponible: {msg}");
+        assert!(msg.contains("cua"), "lista lo disponible: {msg}");
     }
 
     /// `task_at_cursor` (#91): devuelve la task en el índice dado, y `None`
