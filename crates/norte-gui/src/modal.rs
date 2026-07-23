@@ -371,5 +371,8 @@ mod tests {
         assert_eq!(on_key(&mut m, "n"), ModalOutcome::Dismiss);
         assert_eq!(on_key(&mut m, "escape"), ModalOutcome::Dismiss);
         assert_eq!(on_key(&mut m, "x"), ModalOutcome::Ignored);
+        // Pin explícito de la convención del modal de aprobación: Enter
+        // JAMÁS confirma una acción destructiva/consentimiento.
+        assert_eq!(on_key(&mut m, "enter"), ModalOutcome::Ignored);
     }
 }

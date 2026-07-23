@@ -360,23 +360,27 @@ mod tests {
     /// `task.dismiss` faltaban, y los cuatro los repone el supplemento.
     #[test]
     fn todo_comando_gui_es_alcanzable_desde_el_preset_default() {
-        let (browse, viewer) = build_effectives_from("orthodox", None)
-            .expect("preset por defecto + supplemento: construye");
-        let browse_cmds: std::collections::HashSet<&str> =
-            browse.bindings().iter().map(|(_, cmd)| *cmd).collect();
-        let viewer_cmds: std::collections::HashSet<&str> =
-            viewer.bindings().iter().map(|(_, cmd)| *cmd).collect();
-        for cmd in COMMANDS {
-            assert!(
-                browse_cmds.contains(cmd),
-                "comando Browse {cmd:?} sin NINGÚN chord en el efectivo por defecto"
-            );
-        }
-        for cmd in VIEWER_COMMANDS {
-            assert!(
-                viewer_cmds.contains(cmd),
-                "comando Viewer {cmd:?} sin NINGÚN chord en el efectivo por defecto"
-            );
+        // Los TRES presets de fábrica (no solo orthodox): un chord retirado
+        // de vim/cua en el catálogo compartido también debe romper aquí.
+        for preset_name in ["orthodox", "vim", "cua"] {
+            let (browse, viewer) = build_effectives_from(preset_name, None)
+                .expect("preset de fábrica + supplemento: construye");
+            let browse_cmds: std::collections::HashSet<&str> =
+                browse.bindings().iter().map(|(_, cmd)| *cmd).collect();
+            let viewer_cmds: std::collections::HashSet<&str> =
+                viewer.bindings().iter().map(|(_, cmd)| *cmd).collect();
+            for cmd in COMMANDS {
+                assert!(
+                    browse_cmds.contains(cmd),
+                    "comando Browse {cmd:?} sin NINGÚN chord en {preset_name}"
+                );
+            }
+            for cmd in VIEWER_COMMANDS {
+                assert!(
+                    viewer_cmds.contains(cmd),
+                    "comando Viewer {cmd:?} sin NINGÚN chord en {preset_name}"
+                );
+            }
         }
     }
 

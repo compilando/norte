@@ -329,7 +329,9 @@ impl NorteGui {
                     focus: 0,
                     query: [String::new(), String::new()],
                     errors: {
-                        let error = e.to_string();
+                        // Mismo saneado que el resto de sitios del banner:
+                        // aunque venga del entorno, jamás texto crudo.
+                        let error = banner_safe(&e.to_string());
                         let msg = norte_i18n::ta(
                             "gui-banner-config-invalid",
                             &[("error", error.as_str())],
@@ -734,7 +736,11 @@ impl NorteGui {
     fn quit_or_confirm(&mut self, cx: &mut Context<Self>) {
         let tasks = self.task_progress.len();
         let marks = self.panes[0].marks_len() + self.panes[1].marks_len();
-        if has_pending_work(tasks, marks) {
+        // `inflight` cubre la ventana entre submit y el primer evento de
+        // task: una op recién lanzada aún sin progreso también debe frenar
+        // el quit (solo el GATE; los contadores del modal siguen siendo los
+        // visibles).
+        if has_pending_work(tasks, marks) || !self.inflight.is_empty() {
             self.modal = Some(Modal::ConfirmQuit { tasks, marks });
         } else {
             cx.quit();
