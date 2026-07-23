@@ -188,9 +188,34 @@
       "additionalProperties": false,
       "description": "The `[ui]` section of `norte.toml`.",
       "properties": {
+        "font": {
+          "default": null,
+          "description": "UI font family for GUI chrome (GP: `docs/superpowers/specs/2026-07-23-gui-visual-plugins-design.md`).\nWhen absent, use the platform default (bundled fallback).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "font_size": {
+          "default": null,
+          "description": "Base UI font size in pixels (GP spec, same design doc). Valid range is\n`[8.0, 32.0]`; [`crate::load::load`] rejects values outside that range\nso its diagnostic can include the source configuration path — it is\nNOT clamped in silence.",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "lang": {
           "default": null,
           "description": "Language (`es` or `en`). When absent, negotiate from the environment.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mono_font": {
+          "default": null,
+          "description": "Monospace font family for listings/viewer (GP spec, same design doc).\nWhen absent, use the bundled monospace font.",
           "type": [
             "string",
             "null"

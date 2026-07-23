@@ -267,6 +267,19 @@ pub struct CommonConfig {
     pub ui_theme: Option<String>,
     /// `[ui] quick_search`, validated (invalid value = load error).
     pub quick_search: QuickSearch,
+    /// `[ui] font` (last-wins; None = platform default). Honored from ALL
+    /// layers including Project — presentation-only, same reasoning as the
+    /// other `[ui]` scalars above.
+    pub ui_font: Option<String>,
+    /// `[ui] mono_font` (last-wins; None = bundled mono). Honored from ALL
+    /// layers including Project — presentation-only, same reasoning as the
+    /// other `[ui]` scalars above.
+    pub ui_mono_font: Option<String>,
+    /// `[ui] font_size`, validated to `[8.0, 32.0]` (invalid value = load
+    /// error; None = platform/frontend default). Honored from ALL layers
+    /// including Project — presentation-only, same reasoning as the other
+    /// `[ui]` scalars above.
+    pub ui_font_size: Option<f32>,
     /// `[daemon] mode` (last-wins; None = embedded; never from Project —
     /// fail-closed, review MAJOR-1). Startup only.
     pub daemon_mode: Option<crate::schema::DaemonMode>,
@@ -330,6 +343,43 @@ fn merge_ai_layer(
     Ok(())
 }
 
+/// Merges one layer's already-parsed `[ui] font`/`mono_font`/`font_size`
+/// values into the accumulators (last-present-wins), validating `font_size`
+/// against `[8.0, 32.0]` (GP:
+/// `docs/superpowers/specs/2026-07-23-gui-visual-plugins-design.md`).
+/// Extracted out of [`load`] to stay under clippy's line-count cap, same
+/// pattern as [`merge_ai_layer`].
+///
+/// # Errors
+/// [`ConfigError::Toml`] if `font_size` is outside `[8.0, 32.0]`.
+fn merge_ui_fonts(
+    ui_font: &mut Option<String>,
+    ui_mono_font: &mut Option<String>,
+    ui_font_size: &mut Option<f32>,
+    font: Option<String>,
+    mono_font: Option<String>,
+    font_size: Option<f32>,
+    norte: &Path,
+) -> Result<(), ConfigError> {
+    if let Some(f) = font {
+        *ui_font = Some(f);
+    }
+    if let Some(mf) = mono_font {
+        *ui_mono_font = Some(mf);
+    }
+    if let Some(fs) = font_size {
+        if !(8.0..=32.0).contains(&fs) {
+            return Err(ConfigError::Toml {
+                path: norte.to_path_buf(),
+                // #73: never quote the raw value in the diagnostic.
+                message: "[ui] font_size fuera de rango [8, 32]".to_owned(),
+            });
+        }
+        *ui_font_size = Some(fs);
+    }
+    Ok(())
+}
+
 /// Loads and merges every layer (ADR 0007/0035).
 ///
 /// # Errors
@@ -340,6 +390,9 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_lang: Option<String> = None;
     let mut ui_theme: Option<String> = None;
     let mut quick_search = QuickSearch::default();
+    let mut ui_font: Option<String> = None;
+    let mut ui_mono_font: Option<String> = None;
+    let mut ui_font_size: Option<f32> = None;
     let mut daemon_mode: Option<DaemonMode> = None;
     let mut daemon_socket: Option<PathBuf> = None;
     let mut hotlist: Vec<HotlistItem> = Vec::new();
@@ -382,6 +435,15 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                     }
                 };
             }
+            merge_ui_fonts(
+                &mut ui_font,
+                &mut ui_mono_font,
+                &mut ui_font_size,
+                parsed.ui.font,
+                parsed.ui.mono_font,
+                parsed.ui.font_size,
+                &norte,
+            )?;
             // `[daemon]` is NOT honored from Project either (review MAJOR-1):
             // a foreign repo must not redirect the core transport to an
             // attacker-controlled socket — same fail-closed carve-out as
@@ -438,6 +500,9 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_lang,
         ui_theme,
         quick_search,
+        ui_font,
+        ui_mono_font,
+        ui_font_size,
         daemon_mode,
         daemon_socket,
         hotlist,
@@ -717,6 +782,36 @@ mod hotlist_tests {
     fn quick_search_default_es_filter() {
         let cfg = load(&Layers { dirs: vec![] }).expect("carga");
         assert_eq!(cfg.quick_search, QuickSearch::Filter);
+    }
+
+    #[test]
+    fn ui_fonts_se_cargan_y_validan() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("norte.toml"),
+            "[ui]\nfont = \"Inter\"\nmono_font = \"JetBrains Mono\"\nfont_size = 15.5\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.ui_font.as_deref(), Some("Inter"));
+        assert_eq!(cfg.ui_mono_font.as_deref(), Some("JetBrains Mono"));
+        assert!((cfg.ui_font_size.unwrap() - 15.5).abs() < f32::EPSILON);
+    }
+
+    /// ADR 0007: config inválida es error de arranque CON fichero culpable —
+    /// un `font_size` fuera de [8, 32] no se clampa en silencio (contrato
+    /// distinto al de [effects], que es data de tema y clampa).
+    #[test]
+    fn ui_font_size_fuera_de_rango_es_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("norte.toml"), "[ui]\nfont_size = 4.0\n").unwrap();
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        assert!(matches!(load(&layers), Err(ConfigError::Toml { .. })));
     }
 
     #[test]

@@ -123,6 +123,20 @@ pub struct UiSection {
     /// fall back.
     #[serde(default)]
     pub quick_search: Option<String>,
+    /// UI font family for GUI chrome (GP: `docs/superpowers/specs/2026-07-23-gui-visual-plugins-design.md`).
+    /// When absent, use the platform default (bundled fallback).
+    #[serde(default)]
+    pub font: Option<String>,
+    /// Monospace font family for listings/viewer (GP spec, same design doc).
+    /// When absent, use the bundled monospace font.
+    #[serde(default)]
+    pub mono_font: Option<String>,
+    /// Base UI font size in pixels (GP spec, same design doc). Valid range is
+    /// `[8.0, 32.0]`; [`crate::load::load`] rejects values outside that range
+    /// so its diagnostic can include the source configuration path — it is
+    /// NOT clamped in silence.
+    #[serde(default)]
+    pub font_size: Option<f32>,
 }
 
 /// The `[keymap]` section of `norte.toml`.
