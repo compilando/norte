@@ -1,0 +1,288 @@
+//! The strict, canonical schema of `norte.toml` (ADR 0035): every section,
+//! `deny_unknown_fields`, compact hostile-safe diagnostics (#73).
+
+use std::path::PathBuf;
+
+use serde::Deserialize;
+
+/// Default keymap preset (decision from 2026-07-10).
+pub const DEFAULT_PRESET: &str = "orthodox";
+
+/// General configuration from `norte.toml`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct NorteToml {
+    /// Keymap settings.
+    #[serde(default)]
+    pub keymap: KeymapSection,
+    /// User-interface settings.
+    #[serde(default)]
+    pub ui: UiSection,
+    /// Daemon settings.
+    #[serde(default)]
+    pub daemon: DaemonSection,
+    /// Archive-provider limits (`[archive]`, #95.2).
+    #[serde(default)]
+    pub archive: ArchiveSection,
+    /// Favourite directories shown by `Ctrl+D`.
+    ///
+    /// Entries accumulate across layers instead of replacing lower-layer
+    /// values. The project layer is excluded while the load module (Task 5)
+    /// merges the list. An absent value contributes no favourites from that
+    /// layer.
+    #[serde(default)]
+    pub hotlist: Vec<HotlistEntry>,
+    /// AI subsystem settings (`[ai]`, ADR 0031/0035). Honored from
+    /// System+User layers only — never Project (fail-closed, same carve-out
+    /// as `[archive]`).
+    #[serde(default)]
+    pub ai: AiSection,
+}
+
+/// One `[[hotlist]]` entry as stored in `norte.toml`.
+///
+/// `path` contains an unvalidated wire value such as `scheme://...`, including
+/// valid remote schemes. The load module (Task 5) validates it as a `VPath`
+/// while merging layers. One invalid entry is handled independently and does
+/// not prevent the rest of `norte.toml` from loading.
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct HotlistEntry {
+    /// Name displayed in the `Ctrl+D` popup.
+    pub name: String,
+    /// Path in wire form, not yet validated.
+    pub path: String,
+}
+
+/// The `[archive]` section of `norte.toml` (#95.2): local anti-bomb limits
+/// for browsing zip/tar/tar.gz containers. Absent values keep the compiled
+/// defaults. Applied at startup on the embedded engine only — a container
+/// that exceeds them fails with `LimitExceeded`, never silently truncates.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ArchiveSection {
+    /// Maximum indexed entries per container (default 500000).
+    #[serde(default)]
+    pub max_entries: Option<u64>,
+    /// Decompression budget in bytes for indexing a `tar.gz` (default 64 GiB).
+    #[serde(default)]
+    pub max_decompressed_bytes: Option<u64>,
+    /// `[archive] max_nesting` (#56): tope de capas de archivo anidadas.
+    pub max_nesting: Option<usize>,
+}
+
+/// The `[daemon]` section of `norte.toml` (ADR 0011).
+///
+/// Transport mode is selected at startup and is not hot reloaded. Changing it
+/// requires restarting the frontend.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct DaemonSection {
+    /// `embedded` for immediate startup (the default), or `daemon`.
+    #[serde(default)]
+    pub mode: Option<DaemonMode>,
+    /// Daemon socket path. When absent, use the operating-system default.
+    #[serde(default)]
+    pub socket: Option<PathBuf>,
+}
+
+/// Core transport. This changes transport only, not behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum DaemonMode {
+    /// Core in-process (default).
+    Embedded,
+    /// Connect to the Unix-domain-socket daemon (Unix only; ADR 0011).
+    Daemon,
+}
+
+/// The `[ui]` section of `norte.toml`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct UiSection {
+    /// Language (`es` or `en`). When absent, negotiate from the environment.
+    #[serde(default)]
+    pub lang: Option<String>,
+    /// Theme preset name (`default`, `catppuccin-mocha`, `gruvbox-dark`,
+    /// `nord`, `gruvbox-light`, or `catppuccin-latte`) or a path to a custom
+    /// TOML theme (ADR 0020). When absent, use `default`.
+    #[serde(default)]
+    pub theme: Option<String>,
+    /// Quick-search mode for `/`: `"filter"` narrows the listing (the default),
+    /// while `"jump"` moves the cursor without changing the listing.
+    ///
+    /// The load module (Task 5) rejects other values so its diagnostic can
+    /// include the source configuration path. Invalid values never silently
+    /// fall back.
+    #[serde(default)]
+    pub quick_search: Option<String>,
+}
+
+/// The `[keymap]` section of `norte.toml`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct KeymapSection {
+    /// Base preset (`orthodox`, `vim`, or `cua`). Inherit when absent.
+    #[serde(default)]
+    pub preset: Option<String>,
+}
+
+/// The `[ai]` section of `norte.toml` (ADR 0031). All off by default.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AiSection {
+    /// AI enabled. `None`/`false` = the gate rejects every operation.
+    /// `Option` so layer merge distinguishes "absent" from "false".
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// Local-only mode: reject remote providers (spec §9).
+    #[serde(default)]
+    pub local_only: Option<bool>,
+    /// Prefixes whose content/names never leave the process. Wire strings;
+    /// validated to `VPath` during merge (the load module, Task 5).
+    #[serde(default)]
+    pub denied_prefixes: Vec<String>,
+    /// Provider name used for AI rename.
+    #[serde(default)]
+    pub rename_provider: Option<String>,
+    /// Declared providers (`[ai.providers.<name>]`).
+    #[serde(default)]
+    pub providers: std::collections::BTreeMap<String, AiProviderEntry>,
+}
+
+/// One `[ai.providers.<name>]` entry.
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AiProviderEntry {
+    /// `anthropic` | `ollama` | `openai-compat`.
+    pub kind: String,
+    /// Model id as the provider expects it.
+    pub model: String,
+    /// Base URL (required for `openai-compat`).
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+/// Error de carga de config. Siempre con el ARCHIVO en el diagnóstico.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    /// No se pudo leer un archivo que existe.
+    #[error("no se pudo leer {}: {source}", path.display())]
+    Io {
+        /// El archivo.
+        path: PathBuf,
+        /// La causa.
+        source: std::io::Error,
+    },
+    /// TOML inválido o con claves desconocidas.
+    #[error("{}: {message}", path.display())]
+    Toml {
+        /// El archivo.
+        path: PathBuf,
+        /// Diagnóstico del parser (incluye campo y posición).
+        message: String,
+    },
+}
+
+/// Diagnóstico COMPACTO de un error de `toml`: posición + mensaje semántico.
+/// El `Display` multilínea del crate cita ENTERA la línea del fichero —
+/// contenido potencialmente hostil/kilométrico que además desplazaría lo
+/// accionable («unknown field …», que va al final) fuera del tope de la
+/// barra (#73).
+///
+/// Only exercised by tests until the merge/load module (Task 5) wires it
+/// into `load`'s error path — hence the explicit `allow`.
+#[allow(dead_code)]
+pub(crate) fn toml_diag(raw: &str, e: &toml::de::Error) -> String {
+    match e.span() {
+        Some(s) => {
+            let line = 1 + raw[..s.start.min(raw.len())].matches('\n').count();
+            format!("line {line}: {}", e.message())
+        }
+        None => e.message().to_owned(),
+    }
+}
+
+/// Lee un archivo si existe; `None` si no está (una capa ausente no es
+/// error), `Err` si existe pero no se puede leer.
+#[doc(hidden)]
+pub fn read_optional(path: &std::path::Path) -> Result<Option<String>, ConfigError> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => Ok(Some(s)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(ConfigError::Io {
+            path: path.to_path_buf(),
+            source: e,
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The latent bug this task fixes: the strict struct must accept `[ai]`
+    /// (ADR 0031 documents it in norte.toml; the old TUI struct rejected it).
+    #[test]
+    fn norte_toml_estricto_acepta_seccion_ai() {
+        let doc = r#"
+[ui]
+theme = "nord"
+
+[ai]
+enabled = true
+local_only = true
+denied_prefixes = ["file:///secret"]
+rename_provider = "local"
+
+[ai.providers.local]
+kind = "ollama"
+model = "llama3"
+"#;
+        let parsed: NorteToml = toml::from_str(doc).expect("[ai] es sección canónica");
+        assert_eq!(parsed.ai.enabled, Some(true));
+        assert_eq!(parsed.ai.providers.len(), 1);
+    }
+
+    /// Strictness is uniform: a typo anywhere is a hard error.
+    #[test]
+    fn campo_desconocido_sigue_siendo_error() {
+        assert!(toml::from_str::<NorteToml>("[ui]\ntheem = \"nord\"\n").is_err());
+    }
+}
+
+#[cfg(test)]
+mod toml_diag_tests {
+    use super::*;
+
+    /// #73: el diagnóstico compacto conserva posición + mensaje semántico y
+    /// NO cita la línea del fichero — un TOML hostil puede meter valores
+    /// kilométricos/bidi que desplazarían lo accionable fuera del tope de la
+    /// barra (hallazgo MEDIA-1 del encoding-auditor).
+    #[test]
+    fn toml_diag_compacto_sin_citar_el_contenido() {
+        let hostil = format!("v = \"{}\u{202E}\"\nbad", "x".repeat(300));
+        let e = toml::from_str::<NorteToml>(&hostil).expect_err("no parsea");
+        let d = toml_diag(&hostil, &e);
+        assert!(!d.contains("xxx"), "no cita el contenido: {d}");
+        assert!(!d.contains('\u{202E}'), "sin bidi: {d}");
+        assert!(d.len() < 200, "compacto ({} bytes): {d}", d.len());
+        assert!(d.contains("line "), "la posición sobrevive: {d}");
+    }
+
+    /// El span puede faltar (errores semánticos sin posición): mensaje solo.
+    #[test]
+    fn toml_diag_sin_span_no_panica() {
+        let e = toml::from_str::<NorteToml>("keymap = 3").expect_err("no valida");
+        let _ = toml_diag("keymap = 3", &e);
+    }
+}
