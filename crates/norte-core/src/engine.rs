@@ -631,7 +631,11 @@ impl Engine {
                         .await
                         .map_err(|e| {
                             tracing::warn!(error = %e, "index.build falló");
-                            Error::Io { retryable: false }
+                            // BUSY/LOCKED de SQLite = transitorio → retryable
+                            // (rust review MAJOR).
+                            Error::Io {
+                                retryable: e.is_retryable(),
+                            }
                         })?;
                     *report_task.lock().expect("report lock sano") = Some(r);
                     Ok(())
@@ -655,7 +659,9 @@ impl Engine {
         let index = self.index.clone().ok_or(Error::Unsupported)?;
         index.query(root, text, limit).await.map_err(|e| {
             tracing::debug!(error = %e, "index.query falló");
-            Error::Io { retryable: false }
+            Error::Io {
+                retryable: e.is_retryable(),
+            }
         })
     }
 

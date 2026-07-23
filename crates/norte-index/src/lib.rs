@@ -23,6 +23,26 @@ pub enum IndexError {
     /// Fallo de `SQLite` (abrir, migrar, consultar).
     #[error("sqlite: {0}")]
     Sqlite(#[from] sqlx::Error),
+    /// Fallo de I/O al pre-crear el fichero del índice con permisos 0600.
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+impl IndexError {
+    /// `true` si es TRANSITORIO (lock ocupado: `SQLITE_BUSY`/`SQLITE_LOCKED`) —
+    /// el caller puede reintentar. La corrupción/otros no son retryables. Sirve
+    /// para que el engine mapee a `Error::Io { retryable }` con fidelidad (rust
+    /// review MAJOR).
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        let Self::Sqlite(e) = self else {
+            return false; // Io (pre-create) no es transitorio de lock.
+        };
+        e.as_database_error()
+            .and_then(sqlx::error::DatabaseError::code)
+            // Códigos primarios SQLITE_BUSY=5, SQLITE_LOCKED=6.
+            .is_some_and(|c| c == "5" || c == "6")
+    }
 }
 
 /// Una entrada a indexar (proyección de `norte_vfs::Entry`). `path` completo bajo
@@ -74,6 +94,30 @@ impl Index {
     /// # Errors
     /// [`IndexError::Sqlite`] si no se puede abrir o migrar.
     pub async fn open(path: &Path) -> Result<Self, IndexError> {
+        // Pre-crea el fichero 0600 ANTES de conectar (security review MEDIUM): el
+        // índice guarda NOMBRES/PATHS del usuario (sensibles). Sin esto SQLite lo
+        // crearía con el umask (típicamente 0644). Mismo patrón que el journal;
+        // los sidecars -wal/-shm heredan. Sin lock EXCLUSIVO a propósito: el WAL
+        // da lectura concurrente y el `SQLITE_BUSY` de una escritura simultánea se
+        // reporta retryable (ver `is_retryable`) — así el CLI embebido puede leer
+        // aunque el daemon posea el fichero.
+        #[cfg(unix)]
+        {
+            // tokio::fs::{DirBuilder,OpenOptions} exponen `.mode()` inherente en
+            // unix (sin los traits ext de std).
+            if let Some(parent) = path.parent() {
+                let mut builder = tokio::fs::DirBuilder::new();
+                builder.recursive(true).mode(0o700);
+                let _ = builder.create(parent).await;
+            }
+            tokio::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .open(path)
+                .await?;
+        }
         let opts = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true)
@@ -82,6 +126,12 @@ impl Index {
         let pool = SqlitePoolOptions::new().connect_with(opts).await?;
         let idx = Self { pool };
         idx.migrate().await?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Cinturón si el fichero preexistía con otros permisos.
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
         Ok(idx)
     }
 
@@ -184,6 +234,11 @@ impl Index {
                 .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
                 .unwrap_or_default();
             let path_display = e.path.display_lossy();
+            // Las columnas *_display son FUNCIÓN de `path` (la clave del
+            // conflicto), así que NO cambian para una fila dada → el UPDATE solo
+            // toca kind/size/mtime y NO hay trigger AFTER UPDATE. INVARIANTE
+            // (rust review MINOR): jamás añadir `name_display`/`path_display` a
+            // este DO UPDATE sin un trigger AFTER UPDATE, o la FTS se desincroniza.
             sqlx::query(
                 "INSERT INTO files
                      (root_id, path, name_display, path_display, kind, size, mtime_ms, last_seen_build)
@@ -274,7 +329,12 @@ impl Index {
 }
 
 /// Id estable del root desde su forma canónica (`scheme://authority` + base).
-/// FNV-1a de 64 bits sobre `to_wire()`; estable entre procesos.
+/// FNV-1a de 64 bits sobre `to_wire()`; estable entre procesos Y entre
+/// endianness (bytes little-endian, no `to_ne_bytes` — así una `.db` copiada a
+/// otra máquina conserva el id, encoding review). Solo es una clave de SCOPING
+/// (`WHERE root_id = ?`), jamás autoridad: una colisión (64 bits, ínfima)
+/// mezclaría a lo sumo dos roots, sin corromper bytes. Deuda (root table
+/// interna) en ADR 0034 si el confused-deputy importa.
 fn root_id(root: &VPath) -> i64 {
     let s = root.to_wire();
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -282,7 +342,7 @@ fn root_id(root: &VPath) -> i64 {
         h ^= u64::from(*b);
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    i64::from_ne_bytes(h.to_ne_bytes())
+    i64::from_le_bytes(h.to_le_bytes())
 }
 
 /// Discriminante estable de `EntryKind` para la columna `kind`.
@@ -412,10 +472,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_cancel_persists_partial_and_skips_sweep() {
+    async fn build_cancel_persists_partial_superset_and_skips_sweep() {
         let idx = Index::open_memory().await.unwrap();
         let root = root();
-        // Primer build: 2 entradas.
+        // Primer build: a, b.
         let tok = CancellationToken::new();
         idx.build(
             &root,
@@ -424,19 +484,37 @@ mod tests {
         )
         .await
         .unwrap();
-        // Segundo build CANCELADO de entrada: no barre nada (a/b persisten).
+        // Segundo build que INSERTA c y luego se cancela ANTES de d: el token se
+        // dispara al tirar del 2º item (i==1), así c ya se procesó pero el sweep
+        // se salta. Resultado = SUPERSET (a, b viejos + c nuevo), removed=0. Esto
+        // prueba el camino "coherente superset", no solo el skip-sweep (rust MINOR).
         let cancelled = CancellationToken::new();
-        cancelled.cancel();
-        let r = idx
-            .build(&root, vec![entry(&root, b"c.txt")], &cancelled)
+        let c2 = cancelled.clone();
+        let items = vec![entry(&root, b"c.txt"), entry(&root, b"d.txt")]
+            .into_iter()
+            .enumerate()
+            .map(move |(i, e)| {
+                if i == 1 {
+                    c2.cancel();
+                }
+                e
+            });
+        let r = idx.build(&root, items, &cancelled).await.unwrap();
+        assert_eq!(r.removed, 0, "cancelado NO barre (b/d no se podan)");
+        let names: Vec<String> = sqlx::query_scalar("SELECT path FROM files ORDER BY path")
+            .fetch_all(&idx.pool)
             .await
             .unwrap();
-        assert_eq!(r.removed, 0, "cancelado no barre");
-        let n: i64 = sqlx::query_scalar("SELECT count(*) FROM files")
-            .fetch_one(&idx.pool)
-            .await
-            .unwrap();
-        assert_eq!(n, 2, "a y b siguen (no se podó)");
+        // a, b (viejos) + c (parcial nuevo); d nunca se insertó.
+        assert_eq!(names.len(), 3, "superset a+b+c, fue {names:?}");
+        assert!(
+            names.iter().any(|p| p.ends_with("c.txt")),
+            "c parcial persistió"
+        );
+        assert!(
+            names.iter().all(|p| !p.ends_with("d.txt")),
+            "d no se insertó"
+        );
     }
 
     #[test]

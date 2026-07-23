@@ -363,13 +363,19 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
 
     // Índice de búsqueda (M4, ADR 0034): el MISMO fichero que el daemon
     // (config_dir/index.db), así `norte index build` en embebido persiste y una
-    // query posterior lo lee. Si no abre, se sigue sin él (index.* Unsupported).
-    let index_path = norte_core::connect::config_dir().join("index.db");
-    let engine = match norte_core::Index::open(&index_path).await {
-        Ok(idx) => Engine::new().with_index(Arc::new(idx)),
-        Err(e) => {
-            eprintln!("aviso: índice no disponible ({e}); index.* dará Unsupported");
-            Engine::new()
+    // query posterior lo lee. SOLO se abre en modo embebido: con `--daemon` el
+    // dueño del índice es el daemon (se accede por RPC), y abrirlo aquí solo
+    // arriesgaría contención de escritura. Si no abre, se sigue sin él.
+    let engine = if cli.daemon {
+        Engine::new()
+    } else {
+        let index_path = norte_core::connect::config_dir().join("index.db");
+        match norte_core::Index::open(&index_path).await {
+            Ok(idx) => Engine::new().with_index(Arc::new(idx)),
+            Err(e) => {
+                eprintln!("aviso: índice no disponible ({e}); index.* dará Unsupported");
+                Engine::new()
+            }
         }
     };
     engine.register_provider(Arc::new(LocalProvider::os_root()) as Arc<dyn Provider>);

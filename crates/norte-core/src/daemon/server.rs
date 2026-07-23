@@ -2400,6 +2400,11 @@ async fn dispatch_fs_task(
         // deuda análoga a `policy.undo_report`.
         methods::INDEX_BUILD => {
             let p: methods::IndexBuildParams = parse_params(req.params)?;
+            // Gate de LECTURA (#80): el build camina el subárbol y sus paths
+            // salen por `task.progress.current` al owner — un agente fuera de
+            // scope enumeraría un árbol arbitrario. Se gatea igual que fs.search /
+            // index.query (security/rust BLOCKER de la review M4).
+            read_gate(&actor, &p.root, shared)?;
             let (handle, _report) = shared
                 .engine
                 .index_build_as(p.root, actor.clone())

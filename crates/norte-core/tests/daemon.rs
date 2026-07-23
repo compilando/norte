@@ -654,6 +654,49 @@ async fn agente_sin_scope_ve_policy_denied_humano_copia() {
     assert!(res.task_id.get() > 0);
 }
 
+/// M4 (ADR 0034, review BLOCKER): `index.build` e `index.query` gatean la
+/// LECTURA por actor igual que `fs.search`. Un agente sin scope NO puede caminar
+/// un árbol arbitrario (cuyos paths saldrían por `task.progress`) ni consultar el
+/// índice — ambos devuelven `PolicyDenied out-of-scope`. El gate corre ANTES del
+/// engine, así que no importa que el daemon de test no tenga índice instalado.
+#[tokio::test]
+async fn agente_sin_scope_no_puede_index_build_ni_query() {
+    let d = spawn_daemon_policy().await;
+    let agent = connected_agent(&d, "s1").await;
+    let assert_denied = |err: ClientError| match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
+            "PolicyDenied out-of-scope, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    };
+    // index.build fuera de scope → denegado (jamás camina el árbol).
+    let err = agent
+        .call::<_, FsTaskResult>(
+            methods::INDEX_BUILD,
+            &methods::IndexBuildParams {
+                root: vp("mem:///"),
+            },
+        )
+        .await
+        .expect_err("index.build sin scope denegado");
+    assert_denied(err);
+    // index.query fuera de scope → denegado.
+    let err = agent
+        .call::<_, methods::IndexQueryResult>(
+            methods::INDEX_QUERY,
+            &methods::IndexQueryParams {
+                root: vp("mem:///"),
+                text: "x".into(),
+                limit: 10,
+            },
+        )
+        .await
+        .expect_err("index.query sin scope denegado");
+    assert_denied(err);
+}
+
 /// M3-3b Task 3: round-trip de scope. Un agente pide (`request_scope`) — sin
 /// concesión su copia dentro sigue denegada —; un humano concede
 /// (`grant_scope`) y entonces la copia DENTRO del scope procede, pero FUERA
@@ -1605,7 +1648,7 @@ async fn frames_hostiles_y_formas_canonicas_crudas() {
 
     // initialize + daemon.shutdown con params null (golden canónico, M1).
     s.write_all(
-        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.23.0\",\"encodings\":[\"json\"]}}\n",
+        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.24.0\",\"encodings\":[\"json\"]}}\n",
     )
     .await
     .expect("write");

@@ -12,7 +12,7 @@ authors.workspace = true
 norte-proto.workspace = true
 sqlx = { workspace = true, features = ["sqlite", "runtime-tokio"] }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "fs"] }
 tokio-util.workspace = true
 tracing.workspace = true
 

@@ -73,3 +73,22 @@ the daemon (like the journal).
   gated by the AI policy. Out of scope here.
 - Residual debt: file **content** full-text (not just names), **tags**, and
   **auto-watch** — all deferred (spec §9 lists them under `norte-index`).
+- Review debt (M4 reviewers):
+  - **Streaming build.** `index.build` materialises the whole `Vec<IndexEntry>`
+    from the walk before writing (bounded by `MAX_INDEX_ENTRIES = 5_000_000`).
+    A huge tree holds all path bytes resident. `Index::build` already commits in
+    512-row batches; the walk should stream into it over a bounded channel so
+    peak memory is O(batch). Deferred; the cap plus the `read_gate` (only
+    scope-granted roots reach the walk) bound the exposure.
+  - **NFC-insensitive match.** The authority preserves bytes exactly, but the
+    FTS `*_display` columns and the query are not NFC-folded, so a macOS-NFD name
+    searched with an NFC term can miss (a *recall* gap, never corruption). Search
+    is display-form best-effort; NFC-fold-for-match is future work.
+  - **`root_id` is a 64-bit FNV hash** used only as a scoping key (never
+    authority). A collision (astronomically unlikely, and the colliding root must
+    also be a valid scope-granted VPath) would at worst merge two roots' results.
+    A `roots` intern table would remove the confused-deputy shape; deferred.
+  - **`IndexBuildResult` counts** (`indexed`/`removed`) are not forwarded over the
+    daemon wire yet (the handler returns `FsTaskResult{task_id}`; task completion
+    is the signal). A report-fetch method analogous to `policy.undo_report` is
+    future work. The embedded backend surfaces the counts directly.

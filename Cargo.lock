@@ -4258,6 +4258,7 @@ dependencies = [
  "norte-ai",
  "norte-connect",
  "norte-encoding",
+ "norte-index",
  "norte-plugin-host",
  "norte-proto",
  "norte-testkit",
@@ -4317,6 +4318,18 @@ dependencies = [
  "fluent 0.17.0",
  "fluent-syntax 0.12.0",
  "unic-langid",
+]
+
+[[package]]
+name = "norte-index"
+version = "0.3.0-alpha.1"
+dependencies = [
+ "norte-proto",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
