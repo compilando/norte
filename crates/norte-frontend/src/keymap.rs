@@ -379,31 +379,55 @@ pub struct Effective {
     discarded_lua_bindings: usize,
 }
 
+/// De dónde viene un binding fusionado: el preset compartido (elegible para
+/// el filtrado lenient de [`Effective::build_for_subset`]) o una capa de
+/// usuario/proyecto (siempre estricta — ver [`Strictness`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    Preset,
+    Layer,
+}
+
+/// Selecciona el comportamiento ante un binding de PRESET a un comando
+/// ausente de `known_commands`: [`Effective::build_for`] es `Strict`
+/// (error), [`Effective::build_for_subset`] es `Lenient` (se filtra en
+/// silencio — el frontend implementa un subconjunto de comandos del preset
+/// compartido). Nunca afecta bindings de capa: ver el `continue` en
+/// `build_for_impl`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Strictness {
+    Strict,
+    Lenient,
+}
+
 /// Fusión de un contexto (ADR 0006/0007): prepends de capa superior primero
 /// (ganan), luego el preset, luego los appends (superiores antes). Los
 /// bindings `lua:` de una capa de PROYECTO se DESCARTAN aquí, contados en
 /// `discarded_lua` (seguridad: ver [`KeymapFile::mark_project`] — el
 /// keymap de un repo ajeno no puede dirigir la ejecución de comandos Lua).
+/// Cada binding se etiqueta con su [`Origin`] (preset vs. capa) para que
+/// `build_for_impl` sepa a cuáles aplica el filtrado lenient.
 fn merge_ctx<'a>(
     preset: &'a KeymapFile,
     layers: &'a [KeymapFile],
     get: fn(&KeymapFile) -> &RawSection,
     discarded_lua: &mut usize,
-) -> Vec<&'a RawBinding> {
+) -> Vec<(&'a RawBinding, Origin)> {
     let mut out = Vec::new();
-    let mut push = |layer_project: bool, b: &'a RawBinding, out: &mut Vec<&'a RawBinding>| {
-        if layer_project && b.run.starts_with("lua:") {
-            *discarded_lua += 1;
-        } else {
-            out.push(b);
-        }
-    };
+    let mut push =
+        |layer_project: bool, b: &'a RawBinding, out: &mut Vec<(&'a RawBinding, Origin)>| {
+            if layer_project && b.run.starts_with("lua:") {
+                *discarded_lua += 1;
+            } else {
+                out.push((b, Origin::Layer));
+            }
+        };
     for l in layers.iter().rev() {
         for b in &get(l).prepend_keymap {
             push(l.project, b, &mut out);
         }
     }
-    out.extend(get(preset).keymap.iter());
+    out.extend(get(preset).keymap.iter().map(|b| (b, Origin::Preset)));
     for l in layers.iter().rev() {
         for b in &get(l).append_keymap {
             push(l.project, b, &mut out);
@@ -472,6 +496,32 @@ impl Effective {
         known_commands: &[&str],
         screen: Screen,
     ) -> Result<Self, KeymapError> {
+        Self::build_for_impl(preset, layers, known_commands, screen, Strictness::Strict)
+    }
+
+    /// Like [`Effective::build_for`], but PRESET bindings whose command is
+    /// not in `known_commands` are skipped instead of failing. For
+    /// frontends that implement a subset of the shared presets' commands
+    /// (the GUI). User/project LAYERS remain strict.
+    ///
+    /// # Errors
+    /// Same as [`Effective::build_for`], except preset `UnknownCommand`.
+    pub fn build_for_subset(
+        preset: &KeymapFile,
+        layers: &[KeymapFile],
+        known_commands: &[&str],
+        screen: Screen,
+    ) -> Result<Self, KeymapError> {
+        Self::build_for_impl(preset, layers, known_commands, screen, Strictness::Lenient)
+    }
+
+    fn build_for_impl(
+        preset: &KeymapFile,
+        layers: &[KeymapFile],
+        known_commands: &[&str],
+        screen: Screen,
+        preset_strictness: Strictness,
+    ) -> Result<Self, KeymapError> {
         // Cada capa admite SOLO sus listas (revisión fase 4): descartar en
         // silencio la lista equivocada sería el "comportamiento raro" que
         // el ADR prohíbe.
@@ -501,7 +551,7 @@ impl Effective {
             Screen::Viewer => |f| &f.viewer,
         };
         let mut discarded_lua_bindings = 0usize;
-        let ordered: Vec<&RawBinding> =
+        let ordered: Vec<(&RawBinding, Origin)> =
             merge_ctx(preset, layers, specific, &mut discarded_lua_bindings)
                 .into_iter()
                 .chain(merge_ctx(
@@ -514,7 +564,7 @@ impl Effective {
 
         let mut seen: HashSet<Vec<Chord>> = HashSet::new();
         let mut bindings: Vec<(Vec<Chord>, String)> = Vec::new();
-        for raw in ordered {
+        for (raw, origin) in ordered {
             let seq: Vec<Chord> = raw
                 .on
                 .iter()
@@ -537,7 +587,9 @@ impl Effective {
             // `known_commands` — solo el charset del nombre (la MISMA
             // `valid_lua_name`, una sola fuente). Un comando lua no
             // registrado al invocar NO es error de keymap: el frontend con
-            // host avisa en runtime.
+            // host avisa en runtime. Se aplica IGUAL en modo lenient — el
+            // filtrado de `build_for_subset` es SOLO por `known_commands`
+            // desconocido, jamás una vía para colarse del charset lua:.
             if let Some(lua_name) = raw.run.strip_prefix("lua:") {
                 if !valid_lua_name(lua_name) {
                     return Err(KeymapError::UnknownCommand {
@@ -545,6 +597,14 @@ impl Effective {
                     });
                 }
             } else if !known_commands.contains(&raw.run.as_str()) {
+                // En modo Lenient, SOLO los bindings del `keymap` del
+                // preset se filtran en silencio (el frontend no implementa
+                // ese comando compartido); un binding de CAPA (prepend/
+                // append de usuario o proyecto) sigue siendo estricto — un
+                // typo de usuario jamás debe morir en silencio (ADR 0006).
+                if preset_strictness == Strictness::Lenient && origin == Origin::Preset {
+                    continue;
+                }
                 return Err(KeymapError::UnknownCommand {
                     run: raw.run.clone(),
                 });
@@ -555,7 +615,9 @@ impl Effective {
             }
         }
 
-        // Prefix-free: ninguna secuencia es prefijo estricto de otra.
+        // Prefix-free: ninguna secuencia es prefijo estricto de otra. Corre
+        // sobre el set YA filtrado — un binding de preset descartado en
+        // modo Lenient no debe poder bloquear un prefijo ajeno.
         for (i, (a, _)) in bindings.iter().enumerate() {
             for (b, _) in bindings.iter().skip(i + 1) {
                 let (short, long) = if a.len() < b.len() { (a, b) } else { (b, a) };
@@ -1297,5 +1359,62 @@ keymap = [{ on = ["g", "g"], run = "cursor.top" }]"#,
             r.push(Chord::new(Mods::default(), KeyCode::Char('g'))),
             Resolution::Pending(_)
         ));
+    }
+
+    /// `build_for_subset`: a PRESET binding to a command this frontend does
+    /// not implement is skipped (the GUI implements a subset of the TUI's
+    /// commands); a LAYER binding to an unknown command is still an error
+    /// (a user typo must never die silently — ADR 0006).
+    #[test]
+    fn build_for_subset_filtra_preset_pero_capa_sigue_estricta() {
+        let preset = parse_keymap(
+            "[pane]\nkeymap = [\n { on = [\"q\"], run = \"app.quit\" },\n { on = [\"f1\"], run = \"app.help\" },\n]\n",
+        )
+        .unwrap();
+        let known = ["app.quit"];
+        let eff = Effective::build_for_subset(&preset, &[], &known, Screen::Browse)
+            .expect("preset con extras construye");
+        let mut r = Resolver::new(eff);
+        assert_eq!(
+            r.push(Chord::new(Mods::default(), KeyCode::Char('q'))),
+            Resolution::Run("app.quit".into())
+        );
+        // El binding filtrado no existe: F1 no debe resolver a run.
+        assert!(!matches!(
+            r.push(Chord::new(Mods::default(), KeyCode::F(1))),
+            Resolution::Run(_)
+        ));
+        let layer =
+            parse_keymap("[pane]\nprepend_keymap = [{ on = [\"z\"], run = \"app.help\" }]\n")
+                .unwrap();
+        assert!(
+            Effective::build_for_subset(&preset, &[layer], &known, Screen::Browse).is_err(),
+            "capa con comando desconocido: error, no filtrado"
+        );
+    }
+}
+
+/// Bundled keymap presets (ADR 0006), shared by every frontend. Each
+/// frontend validates against ITS OWN command set — via
+/// [`Effective::build_for`] (strict) or [`Effective::build_for_subset`]
+/// (preset bindings to commands the frontend lacks are skipped).
+pub mod presets {
+    /// The default orthodox preset.
+    pub const ORTHODOX: &str = include_str!("../presets/keymap/orthodox.toml");
+    /// Vim-style preset.
+    pub const VIM: &str = include_str!("../presets/keymap/vim.toml");
+    /// CUA preset.
+    pub const CUA: &str = include_str!("../presets/keymap/cua.toml");
+
+    /// Preset source by name; `None` if unknown (caller falls back +
+    /// reports, same contract the TUI had).
+    #[must_use]
+    pub fn source(name: &str) -> Option<&'static str> {
+        match name {
+            "orthodox" => Some(ORTHODOX),
+            "vim" => Some(VIM),
+            "cua" => Some(CUA),
+            _ => None,
+        }
     }
 }

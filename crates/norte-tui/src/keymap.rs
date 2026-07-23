@@ -104,10 +104,12 @@ pub fn help_id(command: &str) -> String {
 /// Nunca con los TOML embebidos (los valida la suite).
 #[must_use]
 pub fn presets() -> Vec<(&'static str, KeymapFile)> {
+    use norte_frontend::keymap::presets as shared;
+
     [
-        ("orthodox", include_str!("keymap_presets/orthodox.toml")),
-        ("vim", include_str!("keymap_presets/vim.toml")),
-        ("cua", include_str!("keymap_presets/cua.toml")),
+        ("orthodox", shared::ORTHODOX),
+        ("vim", shared::VIM),
+        ("cua", shared::CUA),
     ]
     .into_iter()
     .map(|(name, src)| {

@@ -35,7 +35,7 @@ proptest! {
         inyecta in ".{0,16}",
         pos in 0usize..2048,
     ) {
-        let base = include_str!("../src/keymap_presets/orthodox.toml");
+        let base = norte_frontend::keymap::presets::ORTHODOX;
         let mut s = base.to_owned();
         let mut corte2 = corte.min(s.len());
         while !s.is_char_boundary(corte2) {
