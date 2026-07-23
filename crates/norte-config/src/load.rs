@@ -234,9 +234,11 @@ pub struct CommonConfig {
     pub ui_theme: Option<String>,
     /// `[ui] quick_search`, validated (invalid value = load error).
     pub quick_search: QuickSearch,
-    /// `[daemon] mode` (last-wins; None = embedded). Startup only.
+    /// `[daemon] mode` (last-wins; None = embedded; never from Project —
+    /// fail-closed, review MAJOR-1). Startup only.
     pub daemon_mode: Option<crate::schema::DaemonMode>,
-    /// `[daemon] socket` (last-wins; None = OS default).
+    /// `[daemon] socket` (last-wins; None = OS default; never from Project —
+    /// fail-closed, review MAJOR-1).
     pub daemon_socket: Option<std::path::PathBuf>,
     /// Hotlist merged from every layer except Project.
     pub hotlist: Vec<HotlistItem>,
@@ -252,15 +254,15 @@ pub struct CommonConfig {
     pub sources: Vec<std::path::PathBuf>,
 }
 
-/// Fusiona la sección `[ai]` de una capa (ya filtrada a no-Project por el
-/// caller) en `ai`: escalares último-gana, `denied_prefixes` UNIÓN
-/// (validando cada entrada como [`VPath`]), providers por nombre
-/// último-gana. Extraída de [`load`] para no exceder el tope de líneas de
-/// clippy (ADR 0035 decisión 3: fail-closed Project carve-out vive en el
-/// caller).
+/// Merges one layer's `[ai]` section (already filtered to non-Project by the
+/// caller) into `ai`: scalars last-present-wins, `denied_prefixes` is a
+/// UNION (each entry validated as a [`VPath`]), providers merge by name with
+/// the later layer winning. Extracted out of [`load`] to stay under
+/// clippy's line-count cap (ADR 0035 decision 3: the fail-closed Project
+/// carve-out lives in the caller).
 ///
 /// # Errors
-/// [`ConfigError::Toml`] si una entrada de `denied_prefixes` no parsea como
+/// [`ConfigError::Toml`] if a `denied_prefixes` entry does not parse as a
 /// [`VPath`].
 fn merge_ai_layer(
     ai: &mut AiSettings,
@@ -276,12 +278,16 @@ fn merge_ai_layer(
     if let Some(v) = a.rename_provider {
         ai.rename_provider = Some(v);
     }
-    for p in &a.denied_prefixes {
+    for (i, p) in a.denied_prefixes.iter().enumerate() {
         let vp = VPath::parse(p).map_err(|_| ConfigError::Toml {
             path: norte.to_path_buf(),
-            // Mismo #73 que quick_search: jamás citar el valor crudo
-            // (posiblemente hostil) en el diagnóstico.
-            message: "[ai] denied_prefixes: entry does not parse as a VPath".to_owned(),
+            // Same #73 caution as quick_search: never quote the raw
+            // (possibly hostile) value in the diagnostic — the 1-based
+            // index is enough to locate the offending entry.
+            message: format!(
+                "[ai] denied_prefixes: entry {} does not parse as a VPath",
+                i + 1
+            ),
         })?;
         if !ai.denied_prefixes.contains(&vp) {
             ai.denied_prefixes.push(vp);
@@ -291,10 +297,11 @@ fn merge_ai_layer(
     Ok(())
 }
 
-/// Carga y fusiona todas las capas (ADR 0007/0035).
+/// Loads and merges every layer (ADR 0007/0035).
 ///
 /// # Errors
-/// [`ConfigError`] con el archivo culpable; una capa AUSENTE no es error.
+/// [`ConfigError`] naming the offending file; an ABSENT layer is not an
+/// error.
 pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut preset: Option<String> = None;
     let mut ui_lang: Option<String> = None;
@@ -342,11 +349,17 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                     }
                 };
             }
-            if let Some(m) = parsed.daemon.mode {
-                daemon_mode = Some(m);
-            }
-            if let Some(sock) = parsed.daemon.socket {
-                daemon_socket = Some(sock);
+            // `[daemon]` is NOT honored from Project either (review MAJOR-1):
+            // a foreign repo must not redirect the core transport to an
+            // attacker-controlled socket — same fail-closed carve-out as
+            // `[archive]`/`[ai]`/hotlist.
+            if *kind != Layer::Project {
+                if let Some(m) = parsed.daemon.mode {
+                    daemon_mode = Some(m);
+                }
+                if let Some(sock) = parsed.daemon.socket {
+                    daemon_socket = Some(sock);
+                }
             }
             // La hotlist se acumula de TODAS las capas MENOS la de
             // proyecto (deuda #75 cerrada: el kind viaja POR DIR, ya no se
@@ -689,20 +702,22 @@ mod hotlist_tests {
     }
 
     /// ADR 0035: [ai] merges across layers — scalars last-wins, denied
-    /// prefixes UNION (a system deny survives a user layer), providers
-    /// merge by name.
+    /// prefixes UNION (a system deny survives a user layer) AND deduped (a
+    /// prefix repeated across layers is not a distinct entry).
     #[test]
     fn ai_merge_escalares_ultimo_gana_y_denied_union() {
         let sistema = tempfile::tempdir().unwrap();
         std::fs::write(
             sistema.path().join("norte.toml"),
-            "[ai]\nenabled = true\nlocal_only = true\ndenied_prefixes = [\"file:///etc\"]\n",
+            "[ai]\nenabled = true\nlocal_only = true\n\
+             denied_prefixes = [\"file:///etc\", \"file:///shared\"]\n",
         )
         .unwrap();
         let usuario = tempfile::tempdir().unwrap();
         std::fs::write(
             usuario.path().join("norte.toml"),
-            "[ai]\nlocal_only = false\ndenied_prefixes = [\"file:///home/u/secret\"]\n",
+            "[ai]\nlocal_only = false\n\
+             denied_prefixes = [\"file:///home/u/secret\", \"file:///shared\"]\n",
         )
         .unwrap();
         let layers = Layers {
@@ -714,23 +729,110 @@ mod hotlist_tests {
         let cfg = load(&layers).expect("carga");
         assert!(cfg.ai.enabled, "absent in user layer: inherits system");
         assert!(!cfg.ai.local_only, "present in user layer: user wins");
+        let etc = VPath::parse("file:///etc").unwrap();
+        let secreto = VPath::parse("file:///home/u/secret").unwrap();
+        let compartido = VPath::parse("file:///shared").unwrap();
         assert_eq!(
             cfg.ai.denied_prefixes.len(),
-            2,
-            "denies UNION, never shrink"
+            3,
+            "UNION deduped: 3 distinct entries, `file:///shared` not doubled"
+        );
+        assert!(
+            cfg.ai.denied_prefixes.contains(&etc),
+            "system deny survives"
+        );
+        assert!(cfg.ai.denied_prefixes.contains(&secreto), "user deny added");
+        assert!(
+            cfg.ai.denied_prefixes.contains(&compartido),
+            "shared deny present exactly once"
         );
     }
 
     /// [ai] from the project layer is ignored fail-closed — a hostile repo
-    /// must not enable AI nor redirect providers.
+    /// must not enable AI, declare a provider, nor add a denied prefix.
     #[test]
     fn ai_de_proyecto_se_ignora() {
         let proyecto = tempfile::tempdir().unwrap();
-        std::fs::write(proyecto.path().join("norte.toml"), "[ai]\nenabled = true\n").unwrap();
+        std::fs::write(
+            proyecto.path().join("norte.toml"),
+            "[ai]\nenabled = true\ndenied_prefixes = [\"file:///x\"]\n\n\
+             [ai.providers.p]\nkind = \"ollama\"\nmodel = \"m\"\n",
+        )
+        .unwrap();
         let layers = Layers {
             dirs: vec![(proyecto.path().to_path_buf(), Layer::Project)],
         };
         let cfg = load(&layers).expect("carga");
         assert!(!cfg.ai.enabled);
+        assert!(cfg.ai.providers.is_empty(), "project provider ignored");
+        assert!(
+            cfg.ai.denied_prefixes.is_empty(),
+            "project denied_prefixes ignored"
+        );
+    }
+
+    /// ADR 0035: providers merge BY NAME — a later layer redeclaring an
+    /// existing name replaces just that entry, an untouched name from a
+    /// lower layer survives, and `rename_provider` (a plain scalar) is
+    /// last-present-wins independent of the providers map.
+    #[test]
+    fn ai_providers_merge_por_nombre_capa_posterior_gana() {
+        let sistema = tempfile::tempdir().unwrap();
+        std::fs::write(
+            sistema.path().join("norte.toml"),
+            "[ai]\nrename_provider = \"x\"\n\n\
+             [ai.providers.x]\nkind = \"ollama\"\nmodel = \"viejo\"\n\n\
+             [ai.providers.y]\nkind = \"ollama\"\nmodel = \"solo-sistema\"\n",
+        )
+        .unwrap();
+        let usuario = tempfile::tempdir().unwrap();
+        std::fs::write(
+            usuario.path().join("norte.toml"),
+            "[ai]\nrename_provider = \"y\"\n\n\
+             [ai.providers.x]\nkind = \"ollama\"\nmodel = \"nuevo\"\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (sistema.path().to_path_buf(), Layer::System),
+                (usuario.path().to_path_buf(), Layer::User),
+            ],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.ai.providers.len(), 2, "both names survive");
+        assert_eq!(
+            cfg.ai.providers.get("x").unwrap().model,
+            "nuevo",
+            "user layer redeclares x: later layer wins"
+        );
+        assert_eq!(
+            cfg.ai.providers.get("y").unwrap().model,
+            "solo-sistema",
+            "y untouched by user layer: survives"
+        );
+        assert_eq!(
+            cfg.ai.rename_provider,
+            Some("y".to_owned()),
+            "scalar last-present-wins, independent of the providers map"
+        );
+    }
+
+    /// Review MAJOR-1: `[daemon]` from the project layer must NOT be
+    /// honored — a hostile repo must not redirect the core transport (mode
+    /// or socket) to an attacker-controlled endpoint.
+    #[test]
+    fn daemon_de_proyecto_se_ignora() {
+        let proyecto = tempfile::tempdir().unwrap();
+        std::fs::write(
+            proyecto.path().join("norte.toml"),
+            "[daemon]\nmode = \"daemon\"\nsocket = \"/tmp/evil.sock\"\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![(proyecto.path().to_path_buf(), Layer::Project)],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.daemon_mode, None, "project mode ignored");
+        assert_eq!(cfg.daemon_socket, None, "project socket ignored");
     }
 }

@@ -108,3 +108,6 @@ The crate is `MIT OR Apache-2.0`, following the shared-library pattern of
 - `norte-config` deliberately reads with `std::fs` at startup rather than
   through a `Provider` — providers would be circular, since configuration
   selects how a frontend starts (ADR 0010's rule 2 carve-out).
+- **Behavior change**: `[daemon]` is no longer honored from the project layer
+  (fail-closed; previously the TUI merged it) — a hostile repo must not
+  redirect the daemon socket.
