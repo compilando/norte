@@ -41,3 +41,4 @@ edits.
 | [0033](0033-ftp-provider-as-plugin.md) | FTP provider as an embedded WASM plugin | accepted |
 | [0034](0034-index-fts5.md) | Search index: `norte-index` crate with SQLite FTS5 | accepted |
 | [0035](0035-norte-config-crate.md) | Shared norte-config crate and unified configuration resolution | accepted |
+| [0036](0036-effects-schema-v1.md) | GUI effects schema v1 for theme `[effects]` | accepted |

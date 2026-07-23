@@ -89,6 +89,37 @@ WezTerm as well as a basic `xterm`.
 
 ## GPU effects
 
-A theme may include an `[effects]` section for gradients, glow, or animation.
-The terminal interface ignores it; the section is reserved for GPU-backed GUI
-rendering and is safe to include in a shared theme.
+A theme may include an `[effects]` section for gradients, glow, and bezel
+framing rendered by the GUI. The terminal interface always ignores this
+section — it is safe to include in a theme shared between both frontends.
+See ADR 0036 for the design rationale.
+
+```toml
+[effects]
+scanlines = { opacity = 0.12, spacing_px = 3 }
+vignette  = { strength = 0.3 }
+glow      = { strength = 0.4 }
+bezel     = { radius_px = 12, inset = true }
+```
+
+All four keys are optional, and so is the whole section. Every numeric value
+is clamped to a safe range; out-of-range values clamp silently instead of
+being rejected:
+
+| Key                    | Clamp range   |
+| ----------------------- | ------------- |
+| `scanlines.opacity`    | `0.0` – `0.35` |
+| `scanlines.spacing_px` | `2` – `16`     |
+| `vignette.strength`    | `0.0` – `0.6`  |
+| `glow.strength`        | `0.0` – `1.0`  |
+| `bezel.radius_px`      | `0` – `32`     |
+
+`scanlines.opacity` is capped at `0.35` so the overlay can never wash out
+text contrast, even at maximum strength. `glow.strength` brightens
+foreground colors toward white; it does not currently produce true shader
+bloom. `bezel.inset` accepts `true` or `false` only.
+
+Unknown keys inside `[effects]`, and keys with the wrong type, produce a
+startup warning and are skipped individually — they never prevent norte from
+starting. If every key in `[effects]` is invalid or unrecognized, the GUI
+behaves as if the section were absent.
