@@ -34,3 +34,10 @@ edits.
 | [0026](0026-lua-scripting-mlua.md) | Embedded Lua scripting with mlua | accepted |
 | [0027](0027-gpui-feasibility.md) | GPUI feasibility decision for the GUI | accepted |
 | [0028](0028-targz-compound-format.md) | `tar+gz` as an opaque compound archive format | accepted |
+| [0029](0029-remote-session-lifecycle.md) | Remote session lifecycle: lazy eviction, single-flight, canonical dedup | accepted |
+| [0030](0030-own-zip-cd-parser.md) | Own zip central-directory parser | accepted |
+| [0031](0031-ai-subsystem.md) | AI subsystem: norte-ai providers, reviewable AI rename, semantic index | accepted |
+| [0032](0032-plugin-provider-interface.md) | Plugin provider interface (WIT projection of the `Provider` trait) | proposed |
+| [0033](0033-ftp-provider-as-plugin.md) | FTP provider as an embedded WASM plugin | accepted |
+| [0034](0034-index-fts5.md) | Search index: `norte-index` crate with SQLite FTS5 | accepted |
+| [0035](0035-norte-config-crate.md) | Shared norte-config crate and unified configuration resolution | accepted |
