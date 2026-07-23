@@ -63,6 +63,18 @@ pipeline. Public API does offer: `canvas()`, box shadows, gradients, opacity,
   …; add missing roles as needed — `Role` is `#[non_exhaustive]`, additive).
   Without this no skin can touch backgrounds or borders. The TUI is
   unaffected (same roles, same fallbacks).
+  **Amendment (2026-07-23, discovered in implementation):** 8 of the 11
+  historic GUI constants diverge from `default.toml`, whose values are
+  TUI-designed style PAIRS (e.g. `status-bar` and `match` are
+  dark-text-on-colored-bg idioms). Aligning `default.toml` to the GUI's
+  historic hex would repaint the TUI; keeping the GUI pixel-identical would
+  need parallel GUI-only roles. Decision — same principle as the shared
+  keymap presets: **the theme is canonical**. The GUI consumes roles as
+  honest fg+bg pairs (header = `StatusBar` pair, quick-search highlight =
+  `Match` pair, selection = `Selection` pair) and its default appearance
+  becomes the default theme's appearance, unifying visual identity across
+  frontends (the stated goal of ADR 0020). The historic constants remain
+  only as fallbacks for channels a theme leaves undeclared.
 
 ## Phase G1 — `[effects]` schema v1 + retro-CRT preset (static)
 
