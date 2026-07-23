@@ -293,3 +293,36 @@ fn ftp_reread_no_secuencial_sobre_cache_viva() {
     let whole = read_all_chunked(&mut inst, &seg, 64 * 1024);
     assert_eq!(whole, content, "lectura entera byte-exacta tras los saltos");
 }
+
+#[test]
+fn ftp_mlsd_size_mayor_de_4gib() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // Fichero DISPERSO de 5 GiB (set_len no escribe bloques): > u32::MAX.
+    let f = std::fs::File::create(dir.path().join("huge.bin")).expect("crear");
+    f.set_len(5 * 1024 * 1024 * 1024).expect("set_len 5 GiB");
+    drop(f);
+    let Some((_rt, mut inst)) = configured_ftp_provider(dir.path().to_path_buf()) else {
+        return;
+    };
+    // stat: size == 5 GiB exacto (no truncado a usize/u32, no NotFound/Io).
+    let st = inst
+        .stat(&[b"huge.bin".to_vec()])
+        .expect("stat sin trap")
+        .expect("huge.bin existe");
+    assert_eq!(
+        st.size,
+        Some(5 * 1024 * 1024 * 1024),
+        "size u64 sin truncar"
+    );
+    // list: la entrada aparece con su size, la página NO falla.
+    let page = inst
+        .list_dir(&[], None)
+        .expect("list sin trap")
+        .expect("raíz lista");
+    let e = page
+        .entries
+        .iter()
+        .find(|e| e.name == b"huge.bin")
+        .expect("huge.bin listado");
+    assert_eq!(e.size, Some(5 * 1024 * 1024 * 1024));
+}
