@@ -14,6 +14,9 @@ error            = { fg = "#f38ba8" }
 warning          = { fg = "#f9e2af" }
 info             = { fg = "#89b4fa" }
 match            = { fg = "#1e1e2e", bg = "#f9e2af" }
+pane-background       = { bg = "#313244" } # surface0
+pane-focus-background = { bg = "#45475a" } # surface1
+mark                  = { bg = "#483b1e" } # dark blend of yellow
 
 [files.kind]
 dir          = { fg = "#89b4fa", bold = true }

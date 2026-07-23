@@ -16,6 +16,9 @@ error            = { fg = "#d20f39" }
 warning          = { fg = "#df8e1d" }
 info             = { fg = "#1e66f5" }
 match            = { fg = "#eff1f5", bg = "#df8e1d" }
+pane-background       = { bg = "#e6e9ef" } # mantle
+pane-focus-background = { bg = "#dce0e8" } # crust
+mark                  = { bg = "#f5ece0" } # pale blend of yellow
 
 [files.kind]
 dir          = { fg = "#1e66f5", bold = true }

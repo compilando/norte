@@ -14,6 +14,9 @@ error            = { fg = "#bf616a" }
 warning          = { fg = "#ebcb8b" }
 info             = { fg = "#81a1c1" }
 match            = { fg = "#2e3440", bg = "#ebcb8b" }
+pane-background       = { bg = "#3b4252" } # nord1
+pane-focus-background = { bg = "#434c5e" } # nord2
+mark                  = { bg = "#3e331d" } # muted nord13 (aurora yellow)
 
 [files.kind]
 dir          = { fg = "#81a1c1", bold = true }
