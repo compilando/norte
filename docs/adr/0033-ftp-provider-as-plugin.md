@@ -107,25 +107,32 @@ unlike a third-party plugin loaded from disk).
   wasm), so the native provider's dedicated read connection for same-host FTP→FTP
   copies (issue #39 B1) is not reproduced. Same-host FTP→FTP copy is not a
   contract requirement; filed as debt.
-- **No socket timeout / cancellation (debt).** The wasmtime epoch deadline only
-  traps *guest* code, not a guest blocked inside a wasip2 socket syscall. A
-  stalled server therefore holds the `spawn_blocking` thread (and the instance
-  mutex) indefinitely; task cancellation only drops the future. The native async
-  provider was drop-cancellable. Mitigation (future): wrap the adapter's
-  `spawn_blocking` call in `tokio::time::timeout` and mark the provider
-  unavailable on expiry, accepting a leaked worker thread.
+- **Socket timeout — BOUNDED by `OP_TIMEOUT`.** The wasmtime epoch deadline only
+  traps *guest* code, not a guest blocked inside a wasip2 socket syscall. The
+  adapter now wraps every `spawn_blocking` (`PluginProvider::call`, the `read`
+  stream, and `PluginByteSink::call`) in `tokio::time::timeout(OP_TIMEOUT)` (30 s)
+  and, on expiry, sets a shared `Arc<AtomicBool> dead` and returns
+  `ProviderUnavailable { retryable: true }`; subsequent ops check `dead` and fail
+  fast without blocking on the mutex the hung thread still holds. **Residual
+  cost:** the timed-out `spawn_blocking` worker thread leaks (wasip2 socket I/O is
+  not cancellable) and keeps the instance mutex until the whole `PluginRuntime`
+  drops; the human reconnects (a fresh provider = fresh instance). Accepted.
 - **Capability honesty (debt).** The adapter cannot project `RESUME`/`APPEND`
   (the WIT `writer` has no resume), so the guest declares neither and the shared
   contract's resume cases self-skip. Restoring resume needs a resumable-writer
   WIT surface, tracked alongside the read-stream resource.
-- **wasm32 4 GiB size ceiling (debt).** `suppaftp` parses file sizes into
-  `usize`; the guest is always `wasm32-wasip2` (32-bit `usize`), so a size ≥ 4
-  GiB fails to parse. On MLSD servers this fails loud (the whole page returns
-  `Io`, the file is unlistable); on ancient no-MLSD servers the LIST line is
-  dropped like a header, making the file invisible — a `commit`/`rename` could
-  then silently land over it. Modern servers (the `libunftp` target) use MLSD, so
-  the failure is loud there. The real fix extracts the size fact as raw `u64`
-  guest-side instead of trusting `File::size() -> usize`; deferred.
+- **wasm32 4 GiB size ceiling — FIXED for MLSD.** `suppaftp` parses file sizes
+  into `usize` (32-bit on `wasm32`), so a size ≥ 4 GiB broke the whole entry
+  parse. The guest now self-parses MLSD/MLST facts (`parse_mlsd_facts`, size as
+  `u64`) instead of `ListParser::parse_mlsd`/`parse_mlst`, so MLSD servers (the
+  `libunftp`/`vsftpd`/`proftpd` norm) list and stat ≥ 4 GiB files correctly.
+  **Residual debt:** on ancient no-MLSD servers the `ls -l` line still fails
+  suppaftp's `usize` size parse, so `list_dir` hides ≥ 4 GiB files (visibility
+  gap). The **overwrite hazard is closed**: `stat_remote`'s LIST branch uses a
+  lenient `ls_l_name` and returns `Err(Io)` when a name-matching line fails to
+  parse, so `exists()`/`write`/`rename` refuse rather than silently overwrite an
+  invisible file. Full `ls -l` self-parse (to also *list* ≥ 4 GiB on no-MLSD) is
+  deferred.
 - **`mtime` dropped (debt).** The WIT `entry` record has no mtime field, so the
   adapter reports `None` for FTP mtimes (the native provider surfaced them).
   A future pre-release WIT bump can add `mtime-ms: option<s64>`.
