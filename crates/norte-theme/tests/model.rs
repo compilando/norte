@@ -98,6 +98,16 @@ fn efectos_opacos_no_rompen_el_parseo() {
     assert!(t.style(Role::BorderFocus).bold);
 }
 
+/// C2/G0: the three GUI-chrome roles exist, are in ALL, and have a
+/// usable monochrome fallback.
+#[test]
+fn roles_de_chrome_gui_presentes() {
+    for r in [Role::PaneBackground, Role::PaneFocusBackground, Role::Mark] {
+        assert!(Role::ALL.contains(&r));
+        let _ = r.fallback();
+    }
+}
+
 #[test]
 fn extension_de_nombres() {
     assert_eq!(extension_of(b"foto.PNG"), Some(&b"PNG"[..]));

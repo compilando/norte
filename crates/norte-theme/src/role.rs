@@ -41,6 +41,13 @@ pub enum Role {
     Info,
     /// Coincidencia de búsqueda resaltada.
     Match,
+    /// Pane interior background (GUI chrome; the TUI may adopt it later).
+    PaneBackground,
+    /// Focused pane interior background.
+    PaneFocusBackground,
+    /// Marked-entry background (selection marks, distinct from the cursor's
+    /// `Selection`).
+    Mark,
 }
 
 impl Role {
@@ -59,6 +66,9 @@ impl Role {
         Role::Warning,
         Role::Info,
         Role::Match,
+        Role::PaneBackground,
+        Role::PaneFocusBackground,
+        Role::Mark,
     ];
 
     /// Estilo por defecto MONOCROMO del rol: reproduce el aspecto de M1
@@ -72,16 +82,24 @@ impl Role {
             Role::BorderFocus | Role::ModalBorder | Role::HostileBadge | Role::Title => {
                 Style::new().bold()
             }
-            Role::BorderUnfocused => Style::new().dim(),
+            // BorderUnfocused/Mark: Mark, distinto de Selection (reverse) pero
+            // visible sin color, comparte el atenuado del borde sin foco —
+            // "presente pero no activo".
+            Role::BorderUnfocused | Role::Mark => Style::new().dim(),
             // Background/Regular/Error/Warning/Info/Match: sin color por defecto
             // (la UI de M1 no los distinguía; Background sin fijar = fondo del
             // terminal). Un tema con color los diferencia.
+            // PaneBackground/PaneFocusBackground: chrome nuevo de la GUI, sin
+            // equivalente en la TUI de M1; mismo tratamiento que Background
+            // (sin color = fondo heredado del backend).
             Role::Background
             | Role::Regular
             | Role::Error
             | Role::Warning
             | Role::Info
-            | Role::Match => Style::new(),
+            | Role::Match
+            | Role::PaneBackground
+            | Role::PaneFocusBackground => Style::new(),
         }
     }
 }
