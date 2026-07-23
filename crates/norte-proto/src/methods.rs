@@ -32,7 +32,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CollisionPolicy, DeleteMode, Entry, ResumePolicy, SymlinkPolicy, TaskId, VPath, VerifyPolicy,
+    CollisionPolicy, DeleteMode, Entry, EntryKind, ResumePolicy, SymlinkPolicy, TaskId, VPath,
+    VerifyPolicy,
 };
 
 /// Versión del protocolo (semver). El core soporta N y N-1 (spec §11).
@@ -116,7 +117,15 @@ use crate::{
 /// `archive_split` daba `InvalidScheme` ante un interior compuesto →
 /// `InvalidPath` en el wire) — direccionamiento nuevo, jamás resignifica
 /// uno viejo: los paths de UNA capa se resuelven idéntico.
-pub const PROTOCOL_VERSION: &str = "0.24.0";
+///
+/// 0.25.0 (M4, ADR 0034): búsqueda INDEXADA. Métodos `index.build` (una Task,
+/// [`IndexBuildParams`]→[`IndexBuildResult`]) e `index.query`
+/// ([`IndexQueryParams`]→[`IndexQueryResult`] con [`IndexHit`]), más
+/// [`TaskKind::Index`](crate::TaskKind::Index). Aditivo sobre 0.24.x: un peer
+/// N-1 no conoce los métodos (los rechaza con `MethodNotFound`) y degrada
+/// `TaskKind::Index` a `Unknown` vía `serde(other)` — jamás resignifica nada
+/// viejo. El índice ausente (daemon sin `norte-index`) responde `Unsupported`.
+pub const PROTOCOL_VERSION: &str = "0.25.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -246,6 +255,13 @@ pub const FS_DELETE: &str = "fs.delete";
 /// cliente infiere "truncada" comparando el total de hits recibidos con
 /// `max_hits`.
 pub const FS_SEARCH: &str = "fs.search";
+/// Construye/actualiza el índice de búsqueda de un subárbol (M4, ADR 0034). Es
+/// una Task (progreso + cancelación, como [`FS_COPY`]); su resultado al completar
+/// es [`IndexBuildResult`].
+pub const INDEX_BUILD: &str = "index.build";
+/// Consulta el índice de un root por texto (M4, ADR 0034). Respuesta DIRECTA (no
+/// Task): [`IndexQueryResult`].
+pub const INDEX_QUERY: &str = "index.query";
 /// `search.hits` — notificación server→client con un LOTE de resultados de
 /// [`FS_SEARCH`]. SOLO viaja a la conexión que lanzó la búsqueda (jamás
 /// broadcast, mismo criterio direccional que
@@ -514,6 +530,55 @@ pub struct MatchInfo {
     /// por `detail_for_bar` como cinturón.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<String>,
+}
+
+/// Params de [`INDEX_BUILD`] (M4): raíz a indexar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexBuildParams {
+    /// Raíz del subárbol a (re)indexar.
+    pub root: VPath,
+}
+
+/// Resultado de [`INDEX_BUILD`] al completar la Task (M4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexBuildResult {
+    /// Entradas indexadas (insertadas o actualizadas).
+    pub indexed: u64,
+    /// Filas barridas (paths que ya no existían).
+    pub removed: u64,
+}
+
+/// Params de [`INDEX_QUERY`] (M4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexQueryParams {
+    /// Raíz cuyo índice se consulta.
+    pub root: VPath,
+    /// Texto libre del usuario (se sanea a una query FTS5 en el core).
+    pub text: String,
+    /// Tope de resultados.
+    pub limit: u32,
+}
+
+/// Un hit de [`INDEX_QUERY`] (M4). `path` en bytes crudos vía [`VPath`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexHit {
+    /// Path completo del resultado.
+    pub path: VPath,
+    /// Tipo de entrada.
+    pub kind: EntryKind,
+    /// Tamaño (`None` para dirs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    /// mtime en ms desde epoch (`None` si desconocido).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtime_ms: Option<i64>,
+}
+
+/// Resultado de [`INDEX_QUERY`] (M4): hits ordenados por relevancia.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexQueryResult {
+    /// Hits (bm25, más relevante primero).
+    pub hits: Vec<IndexHit>,
 }
 
 /// Identidad de un cliente (va en [`InitializeParams`]).

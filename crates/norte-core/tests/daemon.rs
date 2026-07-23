@@ -224,7 +224,7 @@ async fn initialize_rechaza_version_incompatible() {
             },
         )
         .await
-        .expect_err("0.1.0 no es N ni N-1 de 0.24.0");
+        .expect_err("0.1.0 no es N ni N-1 de 0.25.0");
     match err {
         ClientError::Rpc(rpc) => {
             // Código PROPIO: la señal de upgrade jamás se parsea de message.
@@ -235,14 +235,14 @@ async fn initialize_rechaza_version_incompatible() {
         }
         other => panic!("esperaba Rpc, fue {other:?}"),
     }
-    // N-1 (0.23.x) SÍ entra.
+    // N-1 (0.24.x) SÍ entra.
     let c2 = Client::connect(&d.socket).await.expect("connect");
     let ok: methods::InitializeResult = c2
         .call(
             methods::INITIALIZE,
             &InitializeParams {
                 client_info: client_info(),
-                protocol_version: "0.23.2".into(),
+                protocol_version: "0.24.2".into(),
                 encodings: vec![],
                 agent_session: None,
             },

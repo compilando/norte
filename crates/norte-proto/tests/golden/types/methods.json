@@ -131,17 +131,17 @@
     "eof": false
   },
   "fs_search_params": {
-    "root": "file:///home/user",
-    "name_glob": "*.rs",
-    "name_regex": "^ma.n\\.rs$",
+    "case_sensitive": true,
     "content": "año",
     "content_regex": "a.o",
-    "case_sensitive": true,
-    "max_hits": 100
+    "max_hits": 100,
+    "name_glob": "*.rs",
+    "name_regex": "^ma.n\\.rs$",
+    "root": "file:///home/user"
   },
   "fs_search_params_minimo": {
-    "root": "file:///home/user",
-    "case_sensitive": false
+    "case_sensitive": false,
+    "root": "file:///home/user"
   },
   "fs_stat_params": {
     "path": "file:///home/user/doc.txt"
@@ -157,24 +157,34 @@
   "fs_task_result": {
     "task_id": 7
   },
-  "match_info": {
-    "line": 3,
-    "preview": "hay un año aquí"
+  "grant_scope_params": {
+    "request_id": 3
   },
-  "search_hits": {
-    "task_id": 7,
-    "entries": [
+  "grant_scope_result": {},
+  "index_build_params": {
+    "root": "file:///home/user"
+  },
+  "index_build_result": {
+    "indexed": 128,
+    "removed": 3
+  },
+  "index_hit": {
+    "kind": "file",
+    "mtime_ms": 1700000000000,
+    "path": "file:///home/user/informe-a%FF%FE.txt",
+    "size": 4096
+  },
+  "index_query_params": {
+    "limit": 50,
+    "root": "file:///home/user",
+    "text": "informe anual"
+  },
+  "index_query_result": {
+    "hits": [
       {
         "kind": "file",
-        "mtime_ms": 1720000000000,
-        "path": "file:///home/user/doc.txt",
-        "size": 1234
-      }
-    ],
-    "matches": [
-      {
-        "line": 3,
-        "preview": "hay un año aquí"
+        "path": "file:///home/user/informe-anual.txt",
+        "size": 4096
       }
     ]
   },
@@ -188,6 +198,15 @@
     ],
     "protocol_version": "0.4.0"
   },
+  "initialize_params_agent": {
+    "agent_session": "s1",
+    "client_info": {
+      "name": "mcp",
+      "version": "1"
+    },
+    "encodings": [],
+    "protocol_version": "0.11.0"
+  },
   "initialize_result": {
     "encodings": [
       "json"
@@ -197,6 +216,166 @@
       "name": "norte-core",
       "version": "0.1.0"
     }
+  },
+  "match_info": {
+    "line": 3,
+    "preview": "hay un año aquí"
+  },
+  "pending_approval": {
+    "approval_id": 7,
+    "op": "delete",
+    "paths": [
+      "file:///work/x"
+    ],
+    "session": "s1"
+  },
+  "plugin_info": {
+    "approved": true,
+    "capabilities": [
+      "fs-read"
+    ],
+    "category": "previewer",
+    "enabled": true,
+    "id": "org.norte.demo",
+    "name": "Demo Previewer",
+    "publisher": "norte",
+    "version": "0.1.0"
+  },
+  "plugin_list_params": {},
+  "plugin_list_result": {
+    "errors": [
+      {
+        "dir": "/plugins/broken",
+        "reason": "manifiesto inválido"
+      }
+    ],
+    "plugins": [
+      {
+        "approved": false,
+        "capabilities": [
+          "fs-read"
+        ],
+        "category": "previewer",
+        "enabled": false,
+        "id": "org.norte.demo",
+        "name": "Demo Previewer",
+        "publisher": "norte",
+        "version": "0.1.0"
+      }
+    ]
+  },
+  "plugin_preview_params": {
+    "path": "file:///home/user/doc.md"
+  },
+  "plugin_preview_result": {
+    "output": "<h1>Título</h1>",
+    "plugin_id": "org.norte.md",
+    "plugin_name": "Markdown Preview"
+  },
+  "plugin_preview_result_none": {},
+  "plugin_run_command_params": {
+    "arg": "world",
+    "command": "greet",
+    "id": "org.norte.demo"
+  },
+  "plugin_run_command_result": {
+    "output": "hello, world"
+  },
+  "plugin_set_approval_params": {
+    "approved": true,
+    "id": "org.norte.demo"
+  },
+  "plugin_set_approval_result": {},
+  "plugin_set_enabled_params": {
+    "enabled": false,
+    "id": "org.norte.demo"
+  },
+  "plugin_set_enabled_result": {},
+  "policy_approval_required": {
+    "approval_id": 7,
+    "op": "delete",
+    "paths": [
+      "file:///work/x"
+    ],
+    "session": "s1",
+    "ttl_ms": 30000
+  },
+  "policy_decide_params": {
+    "approval_id": 7,
+    "approve": true
+  },
+  "policy_decide_result": {},
+  "policy_pending_result": {
+    "pending": [
+      {
+        "approval_id": 7,
+        "op": "delete",
+        "paths": [
+          "file:///work/x"
+        ],
+        "session": "s1"
+      }
+    ]
+  },
+  "policy_undo_report_params": {
+    "task_id": 9
+  },
+  "policy_undo_report_result": {
+    "blocked": {
+      "error": {
+        "conflict": "exists",
+        "kind": "conflict"
+      },
+      "seq": 41
+    },
+    "skipped_created_no_trash": 2,
+    "skipped_irreversible": 1,
+    "undone": 3
+  },
+  "policy_undo_report_result_clean": {
+    "skipped_created_no_trash": 0,
+    "skipped_irreversible": 0,
+    "undone": 4
+  },
+  "policy_undo_session_params": {
+    "session": "claude"
+  },
+  "policy_undo_session_result": {
+    "task_id": 9
+  },
+  "request_scope_params": {
+    "ops": [
+      "copy",
+      "delete"
+    ],
+    "roots": [
+      "file:///work"
+    ],
+    "session": "s1",
+    "ttl_ms": 60000
+  },
+  "request_scope_result": {
+    "request_id": 3
+  },
+  "rpc_cancel_params": {
+    "id": 7
+  },
+  "search_hits": {
+    "entries": [
+      {
+        "kind": "file",
+        "mtime_ms": 1720000000000,
+        "path": "file:///home/user/doc.txt",
+        "size": 1234
+      }
+    ],
+    "matches": [
+      {
+        "line": 3,
+        "preview": "hay un año aquí"
+      }
+    ],
+    "task_id": 7
   },
   "task_cancel_params": {
     "task_id": 7
@@ -221,155 +400,5 @@
   },
   "task_list_result_vacio": {
     "tasks": []
-  },
-  "initialize_params_agent": {
-    "client_info": {
-      "name": "mcp",
-      "version": "1"
-    },
-    "protocol_version": "0.11.0",
-    "encodings": [],
-    "agent_session": "s1"
-  },
-  "request_scope_params": {
-    "session": "s1",
-    "roots": [
-      "file:///work"
-    ],
-    "ops": [
-      "copy",
-      "delete"
-    ],
-    "ttl_ms": 60000
-  },
-  "request_scope_result": {
-    "request_id": 3
-  },
-  "grant_scope_params": {
-    "request_id": 3
-  },
-  "grant_scope_result": {},
-  "policy_approval_required": {
-    "approval_id": 7,
-    "session": "s1",
-    "op": "delete",
-    "paths": [
-      "file:///work/x"
-    ],
-    "ttl_ms": 30000
-  },
-  "policy_decide_params": {
-    "approval_id": 7,
-    "approve": true
-  },
-  "policy_decide_result": {},
-  "pending_approval": {
-    "approval_id": 7,
-    "session": "s1",
-    "op": "delete",
-    "paths": [
-      "file:///work/x"
-    ]
-  },
-  "policy_pending_result": {
-    "pending": [
-      {
-        "approval_id": 7,
-        "session": "s1",
-        "op": "delete",
-        "paths": [
-          "file:///work/x"
-        ]
-      }
-    ]
-  },
-  "policy_undo_session_params": {
-    "session": "claude"
-  },
-  "policy_undo_session_result": {
-    "task_id": 9
-  },
-  "policy_undo_report_params": {
-    "task_id": 9
-  },
-  "policy_undo_report_result": {
-    "undone": 3,
-    "skipped_irreversible": 1,
-    "skipped_created_no_trash": 2,
-    "blocked": {
-      "seq": 41,
-      "error": {
-        "kind": "conflict",
-        "conflict": "exists"
-      }
-    }
-  },
-  "policy_undo_report_result_clean": {
-    "undone": 4,
-    "skipped_irreversible": 0,
-    "skipped_created_no_trash": 0
-  },
-  "plugin_info": {
-    "id": "org.norte.demo",
-    "name": "Demo Previewer",
-    "publisher": "norte",
-    "version": "0.1.0",
-    "category": "previewer",
-    "capabilities": [
-      "fs-read"
-    ],
-    "approved": true,
-    "enabled": true
-  },
-  "plugin_list_result": {
-    "plugins": [
-      {
-        "id": "org.norte.demo",
-        "name": "Demo Previewer",
-        "publisher": "norte",
-        "version": "0.1.0",
-        "category": "previewer",
-        "capabilities": [
-          "fs-read"
-        ],
-        "approved": false,
-        "enabled": false
-      }
-    ],
-    "errors": [
-      {
-        "dir": "/plugins/broken",
-        "reason": "manifiesto inválido"
-      }
-    ]
-  },
-  "plugin_set_approval_params": {
-    "id": "org.norte.demo",
-    "approved": true
-  },
-  "plugin_set_approval_result": {},
-  "plugin_set_enabled_params": {
-    "id": "org.norte.demo",
-    "enabled": false
-  },
-  "plugin_set_enabled_result": {},
-  "plugin_list_params": {},
-  "plugin_run_command_params": {
-    "id": "org.norte.demo",
-    "command": "greet",
-    "arg": "world"
-  },
-  "plugin_run_command_result": {
-    "output": "hello, world"
-  },
-  "plugin_preview_params": {
-    "path": "file:///home/user/doc.md"
-  },
-  "plugin_preview_result": {
-    "plugin_id": "org.norte.md",
-    "plugin_name": "Markdown Preview",
-    "output": "<h1>Título</h1>"
-  },
-  "plugin_preview_result_none": {},
-  "rpc_cancel_params": {"id": 7}
+  }
 }

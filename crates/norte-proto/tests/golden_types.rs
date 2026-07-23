@@ -368,7 +368,63 @@ fn golden_methods() {
     check_methods_session(&fixtures);
     check_methods_plugin(&fixtures);
     check_methods_rpc(&fixtures);
-    assert_eq!(fixtures.len(), 65, "[methods.json] fixtures sin caso Rust");
+    check_methods_index(&fixtures);
+    assert_eq!(fixtures.len(), 70, "[methods.json] fixtures sin caso Rust");
+}
+
+/// Familia `index.*` (0.25.0, M4, ADR 0034): build + query del índice de búsqueda.
+fn check_methods_index(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{
+        IndexBuildParams, IndexBuildResult, IndexHit, IndexQueryParams, IndexQueryResult,
+    };
+    use norte_proto::{EntryKind, VPath};
+    check_one(
+        fixtures,
+        "index_build_params",
+        &IndexBuildParams {
+            root: VPath::parse("file:///home/user").unwrap(),
+        },
+    );
+    check_one(
+        fixtures,
+        "index_build_result",
+        &IndexBuildResult {
+            indexed: 128,
+            removed: 3,
+        },
+    );
+    check_one(
+        fixtures,
+        "index_query_params",
+        &IndexQueryParams {
+            root: VPath::parse("file:///home/user").unwrap(),
+            text: "informe anual".into(),
+            limit: 50,
+        },
+    );
+    // Un hit con nombre HOSTIL (no-UTF8, percent-encoded en el wire de VPath).
+    check_one(
+        fixtures,
+        "index_hit",
+        &IndexHit {
+            path: VPath::parse("file:///home/user/informe-a%FF%FE.txt").unwrap(),
+            kind: EntryKind::File,
+            size: Some(4096),
+            mtime_ms: Some(1_700_000_000_000),
+        },
+    );
+    check_one(
+        fixtures,
+        "index_query_result",
+        &IndexQueryResult {
+            hits: vec![IndexHit {
+                path: VPath::parse("file:///home/user/informe-anual.txt").unwrap(),
+                kind: EntryKind::File,
+                size: Some(4096),
+                mtime_ms: None,
+            }],
+        },
+    );
 }
 
 /// Familia de la CAPA RPC (0.19.0, #72): `rpc.cancel`.
@@ -1156,7 +1212,10 @@ fn method_names_frozen() {
     // 0.24.0 (#56): direccionamiento multi-capa + tope de anidamiento en el
     // vocabulario de LimitExceeded (tres constantes, sigue CERRADO).
     assert_eq!(norte_proto::Error::LIMIT_NESTING, "nesting");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.24.0");
+    // 0.25.0 (M4, ADR 0034): índice de búsqueda. index.build (Task) + index.query.
+    assert_eq!(methods::INDEX_BUILD, "index.build");
+    assert_eq!(methods::INDEX_QUERY, "index.query");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.25.0");
 }
 
 #[test]

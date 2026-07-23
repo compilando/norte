@@ -70,11 +70,18 @@ pub enum TaskKind {
     /// (desde 0.10) — recibirla la degrada a [`TaskKind::Unknown`] sin
     /// fallar el parse. Sin gating de emisión necesario para este borde.
     Search,
+    /// Construcción/actualización del índice de búsqueda de un subtree
+    /// (`index.build`, M4). Entra en 0.25.0; un cliente N-1 (0.24.x) la degrada a
+    /// [`TaskKind::Unknown`] vía el `serde(other)`.
+    Index,
     /// Clase desconocida: un daemon N+1 (0.11+) envió un kind que ESTE proto no
     /// conoce → se acepta como genérica en vez de fallar el parse (forward-compat
     /// desde 0.10, como [`TaskState::Unknown`]). No cubre el borde hacia atrás
     /// 0.9→0.10 (ver `Undo`); SÍ cubre 0.17→0.18 (ver `Search`, ya nacida
     /// dentro de la ventana de este fallback).
+    ///
+    /// `TaskKind::Index` (0.25.0, `index.build`) es el mismo caso que `Search`:
+    /// un cliente 0.24.x lo degrada aquí sin fallar.
     #[serde(other)]
     Unknown,
 }
