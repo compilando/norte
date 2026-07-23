@@ -9,6 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+norte-config.workspace = true
 norte-proto.workspace = true
 norte-encoding.workspace = true
 unicode-normalization.workspace = true
@@ -19,6 +20,7 @@ toml.workspace = true
 
 [dev-dependencies]
 norte-testkit.workspace = true
+tempfile.workspace = true
 
 [features]
 # Generación de los JSON Schema publicados (golden test de docs/schema);

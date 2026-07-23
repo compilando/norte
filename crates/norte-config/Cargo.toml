@@ -16,7 +16,7 @@ toml.workspace = true
 toml_edit.workspace = true
 schemars = { workspace = true, features = ["derive"], optional = true }
 notify = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["rt", "time", "sync"], optional = true }
+tokio = { workspace = true, features = ["rt", "time", "sync", "macros"], optional = true }
 tokio-util = { workspace = true, optional = true }
 
 [dev-dependencies]

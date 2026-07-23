@@ -13,6 +13,7 @@
 #![warn(missing_docs)]
 
 pub mod ansi;
+pub mod config;
 mod display;
 pub mod keymap;
 pub mod nav;

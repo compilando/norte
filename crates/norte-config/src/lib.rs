@@ -12,6 +12,8 @@
 pub mod dirs;
 pub mod load;
 pub mod schema;
+#[cfg(feature = "watch")]
+pub mod watch;
 
 pub use dirs::{
     Layer, Layers, config_dir, standard_layers, standard_layers_from, user_config_dir,
@@ -25,3 +27,5 @@ pub use schema::{
     AiProviderEntry, AiSection, ArchiveSection, ConfigError, DEFAULT_PRESET, DaemonMode,
     DaemonSection, HotlistEntry, KeymapSection, NorteToml, UiSection,
 };
+#[cfg(feature = "watch")]
+pub use watch::{Watch, WatchMode, watch, watch_polling};
