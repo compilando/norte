@@ -25,6 +25,12 @@ const PRESETS: &[(&str, &str)] = &[
         "catppuccin-latte",
         include_str!("../presets/catppuccin-latte.toml"),
     ),
+    // Retro (G1): [effects] interpretados por la GUI (ADR 0036).
+    ("retro-crt", include_str!("../presets/retro-crt.toml")),
+    (
+        "retro-crt-amber",
+        include_str!("../presets/retro-crt-amber.toml"),
+    ),
 ];
 
 /// Nombres de todos los presets embebidos (para autocompletar / validar).

@@ -1,0 +1,48 @@
+name = "retro-crt-amber"
+
+# Fósforo ámbar (P3): terminal CRT clásica. [effects] es interpretado por la
+# GUI (scanlines/vignette/glow/bezel, ADR 0036); la TUI lo ignora y solo pinta
+# los [roles]/[files].
+
+[roles]
+background       = { bg = "#100c04" }
+regular          = { fg = "#ffb000" }
+selection        = { fg = "#ffe0a0", bg = "#4f3a13" }
+border-focus     = { fg = "#ffb000", bold = true }
+border-unfocused = { fg = "#8f6a1a", dim = true }
+modal-border     = { fg = "#e69a00" }
+status-bar       = { fg = "#100c04", bg = "#ffb000" }
+title            = { fg = "#ffd070", bold = true }
+hostile-badge    = { fg = "#ff5f5f", bold = true }
+error            = { fg = "#ff5f5f" }
+warning          = { fg = "#ffd070" }
+info             = { fg = "#e69a00" }
+match            = { fg = "#100c04", bg = "#ffd070" }
+pane-background       = { bg = "#141006" }
+pane-focus-background = { bg = "#1d1708" }
+mark                  = { bg = "#3a2e10" }
+
+[files.kind]
+dir          = { fg = "#ffd070", bold = true }
+symlink      = { fg = "#e69a00" }
+executable   = { fg = "#ffe0a0", bold = true }
+fifo         = { fg = "#8f6a1a" }
+socket       = { fg = "#e69a00" }
+block-device = { fg = "#8f6a1a" }
+char-device  = { fg = "#8f6a1a" }
+
+[files.ext]
+zip  = { fg = "#ffd070", dim = true }
+tar  = { fg = "#ffd070", dim = true }
+gz   = { fg = "#ffd070", dim = true }
+rs   = { fg = "#ffe0a0" }
+toml = { fg = "#e69a00" }
+md   = { fg = "#ffb000" }
+png  = { fg = "#ffd070" }
+jpg  = { fg = "#ffd070" }
+
+[effects]
+scanlines = { opacity = 0.12, spacing_px = 3 }
+vignette  = { strength = 0.35 }
+glow      = { strength = 0.5 }
+bezel     = { radius_px = 10, inset = true }

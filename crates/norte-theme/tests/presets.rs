@@ -56,6 +56,18 @@ fn cada_preset_parsea_y_es_completo() {
     }
 }
 
+/// G1: los presets retro declaran [effects] (la GUI los interpreta; la TUI
+/// los ignora) y pasan la misma completitud que el resto.
+#[test]
+fn presets_retro_traen_effects() {
+    for name in ["retro-crt", "retro-crt-amber"] {
+        let t = norte_theme::Theme::preset(name)
+            .expect("parsea")
+            .expect("preset registrado");
+        assert!(t.has_effects(), "{name} sin [effects]");
+    }
+}
+
 #[test]
 fn preset_por_nombre_y_default() {
     assert_eq!(

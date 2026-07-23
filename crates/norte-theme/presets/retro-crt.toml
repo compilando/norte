@@ -1,0 +1,48 @@
+name = "retro-crt"
+
+# Fósforo verde (P1): terminal CRT clásica. [effects] es interpretado por la
+# GUI (scanlines/vignette/glow/bezel, ADR 0036); la TUI lo ignora y solo pinta
+# los [roles]/[files].
+
+[roles]
+background       = { bg = "#0a0f0a" }
+regular          = { fg = "#2ee65c" }
+selection        = { fg = "#aaffcc", bg = "#134f26" }
+border-focus     = { fg = "#2ee65c", bold = true }
+border-unfocused = { fg = "#1a8f3c", dim = true }
+modal-border     = { fg = "#33d9a6" }
+status-bar       = { fg = "#0a0f0a", bg = "#2ee65c" }
+title            = { fg = "#7bff9e", bold = true }
+hostile-badge    = { fg = "#ff5f5f", bold = true }
+error            = { fg = "#ff5f5f" }
+warning          = { fg = "#d7af5f" }
+info             = { fg = "#33d9a6" }
+match            = { fg = "#0a0f0a", bg = "#7bff9e" }
+pane-background       = { bg = "#0d140d" }
+pane-focus-background = { bg = "#122012" }
+mark                  = { bg = "#123a12" }
+
+[files.kind]
+dir          = { fg = "#7bff9e", bold = true }
+symlink      = { fg = "#33d9a6" }
+executable   = { fg = "#aaffcc", bold = true }
+fifo         = { fg = "#1a8f3c" }
+socket       = { fg = "#33d9a6" }
+block-device = { fg = "#1a8f3c" }
+char-device  = { fg = "#1a8f3c" }
+
+[files.ext]
+zip  = { fg = "#7bff9e", dim = true }
+tar  = { fg = "#7bff9e", dim = true }
+gz   = { fg = "#7bff9e", dim = true }
+rs   = { fg = "#aaffcc" }
+toml = { fg = "#33d9a6" }
+md   = { fg = "#2ee65c" }
+png  = { fg = "#7bff9e" }
+jpg  = { fg = "#7bff9e" }
+
+[effects]
+scanlines = { opacity = 0.12, spacing_px = 3 }
+vignette  = { strength = 0.35 }
+glow      = { strength = 0.5 }
+bezel     = { radius_px = 10, inset = true }
