@@ -274,10 +274,21 @@ fn ftp_reread_no_secuencial_sobre_cache_viva() {
     // Re-lee desde 0 SIN op de flush intermedia: offset no casa (next_offset=64Ki)
     // → miss → flush+re-RETR. Debe dar los MISMOS primeros bytes, no basura.
     let b = inst.read(&seg, 0, 64 * 1024).expect("read").expect("ok");
-    assert_eq!(b.as_slice(), &content[..64 * 1024], "re-lectura desde 0 byte-exacta");
+    assert_eq!(
+        b.as_slice(),
+        &content[..64 * 1024],
+        "re-lectura desde 0 byte-exacta"
+    );
     // Salto hacia delante a 128 KiB (miss otra vez) → cola de 2 KiB.
-    let c = inst.read(&seg, 128 * 1024, 64 * 1024).expect("read").expect("ok");
-    assert_eq!(c.as_slice(), &content[128 * 1024..], "salto adelante byte-exacto (cola)");
+    let c = inst
+        .read(&seg, 128 * 1024, 64 * 1024)
+        .expect("read")
+        .expect("ok");
+    assert_eq!(
+        c.as_slice(),
+        &content[128 * 1024..],
+        "salto adelante byte-exacto (cola)"
+    );
     // Y una lectura secuencial entera desde cero sigue correcta.
     let whole = read_all_chunked(&mut inst, &seg, 64 * 1024);
     assert_eq!(whole, content, "lectura entera byte-exacta tras los saltos");
