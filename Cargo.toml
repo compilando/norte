@@ -12,6 +12,7 @@ members = [
     "crates/norte-connect",
     "crates/norte-testkit",
     "crates/norte-core",
+    "crates/norte-index",
     "crates/norte-cli",
     "crates/norte-tui",
     "crates/norte-frontend",
@@ -71,6 +72,7 @@ norte-vfs-archive = { path = "crates/norte-vfs-archive", version = "0.3.0-alpha.
 norte-connect = { path = "crates/norte-connect", version = "0.3.0-alpha.1" }
 norte-testkit = { path = "crates/norte-testkit", version = "0.3.0-alpha.1" }
 norte-core = { path = "crates/norte-core", version = "0.3.0-alpha.1" }
+norte-index = { path = "crates/norte-index", version = "0.3.0-alpha.1" }
 norte-tui = { path = "crates/norte-tui", version = "0.3.0-alpha.1" }
 norte-frontend = { path = "crates/norte-frontend", version = "0.3.0-alpha.1" }
 norte-encoding = { path = "crates/norte-encoding", version = "0.3.0-alpha.1" }

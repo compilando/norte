@@ -1,0 +1,23 @@
+[package]
+name = "norte-index"
+description = "SQLite FTS5 name/metadata search index for norte"
+license = "AGPL-3.0-only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+norte-proto.workspace = true
+sqlx = { workspace = true, features = ["sqlite", "runtime-tokio"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+
+[lints]
+workspace = true
