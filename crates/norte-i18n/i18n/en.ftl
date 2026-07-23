@@ -280,3 +280,7 @@ cli-ai-rename-abort = aborted; nothing was renamed
 cli-ai-rename-done = renamed { $n } file(s)
 gui-modal-quit-title = Quit with { $tasks } task(s) running and { $marks } mark(s)?
 gui-modal-footer-quit = y confirm   n/Esc cancel
+gui-banner-theme-io = theme { $spec }: { $error }
+gui-banner-theme-parse = theme { $spec }: { $detail }
+gui-banner-config-io = configuration { $path }: { $error }
+gui-banner-config-parse = configuration { $path }: { $detail }

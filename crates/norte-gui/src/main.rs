@@ -108,6 +108,15 @@ struct NorteGui {
     /// es solo su reflejo para render).
     query: [String; 2],
     /// Último error de carga por pane (banner), o `None` si el listado está OK.
+    ///
+    /// Auditoría de encoding final (#73, INFO 4, no corregido a propósito):
+    /// los sitios que rellenan este campo con un `Error` del protocolo
+    /// (`SubmitFailed` ~445, `ViewerOpened`/`ViewerFailed` ~518) interpolan su
+    /// `Display` SIN pasar por `banner_safe` — se apoyan en la reclamación de
+    /// "taxonomía cerrada, sin bytes crudos" (auditada en GUI-b, ver el
+    /// comentario junto a `gui-banner-op-rejected`). No se toca aquí: la
+    /// auditoría solo señala que la garantía descansa en esa reclamación, no
+    /// la re-verifica.
     errors: [Option<String>; 2],
     /// Contador de generación por pane: cada `cd` (incluido el `begin_loading`)
     /// lo incrementa y captura el valor. Un `fs.list` en vuelo lleva su
@@ -208,10 +217,7 @@ impl NorteGui {
             Err(e) => (
                 norte_config::DEFAULT_PRESET.to_owned(),
                 None,
-                Some(norte_i18n::ta(
-                    "gui-banner-config-invalid",
-                    &[("error", banner_safe(&e.to_string()).as_str())],
-                )),
+                Some(config_error_banner(e)),
             ),
         };
 
@@ -224,10 +230,7 @@ impl NorteGui {
         let theme = match norte_frontend::theme::resolve_theme(theme_spec.as_deref()) {
             Ok(theme) => theme,
             Err(e) => {
-                let msg = norte_i18n::ta(
-                    "gui-banner-config-invalid",
-                    &[("error", banner_safe(&e.to_string()).as_str())],
-                );
+                let msg = theme_error_banner(&e);
                 startup_banner = Some(push_banner(startup_banner, msg));
                 Theme::preset_default()
             }
@@ -241,7 +244,7 @@ impl NorteGui {
             Err(e) => {
                 let msg = norte_i18n::ta(
                     "gui-banner-keymap-error",
-                    &[("error", banner_safe(&e.to_string()).as_str())],
+                    &[("error", keymap_error_detail(&e).as_str())],
                 );
                 (
                     keymap::build_effectives_preset_only(&preset_name),
@@ -2403,15 +2406,134 @@ impl Render for NorteGui {
     }
 }
 
+/// Tope de un detalle de banner (auditoría de encoding final, #73): mismo
+/// valor que `norte_tui::app::DETAIL_MAX_CHARS` — un `preset`/tema/TOML
+/// hostil bajo `./.norte` puede citar valores kilométricos, y sin tope
+/// desbordarían la línea del banner igual que desbordarían la barra de la
+/// TUI.
+const BANNER_DETAIL_MAX_CHARS: usize = 160;
+
 /// Sanea un mensaje de error para el banner de arranque (revisión C2/G0
-/// MINOR 4): la config (o el nombre del preset) puede venir de la capa de
-/// PROYECTO (`./.norte` de un repo AJENO/clonado) y los diagnósticos citan
-/// fragmentos crudos del propio fichero — bidi/invisibles sin enmascarar
-/// serían un hazard de terminal. Reusa el MISMO saneo que el resto de
-/// superficies de esta GUI (`norte_frontend::display_name`, vía bytes: el
-/// mismo camino que un nombre de fichero hostil).
+/// MINOR 4; auditoría de encoding final #73 — MEDIUM-LOW 1: ahora también
+/// TOPA, espejo de `norte_tui::app::detail_for_bar`): la config (o el nombre
+/// del preset) puede venir de la capa de PROYECTO (`./.norte` de un repo
+/// AJENO/clonado) y los diagnósticos citan fragmentos crudos del propio
+/// fichero — bidi/invisibles sin enmascarar serían un hazard de terminal, y
+/// sin tope un valor kilométrico desbordaría el banner. Reusa el MISMO saneo
+/// que el resto de superficies de esta GUI (`norte_frontend::display_name`,
+/// vía bytes: el mismo camino que un nombre de fichero hostil), luego recorta
+/// a [`BANNER_DETAIL_MAX_CHARS`] con una elipsis marcando el corte.
 fn banner_safe(s: &str) -> String {
-    norte_frontend::display_name(s.as_bytes()).0
+    let masked = norte_frontend::display_name(s.as_bytes()).0;
+    let mut out: String = masked.chars().take(BANNER_DETAIL_MAX_CHARS).collect();
+    if masked.chars().nth(BANNER_DETAIL_MAX_CHARS).is_some() {
+        out.push('…');
+    }
+    out
+}
+
+/// Categoría LOCALIZADA de un `io::Error` del SO (auditoría de encoding
+/// final #73 — MEDIUM 3): espejo de `norte_tui::app::io_error_category`
+/// (mismas claves Fluent COMPARTIDAS, `err-not-found`/`err-permission-
+/// denied`/`err-no-space`/`err-io`) — jamás el `Display` del `io::Error`, que
+/// el SO redacta en SU idioma («Permission denied (os error 13)»,
+/// «Permiso denegado», …) sin que Fluent tenga ninguna oportunidad de
+/// traducirlo: mezclarlo en un banner por lo demás localizado rompe la
+/// paridad de idioma (regla 1: nunca texto crudo del sistema).
+fn io_error_category(e: &std::io::Error) -> String {
+    let key = match e.kind() {
+        std::io::ErrorKind::NotFound => "err-not-found",
+        std::io::ErrorKind::PermissionDenied => "err-permission-denied",
+        std::io::ErrorKind::StorageFull => "err-no-space",
+        _ => "err-io",
+    };
+    norte_i18n::t(key)
+}
+
+/// Banner LOCALIZADO de un [`norte_config::ConfigError`] (auditoría de
+/// encoding final #73 — MEDIUM 3): antes se interpolaba `e.to_string()`
+/// entero en `gui-banner-config-invalid` — el `Display` de `Io` incluye el
+/// `io::Error` del SO sin traducir (ver [`io_error_category`]) y el de
+/// `Toml` cita el mensaje del parser SIN tope (un `norte.toml` hostil de
+/// `./.norte`, un repo AJENO, puede citar valores kilométricos). Cada
+/// variante mapea a su propia clave (`gui-banner-config-io`/`-parse`), con
+/// el `path`/mensaje siempre por [`banner_safe`] (enmascara Y topa).
+fn config_error_banner(e: &norte_config::ConfigError) -> String {
+    use norte_config::ConfigError;
+    match e {
+        ConfigError::Io { path, source } => norte_i18n::ta(
+            "gui-banner-config-io",
+            &[
+                ("path", banner_safe(&path.display().to_string()).as_str()),
+                ("error", io_error_category(source).as_str()),
+            ],
+        ),
+        ConfigError::Toml { path, message } => norte_i18n::ta(
+            "gui-banner-config-parse",
+            &[
+                ("path", banner_safe(&path.display().to_string()).as_str()),
+                ("detail", banner_safe(message).as_str()),
+            ],
+        ),
+    }
+}
+
+/// Banner LOCALIZADO de un [`norte_frontend::theme::ResolveError`]
+/// (auditoría de encoding final #73 — MEDIUM 3): espejo de
+/// [`config_error_banner`] (mismo par de variantes `{spec/path, source}` /
+/// `{spec/path, detail}` documentado en el contrato de
+/// `norte_frontend::theme` — un `[ui].theme` hostil de `./.norte` cae por el
+/// mismo camino saneado).
+fn theme_error_banner(e: &norte_frontend::theme::ResolveError) -> String {
+    use norte_frontend::theme::ResolveError;
+    match e {
+        ResolveError::Io { spec, source } => norte_i18n::ta(
+            "gui-banner-theme-io",
+            &[
+                ("spec", banner_safe(spec).as_str()),
+                ("error", io_error_category(source).as_str()),
+            ],
+        ),
+        ResolveError::Parse { spec, detail } => norte_i18n::ta(
+            "gui-banner-theme-parse",
+            &[
+                ("spec", banner_safe(spec).as_str()),
+                ("detail", banner_safe(detail).as_str()),
+            ],
+        ),
+    }
+}
+
+/// Detalle accionable de un [`norte_frontend::keymap::KeymapError`] para el
+/// banner (auditoría de encoding final #73 — MEDIUM 3): su `Display`
+/// (thiserror) es prosa en CASTELLANO fija — mezclada en un banner que el
+/// resto del tiempo sale en el idioma del usuario (`gui-banner-keymap-error`,
+/// ya Fluent), rompe la paridad de idioma para un usuario en inglés. Las
+/// variantes con contenido de USUARIO embebido (chord/comando/secuencia/
+/// diagnóstico TOML — cualquiera puede venir de un `keymap.toml` hostil de
+/// `./.norte`) devuelven SOLO ese contenido, por [`banner_safe`] (enmascara Y
+/// topa) — sin la prosa española alrededor. `WrongLayerKey` es la única
+/// variante SIN payload de usuario (`layer`/`key` son literales `&'static
+/// str` en inglés: `"preset"`/`"usuario"`, `"keymap"`/`"prepend/append"`): su
+/// `Display` completo es aceptable tal cual (nada de SO, nada sin
+/// enmascarar) — reescribir esa única frase a Fluent queda fuera de alcance
+/// de esta auditoría.
+fn keymap_error_detail(e: &norte_frontend::keymap::KeymapError) -> String {
+    use norte_frontend::keymap::KeymapError;
+    match e {
+        KeymapError::Toml(msg) => banner_safe(msg),
+        KeymapError::BadChord { chord } | KeymapError::ShiftWithChar { chord } => {
+            banner_safe(chord)
+        }
+        KeymapError::EmptySequence { run } | KeymapError::UnknownCommand { run } => {
+            banner_safe(run)
+        }
+        KeymapError::EscInSequence { sequence } => banner_safe(sequence),
+        KeymapError::AmbiguousPrefix { shorter, longer } => {
+            format!("{} / {}", banner_safe(shorter), banner_safe(longer))
+        }
+        KeymapError::WrongLayerKey { .. } => banner_safe(&e.to_string()),
+    }
 }
 
 /// Añade `msg` al banner de arranque acumulado (revisión C2/G0 MINOR 5): UN
@@ -2493,15 +2615,15 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        BG, BORDER_FOCUS, BORDER_UNFOCUS, ERR_FG, FG, HEADER_BG, MARK_BG, PANE_BG, PANE_BG_FOCUS,
-        QUICK_FG, SEL_BG,
+        BANNER_DETAIL_MAX_CHARS, BG, BORDER_FOCUS, BORDER_UNFOCUS, ERR_FG, FG, HEADER_BG, MARK_BG,
+        PANE_BG, PANE_BG_FOCUS, QUICK_FG, SEL_BG,
     };
     use super::{
-        ChromeColors, ImagePreview, affected_dirs, apply_viewer_command, confirm_quit_task_count,
-        first_cancelable, generation_is_current, has_pending_work, image_preview_from,
-        image_status, modal_footer_colors, modal_panel_colors, modal_title_colors, pending_hint,
-        retain_active, row_label, task_at_cursor, unknown_preset_banner, viewer_header,
-        viewer_status,
+        ChromeColors, ImagePreview, affected_dirs, apply_viewer_command, banner_safe,
+        confirm_quit_task_count, first_cancelable, generation_is_current, has_pending_work,
+        image_preview_from, image_status, keymap_error_detail, modal_footer_colors,
+        modal_panel_colors, modal_title_colors, pending_hint, retain_active, row_label,
+        task_at_cursor, unknown_preset_banner, viewer_header, viewer_status,
     };
     use norte_frontend::viewer::Viewer;
     use norte_proto::{EntryKind, VPath};
@@ -3051,6 +3173,190 @@ mod tests {
         assert!(msg.contains("orthodox"), "lista lo disponible: {msg}");
         assert!(msg.contains("vim"), "lista lo disponible: {msg}");
         assert!(msg.contains("cua"), "lista lo disponible: {msg}");
+    }
+
+    /// `unknown_preset_banner` sobre TODO el corpus hostil de `norte-testkit`,
+    /// usado como nombre de PRESET (auditoría de encoding final #73 — hueco
+    /// de test 2): un `[ui].preset` hostil de `./.norte`, un repo AJENO, pasa
+    /// por AQUÍ. Dos propiedades, cada una sobre lo que de verdad las
+    /// garantiza:
+    /// - el banner COMPUESTO (mismo criterio que el pin de `row_label`: sin
+    ///   ningún carácter `is_terminal_hazard` crudo) — la prosa del propio
+    ///   `.ftl` es ASCII controlado por nosotros, así que un hazard ahí solo
+    ///   puede venir del nombre interpolado.
+    /// - el nombre ENMASCARADO (`banner_safe`, lo que de verdad entra al
+    ///   argumento `name`) respeta `BANNER_DETAIL_MAX_CHARS` (+1 por la
+    ///   elipsis del corte, mismo margen que el pin equivalente de la TUI,
+    ///   `norte-tui/src/app.rs`) — medir la longitud del banner COMPLETO no
+    ///   tendría sentido: la prosa fija alrededor del nombre ya suma más que
+    ///   el tope por sí sola.
+    #[test]
+    fn unknown_preset_banner_sobre_el_corpus_hostil_no_deja_hazards_ni_desborda() {
+        for fixture in norte_testkit::corpus::hostile_names() {
+            let name = String::from_utf8_lossy(&fixture.bytes).into_owned();
+
+            let masked = banner_safe(&name);
+            assert!(
+                masked.chars().count() <= BANNER_DETAIL_MAX_CHARS + 1,
+                "{}: banner_safe no topó el nombre ({} chars)",
+                fixture.id,
+                masked.chars().count(),
+            );
+
+            // Un fixture hostil que por casualidad IGUALARA "orthodox"/"vim"/
+            // "cua" no avisaría (contrato de `unknown_preset_banner`); ningún
+            // fixture del corpus lo hace, pero no se asume — se salta limpio.
+            let Some(banner) = unknown_preset_banner(&name) else {
+                continue;
+            };
+            assert!(
+                !banner.chars().any(norte_encoding::is_terminal_hazard),
+                "{}: unknown_preset_banner dejó un hazard crudo en {banner:?}",
+                fixture.id,
+            );
+        }
+    }
+
+    /// `config_error_banner` (auditoría de encoding final #73 — MEDIUM 3):
+    /// `Io` jamás interpola el `Display` crudo del `io::Error` del SO —
+    /// aunque ese `Display` traiga prosa que PARECE ya localizada (simulado
+    /// aquí a propósito), el banner debe llevar la categoría de
+    /// `io_error_category` (`err-permission-denied`, Fluent, ES forzado) y
+    /// NO el texto del SO. El path (que puede venir de `./.norte`, un repo
+    /// AJENO) sale por `banner_safe`.
+    #[test]
+    fn config_error_banner_nunca_interpola_el_display_del_so() {
+        let _ = norte_i18n::force(norte_i18n::Lang::Es);
+        let so_dice = "esto NO debe aparecer en el banner (os error 13)";
+        let e = norte_config::ConfigError::Io {
+            path: std::path::PathBuf::from("./.norte/norte.toml"),
+            source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, so_dice),
+        };
+        let banner = super::config_error_banner(&e);
+        assert!(
+            !banner.contains(so_dice),
+            "el Display crudo del SO se filtró: {banner:?}"
+        );
+        assert!(
+            banner.contains("permiso denegado"),
+            "falta la categoría localizada (ES): {banner:?}"
+        );
+    }
+
+    /// `config_error_banner` (auditoría de encoding final #73 — MEDIUM 3):
+    /// `Toml` topa el mensaje del parser — un `norte.toml` hostil de
+    /// `./.norte` puede citar un valor kilométrico, y el diagnóstico
+    /// (`message`, ya compacto por `toml_diag` — ver `norte-config`) se
+    /// enmascara de todas formas.
+    #[test]
+    fn config_error_banner_topa_un_mensaje_toml_kilometrico() {
+        let kilometrico = "x".repeat(BANNER_DETAIL_MAX_CHARS * 4);
+        let e = norte_config::ConfigError::Toml {
+            path: std::path::PathBuf::from("norte.toml"),
+            message: kilometrico,
+        };
+        let banner = super::config_error_banner(&e);
+        assert!(
+            banner.chars().count() <= BANNER_DETAIL_MAX_CHARS * 2,
+            "el mensaje TOML no se topó: {} chars",
+            banner.chars().count(),
+        );
+        assert!(banner.contains('…'), "falta la marca de corte: {banner:?}");
+    }
+
+    /// `theme_error_banner` (auditoría de encoding final #73 — MEDIUM 3):
+    /// espejo de `config_error_banner_nunca_interpola_el_display_del_so`
+    /// para `ResolveError::Io` (un `[ui].theme` hostil de `./.norte`).
+    #[test]
+    fn theme_error_banner_nunca_interpola_el_display_del_so() {
+        let _ = norte_i18n::force(norte_i18n::Lang::Es);
+        let so_dice = "esto NO debe aparecer en el banner (os error 2)";
+        let e = norte_frontend::theme::ResolveError::Io {
+            spec: "./.norte/tema-hostil.toml".to_owned(),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, so_dice),
+        };
+        let banner = super::theme_error_banner(&e);
+        assert!(
+            !banner.contains(so_dice),
+            "el Display crudo del SO se filtró: {banner:?}"
+        );
+        assert!(
+            banner.contains("no encontrado"),
+            "falta la categoría localizada (ES): {banner:?}"
+        );
+    }
+
+    /// `theme_error_banner` (auditoría de encoding final #73 — MEDIUM 3):
+    /// `Parse` enmascara y topa TANTO `spec` como `detail` — ambos pueden
+    /// venir de un tema hostil de `./.norte`.
+    #[test]
+    fn theme_error_banner_topa_spec_y_detail() {
+        let kilometrico = "y".repeat(BANNER_DETAIL_MAX_CHARS * 4);
+        let e = norte_frontend::theme::ResolveError::Parse {
+            spec: kilometrico.clone(),
+            detail: kilometrico,
+        };
+        let banner = super::theme_error_banner(&e);
+        assert!(
+            banner.chars().count() <= BANNER_DETAIL_MAX_CHARS * 4,
+            "spec+detail no se toparon: {} chars",
+            banner.chars().count(),
+        );
+        // Dos cortes: uno en spec, otro en detail — cada uno con su propia
+        // elipsis (`banner_safe` topa cada argumento por separado).
+        assert_eq!(
+            banner.matches('…').count(),
+            2,
+            "esperaba una elipsis por cada campo topado: {banner:?}"
+        );
+    }
+
+    /// `keymap_error_detail` (auditoría de encoding final #73 — MEDIUM 3):
+    /// las variantes con contenido de USUARIO (chord/comando/secuencia/TOML)
+    /// devuelven SOLO ese contenido — nunca la prosa castellana fija que
+    /// trae `Display` alrededor (rompería la paridad de idioma en un banner
+    /// EN inglés).
+    #[test]
+    fn keymap_error_detail_extrae_el_contenido_de_usuario_sin_prosa_castellana() {
+        use norte_frontend::keymap::KeymapError;
+        let cases: &[(KeymapError, &str)] = &[
+            (
+                KeymapError::BadChord {
+                    chord: "megatecla".to_owned(),
+                },
+                "megatecla",
+            ),
+            (
+                KeymapError::UnknownCommand {
+                    run: "pane.teletransportar".to_owned(),
+                },
+                "pane.teletransportar",
+            ),
+            (
+                KeymapError::Toml("unknown field `bindingz`".to_owned()),
+                "unknown field `bindingz`",
+            ),
+        ];
+        for (e, expected_content) in cases {
+            let detail = keymap_error_detail(e);
+            assert_eq!(
+                detail, *expected_content,
+                "debía ser SOLO el contenido de usuario, sin prosa: {detail:?}"
+            );
+            assert!(
+                !detail.contains("inválida") && !detail.contains("desconocido"),
+                "se coló prosa castellana del Display: {detail:?}"
+            );
+        }
+
+        // Sin payload de usuario (literales `&'static str` en inglés): el
+        // `Display` completo es aceptable (juicio explícito del audit).
+        let sin_payload = KeymapError::WrongLayerKey {
+            layer: "usuario",
+            key: "keymap",
+        };
+        let detail = keymap_error_detail(&sin_payload);
+        assert_eq!(detail, sin_payload.to_string());
     }
 
     /// `task_at_cursor` (#91): devuelve la task en el índice dado, y `None`
