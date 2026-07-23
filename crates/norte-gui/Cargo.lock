@@ -5024,6 +5024,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "norte-config"
+version = "0.3.0-alpha.1"
+dependencies = [
+ "norte-proto",
+ "serde",
+ "thiserror 2.0.18",
+ "toml 0.9.12+spec-1.1.0",
+ "toml_edit 0.25.13+spec-1.1.0",
+]
+
+[[package]]
 name = "norte-connect"
 version = "0.3.0-alpha.1"
 dependencies = [
@@ -5052,18 +5063,20 @@ version = "0.3.0-alpha.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "bytes",
  "futures",
  "globset",
  "hmac 0.12.1",
  "memchr",
  "norte-ai",
+ "norte-config",
  "norte-connect",
  "norte-encoding",
+ "norte-index",
  "norte-plugin-host",
  "norte-proto",
  "norte-vfs",
  "norte-vfs-archive",
- "norte-vfs-ftp",
  "norte-vfs-object",
  "norte-vfs-sftp",
  "regex",
@@ -5093,6 +5106,7 @@ dependencies = [
 name = "norte-frontend"
 version = "0.3.0-alpha.1"
 dependencies = [
+ "norte-config",
  "norte-encoding",
  "norte-proto",
  "serde",
@@ -5109,6 +5123,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "image",
+ "norte-config",
  "norte-core",
  "norte-encoding",
  "norte-frontend",
@@ -5127,6 +5142,18 @@ dependencies = [
  "fluent 0.17.0",
  "fluent-syntax 0.12.0",
  "unic-langid",
+]
+
+[[package]]
+name = "norte-index"
+version = "0.3.0-alpha.1"
+dependencies = [
+ "norte-proto",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -5202,19 +5229,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "norte-vfs-ftp"
-version = "0.3.0-alpha.1"
-dependencies = [
- "async-trait",
- "bytes",
- "futures",
- "norte-proto",
- "norte-vfs",
- "suppaftp",
- "tokio",
 ]
 
 [[package]]

@@ -30,6 +30,9 @@ norte-vfs-local = { path = "../norte-vfs-local" }
 # search), display_name/sort_entries. Por path (crate del workspace, pero este
 # binario está excluido → no puede usar el alias `.workspace`).
 norte-frontend = { path = "../norte-frontend" }
+# Descubrimiento de capas de config compartido (Task 9): reemplaza el fork
+# `env_user_dir`/`layer_dirs` a mano por `norte_config::standard_layers`.
+norte-config = { path = "../norte-config", version = "0.3.0-alpha.1" }
 # Strings de UI por Fluent (GUI-e T1): mismos bundles es/en que la TUI
 # (`crates/norte-i18n/i18n/*.ftl`), por path como el resto de los internos.
 norte-i18n = { path = "../norte-i18n" }

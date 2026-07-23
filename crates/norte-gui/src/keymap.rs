@@ -2,9 +2,13 @@
 //! embebido, carga de capas (sistema/usuario/proyecto) y el adaptador
 //! nombre-de-tecla-GPUI → `Chord` neutro. El MOTOR es `norte_frontend::keymap`.
 
+#[cfg(test)]
+use norte_config::Layer;
+use norte_config::Layers;
 use norte_frontend::keymap::{
     Chord, Effective, KeyCode, KeymapError, KeymapFile, Mods, Screen, parse_keymap,
 };
+#[cfg(test)]
 use std::path::PathBuf;
 
 /// Comandos que la GUI sabe ejecutar (contexto Browse). Fuente ÚNICA de
@@ -52,73 +56,71 @@ fn orthodox() -> KeymapFile {
         .unwrap_or_else(|e| panic!("preset orthodox embebido inválido: {e}"))
 }
 
-/// Directorios de capa en precedencia ASCENDENTE (sistema → usuario → proyecto),
-/// como la TUI: `/etc/norte` (o `%ProgramData%`), config dir XDG, `./.norte`.
-/// `NORTE_CONFIG_DIR` fuerza la capa de usuario (tests/headless).
-/// El dir de config del USUARIO desde el entorno: `NORTE_CONFIG_DIR` →
-/// `$XDG_CONFIG_HOME/norte` → `~/.config/norte`. Aislado para que los tests
-/// inyecten el dir directo (`build_effectives_from`) sin mutar el entorno
-/// global — en edición 2024 `env::set_var` es `unsafe` y el crate es
-/// `forbid(unsafe_code)`.
-fn env_user_dir() -> Option<PathBuf> {
-    std::env::var_os("NORTE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(|x| PathBuf::from(x).join("norte")))
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/norte")))
-}
-
-/// Dirs de capa en precedencia ASCENDENTE dado el dir de usuario resuelto:
-/// `/etc/norte` (sistema) → `user` → `./.norte` (proyecto).
-fn layer_dirs(user: Option<PathBuf>) -> Vec<(PathBuf, bool)> {
-    // (dir, es_proyecto)
-    let mut v = Vec::new();
-    #[cfg(unix)]
-    v.push((PathBuf::from("/etc/norte"), false));
-    if let Some(u) = user {
-        v.push((u, false));
-    }
-    v.push((PathBuf::from("./.norte"), true));
-    v
-}
-
 /// La unión de comandos de Browse + Viewer (para validar el keymap ENTERO —
 /// `build_for` mezcla `global` con el contexto de la pantalla).
 fn all_commands() -> Vec<&'static str> {
     COMMANDS.iter().chain(VIEWER_COMMANDS).copied().collect()
 }
 
-/// Construye los dos `Effective` (Browse y Viewer) desde el preset + capas.
+/// Build the two `Effective`s (Browse and Viewer) from preset + layers.
+///
+/// Layer discovery now goes through the shared `norte_config::standard_layers`
+/// (system → user → project, `NORTE_CONFIG_DIR` override included) instead of
+/// the GUI's hand-rolled fork — see Task 9 of the M5 config-layer migration.
 ///
 /// # Errors
-/// El primer `KeymapError` de una capa.
+/// The first `KeymapError` from any layer.
 pub fn build_effectives() -> Result<(Effective, Effective), KeymapError> {
-    build_effectives_from(env_user_dir())
+    build_effectives_layers(&norte_config::standard_layers())
 }
 
-/// Igual que [`build_effectives`] pero con el dir de config del usuario EXPLÍCITO
-/// (inyección: `main` pasa el del entorno vía [`build_effectives`]; los tests
-/// pasan un scratch dir sin mutar el entorno).
+/// Like [`build_effectives`] with an EXPLICIT user config dir (test
+/// injection, kept for the existing tests): builds a minimal [`Layers`] of
+/// (user, [`Layer::User`]) + (`./.norte`, [`Layer::Project`]).
+///
+/// `#[cfg(test)]`: since [`build_effectives`] now calls
+/// `build_effectives_layers` directly (it no longer routes through this
+/// seam), this function has no production caller — only the tests below use
+/// it as an injection point. Gating it avoids a `dead_code` lint in this
+/// binary crate (no lib target means `pub` alone doesn't count as reachable).
 ///
 /// # Errors
-/// El primer `KeymapError` de una capa.
+/// The first `KeymapError` from any layer.
+#[cfg(test)]
 pub fn build_effectives_from(
     user_dir: Option<PathBuf>,
 ) -> Result<(Effective, Effective), KeymapError> {
+    let mut dirs = Vec::new();
+    if let Some(u) = user_dir {
+        dirs.push((u, Layer::User));
+    }
+    dirs.push((PathBuf::from(".norte"), Layer::Project));
+    build_effectives_layers(&Layers { dirs })
+}
+
+/// Shared implementation: loads each layer via
+/// `norte_frontend::config::load_keymap_layer` (which also rejects a bare
+/// `keymap = [...]` in a layer — ADR 0006/0035 — a check the old hand-rolled
+/// GUI loader was missing) and merges them onto the embedded preset.
+///
+/// # Errors
+/// The first `KeymapError` from any layer.
+fn build_effectives_layers(layers: &Layers) -> Result<(Effective, Effective), KeymapError> {
     let preset = orthodox();
-    let mut layers: Vec<KeymapFile> = Vec::new();
-    for (dir, is_project) in layer_dirs(user_dir) {
-        let path = dir.join("keymap.toml");
-        if let Ok(src) = std::fs::read_to_string(&path) {
-            let mut kf = parse_keymap(&src)?;
-            if is_project {
-                kf.mark_project();
-            }
-            layers.push(kf);
+    let mut kfs: Vec<KeymapFile> = Vec::new();
+    // La GUI no expone diagnósticos de "qué ficheros se cargaron" (a
+    // diferencia de la TUI): las fuentes se descartan tras el préstamo.
+    let mut sources = Vec::new();
+    for (dir, kind) in &layers.dirs {
+        if let Some(kf) = norte_frontend::config::load_keymap_layer(dir, *kind, &mut sources)
+            .map_err(|e| KeymapError::Toml(e.to_string()))?
+        {
+            kfs.push(kf);
         } // ausente/no legible: la capa no aporta.
     }
     let cmds = all_commands();
-    let browse = Effective::build_for(&preset, &layers, &cmds, Screen::Browse)?;
-    let viewer = Effective::build_for(&preset, &layers, &cmds, Screen::Viewer)?;
+    let browse = Effective::build_for(&preset, &kfs, &cmds, Screen::Browse)?;
+    let viewer = Effective::build_for(&preset, &kfs, &cmds, Screen::Viewer)?;
     Ok((browse, viewer))
 }
 
@@ -341,6 +343,24 @@ prepend_keymap = [{ on = ["z"], run = "lua:foo" }]
             "el motor resuelve el binding — la GUI (sin host) lo ignora en \
              `run_command`, cuyo `_ => {{}}` cubre cualquier comando no \
              reconocido en runtime"
+        );
+    }
+
+    /// ADR 0006/0035: a config layer must use prepend_keymap/append_keymap;
+    /// the bare `keymap` form (preset-only) is now a load error in the GUI
+    /// too (the old hand-rolled loader silently accepted it).
+    #[test]
+    fn capa_con_keymap_completo_es_error() {
+        let dir = scratch_dir("full-keymap");
+        std::fs::write(
+            dir.join("keymap.toml"),
+            "[pane]\nkeymap = [{ on = [\"z\"], run = \"app.quit\" }]\n",
+        )
+        .unwrap();
+        let result = build_effectives_from(Some(dir.clone()));
+        assert!(
+            result.is_err(),
+            "bare keymap in a layer must fail: {result:?}"
         );
     }
 }
