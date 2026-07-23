@@ -11,4 +11,7 @@
 
 pub mod dirs;
 
-pub use dirs::{Layer, Layers, config_dir, standard_layers, user_config_dir};
+pub use dirs::{
+    Layer, Layers, config_dir, standard_layers, standard_layers_from, user_config_dir,
+    user_config_dir_from,
+};
