@@ -379,21 +379,20 @@ pub struct Effective {
     discarded_lua_bindings: usize,
 }
 
-/// De dónde viene un binding fusionado: el preset compartido (elegible para
-/// el filtrado lenient de [`Effective::build_for_subset`]) o una capa de
-/// usuario/proyecto (siempre estricta — ver [`Strictness`]).
+/// Where a merged binding comes from: the shared preset (eligible for the
+/// lenient filter in [`Effective::build_for_subset`]) or a user/project
+/// layer (always strict — see [`Strictness`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Origin {
     Preset,
     Layer,
 }
 
-/// Selecciona el comportamiento ante un binding de PRESET a un comando
-/// ausente de `known_commands`: [`Effective::build_for`] es `Strict`
-/// (error), [`Effective::build_for_subset`] es `Lenient` (se filtra en
-/// silencio — el frontend implementa un subconjunto de comandos del preset
-/// compartido). Nunca afecta bindings de capa: ver el `continue` en
-/// `build_for_impl`.
+/// Selects the behavior for a PRESET binding to a command absent from
+/// `known_commands`: [`Effective::build_for`] is `Strict` (error),
+/// [`Effective::build_for_subset`] is `Lenient` (silently filtered — the
+/// frontend implements a subset of the shared preset's commands). Never
+/// affects layer bindings — see the `continue` in `build_for_impl`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Strictness {
     Strict,
@@ -505,7 +504,9 @@ impl Effective {
     /// (the GUI). User/project LAYERS remain strict.
     ///
     /// # Errors
-    /// Same as [`Effective::build_for`], except preset `UnknownCommand`.
+    /// Same as [`Effective::build_for`], except preset bindings to
+    /// non-`lua:` commands absent from `known_commands` are skipped
+    /// instead of failing.
     pub fn build_for_subset(
         preset: &KeymapFile,
         layers: &[KeymapFile],
@@ -1379,11 +1380,12 @@ keymap = [{ on = ["g", "g"], run = "cursor.top" }]"#,
             r.push(Chord::new(Mods::default(), KeyCode::Char('q'))),
             Resolution::Run("app.quit".into())
         );
-        // El binding filtrado no existe: F1 no debe resolver a run.
-        assert!(!matches!(
+        // El binding filtrado no existe: F1 no tiene ningún binding —
+        // Miss, no Prefix ni Run.
+        assert_eq!(
             r.push(Chord::new(Mods::default(), KeyCode::F(1))),
-            Resolution::Run(_)
-        ));
+            Resolution::Reset
+        );
         let layer =
             parse_keymap("[pane]\nprepend_keymap = [{ on = [\"z\"], run = \"app.help\" }]\n")
                 .unwrap();
@@ -1391,6 +1393,108 @@ keymap = [{ on = ["g", "g"], run = "cursor.top" }]"#,
             Effective::build_for_subset(&preset, &[layer], &known, Screen::Browse).is_err(),
             "capa con comando desconocido: error, no filtrado"
         );
+    }
+
+    /// El nombre `lua:` sigue validándose por CHARSET aunque el modo sea
+    /// Lenient — el filtrado de `build_for_subset` es solo por
+    /// `known_commands` ausente; un `lua:` con nombre inválido (fuera de
+    /// `[a-z0-9._-]{1,64}`) no tiene forma de colarse. El error sale como
+    /// `UnknownCommand` (mismo camino que en modo estricto: el check de
+    /// charset vive ANTES del filtrado lenient).
+    #[test]
+    fn subset_lua_invalido_sigue_siendo_error() {
+        let preset = parse_keymap(
+            r#"[pane]
+keymap = [{ on = ["x"], run = "lua:Bad Name" }]"#,
+        )
+        .unwrap();
+        match Effective::build_for_subset(&preset, &[], &[], Screen::Browse) {
+            Err(KeymapError::UnknownCommand { .. }) => {}
+            other => panic!("esperaba UnknownCommand, fue {other:?}"),
+        }
+    }
+
+    /// Un binding de PRESET filtrado (comando desconocido para este
+    /// frontend) no puede bloquear una secuencia más larga que lo tenía
+    /// como prefijo — pin de la afirmación "prefix-freeness corre sobre el
+    /// set YA filtrado". El binding largo viene de una CAPA (no del
+    /// preset): en modo estricto, "g" (preset) + "g g" (capa) sería
+    /// `AmbiguousPrefix`; en Lenient, "g" se filtra antes del check y "g g"
+    /// resuelve limpio.
+    #[test]
+    fn subset_prefijo_filtrado_no_bloquea_secuencia() {
+        let preset = parse_keymap(
+            r#"[pane]
+keymap = [{ on = ["g"], run = "gui.unknown" }]"#,
+        )
+        .unwrap();
+        let layer = parse_keymap(
+            r#"[pane]
+append_keymap = [{ on = ["g", "g"], run = "known.cmd" }]"#,
+        )
+        .unwrap();
+        let known = ["known.cmd"];
+        let eff = Effective::build_for_subset(&preset, &[layer], &known, Screen::Browse)
+            .expect("el prefijo filtrado no debe producir AmbiguousPrefix");
+        let mut r = Resolver::new(eff);
+        assert_eq!(
+            r.push(Chord::new(Mods::default(), KeyCode::Char('g'))),
+            Resolution::Pending(1),
+            "único binding activo en g: prefijo válido de g g"
+        );
+        assert_eq!(
+            r.push(Chord::new(Mods::default(), KeyCode::Char('g'))),
+            Resolution::Run("known.cmd".into())
+        );
+    }
+
+    /// Divergencia DELIBERADA entre Strict y Lenient, pineada a propósito:
+    /// el dedup por secuencia (`seen.insert`, "el primero gana") solo ve
+    /// los bindings que SOBREVIVEN al filtro. Con un binding de `pane` y
+    /// otro de `global` en el MISMO chord, un frontend que conoce ambos
+    /// comandos (Strict) ve ganar `pane` por especificidad de contexto —
+    /// pero un frontend que NO implementa el comando de `pane` (Lenient) lo
+    /// filtra ANTES del dedup, y el binding de `global` queda "desenmascarado"
+    /// (deja de estar sombreado) y pasa a ser el activo. Es el precio de
+    /// que cada frontend valide contra SU PROPIO catálogo: la tecla hace
+    /// algo distinto según qué frontend la interprete, por diseño (ADR
+    /// 0006 — el motor no conoce comandos concretos).
+    #[test]
+    fn subset_dedup_desenmascara_binding_global() {
+        let preset = parse_keymap(
+            r#"[pane]
+keymap = [{ on = ["x"], run = "gui.unknown" }]
+[global]
+keymap = [{ on = ["x"], run = "app.quit" }]"#,
+        )
+        .unwrap();
+        let known = ["app.quit"];
+        let eff = Effective::build_for_subset(&preset, &[], &known, Screen::Browse)
+            .expect("pane.x filtrado, global.x conocido");
+        let mut r = Resolver::new(eff);
+        assert_eq!(
+            r.push(Chord::new(Mods::default(), KeyCode::Char('x'))),
+            Resolution::Run("app.quit".into()),
+            "con pane.x filtrado, global.x deja de estar sombreado"
+        );
+    }
+
+    /// Un chord ilegible (`"megatecla"`) en un binding de PRESET cuyo
+    /// comando TAMBIÉN es desconocido: el parseo de la secuencia corre
+    /// ANTES del filtrado lenient (`raw.on.iter().map(parse_chord)`), así
+    /// que `BadChord` gana incluso en modo Lenient — el filtro solo
+    /// silencia comandos desconocidos, jamás config estructuralmente rota.
+    #[test]
+    fn subset_chord_malo_en_preset_sigue_fallando() {
+        let preset = parse_keymap(
+            r#"[pane]
+keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
+        )
+        .unwrap();
+        match Effective::build_for_subset(&preset, &[], &[], Screen::Browse) {
+            Err(KeymapError::BadChord { .. }) => {}
+            other => panic!("esperaba BadChord, fue {other:?}"),
+        }
     }
 }
 
