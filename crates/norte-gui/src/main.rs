@@ -89,6 +89,19 @@ const VIEWER_CHROME_ROWS: usize = 3;
 /// `PaneState::is_marked`, la GUI solo lo pinta).
 const MARK_MARKER: &str = "●";
 
+/// Escala de espaciado (GP): los ÚNICOS valores en px permitidos para
+/// paddings/gaps en código de render — ritmo en vez de improvisación. Un
+/// `px(n)` con `n` fuera de esta escala en una llamada a `.px`/`.py`/`.p`/
+/// `.gap`/`.mt` (etc.) en `render_*` es una regresión de este barrido, salvo
+/// los acentos de 1px documentados en el sitio (más finos que `sp::XS`,
+/// deliberadamente fuera de la escala).
+mod sp {
+    pub const XS: f32 = 2.0;
+    pub const S: f32 = 4.0;
+    pub const M: f32 = 8.0;
+    pub const L: f32 = 12.0;
+}
+
 /// El *root view*: dos panes navegables, cuál tiene el foco, el tema cacheado y
 /// el canal hacia el hilo de sesión persistente (para relistar en cada `cd`).
 struct NorteGui {
@@ -1267,10 +1280,16 @@ impl NorteGui {
 
         // Cabecera: el path saneado del dir. Par honesto con el tema: fondo Y
         // texto de `StatusBar` (ver doc de `ChromeColors`), no solo el fondo.
+        // `py` en `sp::S` (bump deliberado del look-and-feel GP, antes 2px) +
+        // separador de 1px al pie en `border_unfocus` — línea fina bajo la
+        // cabecera, independiente de si el pane tiene foco (el foco ya se
+        // marca con el borde del pane entero, ver `col` más arriba).
         col = col.child(
             div()
-                .px(px(4.0))
-                .py(px(2.0))
+                .px(px(sp::S))
+                .py(px(sp::S))
+                .border_b_1()
+                .border_color(chrome.border_unfocus)
                 .bg(chrome.header_bg)
                 .text_color(chrome.header_fg)
                 .truncate()
@@ -1281,23 +1300,20 @@ impl NorteGui {
         if pane.loading() {
             col = col.child(
                 div()
-                    .px(px(4.0))
+                    .px(px(sp::S))
                     .child(SharedString::from(norte_i18n::t("gui-loading"))),
             );
         } else if let Some(err) = &self.errors[i] {
-            col = col.child(
-                div()
-                    .px(px(4.0))
-                    .text_color(chrome.err_fg)
-                    .child(SharedString::from(norte_i18n::ta(
-                        "gui-banner-error",
-                        &[("error", err.as_str())],
-                    ))),
-            );
+            col = col.child(div().px(px(sp::S)).text_color(chrome.err_fg).child(
+                SharedString::from(norte_i18n::ta(
+                    "gui-banner-error",
+                    &[("error", err.as_str())],
+                )),
+            ));
         } else if pane.entries().is_empty() {
             col = col.child(
                 div()
-                    .px(px(4.0))
+                    .px(px(sp::S))
                     .child(SharedString::from(norte_i18n::t("gui-dir-empty"))),
             );
         }
@@ -1312,7 +1328,7 @@ impl NorteGui {
         if let Some(n) = pane.skipped().filter(|n| *n > 0) {
             col = col.child(
                 div()
-                    .px(px(4.0))
+                    .px(px(sp::S))
                     .bg(chrome.quick_bg)
                     .text_color(chrome.quick_fg)
                     .child(SharedString::from(norte_i18n::ta(
@@ -1344,8 +1360,8 @@ impl NorteGui {
                 .collect();
             col = col.child(
                 div()
-                    .px(px(4.0))
-                    .py(px(1.0))
+                    .px(px(sp::S))
+                    .py(px(1.0)) // sub-XS: acento fino de una línea, fuera de la escala a propósito
                     .bg(chrome.quick_bg)
                     .text_color(chrome.quick_fg)
                     .child(SharedString::from(format!("/{query_display}"))),
@@ -1414,8 +1430,13 @@ impl NorteGui {
                 gpui::Toggled::False
             })
             .h(self.fonts.row_h)
-            .px(px(4.0))
-            .py(px(1.0))
+            .px(px(sp::S))
+            .py(px(1.0)) // sub-XS: acento fino de una línea, fuera de la escala a propósito
+            // Redondeo sutil (GP): constante en TODAS las filas en vez de
+            // condicionarlo a selección/hover — más barato (un solo estilo,
+            // sin ramas) y visualmente inapreciable en una fila sin fondo.
+            .rounded(px(3.0))
+            .cursor_pointer()
             .text_color(color)
             .truncate()
             .child(SharedString::from(label));
@@ -1430,6 +1451,15 @@ impl NorteGui {
             if let Some(fg) = chrome.sel_fg {
                 row = row.text_color(fg);
             }
+        } else {
+            // Hover SOLO si la fila no es la seleccionada bajo cursor: encima
+            // de `sel_bg` (que ya es el fondo más fuerte de la paleta), el
+            // `hover_bg` derivado (más tenue, un lerp HACIA `sel_bg`) se
+            // perdía o se veía como un parpadeo sin sentido — gatear aquí es
+            // más simple y honesto que forzar un tercer tono para ese caso.
+            // Fila marcada-y-no-seleccionada SÍ recibe hover (se ve como una
+            // variación legible sobre `mark_bg`).
+            row = row.hover(|s| s.bg(chrome.hover_bg));
         }
         row.on_mouse_down(
             MouseButton::Left,
@@ -1459,8 +1489,8 @@ impl NorteGui {
             .overflow_hidden()
             .bg(chrome.header_bg)
             .text_color(chrome.header_fg)
-            .px(px(4.0))
-            .py(px(2.0));
+            .px(px(sp::S))
+            .py(px(sp::XS));
         if self.task_order.is_empty() {
             return strip.child(SharedString::from(norte_i18n::t("gui-tasks-empty")));
         }
@@ -1478,7 +1508,19 @@ impl NorteGui {
                 .role(gpui::Role::ListItem)
                 .aria_label(line.clone())
                 .aria_selected(selected)
-                .px(px(2.0))
+                // Bump deliberado del look-and-feel GP (antes 2px/`sp::XS`):
+                // la franja de tasks se lee más cómoda con el mismo aire
+                // horizontal que una fila de pane.
+                .px(px(sp::S))
+                // Mismo tratamiento que `render_row` (redondeo constante,
+                // cursor + hover gateados fuera de la fila bajo cursor de
+                // franja) — consistencia visual entre las dos únicas listas
+                // de fila-por-fila de la GUI, aunque hoy el click en una fila
+                // de tasks no hace nada (F9 cancela por teclado, ver
+                // `task_cursor`); es una afirmación visual honesta de "esto
+                // es una lista", no una promesa de acción al click.
+                .rounded(px(3.0))
+                .cursor_pointer()
                 .child(SharedString::from(line));
             if selected {
                 row = row.bg(chrome.sel_bg);
@@ -1488,6 +1530,10 @@ impl NorteGui {
                 if let Some(fg) = chrome.sel_fg {
                     row = row.text_color(fg);
                 }
+            } else {
+                // Mismo gate que `render_row`: no apilar `hover_bg` sobre
+                // `sel_bg` (ver comentario allí).
+                row = row.hover(|s| s.bg(chrome.hover_bg));
             }
             strip = strip.child(row);
         }
@@ -1561,7 +1607,7 @@ impl NorteGui {
                     v.rows(h).into_iter().map(|row| {
                         div()
                             .h(self.fonts.row_h)
-                            .px(px(4.0))
+                            .px(px(sp::S))
                             .truncate()
                             .child(SharedString::from(row))
                     }),
@@ -1593,8 +1639,8 @@ impl NorteGui {
             .bg(chrome.pane_bg_focus)
             .child(
                 div()
-                    .px(px(4.0))
-                    .py(px(2.0))
+                    .px(px(sp::S))
+                    .py(px(sp::XS))
                     .bg(chrome.header_bg)
                     .text_color(chrome.header_fg)
                     .truncate()
@@ -1603,8 +1649,8 @@ impl NorteGui {
             .child(body)
             .child(
                 div()
-                    .px(px(4.0))
-                    .py(px(1.0))
+                    .px(px(sp::S))
+                    .py(px(1.0)) // sub-XS: acento fino de una línea, fuera de la escala a propósito
                     .bg(chrome.quick_bg)
                     .text_color(chrome.quick_fg)
                     .font(self.fonts.mono.clone())
@@ -1661,9 +1707,12 @@ impl NorteGui {
             .overflow_hidden()
             .border_2()
             .border_color(chrome.border_focus)
-            .px(px(12.0))
-            .py(px(8.0))
-            .gap(px(2.0));
+            // Esquinas redondeadas (GP): distingue el panel flotante del
+            // resto del chrome, que va todo en ángulo recto.
+            .rounded(px(6.0))
+            .px(px(sp::L))
+            .py(px(sp::M))
+            .gap(px(sp::XS));
 
         // Revisión final (contraste WCAG): `header_bg`+`fg` medía 1.1-1.9:1
         // en los 6 presets — `StatusBar` está pensado para texto en
@@ -1679,8 +1728,8 @@ impl NorteGui {
             let (title_bg, title_fg) = modal_title_colors(chrome);
             panel = panel.child(
                 div()
-                    .px(px(2.0))
-                    .py(px(1.0))
+                    .px(px(sp::XS))
+                    .py(px(1.0)) // sub-XS: acento fino de una línea, fuera de la escala a propósito
                     .bg(title_bg)
                     .text_color(title_fg)
                     .truncate()
@@ -1697,9 +1746,9 @@ impl NorteGui {
 
         let (footer_bg, footer_fg) = modal_footer_colors(chrome);
         let mut footer_row = div()
-            .mt(px(4.0))
-            .px(px(2.0))
-            .py(px(1.0))
+            .mt(px(sp::S))
+            .px(px(sp::XS))
+            .py(px(1.0)) // sub-XS: acento fino de una línea, fuera de la escala a propósito
             .bg(footer_bg)
             .child(SharedString::from(footer));
         if let Some(fg) = footer_fg {
@@ -2247,6 +2296,22 @@ fn glowed(c: gpui::Rgba, g: Option<effects::Glow>) -> gpui::Rgba {
     }
 }
 
+/// Interpola linealmente `a` hacia `b` por canal, `t` en `[0, 1]` (sin clamp:
+/// call-sites del look-and-feel GP siempre pasan una constante fija dentro de
+/// rango). Usado por `ChromeColors::hover_bg` — a diferencia de `glowed`, esto
+/// mezcla DOS colores del tema entre sí, no un color hacia blanco, así que no
+/// reutiliza esa función. El canal `a` también se interpola (a diferencia de
+/// `glowed`, que lo deja intacto a propósito): `hover_bg` es un fondo sólido
+/// nuevo, no un ajuste de brillo sobre un fg existente.
+fn lerp_rgba(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
+    gpui::Rgba {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: a.a + (b.a - a.a) * t,
+    }
+}
+
 /// Pinta las scanlines (ADR 0036 / G1 Task 4): franjas horizontales de 1px
 /// cada `spacing_px`, negro puro a `opacity`. Primitivas de escena crudas
 /// (`Window::paint_quad`) en vez de un `div()` por línea a propósito: en una
@@ -2444,6 +2509,13 @@ fn family_with_fallback(family: Option<&str>, bundled: &'static str) -> gpui::Fo
 ///   seleccionada; si no lo declara, `sel_fg` es `None` y la fila conserva su
 ///   color de entrada (comportamiento histórico).
 ///
+/// `hover_bg` NO es un rol de tema — es DERIVADO (`lerp(pane_bg_focus,
+/// sel_bg, 0.35)`, ver `resolve`): a diferencia de los pares de arriba, ningún
+/// tema declara un color de hover, así que en vez de inventar un rol nuevo
+/// (que cada preset tendría que rellenar) se interpola entre dos que YA
+/// existen — se lee como "casi seleccionado" en cualquier tema sin tocar
+/// `norte-theme`.
+///
 /// `Copy` a propósito: `render_pane` necesita mover una copia dentro del
 /// closure `'static` de `cx.processor` (no puede prestarla del frame).
 #[derive(Clone, Copy)]
@@ -2462,21 +2534,24 @@ struct ChromeColors {
     quick_fg: gpui::Rgba,
     quick_bg: gpui::Rgba,
     mark_bg: gpui::Rgba,
+    hover_bg: gpui::Rgba,
 }
 
 impl ChromeColors {
     fn resolve(theme: &Theme) -> Self {
+        let pane_bg_focus = chrome(theme, Role::PaneFocusBackground, false, PANE_BG_FOCUS);
+        let sel_bg = chrome(theme, Role::Selection, false, SEL_BG);
         Self {
             bg: chrome(theme, Role::Background, false, BG),
             fg: chrome(theme, Role::Regular, true, FG),
             pane_bg: chrome(theme, Role::PaneBackground, false, PANE_BG),
-            pane_bg_focus: chrome(theme, Role::PaneFocusBackground, false, PANE_BG_FOCUS),
+            pane_bg_focus,
             // Par cabecera: ambos canales de `StatusBar` (ver doc del struct).
             header_bg: chrome(theme, Role::StatusBar, false, HEADER_BG),
             header_fg: chrome(theme, Role::StatusBar, true, FG),
             border_focus: chrome(theme, Role::BorderFocus, true, BORDER_FOCUS),
             border_unfocus: chrome(theme, Role::BorderUnfocused, true, BORDER_UNFOCUS),
-            sel_bg: chrome(theme, Role::Selection, false, SEL_BG),
+            sel_bg,
             // Sin fallback histórico: si el tema no declara `Selection.fg`,
             // `None` = la fila seleccionada conserva su color por-tipo
             // (comportamiento de siempre; nunca hubo un fg de selección).
@@ -2488,6 +2563,8 @@ impl ChromeColors {
             quick_fg: chrome(theme, Role::Match, true, QUICK_FG),
             quick_bg: chrome(theme, Role::Match, false, HEADER_BG),
             mark_bg: chrome(theme, Role::Mark, false, MARK_BG),
+            // Derivado, no un rol de tema — ver doc del struct.
+            hover_bg: lerp_rgba(pane_bg_focus, sel_bg, 0.35),
         }
     }
 
@@ -2546,8 +2623,8 @@ impl Render for NorteGui {
             // abajo en el árbol.
             .font(self.fonts.ui.clone())
             .text_size(self.fonts.size)
-            .p(px(4.0))
-            .gap(px(2.0));
+            .p(px(sp::S))
+            .gap(px(sp::XS));
 
         // Bezel (ADR 0036 / G1 Task 4): radio de esquina paramétrico —
         // `Styled::rounded(AbsoluteLength)` acepta un `px(n)` cualquiera (a
@@ -2590,8 +2667,8 @@ impl Render for NorteGui {
             for line in msg.split('\n') {
                 banner = banner.child(
                     div()
-                        .px(px(4.0))
-                        .py(px(1.0))
+                        .px(px(sp::S))
+                        .py(px(1.0)) // sub-XS: acento fino de una línea, fuera de la escala a propósito
                         .truncate()
                         .child(SharedString::from(line.to_owned())),
                 );
@@ -2619,7 +2696,7 @@ impl Render for NorteGui {
                 .flex()
                 .flex_row()
                 .overflow_hidden()
-                .gap(px(2.0))
+                .gap(px(sp::XS))
                 .child(self.render_pane(0, &chrome, cx))
                 .child(self.render_pane(1, &chrome, cx));
             root = root.child(panes_row).child(self.render_task_strip(&chrome));
@@ -2640,8 +2717,8 @@ impl Render for NorteGui {
         if !pending.is_empty() {
             root = root.child(
                 div()
-                    .px(px(4.0))
-                    .py(px(1.0))
+                    .px(px(sp::S))
+                    .py(px(1.0)) // sub-XS: acento fino de una línea, fuera de la escala a propósito
                     .bg(chrome.quick_bg)
                     .text_color(chrome.quick_fg)
                     .child(SharedString::from(format!("{}…", pending_hint(pending)))),
@@ -3901,6 +3978,51 @@ mod tests {
 
         let c = gpui::rgb(0x336699);
         assert_eq!(glowed(c, None), c, "sin glow, identidad exacta");
+    }
+
+    /// `ChromeColors::hover_bg` (GP look-and-feel): DERIVADO, no un rol de
+    /// tema — `lerp(pane_bg_focus, sel_bg, 0.35)` calculado aquí de forma
+    /// INDEPENDIENTE del cuerpo de `resolve` (no basta con confiar en que el
+    /// código de producción llame a la misma fórmula; si alguien cambia el
+    /// factor o los colores base en `resolve` sin querer, este test lo pilla).
+    #[test]
+    fn chrome_hover_derivado() {
+        let t = norte_theme::Theme::preset_default();
+        let c = ChromeColors::resolve(&t);
+        let expected = gpui::Rgba {
+            r: c.pane_bg_focus.r + (c.sel_bg.r - c.pane_bg_focus.r) * 0.35,
+            g: c.pane_bg_focus.g + (c.sel_bg.g - c.pane_bg_focus.g) * 0.35,
+            b: c.pane_bg_focus.b + (c.sel_bg.b - c.pane_bg_focus.b) * 0.35,
+            a: c.pane_bg_focus.a + (c.sel_bg.a - c.pane_bg_focus.a) * 0.35,
+        };
+        assert!(
+            (c.hover_bg.r - expected.r).abs() < 1e-6,
+            "r: got {}, want {}",
+            c.hover_bg.r,
+            expected.r
+        );
+        assert!(
+            (c.hover_bg.g - expected.g).abs() < 1e-6,
+            "g: got {}, want {}",
+            c.hover_bg.g,
+            expected.g
+        );
+        assert!(
+            (c.hover_bg.b - expected.b).abs() < 1e-6,
+            "b: got {}, want {}",
+            c.hover_bg.b,
+            expected.b
+        );
+        assert!(
+            (c.hover_bg.a - expected.a).abs() < 1e-6,
+            "a: got {}, want {}",
+            c.hover_bg.a,
+            expected.a
+        );
+        assert_ne!(
+            c.hover_bg, c.pane_bg_focus,
+            "con t=0.35 y sel_bg != pane_bg_focus en el tema default, hover_bg debe distinguirse"
+        );
     }
 
     /// Sin config, `FontSet` cae a las familias empaquetadas de GPUI
