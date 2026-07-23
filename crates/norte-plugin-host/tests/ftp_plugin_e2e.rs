@@ -134,3 +134,119 @@ fn target_installed(target: &str) -> bool {
                 .any(|l| l == target)
         })
 }
+
+// ---- #30 M1: guardas de la caché RETR guest-side (lectura O(n)) ----
+
+/// Configura un `ProviderInstance` del guest ftp-provider contra un libunftp
+/// sobre `home`, listo para leer. `None` (SKIP) sin el target wasm. Devuelve el
+/// runtime junto a la instancia para mantener vivo el ticker de época.
+fn configured_ftp_provider(
+    home: PathBuf,
+) -> Option<(PluginRuntime, norte_plugin_host::ProviderInstance)> {
+    let wasm = build_guest("ftp-provider")?;
+    let port = spawn_ftp_server(home);
+    let rt = PluginRuntime::new().expect("runtime");
+    let mut inst = rt
+        .instantiate_provider(&wasm, Capabilities::with_net(vec!["127.0.0.1".to_owned()]))
+        .expect("instanciar provider");
+    let cfg = norte_plugin_host::provider_iface::ProviderConfig {
+        endpoint: format!("127.0.0.1:{port}"),
+        user: "anonymous".to_owned(),
+        password: "anonymous".to_owned(),
+        base: "/".to_owned(),
+    };
+    inst.configure(&cfg)
+        .expect("configure sin trap")
+        .expect("configure ok");
+    Some((rt, inst))
+}
+
+/// Lee `segments` por chunks de `chunk` bytes (como el adapter), reensamblando;
+/// para en el primer chunk corto (EOF).
+fn read_all_chunked(
+    inst: &mut norte_plugin_host::ProviderInstance,
+    segments: &[Vec<u8>],
+    chunk: u64,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut off = 0u64;
+    loop {
+        let c = inst
+            .read(segments, off, chunk)
+            .expect("read sin trap")
+            .expect("read ok");
+        if c.is_empty() {
+            break;
+        }
+        off += c.len() as u64;
+        let short = (c.len() as u64) < chunk;
+        out.extend_from_slice(&c);
+        if short {
+            break;
+        }
+    }
+    out
+}
+
+#[test]
+fn ftp_secuencial_grande_byte_exacto() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // 512 KiB > varios chunks de 64 KiB: ejercita el reuso del RETR.
+    let content: Vec<u8> = (0..512 * 1024).map(|i| (i % 251) as u8).collect();
+    std::fs::write(dir.path().join("big.bin"), &content).expect("sembrar");
+    let Some((_rt, mut inst)) = configured_ftp_provider(dir.path().to_path_buf()) else {
+        return;
+    };
+    let got = read_all_chunked(&mut inst, &[b"big.bin".to_vec()], 64 * 1024);
+    assert_eq!(got, content, "lectura secuencial byte-exacta");
+}
+
+#[test]
+fn ftp_intercalar_stat_no_desincroniza() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let content: Vec<u8> = (0..200 * 1024).map(|i| (i % 251) as u8).collect();
+    std::fs::write(dir.path().join("f.bin"), &content).expect("sembrar f");
+    std::fs::write(dir.path().join("otro.txt"), b"hola").expect("sembrar otro");
+    let Some((_rt, mut inst)) = configured_ftp_provider(dir.path().to_path_buf()) else {
+        return;
+    };
+    // Lee un chunk (medio fichero), ABANDONA sin llegar a EOF, luego stat de otro
+    // path: si la caché no se drenara, el 226 pendiente desincronizaría el stat.
+    let half = inst
+        .read(&[b"f.bin".to_vec()], 0, 64 * 1024)
+        .expect("read sin trap")
+        .expect("read ok");
+    assert_eq!(half.len(), 64 * 1024);
+    let st = inst
+        .stat(&[b"otro.txt".to_vec()])
+        .expect("stat sin trap")
+        .expect("otro.txt existe");
+    assert_eq!(st.size, Some(4), "stat tras lectura abandonada NO desincroniza");
+    // Relectura entera del primero sigue byte-exacta.
+    let got = read_all_chunked(&mut inst, &[b"f.bin".to_vec()], 64 * 1024);
+    assert_eq!(got, content, "relectura entera byte-exacta");
+}
+
+#[test]
+fn ftp_rango_luego_list_ok() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("r.bin"), b"0123456789").expect("sembrar");
+    let Some((_rt, mut inst)) = configured_ftp_provider(dir.path().to_path_buf()) else {
+        return;
+    };
+    // Rango acotado (offset 2, 3 bytes) = "234"; deja la caché viva.
+    let slice = inst
+        .read(&[b"r.bin".to_vec()], 2, 3)
+        .expect("read sin trap")
+        .expect("read ok");
+    assert_eq!(slice, b"234");
+    // list_dir de la raíz debe funcionar (flush de la caché antes del comando).
+    let page = inst
+        .list_dir(&[], None)
+        .expect("list sin trap")
+        .expect("raíz lista");
+    assert!(
+        page.entries.iter().any(|e| e.name == b"r.bin"),
+        "list tras rango ve el fichero: la caché se drenó limpio"
+    );
+}
