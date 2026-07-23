@@ -204,21 +204,64 @@ impl NorteGui {
     /// (`NORTE_DIR` o el `cwd`) y lanza sus dos cargas. Toma el foco de la
     /// ventana para recibir teclado. Si la config no resuelve, nace con ambos
     /// panes en error (sin lanzar cargas), nunca panic.
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let theme = Theme::preset_default();
+    ///
+    /// `loaded`: el resultado de la carga de config REAL (C2), ya hecha una
+    /// vez en `main` (antes de abrir la ventana — ahí es donde también se
+    /// negocia el idioma, que debe estar fijado ANTES de que este
+    /// constructor arme los banners localizados). `Err` degrada a preset
+    /// `orthodox`/tema por defecto y avisa por el MISMO banner que el error
+    /// de keymap (unidos si ambos fallan) — jamás aborta el arranque.
+    fn new(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        loaded: &Result<norte_frontend::config::FrontendConfig, norte_config::ConfigError>,
+    ) -> Self {
+        let (preset_name, theme_spec, mut startup_banner): (
+            String,
+            Option<String>,
+            Option<String>,
+        ) = match loaded {
+            Ok(cfg) => (cfg.common.preset.clone(), cfg.common.ui_theme.clone(), None),
+            Err(e) => (
+                norte_config::DEFAULT_PRESET.to_owned(),
+                None,
+                Some(norte_i18n::ta(
+                    "gui-banner-config-invalid",
+                    &[("error", e.to_string().as_str())],
+                )),
+            ),
+        };
+
+        let theme = match norte_frontend::theme::resolve_theme(theme_spec.as_deref()) {
+            Ok(theme) => theme,
+            Err(e) => {
+                let msg = norte_i18n::ta(
+                    "gui-banner-config-invalid",
+                    &[("error", e.to_string().as_str())],
+                );
+                startup_banner = Some(match startup_banner {
+                    Some(prev) => format!("{prev}; {msg}"),
+                    None => msg,
+                });
+                Theme::preset_default()
+            }
+        };
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
-        let ((browse_eff, viewer_eff), keymap_error) = match keymap::build_effectives() {
-            Ok(pair) => (pair, None),
+        let ((browse_eff, viewer_eff), keymap_error) = match keymap::build_effectives(&preset_name)
+        {
+            Ok(pair) => (pair, startup_banner),
             Err(e) => {
                 let error = e.to_string();
+                let msg = norte_i18n::ta("gui-banner-keymap-error", &[("error", error.as_str())]);
+                let combined = match startup_banner {
+                    Some(prev) => format!("{prev}; {msg}"),
+                    None => msg,
+                };
                 (
-                    keymap::build_effectives_preset_only(),
-                    Some(norte_i18n::ta(
-                        "gui-banner-keymap-error",
-                        &[("error", error.as_str())],
-                    )),
+                    keymap::build_effectives_preset_only(&preset_name),
+                    Some(combined),
                 )
             }
         };
@@ -2115,20 +2158,39 @@ impl Render for NorteGui {
 }
 
 fn main() {
-    // Idioma (GUI-e T1): mismo patrón que la TUI (`crates/norte-tui/src/
-    // main.rs`), sin flag CLI — solo entorno (`NORTE_LANG` > `LC_ALL` >
-    // `LC_MESSAGES` > `LANG`). Debe ir ANTES de construir la ventana: los
-    // banners de arranque (`keymap_error`, config inválida) ya salen
-    // localizados desde `NorteGui::new`.
-    let _ = norte_i18n::force(norte_i18n::Lang::from_env());
-    application().run(|cx: &mut App| {
+    // Configuración real (C2): capas compartidas — escalares + keymap.
+    // Bloqueante A PROPÓSITO: arranque, antes de que exista la ventana; no
+    // hay runtime async aquí todavía. UNA sola carga (el keymap.rs de la GUI
+    // vuelve a leer `keymap.toml` por su cuenta dentro de `build_effectives`
+    // — segunda lectura redundante ACEPTADA, ver su rustdoc).
+    let loaded = norte_frontend::config::load(&norte_config::standard_layers());
+
+    // Idioma (GUI-e T1 + C2): mismo orden que la TUI (`crates/norte-tui/src/
+    // main.rs:224-225`): `NORTE_LANG` explícito > `[ui] lang` de la config >
+    // entorno (`LC_ALL`/`LC_MESSAGES`/`LANG`). Debe ir ANTES de construir la
+    // ventana: los banners de arranque (`keymap_error`, config inválida) ya
+    // salen localizados desde `NorteGui::new`.
+    let lang = if std::env::var("NORTE_LANG").is_ok_and(|v| !v.is_empty()) {
+        norte_i18n::Lang::from_env()
+    } else if let Some(l) = loaded
+        .as_ref()
+        .ok()
+        .and_then(|c| c.common.ui_lang.as_deref())
+    {
+        norte_i18n::Lang::negotiate(Some(l))
+    } else {
+        norte_i18n::Lang::from_env()
+    };
+    let _ = norte_i18n::force(lang);
+
+    application().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1000.0), px(640.0)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |window, cx| cx.new(|cx| NorteGui::new(window, cx)),
+            |window, cx| cx.new(|cx| NorteGui::new(window, cx, &loaded)),
         )
         .expect("no se pudo abrir la ventana GPUI");
 

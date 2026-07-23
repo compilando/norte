@@ -49,11 +49,20 @@ pub const VIEWER_COMMANDS: &[&str] = &[
     "viewer.hex",
 ];
 
-/// El preset orthodox de la GUI, parseado. Panics solo si el TOML embebido es
-/// inválido (lo cubre un test).
-fn orthodox() -> KeymapFile {
-    parse_keymap(include_str!("keymap_presets/orthodox.toml"))
-        .unwrap_or_else(|e| panic!("preset orthodox embebido inválido: {e}"))
+/// Preset por nombre, tomado del catálogo COMPARTIDO
+/// `norte_frontend::keymap::presets` (decisión de diseño C2/G0: el preset
+/// compartido es canónico — la GUI adopta sus chords para ir alineada con la
+/// TUI; su viejo `keymap_presets/orthodox.toml` privado, con drift a nivel de
+/// chord, queda retirado). Un nombre desconocido cae al ORTHODOX compartido
+/// (mismo contrato que antes: fuente embebida, jamás I/O).
+///
+/// # Panics
+/// Solo si el TOML embebido (constante en tiempo de compilación) fuera
+/// inválido — lo cubre un test para los tres presets de fábrica.
+fn preset(name: &str) -> KeymapFile {
+    let src = norte_frontend::keymap::presets::source(name)
+        .unwrap_or(norte_frontend::keymap::presets::ORTHODOX);
+    parse_keymap(src).unwrap_or_else(|e| panic!("preset {name} embebido inválido: {e}"))
 }
 
 /// La unión de comandos de Browse + Viewer (para validar el keymap ENTERO —
@@ -62,7 +71,8 @@ fn all_commands() -> Vec<&'static str> {
     COMMANDS.iter().chain(VIEWER_COMMANDS).copied().collect()
 }
 
-/// Build the two `Effective`s (Browse and Viewer) from preset + layers.
+/// Build the two `Effective`s (Browse and Viewer) from `preset_name` +
+/// layers.
 ///
 /// Layer discovery now goes through the shared `norte_config::standard_layers`
 /// (system → user → project, `NORTE_CONFIG_DIR` override included) instead of
@@ -70,8 +80,8 @@ fn all_commands() -> Vec<&'static str> {
 ///
 /// # Errors
 /// The first `KeymapError` from any layer.
-pub fn build_effectives() -> Result<(Effective, Effective), KeymapError> {
-    build_effectives_layers(&norte_config::standard_layers())
+pub fn build_effectives(preset_name: &str) -> Result<(Effective, Effective), KeymapError> {
+    build_effectives_layers(&norte_config::standard_layers(), preset_name)
 }
 
 /// Like [`build_effectives`] with an EXPLICIT user config dir (test
@@ -88,6 +98,7 @@ pub fn build_effectives() -> Result<(Effective, Effective), KeymapError> {
 /// The first `KeymapError` from any layer.
 #[cfg(test)]
 pub fn build_effectives_from(
+    preset_name: &str,
     user_dir: Option<PathBuf>,
 ) -> Result<(Effective, Effective), KeymapError> {
     let mut dirs = Vec::new();
@@ -95,18 +106,25 @@ pub fn build_effectives_from(
         dirs.push((u, Layer::User));
     }
     dirs.push((PathBuf::from(".norte"), Layer::Project));
-    build_effectives_layers(&Layers { dirs })
+    build_effectives_layers(&Layers { dirs }, preset_name)
 }
 
 /// Shared implementation: loads each layer via
 /// `norte_frontend::config::load_keymap_layer` (which also rejects a bare
 /// `keymap = [...]` in a layer — ADR 0006/0035 — a check the old hand-rolled
-/// GUI loader was missing) and merges them onto the embedded preset.
+/// GUI loader was missing) and merges them onto the shared preset via
+/// [`Effective::build_for_subset`] — the GUI implements a SUBSET of the
+/// commands the shared presets bind (e.g. `app.help`, `pane.hotlist`), so
+/// preset bindings to commands the GUI lacks are skipped instead of failing
+/// the whole load (design decision C2/G0: shared preset is canonical).
 ///
 /// # Errors
 /// The first `KeymapError` from any layer.
-fn build_effectives_layers(layers: &Layers) -> Result<(Effective, Effective), KeymapError> {
-    let preset = orthodox();
+fn build_effectives_layers(
+    layers: &Layers,
+    preset_name: &str,
+) -> Result<(Effective, Effective), KeymapError> {
+    let preset = preset(preset_name);
     let mut kfs: Vec<KeymapFile> = Vec::new();
     // La GUI no expone diagnósticos de "qué ficheros se cargaron" (a
     // diferencia de la TUI): las fuentes se descartan tras el préstamo.
@@ -119,19 +137,23 @@ fn build_effectives_layers(layers: &Layers) -> Result<(Effective, Effective), Ke
         } // ausente: la capa no aporta; ilegible = error (banner + preset).
     }
     let cmds = all_commands();
-    let browse = Effective::build_for(&preset, &kfs, &cmds, Screen::Browse)?;
-    let viewer = Effective::build_for(&preset, &kfs, &cmds, Screen::Viewer)?;
+    let browse = Effective::build_for_subset(&preset, &kfs, &cmds, Screen::Browse)?;
+    let viewer = Effective::build_for_subset(&preset, &kfs, &cmds, Screen::Viewer)?;
     Ok((browse, viewer))
 }
 
-/// Fallback: los dos `Effective` SOLO del preset (no puede fallar — test).
+/// Fallback: los dos `Effective` SOLO del preset `preset_name` (no puede
+/// fallar — test), sin capas de usuario/proyecto (que es justo lo que se
+/// descarta cuando [`build_effectives`] falló).
 #[must_use]
-pub fn build_effectives_preset_only() -> (Effective, Effective) {
-    let preset = orthodox();
+pub fn build_effectives_preset_only(preset_name: &str) -> (Effective, Effective) {
+    let preset = preset(preset_name);
     let cmds = all_commands();
     (
-        Effective::build_for(&preset, &[], &cmds, Screen::Browse).expect("preset browse válido"),
-        Effective::build_for(&preset, &[], &cmds, Screen::Viewer).expect("preset viewer válido"),
+        Effective::build_for_subset(&preset, &[], &cmds, Screen::Browse)
+            .expect("preset browse válido"),
+        Effective::build_for_subset(&preset, &[], &cmds, Screen::Viewer)
+            .expect("preset viewer válido"),
     )
 }
 
@@ -187,13 +209,21 @@ pub fn gpui_chord(
 mod tests {
     use super::*;
 
+    /// Los TRES presets compartidos parsean y construyen (modo subset — la
+    /// GUI no implementa el catálogo entero de la TUI/CLI, ver
+    /// `build_for_subset`) para el contexto Browse de la GUI.
     #[test]
-    fn preset_orthodox_valido_y_construye() {
-        assert!(build_effective_from(&orthodox(), &[]).is_ok());
+    fn los_tres_presets_compartidos_parsean_y_construyen_para_la_gui() {
+        for name in ["orthodox", "vim", "cua"] {
+            assert!(
+                build_effective_from(&preset(name), &[]).is_ok(),
+                "preset {name}: debe construir en modo subset para la GUI"
+            );
+        }
     }
 
     fn build_effective_from(p: &KeymapFile, l: &[KeymapFile]) -> Result<Effective, KeymapError> {
-        Effective::build_for(p, l, COMMANDS, Screen::Browse)
+        Effective::build_for_subset(p, l, COMMANDS, Screen::Browse)
     }
 
     /// `build_effectives` (GUI-d T3): el preset orthodox construye AMBOS
@@ -201,7 +231,8 @@ mod tests {
     /// `viewer.close` (el bind de cierre del preset).
     #[test]
     fn build_effectives_preset_ok_y_viewer_resuelve_f3() {
-        let (browse, viewer) = build_effectives().expect("preset orthodox: ambos contextos OK");
+        let (browse, viewer) =
+            build_effectives("orthodox").expect("preset orthodox: ambos contextos OK");
         let mut rb = norte_frontend::keymap::Resolver::new(browse);
         assert_eq!(
             rb.push(Chord::new(Mods::default(), KeyCode::F(3))),
@@ -224,7 +255,24 @@ mod tests {
     /// documentada en su `.expect`).
     #[test]
     fn build_effectives_preset_only_no_panica() {
-        let _ = build_effectives_preset_only();
+        let _ = build_effectives_preset_only("orthodox");
+    }
+
+    /// Diseño C2/G0 (preset compartido canónico): el preset `vim` construye
+    /// para el subconjunto de comandos de la GUI y resuelve un binding REAL
+    /// del `vim.toml` compartido — F3 en `[pane]` → `pane.view`
+    /// (`crates/norte-frontend/presets/keymap/vim.toml`), un comando que la
+    /// GUI sí implementa.
+    #[test]
+    fn preset_vim_construye_para_la_gui() {
+        let (browse, _viewer) = build_effectives_from("vim", None)
+            .expect("preset vim: construye para el subconjunto de comandos de la GUI");
+        let mut r = norte_frontend::keymap::Resolver::new(browse);
+        assert_eq!(
+            r.push(Chord::new(Mods::default(), KeyCode::F(3))),
+            norte_frontend::keymap::Resolution::Run("pane.view".into()),
+            "F3 en el preset vim (pane) resuelve a pane.view"
+        );
     }
 
     #[test]
@@ -283,8 +331,8 @@ prepend_keymap = [{ on = ["j"], run = "cursor.down" }, { on = ["k"], run = "curs
 "#,
         )
         .unwrap();
-        let (eff, _viewer) =
-            build_effectives_from(Some(dir.clone())).expect("capa válida: carga sin error");
+        let (eff, _viewer) = build_effectives_from("orthodox", Some(dir.clone()))
+            .expect("capa válida: carga sin error");
 
         let mut r = norte_frontend::keymap::Resolver::new(eff);
         assert_eq!(
@@ -311,7 +359,7 @@ prepend_keymap = [{ on = ["z"], run = "comando.inventado" }]
 "#,
         )
         .unwrap();
-        let result = build_effectives_from(Some(dir.clone()));
+        let result = build_effectives_from("orthodox", Some(dir.clone()));
         assert!(
             matches!(result, Err(KeymapError::UnknownCommand { .. })),
             "esperaba UnknownCommand, fue {result:?}"
@@ -333,8 +381,8 @@ prepend_keymap = [{ on = ["z"], run = "lua:foo" }]
 "#,
         )
         .unwrap();
-        let (eff, _viewer) =
-            build_effectives_from(Some(dir.clone())).expect("lua: con nombre válido carga");
+        let (eff, _viewer) = build_effectives_from("orthodox", Some(dir.clone()))
+            .expect("lua: con nombre válido carga");
 
         let mut r = norte_frontend::keymap::Resolver::new(eff);
         assert_eq!(
@@ -357,7 +405,7 @@ prepend_keymap = [{ on = ["z"], run = "lua:foo" }]
             "[pane]\nkeymap = [{ on = [\"z\"], run = \"app.quit\" }]\n",
         )
         .unwrap();
-        let result = build_effectives_from(Some(dir.clone()));
+        let result = build_effectives_from("orthodox", Some(dir.clone()));
         // Pin the variant AND that the diagnostic names the culprit file —
         // the property norte_frontend::config::load_keymap_layer advertises.
         match result {
