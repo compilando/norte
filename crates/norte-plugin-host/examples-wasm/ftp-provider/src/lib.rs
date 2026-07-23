@@ -8,18 +8,18 @@
 //! `RefCell<Option<Session>>`, no en `Arc<Mutex>`. Nombres crudos en bytes
 //! (regla 1); FTP exige UTF-8 → un nombre no representable es `invalid-path`.
 //!
-//! DEUDA (per-chunk RETR, ADR 0033): la interfaz WIT `read(segs, offset, len)`
-//! es acotada y NO puede sostener una conexión de datos viva entre llamadas (no
-//! hay recurso de read-stream). Cada `read` hace un ciclo REST+RETR completo
-//! drenando hasta EOF → O(n²) de transferencia si el host lee un fichero grande
-//! a trozos. El provider nativo async sí sostenía el RETR; el fix real es un
-//! recurso `reader` en el WIT (espejo de `writer`). DEUDA (timeout/cancelación,
-//! ADR 0033): una lectura/connect bloqueada en el socket del guest no la corta
-//! el epoch deadline (solo traba código guest), y el hilo `spawn_blocking` del
-//! host queda retenido — mitigación futura: `tokio::time::timeout` en el adapter.
+//! LECTURA (#30 M1): la interfaz WIT `read(segs, offset, len)` es acotada, pero el
+//! guest CACHEA el `DataStream` del RETR en la sesión y lo reutiliza mientras las
+//! lecturas sean secuenciales (offset = fin del chunk anterior) → un solo RETR por
+//! fichero, O(n). Cualquier otra op (o un offset no secuencial) drena y finaliza la
+//! caché ANTES de emitir su comando de control (`flush_cached_read`), así el `226`
+//! pendiente jamás se intercala. DEUDA (timeout/cancelación, ADR 0033): una lectura
+//! bloqueada en el socket no la corta el epoch deadline (solo traba código guest),
+//! y el hilo `spawn_blocking` del host queda retenido — mitigación futura:
+//! `tokio::time::timeout` en el adapter.
 
 use std::cell::RefCell;
-use std::io::{Read, Write};
+use std::io::Write;
 
 use suppaftp::list::{File, ListParser};
 use suppaftp::types::FileType;
@@ -50,6 +50,19 @@ struct Session {
     has_mlsd: bool,
     /// Contador de staging (nombre efímero único para `open_writer`).
     seq: u64,
+    /// RETR en curso reutilizable entre lecturas secuenciales (#30 M1): evita el
+    /// re-RETR por chunk (O(n²)→O(n)). `None` = sin lectura en vuelo.
+    cached_read: Option<CachedRead>,
+}
+
+/// Un RETR vivo cacheado: la conexión de DATOS + el path y el siguiente offset
+/// que entregará. El `reader` es independiente del control; se drena y finaliza
+/// vía [`flush_cached_read`] ANTES de cualquier comando de control, para que el
+/// `226` pendiente jamás se intercale.
+struct CachedRead {
+    remote: String,
+    next_offset: u64,
+    reader: Box<dyn std::io::Read>,
 }
 
 thread_local! {
@@ -64,6 +77,27 @@ fn with_session<T>(f: impl FnOnce(&mut Session) -> Result<T, VfsError>) -> Resul
         Some(sess) => f(sess),
         None => Err(VfsError::ProviderUnavailable),
     })
+}
+
+/// Drena y finaliza el RETR cacheado (si hay), dejando el control LIMPIO para el
+/// siguiente comando. Best-effort e idempotente (`None` = no-op). Todo op que
+/// emita un comando de control lo llama ANTES (invariante #30 M1: jamás un
+/// comando con un `226` pendiente en el control).
+fn flush_cached_read(s: &mut Session) {
+    let Some(mut cr) = s.cached_read.take() else {
+        return;
+    };
+    use std::io::Read;
+    // Drena el resto de la conexión de datos (RETR va offset→EOF; parar sin
+    // drenar desincronizaría el control), luego lee la respuesta de transferencia.
+    let mut scratch = [0u8; 8192];
+    loop {
+        match cr.reader.read(&mut scratch) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+    }
+    let _ = s.ftp.finalize_retr_stream(cr.reader);
 }
 
 struct FtpProvider;
@@ -92,6 +126,7 @@ impl Guest for FtpProvider {
             base,
             has_mlsd,
             seq: 0,
+            cached_read: None,
         }));
         Ok(())
     }
@@ -110,6 +145,7 @@ impl Guest for FtpProvider {
 
     fn stat(segments: Vec<Vec<u8>>) -> Result<Entry, VfsError> {
         with_session(|s| {
+            flush_cached_read(s);
             // La raíz del provider es el directorio base (no tiene padre a listar).
             if segments.is_empty() {
                 return Ok(Entry {
@@ -128,6 +164,7 @@ impl Guest for FtpProvider {
 
     fn list_dir(segments: Vec<Vec<u8>>, _cursor: Option<Vec<u8>>) -> Result<Page, VfsError> {
         with_session(|s| {
+            flush_cached_read(s);
             let remote = remote(&s.base, &segments)?;
             let lines = if s.has_mlsd {
                 s.ftp.mlsd(Some(remote.as_str()))
@@ -187,67 +224,74 @@ impl Guest for FtpProvider {
     }
 
     fn read(segments: Vec<Vec<u8>>, offset: u64, len: u64) -> Result<Vec<u8>, VfsError> {
+        use std::io::Read;
         with_session(|s| {
             let remote = remote(&s.base, &segments)?;
-            // Rechaza dir (leerlo es error) y ausente (NotFound): stat vía la
-            // misma conexión.
-            match stat_remote(&mut s.ftp, &remote, s.has_mlsd, &s.base)? {
-                None => return Err(VfsError::NotFound),
-                Some(f) if f.is_directory() => return Err(VfsError::Conflict),
-                Some(_) => {}
+            // Reusa el RETR cacheado si casa el path Y el offset secuencial (#30
+            // M1). Si no casa (o no hay), finaliza el anterior y abre uno nuevo.
+            let hit = s
+                .cached_read
+                .as_ref()
+                .is_some_and(|cr| cr.remote == remote && cr.next_offset == offset);
+            if !hit {
+                flush_cached_read(s);
+                // Rechaza dir (leerlo es error) y ausente (NotFound).
+                match stat_remote(&mut s.ftp, &remote, s.has_mlsd, &s.base)? {
+                    None => return Err(VfsError::NotFound),
+                    Some(f) if f.is_directory() => return Err(VfsError::Conflict),
+                    Some(_) => {}
+                }
+                // REST offset (resume/rango): posiciona el inicio del RETR.
+                if offset > 0 {
+                    let off = usize::try_from(offset).map_err(|_| VfsError::Io)?;
+                    s.ftp.resume_transfer(off).map_err(|e| map_err(&e))?;
+                }
+                let reader = s
+                    .ftp
+                    .retr_as_stream(remote.as_str())
+                    .map_err(|e| map_err(&e))?;
+                s.cached_read = Some(CachedRead {
+                    remote: remote.clone(),
+                    next_offset: offset,
+                    reader: Box::new(reader),
+                });
             }
-            // REST offset (resume/rango): posiciona el inicio del RETR.
-            if offset > 0 {
-                let off = usize::try_from(offset).map_err(|_| VfsError::Io)?;
-                s.ftp.resume_transfer(off).map_err(|e| map_err(&e))?;
-            }
-            let mut reader = s
-                .ftp
-                .retr_as_stream(remote.as_str())
-                .map_err(|e| map_err(&e))?;
+            // Lee hasta `want` bytes del reader cacheado. Se lee DIRECTO sobre un
+            // buffer del tamaño pedido (no un buf fijo + truncado): así jamás se
+            // saca del socket más de lo pedido, que corromperia la siguiente
+            // lectura secuencial (perdería esos bytes de su ventana).
             let want = usize::try_from(len).unwrap_or(usize::MAX);
-            let mut out = Vec::new();
-            let mut buf = [0u8; 8192];
-            // Un error de lectura NO puede hacer `?` aquí (rust review B1):
-            // saltaría el `finalize_retr_stream` de abajo, dejando la respuesta
-            // 226/426 PENDIENTE en el control → la siguiente op la leería como
-            // suya y una mutación fallida podría reportarse como OK. Se marca y
-            // se sale del bucle para finalizar SIEMPRE.
+            // Techo por si `want == u64::MAX` (el adapter pide 64 KiB; jamás pica).
+            let cap = want.min(1 << 20);
+            let cr = s.cached_read.as_mut().expect("caché instalada arriba");
+            let mut out = vec![0u8; cap];
+            let mut filled = 0usize;
+            let mut eof = false;
             let mut read_err = false;
-            while out.len() < want {
-                match reader.read(&mut buf) {
-                    Ok(0) => break, // EOF
-                    Ok(n) => {
-                        let take = n.min(want - out.len());
-                        out.extend_from_slice(&buf[..take]);
+            while filled < cap {
+                // Un error NO puede hacer `?` (saltaría el flush → 226 pendiente,
+                // rust review B1). Se marca y se finaliza fuera del bucle.
+                match cr.reader.read(&mut out[filled..]) {
+                    Ok(0) => {
+                        eof = true;
+                        break;
                     }
+                    Ok(n) => filled += n,
                     Err(_) => {
                         read_err = true;
                         break;
                     }
                 }
             }
-            // FTP no sabe parar un RETR a media (va offset→EOF; ABOR
-            // desincronizaría el control): se DRENA el resto de la conexión de
-            // datos SIEMPRE (best-effort) antes de finalizar — así el rango
-            // acotado, el EOF natural y el error dejan el control sano. (Coste
-            // O(n²) del drenado por chunk: deuda documentada, ADR 0033.)
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
-                }
+            out.truncate(filled);
+            cr.next_offset += filled as u64;
+            // EOF o error: finaliza la caché (limpio, o best-effort en error).
+            if eof || read_err {
+                flush_cached_read(s);
             }
-            // Cierra la conexión de datos y lee la respuesta de transferencia
-            // SIEMPRE (todos los caminos de salida). En el camino feliz se ignora
-            // el error de finalize (los bytes ya están; un cierre abrupto de la
-            // conexión de datos tras un RETR completo no debe fallar la lectura,
-            // rust review m5). Si hubo error de lectura, se reporta Io.
-            let fin = s.ftp.finalize_retr_stream(reader);
             if read_err {
                 return Err(VfsError::Io);
             }
-            let _ = fin;
             Ok(out)
         })
     }
@@ -258,6 +302,7 @@ impl Guest for FtpProvider {
 
     fn open_writer(segments: Vec<Vec<u8>>) -> Result<Writer, VfsError> {
         with_session(|s| {
+            flush_cached_read(s);
             let final_remote = remote(&s.base, &segments)?;
             let parent_len = segments.len().saturating_sub(1);
             let parent = remote(&s.base, &segments[..parent_len])?;
@@ -281,6 +326,7 @@ impl Guest for FtpProvider {
 
     fn make_dir(segments: Vec<Vec<u8>>) -> Result<(), VfsError> {
         with_session(|s| {
+            flush_cached_read(s);
             let remote = remote(&s.base, &segments)?;
             if exists(&mut s.ftp, &remote, s.has_mlsd, &s.base)? {
                 return Err(VfsError::Conflict);
@@ -291,6 +337,7 @@ impl Guest for FtpProvider {
 
     fn remove(segments: Vec<Vec<u8>>) -> Result<(), VfsError> {
         with_session(|s| {
+            flush_cached_read(s);
             let remote = remote(&s.base, &segments)?;
             // Saber si es dir para elegir RMD vs DELE.
             let f =
@@ -305,6 +352,7 @@ impl Guest for FtpProvider {
 
     fn rename(src: Vec<Vec<u8>>, dst: Vec<Vec<u8>>) -> Result<(), VfsError> {
         with_session(|s| {
+            flush_cached_read(s);
             let from_r = remote(&s.base, &src)?;
             let to_r = remote(&s.base, &dst)?;
             // RNFR/RNTO no garantiza no-replace: se comprueba antes (TOCTOU
@@ -334,6 +382,7 @@ impl GuestWriter for FtpWriter {
         }
         let staging = self.staging.borrow().clone().ok_or(VfsError::Io)?;
         with_session(|s| {
+            flush_cached_read(s);
             let mut data = s
                 .ftp
                 .append_with_stream(&staging)
@@ -350,6 +399,7 @@ impl GuestWriter for FtpWriter {
     fn commit(&self) -> Result<(), VfsError> {
         let staging = self.staging.borrow_mut().take().ok_or(VfsError::Io)?;
         with_session(|s| {
+            flush_cached_read(s);
             // El destino final no debe existir (create-new): comprobado al abrir;
             // la ventana hasta aquí es TOCTOU (FTP sin rename atómico).
             if exists(&mut s.ftp, &self.final_remote, s.has_mlsd, &s.base)? {
@@ -365,6 +415,7 @@ impl GuestWriter for FtpWriter {
         // Borra el staging (cada write lo dejó durable en el servidor).
         if let Some(staging) = self.staging.borrow_mut().take() {
             let _ = with_session(|s| {
+                flush_cached_read(s);
                 let _ = s.ftp.rm(&staging);
                 Ok(())
             });
