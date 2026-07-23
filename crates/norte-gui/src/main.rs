@@ -90,23 +90,6 @@ const ROW_H: f32 = 22.0;
 /// barra de estado (una fila cada una) + margen de redondeo.
 const VIEWER_CHROME_ROWS: usize = 3;
 
-// Colores del chrome del dual-pane (constantes locales; el color por TIPO de
-// archivo sí sale del tema, ver `entry_color`). El theming completo del chrome
-// por rol es fuera de alcance del spike.
-const BG: u32 = 0x121212;
-const FG: u32 = 0xffffff;
-const PANE_BG: u32 = 0x1e1e1e;
-const PANE_BG_FOCUS: u32 = 0x252526;
-const HEADER_BG: u32 = 0x2d2d2d;
-const BORDER_FOCUS: u32 = 0x3b82f6;
-const BORDER_UNFOCUS: u32 = 0x3a3a3a;
-const SEL_BG: u32 = 0x264f78;
-const ERR_FG: u32 = 0xf87171;
-const QUICK_FG: u32 = 0xfbbf24;
-/// Fondo de una fila MARCADA (distinto de `SEL_BG`, que es la selección bajo
-/// cursor — marca y selección son ortogonales, ver `render_row`).
-const MARK_BG: u32 = 0x3d3315;
-
 /// Marcador de fila con marca (prefijo visible; el bool lo expone
 /// `PaneState::is_marked`, la GUI solo lo pinta).
 const MARK_MARKER: &str = "●";
@@ -1134,9 +1117,18 @@ impl NorteGui {
     }
 
     /// Pinta una columna (un pane).
-    fn render_pane(&self, i: usize, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_pane(
+        &self,
+        i: usize,
+        chrome: &ChromeColors,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let pane = &self.panes[i];
         let focused = self.focus == i;
+        // Copia barata (todo `Copy`) para moverla dentro del closure
+        // `'static` de `cx.processor` — no puede capturar `&ChromeColors`
+        // prestado de este frame, que no vive tanto como el closure.
+        let chrome_owned = *chrome;
 
         let (path_txt, path_hostile) = norte_frontend::path_display(pane.dir());
         let header = if path_hostile {
@@ -1173,7 +1165,7 @@ impl NorteGui {
                         let e = this.panes[i].entries()[j].clone();
                         let hl = sel_path.as_ref() == Some(&e.path);
                         let marked = this.panes[i].is_marked(&e);
-                        this.render_row(i, j, &e, hl, marked, cx)
+                        this.render_row(i, j, &e, hl, marked, &chrome_owned, cx)
                     })
                     .collect()
             }),
@@ -1211,22 +1203,24 @@ impl NorteGui {
             .overflow_hidden()
             .border_2()
             .border_color(if focused {
-                rgb(BORDER_FOCUS)
+                chrome.border_focus
             } else {
-                rgb(BORDER_UNFOCUS)
+                chrome.border_unfocus
             })
             .bg(if focused {
-                rgb(PANE_BG_FOCUS)
+                chrome.pane_bg_focus
             } else {
-                rgb(PANE_BG)
+                chrome.pane_bg
             });
 
-        // Cabecera: el path saneado del dir.
+        // Cabecera: el path saneado del dir. Par honesto con el tema: fondo Y
+        // texto de `StatusBar` (ver doc de `ChromeColors`), no solo el fondo.
         col = col.child(
             div()
                 .px(px(4.0))
                 .py(px(2.0))
-                .bg(rgb(HEADER_BG))
+                .bg(chrome.header_bg)
+                .text_color(chrome.header_fg)
                 .truncate()
                 .child(SharedString::from(header)),
         );
@@ -1242,7 +1236,7 @@ impl NorteGui {
             col = col.child(
                 div()
                     .px(px(4.0))
-                    .text_color(rgb(ERR_FG))
+                    .text_color(chrome.err_fg)
                     .child(SharedString::from(norte_i18n::ta(
                         "gui-banner-error",
                         &[("error", err.as_str())],
@@ -1259,12 +1253,16 @@ impl NorteGui {
         // #96: el contenedor omitió entradas de su índice (#93) — el listado
         // que se ve NO es todo lo que el archivo contiene. Mismo contrato que
         // el badge de la status bar del TUI (clave i18n compartida), jamás
-        // silencioso; solo se pinta `Some(n)` con n > 0.
+        // silencioso; solo se pinta `Some(n)` con n > 0. Par honesto
+        // quick-search (`Match`): fondo Y texto, no solo el texto — un texto
+        // casi negro (tema `default`) sobre el fondo oscuro del pane sin su
+        // propio fondo sería ilegible.
         if let Some(n) = pane.skipped().filter(|n| *n > 0) {
             col = col.child(
                 div()
                     .px(px(4.0))
-                    .text_color(rgb(QUICK_FG))
+                    .bg(chrome.quick_bg)
+                    .text_color(chrome.quick_fg)
                     .child(SharedString::from(norte_i18n::ta(
                         "status-archive-skipped",
                         &[("n", &n.to_string())],
@@ -1296,8 +1294,8 @@ impl NorteGui {
                 div()
                     .px(px(4.0))
                     .py(px(1.0))
-                    .bg(rgb(HEADER_BG))
-                    .text_color(rgb(QUICK_FG))
+                    .bg(chrome.quick_bg)
+                    .text_color(chrome.quick_fg)
                     .child(SharedString::from(format!("/{query_display}"))),
             );
         }
@@ -1318,6 +1316,12 @@ impl NorteGui {
     /// Pinta una fila: marcador de marca + badge hostil + nombre saneado +
     /// indicador de tipo, coloreado por tipo de archivo; fondo distinto si está
     /// marcada, resaltado (que gana) si es la selección bajo cursor.
+    // 8 parámetros: posición (pane/idx), datos de la entrada+estado
+    // (entry/highlighted/marked), la paleta resuelta del frame (chrome) y el
+    // contexto de GPUI (cx) — todos necesarios, ninguno agrupable sin una
+    // indirección artificial (`RowState { entry, highlighted, marked }` solo
+    // movería el problema a un tipo nuevo con un único call site).
+    #[allow(clippy::too_many_arguments)]
     fn render_row(
         &self,
         pane: usize,
@@ -1325,11 +1329,14 @@ impl NorteGui {
         entry: &Entry,
         highlighted: bool,
         marked: bool,
+        chrome: &ChromeColors,
         cx: &mut Context<Self>,
         // ed. 2024: RPIT captura TODOS los lifetimes en scope; `render_row` NO
         // retiene préstamos (clona nombre/color, el listener es 'static), así
         // que acota la captura a vacío para no atrapar el `&entry` (que en el
-        // processor de `uniform_list` es un clon local que escaparía).
+        // processor de `uniform_list` es un clon local que escaparía) ni
+        // `&chrome` (misma razón: solo se leen sus campos `Copy`, nunca se
+        // guarda la referencia).
     ) -> impl IntoElement + use<> {
         let bytes = entry.path.file_name().map_or(&b""[..], Segment::as_bytes);
         let mut label = row_label(bytes, entry.kind);
@@ -1361,10 +1368,16 @@ impl NorteGui {
             .truncate()
             .child(SharedString::from(label));
         if marked {
-            row = row.bg(rgb(MARK_BG));
+            row = row.bg(chrome.mark_bg);
         }
         if highlighted {
-            row = row.bg(rgb(SEL_BG));
+            row = row.bg(chrome.sel_bg);
+            // Par honesto de selección: si el tema declara `Selection.fg`,
+            // reemplaza el color por-tipo de la fila; si no, se conserva
+            // (comportamiento histórico, ver doc de `ChromeColors`).
+            if let Some(fg) = chrome.sel_fg {
+                row = row.text_color(fg);
+            }
         }
         row.on_mouse_down(
             MouseButton::Left,
@@ -1380,7 +1393,7 @@ impl NorteGui {
     /// marca `aria_selected`; F9 cancela esa fila. El cursor se clampa aquí a
     /// un índice válido (la franja encoge al podar Completed/dismiss) — jamás
     /// indexa fuera de rango.
-    fn render_task_strip(&self) -> impl IntoElement {
+    fn render_task_strip(&self, chrome: &ChromeColors) -> impl IntoElement {
         let mut strip = div()
             .id("task-strip")
             .role(gpui::Role::List)
@@ -1389,7 +1402,8 @@ impl NorteGui {
             .flex_col()
             .max_h(px(120.0))
             .overflow_hidden()
-            .bg(rgb(HEADER_BG))
+            .bg(chrome.header_bg)
+            .text_color(chrome.header_fg)
             .px(px(4.0))
             .py(px(2.0));
         if self.task_order.is_empty() {
@@ -1412,7 +1426,13 @@ impl NorteGui {
                 .px(px(2.0))
                 .child(SharedString::from(line));
             if selected {
-                row = row.bg(rgb(SEL_BG));
+                row = row.bg(chrome.sel_bg);
+                // Sobrescribe el `header_fg` heredado del contenedor: la fila
+                // seleccionada necesita SU propio contraste sobre `sel_bg`,
+                // no el pensado para `header_bg` (ver doc de `ChromeColors`).
+                if let Some(fg) = chrome.sel_fg {
+                    row = row.text_color(fg);
+                }
             }
             strip = strip.child(row);
         }
@@ -1428,7 +1448,12 @@ impl NorteGui {
     /// deriva del alto real del viewport de la ventana. `v.scroll` es el
     /// ÚNICO dueño del scroll (la rueda lo mueve vía `on_viewer_scroll`,
     /// registrada sobre el contenedor).
-    fn render_viewer(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_viewer(
+        &self,
+        window: &Window,
+        chrome: &ChromeColors,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         // INVARIANTE: solo se llama desde `render` cuando `self.viewer` es
         // `Some` (comprobado justo antes de esta llamada).
         let v = self
@@ -1502,13 +1527,14 @@ impl NorteGui {
             .flex_col()
             .overflow_hidden()
             .border_2()
-            .border_color(rgb(BORDER_FOCUS))
-            .bg(rgb(PANE_BG_FOCUS))
+            .border_color(chrome.border_focus)
+            .bg(chrome.pane_bg_focus)
             .child(
                 div()
                     .px(px(4.0))
                     .py(px(2.0))
-                    .bg(rgb(HEADER_BG))
+                    .bg(chrome.header_bg)
+                    .text_color(chrome.header_fg)
                     .truncate()
                     .child(SharedString::from(header)),
             )
@@ -1517,8 +1543,8 @@ impl NorteGui {
                 div()
                     .px(px(4.0))
                     .py(px(1.0))
-                    .bg(rgb(HEADER_BG))
-                    .text_color(rgb(QUICK_FG))
+                    .bg(chrome.quick_bg)
+                    .text_color(chrome.quick_fg)
                     .truncate()
                     .child(SharedString::from(status)),
             )
@@ -1530,7 +1556,7 @@ impl NorteGui {
     /// Pinta el panel del modal activo (overlay centrado, ver `render`): título
     /// y cuerpo saneados por [`modal_lines`] (mapeados 1:1 a divs, sin volver a
     /// tocar bytes de usuario aquí), más el pie de teclas fijo por variante.
-    fn render_modal(&self, m: &Modal) -> impl IntoElement {
+    fn render_modal(&self, m: &Modal, chrome: &ChromeColors) -> impl IntoElement {
         let lines = modal_lines(m);
         // Nombre accesible = título (1.ª línea, siempre presente); el resto
         // (cuerpo saneado por `modal_lines`, ítems/mode/conflict) va como
@@ -1571,9 +1597,15 @@ impl NorteGui {
             .max_h(px(360.0))
             .overflow_hidden()
             .border_2()
-            .border_color(rgb(BORDER_FOCUS))
-            .bg(rgb(HEADER_BG))
-            .text_color(rgb(FG))
+            .border_color(chrome.border_focus)
+            // `header_bg` reusado como superficie neutra del panel (no es LA
+            // franja de cabecera, ver doc de `ChromeColors`): su texto se
+            // queda en `fg` (canal suelto), no en el par `header_fg` — el
+            // panel tiene hijos con SU PROPIO fondo (título, pie) que
+            // heredarían un `header_fg` pensado para `header_bg`, no para
+            // `border_focus`/`sel_bg`.
+            .bg(chrome.header_bg)
+            .text_color(chrome.fg)
             .px(px(12.0))
             .py(px(8.0))
             .gap(px(2.0));
@@ -1584,8 +1616,8 @@ impl NorteGui {
                 div()
                     .px(px(2.0))
                     .py(px(1.0))
-                    .bg(rgb(BORDER_FOCUS))
-                    .text_color(rgb(FG))
+                    .bg(chrome.border_focus)
+                    .text_color(chrome.fg)
                     .truncate()
                     .child(SharedString::from(title)),
             );
@@ -1593,7 +1625,7 @@ impl NorteGui {
         for (i, line) in lines.enumerate() {
             let mut row = div().truncate().child(SharedString::from(line));
             if Some(i + 1) == alert_line {
-                row = row.text_color(rgb(ERR_FG));
+                row = row.text_color(chrome.err_fg);
             }
             panel = panel.child(row);
         }
@@ -1603,7 +1635,7 @@ impl NorteGui {
                 .mt(px(4.0))
                 .px(px(2.0))
                 .py(px(1.0))
-                .bg(rgb(SEL_BG))
+                .bg(chrome.sel_bg)
                 .child(SharedString::from(footer)),
         )
     }
@@ -2081,6 +2113,104 @@ fn entry_color(theme: &Theme, entry: &Entry) -> gpui::Rgba {
     fg.map_or_else(|| rgb(0xffffff), theme_map::to_gpui_rgba)
 }
 
+// Colores del chrome del dual-pane; pre-C2 look, usados SOLO como fallback
+// para el canal que un tema deja sin declarar (`ChromeColors::resolve`, ver
+// `chrome`) — el tema es canónico (mismo principio que los presets de
+// keymap compartidos), no una piel sobre un aspecto congelado: el preset
+// `default` declara casi todos los roles, así que el aspecto por defecto de
+// la GUI pasa a ser el del tema `default` (consistente con la TUI), y estas
+// constantes solo se ven cuando un tema deliberadamente minimalista deja un
+// canal sin fijar.
+const BG: u32 = 0x121212;
+const FG: u32 = 0xffffff;
+const PANE_BG: u32 = 0x1e1e1e;
+const PANE_BG_FOCUS: u32 = 0x252526;
+const HEADER_BG: u32 = 0x2d2d2d;
+const BORDER_FOCUS: u32 = 0x3b82f6;
+const BORDER_UNFOCUS: u32 = 0x3a3a3a;
+const SEL_BG: u32 = 0x264f78;
+const ERR_FG: u32 = 0xf87171;
+const QUICK_FG: u32 = 0xfbbf24;
+/// Fondo de una fila MARCADA (distinto de `SEL_BG`, que es la selección bajo
+/// cursor — marca y selección son ortogonales, ver `render_row`).
+const MARK_BG: u32 = 0x3d3315;
+
+/// Color de chrome del tema, con la constante pre-C2 como fallback: SOLO el
+/// canal que el tema deja sin declarar para el rol cae al valor histórico —
+/// un tema que declara el rol (el preset `default` declara casi todos, ver
+/// `ChromeColors`) lo reemplaza entero. `fg`=false toma el canal de fondo del
+/// rol.
+fn chrome(theme: &Theme, role: Role, fg: bool, fallback: u32) -> gpui::Rgba {
+    let style = theme.style(role);
+    let c = if fg { style.fg } else { style.bg };
+    c.map_or(gpui::rgb(fallback), theme_map::to_gpui_rgba)
+}
+
+/// La paleta de chrome resuelta para UN frame. Se construye UNA vez al
+/// principio de `render()` — `render_row` corre por cada entrada visible y no
+/// debe resolver el tema por fila.
+///
+/// Tres campos son PARES honestos con el tema (no canales sueltos), porque
+/// el tema los declara como pares con sentido conjunto (p. ej. el TUI empareja
+/// texto oscuro sobre la barra azul; usar un canal solo era lo que rompía la
+/// legibilidad):
+/// - `header_bg`/`header_fg`: la franja de cabecera (path del pane, cabecera
+///   del visor) — ambos canales de `StatusBar`.
+/// - `quick_fg`/`quick_bg`: resaltado de quick-search — ambos canales de
+///   `Match`.
+/// - `sel_bg` (fondo de fila seleccionada) + `sel_fg` opcional: si el tema
+///   declara `Selection.fg`, ese color reemplaza el color por-tipo de la fila
+///   seleccionada; si no lo declara, `sel_fg` es `None` y la fila conserva su
+///   color de entrada (comportamiento histórico).
+///
+/// `Copy` a propósito: `render_pane` necesita mover una copia dentro del
+/// closure `'static` de `cx.processor` (no puede prestarla del frame).
+#[derive(Clone, Copy)]
+struct ChromeColors {
+    bg: gpui::Rgba,
+    fg: gpui::Rgba,
+    pane_bg: gpui::Rgba,
+    pane_bg_focus: gpui::Rgba,
+    header_bg: gpui::Rgba,
+    header_fg: gpui::Rgba,
+    border_focus: gpui::Rgba,
+    border_unfocus: gpui::Rgba,
+    sel_bg: gpui::Rgba,
+    sel_fg: Option<gpui::Rgba>,
+    err_fg: gpui::Rgba,
+    quick_fg: gpui::Rgba,
+    quick_bg: gpui::Rgba,
+    mark_bg: gpui::Rgba,
+}
+
+impl ChromeColors {
+    fn resolve(theme: &Theme) -> Self {
+        Self {
+            bg: chrome(theme, Role::Background, false, BG),
+            fg: chrome(theme, Role::Regular, true, FG),
+            pane_bg: chrome(theme, Role::PaneBackground, false, PANE_BG),
+            pane_bg_focus: chrome(theme, Role::PaneFocusBackground, false, PANE_BG_FOCUS),
+            // Par cabecera: ambos canales de `StatusBar` (ver doc del struct).
+            header_bg: chrome(theme, Role::StatusBar, false, HEADER_BG),
+            header_fg: chrome(theme, Role::StatusBar, true, FG),
+            border_focus: chrome(theme, Role::BorderFocus, true, BORDER_FOCUS),
+            border_unfocus: chrome(theme, Role::BorderUnfocused, true, BORDER_UNFOCUS),
+            sel_bg: chrome(theme, Role::Selection, false, SEL_BG),
+            // Sin fallback histórico: si el tema no declara `Selection.fg`,
+            // `None` = la fila seleccionada conserva su color por-tipo
+            // (comportamiento de siempre; nunca hubo un fg de selección).
+            sel_fg: theme.style(Role::Selection).fg.map(theme_map::to_gpui_rgba),
+            err_fg: chrome(theme, Role::Error, true, ERR_FG),
+            // Par quick-search: ambos canales de `Match` (ver doc del struct).
+            // El fallback de `quick_bg` es `HEADER_BG`: el combo histórico
+            // (3 de los 4 usos) ya pintaba el resaltado sobre ese fondo.
+            quick_fg: chrome(theme, Role::Match, true, QUICK_FG),
+            quick_bg: chrome(theme, Role::Match, false, HEADER_BG),
+            mark_bg: chrome(theme, Role::Mark, false, MARK_BG),
+        }
+    }
+}
+
 impl Render for NorteGui {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Instrumentación (medición del lag, gated por NORTE_GUI_DEBUG): tiempo
@@ -2089,6 +2219,11 @@ impl Render for NorteGui {
         // culpable es el O(N)-por-frame (display_name/tema recomputados por fila
         // sin virtualizar). Ver issue #87.
         let _t0 = std::time::Instant::now();
+
+        // Paleta de chrome resuelta UNA vez por frame (ver doc de
+        // `ChromeColors`): `render_row` corre por cada fila visible y no debe
+        // resolver el tema por fila.
+        let chrome = ChromeColors::resolve(&self.theme);
 
         // Raíz: `Role::Application` (idioma del ejemplo `a11y.rs`, div "root").
         // `.aria_label("norte")` es el nombre del producto (proper noun, como
@@ -2103,8 +2238,8 @@ impl Render for NorteGui {
             .flex()
             .flex_col()
             .size_full()
-            .bg(rgb(BG))
-            .text_color(rgb(FG))
+            .bg(chrome.bg)
+            .text_color(chrome.fg)
             .p(px(4.0))
             .gap(px(2.0));
 
@@ -2119,8 +2254,8 @@ impl Render for NorteGui {
             let mut banner = div()
                 .flex()
                 .flex_col()
-                .bg(rgb(HEADER_BG))
-                .text_color(rgb(ERR_FG));
+                .bg(chrome.header_bg)
+                .text_color(chrome.err_fg);
             for line in msg.split('\n') {
                 banner = banner.child(
                     div()
@@ -2137,7 +2272,7 @@ impl Render for NorteGui {
         // llega, o el dual-pane: pantallas mutuamente excluyentes (ver
         // `on_key`, que enruta al visor primero cuando ya está abierto).
         if self.viewer.is_some() {
-            root = root.child(self.render_viewer(window, cx));
+            root = root.child(self.render_viewer(window, &chrome, cx));
         } else if self.viewer_loading {
             root = root.child(
                 div()
@@ -2154,9 +2289,9 @@ impl Render for NorteGui {
                 .flex_row()
                 .overflow_hidden()
                 .gap(px(2.0))
-                .child(self.render_pane(0, cx))
-                .child(self.render_pane(1, cx));
-            root = root.child(panes_row).child(self.render_task_strip());
+                .child(self.render_pane(0, &chrome, cx))
+                .child(self.render_pane(1, &chrome, cx));
+            root = root.child(panes_row).child(self.render_task_strip(&chrome));
         }
 
         // Indicador de secuencia multi-tecla en curso (#91): si el resolver
@@ -2176,8 +2311,8 @@ impl Render for NorteGui {
                 div()
                     .px(px(4.0))
                     .py(px(1.0))
-                    .bg(rgb(HEADER_BG))
-                    .text_color(rgb(QUICK_FG))
+                    .bg(chrome.quick_bg)
+                    .text_color(chrome.quick_fg)
                     .child(SharedString::from(format!("{}…", pending_hint(pending)))),
             );
         }
@@ -2196,7 +2331,7 @@ impl Render for NorteGui {
                     .items_center()
                     .justify_center()
                     .bg(rgba(0x000000aa))
-                    .child(self.render_modal(m)),
+                    .child(self.render_modal(m, &chrome)),
             );
         }
 
@@ -2304,9 +2439,14 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ImagePreview, affected_dirs, apply_viewer_command, first_cancelable, generation_is_current,
-        has_pending_work, image_preview_from, image_status, pending_hint, retain_active, row_label,
-        task_at_cursor, unknown_preset_banner, viewer_header, viewer_status,
+        BG, BORDER_FOCUS, BORDER_UNFOCUS, ERR_FG, FG, HEADER_BG, MARK_BG, PANE_BG, PANE_BG_FOCUS,
+        QUICK_FG, SEL_BG,
+    };
+    use super::{
+        ChromeColors, ImagePreview, affected_dirs, apply_viewer_command, first_cancelable,
+        generation_is_current, has_pending_work, image_preview_from, image_status, pending_hint,
+        retain_active, row_label, task_at_cursor, unknown_preset_banner, viewer_header,
+        viewer_status,
     };
     use norte_frontend::viewer::Viewer;
     use norte_proto::{EntryKind, VPath};
@@ -2910,5 +3050,68 @@ mod tests {
         );
         assert_eq!(progress.len(), 1, "solo la task activa queda en progress");
         assert!(progress.contains_key(&TaskId::new(2)));
+    }
+
+    /// El tema es CANÓNICO (G0, decisión del 2026-07-23): el preset `default`
+    /// declara casi todos los roles, así que el aspecto por defecto de la GUI
+    /// pasa a ser el del tema `default.toml` (consistente con la TUI) — NO el
+    /// aspecto histórico pre-tema. Valores leídos directamente de
+    /// `crates/norte-theme/presets/default.toml`.
+    #[test]
+    fn tema_default_reproduce_el_tema_default() {
+        let t = norte_theme::Theme::preset_default();
+        let c = ChromeColors::resolve(&t);
+        assert_eq!(c.bg, gpui::rgb(0x1c1c1c), "background.bg");
+        assert_eq!(c.fg, gpui::rgb(0xd0d0d0), "regular.fg");
+        // pane-background/pane-focus-background/mark: coinciden con las
+        // constantes históricas (se fijaron a esos valores a propósito en
+        // `fc8f5a5`, el commit que añadió estos tres roles nuevos).
+        assert_eq!(c.pane_bg, gpui::rgb(0x1e1e1e), "pane-background.bg");
+        assert_eq!(
+            c.pane_bg_focus,
+            gpui::rgb(0x252526),
+            "pane-focus-background.bg"
+        );
+        assert_eq!(c.mark_bg, gpui::rgb(0x3d3315), "mark.bg");
+        // Par cabecera: status-bar empareja texto oscuro sobre barra azul.
+        assert_eq!(c.header_bg, gpui::rgb(0x5fafd7), "status-bar.bg");
+        assert_eq!(c.header_fg, gpui::rgb(0x1c1c1c), "status-bar.fg");
+        assert_eq!(c.border_focus, gpui::rgb(0x5fafd7), "border-focus.fg");
+        assert_eq!(c.border_unfocus, gpui::rgb(0x6c6c6c), "border-unfocused.fg");
+        assert_eq!(c.sel_bg, gpui::rgb(0x3a3a3a), "selection.bg");
+        assert_eq!(
+            c.sel_fg,
+            Some(gpui::rgb(0xffffff)),
+            "selection.fg declarado → Some"
+        );
+        assert_eq!(c.err_fg, gpui::rgb(0xd75f5f), "error.fg");
+        // Par quick-search: match empareja texto oscuro sobre resaltado dorado.
+        assert_eq!(c.quick_fg, gpui::rgb(0x1c1c1c), "match.fg");
+        assert_eq!(c.quick_bg, gpui::rgb(0xd7af5f), "match.bg");
+    }
+
+    /// Un tema mínimo que no declara `[roles]` dispara el fallback de
+    /// `Role::fallback()` para TODOS los roles (sin color) — cada canal de
+    /// `ChromeColors` debe entonces caer a su constante histórica pre-C2
+    /// (`chrome`, ver su doc), y `sel_fg` a `None` (nunca hubo un fg de
+    /// selección separado del color por-tipo antes de esta migración).
+    #[test]
+    fn canal_ausente_cae_a_la_constante_historica() {
+        let t = norte_theme::Theme::from_toml("name = \"x\"\n").expect("tema mínimo parsea");
+        let c = ChromeColors::resolve(&t);
+        assert_eq!(c.bg, gpui::rgb(BG));
+        assert_eq!(c.fg, gpui::rgb(FG));
+        assert_eq!(c.pane_bg, gpui::rgb(PANE_BG));
+        assert_eq!(c.pane_bg_focus, gpui::rgb(PANE_BG_FOCUS));
+        assert_eq!(c.header_bg, gpui::rgb(HEADER_BG));
+        assert_eq!(c.header_fg, gpui::rgb(FG));
+        assert_eq!(c.border_focus, gpui::rgb(BORDER_FOCUS));
+        assert_eq!(c.border_unfocus, gpui::rgb(BORDER_UNFOCUS));
+        assert_eq!(c.sel_bg, gpui::rgb(SEL_BG));
+        assert_eq!(c.sel_fg, None, "sin Selection.fg declarado → sin override");
+        assert_eq!(c.err_fg, gpui::rgb(ERR_FG));
+        assert_eq!(c.quick_fg, gpui::rgb(QUICK_FG));
+        assert_eq!(c.quick_bg, gpui::rgb(HEADER_BG));
+        assert_eq!(c.mark_bg, gpui::rgb(MARK_BG));
     }
 }
