@@ -22,12 +22,13 @@ use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{
     App, DialogOutcome, ExtensionManager, Help, KeymapsError, Modal, NavPopupKind, Pane,
     PickerAction, SearchDialog, SearchState, TransferKind, config_error_category, detail_for_bar,
-    dialog_key, error_category, error_message, io_error_category, keymaps_error_category,
-    theme_error_category,
+    dialog_action, error_category, error_message, io_error_category, keymaps_error_category,
+    theme_error_category, trust_lua_key,
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::keymap::{
-    COMMANDS, Effective, Resolution, Resolver, Screen, chord_from_crossterm, presets,
+    COMMANDS, DIALOG_COMMANDS, Effective, Resolution, Resolver, Screen, chord_from_crossterm,
+    presets,
 };
 use norte_tui::lua::{
     CommandRun, Layer, LuaHost, PaneCtx, RunOutcome, StatusInput, TrustDecision, TrustStore,
@@ -230,14 +231,16 @@ async fn main() -> Result<()> {
         norte_i18n::Lang::from_env()
     };
     let _ = norte_i18n::force(lang);
-    let (browse_eff, viewer_eff) = build_keymaps(&cfg, cli_preset.as_deref())?;
+    let (browse_eff, viewer_eff, dialog_eff) = build_keymaps(&cfg, cli_preset.as_deref())?;
     // Bindings `lua:` descartados del keymap.toml de PROYECTO (seguridad,
     // review M4 Lua): se avisa tras crear la App, jamás descarte mudo. El
-    // contexto `global` se fusiona en AMBAS pantallas, así que el máximo es
-    // el recuento sin dobles (un binding global cuenta en las dos).
+    // contexto `global` se fusiona en las TRES pantallas (H1 T2 suma
+    // dialog), así que el máximo es el recuento sin dobles (un binding
+    // global cuenta en todas).
     let discarded_lua = browse_eff
         .discarded_lua_bindings()
-        .max(viewer_eff.discarded_lua_bindings());
+        .max(viewer_eff.discarded_lua_bindings())
+        .max(dialog_eff.discarded_lua_bindings());
 
     let mut backend = make_backend(&cfg, cli_daemon, cli_socket).await?;
 
@@ -279,6 +282,14 @@ async fn main() -> Result<()> {
     let mut help_lines = norte_tui::help::build(&browse_eff, &viewer_eff);
     let mut resolver = Resolver::new(browse_eff);
     let mut viewer_resolver = Resolver::new(viewer_eff);
+    // H1 T2: resolver compartido por TODOS los overlays (modal, theme
+    // picker, extensions, nav popup) — mutuamente exclusivos en el run loop
+    // (el `if`/`else if` de más abajo), así que un único estado de secuencia
+    // basta. Los presets `[dialog]` son de UN chord; un `Resolution::Pending`
+    // (solo posible con una secuencia multi-tecla de una capa de usuario) se
+    // trata como ignorar-y-reiniciar en cada handler — sin semántica de
+    // overlay definida para eso todavía.
+    let mut dialog_resolver = Resolver::new(dialog_eff);
 
     // Hot-reload: vigilancia de las capas, con aviso si degrada a polling.
     let (cfg_tx, cfg_rx) = tokio::sync::mpsc::channel(8);
@@ -301,6 +312,7 @@ async fn main() -> Result<()> {
         &backend,
         &mut resolver,
         &mut viewer_resolver,
+        &mut dialog_resolver,
         &mut help_lines,
         layers,
         cli_preset,
@@ -411,13 +423,13 @@ async fn make_backend(
 }
 
 /// Resuelve el preset (flag > config > default) y pliega las capas de
-/// keymap (ADR 0007) para las DOS pantallas (browse y viewer). El error
-/// tipado ([`KeymapsError`], #73) vive en `norte_tui::app` junto a su
-/// categoría Fluent.
+/// keymap (ADR 0007) para las TRES pantallas (browse, viewer, dialog — H1
+/// T2). El error tipado ([`KeymapsError`], #73) vive en `norte_tui::app`
+/// junto a su categoría Fluent.
 fn build_keymaps(
     cfg: &config::LoadedConfig,
     cli_preset: Option<&str>,
-) -> Result<(Effective, Effective), KeymapsError> {
+) -> Result<(Effective, Effective, Effective), KeymapsError> {
     let preset_name = cli_preset.unwrap_or(&cfg.common.preset);
     let presets = presets();
     let (_, preset) = presets
@@ -438,7 +450,22 @@ fn build_keymaps(
         .map_err(invalid)?;
     let viewer = Effective::build_for(preset, &cfg.keymap_layers, COMMANDS, Screen::Viewer)
         .map_err(invalid)?;
-    Ok((browse, viewer))
+    // Screen::Dialog fusiona `[dialog] ∪ [global]` (ADR 0006/H1 T1):
+    // `build_for_impl` valida TODO el efectivo fusionado contra
+    // `known_commands`, así que un binding GLOBAL (p. ej. `ctrl+c →
+    // app.quit`) se validaría como `UnknownCommand` si solo pasáramos
+    // `DIALOG_COMMANDS`. La UNIÓN con `COMMANDS` es la opción simple (T1 lo
+    // deja elegido): inofensiva porque cada overlay ALLOWLISTEA solo sus
+    // `dialog.*` soportados (`app::dialog_action` y las resoluciones ad hoc
+    // de este módulo) y descarta cualquier otro comando resuelto.
+    let dialog_known: Vec<&str> = COMMANDS
+        .iter()
+        .copied()
+        .chain(DIALOG_COMMANDS.iter().copied())
+        .collect();
+    let dialog = Effective::build_for(preset, &cfg.keymap_layers, &dialog_known, Screen::Dialog)
+        .map_err(invalid)?;
+    Ok((browse, viewer, dialog))
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // wiring del binario, no API
@@ -448,6 +475,7 @@ async fn run(
     backend: &Backend,
     resolver: &mut Resolver,
     viewer_resolver: &mut Resolver,
+    dialog_resolver: &mut Resolver,
     help_lines: &mut Vec<String>,
     layers: Layers,
     cli_preset: Option<String>,
@@ -662,6 +690,7 @@ async fn run(
                     app,
                     resolver,
                     viewer_resolver,
+                    dialog_resolver,
                     help_lines,
                     &layers,
                     cli_preset.as_deref(),
@@ -684,16 +713,23 @@ async fn run(
                 {
                     app.message = None;
                     if app.theme_picker.is_some() {
-                        on_theme_picker_key(app, key.modifiers, key.code).await;
+                        on_theme_picker_key(app, dialog_resolver, key.modifiers, key.code).await;
                     } else if app.extensions.is_some() {
-                        on_extensions_key(app, backend, key.modifiers, key.code).await;
+                        on_extensions_key(app, backend, dialog_resolver, key.modifiers, key.code)
+                            .await;
                     } else if app.nav_popup.is_some() {
                         // Popup historial/hotlist (spec 2026-07-18): Enter
                         // sobre un item NAVEGA por el flujo de cd normal —
                         // su desenlace toca el relleno como cualquier cd.
-                        let outcome =
-                            on_nav_popup_key(app, backend, &mut events, key.modifiers, key.code)
-                                .await;
+                        let outcome = on_nav_popup_key(
+                            app,
+                            backend,
+                            &mut events,
+                            dialog_resolver,
+                            key.modifiers,
+                            key.code,
+                        )
+                        .await;
                         apply_cd(&mut fill, &mut last_probed, outcome);
                     } else if app.search_dialog.is_some() {
                         // Diálogo Alt+F7 (liveSearch T6): captura imprimibles
@@ -728,9 +764,26 @@ async fn run(
                             resolve_lua_trust(app, lua_host.as_ref(), key.code).await;
                             continue;
                         }
+                        // ctrl+c conserva su significado global (salir),
+                        // como los demás overlays (H1 T2) — ANTES de
+                        // resolver contra el contexto `dialog`, hardcodeado.
+                        if key.modifiers.contains(KeyModifiers::CONTROL)
+                            && key.code == KeyCode::Char('c')
+                        {
+                            app.quit = true;
+                            continue;
+                        }
                         // El modal TOFU (#45) puede NAVEGAR al confiar: su Cd
                         // se aplica igual que el de un comando.
-                        let outcome = on_dialog_key(app, backend, &mut events, key.code).await;
+                        let outcome = on_dialog_key(
+                            app,
+                            backend,
+                            &mut events,
+                            dialog_resolver,
+                            key.modifiers,
+                            key.code,
+                        )
+                        .await;
                         apply_cd(&mut fill, &mut last_probed, outcome);
                     } else {
                         // Esc con un comando Lua en vuelo (BROWSE: sin modal
@@ -953,20 +1006,46 @@ fn apply_theme(app: &mut App, cfg: &config::LoadedConfig) {
 }
 
 /// Traduce las teclas del popup de tema a una acción de dominio (la lógica
-/// vive en `App`, testeable). Fijas como los demás overlays (#24); `ctrl+c`
-/// conserva su salida global. Al confirmar, PERSISTE la elección en el
-/// `norte.toml` del usuario (ADR 0020), sin bloquear el runtime.
-async fn on_theme_picker_key(app: &mut App, mods: KeyModifiers, code: KeyCode) {
-    let action = match (mods, code) {
-        (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
-            app.quit = true;
+/// vive en `App`, testeable) resolviendo contra el contexto `dialog` del
+/// keymap (H1 T2, issue #24 — rebindeable). `ctrl+c` conserva su salida
+/// global, hardcodeado ANTES de resolver, como los demás overlays. `F9`
+/// cierra el picker como atajo ESPECÍFICO de este overlay (no es un binding
+/// `dialog.*` del preset): se mantiene hardcodeado. Al confirmar, PERSISTE
+/// la elección en el `norte.toml` del usuario (ADR 0020), sin bloquear el
+/// runtime.
+async fn on_theme_picker_key(
+    app: &mut App,
+    resolver: &mut Resolver,
+    mods: KeyModifiers,
+    code: KeyCode,
+) {
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return;
+    }
+    if mods.is_empty() && code == KeyCode::F(9) {
+        app.theme_picker_input(PickerAction::Cancel);
+        return;
+    }
+    let Some(chord) = chord_from_crossterm(mods, code) else {
+        return; // tecla no modelada por el keymap: ignorar
+    };
+    let cmd = match resolver.push(chord) {
+        Resolution::Run(cmd) => cmd,
+        // Sin semántica de secuencia definida para overlays (T2): ignorar y
+        // reiniciar el estado de resolución.
+        Resolution::Pending(_) => {
+            resolver.reset();
             return;
         }
-        (KeyModifiers::NONE, KeyCode::Up | KeyCode::Char('k')) => PickerAction::Up,
-        (KeyModifiers::NONE, KeyCode::Down | KeyCode::Char('j')) => PickerAction::Down,
-        (KeyModifiers::NONE, KeyCode::Enter) => PickerAction::Confirm,
-        (KeyModifiers::NONE, KeyCode::Esc | KeyCode::F(9)) => PickerAction::Cancel,
-        _ => return,
+        Resolution::Reset => return,
+    };
+    let action = match cmd.as_str() {
+        "dialog.up" => PickerAction::Up,
+        "dialog.down" => PickerAction::Down,
+        "dialog.confirm" => PickerAction::Confirm,
+        "dialog.cancel" => PickerAction::Cancel,
+        _ => return, // fuera del allowlist de este overlay: inerte
     };
     // El nombre a persistir se toma ANTES de que Confirm cierre el popup.
     let confirmed = (action == PickerAction::Confirm)
@@ -1006,25 +1085,50 @@ async fn on_theme_picker_key(app: &mut App, mods: KeyModifiers, code: KeyCode) {
     }
 }
 
-/// Teclas del overlay de extensiones (M4-P3), fijas como los demás overlays
-/// (#24); `ctrl+c` conserva su salida global. Regla 7: aprobar/activar viaja
-/// al core por el `Backend`; el bool LOCAL solo se togglea tras un OK (feedback
-/// inmediato sin relistar). El id y el estado se toman ANTES del `.await` (el
-/// borrow del `mgr` se suelta durante la llamada al backend y se re-obtiene
-/// después para reflejar el resultado).
-async fn on_extensions_key(app: &mut App, backend: &Backend, mods: KeyModifiers, code: KeyCode) {
+/// Teclas del overlay de extensiones (M4-P3), resueltas contra el contexto
+/// `dialog` del keymap (H1 T2, issue #24); `ctrl+c` conserva su salida
+/// global, hardcodeado ANTES de resolver. Regla 7: aprobar/activar viaja al
+/// core por el `Backend`; el bool LOCAL solo se togglea tras un OK (feedback
+/// inmediato sin relistar). El id y el estado se toman ANTES del `.await`
+/// (el borrow del `mgr` se suelta durante la llamada al backend y se
+/// re-obtiene después para reflejar el resultado). Allowlist de este
+/// overlay: `dialog.up/down/cancel/approve/toggle-enabled` — `approve`
+/// togglea la APROBACIÓN del plugin (decisión 3 del plan H1: "aprobar un
+/// plugin" reutiliza semánticamente `dialog.approve`, antes era la tecla
+/// `a` hardcodeada; ahora `a` es `dialog.add`, que este overlay no soporta).
+async fn on_extensions_key(
+    app: &mut App,
+    backend: &Backend,
+    resolver: &mut Resolver,
+    mods: KeyModifiers,
+    code: KeyCode,
+) {
     if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
         app.quit = true;
         return;
     }
+    if app.extensions.is_none() {
+        return;
+    }
+    let Some(chord) = chord_from_crossterm(mods, code) else {
+        return; // tecla no modelada por el keymap: ignorar
+    };
+    let cmd = match resolver.push(chord) {
+        Resolution::Run(cmd) => cmd,
+        Resolution::Pending(_) => {
+            resolver.reset();
+            return;
+        }
+        Resolution::Reset => return,
+    };
     let Some(mgr) = &mut app.extensions else {
         return;
     };
-    match code {
-        KeyCode::Up | KeyCode::Char('k') => mgr.up(),
-        KeyCode::Down | KeyCode::Char('j') => mgr.down(),
-        KeyCode::Esc | KeyCode::Char('q') => app.extensions = None,
-        KeyCode::Char('a') => {
+    match cmd.as_str() {
+        "dialog.up" => mgr.up(),
+        "dialog.down" => mgr.down(),
+        "dialog.cancel" => app.extensions = None,
+        "dialog.approve" => {
             // Id y estado ANTES del await (suelta el borrow de `mgr`).
             let Some((id, cur)) = mgr.selected().map(|p| (p.id.clone(), p.approved)) else {
                 return;
@@ -1038,7 +1142,7 @@ async fn on_extensions_key(app: &mut App, backend: &Backend, mods: KeyModifiers,
                 Err(e) => app.message = Some(error_message(&e)),
             }
         }
-        KeyCode::Char('e') => {
+        "dialog.toggle-enabled" => {
             let Some((id, cur)) = mgr.selected().map(|p| (p.id.clone(), p.enabled)) else {
                 return;
             };
@@ -1051,20 +1155,27 @@ async fn on_extensions_key(app: &mut App, backend: &Backend, mods: KeyModifiers,
                 Err(e) => app.message = Some(error_message(&e)),
             }
         }
-        _ => {}
+        _ => {} // fuera del allowlist de este overlay: inerte
     }
 }
 
-/// Teclas del popup de navegación (historial `Alt+↓` / hotlist `Ctrl+D`),
-/// fijas como los demás overlays (#24); `ctrl+c` conserva su salida global.
-/// Con `name_input` activo los imprimibles/backspace se capturan ANTES que
-/// nada. Enter sobre un item válido NAVEGA por el flujo de cd normal; si el
-/// cd desde el HISTORIAL falla con `NotFound`, la entrada se retira (spec
+/// Teclas del popup de navegación (historial `Alt+↓` / hotlist `Ctrl+D`);
+/// `ctrl+c` conserva su salida global, hardcodeado ANTES de nada. Con
+/// `name_input` activo (el `a` de hotlist abre un campo para el nombre del
+/// favorito) los imprimibles/backspace se capturan como editor de texto RAW
+/// — H1 T2 decisión: NO es un comando `dialog.*`, es entrada libre, se
+/// queda hardcodeado. Fuera de `name_input`, la tecla resuelve contra el
+/// contexto `dialog` del keymap (H1 T2, issue #24); `add`/`remove` los
+/// filtra el ALLOWLIST de este overlay a `kind == Hotlist` (el historial no
+/// tiene nada que nombrar ni borrar — mismo criterio que antes de H1).
+/// Enter sobre un item válido NAVEGA por el flujo de cd normal; si el cd
+/// desde el HISTORIAL falla con `NotFound`, la entrada se retira (spec
 /// 2026-07-18) — la de hotlist NO (es config del usuario: se avisa y queda).
 async fn on_nav_popup_key(
     app: &mut App,
     backend: &Backend,
     events: &mut EventStream,
+    resolver: &mut Resolver,
     mods: KeyModifiers,
     code: KeyCode,
 ) -> Cd {
@@ -1102,25 +1213,36 @@ async fn on_nav_popup_key(
         }
         return Cd::Cancelled;
     }
-    match code {
-        KeyCode::Up => {
+    let Some(chord) = chord_from_crossterm(mods, code) else {
+        return Cd::Cancelled; // tecla no modelada por el keymap: ignorar
+    };
+    let cmd = match resolver.push(chord) {
+        Resolution::Run(cmd) => cmd,
+        Resolution::Pending(_) => {
+            resolver.reset();
+            return Cd::Cancelled;
+        }
+        Resolution::Reset => return Cd::Cancelled,
+    };
+    match cmd.as_str() {
+        "dialog.up" => {
             app.nav_popup_input(PickerAction::Up);
         }
-        KeyCode::Down => {
+        "dialog.down" => {
             app.nav_popup_input(PickerAction::Down);
         }
-        KeyCode::Esc => {
+        "dialog.cancel" => {
             app.nav_popup_input(PickerAction::Cancel);
         }
-        KeyCode::Char('a') if plain && kind == NavPopupKind::Hotlist => {
+        "dialog.add" if kind == NavPopupKind::Hotlist => {
             app.nav_popup_open_name_input();
         }
-        KeyCode::Char('d') if plain && kind == NavPopupKind::Hotlist => {
+        "dialog.remove" if kind == NavPopupKind::Hotlist => {
             if let Some(name) = app.nav_popup_selected_hotlist_name() {
                 hotlist_remove(app, &name).await;
             }
         }
-        KeyCode::Enter => {
+        "dialog.confirm" => {
             // Confirm sobre un item inválido/vacío es no-op (el popup sigue).
             if let Some(path) = app.nav_popup_input(PickerAction::Confirm) {
                 let pane = app.focus();
@@ -1134,7 +1256,7 @@ async fn on_nav_popup_key(
                 return outcome;
             }
         }
-        _ => {}
+        _ => {} // fuera del allowlist de este overlay (o kind): inerte
     }
     Cd::Cancelled
 }
@@ -1218,6 +1340,7 @@ async fn reload_config(
     app: &mut App,
     resolver: &mut Resolver,
     viewer_resolver: &mut Resolver,
+    dialog_resolver: &mut Resolver,
     help_lines: &mut Vec<String>,
     layers: &Layers,
     cli_preset: Option<&str>,
@@ -1225,7 +1348,7 @@ async fn reload_config(
 ) {
     match config::load_async(layers.clone()).await {
         Ok(cfg) => match build_keymaps(&cfg, cli_preset) {
-            Ok((browse, viewer)) => {
+            Ok((browse, viewer, dialog)) => {
                 // El modo del quick search sigue a la config vigente (solo
                 // afecta a quick searches NUEVOS; uno abierto conserva el
                 // suyo). Mismo criterio que el tema: solo si TODO aplicó.
@@ -1237,15 +1360,18 @@ async fn reload_config(
                 app.openers = cfg.openers.clone();
                 // Bindings `lua:` descartados del keymap de PROYECTO
                 // (seguridad — mismo aviso que en el arranque; máximo
-                // porque `global` se fusiona en ambas pantallas).
+                // porque `global` se fusiona en las tres pantallas, H1 T2
+                // suma dialog).
                 let discarded_lua = browse
                     .discarded_lua_bindings()
-                    .max(viewer.discarded_lua_bindings());
+                    .max(viewer.discarded_lua_bindings())
+                    .max(dialog.discarded_lua_bindings());
                 // La ayuda refleja el keymap VIGENTE: se reconstruye aquí.
                 *help_lines = norte_tui::help::build(&browse, &viewer);
                 app.help = None;
                 *resolver = Resolver::new(browse);
                 *viewer_resolver = Resolver::new(viewer);
+                *dialog_resolver = Resolver::new(dialog);
                 app.pending.clear();
                 app.message = Some(t("msg-config-reloaded"));
                 // El tema también es hot-reloadable (ADR 0020): si falla, el
@@ -1549,17 +1675,18 @@ async fn load_lua_project(app: &mut App, host: &LuaHost, dir: std::path::PathBuf
 }
 
 /// Resuelve el modal [`Modal::TrustLuaInit`] (interceptado en el run loop,
-/// que es quien tiene el host): `y` confía, `n`/Esc deniegan, Enter NO
-/// decide (`dialog_key`). La decisión se PERSISTE en el [`TrustStore`]
+/// que es quien tiene el host — decisión 8 del plan H1: NO migrado al
+/// contexto `dialog`): `y` confía, `n`/Esc deniegan, Enter NO decide
+/// ([`trust_lua_key`]). La decisión se PERSISTE en el [`TrustStore`]
 /// (`spawn_blocking`, regla 2) y, si aprueba, se evalúan los BYTES guardados
 /// en `App::lua_pending_trust` — lo aprobado = lo evaluado (anti-TOCTOU),
 /// jamás una relectura de disco. Un fallo al persistir no bloquea la
 /// decisión de ESTA sesión (solo re-preguntará la próxima): aviso y sigue.
 async fn resolve_lua_trust(app: &mut App, host: Option<&LuaHost>, code: KeyCode) {
-    let Some(modal) = app.modal.clone() else {
+    if app.modal.is_none() {
         return;
-    };
-    let allow = match dialog_key(&modal, code) {
+    }
+    let allow = match trust_lua_key(code) {
         DialogOutcome::Confirmed => true,
         DialogOutcome::Cancelled => false,
         DialogOutcome::Open | DialogOutcome::Retry(_) => return,
@@ -1801,20 +1928,43 @@ async fn refresh_panes(app: &mut App, backend: &Backend, events: &mut EventStrea
     }
 }
 
-/// Teclas de un modal abierto (hardcodeadas, issue #24). `events` es para el
-/// reintento de navegación del modal TOFU (#45): confiar en la host key
-/// relanza el `cd`, que tiene su propio loop de eventos.
+/// Teclas de un modal abierto, resueltas contra el contexto `dialog` del
+/// keymap (H1 T2, issue #24 CERRADO — rebindeable) y filtradas por el
+/// ALLOWLIST del modal concreto ([`dialog_action`]): la semántica de
+/// seguridad vive en código, solo la ASIGNACIÓN tecla→comando es keymap.
+/// `Modal::TrustLuaInit` nunca llega aquí (interceptado antes en el run
+/// loop, decisión 8). `events` es para el reintento de navegación del modal
+/// TOFU (#45): confiar en la host key relanza el `cd`, que tiene su propio
+/// loop de eventos.
 async fn on_dialog_key(
     app: &mut App,
     backend: &Backend,
     events: &mut EventStream,
+    resolver: &mut Resolver,
+    mods: KeyModifiers,
     code: KeyCode,
 ) -> Cd {
     let Some(modal) = app.modal.clone() else {
         return Cd::Cancelled;
     };
-    match dialog_key(&modal, code) {
-        DialogOutcome::Open => {}
+    let Some(chord) = chord_from_crossterm(mods, code) else {
+        return Cd::Cancelled; // tecla no modelada por el keymap: ignorar
+    };
+    let cmd = match resolver.push(chord) {
+        Resolution::Run(cmd) => cmd,
+        // Sin semántica de secuencia definida para overlays (T2): ignorar y
+        // reiniciar el estado de resolución.
+        Resolution::Pending(_) => {
+            resolver.reset();
+            return Cd::Cancelled;
+        }
+        Resolution::Reset => return Cd::Cancelled,
+    };
+    let Some(outcome) = dialog_action(&modal, &cmd) else {
+        return Cd::Cancelled; // comando fuera del allowlist de ESTE modal
+    };
+    match outcome {
+        DialogOutcome::Open => {} // dialog_action nunca lo devuelve: defensivo
         DialogOutcome::Cancelled => {
             app.modal = None;
             app.open_next_pending();
@@ -1832,12 +1982,12 @@ async fn on_dialog_key(
             // cola (quedaría huérfana hasta su TTL). Se difiere al final.
             match modal {
                 Modal::ConfirmDelete { target, permanent } => {
-                    let mode = if permanent {
+                    let del_mode = if permanent {
                         DeleteMode::Permanent
                     } else {
                         DeleteMode::Trash
                     };
-                    match backend.delete(&target, mode).await {
+                    match backend.delete(&target, del_mode).await {
                         Ok(task) => {
                             app.board
                                 .push_full(task, None, (!permanent).then(|| target.clone()));

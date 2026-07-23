@@ -1063,9 +1063,16 @@ pub enum TransferKind {
     Move,
 }
 
-/// Diálogo modal activo. Sus teclas van HARDCODEADAS (son la semántica del
-/// diálogo, no bindings del usuario); el contexto `dialog` del keymap es
-/// deuda anotada (issue #24).
+/// Diálogo modal activo. Sus teclas resuelven contra el contexto `dialog`
+/// del keymap (H1, issue #24 — CERRADO): el run loop pasa la tecla por el
+/// [`Resolver`](crate::keymap::Resolver) del efectivo `dialog` y el comando
+/// resultante se filtra por el ALLOWLIST del modal concreto
+/// ([`dialog_action`]) — la semántica de SEGURIDAD (qué confirma, qué
+/// deniega, qué es inerte) vive en código, jamás en el keymap; solo la
+/// ASIGNACIÓN de tecla→comando es rebindeable. Única excepción:
+/// `Modal::TrustLuaInit`, que el run loop intercepta ANTES (necesita el
+/// `LuaHost`) y resuelve con [`trust_lua_key`] — decisión 8 del plan H1, no
+/// migrado.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Modal {
     /// Confirmación de borrado (F8). `permanent = false` → papelera.
@@ -1154,40 +1161,111 @@ pub enum DialogOutcome {
     Retry(norte_proto::CollisionPolicy),
 }
 
-/// Teclas de diálogo: Esc SIEMPRE cancela; confirmaciones aceptan Enter/y
-/// y rechazan n; la colisión elige o/s/r/n (sin default en Enter: no hay
-/// respuesta inocua que merezca dispararse sola).
+/// ALLOWLIST de `Modal::ConfirmDelete`/`Modal::ConfirmTransfer`: `approve` y
+/// `confirm` ambos aceptan (Enter e `y` funcionan igual que antes de H1),
+/// `deny`/`cancel` rechazan. Excluye deliberadamente los comandos de
+/// colisión/aprobación — un rebind de `w`→`dialog.newer` no hace nada aquí.
+pub const ALLOW_CONFIRM: &[&str] = &[
+    "dialog.approve",
+    "dialog.confirm",
+    "dialog.deny",
+    "dialog.cancel",
+];
+
+/// ALLOWLIST de `Modal::Collision`: overwrite/skip/rename/newer eligen
+/// política y reintentan; `cancel` cierra. Excluye A PROPÓSITO
+/// `dialog.confirm`/`dialog.approve` — no hay respuesta inocua que Enter
+/// deba disparar sola (decisión 4 del plan H1, igual que antes de H1).
+pub const ALLOW_COLLISION: &[&str] = &[
+    "dialog.overwrite",
+    "dialog.skip",
+    "dialog.rename",
+    "dialog.newer",
+    "dialog.cancel",
+];
+
+/// ALLOWLIST de `Modal::ApproveAgentOp`: SOLO `approve` confirma; `deny` y
+/// `cancel` deniegan (cerrar ES denegar, fail-safe). Excluye A PROPÓSITO
+/// `dialog.confirm` — aprobar una mutación de AGENTE no es una respuesta
+/// inocua que Enter deba disparar sola (decisión 2 del plan H1).
+pub const ALLOW_APPROVAL: &[&str] = &["dialog.approve", "dialog.deny", "dialog.cancel"];
+
+/// ALLOWLIST de `Modal::TrustHostKey` (TOFU SSH, #45): mismo principio que
+/// [`ALLOW_APPROVAL`] — SOLO `approve` confía, `dialog.confirm` excluido a
+/// propósito (Enter jamás confía en una host key sin verificar).
+pub const ALLOW_TRUST_HOST: &[&str] = &["dialog.approve", "dialog.deny", "dialog.cancel"];
+
+/// Mapea un comando `dialog.*` YA RESUELTO (por el
+/// [`Resolver`](crate::keymap::Resolver) del efectivo `dialog`, H1 #24) al
+/// desenlace del modal activo, filtrando por el ALLOWLIST del modal
+/// concreto: `None` = comando fuera de allowlist, la tecla es INERTE para
+/// este modal (p. ej. Enter — `dialog.confirm` — sobre una aprobación de
+/// agente). La semántica de seguridad vive aquí, en código, jamás en el
+/// keymap: un rebind solo cambia qué TECLA dispara `dialog.approve`, nunca
+/// qué modales aceptan `dialog.approve` como confirmación.
+///
+/// `Modal::TrustLuaInit` no tiene allowlist — decisión 8 del plan H1, se
+/// resuelve aparte con [`trust_lua_key`] — y devuelve `None` aquí siempre.
 #[must_use]
-pub fn dialog_key(modal: &Modal, code: crossterm::event::KeyCode) -> DialogOutcome {
-    use crossterm::event::KeyCode as K;
+pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
     use norte_proto::CollisionPolicy as P;
-    if code == K::Esc {
-        return DialogOutcome::Cancelled;
-    }
     match modal {
-        Modal::ConfirmDelete { .. } | Modal::ConfirmTransfer { .. } => match code {
-            K::Enter | K::Char('y') => DialogOutcome::Confirmed,
-            K::Char('n') => DialogOutcome::Cancelled,
-            _ => DialogOutcome::Open,
-        },
-        Modal::Collision { .. } => match code {
-            K::Char('o') => DialogOutcome::Retry(P::Overwrite),
-            K::Char('s') => DialogOutcome::Retry(P::Skip),
-            K::Char('r') => DialogOutcome::Retry(P::RenameAuto),
-            K::Char('n') => DialogOutcome::Retry(P::Newer),
-            _ => DialogOutcome::Open,
-        },
-        // Decisiones de SEGURIDAD (aprobar una op de agente, o confiar en una
-        // host key TOFU #45): solo `y` confirma, `n`/Esc cancelan (con el Esc
-        // global de arriba; cerrar ES denegar — fail-safe), Enter NUNCA
-        // confirma (sin default peligroso que se dispare solo).
-        Modal::ApproveAgentOp { .. } | Modal::TrustHostKey { .. } | Modal::TrustLuaInit { .. } => {
-            match code {
-                K::Char('y') => DialogOutcome::Confirmed,
-                K::Char('n') => DialogOutcome::Cancelled,
-                _ => DialogOutcome::Open,
+        Modal::ConfirmDelete { .. } | Modal::ConfirmTransfer { .. } => {
+            if !ALLOW_CONFIRM.contains(&cmd) {
+                return None;
             }
+            Some(match cmd {
+                "dialog.approve" | "dialog.confirm" => DialogOutcome::Confirmed,
+                _ => DialogOutcome::Cancelled, // dialog.deny | dialog.cancel
+            })
         }
+        Modal::Collision { .. } => {
+            if !ALLOW_COLLISION.contains(&cmd) {
+                return None;
+            }
+            Some(match cmd {
+                "dialog.overwrite" => DialogOutcome::Retry(P::Overwrite),
+                "dialog.skip" => DialogOutcome::Retry(P::Skip),
+                "dialog.rename" => DialogOutcome::Retry(P::RenameAuto),
+                "dialog.newer" => DialogOutcome::Retry(P::Newer),
+                _ => DialogOutcome::Cancelled, // dialog.cancel
+            })
+        }
+        Modal::ApproveAgentOp { .. } => {
+            if !ALLOW_APPROVAL.contains(&cmd) {
+                return None;
+            }
+            Some(match cmd {
+                "dialog.approve" => DialogOutcome::Confirmed,
+                _ => DialogOutcome::Cancelled, // dialog.deny | dialog.cancel
+            })
+        }
+        Modal::TrustHostKey { .. } => {
+            if !ALLOW_TRUST_HOST.contains(&cmd) {
+                return None;
+            }
+            Some(match cmd {
+                "dialog.approve" => DialogOutcome::Confirmed,
+                _ => DialogOutcome::Cancelled, // dialog.deny | dialog.cancel
+            })
+        }
+        Modal::TrustLuaInit { .. } => None,
+    }
+}
+
+/// Resuelve el modal [`Modal::TrustLuaInit`] (decisión 8 del plan H1: NO
+/// migrado al contexto `dialog` — es una ruta de resolución ESPECIAL que el
+/// run loop intercepta ANTES de consultar el keymap, porque necesita el
+/// `LuaHost` que solo vive ahí). Mismo contrato de seguridad que el resto de
+/// diálogos TOFU: `y` confía, `n`/Esc deniegan, Enter NO decide (sin default
+/// peligroso que se dispare solo).
+#[must_use]
+pub fn trust_lua_key(code: crossterm::event::KeyCode) -> DialogOutcome {
+    use crossterm::event::KeyCode as K;
+    match code {
+        K::Char('y') => DialogOutcome::Confirmed,
+        K::Char('n') | K::Esc => DialogOutcome::Cancelled,
+        _ => DialogOutcome::Open,
     }
 }
 
@@ -1803,11 +1881,11 @@ mod tests {
         assert!(display.starts_with('!'), "badge prefijo: {display}");
     }
 
-    /// TOFU (#45): confiar es decisión de seguridad — solo `y` confía; `n` y
-    /// Esc cancelan; Enter NO confía (sin default peligroso).
+    /// TOFU (#45): confiar es decisión de seguridad — `dialog.approve`
+    /// confía; `dialog.deny`/`dialog.cancel` cancelan; `dialog.confirm`
+    /// (Enter) es INERTE (safety pin H1: sin default peligroso).
     #[test]
-    fn trust_host_key_solo_y_confia() {
-        use crossterm::event::KeyCode as K;
+    fn trust_host_key_solo_approve_confia() {
         let m = Modal::TrustHostKey {
             host: "h".into(),
             port: Some(22),
@@ -1815,31 +1893,31 @@ mod tests {
             fingerprint: "SHA256:AAAA".into(),
             dir: root(),
         };
-        assert_eq!(dialog_key(&m, K::Char('y')), DialogOutcome::Confirmed);
-        assert_eq!(dialog_key(&m, K::Char('n')), DialogOutcome::Cancelled);
-        assert_eq!(dialog_key(&m, K::Esc), DialogOutcome::Cancelled);
         assert_eq!(
-            dialog_key(&m, K::Enter),
-            DialogOutcome::Open,
-            "Enter jamás confía en una host key"
+            dialog_action(&m, "dialog.approve"),
+            Some(DialogOutcome::Confirmed)
+        );
+        for cmd in ["dialog.deny", "dialog.cancel"] {
+            assert_eq!(dialog_action(&m, cmd), Some(DialogOutcome::Cancelled));
+        }
+        assert_eq!(
+            dialog_action(&m, "dialog.confirm"),
+            None,
+            "Enter (dialog.confirm) jamás confía en una host key"
         );
     }
 
-    /// TOFU Lua (M4): mismo contrato que la host key — ejecutar el script de
-    /// un repo ajeno es decisión de seguridad: solo `y` confía; `n` y Esc
-    /// deniegan; Enter NO decide.
+    /// TOFU Lua (M4, decisión 8 del plan H1: NO migrado): mismo contrato de
+    /// seguridad que el resto — solo `y` confía; `n` y Esc deniegan; Enter
+    /// NO decide.
     #[test]
     fn trust_lua_init_solo_y_confia_y_enter_no_decide() {
         use crossterm::event::KeyCode as K;
-        let m = Modal::TrustLuaInit {
-            path: "repo/.norte/init.lua".into(),
-            hash_abbrev: "ab12cd34".into(),
-        };
-        assert_eq!(dialog_key(&m, K::Char('y')), DialogOutcome::Confirmed);
-        assert_eq!(dialog_key(&m, K::Char('n')), DialogOutcome::Cancelled);
-        assert_eq!(dialog_key(&m, K::Esc), DialogOutcome::Cancelled);
+        assert_eq!(trust_lua_key(K::Char('y')), DialogOutcome::Confirmed);
+        assert_eq!(trust_lua_key(K::Char('n')), DialogOutcome::Cancelled);
+        assert_eq!(trust_lua_key(K::Esc), DialogOutcome::Cancelled);
         assert_eq!(
-            dialog_key(&m, K::Enter),
+            trust_lua_key(K::Enter),
             DialogOutcome::Open,
             "Enter jamás aprueba ejecutar un script ajeno"
         );

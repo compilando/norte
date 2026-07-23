@@ -88,6 +88,32 @@ pub const COMMANDS: &[&str] = &[
     "pane.names-encoding",
 ];
 
+/// Los comandos del contexto `dialog` (H1, issue #24) — la lista CERRADA
+/// que el TUI pasa a [`Effective::build_for`] para `Screen::Dialog`. Cada
+/// overlay (modal, theme picker, extensions, nav popup) declara en código
+/// su propio ALLOWLIST de cuáles soporta (`app::dialog_action` y las
+/// resoluciones ad hoc en `main.rs`); la semántica de seguridad vive ahí,
+/// jamás aquí. Coincide 1:1 con las secciones `[dialog]` de los tres
+/// presets compartidos (`orthodox`/`vim`/`cua`) — un comando nuevo en el
+/// preset sin su entrada aquí falla a construir con `UnknownCommand`.
+pub const DIALOG_COMMANDS: &[&str] = &[
+    "dialog.confirm",
+    "dialog.cancel",
+    "dialog.approve",
+    "dialog.deny",
+    "dialog.overwrite",
+    "dialog.skip",
+    "dialog.rename",
+    "dialog.newer",
+    "dialog.up",
+    "dialog.down",
+    "dialog.page-up",
+    "dialog.page-down",
+    "dialog.add",
+    "dialog.toggle-enabled",
+    "dialog.remove",
+];
+
 /// Id de Fluent con la descripción de un comando (`app.quit` →
 /// `help-cmd-app-quit`). La suite OBLIGA a que exista en ambos locales
 /// para TODO comando de [`COMMANDS`]: un comando nuevo sin descripción
@@ -183,6 +209,30 @@ mod tests {
             r.push(Chord::new(Mods::default(), KeyCode::F(5))),
             Resolution::Run("pane.copy".to_owned())
         );
+    }
+
+    /// H1 T2: los tres presets construyen `Screen::Dialog` con el
+    /// `known_commands` UNIÓN (`COMMANDS` ∪ `DIALOG_COMMANDS` —
+    /// `build_for_impl` valida TODO el efectivo fusionado, incluido
+    /// `[global]`, contra la lista que le pasa el caller; T1 lo confirmó).
+    /// `y` resuelve `dialog.approve` en los tres (preset idéntico).
+    #[test]
+    fn dialog_commands_se_resuelven_en_los_tres_presets() {
+        let known: Vec<&str> = COMMANDS
+            .iter()
+            .copied()
+            .chain(DIALOG_COMMANDS.iter().copied())
+            .collect();
+        for (nombre, preset) in presets() {
+            let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog)
+                .unwrap_or_else(|e| panic!("preset {nombre}: {e}"));
+            let mut r = Resolver::new(eff);
+            assert_eq!(
+                r.push(Chord::new(Mods::default(), KeyCode::Char('y'))),
+                Resolution::Run("dialog.approve".to_owned()),
+                "preset {nombre}"
+            );
+        }
     }
 
     #[test]
