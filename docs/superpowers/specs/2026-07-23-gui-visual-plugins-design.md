@@ -111,6 +111,38 @@ palette   = "phosphor-green"                          # or "phosphor-amber", or 
   keeps AA contrast on the default presets; high-contrast themes may declare
   `[effects]` absent and the GUI adds none.
 
+## Phase GP — typography & look-and-feel polish (added 2026-07-24)
+
+User-requested: the GUI "está muy poco trabajado" — it uses GPUI's default
+font everywhere, a fixed row height, and improvised paddings. Goal: a
+VSCode-grade baseline of visual craft. Scope:
+
+- **Typography**: file listings, viewer, and task strip render in a
+  MONOSPACE font (file names and hex dumps are tabular data); chrome
+  (headers, modals, banners) in a UI font. New optional `[ui]` settings in
+  `norte-config`: `font` (UI family), `mono_font` (listing family),
+  `font_size` (base px, clamped). Absent = platform-sensible defaults with
+  a documented fallback chain; an uninstalled family falls back silently
+  (fontconfig) — `doctor`/banner may warn later, not in scope. Schema
+  golden regenerates (additive optional fields).
+- **Metrics rhythm**: row height derived from the resolved line height
+  instead of a hardcoded const; consistent spacing scale (one small set of
+  spacing constants used everywhere: pane padding, header padding, gaps);
+  header/status strips get breathing room; viewer line height tuned for
+  density.
+- **Fine detail**: hover state on rows (subtle bg shift via theme-derived
+  color, no new roles — computed from existing ones); pointer cursor on
+  clickable rows; focused-pane border treatment kept but aligned to the
+  spacing scale; modal gets consistent padding/radius; selected row corner
+  rounding consistent with the bezel aesthetic; truncation behavior
+  verified with the hostile-names corpus (no regression).
+- Non-goals here: animations (G2), icons, ligature config, per-theme font
+  overrides (a theme sets colors, not fonts — fonts are user ergonomics,
+  config not theme; recorded as a decision).
+
+Testing: chrome/metrics helpers unit-tested; hostile-name rendering pinned;
+manual smoke with screenshots on default + retro-crt + nord.
+
 ## Phase G2 — motion (opt-in)
 
 - A frame timer exists only while at least one animated effect is active and
