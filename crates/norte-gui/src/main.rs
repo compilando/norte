@@ -247,7 +247,25 @@ impl NorteGui {
         // único lugar donde este tema puede cambiar es aquí, en el arranque
         // (grep de `self.theme`/`theme:` en el resto del archivo — no hay
         // selector de tema en caliente en esta GUI).
-        let effects = effects::EffectsV1::from_theme(&theme);
+        //
+        // MINOR de review: antes las claves `[effects]` degradadas SOLO
+        // salían por un `eprintln!` — invisible al lanzar desde un desktop
+        // entry sin terminal adjunta. `from_theme` ahora devuelve también la
+        // lista de warnings (clave + motivo corto, NUNCA el valor
+        // malformado — ver rustdoc de `effects::record`); cada una entra al
+        // MISMO acumulador de banner de arranque que ya usan los errores de
+        // config/tema/keymap, vía la clave Fluent nueva
+        // `gui-banner-effects-key-skipped`, con el texto saneado por
+        // `banner_safe` (los nombres de clave desconocida SON contenido de
+        // un `.toml` de usuario).
+        let (effects, effects_warnings) = effects::EffectsV1::from_theme(&theme);
+        for w in &effects_warnings {
+            let msg = norte_i18n::ta(
+                "gui-banner-effects-key-skipped",
+                &[("key", banner_safe(w).as_str())],
+            );
+            startup_banner = Some(push_banner(startup_banner, msg));
+        }
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
@@ -2212,6 +2230,16 @@ fn glowed(c: gpui::Rgba, g: Option<effects::Glow>) -> gpui::Rgba {
 fn paint_scanlines(window: &mut Window, bounds: Bounds<Pixels>, s: Option<effects::Scanlines>) {
     let Some(s) = s else { return };
     let spacing = px(f32::from(s.spacing_px));
+    // Belt-and-suspenders (BLOCKER de review): `s.spacing_px` ya pasó por
+    // `clamp_u8([2, 16])` en `effects::decode_scanlines`, que en teoría
+    // nunca deja pasar 0 — pero esa garantía vive lejos de este bucle, y
+    // `while y < bottom { ... y += spacing }` con `spacing == px(0.0)`
+    // colgaría la ventana (congelación por datos de tema editables por el
+    // usuario). Corte defensivo local, independiente de que el piso de
+    // arriba se mantenga.
+    if spacing < px(1.0) {
+        return;
+    }
     let color = hsla(0.0, 0.0, 0.0, s.opacity);
     let bottom = bounds.origin.y + bounds.size.height;
     let mut y = bounds.origin.y;
@@ -3744,7 +3772,7 @@ mod tests {
     #[test]
     fn sin_effects_no_hay_overlay() {
         let t = norte_theme::Theme::preset_default();
-        assert!(effects::EffectsV1::from_theme(&t).is_none());
+        assert!(effects::EffectsV1::from_theme(&t).0.is_none());
     }
 
     /// G1 Task 4 pin: el preset `retro-crt` (Task 2) trae las 4 claves —
@@ -3756,7 +3784,9 @@ mod tests {
         let t = norte_theme::Theme::preset("retro-crt")
             .unwrap()
             .expect("preset registrado");
-        let e = effects::EffectsV1::from_theme(&t).expect("retro-crt trae [effects]");
+        let e = effects::EffectsV1::from_theme(&t)
+            .0
+            .expect("retro-crt trae [effects]");
         assert!(e.scanlines.is_some(), "scanlines");
         assert!(e.vignette.is_some(), "vignette");
         assert!(e.glow.is_some(), "glow");

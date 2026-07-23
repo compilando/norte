@@ -114,8 +114,22 @@ being rejected:
 | `glow.strength`        | `0.0` – `1.0`  |
 | `bezel.radius_px`      | `0` – `32`     |
 
-`scanlines.opacity` is capped at `0.35` so the overlay can never wash out
-text contrast, even at maximum strength. `glow.strength` brightens
+Each subfield is optional on its own: a table like `scanlines = { opacity =
+0.2 }` (no `spacing_px`) is valid, and the omitted subfield uses these
+defaults:
+
+| Subfield                | Default |
+| ------------------------ | ------- |
+| `scanlines.opacity`      | `0.1`   |
+| `scanlines.spacing_px`   | `3`     |
+| `vignette.strength`      | `0.3`   |
+| `glow.strength`          | `0.4`   |
+| `bezel.radius_px`        | `10`    |
+| `bezel.inset`            | `false` |
+
+`scanlines.opacity` is capped at `0.35`, which keeps AA text contrast for the
+default preset; on dark themes the tight case is an inverse pair — dark text
+on a bright accent color — at the opacity cap. `glow.strength` brightens
 foreground colors toward white; it does not currently produce true shader
 bloom. `bezel.inset` accepts `true` or `false` only.
 

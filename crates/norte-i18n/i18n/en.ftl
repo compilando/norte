@@ -284,3 +284,4 @@ gui-banner-theme-io = theme { $spec }: { $error }
 gui-banner-theme-parse = theme { $spec }: { $detail }
 gui-banner-config-io = configuration { $path }: { $error }
 gui-banner-config-parse = configuration { $path }: { $detail }
+gui-banner-effects-key-skipped = theme effects: skipped { $key }

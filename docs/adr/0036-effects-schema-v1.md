@@ -66,6 +66,20 @@ bezel     = { radius_px = 12, inset = true }
 | `glow.strength`        | `[0.0, 1.0]`   |
 | `bezel.radius_px`      | `[0, 32]`      |
 
+Every subfield above is independently optional. When a known key's table
+(`[effects.scanlines]`, etc.) is present but a given subfield is absent, the
+subfield falls back to its documented default below, which is then clamped
+like any explicit value:
+
+| Subfield                | Default |
+| ------------------------ | ------- |
+| `scanlines.opacity`      | `0.1`   |
+| `scanlines.spacing_px`   | `3`     |
+| `vignette.strength`      | `0.3`   |
+| `glow.strength`          | `0.4`   |
+| `bezel.radius_px`        | `10`    |
+| `bezel.inset`            | `false` |
+
 The `scanlines.opacity` upper bound is an accessibility guard, not an
 aesthetic choice: at the worst case (maximum opacity, default-preset text
 colors) the overlay must still keep AA text contrast. The other ranges bound

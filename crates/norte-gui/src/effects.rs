@@ -140,13 +140,27 @@ impl EffectsV1 {
     /// section is malformed — a fully-degraded section renders as "no
     /// effects" but is still recorded as "present" for
     /// [`norte_theme::Theme::has_effects`] callers.
+    ///
+    /// Alongside the parsed value, returns the list of warnings produced
+    /// while interpreting the section: one entry per degraded key, each
+    /// naming the key and a short reason (never the malformed value itself
+    /// — see the [module docs](self)). Empty when `[effects]` is absent or
+    /// every present key was well-formed. Callers that only need the parsed
+    /// value can ignore the second element; `norte-gui`'s startup path
+    /// forwards each entry to the localized startup banner (`main.rs`) so a
+    /// theme problem is visible even when stderr is not (e.g. launched from
+    /// a desktop entry).
     #[must_use]
-    pub fn from_theme(theme: &norte_theme::Theme) -> Option<Self> {
-        let value = theme.effects.as_ref()?;
+    pub fn from_theme(theme: &norte_theme::Theme) -> (Option<Self>, Vec<String>) {
+        let mut warnings = Vec::new();
+
+        let Some(value) = theme.effects.as_ref() else {
+            return (None, warnings);
+        };
 
         let Some(table) = value.as_table() else {
-            warn("[effects] section is not a table: treating as empty");
-            return Some(Self::default());
+            record(&mut warnings, "effects", "not a table");
+            return (Some(Self::default()), warnings);
         };
 
         let mut unknown: Vec<&str> = table
@@ -154,20 +168,27 @@ impl EffectsV1 {
             .map(String::as_str)
             .filter(|k| !KNOWN_KEYS.contains(k))
             .collect();
-        if !unknown.is_empty() {
-            unknown.sort_unstable();
-            warn(&format!(
-                "[effects] unknown key(s) skipped: {}",
-                unknown.join(", ")
-            ));
+        unknown.sort_unstable();
+        for key in unknown {
+            record(&mut warnings, key, "unknown key");
         }
 
-        Some(Self {
-            scanlines: table.get("scanlines").and_then(decode_scanlines),
-            vignette: table.get("vignette").and_then(decode_vignette),
-            glow: table.get("glow").and_then(decode_glow),
-            bezel: table.get("bezel").and_then(decode_bezel),
-        })
+        let effects = Self {
+            scanlines: table
+                .get("scanlines")
+                .and_then(|v| decode_scanlines(v, &mut warnings)),
+            vignette: table
+                .get("vignette")
+                .and_then(|v| decode_vignette(v, &mut warnings)),
+            glow: table
+                .get("glow")
+                .and_then(|v| decode_glow(v, &mut warnings)),
+            bezel: table
+                .get("bezel")
+                .and_then(|v| decode_bezel(v, &mut warnings)),
+        };
+
+        (Some(effects), warnings)
     }
 }
 
@@ -183,7 +204,11 @@ enum Field<T> {
 fn num_field(table: &toml::Table, key: &str) -> Field<f64> {
     match table.get(key) {
         None => Field::Absent,
-        Some(v) => match v.as_float().or_else(|| v.as_integer().map(|i| i as f64)) {
+        Some(v) => match v
+            .as_float()
+            .or_else(|| v.as_integer().map(|i| i as f64))
+            .filter(|f| f.is_finite())
+        {
             Some(f) => Field::Valid(f),
             None => Field::Invalid,
         },
@@ -213,16 +238,16 @@ fn clamp_u8(v: f64, range: (u8, u8)) -> u8 {
     clamped
 }
 
-fn decode_scanlines(value: &toml::Value) -> Option<Scanlines> {
+fn decode_scanlines(value: &toml::Value, warnings: &mut Vec<String>) -> Option<Scanlines> {
     let Some(t) = value.as_table() else {
-        warn("[effects] key skipped: wrong shape: scanlines");
+        record(warnings, "scanlines", "wrong shape");
         return None;
     };
     let opacity = match num_field(t, "opacity") {
         Field::Absent => f64::from(DEFAULT_SCANLINES_OPACITY),
         Field::Valid(f) => f,
         Field::Invalid => {
-            warn("[effects] key skipped: wrong shape: scanlines.opacity");
+            record(warnings, "scanlines.opacity", "wrong shape");
             return None;
         }
     };
@@ -230,7 +255,7 @@ fn decode_scanlines(value: &toml::Value) -> Option<Scanlines> {
         Field::Absent => f64::from(DEFAULT_SCANLINES_SPACING),
         Field::Valid(f) => f,
         Field::Invalid => {
-            warn("[effects] key skipped: wrong shape: scanlines.spacing_px");
+            record(warnings, "scanlines.spacing_px", "wrong shape");
             return None;
         }
     };
@@ -240,16 +265,16 @@ fn decode_scanlines(value: &toml::Value) -> Option<Scanlines> {
     })
 }
 
-fn decode_vignette(value: &toml::Value) -> Option<Vignette> {
+fn decode_vignette(value: &toml::Value, warnings: &mut Vec<String>) -> Option<Vignette> {
     let Some(t) = value.as_table() else {
-        warn("[effects] key skipped: wrong shape: vignette");
+        record(warnings, "vignette", "wrong shape");
         return None;
     };
     let strength = match num_field(t, "strength") {
         Field::Absent => f64::from(DEFAULT_VIGNETTE_STRENGTH),
         Field::Valid(f) => f,
         Field::Invalid => {
-            warn("[effects] key skipped: wrong shape: vignette.strength");
+            record(warnings, "vignette.strength", "wrong shape");
             return None;
         }
     };
@@ -258,16 +283,16 @@ fn decode_vignette(value: &toml::Value) -> Option<Vignette> {
     })
 }
 
-fn decode_glow(value: &toml::Value) -> Option<Glow> {
+fn decode_glow(value: &toml::Value, warnings: &mut Vec<String>) -> Option<Glow> {
     let Some(t) = value.as_table() else {
-        warn("[effects] key skipped: wrong shape: glow");
+        record(warnings, "glow", "wrong shape");
         return None;
     };
     let strength = match num_field(t, "strength") {
         Field::Absent => f64::from(DEFAULT_GLOW_STRENGTH),
         Field::Valid(f) => f,
         Field::Invalid => {
-            warn("[effects] key skipped: wrong shape: glow.strength");
+            record(warnings, "glow.strength", "wrong shape");
             return None;
         }
     };
@@ -276,16 +301,16 @@ fn decode_glow(value: &toml::Value) -> Option<Glow> {
     })
 }
 
-fn decode_bezel(value: &toml::Value) -> Option<Bezel> {
+fn decode_bezel(value: &toml::Value, warnings: &mut Vec<String>) -> Option<Bezel> {
     let Some(t) = value.as_table() else {
-        warn("[effects] key skipped: wrong shape: bezel");
+        record(warnings, "bezel", "wrong shape");
         return None;
     };
     let radius_px = match num_field(t, "radius_px") {
         Field::Absent => f64::from(DEFAULT_BEZEL_RADIUS),
         Field::Valid(f) => f,
         Field::Invalid => {
-            warn("[effects] key skipped: wrong shape: bezel.radius_px");
+            record(warnings, "bezel.radius_px", "wrong shape");
             return None;
         }
     };
@@ -293,7 +318,7 @@ fn decode_bezel(value: &toml::Value) -> Option<Bezel> {
         Field::Absent => DEFAULT_BEZEL_INSET,
         Field::Valid(b) => b,
         Field::Invalid => {
-            warn("[effects] key skipped: wrong shape: bezel.inset");
+            record(warnings, "bezel.inset", "wrong shape");
             return None;
         }
     };
@@ -304,42 +329,56 @@ fn decode_bezel(value: &toml::Value) -> Option<Bezel> {
 }
 
 /// A malformed `[effects]` key is user-actionable (typo or unsupported shape
-/// in a hand-edited or newer-schema theme), so — unlike this crate's
-/// `NORTE_GUI_DEBUG`-gated diagnostics — this always goes to stderr. See the
-/// [module docs](self) for why `norte-gui` uses `eprintln!` here instead of
-/// `tracing`.
-fn warn(msg: &str) {
-    eprintln!("[norte-gui] {msg}");
+/// in a hand-edited or newer-schema theme). Two channels carry it: an
+/// unconditional `eprintln!` (unlike this crate's `NORTE_GUI_DEBUG`-gated
+/// diagnostics — see the [module docs](self) for why `norte-gui` uses
+/// `eprintln!` here instead of `tracing`) for a terminal-launched norte, and
+/// an entry appended to `warnings` for [`EffectsV1::from_theme`]'s caller to
+/// route through the startup banner (`main.rs`) — the only channel visible
+/// when norte is launched from a desktop entry with no attached terminal.
+/// `reason` is always a short fixed phrase, never the malformed TOML value.
+fn record(warnings: &mut Vec<String>, key: &str, reason: &str) {
+    eprintln!("[norte-gui] [effects] key skipped: {reason}: {key}");
+    warnings.push(format!("{key}: {reason}"));
 }
 
 #[cfg(test)]
 mod tests {
-    use super::EffectsV1;
+    use super::{
+        BEZEL_RADIUS_RANGE, EffectsV1, GLOW_STRENGTH_RANGE, SCANLINES_OPACITY_RANGE,
+        SCANLINES_SPACING_RANGE, VIGNETTE_STRENGTH_RANGE, clamp_f32, clamp_u8,
+    };
 
     #[test]
     fn tema_sin_effects_es_none() {
         let t = norte_theme::Theme::preset_default();
-        assert!(EffectsV1::from_theme(&t).is_none());
+        let (e, warnings) = EffectsV1::from_theme(&t);
+        assert!(e.is_none());
+        assert!(warnings.is_empty(), "sin [effects], sin warnings");
     }
 
     #[test]
     fn retro_crt_parsea_con_valores_del_preset() {
         let t = norte_theme::Theme::preset("retro-crt").unwrap().unwrap();
-        let e = EffectsV1::from_theme(&t).expect("retro trae effects");
+        let (e, warnings) = EffectsV1::from_theme(&t);
+        let e = e.expect("retro trae effects");
         let s = e.scanlines.expect("scanlines");
         assert!((s.opacity - 0.12).abs() < f32::EPSILON);
         assert_eq!(s.spacing_px, 3);
         assert!(e.vignette.is_some() && e.glow.is_some() && e.bezel.is_some());
+        assert!(warnings.is_empty(), "preset bien formado, sin warnings");
     }
 
-    /// Clamps: fuera de rango SATURA, jamás error (ADR 0036).
+    /// Clamps: fuera de rango SATURA, jamás error (ADR 0036) — y saturar NO
+    /// es un warning (distinto de un tipo/forma inválidos).
     #[test]
     fn valores_fuera_de_rango_se_clampan() {
         let t = norte_theme::Theme::from_toml(
             "[effects]\nscanlines = { opacity = 9.0, spacing_px = 1 }\nvignette = { strength = -3.0 }\n",
         )
         .unwrap();
-        let e = EffectsV1::from_theme(&t).unwrap();
+        let (e, warnings) = EffectsV1::from_theme(&t);
+        let e = e.unwrap();
         let s = e.scanlines.unwrap();
         assert!(
             (s.opacity - 0.35).abs() < f32::EPSILON,
@@ -350,6 +389,7 @@ mod tests {
             e.vignette.unwrap().strength.abs() < f32::EPSILON,
             "strength clampa a 0"
         );
+        assert!(warnings.is_empty(), "clamp silencioso, no es warning");
     }
 
     /// Clave desconocida o tipo malo: WARN + skip de ESA clave, el resto vive.
@@ -359,9 +399,22 @@ mod tests {
             "[effects]\nscanlines = \"muchas\"\nvignette = { strength = 0.2 }\nfuturo = { x = 1 }\n",
         )
         .unwrap();
-        let e = EffectsV1::from_theme(&t).expect("vignette sobrevive");
+        let (e, warnings) = EffectsV1::from_theme(&t);
+        let e = e.expect("vignette sobrevive");
         assert!(e.scanlines.is_none(), "scanlines mal tipado: skip");
         assert!(e.vignette.is_some(), "vignette válido: vive");
+        assert!(
+            warnings.iter().any(|w| w.starts_with("scanlines")),
+            "el warning nombra la clave scanlines: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.starts_with("futuro")),
+            "el warning nombra la clave desconocida futuro: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().all(|w| !w.contains("muchas")),
+            "el warning NUNCA lleva el valor malformado: {warnings:?}"
+        );
     }
 
     /// [effects] presente pero TODO degradado: Some(default) — modo effects
@@ -369,7 +422,68 @@ mod tests {
     #[test]
     fn seccion_presente_todo_degradado_es_some_vacio() {
         let t = norte_theme::Theme::from_toml("[effects]\nscanlines = 3\n").unwrap();
-        let e = EffectsV1::from_theme(&t).expect("Some aunque vacío");
+        let (e, warnings) = EffectsV1::from_theme(&t);
+        let e = e.expect("Some aunque vacío");
         assert_eq!(e, EffectsV1::default());
+        assert!(!warnings.is_empty(), "el degrade se reporta igual");
+    }
+
+    /// BLOCKER de review: `nan`/`inf` en TOML no deben colar por los clamps
+    /// (`f64::clamp` propaga NaN, `NaN as u8` satura a 0 — por debajo del
+    /// piso `[2, 16]` de `spacing_px`, lo que colgaría `paint_scanlines` en
+    /// `main.rs`: `while y < bottom { ... y += px(0) }` nunca termina). Un
+    /// valor no finito debe tomar la rama `Invalid` de `num_field`, igual
+    /// que un tipo incorrecto: la clave se descarta entera, sin panic.
+    #[test]
+    fn nan_no_rompe_el_clamp() {
+        let t = norte_theme::Theme::from_toml(
+            "[effects]\nscanlines = { opacity = nan, spacing_px = nan }\nvignette = { strength = inf }\n",
+        )
+        .unwrap();
+        let (e, warnings) = EffectsV1::from_theme(&t);
+        let e = e.expect("Some aunque degradado: [effects] SÍ estaba presente");
+        assert!(e.scanlines.is_none(), "opacity/spacing_px NaN: no cuela");
+        assert!(e.vignette.is_none(), "strength inf: no cuela");
+        assert!(
+            warnings.iter().any(|w| w.starts_with("scanlines.opacity")),
+            "warning nombra scanlines.opacity: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.starts_with("vignette.strength")),
+            "warning nombra vignette.strength: {warnings:?}"
+        );
+    }
+
+    /// Los helpers de clamp jamás emiten fuera de rango para entradas
+    /// finitas, por extremas que sean (defensa directa, sin pasar por TOML).
+    #[test]
+    fn clamp_helpers_finito_extremo_nunca_sale_de_rango() {
+        for v in [f64::MAX, f64::MIN, -0.0, 0.0] {
+            let o = clamp_f32(v, SCANLINES_OPACITY_RANGE);
+            assert!(
+                (SCANLINES_OPACITY_RANGE.0..=SCANLINES_OPACITY_RANGE.1).contains(&o),
+                "opacity fuera de rango para v={v}: {o}"
+            );
+            let vg = clamp_f32(v, VIGNETTE_STRENGTH_RANGE);
+            assert!(
+                (VIGNETTE_STRENGTH_RANGE.0..=VIGNETTE_STRENGTH_RANGE.1).contains(&vg),
+                "vignette fuera de rango para v={v}: {vg}"
+            );
+            let gl = clamp_f32(v, GLOW_STRENGTH_RANGE);
+            assert!(
+                (GLOW_STRENGTH_RANGE.0..=GLOW_STRENGTH_RANGE.1).contains(&gl),
+                "glow fuera de rango para v={v}: {gl}"
+            );
+            let sp = clamp_u8(v, SCANLINES_SPACING_RANGE);
+            assert!(
+                (SCANLINES_SPACING_RANGE.0..=SCANLINES_SPACING_RANGE.1).contains(&sp),
+                "spacing fuera de rango para v={v}: {sp}"
+            );
+            let br = clamp_u8(v, BEZEL_RADIUS_RANGE);
+            assert!(
+                (BEZEL_RADIUS_RANGE.0..=BEZEL_RADIUS_RANGE.1).contains(&br),
+                "bezel radius fuera de rango para v={v}: {br}"
+            );
+        }
     }
 }
