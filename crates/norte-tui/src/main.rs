@@ -224,7 +224,7 @@ async fn main() -> Result<()> {
     // Idioma: NORTE_LANG explícito > [ui] lang de la config > entorno.
     let lang = if std::env::var("NORTE_LANG").is_ok_and(|v| !v.is_empty()) {
         norte_i18n::Lang::from_env()
-    } else if let Some(l) = &cfg.ui_lang {
+    } else if let Some(l) = &cfg.common.ui_lang {
         norte_i18n::Lang::negotiate(Some(l))
     } else {
         norte_i18n::Lang::from_env()
@@ -266,7 +266,7 @@ async fn main() -> Result<()> {
     apply_theme(&mut app, &cfg);
     // Copia de la hotlist en el App (spec 2026-07-18): la fuente del popup
     // `Ctrl+D`; se refresca en cada hot-reload OK (`reload_config`).
-    app.hotlist = cfg.hotlist.clone();
+    app.hotlist = cfg.common.hotlist.clone();
     // Openers declarativos (#28): fuente de `pane.open` (F4).
     app.openers = cfg.openers.clone();
     // Canales del modo daemon (None en embebido): tasks de otros frontends
@@ -346,18 +346,18 @@ async fn make_backend(
     cli_daemon: bool,
     cli_socket: Option<std::path::PathBuf>,
 ) -> Result<Backend> {
-    let want_daemon = cli_daemon || cfg.daemon_mode == Some(config::DaemonMode::Daemon);
+    let want_daemon = cli_daemon || cfg.common.daemon_mode == Some(config::DaemonMode::Daemon);
     if !want_daemon {
         let engine = Engine::new();
         // #95.2: límites anti-bomba de archives desde `[archive]` (capas de
         // usuario, jamás la de proyecto). Antes de cualquier navegación: los
         // providers compuestos se cachean con los límites de su primer uso.
-        if cfg.archive_max_entries.is_some()
-            || cfg.archive_max_decompressed_bytes.is_some()
-            || cfg.archive_max_nesting.is_some()
+        if cfg.common.archive_max_entries.is_some()
+            || cfg.common.archive_max_decompressed_bytes.is_some()
+            || cfg.common.archive_max_nesting.is_some()
         {
             let mut limits = norte_core::ArchiveLimits::default();
-            if let Some(n) = cfg.archive_max_entries {
+            if let Some(n) = cfg.common.archive_max_entries {
                 // Saturación HACIA ARRIBA (solo posible en 32-bit con un
                 // valor > u32::MAX): jamás recorta un límite a un valor
                 // pequeño por wrap — pero que no sea silenciosa.
@@ -369,10 +369,10 @@ async fn make_backend(
                     usize::MAX
                 });
             }
-            if let Some(b) = cfg.archive_max_decompressed_bytes {
+            if let Some(b) = cfg.common.archive_max_decompressed_bytes {
                 limits.max_decompressed_bytes = b;
             }
-            if let Some(n) = cfg.archive_max_nesting {
+            if let Some(n) = cfg.common.archive_max_nesting {
                 limits.max_nesting = n;
             }
             engine.set_archive_limits(limits);
@@ -395,7 +395,7 @@ async fn make_backend(
     #[cfg(unix)]
     {
         use norte_core::backend::remote::RemoteBackend;
-        let socket = match cli_socket.or_else(|| cfg.daemon_socket.clone()) {
+        let socket = match cli_socket.or_else(|| cfg.common.daemon_socket.clone()) {
             Some(s) => s,
             None => tokio::task::spawn_blocking(|| norte_core::daemon::default_socket_path(None))
                 .await
@@ -432,7 +432,7 @@ fn build_keymaps(
     cfg: &config::LoadedConfig,
     cli_preset: Option<&str>,
 ) -> Result<(Effective, Effective), KeymapsError> {
-    let preset_name = cli_preset.unwrap_or(&cfg.preset);
+    let preset_name = cli_preset.unwrap_or(&cfg.common.preset);
     let presets = presets();
     let (_, preset) = presets
         .iter()
@@ -955,7 +955,7 @@ async fn run(
 /// por un tema malo.
 fn apply_theme(app: &mut App, cfg: &config::LoadedConfig) {
     let depth = norte_tui::theme::detect_depth();
-    match norte_tui::theme::resolve(cfg.ui_theme.as_deref(), depth) {
+    match norte_tui::theme::resolve(cfg.common.ui_theme.as_deref(), depth) {
         Ok(theme) => app.theme = theme,
         Err(e) => {
             app.theme = norte_tui::theme::TuiTheme::default();
@@ -1246,7 +1246,7 @@ async fn reload_config(
                 *quick_mode = cfg.quick_search_mode;
                 // La copia de hotlist también (un popup abierto conserva su
                 // snapshot hasta reabrirse — items congelados a propósito).
-                app.hotlist.clone_from(&cfg.hotlist);
+                app.hotlist.clone_from(&cfg.common.hotlist);
                 // Openers (#28): recargados con el resto de la config.
                 app.openers = cfg.openers.clone();
                 // Bindings `lua:` descartados del keymap de PROYECTO

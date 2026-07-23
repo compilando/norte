@@ -16,7 +16,7 @@ fn dir_with(files: &[(&str, &str)]) -> tempfile::TempDir {
 fn defaults_sin_ninguna_capa() {
     let cfg = load(&Layers { dirs: vec![] }).expect("defaults");
     assert_eq!(
-        cfg.preset, "orthodox",
+        cfg.common.preset, "orthodox",
         "default compilado (decisión 2026-07-10)"
     );
     assert!(cfg.keymap_layers.is_empty());
@@ -45,7 +45,7 @@ fn el_ultimo_gana_por_campo_y_las_capas_de_keymap_se_acumulan() {
     };
     let cfg = load(&layers).expect("carga");
     assert_eq!(
-        cfg.preset, "vim",
+        cfg.common.preset, "vim",
         "el preset del usuario pisa al del sistema"
     );
     assert_eq!(
@@ -94,7 +94,7 @@ fn dir_sin_archivos_no_molesta() {
         ],
     })
     .expect("capas ausentes = defaults");
-    assert_eq!(cfg.preset, "orthodox");
+    assert_eq!(cfg.common.preset, "orthodox");
 }
 
 /// Regla 3 para el poll del watcher: detecta cambios y soltar el `Watch`
@@ -191,9 +191,13 @@ fn archive_limits_ultimo_gana_y_proyecto_no_los_toca() {
         ],
     };
     let cfg = load(&layers).expect("carga");
-    assert_eq!(cfg.archive_max_entries, Some(50), "usuario pisa sistema");
     assert_eq!(
-        cfg.archive_max_decompressed_bytes,
+        cfg.common.archive_max_entries,
+        Some(50),
+        "usuario pisa sistema"
+    );
+    assert_eq!(
+        cfg.common.archive_max_decompressed_bytes,
         Some(4096),
         "campo no pisado conserva la capa inferior"
     );

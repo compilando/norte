@@ -17,6 +17,7 @@ anyhow.workspace = true
 crossterm = { workspace = true, features = ["event-stream"] }
 futures.workspace = true
 mlua.workspace = true
+norte-config = { workspace = true, features = ["watch"] }
 norte-core.workspace = true
 norte-encoding.workspace = true
 norte-frontend.workspace = true
@@ -24,10 +25,6 @@ norte-i18n.workspace = true
 norte-proto.workspace = true
 norte-theme.workspace = true
 norte-vfs-local.workspace = true
-# Persistir `[ui].theme` desde el popup preservando comentarios/formato del
-# norte.toml del usuario (toml no re-emite; toml_edit sí).
-toml_edit.workspace = true
-notify.workspace = true
 schemars = { workspace = true, features = ["derive"], optional = true }
 serde.workspace = true
 thiserror.workspace = true
@@ -65,7 +62,7 @@ harness = false
 # fuera del binario final (ADR 0007). `KeymapFile` vive en `norte-frontend`
 # desde GUI-c T2 — su derive `JsonSchema` está tras la MISMA feature ahí, así
 # que hay que reenviarla o `schema_for!` no compila.
-schema = ["dep:schemars", "norte-frontend/schema"]
+schema = ["dep:schemars", "norte-config/schema", "norte-frontend/schema"]
 
 [[test]]
 name = "schema"

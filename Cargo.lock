@@ -4436,6 +4436,7 @@ dependencies = [
  "futures",
  "insta",
  "mlua",
+ "norte-config",
  "norte-core",
  "norte-encoding",
  "norte-frontend",
@@ -4445,7 +4446,6 @@ dependencies = [
  "norte-theme",
  "norte-vfs",
  "norte-vfs-local",
- "notify",
  "proptest",
  "ratatui",
  "schemars 1.2.1",
@@ -4457,7 +4457,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml 0.9.12+spec-1.1.0",
- "toml_edit",
  "unicode-width",
 ]
 

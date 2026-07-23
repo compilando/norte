@@ -78,7 +78,10 @@ fn bench_cold_start(c: &mut Criterion) {
         b.iter(|| {
             let cfg = load(&Layers { dirs: vec![] }).expect("config");
             let presets = presets();
-            let (_, preset) = presets.iter().find(|(n, _)| *n == cfg.preset).unwrap();
+            let (_, preset) = presets
+                .iter()
+                .find(|(n, _)| *n == cfg.common.preset)
+                .unwrap();
             let browse =
                 Effective::build_for(preset, &cfg.keymap_layers, COMMANDS, Screen::Browse).unwrap();
             let viewer =
