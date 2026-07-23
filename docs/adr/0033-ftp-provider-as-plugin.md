@@ -109,14 +109,32 @@ unlike a third-party plugin loaded from disk).
   contract requirement; filed as debt.
 - **Socket timeout — BOUNDED by `OP_TIMEOUT`.** The wasmtime epoch deadline only
   traps *guest* code, not a guest blocked inside a wasip2 socket syscall. The
-  adapter now wraps every `spawn_blocking` (`PluginProvider::call`, the `read`
-  stream, and `PluginByteSink::call`) in `tokio::time::timeout(OP_TIMEOUT)` (30 s)
-  and, on expiry, sets a shared `Arc<AtomicBool> dead` and returns
-  `ProviderUnavailable { retryable: true }`; subsequent ops check `dead` and fail
-  fast without blocking on the mutex the hung thread still holds. **Residual
-  cost:** the timed-out `spawn_blocking` worker thread leaks (wasip2 socket I/O is
-  not cancellable) and keeps the instance mutex until the whole `PluginRuntime`
-  drops; the human reconnects (a fresh provider = fresh instance). Accepted.
+  adapter runs every guest call through `run_guarded`: it takes the instance lock
+  **asynchronously** (`tokio::sync::Mutex::lock_owned().await`), runs the sync
+  guest call in `spawn_blocking`, and wraps the whole thing in
+  `tokio::time::timeout(OP_TIMEOUT)` (30 s). On expiry it sets a shared
+  `Arc<AtomicBool> dead` and returns `ProviderUnavailable { retryable: true }`;
+  subsequent ops check `dead` and fail fast. Because the lock wait is `.await`
+  (cancellable), an op that times out *waiting for the lock* just drops its future
+  — it does **not** park a blocking-pool thread. So a stalled socket leaks
+  **exactly one** worker thread (the one holding the lock inside the hung guest
+  call), not one per concurrent waiter.
+  **Residual debt:** (1) that one leaked thread (wasip2 socket I/O is
+  uncancellable) keeps the owned lock until the `PluginRuntime` drops; the human
+  reconnects. (2) *Cross-session accumulation:* each stalled remote session leaks
+  one thread; repeated evict→reconnect→stall churn against a hostile server
+  accumulates toward tokio's default 512-thread blocking pool, which — if
+  exhausted — would stall all `spawn_blocking` work daemon-wide. Mitigation
+  (future): a dedicated bounded blocking pool for plugin socket I/O, or a cap on
+  concurrent live plugin-provider instances. (3) The scheduler's concurrency
+  permits are keyed by *scheme* (`"ftp"`), not authority, so ≤4 stalled ops to one
+  host can queue FTP ops to *other* hosts for up to `OP_TIMEOUT`. (2)/(3) tracked
+  as debt; (1) accepted.
+- **`ByteSink::Drop` best-effort abort (debt).** Dropping a sink without
+  commit/abort runs a synchronous `writer_abort` (a control-channel `rm`) under a
+  non-blocking `try_lock`. It is skipped when the provider is already `dead`; but
+  a *live-but-stalled* server could still block the `Drop` on the socket (same
+  uncancellable-I/O rationale). Best-effort, accepted.
 - **Capability honesty (debt).** The adapter cannot project `RESUME`/`APPEND`
   (the WIT `writer` has no resume), so the guest declares neither and the shared
   contract's resume cases self-skip. Restoring resume needs a resumable-writer

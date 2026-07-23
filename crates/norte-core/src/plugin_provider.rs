@@ -14,8 +14,8 @@
 //! gobierna el deadline de CPU del guest).
 
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -27,6 +27,7 @@ use norte_vfs::proto::{
     ByteRange, Capabilities, CapabilityFlags, ConflictKind, Entry, EntryKind, Error, Segment, VPath,
 };
 use norte_vfs::{ByteSink, ByteStream, EntryStream, Provider, SymlinkKind};
+use tokio::sync::Mutex;
 
 /// Timeout por operación del guest (M2, ADR 0033): una llamada bloqueada en un
 /// socket wasip2 no la corta el epoch deadline (sólo traba CPU del guest). Al
@@ -165,38 +166,63 @@ impl PluginProvider {
         p.segments().map(<[u8]>::to_vec).collect()
     }
 
-    /// Ejecuta una llamada al guest en `spawn_blocking` (regla 2), serializada
-    /// por el `Mutex`. Un `JoinError` (panic del hilo bloqueante) se mapea a
-    /// `Internal`.
+    /// Ejecuta una llamada al guest bajo el lock + timeout (M2). Ver
+    /// [`run_guarded`].
     async fn call<T, F>(&self, f: F) -> Result<T, Error>
     where
         T: Send + 'static,
         F: FnOnce(&mut ProviderInstance) -> Result<T, Error> + Send + 'static,
     {
-        // Provider ya muerto por un timeout previo (M2): falla rápido sin tocar
-        // el `Mutex` (que el hilo colgado retiene para siempre).
-        if self.dead.load(Ordering::Relaxed) {
-            return Err(Error::ProviderUnavailable { retryable: true });
-        }
-        let inst = Arc::clone(&self.inst);
-        let dead = Arc::clone(&self.dead);
-        let fut = tokio::task::spawn_blocking(move || {
-            let mut guard = inst.lock().map_err(|_| Error::Internal { panic: true })?;
-            f(&mut guard)
-        });
-        let Ok(join) = tokio::time::timeout(self.op_timeout, fut).await else {
-            // El hilo sigue colgado reteniendo el Mutex: marca muerto el provider
-            // para que las ops futuras no bloqueen (M2, leak aceptado: I/O de
-            // socket wasip2 no cancelable; el humano reconecta).
-            dead.store(true, Ordering::Relaxed);
-            return Err(Error::ProviderUnavailable { retryable: true });
-        };
-        join.map_err(|_| Error::Internal { panic: true })?
+        run_guarded(&self.inst, &self.dead, self.op_timeout, f).await
     }
 }
 
-/// Traduce el error lógico del guest a la taxonomía del protocolo. `other` y
-/// `other` cae a `Internal` no-panic (categoría gruesa, sin inventar detalle);
+/// Corre `f` sobre el guest bajo el lock ASÍNCRONO + un timeout por-op (M2).
+///
+/// El `Mutex` es de tokio: la espera del lock es `.await` (CANCELABLE), así que
+/// una op que expira esperando el lock sólo suelta su futuro — NO parquea un
+/// hilo. Sólo el `spawn_blocking` que ejecuta el guest COLGADO puede leak-ear UN
+/// hilo (I/O de socket wasip2 no cancelable), y sólo uno: los demás esperan
+/// async. Al expirar se marca `dead` y toda op futura falla rápido sin tocar el
+/// lock. El `OwnedMutexGuard` se mueve al hilo bloqueante y se suelta ahí tras
+/// el guest, de modo que el lock queda tomado exactamente mientras el guest corre.
+async fn run_guarded<T, F>(
+    inst: &Arc<Mutex<ProviderInstance>>,
+    dead: &Arc<AtomicBool>,
+    op_timeout: Duration,
+    f: F,
+) -> Result<T, Error>
+where
+    T: Send + 'static,
+    F: FnOnce(&mut ProviderInstance) -> Result<T, Error> + Send + 'static,
+{
+    // Provider ya muerto por un timeout previo (M2): falla rápido sin esperar el
+    // lock (que el hilo colgado retiene para siempre).
+    if dead.load(Ordering::Relaxed) {
+        return Err(Error::ProviderUnavailable { retryable: true });
+    }
+    let inst = Arc::clone(inst);
+    let work = async move {
+        let mut guard = inst.lock_owned().await; // espera ASÍNCRONA, cancelable
+        tokio::task::spawn_blocking(move || {
+            let r = f(&mut guard);
+            drop(guard); // libera el lock en este hilo tras el guest
+            r
+        })
+        .await
+    };
+    let Ok(join) = tokio::time::timeout(op_timeout, work).await else {
+        // El guest sigue colgado en el socket (M2): marca muerto el provider para
+        // que las ops futuras no bloqueen (leak aceptado de UN hilo por socket
+        // estancado; el humano reconecta).
+        dead.store(true, Ordering::Relaxed);
+        return Err(Error::ProviderUnavailable { retryable: true });
+    };
+    join.map_err(|_| Error::Internal { panic: true })?
+}
+
+/// Traduce el error lógico del guest a la taxonomía del protocolo. `other` cae a
+/// `Internal` no-panic (categoría gruesa, sin inventar detalle);
 /// `conflict`/`no-space` (alcanzables en el camino de escritura) se mapean fiel.
 fn map_vfs_error(e: provider_iface::VfsError) -> Error {
     use provider_iface::VfsError as V;
@@ -355,23 +381,15 @@ impl Provider for PluginProvider {
                     }
                     None => CHUNK,
                 };
-                if dead.load(Ordering::Relaxed) {
-                    return Err(Error::ProviderUnavailable { retryable: true });
-                }
-                let inst2 = Arc::clone(&inst);
                 let segs2 = segs.clone();
-                let fut = tokio::task::spawn_blocking(move || {
-                    let mut g = inst2.lock().map_err(|_| Error::Internal { panic: true })?;
+                // Mismo lock async + timeout + dead que `call` (M2): una lectura
+                // colgada leak-ea a lo sumo UN hilo, no parquea a los que esperan.
+                let chunk: Vec<u8> = run_guarded(&inst, &dead, timeout, move |g| {
                     g.read(&segs2, off, want)
                         .map_err(|e| map_runtime_error(&e))?
                         .map_err(map_vfs_error)
-                });
-                let Ok(join) = tokio::time::timeout(timeout, fut).await else {
-                    // Lectura colgada en el socket (M2): marca muerto y corta.
-                    dead.store(true, Ordering::Relaxed);
-                    return Err(Error::ProviderUnavailable { retryable: true });
-                };
-                let chunk: Vec<u8> = join.map_err(|_| Error::Internal { panic: true })??;
+                })
+                .await?;
                 if chunk.is_empty() {
                     return Ok(None); // EOF
                 }
@@ -481,9 +499,19 @@ impl Drop for PluginByteSink {
     fn drop(&mut self) {
         // Best-effort (contrato de `ByteSink`): soltar sin commit/abort limpia
         // el staging del guest. Síncrono (las llamadas al guest lo son) con
-        // `try_lock` — jamás bloquea: en Drop no hay ninguna op en vuelo sobre
-        // este sink, y si por lo que fuera el mutex estuviera tomado, se cede el
+        // `try_lock` — no bloquea en el mutex: si estuviera tomado se cede el
         // handle a la tabla de recursos del store hasta que el provider muera.
+        //
+        // NO es asíncrono, así que NO puede envolverse en `tokio::time::timeout`
+        // (M2): `writer_abort` emite un `rm` de control por el socket wasip2. Si
+        // el provider ya está MUERTO por un timeout previo, se salta — el hilo
+        // colgado retiene el estado y limpiar es fútil. Un servidor VIVO-pero-
+        // -estancado aún podría bloquear este `Drop` en el socket (mismo motivo
+        // de I/O no cancelable que el leak aceptado de M2); deuda residual.
+        if self.dead.load(Ordering::Relaxed) {
+            self.writer.take(); // suelta el handle sin tocar el socket
+            return;
+        }
         if let Some(w) = self.writer.take()
             && let Ok(mut g) = self.inst.try_lock()
         {
@@ -494,8 +522,8 @@ impl Drop for PluginByteSink {
 }
 
 impl PluginByteSink {
-    /// Ejecuta una op sobre el writer en `spawn_blocking` (regla 2), con el mismo
-    /// dead-check + timeout que [`PluginProvider::call`] (M2).
+    /// Ejecuta una op sobre el writer bajo el lock + timeout (M2): delega en
+    /// [`run_guarded`], el mismo camino que [`PluginProvider::call`].
     async fn call<F>(
         inst: &Arc<Mutex<ProviderInstance>>,
         dead: &Arc<AtomicBool>,
@@ -505,20 +533,7 @@ impl PluginByteSink {
     where
         F: FnOnce(&mut ProviderInstance) -> Result<(), Error> + Send + 'static,
     {
-        if dead.load(Ordering::Relaxed) {
-            return Err(Error::ProviderUnavailable { retryable: true });
-        }
-        let inst = Arc::clone(inst);
-        let dead = Arc::clone(dead);
-        let fut = tokio::task::spawn_blocking(move || {
-            let mut guard = inst.lock().map_err(|_| Error::Internal { panic: true })?;
-            f(&mut guard)
-        });
-        let Ok(join) = tokio::time::timeout(op_timeout, fut).await else {
-            dead.store(true, Ordering::Relaxed);
-            return Err(Error::ProviderUnavailable { retryable: true });
-        };
-        join.map_err(|_| Error::Internal { panic: true })?
+        run_guarded(inst, dead, op_timeout, f).await
     }
 }
 

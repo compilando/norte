@@ -580,7 +580,11 @@ fn parse_mlsd_facts(line: &str) -> Option<(EntryKind, Option<u64>, &str)> {
 /// anti-overwrite (nunca como nombre real): `perms links owner group size mon day
 /// time name` → el nombre es todo tras el 8º campo separado por whitespace.
 /// `None` si la línea tiene <9 campos (p. ej. una cabecera `total N`). Los
-/// nombres con espacio inicial se pierden (límite conocido de `ls -l`).
+/// nombres con espacio inicial se pierden (límite conocido de `ls -l`): eso deja
+/// UN hueco en la salvaguarda anti-overwrite — un fichero ≥4 GiB con nombre de
+/// espacio inicial en un servidor SIN MLSD no casaría `child` y podría
+/// sobrescribirse. Intersección de 3 precondiciones raras + inherente a `ls -l`
+/// (suppaftp lo pierde igual); el fix real es MLSD (que sí preserva el espacio).
 fn ls_l_name(line: &str) -> Option<&str> {
     // Salta 8 campos (cada uno = token + su whitespace siguiente).
     let mut rest = line;
@@ -590,11 +594,7 @@ fn ls_l_name(line: &str) -> Option<&str> {
         rest = &trimmed[end..];
     }
     let name = rest.trim_start();
-    if name.is_empty() {
-        None
-    } else {
-        Some(name)
-    }
+    if name.is_empty() { None } else { Some(name) }
 }
 
 /// `StatEntry` desde un `File` de suppaftp (rama LIST; el size sale del `usize`
@@ -703,7 +703,7 @@ export!(FtpProvider);
 
 #[cfg(test)]
 mod parse_tests {
-    use super::{ls_l_name, parse_mlsd_facts, EntryKind};
+    use super::{EntryKind, ls_l_name, parse_mlsd_facts};
 
     #[test]
     fn mlsd_facts_size_u64_beyond_4gib() {
