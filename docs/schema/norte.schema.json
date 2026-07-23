@@ -1,5 +1,78 @@
 {
   "$defs": {
+    "AiProviderEntry": {
+      "additionalProperties": false,
+      "description": "One `[ai.providers.<name>]` entry.",
+      "properties": {
+        "base_url": {
+          "default": null,
+          "description": "Base URL (required for `openai-compat`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "`anthropic` | `ollama` | `openai-compat`. An invalid value is not\nrejected at parse time — same pattern as `[ui] quick_search` — the AI\ngate rejects it at use, where the diagnostic can name the provider.",
+          "type": "string"
+        },
+        "model": {
+          "description": "Model id as the provider expects it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "model"
+      ],
+      "type": "object"
+    },
+    "AiSection": {
+      "additionalProperties": false,
+      "description": "The `[ai]` section of `norte.toml` (ADR 0031). All off by default.",
+      "properties": {
+        "denied_prefixes": {
+          "default": [],
+          "description": "Prefixes whose content/names never leave the process. Wire strings;\nvalidated to `VPath` during merge ([`crate::load::load`]). Merge is\na UNION across layers, not last-wins: a deny never disappears by\nadding a layer (ADR 0035).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": null,
+          "description": "AI enabled. `None`/`false` = the gate rejects every operation.\n`Option` (not a plain `bool`) so layer merge distinguishes \"absent\"\n(inherit the lower layer's value) from \"explicitly false\".",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "local_only": {
+          "default": null,
+          "description": "Local-only mode: reject remote providers (spec §9). `Option` for the\nsame absent-vs-false reason as `enabled` above.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "providers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AiProviderEntry"
+          },
+          "description": "Declared providers (`[ai.providers.<name>]`). By-name, later-layer-wins\nmerge: a provider redeclared in a higher layer replaces the lower\nlayer's entry for that name, other names are untouched.",
+          "type": "object"
+        },
+        "rename_provider": {
+          "default": null,
+          "description": "Provider name used for AI rename. By-name, later-layer-wins merge\n(same as other `Option` scalars in this schema).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ArchiveSection": {
       "additionalProperties": false,
       "description": "The `[archive]` section of `norte.toml` (#95.2): local anti-bomb limits\nfor browsing zip/tar/tar.gz containers. Absent values keep the compiled\ndefaults. Applied at startup on the embedded engine only — a container\nthat exceeds them fails with `LimitExceeded`, never silently truncates.",
@@ -79,7 +152,7 @@
     },
     "HotlistEntry": {
       "additionalProperties": false,
-      "description": "One `[[hotlist]]` entry as stored in `norte.toml`.\n\n`path` contains an unvalidated wire value such as `scheme://...`, including\nvalid remote schemes. [`load`] validates it as a [`VPath`] while merging\nlayers. One invalid entry is handled independently and does not prevent the\nrest of `norte.toml` from loading.",
+      "description": "One `[[hotlist]]` entry as stored in `norte.toml`.\n\n`path` contains an unvalidated wire value such as `scheme://...`, including\nvalid remote schemes. [`crate::load::load`] validates it as a `VPath`\nwhile merging layers. One invalid entry is handled independently and does\nnot prevent the rest of `norte.toml` from loading.",
       "properties": {
         "name": {
           "description": "Name displayed in the `Ctrl+D` popup.",
@@ -125,7 +198,7 @@
         },
         "quick_search": {
           "default": null,
-          "description": "Quick-search mode for `/`: `\"filter\"` narrows the listing (the default),\nwhile `\"jump\"` moves the cursor without changing the listing.\n\n[`load`] rejects other values so its diagnostic can include the source\nconfiguration path. Invalid values never silently fall back.",
+          "description": "Quick-search mode for `/`: `\"filter\"` narrows the listing (the default),\nwhile `\"jump\"` moves the cursor without changing the listing.\n\n[`crate::load::load`] rejects other values so its diagnostic can\ninclude the source configuration path. Invalid values never silently\nfall back.",
           "type": [
             "string",
             "null"
@@ -147,6 +220,10 @@
   "additionalProperties": false,
   "description": "General configuration from `norte.toml`.",
   "properties": {
+    "ai": {
+      "$ref": "#/$defs/AiSection",
+      "description": "AI subsystem settings (`[ai]`, ADR 0031/0035). Honored from\nSystem+User layers only — never Project (fail-closed, same carve-out\nas `[archive]`)."
+    },
     "archive": {
       "$ref": "#/$defs/ArchiveSection",
       "description": "Archive-provider limits (`[archive]`, #95.2)."
@@ -156,7 +233,7 @@
       "description": "Daemon settings."
     },
     "hotlist": {
-      "description": "Favourite directories shown by `Ctrl+D`.\n\nEntries accumulate across layers instead of replacing lower-layer\nvalues. The project layer is excluded while [`load`] merges the list.\nAn absent value contributes no favourites from that layer.",
+      "description": "Favourite directories shown by `Ctrl+D`.\n\nEntries accumulate across layers instead of replacing lower-layer\nvalues. The project layer is excluded while [`crate::load::load`]\nmerges the list. An absent value contributes no favourites from that\nlayer.",
       "items": {
         "$ref": "#/$defs/HotlistEntry"
       },
