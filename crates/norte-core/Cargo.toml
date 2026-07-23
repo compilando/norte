@@ -19,6 +19,7 @@ base64.workspace = true
 # Chunks del ByteStream que reensambla PluginProvider (#30).
 bytes.workspace = true
 futures.workspace = true
+norte-config.workspace = true
 norte-connect.workspace = true
 # Modelo de plugins (M4-P3): catálogo + manifiesto que el PluginRegistry expone.
 norte-plugin-host.workspace = true

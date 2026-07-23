@@ -4272,6 +4272,7 @@ dependencies = [
  "libunftp",
  "memchr",
  "norte-ai",
+ "norte-config",
  "norte-connect",
  "norte-encoding",
  "norte-index",

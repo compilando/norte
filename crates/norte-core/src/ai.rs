@@ -10,9 +10,10 @@ use norte_ai::{AiError, ChatMessage, ChatRequest};
 use norte_proto::{Segment, VPath};
 use serde::Deserialize;
 
-/// Config del subsistema IA, capa de USUARIO de `norte.toml` (la de proyecto
-/// se ignora fail-closed, mismo criterio que `[archive]`/policy). Todo OFF
-/// por defecto (spec §9: IA opt-in).
+/// Config del subsistema IA, mezclada en capas Sistema+Usuario de
+/// `norte.toml` (ADR 0035; la capa de proyecto se ignora fail-closed, mismo
+/// criterio que `[archive]`/policy). Todo OFF por defecto (spec §9: IA
+/// opt-in).
 #[derive(Debug, Clone, Default)]
 pub struct AiConfig {
     /// IA habilitada. `false` (default) = el gate rechaza toda operación.
@@ -43,6 +44,15 @@ pub struct AiProviderConfig {
 }
 
 /// Error al cargar/validar `[ai]`.
+///
+/// Desde la migración a `norte-config` (ADR 0035) el parseo/merge de
+/// `[ai]` vive en `norte-config::load`; sus errores llegan envueltos en
+/// [`AiConfigError::Io`] (TOML roto, un `denied_prefix` inválido, tipos
+/// incorrectos — todos son `norte_config::ConfigError` en origen). `Toml` y
+/// `BadPrefix` ya no se construyen desde este crate, pero se conservan: son
+/// parte del contrato público (`#[non_exhaustive]`, quitarlas sería un
+/// cambio de semver visible) y `BadPrefix` sigue documentando ese modo de
+/// fallo para quien matchee el enum.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum AiConfigError {
@@ -52,67 +62,14 @@ pub enum AiConfigError {
     /// Un `denied_prefix` no parsea como `VPath`.
     #[error("invalid denied_prefix `{0}`")]
     BadPrefix(String),
-    /// Error de lectura del fichero (que no sea `NotFound`).
+    /// Error de lectura del fichero, o de `norte-config` (TOML roto,
+    /// `denied_prefix` inválido, tipos incorrectos) desde que el parseo se
+    /// delegó (ADR 0035) — no solo `NotFound`.
     #[error("io error reading norte.toml: {0}")]
     Io(#[from] std::io::Error),
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct NorteTomlAi {
-    ai: AiSection,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct AiSection {
-    enabled: bool,
-    local_only: bool,
-    denied_prefixes: Vec<String>,
-    rename_provider: Option<String>,
-    providers: std::collections::BTreeMap<String, RawProvider>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawProvider {
-    kind: String,
-    model: String,
-    base_url: Option<String>,
-}
-
 impl AiConfig {
-    /// Parsea la sección `[ai]` de un `norte.toml`. Fail-loud: TOML roto o un
-    /// `denied_prefix` inválido abortan (un prefijo denegado que se cuela por
-    /// un typo es un fallo de seguridad silencioso).
-    ///
-    /// # Errors
-    /// [`AiConfigError`] si el TOML es inválido o un prefijo no parsea.
-    pub fn parse(s: &str) -> Result<Self, AiConfigError> {
-        let cfg: NorteTomlAi = toml::from_str(s)?;
-        let a = cfg.ai;
-        let mut denied = Vec::with_capacity(a.denied_prefixes.len());
-        for p in &a.denied_prefixes {
-            denied.push(VPath::parse(p).map_err(|_| AiConfigError::BadPrefix(p.clone()))?);
-        }
-        let providers = a
-            .providers
-            .into_iter()
-            .map(|(name, r)| AiProviderConfig {
-                name,
-                kind: r.kind,
-                model: r.model,
-                base_url: r.base_url,
-            })
-            .collect();
-        Ok(Self {
-            enabled: a.enabled,
-            local_only: a.local_only,
-            denied_prefixes: denied,
-            rename_provider: a.rename_provider,
-            providers,
-        })
-    }
-
     /// El [`AiProviderConfig`] para el rename (el `rename_provider`
     /// nombrado, o el único si hay exactamente uno). `None` si no se puede
     /// determinar.
@@ -125,18 +82,47 @@ impl AiConfig {
         }
     }
 
-    /// Carga desde `config_dir()/norte.toml` (capa usuario; ausente =
-    /// default deshabilitado). SÍNCRONA (arranque): `spawn_blocking` en async.
+    /// Build from the already-merged `[ai]` settings (norte-config).
+    fn from_settings(s: norte_config::AiSettings) -> Self {
+        Self {
+            enabled: s.enabled,
+            local_only: s.local_only,
+            denied_prefixes: s.denied_prefixes,
+            rename_provider: s.rename_provider,
+            providers: s
+                .providers
+                .into_iter()
+                .map(|(name, r)| AiProviderConfig {
+                    name,
+                    kind: r.kind,
+                    model: r.model,
+                    base_url: r.base_url,
+                })
+                .collect(),
+        }
+    }
+
+    /// Layered load (ADR 0035): System+User layers, Project ignored
+    /// fail-closed. SYNC (startup): `spawn_blocking` in async contexts.
     ///
     /// # Errors
-    /// Error de lectura (que no sea `NotFound`) o de parseo/validación.
+    /// [`AiConfigError`] if any layer's TOML is invalid.
     pub fn load() -> Result<Self, AiConfigError> {
-        let path = crate::connect::config_dir().join("norte.toml");
-        match std::fs::read_to_string(&path) {
-            Ok(s) => Self::parse(&s),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(AiConfigError::Io(e)),
-        }
+        Self::load_from(&norte_config::standard_layers())
+    }
+
+    /// Like [`AiConfig::load`] with explicit layers (test injection).
+    ///
+    /// # Errors
+    /// [`AiConfigError`] if any layer's TOML is invalid.
+    pub fn load_from(layers: &norte_config::Layers) -> Result<Self, AiConfigError> {
+        let cfg = norte_config::load(layers).map_err(|e| {
+            AiConfigError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e.to_string(),
+            ))
+        })?;
+        Ok(Self::from_settings(cfg.ai))
     }
 }
 
@@ -404,16 +390,28 @@ mod tests {
         Segment::new(b.to_vec()).expect("segmento de test")
     }
 
+    /// Loads `[ai]` from a single-file User layer (test injection, mirrors
+    /// `archive_config`'s tempdir pattern now that parsing lives in
+    /// norte-config).
+    fn load_from_toml(s: &str) -> Result<AiConfig, AiConfigError> {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("norte.toml"), s).unwrap();
+        let layers = norte_config::Layers {
+            dirs: vec![(dir.path().to_path_buf(), norte_config::Layer::User)],
+        };
+        AiConfig::load_from(&layers)
+    }
+
     #[test]
     fn config_default_deshabilitado() {
         let c = AiConfig::default();
         assert!(!c.enabled && !c.local_only && c.denied_prefixes.is_empty());
-        assert!(!AiConfig::parse("").expect("vacío").enabled);
+        assert!(!load_from_toml("").expect("vacío").enabled);
     }
 
     #[test]
     fn config_parsea_seccion_completa() {
-        let c = AiConfig::parse(
+        let c = load_from_toml(
             "[ai]\nenabled = true\nlocal_only = true\n\
              denied_prefixes = [\"file:///secret\", \"file:///home/o/.ssh\"]\n\
              rename_provider = \"local\"\n",
@@ -426,11 +424,12 @@ mod tests {
 
     #[test]
     fn config_prefijo_invalido_es_error() {
-        assert!(matches!(
-            AiConfig::parse("[ai]\ndenied_prefixes = [\"no-es-url\"]\n"),
-            Err(AiConfigError::BadPrefix(_))
-        ));
-        assert!(AiConfig::parse("[ai]\nenabled = \"si\"\n").is_err());
+        // norte-config valida `denied_prefixes` en su propio loader: la
+        // variante ahora es un `AiConfigError::Io`-envuelto `ConfigError`,
+        // no `AiConfigError::BadPrefix` (ese variant queda documentado pero
+        // sin construir desde aquí — ver su rustdoc).
+        assert!(load_from_toml("[ai]\ndenied_prefixes = [\"no-es-url\"]\n").is_err());
+        assert!(load_from_toml("[ai]\nenabled = \"si\"\n").is_err());
     }
 
     fn vp(s: &str) -> VPath {

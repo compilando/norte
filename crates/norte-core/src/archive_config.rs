@@ -1,79 +1,53 @@
-//! Carga MÍNIMA de la sección `[archive]` de `norte.toml` para procesos SIN
-//! el loader del TUI (#95: el daemon servía con defaults compilados). Solo la
-//! capa de USUARIO (`config_dir()/norte.toml`): la capa de proyecto se ignora
-//! por diseño — un repo ajeno jamás sube límites de seguridad (#95.2). Mismo
-//! patrón que `PolicyConfig::load` (síncrono, arranque, fail-loud).
+//! `[archive]` limits for processes without the TUI loader (#95), now via
+//! the shared layered loader (ADR 0035): System+User layers apply, the
+//! Project layer never does (a foreign repo must not raise security limits).
 
 use norte_vfs_archive::Limits;
 
-/// `norte.toml` visto por el daemon: SOLO `[archive]`; el resto de secciones
-/// (TUI, daemon, panes…) se toleran y se ignoran.
-#[derive(Debug, Default, serde::Deserialize)]
-#[serde(default)]
-struct NorteToml {
-    archive: ArchiveSection,
-}
-
-/// La sección `[archive]` (#95.2). Campos opcionales: ausente = default
-/// compilado. Tolerante a campos futuros (un daemon viejo no revienta).
-#[derive(Debug, Default, serde::Deserialize)]
-#[serde(default)]
-// Los nombres calcan las claves TOML de `[archive]` (contrato con el
-// usuario), no se renombran por estilo.
-#[allow(clippy::struct_field_names)]
-struct ArchiveSection {
-    max_entries: Option<u64>,
-    max_decompressed_bytes: Option<u64>,
-    max_nesting: Option<usize>,
-}
-
-/// Parsea los overrides de `[archive]` de un `norte.toml`. `None` = sin
-/// sección o sin campos (usar defaults compilados).
+/// Merged `[archive]` overrides from the given layers. `None` = no
+/// overrides anywhere (use compiled defaults).
 ///
 /// # Errors
-/// TOML inválido o campos de `[archive]` con tipo incorrecto — fail-loud: un
-/// operador que BAJÓ límites para agentes no debe quedarse en 64 GiB por un
-/// typo silencioso.
-fn parse(s: &str) -> Result<Option<Limits>, toml::de::Error> {
-    let cfg: NorteToml = toml::from_str(s)?;
-    let a = cfg.archive;
-    if a.max_entries.is_none() && a.max_decompressed_bytes.is_none() && a.max_nesting.is_none() {
+/// Any layer that exists but does not parse strictly — fail-loud: an
+/// operator who LOWERED limits for agents must not stay at 64 GiB over a
+/// silent typo.
+pub fn load_archive_limits_from(layers: &norte_config::Layers) -> std::io::Result<Option<Limits>> {
+    let cfg = norte_config::load(layers)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    if cfg.archive_max_entries.is_none()
+        && cfg.archive_max_decompressed_bytes.is_none()
+        && cfg.archive_max_nesting.is_none()
+    {
         return Ok(None);
     }
     let mut limits = Limits::default();
-    if let Some(n) = a.max_entries {
-        // Saturación HACIA ARRIBA (solo posible en 32-bit con un valor >
-        // u32::MAX): jamás recorta un límite por wrap, y no en silencio.
+    if let Some(n) = cfg.archive_max_entries {
+        // Saturate UPWARD (only possible on 32-bit with a value > u32::MAX):
+        // never shrink a limit by wrap, and not silently.
         limits.max_entries = usize::try_from(n).unwrap_or_else(|_| {
             tracing::warn!(
                 n,
-                "[archive] max_entries satura a usize::MAX en esta plataforma"
+                "[archive] max_entries saturates to usize::MAX on this platform"
             );
             usize::MAX
         });
     }
-    if let Some(b) = a.max_decompressed_bytes {
+    if let Some(b) = cfg.archive_max_decompressed_bytes {
         limits.max_decompressed_bytes = b;
     }
-    if let Some(n) = a.max_nesting {
+    if let Some(n) = cfg.archive_max_nesting {
         limits.max_nesting = n;
     }
     Ok(Some(limits))
 }
 
-/// Carga los overrides de `[archive]` desde `config_dir()/norte.toml`
-/// (capa de usuario; ausente = `Ok(None)`). SÍNCRONA (arranque): no invocar
-/// desde contexto async sin `spawn_blocking`.
+/// Layered load from the standard layers. SYNC (startup): wrap in
+/// `spawn_blocking` from async contexts.
 ///
 /// # Errors
-/// Error de lectura (que no sea `NotFound`) o TOML/tipos inválidos.
+/// Those of [`load_archive_limits_from`].
 pub fn load_archive_limits() -> std::io::Result<Option<Limits>> {
-    let path = crate::connect::config_dir().join("norte.toml");
-    match std::fs::read_to_string(&path) {
-        Ok(s) => parse(&s).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
-    }
+    load_archive_limits_from(&norte_config::standard_layers())
 }
 
 #[cfg(test)]
@@ -81,19 +55,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sin_seccion_ni_campos_es_none() {
-        assert!(parse("").expect("vacío").is_none());
+    fn sin_overrides_en_ninguna_capa_es_none() {
+        let dir = tempfile::tempdir().unwrap();
+        // Sección conocida (`deny_unknown_fields` rechaza secciones
+        // desconocidas también, no solo campos) sin nada de `[archive]`.
+        std::fs::write(dir.path().join("norte.toml"), "[ui]\nlang = \"en\"\n").unwrap();
+        let layers = norte_config::Layers {
+            dirs: vec![(dir.path().to_path_buf(), norte_config::Layer::User)],
+        };
+        assert!(load_archive_limits_from(&layers).expect("carga").is_none());
+
+        let vacio = norte_config::Layers { dirs: vec![] };
         assert!(
-            parse("[panes]\nratio = 50\n")
-                .expect("otras secciones")
+            load_archive_limits_from(&vacio)
+                .expect("sin capas")
                 .is_none()
         );
-        assert!(parse("[archive]\n").expect("sección vacía").is_none());
     }
 
     #[test]
     fn overrides_se_aplican_sobre_defaults() {
-        let l = parse("[archive]\nmax_entries = 100\n")
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("norte.toml"),
+            "[archive]\nmax_entries = 100\n",
+        )
+        .unwrap();
+        let layers = norte_config::Layers {
+            dirs: vec![(dir.path().to_path_buf(), norte_config::Layer::User)],
+        };
+        let l = load_archive_limits_from(&layers)
             .expect("parsea")
             .expect("hay overrides");
         assert_eq!(l.max_entries, 100);
@@ -102,25 +93,50 @@ mod tests {
             Limits::default().max_decompressed_bytes,
             "el campo ausente conserva el default"
         );
-        let l = parse("[archive]\nmax_decompressed_bytes = 1024\n")
+
+        let dir2 = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir2.path().join("norte.toml"),
+            "[archive]\nmax_decompressed_bytes = 1024\n",
+        )
+        .unwrap();
+        let layers2 = norte_config::Layers {
+            dirs: vec![(dir2.path().to_path_buf(), norte_config::Layer::User)],
+        };
+        let l = load_archive_limits_from(&layers2)
             .expect("parsea")
             .expect("hay overrides");
         assert_eq!(l.max_decompressed_bytes, 1024);
     }
 
+    /// C1 exit criterion: a system-layer `[archive]` binds the daemon path
+    /// exactly like it binds the TUI (spec gap 3).
     #[test]
-    fn toml_roto_o_tipo_malo_es_error_fail_loud() {
-        assert!(parse("[archive\n").is_err(), "sintaxis rota");
-        assert!(
-            parse("[archive]\nmax_entries = \"muchas\"\n").is_err(),
-            "tipo incorrecto"
-        );
+    fn capa_sistema_tambien_aplica() {
+        let sistema = tempfile::tempdir().unwrap();
+        std::fs::write(
+            sistema.path().join("norte.toml"),
+            "[archive]\nmax_entries = 7\n",
+        )
+        .unwrap();
+        let layers = norte_config::Layers {
+            dirs: vec![(sistema.path().to_path_buf(), norte_config::Layer::System)],
+        };
+        let l = load_archive_limits_from(&layers)
+            .expect("carga")
+            .expect("overrides");
+        assert_eq!(l.max_entries, 7);
     }
 
+    /// Uniform strictness (ADR 0035 decision 4): a `[ui]` typo now fails
+    /// the daemon load too — no more silent divergence from the TUI.
     #[test]
-    fn secciones_ajenas_con_campos_desconocidos_se_toleran() {
-        let doc = "[daemon]\nmode = \"daemon\"\n[archive]\nmax_entries = 7\n[colores]\nx = 1\n";
-        let l = parse(doc).expect("tolera").expect("overrides");
-        assert_eq!(l.max_entries, 7);
+    fn typo_en_otra_seccion_es_error_tambien_para_el_daemon() {
+        let user = tempfile::tempdir().unwrap();
+        std::fs::write(user.path().join("norte.toml"), "[ui]\ntheem = \"nord\"\n").unwrap();
+        let layers = norte_config::Layers {
+            dirs: vec![(user.path().to_path_buf(), norte_config::Layer::User)],
+        };
+        assert!(load_archive_limits_from(&layers).is_err());
     }
 }

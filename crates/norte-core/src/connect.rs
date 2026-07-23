@@ -118,29 +118,9 @@ pub trait ConnectionObserver: Send + Sync {
 // dominio de secretos/keyring, regla 10); el CLI la usa vía este re-export.
 pub use norte_connect::journal_anchor_key;
 
-/// Directorio de config del usuario para `connections.toml` / `known_hosts` /
-/// `secrets.age`: `$NORTE_CONFIG_DIR` (override explícito) →
-/// `$XDG_CONFIG_HOME/norte` → `~/.config/norte` (unix) / `%APPDATA%\norte`
-/// (Windows). Misma capa de usuario que el resto de la config (ADR 0007).
-#[must_use]
-pub fn config_dir() -> PathBuf {
-    if let Some(d) = std::env::var_os("NORTE_CONFIG_DIR") {
-        return PathBuf::from(d);
-    }
-    if let Some(d) = std::env::var_os("XDG_CONFIG_HOME")
-        && !d.is_empty()
-    {
-        return PathBuf::from(d).join("norte");
-    }
-    #[cfg(windows)]
-    if let Some(d) = std::env::var_os("APPDATA") {
-        return PathBuf::from(d).join("norte");
-    }
-    std::env::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".config")
-        .join("norte")
-}
+// The user config dir — relocated to norte-config (ADR 0035); re-exported
+// so the historic `norte_core::connect::config_dir()` path keeps working.
+pub use norte_config::config_dir;
 
 /// La URL de la conexión NOMBRADA `name` en `<dir>/connections.toml` (para
 /// `norte connect <nombre>`: el frontend traduce el nombre a URL y el
