@@ -23,6 +23,10 @@ tokio-util = { workspace = true, optional = true }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 
+[[test]]
+name = "watch"
+required-features = ["watch"]
+
 [features]
 # JSON Schema generation for docs/schema goldens (ADR 0007).
 schema = ["dep:schemars"]

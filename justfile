@@ -18,7 +18,7 @@ fmt-check:
     cargo fmt --all -- --check
 
 lint: fmt-check
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets --features norte-config/watch -- -D warnings
     cargo deny check
 
 # --no-tests=pass: el esqueleto de fase 1 no tiene tests aún; con código real
@@ -29,7 +29,7 @@ lint: fmt-check
 # —ni correrse ni compilar su árbol (testcontainers/bollard)—. Toda feature
 # nueva apta para el gate se añade aquí; las de integración/nightly, no.
 test:
-    cargo nextest run --workspace --features norte-tui/schema --no-tests=pass --no-fail-fast
+    cargo nextest run --workspace --features norte-tui/schema --features norte-config/watch --no-tests=pass --no-fail-fast
     cargo test --workspace --features norte-tui/schema --doc
 
 # Gate de cobertura (mismo umbral que CI): solo crates de lógica (spec §12).

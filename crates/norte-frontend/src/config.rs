@@ -14,6 +14,10 @@ use crate::openers::OpenersConfig;
 #[derive(Debug, Clone)]
 pub struct FrontendConfig {
     /// The merged scalars (preset, ui, daemon, hotlist, archive, ai, sources).
+    /// `common.sources` is NOT grouped by layer: `norte-config::load` fills
+    /// it with every layer's `norte.toml` first, and this module's `load`
+    /// then appends each layer's `keymap.toml`/`openers.toml` afterwards —
+    /// treat it as a set of files that participated, not an ordered log.
     pub common: CommonConfig,
     /// `keymap.toml` layers present, ascending precedence.
     pub keymap_layers: Vec<KeymapFile>,
@@ -23,16 +27,17 @@ pub struct FrontendConfig {
     pub openers: OpenersConfig,
 }
 
-/// Carga la capa `keymap.toml` de `dir` (ADR 0006/0007); `None` si no existe.
-/// La capa de PROYECTO se marca (`mark_project`) para que `Effective` descarte
-/// sus bindings `lua:` (seguridad #75). Una capa de usuario no admite la lista
-/// `keymap` completa (eso es de presets): es error con archivo culpable.
+/// Loads the `keymap.toml` layer from `dir` (ADR 0006/0007); `None` if it
+/// doesn't exist. The PROJECT layer is marked (`mark_project`) so
+/// `Effective` discards its `lua:` bindings (security #75). A user layer
+/// does not accept the full `keymap` list (that belongs to presets): using
+/// it is an error naming the culprit file.
 ///
-/// `pub` porque norte-gui llama esto directamente (M4/Task 9): la GUI carga
-/// keymaps sin pasar por el `load` combinado de este módulo.
+/// Kept `pub` for out-of-workspace frontends (e.g. the GUI): they can load
+/// keymap layers without going through this module's combined `load`.
 ///
 /// # Errors
-/// [`ConfigError::Toml`] si no parsea o usa `keymap` en una capa.
+/// [`ConfigError::Toml`] if it doesn't parse or a layer uses `keymap`.
 pub fn load_keymap_layer(
     dir: &Path,
     kind: Layer,
@@ -61,15 +66,15 @@ pub fn load_keymap_layer(
     Ok(Some(parsed))
 }
 
-/// Carga y parsea `openers.toml` de una capa (#28); `None` si el fichero no
-/// existe o la capa es de PROYECTO (fail-closed — un `./.norte/openers.toml`
-/// de un repo hostil no debe lanzar binarios externos).
+/// Loads and parses `openers.toml` for a layer (#28); `None` if the file
+/// doesn't exist or the layer is PROJECT (fail-closed — a hostile repo's
+/// `./.norte/openers.toml` must not be able to launch external binaries).
 ///
-/// `pub` porque norte-gui llama esto directamente (M4/Task 9): la GUI carga
-/// openers sin pasar por el `load` combinado de este módulo.
+/// Kept `pub` for out-of-workspace frontends (e.g. the GUI): they can load
+/// openers without going through this module's combined `load`.
 ///
 /// # Errors
-/// [`ConfigError::Toml`] con el archivo culpable si no parsea.
+/// [`ConfigError::Toml`] naming the culprit file if it doesn't parse.
 pub fn load_openers(
     dir: &Path,
     kind: Layer,
