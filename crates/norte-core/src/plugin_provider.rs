@@ -184,16 +184,14 @@ impl PluginProvider {
             let mut guard = inst.lock().map_err(|_| Error::Internal { panic: true })?;
             f(&mut guard)
         });
-        match tokio::time::timeout(self.op_timeout, fut).await {
-            Ok(join) => join.map_err(|_| Error::Internal { panic: true })?,
-            Err(_) => {
-                // El hilo sigue colgado reteniendo el Mutex: marca muerto el
-                // provider para que las ops futuras no bloqueen (M2, leak aceptado:
-                // I/O de socket wasip2 no cancelable; el humano reconecta).
-                dead.store(true, Ordering::Relaxed);
-                Err(Error::ProviderUnavailable { retryable: true })
-            }
-        }
+        let Ok(join) = tokio::time::timeout(self.op_timeout, fut).await else {
+            // El hilo sigue colgado reteniendo el Mutex: marca muerto el provider
+            // para que las ops futuras no bloqueen (M2, leak aceptado: I/O de
+            // socket wasip2 no cancelable; el humano reconecta).
+            dead.store(true, Ordering::Relaxed);
+            return Err(Error::ProviderUnavailable { retryable: true });
+        };
+        join.map_err(|_| Error::Internal { panic: true })?
     }
 }
 
@@ -368,14 +366,12 @@ impl Provider for PluginProvider {
                         .map_err(|e| map_runtime_error(&e))?
                         .map_err(map_vfs_error)
                 });
-                let chunk: Vec<u8> = match tokio::time::timeout(timeout, fut).await {
-                    Ok(join) => join.map_err(|_| Error::Internal { panic: true })??,
-                    Err(_) => {
-                        // Lectura colgada en el socket (M2): marca muerto y corta.
-                        dead.store(true, Ordering::Relaxed);
-                        return Err(Error::ProviderUnavailable { retryable: true });
-                    }
+                let Ok(join) = tokio::time::timeout(timeout, fut).await else {
+                    // Lectura colgada en el socket (M2): marca muerto y corta.
+                    dead.store(true, Ordering::Relaxed);
+                    return Err(Error::ProviderUnavailable { retryable: true });
                 };
+                let chunk: Vec<u8> = join.map_err(|_| Error::Internal { panic: true })??;
                 if chunk.is_empty() {
                     return Ok(None); // EOF
                 }
@@ -518,13 +514,11 @@ impl PluginByteSink {
             let mut guard = inst.lock().map_err(|_| Error::Internal { panic: true })?;
             f(&mut guard)
         });
-        match tokio::time::timeout(op_timeout, fut).await {
-            Ok(join) => join.map_err(|_| Error::Internal { panic: true })?,
-            Err(_) => {
-                dead.store(true, Ordering::Relaxed);
-                Err(Error::ProviderUnavailable { retryable: true })
-            }
-        }
+        let Ok(join) = tokio::time::timeout(op_timeout, fut).await else {
+            dead.store(true, Ordering::Relaxed);
+            return Err(Error::ProviderUnavailable { retryable: true });
+        };
+        join.map_err(|_| Error::Internal { panic: true })?
     }
 }
 
