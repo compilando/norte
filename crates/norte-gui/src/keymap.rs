@@ -49,13 +49,17 @@ pub const VIEWER_COMMANDS: &[&str] = &[
     "viewer.hex",
 ];
 
-/// Los nombres de preset que el catálogo compartido conoce (espejo del
-/// `["orthodox", "vim", "cua"]` hardcodeado en `norte-tui/src/keymap.rs::
-/// presets()` — el catálogo (`norte_frontend::keymap::presets`) no expone un
-/// listado, solo `source(name)`). Fuente del mensaje "disponibles" del aviso
-/// de preset desconocido (revisión C2/G0 IMPORTANT 2) y de
-/// [`is_known_preset`].
-pub const KNOWN_PRESETS: &[&str] = &["orthodox", "vim", "cua"];
+/// Los nombres de preset que el catálogo compartido conoce (final review
+/// MINOR 4: antes un `&[&str]` hardcodeado que espejaba a mano el
+/// `["orthodox", "vim", "cua"]` de `norte-tui/src/keymap.rs::presets()` — el
+/// catálogo ahora expone su PROPIO listado, `norte_frontend::keymap::
+/// presets::NAMES`, verificado contra `source()` por un test en
+/// `norte-frontend`; la GUI solo re-exporta, sin copiar el array). Fuente del
+/// mensaje "disponibles" del aviso de preset desconocido (revisión C2/G0
+/// IMPORTANT 2) y de [`is_known_preset`]. La TUI sigue con su propio mirror
+/// (fuera de alcance de esta revisión, ver el comentario original que
+/// citaba `presets()`).
+pub const KNOWN_PRESETS: &[&str] = norte_frontend::keymap::presets::NAMES;
 
 /// ¿`name` es uno de los presets embebidos? (revisión C2/G0 IMPORTANT 2): el
 /// catálogo compartido documenta "nombre desconocido → cae al default +

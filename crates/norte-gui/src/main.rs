@@ -717,12 +717,12 @@ impl NorteGui {
     /// que jamás confirma — `crates/norte-tui/src/main.rs` hace
     /// `app.quit = true` sin preguntar).
     fn quit_or_confirm(&mut self, cx: &mut Context<Self>) {
-        let tasks = self.task_progress.len();
         let marks = self.panes[0].marks_len() + self.panes[1].marks_len();
+        let tasks = confirm_quit_task_count(self.task_progress.len(), marks, self.inflight.len());
         // `inflight` cubre la ventana entre submit y el primer evento de
         // task: una op recién lanzada aún sin progreso también debe frenar
         // el quit (solo el GATE; los contadores del modal siguen siendo los
-        // visibles).
+        // visibles, ver `confirm_quit_task_count`).
         if has_pending_work(tasks, marks) || !self.inflight.is_empty() {
             self.modal = Some(Modal::ConfirmQuit { tasks, marks });
         } else {
@@ -1598,26 +1598,28 @@ impl NorteGui {
             .overflow_hidden()
             .border_2()
             .border_color(chrome.border_focus)
-            // `header_bg` reusado como superficie neutra del panel (no es LA
-            // franja de cabecera, ver doc de `ChromeColors`): su texto se
-            // queda en `fg` (canal suelto), no en el par `header_fg` — el
-            // panel tiene hijos con SU PROPIO fondo (título, pie) que
-            // heredarían un `header_fg` pensado para `header_bg`, no para
-            // `border_focus`/`sel_bg`.
-            .bg(chrome.header_bg)
-            .text_color(chrome.fg)
             .px(px(12.0))
             .py(px(8.0))
             .gap(px(2.0));
 
+        // Revisión final (contraste WCAG): `header_bg`+`fg` medía 1.1-1.9:1
+        // en los 6 presets — `StatusBar` está pensado para texto en
+        // `header_fg`, no en el `fg` genérico. `modal_panel_colors`/
+        // `modal_title_colors`/`modal_footer_colors` (funciones puras, ver
+        // sus docs) fijan las COMBINACIONES honestas; `modal_usa_pares_
+        // honestos` las pinea.
+        let (panel_bg, panel_fg) = modal_panel_colors(chrome);
+        panel = panel.bg(panel_bg).text_color(panel_fg);
+
         let mut lines = lines.into_iter();
         if let Some(title) = lines.next() {
+            let (title_bg, title_fg) = modal_title_colors(chrome);
             panel = panel.child(
                 div()
                     .px(px(2.0))
                     .py(px(1.0))
-                    .bg(chrome.border_focus)
-                    .text_color(chrome.fg)
+                    .bg(title_bg)
+                    .text_color(title_fg)
                     .truncate()
                     .child(SharedString::from(title)),
             );
@@ -1630,15 +1632,44 @@ impl NorteGui {
             panel = panel.child(row);
         }
 
-        panel.child(
-            div()
-                .mt(px(4.0))
-                .px(px(2.0))
-                .py(px(1.0))
-                .bg(chrome.sel_bg)
-                .child(SharedString::from(footer)),
-        )
+        let (footer_bg, footer_fg) = modal_footer_colors(chrome);
+        let mut footer_row = div()
+            .mt(px(4.0))
+            .px(px(2.0))
+            .py(px(1.0))
+            .bg(footer_bg)
+            .child(SharedString::from(footer));
+        if let Some(fg) = footer_fg {
+            footer_row = footer_row.text_color(fg);
+        }
+        panel.child(footer_row)
     }
+}
+
+/// Colores de la SUPERFICIE del panel del modal: `pane_bg_focus` + `fg` — el
+/// mismo par que ya usan los panes (`render_pane`), porque `Regular.fg` está
+/// diseñado para fondos de pane, no para `header_bg` (que trae su propio
+/// `header_fg`, ver `modal_title_colors`). La línea de alerta (`err_fg`)
+/// queda legible sobre este fondo sin ningún ajuste extra.
+#[must_use]
+fn modal_panel_colors(chrome: &ChromeColors) -> (gpui::Rgba, gpui::Rgba) {
+    (chrome.pane_bg_focus, chrome.fg)
+}
+
+/// Colores de la franja de TÍTULO del modal: el par completo de `StatusBar`
+/// (fondo Y texto), igual que cualquier otra franja de cabecera de la GUI.
+#[must_use]
+fn modal_title_colors(chrome: &ChromeColors) -> (gpui::Rgba, gpui::Rgba) {
+    (chrome.header_bg, chrome.header_fg)
+}
+
+/// Colores del PIE del modal: fondo de selección + su texto emparejado
+/// cuando el tema lo declara (mismo criterio que la fila seleccionada de
+/// `render_row`); si el tema no declara `Selection.fg`, `None` deja el texto
+/// heredado del panel (`modal_panel_colors`).
+#[must_use]
+fn modal_footer_colors(chrome: &ChromeColors) -> (gpui::Rgba, Option<gpui::Rgba>) {
+    (chrome.sel_bg, chrome.sel_fg)
 }
 
 /// El primer carácter de `s` si `s` es exactamente uno.
@@ -1738,6 +1769,25 @@ fn retain_active(
 #[must_use]
 fn has_pending_work(tasks: usize, marks: usize) -> bool {
     tasks > 0 || marks > 0
+}
+
+/// El contador de tasks que muestra [`Modal::ConfirmQuit`] (revisión final
+/// del review, MINOR 3): normalmente `task_progress_len` (lo que ya tiene un
+/// evento de progreso). Pero el gate de `quit_or_confirm` también frena por
+/// `inflight` no vacío — una op recién lanzada AÚN sin su primer evento — y
+/// mostrar «0 task(s)» con trabajo real en vuelo es una mentira visible. Solo
+/// se sustituye por `inflight_len` cuando `task_progress_len` Y `marks` son
+/// CERO: en ese caso las ops de `inflight` no han producido progreso todavía,
+/// así que no pueden solaparse con `task_progress_len` (que ya sería > 0 si
+/// alguna lo hubiera hecho) — nunca se suman ambos números. Puro: no decide
+/// la UI, solo el conteo.
+#[must_use]
+fn confirm_quit_task_count(task_progress_len: usize, marks: usize, inflight_len: usize) -> usize {
+    if task_progress_len == 0 && marks == 0 && inflight_len > 0 {
+        inflight_len
+    } else {
+        task_progress_len
+    }
 }
 
 /// ¿Sigue vigente el resultado de un `fs.list`? Solo si su generación coincide
@@ -2251,10 +2301,14 @@ impl Render for NorteGui {
         // cada aviso se lee entero (hasta el ancho) sin competir por el
         // mismo renglón.
         if let Some(msg) = &self.keymap_error {
+            // Revisión final (contraste WCAG): `header_bg`+`err_fg` medía
+            // 1.1:1 en catppuccin — `err_fg` está pensado para el fondo
+            // PRINCIPAL (`bg`), como el error en pane de más abajo (~1239),
+            // no para `header_bg` (que trae su propio `header_fg`).
             let mut banner = div()
                 .flex()
                 .flex_col()
-                .bg(chrome.header_bg)
+                .bg(chrome.bg)
                 .text_color(chrome.err_fg);
             for line in msg.split('\n') {
                 banner = banner.child(
@@ -2443,8 +2497,9 @@ mod tests {
         QUICK_FG, SEL_BG,
     };
     use super::{
-        ChromeColors, ImagePreview, affected_dirs, apply_viewer_command, first_cancelable,
-        generation_is_current, has_pending_work, image_preview_from, image_status, pending_hint,
+        ChromeColors, ImagePreview, affected_dirs, apply_viewer_command, confirm_quit_task_count,
+        first_cancelable, generation_is_current, has_pending_work, image_preview_from,
+        image_status, modal_footer_colors, modal_panel_colors, modal_title_colors, pending_hint,
         retain_active, row_label, task_at_cursor, unknown_preset_banner, viewer_header,
         viewer_status,
     };
@@ -3113,5 +3168,68 @@ mod tests {
         assert_eq!(c.quick_fg, gpui::rgb(QUICK_FG));
         assert_eq!(c.quick_bg, gpui::rgb(HEADER_BG));
         assert_eq!(c.mark_bg, gpui::rgb(MARK_BG));
+    }
+
+    /// Revisión final del review (contraste WCAG, medido 1.1-1.9:1 con el
+    /// par roto `header_bg`+`fg`): las COMBINACIONES que usa el modal en el
+    /// tema `default`, no canales sueltos (esos ya los pinea `tema_default_
+    /// reproduce_el_tema_default`). El panel usa el MISMO par que los panes
+    /// (`pane_bg_focus`+`fg`), no el de la cabecera; el título SÍ usa el par
+    /// completo de cabecera; el pie usa el par de selección declarado por
+    /// el tema.
+    #[test]
+    fn modal_usa_pares_honestos() {
+        let t = norte_theme::Theme::preset_default();
+        let c = ChromeColors::resolve(&t);
+
+        let (panel_bg, panel_fg) = modal_panel_colors(&c);
+        assert_eq!(panel_bg, c.pane_bg_focus, "panel bg == pane_bg_focus");
+        assert_eq!(panel_fg, c.fg, "panel fg == regular fg");
+        assert_ne!(
+            panel_bg, c.header_bg,
+            "el panel NO debe reusar el fondo de cabecera (por eso era ilegible)"
+        );
+
+        let (title_bg, title_fg) = modal_title_colors(&c);
+        assert_eq!(title_bg, c.header_bg, "título bg == header_bg");
+        assert_eq!(
+            title_fg, c.header_fg,
+            "título fg == header_fg cuando el fondo es header_bg (el par completo)"
+        );
+
+        let (footer_bg, footer_fg) = modal_footer_colors(&c);
+        assert_eq!(footer_bg, c.sel_bg, "pie bg == sel_bg");
+        assert_eq!(
+            footer_fg,
+            Some(gpui::rgb(0xffffff)),
+            "el tema default declara selection.fg → el pie lo hereda"
+        );
+    }
+
+    /// `confirm_quit_task_count` (MINOR 3 del review final): normalmente el
+    /// conteo de `task_progress`; solo cae a `inflight_len` cuando NO hay
+    /// progreso NI marcas (así nunca se solapan los dos números).
+    #[test]
+    fn confirm_quit_task_count_sustituye_solo_cuando_no_hay_progreso_ni_marcas() {
+        assert_eq!(
+            confirm_quit_task_count(0, 0, 2),
+            2,
+            "0 tasks, 0 marcas, 2 inflight → muestra las 2 en vuelo, no «0 task(s)»"
+        );
+        assert_eq!(
+            confirm_quit_task_count(3, 0, 5),
+            3,
+            "ya hay progreso → NUNCA se suma/reemplaza por inflight"
+        );
+        assert_eq!(
+            confirm_quit_task_count(0, 1, 5),
+            0,
+            "hay marcas (hay algo que confirmar igual) → no se sustituye por inflight"
+        );
+        assert_eq!(
+            confirm_quit_task_count(0, 0, 0),
+            0,
+            "nada en absoluto → 0, tal cual (el gate ni siquiera abriría el modal)"
+        );
     }
 }
