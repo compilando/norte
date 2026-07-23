@@ -80,13 +80,6 @@ const HOSTILE_BADGE: &str = "⚠";
 /// spike; el fill/scroll fino es optimización posterior.
 const PAGE: usize = 10;
 
-/// Alto FIJO de cada fila (px), requerido por `uniform_list` (issue #87): sin
-/// una altura uniforme no puede medir un elemento y derivar el resto por
-/// aritmética en vez de layout completo. También usado por el visor (F3),
-/// que NO usa `uniform_list` (ver `render_viewer`) pero sí quiere filas de
-/// alto uniforme.
-const ROW_H: f32 = 22.0;
-
 /// Filas de chrome que le restamos al alto del viewport para derivar cuántas
 /// filas de contenido pedirle a `Viewer::rows` en `render_viewer`: cabecera +
 /// barra de estado (una fila cada una) + margen de redondeo.
@@ -197,6 +190,9 @@ struct NorteGui {
     /// `true` mientras un `OpenViewer` está en vuelo (para el estado
     /// «abriendo visor…» del render, ver `render`).
     viewer_loading: bool,
+    /// Tipografía resuelta UNA vez en `new` (GP), a partir de `[ui]`. Ver
+    /// doc de [`FontSet`].
+    fonts: FontSet,
 }
 
 impl NorteGui {
@@ -286,6 +282,19 @@ impl NorteGui {
         let resolver = norte_frontend::keymap::Resolver::new(browse_eff);
         let viewer_resolver = norte_frontend::keymap::Resolver::new(viewer_eff);
 
+        // Tipografía (GP): resuelta UNA vez aquí, junto al resto de la
+        // sesión — config inválida (rama `Err` de `loaded`) degrada a la
+        // fuente/tamaño por defecto, igual que el resto del arranque
+        // (nunca aborta por esto).
+        let fonts = match loaded {
+            Ok(cfg) => FontSet::resolve(
+                cfg.common.ui_font.as_deref(),
+                cfg.common.ui_mono_font.as_deref(),
+                cfg.common.ui_font_size,
+            ),
+            Err(_) => FontSet::resolve(None, None, None),
+        };
+
         match LoadConfig::from_env() {
             Ok(cfg) => {
                 let LoadConfig { socket, dir } = cfg;
@@ -324,6 +333,7 @@ impl NorteGui {
                     viewer_resolver,
                     viewer_gen: 0,
                     viewer_loading: false,
+                    fonts,
                 };
                 gui.spawn_event_loop(event_rx, cx);
                 gui.cd(0, dir.clone(), cx);
@@ -379,6 +389,7 @@ impl NorteGui {
                     viewer_resolver,
                     viewer_gen: 0,
                     viewer_loading: false,
+                    fonts,
                 }
             }
         }
@@ -1226,6 +1237,11 @@ impl NorteGui {
             .role(gpui::Role::List)
             .aria_label(pane_a11y_label)
             .aria_selected(focused)
+            // Mono (GP): tamaños/columnas del listado necesitan ancho fijo
+            // para alinear — cascada a las filas (`render_row`) vía
+            // `TextStyleRefinement`.
+            .font(self.fonts.mono.clone())
+            .line_height(self.fonts.row_h)
             .flex_1()
             .flex()
             .flex_col()
@@ -1397,7 +1413,7 @@ impl NorteGui {
             } else {
                 gpui::Toggled::False
             })
-            .h(px(ROW_H))
+            .h(self.fonts.row_h)
             .px(px(4.0))
             .py(px(1.0))
             .text_color(color)
@@ -1434,6 +1450,9 @@ impl NorteGui {
             .id("task-strip")
             .role(gpui::Role::List)
             .aria_label(norte_i18n::t("gui-a11y-tasks"))
+            // Mono (GP): la % y el estado de cada task se leen mejor
+            // alineados en columna, igual que un listado.
+            .font(self.fonts.mono.clone())
             .flex()
             .flex_col()
             .max_h(px(120.0))
@@ -1510,7 +1529,7 @@ impl NorteGui {
         // (`VIEWER_CHROME_ROWS`); el sobrante (redondeo, chrome del root) lo
         // recorta `overflow_hidden` del contenedor. Mínimo 1: una ventana
         // minúscula no debe pedir un rango vacío a `v.rows`.
-        let viewport_rows = (f32::from(window.viewport_size().height) / ROW_H) as usize;
+        let viewport_rows = (window.viewport_size().height / self.fonts.row_h) as usize;
         let h = viewport_rows.saturating_sub(VIEWER_CHROME_ROWS).max(1);
 
         // Cuerpo del visor: en modo imagen, el elemento `img` (o un aviso si el
@@ -1541,13 +1560,20 @@ impl NorteGui {
                 div().flex_1().flex().flex_col().overflow_hidden().children(
                     v.rows(h).into_iter().map(|row| {
                         div()
-                            .h(px(ROW_H))
+                            .h(self.fonts.row_h)
                             .px(px(4.0))
                             .truncate()
                             .child(SharedString::from(row))
                     }),
                 )
             };
+        // Mono (GP): columnas hex/texto necesitan ancho fijo para alinear.
+        // Se fija también en modo imagen (sin efecto visible: no hay texto
+        // que alinear ahí) para mantener `body` de un solo tipo concreto sin
+        // un tercer branch — más simple que condicionar el font por modo.
+        let body = body
+            .font(self.fonts.mono.clone())
+            .line_height(self.fonts.row_h);
 
         // `Role::Document` + nombre accesible = cabecera saneada (path +
         // «via <plugin>» si aplica); la barra de estado va como
@@ -1581,6 +1607,7 @@ impl NorteGui {
                     .py(px(1.0))
                     .bg(chrome.quick_bg)
                     .text_color(chrome.quick_fg)
+                    .font(self.fonts.mono.clone())
                     .truncate()
                     .child(SharedString::from(status)),
             )
@@ -2346,6 +2373,60 @@ fn chrome(theme: &Theme, role: Role, fg: bool, fallback: u32) -> gpui::Rgba {
     c.map_or(gpui::rgb(fallback), theme_map::to_gpui_rgba)
 }
 
+/// Tipografía resuelta para la sesión (GP): fuente de chrome (UI) para
+/// cabeceras/banners/franja de tasks y fuente mono para listados/visor —
+/// alineación de columnas (tamaños, hex del visor) exige ancho fijo, algo que
+/// una fuente UI proporcional no garantiza. Se construye UNA vez en `new` a
+/// partir de `[ui]` (`cfg.common.ui_font`/`ui_mono_font`/`ui_font_size`); una
+/// familia de usuario lleva SIEMPRE un fallback a la fuente empaquetada por
+/// defecto, así que una familia mal tecleada degrada al look por defecto, no
+/// a una fuente arbitraria del sistema (`family_with_fallback`).
+struct FontSet {
+    /// Fuente de chrome: cabeceras de pane/visor, banners, franja de tasks.
+    ui: gpui::Font,
+    /// Fuente monoespaciada: listados de pane, cuerpo del visor (texto/hex).
+    mono: gpui::Font,
+    /// Tamaño base (`[ui] font_size`, validado a `[8, 32]` en config).
+    size: gpui::Pixels,
+    /// Alto de fila derivado de `size` (1.5x, redondeado, con piso 18px —
+    /// mismo rol que tenía `ROW_H` antes de GP, ahora dependiente de la
+    /// config en vez de una constante fija).
+    row_h: gpui::Pixels,
+}
+
+impl FontSet {
+    /// Resuelve el set a partir de los tres escalares de `[ui]` (ya
+    /// validados por `norte-config`). `None` en cualquiera = el default
+    /// documentado en el campo correspondiente.
+    fn resolve(font: Option<&str>, mono_font: Option<&str>, font_size: Option<f32>) -> Self {
+        let size = font_size.unwrap_or(14.0);
+        let row_h = (size * 1.5).round().max(18.0);
+        Self {
+            ui: family_with_fallback(font, ".SystemUIFont"),
+            mono: family_with_fallback(mono_font, ".ZedMono"),
+            size: gpui::px(size),
+            row_h: gpui::px(row_h),
+        }
+    }
+}
+
+/// Familia de usuario con la fuente empaquetada como fallback EXPLÍCITO
+/// (`Font::fallbacks`); `None` = la fuente empaquetada directamente, sin
+/// fallback (no hace falta: ya es el default). `.SystemUIFont`/`.ZedMono` son
+/// nombres reservados de GPUI (siempre resolubles, ver comentario de rev en
+/// la cabecera del módulo) — jamás caen a una fuente arbitraria del sistema
+/// que el usuario no pidió.
+fn family_with_fallback(family: Option<&str>, bundled: &'static str) -> gpui::Font {
+    match family {
+        None => gpui::font(bundled),
+        Some(f) => {
+            let mut font = gpui::font(f);
+            font.fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![bundled.to_owned()]));
+            font
+        }
+    }
+}
+
 /// La paleta de chrome resuelta para UN frame. Se construye UNA vez al
 /// principio de `render()` — `render_row` corre por cada entrada visible y no
 /// debe resolver el tema por fila.
@@ -2459,6 +2540,12 @@ impl Render for NorteGui {
             .size_full()
             .bg(chrome.bg)
             .text_color(chrome.fg)
+            // Tipografía (GP): fuente de chrome + tamaño base para TODO el
+            // árbol por cascada (`TextStyleRefinement`); los contenedores
+            // mono (listados/visor/franja de tasks) se reponen encima, más
+            // abajo en el árbol.
+            .font(self.fonts.ui.clone())
+            .text_size(self.fonts.size)
             .p(px(4.0))
             .gap(px(2.0));
 
@@ -2843,7 +2930,7 @@ mod tests {
         PANE_BG, PANE_BG_FOCUS, QUICK_FG, SEL_BG,
     };
     use super::{
-        ChromeColors, ImagePreview, affected_dirs, apply_viewer_command, banner_safe,
+        ChromeColors, FontSet, ImagePreview, affected_dirs, apply_viewer_command, banner_safe,
         confirm_quit_task_count, first_cancelable, generation_is_current, glowed, has_pending_work,
         image_preview_from, image_status, keymap_error_detail, modal_footer_colors,
         modal_panel_colors, modal_title_colors, pending_hint, retain_active, row_label,
@@ -3814,5 +3901,37 @@ mod tests {
 
         let c = gpui::rgb(0x336699);
         assert_eq!(glowed(c, None), c, "sin glow, identidad exacta");
+    }
+
+    /// Sin config, `FontSet` cae a las familias empaquetadas de GPUI
+    /// (`.SystemUIFont`/`.ZedMono`, siempre resolubles — ver rustdoc del
+    /// módulo) y al tamaño/alto por defecto.
+    #[test]
+    fn fontset_defaults() {
+        let f = FontSet::resolve(None, None, None);
+        assert_eq!(f.ui.family.as_ref(), ".SystemUIFont");
+        assert_eq!(f.mono.family.as_ref(), ".ZedMono");
+        assert_eq!(f.size, gpui::px(14.0));
+        assert_eq!(f.row_h, gpui::px(21.0));
+    }
+
+    /// Una familia de usuario ocupa `family`, pero lleva SIEMPRE la fuente
+    /// empaquetada de fallback — así una familia mal tecleada degrada al
+    /// look por defecto, no a una fuente arbitraria del sistema.
+    #[test]
+    fn fontset_familia_usuario_con_fallback() {
+        let f = FontSet::resolve(None, Some("Nope Mono"), None);
+        assert_eq!(f.mono.family.as_ref(), "Nope Mono");
+        let fb = f.mono.fallbacks.as_ref().expect("fallback presente");
+        assert_eq!(fb.fallback_list(), [".ZedMono".to_owned()]);
+    }
+
+    /// El piso de 18px evita filas ilegiblemente finas con tamaños de fuente
+    /// muy pequeños (config válida solo desde 8.0, ver `norte-config`, pero
+    /// el piso vive aquí porque `FontSet` no conoce ese rango).
+    #[test]
+    fn row_h_minimo() {
+        let f = FontSet::resolve(None, None, Some(8.0));
+        assert_eq!(f.row_h, gpui::px(18.0));
     }
 }
