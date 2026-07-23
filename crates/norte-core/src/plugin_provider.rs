@@ -14,7 +14,9 @@
 //! gobierna el deadline de CPU del guest).
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use bytes::Bytes;
 use futures::stream::{self, StreamExt};
@@ -25,6 +27,11 @@ use norte_vfs::proto::{
     ByteRange, Capabilities, CapabilityFlags, ConflictKind, Entry, EntryKind, Error, Segment, VPath,
 };
 use norte_vfs::{ByteSink, ByteStream, EntryStream, Provider, SymlinkKind};
+
+/// Timeout por operación del guest (M2, ADR 0033): una llamada bloqueada en un
+/// socket wasip2 no la corta el epoch deadline (sólo traba CPU del guest). Al
+/// expirar, la op falla y el provider se marca muerto. 30 s = orden del connect.
+const OP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Un provider VFS respaldado por un plugin WASM que exporta la interfaz WIT
 /// `provider` (#30). Ver el módulo.
@@ -37,6 +44,11 @@ pub struct PluginProvider {
     scheme: String,
     /// Capabilities cacheadas al construir (`Provider::capabilities` es sync).
     caps: Capabilities,
+    /// `true` cuando una op expiró (M2): el hilo `spawn_blocking` colgado retiene
+    /// el `Mutex` para siempre, así que toda op futura falla rápido sin tocarlo.
+    dead: Arc<AtomicBool>,
+    /// Timeout por op (override en tests para no esperar 30 s).
+    op_timeout: Duration,
 }
 
 impl PluginProvider {
@@ -100,7 +112,17 @@ impl PluginProvider {
                 flags,
                 max_path: None,
             },
+            dead: Arc::new(AtomicBool::new(false)),
+            op_timeout: OP_TIMEOUT,
         })
+    }
+
+    /// Fija un timeout por op corto (tests de M2). Doc-hidden: no es API de prod.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_op_timeout(mut self, timeout: Duration) -> Self {
+        self.op_timeout = timeout;
+        self
     }
 
     /// Configura la conexión del guest-provider (#30 stage 3c): endpoint YA
@@ -151,13 +173,27 @@ impl PluginProvider {
         T: Send + 'static,
         F: FnOnce(&mut ProviderInstance) -> Result<T, Error> + Send + 'static,
     {
+        // Provider ya muerto por un timeout previo (M2): falla rápido sin tocar
+        // el `Mutex` (que el hilo colgado retiene para siempre).
+        if self.dead.load(Ordering::Relaxed) {
+            return Err(Error::ProviderUnavailable { retryable: true });
+        }
         let inst = Arc::clone(&self.inst);
-        tokio::task::spawn_blocking(move || {
+        let dead = Arc::clone(&self.dead);
+        let fut = tokio::task::spawn_blocking(move || {
             let mut guard = inst.lock().map_err(|_| Error::Internal { panic: true })?;
             f(&mut guard)
-        })
-        .await
-        .map_err(|_| Error::Internal { panic: true })?
+        });
+        match tokio::time::timeout(self.op_timeout, fut).await {
+            Ok(join) => join.map_err(|_| Error::Internal { panic: true })?,
+            Err(_) => {
+                // El hilo sigue colgado reteniendo el Mutex: marca muerto el
+                // provider para que las ops futuras no bloqueen (M2, leak aceptado:
+                // I/O de socket wasip2 no cancelable; el humano reconecta).
+                dead.store(true, Ordering::Relaxed);
+                Err(Error::ProviderUnavailable { retryable: true })
+            }
+        }
     }
 }
 
@@ -305,9 +341,11 @@ impl Provider for PluginProvider {
         // apertura (fichero inexistente, dir) llega como el primer item del
         // stream. Estado: (instancia, segmentos, offset, bytes ya leídos).
         let inst = Arc::clone(&self.inst);
+        let dead = Arc::clone(&self.dead);
+        let timeout = self.op_timeout;
         let stream = stream::try_unfold(
-            (inst, segs, offset, 0u64),
-            move |(inst, segs, off, done)| async move {
+            (inst, dead, timeout, segs, offset, 0u64),
+            move |(inst, dead, timeout, segs, off, done)| async move {
                 const CHUNK: u64 = 64 * 1024;
                 let want = match limit {
                     Some(l) => {
@@ -319,16 +357,25 @@ impl Provider for PluginProvider {
                     }
                     None => CHUNK,
                 };
+                if dead.load(Ordering::Relaxed) {
+                    return Err(Error::ProviderUnavailable { retryable: true });
+                }
                 let inst2 = Arc::clone(&inst);
                 let segs2 = segs.clone();
-                let chunk: Vec<u8> = tokio::task::spawn_blocking(move || {
+                let fut = tokio::task::spawn_blocking(move || {
                     let mut g = inst2.lock().map_err(|_| Error::Internal { panic: true })?;
                     g.read(&segs2, off, want)
                         .map_err(|e| map_runtime_error(&e))?
                         .map_err(map_vfs_error)
-                })
-                .await
-                .map_err(|_| Error::Internal { panic: true })??;
+                });
+                let chunk: Vec<u8> = match tokio::time::timeout(timeout, fut).await {
+                    Ok(join) => join.map_err(|_| Error::Internal { panic: true })??,
+                    Err(_) => {
+                        // Lectura colgada en el socket (M2): marca muerto y corta.
+                        dead.store(true, Ordering::Relaxed);
+                        return Err(Error::ProviderUnavailable { retryable: true });
+                    }
+                };
                 if chunk.is_empty() {
                     return Ok(None); // EOF
                 }
@@ -341,7 +388,7 @@ impl Provider for PluginProvider {
                 let n = chunk.len() as u64;
                 Ok(Some((
                     Bytes::from(chunk),
-                    (inst, segs, off.saturating_add(n), done + n),
+                    (inst, dead, timeout, segs, off.saturating_add(n), done + n),
                 )))
             },
         );
@@ -365,6 +412,8 @@ impl Provider for PluginProvider {
             .await?;
         Ok(Box::new(PluginByteSink {
             inst: Arc::clone(&self.inst),
+            dead: Arc::clone(&self.dead),
+            op_timeout: self.op_timeout,
             writer: Some(handle),
         }))
     }
@@ -423,6 +472,10 @@ impl Provider for PluginProvider {
 /// best-effort en [`Drop`] (contrato de `ByteSink`; síncrono con `try_lock`).
 struct PluginByteSink {
     inst: Arc<Mutex<ProviderInstance>>,
+    /// Flag de muerte compartido con el `PluginProvider` (M2).
+    dead: Arc<AtomicBool>,
+    /// Timeout por op (heredado del provider).
+    op_timeout: Duration,
     /// `Some` mientras el handle no se haya liberado; `commit`/`abort`/`Drop` lo
     /// toman.
     writer: Option<norte_plugin_host::WriterHandle>,
@@ -445,18 +498,33 @@ impl Drop for PluginByteSink {
 }
 
 impl PluginByteSink {
-    /// Ejecuta una op sobre el writer en `spawn_blocking` (regla 2).
-    async fn call<F>(inst: &Arc<Mutex<ProviderInstance>>, f: F) -> Result<(), Error>
+    /// Ejecuta una op sobre el writer en `spawn_blocking` (regla 2), con el mismo
+    /// dead-check + timeout que [`PluginProvider::call`] (M2).
+    async fn call<F>(
+        inst: &Arc<Mutex<ProviderInstance>>,
+        dead: &Arc<AtomicBool>,
+        op_timeout: Duration,
+        f: F,
+    ) -> Result<(), Error>
     where
         F: FnOnce(&mut ProviderInstance) -> Result<(), Error> + Send + 'static,
     {
+        if dead.load(Ordering::Relaxed) {
+            return Err(Error::ProviderUnavailable { retryable: true });
+        }
         let inst = Arc::clone(inst);
-        tokio::task::spawn_blocking(move || {
+        let dead = Arc::clone(dead);
+        let fut = tokio::task::spawn_blocking(move || {
             let mut guard = inst.lock().map_err(|_| Error::Internal { panic: true })?;
             f(&mut guard)
-        })
-        .await
-        .map_err(|_| Error::Internal { panic: true })?
+        });
+        match tokio::time::timeout(op_timeout, fut).await {
+            Ok(join) => join.map_err(|_| Error::Internal { panic: true })?,
+            Err(_) => {
+                dead.store(true, Ordering::Relaxed);
+                Err(Error::ProviderUnavailable { retryable: true })
+            }
+        }
     }
 }
 
@@ -466,7 +534,7 @@ impl ByteSink for PluginByteSink {
         let Some(w) = self.writer else {
             return Err(Error::Internal { panic: false }); // usado tras consumir
         };
-        Self::call(&self.inst, move |g| {
+        Self::call(&self.inst, &self.dead, self.op_timeout, move |g| {
             g.writer_write(w, &chunk)
                 .map_err(|e| map_runtime_error(&e))?
                 .map_err(map_vfs_error)
@@ -478,7 +546,7 @@ impl ByteSink for PluginByteSink {
         let Some(w) = self.writer.take() else {
             return Err(Error::Internal { panic: false });
         };
-        Self::call(&self.inst, move |g| {
+        Self::call(&self.inst, &self.dead, self.op_timeout, move |g| {
             let r = g
                 .writer_commit(w)
                 .map_err(|e| map_runtime_error(&e))?
@@ -495,7 +563,7 @@ impl ByteSink for PluginByteSink {
         let Some(w) = self.writer.take() else {
             return Err(Error::Internal { panic: false });
         };
-        Self::call(&self.inst, move |g| {
+        Self::call(&self.inst, &self.dead, self.op_timeout, move |g| {
             let r = g
                 .writer_abort(w)
                 .map_err(|e| map_runtime_error(&e))?
