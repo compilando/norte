@@ -116,7 +116,7 @@ fn build_effectives_layers(layers: &Layers) -> Result<(Effective, Effective), Ke
             .map_err(|e| KeymapError::Toml(e.to_string()))?
         {
             kfs.push(kf);
-        } // ausente/no legible: la capa no aporta.
+        } // ausente: la capa no aporta; ilegible = error (banner + preset).
     }
     let cmds = all_commands();
     let browse = Effective::build_for(&preset, &kfs, &cmds, Screen::Browse)?;
@@ -358,9 +358,16 @@ prepend_keymap = [{ on = ["z"], run = "lua:foo" }]
         )
         .unwrap();
         let result = build_effectives_from(Some(dir.clone()));
-        assert!(
-            result.is_err(),
-            "bare keymap in a layer must fail: {result:?}"
-        );
+        // Pin the variant AND that the diagnostic names the culprit file —
+        // the property norte_frontend::config::load_keymap_layer advertises.
+        match result {
+            Err(KeymapError::Toml(msg)) => {
+                assert!(
+                    msg.contains("keymap.toml"),
+                    "culprit file in message: {msg}"
+                );
+            }
+            other => panic!("expected Err(KeymapError::Toml(_)), got {other:?}"),
+        }
     }
 }
