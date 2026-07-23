@@ -1,6 +1,7 @@
 //! The strict, canonical schema of `norte.toml` (ADR 0035): every section,
 //! `deny_unknown_fields`, compact hostile-safe diagnostics (#73).
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -135,35 +136,44 @@ pub struct KeymapSection {
 }
 
 /// The `[ai]` section of `norte.toml` (ADR 0031). All off by default.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AiSection {
     /// AI enabled. `None`/`false` = the gate rejects every operation.
-    /// `Option` so layer merge distinguishes "absent" from "false".
+    /// `Option` (not a plain `bool`) so layer merge distinguishes "absent"
+    /// (inherit the lower layer's value) from "explicitly false".
     #[serde(default)]
     pub enabled: Option<bool>,
-    /// Local-only mode: reject remote providers (spec §9).
+    /// Local-only mode: reject remote providers (spec §9). `Option` for the
+    /// same absent-vs-false reason as `enabled` above.
     #[serde(default)]
     pub local_only: Option<bool>,
     /// Prefixes whose content/names never leave the process. Wire strings;
-    /// validated to `VPath` during merge (the load module, Task 5).
+    /// validated to `VPath` during merge (the load module, Task 5). Merge is
+    /// a UNION across layers, not last-wins: a deny never disappears by
+    /// adding a layer (ADR 0035).
     #[serde(default)]
     pub denied_prefixes: Vec<String>,
-    /// Provider name used for AI rename.
+    /// Provider name used for AI rename. By-name, later-layer-wins merge
+    /// (same as other `Option` scalars in this schema).
     #[serde(default)]
     pub rename_provider: Option<String>,
-    /// Declared providers (`[ai.providers.<name>]`).
+    /// Declared providers (`[ai.providers.<name>]`). By-name, later-layer-wins
+    /// merge: a provider redeclared in a higher layer replaces the lower
+    /// layer's entry for that name, other names are untouched.
     #[serde(default)]
-    pub providers: std::collections::BTreeMap<String, AiProviderEntry>,
+    pub providers: BTreeMap<String, AiProviderEntry>,
 }
 
 /// One `[ai.providers.<name>]` entry.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AiProviderEntry {
-    /// `anthropic` | `ollama` | `openai-compat`.
+    /// `anthropic` | `ollama` | `openai-compat`. An invalid value is not
+    /// rejected at parse time — same pattern as `[ui] quick_search` — the AI
+    /// gate rejects it at use, where the diagnostic can name the provider.
     pub kind: String,
     /// Model id as the provider expects it.
     pub model: String,
@@ -250,7 +260,32 @@ model = "llama3"
 "#;
         let parsed: NorteToml = toml::from_str(doc).expect("[ai] es sección canónica");
         assert_eq!(parsed.ai.enabled, Some(true));
+        assert_eq!(parsed.ai.local_only, Some(true));
+        assert_eq!(parsed.ai.denied_prefixes, vec!["file:///secret".to_owned()]);
+        assert_eq!(parsed.ai.rename_provider, Some("local".to_owned()));
         assert_eq!(parsed.ai.providers.len(), 1);
+        let provider = parsed.ai.providers.get("local").expect("declarado");
+        assert_eq!(provider.kind, "ollama");
+        assert_eq!(provider.model, "llama3");
+    }
+
+    /// `deny_unknown_fields` pinned on the NEW `[ai]` struct too: a typo in
+    /// its top-level fields is a hard error, not silently ignored.
+    #[test]
+    fn ai_section_campo_desconocido_es_error() {
+        assert!(toml::from_str::<NorteToml>("[ai]\nenabld = true\n").is_err());
+    }
+
+    /// `deny_unknown_fields` pinned on `[ai.providers.<name>]` too.
+    #[test]
+    fn ai_provider_entry_campo_desconocido_es_error() {
+        let doc = r#"
+[ai.providers.x]
+kind = "ollama"
+model = "m"
+modle = "typo"
+"#;
+        assert!(toml::from_str::<NorteToml>(doc).is_err());
     }
 
     /// Strictness is uniform: a typo anywhere is a hard error.

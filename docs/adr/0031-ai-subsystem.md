@@ -57,7 +57,10 @@ the gate, ever.
 `[ai]` in norte.toml (user layer; PROJECT layer ignored fail-closed, same
 rule as `[archive]`): `enabled = false` (default: everything off),
 `local_only = false`, `[ai.providers.<name>] kind/model/base_url`, task
-routing `[ai.tasks] rename = "<name>"`, `denied_prefixes = ["file:///…"]`.
+routing `rename_provider = "<name>"`, `denied_prefixes = ["file:///…"]`.
+(The strict `norte-config` schema — ADR 0035 — rejects the nested
+`[ai.tasks]` form sketched in an earlier draft of this ADR: it was never
+implemented, and `deny_unknown_fields` makes it a hard startup error.)
 The core gate (`norte-core/src/ai.rs`): refuses any AI op when disabled;
 refuses remote (non-ollama-loopback) providers when `local_only`; refuses an
 op whose input paths fall under `denied_prefixes` BEFORE any content/name
