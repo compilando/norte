@@ -83,6 +83,13 @@ fn with_session<T>(f: impl FnOnce(&mut Session) -> Result<T, VfsError>) -> Resul
 /// siguiente comando. Best-effort e idempotente (`None` = no-op). Todo op que
 /// emita un comando de control lo llama ANTES (invariante #30 M1: jamás un
 /// comando con un `226` pendiente en el control).
+///
+/// COSTE (deuda, ADR 0033): el drenado va hasta EOF de la conexión de datos, así
+/// que abandonar una lectura de un fichero grande hace que la SIGUIENTE op pague
+/// transferir la cola no leída; y un servidor hostil que streamee sin fin cuelga
+/// el hilo `spawn_blocking` del host (el epoch deadline no traba I/O de socket).
+/// Igual que la deuda de timeout/cancelación; el fix limpio sería `ABOR` o
+/// reconectar el control. El `8192`-scratch acota la MEMORIA, no el total.
 fn flush_cached_read(s: &mut Session) {
     let Some(mut cr) = s.cached_read.take() else {
         return;
@@ -263,7 +270,12 @@ impl Guest for FtpProvider {
             let want = usize::try_from(len).unwrap_or(usize::MAX);
             // Techo por si `want == u64::MAX` (el adapter pide 64 KiB; jamás pica).
             let cap = want.min(1 << 20);
-            let cr = s.cached_read.as_mut().expect("caché instalada arriba");
+            // El hit reusa la caché; el miss la instaló justo arriba — en ambos
+            // casos `cached_read` es Some. El else es inalcanzable; se trata como
+            // Io en vez de panicar (regla 6, sin `expect`).
+            let Some(cr) = s.cached_read.as_mut() else {
+                return Err(VfsError::Io);
+            };
             let mut out = vec![0u8; cap];
             let mut filled = 0usize;
             let mut eof = false;

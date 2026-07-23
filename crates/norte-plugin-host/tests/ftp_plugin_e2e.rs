@@ -168,6 +168,9 @@ fn read_all_chunked(
     segments: &[Vec<u8>],
     chunk: u64,
 ) -> Vec<u8> {
+    // El helper trata un chunk corto como EOF: sólo es válido si `chunk` no supera
+    // el techo del guest (1 MiB), donde un short-read = EOF de verdad.
+    assert!(chunk <= 1 << 20, "el helper asume chunk <= techo del guest");
     let mut out = Vec::new();
     let mut off = 0u64;
     loop {
@@ -192,7 +195,7 @@ fn read_all_chunked(
 fn ftp_secuencial_grande_byte_exacto() {
     let dir = tempfile::tempdir().expect("tempdir");
     // 512 KiB > varios chunks de 64 KiB: ejercita el reuso del RETR.
-    let content: Vec<u8> = (0..512 * 1024).map(|i| (i % 251) as u8).collect();
+    let content: Vec<u8> = (0u32..512 * 1024).map(|i| (i % 251) as u8).collect();
     std::fs::write(dir.path().join("big.bin"), &content).expect("sembrar");
     let Some((_rt, mut inst)) = configured_ftp_provider(dir.path().to_path_buf()) else {
         return;
@@ -204,7 +207,7 @@ fn ftp_secuencial_grande_byte_exacto() {
 #[test]
 fn ftp_intercalar_stat_no_desincroniza() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let content: Vec<u8> = (0..200 * 1024).map(|i| (i % 251) as u8).collect();
+    let content: Vec<u8> = (0u32..200 * 1024).map(|i| (i % 251) as u8).collect();
     std::fs::write(dir.path().join("f.bin"), &content).expect("sembrar f");
     std::fs::write(dir.path().join("otro.txt"), b"hola").expect("sembrar otro");
     let Some((_rt, mut inst)) = configured_ftp_provider(dir.path().to_path_buf()) else {
@@ -221,7 +224,11 @@ fn ftp_intercalar_stat_no_desincroniza() {
         .stat(&[b"otro.txt".to_vec()])
         .expect("stat sin trap")
         .expect("otro.txt existe");
-    assert_eq!(st.size, Some(4), "stat tras lectura abandonada NO desincroniza");
+    assert_eq!(
+        st.size,
+        Some(4),
+        "stat tras lectura abandonada NO desincroniza"
+    );
     // Relectura entera del primero sigue byte-exacta.
     let got = read_all_chunked(&mut inst, &[b"f.bin".to_vec()], 64 * 1024);
     assert_eq!(got, content, "relectura entera byte-exacta");
@@ -249,4 +256,29 @@ fn ftp_rango_luego_list_ok() {
         page.entries.iter().any(|e| e.name == b"r.bin"),
         "list tras rango ve el fichero: la caché se drenó limpio"
     );
+}
+
+#[test]
+fn ftp_reread_no_secuencial_sobre_cache_viva() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // 130 KiB NO alineado a 64 KiB: cruza fronteras de chunk con cola parcial.
+    let content: Vec<u8> = (0u32..130 * 1024).map(|i| (i % 251) as u8).collect();
+    std::fs::write(dir.path().join("g.bin"), &content).expect("sembrar");
+    let Some((_rt, mut inst)) = configured_ftp_provider(dir.path().to_path_buf()) else {
+        return;
+    };
+    let seg = [b"g.bin".to_vec()];
+    // Un chunk desde 0 (deja la caché VIVA en next_offset=64Ki).
+    let a = inst.read(&seg, 0, 64 * 1024).expect("read").expect("ok");
+    assert_eq!(a.as_slice(), &content[..64 * 1024]);
+    // Re-lee desde 0 SIN op de flush intermedia: offset no casa (next_offset=64Ki)
+    // → miss → flush+re-RETR. Debe dar los MISMOS primeros bytes, no basura.
+    let b = inst.read(&seg, 0, 64 * 1024).expect("read").expect("ok");
+    assert_eq!(b.as_slice(), &content[..64 * 1024], "re-lectura desde 0 byte-exacta");
+    // Salto hacia delante a 128 KiB (miss otra vez) → cola de 2 KiB.
+    let c = inst.read(&seg, 128 * 1024, 64 * 1024).expect("read").expect("ok");
+    assert_eq!(c.as_slice(), &content[128 * 1024..], "salto adelante byte-exacto (cola)");
+    // Y una lectura secuencial entera desde cero sigue correcta.
+    let whole = read_all_chunked(&mut inst, &seg, 64 * 1024);
+    assert_eq!(whole, content, "lectura entera byte-exacta tras los saltos");
 }
