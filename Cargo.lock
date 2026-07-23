@@ -4322,6 +4322,7 @@ dependencies = [
  "norte-encoding",
  "norte-proto",
  "norte-testkit",
+ "norte-theme",
  "schemars 1.2.1",
  "serde",
  "tempfile",

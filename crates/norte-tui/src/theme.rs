@@ -5,11 +5,11 @@
 //! Vive en el frontend (regla 7: presentación, no lógica de negocio). La GUI de
 //! M5 tendrá su propio puente contra el MISMO `norte-theme`.
 
-use std::path::Path;
-
 use norte_proto::EntryKind;
 use norte_theme::{Color, ColorDepth, FileKind, ResolvedColor, Role, Theme};
 use ratatui::style::{Color as RColor, Modifier, Style as RStyle};
+
+pub use norte_frontend::theme::{ResolveError, resolve_theme};
 
 /// El tema resuelto + la profundidad de color a la que se pinta.
 #[derive(Debug, Clone)]
@@ -110,55 +110,12 @@ pub fn detect_depth() -> ColorDepth {
     ColorDepth::Ansi16
 }
 
-/// Error tipado de [`resolve`] (#73): el caller mapea cada variante a una
-/// clave Fluent para la barra — jamás el `Display` del OS (localizado por el
-/// SO) ni el diagnóstico crudo del parser ni el `spec` (que puede venir de la
-/// capa `./.norte` de un repo AJENO) sin sanear. El `Display` thiserror es
-/// solo para logs/stderr.
-#[derive(Debug, thiserror::Error)]
-pub enum ResolveError {
-    /// La ruta del spec no se pudo leer.
-    #[error("tema {spec:?}: {source}")]
-    Io {
-        /// El spec `[ui].theme` tal cual (ruta).
-        spec: String,
-        /// La causa.
-        source: std::io::Error,
-    },
-    /// El TOML del tema (o el preset embebido) no valida.
-    #[error("tema {spec:?}: {detail}")]
-    Parse {
-        /// El spec `[ui].theme` tal cual (nombre o ruta).
-        spec: String,
-        /// Diagnóstico de `norte-theme`.
-        detail: String,
-    },
-}
-
-/// Resuelve la especificación `[ui].theme`: un NOMBRE de preset embebido o una
-/// RUTA a un `.toml` propio. `None` = el preset por defecto.
+/// Resuelve la especificación `[ui].theme` al [`TuiTheme`] (tema compartido
+/// más profundidad del terminal). La resolución nombre/ruta vive en
+/// `norte_frontend::theme` (compartida con la GUI).
 ///
 /// # Errors
-/// [`ResolveError`] si la ruta no se lee o el TOML no parsea; el caller
-/// decide degradar al default y avisar.
+/// Los de [`resolve_theme`].
 pub fn resolve(spec: Option<&str>, depth: ColorDepth) -> Result<TuiTheme, ResolveError> {
-    let Some(spec) = spec else {
-        return Ok(TuiTheme::new(Theme::preset_default(), depth));
-    };
-    let parse = |e: norte_theme::ThemeError| ResolveError::Parse {
-        spec: spec.to_owned(),
-        detail: e.to_string(),
-    };
-    // Preset embebido por nombre.
-    if let Some(theme) = Theme::preset(spec).map_err(parse)? {
-        return Ok(TuiTheme::new(theme, depth));
-    }
-    // Si no es preset, es una ruta a un fichero de tema.
-    let path = Path::new(spec);
-    let raw = std::fs::read_to_string(path).map_err(|e| ResolveError::Io {
-        spec: spec.to_owned(),
-        source: e,
-    })?;
-    let theme = Theme::from_toml(&raw).map_err(parse)?;
-    Ok(TuiTheme::new(theme, depth))
+    Ok(TuiTheme::new(resolve_theme(spec)?, depth))
 }

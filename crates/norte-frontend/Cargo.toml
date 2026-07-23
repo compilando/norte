@@ -12,6 +12,7 @@ authors.workspace = true
 norte-config.workspace = true
 norte-proto.workspace = true
 norte-encoding.workspace = true
+norte-theme.workspace = true
 unicode-normalization.workspace = true
 serde = { workspace = true, features = ["derive"] }
 schemars = { workspace = true, features = ["derive"], optional = true }

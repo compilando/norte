@@ -20,6 +20,7 @@ pub mod nav;
 pub mod openers;
 mod pane;
 mod sort;
+pub mod theme;
 pub mod viewer;
 
 pub use display::{display_name, display_name_with, path_display, path_display_with};
