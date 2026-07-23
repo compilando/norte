@@ -23,6 +23,7 @@ the protocol, a frontend cannot provide it.
 | `norte-vfs-sftp` | SFTP provider, including hostile-server containment and byte-safe names. | MIT OR Apache-2.0 |
 | `norte-vfs-object` | Object-storage provider, with S3 as the first supported backend. | MIT OR Apache-2.0 |
 | `norte-vfs-archive` | Read-only ZIP and TAR provider. | MIT OR Apache-2.0 |
+| `norte-index` | SQLite FTS5 name/metadata search index (ADR 0034). Raw-bytes path authority + lossy-UTF-8 matching. Content/embeddings/tags are future work. | AGPL-3.0-only |
 | `norte-testkit` | Deterministic `MemProvider`, injectable failures, hostile fixtures, and proptest strategies. | MIT OR Apache-2.0 |
 | `norte-core` | Task scheduling, transfers, sessions, policy enforcement, journaling, and the daemon. | AGPL-3.0-only |
 | `norte-plugin-host` | WASM plugin manifests, capabilities, catalogue, and runtime. Hosts the first-party FTP provider guest (`examples-wasm/ftp-provider`), which replaces the former `norte-vfs-ftp` crate (ADR 0033). | AGPL-3.0-only |
