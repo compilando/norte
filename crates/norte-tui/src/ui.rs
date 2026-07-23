@@ -452,6 +452,7 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 // Etiqueta mínima; el diálogo/pane virtual de Alt+F7 llega en
                 // T6 de liveSearch — aquí solo evita el `match` no exhaustivo.
                 norte_proto::TaskKind::Search => "search",
+                norte_proto::TaskKind::Index => "index",
                 // Clase de un daemon N+1: etiqueta genérica, no rompe la UI.
                 norte_proto::TaskKind::Unknown => "task",
             };

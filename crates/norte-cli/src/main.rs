@@ -116,6 +116,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: PluginCmd,
     },
+    /// Índice de búsqueda: `index build <path>` / `index query <path> <texto>` (M4)
+    Index {
+        #[command(subcommand)]
+        cmd: IndexCmd,
+    },
     /// Sugerencias de IA (M4, ADR 0031). Opt-in por `[ai]` de norte.toml;
     /// SIEMPRE produce un plan REVISABLE que confirmas antes de aplicar
     Ai {
@@ -155,6 +160,26 @@ enum AiCmd {
         /// Aplica sin preguntar (por defecto se confirma — es revisable)
         #[arg(long)]
         yes: bool,
+    },
+}
+
+/// Subcomandos del índice de búsqueda (M4, ADR 0034).
+#[derive(Subcommand)]
+enum IndexCmd {
+    /// (Re)construye el índice de un subárbol (Task cancelable)
+    Build {
+        /// Raíz a indexar (path local o URL remota)
+        path: PathBuf,
+    },
+    /// Busca en el índice de un root por texto
+    Query {
+        /// Raíz cuyo índice consultar
+        path: PathBuf,
+        /// Texto libre (prefijo-AND de los términos)
+        text: String,
+        /// Tope de resultados
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
     },
 }
 
@@ -309,6 +334,7 @@ fn main() -> ExitCode {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // Tracing con el cap de seguridad `suppaftp=info` (issue #43, regla 10):
     // sin esto un `RUST_LOG=trace` volcaría `PASS <password>` de suppaftp.
@@ -335,7 +361,17 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         return audit_cmd(cmd).await;
     }
 
-    let engine = Engine::new();
+    // Índice de búsqueda (M4, ADR 0034): el MISMO fichero que el daemon
+    // (config_dir/index.db), así `norte index build` en embebido persiste y una
+    // query posterior lo lee. Si no abre, se sigue sin él (index.* Unsupported).
+    let index_path = norte_core::connect::config_dir().join("index.db");
+    let engine = match norte_core::Index::open(&index_path).await {
+        Ok(idx) => Engine::new().with_index(Arc::new(idx)),
+        Err(e) => {
+            eprintln!("aviso: índice no disponible ({e}); index.* dará Unsupported");
+            Engine::new()
+        }
+    };
     engine.register_provider(Arc::new(LocalProvider::os_root()) as Arc<dyn Provider>);
     // Conexiones remotas bajo demanda (fase 6e): connections.toml +
     // known_hosts + secretos en el dir de config del usuario.
@@ -419,6 +455,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(run_task(task, false).await)
         }
         Cmd::Plugin { cmd } => plugin_cmd(&backend, cmd).await,
+        Cmd::Index { cmd } => index_cmd(&backend, cmd).await,
         Cmd::Audit { .. } | Cmd::Ai { .. } => unreachable!("manejado arriba"),
         #[cfg(unix)]
         Cmd::Daemon { .. } | Cmd::Mcp { .. } | Cmd::Policy { .. } | Cmd::Undo { .. } => {
@@ -685,6 +722,45 @@ async fn plugin_cmd(backend: &Backend, cmd: PluginCmd) -> anyhow::Result<ExitCod
     }
 }
 
+/// `norte index build|query` (M4, ADR 0034).
+async fn index_cmd(backend: &Backend, cmd: IndexCmd) -> anyhow::Result<ExitCode> {
+    match cmd {
+        IndexCmd::Build { path } => {
+            let root = vpath(&path)?;
+            let task = backend
+                .index_build(&root)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))
+                .context("no se pudo lanzar el index build")?;
+            Ok(run_task(task, false).await)
+        }
+        IndexCmd::Query { path, text, limit } => {
+            let root = vpath(&path)?;
+            let hits = backend
+                .index_query(&root, &text, limit)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))
+                .context("query del índice")?;
+            for h in &hits {
+                let marker = match h.kind {
+                    EntryKind::Dir => "d",
+                    EntryKind::Symlink => "l",
+                    EntryKind::Other => "?",
+                    EntryKind::File => "-",
+                };
+                let size = h.size.map_or_else(|| "-".to_string(), |s| s.to_string());
+                // `display_lossy` sanea los bytes hostiles (regla 1): jamás
+                // controles/no-UTF8 crudos por stdout.
+                println!("{marker}\t{size}\t{}", h.path.display_lossy());
+            }
+            if hits.is_empty() {
+                eprintln!("(sin resultados)");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
+
 /// Resuelve el socket del daemon y un `spawn_cmd` de autoarranque (este mismo
 /// binario sabe ser daemon). Sondas de FS fuera del runtime (regla 2).
 #[cfg(unix)]
@@ -913,6 +989,7 @@ async fn make_backend(
 /// `norte daemon run|stop` (ADR 0011). El engine que sirve el daemon es el
 /// MISMO embebido de esta CLI: solo cambia el transporte (regla 7).
 #[cfg(unix)]
+#[allow(clippy::too_many_lines)]
 async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
     use norte_core::daemon::{
         Client, Daemon, DaemonApprovalResolver, DaemonConfig, default_socket_path,
@@ -942,6 +1019,16 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
                 std::sync::Arc::new(norte_core::ScopedPolicy::new(scopes.clone(), cfg)),
                 std::sync::Arc::clone(&approvals) as _,
             );
+            // Índice de búsqueda (M4, ADR 0034): junto al journal en config_dir.
+            // Si no abre, se sigue sin él (index.* → Unsupported, fail-closed).
+            let index_path = norte_core::connect::config_dir().join("index.db");
+            let engine = match norte_core::Index::open(&index_path).await {
+                Ok(idx) => engine.with_index(std::sync::Arc::new(idx)),
+                Err(e) => {
+                    eprintln!("aviso: índice no disponible ({e}); index.* dará Unsupported");
+                    engine
+                }
+            };
             engine.register_provider(Arc::new(LocalProvider::os_root()) as Arc<dyn Provider>);
             apply_archive_limits(&engine).await?;
             engine.set_connector(std::sync::Arc::new(

@@ -2375,6 +2375,39 @@ async fn dispatch_fs_task(
             let entry = shared.engine.stat(&p.path).await.map_err(RpcError::from)?;
             to_value(&methods::FsStatResult { entry })
         }
+        // index.query (0.25.0, M4): lectura directa del índice.
+        methods::INDEX_QUERY => {
+            let p: methods::IndexQueryParams = parse_params(req.params)?;
+            read_gate(&actor, &p.root, shared)?; // #80
+            let hits = shared
+                .engine
+                .index_query_as(&p.root, &p.text, p.limit, actor.clone())
+                .await
+                .map_err(RpcError::from)?;
+            let hits = hits
+                .into_iter()
+                .map(|h| methods::IndexHit {
+                    path: h.path,
+                    kind: h.kind,
+                    size: h.size,
+                    mtime_ms: h.mtime_ms,
+                })
+                .collect();
+            to_value(&methods::IndexQueryResult { hits })
+        }
+        // index.build (0.25.0, M4): Task. El resultado (indexed/removed) NO se
+        // reenvía por wire aún (task completa = hecho); un fetch de report es
+        // deuda análoga a `policy.undo_report`.
+        methods::INDEX_BUILD => {
+            let p: methods::IndexBuildParams = parse_params(req.params)?;
+            let (handle, _report) = shared
+                .engine
+                .index_build_as(p.root, actor.clone())
+                .await
+                .map_err(RpcError::from)?;
+            let task_id = register_task_id(shared, handle, actor.clone())?;
+            to_value(&methods::FsTaskResult { task_id })
+        }
         methods::FS_COPY => {
             let p: methods::FsCopyParams = parse_params(req.params)?;
             let opts = TransferOptions {

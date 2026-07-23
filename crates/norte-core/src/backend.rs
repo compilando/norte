@@ -22,6 +22,16 @@ use crate::Engine;
 use crate::engine::TransferOptions;
 use crate::scheduler::TaskHandle;
 
+/// Proyecta un `IndexHit` del core (norte-index) al tipo del protocolo (M4).
+fn index_hit_to_proto(h: norte_index::IndexHit) -> norte_proto::methods::IndexHit {
+    norte_proto::methods::IndexHit {
+        path: h.path,
+        kind: h.kind,
+        size: h.size,
+        mtime_ms: h.mtime_ms,
+    }
+}
+
 /// El tipo de stream que devuelve [`Backend::list_stream`] (ADR 0017),
 /// re-exportado para que los frontends lo nombren sin depender de `norte-vfs`.
 pub use norte_vfs::EntryStream;
@@ -343,6 +353,45 @@ impl Backend {
             }
             #[cfg(unix)]
             Self::Remote(r) => r.delete(path, mode).await,
+        }
+    }
+
+    /// (Re)construye el índice de `root` como Task (M4, ADR 0034).
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si no hay índice; taxonomía del protocolo.
+    pub async fn index_build(&self, root: &VPath) -> Result<TaskRef, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let (handle, _report) = engine
+                    .index_build_as(root.clone(), crate::journal::Actor::User)
+                    .await?;
+                Ok(TaskRef::from_handle(&handle))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.index_build(root).await,
+        }
+    }
+
+    /// Consulta el índice de `root` por `text` (M4). Devuelve hits del protocolo.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si no hay índice; taxonomía del protocolo.
+    pub async fn index_query(
+        &self,
+        root: &VPath,
+        text: &str,
+        limit: u32,
+    ) -> Result<Vec<norte_proto::methods::IndexHit>, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let hits = engine
+                    .index_query_as(root, text, limit, crate::journal::Actor::User)
+                    .await?;
+                Ok(hits.into_iter().map(index_hit_to_proto).collect())
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.index_query(root, text, limit).await,
         }
     }
 
@@ -1509,6 +1558,35 @@ pub mod remote {
                 TaskKind::Move
             };
             Ok(self.own_task(result.task_id, kind))
+        }
+
+        pub(super) async fn index_build(&self, root: &VPath) -> Result<TaskRef, Error> {
+            let result: FsTaskResult = self
+                .call_timed_guarded(
+                    methods::INDEX_BUILD,
+                    &methods::IndexBuildParams { root: root.clone() },
+                )
+                .await?;
+            Ok(self.own_task(result.task_id, TaskKind::Index))
+        }
+
+        pub(super) async fn index_query(
+            &self,
+            root: &VPath,
+            text: &str,
+            limit: u32,
+        ) -> Result<Vec<methods::IndexHit>, Error> {
+            let r: methods::IndexQueryResult = self
+                .call_timed(
+                    methods::INDEX_QUERY,
+                    &methods::IndexQueryParams {
+                        root: root.clone(),
+                        text: text.to_string(),
+                        limit,
+                    },
+                )
+                .await?;
+            Ok(r.hits)
         }
 
         pub(super) async fn delete(

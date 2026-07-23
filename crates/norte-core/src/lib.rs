@@ -28,6 +28,7 @@ mod undo;
 
 pub use engine::{Engine, TransferOptions};
 pub use journal::{Actor, ChainStatus, Journal, JournalEntry, Reversal, SqliteJournal};
+pub use norte_index::Index;
 /// Límites anti-bomba de los providers archive (#95.2): re-export para que
 /// los frontends configuren [`Engine::set_archive_limits`] sin depender de
 /// `norte-vfs-archive` (regla 7: hablan con el core).
