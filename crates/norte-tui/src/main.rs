@@ -352,29 +352,15 @@ async fn make_backend(
         // #95.2: límites anti-bomba de archives desde `[archive]` (capas de
         // usuario, jamás la de proyecto). Antes de cualquier navegación: los
         // providers compuestos se cachean con los límites de su primer uso.
-        if cfg.common.archive_max_entries.is_some()
-            || cfg.common.archive_max_decompressed_bytes.is_some()
-            || cfg.common.archive_max_nesting.is_some()
-        {
-            let mut limits = norte_core::ArchiveLimits::default();
-            if let Some(n) = cfg.common.archive_max_entries {
-                // Saturación HACIA ARRIBA (solo posible en 32-bit con un
-                // valor > u32::MAX): jamás recorta un límite a un valor
-                // pequeño por wrap — pero que no sea silenciosa.
-                limits.max_entries = usize::try_from(n).unwrap_or_else(|_| {
-                    // Pre-TUI (aún sin raw mode): stderr es visible.
-                    eprintln!(
-                        "norte: [archive] max_entries={n} satura a usize::MAX en esta plataforma"
-                    );
-                    usize::MAX
-                });
-            }
-            if let Some(b) = cfg.common.archive_max_decompressed_bytes {
-                limits.max_decompressed_bytes = b;
-            }
-            if let Some(n) = cfg.common.archive_max_nesting {
-                limits.max_nesting = n;
-            }
+        // rust review item 3 (C1): la conversión override+saturación vivía
+        // duplicada aquí y en `norte_core::archive_config` — un único home
+        // en el core (`limits_from_overrides`) para que TUI y daemon jamás
+        // diverjan en los límites anti-bomba.
+        if let Some(limits) = norte_core::archive_config::limits_from_overrides(
+            cfg.common.archive_max_entries,
+            cfg.common.archive_max_decompressed_bytes,
+            cfg.common.archive_max_nesting,
+        ) {
             engine.set_archive_limits(limits);
         }
         engine.register_provider(Arc::new(LocalProvider::os_root()));

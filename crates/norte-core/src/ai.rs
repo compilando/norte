@@ -106,10 +106,19 @@ impl AiConfig {
     /// Layered load (ADR 0035): System+User layers, Project ignored
     /// fail-closed. SYNC (startup): `spawn_blocking` in async contexts.
     ///
+    /// C1 review (item 2): uses [`norte_config::standard_layers_no_project`]
+    /// rather than [`norte_config::standard_layers`] — every `[ai]` value the
+    /// Project layer could provide is carved out in [`Self::from_settings`]
+    /// anyway (`norte-config::load` never merges `[ai]` from Project), so
+    /// parsing `./.norte/norte.toml` here would give a foreign repo a
+    /// startup-abort lever over `norte daemon run` (a broken or hostile
+    /// project file, combined with `deny_unknown_fields`) and no other
+    /// effect.
+    ///
     /// # Errors
     /// [`AiConfigError`] if any layer's TOML is invalid.
     pub fn load() -> Result<Self, AiConfigError> {
-        Self::load_from(&norte_config::standard_layers())
+        Self::load_from(&norte_config::standard_layers_no_project())
     }
 
     /// Like [`AiConfig::load`] with explicit layers (test injection).

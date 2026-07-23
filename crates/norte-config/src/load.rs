@@ -41,9 +41,20 @@ pub fn persist_ui_theme_to(dir: &std::path::Path, name: &str) -> std::io::Result
     std::fs::create_dir_all(dir)?;
     let path = dir.join("norte.toml");
     let mut doc = match std::fs::read_to_string(&path) {
-        Ok(s) => s
-            .parse::<toml_edit::DocumentMut>()
-            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?,
+        Ok(s) => s.parse::<toml_edit::DocumentMut>().map_err(|_| {
+            // security review item 4 (C1, NIT F4): `toml_edit`'s parse
+            // error `Display` quotes the offending document line — a
+            // hostile `name`/`path` persisted earlier (#73 discipline)
+            // would otherwise reach whatever shows this `io::Error`
+            // (the TUI status bar). Name the file, never the content.
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "{} no parsea: TOML inválido; corrígelo o bórralo",
+                    path.display()
+                ),
+            )
+        })?,
         Err(e) if e.kind() == ErrorKind::NotFound => toml_edit::DocumentMut::new(),
         Err(e) => return Err(e),
     };
@@ -79,9 +90,20 @@ pub fn persist_hotlist_add(dir: &Path, name: &str, wire_path: &str) -> std::io::
     std::fs::create_dir_all(dir)?;
     let path = dir.join("norte.toml");
     let mut doc = match std::fs::read_to_string(&path) {
-        Ok(s) => s
-            .parse::<toml_edit::DocumentMut>()
-            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?,
+        Ok(s) => s.parse::<toml_edit::DocumentMut>().map_err(|_| {
+            // security review item 4 (C1, NIT F4): `toml_edit`'s parse
+            // error `Display` quotes the offending document line — a
+            // hostile `name`/`path` persisted earlier (#73 discipline)
+            // would otherwise reach whatever shows this `io::Error`
+            // (the TUI status bar). Name the file, never the content.
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "{} no parsea: TOML inválido; corrígelo o bórralo",
+                    path.display()
+                ),
+            )
+        })?,
         Err(e) if e.kind() == ErrorKind::NotFound => toml_edit::DocumentMut::new(),
         Err(e) => return Err(e),
     };
@@ -127,9 +149,20 @@ pub fn persist_hotlist_remove(dir: &Path, name: &str) -> std::io::Result<PathBuf
     use std::io::{Error, ErrorKind};
     let path = dir.join("norte.toml");
     let mut doc = match std::fs::read_to_string(&path) {
-        Ok(s) => s
-            .parse::<toml_edit::DocumentMut>()
-            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?,
+        Ok(s) => s.parse::<toml_edit::DocumentMut>().map_err(|_| {
+            // security review item 4 (C1, NIT F4): `toml_edit`'s parse
+            // error `Display` quotes the offending document line — a
+            // hostile `name`/`path` persisted earlier (#73 discipline)
+            // would otherwise reach whatever shows this `io::Error`
+            // (the TUI status bar). Name the file, never the content.
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "{} no parsea: TOML inválido; corrígelo o bórralo",
+                    path.display()
+                ),
+            )
+        })?,
         // No-op documentado: nada que borrar.
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(path),
         Err(e) => return Err(e),
@@ -834,5 +867,36 @@ mod hotlist_tests {
         let cfg = load(&layers).expect("carga");
         assert_eq!(cfg.daemon_mode, None, "project mode ignored");
         assert_eq!(cfg.daemon_socket, None, "project socket ignored");
+    }
+
+    /// Security review item 4 (C1, NIT F4): the persist helpers' "existing
+    /// TOML doesn't parse" error must name the file but never echo
+    /// `toml_edit`'s parse-error `Display`, which quotes the offending
+    /// document line — a hostile line persisted earlier (#73 discipline)
+    /// must not resurface verbatim in whatever shows this `io::Error` (the
+    /// TUI status bar). Pinned across all three persist helpers with a
+    /// planted line containing a bidi override + an embedded fake TOML
+    /// header, deliberately broken syntax so the parse fails.
+    #[test]
+    fn persist_helpers_no_citan_el_error_crudo_de_toml_edit() {
+        let hostile = "not toml \u{202E}[[hotlist]]\u{202C} = [unterminated\n";
+        for helper in ["theme", "hotlist_add", "hotlist_remove"] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("norte.toml"), hostile).unwrap();
+            let err = match helper {
+                "theme" => persist_ui_theme_to(dir.path(), "nord").unwrap_err(),
+                "hotlist_add" => persist_hotlist_add(dir.path(), "n", "file:///x").unwrap_err(),
+                _ => persist_hotlist_remove(dir.path(), "n").unwrap_err(),
+            };
+            let msg = err.to_string();
+            assert!(
+                !msg.contains("hotlist") && !msg.contains('\u{202E}'),
+                "{helper}: error must not echo the hostile document content: {msg:?}"
+            );
+            assert!(
+                msg.contains("norte.toml"),
+                "{helper}: error should still name the offending file: {msg:?}"
+            );
+        }
     }
 }

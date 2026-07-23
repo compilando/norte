@@ -16,8 +16,8 @@ pub mod schema;
 pub mod watch;
 
 pub use dirs::{
-    Layer, Layers, config_dir, standard_layers, standard_layers_from, user_config_dir,
-    user_config_dir_from,
+    Layer, Layers, config_dir, standard_layers, standard_layers_from, standard_layers_no_project,
+    user_config_dir, user_config_dir_from,
 };
 pub use load::{
     AiSettings, CommonConfig, HotlistItem, QuickSearch, load, persist_hotlist_add,

@@ -47,6 +47,13 @@ The user config directory resolves, in order:
 An empty `NORTE_CONFIG_DIR` counts as unset, same as an empty
 `XDG_CONFIG_HOME`.
 
+When no environment variable resolves, the OS-reported home directory
+(`std::env::home_dir()`) is consulted before falling back to
+`./.config/norte` — parity with the pre-ADR-0035 resolver, so a HOME-less
+daemon (systemd unit, cron, container) does not silently anchor
+connections.toml/known_hosts/secrets.age/policy.toml/journal.db in a
+cwd-relative directory (security review, C1).
+
 Every consumer — core, daemon, CLI, TUI, GUI — uses this single resolver.
 
 ### `NORTE_CONFIG_DIR` is hermetic
@@ -111,3 +118,9 @@ The crate is `MIT OR Apache-2.0`, following the shared-library pattern of
 - **Behavior change**: `[daemon]` is no longer honored from the project layer
   (fail-closed; previously the TUI merged it) — a hostile repo must not
   redirect the daemon socket.
+- **Operator note**: a non-empty `NORTE_CONFIG_DIR` is hermetic — the
+  system-layer (`/etc/norte`) deny list and limits do not apply underneath
+  it (see "`NORTE_CONFIG_DIR` is hermetic" above). Operators relying on
+  system-wide `[ai] denied_prefixes` or a lowered `[archive]` limit must not
+  launch the daemon with the override set, or must copy that layer into the
+  override directory first.

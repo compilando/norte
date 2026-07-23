@@ -8,9 +8,9 @@ use std::path::PathBuf;
 /// lleva POR DIR en [`Layers`] (deuda #75) en vez de inferirse por la
 /// POSICIÓN en `dirs`: en Windows sin `%ProgramData%` la capa `System` está
 /// ausente, así que `%APPDATA%` (`User`) caería en el índice 0 y la
-/// inferencia posicional la etiquetaría como `System`. `Layer` reexporta
-/// por `crate::lua` para el `init.lua` (config es dueña del concepto de
-/// capa; el scripting solo lo consume).
+/// inferencia posicional la etiquetaría como `System`. `Layer` se reexporta
+/// desde `norte_tui::lua` para el `init.lua` (config es dueña del concepto
+/// de capa; el scripting solo lo consume).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Layer {
     /// `/etc/norte` (o `%ProgramData%\norte`).
@@ -94,15 +94,31 @@ pub fn user_config_dir_from(get: &impl Fn(&str) -> Option<OsString>) -> Option<P
     user_config_dir_on(cfg!(windows), get)
 }
 
-/// The user config dir from the process environment; `None` when the
-/// environment defines nothing (CI without HOME): the caller warns.
+/// The user config dir from the process environment. Falls back to the
+/// OS-reported home directory ([`std::env::home_dir`]) when none of the
+/// environment variables resolve; `None` only when even the OS cannot name
+/// a home (CI without HOME and no passwd entry): the caller warns.
 #[must_use]
 pub fn user_config_dir() -> Option<PathBuf> {
-    user_config_dir_from(&|k| std::env::var_os(k))
+    user_config_dir_from(&|k| std::env::var_os(k)).or_else(|| {
+        // Parity with the pre-ADR-0035 resolver: `std::env::home_dir()`
+        // consults the OS (getpwuid_r on unix, the user profile on
+        // Windows) when the env vars above are all absent. Without this, a
+        // HOME-less daemon (systemd unit, cron, container) would silently
+        // anchor connections.toml/known_hosts/secrets.age/policy.toml/
+        // journal.db in a cwd-relative directory — an attacker-influenced
+        // cwd must never decide where secrets live (security review, ADR
+        // 0035 C1). `home_dir()` was deprecated 1.29–1.84 over an
+        // inconsistent Windows implementation and un-deprecated in 1.85
+        // once that was fixed; the workspace MSRV (1.94) postdates that.
+        #[allow(deprecated)]
+        std::env::home_dir().map(|h| h.join(".config").join("norte"))
+    })
 }
 
 /// Infallible variant for core paths (`connections.toml`, `journal.db`, …):
-/// falls back to `./.config/norte`.
+/// falls back to `./.config/norte` only when [`user_config_dir`] returns
+/// `None` (no env var AND the OS cannot name a home).
 #[must_use]
 pub fn config_dir() -> PathBuf {
     user_config_dir().unwrap_or_else(|| PathBuf::from(".").join(".config").join("norte"))
@@ -150,6 +166,20 @@ pub fn standard_layers() -> Layers {
     standard_layers_from(&|k| std::env::var_os(k))
 }
 
+/// Standard layers WITHOUT the project layer (ADR 0035, C1 review): for
+/// value-only core consumers (`[archive]`, `[ai]`) where every project-layer
+/// value is carved out anyway by [`load`](crate::load::load) — parsing
+/// `./.norte/norte.toml` there would give a foreign repo a startup-abort
+/// lever over the daemon (a hostile or merely broken project `norte.toml`,
+/// combined with `deny_unknown_fields`, aborts `norte daemon run`) and no
+/// other effect.
+#[must_use]
+pub fn standard_layers_no_project() -> Layers {
+    let mut l = standard_layers();
+    l.dirs.retain(|(_, kind)| *kind != Layer::Project);
+    l
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,6 +221,16 @@ mod tests {
         assert_eq!(user_config_dir_from(&env(&[])), None);
     }
 
+    // Security review item 1 (C1): the PRODUCTION wrapper `user_config_dir()`
+    // falls back to `std::env::home_dir()` when the whole environment is
+    // silent (see its rustdoc). Not pinned by a test here: this crate
+    // `#![forbid(unsafe_code)]` (CLAUDE.md rule 5), and mutating process env
+    // to exercise that branch needs `unsafe` (edition 2024) — the injectable
+    // `_from`/`_on` seam this module already tests deliberately stays
+    // env-only (`getpwuid_r`/the Windows profile API are not injectable), so
+    // there is no unsafe-free way to drive the fallback branch from a test
+    // in this crate.
+
     /// ADR 0035 decision 2: an explicit override is HERMETIC — no system
     /// layer, only (override, User) + (./.norte, Project).
     #[test]
@@ -205,6 +245,21 @@ mod tests {
                 (PathBuf::from("/custom"), Layer::User),
                 (PathBuf::from(".norte"), Layer::Project),
             ]
+        );
+    }
+
+    /// Item 2 (both reviewers, C1): `standard_layers_no_project()` drops the
+    /// `(./.norte, Project)` entry that `standard_layers()` always appends —
+    /// value-only core consumers (`[archive]`, `[ai]`) must never let a
+    /// foreign repo's `norte.toml` reach `deny_unknown_fields` and abort
+    /// `norte daemon run`.
+    #[test]
+    fn standard_layers_no_project_excluye_proyecto() {
+        let l = standard_layers_no_project();
+        assert!(
+            !l.dirs.iter().any(|(_, kind)| *kind == Layer::Project),
+            "no Project entry: {:?}",
+            l.dirs
         );
     }
 

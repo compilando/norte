@@ -293,8 +293,10 @@ pub struct KeymapFile {
     /// [`Effective::discarded_lua_bindings`]) — rebindear una tecla común a
     /// un comando del `init.lua` del USUARIO (sin sandbox) sería ejecución
     /// dirigida por el repo sin confirmación alguna. No viene del TOML
-    /// (`serde(skip)`): lo marca `config::load` por posición de capa
-    /// (deuda #75: `Layers` debería llevar el kind por dir).
+    /// (`serde(skip)`): lo marca `load_keymap_layer` (`config.rs`) leyendo
+    /// el [`Layer`](norte_config::Layer) del `dir` que trae cada capa
+    /// (ADR 0035: el kind viaja POR DIR en `Layers`, ya no se infiere por
+    /// posición — deuda #75 cerrada).
     #[serde(skip)]
     project: bool,
 }

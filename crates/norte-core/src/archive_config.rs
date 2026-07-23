@@ -4,6 +4,43 @@
 
 use norte_vfs_archive::Limits;
 
+/// Compiled-default [`Limits`] with the given overrides applied. `None` = no
+/// override present for that field, keep the compiled default. Single home
+/// of the override+saturation rule (rust review item 3, C1): it previously
+/// existed twice, hand-duplicated between this function and the TUI's
+/// `make_backend` — the TUI and the daemon path must never diverge on
+/// anti-bomb limits.
+///
+/// Saturates `max_entries` UPWARD (only reachable on 32-bit with a value
+/// greater than `u32::MAX`): a limit is never silently shrunk by wraparound.
+#[must_use]
+pub fn limits_from_overrides(
+    max_entries: Option<u64>,
+    max_decompressed_bytes: Option<u64>,
+    max_nesting: Option<usize>,
+) -> Option<Limits> {
+    if max_entries.is_none() && max_decompressed_bytes.is_none() && max_nesting.is_none() {
+        return None;
+    }
+    let mut limits = Limits::default();
+    if let Some(n) = max_entries {
+        limits.max_entries = usize::try_from(n).unwrap_or_else(|_| {
+            tracing::warn!(
+                n,
+                "[archive] max_entries saturates to usize::MAX on this platform"
+            );
+            usize::MAX
+        });
+    }
+    if let Some(b) = max_decompressed_bytes {
+        limits.max_decompressed_bytes = b;
+    }
+    if let Some(n) = max_nesting {
+        limits.max_nesting = n;
+    }
+    Some(limits)
+}
+
 /// Merged `[archive]` overrides from the given layers. `None` = no
 /// overrides anywhere (use compiled defaults).
 ///
@@ -14,40 +51,27 @@ use norte_vfs_archive::Limits;
 pub fn load_archive_limits_from(layers: &norte_config::Layers) -> std::io::Result<Option<Limits>> {
     let cfg = norte_config::load(layers)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    if cfg.archive_max_entries.is_none()
-        && cfg.archive_max_decompressed_bytes.is_none()
-        && cfg.archive_max_nesting.is_none()
-    {
-        return Ok(None);
-    }
-    let mut limits = Limits::default();
-    if let Some(n) = cfg.archive_max_entries {
-        // Saturate UPWARD (only possible on 32-bit with a value > u32::MAX):
-        // never shrink a limit by wrap, and not silently.
-        limits.max_entries = usize::try_from(n).unwrap_or_else(|_| {
-            tracing::warn!(
-                n,
-                "[archive] max_entries saturates to usize::MAX on this platform"
-            );
-            usize::MAX
-        });
-    }
-    if let Some(b) = cfg.archive_max_decompressed_bytes {
-        limits.max_decompressed_bytes = b;
-    }
-    if let Some(n) = cfg.archive_max_nesting {
-        limits.max_nesting = n;
-    }
-    Ok(Some(limits))
+    Ok(limits_from_overrides(
+        cfg.archive_max_entries,
+        cfg.archive_max_decompressed_bytes,
+        cfg.archive_max_nesting,
+    ))
 }
 
 /// Layered load from the standard layers. SYNC (startup): wrap in
 /// `spawn_blocking` from async contexts.
 ///
+/// C1 review (item 2): uses [`norte_config::standard_layers_no_project`]
+/// rather than [`norte_config::standard_layers`] — `norte-config::load`
+/// never honors `[archive]` from the Project layer anyway (a foreign repo
+/// must not raise the anti-bomb limits), so parsing `./.norte/norte.toml`
+/// here would give it a startup-abort lever over `norte daemon run` and no
+/// other effect.
+///
 /// # Errors
 /// Those of [`load_archive_limits_from`].
 pub fn load_archive_limits() -> std::io::Result<Option<Limits>> {
-    load_archive_limits_from(&norte_config::standard_layers())
+    load_archive_limits_from(&norte_config::standard_layers_no_project())
 }
 
 #[cfg(test)]
@@ -178,5 +202,99 @@ mod tests {
             dirs: vec![(user.path().to_path_buf(), norte_config::Layer::User)],
         };
         assert!(load_archive_limits_from(&layers).expect("carga").is_none());
+    }
+
+    /// C1 review, item 2: a broken/hostile `./.norte/norte.toml` (Project
+    /// layer) must not be able to abort `norte daemon run`. This is pinned
+    /// two ways: `load_archive_limits_from` keeps its documented semantics
+    /// unchanged — given an EXPLICIT `Layers` that still includes a broken
+    /// Project entry, it still errors fail-loud (nothing here silently
+    /// swallows a broken layer the caller asked to include). The actual
+    /// fix is that `load_archive_limits()` no longer asks for that entry at
+    /// all: it uses `standard_layers_no_project()`, whose exclusion of
+    /// `Layer::Project` is pinned at the `norte-config` level by
+    /// `standard_layers_no_project_excluye_proyecto`. Reproduced here with a
+    /// same-shape User+Project pair to show what the daemon would have hit.
+    #[test]
+    fn norte_toml_de_proyecto_roto_no_aborta_el_daemon() {
+        let user = tempfile::tempdir().unwrap();
+        std::fs::write(
+            user.path().join("norte.toml"),
+            "[archive]\nmax_entries = 5\n",
+        )
+        .unwrap();
+        let proyecto = tempfile::tempdir().unwrap();
+        // Broken TOML — the kind of thing a hostile or merely careless
+        // project checkout could ship.
+        std::fs::write(proyecto.path().join("norte.toml"), "[archive\n").unwrap();
+
+        // Explicit layers INCLUDING the broken project entry: semantics of
+        // `load_archive_limits_from` are unchanged — it still errors when
+        // the caller hands it a broken layer.
+        let with_project = norte_config::Layers {
+            dirs: vec![
+                (user.path().to_path_buf(), norte_config::Layer::User),
+                (proyecto.path().to_path_buf(), norte_config::Layer::Project),
+            ],
+        };
+        assert!(
+            load_archive_limits_from(&with_project).is_err(),
+            "an explicitly-included broken Project layer still errors"
+        );
+
+        // What the daemon actually does (`load_archive_limits()`, via
+        // `standard_layers_no_project()`): the same broken project dir is
+        // never consulted, so the same on-disk state loads cleanly.
+        let without_project = norte_config::Layers {
+            dirs: vec![(user.path().to_path_buf(), norte_config::Layer::User)],
+        };
+        let limits = load_archive_limits_from(&without_project)
+            .expect("no project layer in play: loads cleanly")
+            .expect("override present");
+        assert_eq!(limits.max_entries, 5);
+    }
+
+    /// Unit coverage for the deduped helper (rust review item 3): overrides
+    /// are respected per-field, an absent field keeps the compiled default,
+    /// and `max_entries` saturates upward rather than wrapping.
+    #[test]
+    fn limits_from_overrides_respeta_overrides_y_defaults() {
+        assert!(limits_from_overrides(None, None, None).is_none());
+
+        let l = limits_from_overrides(Some(100), None, None).expect("override presente");
+        assert_eq!(l.max_entries, 100);
+        assert_eq!(
+            l.max_decompressed_bytes,
+            Limits::default().max_decompressed_bytes,
+            "campo ausente conserva el default"
+        );
+        assert_eq!(
+            l.max_nesting,
+            Limits::default().max_nesting,
+            "campo ausente conserva el default"
+        );
+
+        let l = limits_from_overrides(None, Some(1024), Some(3)).expect("overrides presentes");
+        assert_eq!(l.max_decompressed_bytes, 1024);
+        assert_eq!(l.max_nesting, 3);
+        assert_eq!(
+            l.max_entries,
+            Limits::default().max_entries,
+            "campo ausente conserva el default"
+        );
+    }
+
+    /// Saturation branch (32-bit only in practice, but the conversion path
+    /// is portable): a `max_entries` beyond `usize::MAX` never wraps to a
+    /// small number — it saturates to `usize::MAX`, loud (a `tracing::warn`)
+    /// rather than a silently-shrunk anti-bomb limit.
+    #[test]
+    fn limits_from_overrides_max_entries_satura_no_envuelve() {
+        // On 64-bit `usize::try_from(u64)` never fails, so this pins the
+        // in-range identity path instead — the saturation branch itself is
+        // only reachable on 32-bit, documented in the rustdoc.
+        let l = limits_from_overrides(Some(u64::from(u32::MAX)), None, None)
+            .expect("override presente");
+        assert_eq!(l.max_entries, u32::MAX as usize);
     }
 }
