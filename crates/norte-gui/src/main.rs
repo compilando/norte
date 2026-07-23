@@ -1963,6 +1963,7 @@ fn task_line(p: &norte_proto::TaskProgress) -> String {
         TaskKind::Delete => "gui-task-kind-delete",
         TaskKind::Undo => "gui-task-kind-undo",
         TaskKind::Search => "gui-task-kind-search",
+        TaskKind::Index => "gui-task-kind-index",
         TaskKind::Unknown => "gui-task-kind-unknown",
     });
     let pct = match p.entries_total {
