@@ -565,6 +565,21 @@ fn modal_width(titulo: &str, cuerpo: &str, frame_width: u16) -> u16 {
         .clamp(60, frame_width.saturating_sub(4).max(60))
 }
 
+/// Alto del modal por variante (líneas de contenido + bordes).
+fn modal_height(modal: &crate::app::Modal) -> u16 {
+    use crate::app::Modal;
+    match modal {
+        Modal::ApproveAgentOp { req } => u16::try_from(req.paths.len())
+            .unwrap_or(u16::MAX)
+            .saturating_add(4),
+        // host + algo + fingerprint + nota + teclas (5 líneas) + bordes.
+        Modal::TrustHostKey { .. } => 9,
+        // Un mensaje largo con wrap (~4 líneas a 58 cols) + bordes.
+        Modal::TrustLuaInit { .. } => 8,
+        _ => 6,
+    }
+}
+
 /// Caja centrada del modal.
 /// `reinterpret` = enc del pane con FOCO al pintar: correcto para los
 /// modales SÍNCRONOS (confirmar copy/move/delete se crea desde el pane con
@@ -665,16 +680,7 @@ fn draw_modal(
         theme.role(Role::ModalBorder)
     };
     // Altura: fija salvo la aprobación (una línea POR ruta, H2 del auditor).
-    let alto = match modal {
-        Modal::ApproveAgentOp { req } => u16::try_from(req.paths.len())
-            .unwrap_or(u16::MAX)
-            .saturating_add(4),
-        // host + algo + fingerprint + nota + teclas (5 líneas) + bordes.
-        Modal::TrustHostKey { .. } => 9,
-        // Un mensaje largo con wrap (~4 líneas a 58 cols) + bordes.
-        Modal::TrustLuaInit { .. } => 8,
-        _ => 6,
-    };
+    let alto = modal_height(modal);
     let area = centered(
         frame.area(),
         modal_width(&titulo, &cuerpo, frame.area().width),
