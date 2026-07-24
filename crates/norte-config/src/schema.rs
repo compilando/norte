@@ -137,6 +137,16 @@ pub struct UiSection {
     /// NOT clamped in silence.
     #[serde(default)]
     pub font_size: Option<f32>,
+    /// Accessibility motion override (spec §17 a11y; GUI phase G2). `true`
+    /// forces every animated GUI effect off — CRT flicker, cursor blink, and
+    /// any future `with_animation` use — regardless of what a theme's
+    /// `[effects]` section declares. `None`/absent leaves motion as the
+    /// theme requests it; GPUI exposes no platform-level "prefers reduced
+    /// motion" hint at this revision, so the effective default when absent
+    /// is `false` (motion allowed), not an OS query. `Option` for the same
+    /// absent-vs-explicit reason as `[ai] enabled`.
+    #[serde(default)]
+    pub reduce_motion: Option<bool>,
 }
 
 /// The `[keymap]` section of `norte.toml`.

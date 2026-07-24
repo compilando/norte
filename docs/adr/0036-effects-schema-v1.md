@@ -158,3 +158,61 @@ the value.
   `cursor_blink`, `fade_ms`) under the same lenient, per-key-degrading
   contract, plus a `reduce_motion` accessibility override — not part of this
   decision.
+
+## Amendment (2026-07-24, phase G2 — schema v1.1)
+
+Phase G2 (`docs/superpowers/plans/2026-07-24-g2-motion.md`) begins landing
+the motion extension this ADR pre-authorized above. Its Task 1 extends
+`norte-gui`'s `EffectsV1` (`crates/norte-gui/src/effects.rs`) with three
+more keys, under the exact per-key-lenient contract of decision 2 — same
+clamp-never-error numeric treatment, same per-key wrong-type degrade-and-warn,
+same "unknown key" leniency for anything still newer:
+
+| Table     | Key            | Type  | Range        | Default | Status                              |
+| --------- | -------------- | ----- | ------------ | ------- | ------------------------------------ |
+| `flicker` | `strength`     | f32   | `[0.0, 0.15]`| `0.05`  | schema landed (T1); rendered in T2   |
+| —         | `cursor_blink` | bool  | —            | —       | schema landed (T1); rendered in T2   |
+| —         | `fade_ms`      | int   | `[0, 400]`   | —       | schema landed (T1); **parsed only**  |
+
+`flicker` mirrors `vignette`'s shape (a sub-table with one clamped `f32`
+subfield); `cursor_blink` and `fade_ms` are bare scalars directly under
+`[effects]`, not sub-tables — there is no "table present, subfield absent"
+default-substitution case for them (see the module's rustdoc), so absent
+means [`None`], not a default value.
+
+`flicker.strength`'s range is deliberately tiny — `[0.0, 0.15]`, less than
+half of `scanlines.opacity`'s ceiling — for the same accessibility reason
+class as decision 2's AA-contrast guard: unbounded flicker risks a
+photosensitive trigger, not just an ugly overlay. GPUI's native
+`with_animation` + `cx.reduce_motion()` (verified at rev f14fea9,
+`animation.rs:161-168`) mean every animated effect this schema can produce
+is force-static under `reduce_motion`, both through GPUI's own gate and
+through a second `cx.reduce_motion()` check directly in `norte-gui`'s frame
+loop as a belt-and-suspenders (decision 3 of the G2 motion plan).
+
+**`fade_ms` is schema-complete but not yet rendered.** G2's plan (decision 1
+of `docs/superpowers/plans/2026-07-24-g2-motion.md`) deferred wiring
+modal/pane fade transitions: touching every overlay's show/hide path for a
+marginal visual payoff was judged out of scope for the milestone that ships
+flicker and cursor blink. The field parses and clamps correctly today — a
+theme author can set `fade_ms = 200` and the value round-trips through
+`EffectsV1` — but no GPUI element currently reads it to animate an opacity
+ramp. This is a recorded, deliberate schema/implementation gap, not an
+oversight; closing it is a follow-up, not a re-opening of this ADR.
+
+**`reduce_motion` accessibility override.** T1 also lands the configuration
+side: `norte-config`'s `[ui]` section (`crates/norte-config/src/schema.rs`)
+gains `reduce_motion: Option<bool>`, merged last-wins across every
+configuration layer including Project — the same presentation-only class as
+`ui_theme`/`ui_lang`, not the security-sensitive fail-closed carve-out
+`[archive]`/`[ai]`/hotlist get (`CommonConfig::ui_reduce_motion` in
+`crates/norte-config/src/load.rs`). Task 2 wires the GUI side: `norte-gui`
+will read it once at startup and call GPUI's `App::set_reduce_motion`
+(`app.rs:1016` at the verified rev) — GPUI then kills all `with_animation`
+motion for every element for free, with no per-effect plumbing required, and
+Task 2's direct `request_animation_frame` path adds a second
+`cx.reduce_motion()` check as a belt-and-suspenders on top of GPUI's own
+gate. GPUI itself exposes no platform "prefers reduced motion" query at this
+revision, so an absent config value takes the "else false" branch (motion
+allowed) rather than an OS-level default — documented here since it is a
+capability gap in the upstream library, not a norte design choice.

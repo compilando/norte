@@ -42,7 +42,9 @@ png  = { fg = "#ffd070" }
 jpg  = { fg = "#ffd070" }
 
 [effects]
-scanlines = { opacity = 0.12, spacing_px = 3 }
-vignette  = { strength = 0.35 }
-glow      = { strength = 0.5 }
-bezel     = { radius_px = 10, inset = true }
+scanlines    = { opacity = 0.12, spacing_px = 3 }
+vignette     = { strength = 0.35 }
+glow         = { strength = 0.5 }
+bezel        = { radius_px = 10, inset = true }
+flicker      = { strength = 0.05 }
+cursor_blink = true

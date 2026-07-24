@@ -280,6 +280,10 @@ pub struct CommonConfig {
     /// including Project — presentation-only, same reasoning as the other
     /// `[ui]` scalars above.
     pub ui_font_size: Option<f32>,
+    /// `[ui] reduce_motion` (last-wins; None = motion allowed, spec §17 a11y
+    /// / GUI phase G2). Honored from ALL layers including Project —
+    /// presentation-only, same class as `ui_theme`/`ui_lang` above.
+    pub ui_reduce_motion: Option<bool>,
     /// `[daemon] mode` (last-wins; None = embedded; never from Project —
     /// fail-closed, review MAJOR-1). Startup only.
     pub daemon_mode: Option<crate::schema::DaemonMode>,
@@ -343,22 +347,65 @@ fn merge_ai_layer(
     Ok(())
 }
 
-/// Merges one layer's already-parsed `[ui] font`/`mono_font`/`font_size`
-/// values into the accumulators (last-present-wins), validating `font_size`
-/// against `[8.0, 32.0]` (GP:
-/// `docs/superpowers/specs/2026-07-23-gui-visual-plugins-design.md`).
-/// Extracted out of [`load`] to stay under clippy's line-count cap, same
-/// pattern as [`merge_ai_layer`].
+/// Merges one layer's already-parsed `[daemon]` section (already filtered to
+/// non-Project by the caller) into the accumulators (last-present-wins per
+/// field, infallible). Extracted out of [`load`] to stay under clippy's
+/// line-count cap, same pattern as [`merge_ai_layer`].
+fn merge_daemon_layer(
+    daemon_mode: &mut Option<DaemonMode>,
+    daemon_socket: &mut Option<PathBuf>,
+    d: crate::schema::DaemonSection,
+) {
+    if let Some(m) = d.mode {
+        *daemon_mode = Some(m);
+    }
+    if let Some(sock) = d.socket {
+        *daemon_socket = Some(sock);
+    }
+}
+
+/// Merges one layer's already-parsed `[archive]` section (already filtered
+/// to non-Project by the caller) into the accumulators (last-present-wins
+/// per field, infallible — every field is a plain scalar copy). Extracted
+/// out of [`load`] to stay under clippy's line-count cap, same pattern as
+/// [`merge_ai_layer`].
+fn merge_archive_layer(
+    archive_max_entries: &mut Option<u64>,
+    archive_max_decompressed_bytes: &mut Option<u64>,
+    archive_max_nesting: &mut Option<usize>,
+    a: &crate::schema::ArchiveSection,
+) {
+    if let Some(n) = a.max_entries {
+        *archive_max_entries = Some(n);
+    }
+    if let Some(b) = a.max_decompressed_bytes {
+        *archive_max_decompressed_bytes = Some(b);
+    }
+    if let Some(n) = a.max_nesting {
+        *archive_max_nesting = Some(n);
+    }
+}
+
+/// Merges one layer's already-parsed `[ui] font`/`mono_font`/`font_size`/
+/// `reduce_motion` values into the accumulators (last-present-wins),
+/// validating `font_size` against `[8.0, 32.0]` (GP:
+/// `docs/superpowers/specs/2026-07-23-gui-visual-plugins-design.md`;
+/// `reduce_motion` is G2, spec §17 a11y — no validation needed, any bool is
+/// valid). Extracted out of [`load`] to stay under clippy's line-count cap,
+/// same pattern as [`merge_ai_layer`].
 ///
 /// # Errors
 /// [`ConfigError::Toml`] if `font_size` is outside `[8.0, 32.0]`.
+#[allow(clippy::too_many_arguments)]
 fn merge_ui_fonts(
     ui_font: &mut Option<String>,
     ui_mono_font: &mut Option<String>,
     ui_font_size: &mut Option<f32>,
+    ui_reduce_motion: &mut Option<bool>,
     font: Option<String>,
     mono_font: Option<String>,
     font_size: Option<f32>,
+    reduce_motion: Option<bool>,
     norte: &Path,
 ) -> Result<(), ConfigError> {
     if let Some(f) = font {
@@ -377,6 +424,9 @@ fn merge_ui_fonts(
         }
         *ui_font_size = Some(fs);
     }
+    if let Some(rm) = reduce_motion {
+        *ui_reduce_motion = Some(rm);
+    }
     Ok(())
 }
 
@@ -393,6 +443,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_font: Option<String> = None;
     let mut ui_mono_font: Option<String> = None;
     let mut ui_font_size: Option<f32> = None;
+    let mut ui_reduce_motion: Option<bool> = None;
     let mut daemon_mode: Option<DaemonMode> = None;
     let mut daemon_socket: Option<PathBuf> = None;
     let mut hotlist: Vec<HotlistItem> = Vec::new();
@@ -439,9 +490,11 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                 &mut ui_font,
                 &mut ui_mono_font,
                 &mut ui_font_size,
+                &mut ui_reduce_motion,
                 parsed.ui.font,
                 parsed.ui.mono_font,
                 parsed.ui.font_size,
+                parsed.ui.reduce_motion,
                 &norte,
             )?;
             // `[daemon]` is NOT honored from Project either (review MAJOR-1):
@@ -449,12 +502,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             // attacker-controlled socket — same fail-closed carve-out as
             // `[archive]`/`[ai]`/hotlist.
             if *kind != Layer::Project {
-                if let Some(m) = parsed.daemon.mode {
-                    daemon_mode = Some(m);
-                }
-                if let Some(sock) = parsed.daemon.socket {
-                    daemon_socket = Some(sock);
-                }
+                merge_daemon_layer(&mut daemon_mode, &mut daemon_socket, parsed.daemon);
             }
             // La hotlist se acumula de TODAS las capas MENOS la de
             // proyecto (deuda #75 cerrada: el kind viaja POR DIR, ya no se
@@ -475,15 +523,12 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             // justo donde viven los contenedores hostiles (mismo criterio
             // fail-closed que la hotlist).
             if *kind != Layer::Project {
-                if let Some(n) = parsed.archive.max_entries {
-                    archive_max_entries = Some(n);
-                }
-                if let Some(b) = parsed.archive.max_decompressed_bytes {
-                    archive_max_decompressed_bytes = Some(b);
-                }
-                if let Some(n) = parsed.archive.max_nesting {
-                    archive_max_nesting = Some(n);
-                }
+                merge_archive_layer(
+                    &mut archive_max_entries,
+                    &mut archive_max_decompressed_bytes,
+                    &mut archive_max_nesting,
+                    &parsed.archive,
+                );
             }
             // `[ai]` (ADR 0035 decisión 3) TAMPOCO se honra desde proyecto:
             // un `./.norte/norte.toml` de un repo ajeno no debe poder
@@ -503,6 +548,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_font,
         ui_mono_font,
         ui_font_size,
+        ui_reduce_motion,
         daemon_mode,
         daemon_socket,
         hotlist,
@@ -799,6 +845,44 @@ mod hotlist_tests {
         assert_eq!(cfg.ui_font.as_deref(), Some("Inter"));
         assert_eq!(cfg.ui_mono_font.as_deref(), Some("JetBrains Mono"));
         assert!((cfg.ui_font_size.unwrap() - 15.5).abs() < f32::EPSILON);
+    }
+
+    /// `[ui] reduce_motion` (G2 a11y override, spec §17): last-wins, honored
+    /// from EVERY layer including Project — same presentation-only class as
+    /// `ui_theme`/`ui_lang`, not the security-sensitive fail-closed carve-out
+    /// `[archive]`/`[ai]`/hotlist get.
+    #[test]
+    fn ui_reduce_motion_carga_last_wins_todas_las_capas() {
+        let system = tempfile::tempdir().unwrap();
+        std::fs::write(
+            system.path().join("norte.toml"),
+            "[ui]\nreduce_motion = true\n",
+        )
+        .unwrap();
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            project.path().join("norte.toml"),
+            "[ui]\nreduce_motion = false\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (system.path().to_path_buf(), Layer::System),
+                (project.path().to_path_buf(), Layer::Project),
+            ],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(
+            cfg.ui_reduce_motion,
+            Some(false),
+            "la capa Project gana (last-wins) y SÍ se honra (presentación, no seguridad)"
+        );
+    }
+
+    #[test]
+    fn ui_reduce_motion_ausente_es_none() {
+        let cfg = load(&Layers { dirs: vec![] }).expect("carga");
+        assert_eq!(cfg.ui_reduce_motion, None);
     }
 
     /// ADR 0007: config inválida es error de arranque CON fichero culpable —

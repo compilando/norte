@@ -1,4 +1,5 @@
-//! Interpreter for a theme's `[effects]` section (schema v1, ADR 0036).
+//! Interpreter for a theme's `[effects]` section (schema v1.1, ADR 0036 +
+//! its G2 amendment).
 //!
 //! `norte-theme` keeps `Theme.effects` deliberately untyped
 //! (`Option<toml::Value>`, ADR 0020 D4) so a TUI-only build never links
@@ -13,7 +14,7 @@
 //! - `[effects]` absent → [`None`]: paint nothing.
 //! - `[effects]` present → always [`Some`], even if every key inside it is
 //!   malformed. A degraded-to-empty `[effects]` renders identically to an
-//!   absent one (all four fields [`None`]), but the distinction matters for
+//!   absent one (all seven fields [`None`]), but the distinction matters for
 //!   callers that only need "is there an effects section at all"
 //!   ([`norte_theme::Theme::has_effects`]).
 //! - Numeric values out of range **clamp** to the nearest bound — never an
@@ -41,8 +42,15 @@
 //! | `glow.strength`          | `0.4`   |
 //! | `bezel.radius_px`        | `10`    |
 //! | `bezel.inset`            | `false` |
+//! | `flicker.strength`       | `0.05`  |
 //!
-//! # Clamp ranges (ADR 0036 §2)
+//! `cursor_blink` and `fade_ms` are bare scalars directly under `[effects]`,
+//! not subfields of an always-present sub-table (unlike `flicker.strength`
+//! above) — there is no "table present but key absent" case for them, so no
+//! default substitution applies: absent means [`None`], same as any other
+//! top-level key.
+//!
+//! # Clamp ranges (ADR 0036 §2, extended §2 amendment for v1.1)
 //!
 //! | Key                     | Range          |
 //! | ------------------------ | -------------- |
@@ -51,8 +59,10 @@
 //! | `vignette.strength`      | `[0.0, 0.6]`   |
 //! | `glow.strength`          | `[0.0, 1.0]`   |
 //! | `bezel.radius_px`        | `[0, 32]`      |
+//! | `flicker.strength`       | `[0.0, 0.15]`  |
+//! | `fade_ms`                | `[0, 400]`     |
 //!
-//! `bezel.inset` is a bool: no clamp applies.
+//! `bezel.inset` and `cursor_blink` are bools: no clamp applies.
 //!
 //! # Logging
 //!
@@ -69,6 +79,13 @@ const SCANLINES_SPACING_RANGE: (u8, u8) = (2, 16);
 const VIGNETTE_STRENGTH_RANGE: (f32, f32) = (0.0, 0.6);
 const GLOW_STRENGTH_RANGE: (f32, f32) = (0.0, 1.0);
 const BEZEL_RADIUS_RANGE: (u8, u8) = (0, 32);
+/// Schema v1.1 (G2). Deliberately tiny: an a11y guard against
+/// photosensitive-trigger risk, same reasoning class as
+/// `SCANLINES_OPACITY_RANGE`'s AA-contrast cap.
+const FLICKER_STRENGTH_RANGE: (f32, f32) = (0.0, 0.15);
+/// Schema v1.1 (G2). Milliseconds; parsed only — the GUI does not yet
+/// animate fades (plan G2 decision 1).
+const FADE_MS_RANGE: (u16, u16) = (0, 400);
 
 const DEFAULT_SCANLINES_OPACITY: f32 = 0.1;
 const DEFAULT_SCANLINES_SPACING: u8 = 3;
@@ -76,8 +93,20 @@ const DEFAULT_VIGNETTE_STRENGTH: f32 = 0.3;
 const DEFAULT_GLOW_STRENGTH: f32 = 0.4;
 const DEFAULT_BEZEL_RADIUS: u8 = 10;
 const DEFAULT_BEZEL_INSET: bool = false;
+/// Schema v1.1 (G2). Used only when `[effects.flicker]` is present but
+/// `strength` is absent — `cursor_blink`/`fade_ms` are bare scalars with no
+/// equivalent "table present, subfield absent" case (see module docs).
+const DEFAULT_FLICKER_STRENGTH: f32 = 0.05;
 
-const KNOWN_KEYS: [&str; 4] = ["scanlines", "vignette", "glow", "bezel"];
+const KNOWN_KEYS: [&str; 7] = [
+    "scanlines",
+    "vignette",
+    "glow",
+    "bezel",
+    "flicker",
+    "cursor_blink",
+    "fade_ms",
+];
 
 /// Scanline overlay: `[effects.scanlines]`. See the [module docs](self) for
 /// defaults and clamp ranges.
@@ -115,6 +144,16 @@ pub struct Bezel {
     pub inset: bool,
 }
 
+/// Subtle CRT flicker: `[effects.flicker]` (schema v1.1, phase G2, ADR 0036
+/// amendment). See the [module docs](self) for the default and clamp range.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Flicker {
+    /// Flicker amplitude, clamped to `[0.0, 0.15]` — deliberately tiny, an
+    /// accessibility guard against photosensitive-trigger risk (same
+    /// reasoning class as `scanlines.opacity`'s AA-contrast cap).
+    pub strength: f32,
+}
+
 /// The typed, clamped interpretation of a theme's `[effects]` section
 /// (schema v1, ADR 0036). Every field is independently optional: a theme may
 /// declare any subset of scanlines/vignette/glow/bezel. See the
@@ -129,6 +168,18 @@ pub struct EffectsV1 {
     pub glow: Option<Glow>,
     /// `[effects.bezel]`, if present and well-shaped.
     pub bezel: Option<Bezel>,
+    /// `[effects.flicker]`, if present and well-shaped (schema v1.1, phase
+    /// G2, ADR 0036 amendment).
+    pub flicker: Option<Flicker>,
+    /// `[effects] cursor_blink`, if present and a `bool` (schema v1.1, phase
+    /// G2). A bare scalar, not a sub-table — a wrong TOML type degrades this
+    /// key alone, same per-key contract as every other key.
+    pub cursor_blink: Option<bool>,
+    /// `[effects] fade_ms`, if present and well-shaped, clamped to
+    /// `[0, 400]` milliseconds (schema v1.1, phase G2). The field is parsed;
+    /// rendering lands with the fade work (plan G2 decision 1) — v1.1 ships
+    /// the schema, not yet the animation.
+    pub fade_ms: Option<u16>,
 }
 
 impl EffectsV1 {
@@ -186,6 +237,25 @@ impl EffectsV1 {
             bezel: table
                 .get("bezel")
                 .and_then(|v| decode_bezel(v, &mut warnings)),
+            flicker: table
+                .get("flicker")
+                .and_then(|v| decode_flicker(v, &mut warnings)),
+            cursor_blink: match bool_field(table, "cursor_blink") {
+                Field::Absent => None,
+                Field::Valid(b) => Some(b),
+                Field::Invalid => {
+                    record(&mut warnings, "cursor_blink", "wrong shape");
+                    None
+                }
+            },
+            fade_ms: match num_field(table, "fade_ms") {
+                Field::Absent => None,
+                Field::Valid(f) => Some(clamp_u16(f, FADE_MS_RANGE)),
+                Field::Invalid => {
+                    record(&mut warnings, "fade_ms", "wrong shape");
+                    None
+                }
+            },
         };
 
         (Some(effects), warnings)
@@ -235,6 +305,16 @@ fn clamp_u8(v: f64, range: (u8, u8)) -> u8 {
     let clamped = v.clamp(f64::from(range.0), f64::from(range.1)).round();
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let clamped = clamped as u8;
+    clamped
+}
+
+/// Schema v1.1 (G2): `fade_ms`'s range (`[0, 400]`) does not fit `u8`, so it
+/// gets its own clamp helper — same rounding/truncation shape as
+/// [`clamp_u8`].
+fn clamp_u16(v: f64, range: (u16, u16)) -> u16 {
+    let clamped = v.clamp(f64::from(range.0), f64::from(range.1)).round();
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let clamped = clamped as u16;
     clamped
 }
 
@@ -325,6 +405,26 @@ fn decode_bezel(value: &toml::Value, warnings: &mut Vec<String>) -> Option<Bezel
     Some(Bezel {
         radius_px: clamp_u8(radius_px, BEZEL_RADIUS_RANGE),
         inset,
+    })
+}
+
+/// Schema v1.1 (G2, ADR 0036 amendment). Same shape as [`decode_vignette`]:
+/// one clamped `f32` subfield with a default.
+fn decode_flicker(value: &toml::Value, warnings: &mut Vec<String>) -> Option<Flicker> {
+    let Some(t) = value.as_table() else {
+        record(warnings, "flicker", "wrong shape");
+        return None;
+    };
+    let strength = match num_field(t, "strength") {
+        Field::Absent => f64::from(DEFAULT_FLICKER_STRENGTH),
+        Field::Valid(f) => f,
+        Field::Invalid => {
+            record(warnings, "flicker.strength", "wrong shape");
+            return None;
+        }
+    };
+    Some(Flicker {
+        strength: clamp_f32(strength, FLICKER_STRENGTH_RANGE),
     })
 }
 
@@ -485,5 +585,159 @@ mod tests {
                 "bezel radius fuera de rango para v={v}: {br}"
             );
         }
+    }
+
+    // --- schema v1.1 (G2 motion, ADR 0036 amendment) -----------------------
+
+    /// `flicker.strength` parsea y clampa a `[0.0, 0.15]`, mismo patrón que
+    /// `vignette.strength`.
+    #[test]
+    fn flicker_parsea_y_clampa() {
+        let t =
+            norte_theme::Theme::from_toml("[effects]\nflicker = { strength = 0.08 }\n").unwrap();
+        let (e, warnings) = EffectsV1::from_theme(&t);
+        let e = e.unwrap();
+        let f = e.flicker.expect("flicker presente");
+        assert!((f.strength - 0.08).abs() < f32::EPSILON);
+        assert!(warnings.is_empty());
+
+        let t = norte_theme::Theme::from_toml("[effects]\nflicker = { strength = 9.0 }\n").unwrap();
+        let (e, warnings) = EffectsV1::from_theme(&t);
+        let e = e.unwrap();
+        assert!(
+            (e.flicker.unwrap().strength - 0.15).abs() < f32::EPSILON,
+            "clampa al techo 0.15"
+        );
+        assert!(warnings.is_empty(), "clamp silencioso, no es warning");
+    }
+
+    /// `flicker` presente sin `strength`: usa el default documentado (0.05),
+    /// clampado igual que cualquier otro valor (mismo patrón que
+    /// `scanlines.opacity`).
+    #[test]
+    fn flicker_sin_strength_usa_default() {
+        let t = norte_theme::Theme::from_toml("[effects]\nflicker = {}\n").unwrap();
+        let (e, warnings) = EffectsV1::from_theme(&t);
+        let e = e.unwrap();
+        assert!((e.flicker.unwrap().strength - 0.05).abs() < f32::EPSILON);
+        assert!(warnings.is_empty());
+    }
+
+    /// `cursor_blink` es un bool suelto en `[effects]` (no una subtabla):
+    /// parsea directo.
+    #[test]
+    fn cursor_blink_bool_parsea() {
+        let t = norte_theme::Theme::from_toml("[effects]\ncursor_blink = true\n").unwrap();
+        let (e, warnings) = EffectsV1::from_theme(&t);
+        assert_eq!(e.unwrap().cursor_blink, Some(true));
+        assert!(warnings.is_empty());
+
+        let t = norte_theme::Theme::from_toml("[effects]\ncursor_blink = false\n").unwrap();
+        let (e, _) = EffectsV1::from_theme(&t);
+        assert_eq!(e.unwrap().cursor_blink, Some(false));
+    }
+
+    /// Tipo incorrecto (string en vez de bool): degrada SOLO esa clave, con
+    /// warning — mismo contrato per-key que el resto del módulo.
+    #[test]
+    fn cursor_blink_tipo_incorrecto_degrada() {
+        let t = norte_theme::Theme::from_toml("[effects]\ncursor_blink = \"yes\"\n").unwrap();
+        let (e, warnings) = EffectsV1::from_theme(&t);
+        let e = e.unwrap();
+        assert!(e.cursor_blink.is_none());
+        assert!(
+            warnings.iter().any(|w| w.starts_with("cursor_blink")),
+            "{warnings:?}"
+        );
+    }
+
+    /// `fade_ms` parsea y clampa a `[0, 400]`. Solo el campo — el renderer
+    /// aún no anima el fade (plan G2 decisión 1).
+    #[test]
+    fn fade_ms_parsea_y_clampa() {
+        let t = norte_theme::Theme::from_toml("[effects]\nfade_ms = 200\n").unwrap();
+        let (e, warnings) = EffectsV1::from_theme(&t);
+        assert_eq!(e.unwrap().fade_ms, Some(200));
+        assert!(warnings.is_empty());
+
+        let t = norte_theme::Theme::from_toml("[effects]\nfade_ms = 9999\n").unwrap();
+        let (e, warnings) = EffectsV1::from_theme(&t);
+        assert_eq!(e.unwrap().fade_ms, Some(400), "clampa al techo 400");
+        assert!(warnings.is_empty());
+
+        let t = norte_theme::Theme::from_toml("[effects]\nfade_ms = -50\n").unwrap();
+        let (e, warnings) = EffectsV1::from_theme(&t);
+        assert_eq!(e.unwrap().fade_ms, Some(0), "clampa al piso 0");
+        assert!(warnings.is_empty());
+    }
+
+    /// Tipo incorrecto en `fade_ms`: degrada SOLO esa clave, con warning.
+    #[test]
+    fn fade_ms_tipo_incorrecto_degrada() {
+        let t = norte_theme::Theme::from_toml("[effects]\nfade_ms = \"pronto\"\n").unwrap();
+        let (e, warnings) = EffectsV1::from_theme(&t);
+        let e = e.unwrap();
+        assert!(e.fade_ms.is_none());
+        assert!(
+            warnings.iter().any(|w| w.starts_with("fade_ms")),
+            "{warnings:?}"
+        );
+    }
+
+    /// Extiende el test BLOCKER existente: `nan`/`inf` en las claves v1.1
+    /// tampoco cuelan por el clamp (mismo bug de fondo que `scanlines`).
+    #[test]
+    fn nan_no_rompe_el_clamp_de_las_claves_v1_1() {
+        let t = norte_theme::Theme::from_toml(
+            "[effects]\nflicker = { strength = nan }\nfade_ms = nan\n",
+        )
+        .unwrap();
+        let (e, warnings) = EffectsV1::from_theme(&t);
+        let e = e.expect("Some aunque degradado");
+        assert!(e.flicker.is_none(), "strength NaN: no cuela");
+        assert!(e.fade_ms.is_none(), "fade_ms NaN: no cuela");
+        assert!(
+            warnings.iter().any(|w| w.starts_with("flicker.strength")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.starts_with("fade_ms")),
+            "{warnings:?}"
+        );
+    }
+
+    /// Las 3 claves nuevas conviven con las 4 de v1 sin pisarse, y una clave
+    /// realmente desconocida sigue avisando igual (KNOWN_KEYS 4→7 no rompe
+    /// el warning de "unknown key").
+    #[test]
+    fn claves_v1_1_conviven_y_desconocida_sigue_avisando() {
+        let t = norte_theme::Theme::from_toml(
+            "[effects]\nscanlines = { opacity = 0.1 }\nflicker = { strength = 0.05 }\n\
+             cursor_blink = true\nfade_ms = 120\nfuturo = 1\n",
+        )
+        .unwrap();
+        let (e, warnings) = EffectsV1::from_theme(&t);
+        let e = e.unwrap();
+        assert!(e.scanlines.is_some());
+        assert!(e.flicker.is_some());
+        assert_eq!(e.cursor_blink, Some(true));
+        assert_eq!(e.fade_ms, Some(120));
+        assert!(warnings.iter().any(|w| w.starts_with("futuro")));
+        assert_eq!(
+            warnings.len(),
+            1,
+            "solo 'futuro' es realmente desconocida: {warnings:?}"
+        );
+    }
+
+    /// El preset retro-crt (editado en G2 decisión 5) trae flicker+blink.
+    #[test]
+    fn retro_crt_preset_trae_flicker_y_cursor_blink() {
+        let t = norte_theme::Theme::preset("retro-crt").unwrap().unwrap();
+        let (e, warnings) = EffectsV1::from_theme(&t);
+        let e = e.expect("retro trae effects");
+        assert!((e.flicker.expect("flicker").strength - 0.05).abs() < f32::EPSILON);
+        assert_eq!(e.cursor_blink, Some(true));
+        assert!(warnings.is_empty(), "preset bien formado, sin warnings");
     }
 }

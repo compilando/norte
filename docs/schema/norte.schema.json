@@ -229,6 +229,14 @@
             "null"
           ]
         },
+        "reduce_motion": {
+          "default": null,
+          "description": "Accessibility motion override (spec §17 a11y; GUI phase G2). `true`\nforces every animated GUI effect off — CRT flicker, cursor blink, and\nany future `with_animation` use — regardless of what a theme's\n`[effects]` section declares. `None`/absent leaves motion as the\ntheme requests it; GPUI exposes no platform-level \"prefers reduced\nmotion\" hint at this revision, so the effective default when absent\nis `false` (motion allowed), not an OS query. `Option` for the same\nabsent-vs-explicit reason as `[ai] enabled`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "theme": {
           "default": null,
           "description": "Theme preset name (`default`, `catppuccin-mocha`, `gruvbox-dark`,\n`nord`, `gruvbox-light`, or `catppuccin-latte`) or a path to a custom\nTOML theme (ADR 0020). When absent, use `default`.",
