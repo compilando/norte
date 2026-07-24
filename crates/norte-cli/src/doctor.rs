@@ -334,14 +334,19 @@ fn check_keymap_screen(
 /// resolved key of [`PluginRegistry::settings_of`] becomes one
 /// [`Severity::Ok`] `plugin-config` finding, `detail` = `{id}: {key}=
 /// {value}` — the value is the plugin's OWN default or the user's OWN
-/// override, but still MASKED via [`norte_encoding::mask_terminal_hazards`]
-/// and capped to [`PLUGIN_CONFIG_VALUE_MAX_CHARS`] (belt, same policy as the
-/// TUI's `must_mask`/`display_name`: a value is untrusted text regardless of
-/// who wrote it). A `config.toml` that fails validation against the schema
-/// does NOT reach here at all — the whole plugin is already excluded and
-/// surfaced by the `plugin-manifest-broken` loop above (fail-closed at
-/// catalog level, [`norte_plugin_host::Catalog::load_dir`]'s own contract);
-/// there is no separate violation path to handle in THIS function.
+/// override, but still MASKED+CAPPED via [`masked_and_capped`] (belt, same
+/// policy as the TUI's `must_mask`/`display_name`: a value is untrusted text
+/// regardless of who wrote it). A `config.toml` that fails validation
+/// against the schema does NOT reach `plugin-config` at all — the whole
+/// plugin is already excluded and surfaced by the `plugin-manifest-broken`
+/// loop above instead (fail-closed at catalog level,
+/// [`norte_plugin_host::Catalog::load_dir`]'s own contract) — but that
+/// loop's `reason` is untrusted TOO (P2 Task 4a security review: a
+/// `ConfigValueError::UnknownKey`'s message can carry a key straight out of
+/// a hostile `config.toml`, which — unlike a manifest-declared key — has no
+/// charset guarantee even after the source-side fix in `norte-plugin-host`;
+/// defense in depth applies [`masked_and_capped`] here too, not just to
+/// `plugin-config`).
 #[must_use]
 pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
     let mut findings = Vec::new();
@@ -364,7 +369,15 @@ pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
             section: "plugins",
             severity: Severity::Error,
             code: "plugin-manifest-broken",
-            detail: format!("{}: {}", err.dir, err.reason),
+            // security review P2 Task 4a: `err.reason` can carry untrusted
+            // text (a `config.toml` values error names the offending KEY,
+            // which is user TOML and — unlike a manifest-declared key — has
+            // no charset guarantee; a manifest parse error can likewise
+            // quote hostile bytes). Masked + capped at the SAME boundary as
+            // `plugin-config` below, not just relying on the source-side
+            // fix in `ConfigValueError` (defense in depth: this loop also
+            // covers `ManifestError` variants that pre-date that fix).
+            detail: format!("{}: {}", err.dir, masked_and_capped(&err.reason)),
         });
     }
     for p in &list.plugins {
@@ -397,7 +410,7 @@ pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
                     section: "plugins",
                     severity: Severity::Ok,
                     code: "plugin-config",
-                    detail: format!("{}: {key}={}", p.id, masked_config_value(value)),
+                    detail: format!("{}: {key}={}", p.id, masked_and_capped(value)),
                 });
             }
         }
@@ -406,22 +419,27 @@ pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
 }
 
 /// Cap (CHARS, not bytes — same criterion as the manifest's own
-/// `description`/`[config]` topes) on the VALUE shown in a `plugin-config`
-/// finding (P2 Task 2): a plugin's own default, or a user's own override,
-/// could still be pathologically long (the manifest caps a `[config]`
-/// DEFAULT at 280 chars, decision 1 — but `config.toml` VALUES have no such
-/// cap, decision 3) and must not blow up the report.
-const PLUGIN_CONFIG_VALUE_MAX_CHARS: usize = 80;
+/// `description`/`[config]` topes) on untrusted text shown in a plugin
+/// finding: a `plugin-config` VALUE (P2 Task 2 — a plugin's own default, or a
+/// user's own override, could still be pathologically long: the manifest
+/// caps a `[config]` DEFAULT at 280 chars, decision 1, but `config.toml`
+/// VALUES had no such cap before the P2 Task 4a security-review fix, and
+/// even with it a legitimate 280-char value is still too wide for one line),
+/// or a `plugin-manifest-broken` REASON (P2 Task 4a — a `ConfigValueError`
+/// naming an untrusted key, or any other `ManifestError`'s `Display`).
+const PLUGIN_FINDING_TEXT_MAX_CHARS: usize = 80;
 
 /// Masks terminal hazards ([`norte_encoding::mask_terminal_hazards`]) and
-/// caps to [`PLUGIN_CONFIG_VALUE_MAX_CHARS`] CHARS (an ellipsis marks a cut)
-/// for display in a `plugin-config` finding.
-fn masked_config_value(value: &str) -> String {
+/// caps to [`PLUGIN_FINDING_TEXT_MAX_CHARS`] CHARS (an ellipsis marks a cut)
+/// for display in a `plugin-config`/`plugin-manifest-broken` finding — ANY
+/// text that ultimately traces back to a plugin manifest or a user's
+/// `config.toml`, neither of which this process trusts.
+fn masked_and_capped(value: &str) -> String {
     let masked = norte_encoding::mask_terminal_hazards(value);
-    if masked.chars().count() <= PLUGIN_CONFIG_VALUE_MAX_CHARS {
+    if masked.chars().count() <= PLUGIN_FINDING_TEXT_MAX_CHARS {
         return masked;
     }
-    let mut truncated: String = masked.chars().take(PLUGIN_CONFIG_VALUE_MAX_CHARS).collect();
+    let mut truncated: String = masked.chars().take(PLUGIN_FINDING_TEXT_MAX_CHARS).collect();
     truncated.push('…');
     truncated
 }
@@ -539,6 +557,26 @@ mod tests {
                 .find(|(n, _)| *n == k)
                 .map(|(_, x)| OsString::from(x))
         }
+    }
+
+    /// P2 Task 4a security review: `masked_and_capped` (the boundary policy
+    /// shared by `plugin-config` values AND `plugin-manifest-broken`
+    /// reasons) tested DIRECTLY, independent of whichever upstream source
+    /// happens to already be clean — a defense-in-depth boundary must hold
+    /// on its own, not just because nothing hostile reaches it today.
+    #[test]
+    fn masked_and_capped_enmascara_hazards_y_recorta_largos() {
+        let hostile = format!("safe{}rest", '\u{1b}');
+        let out = masked_and_capped(&hostile);
+        assert!(!out.contains('\u{1b}'), "{out}");
+        assert!(out.contains('\u{fffd}'), "{out}");
+
+        let long = "a".repeat(200);
+        let out2 = masked_and_capped(&long);
+        assert!(
+            out2.chars().count() < 200,
+            "a long value must be capped: {out2}"
+        );
     }
 
     /// TDD: valid layers → every finding is `Ok`; a broken `norte.toml` in
@@ -916,6 +954,37 @@ max = 10
             .unwrap_or_else(|| panic!("expected a manifest-broken finding: {findings:?}"));
         assert_eq!(err.severity, Severity::Error);
         assert!(err.detail.contains("no-declarada"), "{}", err.detail);
+    }
+
+    /// P2 Task 4a security review: an UNKNOWN key from a hostile
+    /// `config.toml` (ESC/bidi override) must never reach the
+    /// `plugin-manifest-broken` finding raw — unlike a manifest-declared
+    /// key, a `config.toml` key has no charset guarantee, and the message
+    /// crosses both `norte doctor`'s stdout and the wire
+    /// (`PluginLoadError.reason`).
+    #[test]
+    fn plugins_manifest_broken_con_clave_hostil_se_enmascara() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "org.norte.cfg", CONFIG_MANIFEST);
+        // Clave TOML entrecomillada con ESC + un override RLO (bidi) —
+        // ninguno de los dos es válido en el charset [a-z0-9-]{1,32} que
+        // exige toda clave DECLARADA, así que este es TOML puro de usuario.
+        write_config_values(
+            dir.path(),
+            "org.norte.cfg",
+            "\"mal\\u001b\\u202eicious\" = \"x\"\n",
+        );
+
+        let findings = check_plugins(dir.path());
+        let err = findings
+            .iter()
+            .find(|f| f.code == "plugin-manifest-broken")
+            .unwrap_or_else(|| panic!("expected a manifest-broken finding: {findings:?}"));
+        assert!(
+            !err.detail.contains('\u{1b}') && !err.detail.contains('\u{202e}'),
+            "raw ESC/RLO must never reach the finding: {}",
+            err.detail
+        );
     }
 
     /// Encoding audit (H2-style, same policy as elsewhere in this file):

@@ -12,7 +12,22 @@
 //! se ejecuta en `spawn_blocking` para no bloquear el executor async (regla 2).
 //! El `PluginProvider` mantiene vivo el [`PluginRuntime`] (su ticker de época
 //! gobierna el deadline de CPU del guest).
+//!
+//! **`[config]` (P2 Task 4a) — deferral documentado:** [`PluginProvider::set_settings`]
+//! existe (mismo contrato que [`norte_plugin_host::PluginInstance::set_settings`]/
+//! [`ProviderInstance::set_settings`], usado por `command`/`previewer` desde
+//! Task 3/4a), pero NINGÚN caller de producción lo invoca hoy. Razón
+//! estructural, no descuido: un `PluginProvider` NUNCA se construye a partir
+//! del catálogo de plugins ([`norte_plugin_host::Catalog`]/
+//! `norte_core::plugins::PluginRegistry`) — no hay `plugin.toml` ni `[config]`
+//! que resolver. El único provider real hoy (FTP, `ftp_plugin.rs`) se
+//! construye desde `ConnectionSpec`/`connections.toml` (un subsistema de
+//! configuración TOTALMENTE distinto, sin esquema `[config]`). El método
+//! queda listo para el día en que un provider SÍ nazca de un manifiesto de
+//! plugin con `[config]` propio, sin tener que tocar más que ese único punto
+//! de wiring.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -124,6 +139,23 @@ impl PluginProvider {
     pub fn with_op_timeout(mut self, timeout: Duration) -> Self {
         self.op_timeout = timeout;
         self
+    }
+
+    /// Instala los valores de `[config]` (P2 Task 4a) que el guest verá vía
+    /// `host-config::get`/`all` — mismo contrato que
+    /// [`norte_plugin_host::PluginInstance::set_settings`]: llamar ANTES de
+    /// cualquier operación que invoque al guest. Ver el deferral documentado
+    /// en el doc del módulo: NINGÚN caller de producción lo usa hoy (los
+    /// providers no nacen de un manifiesto de plugin), pero la plomería
+    /// existe y es segura de llamar — incluso con un mapa vacío, que es el
+    /// comportamiento por defecto sin llamarla en absoluto.
+    ///
+    /// No hace falta `spawn_blocking`: es una escritura pura en memoria del
+    /// `Store` (ni compila ni ejecuta el guest), a diferencia de
+    /// [`Self::configure`] u otras ops.
+    pub async fn set_settings(&self, settings: BTreeMap<String, String>) {
+        let mut guard = self.inst.lock().await;
+        guard.set_settings(settings);
     }
 
     /// Configura la conexión del guest-provider (#30 stage 3c): endpoint YA

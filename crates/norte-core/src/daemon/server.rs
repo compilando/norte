@@ -2082,7 +2082,7 @@ async fn handle_plugin_run_command(
         let reg = shared.plugins.lock().expect("plugins lock sano");
         reg.resolve_runnable(&p.id)
     };
-    let (wasm, caps) = resolved.map_err(|e| run_error_to_rpc(&e))?;
+    let (wasm, caps, settings) = resolved.map_err(|e| run_error_to_rpc(&e))?;
 
     // 2) Ejecutar fuera del lock, en spawn_blocking (regla 2). El runtime es
     // `Send+Sync` pero no `Clone`: se clona el `Arc`.
@@ -2091,6 +2091,9 @@ async fn handle_plugin_run_command(
     let arg = p.arg.clone();
     let output = tokio::task::spawn_blocking(move || {
         let mut inst = runtime.instantiate(&wasm, caps)?;
+        // P2 Task 4a: entrega `[config]` YA resuelto (Task 2) al guest, mismo
+        // criterio que `PluginRegistry::run_command` (uso embebido).
+        inst.set_settings(settings);
         inst.run_command(&command, &arg)
     })
     .await
@@ -2170,7 +2173,7 @@ async fn handle_plugin_preview(
         let reg = shared.plugins.lock().expect("plugins lock sano");
         reg.resolve_previewer(mime)
     };
-    let Some((id, name, wasm, caps)) = resolved else {
+    let Some((id, name, wasm, caps, settings)) = resolved else {
         // Ningún previewer consentido casa el mimetype: NO es error. El
         // frontend cae a la vista cruda. Los bytes ni se leen.
         return to_value(&methods::PluginPreviewResult { preview: None });
@@ -2206,6 +2209,9 @@ async fn handle_plugin_preview(
     let runtime = Arc::clone(&shared.plugin_runtime);
     let output = tokio::task::spawn_blocking(move || {
         let mut inst = runtime.instantiate(&wasm, caps)?;
+        // P2 Task 4a: entrega `[config]` YA resuelto (Task 2) al previewer,
+        // igual que `handle_plugin_run_command` ya hace para comandos.
+        inst.set_settings(settings);
         inst.render_preview(mime, &bytes)
     })
     .await

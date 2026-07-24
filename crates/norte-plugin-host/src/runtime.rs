@@ -881,7 +881,12 @@ mod tests {
     fn host_config_sin_settings_es_mapa_vacio() {
         // El default de `prepare_common` antes de `set_settings` (mismo
         // criterio que un plugin sin `[config]`, Task 1/2): ni `get` ni `all`
-        // deben devolver nada, jamás panicar.
+        // deben devolver nada, jamás panicar. `HostState`/`host_config::Host`
+        // es la ÚNICA implementación compartida por AMBOS worlds (`with:` en
+        // bindings.rs) — este test cubre tanto `PluginInstance` (command/
+        // previewer) como `ProviderInstance` (P2 Task 4a: el caso concreto de
+        // un provider que nunca llama a `set_settings`, p. ej. FTP hoy, ver
+        // `norte_core::plugin_provider`/`ftp_plugin`).
         let mut state = bare_host_state(BTreeMap::new());
         assert_eq!(
             host_config::Host::get(&mut state, "cualquiera".to_string()),

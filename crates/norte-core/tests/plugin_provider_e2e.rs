@@ -268,6 +268,43 @@ async fn plugin_provider_satisface_el_contrato_de_lectura() {
     );
 }
 
+/// P2 Task 4a: un provider NUNCA nace del catálogo de plugins (ver el doc de
+/// `plugin_provider`/`ftp_plugin` — deferral documentado), así que
+/// `set_settings` no forma parte de ningún camino de producción. Este test
+/// prueba que la plomería es segura de todos modos: (a) SIN llamarla, el
+/// guest funciona exactamente igual que antes de P2 (settings vacías por
+/// defecto — mismo default que cubre `host_config_sin_settings_es_mapa_vacio`
+/// en `norte-plugin-host` para el `Host` trait subyacente); (b) LLAMÁNDOLA
+/// (con el único valor honesto disponible hoy: un mapa vacío, ya que
+/// `provider-mem` no declara `[config]`) no rompe nada.
+#[tokio::test]
+async fn plugin_provider_set_settings_es_seguro_con_o_sin_llamarla() {
+    let Some(wasm) = build_guest("provider-mem") else {
+        eprintln!("SKIP: target wasm32-wasip2 no instalado");
+        return;
+    };
+    let rt = PluginRuntime::new().expect("runtime");
+    let p = PluginProvider::new(rt, &wasm, HostCaps::default(), "mem").expect("adapter");
+    let root = root();
+
+    // Sin set_settings: comportamiento normal (default vacío, como siempre).
+    assert_eq!(
+        p.stat(&root).await.expect("raíz existe").kind,
+        EntryKind::Dir
+    );
+
+    // Con set_settings (mapa vacío: lo único honesto hoy, provider-mem no
+    // declara [config]) — no debe romper nada.
+    p.set_settings(std::collections::BTreeMap::new()).await;
+    assert_eq!(
+        p.stat(&root)
+            .await
+            .expect("sigue funcionando tras set_settings")
+            .kind,
+        EntryKind::Dir
+    );
+}
+
 fn build_guest(name: &str) -> Option<PathBuf> {
     if !target_installed("wasm32-wasip2") {
         eprintln!("SKIP: target wasm32-wasip2 no instalado");

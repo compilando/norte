@@ -131,6 +131,18 @@ fn mimetype_matches(pat: &str, mime: &str) -> bool {
     }
 }
 
+/// Resultado de [`PluginRegistry::resolve_previewer`]: `(id, name,
+/// wasm_path, capabilities, settings)` — factorizado a un alias (en vez de un
+/// tuple de 5 elementos in-line) porque clippy `type_complexity` lo pide;
+/// `settings` es P2 Task 4a, ver el rustdoc del método.
+pub type ResolvedPreviewer = (
+    String,
+    String,
+    PathBuf,
+    norte_plugin_host::Capabilities,
+    BTreeMap<String, String>,
+);
+
 /// Registro de plugins: catálogo descubierto + estado persistido fusionado.
 #[derive(Debug)]
 pub struct PluginRegistry {
@@ -363,13 +375,21 @@ impl PluginRegistry {
     }
 
     /// Valida el consentimiento (fail-closed) y RESUELVE el `.wasm` +
-    /// capabilities de un plugin, SIN ejecutarlo. Es BARATO (lectura del
-    /// catálogo/estado en memoria + un `is_file`): pensado para correr bajo el
-    /// `Mutex<PluginRegistry>` del daemon, que después ejecuta lo PESADO
-    /// (`PluginRuntime::instantiate` + `run_command`, que compila el componente
-    /// WASM) FUERA del lock, en un `spawn_blocking` (regla 2). El `.wasm` es
-    /// `<dir>/plugin.wasm` por convención (ADR 0022 D6); las capabilities son
-    /// las DEL MANIFIESTO (el sandbox de M4-P2 las hace cumplir).
+    /// capabilities + `[config]` YA resuelto de un plugin, SIN ejecutarlo. Es
+    /// BARATO (lectura del catálogo/estado en memoria + un `is_file`): pensado
+    /// para correr bajo el `Mutex<PluginRegistry>` del daemon, que después
+    /// ejecuta lo PESADO (`PluginRuntime::instantiate` + `run_command`, que
+    /// compila el componente WASM) FUERA del lock, en un `spawn_blocking`
+    /// (regla 2). El `.wasm` es `<dir>/plugin.wasm` por convención (ADR 0022
+    /// D6); las capabilities son las DEL MANIFIESTO (el sandbox de M4-P2 las
+    /// hace cumplir).
+    ///
+    /// `settings` (P2 Task 4a) son los valores de `[config]` YA resueltos
+    /// (Task 2) — el caller debe pasarlos a `PluginInstance::set_settings`
+    /// ANTES de invocar el comando para que el guest los vea vía `host-config`
+    /// (Task 3); [`Self::run_command`] ya lo hace, y `handle_plugin_run_command`
+    /// del daemon (que resuelve bajo lock y ejecuta fuera de él, sin poder
+    /// reusar `run_command` directamente) también.
     ///
     /// # Errors
     /// [`PluginRunError`] `Unknown`/`NotApproved`/`Disabled`/`NoBinary` según el
@@ -377,7 +397,14 @@ impl PluginRegistry {
     pub fn resolve_runnable(
         &self,
         id: &str,
-    ) -> Result<(PathBuf, norte_plugin_host::Capabilities), PluginRunError> {
+    ) -> Result<
+        (
+            PathBuf,
+            norte_plugin_host::Capabilities,
+            BTreeMap<String, String>,
+        ),
+        PluginRunError,
+    > {
         let entry = self
             .catalog
             .plugins
@@ -396,23 +423,26 @@ impl PluginRegistry {
         }
         let wasm = Self::verified_wasm(&entry.dir)
             .ok_or_else(|| PluginRunError::NoBinary(id.to_string()))?;
-        Ok((wasm, entry.manifest.capabilities.clone()))
+        Ok((
+            wasm,
+            entry.manifest.capabilities.clone(),
+            entry.settings.clone(),
+        ))
     }
 
     /// Resuelve el PRIMER previewer APROBADO y ACTIVADO cuyo mimetype declarado
-    /// case `mime`, devolviendo `(id, name, wasm_path, capabilities)`; `None` si
-    /// ninguno aplica. Fail-closed: un previewer no consentido jamás se elige.
-    /// Barato: el caller lee los bytes del archivo y ejecuta fuera del lock.
+    /// case `mime`, devolviendo `(id, name, wasm_path, capabilities, settings)`;
+    /// `None` si ninguno aplica. Fail-closed: un previewer no consentido jamás
+    /// se elige. Barato: el caller lee los bytes del archivo y ejecuta fuera del
+    /// lock.
+    ///
+    /// `settings` (P2 Task 4a) son los valores de `[config]` YA resueltos
+    /// ([`Self::settings_of`]) — el caller debe pasarlos a
+    /// `PluginInstance::set_settings` ANTES de `render_preview` para que el
+    /// guest los vea vía `host-config` (Task 3), igual que
+    /// [`Self::run_command`] ya hace para los comandos.
     #[must_use]
-    pub fn resolve_previewer(
-        &self,
-        mime: &str,
-    ) -> Option<(
-        String,
-        String,
-        std::path::PathBuf,
-        norte_plugin_host::Capabilities,
-    )> {
+    pub fn resolve_previewer(&self, mime: &str) -> Option<ResolvedPreviewer> {
         self.catalog.plugins.iter().find_map(|e| {
             let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
             // Fail-closed con digest vigente (issue #69): un previewer cuyo
@@ -436,6 +466,7 @@ impl PluginRegistry {
                 e.manifest.name.clone(),
                 wasm,
                 e.manifest.capabilities.clone(),
+                e.settings.clone(),
             ))
         })
     }
@@ -445,13 +476,14 @@ impl PluginRegistry {
     /// [`Self::resolve_runnable`] y ejecuta a continuación. SÍNCRONO (compila e
     /// instancia el componente): el caller lo corre en `spawn_blocking` (regla
     /// 2). El daemon prefiere separar resolución (bajo lock) y ejecución (fuera
-    /// del lock) llamando a [`Self::resolve_runnable`] directamente.
+    /// del lock) llamando a [`Self::resolve_runnable`] directamente — su
+    /// `handle_plugin_run_command` entrega `settings` de la MISMA forma, solo
+    /// que en dos pasos en vez de una llamada a este método.
     ///
-    /// Entrega al guest los valores de `[config]` YA resueltos (P2 Task 2,
-    /// [`Self::settings_of`]) vía `host-config` (P2 Task 3) ANTES de invocar
-    /// el comando — un plugin sin `[config]` recibe el mapa vacío
-    /// ([`Self::settings_of`] siempre devuelve `Some` para un id descubierto,
-    /// nunca `None` aquí: `resolve_runnable` ya validó que existe).
+    /// Entrega al guest los valores de `[config]` YA resueltos que devuelve
+    /// [`Self::resolve_runnable`] (P2 Task 2) vía `host-config` (P2 Task 3)
+    /// ANTES de invocar el comando — un plugin sin `[config]` recibe el mapa
+    /// vacío.
     ///
     /// # Errors
     /// [`PluginRunError`] si el plugin no existe, no está aprobado, está
@@ -463,9 +495,9 @@ impl PluginRegistry {
         command: &str,
         arg: &str,
     ) -> Result<String, PluginRunError> {
-        let (wasm, caps) = self.resolve_runnable(id)?;
+        let (wasm, caps, settings) = self.resolve_runnable(id)?;
         let mut inst = runtime.instantiate(&wasm, caps)?;
-        inst.set_settings(self.settings_of(id).cloned().unwrap_or_default());
+        inst.set_settings(settings);
         Ok(inst.run_command(command, arg)?)
     }
 
@@ -1023,10 +1055,14 @@ mimetypes = ["text/*"]
 
         let got = reg.resolve_previewer("text/plain");
         assert!(got.is_some(), "text/plain casa text/*");
-        let (id, name, wasm, _caps) = got.unwrap();
+        let (id, name, wasm, _caps, settings) = got.unwrap();
         assert_eq!(id, "org.norte.prev");
         assert_eq!(name, "Prev");
         assert!(wasm.ends_with("plugin.wasm"));
+        assert!(
+            settings.is_empty(),
+            "PREV_MANIFEST no declara [config]: mapa vacío"
+        );
 
         // Un mimetype que no casa el glob declarado → None.
         assert!(

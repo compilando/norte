@@ -193,6 +193,39 @@ plugin's settings from the schema (key, type, current value, default,
 description) — generated UI, no per-plugin code. Editing values in-app is a
 possible follow-up, not in scope; P2 ships read/validate/deliver + display.
 
+**Deferral (implemented, post-hoc note — Task 4):** the extension-manager
+display described above did **not** ship in P2. `PluginRegistry::settings_of`
+is host-side only; the manager is fed entirely over the wire via
+`plugin.list`/`PluginInfo`, which P2 deliberately did not extend (no
+`norte-proto` change was in scope — see the plan's own gate note). Settings
+therefore have no wire representation to render in the manager today.
+`norte doctor` (which runs embedded, host-side) carries the display burden
+instead, via its `plugin-config` findings. The manager display is deferred to
+whichever future change bumps `PROTOCOL_VERSION` for G3 — that bump is the
+natural point to add a `settings` field to `PluginInfo` and wire the manager
+up to it.
+
+**WIT package-versioning caveat (implemented, post-hoc note — Task 3):** the
+delivery interface (`host-config`) lives in the same shared WIT package as
+every other plugin interface (`package norte:plugin@X.Y.Z`, see the package's
+own versioning history comment for the precedent from the 0.3.0→0.4.0 bump).
+Because the package version is embedded in every interface's canonical name,
+bumping it to add `host-config` (0.4.0→0.5.0) is **not** the backward-compatible
+change one might expect from "just adding an optional import" — it renames
+`host-log`/`previewer`/`command` too, and any `.wasm` artifact compiled
+against the previous package version fails to instantiate against a host
+built from the new one. Verified empirically for this exact bump: a
+`command-demo` build from immediately before the P2 Task 3 change, run
+against the post-bump host, fails with `component imports instance
+norte:plugin/host-log@0.4.0, but a matching implementation was not found in
+the linker`. Every precompiled artifact in the tree needed a rebuild,
+including the embedded `crates/norte-core/resources/ftp-provider.wasm`
+(`just build-ftp-wasm`) — a real, previously undocumented consequence, not
+just a theoretical one. This is tracked as the pre-existing shared-package
+debt (ADR 0032): it resolves once `provider` stabilizes and the package
+splits via `wit/deps/`, at which point additive interfaces on the stable
+surface would no longer force a rebuild of every artifact.
+
 ## Error handling (cross-cutting)
 
 Unchanged philosophy, now uniform: startup errors are loud with file+field;

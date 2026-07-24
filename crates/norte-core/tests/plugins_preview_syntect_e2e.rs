@@ -59,7 +59,7 @@ fn plugin_preview_syntect_e2e_wasm_real() {
     assert!(reg.set_approval_in_memory("org.norte.syntect", true));
     assert!(reg.set_enabled_in_memory("org.norte.syntect", true));
 
-    let (id, _name, resolved_wasm, caps) = reg
+    let (id, _name, resolved_wasm, caps, _settings) = reg
         .resolve_previewer("application/json")
         .expect("application/json casa el glob del previewer consentido");
     assert_eq!(id, "org.norte.syntect");

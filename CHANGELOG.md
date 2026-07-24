@@ -9,6 +9,48 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Declarative per-plugin configuration (P2):** a plugin manifest can now
+  declare typed settings under `[config.<key>]` (`string`/`bool`/`int`/`enum`,
+  with an in-range default, an optional description, and per-type caps —
+  ≤32 keys, key charset `[a-z0-9-]{1,32}`, ≤280-char strings/descriptions,
+  ≤16 enum values). The schema is **inside the approval digest** (it decides
+  what a plugin can be configured to do, same as `category`/`contributions`):
+  a manifest with no `[config]` digests byte-identical to before P2 (existing
+  human approvals are never reset), and any change to the schema — including
+  just a default value — moves the digest and forces re-consent. Values live
+  in `config_dir/plugins/<id>/config.toml` (flat `key = value`, validated
+  fail-closed at discover time: an unknown key, a wrong TOML type, an
+  out-of-range int, or a non-member enum value excludes the **whole plugin**
+  from the catalog as a load error naming the offending key — never the
+  value, #73) and are resolved to defaults-with-overrides applied.
+  `norte doctor` gained a `plugin-config` finding per resolved key
+  (`{id}: {key}={value}`, masked and capped like everything else untrusted in
+  its report) for every plugin that declares `[config]`. Delivery to the
+  sandboxed guest is a new WIT interface, `host-config` (`get`/`all`,
+  package `norte:plugin@0.5.0`), linked for every plugin the same way
+  `host-log` already is; values reach the guest through it for `command`,
+  `previewer`, **and** provider guests alike, wired at every instantiation
+  site (the embedded CLI/backend path, the daemon's `plugin.run_command`/
+  `plugin.preview` handlers, and the previewer path in both). A provider
+  guest (today, only FTP) never receives `[config]` — not an oversight:
+  providers aren't discovered through the plugin manifest/catalog system at
+  all, they're driven by `connections.toml`, a structurally separate config
+  path with no `[config]` schema to resolve; the delivery plumbing
+  (`PluginProvider::set_settings`) exists and is safe to call, ready for the
+  day a provider *does* originate from a plugin manifest. The WIT package
+  bump is **not** backward compatible with previously-compiled `.wasm`
+  artifacts, verified empirically (not just by the pre-existing shared-package
+  caveat in the WIT file's own history comment): instantiating a `command-demo`
+  build from before the bump against the post-bump host fails outright
+  (`component imports instance norte:plugin/host-log@0.4.0, but a matching
+  implementation was not found in the linker`) — every precompiled guest,
+  including the embedded `ftp-provider.wasm`, had to be rebuilt
+  (`just build-ftp-wasm`). The extension manager's settings display is
+  **deferred** to the wire (`PROTOCOL_VERSION`) bump G3 already requires:
+  settings live host-side and the manager is wire-fed, so there is nothing to
+  show there yet — `norte doctor` (which runs embedded) carries the display
+  burden in the meantime.
+
 - **`norte doctor` (H2):** read-only diagnostics over config layers,
   keymaps, plugins, and connections — `[config]` (parse errors per layer,
   and a split-brain warning when `NORTE_CONFIG_DIR` shadows a legacy dir

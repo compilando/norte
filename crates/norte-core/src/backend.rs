@@ -754,15 +754,7 @@ impl Backend {
                 let dir = crate::connect::config_dir();
                 let mime = crate::plugins::guess_mimetype(path);
                 let resolved = tokio::task::spawn_blocking(
-                    move || -> Result<
-                        Option<(
-                            String,
-                            String,
-                            std::path::PathBuf,
-                            norte_plugin_host::Capabilities,
-                        )>,
-                        Error,
-                    > {
+                    move || -> Result<Option<crate::plugins::ResolvedPreviewer>, Error> {
                         let reg = crate::PluginRegistry::discover(&dir)
                             .map_err(|_| Error::Io { retryable: false })?;
                         Ok(reg.resolve_previewer(mime))
@@ -770,7 +762,7 @@ impl Backend {
                 )
                 .await
                 .map_err(|_| Error::Internal { panic: true })??;
-                let Some((id, name, wasm, caps)) = resolved else {
+                let Some((id, name, wasm, caps, settings)) = resolved else {
                     return Ok(norte_proto::methods::PluginPreviewResult { preview: None });
                 };
 
@@ -804,6 +796,10 @@ impl Backend {
                     let mut inst = runtime
                         .instantiate(&wasm, caps)
                         .map_err(|_| Error::Internal { panic: false })?;
+                    // P2 Task 4a: entrega `[config]` YA resuelto al previewer,
+                    // mismo criterio que `plugin_run_command` (vía
+                    // `PluginRegistry::run_command`, Task 3).
+                    inst.set_settings(settings);
                     inst.render_preview(&mime_owned, &content)
                         .map_err(|_| Error::Internal { panic: false })
                 })

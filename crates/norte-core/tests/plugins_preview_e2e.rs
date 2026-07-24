@@ -41,6 +41,28 @@ fs-read = "scoped"
 /// primeras, así que "linea cuatro" NO debe aparecer en el render.
 const SAMPLE: &[u8] = b"linea uno\nlinea dos\nlinea tres\nlinea cuatro";
 
+/// Igual que [`PREV_MANIFEST`] pero con `[config.banner]` (P2 Task 4a): para
+/// probar que `resolve_previewer` + `set_settings` entregan `[config]` al
+/// previewer, no solo al `command` (Task 3).
+const PREV_MANIFEST_WITH_CONFIG: &str = r#"
+[plugin]
+id = "org.norte.prev-cfg"
+name = "Preview Demo Config"
+publisher = "norte"
+version = "0.1.0"
+category = "previewer"
+
+[contributions]
+previewer = [{ mimetypes = ["text/*"] }]
+
+[capabilities]
+fs-read = "scoped"
+
+[config.banner]
+type = "string"
+default = "Default Banner"
+"#;
+
 /// La cadena de cierre M4-P5 con un componente WASM REAL.
 #[test]
 fn plugin_preview_e2e_wasm_real() {
@@ -77,7 +99,7 @@ fn plugin_preview_e2e_wasm_real() {
     );
 
     // 3) Ahora sí resuelve para el mimetype que casa el glob `text/*`.
-    let (id, name, resolved_wasm, caps) = reg
+    let (id, name, resolved_wasm, caps, _settings) = reg
         .resolve_previewer("text/plain")
         .expect("text/plain casa text/* con el previewer consentido");
     assert_eq!(id, "org.norte.prev", "id del previewer resuelto");
@@ -116,6 +138,85 @@ fn plugin_preview_e2e_wasm_real() {
     assert!(
         !render.contains("linea cuatro"),
         "el previewer-demo solo toma 3 líneas: la 4.ª no aparece: {render:?}"
+    );
+}
+
+/// P2 Task 4a: el previewer recibe `[config]` YA resuelto vía `host-config`,
+/// igual que `command` (Task 3) — este test es el análogo de
+/// `plugins_config_e2e.rs` pero para la ruta `resolve_previewer` +
+/// `set_settings` + `render_preview`. Sin `config.toml`, el guest ve el
+/// DEFAULT del esquema.
+#[test]
+fn plugin_preview_e2e_wasm_real_config_banner_default() {
+    let Some(wasm) = build_guest("previewer-demo") else {
+        eprintln!("SKIP: target wasm32-wasip2 no instalado; no hay .wasm que ejecutar");
+        return;
+    };
+
+    let cfg = tempfile::tempdir().expect("tempdir");
+    let plugin_dir = cfg.path().join("plugins").join("org.norte.prev-cfg");
+    std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin dir");
+    std::fs::write(plugin_dir.join("plugin.toml"), PREV_MANIFEST_WITH_CONFIG)
+        .expect("write manifest");
+    std::fs::copy(&wasm, plugin_dir.join("plugin.wasm")).expect("copy .wasm");
+    // Deliberadamente SIN config.toml.
+
+    let rt = PluginRuntime::new().expect("PluginRuntime::new");
+    let mut reg = PluginRegistry::discover(cfg.path()).expect("discover");
+    assert!(reg.set_approval_in_memory("org.norte.prev-cfg", true));
+    assert!(reg.set_enabled_in_memory("org.norte.prev-cfg", true));
+
+    let (_id, _name, resolved_wasm, caps, settings) = reg
+        .resolve_previewer("text/plain")
+        .expect("text/plain casa text/*");
+    let mut inst = rt.instantiate(&resolved_wasm, caps).expect("instanciar");
+    inst.set_settings(settings);
+    let render = inst
+        .render_preview("text/plain", SAMPLE)
+        .expect("render con settings");
+    assert!(
+        render.starts_with("Default Banner\n"),
+        "sin config.toml, el guest ve el default del esquema: {render:?}"
+    );
+}
+
+/// Como el anterior, pero CON `config.toml` — el guest debe ver el OVERRIDE
+/// validado, no el default.
+#[test]
+fn plugin_preview_e2e_wasm_real_config_banner_override() {
+    let Some(wasm) = build_guest("previewer-demo") else {
+        eprintln!("SKIP: target wasm32-wasip2 no instalado; no hay .wasm que ejecutar");
+        return;
+    };
+
+    let cfg = tempfile::tempdir().expect("tempdir");
+    let plugin_dir = cfg.path().join("plugins").join("org.norte.prev-cfg");
+    std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin dir");
+    std::fs::write(plugin_dir.join("plugin.toml"), PREV_MANIFEST_WITH_CONFIG)
+        .expect("write manifest");
+    std::fs::copy(&wasm, plugin_dir.join("plugin.wasm")).expect("copy .wasm");
+    std::fs::write(
+        plugin_dir.join("config.toml"),
+        "banner = \"Hola desde config\"\n",
+    )
+    .expect("write config.toml");
+
+    let rt = PluginRuntime::new().expect("PluginRuntime::new");
+    let mut reg = PluginRegistry::discover(cfg.path()).expect("discover");
+    assert!(reg.set_approval_in_memory("org.norte.prev-cfg", true));
+    assert!(reg.set_enabled_in_memory("org.norte.prev-cfg", true));
+
+    let (_id, _name, resolved_wasm, caps, settings) = reg
+        .resolve_previewer("text/plain")
+        .expect("text/plain casa text/*");
+    let mut inst = rt.instantiate(&resolved_wasm, caps).expect("instanciar");
+    inst.set_settings(settings);
+    let render = inst
+        .render_preview("text/plain", SAMPLE)
+        .expect("render con settings");
+    assert!(
+        render.starts_with("Hola desde config\n"),
+        "con config.toml, el guest ve el override validado: {render:?}"
     );
 }
 

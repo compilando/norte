@@ -8,6 +8,15 @@
 //! el host no puede inyectarle un stream vivo. Las credenciales cruzan a memoria
 //! del guest para el `login`; sin TLS (FTPS = deuda, aws-lc-rs no compila a
 //! wasm) ya viajan en claro por el cable.
+//!
+//! **`[config]` (P2 Task 4a) — deferral documentado:** este provider NO
+//! declara `[config]` ni lo recibiría si lo hiciera — `connect_ftp_plugin`
+//! nunca llama a [`crate::plugin_provider::PluginProvider::set_settings`]
+//! (queda en su default vacío, como cualquier plugin sin `[config]`). Motivo
+//! estructural: la conexión FTP nace de `ConnectionSpec`/`connections.toml`
+//! (endpoint, credenciales, auth), NO del catálogo de plugins — no hay
+//! `plugin.toml` que declare un esquema `[config]` que resolver. Ver el doc
+//! del módulo `plugin_provider` para el detalle del deferral.
 
 use std::net::IpAddr;
 

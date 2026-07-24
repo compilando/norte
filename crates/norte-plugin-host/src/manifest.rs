@@ -312,8 +312,12 @@ pub const CONFIG_STRING_MAX_CHARS: usize = 280;
 pub const CONFIG_ENUM_MAX_VALUES: usize = 16;
 
 /// `true` si `key` respeta el charset `[a-z0-9-]{1,32}` (P2 decisión 1): solo
-/// minúsculas ASCII, dígitos y guion, longitud `1..=32`.
-fn is_valid_config_key(key: &str) -> bool {
+/// minúsculas ASCII, dígitos y guion, longitud `1..=32`. `pub(crate)`: la
+/// reutiliza `config_values.rs` (security review P2 Task 4a) para decidir si
+/// una clave DESCONOCIDA de `config.toml` es segura de interpolar en un
+/// mensaje de error — el mismo charset acotado (ASCII, sin control/bidi, tope
+/// de longitud) que ya garantiza toda clave DECLARADA en el esquema.
+pub(crate) fn is_valid_config_key(key: &str) -> bool {
     !key.is_empty()
         && key.len() <= CONFIG_KEY_MAX_CHARS
         && key
