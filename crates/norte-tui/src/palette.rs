@@ -94,10 +94,25 @@ pub fn plugin_rows(plugins: &[norte_proto::methods::PluginInfo]) -> Vec<Row> {
         .iter()
         .filter(|p| p.approved && p.enabled)
         .flat_map(|p| {
+            // Tope defensivo (P1 encoding audit F1) IGUAL al de
+            // `app::clamp_plugin_descriptions` — el ingest de `main::dispatch`
+            // ya clampa+enmascara antes de llegar aquí, pero `plugin_rows` es
+            // pública y se ejercita directo en tests/snapshots con datos
+            // crudos; se queda auto-contenida (segura por construcción, sin
+            // depender de que el caller haya clampado) en vez de confiar en
+            // un invariante no forzado por el compilador. Sobre un string ya
+            // clampado esto es barato e idempotente — no hay doble coste
+            // real, y se hace UNA vez por plugin (no por comando).
             let desc = p
                 .description
                 .as_deref()
-                .map(|d| crate::app::display_name(d.as_bytes()).0)
+                .map(|d| {
+                    let clamped: String = d
+                        .chars()
+                        .take(crate::app::PLUGIN_DESCRIPTION_WIRE_CAP)
+                        .collect();
+                    crate::app::display_name(clamped.as_bytes()).0
+                })
                 .unwrap_or_default();
             let plugin_id = p.id.clone();
             p.commands.iter().map(move |c| {
@@ -329,6 +344,29 @@ mod tests {
         assert_eq!(rows[0].desc, "");
     }
 
+    /// P1 encoding audit F1 (MEDIUM): un daemon hostil/comprometido puede
+    /// mandar una `description` de CUALQUIER longitud por el wire — el
+    /// manifiesto solo limita a 280 chars al parsear en el camino honesto.
+    /// `plugin_rows` debe clampar igual que `app::clamp_plugin_descriptions`,
+    /// sin depender de que el caller ya lo haya hecho.
+    #[test]
+    fn plugin_rows_clampa_description_al_tope_del_wire() {
+        let larga = "a".repeat(10_000);
+        let plugins = vec![plugin_info(
+            "org.norte.demo",
+            true,
+            true,
+            Some(larga.as_str()),
+            vec![("greet", "Greet")],
+        )];
+        let rows = plugin_rows(&plugins);
+        assert_eq!(
+            rows[0].desc.chars().count(),
+            crate::app::PLUGIN_DESCRIPTION_WIRE_CAP,
+            "description sin tope llegó cruda a la fila"
+        );
+    }
+
     /// P1, encoding audit: un título de plugin hostil (bidi override, corpus
     /// `rtl_override`) NUNCA se pinta crudo — `text` lo lleva por
     /// `display_name` ANTES de llegar a la fila (mismo criterio que el
@@ -382,5 +420,47 @@ mod tests {
             "fila de plugin sin prefijo: {:?}",
             rows[0].text
         );
+    }
+
+    /// P1 encoding audit M1: un plugin hostil que titula su comando
+    /// EMPEZANDO con el prefijo genuino (`"extensión] app.quit"`, tratando
+    /// de fabricar `"[extensión] app.quit"` — indistinguible en pantalla de
+    /// una fila de plugin normal cuyo título fuera literalmente
+    /// `"app.quit"`) no logra esconder ni sustituir el prefijo real:
+    /// `text` SIEMPRE arranca con el prefijo genuino de `plugin_rows`
+    /// (`format!` lo antepone, nunca lo interpreta ni lo deja reescribir), y
+    /// el intento del título queda DOBLADO y visible después, jamás
+    /// eliminado ni fusionado con el original — el humano ve el prefijo
+    /// real dos veces, una señal clara de manipulación, no un "app.quit"
+    /// limpio que pudiera confundirse con el built-in genuino.
+    #[test]
+    fn prefijo_doblado_por_titulo_hostil_nunca_se_elimina() {
+        let prefix = t("palette-plugin-prefix");
+        let payload = format!("{prefix}] app.quit");
+        let plugins = vec![plugin_info(
+            "org.evil.x",
+            true,
+            true,
+            None,
+            vec![("run", payload.as_str())],
+        )];
+        let rows = plugin_rows(&plugins);
+        let genuine_prefix = format!("[{prefix}] ");
+        assert!(
+            rows[0].text.starts_with(&genuine_prefix),
+            "el prefijo genuino debe seguir siendo el arranque de la fila: {:?}",
+            rows[0].text
+        );
+        // El payload del atacante sigue COMPLETO tras el prefijo genuino —
+        // ni recortado ni fusionado en uno solo: el doblado es visible.
+        assert_eq!(
+            rows[0].text,
+            format!("{genuine_prefix}{payload}"),
+            "el intento de doblar el prefijo debe quedar íntegro, no colapsado: {:?}",
+            rows[0].text
+        );
+        // Y el resultado NUNCA es indistinguible del texto de un built-in
+        // genuino ("app.quit" a secas): el prefijo real siempre lo precede.
+        assert_ne!(rows[0].text, "app.quit");
     }
 }

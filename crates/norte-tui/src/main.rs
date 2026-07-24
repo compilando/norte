@@ -2772,8 +2772,14 @@ async fn dispatch(
         "app.extensions" => match backend.plugins_list().await {
             // El catálogo llega YA ordenado por categoría e id desde el core.
             Ok(list) => {
+                // (P1 encoding audit F1) INGEST: clampa+enmascara `description`
+                // UNA vez aquí, no en cada frame de `plugin_description_line`
+                // — defensa contra un daemon hostil/comprometido que ignore
+                // el tope del manifiesto.
+                let mut plugins = list.plugins;
+                norte_tui::app::clamp_plugin_descriptions(&mut plugins);
                 app.extensions = Some(ExtensionManager {
-                    plugins: list.plugins,
+                    plugins,
                     errors: list.errors,
                     cursor: 0,
                 });
@@ -2802,7 +2808,13 @@ async fn dispatch(
             let mut rows =
                 norte_tui::palette::rows_for_context(&app.palette_rows, app.viewer.is_some());
             match backend.plugins_list().await {
-                Ok(list) => rows.extend(norte_tui::palette::plugin_rows(&list.plugins)),
+                Ok(list) => {
+                    // (P1 encoding audit F1) INGEST: mismo clamp que el brazo
+                    // `app.extensions` — un solo punto de entrada, mismo tope.
+                    let mut plugins = list.plugins;
+                    norte_tui::app::clamp_plugin_descriptions(&mut plugins);
+                    rows.extend(norte_tui::palette::plugin_rows(&plugins));
+                }
                 Err(e) => app.message = Some(error_message(&e)),
             }
             app.palette = Some(Palette::new(rows));

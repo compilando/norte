@@ -332,28 +332,37 @@ fn plugin_line<'a>(
 }
 
 /// Segunda línea BAJO cada plugin con su `description` (P1), si la declara
-/// — `None` si el plugin no tiene una. Texto de TERCEROS: mismo enmascarado
-/// que `name`/`publisher` ([`display_name`], con el mismo [`HOSTILE_BADGE`]
-/// si salió alterada) más elipsis MEDIA ([`middle_ellipsis`]) al ancho útil
-/// del popup, para no desbordar la caja (el resto del popup no se
-/// pre-recorta — confía en el clip de `Paragraph` — pero una description
-/// puede llegar hasta 280 chars, `norte-plugin-host` manifest.rs, y aquí sí
-/// vale la pena evitar que tape el resto de la lista). Estilo atenuado
-/// (`Role::BorderUnfocused`, "presente pero no activo" — mismo criterio que
-/// documenta ese rol): es contexto, no el dato principal de la fila.
-fn plugin_description_line<'a>(
-    p: &'a norte_proto::methods::PluginInfo,
+/// — `None` si el plugin no tiene una. El camino normal (`main::dispatch`,
+/// brazo `app.extensions`) ya llega con `description` clampada+enmascarada
+/// por `app::clamp_plugin_descriptions` (P1 encoding audit F1: UNA vez por
+/// plugin al ingest, no por frame) — pero este draw NO confía ciegamente en
+/// eso: re-clampa+enmascara aquí también, self-contained como `plugin_line`
+/// con `name`/`publisher` (y como `palette::plugin_rows`). Un control/bidi
+/// crudo que llegara a `ratatui` sin pasar por [`display_name`] no se pinta
+/// como `�` — un char de control/override es INVISIBLE en la celda, así que
+/// desaparecería en silencio (justo lo que el enmascarado existe para
+/// evitar); confiar ciegamente en el caller cambiaría "marcado" por
+/// "silencioso" ante cualquier ruta que construya `ExtensionManager` sin
+/// pasar por el ingest (tests, un futuro caller). Sobre un string YA
+/// acotado (el caso normal) esto es barato e idempotente. Elipsis MEDIA
+/// ([`middle_ellipsis`]) al ancho útil del popup para no desbordar la caja.
+/// Sin badge de hostil (el badge es para diagnóstico de fallos de carga,
+/// [`HOSTILE_BADGE`], no para cosmética de terceros — mismo criterio que
+/// `plugin_line`). Estilo atenuado (`Role::BorderUnfocused`, "presente pero
+/// no activo" — mismo criterio que documenta ese rol): es contexto, no el
+/// dato principal de la fila.
+fn plugin_description_line(
+    p: &norte_proto::methods::PluginInfo,
     theme: &TuiTheme,
     inner: usize,
-) -> Option<Line<'a>> {
+) -> Option<Line<'static>> {
     let raw = p.description.as_deref()?;
-    let (masked, hostil) = display_name(raw.as_bytes());
-    let texto = middle_ellipsis(&masked, inner.saturating_sub(3));
-    let texto = if hostil {
-        format!("   {HOSTILE_BADGE} {texto}")
-    } else {
-        format!("   {texto}")
-    };
+    let clamped: String = raw
+        .chars()
+        .take(crate::app::PLUGIN_DESCRIPTION_WIRE_CAP)
+        .collect();
+    let (masked, _) = display_name(clamped.as_bytes());
+    let texto = format!("   {}", middle_ellipsis(&masked, inner.saturating_sub(3)));
     Some(Line::styled(texto, theme.role(Role::BorderUnfocused)))
 }
 
@@ -876,11 +885,45 @@ fn clamp_chars(s: &str, max: usize) -> String {
 /// re-truncaba por la DERECHA, comiéndose justo la cola que la elipsis media
 /// existe para preservar (#79). Para ASCII (celdas == chars) el resultado es
 /// idéntico al anterior.
+///
+/// P1 encoding audit F2 (LOW): backstop por CUENTA DE CHARS antes del
+/// caminante por ancho. Un combining mark (`U+0301`…) o un ZWJ pesa CERO
+/// celdas — un flood de millones de ellos pegados a un solo char visible
+/// tiene ancho total ≤ `max` (el early-return de abajo lo devolvería
+/// INTACTO, sin cortar nada) o, si desborda por el char visible, el
+/// caminante de cabeza/cola seguiría acumulando chars de ancho 0 sin nunca
+/// tocar su presupuesto — en ningún caso el tamaño del STRING (memoria,
+/// trabajo de `display_name`/render aguas arriba) queda acotado por `max`
+/// aunque el ANCHO sí. Si `s` trae más de `4*max` chars, se pre-recorta por
+/// CHARS (generoso: bastante mayor que cualquier `max` de celdas real de la
+/// TUI hoy) a cabeza+cola ANTES de medir nada — el resto de la función seguía
+/// igual sobre esa entrada ya acotada.
 fn middle_ellipsis(s: &str, max: usize) -> String {
+    let char_cap = max.saturating_mul(4);
+    let chars: Vec<char> = s.chars().collect();
+    // `true` si el backstop tuvo que descartar chars por CUENTA (no por
+    // ancho) — en ese caso se FUERZA la elipsis más abajo aunque el ancho
+    // resultante quepa en `max`: spec §6, jamás pérdida silenciosa. Sin
+    // esto, un flood de zero-width recortado a `char_cap` podría terminar
+    // pesando 0 celdas y devolverse INTACTO (ya recortado, pero sin marcar)
+    // por el early-return de ancho.
+    let (chars, cortado_por_chars) = if chars.len() > char_cap {
+        let head_n = char_cap / 2;
+        let tail_n = char_cap - head_n;
+        let recorte: Vec<char> = chars[..head_n]
+            .iter()
+            .chain(chars[chars.len() - tail_n..].iter())
+            .copied()
+            .collect();
+        (recorte, true)
+    } else {
+        (chars, false)
+    };
     let cell = |c: char| UnicodeWidthChar::width(c).unwrap_or(0);
-    if s.chars().map(cell).sum::<usize>() <= max {
-        return s.to_owned();
+    if !cortado_por_chars && chars.iter().copied().map(cell).sum::<usize>() <= max {
+        return chars.into_iter().collect();
     }
+    let s = &chars[..];
     // Una celda para el `…`; el resto se reparte cabeza/cola. Cada mitad
     // acumula chars mientras el siguiente QUEPA entero en su presupuesto: un
     // char ancho que no cabe se descarta (nunca se parte una celda).
@@ -890,7 +933,7 @@ fn middle_ellipsis(s: &str, max: usize) -> String {
 
     let mut head = String::new();
     let mut used = 0usize;
-    for c in s.chars() {
+    for &c in s {
         let w = cell(c);
         if used + w > head_budget {
             break;
@@ -901,7 +944,7 @@ fn middle_ellipsis(s: &str, max: usize) -> String {
 
     let mut tail: Vec<char> = Vec::new();
     let mut used_tail = 0usize;
-    for c in s.chars().rev() {
+    for &c in s.iter().rev() {
         let w = cell(c);
         if used_tail + w > tail_budget {
             break;
@@ -1184,5 +1227,105 @@ mod ellipsis_tests {
         let out = middle_ellipsis("日本", 1);
         assert_eq!(out, "…");
         assert!(out.width() <= 1);
+    }
+
+    /// P1 encoding audit F2 (LOW): un flood de combining marks (ancho CERO
+    /// cada uno) desborda el caminante por celdas SIN nunca tocar su
+    /// presupuesto — el early-return de ancho, o el propio caminante,
+    /// podían devolver/procesar el string ENTERO sin acotar, con `max`
+    /// celdas satisfecho pero el tamaño real sin tope. `nfd_e_acute` del
+    /// corpus (`e` + combining acute) es el par base+combining canónico —
+    /// aquí se inunda a 100 000× para ejercer el backstop por CUENTA de
+    /// chars, no solo por ancho.
+    #[test]
+    fn flood_de_combining_marks_no_desborda() {
+        let fixture = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == "nfd_e_acute")
+            .expect("fixture del corpus");
+        let texto = String::from_utf8(fixture.bytes).expect("nfd_e_acute es UTF-8 válido");
+        let (base, combining) = texto.split_at(1); // "e" + "\u{0301}"
+        let flood: String = std::iter::once(base)
+            .chain(std::iter::repeat_n(combining, 100_000))
+            .collect();
+        assert_eq!(flood.width(), 1, "control: el flood entero pesa 1 celda");
+        let out = middle_ellipsis(&flood, 10);
+        // Cota: el backstop pre-recorta a `char_cap = 4*max` chars, pero el
+        // caminante de cabeza Y el de cola operan cada uno sobre TODO ese
+        // precorte (no sobre mitades separadas) — con ancho cero ninguno
+        // frena por presupuesto, así que cada uno puede consumirlo entero.
+        // Bounded (2*char_cap + 1), no perfecto — lo que pide F2 (LOW) es
+        // dejar de ser ILIMITADO, no una cota ajustada.
+        let cota = 2 * (10 * 4) + 1;
+        assert!(
+            out.chars().count() <= cota,
+            "el backstop de cuenta de chars no acotó la salida: {} chars (cota {cota})",
+            out.chars().count()
+        );
+    }
+}
+
+#[cfg(test)]
+mod plugin_description_line_tests {
+    use super::plugin_description_line;
+    use crate::theme::TuiTheme;
+
+    fn sample_plugin(description: Option<&str>) -> norte_proto::methods::PluginInfo {
+        norte_proto::methods::PluginInfo {
+            id: "org.norte.demo".into(),
+            name: "Demo".into(),
+            publisher: "norte".into(),
+            version: "1.0.0".into(),
+            category: "previewer".into(),
+            capabilities: Vec::new(),
+            approved: true,
+            enabled: true,
+            description: description.map(str::to_owned),
+            commands: Vec::new(),
+        }
+    }
+
+    fn line_text(line: &ratatui::text::Line<'_>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn sin_description_es_none() {
+        let p = sample_plugin(None);
+        assert!(plugin_description_line(&p, &TuiTheme::default(), 100).is_none());
+    }
+
+    /// P1 encoding audit F1 (MEDIUM): un daemon hostil/comprometido puede
+    /// mandar una `description` sin tope por el wire — este draw NO confía
+    /// en que el caller (`main::dispatch`'s ingest,
+    /// `app::clamp_plugin_descriptions`) ya la haya clampado, y la acota
+    /// aquí también (self-contained, como `plugin_line`). Con un `inner`
+    /// GRANDE (que no fuerce elipsis por ancho) el contenido final refleja
+    /// EXACTAMENTE `PLUGIN_DESCRIPTION_WIRE_CAP` caracteres del original —
+    /// ni uno más, sin pasar por el layout del popup.
+    #[test]
+    fn clampa_al_tope_del_wire_incluso_sin_ingest() {
+        let p = sample_plugin(Some(&"a".repeat(50_000)));
+        let line =
+            plugin_description_line(&p, &TuiTheme::default(), 10_000).expect("hay description");
+        let texto = line_text(&line);
+        assert_eq!(
+            texto.chars().filter(|&c| c == 'a').count(),
+            crate::app::PLUGIN_DESCRIPTION_WIRE_CAP,
+            "el draw procesó más de PLUGIN_DESCRIPTION_WIRE_CAP chars del original: {texto:?}"
+        );
+    }
+
+    /// Un override RTL crudo (sin pasar por ingest) se enmascara a U+FFFD
+    /// AQUÍ — nunca llega intacto a `ratatui` (donde un control/override es
+    /// invisible: desaparecería en silencio en vez de marcarse).
+    #[test]
+    fn enmascara_override_rtl_incluso_sin_ingest() {
+        let p = sample_plugin(Some("abc\u{202E}gpj.exe"));
+        let line =
+            plugin_description_line(&p, &TuiTheme::default(), 10_000).expect("hay description");
+        let texto = line_text(&line);
+        assert!(!texto.contains('\u{202E}'));
+        assert!(texto.contains('\u{FFFD}'));
     }
 }

@@ -1,7 +1,10 @@
 //! Modelo del host de plugins (ADR 0022, M4-P1): manifiesto, capabilities,
 //! catálogo. Sin runtime WASM (M4-P2).
 
-use norte_plugin_host::{Catalog, Category, Manifest, ManifestError, Scope};
+use norte_plugin_host::{
+    COMMAND_ID_MAX_CHARS, COMMAND_TITLE_MAX_CHARS, Catalog, Category, Manifest, ManifestError,
+    Scope,
+};
 
 const SYNTAX_PREVIEW: &str = r#"
 [plugin]
@@ -255,6 +258,74 @@ fn description_editada_no_mueve_el_approval_digest() {
         con_desc.approval_digest(),
         con_otra_desc.approval_digest(),
         "editar description no debe mover el digest"
+    );
+}
+
+/// P1 encoding audit M2: manifiesto con UN `contributions.command`, `id`/
+/// `title` parametrizados — para probar los topes 120/64 (chars) sin
+/// repetir el boilerplate del `[plugin]`.
+fn manifest_con_comando(id: &str, title: &str) -> Result<Manifest, ManifestError> {
+    Manifest::from_toml(&format!(
+        r#"
+        [plugin]
+        id = "org.norte.x"
+        name = "X"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "command"
+        [contributions]
+        command = [{{ id = "{id}", title = "{title}" }}]
+    "#
+    ))
+}
+
+#[test]
+fn command_title_120_chars_es_el_tope_exacto() {
+    let title = "a".repeat(COMMAND_TITLE_MAX_CHARS);
+    let m = manifest_con_comando("cmd", &title).unwrap();
+    assert_eq!(m.contributions.command[0].title, title);
+}
+
+#[test]
+fn command_title_121_chars_se_rechaza() {
+    let title = "a".repeat(COMMAND_TITLE_MAX_CHARS + 1);
+    assert!(matches!(
+        manifest_con_comando("cmd", &title),
+        Err(ManifestError::CommandTitleTooLong)
+    ));
+}
+
+#[test]
+fn command_id_64_chars_es_el_tope_exacto() {
+    let id = "a".repeat(COMMAND_ID_MAX_CHARS);
+    let m = manifest_con_comando(&id, "Title").unwrap();
+    assert_eq!(m.contributions.command[0].id, id);
+}
+
+#[test]
+fn command_id_65_chars_se_rechaza() {
+    let id = "a".repeat(COMMAND_ID_MAX_CHARS + 1);
+    assert!(matches!(
+        manifest_con_comando(&id, "Title"),
+        Err(ManifestError::CommandIdTooLong)
+    ));
+}
+
+/// El tope es de PARSEO, no de digest: `title` SÍ entra en `approval_digest`
+/// (decide cuándo/cómo se dispara el comando), pero eso ya estaba probado
+/// por `approval_digest_incluye_category_y_contributions_no_solo_capabilities`
+/// — el tope NUEVO solo rechaza manifiestos NUEVOS que lo excedan, jamás
+/// reinterpreta un digest ya calculado para uno viejo dentro del tope (el
+/// digest hashea el VALOR de `title`, no el tope contra el que se validó al
+/// parsear).
+#[test]
+fn command_dentro_del_tope_no_cambia_el_criterio_del_digest() {
+    let a = manifest_con_comando("cmd", "Title A").unwrap();
+    let b = manifest_con_comando("cmd", "Title B").unwrap();
+    assert_ne!(
+        a.approval_digest(),
+        b.approval_digest(),
+        "title distinto SÍ debe mover el digest (no es cosmético como description)"
     );
 }
 

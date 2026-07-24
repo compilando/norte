@@ -234,7 +234,30 @@ pub enum ManifestError {
     /// intenten esconder texto fuera de la vista truncada del frontend.
     #[error("plugin.description excede el tope de 280 caracteres")]
     DescriptionTooLong,
+    /// `contributions.command[].title` supera el tope de 120 caracteres (P1
+    /// encoding audit M2). A diferencia de `description`, `title` SÍ entra en
+    /// `approval_digest` (decide cuándo/cómo se dispara el comando en la
+    /// palette) — el tope es solo de PARSEO: un manifiesto ya aprobado con un
+    /// título corto no se ve afectado si el tope cambia en una versión
+    /// futura del host, porque eso solo rechaza manifiestos NUEVOS, nunca
+    /// reinterpreta uno viejo.
+    #[error("contributions.command[].title excede el tope de 120 caracteres")]
+    CommandTitleTooLong,
+    /// `contributions.command[].id` supera el tope de 64 caracteres (P1
+    /// encoding audit M2). Mismo criterio que `CommandTitleTooLong`: cap de
+    /// PARSEO, no reinterpreta aprobaciones existentes.
+    #[error("contributions.command[].id excede el tope de 64 caracteres")]
+    CommandIdTooLong,
 }
+
+/// Tope de `contributions.command[].title` (P1 encoding audit M2): mismo
+/// espíritu que el tope de `description` — un plugin hostil no debe poder
+/// abultar la palette con un título kilométrico. `title` SÍ entra en
+/// `approval_digest` (ver doc de [`ManifestError::CommandTitleTooLong`]).
+pub const COMMAND_TITLE_MAX_CHARS: usize = 120;
+
+/// Tope de `contributions.command[].id` (P1 encoding audit M2).
+pub const COMMAND_ID_MAX_CHARS: usize = 64;
 
 /// `true` si `id` es un identificador reverse-DNS válido: uno o más segmentos
 /// `[A-Za-z0-9-]+` separados por puntos, con al menos un punto, ningún segmento
@@ -293,6 +316,18 @@ impl Manifest {
             .is_some_and(|d| d.chars().count() > 280)
         {
             return Err(ManifestError::DescriptionTooLong);
+        }
+        // Topes de cada comando declarado (P1 encoding audit M2), simétricos
+        // con el de `description` — CHARS, no bytes. `id` primero: es el que
+        // viaja al wire para despachar (`plugin.run_command`), acotarlo
+        // primero da el error más específico si AMBOS desbordan a la vez.
+        for c in &raw.contributions.command {
+            if c.id.chars().count() > COMMAND_ID_MAX_CHARS {
+                return Err(ManifestError::CommandIdTooLong);
+            }
+            if c.title.chars().count() > COMMAND_TITLE_MAX_CHARS {
+                return Err(ManifestError::CommandTitleTooLong);
+            }
         }
         Ok(Self {
             id: raw.plugin.id,

@@ -20,7 +20,6 @@ fn plugin(id: &str, name: &str, category: &str, caps: &[&str], approved: bool) -
         capabilities: caps.iter().map(|c| (*c).to_string()).collect(),
         approved,
         enabled: true,
-        // P1 T3 fills these (extension manager description line).
         description: None,
         commands: Vec::new(),
     }
@@ -149,6 +148,30 @@ fn render_enmascara_nombre_hostil() {
         texto.contains('\u{FFFD}'),
         "no se marcó el enmascarado: {texto:?}"
     );
+}
+
+/// P1 encoding audit F1 (MEDIUM): un daemon hostil/comprometido puede mandar
+/// una `description` de CUALQUIER longitud por el wire (el manifiesto solo
+/// limita a 280 chars al PARSEAR, un chequeo del camino honesto que un
+/// daemon fiel respeta pero uno hostil no tiene por qué). Este test
+/// construye `ExtensionManager` DIRECTO (como haría cualquier caller que no
+/// pase por `main::dispatch`'s ingest, `clamp_plugin_descriptions`), con una
+/// description sin tope, y solo comprueba que el render no panica ni se
+/// cuelga — el efecto de acotar en `ui::plugin_description_line` no es
+/// visible en el frame renderizado (el popup ya acota lo VISIBLE por ancho,
+/// con o sin el tope de 280: `plugin_description_line`'s propio unit test
+/// en `ui.rs` prueba el tope directo, sin pasar por el layout).
+#[test]
+fn render_no_panica_con_description_sin_tope_del_wire() {
+    let mut p = plugin("org.norte.demo", "Demo", "previewer", &[], true);
+    p.description = Some("a".repeat(50_000));
+    let app = app_with(ExtensionManager {
+        plugins: vec![p],
+        errors: Vec::new(),
+        cursor: 0,
+    });
+    let mut t = Terminal::new(TestBackend::new(60, 12)).expect("term");
+    t.draw(|f| ui::draw(f, &app)).expect("draw");
 }
 
 #[test]

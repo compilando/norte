@@ -617,6 +617,101 @@ fn nav_item_display(
     }
 }
 
+/// Tope defensivo sobre `PluginInfo.description` en el wire (P1 encoding
+/// audit F1): el manifiesto YA limita a 280 chars al PARSEAR
+/// (`norte-plugin-host` manifest.rs, `ManifestError::DescriptionTooLong`) —
+/// pero eso solo protege el camino honesto (un plugin bien formado, un
+/// daemon fiel al server que lo cargó). Un daemon hostil o comprometido
+/// podría mandar CUALQUIER longitud por el wire — el cliente no debe
+/// confiar en que el server respetó su propio límite. Mismo valor que el
+/// tope del manifiesto: mirror deliberado, no coincidencia.
+pub const PLUGIN_DESCRIPTION_WIRE_CAP: usize = 280;
+
+/// Clampa ([`PLUGIN_DESCRIPTION_WIRE_CAP`]) y enmascara ([`display_name`])
+/// la `description` de CADA plugin de `plugins`, IN PLACE — en el único
+/// punto donde un `PluginListResult` recién llegado del `Backend` entra al
+/// estado del TUI (`main::dispatch`, brazos `app.extensions`/
+/// `app.palette`). El trabajo se hace UNA vez por plugin aquí, no por fila
+/// ni por frame: ambos consumidores ([`ExtensionManager`],
+/// [`crate::palette::plugin_rows`]) comparten el resultado ya seguro para
+/// pintar — `ExtensionManager` la repinta cada frame
+/// (`ui::plugin_description_line`), y antes de este fix recalculaba el
+/// enmascarado del String crudo (sin tope) en CADA uno.
+pub fn clamp_plugin_descriptions(plugins: &mut [norte_proto::methods::PluginInfo]) {
+    for p in plugins {
+        if let Some(raw) = &p.description {
+            let clamped: String = raw.chars().take(PLUGIN_DESCRIPTION_WIRE_CAP).collect();
+            let (masked, _) = display_name(clamped.as_bytes());
+            p.description = Some(masked);
+        }
+    }
+}
+
+#[cfg(test)]
+mod clamp_plugin_descriptions_tests {
+    use super::clamp_plugin_descriptions;
+    use norte_proto::methods::PluginInfo;
+
+    fn plugin(description: Option<&str>) -> PluginInfo {
+        PluginInfo {
+            id: "org.norte.demo".into(),
+            name: "Demo".into(),
+            publisher: "norte".into(),
+            version: "1.0.0".into(),
+            category: "previewer".into(),
+            capabilities: Vec::new(),
+            approved: true,
+            enabled: true,
+            description: description.map(str::to_owned),
+            commands: Vec::new(),
+        }
+    }
+
+    /// P1 encoding audit F1 (MEDIUM): `PluginInfo.description` no tiene tope
+    /// en el wire (el manifiesto solo lo limita al PARSEAR, en el camino
+    /// honesto) — un daemon hostil/comprometido podría mandar cualquier
+    /// longitud. `clamp_plugin_descriptions` es el único punto donde
+    /// `plugins_list` entra al estado del TUI (`main::dispatch`); debe
+    /// recortarla ahí, de una vez, para ambos consumidores.
+    #[test]
+    fn clampa_al_tope_del_wire() {
+        let mut plugins = vec![plugin(Some(&"a".repeat(50_000)))];
+        clamp_plugin_descriptions(&mut plugins);
+        assert_eq!(
+            plugins[0].description.as_deref().unwrap().chars().count(),
+            super::PLUGIN_DESCRIPTION_WIRE_CAP
+        );
+    }
+
+    #[test]
+    fn none_se_queda_none() {
+        let mut plugins = vec![plugin(None)];
+        clamp_plugin_descriptions(&mut plugins);
+        assert_eq!(plugins[0].description, None);
+    }
+
+    #[test]
+    fn corta_bajo_el_tope_no_se_toca() {
+        let mut plugins = vec![plugin(Some("una description corta"))];
+        clamp_plugin_descriptions(&mut plugins);
+        assert_eq!(
+            plugins[0].description.as_deref(),
+            Some("una description corta")
+        );
+    }
+
+    /// El override RTL nunca sobrevive crudo al clamp — se enmascara aquí,
+    /// no en cada frame del gestor de extensiones.
+    #[test]
+    fn enmascara_override_rtl() {
+        let mut plugins = vec![plugin(Some("abc\u{202E}gpj.exe"))];
+        clamp_plugin_descriptions(&mut plugins);
+        let d = plugins[0].description.as_deref().unwrap();
+        assert!(!d.contains('\u{202E}'));
+        assert!(d.contains('\u{FFFD}'));
+    }
+}
+
 /// Overlay del catálogo de extensiones (M4-P3): la lista de plugins descubierta
 /// por el core (YA ordenada por categoría e id) más los directorios que
 /// fallaron al cargar, con un cursor de selección. Regla 7: el TUI no decide
