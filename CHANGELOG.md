@@ -22,9 +22,18 @@ independently through `PROTOCOL_VERSION`.
   `NORTE_SECRET_<CONN>` env var a password/access-key connection falls back
   to is present; the OS keyring and `secrets.age` are explicitly NOT probed,
   since either could prompt or touch the keychain). `--json` emits a stable
-  `{ findings, summary }` shape for tooling. Exit code is non-zero only when
-  a finding is an error (a warning-only report still exits clean), and the
-  full report always prints regardless of the exit code.
+  `{ findings, summary }` shape for tooling — locale-free and secret-free by
+  construction: a `Finding`'s `detail` only ever carries machine values (ids,
+  paths, var names), never the underlying library error's raw `Display`
+  (a `connections.toml` syntax error inside a `password = "…` line is
+  reported generically, never echoing the fragment); the handful of
+  narrative sentences (e.g. "re-approval required") live in the text
+  renderer, keyed by finding code, and are looked up in the user's locale.
+  A layer's `lua:<name>` binding with an invalid Lua identifier is reported
+  as a single structural error instead of retrying a fix that can never
+  converge. Exit code is non-zero only when a finding is an error (a
+  warning-only report still exits clean), and the full report always prints
+  regardless of the exit code.
 
 - **Command palette (H1, `Ctrl+P`; vim preset also `:`):** a filterable
   overlay lists every command with its Fluent description and its first

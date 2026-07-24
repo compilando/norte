@@ -705,6 +705,26 @@ fn verdict_detail(verdict: &norte_core::audit::AnchorVerdict) -> Option<String> 
     })
 }
 
+/// Text-mode line for one [`doctor::Finding`] (review MINOR-3): `Finding`
+/// itself carries only STABLE, MACHINE detail (ids, paths, var names — see
+/// `doctor.rs`'s own module doc) so `--json` stays locale-free. A few codes
+/// had a full narrative sentence baked into `detail` as English prose before
+/// this review (`plugin-digest-stale`, `connections-none`); that sentence now
+/// lives HERE, keyed by `code`, and is looked up ONLY for text-mode
+/// rendering — every other code still prints its raw (already-machine)
+/// `detail` unchanged.
+fn doctor_finding_line(f: &doctor::Finding) -> String {
+    match f.code {
+        "connections-parse" => norte_i18n::t("cli-doctor-detail-connections-parse"),
+        "connections-none" => norte_i18n::t("cli-doctor-detail-connections-none"),
+        "plugin-digest-stale" => norte_i18n::ta(
+            "cli-doctor-detail-plugin-digest-stale",
+            &[("id", &f.detail)],
+        ),
+        _ => f.detail.clone(),
+    }
+}
+
 /// `norte doctor` (H2): read-only diagnostics over config layers, keymaps,
 /// plugins and connections. Never touches the daemon/engine — early-returned
 /// in `run()` like `audit_cmd`.
@@ -782,9 +802,13 @@ async fn doctor_cmd(json: bool) -> anyhow::Result<ExitCode> {
                 doctor::Severity::Warn => norte_i18n::t("cli-doctor-warn"),
                 doctor::Severity::Error => norte_i18n::t("cli-doctor-error"),
             };
-            println!("  [{marker}] {}: {}", f.code, f.detail);
+            println!("  [{marker}] {}: {}", f.code, doctor_finding_line(f));
         }
         println!("{}", norte_i18n::t("cli-doctor-footer-keymap-approx"));
+        println!(
+            "{}",
+            norte_i18n::t("cli-doctor-footer-connections-not-probed")
+        );
     }
     let has_error = findings
         .iter()

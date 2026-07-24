@@ -236,6 +236,22 @@ impl PluginRegistry {
         &self.config_dir
     }
 
+    /// Ruta esperada del binario de `id`: `<config_dir>/plugins/<id>/plugin.wasm`.
+    /// Para un caller que solo necesita comprobar PRESENCIA sin cargar el
+    /// runtime WASM (p. ej. `norte doctor`, H2) — evita que ese caller
+    /// duplique el layout con su propio `config_dir.join("plugins")...`.
+    /// NO es el mismo camino que [`Self::verified_wasm`] (que además
+    /// canonicaliza y verifica que el binario no escape del directorio del
+    /// plugin vía symlink, issue #69 — una defensa que este cálculo puro de
+    /// ruta no aplica) ni consulta el catálogo: por convención
+    /// (`PluginEntry::dir`'s propio rustdoc) el directorio de un plugin
+    /// descubierto es `plugins/<id>/`, pero esta función no lo verifica, solo
+    /// lo asume.
+    #[must_use]
+    pub fn wasm_path(&self, id: &str) -> PathBuf {
+        self.config_dir.join("plugins").join(id).join("plugin.wasm")
+    }
+
     /// Copia del estado aprobado/activado, para persistir fuera del lock (el
     /// daemon lo mueve a `spawn_blocking` junto a [`Self::config_dir`], regla 2).
     #[must_use]
@@ -604,6 +620,22 @@ fs-read = "scoped"
         assert!(!p.enabled);
         assert!(p.capabilities.iter().any(|c| c == "fs-read"));
         assert!(list.errors.is_empty());
+    }
+
+    /// `wasm_path` es un cálculo puro de ruta (single source of truth del
+    /// layout `plugins/<id>/plugin.wasm`, review H2): no requiere que el
+    /// binario exista.
+    #[test]
+    fn wasm_path_sigue_el_layout_plugins_id() {
+        let tmp = TempDir::new().unwrap();
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert_eq!(
+            reg.wasm_path("org.norte.demo"),
+            tmp.path()
+                .join("plugins")
+                .join("org.norte.demo")
+                .join("plugin.wasm")
+        );
     }
 
     #[test]

@@ -213,6 +213,22 @@ const MAX_UNKNOWN_COMMAND_RETRIES: usize = 256;
 /// with several distinct typos gets ALL of them reported, not just the
 /// first. Any other [`KeymapError`] is a [`Severity::Error`] finding that
 /// stops the screen's check (retrying would not converge).
+///
+/// One case masquerades as an ordinary unknown command but can NEVER
+/// converge by adding it to `known`: a `lua:<name>` binding whose `<name>`
+/// fails the Lua identifier charset. `Effective::build_for` validates that
+/// charset UNCONDITIONALLY for any `lua:` run string, never consulting
+/// `known_commands` (`norte-frontend`'s `keymap.rs`, the `lua:` branch right
+/// before the `known_commands.contains` check) — so retrying with the exact
+/// same broken name added to `known` reproduces the identical error forever,
+/// burning the whole retry budget on one binding and ending in a misleading
+/// `keymap-too-many-unknown-commands`. [`norte_frontend::keymap::valid_lua_name`]
+/// is the SAME charset check the engine uses (single source), so it is
+/// checked directly here to short-circuit that case in one iteration instead
+/// of two-hundred-fifty-six; `known.contains(&run)` is kept as a
+/// defense-in-depth guard for any OTHER non-convergent case this reasoning
+/// missed (issue #102 tracks replacing this whole retry loop with a
+/// one-pass diagnostic that can't have this class of bug at all).
 fn check_keymap_screen(
     preset_kf: &norte_frontend::keymap::KeymapFile,
     layer_kfs: &[norte_frontend::keymap::KeymapFile],
@@ -221,6 +237,10 @@ fn check_keymap_screen(
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
     let mut known = norte_frontend::keymap::preset_commands(screen);
+    // TODO(#102): replace this retry loop with a one-pass
+    // `Effective::build_diagnostics`-style API that reports every unknown
+    // command in a single walk — would also remove the need for the
+    // non-convergence guard below entirely.
     for _ in 0..MAX_UNKNOWN_COMMAND_RETRIES {
         let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
         match Effective::build_for(preset_kf, layer_kfs, &known_refs, screen) {
@@ -234,15 +254,25 @@ fn check_keymap_screen(
                 return findings;
             }
             Err(KeymapError::UnknownCommand { run }) => {
+                let lua_charset_error = run
+                    .strip_prefix("lua:")
+                    .is_some_and(|name| !norte_frontend::keymap::valid_lua_name(name));
+                if lua_charset_error || known.contains(&run) {
+                    findings.push(Finding {
+                        section: "keymap",
+                        severity: Severity::Error,
+                        code: "keymap-structural",
+                        detail: format!("{label}: {run}"),
+                    });
+                    return findings;
+                }
                 findings.push(Finding {
                     section: "keymap",
                     severity: Severity::Warn,
                     code: "keymap-unknown-cmd",
                     detail: format!("{label}: {run}"),
                 });
-                if !known.contains(&run) {
-                    known.push(run);
-                }
+                known.push(run);
             }
             Err(e) => {
                 findings.push(Finding {
@@ -284,15 +314,19 @@ fn check_keymap_screen(
 /// as last written by a human) is what tells "never approved" apart from
 /// "approved, but the manifest changed since" — a former `true` that reads
 /// back as an effective `false` can ONLY mean the digest stopped matching, so
-/// that pair becomes a [`Severity::Warn`] naming the re-approval requirement.
+/// that pair becomes a [`Severity::Warn`] naming the re-approval requirement
+/// (`detail` carries only the plugin id — a MACHINE value; the narrative
+/// sentence lives in the text renderer's `cli-doctor-detail-plugin-digest-stale`
+/// Fluent key, keyed by `code`, so `--json` stays locale-free, review
+/// MINOR-3).
 ///
 /// `plugin.wasm` presence is a direct `Path::is_file` — read-only, no
 /// `spawn_blocking` needed by ITSELF (the caller already runs the whole
-/// check inside one, rule 2) — against `config_dir/plugins/<id>/plugin.wasm`.
-/// This mirrors the registry's OWN layout knowledge
-/// (`PluginRegistry::verified_wasm` resolves the identical path internally)
-/// rather than adding a public accessor for a read-only diagnostic; a CLI
-/// binary's synchronous startup path, not a hot path or a provider boundary.
+/// check inside one, rule 2) — against [`PluginRegistry::wasm_path`] (review
+/// MINOR-4: was a raw `config_dir.join(...)` duplicate of that layout here
+/// before). No symlink-safety canonicalization here, unlike the registry's
+/// own `verified_wasm` (issue #69) — this is a presence check for a
+/// diagnostic, not a load path, so that defense does not apply.
 #[must_use]
 pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
     let mut findings = Vec::new();
@@ -331,14 +365,10 @@ pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
                 section: "plugins",
                 severity: Severity::Warn,
                 code: "plugin-digest-stale",
-                detail: format!(
-                    "{}: manifest capabilities changed since approval; re-approval required",
-                    p.id
-                ),
+                detail: p.id.clone(),
             });
         }
-        let wasm = config_dir.join("plugins").join(&p.id).join("plugin.wasm");
-        if !wasm.is_file() {
+        if !registry.wasm_path(&p.id).is_file() {
             findings.push(Finding {
                 section: "plugins",
                 severity: Severity::Warn,
@@ -356,18 +386,30 @@ pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
 ///
 /// [`ConnectionsFile::load`] already treats an absent file as empty (not an
 /// error — connections are optional); that empty case surfaces as one
-/// [`Severity::Ok`] finding. A broken file (bad TOML, or a rejected inline
-/// secret field — `deny_unknown_fields`, ADR 0015 B) is a single
-/// [`Severity::Error`]. Per connection: [`ConnectionSpec::endpoint`][ep]
-/// parsing is [`Severity::Error`] on failure (its `Display` never echoes a
-/// password — `spec.rs`'s own
+/// [`Severity::Ok`] `connections-none` finding. A broken file (bad TOML, or
+/// a rejected inline secret field — `deny_unknown_fields`, ADR 0015 B) is a
+/// single [`Severity::Error`] `connections-parse`. Per connection:
+/// [`ConnectionSpec::endpoint`][ep] parsing is [`Severity::Error`] on
+/// failure (its `Display` never echoes a password — `spec.rs`'s own
 /// `password_inline_en_url_rechazado_sin_eco`/`scheme_invalido_con_password_inline_no_eco`
 /// tests pin that); `Agent`/`Key` auth need no secret and are
 /// [`Severity::Ok`]; `Password`/`AccessKey` (secret-bearing, decision 2) are
 /// checked for [`norte_connect::env_key`]'s var via `env` — present is
 /// [`Severity::Ok`], absent is [`Severity::Warn`] NAMING THE VAR (never a
-/// value). A trailing [`Severity::Ok`] finding notes keyring/age are not
-/// probed.
+/// value). The "keyring/age not probed" note is NOT a finding — it is a
+/// constant caveat about THIS FUNCTION, not a fact about the config it read,
+/// so it is printed once by the text renderer instead (review MINOR-3);
+/// `--json` consumers don't need it repeated per run.
+///
+/// `connections-parse`'s `detail` is DELIBERATELY not `e.to_string()`:
+/// [`norte_connect::ConnectError::Config`] wraps `toml`'s own parse-error
+/// `Display`, which echoes the offending line — an unterminated
+/// `password = "hunter2` would put that fragment straight into stdout and
+/// `--json` (rule 10, review MINOR-2). `connections-none`/`connections-parse`
+/// details are therefore left as MACHINE values (empty — there is no
+/// identifying value to report for either), and their full sentence lives
+/// in the text renderer's `cli-doctor-detail-*` Fluent keys, keyed by `code`
+/// (review MINOR-3, same policy as `plugin-digest-stale` above).
 ///
 /// [ep]: norte_connect::ConnectionSpec::endpoint
 #[must_use]
@@ -376,24 +418,21 @@ pub fn check_connections(
     env: &impl Fn(&str) -> Option<OsString>,
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
-    let file = match ConnectionsFile::load(config_dir) {
-        Ok(f) => f,
-        Err(e) => {
-            findings.push(Finding {
-                section: "connections",
-                severity: Severity::Error,
-                code: "connections-parse",
-                detail: e.to_string(),
-            });
-            return findings;
-        }
+    let Ok(file) = ConnectionsFile::load(config_dir) else {
+        findings.push(Finding {
+            section: "connections",
+            severity: Severity::Error,
+            code: "connections-parse",
+            detail: String::new(),
+        });
+        return findings;
     };
     if file.connections.is_empty() {
         findings.push(Finding {
             section: "connections",
             severity: Severity::Ok,
             code: "connections-none",
-            detail: "no connections.toml, or no connections configured".to_owned(),
+            detail: String::new(),
         });
     } else {
         for (name, spec) in &file.connections {
@@ -437,12 +476,6 @@ pub fn check_connections(
             }
         }
     }
-    findings.push(Finding {
-        section: "connections",
-        severity: Severity::Ok,
-        code: "connections-secrets-not-probed",
-        detail: norte_i18n::t("cli-doctor-connections-not-probed"),
-    });
     findings
 }
 
@@ -597,6 +630,43 @@ mod tests {
         assert!(warn.detail.contains("invented.command"), "{}", warn.detail);
     }
 
+    /// TDD (review IMPORTANT-1): a `lua:<name>` binding whose name fails the
+    /// charset (`valid_lua_name`) can NEVER be fixed by adding it to the
+    /// known-commands set — the retry loop must detect that directly and
+    /// stop in ONE iteration with a single `Error`, not spin through the
+    /// whole retry budget into a spurious `keymap-too-many-unknown-commands`.
+    #[test]
+    fn keymap_lua_charset_invalido_no_reintenta_hasta_agotar() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("keymap.toml"),
+            "[pane]\nappend_keymap = [{ on = [\"z\"], run = \"lua:bad name!\" }]\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let findings = check_keymaps(&layers);
+        // Exactly one Error finding for this screen, no cap escalation.
+        let errors: Vec<_> = findings
+            .iter()
+            .filter(|f| f.section == "keymap" && f.severity == Severity::Error)
+            .collect();
+        assert_eq!(errors.len(), 1, "{findings:?}");
+        assert_eq!(errors[0].code, "keymap-structural");
+        assert!(
+            errors[0].detail.contains("lua:bad name!"),
+            "{}",
+            errors[0].detail
+        );
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.code == "keymap-too-many-unknown-commands"),
+            "must terminate fast, not exhaust the retry cap: {findings:?}"
+        );
+    }
+
     /// Minimal valid manifest shape (copied from `norte-core`'s own
     /// `DEMO_MANIFEST` test const, `crates/norte-core/src/plugins.rs`).
     const DEMO_MANIFEST: &str = r#"
@@ -720,12 +790,6 @@ fs-read = "scoped"
             "{}",
             warn.detail
         );
-        assert!(
-            findings
-                .iter()
-                .any(|f| f.code == "connections-secrets-not-probed"),
-            "{findings:?}"
-        );
 
         let vars = [("NORTE_SECRET_BACKUP", "irrelevant-marker")];
         let findings2 = check_connections(dir.path(), &env(&vars));
@@ -740,8 +804,10 @@ fs-read = "scoped"
         assert_eq!(ok.severity, Severity::Ok);
     }
 
-    /// TDD: absent `connections.toml` → a single `Ok`-empty finding (plus the
-    /// not-probed footer), never an error (connections are optional).
+    /// TDD: absent `connections.toml` → a single `Ok`-empty finding, never an
+    /// error (connections are optional). Its `detail` is a MACHINE (empty)
+    /// value, per review MINOR-3 — the narrative sentence is the text
+    /// renderer's job.
     #[test]
     fn conexiones_ausentes_es_ok_vacio() {
         let dir = tempfile::tempdir().unwrap();
@@ -750,10 +816,14 @@ fs-read = "scoped"
             findings.iter().all(|f| f.severity != Severity::Error),
             "{findings:?}"
         );
-        assert!(findings.iter().any(|f| f.code == "connections-none"));
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].code, "connections-none");
+        assert!(findings[0].detail.is_empty(), "{}", findings[0].detail);
     }
 
-    /// TDD: broken `connections.toml` → a single `Error` finding.
+    /// TDD: broken `connections.toml` → a single `Error` finding, `detail`
+    /// empty (review MINOR-3: machine-only; the sentence is the text
+    /// renderer's `cli-doctor-detail-connections-parse`).
     #[test]
     fn conexiones_toml_roto_es_error() {
         let dir = tempfile::tempdir().unwrap();
@@ -762,5 +832,30 @@ fs-read = "scoped"
         assert_eq!(findings.len(), 1, "{findings:?}");
         assert_eq!(findings[0].code, "connections-parse");
         assert_eq!(findings[0].severity, Severity::Error);
+        assert!(findings[0].detail.is_empty(), "{}", findings[0].detail);
+    }
+
+    /// TDD (review MINOR-2, secret hygiene): a syntax error inside a
+    /// secret-shaped line (`password = "hunter2` — unterminated string) must
+    /// NOT leak through `connections-parse`'s `detail`.
+    /// `ConnectError::Config`'s `Display` (`toml`'s own parser) echoes the
+    /// offending line/snippet, which could be a real secret a user pasted
+    /// straight into `connections.toml` by mistake (rule 10) — this pins
+    /// that `check_connections` never propagates it, in `--json` or text.
+    #[test]
+    fn conexiones_toml_con_secreto_roto_no_filtra_el_valor() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("connections.toml"),
+            "[connections.x]\nurl = \"sftp://h\"\npassword = \"hunter2\n",
+        )
+        .unwrap();
+        let findings = check_connections(dir.path(), &env(&[]));
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        let f = &findings[0];
+        assert_eq!(f.code, "connections-parse");
+        assert_eq!(f.severity, Severity::Error);
+        assert!(!f.detail.contains("hunter2"), "{}", f.detail);
+        assert!(!f.detail.contains('"'), "{}", f.detail);
     }
 }
