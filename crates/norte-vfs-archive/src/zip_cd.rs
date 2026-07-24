@@ -457,6 +457,58 @@ mod tests {
         assert_eq!(entries[0].uncomp_size, 3);
     }
 
+    /// EOCD64 de 56 bytes con `count`/`cd_size`/`cd_offset` en las posiciones
+    /// que lee [`read_zip64`]. El resto va a cero (basta para el pin).
+    fn eocd64_record(count: u64, cd_size: u64, cd_offset: u64) -> [u8; 56] {
+        let mut r = [0u8; 56];
+        r[..4].copy_from_slice(&EOCD64_SIG);
+        r[4..12].copy_from_slice(&44u64.to_le_bytes()); // tamaño del record
+        r[32..40].copy_from_slice(&count.to_le_bytes());
+        r[40..48].copy_from_slice(&cd_size.to_le_bytes());
+        r[48..56].copy_from_slice(&cd_offset.to_le_bytes());
+        r
+    }
+
+    /// Locator de 20 bytes apuntando a `eocd64_pos`.
+    fn eocd64_locator(eocd64_pos: u64) -> [u8; 20] {
+        let mut l = [0u8; 20];
+        l[..4].copy_from_slice(&EOCD64_LOCATOR_SIG);
+        l[8..16].copy_from_slice(&eocd64_pos.to_le_bytes());
+        l[16..20].copy_from_slice(&1u32.to_le_bytes()); // discos totales
+        l
+    }
+
+    /// #100.1 (mutante superviviente del audit #59): el guard
+    /// `eocd64_pos >= locator_pos` de [`read_zip64`]. Un locator forjado
+    /// apunta ADELANTE, a un EOCD64 por lo demás consistente; el EOCD64 debe
+    /// vivir ANTES de su locator, así que la cadena se descarta (`None`) y el
+    /// scan sigue hacia el EOCD real. Sin el guard, el mutante aceptaría este
+    /// EOCD64 forjado.
+    #[test]
+    fn read_zip64_rechaza_eocd64_no_anterior_a_su_locator() {
+        let mut buf = vec![0u8; 128];
+        buf[0..20].copy_from_slice(&eocd64_locator(20)); // locator_pos = 0
+        buf[20..76].copy_from_slice(&eocd64_record(1, 0, 0)); // end 0 <= 20
+        let mut r = Cursor::new(buf);
+        // eocd_pos = locator_pos + 20; eocd64_pos (20) >= locator_pos (0).
+        assert!(read_zip64(&mut r, 20).expect("io").is_none());
+    }
+
+    /// #100.1 (segundo mutante del audit #59): el guard `end <= eocd64_pos`
+    /// de [`read_zip64`]. Cadena locator→EOCD64 consistente salvo que el CD
+    /// promete terminar MÁS ALLÁ del EOCD64 (`cd_offset + cd_size >
+    /// eocd64_pos`): inconsistente, se descarta. Sin el guard, el mutante
+    /// aceptaría un `cd_offset`/`cd_size` mentira.
+    #[test]
+    fn read_zip64_rechaza_cd_que_desborda_el_eocd64() {
+        let mut buf = vec![0u8; 128];
+        buf[0..56].copy_from_slice(&eocd64_record(1, 100, 0)); // end 100 > 0
+        buf[56..76].copy_from_slice(&eocd64_locator(0)); // locator_pos = 56
+        let mut r = Cursor::new(buf);
+        // eocd_pos = 76; eocd64_pos (0) < locator_pos (56) pasa el guard 174.
+        assert!(read_zip64(&mut r, 76).expect("io").is_none());
+    }
+
     #[test]
     fn extra_zip64_resuelve_los_marcadores_en_orden() {
         // uncomp y offset con marcador; comp normal: el blob lleva DOS u64
