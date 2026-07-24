@@ -817,6 +817,112 @@ impl Backend {
             Self::Remote(r) => r.plugin_preview(path).await,
         }
     }
+
+    /// Previsualiza `path` CON ESTILO (G3a, ADR 0037): el gemelo de
+    /// [`Self::plugin_preview`] que devuelve líneas de spans en vez de una
+    /// cadena plana. Mismos pasos 1 (resolver) y 2 (leer bytes) que
+    /// `plugin_preview` — sus errores se PROPAGAN igual (un archivo
+    /// ilegible sigue siendo un fallo honesto). Difiere en el paso 3
+    /// (ejecución): invoca `render-styled` en vez de `render`, y —a
+    /// diferencia de `plugin_preview`— CUALQUIER fallo del runtime EN ESE
+    /// PASO (trap, error de lógica del guest, o los topes de la tabla ADR
+    /// 0037 excedidos vía `RuntimeError::StyledPreviewTooLarge`) degrada a
+    /// `Ok(None)` en vez de propagarse: el preview con estilo es un
+    /// ENRIQUECIMIENTO sobre el plano, nunca debe bloquear el archivo — el
+    /// caller cae a [`Self::plugin_preview`] (plano), que a su vez cae a la
+    /// vista cruda si tampoco aplica ninguno.
+    ///
+    /// Límite de responsabilidad sobre `SpanWire::role` (ADR 0037 decisión
+    /// 3, enmienda): viaja SIN VALIDAR desde aquí. `norte-core` es headless
+    /// y NO depende de `norte-theme` (dueño del conjunto cerrado `Role`);
+    /// añadir esa dependencia estructural solo para validar un `String` que
+    /// de todos modos ya llega acotado en tamaño (topes del wire, aplicados
+    /// en `render_styled_preview`) no se justifica (regla 8) cuando el
+    /// FRONTEND —que sí conoce el tema y es quien PINTA— es el único que
+    /// puede resolver un `role` a un color, y por tanto el único lugar
+    /// donde un nombre desconocido tiene un significado operable (`None`,
+    /// sin color) en vez de un dato inerte. Un `role` no reconocido nunca
+    /// debe usarse por un frontend como clave de lookup sin pasar antes por
+    /// `norte_theme::Role::from_kebab` (ver `norte-frontend::viewer::
+    /// Viewer::with_plugin_preview_styled`, que es donde eso ocurre).
+    ///
+    /// # Errors
+    /// Igual que [`Self::plugin_preview`] para resolución/lectura; jamás por
+    /// un fallo de EJECUCIÓN del guest (ver arriba: degrada a `Ok(None)`).
+    pub async fn plugin_preview_styled(
+        &self,
+        path: &VPath,
+    ) -> Result<Option<norte_proto::methods::PluginPreviewStyled>, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                // 1) Resolver el previewer (discover = IO) en spawn_blocking.
+                let dir = crate::connect::config_dir();
+                let mime = crate::plugins::guess_mimetype(path);
+                let resolved = tokio::task::spawn_blocking(
+                    move || -> Result<Option<crate::plugins::ResolvedPreviewer>, Error> {
+                        let reg = crate::PluginRegistry::discover(&dir)
+                            .map_err(|_| Error::Io { retryable: false })?;
+                        Ok(reg.resolve_previewer(mime))
+                    },
+                )
+                .await
+                .map_err(|_| Error::Internal { panic: true })??;
+                let Some((id, name, wasm, caps, settings)) = resolved else {
+                    return Ok(None);
+                };
+
+                // 2) Leer los bytes ACOTADOS vía el engine (async), igual que
+                // `plugin_preview`. Un archivo ilegible se propaga honesto.
+                let range = ByteRange {
+                    offset: 0,
+                    len: Some(crate::plugins::PREVIEW_MAX_BYTES),
+                };
+                let mut stream = engine.read(path, Some(range)).await?;
+                let mut bytes: Vec<u8> = Vec::new();
+                while let Some(chunk) = stream.next().await {
+                    bytes.extend_from_slice(&chunk?);
+                    if bytes.len() as u64 >= crate::plugins::PREVIEW_MAX_BYTES {
+                        break;
+                    }
+                }
+                let cap = usize::try_from(crate::plugins::PREVIEW_MAX_BYTES).unwrap_or(usize::MAX);
+                bytes.truncate(cap.min(bytes.len()));
+                let content = crate::plugins::decode_for_preview(bytes);
+
+                // 3) Instanciar + `render-styled` (síncrono, WASM) en
+                // spawn_blocking. Cualquier `RuntimeError` aquí (trap, guest,
+                // o tope excedido) degrada a `Ok(None)` — ver rustdoc.
+                let mime_owned = mime.to_owned();
+                let outcome = tokio::task::spawn_blocking(move || {
+                    let runtime = norte_plugin_host::PluginRuntime::new()?;
+                    let mut inst = runtime.instantiate(&wasm, caps)?;
+                    inst.set_settings(settings);
+                    inst.render_styled_preview(&mime_owned, &content)
+                })
+                .await
+                .map_err(|_| Error::Internal { panic: true })?;
+
+                let lines = match outcome {
+                    Ok(lines) => lines,
+                    Err(e) => {
+                        tracing::debug!(
+                            plugin = %id,
+                            error = %e,
+                            "render-styled falló: cae a plugin_preview (plano)"
+                        );
+                        return Ok(None);
+                    }
+                };
+                Ok(Some(norte_proto::methods::PluginPreviewStyled {
+                    plugin_id: id,
+                    plugin_name: name,
+                    lines: crate::plugins::to_wire_lines(lines),
+                }))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.plugin_preview_styled(path).await,
+        }
+    }
 }
 
 /// Mapea el fallo de ejecución de un plugin a la taxonomía del protocolo (modo
@@ -1897,6 +2003,56 @@ pub mod remote {
             )
             .await
         }
+
+        /// `plugin.preview_styled` contra el daemon (G3a, ADR 0037): gemelo
+        /// con estilo de [`Self::plugin_preview`]. `MethodNotFound` (-32601)
+        /// es el trigger REAL dentro de la MISMA ventana 0.27 (un daemon
+        /// 0.27 sin este handler aún cableado — el ADR distingue esto de
+        /// `VERSION_MISMATCH`, que ni deja intentar la llamada): se traduce
+        /// a `Ok(None)`, exactamente lo mismo que "ningún previewer
+        /// aplica" — el caller cae a [`Self::plugin_preview`] (plano). NO
+        /// se usa `call_timed` aquí (mismo motivo que `undo_report`,
+        /// arriba): `call_timed`/`to_taxonomy` solo miran `rpc.data`, que
+        /// para un `METHOD_NOT_FOUND` de la rama `_` del dispatch es `None`
+        /// — el código -32601 se perdería. Cualquier OTRO fallo (I/O,
+        /// timeout, un fallo real de runtime redactado por el daemon…) se
+        /// propaga tal cual.
+        pub(super) async fn plugin_preview_styled(
+            &self,
+            path: &VPath,
+        ) -> Result<Option<methods::PluginPreviewStyled>, Error> {
+            let client = self.client().await?;
+            let params = methods::PluginPreviewStyledParams { path: path.clone() };
+            let call = client.call::<_, methods::PluginPreviewStyledResult>(
+                methods::PLUGIN_PREVIEW_STYLED,
+                &params,
+            );
+            match tokio::time::timeout(CALL_TIMEOUT, call).await {
+                Ok(res) => map_styled_preview_result(res),
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            }
+        }
+    }
+
+    /// Traduce el `Result` crudo de `plugin.preview_styled` (G3a, ADR 0037)
+    /// al contrato de [`RemoteBackend::plugin_preview_styled`]. Extraída de
+    /// esa función SOLO para poder testearla sin socket (construyendo un
+    /// [`ClientError::Rpc`] a mano): `METHOD_NOT_FOUND` (-32601) → `Ok(None)`
+    /// (mismo destino que "ningún previewer aplica" — el caller cae al
+    /// preview plano); cualquier OTRO error va por la taxonomía normal
+    /// (`to_taxonomy`, que SÍ mira `rpc.data` para los `APP_ERROR`).
+    fn map_styled_preview_result(
+        res: Result<methods::PluginPreviewStyledResult, ClientError>,
+    ) -> Result<Option<methods::PluginPreviewStyled>, Error> {
+        match res {
+            Ok(r) => Ok(r.preview),
+            Err(ClientError::Rpc(ref rpc))
+                if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(to_taxonomy(e)),
+        }
     }
 
     /// Enruta UN lote de `search.hits` a su búsqueda por `task_id` (live
@@ -2243,6 +2399,58 @@ pub mod remote {
             assert!(
                 backend.take_degraded().is_none(),
                 "el receptor es one-shot, igual que take_approvals"
+            );
+        }
+
+        /// G3a (ADR 0037): `METHOD_NOT_FOUND` (-32601) de `plugin.preview_styled`
+        /// se traduce a `Ok(None)` — un daemon 0.27 sin este handler aún
+        /// cableado degrada EXACTAMENTE como "ningún previewer aplica"; el
+        /// caller (frontend) cae al preview plano. Construye el `ClientError`
+        /// a mano (sin socket): es el trigger REAL dentro de la ventana 0.27,
+        /// distinto de `VERSION_MISMATCH` (que ni deja llamar).
+        #[test]
+        fn plugin_preview_styled_method_not_found_es_none() {
+            let err = ClientError::Rpc(norte_proto::wire::RpcError::protocol(
+                norte_proto::wire::codes::METHOD_NOT_FOUND,
+                "unknown method: plugin.preview_styled",
+            ));
+            let got = map_styled_preview_result(Err(err)).expect("METHOD_NOT_FOUND no es error");
+            assert_eq!(
+                got, None,
+                "cae a Ok(None), como si ningún previewer aplicara"
+            );
+        }
+
+        /// Un `Ok` con `preview: Some(..)` pasa tal cual.
+        #[test]
+        fn plugin_preview_styled_ok_pasa_la_preview() {
+            let preview = methods::PluginPreviewStyled {
+                plugin_id: "org.norte.demo".into(),
+                plugin_name: "Demo".into(),
+                lines: vec![vec![methods::SpanWire {
+                    text: "hola".into(),
+                    role: None,
+                    fg: None,
+                }]],
+            };
+            let got = map_styled_preview_result(Ok(methods::PluginPreviewStyledResult {
+                preview: Some(preview.clone()),
+            }))
+            .expect("Ok pasa");
+            assert_eq!(got, Some(preview));
+        }
+
+        /// Un fallo REAL (no `METHOD_NOT_FOUND`) se propaga vía `to_taxonomy`
+        /// — jamás se confunde en silencio con "no hay handler todavía".
+        #[test]
+        fn plugin_preview_styled_otro_error_se_propaga() {
+            let err = ClientError::Rpc(norte_proto::wire::RpcError::from(Error::Internal {
+                panic: false,
+            }));
+            let got = map_styled_preview_result(Err(err));
+            assert!(
+                matches!(got, Err(Error::Internal { panic: false })),
+                "un fallo real se propaga, no se confunde con METHOD_NOT_FOUND: {got:?}"
             );
         }
     }

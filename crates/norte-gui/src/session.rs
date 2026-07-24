@@ -92,6 +92,17 @@ pub enum ViewerContent {
         /// `Viewer` core al construirse (`with_plugin_preview`).
         output: String,
     },
+    /// Salida CON ESTILO de un previewer de plugin (G3a, ADR 0037): el
+    /// gemelo estructurado de [`Self::Plugin`] — líneas de spans (`role`
+    /// SIN VALIDAR aún, se valida al construir el `Viewer` core,
+    /// `with_plugin_preview_styled`) en vez de una cadena plana.
+    PluginStyled {
+        /// Nombre legible del plugin previewer (para el indicador «via …»).
+        plugin_name: String,
+        /// Líneas de spans, sin sanear/validar todavía — lo hace el
+        /// `Viewer` core al construirse.
+        lines: Vec<Vec<norte_proto::methods::SpanWire>>,
+    },
     /// Bytes crudos (posiblemente truncados al presupuesto).
     Raw {
         /// Los bytes leídos (acotados a `FS_READ_MAX_CHUNK`).
@@ -241,6 +252,23 @@ async fn open_viewer(
     generation: u64,
     tx: &mpsc::UnboundedSender<SessionEvent>,
 ) {
+    // G3a (ADR 0037): intenta el preview CON ESTILO primero — `Ok(Some(_))`
+    // = un previewer aplicó; `Ok(None)` (ninguno aplica, un guest cayó, o
+    // los topes del wire se violaron — todo degrada igual, ver
+    // `Backend::plugin_preview_styled`) o `Err` (fallo de red) caen al
+    // preview PLANO clásico, que a su vez cae a los bytes crudos.
+    if let Ok(Some(p)) = backend.plugin_preview_styled(&path).await {
+        let _ = tx.send(SessionEvent::ViewerOpened {
+            path,
+            content: ViewerContent::PluginStyled {
+                plugin_name: p.plugin_name,
+                lines: p.lines,
+            },
+            image: None,
+            generation,
+        });
+        return;
+    }
     // `Err` (preview falló) o `Ok` sin previewer aplicable: cae a la vista
     // cruda igual, sin distinguir el motivo aquí.
     if let Ok(res) = backend.plugin_preview(&path).await

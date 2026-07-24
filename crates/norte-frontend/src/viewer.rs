@@ -153,7 +153,50 @@ impl Viewer {
                 line.into_iter()
                     .map(|span| crate::ansi::StyledSpan {
                         text: crate::display_name(span.text.as_bytes()).0,
+                        role: None, // ANSI-SGR no tiene concepto de rol (G3a, ver ansi.rs)
                         fg: span.fg,
+                    })
+                    .collect()
+            })
+            .collect();
+        let plugin_name = crate::display_name(&plugin_name.into_bytes()).0;
+        let mut v = Self::base(path, Vec::new(), false);
+        v.plugin_preview = Some(PluginPreviewView {
+            plugin_name,
+            styled,
+        });
+        v
+    }
+
+    /// Viewer en modo preview de plugin CON ESTILO (G3a, ADR 0037): gemelo
+    /// de [`Self::with_plugin_preview`] que consume `lines` YA
+    /// ESTRUCTURADAS (`SpanWire`, del wire `plugin.preview_styled`) en vez
+    /// de una salida ANSI-SGR que sanear. Cada `text` de span es texto de un
+    /// TERCERO — se enmascara IGUAL que la ruta ANSI (`crate::display_name`,
+    /// mismo saneado, no una copia paralela); cada `role` es un nombre de
+    /// `norte_theme::Role` que llega SIN VALIDAR por el wire (`norte-core`
+    /// no depende de `norte-theme` — ver el rustdoc de
+    /// `Backend::plugin_preview_styled`) y se valida AQUÍ, la frontera
+    /// donde el frontend por fin conoce el tema
+    /// (`norte_theme::Role::from_kebab`): un nombre desconocido colapsa a
+    /// `None` — jamás un panic ni una cadena libre que otra capa deba
+    /// re-interpretar (ADR 0037, mismo criterio que un tema con datos
+    /// parciales, ADR 0020). `fg` es el fallback RGB crudo, ya acotado por
+    /// el wire (`[u8; 3]` siempre representable) — se copia tal cual.
+    #[must_use]
+    pub fn with_plugin_preview_styled(
+        path: VPath,
+        plugin_name: String,
+        lines: &[Vec<norte_proto::methods::SpanWire>],
+    ) -> Self {
+        let styled = lines
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|span| crate::ansi::StyledSpan {
+                        text: crate::display_name(span.text.as_bytes()).0,
+                        role: span.role.as_deref().and_then(norte_theme::Role::from_kebab),
+                        fg: span.fg.map(|[r, g, b]| (r, g, b)),
                     })
                     .collect()
             })
@@ -604,6 +647,84 @@ mod tests {
             !rows[1].contains('\u{7}'),
             "jamás el byte de control crudo: {:?}",
             rows[1]
+        );
+    }
+
+    /// G3a (ADR 0037): `with_plugin_preview_styled` enmascara el `text` de
+    /// CADA span igual que la ruta ANSI (mismo `crate::display_name`, sin
+    /// una copia paralela), incluidos hostiles bidi (RLO) — jamás el byte
+    /// crudo llega a `plugin_styled_rows`.
+    #[test]
+    fn preview_styled_enmascara_cada_span_bidi_incluido() {
+        use norte_proto::methods::SpanWire;
+        let lines = vec![
+            vec![SpanWire {
+                text: "buen\u{7}o".to_owned(), // BEL crudo
+                role: None,
+                fg: None,
+            }],
+            vec![SpanWire {
+                text: "a\u{202E}b".to_owned(), // RLO (bidi hostil)
+                role: None,
+                fg: None,
+            }],
+        ];
+        let v = Viewer::with_plugin_preview_styled(vp(), "Demo".to_owned(), &lines);
+        assert_eq!(v.preview_plugin(), Some("Demo"));
+        let rows = v.plugin_styled_rows(10).expect("modo preview con estilo");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][0].text, "buen\u{FFFD}o", "BEL enmascarado");
+        assert!(!rows[0][0].text.contains('\u{7}'), "jamás el BEL crudo");
+        assert!(
+            !rows[1][0].text.contains('\u{202E}'),
+            "jamás el RLO crudo: {:?}",
+            rows[1][0].text
+        );
+    }
+
+    /// G3a: `role` YA VALIDADO contra `norte_theme::Role` en la conversión.
+    /// Un nombre reconocido (kebab-case) resuelve al `Role`; uno DESCONOCIDO
+    /// (p. ej. el `"number"`/`"keyword"` del mini-highlighter de
+    /// `previewer-demo`, que NO son `Role`s válidos a propósito — ver su
+    /// rustdoc) colapsa a `None`, nunca panica ni deja pasar la cadena
+    /// cruda. `fg` viaja SIEMPRE tal cual (es el fallback crudo, no algo
+    /// que validar contra un conjunto cerrado).
+    #[test]
+    fn preview_styled_valida_role_desconocido_a_none() {
+        use norte_proto::methods::SpanWire;
+        let lines = vec![vec![
+            SpanWire {
+                text: "42".to_owned(),
+                role: Some("number".to_owned()), // no es un Role válido
+                fg: None,
+            },
+            SpanWire {
+                text: "TODO".to_owned(),
+                role: Some("keyword".to_owned()), // tampoco
+                fg: Some([255, 200, 0]),
+            },
+            SpanWire {
+                text: "err".to_owned(),
+                role: Some("hostile-badge".to_owned()), // SÍ es un Role válido
+                fg: None,
+            },
+        ]];
+        let v = Viewer::with_plugin_preview_styled(vp(), "Demo".to_owned(), &lines);
+        let rows = v.plugin_styled_rows(10).expect("modo preview con estilo");
+        assert_eq!(
+            rows[0][0].role, None,
+            "role desconocido → None, jamás panic"
+        );
+        assert_eq!(rows[0][1].role, None, "role desconocido → None");
+        assert_eq!(
+            rows[0][1].fg,
+            Some((255, 200, 0)),
+            "fg viaja tal cual, sin validar (no es un Role)"
+        );
+        assert_eq!(
+            rows[0][2].role,
+            Some(norte_theme::Role::HostileBadge),
+            "role reconocido resuelve al Role"
         );
     }
 

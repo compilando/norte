@@ -9,6 +9,53 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Styled plugin previews, end-to-end (G3a):** `plugin.preview_styled`
+  (proto 0.27.0, ADR 0037) is now wired from a real WASM guest through the
+  daemon and both frontends. `Backend::plugin_preview_styled` (embedded:
+  resolve → read → `render-styled`; remote: the wire call) mirrors
+  `plugin_preview`'s resolve/read steps but treats ANY runtime failure in
+  the styled render (a guest trap, a guest-side error, or a cap violation —
+  `RuntimeError::StyledPreviewTooLarge`) as `Ok(None)` rather than an
+  error — a styled preview is a pure enrichment over the plain one, so it
+  must never block the file; the caller falls back to `plugin_preview`,
+  which falls back to the raw view. The daemon handler
+  (`handle_plugin_preview_styled`) mirrors that same fallback contract
+  server-side. A pre-0.27 daemon is never reachable (handshake rejects it);
+  within the 0.27 window a daemon that hasn't wired the handler yet answers
+  `MethodNotFound` (-32601), which the remote client also folds into
+  `Ok(None)`. `SpanWire::role` travels **unvalidated** across
+  `norte-core` (it has no dependency on `norte-theme`, which owns the
+  closed `Role` set) — validation happens once, at the frontend boundary
+  that actually paints: `norte_frontend::viewer::Viewer::
+  with_plugin_preview_styled` resolves each `role` string through the new
+  `norte_theme::Role::from_kebab` (reuses the existing serde kebab-case
+  derive as the single source of truth for role names, rather than a
+  hand-duplicated table), collapsing an unrecognized name to `None` — never
+  a panic, never a raw string leaking into a frontend's paint path. `role`
+  wins over the raw `fg` fallback when a span carries both (the user's
+  theme outranks a plugin's fixed color); every span's `text` is masked
+  through the same `display_name` the ANSI-derived preview already used —
+  `ansi::StyledSpan` grew a `role: Option<Role>` field shared by both
+  preview paths (ANSI-SGR-derived and WIT-structured), so `draw_viewer`
+  (TUI) and `render_viewer` (GUI) paint them with one code path. TUI/GUI
+  viewer-open flows try the styled preview first and fall back to the
+  plain one. TUI: per-span role resolves through `TuiTheme::role`
+  (ratatui `Style`, falls back to raw RGB, then to the theme default). GUI:
+  `styled_span_color` resolves role through `Theme::style(..).fg` (with G1
+  glow applied on top, same as `entry_color`) or the raw `fg` (via
+  `norte_theme::Color::rgb` + the existing `theme_map::to_gpui_rgba`, no
+  parallel conversion), rendering a flex-row of per-span child divs — as a
+  side effect, the GUI now also paints the pre-existing ANSI-derived
+  preview in color (it shares the same `StyledSpan` type and render path),
+  closing a gap noted in ADR 0037's context section. Covered by a real-WASM
+  e2e (`previewer-demo`'s mini-highlighter: digits → `role: "number"`,
+  `TODO`/`FIXME`/`norte` → `role: "keyword"` + a fixed `fg` — both are
+  deliberately *not* valid `Role` names, proving the unvalidated-wire /
+  validated-at-frontend boundary end to end) through `Backend::Remote`
+  against a real daemon socket, plus a TUI buffer-inspection test pinning
+  role-over-fg precedence and GUI unit tests for the pure color-resolution
+  function.
+
 - **GUI settings view (S4):** `app.settings` (`F11`, same shared preset
   binding as the TUI) opens a searchable, VSCode-style full-view swap over
   the same General catalog (S2) — search box, grouped list (General/

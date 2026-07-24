@@ -123,6 +123,41 @@ pub(crate) fn guess_mimetype(path: &norte_proto::VPath) -> &'static str {
     }
 }
 
+/// Convierte las líneas del `render-styled` del runtime de plugins
+/// (`Vec<Vec<norte_plugin_host::previewer_iface::Span>>`) al tipo de WIRE
+/// (`Vec<Vec<norte_proto::methods::SpanWire>>`, G3a, ADR 0037). Comparte esta
+/// única conversión el brazo EMBEBIDO de `Backend::plugin_preview_styled` y
+/// el handler `plugin.preview_styled` del daemon (`daemon::server`), para no
+/// duplicarla.
+///
+/// `role` viaja SIN VALIDAR (límite de responsabilidad, enmienda de ADR
+/// 0037 decisión 3 en el propio ADR: `norte-core` headless NO depende de
+/// `norte-theme`, dueño del conjunto cerrado `Role` — validar aquí exigiría
+/// esa dependencia estructural solo para esta superficie). El texto NO se
+/// enmascara aquí tampoco: `norte-core` es headless (regla 7, sin display),
+/// el enmascarado por span es responsabilidad del FRONTEND (mismo criterio
+/// que `PluginPreview::output`, que tampoco se enmascara en el core). Los
+/// topes de tamaño (líneas/spans/bytes) YA se aplicaron en
+/// `render_styled_preview` (`norte-plugin-host::runtime::cap_styled_text`,
+/// POST-retorno del guest) — esta función solo re-forma el tipo, no vuelve a
+/// acotar.
+pub(crate) fn to_wire_lines(
+    lines: Vec<Vec<norte_plugin_host::previewer_iface::Span>>,
+) -> Vec<Vec<norte_proto::methods::SpanWire>> {
+    lines
+        .into_iter()
+        .map(|line| {
+            line.into_iter()
+                .map(|s| norte_proto::methods::SpanWire {
+                    text: s.text,
+                    role: s.role,
+                    fg: s.fg.map(|(r, g, b)| [r, g, b]),
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// ¿El glob `pat` (`text/*` o exacto `application/json`) casa `mime`?
 fn mimetype_matches(pat: &str, mime: &str) -> bool {
     match pat.strip_suffix("/*") {
@@ -659,6 +694,47 @@ mod tests {
         // Cabecera PNG (controles + NUL): detect Binary → bytes tal cual.
         let png = b"\x89PNG\r\n\x1a\n\x00\x00\x00".to_vec();
         assert_eq!(decode_for_preview(png.clone()), png);
+    }
+
+    /// G3a (ADR 0037): `to_wire_lines` re-forma el tipo del runtime al de
+    /// wire 1:1, SIN validar `role` (esa validación vive en el frontend, ver
+    /// su rustdoc) ni volver a acotar tamaños (ya acotados por
+    /// `render_styled_preview`).
+    #[test]
+    fn to_wire_lines_reforma_1_a_1_sin_validar_role() {
+        use norte_plugin_host::previewer_iface::Span;
+        let lines = vec![
+            vec![
+                Span {
+                    text: "42".to_owned(),
+                    role: Some("number".to_owned()), // no es un Role válido: pasa igual
+                    fg: None,
+                },
+                Span {
+                    text: " TODO".to_owned(),
+                    role: Some("keyword".to_owned()),
+                    fg: Some((255, 200, 0)),
+                },
+            ],
+            vec![Span {
+                text: "plano".to_owned(),
+                role: None,
+                fg: None,
+            }],
+        ];
+        let wire = to_wire_lines(lines);
+        assert_eq!(wire.len(), 2, "2 líneas de entrada → 2 líneas de salida");
+        assert_eq!(wire[0].len(), 2, "spans conservados 1:1");
+        assert_eq!(wire[0][0].text, "42");
+        assert_eq!(
+            wire[0][0].role.as_deref(),
+            Some("number"),
+            "role viaja SIN VALIDAR (no es un Role válido y aun así pasa)"
+        );
+        assert_eq!(wire[0][0].fg, None);
+        assert_eq!(wire[0][1].fg, Some([255, 200, 0]), "tupla → array [u8;3]");
+        assert_eq!(wire[1][0].text, "plano");
+        assert_eq!(wire[1][0].role, None);
     }
 
     /// Manifiesto válido mínimo (copiado del doctest de `norte-plugin-host`).

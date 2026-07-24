@@ -3262,13 +3262,26 @@ async fn open_viewer(app: &mut App, backend: &Backend, events: &mut EventStream,
     // cualquiera de las dos. Un fallo del preview NUNCA impide ver el crudo.
     let fut = async {
         let (bytes, truncated) = read_head(backend, &path).await?;
-        let viewer = match backend.plugin_preview(&path).await {
-            Ok(res) => match res.preview {
-                Some(p) => Viewer::with_plugin_preview(path.clone(), p.plugin_name, &p.output),
-                None => Viewer::new(path.clone(), bytes, truncated),
+        // G3a (ADR 0037): intenta el preview CON ESTILO primero; `Ok(None)`
+        // (ningún previewer aplica, un guest cayó, o los topes del wire se
+        // violaron — todos degradan igual, ver `Backend::
+        // plugin_preview_styled`) cae al preview PLANO clásico, que a su
+        // vez cae a la vista cruda si tampoco aplica. Un fallo de RED (no
+        // `Ok`) en el intento estilizado tampoco bloquea: se trata igual
+        // que `None` y se reintenta con el plano (mismo criterio que ya
+        // regía para el plano frente a la vista cruda).
+        let viewer = match backend.plugin_preview_styled(&path).await {
+            Ok(Some(p)) => {
+                Viewer::with_plugin_preview_styled(path.clone(), p.plugin_name, &p.lines)
+            }
+            Ok(None) | Err(_) => match backend.plugin_preview(&path).await {
+                Ok(res) => match res.preview {
+                    Some(p) => Viewer::with_plugin_preview(path.clone(), p.plugin_name, &p.output),
+                    None => Viewer::new(path.clone(), bytes, truncated),
+                },
+                // Un plugin roto no bloquea el archivo: vista cruda de siempre.
+                Err(_) => Viewer::new(path.clone(), bytes, truncated),
             },
-            // Un plugin roto no bloquea el archivo: vista cruda de siempre.
-            Err(_) => Viewer::new(path.clone(), bytes, truncated),
         };
         Ok::<Viewer, Error>(viewer)
     };

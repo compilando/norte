@@ -634,8 +634,13 @@ fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer, app: &App)
         );
     }
     let inner_h = rows[0].height.saturating_sub(2) as usize;
-    // #29: un preview de plugin trae color (ANSI-SGR ya saneado); se pinta con
-    // Color::Rgb. El resto (texto/hex) va en el color del tema.
+    // #29/G3a (ADR 0037): un preview de plugin trae color, por ANSI-SGR
+    // saneado (`fg` únicamente) o por WIT estructurado (`role` VALIDADO +
+    // `fg` de respaldo). `role` GANA sobre `fg` cuando ambos están
+    // presentes (el tema del usuario tiene precedencia sobre el color fijo
+    // de un plugin, ADR 0037 decisión 3) — se resuelve por el tema
+    // (`app.theme.role`), no como RGB crudo. Sin ninguno de los dos, el
+    // color por defecto del tema (sin `.style()`).
     let lines: Vec<Line<'_>> = match viewer.plugin_styled_rows(inner_h) {
         Some(styled) => styled
             .into_iter()
@@ -644,11 +649,12 @@ fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer, app: &App)
                     line.iter()
                         .map(|span| {
                             let s = Span::raw(span.text.clone());
-                            match span.fg {
-                                Some((r, g, b)) => {
-                                    s.style(Style::default().fg(Color::Rgb(r, g, b)))
-                                }
-                                None => s,
+                            if let Some(role) = span.role {
+                                s.style(app.theme.role(role))
+                            } else if let Some((r, g, b)) = span.fg {
+                                s.style(Style::default().fg(Color::Rgb(r, g, b)))
+                            } else {
+                                s
                             }
                         })
                         .collect::<Vec<_>>(),

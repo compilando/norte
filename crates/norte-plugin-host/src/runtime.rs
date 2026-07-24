@@ -947,6 +947,13 @@ impl ProviderInstance {
 /// módulo de bindings generado (ADR 0037 decisión 2).
 pub use crate::bindings::decorator_world::exports::norte::plugin::decorator as decorator_iface;
 
+/// Tipos del export `previewer` (record `Span`, alias `PreviewInput`) —
+/// re-exportados igual que [`provider_iface`]/[`decorator_iface`]: el
+/// caller (`norte-core`, G3a) necesita construir el `Vec<Vec<Span>>` que
+/// devuelve [`PluginInstance::render_styled_preview`] hacia el tipo de
+/// wire `SpanWire` (`norte-proto`) sin cavar en `crate::bindings`.
+pub use crate::bindings::exports::norte::plugin::previewer as previewer_iface;
+
 /// Una instancia viva de un guest DECORATOR (ADR 0037 decisión 2, world
 /// `norte-decorator`): su `Store` (estado host + sandbox) y los bindings para
 /// llamar a `decorate`.

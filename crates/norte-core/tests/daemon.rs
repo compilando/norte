@@ -2254,6 +2254,31 @@ async fn plugin_preview_sin_previewer_es_none() {
     );
 }
 
+/// G3a (ADR 0037): `plugin.preview_styled` sin ningún previewer instalado
+/// devuelve `preview: None` — MISMO criterio que su gemelo plano, no un
+/// error. El client `Backend::plugin_preview_styled` embebido tiene su
+/// propio test para el caso `Ok(None)`; este cubre el handler DAEMON contra
+/// un socket real.
+#[tokio::test]
+async fn plugin_preview_styled_sin_previewer_es_none() {
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///nota.txt", b"hola mundo").await;
+    let c = connected_client(&d).await;
+    let res = c
+        .call::<_, methods::PluginPreviewStyledResult>(
+            methods::PLUGIN_PREVIEW_STYLED,
+            &methods::PluginPreviewStyledParams {
+                path: vp("mem:///nota.txt"),
+            },
+        )
+        .await
+        .expect("plugin.preview_styled no es error cuando no hay previewer");
+    assert!(
+        res.preview.is_none(),
+        "sin previewer instalado la preview con estilo es None: {res:?}"
+    );
+}
+
 /// TOML deliberadamente inválido: el descubridor debe reportarlo en `errors`,
 /// no tumbar el catálogo. Un `[[[` sin cerrar no parsea.
 const BROKEN_MANIFEST: &str = "no es toml [[[";

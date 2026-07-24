@@ -1671,6 +1671,11 @@ async fn dispatch(
         methods::PLUGIN_RUN_COMMAND => handle_plugin_run_command(req.params, shared).await,
         // plugin.preview (M4-P5): ABIERTO (previsualizar no consiente nada).
         methods::PLUGIN_PREVIEW => handle_plugin_preview(req.params, &conn.actor, shared).await,
+        // plugin.preview_styled (G3a, ADR 0037): gemelo con estilo, mismo
+        // criterio de apertura que su gemelo plano.
+        methods::PLUGIN_PREVIEW_STYLED => {
+            handle_plugin_preview_styled(req.params, &conn.actor, shared).await
+        }
         _ => dispatch_fs_task(req, conn_id, conn.actor.clone(), shared).await,
     }
 }
@@ -2227,6 +2232,92 @@ async fn handle_plugin_preview(
             plugin_id: id,
             plugin_name: name,
             output,
+        }),
+    })
+}
+
+/// `plugin.preview_styled` (G3a, ADR 0037): gemelo CON ESTILO de
+/// [`handle_plugin_preview`]. Mismos tres pasos y el mismo gate de lectura
+/// (#80) — ABIERTO como su gemelo plano, previsualizar no consiente nada.
+///
+/// Difiere del gemelo plano en el paso 3 (ejecución) y en su redacción de
+/// fallos: un fallo del RUNTIME en `render-styled` (trap, error de lógica
+/// del guest, o los topes de la tabla ADR 0037 excedidos vía
+/// `RuntimeError::StyledPreviewTooLarge`) responde `preview: None`, NUNCA
+/// `INTERNAL_ERROR` — el preview con estilo es un ENRIQUECIMIENTO sobre el
+/// plano (ADR 0037: "un cliente re-valida y cae a `plugin.preview` si se
+/// violan [los topes]"; aquí el SERVER ya se adelanta con el mismo criterio
+/// para no obligar a un cliente a distinguir "no hay preview" de "el
+/// preview falló" cuando el resultado observable —caer al plano— es
+/// idéntico). El detalle del fallo va SOLO al log local (igual redacción
+/// que el gemelo plano).
+///
+/// `role` de cada [`methods::SpanWire`] viaja SIN VALIDAR: `norte-core`
+/// (headless) no depende de `norte-theme` — ver el rustdoc de
+/// [`crate::plugins::to_wire_lines`] y de `Backend::plugin_preview_styled`
+/// para el razonamiento completo de esa frontera.
+#[tracing::instrument(skip_all)]
+async fn handle_plugin_preview_styled(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::PluginPreviewStyledParams = parse_params(params)?;
+    read_gate(actor, &p.path, shared)?;
+    let mime = crate::plugins::guess_mimetype(&p.path);
+    let resolved = {
+        let reg = shared.plugins.lock().expect("plugins lock sano");
+        reg.resolve_previewer(mime)
+    };
+    let Some((id, name, wasm, caps, settings)) = resolved else {
+        return to_value(&methods::PluginPreviewStyledResult { preview: None });
+    };
+
+    let range = norte_proto::ByteRange {
+        offset: 0,
+        len: Some(crate::plugins::PREVIEW_MAX_BYTES),
+    };
+    let mut stream = shared
+        .engine
+        .read(&p.path, Some(range))
+        .await
+        .map_err(RpcError::from)?;
+    let mut bytes: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(RpcError::from)?;
+        bytes.extend_from_slice(&chunk);
+        if bytes.len() as u64 >= crate::plugins::PREVIEW_MAX_BYTES {
+            break;
+        }
+    }
+    let cap = usize::try_from(crate::plugins::PREVIEW_MAX_BYTES).unwrap_or(usize::MAX);
+    bytes.truncate(cap.min(bytes.len()));
+
+    let runtime = Arc::clone(&shared.plugin_runtime);
+    let outcome = tokio::task::spawn_blocking(move || {
+        let mut inst = runtime.instantiate(&wasm, caps)?;
+        inst.set_settings(settings);
+        inst.render_styled_preview(mime, &bytes)
+    })
+    .await
+    .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "styled preview task panicked"))?;
+
+    let lines = match outcome {
+        Ok(lines) => lines,
+        Err(e) => {
+            tracing::warn!(
+                plugin = %id,
+                error = %e,
+                "render-styled falló: preview:None (cae a plugin.preview)"
+            );
+            return to_value(&methods::PluginPreviewStyledResult { preview: None });
+        }
+    };
+    to_value(&methods::PluginPreviewStyledResult {
+        preview: Some(methods::PluginPreviewStyled {
+            plugin_id: id,
+            plugin_name: name,
+            lines: crate::plugins::to_wire_lines(lines),
         }),
     })
 }

@@ -284,3 +284,200 @@ fn target_installed(target: &str) -> bool {
                 .any(|l| l == target)
         })
 }
+
+// ---------------------------------------------------------------------
+// G3a (ADR 0037): `plugin.preview_styled` de punta a punta CON WASM real,
+// a través de `Backend` (no del `PluginRuntime` a pelo como arriba). Solo
+// unix: el daemon UDS es `#[cfg(unix)]` (ADR 0011), igual que
+// `tests/backend_remote.rs`, del que esta sección toma el arnés
+// (`RemoteBackend::connect` + `DaemonConfig::plugins_dir`).
+//
+// NO se ejercita `Backend::Embedded` aquí a propósito: su brazo de plugins
+// resuelve el directorio SIEMPRE vía `norte_core::connect::config_dir()`
+// (global del proceso, sin parámetro de override) — cambiarlo desde un test
+// exigiría `std::env::set_var` (`unsafe` en edition 2024, regla 5 del
+// proyecto: PROHIBIDO fuera de `norte-vfs-local`). `Backend::Remote` ejerce
+// la MISMA superficie pública (`Backend::plugin_preview_styled`) contra el
+// handler REAL del daemon (`daemon::server::handle_plugin_preview_styled`,
+// cableado en esta misma task) sin ese problema — el `plugins_dir` del
+// daemon SÍ es parametrizable por test (`DaemonConfig`), como ya prueba
+// `spawn_daemon_plugins_ok_y_roto` en `tests/daemon.rs`.
+#[cfg(unix)]
+mod styled {
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+    use norte_core::Engine;
+    use norte_core::backend::Backend;
+    use norte_core::backend::remote::RemoteBackend;
+    use norte_core::daemon::{Daemon, DaemonConfig};
+    use norte_proto::VPath;
+    use norte_proto::methods::ClientInfo;
+    use norte_testkit::MemProvider;
+    use norte_vfs::Provider;
+
+    use super::{PREV_MANIFEST, SAMPLE, build_guest};
+
+    fn vp(wire: &str) -> VPath {
+        VPath::parse(wire).expect("wire válido de test")
+    }
+
+    async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
+        let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+        sink.write(Bytes::copy_from_slice(content))
+            .await
+            .expect("chunk entra");
+        sink.commit().await.expect("commit publica");
+    }
+
+    /// La cadena de cierre G3a con un componente WASM REAL, de punta a
+    /// punta A TRAVÉS DE `Backend::Remote` (daemon UDS real): descubrir →
+    /// aprobar → activar (por el WIRE, `plugin.set_approval`/
+    /// `plugin.set_enabled` — no `_in_memory`, a diferencia del test
+    /// síncrono de arriba) → `Backend::plugin_preview_styled` → roles/fg
+    /// REALES del mini-highlighter de `previewer-demo` (ver su rustdoc:
+    /// dígitos → `role: "number"`, `TODO`/`FIXME`/`norte` → `role:
+    /// "keyword"` + `fg` fijo).
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // e2e de punta a punta: setup+wire+assert, sin trocear
+    async fn plugin_preview_styled_e2e_wasm_real_a_traves_del_backend() {
+        let Some(wasm) = build_guest("previewer-demo") else {
+            eprintln!("SKIP: target wasm32-wasip2 no instalado; no hay .wasm que ejecutar");
+            return;
+        };
+
+        let cfg = tempfile::tempdir().expect("tempdir cfg");
+        let plugin_dir = cfg.path().join("plugins").join("org.norte.prev");
+        std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin dir");
+        std::fs::write(plugin_dir.join("plugin.toml"), PREV_MANIFEST).expect("write manifest");
+        std::fs::copy(&wasm, plugin_dir.join("plugin.wasm")).expect("copy .wasm");
+
+        let dir = tempfile::tempdir().expect("tempdir daemon");
+        let socket = dir.path().join("d.sock");
+        let engine = Arc::new(Engine::new());
+        let mem = Arc::new(MemProvider::new());
+        engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+        let daemon = Daemon::bind(
+            engine,
+            DaemonConfig {
+                socket_path: Some(socket.clone()),
+                idle_timeout: None,
+                listing_ttl: std::time::Duration::from_mins(2),
+                plugins_dir: Some(cfg.path().to_path_buf()),
+            },
+        )
+        .await
+        .expect("bind");
+        let _run = tokio::spawn(daemon.run());
+
+        write_file(&mem, "mem:///doc.txt", SAMPLE).await;
+
+        let remote = RemoteBackend::connect(
+            socket,
+            None,
+            ClientInfo {
+                name: "plugins-preview-styled-e2e".into(),
+                version: "0.0.0".into(),
+            },
+        )
+        .await
+        .expect("connect");
+        let backend = Backend::Remote(remote.clone());
+
+        // SIN aprobar todavía: el consentimiento manda, `plugin.preview`
+        // clásico ya lo prueba (arriba, in-memory); aquí basta confirmar que
+        // el WIRE respeta el mismo fail-closed antes de aprobar.
+        let none_yet = backend
+            .plugin_preview_styled(&vp("mem:///doc.txt"))
+            .await
+            .expect("plugin.preview_styled no es error sin aprobar");
+        assert!(
+            none_yet.is_none(),
+            "sin aprobar, ningún previewer consentido casa: None"
+        );
+
+        backend
+            .plugins_set_approval("org.norte.prev", true)
+            .await
+            .expect("aprobar por el wire");
+        backend
+            .plugins_set_enabled("org.norte.prev", true)
+            .await
+            .expect("activar por el wire");
+
+        let preview = backend
+            .plugin_preview_styled(&vp("mem:///doc.txt"))
+            .await
+            .expect("plugin.preview_styled no es error")
+            .expect("aprobado+activado: el previewer aplica");
+        assert_eq!(preview.plugin_id, "org.norte.prev");
+        assert_eq!(preview.plugin_name, "Preview Demo");
+
+        // SAMPLE = "linea uno\nlinea dos\nlinea tres\nlinea cuatro": la
+        // cabecera (1 línea plana) + 3 líneas de contenido resaltado.
+        assert_eq!(
+            preview.lines.len(),
+            4,
+            "cabecera + 3 líneas: {:?}",
+            preview.lines
+        );
+        let header_text: String = preview.lines[0].iter().map(|s| s.text.as_str()).collect();
+        assert!(
+            header_text.contains("[text/plain]"),
+            "cabecera con el mimetype: {header_text:?}"
+        );
+        assert!(
+            preview.lines[0]
+                .iter()
+                .all(|s| s.role.is_none() && s.fg.is_none()),
+            "la cabecera es un único span plano: {:?}",
+            preview.lines[0]
+        );
+
+        // "linea uno" no tiene dígitos ni keywords: todo plano.
+        assert!(
+            preview.lines[1].iter().all(|s| s.role.is_none()),
+            "línea sin dígitos ni keywords: sin roles: {:?}",
+            preview.lines[1]
+        );
+
+        // El contenido de SAMPLE no lleva dígitos/keywords reales en las 3
+        // primeras líneas ("linea uno/dos/tres"); se prueba la conversión
+        // exacta (role sin validar en el wire) con un archivo dedicado.
+        let mem2 = &mem;
+        write_file(mem2, "mem:///code.txt", b"TODO 42 norte plano\nsegunda").await;
+        let preview2 = backend
+            .plugin_preview_styled(&vp("mem:///code.txt"))
+            .await
+            .expect("preview_styled ok")
+            .expect("previewer sigue aprobado+activado");
+        // lines[1] = primera línea de contenido: "TODO 42 norte plano".
+        let spans = &preview2.lines[1];
+        let by_text = |t: &str| spans.iter().find(|s| s.text == t);
+        assert_eq!(
+            by_text("TODO").and_then(|s| s.role.as_deref()),
+            Some("keyword"),
+            "TODO es keyword del guest (SIN validar contra norte_theme::Role en el wire): {spans:?}"
+        );
+        assert_eq!(
+            by_text("TODO").and_then(|s| s.fg),
+            Some([255, 200, 0]),
+            "keyword además lleva fg fijo: {spans:?}"
+        );
+        assert_eq!(
+            by_text("42").and_then(|s| s.role.as_deref()),
+            Some("number"),
+            "42 es number: {spans:?}"
+        );
+        assert_eq!(
+            by_text("norte").and_then(|s| s.role.as_deref()),
+            Some("keyword"),
+            "norte es keyword: {spans:?}"
+        );
+        assert_eq!(
+            by_text("plano").and_then(|s| s.role.as_deref()),
+            None,
+            "plano no casa ninguna regla del highlighter: {spans:?}"
+        );
+    }
+}

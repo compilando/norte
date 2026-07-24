@@ -702,6 +702,9 @@ impl NorteGui {
                         plugin_name,
                         output,
                     } => Viewer::with_plugin_preview(path, plugin_name, &output),
+                    ViewerContent::PluginStyled { plugin_name, lines } => {
+                        Viewer::with_plugin_preview_styled(path, plugin_name, &lines)
+                    }
                     ViewerContent::Raw { bytes, truncated } => Viewer::new(path, bytes, truncated),
                 };
                 // #92: la imagen llega YA decodificada del hilo de sesión —
@@ -2302,6 +2305,32 @@ impl NorteGui {
                         "gui-viewer-image-unreadable",
                     ))),
                 }
+            } else if let Some(styled) = v.plugin_styled_rows(h) {
+                // G3a (ADR 0037): preview de plugin CON ESTILO — flex-row por
+                // línea, un div hijo por span. `styled_span_color` resuelve
+                // `role`→tema (con glow) o `fg` crudo, `None` = sin
+                // `.text_color()` (hereda `chrome.fg` del div raíz, mismo
+                // criterio que un span plano).
+                let glow = self.effects.and_then(|e| e.glow);
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .children(styled.into_iter().map(|line| {
+                        div()
+                            .h(self.fonts.row_h)
+                            .px(px(sp::S))
+                            .flex()
+                            .overflow_hidden()
+                            .children(line.iter().map(|span| {
+                                let mut cell = div().child(SharedString::from(span.text.clone()));
+                                if let Some(color) = styled_span_color(&self.theme, span, glow) {
+                                    cell = cell.text_color(color);
+                                }
+                                cell
+                            }))
+                    }))
             } else {
                 div().flex_1().flex().flex_col().overflow_hidden().children(
                     v.rows(h).into_iter().map(|row| {
@@ -3023,6 +3052,31 @@ fn entry_color(theme: &Theme, entry: &Entry, glow: Option<effects::Glow>) -> gpu
     let fg = style.fg.or_else(|| theme.style(Role::Regular).fg);
     let color = fg.map_or_else(|| rgb(0xffffff), theme_map::to_gpui_rgba);
     glowed(color, glow)
+}
+
+/// Color de UN span de un preview de plugin con estilo (G3a, ADR 0037):
+/// `role` GANA sobre `fg` (el tema del usuario tiene precedencia sobre el
+/// color fijo de un plugin, decisión 3 del ADR — MISMO criterio que la TUI,
+/// `norte-tui::ui::draw_viewer`). `None` = ni rol ni fg aplican (o el rol
+/// resuelto no trae color en el tema activo, p. ej. `Role::Regular` en
+/// muchos presets): el caller NO fija `.text_color()`, el div hereda el
+/// `chrome.fg` del contenedor — no un blanco a pelo como el fallback de
+/// [`entry_color`] (ahí SIEMPRE hay una entrada que pintar; aquí "sin
+/// color" es un estado legítimo, el texto normal del viewer). El glow de G1
+/// (ADR 0036 D3) se aplica DESPUÉS de resolver el color, igual que
+/// `entry_color`, tanto si viene de `role` como de `fg`.
+fn styled_span_color(
+    theme: &Theme,
+    span: &norte_frontend::ansi::StyledSpan,
+    glow: Option<effects::Glow>,
+) -> Option<gpui::Rgba> {
+    let resolved = match span.role {
+        Some(role) => theme.style(role).fg,
+        None => span.fg.map(|(r, g, b)| norte_theme::Color::rgb(r, g, b)),
+    };
+    resolved
+        .map(theme_map::to_gpui_rgba)
+        .map(|c| glowed(c, glow))
 }
 
 /// Aplica el brillo v1 de G1 (ADR 0036 decisión 3): `lerp(fg, white, strength
@@ -3979,11 +4033,13 @@ mod tests {
         flicker_factor, flicker_scale, generation_is_current, glowed, has_pending_work,
         image_preview_from, image_status, keymap_error_detail, modal_footer_colors,
         modal_panel_colors, modal_title_colors, motion_active, pending_hint, retain_active,
-        row_label, task_at_cursor, unknown_preset_banner, validated_family, viewer_header,
-        viewer_status,
+        row_label, styled_span_color, task_at_cursor, theme_map, unknown_preset_banner,
+        validated_family, viewer_header, viewer_status,
     };
+    use gpui::rgb;
     use norte_frontend::viewer::Viewer;
     use norte_proto::{EntryKind, VPath};
+    use norte_theme::Theme;
 
     fn vp() -> VPath {
         VPath::parse("mem:///a.txt").unwrap()
@@ -5004,6 +5060,87 @@ mod tests {
 
         let c = gpui::rgb(0x336699);
         assert_eq!(glowed(c, None), c, "sin glow, identidad exacta");
+    }
+
+    // --- G3a: `styled_span_color` (preview de plugin con estilo) -----------
+
+    fn ansi_span(
+        role: Option<norte_theme::Role>,
+        fg: Option<(u8, u8, u8)>,
+    ) -> norte_frontend::ansi::StyledSpan {
+        norte_frontend::ansi::StyledSpan {
+            text: "x".into(),
+            role,
+            fg,
+        }
+    }
+
+    /// El preset `default` (ADR 0037: fuente única, sin repetir el hex a
+    /// mano en dos sitios) fija `title = #5fafd7`: un span con `role` Y
+    /// `fg` distintos debe pintar el DEL TEMA — `role` gana (decisión 3).
+    #[test]
+    fn styled_span_color_role_gana_a_fg() {
+        let theme = Theme::preset_default();
+        let span = ansi_span(Some(norte_theme::Role::Title), Some((255, 0, 0)));
+        let got = styled_span_color(&theme, &span, None).expect("title tiene color");
+        assert_eq!(
+            got,
+            rgb(0x5fafd7),
+            "pinta el color del tema, no el fg crudo"
+        );
+    }
+
+    /// Sin `role`, `fg` crudo pasa tal cual (vía `Color::rgb` +
+    /// `to_gpui_rgba`, MISMA conversión que el resto del theming — no un
+    /// camino paralelo).
+    #[test]
+    fn styled_span_color_sin_role_usa_fg_crudo() {
+        let theme = Theme::preset_default();
+        let span = ansi_span(None, Some((10, 20, 30)));
+        let got = styled_span_color(&theme, &span, None).expect("fg presente");
+        assert_eq!(
+            got,
+            theme_map::to_gpui_rgba(norte_theme::Color::rgb(10, 20, 30))
+        );
+    }
+
+    /// Un `role` VÁLIDO cuyo tema activo no lo colorea (fallback monocromo,
+    /// sin `fg`) resuelve a `None` — AUNQUE el span traiga `fg`: `role` gana
+    /// incluso para "perder" el fallback, coherente con la precedencia (el
+    /// tema manda, no un truco de "si no hay color, usa el crudo").
+    #[test]
+    fn styled_span_color_role_sin_color_en_tema_es_none_aunque_haya_fg() {
+        let vacio = norte_theme::Theme::from_toml("").expect("tema vacío parsea");
+        let span = ansi_span(Some(norte_theme::Role::Regular), Some((1, 2, 3)));
+        assert_eq!(
+            styled_span_color(&vacio, &span, None),
+            None,
+            "Regular sin tema no tiene color: None, ni el fg crudo se usa"
+        );
+    }
+
+    /// Sin `role` ni `fg`: `None` (el caller no fija `.text_color()`, hereda
+    /// el color del contenedor).
+    #[test]
+    fn styled_span_color_sin_nada_es_none() {
+        let theme = Theme::preset_default();
+        let span = ansi_span(None, None);
+        assert_eq!(styled_span_color(&theme, &span, None), None);
+    }
+
+    /// El glow de G1 se aplica DESPUÉS de resolver el color, tanto por
+    /// `role` como por `fg` — mismo criterio que `entry_color`.
+    #[test]
+    fn styled_span_color_aplica_glow_encima() {
+        let theme = Theme::preset_default();
+        let glow = Some(effects::Glow { strength: 1.0 });
+        let span = ansi_span(Some(norte_theme::Role::Title), None);
+        let got = styled_span_color(&theme, &span, glow).expect("title tiene color");
+        assert_eq!(
+            got,
+            glowed(rgb(0x5fafd7), glow),
+            "glow aplicado sobre el color del rol"
+        );
     }
 
     // --- G2 motion: helpers puros (decisión 3) -----------------------------

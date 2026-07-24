@@ -13,17 +13,38 @@
 //! que además trata bidi/invisibles) — el parser solo se ocupa de las
 //! secuencias multi-carácter que `display_name` no sabría reconocer. El frontend
 //! traduce [`Rgb`] a su propio tipo de color (ratatui/GPUI).
+//!
+//! [`StyledSpan::role`] (G3a, ADR 0037) es el ÚNICO campo que este parser
+//! NUNCA rellena — `parse_sgr` solo entiende SGR de color (`fg`), un
+//! previewer con salida ANSI-SGR no tiene concepto de rol semántico. Lo
+//! rellena la conversión hermana de un preview YA ESTRUCTURADO
+//! (`SpanWire` → `StyledSpan`, `crate::viewer::Viewer::
+//! with_plugin_preview_styled`), que comparte este mismo tipo para que
+//! `draw_viewer`/`render_viewer` pinten AMBAS rutas (ANSI-derivada y
+//! WIT-estructurada) con el mismo código.
 
 /// Color RGB de 24 bits (primer plano).
 pub type Rgb = (u8, u8, u8);
 
-/// Un tramo de texto con un color de primer plano opcional (`None` = color por
-/// defecto del tema).
+/// Un tramo de texto con estilo opcional: `role` (G3a, ADR 0037: un nombre
+/// semántico YA VALIDADO contra `norte_theme::Role` — ver el rustdoc del
+/// módulo) o `fg` (color de primer plano crudo). Cuando AMBOS están
+/// presentes, `role` GANA al pintar (el tema del usuario tiene precedencia
+/// sobre un color fijo de plugin, ADR 0037 decisión 3) — el frontend que
+/// consume este tipo (`ui.rs::draw_viewer`/`main.rs::render_viewer`)
+/// implementa esa precedencia; este tipo solo la TRANSPORTA.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StyledSpan {
     /// El texto visible del tramo (ya sin secuencias de escape).
     pub text: String,
-    /// Color de primer plano, o `None` para el del tema.
+    /// Rol semántico YA VALIDADO (G3a): `None` si el tramo no trae rol, o si
+    /// traía uno que no está en el conjunto cerrado de `norte_theme::Role`
+    /// (degradación silenciosa, ADR 0037 — nunca un panic ni una cadena
+    /// libre). SIEMPRE `None` en el camino ANSI-SGR (`parse_sgr`, ver el
+    /// rustdoc del módulo).
+    pub role: Option<norte_theme::Role>,
+    /// Color de primer plano crudo (fallback cuando `role` es `None`, o
+    /// cuando el propio plugin no declaró rol), o `None` para el del tema.
     pub fg: Option<Rgb>,
 }
 
@@ -41,8 +62,11 @@ pub type StyledLine = Vec<StyledSpan>;
 /// // conserva, el OSC se descarta entero.
 /// let out = parse_sgr("\x1b[38;2;255;0;0mhi\x1b]0;PWNED\x07\x1b[0m fin");
 /// assert_eq!(out.len(), 1);
-/// assert_eq!(out[0][0], StyledSpan { text: "hi".into(), fg: Some((255, 0, 0)) });
-/// assert_eq!(out[0][1], StyledSpan { text: " fin".into(), fg: None });
+/// assert_eq!(
+///     out[0][0],
+///     StyledSpan { text: "hi".into(), role: None, fg: Some((255, 0, 0)) }
+/// );
+/// assert_eq!(out[0][1], StyledSpan { text: " fin".into(), role: None, fg: None });
 /// ```
 #[must_use]
 pub fn parse_sgr(input: &str) -> Vec<StyledLine> {
@@ -57,6 +81,7 @@ pub fn parse_sgr(input: &str) -> Vec<StyledLine> {
         if !cur.is_empty() {
             line.push(StyledSpan {
                 text: std::mem::take(cur),
+                role: None,
                 fg,
             });
         }
@@ -223,6 +248,7 @@ mod tests {
             out[0],
             vec![StyledSpan {
                 text: "hola mundo".into(),
+                role: None,
                 fg: None
             }]
         );
@@ -238,10 +264,12 @@ mod tests {
             vec![
                 StyledSpan {
                     text: "rojo".into(),
+                    role: None,
                     fg: Some((255, 0, 0))
                 },
                 StyledSpan {
                     text: " fin".into(),
+                    role: None,
                     fg: None
                 },
             ]
@@ -255,6 +283,7 @@ mod tests {
             out[0][0],
             StyledSpan {
                 text: "A".into(),
+                role: None,
                 fg: Some((205, 0, 0))
             }
         );
@@ -282,6 +311,7 @@ mod tests {
             out[0],
             vec![StyledSpan {
                 text: "antesdespues".into(),
+                role: None,
                 fg: None
             }]
         );
@@ -296,6 +326,7 @@ mod tests {
             out[0],
             vec![StyledSpan {
                 text: "xy".into(),
+                role: None,
                 fg: None
             }]
         );
@@ -319,6 +350,7 @@ mod tests {
             out[0][1],
             StyledSpan {
                 text: "B".into(),
+                role: None,
                 fg: None
             }
         );

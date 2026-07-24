@@ -47,7 +47,7 @@ pub use manifest::{
 };
 pub use runtime::{
     ColumnsInstance, DecoratorInstance, PluginInstance, PluginRuntime, ProviderInstance,
-    RuntimeError, decorator_iface, provider_iface,
+    RuntimeError, decorator_iface, previewer_iface, provider_iface,
 };
 /// Handle opaco de un `writer` resource del guest (#30 stage 2b-write): el
 /// adapter host lo lleva en su `ByteSink` y lo pasa a los métodos

@@ -198,6 +198,70 @@ fn viewer_pinta_indicador_via_plugin_y_sus_lineas() {
     );
 }
 
+/// G3a (ADR 0037): un preview de plugin CON ESTILO (`SpanWire`, no ANSI-SGR)
+/// pinta con el COLOR DEL TEMA cuando el span trae `role`, y con el `fg`
+/// crudo cuando no — `role` GANA sobre `fg` si un span trae ambos (decisión
+/// 3 del ADR: el tema del usuario tiene precedencia sobre el color fijo de
+/// un plugin). Inspecciona el BUFFER de ratatui (como `theme_render.rs`),
+/// no solo el texto: la snapshot de texto no distingue "pintado con role"
+/// de "pintado con fg crudo".
+#[test]
+fn viewer_preview_styled_role_gana_a_fg_y_pinta_del_tema() {
+    use norte_proto::methods::SpanWire;
+    use norte_theme::{ColorDepth, Theme};
+    use norte_tui::theme::TuiTheme;
+    use ratatui::style::Color;
+
+    let dir = vp("file:///x");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir, Vec::new()),
+    );
+    // Truecolor EXPLÍCITO (no `detect_depth()`, que depende del entorno del
+    // proceso de test — mismo criterio que `theme_render.rs`). El preset
+    // `default` fija `title = #5fafd7` (RGB 95,175,215): fuente única del
+    // color esperado, sin repetirlo a mano en dos sitios.
+    app.theme = TuiTheme::new(Theme::preset_default(), ColorDepth::Truecolor);
+
+    let lines = vec![vec![
+        // Rol Y fg a la vez: el rol (Title, #5fafd7) debe ganar — el fg
+        // crudo (255,0,0) NUNCA debe llegar a pintarse.
+        SpanWire {
+            text: "AAA".to_owned(),
+            role: Some("title".to_owned()),
+            fg: Some([255, 0, 0]),
+        },
+        // Solo fg: pinta el crudo tal cual, sin tema de por medio.
+        SpanWire {
+            text: "BBB".to_owned(),
+            role: None,
+            fg: Some([0, 255, 0]),
+        },
+    ]];
+    app.viewer = Some(norte_tui::viewer::Viewer::with_plugin_preview_styled(
+        vp("file:///doc.rs"),
+        "Highlighter".to_owned(),
+        &lines,
+    ));
+
+    let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let cells: Vec<_> = terminal.backend().buffer().content.iter().collect();
+
+    assert!(
+        cells.iter().any(|c| c.fg == Color::Rgb(0x5f, 0xaf, 0xd7)),
+        "el span con role=title pinta el AZUL del tema (title.fg)"
+    );
+    assert!(
+        !cells.iter().any(|c| c.fg == Color::Rgb(255, 0, 0)),
+        "el fg crudo (255,0,0) del span con role NUNCA se pinta: role gana"
+    );
+    assert!(
+        cells.iter().any(|c| c.fg == Color::Rgb(0, 255, 0)),
+        "el span SIN role pinta su fg crudo tal cual"
+    );
+}
+
 /// M3-3b T5 (encoding-auditor H1/H2/H3): el modal de aprobación pinta datos
 /// que CONTROLA el agente. Controles/bidi/invisibles → `�` con badge; cada
 /// ruta en SU línea etiquetada (jamás joiner in-band); un `from` kilométrico
