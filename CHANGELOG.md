@@ -9,6 +9,26 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **GUI opt-in motion (G2, ADR 0036 amendment):** the `[effects]` theme
+  schema grows to v1.1 with `flicker = { strength }` (CRT flicker, clamped
+  to `[0.0, 0.15]` — deliberately tiny, an accessibility guard against
+  photosensitive-trigger risk) and `cursor_blink` (bool); both render in the
+  GUI. `fade_ms` (clamp `[0, 400]`) is parsed but not yet animated — a
+  documented, deliberate schema/render split, not an oversight. The bundled
+  `retro-crt`/`retro-crt-amber` presets now declare `flicker`+
+  `cursor_blink` by default. A new `[ui] reduce_motion` config key (spec
+  §17 a11y; last-wins across every layer including Project) forces all
+  motion off via GPUI's native `App::set_reduce_motion`, which also frees
+  `with_animation`-driven cursor blink from any hand-rolled reduce-motion
+  check. The frame loop stays alive ONLY while a motion effect is active
+  AND the window is focused AND `reduce_motion` is off — spot-checked with
+  `NORTE_GUI_DEBUG`'s render counter (a focused retro-crt window renders
+  continuously; the same theme under `reduce_motion = true`, or any theme
+  with no motion keys, settles after the initial listing and goes fully
+  event-driven, exactly as before this feature landed). This manual check
+  is not yet pinned by an automated test — tracked as follow-up debt
+  (no `gpui::test` harness exists in `norte-gui` yet to drive one).
+
 - **Declarative per-plugin configuration (P2):** a plugin manifest can now
   declare typed settings under `[config.<key>]` (`string`/`bool`/`int`/`enum`,
   with an in-range default, an optional description, and per-type caps —

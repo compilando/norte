@@ -74,9 +74,14 @@
 //! `NORTE_GUI_DEBUG`: they always go to stderr, prefixed `[norte-gui]` like
 //! every other diagnostic line this crate emits.
 
-const SCANLINES_OPACITY_RANGE: (f32, f32) = (0.0, 0.35);
+// `pub(crate)`, not private: G2's flicker overlay (`main.rs`) re-clamps a
+// flicker-modulated `scanlines.opacity`/`vignette.strength` to these SAME
+// static ceilings (a flicker-scaled value must never exceed the
+// accessibility cap a theme's own value is already clamped to) — one
+// source of truth for the cap, no duplicated magic numbers in `main.rs`.
+pub(crate) const SCANLINES_OPACITY_RANGE: (f32, f32) = (0.0, 0.35);
 const SCANLINES_SPACING_RANGE: (u8, u8) = (2, 16);
-const VIGNETTE_STRENGTH_RANGE: (f32, f32) = (0.0, 0.6);
+pub(crate) const VIGNETTE_STRENGTH_RANGE: (f32, f32) = (0.0, 0.6);
 const GLOW_STRENGTH_RANGE: (f32, f32) = (0.0, 1.0);
 const BEZEL_RADIUS_RANGE: (u8, u8) = (0, 32);
 /// Schema v1.1 (G2). Deliberately tiny: an a11y guard against

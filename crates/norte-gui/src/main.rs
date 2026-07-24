@@ -47,11 +47,11 @@
 #![forbid(unsafe_code)]
 
 use gpui::{
-    App, Bounds, BoxShadow, Context, FocusHandle, IntoElement, KeyDownEvent, MouseButton,
-    MouseDownEvent, ParentElement, Pixels, Render, RenderImage, ScrollDelta, ScrollStrategy,
-    ScrollWheelEvent, SharedString, Styled, UniformListScrollHandle, Window, WindowBounds,
-    WindowOptions, canvas, div, fill, hsla, img, linear_color_stop, linear_gradient, point,
-    prelude::*, px, rgb, rgba, size, uniform_list,
+    Animation, AnimationExt, AnyElement, App, Bounds, BoxShadow, Context, FocusHandle, IntoElement,
+    KeyDownEvent, MouseButton, MouseDownEvent, ParentElement, Pixels, Render, RenderImage,
+    ScrollDelta, ScrollStrategy, ScrollWheelEvent, SharedString, Styled, UniformListScrollHandle,
+    Window, WindowBounds, WindowOptions, canvas, div, fill, hsla, img, linear_color_stop,
+    linear_gradient, point, prelude::*, pulsating_between, px, rgb, rgba, size, uniform_list,
 };
 use gpui_platform::application;
 
@@ -212,6 +212,13 @@ struct NorteGui {
     /// Tipografía resuelta UNA vez en `new` (GP), a partir de `[ui]`. Ver
     /// doc de [`FontSet`].
     fonts: FontSet,
+    /// Epoch del flicker (G2 decisión 3): fijado UNA vez en `new` con
+    /// `Instant::now()` — NO el reloj de pared, así que reajustar la hora
+    /// del sistema en caliente no salta la fase. `render` computa
+    /// `motion_epoch.elapsed()` cada frame y lo pasa a [`flicker_factor`];
+    /// nunca se reinicia durante la vida de la ventana (un flicker
+    /// "reiniciado" en cada frame no oscilaría, `sin(0)` siempre).
+    motion_epoch: std::time::Instant,
 }
 
 impl NorteGui {
@@ -281,6 +288,26 @@ impl NorteGui {
             );
             startup_banner = Some(push_banner(startup_banner, msg));
         }
+
+        // Movimiento (G2 decisión 2, spec §17 a11y): `[ui] reduce_motion`
+        // fijado UNA vez aquí, ANTES del primer `render`. `Context<Self>`
+        // derefa a `App` (mismo precedente que `cx.text_system()` más abajo
+        // para la tipografía), así que `set_reduce_motion` YA es alcanzable
+        // en el constructor. GPUI mata TODO `with_animation` gratis a partir
+        // de aquí (`App::reduce_motion`, `animation.rs`); el camino directo
+        // de `render` (flicker) repite el chequeo como cinturón, per la doc
+        // de `Window::request_animation_frame`. `unwrap_or(false)` cuando la
+        // config no resolvió o la clave está ausente: GPUI no expone ninguna
+        // pista de plataforma "prefiere menos movimiento" en este rev — "si
+        // no, false" es la única rama disponible (documentado también en
+        // `norte-config`).
+        let reduce_motion = loaded
+            .as_ref()
+            .ok()
+            .and_then(|cfg| cfg.common.ui_reduce_motion)
+            .unwrap_or(false);
+        cx.set_reduce_motion(reduce_motion);
+
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
@@ -383,6 +410,7 @@ impl NorteGui {
                     viewer_gen: 0,
                     viewer_loading: false,
                     fonts,
+                    motion_epoch: std::time::Instant::now(),
                 };
                 gui.spawn_event_loop(event_rx, cx);
                 gui.cd(0, dir.clone(), cx);
@@ -439,6 +467,7 @@ impl NorteGui {
                     viewer_gen: 0,
                     viewer_loading: false,
                     fonts,
+                    motion_epoch: std::time::Instant::now(),
                 }
             }
         }
@@ -1244,7 +1273,7 @@ impl NorteGui {
         let list = uniform_list(
             SharedString::from(format!("entries-{i}")),
             item_count,
-            cx.processor(move |this, range: Range<usize>, _window, cx| {
+            cx.processor(move |this, range: Range<usize>, window, cx| {
                 let pane = &this.panes[i];
                 let sel_path = pane.selected().map(|e| e.path.clone());
                 // Mapea el rango (índices dentro de la lista VISIBLE) a índices
@@ -1261,7 +1290,12 @@ impl NorteGui {
                         let e = this.panes[i].entries()[j].clone();
                         let hl = sel_path.as_ref() == Some(&e.path);
                         let marked = this.panes[i].is_marked(&e);
-                        this.render_row(i, j, &e, hl, marked, &chrome_owned, cx)
+                        // `window` (G2 decisión 3): `render_row` lo necesita
+                        // para `is_window_active()` — el blink de cursor solo
+                        // se anima con la ventana enfocada (`with_animation`
+                        // de GPUI NO lo comprueba solo; ver doc de
+                        // `render_row`).
+                        this.render_row(i, j, &e, hl, marked, &chrome_owned, window, cx)
                     })
                     .collect()
             }),
@@ -1425,6 +1459,15 @@ impl NorteGui {
     // contexto de GPUI (cx) — todos necesarios, ninguno agrupable sin una
     // indirección artificial (`RowState { entry, highlighted, marked }` solo
     // movería el problema a un tipo nuevo con un único call site).
+    // G2 decisión 3: el retorno pasó de `impl IntoElement` a `AnyElement`
+    // (antes la única salida posible era `Stateful<Div>`; ahora la rama de
+    // blink de cursor envuelve esa misma fila en `AnimationElement<..>`, un
+    // tipo DISTINTO — `uniform_list::<R>` exige un `Vec<R>` uniforme, así
+    // que las dos ramas necesitan converger a un único tipo concreto vía
+    // `.into_any_element()`, el patrón estándar de GPUI para esto). Efecto
+    // colateral bienvenido: ya no hace falta acotar el RPIT con `use<>` para
+    // no atrapar lifetimes prestados (`AnyElement` es dueño de su contenido
+    // en un arena, sin lifetime que capturar).
     #[allow(clippy::too_many_arguments)]
     fn render_row(
         &self,
@@ -1434,14 +1477,9 @@ impl NorteGui {
         highlighted: bool,
         marked: bool,
         chrome: &ChromeColors,
+        window: &Window,
         cx: &mut Context<Self>,
-        // ed. 2024: RPIT captura TODOS los lifetimes en scope; `render_row` NO
-        // retiene préstamos (clona nombre/color, el listener es 'static), así
-        // que acota la captura a vacío para no atrapar el `&entry` (que en el
-        // processor de `uniform_list` es un clon local que escaparía) ni
-        // `&chrome` (misma razón: solo se leen sus campos `Copy`, nunca se
-        // guarda la referencia).
-    ) -> impl IntoElement + use<> {
+    ) -> AnyElement {
         let bytes = entry.path.file_name().map_or(&b""[..], Segment::as_bytes);
         let mut label = row_label(bytes, entry.kind);
         if marked {
@@ -1497,12 +1535,57 @@ impl NorteGui {
             // variación legible sobre `mark_bg`).
             row = row.hover(|s| s.bg(chrome.hover_bg));
         }
-        row.on_mouse_down(
+        let row = row.on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, ev: &MouseDownEvent, _w, cx| {
                 this.on_row_click(pane, idx, dir_target.clone(), ev.click_count, cx);
             }),
-        )
+        );
+
+        // Blink de cursor (G2 decisión 3, ADR 0036 amendment): SOLO la fila
+        // bajo el cursor real (`highlighted`), SOLO con `cursor_blink =
+        // true` en el tema, y SOLO con la ventana enfocada.
+        // `with_animation` de GPUI honra `reduce_motion` NATIVAMENTE
+        // (renderiza el frame ESTÁTICO — el estado de INICIO de una
+        // animación `.repeat()` — y no pide más frames, ver
+        // `elements/animation.rs`), así que no hace falta comprobarlo aquí
+        // (decisión 2: "reduce_motion: free via GPUI"). Pero NO comprueba
+        // el foco de la ventana por su cuenta — `AnimationElement::
+        // request_layout` pide su próximo frame incondicionalmente cuando
+        // la fila se pinta; sin este gate, una ventana desenfocada seguiría
+        // pidiendo frames por una fila que nadie ve, violando el Goal de G2
+        // ("frame loop alive ONLY while ... focused"). El id de la
+        // animación es POR PANE (`cursor-blink-{pane}`), no por fila:
+        // únicamente puede haber una fila resaltada por pane a la vez, así
+        // que el estado retenido (fase del pulso) sobrevive al cursor
+        // moviéndose entre filas — un id por índice de fila reiniciaría la
+        // fase cada vez que el cursor se mueve, que se leería como un
+        // parpadeo cortado en vez de un pulso continuo.
+        let want_blink = highlighted
+            && self.effects.and_then(|e| e.cursor_blink) == Some(true)
+            && window.is_window_active();
+        if want_blink {
+            // Anima la OPACIDAD de `sel_bg` (no su color): un pulso de
+            // alpha entre 0.7 y 1.0 (`pulsating_between`, easing nativo de
+            // GPUI) lee como "cursor respirando" sin desaturar ni cambiar
+            // de tono el fondo de selección del tema.
+            let sel_bg = chrome.sel_bg;
+            row.with_animation(
+                format!("cursor-blink-{pane}"),
+                Animation::new(std::time::Duration::from_millis(1000))
+                    .repeat()
+                    .with_easing(pulsating_between(0.7, 1.0)),
+                move |el, delta| {
+                    el.bg(gpui::Rgba {
+                        a: sel_bg.a * delta,
+                        ..sel_bg
+                    })
+                },
+            )
+            .into_any_element()
+        } else {
+            row.into_any_element()
+        }
     }
 
     /// Franja de tasks al pie: una fila por task en orden de llegada (kind + % +
@@ -2453,6 +2536,68 @@ fn paint_vignette(window: &mut Window, bounds: Bounds<Pixels>, v: Option<effects
     window.paint_quad(fill(right, linear_gradient(270.0, black, transparent)));
 }
 
+/// Tasa del ciclo de flicker, en Hz (G2 decisión 3): cuántos ciclos
+/// completos de seno por segundo. Elegida a ojo — bastante rápida para
+/// leerse como "zumbido de CRT", bastante lenta para no leerse como un
+/// estroboscopio (la AMPLITUD ya está acotada por
+/// `effects::FLICKER_STRENGTH_RANGE` = `[0, 0.15]`, razón de accesibilidad;
+/// esta constante es la mitad de FRECUENCIA de esa misma cautela, no
+/// mandatada por el ADR, documentada aquí en vez de allí).
+const FLICKER_HZ: f32 = 1.2;
+
+/// Pura: el multiplicador de flicker para `elapsed_secs` transcurridos
+/// desde `NorteGui::motion_epoch` (un `Instant`, NO el reloj de pared — sin
+/// saltos de NTP/zona horaria que preocupar). Acotada a
+/// `[1 - strength, 1 + strength]` (el seno está acotado a `[-1, 1]`) para
+/// CUALQUIER `strength`; `strength = 0.0` es la identidad `1.0` exacta, así
+/// un caller nunca necesita ramificar "sin flicker" antes de multiplicar
+/// (ver `render`, que multiplica scanlines/vignette por este factor
+/// incondicionalmente cuando hay `flicker` en el tema). `elapsed_secs` se
+/// reduce módulo el período (`1 / FLICKER_HZ`) ANTES de entrar al seno
+/// (rust-reviewer MINOR): un `f32` sin reducir acumula error de precisión
+/// tras horas de sesión (~7 dígitos significativos), que se leería como
+/// una deriva de fase — el módulo lo evita sin cambiar el resultado (el
+/// seno ya es periódico).
+fn flicker_factor(strength: f32, elapsed_secs: f32) -> f32 {
+    let period = 1.0 / FLICKER_HZ;
+    let phase_secs = elapsed_secs.rem_euclid(period);
+    1.0 + strength * (2.0 * std::f32::consts::PI * FLICKER_HZ * phase_secs).sin()
+}
+
+/// Pura: `base` escalado por un `factor` de flicker, re-clampado a `cap`
+/// (el TECHO estático per-key de `effects.rs` —
+/// `SCANLINES_OPACITY_RANGE.1`/`VIGNETTE_STRENGTH_RANGE.1`). El flicker
+/// jamás debe empujar un valor de tema YA clampado por encima de su PROPIO
+/// tope de accesibilidad (ADR 0036 §2) — solo modula DENTRO de él. Piso
+/// SIEMPRE `0.0`: ni el flicker ni un `base`/`factor` extremo producen una
+/// opacidad/strength negativa.
+fn flicker_scale(base: f32, factor: f32, cap: f32) -> f32 {
+    (base * factor).clamp(0.0, cap)
+}
+
+/// Pura: ¿necesita este frame que el render loop siga pidiendo frames por
+/// un efecto decorativo (G2 decisión 3)? `flicker` los necesita
+/// DIRECTAMENTE — el overlay `canvas` de este módulo es dueño de su propia
+/// fase de seno, sin maquinaria de GPUI detrás. El blink de cursor pide sus
+/// PROPIOS frames vía `with_animation` de GPUI
+/// (`AnimationElement::request_layout` llama a
+/// `window.request_animation_frame()` cada vez que la fila parpadeante se
+/// pinta de verdad) — incluirlo aquí TAMBIÉN es una aproximación
+/// documentada, no una comprobación exacta: `cursor_blink` activo Y al
+/// menos un pane con entradas (`any_pane_nonempty`) se toma como
+/// "probablemente hay una fila resaltada en pantalla", sin verificar que
+/// esa fila esté REALMENTE dentro del rango visible que `uniform_list`
+/// virtualiza (rust-reviewer MINOR: en el borde raro de un `scroll_to_item`
+/// aún no asentado, esto puede pedir un frame de más). El coste de acertar
+/// de más NO es una fuga sostenida — el siguiente frame vuelve a evaluar
+/// esta misma función con datos frescos — pero SÍ es un repintado real de
+/// ambos panes ese frame, no gratis: la llamada a `request_animation_frame`
+/// en sí se coalesce (ver su propia doc), el trabajo de repintado que
+/// dispara no.
+fn motion_active(flicker: bool, cursor_blink: bool, any_pane_nonempty: bool) -> bool {
+    flicker || (cursor_blink && any_pane_nonempty)
+}
+
 // Colores del chrome del dual-pane; pre-C2 look, usados SOLO como fallback
 // para el canal que un tema deja sin declarar (`ChromeColors::resolve`, ver
 // `chrome`) — el tema es canónico (mismo principio que los presets de
@@ -2857,20 +3002,87 @@ impl Render for NorteGui {
         // clicks/scroll/teclas sin importar lo que pinte. Confirmado en el
         // smoke manual (Task 4 paso 5): click selecciona fila, la rueda
         // mueve el pane y las teclas actúan con scanlines+viñeta activos.
+        // Fase de flicker (G2 decisión 3): UN `elapsed()` por frame desde
+        // `motion_epoch` (`Instant`, ver doc del campo), capturado por el
+        // closure `'static` del `canvas` de abajo. Barato incondicionalmente
+        // (una resta de `Instant`) — no vale la pena ramificar "solo si hay
+        // flicker" antes de calcularlo.
+        let elapsed = self.motion_epoch.elapsed().as_secs_f32();
+        let has_overlay = self
+            .effects
+            .is_some_and(|e| e.scanlines.is_some() || e.vignette.is_some());
+        // El flicker sin scanlines/vignette no tiene NADA que modular — el
+        // overlay `canvas` de abajo ni se crea en ese caso, así que el
+        // gate de `motion_active` de más abajo debe reflejar eso, no solo
+        // "el tema declara `[effects.flicker]`".
+        let flicker_paints = has_overlay && self.effects.is_some_and(|e| e.flicker.is_some());
+
         if let Some(eff) = self.effects
-            && (eff.scanlines.is_some() || eff.vignette.is_some())
+            && has_overlay
         {
             root = root.child(
                 canvas(
                     move |_bounds, _window, _cx| {},
-                    move |bounds, (), window, _cx| {
-                        paint_scanlines(window, bounds, eff.scanlines);
-                        paint_vignette(window, bounds, eff.vignette);
+                    move |bounds, (), window, cx| {
+                        // El chequeo directo de `reduce_motion`/foco (belt,
+                        // decisión 2/3): este `canvas` NO pasa por
+                        // `with_animation` (pinta primitivas de escena
+                        // crudas, no un elemento GPUI animable), así que
+                        // `App::reduce_motion`'s gate nativo no lo cubre —
+                        // hay que replicarlo a mano, como pide la doc de
+                        // `Window::request_animation_frame` para callers
+                        // directos.
+                        let factor = match eff.flicker {
+                            Some(f) if !cx.reduce_motion() && window.is_window_active() => {
+                                flicker_factor(f.strength, elapsed)
+                            }
+                            _ => 1.0,
+                        };
+                        let scanlines = eff.scanlines.map(|s| effects::Scanlines {
+                            opacity: flicker_scale(
+                                s.opacity,
+                                factor,
+                                effects::SCANLINES_OPACITY_RANGE.1,
+                            ),
+                            ..s
+                        });
+                        let vignette = eff.vignette.map(|v| effects::Vignette {
+                            strength: flicker_scale(
+                                v.strength,
+                                factor,
+                                effects::VIGNETTE_STRENGTH_RANGE.1,
+                            ),
+                        });
+                        paint_scanlines(window, bounds, scanlines);
+                        paint_vignette(window, bounds, vignette);
                     },
                 )
                 .absolute()
                 .inset_0(),
             );
+        }
+
+        // Frame loop del movimiento (G2 decisión 3): pide el PRÓXIMO frame
+        // SOLO si hace falta (`motion_active`) Y la ventana tiene foco Y
+        // `reduce_motion` está OFF — así una sesión sin flicker/cursor_blink
+        // activos (o con `reduce_motion = true`, o desenfocada) sigue siendo
+        // puramente dirigida por eventos, exactamente como antes de G2 (el
+        // Goal del plan: "frame loop alive ONLY while an animated effect is
+        // active and the window focused"). El blink de cursor YA pide sus
+        // PROPIOS frames vía `with_animation` cuando su fila se pinta
+        // (`render_row`) — esta llamada directa es la única forma de que el
+        // flicker del `canvas` de arriba (que no pasa por `with_animation`)
+        // se re-pinte en el SIGUIENTE frame; `Window::
+        // request_animation_frame`'s propia doc pide gatear a mano sobre
+        // `reduce_motion` para callers directos (rev f14fea9,
+        // window.rs:2229).
+        let cursor_blink_on = self.effects.and_then(|e| e.cursor_blink) == Some(true);
+        let any_pane_nonempty = self.panes.iter().any(|p| !p.entries().is_empty());
+        if motion_active(flicker_paints, cursor_blink_on, any_pane_nonempty)
+            && window.is_window_active()
+            && !cx.reduce_motion()
+        {
+            window.request_animation_frame();
         }
 
         if std::env::var_os("NORTE_GUI_DEBUG").is_some() {
@@ -3127,10 +3339,11 @@ mod tests {
     };
     use super::{
         ChromeColors, FontSet, ImagePreview, affected_dirs, apply_viewer_command, banner_safe,
-        confirm_quit_task_count, first_cancelable, generation_is_current, glowed, has_pending_work,
-        image_preview_from, image_status, keymap_error_detail, modal_footer_colors,
-        modal_panel_colors, modal_title_colors, pending_hint, retain_active, row_label,
-        task_at_cursor, unknown_preset_banner, validated_family, viewer_header, viewer_status,
+        confirm_quit_task_count, first_cancelable, flicker_factor, flicker_scale,
+        generation_is_current, glowed, has_pending_work, image_preview_from, image_status,
+        keymap_error_detail, modal_footer_colors, modal_panel_colors, modal_title_colors,
+        motion_active, pending_hint, retain_active, row_label, task_at_cursor,
+        unknown_preset_banner, validated_family, viewer_header, viewer_status,
     };
     use norte_frontend::viewer::Viewer;
     use norte_proto::{EntryKind, VPath};
@@ -4121,6 +4334,99 @@ mod tests {
 
         let c = gpui::rgb(0x336699);
         assert_eq!(glowed(c, None), c, "sin glow, identidad exacta");
+    }
+
+    // --- G2 motion: helpers puros (decisión 3) -----------------------------
+
+    /// `flicker_factor` (G2 decisión 3): `strength = 0.0` es la identidad
+    /// exacta para CUALQUIER tiempo transcurrido — así un caller nunca
+    /// necesita ramificar "flicker ausente" antes de multiplicar.
+    #[test]
+    fn flicker_factor_strength_cero_es_identidad() {
+        for t in [0.0_f32, 0.3, 1.0, 7.5, 100.0] {
+            let f = flicker_factor(0.0, t);
+            assert!((f - 1.0).abs() < f32::EPSILON, "t={t}: f={f}");
+        }
+    }
+
+    /// `flicker_factor` está acotado a `[1-strength, 1+strength]` (seno
+    /// acotado a `[-1, 1]`) para CUALQUIER tiempo — el clamp de
+    /// `effects::FLICKER_STRENGTH_RANGE` ([0, 0.15]) ya garantiza que el
+    /// peor caso real sea `[0.85, 1.15]`, pero esta prueba no asume ese
+    /// clamp: cubre el rango completo de `strength` que la firma acepta.
+    #[test]
+    fn flicker_factor_acotado_por_strength() {
+        for s in [0.0_f32, 0.05, 0.15, 0.5, 1.0] {
+            for i in 0..200_i32 {
+                #[allow(clippy::cast_precision_loss)]
+                let t = i as f32 * 0.037;
+                let f = flicker_factor(s, t);
+                assert!(
+                    (1.0 - s..=1.0 + s).contains(&f),
+                    "s={s} t={t}: f={f} fuera de [{}, {}]",
+                    1.0 - s,
+                    1.0 + s
+                );
+            }
+        }
+    }
+
+    /// `flicker_scale` (G2 decisión 3): el resultado NUNCA excede `cap` — ni
+    /// con un `factor` extremo (por encima de lo que `flicker_factor` puede
+    /// producir con un `strength` ya clampado) ni negativo (piso `0.0`,
+    /// nunca una opacidad/strength negativa). Este es el "clamp compuesto"
+    /// que evita que el flicker empuje un valor de tema YA clampado por
+    /// encima de su propio tope de accesibilidad (ADR 0036 §2).
+    #[test]
+    fn flicker_scale_nunca_excede_el_cap_estatico() {
+        let cap = effects::SCANLINES_OPACITY_RANGE.1;
+        for base in [0.0_f32, 0.1, cap] {
+            for factor in [-5.0_f32, 0.0, 0.85, 1.0, 1.15, 100.0] {
+                let v = flicker_scale(base, factor, cap);
+                assert!(
+                    (0.0..=cap).contains(&v),
+                    "base={base} factor={factor}: v={v} fuera de [0, {cap}]"
+                );
+            }
+        }
+    }
+
+    /// `flicker_scale` con `factor = 1.0` es la identidad para un `base` ya
+    /// dentro de `[0, cap]` (el caso "sin flicker" no debe alterar el valor
+    /// clampado que `effects.rs` ya produjo).
+    #[test]
+    fn flicker_scale_factor_uno_es_identidad_dentro_del_cap() {
+        let cap = effects::VIGNETTE_STRENGTH_RANGE.1;
+        let base = cap * 0.5;
+        assert!((flicker_scale(base, 1.0, cap) - base).abs() < f32::EPSILON);
+    }
+
+    /// `motion_active` (G2 decisión 3): tabla de verdad completa. El flicker
+    /// solo importa cuando ya pinta algo (`main.rs` solo llama con
+    /// `flicker=true` cuando además hay scanlines/vignette); el cursor blink
+    /// es una aproximación documentada (`cursor_blink && !panes vacíos`, ver
+    /// doc de la función) — errar hacia `true` cuando no hay fila resaltada
+    /// de verdad es inofensivo (un `request_animation_frame` de más no
+    /// cuesta nada, GPUI los coalesce).
+    #[test]
+    fn motion_active_tabla_de_verdad() {
+        let casos = [
+            (false, false, false, false),
+            (false, false, true, false),
+            (false, true, false, false),
+            (false, true, true, true),
+            (true, false, false, true),
+            (true, false, true, true),
+            (true, true, false, true),
+            (true, true, true, true),
+        ];
+        for (flicker, blink, nonempty, expected) in casos {
+            assert_eq!(
+                motion_active(flicker, blink, nonempty),
+                expected,
+                "flicker={flicker} blink={blink} nonempty={nonempty}"
+            );
+        }
     }
 
     /// `ChromeColors::hover_bg` (GP look-and-feel): DERIVADO, no un rol de
