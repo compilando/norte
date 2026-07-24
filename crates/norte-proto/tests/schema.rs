@@ -1,0 +1,220 @@
+//! Golden of the published protocol JSON Schema (ADR 0038, spec §11): it is
+//! generated from the SAME serde types that speak the wire, so it cannot drift
+//! from what the daemon actually sends. Break this test = wire-shape change =
+//! regenerate with `NORTE_UPDATE_SCHEMA=1` (and bump + double review).
+#![cfg(feature = "schema")]
+
+use std::path::Path;
+
+use norte_proto::methods::*;
+use norte_proto::*;
+
+/// Aggregate root: one field per top-level wire type. `schema_for!` emits each
+/// as a property and pulls every nested type into `$defs`, so the single
+/// document covers the whole protocol surface. Field values are never read.
+#[derive(schemars::JsonSchema)]
+#[allow(dead_code)]
+struct ProtocolSchema {
+    byte_range: ByteRange,
+    capabilities: Capabilities,
+    capability_flags: CapabilityFlags,
+    client_info: ClientInfo,
+    collision_policy: CollisionPolicy,
+    conflict_kind: ConflictKind,
+    connection_degraded: ConnectionDegraded,
+    connection_trust_host_key_params: ConnectionTrustHostKeyParams,
+    connection_trust_host_key_result: ConnectionTrustHostKeyResult,
+    daemon_shutdown_params: DaemonShutdownParams,
+    daemon_shutdown_result: DaemonShutdownResult,
+    decoration_wire: DecorationWire,
+    delete_mode: DeleteMode,
+    entry: Entry,
+    entry_kind: EntryKind,
+    error: Error,
+    fs_capabilities_params: FsCapabilitiesParams,
+    fs_capabilities_result: FsCapabilitiesResult,
+    fs_copy_params: FsCopyParams,
+    fs_delete_params: FsDeleteParams,
+    fs_list_params: FsListParams,
+    fs_list_result: FsListResult,
+    fs_move_params: FsMoveParams,
+    fs_read_params: FsReadParams,
+    fs_read_result: FsReadResult,
+    fs_search_params: FsSearchParams,
+    fs_stat_params: FsStatParams,
+    fs_stat_result: FsStatResult,
+    fs_task_result: FsTaskResult,
+    grant_scope_params: GrantScopeParams,
+    grant_scope_result: GrantScopeResult,
+    index_build_params: IndexBuildParams,
+    index_build_result: IndexBuildResult,
+    index_hit: IndexHit,
+    index_query_params: IndexQueryParams,
+    index_query_result: IndexQueryResult,
+    initialize_params: InitializeParams,
+    initialize_result: InitializeResult,
+    match_info: MatchInfo,
+    pending_approval: PendingApproval,
+    plugin_column_info: PluginColumnInfo,
+    plugin_column_values_params: PluginColumnValuesParams,
+    plugin_column_values_result: PluginColumnValuesResult,
+    plugin_command_info: PluginCommandInfo,
+    plugin_config_key_wire: PluginConfigKeyWire,
+    plugin_decorate_params: PluginDecorateParams,
+    plugin_decorate_result: PluginDecorateResult,
+    plugin_decorations: PluginDecorations,
+    plugin_get_config_params: PluginGetConfigParams,
+    plugin_get_config_result: PluginGetConfigResult,
+    plugin_info: PluginInfo,
+    plugin_list_params: PluginListParams,
+    plugin_list_result: PluginListResult,
+    plugin_load_error: PluginLoadError,
+    plugin_preview: PluginPreview,
+    plugin_preview_params: PluginPreviewParams,
+    plugin_preview_result: PluginPreviewResult,
+    plugin_preview_styled: PluginPreviewStyled,
+    plugin_preview_styled_params: PluginPreviewStyledParams,
+    plugin_preview_styled_result: PluginPreviewStyledResult,
+    plugin_run_command_params: PluginRunCommandParams,
+    plugin_run_command_result: PluginRunCommandResult,
+    plugin_set_approval_params: PluginSetApprovalParams,
+    plugin_set_approval_result: PluginSetApprovalResult,
+    plugin_set_config_params: PluginSetConfigParams,
+    plugin_set_config_result: PluginSetConfigResult,
+    plugin_set_enabled_params: PluginSetEnabledParams,
+    plugin_set_enabled_result: PluginSetEnabledResult,
+    policy_approval_required: PolicyApprovalRequired,
+    policy_decide_params: PolicyDecideParams,
+    policy_decide_result: PolicyDecideResult,
+    policy_pending_result: PolicyPendingResult,
+    policy_undo_report_params: PolicyUndoReportParams,
+    policy_undo_report_result: PolicyUndoReportResult,
+    policy_undo_session_params: PolicyUndoSessionParams,
+    policy_undo_session_result: PolicyUndoSessionResult,
+    request_scope_params: RequestScopeParams,
+    request_scope_result: RequestScopeResult,
+    resume_policy: ResumePolicy,
+    rpc_cancel_params: RpcCancelParams,
+    search_hits: SearchHits,
+    server_info: ServerInfo,
+    span_wire: SpanWire,
+    symlink_policy: SymlinkPolicy,
+    task_cancel_params: TaskCancelParams,
+    task_cancel_result: TaskCancelResult,
+    task_id: TaskId,
+    task_kind: TaskKind,
+    task_list_params: TaskListParams,
+    task_list_result: TaskListResult,
+    task_progress: TaskProgress,
+    task_state: TaskState,
+    undo_blocked: UndoBlocked,
+    v_path: VPath,
+    verify_policy: VerifyPolicy,
+}
+
+#[test]
+fn el_schema_del_protocolo_no_diverge() {
+    let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
+    let json = format!("{}\n", serde_json::to_string_pretty(&schema).unwrap());
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/schema/proto.schema.json");
+    if std::env::var_os("NORTE_UPDATE_SCHEMA").is_some() {
+        std::fs::write(&path, &json).expect("escribir proto.schema.json");
+        return;
+    }
+    let publicado = std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| {
+            panic!("falta docs/schema/proto.schema.json: regenera con NORTE_UPDATE_SCHEMA=1")
+        })
+        .replace("\r\n", "\n");
+    assert_eq!(
+        publicado, json,
+        "docs/schema/proto.schema.json divergió del código: regenera con \
+         NORTE_UPDATE_SCHEMA=1 cargo test -p norte-proto --features schema --test schema"
+    );
+}
+
+/// Completeness guard (rust-review MAJOR): the aggregate [`ProtocolSchema`] is
+/// hand-maintained, so a NEW wire type that gains the `schema` derive but is
+/// neither added as a field nor referenced by an included type would silently
+/// vanish from the artifact while the golden stays green. Every type carrying
+/// `#[derive(schemars::JsonSchema)]` (or a hand-written impl) in `src/` MUST
+/// appear in the generated `$defs`; scanning the source turns that omission
+/// into a red test instead of a stale schema.
+#[test]
+fn todo_tipo_con_schema_esta_en_el_artefacto() {
+    let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
+    let defs = schema
+        .get("$defs")
+        .and_then(serde_json::Value::as_object)
+        .expect("el schema raíz tiene $defs");
+
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    collect_rs(&src, &mut files);
+
+    let mut declared: Vec<String> = Vec::new();
+    for file in &files {
+        let text = std::fs::read_to_string(file).expect("leer fuente");
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if line.contains("derive(schemars::JsonSchema)") {
+                // Nearest following `pub struct|enum NAME`.
+                if let Some(name) = lines[i + 1..].iter().take(8).find_map(|l| pub_type_name(l)) {
+                    declared.push(name);
+                }
+            }
+            if let Some(rest) = line
+                .trim_start()
+                .strip_prefix("impl schemars::JsonSchema for ")
+            {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !name.is_empty() {
+                    declared.push(name);
+                }
+            }
+        }
+    }
+    assert!(
+        declared.len() >= 90,
+        "el escáner no encontró los tipos con schema (halló {}): ¿cambió el formato del derive?",
+        declared.len()
+    );
+
+    let missing: Vec<&String> = declared.iter().filter(|n| !defs.contains_key(*n)).collect();
+    assert!(
+        missing.is_empty(),
+        "tipos con derive `schema` ausentes del artefacto (no alcanzables desde \
+         ProtocolSchema — añádelos como campo): {missing:?}"
+    );
+}
+
+/// Recoge `.rs` bajo `dir` (incluye `src/wire/`).
+fn collect_rs(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rs(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+/// Nombre en `pub struct NAME` / `pub enum NAME`, si la línea lo es.
+fn pub_type_name(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let rest = trimmed
+        .strip_prefix("pub struct ")
+        .or_else(|| trimmed.strip_prefix("pub enum "))?;
+    let name: String = rest
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    (!name.is_empty()).then_some(name)
+}

@@ -9,6 +9,15 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Protocol JSON Schema artifact (#13, ADR 0038):** `docs/schema/proto.schema.json`
+  is now generated from the same `norte-proto` serde types that speak the wire,
+  behind an optional `schema` cargo feature (off by default — the shipped crate
+  gains no dependency at runtime). A golden test pins it byte-for-byte and a
+  source scan guards that every schema-deriving type reaches the artifact, so it
+  cannot silently drift. External clients (the MCP bridge, third-party tooling)
+  get a machine-readable contract for the request/response/notification payloads.
+  A standalone `just semver` recipe (cargo-semver-checks over the publishable
+  crates) is staged for the gate once the binary and a release baseline exist.
 - **Plugin previews mark lossy decoding (#101, proto 0.29.0):**
   `PluginPreview` and `PluginPreviewStyled` gain an additive `lossy: bool`.
   When the core's host-side text decoding (§6.2, #29) had to substitute `�`

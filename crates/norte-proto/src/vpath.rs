@@ -671,3 +671,22 @@ impl<'de> Deserialize<'de> for VPath {
         deserializer.deserialize_str(WireVisitor)
     }
 }
+
+// A `VPath` is (de)serialized as a single wire string (`to_wire`), so its JSON
+// Schema is a string — it cannot be derived because the serde is hand-written
+// (filenames are bytes; the wire form is `scheme://authority/segments`).
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for VPath {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "VPath".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "VPath wire string: `scheme://authority/segments`. \
+                            Filenames are bytes; non-UTF-8 segments use the \
+                            percent-encoded wire form.",
+        })
+    }
+}

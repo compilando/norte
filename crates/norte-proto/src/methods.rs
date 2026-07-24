@@ -468,6 +468,7 @@ pub const PLUGIN_SET_CONFIG: &str = "plugin.set_config";
 pub const RPC_CANCEL: &str = "rpc.cancel";
 
 /// Params de [`FS_LIST`] (paginación por cursor desde 0.8.0, ADR 0017).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsListParams {
     /// Directorio a listar. OBLIGATORIO también al continuar (valida que el
@@ -490,6 +491,7 @@ pub struct FsListParams {
 /// Cláusula de compatibilidad (ADR 0004/0017): sin `cursor` NI `limit`, el
 /// core DEVUELVE el listado COMPLETO con `next_cursor: null` — un cliente
 /// 0.7 (N-1) recibe exactamente lo de antes, jamás un truncado en silencio.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsListResult {
     /// Entradas de ESTA página (orden: el del provider, sin garantía).
@@ -510,6 +512,7 @@ pub struct FsListResult {
 }
 
 /// Params de [`FS_STAT`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsStatParams {
     /// Nodo a consultar.
@@ -517,6 +520,7 @@ pub struct FsStatParams {
 }
 
 /// Result de [`FS_STAT`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsStatResult {
     /// Metadatos del nodo.
@@ -524,6 +528,7 @@ pub struct FsStatResult {
 }
 
 /// Params de [`FS_COPY`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsCopyParams {
     /// Origen (archivo o directorio).
@@ -547,6 +552,7 @@ pub struct FsCopyParams {
 }
 
 /// Params de [`FS_MOVE`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsMoveParams {
     /// Origen.
@@ -569,6 +575,7 @@ pub struct FsMoveParams {
 }
 
 /// Params de [`FS_DELETE`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsDeleteParams {
     /// Nodo a borrar (recursivo si es dir).
@@ -581,6 +588,7 @@ pub struct FsDeleteParams {
 
 /// Result de [`FS_COPY`], [`FS_MOVE`] y [`FS_DELETE`]: la Task creada.
 /// El progreso llega por [`TASK_PROGRESS`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsTaskResult {
     /// Id de la Task encolada.
@@ -588,6 +596,7 @@ pub struct FsTaskResult {
 }
 
 /// Params de [`FS_SEARCH`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsSearchParams {
     /// Raíz del walk (subtree entero).
@@ -620,6 +629,7 @@ pub struct FsSearchParams {
 
 /// Un lote de resultados de [`SEARCH_HITS`]. `matches` alineado 1:1 con
 /// `entries` cuando la búsqueda es de contenido (None si es solo nombre).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchHits {
     /// Task dueña (correlación con `fs.search` → `task_id`).
@@ -632,6 +642,7 @@ pub struct SearchHits {
 }
 
 /// Contexto de UN match de contenido.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MatchInfo {
     /// Línea (1-based) del primer match, si se computó.
@@ -647,6 +658,7 @@ pub struct MatchInfo {
 }
 
 /// Params de [`INDEX_BUILD`] (M4): raíz a indexar.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexBuildParams {
     /// Raíz del subárbol a (re)indexar.
@@ -654,6 +666,7 @@ pub struct IndexBuildParams {
 }
 
 /// Resultado de [`INDEX_BUILD`] al completar la Task (M4).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexBuildResult {
     /// Entradas indexadas (insertadas o actualizadas).
@@ -663,6 +676,7 @@ pub struct IndexBuildResult {
 }
 
 /// Params de [`INDEX_QUERY`] (M4).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexQueryParams {
     /// Raíz cuyo índice se consulta.
@@ -674,6 +688,7 @@ pub struct IndexQueryParams {
 }
 
 /// Un hit de [`INDEX_QUERY`] (M4). `path` en bytes crudos vía [`VPath`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexHit {
     /// Path completo del resultado.
@@ -689,6 +704,7 @@ pub struct IndexHit {
 }
 
 /// Resultado de [`INDEX_QUERY`] (M4): hits ordenados por relevancia.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexQueryResult {
     /// Hits (bm25, más relevante primero).
@@ -696,6 +712,7 @@ pub struct IndexQueryResult {
 }
 
 /// Identidad de un cliente (va en [`InitializeParams`]).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientInfo {
     /// Nombre del frontend (`norte-tui`, `norte-cli`, un tercero…).
@@ -705,6 +722,7 @@ pub struct ClientInfo {
 }
 
 /// Identidad del servidor (va en [`InitializeResult`]).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerInfo {
     /// Nombre del servidor (`norte-core`).
@@ -714,6 +732,7 @@ pub struct ServerInfo {
 }
 
 /// Params de [`INITIALIZE`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InitializeParams {
     /// Quién se conecta.
@@ -739,6 +758,7 @@ pub struct InitializeParams {
 }
 
 /// Result de [`INITIALIZE`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InitializeResult {
     /// Quién responde.
@@ -750,6 +770,7 @@ pub struct InitializeResult {
 }
 
 /// Params de [`DAEMON_SHUTDOWN`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DaemonShutdownParams {
     /// `true` (default): terminar las tasks vivas antes de salir.
@@ -769,11 +790,13 @@ fn default_graceful() -> bool {
 }
 
 /// Result de [`DAEMON_SHUTDOWN`]: objeto vacío, reservado para extensión.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DaemonShutdownResult {}
 
 /// Params de [`TASK_LIST`]: objeto vacío, reservado para extensión
 /// (filtros por estado/kind llegarán aquí como campos opcionales).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskListParams {}
 
@@ -784,6 +807,7 @@ pub struct TaskListParams {}
 /// let r: TaskListResult = serde_json::from_str(r#"{"tasks":[]}"#).unwrap();
 /// assert!(r.tasks.is_empty());
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskListResult {
     /// Snapshots de las tasks vivas + los desenlaces recientes retenidos
@@ -801,6 +825,7 @@ pub struct TaskListResult {
 /// // El emisor canónico escribe `range: null` explícito (ADR 0004).
 /// assert!(serde_json::to_string(&p).unwrap().contains(r#""range":null"#));
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsReadParams {
     /// Archivo a leer.
@@ -817,6 +842,7 @@ pub struct FsReadParams {
 /// let r: FsReadResult = serde_json::from_str(r#"{"content_b64":"aGk=","eof":true}"#).unwrap();
 /// assert!(r.eof);
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsReadResult {
     /// Bytes del tramo, en base64 estándar (los bytes de un archivo no
@@ -827,6 +853,7 @@ pub struct FsReadResult {
 }
 
 /// Params de [`FS_CAPABILITIES`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsCapabilitiesParams {
     /// Un path del provider a consultar.
@@ -834,6 +861,7 @@ pub struct FsCapabilitiesParams {
 }
 
 /// Result de [`FS_CAPABILITIES`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsCapabilitiesResult {
     /// Capabilities declaradas por el provider.
@@ -841,6 +869,7 @@ pub struct FsCapabilitiesResult {
 }
 
 /// Params de [`TASK_CANCEL`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskCancelParams {
     /// Task a cancelar. Cancelar una Task terminal o inexistente no es error:
@@ -849,12 +878,14 @@ pub struct TaskCancelParams {
 }
 
 /// Result de [`TASK_CANCEL`]: objeto vacío, reservado para extensión.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskCancelResult {}
 
 /// Params de [`CONNECTION_TRUST_HOST_KEY`] (flujo TOFU, ADR 0015 D). Lleva el
 /// fingerprint que el usuario VERIFICÓ; el core lo compara con la clave que
 /// vuelve a presentar el servidor al reintentar, y solo registra si coincide.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionTrustHostKeyParams {
     /// Host al que se conecta (`host`; el puerto aparte).
@@ -870,6 +901,7 @@ pub struct ConnectionTrustHostKeyParams {
 }
 
 /// Result de [`CONNECTION_TRUST_HOST_KEY`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionTrustHostKeyResult {
     /// `true` si la clave quedó registrada (idempotente: `true` también si ya
@@ -880,6 +912,7 @@ pub struct ConnectionTrustHostKeyResult {
 /// Notificación [`CONNECTION_DEGRADED`] (server→client): una sesión remota se
 /// estableció con seguridad degradada. Las rutas/host van REDACTADOS (rule 10):
 /// `host` jamás lleva userinfo.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionDegraded {
     /// Scheme de la sesión (p. ej. `"ftp"`).
@@ -901,6 +934,7 @@ pub struct ConnectionDegraded {
 }
 
 /// Params de [`POLICY_REQUEST_SCOPE`] (M3-3b): un agente pide un scope.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestScopeParams {
     /// Sesión de agente que pide (debe coincidir con la de la conexión).
@@ -914,6 +948,7 @@ pub struct RequestScopeParams {
 }
 
 /// Result de [`POLICY_REQUEST_SCOPE`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestScopeResult {
     /// Id de la petición, para que un humano la conceda con `policy.grant_scope`.
@@ -921,6 +956,7 @@ pub struct RequestScopeResult {
 }
 
 /// Params de [`POLICY_GRANT_SCOPE`] (un humano concede una petición pendiente).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrantScopeParams {
     /// Id devuelto por `policy.request_scope`.
@@ -928,11 +964,13 @@ pub struct GrantScopeParams {
 }
 
 /// Result de [`POLICY_GRANT_SCOPE`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrantScopeResult {}
 
 /// Notificación [`POLICY_APPROVAL_REQUIRED`] (server→client): una op `ask`
 /// espera decisión. Las rutas van REDACTADAS si llevan userinfo (regla 10).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyApprovalRequired {
     /// Id para responder con `policy.decide`.
@@ -952,6 +990,7 @@ pub struct PolicyApprovalRequired {
 }
 
 /// Params de [`POLICY_DECIDE`] (un humano aprueba/deniega).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyDecideParams {
     /// Id de la aprobación pendiente.
@@ -961,10 +1000,12 @@ pub struct PolicyDecideParams {
 }
 
 /// Result de [`POLICY_DECIDE`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyDecideResult {}
 
 /// Una aprobación pendiente (elemento de [`PolicyPendingResult`]).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingApproval {
     /// Id para responder con `policy.decide`.
@@ -980,6 +1021,7 @@ pub struct PendingApproval {
 }
 
 /// Result de [`POLICY_PENDING`] (resync de aprobaciones pendientes).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyPendingResult {
     /// Aprobaciones pendientes.
@@ -992,6 +1034,7 @@ pub struct PolicyPendingResult {
 /// canónico) o string (tolerancia JSON-RPC). No se valida contra un mapa aquí
 /// (es una notificación best-effort): el daemon lo coteja con sus requests en
 /// vuelo y un id sin correspondencia es un no-op.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RpcCancelParams {
     /// Id JSON-RPC de la request a cancelar.
@@ -999,6 +1042,7 @@ pub struct RpcCancelParams {
 }
 
 /// Params de [`POLICY_UNDO_SESSION`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyUndoSessionParams {
     /// Sesión de agente cuyas mutaciones se deshacen (mismo formato que
@@ -1008,6 +1052,7 @@ pub struct PolicyUndoSessionParams {
 
 /// Result de [`POLICY_UNDO_SESSION`]: el undo corre como Task (progreso por
 /// `task.progress`, cancelable con `task.cancel`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyUndoSessionResult {
     /// Task del undo.
@@ -1015,6 +1060,7 @@ pub struct PolicyUndoSessionResult {
 }
 
 /// Params de [`POLICY_UNDO_REPORT`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyUndoReportParams {
     /// Task de undo cuyo informe se pide (la de
@@ -1027,6 +1073,7 @@ pub struct PolicyUndoReportParams {
 /// `Completed`: una Task `Failed`/`Cancelled` deja contadores PARCIALES con
 /// `blocked` ausente (el motivo vive en su `task.progress` terminal) — el
 /// estado de la Task se consulta aparte, este result no lo lleva.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyUndoReportResult {
     /// Entradas revertidas con éxito.
@@ -1047,6 +1094,7 @@ pub struct PolicyUndoReportResult {
 
 /// Un bloqueo del undo: dónde y por qué (elemento de
 /// [`PolicyUndoReportResult::blocked`]).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UndoBlocked {
     /// `seq` de la entrada del journal cuya reversa bloqueó. Referencia
@@ -1072,6 +1120,7 @@ pub struct UndoBlocked {
 /// assert_eq!(c.id, "greet");
 /// assert_eq!(c.title, "Greet");
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginCommandInfo {
     /// Id del comando dentro del plugin (estable; se pasa junto al id del
@@ -1095,6 +1144,7 @@ pub struct PluginCommandInfo {
 /// assert_eq!(c.id, "git-status");
 /// assert_eq!(c.header, "Git");
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginColumnInfo {
     /// Id de la columna (el mismo `column_id` que espera
@@ -1105,6 +1155,7 @@ pub struct PluginColumnInfo {
 }
 
 /// Un plugin descubierto (elemento de [`PluginListResult::plugins`], M4-P3).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginInfo {
     /// Id estable del plugin (namespace inverso, p. ej. `org.norte.demo`).
@@ -1146,6 +1197,7 @@ pub struct PluginInfo {
 /// Un directorio de plugin que NO se pudo cargar (elemento de
 /// [`PluginListResult::errors`], M4-P3): se reporta para diagnóstico, sin
 /// tumbar el resto del catálogo.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginLoadError {
     /// Directorio del plugin que falló (display; puede llevar bytes lossy).
@@ -1156,10 +1208,12 @@ pub struct PluginLoadError {
 
 /// Params de [`PLUGIN_LIST`]: objeto vacío, reservado para extensión
 /// (filtros por categoría/estado llegarán aquí como campos opcionales).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginListParams {}
 
 /// Result de [`PLUGIN_LIST`]: el catálogo descubierto y los fallos de carga.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginListResult {
     /// Plugins descubiertos y cargados (con su estado aprobado/activo).
@@ -1170,6 +1224,7 @@ pub struct PluginListResult {
 }
 
 /// Params de [`PLUGIN_SET_APPROVAL`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginSetApprovalParams {
     /// Id del plugin a (des)aprobar.
@@ -1179,10 +1234,12 @@ pub struct PluginSetApprovalParams {
 }
 
 /// Result de [`PLUGIN_SET_APPROVAL`]: objeto vacío, reservado para extensión.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginSetApprovalResult {}
 
 /// Params de [`PLUGIN_SET_ENABLED`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginSetEnabledParams {
     /// Id del plugin a activar/desactivar.
@@ -1192,10 +1249,12 @@ pub struct PluginSetEnabledParams {
 }
 
 /// Result de [`PLUGIN_SET_ENABLED`]: objeto vacío, reservado para extensión.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginSetEnabledResult {}
 
 /// Params de [`PLUGIN_RUN_COMMAND`] (M4-P4).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginRunCommandParams {
     /// Id del plugin que expone el comando.
@@ -1209,6 +1268,7 @@ pub struct PluginRunCommandParams {
 }
 
 /// Result de [`PLUGIN_RUN_COMMAND`]: la salida del comando del plugin.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginRunCommandResult {
     /// Salida (string) que devuelve el comando del plugin.
@@ -1216,6 +1276,7 @@ pub struct PluginRunCommandResult {
 }
 
 /// Params de [`PLUGIN_PREVIEW`] (M4-P5).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginPreviewParams {
     /// Ruta del archivo a previsualizar (el core lee sus bytes).
@@ -1224,6 +1285,7 @@ pub struct PluginPreviewParams {
 
 /// La preview producida por un plugin previewer: los tres campos van JUNTOS
 /// (all-or-nothing). Ver [`PluginPreviewResult`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginPreview {
     /// Id del plugin previewer que produjo la salida.
@@ -1253,6 +1315,7 @@ pub struct PluginPreview {
 /// preview, seguro) — jamás un `plugin_id` sin `output` (protocol-guardian
 /// M4-P5). `None` = ningún previewer maneja el mimetype; el frontend cae a la
 /// vista cruda.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginPreviewResult {
     /// La preview, o `None` si ningún previewer aplicó.
@@ -1281,6 +1344,7 @@ pub struct PluginPreviewResult {
 /// assert_eq!(s.role, None);
 /// assert_eq!(s.fg, None);
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpanWire {
     /// Texto del span. Texto del plugin — NO confiable.
@@ -1302,6 +1366,7 @@ pub struct SpanWire {
 /// tope de retorno del runtime que ya usan [`PLUGIN_PREVIEW`]/
 /// [`PLUGIN_RUN_COMMAND`]) — el server los aplica antes de enviar; un
 /// cliente los re-valida y cae a [`PLUGIN_PREVIEW`] si se violan.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginPreviewStyled {
     /// Id del plugin previewer que produjo la salida.
@@ -1320,6 +1385,7 @@ pub struct PluginPreviewStyled {
 /// Params de [`PLUGIN_PREVIEW_STYLED`]: idéntico a [`PluginPreviewParams`]
 /// (mismo archivo, misma resolución de previewer — solo cambia la forma del
 /// result).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginPreviewStyledParams {
     /// Ruta del archivo a previsualizar (el core lee sus bytes).
@@ -1331,6 +1397,7 @@ pub struct PluginPreviewStyledParams {
 /// all-or-nothing que [`PluginPreviewResult`] (ver su rustdoc): el wire es
 /// `{plugin_id,plugin_name,lines}` (aplicó) o `{}` (ninguno), jamás un
 /// estado parcial.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginPreviewStyledResult {
     /// La preview con estilo, o `None` si ningún previewer aplicó.
@@ -1345,6 +1412,7 @@ pub struct PluginPreviewStyledResult {
 /// de confiar en el tope ya aplicado por el server — defensa en
 /// profundidad. `role` sigue la misma validación host-side que
 /// [`SpanWire::role`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecorationWire {
     /// Badge corto (p. ej. `"M"`, `"++"`). Ausente = sin badge para esta
@@ -1358,6 +1426,7 @@ pub struct DecorationWire {
 
 /// Params de [`PLUGIN_DECORATE`]: las entradas VISIBLES de la página actual
 /// (batched — el frontend no pide decoraciones entrada por entrada).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginDecorateParams {
     /// Rutas a decorar, en el orden en que se listan.
@@ -1372,6 +1441,7 @@ pub struct PluginDecorateParams {
 /// simplemente no aparece en `plugins` (sin decoraciones de ESE plugin; el
 /// resto de la página se pinta igual — mismo contrato de fallback que
 /// [`PLUGIN_PREVIEW`]).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginDecorations {
     /// Id del plugin `decorator` que produjo estas decoraciones.
@@ -1385,6 +1455,7 @@ pub struct PluginDecorations {
 
 /// Result de [`PLUGIN_DECORATE`]: las decoraciones de cada plugin
 /// `decorator` aprobado y activado que respondió.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginDecorateResult {
     /// Un elemento por plugin `decorator` que decoró esta página.
@@ -1393,6 +1464,7 @@ pub struct PluginDecorateResult {
 
 /// Params de [`PLUGIN_COLUMN_VALUES`]: el id de columna declarado por el
 /// plugin `columns` en su manifiesto, más las rutas visibles a valorar.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginColumnValuesParams {
     /// Id de la columna (declarado por el plugin; identifica QUÉ columna
@@ -1411,6 +1483,7 @@ pub struct PluginColumnValuesParams {
 /// para esta entrada de esta columna, jamás se omite del vector posicional
 /// (protocol-guardian, ADR 0037). Texto del plugin — NO confiable, un
 /// frontend debe enmascararlo antes de renderizarlo.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginColumnValuesResult {
     /// Valores de celda, uno por elemento de `paths` en el mismo orden;
@@ -1419,6 +1492,7 @@ pub struct PluginColumnValuesResult {
 }
 
 /// Params de [`PLUGIN_GET_CONFIG`] (0.28.0, G3c).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginGetConfigParams {
     /// Id del plugin cuyo esquema `[config]` se consulta.
@@ -1448,6 +1522,7 @@ pub struct PluginGetConfigParams {
 /// assert!(k.min.is_none());
 /// assert!(k.values.is_empty());
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginConfigKeyWire {
     /// Nombre de la clave (charset `[a-z0-9-]{1,32}` del manifiesto, seguro
@@ -1485,6 +1560,7 @@ pub struct PluginConfigKeyWire {
 /// `PluginInfo::commands`: orden de manifiesto, no reordenado). `id`
 /// desconocido responde `keys: []` — nunca un error (mismo criterio
 /// indulgente que `PLUGIN_LIST` con un catálogo vacío).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginGetConfigResult {
     /// Una entrada por clave `[config.<key>]` declarada.
@@ -1495,6 +1571,7 @@ pub struct PluginGetConfigResult {
 /// `String` (la codificación canónica descrita en
 /// [`PluginConfigKeyWire::value`]) — el daemon la valida contra el ESQUEMA
 /// de `key` antes de persistir; nunca se persiste sin validar (spec S2).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginSetConfigParams {
     /// Id del plugin cuyo ajuste se cambia.
@@ -1507,5 +1584,6 @@ pub struct PluginSetConfigParams {
 }
 
 /// Result de [`PLUGIN_SET_CONFIG`]: objeto vacío, reservado para extensión.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginSetConfigResult {}

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 /// let r: ByteRange = serde_json::from_str(r#"{"offset": 65536, "len": null}"#).unwrap();
 /// assert_eq!(r, ByteRange { offset: 65536, len: None });
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ByteRange {
     /// Primer byte a leer (0 = principio).
@@ -35,6 +36,7 @@ pub struct ByteRange {
 /// assert_eq!(p, CollisionPolicy::RenameAuto);
 /// assert_eq!(CollisionPolicy::default(), CollisionPolicy::Fail);
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CollisionPolicy {
@@ -68,6 +70,7 @@ pub enum CollisionPolicy {
 /// assert_eq!(p, SymlinkPolicy::Preserve);
 /// assert_eq!(SymlinkPolicy::default(), SymlinkPolicy::Preserve);
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SymlinkPolicy {
@@ -89,6 +92,7 @@ pub enum SymlinkPolicy {
 /// let p: ResumePolicy = serde_json::from_str(r#""on""#).unwrap();
 /// assert_eq!(p, ResumePolicy::On);
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResumePolicy {
@@ -111,6 +115,7 @@ pub enum ResumePolicy {
 /// let v: VerifyPolicy = serde_json::from_str(r#""hash""#).unwrap();
 /// assert_eq!(v, VerifyPolicy::Hash);
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VerifyPolicy {
@@ -138,6 +143,7 @@ pub enum VerifyPolicy {
 /// let m: DeleteMode = serde_json::from_str(r#""permanent""#).unwrap();
 /// assert_eq!(m, DeleteMode::Permanent);
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeleteMode {

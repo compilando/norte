@@ -69,6 +69,24 @@ impl<'de> Deserialize<'de> for CapabilityFlags {
     }
 }
 
+// `CapabilityFlags` serializes as a `A | B` string (ADR 0004), so its JSON
+// Schema is a string — the bitflags serde is hand-written and cannot derive.
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for CapabilityFlags {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "CapabilityFlags".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "Capability flags as a `NAME | NAME` string \
+                            (e.g. `RENAME_ATOMIC | CASE_SENSITIVE`). Unknown \
+                            well-formed names are ignored for forward-compat.",
+        })
+    }
+}
+
 /// Parser del wire de flags con la política del ADR 0004: nombres conocidos
 /// se acumulan, nombres desconocidos bien formados se ignoran (forward-compat),
 /// hex y tokens malformados son error (`bitflags::parser::from_str` retendría
@@ -111,6 +129,7 @@ fn parse_flags(s: &str) -> Result<CapabilityFlags, &'static str> {
 /// };
 /// assert!(c.flags.contains(CapabilityFlags::RENAME_ATOMIC));
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Capabilities {
     /// Flags de capacidad.

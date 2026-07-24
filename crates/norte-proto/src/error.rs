@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 /// let futuro: ConflictKind = serde_json::from_str(r#""subtipo_del_futuro""#).unwrap();
 /// assert_eq!(futuro, ConflictKind::Unknown);
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -66,6 +67,7 @@ impl fmt::Display for ConflictKind {
 /// let futuro: Error = serde_json::from_str(r#"{"kind": "quota_del_futuro"}"#).unwrap();
 /// assert_eq!(futuro, Error::Unknown);
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]

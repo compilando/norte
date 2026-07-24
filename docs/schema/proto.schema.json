@@ -1,0 +1,2850 @@
+{
+  "$defs": {
+    "ByteRange": {
+      "description": "Rango de bytes de una lectura: `offset` inicial y longitud opcional\n(`None` = hasta EOF). Lo exigen el resume de M2 (`.norte-partial` +\noffset) y el viewer (lectura parcial de archivos grandes).\n\n```\nuse norte_proto::ByteRange;\nlet r: ByteRange = serde_json::from_str(r#\"{\"offset\": 65536, \"len\": null}\"#).unwrap();\nassert_eq!(r, ByteRange { offset: 65536, len: None });\n```",
+      "properties": {
+        "len": {
+          "description": "Cuántos bytes leer; `None` = hasta el final del archivo.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "offset": {
+          "description": "Primer byte a leer (0 = principio).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "offset"
+      ],
+      "type": "object"
+    },
+    "Capabilities": {
+      "description": "Capacidades declaradas por un provider.\n\n```\nuse norte_proto::{Capabilities, CapabilityFlags};\nlet c = Capabilities {\n    flags: CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::CASE_SENSITIVE,\n    max_path: Some(4096),\n};\nassert!(c.flags.contains(CapabilityFlags::RENAME_ATOMIC));\n```",
+      "properties": {
+        "flags": {
+          "$ref": "#/$defs/CapabilityFlags",
+          "description": "Flags de capacidad."
+        },
+        "max_path": {
+          "default": null,
+          "description": "Longitud máxima de path nativo en bytes; `None` = sin límite conocido.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "flags"
+      ],
+      "type": "object"
+    },
+    "CapabilityFlags": {
+      "description": "Capability flags as a `NAME | NAME` string (e.g. `RENAME_ATOMIC | CASE_SENSITIVE`). Unknown well-formed names are ignored for forward-compat.",
+      "type": "string"
+    },
+    "ClientInfo": {
+      "description": "Identidad de un cliente (va en [`InitializeParams`]).",
+      "properties": {
+        "name": {
+          "description": "Nombre del frontend (`norte-tui`, `norte-cli`, un tercero…).",
+          "type": "string"
+        },
+        "version": {
+          "description": "Versión del frontend (informativa, jamás se compara).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "type": "object"
+    },
+    "CollisionPolicy": {
+      "description": "Qué hacer cuando el destino de una copia/movimiento ya existe\n(spec §5; semánticas exactas en ADR 0005).\n\nEl engine de M1 trata [`Ask`](Self::Ask) como [`Fail`](Self::Fail): la\nresolución interactiva por archivo llega con los diálogos del TUI\n(fase 5). Un core viejo que no conozca una política nueva DEBE fallar el\nrequest, jamás adivinar.\n\n```\nuse norte_proto::CollisionPolicy;\nlet p: CollisionPolicy = serde_json::from_str(r#\"\"rename_auto\"\"#).unwrap();\nassert_eq!(p, CollisionPolicy::RenameAuto);\nassert_eq!(CollisionPolicy::default(), CollisionPolicy::Fail);\n```",
+      "oneOf": [
+        {
+          "const": "fail",
+          "description": "La colisión es error: `Conflict` y la task falla (default).",
+          "type": "string"
+        },
+        {
+          "const": "ask",
+          "description": "Preguntar por archivo (TUI, fase 5). El engine M1 lo trata como\n[`Fail`](Self::Fail).",
+          "type": "string"
+        },
+        {
+          "const": "skip",
+          "description": "No copiar la entrada en conflicto; la task termina `Completed`.",
+          "type": "string"
+        },
+        {
+          "const": "overwrite",
+          "description": "Reemplazar el destino (remove + write, dos mutaciones en el journal;\ntipo contra tipo distinto sigue siendo `Conflict`).",
+          "type": "string"
+        },
+        {
+          "const": "rename_auto",
+          "description": "Buscar nombre libre: sufijo ` (n)` antes de la última extensión,\nn = 1..=1000; agotado → `Conflict`.",
+          "type": "string"
+        },
+        {
+          "const": "newer",
+          "description": "Reemplazar solo si el origen es más nuevo (`mtime`); si no, saltar.\nSin mtime comparable en cualquiera de los dos → `Conflict`.",
+          "type": "string"
+        }
+      ]
+    },
+    "ConflictKind": {
+      "description": "Subtipo de conflicto en el destino de una operación.\nTolerancia N/N-1 (patrón de ADR 0004; el fallback lo introduce ADR\n0005): un subtipo desconocido deserializa a [`ConflictKind::Unknown`] —\nel cliente viejo degrada a \"conflicto genérico\", no revienta.\n\n```\nuse norte_proto::ConflictKind;\nlet futuro: ConflictKind = serde_json::from_str(r#\"\"subtipo_del_futuro\"\"#).unwrap();\nassert_eq!(futuro, ConflictKind::Unknown);\n```",
+      "oneOf": [
+        {
+          "const": "exists",
+          "description": "El destino ya existe.",
+          "type": "string"
+        },
+        {
+          "const": "case_collision",
+          "description": "Colisión solo-por-caja en FS case-insensitive (evaluada contra el\nFS DESTINO, no el origen).",
+          "type": "string"
+        },
+        {
+          "const": "normalization",
+          "description": "Colisión solo-por-normalización Unicode: los bytes difieren pero la\nforma NFC coincide (macOS almacena NFD; issue #8, ADR 0005).",
+          "type": "string"
+        },
+        {
+          "const": "type_mismatch",
+          "description": "El destino existe con otro tipo (dir donde va un archivo o viceversa).",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Subtipo de un protocolo más nuevo (fallback de deserialización).\nEl core JAMÁS lo emite.",
+          "type": "string"
+        }
+      ]
+    },
+    "ConnectionDegraded": {
+      "description": "Notificación [`CONNECTION_DEGRADED`] (server→client): una sesión remota se\nestableció con seguridad degradada. Las rutas/host van REDACTADOS (rule 10):\n`host` jamás lleva userinfo.",
+      "properties": {
+        "detail": {
+          "description": "Detalle humano opcional (presentación, jamás contrato).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "host": {
+          "description": "Host de la sesión, SIN userinfo (rule 10).",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Causa, vocabulario CERRADO comparable por igualdad (como\n`PolicyDenied.rule`). Valores actuales: `\"tls-auth-rejected\"` (el servidor\nrechazó `AUTH TLS` bajo `tls=\"allow\"`; la sesión viaja en claro) y\n`\"ftp-plaintext\"` (FTP-por-plugin, ADR 0033: FTPS es deuda, la sesión es\nSIEMPRE en claro). El conjunto puede CRECER de forma aditiva: un consumidor\nque reciba un `reason` DESCONOCIDO debe degradar con gracia (mensaje\ngenérico de \"sesión degradada\" apoyándose en `detail`), jamás rechazar la\nnotif.",
+          "type": "string"
+        },
+        "scheme": {
+          "description": "Scheme de la sesión (p. ej. `\"ftp\"`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scheme",
+        "host",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ConnectionTrustHostKeyParams": {
+      "description": "Params de [`CONNECTION_TRUST_HOST_KEY`] (flujo TOFU, ADR 0015 D). Lleva el\nfingerprint que el usuario VERIFICÓ; el core lo compara con la clave que\nvuelve a presentar el servidor al reintentar, y solo registra si coincide.",
+      "properties": {
+        "algo": {
+          "description": "Algoritmo de la clave (p. ej. `ssh-ed25519`).",
+          "type": "string"
+        },
+        "fingerprint": {
+          "description": "Fingerprint en formato OpenSSH `SHA256:<base64>` que el usuario\nconfirmó (la misma cadena que trae el `Error::HostKeyUnknown`).",
+          "type": "string"
+        },
+        "host": {
+          "description": "Host al que se conecta (`host`; el puerto aparte).",
+          "type": "string"
+        },
+        "port": {
+          "default": null,
+          "description": "Puerto (ausente = default del scheme).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "host",
+        "algo",
+        "fingerprint"
+      ],
+      "type": "object"
+    },
+    "ConnectionTrustHostKeyResult": {
+      "description": "Result de [`CONNECTION_TRUST_HOST_KEY`].",
+      "properties": {
+        "trusted": {
+          "description": "`true` si la clave quedó registrada (idempotente: `true` también si ya\nestaba). `false` reservado para un futuro rechazo por política.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "trusted"
+      ],
+      "type": "object"
+    },
+    "DaemonShutdownParams": {
+      "description": "Params de [`DAEMON_SHUTDOWN`].",
+      "properties": {
+        "graceful": {
+          "default": true,
+          "description": "`true` (default): terminar las tasks vivas antes de salir.\n`false`: cancelarlas primero (estado limpio garantizado igual).",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "DaemonShutdownResult": {
+      "description": "Result de [`DAEMON_SHUTDOWN`]: objeto vacío, reservado para extensión.",
+      "type": "object"
+    },
+    "DecorationWire": {
+      "description": "Una decoración tipo git-status de UNA entrada (elemento de\n[`PluginDecorations::decorations`], 0.27.0, G3, ADR 0037). `badge` es\ntexto del plugin — NO confiable, ≤8 chars TRAS enmascarar (tope del\nwire, ADR 0037); un frontend debe enmascarar (y truncar de nuevo) antes\nde confiar en el tope ya aplicado por el server — defensa en\nprofundidad. `role` sigue la misma validación host-side que\n[`SpanWire::role`].",
+      "properties": {
+        "badge": {
+          "description": "Badge corto (p. ej. `\"M\"`, `\"++\"`). Ausente = sin badge para esta\nentrada de este plugin.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "description": "Nombre de rol de `norte_theme::Role` para pintar el badge.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DeleteMode": {
+      "description": "Cómo borrar (ADR 0009). El default del WIRE es el seguro:\n[`Trash`](Self::Trash). El engine JAMÁS degrada solo — pedir `Trash`\nsin capability `TRASH` es `Unsupported` y el frontend decide con el\nusuario informado.\n\nSKEW: un core anterior a 0.3 IGNORA `mode` (tolerancia de structs,\nADR 0004) y borra PERMANENTE — condiciona `Trash` a la capability\n`TRASH` (que un core viejo jamás anuncia), NUNCA a tu versión.\n\n```\nuse norte_proto::DeleteMode;\nassert_eq!(DeleteMode::default(), DeleteMode::Trash);\nlet m: DeleteMode = serde_json::from_str(r#\"\"permanent\"\"#).unwrap();\nassert_eq!(m, DeleteMode::Permanent);\n```",
+      "oneOf": [
+        {
+          "const": "trash",
+          "description": "A la papelera del provider (recuperable).",
+          "type": "string"
+        },
+        {
+          "const": "permanent",
+          "description": "Borrado permanente (elección EXPLÍCITA).",
+          "type": "string"
+        }
+      ]
+    },
+    "Entry": {
+      "description": "Metadatos de un nodo del VFS.\n\nCampos opcionales `None` = \"el provider no lo sabe\", nunca un 0 fingido.\n\n```\nuse norte_proto::{Entry, EntryKind, VPath};\nlet e = Entry {\n    path: VPath::parse(\"file:///a.txt\").unwrap(),\n    kind: EntryKind::File,\n    size: Some(42),\n    mtime_ms: None,\n};\nlet json = serde_json::to_string(&e).unwrap();\nassert_eq!(serde_json::from_str::<Entry>(&json).unwrap(), e);\n```",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/EntryKind",
+          "description": "Clase del nodo."
+        },
+        "mtime_ms": {
+          "default": null,
+          "description": "Última modificación en milisegundos desde epoch UTC; `i64` porque las\nfechas pre-1970 existen en FS reales. `None` = desconocida.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/VPath",
+          "description": "Path completo del nodo (los frontends operan con él, no con el nombre)."
+        },
+        "size": {
+          "default": null,
+          "description": "Tamaño en bytes; `None` si el provider no lo conoce (p. ej. directorios).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "EntryKind": {
+      "description": "Clase de un nodo del VFS.\n\nLos valores desconocidos (protocolo N+1) deserializan a [`EntryKind::Other`]:\nun cliente viejo degrada, no revienta.\n\n```\nuse norte_proto::EntryKind;\nlet k: EntryKind = serde_json::from_str(\"\\\"kind_del_futuro\\\"\").unwrap();\nassert_eq!(k, EntryKind::Other);\n```",
+      "oneOf": [
+        {
+          "const": "file",
+          "description": "Archivo regular.",
+          "type": "string"
+        },
+        {
+          "const": "dir",
+          "description": "Directorio.",
+          "type": "string"
+        },
+        {
+          "const": "symlink",
+          "description": "Symlink (M0: jamás se sigue; se preserva o `Unsupported`).",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Cualquier otra cosa (device, socket, fifo, o kind de protocolo futuro).",
+          "type": "string"
+        }
+      ]
+    },
+    "Error": {
+      "description": "Error del protocolo norte (spec §17.7).\n\nWire: objeto tagged `{\"kind\": \"...\", …campos}`. La variante es la API:\nlos frontends hacen match por categoría y el detalle humano viaja aparte\n(campo `message` del error JSON-RPC), nunca dentro de esta taxonomía.\n\nTolerancia N/N-1 (ADR 0004): una categoría desconocida deserializa a\n[`Error::Unknown`] — el cliente viejo degrada a \"error genérico\", no\nrevienta. `#[non_exhaustive]` obliga además al brazo `_` en Rust.\n\n```\nuse norte_proto::Error;\nlet e: Error = serde_json::from_str(r#\"{\"kind\": \"not_found\"}\"#).unwrap();\nassert_eq!(e, Error::NotFound);\nlet futuro: Error = serde_json::from_str(r#\"{\"kind\": \"quota_del_futuro\"}\"#).unwrap();\nassert_eq!(futuro, Error::Unknown);\n```",
+      "oneOf": [
+        {
+          "description": "El path no existe.",
+          "properties": {
+            "kind": {
+              "const": "not_found",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "El provider/OS denegó el acceso.",
+          "properties": {
+            "kind": {
+              "const": "permission_denied",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Conflicto en el destino; la operación NO escribió nada.",
+          "properties": {
+            "conflict": {
+              "$ref": "#/$defs/ConflictKind",
+              "description": "Subtipo del conflicto."
+            },
+            "kind": {
+              "const": "conflict",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "conflict"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "El provider no responde (red caída, daemon remoto muerto…).",
+          "properties": {
+            "kind": {
+              "const": "provider_unavailable",
+              "type": "string"
+            },
+            "retryable": {
+              "description": "`true` si reintentar con backoff tiene sentido.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Sin espacio o cuota en el destino (ENOSPC/EDQUOT) — el fallo de copia\nmás común tras permisos; merece render propio, no un cajón genérico.",
+          "properties": {
+            "kind": {
+              "const": "no_space",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "I/O falló a mitad de operación (EIO, reset de conexión…): el provider\nresponde, pero esta operación concreta murió.",
+          "properties": {
+            "kind": {
+              "const": "io",
+              "type": "string"
+            },
+            "retryable": {
+              "description": "`true` si repetir la operación puede funcionar.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Cancelado por el usuario o por shutdown; estado limpio garantizado.",
+          "properties": {
+            "kind": {
+              "const": "cancelled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "El policy engine denegó la operación (agentes/plugins, M3-3).",
+          "properties": {
+            "kind": {
+              "const": "policy_denied",
+              "type": "string"
+            },
+            "rule": {
+              "description": "Categoría GRUESA de la causa de denegación — NO el identificador de\nla regla concreta de `policy.toml` (que no se filtra, por\nseguridad). Vocabulario cerrado, comparable por igualdad:\n`\"out-of-scope\"` (ruta/op fuera del scope del agente),\n`\"scope-expired\"` (el scope aplicable venció),\n`\"policy-rule\"` (una regla `deny` de `policy.toml` hizo match),\n`\"no-rule\"` (fail-closed: dentro del scope pero sin regla que\naplique), `\"not-approved\"` (un `ask` fue denegado o su TTL venció).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "rule"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Una transcodificación habría perdido datos y se abortó.",
+          "properties": {
+            "kind": {
+              "const": "encoding_loss",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "La operación no está soportada por este provider (ver `Capabilities`).",
+          "properties": {
+            "kind": {
+              "const": "unsupported",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "El `VPath` recibido no parsea o viola invariantes.",
+          "properties": {
+            "kind": {
+              "const": "invalid_path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Error interno del core; `panic: true` = task supervisada que reventó\n(el daemon sigue vivo, spec §17.7).",
+          "properties": {
+            "kind": {
+              "const": "internal",
+              "type": "string"
+            },
+            "panic": {
+              "description": "`true` si el origen fue un panic capturado en una task.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "panic"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Ciclo de symlinks detectado al recorrer con `Follow` (visited set\nde la spec §17.9; issue #31). Un cliente N-1 degrada a `Unknown`.",
+          "properties": {
+            "kind": {
+              "const": "loop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Contenedor/formato ROTO (0.17.0, #58): un zip/tar corrupto, truncado\no estructuralmente mentiroso. No es un fallo de I/O (reintentar no\nayuda; un fallo del provider subyacente se propaga con su propia\ncategoría, jamás como `Corrupt`); la UX honesta es «no es un\ncontenedor válido». Desde 0.23.0 (#95) exceder los topes anti-bomba\nLOCALES ya no es `Corrupt`: es [`Error::LimitExceeded`] — el\ncontenedor puede ser perfectamente válido. Un cliente N-1 degrada a\n`Unknown`.",
+          "properties": {
+            "kind": {
+              "const": "corrupt",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "El contenedor excede un LÍMITE LOCAL anti-bomba del índice (0.23.0,\n#95, ADR 0018 D2). Distinto de [`Error::Corrupt`]: el contenedor\npuede ser VÁLIDO (un tar.gz legítimo enorme) — norte REHÚSA pagar su\ncoste con los límites vigentes, no lo declara roto. Un cliente N-1\ndegrada a `Unknown` (misma UX gruesa que el `Corrupt` de antes).",
+          "properties": {
+            "kind": {
+              "const": "limit_exceeded",
+              "type": "string"
+            },
+            "limit": {
+              "description": "QUÉ límite se excedió — vocabulario CERRADO, comparable por\nigualdad (nunca el valor numérico, que es configuración local):\n[`Error::LIMIT_ENTRIES`] (entradas del índice — o anunciadas por\nel EOCD — por encima de `max_entries`, presupuesto de omitidas\nincluido), [`Error::LIMIT_DECOMPRESSED_BYTES`] (inflado\nacumulado por encima de `max_decompressed_bytes`) o\n[`Error::LIMIT_NESTING`] (capas de archivo anidadas por encima\nde `max_nesting`, #56/proto 0.24). Los emisores usan las\nconstantes, jamás literales sueltos (fuente única, pin en\ntests). Forward-compat: un token DESCONOCIDO (peer más nuevo)\nse trata como límite genérico — mostrar el string tal cual,\njamás fallar el parse ni adivinar.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "limit"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Host key SSH DESCONOCIDA en el primer contacto (TOFU — ADR 0015 D). El\nfrontend muestra el `fingerprint` y, si el usuario confía, llama a\n`connection.trust_host_key` y reintenta. Un cliente N-1 degrada a\n`Unknown` (0.7.0, fase 6).",
+          "properties": {
+            "algo": {
+              "description": "Algoritmo de la clave (p. ej. `ssh-ed25519`).",
+              "type": "string"
+            },
+            "fingerprint": {
+              "description": "Fingerprint en formato OpenSSH `SHA256:<base64>` — la MISMA cadena\nque core y frontend comparan y que va en `trust_host_key`.",
+              "type": "string"
+            },
+            "host": {
+              "description": "Host DESNUDO al que se conecta (sin puerto; el puerto va aparte\npara que el mapeo error→`connection.trust_host_key` sea 1:1).",
+              "type": "string"
+            },
+            "kind": {
+              "const": "host_key_unknown",
+              "type": "string"
+            },
+            "port": {
+              "default": null,
+              "description": "Puerto (ausente = default del scheme).",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "host",
+            "algo",
+            "fingerprint"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "La host key SSH CAMBIÓ respecto a la registrada en `known_hosts`:\nposible MITM. JAMÁS se acepta en silencio (0.7.0, fase 6).",
+          "properties": {
+            "algo": {
+              "description": "Algoritmo de la clave presentada.",
+              "type": "string"
+            },
+            "fingerprint": {
+              "description": "Fingerprint OpenSSH `SHA256:<base64>` de la clave presentada.",
+              "type": "string"
+            },
+            "host": {
+              "description": "Host DESNUDO afectado (sin puerto).",
+              "type": "string"
+            },
+            "kind": {
+              "const": "host_key_mismatch",
+              "type": "string"
+            },
+            "port": {
+              "default": null,
+              "description": "Puerto (ausente = default del scheme).",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "host",
+            "algo",
+            "fingerprint"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Un `cursor` de paginación de `fs.list` ya no es válido: expiró (TTL),\nfue expulsado (LRU) o murió con la conexión (ADR 0017, 0.8.0). El\ncliente reinicia el listado desde cero. Un cliente N-1 (0.7.x) jamás la\nve — no envía cursores — pero degrada a `Unknown` si la recibiera.",
+          "properties": {
+            "kind": {
+              "const": "cursor_expired",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Categoría de un protocolo más nuevo (fallback de deserialización).\nEl core JAMÁS la emite; existe para que un cliente N degrade con\nelegancia ante categorías N+1.",
+          "properties": {
+            "kind": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "FsCapabilitiesParams": {
+      "description": "Params de [`FS_CAPABILITIES`].",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/VPath",
+          "description": "Un path del provider a consultar."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "FsCapabilitiesResult": {
+      "description": "Result de [`FS_CAPABILITIES`].",
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities",
+          "description": "Capabilities declaradas por el provider."
+        }
+      },
+      "required": [
+        "capabilities"
+      ],
+      "type": "object"
+    },
+    "FsCopyParams": {
+      "description": "Params de [`FS_COPY`].",
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/VPath",
+          "description": "Origen (archivo o directorio)."
+        },
+        "on_collision": {
+          "$ref": "#/$defs/CollisionPolicy",
+          "default": "fail",
+          "description": "Qué hacer si el destino existe. `#[serde(default)]`: un cliente N-1\nque no lo envía obtiene `Fail` (el comportamiento de siempre)."
+        },
+        "resume": {
+          "$ref": "#/$defs/ResumePolicy",
+          "default": "off",
+          "description": "Reanudación (ADR 0012); default `Off` = contrato de M1."
+        },
+        "symlinks": {
+          "$ref": "#/$defs/SymlinkPolicy",
+          "default": "preserve",
+          "description": "Qué hacer con los symlinks del origen (default `Preserve`)."
+        },
+        "to": {
+          "$ref": "#/$defs/VPath",
+          "description": "Destino EXACTO (con `RenameAuto` el core deriva el nombre libre;\ncon el resto de políticas jamás inventa nombres)."
+        },
+        "verify": {
+          "$ref": "#/$defs/VerifyPolicy",
+          "default": "length",
+          "description": "Verificación del parcial al reanudar; default `Length`."
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "FsDeleteParams": {
+      "description": "Params de [`FS_DELETE`].",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/DeleteMode",
+          "default": "trash",
+          "description": "Papelera o permanente. `#[serde(default)]` = Trash: el default del\nwire es el SEGURO (ADR 0009)."
+        },
+        "path": {
+          "$ref": "#/$defs/VPath",
+          "description": "Nodo a borrar (recursivo si es dir)."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "FsListParams": {
+      "description": "Params de [`FS_LIST`] (paginación por cursor desde 0.8.0, ADR 0017).",
+      "properties": {
+        "cursor": {
+          "default": null,
+          "description": "Cursor OPACO de la página siguiente (el `next_cursor` de la respuesta\nprevia). `None` = abre un listado nuevo. Jamás se parsea; desconocido\no expirado → [`Error::CursorExpired`](crate::Error::CursorExpired).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": null,
+          "description": "Máximo de entradas de ESTA página. `None` (o ausente) = sin límite\n(drena el resto). Recortado a [`FS_LIST_MAX_PAGE`]; `Some(0)` es error\n(`-32602`, evita páginas vacías en bucle). Un cliente 0.7 no lo envía.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/VPath",
+          "description": "Directorio a listar. OBLIGATORIO también al continuar (valida que el\n`cursor` corresponde a ESTE listado)."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "FsListResult": {
+      "description": "Result de [`FS_LIST`].\n\nCláusula de compatibilidad (ADR 0004/0017): sin `cursor` NI `limit`, el\ncore DEVUELVE el listado COMPLETO con `next_cursor: null` — un cliente\n0.7 (N-1) recibe exactamente lo de antes, jamás un truncado en silencio.",
+      "properties": {
+        "entries": {
+          "description": "Entradas de ESTA página (orden: el del provider, sin garantía).",
+          "items": {
+            "$ref": "#/$defs/Entry"
+          },
+          "type": "array"
+        },
+        "next_cursor": {
+          "default": null,
+          "description": "Cursor de la página siguiente, o `None` si el listado terminó. Un\ncliente 0.7 lo ignora (campo desconocido para él).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skipped": {
+          "description": "Entradas del CONTENEDOR omitidas de TODO su índice (#93, desde\n0.22.0): nombres hostiles/límites anti-bomba de un provider archive\n(ADR 0018 C2). Es un total POR CONTENEDOR, no por página ni por\ndirectorio (las omitidas no tienen ruta representable donde\natribuirse): cada página del listado repite el mismo valor. Ausente\n(`None`) = no aplica o desconocido; los clientes solo deben\nseñalizarlo cuando es `Some(n)` con `n > 0`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "type": "object"
+    },
+    "FsMoveParams": {
+      "description": "Params de [`FS_MOVE`].",
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/VPath",
+          "description": "Origen."
+        },
+        "on_collision": {
+          "$ref": "#/$defs/CollisionPolicy",
+          "default": "fail",
+          "description": "Qué hacer si el destino existe (ver [`FsCopyParams::on_collision`])."
+        },
+        "resume": {
+          "$ref": "#/$defs/ResumePolicy",
+          "default": "off",
+          "description": "Reanudación del camino copy+delete (ADR 0012); default `Off`."
+        },
+        "symlinks": {
+          "$ref": "#/$defs/SymlinkPolicy",
+          "default": "preserve",
+          "description": "Qué hacer con los symlinks (solo aplica al camino copy+delete; el\nrename same-provider mueve el link tal cual)."
+        },
+        "to": {
+          "$ref": "#/$defs/VPath",
+          "description": "Destino exacto (ver [`FsCopyParams::to`])."
+        },
+        "verify": {
+          "$ref": "#/$defs/VerifyPolicy",
+          "default": "length",
+          "description": "Verificación del parcial al reanudar; default `Length`."
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "FsReadParams": {
+      "description": "Params de [`FS_READ`].\n\n```\nuse norte_proto::methods::FsReadParams;\nuse norte_proto::VPath;\nlet p = FsReadParams { path: VPath::parse(\"file:///x\").unwrap(), range: None };\n// El emisor canónico escribe `range: null` explícito (ADR 0004).\nassert!(serde_json::to_string(&p).unwrap().contains(r#\"\"range\":null\"#));\n```",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/VPath",
+          "description": "Archivo a leer."
+        },
+        "range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ByteRange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tramo pedido; ausente/`null` = desde 0, tope del server."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "FsReadResult": {
+      "description": "Result de [`FS_READ`].\n\n```\nuse norte_proto::methods::FsReadResult;\nlet r: FsReadResult = serde_json::from_str(r#\"{\"content_b64\":\"aGk=\",\"eof\":true}\"#).unwrap();\nassert!(r.eof);\n```",
+      "properties": {
+        "content_b64": {
+          "description": "Bytes del tramo, en base64 estándar (los bytes de un archivo no\nson texto: JSON no puede llevarlos crudos).",
+          "type": "string"
+        },
+        "eof": {
+          "description": "`true` si el tramo termina EN el fin del archivo.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "content_b64",
+        "eof"
+      ],
+      "type": "object"
+    },
+    "FsSearchParams": {
+      "description": "Params de [`FS_SEARCH`].",
+      "properties": {
+        "case_sensitive": {
+          "default": false,
+          "description": "Sensible a mayúsculas (default false; el matching de nombre es\nsobre el lossy en NFC — misma disciplina que el quick search).",
+          "type": "boolean"
+        },
+        "content": {
+          "description": "Texto literal a buscar en el CONTENIDO (multi-encoding: la aguja se\ntranscodifica, el pajar jamás se decodifica entero).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "content_regex": {
+          "description": "Regex sobre el contenido (solo ficheros que el detector dé como\ntexto). Excluyente con `content`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_hits": {
+          "description": "Tope de hits: alcanzado, la Task completa (`Completed`, no `Failed`).\nNo hay flag `truncated` en el wire — el cliente infiere la\ntruncación comparando el total de hits recibidos contra `max_hits`\n(== implica truncada).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name_glob": {
+          "description": "Glob sobre el NOMBRE (último segmento), p.ej. `*.rs`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name_regex": {
+          "description": "Regex sobre el nombre. Excluyente con `name_glob`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root": {
+          "$ref": "#/$defs/VPath",
+          "description": "Raíz del walk (subtree entero)."
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "FsStatParams": {
+      "description": "Params de [`FS_STAT`].",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/VPath",
+          "description": "Nodo a consultar."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "FsStatResult": {
+      "description": "Result de [`FS_STAT`].",
+      "properties": {
+        "entry": {
+          "$ref": "#/$defs/Entry",
+          "description": "Metadatos del nodo."
+        }
+      },
+      "required": [
+        "entry"
+      ],
+      "type": "object"
+    },
+    "FsTaskResult": {
+      "description": "Result de [`FS_COPY`], [`FS_MOVE`] y [`FS_DELETE`]: la Task creada.\nEl progreso llega por [`TASK_PROGRESS`].",
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "Id de la Task encolada."
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "GrantScopeParams": {
+      "description": "Params de [`POLICY_GRANT_SCOPE`] (un humano concede una petición pendiente).",
+      "properties": {
+        "request_id": {
+          "description": "Id devuelto por `policy.request_scope`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "request_id"
+      ],
+      "type": "object"
+    },
+    "GrantScopeResult": {
+      "description": "Result de [`POLICY_GRANT_SCOPE`].",
+      "type": "object"
+    },
+    "IndexBuildParams": {
+      "description": "Params de [`INDEX_BUILD`] (M4): raíz a indexar.",
+      "properties": {
+        "root": {
+          "$ref": "#/$defs/VPath",
+          "description": "Raíz del subárbol a (re)indexar."
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "IndexBuildResult": {
+      "description": "Resultado de [`INDEX_BUILD`] al completar la Task (M4).",
+      "properties": {
+        "indexed": {
+          "description": "Entradas indexadas (insertadas o actualizadas).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "removed": {
+          "description": "Filas barridas (paths que ya no existían).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "indexed",
+        "removed"
+      ],
+      "type": "object"
+    },
+    "IndexHit": {
+      "description": "Un hit de [`INDEX_QUERY`] (M4). `path` en bytes crudos vía [`VPath`].",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/EntryKind",
+          "description": "Tipo de entrada."
+        },
+        "mtime_ms": {
+          "description": "mtime en ms desde epoch (`None` si desconocido).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/VPath",
+          "description": "Path completo del resultado."
+        },
+        "size": {
+          "description": "Tamaño (`None` para dirs).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "IndexQueryParams": {
+      "description": "Params de [`INDEX_QUERY`] (M4).",
+      "properties": {
+        "limit": {
+          "description": "Tope de resultados.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "root": {
+          "$ref": "#/$defs/VPath",
+          "description": "Raíz cuyo índice se consulta."
+        },
+        "text": {
+          "description": "Texto libre del usuario (se sanea a una query FTS5 en el core).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root",
+        "text",
+        "limit"
+      ],
+      "type": "object"
+    },
+    "IndexQueryResult": {
+      "description": "Resultado de [`INDEX_QUERY`] (M4): hits ordenados por relevancia.",
+      "properties": {
+        "hits": {
+          "description": "Hits (bm25, más relevante primero).",
+          "items": {
+            "$ref": "#/$defs/IndexHit"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "hits"
+      ],
+      "type": "object"
+    },
+    "InitializeParams": {
+      "description": "Params de [`INITIALIZE`].",
+      "properties": {
+        "agent_session": {
+          "description": "Si presente, la conexión actúa como SESIÓN DE AGENTE con este id: sus\nmutaciones se evalúan por el policy engine (M3-3). Ausente = frontend\nhumano (`User`, sin sandbox). El servidor liga el actor a la conexión;\nun cliente no puede declararse `User` por otra vía.\n\nEl id se valida server-side fail-closed: 1..=64 chars de\n`[A-Za-z0-9._-]`, si no `INVALID_PARAMS` — viaja a journal, logs y\nmodales de aprobación de los frontends, jamás debe ser un vector de\ninyección (controles/bidi) elegido por el agente.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_info": {
+          "$ref": "#/$defs/ClientInfo",
+          "description": "Quién se conecta."
+        },
+        "encodings": {
+          "default": [],
+          "description": "Encodings que el cliente sabe hablar, por preferencia. Vacío o\nausente = `[\"json\"]` implícito (el único de M2, decisión 4 del\nkickoff: negociado-pero-solo-JSON).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "protocol_version": {
+          "description": "Versión del protocolo del cliente; incompatible = error y cierre.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "client_info",
+        "protocol_version"
+      ],
+      "type": "object"
+    },
+    "InitializeResult": {
+      "description": "Result de [`INITIALIZE`].",
+      "properties": {
+        "encodings": {
+          "description": "Encodings aceptados (hoy siempre `[\"json\"]`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "protocol_version": {
+          "description": "Versión del protocolo del core.",
+          "type": "string"
+        },
+        "server_info": {
+          "$ref": "#/$defs/ServerInfo",
+          "description": "Quién responde."
+        }
+      },
+      "required": [
+        "server_info",
+        "protocol_version",
+        "encodings"
+      ],
+      "type": "object"
+    },
+    "MatchInfo": {
+      "description": "Contexto de UN match de contenido.",
+      "properties": {
+        "line": {
+          "description": "Línea (1-based) del primer match, si se computó.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "preview": {
+          "description": "La línea del match decodificada lossy y saneada EN ORIGEN\n(controles/bidi/invisibles enmascarados a `U+FFFD`, luego recorte a un\ntope fijo de chars). El consumidor puede pintarla directa —jamás llegan\nANSI ni overrides bidi crudos por wire— aunque el TUI sigue pasándola\npor `detail_for_bar` como cinturón.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "PendingApproval": {
+      "description": "Una aprobación pendiente (elemento de [`PolicyPendingResult`]).",
+      "properties": {
+        "approval_id": {
+          "description": "Id para responder con `policy.decide`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "op": {
+          "description": "Op-kind.",
+          "type": "string"
+        },
+        "paths": {
+          "description": "Rutas implicadas (wire, redactadas). SOLO display: jamás se reparsan a\nuna operación — la op real va ligada server-side por `approval_id`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "session": {
+          "description": "Sesión de agente que pidió la op (si aplica).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "approval_id",
+        "op",
+        "paths"
+      ],
+      "type": "object"
+    },
+    "PluginColumnInfo": {
+      "description": "Una columna que un plugin `columns` contribuye (elemento de\n[`PluginInfo::columns`], 0.28.0, G3c, ADR 0037): discovery — con QUÉ\n`column_id` llamar a [`PLUGIN_COLUMN_VALUES`] y QUÉ cabecera pintar, sin\nque el frontend tenga que adivinar por `category == \"columns\"`. `header`\nes texto del plugin — NO confiable, un frontend debe enmascararlo antes\nde renderizarlo (mismo trato que [`PluginCommandInfo::title`]).\n\n```\nuse norte_proto::methods::PluginColumnInfo;\nlet c: PluginColumnInfo =\n    serde_json::from_str(r#\"{\"id\":\"git-status\",\"header\":\"Git\"}\"#).unwrap();\nassert_eq!(c.id, \"git-status\");\nassert_eq!(c.header, \"Git\");\n```",
+      "properties": {
+        "header": {
+          "description": "Cabecera legible para mostrar. Texto del plugin — NO confiable.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Id de la columna (el mismo `column_id` que espera\n[`PLUGIN_COLUMN_VALUES`]).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "header"
+      ],
+      "type": "object"
+    },
+    "PluginColumnValuesParams": {
+      "description": "Params de [`PLUGIN_COLUMN_VALUES`]: el id de columna declarado por el\nplugin `columns` en su manifiesto, más las rutas visibles a valorar.",
+      "properties": {
+        "column_id": {
+          "description": "Id de la columna (declarado por el plugin; identifica QUÉ columna\nentre varias que un mismo plugin `columns` podría exponer).",
+          "type": "string"
+        },
+        "paths": {
+          "description": "Rutas a valorar, en el orden en que se listan.",
+          "items": {
+            "$ref": "#/$defs/VPath"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "column_id",
+        "paths"
+      ],
+      "type": "object"
+    },
+    "PluginColumnValuesResult": {
+      "description": "Result de [`PLUGIN_COLUMN_VALUES`]: `values` es POSICIONAL 1:1 con\n`PluginColumnValuesParams::paths` — el valor `i` es la celda de la ruta\n`i`. Cada celda es `Option<String>` (no `String`) por la MISMA razón que\n[`DecorationWire::badge`]: una columna que no aplica a esa entrada (p.\nej. \"duración\" sobre un archivo que no es media) necesita distinguirse\nde un valor real que resulta ser la cadena vacía — `None` = sin celda\npara esta entrada de esta columna, jamás se omite del vector posicional\n(protocol-guardian, ADR 0037). Texto del plugin — NO confiable, un\nfrontend debe enmascararlo antes de renderizarlo.",
+      "properties": {
+        "values": {
+          "description": "Valores de celda, uno por elemento de `paths` en el mismo orden;\n`None` = la columna no aplica a esa entrada.",
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "values"
+      ],
+      "type": "object"
+    },
+    "PluginCommandInfo": {
+      "description": "Un comando de plugin invocable (elemento de [`PluginInfo::commands`],\nP1): espejo minimal, solo-lectura, de la contribución `command` del\nmanifiesto (`CommandContrib` en `norte-plugin-host`) — lo que un\nfrontend necesita para listar el comando (paleta, gestor de\nextensiones), no para ejecutarlo. `title` es texto suministrado por el\nplugin: NO CONFIABLE, un frontend debe enmascararlo antes de\nrenderizarlo (mismo trato que `PluginInfo::name`).\n\n```\nuse norte_proto::methods::PluginCommandInfo;\nlet c: PluginCommandInfo =\n    serde_json::from_str(r#\"{\"id\":\"greet\",\"title\":\"Greet\"}\"#).unwrap();\nassert_eq!(c.id, \"greet\");\nassert_eq!(c.title, \"Greet\");\n```",
+      "properties": {
+        "id": {
+          "description": "Id del comando dentro del plugin (estable; se pasa junto al id del\nplugin a [`PLUGIN_RUN_COMMAND`]).",
+          "type": "string"
+        },
+        "title": {
+          "description": "Título legible para mostrar. Texto del plugin — NO confiable.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "type": "object"
+    },
+    "PluginConfigKeyWire": {
+      "description": "Una clave `[config.<key>]` del esquema de un plugin, esquema + valor\nEFECTIVO juntos (elemento de [`PluginGetConfigResult::keys`], 0.28.0,\nG3c, ADR 0037): mismo criterio \"schema+value together\" que evita una\nsegunda ida y vuelta al wire para pintar la UI de ajustes. `kind` es\ntexto CERRADO (`\"string\"|\"bool\"|\"int\"|\"enum\"` — los cuatro únicos que\n`norte_plugin_host::ConfigKeySpec` declara); un frontend que ve un valor\ndesconocido (peer más nuevo) debe tratarlo como no-editable, jamás\nreventar. `default`/`value` viajan como `String` SIEMPRE (la MISMA\ncodificación canónica que `norte_plugin_host::resolve_settings`: `bool`\n→ `\"true\"`/`\"false\"`, `int` → decimal), coherente con\n[`PluginSetConfigParams::value`], que también es `String`.\n\n```\nuse norte_proto::methods::PluginConfigKeyWire;\nlet k: PluginConfigKeyWire = serde_json::from_str(\n    r#\"{\"key\":\"greeting\",\"kind\":\"string\",\"default\":\"hola\",\"value\":\"hola\"}\"#,\n)\n.unwrap();\nassert_eq!(k.key, \"greeting\");\nassert_eq!(k.kind, \"string\");\nassert!(k.min.is_none());\nassert!(k.values.is_empty());\n```",
+      "properties": {
+        "default": {
+          "description": "Valor por defecto del esquema, codificado como string canónico.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Descripción cosmética del manifiesto. Texto del plugin — NO\nconfiable, un frontend debe enmascararla antes de renderizarla\n(mismo trato que `PluginInfo::description`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "Nombre de la clave (charset `[a-z0-9-]{1,32}` del manifiesto, seguro\nde mostrar tal cual — mismo criterio que\n`norte_plugin_host::is_valid_config_key`).",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Tipo declarado: `\"string\"`, `\"bool\"`, `\"int\"` o `\"enum\"`.",
+          "type": "string"
+        },
+        "max": {
+          "description": "Cota superior inclusive (solo `kind == \"int\"`). Ausente = sin cota.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min": {
+          "description": "Cota inferior inclusive (solo `kind == \"int\"`). Ausente = sin cota.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "Valor EFECTIVO actual (defaults de esquema + `config.toml` ya\nsuperpuesto), codificado como string canónico — la MISMA\ncodificación que `default`.",
+          "type": "string"
+        },
+        "values": {
+          "default": [],
+          "description": "Valores permitidos (solo `kind == \"enum\"`); vacío para el resto de\ntipos — SIEMPRE presente (mismo criterio aditivo que\n`PluginInfo::commands`), nunca omitido.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "key",
+        "kind",
+        "default",
+        "value"
+      ],
+      "type": "object"
+    },
+    "PluginDecorateParams": {
+      "description": "Params de [`PLUGIN_DECORATE`]: las entradas VISIBLES de la página actual\n(batched — el frontend no pide decoraciones entrada por entrada).",
+      "properties": {
+        "paths": {
+          "description": "Rutas a decorar, en el orden en que se listan.",
+          "items": {
+            "$ref": "#/$defs/VPath"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "paths"
+      ],
+      "type": "object"
+    },
+    "PluginDecorateResult": {
+      "description": "Result de [`PLUGIN_DECORATE`]: las decoraciones de cada plugin\n`decorator` aprobado y activado que respondió.",
+      "properties": {
+        "plugins": {
+          "description": "Un elemento por plugin `decorator` que decoró esta página.",
+          "items": {
+            "$ref": "#/$defs/PluginDecorations"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "plugins"
+      ],
+      "type": "object"
+    },
+    "PluginDecorations": {
+      "description": "Las decoraciones de UN plugin `decorator` (elemento de\n[`PluginDecorateResult::plugins`]): `decorations` es POSICIONAL 1:1 con\n`PluginDecorateParams::paths` — el elemento `i` decora la ruta `i`, jamás\nuna clave por path (barato en el wire, y un nombre hostil no puede\ncolisionar con otro como clave). Un plugin muerto o que falló\nsimplemente no aparece en `plugins` (sin decoraciones de ESE plugin; el\nresto de la página se pinta igual — mismo contrato de fallback que\n[`PLUGIN_PREVIEW`]).",
+      "properties": {
+        "decorations": {
+          "description": "Decoraciones, UNA por elemento de `paths` en el mismo orden (una\nentrada sin decoración de este plugin lleva\n`DecorationWire{badge:None,role:None}`, nunca se omite — el índice es\nel único enlace con la ruta).",
+          "items": {
+            "$ref": "#/$defs/DecorationWire"
+          },
+          "type": "array"
+        },
+        "plugin_id": {
+          "description": "Id del plugin `decorator` que produjo estas decoraciones.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plugin_id",
+        "decorations"
+      ],
+      "type": "object"
+    },
+    "PluginGetConfigParams": {
+      "description": "Params de [`PLUGIN_GET_CONFIG`] (0.28.0, G3c).",
+      "properties": {
+        "id": {
+          "description": "Id del plugin cuyo esquema `[config]` se consulta.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "PluginGetConfigResult": {
+      "description": "Result de [`PLUGIN_GET_CONFIG`]: el esquema completo + valores\nefectivos, EN ORDEN DE CLAVE del manifiesto (mismo criterio que\n`PluginInfo::commands`: orden de manifiesto, no reordenado). `id`\ndesconocido responde `keys: []` — nunca un error (mismo criterio\nindulgente que `PLUGIN_LIST` con un catálogo vacío).",
+      "properties": {
+        "keys": {
+          "description": "Una entrada por clave `[config.<key>]` declarada.",
+          "items": {
+            "$ref": "#/$defs/PluginConfigKeyWire"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "keys"
+      ],
+      "type": "object"
+    },
+    "PluginInfo": {
+      "description": "Un plugin descubierto (elemento de [`PluginListResult::plugins`], M4-P3).",
+      "properties": {
+        "approved": {
+          "description": "`true` si un humano ya aprobó sus capabilities.",
+          "type": "boolean"
+        },
+        "capabilities": {
+          "description": "Capabilities que el plugin solicita (p. ej. `fs-read`). Un humano las\naprueba con [`PLUGIN_SET_APPROVAL`] antes de que surtan efecto.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "category": {
+          "description": "Categoría (`previewer`, `indexer`…): qué papel juega en el core.",
+          "type": "string"
+        },
+        "columns": {
+          "default": [],
+          "description": "Columnas que el plugin contribuye (0.28.0, G3c); vacío si no\ncontribuye ninguna. Un peer N-1 que construye su propio `PluginInfo`\nno emite este campo — se toma por su default (`vec![]`) al\ndeserializar aquí (mismo criterio aditivo que `commands` en 0.26.0).",
+          "items": {
+            "$ref": "#/$defs/PluginColumnInfo"
+          },
+          "type": "array"
+        },
+        "commands": {
+          "default": [],
+          "description": "Comandos que el plugin expone (P1); vacío si no contribuye ninguno.\nUn peer N-1 que construye su propio `PluginInfo` no emite este\ncampo — se toma por su default (`vec![]`) al deserializar aquí.",
+          "items": {
+            "$ref": "#/$defs/PluginCommandInfo"
+          },
+          "type": "array"
+        },
+        "description": {
+          "description": "Descripción cosmética declarada en el manifiesto (P1); ausente =\n`None`. NO forma parte del digest de aprobación (editarla no\nreinvalida capabilities ya aprobadas) y es texto del plugin — NO\nconfiable, un frontend debe enmascararla antes de renderizarla.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "`true` si un humano lo tiene activado.",
+          "type": "boolean"
+        },
+        "id": {
+          "description": "Id estable del plugin (namespace inverso, p. ej. `org.norte.demo`).",
+          "type": "string"
+        },
+        "name": {
+          "description": "Nombre legible para mostrar.",
+          "type": "string"
+        },
+        "publisher": {
+          "description": "Publicador declarado en el manifiesto.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Versión del plugin (informativa).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "publisher",
+        "version",
+        "category",
+        "capabilities",
+        "approved",
+        "enabled"
+      ],
+      "type": "object"
+    },
+    "PluginListParams": {
+      "description": "Params de [`PLUGIN_LIST`]: objeto vacío, reservado para extensión\n(filtros por categoría/estado llegarán aquí como campos opcionales).",
+      "type": "object"
+    },
+    "PluginListResult": {
+      "description": "Result de [`PLUGIN_LIST`]: el catálogo descubierto y los fallos de carga.",
+      "properties": {
+        "errors": {
+          "description": "Directorios que fallaron al cargar (mejor esfuerzo; ver\n[`PluginLoadError`]).",
+          "items": {
+            "$ref": "#/$defs/PluginLoadError"
+          },
+          "type": "array"
+        },
+        "plugins": {
+          "description": "Plugins descubiertos y cargados (con su estado aprobado/activo).",
+          "items": {
+            "$ref": "#/$defs/PluginInfo"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "plugins",
+        "errors"
+      ],
+      "type": "object"
+    },
+    "PluginLoadError": {
+      "description": "Un directorio de plugin que NO se pudo cargar (elemento de\n[`PluginListResult::errors`], M4-P3): se reporta para diagnóstico, sin\ntumbar el resto del catálogo.",
+      "properties": {
+        "dir": {
+          "description": "Directorio del plugin que falló (display; puede llevar bytes lossy).",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Motivo legible del fallo (manifiesto inválido, versión no soportada…).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dir",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "PluginPreview": {
+      "description": "La preview producida por un plugin previewer: los tres campos van JUNTOS\n(all-or-nothing). Ver [`PluginPreviewResult`].",
+      "properties": {
+        "lossy": {
+          "default": false,
+          "description": "La decodificación host-side del fichero fue LOSSY (0.29.0, #101): el\ncore detectó texto en un encoding no-UTF8 y algún byte no era válido,\nasí que los `�` de la salida vienen de la decodificación, no del\nfichero. El frontend lo señala junto al indicador «via …» (el viewer\ncrudo ya marca su propio `had_errors`; esto le da al modo preview la\nmisma honestidad). Aditivo sobre 0.28.x: `#[serde(default)]` = un\ncliente/daemon N-1 que no lo emite se lee como `false` (sin aviso,\ndirección segura). SIEMPRE presente al serializar (mismo criterio\n«aditivo siempre presente» que `PluginInfo::commands`).",
+          "type": "boolean"
+        },
+        "output": {
+          "description": "Salida (texto) de la preview.",
+          "type": "string"
+        },
+        "plugin_id": {
+          "description": "Id del plugin previewer que produjo la salida.",
+          "type": "string"
+        },
+        "plugin_name": {
+          "description": "Nombre legible del plugin previewer (para el indicador «via …»).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plugin_id",
+        "plugin_name",
+        "output"
+      ],
+      "type": "object"
+    },
+    "PluginPreviewParams": {
+      "description": "Params de [`PLUGIN_PREVIEW`] (M4-P5).",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/VPath",
+          "description": "Ruta del archivo a previsualizar (el core lee sus bytes)."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "PluginPreviewResult": {
+      "description": "Result de [`PLUGIN_PREVIEW`] (M4-P5): la preview del primer previewer que\naplica, o NADA. El `flatten` sobre un `Option` hace que el wire sea\n`{plugin_id,plugin_name,output}` (aplicó) o `{}` (ninguno); el TIPO Rust hace\nINCONSTRUIBLE un estado parcial (los tres campos van juntos en\n[`PluginPreview`]), y un objeto parcial del wire colapsa a `None` (sin\npreview, seguro) — jamás un `plugin_id` sin `output` (protocol-guardian\nM4-P5). `None` = ningún previewer maneja el mimetype; el frontend cae a la\nvista cruda.",
+      "properties": {
+        "lossy": {
+          "default": false,
+          "description": "La decodificación host-side del fichero fue LOSSY (0.29.0, #101): el\ncore detectó texto en un encoding no-UTF8 y algún byte no era válido,\nasí que los `�` de la salida vienen de la decodificación, no del\nfichero. El frontend lo señala junto al indicador «via …» (el viewer\ncrudo ya marca su propio `had_errors`; esto le da al modo preview la\nmisma honestidad). Aditivo sobre 0.28.x: `#[serde(default)]` = un\ncliente/daemon N-1 que no lo emite se lee como `false` (sin aviso,\ndirección segura). SIEMPRE presente al serializar (mismo criterio\n«aditivo siempre presente» que `PluginInfo::commands`).",
+          "type": "boolean"
+        },
+        "output": {
+          "description": "Salida (texto) de la preview.",
+          "type": "string"
+        },
+        "plugin_id": {
+          "description": "Id del plugin previewer que produjo la salida.",
+          "type": "string"
+        },
+        "plugin_name": {
+          "description": "Nombre legible del plugin previewer (para el indicador «via …»).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "PluginPreviewStyled": {
+      "description": "La preview CON ESTILO producida por un plugin previewer (0.27.0, G3, ADR\n0037): gemelo de [`PluginPreview`] con `lines` de [`SpanWire`] en vez de\nun `output: String` plano. Topes del wire (ADR 0037): ≤10 000 líneas,\n≤64 spans por línea, texto de span ≤4 KiB, payload total ≤4 MiB (mismo\ntope de retorno del runtime que ya usan [`PLUGIN_PREVIEW`]/\n[`PLUGIN_RUN_COMMAND`]) — el server los aplica antes de enviar; un\ncliente los re-valida y cae a [`PLUGIN_PREVIEW`] si se violan.",
+      "properties": {
+        "lines": {
+          "description": "Líneas de la preview; cada línea es una lista de spans en orden.",
+          "items": {
+            "items": {
+              "$ref": "#/$defs/SpanWire"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "lossy": {
+          "default": false,
+          "description": "La decodificación host-side del fichero fue LOSSY (0.29.0, #101):\nidéntico a [`PluginPreview::lossy`] — el previewer con estilo recibe el\nMISMO texto ya decodificado por el core, así que hereda el mismo aviso.",
+          "type": "boolean"
+        },
+        "plugin_id": {
+          "description": "Id del plugin previewer que produjo la salida.",
+          "type": "string"
+        },
+        "plugin_name": {
+          "description": "Nombre legible del plugin previewer (para el indicador «via …»).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plugin_id",
+        "plugin_name",
+        "lines"
+      ],
+      "type": "object"
+    },
+    "PluginPreviewStyledParams": {
+      "description": "Params de [`PLUGIN_PREVIEW_STYLED`]: idéntico a [`PluginPreviewParams`]\n(mismo archivo, misma resolución de previewer — solo cambia la forma del\nresult).",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/VPath",
+          "description": "Ruta del archivo a previsualizar (el core lee sus bytes)."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "PluginPreviewStyledResult": {
+      "description": "Result de [`PLUGIN_PREVIEW_STYLED`]: la preview con estilo del primer\npreviewer que aplica, o NADA. Mismo patrón `flatten`-sobre-`Option`\nall-or-nothing que [`PluginPreviewResult`] (ver su rustdoc): el wire es\n`{plugin_id,plugin_name,lines}` (aplicó) o `{}` (ninguno), jamás un\nestado parcial.",
+      "properties": {
+        "lines": {
+          "description": "Líneas de la preview; cada línea es una lista de spans en orden.",
+          "items": {
+            "items": {
+              "$ref": "#/$defs/SpanWire"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "lossy": {
+          "default": false,
+          "description": "La decodificación host-side del fichero fue LOSSY (0.29.0, #101):\nidéntico a [`PluginPreview::lossy`] — el previewer con estilo recibe el\nMISMO texto ya decodificado por el core, así que hereda el mismo aviso.",
+          "type": "boolean"
+        },
+        "plugin_id": {
+          "description": "Id del plugin previewer que produjo la salida.",
+          "type": "string"
+        },
+        "plugin_name": {
+          "description": "Nombre legible del plugin previewer (para el indicador «via …»).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "PluginRunCommandParams": {
+      "description": "Params de [`PLUGIN_RUN_COMMAND`] (M4-P4).",
+      "properties": {
+        "arg": {
+          "default": "",
+          "description": "Argumento del comando. Ausente = `\"\"` (el default del wire): un cliente\nque no lo envía ejecuta el comando sin argumento.",
+          "type": "string"
+        },
+        "command": {
+          "description": "Nombre del comando a ejecutar (declarado por el plugin).",
+          "type": "string"
+        },
+        "id": {
+          "description": "Id del plugin que expone el comando.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "command"
+      ],
+      "type": "object"
+    },
+    "PluginRunCommandResult": {
+      "description": "Result de [`PLUGIN_RUN_COMMAND`]: la salida del comando del plugin.",
+      "properties": {
+        "output": {
+          "description": "Salida (string) que devuelve el comando del plugin.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "output"
+      ],
+      "type": "object"
+    },
+    "PluginSetApprovalParams": {
+      "description": "Params de [`PLUGIN_SET_APPROVAL`].",
+      "properties": {
+        "approved": {
+          "description": "`true` = aprobar las capabilities, `false` = revocar.",
+          "type": "boolean"
+        },
+        "id": {
+          "description": "Id del plugin a (des)aprobar.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "approved"
+      ],
+      "type": "object"
+    },
+    "PluginSetApprovalResult": {
+      "description": "Result de [`PLUGIN_SET_APPROVAL`]: objeto vacío, reservado para extensión.",
+      "type": "object"
+    },
+    "PluginSetConfigParams": {
+      "description": "Params de [`PLUGIN_SET_CONFIG`] (0.28.0, G3c): `value` es SIEMPRE\n`String` (la codificación canónica descrita en\n[`PluginConfigKeyWire::value`]) — el daemon la valida contra el ESQUEMA\nde `key` antes de persistir; nunca se persiste sin validar (spec S2).",
+      "properties": {
+        "id": {
+          "description": "Id del plugin cuyo ajuste se cambia.",
+          "type": "string"
+        },
+        "key": {
+          "description": "Clave `[config.<key>]` a fijar.",
+          "type": "string"
+        },
+        "value": {
+          "description": "Valor nuevo, codificado como string canónico (ver\n[`PluginConfigKeyWire::value`]).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "key",
+        "value"
+      ],
+      "type": "object"
+    },
+    "PluginSetConfigResult": {
+      "description": "Result de [`PLUGIN_SET_CONFIG`]: objeto vacío, reservado para extensión.",
+      "type": "object"
+    },
+    "PluginSetEnabledParams": {
+      "description": "Params de [`PLUGIN_SET_ENABLED`].",
+      "properties": {
+        "enabled": {
+          "description": "`true` = activar, `false` = desactivar.",
+          "type": "boolean"
+        },
+        "id": {
+          "description": "Id del plugin a activar/desactivar.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "enabled"
+      ],
+      "type": "object"
+    },
+    "PluginSetEnabledResult": {
+      "description": "Result de [`PLUGIN_SET_ENABLED`]: objeto vacío, reservado para extensión.",
+      "type": "object"
+    },
+    "PolicyApprovalRequired": {
+      "description": "Notificación [`POLICY_APPROVAL_REQUIRED`] (server→client): una op `ask`\nespera decisión. Las rutas van REDACTADAS si llevan userinfo (regla 10).",
+      "properties": {
+        "approval_id": {
+          "description": "Id para responder con `policy.decide`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "op": {
+          "description": "Op-kind (`copy|move|delete|mkdir`).",
+          "type": "string"
+        },
+        "paths": {
+          "description": "Rutas implicadas (wire, redactadas). SOLO display: jamás se reparsan a\nuna operación — la op real va ligada server-side por `approval_id`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "session": {
+          "description": "Sesión de agente que pidió la op (si aplica).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ttl_ms": {
+          "description": "TTL de la aprobación en milisegundos. `0` = DESCONOCIDO (p. ej. una\npendiente reconstruida del resync de `policy.pending`, que no\ntransporta el TTL restante): el frontend no pinta cuenta atrás.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "approval_id",
+        "op",
+        "paths",
+        "ttl_ms"
+      ],
+      "type": "object"
+    },
+    "PolicyDecideParams": {
+      "description": "Params de [`POLICY_DECIDE`] (un humano aprueba/deniega).",
+      "properties": {
+        "approval_id": {
+          "description": "Id de la aprobación pendiente.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "approve": {
+          "description": "`true` = aprobar, `false` = denegar.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "approval_id",
+        "approve"
+      ],
+      "type": "object"
+    },
+    "PolicyDecideResult": {
+      "description": "Result de [`POLICY_DECIDE`].",
+      "type": "object"
+    },
+    "PolicyPendingResult": {
+      "description": "Result de [`POLICY_PENDING`] (resync de aprobaciones pendientes).",
+      "properties": {
+        "pending": {
+          "description": "Aprobaciones pendientes.",
+          "items": {
+            "$ref": "#/$defs/PendingApproval"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "pending"
+      ],
+      "type": "object"
+    },
+    "PolicyUndoReportParams": {
+      "description": "Params de [`POLICY_UNDO_REPORT`].",
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "Task de undo cuyo informe se pide (la de\n[`PolicyUndoSessionResult::task_id`])."
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "PolicyUndoReportResult": {
+      "description": "Result de [`POLICY_UNDO_REPORT`]: el informe del undo. Todo cero y sin\n`blocked` = no había nada que deshacer SOLO si la Task terminó\n`Completed`: una Task `Failed`/`Cancelled` deja contadores PARCIALES con\n`blocked` ausente (el motivo vive en su `task.progress` terminal) — el\nestado de la Task se consulta aparte, este result no lo lleva.",
+      "properties": {
+        "blocked": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UndoBlocked"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Primer paso donde el LIFO paró (estricto), si lo hubo. El undo va de\nla entrada MÁS NUEVA hacia atrás: lo posterior al bloqueo en el\njournal ya se deshizo; lo ANTERIOR a él en el journal (seq menor)\nquedó SIN deshacer."
+        },
+        "skipped_created_no_trash": {
+          "description": "Reversas de `Created` saltadas porque el provider no tiene papelera\n(#65): el nodo SIGUE en el destino — deshacerlo habría sido un borrado\npermanente y el undo jamás destruye de forma irrecuperable.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skipped_irreversible": {
+          "description": "Entradas `Irreversible` saltadas (no hay nada que pisar).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "undone": {
+          "description": "Entradas revertidas con éxito.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "undone",
+        "skipped_irreversible",
+        "skipped_created_no_trash"
+      ],
+      "type": "object"
+    },
+    "PolicyUndoSessionParams": {
+      "description": "Params de [`POLICY_UNDO_SESSION`].",
+      "properties": {
+        "session": {
+          "description": "Sesión de agente cuyas mutaciones se deshacen (mismo formato que\n`agent_session` del initialize: `[A-Za-z0-9._-]`, 1..=64).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "type": "object"
+    },
+    "PolicyUndoSessionResult": {
+      "description": "Result de [`POLICY_UNDO_SESSION`]: el undo corre como Task (progreso por\n`task.progress`, cancelable con `task.cancel`).",
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "Task del undo."
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "RequestId": {
+      "anyOf": [
+        {
+          "description": "Contador del emisor canónico.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "description": "Aceptado por tolerancia con otros clientes JSON-RPC.",
+          "type": "string"
+        }
+      ],
+      "description": "Id de una request. El emisor canónico escribe números (contador u64);\nse aceptan strings por tolerancia (JSON-RPC 2.0 los permite).\n\n```\nuse norte_proto::wire::RequestId;\nlet n: RequestId = serde_json::from_str(\"7\").unwrap();\nassert_eq!(n, RequestId::Num(7));\nlet s: RequestId = serde_json::from_str(r#\"\"abc\"\"#).unwrap();\nassert_eq!(s, RequestId::Str(\"abc\".into()));\n```"
+    },
+    "RequestScopeParams": {
+      "description": "Params de [`POLICY_REQUEST_SCOPE`] (M3-3b): un agente pide un scope.",
+      "properties": {
+        "ops": {
+          "description": "Op-kinds solicitados (`copy|move|delete|mkdir`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "roots": {
+          "description": "Raíces solicitadas (contención por subtree-prefix).",
+          "items": {
+            "$ref": "#/$defs/VPath"
+          },
+          "type": "array"
+        },
+        "session": {
+          "description": "Sesión de agente que pide (debe coincidir con la de la conexión).",
+          "type": "string"
+        },
+        "ttl_ms": {
+          "description": "TTL solicitado en milisegundos.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "session",
+        "roots",
+        "ops",
+        "ttl_ms"
+      ],
+      "type": "object"
+    },
+    "RequestScopeResult": {
+      "description": "Result de [`POLICY_REQUEST_SCOPE`].",
+      "properties": {
+        "request_id": {
+          "description": "Id de la petición, para que un humano la conceda con `policy.grant_scope`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "request_id"
+      ],
+      "type": "object"
+    },
+    "ResumePolicy": {
+      "description": "Reanudación de una transferencia interrumpida (ADR 0012, spec §5).\n\n```\nuse norte_proto::ResumePolicy;\nassert_eq!(ResumePolicy::default(), ResumePolicy::Off);\nlet p: ResumePolicy = serde_json::from_str(r#\"\"on\"\"#).unwrap();\nassert_eq!(p, ResumePolicy::On);\n```",
+      "oneOf": [
+        {
+          "const": "off",
+          "description": "Sin reanudación: cancelar/fallar deja el destino LIMPIO (contrato\nde M1). Default — cero sorpresas para quien no lo pide.",
+          "type": "string"
+        },
+        {
+          "const": "on",
+          "description": "Reanudar: cancelar o un fallo transitorio CONSERVA el\n`.norte-partial`; la próxima copia del mismo `src→dst` continúa\ndesde donde iba (`already` del provider, ADR 0012).",
+          "type": "string"
+        }
+      ]
+    },
+    "RpcCancelParams": {
+      "description": "Params de [`RPC_CANCEL`] (#72): el id de la request en vuelo a cancelar.\n\nEl `id` es el mismo tipo que [`crate::wire::RequestId`] — número (emisor\ncanónico) o string (tolerancia JSON-RPC). No se valida contra un mapa aquí\n(es una notificación best-effort): el daemon lo coteja con sus requests en\nvuelo y un id sin correspondencia es un no-op.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/RequestId",
+          "description": "Id JSON-RPC de la request a cancelar."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "SearchHits": {
+      "description": "Un lote de resultados de [`SEARCH_HITS`]. `matches` alineado 1:1 con\n`entries` cuando la búsqueda es de contenido (None si es solo nombre).",
+      "properties": {
+        "entries": {
+          "description": "Entradas que casan.",
+          "items": {
+            "$ref": "#/$defs/Entry"
+          },
+          "type": "array"
+        },
+        "matches": {
+          "description": "Contexto del match de contenido, alineado con `entries`.",
+          "items": {
+            "$ref": "#/$defs/MatchInfo"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "Task dueña (correlación con `fs.search` → `task_id`)."
+        }
+      },
+      "required": [
+        "task_id",
+        "entries"
+      ],
+      "type": "object"
+    },
+    "ServerInfo": {
+      "description": "Identidad del servidor (va en [`InitializeResult`]).",
+      "properties": {
+        "name": {
+          "description": "Nombre del servidor (`norte-core`).",
+          "type": "string"
+        },
+        "version": {
+          "description": "Versión del binario del daemon (informativa).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "type": "object"
+    },
+    "SpanWire": {
+      "description": "Un span de texto con estilo opcional (elemento de una línea de\n[`PluginPreviewStyled::lines`], 0.27.0, G3, ADR 0037): el HOST pinta, el\nplugin solo describe. `text` es texto del plugin — NO CONFIABLE, un\nfrontend debe enmascararlo antes de renderizarlo (mismo trato que\n`PluginInfo::name`/`title`). `role` referencia un nombre de\n`norte_theme::Role` — el HOST lo valida contra el conjunto CERRADO al\nproducirlo (un nombre desconocido nunca sale al wire como texto libre,\ncolapsa a `None` antes de serializar); un cliente remoto que reciba de un\ndaemon en el que no confía plenamente un `role` que no reconoce debe\ntratarlo igual, como `None`. `fg` es un fallback de color RGB crudo para\nspans sin rol (p. ej. la paleta fija de un highlighter); cuando AMBOS\nestán presentes, `role` gana — el tema del usuario tiene precedencia\nsobre un color fijo del plugin.\n\n```\nuse norte_proto::methods::SpanWire;\nlet s: SpanWire = serde_json::from_str(r#\"{\"text\":\"fn\"}\"#).unwrap();\nassert_eq!(s.text, \"fn\");\nassert_eq!(s.role, None);\nassert_eq!(s.fg, None);\n```",
+      "properties": {
+        "fg": {
+          "description": "Color RGB crudo de respaldo cuando no hay `role` (un byte por canal).",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "role": {
+          "description": "Nombre de rol de `norte_theme::Role` (validado host-side; un nombre\ndesconocido nunca llega hasta aquí como `Some`, ver el rustdoc del\ntipo).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "description": "Texto del span. Texto del plugin — NO confiable.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    },
+    "SymlinkPolicy": {
+      "description": "Qué hacer con los symlinks al copiar (spec §17.9; ADR 0005).\n\nEn M1, [`Follow`](Self::Follow) sobre un symlink a DIRECTORIO devuelve\n`Unsupported` (seguir dirs exige detección de ciclos — M2).\n\n```\nuse norte_proto::SymlinkPolicy;\nlet p: SymlinkPolicy = serde_json::from_str(r#\"\"preserve\"\"#).unwrap();\nassert_eq!(p, SymlinkPolicy::Preserve);\nassert_eq!(SymlinkPolicy::default(), SymlinkPolicy::Preserve);\n```",
+      "oneOf": [
+        {
+          "const": "follow",
+          "description": "Copiar el CONTENIDO apuntado. Symlink a dir: `Unsupported` en M1.",
+          "type": "string"
+        },
+        {
+          "const": "preserve",
+          "description": "Recrear el symlink en el destino, bytes del target intactos\n(default: lo que hace `cp -a`).",
+          "type": "string"
+        },
+        {
+          "const": "skip",
+          "description": "No copiar symlinks (contados como saltados).",
+          "type": "string"
+        }
+      ]
+    },
+    "TaskCancelParams": {
+      "description": "Params de [`TASK_CANCEL`].",
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "Task a cancelar. Cancelar una Task terminal o inexistente no es error:\nla respuesta llega igual y el estado real viaja por [`TASK_PROGRESS`]."
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "TaskCancelResult": {
+      "description": "Result de [`TASK_CANCEL`]: objeto vacío, reservado para extensión.",
+      "type": "object"
+    },
+    "TaskId": {
+      "description": "Identificador de una Task, único por proceso core.\n\nWire: número JSON transparente.\n\n```\nuse norte_proto::TaskId;\nlet id = TaskId::new(42);\nassert_eq!(serde_json::to_string(&id).unwrap(), \"42\");\n```",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "TaskKind": {
+      "description": "Clase de operación que ejecuta una Task (M0: las tres mutaciones del VFS).",
+      "oneOf": [
+        {
+          "const": "copy",
+          "description": "Copia (posiblemente recursiva, posiblemente cross-provider).",
+          "type": "string"
+        },
+        {
+          "const": "move",
+          "description": "Movimiento (rename atómico o copy+delete).",
+          "type": "string"
+        },
+        {
+          "const": "delete",
+          "description": "Borrado (recursivo post-order).",
+          "type": "string"
+        },
+        {
+          "const": "undo",
+          "description": "Undo de sesión: deshace mutaciones previas en LIFO (M3-2).\n\nOJO (compat): esta variante entra en 0.10.0. Un cliente 0.9.x (N-1) NO la\nconoce y su parse de `TaskKind` FALLA al recibirla — el `serde(other)` de\nabajo protege a ESTE proto (0.10+) frente a kinds de 0.11+, no\nretroactivamente al 0.9. En M3-2 el undo no se expone por RPC (no llega a\nclientes), así que la rotura es latente; M3-4 debe gatear la emisión de\nkinds nuevos por versión negociada (o asumir descarte silencioso en\nbroadcast y proteger el resync de `task.list`).",
+          "type": "string"
+        },
+        {
+          "const": "search",
+          "description": "Búsqueda viva por nombre y/o contenido bajo un subtree (`fs.search`,\nM4 live search). Lectura pura (regla 4 no aplica): sin journal.\n\nOJO (compat): esta variante entra en 0.18.0. A diferencia del borde\n0.9→0.10 de [`TaskKind::Undo`] (donde el `serde(other)` de abajo\nTODAVÍA no existía), un cliente 0.17.x (N-1) YA tiene ese fallback\n(desde 0.10) — recibirla la degrada a [`TaskKind::Unknown`] sin\nfallar el parse. Sin gating de emisión necesario para este borde.",
+          "type": "string"
+        },
+        {
+          "const": "index",
+          "description": "Construcción/actualización del índice de búsqueda de un subtree\n(`index.build`, M4). Entra en 0.25.0; un cliente N-1 (0.24.x) la degrada a\n[`TaskKind::Unknown`] vía el `serde(other)`.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Clase desconocida: un daemon N+1 (0.11+) envió un kind que ESTE proto no\nconoce → se acepta como genérica en vez de fallar el parse (forward-compat\ndesde 0.10, como [`TaskState::Unknown`]). No cubre el borde hacia atrás\n0.9→0.10 (ver `Undo`); SÍ cubre 0.17→0.18 (ver `Search`, ya nacida\ndentro de la ventana de este fallback).\n\n`TaskKind::Index` (0.25.0, `index.build`) es el mismo caso que `Search`:\nun cliente 0.24.x lo degrada aquí sin fallar.",
+          "type": "string"
+        }
+      ]
+    },
+    "TaskListParams": {
+      "description": "Params de [`TASK_LIST`]: objeto vacío, reservado para extensión\n(filtros por estado/kind llegarán aquí como campos opcionales).",
+      "type": "object"
+    },
+    "TaskListResult": {
+      "description": "Result de [`TASK_LIST`].\n\n```\nuse norte_proto::methods::TaskListResult;\nlet r: TaskListResult = serde_json::from_str(r#\"{\"tasks\":[]}\"#).unwrap();\nassert!(r.tasks.is_empty());\n```",
+      "properties": {
+        "tasks": {
+          "description": "Snapshots de las tasks vivas + los desenlaces recientes retenidos\npor el server (mejor esfuerzo; ver [`TASK_LIST`]). Puede repetir\n`task_id` — el receptor deduplica.",
+          "items": {
+            "$ref": "#/$defs/TaskProgress"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tasks"
+      ],
+      "type": "object"
+    },
+    "TaskProgress": {
+      "description": "Snapshot de progreso de una Task (payload de la notificación `task.progress`).\n\nTotales `None` = aún desconocidos (walk en curso), jamás un 0 fingido.\nEl emisor coalesce; el último snapshot de una Task siempre lleva estado\nterminal y totales finales.\n\n```\nuse norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};\nlet p = TaskProgress {\n    task_id: TaskId::new(7),\n    kind: TaskKind::Copy,\n    state: TaskState::Running,\n    bytes_done: 512,\n    bytes_total: Some(4096),\n    entries_done: 0,\n    entries_total: Some(2),\n    current: None,\n};\nlet json = serde_json::to_string(&p).unwrap();\nassert_eq!(serde_json::from_str::<TaskProgress>(&json).unwrap(), p);\n```",
+      "properties": {
+        "bytes_done": {
+          "description": "Bytes ya procesados.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "bytes_total": {
+          "default": null,
+          "description": "Bytes totales estimados; `None` mientras el walk no termina.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "current": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Entrada en curso (para pintar \"copiando X…\"); puede faltar."
+        },
+        "entries_done": {
+          "description": "Entradas (archivos/dirs) ya procesadas.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "entries_total": {
+          "default": null,
+          "description": "Entradas totales estimadas; `None` mientras el walk no termina.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/TaskKind",
+          "description": "Clase de operación (un frontend pinta \"copiando…\" sin estado propio)."
+        },
+        "state": {
+          "$ref": "#/$defs/TaskState",
+          "description": "Estado en el momento del snapshot."
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "Task a la que pertenece el snapshot."
+        }
+      },
+      "required": [
+        "task_id",
+        "kind",
+        "state",
+        "bytes_done",
+        "entries_done"
+      ],
+      "type": "object"
+    },
+    "TaskState": {
+      "description": "Estado del ciclo de vida de una Task.\n\nWire: objeto tagged `{\"kind\": \"...\", …}` — mismo convenio que [`Error`].\nTolerancia N/N-1 (ADR 0004): un estado desconocido deserializa a\n[`TaskState::Unknown`], que se trata como NO terminal (conservador:\nel cliente sigue escuchando `task.progress` hasta un estado que entienda).\n\n```\nuse norte_proto::TaskState;\nlet s: TaskState = serde_json::from_str(r#\"{\"kind\": \"running\"}\"#).unwrap();\nassert_eq!(s, TaskState::Running);\nassert!(!s.is_terminal());\n```",
+      "oneOf": [
+        {
+          "description": "Encolada, aún sin hueco en el scheduler.",
+          "properties": {
+            "kind": {
+              "const": "pending",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Ejecutándose.",
+          "properties": {
+            "kind": {
+              "const": "running",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Pausada (spec §11: `task.pause`). M0 no la emite; queda reservada ya\npara que estrenarla no rompa a clientes N-1.",
+          "properties": {
+            "kind": {
+              "const": "paused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Terminó bien.",
+          "properties": {
+            "kind": {
+              "const": "completed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Cancelada limpiamente (destino limpio o `.norte-partial`, spec §5).",
+          "properties": {
+            "kind": {
+              "const": "cancelled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Falló; el error dice por qué (un panic capturado llega como\n[`Error::Internal`] con `panic: true`).",
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/Error",
+              "description": "Causa del fallo."
+            },
+            "kind": {
+              "const": "failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "error"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Estado de un protocolo más nuevo (fallback de deserialización).\nEl core JAMÁS lo emite.",
+          "properties": {
+            "kind": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "UndoBlocked": {
+      "description": "Un bloqueo del undo: dónde y por qué (elemento de\n[`PolicyUndoReportResult::blocked`]).",
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/Error",
+          "description": "Motivo (taxonomía de errores del protocolo; drift/conflicto típicos)."
+        },
+        "seq": {
+          "description": "`seq` de la entrada del journal cuya reversa bloqueó. Referencia\nOPACA para el cliente: solo cobra sentido contra el journal/audit del\nserver (M3-5) — sirve para citarla, no para interpretarla.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "error"
+      ],
+      "type": "object"
+    },
+    "VPath": {
+      "description": "VPath wire string: `scheme://authority/segments`. Filenames are bytes; non-UTF-8 segments use the percent-encoded wire form.",
+      "type": "string"
+    },
+    "VerifyPolicy": {
+      "description": "Cómo verificar el `.norte-partial` antes de reanudar sobre él\n(ADR 0012). Solo aplica con [`ResumePolicy::On`].\n\n```\nuse norte_proto::VerifyPolicy;\nassert_eq!(VerifyPolicy::default(), VerifyPolicy::Length);\nlet v: VerifyPolicy = serde_json::from_str(r#\"\"hash\"\"#).unwrap();\nassert_eq!(v, VerifyPolicy::Hash);\n```",
+      "oneOf": [
+        {
+          "const": "length",
+          "description": "Solo longitud: si el parcial es más largo que el origen se descarta\ny se empieza de cero. Barato (default).",
+          "type": "string"
+        },
+        {
+          "const": "hash",
+          "description": "Además, el hash de `origen[..already]` debe coincidir con el del\nparcial; si no, se descarta. Relee `already` bytes de ambos lados.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Aggregate root: one field per top-level wire type. `schema_for!` emits each\nas a property and pulls every nested type into `$defs`, so the single\ndocument covers the whole protocol surface. Field values are never read.",
+  "properties": {
+    "byte_range": {
+      "$ref": "#/$defs/ByteRange"
+    },
+    "capabilities": {
+      "$ref": "#/$defs/Capabilities"
+    },
+    "capability_flags": {
+      "$ref": "#/$defs/CapabilityFlags"
+    },
+    "client_info": {
+      "$ref": "#/$defs/ClientInfo"
+    },
+    "collision_policy": {
+      "$ref": "#/$defs/CollisionPolicy"
+    },
+    "conflict_kind": {
+      "$ref": "#/$defs/ConflictKind"
+    },
+    "connection_degraded": {
+      "$ref": "#/$defs/ConnectionDegraded"
+    },
+    "connection_trust_host_key_params": {
+      "$ref": "#/$defs/ConnectionTrustHostKeyParams"
+    },
+    "connection_trust_host_key_result": {
+      "$ref": "#/$defs/ConnectionTrustHostKeyResult"
+    },
+    "daemon_shutdown_params": {
+      "$ref": "#/$defs/DaemonShutdownParams"
+    },
+    "daemon_shutdown_result": {
+      "$ref": "#/$defs/DaemonShutdownResult"
+    },
+    "decoration_wire": {
+      "$ref": "#/$defs/DecorationWire"
+    },
+    "delete_mode": {
+      "$ref": "#/$defs/DeleteMode"
+    },
+    "entry": {
+      "$ref": "#/$defs/Entry"
+    },
+    "entry_kind": {
+      "$ref": "#/$defs/EntryKind"
+    },
+    "error": {
+      "$ref": "#/$defs/Error"
+    },
+    "fs_capabilities_params": {
+      "$ref": "#/$defs/FsCapabilitiesParams"
+    },
+    "fs_capabilities_result": {
+      "$ref": "#/$defs/FsCapabilitiesResult"
+    },
+    "fs_copy_params": {
+      "$ref": "#/$defs/FsCopyParams"
+    },
+    "fs_delete_params": {
+      "$ref": "#/$defs/FsDeleteParams"
+    },
+    "fs_list_params": {
+      "$ref": "#/$defs/FsListParams"
+    },
+    "fs_list_result": {
+      "$ref": "#/$defs/FsListResult"
+    },
+    "fs_move_params": {
+      "$ref": "#/$defs/FsMoveParams"
+    },
+    "fs_read_params": {
+      "$ref": "#/$defs/FsReadParams"
+    },
+    "fs_read_result": {
+      "$ref": "#/$defs/FsReadResult"
+    },
+    "fs_search_params": {
+      "$ref": "#/$defs/FsSearchParams"
+    },
+    "fs_stat_params": {
+      "$ref": "#/$defs/FsStatParams"
+    },
+    "fs_stat_result": {
+      "$ref": "#/$defs/FsStatResult"
+    },
+    "fs_task_result": {
+      "$ref": "#/$defs/FsTaskResult"
+    },
+    "grant_scope_params": {
+      "$ref": "#/$defs/GrantScopeParams"
+    },
+    "grant_scope_result": {
+      "$ref": "#/$defs/GrantScopeResult"
+    },
+    "index_build_params": {
+      "$ref": "#/$defs/IndexBuildParams"
+    },
+    "index_build_result": {
+      "$ref": "#/$defs/IndexBuildResult"
+    },
+    "index_hit": {
+      "$ref": "#/$defs/IndexHit"
+    },
+    "index_query_params": {
+      "$ref": "#/$defs/IndexQueryParams"
+    },
+    "index_query_result": {
+      "$ref": "#/$defs/IndexQueryResult"
+    },
+    "initialize_params": {
+      "$ref": "#/$defs/InitializeParams"
+    },
+    "initialize_result": {
+      "$ref": "#/$defs/InitializeResult"
+    },
+    "match_info": {
+      "$ref": "#/$defs/MatchInfo"
+    },
+    "pending_approval": {
+      "$ref": "#/$defs/PendingApproval"
+    },
+    "plugin_column_info": {
+      "$ref": "#/$defs/PluginColumnInfo"
+    },
+    "plugin_column_values_params": {
+      "$ref": "#/$defs/PluginColumnValuesParams"
+    },
+    "plugin_column_values_result": {
+      "$ref": "#/$defs/PluginColumnValuesResult"
+    },
+    "plugin_command_info": {
+      "$ref": "#/$defs/PluginCommandInfo"
+    },
+    "plugin_config_key_wire": {
+      "$ref": "#/$defs/PluginConfigKeyWire"
+    },
+    "plugin_decorate_params": {
+      "$ref": "#/$defs/PluginDecorateParams"
+    },
+    "plugin_decorate_result": {
+      "$ref": "#/$defs/PluginDecorateResult"
+    },
+    "plugin_decorations": {
+      "$ref": "#/$defs/PluginDecorations"
+    },
+    "plugin_get_config_params": {
+      "$ref": "#/$defs/PluginGetConfigParams"
+    },
+    "plugin_get_config_result": {
+      "$ref": "#/$defs/PluginGetConfigResult"
+    },
+    "plugin_info": {
+      "$ref": "#/$defs/PluginInfo"
+    },
+    "plugin_list_params": {
+      "$ref": "#/$defs/PluginListParams"
+    },
+    "plugin_list_result": {
+      "$ref": "#/$defs/PluginListResult"
+    },
+    "plugin_load_error": {
+      "$ref": "#/$defs/PluginLoadError"
+    },
+    "plugin_preview": {
+      "$ref": "#/$defs/PluginPreview"
+    },
+    "plugin_preview_params": {
+      "$ref": "#/$defs/PluginPreviewParams"
+    },
+    "plugin_preview_result": {
+      "$ref": "#/$defs/PluginPreviewResult"
+    },
+    "plugin_preview_styled": {
+      "$ref": "#/$defs/PluginPreviewStyled"
+    },
+    "plugin_preview_styled_params": {
+      "$ref": "#/$defs/PluginPreviewStyledParams"
+    },
+    "plugin_preview_styled_result": {
+      "$ref": "#/$defs/PluginPreviewStyledResult"
+    },
+    "plugin_run_command_params": {
+      "$ref": "#/$defs/PluginRunCommandParams"
+    },
+    "plugin_run_command_result": {
+      "$ref": "#/$defs/PluginRunCommandResult"
+    },
+    "plugin_set_approval_params": {
+      "$ref": "#/$defs/PluginSetApprovalParams"
+    },
+    "plugin_set_approval_result": {
+      "$ref": "#/$defs/PluginSetApprovalResult"
+    },
+    "plugin_set_config_params": {
+      "$ref": "#/$defs/PluginSetConfigParams"
+    },
+    "plugin_set_config_result": {
+      "$ref": "#/$defs/PluginSetConfigResult"
+    },
+    "plugin_set_enabled_params": {
+      "$ref": "#/$defs/PluginSetEnabledParams"
+    },
+    "plugin_set_enabled_result": {
+      "$ref": "#/$defs/PluginSetEnabledResult"
+    },
+    "policy_approval_required": {
+      "$ref": "#/$defs/PolicyApprovalRequired"
+    },
+    "policy_decide_params": {
+      "$ref": "#/$defs/PolicyDecideParams"
+    },
+    "policy_decide_result": {
+      "$ref": "#/$defs/PolicyDecideResult"
+    },
+    "policy_pending_result": {
+      "$ref": "#/$defs/PolicyPendingResult"
+    },
+    "policy_undo_report_params": {
+      "$ref": "#/$defs/PolicyUndoReportParams"
+    },
+    "policy_undo_report_result": {
+      "$ref": "#/$defs/PolicyUndoReportResult"
+    },
+    "policy_undo_session_params": {
+      "$ref": "#/$defs/PolicyUndoSessionParams"
+    },
+    "policy_undo_session_result": {
+      "$ref": "#/$defs/PolicyUndoSessionResult"
+    },
+    "request_scope_params": {
+      "$ref": "#/$defs/RequestScopeParams"
+    },
+    "request_scope_result": {
+      "$ref": "#/$defs/RequestScopeResult"
+    },
+    "resume_policy": {
+      "$ref": "#/$defs/ResumePolicy"
+    },
+    "rpc_cancel_params": {
+      "$ref": "#/$defs/RpcCancelParams"
+    },
+    "search_hits": {
+      "$ref": "#/$defs/SearchHits"
+    },
+    "server_info": {
+      "$ref": "#/$defs/ServerInfo"
+    },
+    "span_wire": {
+      "$ref": "#/$defs/SpanWire"
+    },
+    "symlink_policy": {
+      "$ref": "#/$defs/SymlinkPolicy"
+    },
+    "task_cancel_params": {
+      "$ref": "#/$defs/TaskCancelParams"
+    },
+    "task_cancel_result": {
+      "$ref": "#/$defs/TaskCancelResult"
+    },
+    "task_id": {
+      "$ref": "#/$defs/TaskId"
+    },
+    "task_kind": {
+      "$ref": "#/$defs/TaskKind"
+    },
+    "task_list_params": {
+      "$ref": "#/$defs/TaskListParams"
+    },
+    "task_list_result": {
+      "$ref": "#/$defs/TaskListResult"
+    },
+    "task_progress": {
+      "$ref": "#/$defs/TaskProgress"
+    },
+    "task_state": {
+      "$ref": "#/$defs/TaskState"
+    },
+    "undo_blocked": {
+      "$ref": "#/$defs/UndoBlocked"
+    },
+    "v_path": {
+      "$ref": "#/$defs/VPath"
+    },
+    "verify_policy": {
+      "$ref": "#/$defs/VerifyPolicy"
+    }
+  },
+  "required": [
+    "byte_range",
+    "capabilities",
+    "capability_flags",
+    "client_info",
+    "collision_policy",
+    "conflict_kind",
+    "connection_degraded",
+    "connection_trust_host_key_params",
+    "connection_trust_host_key_result",
+    "daemon_shutdown_params",
+    "daemon_shutdown_result",
+    "decoration_wire",
+    "delete_mode",
+    "entry",
+    "entry_kind",
+    "error",
+    "fs_capabilities_params",
+    "fs_capabilities_result",
+    "fs_copy_params",
+    "fs_delete_params",
+    "fs_list_params",
+    "fs_list_result",
+    "fs_move_params",
+    "fs_read_params",
+    "fs_read_result",
+    "fs_search_params",
+    "fs_stat_params",
+    "fs_stat_result",
+    "fs_task_result",
+    "grant_scope_params",
+    "grant_scope_result",
+    "index_build_params",
+    "index_build_result",
+    "index_hit",
+    "index_query_params",
+    "index_query_result",
+    "initialize_params",
+    "initialize_result",
+    "match_info",
+    "pending_approval",
+    "plugin_column_info",
+    "plugin_column_values_params",
+    "plugin_column_values_result",
+    "plugin_command_info",
+    "plugin_config_key_wire",
+    "plugin_decorate_params",
+    "plugin_decorate_result",
+    "plugin_decorations",
+    "plugin_get_config_params",
+    "plugin_get_config_result",
+    "plugin_info",
+    "plugin_list_params",
+    "plugin_list_result",
+    "plugin_load_error",
+    "plugin_preview",
+    "plugin_preview_params",
+    "plugin_preview_result",
+    "plugin_preview_styled",
+    "plugin_preview_styled_params",
+    "plugin_preview_styled_result",
+    "plugin_run_command_params",
+    "plugin_run_command_result",
+    "plugin_set_approval_params",
+    "plugin_set_approval_result",
+    "plugin_set_config_params",
+    "plugin_set_config_result",
+    "plugin_set_enabled_params",
+    "plugin_set_enabled_result",
+    "policy_approval_required",
+    "policy_decide_params",
+    "policy_decide_result",
+    "policy_pending_result",
+    "policy_undo_report_params",
+    "policy_undo_report_result",
+    "policy_undo_session_params",
+    "policy_undo_session_result",
+    "request_scope_params",
+    "request_scope_result",
+    "resume_policy",
+    "rpc_cancel_params",
+    "search_hits",
+    "server_info",
+    "span_wire",
+    "symlink_policy",
+    "task_cancel_params",
+    "task_cancel_result",
+    "task_id",
+    "task_kind",
+    "task_list_params",
+    "task_list_result",
+    "task_progress",
+    "task_state",
+    "undo_blocked",
+    "v_path",
+    "verify_policy"
+  ],
+  "title": "ProtocolSchema",
+  "type": "object"
+}

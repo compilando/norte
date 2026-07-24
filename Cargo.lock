@@ -4402,6 +4402,7 @@ version = "0.3.0-alpha.1"
 dependencies = [
  "bitflags 2.13.0",
  "proptest",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

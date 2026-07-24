@@ -17,6 +17,7 @@ use crate::{Error, VPath};
 /// let id = TaskId::new(42);
 /// assert_eq!(serde_json::to_string(&id).unwrap(), "42");
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct TaskId(u64);
@@ -42,6 +43,7 @@ impl fmt::Display for TaskId {
 }
 
 /// Clase de operación que ejecuta una Task (M0: las tres mutaciones del VFS).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskKind {
@@ -99,6 +101,7 @@ pub enum TaskKind {
 /// assert_eq!(s, TaskState::Running);
 /// assert!(!s.is_terminal());
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
@@ -161,6 +164,7 @@ impl TaskState {
 /// let json = serde_json::to_string(&p).unwrap();
 /// assert_eq!(serde_json::from_str::<TaskProgress>(&json).unwrap(), p);
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskProgress {
     /// Task a la que pertenece el snapshot.

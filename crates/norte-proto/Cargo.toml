@@ -15,6 +15,15 @@ serde.workspace = true
 # y el framing NDJSON. Ya estaba en el árbol como dev-dep de todo el workspace.
 serde_json.workspace = true
 thiserror.workspace = true
+# JSON Schema generation for docs/schema/proto.schema.json (ADR 0038, spec §11).
+# Off by default: the shipped crate gains no dependency at runtime — the derives
+# and the schema golden compile only under the `schema` feature.
+schemars = { workspace = true, features = ["derive"], optional = true }
+
+[features]
+# Generate the protocol JSON Schema from the same serde types that speak the
+# wire (ADR 0038). Enabled by the golden test and the `just ci` schema step.
+schema = ["dep:schemars"]
 
 [dev-dependencies]
 proptest.workspace = true

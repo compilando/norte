@@ -14,6 +14,7 @@ use crate::VPath;
 /// let k: EntryKind = serde_json::from_str("\"kind_del_futuro\"").unwrap();
 /// assert_eq!(k, EntryKind::Other);
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntryKind {
@@ -43,6 +44,7 @@ pub enum EntryKind {
 /// let json = serde_json::to_string(&e).unwrap();
 /// assert_eq!(serde_json::from_str::<Entry>(&json).unwrap(), e);
 /// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Entry {
     /// Path completo del nodo (los frontends operan con él, no con el nombre).

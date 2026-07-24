@@ -51,6 +51,7 @@ impl<'de> Deserialize<'de> for JsonRpcVersion {
 /// assert_eq!(s, RequestId::Str("abc".into()));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum RequestId {
     /// Contador del emisor canónico.

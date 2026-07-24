@@ -18,7 +18,7 @@ fmt-check:
     cargo fmt --all -- --check
 
 lint: fmt-check
-    cargo clippy --workspace --all-targets --features norte-config/watch -- -D warnings
+    cargo clippy --workspace --all-targets --features norte-config/watch --features norte-proto/schema -- -D warnings
     cargo deny check
 
 # --no-tests=pass: el esqueleto de fase 1 no tiene tests aún; con código real
@@ -29,8 +29,8 @@ lint: fmt-check
 # —ni correrse ni compilar su árbol (testcontainers/bollard)—. Toda feature
 # nueva apta para el gate se añade aquí; las de integración/nightly, no.
 test:
-    cargo nextest run --workspace --features norte-tui/schema --features norte-config/watch --no-tests=pass --no-fail-fast
-    cargo test --workspace --features norte-tui/schema --doc
+    cargo nextest run --workspace --features norte-tui/schema --features norte-config/watch --features norte-proto/schema --no-tests=pass --no-fail-fast
+    cargo test --workspace --features norte-tui/schema --features norte-proto/schema --doc
 
 # Gate de cobertura (mismo umbral que CI): solo crates de lógica (spec §12).
 cov:
@@ -50,6 +50,18 @@ docs:
 # se detectaba hasta `gui-ci` (o nunca, en CI).
 check-gui:
     cd crates/norte-gui && cargo check --locked
+
+# Detección de rupturas de API en los crates publicables (ADR 0038, #13).
+# Herramienta externa: `cargo install cargo-semver-checks`. Necesita una
+# BASELINE: el primer release publicado o un tag git (`--baseline-rev vX.Y.Z`);
+# hasta que exista ese tag no hay contra qué comparar y la receta no corre.
+# `--exclude` deja fuera lo NO publicable (frontends/binarios y el árbol de la
+# GUI, excluido del workspace). AÚN NO está en `ci`: cablearla antes de tener
+# binario+baseline rompería cada `just ci` (decisión de gate del ADR 0038); se
+# añade a `ci` cuando ambos estén disponibles.
+baseline := "HEAD"
+semver:
+    cargo semver-checks --workspace --baseline-rev {{baseline}}
 
 # Lo que corre CI.
 ci: lint test cov docs check-gui
