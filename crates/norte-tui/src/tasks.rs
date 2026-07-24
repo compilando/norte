@@ -153,4 +153,68 @@ impl TaskBoard {
     pub fn rows(&self) -> &[TaskRow] {
         &self.rows
     }
+
+    /// `true` si alguna fila del panel sigue EN VUELO (S2, `[ui]
+    /// confirm_quit` modo `auto`): consulta el estado EN VIVO de cada task,
+    /// mismo criterio que [`Self::cancel_last_running`] — el snapshot del
+    /// tick puede tener hasta 100 ms de retraso, y "nada pendiente" no debe
+    /// decirse de algo que en realidad sigue corriendo.
+    #[must_use]
+    pub fn has_active(&self) -> bool {
+        self.rows
+            .iter()
+            .any(|row| !row.rx.borrow().state.is_terminal())
+    }
+}
+
+#[cfg(test)]
+mod has_active_tests {
+    use norte_core::backend::TaskRef;
+    use norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};
+
+    use super::TaskBoard;
+
+    fn task_ref(id: u64, state: TaskState) -> TaskRef {
+        let progress = TaskProgress {
+            task_id: TaskId::new(id),
+            kind: TaskKind::Copy,
+            state,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: None,
+            current: None,
+        };
+        let (_tx, rx) = tokio::sync::watch::channel(progress);
+        TaskRef::synthetic_for_tests(TaskId::new(id), rx)
+    }
+
+    #[test]
+    fn vacio_no_esta_activo() {
+        let board = TaskBoard::default();
+        assert!(!board.has_active());
+    }
+
+    #[test]
+    fn una_fila_en_vuelo_es_activa() {
+        let mut board = TaskBoard::default();
+        board.push(task_ref(1, TaskState::Running), None);
+        assert!(board.has_active());
+    }
+
+    #[test]
+    fn todas_las_filas_terminales_no_es_activa() {
+        let mut board = TaskBoard::default();
+        board.push(task_ref(1, TaskState::Completed), None);
+        board.push(task_ref(2, TaskState::Cancelled), None);
+        assert!(!board.has_active());
+    }
+
+    #[test]
+    fn mezcla_una_en_vuelo_entre_terminales_es_activa() {
+        let mut board = TaskBoard::default();
+        board.push(task_ref(1, TaskState::Completed), None);
+        board.push(task_ref(2, TaskState::Running), None);
+        assert!(board.has_active());
+    }
 }

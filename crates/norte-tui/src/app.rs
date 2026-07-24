@@ -1560,6 +1560,33 @@ pub enum Modal {
         /// correlar con el `lua-trust.toml` a ojo.
         hash_abbrev: String,
     },
+    /// Confirmar `app.quit` (S2, `[ui] confirm_quit`): abierto por el brazo
+    /// de despacho de `app.quit` en `main.rs` cuando [`quit_needs_confirm`]
+    /// lo pide — SIN datos propios (a diferencia del equivalente de la GUI,
+    /// que cuenta tasks/marcas para el título): sin riesgo de seguridad que
+    /// enmascarar, así que reutiliza el ALLOWLIST/hint de
+    /// [`ALLOW_CONFIRM`]/`DialogHints::confirm` sin necesitar los suyos
+    /// propios. Los Ctrl+C hardcodeados del resto de `main.rs` NO pasan por
+    /// aquí a propósito (ver el comentario junto al brazo de despacho): ese
+    /// atajo de salida de emergencia se mantiene inmediato en todos los
+    /// overlays, igual que antes de S2.
+    ConfirmQuit,
+}
+
+/// S2 (`[ui] confirm_quit`): si el brazo de despacho de `app.quit` debe abrir
+/// [`Modal::ConfirmQuit`] en vez de cerrar de inmediato. Pura — el run loop
+/// aporta `board_has_active` ([`crate::tasks::TaskBoard::has_active`]), así
+/// que es testeable sin ratatui/tokio. `Auto` (por defecto) es el
+/// comportamiento pre-S2: confirma solo si el panel de tasks tiene trabajo en
+/// vuelo; `Always`/`Never` son incondicionales.
+#[must_use]
+pub fn quit_needs_confirm(mode: crate::config::ConfirmQuit, board_has_active: bool) -> bool {
+    use crate::config::ConfirmQuit;
+    match mode {
+        ConfirmQuit::Never => false,
+        ConfirmQuit::Always => true,
+        ConfirmQuit::Auto => board_has_active,
+    }
 }
 
 /// Resultado de una tecla sobre un modal.
@@ -1575,9 +1602,10 @@ pub enum DialogOutcome {
     Retry(norte_proto::CollisionPolicy),
 }
 
-/// ALLOWLIST de `Modal::ConfirmDelete`/`Modal::ConfirmTransfer`: `approve` y
-/// `confirm` ambos aceptan (Enter e `y` funcionan igual que antes de H1),
-/// `deny`/`cancel` rechazan. Excluye deliberadamente los comandos de
+/// ALLOWLIST de `Modal::ConfirmDelete`/`Modal::ConfirmTransfer`/
+/// `Modal::ConfirmQuit` (S2, `[ui] confirm_quit`): `approve` y `confirm`
+/// ambos aceptan (Enter e `y` funcionan igual que antes de H1), `deny`/
+/// `cancel` rechazan. Excluye deliberadamente los comandos de
 /// colisión/aprobación — un rebind de `w`→`dialog.newer` no hace nada aquí.
 pub const ALLOW_CONFIRM: &[&str] = &[
     "dialog.approve",
@@ -1663,7 +1691,7 @@ pub const ALLOW_NAV_HOTLIST: &[&str] = &[
 pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
     use norte_proto::CollisionPolicy as P;
     match modal {
-        Modal::ConfirmDelete { .. } | Modal::ConfirmTransfer { .. } => {
+        Modal::ConfirmDelete { .. } | Modal::ConfirmTransfer { .. } | Modal::ConfirmQuit => {
             if !ALLOW_CONFIRM.contains(&cmd) {
                 return None;
             }
@@ -2357,6 +2385,57 @@ mod tests {
             dialog_action(&m, "dialog.confirm"),
             None,
             "Enter (dialog.confirm) jamás confía en una host key"
+        );
+    }
+
+    /// S2 (`[ui] confirm_quit`): `Modal::ConfirmQuit` reutiliza el ALLOWLIST
+    /// de `ConfirmDelete`/`ConfirmTransfer` — `y`/Enter confirman (cierran),
+    /// `n`/Esc cancelan, cualquier otro comando queda fuera (`None`).
+    #[test]
+    fn confirm_quit_reutiliza_allow_confirm() {
+        let m = Modal::ConfirmQuit;
+        for cmd in ["dialog.approve", "dialog.confirm"] {
+            assert_eq!(dialog_action(&m, cmd), Some(DialogOutcome::Confirmed));
+        }
+        for cmd in ["dialog.deny", "dialog.cancel"] {
+            assert_eq!(dialog_action(&m, cmd), Some(DialogOutcome::Cancelled));
+        }
+        assert_eq!(
+            dialog_action(&m, "dialog.overwrite"),
+            None,
+            "fuera del allowlist de confirm: inerte"
+        );
+    }
+
+    /// S2 (`[ui] confirm_quit`): las tres combinaciones modo × trabajo en
+    /// vuelo, cada una por separado (mismo estilo que
+    /// `has_pending_work_tasks_o_marcas_o_ninguno` de la GUI).
+    #[test]
+    fn quit_needs_confirm_los_tres_modos() {
+        use crate::config::ConfirmQuit;
+        assert!(
+            !quit_needs_confirm(ConfirmQuit::Never, true),
+            "never NUNCA confirma, ni con trabajo en vuelo"
+        );
+        assert!(
+            !quit_needs_confirm(ConfirmQuit::Never, false),
+            "never NUNCA confirma"
+        );
+        assert!(
+            quit_needs_confirm(ConfirmQuit::Always, false),
+            "always SIEMPRE confirma, incluso sin trabajo pendiente"
+        );
+        assert!(
+            quit_needs_confirm(ConfirmQuit::Always, true),
+            "always SIEMPRE confirma"
+        );
+        assert!(
+            !quit_needs_confirm(ConfirmQuit::Auto, false),
+            "auto sin trabajo pendiente: cierra directo"
+        );
+        assert!(
+            quit_needs_confirm(ConfirmQuit::Auto, true),
+            "auto con trabajo pendiente: confirma (comportamiento pre-S2)"
         );
     }
 

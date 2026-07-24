@@ -19,6 +19,8 @@ modal-trust-host-fp = { $badge }fingerprint: { $fingerprint }
 modal-trust-host-note = compare it out of band before trusting.
 modal-lua-trust-title = Run project init.lua?
 modal-lua-trust-body = { $path } (sha256 { $hash }) will run WITH YOUR PERMISSIONS. A cloned repo's script can do anything you can. y = trust and run · n/Esc = deny (remembered until the file changes)
+modal-confirm-quit-title = Quit norte?
+modal-confirm-quit-body = Close the application.
 
 # --- Status bar messages ---
 msg-done = done
@@ -288,6 +290,7 @@ cli-ai-rename-confirm = Apply these renames? [y/N]
 cli-ai-rename-abort = aborted; nothing was renamed
 cli-ai-rename-done = renamed { $n } file(s)
 gui-modal-quit-title = Quit with { $tasks } task(s) running and { $marks } mark(s)?
+gui-modal-quit-title-empty = Quit norte?
 gui-modal-footer-quit = y confirm   n/Esc cancel
 gui-banner-theme-io = theme { $spec }: { $error }
 gui-banner-theme-parse = theme { $spec }: { $detail }
@@ -330,3 +333,25 @@ cli-doctor-footer-connections-not-probed = note: keyring/age are not probed (sid
 cli-doctor-detail-connections-parse = connections.toml does not parse (fix or remove it)
 cli-doctor-detail-connections-none = no connections.toml, or no connections configured
 cli-doctor-detail-plugin-digest-stale = { $id }: manifest capabilities changed since approval; re-approval required
+
+# --- Settings registry (S2): curated GENERAL settings shown by the TUI
+# overlay (S3) and the GUI view (S4). One name/desc pair per entry in
+# `norte_frontend::settings::catalog()`.
+setting-ui-theme-name = Theme
+setting-ui-theme-desc = Color preset for the UI (or a path to a custom theme file, ADR 0020).
+setting-ui-lang-name = Language
+setting-ui-lang-desc = Interface language. Leave unset to negotiate from the environment.
+setting-ui-font-name = UI font
+setting-ui-font-desc = Font family for GUI chrome (window text, not the listing). Ignored by the TUI.
+setting-ui-mono-font-name = Monospace font
+setting-ui-mono-font-desc = Font family for listings and the file viewer. Ignored by the TUI.
+setting-ui-font-size-name = Font size
+setting-ui-font-size-desc = Base UI font size in pixels (8-32). Ignored by the TUI.
+setting-ui-quick-search-name = Quick search mode
+setting-ui-quick-search-desc = What `/` does: narrow the listing (filter) or move the cursor without changing it (jump).
+setting-ui-reduce-motion-name = Reduce motion
+setting-ui-reduce-motion-desc = Turn off animated effects (CRT flicker, cursor blink) for accessibility. GUI only.
+setting-ui-confirm-quit-name = Confirm before quitting
+setting-ui-confirm-quit-desc = When quitting asks for confirmation: only with pending work (auto), always, or never.
+setting-keymap-preset-name = Keymap preset
+setting-keymap-preset-desc = Base key-binding preset (orthodox, vim, or cua). User/project layers can still rebind on top.

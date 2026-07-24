@@ -736,6 +736,12 @@ fn draw_modal(
                 &[("path", path.as_str()), ("hash", hash_abbrev.as_str())],
             ),
         ),
+        // S2 (`[ui] confirm_quit`): sin datos propios — un título+cuerpo
+        // fijos más el hint (`hints.confirm`, ALLOW_CONFIRM reutilizado).
+        Modal::ConfirmQuit => (
+            t("modal-confirm-quit-title"),
+            format!("{}\n{}", t("modal-confirm-quit-body"), hints.confirm),
+        ),
     };
     // Un borrado PERMANENTE (o aprobar una mutación de agente) tiñe el borde
     // de aviso (rol `warning`).

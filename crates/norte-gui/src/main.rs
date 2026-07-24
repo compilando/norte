@@ -57,6 +57,7 @@ use gpui_platform::application;
 
 use std::ops::Range;
 
+use norte_config::ConfirmQuit;
 use norte_frontend::{PaneState, nav::Mode};
 use norte_proto::{Entry, EntryKind, Segment, VPath};
 use norte_theme::{FileKind, Role, Theme};
@@ -219,6 +220,12 @@ struct NorteGui {
     /// nunca se reinicia durante la vida de la ventana (un flicker
     /// "reiniciado" en cada frame no oscilaría, `sin(0)` siempre).
     motion_epoch: std::time::Instant,
+    /// `[ui] confirm_quit` (S2), resuelto UNA vez en `new` junto al resto de
+    /// `[ui]` — `applies_live` no aplica a este campo por diseño de la GUI
+    /// (no hay hot-reload de config en este frontend a diferencia del TUI;
+    /// solo se lee al arrancar). `Default` = `Auto`, el comportamiento
+    /// pre-S2 (confirma solo con trabajo pendiente).
+    confirm_quit: ConfirmQuit,
 }
 
 impl NorteGui {
@@ -371,6 +378,14 @@ impl NorteGui {
         };
         let fonts = FontSet::resolve(&ui_family, &mono_family, font_size);
 
+        // `[ui] confirm_quit` (S2): resuelto aquí junto al resto de `[ui]`,
+        // mismo criterio "config inválida degrada al default" que el resto
+        // del arranque — jamás aborta.
+        let confirm_quit = loaded
+            .as_ref()
+            .map(|cfg| cfg.common.ui_confirm_quit)
+            .unwrap_or_default();
+
         match LoadConfig::from_env() {
             Ok(cfg) => {
                 let LoadConfig { socket, dir } = cfg;
@@ -411,6 +426,7 @@ impl NorteGui {
                     viewer_loading: false,
                     fonts,
                     motion_epoch: std::time::Instant::now(),
+                    confirm_quit,
                 };
                 gui.spawn_event_loop(event_rx, cx);
                 gui.cd(0, dir.clone(), cx);
@@ -468,6 +484,7 @@ impl NorteGui {
                     viewer_loading: false,
                     fonts,
                     motion_epoch: std::time::Instant::now(),
+                    confirm_quit,
                 }
             }
         }
@@ -834,21 +851,29 @@ impl NorteGui {
         self.clamp_task_cursor();
     }
 
-    /// `app.quit` (revisión C2/G0 IMPORTANT 3): con trabajo pendiente
-    /// (tasks visibles en la franja o marcas activas), abre
-    /// [`Modal::ConfirmQuit`] en vez de cerrar de inmediato — "y" en el
+    /// `app.quit` (revisión C2/G0 IMPORTANT 3; S2 `[ui] confirm_quit`): con
+    /// trabajo pendiente (tasks visibles en la franja o marcas activas),
+    /// abre [`Modal::ConfirmQuit`] en vez de cerrar de inmediato — "y" en el
     /// modal manda `ModalOutcome::Quit`, que el dispatcher de `on_key` ya
-    /// traduce a `cx.quit()`. Estado vacío: cierra YA (paridad con la TUI,
-    /// que jamás confirma — `crates/norte-tui/src/main.rs` hace
-    /// `app.quit = true` sin preguntar).
+    /// traduce a `cx.quit()`. `self.confirm_quit` decide el resto: `Never`
+    /// cierra siempre YA (ni siquiera consulta lo pendiente — a diferencia
+    /// del gate pre-S2, que solo conocía "auto"), `Always` abre el modal
+    /// incluso sin nada pendiente (título genérico, ver `modal_lines`),
+    /// `Auto` es el comportamiento pre-S2 (paridad con la TUI en su modo por
+    /// defecto — `crates/norte-tui/src/main.rs`, `quit_needs_confirm`).
     fn quit_or_confirm(&mut self, cx: &mut Context<Self>) {
+        if self.confirm_quit == ConfirmQuit::Never {
+            cx.quit();
+            return;
+        }
         let marks = self.panes[0].marks_len() + self.panes[1].marks_len();
         let tasks = confirm_quit_task_count(self.task_progress.len(), marks, self.inflight.len());
         // `inflight` cubre la ventana entre submit y el primer evento de
         // task: una op recién lanzada aún sin progreso también debe frenar
         // el quit (solo el GATE; los contadores del modal siguen siendo los
         // visibles, ver `confirm_quit_task_count`).
-        if has_pending_work(tasks, marks) || !self.inflight.is_empty() {
+        let pending = has_pending_work(tasks, marks) || !self.inflight.is_empty();
+        if confirm_quit_should_open(self.confirm_quit, pending) {
             self.modal = Some(Modal::ConfirmQuit { tasks, marks });
         } else {
             cx.quit();
@@ -2037,6 +2062,23 @@ fn confirm_quit_task_count(task_progress_len: usize, marks: usize, inflight_len:
     }
 }
 
+/// S2 (`[ui] confirm_quit`): si `quit_or_confirm` debe abrir el modal en vez
+/// de cerrar, dado el modo configurado y si HAY trabajo pendiente (ya
+/// calculado por el caller — [`has_pending_work`]/`inflight`). `Never` NO
+/// pasa por aquí (el caller corta antes, ver `quit_or_confirm`); mantenerlo
+/// fuera de este `match` sería redundante con ese corte temprano, así que
+/// esta función solo cubre `Always`/`Auto` — llamarla con `Never` es
+/// correcto igualmente (`false` incondicional) pero nunca ocurre en el
+/// camino real. Puro: testeable sin GPUI.
+#[must_use]
+fn confirm_quit_should_open(mode: ConfirmQuit, pending: bool) -> bool {
+    match mode {
+        ConfirmQuit::Never => false,
+        ConfirmQuit::Always => true,
+        ConfirmQuit::Auto => pending,
+    }
+}
+
 /// ¿Sigue vigente el resultado de un `fs.list`? Solo si su generación coincide
 /// con la vigente del pane: un cd más nuevo ya incrementó el contador, dejando
 /// stale a cualquier list en vuelo anterior. Comparar la generación (y no el
@@ -2230,14 +2272,22 @@ fn modal_lines(m: &Modal) -> Vec<String> {
         }
         Modal::ConfirmQuit { tasks, marks } => {
             // Contadores puros (`usize`), sin bytes de usuario — nada que
-            // sanear aquí, a diferencia del resto de modales.
-            vec![norte_i18n::ta(
-                "gui-modal-quit-title",
-                &[
-                    ("tasks", tasks.to_string().as_str()),
-                    ("marks", marks.to_string().as_str()),
-                ],
-            )]
+            // sanear aquí, a diferencia del resto de modales. S2: con
+            // `confirm_quit = "always"` este modal también se abre SIN nada
+            // pendiente — "Quit with 0 task(s) running and 0 mark(s)?" es
+            // gramatical pero raro; un título genérico evita la falsa
+            // sensación de que "0 tasks" es una advertencia real.
+            if *tasks == 0 && *marks == 0 {
+                vec![norte_i18n::t("gui-modal-quit-title-empty")]
+            } else {
+                vec![norte_i18n::ta(
+                    "gui-modal-quit-title",
+                    &[
+                        ("tasks", tasks.to_string().as_str()),
+                        ("marks", marks.to_string().as_str()),
+                    ],
+                )]
+            }
         }
     }
 }
@@ -3343,12 +3393,13 @@ mod tests {
         PANE_BG, PANE_BG_FOCUS, QUICK_FG, SEL_BG,
     };
     use super::{
-        ChromeColors, FontSet, ImagePreview, affected_dirs, apply_viewer_command, banner_safe,
-        confirm_quit_task_count, first_cancelable, flicker_factor, flicker_scale,
-        generation_is_current, glowed, has_pending_work, image_preview_from, image_status,
-        keymap_error_detail, modal_footer_colors, modal_panel_colors, modal_title_colors,
-        motion_active, pending_hint, retain_active, row_label, task_at_cursor,
-        unknown_preset_banner, validated_family, viewer_header, viewer_status,
+        ChromeColors, ConfirmQuit, FontSet, ImagePreview, affected_dirs, apply_viewer_command,
+        banner_safe, confirm_quit_should_open, confirm_quit_task_count, first_cancelable,
+        flicker_factor, flicker_scale, generation_is_current, glowed, has_pending_work,
+        image_preview_from, image_status, keymap_error_detail, modal_footer_colors,
+        modal_panel_colors, modal_title_colors, motion_active, pending_hint, retain_active,
+        row_label, task_at_cursor, unknown_preset_banner, validated_family, viewer_header,
+        viewer_status,
     };
     use norte_frontend::viewer::Viewer;
     use norte_proto::{EntryKind, VPath};
@@ -3880,6 +3931,39 @@ mod tests {
         assert!(has_pending_work(1, 0), "solo tasks → true");
         assert!(has_pending_work(0, 1), "solo marcas → true");
         assert!(has_pending_work(3, 2), "ambos → true");
+    }
+
+    /// S2 (`[ui] confirm_quit`): las tres combinaciones modo × pendiente,
+    /// cada una por separado — mismo estilo que
+    /// `has_pending_work_tasks_o_marcas_o_ninguno` de arriba. `Never` no pasa
+    /// por esta función en el camino real (`quit_or_confirm` corta antes),
+    /// pero se pinza igual (`false` incondicional, documentado en su doc).
+    #[test]
+    fn confirm_quit_should_open_los_tres_modos() {
+        assert!(
+            !confirm_quit_should_open(ConfirmQuit::Never, true),
+            "never nunca abre, ni con trabajo pendiente"
+        );
+        assert!(
+            !confirm_quit_should_open(ConfirmQuit::Never, false),
+            "never nunca abre"
+        );
+        assert!(
+            confirm_quit_should_open(ConfirmQuit::Always, false),
+            "always SIEMPRE abre, incluso sin nada pendiente"
+        );
+        assert!(
+            confirm_quit_should_open(ConfirmQuit::Always, true),
+            "always SIEMPRE abre"
+        );
+        assert!(
+            !confirm_quit_should_open(ConfirmQuit::Auto, false),
+            "auto sin pendiente: cierra directo"
+        );
+        assert!(
+            confirm_quit_should_open(ConfirmQuit::Auto, true),
+            "auto con pendiente: abre (comportamiento pre-S2)"
+        );
     }
 
     /// Revisión C2/G0 IMPORTANT 2: los tres presets de fábrica NO avisan;

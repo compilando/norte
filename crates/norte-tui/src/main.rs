@@ -386,6 +386,7 @@ async fn main() -> Result<()> {
         layers,
         cli_preset,
         cfg.quick_search_mode,
+        cfg.common.ui_confirm_quit,
         cfg_rx,
         foreign_tasks,
         conn_events,
@@ -551,6 +552,10 @@ async fn run(
     // Modo del quick search (`[ui] quick_search`): vive en el run loop como
     // el preset CLI y se actualiza en el hot-reload de config.
     mut quick_mode: nav::Mode,
+    // `[ui] confirm_quit` (S2): mismo patrón que `quick_mode` — vive en el
+    // run loop, `applies_live` (solo afecta a `app.quit` NUEVOS, uno en
+    // curso ya decidió) y se actualiza en el hot-reload.
+    mut confirm_quit: config::ConfirmQuit,
     mut cfg_rx: tokio::sync::mpsc::Receiver<()>,
     mut foreign_tasks: Option<tokio::sync::mpsc::UnboundedReceiver<norte_core::backend::TaskRef>>,
     mut conn_events: Option<tokio::sync::mpsc::UnboundedReceiver<ConnEvent>>,
@@ -764,6 +769,7 @@ async fn run(
                     &layers,
                     cli_preset.as_deref(),
                     &mut quick_mode,
+                    &mut confirm_quit,
                 )
                 .await;
                 // Hot-reload del scripting Lua (ADR 0026): host NUEVO entero
@@ -871,7 +877,13 @@ async fn run(
                                     // hubiera pulsado — incluida la apertura
                                     // de otro overlay (p.ej. `app.help`).
                                     let outcome = dispatch(
-                                        app, backend, &mut events, help_lines, quick_mode, &cmd,
+                                        app,
+                                        backend,
+                                        &mut events,
+                                        help_lines,
+                                        quick_mode,
+                                        confirm_quit,
+                                        &cmd,
                                     )
                                     .await;
                                     apply_cd(&mut fill, &mut last_probed, outcome);
@@ -1045,7 +1057,12 @@ async fn run(
                                     // MAJOR T4).
                                     if app.focused_mut().quick_confirm() {
                                         let outcome = dispatch(
-                                            app, backend, &mut events, help_lines, quick_mode,
+                                            app,
+                                            backend,
+                                            &mut events,
+                                            help_lines,
+                                            quick_mode,
+                                            confirm_quit,
                                             "nav.enter",
                                         )
                                         .await;
@@ -1091,7 +1108,13 @@ async fn run(
                                         continue;
                                     }
                                     let outcome = dispatch(
-                                        app, backend, &mut events, help_lines, quick_mode, &cmd,
+                                        app,
+                                        backend,
+                                        &mut events,
+                                        help_lines,
+                                        quick_mode,
+                                        confirm_quit,
+                                        &cmd,
                                     )
                                     .await;
                                     apply_cd(&mut fill, &mut last_probed, outcome);
@@ -1505,6 +1528,7 @@ async fn reload_config(
     layers: &Layers,
     cli_preset: Option<&str>,
     quick_mode: &mut nav::Mode,
+    confirm_quit: &mut config::ConfirmQuit,
 ) {
     match config::load_async(layers.clone()).await {
         Ok(cfg) => match build_keymaps(&cfg, cli_preset) {
@@ -1513,6 +1537,10 @@ async fn reload_config(
                 // afecta a quick searches NUEVOS; uno abierto conserva el
                 // suyo). Mismo criterio que el tema: solo si TODO aplicó.
                 *quick_mode = cfg.quick_search_mode;
+                // `[ui] confirm_quit` (S2): mismo criterio — solo afecta a
+                // `app.quit` NUEVOS (uno ya abierto como `Modal::ConfirmQuit`
+                // conserva su decisión hasta que el usuario responda).
+                *confirm_quit = cfg.common.ui_confirm_quit;
                 // La copia de hotlist también (un popup abierto conserva su
                 // snapshot hasta reabrirse — items congelados a propósito).
                 app.hotlist.clone_from(&cfg.common.hotlist);
@@ -2172,6 +2200,10 @@ async fn on_dialog_key(
                 // TrustLuaInit se intercepta ANTES en el run loop (necesita
                 // el LuaHost): inalcanzable aquí — no-op defensivo.
                 Modal::Collision { .. } | Modal::TrustLuaInit { .. } => {}
+                // S2 (`[ui] confirm_quit`): confirmar cierra — el run loop
+                // lo detecta en su chequeo de `app.quit` de cada vuelta
+                // (main.rs, tope del `loop`).
+                Modal::ConfirmQuit => app.quit = true,
                 Modal::ApproveAgentOp { req } => {
                     decide_approval(app, backend, req.approval_id, true).await;
                 }
@@ -2638,13 +2670,26 @@ async fn dispatch(
     events: &mut EventStream,
     help_lines: &[String],
     quick_mode: nav::Mode,
+    confirm_quit: config::ConfirmQuit,
     cmd: &str,
 ) -> Cd {
     // Solo los cd (nav.enter/nav.parent) tocan el relleno en background; el
     // resto de comandos lo dejan como está (`Cancelled`).
     let mut cd_outcome = Cd::Cancelled;
     match cmd {
-        "app.quit" => app.quit = true,
+        // S2 (`[ui] confirm_quit`): SOLO este brazo (el despacho nombrado de
+        // `app.quit`, alcanzable por keymap Y por la palette) honra la
+        // config y puede abrir `Modal::ConfirmQuit`. Los `app.quit = true`
+        // hardcodeados de Ctrl+C repartidos por el resto de este fichero
+        // (cada overlay tiene el suyo, documentado in situ) son la salida de
+        // emergencia — se quedan INMEDIATOS a propósito, jamás preguntan.
+        "app.quit" => {
+            if norte_tui::app::quit_needs_confirm(confirm_quit, app.board.has_active()) {
+                app.modal = Some(Modal::ConfirmQuit);
+            } else {
+                app.quit = true;
+            }
+        }
         "pane.switch" => app.switch_focus(),
         // `/` (spec 2026-07-18): arranca el quick search en el modo de la
         // config. Con uno ya activo las teclas se comen antes del resolver,

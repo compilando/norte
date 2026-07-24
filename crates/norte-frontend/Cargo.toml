@@ -18,6 +18,12 @@ serde = { workspace = true, features = ["derive"] }
 schemars = { workspace = true, features = ["derive"], optional = true }
 thiserror.workspace = true
 toml.workspace = true
+# Settings registry (S2, `settings.rs`): cada `SettingDef` resuelve un par de
+# claves Fluent (`setting-<id>-name`/`-desc`) — el mismo crate que YA usan
+# ambos frontends para localizar el resto de la UI, aquí en su capa
+# compartida en vez de duplicado. In-workspace, sin coste de build nuevo
+# fuera de compilar un crate que ya se compilaba de todas formas.
+norte-i18n.workspace = true
 
 [dev-dependencies]
 norte-testkit.workspace = true

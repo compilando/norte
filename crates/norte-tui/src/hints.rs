@@ -86,7 +86,8 @@ pub fn dialog_hints(supported: &[&str], eff: &Effective) -> String {
 /// despacho, jamás una copia.
 #[derive(Debug, Clone, Default)]
 pub struct DialogHints {
-    /// `Modal::ConfirmDelete`/`Modal::ConfirmTransfer`.
+    /// `Modal::ConfirmDelete`/`Modal::ConfirmTransfer`/`Modal::ConfirmQuit`
+    /// (S2, `[ui] confirm_quit`).
     pub confirm: String,
     /// `Modal::Collision`.
     pub collision: String,

@@ -19,6 +19,8 @@ modal-trust-host-fp = { $badge }huella: { $fingerprint }
 modal-trust-host-note = compárala fuera de banda antes de confiar.
 modal-lua-trust-title = ¿Ejecutar el init.lua del proyecto?
 modal-lua-trust-body = { $path } (sha256 { $hash }) se ejecutará CON TUS PERMISOS. El script de un repo clonado puede hacer todo lo que tú puedas. y = confiar y ejecutar · n/Esc = denegar (se recuerda hasta que el fichero cambie)
+modal-confirm-quit-title = ¿Salir de norte?
+modal-confirm-quit-body = Cierra la aplicación.
 
 # --- Mensajes de la barra ---
 msg-done = hecho
@@ -289,6 +291,7 @@ cli-ai-rename-confirm = ¿Aplicar estos renombrados? [s/N]
 cli-ai-rename-abort = cancelado; no se renombró nada
 cli-ai-rename-done = renombrados { $n } archivo(s)
 gui-modal-quit-title = ¿Salir con { $tasks } tarea(s) en curso y { $marks } marca(s)?
+gui-modal-quit-title-empty = ¿Salir de norte?
 gui-modal-footer-quit = y confirmar   n/Esc cancelar
 gui-banner-theme-io = tema { $spec }: { $error }
 gui-banner-theme-parse = tema { $spec }: { $detail }
@@ -332,3 +335,25 @@ cli-doctor-footer-connections-not-probed = nota: el keyring/`age` no se prueban 
 cli-doctor-detail-connections-parse = connections.toml no parsea (corrígelo o bórralo)
 cli-doctor-detail-connections-none = no hay connections.toml, o no hay conexiones configuradas
 cli-doctor-detail-plugin-digest-stale = { $id }: las capabilities del manifiesto cambiaron desde la aprobación; requiere re-aprobación
+
+# --- Registro de settings (S2): ajustes generales curados que muestra el
+# overlay del TUI (S3) y la vista de la GUI (S4). Un par nombre/desc por
+# entrada de `norte_frontend::settings::catalog()`.
+setting-ui-theme-name = Tema
+setting-ui-theme-desc = Preset de color de la interfaz (o una ruta a un fichero de tema propio, ADR 0020).
+setting-ui-lang-name = Idioma
+setting-ui-lang-desc = Idioma de la interfaz. Déjalo sin fijar para negociarlo desde el entorno.
+setting-ui-font-name = Tipografía de la interfaz
+setting-ui-font-desc = Familia tipográfica del chrome de la GUI (texto de ventana, no el listado). El TUI la ignora.
+setting-ui-mono-font-name = Tipografía monoespaciada
+setting-ui-mono-font-desc = Familia tipográfica de los listados y el visor de ficheros. El TUI la ignora.
+setting-ui-font-size-name = Tamaño de letra
+setting-ui-font-size-desc = Tamaño base de la tipografía en píxeles (8-32). El TUI lo ignora.
+setting-ui-quick-search-name = Modo de búsqueda rápida
+setting-ui-quick-search-desc = Qué hace `/`: filtrar el listado (filter) o mover el cursor sin cambiarlo (jump).
+setting-ui-reduce-motion-name = Reducir movimiento
+setting-ui-reduce-motion-desc = Desactiva los efectos animados (flicker CRT, parpadeo del cursor) por accesibilidad. Solo GUI.
+setting-ui-confirm-quit-name = Confirmar antes de salir
+setting-ui-confirm-quit-desc = Al salir pide confirmación: solo con trabajo pendiente (auto), siempre, o nunca.
+setting-keymap-preset-name = Preset de keymap
+setting-keymap-preset-desc = Preset base de atajos de teclado (orthodox, vim o cua). Las capas de usuario/proyecto pueden seguir rebindeando encima.

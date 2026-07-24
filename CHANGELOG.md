@@ -9,6 +9,22 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **`[ui] confirm_quit` (S2):** a new `norte.toml` setting controls whether
+  quitting asks for confirmation — `"auto"` (default, unchanged behavior)
+  confirms only with pending work, `"always"` always confirms even with
+  nothing pending, and `"never"` closes immediately. Wired end to end in
+  both frontends: the GUI's existing quit-confirmation modal now honors the
+  three modes (and shows a generic title instead of "0 task(s), 0 mark(s)"
+  when `"always"` fires with nothing pending), and the TUI gains its own
+  confirmation modal on `app.quit` (Ctrl+C's emergency-exit shortcuts stay
+  immediate everywhere, unaffected by this setting) — `"auto"` there
+  confirms only when the task board has work in flight. A generic
+  comment-preserving config writer (`norte_config::persist_set`) and a
+  curated, Fluent-localized settings registry
+  (`norte_frontend::settings::catalog`) land alongside it as the shared
+  foundation the upcoming in-app settings UI (VSCode-style, searchable) will
+  build on.
+
 - **Per-directory cursor memory (S1):** both the TUI and the GUI now
   remember where the cursor was in each directory you visit this session
   (in-memory only, capped at 64 directories, byte-exact identity — hostile

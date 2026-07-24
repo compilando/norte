@@ -19,6 +19,7 @@ pub mod keymap;
 pub mod nav;
 pub mod openers;
 mod pane;
+pub mod settings;
 mod sort;
 pub mod theme;
 pub mod viewer;

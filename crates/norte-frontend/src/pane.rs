@@ -443,7 +443,8 @@ impl PaneState {
     }
 
     /// Graba `(dir actual, cursor actual)` en la memoria de cursor (spec
-    /// §S1): sesión-solo, por pane, LRU con tope [`CURSOR_MEMORY_CAP`].
+    /// §S1): sesión-solo, por pane, LRU con tope `CURSOR_MEMORY_CAP`
+    /// (constante privada del módulo, 64).
     /// Reemplaza cualquier entrada previa del mismo dir (identidad
     /// byte-exacta, sin normalizar — regla 1) para que cada dir tenga como
     /// mucho UNA entrada, siempre la más reciente.
