@@ -20,7 +20,29 @@
 // layout `wit/deps/` (el wit-parser del árbol, 0.239, no soporta paquetes
 // anidados), y solo entonces la superficie estable deja de romperse con
 // `provider`. protocol-guardian.
-package norte:plugin@0.4.0;
+//
+// 0.4.0 → 0.5.0 (P2 Task 3): añade la interfaz `host-config` (settings
+// VALIDADAS de `[config]`, P2) importada por AMBOS worlds. Es aditiva SOLO en
+// el sentido estrecho de LINKING wasmtime: el `Linker` del host puede ofrecer
+// una función más de las que un componente concreto importa sin que eso, por
+// sí mismo, rompa nada (un import de más en el linker nunca es el problema;
+// solo un import NO resuelto lo es). Pero el MISMO "AVISO" de arriba se aplica
+// igual de fuerte aquí, y no es solo teórico: VERIFICADO empíricamente para
+// este bump — un `.wasm` de `command-demo` compilado ANTES de este cambio
+// (paquete 0.4.0, sin `host-config`) fue probado contra el host YA en 0.5.0 y
+// la instanciación FALLA:
+//   "component imports instance `norte:plugin/host-log@0.4.0`, but a matching
+//   implementation was not found in the linker"
+// Es decir, el guest viejo pide `host-log@0.4.0` (el nombre versionado que
+// llevaba grabado al compilar) y el linker del host 0.5.0 solo ofrece
+// `host-log@0.5.0` — rompe por el LADO DE IMPORT, no solo el de export como
+// advertía el análisis original. Confirma la deuda del paquete compartido
+// (ADR 0032): CUALQUIER bump de este `package` invalida TODOS los artefactos
+// `.wasm` ya compilados, aditivo o no en su contenido textual. Dentro de este
+// repo no importa (los guests de `examples-wasm/` se recompilan siempre desde
+// el WIT actual, vía symlink) — importaría el día que un plugin de terceros
+// exista de verdad.
+package norte:plugin@0.5.0;
 
 /// La puerta de host MÍNIMA (demuestra el gating host↔guest): un plugin puede
 /// pedir al host que registre una línea de log (inocua, sin capability) y leer
@@ -32,6 +54,26 @@ interface host-log {
     /// (fs-read=scoped). Si el plugin NO declaró fs-read, el host devuelve
     /// Err — el enforcement vive en el HOST, no en el guest (ADR 0022 D4).
     read-scoped: func(token: string) -> result<list<u8>, string>;
+}
+
+/// Settings VALIDADAS de `[config]` del plugin (P2 decisión 4): el host ya
+/// resolvió los defaults del esquema del manifiesto con `config.toml`
+/// superpuesto y validado (`norte-plugin-host::resolve_settings`) ANTES de
+/// instanciar — el guest NUNCA ve el `config.toml` crudo ni decide sobre su
+/// propia validez, solo lee el resultado. Codificación canónica de string
+/// (mismo criterio en host y guest): `bool` → `"true"`/`"false"`; `int` →
+/// decimal; `string`/`enum` → el texto crudo.
+///
+/// Puramente de LECTURA sobre un mapa en memoria del host: ninguna función
+/// toca FS, red ni reloj (el sandbox de M4-P2 sigue intacto — esto no abre
+/// una puerta nueva, solo expone datos que el host YA tenía resueltos antes de
+/// instanciar).
+interface host-config {
+    /// El valor de `key`, o `none` si `key` no está declarada en `[config]`
+    /// del manifiesto.
+    get: func(key: string) -> option<string>;
+    /// Todos los pares clave/valor resueltos (defaults + overrides).
+    all: func() -> list<tuple<string, string>>;
 }
 
 /// Genera una previsualización de UN recurso que el HOST ya leyó y le pasa
@@ -59,6 +101,7 @@ interface command {
 /// no-soportada. Worlds por-categoría = deuda P2b.
 world norte-plugin {
     import host-log;
+    import host-config;
     export previewer;
     export command;
 }
@@ -193,5 +236,6 @@ interface provider {
 /// previewer/command.
 world norte-provider {
     import host-log;
+    import host-config;
     export provider;
 }

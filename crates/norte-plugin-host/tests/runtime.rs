@@ -133,3 +133,49 @@ fn fs_read_scoped_gatea_la_puerta_en_el_host() {
     con.preload_scoped("demo", b"contenido".to_vec());
     assert_eq!(con.run_command("read", "").expect("read"), "contenido");
 }
+
+#[test]
+fn host_config_entrega_settings_al_guest_real() {
+    // P2 Task 3: `set_settings` + el comando `config` del guest real
+    // (`host_config::get` bajo el capó) — end-to-end sin pasar por el
+    // catálogo/registro (eso lo cubre `plugins_config_e2e.rs` en norte-core).
+    let Some(wasm) = support::build_guest("command-demo") else {
+        return;
+    };
+    let rt = norte_plugin_host::PluginRuntime::new().expect("engine");
+
+    // Sin `set_settings`: el mapa por defecto está vacío, `get` no encuentra
+    // nada (mismo comportamiento que un plugin sin `[config]`).
+    let mut sin = rt
+        .instantiate(&wasm, norte_plugin_host::Capabilities::default())
+        .expect("instancia");
+    let err = sin
+        .run_command("config", "greeting")
+        .expect_err("sin set_settings no hay nada que leer");
+    assert!(
+        matches!(err, norte_plugin_host::RuntimeError::Guest(ref m) if m.contains("greeting")),
+        "fue {err:?}"
+    );
+
+    // Con `set_settings`: el guest lee el valor instalado tal cual.
+    let mut con = rt
+        .instantiate(&wasm, norte_plugin_host::Capabilities::default())
+        .expect("instancia");
+    con.set_settings(std::collections::BTreeMap::from([(
+        "greeting".to_string(),
+        "hola mundo".to_string(),
+    )]));
+    assert_eq!(
+        con.run_command("config", "greeting").expect("config"),
+        "hola mundo"
+    );
+    // Una clave NO instalada sigue sin encontrarse, aunque el mapa no esté
+    // vacío (no es "todo o nada": es por-clave).
+    let err = con
+        .run_command("config", "no-declarada")
+        .expect_err("clave ausente del mapa instalado");
+    assert!(
+        matches!(err, norte_plugin_host::RuntimeError::Guest(ref m) if m.contains("no-declarada")),
+        "fue {err:?}"
+    );
+}

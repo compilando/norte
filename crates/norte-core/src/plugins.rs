@@ -447,6 +447,12 @@ impl PluginRegistry {
     /// 2). El daemon prefiere separar resolución (bajo lock) y ejecución (fuera
     /// del lock) llamando a [`Self::resolve_runnable`] directamente.
     ///
+    /// Entrega al guest los valores de `[config]` YA resueltos (P2 Task 2,
+    /// [`Self::settings_of`]) vía `host-config` (P2 Task 3) ANTES de invocar
+    /// el comando — un plugin sin `[config]` recibe el mapa vacío
+    /// ([`Self::settings_of`] siempre devuelve `Some` para un id descubierto,
+    /// nunca `None` aquí: `resolve_runnable` ya validó que existe).
+    ///
     /// # Errors
     /// [`PluginRunError`] si el plugin no existe, no está aprobado, está
     /// desactivado, no tiene binario, o el runtime falla.
@@ -459,6 +465,7 @@ impl PluginRegistry {
     ) -> Result<String, PluginRunError> {
         let (wasm, caps) = self.resolve_runnable(id)?;
         let mut inst = runtime.instantiate(&wasm, caps)?;
+        inst.set_settings(self.settings_of(id).cloned().unwrap_or_default());
         Ok(inst.run_command(command, arg)?)
     }
 

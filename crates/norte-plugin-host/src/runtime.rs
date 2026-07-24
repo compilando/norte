@@ -6,7 +6,7 @@
 //! hostil no puede evadir el gating porque la comprobación se hace en la
 //! implementación host de `host-log::read-scoped`, antes de entregar bytes.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,7 +20,7 @@ use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::bindings::NortePlugin;
 use crate::bindings::exports::norte::plugin::previewer::PreviewInput;
-use crate::bindings::norte::plugin::host_log;
+use crate::bindings::norte::plugin::{host_config, host_log};
 use crate::capability::Capabilities;
 
 /// Tope de líneas de log que un plugin puede acumular (anti-DoS: el guest no
@@ -123,14 +123,24 @@ fn check_artifact_size(len: u64) -> Result<(), RuntimeError> {
 }
 
 /// El estado que vive en el `Store<T>` de wasmtime: contexto WASI (vacío),
-/// tabla de recursos, capabilities declaradas, buffer de logs y los recursos
-/// scoped que el HOST preparó para el guest.
+/// tabla de recursos, capabilities declaradas, buffer de logs, los recursos
+/// scoped que el HOST preparó para el guest, y los valores de `[config]` (P2
+/// Task 3) que el guest puede leer vía `host-config`.
 pub struct HostState {
     ctx: WasiCtx,
     table: ResourceTable,
     caps: Capabilities,
     logs: Vec<String>,
     scoped_resources: HashMap<String, Vec<u8>>,
+    /// Valores VALIDADOS de `[config]` (P2 decisión 3/4): defaults del
+    /// esquema del manifiesto con `config.toml` ya superpuesto —
+    /// `norte-plugin-host::resolve_settings` corre ANTES de instanciar (en el
+    /// catálogo, Task 2). Vacío por defecto ([`Self`] se construye antes de
+    /// que el caller conozca el plugin concreto); [`PluginInstance::set_settings`]/
+    /// [`ProviderInstance::set_settings`] lo rellenan ANTES de invocar
+    /// cualquier export del guest (mismo patrón que
+    /// [`PluginInstance::preload_scoped`]).
+    settings: BTreeMap<String, String>,
     /// Límites de recursos del store (memoria lineal). Referenciado por
     /// `Store::limiter` vía [`WasiView`]-adyacente closure en `instantiate`.
     limits: StoreLimits,
@@ -168,6 +178,26 @@ impl host_log::Host for HostState {
             Some(bytes) => Ok(bytes.clone()),
             None => Err("token desconocido".into()),
         }
+    }
+}
+
+/// `host-config` (P2 Task 3): lecturas PURAS del mapa `settings` ya resuelto
+/// — ninguna rama toca FS, red ni reloj, a diferencia de `read-scoped` (que sí
+/// gatea contra una capability). No hay nada que gatear aquí: `settings` es
+/// SIEMPRE el resultado de una validación fail-closed hecha ANTES de llegar a
+/// esta struct (Task 2, `resolve_settings`), así que cualquier clave presente
+/// ya es segura de entregar tal cual — el sandbox invariant (regla dura 9,
+/// ningún acceso directo del guest al mundo exterior) queda intacto.
+impl host_config::Host for HostState {
+    fn get(&mut self, key: String) -> Option<String> {
+        self.settings.get(&key).cloned()
+    }
+
+    fn all(&mut self) -> Vec<(String, String)> {
+        self.settings
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 }
 
@@ -351,6 +381,16 @@ impl PluginRuntime {
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
         host_log::add_to_linker::<HostState, wasmtime::component::HasSelf<_>>(&mut linker, |s| s)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
+        // `host-config` (P2 Task 3): se linka SIEMPRE, para CUALQUIER plugin,
+        // igual que `host-log` — un guest 0.4.0 que no la importa simplemente
+        // nunca la resuelve al instanciar (el `Linker` puede ofrecer MÁS
+        // funciones de las que un world concreto exige; solo un import NO
+        // resuelto rompe la instanciación, nunca uno de más).
+        host_config::add_to_linker::<HostState, wasmtime::component::HasSelf<_>>(
+            &mut linker,
+            |s| s,
+        )
+        .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
 
         // Sandbox WASI: sin stdio heredado, sin preopens, sin env. La RED se
         // concede SOLO si la capability `net` está declarada, y aun así
@@ -394,6 +434,12 @@ impl PluginRuntime {
             caps,
             logs: Vec::new(),
             scoped_resources: HashMap::new(),
+            // Vacío hasta que el caller conozca el plugin concreto y llame a
+            // `set_settings` (mismo patrón que `scoped_resources`/
+            // `preload_scoped`, P2 Task 3) — equivale a un manifiesto sin
+            // `[config]`, el comportamiento correcto para cualquier caller
+            // que aún no fue extendido para entregar settings.
+            settings: BTreeMap::new(),
             limits,
         };
 
@@ -449,6 +495,17 @@ impl PluginInstance {
             .data_mut()
             .scoped_resources
             .insert(token.to_owned(), bytes);
+    }
+
+    /// Instala los valores VALIDADOS de `[config]` (P2 Task 3) que el guest
+    /// verá vía `host-config::get`/`all`. Debe llamarse ANTES de invocar
+    /// cualquier export que pueda leerlos (mismo patrón que
+    /// [`Self::preload_scoped`]). Un guest compilado contra un paquete
+    /// anterior que no importe `host-config` simplemente nunca llama a estas
+    /// funciones — instalar el mapa no cambia su comportamiento ni requiere
+    /// que el caller sepa si el guest las usa.
+    pub fn set_settings(&mut self, settings: BTreeMap<String, String>) {
+        self.store.data_mut().settings = settings;
     }
 
     /// Invoca el export `previewer::render` del guest.
@@ -516,6 +573,14 @@ impl std::fmt::Debug for ProviderInstance {
 }
 
 impl ProviderInstance {
+    /// Instala los valores VALIDADOS de `[config]` (P2 Task 3) que el guest
+    /// PROVIDER verá vía `host-config::get`/`all`. Mismo contrato que
+    /// [`PluginInstance::set_settings`]: llamar ANTES de invocar cualquier
+    /// export.
+    pub fn set_settings(&mut self, settings: BTreeMap<String, String>) {
+        self.store.data_mut().settings = settings;
+    }
+
     /// Las capabilities que el guest declara (stage 2: solo `read-only`).
     ///
     /// # Errors
@@ -759,5 +824,69 @@ mod tests {
                 if len == MAX_ARTIFACT_BYTES + 1 && cap == MAX_ARTIFACT_BYTES),
             "fue {err:?}"
         );
+    }
+
+    /// Un `HostState` mínimo (sin motor/engine: los campos WASI se
+    /// construyen sueltos) para probar `host_config::Host` DIRECTAMENTE, sin
+    /// compilar ningún componente WASM (P2 Task 3) — cubre `get`/`all` de
+    /// forma barata en cualquier toolchain, incluidas las que no tienen el
+    /// target `wasm32-wasip2`.
+    fn bare_host_state(settings: BTreeMap<String, String>) -> HostState {
+        HostState {
+            ctx: WasiCtxBuilder::new().build(),
+            table: ResourceTable::new(),
+            caps: Capabilities::default(),
+            logs: Vec::new(),
+            scoped_resources: HashMap::new(),
+            settings,
+            limits: StoreLimitsBuilder::new().build(),
+        }
+    }
+
+    #[test]
+    fn host_config_get_devuelve_el_valor_o_none() {
+        let mut state = bare_host_state(BTreeMap::from([(
+            "greeting".to_string(),
+            "hola".to_string(),
+        )]));
+        assert_eq!(
+            host_config::Host::get(&mut state, "greeting".to_string()),
+            Some("hola".to_string())
+        );
+        assert_eq!(
+            host_config::Host::get(&mut state, "no-declarada".to_string()),
+            None,
+            "una clave ausente del mapa resuelto es None, no un error"
+        );
+    }
+
+    #[test]
+    fn host_config_all_devuelve_todos_los_pares() {
+        let mut state = bare_host_state(BTreeMap::from([
+            ("greeting".to_string(), "hola".to_string()),
+            ("retries".to_string(), "3".to_string()),
+        ]));
+        let mut all = host_config::Host::all(&mut state);
+        all.sort();
+        assert_eq!(
+            all,
+            vec![
+                ("greeting".to_string(), "hola".to_string()),
+                ("retries".to_string(), "3".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn host_config_sin_settings_es_mapa_vacio() {
+        // El default de `prepare_common` antes de `set_settings` (mismo
+        // criterio que un plugin sin `[config]`, Task 1/2): ni `get` ni `all`
+        // deben devolver nada, jamás panicar.
+        let mut state = bare_host_state(BTreeMap::new());
+        assert_eq!(
+            host_config::Host::get(&mut state, "cualquiera".to_string()),
+            None
+        );
+        assert!(host_config::Host::all(&mut state).is_empty());
     }
 }
