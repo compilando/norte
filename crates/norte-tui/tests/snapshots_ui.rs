@@ -244,6 +244,52 @@ fn snapshot_extensions_80x24() {
     );
 }
 
+/// P1: la description de un plugin (manifest `[plugin]`, cap 280 chars) es
+/// texto de TERCEROS — una segunda línea bajo la fila del plugin, pero
+/// hostil (override RTL, corpus `rtl_override`) NUNCA se pinta cruda. Mismo
+/// criterio de enmascarado que `render_enmascara_nombre_hostil`
+/// (`extensions.rs`), a nivel de snapshot completo.
+#[test]
+fn snapshot_extensions_description_hostil_80x24() {
+    let hostil = norte_testkit::corpus::hostile_names()
+        .into_iter()
+        .find(|n| n.id == "rtl_override")
+        .expect("fixture del corpus");
+    let descripcion = String::from_utf8_lossy(&hostil.bytes).into_owned();
+    let mut app = app_base();
+    app.extensions = Some(norte_tui::app::ExtensionManager {
+        plugins: vec![norte_proto::methods::PluginInfo {
+            id: "org.norte.demo".into(),
+            name: "Demo".into(),
+            publisher: "norte".into(),
+            version: "1.0.0".into(),
+            category: "previewer".into(),
+            capabilities: vec!["fs-read".into()],
+            approved: true,
+            enabled: true,
+            description: Some(descripcion),
+            commands: Vec::new(),
+        }],
+        errors: Vec::new(),
+        cursor: 0,
+    });
+    let texto = render_80x24(&app);
+    // El check es sobre el CARÁCTER inyectado, no "ningún hazard en toda la
+    // pantalla" — `to_string()` del backend une líneas con `\n`, que
+    // `is_terminal_hazard` (correctamente) también marca como control: un
+    // check ciego sobre TODO el render daría un falso positivo por el
+    // formato del propio buffer, no por texto hostil filtrado.
+    assert!(
+        !texto.contains('\u{202E}'),
+        "el override RTL de la description se pintó crudo: {texto}"
+    );
+    assert!(
+        texto.contains('\u{FFFD}'),
+        "la description hostil debe enmascararse a U+FFFD: {texto}"
+    );
+    insta::assert_snapshot!(texto);
+}
+
 /// BAJA-3: los items largos del popup de navegación van con elipsis MEDIA
 /// (cabeza + cola, como los modales de rutas), no truncado derecho: dos
 /// entradas de historial con un prefijo común más ancho que el popup deben
@@ -462,4 +508,53 @@ fn snapshot_palette_abierta() {
     }
     app.palette = Some(palette);
     insta::assert_snapshot!(render(&app));
+}
+
+/// P1: una fila de comando de plugin (`palette::plugin_rows`) filtrada a
+/// SOLO ella — con un título hostil (override RTL, corpus `rtl_override`),
+/// para pinchar que ni el título ni el prefijo `[extension]` se pintan
+/// crudos, y que la fila queda distinguible de un built-in.
+#[test]
+fn snapshot_palette_fila_de_plugin_hostil() {
+    let hostil = norte_testkit::corpus::hostile_names()
+        .into_iter()
+        .find(|n| n.id == "rtl_override")
+        .expect("fixture del corpus");
+    let titulo = String::from_utf8_lossy(&hostil.bytes).into_owned();
+    let mut app = app_base();
+    let plugin = norte_proto::methods::PluginInfo {
+        id: "org.evil.demo".into(),
+        name: "Evil".into(),
+        publisher: "evil".into(),
+        version: "1.0.0".into(),
+        category: "command".into(),
+        capabilities: Vec::new(),
+        approved: true,
+        enabled: true,
+        description: None,
+        commands: vec![norte_proto::methods::PluginCommandInfo {
+            id: "run".into(),
+            title: titulo,
+        }],
+    };
+    // Sin query: `plugin_rows` sobre UN plugin con UN comando ya deja una
+    // sola fila — "filtrada a solo ella" por construcción, no por texto
+    // tecleado (el título hostil no tiene por qué contener nada buscable).
+    let rows = norte_tui::palette::plugin_rows(std::slice::from_ref(&plugin));
+    let palette = norte_tui::app::Palette::new(rows);
+    app.palette = Some(palette);
+    let texto = render(&app);
+    // Ver comentario equivalente en `snapshot_extensions_description_hostil_80x24`:
+    // el check es sobre el CARÁCTER inyectado, no sobre "ningún control en
+    // toda la pantalla" (los saltos de línea de `to_string()` también son
+    // controles, falso positivo si se escanea el buffer entero).
+    assert!(
+        !texto.contains('\u{202E}'),
+        "el override RTL del título se pintó crudo: {texto}"
+    );
+    assert!(
+        texto.contains('\u{FFFD}'),
+        "el título hostil debe enmascararse a U+FFFD: {texto}"
+    );
+    insta::assert_snapshot!(texto);
 }

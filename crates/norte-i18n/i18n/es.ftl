@@ -170,6 +170,10 @@ help-cmd-app-palette = paleta de comandos
 # contexto `dialog` — este hint es una cadena estática, como `search-hint`.
 palette-title = Paleta de comandos
 palette-hint = [↑/↓/pgup/pgdn] navegar · [enter] ejecutar · [esc] cerrar
+# P1: prefijo de una fila aportada por un plugin (`palette::plugin_rows`) —
+# ninguna fila built-in lo lleva, así que un plugin no puede disfrazarse de
+# comando built-in copiando su texto exacto.
+palette-plugin-prefix = extensión
 theme-picker-title = Tema
 ext-title = Extensiones
 ext-empty = no hay extensiones instaladas
@@ -186,6 +190,12 @@ msg-theme-saved = tema guardado: { $name } → { $path }
 msg-theme-save-failed = tema aplicado (no guardado): { $error }
 msg-hotlist-saved = favorito guardado: { $name }
 msg-hotlist-removed = favorito eliminado: { $name }
+# P1: resultado de Enter sobre una fila de plugin de la palette — { $output }
+# es salida NO confiable del plugin, ya enmascarada+acotada por
+# `detail_for_bar` antes de llegar aquí (patrón #73). El prefijo
+# "extensión:" la marca como texto de terceros, mismo vocabulario que
+# `palette-plugin-prefix`.
+msg-plugin-run-ok = extensión: { $output }
 msg-hotlist-persist-failed = favoritos no guardados: { $error }
 help-cmd-pane-switch = cambiar de pane
 help-cmd-cursor-up = subir el cursor

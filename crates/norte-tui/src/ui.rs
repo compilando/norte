@@ -259,6 +259,9 @@ fn draw_extensions(
         frame.area().height.saturating_sub(4).max(6),
     );
     frame.render_widget(ratatui::widgets::Clear, area);
+    // Ancho útil para la segunda línea (description, P1): igual criterio que
+    // `draw_palette` (borde + margen), NO el `ancho` de la caja completa.
+    let inner = usize::from(area.width.saturating_sub(4));
     let mut lines: Vec<Line<'_>> = Vec::new();
     if mgr.plugins.is_empty() && mgr.errors.is_empty() {
         lines.push(Line::raw(t("ext-empty")));
@@ -271,6 +274,9 @@ fn draw_extensions(
                 lines.push(Line::styled(cat, theme.role(Role::Title)));
             }
             lines.push(plugin_line(p, i == mgr.cursor, theme));
+            if let Some(desc_line) = plugin_description_line(p, theme, inner) {
+                lines.push(desc_line);
+            }
         }
         for e in &mgr.errors {
             let (dir, _) = display_name(e.dir.as_bytes());
@@ -323,6 +329,32 @@ fn plugin_line<'a>(
         line = line.style(theme.role(Role::Selection));
     }
     line
+}
+
+/// Segunda línea BAJO cada plugin con su `description` (P1), si la declara
+/// — `None` si el plugin no tiene una. Texto de TERCEROS: mismo enmascarado
+/// que `name`/`publisher` ([`display_name`], con el mismo [`HOSTILE_BADGE`]
+/// si salió alterada) más elipsis MEDIA ([`middle_ellipsis`]) al ancho útil
+/// del popup, para no desbordar la caja (el resto del popup no se
+/// pre-recorta — confía en el clip de `Paragraph` — pero una description
+/// puede llegar hasta 280 chars, `norte-plugin-host` manifest.rs, y aquí sí
+/// vale la pena evitar que tape el resto de la lista). Estilo atenuado
+/// (`Role::BorderUnfocused`, "presente pero no activo" — mismo criterio que
+/// documenta ese rol): es contexto, no el dato principal de la fila.
+fn plugin_description_line<'a>(
+    p: &'a norte_proto::methods::PluginInfo,
+    theme: &TuiTheme,
+    inner: usize,
+) -> Option<Line<'a>> {
+    let raw = p.description.as_deref()?;
+    let (masked, hostil) = display_name(raw.as_bytes());
+    let texto = middle_ellipsis(&masked, inner.saturating_sub(3));
+    let texto = if hostil {
+        format!("   {HOSTILE_BADGE} {texto}")
+    } else {
+        format!("   {texto}")
+    };
+    Some(Line::styled(texto, theme.role(Role::BorderUnfocused)))
 }
 
 /// Popup selector de tema: lista de presets con el vigente resaltado (ADR
@@ -397,10 +429,17 @@ fn draw_help(frame: &mut Frame<'_>, help: &crate::app::Help, theme: &TuiTheme) {
 /// Command palette (`Ctrl+P`/vim `:`, H1 T4, spec-promised): filtro libre
 /// sobre TODOS los comandos, mismo idioma visual que [`draw_nav_popup`]
 /// (centrado, input al pie, `Clear` antes de pintar) pero MÁS ancha (60
-/// columnas: `{comando} {descripción} {chord}` no cabe en el ancho de un
-/// popup normal). `comando`/`descripción`/`chord` son texto CONFIABLE
-/// (constantes del binario + catálogo Fluent, [`crate::palette::
-/// build_rows`]) — jamás se enmascaran; SOLO la query (tecleada por el
+/// columnas: `{texto} {descripción} {chord}` no cabe en el ancho de un
+/// popup normal). Una fila built-in ([`crate::palette::build_rows`]) trae
+/// `text`/`desc`/`chord` CONFIABLES (constantes del binario + catálogo
+/// Fluent) — este draw jamás los enmascara. Una fila de plugin (P1,
+/// [`crate::palette::plugin_rows`]) trae texto de TERCEROS, pero YA
+/// enmascarado en la fila misma (mismo criterio que `first_chord` con la
+/// columna chord: el enmascarado vive donde se CONSTRUYE la fila, no aquí)
+/// — este draw sigue sin diferenciar, solo pinta lo que ya es seguro. La
+/// `key` de despacho (P1: puede llevar el `command_id` crudo de un plugin,
+/// sin charset validado) NUNCA se lee aquí — [`crate::app::Palette::rows`]
+/// solo se consulta por `text`/`desc`/`chord`. La query (tecleada por el
 /// usuario) pasa por [`crate::app::Palette::query_display`] (mismo
 /// contrato que `QuickSearch::query_display`: un paste hostil no pinta
 /// bidi/invisibles crudos en el borde) + [`display_name`] (mismo doble
@@ -423,8 +462,8 @@ fn draw_palette(frame: &mut Frame<'_>, palette: &crate::app::Palette, theme: &Tu
                 .visible()
                 .iter()
                 .map(|&i| {
-                    let (cmd, desc, chord) = &palette.rows()[i];
-                    let texto = format!(" {cmd:<24} {desc:<32} {chord}");
+                    let row = &palette.rows()[i];
+                    let texto = format!(" {:<24} {:<32} {}", row.text, row.desc, row.chord);
                     ListItem::new(Line::raw(middle_ellipsis(&texto, inner)))
                 })
                 .collect(),

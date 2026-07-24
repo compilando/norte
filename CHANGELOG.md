@@ -42,6 +42,23 @@ independently through `PROTOCOL_VERSION`.
   would. Rows are precomputed from the effective keymap, like the F1 help
   and the dialog footer hints below, and refreshed on every hot-reload.
 
+- **Plugin descriptions and commands on the wire, in the extension manager,
+  and in the palette (P1, `PROTOCOL_VERSION` 0.26.0):** a plugin manifest can
+  now declare an optional `description` (cosmetic, capped at 280 characters,
+  outside the approval digest — editing it never resets an already-approved
+  plugin's consent) and its `contributions.command` entries are exposed on
+  `PluginInfo` alongside it. The extension manager (F12) shows the
+  description as a dimmed second line under each plugin, masked and
+  ellipsized like the rest of third-party text. The command palette
+  (`Ctrl+P`) now fetches the plugin catalog on open and appends one row per
+  command of every *approved and enabled* plugin, masked and tagged with an
+  `[extension]` prefix that no built-in row can carry (a hostile plugin
+  cannot spoof a built-in command by copying its exact display text); Enter
+  runs it through `plugin.run_command` and shows the (masked, capped) result
+  on the status bar. The row's internal dispatch key is never painted — a
+  command id from the manifest has no charset validation of its own, unlike
+  the plugin id.
+
 - **Generated dialog footer hints (#24):** the confirm/collision/agent
   approval/host-key-trust modals and the theme picker, extension manager, and
   favorites popup now show a footer built from the *effective* `dialog`

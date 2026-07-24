@@ -871,7 +871,7 @@ async fn run(
                                     // hubiera pulsado — incluida la apertura
                                     // de otro overlay (p.ej. `app.help`).
                                     let outcome = dispatch(
-                                        app, backend, &mut events, help_lines, quick_mode, cmd,
+                                        app, backend, &mut events, help_lines, quick_mode, &cmd,
                                     )
                                     .await;
                                     apply_cd(&mut fill, &mut last_probed, outcome);
@@ -2786,14 +2786,26 @@ async fn dispatch(
         // `app.palette` DESDE la palette (el run loop la cierra ANTES de
         // despachar, `enter`) es un no-op observable: cierra y reabre
         // vacía — inofensivo, sin recursión de estado.
+        //
+        // (P1) ahora es ASÍNCRONA, como `app.extensions` arriba: las filas
+        // de plugin necesitan `backend.plugins_list().await` (aprobado +
+        // activado, `palette::plugin_rows`). A diferencia de `app.extensions`
+        // (que NO abre el gestor si el fetch falla), los built-ins SIEMPRE
+        // deben poder despacharse — un daemon caído no debe tumbar la
+        // palette entera, solo degradarla (sin filas de plugin + un aviso),
+        // mismo principio "un error de listado no tumba el TUI" del resto
+        // de `dispatch`.
         "app.palette" => {
             // MINOR-6 (H1 close): Ctrl+P/`:` viven en `[global]`, fundido en
             // AMBOS efectivos — la palette puede abrirse desde el viewer
             // también, no solo desde browse (`rows_for_context` doc).
-            app.palette = Some(Palette::new(norte_tui::palette::rows_for_context(
-                &app.palette_rows,
-                app.viewer.is_some(),
-            )));
+            let mut rows =
+                norte_tui::palette::rows_for_context(&app.palette_rows, app.viewer.is_some());
+            match backend.plugins_list().await {
+                Ok(list) => rows.extend(norte_tui::palette::plugin_rows(&list.plugins)),
+                Err(e) => app.message = Some(error_message(&e)),
+            }
+            app.palette = Some(Palette::new(rows));
         }
         "task.cancel" => {
             app.message = Some(if app.board.cancel_last_running() {
@@ -2802,11 +2814,90 @@ async fn dispatch(
                 t("msg-no-tasks")
             });
         }
+        // (P1) Enter sobre una fila de plugin de la palette: `cmd` es la
+        // `key` de despacho `plugin:{id}:{command}` (`palette::plugin_rows`,
+        // JAMÁS pintada) — no vive en `COMMANDS`, así que necesita su propio
+        // brazo ANTES del comodín de abajo. `parse_plugin_key` documenta por
+        // qué el split es inequívoco pese a que `command` no tiene charset
+        // validado. El resultado del plugin es texto NO confiable: por
+        // `detail_for_bar` (enmascarado + tope, patrón #73) antes de la
+        // barra de estado.
+        _ if cmd.starts_with("plugin:") => {
+            if let Some((id, command)) = parse_plugin_key(cmd) {
+                app.message = Some(match backend.plugin_run_command(id, command, "").await {
+                    Ok(output) => ta("msg-plugin-run-ok", &[("output", &detail_for_bar(&output))]),
+                    Err(e) => error_message(&e),
+                });
+            }
+        }
         // Inalcanzable: todo keymap se valida contra COMMANDS al cargar
-        // (y COMMANDS vive en la lib: una sola fuente).
+        // (y COMMANDS vive en la lib: una sola fuente) — salvo el brazo de
+        // plugin de arriba, que no vive en COMMANDS a propósito.
         _ => debug_assert!(false, "comando validado sin brazo: {cmd}"),
     }
     cd_outcome
+}
+
+/// Parsea una `key` de fila de plugin de la palette
+/// (`plugin:{plugin_id}:{command_id}`, [`norte_tui::palette::plugin_rows`])
+/// de vuelta a `(plugin_id, command_id)`. El `plugin_id` es reverse-DNS
+/// charset-validado por el core (`is_valid_plugin_id`, norte-plugin-host
+/// manifest.rs — nunca lleva `:`); el `command_id` del manifiesto NO tiene
+/// charset validado, así que puede llevar CUALQUIER byte, incluidos `:` o
+/// saltos de línea. El PRIMER `:` que sigue al prefijo `plugin:` separa
+/// ambos sin ambigüedad (el `plugin_id` no puede contenerlo) — el resto,
+/// TODO lo que quede tras ese primer `:`, es el `command_id` crudo, tomado
+/// ENTERO y jamás vuelto a partir.
+fn parse_plugin_key(cmd: &str) -> Option<(&str, &str)> {
+    let (id, command) = cmd.strip_prefix("plugin:")?.split_once(':')?;
+    (!id.is_empty()).then_some((id, command))
+}
+
+#[cfg(test)]
+mod parse_plugin_key_tests {
+    use super::parse_plugin_key;
+
+    #[test]
+    fn separa_plugin_id_y_command_id() {
+        assert_eq!(
+            parse_plugin_key("plugin:org.norte.demo:greet"),
+            Some(("org.norte.demo", "greet"))
+        );
+    }
+
+    /// El `command_id` NO tiene charset validado (a diferencia del
+    /// `plugin_id`): puede llevar `:` o saltos de línea, y el split se
+    /// queda con TODO lo que sigue al primero, sin volver a partir.
+    #[test]
+    fn command_id_hostil_se_toma_entero_sin_repartir() {
+        assert_eq!(
+            parse_plugin_key("plugin:org.norte.demo:a:b\nc"),
+            Some(("org.norte.demo", "a:b\nc"))
+        );
+    }
+
+    #[test]
+    fn sin_prefijo_plugin_es_none() {
+        assert_eq!(parse_plugin_key("app.quit"), None);
+        assert_eq!(parse_plugin_key(""), None);
+    }
+
+    /// Sin el segundo `:` (formato mínimo `plugin:x` sin `command_id`): `None`
+    /// — un despacho parcial jamás corre `plugin_run_command` con un id
+    /// vacío o adivinado.
+    #[test]
+    fn sin_segundo_separador_es_none() {
+        assert_eq!(parse_plugin_key("plugin:org.norte.demo"), None);
+    }
+
+    /// `plugin_id` vacío (`"plugin::greet"`) es `None` — nunca alcanzable
+    /// desde una fila real (`PluginInfo.id` siempre no-vacío, validado por
+    /// el core), pero el parser no debe entregar un id vacío a
+    /// `plugin_run_command` si alguna vez lo fuera.
+    #[test]
+    fn plugin_id_vacio_es_none() {
+        assert_eq!(parse_plugin_key("plugin::greet"), None);
+    }
 }
 
 fn viewer_do(app: &mut App, f: impl FnOnce(&mut Viewer)) {

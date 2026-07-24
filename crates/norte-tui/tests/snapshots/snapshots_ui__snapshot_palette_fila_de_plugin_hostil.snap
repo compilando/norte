@@ -1,0 +1,20 @@
+---
+source: crates/norte-tui/tests/snapshots_ui.rs
+expression: texto
+---
+"┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
+"│ /docs                                ││  cosa                                │"
+"│ /src                                 ││                                      │"
+"│ @enlace                              ││                                      │"
+"│  notas.txt                           ││                                      │"
+"│! �.dat                               ││                                      │"
+"│         ┌ Paleta de comandos ──────────────────────────────────────┐         │"
+"│         │ [extensión] abc�gpj.exe    …                           — │         │"
+"│         └ /  [↑/↓/pgup/pgdn] navegar · [enter] ejecutar · [esc] cer┘         │"
+"│                                      ││                                      │"
+"│                                      ││                                      │"
+"│                                      ││                                      │"
+"│                                      ││                                      │"
+"│                                      ││                                      │"
+"└──────────────────────────────────────┘└──────────────────────────────────────┘"
+" ⟨file⟩/casa  2/5                                                               "

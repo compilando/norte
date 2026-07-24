@@ -765,12 +765,14 @@ pub struct Palette {
 impl Palette {
     /// Abre la palette sobre `rows` (la snapshot precomputada de `App`):
     /// pliega el haystack de cada fila y arranca con la query vacía (todo
-    /// visible).
+    /// visible). El fold es sobre `text`+`desc` (lo PINTADO, ya enmascarado
+    /// para una fila de plugin) — jamás sobre `key` (P1: podría llevar el
+    /// `command_id` crudo del manifiesto, sin charset validado).
     #[must_use]
     pub fn new(rows: Vec<crate::palette::Row>) -> Self {
         let folds = rows
             .iter()
-            .map(|(cmd, desc, _chord)| crate::nav::fold(format!("{cmd} {desc}").as_bytes()))
+            .map(|row| crate::nav::fold(format!("{} {}", row.text, row.desc).as_bytes()))
             .collect();
         let mut p = Self {
             rows,
@@ -858,8 +860,10 @@ impl Palette {
         &self.visible
     }
 
-    /// Todas las filas (comando, descripción, chord) — `rows()[visible()[i]]`
-    /// para pintar la fila `i`-ésima de la lista filtrada.
+    /// Todas las filas ([`crate::palette::Row`]) — `rows()[visible()[i]]`
+    /// para pintar la fila `i`-ésima de la lista filtrada. Solo `text`/
+    /// `desc`/`chord` se pintan; `key` es de despacho interno (ver doc de
+    /// [`crate::palette::Row`]).
     #[must_use]
     pub fn rows(&self) -> &[crate::palette::Row] {
         &self.rows
@@ -871,10 +875,16 @@ impl Palette {
         self.cursor
     }
 
-    /// El comando bajo el cursor, si hay alguno visible.
+    /// La CLAVE de despacho bajo el cursor, si hay alguna visible (P1: ya no
+    /// es `&'static str` — una fila de plugin trae una `key` construida en
+    /// tiempo de ejecución, `plugin:{id}:{command}`; se clona porque
+    /// `main::dispatch` la usa DESPUÉS de cerrar la palette, `app.palette =
+    /// None`, que dropea `rows`).
     #[must_use]
-    pub fn selected(&self) -> Option<&'static str> {
-        self.visible.get(self.cursor).map(|&i| self.rows[i].0)
+    pub fn selected(&self) -> Option<String> {
+        self.visible
+            .get(self.cursor)
+            .map(|&i| self.rows[i].key.clone())
     }
 
     /// Query para pintar (lossy, enmascarada — mismo contrato que
@@ -900,10 +910,19 @@ impl Palette {
 mod palette_tests {
     use super::Palette;
 
+    fn row(key: &str, desc: &str, chord: &str) -> crate::palette::Row {
+        crate::palette::Row {
+            key: key.to_owned(),
+            text: key.to_owned(),
+            desc: desc.to_owned(),
+            chord: chord.to_owned(),
+        }
+    }
+
     fn rows() -> Vec<crate::palette::Row> {
         vec![
-            ("app.quit", "quit norte".to_owned(), "q".to_owned()),
-            ("app.help", "this help".to_owned(), "f1".to_owned()),
+            row("app.quit", "quit norte", "q"),
+            row("app.help", "this help", "f1"),
         ]
     }
 
@@ -914,7 +933,7 @@ mod palette_tests {
             p.push_char(c);
         }
         assert_eq!(p.visible().len(), 1, "solo app.quit casa con 'quit'");
-        assert_eq!(p.selected(), Some("app.quit"));
+        assert_eq!(p.selected().as_deref(), Some("app.quit"));
     }
 
     #[test]
@@ -935,7 +954,7 @@ mod palette_tests {
         let p = Palette::new(rows());
         assert_eq!(p.visible().len(), 2, "query vacía = todas las filas");
         assert_eq!(
-            p.selected(),
+            p.selected().as_deref(),
             Some("app.quit"),
             "cursor arranca en la primera"
         );
@@ -957,6 +976,41 @@ mod palette_tests {
         p.page_up(3);
         p.page_down(3);
         assert_eq!(p.selected(), None);
+    }
+
+    /// (P1) Filas de plugin ([`crate::palette::plugin_rows`]) mezcladas con
+    /// las built-in: el filtro de texto libre casa contra el TÍTULO YA
+    /// enmascarado (`text`), y Enter (`selected()`) devuelve la `key` de
+    /// despacho `plugin:{id}:{command}` — jamás el texto pintado.
+    #[test]
+    fn palette_filas_de_plugin_se_filtran_por_titulo_y_despachan_por_key() {
+        let plugin = norte_proto::methods::PluginInfo {
+            id: "org.norte.demo".into(),
+            name: "Demo".into(),
+            publisher: "norte".into(),
+            version: "0.1.0".into(),
+            category: "command".into(),
+            capabilities: Vec::new(),
+            approved: true,
+            enabled: true,
+            description: None,
+            commands: vec![norte_proto::methods::PluginCommandInfo {
+                id: "greet".into(),
+                title: "Greet loudly".into(),
+            }],
+        };
+        let mut all = rows();
+        all.extend(crate::palette::plugin_rows(&[plugin]));
+        let mut p = Palette::new(all);
+        for c in "loudly".chars() {
+            p.push_char(c);
+        }
+        assert_eq!(
+            p.visible().len(),
+            1,
+            "solo la fila de plugin casa con 'loudly' (el título)"
+        );
+        assert_eq!(p.selected().as_deref(), Some("plugin:org.norte.demo:greet"));
     }
 }
 

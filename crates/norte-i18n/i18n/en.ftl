@@ -170,6 +170,10 @@ help-cmd-app-palette = command palette
 # `dialog` context, so this hint is a static string like `search-hint`.
 palette-title = Command palette
 palette-hint = [↑/↓/pgup/pgdn] navigate · [enter] run · [esc] close
+# P1: prefix on a plugin-contributed row (`palette::plugin_rows`) — no
+# built-in row ever carries it, so a plugin cannot spoof a built-in command
+# by copying its exact display text.
+palette-plugin-prefix = extension
 theme-picker-title = Theme
 ext-title = Extensions
 ext-empty = no extensions installed
@@ -186,6 +190,11 @@ msg-theme-saved = theme saved: { $name } → { $path }
 msg-theme-save-failed = theme applied (not saved): { $error }
 msg-hotlist-saved = favorite saved: { $name }
 msg-hotlist-removed = favorite removed: { $name }
+# P1: result of Enter on a plugin-command palette row — { $output } is
+# untrusted plugin output, already masked+capped by `detail_for_bar` before
+# reaching here (#73 pattern). The "extension:" prefix marks it as
+# third-party text, same vocabulary as `palette-plugin-prefix`.
+msg-plugin-run-ok = extension: { $output }
 msg-hotlist-persist-failed = favorites not saved: { $error }
 help-cmd-pane-switch = switch pane
 help-cmd-cursor-up = move cursor up
