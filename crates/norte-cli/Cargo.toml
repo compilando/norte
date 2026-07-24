@@ -23,6 +23,7 @@ anyhow.workspace = true
 clap.workspace = true
 futures.workspace = true
 norte-config.workspace = true
+norte-connect.workspace = true
 norte-core.workspace = true
 norte-frontend.workspace = true
 norte-mcp.workspace = true

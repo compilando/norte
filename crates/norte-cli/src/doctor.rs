@@ -9,12 +9,16 @@
 //!
 //! Task 1 covers `[config]` (parse + split-brain) and `[keymap]`
 //! (structural validity + an HONEST APPROXIMATION of unknown commands, see
-//! [`norte_frontend::keymap::preset_commands`]). Plugin and connection
-//! checks land in Task 2.
+//! [`norte_frontend::keymap::preset_commands`]). Task 2 adds `[plugins]`
+//! (discovery, digest-stale re-approval, `plugin.wasm` presence) and
+//! `[connections]` (parse, endpoint validity, secret-env-var presence —
+//! decision 2: side-effect-free v1, keyring/age are NOT probed).
 
 use std::ffi::OsString;
+use std::path::Path;
 
 use norte_config::Layers;
+use norte_connect::{AuthMethod, ConnectionsFile};
 use norte_frontend::keymap::{Effective, KeymapError, Screen, presets};
 use serde::Serialize;
 
@@ -260,6 +264,188 @@ fn check_keymap_screen(
     findings
 }
 
+/// Checks `config_dir/plugins/*` (manifest discovery via
+/// [`norte_core::plugins::PluginRegistry::discover`]) + the persisted
+/// `plugins-state.toml` + `plugin.wasm` presence.
+///
+/// `discover` failing (state file corrupt — `io::ErrorKind::InvalidData`, see
+/// its rustdoc) is a single [`Severity::Error`] finding: the STATE, not any
+/// one plugin, is unreadable, so nothing more can be checked. On success:
+/// each [`norte_proto::methods::PluginLoadError`] (broken manifest) is an
+/// [`Severity::Error`] (its `dir` is ALREADY the pre-redacted basename —
+/// `PluginRegistry::list`'s own rustdoc: never the absolute path, home dir
+/// disclosure); each [`norte_proto::methods::PluginInfo`] is an
+/// [`Severity::Ok`] naming id + effective approved/enabled.
+///
+/// Digest-stale detection (issue #69's mechanism, surfaced here): `list()`
+/// only exposes the EFFECTIVE `approved` (digest-checked against the current
+/// manifest — [`PluginRegistry::list`]'s own doc). Comparing it against the
+/// RAW persisted flag from [`PluginRegistry::state_snapshot`] (the state file
+/// as last written by a human) is what tells "never approved" apart from
+/// "approved, but the manifest changed since" — a former `true` that reads
+/// back as an effective `false` can ONLY mean the digest stopped matching, so
+/// that pair becomes a [`Severity::Warn`] naming the re-approval requirement.
+///
+/// `plugin.wasm` presence is a direct `Path::is_file` — read-only, no
+/// `spawn_blocking` needed by ITSELF (the caller already runs the whole
+/// check inside one, rule 2) — against `config_dir/plugins/<id>/plugin.wasm`.
+/// This mirrors the registry's OWN layout knowledge
+/// (`PluginRegistry::verified_wasm` resolves the identical path internally)
+/// rather than adding a public accessor for a read-only diagnostic; a CLI
+/// binary's synchronous startup path, not a hot path or a provider boundary.
+#[must_use]
+pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let registry = match norte_core::plugins::PluginRegistry::discover(config_dir) {
+        Ok(r) => r,
+        Err(e) => {
+            findings.push(Finding {
+                section: "plugins",
+                severity: Severity::Error,
+                code: "plugins-state-unreadable",
+                detail: e.to_string(),
+            });
+            return findings;
+        }
+    };
+    let snapshot = registry.state_snapshot();
+    let list = registry.list();
+    for err in &list.errors {
+        findings.push(Finding {
+            section: "plugins",
+            severity: Severity::Error,
+            code: "plugin-manifest-broken",
+            detail: format!("{}: {}", err.dir, err.reason),
+        });
+    }
+    for p in &list.plugins {
+        findings.push(Finding {
+            section: "plugins",
+            severity: Severity::Ok,
+            code: "plugin-ok",
+            detail: format!("{} (approved={}, enabled={})", p.id, p.approved, p.enabled),
+        });
+        let was_approved_raw = snapshot.get(&p.id).is_some_and(|st| st.approved);
+        if was_approved_raw && !p.approved {
+            findings.push(Finding {
+                section: "plugins",
+                severity: Severity::Warn,
+                code: "plugin-digest-stale",
+                detail: format!(
+                    "{}: manifest capabilities changed since approval; re-approval required",
+                    p.id
+                ),
+            });
+        }
+        let wasm = config_dir.join("plugins").join(&p.id).join("plugin.wasm");
+        if !wasm.is_file() {
+            findings.push(Finding {
+                section: "plugins",
+                severity: Severity::Warn,
+                code: "plugin-no-binary",
+                detail: p.id.clone(),
+            });
+        }
+    }
+    findings
+}
+
+/// Checks `config_dir/connections.toml` (decision 2: side-effect-free v1 —
+/// secret PRESENCE only, never the value; keyring/age are NOT probed here,
+/// that would touch the OS keychain or prompt).
+///
+/// [`ConnectionsFile::load`] already treats an absent file as empty (not an
+/// error — connections are optional); that empty case surfaces as one
+/// [`Severity::Ok`] finding. A broken file (bad TOML, or a rejected inline
+/// secret field — `deny_unknown_fields`, ADR 0015 B) is a single
+/// [`Severity::Error`]. Per connection: [`ConnectionSpec::endpoint`][ep]
+/// parsing is [`Severity::Error`] on failure (its `Display` never echoes a
+/// password — `spec.rs`'s own
+/// `password_inline_en_url_rechazado_sin_eco`/`scheme_invalido_con_password_inline_no_eco`
+/// tests pin that); `Agent`/`Key` auth need no secret and are
+/// [`Severity::Ok`]; `Password`/`AccessKey` (secret-bearing, decision 2) are
+/// checked for [`norte_connect::env_key`]'s var via `env` — present is
+/// [`Severity::Ok`], absent is [`Severity::Warn`] NAMING THE VAR (never a
+/// value). A trailing [`Severity::Ok`] finding notes keyring/age are not
+/// probed.
+///
+/// [ep]: norte_connect::ConnectionSpec::endpoint
+#[must_use]
+pub fn check_connections(
+    config_dir: &Path,
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let file = match ConnectionsFile::load(config_dir) {
+        Ok(f) => f,
+        Err(e) => {
+            findings.push(Finding {
+                section: "connections",
+                severity: Severity::Error,
+                code: "connections-parse",
+                detail: e.to_string(),
+            });
+            return findings;
+        }
+    };
+    if file.connections.is_empty() {
+        findings.push(Finding {
+            section: "connections",
+            severity: Severity::Ok,
+            code: "connections-none",
+            detail: "no connections.toml, or no connections configured".to_owned(),
+        });
+    } else {
+        for (name, spec) in &file.connections {
+            match spec.endpoint() {
+                Ok(_) => findings.push(Finding {
+                    section: "connections",
+                    severity: Severity::Ok,
+                    code: "connection-ok",
+                    detail: name.clone(),
+                }),
+                Err(e) => {
+                    findings.push(Finding {
+                        section: "connections",
+                        severity: Severity::Error,
+                        code: "connection-endpoint-invalid",
+                        detail: format!("{name}: {e}"),
+                    });
+                    continue;
+                }
+            }
+            match spec.auth {
+                AuthMethod::Agent | AuthMethod::Key => {}
+                AuthMethod::Password | AuthMethod::AccessKey => {
+                    let var = norte_connect::env_key(name);
+                    if env(&var).is_some() {
+                        findings.push(Finding {
+                            section: "connections",
+                            severity: Severity::Ok,
+                            code: "conn-secret-env-present",
+                            detail: format!("{name}: {var}"),
+                        });
+                    } else {
+                        findings.push(Finding {
+                            section: "connections",
+                            severity: Severity::Warn,
+                            code: "conn-secret-env-absent",
+                            detail: format!("{name}: {var}"),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    findings.push(Finding {
+        section: "connections",
+        severity: Severity::Ok,
+        code: "connections-secrets-not-probed",
+        detail: norte_i18n::t("cli-doctor-connections-not-probed"),
+    });
+    findings
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
@@ -409,5 +595,172 @@ mod tests {
             .unwrap_or_else(|| panic!("expected an unknown-cmd finding: {findings:?}"));
         assert_eq!(warn.severity, Severity::Warn);
         assert!(warn.detail.contains("invented.command"), "{}", warn.detail);
+    }
+
+    /// Minimal valid manifest shape (copied from `norte-core`'s own
+    /// `DEMO_MANIFEST` test const, `crates/norte-core/src/plugins.rs`).
+    const DEMO_MANIFEST: &str = r#"
+[plugin]
+id = "org.norte.demo"
+name = "Demo"
+publisher = "norte"
+version = "0.1.0"
+category = "command"
+[capabilities]
+fs-read = "scoped"
+"#;
+
+    fn write_plugin(config_dir: &std::path::Path, id: &str, src: &str) {
+        let dir = config_dir.join("plugins").join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("plugin.toml"), src).unwrap();
+    }
+
+    /// TDD: a discovered plugin with a valid manifest but no `plugin.wasm`
+    /// on disk → `Ok` for the plugin itself, `Warn` `plugin-no-binary`.
+    #[test]
+    fn plugins_manifest_valido_sin_wasm_es_aviso() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "org.norte.demo", DEMO_MANIFEST);
+
+        let findings = check_plugins(dir.path());
+        assert!(
+            !findings.iter().any(|f| f.severity == Severity::Error),
+            "{findings:?}"
+        );
+        let ok = findings
+            .iter()
+            .find(|f| f.code == "plugin-ok")
+            .unwrap_or_else(|| panic!("expected a plugin-ok finding: {findings:?}"));
+        assert!(ok.detail.contains("org.norte.demo"), "{}", ok.detail);
+        let warn = findings
+            .iter()
+            .find(|f| f.code == "plugin-no-binary")
+            .unwrap_or_else(|| panic!("expected a no-binary finding: {findings:?}"));
+        assert_eq!(warn.severity, Severity::Warn);
+        assert!(warn.detail.contains("org.norte.demo"), "{}", warn.detail);
+    }
+
+    /// TDD: a broken manifest surfaces via `PluginLoadError` as an `Error`
+    /// finding, WITHOUT stopping the valid plugin from also being reported
+    /// (mirrors `PluginRegistry::list`'s own best-effort contract).
+    #[test]
+    fn plugins_manifest_roto_es_error() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "org.norte.demo", DEMO_MANIFEST);
+        write_plugin(dir.path(), "roto", "esto no es toml [ valido =");
+
+        let findings = check_plugins(dir.path());
+        assert!(
+            findings.iter().any(|f| f.code == "plugin-ok"),
+            "the valid plugin must still be reported: {findings:?}"
+        );
+        let err = findings
+            .iter()
+            .find(|f| f.code == "plugin-manifest-broken")
+            .unwrap_or_else(|| panic!("expected a manifest-broken finding: {findings:?}"));
+        assert_eq!(err.severity, Severity::Error);
+        assert!(err.detail.contains("roto"), "{}", err.detail);
+    }
+
+    /// TDD: `plugins-state.toml` says `approved = true` with a `digest` that
+    /// does not match the current manifest's — `list()`'s effective
+    /// `approved` reads back `false` (issue #69's own mechanism) → doctor
+    /// must surface that gap as `plugin-digest-stale`, not silently agree
+    /// with the (now stale) raw flag.
+    #[test]
+    fn plugins_digest_obsoleto_es_aviso() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "org.norte.demo", DEMO_MANIFEST);
+        std::fs::write(
+            dir.path().join("plugins-state.toml"),
+            "[plugins]\n\"org.norte.demo\" = { approved = true, digest = \"stale-digest\" }\n",
+        )
+        .unwrap();
+
+        let findings = check_plugins(dir.path());
+        let warn = findings
+            .iter()
+            .find(|f| f.code == "plugin-digest-stale")
+            .unwrap_or_else(|| panic!("expected a digest-stale finding: {findings:?}"));
+        assert_eq!(warn.severity, Severity::Warn);
+        assert!(warn.detail.contains("org.norte.demo"), "{}", warn.detail);
+        // The plugin-ok finding must reflect the EFFECTIVE (not raw) state.
+        let ok = findings
+            .iter()
+            .find(|f| f.code == "plugin-ok")
+            .unwrap_or_else(|| panic!("expected a plugin-ok finding: {findings:?}"));
+        assert!(ok.detail.contains("approved=false"), "{}", ok.detail);
+    }
+
+    /// TDD (decision 2): a `Password`-auth connection with the secret env
+    /// var absent → `Warn` naming the var; present (via an injected env
+    /// closure) → `Ok`. Never the secret VALUE, only presence.
+    #[test]
+    fn conexiones_secreto_env_ausente_y_presente() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("connections.toml"),
+            "[connections.backup]\nurl = \"ftp://backup@ftp.example.com\"\nauth = \"password\"\n",
+        )
+        .unwrap();
+
+        let findings = check_connections(dir.path(), &env(&[]));
+        assert!(
+            !findings.iter().any(|f| f.severity == Severity::Error),
+            "{findings:?}"
+        );
+        let warn = findings
+            .iter()
+            .find(|f| f.code == "conn-secret-env-absent")
+            .unwrap_or_else(|| panic!("expected an env-absent finding: {findings:?}"));
+        assert_eq!(warn.severity, Severity::Warn);
+        assert!(
+            warn.detail.contains("NORTE_SECRET_BACKUP"),
+            "{}",
+            warn.detail
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.code == "connections-secrets-not-probed"),
+            "{findings:?}"
+        );
+
+        let vars = [("NORTE_SECRET_BACKUP", "irrelevant-marker")];
+        let findings2 = check_connections(dir.path(), &env(&vars));
+        assert!(
+            !findings2.iter().any(|f| f.code == "conn-secret-env-absent"),
+            "{findings2:?}"
+        );
+        let ok = findings2
+            .iter()
+            .find(|f| f.code == "conn-secret-env-present")
+            .unwrap_or_else(|| panic!("expected an env-present finding: {findings2:?}"));
+        assert_eq!(ok.severity, Severity::Ok);
+    }
+
+    /// TDD: absent `connections.toml` → a single `Ok`-empty finding (plus the
+    /// not-probed footer), never an error (connections are optional).
+    #[test]
+    fn conexiones_ausentes_es_ok_vacio() {
+        let dir = tempfile::tempdir().unwrap();
+        let findings = check_connections(dir.path(), &env(&[]));
+        assert!(
+            findings.iter().all(|f| f.severity != Severity::Error),
+            "{findings:?}"
+        );
+        assert!(findings.iter().any(|f| f.code == "connections-none"));
+    }
+
+    /// TDD: broken `connections.toml` → a single `Error` finding.
+    #[test]
+    fn conexiones_toml_roto_es_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("connections.toml"), "esto no es toml [[[").unwrap();
+        let findings = check_connections(dir.path(), &env(&[]));
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].code, "connections-parse");
+        assert_eq!(findings[0].severity, Severity::Error);
     }
 }

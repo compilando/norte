@@ -317,3 +317,4 @@ cli-doctor-ok = OK
 cli-doctor-warn = WARN
 cli-doctor-error = ERROR
 cli-doctor-footer-keymap-approx = note: an "unknown command" warning is an approximation against the three bundled presets' own bindings for that screen — a frontend-specific command with no default binding anywhere is invisible to this check.
+cli-doctor-connections-not-probed = note: keyring/age are not probed (side-effect-free diagnostics only) — only the presence of the env-var fallback is checked; use `norte connect` to test a connection for real.

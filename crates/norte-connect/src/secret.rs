@@ -127,9 +127,20 @@ impl SecretResolver {
     }
 }
 
-/// El nombre de la env var para `conn`: `NORTE_SECRET_<CONN>` con `<CONN>` en
-/// mayúsculas y no-alfanuméricos → `_`.
-fn env_key(conn: &str) -> String {
+/// El nombre de la env var que resuelve el secreto de la conexión `conn`.
+///
+/// Convención: `NORTE_SECRET_<CONN>`, con `<CONN>` = `conn` en MAYÚSCULAS y
+/// cada byte no-alfanumérico sustituido por `_` (así un nombre de conexión
+/// con `-`/`.`/espacios sigue siendo una env var válida en cualquier shell
+/// POSIX). Pública para que `norte doctor` (H2) pueda nombrar la variable que
+/// falta sin duplicar la regla — el propio [`SecretResolver::resolve`] la usa
+/// como primer escalón de resolución (`env_secret`).
+///
+/// ```
+/// assert_eq!(norte_connect::env_key("mi-server.1"), "NORTE_SECRET_MI_SERVER_1");
+/// ```
+#[must_use]
+pub fn env_key(conn: &str) -> String {
     let tail: String = conn
         .chars()
         .map(|c| {

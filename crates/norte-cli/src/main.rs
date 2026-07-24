@@ -705,17 +705,27 @@ fn verdict_detail(verdict: &norte_core::audit::AnchorVerdict) -> Option<String> 
     })
 }
 
-/// `norte doctor` (H2): read-only diagnostics over config layers + keymaps
-/// (plugin/connection checks land in Task 2). Never touches the
-/// daemon/engine — early-returned in `run()` like `audit_cmd`.
+/// `norte doctor` (H2): read-only diagnostics over config layers, keymaps,
+/// plugins and connections. Never touches the daemon/engine — early-returned
+/// in `run()` like `audit_cmd`.
 async fn doctor_cmd(json: bool) -> anyhow::Result<ExitCode> {
     let layers = norte_config::standard_layers();
-    // `doctor::check_config`/`check_keymaps` do synchronous fs I/O
-    // (norte-config's own design — see its crate doc); never call them
-    // directly on the async executor (rule 2).
+    // Plugins/connections live under the SINGLE resolved config dir (ADR
+    // 0035's `norte_config::config_dir` — the same one `norte_core::connect`
+    // re-exports and every other command in this binary already uses for
+    // `connections.toml`/`journal.db`/`policy.toml`), NOT `layers.dirs.last()`
+    // — that is the PROJECT layer (`.norte`, lowest precedence but last in
+    // the ascending-precedence `Layers::dirs` list), a different directory.
+    let config_dir = norte_config::config_dir();
+    // `doctor::check_*` do synchronous fs I/O (norte-config's own design —
+    // see its crate doc); never call them directly on the async executor
+    // (rule 2).
     let findings = tokio::task::spawn_blocking(move || {
-        let mut findings = doctor::check_config(&layers, &|k| std::env::var_os(k));
+        let env = |k: &str| std::env::var_os(k);
+        let mut findings = doctor::check_config(&layers, &env);
         findings.extend(doctor::check_keymaps(&layers));
+        findings.extend(doctor::check_plugins(&config_dir));
+        findings.extend(doctor::check_connections(&config_dir, &env));
         findings
     })
     .await

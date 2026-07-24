@@ -9,6 +9,23 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **`norte doctor` (H2):** read-only diagnostics over config layers,
+  keymaps, plugins, and connections — `[config]` (parse errors per layer,
+  and a split-brain warning when `NORTE_CONFIG_DIR` shadows a legacy dir
+  with its own config files), `[keymap]` (structural errors — bad TOML,
+  ambiguous prefixes, bad chords — vs. an honest per-screen approximation
+  that downgrades an unrecognized layer command to a warning against the
+  three bundled presets' own vocabulary), `[plugins]` (broken manifests,
+  a plugin approved but whose capabilities digest went stale since —
+  re-approval required — and a missing `plugin.wasm`), and `[connections]`
+  (parse errors, invalid endpoints, and — side-effect-free v1 — whether the
+  `NORTE_SECRET_<CONN>` env var a password/access-key connection falls back
+  to is present; the OS keyring and `secrets.age` are explicitly NOT probed,
+  since either could prompt or touch the keychain). `--json` emits a stable
+  `{ findings, summary }` shape for tooling. Exit code is non-zero only when
+  a finding is an error (a warning-only report still exits clean), and the
+  full report always prints regardless of the exit code.
+
 - **Command palette (H1, `Ctrl+P`; vim preset also `:`):** a filterable
   overlay lists every command with its Fluent description and its first
   bound chord (falling back from the browse to the viewer keymap); Enter

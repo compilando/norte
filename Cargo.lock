@@ -4198,6 +4198,7 @@ dependencies = [
  "clap",
  "futures",
  "norte-config",
+ "norte-connect",
  "norte-core",
  "norte-frontend",
  "norte-i18n",
