@@ -15,8 +15,17 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 cargo llvm-cov nextest --workspace      # Local coverage; CI threshold is 85% for core/VFS/proto
 cargo deny check                        # Licenses and security advisories
+just ci-fast                            # Gate minus coverage (lint test docs)
 just ci                                 # Run the complete local CI suite
 ```
+
+Pace CI to avoid slowing iteration. While iterating, prefer targeted
+`cargo nextest run -p <crate>` and `cargo clippy -p <crate> --all-targets`. Use
+`just ci-fast` for a normal pre-commit check; it skips the `cov` gate, which
+re-instruments proto/vfs/core in a separate target (~34s fixed plus a rebuild).
+Run the full `just ci` once per change — never on a loop — and only when you
+touched proto/vfs/core logic (the sole crates under the 85% coverage gate) or at
+the final close of the work.
 
 ## Workspace map
 
