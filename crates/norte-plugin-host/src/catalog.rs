@@ -1,9 +1,10 @@
 //! Catálogo de plugins (ADR 0022 D5/D6): descubre los `.wasm` locales y sus
 //! manifiestos, y los ordena por categoría para el gestor de extensiones.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
+use crate::config_values::resolve_settings;
 use crate::manifest::{Category, Manifest, ManifestError};
 
 /// Nivel de una acción invocable (ADR 0022 D5): los tres NUNCA se mezclan. El
@@ -31,6 +32,13 @@ pub struct PluginEntry {
     /// El usuario aprobó las capabilities declaradas (si no, `⚠ sin aprobar`
     /// y el host no lo carga — ADR 0022 D4).
     pub approved: bool,
+    /// Valores EFECTIVOS de `[config]` (P2 decisión 3): defaults del esquema
+    /// del manifiesto, con `dir/config.toml` superpuesto y ya validado —
+    /// [`crate::resolve_settings`] corre en `load_dir` y, si falla, el
+    /// plugin va a `errors` en vez de aquí (ver [`Catalog::load_dir`]).
+    /// Codificación canónica de string (decisión 4). Vacío si el manifiesto
+    /// no declara `[config]`.
+    pub settings: BTreeMap<String, String>,
 }
 
 /// Un manifiesto que no cargó, con su causa (para avisar en el gestor en vez de
@@ -95,12 +103,24 @@ impl Catalog {
                     error: ManifestError::DuplicateId(id),
                 });
             } else {
-                cat.plugins.push(PluginEntry {
-                    manifest,
-                    dir,
-                    enabled: false,
-                    approved: false,
-                });
+                // P2 decisión 3: los VALORES de `[config]` se resuelven y
+                // validan AQUÍ, al descubrir — fail-closed a nivel de
+                // catálogo (mismo trato que `DuplicateId`): un `config.toml`
+                // que no valida excluye el plugin ENTERO, nunca carga con
+                // valores a medias.
+                match resolve_settings(&manifest, &dir) {
+                    Ok(settings) => cat.plugins.push(PluginEntry {
+                        manifest,
+                        dir,
+                        enabled: false,
+                        approved: false,
+                        settings,
+                    }),
+                    Err(error) => cat.errors.push(LoadError {
+                        dir,
+                        error: ManifestError::from(error),
+                    }),
+                }
             }
         }
         cat.plugins.sort_by(|a, b| {

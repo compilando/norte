@@ -327,6 +327,21 @@ fn check_keymap_screen(
 /// before). No symlink-safety canonicalization here, unlike the registry's
 /// own `verified_wasm` (issue #69) — this is a presence check for a
 /// diagnostic, not a load path, so that defense does not apply.
+///
+/// P2 Task 2 adds `[config]` VALUES visibility (decision 5: host-side only —
+/// `doctor` runs embedded, so it CAN show them; the wire-facing extension
+/// manager cannot until the protocol bump G3 already requires). Each
+/// resolved key of [`PluginRegistry::settings_of`] becomes one
+/// [`Severity::Ok`] `plugin-config` finding, `detail` = `{id}: {key}=
+/// {value}` — the value is the plugin's OWN default or the user's OWN
+/// override, but still MASKED via [`norte_encoding::mask_terminal_hazards`]
+/// and capped to [`PLUGIN_CONFIG_VALUE_MAX_CHARS`] (belt, same policy as the
+/// TUI's `must_mask`/`display_name`: a value is untrusted text regardless of
+/// who wrote it). A `config.toml` that fails validation against the schema
+/// does NOT reach here at all — the whole plugin is already excluded and
+/// surfaced by the `plugin-manifest-broken` loop above (fail-closed at
+/// catalog level, [`norte_plugin_host::Catalog::load_dir`]'s own contract);
+/// there is no separate violation path to handle in THIS function.
 #[must_use]
 pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
     let mut findings = Vec::new();
@@ -376,8 +391,39 @@ pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
                 detail: p.id.clone(),
             });
         }
+        if let Some(settings) = registry.settings_of(&p.id) {
+            for (key, value) in settings {
+                findings.push(Finding {
+                    section: "plugins",
+                    severity: Severity::Ok,
+                    code: "plugin-config",
+                    detail: format!("{}: {key}={}", p.id, masked_config_value(value)),
+                });
+            }
+        }
     }
     findings
+}
+
+/// Cap (CHARS, not bytes — same criterion as the manifest's own
+/// `description`/`[config]` topes) on the VALUE shown in a `plugin-config`
+/// finding (P2 Task 2): a plugin's own default, or a user's own override,
+/// could still be pathologically long (the manifest caps a `[config]`
+/// DEFAULT at 280 chars, decision 1 — but `config.toml` VALUES have no such
+/// cap, decision 3) and must not blow up the report.
+const PLUGIN_CONFIG_VALUE_MAX_CHARS: usize = 80;
+
+/// Masks terminal hazards ([`norte_encoding::mask_terminal_hazards`]) and
+/// caps to [`PLUGIN_CONFIG_VALUE_MAX_CHARS`] CHARS (an ellipsis marks a cut)
+/// for display in a `plugin-config` finding.
+fn masked_config_value(value: &str) -> String {
+    let masked = norte_encoding::mask_terminal_hazards(value);
+    if masked.chars().count() <= PLUGIN_CONFIG_VALUE_MAX_CHARS {
+        return masked;
+    }
+    let mut truncated: String = masked.chars().take(PLUGIN_CONFIG_VALUE_MAX_CHARS).collect();
+    truncated.push('…');
+    truncated
 }
 
 /// Checks `config_dir/connections.toml` (decision 2: side-effect-free v1 —
@@ -761,6 +807,165 @@ fs-read = "scoped"
             .find(|f| f.code == "plugin-ok")
             .unwrap_or_else(|| panic!("expected a plugin-ok finding: {findings:?}"));
         assert!(ok.detail.contains("approved=false"), "{}", ok.detail);
+    }
+
+    /// Manifest declaring `[config]` (P2 Task 2), for the `plugin-config`
+    /// finding tests below.
+    const CONFIG_MANIFEST: &str = r#"
+[plugin]
+id = "org.norte.cfg"
+name = "Cfg"
+publisher = "norte"
+version = "0.1.0"
+category = "command"
+[config.greeting]
+type = "string"
+default = "hola"
+[config.retries]
+type = "int"
+default = 3
+min = 0
+max = 10
+"#;
+
+    fn write_config_values(dir: &std::path::Path, id: &str, toml: &str) {
+        std::fs::write(dir.join("plugins").join(id).join("config.toml"), toml).unwrap();
+    }
+
+    /// TDD (P2 Task 2, decision 5): a plugin declaring `[config]` with no
+    /// `config.toml` on disk → one `Severity::Ok` `plugin-config` finding
+    /// PER KEY, showing the DEFAULT (`key=value`, id-prefixed).
+    #[test]
+    fn plugins_config_sin_fichero_muestra_los_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "org.norte.cfg", CONFIG_MANIFEST);
+
+        let findings = check_plugins(dir.path());
+        let config_findings: Vec<&Finding> = findings
+            .iter()
+            .filter(|f| f.code == "plugin-config")
+            .collect();
+        assert_eq!(config_findings.len(), 2, "{findings:?}");
+        assert!(config_findings.iter().all(|f| f.severity == Severity::Ok));
+        assert!(
+            config_findings
+                .iter()
+                .any(|f| f.detail == "org.norte.cfg: greeting=hola"),
+            "{config_findings:?}"
+        );
+        assert!(
+            config_findings
+                .iter()
+                .any(|f| f.detail == "org.norte.cfg: retries=3"),
+            "{config_findings:?}"
+        );
+    }
+
+    /// A valid override in `config.toml` is reflected in the finding's
+    /// value, not the schema default.
+    #[test]
+    fn plugins_config_con_override_muestra_el_valor_efectivo() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "org.norte.cfg", CONFIG_MANIFEST);
+        write_config_values(dir.path(), "org.norte.cfg", "retries = 9\n");
+
+        let findings = check_plugins(dir.path());
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.code == "plugin-config" && f.detail == "org.norte.cfg: retries=9"),
+            "{findings:?}"
+        );
+    }
+
+    /// A plugin with NO `[config]` schema gets no `plugin-config` findings
+    /// at all (empty settings map, decision 5 — nothing to show).
+    #[test]
+    fn plugins_sin_config_no_tiene_findings_plugin_config() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "org.norte.demo", DEMO_MANIFEST);
+
+        let findings = check_plugins(dir.path());
+        assert!(!findings.iter().any(|f| f.code == "plugin-config"));
+    }
+
+    /// TDD (P2 Task 2, fail-closed): a `config.toml` that fails validation
+    /// against the manifest's `[config]` schema excludes the WHOLE plugin —
+    /// it surfaces via the EXISTING `plugin-manifest-broken` catalog-error
+    /// path (mirrors `plugins_manifest_roto_es_error`), not as a
+    /// `plugin-config`/`plugin-ok` finding. The error names the KEY, never
+    /// the value (#73).
+    #[test]
+    fn plugins_config_toml_invalido_excluye_el_plugin_y_reporta_error() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "org.norte.cfg", CONFIG_MANIFEST);
+        write_config_values(dir.path(), "org.norte.cfg", "no-declarada = \"x\"\n");
+
+        let findings = check_plugins(dir.path());
+        assert!(
+            !findings.iter().any(|f| f.code == "plugin-ok"),
+            "the invalid plugin must not load: {findings:?}"
+        );
+        assert!(
+            !findings.iter().any(|f| f.code == "plugin-config"),
+            "no config values should be shown for an excluded plugin: {findings:?}"
+        );
+        let err = findings
+            .iter()
+            .find(|f| f.code == "plugin-manifest-broken")
+            .unwrap_or_else(|| panic!("expected a manifest-broken finding: {findings:?}"));
+        assert_eq!(err.severity, Severity::Error);
+        assert!(err.detail.contains("no-declarada"), "{}", err.detail);
+    }
+
+    /// Encoding audit (H2-style, same policy as elsewhere in this file):
+    /// a config value carrying a terminal hazard (ESC) must never reach the
+    /// finding's `detail` raw — it is masked to U+FFFD.
+    #[test]
+    fn plugins_config_value_con_hazard_de_terminal_se_enmascara() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "org.norte.cfg", CONFIG_MANIFEST);
+        write_config_values(
+            dir.path(),
+            "org.norte.cfg",
+            "greeting = \"ok \\u001bmalicious\"\n",
+        );
+
+        let findings = check_plugins(dir.path());
+        let f = findings
+            .iter()
+            .find(|f| f.code == "plugin-config" && f.detail.starts_with("org.norte.cfg: greeting"))
+            .unwrap_or_else(|| panic!("expected a greeting plugin-config finding: {findings:?}"));
+        assert!(
+            !f.detail.contains('\u{1b}'),
+            "raw ESC must never reach the finding: {}",
+            f.detail
+        );
+        assert!(f.detail.contains('\u{fffd}'), "{}", f.detail);
+    }
+
+    /// A config value longer than the display cap is truncated.
+    #[test]
+    fn plugins_config_value_largo_se_recorta() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "org.norte.cfg", CONFIG_MANIFEST);
+        let long = "a".repeat(200);
+        write_config_values(
+            dir.path(),
+            "org.norte.cfg",
+            &format!("greeting = \"{long}\"\n"),
+        );
+
+        let findings = check_plugins(dir.path());
+        let f = findings
+            .iter()
+            .find(|f| f.code == "plugin-config" && f.detail.starts_with("org.norte.cfg: greeting"))
+            .unwrap_or_else(|| panic!("expected a greeting plugin-config finding: {findings:?}"));
+        assert!(
+            f.detail.chars().count() < 200,
+            "the long value must be capped: {}",
+            f.detail
+        );
     }
 
     /// TDD (decision 2): a `Password`-auth connection with the secret env

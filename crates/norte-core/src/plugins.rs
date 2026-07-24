@@ -251,6 +251,28 @@ impl PluginRegistry {
         &self.config_dir
     }
 
+    /// Valores EFECTIVOS de `[config]` (P2) para `id`: defaults del esquema
+    /// del manifiesto con `config.toml` ya superpuesto y validado —
+    /// resueltos al descubrir ([`norte_plugin_host::Catalog::load_dir`], que
+    /// excluye a `errors` cualquier plugin cuyo `config.toml` no valide, así
+    /// que lo que llega aquí SIEMPRE es válido). `None` si `id` no está en el
+    /// catálogo — NUNCA por un `[config]` vacío/ausente, que da `Some` de un
+    /// mapa vacío (mismo criterio que
+    /// [`norte_plugin_host::Manifest::config`]).
+    ///
+    /// Host-side ONLY (P2 decisión 5): no cruza el wire — lo consume
+    /// directamente `norte doctor` (que corre embebido); la vista del
+    /// gestor de extensiones queda diferida al bump de protocolo que exige
+    /// G3.
+    #[must_use]
+    pub fn settings_of(&self, id: &str) -> Option<&BTreeMap<String, String>> {
+        self.catalog
+            .plugins
+            .iter()
+            .find(|p| p.manifest.id == id)
+            .map(|p| &p.settings)
+    }
+
     /// Ruta esperada del binario de `id`: `<config_dir>/plugins/<id>/plugin.wasm`.
     /// Para un caller que solo necesita comprobar PRESENCIA sin cargar el
     /// runtime WASM (p. ej. `norte doctor`, H2) — evita que ese caller
@@ -694,6 +716,58 @@ fs-read = "scoped"
                 .join("org.norte.demo")
                 .join("plugin.wasm")
         );
+    }
+
+    /// Manifiesto con `[config]` (P2 Task 2), para `settings_of`.
+    const CONFIG_MANIFEST: &str = r#"
+[plugin]
+id = "org.norte.cfg"
+name = "Cfg"
+publisher = "norte"
+version = "0.1.0"
+category = "command"
+[config.retries]
+type = "int"
+default = 3
+min = 0
+max = 10
+"#;
+
+    #[test]
+    fn settings_of_sin_config_toml_devuelve_los_defaults() {
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.cfg", CONFIG_MANIFEST);
+
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        let settings = reg
+            .settings_of("org.norte.cfg")
+            .unwrap_or_else(|| panic!("se esperaba un plugin descubierto"));
+        assert_eq!(settings.get("retries").map(String::as_str), Some("3"));
+    }
+
+    #[test]
+    fn settings_of_con_override_refleja_el_valor_de_config_toml() {
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.cfg", CONFIG_MANIFEST);
+        std::fs::write(
+            tmp.path()
+                .join("plugins")
+                .join("org.norte.cfg")
+                .join("config.toml"),
+            "retries = 8\n",
+        )
+        .unwrap();
+
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        let settings = reg.settings_of("org.norte.cfg").unwrap();
+        assert_eq!(settings.get("retries").map(String::as_str), Some("8"));
+    }
+
+    #[test]
+    fn settings_of_id_desconocido_es_none() {
+        let tmp = TempDir::new().unwrap();
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert!(reg.settings_of("org.norte.fantasma").is_none());
     }
 
     #[test]

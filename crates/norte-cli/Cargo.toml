@@ -25,6 +25,7 @@ futures.workspace = true
 norte-config.workspace = true
 norte-connect.workspace = true
 norte-core.workspace = true
+norte-encoding.workspace = true
 norte-frontend.workspace = true
 norte-mcp.workspace = true
 norte-i18n.workspace = true

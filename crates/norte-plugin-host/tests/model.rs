@@ -362,6 +362,12 @@ fn write_plugin(root: &std::path::Path, id: &str, toml: &str) {
     // el .wasm real llega en M4-P2; el catálogo solo exige el manifiesto.
 }
 
+/// Añade `config_dir/plugins/<id>/config.toml` a un plugin YA escrito con
+/// [`write_plugin`] (P2 Task 2).
+fn write_config_values(root: &std::path::Path, id: &str, toml: &str) {
+    std::fs::write(root.join(id).join("config.toml"), toml).unwrap();
+}
+
 #[test]
 fn catalogo_descubre_ordena_y_agrupa() {
     let root = tempfile::tempdir().unwrap();
@@ -889,4 +895,73 @@ fn config_tabla_vacia_digesta_igual_que_ausente() {
     let sin_tabla = manifest_con_config("").unwrap();
     let tabla_vacia = manifest_con_config("\n[config]\n").unwrap();
     assert_eq!(sin_tabla.approval_digest(), tabla_vacia.approval_digest());
+}
+
+// --- P2 Task 2: wiring de `resolve_settings` en `Catalog::load_dir` -------
+
+#[test]
+fn catalogo_config_toml_invalido_excluye_el_plugin_via_error() {
+    // Un `config.toml` que NO valida contra el esquema `[config]` del
+    // manifiesto (P2 decisión 3) excluye el plugin ENTERO del catálogo
+    // (fail-closed, mismo trato que un `plugin.toml` roto o un id
+    // duplicado): va a `errors`, nunca a `plugins` con valores a medias.
+    let root = tempfile::tempdir().unwrap();
+    write_plugin(root.path(), "org.norte.demo-config", WITH_CONFIG);
+    write_config_values(root.path(), "org.norte.demo-config", "mode = \"turbo\"\n");
+    // Un plugin sano de control, sin `[config]`.
+    write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
+
+    let cat = Catalog::load_dir(root.path());
+    assert_eq!(
+        cat.plugins.len(),
+        1,
+        "el plugin con config.toml inválido NO carga"
+    );
+    assert_eq!(cat.plugins[0].manifest.id, "org.norte.syntax-preview");
+    assert_eq!(cat.errors.len(), 1, "el config.toml inválido va a errors");
+    assert!(
+        matches!(
+            &cat.errors[0].error,
+            ManifestError::ConfigValues(inner) if inner.to_string().contains("mode")
+        ),
+        "el error nombra la CLAVE (mode), no el valor: {:?}",
+        cat.errors[0].error
+    );
+}
+
+#[test]
+fn catalogo_config_toml_valido_resuelve_settings_en_la_entrada() {
+    let root = tempfile::tempdir().unwrap();
+    write_plugin(root.path(), "org.norte.demo-config", WITH_CONFIG);
+    write_config_values(root.path(), "org.norte.demo-config", "retries = 7\n");
+
+    let cat = Catalog::load_dir(root.path());
+    assert_eq!(cat.errors.len(), 0, "{:?}", cat.errors);
+    assert_eq!(cat.plugins.len(), 1);
+    let settings = &cat.plugins[0].settings;
+    assert_eq!(settings.get("retries").map(String::as_str), Some("7"));
+    // El resto sigue en su default.
+    assert_eq!(settings.get("greeting").map(String::as_str), Some("hola"));
+}
+
+#[test]
+fn catalogo_sin_config_toml_resuelve_defaults_en_la_entrada() {
+    let root = tempfile::tempdir().unwrap();
+    write_plugin(root.path(), "org.norte.demo-config", WITH_CONFIG);
+    // Sin escribir config.toml.
+
+    let cat = Catalog::load_dir(root.path());
+    assert_eq!(cat.errors.len(), 0, "{:?}", cat.errors);
+    let settings = &cat.plugins[0].settings;
+    assert_eq!(settings.len(), 4);
+    assert_eq!(settings.get("mode").map(String::as_str), Some("fast"));
+}
+
+#[test]
+fn catalogo_plugin_sin_config_tiene_settings_vacio() {
+    let root = tempfile::tempdir().unwrap();
+    write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
+
+    let cat = Catalog::load_dir(root.path());
+    assert!(cat.plugins[0].settings.is_empty());
 }

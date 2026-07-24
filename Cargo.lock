@@ -4200,6 +4200,7 @@ dependencies = [
  "norte-config",
  "norte-connect",
  "norte-core",
+ "norte-encoding",
  "norte-frontend",
  "norte-i18n",
  "norte-mcp",

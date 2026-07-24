@@ -30,11 +30,13 @@
 mod bindings;
 mod capability;
 mod catalog;
+mod config_values;
 mod manifest;
 mod runtime;
 
 pub use capability::{Capabilities, NetCap, Scope};
 pub use catalog::{Catalog, LoadError, PluginEntry, Tier};
+pub use config_values::{ConfigValueError, resolve_settings};
 pub use manifest::{
     COMMAND_ID_MAX_CHARS, COMMAND_TITLE_MAX_CHARS, CONFIG_DESCRIPTION_MAX_CHARS,
     CONFIG_ENUM_MAX_VALUES, CONFIG_KEY_MAX_CHARS, CONFIG_MAX_KEYS, CONFIG_STRING_MAX_CHARS,

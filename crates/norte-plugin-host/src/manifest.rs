@@ -490,7 +490,13 @@ pub struct Manifest {
     pub config: BTreeMap<String, ConfigKeySpec>,
 }
 
-/// Error al cargar un manifiesto.
+/// Error al cargar un manifiesto — o, más ampliamente, la razón por la que un
+/// candidato a plugin queda excluido del catálogo (mismo tipo que
+/// [`crate::LoadError::error`]): además del parseo/validación de
+/// `plugin.toml` en sí, cubre condiciones de nivel catálogo como
+/// `DuplicateId` y, desde P2, `ConfigValues` (un `config.toml` de VALORES
+/// que no valida contra el esquema `[config]` — el plugin entero se excluye,
+/// no solo la clave ofensora).
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestError {
     /// El TOML no parsea o tiene claves desconocidas.
@@ -570,6 +576,12 @@ pub enum ManifestError {
     /// parsear).
     #[error("[config.<key>].default (enum) no está entre los `values` declarados")]
     ConfigEnumDefaultNotInValues,
+    /// El `config.toml` de VALORES (P2 decisión 3, distinto del manifiesto)
+    /// no valida contra el esquema `[config]` — fail-closed a nivel de
+    /// catálogo: el plugin ENTERO se excluye (mismo criterio que
+    /// `DuplicateId`), nunca carga con valores a medias.
+    #[error("config.toml inválido: {0}")]
+    ConfigValues(#[from] crate::config_values::ConfigValueError),
 }
 
 /// Tope de `contributions.command[].title` (P1 encoding audit M2): mismo
