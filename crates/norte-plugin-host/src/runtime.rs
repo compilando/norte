@@ -62,7 +62,7 @@ const MAX_STYLED_SPAN_TEXT_BYTES: usize = 4 * 1024;
 
 /// Tope TOTAL de bytes de `text` sumados de TODOS los spans de un
 /// `render-styled` (ADR 0037 tabla de decisión 1): reutiliza el mismo tope
-/// que [`MAX_RETURN_BYTES`] (el cap de retorno del runtime, issue #68) — un
+/// que `MAX_RETURN_BYTES` (el cap de retorno del runtime, issue #68) — un
 /// preview estilizado no debe poder inflar la memoria del host más que
 /// cualquier otro valor de retorno de un guest.
 const MAX_STYLED_TOTAL_TEXT_BYTES: usize = MAX_RETURN_BYTES;
@@ -191,7 +191,7 @@ fn cap_styled_text(lines: Vec<Vec<Span>>) -> Result<Vec<Vec<Span>>, RuntimeError
 }
 
 /// Tope agregado sobre un LOTE de `decorate`/`column-values` (mismo
-/// [`MAX_RETURN_BYTES`] que cualquier otro valor de retorno del runtime,
+/// `MAX_RETURN_BYTES` que cualquier otro valor de retorno del runtime,
 /// issue #68): `len` es la suma de bytes ÚTILES del batch (badges+roles, o
 /// valores de columna), no el nº de entradas — un batch grande de celdas
 /// diminutas es legítimo, un batch de pocas celdas gigantes no lo es.
@@ -980,7 +980,7 @@ impl DecoratorInstance {
     /// decisión 2): `entries` son los nombres/paths crudos en el orden en
     /// que el host los lista; el resultado es POSICIONAL 1:1 — nunca
     /// reordenado, nunca disperso. Aplica el mismo tope agregado
-    /// [`MAX_RETURN_BYTES`] que cualquier otro valor de retorno del runtime
+    /// `MAX_RETURN_BYTES` que cualquier otro valor de retorno del runtime
     /// (issue #68), sumando los bytes de `badge`+`role` de TODAS las
     /// decoraciones del lote.
     ///
@@ -1033,7 +1033,7 @@ impl ColumnsInstance {
     /// posicional 1:1 que [`DecoratorInstance::decorate`]. Cada celda es
     /// `Option<String>` — `None` = "no aplica a esta entrada", distinguible
     /// de un valor real vacío (ADR 0037 decisión 1). Aplica el mismo tope
-    /// agregado [`MAX_RETURN_BYTES`], sumando los bytes de las celdas
+    /// agregado `MAX_RETURN_BYTES`, sumando los bytes de las celdas
     /// `Some`.
     ///
     /// # Errors

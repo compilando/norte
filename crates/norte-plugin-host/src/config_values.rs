@@ -322,7 +322,7 @@ fn plugin_id_is_safe_path_segment(id: &str) -> bool {
 /// `plugin_id` debe llegar YA validado por el caller (p. ej. el `id` de un
 /// [`Manifest`] ya cargado, que pasó el charset reverse-DNS al parsear) —
 /// esta función AÑADE un guard barato de defensa en profundidad (revisión S,
-/// M5: [`plugin_id_is_safe_path_segment`]) porque `plugin_id` se usa DIRECTO
+/// M5: `plugin_id_is_safe_path_segment`) porque `plugin_id` se usa DIRECTO
 /// como segmento de ruta (`config_dir.join("plugins").join(plugin_id)`): sin
 /// el guard, un `plugin_id` no confiable con `..`/un separador podría escapar
 /// `plugins/` — el propio charset reverse-DNS del manifiesto ya lo impide
@@ -345,7 +345,7 @@ fn plugin_id_is_safe_path_segment(id: &str) -> bool {
 ///
 /// # Errors
 /// [`std::io::Error`] (`InvalidInput`) si `plugin_id` no pasa
-/// [`plugin_id_is_safe_path_segment`]; (otro kind) si el `config.toml`
+/// `plugin_id_is_safe_path_segment`; (otro kind) si el `config.toml`
 /// existente no parsea o falla el I/O.
 pub fn persist_plugin_setting(
     config_dir: &Path,
@@ -411,7 +411,7 @@ mod persist_plugin_setting_tests {
     }
 
     /// Revisión S, M5: par positivo/negativo de
-    /// [`plugin_id_is_safe_path_segment`] — vacío, `.`/`..` exactos, y
+    /// `plugin_id_is_safe_path_segment` — vacío, `.`/`..` exactos, y
     /// cualquier `plugin_id` con un separador embebido se rechazan; un id
     /// reverse-DNS normal no.
     #[test]
