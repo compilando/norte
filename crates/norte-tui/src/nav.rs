@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 
 use norte_proto::VPath;
 
-pub use norte_frontend::nav::{Mode, QuickSearch, matches};
+pub use norte_frontend::nav::{Mode, QuickSearch, fold, matches};
 
 /// Tope de directorios retenidos en el historial de un pane (spec
 /// 2026-07-18: sesión, no persistido — a diferencia de la hotlist).

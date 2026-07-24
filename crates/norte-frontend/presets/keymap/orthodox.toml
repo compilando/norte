@@ -10,6 +10,7 @@ keymap = [
     { on = ["f1"], run = "app.help" },
     { on = ["f9"], run = "app.theme" },
     { on = ["f12"], run = "app.extensions" },
+    { on = ["ctrl+p"], run = "app.palette" },
 ]
 
 [pane]

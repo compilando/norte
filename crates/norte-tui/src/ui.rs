@@ -87,6 +87,9 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
             &app.theme,
         );
     }
+    if let Some(palette) = &app.palette {
+        draw_palette(frame, palette, &app.theme);
+    }
 }
 
 /// Diálogo de búsqueda viva (`Alt+F7`, liveSearch T6): dos campos de texto
@@ -366,6 +369,59 @@ fn draw_help(frame: &mut Frame<'_>, help: &crate::app::Help, theme: &TuiTheme) {
         ),
         area,
     );
+}
+
+/// Command palette (`Ctrl+P`/vim `:`, H1 T4, spec-promised): filtro libre
+/// sobre TODOS los comandos, mismo idioma visual que [`draw_nav_popup`]
+/// (centrado, input al pie, `Clear` antes de pintar) pero MÁS ancha (60
+/// columnas: `{comando} {descripción} {chord}` no cabe en el ancho de un
+/// popup normal). `comando`/`descripción`/`chord` son texto CONFIABLE
+/// (constantes del binario + catálogo Fluent, [`crate::palette::
+/// build_rows`]) — jamás se enmascaran; SOLO la query (tecleada por el
+/// usuario) pasa por [`crate::app::Palette::query_display`] (mismo
+/// contrato que `QuickSearch::query_display`: un paste hostil no pinta
+/// bidi/invisibles crudos en el borde) + [`display_name`] (mismo doble
+/// filtro que la barra de quick search del pane, línea de abajo). El hint
+/// es ESTÁTICO (`palette-hint`): la palette NO resuelve por el contexto
+/// `dialog` (decisión 8 del plan H1 — es un editor de filtro libre como el
+/// diálogo de búsqueda), así que no hay hint GENERADO que mostrar aquí.
+fn draw_palette(frame: &mut Frame<'_>, palette: &crate::app::Palette, theme: &TuiTheme) {
+    let rows = u16::try_from(palette.visible().len().max(1))
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
+    let area = centered(frame.area(), 60, rows.min(frame.area().height.max(3)));
+    frame.render_widget(ratatui::widgets::Clear, area);
+    let inner = usize::from(area.width.saturating_sub(3));
+    let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = if palette.visible().is_empty() {
+        (vec![ListItem::new(Line::raw(" —"))], None)
+    } else {
+        (
+            palette
+                .visible()
+                .iter()
+                .map(|&i| {
+                    let (cmd, desc, chord) = &palette.rows()[i];
+                    let texto = format!(" {cmd:<24} {desc:<32} {chord}");
+                    ListItem::new(Line::raw(middle_ellipsis(&texto, inner)))
+                })
+                .collect(),
+            Some(palette.cursor()),
+        )
+    };
+    let (query, _) = display_name(palette.query_display().as_bytes());
+    let footer = Line::raw(format!(" /{query}  {} ", t("palette-hint")));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("palette-title")))
+        .title_style(theme.role(Role::Title))
+        .title_bottom(footer)
+        .border_style(theme.role(Role::ModalBorder));
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(theme.role(Role::Selection));
+    let mut state = ListState::default();
+    state.select(selected);
+    frame.render_stateful_widget(list, area, &mut state);
 }
 
 /// Viewer a pantalla completa: contenido + status propia (encoding, EOL,

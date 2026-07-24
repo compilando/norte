@@ -39,7 +39,13 @@ pub enum Mode {
 /// solo pliegan la query. `to_lowercase` es case-folding simple de Rust,
 /// NO full Unicode case-folding — consciente, suficiente para substring
 /// UX de tipeo.
-fn fold(name: &[u8]) -> String {
+///
+/// `pub` (H1 T4): la palette de comandos de la TUI pliega texto que NO es
+/// un nombre de `Entry` (comando+descripción) con el MISMO criterio de
+/// normalización que el quick search — un solo pipeline de fold para todo
+/// filtro substring del frontend, jamás una copia divergente.
+#[must_use]
+pub fn fold(name: &[u8]) -> String {
     String::from_utf8_lossy(name)
         .nfc()
         .flat_map(char::to_lowercase)

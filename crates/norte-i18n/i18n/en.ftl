@@ -164,6 +164,12 @@ help-cmd-app-quit = quit norte
 help-cmd-app-help = this help
 help-cmd-app-theme = choose theme
 help-cmd-app-extensions = extension manager
+help-cmd-app-palette = command palette
+# --- Command palette (H1 T4) — a free-text filter editor like the search
+# dialog (decision 8): its keys are hardcoded, NOT resolved through the
+# `dialog` context, so this hint is a static string like `search-hint`.
+palette-title = Command palette
+palette-hint = [↑/↓/pgup/pgdn] navigate · [enter] run · [esc] close
 theme-picker-title = Theme
 ext-title = Extensions
 ext-empty = no extensions installed

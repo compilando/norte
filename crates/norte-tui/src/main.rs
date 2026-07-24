@@ -21,9 +21,9 @@ use norte_proto::methods::{FsSearchParams, SearchHits};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{
     ALLOW_EXTENSIONS, ALLOW_NAV_HOTLIST, ALLOW_PICKER, App, DialogOutcome, ExtensionManager, Help,
-    KeymapsError, Modal, NavPopupKind, Pane, PickerAction, SearchDialog, SearchState, TransferKind,
-    config_error_category, detail_for_bar, dialog_action, error_category, error_message,
-    io_error_category, keymaps_error_category, theme_error_category, trust_lua_key,
+    KeymapsError, Modal, NavPopupKind, Palette, Pane, PickerAction, SearchDialog, SearchState,
+    TransferKind, config_error_category, detail_for_bar, dialog_action, error_category,
+    error_message, io_error_category, keymaps_error_category, theme_error_category, trust_lua_key,
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::hints::DialogHints;
@@ -285,6 +285,10 @@ async fn main() -> Result<()> {
     // #44: avisos `connection.degraded` del daemon → indicador persistente.
     let degraded = backend.take_degraded();
     let mut help_lines = norte_tui::help::build(&browse_eff, &viewer_eff);
+    // Filas de la command palette (H1 T4): PRECOMPUTADAS de los efectivos
+    // browse/viewer ANTES de que se muevan al `Resolver` de abajo — mismo
+    // criterio que `help_lines`/`dialog_hints`.
+    app.palette_rows = norte_tui::palette::build_rows(&browse_eff, &viewer_eff);
     let mut resolver = Resolver::new(browse_eff);
     let mut viewer_resolver = Resolver::new(viewer_eff);
     // H1 T2: resolver compartido por TODOS los overlays (modal, theme
@@ -746,6 +750,74 @@ async fn run(
                         {
                             launch_search(app, backend, &mut fill, &mut search_run, params)
                                 .await;
+                        }
+                    } else if app.palette.is_some() {
+                        // Command palette (H1 T4): editor de filtro libre,
+                        // como el diálogo de búsqueda de arriba — sus
+                        // teclas son FIJAS, no resuelven por el contexto
+                        // `dialog` (decisión 8 del plan H1: no hay
+                        // vocabulario `dialog.*` para "teclear un carácter"
+                        // o "correr la selección"). ctrl+c conserva su
+                        // significado global (salir), como TODOS los
+                        // overlays.
+                        if key.modifiers.contains(KeyModifiers::CONTROL)
+                            && key.code == KeyCode::Char('c')
+                        {
+                            app.quit = true;
+                            continue;
+                        }
+                        let plain = key.modifiers.is_empty()
+                            || key.modifiers == KeyModifiers::SHIFT;
+                        match key.code {
+                            KeyCode::Char(c) if plain => {
+                                if let Some(p) = &mut app.palette {
+                                    p.push_char(c);
+                                }
+                            }
+                            KeyCode::Backspace if plain => {
+                                if let Some(p) = &mut app.palette {
+                                    p.backspace();
+                                }
+                            }
+                            KeyCode::Esc if plain => app.palette = None,
+                            KeyCode::Up if plain => {
+                                if let Some(p) = &mut app.palette {
+                                    p.up();
+                                }
+                            }
+                            KeyCode::Down if plain => {
+                                if let Some(p) = &mut app.palette {
+                                    p.down();
+                                }
+                            }
+                            KeyCode::PageUp if plain => {
+                                if let Some(p) = &mut app.palette {
+                                    p.page_up(PAGE);
+                                }
+                            }
+                            KeyCode::PageDown if plain => {
+                                if let Some(p) = &mut app.palette {
+                                    p.page_down(PAGE);
+                                }
+                            }
+                            KeyCode::Enter if plain => {
+                                let cmd = app.palette.as_ref().and_then(Palette::selected);
+                                app.palette = None;
+                                if let Some(cmd) = cmd {
+                                    // MISMA función de despacho que el
+                                    // resolver del keymap invoca (#dispatch):
+                                    // un comando elegido en la palette corre
+                                    // EXACTAMENTE como si su tecla se
+                                    // hubiera pulsado — incluida la apertura
+                                    // de otro overlay (p.ej. `app.help`).
+                                    let outcome = dispatch(
+                                        app, backend, &mut events, help_lines, quick_mode, cmd,
+                                    )
+                                    .await;
+                                    apply_cd(&mut fill, &mut last_probed, outcome);
+                                }
+                            }
+                            _ => {}
                         }
                     } else if let Some(help) = &mut app.help {
                         // Teclas de la ayuda: fijas, como los diálogos (#24).
@@ -1392,6 +1464,13 @@ async fn reload_config(
                 // La ayuda refleja el keymap VIGENTE: se reconstruye aquí.
                 *help_lines = norte_tui::help::build(&browse, &viewer);
                 app.help = None;
+                // Filas de la palette (H1 T4): reconstruidas del keymap
+                // VIGENTE, ANTES de que se mueva al resolver de abajo —
+                // mismo criterio que help_lines. La palette abierta se
+                // cierra (como la ayuda): sus filas congeladas podrían
+                // apuntar a descripciones/chords ya viejos.
+                app.palette_rows = norte_tui::palette::build_rows(&browse, &viewer);
+                app.palette = None;
                 // Hints de los overlays (H1 T3, #24): reconstruidos del
                 // efectivo `dialog` VIGENTE, ANTES de que se mueva al
                 // resolver de abajo — mismo criterio que help_lines.
@@ -2636,6 +2715,15 @@ async fn dispatch(
             }
             Err(e) => app.message = Some(error_message(&e)),
         },
+        // Ctrl+P / vim `:` (H1 T4, spec-promised): abre la palette sobre la
+        // snapshot PRECOMPUTADA (`App::palette_rows`, `main::build_keymaps`
+        // + hot-reload) — jamás recalcula el keymap efectivo aquí. Elegir
+        // `app.palette` DESDE la palette (el run loop la cierra ANTES de
+        // despachar, `enter`) es un no-op observable: cierra y reabre
+        // vacía — inofensivo, sin recursión de estado.
+        "app.palette" => {
+            app.palette = Some(Palette::new(app.palette_rows.clone()));
+        }
         "task.cancel" => {
             app.message = Some(if app.board.cancel_last_running() {
                 t("msg-cancelling")

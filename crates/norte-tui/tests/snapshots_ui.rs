@@ -354,3 +354,28 @@ fn snapshot_ayuda() {
     app.help.as_mut().unwrap().scroll_down(24);
     insta::assert_snapshot!(format!("{arriba}\n===\n{}", render(&app)));
 }
+
+/// Command palette (`Ctrl+P`/vim `:`, H1 T4): filtrada a "principio" deja
+/// DOS filas visibles (`cursor.top`/`viewer.top` — ambas "ir al principio"
+/// en ES) con su chord real del preset orthodox — el MISMO builder que usa
+/// el binario (`norte_tui::palette::build_rows`), no una copia del formato.
+#[test]
+fn snapshot_palette_abierta() {
+    let mut app = app_base();
+    let presets = norte_tui::keymap::presets();
+    let (_, preset) = presets.iter().find(|(n, _)| *n == "orthodox").unwrap();
+    let build = |screen| {
+        norte_tui::keymap::Effective::build_for(preset, &[], norte_tui::keymap::COMMANDS, screen)
+            .unwrap()
+    };
+    let rows = norte_tui::palette::build_rows(
+        &build(norte_tui::keymap::Screen::Browse),
+        &build(norte_tui::keymap::Screen::Viewer),
+    );
+    let mut palette = norte_tui::app::Palette::new(rows);
+    for c in "principio".chars() {
+        palette.push_char(c);
+    }
+    app.palette = Some(palette);
+    insta::assert_snapshot!(render(&app));
+}

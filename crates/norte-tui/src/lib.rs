@@ -10,6 +10,7 @@ pub mod hints;
 pub mod keymap;
 pub mod lua;
 pub mod nav;
+pub mod palette;
 pub mod tasks;
 pub mod theme;
 pub mod ui;

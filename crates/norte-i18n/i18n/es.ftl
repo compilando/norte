@@ -164,6 +164,12 @@ help-cmd-app-quit = salir de norte
 help-cmd-app-help = esta ayuda
 help-cmd-app-theme = elegir tema
 help-cmd-app-extensions = gestor de extensiones
+help-cmd-app-palette = paleta de comandos
+# --- Paleta de comandos (H1 T4) — editor de filtro libre como el diálogo
+# de búsqueda (decisión 8): sus teclas son fijas, NO resuelven por el
+# contexto `dialog` — este hint es una cadena estática, como `search-hint`.
+palette-title = Paleta de comandos
+palette-hint = [↑/↓/pgup/pgdn] navegar · [enter] ejecutar · [esc] cerrar
 theme-picker-title = Tema
 ext-title = Extensiones
 ext-empty = no hay extensiones instaladas
