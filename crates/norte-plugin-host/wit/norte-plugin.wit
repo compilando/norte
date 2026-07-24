@@ -42,7 +42,36 @@
 // repo no importa (los guests de `examples-wasm/` se recompilan siempre desde
 // el WIT actual, vía symlink) — importaría el día que un plugin de terceros
 // exista de verdad.
-package norte:plugin@0.5.0;
+//
+// 0.5.0 → 0.6.0 (2026-07-24, G3 plan / ADR 0037 "Plugin data-out v2"): el host
+// pinta datos estructurados en vez de texto plano. TRES cambios:
+//   1. `previewer` gana un export REQUERIDO, `render-styled` (devuelve
+//      `styled-text` — líneas de spans con `role`/`fg` opcionales) hermano de
+//      `render`. REQUERIDO porque los exports de una interfaz WIT son
+//      todo-o-nada — un guest no puede implementar la mitad de `previewer`. Un
+//      guest de solo-texto lo satisface trivialmente envolviendo su propio
+//      `render` en un span por línea (sin rol ni color).
+//   2. Dos worlds NUEVOS, `norte-decorator` y `norte-columns`, con el MISMO
+//      patrón que `norte-provider` (world propio, interfaz propia, resueltos
+//      por `category` del manifiesto, no plegados en `norte-plugin`).
+//   3. `role: option<string>` en `span`/`decoration` NO se valida aquí — la
+//      validación contra el conjunto cerrado de `norte_theme::Role` vive en el
+//      HOST consumidor (`norte-core`), fuera de este paquete WIT (ADR 0037
+//      decisión 1): un rol desconocido degrada a `none`, nunca rompe.
+//
+// AVISO (reafirma el AVISO de 0.4.0→0.5.0, ahora verificado DOS veces sobre
+// este mismo paquete): el bump 0.5.0 → 0.6.0 es "aditivo" en el sentido de que
+// ningún export/import EXISTENTE cambió de forma — pero la versión del
+// paquete viaja en el nombre de CADA interfaz versionada
+// (`norte:plugin/previewer@0.5.0` → `@0.6.0`, y también `host-log`/
+// `host-config`), así que CUALQUIER artefacto `.wasm` compilado contra 0.5.0
+// deja de instanciar contra el linker 0.6.0 — import no resuelto, el mismo
+// fallo que en el bump anterior. T2 de este plan recompila TODOS los guests
+// de `examples-wasm/` (vía symlink `wit -> ../../wit`, siempre desde el WIT
+// actual) y re-ejecuta `just build-ftp-wasm` para
+// `crates/norte-core/resources/ftp-provider.wasm` (embebido, ADR 0033) en el
+// MISMO cambio que sube el paquete — nunca por separado.
+package norte:plugin@0.6.0;
 
 /// La puerta de host MÍNIMA (demuestra el gating host↔guest): un plugin puede
 /// pedir al host que registre una línea de log (inocua, sin capability) y leer
@@ -87,12 +116,78 @@ interface previewer {
         content: list<u8>,
     }
     render: func(input: preview-input) -> result<string, string>;
+
+    /// Un fragmento de texto con estilo OPCIONAL (ADR 0037 decisión 2): el
+    /// host pinta, el guest solo describe. `role` es un nombre semántico
+    /// (validado por el HOST consumidor contra `norte_theme::Role` — este
+    /// paquete WIT no conoce ese conjunto cerrado, un guest puede mandar
+    /// cualquier string); `fg` es un RGB crudo de respaldo para spans sin rol
+    /// (un highlighter con su propia paleta fija). Cuando un span trae AMBOS,
+    /// el rol gana en el host (el tema del usuario manda sobre el color fijo
+    /// del plugin) — decisión de pintado, no de este WIT.
+    record span {
+        text: string,
+        role: option<string>,
+        fg: option<tuple<u8, u8, u8>>,
+    }
+
+    /// Una línea = una secuencia ORDENADA de spans.
+    type styled-line = list<span>;
+
+    /// Un preview con estilo = una secuencia ORDENADA de líneas.
+    type styled-text = list<styled-line>;
+
+    /// Gemelo con estilo de `render` (ADR 0037 decisión 2): mismo `input`,
+    /// devuelve líneas de spans en vez de una cadena plana. REQUERIDO — los
+    /// exports de una interfaz WIT son todo-o-nada, así que un guest de solo
+    /// texto lo implementa envolviendo su propio `render` en UN span por
+    /// línea, sin `role` ni `fg` (ver el AVISO de cabecera de este paquete).
+    /// El HOST aplica topes de anti-DoS al resultado (nº de líneas, spans por
+    /// línea, bytes por span y bytes totales — ADR 0037 tabla de decisión 1)
+    /// DESPUÉS de que esta función retorne; una violación se rechaza entera
+    /// (fail-closed), nunca se trunca a medias.
+    render-styled: func(input: preview-input) -> result<styled-text, string>;
 }
 
 /// Ejecuta un comando aportado por el plugin. `arg` es texto libre del
 /// invocador; devuelve un mensaje para la barra de estado, o un error.
 interface command {
     run: func(id: string, arg: string) -> result<string, string>;
+}
+
+/// Decora entradas visibles con un badge/rol tipo "git status" (ADR 0037
+/// decisión 2, categoría de manifiesto `decorator`). Mundo propio
+/// (`norte-decorator`), NO plegado en `norte-plugin` — mismo patrón que
+/// `provider`.
+interface decorator {
+    /// `badge` = texto corto (el HOST lo acota a 8 chars TRAS enmascarar,
+    /// ADR 0037 tabla de decisión 1; este WIT no impone esa longitud) o
+    /// `none` = sin badge para esa entrada. `role` = nombre semántico
+    /// (validado host-side, igual que `span::role`).
+    record decoration {
+        badge: option<string>,
+        role: option<string>,
+    }
+
+    /// `entries` = los nombres/paths crudos (regla 1: bytes, jamás `string`)
+    /// de la página VISIBLE actual, en el orden en que el host la lista. El
+    /// resultado es POSICIONAL 1:1 con `entries` — el host jamás reordena ni
+    /// dispersa (ADR 0037 tabla de decisión 1): `result[i]` decora
+    /// `entries[i]`. Llamado en lote por página, nunca por entrada.
+    decorate: func(entries: list<list<u8>>) -> list<decoration>;
+}
+
+/// Aporta valores computados para UNA columna del listado (ADR 0037 decisión
+/// 2, categoría de manifiesto `columns`). Mundo propio (`norte-columns`).
+interface columns {
+    /// `id` identifica la columna (el manifiesto declara sus columnas
+    /// aportadas; el host pasa el id de la que está pintando). `entries` =
+    /// mismo contrato posicional que `decorator::decorate`. Cada celda es
+    /// `option<string>`: `none` = "esta columna no aplica a esta entrada"
+    /// (p. ej. "duración" sobre un fichero que no es media), distinguible de
+    /// un valor real vacío — NUNCA se omite del vector, siempre 1:1 con
+    /// `entries`.
+    column-values: func(id: string, entries: list<list<u8>>) -> list<option<string>>;
 }
 
 /// El world que un plugin de norte implementa. Un plugin concreto exporta las
@@ -238,4 +333,22 @@ world norte-provider {
     import host-log;
     import host-config;
     export provider;
+}
+
+/// World de un plugin-decorator (ADR 0037 decisión 2): expone `decorator` e
+/// importa `host-log`/`host-config`. Separado de `norte-plugin` y de
+/// `norte-provider` — un guest decorator no implementa previewer/command/
+/// provider.
+world norte-decorator {
+    import host-log;
+    import host-config;
+    export decorator;
+}
+
+/// World de un plugin-columns (ADR 0037 decisión 2): expone `columns` e
+/// importa `host-log`/`host-config`. Mismo patrón que `norte-decorator`.
+world norte-columns {
+    import host-log;
+    import host-config;
+    export columns;
 }

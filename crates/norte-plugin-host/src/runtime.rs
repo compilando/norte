@@ -19,7 +19,7 @@ use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::bindings::NortePlugin;
-use crate::bindings::exports::norte::plugin::previewer::PreviewInput;
+use crate::bindings::exports::norte::plugin::previewer::{PreviewInput, Span};
 use crate::bindings::norte::plugin::{host_config, host_log};
 use crate::capability::Capabilities;
 
@@ -43,6 +43,29 @@ const MAX_STORE_MEMORY_BYTES: usize = 64 * 1024 * 1024;
 /// core al previsualizar. Por encima se RECHAZA (fail-loud), no se trunca a
 /// medias — un valor cortado no es el que el plugin quiso devolver.
 const MAX_RETURN_BYTES: usize = 4 * 1024 * 1024;
+
+/// Tope de LÍNEAS de un `render-styled` (ADR 0037 tabla de decisión 1):
+/// anti-DoS sobre el nº de líneas que un guest puede devolver de un preview
+/// estilizado. Aplicado POST-retorno del guest (regla dura del ADR: rechazo
+/// entero, nunca truncado a medias).
+const MAX_STYLED_LINES: usize = 10_000;
+
+/// Tope de SPANS por línea de un `render-styled` (ADR 0037 tabla de decisión
+/// 1).
+const MAX_STYLED_SPANS_PER_LINE: usize = 64;
+
+/// Tope de bytes UTF-8 del `text` de UN span (ADR 0037 tabla de decisión 1:
+/// "4 KiB"). Medido en BYTES, no en caracteres — un WIT `string` no impone
+/// límite de longitud por sí mismo y "carácter" es ambiguo (code point vs.
+/// grafema); bytes es lo único no ambiguo y lo que realmente ocupa memoria.
+const MAX_STYLED_SPAN_TEXT_BYTES: usize = 4 * 1024;
+
+/// Tope TOTAL de bytes de `text` sumados de TODOS los spans de un
+/// `render-styled` (ADR 0037 tabla de decisión 1): reutiliza el mismo tope
+/// que [`MAX_RETURN_BYTES`] (el cap de retorno del runtime, issue #68) — un
+/// preview estilizado no debe poder inflar la memoria del host más que
+/// cualquier otro valor de retorno de un guest.
+const MAX_STYLED_TOTAL_TEXT_BYTES: usize = MAX_RETURN_BYTES;
 
 /// Tope del tamaño del ARTEFACTO `.wasm` en disco ANTES de compilarlo (issue
 /// #68): compilar un componente con cranelift cuesta CPU y memoria proporcional
@@ -95,6 +118,12 @@ pub enum RuntimeError {
         /// Tope permitido (`MAX_RETURN_BYTES`).
         cap: usize,
     },
+    /// El `render-styled` del guest supera alguno de los topes de la tabla
+    /// ADR 0037 decisión 1 (líneas / spans por línea / bytes por span / bytes
+    /// totales): se rechaza ENTERO, fail-closed — nunca se trunca a medias
+    /// (el caller cae a la previsualización plana `render`).
+    #[error("preview estilizado supera un tope: {0}")]
+    StyledPreviewTooLarge(String),
 }
 
 /// Aplica el tope de tamaño al valor de retorno del guest (issue #68). Fail-loud:
@@ -117,6 +146,60 @@ fn check_artifact_size(len: u64) -> Result<(), RuntimeError> {
         return Err(RuntimeError::ArtifactTooLarge {
             len,
             cap: MAX_ARTIFACT_BYTES,
+        });
+    }
+    Ok(())
+}
+
+/// Aplica los CUATRO topes de `render-styled` (ADR 0037 tabla de decisión 1)
+/// al resultado devuelto por el guest, POST-retorno: nº de líneas, spans por
+/// línea, bytes UTF-8 de `text` por span, y bytes totales de `text` sumados
+/// de TODOS los spans. Fail-closed: la primera violación encontrada rechaza
+/// el conjunto ENTERO — nunca se trunca a medias, el caller (norte-core) cae
+/// a la previsualización plana.
+fn cap_styled_text(lines: Vec<Vec<Span>>) -> Result<Vec<Vec<Span>>, RuntimeError> {
+    if lines.len() > MAX_STYLED_LINES {
+        return Err(RuntimeError::StyledPreviewTooLarge(format!(
+            "{} líneas (máx {MAX_STYLED_LINES})",
+            lines.len()
+        )));
+    }
+    let mut total_text_bytes: usize = 0;
+    for (i, line) in lines.iter().enumerate() {
+        if line.len() > MAX_STYLED_SPANS_PER_LINE {
+            return Err(RuntimeError::StyledPreviewTooLarge(format!(
+                "línea {i}: {} spans (máx {MAX_STYLED_SPANS_PER_LINE})",
+                line.len()
+            )));
+        }
+        for span in line {
+            if span.text.len() > MAX_STYLED_SPAN_TEXT_BYTES {
+                return Err(RuntimeError::StyledPreviewTooLarge(format!(
+                    "span de {} bytes (máx {MAX_STYLED_SPAN_TEXT_BYTES})",
+                    span.text.len()
+                )));
+            }
+            total_text_bytes += span.text.len();
+        }
+    }
+    if total_text_bytes > MAX_STYLED_TOTAL_TEXT_BYTES {
+        return Err(RuntimeError::StyledPreviewTooLarge(format!(
+            "{total_text_bytes} bytes totales de texto (máx {MAX_STYLED_TOTAL_TEXT_BYTES})"
+        )));
+    }
+    Ok(lines)
+}
+
+/// Tope agregado sobre un LOTE de `decorate`/`column-values` (mismo
+/// [`MAX_RETURN_BYTES`] que cualquier otro valor de retorno del runtime,
+/// issue #68): `len` es la suma de bytes ÚTILES del batch (badges+roles, o
+/// valores de columna), no el nº de entradas — un batch grande de celdas
+/// diminutas es legítimo, un batch de pocas celdas gigantes no lo es.
+fn cap_total_bytes(len: usize) -> Result<(), RuntimeError> {
+    if len > MAX_RETURN_BYTES {
+        return Err(RuntimeError::ReturnTooLarge {
+            len,
+            cap: MAX_RETURN_BYTES,
         });
     }
     Ok(())
@@ -306,6 +389,42 @@ impl PluginRuntime {
         let bindings = NorteProvider::instantiate(&mut store, &component, &linker)
             .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
         Ok(ProviderInstance { store, bindings })
+    }
+
+    /// Instancia un guest DECORATOR (world `norte-decorator`, ADR 0037
+    /// decisión 2) con el MISMO sandbox y límites que [`Self::instantiate`].
+    /// Devuelve una [`DecoratorInstance`] para llamar a `decorate`.
+    ///
+    /// # Errors
+    /// Igual que [`Self::instantiate`].
+    pub fn instantiate_decorator(
+        &self,
+        wasm_path: &Path,
+        caps: Capabilities,
+    ) -> Result<DecoratorInstance, RuntimeError> {
+        use crate::bindings::decorator_world::NorteDecorator;
+        let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        let bindings = NorteDecorator::instantiate(&mut store, &component, &linker)
+            .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
+        Ok(DecoratorInstance { store, bindings })
+    }
+
+    /// Instancia un guest COLUMNS (world `norte-columns`, ADR 0037 decisión
+    /// 2) con el MISMO sandbox y límites que [`Self::instantiate`]. Devuelve
+    /// una [`ColumnsInstance`] para llamar a `column-values`.
+    ///
+    /// # Errors
+    /// Igual que [`Self::instantiate`].
+    pub fn instantiate_columns(
+        &self,
+        wasm_path: &Path,
+        caps: Capabilities,
+    ) -> Result<ColumnsInstance, RuntimeError> {
+        use crate::bindings::columns_world::NorteColumns;
+        let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        let bindings = NorteColumns::instantiate(&mut store, &component, &linker)
+            .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
+        Ok(ColumnsInstance { store, bindings })
     }
 
     /// Como [`Self::instantiate_provider`] pero desde los BYTES de un componente
@@ -531,6 +650,35 @@ impl PluginInstance {
             .map_err(|e| RuntimeError::Trap(e.to_string()))?
             .map_err(RuntimeError::Guest)?;
         cap_return_value(out)
+    }
+
+    /// Invoca el export `previewer::render-styled` del guest (ADR 0037
+    /// decisión 2): el gemelo con estilo de [`Self::render_preview`]. Los
+    /// topes de la tabla de decisión 1 se aplican POST-retorno, ANTES de
+    /// devolver al caller (`norte-core`, que valida además `role` contra
+    /// `norte_theme::Role` — este crate no conoce ese conjunto, decisión 1).
+    ///
+    /// # Errors
+    /// - [`RuntimeError::Trap`] si el guest atrapa.
+    /// - [`RuntimeError::Guest`] si el guest devuelve un `Err` de lógica.
+    /// - [`RuntimeError::StyledPreviewTooLarge`] si el resultado supera
+    ///   alguno de los topes de líneas/spans/bytes-por-span/bytes-totales.
+    pub fn render_styled_preview(
+        &mut self,
+        mimetype: &str,
+        content: &[u8],
+    ) -> Result<Vec<Vec<Span>>, RuntimeError> {
+        let input = PreviewInput {
+            mimetype: mimetype.to_owned(),
+            content: content.to_vec(),
+        };
+        let out = self
+            .bindings
+            .norte_plugin_previewer()
+            .call_render_styled(&mut self.store, &input)
+            .map_err(|e| RuntimeError::Trap(e.to_string()))?
+            .map_err(RuntimeError::Guest)?;
+        cap_styled_text(out)
     }
 
     /// Invoca el export `command::run` del guest.
@@ -791,6 +939,113 @@ impl ProviderInstance {
             .norte_plugin_provider()
             .call_rename(&mut self.store, src, dst)
             .map_err(|e| RuntimeError::Trap(e.to_string()))
+    }
+}
+
+/// Tipos del export `decorator` (record `Decoration`) — re-exportados igual
+/// que [`provider_iface`], para que el adapter host los use sin cavar en el
+/// módulo de bindings generado (ADR 0037 decisión 2).
+pub use crate::bindings::decorator_world::exports::norte::plugin::decorator as decorator_iface;
+
+/// Una instancia viva de un guest DECORATOR (ADR 0037 decisión 2, world
+/// `norte-decorator`): su `Store` (estado host + sandbox) y los bindings para
+/// llamar a `decorate`.
+pub struct DecoratorInstance {
+    store: Store<HostState>,
+    bindings: crate::bindings::decorator_world::NorteDecorator,
+}
+
+impl std::fmt::Debug for DecoratorInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DecoratorInstance").finish_non_exhaustive()
+    }
+}
+
+impl DecoratorInstance {
+    /// Instala los valores VALIDADOS de `[config]` que el guest DECORATOR
+    /// verá vía `host-config::get`/`all`. Mismo contrato que
+    /// [`PluginInstance::set_settings`]: llamar ANTES de invocar `decorate`.
+    pub fn set_settings(&mut self, settings: BTreeMap<String, String>) {
+        self.store.data_mut().settings = settings;
+    }
+
+    /// Decora un LOTE de entradas (batched per visible page, ADR 0037
+    /// decisión 2): `entries` son los nombres/paths crudos en el orden en
+    /// que el host los lista; el resultado es POSICIONAL 1:1 — nunca
+    /// reordenado, nunca disperso. Aplica el mismo tope agregado
+    /// [`MAX_RETURN_BYTES`] que cualquier otro valor de retorno del runtime
+    /// (issue #68), sumando los bytes de `badge`+`role` de TODAS las
+    /// decoraciones del lote.
+    ///
+    /// # Errors
+    /// - [`RuntimeError::Trap`] si el guest atrapa.
+    /// - [`RuntimeError::ReturnTooLarge`] si el lote devuelto supera el tope
+    ///   agregado.
+    pub fn decorate(
+        &mut self,
+        entries: &[Vec<u8>],
+    ) -> Result<Vec<decorator_iface::Decoration>, RuntimeError> {
+        let out = self
+            .bindings
+            .norte_plugin_decorator()
+            .call_decorate(&mut self.store, entries)
+            .map_err(|e| RuntimeError::Trap(e.to_string()))?;
+        let total: usize = out
+            .iter()
+            .map(|d| d.badge.as_deref().map_or(0, str::len) + d.role.as_deref().map_or(0, str::len))
+            .sum();
+        cap_total_bytes(total)?;
+        Ok(out)
+    }
+}
+
+/// Una instancia viva de un guest COLUMNS (ADR 0037 decisión 2, world
+/// `norte-columns`): su `Store` (estado host + sandbox) y los bindings para
+/// llamar a `column-values`.
+pub struct ColumnsInstance {
+    store: Store<HostState>,
+    bindings: crate::bindings::columns_world::NorteColumns,
+}
+
+impl std::fmt::Debug for ColumnsInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ColumnsInstance").finish_non_exhaustive()
+    }
+}
+
+impl ColumnsInstance {
+    /// Instala los valores VALIDADOS de `[config]` que el guest COLUMNS verá
+    /// vía `host-config::get`/`all`. Mismo contrato que
+    /// [`PluginInstance::set_settings`]: llamar ANTES de invocar
+    /// `column-values`.
+    pub fn set_settings(&mut self, settings: BTreeMap<String, String>) {
+        self.store.data_mut().settings = settings;
+    }
+
+    /// Valores de la columna `id` para un LOTE de entradas: mismo contrato
+    /// posicional 1:1 que [`DecoratorInstance::decorate`]. Cada celda es
+    /// `Option<String>` — `None` = "no aplica a esta entrada", distinguible
+    /// de un valor real vacío (ADR 0037 decisión 1). Aplica el mismo tope
+    /// agregado [`MAX_RETURN_BYTES`], sumando los bytes de las celdas
+    /// `Some`.
+    ///
+    /// # Errors
+    /// - [`RuntimeError::Trap`] si el guest atrapa.
+    /// - [`RuntimeError::ReturnTooLarge`] si el lote devuelto supera el tope
+    ///   agregado.
+    pub fn column_values(
+        &mut self,
+        id: &str,
+        entries: &[Vec<u8>],
+    ) -> Result<Vec<Option<String>>, RuntimeError> {
+        let out = self
+            .bindings
+            .norte_plugin_columns()
+            .call_column_values(&mut self.store, id, entries)
+            .map_err(|e| RuntimeError::Trap(e.to_string()))?;
+        let total: usize = out.iter().map(|v| v.as_deref().map_or(0, str::len)).sum();
+        cap_total_bytes(total)?;
+        Ok(out)
     }
 }
 

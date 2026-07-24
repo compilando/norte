@@ -22,7 +22,7 @@ wit_bindgen::generate!({
 });
 
 use exports::norte::plugin::command::Guest as CommandGuest;
-use exports::norte::plugin::previewer::{Guest as PreviewerGuest, PreviewInput};
+use exports::norte::plugin::previewer::{Guest as PreviewerGuest, PreviewInput, Span};
 use norte::plugin::{host_config, host_log};
 
 struct Demo;
@@ -59,6 +59,15 @@ impl CommandGuest for Demo {
 
 impl PreviewerGuest for Demo {
     fn render(_input: PreviewInput) -> Result<String, String> {
+        Err("command-demo no aporta previews".to_string())
+    }
+
+    // ADR 0037 (WIT 0.6.0): `render-styled` es un export REQUERIDO de
+    // `previewer` — este guest es solo-`command`, así que responde el mismo
+    // "no soportado" que `render`.
+    fn render_styled(
+        _input: PreviewInput,
+    ) -> Result<alloc::vec::Vec<alloc::vec::Vec<Span>>, String> {
         Err("command-demo no aporta previews".to_string())
     }
 }

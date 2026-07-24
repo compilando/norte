@@ -45,7 +45,10 @@ pub use manifest::{
     Category, ColumnContrib, CommandContrib, ConfigKeySpec, Contributions, HookContrib, Manifest,
     ManifestError, PreviewerContrib, ProviderContrib,
 };
-pub use runtime::{PluginInstance, PluginRuntime, ProviderInstance, RuntimeError, provider_iface};
+pub use runtime::{
+    ColumnsInstance, DecoratorInstance, PluginInstance, PluginRuntime, ProviderInstance,
+    RuntimeError, decorator_iface, provider_iface,
+};
 /// Handle opaco de un `writer` resource del guest (#30 stage 2b-write): el
 /// adapter host lo lleva en su `ByteSink` y lo pasa a los métodos
 /// `writer_*`/`writer_drop` de [`ProviderInstance`].

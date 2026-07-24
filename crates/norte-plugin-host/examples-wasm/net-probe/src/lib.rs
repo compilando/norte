@@ -13,7 +13,7 @@ wit_bindgen::generate!({
 });
 
 use exports::norte::plugin::command::Guest as CommandGuest;
-use exports::norte::plugin::previewer::{Guest as PreviewerGuest, PreviewInput};
+use exports::norte::plugin::previewer::{Guest as PreviewerGuest, PreviewInput, Span};
 use norte::plugin::host_log;
 
 struct Probe;
@@ -33,6 +33,11 @@ impl CommandGuest for Probe {
 
 impl PreviewerGuest for Probe {
     fn render(_input: PreviewInput) -> Result<String, String> {
+        Err("net-probe no aporta preview".to_string())
+    }
+
+    // ADR 0037 (WIT 0.6.0): export REQUERIDO de `previewer`, guest solo-command.
+    fn render_styled(_input: PreviewInput) -> Result<Vec<Vec<Span>>, String> {
         Err("net-probe no aporta preview".to_string())
     }
 }

@@ -21,3 +21,30 @@ pub mod provider_world {
         },
     });
 }
+
+/// Bindings del world `norte-decorator` (ADR 0037 decisión 2). Mismo motivo
+/// de módulo separado + `with:` que [`provider_world`]: no duplicar el trait
+/// `Host` de `host-log`/`host-config` ni su `add_to_linker`.
+pub mod decorator_world {
+    wasmtime::component::bindgen!({
+        world: "norte-decorator",
+        path: "wit/norte-plugin.wit",
+        with: {
+            "norte:plugin/host-log": crate::bindings::norte::plugin::host_log,
+            "norte:plugin/host-config": crate::bindings::norte::plugin::host_config,
+        },
+    });
+}
+
+/// Bindings del world `norte-columns` (ADR 0037 decisión 2). Mismo patrón que
+/// [`decorator_world`].
+pub mod columns_world {
+    wasmtime::component::bindgen!({
+        world: "norte-columns",
+        path: "wit/norte-plugin.wit",
+        with: {
+            "norte:plugin/host-log": crate::bindings::norte::plugin::host_log,
+            "norte:plugin/host-config": crate::bindings::norte::plugin::host_config,
+        },
+    });
+}

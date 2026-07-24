@@ -18,7 +18,7 @@ wit_bindgen::generate!({
 });
 
 use exports::norte::plugin::command::Guest as CommandGuest;
-use exports::norte::plugin::previewer::{Guest as PreviewerGuest, PreviewInput};
+use exports::norte::plugin::previewer::{Guest as PreviewerGuest, PreviewInput, Span};
 use norte::plugin::host_log;
 
 struct Syntect;
@@ -81,6 +81,29 @@ impl PreviewerGuest for Syntect {
             out.push_str("\x1b[0m\n");
         }
         Ok(out)
+    }
+
+    // ADR 0037 (WIT 0.6.0): `render-styled` es un export REQUERIDO de
+    // `previewer`. Este guest no traduce su resaltado ANSI a spans
+    // estructurados (deuda: haría falta parsear SGR igual que
+    // `norte-frontend::ansi`, fuera de alcance de G3 Task 2) — implementa el
+    // envoltorio TRIVIAL que el ADR reserva para un guest de solo-texto: un
+    // span plano por línea, sin `role` ni `fg`. El texto por span lleva los
+    // códigos ANSI crudos de `render` (el host los vería como texto literal
+    // si alguien llamase a `preview_styled` sobre este guest hoy); un futuro
+    // parseo real de SGR es la mejora natural, no requerida por este guest.
+    fn render_styled(input: PreviewInput) -> Result<Vec<Vec<Span>>, String> {
+        let plain = Self::render(input)?;
+        Ok(plain
+            .lines()
+            .map(|l| {
+                vec![Span {
+                    text: l.to_string(),
+                    role: None,
+                    fg: None,
+                }]
+            })
+            .collect())
     }
 }
 
