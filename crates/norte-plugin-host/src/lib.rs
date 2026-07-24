@@ -36,7 +36,9 @@ mod runtime;
 
 pub use capability::{Capabilities, NetCap, Scope};
 pub use catalog::{Catalog, LoadError, PluginEntry, Tier};
-pub use config_values::{CONFIG_VALUES_MAX_BYTES, ConfigValueError, resolve_settings};
+pub use config_values::{
+    CONFIG_VALUES_MAX_BYTES, ConfigValueError, persist_plugin_setting, resolve_settings,
+};
 pub use manifest::{
     COMMAND_ID_MAX_CHARS, COMMAND_TITLE_MAX_CHARS, CONFIG_DESCRIPTION_MAX_CHARS,
     CONFIG_ENUM_MAX_VALUES, CONFIG_KEY_MAX_CHARS, CONFIG_MAX_KEYS, CONFIG_STRING_MAX_CHARS,

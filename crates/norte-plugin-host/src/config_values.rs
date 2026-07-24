@@ -297,3 +297,131 @@ pub fn resolve_settings(
     }
     Ok(out)
 }
+
+/// Fija `key = value` en `config_dir/plugins/<plugin_id>/config.toml` (S2),
+/// PRESERVANDO comentarios y formato (`toml_edit`) — mismo patrón que
+/// `norte_config::persist_set`, adaptado a que este fichero es PLANO (P2
+/// decisión 3: sin secciones anidadas, cada clave vive top-level). Crea el
+/// directorio del plugin y el fichero si no existen.
+///
+/// `plugin_id` NO se valida aquí: el caller debe pasar uno YA validado (p.
+/// ej. el `id` de un [`Manifest`] ya cargado, que pasó el charset
+/// reverse-DNS al parsear) — se usa directo como segmento de ruta, así que
+/// un `plugin_id` no confiable podría escapar `plugins/`. Misma
+/// responsabilidad que ya tiene cualquier caller de `PluginEntry::dir`.
+///
+/// `value` se escribe TAL CUAL como un string TOML (escapado por
+/// `toml_edit`, jamás inyectado crudo) — validar `value` contra el tipo/rango
+/// del esquema `[config]` del manifiesto (bool/int/enum, la misma validación
+/// que hace el `encode_override` interno de este módulo) es responsabilidad
+/// del CALLER, ANTES de llamar aquí (spec S2: "validated against the schema
+/// BEFORE writing — never persist an invalid value"). Esta función es el
+/// primitivo de escritura, no el validador: [`resolve_settings`] sigue
+/// siendo la única fuente de verdad de lectura/validación, y ESA función
+/// espera un `toml::Value` NATIVO (bool/int reales, no un string) para las
+/// claves `bool`/`int` — un caller tipado debe escribir esos tipos con
+/// `toml_edit` directamente si necesita ese round trip; este helper cubre el
+/// caso plano `string`/`enum` (el único que S2 conecta de punta a punta).
+///
+/// # Errors
+/// [`std::io::Error`] si el `config.toml` existente no parsea o falla el I/O.
+pub fn persist_plugin_setting(
+    config_dir: &Path,
+    plugin_id: &str,
+    key: &str,
+    value: &str,
+) -> io::Result<std::path::PathBuf> {
+    use std::io::{Error, ErrorKind};
+    let dir = config_dir.join("plugins").join(plugin_id);
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("config.toml");
+    let mut doc = match std::fs::read_to_string(&path) {
+        Ok(s) => s.parse::<toml_edit::DocumentMut>().map_err(|_| {
+            // Same #73 caution as `norte-config`'s persist helpers: never
+            // echo `toml_edit`'s parse-error `Display`, which quotes the
+            // offending document line — a hostile value persisted earlier
+            // must not resurface verbatim.
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "{} no parsea: TOML inválido; corrígelo o bórralo",
+                    path.display()
+                ),
+            )
+        })?,
+        Err(e) if e.kind() == ErrorKind::NotFound => toml_edit::DocumentMut::new(),
+        Err(e) => return Err(e),
+    };
+    doc[key] = toml_edit::value(value);
+    std::fs::write(&path, doc.to_string())?;
+    Ok(path)
+}
+
+#[cfg(test)]
+mod persist_plugin_setting_tests {
+    use super::*;
+
+    #[test]
+    fn round_trip_preservando_comentarios() {
+        let base = tempfile::tempdir().unwrap();
+        let plugin_dir = base.path().join("plugins/org.norte.demo");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("config.toml"),
+            "# mi ajuste\ngreeting = \"hola\" # saludo\n",
+        )
+        .unwrap();
+        persist_plugin_setting(base.path(), "org.norte.demo", "mode", "slow").unwrap();
+        let s = std::fs::read_to_string(plugin_dir.join("config.toml")).unwrap();
+        assert!(s.contains("# mi ajuste"), "{s}");
+        assert!(s.contains("# saludo"), "{s}");
+        assert!(s.contains("mode = \"slow\""), "{s}");
+        assert!(
+            s.contains("greeting = \"hola\""),
+            "valor previo intacto: {s}"
+        );
+    }
+
+    #[test]
+    fn crea_el_directorio_y_fichero_si_no_existen() {
+        let base = tempfile::tempdir().unwrap();
+        let path =
+            persist_plugin_setting(base.path(), "org.norte.nuevo", "greeting", "hi").unwrap();
+        assert_eq!(
+            path,
+            base.path().join("plugins/org.norte.nuevo/config.toml")
+        );
+        let s = std::fs::read_to_string(&path).unwrap();
+        assert!(s.contains("greeting = \"hi\""), "{s}");
+    }
+
+    /// Reemplaza el valor si la clave ya existía (no duplica).
+    #[test]
+    fn reemplaza_clave_existente() {
+        let base = tempfile::tempdir().unwrap();
+        persist_plugin_setting(base.path(), "org.norte.demo", "greeting", "hola").unwrap();
+        persist_plugin_setting(base.path(), "org.norte.demo", "greeting", "adios").unwrap();
+        let s = std::fs::read_to_string(base.path().join("plugins/org.norte.demo/config.toml"))
+            .unwrap();
+        assert_eq!(s.matches("greeting").count(), 1, "una sola clave: {s}");
+        assert!(s.contains("adios"), "{s}");
+        assert!(!s.contains("hola"), "{s}");
+    }
+
+    /// Pin encoding: un valor hostil (comilla, salto de línea, cabecera TOML
+    /// embebida, override bidi) round-tripea escapado y byte-idéntico.
+    #[test]
+    fn valor_hostil_round_tripea_escapado() {
+        let base = tempfile::tempdir().unwrap();
+        let hostile = "fa\"vo\n[[evil]]\u{202E}rito";
+        persist_plugin_setting(base.path(), "org.norte.demo", "greeting", hostile).unwrap();
+        let path = base.path().join("plugins/org.norte.demo/config.toml");
+        let s = std::fs::read_to_string(&path).unwrap();
+        let doc: toml::Table = toml::from_str(&s).expect("TOML válido, sin inyección");
+        assert_eq!(
+            doc.get("greeting").and_then(toml::Value::as_str),
+            Some(hostile),
+            "valor byte-idéntico tras el round trip: {s}"
+        );
+    }
+}

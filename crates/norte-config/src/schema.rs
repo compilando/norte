@@ -147,6 +147,15 @@ pub struct UiSection {
     /// absent-vs-explicit reason as `[ai] enabled`.
     #[serde(default)]
     pub reduce_motion: Option<bool>,
+    /// Whether `app.quit` confirms before closing (S2): `"auto"` (default)
+    /// confirms only with pending work (today's behavior — active tasks in
+    /// the TUI's board, tasks/marks in the GUI); `"always"` always confirms,
+    /// even with nothing pending; `"never"` closes immediately.
+    ///
+    /// [`crate::load::load`] rejects other values (same pattern as
+    /// `quick_search`) so its diagnostic can include the source path.
+    #[serde(default)]
+    pub confirm_quit: Option<String>,
 }
 
 /// The `[keymap]` section of `norte.toml`.

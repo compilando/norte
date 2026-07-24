@@ -32,11 +32,36 @@ pub fn persist_ui_theme(name: &str) -> std::io::Result<PathBuf> {
 }
 
 /// Como [`persist_ui_theme`] pero en un `dir` explícito (sin depender del
-/// entorno — la base testeable).
+/// entorno — la base testeable). Envoltorio fino sobre [`persist_set`] (S2):
+/// mantiene su propia firma (`name: &str`, no `toml_edit::Value`) porque es
+/// el punto de entrada histórico, pero la escritura la hace enteramente
+/// `persist_set(dir, "ui", "theme", …)` — prueba de comportamiento en el
+/// mismo `#[test]` de antes (`hotlist_tests`), sin cambios.
 ///
 /// # Errors
 /// [`std::io::Error`] si el TOML existente no parsea o falla el I/O.
 pub fn persist_ui_theme_to(dir: &std::path::Path, name: &str) -> std::io::Result<PathBuf> {
+    persist_set(dir, "ui", "theme", toml_edit::Value::from(name))
+}
+
+/// Fija `[section] key = value` en el `norte.toml` de `dir`, PRESERVANDO
+/// comentarios y formato (`toml_edit`) — la forma GENÉRICA detrás de
+/// [`persist_ui_theme_to`] (S2, mismo patrón EXACTO: lee-o-crea un
+/// `DocumentMut`, la tabla de sección nace EXPLÍCITA — jamás implícita, para
+/// que un fichero nuevo lea limpio — fija `key`, escribe). Crea el
+/// dir/fichero si no existen. `value` ya viene tipado por el caller
+/// (`toml_edit::Value`): un string se escapa solo (mismo mecanismo que
+/// `toml_edit::value(name)` usaba antes aquí), un bool/int se escriben nativos.
+///
+/// # Errors
+/// [`std::io::Error`] si no hay dir de usuario, el TOML existente no parsea, o
+/// falla el I/O.
+pub fn persist_set(
+    dir: &std::path::Path,
+    section: &str,
+    key: &str,
+    value: toml_edit::Value,
+) -> std::io::Result<PathBuf> {
     use std::io::{Error, ErrorKind};
     std::fs::create_dir_all(dir)?;
     let path = dir.join("norte.toml");
@@ -58,15 +83,16 @@ pub fn persist_ui_theme_to(dir: &std::path::Path, name: &str) -> std::io::Result
         Err(e) if e.kind() == ErrorKind::NotFound => toml_edit::DocumentMut::new(),
         Err(e) => return Err(e),
     };
-    // Una tabla `[ui]` recién creada sería IMPLÍCITA (se emitiría como
-    // `ui.theme = …` en vez de bajo `[ui]`): se crea EXPLÍCITA para que el
-    // fichero nuevo tenga una sección legible; la ya existente se respeta.
-    let ui = doc.as_table_mut().entry("ui").or_insert_with(|| {
+    // Una tabla `[section]` recién creada sería IMPLÍCITA (se emitiría como
+    // `section.key = …` en vez de bajo `[section]`): se crea EXPLÍCITA para
+    // que el fichero nuevo tenga una sección legible; la ya existente se
+    // respeta.
+    let table = doc.as_table_mut().entry(section).or_insert_with(|| {
         let mut t = toml_edit::Table::new();
         t.set_implicit(false);
         toml_edit::Item::Table(t)
     });
-    ui["theme"] = toml_edit::value(name);
+    table[key] = toml_edit::Item::Value(value);
     std::fs::write(&path, doc.to_string())?;
     Ok(path)
 }
@@ -237,6 +263,35 @@ pub enum QuickSearch {
     Jump,
 }
 
+/// `[ui] confirm_quit` behaviour (S2): whether `app.quit` opens a
+/// confirmation modal before closing. Each frontend interprets `Auto`'s
+/// "pending work" against its own model (TUI: active task-board rows; GUI:
+/// tasks/marks) — this type only carries the mode, not the predicate.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ConfirmQuit {
+    /// Confirm only when work is pending (today's behavior). Default.
+    #[default]
+    Auto,
+    /// Always confirm, even with nothing pending.
+    Always,
+    /// Never confirm; `app.quit` closes immediately.
+    Never,
+}
+
+impl ConfirmQuit {
+    /// The wire string this variant round-trips from/to (`"auto"`,
+    /// `"always"`, `"never"`) — used by the settings registry to display the
+    /// current value.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Always => "always",
+            Self::Never => "never",
+        }
+    }
+}
+
 /// `[ai]` already merged across layers and validated (ADR 0035 decision 3:
 /// scalars last-present-wins; `denied_prefixes` union; providers merge by
 /// name, later layer wins).
@@ -284,6 +339,11 @@ pub struct CommonConfig {
     /// / GUI phase G2). Honored from ALL layers including Project —
     /// presentation-only, same class as `ui_theme`/`ui_lang` above.
     pub ui_reduce_motion: Option<bool>,
+    /// `[ui] confirm_quit`, validated (S2, invalid value = load error, same
+    /// pattern as `quick_search`). Honored from ALL layers including
+    /// Project — presentation-only, same class as the other `[ui]` scalars
+    /// above.
+    pub ui_confirm_quit: ConfirmQuit,
     /// `[daemon] mode` (last-wins; None = embedded; never from Project —
     /// fail-closed, review MAJOR-1). Startup only.
     pub daemon_mode: Option<crate::schema::DaemonMode>,
@@ -430,6 +490,47 @@ fn merge_ui_fonts(
     Ok(())
 }
 
+/// Parses `[ui] quick_search`'s raw string into [`QuickSearch`]. Same #73
+/// caution as `toml_diag`: a hostile TOML could stuff a bidi/kilometric
+/// string into anything, and this is a two-value field — naming the
+/// offending file plus the two valid values is enough context, no need to
+/// reflect `raw` itself. Extracted out of [`load`] to stay under clippy's
+/// line-count cap, same pattern as the `merge_*` helpers above.
+///
+/// # Errors
+/// [`ConfigError::Toml`] if `raw` isn't `"filter"`/`"jump"`.
+fn parse_quick_search(raw: &str, norte: &Path) -> Result<QuickSearch, ConfigError> {
+    match raw {
+        "filter" => Ok(QuickSearch::Filter),
+        "jump" => Ok(QuickSearch::Jump),
+        _ => Err(ConfigError::Toml {
+            path: norte.to_path_buf(),
+            message: "[ui] quick_search inválido: solo se admite «filter» o «jump»".to_owned(),
+        }),
+    }
+}
+
+/// Parses `[ui] confirm_quit`'s raw string into [`ConfirmQuit`] (S2). Same
+/// #73 caution as `quick_search`'s inline match: the diagnostic never quotes
+/// the raw value — this field only has three valid values, so naming them is
+/// enough context. Extracted out of [`load`] to stay under clippy's
+/// line-count cap, same pattern as the `merge_*` helpers above.
+///
+/// # Errors
+/// [`ConfigError::Toml`] if `raw` isn't `"auto"`/`"always"`/`"never"`.
+fn parse_confirm_quit(raw: &str, norte: &Path) -> Result<ConfirmQuit, ConfigError> {
+    match raw {
+        "auto" => Ok(ConfirmQuit::Auto),
+        "always" => Ok(ConfirmQuit::Always),
+        "never" => Ok(ConfirmQuit::Never),
+        _ => Err(ConfigError::Toml {
+            path: norte.to_path_buf(),
+            message: "[ui] confirm_quit inválido: solo se admite «auto», «always» o «never»"
+                .to_owned(),
+        }),
+    }
+}
+
 /// Loads and merges every layer (ADR 0007/0035).
 ///
 /// # Errors
@@ -444,6 +545,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_mono_font: Option<String> = None;
     let mut ui_font_size: Option<f32> = None;
     let mut ui_reduce_motion: Option<bool> = None;
+    let mut ui_confirm_quit = ConfirmQuit::default();
     let mut daemon_mode: Option<DaemonMode> = None;
     let mut daemon_socket: Option<PathBuf> = None;
     let mut hotlist: Vec<HotlistItem> = Vec::new();
@@ -468,23 +570,8 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             if let Some(th) = parsed.ui.theme {
                 ui_theme = Some(th);
             }
-            if let Some(qs) = parsed.ui.quick_search {
-                quick_search = match qs.as_str() {
-                    "filter" => QuickSearch::Filter,
-                    "jump" => QuickSearch::Jump,
-                    // Mensaje SIN citar el valor crudo (misma cautela que
-                    // `toml_diag`, #73): un TOML hostil puede meter
-                    // bidi/kilométrico en cualquier string, y este es un
-                    // campo de dos valores válidos — no hace falta
-                    // reflejar el resto para que el diagnóstico sea claro.
-                    _ => {
-                        return Err(ConfigError::Toml {
-                            path: norte,
-                            message: "[ui] quick_search inválido: solo se admite «filter» o «jump»"
-                                .to_owned(),
-                        });
-                    }
-                };
+            if let Some(qs) = &parsed.ui.quick_search {
+                quick_search = parse_quick_search(qs, &norte)?;
             }
             merge_ui_fonts(
                 &mut ui_font,
@@ -497,6 +584,9 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                 parsed.ui.reduce_motion,
                 &norte,
             )?;
+            if let Some(cq) = &parsed.ui.confirm_quit {
+                ui_confirm_quit = parse_confirm_quit(cq, &norte)?;
+            }
             // `[daemon]` is NOT honored from Project either (review MAJOR-1):
             // a foreign repo must not redirect the core transport to an
             // attacker-controlled socket — same fail-closed carve-out as
@@ -549,6 +639,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_mono_font,
         ui_font_size,
         ui_reduce_motion,
+        ui_confirm_quit,
         daemon_mode,
         daemon_socket,
         hotlist,
@@ -885,6 +976,57 @@ mod hotlist_tests {
         assert_eq!(cfg.ui_reduce_motion, None);
     }
 
+    /// S2: `[ui] confirm_quit` acepta los tres valores documentados.
+    #[test]
+    fn confirm_quit_valores_validos() {
+        for (raw, expected) in [
+            ("auto", ConfirmQuit::Auto),
+            ("always", ConfirmQuit::Always),
+            ("never", ConfirmQuit::Never),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(
+                dir.path().join("norte.toml"),
+                format!("[ui]\nconfirm_quit = \"{raw}\"\n"),
+            )
+            .unwrap();
+            let layers = Layers {
+                dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+            };
+            let cfg = load(&layers).expect("carga");
+            assert_eq!(cfg.ui_confirm_quit, expected, "raw={raw}");
+        }
+    }
+
+    #[test]
+    fn confirm_quit_default_es_auto() {
+        let cfg = load(&Layers { dirs: vec![] }).expect("carga");
+        assert_eq!(cfg.ui_confirm_quit, ConfirmQuit::Auto);
+    }
+
+    #[test]
+    fn confirm_quit_valor_invalido_es_error_de_carga() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("norte.toml"),
+            "[ui]\nconfirm_quit = \"a-veces\"\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let err = load(&layers).expect_err("config rota es error (ADR 0007)");
+        assert!(matches!(err, ConfigError::Toml { .. }));
+    }
+
+    /// `as_str` round-tripea las tres cadenas de wire.
+    #[test]
+    fn confirm_quit_as_str() {
+        assert_eq!(ConfirmQuit::Auto.as_str(), "auto");
+        assert_eq!(ConfirmQuit::Always.as_str(), "always");
+        assert_eq!(ConfirmQuit::Never.as_str(), "never");
+    }
+
     /// ADR 0007: config inválida es error de arranque CON fichero culpable —
     /// un `font_size` fuera de [8, 32] no se clampa en silencio (contrato
     /// distinto al de [effects], que es data de tema y clampa).
@@ -1077,5 +1219,100 @@ mod hotlist_tests {
                 "{helper}: error should still name the offending file: {msg:?}"
             );
         }
+    }
+}
+
+/// Tests de [`persist_set`] (S2): la forma GENÉRICA detrás de
+/// `persist_ui_theme_to` — comprueba lo que ese wrapper no ejercita solo
+/// (una sección arbitraria, un fichero nuevo, un valor hostil), MIENTRAS que
+/// `hotlist_tests::persist_helpers_no_citan_el_error_crudo_de_toml_edit`
+/// arriba es la prueba de comportamiento de que el wrapper sigue siendo
+/// idéntico a como era.
+#[cfg(test)]
+mod persist_set_tests {
+    use super::*;
+
+    /// Round trip preservando comentarios ya existentes — mismo criterio que
+    /// `hotlist_round_trip_preservando_comentarios`.
+    #[test]
+    fn persist_set_preserva_comentarios_existentes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("norte.toml"),
+            "# mi config\n[ui]\ntheme = \"nord\" # tema\n",
+        )
+        .unwrap();
+        persist_set(dir.path(), "ui", "lang", toml_edit::Value::from("es")).unwrap();
+        let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert!(s.contains("# mi config"), "comentario del fichero: {s}");
+        assert!(s.contains("# tema"), "comentario de la clave: {s}");
+        assert!(s.contains("lang = \"es\""), "{s}");
+        assert!(s.contains("theme = \"nord\""), "valor previo intacto: {s}");
+    }
+
+    /// Fichero AUSENTE: `persist_set` lo crea (y el dir, si tampoco existe).
+    #[test]
+    fn persist_set_crea_el_fichero_si_no_existe() {
+        let base = tempfile::tempdir().unwrap();
+        let dir = base.path().join("subdir/aun-no-existe");
+        let path = persist_set(&dir, "keymap", "preset", toml_edit::Value::from("vim")).unwrap();
+        let s = std::fs::read_to_string(&path).unwrap();
+        assert!(s.contains("preset = \"vim\""), "{s}");
+    }
+
+    /// La tabla `[section]` nace EXPLÍCITA en un fichero nuevo — no
+    /// `section.key = …` en dotted-key implícito, que sería ilegible/no
+    /// idiomático para un fichero que el usuario puede editar a mano.
+    #[test]
+    fn persist_set_crea_la_seccion_explicita() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = persist_set(dir.path(), "ai", "enabled", toml_edit::Value::from(true)).unwrap();
+        let s = std::fs::read_to_string(&path).unwrap();
+        assert!(s.contains("[ai]"), "sección EXPLÍCITA: {s}");
+        assert!(
+            !s.contains("ai.enabled"),
+            "no debe degradar a dotted-key implícito: {s}"
+        );
+    }
+
+    /// Pin encoding: un valor string hostil (comilla, salto de línea, una
+    /// cabecera TOML embebida y un override bidi) round-tripea escapado y
+    /// byte-idéntico — `toml_edit` escapa, jamás inyecta TOML — mismo
+    /// criterio que `hotlist_round_trip_name_hostil_byte_identico`.
+    #[test]
+    fn persist_set_valor_hostil_round_tripea_escapado() {
+        let dir = tempfile::tempdir().unwrap();
+        let hostile = "fa\"vo\n[[evil]]\u{202E}rito";
+        persist_set(dir.path(), "ui", "font", toml_edit::Value::from(hostile)).unwrap();
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let cfg = load(&layers).expect("el valor hostil no rompe el TOML");
+        assert_eq!(
+            cfg.ui_font.as_deref(),
+            Some(hostile),
+            "valor byte-idéntico tras el round trip"
+        );
+    }
+
+    /// `[section]` ya existente (no una tabla, sino un escalar) — mirando el
+    /// comportamiento EXACTO de `persist_ui_theme_to` antes de S2: la
+    /// indexación de `toml_edit::Item` panica si la entrada no es tabla.
+    /// Documentado, no cambiado (mismo riesgo que el wrapper ya asumía).
+    #[test]
+    fn persist_set_reemplaza_clave_existente() {
+        let dir = tempfile::tempdir().unwrap();
+        persist_set(dir.path(), "ui", "theme", toml_edit::Value::from("nord")).unwrap();
+        persist_set(
+            dir.path(),
+            "ui",
+            "theme",
+            toml_edit::Value::from("gruvbox-dark"),
+        )
+        .unwrap();
+        let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert_eq!(s.matches("theme").count(), 1, "una sola clave: {s}");
+        assert!(s.contains("gruvbox-dark"), "{s}");
+        assert!(!s.contains("\"nord\""), "{s}");
     }
 }

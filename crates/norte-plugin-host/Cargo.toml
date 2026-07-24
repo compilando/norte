@@ -12,6 +12,13 @@ authors.workspace = true
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 toml.workspace = true
+# Escritor de settings PERSISTIDAS del usuario (S2, `persist_plugin_setting`
+# junto a `config_values.rs`): igual que `norte-config::persist_set`, hace
+# falta preservar comentarios/formato al reescribir `config.toml` — `toml`
+# (arriba) solo DESERIALIZA, no tiene edición comment-preserving. Ya es dep
+# de workspace (`norte-config` la usa con el mismo fin) — cero coste nuevo de
+# build, solo activa la feature para este crate.
+toml_edit.workspace = true
 # Digest de las capabilities aprobadas (issue #69, defensa confused-deputy): un
 # sha256 de la forma canónica del bloque `[capabilities]` que se guarda JUNTO a
 # la aprobación; si el manifiesto cambia en disco tras aprobar, el digest deja de
