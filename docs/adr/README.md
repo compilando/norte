@@ -42,3 +42,4 @@ edits.
 | [0034](0034-index-fts5.md) | Search index: `norte-index` crate with SQLite FTS5 | accepted |
 | [0035](0035-norte-config-crate.md) | Shared norte-config crate and unified configuration resolution | accepted |
 | [0036](0036-effects-schema-v1.md) | GUI effects schema v1 for theme `[effects]` | accepted |
+| [0037](0037-plugin-data-out-v2.md) | Plugin data-out v2: styled previews, decorators, columns | accepted |
