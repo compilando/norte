@@ -26,6 +26,19 @@ pub(crate) fn update_opt_str(h: &mut sha2::Sha256, value: Option<&str>) {
     }
 }
 
+/// Alimenta un hasher con un `i64` OPCIONAL: presencia (`0`/`1`) + 8 bytes LE.
+/// Usado por `[config.<key>]` (P2) para `min`/`max` de las claves `int`.
+pub(crate) fn update_opt_i64(h: &mut sha2::Sha256, value: Option<i64>) {
+    use sha2::Digest;
+    match value {
+        None => h.update([0u8]),
+        Some(v) => {
+            h.update([1u8]);
+            h.update(v.to_le_bytes());
+        }
+    }
+}
+
 /// Codifica un digest binario a hex minúsculas (64 chars para sha256).
 pub(crate) fn hex_lower(bytes: &[u8]) -> String {
     use std::fmt::Write as _;

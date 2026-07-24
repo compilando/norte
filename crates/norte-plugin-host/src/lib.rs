@@ -36,8 +36,10 @@ mod runtime;
 pub use capability::{Capabilities, NetCap, Scope};
 pub use catalog::{Catalog, LoadError, PluginEntry, Tier};
 pub use manifest::{
-    COMMAND_ID_MAX_CHARS, COMMAND_TITLE_MAX_CHARS, Category, ColumnContrib, CommandContrib,
-    Contributions, HookContrib, Manifest, ManifestError, PreviewerContrib, ProviderContrib,
+    COMMAND_ID_MAX_CHARS, COMMAND_TITLE_MAX_CHARS, CONFIG_DESCRIPTION_MAX_CHARS,
+    CONFIG_ENUM_MAX_VALUES, CONFIG_KEY_MAX_CHARS, CONFIG_MAX_KEYS, CONFIG_STRING_MAX_CHARS,
+    Category, ColumnContrib, CommandContrib, ConfigKeySpec, Contributions, HookContrib, Manifest,
+    ManifestError, PreviewerContrib, ProviderContrib,
 };
 pub use runtime::{PluginInstance, PluginRuntime, ProviderInstance, RuntimeError, provider_iface};
 /// Handle opaco de un `writer` resource del guest (#30 stage 2b-write): el

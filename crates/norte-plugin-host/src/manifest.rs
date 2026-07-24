@@ -1,5 +1,8 @@
 //! Manifiesto `plugin.toml` (ADR 0022 D3): identidad + contribuciones por
-//! interfaz (estilo `contributes` de `VSCode`) + capabilities.
+//! interfaz (estilo `contributes` de `VSCode`) + capabilities + `[config]`
+//! (P2: settings tipadas declaradas por el plugin).
+
+use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
@@ -157,6 +160,271 @@ impl Contributions {
     }
 }
 
+/// Una clave `[config.<key>]` del manifiesto (P2), ya validada: el `type`
+/// TOML fija la forma exacta (mirror del estilo de [`Capabilities`] — un
+/// permiso ausente/campo no aplicable simplemente no existe en la variante).
+/// `description` es cosmética para la UI del gestor y está deliberadamente
+/// FUERA de [`Manifest::approval_digest`] (mismo criterio que
+/// [`Manifest::description`]): editarla no reinvalida capabilities ya
+/// aprobadas, porque no cambia qué valores puede tomar la clave.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConfigKeySpec {
+    /// `type = "string"`.
+    String {
+        /// Valor por defecto (tope [`CONFIG_STRING_MAX_CHARS`] caracteres).
+        default: String,
+        /// Texto cosmético para la UI (tope [`CONFIG_DESCRIPTION_MAX_CHARS`]
+        /// caracteres). NO entra en el digest de aprobación.
+        description: Option<String>,
+    },
+    /// `type = "bool"`.
+    Bool {
+        /// Valor por defecto.
+        default: bool,
+        /// Ver [`ConfigKeySpec::String::description`].
+        description: Option<String>,
+    },
+    /// `type = "int"`.
+    Int {
+        /// Valor por defecto; DEBE caer dentro de `[min, max]` cuando se
+        /// declaran (validado al parsear, fail-loud).
+        default: i64,
+        /// Cota inferior inclusive (opcional).
+        min: Option<i64>,
+        /// Cota superior inclusive (opcional).
+        max: Option<i64>,
+        /// Ver [`ConfigKeySpec::String::description`].
+        description: Option<String>,
+    },
+    /// `type = "enum"`.
+    Enum {
+        /// Valor por defecto; DEBE estar en `values` (validado al parsear,
+        /// fail-loud).
+        default: String,
+        /// Valores permitidos (tope [`CONFIG_ENUM_MAX_VALUES`] entradas, cada
+        /// una hasta [`CONFIG_STRING_MAX_CHARS`] caracteres).
+        values: Vec<String>,
+        /// Ver [`ConfigKeySpec::String::description`].
+        description: Option<String>,
+    },
+}
+
+impl ConfigKeySpec {
+    /// Byte canónico y estable para el digest de aprobación (mismo criterio
+    /// que [`Category::digest_tag`]/`Scope::digest_tag`): NO se usa el
+    /// discriminante del enum (podría reordenarse) sino un valor fijo.
+    fn digest_tag(&self) -> u8 {
+        match self {
+            ConfigKeySpec::String { .. } => 0,
+            ConfigKeySpec::Bool { .. } => 1,
+            ConfigKeySpec::Int { .. } => 2,
+            ConfigKeySpec::Enum { .. } => 3,
+        }
+    }
+
+    /// Alimenta un hasher con la forma CANÓNICA de esta clave, SIN finalizar
+    /// (compone [`Manifest::approval_digest`]): tag de tipo + los campos que
+    /// afectan comportamiento (`default`, `min`, `max`, `values`).
+    /// `description` se EXCLUYE a propósito (cosmética, ver el doc del tipo).
+    fn update_digest(&self, h: &mut sha2::Sha256) {
+        use crate::capability::{update_opt_i64, update_str};
+        use sha2::Digest;
+        h.update([self.digest_tag()]);
+        match self {
+            ConfigKeySpec::String { default, .. } => update_str(h, default),
+            ConfigKeySpec::Bool { default, .. } => h.update([u8::from(*default)]),
+            ConfigKeySpec::Int {
+                default, min, max, ..
+            } => {
+                h.update(default.to_le_bytes());
+                update_opt_i64(h, *min);
+                update_opt_i64(h, *max);
+            }
+            ConfigKeySpec::Enum {
+                default, values, ..
+            } => {
+                update_str(h, default);
+                // `values` es una LISTA ordenada (no un conjunto): el orden en
+                // que el usuario las declara es el orden en que se muestran en
+                // la UI (ADR-style: mismo criterio que `Contributions`, que
+                // tampoco ordena). Cambiar el orden SÍ mueve el digest.
+                h.update((values.len() as u64).to_le_bytes());
+                for v in values {
+                    update_str(h, v);
+                }
+            }
+        }
+    }
+}
+
+/// Forma cruda de una entrada `[config.<key>]` (antes de validar). El campo
+/// `type` (`serde(tag = "type")`) selecciona la variante; TOML es
+/// autodescriptivo así que el tag interno funciona sin ambigüedad.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+enum ConfigKeyRaw {
+    /// `type = "string"`.
+    String {
+        default: String,
+        #[serde(default)]
+        description: Option<String>,
+    },
+    /// `type = "bool"`.
+    Bool {
+        default: bool,
+        #[serde(default)]
+        description: Option<String>,
+    },
+    /// `type = "int"`.
+    Int {
+        default: i64,
+        #[serde(default)]
+        min: Option<i64>,
+        #[serde(default)]
+        max: Option<i64>,
+        #[serde(default)]
+        description: Option<String>,
+    },
+    /// `type = "enum"`.
+    Enum {
+        default: String,
+        values: Vec<String>,
+        #[serde(default)]
+        description: Option<String>,
+    },
+}
+
+/// Tope de claves en `[config]` (P2 decisión 1).
+pub const CONFIG_MAX_KEYS: usize = 32;
+/// Tope de longitud de una clave `[config.<key>]`; el charset permitido es
+/// `[a-z0-9-]{1,32}` (P2 decisión 1) — ni mayúsculas ni `_` ni no-ASCII, para
+/// que la clave sea segura de interpolar en TOML de valores
+/// (`config_dir/plugins/<id>/config.toml`), logs y la UI del gestor sin
+/// escapado.
+pub const CONFIG_KEY_MAX_CHARS: usize = 32;
+/// Tope de `[config.<key>].description` (P2 decisión 1), mismo criterio que
+/// [`Manifest::description`] (280 CARACTERES, no bytes).
+pub const CONFIG_DESCRIPTION_MAX_CHARS: usize = 280;
+/// Tope de un `default` de tipo `string`, o de cada entrada de `values`
+/// (enum) (P2 decisión 1), en CARACTERES.
+pub const CONFIG_STRING_MAX_CHARS: usize = 280;
+/// Tope de entradas en `[config.<key>].values` (enum) (P2 decisión 1).
+pub const CONFIG_ENUM_MAX_VALUES: usize = 16;
+
+/// `true` si `key` respeta el charset `[a-z0-9-]{1,32}` (P2 decisión 1): solo
+/// minúsculas ASCII, dígitos y guion, longitud `1..=32`.
+fn is_valid_config_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= CONFIG_KEY_MAX_CHARS
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// Valida una entrada cruda `[config.<key>]` contra sus propios topes de tipo
+/// y devuelve la forma ya validada. `key` NO se usa en los mensajes de error
+/// (mismo criterio que `Id`/`DuplicateId`... salvo que aquí ni siquiera el id
+/// de plugin, ya validado, se arriesga: la clave de config puede venir de
+/// CUALQUIER TOML hostil antes de pasar el charset).
+fn validate_config_entry(raw: ConfigKeyRaw) -> Result<ConfigKeySpec, ManifestError> {
+    fn check_description(description: Option<&String>) -> Result<(), ManifestError> {
+        if description.is_some_and(|d| d.chars().count() > CONFIG_DESCRIPTION_MAX_CHARS) {
+            return Err(ManifestError::ConfigDescriptionTooLong);
+        }
+        Ok(())
+    }
+
+    match raw {
+        ConfigKeyRaw::String {
+            default,
+            description,
+        } => {
+            check_description(description.as_ref())?;
+            if default.chars().count() > CONFIG_STRING_MAX_CHARS {
+                return Err(ManifestError::ConfigDefaultTooLong);
+            }
+            Ok(ConfigKeySpec::String {
+                default,
+                description,
+            })
+        }
+        ConfigKeyRaw::Bool {
+            default,
+            description,
+        } => {
+            check_description(description.as_ref())?;
+            Ok(ConfigKeySpec::Bool {
+                default,
+                description,
+            })
+        }
+        ConfigKeyRaw::Int {
+            default,
+            min,
+            max,
+            description,
+        } => {
+            check_description(description.as_ref())?;
+            if min.is_some_and(|m| default < m) || max.is_some_and(|m| default > m) {
+                return Err(ManifestError::ConfigIntDefaultOutOfRange);
+            }
+            Ok(ConfigKeySpec::Int {
+                default,
+                min,
+                max,
+                description,
+            })
+        }
+        ConfigKeyRaw::Enum {
+            default,
+            values,
+            description,
+        } => {
+            check_description(description.as_ref())?;
+            if values.len() > CONFIG_ENUM_MAX_VALUES {
+                return Err(ManifestError::ConfigEnumTooManyValues);
+            }
+            if values
+                .iter()
+                .any(|v| v.chars().count() > CONFIG_STRING_MAX_CHARS)
+            {
+                return Err(ManifestError::ConfigEnumValueTooLong);
+            }
+            if !values.iter().any(|v| v == &default) {
+                return Err(ManifestError::ConfigEnumDefaultNotInValues);
+            }
+            Ok(ConfigKeySpec::Enum {
+                default,
+                values,
+                description,
+            })
+        }
+    }
+}
+
+/// Alimenta un hasher con la forma CANÓNICA de `[config]` completo, SIN
+/// finalizar (P2 decisión 2): la sección `config:` SOLO se añade si `config`
+/// NO está vacío — un manifiesto sin `[config]` (o con una tabla presente
+/// pero sin claves) digesta IGUAL que antes de P2, así que las aprobaciones
+/// humanas ya existentes de plugins que no usan `[config]` NUNCA se
+/// resetean. El `BTreeMap` ya itera en orden de clave (determinista, no
+/// depende del orden en el fichero).
+fn update_config_digest(config: &BTreeMap<String, ConfigKeySpec>, h: &mut sha2::Sha256) {
+    use crate::capability::update_str;
+    use sha2::Digest;
+    if config.is_empty() {
+        return;
+    }
+    // Domain separator FIJO (no interpolado, no ambiguo con contenido de
+    // usuario): marca dónde empieza la sección opcional.
+    h.update(b"config:\n");
+    h.update((config.len() as u64).to_le_bytes());
+    for (key, spec) in config {
+        update_str(h, key);
+        spec.update_digest(h);
+    }
+}
+
 /// Bloque `[plugin]` del manifiesto.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -181,6 +449,11 @@ struct ManifestRaw {
     contributions: Contributions,
     #[serde(default)]
     capabilities: Capabilities,
+    /// `[config.<key>]` (P2); ausente = mapa vacío. `BTreeMap` para que el
+    /// orden de iteración sea determinista independientemente del orden en
+    /// el fichero (relevante para [`Manifest::approval_digest`]).
+    #[serde(default)]
+    config: BTreeMap<String, ConfigKeyRaw>,
 }
 
 /// El manifiesto ya validado de un plugin.
@@ -208,6 +481,13 @@ pub struct Manifest {
     pub contributions: Contributions,
     /// Capabilities declaradas.
     pub capabilities: Capabilities,
+    /// Settings tipadas declaradas por el plugin (P2), ya validadas.
+    /// `BTreeMap` para orden determinista por clave. Ausente `[config]` en el
+    /// TOML ⇒ mapa vacío. SÍ entra en [`Manifest::approval_digest`] (afecta
+    /// comportamiento: define qué valores puede tomar cada setting), salvo la
+    /// `description` de cada clave (cosmética, igual que
+    /// [`Manifest::description`]).
+    pub config: BTreeMap<String, ConfigKeySpec>,
 }
 
 /// Error al cargar un manifiesto.
@@ -248,6 +528,48 @@ pub enum ManifestError {
     /// PARSEO, no reinterpreta aprobaciones existentes.
     #[error("contributions.command[].id excede el tope de 64 caracteres")]
     CommandIdTooLong,
+    /// `[config]` declara más de [`CONFIG_MAX_KEYS`] claves (P2 decisión 1).
+    #[error("[config] declara más claves de las permitidas (tope: {CONFIG_MAX_KEYS})")]
+    ConfigTooManyKeys,
+    /// Una clave `[config.<key>]` no respeta el charset `[a-z0-9-]{1,32}` (P2
+    /// decisión 1). La clave literal NO se interpola en el mensaje (mismo
+    /// criterio que `Id`): una clave hostil no debe llegar a logs/UI vía el
+    /// texto del error.
+    #[error("clave de [config] inválida: se espera el charset `[a-z0-9-]{{1,32}}`")]
+    ConfigKeyCharset,
+    /// `[config.<key>].description` supera el tope de
+    /// [`CONFIG_DESCRIPTION_MAX_CHARS`] caracteres (mismo criterio que
+    /// `plugin.description`).
+    #[error(
+        "[config.<key>].description excede el tope de {CONFIG_DESCRIPTION_MAX_CHARS} caracteres"
+    )]
+    ConfigDescriptionTooLong,
+    /// `[config.<key>].default` de tipo `string` supera el tope de
+    /// [`CONFIG_STRING_MAX_CHARS`] caracteres (P2 decisión 1).
+    #[error(
+        "[config.<key>].default (string) excede el tope de {CONFIG_STRING_MAX_CHARS} caracteres"
+    )]
+    ConfigDefaultTooLong,
+    /// `[config.<key>].default` de tipo `int` cae fuera de `[min, max]`
+    /// declarados (P2 decisión 1: los defaults DEBEN validar contra su propio
+    /// tipo/rango al parsear).
+    #[error("[config.<key>].default (int) cae fuera del rango [min, max] declarado")]
+    ConfigIntDefaultOutOfRange,
+    /// `[config.<key>].values` (enum) supera [`CONFIG_ENUM_MAX_VALUES`]
+    /// entradas (P2 decisión 1).
+    #[error("[config.<key>].values (enum) excede el tope de {CONFIG_ENUM_MAX_VALUES} entradas")]
+    ConfigEnumTooManyValues,
+    /// Una entrada de `[config.<key>].values` (enum) supera el tope de
+    /// [`CONFIG_STRING_MAX_CHARS`] caracteres (P2 decisión 1).
+    #[error(
+        "[config.<key>].values (enum) contiene una entrada que excede el tope de {CONFIG_STRING_MAX_CHARS} caracteres"
+    )]
+    ConfigEnumValueTooLong,
+    /// `[config.<key>].default` de tipo `enum` no está entre `values` (P2
+    /// decisión 1: los defaults DEBEN validar contra su propio tipo/rango al
+    /// parsear).
+    #[error("[config.<key>].default (enum) no está entre los `values` declarados")]
+    ConfigEnumDefaultNotInValues,
 }
 
 /// Tope de `contributions.command[].title` (P1 encoding audit M2): mismo
@@ -329,6 +651,19 @@ impl Manifest {
                 return Err(ManifestError::CommandTitleTooLong);
             }
         }
+        // `[config]` (P2 decisión 1): tope de claves primero (fail-fast antes
+        // de validar cada entrada), luego charset + topes de tipo por clave,
+        // en orden de `BTreeMap` (determinista).
+        if raw.config.len() > CONFIG_MAX_KEYS {
+            return Err(ManifestError::ConfigTooManyKeys);
+        }
+        let mut config = BTreeMap::new();
+        for (key, entry) in raw.config {
+            if !is_valid_config_key(&key) {
+                return Err(ManifestError::ConfigKeyCharset);
+            }
+            config.insert(key, validate_config_entry(entry)?);
+        }
         Ok(Self {
             id: raw.plugin.id,
             name: raw.plugin.name,
@@ -338,6 +673,7 @@ impl Manifest {
             description: raw.plugin.description,
             contributions: raw.contributions,
             capabilities: raw.capabilities,
+            config,
         })
     }
 
@@ -356,6 +692,12 @@ impl Manifest {
     /// El id y el nombre/publisher/versión NO entran: la aprobación se indexa por
     /// id (cambiarlo es otro plugin) y el resto es cosmético — lo que importa para
     /// la seguridad es qué hace y cuándo se dispara.
+    ///
+    /// P2 extiende la forma canónica con una sección `config:` — pero SOLO
+    /// cuando `[config]` declara alguna clave: [`update_config_digest`] no
+    /// añade ni un byte si `self.config` está vacío, así que un manifiesto sin
+    /// `[config]` digesta EXACTAMENTE igual que antes de P2 (las aprobaciones
+    /// humanas existentes de plugins que no usan `[config]` no se resetean).
     #[must_use]
     pub fn approval_digest(&self) -> String {
         use sha2::{Digest, Sha256};
@@ -366,6 +708,7 @@ impl Manifest {
         h.update([self.category.digest_tag()]);
         self.contributions.update_digest(&mut h);
         self.capabilities.update_digest(&mut h);
+        update_config_digest(&self.config, &mut h);
         crate::capability::hex_lower(&h.finalize())
     }
 }

@@ -2,8 +2,9 @@
 //! catálogo. Sin runtime WASM (M4-P2).
 
 use norte_plugin_host::{
-    COMMAND_ID_MAX_CHARS, COMMAND_TITLE_MAX_CHARS, Catalog, Category, Manifest, ManifestError,
-    Scope,
+    COMMAND_ID_MAX_CHARS, COMMAND_TITLE_MAX_CHARS, CONFIG_DESCRIPTION_MAX_CHARS,
+    CONFIG_ENUM_MAX_VALUES, CONFIG_MAX_KEYS, CONFIG_STRING_MAX_CHARS, Catalog, Category,
+    ConfigKeySpec, Manifest, ManifestError, Scope,
 };
 
 const SYNTAX_PREVIEW: &str = r#"
@@ -535,4 +536,357 @@ fn catalogo_rechaza_ids_duplicados_en_dos_directorios() {
             .all(|e| matches!(&e.error, ManifestError::DuplicateId(id) if id == "org.norte.clash")),
         "los dos errores son DuplicateId del id colisionante"
     );
+}
+
+/// P2: pin de no-regresión. El digest de `SYNTAX_PREVIEW` (sin `[config]`)
+/// capturado ANTES de introducir el esquema `[config]` en la forma canónica
+/// del digest (commit previo a este). Si este test se rompe, la extensión de
+/// P2 movió el digest de un manifiesto SIN `[config]` — eso resetearía TODAS
+/// las aprobaciones humanas existentes de plugins que no usan `[config]`,
+/// que es exactamente lo que la decisión 2 del plan P2 prohíbe.
+#[test]
+fn manifest_sin_config_digesta_identico_a_pre_p2() {
+    const DIGEST_PRE_P2: &str = "9ba598fcee4cb10e91a2de3683287a11af83c9bdd7bc18ecb2df79570f9c0d5f";
+    let m = Manifest::from_toml(SYNTAX_PREVIEW).unwrap();
+    assert_eq!(
+        m.approval_digest(),
+        DIGEST_PRE_P2,
+        "un manifiesto sin [config] debe digestar IGUAL que antes de P2 \
+         (o resetea aprobaciones existentes)"
+    );
+}
+
+// --- P2: esquema `[config]` del manifiesto (dentro del approval digest) ---
+
+const WITH_CONFIG: &str = r#"
+[plugin]
+id = "org.norte.demo-config"
+name = "Demo Config"
+publisher = "norte"
+version = "0.1.0"
+category = "command"
+
+[config.greeting]
+type = "string"
+default = "hola"
+description = "Saludo mostrado al arrancar."
+
+[config.enabled]
+type = "bool"
+default = true
+
+[config.retries]
+type = "int"
+default = 3
+min = 0
+max = 10
+
+[config.mode]
+type = "enum"
+default = "fast"
+values = ["fast", "slow"]
+"#;
+
+/// Boilerplate mínimo de `[plugin]` + las entradas `[config.*]` que se le
+/// inyecten, para probar los topes de P2 sin repetir el resto del manifiesto.
+fn manifest_con_config(entries: &str) -> Result<Manifest, ManifestError> {
+    Manifest::from_toml(&format!(
+        r#"
+        [plugin]
+        id = "org.norte.x"
+        name = "X"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "command"
+        {entries}
+    "#
+    ))
+}
+
+#[test]
+fn config_los_4_tipos_parsean() {
+    let m = Manifest::from_toml(WITH_CONFIG).unwrap();
+    assert_eq!(m.config.len(), 4);
+    assert_eq!(
+        m.config.get("greeting"),
+        Some(&ConfigKeySpec::String {
+            default: "hola".into(),
+            description: Some("Saludo mostrado al arrancar.".into()),
+        })
+    );
+    assert_eq!(
+        m.config.get("enabled"),
+        Some(&ConfigKeySpec::Bool {
+            default: true,
+            description: None,
+        })
+    );
+    assert_eq!(
+        m.config.get("retries"),
+        Some(&ConfigKeySpec::Int {
+            default: 3,
+            min: Some(0),
+            max: Some(10),
+            description: None,
+        })
+    );
+    assert_eq!(
+        m.config.get("mode"),
+        Some(&ConfigKeySpec::Enum {
+            default: "fast".into(),
+            values: vec!["fast".into(), "slow".into()],
+            description: None,
+        })
+    );
+}
+
+#[test]
+fn config_ausente_es_mapa_vacio() {
+    let m = Manifest::from_toml(SYNTAX_PREVIEW).unwrap();
+    assert!(m.config.is_empty());
+}
+
+#[test]
+fn config_33_claves_se_rechaza() {
+    use std::fmt::Write as _;
+    let mut entries = String::new();
+    for i in 0..=CONFIG_MAX_KEYS {
+        let _ = write!(
+            entries,
+            "\n[config.k{i}]\ntype = \"bool\"\ndefault = true\n"
+        );
+    }
+    assert!(matches!(
+        manifest_con_config(&entries),
+        Err(ManifestError::ConfigTooManyKeys)
+    ));
+}
+
+#[test]
+fn config_32_claves_es_el_tope_exacto() {
+    use std::fmt::Write as _;
+    let mut entries = String::new();
+    for i in 0..CONFIG_MAX_KEYS {
+        let _ = write!(
+            entries,
+            "\n[config.k{i}]\ntype = \"bool\"\ndefault = true\n"
+        );
+    }
+    let m = manifest_con_config(&entries).unwrap();
+    assert_eq!(m.config.len(), CONFIG_MAX_KEYS);
+}
+
+#[test]
+fn config_clave_con_mayuscula_se_rechaza() {
+    let entries = "\n[config.Bad]\ntype = \"bool\"\ndefault = true\n";
+    assert!(matches!(
+        manifest_con_config(entries),
+        Err(ManifestError::ConfigKeyCharset)
+    ));
+}
+
+#[test]
+fn config_clave_con_guion_bajo_se_rechaza() {
+    let entries = "\n[config.has_underscore]\ntype = \"bool\"\ndefault = true\n";
+    assert!(matches!(
+        manifest_con_config(entries),
+        Err(ManifestError::ConfigKeyCharset)
+    ));
+}
+
+#[test]
+fn config_clave_33_chars_se_rechaza() {
+    let key = "a".repeat(33);
+    let entries = format!("\n[config.{key}]\ntype = \"bool\"\ndefault = true\n");
+    assert!(matches!(
+        manifest_con_config(&entries),
+        Err(ManifestError::ConfigKeyCharset)
+    ));
+}
+
+#[test]
+fn config_clave_32_chars_es_el_tope_exacto() {
+    let key = "a".repeat(32);
+    let entries = format!("\n[config.{key}]\ntype = \"bool\"\ndefault = true\n");
+    let m = manifest_con_config(&entries).unwrap();
+    assert!(m.config.contains_key(&key));
+}
+
+#[test]
+fn config_description_281_chars_se_rechaza() {
+    let d = "a".repeat(CONFIG_DESCRIPTION_MAX_CHARS + 1);
+    let entries = format!(
+        "\n[config.greeting]\ntype = \"string\"\ndefault = \"hi\"\ndescription = \"{d}\"\n"
+    );
+    assert!(matches!(
+        manifest_con_config(&entries),
+        Err(ManifestError::ConfigDescriptionTooLong)
+    ));
+}
+
+#[test]
+fn config_description_280_chars_es_el_tope_exacto() {
+    let d = "a".repeat(CONFIG_DESCRIPTION_MAX_CHARS);
+    let entries = format!(
+        "\n[config.greeting]\ntype = \"string\"\ndefault = \"hi\"\ndescription = \"{d}\"\n"
+    );
+    let m = manifest_con_config(&entries).unwrap();
+    assert_eq!(
+        m.config.get("greeting"),
+        Some(&ConfigKeySpec::String {
+            default: "hi".into(),
+            description: Some(d),
+        })
+    );
+}
+
+#[test]
+fn config_string_default_281_chars_se_rechaza() {
+    let d = "a".repeat(CONFIG_STRING_MAX_CHARS + 1);
+    let entries = format!("\n[config.greeting]\ntype = \"string\"\ndefault = \"{d}\"\n");
+    assert!(matches!(
+        manifest_con_config(&entries),
+        Err(ManifestError::ConfigDefaultTooLong)
+    ));
+}
+
+#[test]
+fn config_int_default_por_encima_del_maximo_se_rechaza() {
+    let entries = "\n[config.retries]\ntype = \"int\"\ndefault = 20\nmin = 0\nmax = 10\n";
+    assert!(matches!(
+        manifest_con_config(entries),
+        Err(ManifestError::ConfigIntDefaultOutOfRange)
+    ));
+}
+
+#[test]
+fn config_int_default_bajo_el_minimo_se_rechaza() {
+    let entries = "\n[config.retries]\ntype = \"int\"\ndefault = -1\nmin = 0\nmax = 10\n";
+    assert!(matches!(
+        manifest_con_config(entries),
+        Err(ManifestError::ConfigIntDefaultOutOfRange)
+    ));
+}
+
+#[test]
+fn config_int_default_en_el_borde_es_valido() {
+    let entries = "\n[config.retries]\ntype = \"int\"\ndefault = 10\nmin = 0\nmax = 10\n";
+    let m = manifest_con_config(entries).unwrap();
+    assert_eq!(
+        m.config.get("retries"),
+        Some(&ConfigKeySpec::Int {
+            default: 10,
+            min: Some(0),
+            max: Some(10),
+            description: None,
+        })
+    );
+}
+
+#[test]
+fn config_enum_default_ausente_de_values_se_rechaza() {
+    let entries =
+        "\n[config.mode]\ntype = \"enum\"\ndefault = \"turbo\"\nvalues = [\"fast\", \"slow\"]\n";
+    assert!(matches!(
+        manifest_con_config(entries),
+        Err(ManifestError::ConfigEnumDefaultNotInValues)
+    ));
+}
+
+#[test]
+fn config_enum_17_values_se_rechaza() {
+    let values: Vec<String> = (0..=CONFIG_ENUM_MAX_VALUES)
+        .map(|i| format!("\"v{i}\""))
+        .collect();
+    let entries = format!(
+        "\n[config.mode]\ntype = \"enum\"\ndefault = \"v0\"\nvalues = [{}]\n",
+        values.join(", ")
+    );
+    assert!(matches!(
+        manifest_con_config(&entries),
+        Err(ManifestError::ConfigEnumTooManyValues)
+    ));
+}
+
+#[test]
+fn config_enum_16_values_es_el_tope_exacto() {
+    let values: Vec<String> = (0..CONFIG_ENUM_MAX_VALUES)
+        .map(|i| format!("\"v{i}\""))
+        .collect();
+    let entries = format!(
+        "\n[config.mode]\ntype = \"enum\"\ndefault = \"v0\"\nvalues = [{}]\n",
+        values.join(", ")
+    );
+    let m = manifest_con_config(&entries).unwrap();
+    match m.config.get("mode").unwrap() {
+        ConfigKeySpec::Enum { values, .. } => assert_eq!(values.len(), CONFIG_ENUM_MAX_VALUES),
+        other => panic!("se esperaba Enum, se obtuvo {other:?}"),
+    }
+}
+
+#[test]
+fn config_enum_value_281_chars_se_rechaza() {
+    let long_value = "a".repeat(CONFIG_STRING_MAX_CHARS + 1);
+    let entries = format!(
+        "\n[config.mode]\ntype = \"enum\"\ndefault = \"{long_value}\"\nvalues = [\"{long_value}\"]\n"
+    );
+    assert!(matches!(
+        manifest_con_config(&entries),
+        Err(ManifestError::ConfigEnumValueTooLong)
+    ));
+}
+
+#[test]
+fn config_presente_mueve_el_approval_digest() {
+    let sin_config = manifest_con_config("").unwrap();
+    let con_config =
+        manifest_con_config("\n[config.greeting]\ntype = \"string\"\ndefault = \"hola\"\n")
+            .unwrap();
+    assert_ne!(
+        sin_config.approval_digest(),
+        con_config.approval_digest(),
+        "declarar [config] debe mover el digest de aprobación (decisión 2)"
+    );
+}
+
+#[test]
+fn config_default_distinto_mueve_el_approval_digest() {
+    let a = manifest_con_config("\n[config.greeting]\ntype = \"string\"\ndefault = \"hola\"\n")
+        .unwrap();
+    let b = manifest_con_config("\n[config.greeting]\ntype = \"string\"\ndefault = \"adios\"\n")
+        .unwrap();
+    assert_ne!(
+        a.approval_digest(),
+        b.approval_digest(),
+        "un default distinto es comportamiento distinto: debe mover el digest"
+    );
+}
+
+#[test]
+fn config_description_editada_no_mueve_el_approval_digest() {
+    // Mismo criterio que `plugin.description` (cosmética): editarla no
+    // reinvalida capabilities ya aprobadas.
+    let a = manifest_con_config(
+        "\n[config.greeting]\ntype = \"string\"\ndefault = \"hola\"\ndescription = \"uno\"\n",
+    )
+    .unwrap();
+    let b = manifest_con_config(
+        "\n[config.greeting]\ntype = \"string\"\ndefault = \"hola\"\ndescription = \"dos, muy distinta\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        a.approval_digest(),
+        b.approval_digest(),
+        "editar la description de una clave de config no debe mover el digest"
+    );
+}
+
+#[test]
+fn config_tabla_vacia_digesta_igual_que_ausente() {
+    // decisión 2: la sección `config:` solo se añade al digest si el mapa NO
+    // está vacío — una tabla `[config]` presente pero sin claves debe digestar
+    // igual que su ausencia total.
+    let sin_tabla = manifest_con_config("").unwrap();
+    let tabla_vacia = manifest_con_config("\n[config]\n").unwrap();
+    assert_eq!(sin_tabla.approval_digest(), tabla_vacia.approval_digest());
 }
