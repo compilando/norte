@@ -15,6 +15,11 @@ use std::path::PathBuf;
 /// validación del keymap; nombres alineados con la TUI donde coinciden.
 pub const COMMANDS: &[&str] = &[
     "app.quit",
+    // S4: overlay de ajustes a pantalla completa. Bindeado a F11 en LOS
+    // TRES presets compartidos (`f9`/`f10`/`f12` ya estaban tomados) — sin
+    // supplemento propio: el chord viene del catálogo compartido, igual que
+    // `app.theme`/`app.extensions`.
+    "app.settings",
     "pane.switch",
     "cursor.up",
     "cursor.down",

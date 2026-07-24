@@ -183,6 +183,10 @@ settings-section-general = General
 settings-section-plugins = Plugins
 settings-plugins-name = Ajustes de plugins
 settings-plugins-note = Edita los ajustes de plugins a mano en plugins/<id>/config.toml (validado por `norte doctor`) — el editor completo llega con una futura actualización del protocolo.
+# --- Vista de ajustes de la GUI (S4) — swap a pantalla completa por ratón
+# sobre el mismo catálogo/máquina de estado que el overlay de arriba.
+settings-restart-badge = requiere reinicio
+settings-hint-gui = [↑/↓/pgup/pgdn/click] navegar · [enter/click] editar · [esc] cerrar
 # P1: prefijo de una fila aportada por un plugin (`palette::plugin_rows`) —
 # ninguna fila built-in lo lleva, así que un plugin no puede disfrazarse de
 # comando built-in copiando su texto exacto.

@@ -9,6 +9,30 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **GUI settings view (S4):** `app.settings` (`F11`, same shared preset
+  binding as the TUI) opens a searchable, VSCode-style full-view swap over
+  the same General catalog (S2) — search box, grouped list (General/
+  Plugins) with descriptions, mouse AND keyboard (click/hover to select,
+  click cycles a bool/enum/theme/keymap-preset row or opens inline text/int
+  editing; Enter/Esc mirror the TUI overlay). Writes persist off the UI
+  thread through GPUI's background executor (no new OS thread, no coupling
+  to the daemon session — config I/O has nothing to do with that
+  connection's lifecycle) and, on success, re-resolve what the GUI can
+  apply live from the freshly reloaded config: theme + `[effects]`, fonts
+  (family/size — resolved once at startup until now, but cheap enough to
+  redo on every write), reduce-motion, confirm-quit, quick-search (closes a
+  pre-existing gap: the GUI had always hardcoded `Filter` mode, ignoring
+  this setting entirely), and the keymap preset (rebuilds both resolvers).
+  Only the UI language can't apply live in this frontend (Fluent negotiates
+  it once at process startup) — that row carries a static "restart
+  required" badge, and any write that couldn't apply live says so in the
+  save confirmation. The pure editor state machine (search/cursor/inline
+  edit, `SettingsState`) and row builder (`build_rows`) that power the S3
+  TUI overlay moved to `norte_frontend::settings` unchanged (they had no
+  ratatui/crossterm coupling to begin with) so both frontends share the
+  exact same behavior instead of duplicating it; the TUI's own modules
+  re-export the same names for source compatibility.
+
 - **TUI settings overlay (S3):** `app.settings` (`F11` in all three bundled
   presets — `F9`/`F10`/`F12` were already taken) opens a searchable overlay
   over the General settings catalog (S2): type to filter by id, name, or

@@ -182,6 +182,10 @@ settings-section-general = General
 settings-section-plugins = Plugins
 settings-plugins-name = Plugin settings
 settings-plugins-note = Edit plugin settings by hand in plugins/<id>/config.toml (validated by `norte doctor`) — the full editor lands with a future protocol update.
+# --- GUI settings view (S4) — mouse-driven full-view swap over the same
+# catalog/state machine as the overlay above.
+settings-restart-badge = restart required
+settings-hint-gui = [↑/↓/pgup/pgdn/click] navigate · [enter/click] edit · [esc] close
 # P1: prefix on a plugin-contributed row (`palette::plugin_rows`) — no
 # built-in row ever carries it, so a plugin cannot spoof a built-in command
 # by copying its exact display text.

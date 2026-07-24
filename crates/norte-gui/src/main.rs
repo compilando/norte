@@ -58,6 +58,7 @@ use gpui_platform::application;
 use std::ops::Range;
 
 use norte_config::ConfirmQuit;
+use norte_frontend::settings::PendingWrite;
 use norte_frontend::{PaneState, nav::Mode};
 use norte_proto::{Entry, EntryKind, Segment, VPath};
 use norte_theme::{FileKind, Role, Theme};
@@ -66,6 +67,7 @@ mod effects;
 mod keymap;
 mod modal;
 mod session;
+mod settings_view;
 mod theme_map;
 
 use modal::{Modal, ModalOutcome, PendingOp, PendingTransfer, TransferKind};
@@ -221,11 +223,37 @@ struct NorteGui {
     /// "reiniciado" en cada frame no oscilaría, `sin(0)` siempre).
     motion_epoch: std::time::Instant,
     /// `[ui] confirm_quit` (S2), resuelto UNA vez en `new` junto al resto de
-    /// `[ui]` — `applies_live` no aplica a este campo por diseño de la GUI
-    /// (no hay hot-reload de config en este frontend a diferencia del TUI;
-    /// solo se lee al arrancar). `Default` = `Auto`, el comportamiento
-    /// pre-S2 (confirma solo con trabajo pendiente).
+    /// `[ui]`. `Default` = `Auto`, el comportamiento pre-S2 (confirma solo
+    /// con trabajo pendiente). A diferencia del TUI (que hot-recarga
+    /// `norte.toml` con un watcher), esta GUI no tenía NINGÚN camino de
+    /// recarga hasta S4: `app.settings` es el ÚNICO sitio donde este campo
+    /// (y `quick_mode`/`theme`/`effects`/`fonts`/`resolver`/`viewer_resolver`)
+    /// puede cambiar en caliente ahora — ver
+    /// `NorteGui::apply_settings_write_result`.
     confirm_quit: ConfirmQuit,
+    /// `[ui] quick_search` (S2), resuelto UNA vez en `new` — GUI-c dejó este
+    /// campo SIN homólogo (hardcodeaba `Mode::Filter` en `maybe_open_quick`,
+    /// una brecha real: la TUI sí honra este ajuste desde S3). S4 lo cierra:
+    /// `norte_frontend::config::FrontendConfig::quick_search_mode` YA lo
+    /// resolvía desde `load` — solo faltaba leerlo aquí, mismo patrón que
+    /// `confirm_quit`.
+    quick_mode: Mode,
+    /// Snapshot de los escalares MERGED de `norte.toml` (S4): construida UNA
+    /// vez en `new` a partir de `loaded` (o vacía si la config no cargó,
+    /// [`empty_frontend_config`]) y refrescada tras cada escritura de
+    /// ajustes con OK (`apply_settings_write_result`). Las filas de
+    /// `settings_view` (`norte_frontend::settings::build_rows`) se
+    /// construyen SIEMPRE desde este campo, nunca releyendo disco al abrir
+    /// la vista (F11) — eso sería I/O bloqueante en el hilo de UI (regla 2).
+    cfg_snapshot: norte_frontend::config::FrontendConfig,
+    /// La vista de ajustes abierta (`app.settings`, F11, S4), o `None` =
+    /// cerrada. Mismo patrón de swap a pantalla completa que `viewer`
+    /// (mutuamente excluyente con él y con el dual-pane — `on_key`/`render`
+    /// la comprueban ANTES que `viewer`, mismo criterio de prioridad que el
+    /// modal: si un `ViewerOpened` async aterriza mientras la vista de
+    /// ajustes está abierta, la vista de ajustes sigue ganando la pantalla
+    /// hasta que el usuario la cierre).
+    settings_view: Option<settings_view::SettingsView>,
 }
 
 impl NorteGui {
@@ -386,6 +414,21 @@ impl NorteGui {
             .map(|cfg| cfg.common.ui_confirm_quit)
             .unwrap_or_default();
 
+        // Snapshot de config (S4): `loaded.clone()` si cargó, si no una
+        // config VACÍA (nunca los defaults ad hoc de arriba — `build_rows`
+        // necesita el `FrontendConfig` completo, no solo tema/fuente/preset
+        // sueltos). Mismo criterio "jamás aborta" que el resto del arranque:
+        // una `settings_view` sobre una config vacía sigue siendo útil (el
+        // usuario puede FIJAR valores aunque la carga inicial fallara).
+        let cfg_snapshot = match loaded {
+            Ok(cfg) => cfg.clone(),
+            Err(_) => empty_frontend_config(),
+        };
+        // `[ui] quick_search` (ver doc del campo): mismo patrón que
+        // `confirm_quit`, pero derivado del snapshot en vez de `loaded`
+        // directamente — `quick_search_mode` ya vive ahí.
+        let quick_mode = cfg_snapshot.quick_search_mode;
+
         match LoadConfig::from_env() {
             Ok(cfg) => {
                 let LoadConfig { socket, dir } = cfg;
@@ -427,6 +470,9 @@ impl NorteGui {
                     fonts,
                     motion_epoch: std::time::Instant::now(),
                     confirm_quit,
+                    quick_mode,
+                    cfg_snapshot,
+                    settings_view: None,
                 };
                 gui.spawn_event_loop(event_rx, cx);
                 gui.cd(0, dir.clone(), cx);
@@ -485,6 +531,9 @@ impl NorteGui {
                     fonts,
                     motion_epoch: std::time::Instant::now(),
                     confirm_quit,
+                    quick_mode,
+                    cfg_snapshot,
+                    settings_view: None,
                 }
             }
         }
@@ -887,6 +936,7 @@ impl NorteGui {
         let f = self.focus;
         match cmd {
             "app.quit" => self.quit_or_confirm(cx),
+            "app.settings" => self.open_settings(),
             "pane.switch" => self.focus = 1 - self.focus,
             "cursor.up" => self.panes[f].cursor_up(),
             "cursor.down" => self.panes[f].cursor_down(),
@@ -922,6 +972,292 @@ impl NorteGui {
         }
         // Tras un movimiento de cursor, sigue el scroll (issue #87).
         self.follow_cursor(f);
+    }
+
+    /// Abre la vista de ajustes (`app.settings`, F11, S4): construida
+    /// SÍNCRONAMENTE desde `cfg_snapshot` (nunca releyendo disco — regla 2),
+    /// mismo criterio que abrir la paleta en la TUI. Reemplaza cualquier
+    /// vista anterior con una fresca (sin filtro/edición, igual que F11
+    /// repetido en la TUI cerraría y reabriría).
+    fn open_settings(&mut self) {
+        self.settings_view = Some(settings_view::SettingsView::new(
+            norte_frontend::settings::build_rows(&self.cfg_snapshot),
+        ));
+    }
+
+    /// Maneja UNA tecla con la vista de ajustes abierta (`on_key`, tramo
+    /// dedicado): ctrl/alt/platform se descartan ANTES de llegar al filtro
+    /// (un ctrl-chord no debe teclearse en el buffer — mismo gate que el
+    /// visor aplica solo a platform; aquí se extiende a ctrl/alt porque esta
+    /// pantalla SÍ acepta tecleo libre). El resto delega en
+    /// [`settings_view::on_key`] (puro) y actúa sobre el
+    /// [`settings_view::SettingsOutcome`].
+    fn on_settings_key(&mut self, ks: &gpui::Keystroke, cx: &mut Context<Self>) {
+        if ks.modifiers.control || ks.modifiers.alt || ks.modifiers.platform {
+            return;
+        }
+        let Some(view) = &mut self.settings_view else {
+            return;
+        };
+        let outcome = settings_view::on_key(view, &ks.key, ks.key_char.as_deref());
+        match outcome {
+            settings_view::SettingsOutcome::None => {}
+            settings_view::SettingsOutcome::Close => self.settings_view = None,
+            settings_view::SettingsOutcome::Write(w) => self.commit_settings_write(*w, cx),
+            settings_view::SettingsOutcome::Invalid(e) => {
+                if let Some(view) = &mut self.settings_view {
+                    view.status = Some(settings_view::SettingsStatus {
+                        message: settings_view::edit_error_message(&e),
+                        error: true,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Click en una fila de la vista de ajustes: fija el cursor sobre `idx`
+    /// (posición DENTRO de `visible()`, mismo contrato que
+    /// `SettingsState::set_cursor`) y activa (mismo camino que Enter) — un
+    /// click sobre un `Bool`/`Enum`/`ThemeName`/`PresetName` cicla de
+    /// inmediato, sobre `Text`/`Int` abre la edición inline. No-op mientras
+    /// se edita OTRA fila (mismo guard que `set_cursor`/`up`/`down`): un
+    /// click perdido no debe tirar lo que el usuario ya tecleó.
+    fn on_settings_row_click(&mut self, idx: usize, cx: &mut Context<Self>) {
+        let Some(view) = &mut self.settings_view else {
+            return;
+        };
+        if view.state.is_editing() {
+            return;
+        }
+        view.state.set_cursor(idx);
+        match settings_view::activate(&mut view.state) {
+            settings_view::SettingsOutcome::Write(w) => self.commit_settings_write(*w, cx),
+            settings_view::SettingsOutcome::None
+            | settings_view::SettingsOutcome::Close
+            | settings_view::SettingsOutcome::Invalid(_) => {}
+        }
+        cx.notify();
+    }
+
+    /// Persiste un [`PendingWrite`] (S4) fuera del hilo de UI (regla 2,
+    /// mismo criterio que el `spawn_blocking` de la TUI): esta GUI no tiene
+    /// runtime tokio en el hilo de render (a diferencia del hilo de sesión,
+    /// `session.rs`, que sí lo tiene, pero es un canal AJENO — persistir
+    /// config no tiene nada que ver con la conexión al daemon, y ese hilo
+    /// puede no estar sirviendo nada si `connect` falló; usarlo colgaría la
+    /// escritura para siempre). En vez de un `std::thread::spawn` nuevo, usa
+    /// el executor de FONDO que GPUI ya trae (`cx.background_spawn`, dentro
+    /// de un `cx.spawn` normal — el mismo idioma "async → UI" que
+    /// `spawn_event_loop` documenta al principio del fichero): el I/O
+    /// bloqueante (escribir + releer la config fusionada, y si el ajuste
+    /// tocado es `keymap.preset`, reconstruir los efectivos) corre en el
+    /// pool de fondo; el resultado vuelve al hilo de UI vía `this.update`.
+    /// Solo se reconstruye el keymap cuando hace falta (evita releer
+    /// `keymap.toml` de cada capa en cada escritura de un ajuste no
+    /// relacionado).
+    fn commit_settings_write(&mut self, write: PendingWrite, cx: &mut Context<Self>) {
+        let PendingWrite {
+            section,
+            key,
+            value,
+            name,
+            display,
+        } = write;
+        let Some(dir) = norte_config::user_config_dir() else {
+            self.set_settings_status(norte_i18n::t("msg-settings-no-config-dir"), true);
+            cx.notify();
+            return;
+        };
+        let needs_keymap_rebuild = section == "keymap" && key == "preset";
+        cx.spawn(async move |this, cx| {
+            let key_for_bg = key.clone();
+            let (persisted, fresh_cfg, fresh_keymap) = cx
+                .background_spawn(async move {
+                    let persisted = norte_config::persist_set(&dir, section, &key_for_bg, value);
+                    let fresh_cfg = persisted
+                        .is_ok()
+                        .then(|| norte_frontend::config::load(&norte_config::standard_layers()));
+                    let fresh_keymap = match (&fresh_cfg, needs_keymap_rebuild) {
+                        (Some(Ok(cfg)), true) => Some(keymap::build_effectives(&cfg.common.preset)),
+                        _ => None,
+                    };
+                    (persisted, fresh_cfg, fresh_keymap)
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                view.apply_settings_write_result(
+                    section,
+                    &key,
+                    &name,
+                    &display,
+                    persisted,
+                    fresh_cfg,
+                    fresh_keymap,
+                    cx,
+                );
+            });
+        })
+        .detach();
+    }
+
+    /// Aplica el resultado de una escritura de ajustes (S4, hilo de UI): un
+    /// fallo de escritura anuncia el error y no toca nada más. Un OK
+    /// despacha por `(section, key)` (forma WIRE — ver
+    /// `norte_frontend::settings::wire_key`) qué re-resolver EN CALIENTE
+    /// desde la config fresca; cualquier `(section, key)` sin brazo propio
+    /// (hoy solo `("ui","lang")`: Fluent negocia el idioma una vez al
+    /// arrancar, sin camino de recarga en esta GUI) queda "requiere
+    /// reinicio" — mismo vocabulario que `settings_view::gui_applies_live`,
+    /// que pinta el aviso ESTÁTICO por fila (mantener las dos ramas
+    /// sincronizadas si un futuro ajuste se vuelve, o deja de ser, en
+    /// caliente).
+    #[allow(clippy::too_many_arguments)]
+    fn apply_settings_write_result(
+        &mut self,
+        section: &'static str,
+        key: &str,
+        name: &str,
+        display: &str,
+        persisted: std::io::Result<std::path::PathBuf>,
+        fresh_cfg: Option<
+            Result<norte_frontend::config::FrontendConfig, norte_config::ConfigError>,
+        >,
+        fresh_keymap: Option<
+            Result<
+                (
+                    norte_frontend::keymap::Effective,
+                    norte_frontend::keymap::Effective,
+                ),
+                norte_frontend::keymap::KeymapError,
+            >,
+        >,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(e) = persisted {
+            self.set_settings_status(
+                norte_i18n::ta(
+                    "msg-settings-save-failed",
+                    &[("error", &io_error_category(&e))],
+                ),
+                true,
+            );
+            cx.notify();
+            return;
+        }
+        let mut applied_live = true;
+        match fresh_cfg {
+            Some(Ok(cfg)) => {
+                match (section, key) {
+                    ("ui", "theme") => applied_live = self.apply_theme_live(&cfg),
+                    ("ui", "reduce_motion") => {
+                        cx.set_reduce_motion(cfg.common.ui_reduce_motion.unwrap_or(false));
+                    }
+                    ("ui", "confirm_quit") => self.confirm_quit = cfg.common.ui_confirm_quit,
+                    ("ui", "quick_search") => self.quick_mode = cfg.quick_search_mode,
+                    ("ui", "font" | "mono_font" | "font_size") => {
+                        self.apply_fonts_live(&cfg, cx);
+                    }
+                    ("keymap", "preset") => applied_live = self.apply_keymap_live(fresh_keymap),
+                    _ => applied_live = false, // ui.lang y cualquier id futuro sin brazo propio.
+                }
+                self.cfg_snapshot = cfg;
+            }
+            Some(Err(_)) | None => applied_live = false,
+        }
+        let mut msg = norte_i18n::ta("msg-settings-saved", &[("name", name), ("value", display)]);
+        if !applied_live {
+            msg = format!("{msg} — {}", norte_i18n::t("settings-restart-badge"));
+        }
+        self.set_settings_status(msg, false);
+        cx.notify();
+    }
+
+    /// Re-resuelve `theme`+`effects` desde `cfg.common.ui_theme` (S4, tras
+    /// una escritura de `ui.theme` con OK): mismo par que `new` resuelve al
+    /// arrancar. Si el nombre/ruta ya no resuelve (edge case: un tema
+    /// personalizado borrado entre el ciclo y el commit), CONSERVA el tema
+    /// vigente — un cambio a medias sería más sorprendente que "no cambió
+    /// del todo" — y devuelve `false` (el caller lo marca "requiere
+    /// reinicio" en el mensaje, aunque en la práctica un reinicio tampoco lo
+    /// arreglaría; es la categoría más honesta disponible sin inventar un
+    /// tercer estado). Los avisos de `[effects]` degradados (`from_theme`)
+    /// se descartan aquí a propósito: son ruido de arranque, no algo que la
+    /// vista de ajustes necesite mostrar en su status de una línea.
+    fn apply_theme_live(&mut self, cfg: &norte_frontend::config::FrontendConfig) -> bool {
+        match norte_frontend::theme::resolve_theme(cfg.common.ui_theme.as_deref()) {
+            Ok(theme) => {
+                let (effects, _warnings) = effects::EffectsV1::from_theme(&theme);
+                self.theme = theme;
+                self.effects = effects;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Re-resuelve `fonts` desde `cfg` (S4, tras `ui.font`/`ui.mono-font`/
+    /// `ui.font-size` con OK): `FontSet::resolve` es barato — issue #87 no
+    /// aplica, esto NO corre por frame — así que, a diferencia del supuesto
+    /// pesimista del doc de `SettingDef` (fuentes "resueltas solo al
+    /// arrancar"), la GUI SÍ lo aplica en caliente. Revalida la familia
+    /// contra el fontdb REAL (`cx.text_system().all_font_names()`, mismo
+    /// criterio que `NorteGui::new`/`validated_family`) — una familia que ya
+    /// no exporta ese nombre sustituye al default en silencio (sin banner:
+    /// el status de una línea de la vista ya confirma "guardado", un
+    /// segundo aviso de sustitución sería ruido para un caso raro).
+    fn apply_fonts_live(
+        &mut self,
+        cfg: &norte_frontend::config::FrontendConfig,
+        cx: &mut Context<Self>,
+    ) {
+        let known = cx.text_system().all_font_names();
+        let (ui, _) = validated_family(cfg.common.ui_font.as_deref(), &known, ".SystemUIFont");
+        let (mono, _) =
+            validated_family(cfg.common.ui_mono_font.as_deref(), &known, "JetBrains Mono");
+        self.fonts = FontSet::resolve(&ui, &mono, cfg.common.ui_font_size);
+    }
+
+    /// Reemplaza `resolver`/`viewer_resolver` con los efectivos frescos
+    /// (S4, tras `keymap.preset` con OK): `fresh_keymap` ya viene calculado
+    /// desde el hilo de fondo (`commit_settings_write`, evita releer
+    /// `keymap.toml` en el hilo de UI). Un preset roto/capa de usuario
+    /// inválida en el momento del commit CONSERVA el resolver vigente
+    /// (nunca deja la GUI sin bindings) y devuelve `false`.
+    fn apply_keymap_live(
+        &mut self,
+        fresh_keymap: Option<
+            Result<
+                (
+                    norte_frontend::keymap::Effective,
+                    norte_frontend::keymap::Effective,
+                ),
+                norte_frontend::keymap::KeymapError,
+            >,
+        >,
+    ) -> bool {
+        match fresh_keymap {
+            Some(Ok((browse, viewer))) => {
+                self.resolver = norte_frontend::keymap::Resolver::new(browse);
+                self.viewer_resolver = norte_frontend::keymap::Resolver::new(viewer);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Fija el status de la vista de ajustes y refresca sus filas desde
+    /// `cfg_snapshot` VIGENTE (que `apply_settings_write_result` ya
+    /// actualizó cuando hubo config fresca) — mismo criterio que
+    /// `SettingsState::refresh`: conserva la query/cursor/edición del
+    /// usuario, solo recalcula los VALORES. No-op si la vista ya se cerró
+    /// mientras la escritura estaba en vuelo (el usuario pulsó Esc antes de
+    /// que la respuesta async llegara).
+    fn set_settings_status(&mut self, message: String, error: bool) {
+        if let Some(view) = &mut self.settings_view {
+            view.status = Some(settings_view::SettingsStatus { message, error });
+            view.state
+                .refresh(norte_frontend::settings::build_rows(&self.cfg_snapshot));
+        }
     }
 
     /// Abre el visor sobre la entrada seleccionada si es un archivo (F3 sobre
@@ -1032,7 +1368,7 @@ impl NorteGui {
         if let Some(c) = ch
             && c.is_alphanumeric()
         {
-            self.panes[f].quick_start(Mode::Filter);
+            self.panes[f].quick_start(self.quick_mode);
             self.query[f].clear();
             self.panes[f].quick_char(c);
             self.query[f].push(c);
@@ -1090,6 +1426,15 @@ impl NorteGui {
                 }
                 ModalOutcome::Quit => cx.quit(),
             }
+            cx.notify();
+            return;
+        }
+
+        // Vista de ajustes abierta (F11, S4): captura fija, mismo criterio de
+        // prioridad que el modal — gana incluso sobre el visor (ver doc del
+        // campo `settings_view`).
+        if self.settings_view.is_some() {
+            self.on_settings_key(ks, cx);
             cx.notify();
             return;
         }
@@ -1687,6 +2032,199 @@ impl NorteGui {
             strip = strip.child(row);
         }
         strip
+    }
+
+    /// Pinta la vista de ajustes a pantalla COMPLETA (`app.settings`, F11,
+    /// S4): cabecera con la búsqueda/buffer de edición, la lista agrupada
+    /// (General/Plugins, mismo criterio de cabeceras intercaladas que
+    /// `draw_settings` en la TUI — `ui.rs`) y dos líneas de pie (descripción
+    /// de la fila seleccionada + status/hint). Nombre/descripción son texto
+    /// PROPIO del binario (Fluent, jamás de un tercero) — no hace falta
+    /// `display_name` en las filas, solo en la query/buffer (SÍ son tecleo
+    /// del usuario). Sin `uniform_list`: el catálogo es de un puñado de
+    /// filas (issue #87 no aplica, mismo criterio que el visor).
+    fn render_settings(&self, chrome: &ChromeColors, cx: &mut Context<Self>) -> impl IntoElement {
+        // INVARIANTE: solo se llama desde `render` cuando `self.settings_view`
+        // es `Some` (comprobado justo antes de esta llamada).
+        let view = self.settings_view.as_ref().expect(
+            "render_settings: self.settings_view es Some (invariante del caller, ver `render`)",
+        );
+        let s = &view.state;
+
+        let header_text = if let Some(buf) = s.edit_buffer() {
+            let row_name = s
+                .visible()
+                .get(s.cursor())
+                .map(|&real| s.rows()[real].name.as_str())
+                .unwrap_or_default();
+            let (buf_txt, _) = norte_frontend::display_name(buf.as_bytes());
+            format!("{row_name}: {buf_txt}_")
+        } else {
+            let (q, _) = norte_frontend::display_name(s.query_display().as_bytes());
+            format!("⌕ {q}")
+        };
+
+        let mut body = div()
+            .id("settings-rows")
+            .role(gpui::Role::List)
+            .aria_label(norte_i18n::t("settings-title"))
+            .flex_1()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .font(self.fonts.ui.clone());
+        if s.visible().is_empty() {
+            body = body.child(div().px(px(sp::S)).child(SharedString::from("—")));
+        } else {
+            let mut general_header = false;
+            let mut plugins_header = false;
+            for (pos, &real) in s.visible().iter().enumerate() {
+                let row = &s.rows()[real];
+                if row.is_plugins_note() {
+                    if !plugins_header {
+                        body = body.child(settings_section_header(
+                            norte_i18n::t("settings-section-plugins"),
+                            chrome,
+                        ));
+                        plugins_header = true;
+                    }
+                } else if !general_header {
+                    body = body.child(settings_section_header(
+                        norte_i18n::t("settings-section-general"),
+                        chrome,
+                    ));
+                    general_header = true;
+                }
+                let selected = pos == s.cursor();
+                body = body.child(self.render_settings_row(pos, row, selected, chrome, cx));
+            }
+        }
+
+        let desc = s.selected_desc().unwrap_or_default();
+        let hint = if s.is_editing() {
+            norte_i18n::t("settings-edit-hint")
+        } else {
+            norte_i18n::t("settings-hint-gui")
+        };
+        let status = view.status.as_ref();
+
+        div()
+            .id("settings-view")
+            .role(gpui::Role::Document)
+            .aria_label(norte_i18n::t("settings-title"))
+            .flex_1()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .border_2()
+            .border_color(chrome.border_focus)
+            .bg(chrome.pane_bg_focus)
+            .child(
+                div()
+                    .px(px(sp::S))
+                    .py(px(sp::XS))
+                    .bg(chrome.header_bg)
+                    .text_color(chrome.header_fg)
+                    .truncate()
+                    .child(SharedString::from(format!(
+                        "{}  {header_text}",
+                        norte_i18n::t("settings-title")
+                    ))),
+            )
+            .child(body)
+            .child(
+                div()
+                    .px(px(sp::S))
+                    .py(px(1.0)) // sub-XS: acento fino de una línea, fuera de la escala a propósito
+                    .truncate()
+                    .child(SharedString::from(desc.to_owned())),
+            )
+            .child(
+                div()
+                    .px(px(sp::S))
+                    .py(px(1.0)) // sub-XS: acento fino de una línea, fuera de la escala a propósito
+                    .bg(chrome.quick_bg)
+                    .text_color(if status.is_some_and(|st| st.error) {
+                        chrome.err_fg
+                    } else {
+                        chrome.quick_fg
+                    })
+                    .truncate()
+                    .child(SharedString::from(
+                        status.map_or(hint, |st| st.message.clone()),
+                    )),
+            )
+    }
+
+    /// Pinta UNA fila de la vista de ajustes: nombre (columna fija) + valor
+    /// mono (flex, con el aviso "requiere reinicio" pegado si
+    /// `settings_view::gui_applies_live` es `false` para su id) para las
+    /// filas General; solo el nombre para la nota informativa de Plugins.
+    /// Mismo idioma visual que `render_row` (hover/selección/redondeo) —
+    /// click fija el cursor en `pos` y activa (`on_settings_row_click`),
+    /// mismo criterio uniforme para TODAS las filas: sobre la nota de
+    /// Plugins `activate` ya es un no-op seguro (`SettingsState::activate`).
+    fn render_settings_row(
+        &self,
+        pos: usize,
+        row: &norte_frontend::settings::Row,
+        selected: bool,
+        chrome: &ChromeColors,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut value_text = row.value.clone();
+        if let Some(id) = row.id()
+            && !settings_view::gui_applies_live(id)
+        {
+            value_text = format!(
+                "{value_text}  ({})",
+                norte_i18n::t("settings-restart-badge")
+            );
+        }
+
+        let mut r = div()
+            .id(format!("settings-row-{pos}"))
+            .role(gpui::Role::ListItem)
+            .aria_label(row.name.clone())
+            .aria_selected(selected)
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(sp::S))
+            .px(px(sp::S))
+            .py(px(1.0)) // sub-XS: acento fino de una línea, fuera de la escala a propósito
+            .rounded(px(sp::RADIUS_ROW))
+            .cursor_pointer()
+            .child(
+                div()
+                    .w(px(240.0))
+                    .truncate()
+                    .child(SharedString::from(row.name.clone())),
+            );
+        if !row.is_plugins_note() {
+            r = r.child(
+                div()
+                    .flex_1()
+                    .truncate()
+                    .font(self.fonts.mono.clone())
+                    .child(SharedString::from(value_text)),
+            );
+        }
+        if selected {
+            r = r.bg(chrome.sel_bg);
+            if let Some(fg) = chrome.sel_fg {
+                r = r.text_color(fg);
+            }
+        } else {
+            r = r.hover(|s| s.bg(chrome.hover_bg));
+        }
+        r.on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                this.on_settings_row_click(pos, cx);
+            }),
+        )
+        .into_any_element()
     }
 
     /// Pinta el visor a pantalla COMPLETA (F3): cabecera (path saneado +
@@ -2315,6 +2853,17 @@ fn apply_viewer_command(v: &mut norte_frontend::viewer::Viewer, cmd: &str) -> bo
     true
 }
 
+/// Cabecera de sección de la vista de ajustes (`render_settings`): "General"
+/// / "Plugins" intercaladas entre las filas, mismo criterio visual que
+/// `draw_settings` en la TUI (`ui.rs`).
+fn settings_section_header(text: String, chrome: &ChromeColors) -> impl IntoElement {
+    div()
+        .px(px(sp::S))
+        .py(px(1.0)) // sub-XS: acento fino de una línea, fuera de la escala a propósito
+        .text_color(chrome.header_fg)
+        .child(SharedString::from(text))
+}
+
 /// Barra de estado del visor (GUI-e T1: por Fluent, UNIFICADA con
 /// `norte_tui::viewer::status` — mismas claves `viewer-*`/`eol-*` de
 /// `norte-i18n`). Compone desde los getters del `Viewer` core (encoding/
@@ -2756,6 +3305,17 @@ impl FontSet {
 /// `fallbacks` (es una cadena sobre las CARAS de la familia primaria) y
 /// caminaría su pila global en su lugar, que es exactamente el hallazgo
 /// CRÍTICO que este fix cierra.
+/// An empty [`norte_frontend::config::FrontendConfig`] (S4): the fallback
+/// for `NorteGui::cfg_snapshot` when startup's `loaded` was `Err`. Safe to
+/// `expect` — an EMPTY `Layers` never touches the filesystem, so
+/// `norte_frontend::config::load` cannot fail on it (the same invariant
+/// `norte-frontend`'s own tests rely on for their `cfg_vacia()` fixture,
+/// e.g. `settings::tests::cfg_vacia`).
+fn empty_frontend_config() -> norte_frontend::config::FrontendConfig {
+    norte_frontend::config::load(&norte_config::Layers { dirs: Vec::new() })
+        .expect("Layers vacío nunca toca el sistema de ficheros")
+}
+
 fn family_with_fallback(family: &str, default: &'static str) -> gpui::Font {
     let mut font = gpui::font(family);
     if family != default {
@@ -2970,10 +3530,13 @@ impl Render for NorteGui {
             root = root.child(banner);
         }
 
-        // Visor (F3) a pantalla completa, el estado «abriendo…» mientras
-        // llega, o el dual-pane: pantallas mutuamente excluyentes (ver
-        // `on_key`, que enruta al visor primero cuando ya está abierto).
-        if self.viewer.is_some() {
+        // Vista de ajustes (F11, S4) a pantalla completa, visor (F3), el
+        // estado «abriendo…» mientras llega, o el dual-pane: pantallas
+        // mutuamente excluyentes (ver `on_key`, que las enruta con la misma
+        // prioridad: ajustes > visor > dual-pane).
+        if self.settings_view.is_some() {
+            root = root.child(self.render_settings(&chrome, cx));
+        } else if self.viewer.is_some() {
             root = root.child(self.render_viewer(window, &chrome, cx));
         } else if self.viewer_loading {
             root = root.child(
@@ -3002,12 +3565,19 @@ impl Render for NorteGui {
         // (`pending()` no vacío), pinta al pie los chords tecleados +«…». El
         // preset orthodox no trae secuencias, así que esto se ejerce con un
         // `keymap.toml` de usuario que ligue una (p. ej. `g g`).
+        // La vista de ajustes no tiene un `Resolver` de secuencias (edita
+        // tecla a tecla, `settings_view::on_key`) — sin indicador aquí
+        // mientras está abierta.
         let active_resolver = if self.viewer.is_some() {
             &self.viewer_resolver
         } else {
             &self.resolver
         };
-        let pending = active_resolver.pending();
+        let pending = if self.settings_view.is_some() {
+            &[][..]
+        } else {
+            active_resolver.pending()
+        };
         if !pending.is_empty() {
             root = root.child(
                 div()

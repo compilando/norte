@@ -18,6 +18,11 @@ serde = { workspace = true, features = ["derive"] }
 schemars = { workspace = true, features = ["derive"], optional = true }
 thiserror.workspace = true
 toml.workspace = true
+# `SettingsState`/`PendingWrite` (S4 hoist, `settings.rs`): `toml_edit::Value`
+# is `norte_config::persist_set`'s typed value — the settings editor builds
+# it directly so BOTH frontends write the exact same wire shape without a
+# round-trip through a generic string.
+toml_edit.workspace = true
 # Settings registry (S2, `settings.rs`): cada `SettingDef` resuelve un par de
 # claves Fluent (`setting-<id>-name`/`-desc`) — el mismo crate que YA usan
 # ambos frontends para localizar el resto de la UI, aquí en su capa
