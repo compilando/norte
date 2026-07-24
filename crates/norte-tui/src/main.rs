@@ -20,12 +20,13 @@ use norte_proto::DeleteMode;
 use norte_proto::methods::{FsSearchParams, SearchHits};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{
-    App, DialogOutcome, ExtensionManager, Help, KeymapsError, Modal, NavPopupKind, Pane,
-    PickerAction, SearchDialog, SearchState, TransferKind, config_error_category, detail_for_bar,
-    dialog_action, error_category, error_message, io_error_category, keymaps_error_category,
-    theme_error_category, trust_lua_key,
+    ALLOW_EXTENSIONS, ALLOW_NAV_HOTLIST, ALLOW_PICKER, App, DialogOutcome, ExtensionManager, Help,
+    KeymapsError, Modal, NavPopupKind, Pane, PickerAction, SearchDialog, SearchState, TransferKind,
+    config_error_category, detail_for_bar, dialog_action, error_category, error_message,
+    io_error_category, keymaps_error_category, theme_error_category, trust_lua_key,
 };
 use norte_tui::config::{self, Layers, WatchMode};
+use norte_tui::hints::DialogHints;
 use norte_tui::keymap::{
     COMMANDS, DIALOG_COMMANDS, Effective, Resolution, Resolver, Screen, chord_from_crossterm,
     presets,
@@ -270,6 +271,10 @@ async fn main() -> Result<()> {
     // Copia de la hotlist en el App (spec 2026-07-18): la fuente del popup
     // `Ctrl+D`; se refresca en cada hot-reload OK (`reload_config`).
     app.hotlist = cfg.common.hotlist.clone();
+    // Hints de pie de página de los overlays (H1 T3, #24): PRECOMPUTADOS del
+    // efectivo `dialog` ANTES de que se mueva al `Resolver` de abajo — igual
+    // que `help_lines`, se reconstruyen en cada hot-reload OK.
+    app.dialog_hints = DialogHints::build(&dialog_eff);
     // Openers declarativos (#28): fuente de `pane.open` (F4).
     app.openers = cfg.openers.clone();
     // Canales del modo daemon (None en embebido): tasks de otros frontends
@@ -1040,12 +1045,18 @@ async fn on_theme_picker_key(
         }
         Resolution::Reset => return,
     };
+    // H1 T3: el MISMO allowlist que consume el hint generado
+    // (`hints::DialogHints::build`) — una sola fuente para dispatch y
+    // footer. El match sigue siendo exhaustivo por defensa en profundidad.
+    if !ALLOW_PICKER.contains(&cmd.as_str()) {
+        return; // fuera del allowlist de este overlay: inerte
+    }
     let action = match cmd.as_str() {
         "dialog.up" => PickerAction::Up,
         "dialog.down" => PickerAction::Down,
         "dialog.confirm" => PickerAction::Confirm,
         "dialog.cancel" => PickerAction::Cancel,
-        _ => return, // fuera del allowlist de este overlay: inerte
+        _ => return, // ya filtrado por ALLOW_PICKER; inalcanzable en la práctica
     };
     // El nombre a persistir se toma ANTES de que Confirm cierre el popup.
     let confirmed = (action == PickerAction::Confirm)
@@ -1121,6 +1132,11 @@ async fn on_extensions_key(
         }
         Resolution::Reset => return,
     };
+    // H1 T3: el MISMO allowlist que consume el hint generado
+    // (`hints::DialogHints::build`) — una sola fuente para dispatch y footer.
+    if !ALLOW_EXTENSIONS.contains(&cmd.as_str()) {
+        return; // fuera del allowlist de este overlay: inerte
+    }
     let Some(mgr) = &mut app.extensions else {
         return;
     };
@@ -1224,6 +1240,13 @@ async fn on_nav_popup_key(
         }
         Resolution::Reset => return Cd::Cancelled,
     };
+    // H1 T3: el MISMO allowlist que consume el hint generado
+    // (`hints::DialogHints::build`, campo `nav_list`) — una sola fuente
+    // para dispatch y footer. Cubre AMBOS kinds (History es un subconjunto:
+    // `add`/`remove` los filtra el guard `kind == Hotlist` de más abajo).
+    if !ALLOW_NAV_HOTLIST.contains(&cmd.as_str()) {
+        return Cd::Cancelled; // fuera del allowlist de este overlay: inerte
+    }
     match cmd.as_str() {
         "dialog.up" => {
             app.nav_popup_input(PickerAction::Up);
@@ -1369,6 +1392,10 @@ async fn reload_config(
                 // La ayuda refleja el keymap VIGENTE: se reconstruye aquí.
                 *help_lines = norte_tui::help::build(&browse, &viewer);
                 app.help = None;
+                // Hints de los overlays (H1 T3, #24): reconstruidos del
+                // efectivo `dialog` VIGENTE, ANTES de que se mueva al
+                // resolver de abajo — mismo criterio que help_lines.
+                app.dialog_hints = DialogHints::build(&dialog);
                 *resolver = Resolver::new(browse);
                 *viewer_resolver = Resolver::new(viewer);
                 *dialog_resolver = Resolver::new(dialog);

@@ -10,7 +10,7 @@ expression: render(&app)
 "│! �.dat  ┌Colisión──────────────────────────────────────────────────┐         │"
 "│         │el destino ya existe:                                     │         │"
 "│         │⟨file⟩/otro/notas.txt                                     │         │"
-"│         │[o]sobrescribir  [s]altar  [r]enombrar  [n]más nuevo  [esc│         │"
+"│         │[esc] cancelar [o] sobrescribir [s] saltar [r] renombrar [│         │"
 "│         │                                                          │         │"
 "│         └──────────────────────────────────────────────────────────┘         │"
 "│                                      ││                                      │"

@@ -9,6 +9,15 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Generated dialog footer hints (#24):** the confirm/collision/agent
+  approval/host-key-trust modals and the theme picker, extension manager, and
+  favorites popup now show a footer built from the *effective* `dialog`
+  keymap — the join of the overlay's supported commands, the keys actually
+  bound (preset plus any user layer), and a short label. Rebinding a dialog
+  key can no longer desync its own hint: the collision dialog's "keep newer"
+  moved from `n` to `w` (freeing `n` for a consistent deny/cancel-ish role)
+  and is now discoverable in the footer instead of hidden in muscle memory.
+
 - **Content-match preview in live search (#81):** with a content search
   active, the status bar shows the line number and a sanitised preview of the
   match for the hit under the cursor.

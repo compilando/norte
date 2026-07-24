@@ -9,18 +9,14 @@ modal-copy-title = Copy
 modal-move-title = Move
 modal-collision-title = Collision
 modal-collision-body = destination already exists:
-modal-collision-keys = [o]verwrite  [s]kip  [r]ename  [n]ewer  [esc]cancel
-modal-confirm-keys = [y/enter] go ahead   [n/esc] cancel
 modal-approval-title = Agent approval
 modal-approval-body = agent "{ $session }" requests { $op }:
 modal-approval-path = { $badge }path { $n }: { $path }
-modal-approval-keys = [y] approve   [n/esc] deny
 modal-trust-host-title = Unknown host key
 modal-trust-host-host = { $badge }host: { $host }
 modal-trust-host-algo = { $badge }algorithm: { $algo }
 modal-trust-host-fp = { $badge }fingerprint: { $fingerprint }
 modal-trust-host-note = compare it out of band before trusting.
-modal-trust-host-keys = [y] trust and continue   [n/esc] cancel
 modal-lua-trust-title = Run project init.lua?
 modal-lua-trust-body = { $path } (sha256 { $hash }) will run WITH YOUR PERMISSIONS. A cloned repo's script can do anything you can. y = trust and run · n/Esc = deny (remembered until the file changes)
 
@@ -169,15 +165,12 @@ help-cmd-app-help = this help
 help-cmd-app-theme = choose theme
 help-cmd-app-extensions = extension manager
 theme-picker-title = Theme
-theme-picker-hint = ↑↓ choose · Enter apply · Esc cancel
 ext-title = Extensions
-ext-hint = [a]pprove [e]nable [↑↓] move [esc] close
 ext-empty = no extensions installed
 ext-unapproved = not approved
 history-title = History
 history-empty = no history yet
 hotlist-title = Favorites
-hotlist-keys = [enter] go   [a] add current   [d] delete   [esc] close
 hotlist-empty = empty — 'a' adds the current directory
 hotlist-name-prompt = name:
 hotlist-invalid = invalid path
@@ -287,3 +280,22 @@ gui-banner-config-io = configuration { $path }: { $error }
 gui-banner-config-parse = configuration { $path }: { $detail }
 gui-banner-effects-key-skipped = theme effects: skipped { $key }
 gui-banner-font-unknown = font { $family } not found; using the default
+
+# --- Dialog footer hints (H1 T3, closes #24) — generated: supported
+# dialog.* commands × the effective dialog keymap × these labels. NEVER a
+# hand-written footer string again: a rebind can't desync it.
+dialog-cmd-confirm = confirm
+dialog-cmd-cancel = cancel
+dialog-cmd-approve = approve
+dialog-cmd-deny = deny
+dialog-cmd-overwrite = overwrite
+dialog-cmd-skip = skip
+dialog-cmd-rename = rename
+dialog-cmd-newer = keep newer
+dialog-cmd-up = up
+dialog-cmd-down = down
+dialog-cmd-page-up = page up
+dialog-cmd-page-down = page down
+dialog-cmd-add = add
+dialog-cmd-toggle-enabled = enable/disable
+dialog-cmd-remove = remove

@@ -31,6 +31,27 @@ fn render(app: &App) -> String {
     terminal.backend().to_string()
 }
 
+/// H1 T3 (#24): los hints de los overlays ya NO son estáticos — se
+/// precomputan del efectivo `dialog` vigente (`main.rs`, `DialogHints::
+/// build`). Los tests de render construyen `App` directamente (sin pasar
+/// por `main`), así que replican el MISMO cómputo con el preset `orthodox`
+/// real: el snapshot congela lo que el usuario vería de verdad, no una
+/// cadena vacía.
+fn default_dialog_hints() -> norte_tui::hints::DialogHints {
+    use norte_tui::keymap::{COMMANDS, DIALOG_COMMANDS, Effective, Screen, presets};
+    let (_, preset) = presets()
+        .into_iter()
+        .find(|(n, _)| *n == "orthodox")
+        .expect("preset orthodox");
+    let known: Vec<&str> = COMMANDS
+        .iter()
+        .copied()
+        .chain(DIALOG_COMMANDS.iter().copied())
+        .collect();
+    let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog).expect("dialog efectivo");
+    norte_tui::hints::DialogHints::build(&eff)
+}
+
 fn app_base() -> App {
     let izq = vp("file:///casa");
     let der = vp("file:///otro");
@@ -55,6 +76,7 @@ fn app_base() -> App {
         ),
     );
     app.focused_mut().move_down(1);
+    app.dialog_hints = default_dialog_hints();
     app
 }
 

@@ -58,19 +58,25 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     draw_tasks(frame, rows[1], app);
     draw_status(frame, rows[2], app);
     if let Some(modal) = &app.modal {
-        draw_modal(frame, modal, &app.theme, app.focused().name_encoding());
+        draw_modal(
+            frame,
+            modal,
+            &app.theme,
+            app.focused().name_encoding(),
+            &app.dialog_hints,
+        );
     }
     if let Some(help) = &app.help {
         draw_help(frame, help, &app.theme);
     }
     if let Some(picker) = &app.theme_picker {
-        draw_theme_picker(frame, picker, &app.theme);
+        draw_theme_picker(frame, picker, &app.theme, &app.dialog_hints.picker);
     }
     if let Some(mgr) = &app.extensions {
-        draw_extensions(frame, mgr, &app.theme);
+        draw_extensions(frame, mgr, &app.theme, &app.dialog_hints.extensions);
     }
     if let Some(popup) = &app.nav_popup {
-        draw_nav_popup(frame, popup, &app.theme);
+        draw_nav_popup(frame, popup, &app.theme, &app.dialog_hints.nav_list);
     }
     if let Some(dialog) = &app.search_dialog {
         draw_search_dialog(
@@ -139,8 +145,15 @@ fn draw_search_dialog(
 /// de [`crate::app::App::open_nav_popup`] — aquí solo se pintan. El footer
 /// de teclas solo aplica a hotlist (`a`/`d`); con el input de nombre activo
 /// lo sustituye la línea `nombre: …` (el input pasa por el MISMO mask que
-/// la query del quick search: un paste hostil no pinta bidi crudo).
-fn draw_nav_popup(frame: &mut Frame<'_>, popup: &crate::app::NavPopup, theme: &TuiTheme) {
+/// la query del quick search: un paste hostil no pinta bidi crudo). `hint`
+/// (H1 T3, #24) es el hint GENERADO (`app.dialog_hints.nav_list`) — el
+/// historial no pinta footer, igual que antes de H1.
+fn draw_nav_popup(
+    frame: &mut Frame<'_>,
+    popup: &crate::app::NavPopup,
+    theme: &TuiTheme,
+    hint: &str,
+) {
     use crate::app::NavPopupKind;
     let title = match popup.kind {
         NavPopupKind::History => t("history-title"),
@@ -158,7 +171,7 @@ fn draw_nav_popup(frame: &mut Frame<'_>, popup: &crate::app::NavPopup, theme: &T
             t("hotlist-name-prompt")
         )))
     } else if popup.kind == NavPopupKind::Hotlist {
-        Some(Line::raw(format!(" {} ", t("hotlist-keys"))))
+        Some(Line::raw(format!(" {hint} ")))
     } else {
         None
     };
@@ -216,8 +229,14 @@ fn draw_nav_popup(frame: &mut Frame<'_>, popup: &crate::app::NavPopup, theme: &T
 /// son texto LIBRE de un tercero y esto es superficie de decisión de seguridad
 /// (aprobar) — se pasan por [`display_name`] (mismo enmascarado de
 /// controles/bidi/invisibles que los panes) antes de pintar. El id ya está
-/// charset-validado en el core; name/publisher no.
-fn draw_extensions(frame: &mut Frame<'_>, mgr: &crate::app::ExtensionManager, theme: &TuiTheme) {
+/// charset-validado en el core; name/publisher no. `hint` (H1 T3, #24) es
+/// el hint GENERADO (`app.dialog_hints.extensions`).
+fn draw_extensions(
+    frame: &mut Frame<'_>,
+    mgr: &crate::app::ExtensionManager,
+    theme: &TuiTheme,
+    hint: &str,
+) {
     let area = centered(
         frame.area(),
         frame.area().width.saturating_sub(6).clamp(24, 80),
@@ -250,7 +269,7 @@ fn draw_extensions(frame: &mut Frame<'_>, mgr: &crate::app::ExtensionManager, th
         .borders(Borders::ALL)
         .title(format!(" {} ", t("ext-title")))
         .title_style(theme.role(Role::Title))
-        .title_bottom(Line::raw(format!(" {} ", t("ext-hint"))))
+        .title_bottom(Line::raw(format!(" {hint} ")))
         .border_style(theme.role(Role::ModalBorder));
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
@@ -291,8 +310,14 @@ fn plugin_line<'a>(
 }
 
 /// Popup selector de tema: lista de presets con el vigente resaltado (ADR
-/// 0020). El preview en vivo lo hace el bucle de eventos; aquí solo se pinta.
-fn draw_theme_picker(frame: &mut Frame<'_>, picker: &crate::app::ThemePicker, theme: &TuiTheme) {
+/// 0020). El preview en vivo lo hace el bucle de eventos; aquí solo se
+/// pinta. `hint` (H1 T3, #24) es el hint GENERADO (`app.dialog_hints.picker`).
+fn draw_theme_picker(
+    frame: &mut Frame<'_>,
+    picker: &crate::app::ThemePicker,
+    theme: &TuiTheme,
+    hint: &str,
+) {
     let rows = u16::try_from(picker.names.len()).unwrap_or(8) + 2;
     let area = centered(frame.area(), 34, rows.min(frame.area().height.max(3)));
     frame.render_widget(ratatui::widgets::Clear, area);
@@ -305,7 +330,7 @@ fn draw_theme_picker(frame: &mut Frame<'_>, picker: &crate::app::ThemePicker, th
         .borders(Borders::ALL)
         .title(format!(" {} ", t("theme-picker-title")))
         .title_style(theme.role(Role::Title))
-        .title_bottom(Line::raw(format!(" {} ", t("theme-picker-hint"))))
+        .title_bottom(Line::raw(format!(" {hint} ")))
         .border_style(theme.role(Role::ModalBorder));
     let list = List::new(items)
         .block(block)
@@ -473,12 +498,15 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
 /// foco y un modal abierto congela el foco — creación ≡ draw). Los ASYNC
 /// (colisión) llevan su enc capturado al lanzar (`RetrySpec`, #98/M1). Los
 /// paths de agentes (`ApproveAgentOp`) JAMÁS se reinterpretan: otra
-/// frontera de confianza (van por `display_name` crudo a propósito).
+/// frontera de confianza (van por `display_name` crudo a propósito). `hints`
+/// (H1 T3, #24) trae los pies de página GENERADOS de cada modal — uno por
+/// campo, ya resueltos del efectivo `dialog` vigente.
 fn draw_modal(
     frame: &mut Frame<'_>,
     modal: &crate::app::Modal,
     theme: &TuiTheme,
     reinterpret: Option<norte_encoding::NameEncoding>,
+    hints: &crate::hints::DialogHints,
 ) {
     use crate::app::{Modal, TransferKind};
     let (titulo, cuerpo): (String, String) = match modal {
@@ -498,7 +526,7 @@ fn draw_modal(
                 } else {
                     t("modal-trash-note")
                 },
-                t("modal-confirm-keys")
+                hints.confirm
             ),
         ),
         Modal::ConfirmTransfer { kind, from, to } => (
@@ -512,7 +540,7 @@ fn draw_modal(
 {}",
                 norte_frontend::path_display_with(from, reinterpret).0,
                 norte_frontend::path_display_with(to, reinterpret).0,
-                t("modal-confirm-keys")
+                hints.confirm
             ),
         ),
         // #98/M1: la colisión llega ASYNC — usa el enc capturado al LANZAR
@@ -525,17 +553,17 @@ fn draw_modal(
 {}",
                 t("modal-collision-body"),
                 norte_frontend::path_display_with(&retry.to, retry.name_encoding).0,
-                t("modal-collision-keys")
+                hints.collision
             ),
         ),
-        Modal::ApproveAgentOp { req } => approval_modal_text(req),
+        Modal::ApproveAgentOp { req } => approval_modal_text(req, &hints.approval),
         Modal::TrustHostKey {
             host,
             port,
             algo,
             fingerprint,
             ..
-        } => trust_host_modal_text(host, *port, algo, fingerprint),
+        } => trust_host_modal_text(host, *port, algo, fingerprint, &hints.trust_host),
         // TOFU Lua (M4): `path` viene YA saneado por el constructor del
         // modal (`detail_for_bar`); el cuerpo es un solo mensaje largo y el
         // Paragraph de este modal lleva wrap (abajo).
@@ -609,7 +637,10 @@ fn session_bytes(req: &norte_proto::methods::PolicyApprovalRequired) -> &[u8] {
 /// joiner in-band que un nombre pueda imitar) y elipsis media (un `from`
 /// kilométrico no expulsa el destino de la caja); el enmascarado se MARCA con
 /// el badge (spec §6).
-fn approval_modal_text(req: &norte_proto::methods::PolicyApprovalRequired) -> (String, String) {
+fn approval_modal_text(
+    req: &norte_proto::methods::PolicyApprovalRequired,
+    hint: &str,
+) -> (String, String) {
     let session = clamp_chars(&display_name(session_bytes(req)).0, 40);
     let op = clamp_chars(&display_name(req.op.as_bytes()).0, 16);
     let mut lineas = vec![ta(
@@ -627,7 +658,7 @@ fn approval_modal_text(req: &norte_proto::methods::PolicyApprovalRequired) -> (S
             ],
         ));
     }
-    lineas.push(t("modal-approval-keys"));
+    lineas.push(hint.to_owned());
     (t("modal-approval-title"), lineas.join("\n"))
 }
 
@@ -643,6 +674,7 @@ fn trust_host_modal_text(
     port: Option<u16>,
     algo: &str,
     fingerprint: &str,
+    hint: &str,
 ) -> (String, String) {
     let (host_txt, host_hostil) = display_name(host.as_bytes());
     let hostport = match port {
@@ -675,7 +707,7 @@ fn trust_host_modal_text(
             ],
         ),
         t("modal-trust-host-note"),
-        t("modal-trust-host-keys"),
+        hint.to_owned(),
     ];
     (t("modal-trust-host-title"), lineas.join("\n"))
 }

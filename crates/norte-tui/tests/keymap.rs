@@ -504,6 +504,24 @@ fn todo_comando_tiene_ayuda_traducida() {
     }
 }
 
+/// H1 T3 (#24): TODO comando de [`DIALOG_COMMANDS`] tiene etiqueta CORTA en
+/// AMBOS locales — la fuente de los hints generados de los overlays
+/// (`dialog_hints`/`DialogHints`). Mismo mangling que `help_id` (puntos→
+/// guiones) pero para el sufijo tras `dialog.`, vía `dialog_hint_id`: un
+/// comando nuevo en `DIALOG_COMMANDS` sin su `dialog-cmd-*` rompe aquí,
+/// jamás en silencio en el footer.
+#[test]
+fn todo_dialog_command_tiene_etiqueta_traducida() {
+    use norte_tui::keymap::{DIALOG_COMMANDS, dialog_hint_id};
+    for cmd in DIALOG_COMMANDS {
+        let id = dialog_hint_id(cmd);
+        for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
+            let texto = norte_i18n::t_in(lang, &id);
+            assert_ne!(texto, id, "{id}: sin traducción en {lang:?}");
+        }
+    }
+}
+
 /// La ayuda se construye del keymap EFECTIVO: los bindings expuestos
 /// reflejan preset + capas EN ORDEN de precedencia, y un binding
 /// sombreado aparece UNA vez con el comando que gana (lo que la tecla

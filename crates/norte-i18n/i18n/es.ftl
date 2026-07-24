@@ -9,18 +9,14 @@ modal-copy-title = Copiar
 modal-move-title = Mover
 modal-collision-title = Colisión
 modal-collision-body = el destino ya existe:
-modal-collision-keys = [o]sobrescribir  [s]altar  [r]enombrar  [n]más nuevo  [esc]cancelar
-modal-confirm-keys = [y/enter] adelante   [n/esc] cancelar
 modal-approval-title = Aprobación de agente
 modal-approval-body = el agente "{ $session }" pide { $op }:
 modal-approval-path = { $badge }ruta { $n }: { $path }
-modal-approval-keys = [y] aprobar   [n/esc] denegar
 modal-trust-host-title = Host key desconocida
 modal-trust-host-host = { $badge }host: { $host }
 modal-trust-host-algo = { $badge }algoritmo: { $algo }
 modal-trust-host-fp = { $badge }huella: { $fingerprint }
 modal-trust-host-note = compárala fuera de banda antes de confiar.
-modal-trust-host-keys = [y] confiar y continuar   [n/esc] cancelar
 modal-lua-trust-title = ¿Ejecutar el init.lua del proyecto?
 modal-lua-trust-body = { $path } (sha256 { $hash }) se ejecutará CON TUS PERMISOS. El script de un repo clonado puede hacer todo lo que tú puedas. y = confiar y ejecutar · n/Esc = denegar (se recuerda hasta que el fichero cambie)
 
@@ -169,15 +165,12 @@ help-cmd-app-help = esta ayuda
 help-cmd-app-theme = elegir tema
 help-cmd-app-extensions = gestor de extensiones
 theme-picker-title = Tema
-theme-picker-hint = ↑↓ elegir · Enter aplicar · Esc cancelar
 ext-title = Extensiones
-ext-hint = [a]probar  [e]activar  [↑↓] mover  [esc] cerrar
 ext-empty = no hay extensiones instaladas
 ext-unapproved = sin aprobar
 history-title = Historial
 history-empty = todavía no hay historial
 hotlist-title = Favoritos
-hotlist-keys = [enter] ir   [a] añadir actual   [d] borrar   [esc] cerrar
 hotlist-empty = vacío — 'a' añade el directorio actual
 hotlist-name-prompt = nombre:
 hotlist-invalid = ruta inválida
@@ -287,3 +280,23 @@ gui-banner-config-io = configuración { $path }: { $error }
 gui-banner-config-parse = configuración { $path }: { $detail }
 gui-banner-effects-key-skipped = efectos del tema: se omitió { $key }
 gui-banner-font-unknown = fuente { $family } no encontrada; se usa la de por defecto
+
+# --- Hints de pie de diálogo (H1 T3, cierra #24) — GENERADOS: comandos
+# dialog.* soportados × el keymap dialog EFECTIVO × estas etiquetas. Jamás
+# un string de pie de página escrito a mano otra vez: un rebind no puede
+# desincronizarlo.
+dialog-cmd-confirm = confirmar
+dialog-cmd-cancel = cancelar
+dialog-cmd-approve = aprobar
+dialog-cmd-deny = denegar
+dialog-cmd-overwrite = sobrescribir
+dialog-cmd-skip = saltar
+dialog-cmd-rename = renombrar
+dialog-cmd-newer = más nuevo
+dialog-cmd-up = arriba
+dialog-cmd-down = abajo
+dialog-cmd-page-up = pág arriba
+dialog-cmd-page-down = pág abajo
+dialog-cmd-add = añadir
+dialog-cmd-toggle-enabled = activar/desactivar
+dialog-cmd-remove = borrar

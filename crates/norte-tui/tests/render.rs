@@ -11,6 +11,25 @@ fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("wire válido")
 }
 
+/// H1 T3 (#24): los hints de los overlays se precomputan del efectivo
+/// `dialog` vigente (`main.rs`, `DialogHints::build`). Este test construye
+/// `App` directamente (sin pasar por `main`), así que replica el MISMO
+/// cómputo con el preset `orthodox` real.
+fn default_dialog_hints() -> norte_tui::hints::DialogHints {
+    use norte_tui::keymap::{COMMANDS, DIALOG_COMMANDS, Effective, Screen, presets};
+    let (_, preset) = presets()
+        .into_iter()
+        .find(|(n, _)| *n == "orthodox")
+        .expect("preset orthodox");
+    let known: Vec<&str> = COMMANDS
+        .iter()
+        .copied()
+        .chain(DIALOG_COMMANDS.iter().copied())
+        .collect();
+    let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog).expect("dialog efectivo");
+    norte_tui::hints::DialogHints::build(&eff)
+}
+
 #[test]
 fn frame_pinta_panes_y_badge_no_utf8() {
     let dir = vp("file:///casa");
@@ -126,6 +145,7 @@ fn panel_de_tasks_y_modal_se_pintan() {
         Pane::new(dir.clone(), Vec::new()),
         Pane::new(dir.clone(), Vec::new()),
     );
+    app.dialog_hints = default_dialog_hints();
     app.message = Some("copy: destination exists".to_owned());
     app.modal = Some(Modal::Collision {
         retry: norte_tui::tasks::RetrySpec {

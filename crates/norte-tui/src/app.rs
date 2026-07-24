@@ -498,6 +498,13 @@ pub struct App {
     /// `(programa, argv)`. `dispatch` lo fija tras validar; el run loop —
     /// dueño de la terminal — suspende el TUI, lo ejecuta y restaura.
     pub pending_open: Option<(String, Vec<std::ffi::OsString>)>,
+    /// Hints de pie de página de los overlays de diálogo (H1 T3, #24),
+    /// PRECOMPUTADOS del efectivo `dialog` vigente — igual que `help_lines`
+    /// en `main.rs`, se reconstruyen en el arranque y en cada hot-reload OK
+    /// (`main::build_keymaps` + `DialogHints::build`), ANTES de que el
+    /// efectivo se mueva al `Resolver` compartido. `ui::draw_*` los lee en
+    /// vez de una clave Fluent estática.
+    pub dialog_hints: crate::hints::DialogHints,
 }
 
 /// Qué popup de navegación está abierto (spec 2026-07-18).
@@ -746,6 +753,7 @@ impl App {
             search_dialog: None,
             openers: norte_frontend::openers::OpenersConfig::empty(),
             pending_open: None,
+            dialog_hints: crate::hints::DialogHints::default(),
         }
     }
 
@@ -1194,6 +1202,45 @@ pub const ALLOW_APPROVAL: &[&str] = &["dialog.approve", "dialog.deny", "dialog.c
 /// [`ALLOW_APPROVAL`] — SOLO `approve` confía, `dialog.confirm` excluido a
 /// propósito (Enter jamás confía en una host key sin verificar).
 pub const ALLOW_TRUST_HOST: &[&str] = &["dialog.approve", "dialog.deny", "dialog.cancel"];
+
+/// ALLOWLIST del selector de tema (`on_theme_picker_key`, main.rs): sin
+/// riesgo de seguridad (elegir tema no muta nada fuera del propio popup),
+/// así que `confirm` SÍ dispara (a diferencia de los modales de arriba).
+/// Única lista de este overlay — dispatch (main.rs) y el hint generado
+/// (H1 T3, `hints::DialogHints`) la comparten, jamás una copia.
+pub const ALLOW_PICKER: &[&str] = &[
+    "dialog.up",
+    "dialog.down",
+    "dialog.confirm",
+    "dialog.cancel",
+];
+
+/// ALLOWLIST del gestor de extensiones (`on_extensions_key`, main.rs,
+/// M4-P3): `approve` togglea la aprobación del plugin (decisión 3 del plan
+/// H1 — "aprobar un plugin" reutiliza `dialog.approve`), `toggle-enabled`
+/// lo activa/desactiva. Compartida por dispatch y el hint generado.
+pub const ALLOW_EXTENSIONS: &[&str] = &[
+    "dialog.up",
+    "dialog.down",
+    "dialog.approve",
+    "dialog.toggle-enabled",
+    "dialog.cancel",
+];
+
+/// ALLOWLIST del popup de navegación en modo HOTLIST (`on_nav_popup_key`,
+/// main.rs): `add`/`remove` los filtra el caller a `kind == Hotlist` (el
+/// historial no tiene nada que nombrar ni borrar — mismo criterio que antes
+/// de H1); el hint (H1 T3) solo se pinta para `NavPopupKind::Hotlist`,
+/// igual que el footer estático que sustituye. Compartida por dispatch y
+/// el hint generado.
+pub const ALLOW_NAV_HOTLIST: &[&str] = &[
+    "dialog.up",
+    "dialog.down",
+    "dialog.confirm",
+    "dialog.add",
+    "dialog.remove",
+    "dialog.cancel",
+];
 
 /// Mapea un comando `dialog.*` YA RESUELTO (por el
 /// [`Resolver`](crate::keymap::Resolver) del efectivo `dialog`, H1 #24) al

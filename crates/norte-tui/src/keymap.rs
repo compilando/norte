@@ -123,6 +123,18 @@ pub fn help_id(command: &str) -> String {
     format!("help-cmd-{}", command.replace('.', "-"))
 }
 
+/// Id de Fluent con la etiqueta CORTA de un comando `dialog.*` (`dialog.
+/// page-up` → `dialog-cmd-page-up`), usada por los hints generados de pie
+/// de página (H1 T3, #24). Mismo mangling que [`help_id`] (puntos→guiones)
+/// aplicado al SUFIJO tras `dialog.` — el prefijo no se repite en el id
+/// (evita `dialog-cmd-dialog-page-up`). La suite OBLIGA a que exista en
+/// ambos locales para TODO comando de [`DIALOG_COMMANDS`].
+#[must_use]
+pub fn dialog_hint_id(command: &str) -> String {
+    let suffix = command.strip_prefix("dialog.").unwrap_or(command);
+    format!("dialog-cmd-{}", suffix.replace('.', "-"))
+}
+
 /// Los presets de fábrica, parseados (se validan en tests y al construir
 /// el efectivo). Default del producto: `orthodox` (decisión 2026-07-10).
 ///
@@ -241,6 +253,16 @@ mod tests {
         assert_eq!(
             help_id("pane.delete-permanent"),
             "help-cmd-pane-delete-permanent"
+        );
+    }
+
+    #[test]
+    fn dialog_hint_id_pela_el_prefijo_dialog_punto() {
+        assert_eq!(dialog_hint_id("dialog.confirm"), "dialog-cmd-confirm");
+        assert_eq!(dialog_hint_id("dialog.page-up"), "dialog-cmd-page-up");
+        assert_eq!(
+            dialog_hint_id("dialog.toggle-enabled"),
+            "dialog-cmd-toggle-enabled"
         );
     }
 }
