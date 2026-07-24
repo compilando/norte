@@ -2685,12 +2685,21 @@ async fn dispatch(
             // Salir de la raíz interior de un archivo = el dir que CONTIENE
             // al contenedor (el padre sintáctico sería un compuesto sin
             // marcador: malformado, ADR 0018).
-            let dir = app.focused().dir();
-            let parent = match dir.archive_split() {
-                Ok(Some(aref)) if aref.inner.is_empty() => aref.outer.parent(),
-                _ => dir.parent(),
+            let dir = app.focused().dir().clone();
+            // Foco pendiente (spec 2026-07-24 §S1): el hijo del que
+            // venimos, para seleccionarlo en el listado del padre. Al salir
+            // de la raíz interior de un archivo el hijo NO es `dir` (ese es
+            // el path compuesto virtual, no una entrada real del listado
+            // del padre) sino el archivo contenedor mismo (`aref.outer`).
+            let (parent, child) = match dir.archive_split() {
+                Ok(Some(aref)) if aref.inner.is_empty() => {
+                    let outer = aref.outer.clone();
+                    (outer.parent(), outer)
+                }
+                _ => (dir.parent(), dir.clone()),
             };
             if let Some(parent) = parent {
+                app.focused_mut().set_pending_focus(child);
                 cd_outcome = cd(app, backend, events, parent).await;
             } else {
                 // Raíz `/` o raíz de unidad Windows (`parent()` = None): antes

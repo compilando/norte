@@ -871,7 +871,12 @@ impl NorteGui {
             "cursor.page-down" => self.panes[f].page_down(PAGE),
             "nav.enter" => self.activate_enter(cx),
             "nav.parent" => {
-                if let Some(p) = self.panes[f].dir().parent() {
+                let dir = self.panes[f].dir().clone();
+                if let Some(p) = dir.parent() {
+                    // Foco pendiente (spec 2026-07-24 §S1): al aterrizar en
+                    // el listado del padre, seleccionar el dir del que
+                    // venimos.
+                    self.panes[f].set_pending_focus(dir);
                     self.cd(f, p, cx);
                 }
             }

@@ -9,6 +9,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Per-directory cursor memory (S1):** both the TUI and the GUI now
+  remember where the cursor was in each directory you visit this session
+  (in-memory only, capped at 64 directories, byte-exact identity — hostile
+  path twins are never folded together). Navigating to the parent directory
+  now selects the folder you just came from, instead of always landing on
+  the first entry.
+
 - **GUI opt-in motion (G2, ADR 0036 amendment):** the `[effects]` theme
   schema grows to v1.1 with `flicker = { strength }` (CRT flicker, clamped
   to `[0.0, 0.15]` — deliberately tiny, an accessibility guard against

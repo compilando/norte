@@ -227,6 +227,14 @@ impl Pane {
         self.state.set_cursor(i);
     }
 
+    /// Foco pendiente (spec 2026-07-24 §S1, `nav.parent`): el próximo
+    /// [`Pane::begin_listing`] selecciona `child` si aparece en el listado
+    /// nuevo, por delante de la memoria de cursor. Ver
+    /// [`norte_frontend::PaneState::set_pending_focus`].
+    pub fn set_pending_focus(&mut self, child: VPath) {
+        self.state.set_pending_focus(child);
+    }
+
     // --- Listado + búsqueda viva (propio de la TUI, encima del estado) ---
 
     /// Marca (o desmarca) el flag de carga de un fill paginado (ADR 0017).
@@ -264,6 +272,14 @@ impl Pane {
     /// que faltan entradas por llegar (ADR 0017). El drenador irá llamando a
     /// [`Pane::extend_listing`] y, al terminar, [`Pane::finish_listing`].
     /// `skipped` = omitidas del contenedor (#93), del open del listado.
+    ///
+    /// Punto de captura de la memoria de cursor (spec §S1) para la TUI: a
+    /// diferencia de la GUI (que tiene una fase `begin_loading` optimista
+    /// ANTES del fetch async), la TUI espera el listado ENTERO antes de
+    /// tocar el pane (`cd` en `main.rs` no llama a
+    /// [`norte_frontend::PaneState::begin_loading`] — este método es el
+    /// único punto donde `self.state` todavía refleja el dir VIEJO). Grabar
+    /// aquí, antes de `set_listing`, es el equivalente exacto.
     pub fn begin_listing(
         &mut self,
         dir: VPath,
@@ -271,6 +287,7 @@ impl Pane {
         more: bool,
         skipped: Option<u64>,
     ) {
+        self.state.remember_cursor();
         self.state.set_listing(dir, first_page);
         self.state.set_loading(more);
         self.virtual_search = false;

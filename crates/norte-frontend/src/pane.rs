@@ -56,7 +56,27 @@ pub struct PaneState {
     /// ([`Self::set_listing`]); el caller lo fija con el valor FRESCO de su
     /// `list_with_skipped`/`list_stream`.
     skipped: Option<u64>,
+    /// Memoria de cursor por directorio (spec 2026-07-24 §S1): sesión-solo,
+    /// per-pane (no persiste entre reinicios — mismo precedente que
+    /// [`crate::nav`]'s history), LRU por recencia con tope
+    /// [`CURSOR_MEMORY_CAP`]. Identidad de dir por [`VPath`] BYTE-EXACTO
+    /// (regla 1): jamás se normaliza, así que dos gemelos hostiles con la
+    /// misma forma visual pero bytes distintos son entradas DISTINTAS. Se
+    /// alimenta con [`Self::remember_cursor`] y se consulta desde
+    /// [`Self::set_listing`].
+    cursor_memory: Vec<(VPath, usize)>,
+    /// Foco pendiente de un `nav.parent` (spec §S1): el hijo del que
+    /// venimos, para seleccionarlo en el listado del padre. Gana sobre
+    /// [`Self::cursor_memory`] y se CONSUME (una sola vez) en el próximo
+    /// [`Self::set_listing`], case o no case con una entrada del listado.
+    /// Identidad por `VPath` byte-exacto, igual que la memoria.
+    pending_focus: Option<VPath>,
 }
+
+/// Tope de la memoria de cursor por pane (spec §S1): sesión larga sin fuga
+/// de memoria sin depender de una nueva dependencia (LRU a mano sobre un
+/// `Vec`, barato para decenas de dirs visitados).
+const CURSOR_MEMORY_CAP: usize = 64;
 
 impl PaneState {
     /// Pane sobre `dir` con `entries` (se normalizan internamente: ya no hace
@@ -77,6 +97,8 @@ impl PaneState {
             name_encoding: None,
             name_encoding_entry: 0,
             skipped: None,
+            cursor_memory: Vec::new(),
+            pending_focus: None,
         }
     }
 
@@ -137,6 +159,13 @@ impl PaneState {
     /// Reemplaza el contenido tras un cd/refresh: resetea el cursor a 0, apaga
     /// el `loading` y MATA cualquier quick search vivo (filtraba OTRO listado).
     /// Normaliza `entries` internamente (mismo contrato que [`PaneState::new`]).
+    ///
+    /// Tras el reset, RESTAURA el cursor (spec §S1) en este orden de
+    /// precedencia: (1) [`Self::set_pending_focus`] si hay un hint pendiente
+    /// Y una entrada de `entries` casa su path byte-exacto (se CONSUME aquí,
+    /// haya o no match); (2) si no, la memoria por dir
+    /// ([`Self::remember_cursor`]) para el `dir` nuevo, con clamp; (3) si
+    /// ninguna aplica, 0 — el comportamiento de siempre.
     pub fn set_listing(&mut self, dir: VPath, entries: Vec<Entry>) {
         let (entries, sort_keys) = crate::sort::sort_with_keys(entries);
         self.dir = dir;
@@ -149,14 +178,38 @@ impl PaneState {
         // #96: las omitidas eran del listado ANTERIOR; el caller fija las
         // frescas con `set_skipped` si su fuente las trae.
         self.skipped = None;
+
+        let restored = self
+            .pending_focus
+            .take()
+            .and_then(|child| self.entries.iter().position(|e| e.path == child))
+            .or_else(|| {
+                self.cursor_memory
+                    .iter()
+                    .find(|(d, _)| *d == self.dir)
+                    .map(|&(_, c)| c)
+            });
+        if let Some(i) = restored {
+            self.set_cursor(i);
+        }
     }
 
     /// Marca el pane como cargando `dir`: entradas vacías, `loading=true`, sin
     /// quick search. La GUI lo usa para pintar el destino de un cd mientras la
     /// Task de listado corre; el listado real llega luego por [`set_listing`].
     ///
+    /// Punto de captura de la memoria de cursor (spec §S1) para el flujo de
+    /// la GUI: graba `(dir viejo, cursor viejo)` con [`Self::remember_cursor`]
+    /// ANTES de pisar el estado con el destino nuevo — es el único momento en
+    /// que el dir viejo sigue en `self.dir`. La TUI no llama a este método
+    /// (su `cd` espera el fetch entero antes de tocar el pane, ver
+    /// `norte-tui::app::Pane::begin_listing`), así que graba en su propio
+    /// punto de captura equivalente, justo antes de llamar a
+    /// [`Self::set_listing`].
+    ///
     /// [`set_listing`]: PaneState::set_listing
     pub fn begin_loading(&mut self, dir: VPath) {
+        self.remember_cursor();
         self.dir = dir;
         self.entries = Vec::new();
         self.sort_keys = Vec::new();
@@ -387,6 +440,33 @@ impl PaneState {
     pub fn set_cursor(&mut self, i: usize) {
         let max = self.entries.len().saturating_sub(1);
         self.cursor = i.min(max);
+    }
+
+    /// Graba `(dir actual, cursor actual)` en la memoria de cursor (spec
+    /// §S1): sesión-solo, por pane, LRU con tope [`CURSOR_MEMORY_CAP`].
+    /// Reemplaza cualquier entrada previa del mismo dir (identidad
+    /// byte-exacta, sin normalizar — regla 1) para que cada dir tenga como
+    /// mucho UNA entrada, siempre la más reciente.
+    ///
+    /// El caller debe invocarlo mientras `self.dir`/`self.cursor` TODAVÍA
+    /// reflejan el dir que se está abandonando — antes de cualquier reset
+    /// (ver [`Self::begin_loading`], que lo llama primero por eso).
+    pub fn remember_cursor(&mut self) {
+        let dir = self.dir.clone();
+        self.cursor_memory.retain(|(d, _)| *d != dir);
+        self.cursor_memory.push((dir, self.cursor));
+        if self.cursor_memory.len() > CURSOR_MEMORY_CAP {
+            self.cursor_memory.remove(0);
+        }
+    }
+
+    /// Fija un foco pendiente (spec §S1, `nav.parent`): en el PRÓXIMO
+    /// [`Self::set_listing`], si una entrada del listado nuevo tiene este
+    /// path EXACTO (bytes, sin normalizar — regla 1), el cursor aterriza
+    /// ahí — por delante de la memoria. Se consume una sola vez (match o
+    /// no) para no filtrar a navegaciones futuras no relacionadas.
+    pub fn set_pending_focus(&mut self, child: VPath) {
+        self.pending_focus = Some(child);
     }
 
     /// Marca/desmarca el pane como cargando SIN tocar el resto del estado: un
@@ -749,6 +829,232 @@ mod tests {
         assert_eq!(p.marks_len(), 2, "nfc y nfd son DOS marcas distintas");
         assert!(p.marks.contains(&nfc));
         assert!(p.marks.contains(&nfd));
+    }
+
+    // --- S1: memoria de cursor por directorio + foco pendiente (spec
+    // 2026-07-24 §S1) ---------------------------------------------------
+
+    /// Round trip básico: dejar un dir con el cursor movido, navegar a otro,
+    /// volver — el cursor se restaura donde quedó (no en 0).
+    #[test]
+    fn cursor_memory_round_trip_basico() {
+        let mut p = pane(&["a", "b", "c"]);
+        p.set_cursor(2); // "c"
+        p.remember_cursor(); // simula el punto de captura de begin_loading
+        p.set_listing(
+            VPath::parse("mem:///otro").unwrap(),
+            vec![e("mem:///otro/x", EntryKind::File)],
+        );
+        assert_eq!(p.cursor(), 0, "dir nuevo, sin memoria: 0 de siempre");
+
+        // Volver al dir original: begin_loading (aquí simulado con
+        // remember_cursor + set_listing, igual que la GUI real) debe
+        // restaurar el cursor recordado.
+        p.remember_cursor();
+        p.set_listing(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a", EntryKind::File),
+                e("mem:///b", EntryKind::File),
+                e("mem:///c", EntryKind::File),
+            ],
+        );
+        assert_eq!(p.cursor(), 2, "restaura el cursor recordado de mem:///");
+    }
+
+    /// Si el listado del dir recordado encogió, la restauración clampa.
+    #[test]
+    fn cursor_memory_restaura_con_clamp_si_encogio() {
+        let mut p = pane(&["a", "b", "c"]);
+        p.set_cursor(2); // "c"
+        p.remember_cursor();
+        p.set_listing(VPath::parse("mem:///otro").unwrap(), vec![]);
+        p.remember_cursor();
+        // Volvemos a "mem:///" pero ahora con solo 1 entrada.
+        p.set_listing(
+            VPath::parse("mem:///").unwrap(),
+            vec![e("mem:///a", EntryKind::File)],
+        );
+        assert_eq!(p.cursor(), 0, "clamp: solo hay índice 0 disponible");
+    }
+
+    /// LRU: al superar el cap (64), la entrada más antigua se descarta.
+    #[test]
+    fn cursor_memory_lru_evict_al_superar_cap() {
+        let mut p = PaneState::new(VPath::parse("mem:///d0").unwrap(), vec![]);
+        // 65 dirs distintos, cada uno con cursor=7 (arbitrario, no importa el
+        // clamp aquí: cada listing tiene una sola entrada, pero lo que se
+        // recuerda es el valor crudo antes del clamp del set_cursor).
+        for i in 0..65 {
+            p.set_cursor(7); // clamp interno no afecta: listado vacío -> 0
+            p.remember_cursor();
+            p.set_listing(VPath::parse(&format!("mem:///d{}", i + 1)).unwrap(), vec![]);
+        }
+        // La entrada para "mem:///d0" (la primerísima, antes del bucle) debe
+        // haber sido expulsada: si no lo fue, volver a "mem:///d0" con un
+        // listado de 65 entradas restauraría el cursor a un índice != 0.
+        let mut entries = Vec::new();
+        for i in 0..65 {
+            entries.push(e(&format!("mem:///d0/x{i:02}"), EntryKind::File));
+        }
+        p.remember_cursor();
+        p.set_listing(VPath::parse("mem:///d0").unwrap(), entries);
+        assert_eq!(
+            p.cursor(),
+            0,
+            "d0 fue expulsado de la memoria LRU (cap 64), no hay nada que restaurar"
+        );
+    }
+
+    /// `set_pending_focus` gana sobre la memoria y se consume una sola vez.
+    #[test]
+    fn pending_focus_gana_sobre_memoria_y_se_consume_una_vez() {
+        let mut p = pane(&["a", "b", "c"]);
+        p.set_cursor(2); // "c" — esto quedará en memoria para "mem:///"
+        p.remember_cursor();
+        p.set_listing(
+            VPath::parse("mem:///a").unwrap(),
+            vec![e("mem:///a/x", EntryKind::File)],
+        );
+        // Foco pendiente hacia "b" al volver a "mem:///".
+        p.set_pending_focus(VPath::parse("mem:///b").unwrap());
+        p.remember_cursor();
+        p.set_listing(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a", EntryKind::File),
+                e("mem:///b", EntryKind::File),
+                e("mem:///c", EntryKind::File),
+            ],
+        );
+        assert_eq!(
+            p.selected().unwrap().path,
+            VPath::parse("mem:///b").unwrap(),
+            "pending_focus gana sobre la memoria (que apuntaba a \"c\")"
+        );
+
+        // Segunda vuelta, SIN volver a fijar pending_focus: si el hint no
+        // se hubiese consumido, seguiría ganando y aterrizaríamos otra vez
+        // en "b" pase lo que pase. Movemos el cursor a "a" (índice 0) antes
+        // de salir para que la memoria prediga un resultado DISTINTO de
+        // "b" — solo la memoria (no un pending_focus fantasma) explica el
+        // resultado.
+        p.set_cursor(0); // "a"
+        p.remember_cursor(); // sobrescribe la memoria de "mem:///" a 0
+        p.set_listing(
+            VPath::parse("mem:///a").unwrap(),
+            vec![e("mem:///a/x", EntryKind::File)],
+        );
+        p.remember_cursor();
+        p.set_listing(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a", EntryKind::File),
+                e("mem:///b", EntryKind::File),
+                e("mem:///c", EntryKind::File),
+            ],
+        );
+        assert_eq!(
+            p.selected().unwrap().path,
+            VPath::parse("mem:///a").unwrap(),
+            "consumido: la segunda vuelta usa memoria (a), no el pending_focus viejo (b)"
+        );
+    }
+
+    /// Bytes hostiles (segmento 0xFF/0xFE, forma wire del corpus): la
+    /// memoria y el `pending_focus` identifican por PATH EXACTO en bytes, sin
+    /// normalizar (regla 1 — nunca se pliegan gemelos hostiles).
+    #[test]
+    fn cursor_memory_y_pending_focus_byte_exacto_con_path_hostil() {
+        let root = VPath::parse("mem:///").unwrap();
+        let hostile = root
+            .clone()
+            .join(norte_proto::Segment::new(vec![0xFF, 0xFE]).unwrap());
+        let benign = root
+            .clone()
+            .join(norte_proto::Segment::new(b"a".to_vec()).unwrap());
+        let mut p = PaneState::new(
+            root.clone(),
+            vec![
+                Entry {
+                    path: hostile.clone(),
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                },
+                Entry {
+                    path: benign.clone(),
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                },
+            ],
+        );
+        // "new" normaliza: 0xFF > 0x61 => hostile queda en el índice 1.
+        p.set_cursor(1);
+        assert_eq!(p.selected().unwrap().path, hostile);
+
+        // Simula entrar al dir hostil (cd) y salir de nuevo (parent-nav): el
+        // hint se fija DESPUÉS de entrar, justo antes de volver al padre —
+        // igual que `nav.parent` real (spec §S1 punto 3).
+        p.remember_cursor();
+        p.set_listing(hostile.clone(), vec![]);
+        p.set_pending_focus(hostile.clone());
+        p.remember_cursor();
+        p.set_listing(
+            root,
+            vec![
+                Entry {
+                    path: hostile.clone(),
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                },
+                Entry {
+                    path: benign,
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                },
+            ],
+        );
+        assert_eq!(
+            p.selected().unwrap().path,
+            hostile,
+            "pending_focus casa por bytes exactos, sin plegar la forma hostil"
+        );
+    }
+
+    /// `begin_loading` captura el dir VIEJO (y su cursor) antes de pisar el
+    /// estado con el destino nuevo — es el punto de captura real para la
+    /// GUI (`PaneState::begin_loading` se llama ANTES del fetch async).
+    #[test]
+    fn begin_loading_graba_el_dir_viejo_antes_de_pisarlo() {
+        let mut p = pane(&["a", "b", "c"]);
+        p.set_cursor(2); // "c" en "mem:///"
+        p.begin_loading(VPath::parse("mem:///nuevo").unwrap());
+        assert_eq!(p.cursor(), 0, "el destino arranca en 0 mientras carga");
+        // set_listing del MISMO dir nuevo no debe alterar lo grabado del
+        // dir viejo: volver a "mem:///" restaura el cursor grabado por
+        // begin_loading, no un valor corrupto.
+        p.set_listing(
+            VPath::parse("mem:///nuevo").unwrap(),
+            vec![e("mem:///nuevo/x", EntryKind::File)],
+        );
+        p.remember_cursor();
+        p.set_listing(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a", EntryKind::File),
+                e("mem:///b", EntryKind::File),
+                e("mem:///c", EntryKind::File),
+            ],
+        );
+        assert_eq!(
+            p.cursor(),
+            2,
+            "begin_loading grabó (mem:///, 2) antes de pisar el dir"
+        );
     }
 
     #[test]
