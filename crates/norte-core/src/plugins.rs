@@ -27,7 +27,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use norte_plugin_host::Catalog;
-use norte_proto::methods::{PluginInfo, PluginListResult, PluginLoadError};
+use norte_proto::methods::{PluginCommandInfo, PluginInfo, PluginListResult, PluginLoadError};
 use toml_edit::{DocumentMut, InlineTable, Item, Table, Value};
 
 /// Estado que el usuario fija sobre un plugin descubierto. Ausente = ambos
@@ -205,10 +205,21 @@ impl PluginRegistry {
                     // la UI ve `approved = false` y vuelve a pedir consentimiento.
                     approved: Self::approval_is_current(&st, &e.manifest),
                     enabled: st.enabled,
-                    // P1 T2 fills these (manifest `description` field +
-                    // `Contributions.command`, out of scope for the proto bump).
-                    description: None,
-                    commands: Vec::new(),
+                    // (P1) manifest `description` is cosmetic/untrusted, same
+                    // as `name`; `commands` mirrors `Contributions.command` in
+                    // MANIFEST ORDER (not sorted — matches how the digest
+                    // treats contribution order as significant, spec §6).
+                    description: e.manifest.description.clone(),
+                    commands: e
+                        .manifest
+                        .contributions
+                        .command
+                        .iter()
+                        .map(|c| PluginCommandInfo {
+                            id: c.id.clone(),
+                            title: c.title.clone(),
+                        })
+                        .collect(),
                 }
             })
             .collect();
@@ -624,6 +635,49 @@ fs-read = "scoped"
         assert!(!p.enabled);
         assert!(p.capabilities.iter().any(|c| c == "fs-read"));
         assert!(list.errors.is_empty());
+        // (P1) DEMO_MANIFEST no declara description ni comandos.
+        assert_eq!(p.description, None, "sin description en el manifiesto");
+        assert!(p.commands.is_empty(), "sin contributions.command");
+    }
+
+    /// (P1) manifiesto con `description` + un `contributions.command`: ambos
+    /// deben llegar íntegros a `PluginInfo` por `list()`.
+    #[test]
+    fn plugins_discover_propaga_description_y_commands() {
+        const WITH_DESC_AND_COMMANDS: &str = r#"
+[plugin]
+id = "org.norte.demo"
+name = "Demo"
+publisher = "norte"
+version = "0.1.0"
+category = "command"
+description = "Saluda desde la paleta de comandos."
+[contributions]
+command = [
+    { id = "greet", title = "Greet" },
+    { id = "wave", title = "Wave" },
+]
+[capabilities]
+fs-read = "scoped"
+"#;
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.demo", WITH_DESC_AND_COMMANDS);
+
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        let list = reg.list();
+
+        assert_eq!(list.plugins.len(), 1);
+        let p = &list.plugins[0];
+        assert_eq!(
+            p.description.as_deref(),
+            Some("Saluda desde la paleta de comandos.")
+        );
+        assert_eq!(p.commands.len(), 2, "los dos comandos declarados");
+        // Orden de manifiesto preservado (no reordenado).
+        assert_eq!(p.commands[0].id, "greet");
+        assert_eq!(p.commands[0].title, "Greet");
+        assert_eq!(p.commands[1].id, "wave");
+        assert_eq!(p.commands[1].title, "Wave");
     }
 
     /// `wasm_path` es un cálculo puro de ruta (single source of truth del

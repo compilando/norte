@@ -166,6 +166,10 @@ struct PluginSection {
     publisher: String,
     version: String,
     category: Category,
+    /// Descripción cosmética (P1); ausente = `None`. Cap 280 chars en
+    /// [`Manifest::from_toml`] — ver [`Manifest::description`].
+    #[serde(default)]
+    description: Option<String>,
 }
 
 /// Forma cruda del TOML (antes de validar).
@@ -192,6 +196,14 @@ pub struct Manifest {
     pub version: String,
     /// Categoría primaria (ordena el gestor).
     pub category: Category,
+    /// Descripción cosmética (P1), tope 280 caracteres (fail-loud al parsear,
+    /// como `id`). `None` si el manifiesto no la declara. Texto suministrado
+    /// por el plugin — NO confiable, un frontend debe enmascararla antes de
+    /// renderizarla. Deliberadamente FUERA de [`Manifest::approval_digest`]
+    /// (mismo trato que `name`/`publisher`/`version`): editarla no reinvalida
+    /// capabilities ya aprobadas por el humano, porque no cambia qué hace el
+    /// plugin ni cuándo se dispara.
+    pub description: Option<String>,
     /// Contribuciones por interfaz.
     pub contributions: Contributions,
     /// Capabilities declaradas.
@@ -217,6 +229,11 @@ pub enum ManifestError {
         "id duplicado: `{0}` aparece en más de un directorio de plugins (rechazado por seguridad)"
     )]
     DuplicateId(String),
+    /// `plugin.description` supera el tope de 280 caracteres (P1). Cosmética
+    /// pero fail-loud, como `id`: evita manifiestos que abulten logs/UI o que
+    /// intenten esconder texto fuera de la vista truncada del frontend.
+    #[error("plugin.description excede el tope de 280 caracteres")]
+    DescriptionTooLong,
 }
 
 /// `true` si `id` es un identificador reverse-DNS válido: uno o más segmentos
@@ -267,12 +284,23 @@ impl Manifest {
         if !is_valid_plugin_id(&raw.plugin.id) {
             return Err(ManifestError::Id);
         }
+        // Tope de 280 CARACTERES (no bytes: un idioma no-ASCII no debe pagar
+        // el tope antes de tiempo). Cosmética pero fail-loud, como `id`.
+        if raw
+            .plugin
+            .description
+            .as_deref()
+            .is_some_and(|d| d.chars().count() > 280)
+        {
+            return Err(ManifestError::DescriptionTooLong);
+        }
         Ok(Self {
             id: raw.plugin.id,
             name: raw.plugin.name,
             publisher: raw.plugin.publisher,
             version: raw.plugin.version,
             category: raw.plugin.category,
+            description: raw.plugin.description,
             contributions: raw.contributions,
             capabilities: raw.capabilities,
         })

@@ -140,6 +140,125 @@ fn id_charset_reverse_dns_estricto() {
 }
 
 #[test]
+fn description_ausente_es_none() {
+    let m = Manifest::from_toml(SYNTAX_PREVIEW).unwrap();
+    assert_eq!(m.description, None);
+}
+
+#[test]
+fn description_presente_se_parsea() {
+    let src = r#"
+        [plugin]
+        id = "org.norte.x"
+        name = "X"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "command"
+        description = "Genera previews de Markdown en línea."
+    "#;
+    let m = Manifest::from_toml(src).unwrap();
+    assert_eq!(
+        m.description.as_deref(),
+        Some("Genera previews de Markdown en línea.")
+    );
+}
+
+#[test]
+fn description_280_chars_es_el_tope_exacto() {
+    let d = "a".repeat(280);
+    let src = format!(
+        r#"
+        [plugin]
+        id = "org.norte.x"
+        name = "X"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "command"
+        description = "{d}"
+    "#
+    );
+    let m = Manifest::from_toml(&src).unwrap();
+    assert_eq!(m.description.as_deref(), Some(d.as_str()));
+}
+
+#[test]
+fn description_281_chars_se_rechaza() {
+    let d = "a".repeat(281);
+    let src = format!(
+        r#"
+        [plugin]
+        id = "org.norte.x"
+        name = "X"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "command"
+        description = "{d}"
+    "#
+    );
+    assert!(matches!(
+        Manifest::from_toml(&src),
+        Err(ManifestError::DescriptionTooLong)
+    ));
+}
+
+#[test]
+fn description_cuenta_caracteres_no_bytes() {
+    // 280 caracteres NO-ASCII (multi-byte en UTF-8): el tope es de CHARS, no de
+    // bytes, o un manifiesto legítimo en un idioma no-ASCII se rechazaría antes
+    // de tiempo.
+    let d = "á".repeat(280);
+    let src = format!(
+        r#"
+        [plugin]
+        id = "org.norte.x"
+        name = "X"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "command"
+        description = "{d}"
+    "#
+    );
+    assert!(Manifest::from_toml(&src).is_ok());
+}
+
+#[test]
+fn description_editada_no_mueve_el_approval_digest() {
+    // Precedente de manifest.rs:296-307 (name/publisher/version cosméticos):
+    // description es TAMBIÉN cosmética — editarla NO debe reinvalidar
+    // capabilities ya aprobadas por el humano.
+    let base = |desc: Option<&str>| {
+        let d = desc.map_or_else(String::new, |d| format!(r#"description = "{d}""#));
+        Manifest::from_toml(&format!(
+            r#"
+        [plugin]
+        id = "org.norte.x"
+        name = "X"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "command"
+        {d}
+        [capabilities]
+        fs-read = "scoped"
+    "#
+        ))
+        .unwrap()
+    };
+    let sin_desc = base(None);
+    let con_desc = base(Some("Una descripción cualquiera."));
+    let con_otra_desc = base(Some("Una descripción TOTALMENTE distinta."));
+    assert_eq!(
+        sin_desc.approval_digest(),
+        con_desc.approval_digest(),
+        "añadir description no debe mover el digest"
+    );
+    assert_eq!(
+        con_desc.approval_digest(),
+        con_otra_desc.approval_digest(),
+        "editar description no debe mover el digest"
+    );
+}
+
+#[test]
 fn net_capability_lista_hosts() {
     let m = Manifest::from_toml(
         r#"
