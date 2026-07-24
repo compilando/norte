@@ -3570,11 +3570,13 @@ async fn open_viewer(app: &mut App, backend: &Backend, events: &mut EventStream,
         // regía para el plano frente a la vista cruda).
         let viewer = match backend.plugin_preview_styled(&path).await {
             Ok(Some(p)) => {
-                Viewer::with_plugin_preview_styled(path.clone(), p.plugin_name, &p.lines)
+                Viewer::with_plugin_preview_styled(path.clone(), p.plugin_name, &p.lines, p.lossy)
             }
             Ok(None) | Err(_) => match backend.plugin_preview(&path).await {
                 Ok(res) => match res.preview {
-                    Some(p) => Viewer::with_plugin_preview(path.clone(), p.plugin_name, &p.output),
+                    Some(p) => {
+                        Viewer::with_plugin_preview(path.clone(), p.plugin_name, &p.output, p.lossy)
+                    }
                     None => Viewer::new(path.clone(), bytes, truncated),
                 },
                 // Un plugin roto no bloquea el archivo: vista cruda de siempre.

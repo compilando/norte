@@ -696,13 +696,21 @@ fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer, app: &App)
         .title_style(app.theme.role(Role::Title))
         .border_style(app.theme.role(Role::BorderFocus));
     if let Some(plugin) = viewer.preview_plugin() {
-        block = block.title(
-            Span::styled(
-                ta("viewer-plugin-preview", &[("plugin", plugin)]),
-                app.theme.role(Role::Info),
-            )
-            .into_right_aligned_line(),
-        );
+        // #101: cuando la decodificación host-side fue LOSSY, un aviso (rol
+        // Warning) SIGUE al «via …» — misma honestidad que el status de
+        // encoding del viewer crudo, y mismo orden que la GUI
+        // (`viewer_header`). ASCII (`⚠` es ambiguous-width).
+        let mut spans = vec![Span::styled(
+            ta("viewer-plugin-preview", &[("plugin", plugin)]),
+            app.theme.role(Role::Info),
+        )];
+        if viewer.preview_lossy() {
+            spans.push(Span::styled(
+                format!(" {}", t("viewer-plugin-preview-lossy")),
+                app.theme.role(Role::Warning),
+            ));
+        }
+        block = block.title(Line::from(spans).right_aligned());
     }
     let inner_h = rows[0].height.saturating_sub(2) as usize;
     // #29/G3a (ADR 0037): un preview de plugin trae color, por ANSI-SGR

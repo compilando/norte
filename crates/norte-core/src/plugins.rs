@@ -106,21 +106,22 @@ pub(crate) const PREVIEW_MAX_BYTES: u64 = 1024 * 1024;
 /// (sin encoding de texto) cae a los bytes tal cual (un guest de texto hará su
 /// propio lossy). `bytes` YA viene acotado a [`PREVIEW_MAX_BYTES`].
 ///
-/// Limitación conocida (#101): si la decodificación fue LOSSY (`had_errors`),
-/// el `�` resultante NO se marca al usuario en modo preview (el raw viewer sí
-/// lo señala) — surfacear el aviso exige un campo en `PluginPreview` (wire).
-pub(crate) fn decode_for_preview(bytes: Vec<u8>) -> Vec<u8> {
+/// Devuelve `(contenido, lossy)`: `lossy` es `true` si la decodificación de
+/// texto fue LOSSY (`had_errors` — bytes inválidos → `�`), para que el
+/// frontend lo señale en modo preview igual que el raw viewer ya marca su
+/// propio `had_errors` (#101, `PluginPreview::lossy` en el wire). Un binario
+/// (sin encoding de texto) nunca es lossy: sus bytes viajan crudos.
+pub(crate) fn decode_for_preview(bytes: Vec<u8>) -> (Vec<u8>, bool) {
     // `< CAP` = el fichero cabía entero (si == CAP pudo quedar truncado: se
     // trata como incompleto, dirección segura — a lo sumo se omite el último
     // char multibyte, jamás se corrompe con `�`).
     let complete = (bytes.len() as u64) < PREVIEW_MAX_BYTES;
     match norte_encoding::detect(&bytes) {
         norte_encoding::Detection::Text { encoding, .. } => {
-            norte_encoding::decode(&bytes, encoding, complete)
-                .text
-                .into_bytes()
+            let decoded = norte_encoding::decode(&bytes, encoding, complete);
+            (decoded.text.into_bytes(), decoded.had_errors)
         }
-        norte_encoding::Detection::Binary => bytes,
+        norte_encoding::Detection::Binary => (bytes, false),
     }
 }
 
@@ -1012,24 +1013,48 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// #29/§6.2: `decode_for_preview` entrega TEXTO decodificado al previewer.
+    /// #29/§6.2: `decode_for_preview` entrega TEXTO decodificado al previewer;
+    /// UTF-8 válido no es lossy (#101).
     #[test]
     fn decode_for_preview_texto_utf8_pasa_igual() {
-        assert_eq!(decode_for_preview(b"hola mundo".to_vec()), b"hola mundo");
+        assert_eq!(
+            decode_for_preview(b"hola mundo".to_vec()),
+            (b"hola mundo".to_vec(), false)
+        );
     }
 
     #[test]
     fn decode_for_preview_utf16le_bom_se_decodifica_a_utf8() {
         // BOM UTF-16LE (FF FE) + "hi" → detect Text, decode a UTF-8 "hi".
         let utf16 = vec![0xFF, 0xFE, b'h', 0x00, b'i', 0x00];
-        assert_eq!(decode_for_preview(utf16), b"hi");
+        assert_eq!(decode_for_preview(utf16), (b"hi".to_vec(), false));
     }
 
     #[test]
     fn decode_for_preview_binario_pasa_los_bytes_crudos() {
-        // Cabecera PNG (controles + NUL): detect Binary → bytes tal cual.
+        // Cabecera PNG (controles + NUL): detect Binary → bytes tal cual,
+        // jamás lossy (#101).
         let png = b"\x89PNG\r\n\x1a\n\x00\x00\x00".to_vec();
-        assert_eq!(decode_for_preview(png.clone()), png);
+        assert_eq!(decode_for_preview(png.clone()), (png, false));
+    }
+
+    /// #101: bytes detectados como texto pero con una secuencia INVÁLIDA para
+    /// ese encoding → decodificación LOSSY (`�`) marcada `lossy = true`. La
+    /// aguja vive en el corpus canónico del testkit (`utf8_bom_invalid`), no
+    /// inline, por la regla de CLAUDE.md sobre regresiones de encoding.
+    #[test]
+    fn decode_for_preview_texto_invalido_es_lossy() {
+        let fx = norte_testkit::corpus::lossy_content_fixtures()
+            .into_iter()
+            .find(|f| f.id == "utf8_bom_invalid")
+            .expect("corpus lossy trae utf8_bom_invalid");
+        let (out, lossy) = decode_for_preview(fx.bytes.clone());
+        assert!(lossy, "byte inválido debe marcar lossy");
+        assert_eq!(
+            String::from_utf8_lossy(&out),
+            fx.decoded,
+            "la salida es el decode canónico con `�`"
+        );
     }
 
     /// G3a (ADR 0037): `to_wire_lines` re-forma el tipo del runtime al de

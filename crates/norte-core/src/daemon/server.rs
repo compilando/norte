@@ -2230,6 +2230,13 @@ async fn handle_plugin_preview(
     let cap = usize::try_from(crate::plugins::PREVIEW_MAX_BYTES).unwrap_or(usize::MAX);
     bytes.truncate(cap.min(bytes.len()));
 
+    // 2.5) §6.2 (#29): decodifica a TEXTO como el camino EMBEBIDO
+    // (`Backend::plugin_preview`) — el guest jamás debe asumir UTF-8 sobre
+    // bytes crudos. `lossy` (#101) marca cuándo la decodificación produjo `�`.
+    // (Paridad de comportamiento embebido↔daemon, regla 7 — antes este handler
+    // pasaba los bytes crudos al guest.)
+    let (content, lossy) = crate::plugins::decode_for_preview(bytes);
+
     // 3) Ejecutar fuera del lock, en spawn_blocking (regla 2). El runtime es
     // `Send+Sync` pero no `Clone`: se clona el `Arc`. `mime` es `&'static` → se
     // mueve tal cual al closure.
@@ -2239,7 +2246,7 @@ async fn handle_plugin_preview(
         // P2 Task 4a: entrega `[config]` YA resuelto (Task 2) al previewer,
         // igual que `handle_plugin_run_command` ya hace para comandos.
         inst.set_settings(settings);
-        inst.render_preview(mime, &bytes)
+        inst.render_preview(mime, &content)
     })
     .await
     .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "preview task panicked"))?
@@ -2254,6 +2261,7 @@ async fn handle_plugin_preview(
             plugin_id: id,
             plugin_name: name,
             output,
+            lossy,
         }),
     })
 }
@@ -2315,11 +2323,15 @@ async fn handle_plugin_preview_styled(
     let cap = usize::try_from(crate::plugins::PREVIEW_MAX_BYTES).unwrap_or(usize::MAX);
     bytes.truncate(cap.min(bytes.len()));
 
+    // §6.2 (#29): decodifica a TEXTO (paridad con el embebido, regla 7);
+    // `lossy` (#101) al frontend para el aviso.
+    let (content, lossy) = crate::plugins::decode_for_preview(bytes);
+
     let runtime = Arc::clone(&shared.plugin_runtime);
     let outcome = tokio::task::spawn_blocking(move || {
         let mut inst = runtime.instantiate(&wasm, caps)?;
         inst.set_settings(settings);
-        inst.render_styled_preview(mime, &bytes)
+        inst.render_styled_preview(mime, &content)
     })
     .await
     .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "styled preview task panicked"))?;
@@ -2340,6 +2352,7 @@ async fn handle_plugin_preview_styled(
             plugin_id: id,
             plugin_name: name,
             lines: crate::plugins::to_wire_lines(lines),
+            lossy,
         }),
     })
 }

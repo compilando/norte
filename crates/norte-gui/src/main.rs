@@ -773,10 +773,13 @@ impl NorteGui {
                     ViewerContent::Plugin {
                         plugin_name,
                         output,
-                    } => Viewer::with_plugin_preview(path, plugin_name, &output),
-                    ViewerContent::PluginStyled { plugin_name, lines } => {
-                        Viewer::with_plugin_preview_styled(path, plugin_name, &lines)
-                    }
+                        lossy,
+                    } => Viewer::with_plugin_preview(path, plugin_name, &output, lossy),
+                    ViewerContent::PluginStyled {
+                        plugin_name,
+                        lines,
+                        lossy,
+                    } => Viewer::with_plugin_preview_styled(path, plugin_name, &lines, lossy),
                     ViewerContent::Raw { bytes, truncated } => Viewer::new(path, bytes, truncated),
                 };
                 // #92: la imagen llega YA decodificada del hilo de sesión —
@@ -3569,6 +3572,12 @@ fn viewer_header(v: &norte_frontend::viewer::Viewer) -> String {
             "viewer-plugin-preview",
             &[("plugin", plugin)],
         ));
+        // #101: aviso de decodificación lossy junto al «via …» (misma clave
+        // que la TUI).
+        if v.preview_lossy() {
+            header.push(' ');
+            header.push_str(&norte_i18n::t("viewer-plugin-preview-lossy"));
+        }
     }
     header
 }
@@ -5101,6 +5110,7 @@ mod tests {
             VPath::parse("mem:///a").unwrap(),
             "plug\u{202E}in\u{200B}".to_string(),
             "salida",
+            false,
         );
         assert!(
             !viewer_header(&prev)

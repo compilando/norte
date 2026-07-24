@@ -369,7 +369,7 @@ fn golden_methods() {
     check_methods_plugin(&fixtures);
     check_methods_rpc(&fixtures);
     check_methods_index(&fixtures);
-    assert_eq!(fixtures.len(), 92, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 94, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `index.*` (0.25.0, M4, ADR 0034): build + query del índice de búsqueda.
@@ -622,6 +622,20 @@ fn check_methods_plugin_exec(fixtures: &BTreeMap<String, Value>) {
                 plugin_id: "org.norte.md".into(),
                 plugin_name: "Markdown Preview".into(),
                 output: "<h1>Título</h1>".into(),
+                lossy: false,
+            }),
+        },
+    );
+    // 0.29.0 (#101): el aviso de decodificación lossy poblado (`true`).
+    check_one(
+        fixtures,
+        "plugin_preview_result_lossy",
+        &PluginPreviewResult {
+            preview: Some(PluginPreview {
+                plugin_id: "org.norte.md".into(),
+                plugin_name: "Markdown Preview".into(),
+                output: "a\u{fffd}b".into(),
+                lossy: true,
             }),
         },
     );
@@ -798,6 +812,25 @@ fn check_methods_plugin_preview_styled(fixtures: &BTreeMap<String, Value>) {
                         fg: Some([255, 0, 0]),
                     }],
                 ],
+                lossy: false,
+            }),
+        },
+    );
+    // 0.29.0 (#101): paridad con `plugin_preview_result_lossy` — la variante
+    // con estilo también pinea `lossy: true` en el wire.
+    check_one(
+        fixtures,
+        "plugin_preview_styled_result_lossy",
+        &PluginPreviewStyledResult {
+            preview: Some(PluginPreviewStyled {
+                plugin_id: "org.norte.demo".into(),
+                plugin_name: "Demo Previewer".into(),
+                lines: vec![vec![SpanWire {
+                    text: "a\u{fffd}b".into(),
+                    role: None,
+                    fg: None,
+                }]],
+                lossy: true,
             }),
         },
     );
@@ -1551,7 +1584,9 @@ fn method_names_frozen() {
     assert_eq!(methods::PLUGIN_SET_CONFIG, "plugin.set_config");
     // 0.28.0 (G3c, ADR 0037): plugin.get_config/set_config — [config] de P2
     // por el wire; PluginInfo gana columns (sin método nuevo).
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.28.0");
+    // 0.29.0 (#101): PluginPreview/PluginPreviewStyled ganan `lossy` (sin
+    // método nuevo — solo campo aditivo).
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.29.0");
 }
 
 #[test]

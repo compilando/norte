@@ -786,7 +786,8 @@ impl Backend {
                 // 2.5) §6.2 (#29): el previewer recibe TEXTO ya decodificado
                 // por la detección del core — jamás bytes crudos sobre los que
                 // asumir UTF-8 (lógica testeada en `plugins::decode_for_preview`).
-                let content = crate::plugins::decode_for_preview(bytes);
+                // `lossy` (#101) viaja al frontend para el aviso «via …».
+                let (content, lossy) = crate::plugins::decode_for_preview(bytes);
 
                 // 3) Instanciar + renderizar (síncrono, WASM) en spawn_blocking.
                 let mime_owned = mime.to_owned();
@@ -810,6 +811,7 @@ impl Backend {
                         plugin_id: id,
                         plugin_name: name,
                         output,
+                        lossy,
                     }),
                 })
             }
@@ -887,7 +889,7 @@ impl Backend {
                 }
                 let cap = usize::try_from(crate::plugins::PREVIEW_MAX_BYTES).unwrap_or(usize::MAX);
                 bytes.truncate(cap.min(bytes.len()));
-                let content = crate::plugins::decode_for_preview(bytes);
+                let (content, lossy) = crate::plugins::decode_for_preview(bytes);
 
                 // 3) Instanciar + `render-styled` (síncrono, WASM) en
                 // spawn_blocking. Cualquier `RuntimeError` aquí (trap, guest,
@@ -917,6 +919,7 @@ impl Backend {
                     plugin_id: id,
                     plugin_name: name,
                     lines: crate::plugins::to_wire_lines(lines),
+                    lossy,
                 }))
             }
             #[cfg(unix)]
@@ -2813,6 +2816,7 @@ pub mod remote {
                     role: None,
                     fg: None,
                 }]],
+                lossy: false,
             };
             let got = map_styled_preview_result(Ok(methods::PluginPreviewStyledResult {
                 preview: Some(preview.clone()),

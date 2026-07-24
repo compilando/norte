@@ -23,6 +23,33 @@ fn el_corpus_de_contenidos_se_detecta_y_decodifica_exacto() {
     }
 }
 
+/// #101: el corpus LOSSY se detecta como texto pero su decode canónico marca
+/// `had_errors` (y produce exactamente el `decoded` con `U+FFFD`). La cara B de
+/// [`el_corpus_de_contenidos_se_detecta_y_decodifica_exacto`]: aquel corpus es
+/// sin pérdida por contrato; este es la aguja de «detectado texto, bytes rotos»
+/// que alimenta la señal `lossy` de la preview de plugin.
+#[test]
+fn el_corpus_lossy_se_detecta_como_texto_pero_marca_had_errors() {
+    for f in norte_testkit::corpus::lossy_content_fixtures() {
+        let Detection::Text { encoding, .. } = detect(&f.bytes) else {
+            panic!("{}: debe detectarse como texto", f.id);
+        };
+        let Decoded {
+            text, had_errors, ..
+        } = decode(&f.bytes, encoding, true);
+        assert!(
+            had_errors,
+            "{}: decode con pérdida debe marcar had_errors",
+            f.id
+        );
+        assert_eq!(
+            text, f.decoded,
+            "{}: el `U+FFFD` esperado en su sitio",
+            f.id
+        );
+    }
+}
+
 #[test]
 fn decodificar_con_la_etiqueta_del_corpus_es_exacto() {
     for f in norte_testkit::corpus::content_fixtures() {

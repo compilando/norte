@@ -92,6 +92,7 @@ viewer-lossy = lossy (�)
 viewer-truncated = [head]
 viewer-binary = binary
 viewer-plugin-preview = via { $plugin }
+viewer-plugin-preview-lossy = [lossy decode]
 eol-mixed = mixed EOL
 eol-none = no EOL
 

@@ -182,6 +182,34 @@ pub fn content_fixtures() -> Vec<ContentFixture> {
     ]
 }
 
+/// Contenidos que un decoder CORRECTO produce CON PÉRDIDA (`had_errors`): se
+/// detectan como texto (con la certeza de un BOM) pero llevan un byte
+/// inválido para ese encoding, así que el decode canónico inserta `U+FFFD`.
+///
+/// Separados de [`content_fixtures`] a propósito — el contrato de ese corpus es
+/// «detectar como texto y decodificar EXACTO y sin pérdida», y sus tests lo
+/// afirman en bucle. Estos son la aguja de la señal `lossy` de la preview de
+/// plugin (#101) y de cualquier consumidor del honesto «esto vino de un decode
+/// fallido, no del fichero». `decoded` es lo que produce el decoder correcto:
+/// ya lleva el `U+FFFD`.
+#[must_use]
+pub fn lossy_content_fixtures() -> Vec<ContentFixture> {
+    vec![ContentFixture {
+        // BOM UTF-8 (EF BB BF) → detección de UTF-8 con CERTEZA (no
+        // estadística: sin el BOM, chardetng elegiría windows-1252 donde 0xFF
+        // es `ÿ` y el decode saldría limpio). El `0xFF` interior NUNCA es
+        // válido en UTF-8 → `U+FFFD` con had_errors.
+        id: "utf8_bom_invalid",
+        encoding: "utf-8",
+        bytes: {
+            let mut v = vec![0xEF, 0xBB, 0xBF];
+            v.extend_from_slice(b"a\xFFo 2026\n");
+            v
+        },
+        decoded: "a\u{FFFD}o 2026\n",
+    }]
+}
+
 /// Línea con `0xF1` como byte líder de un char de 4 bytes (`U+44001`): la
 /// aguja latina corta `ñ` (0xF1 en legacy) casa por azar en modo a-ciegas.
 pub(crate) const CJK_UTF8_LEAD_F1: &str = "汉字 \u{44001} texto\n";

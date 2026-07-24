@@ -9,6 +9,15 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Plugin previews mark lossy decoding (#101, proto 0.29.0):**
+  `PluginPreview` and `PluginPreviewStyled` gain an additive `lossy: bool`.
+  When the core's host-side text decoding (§6.2, #29) had to substitute `�`
+  for invalid bytes, the viewer now shows a `[lossy decode]` marker next to
+  the `via <plugin>` indicator — the same honesty the raw viewer already
+  gives via its encoding status. Additive over 0.28.x (`#[serde(default)]`,
+  so an N-1 peer reads it as `false`); the window becomes N=0.29.x /
+  N-1=0.28.x.
+
 - **Styled plugin previews, end-to-end (G3a):** `plugin.preview_styled`
   (proto 0.27.0, ADR 0037) is now wired from a real WASM guest through the
   daemon and both frontends. `Backend::plugin_preview_styled` (embedded:
@@ -424,6 +433,19 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Daemon plugin previews skipped host-side text decoding (#101):** the
+  `plugin.preview`/`plugin.preview_styled` daemon handlers passed RAW bytes
+  to the previewer guest, unlike the embedded backend, which decodes to text
+  first (§6.2, #29) — a latent behavior gap between embedded and daemon
+  mode. Both handlers now decode through the shared
+  `plugins::decode_for_preview`, matching embedded and surfacing the new
+  `lossy` flag.
+- **`norte doctor`'s keymap check used an O(n) retry loop (#102):** unknown
+  `run` names were discovered by rebuilding the effective keymap once per
+  distinct typo (capped at 256), a loop that could never converge for a
+  `lua:<name>` binding failing the charset and had to special-case it. It is
+  replaced by a single-pass `Effective::build_diagnostics` that reports every
+  finding at once — no retry, no cap, no non-convergent case.
 - **`persist_set` panicked on a malformed `[section]` (S review I1):** a
   hand-edited `norte.toml` with a scalar section (`ui = 3`) or an
   array-of-tables (`[[ui]]`) made the settings-write primitive panic instead

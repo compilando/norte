@@ -169,6 +169,8 @@ pub enum ViewerContent {
         /// Salida del plugin (texto), sin sanear todavía — la sanea el
         /// `Viewer` core al construirse (`with_plugin_preview`).
         output: String,
+        /// La decodificación host-side fue LOSSY (#101).
+        lossy: bool,
     },
     /// Salida CON ESTILO de un previewer de plugin (G3a, ADR 0037): el
     /// gemelo estructurado de [`Self::Plugin`] — líneas de spans (`role`
@@ -180,6 +182,8 @@ pub enum ViewerContent {
         /// Líneas de spans, sin sanear/validar todavía — lo hace el
         /// `Viewer` core al construirse.
         lines: Vec<Vec<norte_proto::methods::SpanWire>>,
+        /// La decodificación host-side fue LOSSY (#101).
+        lossy: bool,
     },
     /// Bytes crudos (posiblemente truncados al presupuesto).
     Raw {
@@ -648,6 +652,7 @@ async fn open_viewer(
             content: ViewerContent::PluginStyled {
                 plugin_name: p.plugin_name,
                 lines: p.lines,
+                lossy: p.lossy,
             },
             image: None,
             generation,
@@ -664,6 +669,7 @@ async fn open_viewer(
             content: ViewerContent::Plugin {
                 plugin_name: p.plugin_name,
                 output: p.output,
+                lossy: p.lossy,
             },
             image: None,
             generation,

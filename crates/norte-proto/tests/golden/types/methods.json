@@ -391,7 +391,14 @@
     "path": "file:///home/user/doc.md"
   },
   "plugin_preview_result": {
+    "lossy": false,
     "output": "<h1>Título</h1>",
+    "plugin_id": "org.norte.md",
+    "plugin_name": "Markdown Preview"
+  },
+  "plugin_preview_result_lossy": {
+    "lossy": true,
+    "output": "a�b",
     "plugin_id": "org.norte.md",
     "plugin_name": "Markdown Preview"
   },
@@ -421,6 +428,19 @@
         }
       ]
     ],
+    "lossy": false,
+    "plugin_id": "org.norte.demo",
+    "plugin_name": "Demo Previewer"
+  },
+  "plugin_preview_styled_result_lossy": {
+    "lines": [
+      [
+        {
+          "text": "a�b"
+        }
+      ]
+    ],
+    "lossy": true,
     "plugin_id": "org.norte.demo",
     "plugin_name": "Demo Previewer"
   },

@@ -184,6 +184,7 @@ fn viewer_pinta_indicador_via_plugin_y_sus_lineas() {
         vp("file:///doc.md"),
         "Markdown".to_owned(),
         "titulo\ncuerpo",
+        false,
     ));
     let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
@@ -195,6 +196,31 @@ fn viewer_pinta_indicador_via_plugin_y_sus_lineas() {
     assert!(
         contenido.contains("titulo") && contenido.contains("cuerpo"),
         "las líneas del preview se pintan: {contenido}"
+    );
+}
+
+/// #101: un preview cuya decodificación host-side fue LOSSY pinta el aviso
+/// `[lossy decode]` junto al indicador «via …» (honestidad igual que el
+/// status de encoding del viewer crudo).
+#[test]
+fn viewer_preview_lossy_pinta_el_aviso() {
+    let dir = vp("file:///x");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir, Vec::new()),
+    );
+    app.viewer = Some(norte_tui::viewer::Viewer::with_plugin_preview(
+        vp("file:///doc.md"),
+        "Markdown".to_owned(),
+        "cuerpo",
+        true,
+    ));
+    let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let contenido = terminal.backend().to_string();
+    assert!(
+        contenido.contains("via Markdown") && contenido.contains("lossy"),
+        "el aviso lossy acompaña al «via …»: {contenido}"
     );
 }
 
@@ -242,6 +268,7 @@ fn viewer_preview_styled_role_gana_a_fg_y_pinta_del_tema() {
         vp("file:///doc.rs"),
         "Highlighter".to_owned(),
         &lines,
+        false,
     ));
 
     let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");

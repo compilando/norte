@@ -479,5 +479,26 @@ mod styled {
             None,
             "plano no casa ninguna regla del highlighter: {spans:?}"
         );
+
+        // #101 (paridad daemon↔embebido): la decodificación host-side ocurre
+        // en el HANDLER DEL DAEMON y su señal `lossy` viaja por el WIRE. Un
+        // archivo válido no es lossy...
+        assert!(!preview.lossy, "SAMPLE UTF-8 válido: no lossy");
+        assert!(!preview2.lossy, "código ASCII: no lossy");
+        // ...y uno detectado como texto (BOM UTF-8) con un byte inválido SÍ:
+        // prueba que el daemon DECODIFICA (no pasa bytes crudos al guest) y
+        // marca la pérdida.
+        let mut bad = vec![0xEF, 0xBB, 0xBF];
+        bad.extend_from_slice(b"linea\xFFmala\n");
+        write_file(&mem, "mem:///bad.txt", &bad).await;
+        let preview_lossy = backend
+            .plugin_preview_styled(&vp("mem:///bad.txt"))
+            .await
+            .expect("preview_styled ok")
+            .expect("previewer sigue aprobado+activado");
+        assert!(
+            preview_lossy.lossy,
+            "el daemon decodificó texto y marcó la pérdida por el wire: {preview_lossy:?}"
+        );
     }
 }

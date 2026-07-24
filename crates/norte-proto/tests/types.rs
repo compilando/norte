@@ -701,11 +701,11 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.28.0 (G3c): acepta 0.28.x (N) y 0.27.x (N-1), rechaza 0.26.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.28.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.27.0"), "N-1");
+    // 0.29.0 (#101): acepta 0.29.x (N) y 0.28.x (N-1), rechaza 0.27.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.29.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.28.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.26.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.27.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -904,6 +904,7 @@ fn plugin_preview_roundtrip() {
             plugin_id: "org.norte.md".into(),
             plugin_name: "Markdown Preview".into(),
             output: "<h1>Título</h1>".into(),
+            lossy: false,
         }),
     };
     let full_json = serde_json::to_string(&full).unwrap();
@@ -913,6 +914,13 @@ fn plugin_preview_roundtrip() {
     );
     let back_full: PluginPreviewResult = serde_json::from_str(&full_json).unwrap();
     assert_eq!(back_full, full);
+    // 0.29.0 (#101): `lossy` es aditivo — un wire N-1 (0.28.x) SIN el campo
+    // deserializa a `false` (sin aviso, dirección segura).
+    let n1: PluginPreviewResult = serde_json::from_str(
+        r#"{"plugin_id":"org.norte.md","plugin_name":"Markdown Preview","output":"x"}"#,
+    )
+    .expect("shape 0.28.x tolerado");
+    assert!(!n1.preview.unwrap().lossy, "lossy ausente = false (N-1)");
     // Result VACÍO: `{}` deserializa a None y reserializa a `{}` (ningún
     // previewer aplica — el frontend cae a la vista cruda).
     let none: PluginPreviewResult = serde_json::from_str("{}").unwrap();
@@ -952,6 +960,7 @@ fn plugin_preview_styled_roundtrip() {
                 role: Some("match".into()),
                 fg: None,
             }]],
+            lossy: false,
         }),
     };
     let full_json = serde_json::to_string(&full).unwrap();

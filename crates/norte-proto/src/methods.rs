@@ -186,7 +186,14 @@ use crate::{
 ///   criterio "aditivo siempre presente" que `commands`), `description` es
 ///   texto del PLUGIN — NO confiable (mismo trato que `PluginCommandInfo::title`).
 ///   Aditivo sobre 0.27.x — la ventana pasa a N=0.28.x/N-1=0.27.x.
-pub const PROTOCOL_VERSION: &str = "0.28.0";
+///
+/// 0.29.0 (#101): [`PluginPreview`] y [`PluginPreviewStyled`] ganan `lossy:
+/// bool` — el core marca cuándo la decodificación de texto host-side (§6.2,
+/// #29) fue LOSSY (`had_errors`), para que el modo preview señale los `�` de
+/// decodificación igual que ya hace el viewer crudo. Aditivo sobre 0.28.x
+/// (`#[serde(default)]` = un par N-1 se lee como `false`) — la ventana pasa a
+/// N=0.29.x/N-1=0.28.x.
+pub const PROTOCOL_VERSION: &str = "0.29.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -1225,6 +1232,17 @@ pub struct PluginPreview {
     pub plugin_name: String,
     /// Salida (texto) de la preview.
     pub output: String,
+    /// La decodificación host-side del fichero fue LOSSY (0.29.0, #101): el
+    /// core detectó texto en un encoding no-UTF8 y algún byte no era válido,
+    /// así que los `�` de la salida vienen de la decodificación, no del
+    /// fichero. El frontend lo señala junto al indicador «via …» (el viewer
+    /// crudo ya marca su propio `had_errors`; esto le da al modo preview la
+    /// misma honestidad). Aditivo sobre 0.28.x: `#[serde(default)]` = un
+    /// cliente/daemon N-1 que no lo emite se lee como `false` (sin aviso,
+    /// dirección segura). SIEMPRE presente al serializar (mismo criterio
+    /// «aditivo siempre presente» que `PluginInfo::commands`).
+    #[serde(default)]
+    pub lossy: bool,
 }
 
 /// Result de [`PLUGIN_PREVIEW`] (M4-P5): la preview del primer previewer que
@@ -1292,6 +1310,11 @@ pub struct PluginPreviewStyled {
     pub plugin_name: String,
     /// Líneas de la preview; cada línea es una lista de spans en orden.
     pub lines: Vec<Vec<SpanWire>>,
+    /// La decodificación host-side del fichero fue LOSSY (0.29.0, #101):
+    /// idéntico a [`PluginPreview::lossy`] — el previewer con estilo recibe el
+    /// MISMO texto ya decodificado por el core, así que hereda el mismo aviso.
+    #[serde(default)]
+    pub lossy: bool,
 }
 
 /// Params de [`PLUGIN_PREVIEW_STYLED`]: idéntico a [`PluginPreviewParams`]

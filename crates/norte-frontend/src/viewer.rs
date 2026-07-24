@@ -77,6 +77,12 @@ pub fn image_format(bytes: &[u8]) -> Option<ImageFmt> {
 pub struct PluginPreviewView {
     /// Nombre legible del plugin previewer (ya enmascarado), para el indicador.
     pub plugin_name: String,
+    /// La decodificación host-side del fichero fue LOSSY (#101,
+    /// `PluginPreview::lossy` del wire): los `�` de la salida vienen de una
+    /// decodificación fallida, no del fichero. El frontend lo lee por
+    /// [`Viewer::preview_lossy`] y lo señala junto al indicador «via …».
+    /// Privado: solo lo fijan los dos constructores del `Viewer`.
+    lossy: bool,
     /// Líneas con color, saneadas y enmascaradas.
     styled: Vec<crate::ansi::StyledLine>,
 }
@@ -146,7 +152,12 @@ impl Viewer {
     /// con [`crate::display_name`] (controles/bidi/invisibles → `�`); el
     /// `plugin_name` igual.
     #[must_use]
-    pub fn with_plugin_preview(path: VPath, plugin_name: String, output: &str) -> Self {
+    pub fn with_plugin_preview(
+        path: VPath,
+        plugin_name: String,
+        output: &str,
+        lossy: bool,
+    ) -> Self {
         let styled = crate::ansi::parse_sgr(output)
             .into_iter()
             .map(|line| {
@@ -163,6 +174,7 @@ impl Viewer {
         let mut v = Self::base(path, Vec::new(), false);
         v.plugin_preview = Some(PluginPreviewView {
             plugin_name,
+            lossy,
             styled,
         });
         v
@@ -188,6 +200,7 @@ impl Viewer {
         path: VPath,
         plugin_name: String,
         lines: &[Vec<norte_proto::methods::SpanWire>],
+        lossy: bool,
     ) -> Self {
         let styled = lines
             .iter()
@@ -205,6 +218,7 @@ impl Viewer {
         let mut v = Self::base(path, Vec::new(), false);
         v.plugin_preview = Some(PluginPreviewView {
             plugin_name,
+            lossy,
             styled,
         });
         v
@@ -225,6 +239,15 @@ impl Viewer {
     #[must_use]
     pub fn preview_plugin(&self) -> Option<&str> {
         self.plugin_preview.as_ref().map(|p| p.plugin_name.as_str())
+    }
+
+    /// `true` si el viewer está en modo preview de plugin Y la decodificación
+    /// host-side del fichero fue LOSSY (#101): el frontend pinta un aviso junto
+    /// al indicador «via …». `false` para la vista cruda (que marca su propio
+    /// [`Self::had_errors`]) o para un preview no-lossy.
+    #[must_use]
+    pub fn preview_lossy(&self) -> bool {
+        self.plugin_preview.as_ref().is_some_and(|p| p.lossy)
     }
 
     fn recompute(&mut self) {
@@ -633,8 +656,10 @@ mod tests {
             vp(),
             "Markdown".to_owned(),
             "linea uno\nlinea\u{7}dos\nlinea tres",
+            false,
         );
         assert_eq!(v.preview_plugin(), Some("Markdown"));
+        assert!(!v.preview_lossy(), "no lossy");
         assert_eq!(v.total_rows(), 3, "3 líneas partidas por \\n");
         let rows = v.rows(10);
         assert_eq!(rows[0], "linea uno");
@@ -648,6 +673,19 @@ mod tests {
             "jamás el byte de control crudo: {:?}",
             rows[1]
         );
+    }
+
+    /// #101: el flag `lossy` del wire llega a `preview_lossy()` en ambos
+    /// constructores (plano y con estilo), para que el frontend pinte el aviso.
+    #[test]
+    fn preview_lossy_se_propaga_desde_el_wire() {
+        let plano = Viewer::with_plugin_preview(vp(), "P".to_owned(), "a\u{FFFD}b", true);
+        assert!(plano.preview_lossy(), "plano lossy");
+        let styled = Viewer::with_plugin_preview_styled(vp(), "P".to_owned(), &[], true);
+        assert!(styled.preview_lossy(), "styled lossy");
+        // La vista cruda (sin preview) jamás reporta lossy por esta vía.
+        let crudo = Viewer::new(vp(), b"hola".to_vec(), false);
+        assert!(!crudo.preview_lossy(), "vista cruda: preview_lossy = false");
     }
 
     /// G3a (ADR 0037): `with_plugin_preview_styled` enmascara el `text` de
@@ -669,7 +707,7 @@ mod tests {
                 fg: None,
             }],
         ];
-        let v = Viewer::with_plugin_preview_styled(vp(), "Demo".to_owned(), &lines);
+        let v = Viewer::with_plugin_preview_styled(vp(), "Demo".to_owned(), &lines, false);
         assert_eq!(v.preview_plugin(), Some("Demo"));
         let rows = v.plugin_styled_rows(10).expect("modo preview con estilo");
         assert_eq!(rows.len(), 2);
@@ -709,7 +747,7 @@ mod tests {
                 fg: None,
             },
         ]];
-        let v = Viewer::with_plugin_preview_styled(vp(), "Demo".to_owned(), &lines);
+        let v = Viewer::with_plugin_preview_styled(vp(), "Demo".to_owned(), &lines, false);
         let rows = v.plugin_styled_rows(10).expect("modo preview con estilo");
         assert_eq!(
             rows[0][0].role, None,
@@ -737,7 +775,7 @@ mod tests {
         for i in 0..20 {
             let _ = writeln!(out, "l{i}");
         }
-        let mut v = Viewer::with_plugin_preview(vp(), "P".to_owned(), out.trim_end());
+        let mut v = Viewer::with_plugin_preview(vp(), "P".to_owned(), out.trim_end(), false);
         assert_eq!(v.total_rows(), 20);
         v.scroll_bottom();
         assert_eq!(v.scroll, 19);
