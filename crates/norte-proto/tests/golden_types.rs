@@ -369,7 +369,7 @@ fn golden_methods() {
     check_methods_plugin(&fixtures);
     check_methods_rpc(&fixtures);
     check_methods_index(&fixtures);
-    assert_eq!(fixtures.len(), 72, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 84, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `index.*` (0.25.0, M4, ADR 0034): build + query del índice de búsqueda.
@@ -444,6 +444,7 @@ fn check_methods_rpc(fixtures: &BTreeMap<String, Value>) {
 fn check_methods_plugin(fixtures: &BTreeMap<String, Value>) {
     check_methods_plugin_governance(fixtures);
     check_methods_plugin_exec(fixtures);
+    check_methods_plugin_data_out_v2(fixtures);
 }
 
 /// Casos de [`PluginInfo`]/[`PluginCommandInfo`] (P1, 0.26.0): el shape sin
@@ -611,6 +612,168 @@ fn check_methods_plugin_exec(fixtures: &BTreeMap<String, Value>) {
         fixtures,
         "plugin_preview_result_none",
         &PluginPreviewResult { preview: None },
+    );
+}
+
+/// Familia `plugin.*` de datos ESTRUCTURADOS v2 (0.27.0, G3, ADR 0037): el
+/// host pinta, nunca el plugin. Cubre preview con estilo (mismo patrón
+/// `flatten`-sobre-`Option` all-or-nothing que [`PluginPreviewResult`]),
+/// decoraciones POSICIONALES 1:1 y columnas POSICIONALES 1:1. Repartida en
+/// dos funciones (preview con estilo / decorate+columns) por el límite de
+/// líneas de clippy, mismo criterio que `check_methods_plugin_info`.
+fn check_methods_plugin_data_out_v2(fixtures: &BTreeMap<String, Value>) {
+    check_methods_plugin_preview_styled(fixtures);
+    check_methods_plugin_decorate_and_columns(fixtures);
+}
+
+/// `plugin.preview_styled` (0.27.0): mismo patrón all-or-nothing que
+/// `plugin.preview`, con `lines: Vec<Vec<SpanWire>>` en vez de `output: String`.
+fn check_methods_plugin_preview_styled(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::PluginPreviewStyledResult;
+    use norte_proto::methods::{PluginPreviewStyled, PluginPreviewStyledParams, SpanWire};
+    // Un span suelto: shape mínimo (solo `text`, role/fg omitidos por
+    // `skip_serializing_if`) y el shape POBLADO (role+fg juntos en el wire,
+    // aunque el host pinte con `role` cuando ambos están presentes).
+    check_one(
+        fixtures,
+        "span_wire_bare",
+        &SpanWire {
+            text: "fn".into(),
+            role: None,
+            fg: None,
+        },
+    );
+    check_one(
+        fixtures,
+        "span_wire_styled",
+        &SpanWire {
+            text: "año".into(),
+            role: Some("match".into()),
+            fg: Some([200, 40, 40]),
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_preview_styled_params",
+        &PluginPreviewStyledParams {
+            path: vpath("file:///home/user/doc.rs"),
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_preview_styled_result",
+        &PluginPreviewStyledResult {
+            preview: Some(PluginPreviewStyled {
+                plugin_id: "org.norte.demo".into(),
+                plugin_name: "Demo Previewer".into(),
+                lines: vec![
+                    vec![
+                        SpanWire {
+                            text: "fn".into(),
+                            role: Some("match".into()),
+                            fg: None,
+                        },
+                        SpanWire {
+                            text: " main".into(),
+                            role: None,
+                            fg: None,
+                        },
+                    ],
+                    vec![SpanWire {
+                        text: "año".into(),
+                        role: None,
+                        fg: Some([255, 0, 0]),
+                    }],
+                ],
+            }),
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_preview_styled_result_none",
+        &PluginPreviewStyledResult { preview: None },
+    );
+}
+
+/// `plugin.decorate` + `plugin.column_values` (0.27.0): ambos POSICIONALES
+/// 1:1 con `params.paths`. `plugin_decorate_params` incluye un nombre HOSTIL
+/// (no-UTF8); el segundo elemento de `plugin_decorate_result` es `{}` (sin
+/// badge/role de ESE plugin para ESA entrada), no un elemento omitido.
+fn check_methods_plugin_decorate_and_columns(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{
+        DecorationWire, PluginColumnValuesParams, PluginColumnValuesResult, PluginDecorateParams,
+        PluginDecorateResult, PluginDecorations,
+    };
+    check_one(
+        fixtures,
+        "plugin_decorate_params",
+        &PluginDecorateParams {
+            paths: vec![
+                vpath("file:///repo/a.rs"),
+                vpath("file:///repo/informe%FF%FE.dat"),
+            ],
+        },
+    );
+    check_one(
+        fixtures,
+        "decoration_wire",
+        &DecorationWire {
+            badge: Some("M".into()),
+            role: Some("warning".into()),
+        },
+    );
+    check_one(
+        fixtures,
+        "decoration_wire_empty",
+        &DecorationWire {
+            badge: None,
+            role: None,
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_decorate_result",
+        &PluginDecorateResult {
+            plugins: vec![PluginDecorations {
+                plugin_id: "org.norte.git".into(),
+                decorations: vec![
+                    DecorationWire {
+                        badge: Some("M".into()),
+                        role: Some("warning".into()),
+                    },
+                    DecorationWire {
+                        badge: None,
+                        role: None,
+                    },
+                ],
+            }],
+        },
+    );
+    // Ningún decorator respondió: `plugins` vacío. A diferencia del patrón
+    // `flatten` de preview, aquí no hay all-or-nothing — un plugin ausente
+    // es simplemente un elemento ausente de `plugins`.
+    check_one(
+        fixtures,
+        "plugin_decorate_result_empty",
+        &PluginDecorateResult { plugins: vec![] },
+    );
+    // `paths` lleva DOS entradas para que `values` pueda pinnear ambos casos
+    // posicionales: una celda real y una `None` (la columna no aplica a esa
+    // entrada, distinguible de una cadena vacía real).
+    check_one(
+        fixtures,
+        "plugin_column_values_params",
+        &PluginColumnValuesParams {
+            column_id: "git-status".into(),
+            paths: vec![vpath("file:///repo/a.rs"), vpath("file:///repo/README")],
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_column_values_result",
+        &PluginColumnValuesResult {
+            values: vec![Some("modified".into()), None],
+        },
     );
 }
 
@@ -1232,6 +1395,11 @@ fn method_names_frozen() {
     assert_eq!(methods::PLUGIN_SET_ENABLED, "plugin.set_enabled");
     assert_eq!(methods::PLUGIN_RUN_COMMAND, "plugin.run_command");
     assert_eq!(methods::PLUGIN_PREVIEW, "plugin.preview");
+    // Familia plugin.* de datos ESTRUCTURADOS v2 (0.27.0, G3, ADR 0037): el
+    // host pinta, nunca el plugin. Aditivo sobre 0.26.x.
+    assert_eq!(methods::PLUGIN_PREVIEW_STYLED, "plugin.preview_styled");
+    assert_eq!(methods::PLUGIN_DECORATE, "plugin.decorate");
+    assert_eq!(methods::PLUGIN_COLUMN_VALUES, "plugin.column_values");
     assert_eq!(methods::FS_READ_MAX_CHUNK, 8 * 1024 * 1024);
     assert_eq!(methods::FS_LIST_MAX_PAGE, 10_000);
     // 0.18.0 (M4 live search): fs.search + search.hits + TaskKind::Search.
@@ -1264,7 +1432,9 @@ fn method_names_frozen() {
     assert_eq!(methods::INDEX_BUILD, "index.build");
     assert_eq!(methods::INDEX_QUERY, "index.query");
     // 0.26.0 (P1): PluginInfo gana description + commands (sin método nuevo).
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.26.0");
+    // 0.27.0 (G3, ADR 0037): plugin.preview_styled/decorate/column_values —
+    // datos estructurados de plugin, pinta el host.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.27.0");
 }
 
 #[test]

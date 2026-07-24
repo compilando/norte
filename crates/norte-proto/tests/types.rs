@@ -701,11 +701,11 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.26.0 (P1): acepta 0.26.x (N) y 0.25.x (N-1), rechaza 0.24.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.26.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.25.0"), "N-1");
+    // 0.27.0 (G3): acepta 0.27.x (N) y 0.26.x (N-1), rechaza 0.25.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.27.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.26.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.24.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.25.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -897,6 +897,157 @@ fn plugin_preview_roundtrip() {
     let parcial: PluginPreviewResult =
         serde_json::from_str(r#"{"plugin_id":"x"}"#).expect("parcial deserializa");
     assert_eq!(parcial.preview, None, "un preview parcial cae a None");
+}
+
+/// `plugin.preview_styled` (0.27.0, G3, ADR 0037): mismo patrón
+/// all-or-nothing que `plugin_preview_roundtrip` de arriba, con `lines` de
+/// spans en vez de un `output` plano.
+#[test]
+fn plugin_preview_styled_roundtrip() {
+    use norte_proto::methods::{
+        PluginPreviewStyled, PluginPreviewStyledParams, PluginPreviewStyledResult, SpanWire,
+    };
+    let p = PluginPreviewStyledParams {
+        path: vpath("file:///a.rs"),
+    };
+    let back: PluginPreviewStyledParams =
+        serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+    assert_eq!(back, p);
+    // Result POBLADO: round-trip exacto, flatten al nivel raíz (como
+    // `plugin_preview_result`).
+    let full = PluginPreviewStyledResult {
+        preview: Some(PluginPreviewStyled {
+            plugin_id: "org.norte.demo".into(),
+            plugin_name: "Demo Previewer".into(),
+            lines: vec![vec![SpanWire {
+                text: "fn".into(),
+                role: Some("match".into()),
+                fg: None,
+            }]],
+        }),
+    };
+    let full_json = serde_json::to_string(&full).unwrap();
+    assert!(
+        full_json.contains("\"plugin_id\":\"org.norte.demo\""),
+        "flatten: {full_json}"
+    );
+    let back_full: PluginPreviewStyledResult = serde_json::from_str(&full_json).unwrap();
+    assert_eq!(back_full, full);
+    // Result VACÍO: `{}` deserializa a None y reserializa a `{}`.
+    let none: PluginPreviewStyledResult = serde_json::from_str("{}").unwrap();
+    assert_eq!(none.preview, None);
+    assert_eq!(serde_json::to_string(&none).unwrap(), "{}");
+    // Estado PARCIAL: inconstruible en Rust (los tres campos van juntos en
+    // `PluginPreviewStyled`); un objeto parcial del wire colapsa a `None`.
+    let parcial: PluginPreviewStyledResult =
+        serde_json::from_str(r#"{"plugin_id":"x"}"#).expect("parcial deserializa");
+    assert_eq!(
+        parcial.preview, None,
+        "un preview con estilo parcial cae a None"
+    );
+}
+
+/// `SpanWire`/`DecorationWire` (0.27.0, G3, ADR 0037): `role`/`fg`/`badge`
+/// son `Option` independientes con `skip_serializing_if` — cuando faltan,
+/// NO salen al wire (payload mínimo, mismo trato que `description` en
+/// `PluginInfo`), y un shape que solo trae `text`/vacío tolera su ausencia
+/// al deserializar.
+#[test]
+fn span_wire_and_decoration_wire_optionals_are_independent_and_omitted() {
+    use norte_proto::methods::{DecorationWire, SpanWire};
+    let bare = SpanWire {
+        text: "fn".into(),
+        role: None,
+        fg: None,
+    };
+    assert_eq!(
+        serde_json::to_string(&bare).unwrap(),
+        r#"{"text":"fn"}"#,
+        "role/fg ausentes no salen al wire"
+    );
+    let only_role: SpanWire = serde_json::from_str(r#"{"text":"x","role":"error"}"#).unwrap();
+    assert_eq!(only_role.role.as_deref(), Some("error"));
+    assert_eq!(only_role.fg, None);
+    let only_fg: SpanWire = serde_json::from_str(r#"{"text":"x","fg":[1,2,3]}"#).unwrap();
+    assert_eq!(only_fg.fg, Some([1, 2, 3]));
+    assert_eq!(only_fg.role, None);
+
+    let empty_decoration = DecorationWire {
+        badge: None,
+        role: None,
+    };
+    assert_eq!(
+        serde_json::to_string(&empty_decoration).unwrap(),
+        "{}",
+        "una decoración sin badge ni role serializa a objeto vacío, no null"
+    );
+    let back: DecorationWire = serde_json::from_str("{}").unwrap();
+    assert_eq!(back, empty_decoration);
+}
+
+/// `plugin.decorate`/`plugin.column_values` (0.27.0, G3, ADR 0037): POSICIÓN
+/// 1:1 con `paths`, jamás un mapa clave→valor — un elemento sin dato para
+/// esa ruta sigue presente (no se omite), y el orden se preserva byte-exacto
+/// incluyendo un nombre HOSTIL (no-UTF8).
+#[test]
+fn plugin_decorate_and_column_values_are_positional() {
+    use norte_proto::methods::{
+        DecorationWire, PluginColumnValuesParams, PluginColumnValuesResult, PluginDecorateParams,
+        PluginDecorateResult, PluginDecorations,
+    };
+    let paths = vec![
+        vpath("file:///repo/a.rs"),
+        vpath("file:///repo/informe%FF%FE.dat"),
+    ];
+    let dp = PluginDecorateParams {
+        paths: paths.clone(),
+    };
+    let back: PluginDecorateParams =
+        serde_json::from_str(&serde_json::to_string(&dp).unwrap()).unwrap();
+    assert_eq!(back, dp);
+
+    let dr = PluginDecorateResult {
+        plugins: vec![PluginDecorations {
+            plugin_id: "org.norte.git".into(),
+            decorations: vec![
+                DecorationWire {
+                    badge: Some("M".into()),
+                    role: Some("warning".into()),
+                },
+                DecorationWire {
+                    badge: None,
+                    role: None,
+                },
+            ],
+        }],
+    };
+    assert_eq!(
+        dr.plugins[0].decorations.len(),
+        paths.len(),
+        "una decoración por ruta, sin omitir la que no tiene badge"
+    );
+    let back: PluginDecorateResult =
+        serde_json::from_str(&serde_json::to_string(&dr).unwrap()).unwrap();
+    assert_eq!(back, dr);
+
+    let cvp = PluginColumnValuesParams {
+        column_id: "git-status".into(),
+        paths: paths.clone(),
+    };
+    // `Some("")` (celda real, cadena vacía) y `None` (la columna no aplica a
+    // esa entrada) deben distinguirse en el wire — `values: Vec<Option
+    // <String>>`, no `Vec<String>` (MAJOR de protocol-guardian aplicado).
+    let cvr = PluginColumnValuesResult {
+        values: vec![Some(String::new()), None],
+    };
+    assert_eq!(cvr.values.len(), cvp.paths.len());
+    let wire = serde_json::to_string(&cvr).unwrap();
+    assert_eq!(
+        wire, r#"{"values":["",null]}"#,
+        "celda vacía real (\"\") y celda ausente (null) son shapes DISTINTOS"
+    );
+    let back: PluginColumnValuesResult = serde_json::from_str(&wire).unwrap();
+    assert_eq!(back, cvr);
 }
 
 #[test]

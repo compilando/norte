@@ -26,6 +26,11 @@
     "graceful": false
   },
   "daemon_shutdown_result": {},
+  "decoration_wire": {
+    "badge": "M",
+    "role": "warning"
+  },
+  "decoration_wire_empty": {},
   "fs_capabilities_params": {
     "path": "file:///home"
   },
@@ -229,9 +234,45 @@
     ],
     "session": "s1"
   },
+  "plugin_column_values_params": {
+    "column_id": "git-status",
+    "paths": [
+      "file:///repo/a.rs",
+      "file:///repo/README"
+    ]
+  },
+  "plugin_column_values_result": {
+    "values": [
+      "modified",
+      null
+    ]
+  },
   "plugin_command_info": {
     "id": "greet",
     "title": "Greet"
+  },
+  "plugin_decorate_params": {
+    "paths": [
+      "file:///repo/a.rs",
+      "file:///repo/informe%FF%FE.dat"
+    ]
+  },
+  "plugin_decorate_result": {
+    "plugins": [
+      {
+        "decorations": [
+          {
+            "badge": "M",
+            "role": "warning"
+          },
+          {}
+        ],
+        "plugin_id": "org.norte.git"
+      }
+    ]
+  },
+  "plugin_decorate_result_empty": {
+    "plugins": []
   },
   "plugin_info": {
     "approved": true,
@@ -302,6 +343,35 @@
     "plugin_name": "Markdown Preview"
   },
   "plugin_preview_result_none": {},
+  "plugin_preview_styled_params": {
+    "path": "file:///home/user/doc.rs"
+  },
+  "plugin_preview_styled_result": {
+    "lines": [
+      [
+        {
+          "role": "match",
+          "text": "fn"
+        },
+        {
+          "text": " main"
+        }
+      ],
+      [
+        {
+          "fg": [
+            255,
+            0,
+            0
+          ],
+          "text": "año"
+        }
+      ]
+    ],
+    "plugin_id": "org.norte.demo",
+    "plugin_name": "Demo Previewer"
+  },
+  "plugin_preview_styled_result_none": {},
   "plugin_run_command_params": {
     "arg": "world",
     "command": "greet",
@@ -405,6 +475,18 @@
       }
     ],
     "task_id": 7
+  },
+  "span_wire_bare": {
+    "text": "fn"
+  },
+  "span_wire_styled": {
+    "fg": [
+      200,
+      40,
+      40
+    ],
+    "role": "match",
+    "text": "año"
   },
   "task_cancel_params": {
     "task_id": 7

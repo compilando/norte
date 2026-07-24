@@ -131,9 +131,34 @@ use crate::{
 /// comandos invocables vía [`PLUGIN_RUN_COMMAND`]). Aditivo sobre 0.25.x: un
 /// peer N-1 ignora ambos campos desconocidos al deserializar; un peer N-1 que
 /// construye su propio `PluginInfo` sencillamente no los emite y este core
-/// los toma por su default (`None`/`vec![]`) — la ventana N/N-1 pasa a
-/// 0.25.x/0.26.x.
-pub const PROTOCOL_VERSION: &str = "0.26.0";
+/// los toma por su default (`None`/`vec![]`) — la ventana pasa a
+/// N=0.26.x/N-1=0.25.x.
+///
+/// 0.27.0 (G3, ADR 0037): tres métodos nuevos de datos ESTRUCTURADOS de
+/// plugin, que el HOST pinta (nunca el plugin, que jamás recibe capacidad de
+/// pintar directamente):
+/// - [`PLUGIN_PREVIEW_STYLED`] — gemelo con estilo de [`PLUGIN_PREVIEW`]:
+///   [`PluginPreviewStyledResult`] envuelve (`flatten`, mismo patrón
+///   all-or-nothing) un [`PluginPreviewStyled`] con `lines: Vec<Vec<`[`SpanWire`]`>>`.
+/// - [`PLUGIN_DECORATE`] — decoraciones tipo git-status por entrada
+///   ([`PluginDecorateResult`], POSICIONAL 1:1 con `params.paths`).
+/// - [`PLUGIN_COLUMN_VALUES`] — valores de una columna aportada por un plugin
+///   ([`PluginColumnValuesResult`], también posicional 1:1).
+///
+/// Los tres son métodos NUEVOS (no flags sobre los existentes): un peer N-1
+/// los rechaza limpio con `MethodNotFound` (taxonomía de métodos desconocidos,
+/// ADR 0004) y el cliente cae a la superficie plana existente
+/// ([`PLUGIN_PREVIEW`], sin decoraciones, sin columnas). Topes del wire
+/// (server ENFORCE, cliente re-valida fail-closed a lo plano si se violan):
+/// ≤10 000 líneas, ≤64 spans/línea, texto de span ≤4 KiB, payload total
+/// ≤4 MiB (mismo tope de retorno del runtime, ya usado por
+/// [`PLUGIN_RUN_COMMAND`]/[`PLUGIN_PREVIEW`]), badge ≤8 chars TRAS
+/// enmascarar. `role: Option<String>` en [`SpanWire`]/[`DecorationWire`] se
+/// valida HOST-SIDE contra el conjunto cerrado `norte_theme::Role`: un
+/// nombre desconocido degrada a `None` + warning, jamás a error duro (mismo
+/// trato indulgente que ADR 0020 da a un tema mal escrito). Aditivo sobre
+/// 0.26.x — la ventana pasa a N=0.27.x/N-1=0.26.x.
+pub const PROTOCOL_VERSION: &str = "0.27.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -348,6 +373,23 @@ pub const PLUGIN_RUN_COMMAND: &str = "plugin.run_command";
 /// que maneje el mimetype del archivo (M4-P5) sobre los bytes que el core lee;
 /// todo `None` = ningún previewer aplica (el frontend cae a la vista cruda).
 pub const PLUGIN_PREVIEW: &str = "plugin.preview";
+/// `plugin.preview_styled` — gemelo CON ESTILO de [`PLUGIN_PREVIEW`] (0.27.0,
+/// G3, ADR 0037): el mismo previewer devuelve líneas de spans con `role`/`fg`
+/// en vez de un string plano, para que el HOST pinte resaltado real (nunca el
+/// plugin). Mismo patrón all-or-nothing que [`PLUGIN_PREVIEW`]; un daemon N-1
+/// responde `MethodNotFound` y el cliente cae a [`PLUGIN_PREVIEW`].
+pub const PLUGIN_PREVIEW_STYLED: &str = "plugin.preview_styled";
+/// `plugin.decorate` — decoraciones tipo git-status por entrada, aportadas
+/// por plugins `decorator` APROBADOS y ACTIVADOS (0.27.0, G3, ADR 0037):
+/// batched sobre una página visible, POSICIONAL 1:1 con `params.paths`
+/// (ver [`PluginDecorateResult`]). Un daemon N-1 responde `MethodNotFound`;
+/// el frontend cae a listar sin decoraciones.
+pub const PLUGIN_DECORATE: &str = "plugin.decorate";
+/// `plugin.column_values` — valores de una columna aportada por un plugin
+/// `columns` APROBADO y ACTIVADO (0.27.0, G3, ADR 0037), POSICIONAL 1:1 con
+/// `params.paths` (ver [`PluginColumnValuesResult`]). Un daemon N-1 responde
+/// `MethodNotFound`; el frontend cae a no mostrar la columna.
+pub const PLUGIN_COLUMN_VALUES: &str = "plugin.column_values";
 /// `rpc.cancel` — notificación client→server (#72): retira la request en
 /// vuelo cuyo `id` JSON-RPC se indica. Best-effort y SIN respuesta: la
 /// confirmación real es que la request cancelada responde con su desenlace
@@ -1112,4 +1154,157 @@ pub struct PluginPreviewResult {
     /// La preview, o `None` si ningún previewer aplicó.
     #[serde(flatten)]
     pub preview: Option<PluginPreview>,
+}
+
+/// Un span de texto con estilo opcional (elemento de una línea de
+/// [`PluginPreviewStyled::lines`], 0.27.0, G3, ADR 0037): el HOST pinta, el
+/// plugin solo describe. `text` es texto del plugin — NO CONFIABLE, un
+/// frontend debe enmascararlo antes de renderizarlo (mismo trato que
+/// `PluginInfo::name`/`title`). `role` referencia un nombre de
+/// `norte_theme::Role` — el HOST lo valida contra el conjunto CERRADO al
+/// producirlo (un nombre desconocido nunca sale al wire como texto libre,
+/// colapsa a `None` antes de serializar); un cliente remoto que reciba de un
+/// daemon en el que no confía plenamente un `role` que no reconoce debe
+/// tratarlo igual, como `None`. `fg` es un fallback de color RGB crudo para
+/// spans sin rol (p. ej. la paleta fija de un highlighter); cuando AMBOS
+/// están presentes, `role` gana — el tema del usuario tiene precedencia
+/// sobre un color fijo del plugin.
+///
+/// ```
+/// use norte_proto::methods::SpanWire;
+/// let s: SpanWire = serde_json::from_str(r#"{"text":"fn"}"#).unwrap();
+/// assert_eq!(s.text, "fn");
+/// assert_eq!(s.role, None);
+/// assert_eq!(s.fg, None);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpanWire {
+    /// Texto del span. Texto del plugin — NO confiable.
+    pub text: String,
+    /// Nombre de rol de `norte_theme::Role` (validado host-side; un nombre
+    /// desconocido nunca llega hasta aquí como `Some`, ver el rustdoc del
+    /// tipo).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Color RGB crudo de respaldo cuando no hay `role` (un byte por canal).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fg: Option<[u8; 3]>,
+}
+
+/// La preview CON ESTILO producida por un plugin previewer (0.27.0, G3, ADR
+/// 0037): gemelo de [`PluginPreview`] con `lines` de [`SpanWire`] en vez de
+/// un `output: String` plano. Topes del wire (ADR 0037): ≤10 000 líneas,
+/// ≤64 spans por línea, texto de span ≤4 KiB, payload total ≤4 MiB (mismo
+/// tope de retorno del runtime que ya usan [`PLUGIN_PREVIEW`]/
+/// [`PLUGIN_RUN_COMMAND`]) — el server los aplica antes de enviar; un
+/// cliente los re-valida y cae a [`PLUGIN_PREVIEW`] si se violan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginPreviewStyled {
+    /// Id del plugin previewer que produjo la salida.
+    pub plugin_id: String,
+    /// Nombre legible del plugin previewer (para el indicador «via …»).
+    pub plugin_name: String,
+    /// Líneas de la preview; cada línea es una lista de spans en orden.
+    pub lines: Vec<Vec<SpanWire>>,
+}
+
+/// Params de [`PLUGIN_PREVIEW_STYLED`]: idéntico a [`PluginPreviewParams`]
+/// (mismo archivo, misma resolución de previewer — solo cambia la forma del
+/// result).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginPreviewStyledParams {
+    /// Ruta del archivo a previsualizar (el core lee sus bytes).
+    pub path: VPath,
+}
+
+/// Result de [`PLUGIN_PREVIEW_STYLED`]: la preview con estilo del primer
+/// previewer que aplica, o NADA. Mismo patrón `flatten`-sobre-`Option`
+/// all-or-nothing que [`PluginPreviewResult`] (ver su rustdoc): el wire es
+/// `{plugin_id,plugin_name,lines}` (aplicó) o `{}` (ninguno), jamás un
+/// estado parcial.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginPreviewStyledResult {
+    /// La preview con estilo, o `None` si ningún previewer aplicó.
+    #[serde(flatten)]
+    pub preview: Option<PluginPreviewStyled>,
+}
+
+/// Una decoración tipo git-status de UNA entrada (elemento de
+/// [`PluginDecorations::decorations`], 0.27.0, G3, ADR 0037). `badge` es
+/// texto del plugin — NO confiable, ≤8 chars TRAS enmascarar (tope del
+/// wire, ADR 0037); un frontend debe enmascarar (y truncar de nuevo) antes
+/// de confiar en el tope ya aplicado por el server — defensa en
+/// profundidad. `role` sigue la misma validación host-side que
+/// [`SpanWire::role`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecorationWire {
+    /// Badge corto (p. ej. `"M"`, `"++"`). Ausente = sin badge para esta
+    /// entrada de este plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub badge: Option<String>,
+    /// Nombre de rol de `norte_theme::Role` para pintar el badge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+}
+
+/// Params de [`PLUGIN_DECORATE`]: las entradas VISIBLES de la página actual
+/// (batched — el frontend no pide decoraciones entrada por entrada).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginDecorateParams {
+    /// Rutas a decorar, en el orden en que se listan.
+    pub paths: Vec<VPath>,
+}
+
+/// Las decoraciones de UN plugin `decorator` (elemento de
+/// [`PluginDecorateResult::plugins`]): `decorations` es POSICIONAL 1:1 con
+/// `PluginDecorateParams::paths` — el elemento `i` decora la ruta `i`, jamás
+/// una clave por path (barato en el wire, y un nombre hostil no puede
+/// colisionar con otro como clave). Un plugin muerto o que falló
+/// simplemente no aparece en `plugins` (sin decoraciones de ESE plugin; el
+/// resto de la página se pinta igual — mismo contrato de fallback que
+/// [`PLUGIN_PREVIEW`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginDecorations {
+    /// Id del plugin `decorator` que produjo estas decoraciones.
+    pub plugin_id: String,
+    /// Decoraciones, UNA por elemento de `paths` en el mismo orden (una
+    /// entrada sin decoración de este plugin lleva
+    /// `DecorationWire{badge:None,role:None}`, nunca se omite — el índice es
+    /// el único enlace con la ruta).
+    pub decorations: Vec<DecorationWire>,
+}
+
+/// Result de [`PLUGIN_DECORATE`]: las decoraciones de cada plugin
+/// `decorator` aprobado y activado que respondió.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginDecorateResult {
+    /// Un elemento por plugin `decorator` que decoró esta página.
+    pub plugins: Vec<PluginDecorations>,
+}
+
+/// Params de [`PLUGIN_COLUMN_VALUES`]: el id de columna declarado por el
+/// plugin `columns` en su manifiesto, más las rutas visibles a valorar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginColumnValuesParams {
+    /// Id de la columna (declarado por el plugin; identifica QUÉ columna
+    /// entre varias que un mismo plugin `columns` podría exponer).
+    pub column_id: String,
+    /// Rutas a valorar, en el orden en que se listan.
+    pub paths: Vec<VPath>,
+}
+
+/// Result de [`PLUGIN_COLUMN_VALUES`]: `values` es POSICIONAL 1:1 con
+/// `PluginColumnValuesParams::paths` — el valor `i` es la celda de la ruta
+/// `i`. Cada celda es `Option<String>` (no `String`) por la MISMA razón que
+/// [`DecorationWire::badge`]: una columna que no aplica a esa entrada (p.
+/// ej. "duración" sobre un archivo que no es media) necesita distinguirse
+/// de un valor real que resulta ser la cadena vacía — `None` = sin celda
+/// para esta entrada de esta columna, jamás se omite del vector posicional
+/// (protocol-guardian, ADR 0037). Texto del plugin — NO confiable, un
+/// frontend debe enmascararlo antes de renderizarlo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginColumnValuesResult {
+    /// Valores de celda, uno por elemento de `paths` en el mismo orden;
+    /// `None` = la columna no aplica a esa entrada.
+    pub values: Vec<Option<String>>,
 }
