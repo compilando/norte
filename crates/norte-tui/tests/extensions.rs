@@ -20,6 +20,9 @@ fn plugin(id: &str, name: &str, category: &str, caps: &[&str], approved: bool) -
         capabilities: caps.iter().map(|c| (*c).to_string()).collect(),
         approved,
         enabled: true,
+        // P1 T3 fills these (extension manager description line).
+        description: None,
+        commands: Vec::new(),
     }
 }
 

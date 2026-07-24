@@ -229,12 +229,40 @@
     ],
     "session": "s1"
   },
+  "plugin_command_info": {
+    "id": "greet",
+    "title": "Greet"
+  },
   "plugin_info": {
     "approved": true,
     "capabilities": [
       "fs-read"
     ],
     "category": "previewer",
+    "commands": [],
+    "enabled": true,
+    "id": "org.norte.demo",
+    "name": "Demo Previewer",
+    "publisher": "norte",
+    "version": "0.1.0"
+  },
+  "plugin_info_with_commands": {
+    "approved": true,
+    "capabilities": [
+      "fs-read"
+    ],
+    "category": "previewer",
+    "commands": [
+      {
+        "id": "greet",
+        "title": "Greet"
+      },
+      {
+        "id": "wave",
+        "title": "Wave"
+      }
+    ],
+    "description": "Previsualiza Markdown en línea.",
     "enabled": true,
     "id": "org.norte.demo",
     "name": "Demo Previewer",
@@ -256,6 +284,7 @@
           "fs-read"
         ],
         "category": "previewer",
+        "commands": [],
         "enabled": false,
         "id": "org.norte.demo",
         "name": "Demo Previewer",

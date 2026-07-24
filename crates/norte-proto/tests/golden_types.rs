@@ -369,7 +369,7 @@ fn golden_methods() {
     check_methods_plugin(&fixtures);
     check_methods_rpc(&fixtures);
     check_methods_index(&fixtures);
-    assert_eq!(fixtures.len(), 70, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 72, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `index.*` (0.25.0, M4, ADR 0034): build + query del índice de búsqueda.
@@ -446,14 +446,20 @@ fn check_methods_plugin(fixtures: &BTreeMap<String, Value>) {
     check_methods_plugin_exec(fixtures);
 }
 
-/// Familia `plugin.*` de GESTIÓN (0.13.0, M4-P3): listar y aprobar/activar.
-fn check_methods_plugin_governance(fixtures: &BTreeMap<String, Value>) {
-    use norte_proto::methods::{
-        PluginInfo, PluginListParams, PluginListResult, PluginLoadError, PluginSetApprovalParams,
-        PluginSetApprovalResult, PluginSetEnabledParams, PluginSetEnabledResult,
-    };
-    // `plugin.list` sin params: golden vacío, simetría con `task_list_params`.
-    check_one(fixtures, "plugin_list_params", &PluginListParams {});
+/// Casos de [`PluginInfo`]/[`PluginCommandInfo`] (P1, 0.26.0): el shape sin
+/// `description`/`commands`, el shape CON ambos poblados, y el tipo suelto
+/// `PluginCommandInfo`. Función propia para no desbordar el límite de
+/// líneas de `check_methods_plugin_governance`.
+fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{PluginCommandInfo, PluginInfo, PluginListResult, PluginLoadError};
+    check_one(
+        fixtures,
+        "plugin_command_info",
+        &PluginCommandInfo {
+            id: "greet".into(),
+            title: "Greet".into(),
+        },
+    );
     check_one(
         fixtures,
         "plugin_info",
@@ -466,6 +472,35 @@ fn check_methods_plugin_governance(fixtures: &BTreeMap<String, Value>) {
             capabilities: vec!["fs-read".into()],
             approved: true,
             enabled: true,
+            description: None,
+            commands: vec![],
+        },
+    );
+    // (P1) description + commands POBLADOS: golden nuevo, no reemplaza al de
+    // arriba (que sigue cubriendo el shape sin ellos).
+    check_one(
+        fixtures,
+        "plugin_info_with_commands",
+        &PluginInfo {
+            id: "org.norte.demo".into(),
+            name: "Demo Previewer".into(),
+            publisher: "norte".into(),
+            version: "0.1.0".into(),
+            category: "previewer".into(),
+            capabilities: vec!["fs-read".into()],
+            approved: true,
+            enabled: true,
+            description: Some("Previsualiza Markdown en línea.".into()),
+            commands: vec![
+                PluginCommandInfo {
+                    id: "greet".into(),
+                    title: "Greet".into(),
+                },
+                PluginCommandInfo {
+                    id: "wave".into(),
+                    title: "Wave".into(),
+                },
+            ],
         },
     );
     check_one(
@@ -481,6 +516,8 @@ fn check_methods_plugin_governance(fixtures: &BTreeMap<String, Value>) {
                 capabilities: vec!["fs-read".into()],
                 approved: false,
                 enabled: false,
+                description: None,
+                commands: vec![],
             }],
             errors: vec![PluginLoadError {
                 dir: "/plugins/broken".into(),
@@ -488,6 +525,17 @@ fn check_methods_plugin_governance(fixtures: &BTreeMap<String, Value>) {
             }],
         },
     );
+}
+
+/// Familia `plugin.*` de GESTIÓN (0.13.0, M4-P3): listar y aprobar/activar.
+fn check_methods_plugin_governance(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{
+        PluginListParams, PluginSetApprovalParams, PluginSetApprovalResult, PluginSetEnabledParams,
+        PluginSetEnabledResult,
+    };
+    // `plugin.list` sin params: golden vacío, simetría con `task_list_params`.
+    check_one(fixtures, "plugin_list_params", &PluginListParams {});
+    check_methods_plugin_info(fixtures);
     check_one(
         fixtures,
         "plugin_set_approval_params",
@@ -1215,7 +1263,8 @@ fn method_names_frozen() {
     // 0.25.0 (M4, ADR 0034): índice de búsqueda. index.build (Task) + index.query.
     assert_eq!(methods::INDEX_BUILD, "index.build");
     assert_eq!(methods::INDEX_QUERY, "index.query");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.25.0");
+    // 0.26.0 (P1): PluginInfo gana description + commands (sin método nuevo).
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.26.0");
 }
 
 #[test]

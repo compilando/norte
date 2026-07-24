@@ -125,7 +125,15 @@ use crate::{
 /// N-1 no conoce los métodos (los rechaza con `MethodNotFound`) y degrada
 /// `TaskKind::Index` a `Unknown` vía `serde(other)` — jamás resignifica nada
 /// viejo. El índice ausente (daemon sin `norte-index`) responde `Unsupported`.
-pub const PROTOCOL_VERSION: &str = "0.25.0";
+///
+/// 0.26.0 (P1): [`PluginInfo`] gana `description` (`Option<String>`, cosmético,
+/// ausente = `None`) y `commands` (`Vec<`[`PluginCommandInfo`]`>`, catálogo de
+/// comandos invocables vía [`PLUGIN_RUN_COMMAND`]). Aditivo sobre 0.25.x: un
+/// peer N-1 ignora ambos campos desconocidos al deserializar; un peer N-1 que
+/// construye su propio `PluginInfo` sencillamente no los emite y este core
+/// los toma por su default (`None`/`vec![]`) — la ventana N/N-1 pasa a
+/// 0.25.x/0.26.x.
+pub const PROTOCOL_VERSION: &str = "0.26.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -943,6 +951,30 @@ pub struct UndoBlocked {
     pub error: crate::Error,
 }
 
+/// Un comando de plugin invocable (elemento de [`PluginInfo::commands`],
+/// P1): espejo minimal, solo-lectura, de la contribución `command` del
+/// manifiesto (`CommandContrib` en `norte-plugin-host`) — lo que un
+/// frontend necesita para listar el comando (paleta, gestor de
+/// extensiones), no para ejecutarlo. `title` es texto suministrado por el
+/// plugin: NO CONFIABLE, un frontend debe enmascararlo antes de
+/// renderizarlo (mismo trato que `PluginInfo::name`).
+///
+/// ```
+/// use norte_proto::methods::PluginCommandInfo;
+/// let c: PluginCommandInfo =
+///     serde_json::from_str(r#"{"id":"greet","title":"Greet"}"#).unwrap();
+/// assert_eq!(c.id, "greet");
+/// assert_eq!(c.title, "Greet");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginCommandInfo {
+    /// Id del comando dentro del plugin (estable; se pasa junto al id del
+    /// plugin a [`PLUGIN_RUN_COMMAND`]).
+    pub id: String,
+    /// Título legible para mostrar. Texto del plugin — NO confiable.
+    pub title: String,
+}
+
 /// Un plugin descubierto (elemento de [`PluginListResult::plugins`], M4-P3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginInfo {
@@ -963,6 +995,17 @@ pub struct PluginInfo {
     pub approved: bool,
     /// `true` si un humano lo tiene activado.
     pub enabled: bool,
+    /// Descripción cosmética declarada en el manifiesto (P1); ausente =
+    /// `None`. NO forma parte del digest de aprobación (editarla no
+    /// reinvalida capabilities ya aprobadas) y es texto del plugin — NO
+    /// confiable, un frontend debe enmascararla antes de renderizarla.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Comandos que el plugin expone (P1); vacío si no contribuye ninguno.
+    /// Un peer N-1 que construye su propio `PluginInfo` no emite este
+    /// campo — se toma por su default (`vec![]`) al deserializar aquí.
+    #[serde(default)]
+    pub commands: Vec<PluginCommandInfo>,
 }
 
 /// Un directorio de plugin que NO se pudo cargar (elemento de

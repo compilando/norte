@@ -701,11 +701,11 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.25.0 (M4 índice): acepta 0.25.x (N) y 0.24.x (N-1), rechaza 0.23.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.25.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.24.0"), "N-1");
+    // 0.26.0 (P1): acepta 0.26.x (N) y 0.25.x (N-1), rechaza 0.24.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.26.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.25.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.23.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.24.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -763,6 +763,8 @@ fn plugin_types_roundtrip() {
             capabilities: vec!["fs-read".into()],
             approved: false,
             enabled: true,
+            description: None,
+            commands: vec![],
         }],
         errors: vec![PluginLoadError {
             dir: "/plugins/broken".into(),
@@ -779,6 +781,58 @@ fn plugin_types_roundtrip() {
     let en: PluginSetEnabledParams =
         serde_json::from_str(r#"{"id":"org.norte.demo","enabled":false}"#).unwrap();
     assert!(!en.enabled);
+}
+
+/// (P1, 0.26.0) Tolerancia N-1: un peer viejo que emite `PluginInfo` SIN
+/// `description`/`commands` (shape de 0.25.x) debe seguir deserializando
+/// aquí — ambos campos caen a su default (`None`/`vec![]`), nunca un error.
+#[test]
+fn plugin_info_old_shape_tolerance() {
+    use norte_proto::methods::PluginInfo;
+    let old_shape = r#"{
+        "id": "org.norte.demo",
+        "name": "Demo Previewer",
+        "publisher": "norte",
+        "version": "0.1.0",
+        "category": "previewer",
+        "capabilities": ["fs-read"],
+        "approved": true,
+        "enabled": true
+    }"#;
+    let info: PluginInfo = serde_json::from_str(old_shape).expect("shape 0.25.x tolerado");
+    assert_eq!(info.description, None);
+    assert!(info.commands.is_empty());
+}
+
+/// (P1, 0.26.0) Estabilidad de bytes hacia atrás: cuando `description` es
+/// `None` (el default, y lo que un plugin sin manifiesto-description
+/// produce hoy), la clave NO sale al wire — un peer N-1 que solo conoce el
+/// shape de 0.25.x ve exactamente lo de antes salvo por el nuevo
+/// `commands` (aditivo, siempre presente aunque vacío).
+#[test]
+fn plugin_info_none_description_omitted_on_wire() {
+    use norte_proto::methods::PluginInfo;
+    let info = PluginInfo {
+        id: "org.norte.demo".into(),
+        name: "Demo Previewer".into(),
+        publisher: "norte".into(),
+        version: "0.1.0".into(),
+        category: "previewer".into(),
+        capabilities: vec!["fs-read".into()],
+        approved: true,
+        enabled: true,
+        description: None,
+        commands: vec![],
+    };
+    let wire = serde_json::to_string(&info).unwrap();
+    assert!(
+        !wire.contains("description"),
+        "description:None no debe serializarse: {wire}"
+    );
+    assert!(
+        wire.contains(r#""commands":[]"#),
+        "commands es aditivo pero SIEMPRE presente (sin skip_if vacío): {wire}"
+    );
 }
 
 #[test]

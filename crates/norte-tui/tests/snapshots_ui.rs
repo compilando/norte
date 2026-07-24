@@ -224,6 +224,9 @@ fn snapshot_extensions_80x24() {
             capabilities: vec!["fs-read".into()],
             approved: false,
             enabled: true,
+            // P1 T3 fills these (extension manager description line).
+            description: None,
+            commands: Vec::new(),
         }],
         errors: Vec::new(),
         cursor: 0,

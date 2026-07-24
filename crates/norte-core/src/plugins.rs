@@ -205,6 +205,10 @@ impl PluginRegistry {
                     // la UI ve `approved = false` y vuelve a pedir consentimiento.
                     approved: Self::approval_is_current(&st, &e.manifest),
                     enabled: st.enabled,
+                    // P1 T2 fills these (manifest `description` field +
+                    // `Contributions.command`, out of scope for the proto bump).
+                    description: None,
+                    commands: Vec::new(),
                 }
             })
             .collect();
