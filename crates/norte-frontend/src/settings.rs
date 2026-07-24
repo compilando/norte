@@ -42,7 +42,18 @@ pub enum SettingKind {
     Enum(&'static [&'static str]),
     /// Free text.
     Text,
-    /// Integer in `[min, max]`.
+    /// A NUMBER in `[min, max]` — despite the name, the buffer parses as
+    /// `f64` and accepts a fractional part (revisión S, M4): `ui.font-size`
+    /// is the only entry using this kind, and its underlying config field
+    /// (`CommonConfig::ui_font_size`) is `f32`, not an integer — a
+    /// hand-edited `font_size = 14.5` was previously un-editable from this
+    /// UI (the old strict `i64` parse rejected it outright). `min`/`max`
+    /// stay `i64` (every bound in the catalog today is a whole number;
+    /// widening them to `f64` for one entry wasn't worth the churn). The
+    /// written [`toml_edit::Value`] is an Integer when the parsed number has
+    /// no fractional part (keeps `norte.toml` looking the same as before
+    /// for the common whole-number case) and a Float otherwise — see
+    /// [`SettingsState::edit_commit`].
     Int {
         /// Inclusive lower bound.
         min: i64,
@@ -624,7 +635,9 @@ impl SettingsState {
         }
     }
 
-    /// Confirms the inline edit buffer: `Int` validates `[min, max]`
+    /// Confirms the inline edit buffer: `Int` parses the buffer as `f64`
+    /// (revisión S, M4 — see [`SettingKind::Int`]'s doc for why a "whole
+    /// number" kind accepts a fractional part) and validates `[min, max]`
     /// ([`SettingsEditError`] WITHOUT persisting, buffer intact — the user
     /// corrects and retries); `Text` accepts anything. Only reachable with
     /// [`Self::is_editing`] — the caller guarantees it; without an active
@@ -633,9 +646,9 @@ impl SettingsState {
     ///
     /// # Errors
     /// [`SettingsEditError::NotAnInt`] if an `Int` row's buffer does not
-    /// parse (or, as an inert fallback, if there is no active edit);
-    /// [`SettingsEditError::OutOfRange`] if it parses but falls outside
-    /// `[min, max]`. Never for a `Text` row.
+    /// parse as a number (or, as an inert fallback, if there is no active
+    /// edit); [`SettingsEditError::OutOfRange`] if it parses but falls
+    /// outside `[min, max]`. Never for a `Text` row.
     pub fn edit_commit(&mut self) -> Result<PendingWrite, SettingsEditError> {
         let (Some(buf), Some(real)) = (self.edit.clone(), self.visible.get(self.cursor).copied())
         else {
@@ -646,14 +659,31 @@ impl SettingsState {
         };
         let def = &catalog()[idx];
         let write = if let SettingKind::Int { min, max } = def.kind {
-            let n: i64 = buf
+            let n: f64 = buf
                 .trim()
                 .parse()
                 .map_err(|_| SettingsEditError::NotAnInt)?;
-            if n < min || n > max {
+            // `min`/`max` are catalog constants, always tiny (today: 8/32) —
+            // the precision loss `as f64` could theoretically incur past
+            // 2^53 never applies here.
+            #[allow(clippy::cast_precision_loss)]
+            let (min_f, max_f) = (min as f64, max as f64);
+            if n < min_f || n > max_f {
                 return Err(SettingsEditError::OutOfRange { min, max });
             }
-            self.commit_row(real, def, n.to_string(), toml_edit::Value::from(n))
+            // Whole number → TOML Integer (keeps `norte.toml` looking the
+            // same as before this fix for the common case, "14" not
+            // "14.0"); fractional → TOML Float ("14.5"). `n.to_string()`
+            // already renders a whole `f64` WITHOUT a trailing ".0" (Rust's
+            // `Display` for floats picks the shortest round-tripping form),
+            // so `display` needs no separate branch.
+            #[allow(clippy::cast_possible_truncation)] // n ∈ [min, max], both i64
+            let value = if n.fract() == 0.0 {
+                toml_edit::Value::from(n as i64)
+            } else {
+                toml_edit::Value::from(n)
+            };
+            self.commit_row(real, def, n.to_string(), value)
         } else {
             // By construction, only `Text`/`Int` open `self.edit`
             // (`Self::activate`) — this is the `Text` arm.
@@ -700,6 +730,39 @@ fn cycle(current: &str, values: &[&str]) -> String {
         .position(|v| *v == current)
         .map_or(0, |i| (i + 1) % values.len());
     values[next].to_owned()
+}
+
+/// Whether `app.quit` should open a confirmation modal, given the
+/// configured `[ui] confirm_quit` mode and whether there is pending work to
+/// lose (only consulted for `Auto` — `Never`/`Always` are unconditional).
+/// "Pending work" means something different per frontend (TUI:
+/// `TaskBoard::has_active`; GUI: tasks/marks/inflight, see
+/// `confirm_quit_task_count`) — the caller computes THAT; this is only the
+/// three-way decision from the mode, and it was byte-identical in both
+/// frontends before this hoist (revisión S, M6: TUI's `quit_needs_confirm`
+/// and the GUI's `confirm_quit_should_open`).
+#[must_use]
+pub fn quit_needs_confirm(mode: norte_config::ConfirmQuit, pending: bool) -> bool {
+    match mode {
+        norte_config::ConfirmQuit::Never => false,
+        norte_config::ConfirmQuit::Always => true,
+        norte_config::ConfirmQuit::Auto => pending,
+    }
+}
+
+/// Status-bar/inline message for a [`SettingsEditError`] — by CATEGORY
+/// (Fluent), never ad hoc text (#73 pattern). Shared by the TUI overlay
+/// (S3) and the GUI view (S4, revisión S M6): both had their own
+/// byte-identical copy of this match before this hoist.
+#[must_use]
+pub fn edit_error_message(e: &SettingsEditError) -> String {
+    match e {
+        SettingsEditError::NotAnInt => t("msg-settings-invalid-int"),
+        SettingsEditError::OutOfRange { min, max } => norte_i18n::ta(
+            "msg-settings-invalid-range",
+            &[("min", &min.to_string()), ("max", &max.to_string())],
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -1054,6 +1117,43 @@ mod tests {
         assert_eq!(write.display, "16");
     }
 
+    /// Revisión S, M4: `ui.font-size` acepta un valor FRACCIONARIO
+    /// (`[ui] font_size` es `f32` en `norte_config`, no un entero — un
+    /// `norte.toml` editado a mano con `font_size = 14.5` era imposible de
+    /// re-editar desde aquí antes de este fix, el `i64::parse` estricto lo
+    /// rechazaba). Round-trip: "14.5" → `Value::Float(14.5)` + `display`
+    /// SIN ceros de más.
+    #[test]
+    fn edit_commit_en_font_size_acepta_fraccion_y_round_tripea() {
+        let mut s = only("font-size");
+        s.activate(&[], &[]);
+        for c in "14.5".chars() {
+            s.edit_push_char(c);
+        }
+        let write = s.edit_commit().expect("14.5 está en [8,32]");
+        assert_eq!(write.value.as_float(), Some(14.5));
+        assert_eq!(
+            write.value.as_integer(),
+            None,
+            "no debe escribirse como entero"
+        );
+        assert_eq!(write.display, "14.5");
+    }
+
+    /// Un valor fraccionario FUERA de rango (p. ej. `33.5`) sigue
+    /// rechazándose — el parse más permisivo (`f64` en vez de `i64`) no
+    /// debilita la validación de `[min, max]`.
+    #[test]
+    fn edit_commit_en_font_size_fraccion_fuera_de_rango_rechaza() {
+        let mut s = only("font-size");
+        s.activate(&[], &[]);
+        for c in "33.5".chars() {
+            s.edit_push_char(c);
+        }
+        let err = s.edit_commit().expect_err("33.5 fuera de [8,32]");
+        assert_eq!(err, SettingsEditError::OutOfRange { min: 8, max: 32 });
+    }
+
     #[test]
     fn edit_cancel_no_persiste_y_conserva_el_valor_original() {
         let mut s = only("mono-font");
@@ -1155,5 +1255,33 @@ mod tests {
             "no encontrado: arranca en el primero"
         );
         assert_eq!(cycle("a", &[]), "a", "lista vacía: no panica, no cambia");
+    }
+
+    // --- `quit_needs_confirm`/`edit_error_message` (revisión S, M6 hoist) ---
+
+    #[test]
+    fn quit_needs_confirm_los_tres_modos() {
+        use norte_config::ConfirmQuit;
+        assert!(
+            !quit_needs_confirm(ConfirmQuit::Never, true),
+            "Never: jamás"
+        );
+        assert!(
+            quit_needs_confirm(ConfirmQuit::Always, false),
+            "Always: siempre"
+        );
+        assert!(
+            quit_needs_confirm(ConfirmQuit::Auto, true),
+            "Auto: sigue a pending"
+        );
+        assert!(!quit_needs_confirm(ConfirmQuit::Auto, false));
+    }
+
+    #[test]
+    fn edit_error_message_por_categoria_nunca_vacio() {
+        assert!(!edit_error_message(&SettingsEditError::NotAnInt).is_empty());
+        let msg = edit_error_message(&SettingsEditError::OutOfRange { min: 8, max: 32 });
+        assert!(!msg.is_empty());
+        assert!(msg.contains('8') && msg.contains("32"), "{msg}");
     }
 }

@@ -298,16 +298,36 @@ pub fn resolve_settings(
     Ok(out)
 }
 
+/// Revisión S, M5: ¿es seguro usar `id` como UN ÚNICO segmento de ruta
+/// (`config_dir.join("plugins").join(id)`)? Rechaza vacío, `.`/`..`
+/// EXACTOS, y cualquier separador de ruta embebido (`/`, y `\` por si el
+/// mismo binario corriera en Windows algún día — `Path::join` en Unix trata
+/// `\` como un carácter normal de nombre, pero un `plugin_id` con `\` sigue
+/// siendo sospechoso ahí también). Defensa en profundidad BARATA: el
+/// charset reverse-DNS del manifiesto (`manifest::is_valid_plugin_id`, que
+/// corre al parsear un plugin aprobado) ya excluye todo esto en el camino
+/// normal; este guard cubre al primitivo de escritura ante un caller futuro
+/// que no repita esa validación.
+#[must_use]
+fn plugin_id_is_safe_path_segment(id: &str) -> bool {
+    !id.is_empty() && id != "." && id != ".." && !id.contains(['/', '\\'])
+}
+
 /// Fija `key = value` en `config_dir/plugins/<plugin_id>/config.toml` (S2),
 /// PRESERVANDO comentarios y formato (`toml_edit`) — mismo patrón que
 /// `norte_config::persist_set`, adaptado a que este fichero es PLANO (P2
 /// decisión 3: sin secciones anidadas, cada clave vive top-level). Crea el
 /// directorio del plugin y el fichero si no existen.
 ///
-/// `plugin_id` NO se valida aquí: el caller debe pasar uno YA validado (p.
-/// ej. el `id` de un [`Manifest`] ya cargado, que pasó el charset
-/// reverse-DNS al parsear) — se usa directo como segmento de ruta, así que
-/// un `plugin_id` no confiable podría escapar `plugins/`. Misma
+/// `plugin_id` debe llegar YA validado por el caller (p. ej. el `id` de un
+/// [`Manifest`] ya cargado, que pasó el charset reverse-DNS al parsear) —
+/// esta función AÑADE un guard barato de defensa en profundidad (revisión S,
+/// M5: [`plugin_id_is_safe_path_segment`]) porque `plugin_id` se usa DIRECTO
+/// como segmento de ruta (`config_dir.join("plugins").join(plugin_id)`): sin
+/// el guard, un `plugin_id` no confiable con `..`/un separador podría escapar
+/// `plugins/` — el propio charset reverse-DNS del manifiesto ya lo impide
+/// para un plugin APROBADO normalmente, pero este primitivo no debe confiar
+/// ciegamente en que TODO caller futuro repita esa validación. Misma
 /// responsabilidad que ya tiene cualquier caller de `PluginEntry::dir`.
 ///
 /// `value` se escribe TAL CUAL como un string TOML (escapado por
@@ -324,7 +344,9 @@ pub fn resolve_settings(
 /// caso plano `string`/`enum` (el único que S2 conecta de punta a punta).
 ///
 /// # Errors
-/// [`std::io::Error`] si el `config.toml` existente no parsea o falla el I/O.
+/// [`std::io::Error`] (`InvalidInput`) si `plugin_id` no pasa
+/// [`plugin_id_is_safe_path_segment`]; (otro kind) si el `config.toml`
+/// existente no parsea o falla el I/O.
 pub fn persist_plugin_setting(
     config_dir: &Path,
     plugin_id: &str,
@@ -332,6 +354,12 @@ pub fn persist_plugin_setting(
     value: &str,
 ) -> io::Result<std::path::PathBuf> {
     use std::io::{Error, ErrorKind};
+    if !plugin_id_is_safe_path_segment(plugin_id) {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "plugin_id inválido como segmento de ruta",
+        ));
+    }
     let dir = config_dir.join("plugins").join(plugin_id);
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("config.toml");
@@ -379,6 +407,45 @@ mod persist_plugin_setting_tests {
         assert!(
             s.contains("greeting = \"hola\""),
             "valor previo intacto: {s}"
+        );
+    }
+
+    /// Revisión S, M5: par positivo/negativo de
+    /// [`plugin_id_is_safe_path_segment`] — vacío, `.`/`..` exactos, y
+    /// cualquier `plugin_id` con un separador embebido se rechazan; un id
+    /// reverse-DNS normal no.
+    #[test]
+    fn plugin_id_is_safe_path_segment_rechaza_vacio_puntos_y_separadores() {
+        for bad in ["", ".", "..", "../etc", "a/../b", "a/b", "a\\b", "/etc"] {
+            assert!(
+                !plugin_id_is_safe_path_segment(bad),
+                "{bad:?} debería rechazarse"
+            );
+        }
+        for good in ["org.norte.demo", "a", "a-b.c"] {
+            assert!(
+                plugin_id_is_safe_path_segment(good),
+                "{good:?} debería aceptarse"
+            );
+        }
+    }
+
+    /// Revisión S, M5: `persist_plugin_setting` con un `plugin_id` hostil
+    /// (`..`) es un `Err(InvalidInput)` — NUNCA escribe fuera de
+    /// `config_dir/plugins/`. Pin de path traversal: sin el guard,
+    /// `config_dir.join("plugins").join("..")` resuelve al propio
+    /// `config_dir` — este test falla ruidosamente si esa regresión vuelve.
+    #[test]
+    fn persist_plugin_setting_rechaza_plugin_id_hostil() {
+        let base = tempfile::tempdir().unwrap();
+        let err = persist_plugin_setting(base.path(), "..", "mode", "slow")
+            .expect_err("\"..\" debe rechazarse");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        // Nada se creó ni en `config_dir` ni en un ".." imaginario fuera de
+        // él — el guard corre ANTES de cualquier I/O.
+        assert!(
+            std::fs::read_dir(base.path()).unwrap().next().is_none(),
+            "config_dir debe seguir vacío"
         );
     }
 

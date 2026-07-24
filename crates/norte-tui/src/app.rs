@@ -235,6 +235,12 @@ impl Pane {
         self.state.set_pending_focus(child);
     }
 
+    /// Descarta un foco pendiente sin consumirlo (revisión S, M2). Ver
+    /// [`norte_frontend::PaneState::clear_pending_focus`].
+    pub fn clear_pending_focus(&mut self) {
+        self.state.clear_pending_focus();
+    }
+
     // --- Listado + búsqueda viva (propio de la TUI, encima del estado) ---
 
     /// Marca (o desmarca) el flag de carga de un fill paginado (ADR 0017).
@@ -1594,15 +1600,13 @@ pub enum Modal {
 /// aporta `board_has_active` ([`crate::tasks::TaskBoard::has_active`]), así
 /// que es testeable sin ratatui/tokio. `Auto` (por defecto) es el
 /// comportamiento pre-S2: confirma solo si el panel de tasks tiene trabajo en
-/// vuelo; `Always`/`Never` son incondicionales.
+/// vuelo; `Always`/`Never` son incondicionales. Envoltorio fino (revisión S,
+/// M6): la decisión de tres vías era byte-idéntica a la de la GUI
+/// (`confirm_quit_should_open`) — hoisteada a
+/// [`norte_frontend::settings::quit_needs_confirm`].
 #[must_use]
 pub fn quit_needs_confirm(mode: crate::config::ConfirmQuit, board_has_active: bool) -> bool {
-    use crate::config::ConfirmQuit;
-    match mode {
-        ConfirmQuit::Never => false,
-        ConfirmQuit::Always => true,
-        ConfirmQuit::Auto => board_has_active,
-    }
+    norte_frontend::settings::quit_needs_confirm(mode, board_has_active)
 }
 
 /// Resultado de una tecla sobre un modal.

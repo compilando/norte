@@ -148,9 +148,11 @@ pub struct UiSection {
     #[serde(default)]
     pub reduce_motion: Option<bool>,
     /// Whether `app.quit` confirms before closing (S2): `"auto"` (default)
-    /// confirms only with pending work (today's behavior — active tasks in
-    /// the TUI's board, tasks/marks in the GUI); `"always"` always confirms,
-    /// even with nothing pending; `"never"` closes immediately.
+    /// confirms only with pending work (active tasks in the TUI's board,
+    /// tasks/marks in the GUI — the behavior before this setting existed,
+    /// preserved as the default rather than a fixed point in time);
+    /// `"always"` always confirms, even with nothing pending; `"never"`
+    /// closes immediately.
     ///
     /// [`crate::load::load`] rejects other values (same pattern as
     /// `quick_search`) so its diagnostic can include the source path.

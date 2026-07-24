@@ -188,21 +188,6 @@ pub fn activate(s: &mut SettingsState) -> SettingsOutcome {
     }
 }
 
-/// Message for a [`SettingsEditError`] (mirrors the TUI's
-/// `settings_edit_error_message`) — by CATEGORY, never the raw buffer (it's
-/// user-typed but the error itself carries no user text to leak, so this is
-/// belt-and-suspenders, not a real hazard).
-#[must_use]
-pub fn edit_error_message(e: &SettingsEditError) -> String {
-    match e {
-        SettingsEditError::NotAnInt => norte_i18n::t("msg-settings-invalid-int"),
-        SettingsEditError::OutOfRange { min, max } => norte_i18n::ta(
-            "msg-settings-invalid-range",
-            &[("min", &min.to_string()), ("max", &max.to_string())],
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use norte_frontend::settings::{SettingKind, build_rows, catalog};
@@ -336,11 +321,5 @@ mod tests {
             SettingsOutcome::Write(w) => assert_eq!(w.value.as_str(), Some("vim")),
             other => panic!("esperaba Write, vino {other:?}"),
         }
-    }
-
-    #[test]
-    fn edit_error_message_no_esta_vacio_para_cada_variante() {
-        assert!(!edit_error_message(&SettingsEditError::NotAnInt).is_empty());
-        assert!(!edit_error_message(&SettingsEditError::OutOfRange { min: 1, max: 2 }).is_empty());
     }
 }

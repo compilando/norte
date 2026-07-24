@@ -548,11 +548,24 @@ impl NorteGui {
         self.panes[pane].begin_loading(dir.clone());
         self.errors[pane] = None;
         self.query[pane].clear();
-        let _ = self.cmds.send(SessionCmd::List {
-            pane,
-            generation,
-            dir,
-        });
+        let sent = self
+            .cmds
+            .send(SessionCmd::List {
+                pane,
+                generation,
+                dir,
+            })
+            .is_ok();
+        if !sent {
+            // Revisión S, M2: el hilo de sesión murió (p. ej. `connect`
+            // falló al arrancar) — ningún `SessionEvent::Listed` llegará
+            // jamás para esta generación, así que `set_listing` (el ÚNICO
+            // consumidor de `pending_focus`, ver su doc) tampoco se llama.
+            // Sin este guard, un hint fijado por `nav.parent` justo antes de
+            // este `cd` sobreviviría indefinidamente y podría aterrizar en
+            // un `cd` futuro sin relación.
+            self.panes[pane].clear_pending_focus();
+        }
     }
 
     /// Drena los eventos del hilo de sesión y los aplica al estado (UN solo
@@ -1007,7 +1020,7 @@ impl NorteGui {
             settings_view::SettingsOutcome::Invalid(e) => {
                 if let Some(view) = &mut self.settings_view {
                     view.status = Some(settings_view::SettingsStatus {
-                        message: settings_view::edit_error_message(&e),
+                        message: norte_frontend::settings::edit_error_message(&e),
                         error: true,
                     });
                 }
@@ -2607,14 +2620,12 @@ fn confirm_quit_task_count(task_progress_len: usize, marks: usize, inflight_len:
 /// fuera de este `match` sería redundante con ese corte temprano, así que
 /// esta función solo cubre `Always`/`Auto` — llamarla con `Never` es
 /// correcto igualmente (`false` incondicional) pero nunca ocurre en el
-/// camino real. Puro: testeable sin GPUI.
+/// camino real. Puro: testeable sin GPUI. Envoltorio fino (revisión S, M6):
+/// byte-idéntica a la de la TUI (`quit_needs_confirm`) — hoisteada a
+/// [`norte_frontend::settings::quit_needs_confirm`].
 #[must_use]
 fn confirm_quit_should_open(mode: ConfirmQuit, pending: bool) -> bool {
-    match mode {
-        ConfirmQuit::Never => false,
-        ConfirmQuit::Always => true,
-        ConfirmQuit::Auto => pending,
-    }
+    norte_frontend::settings::quit_needs_confirm(mode, pending)
 }
 
 /// ¿Sigue vigente el resultado de un `fs.list`? Solo si su generación coincide

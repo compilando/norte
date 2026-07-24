@@ -213,6 +213,13 @@ msg-hotlist-removed = favorite removed: { $name }
 msg-plugin-run-ok = extension: { $output }
 msg-settings-saved = { $name } saved: { $value }
 msg-settings-save-failed = not saved: { $error }
+# S review I1: the background write task itself panicked or was cancelled
+# (never observed in practice — the one known panic source, an unexpected
+# `[section]` shape, is now a clean `Err` from `persist_set` — this is the
+# defense-in-depth arm for anything else that could still crash that task).
+# No `{ $error }` placeholder on purpose: a join failure carries no clean,
+# localizable category the way an `io::Error` kind does.
+msg-settings-save-crashed = internal error while saving — the value was not written
 msg-settings-invalid-int = not a number
 msg-settings-invalid-range = value must be between { $min } and { $max }
 msg-settings-no-config-dir = no user config directory (env not set)
@@ -371,6 +378,6 @@ setting-ui-quick-search-desc = What `/` does: narrow the listing (filter) or mov
 setting-ui-reduce-motion-name = Reduce motion
 setting-ui-reduce-motion-desc = Turn off animated effects (CRT flicker, cursor blink) for accessibility. GUI only.
 setting-ui-confirm-quit-name = Confirm before quitting
-setting-ui-confirm-quit-desc = When quitting asks for confirmation: only with pending work (auto), always, or never.
+setting-ui-confirm-quit-desc = When quitting asks for confirmation: only with pending work (auto), always, or never. An emergency-exit shortcut, where bound (e.g. the TUI's Ctrl+C), always bypasses this.
 setting-keymap-preset-name = Keymap preset
 setting-keymap-preset-desc = Base key-binding preset (orthodox, vim, or cua). User/project layers can still rebind on top.

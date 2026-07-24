@@ -57,15 +57,6 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     }
     draw_tasks(frame, rows[1], app);
     draw_status(frame, rows[2], app);
-    if let Some(modal) = &app.modal {
-        draw_modal(
-            frame,
-            modal,
-            &app.theme,
-            app.focused().name_encoding(),
-            &app.dialog_hints,
-        );
-    }
     if let Some(help) = &app.help {
         draw_help(frame, help, &app.theme);
     }
@@ -92,6 +83,24 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     }
     if let Some(settings) = &app.settings {
         draw_settings(frame, settings, &app.theme);
+    }
+    // Revisión S, M3: el modal se pinta ÚLTIMO, por encima de CUALQUIER otro
+    // overlay — el enrutado de teclas ya lo trata como AUTORITATIVO en
+    // presencia de la palette o el overlay de ajustes (`modal_preempts_
+    // palette`/`modal_preempts_settings`, `main.rs`: un modal en vuelo p.ej.
+    // una aprobación de policy async SIEMPRE gana la tecla). Antes se
+    // pintaba justo tras la barra de estado, así que cualquier overlay
+    // posterior en esta lista lo TAPABA visualmente — los píxeles mentían
+    // sobre quién manda. Cierra la clase de H1 MINOR-4 (aceptada entonces
+    // solo para la palette) para AMBOS overlays.
+    if let Some(modal) = &app.modal {
+        draw_modal(
+            frame,
+            modal,
+            &app.theme,
+            app.focused().name_encoding(),
+            &app.dialog_hints,
+        );
     }
 }
 

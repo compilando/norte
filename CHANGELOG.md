@@ -274,6 +274,29 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **`persist_set` panicked on a malformed `[section]` (S review I1):** a
+  hand-edited `norte.toml` with a scalar section (`ui = 3`) or an
+  array-of-tables (`[[ui]]`) made the settings-write primitive panic instead
+  of returning an error — reachable in both frontends' background write
+  task (GUI: could take the process down; TUI: the panic was swallowed
+  silently, leaving the settings row optimistically showing "edited" even
+  though nothing was written). Now a clean `io::ErrorKind::InvalidData`; the
+  TUI's previously-silent panic arm now shows a status message too.
+- **Settings paint order (S review M3):** a modal (e.g. an async policy
+  approval) painted UNDER the TUI's command palette or settings overlay
+  when both were open, even though key input already treated the modal as
+  authoritative — the pixels lied about who was in control. The modal now
+  paints last, on top of every overlay.
+- **`nav.parent`'s cursor-memory hint could survive a failed `cd` (S review
+  M2):** landing back on the child you came from only worked after a
+  *successful* navigation; a failed one (permission denied, a dead session)
+  left the hint set, ready to hijack an unrelated future navigation's
+  cursor placement. Both frontends now clear it on failure.
+- **`ui.font-size` couldn't be edited to a fractional value (S review M4):**
+  the settings UI's `Int` editor only accepted whole numbers, even though
+  `[ui] font_size` is a float — a hand-set `14.5` was invisible to the
+  editor (typing it back always failed). It now accepts a fractional part
+  and round-trips it.
 - **Silent short reads from zip entries (#95):** a zip whose central directory
   promises more bytes than the deflate stream delivers now fails loudly with
   `corrupt` mid-stream instead of silently returning a partial file.

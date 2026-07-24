@@ -1451,20 +1451,48 @@ async fn persist_setting(app: &mut App, write: PendingWrite) {
                 &[("error", &io_error_category(&e))],
             ));
         }
-        // Un panic en el write es un bug nuestro: que no tumbe la TUI.
-        Err(_) => {}
+        // Revisión S I1: la tarea de `spawn_blocking` panicó o se canceló
+        // (antes: silencio total — la fila optimista de `Settings::
+        // commit_row` quedaba MINTIENDO "editado" aunque nada se escribió).
+        // No debe tumbar la TUI: se anuncia en la barra (categoría genérica,
+        // sin `{$error}` — un `JoinError` no trae una categoría limpia) y se
+        // deja rastro con `tracing` para diagnóstico — jamás `eprintln!`
+        // aquí, que corrompería la pantalla alterna de ratatui mientras la
+        // TUI sigue viva.
+        Err(e) => {
+            tracing::error!(error = %e, "tarea de fondo de persist_setting no terminó");
+            app.message = Some(t("msg-settings-save-crashed"));
+        }
     }
 }
 
 /// Mensaje de barra para un [`SettingsEditError`] (S3) — por CATEGORÍA
-/// Fluent, nunca texto ad hoc (#73 pattern).
+/// Fluent, nunca texto ad hoc (#73 pattern). Envoltorio fino (revisión S,
+/// M6): byte-idéntico al de la GUI (`settings_view::edit_error_message`) —
+/// hoisteado a [`norte_frontend::settings::edit_error_message`].
 fn settings_edit_error_message(e: &SettingsEditError) -> String {
-    match e {
-        SettingsEditError::NotAnInt => t("msg-settings-invalid-int"),
-        SettingsEditError::OutOfRange { min, max } => ta(
-            "msg-settings-invalid-range",
-            &[("min", &min.to_string()), ("max", &max.to_string())],
-        ),
+    norte_frontend::settings::edit_error_message(e)
+}
+
+#[cfg(test)]
+mod settings_message_tests {
+    use norte_i18n::{Lang, t_in};
+
+    /// Revisión S I1: `msg-settings-save-crashed` (el brazo `Err(_)` de
+    /// `persist_setting`, ver su doc) resuelve a texto REAL en ambos
+    /// locales — no al id crudo, que es lo que se vería en la barra si
+    /// faltara la clave en algún `.ftl`. Mismo criterio de cobertura que
+    /// `norte_frontend::settings`'s `fluent_keys_existen_en_ambos_locales_
+    /// para_cada_entrada`.
+    #[test]
+    fn msg_settings_save_crashed_existe_en_ambos_locales() {
+        for lang in [Lang::Es, Lang::En] {
+            assert_ne!(
+                t_in(lang, "msg-settings-save-crashed"),
+                "msg-settings-save-crashed",
+                "falta la clave en {lang:?}"
+            );
+        }
     }
 }
 
@@ -2975,6 +3003,16 @@ async fn dispatch(
             if let Some(parent) = parent {
                 app.focused_mut().set_pending_focus(child);
                 cd_outcome = cd(app, backend, events, parent).await;
+                // Revisión S, M2: un `cd` FALLIDO (permiso denegado, error
+                // del daemon…) nunca llama a `set_listing` (`cd`'s doc, `Err`
+                // arm), así que el hint recién fijado arriba nunca se
+                // consume — descartarlo aquí evita que sobreviva a un `cd`
+                // futuro sin relación. `Cd::Cancelled` (p. ej. el modal TOFU,
+                // que REINTENTA esta misma navegación) lo CONSERVA a
+                // propósito: el reintento debe seguir aterrizando en `child`.
+                if matches!(cd_outcome, Cd::Failed(_)) {
+                    app.focused_mut().clear_pending_focus();
+                }
             } else {
                 // Raíz `/` o raíz de unidad Windows (`parent()` = None): antes
                 // era un no-op SILENCIOSO (#20). Ahora avisa por la barra.

@@ -575,6 +575,48 @@ fn snapshot_settings_abierta() {
     insta::assert_snapshot!(render_80x24(&app));
 }
 
+/// Revisión S, M3: con el overlay de ajustes Y un modal AMBOS abiertos (el
+/// enrutado de teclas ya trata al modal como AUTORITATIVO en este caso,
+/// `modal_preempts_settings`), el modal debe pintarse ENCIMA — antes se
+/// pintaba antes que `draw_settings` en `ui::draw`, así que el overlay lo
+/// tapaba visualmente aunque las teclas seguían yendo al modal. Pin: el
+/// título del modal ("papelera") es visible en el snapshot, no enterrado
+/// bajo la lista de ajustes.
+#[test]
+fn snapshot_modal_pinta_encima_del_overlay_de_ajustes() {
+    let mut app = app_base();
+    let settings = norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia()));
+    app.settings = Some(settings);
+    app.modal = Some(Modal::ConfirmDelete {
+        target: vp("file:///casa/notas.txt"),
+        permanent: false,
+    });
+    insta::assert_snapshot!(render_80x24(&app));
+}
+
+/// Mismo caso que arriba, con la PALETTE en vez del overlay de ajustes
+/// (`modal_preempts_palette`) — la otra mitad de la clase H1 MINOR-4.
+#[test]
+fn snapshot_modal_pinta_encima_de_la_palette() {
+    let mut app = app_base();
+    let presets = norte_tui::keymap::presets();
+    let (_, preset) = presets.iter().find(|(n, _)| *n == "orthodox").unwrap();
+    let build = |screen| {
+        norte_tui::keymap::Effective::build_for(preset, &[], norte_tui::keymap::COMMANDS, screen)
+            .unwrap()
+    };
+    let rows = norte_tui::palette::build_rows(
+        &build(norte_tui::keymap::Screen::Browse),
+        &build(norte_tui::keymap::Screen::Viewer),
+    );
+    app.palette = Some(norte_tui::app::Palette::new(rows));
+    app.modal = Some(Modal::ConfirmDelete {
+        target: vp("file:///casa/notas.txt"),
+        permanent: false,
+    });
+    insta::assert_snapshot!(render(&app));
+}
+
 /// Filtrada + EDITANDO (S3): filtra a la fila `Text` `ui.font` (el espacio
 /// final la aísla de `ui.font-size`, ver `app::settings_tests`), `activate`
 /// abre el buffer de edición y se teclea un valor — pincha que la lista

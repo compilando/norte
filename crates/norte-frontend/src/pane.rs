@@ -470,6 +470,17 @@ impl PaneState {
         self.pending_focus = Some(child);
     }
 
+    /// Descarta un foco pendiente SIN consumirlo contra un listado (revisión
+    /// S, M2): [`Self::set_listing`] es el ÚNICO sitio que hasta ahora
+    /// consumía `pending_focus` — un `nav.parent` cuyo `cd` FALLA (permiso
+    /// denegado, error del daemon…) nunca llega a `set_listing`, así que el
+    /// hint quedaba vivo y podía aterrizar en un `cd` MUY posterior y sin
+    /// relación, en el pane equivocado. El caller (`nav.parent`, ambos
+    /// frontends) llama a esto en la rama de error del `cd`.
+    pub fn clear_pending_focus(&mut self) {
+        self.pending_focus = None;
+    }
+
     /// Marca/desmarca el pane como cargando SIN tocar el resto del estado: un
     /// fill paginado (ADR 0017) pinta la primera página y sigue (`true`), baja
     /// el flag al terminar (`false`). (#82)
@@ -960,6 +971,30 @@ mod tests {
             VPath::parse("mem:///a").unwrap(),
             "consumido: la segunda vuelta usa memoria (a), no el pending_focus viejo (b)"
         );
+    }
+
+    /// Revisión S, M2: un `cd` que FALLA no debe dejar un `pending_focus`
+    /// fantasma vivo para un `set_listing` futuro y sin relación —
+    /// `clear_pending_focus` (llamado por el caller en la rama de error del
+    /// `cd`) lo descarta SIN consumirlo contra ningún listado.
+    #[test]
+    fn clear_pending_focus_descarta_el_hint_sin_listado() {
+        let mut p = pane(&["a", "b", "c"]);
+        p.set_pending_focus(VPath::parse("mem:///b").unwrap());
+        p.clear_pending_focus();
+        // Un `set_listing` posterior (el reintento del `cd`, o uno
+        // totalmente distinto) NO aterriza en "b": no hay memoria para
+        // "mem:///" en este pane fresco, así que el cursor cae al 0 de
+        // siempre — si el hint hubiera sobrevivido, "b" ganaría igual.
+        p.set_listing(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a", EntryKind::File),
+                e("mem:///b", EntryKind::File),
+                e("mem:///c", EntryKind::File),
+            ],
+        );
+        assert_eq!(p.cursor(), 0, "el hint descartado no debe ganar");
     }
 
     /// Bytes hostiles (segmento 0xFF/0xFE, forma wire del corpus): la

@@ -53,9 +53,27 @@ pub fn persist_ui_theme_to(dir: &std::path::Path, name: &str) -> std::io::Result
 /// (`toml_edit::Value`): un string se escapa solo (mismo mecanismo que
 /// `toml_edit::value(name)` usaba antes aquí), un bool/int se escriben nativos.
 ///
+/// CONTRATO de forma (revisión S, I1): cada `[section]` de `norte.toml` debe
+/// ser una tabla plana (`[section]` real o `section = { .. }` inline) —
+/// NUNCA un escalar (`ui = 3`) ni un array-of-tables (`[[ui]]`). `load` solo
+/// AVISA si una sección tiene una forma inesperada (degrada esa sección,
+/// sigue arrancando); este escritor, en cambio, debe RECHAZAR explícitamente
+/// una sección con forma escalar — indexar un `toml_edit::Item` escalar por
+/// clave (`item[key] = ..`) no crea nada: `panic!("index not found")` (la
+/// implementación de `IndexMut` de `toml_edit` para un `Item::Value` no
+/// tabla devuelve `None` internamente y el operador de índice lo
+/// `.expect()`). Alcanzable con una config editada a mano entre sesiones (el
+/// TUI solo lo AVISA en el reload, no lo bloquea) — un `panic` aquí tumbaría
+/// el hilo de fondo (GUI: se lleva el proceso; TUI: `JoinError` silencioso
+/// tras un `spawn_blocking`). Se comprueba con `Item::is_table_like` (el
+/// mismo criterio que usa el `IndexMut` interno de `toml_edit` para decidir
+/// si puede indexar) — así el guard nunca rechaza una forma que la propia
+/// librería aceptaría.
+///
 /// # Errors
-/// [`std::io::Error`] si no hay dir de usuario, el TOML existente no parsea, o
-/// falla el I/O.
+/// [`std::io::Error`] si no hay dir de usuario, el TOML existente no parsea,
+/// la sección existente no es una tabla (forma inesperada, ver el CONTRATO
+/// arriba), o falla el I/O.
 pub fn persist_set(
     dir: &std::path::Path,
     section: &str,
@@ -83,6 +101,21 @@ pub fn persist_set(
         Err(e) if e.kind() == ErrorKind::NotFound => toml_edit::DocumentMut::new(),
         Err(e) => return Err(e),
     };
+    // Guard de forma (revisión S, I1) — ANTES de tocar nada: una sección
+    // existente que no sea tabla (escalar, array-of-tables…) indexaría en
+    // pánico más abajo (ver el CONTRATO del rustdoc). `get` no crea nada
+    // (a diferencia de `entry`), así que este chequeo es de solo lectura.
+    if let Some(existing) = doc.as_table().get(section)
+        && !existing.is_table_like()
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "{}: [{section}] no es una tabla (forma inesperada); corrígelo o bórralo",
+                path.display()
+            ),
+        ));
+    }
     // Una tabla `[section]` recién creada sería IMPLÍCITA (se emitiría como
     // `section.key = …` en vez de bajo `[section]`): se crea EXPLÍCITA para
     // que el fichero nuevo tenga una sección legible; la ya existente se
@@ -269,7 +302,8 @@ pub enum QuickSearch {
 /// tasks/marks) — this type only carries the mode, not the predicate.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ConfirmQuit {
-    /// Confirm only when work is pending (today's behavior). Default.
+    /// Confirm only when work is pending (the behavior before this setting
+    /// existed, preserved as the default). Default.
     #[default]
     Auto,
     /// Always confirm, even with nothing pending.
@@ -1295,10 +1329,8 @@ mod persist_set_tests {
         );
     }
 
-    /// `[section]` ya existente (no una tabla, sino un escalar) — mirando el
-    /// comportamiento EXACTO de `persist_ui_theme_to` antes de S2: la
-    /// indexación de `toml_edit::Item` panica si la entrada no es tabla.
-    /// Documentado, no cambiado (mismo riesgo que el wrapper ya asumía).
+    /// `[section]` ya existente se REEMPLAZA (misma clave, valor nuevo) —
+    /// una sola ocurrencia en el fichero final, no una duplicada.
     #[test]
     fn persist_set_reemplaza_clave_existente() {
         let dir = tempfile::tempdir().unwrap();
@@ -1314,5 +1346,51 @@ mod persist_set_tests {
         assert_eq!(s.matches("theme").count(), 1, "una sola clave: {s}");
         assert!(s.contains("gruvbox-dark"), "{s}");
         assert!(!s.contains("\"nord\""), "{s}");
+    }
+
+    /// Revisión S, I1: `[section]` existente pero con forma ESCALAR
+    /// (`ui = 3`, p. ej. un `norte.toml` editado a mano entre sesiones) es
+    /// un `Err(InvalidData)` LIMPIO — antes de este fix, `toml_edit`
+    /// indexaba esa entrada y panicaba (`IndexMut` de un `Item::Value` no
+    /// tabla devuelve `None` internamente, `.expect()`d por el operador de
+    /// índice). Un panic aquí hundiría el hilo de fondo que llama a
+    /// `persist_set` (GUI: se lleva el proceso; TUI: `JoinError` silencioso).
+    /// El fichero queda INTACTO (el guard es de solo lectura, antes de
+    /// cualquier escritura).
+    #[test]
+    fn persist_set_seccion_escalar_es_err_no_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("norte.toml"), "ui = 3\n").unwrap();
+        let err = persist_set(dir.path(), "ui", "theme", toml_edit::Value::from("nord"))
+            .expect_err("[ui] escalar debe rechazarse, no panicar");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert_eq!(s, "ui = 3\n", "el fichero no se toca en el camino de error");
+    }
+
+    /// Mismo guard, forma array-of-tables (`[[ui]]`) — igual de "no tabla"
+    /// para nuestro propósito aunque `toml_edit` lo modele como su propio
+    /// tipo (`Item::ArrayOfTables`), no como un `Item::Value` escalar.
+    #[test]
+    fn persist_set_seccion_array_of_tables_es_err_no_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("norte.toml"), "[[ui]]\nx = 1\n").unwrap();
+        let err = persist_set(dir.path(), "ui", "theme", toml_edit::Value::from("nord"))
+            .expect_err("[[ui]] array-of-tables debe rechazarse, no panicar");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    /// Par positivo del guard: una sección `[section]` inline
+    /// (`ui = { theme = "x" }`) SÍ es tabla-like para `toml_edit` — el guard
+    /// no debe rechazarla (pin: evita que un guard demasiado estricto rompa
+    /// una forma que la librería indexa sin problema).
+    #[test]
+    fn persist_set_seccion_inline_table_no_se_rechaza() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("norte.toml"), "ui = { theme = \"nord\" }\n").unwrap();
+        persist_set(dir.path(), "ui", "lang", toml_edit::Value::from("es"))
+            .expect("tabla inline: el guard no debe rechazarla");
+        let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert!(s.contains("lang"), "{s}");
     }
 }

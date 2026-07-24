@@ -33,6 +33,13 @@ sha2.workspace = true
 toml.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tokio-util.workspace = true
+# Revisión S I1: `tracing::error!` para el brazo de defensa en profundidad
+# de `persist_setting` (la tarea de fondo de una escritura de ajustes se
+# canceló/panicó — nunca observado, la única causa de panic conocida ya se
+# arregló en `persist_set`). Ya es dependencia de workspace (`norte-core` y
+# otros la usan); extenderla a este binario no añade una dependencia NUEVA
+# al árbol, solo la enlaza aquí también.
+tracing.workspace = true
 # `toml_edit::Value` es el tipo de `norte_config::persist_set` (S2, escritor
 # GENÉRICO detrás del overlay de ajustes, S3): el TUI construye el valor
 # tipado (bool/int/string nativos) antes de llamarlo.

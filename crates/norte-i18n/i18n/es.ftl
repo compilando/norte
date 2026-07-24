@@ -215,6 +215,14 @@ msg-hotlist-removed = favorito eliminado: { $name }
 msg-plugin-run-ok = extensión: { $output }
 msg-settings-saved = { $name } guardado: { $value }
 msg-settings-save-failed = no se pudo guardar: { $error }
+# Revisión S I1: la propia tarea de fondo de la escritura panicó o se
+# canceló (nunca observado en la práctica — la única causa de panic
+# conocida, una forma inesperada de `[section]`, ya es un `Err` limpio de
+# `persist_set` — este es el brazo de defensa en profundidad para cualquier
+# otra cosa que pudiera tumbar esa tarea). Sin placeholder `{ $error }` a
+# propósito: un fallo de join no trae una categoría limpia y localizable
+# como sí trae un `ErrorKind` de `io::Error`.
+msg-settings-save-crashed = error interno al guardar — el valor no se escribió
 msg-settings-invalid-int = no es un número
 msg-settings-invalid-range = el valor debe estar entre { $min } y { $max }
 msg-settings-no-config-dir = sin directorio de config de usuario (entorno sin definir)
@@ -374,6 +382,6 @@ setting-ui-quick-search-desc = Qué hace `/`: filtrar el listado (filter) o move
 setting-ui-reduce-motion-name = Reducir movimiento
 setting-ui-reduce-motion-desc = Desactiva los efectos animados (flicker CRT, parpadeo del cursor) por accesibilidad. Solo GUI.
 setting-ui-confirm-quit-name = Confirmar antes de salir
-setting-ui-confirm-quit-desc = Al salir pide confirmación: solo con trabajo pendiente (auto), siempre, o nunca.
+setting-ui-confirm-quit-desc = Al salir pide confirmación: solo con trabajo pendiente (auto), siempre, o nunca. Un atajo de salida de emergencia, donde esté ligado (p. ej. Ctrl+C en la TUI), siempre lo evita.
 setting-keymap-preset-name = Preset de keymap
 setting-keymap-preset-desc = Preset base de atajos de teclado (orthodox, vim o cua). Las capas de usuario/proyecto pueden seguir rebindeando encima.
