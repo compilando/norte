@@ -9,14 +9,38 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Command palette (H1, `Ctrl+P`; vim preset also `:`):** a filterable
+  overlay lists every command with its Fluent description and its first
+  bound chord (falling back from the browse to the viewer keymap); Enter
+  dispatches the highlighted row through the exact same path a keypress
+  would. Rows are precomputed from the effective keymap, like the F1 help
+  and the dialog footer hints below, and refreshed on every hot-reload.
+
 - **Generated dialog footer hints (#24):** the confirm/collision/agent
   approval/host-key-trust modals and the theme picker, extension manager, and
   favorites popup now show a footer built from the *effective* `dialog`
   keymap — the join of the overlay's supported commands, the keys actually
   bound (preset plus any user layer), and a short label. Rebinding a dialog
-  key can no longer desync its own hint: the collision dialog's "keep newer"
-  moved from `n` to `w` (freeing `n` for a consistent deny/cancel-ish role)
-  and is now discoverable in the footer instead of hidden in muscle memory.
+  key can no longer desync its own hint. Notable key changes that came out of
+  this: the collision dialog's "keep newer" moved from `n` to `w` — on
+  collision, `n` (`dialog.deny`) is simply **inert**, not a cancel; it is not
+  bound to anything the collision dialog listens for, it just no longer does
+  "keep newer" by accident. The extension manager's approval toggle moved
+  from a hardcoded `a` to `dialog.approve` (`y` in the bundled presets — `a`
+  is now `dialog.add`, used by the favorites popup), and its `q`-to-close
+  fallback was removed (`Esc` closes it, like every other overlay). The
+  orthodox/cua presets also lost a hardcoded `k`/`j` fallback in the theme
+  picker and extension manager: `k`/`j` now only navigate overlays under the
+  **vim** preset, via its own `[dialog]` bindings, not as a blanket default.
+  A later pass (encoding audit H1) found and fixed a masking gap: a hostile
+  `./.norte/keymap.toml` project layer could bind a bidi-override or other
+  hazardous codepoint to a supported dialog command, and that raw codepoint
+  would reach the generated footer and the palette's chord column unmasked —
+  both render sites now mask hazards the same way the query bar already did.
+  A follow-up pass also fixed hint text that could get cut mid-word on an
+  80-column overlay by dropping self-evident arrow/paging keys from
+  non-modal hints and sizing the theme picker and extension manager boxes to
+  their footer instead of a fixed width.
 
 - **Content-match preview in live search (#81):** with a content search
   active, the status bar shows the line number and a sanitised preview of the

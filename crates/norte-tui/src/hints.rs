@@ -12,6 +12,37 @@ use norte_i18n::t;
 
 use crate::keymap::{Effective, dialog_hint_id};
 
+/// Commands considered self-evident navigation (MAJOR-1, H1 close): arrows
+/// and paging are universal — every terminal user already knows what they
+/// do — so they cost footer width without paying for it in clarity. Excluded
+/// ONLY from the generated HINT text via [`without_navigation`]; the
+/// dispatch allowlists in `app.rs` (`ALLOW_PICKER`/`ALLOW_EXTENSIONS`/
+/// `ALLOW_NAV_HOTLIST`) are untouched — the keys still work, they are just
+/// not spelled out in the footer.
+const NAVIGATION_HINT_EXCLUDED: &[&str] = &[
+    "dialog.up",
+    "dialog.down",
+    "dialog.page-up",
+    "dialog.page-down",
+];
+
+/// Filters a SUPPORTED allowlist down to the commands worth spelling out in
+/// a footer hint (MAJOR-1): drops [`NAVIGATION_HINT_EXCLUDED`] entries. Used
+/// only by [`DialogHints::build`] for the NON-MODAL overlays (theme picker,
+/// extensions, hotlist popup) — 80-column footers were being cut mid-word
+/// (`snapshots_ui__snapshot_popup_hotlist.snap` showed `[d] borr┘`) because
+/// universally-known arrow keys were eating the scarce width. Modal dialogs
+/// (confirm/collision/approval/trust-host) never include navigation commands
+/// in their allowlists to begin with, so this is a no-op for them.
+#[must_use]
+fn without_navigation<'a>(supported: &'a [&'a str]) -> Vec<&'a str> {
+    supported
+        .iter()
+        .copied()
+        .filter(|c| !NAVIGATION_HINT_EXCLUDED.contains(c))
+        .collect()
+}
+
 /// Footer hint for an overlay: the join of its SUPPORTED dialog commands ×
 /// the effective dialog keymap × Fluent labels — same invariant as F1 help
 /// (#24: a rebind can never desync the hint again).
@@ -86,9 +117,12 @@ impl DialogHints {
             collision: dialog_hints(ALLOW_COLLISION, eff),
             approval: dialog_hints(ALLOW_APPROVAL, eff),
             trust_host: dialog_hints(ALLOW_TRUST_HOST, eff),
-            picker: dialog_hints(ALLOW_PICKER, eff),
-            extensions: dialog_hints(ALLOW_EXTENSIONS, eff),
-            nav_list: dialog_hints(ALLOW_NAV_HOTLIST, eff),
+            // Non-modal overlays (MAJOR-1): arrows are self-evident, so they
+            // are dropped from the PRINTED hint (never from dispatch — see
+            // `without_navigation`).
+            picker: dialog_hints(&without_navigation(ALLOW_PICKER), eff),
+            extensions: dialog_hints(&without_navigation(ALLOW_EXTENSIONS), eff),
+            nav_list: dialog_hints(&without_navigation(ALLOW_NAV_HOTLIST), eff),
         }
     }
 }
@@ -209,5 +243,52 @@ mod tests {
         let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog).unwrap();
         let hint = dialog_hints(&["dialog.rename"], &eff);
         assert_eq!(hint, "");
+    }
+
+    /// MAJOR-1 (H1 close): las teclas de navegación NO salen en los tres
+    /// hints de overlay NO-modal (picker/extensions/hotlist) — se pintarían
+    /// self-evidentes y truncaban el pie a 80 col
+    /// (`snapshots_ui__snapshot_popup_hotlist.snap` antes de este fix). Los
+    /// modales sí llevan sus comandos completos (ninguno soporta
+    /// navegación) — nada que filtrar, así que su comportamiento no cambia.
+    #[test]
+    fn overlays_no_modales_omiten_navegacion_del_hint() {
+        use crate::keymap::{COMMANDS, DIALOG_COMMANDS, presets};
+        let (_, preset) = presets()
+            .into_iter()
+            .find(|(n, _)| *n == "orthodox")
+            .expect("preset orthodox");
+        let known: Vec<&str> = COMMANDS
+            .iter()
+            .copied()
+            .chain(DIALOG_COMMANDS.iter().copied())
+            .collect();
+        let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog).unwrap();
+        let hints = DialogHints::build(&eff);
+        for hint in [&hints.picker, &hints.extensions, &hints.nav_list] {
+            assert!(
+                !hint.contains("[up]") && !hint.contains("[down]"),
+                "las flechas no deberían salir en un hint no-modal: {hint:?}"
+            );
+        }
+        // El picker SÍ conserva confirm/cancel (no son navegación).
+        assert!(hints.picker.contains("[enter]"));
+        assert!(hints.picker.contains("[esc]"));
+    }
+
+    /// [`without_navigation`] filtra SOLO las cuatro entradas de navegación,
+    /// preservando el resto intacto y su orden relativo.
+    #[test]
+    fn without_navigation_filtra_solo_navegacion() {
+        let supported = [
+            "dialog.up",
+            "dialog.approve",
+            "dialog.down",
+            "dialog.cancel",
+        ];
+        assert_eq!(
+            without_navigation(&supported),
+            vec!["dialog.approve", "dialog.cancel"]
+        );
     }
 }

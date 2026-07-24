@@ -212,6 +212,42 @@ fn una_capa_de_usuario_rebindea_dialog_y_dialog_action_lo_obedece() {
     );
 }
 
+/// review MINOR-3 (H1 close): `ALLOW_APPROVAL` excluye `dialog.confirm` A
+/// PROPÓSITO — de fábrica, Enter NUNCA aprueba una mutación de agente
+/// (decisión 2 del plan H1). Pero si un usuario rebindea EXPLÍCITAMENTE
+/// `enter` a `dialog.approve` en su PROPIA capa de keymap, Enter SÍ aprueba
+/// — este test documenta ese agujero como ACEPTADO, no como bug: la
+/// semántica de seguridad sigue viviendo en `dialog_action` (el comando
+/// RESUELTO decide, nunca la tecla física), y llegar aquí exige una capa de
+/// usuario escrita a mano — ningún preset de fábrica la trae — así que es
+/// consentimiento informado, no una tecla que se dispara sola.
+#[test]
+fn rebind_explicito_de_enter_a_approve_es_consentimiento_informado() {
+    let preset = presets_orthodox();
+    let layer = parse_keymap(
+        "[dialog]\nprepend_keymap = [{ on = [\"enter\"], run = \"dialog.approve\" }]\n",
+    )
+    .expect("capa válida");
+    let known: Vec<&str> = COMMANDS
+        .iter()
+        .copied()
+        .chain(DIALOG_COMMANDS.iter().copied())
+        .collect();
+    let eff = Effective::build_for(&preset, &[layer], &known, Screen::Dialog)
+        .expect("el efectivo construye con la capa rebindeada");
+    let mut resolver = Resolver::new(eff);
+    let res = resolver.push(Chord::new(Mods::default(), KeyCode::Enter));
+    assert_eq!(res, Resolution::Run("dialog.approve".to_owned()));
+    let Resolution::Run(cmd) = res else {
+        unreachable!()
+    };
+    assert_eq!(
+        dialog_action(&approval(), &cmd),
+        Some(DialogOutcome::Confirmed),
+        "un rebind EXPLÍCITO de enter a dialog.approve sí aprueba: consentimiento informado"
+    );
+}
+
 /// El preset `orthodox` embebido, ya parseado (helper del test de
 /// integración anterior).
 fn presets_orthodox() -> norte_tui::keymap::KeymapFile {

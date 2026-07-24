@@ -161,6 +161,66 @@ enum Cd {
     Cancelled,
 }
 
+/// MINOR-4 (H1 close): un modal puede llegar de forma ASÍNCRONA (p. ej.
+/// `Modal::ApproveAgentOp`, vía `ConnEvent` — un agente pide aprobación en
+/// cualquier momento) mientras la palette está abierta. Sin este guard, el
+/// run loop resolvía la tecla contra la palette PRIMERO (`app.palette.is_some()`
+/// se comprobaba antes que `app.modal.is_some()`): un Enter pulsado para
+/// responder al modal en realidad despachaba la fila resaltada de la
+/// palette EN SILENCIO, y el modal de seguridad seguía esperando una
+/// respuesta que nunca llegó por esa tecla. El modal SIEMPRE gana: la rama
+/// de la palette del run loop excluye este caso de su condición (deja de
+/// consumir la tecla) y la rama del modal cierra la palette, ahora obsoleta,
+/// nada más entrar — la MISMA tecla cae al modal en la misma iteración.
+#[must_use]
+fn modal_preempts_palette(app: &App) -> bool {
+    app.palette.is_some() && app.modal.is_some()
+}
+
+#[cfg(test)]
+mod palette_modal_guard_tests {
+    use super::*;
+
+    fn app() -> App {
+        let d = VPath::parse("file:///x").expect("wire de test");
+        App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()))
+    }
+
+    fn approval_modal() -> Modal {
+        Modal::ApproveAgentOp {
+            req: norte_proto::methods::PolicyApprovalRequired {
+                approval_id: 1,
+                session: Some("s1".into()),
+                op: "copy".into(),
+                paths: vec!["mem:///a".into()],
+                ttl_ms: 60_000,
+            },
+        }
+    }
+
+    /// MINOR-4 (H1 close): con SOLO la palette abierta, no hay nada que
+    /// preceder — el guard no dispara. Con AMBOS abiertos (un modal llegó
+    /// asíncronamente encima de la palette), el modal debe ganar.
+    #[test]
+    fn modal_preempts_palette_solo_cuando_ambos_estan_abiertos() {
+        let mut a = app();
+        assert!(
+            !modal_preempts_palette(&a),
+            "sin overlays abiertos, nada que preceder"
+        );
+        a.palette = Some(Palette::new(Vec::new()));
+        assert!(
+            !modal_preempts_palette(&a),
+            "solo la palette abierta: la palette maneja sus teclas normalmente"
+        );
+        a.modal = Some(approval_modal());
+        assert!(
+            modal_preempts_palette(&a),
+            "un modal en vuelo con la palette abierta DEBE ganarle"
+        );
+    }
+}
+
 /// Aplica el desenlace de un cd al relleno paginado en curso: uno nuevo lo
 /// sustituye (el rx anterior dropeado mata su drenador → suelta el stream,
 /// regla 3); un REEMPLAZO del MISMO pane lo suelta (su drenador drenaría el
@@ -751,7 +811,7 @@ async fn run(
                             launch_search(app, backend, &mut fill, &mut search_run, params)
                                 .await;
                         }
-                    } else if app.palette.is_some() {
+                    } else if app.palette.is_some() && !modal_preempts_palette(app) {
                         // Command palette (H1 T4): editor de filtro libre,
                         // como el diálogo de búsqueda de arriba — sus
                         // teclas son FIJAS, no resuelven por el contexto
@@ -835,6 +895,11 @@ async fn run(
                             _ => {}
                         }
                     } else if app.modal.is_some() {
+                        // MINOR-4 (H1 close): un modal llegado mientras la
+                        // palette estaba abierta la cierra AQUÍ — obsoleta,
+                        // y esta MISMA tecla responde al modal en vez de
+                        // desaparecer dentro del filtro de la palette.
+                        app.palette = None;
                         // El TOFU de Lua se resuelve AQUÍ (necesita el host,
                         // que vive en este loop): no navega ni toca `fill`.
                         if matches!(app.modal, Some(Modal::TrustLuaInit { .. })) {
@@ -2722,7 +2787,13 @@ async fn dispatch(
         // despachar, `enter`) es un no-op observable: cierra y reabre
         // vacía — inofensivo, sin recursión de estado.
         "app.palette" => {
-            app.palette = Some(Palette::new(app.palette_rows.clone()));
+            // MINOR-6 (H1 close): Ctrl+P/`:` viven en `[global]`, fundido en
+            // AMBOS efectivos — la palette puede abrirse desde el viewer
+            // también, no solo desde browse (`rows_for_context` doc).
+            app.palette = Some(Palette::new(norte_tui::palette::rows_for_context(
+                &app.palette_rows,
+                app.viewer.is_some(),
+            )));
         }
         "task.cancel" => {
             app.message = Some(if app.board.cancel_last_running() {

@@ -44,9 +44,12 @@ docs:
 # lo toca — un bump de proto/frontend/core podía romper la GUI sin que nada
 # lo notara hasta correr `gui-ci` a mano. Solo `cargo check` (no el gate
 # completo `gui-ci`: nextest+clippy+fmt son caros para correr en cada `just
-# ci`) — suficiente para atrapar una API rota.
+# ci`) — suficiente para atrapar una API rota. MINOR-5 (H1 close): `--locked`
+# — norte-gui tiene su PROPIO Cargo.lock (excluido del workspace); sin
+# `--locked` este chequeo podía silenciosamente actualizarlo y el drift no
+# se detectaba hasta `gui-ci` (o nunca, en CI).
 check-gui:
-    cd crates/norte-gui && cargo check
+    cd crates/norte-gui && cargo check --locked
 
 # Lo que corre CI.
 ci: lint test cov docs check-gui

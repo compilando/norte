@@ -31,6 +31,16 @@ fn render(app: &App) -> String {
     terminal.backend().to_string()
 }
 
+/// Como [`render`] pero a 80×24 (MAJOR-1 item d, H1 close): el gestor de
+/// extensiones y el selector de tema necesitan más filas visibles que la
+/// pantalla de 16 usada en el resto del archivo para pintar su lista
+/// completa sin recorte vertical.
+fn render_80x24(app: &App) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, app)).expect("draw");
+    terminal.backend().to_string()
+}
+
 /// H1 T3 (#24): los hints de los overlays ya NO son estáticos — se
 /// precomputan del efectivo `dialog` vigente (`main.rs`, `DialogHints::
 /// build`). Los tests de render construyen `App` directamente (sin pasar
@@ -176,6 +186,61 @@ fn snapshot_popup_hotlist() {
     insta::assert_snapshot!(render(&app));
 }
 
+/// MAJOR-1 item (d), H1 close: a 80 columnas, el hint GENERADO del selector
+/// de tema (`app.theme`, F9) ya no se corta a mitad de palabra — el box
+/// ahora crece con su footer (ver `ui::draw_theme_picker`). Se pin-ea Y se
+/// verifica en directo que ninguna etiqueta quedó partida.
+#[test]
+fn snapshot_theme_picker_80x24() {
+    let mut app = app_base();
+    app.open_theme_picker();
+    let texto = render_80x24(&app);
+    insta::assert_snapshot!(texto.clone());
+    let hint = &app.dialog_hints.picker;
+    assert!(
+        !hint.is_empty(),
+        "el preset orthodox liga confirm/cancel al picker"
+    );
+    assert!(
+        texto.contains(hint.as_str()),
+        "el hint generado debe caber ENTERO, sin cortes: hint={hint:?}\n{texto}"
+    );
+}
+
+/// MAJOR-1 item (d): igual que el selector de tema, para el gestor de
+/// extensiones (`app.extensions`, M4-P3) — su hint tras (a)+(b) (labels
+/// cortas + sin flechas) más el sizing por footer de (c) deben caber
+/// enteros a 80 columnas.
+#[test]
+fn snapshot_extensions_80x24() {
+    let mut app = app_base();
+    app.extensions = Some(norte_tui::app::ExtensionManager {
+        plugins: vec![norte_proto::methods::PluginInfo {
+            id: "org.norte.demo".into(),
+            name: "Demo".into(),
+            publisher: "norte".into(),
+            version: "1.0.0".into(),
+            category: "previewer".into(),
+            capabilities: vec!["fs-read".into()],
+            approved: false,
+            enabled: true,
+        }],
+        errors: Vec::new(),
+        cursor: 0,
+    });
+    let texto = render_80x24(&app);
+    insta::assert_snapshot!(texto.clone());
+    let hint = &app.dialog_hints.extensions;
+    assert!(
+        !hint.is_empty(),
+        "el preset orthodox liga approve/toggle-enabled/cancel a extensiones"
+    );
+    assert!(
+        texto.contains(hint.as_str()),
+        "el hint generado debe caber ENTERO, sin cortes: hint={hint:?}\n{texto}"
+    );
+}
+
 /// BAJA-3: los items largos del popup de navegación van con elipsis MEDIA
 /// (cabeza + cola, como los modales de rutas), no truncado derecho: dos
 /// entradas de historial con un prefijo común más ancho que el popup deben
@@ -207,6 +272,22 @@ fn snapshot_modal_colision() {
             opts: TransferOptions::default(),
             name_encoding: None,
         },
+    });
+    insta::assert_snapshot!(render(&app));
+}
+
+/// MINOR-1 (H1 close): `modal_width` medía en `chars`, no en celdas de
+/// terminal — un cuerpo con CJK (2 celdas por char) desbordaba la caja. Un
+/// nombre japonés en el `to` del modal de copia pin-ea el fit correcto: la
+/// caja debe caber en el frame de 80 columnas sin que ratatui recorte el
+/// borde ni el path.
+#[test]
+fn snapshot_modal_confirm_transfer_cjk() {
+    let mut app = app_base();
+    app.modal = Some(Modal::ConfirmTransfer {
+        kind: TransferKind::Copy,
+        from: vp("file:///casa/notas.txt"),
+        to: vp("file:///otro/日本語のファイル名.txt"),
     });
     insta::assert_snapshot!(render(&app));
 }

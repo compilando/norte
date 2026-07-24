@@ -10,7 +10,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{App, Pane, display_name};
 use crate::theme::TuiTheme;
@@ -240,9 +240,22 @@ fn draw_extensions(
     theme: &TuiTheme,
     hint: &str,
 ) {
+    // MAJOR-1(c) H1 close: el ancho por CONTENIDO (igual que antes,
+    // clamp(24, 80)) puede quedarse corto para el footer GENERADO — mismo
+    // criterio de sizing que [`draw_nav_popup`] (medir el footer en CELDAS,
+    // `Line::width`, y crecer si hace falta), tope en el ancho del frame.
+    let footer_w = Line::raw(format!(" {hint} ")).width();
+    let ancho_min = u16::try_from(footer_w.saturating_add(4)).unwrap_or(u16::MAX);
+    let ancho = frame
+        .area()
+        .width
+        .saturating_sub(6)
+        .clamp(24, 80)
+        .max(ancho_min)
+        .min(frame.area().width);
     let area = centered(
         frame.area(),
-        frame.area().width.saturating_sub(6).clamp(24, 80),
+        ancho,
         frame.area().height.saturating_sub(4).max(6),
     );
     frame.render_widget(ratatui::widgets::Clear, area);
@@ -315,14 +328,24 @@ fn plugin_line<'a>(
 /// Popup selector de tema: lista de presets con el vigente resaltado (ADR
 /// 0020). El preview en vivo lo hace el bucle de eventos; aquí solo se
 /// pinta. `hint` (H1 T3, #24) es el hint GENERADO (`app.dialog_hints.picker`).
+/// MAJOR-1(c) H1 close: 34 columnas era un ancho FIJO que no crecía con el
+/// hint generado (se cortaba en terminales angostas) — mismo criterio de
+/// sizing que [`draw_nav_popup`]/[`draw_extensions`], footer en CELDAS
+/// (`Line::width`), suelo 34 (el listado de nombres de preset ya cabía),
+/// tope el ancho del frame.
 fn draw_theme_picker(
     frame: &mut Frame<'_>,
     picker: &crate::app::ThemePicker,
     theme: &TuiTheme,
     hint: &str,
 ) {
+    let footer_w = Line::raw(format!(" {hint} ")).width();
+    let ancho = u16::try_from(footer_w.saturating_add(4))
+        .unwrap_or(u16::MAX)
+        .max(34)
+        .min(frame.area().width);
     let rows = u16::try_from(picker.names.len()).unwrap_or(8) + 2;
-    let area = centered(frame.area(), 34, rows.min(frame.area().height.max(3)));
+    let area = centered(frame.area(), ancho, rows.min(frame.area().height.max(3)));
     frame.render_widget(ratatui::widgets::Clear, area);
     let items: Vec<ListItem<'_>> = picker
         .names
@@ -551,13 +574,16 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
 /// Ancho del modal por CONTENIDO (H1 T3 follow-up): los pies GENERADOS
 /// pueden superar las 60 col históricas — p. ej. colisión: `[esc] … [w] más
 /// nuevo` — y truncarlos escondería teclas reales. Techo = ancho del frame
-/// menos margen; suelo = las 60 históricas. Se mide en chars (los hints son
-/// ASCII + etiquetas Fluent cortas; los paths ya llegan con elipsis propia).
+/// menos margen; suelo = las 60 históricas. MINOR-1 (H1 close): se mide en
+/// CELDAS de terminal (`UnicodeWidthStr::width`, mismo idioma que
+/// [`draw_nav_popup`]/[`middle_ellipsis`]), no en `chars` — un cuerpo con
+/// CJK (dos celdas por char, p. ej. un path con `日本語`) desbordaba la caja
+/// con el conteo de chars antiguo.
 fn modal_width(titulo: &str, cuerpo: &str, frame_width: u16) -> u16 {
     let contenido_max = cuerpo
         .lines()
-        .map(|l| l.chars().count())
-        .chain(std::iter::once(titulo.chars().count() + 2))
+        .map(UnicodeWidthStr::width)
+        .chain(std::iter::once(titulo.width() + 2))
         .max()
         .unwrap_or(0);
     u16::try_from(contenido_max + 4)

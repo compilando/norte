@@ -1,6 +1,6 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
-expression: render(&app)
+expression: texto.clone()
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
 "│ /docs                                ││  cosa                                │"
@@ -8,10 +8,18 @@ expression: render(&app)
 "│ @enlace                              ││                                      │"
 "│  notas.txt                           ││                                      │"
 "│! �.dat                               ││                                      │"
-"│       ┌ Favoritos ───────────────────────────────────────────────────┐       │"
-"│       │ trabajo — ⟨file⟩/home/o/work                                 │       │"
-"│       │ rota ruta inválida                                           │       │"
-"│       └ [enter] confirmar [esc] cancelar [a] añadir [d] borrar ──────┘       │"
+"│                                      ││                                      │"
+"│                    ┌ Tema ──────────────────────────────┐                    │"
+"│                    │ default                            │                    │"
+"│                    │ catppuccin-mocha                   │                    │"
+"│                    │ gruvbox-dark                       │                    │"
+"│                    │ nord                               │                    │"
+"│                    │ gruvbox-light                      │                    │"
+"│                    │ catppuccin-latte                   │                    │"
+"│                    │ retro-crt                          │                    │"
+"│                    │ retro-crt-amber                    │                    │"
+"│                    └ [enter] confirmar [esc] cancelar ──┘                    │"
+"│                                      ││                                      │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"

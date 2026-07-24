@@ -49,6 +49,29 @@ fn first_chord(cmd: &str, eff: &Effective) -> Option<String> {
         .map(|(chord, _)| norte_encoding::mask_terminal_hazards(&chord))
 }
 
+/// Filtra la snapshot completa de [`build_rows`] para una palette ABIERTA en
+/// un contexto dado (MINOR-6, H1 close). `Ctrl+P`/vim `:` viven en
+/// `[global]`, que se funde en AMBOS efectivos (`Screen::Browse` y
+/// `Screen::Viewer`, ver `merge_ctx`) — la palette puede abrirse desde el
+/// viewer, no solo desde browse. Un `viewer.*` despachado SIN viewer abierto
+/// es un no-op silencioso (`main::dispatch` los resuelve contra
+/// `app.viewer`, que sería `None`), así que se ocultan cuando NO hay viewer.
+/// Abierta DESDE el viewer conserva TODAS las filas — `pane.*` sigue
+/// alcanzando el pane con foco igual (el viewer no lo sustituye); un
+/// filtrado simétrico (ocultar `pane.*` desde el viewer) queda para cuando
+/// la palette sea consciente de pantalla en ambos sentidos.
+#[must_use]
+pub fn rows_for_context(rows: &[Row], viewer_open: bool) -> Vec<Row> {
+    if viewer_open {
+        rows.to_vec()
+    } else {
+        rows.iter()
+            .filter(|(cmd, ..)| !cmd.starts_with("viewer."))
+            .cloned()
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,5 +150,38 @@ mod tests {
                 copy.2
             );
         }
+    }
+
+    /// MINOR-6 (H1 close): abierta desde BROWSE (`viewer_open = false`), la
+    /// palette oculta `viewer.*` — despacharla sin `app.viewer` sería un
+    /// no-op silencioso.
+    #[test]
+    fn rows_for_context_oculta_viewer_desde_browse() {
+        let (browse, viewer) = orthodox_effs();
+        let rows = build_rows(&browse, &viewer);
+        let filtradas = rows_for_context(&rows, false);
+        assert!(
+            filtradas
+                .iter()
+                .all(|(cmd, ..)| !cmd.starts_with("viewer.")),
+            "ninguna fila viewer.* debería sobrevivir al filtrado desde browse"
+        );
+        assert!(
+            filtradas.iter().any(|(cmd, ..)| cmd.starts_with("pane.")),
+            "las filas pane.* siguen presentes"
+        );
+        assert!(
+            filtradas.len() < rows.len(),
+            "el filtrado debe quitar AL MENOS las filas viewer.*"
+        );
+    }
+
+    /// Abierta DESDE el viewer (`viewer_open = true`), la palette conserva
+    /// TODO — incluidas las filas `pane.*`.
+    #[test]
+    fn rows_for_context_mantiene_todo_desde_el_viewer() {
+        let (browse, viewer) = orthodox_effs();
+        let rows = build_rows(&browse, &viewer);
+        assert_eq!(rows_for_context(&rows, true), rows);
     }
 }
