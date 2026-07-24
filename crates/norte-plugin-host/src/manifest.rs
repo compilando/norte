@@ -710,7 +710,7 @@ impl Manifest {
     /// la seguridad es qué hace y cuándo se dispara.
     ///
     /// P2 extiende la forma canónica con una sección `config:` — pero SOLO
-    /// cuando `[config]` declara alguna clave: [`update_config_digest`] no
+    /// cuando `[config]` declara alguna clave: `update_config_digest` no
     /// añade ni un byte si `self.config` está vacío, así que un manifiesto sin
     /// `[config]` digesta EXACTAMENTE igual que antes de P2 (las aprobaciones
     /// humanas existentes de plugins que no usan `[config]` no se resetean).

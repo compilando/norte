@@ -309,8 +309,8 @@ fn check_keymap_screen(
 ///
 /// Digest-stale detection (issue #69's mechanism, surfaced here): `list()`
 /// only exposes the EFFECTIVE `approved` (digest-checked against the current
-/// manifest — [`PluginRegistry::list`]'s own doc). Comparing it against the
-/// RAW persisted flag from [`PluginRegistry::state_snapshot`] (the state file
+/// manifest — `PluginRegistry::list`'s own doc). Comparing it against the
+/// RAW persisted flag from `PluginRegistry::state_snapshot` (the state file
 /// as last written by a human) is what tells "never approved" apart from
 /// "approved, but the manifest changed since" — a former `true` that reads
 /// back as an effective `false` can ONLY mean the digest stopped matching, so
@@ -322,7 +322,7 @@ fn check_keymap_screen(
 ///
 /// `plugin.wasm` presence is a direct `Path::is_file` — read-only, no
 /// `spawn_blocking` needed by ITSELF (the caller already runs the whole
-/// check inside one, rule 2) — against [`PluginRegistry::wasm_path`] (review
+/// check inside one, rule 2) — against `PluginRegistry::wasm_path` (review
 /// MINOR-4: was a raw `config_dir.join(...)` duplicate of that layout here
 /// before). No symlink-safety canonicalization here, unlike the registry's
 /// own `verified_wasm` (issue #69) — this is a presence check for a
@@ -331,7 +331,7 @@ fn check_keymap_screen(
 /// P2 Task 2 adds `[config]` VALUES visibility (decision 5: host-side only —
 /// `doctor` runs embedded, so it CAN show them; the wire-facing extension
 /// manager cannot until the protocol bump G3 already requires). Each
-/// resolved key of [`PluginRegistry::settings_of`] becomes one
+/// resolved key of `PluginRegistry::settings_of` becomes one
 /// [`Severity::Ok`] `plugin-config` finding, `detail` = `{id}: {key}=
 /// {value}` — the value is the plugin's OWN default or the user's OWN
 /// override, but still MASKED+CAPPED via [`masked_and_capped`] (belt, same
@@ -340,7 +340,7 @@ fn check_keymap_screen(
 /// against the schema does NOT reach `plugin-config` at all — the whole
 /// plugin is already excluded and surfaced by the `plugin-manifest-broken`
 /// loop above instead (fail-closed at catalog level,
-/// [`norte_plugin_host::Catalog::load_dir`]'s own contract) — but that
+/// `norte_plugin_host::Catalog::load_dir`'s own contract) — but that
 /// loop's `reason` is untrusted TOO (P2 Task 4a security review: a
 /// `ConfigValueError::UnknownKey`'s message can carry a key straight out of
 /// a hostile `config.toml`, which — unlike a manifest-declared key — has no

@@ -289,7 +289,7 @@ impl PluginRegistry {
     /// Para un caller que solo necesita comprobar PRESENCIA sin cargar el
     /// runtime WASM (p. ej. `norte doctor`, H2) — evita que ese caller
     /// duplique el layout con su propio `config_dir.join("plugins")...`.
-    /// NO es el mismo camino que [`Self::verified_wasm`] (que además
+    /// NO es el mismo camino que `Self::verified_wasm` (que además
     /// canonicaliza y verifica que el binario no escape del directorio del
     /// plugin vía symlink, issue #69 — una defensa que este cálculo puro de
     /// ruta no aplica) ni consulta el catálogo: por convención
