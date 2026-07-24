@@ -108,7 +108,7 @@ impl AiConfig {
     ///
     /// C1 review (item 2): uses [`norte_config::standard_layers_no_project`]
     /// rather than [`norte_config::standard_layers`] — every `[ai]` value the
-    /// Project layer could provide is carved out in [`Self::from_settings`]
+    /// Project layer could provide is carved out in `Self::from_settings`
     /// anyway (`norte-config::load` never merges `[ai]` from Project), so
     /// parsing `./.norte/norte.toml` here would give a foreign repo a
     /// startup-abort lever over `norte daemon run` (a broken or hostile

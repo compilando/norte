@@ -1,19 +1,20 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
+assertion_line: 241
 expression: render(&app)
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
 "│ /docs                                ││  cosa                                │"
 "│ /src                                 ││                                      │"
 "│ @enlace                              ││                                      │"
-"│  notas.t┌¿Ejecutar el init.lua del proyecto?───────────────────────┐         │"
-"│! �.dat  │repo/.norte/init.lua (sha256                              │         │"
-"│         │ab12cd34ef56ab78ab12cd34ef56ab78) se ejecutará CON TUS    │         │"
-"│         │PERMISOS. El script de un repo clonado puede hacer todo lo│         │"
-"│         │que tú puedas. y = confiar y ejecutar · n/Esc = denegar   │         │"
-"│         │(se recuerda hasta que el fichero cambie)                 │         │"
-"│         │                                                          │         │"
-"│         └──────────────────────────────────────────────────────────┘         │"
+"│ ┌¿Ejecutar el init.lua del proyecto?───────────────────────────────────────┐ │"
+"│!│repo/.norte/init.lua (sha256 ab12cd34ef56ab78ab12cd34ef56ab78) se         │ │"
+"│ │ejecutará CON TUS PERMISOS. El script de un repo clonado puede hacer todo │ │"
+"│ │lo que tú puedas. y = confiar y ejecutar · n/Esc = denegar (se recuerda   │ │"
+"│ │hasta que el fichero cambie)                                              │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ └──────────────────────────────────────────────────────────────────────────┘ │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘"

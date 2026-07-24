@@ -658,7 +658,22 @@ fn draw_modal(
         Modal::TrustLuaInit { .. } => 8,
         _ => 6,
     };
-    let area = centered(frame.area(), 60, alto);
+    // Ancho por CONTENIDO (H1 T3 follow-up): los pies generados pueden ser
+    // más largos que las 60 col históricas — p. ej. colisión: `[esc] … [w]
+    // conservar más nuevo` — y truncarlos escondería teclas reales. Techo en
+    // el ancho del frame menos margen; suelo en las 60 históricas. Se mide
+    // en chars (los hints son ASCII + etiquetas Fluent cortas; los paths ya
+    // llegan con elipsis propia).
+    let contenido_max = cuerpo
+        .lines()
+        .map(|l| l.chars().count())
+        .chain(std::iter::once(titulo.chars().count() + 2))
+        .max()
+        .unwrap_or(0);
+    let ancho = u16::try_from(contenido_max + 4)
+        .unwrap_or(u16::MAX)
+        .clamp(60, frame.area().width.saturating_sub(4).max(60));
+    let area = centered(frame.area(), ancho, alto);
     frame.render_widget(ratatui::widgets::Clear, area);
     let mut cuerpo = Paragraph::new(cuerpo).block(
         Block::default()
