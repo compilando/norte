@@ -1,5 +1,6 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
+assertion_line: 331
 expression: texto
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
@@ -23,6 +24,6 @@ expression: texto
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"
-"│  └ [y] aprobar [esc] cancelar [e] activar ────────────────────────────────┘  │"
+"│  └ [enter] confirmar [y] aprobar [esc] cancelar [e] activar ──────────────┘  │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘"
 " ⟨file⟩/casa  2/5                                                               "

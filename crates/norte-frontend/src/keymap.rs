@@ -722,6 +722,17 @@ impl Resolver {
         &self.pending
     }
 
+    /// El keymap efectivo que este resolver posee (G3c): la GUI lo necesita
+    /// para construir las filas de la paleta de comandos
+    /// (`palette::first_chord`) sin duplicar el `Effective` en un campo
+    /// aparte de `NorteGui` — el resolver ya es la única fuente de verdad
+    /// del keymap vigente (hot-reload lo reemplaza entero, ver el doc del
+    /// tipo).
+    #[must_use]
+    pub fn effective(&self) -> &Effective {
+        &self.eff
+    }
+
     /// Rompe cualquier secuencia pendiente (una tecla no modelada por el
     /// frontend equivale a un miss: cancela el multi-tecla en curso).
     pub fn reset(&mut self) {

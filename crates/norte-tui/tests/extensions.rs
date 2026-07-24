@@ -22,6 +22,7 @@ fn plugin(id: &str, name: &str, category: &str, caps: &[&str], approved: bool) -
         enabled: true,
         description: None,
         commands: Vec::new(),
+        columns: Vec::new(),
     }
 }
 
@@ -41,6 +42,7 @@ fn mgr() -> ExtensionManager {
         ],
         errors: Vec::new(),
         cursor: 0,
+        config: None,
     }
 }
 
@@ -84,6 +86,7 @@ fn selected_vacio_es_none() {
         plugins: Vec::new(),
         errors: Vec::new(),
         cursor: 0,
+        config: None,
     };
     assert!(m.selected().is_none());
 }
@@ -116,6 +119,7 @@ fn render_overlay_vacio_muestra_ext_empty() {
         plugins: Vec::new(),
         errors: Vec::new(),
         cursor: 0,
+        config: None,
     });
     let mut t = Terminal::new(TestBackend::new(60, 12)).expect("term");
     t.draw(|f| ui::draw(f, &app)).expect("draw");
@@ -136,6 +140,7 @@ fn render_enmascara_nombre_hostil() {
         )],
         errors: Vec::new(),
         cursor: 0,
+        config: None,
     });
     let mut t = Terminal::new(TestBackend::new(60, 12)).expect("term");
     t.draw(|f| ui::draw(f, &app)).expect("draw");
@@ -169,6 +174,7 @@ fn render_no_panica_con_description_sin_tope_del_wire() {
         plugins: vec![p],
         errors: Vec::new(),
         cursor: 0,
+        config: None,
     });
     let mut t = Terminal::new(TestBackend::new(60, 12)).expect("term");
     t.draw(|f| ui::draw(f, &app)).expect("draw");
@@ -183,6 +189,7 @@ fn render_muestra_errores_de_carga() {
             reason: "manifiesto inválido".into(),
         }],
         cursor: 0,
+        config: None,
     });
     let mut t = Terminal::new(TestBackend::new(70, 12)).expect("term");
     t.draw(|f| ui::draw(f, &app)).expect("draw");

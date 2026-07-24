@@ -20,6 +20,12 @@ pub const COMMANDS: &[&str] = &[
     // supplemento propio: el chord viene del catálogo compartido, igual que
     // `app.theme`/`app.extensions`.
     "app.settings",
+    // G3c: command palette overlay + extension manager full view — the
+    // shared presets already bind `ctrl+p`/`f12` to these (see
+    // `orthodox.toml`); `gui_supplement` below moves `task.prev` OFF
+    // `ctrl+p` so the shared binding reaches `app.palette` unshadowed.
+    "app.palette",
+    "app.extensions",
     "pane.switch",
     "cursor.up",
     "cursor.down",
@@ -124,7 +130,7 @@ fn gui_supplement() -> KeymapFile {
 prepend_keymap = [
     { on = ["insert"], run = "mark.toggle" },
     { on = ["ctrl+n"], run = "task.next" },
-    { on = ["ctrl+p"], run = "task.prev" },
+    { on = ["ctrl+b"], run = "task.prev" },
     { on = ["ctrl+l"], run = "task.dismiss" },
     { on = ["delete"], run = "pane.delete" },
 ]
@@ -187,8 +193,12 @@ pub fn build_effectives_from(
 ///
 /// The GUI-only [`gui_supplement`] goes in FIRST (lowest precedence, see
 /// `merge_ctx`: the LAST layer wins) so a user/project `keymap.toml` can
-/// still rebind `insert`/`ctrl+n`/`ctrl+p`/`ctrl+l`/`delete` on top of it
-/// (revisión C2/G0 CRITICAL 1).
+/// still rebind `insert`/`ctrl+n`/`ctrl+b`/`ctrl+l`/`delete` on top of it
+/// (revisión C2/G0 CRITICAL 1). G3c: `task.prev` moved from `ctrl+p` to
+/// `ctrl+b` — `gui_supplement` OUTRANKS the shared preset (it's a layer
+/// merged on top of it), so it used to shadow the preset's `ctrl+p` →
+/// `app.palette` binding entirely; freeing the chord is what makes the
+/// shared binding reach the palette once `app.palette` joins [`COMMANDS`].
 ///
 /// # Errors
 /// The first `KeymapError` from any layer.
@@ -415,7 +425,11 @@ mod tests {
         }
         let ctrl_cases = [
             (KeyCode::Char('n'), "task.next"),
-            (KeyCode::Char('p'), "task.prev"),
+            // G3c: moved from ctrl+p to ctrl+b — ctrl+p is the SHARED
+            // preset's `app.palette` binding, which `gui_supplement`
+            // (higher precedence than the preset, see `build_effectives_layers`'s
+            // doc) used to shadow entirely.
+            (KeyCode::Char('b'), "task.prev"),
             (KeyCode::Char('l'), "task.dismiss"),
         ];
         for (code, cmd) in ctrl_cases {
@@ -432,6 +446,27 @@ mod tests {
                 "ctrl+{code:?} debe resolver a {cmd:?}"
             );
         }
+    }
+
+    /// G3c: freeing `ctrl+p` from `gui_supplement` (moved to `ctrl+b`, see
+    /// the test above) lets the SHARED preset's own `ctrl+p` →
+    /// `app.palette` binding reach the resolver unshadowed, now that
+    /// `app.palette` joined [`COMMANDS`].
+    #[test]
+    fn ctrl_p_ya_no_lo_tapa_el_supplemento_y_llega_a_app_palette() {
+        let (browse, _viewer) = build_effectives_from("orthodox", None).expect("construye");
+        let mut r = norte_frontend::keymap::Resolver::new(browse);
+        let chord = Chord::new(
+            Mods {
+                ctrl: true,
+                ..Default::default()
+            },
+            KeyCode::Char('p'),
+        );
+        assert_eq!(
+            r.push(chord),
+            norte_frontend::keymap::Resolution::Run("app.palette".into())
+        );
     }
 
     /// El supplemento tiene precedencia MÁS BAJA que una capa de

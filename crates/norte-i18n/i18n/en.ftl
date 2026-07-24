@@ -181,7 +181,9 @@ settings-edit-hint = [enter] save · [esc] cancel
 settings-section-general = General
 settings-section-plugins = Plugins
 settings-plugins-name = Plugin settings
-settings-plugins-note = Edit plugin settings by hand in plugins/<id>/config.toml (validated by `norte doctor`) — the full editor lands with a future protocol update.
+settings-plugins-note = No installed plugin declares configurable settings.
+settings-plugins-open-hint = [enter] open this plugin's settings
+settings-plugins-key-count = {$count} settings
 # --- GUI settings view (S4) — mouse-driven full-view swap over the same
 # catalog/state machine as the overlay above.
 settings-restart-badge = restart required
@@ -211,6 +213,12 @@ msg-hotlist-removed = favorite removed: { $name }
 # reaching here (#73 pattern). The "extension:" prefix marks it as
 # third-party text, same vocabulary as `palette-plugin-prefix`.
 msg-plugin-run-ok = extension: { $output }
+# G3c: `dialog.confirm` on a plugin with an empty `[config]` schema.
+msg-plugin-config-empty = this plugin declares no configurable settings
+# G3c: plugin.set_config succeeded — { $key } is the manifest-declared,
+# charset-safe config key (never plugin free text); { $value } is the new
+# value already validated client-side.
+msg-plugin-config-saved = { $key } saved: { $value }
 msg-settings-saved = { $name } saved: { $value }
 msg-settings-save-failed = not saved: { $error }
 # S review I1: the background write task itself panicked or was cancelled
@@ -243,6 +251,13 @@ help-cmd-pane-quick-search = quick search in pane (filter/jump)
 help-cmd-pane-history = directory history
 help-cmd-pane-hotlist = favorite directories
 help-cmd-task-cancel = cancel the most recent task
+# G3c: GUI-only commands (no TUI equivalent — its multi-select/task strip
+# use different bindings) surfaced now that the GUI's command palette lists
+# `app.palette`/`app.extensions` and needs help text for every GUI command.
+help-cmd-mark-toggle = toggle mark on the entry under the cursor
+help-cmd-task-next = highlight the next task
+help-cmd-task-prev = highlight the previous task
+help-cmd-task-dismiss = dismiss finished tasks from the strip
 help-cmd-viewer-close = close the viewer
 help-cmd-viewer-up = one line up
 help-cmd-viewer-down = one line down

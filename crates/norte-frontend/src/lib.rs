@@ -13,13 +13,16 @@
 #![warn(missing_docs)]
 
 pub mod ansi;
+pub mod columns;
 pub mod config;
 mod decoration;
 mod display;
 pub mod keymap;
 pub mod nav;
 pub mod openers;
+pub mod palette;
 mod pane;
+pub mod plugin_config;
 pub mod settings;
 mod sort;
 pub mod theme;

@@ -103,6 +103,62 @@ independently through `PROTOCOL_VERSION`.
   without a further (additive) protocol change; that's follow-up work,
   tracked separately from this change's registry/wire/decorator-UI scope.
 
+- **Plugin config on the wire, GUI palette + extension manager, column
+  cells (G3c, ADR 0037, proto 0.28.0):** closes the two deferrals G3
+  accumulated. `PluginInfo` gains `columns: Vec<PluginColumnInfo>`
+  (id + masked header, additive, discovery for the column UI) and two new
+  methods expose P2's `[config]` on the wire, which was host-only by
+  design until now: `plugin.get_config` (schema + effective value
+  together, `PluginConfigKeyWire`) and `plugin.set_config` (validates
+  against the SAME schema `config.toml` uses —
+  `norte_plugin_host::encode_wire_value` reuses the private
+  `encode_override` validator, never a parallel path — before persisting;
+  `PluginRegistry::set_config` re-resolves settings in memory so the very
+  next `run_command`/`get_config` sees the new value without a fresh
+  `discover`). `persist_plugin_setting_typed` fixes a latent gap in P2's
+  write primitive: it writes the NATIVE TOML type (`bool`/`int`/`string`)
+  the schema declares instead of always a string, which a later
+  `resolve_settings` re-parse requires. `plugin.set_config` is gated to
+  non-agent connections (same criterion as `plugin.set_approval`: a
+  plugin's settings are user data, not something an agent edits on its
+  own).
+  TUI: the extension manager gains a `[config]` drill-down (Enter on a
+  plugin fetches its schema and opens a panel; `bool`/`enum` cycle
+  immediately, `string`/`int` open inline editing with client **and**
+  server-side range validation) built on a new shared
+  `norte_frontend::plugin_config::PluginConfigState`; the settings
+  overlay's Plugins section drops the old "edit `config.toml` by hand"
+  note and shows one row per plugin with declared settings, drilling into
+  the same panel.
+  GUI: `app.palette`/`app.extensions` join `crate::keymap::COMMANDS` — the
+  shared presets already bound `ctrl+p`/`f12` to them, but the GUI's own
+  keymap supplement had claimed `ctrl+p` for `task.prev` (a layer that
+  outranks the preset), silently shadowing the binding; `task.prev` moves
+  to `ctrl+b` to free it. The command palette (`palette_view.rs`, an
+  overlay painted like the modal, same key-capture priority, "modal
+  preempts palette" preserved by construction) and the extension manager
+  (`extensions_view.rs`, a full-view swap like the settings view, with the
+  same `[config]` drill-down as the TUI) are new. `norte_frontend::palette`
+  hoists the TUI's `Row`/`plugin_rows`/`rows_for_context`/`first_chord`
+  (pure, no `COMMANDS` coupling) so the GUI doesn't re-implement plugin-row
+  masking and the `[extension]`-prefix anti-spoofing discipline from
+  scratch; each frontend keeps its own `build_rows` (genuinely different
+  `COMMANDS`/help-id sources, not incidental duplication). Column *cells*
+  (the G3b GUI deferral) now render: a new `SessionCmd::Columns` discovers
+  approved+enabled `columns` plugins via `plugin.list`, fetches
+  `plugin.column_values` for every declared column over the visible page,
+  and `render_row` appends one fixed-width, monospace, masked cell per
+  column (TUI columns remain deferred, tracked separately). `norte-i18n`
+  gains help text for the four GUI-only commands
+  (`mark.toggle`/`task.next`/`task.prev`/`task.dismiss`) that the palette
+  now needs to describe, and messages for the config drill-down's
+  save/empty feedback, in both locales. Session tests, daemon wire tests
+  (validation-then-`INVALID_PARAMS`-without-persisting, agent-denied),
+  registry tests, a real-WASM e2e proving a guest reads a value written
+  through `set_config` on its very next run (extends
+  `plugins_config_e2e.rs`), and a `Backend::Remote`-level e2e for the new
+  wrapper methods.
+
 - **GUI settings view (S4):** `app.settings` (`F11`, same shared preset
   binding as the TUI) opens a searchable, VSCode-style full-view swap over
   the same General catalog (S2) — search box, grouped list (General/

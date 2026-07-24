@@ -200,7 +200,7 @@ mod tests {
     }
 
     fn view() -> SettingsView {
-        SettingsView::new(build_rows(&cfg_vacia()))
+        SettingsView::new(build_rows(&cfg_vacia(), &[]))
     }
 
     #[test]

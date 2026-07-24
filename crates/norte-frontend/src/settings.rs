@@ -241,81 +241,140 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
     }
 }
 
+/// One approved+enabled plugin's `[config]` SUMMARY (G3c): built by the
+/// caller from `plugins_list` + one `plugin.get_config` call per plugin
+/// (async — [`build_rows`] stays pure/sync, the caller fetches these
+/// FIRST). Drives one [`Row`] per plugin in the Plugins section; drilling
+/// into it (caller-side: `Backend::plugin_get_config` again, then a
+/// [`crate::plugin_config::PluginConfigState`]) is how the actual keys get
+/// edited — this summary only carries enough to LIST the plugin.
+#[derive(Debug, Clone)]
+pub struct PluginConfigSummary {
+    /// Stable plugin id (`org.norte.demo`) — safe to display as-is
+    /// (reverse-DNS charset, core-validated) and to pass back to
+    /// `Backend::plugin_get_config`/`plugin_set_config`.
+    pub plugin_id: String,
+    /// Plugin name, ALREADY masked ([`crate::display_name`] — plugin text,
+    /// untrusted).
+    pub name: String,
+    /// How many `[config.<key>]` entries this plugin declares. A plugin
+    /// with `0` is NOT expected here — the caller should already have
+    /// filtered it out (nothing to show, nothing to drill into).
+    pub key_count: usize,
+}
+
 /// One row of a settings view (TUI overlay, S3; GUI full-view swap, S4):
 /// built, never computed by the editor ([`SettingsState`] only consumes it).
 #[derive(Debug, Clone)]
 pub struct Row {
-    /// Index into [`catalog`]; `None` for the informational Plugins row (see
-    /// the module HONEST SCOPE note below) — never editable, and
-    /// [`SettingsState::activate`] recognizes it by this, not by text.
+    /// Index into [`catalog`]; `None` for a Plugins-section row (a
+    /// per-plugin summary, or the informational "nothing configurable"
+    /// fallback — see [`build_rows`]) — never editable through THIS state
+    /// machine, [`SettingsState::activate`] recognizes it by this, not by
+    /// text.
     def_index: Option<usize>,
+    /// The plugin id this row summarizes (G3c), or `None` for a General
+    /// row or the informational "nothing configurable" fallback. The
+    /// caller checks this BEFORE calling [`SettingsState::activate`] — a
+    /// `Some` here means Enter should drill into that plugin's own
+    /// [`crate::plugin_config::PluginConfigState`], not call `activate`
+    /// (which is a no-op for any row with `def_index: None`, plugin
+    /// summary included).
+    plugin_id: Option<String>,
     /// Localized (Fluent) name to paint.
     pub name: String,
     /// Localized description — footer/detail line of the selected row.
     pub desc: String,
-    /// Current value as display text; empty for the informational row (it
-    /// has no single value to show).
+    /// Current value as display text; empty for a row with nothing single
+    /// to show (the informational fallback).
     pub value: String,
 }
 
 impl Row {
-    /// `true` for the informational Plugins row (see the module HONEST SCOPE
-    /// note): never editable, the editor skips it in `activate`.
+    /// `true` for ANY row in the Plugins section (summary or the
+    /// informational fallback): never editable via [`SettingsState::activate`].
     #[must_use]
     pub fn is_plugins_note(&self) -> bool {
         self.def_index.is_none()
     }
 
     /// The catalog id this row renders (`ui.confirm-quit`, …), or `None` for
-    /// the informational Plugins row. A frontend that needs to derive
-    /// section/key ([`wire_key`]) or per-entry behavior from a rendered row
-    /// (e.g. the GUI's S4 live-vs-restart-required split, since `Row` keeps
+    /// a Plugins-section row. A frontend that needs to derive section/key
+    /// ([`wire_key`]) or per-entry behavior from a rendered row (e.g. the
+    /// GUI's S4 live-vs-restart-required split, since `Row` keeps
     /// `def_index` private) uses this instead of re-deriving the catalog
     /// index itself.
     #[must_use]
     pub fn id(&self) -> Option<&'static str> {
         self.def_index.map(|i| catalog()[i].id)
     }
-}
 
-/// HONEST SCOPE (S3/S4, see the spec `2026-07-24-settings-ui-cursor-memory-
-/// design.md`): the General section is built from the curated [`catalog`]
-/// (S2) × the CURRENT config value (S2 [`current_value`]) × Fluent
-/// name/description — same criterion the TUI's command palette uses for
-/// `help-cmd-*`. The Plugins section does NOT edit values: the P2 wire does
-/// not expose either the schema (`ConfigKeySpec` from the manifest) or a
-/// plugin's current values (`settings_of`) outside the process that loaded
-/// it — a REMOTE frontend (the general case of a `Backend`) has nowhere to
-/// read them from. [`build_rows`] adds a single INFORMATIONAL row pointing
-/// at today's manual path; full editing lands with G3's wire bump.
-fn plugins_note_row() -> Row {
-    Row {
-        def_index: None,
-        name: t("settings-plugins-name"),
-        desc: t("settings-plugins-note"),
-        value: String::new(),
+    /// The plugin id this row summarizes (G3c), or `None` for a General row
+    /// or the informational "nothing configurable" fallback. `Some` is the
+    /// caller's signal to drill in on Enter (see the field's own doc).
+    #[must_use]
+    pub fn plugin_id(&self) -> Option<&str> {
+        self.plugin_id.as_deref()
     }
 }
 
+/// The Plugins section's rows (G3c — replaces the old P2-era informational
+/// note now that `plugin.get_config`/`plugin.set_config` put settings on
+/// the wire): one row PER `summaries` entry (`name` = the plugin's masked
+/// name, `desc` a localized "press Enter" hint, `value` a localized
+/// `"N settings"` count) — never directly editable through THIS state
+/// machine (`plugin_id().is_some()` is the caller's cue to drill into a
+/// [`crate::plugin_config::PluginConfigState`] instead of calling
+/// [`SettingsState::activate`]). An EMPTY `summaries` (no approved+enabled
+/// plugin declares any `[config]` key) falls back to a single
+/// informational row, same shape as before G3c.
+fn plugin_summary_rows(summaries: &[PluginConfigSummary]) -> Vec<Row> {
+    if summaries.is_empty() {
+        return vec![Row {
+            def_index: None,
+            plugin_id: None,
+            name: t("settings-plugins-name"),
+            desc: t("settings-plugins-note"),
+            value: String::new(),
+        }];
+    }
+    summaries
+        .iter()
+        .map(|s| Row {
+            def_index: None,
+            plugin_id: Some(s.plugin_id.clone()),
+            name: s.name.clone(),
+            desc: t("settings-plugins-open-hint"),
+            value: norte_i18n::ta(
+                "settings-plugins-key-count",
+                &[("count", &s.key_count.to_string())],
+            ),
+        })
+        .collect()
+}
+
 /// Builds the rows for a settings view: the GENERAL catalog (S2) × the
-/// CURRENT value of `cfg` × localized name/description, plus the
-/// informational Plugins row at the end. Called on OPEN (`app.settings`) and
-/// on every successful hot-reload with the current `cfg` (TUI) — same
-/// criterion as `help_lines`/`palette_rows`: rebuilt wholesale, never mutated
-/// row by row.
+/// CURRENT value of `cfg` × localized name/description, plus the Plugins
+/// section (G3c) built from `plugin_summaries` — the caller fetches those
+/// via `plugins_list` + `plugin.get_config` BEFORE
+/// calling this (this function stays pure/sync). Called on OPEN
+/// (`app.settings`) and on every successful hot-reload with the current
+/// `cfg` (TUI) — same criterion as `help_lines`/`palette_rows`: rebuilt
+/// wholesale, never mutated row by row.
 #[must_use]
-pub fn build_rows(cfg: &FrontendConfig) -> Vec<Row> {
+pub fn build_rows(cfg: &FrontendConfig, plugin_summaries: &[PluginConfigSummary]) -> Vec<Row> {
     let mut rows: Vec<Row> = catalog()
         .iter()
         .enumerate()
         .map(|(i, def)| Row {
             def_index: Some(i),
+            plugin_id: None,
             name: t(&fluent_name_id(def.id)),
             desc: t(&fluent_desc_id(def.id)),
             value: current_value(def, cfg),
         })
         .collect();
-    rows.push(plugins_note_row());
+    rows.extend(plugin_summary_rows(plugin_summaries));
     rows
 }
 
@@ -407,7 +466,11 @@ impl SettingsState {
         let catalog = catalog();
         rows.iter()
             .map(|r| {
-                let id = r.def_index.map_or("plugins", |i| catalog[i].id);
+                let id: &str = match (r.def_index, r.plugin_id.as_deref()) {
+                    (Some(i), _) => catalog[i].id,
+                    (None, Some(pid)) => pid,
+                    (None, None) => "plugins",
+                };
                 crate::nav::fold(format!("{id} {} {}", r.name, r.desc).as_bytes())
             })
             .collect()
@@ -720,8 +783,10 @@ impl SettingsState {
 /// Next value in `values` after `current` (wrapping); if `current` isn't in
 /// `values` (a config with a value the catalog no longer recognizes, or a
 /// dynamic list that changed), starts at the FIRST — never panics on an
-/// empty list (returns `current` untouched).
-fn cycle(current: &str, values: &[&str]) -> String {
+/// empty list (returns `current` untouched). `pub(crate)`: also reused by
+/// [`crate::plugin_config`] (G3c) — same cycle semantics for a plugin's
+/// `enum`/`bool` config keys, one source of truth.
+pub(crate) fn cycle(current: &str, values: &[&str]) -> String {
     if values.is_empty() {
         return current.to_owned();
     }
@@ -910,13 +975,14 @@ mod tests {
     // --- `build_rows` (S3/S4 hoist) ---
 
     /// One row per catalog entry, plus EXACTLY one informational row at the
-    /// end (HONEST SCOPE, see `plugins_note_row` doc).
+    /// end when NO plugin declares any `[config]` key (G3c fallback shape).
     #[test]
     fn build_rows_una_fila_por_entrada_mas_la_de_plugins() {
-        let rows = build_rows(&cfg_vacia());
+        let rows = build_rows(&cfg_vacia(), &[]);
         assert_eq!(rows.len(), catalog().len() + 1);
         assert!(!rows[0].is_plugins_note());
         assert!(rows.last().unwrap().is_plugins_note());
+        assert_eq!(rows.last().unwrap().plugin_id(), None);
     }
 
     fn cfg_vacia() -> FrontendConfig {
@@ -928,7 +994,7 @@ mod tests {
     #[test]
     fn build_rows_valores_coinciden_con_current_value() {
         let cfg = cfg_vacia();
-        let rows = build_rows(&cfg);
+        let rows = build_rows(&cfg, &[]);
         for (i, def) in catalog().iter().enumerate() {
             assert_eq!(rows[i].value, current_value(def, &cfg));
         }
@@ -939,17 +1005,68 @@ mod tests {
     /// this suite's active language.
     #[test]
     fn plugins_note_row_sin_valor_y_con_texto_traducido() {
-        let rows = build_rows(&cfg_vacia());
+        let rows = build_rows(&cfg_vacia(), &[]);
         let note = rows.last().unwrap();
         assert_eq!(note.value, "");
         assert_ne!(note.name, "settings-plugins-name");
         assert_ne!(note.desc, "settings-plugins-note");
     }
 
+    /// G3c: a NON-EMPTY `plugin_summaries` yields one row PER summary
+    /// (never the informational fallback), each with `plugin_id()` set and
+    /// a localized `"N settings"` value — the caller's cue to drill in on
+    /// Enter, never to call `SettingsState::activate` on it.
+    #[test]
+    fn build_rows_con_plugins_una_fila_por_resumen() {
+        let summaries = vec![
+            PluginConfigSummary {
+                plugin_id: "org.a".into(),
+                name: "Alpha".into(),
+                key_count: 3,
+            },
+            PluginConfigSummary {
+                plugin_id: "org.b".into(),
+                name: "Beta".into(),
+                key_count: 1,
+            },
+        ];
+        let rows = build_rows(&cfg_vacia(), &summaries);
+        assert_eq!(rows.len(), catalog().len() + 2);
+        let a = &rows[catalog().len()];
+        assert_eq!(a.plugin_id(), Some("org.a"));
+        assert_eq!(a.name, "Alpha");
+        assert!(
+            a.is_plugins_note(),
+            "no editable vía SettingsState::activate"
+        );
+        assert!(a.value.contains('3'));
+        let b = &rows[catalog().len() + 1];
+        assert_eq!(b.plugin_id(), Some("org.b"));
+        assert!(b.value.contains('1'));
+    }
+
+    /// `PluginConfigSummary::name` is UNTRUSTED plugin text — a hostile
+    /// name (bidi override, corpus `rtl_override`) reaches `Row::name`
+    /// UNCHANGED by `build_rows` itself: masking is the CALLER's
+    /// responsibility (same contract as `palette::plugin_rows`, which
+    /// masks BEFORE building the row) — this pins that `build_rows` does
+    /// not double-mask nor accidentally corrupt an already-masked name.
+    #[test]
+    fn build_rows_con_plugins_no_altera_un_nombre_ya_enmascarado() {
+        let masked = crate::display_name("\u{202E}evil".as_bytes()).0;
+        let summaries = vec![PluginConfigSummary {
+            plugin_id: "org.evil".into(),
+            name: masked.clone(),
+            key_count: 1,
+        }];
+        let rows = build_rows(&cfg_vacia(), &summaries);
+        assert_eq!(rows.last().unwrap().name, masked);
+    }
+
     // --- `SettingsState`/`PendingWrite`/`SettingsEditError` (S3/S4 hoist) ---
 
     fn rows() -> Vec<Row> {
-        build_rows(&cfg_vacia())
+        build_rows(&cfg_vacia(), &[])
     }
 
     /// Filtering by a DASHED fragment of the id (`confirm-quit`) — unlikely
@@ -1195,7 +1312,7 @@ mod tests {
             dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
         let cfg = crate::config::load(&layers).expect("carga");
-        s.refresh(build_rows(&cfg));
+        s.refresh(build_rows(&cfg, &[]));
         assert_eq!(
             s.visible().len(),
             1,

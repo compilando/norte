@@ -99,6 +99,9 @@ pub struct DialogHints {
     pub picker: String,
     /// Gestor de extensiones (`App::extensions`).
     pub extensions: String,
+    /// Panel de `[config]` de un plugin dentro del gestor de extensiones
+    /// (`App::extensions`'s `config`, G3c).
+    pub plugin_config: String,
     /// Popup de navegación en modo hotlist (`App::nav_popup`,
     /// `NavPopupKind::Hotlist`) — el historial no pinta footer, igual que
     /// antes de H1.
@@ -111,7 +114,7 @@ impl DialogHints {
     pub fn build(eff: &Effective) -> Self {
         use crate::app::{
             ALLOW_APPROVAL, ALLOW_COLLISION, ALLOW_CONFIRM, ALLOW_EXTENSIONS, ALLOW_NAV_HOTLIST,
-            ALLOW_PICKER, ALLOW_TRUST_HOST,
+            ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, ALLOW_TRUST_HOST,
         };
         Self {
             confirm: dialog_hints(ALLOW_CONFIRM, eff),
@@ -123,6 +126,7 @@ impl DialogHints {
             // `without_navigation`).
             picker: dialog_hints(&without_navigation(ALLOW_PICKER), eff),
             extensions: dialog_hints(&without_navigation(ALLOW_EXTENSIONS), eff),
+            plugin_config: dialog_hints(&without_navigation(ALLOW_PLUGIN_CONFIG), eff),
             nav_list: dialog_hints(&without_navigation(ALLOW_NAV_HOTLIST), eff),
         }
     }
@@ -266,7 +270,12 @@ mod tests {
             .collect();
         let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog).unwrap();
         let hints = DialogHints::build(&eff);
-        for hint in [&hints.picker, &hints.extensions, &hints.nav_list] {
+        for hint in [
+            &hints.picker,
+            &hints.extensions,
+            &hints.plugin_config,
+            &hints.nav_list,
+        ] {
             assert!(
                 !hint.contains("[up]") && !hint.contains("[down]"),
                 "las flechas no deberían salir en un hint no-modal: {hint:?}"

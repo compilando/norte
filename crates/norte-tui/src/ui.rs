@@ -64,7 +64,11 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         draw_theme_picker(frame, picker, &app.theme, &app.dialog_hints.picker);
     }
     if let Some(mgr) = &app.extensions {
-        draw_extensions(frame, mgr, &app.theme, &app.dialog_hints.extensions);
+        if let Some(panel) = &mgr.config {
+            draw_plugin_config_panel(frame, panel, &app.theme, &app.dialog_hints.plugin_config);
+        } else {
+            draw_extensions(frame, mgr, &app.theme, &app.dialog_hints.extensions);
+        }
     }
     if let Some(popup) = &app.nav_popup {
         draw_nav_popup(frame, popup, &app.theme, &app.dialog_hints.nav_list);
@@ -302,6 +306,73 @@ fn draw_extensions(
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {} ", t("ext-title")))
+        .title_style(theme.role(Role::Title))
+        .title_bottom(Line::raw(format!(" {hint} ")))
+        .border_style(theme.role(Role::ModalBorder));
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// Panel de `[config]` de UN plugin (G3c, drill-down de
+/// [`draw_extensions`]): una línea `<key>: <value>` por
+/// [`norte_frontend::plugin_config::ConfigKeyRow`], la seleccionada
+/// resaltada; si se está editando (`state.is_editing()`), el buffer RAW se
+/// pinta bajo la fila con un cursor `_` (mismo idioma visual que un
+/// name-input popup). `key`/`kind`/`value` son charset-safe o vocabulario
+/// de norte (nunca texto libre del plugin — ver el rustdoc de
+/// [`norte_frontend::plugin_config::ConfigKeyRow`]); `description` llega YA
+/// enmascarada (`sanitize_config_keys`), se pinta como segunda línea
+/// atenuada igual que [`plugin_description_line`].
+fn draw_plugin_config_panel(
+    frame: &mut Frame<'_>,
+    panel: &crate::app::PluginConfigPanel,
+    theme: &TuiTheme,
+    hint: &str,
+) {
+    let footer_w = Line::raw(format!(" {hint} ")).width();
+    let ancho_min = u16::try_from(footer_w.saturating_add(4)).unwrap_or(u16::MAX);
+    let ancho = frame
+        .area()
+        .width
+        .saturating_sub(6)
+        .clamp(24, 80)
+        .max(ancho_min)
+        .min(frame.area().width);
+    let area = centered(
+        frame.area(),
+        ancho,
+        frame.area().height.saturating_sub(4).max(6),
+    );
+    frame.render_widget(ratatui::widgets::Clear, area);
+    let mut lines: Vec<Line<'_>> = Vec::new();
+    let rows = panel.state.rows();
+    if rows.is_empty() {
+        lines.push(Line::raw(t("ext-empty")));
+    } else {
+        for (i, row) in rows.iter().enumerate() {
+            let selected = i == panel.state.cursor();
+            let cursor = if selected { ">" } else { " " };
+            let mut line = Line::raw(format!("{cursor} {}: {}", row.key, row.value));
+            if selected {
+                line = line.style(theme.role(Role::Selection));
+            }
+            lines.push(line);
+            if selected && panel.state.is_editing() {
+                let buf = panel.state.edit_buffer().unwrap_or_default();
+                lines.push(Line::styled(
+                    format!("   {buf}_"),
+                    theme.role(Role::BorderUnfocused),
+                ));
+            } else if !row.description.is_empty() {
+                lines.push(Line::styled(
+                    format!("   {}", row.description),
+                    theme.role(Role::BorderUnfocused),
+                ));
+            }
+        }
+    }
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", panel.plugin_name))
         .title_style(theme.role(Role::Title))
         .title_bottom(Line::raw(format!(" {hint} ")))
         .border_style(theme.role(Role::ModalBorder));
@@ -1421,6 +1492,7 @@ mod plugin_description_line_tests {
             enabled: true,
             description: description.map(str::to_owned),
             commands: Vec::new(),
+            columns: Vec::new(),
         }
     }
 

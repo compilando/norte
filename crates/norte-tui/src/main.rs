@@ -20,11 +20,11 @@ use norte_proto::DeleteMode;
 use norte_proto::methods::{FsSearchParams, SearchHits};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{
-    ALLOW_EXTENSIONS, ALLOW_NAV_HOTLIST, ALLOW_PICKER, App, DialogOutcome, ExtensionManager, Help,
-    KeymapsError, Modal, NavPopupKind, Palette, Pane, PendingWrite, PickerAction, SearchDialog,
-    SearchState, Settings, SettingsEditError, TransferKind, config_error_category, detail_for_bar,
-    dialog_action, error_category, error_message, io_error_category, keymaps_error_category,
-    theme_error_category, trust_lua_key,
+    ALLOW_EXTENSIONS, ALLOW_NAV_HOTLIST, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, App, DialogOutcome,
+    ExtensionManager, Help, KeymapsError, Modal, NavPopupKind, Palette, Pane, PendingWrite,
+    PickerAction, SearchDialog, SearchState, Settings, SettingsEditError, TransferKind,
+    config_error_category, detail_for_bar, dialog_action, error_category, error_message,
+    io_error_category, keymaps_error_category, theme_error_category, trust_lua_key,
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::hints::DialogHints;
@@ -877,6 +877,7 @@ async fn run(
                 while cfg_rx.try_recv().is_ok() {}
                 reload_config(
                     app,
+                    backend,
                     resolver,
                     viewer_resolver,
                     dialog_resolver,
@@ -1630,6 +1631,19 @@ async fn on_extensions_key(
     if app.extensions.is_none() {
         return;
     }
+    // G3c drill-down: while a `[config]` `string`/`int` edit buffer is
+    // active, keys are captured RAW (same idiom as `on_nav_popup_key`'s
+    // `name_input`) — bypassing the keymap resolver entirely, so typing
+    // e.g. "y" edits the buffer instead of resolving to `dialog.approve`.
+    let editing = app
+        .extensions
+        .as_ref()
+        .and_then(|m| m.config.as_ref())
+        .is_some_and(|p| p.state.is_editing());
+    if editing {
+        on_plugin_config_edit_key(app, backend, mods, code).await;
+        return;
+    }
     let Some(chord) = chord_from_crossterm(mods, code) else {
         return; // tecla no modelada por el keymap: ignorar
     };
@@ -1641,15 +1655,105 @@ async fn on_extensions_key(
         }
         Resolution::Reset => return,
     };
+    let panel_open = app.extensions.as_ref().is_some_and(|m| m.config.is_some());
     // H1 T3: el MISMO allowlist que consume el hint generado
     // (`hints::DialogHints::build`) — una sola fuente para dispatch y footer.
-    if !ALLOW_EXTENSIONS.contains(&cmd.as_str()) {
-        return; // fuera del allowlist de este overlay: inerte
+    // G3c: qué allowlist aplica depende de si el panel de `[config]` está
+    // abierto.
+    let allow: &[&str] = if panel_open {
+        ALLOW_PLUGIN_CONFIG
+    } else {
+        ALLOW_EXTENSIONS
+    };
+    if !allow.contains(&cmd.as_str()) {
+        return; // fuera del allowlist de este contexto: inerte
     }
+    if panel_open {
+        on_plugin_config_panel_cmd(app, backend, &cmd).await;
+    } else {
+        on_extensions_list_cmd(app, backend, &cmd).await;
+    }
+}
+
+/// G3c: teclas RAW mientras un `string`/`int` de `[config]` se edita
+/// (`on_extensions_key`'s guard `editing`) — mismo idioma que
+/// `on_nav_popup_key`'s `name_input`.
+async fn on_plugin_config_edit_key(
+    app: &mut App,
+    backend: &Backend,
+    mods: KeyModifiers,
+    code: KeyCode,
+) {
+    let plain = mods.is_empty() || mods == KeyModifiers::SHIFT;
+    match code {
+        KeyCode::Char(c) if plain => {
+            if let Some(panel) = app.extensions.as_mut().and_then(|m| m.config.as_mut()) {
+                panel.state.edit_push_char(c);
+            }
+        }
+        KeyCode::Backspace if plain => {
+            if let Some(panel) = app.extensions.as_mut().and_then(|m| m.config.as_mut()) {
+                panel.state.edit_backspace();
+            }
+        }
+        KeyCode::Esc => {
+            if let Some(panel) = app.extensions.as_mut().and_then(|m| m.config.as_mut()) {
+                panel.state.edit_cancel();
+            }
+        }
+        KeyCode::Enter => {
+            let Some(panel) = app.extensions.as_mut().and_then(|m| m.config.as_mut()) else {
+                return;
+            };
+            match panel.state.edit_commit() {
+                Ok(write) => {
+                    let id = panel.plugin_id.clone();
+                    commit_plugin_config_write(app, backend, &id, write).await;
+                }
+                Err(err) => {
+                    app.message = Some(norte_frontend::settings::edit_error_message(&err));
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// G3c: comandos resueltos (`up`/`down`/`confirm`/`cancel`) mientras el
+/// panel de `[config]` está abierto y NADA se edita (`on_extensions_key`,
+/// `panel_open` branch — `allow == ALLOW_PLUGIN_CONFIG`).
+async fn on_plugin_config_panel_cmd(app: &mut App, backend: &Backend, cmd: &str) {
+    let Some(panel) = app.extensions.as_mut().and_then(|m| m.config.as_mut()) else {
+        return;
+    };
+    match cmd {
+        "dialog.up" => panel.state.up(),
+        "dialog.down" => panel.state.down(),
+        "dialog.cancel" => {
+            if let Some(mgr) = &mut app.extensions {
+                mgr.config = None;
+            }
+        }
+        "dialog.confirm" => {
+            if let Some(write) = panel.state.activate() {
+                let id = panel.plugin_id.clone();
+                commit_plugin_config_write(app, backend, &id, write).await;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// El resto de `on_extensions_key`: comandos sobre la LISTA de plugins
+/// (`panel_open == false`, `allow == ALLOW_EXTENSIONS`) — navegar,
+/// aprobar/activar, y `dialog.confirm` (G3c) abre el panel de `[config]`
+/// del plugin resaltado SI declara alguna clave. Enter NUNCA aprueba (pin
+/// P1): solo entra en un submenú.
+async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
     let Some(mgr) = &mut app.extensions else {
         return;
     };
-    match cmd.as_str() {
+    match cmd {
         "dialog.up" => mgr.up(),
         "dialog.down" => mgr.down(),
         "dialog.cancel" => app.extensions = None,
@@ -1680,7 +1784,52 @@ async fn on_extensions_key(
                 Err(e) => app.message = Some(error_message(&e)),
             }
         }
+        "dialog.confirm" => {
+            let Some((id, name)) = mgr.selected().map(|p| (p.id.clone(), p.name.clone())) else {
+                return;
+            };
+            match backend.plugin_get_config(&id).await {
+                Ok(result) if !result.keys.is_empty() => {
+                    let rows = norte_frontend::plugin_config::sanitize_config_keys(&result.keys);
+                    let (plugin_name, _) = norte_tui::app::display_name(name.as_bytes());
+                    if let Some(mgr) = &mut app.extensions {
+                        mgr.config = Some(norte_tui::app::PluginConfigPanel {
+                            plugin_id: id,
+                            plugin_name,
+                            state: norte_frontend::plugin_config::PluginConfigState::new(rows),
+                        });
+                    }
+                }
+                Ok(_) => app.message = Some(t("msg-plugin-config-empty")),
+                Err(e) => app.message = Some(error_message(&e)),
+            }
+        }
         _ => {} // fuera del allowlist de este overlay: inerte
+    }
+}
+
+/// Persiste UN [`norte_frontend::plugin_config::PendingConfigWrite`] vía
+/// `Backend::plugin_set_config` y anuncia el resultado (G3c) — factorizado
+/// fuera de [`on_extensions_key`] porque el mismo commit ocurre desde DOS
+/// sitios (edición inline confirmada con Enter, y un `bool`/`enum` que
+/// cicla de inmediato en `dialog.confirm`).
+async fn commit_plugin_config_write(
+    app: &mut App,
+    backend: &Backend,
+    plugin_id: &str,
+    write: norte_frontend::plugin_config::PendingConfigWrite,
+) {
+    match backend
+        .plugin_set_config(plugin_id, &write.key, &write.value)
+        .await
+    {
+        Ok(()) => {
+            app.message = Some(ta(
+                "msg-plugin-config-saved",
+                &[("key", &write.key), ("value", &write.display)],
+            ));
+        }
+        Err(e) => app.message = Some(error_message(&e)),
     }
 }
 
@@ -1870,6 +2019,7 @@ async fn hotlist_remove(app: &mut App, name: &str) {
 #[allow(clippy::too_many_arguments)] // wiring del hot-reload, no API
 async fn reload_config(
     app: &mut App,
+    backend: &Backend,
     resolver: &mut Resolver,
     viewer_resolver: &mut Resolver,
     dialog_resolver: &mut Resolver,
@@ -1943,7 +2093,8 @@ async fn reload_config(
                 // de recomputar sin tirar el filtro/edición en curso del
                 // usuario (`Settings::refresh`).
                 if let Some(settings) = &mut app.settings {
-                    settings.refresh(norte_tui::settings::build_rows(&cfg));
+                    let summaries = plugin_config_summaries(backend).await;
+                    settings.refresh(norte_tui::settings::build_rows(&cfg, &summaries));
                 }
                 *cfg_out = cfg;
             }
@@ -3212,6 +3363,7 @@ async fn dispatch(
                     plugins,
                     errors: list.errors,
                     cursor: 0,
+                    config: None,
                 });
             }
             Err(e) => app.message = Some(error_message(&e)),
@@ -3251,12 +3403,14 @@ async fn dispatch(
         }
         // `F11` (S3): overlay de ajustes — las filas nacen del `cfg` VIGENTE
         // (mismo criterio que `help_lines`/`app.palette_rows`: reconstruidas
-        // al abrir, jamás una copia arrastrada). Sección Plugins = SOLO la
-        // fila informativa (HONEST SCOPE, `norte_tui::settings` doc del
-        // módulo) — el wire de P2 no expone esquema/valores de plugin fuera
-        // del proceso embebido.
+        // al abrir, jamás una copia arrastrada). Sección Plugins (G3c): un
+        // resumen POR plugin con `[config]` (real ahora, ya no la nota
+        // informativa de P2 — `plugin_config_summaries`).
         "app.settings" => {
-            app.settings = Some(Settings::new(norte_tui::settings::build_rows(cfg)));
+            let summaries = plugin_config_summaries(backend).await;
+            app.settings = Some(Settings::new(norte_tui::settings::build_rows(
+                cfg, &summaries,
+            )));
         }
         "task.cancel" => {
             app.message = Some(if app.board.cancel_last_running() {
@@ -3302,6 +3456,41 @@ async fn dispatch(
 fn parse_plugin_key(cmd: &str) -> Option<(&str, &str)> {
     let (id, command) = cmd.strip_prefix("plugin:")?.split_once(':')?;
     (!id.is_empty()).then_some((id, command))
+}
+
+/// Builds the Plugins-section summaries for the settings overlay (G3c):
+/// `plugins_list` (approved+enabled only — same gate the palette's
+/// `plugin_rows` and the extension manager's actionable rows use) then one
+/// `plugin.get_config` PER surviving plugin, keeping only those with at
+/// least one `[config.<key>]` (nothing to summarize/drill into otherwise).
+/// Best-effort: a plugin whose `get_config` call fails (daemon hiccup, a
+/// remote N-1 without the method) is simply DROPPED from the section — an
+/// enrichment lost, never a hard error that would block opening settings
+/// at all (same fallback contract as `plugin.decorate`/`column_values`).
+/// `name` is masked here (plugin text, untrusted) — the ONLY point this
+/// summary crosses into `norte_frontend::settings::Row`.
+async fn plugin_config_summaries(
+    backend: &Backend,
+) -> Vec<norte_frontend::settings::PluginConfigSummary> {
+    let Ok(list) = backend.plugins_list().await else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for p in list.plugins.iter().filter(|p| p.approved && p.enabled) {
+        let Ok(cfg) = backend.plugin_get_config(&p.id).await else {
+            continue;
+        };
+        if cfg.keys.is_empty() {
+            continue;
+        }
+        let (name, _) = norte_tui::app::display_name(p.name.as_bytes());
+        out.push(norte_frontend::settings::PluginConfigSummary {
+            plugin_id: p.id.clone(),
+            name,
+            key_count: cfg.keys.len(),
+        });
+    }
+    out
 }
 
 #[cfg(test)]

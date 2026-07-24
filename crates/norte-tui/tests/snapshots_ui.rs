@@ -264,9 +264,11 @@ fn snapshot_extensions_80x24() {
             enabled: true,
             description: None,
             commands: Vec::new(),
+            columns: Vec::new(),
         }],
         errors: Vec::new(),
         cursor: 0,
+        config: None,
     });
     let texto = render_80x24(&app);
     insta::assert_snapshot!(texto.clone());
@@ -306,9 +308,11 @@ fn snapshot_extensions_description_hostil_80x24() {
             enabled: true,
             description: Some(descripcion),
             commands: Vec::new(),
+            columns: Vec::new(),
         }],
         errors: Vec::new(),
         cursor: 0,
+        config: None,
     });
     let texto = render_80x24(&app);
     // El check es sobre el CARÁCTER inyectado, no "ningún hazard en toda la
@@ -324,6 +328,64 @@ fn snapshot_extensions_description_hostil_80x24() {
         texto.contains('\u{FFFD}'),
         "la description hostil debe enmascararse a U+FFFD: {texto}"
     );
+    insta::assert_snapshot!(texto);
+}
+
+/// G3c: el panel de `[config]` de un plugin (drill-down del gestor de
+/// extensiones) — dos claves (`bool` seleccionada, `enum` con una
+/// description HOSTIL) se pintan sin bytes crudos, la seleccionada
+/// resaltada.
+#[test]
+fn snapshot_plugin_config_panel_80x24() {
+    use norte_frontend::plugin_config::{PluginConfigState, sanitize_config_keys};
+    let hostil = norte_testkit::corpus::hostile_names()
+        .into_iter()
+        .find(|n| n.id == "rtl_override")
+        .expect("fixture del corpus");
+    let desc_hostil = String::from_utf8_lossy(&hostil.bytes).into_owned();
+    let mut app = app_base();
+    let wire_keys = vec![
+        norte_proto::methods::PluginConfigKeyWire {
+            key: "verbose".into(),
+            kind: "bool".into(),
+            default: "false".into(),
+            min: None,
+            max: None,
+            values: Vec::new(),
+            description: None,
+            value: "true".into(),
+        },
+        norte_proto::methods::PluginConfigKeyWire {
+            key: "mode".into(),
+            kind: "enum".into(),
+            default: "fast".into(),
+            min: None,
+            max: None,
+            values: vec!["fast".into(), "thorough".into()],
+            description: Some(desc_hostil),
+            value: "fast".into(),
+        },
+    ];
+    app.extensions = Some(norte_tui::app::ExtensionManager {
+        plugins: Vec::new(),
+        errors: Vec::new(),
+        cursor: 0,
+        config: Some(norte_tui::app::PluginConfigPanel {
+            plugin_id: "org.norte.demo".into(),
+            plugin_name: "Demo".into(),
+            state: PluginConfigState::new(sanitize_config_keys(&wire_keys)),
+        }),
+    });
+    let texto = render_80x24(&app);
+    assert!(
+        !texto.contains('\u{202E}'),
+        "el override RTL de la description se pintó crudo: {texto}"
+    );
+    assert!(
+        texto.contains('\u{FFFD}'),
+        "la description hostil debe enmascararse a U+FFFD: {texto}"
+    );
+    assert!(texto.contains("verbose: true"));
     insta::assert_snapshot!(texto);
 }
 
@@ -573,6 +635,7 @@ fn snapshot_palette_fila_de_plugin_hostil() {
             id: "run".into(),
             title: titulo,
         }],
+        columns: Vec::new(),
     };
     // Sin query: `plugin_rows` sobre UN plugin con UN comando ya deja una
     // sola fila — "filtrada a solo ella" por construcción, no por texto
@@ -608,7 +671,8 @@ fn cfg_vacia() -> norte_tui::config::LoadedConfig {
 #[test]
 fn snapshot_settings_abierta() {
     let mut app = app_base();
-    let settings = norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia()));
+    let settings =
+        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia(), &[]));
     app.settings = Some(settings);
     insta::assert_snapshot!(render_80x24(&app));
 }
@@ -623,7 +687,8 @@ fn snapshot_settings_abierta() {
 #[test]
 fn snapshot_modal_pinta_encima_del_overlay_de_ajustes() {
     let mut app = app_base();
-    let settings = norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia()));
+    let settings =
+        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia(), &[]));
     app.settings = Some(settings);
     app.modal = Some(Modal::ConfirmDelete {
         target: vp("file:///casa/notas.txt"),
@@ -663,7 +728,8 @@ fn snapshot_modal_pinta_encima_de_la_palette() {
 #[test]
 fn snapshot_settings_filtrada_y_editando_texto() {
     let mut app = app_base();
-    let mut settings = norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia()));
+    let mut settings =
+        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia(), &[]));
     for c in "ui.font ".chars() {
         settings.push_char(c);
     }

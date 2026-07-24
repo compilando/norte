@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use norte_core::backend::{Backend, TaskCanceller, TaskRef, remote::RemoteBackend};
-use norte_proto::methods::ClientInfo;
+use norte_proto::methods::{ClientInfo, PluginColumnInfo, PluginInfo, PluginLoadError};
 use norte_proto::{Entry, Error, TaskId, TaskProgress, TaskState, VPath};
 use tokio::sync::mpsc;
 
@@ -93,6 +93,70 @@ pub enum SessionCmd {
         dir: VPath,
         /// Rutas visibles a decorar, en el orden del listado.
         paths: Vec<VPath>,
+    },
+    /// Valores de columna (G3c, cierra el deferral GUI de G3b): descubre las
+    /// columnas de plugins `columns` APROBADOS y ACTIVADOS (`plugin.list`),
+    /// y pide `plugin.column_values` para CADA columna declarada sobre la
+    /// página visible — todo resuelto en el hilo de sesión, la GUI recibe UN
+    /// solo evento con cabeceras+valores YA saneados. Mismo guard anti-stale
+    /// que `Decorate`.
+    Columns {
+        /// Pane destino (0|1).
+        pane: usize,
+        /// Generación del cd que lo pidió.
+        generation: u64,
+        /// Directorio listado (guard anti-stale al aplicar).
+        dir: VPath,
+        /// Rutas visibles a valorar, en el orden del listado.
+        paths: Vec<VPath>,
+    },
+    /// Catálogo de plugins (G3c): alimenta la paleta (filas de comando de
+    /// plugin) y el gestor de extensiones.
+    PluginsList,
+    /// Esquema `[config]` + valores efectivos de UN plugin (G3c,
+    /// `plugin.get_config`) — usado por el drill-down del gestor de
+    /// extensiones.
+    PluginGetConfig {
+        /// Id del plugin.
+        id: String,
+    },
+    /// Resúmenes de `[config]` de TODOS los plugins aprobados+activados
+    /// (G3c) — alimenta la sección Plugins del overlay de ajustes
+    /// (`plugins_list` + un `plugin.get_config` por plugin, resuelto aquí
+    /// para no encadenar N idas-y-vueltas por el puente GPUI↔tokio).
+    PluginConfigSummaries,
+    /// Persiste UN valor de `[config]` (G3c, `plugin.set_config`).
+    PluginSetConfig {
+        /// Id del plugin.
+        id: String,
+        /// Clave `[config.<key>]`.
+        key: String,
+        /// Valor nuevo, codificado canónicamente.
+        value: String,
+    },
+    /// Aprueba/revoca un plugin (G3c GUI wiring — `Backend::plugins_set_approval`
+    /// ya existía, la GUI simplemente nunca lo llamaba).
+    PluginSetApproval {
+        /// Id del plugin.
+        id: String,
+        /// Nuevo estado.
+        approved: bool,
+    },
+    /// Activa/desactiva un plugin (G3c GUI wiring).
+    PluginSetEnabled {
+        /// Id del plugin.
+        id: String,
+        /// Nuevo estado.
+        enabled: bool,
+    },
+    /// Ejecuta un comando de plugin (G3c, la paleta lo dispara).
+    PluginRunCommand {
+        /// Id del plugin.
+        id: String,
+        /// Comando declarado por el plugin.
+        command: String,
+        /// Argumento (vacío si ninguno).
+        arg: String,
     },
 }
 
@@ -199,6 +263,68 @@ pub enum SessionEvent {
         /// Decoraciones ya saneadas, por ruta.
         decorations: HashMap<VPath, norte_frontend::Decoration>,
     },
+    /// Resultado de `Columns` (G3c): una entrada por columna DECLARADA
+    /// (`(id, header)`, header YA enmascarado) más el mapa de valores YA
+    /// saneados de ESA columna. Ninguna columna declarada = `columns: []`
+    /// (nunca error — mismo criterio indulgente que `Decorated`).
+    ColumnsReady {
+        /// Pane destino.
+        pane: usize,
+        /// Generación del cd que lo pidió (guard anti-stale).
+        generation: u64,
+        /// Directorio listado (guard anti-stale).
+        dir: VPath,
+        /// Columnas declaradas por plugins aprobados+activados, YA
+        /// saneadas (`id`, `header` enmascarado).
+        columns: Vec<(String, String)>,
+        /// Valores por columna (`id`) → por ruta → celda YA saneada.
+        values: HashMap<String, HashMap<VPath, String>>,
+    },
+    /// Catálogo de plugins (G3c): respuesta a `PluginsList`.
+    PluginsListed(Result<(Vec<PluginInfo>, Vec<PluginLoadError>), String>),
+    /// Esquema `[config]` de UN plugin (G3c): respuesta a `PluginGetConfig`.
+    PluginConfigReady {
+        /// Id del plugin consultado.
+        id: String,
+        /// Claves YA saneadas (`norte_frontend::plugin_config::sanitize_config_keys`).
+        rows: Vec<norte_frontend::plugin_config::ConfigKeyRow>,
+    },
+    /// Fallo al pedir `plugin.get_config` (G3c) — mensaje ya renderizable.
+    PluginConfigFailed(String),
+    /// Resúmenes de `[config]` para la sección Plugins del overlay de
+    /// ajustes (G3c): respuesta a `PluginConfigSummaries`.
+    PluginConfigSummariesReady(Vec<norte_frontend::settings::PluginConfigSummary>),
+    /// `plugin.set_config` tuvo éxito (G3c): `key`/`value` para el mensaje
+    /// de confirmación (`key` charset-safe, `value` ya validado
+    /// client-side).
+    PluginConfigSaved {
+        /// Clave fijada.
+        key: String,
+        /// Valor nuevo, como texto de display.
+        value: String,
+    },
+    /// `plugin.set_config` falló (G3c) — mensaje ya renderizable.
+    PluginConfigSaveFailed(String),
+    /// `plugin.set_approval`/`plugin.set_enabled` tuvieron éxito (G3c GUI
+    /// wiring): `approved`/`enabled` es el nuevo estado LOCAL (feedback
+    /// optimista, mismo criterio que la TUI's `set_local_approved`).
+    PluginGovernanceSet {
+        /// Id del plugin afectado.
+        id: String,
+        /// `Some(approved)` si fue una aprobación; `None` si fue
+        /// activación.
+        approved: Option<bool>,
+        /// `Some(enabled)` si fue una activación; `None` si fue aprobación.
+        enabled: Option<bool>,
+    },
+    /// `plugin.set_approval`/`plugin.set_enabled` fallaron (G3c) — mensaje
+    /// ya renderizable.
+    PluginGovernanceFailed(String),
+    /// `plugin.run_command` tuvo éxito (G3c, disparado desde la paleta):
+    /// salida NO confiable del plugin, sin sanear todavía.
+    PluginRunResult(String),
+    /// `plugin.run_command` falló (G3c) — mensaje ya renderizable.
+    PluginRunFailed(String),
 }
 
 /// Arranca el hilo de sesión: conecta al `socket` UNA vez y sirve `cmd_rx`,
@@ -290,10 +416,215 @@ pub fn spawn(
                             });
                         });
                     }
+                    SessionCmd::Columns {
+                        pane,
+                        generation,
+                        dir,
+                        paths,
+                    } => {
+                        if paths.is_empty() {
+                            continue;
+                        }
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            columns_ready(&backend, pane, generation, dir, paths, &tx).await;
+                        });
+                    }
+                    SessionCmd::PluginsList => {
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            let res = backend
+                                .plugins_list()
+                                .await
+                                .map(|r| (r.plugins, r.errors))
+                                .map_err(|e| format!("{e}"));
+                            let _ = tx.send(SessionEvent::PluginsListed(res));
+                        });
+                    }
+                    SessionCmd::PluginGetConfig { id } => {
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            match backend.plugin_get_config(&id).await {
+                                Ok(result) => {
+                                    let rows = norte_frontend::plugin_config::sanitize_config_keys(
+                                        &result.keys,
+                                    );
+                                    let _ = tx.send(SessionEvent::PluginConfigReady { id, rows });
+                                }
+                                Err(e) => {
+                                    let _ =
+                                        tx.send(SessionEvent::PluginConfigFailed(format!("{e}")));
+                                }
+                            }
+                        });
+                    }
+                    SessionCmd::PluginConfigSummaries => {
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            let summaries = plugin_config_summaries(&backend).await;
+                            let _ = tx.send(SessionEvent::PluginConfigSummariesReady(summaries));
+                        });
+                    }
+                    SessionCmd::PluginSetConfig { id, key, value } => {
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            match backend.plugin_set_config(&id, &key, &value).await {
+                                Ok(()) => {
+                                    let _ = tx.send(SessionEvent::PluginConfigSaved { key, value });
+                                }
+                                Err(e) => {
+                                    let _ = tx
+                                        .send(SessionEvent::PluginConfigSaveFailed(format!("{e}")));
+                                }
+                            }
+                        });
+                    }
+                    SessionCmd::PluginSetApproval { id, approved } => {
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            match backend.plugins_set_approval(&id, approved).await {
+                                Ok(()) => {
+                                    let _ = tx.send(SessionEvent::PluginGovernanceSet {
+                                        id,
+                                        approved: Some(approved),
+                                        enabled: None,
+                                    });
+                                }
+                                Err(e) => {
+                                    let _ = tx
+                                        .send(SessionEvent::PluginGovernanceFailed(format!("{e}")));
+                                }
+                            }
+                        });
+                    }
+                    SessionCmd::PluginSetEnabled { id, enabled } => {
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            match backend.plugins_set_enabled(&id, enabled).await {
+                                Ok(()) => {
+                                    let _ = tx.send(SessionEvent::PluginGovernanceSet {
+                                        id,
+                                        approved: None,
+                                        enabled: Some(enabled),
+                                    });
+                                }
+                                Err(e) => {
+                                    let _ = tx
+                                        .send(SessionEvent::PluginGovernanceFailed(format!("{e}")));
+                                }
+                            }
+                        });
+                    }
+                    SessionCmd::PluginRunCommand { id, command, arg } => {
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            match backend.plugin_run_command(&id, &command, &arg).await {
+                                Ok(output) => {
+                                    let _ = tx.send(SessionEvent::PluginRunResult(output));
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(SessionEvent::PluginRunFailed(format!("{e}")));
+                                }
+                            }
+                        });
+                    }
                 }
             }
         });
     });
+}
+
+/// Resuelve `Columns` (G3c): descubre columnas de plugins `columns`
+/// aprobados+activados vía `plugin.list` (`PluginInfo::columns`, 0.28.0),
+/// deduplicadas por `id` (PRIMERA que casa gana — mismo criterio que
+/// `PluginRegistry::resolve_columns`), y pide `plugin.column_values` para
+/// CADA una sobre `paths`. Fail-soft por columna: si una falla, las demás
+/// se pintan igual (`unwrap_or_default` sobre `Vec<Option<String>>` vacío
+/// = sin celdas de esa columna, nunca aborta el resto).
+async fn columns_ready(
+    backend: &Backend,
+    pane: usize,
+    generation: u64,
+    dir: VPath,
+    paths: Vec<VPath>,
+    tx: &mpsc::UnboundedSender<SessionEvent>,
+) {
+    let Ok(list) = backend.plugins_list().await else {
+        let _ = tx.send(SessionEvent::ColumnsReady {
+            pane,
+            generation,
+            dir,
+            columns: Vec::new(),
+            values: HashMap::new(),
+        });
+        return;
+    };
+    let mut declared: Vec<PluginColumnInfo> = Vec::new();
+    for p in list.plugins.iter().filter(|p| p.approved && p.enabled) {
+        for c in &p.columns {
+            if !declared.iter().any(|d| d.id == c.id) {
+                declared.push(c.clone());
+            }
+        }
+    }
+    let mut columns = Vec::new();
+    let mut values = HashMap::new();
+    for c in declared {
+        let raw = backend
+            .plugin_column_values(&c.id, &paths)
+            .await
+            .unwrap_or_default();
+        let sanitized = norte_frontend::columns::sanitize_column_values(&paths, &raw);
+        columns.push((
+            c.id.clone(),
+            norte_frontend::columns::sanitize_header(&c.header),
+        ));
+        values.insert(c.id, sanitized);
+    }
+    let _ = tx.send(SessionEvent::ColumnsReady {
+        pane,
+        generation,
+        dir,
+        columns,
+        values,
+    });
+}
+
+/// Resuelve `PluginConfigSummaries` (G3c): `plugins_list` filtrado a
+/// aprobados+activados, luego un `plugin.get_config` POR plugin, quedándose
+/// solo con los que declaran al menos una clave — mismo criterio best-effort
+/// que la TUI's `plugin_config_summaries` (main.rs): un plugin cuyo
+/// `get_config` falla se DESCARTA de la sección, nunca bloquea el resto.
+async fn plugin_config_summaries(
+    backend: &Backend,
+) -> Vec<norte_frontend::settings::PluginConfigSummary> {
+    let Ok(list) = backend.plugins_list().await else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for p in list.plugins.iter().filter(|p| p.approved && p.enabled) {
+        let Ok(cfg) = backend.plugin_get_config(&p.id).await else {
+            continue;
+        };
+        if cfg.keys.is_empty() {
+            continue;
+        }
+        let name = norte_frontend::display_name(p.name.as_bytes()).0;
+        out.push(norte_frontend::settings::PluginConfigSummary {
+            plugin_id: p.id.clone(),
+            name,
+            key_count: cfg.keys.len(),
+        });
+    }
+    out
 }
 
 /// Intenta un previewer de plugin; si ninguno aplica, lee bytes acotados. El

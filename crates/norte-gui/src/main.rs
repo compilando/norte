@@ -64,8 +64,10 @@ use norte_proto::{Entry, EntryKind, Segment, VPath};
 use norte_theme::{FileKind, Role, Theme};
 
 mod effects;
+mod extensions_view;
 mod keymap;
 mod modal;
+mod palette_view;
 mod session;
 mod settings_view;
 mod theme_map;
@@ -254,6 +256,33 @@ struct NorteGui {
     /// ajustes está abierta, la vista de ajustes sigue ganando la pantalla
     /// hasta que el usuario la cierre).
     settings_view: Option<settings_view::SettingsView>,
+    /// The command palette overlay (G3c, `ctrl+p`): `Some` while open,
+    /// painted ON TOP of the dual-pane/viewer (an overlay, not a
+    /// full-view swap — mirrors the modal's z-order, see `render`), but
+    /// with the SAME key-capture priority as `settings_view` in `on_key`
+    /// (modal still wins over everything, same as the TUI's
+    /// `modal_preempts_palette` guard).
+    palette: Option<palette_view::PaletteView>,
+    /// The extension manager full view (G3c, `F12`): mutually exclusive
+    /// with `settings_view`/`viewer`/dual-pane, same swap pattern as
+    /// `settings_view`.
+    extensions: Option<extensions_view::ExtensionsView>,
+    /// Columnas contribuidas por plugins `columns` aprobados+activados,
+    /// por pane (G3c, cierra el deferral GUI de G3b): `(id, header YA
+    /// enmascarado)`, en el orden en que `plugin.list` las devolvió
+    /// (deduplicadas por id). Vacío = ninguna — el listado se pinta sin
+    /// columnas extra, mismo criterio indulgente que las decoraciones.
+    columns: [Vec<(String, String)>; 2],
+    /// Valores de columna por pane: `id` → por ruta → celda YA saneada
+    /// (G3c). Refrescado junto a `columns` en cada `SessionEvent::ColumnsReady`.
+    column_values: [std::collections::HashMap<String, std::collections::HashMap<VPath, String>>; 2],
+    /// Última respuesta de `SessionCmd::PluginConfigSummaries` (G3c),
+    /// cacheada para que `set_settings_status` (que refresca las filas
+    /// tras CUALQUIER escritura general, no solo un cambio de plugin)
+    /// pueda reconstruir la sección Plugins sin perderla — sin este cache,
+    /// editar `ui.theme` blanquearía la sección Plugins hasta el próximo
+    /// `PluginConfigSummariesReady`.
+    plugin_config_summaries: Vec<norte_frontend::settings::PluginConfigSummary>,
 }
 
 impl NorteGui {
@@ -473,6 +502,14 @@ impl NorteGui {
                     quick_mode,
                     cfg_snapshot,
                     settings_view: None,
+                    palette: None,
+                    extensions: None,
+                    columns: [Vec::new(), Vec::new()],
+                    column_values: [
+                        std::collections::HashMap::new(),
+                        std::collections::HashMap::new(),
+                    ],
+                    plugin_config_summaries: Vec::new(),
                 };
                 gui.spawn_event_loop(event_rx, cx);
                 gui.cd(0, dir.clone(), cx);
@@ -534,6 +571,14 @@ impl NorteGui {
                     quick_mode,
                     cfg_snapshot,
                     settings_view: None,
+                    palette: None,
+                    extensions: None,
+                    columns: [Vec::new(), Vec::new()],
+                    column_values: [
+                        std::collections::HashMap::new(),
+                        std::collections::HashMap::new(),
+                    ],
+                    plugin_config_summaries: Vec::new(),
                 }
             }
         }
@@ -637,6 +682,14 @@ impl NorteGui {
                             .map(|e| e.path.clone())
                             .collect();
                         let _ = self.cmds.send(SessionCmd::Decorate {
+                            pane,
+                            generation,
+                            dir: dir.clone(),
+                            paths: paths.clone(),
+                        });
+                        // G3c (cierra el deferral GUI de G3b): mismo criterio
+                        // que Decorate, batched sobre la MISMA página visible.
+                        let _ = self.cmds.send(SessionCmd::Columns {
                             pane,
                             generation,
                             dir,
@@ -781,6 +834,111 @@ impl NorteGui {
                     self.panes[pane].set_listing(dir, Vec::new());
                     self.errors[pane] = Some(msg.clone());
                 }
+            }
+            SessionEvent::ColumnsReady {
+                pane,
+                generation,
+                dir,
+                columns,
+                values,
+            } => {
+                // Mismo guard doble anti-stale que `Decorated`.
+                if !generation_is_current(self.generation[pane], generation)
+                    || self.panes[pane].dir() != &dir
+                {
+                    return;
+                }
+                self.columns[pane] = columns;
+                self.column_values[pane] = values;
+            }
+            SessionEvent::PluginsListed(res) => match res {
+                Ok((plugins, errors)) => {
+                    if let Some(palette) = &mut self.palette {
+                        palette.extend(norte_frontend::palette::plugin_rows(&plugins));
+                    }
+                    if let Some(ext) = &mut self.extensions {
+                        ext.plugins = plugins;
+                        ext.errors = errors;
+                        ext.loading = false;
+                    }
+                }
+                Err(_) => {
+                    // Best-effort (mismo criterio que Decorate/Columns): la
+                    // paleta se queda con solo los comandos built-in; el
+                    // gestor de extensiones sale de "cargando" a "vacío" —
+                    // indistinguible de un catálogo genuinamente vacío, pero
+                    // nunca un banner de error que tumbe la vista.
+                    if let Some(ext) = &mut self.extensions {
+                        ext.loading = false;
+                    }
+                }
+            },
+            SessionEvent::PluginConfigReady { id, rows } => {
+                if let Some(ext) = &mut self.extensions {
+                    if rows.is_empty() {
+                        self.errors[self.focus] = Some(norte_i18n::t("msg-plugin-config-empty"));
+                        return;
+                    }
+                    let raw_name = ext
+                        .plugins
+                        .iter()
+                        .find(|p| p.id == id)
+                        .map(|p| p.name.clone())
+                        .unwrap_or_default();
+                    let plugin_name = norte_frontend::display_name(raw_name.as_bytes()).0;
+                    ext.config = Some(extensions_view::ConfigPanel {
+                        plugin_id: id,
+                        plugin_name,
+                        state: norte_frontend::plugin_config::PluginConfigState::new(rows),
+                    });
+                }
+            }
+            SessionEvent::PluginConfigFailed(msg) => {
+                self.errors[self.focus] = Some(msg);
+            }
+            SessionEvent::PluginConfigSummariesReady(summaries) => {
+                self.plugin_config_summaries = summaries;
+                if let Some(view) = &mut self.settings_view {
+                    view.state.refresh(norte_frontend::settings::build_rows(
+                        &self.cfg_snapshot,
+                        &self.plugin_config_summaries,
+                    ));
+                }
+            }
+            SessionEvent::PluginConfigSaved { key, value } => {
+                self.errors[self.focus] = Some(norte_i18n::ta(
+                    "msg-plugin-config-saved",
+                    &[("key", key.as_str()), ("value", value.as_str())],
+                ));
+            }
+            SessionEvent::PluginConfigSaveFailed(msg) => {
+                self.errors[self.focus] = Some(msg);
+            }
+            SessionEvent::PluginGovernanceSet {
+                id,
+                approved,
+                enabled,
+            } => {
+                if let Some(ext) = &mut self.extensions {
+                    if let Some(approved) = approved {
+                        ext.set_local_approved(&id, approved);
+                    }
+                    if let Some(enabled) = enabled {
+                        ext.set_local_enabled(&id, enabled);
+                    }
+                }
+            }
+            SessionEvent::PluginGovernanceFailed(msg) => {
+                self.errors[self.focus] = Some(msg);
+            }
+            SessionEvent::PluginRunResult(output) => {
+                self.errors[self.focus] = Some(norte_i18n::ta(
+                    "msg-plugin-run-ok",
+                    &[("output", banner_safe(&output).as_str())],
+                ));
+            }
+            SessionEvent::PluginRunFailed(msg) => {
+                self.errors[self.focus] = Some(msg);
             }
         }
     }
@@ -991,6 +1149,8 @@ impl NorteGui {
         match cmd {
             "app.quit" => self.quit_or_confirm(cx),
             "app.settings" => self.open_settings(),
+            "app.palette" => self.open_palette(),
+            "app.extensions" => self.open_extensions(),
             "pane.switch" => self.focus = 1 - self.focus,
             "cursor.up" => self.panes[f].cursor_up(),
             "cursor.down" => self.panes[f].cursor_down(),
@@ -1032,11 +1192,16 @@ impl NorteGui {
     /// SÍNCRONAMENTE desde `cfg_snapshot` (nunca releyendo disco — regla 2),
     /// mismo criterio que abrir la paleta en la TUI. Reemplaza cualquier
     /// vista anterior con una fresca (sin filtro/edición, igual que F11
-    /// repetido en la TUI cerraría y reabriría).
+    /// repetido en la TUI cerraría y reabriría). La sección Plugins (G3c)
+    /// nace VACÍA (informativa) y se rellena async al llegar
+    /// `PluginConfigSummariesReady` (`SessionCmd::PluginConfigSummaries`,
+    /// disparado aquí) — mismo criterio "muestra algo YA, enriquece
+    /// después" que `Decorate`/`Columns`.
     fn open_settings(&mut self) {
         self.settings_view = Some(settings_view::SettingsView::new(
-            norte_frontend::settings::build_rows(&self.cfg_snapshot),
+            norte_frontend::settings::build_rows(&self.cfg_snapshot, &[]),
         ));
+        let _ = self.cmds.send(SessionCmd::PluginConfigSummaries);
     }
 
     /// Maneja UNA tecla con la vista de ajustes abierta (`on_key`, tramo
@@ -1309,8 +1474,110 @@ impl NorteGui {
     fn set_settings_status(&mut self, message: String, error: bool) {
         if let Some(view) = &mut self.settings_view {
             view.status = Some(settings_view::SettingsStatus { message, error });
-            view.state
-                .refresh(norte_frontend::settings::build_rows(&self.cfg_snapshot));
+            view.state.refresh(norte_frontend::settings::build_rows(
+                &self.cfg_snapshot,
+                &self.plugin_config_summaries,
+            ));
+        }
+    }
+
+    /// Abre la paleta de comandos (`app.palette`, `ctrl+p`, G3c): las filas
+    /// built-in nacen SÍNCRONAS (del `resolver` vigente), las de comando de
+    /// plugin llegan ASYNC (`SessionCmd::PluginsList` → `PaletteView::extend`
+    /// en `apply_event`) — mismo criterio "muestra algo YA, enriquece
+    /// después" que `Decorate`/`Columns`. Reemplaza cualquier paleta
+    /// anterior con una fresca.
+    fn open_palette(&mut self) {
+        self.palette = Some(palette_view::PaletteView::new(palette_view::build_rows(
+            self.resolver.effective(),
+        )));
+        let _ = self.cmds.send(SessionCmd::PluginsList);
+    }
+
+    /// Maneja UNA tecla con la paleta abierta — mismo gate ctrl/alt/platform
+    /// que [`Self::on_settings_key`] (la paleta también acepta tecleo
+    /// libre). `Run(key)` distingue un comando built-in (`key` es un
+    /// nombre de [`crate::keymap::COMMANDS`], se re-despacha vía
+    /// [`Self::run_command`]) de una fila de plugin (`key` empieza con
+    /// `"plugin:"`, JAMÁS un nombre de comando real — se envía
+    /// `SessionCmd::PluginRunCommand`) — mismo criterio inequívoco que la
+    /// TUI's `parse_plugin_key`.
+    fn on_palette_key(&mut self, ks: &gpui::Keystroke, cx: &mut Context<Self>) {
+        if ks.modifiers.control || ks.modifiers.alt || ks.modifiers.platform {
+            return;
+        }
+        let Some(view) = &mut self.palette else {
+            return;
+        };
+        let outcome = palette_view::on_key(view, &ks.key, ks.key_char.as_deref());
+        match outcome {
+            palette_view::PaletteOutcome::None => {}
+            palette_view::PaletteOutcome::Close => self.palette = None,
+            palette_view::PaletteOutcome::Run(key) => {
+                self.palette = None;
+                if let Some((id, command)) = parse_plugin_palette_key(&key) {
+                    let _ = self.cmds.send(SessionCmd::PluginRunCommand {
+                        id: id.to_owned(),
+                        command: command.to_owned(),
+                        arg: String::new(),
+                    });
+                } else {
+                    self.run_command(&key, cx);
+                }
+            }
+        }
+    }
+
+    /// Abre el gestor de extensiones (`app.extensions`, `f12`, G3c): nace
+    /// en estado "cargando" (`ExtensionsView::loading`) — el catálogo
+    /// llega ASYNC (`SessionCmd::PluginsList` → `apply_event`,
+    /// `SessionEvent::PluginsListed`). Reemplaza cualquier vista anterior.
+    fn open_extensions(&mut self) {
+        self.extensions = Some(extensions_view::ExtensionsView::loading());
+        let _ = self.cmds.send(SessionCmd::PluginsList);
+    }
+
+    /// Maneja UNA tecla con el gestor de extensiones abierto — mismo gate
+    /// ctrl/alt/platform que [`Self::on_settings_key`]. Delega en
+    /// [`extensions_view::on_key`] (puro) y traduce su
+    /// [`extensions_view::ExtensionsOutcome`] a comandos async por el
+    /// canal de sesión — nunca I/O directa aquí (regla 2).
+    fn on_extensions_key(&mut self, ks: &gpui::Keystroke, _cx: &mut Context<Self>) {
+        if ks.modifiers.control || ks.modifiers.alt || ks.modifiers.platform {
+            return;
+        }
+        let Some(view) = &mut self.extensions else {
+            return;
+        };
+        let outcome = extensions_view::on_key(view, &ks.key, ks.key_char.as_deref());
+        match outcome {
+            extensions_view::ExtensionsOutcome::None => {}
+            extensions_view::ExtensionsOutcome::Close => self.extensions = None,
+            extensions_view::ExtensionsOutcome::RequestApprove { id, approved } => {
+                let _ = self
+                    .cmds
+                    .send(SessionCmd::PluginSetApproval { id, approved });
+            }
+            extensions_view::ExtensionsOutcome::RequestEnable { id, enabled } => {
+                let _ = self.cmds.send(SessionCmd::PluginSetEnabled { id, enabled });
+            }
+            extensions_view::ExtensionsOutcome::RequestConfig { id } => {
+                let _ = self.cmds.send(SessionCmd::PluginGetConfig { id });
+            }
+            extensions_view::ExtensionsOutcome::RequestConfigWrite { plugin_id, write } => {
+                let _ = self.cmds.send(SessionCmd::PluginSetConfig {
+                    id: plugin_id,
+                    key: write.key,
+                    value: write.value,
+                });
+            }
+            extensions_view::ExtensionsOutcome::Invalid(e) => {
+                self.errors[self.focus] = Some(norte_frontend::settings::edit_error_message(&e));
+            }
+            // Absorbido dentro de `extensions_view::on_key` (cierra el
+            // panel, no la vista) — nunca surge hasta aquí en la práctica,
+            // pero el match debe ser exhaustivo.
+            extensions_view::ExtensionsOutcome::CloseConfigPanel => {}
         }
     }
 
@@ -1489,6 +1756,28 @@ impl NorteGui {
         // campo `settings_view`).
         if self.settings_view.is_some() {
             self.on_settings_key(ks, cx);
+            cx.notify();
+            return;
+        }
+
+        // Gestor de extensiones abierto (F12, G3c): MISMA prioridad de
+        // captura fija que la vista de ajustes (mutuamente excluyentes por
+        // construcción — `open_extensions`/`open_settings` nunca se llaman
+        // con la otra ya abierta).
+        if self.extensions.is_some() {
+            self.on_extensions_key(ks, cx);
+            cx.notify();
+            return;
+        }
+
+        // Paleta de comandos abierta (`ctrl+p`, G3c): un OVERLAY, no un
+        // full-view swap (se pinta encima del dual-pane, ver `render`) —
+        // pero captura teclado con la MISMA prioridad que ajustes/
+        // extensiones (el modal, comprobado ARRIBA de todo, sigue ganando
+        // — mismo "modal preempts palette" que la TUI's
+        // `modal_preempts_palette`).
+        if self.palette.is_some() {
+            self.on_palette_key(ks, cx);
             cx.notify();
             return;
         }
@@ -1977,6 +2266,30 @@ impl NorteGui {
                     .child(SharedString::from(badge_text)),
             );
         }
+        // G3c (cierra el deferral GUI de G3b): una celda de ancho FIJO por
+        // columna DECLARADA para este pane (`self.columns[pane]`, ya
+        // saneada — `session::columns_ready`), en blanco si esta entrada
+        // no tiene valor (`None` en el wire — "no aplica", distinto de una
+        // cadena vacía real). Mono (coherente con el resto del listado) +
+        // un tono atenuado — mismo criterio "presente pero no el dato
+        // principal" que la description de un plugin en el gestor de
+        // extensiones.
+        for (col_id, _header) in &self.columns[pane] {
+            let cell = self.column_values[pane]
+                .get(col_id)
+                .and_then(|m| m.get(&entry.path))
+                .cloned()
+                .unwrap_or_default();
+            row = row.child(
+                div()
+                    .pl(px(sp::XS))
+                    .w(px(96.0))
+                    .truncate()
+                    .font(self.fonts.mono.clone())
+                    .text_color(chrome.quick_fg)
+                    .child(SharedString::from(cell)),
+            );
+        }
         if marked {
             row = row.bg(chrome.mark_bg);
         }
@@ -2313,6 +2626,259 @@ impl NorteGui {
             }),
         )
         .into_any_element()
+    }
+
+    /// Pinta la paleta de comandos (G3c, `ctrl+p`): panel CENTRADO de ancho
+    /// fijo (a diferencia de `render_settings`, que es a pantalla completa
+    /// — la paleta es un OVERLAY sobre el dual-pane, mismo idioma visual
+    /// que `render_modal`), lista filtrada con la fila bajo cursor
+    /// resaltada. Sin click por fila (teclado-only, mismo criterio
+    /// alcanzable que la TUI): el volumen de esta pasada ya cubre filtro +
+    /// navegación + Enter, que es la superficie que el plan pide.
+    fn render_palette(
+        &self,
+        view: &palette_view::PaletteView,
+        chrome: &ChromeColors,
+    ) -> impl IntoElement {
+        let (q, _) = norte_frontend::display_name(view.query_display().as_bytes());
+        let mut body = div()
+            .id("palette-rows")
+            .role(gpui::Role::List)
+            .aria_label(norte_i18n::t("palette-title"))
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .max_h(px(420.0))
+            .font(self.fonts.ui.clone());
+        if view.visible().is_empty() {
+            body = body.child(div().px(px(sp::S)).child(SharedString::from("—")));
+        } else {
+            for (pos, &real) in view.visible().iter().enumerate() {
+                let row = &view.rows()[real];
+                let selected = pos == view.cursor();
+                let mut r = div()
+                    .id(format!("palette-row-{pos}"))
+                    .role(gpui::Role::ListItem)
+                    .aria_label(row.text.clone())
+                    .aria_selected(selected)
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(sp::S))
+                    .px(px(sp::S))
+                    .py(px(1.0)) // sub-XS: acento fino de una línea
+                    .rounded(px(sp::RADIUS_ROW))
+                    .child(
+                        div()
+                            .w(px(72.0))
+                            .truncate()
+                            .text_color(chrome.quick_fg)
+                            .child(SharedString::from(row.chord.clone())),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .truncate()
+                            .child(SharedString::from(row.text.clone())),
+                    );
+                if selected {
+                    r = r.bg(chrome.sel_bg);
+                    if let Some(fg) = chrome.sel_fg {
+                        r = r.text_color(fg);
+                    }
+                }
+                body = body.child(r);
+            }
+        }
+        div()
+            .id("palette-view")
+            .role(gpui::Role::Document)
+            .aria_label(norte_i18n::t("palette-title"))
+            .w(px(560.0))
+            .flex()
+            .flex_col()
+            .border_2()
+            .border_color(chrome.border_focus)
+            .bg(chrome.pane_bg_focus)
+            .child(
+                div()
+                    .px(px(sp::S))
+                    .py(px(sp::XS))
+                    .bg(chrome.header_bg)
+                    .text_color(chrome.header_fg)
+                    .truncate()
+                    .child(SharedString::from(format!("⌕ {q}"))),
+            )
+            .child(body)
+            .child(
+                div()
+                    .px(px(sp::S))
+                    .py(px(1.0)) // sub-XS: acento fino de una línea
+                    .bg(chrome.quick_bg)
+                    .text_color(chrome.quick_fg)
+                    .truncate()
+                    .child(SharedString::from(norte_i18n::t("palette-hint"))),
+            )
+    }
+
+    /// Pinta el gestor de extensiones a pantalla COMPLETA (G3c, `f12`):
+    /// mismo idioma visual que `render_settings` (header/lista/footer);
+    /// dos sub-vistas mutuamente excluyentes — la lista de plugins, o (si
+    /// `ExtensionsView::config` está abierto) el panel de `[config]` de UN
+    /// plugin, con la description YA enmascarada
+    /// (`norte_frontend::plugin_config::sanitize_config_keys`, aplicada al
+    /// recibir `SessionEvent::PluginConfigReady`).
+    fn render_extensions(&self, chrome: &ChromeColors) -> impl IntoElement {
+        let view = self
+            .extensions
+            .as_ref()
+            .expect("render_extensions: self.extensions es Some (invariante del caller)");
+
+        let mut body = div()
+            .id("extensions-rows")
+            .role(gpui::Role::List)
+            .aria_label(norte_i18n::t("ext-title"))
+            .flex_1()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .font(self.fonts.ui.clone());
+
+        let header_text;
+        if let Some(panel) = &view.config {
+            header_text = panel.plugin_name.clone();
+            let rows = panel.state.rows();
+            if rows.is_empty() {
+                body = body.child(div().px(px(sp::S)).child(SharedString::from("—")));
+            } else {
+                for (i, row) in rows.iter().enumerate() {
+                    let selected = i == panel.state.cursor();
+                    let mut value_text = row.value.clone();
+                    if selected && panel.state.is_editing() {
+                        let (buf, _) = norte_frontend::display_name(
+                            panel.state.edit_buffer().unwrap_or("").as_bytes(),
+                        );
+                        value_text = format!("{buf}_");
+                    }
+                    let mut r = div()
+                        .id(format!("plugin-config-row-{i}"))
+                        .role(gpui::Role::ListItem)
+                        .aria_label(row.key.clone())
+                        .aria_selected(selected)
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(sp::S))
+                        .px(px(sp::S))
+                        .py(px(1.0)) // sub-XS: acento fino de una línea
+                        .rounded(px(sp::RADIUS_ROW))
+                        .child(
+                            div()
+                                .w(px(180.0))
+                                .truncate()
+                                .child(SharedString::from(row.key.clone())),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .truncate()
+                                .child(SharedString::from(value_text)),
+                        );
+                    if selected {
+                        r = r.bg(chrome.sel_bg);
+                        if let Some(fg) = chrome.sel_fg {
+                            r = r.text_color(fg);
+                        }
+                    }
+                    body = body.child(r);
+                    if !row.description.is_empty() {
+                        body = body.child(
+                            div()
+                                .pl(px(sp::S + 180.0))
+                                .truncate()
+                                .text_color(chrome.quick_fg)
+                                .child(SharedString::from(row.description.clone())),
+                        );
+                    }
+                }
+            }
+        } else {
+            header_text = norte_i18n::t("ext-title");
+            if view.loading {
+                body = body.child(div().px(px(sp::S)).child(SharedString::from("…")));
+            } else if view.plugins.is_empty() && view.errors.is_empty() {
+                body = body.child(
+                    div()
+                        .px(px(sp::S))
+                        .child(SharedString::from(norte_i18n::t("ext-empty"))),
+                );
+            } else {
+                for (i, p) in view.plugins.iter().enumerate() {
+                    let selected = i == view.cursor;
+                    let (name, _) = norte_frontend::display_name(p.name.as_bytes());
+                    let mut status = if p.enabled { "✓" } else { "" }.to_owned();
+                    if !p.approved {
+                        status = format!("{status} ⚠ {}", norte_i18n::t("ext-unapproved"));
+                    }
+                    let mut r = div()
+                        .id(format!("extensions-row-{i}"))
+                        .role(gpui::Role::ListItem)
+                        .aria_label(name.clone())
+                        .aria_selected(selected)
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(sp::S))
+                        .px(px(sp::S))
+                        .py(px(1.0)) // sub-XS: acento fino de una línea
+                        .rounded(px(sp::RADIUS_ROW))
+                        .child(div().flex_1().truncate().child(SharedString::from(name)))
+                        .child(SharedString::from(status));
+                    if selected {
+                        r = r.bg(chrome.sel_bg);
+                        if let Some(fg) = chrome.sel_fg {
+                            r = r.text_color(fg);
+                        }
+                    }
+                    body = body.child(r);
+                }
+                for e in &view.errors {
+                    let (dir, _) = norte_frontend::display_name(e.dir.as_bytes());
+                    let (reason, _) = norte_frontend::display_name(e.reason.as_bytes());
+                    body = body.child(
+                        div()
+                            .px(px(sp::S))
+                            .text_color(chrome.err_fg)
+                            .child(SharedString::from(format!("{dir}: {reason}"))),
+                    );
+                }
+            }
+        }
+
+        div()
+            .id("extensions-view")
+            .role(gpui::Role::Document)
+            .aria_label(norte_i18n::t("ext-title"))
+            .flex_1()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .border_2()
+            .border_color(chrome.border_focus)
+            .bg(chrome.pane_bg_focus)
+            .child(
+                div()
+                    .px(px(sp::S))
+                    .py(px(sp::XS))
+                    .bg(chrome.header_bg)
+                    .text_color(chrome.header_fg)
+                    .truncate()
+                    .child(SharedString::from(format!(
+                        "{}  {header_text}",
+                        norte_i18n::t("ext-title")
+                    ))),
+            )
+            .child(body)
     }
 
     /// Pinta el visor a pantalla COMPLETA (F3): cabecera (path saneado +
@@ -3689,12 +4255,15 @@ impl Render for NorteGui {
             root = root.child(banner);
         }
 
-        // Vista de ajustes (F11, S4) a pantalla completa, visor (F3), el
+        // Vista de ajustes (F11, S4) a pantalla completa, gestor de
+        // extensiones (F12, G3c) a pantalla completa, visor (F3), el
         // estado «abriendo…» mientras llega, o el dual-pane: pantallas
         // mutuamente excluyentes (ver `on_key`, que las enruta con la misma
-        // prioridad: ajustes > visor > dual-pane).
+        // prioridad: ajustes de config > extensiones > visor > dual-pane).
         if self.settings_view.is_some() {
             root = root.child(self.render_settings(&chrome, cx));
+        } else if self.extensions.is_some() {
+            root = root.child(self.render_extensions(&chrome));
         } else if self.viewer.is_some() {
             root = root.child(self.render_viewer(window, &chrome, cx));
         } else if self.viewer_loading {
@@ -3732,7 +4301,10 @@ impl Render for NorteGui {
         } else {
             &self.resolver
         };
-        let pending = if self.settings_view.is_some() {
+        let pending = if self.settings_view.is_some()
+            || self.extensions.is_some()
+            || self.palette.is_some()
+        {
             &[][..]
         } else {
             active_resolver.pending()
@@ -3745,6 +4317,24 @@ impl Render for NorteGui {
                     .bg(chrome.quick_bg)
                     .text_color(chrome.quick_fg)
                     .child(SharedString::from(format!("{}…", pending_hint(pending)))),
+            );
+        }
+
+        // Overlay de la paleta de comandos (G3c, `ctrl+p`): un scrim +
+        // panel centrado, MISMO patrón absoluto que el modal — pero pintado
+        // ANTES de él (el modal, comprobado justo debajo, sigue ganando
+        // visualmente si ambos llegaran a coexistir; `on_key` ya lo impide
+        // por construcción, esto es defensa en profundidad del render).
+        if let Some(view) = &self.palette {
+            root = root.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(rgba(0x000000aa))
+                    .child(self.render_palette(view, &chrome)),
             );
         }
 
@@ -3889,6 +4479,20 @@ impl Render for NorteGui {
 /// desbordarían la línea del banner igual que desbordarían la barra de la
 /// TUI.
 const BANNER_DETAIL_MAX_CHARS: usize = 160;
+
+/// Parsea una `key` de fila de plugin de la paleta
+/// (`plugin:{plugin_id}:{command_id}`, [`norte_frontend::palette::plugin_rows`])
+/// de vuelta a `(plugin_id, command_id)` — mirror EXACTO de la TUI's
+/// `parse_plugin_key` (`norte-tui/src/main.rs`): el `plugin_id` es
+/// reverse-DNS charset-validado por el core (nunca lleva `:`), el
+/// `command_id` del manifiesto NO tiene charset validado y puede llevar
+/// cualquier byte incluido `:` — el PRIMER `:` tras el prefijo `plugin:`
+/// separa sin ambigüedad, el resto (sin volver a partir) es el
+/// `command_id` crudo.
+fn parse_plugin_palette_key(cmd: &str) -> Option<(&str, &str)> {
+    let (id, command) = cmd.strip_prefix("plugin:")?.split_once(':')?;
+    (!id.is_empty()).then_some((id, command))
+}
 
 /// Sanea un mensaje de error para el banner de arranque (revisión C2/G0
 /// MINOR 4; auditoría de encoding final #73 — MEDIUM-LOW 1: ahora también

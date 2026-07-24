@@ -182,7 +182,9 @@ settings-edit-hint = [enter] guardar · [esc] cancelar
 settings-section-general = General
 settings-section-plugins = Plugins
 settings-plugins-name = Ajustes de plugins
-settings-plugins-note = Edita los ajustes de plugins a mano en plugins/<id>/config.toml (validado por `norte doctor`) — el editor completo llega con una futura actualización del protocolo.
+settings-plugins-note = Ningún plugin instalado declara ajustes configurables.
+settings-plugins-open-hint = [enter] abrir los ajustes de este plugin
+settings-plugins-key-count = {$count} ajustes
 # --- Vista de ajustes de la GUI (S4) — swap a pantalla completa por ratón
 # sobre el mismo catálogo/máquina de estado que el overlay de arriba.
 settings-restart-badge = requiere reinicio
@@ -213,6 +215,12 @@ msg-hotlist-removed = favorito eliminado: { $name }
 # "extensión:" la marca como texto de terceros, mismo vocabulario que
 # `palette-plugin-prefix`.
 msg-plugin-run-ok = extensión: { $output }
+# G3c: `dialog.confirm` sobre un plugin con esquema `[config]` vacío.
+msg-plugin-config-empty = este plugin no declara ajustes configurables
+# G3c: `plugin.set_config` tuvo éxito — { $key } es la clave declarada por el
+# manifiesto (charset seguro, nunca texto libre del plugin); { $value } es el
+# valor nuevo, ya validado client-side.
+msg-plugin-config-saved = { $key } guardado: { $value }
 msg-settings-saved = { $name } guardado: { $value }
 msg-settings-save-failed = no se pudo guardar: { $error }
 # Revisión S I1: la propia tarea de fondo de la escritura panicó o se
@@ -246,6 +254,14 @@ help-cmd-pane-quick-search = quick search en el pane (filtro/salto)
 help-cmd-pane-history = historial de directorios
 help-cmd-pane-hotlist = directorios favoritos
 help-cmd-task-cancel = cancelar la task más reciente
+# G3c: comandos SOLO de la GUI (sin equivalente en la TUI, que usa otros
+# bindings para multi-selección/franja de tasks) — hacen falta ahora que la
+# paleta de comandos de la GUI lista `app.palette`/`app.extensions` y
+# necesita texto de ayuda para todo comando de la GUI.
+help-cmd-mark-toggle = marcar/desmarcar la entrada bajo el cursor
+help-cmd-task-next = resaltar la siguiente task
+help-cmd-task-prev = resaltar la task anterior
+help-cmd-task-dismiss = descartar las tasks terminadas de la franja
 help-cmd-viewer-close = cerrar el viewer
 help-cmd-viewer-up = subir una línea
 help-cmd-viewer-down = bajar una línea

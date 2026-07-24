@@ -710,6 +710,7 @@ mod clamp_plugin_descriptions_tests {
             enabled: true,
             description: description.map(str::to_owned),
             commands: Vec::new(),
+            columns: Vec::new(),
         }
     }
 
@@ -773,6 +774,26 @@ pub struct ExtensionManager {
     pub errors: Vec<norte_proto::methods::PluginLoadError>,
     /// Índice del plugin resaltado.
     pub cursor: usize,
+    /// Drill-down editor over the SELECTED plugin's `[config]` (G3c):
+    /// `Some` while open — `dialog.confirm` on the plugin list opens it
+    /// (fetches `plugin.get_config`), `dialog.cancel` inside it closes
+    /// back to the plugin list (never the whole overlay).
+    pub config: Option<PluginConfigPanel>,
+}
+
+/// The extension manager's config drill-down (G3c): which plugin, its
+/// masked name (for the header — `Row`'s `name`/`desc` inside `state` are
+/// ALREADY masked by `norte_frontend::plugin_config::sanitize_config_keys`,
+/// this is just the plugin's own display name), and the pure editor state.
+#[derive(Debug, Clone)]
+pub struct PluginConfigPanel {
+    /// Id of the plugin being configured — needed to call
+    /// `Backend::plugin_set_config(id, key, value)` on commit.
+    pub plugin_id: String,
+    /// Masked plugin name, for the panel header.
+    pub plugin_name: String,
+    /// The pure cursor+edit widget over this plugin's `[config]` keys.
+    pub state: norte_frontend::plugin_config::PluginConfigState,
 }
 
 impl ExtensionManager {
@@ -1139,6 +1160,7 @@ mod palette_tests {
                 id: "greet".into(),
                 title: "Greet loudly".into(),
             }],
+            columns: Vec::new(),
         };
         let mut all = rows();
         all.extend(crate::palette::plugin_rows(&[plugin]));
@@ -1689,12 +1711,30 @@ pub const ALLOW_PICKER: &[&str] = &[
 /// ALLOWLIST del gestor de extensiones (`on_extensions_key`, main.rs,
 /// M4-P3): `approve` togglea la aprobación del plugin (decisión 3 del plan
 /// H1 — "aprobar un plugin" reutiliza `dialog.approve`), `toggle-enabled`
-/// lo activa/desactiva. Compartida por dispatch y el hint generado.
+/// lo activa/desactiva. `confirm` (G3c) abre la sección de `[config]` del
+/// plugin resaltado, SI declara alguna clave — Enter jamás aprueba (pin del
+/// P1), solo entra en un submenú. Compartida por dispatch y el hint
+/// generado.
 pub const ALLOW_EXTENSIONS: &[&str] = &[
     "dialog.up",
     "dialog.down",
     "dialog.approve",
     "dialog.toggle-enabled",
+    "dialog.confirm",
+    "dialog.cancel",
+];
+
+/// ALLOWLIST del panel de `[config]` de un plugin (G3c, `on_extensions_key`
+/// cuando `mgr.config.is_some()` y NO se está editando un buffer — mientras
+/// se edita, las teclas se capturan RAW, mismo criterio que
+/// `on_nav_popup_key`'s `name_input`): `up`/`down` mueven el cursor sobre
+/// las claves, `confirm` cicla `bool`/`enum` o abre edición de
+/// `string`/`int`, `cancel` cierra el panel (vuelve a la lista de plugins,
+/// NO cierra el overlay entero).
+pub const ALLOW_PLUGIN_CONFIG: &[&str] = &[
+    "dialog.up",
+    "dialog.down",
+    "dialog.confirm",
     "dialog.cancel",
 ];
 
