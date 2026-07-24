@@ -305,3 +305,15 @@ dialog-cmd-page-down = pg dn
 dialog-cmd-add = add
 dialog-cmd-toggle-enabled = toggle
 dialog-cmd-remove = remove
+
+# --- norte doctor (H2): read-only diagnostics over config layers,
+# keymaps, plugins and connections.
+cli-doctor-title = norte doctor — read-only diagnostics
+cli-doctor-section-config = -- config --
+cli-doctor-section-keymap = -- keymap --
+cli-doctor-section-plugins = -- plugins --
+cli-doctor-section-connections = -- connections --
+cli-doctor-ok = OK
+cli-doctor-warn = WARN
+cli-doctor-error = ERROR
+cli-doctor-footer-keymap-approx = note: an "unknown command" warning is an approximation against the three bundled presets' own bindings for that screen — a frontend-specific command with no default binding anywhere is invisible to this check.

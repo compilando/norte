@@ -1593,6 +1593,76 @@ pub mod presets {
     }
 }
 
+/// The union of `run` names bound (in ANY of the three lists — `keymap`,
+/// `prepend_keymap`, `append_keymap`, though only `keymap` is actually used
+/// by a bundled preset today) by ANY bundled preset (`orthodox`/`vim`/`cua`)
+/// for `screen` — its screen-specific context (`pane`/`viewer`/`dialog`)
+/// merged with `global`. A preset that fails to parse is skipped silently
+/// (the three bundled presets are compile-time embedded and pinned by this
+/// module's own test suite, so this only matters if that invariant ever
+/// breaks).
+///
+/// This is an HONEST APPROXIMATION, not a frontend's actual command
+/// catalog: it only sees command names bound by a keymap, not the full set
+/// a frontend implements (a command with no default binding in any preset
+/// is invisible here). `norte doctor` (H2) uses it to flag a config layer's
+/// `run` name that no bundled preset recognizes for that screen — worth a
+/// warning, not proof the command doesn't exist (see its rustdoc/report
+/// footer for the caveat).
+#[must_use]
+pub fn preset_commands(screen: Screen) -> Vec<String> {
+    let specific: fn(&KeymapFile) -> &RawSection = match screen {
+        Screen::Browse => |f| &f.pane,
+        Screen::Viewer => |f| &f.viewer,
+        Screen::Dialog => |f| &f.dialog,
+    };
+    let mut out: Vec<String> = Vec::new();
+    let push_all = |section: &RawSection, out: &mut Vec<String>| {
+        for list in [
+            &section.keymap,
+            &section.prepend_keymap,
+            &section.append_keymap,
+        ] {
+            for b in list {
+                if !out.contains(&b.run) {
+                    out.push(b.run.clone());
+                }
+            }
+        }
+    };
+    for name in presets::NAMES {
+        let Some(src) = presets::source(name) else {
+            continue;
+        };
+        let Ok(kf) = parse_keymap(src) else {
+            continue;
+        };
+        push_all(specific(&kf), &mut out);
+        push_all(&kf.global, &mut out);
+    }
+    out
+}
+
+#[cfg(test)]
+mod preset_commands_tests {
+    use super::{Screen, preset_commands};
+
+    /// Orthodox binds `app.quit` in `[global]` (ADR 0006: global merges
+    /// into every screen), so `Browse` must see it.
+    #[test]
+    fn orthodox_browse_contiene_app_quit() {
+        let v = preset_commands(Screen::Browse);
+        assert!(v.contains(&"app.quit".to_owned()), "{v:?}");
+    }
+
+    /// Every bundled preset binds `y` to `dialog.approve` in `[dialog]`.
+    #[test]
+    fn dialog_contiene_dialog_approve() {
+        let v = preset_commands(Screen::Dialog);
+        assert!(v.contains(&"dialog.approve".to_owned()), "{v:?}");
+    }
+}
+
 #[cfg(test)]
 mod presets_catalog_tests {
     use super::presets::{NAMES, source};

@@ -22,12 +22,15 @@ dist = false
 anyhow.workspace = true
 clap.workspace = true
 futures.workspace = true
+norte-config.workspace = true
 norte-core.workspace = true
+norte-frontend.workspace = true
 norte-mcp.workspace = true
 norte-i18n.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
 norte-vfs-local.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 

@@ -16,6 +16,8 @@ use norte_proto::{Entry, EntryKind, SymlinkPolicy, TaskState, VPath};
 use norte_vfs::Provider;
 use norte_vfs_local::LocalProvider;
 
+mod doctor;
+
 /// Código de salida convencional para "interrumpido por SIGINT".
 const EXIT_CANCELLED: u8 = 130;
 
@@ -144,6 +146,12 @@ enum Cmd {
     Audit {
         #[command(subcommand)]
         cmd: AuditCmd,
+    },
+    /// Diagnósticos de solo lectura sobre capas de config y keymaps (H2)
+    Doctor {
+        /// Salida JSON en vez de texto para humanos
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -360,6 +368,10 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     if let Cmd::Audit { cmd } = cli.cmd {
         return audit_cmd(cmd).await;
     }
+    // Doctor es solo-lectura sobre config/keymaps (H2): ni engine ni daemon.
+    if let Cmd::Doctor { json } = cli.cmd {
+        return doctor_cmd(json).await;
+    }
 
     // Índice de búsqueda (M4, ADR 0034): el MISMO fichero que el daemon
     // (config_dir/index.db), así `norte index build` en embebido persiste y una
@@ -462,7 +474,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         }
         Cmd::Plugin { cmd } => plugin_cmd(&backend, cmd).await,
         Cmd::Index { cmd } => index_cmd(&backend, cmd).await,
-        Cmd::Audit { .. } | Cmd::Ai { .. } => unreachable!("manejado arriba"),
+        Cmd::Audit { .. } | Cmd::Ai { .. } | Cmd::Doctor { .. } => unreachable!("manejado arriba"),
         #[cfg(unix)]
         Cmd::Daemon { .. } | Cmd::Mcp { .. } | Cmd::Policy { .. } | Cmd::Undo { .. } => {
             unreachable!("manejado arriba")
@@ -690,6 +702,87 @@ fn verdict_detail(verdict: &norte_core::audit::AnchorVerdict) -> Option<String> 
             norte_i18n::ta("cli-audit-verdict-mismatch", &[("seq", &a.seq.to_string())])
         }
         AnchorVerdict::Ok(_) => return None,
+    })
+}
+
+/// `norte doctor` (H2): read-only diagnostics over config layers + keymaps
+/// (plugin/connection checks land in Task 2). Never touches the
+/// daemon/engine — early-returned in `run()` like `audit_cmd`.
+async fn doctor_cmd(json: bool) -> anyhow::Result<ExitCode> {
+    let layers = norte_config::standard_layers();
+    // `doctor::check_config`/`check_keymaps` do synchronous fs I/O
+    // (norte-config's own design — see its crate doc); never call them
+    // directly on the async executor (rule 2).
+    let findings = tokio::task::spawn_blocking(move || {
+        let mut findings = doctor::check_config(&layers, &|k| std::env::var_os(k));
+        findings.extend(doctor::check_keymaps(&layers));
+        findings
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("doctor: {e}"))?;
+
+    if json {
+        #[derive(serde::Serialize)]
+        struct Summary {
+            errors: usize,
+            warnings: usize,
+        }
+        #[derive(serde::Serialize)]
+        struct Report<'a> {
+            findings: &'a [doctor::Finding],
+            summary: Summary,
+        }
+        let errors = findings
+            .iter()
+            .filter(|f| f.severity == doctor::Severity::Error)
+            .count();
+        let warnings = findings
+            .iter()
+            .filter(|f| f.severity == doctor::Severity::Warn)
+            .count();
+        serde_json::to_writer_pretty(
+            std::io::stdout().lock(),
+            &Report {
+                findings: &findings,
+                summary: Summary { errors, warnings },
+            },
+        )
+        .context(norte_i18n::t("cli-serialize-failed"))?;
+        println!();
+    } else {
+        println!("{}", norte_i18n::t("cli-doctor-title"));
+        let mut last_section = "";
+        for f in &findings {
+            if f.section != last_section {
+                let key = match f.section {
+                    "config" => "cli-doctor-section-config",
+                    "keymap" => "cli-doctor-section-keymap",
+                    "plugins" => "cli-doctor-section-plugins",
+                    "connections" => "cli-doctor-section-connections",
+                    // No debería ocurrir (`Finding::section` es un catálogo
+                    // cerrado en este módulo): se imprime crudo en vez de
+                    // panicar — un diagnóstico jamás debe tumbar el proceso.
+                    other => other,
+                };
+                println!("{}", norte_i18n::t(key));
+                last_section = f.section;
+            }
+            let marker = match f.severity {
+                doctor::Severity::Ok => norte_i18n::t("cli-doctor-ok"),
+                doctor::Severity::Warn => norte_i18n::t("cli-doctor-warn"),
+                doctor::Severity::Error => norte_i18n::t("cli-doctor-error"),
+            };
+            println!("  [{marker}] {}: {}", f.code, f.detail);
+        }
+        println!("{}", norte_i18n::t("cli-doctor-footer-keymap-approx"));
+    }
+    let has_error = findings
+        .iter()
+        .any(|f| f.severity == doctor::Severity::Error);
+    Ok(if has_error {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
     })
 }
 

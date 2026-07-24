@@ -306,3 +306,15 @@ dialog-cmd-page-down = av pág
 dialog-cmd-add = añadir
 dialog-cmd-toggle-enabled = activar
 dialog-cmd-remove = borrar
+
+# --- norte doctor (H2): diagnóstico de solo lectura sobre capas de config,
+# keymaps, plugins y conexiones.
+cli-doctor-title = norte doctor — diagnóstico de solo lectura
+cli-doctor-section-config = -- config --
+cli-doctor-section-keymap = -- keymap --
+cli-doctor-section-plugins = -- plugins --
+cli-doctor-section-connections = -- conexiones --
+cli-doctor-ok = OK
+cli-doctor-warn = AVISO
+cli-doctor-error = ERROR
+cli-doctor-footer-keymap-approx = nota: un aviso de «comando desconocido» es una aproximación contra los bindings propios de los tres presets empaquetados para esa pantalla — un comando específico de un frontend sin binding por defecto en ninguno es invisible para este chequeo.
