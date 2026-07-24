@@ -167,11 +167,22 @@ help-cmd-app-help = esta ayuda
 help-cmd-app-theme = elegir tema
 help-cmd-app-extensions = gestor de extensiones
 help-cmd-app-palette = paleta de comandos
+help-cmd-app-settings = ajustes
 # --- Paleta de comandos (H1 T4) — editor de filtro libre como el diálogo
 # de búsqueda (decisión 8): sus teclas son fijas, NO resuelven por el
 # contexto `dialog` — este hint es una cadena estática, como `search-hint`.
 palette-title = Paleta de comandos
 palette-hint = [↑/↓/pgup/pgdn] navegar · [enter] ejecutar · [esc] cerrar
+# --- Overlay de ajustes (S3) — mismo criterio de filtro libre que la
+# paleta de arriba (decisión 8): la búsqueda está SIEMPRE activa, Enter
+# togglea/cicla/edita.
+settings-title = Ajustes
+settings-hint = [↑/↓/pgup/pgdn] navegar · [enter] editar · [esc] cerrar
+settings-edit-hint = [enter] guardar · [esc] cancelar
+settings-section-general = General
+settings-section-plugins = Plugins
+settings-plugins-name = Ajustes de plugins
+settings-plugins-note = Edita los ajustes de plugins a mano en plugins/<id>/config.toml (validado por `norte doctor`) — el editor completo llega con una futura actualización del protocolo.
 # P1: prefijo de una fila aportada por un plugin (`palette::plugin_rows`) —
 # ninguna fila built-in lo lleva, así que un plugin no puede disfrazarse de
 # comando built-in copiando su texto exacto.
@@ -198,6 +209,11 @@ msg-hotlist-removed = favorito eliminado: { $name }
 # "extensión:" la marca como texto de terceros, mismo vocabulario que
 # `palette-plugin-prefix`.
 msg-plugin-run-ok = extensión: { $output }
+msg-settings-saved = { $name } guardado: { $value }
+msg-settings-save-failed = no se pudo guardar: { $error }
+msg-settings-invalid-int = no es un número
+msg-settings-invalid-range = el valor debe estar entre { $min } y { $max }
+msg-settings-no-config-dir = sin directorio de config de usuario (entorno sin definir)
 msg-hotlist-persist-failed = favoritos no guardados: { $error }
 help-cmd-pane-switch = cambiar de pane
 help-cmd-cursor-up = subir el cursor

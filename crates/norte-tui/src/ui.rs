@@ -90,6 +90,9 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(palette) = &app.palette {
         draw_palette(frame, palette, &app.theme);
     }
+    if let Some(settings) = &app.settings {
+        draw_settings(frame, settings, &app.theme);
+    }
 }
 
 /// Diálogo de búsqueda viva (`Alt+F7`, liveSearch T6): dos campos de texto
@@ -493,6 +496,102 @@ fn draw_palette(frame: &mut Frame<'_>, palette: &crate::app::Palette, theme: &Tu
     let mut state = ListState::default();
     state.select(selected);
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// Overlay de ajustes (`app.settings`, S3): mismo idioma visual que
+/// [`draw_extensions`] (Paragraph con cabeceras de sección intercaladas,
+/// NO `List`/`ListState` — hay DOS grupos heterogéneos, General y Plugins,
+/// y `draw_extensions` ya resolvió ese patrón) más una línea de descripción
+/// RESERVADA bajo la lista (la de la fila seleccionada, [`Settings::
+/// selected_desc`]) y un footer que alterna entre el filtro (navegando) y el
+/// buffer de edición inline (`Settings::is_editing`). Nombre/descripción son
+/// Fluent — texto PROPIO del binario, jamás de un tercero (a diferencia de
+/// `draw_extensions`, que sí enmascara `name`/`publisher` de un plugin): no
+/// hace falta `display_name` aquí, solo `middle_ellipsis` por ancho. El
+/// buffer de edición SÍ es entrada del usuario vía terminal (paste incluido)
+/// — se enmascara igual que la query, mismo contrato que `NavPopup::
+/// name_input`.
+fn draw_settings(frame: &mut Frame<'_>, settings: &crate::app::Settings, theme: &TuiTheme) {
+    let ancho = frame
+        .area()
+        .width
+        .saturating_sub(6)
+        .clamp(30, 80)
+        .min(frame.area().width);
+    let alto = frame.area().height.saturating_sub(4).max(6);
+    let area = centered(frame.area(), ancho, alto);
+    frame.render_widget(ratatui::widgets::Clear, area);
+
+    let footer = if settings.is_editing() {
+        let (buf, _) = display_name(settings.edit_buffer().unwrap_or_default().as_bytes());
+        Line::raw(format!(" {buf}_  {} ", t("settings-edit-hint")))
+    } else {
+        let (query, _) = display_name(settings.query_display().as_bytes());
+        Line::raw(format!(" /{query}  {} ", t("settings-hint")))
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("settings-title")))
+        .title_style(theme.role(Role::Title))
+        .title_bottom(footer)
+        .border_style(theme.role(Role::ModalBorder));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+    let inner_w = usize::from(inner.width);
+
+    let mut lines: Vec<Line<'_>> = Vec::new();
+    if settings.visible().is_empty() {
+        lines.push(Line::raw(" —"));
+    } else {
+        let mut general_header = false;
+        let mut plugins_header = false;
+        for (pos, &real) in settings.visible().iter().enumerate() {
+            let row = &settings.rows()[real];
+            if row.is_plugins_note() {
+                if !plugins_header {
+                    lines.push(Line::styled(
+                        t("settings-section-plugins"),
+                        theme.role(Role::Title),
+                    ));
+                    plugins_header = true;
+                }
+            } else if !general_header {
+                lines.push(Line::styled(
+                    t("settings-section-general"),
+                    theme.role(Role::Title),
+                ));
+                general_header = true;
+            }
+            let selected = pos == settings.cursor();
+            let cursor = if selected { ">" } else { " " };
+            let texto = if row.is_plugins_note() {
+                format!("{cursor} {}", row.name)
+            } else {
+                format!("{cursor} {:<28} {}", row.name, row.value)
+            };
+            let mut line = Line::raw(middle_ellipsis(&texto, inner_w));
+            if selected {
+                line = line.style(theme.role(Role::Selection));
+            }
+            lines.push(line);
+        }
+    }
+    frame.render_widget(Paragraph::new(lines), split[0]);
+
+    let desc = settings.selected_desc().unwrap_or_default();
+    let desc_line = Line::raw(format!(
+        " {}",
+        middle_ellipsis(desc, inner_w.saturating_sub(1))
+    ));
+    frame.render_widget(
+        Paragraph::new(desc_line).style(theme.role(Role::BorderUnfocused)),
+        split[1],
+    );
 }
 
 /// Viewer a pantalla completa: contenido + status propia (encoding, EOL,

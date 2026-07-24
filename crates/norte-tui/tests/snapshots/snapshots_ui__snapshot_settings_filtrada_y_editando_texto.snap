@@ -1,0 +1,29 @@
+---
+source: crates/norte-tui/tests/snapshots_ui.rs
+assertion_line: 595
+expression: render_80x24(&app)
+---
+"┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
+"│ /docs                                ││  cosa                                │"
+"│ /┌ Ajustes ───────────────────────────────────────────────────────────────┐  │"
+"│ @│General                                                                 │  │"
+"│  │> Tipografía de la interfaz                                             │  │"
+"│! │                                                                        │  │"
+"│  │                                                                        │  │"
+"│  │                                                                        │  │"
+"│  │                                                                        │  │"
+"│  │                                                                        │  │"
+"│  │                                                                        │  │"
+"│  │                                                                        │  │"
+"│  │                                                                        │  │"
+"│  │                                                                        │  │"
+"│  │                                                                        │  │"
+"│  │                                                                        │  │"
+"│  │                                                                        │  │"
+"│  │                                                                        │  │"
+"│  │                                                                        │  │"
+"│  │                                                                        │  │"
+"│  │ Familia tipográfica del chrome de l…, no el listado). El TUI la ignora.│  │"
+"│  └ Fira Code_  [enter] guardar · [esc] cancelar ──────────────────────────┘  │"
+"└──────────────────────────────────────┘└──────────────────────────────────────┘"
+" ⟨file⟩/casa  2/5                                                               "

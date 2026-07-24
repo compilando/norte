@@ -156,6 +156,27 @@ pub fn fluent_desc_id(id: &str) -> String {
     format!("setting-{}-desc", id.replace('.', "-"))
 }
 
+/// Maps a curated id (`ui.confirm-quit`) to the `norte.toml` WIRE location it
+/// persists to: `(section, key)`. `section` is the part of `id` before the
+/// first `.` (an id always has one — pinned by the coverage test below, over
+/// every entry in [`catalog`]); `key` swaps every `-` for `_` (ids are dashed
+/// for the Fluent derivation above, but `norte.toml` keys are `snake_case` —
+/// see [`crate::config::CommonConfig`]'s fields, e.g. `confirm_quit`). Shared
+/// by the TUI overlay (S3) and the GUI view (S4): both write through
+/// `norte_config::persist_set(dir, section, key, value)`, and must derive the
+/// exact same wire location from the same id.
+///
+/// # Panics
+/// Never for an id from [`catalog`] (pinned below); a hand-rolled id without
+/// a `.` would panic — a bug in the caller, not reachable through this crate.
+#[must_use]
+pub fn wire_key(id: &str) -> (&str, String) {
+    let (section, key) = id
+        .split_once('.')
+        .expect("un id de catalog() siempre tiene sección.clave");
+    (section, key.replace('-', "_"))
+}
+
 /// The current value of `def` read from `cfg`, as DISPLAY text (S3/S4 render
 /// it directly; editing widgets parse it back per `def.kind`). An absent
 /// config value renders the same string the frontend would actually use —
@@ -295,6 +316,31 @@ mod tests {
             .find(|d| d.id == "ui.confirm-quit")
             .expect("ui.confirm-quit está en el catálogo");
         assert_eq!(current_value(def, &cfg), "auto");
+    }
+
+    /// `wire_key` splits on the FIRST `.` and dashes-to-underscores the rest
+    /// — pinned with concrete examples (mirrors `fluent_ids_dashean_los_puntos`
+    /// above, same derivation family, different target vocabulary).
+    #[test]
+    fn wire_key_deriva_seccion_y_clave_snake_case() {
+        assert_eq!(
+            wire_key("ui.confirm-quit"),
+            ("ui", "confirm_quit".to_owned())
+        );
+        assert_eq!(wire_key("ui.font-size"), ("ui", "font_size".to_owned()));
+        assert_eq!(wire_key("keymap.preset"), ("keymap", "preset".to_owned()));
+    }
+
+    /// Coverage: EVERY `catalog()` id resolves through `wire_key` without
+    /// panicking (never true for a real id, but a future entry missing the
+    /// `section.key` shape would panic here first, not in the TUI/GUI).
+    #[test]
+    fn wire_key_resuelve_para_cada_entrada_del_catalog() {
+        for def in catalog() {
+            let (section, key) = wire_key(def.id);
+            assert!(!section.is_empty());
+            assert!(!key.is_empty());
+        }
     }
 
     /// `ui.confirm-quit` reflects a NON-default value loaded from

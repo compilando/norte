@@ -1,6 +1,6 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
-assertion_line: 355
+assertion_line: 484
 expression: "format!(\"{arriba}\\n===\\n{}\", render(&app))"
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
@@ -27,6 +27,7 @@ expression: "format!(\"{arriba}\\n===\\n{}\", render(&app))"
 "│ │  tab            cambiar de pane                                          │ │"
 "│ │  f1             esta ayuda                                               │ │"
 "│!│  f9             elegir tema                                              │ │"
+"│ │  f11            ajustes                                                  │ │"
 "│ │  f12            gestor de extensiones                                    │ │"
 "│ │  ctrl+p         paleta de comandos                                       │ │"
 "│ │                                                                          │ │"
@@ -34,6 +35,5 @@ expression: "format!(\"{arriba}\\n===\\n{}\", render(&app))"
 "│ │  q              cerrar el viewer                                         │ │"
 "│ │  esc            cerrar el viewer                                         │ │"
 "│ │  f3             cerrar el viewer                                         │ │"
-"│ │  f10            cerrar el viewer                                         │ │"
 "└─└──────────────────────────────────────────────────────────────────────────┘─┘"
 " ⟨file⟩/casa  2/5                                                               "

@@ -5,6 +5,7 @@
 //! y el I/O (`main`) viven aparte; los scripts Lua (M4) consumen de aquí la
 //! clave ESTABLE de [`error_key`].
 
+use norte_frontend::settings::{SettingDef, SettingKind};
 use norte_i18n::{t, ta};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 
@@ -530,6 +531,12 @@ pub struct App {
     /// OK, ANTES de que los efectivos se muevan al `Resolver`. Abrir la
     /// palette (`dispatch`, brazo `app.palette`) solo clona esta snapshot.
     pub palette_rows: Vec<crate::palette::Row>,
+    /// Overlay de ajustes abierto (`app.settings`, S3): `None` = cerrado.
+    /// Sus filas se reconstruyen del `cfg` VIGENTE en cada hot-reload OK
+    /// (`main::reload_config`, `Settings::refresh`) — a diferencia de
+    /// `palette`/`help`, que se CIERRAN, este overlay se queda abierto y se
+    /// refresca en su sitio (ver el doc de `Settings::refresh`).
+    pub settings: Option<Settings>,
 }
 
 /// Qué popup de navegación está abierto (spec 2026-07-18).
@@ -1126,6 +1133,639 @@ mod palette_tests {
     }
 }
 
+/// Un valor pendiente de persistir en `norte.toml`, PRODUCIDO por
+/// [`Settings::activate`]/[`Settings::edit_commit`] — la edición es PURA
+/// (ningún método de [`Settings`] hace I/O); el caller (`main::
+/// on_settings_key`) llama a `norte_config::persist_set` en
+/// `spawn_blocking` (regla 2) y anuncia el resultado. `section`/`key` ya
+/// vienen en la forma WIRE ([`norte_frontend::settings::wire_key`]).
+#[derive(Debug, Clone)]
+pub struct PendingWrite {
+    /// `[section]` de `norte.toml`.
+    pub section: &'static str,
+    /// Clave dentro de esa sección (`snake_case`, YA convertida).
+    pub key: String,
+    /// El valor TIPADO a escribir (bool/int/string nativos — `persist_set`
+    /// serializa cada uno en su forma TOML propia, jamás todo como string).
+    pub value: toml_edit::Value,
+    /// Nombre localizado del ajuste (para el mensaje de confirmación).
+    pub name: String,
+    /// Nuevo valor en texto de PRESENTACIÓN (para el mensaje + la
+    /// actualización optimista de la fila, [`Settings::commit_row`]).
+    pub display: String,
+}
+
+/// Por qué [`Settings::edit_commit`] rechazó el buffer — SIN persistir (S3:
+/// "invalid = status-bar error, value untouched").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsEditError {
+    /// El buffer no parsea como entero (`SettingKind::Int`).
+    NotAnInt,
+    /// Parsea, pero fuera de `[min, max]`.
+    OutOfRange {
+        /// Cota inferior inclusiva.
+        min: i64,
+        /// Cota superior inclusiva.
+        max: i64,
+    },
+}
+
+/// Overlay de ajustes (`app.settings`, S3): mismo patrón que [`Palette`]
+/// (búsqueda libre SIEMPRE activa, cursor sobre los VISIBLES, decisión 8 del
+/// plan H1 — no resuelve por el contexto `dialog`) más un modo de EDICIÓN
+/// inline para las filas `Text`/`Int` (mismo patrón que el `name_input` del
+/// popup de navegación: buffer crudo, Enter confirma, Esc cancela). Los
+/// métodos de edición son PUROS — devuelven un [`PendingWrite`] o un
+/// [`SettingsEditError`], jamás hacen I/O — el caller (`main.rs`) persiste y
+/// anuncia. La sección Plugins (una única fila informativa,
+/// [`crate::settings::build_rows`]) nunca es editable: `def_index == None`
+/// hace que `Self::activate` sea no-op sobre ella.
+#[derive(Debug, Clone)]
+pub struct Settings {
+    /// Filas ([`crate::settings::Row`]) — snapshot congelada al abrir, y
+    /// reemplazada ENTERA por [`Self::refresh`] en cada hot-reload OK.
+    rows: Vec<crate::settings::Row>,
+    /// Haystack plegado por fila (id + nombre + descripción,
+    /// [`crate::nav::fold`]) — mismo cache que `Palette::folds`.
+    folds: Vec<String>,
+    /// Bytes tecleados tal cual en el filtro (sin sanear; el saneado es solo
+    /// al pintar, [`Self::query_display`]).
+    query: Vec<u8>,
+    /// Índices REALES en `rows` que casan (query vacía = todas).
+    visible: Vec<usize>,
+    /// Posición de la selección DENTRO de `visible`.
+    cursor: usize,
+    /// Buffer de edición inline (`Text`/`Int`): `Some` = editando la fila
+    /// bajo el cursor; `None` = navegando/filtrando normal. Crudo, como
+    /// `NavPopup::name_input` — el saneado es al pintar.
+    edit: Option<String>,
+}
+
+impl Settings {
+    /// Abre el overlay sobre `rows` (la snapshot de
+    /// [`crate::settings::build_rows`]): pliega el haystack de cada fila y
+    /// arranca con la query vacía (todo visible), sin editar.
+    #[must_use]
+    pub fn new(rows: Vec<crate::settings::Row>) -> Self {
+        let folds = Self::fold_rows(&rows);
+        let mut s = Self {
+            rows,
+            folds,
+            query: Vec::new(),
+            visible: Vec::new(),
+            cursor: 0,
+            edit: None,
+        };
+        s.recompute();
+        s
+    }
+
+    fn fold_rows(rows: &[crate::settings::Row]) -> Vec<String> {
+        let catalog = norte_frontend::settings::catalog();
+        rows.iter()
+            .map(|r| {
+                let id = r.def_index.map_or("plugins", |i| catalog[i].id);
+                crate::nav::fold(format!("{id} {} {}", r.name, r.desc).as_bytes())
+            })
+            .collect()
+    }
+
+    /// Reemplaza las filas por una snapshot FRESCA (hot-reload OK,
+    /// `main::reload_config`): recalcula el fold y re-filtra con la query
+    /// VIGENTE (se conserva, a diferencia de `help`/`palette`, que se
+    /// CIERRAN — una fila de ajuste es solo `(nombre, descripción, valor)`
+    /// leído de `cfg`, segura de recomputar sin invalidar lo que el usuario
+    /// esté haciendo). El buffer de edición, si lo hay, TAMBIÉN se conserva
+    /// crudo — un reload no debe tirar lo que el usuario ya tecleó.
+    pub fn refresh(&mut self, rows: Vec<crate::settings::Row>) {
+        self.folds = Self::fold_rows(&rows);
+        self.rows = rows;
+        self.recompute();
+    }
+
+    fn recompute(&mut self) {
+        self.visible = if self.query.is_empty() {
+            (0..self.rows.len()).collect()
+        } else {
+            let q = crate::nav::fold(&self.query);
+            self.folds
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| f.contains(&q))
+                .map(|(i, _)| i)
+                .collect()
+        };
+        self.clamp_cursor();
+    }
+
+    fn clamp_cursor(&mut self) {
+        if self.visible.is_empty() {
+            self.cursor = 0;
+        } else if self.cursor >= self.visible.len() {
+            self.cursor = self.visible.len() - 1;
+        }
+    }
+
+    /// Añade un carácter a la query del filtro y recalcula. No-op mientras
+    /// se edita ([`Self::is_editing`]) — el caller (`main::on_settings_key`)
+    /// ya bifurca por eso, pero el guard aquí lo hace un invariante DEL
+    /// TIPO, no solo del call site.
+    pub fn push_char(&mut self, c: char) {
+        if self.edit.is_some() {
+            return;
+        }
+        let mut buf = [0u8; 4];
+        self.query
+            .extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        self.recompute();
+    }
+
+    /// Retira el último char UTF-8 completo de la query. No-op editando.
+    pub fn backspace(&mut self) {
+        if self.edit.is_some() || self.query.is_empty() {
+            return;
+        }
+        let mut cut = self.query.len() - 1;
+        while cut > 0 && (self.query[cut] & 0b1100_0000) == 0b1000_0000 {
+            cut -= 1;
+        }
+        self.query.truncate(cut);
+        self.recompute();
+    }
+
+    /// Sube la selección (tope arriba). No-op editando.
+    pub fn up(&mut self) {
+        if self.edit.is_none() {
+            self.cursor = self.cursor.saturating_sub(1);
+        }
+    }
+
+    /// Baja la selección (tope al final). No-op editando.
+    pub fn down(&mut self) {
+        if self.edit.is_none() && self.cursor + 1 < self.visible.len() {
+            self.cursor += 1;
+        }
+    }
+
+    /// Sube `n` posiciones (pgup). No-op editando.
+    pub fn page_up(&mut self, n: usize) {
+        if self.edit.is_none() {
+            self.cursor = self.cursor.saturating_sub(n);
+        }
+    }
+
+    /// Baja `n` posiciones, tope al final (pgdn). No-op editando.
+    pub fn page_down(&mut self, n: usize) {
+        if self.edit.is_none() {
+            self.cursor = (self.cursor + n).min(self.visible.len().saturating_sub(1));
+        }
+    }
+
+    /// Índices REALES en [`Self::rows`] visibles con la query actual.
+    #[must_use]
+    pub fn visible(&self) -> &[usize] {
+        &self.visible
+    }
+
+    /// Todas las filas — `rows()[visible()[i]]` pinta la fila `i`-ésima
+    /// filtrada.
+    #[must_use]
+    pub fn rows(&self) -> &[crate::settings::Row] {
+        &self.rows
+    }
+
+    /// Posición de la selección DENTRO de `visible()`.
+    #[must_use]
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    /// La descripción localizada de la fila bajo el cursor, si hay alguna
+    /// visible — pie de página del overlay ([`crate::ui`]).
+    #[must_use]
+    pub fn selected_desc(&self) -> Option<&str> {
+        self.visible
+            .get(self.cursor)
+            .map(|&i| self.rows[i].desc.as_str())
+    }
+
+    /// Query para pintar (lossy, enmascarada — mismo contrato que
+    /// `Palette::query_display`).
+    #[must_use]
+    pub fn query_display(&self) -> String {
+        String::from_utf8_lossy(&self.query)
+            .chars()
+            .map(|c| {
+                if norte_encoding::is_terminal_hazard(c) {
+                    '\u{FFFD}'
+                } else {
+                    c
+                }
+            })
+            .collect()
+    }
+
+    /// `true` mientras el buffer de edición inline está activo (`Text`/`Int`).
+    #[must_use]
+    pub fn is_editing(&self) -> bool {
+        self.edit.is_some()
+    }
+
+    /// El buffer de edición CRUDO, para pintar (el saneado es al dibujar,
+    /// mismo contrato que `NavPopup::name_input`).
+    #[must_use]
+    pub fn edit_buffer(&self) -> Option<&str> {
+        self.edit.as_deref()
+    }
+
+    /// Añade un char al buffer de edición. No-op si no se está editando.
+    pub fn edit_push_char(&mut self, c: char) {
+        if let Some(buf) = &mut self.edit {
+            buf.push(c);
+        }
+    }
+
+    /// Retira el último char del buffer de edición. No-op si no se está
+    /// editando.
+    pub fn edit_backspace(&mut self) {
+        if let Some(buf) = &mut self.edit {
+            buf.pop();
+        }
+    }
+
+    /// Cancela la edición SIN escribir — el valor de la fila queda como
+    /// estaba.
+    pub fn edit_cancel(&mut self) {
+        self.edit = None;
+    }
+
+    /// Enter (S3) sobre la fila bajo el cursor: `Bool`/`Enum`/`ThemeName`/
+    /// `PresetName` CICLAN de inmediato (devuelven el [`PendingWrite`] YA —
+    /// nada que confirmar aparte); `Text`/`Int` ABREN el buffer de edición
+    /// (devuelven `None` — [`Self::edit_commit`] produce el `PendingWrite`
+    /// cuando el usuario confirme). La fila informativa de Plugins y "nada
+    /// visible" también devuelven `None`, sin abrir nada. `theme_names`/
+    /// `preset_names` son las listas VIVAS (no `&'static`, resueltas en
+    /// tiempo de ejecución — el caller las computa, mismo criterio que
+    /// `App::open_theme_picker`).
+    pub fn activate(
+        &mut self,
+        theme_names: &[String],
+        preset_names: &[&str],
+    ) -> Option<PendingWrite> {
+        let &real = self.visible.get(self.cursor)?;
+        let idx = self.rows[real].def_index?;
+        let def = &norte_frontend::settings::catalog()[idx];
+        let current = self.rows[real].value.clone();
+        match def.kind {
+            SettingKind::Bool => {
+                let next = current != "true";
+                Some(self.commit_row(real, def, next.to_string(), toml_edit::Value::from(next)))
+            }
+            SettingKind::Enum(values) => {
+                let next = cycle(&current, values);
+                let value = toml_edit::Value::from(next.as_str());
+                Some(self.commit_row(real, def, next, value))
+            }
+            SettingKind::ThemeName => {
+                let refs: Vec<&str> = theme_names.iter().map(String::as_str).collect();
+                let next = cycle(&current, &refs);
+                let value = toml_edit::Value::from(next.as_str());
+                Some(self.commit_row(real, def, next, value))
+            }
+            SettingKind::PresetName => {
+                let next = cycle(&current, preset_names);
+                let value = toml_edit::Value::from(next.as_str());
+                Some(self.commit_row(real, def, next, value))
+            }
+            SettingKind::Text | SettingKind::Int { .. } => {
+                self.edit = Some(current);
+                None
+            }
+        }
+    }
+
+    /// Confirma el buffer de edición inline: `Int` valida `[min, max]`
+    /// ([`SettingsEditError`] SIN persistir, buffer intacto — el usuario
+    /// corrige y reintenta); `Text` acepta cualquier cosa. Solo alcanzable
+    /// con [`Self::is_editing`] — el caller lo garantiza (mismo contrato que
+    /// `NavPopup::name_input`); sin edición activa devuelve
+    /// `SettingsEditError::NotAnInt` como fallback inerte (inalcanzable en
+    /// la práctica, defensa en profundidad).
+    ///
+    /// # Errors
+    /// [`SettingsEditError::NotAnInt`] si el buffer de una fila `Int` no
+    /// parsea (o, como fallback inerte, si no hay edición activa);
+    /// [`SettingsEditError::OutOfRange`] si parsea pero cae fuera de
+    /// `[min, max]`. Nunca para una fila `Text`.
+    pub fn edit_commit(&mut self) -> Result<PendingWrite, SettingsEditError> {
+        let (Some(buf), Some(real)) = (self.edit.clone(), self.visible.get(self.cursor).copied())
+        else {
+            return Err(SettingsEditError::NotAnInt);
+        };
+        let Some(idx) = self.rows[real].def_index else {
+            return Err(SettingsEditError::NotAnInt);
+        };
+        let def = &norte_frontend::settings::catalog()[idx];
+        let write = if let SettingKind::Int { min, max } = def.kind {
+            let n: i64 = buf
+                .trim()
+                .parse()
+                .map_err(|_| SettingsEditError::NotAnInt)?;
+            if n < min || n > max {
+                return Err(SettingsEditError::OutOfRange { min, max });
+            }
+            self.commit_row(real, def, n.to_string(), toml_edit::Value::from(n))
+        } else {
+            // Por construcción, solo `Text`/`Int` abren `self.edit`
+            // (`Self::activate`) — este es el brazo `Text`.
+            self.commit_row(real, def, buf.clone(), toml_edit::Value::from(buf.as_str()))
+        };
+        self.edit = None;
+        Ok(write)
+    }
+
+    /// Actualización OPTIMISTA de la fila `real` a `display` + construye su
+    /// [`PendingWrite`] (`section`/`key` vía `wire_key`, S2). El hot-reload
+    /// posterior ([`Self::refresh`]) la corrige si el escrito no aplicó
+    /// (fallo de I/O) — esto es solo feedback inmediato, la verdad vive en
+    /// disco.
+    fn commit_row(
+        &mut self,
+        real: usize,
+        def: &SettingDef,
+        display: String,
+        value: toml_edit::Value,
+    ) -> PendingWrite {
+        let (section, key) = norte_frontend::settings::wire_key(def.id);
+        self.rows[real].value.clone_from(&display);
+        PendingWrite {
+            section,
+            key,
+            value,
+            name: self.rows[real].name.clone(),
+            display,
+        }
+    }
+}
+
+/// Próximo valor en `values` tras `current` (con wrap); si `current` no
+/// está en `values` (config con un valor que el catálogo ya no reconoce, o
+/// lista dinámica que cambió), arranca en el PRIMERO — nunca panica sobre
+/// una lista vacía (devuelve `current` sin tocar).
+fn cycle(current: &str, values: &[&str]) -> String {
+    if values.is_empty() {
+        return current.to_owned();
+    }
+    let next = values
+        .iter()
+        .position(|v| *v == current)
+        .map_or(0, |i| (i + 1) % values.len());
+    values[next].to_owned()
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    fn cfg_vacia() -> crate::config::LoadedConfig {
+        crate::config::load(&norte_config::Layers { dirs: vec![] }).expect("config vacía carga")
+    }
+
+    fn rows() -> Vec<crate::settings::Row> {
+        crate::settings::build_rows(&cfg_vacia())
+    }
+
+    /// Filtrar por un fragmento DASHED del id (`confirm-quit`) —
+    /// improbable en la prosa de nombre/descripción — aísla exactamente esa
+    /// fila.
+    fn only(fragment: &str) -> Settings {
+        let mut s = Settings::new(rows());
+        for c in fragment.chars() {
+            s.push_char(c);
+        }
+        assert_eq!(
+            s.visible().len(),
+            1,
+            "el fragmento {fragment:?} debería aislar una sola fila"
+        );
+        s
+    }
+
+    #[test]
+    fn settings_filtra_por_id_nombre_o_descripcion() {
+        let s = only("confirm-quit");
+        assert_eq!(
+            s.rows()[s.visible()[0]].name,
+            norte_i18n::t("setting-ui-confirm-quit-name")
+        );
+    }
+
+    #[test]
+    fn settings_query_hostil_se_enmascara() {
+        let mut s = Settings::new(rows());
+        for c in "a\u{202E}b".chars() {
+            s.push_char(c);
+        }
+        let display = s.query_display();
+        assert!(!display.chars().any(norte_encoding::is_terminal_hazard));
+        assert!(display.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn settings_sin_matches_no_panica_y_activate_es_none() {
+        let mut s = Settings::new(rows());
+        for c in "zzzznuncacasa".chars() {
+            s.push_char(c);
+        }
+        assert!(s.visible().is_empty());
+        s.up();
+        s.down();
+        s.page_up(3);
+        s.page_down(3);
+        assert_eq!(s.selected_desc(), None);
+        assert!(s.activate(&[], &[]).is_none());
+    }
+
+    #[test]
+    fn activate_en_bool_toggla_y_devuelve_pendingwrite() {
+        let mut s = only("reduce-motion");
+        assert_eq!(s.rows()[s.visible()[0]].value, "false", "default");
+        let write = s.activate(&[], &[]).expect("Bool activa de inmediato");
+        assert_eq!(write.section, "ui");
+        assert_eq!(write.key, "reduce_motion");
+        assert_eq!(write.value.as_bool(), Some(true));
+        assert_eq!(write.display, "true");
+        assert_eq!(s.rows()[s.visible()[0]].value, "true", "optimista");
+        assert!(!s.is_editing());
+    }
+
+    #[test]
+    fn activate_en_enum_cicla_con_wrap() {
+        let mut s = only("confirm-quit");
+        assert_eq!(s.rows()[s.visible()[0]].value, "auto", "default S2");
+        let w1 = s.activate(&[], &[]).unwrap();
+        assert_eq!(w1.display, "always");
+        let w2 = s.activate(&[], &[]).unwrap();
+        assert_eq!(w2.display, "never");
+        let w3 = s.activate(&[], &[]).unwrap();
+        assert_eq!(w3.display, "auto", "wrap al primero");
+        assert_eq!(w3.value.as_str(), Some("auto"));
+    }
+
+    #[test]
+    fn activate_en_theme_name_cicla_sobre_la_lista_viva() {
+        // "ui.theme" es el id COMPLETO — no es substring de ningún otro id
+        // del catálogo (a diferencia de "ui.font", ver el test de abajo).
+        let mut s = only("ui.theme");
+        let names = vec!["default".to_owned(), "nord".to_owned()];
+        // El valor actual (default de S2) es "default": el próximo es "nord".
+        let write = s.activate(&names, &[]).expect("ThemeName activa");
+        assert_eq!(write.section, "ui");
+        assert_eq!(write.key, "theme");
+        assert_eq!(write.value.as_str(), Some("nord"));
+    }
+
+    #[test]
+    fn activate_en_preset_name_cicla_sobre_la_lista_viva() {
+        let mut s = only("keymap.preset");
+        let presets = ["orthodox", "vim", "cua"];
+        let write = s.activate(&[], &presets).expect("PresetName activa");
+        assert_eq!(write.section, "keymap");
+        assert_eq!(write.key, "preset");
+        assert_eq!(write.value.as_str(), Some("vim"), "orthodox → vim (wrap)");
+    }
+
+    #[test]
+    fn activate_en_text_abre_edicion_sin_persistir() {
+        // Espacio final: `ui.font` es PREFIJO de `ui.font-size` (el fold
+        // pega `"{id} {name} {desc}"`, así que el espacio que sigue al id
+        // ancla el fin de token y descarta ese otro id sin ambigüedad).
+        let mut s = only("ui.font ");
+        assert!(!s.is_editing());
+        let write = s.activate(&[], &[]);
+        assert!(write.is_none(), "Text no persiste al abrir: solo edita");
+        assert!(s.is_editing());
+        assert_eq!(s.edit_buffer(), Some(""));
+    }
+
+    #[test]
+    fn edit_commit_en_text_persiste_lo_tecleado() {
+        let mut s = only("mono-font");
+        s.activate(&[], &[]);
+        for c in "JetBrains Mono".chars() {
+            s.edit_push_char(c);
+        }
+        let write = s.edit_commit().expect("Text siempre válido");
+        assert_eq!(write.section, "ui");
+        assert_eq!(write.key, "mono_font");
+        assert_eq!(write.value.as_str(), Some("JetBrains Mono"));
+        assert!(!s.is_editing());
+        assert_eq!(s.rows()[s.visible()[0]].value, "JetBrains Mono");
+    }
+
+    #[test]
+    fn edit_commit_en_int_valida_rango_sin_persistir_y_conserva_el_buffer() {
+        let mut s = only("font-size");
+        s.activate(&[], &[]);
+        for c in "999".chars() {
+            s.edit_push_char(c);
+        }
+        let err = s.edit_commit().expect_err("999 fuera de [8,32]");
+        assert_eq!(err, SettingsEditError::OutOfRange { min: 8, max: 32 });
+        assert!(s.is_editing(), "el buffer se conserva tras un rechazo");
+        assert_eq!(s.edit_buffer(), Some("999"));
+    }
+
+    #[test]
+    fn edit_commit_en_int_no_numerico_rechaza() {
+        let mut s = only("font-size");
+        s.activate(&[], &[]);
+        for c in "abc".chars() {
+            s.edit_push_char(c);
+        }
+        assert_eq!(s.edit_commit().unwrap_err(), SettingsEditError::NotAnInt);
+    }
+
+    #[test]
+    fn edit_commit_en_int_valido_persiste() {
+        let mut s = only("font-size");
+        // El buffer arranca con el valor VIGENTE ("" — sin `[ui] font_size`
+        // en la config vacía de este test, `current_value` ya lo documenta).
+        s.activate(&[], &[]);
+        assert_eq!(s.edit_buffer(), Some(""));
+        for c in "16".chars() {
+            s.edit_push_char(c);
+        }
+        let write = s.edit_commit().expect("16 está en [8,32]");
+        assert_eq!(write.value.as_integer(), Some(16));
+        assert_eq!(write.display, "16");
+    }
+
+    #[test]
+    fn edit_cancel_no_persiste_y_conserva_el_valor_original() {
+        let mut s = only("mono-font");
+        let original = s.rows()[s.visible()[0]].value.clone();
+        s.activate(&[], &[]);
+        s.edit_push_char('x');
+        s.edit_cancel();
+        assert!(!s.is_editing());
+        assert_eq!(s.rows()[s.visible()[0]].value, original);
+    }
+
+    /// La fila informativa de Plugins (última con query vacía) nunca abre
+    /// edición ni produce un `PendingWrite`.
+    #[test]
+    fn activate_en_fila_informativa_de_plugins_es_no_op() {
+        let mut s = Settings::new(rows());
+        let n = norte_frontend::settings::catalog().len();
+        for _ in 0..n {
+            s.down();
+        }
+        assert!(s.rows()[s.visible()[s.cursor()]].is_plugins_note());
+        assert!(s.activate(&[], &[]).is_none());
+        assert!(!s.is_editing());
+    }
+
+    /// `refresh` (hot-reload) reconstruye los VALORES pero conserva la
+    /// query y el cursor tecleados por el usuario.
+    #[test]
+    fn refresh_conserva_query_y_recalcula_valores() {
+        let mut s = only("reduce-motion");
+        assert_eq!(s.rows()[s.visible()[0]].value, "false");
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("norte.toml"),
+            "[ui]\nreduce_motion = true\n",
+        )
+        .unwrap();
+        let layers = norte_config::Layers {
+            dirs: vec![(dir.path().to_path_buf(), norte_config::Layer::User)],
+        };
+        let cfg = crate::config::load(&layers).expect("carga");
+        s.refresh(crate::settings::build_rows(&cfg));
+        assert_eq!(
+            s.visible().len(),
+            1,
+            "la query 'reduce-motion' se conserva tras el refresh"
+        );
+        assert_eq!(s.rows()[s.visible()[0]].value, "true", "valor fresco");
+    }
+
+    #[test]
+    fn cycle_envuelve_y_arranca_en_el_primero_si_no_encuentra() {
+        let values = ["a", "b", "c"];
+        assert_eq!(cycle("a", &values), "b");
+        assert_eq!(cycle("c", &values), "a", "wrap");
+        assert_eq!(
+            cycle("x", &values),
+            "a",
+            "no encontrado: arranca en el primero"
+        );
+        assert_eq!(cycle("a", &[]), "a", "lista vacía: no panica, no cambia");
+    }
+}
+
 impl App {
     /// App con foco en el pane izquierdo.
     #[must_use]
@@ -1160,6 +1800,7 @@ impl App {
             dialog_hints: crate::hints::DialogHints::default(),
             palette: None,
             palette_rows: Vec::new(),
+            settings: None,
         }
     }
 

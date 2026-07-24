@@ -21,9 +21,10 @@ use norte_proto::methods::{FsSearchParams, SearchHits};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{
     ALLOW_EXTENSIONS, ALLOW_NAV_HOTLIST, ALLOW_PICKER, App, DialogOutcome, ExtensionManager, Help,
-    KeymapsError, Modal, NavPopupKind, Palette, Pane, PickerAction, SearchDialog, SearchState,
-    TransferKind, config_error_category, detail_for_bar, dialog_action, error_category,
-    error_message, io_error_category, keymaps_error_category, theme_error_category, trust_lua_key,
+    KeymapsError, Modal, NavPopupKind, Palette, Pane, PendingWrite, PickerAction, SearchDialog,
+    SearchState, Settings, SettingsEditError, TransferKind, config_error_category, detail_for_bar,
+    dialog_action, error_category, error_message, io_error_category, keymaps_error_category,
+    theme_error_category, trust_lua_key,
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::hints::DialogHints;
@@ -177,6 +178,15 @@ fn modal_preempts_palette(app: &App) -> bool {
     app.palette.is_some() && app.modal.is_some()
 }
 
+/// S3: el mismo guard que [`modal_preempts_palette`], para el overlay de
+/// ajustes — un modal asíncrono (p.ej. una aprobación de policy) SIEMPRE
+/// gana sobre `app.settings` abierto, igual razón: una tecla de respuesta al
+/// modal no debe colarse como edición silenciosa de un ajuste.
+#[must_use]
+fn modal_preempts_settings(app: &App) -> bool {
+    app.settings.is_some() && app.modal.is_some()
+}
+
 #[cfg(test)]
 mod palette_modal_guard_tests {
     use super::*;
@@ -217,6 +227,24 @@ mod palette_modal_guard_tests {
         assert!(
             modal_preempts_palette(&a),
             "un modal en vuelo con la palette abierta DEBE ganarle"
+        );
+    }
+
+    /// S3: el mismo caso para `app.settings` — un modal en vuelo (p.ej. una
+    /// aprobación de policy) gana sobre el overlay de ajustes abierto.
+    #[test]
+    fn modal_preempts_settings_solo_cuando_ambos_estan_abiertos() {
+        let mut a = app();
+        assert!(!modal_preempts_settings(&a));
+        a.settings = Some(Settings::new(Vec::new()));
+        assert!(
+            !modal_preempts_settings(&a),
+            "solo el overlay de ajustes abierto: maneja sus teclas normalmente"
+        );
+        a.modal = Some(approval_modal());
+        assert!(
+            modal_preempts_settings(&a),
+            "un modal en vuelo con ajustes abierto DEBE ganarle"
         );
     }
 }
@@ -387,6 +415,7 @@ async fn main() -> Result<()> {
         cli_preset,
         cfg.quick_search_mode,
         cfg.common.ui_confirm_quit,
+        cfg,
         cfg_rx,
         foreign_tasks,
         conn_events,
@@ -556,6 +585,13 @@ async fn run(
     // run loop, `applies_live` (solo afecta a `app.quit` NUEVOS, uno en
     // curso ya decidió) y se actualiza en el hot-reload.
     mut confirm_quit: config::ConfirmQuit,
+    // S3 (`app.settings`): la config COMPLETA vive aquí, no solo los campos
+    // sueltos de arriba — el overlay de ajustes necesita leer CUALQUIER
+    // entrada del catálogo (`crate::settings::build_rows`), no una lista
+    // fija. Se actualiza ENTERA en cada hot-reload OK (`reload_config`, al
+    // final, tras aplicar todo lo demás — mismo criterio que `quick_mode`/
+    // `confirm_quit`: solo si TODO aplicó).
+    mut cfg: config::LoadedConfig,
     mut cfg_rx: tokio::sync::mpsc::Receiver<()>,
     mut foreign_tasks: Option<tokio::sync::mpsc::UnboundedReceiver<norte_core::backend::TaskRef>>,
     mut conn_events: Option<tokio::sync::mpsc::UnboundedReceiver<ConnEvent>>,
@@ -770,6 +806,7 @@ async fn run(
                     cli_preset.as_deref(),
                     &mut quick_mode,
                     &mut confirm_quit,
+                    &mut cfg,
                 )
                 .await;
                 // Hot-reload del scripting Lua (ADR 0026): host NUEVO entero
@@ -883,6 +920,7 @@ async fn run(
                                         help_lines,
                                         quick_mode,
                                         confirm_quit,
+                                        &cfg,
                                         &cmd,
                                     )
                                     .await;
@@ -891,6 +929,11 @@ async fn run(
                             }
                             _ => {}
                         }
+                    } else if app.settings.is_some() && !modal_preempts_settings(app) {
+                        // Overlay de ajustes (S3): mismo criterio que la
+                        // palette de arriba (decisión 8 del plan H1) — sus
+                        // teclas son fijas, hardcodeadas en `on_settings_key`.
+                        on_settings_key(app, key.modifiers, key.code).await;
                     } else if let Some(help) = &mut app.help {
                         // Teclas de la ayuda: fijas, como los diálogos (#24).
                         // ctrl+c conserva su significado global (salir).
@@ -910,8 +953,11 @@ async fn run(
                         // MINOR-4 (H1 close): un modal llegado mientras la
                         // palette estaba abierta la cierra AQUÍ — obsoleta,
                         // y esta MISMA tecla responde al modal en vez de
-                        // desaparecer dentro del filtro de la palette.
+                        // desaparecer dentro del filtro de la palette. El
+                        // overlay de ajustes (S3) es el MISMO caso: un modal
+                        // asíncrono (p.ej. una aprobación de policy) gana.
                         app.palette = None;
+                        app.settings = None;
                         // El TOFU de Lua se resuelve AQUÍ (necesita el host,
                         // que vive en este loop): no navega ni toca `fill`.
                         if matches!(app.modal, Some(Modal::TrustLuaInit { .. })) {
@@ -1063,6 +1109,7 @@ async fn run(
                                             help_lines,
                                             quick_mode,
                                             confirm_quit,
+                                            &cfg,
                                             "nav.enter",
                                         )
                                         .await;
@@ -1114,6 +1161,7 @@ async fn run(
                                         help_lines,
                                         quick_mode,
                                         confirm_quit,
+                                        &cfg,
                                         &cmd,
                                     )
                                     .await;
@@ -1253,6 +1301,170 @@ async fn on_theme_picker_key(
             // Un panic en el write es un bug nuestro: que no tumbe la TUI.
             Err(_) => {}
         }
+    }
+}
+
+/// Qué hacer tras procesar una tecla del overlay de ajustes — separa el
+/// cómputo PURO (dentro del borrow de `app.settings`, `on_settings_key`) del
+/// I/O async (`persist_setting`, fuera de ese borrow): `Settings::activate`/
+/// `edit_commit` no pueden devolver directamente y persistir en el mismo
+/// paso porque ya toman `&mut app.settings` — separarlo en un enum evita
+/// pedir prestado `app` dos veces a la vez.
+enum SettingsKeyOutcome {
+    /// La tecla se consumió sin nada que persistir (navegación/filtro/
+    /// edición de buffer en curso).
+    None,
+    /// Esc fuera de edición: cierra el overlay.
+    Close,
+    /// Un ajuste cambió — persistir y anunciar. Boxed: `PendingWrite` lleva
+    /// un `toml_edit::Value` propio y hace este brazo mucho más grande que
+    /// el resto (clippy `large_enum_variant`) — indirección, no un tipo
+    /// distinto.
+    Write(Box<PendingWrite>),
+    /// `Settings::edit_commit` rechazó el buffer — anunciar el error, sin
+    /// tocar nada (el buffer se queda, `Settings` ya lo conserva).
+    Invalid(SettingsEditError),
+}
+
+/// Teclas del overlay de ajustes (`app.settings`, S3): mismo criterio que la
+/// palette (decisión 8 del plan H1) — editor de filtro libre, NO resuelve
+/// por el contexto `dialog`; sus teclas quedan hardcodeadas aquí. `ctrl+c`
+/// conserva su salida global. Mientras `Settings::is_editing()` las teclas
+/// van al buffer de edición inline (mismo patrón que `name_input` del popup
+/// de navegación: imprimibles/backspace crudos, Enter confirma, Esc
+/// cancela); si no, navegan/filtran como la palette y Enter activa la fila
+/// bajo el cursor (`Settings::activate` — cicla YA para `Bool`/`Enum`/
+/// `ThemeName`/`PresetName`, o abre el buffer para `Text`/`Int`).
+async fn on_settings_key(app: &mut App, mods: KeyModifiers, code: KeyCode) {
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return;
+    }
+    let plain = mods.is_empty() || mods == KeyModifiers::SHIFT;
+    let outcome = {
+        let Some(settings) = &mut app.settings else {
+            return;
+        };
+        if settings.is_editing() {
+            match code {
+                KeyCode::Char(c) if plain => {
+                    settings.edit_push_char(c);
+                    SettingsKeyOutcome::None
+                }
+                KeyCode::Backspace if plain => {
+                    settings.edit_backspace();
+                    SettingsKeyOutcome::None
+                }
+                KeyCode::Esc => {
+                    settings.edit_cancel();
+                    SettingsKeyOutcome::None
+                }
+                KeyCode::Enter => match settings.edit_commit() {
+                    Ok(write) => SettingsKeyOutcome::Write(Box::new(write)),
+                    Err(e) => SettingsKeyOutcome::Invalid(e),
+                },
+                _ => SettingsKeyOutcome::None,
+            }
+        } else {
+            match code {
+                KeyCode::Char(c) if plain => {
+                    settings.push_char(c);
+                    SettingsKeyOutcome::None
+                }
+                KeyCode::Backspace if plain => {
+                    settings.backspace();
+                    SettingsKeyOutcome::None
+                }
+                KeyCode::Esc if plain => SettingsKeyOutcome::Close,
+                KeyCode::Up if plain => {
+                    settings.up();
+                    SettingsKeyOutcome::None
+                }
+                KeyCode::Down if plain => {
+                    settings.down();
+                    SettingsKeyOutcome::None
+                }
+                KeyCode::PageUp if plain => {
+                    settings.page_up(PAGE);
+                    SettingsKeyOutcome::None
+                }
+                KeyCode::PageDown if plain => {
+                    settings.page_down(PAGE);
+                    SettingsKeyOutcome::None
+                }
+                KeyCode::Enter if plain => {
+                    // Listas VIVAS para `ThemeName`/`PresetName` (mismo
+                    // criterio que `App::open_theme_picker`): resueltas aquí,
+                    // no `&'static` — el tema/keymap efectivo puede cambiar
+                    // en caliente.
+                    let theme_names: Vec<String> = norte_theme::preset_names()
+                        .into_iter()
+                        .map(String::from)
+                        .collect();
+                    let all_presets = presets();
+                    let preset_names: Vec<&str> = all_presets.iter().map(|(n, _)| *n).collect();
+                    match settings.activate(&theme_names, &preset_names) {
+                        Some(write) => SettingsKeyOutcome::Write(Box::new(write)),
+                        None => SettingsKeyOutcome::None,
+                    }
+                }
+                _ => SettingsKeyOutcome::None,
+            }
+        }
+    };
+    match outcome {
+        SettingsKeyOutcome::None => {}
+        SettingsKeyOutcome::Close => app.settings = None,
+        SettingsKeyOutcome::Write(write) => persist_setting(app, *write).await,
+        SettingsKeyOutcome::Invalid(e) => app.message = Some(settings_edit_error_message(&e)),
+    }
+}
+
+/// Persiste un [`PendingWrite`] (S3) — `spawn_blocking` (regla 2), mismo
+/// patrón que el persist del theme picker (`on_theme_picker_key` arriba):
+/// resuelve `user_config_dir()` a mano en vez de reutilizar
+/// `config::persist_ui_theme` (esa wrapper no toma `section`/`key` — S2 solo
+/// dio el genérico `persist_set(dir, ...)` con `dir` explícito).
+async fn persist_setting(app: &mut App, write: PendingWrite) {
+    let Some(dir) = config::user_config_dir() else {
+        app.message = Some(t("msg-settings-no-config-dir"));
+        return;
+    };
+    let PendingWrite {
+        section,
+        key,
+        value,
+        name,
+        display,
+    } = write;
+    match tokio::task::spawn_blocking(move || config::persist_set(&dir, section, &key, value)).await
+    {
+        Ok(Ok(_path)) => {
+            app.message = Some(ta(
+                "msg-settings-saved",
+                &[("name", &name), ("value", &display)],
+            ));
+        }
+        Ok(Err(e)) => {
+            app.message = Some(ta(
+                "msg-settings-save-failed",
+                &[("error", &io_error_category(&e))],
+            ));
+        }
+        // Un panic en el write es un bug nuestro: que no tumbe la TUI.
+        Err(_) => {}
+    }
+}
+
+/// Mensaje de barra para un [`SettingsEditError`] (S3) — por CATEGORÍA
+/// Fluent, nunca texto ad hoc (#73 pattern).
+fn settings_edit_error_message(e: &SettingsEditError) -> String {
+    match e {
+        SettingsEditError::NotAnInt => t("msg-settings-invalid-int"),
+        SettingsEditError::OutOfRange { min, max } => ta(
+            "msg-settings-invalid-range",
+            &[("min", &min.to_string()), ("max", &max.to_string())],
+        ),
     }
 }
 
@@ -1529,6 +1741,11 @@ async fn reload_config(
     cli_preset: Option<&str>,
     quick_mode: &mut nav::Mode,
     confirm_quit: &mut config::ConfirmQuit,
+    // S3 (`app.settings`): la snapshot COMPLETA que `run()` retiene para
+    // construir/refrescar el overlay de ajustes — reemplazada ENTERA solo
+    // si TODO el reload aplicó (mismo criterio que el resto de esta
+    // función); un reload fallido deja la config VIGENTE, jamás a medias.
+    cfg_out: &mut config::LoadedConfig,
 ) {
     match config::load_async(layers.clone()).await {
         Ok(cfg) => match build_keymaps(&cfg, cli_preset) {
@@ -1583,6 +1800,15 @@ async fn reload_config(
                         &[("n", &discarded_lua.to_string())],
                     ));
                 }
+                // S3: el overlay de ajustes, si está abierto, se REFRESCA
+                // (no se cierra como `help`/`palette` arriba) — sus filas son
+                // solo `(nombre, descripción, valor)` leídas de `cfg`, seguras
+                // de recomputar sin tirar el filtro/edición en curso del
+                // usuario (`Settings::refresh`).
+                if let Some(settings) = &mut app.settings {
+                    settings.refresh(norte_tui::settings::build_rows(&cfg));
+                }
+                *cfg_out = cfg;
             }
             Err(e) => {
                 app.message = Some(ta(
@@ -2663,7 +2889,7 @@ async fn run_opener(
 /// Ejecuta un comando nombrado (ADR 0006: los mismos nombres que verán la
 /// palette y el wire). Un error de listado en un cd NO tumba el TUI: el
 /// pane se queda donde estaba (aviso visible: barra de mensajes, issue #20).
-#[allow(clippy::too_many_lines)] // tabla de despacho comando→efecto, no API
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // tabla de despacho comando→efecto, no API
 async fn dispatch(
     app: &mut App,
     backend: &Backend,
@@ -2671,6 +2897,9 @@ async fn dispatch(
     help_lines: &[String],
     quick_mode: nav::Mode,
     confirm_quit: config::ConfirmQuit,
+    // S3 (`app.settings`): la config VIGENTE — solo leída, para construir
+    // las filas del overlay al abrirlo (`crate::settings::build_rows`).
+    cfg: &config::LoadedConfig,
     cmd: &str,
 ) -> Cd {
     // Solo los cd (nav.enter/nav.parent) tocan el relleno en background; el
@@ -2872,6 +3101,15 @@ async fn dispatch(
                 Err(e) => app.message = Some(error_message(&e)),
             }
             app.palette = Some(Palette::new(rows));
+        }
+        // `F11` (S3): overlay de ajustes — las filas nacen del `cfg` VIGENTE
+        // (mismo criterio que `help_lines`/`app.palette_rows`: reconstruidas
+        // al abrir, jamás una copia arrastrada). Sección Plugins = SOLO la
+        // fila informativa (HONEST SCOPE, `norte_tui::settings` doc del
+        // módulo) — el wire de P2 no expone esquema/valores de plugin fuera
+        // del proceso embebido.
+        "app.settings" => {
+            app.settings = Some(Settings::new(norte_tui::settings::build_rows(cfg)));
         }
         "task.cancel" => {
             app.message = Some(if app.board.cancel_last_running() {

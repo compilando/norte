@@ -167,11 +167,21 @@ help-cmd-app-help = this help
 help-cmd-app-theme = choose theme
 help-cmd-app-extensions = extension manager
 help-cmd-app-palette = command palette
+help-cmd-app-settings = settings
 # --- Command palette (H1 T4) — a free-text filter editor like the search
 # dialog (decision 8): its keys are hardcoded, NOT resolved through the
 # `dialog` context, so this hint is a static string like `search-hint`.
 palette-title = Command palette
 palette-hint = [↑/↓/pgup/pgdn] navigate · [enter] run · [esc] close
+# --- Settings overlay (S3) — same free-text-filter idiom as the palette
+# above (decision 8): search is always active, Enter toggles/cycles/edits.
+settings-title = Settings
+settings-hint = [↑/↓/pgup/pgdn] navigate · [enter] edit · [esc] close
+settings-edit-hint = [enter] save · [esc] cancel
+settings-section-general = General
+settings-section-plugins = Plugins
+settings-plugins-name = Plugin settings
+settings-plugins-note = Edit plugin settings by hand in plugins/<id>/config.toml (validated by `norte doctor`) — the full editor lands with a future protocol update.
 # P1: prefix on a plugin-contributed row (`palette::plugin_rows`) — no
 # built-in row ever carries it, so a plugin cannot spoof a built-in command
 # by copying its exact display text.
@@ -197,6 +207,11 @@ msg-hotlist-removed = favorite removed: { $name }
 # reaching here (#73 pattern). The "extension:" prefix marks it as
 # third-party text, same vocabulary as `palette-plugin-prefix`.
 msg-plugin-run-ok = extension: { $output }
+msg-settings-saved = { $name } saved: { $value }
+msg-settings-save-failed = not saved: { $error }
+msg-settings-invalid-int = not a number
+msg-settings-invalid-range = value must be between { $min } and { $max }
+msg-settings-no-config-dir = no user config directory (env not set)
 msg-hotlist-persist-failed = favorites not saved: { $error }
 help-cmd-pane-switch = switch pane
 help-cmd-cursor-up = move cursor up

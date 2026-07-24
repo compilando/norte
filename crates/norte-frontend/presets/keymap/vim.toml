@@ -8,6 +8,7 @@ keymap = [
     { on = ["tab"], run = "pane.switch" },
     { on = ["f1"], run = "app.help" },
     { on = ["f9"], run = "app.theme" },
+    { on = ["f11"], run = "app.settings" },
     { on = ["f12"], run = "app.extensions" },
     { on = ["?"], run = "app.help" },
     { on = ["ctrl+p"], run = "app.palette" },

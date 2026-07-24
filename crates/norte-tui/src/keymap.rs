@@ -65,6 +65,7 @@ pub const COMMANDS: &[&str] = &[
     "app.theme",
     "app.extensions",
     "app.palette",
+    "app.settings",
     "pane.copy",
     "pane.move",
     "pane.delete",

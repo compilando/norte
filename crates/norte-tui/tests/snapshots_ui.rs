@@ -557,3 +557,40 @@ fn snapshot_palette_fila_de_plugin_hostil() {
     );
     insta::assert_snapshot!(texto);
 }
+
+fn cfg_vacia() -> norte_tui::config::LoadedConfig {
+    norte_tui::config::load(&norte_config::Layers { dirs: vec![] }).expect("config vacía carga")
+}
+
+/// Overlay de ajustes (S3), abierto sobre la config VACÍA (valores default
+/// de S2) — el MISMO builder que usa el binario
+/// (`norte_tui::settings::build_rows`), no una copia a mano. A 80×24: el
+/// catálogo completo (9 filas generales + la informativa de Plugins, más
+/// dos cabeceras de sección) no cabe en las 16 filas del resto del archivo.
+#[test]
+fn snapshot_settings_abierta() {
+    let mut app = app_base();
+    let settings = norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia()));
+    app.settings = Some(settings);
+    insta::assert_snapshot!(render_80x24(&app));
+}
+
+/// Filtrada + EDITANDO (S3): filtra a la fila `Text` `ui.font` (el espacio
+/// final la aísla de `ui.font-size`, ver `app::settings_tests`), `activate`
+/// abre el buffer de edición y se teclea un valor — pincha que la lista
+/// filtrada, la descripción y el footer de edición (`settings-edit-hint`)
+/// se pintan juntos sin pisarse.
+#[test]
+fn snapshot_settings_filtrada_y_editando_texto() {
+    let mut app = app_base();
+    let mut settings = norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia()));
+    for c in "ui.font ".chars() {
+        settings.push_char(c);
+    }
+    settings.activate(&[], &[]);
+    for c in "Fira Code".chars() {
+        settings.edit_push_char(c);
+    }
+    app.settings = Some(settings);
+    insta::assert_snapshot!(render_80x24(&app));
+}

@@ -9,6 +9,22 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **TUI settings overlay (S3):** `app.settings` (`F11` in all three bundled
+  presets — `F9`/`F10`/`F12` were already taken) opens a searchable overlay
+  over the General settings catalog (S2): type to filter by id, name, or
+  description; Enter toggles a bool, cycles an enum/theme/keymap-preset
+  setting immediately, or opens inline text/int editing (Int validates its
+  range before writing — an invalid value shows a status-bar error and
+  changes nothing). Every write goes through the same comment-preserving
+  `norte_config::persist_set` as the theme picker, and the existing
+  hot-reload picks it up live; the overlay stays open across a reload and
+  refreshes its rows in place instead of closing, unlike the help/palette
+  overlays. The Plugins section shows a single informational row for now:
+  editing plugin settings from the UI needs a protocol bump the wire
+  doesn't have yet (P2's `ConfigKeySpec`/`settings_of` aren't exposed to a
+  remote frontend) — until then, edit `plugins/<id>/config.toml` by hand
+  and validate with `norte doctor`.
+
 - **`[ui] confirm_quit` (S2):** a new `norte.toml` setting controls whether
   quitting asks for confirmation — `"auto"` (default, unchanged behavior)
   confirms only with pending work, `"always"` always confirms even with
