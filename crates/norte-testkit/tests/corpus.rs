@@ -1,7 +1,7 @@
 //! Sanidad del corpus canónico: 42 fixtures (28 nombres + 11+3 contenidos),
 //! nombres válidos como segmentos `VPath`, contenidos con la forma declarada.
 
-use norte_testkit::corpus::{content_fixtures, hostile_names};
+use norte_testkit::corpus::{content_fixtures, hostile_chords, hostile_names};
 
 #[test]
 fn corpus_counts() {
@@ -12,6 +12,22 @@ fn corpus_counts() {
         3,
         "contenidos solo-forzables"
     );
+    assert_eq!(hostile_chords().len(), 4, "chords hostiles (H1)");
+}
+
+#[test]
+fn hostile_chords_son_un_solo_codepoint_hazard_y_unicos() {
+    let chords = hostile_chords();
+    let mut seen = std::collections::HashSet::new();
+    for c in &chords {
+        assert!(
+            norte_encoding::is_terminal_hazard(c.token),
+            "[{}] debe ser un hazard de terminal",
+            c.id
+        );
+        assert!(!c.why.is_empty(), "[{}] documenta por qué es hostil", c.id);
+        assert!(seen.insert(c.token), "[{}] token duplicado", c.id);
+    }
 }
 
 #[test]

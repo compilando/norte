@@ -255,6 +255,86 @@ fn modal_de_aprobacion_enmascara_marca_y_no_oculta_el_destino() {
     );
 }
 
+/// Encoding audit H1: un chord hostil (`norte_testkit::corpus::
+/// hostile_chords`) ligado a `dialog.approve` desde una capa (el modelo
+/// de `./.norte/keymap.toml`, capa de PROYECTO sin trust) no debe
+/// sobrevivir crudo al pie del modal `ApproveAgentOp` — uno de los tres
+/// modales de SEGURIDAD (junto a `TrustHostKey`/`ConfirmDelete`-permanente)
+/// cuyo footer un RLO podría reordenar visualmente (cancel/confirm
+/// intercambiados aparentes). `DialogHints::build` se construye del
+/// efectivo hostil, exactamente como `main.rs` lo hace en el arranque/
+/// hot-reload real.
+#[test]
+fn footer_de_aprobacion_enmascara_chord_hostil_de_una_capa() {
+    use norte_tui::keymap::{COMMANDS, DIALOG_COMMANDS, Effective, Screen, parse_keymap, presets};
+
+    let dir = vp("file:///x");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir, Vec::new()),
+    );
+
+    let (_, preset) = presets()
+        .into_iter()
+        .find(|(n, _)| *n == "orthodox")
+        .expect("preset orthodox");
+    let known: Vec<&str> = COMMANDS
+        .iter()
+        .copied()
+        .chain(DIALOG_COMMANDS.iter().copied())
+        .collect();
+
+    for hazard in norte_testkit::corpus::hostile_chords() {
+        let token_esc = format!("\\u{:04X}", hazard.token as u32);
+        let layer_src = format!(
+            r#"
+            [dialog]
+            prepend_keymap = [{{ on = ["{token_esc}"], run = "dialog.approve" }}]
+            "#,
+        );
+        let layer = parse_keymap(&layer_src).unwrap();
+        let eff = Effective::build_for(&preset, &[layer], &known, Screen::Dialog)
+            .unwrap_or_else(|e| panic!("[{}] efectivo dialog: {e}", hazard.id));
+        app.dialog_hints = norte_tui::hints::DialogHints::build(&eff);
+        assert!(
+            app.dialog_hints.approval.contains('\u{FFFD}'),
+            "[{}] precondición: el hint hostil debe enmascararse ANTES de \
+             pintar (helper de norte_encoding, no un accidente del render)",
+            hazard.id
+        );
+
+        app.modal = Some(norte_tui::app::Modal::ApproveAgentOp {
+            req: norte_proto::methods::PolicyApprovalRequired {
+                approval_id: 1,
+                session: Some("s1".into()),
+                op: "copy".into(),
+                paths: vec!["mem:///proj/src.txt".into(), "mem:///proj/dst.txt".into()],
+                ttl_ms: 30_000,
+            },
+        });
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 14)).expect("terminal");
+        terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+        let contenido = terminal.backend().to_string();
+
+        assert!(
+            contenido.contains('\u{FFFD}'),
+            "[{}] el pie del modal de aprobación debe llevar U+FFFD: {contenido}",
+            hazard.id
+        );
+        // El check es del TOKEN concreto, no un blanket `is_terminal_hazard`
+        // sobre `contenido`: la stringificación de `TestBackend` UNE filas
+        // con `\n` (un hazard legítimo del formato de grilla, no del dato
+        // pintado) — comparar contra el hazard exacto evita ese falso
+        // positivo.
+        assert!(
+            !contenido.contains(hazard.token),
+            "[{}] el chord crudo no debe sobrevivir en el frame pintado: {contenido}",
+            hazard.id
+        );
+    }
+}
+
 /// #57: con `pane.names-encoding` activo, un nombre cirílico en cp866 se
 /// PINTA legible (Папка), conserva su badge hostil (el texto difiere de los
 /// bytes) y la barra indica el modo de forma persistente. El ciclo:

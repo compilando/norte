@@ -28,6 +28,15 @@ pub fn dialog_hints(supported: &[&str], eff: &Effective) -> String {
     let mut out = Vec::new();
     for (chord, cmd) in eff.bindings() {
         if supported.contains(&cmd) && seen.insert(cmd) {
+            // RENDER-side duty (encoding audit H1): `chord` viene de un
+            // keymap potencialmente hostil (`./.norte/keymap.toml`, capa de
+            // PROYECTO sin trust — `parse_chord` acepta CUALQUIER
+            // codepoint suelto como `KeyCode::Char`). `Chord`'s `Display`
+            // lo escribe crudo A PROPÓSITO (logs/debug quieren el chord
+            // real); este hint SÍ se pinta en el pie de modales de
+            // seguridad, así que se enmascara aquí, no en el motor. Mismo
+            // mecanismo que `App::query_display`.
+            let chord = norte_encoding::mask_terminal_hazards(&chord);
             out.push(format!("[{chord}] {}", t(&dialog_hint_id(cmd))));
         }
     }
@@ -88,6 +97,51 @@ impl DialogHints {
 mod tests {
     use super::*;
     use crate::keymap::{Screen, parse_keymap};
+
+    /// Encoding audit H1: un `./.norte/keymap.toml` de PROYECTO (sin trust)
+    /// puede ligar un chord hostil (RLO/ZWSP/LRM/BEL, corpus
+    /// `norte_testkit::corpus::hostile_chords`) a un comando `dialog.*`
+    /// soportado vía `prepend_keymap` — capa de usuario, gana al preset. El
+    /// hint generado (`dialog_hints`) es lo que se pinta en el pie de
+    /// modales de SEGURIDAD (`ApproveAgentOp`/`TrustHostKey`/
+    /// `ConfirmDelete`-permanente): ningún hazard puede sobrevivir crudo.
+    #[test]
+    fn dialog_hints_enmascara_chords_hostiles_de_una_capa() {
+        let preset = parse_keymap(
+            r#"
+            [dialog]
+            keymap = [{ on = ["y"], run = "dialog.approve" }]
+        "#,
+        )
+        .unwrap();
+        let known = ["dialog.approve", "dialog.deny"];
+        for hazard in norte_testkit::corpus::hostile_chords() {
+            // Escape `\uXXXX` de TOML (spec v1.0.0): un control C0 crudo
+            // como BEL (U+0007) es sintaxis inválida dentro de una basic
+            // string TOML, así que el token va SIEMPRE escapado, no crudo.
+            let token_esc = format!("\\u{:04X}", hazard.token as u32);
+            let layer_src = format!(
+                r#"
+                [dialog]
+                prepend_keymap = [{{ on = ["{token_esc}"], run = "dialog.approve" }}]
+                "#,
+            );
+            let layer = parse_keymap(&layer_src).unwrap();
+            let eff = Effective::build_for(&preset, &[layer], &known, Screen::Dialog)
+                .unwrap_or_else(|e| panic!("[{}] keymap efectivo: {e}", hazard.id));
+            let hint = dialog_hints(&["dialog.approve", "dialog.deny"], &eff);
+            assert!(
+                !hint.chars().any(norte_encoding::is_terminal_hazard),
+                "[{}] hazard crudo en el hint: {hint:?}",
+                hazard.id
+            );
+            assert!(
+                hint.contains('\u{FFFD}'),
+                "[{}] el hazard debe enmascararse a U+FFFD: {hint:?}",
+                hazard.id
+            );
+        }
+    }
 
     #[test]
     fn dialog_hints_omite_comandos_sin_binding() {

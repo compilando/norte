@@ -36,12 +36,17 @@ pub fn build_rows(browse: &Effective, viewer: &Effective) -> Vec<Row> {
 }
 
 /// La PRIMERA chord (en el orden de precedencia de `eff.bindings()`) que
-/// resuelve a `cmd`, si la hay.
+/// resuelve a `cmd`, si la hay. RENDER-side duty (encoding audit H1): `eff`
+/// puede venir de un keymap hostil (`./.norte/keymap.toml`, capa de
+/// PROYECTO sin trust — `parse_chord` acepta CUALQUIER codepoint suelto);
+/// `Chord`'s `Display` lo escribe crudo A PROPÓSITO (logs/debug quieren el
+/// chord real), así que la columna chord de la palette se enmascara aquí,
+/// no en el motor — mismo mecanismo que `hints::dialog_hints`.
 fn first_chord(cmd: &str, eff: &Effective) -> Option<String> {
     eff.bindings()
         .into_iter()
         .find(|(_, c)| *c == cmd)
-        .map(|(chord, _)| chord)
+        .map(|(chord, _)| norte_encoding::mask_terminal_hazards(&chord))
 }
 
 #[cfg(test)]
@@ -79,5 +84,48 @@ mod tests {
             .find(|(cmd, ..)| *cmd == "viewer.close")
             .unwrap();
         assert_ne!(close.2, "—", "viewer.close vive en Screen::Viewer");
+    }
+
+    /// Encoding audit H1: mismo defecto que `dialog_hints` pero en la
+    /// columna chord de la command palette (`build_rows`/`first_chord`) — un
+    /// chord hostil de una capa de usuario/proyecto rebindeado a un comando
+    /// de browse (`pane.copy`, siempre presente en `COMMANDS`) no debe
+    /// pintarse crudo.
+    #[test]
+    fn build_rows_enmascara_chords_hostiles_en_la_columna_chord() {
+        let (_, preset) = presets()
+            .into_iter()
+            .find(|(n, _)| *n == "orthodox")
+            .expect("preset orthodox");
+        let viewer_vacio = Effective::build_for(&preset, &[], COMMANDS, Screen::Viewer).unwrap();
+        for hazard in norte_testkit::corpus::hostile_chords() {
+            let token_esc = format!("\\u{:04X}", hazard.token as u32);
+            let layer_src = format!(
+                r#"
+                [pane]
+                prepend_keymap = [{{ on = ["{token_esc}"], run = "pane.copy" }}]
+                "#,
+            );
+            let layer = crate::keymap::parse_keymap(&layer_src).unwrap();
+            let browse = Effective::build_for(&preset, &[layer], COMMANDS, Screen::Browse)
+                .unwrap_or_else(|e| panic!("[{}] keymap efectivo: {e}", hazard.id));
+            let rows = build_rows(&browse, &viewer_vacio);
+            let copy = rows
+                .iter()
+                .find(|(cmd, ..)| *cmd == "pane.copy")
+                .unwrap_or_else(|| panic!("[{}] fila pane.copy", hazard.id));
+            assert!(
+                !copy.2.chars().any(norte_encoding::is_terminal_hazard),
+                "[{}] hazard crudo en la columna chord: {:?}",
+                hazard.id,
+                copy.2
+            );
+            assert!(
+                copy.2.contains('\u{FFFD}'),
+                "[{}] el hazard debe enmascararse a U+FFFD: {:?}",
+                hazard.id,
+                copy.2
+            );
+        }
     }
 }

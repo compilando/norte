@@ -192,6 +192,72 @@ pub(crate) const CJK_UTF8_LEAD_F1: &str = "汉字 \u{44001} texto\n";
 pub(crate) const PREVIEW_BIDI_CTRL_INJECTION: &str =
     "aguja \u{202E}reovni\u{2066} \u{1B}]0;pwn\u{07}\u{01}fin\n";
 
+/// Un chord hostil del corpus (encoding audit H1): un token de UN solo
+/// codepoint, elegido de [`norte_encoding::is_terminal_hazard`], que
+/// `norte_frontend::keymap::parse_chord` acepta sin más como
+/// `KeyCode::Char` — CUALQUIER codepoint suelto parsea, el motor de keymap
+/// no filtra hazards (esa no es su responsabilidad; ver el comentario en
+/// `parse_chord`). Un `./.norte/keymap.toml` (capa de PROYECTO, sin trust)
+/// puede ligar uno de estos a un comando soportado; `Chord`'s `Display`
+/// lo escribe CRUDO a propósito (logs/debug quieren el chord real), así
+/// que todo consumidor que pinte el chord FORMATEADO (ayuda generada,
+/// palette) debe enmascararlo — este corpus ejercita esa obligación
+/// render-side.
+#[derive(Debug, Clone)]
+pub struct HostileChord {
+    /// Identificador estable (para nombres de test y mensajes).
+    pub id: &'static str,
+    /// El token, tal como iría en `on = [...]` de un keymap.toml (un solo
+    /// codepoint).
+    pub token: char,
+    /// Por qué es hostil (documentación viva).
+    pub why: &'static str,
+}
+
+/// Los 4 chords hostiles canónicos: un solo codepoint cada uno (dos o más
+/// codepoints ya los rechaza `parse_chord`, ver
+/// `parse_chord_rechaza_tokens_multi_codepoint_sin_partir` en
+/// `norte-frontend`), cada uno un hazard de terminal distinto.
+///
+/// ```
+/// let chords = norte_testkit::corpus::hostile_chords();
+/// assert_eq!(chords.len(), 4);
+/// // Todos son hazards de terminal detectados por la fuente única.
+/// for c in &chords {
+///     assert!(norte_encoding::is_terminal_hazard(c.token), "{}", c.id);
+/// }
+/// ```
+#[must_use]
+pub fn hostile_chords() -> Vec<HostileChord> {
+    vec![
+        HostileChord {
+            id: "rlo",
+            token: '\u{202E}',
+            why: "RIGHT-TO-LEFT OVERRIDE: reordena visualmente TODO lo que \
+                  sigue en la línea — en un footer `[chord] etiqueta` puede \
+                  hacer que cancel/confirm se vean intercambiados",
+        },
+        HostileChord {
+            id: "zwsp",
+            token: '\u{200B}',
+            why: "ZERO WIDTH SPACE: invisible, dos chords bindeados a \
+                  comandos distintos pueden pintarse indistinguibles",
+        },
+        HostileChord {
+            id: "lrm",
+            token: '\u{200E}',
+            why: "LEFT-TO-RIGHT MARK: override bidi invisible, altera el \
+                  orden visual de texto RTL vecino sin dejar marca visible",
+        },
+        HostileChord {
+            id: "bel",
+            token: '\u{0007}',
+            why: "BEL (control C0): un terminal sin sanear lo EJECUTA \
+                  (campana/pitido) en vez de pintarlo como texto",
+        },
+    ]
+}
+
 fn hex_decode(s: &str) -> Vec<u8> {
     assert!(s.len().is_multiple_of(2), "hex de longitud par: {s}");
     (0..s.len())

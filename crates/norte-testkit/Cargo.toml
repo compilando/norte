@@ -12,6 +12,11 @@ authors.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 futures.workspace = true
+# Predicado `is_terminal_hazard` que documenta por qué cada chord del corpus
+# `hostile_chords()` es hostil (encoding audit H1): dependencia de doctest y
+# de la doc, no del runtime del crate — norte-encoding ya dev-depende de este
+# crate (patrón de ciclo-en-dev-deps que cargo soporta).
+norte-encoding.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
 # SHA-256 del staging para VerifyPolicy::Hash (#35), hermana de la del core.

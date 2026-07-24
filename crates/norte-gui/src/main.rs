@@ -1891,9 +1891,20 @@ fn task_at_cursor(order: &[norte_proto::TaskId], cursor: usize) -> Option<norte_
 /// Texto del indicador de secuencia multi-tecla pendiente (#91): cada chord
 /// pendiente por su `Display`, seguido de un espacio (`"g g "`), o vacío si no
 /// hay secuencia en curso. PURA (sin GPUI): testeable sin levantar ventana.
+///
+/// RENDER-side duty (encoding audit H1): un chord de una capa hostil (`./
+/// .norte/keymap.toml`, capa de PROYECTO sin trust — `parse_chord` acepta
+/// CUALQUIER codepoint suelto como `KeyCode::Char`) llega aquí vía el
+/// resolver pendiente y se pinta en el pie de la ventana (#91); `Chord`'s
+/// `Display` lo escribe crudo A PROPÓSITO (logs/debug quieren el chord
+/// real), así que se enmascara aquí — mismo mecanismo que la TUI
+/// (`hints::dialog_hints`/`palette::first_chord`).
 #[must_use]
 fn pending_hint(chords: &[norte_frontend::keymap::Chord]) -> String {
-    chords.iter().map(|c| format!("{c} ")).collect()
+    chords
+        .iter()
+        .map(|c| norte_encoding::mask_terminal_hazards(&format!("{c} ")))
+        .collect()
 }
 
 /// Retiene solo las tasks NO terminales en `order` y `progress`, mutando
@@ -3884,6 +3895,30 @@ mod tests {
             KeyCode::Char('k'),
         );
         assert_eq!(pending_hint(&[ctrl_k, g]), "ctrl+k g ");
+    }
+
+    /// Encoding audit H1: un chord hostil (ligado desde un `keymap.toml` de
+    /// usuario/proyecto) resuelto por el resolver ACTIVO llega crudo a
+    /// `pending_hint` — se pinta al pie de la ventana (#91). Mismo defecto
+    /// que la TUI (`hints::dialog_hints`/`palette::first_chord`): el chord
+    /// se enmascara aquí, no en el motor.
+    #[test]
+    fn pending_hint_enmascara_chords_hostiles() {
+        use norte_frontend::keymap::{Chord, KeyCode, Mods};
+        for hazard in norte_testkit::corpus::hostile_chords() {
+            let c = Chord::new(Mods::default(), KeyCode::Char(hazard.token));
+            let hint = pending_hint(&[c]);
+            assert!(
+                hint.contains('\u{FFFD}'),
+                "[{}] debe enmascararse a U+FFFD: {hint:?}",
+                hazard.id
+            );
+            assert!(
+                !hint.contains(hazard.token),
+                "[{}] el chord crudo no debe sobrevivir: {hint:?}",
+                hazard.id
+            );
+        }
     }
 
     /// `retain_active` (#83, `task.dismiss`): quita de `order`/`progress`

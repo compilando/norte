@@ -4406,6 +4406,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures",
+ "norte-encoding",
  "norte-proto",
  "norte-vfs",
  "proptest",
