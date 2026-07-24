@@ -1151,7 +1151,8 @@ pub struct PendingWrite {
     /// Nombre localizado del ajuste (para el mensaje de confirmación).
     pub name: String,
     /// Nuevo valor en texto de PRESENTACIÓN (para el mensaje + la
-    /// actualización optimista de la fila, [`Settings::commit_row`]).
+    /// actualización optimista de la fila que hace `Settings` al construir
+    /// este valor).
     pub display: String,
 }
 

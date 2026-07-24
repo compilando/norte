@@ -161,7 +161,7 @@ pub fn fluent_desc_id(id: &str) -> String {
 /// first `.` (an id always has one — pinned by the coverage test below, over
 /// every entry in [`catalog`]); `key` swaps every `-` for `_` (ids are dashed
 /// for the Fluent derivation above, but `norte.toml` keys are `snake_case` —
-/// see [`crate::config::CommonConfig`]'s fields, e.g. `confirm_quit`). Shared
+/// see `norte_config::CommonConfig`'s fields, e.g. `confirm_quit`). Shared
 /// by the TUI overlay (S3) and the GUI view (S4): both write through
 /// `norte_config::persist_set(dir, section, key, value)`, and must derive the
 /// exact same wire location from the same id.
