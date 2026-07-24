@@ -1689,6 +1689,15 @@ async fn dispatch(
         methods::PLUGIN_COLUMN_VALUES => {
             handle_plugin_column_values(req.params, &conn.actor, shared).await
         }
+        // plugin.get_config (G3c): ABIERTO, mismo criterio que plugin.list.
+        // plugin.set_config (G3c): SOLO humanos, mismo criterio que
+        // plugin.set_approval/set_enabled — ajustes de plugin son datos de
+        // usuario, un agente no los edita por su cuenta.
+        methods::PLUGIN_GET_CONFIG => handle_plugin_get_config(req.params, shared).await,
+        methods::PLUGIN_SET_CONFIG => {
+            let p: methods::PluginSetConfigParams = parse_params(req.params)?;
+            handle_plugin_set_config(&conn.actor, &p, shared).await
+        }
         _ => dispatch_fs_task(req, conn_id, conn.actor.clone(), shared).await,
     }
 }
@@ -2474,6 +2483,77 @@ async fn handle_plugin_column_values(
     .await
     .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "column_values task panicked"))?;
     to_value(&methods::PluginColumnValuesResult { values })
+}
+
+/// `plugin.get_config` (0.28.0, G3c, ADR 0037): esquema `[config]` + valor
+/// EFECTIVO de `id`, uno por clave. ABIERTO a cualquier conexión (leer un
+/// esquema/valor no consiente nada, mismo criterio que `plugin.preview*`/
+/// `plugin.decorate`). `id` desconocido responde `keys: []` (mismo criterio
+/// indulgente que `plugin.list` con un catálogo vacío — nunca un error).
+/// Barato: solo lee bajo el lock, sin `spawn_blocking` (a diferencia de
+/// `plugin.decorate`/`column_values`, que instancian WASM).
+#[tracing::instrument(skip_all)]
+async fn handle_plugin_get_config(
+    params: Option<serde_json::Value>,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::PluginGetConfigParams = parse_params(params)?;
+    let keys = {
+        let reg = shared.plugins.lock().expect("plugins lock sano");
+        reg.config_keys(&p.id).unwrap_or_default()
+    };
+    let keys = keys
+        .into_iter()
+        .map(|(key, spec, value)| crate::plugins::config_key_to_wire(key, &spec, value))
+        .collect();
+    to_value(&methods::PluginGetConfigResult { keys })
+}
+
+/// `plugin.set_config` (0.28.0, G3c, ADR 0037): persiste UN valor de
+/// `[config]`, validado contra el ESQUEMA del manifiesto (la MISMA
+/// validación que `config.toml`, vía `PluginRegistry::set_config`). Ajustes
+/// de plugin son DATOS DE USUARIO, no un acto de consentimiento de
+/// capabilities — pero SIGUE siendo humano-only (mismo criterio que
+/// [`handle_plugin_set_approval`]/[`handle_plugin_set_enabled`]: un agente
+/// no reconfigura un plugin por su cuenta). Un id/clave desconocidos o un
+/// valor inválido son `INVALID_PARAMS`; NADA se persiste en ese caso
+/// (`PluginRegistry::set_config` valida ANTES de escribir).
+// `skip_all` sin `id`/`key`: crudos del wire, no validados aún (mismo
+// criterio que set_approval/set_enabled — solo se loguean tras confirmar).
+#[tracing::instrument(skip_all)]
+async fn handle_plugin_set_config(
+    actor: &Actor,
+    p: &methods::PluginSetConfigParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection may change a plugin's settings",
+        ));
+    }
+    let id = p.id.clone();
+    let key = p.key.clone();
+    let value = p.value.clone();
+    // El lock se sostiene DURANTE la escritura (a diferencia de
+    // set_approval/set_enabled, que lo sueltan antes de persistir):
+    // deliberado — serializa el read-modify-write de `config.toml` para
+    // ESTE plugin frente a un `set_config` concurrente sobre otra clave del
+    // mismo plugin, que si no podría perder una escritura (dos
+    // lecturas-modificaciones-escrituras de `config.toml` entrelazadas).
+    // Sigue corriendo en `spawn_blocking` (regla 2: la escritura + el
+    // re-`resolve_settings` son I/O síncrona), así que el reactor async
+    // nunca bloquea — solo un hilo de la pool bloqueante sostiene el lock.
+    let shared = Arc::clone(shared);
+    tokio::task::spawn_blocking(move || {
+        let mut reg = shared.plugins.lock().expect("plugins lock sano");
+        reg.set_config(&id, &key, &value)
+    })
+    .await
+    .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "set_config task panicked"))?
+    .map_err(|e| RpcError::protocol(codes::INVALID_PARAMS, e.to_string()))?;
+    tracing::info!(id = %p.id, key = %p.key, "ajuste de plugin cambiado por el humano");
+    to_value(&methods::PluginSetConfigResult {})
 }
 
 /// Instante de expiración de un scope a partir de su `ttl_ms`: clamp a

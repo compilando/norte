@@ -247,9 +247,30 @@
       null
     ]
   },
+  "plugin_column_info": {
+    "id": "git-status",
+    "header": "Git"
+  },
   "plugin_command_info": {
     "id": "greet",
     "title": "Greet"
+  },
+  "plugin_config_key_wire_bare": {
+    "key": "greeting",
+    "kind": "string",
+    "default": "hola",
+    "values": [],
+    "value": "hola"
+  },
+  "plugin_config_key_wire_full": {
+    "key": "retries",
+    "kind": "int",
+    "default": "3",
+    "min": 0,
+    "max": 10,
+    "values": [],
+    "description": "Número de reintentos.",
+    "value": "5"
   },
   "plugin_decorate_params": {
     "paths": [
@@ -274,12 +295,37 @@
   "plugin_decorate_result_empty": {
     "plugins": []
   },
+  "plugin_get_config_params": {
+    "id": "org.norte.demo"
+  },
+  "plugin_get_config_result": {
+    "keys": [
+      {
+        "key": "greeting",
+        "kind": "string",
+        "default": "hola",
+        "values": [],
+        "value": "hola"
+      },
+      {
+        "key": "mode",
+        "kind": "enum",
+        "default": "fast",
+        "values": ["fast", "thorough"],
+        "value": "thorough"
+      }
+    ]
+  },
+  "plugin_get_config_result_empty": {
+    "keys": []
+  },
   "plugin_info": {
     "approved": true,
     "capabilities": [
       "fs-read"
     ],
     "category": "previewer",
+    "columns": [],
     "commands": [],
     "enabled": true,
     "id": "org.norte.demo",
@@ -293,6 +339,12 @@
       "fs-read"
     ],
     "category": "previewer",
+    "columns": [
+      {
+        "id": "git-status",
+        "header": "Git"
+      }
+    ],
     "commands": [
       {
         "id": "greet",
@@ -325,6 +377,7 @@
           "fs-read"
         ],
         "category": "previewer",
+        "columns": [],
         "commands": [],
         "enabled": false,
         "id": "org.norte.demo",
@@ -385,6 +438,12 @@
     "id": "org.norte.demo"
   },
   "plugin_set_approval_result": {},
+  "plugin_set_config_params": {
+    "id": "org.norte.demo",
+    "key": "mode",
+    "value": "thorough"
+  },
+  "plugin_set_config_result": {},
   "plugin_set_enabled_params": {
     "enabled": false,
     "id": "org.norte.demo"

@@ -369,7 +369,7 @@ fn golden_methods() {
     check_methods_plugin(&fixtures);
     check_methods_rpc(&fixtures);
     check_methods_index(&fixtures);
-    assert_eq!(fixtures.len(), 84, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 92, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `index.*` (0.25.0, M4, ADR 0034): build + query del índice de búsqueda.
@@ -445,6 +445,7 @@ fn check_methods_plugin(fixtures: &BTreeMap<String, Value>) {
     check_methods_plugin_governance(fixtures);
     check_methods_plugin_exec(fixtures);
     check_methods_plugin_data_out_v2(fixtures);
+    check_methods_plugin_config(fixtures);
 }
 
 /// Casos de [`PluginInfo`]/[`PluginCommandInfo`] (P1, 0.26.0): el shape sin
@@ -452,13 +453,23 @@ fn check_methods_plugin(fixtures: &BTreeMap<String, Value>) {
 /// `PluginCommandInfo`. Función propia para no desbordar el límite de
 /// líneas de `check_methods_plugin_governance`.
 fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
-    use norte_proto::methods::{PluginCommandInfo, PluginInfo, PluginListResult, PluginLoadError};
+    use norte_proto::methods::{
+        PluginColumnInfo, PluginCommandInfo, PluginInfo, PluginListResult, PluginLoadError,
+    };
     check_one(
         fixtures,
         "plugin_command_info",
         &PluginCommandInfo {
             id: "greet".into(),
             title: "Greet".into(),
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_column_info",
+        &PluginColumnInfo {
+            id: "git-status".into(),
+            header: "Git".into(),
         },
     );
     check_one(
@@ -475,10 +486,11 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
             enabled: true,
             description: None,
             commands: vec![],
+            columns: vec![],
         },
     );
-    // (P1) description + commands POBLADOS: golden nuevo, no reemplaza al de
-    // arriba (que sigue cubriendo el shape sin ellos).
+    // (P1/G3c) description + commands + columns POBLADOS: golden nuevo, no
+    // reemplaza al de arriba (que sigue cubriendo el shape sin ellos).
     check_one(
         fixtures,
         "plugin_info_with_commands",
@@ -502,6 +514,10 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
                     title: "Wave".into(),
                 },
             ],
+            columns: vec![PluginColumnInfo {
+                id: "git-status".into(),
+                header: "Git".into(),
+            }],
         },
     );
     check_one(
@@ -519,6 +535,7 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
                 enabled: false,
                 description: None,
                 commands: vec![],
+                columns: vec![],
             }],
             errors: vec![PluginLoadError {
                 dir: "/plugins/broken".into(),
@@ -612,6 +629,102 @@ fn check_methods_plugin_exec(fixtures: &BTreeMap<String, Value>) {
         fixtures,
         "plugin_preview_result_none",
         &PluginPreviewResult { preview: None },
+    );
+}
+
+/// Familia `plugin.*` de CONFIGURACIÓN (0.28.0, G3c, ADR 0037): esquema +
+/// valor efectivo (`plugin.get_config`) y persistir un valor
+/// (`plugin.set_config`). `plugin_config_key_wire_bare` cubre el shape
+/// mínimo (min/max/description ausentes, values vacío — todos
+/// `skip_serializing_if`/aditivos siempre presentes según corresponda);
+/// `plugin_config_key_wire_full` el shape con TODO poblado (tipo `int` con
+/// min/max, que son los únicos campos opcionales de la struct).
+fn check_methods_plugin_config(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{
+        PluginConfigKeyWire, PluginGetConfigParams, PluginGetConfigResult, PluginSetConfigParams,
+        PluginSetConfigResult,
+    };
+    check_one(
+        fixtures,
+        "plugin_get_config_params",
+        &PluginGetConfigParams {
+            id: "org.norte.demo".into(),
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_config_key_wire_bare",
+        &PluginConfigKeyWire {
+            key: "greeting".into(),
+            kind: "string".into(),
+            default: "hola".into(),
+            min: None,
+            max: None,
+            values: vec![],
+            description: None,
+            value: "hola".into(),
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_config_key_wire_full",
+        &PluginConfigKeyWire {
+            key: "retries".into(),
+            kind: "int".into(),
+            default: "3".into(),
+            min: Some(0),
+            max: Some(10),
+            values: vec![],
+            description: Some("Número de reintentos.".into()),
+            value: "5".into(),
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_get_config_result",
+        &PluginGetConfigResult {
+            keys: vec![
+                PluginConfigKeyWire {
+                    key: "greeting".into(),
+                    kind: "string".into(),
+                    default: "hola".into(),
+                    min: None,
+                    max: None,
+                    values: vec![],
+                    description: None,
+                    value: "hola".into(),
+                },
+                PluginConfigKeyWire {
+                    key: "mode".into(),
+                    kind: "enum".into(),
+                    default: "fast".into(),
+                    min: None,
+                    max: None,
+                    values: vec!["fast".into(), "thorough".into()],
+                    description: None,
+                    value: "thorough".into(),
+                },
+            ],
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_get_config_result_empty",
+        &PluginGetConfigResult { keys: vec![] },
+    );
+    check_one(
+        fixtures,
+        "plugin_set_config_params",
+        &PluginSetConfigParams {
+            id: "org.norte.demo".into(),
+            key: "mode".into(),
+            value: "thorough".into(),
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_set_config_result",
+        &PluginSetConfigResult {},
     );
 }
 
@@ -1434,7 +1547,11 @@ fn method_names_frozen() {
     // 0.26.0 (P1): PluginInfo gana description + commands (sin método nuevo).
     // 0.27.0 (G3, ADR 0037): plugin.preview_styled/decorate/column_values —
     // datos estructurados de plugin, pinta el host.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.27.0");
+    assert_eq!(methods::PLUGIN_GET_CONFIG, "plugin.get_config");
+    assert_eq!(methods::PLUGIN_SET_CONFIG, "plugin.set_config");
+    // 0.28.0 (G3c, ADR 0037): plugin.get_config/set_config — [config] de P2
+    // por el wire; PluginInfo gana columns (sin método nuevo).
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.28.0");
 }
 
 #[test]

@@ -168,7 +168,25 @@ use crate::{
 /// nombre desconocido degrada a `None` + warning, jamás a error duro (mismo
 /// trato indulgente que ADR 0020 da a un tema mal escrito). Aditivo sobre
 /// 0.26.x — la ventana pasa a N=0.27.x/N-1=0.26.x.
-pub const PROTOCOL_VERSION: &str = "0.27.0";
+///
+/// 0.28.0 (G3c, ADR 0037): cierra las DOS deudas acumuladas de G3.
+/// - [`PluginInfo`] gana `columns` (`Vec<`[`PluginColumnInfo`]`>`, aditivo —
+///   default `vec![]`, mismo criterio que `commands` en 0.26.0): la UI de
+///   columnas del gestor de extensiones ahora puede DESCUBRIR qué columnas
+///   contribuye cada plugin sin adivinar por `category == "columns"`.
+/// - Dos métodos nuevos que exponen `[config]` de P2 POR EL WIRE (P2 lo
+///   dejó host-only a propósito, diferido a este bump — ver el rustdoc de
+///   `norte_core::PluginRegistry::settings_of`): [`PLUGIN_GET_CONFIG`]
+///   (esquema + valor efectivo, `keys: Vec<`[`PluginConfigKeyWire`]`>`) y
+///   [`PLUGIN_SET_CONFIG`] (persiste UN valor tras validarlo contra el
+///   MISMO esquema — jamás una ruta de validación paralela; SOLO humano,
+///   mismo criterio que [`PLUGIN_SET_APPROVAL`]). `min`/`max` son
+///   `Option<i64>` (`skip_serializing_if` cuando ausentes), `values` es
+///   `Vec<String>` (vacío para tipos no-enum, SIEMPRE presente — mismo
+///   criterio "aditivo siempre presente" que `commands`), `description` es
+///   texto del PLUGIN — NO confiable (mismo trato que `PluginCommandInfo::title`).
+///   Aditivo sobre 0.27.x — la ventana pasa a N=0.28.x/N-1=0.27.x.
+pub const PROTOCOL_VERSION: &str = "0.28.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -409,6 +427,26 @@ pub const PLUGIN_DECORATE: &str = "plugin.decorate";
 /// (`VERSION_MISMATCH` de handshake); `MethodNotFound`/la decisión del
 /// cliente degradan a no mostrar la columna.
 pub const PLUGIN_COLUMN_VALUES: &str = "plugin.column_values";
+/// `plugin.get_config` — esquema `[config]` + valores EFECTIVOS de un plugin
+/// (0.28.0, G3c, ADR 0037): un elemento [`PluginConfigKeyWire`] por clave
+/// declarada, esquema y valor ACTUAL juntos (`schema+value together`) — un
+/// gestor de extensiones remoto no tenía forma de leer esto antes de este
+/// bump (P2 lo dejó host-only, ver el rustdoc de
+/// `norte_core::PluginRegistry::settings_of`). `id` desconocido responde
+/// `keys: []` (mismo criterio
+/// indulgente que `plugin.list` con un catálogo vacío — nunca un error por
+/// "no tengo nada que mostrar"). ABIERTO a cualquier conexión (leer un
+/// esquema/valor no consiente nada, mismo criterio que `plugin.preview*`).
+pub const PLUGIN_GET_CONFIG: &str = "plugin.get_config";
+/// `plugin.set_config` — persiste UN valor de `[config]` para un plugin
+/// (0.28.0, G3c, ADR 0037), tras validarlo contra el ESQUEMA del manifiesto
+/// (la MISMA validación que `config.toml`, nunca una ruta paralela — ver
+/// `norte_plugin_host::encode_wire_value`). Un valor inválido no persiste
+/// nada (`INVALID_PARAMS`). SOLO una conexión HUMANA (no-agente) puede
+/// llamarlo — mismo criterio que [`PLUGIN_SET_APPROVAL`]/[`PLUGIN_SET_ENABLED`]:
+/// los ajustes de un plugin son datos de USUARIO, un agente no los edita por
+/// su cuenta.
+pub const PLUGIN_SET_CONFIG: &str = "plugin.set_config";
 /// `rpc.cancel` — notificación client→server (#72): retira la request en
 /// vuelo cuyo `id` JSON-RPC se indica. Best-effort y SIN respuesta: la
 /// confirmación real es que la request cancelada responde con su desenlace
@@ -1036,6 +1074,29 @@ pub struct PluginCommandInfo {
     pub title: String,
 }
 
+/// Una columna que un plugin `columns` contribuye (elemento de
+/// [`PluginInfo::columns`], 0.28.0, G3c, ADR 0037): discovery — con QUÉ
+/// `column_id` llamar a [`PLUGIN_COLUMN_VALUES`] y QUÉ cabecera pintar, sin
+/// que el frontend tenga que adivinar por `category == "columns"`. `header`
+/// es texto del plugin — NO confiable, un frontend debe enmascararlo antes
+/// de renderizarlo (mismo trato que [`PluginCommandInfo::title`]).
+///
+/// ```
+/// use norte_proto::methods::PluginColumnInfo;
+/// let c: PluginColumnInfo =
+///     serde_json::from_str(r#"{"id":"git-status","header":"Git"}"#).unwrap();
+/// assert_eq!(c.id, "git-status");
+/// assert_eq!(c.header, "Git");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginColumnInfo {
+    /// Id de la columna (el mismo `column_id` que espera
+    /// [`PLUGIN_COLUMN_VALUES`]).
+    pub id: String,
+    /// Cabecera legible para mostrar. Texto del plugin — NO confiable.
+    pub header: String,
+}
+
 /// Un plugin descubierto (elemento de [`PluginListResult::plugins`], M4-P3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginInfo {
@@ -1067,6 +1128,12 @@ pub struct PluginInfo {
     /// campo — se toma por su default (`vec![]`) al deserializar aquí.
     #[serde(default)]
     pub commands: Vec<PluginCommandInfo>,
+    /// Columnas que el plugin contribuye (0.28.0, G3c); vacío si no
+    /// contribuye ninguna. Un peer N-1 que construye su propio `PluginInfo`
+    /// no emite este campo — se toma por su default (`vec![]`) al
+    /// deserializar aquí (mismo criterio aditivo que `commands` en 0.26.0).
+    #[serde(default)]
+    pub columns: Vec<PluginColumnInfo>,
 }
 
 /// Un directorio de plugin que NO se pudo cargar (elemento de
@@ -1327,3 +1394,95 @@ pub struct PluginColumnValuesResult {
     /// `None` = la columna no aplica a esa entrada.
     pub values: Vec<Option<String>>,
 }
+
+/// Params de [`PLUGIN_GET_CONFIG`] (0.28.0, G3c).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginGetConfigParams {
+    /// Id del plugin cuyo esquema `[config]` se consulta.
+    pub id: String,
+}
+
+/// Una clave `[config.<key>]` del esquema de un plugin, esquema + valor
+/// EFECTIVO juntos (elemento de [`PluginGetConfigResult::keys`], 0.28.0,
+/// G3c, ADR 0037): mismo criterio "schema+value together" que evita una
+/// segunda ida y vuelta al wire para pintar la UI de ajustes. `kind` es
+/// texto CERRADO (`"string"|"bool"|"int"|"enum"` — los cuatro únicos que
+/// `norte_plugin_host::ConfigKeySpec` declara); un frontend que ve un valor
+/// desconocido (peer más nuevo) debe tratarlo como no-editable, jamás
+/// reventar. `default`/`value` viajan como `String` SIEMPRE (la MISMA
+/// codificación canónica que `norte_plugin_host::resolve_settings`: `bool`
+/// → `"true"`/`"false"`, `int` → decimal), coherente con
+/// [`PluginSetConfigParams::value`], que también es `String`.
+///
+/// ```
+/// use norte_proto::methods::PluginConfigKeyWire;
+/// let k: PluginConfigKeyWire = serde_json::from_str(
+///     r#"{"key":"greeting","kind":"string","default":"hola","value":"hola"}"#,
+/// )
+/// .unwrap();
+/// assert_eq!(k.key, "greeting");
+/// assert_eq!(k.kind, "string");
+/// assert!(k.min.is_none());
+/// assert!(k.values.is_empty());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginConfigKeyWire {
+    /// Nombre de la clave (charset `[a-z0-9-]{1,32}` del manifiesto, seguro
+    /// de mostrar tal cual — mismo criterio que
+    /// `norte_plugin_host::is_valid_config_key`).
+    pub key: String,
+    /// Tipo declarado: `"string"`, `"bool"`, `"int"` o `"enum"`.
+    pub kind: String,
+    /// Valor por defecto del esquema, codificado como string canónico.
+    pub default: String,
+    /// Cota inferior inclusive (solo `kind == "int"`). Ausente = sin cota.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<i64>,
+    /// Cota superior inclusive (solo `kind == "int"`). Ausente = sin cota.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<i64>,
+    /// Valores permitidos (solo `kind == "enum"`); vacío para el resto de
+    /// tipos — SIEMPRE presente (mismo criterio aditivo que
+    /// `PluginInfo::commands`), nunca omitido.
+    #[serde(default)]
+    pub values: Vec<String>,
+    /// Descripción cosmética del manifiesto. Texto del plugin — NO
+    /// confiable, un frontend debe enmascararla antes de renderizarla
+    /// (mismo trato que `PluginInfo::description`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Valor EFECTIVO actual (defaults de esquema + `config.toml` ya
+    /// superpuesto), codificado como string canónico — la MISMA
+    /// codificación que `default`.
+    pub value: String,
+}
+
+/// Result de [`PLUGIN_GET_CONFIG`]: el esquema completo + valores
+/// efectivos, EN ORDEN DE CLAVE del manifiesto (mismo criterio que
+/// `PluginInfo::commands`: orden de manifiesto, no reordenado). `id`
+/// desconocido responde `keys: []` — nunca un error (mismo criterio
+/// indulgente que `PLUGIN_LIST` con un catálogo vacío).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginGetConfigResult {
+    /// Una entrada por clave `[config.<key>]` declarada.
+    pub keys: Vec<PluginConfigKeyWire>,
+}
+
+/// Params de [`PLUGIN_SET_CONFIG`] (0.28.0, G3c): `value` es SIEMPRE
+/// `String` (la codificación canónica descrita en
+/// [`PluginConfigKeyWire::value`]) — el daemon la valida contra el ESQUEMA
+/// de `key` antes de persistir; nunca se persiste sin validar (spec S2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginSetConfigParams {
+    /// Id del plugin cuyo ajuste se cambia.
+    pub id: String,
+    /// Clave `[config.<key>]` a fijar.
+    pub key: String,
+    /// Valor nuevo, codificado como string canónico (ver
+    /// [`PluginConfigKeyWire::value`]).
+    pub value: String,
+}
+
+/// Result de [`PLUGIN_SET_CONFIG`]: objeto vacío, reservado para extensión.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginSetConfigResult {}

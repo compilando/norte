@@ -1079,6 +1079,98 @@ impl Backend {
             Self::Remote(r) => r.plugin_column_values(column_id, paths).await,
         }
     }
+
+    /// Esquema `[config]` + valores efectivos de `id` (0.28.0, G3c, ADR
+    /// 0037): cierra la deuda P2 (`settings` era host-only). Id desconocido
+    /// devuelve `keys: []` (mismo criterio indulgente que
+    /// [`Self::plugins_list`] con un catálogo vacío). Embebido: registro
+    /// EFÍMERO por-llamada en `spawn_blocking` (regla 2), igual criterio de
+    /// coste que [`Self::plugins_list`].
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo; con el daemon caído,
+    /// `ProviderUnavailable{retryable:true}`.
+    pub async fn plugin_get_config(
+        &self,
+        id: &str,
+    ) -> Result<norte_proto::methods::PluginGetConfigResult, Error> {
+        match self {
+            Self::Embedded(_) => {
+                let dir = crate::connect::config_dir();
+                let id = id.to_owned();
+                let keys = tokio::task::spawn_blocking(
+                    move || -> Result<Vec<norte_proto::methods::PluginConfigKeyWire>, Error> {
+                        let reg = crate::PluginRegistry::discover(&dir)
+                            .map_err(|_| Error::Io { retryable: false })?;
+                        Ok(reg
+                            .config_keys(&id)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|(key, spec, value)| {
+                                crate::plugins::config_key_to_wire(key, &spec, value)
+                            })
+                            .collect())
+                    },
+                )
+                .await
+                .map_err(|_| Error::Internal { panic: true })??;
+                Ok(norte_proto::methods::PluginGetConfigResult { keys })
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.plugin_get_config(id).await,
+        }
+    }
+
+    /// Persiste UN valor de `[config]` para `id`, validado contra el
+    /// esquema del manifiesto (0.28.0, G3c, ADR 0037). Embebido: registro
+    /// EFÍMERO por-llamada + `PluginRegistry::set_config` (valida, persiste,
+    /// re-resuelve), TODO en `spawn_blocking`.
+    ///
+    /// # Invariante de seguridad (defensa en profundidad)
+    /// Igual que [`Self::plugins_set_approval`]: el gate "solo humano" vive
+    /// en la capa wire (daemon con `Actor`); este `Backend` embebido es la
+    /// API del frontend humano y no recibe `Actor`.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] si `id` es desconocido; taxonomía del protocolo
+    /// en lo demás (un valor inválido o clave desconocida llega como un
+    /// error genérico — el caller debe validar client-side ANTES de llamar,
+    /// que es lo que hacen TUI/GUI).
+    pub async fn plugin_set_config(&self, id: &str, key: &str, value: &str) -> Result<(), Error> {
+        match self {
+            Self::Embedded(_) => {
+                let dir = crate::connect::config_dir();
+                let id = id.to_owned();
+                let key = key.to_owned();
+                let value = value.to_owned();
+                tokio::task::spawn_blocking(move || -> Result<(), Error> {
+                    let mut reg = crate::PluginRegistry::discover(&dir)
+                        .map_err(|_| Error::Io { retryable: false })?;
+                    reg.set_config(&id, &key, &value)
+                        .map_err(|e| config_set_error_to_taxonomy(&e))
+                })
+                .await
+                .map_err(|_| Error::Internal { panic: true })?
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.plugin_set_config(id, key, value).await,
+        }
+    }
+}
+
+/// Mapea un fallo de [`crate::PluginRegistry::set_config`] a la taxonomía
+/// del protocolo (modo EMBEBIDO): un id desconocido es honestamente
+/// `NotFound` (mismo criterio que [`Backend::plugins_set_approval`]); el
+/// resto (clave desconocida / valor inválido / I/O) se REDACTA a `Internal`
+/// — el caller (TUI/GUI) valida client-side ANTES de llamar, así que este
+/// camino solo se pisa por un valor que se coló esa barrera (backstop, no
+/// UX primaria).
+fn config_set_error_to_taxonomy(e: &crate::plugins::PluginConfigSetError) -> Error {
+    use crate::plugins::PluginConfigSetError as E;
+    match e {
+        E::Unknown(_) => Error::NotFound,
+        E::UnknownKey(_) | E::Invalid(_) | E::Io(_) => Error::Internal { panic: false },
+    }
 }
 
 /// Mapea el fallo de ejecución de un plugin a la taxonomía del protocolo (modo
@@ -2241,6 +2333,46 @@ pub mod remote {
                 Ok(res) => map_column_values_result(res, paths.len()),
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             }
+        }
+
+        /// `plugin.get_config` contra el daemon (0.28.0, G3c). Sin fallback
+        /// especial: un daemon N-1 (0.27, que no tiene el handler) responde
+        /// `MethodNotFound`, que `call_timed`/`to_taxonomy` degradan a un
+        /// error genérico — el caller (TUI/GUI) trata "no pude leer la
+        /// config" como "esconde la sección de ajustes de este plugin",
+        /// nunca como un crash.
+        pub(super) async fn plugin_get_config(
+            &self,
+            id: &str,
+        ) -> Result<methods::PluginGetConfigResult, Error> {
+            self.call_timed(
+                methods::PLUGIN_GET_CONFIG,
+                &methods::PluginGetConfigParams { id: id.to_owned() },
+            )
+            .await
+        }
+
+        /// `plugin.set_config` contra el daemon (0.28.0, G3c). Mismo
+        /// criterio de fallback que [`Self::plugin_get_config`] — SIN
+        /// fallback especial, un error (incluido un daemon N-1 sin el
+        /// handler, o un valor rechazado por el daemon) se propaga tal cual.
+        pub(super) async fn plugin_set_config(
+            &self,
+            id: &str,
+            key: &str,
+            value: &str,
+        ) -> Result<(), Error> {
+            let _: methods::PluginSetConfigResult = self
+                .call_timed(
+                    methods::PLUGIN_SET_CONFIG,
+                    &methods::PluginSetConfigParams {
+                        id: id.to_owned(),
+                        key: key.to_owned(),
+                        value: value.to_owned(),
+                    },
+                )
+                .await?;
+            Ok(())
         }
     }
 

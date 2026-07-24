@@ -701,11 +701,11 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.27.0 (G3): acepta 0.27.x (N) y 0.26.x (N-1), rechaza 0.25.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.27.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.26.0"), "N-1");
+    // 0.28.0 (G3c): acepta 0.28.x (N) y 0.27.x (N-1), rechaza 0.26.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.28.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.27.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.25.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.26.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -765,6 +765,7 @@ fn plugin_types_roundtrip() {
             enabled: true,
             description: None,
             commands: vec![],
+            columns: vec![],
         }],
         errors: vec![PluginLoadError {
             dir: "/plugins/broken".into(),
@@ -823,6 +824,7 @@ fn plugin_info_none_description_omitted_on_wire() {
         enabled: true,
         description: None,
         commands: vec![],
+        columns: vec![],
     };
     let wire = serde_json::to_string(&info).unwrap();
     assert!(
@@ -833,6 +835,32 @@ fn plugin_info_none_description_omitted_on_wire() {
         wire.contains(r#""commands":[]"#),
         "commands es aditivo pero SIEMPRE presente (sin skip_if vacío): {wire}"
     );
+    assert!(
+        wire.contains(r#""columns":[]"#),
+        "columns (0.28.0, G3c) es aditivo pero SIEMPRE presente (sin skip_if vacío): {wire}"
+    );
+}
+
+/// (G3c, 0.28.0) Tolerancia N-1: un peer que emite `PluginInfo` en el shape
+/// 0.27.x (sin `columns`) debe seguir deserializando aquí — cae a su
+/// default (`vec![]`), mismo criterio que `plugin_info_old_shape_tolerance`
+/// para `description`/`commands` en 0.26.0.
+#[test]
+fn plugin_info_pre_028_shape_tolerance() {
+    use norte_proto::methods::PluginInfo;
+    let shape_027 = r#"{
+        "id": "org.norte.demo",
+        "name": "Demo Previewer",
+        "publisher": "norte",
+        "version": "0.1.0",
+        "category": "previewer",
+        "capabilities": ["fs-read"],
+        "approved": true,
+        "enabled": true,
+        "commands": []
+    }"#;
+    let info: PluginInfo = serde_json::from_str(shape_027).expect("shape 0.27.x tolerado");
+    assert!(info.columns.is_empty());
 }
 
 #[test]

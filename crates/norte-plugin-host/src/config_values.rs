@@ -176,6 +176,57 @@ fn default_string(spec: &ConfigKeySpec) -> String {
     }
 }
 
+/// Valida un valor SUBMITTED POR EL WIRE (`plugin.set_config`, G3c) contra
+/// `spec` y lo codifica a su forma canónica de string — la MISMA validación
+/// que [`resolve_settings`] aplica a `config.toml` (fuente única, spec S2:
+/// "validated against the schema BEFORE writing"), nunca una ruta paralela.
+///
+/// A diferencia de `config.toml` (TOML tipado: `toml::Value::Boolean`/
+/// `Integer` nativos), el wire manda SIEMPRE un `String` (`PluginSetConfigParams::value`) —
+/// esta función hace el parseo mínimo que el tipo declarado exige antes de
+/// reusar `encode_override` (privada, mismo módulo): `bool` exige
+/// EXACTAMENTE `"true"`/`"false"` (nada de `"1"`/`"yes"`, mismo rigor que
+/// un `config.toml` con `clave = "true"` en vez de `clave = true` —
+/// TAMBIÉN sería `WrongType` ahí), `int` exige decimal ASCII válido para
+/// `i64`. `string`/`enum` pasan el texto tal cual (su propio
+/// charset/longitud los valida `encode_override`).
+///
+/// # Errors
+/// [`ConfigValueError::WrongType`] si `raw` no parsea al tipo de `spec`;
+/// el resto de variantes de `encode_override` (rango, enum, longitud) tal
+/// cual.
+pub fn encode_wire_value(
+    key: &str,
+    spec: &ConfigKeySpec,
+    raw: &str,
+) -> Result<String, ConfigValueError> {
+    let value = match spec {
+        ConfigKeySpec::String { .. } | ConfigKeySpec::Enum { .. } => {
+            toml::Value::String(raw.to_string())
+        }
+        ConfigKeySpec::Bool { .. } => match raw {
+            "true" => toml::Value::Boolean(true),
+            "false" => toml::Value::Boolean(false),
+            _ => {
+                return Err(ConfigValueError::WrongType {
+                    key: key.to_string(),
+                    expected: "bool",
+                });
+            }
+        },
+        ConfigKeySpec::Int { .. } => match raw.parse::<i64>() {
+            Ok(i) => toml::Value::Integer(i),
+            Err(_) => {
+                return Err(ConfigValueError::WrongType {
+                    key: key.to_string(),
+                    expected: "int",
+                });
+            }
+        },
+    };
+    encode_override(key, spec, value)
+}
+
 /// Valida `value` (crudo de `config.toml`) contra `spec` y lo codifica a su
 /// forma canónica de string. `key` viaja SOLO para nombrar el error (nunca
 /// se interpola `value`, #73).
@@ -353,6 +404,69 @@ pub fn persist_plugin_setting(
     key: &str,
     value: &str,
 ) -> io::Result<std::path::PathBuf> {
+    persist_plugin_setting_item(config_dir, plugin_id, key, toml_edit::value(value))
+}
+
+/// Como [`persist_plugin_setting`] pero escribe `raw` con el tipo TOML NATIVO
+/// que `spec` declara (bool → booleano TOML, int → entero TOML, string/enum →
+/// string TOML) en vez de siempre string (G3c, `plugin.set_config`).
+/// Necesario porque una re-lectura posterior vía [`resolve_settings`] espera
+/// el mismo tipado NATIVO que `config.toml` de un humano produciría — un
+/// `clave = "true"` (string) para una clave `bool` fallaría ahí con
+/// `WrongType`, exactamente igual que si un humano lo hubiera escrito a mano.
+///
+/// `raw` DEBE llegar ya validado (el caller llama primero a
+/// [`encode_wire_value`], que es exactamente lo que hace
+/// `PluginRegistry::set_config`) — esta función no revalida el rango/enum,
+/// solo tipa. Un `raw` que no parsea al tipo de `spec` (violación del
+/// invariante del caller) es [`io::ErrorKind::InvalidInput`], nunca un panic.
+///
+/// # Errors
+/// Igual que [`persist_plugin_setting`], más [`io::ErrorKind::InvalidInput`]
+/// si `raw` no parsea al tipo NATIVO de `spec` (invariante del caller roto).
+pub fn persist_plugin_setting_typed(
+    config_dir: &Path,
+    plugin_id: &str,
+    key: &str,
+    spec: &ConfigKeySpec,
+    raw: &str,
+) -> io::Result<std::path::PathBuf> {
+    use std::io::{Error, ErrorKind};
+    let item = match spec {
+        ConfigKeySpec::String { .. } | ConfigKeySpec::Enum { .. } => toml_edit::value(raw),
+        ConfigKeySpec::Bool { .. } => match raw {
+            "true" => toml_edit::value(true),
+            "false" => toml_edit::value(false),
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    "raw bool inválido (debió validarse antes con encode_wire_value)",
+                ));
+            }
+        },
+        ConfigKeySpec::Int { .. } => {
+            let i: i64 = raw.parse().map_err(|_| {
+                Error::new(
+                    ErrorKind::InvalidInput,
+                    "raw int inválido (debió validarse antes con encode_wire_value)",
+                )
+            })?;
+            toml_edit::value(i)
+        }
+    };
+    persist_plugin_setting_item(config_dir, plugin_id, key, item)
+}
+
+/// Primitivo compartido de [`persist_plugin_setting`]/
+/// [`persist_plugin_setting_typed`]: valida `plugin_id` como segmento de
+/// ruta, crea el directorio si falta, parsea (o crea) `config.toml` y fija
+/// `key` al `item` YA construido, preservando comentarios/formato.
+fn persist_plugin_setting_item(
+    config_dir: &Path,
+    plugin_id: &str,
+    key: &str,
+    item: toml_edit::Item,
+) -> io::Result<std::path::PathBuf> {
     use std::io::{Error, ErrorKind};
     if !plugin_id_is_safe_path_segment(plugin_id) {
         return Err(Error::new(
@@ -380,7 +494,7 @@ pub fn persist_plugin_setting(
         Err(e) if e.kind() == ErrorKind::NotFound => toml_edit::DocumentMut::new(),
         Err(e) => return Err(e),
     };
-    doc[key] = toml_edit::value(value);
+    doc[key] = item;
     std::fs::write(&path, doc.to_string())?;
     Ok(path)
 }

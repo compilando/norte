@@ -27,7 +27,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use norte_plugin_host::Catalog;
-use norte_proto::methods::{PluginCommandInfo, PluginInfo, PluginListResult, PluginLoadError};
+use norte_proto::methods::{
+    PluginColumnInfo, PluginCommandInfo, PluginInfo, PluginListResult, PluginLoadError,
+};
 use toml_edit::{DocumentMut, InlineTable, Item, Table, Value};
 
 /// Estado que el usuario fija sobre un plugin descubierto. Ausente = ambos
@@ -69,6 +71,26 @@ pub enum PluginRunError {
     /// El runtime WASM falló al compilar, instanciar o ejecutar el componente.
     #[error("runtime: {0}")]
     Runtime(#[from] norte_plugin_host::RuntimeError),
+}
+
+/// Fallo al fijar UN valor de `[config]` vía [`PluginRegistry::set_config`]
+/// (0.28.0, G3c). Igual que [`ConfigValueError`](norte_plugin_host::ConfigValueError)
+/// (que envuelve en [`Self::Invalid`]), NINGUNA variante lleva el VALOR
+/// submitted — solo la clave (issue #73, mismo criterio).
+#[derive(Debug, thiserror::Error)]
+pub enum PluginConfigSetError {
+    /// No hay ningún plugin descubierto con ese id.
+    #[error("plugin desconocido: {0}")]
+    Unknown(String),
+    /// `key` no está declarada en `[config]` del manifiesto.
+    #[error("clave de config desconocida: {0}")]
+    UnknownKey(String),
+    /// El valor no valida contra el tipo/rango/enum de la clave.
+    #[error("valor inválido: {0}")]
+    Invalid(#[from] norte_plugin_host::ConfigValueError),
+    /// Fallo de I/O al persistir o al re-resolver tras escribir.
+    #[error("i/o: {0}")]
+    Io(#[source] io::Error),
 }
 
 /// Tope de bytes que el core lee de un archivo al PREVISUALIZAR (1 MiB,
@@ -219,6 +241,80 @@ pub(crate) fn column_values_checked(
     (out.len() == expected_len).then_some(out)
 }
 
+/// Convierte UNA entrada de [`PluginRegistry::config_keys`] a su forma de
+/// wire (0.28.0, G3c, `plugin.get_config`): `kind`/`default`/`min`/`max`/
+/// `values`/`description` salen del ESQUEMA (`spec`), `value` del efectivo
+/// ya resuelto (parámetro separado, no del esquema). `default` se codifica
+/// con el MISMO criterio canónico que
+/// `norte_plugin_host::resolve_settings` (`bool` → `"true"`/`"false"`,
+/// `int` → decimal) para que `default`/`value` sean directamente
+/// comparables por un frontend.
+pub(crate) fn config_key_to_wire(
+    key: String,
+    spec: &norte_plugin_host::ConfigKeySpec,
+    value: String,
+) -> norte_proto::methods::PluginConfigKeyWire {
+    use norte_plugin_host::ConfigKeySpec;
+    use norte_proto::methods::PluginConfigKeyWire;
+    match spec {
+        ConfigKeySpec::String {
+            default,
+            description,
+        } => PluginConfigKeyWire {
+            key,
+            kind: "string".into(),
+            default: default.clone(),
+            min: None,
+            max: None,
+            values: Vec::new(),
+            description: description.clone(),
+            value,
+        },
+        ConfigKeySpec::Bool {
+            default,
+            description,
+        } => PluginConfigKeyWire {
+            key,
+            kind: "bool".into(),
+            default: default.to_string(),
+            min: None,
+            max: None,
+            values: Vec::new(),
+            description: description.clone(),
+            value,
+        },
+        ConfigKeySpec::Int {
+            default,
+            min,
+            max,
+            description,
+        } => PluginConfigKeyWire {
+            key,
+            kind: "int".into(),
+            default: default.to_string(),
+            min: *min,
+            max: *max,
+            values: Vec::new(),
+            description: description.clone(),
+            value,
+        },
+        ConfigKeySpec::Enum {
+            default,
+            values,
+            description,
+        } => PluginConfigKeyWire {
+            key,
+            kind: "enum".into(),
+            default: default.clone(),
+            min: None,
+            max: None,
+            values: values.clone(),
+            description: description.clone(),
+            value,
+        },
+    }
+}
+
 /// ¿El glob `pat` (`text/*` o exacto `application/json`) casa `mime`?
 fn mimetype_matches(pat: &str, mime: &str) -> bool {
     match pat.strip_suffix("/*") {
@@ -334,6 +430,22 @@ impl PluginRegistry {
                             title: c.title.clone(),
                         })
                         .collect(),
+                    // (G3c, 0.28.0) columns mirrors `Contributions.columns`
+                    // the SAME way `commands` mirrors `Contributions.command`
+                    // above: manifest order, discovery-only (NOT gated on
+                    // approved/enabled — a plugin's contributed columns are
+                    // metadata a human inspects BEFORE approving, same as
+                    // `commands`/`capabilities` already are).
+                    columns: e
+                        .manifest
+                        .contributions
+                        .columns
+                        .iter()
+                        .map(|c| PluginColumnInfo {
+                            id: c.id.clone(),
+                            header: c.header.clone(),
+                        })
+                        .collect(),
                 }
             })
             .collect();
@@ -374,10 +486,10 @@ impl PluginRegistry {
     /// mapa vacío (mismo criterio que
     /// [`norte_plugin_host::Manifest::config`]).
     ///
-    /// Host-side ONLY (P2 decisión 5): no cruza el wire — lo consume
-    /// directamente `norte doctor` (que corre embebido); la vista del
-    /// gestor de extensiones queda diferida al bump de protocolo que exige
-    /// G3.
+    /// Host-side ONLY (P2 decisión 5): no cruza el wire directamente — lo
+    /// consume `norte doctor` (que corre embebido) y, desde G3c,
+    /// [`Self::config_keys`] (que SÍ cruza el wire vía
+    /// `plugin.get_config`).
     #[must_use]
     pub fn settings_of(&self, id: &str) -> Option<&BTreeMap<String, String>> {
         self.catalog
@@ -385,6 +497,88 @@ impl PluginRegistry {
             .iter()
             .find(|p| p.manifest.id == id)
             .map(|p| &p.settings)
+    }
+
+    /// Esquema `[config]` de `id` + valores EFECTIVOS, EMPAREJADOS en orden
+    /// de clave del manifiesto (0.28.0, G3c): la fuente que alimenta
+    /// `plugin.get_config` — cada `(key, spec, value)` se traduce 1:1 a un
+    /// `PluginConfigKeyWire` en `norte-core/daemon/server.rs`. `None` si
+    /// `id` no está en el catálogo (mismo criterio que
+    /// [`Self::settings_of`]); un `[config]` vacío/ausente da `Some(vec![])`,
+    /// nunca `None` — el catálogo SÍ conoce el plugin, solo no declara
+    /// ninguna clave.
+    ///
+    /// Invariante: `entry.settings` (resuelto por
+    /// [`norte_plugin_host::resolve_settings`] al descubrir) SIEMPRE
+    /// contiene un valor para cada clave de `entry.manifest.config` — un
+    /// `unwrap_or_default` cubriría una violación de ese invariante sin
+    /// panicar (defensa en profundidad, nunca debería activarse en la
+    /// práctica).
+    #[must_use]
+    pub fn config_keys(
+        &self,
+        id: &str,
+    ) -> Option<Vec<(String, norte_plugin_host::ConfigKeySpec, String)>> {
+        let entry = self.catalog.plugins.iter().find(|p| p.manifest.id == id)?;
+        Some(
+            entry
+                .manifest
+                .config
+                .iter()
+                .map(|(key, spec)| {
+                    let value = entry.settings.get(key).cloned().unwrap_or_default();
+                    (key.clone(), spec.clone(), value)
+                })
+                .collect(),
+        )
+    }
+
+    /// Valida `value` contra el esquema `[config.<key>]` de `id` (la MISMA
+    /// validación que `config.toml`, vía
+    /// [`norte_plugin_host::encode_wire_value`]) y, si pasa, persiste +
+    /// RE-RESUELVE `settings_of`/[`Self::config_keys`] EN MEMORIA para que
+    /// una instanciación futura (o una `plugin.get_config` inmediatamente
+    /// después) vea el valor nuevo (0.28.0, G3c). Nunca persiste si la
+    /// validación falla (spec S2: "validated against the schema BEFORE
+    /// writing").
+    ///
+    /// # Errors
+    /// [`PluginConfigSetError::Unknown`] si `id` no está en el catálogo;
+    /// [`PluginConfigSetError::UnknownKey`] si `key` no está declarada en
+    /// `[config]`; [`PluginConfigSetError::Invalid`] si el valor no valida
+    /// contra el tipo/rango/enum de la clave; [`PluginConfigSetError::Io`]
+    /// si falla la escritura o la re-resolución tras escribir.
+    pub fn set_config(
+        &mut self,
+        id: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<(), PluginConfigSetError> {
+        let idx = self
+            .catalog
+            .plugins
+            .iter()
+            .position(|p| p.manifest.id == id)
+            .ok_or_else(|| PluginConfigSetError::Unknown(id.to_string()))?;
+        let spec = self.catalog.plugins[idx]
+            .manifest
+            .config
+            .get(key)
+            .cloned()
+            .ok_or_else(|| PluginConfigSetError::UnknownKey(key.to_string()))?;
+        norte_plugin_host::encode_wire_value(key, &spec, value)
+            .map_err(PluginConfigSetError::Invalid)?;
+        norte_plugin_host::persist_plugin_setting_typed(&self.config_dir, id, key, &spec, value)
+            .map_err(PluginConfigSetError::Io)?;
+        let manifest = self.catalog.plugins[idx].manifest.clone();
+        let dir = self.catalog.plugins[idx].dir.clone();
+        let refreshed = norte_plugin_host::resolve_settings(&manifest, &dir).map_err(|e| {
+            PluginConfigSetError::Io(io::Error::other(format!(
+                "re-resolver config tras escribir: {e}"
+            )))
+        })?;
+        self.catalog.plugins[idx].settings = refreshed;
+        Ok(())
     }
 
     /// Ruta esperada del binario de `id`: `<config_dir>/plugins/<id>/plugin.wasm`.

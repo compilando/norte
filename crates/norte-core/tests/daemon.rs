@@ -224,7 +224,7 @@ async fn initialize_rechaza_version_incompatible() {
             },
         )
         .await
-        .expect_err("0.1.0 no es N ni N-1 de 0.27.0");
+        .expect_err("0.1.0 no es N ni N-1 de 0.28.0");
     match err {
         ClientError::Rpc(rpc) => {
             // Código PROPIO: la señal de upgrade jamás se parsea de message.
@@ -235,14 +235,14 @@ async fn initialize_rechaza_version_incompatible() {
         }
         other => panic!("esperaba Rpc, fue {other:?}"),
     }
-    // N-1 (0.26.x) SÍ entra.
+    // N-1 (0.27.x) SÍ entra.
     let c2 = Client::connect(&d.socket).await.expect("connect");
     let ok: methods::InitializeResult = c2
         .call(
             methods::INITIALIZE,
             &InitializeParams {
                 client_info: client_info(),
-                protocol_version: "0.26.2".into(),
+                protocol_version: "0.27.2".into(),
                 encodings: vec![],
                 agent_session: None,
             },
@@ -1648,7 +1648,7 @@ async fn frames_hostiles_y_formas_canonicas_crudas() {
 
     // initialize + daemon.shutdown con params null (golden canónico, M1).
     s.write_all(
-        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.26.0\",\"encodings\":[\"json\"]}}\n",
+        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.27.0\",\"encodings\":[\"json\"]}}\n",
     )
     .await
     .expect("write");
@@ -2226,6 +2226,263 @@ async fn plugin_run_command_id_desconocido_es_invalid_params() {
         .await
         .expect_err("id desconocido");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+}
+
+/// Manifiesto con `[config]` (G3c): tres claves de tipos distintos, para
+/// ejercitar `plugin.get_config`/`plugin.set_config` de punta a punta por
+/// el socket.
+const CONFIG_MANIFEST: &str = r#"
+[plugin]
+id = "org.norte.cfg"
+name = "Cfg Demo"
+publisher = "norte"
+version = "0.1.0"
+category = "command"
+
+[config.greeting]
+type = "string"
+default = "hola"
+
+[config.retries]
+type = "int"
+default = 3
+min = 0
+max = 10
+
+[config.mode]
+type = "enum"
+default = "fast"
+values = ["fast", "thorough"]
+"#;
+
+/// Daemon sembrado con [`CONFIG_MANIFEST`] (G3c) — espejo de
+/// `spawn_daemon_plugins`, distinto manifiesto.
+async fn spawn_daemon_config_plugin() -> TestDaemon {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    let plugins_root = dir.path().join("cfg");
+    let plugin_dir = plugins_root.join("plugins").join("org.norte.cfg");
+    std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin");
+    std::fs::write(plugin_dir.join("plugin.toml"), CONFIG_MANIFEST).expect("write manifest");
+
+    let engine = Arc::new(Engine::new());
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    let daemon = Daemon::bind(
+        engine,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+            plugins_dir: Some(plugins_root),
+        },
+    )
+    .await
+    .expect("bind");
+    let run = tokio::spawn(daemon.run());
+    TestDaemon {
+        socket,
+        run,
+        _dir: dir,
+        mem,
+    }
+}
+
+/// `plugin.get_config` por el socket: esquema + valor efectivo de las TRES
+/// claves, ABIERTO a cualquier conexión (leer no consiente nada) — incluso
+/// SIN aprobar/activar el plugin (mismo criterio que `plugin.list`).
+#[tokio::test]
+async fn plugin_get_config_ve_el_esquema_y_los_defaults() {
+    let d = spawn_daemon_config_plugin().await;
+    let c = connected_client(&d).await;
+    let res: methods::PluginGetConfigResult = c
+        .call(
+            methods::PLUGIN_GET_CONFIG,
+            &methods::PluginGetConfigParams {
+                id: "org.norte.cfg".into(),
+            },
+        )
+        .await
+        .expect("plugin.get_config");
+    assert_eq!(res.keys.len(), 3);
+    let greeting = res.keys.iter().find(|k| k.key == "greeting").unwrap();
+    assert_eq!(greeting.kind, "string");
+    assert_eq!(greeting.value, "hola");
+    let retries = res.keys.iter().find(|k| k.key == "retries").unwrap();
+    assert_eq!(retries.kind, "int");
+    assert_eq!(retries.min, Some(0));
+    assert_eq!(retries.max, Some(10));
+    let mode = res.keys.iter().find(|k| k.key == "mode").unwrap();
+    assert_eq!(mode.kind, "enum");
+    assert_eq!(
+        mode.values,
+        vec!["fast".to_string(), "thorough".to_string()]
+    );
+}
+
+/// `plugin.get_config` de un id DESCONOCIDO responde `keys: []` — nunca un
+/// error (mismo criterio indulgente que `plugin.list` con un catálogo
+/// vacío).
+#[tokio::test]
+async fn plugin_get_config_id_desconocido_es_keys_vacio() {
+    let d = spawn_daemon_config_plugin().await;
+    let c = connected_client(&d).await;
+    let res: methods::PluginGetConfigResult = c
+        .call(
+            methods::PLUGIN_GET_CONFIG,
+            &methods::PluginGetConfigParams {
+                id: "org.norte.fantasma".into(),
+            },
+        )
+        .await
+        .expect("plugin.get_config no es error con id desconocido");
+    assert!(res.keys.is_empty());
+}
+
+/// Un HUMANO fija un valor válido; `plugin.get_config` lo refleja Y
+/// persistió (una NUEVA conexión también lo ve).
+#[tokio::test]
+async fn plugin_set_config_humano_se_refleja_y_persiste() {
+    let d = spawn_daemon_config_plugin().await;
+    let human = connected_client(&d).await;
+    let _: methods::PluginSetConfigResult = human
+        .call(
+            methods::PLUGIN_SET_CONFIG,
+            &methods::PluginSetConfigParams {
+                id: "org.norte.cfg".into(),
+                key: "greeting".into(),
+                value: "hola mundo".into(),
+            },
+        )
+        .await
+        .expect("set_config con un valor válido");
+
+    let res: methods::PluginGetConfigResult = human
+        .call(
+            methods::PLUGIN_GET_CONFIG,
+            &methods::PluginGetConfigParams {
+                id: "org.norte.cfg".into(),
+            },
+        )
+        .await
+        .expect("get_config tras set_config");
+    assert_eq!(
+        res.keys.iter().find(|k| k.key == "greeting").unwrap().value,
+        "hola mundo"
+    );
+
+    let otra = connected_client(&d).await;
+    let res2: methods::PluginGetConfigResult = otra
+        .call(
+            methods::PLUGIN_GET_CONFIG,
+            &methods::PluginGetConfigParams {
+                id: "org.norte.cfg".into(),
+            },
+        )
+        .await
+        .expect("get_config en otra conexión");
+    assert_eq!(
+        res2.keys
+            .iter()
+            .find(|k| k.key == "greeting")
+            .unwrap()
+            .value,
+        "hola mundo",
+        "el valor persistió"
+    );
+}
+
+/// Un valor INVÁLIDO (fuera de `[min,max]`) es `INVALID_PARAMS` y NO se
+/// persiste — `plugin.get_config` sigue viendo el default.
+#[tokio::test]
+async fn plugin_set_config_valor_invalido_no_persiste() {
+    let d = spawn_daemon_config_plugin().await;
+    let human = connected_client(&d).await;
+    let err = human
+        .call::<_, methods::PluginSetConfigResult>(
+            methods::PLUGIN_SET_CONFIG,
+            &methods::PluginSetConfigParams {
+                id: "org.norte.cfg".into(),
+                key: "retries".into(),
+                value: "999".into(),
+            },
+        )
+        .await
+        .expect_err("999 fuera de [0,10]");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+
+    let res: methods::PluginGetConfigResult = human
+        .call(
+            methods::PLUGIN_GET_CONFIG,
+            &methods::PluginGetConfigParams {
+                id: "org.norte.cfg".into(),
+            },
+        )
+        .await
+        .expect("get_config tras el rechazo");
+    assert_eq!(
+        res.keys.iter().find(|k| k.key == "retries").unwrap().value,
+        "3",
+        "el rechazo no debe haber tocado el default"
+    );
+}
+
+/// Una clave DESCONOCIDA es `INVALID_PARAMS` (no se ensucia `config.toml`
+/// con claves que el esquema no declara).
+#[tokio::test]
+async fn plugin_set_config_clave_desconocida_es_invalid_params() {
+    let d = spawn_daemon_config_plugin().await;
+    let human = connected_client(&d).await;
+    let err = human
+        .call::<_, methods::PluginSetConfigResult>(
+            methods::PLUGIN_SET_CONFIG,
+            &methods::PluginSetConfigParams {
+                id: "org.norte.cfg".into(),
+                key: "no-such-key".into(),
+                value: "x".into(),
+            },
+        )
+        .await
+        .expect_err("clave desconocida");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+}
+
+/// Un AGENTE (conexión con `agent_session`) NO puede cambiar un ajuste de
+/// plugin: es dato de USUARIO, mismo criterio que
+/// `plugin_set_approval_agente_es_invalid_request` → `INVALID_REQUEST`, y
+/// NO deja rastro (el humano sigue viendo el default).
+#[tokio::test]
+async fn plugin_set_config_agente_es_invalid_request() {
+    let d = spawn_daemon_config_plugin().await;
+    let agent = connected_agent(&d, "claude-01").await;
+    let err = agent
+        .call::<_, methods::PluginSetConfigResult>(
+            methods::PLUGIN_SET_CONFIG,
+            &methods::PluginSetConfigParams {
+                id: "org.norte.cfg".into(),
+                key: "greeting".into(),
+                value: "hola agente".into(),
+            },
+        )
+        .await
+        .expect_err("un agente no cambia ajustes de plugin");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
+
+    let human = connected_client(&d).await;
+    let res: methods::PluginGetConfigResult = human
+        .call(
+            methods::PLUGIN_GET_CONFIG,
+            &methods::PluginGetConfigParams {
+                id: "org.norte.cfg".into(),
+            },
+        )
+        .await
+        .expect("get_config");
+    assert_eq!(
+        res.keys.iter().find(|k| k.key == "greeting").unwrap().value,
+        "hola",
+        "el rechazo no dejó rastro"
+    );
 }
 
 /// `plugin.preview` de un archivo cuando NO hay ningún previewer instalado
