@@ -181,6 +181,32 @@ pub enum KeymapError {
     },
 }
 
+/// One finding from [`Effective::build_diagnostics`]: reported WITHOUT
+/// stopping the walk, unlike [`Effective::build_for`], which fails on the
+/// first defect. `norte doctor` (#102) maps each to a report row in a
+/// SINGLE pass — no per-typo rebuild, no retry cap, and no non-convergent
+/// `lua:`-charset case (a broken `lua:` name can never be fixed by extending
+/// `known_commands`, so the retry-with-known trick never terminates for it;
+/// the one-pass walk classifies it directly instead).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeymapDiagnostic {
+    /// A plain (non-`lua:`) `run` name absent from `known_commands` — a typo
+    /// or a binding for a newer version's command. Recoverable: the rest of
+    /// the keymap is unaffected. `run` is UNTRUSTED config text.
+    UnknownCommand {
+        /// The unrecognized command name (untrusted config text).
+        run: String,
+    },
+    /// A defect that would make [`Effective::build_for`] fail outright: a bad
+    /// chord, an empty or `esc`-bearing sequence, a wrong layer key, an
+    /// ambiguous prefix, or a `lua:` name that fails the charset. Carries the
+    /// rendered [`KeymapError`] message (may embed UNTRUSTED config text).
+    Structural {
+        /// Human-readable description (from the underlying [`KeymapError`]).
+        message: String,
+    },
+}
+
 /// Parsea `"ctrl+alt+x"`, `"f5"`, `"g"`, `"shift+f5"`, `"esc"`…
 ///
 /// # Errors
@@ -462,6 +488,139 @@ pub fn valid_lua_name(name: &str) -> bool {
         })
 }
 
+/// Each layer admits ONLY its own lists (phase-4 review): a preset defines
+/// `keymap`; a user/project layer defines `prepend_keymap`/`append_keymap`.
+/// Silently dropping the wrong list would be the "weird behavior" the ADR
+/// forbids. Returns the first offending layer/key (there is at most one kind
+/// of mistake worth reporting per source). Shared by [`Effective::build_for`]
+/// (fails on it) and [`Effective::build_diagnostics`] (reports it and keeps
+/// walking — the bindings still merge from the CORRECT lists via `merge_ctx`).
+fn check_layer_keys(preset: &KeymapFile, layers: &[KeymapFile]) -> Result<(), KeymapError> {
+    for section in [&preset.global, &preset.pane, &preset.viewer, &preset.dialog] {
+        if !(section.prepend_keymap.is_empty() && section.append_keymap.is_empty()) {
+            return Err(KeymapError::WrongLayerKey {
+                layer: "preset",
+                key: "prepend_keymap/append_keymap",
+            });
+        }
+    }
+    for layer in layers {
+        for section in [&layer.global, &layer.pane, &layer.viewer, &layer.dialog] {
+            if !section.keymap.is_empty() {
+                return Err(KeymapError::WrongLayerKey {
+                    layer: "usuario",
+                    key: "keymap",
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validates ONE merged binding. `Ok(Some(binding))` = keep it;
+/// `Ok(None)` = a lenient-filtered PRESET binding (a command this frontend
+/// does not implement — skipped silently, only in [`Strictness::Lenient`]);
+/// `Err` = a defect. Shared by [`Effective::build_for`] (fails on the first
+/// `Err`) and [`Effective::build_diagnostics`] (collects every `Err` and
+/// keeps walking) — the SINGLE source of the per-binding rules, so the two
+/// paths can never drift.
+fn check_binding(
+    raw: &RawBinding,
+    origin: Origin,
+    known_commands: &[&str],
+    preset_strictness: Strictness,
+) -> Result<Option<(Vec<Chord>, String)>, KeymapError> {
+    let seq: Vec<Chord> = raw
+        .on
+        .iter()
+        .map(|s| parse_chord(s))
+        .collect::<Result<_, _>>()?;
+    if seq.is_empty() {
+        return Err(KeymapError::EmptySequence {
+            run: raw.run.clone(),
+        });
+    }
+    // Esc es la cancelación de secuencia (lo cazó el proptest: un esc
+    // no-inicial sería inalcanzable): solo como binding suelto.
+    if seq.len() > 1 && seq.iter().any(|c| c.is_bare_esc()) {
+        return Err(KeymapError::EscInSequence {
+            sequence: format!("{:?}", raw.on),
+        });
+    }
+    // `lua:<nombre>` (M4 Lua, T8): el registro de comandos Lua es DINÁMICO
+    // (runtime), así que no se valida contra `known_commands` — solo el
+    // charset del nombre (la MISMA `valid_lua_name`, una sola fuente). Un
+    // comando lua no registrado al invocar NO es error de keymap: el frontend
+    // con host avisa en runtime. Se aplica IGUAL en modo lenient — el
+    // filtrado de `build_for_subset` es SOLO por `known_commands` desconocido,
+    // jamás una vía para colarse del charset lua:.
+    if let Some(lua_name) = raw.run.strip_prefix("lua:") {
+        if !valid_lua_name(lua_name) {
+            return Err(KeymapError::UnknownCommand {
+                run: raw.run.clone(),
+            });
+        }
+    } else if !known_commands.contains(&raw.run.as_str()) {
+        // En modo Lenient, SOLO los bindings del `keymap` del preset se
+        // filtran en silencio (el frontend no implementa ese comando
+        // compartido); un binding de CAPA (prepend/append de usuario o
+        // proyecto) sigue siendo estricto — un typo de usuario jamás debe
+        // morir en silencio (ADR 0006).
+        if preset_strictness == Strictness::Lenient && origin == Origin::Preset {
+            return Ok(None);
+        }
+        return Err(KeymapError::UnknownCommand {
+            run: raw.run.clone(),
+        });
+    }
+    Ok(Some((seq, raw.run.clone())))
+}
+
+/// Prefix-free: no sequence is a strict prefix of another (ADR 0006 — without
+/// timeouts, resolution must be deterministic). Runs over the ALREADY-filtered
+/// set — a preset binding skipped in `Lenient` mode must not block a foreign
+/// prefix. Returns the first ambiguous pair; shared by both builders.
+fn check_prefix_free(bindings: &[(Vec<Chord>, String)]) -> Result<(), KeymapError> {
+    for (i, (a, _)) in bindings.iter().enumerate() {
+        for (b, _) in bindings.iter().skip(i + 1) {
+            let (short, long) = if a.len() < b.len() { (a, b) } else { (b, a) };
+            if short.len() < long.len() && long[..short.len()] == short[..] {
+                return Err(KeymapError::AmbiguousPrefix {
+                    shorter: format!("{short:?}"),
+                    longer: format!("{long:?}"),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The merged, ordered binding list for `screen` (screen-specific context
+/// before `global`, ADR 0006), with project-layer `lua:` bindings discarded
+/// and counted. Shared by [`Effective::build_for`] and
+/// [`Effective::build_diagnostics`] so the merge order is defined once.
+fn merged_bindings<'a>(
+    preset: &'a KeymapFile,
+    layers: &'a [KeymapFile],
+    screen: Screen,
+    discarded_lua_bindings: &mut usize,
+) -> Vec<(&'a RawBinding, Origin)> {
+    let specific: fn(&KeymapFile) -> &RawSection = match screen {
+        Screen::Browse => |f| &f.pane,
+        Screen::Viewer => |f| &f.viewer,
+        Screen::Dialog => |f| &f.dialog,
+    };
+    merge_ctx(preset, layers, specific, discarded_lua_bindings)
+        .into_iter()
+        .chain(merge_ctx(
+            preset,
+            layers,
+            |f| &f.global,
+            discarded_lua_bindings,
+        ))
+        .collect()
+}
+
 impl Effective {
     /// Fusiona `preset` + capa opcional de usuario (ADR 0006). Azúcar de
     /// [`Self::build_layered`] con cero o una capa.
@@ -536,118 +695,95 @@ impl Effective {
         screen: Screen,
         preset_strictness: Strictness,
     ) -> Result<Self, KeymapError> {
-        // Cada capa admite SOLO sus listas (revisión fase 4): descartar en
-        // silencio la lista equivocada sería el "comportamiento raro" que
-        // el ADR prohíbe.
-        for section in [&preset.global, &preset.pane, &preset.viewer, &preset.dialog] {
-            if !(section.prepend_keymap.is_empty() && section.append_keymap.is_empty()) {
-                return Err(KeymapError::WrongLayerKey {
-                    layer: "preset",
-                    key: "prepend_keymap/append_keymap",
-                });
-            }
-        }
-        for layer in layers {
-            for section in [&layer.global, &layer.pane, &layer.viewer, &layer.dialog] {
-                if !section.keymap.is_empty() {
-                    return Err(KeymapError::WrongLayerKey {
-                        layer: "usuario",
-                        key: "keymap",
-                    });
-                }
-            }
-        }
-        // Entre contextos: el específico de la pantalla antes que global.
-        // La fusión (con el descarte de `lua:` de la capa de proyecto) vive
-        // en [`merge_ctx`].
-        let specific: fn(&KeymapFile) -> &RawSection = match screen {
-            Screen::Browse => |f| &f.pane,
-            Screen::Viewer => |f| &f.viewer,
-            Screen::Dialog => |f| &f.dialog,
-        };
+        check_layer_keys(preset, layers)?;
         let mut discarded_lua_bindings = 0usize;
-        let ordered: Vec<(&RawBinding, Origin)> =
-            merge_ctx(preset, layers, specific, &mut discarded_lua_bindings)
-                .into_iter()
-                .chain(merge_ctx(
-                    preset,
-                    layers,
-                    |f| &f.global,
-                    &mut discarded_lua_bindings,
-                ))
-                .collect();
+        let ordered = merged_bindings(preset, layers, screen, &mut discarded_lua_bindings);
 
         let mut seen: HashSet<Vec<Chord>> = HashSet::new();
         let mut bindings: Vec<(Vec<Chord>, String)> = Vec::new();
         for (raw, origin) in ordered {
-            let seq: Vec<Chord> = raw
-                .on
-                .iter()
-                .map(|s| parse_chord(s))
-                .collect::<Result<_, _>>()?;
-            if seq.is_empty() {
-                return Err(KeymapError::EmptySequence {
-                    run: raw.run.clone(),
-                });
-            }
-            // Esc es la cancelación de secuencia (lo cazó el proptest: un
-            // esc no-inicial sería inalcanzable): solo como binding suelto.
-            if seq.len() > 1 && seq.iter().any(|c| c.is_bare_esc()) {
-                return Err(KeymapError::EscInSequence {
-                    sequence: format!("{:?}", raw.on),
-                });
-            }
-            // `lua:<nombre>` (M4 Lua, T8): el registro de comandos Lua es
-            // DINÁMICO (runtime), así que no se valida contra
-            // `known_commands` — solo el charset del nombre (la MISMA
-            // `valid_lua_name`, una sola fuente). Un comando lua no
-            // registrado al invocar NO es error de keymap: el frontend con
-            // host avisa en runtime. Se aplica IGUAL en modo lenient — el
-            // filtrado de `build_for_subset` es SOLO por `known_commands`
-            // desconocido, jamás una vía para colarse del charset lua:.
-            if let Some(lua_name) = raw.run.strip_prefix("lua:") {
-                if !valid_lua_name(lua_name) {
-                    return Err(KeymapError::UnknownCommand {
-                        run: raw.run.clone(),
-                    });
-                }
-            } else if !known_commands.contains(&raw.run.as_str()) {
-                // En modo Lenient, SOLO los bindings del `keymap` del
-                // preset se filtran en silencio (el frontend no implementa
-                // ese comando compartido); un binding de CAPA (prepend/
-                // append de usuario o proyecto) sigue siendo estricto — un
-                // typo de usuario jamás debe morir en silencio (ADR 0006).
-                if preset_strictness == Strictness::Lenient && origin == Origin::Preset {
-                    continue;
-                }
-                return Err(KeymapError::UnknownCommand {
-                    run: raw.run.clone(),
-                });
-            }
-            // El primero gana (el orden YA codifica la precedencia).
-            if seen.insert(seq.clone()) {
-                bindings.push((seq, raw.run.clone()));
-            }
-        }
-
-        // Prefix-free: ninguna secuencia es prefijo estricto de otra. Corre
-        // sobre el set YA filtrado — un binding de preset descartado en
-        // modo Lenient no debe poder bloquear un prefijo ajeno.
-        for (i, (a, _)) in bindings.iter().enumerate() {
-            for (b, _) in bindings.iter().skip(i + 1) {
-                let (short, long) = if a.len() < b.len() { (a, b) } else { (b, a) };
-                if short.len() < long.len() && long[..short.len()] == short[..] {
-                    return Err(KeymapError::AmbiguousPrefix {
-                        shorter: format!("{short:?}"),
-                        longer: format!("{long:?}"),
-                    });
+            if let Some((seq, run)) = check_binding(raw, origin, known_commands, preset_strictness)?
+            {
+                // El primero gana (el orden YA codifica la precedencia).
+                if seen.insert(seq.clone()) {
+                    bindings.push((seq, run));
                 }
             }
         }
+        check_prefix_free(&bindings)?;
         Ok(Self {
             bindings,
             discarded_lua_bindings,
         })
+    }
+
+    /// Builds the effective keymap for `screen` in a SINGLE pass, collecting
+    /// EVERY defect as a [`KeymapDiagnostic`] instead of failing on the first
+    /// (as [`Effective::build_for`] does). Unlike the diagnostic loop it
+    /// replaces (issue #102), it needs no per-typo rebuild and no anti-DoS
+    /// retry cap, and it cannot get stuck on the non-convergent `lua:`-charset
+    /// case: a broken `lua:` name is classified directly as
+    /// [`KeymapDiagnostic::Structural`] (extending `known_commands` could never
+    /// fix it). Strictness matches [`Effective::build_for`] (`Strict`) — the
+    /// caller (`norte doctor`) validates against the union of the bundled
+    /// presets' commands, so a preset binding is never silently filtered here.
+    ///
+    /// Findings appear in walk order: wrong-layer-key (if any), then each
+    /// binding's defect, then the first ambiguous prefix. An empty result
+    /// means the keymap is clean.
+    #[must_use]
+    pub fn build_diagnostics(
+        preset: &KeymapFile,
+        layers: &[KeymapFile],
+        known_commands: &[&str],
+        screen: Screen,
+    ) -> Vec<KeymapDiagnostic> {
+        let mut diags = Vec::new();
+        if let Err(e) = check_layer_keys(preset, layers) {
+            // A wrong layer key does not stop the walk: `merge_ctx` reads the
+            // CORRECT lists, so binding-level findings are still worth
+            // reporting in the same pass.
+            diags.push(KeymapDiagnostic::Structural {
+                message: e.to_string(),
+            });
+        }
+        let mut discarded = 0usize;
+        let ordered = merged_bindings(preset, layers, screen, &mut discarded);
+        let mut seen: HashSet<Vec<Chord>> = HashSet::new();
+        let mut bindings: Vec<(Vec<Chord>, String)> = Vec::new();
+        for (raw, origin) in ordered {
+            match check_binding(raw, origin, known_commands, Strictness::Strict) {
+                Ok(Some((seq, run))) => {
+                    if seen.insert(seq.clone()) {
+                        bindings.push((seq, run));
+                    }
+                }
+                // Unreachable under `Strict` (no lenient filtering), but a
+                // filtered binding is simply skipped either way.
+                Ok(None) => {}
+                Err(KeymapError::UnknownCommand { run })
+                    if run.strip_prefix("lua:").is_none_or(valid_lua_name) =>
+                {
+                    // A PLAIN unknown command (or a well-formed `lua:` name
+                    // that just is not in `known` — impossible here since
+                    // valid `lua:` names are accepted, so this arm is the
+                    // plain case): recoverable.
+                    diags.push(KeymapDiagnostic::UnknownCommand { run });
+                }
+                // The remaining `UnknownCommand` is a `lua:` name that FAILS
+                // the charset (`valid_lua_name` — single source): structural,
+                // never fixable by extending `known_commands`.
+                Err(e) => diags.push(KeymapDiagnostic::Structural {
+                    message: e.to_string(),
+                }),
+            }
+        }
+        if let Err(e) = check_prefix_free(&bindings) {
+            diags.push(KeymapDiagnostic::Structural {
+                message: e.to_string(),
+            });
+        }
+        diags
     }
 
     /// Bindings `lua:` descartados por venir de la capa de PROYECTO (`./
@@ -1437,6 +1573,64 @@ keymap = [{ on = ["x"], run = "lua:Bad Name" }]"#,
             Err(KeymapError::UnknownCommand { .. }) => {}
             other => panic!("esperaba UnknownCommand, fue {other:?}"),
         }
+    }
+
+    /// `build_diagnostics` (#102): reports EVERY unknown-command finding in
+    /// ONE walk — no per-typo rebuild, no retry cap. Three distinct made-up
+    /// `run` names in a layer must all come back as `UnknownCommand`
+    /// diagnostics from a single call.
+    #[test]
+    fn build_diagnostics_reporta_todos_los_desconocidos_en_una_pasada() {
+        let preset =
+            parse_keymap("[pane]\nkeymap = [{ on = [\"q\"], run = \"app.quit\" }]\n").unwrap();
+        let layer = parse_keymap(
+            "[pane]\nappend_keymap = [\n { on = [\"x\"], run = \"typo.one\" },\n { on = [\"y\"], run = \"typo.two\" },\n { on = [\"z\"], run = \"typo.three\" },\n]\n",
+        )
+        .unwrap();
+        let known = ["app.quit"];
+        let diags = Effective::build_diagnostics(&preset, &[layer], &known, Screen::Browse);
+        let unknowns: Vec<&str> = diags
+            .iter()
+            .filter_map(|d| match d {
+                KeymapDiagnostic::UnknownCommand { run } => Some(run.as_str()),
+                KeymapDiagnostic::Structural { .. } => None,
+            })
+            .collect();
+        assert_eq!(
+            unknowns,
+            ["typo.one", "typo.two", "typo.three"],
+            "{diags:?}"
+        );
+    }
+
+    /// A `lua:<name>` binding whose name fails the charset is a `Structural`
+    /// diagnostic (never fixable by adding it to `known`), NOT a recoverable
+    /// `UnknownCommand` — this is exactly the non-convergent case #102's
+    /// one-pass builder resolves by construction.
+    #[test]
+    fn build_diagnostics_lua_charset_invalido_es_structural() {
+        let preset =
+            parse_keymap("[pane]\nkeymap = [{ on = [\"x\"], run = \"lua:bad name!\" }]\n").unwrap();
+        let diags = Effective::build_diagnostics(&preset, &[], &[], Screen::Browse);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        match &diags[0] {
+            KeymapDiagnostic::Structural { message } => {
+                assert!(message.contains("lua:bad name!"), "{message}");
+            }
+            d @ KeymapDiagnostic::UnknownCommand { .. } => {
+                panic!("esperaba Structural, fue {d:?}")
+            }
+        }
+    }
+
+    /// A well-formed keymap yields NO diagnostics (the caller reports
+    /// `keymap-ok`).
+    #[test]
+    fn build_diagnostics_keymap_valido_sin_hallazgos() {
+        let preset =
+            parse_keymap("[pane]\nkeymap = [{ on = [\"q\"], run = \"app.quit\" }]\n").unwrap();
+        let diags = Effective::build_diagnostics(&preset, &[], &["app.quit"], Screen::Browse);
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     /// Un binding de PRESET filtrado (comando desconocido para este

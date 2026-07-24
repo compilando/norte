@@ -19,7 +19,7 @@ use std::path::Path;
 
 use norte_config::Layers;
 use norte_connect::{AuthMethod, ConnectionsFile};
-use norte_frontend::keymap::{Effective, KeymapError, Screen, presets};
+use norte_frontend::keymap::{Effective, KeymapDiagnostic, Screen, presets};
 use serde::Serialize;
 
 /// Severity of a [`Finding`]. `Ok`/`Warn` never affect the exit code;
@@ -200,98 +200,56 @@ pub fn check_keymaps(layers: &Layers) -> Vec<Finding> {
     findings
 }
 
-/// Anti-DoS cap on the unknown-command retry loop below (a hostile/broken
-/// layer with hundreds of distinct made-up `run` names must not spin
-/// forever) — matches the order of magnitude of a keymap's binding count
-/// (`Effective`'s own doc: "a linear scan over ≤ hundreds of bindings").
-const MAX_UNKNOWN_COMMAND_RETRIES: usize = 256;
-
-/// Builds the effective keymap for one `screen`, RETRYING past
-/// [`KeymapError::UnknownCommand`] from a layer binding (decision 1): each
-/// occurrence becomes a [`Severity::Warn`] finding naming the command, and
-/// is added to the known-commands set for the next attempt — so a config
-/// with several distinct typos gets ALL of them reported, not just the
-/// first. Any other [`KeymapError`] is a [`Severity::Error`] finding that
-/// stops the screen's check (retrying would not converge).
+/// Builds the effective keymap for one `screen` in a SINGLE pass
+/// ([`Effective::build_diagnostics`], issue #102) and turns each
+/// [`KeymapDiagnostic`] into a [`Finding`]:
 ///
-/// One case masquerades as an ordinary unknown command but can NEVER
-/// converge by adding it to `known`: a `lua:<name>` binding whose `<name>`
-/// fails the Lua identifier charset. `Effective::build_for` validates that
-/// charset UNCONDITIONALLY for any `lua:` run string, never consulting
-/// `known_commands` (`norte-frontend`'s `keymap.rs`, the `lua:` branch right
-/// before the `known_commands.contains` check) — so retrying with the exact
-/// same broken name added to `known` reproduces the identical error forever,
-/// burning the whole retry budget on one binding and ending in a misleading
-/// `keymap-too-many-unknown-commands`. [`norte_frontend::keymap::valid_lua_name`]
-/// is the SAME charset check the engine uses (single source), so it is
-/// checked directly here to short-circuit that case in one iteration instead
-/// of two-hundred-fifty-six; `known.contains(&run)` is kept as a
-/// defense-in-depth guard for any OTHER non-convergent case this reasoning
-/// missed (issue #102 tracks replacing this whole retry loop with a
-/// one-pass diagnostic that can't have this class of bug at all).
+/// - [`KeymapDiagnostic::UnknownCommand`] → [`Severity::Warn`]
+///   (`keymap-unknown-cmd`): a layer binding to a `run` name no bundled
+///   preset recognizes for this screen (decision 1 — a typo or a newer
+///   version's command, not fatal).
+/// - [`KeymapDiagnostic::Structural`] → [`Severity::Error`]
+///   (`keymap-structural`): bad chord, empty/`esc` sequence, wrong layer key,
+///   ambiguous prefix, or a `lua:` name that fails the charset.
+///
+/// No diagnostics → one [`Severity::Ok`] `keymap-ok`. The one-pass builder
+/// reports EVERY finding at once, so this needs no retry loop, no anti-DoS
+/// cap, and cannot get stuck on the non-convergent `lua:`-charset case the
+/// old retry-with-known-name approach had to special-case.
 fn check_keymap_screen(
     preset_kf: &norte_frontend::keymap::KeymapFile,
     layer_kfs: &[norte_frontend::keymap::KeymapFile],
     screen: Screen,
     label: &'static str,
 ) -> Vec<Finding> {
-    let mut findings = Vec::new();
-    let mut known = norte_frontend::keymap::preset_commands(screen);
-    // TODO(#102): replace this retry loop with a one-pass
-    // `Effective::build_diagnostics`-style API that reports every unknown
-    // command in a single walk — would also remove the need for the
-    // non-convergence guard below entirely.
-    for _ in 0..MAX_UNKNOWN_COMMAND_RETRIES {
-        let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
-        match Effective::build_for(preset_kf, layer_kfs, &known_refs, screen) {
-            Ok(_) => {
-                findings.push(Finding {
-                    section: "keymap",
-                    severity: Severity::Ok,
-                    code: "keymap-ok",
-                    detail: label.to_owned(),
-                });
-                return findings;
-            }
-            Err(KeymapError::UnknownCommand { run }) => {
-                let lua_charset_error = run
-                    .strip_prefix("lua:")
-                    .is_some_and(|name| !norte_frontend::keymap::valid_lua_name(name));
-                if lua_charset_error || known.contains(&run) {
-                    findings.push(Finding {
-                        section: "keymap",
-                        severity: Severity::Error,
-                        code: "keymap-structural",
-                        detail: format!("{label}: {run}"),
-                    });
-                    return findings;
-                }
-                findings.push(Finding {
-                    section: "keymap",
-                    severity: Severity::Warn,
-                    code: "keymap-unknown-cmd",
-                    detail: format!("{label}: {run}"),
-                });
-                known.push(run);
-            }
-            Err(e) => {
-                findings.push(Finding {
-                    section: "keymap",
-                    severity: Severity::Error,
-                    code: "keymap-structural",
-                    detail: format!("{label}: {e}"),
-                });
-                return findings;
-            }
-        }
+    let known = norte_frontend::keymap::preset_commands(screen);
+    let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
+    let diags = Effective::build_diagnostics(preset_kf, layer_kfs, &known_refs, screen);
+    if diags.is_empty() {
+        return vec![Finding {
+            section: "keymap",
+            severity: Severity::Ok,
+            code: "keymap-ok",
+            detail: label.to_owned(),
+        }];
     }
-    findings.push(Finding {
-        section: "keymap",
-        severity: Severity::Error,
-        code: "keymap-too-many-unknown-commands",
-        detail: label.to_owned(),
-    });
-    findings
+    diags
+        .into_iter()
+        .map(|d| match d {
+            KeymapDiagnostic::UnknownCommand { run } => Finding {
+                section: "keymap",
+                severity: Severity::Warn,
+                code: "keymap-unknown-cmd",
+                detail: format!("{label}: {run}"),
+            },
+            KeymapDiagnostic::Structural { message } => Finding {
+                section: "keymap",
+                severity: Severity::Error,
+                code: "keymap-structural",
+                detail: format!("{label}: {message}"),
+            },
+        })
+        .collect()
 }
 
 /// Checks `config_dir/plugins/*` (manifest discovery via
@@ -714,13 +672,15 @@ mod tests {
         assert!(warn.detail.contains("invented.command"), "{}", warn.detail);
     }
 
-    /// TDD (review IMPORTANT-1): a `lua:<name>` binding whose name fails the
-    /// charset (`valid_lua_name`) can NEVER be fixed by adding it to the
-    /// known-commands set — the retry loop must detect that directly and
-    /// stop in ONE iteration with a single `Error`, not spin through the
-    /// whole retry budget into a spurious `keymap-too-many-unknown-commands`.
+    /// A `lua:<name>` binding whose name fails the charset (`valid_lua_name`)
+    /// can NEVER be fixed by adding it to the known-commands set. The one-pass
+    /// [`Effective::build_diagnostics`] (#102) classifies it directly as a
+    /// single structural `Error` — the old retry-with-known-name loop had to
+    /// special-case it to avoid burning its whole budget into a spurious
+    /// `keymap-too-many-unknown-commands`; that code and its escalation are
+    /// gone, and this test guards that they stay gone.
     #[test]
-    fn keymap_lua_charset_invalido_no_reintenta_hasta_agotar() {
+    fn keymap_lua_charset_invalido_es_un_solo_error_estructural() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("keymap.toml"),
