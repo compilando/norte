@@ -129,7 +129,7 @@ frontend to interpret unchecked.
   list<list<u8>>) -> list<decoration> }` with `record decoration { badge:
   option<string>, role: option<string> }`, called batched per visible page
   and positional 1:1 with the input entries; `interface columns {
-  column-values: func(id: string, entries: list<list<u8>>) -> list<string>
+  column-values: func(id: string, entries: list<list<u8>>) -> list<option<string>>
   }`.
 
 **Consequence carried forward from the P2 lesson**, quoted verbatim from the
