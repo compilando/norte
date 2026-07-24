@@ -548,6 +548,23 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
+/// Ancho del modal por CONTENIDO (H1 T3 follow-up): los pies GENERADOS
+/// pueden superar las 60 col históricas — p. ej. colisión: `[esc] … [w] más
+/// nuevo` — y truncarlos escondería teclas reales. Techo = ancho del frame
+/// menos margen; suelo = las 60 históricas. Se mide en chars (los hints son
+/// ASCII + etiquetas Fluent cortas; los paths ya llegan con elipsis propia).
+fn modal_width(titulo: &str, cuerpo: &str, frame_width: u16) -> u16 {
+    let contenido_max = cuerpo
+        .lines()
+        .map(|l| l.chars().count())
+        .chain(std::iter::once(titulo.chars().count() + 2))
+        .max()
+        .unwrap_or(0);
+    u16::try_from(contenido_max + 4)
+        .unwrap_or(u16::MAX)
+        .clamp(60, frame_width.saturating_sub(4).max(60))
+}
+
 /// Caja centrada del modal.
 /// `reinterpret` = enc del pane con FOCO al pintar: correcto para los
 /// modales SÍNCRONOS (confirmar copy/move/delete se crea desde el pane con
@@ -658,22 +675,11 @@ fn draw_modal(
         Modal::TrustLuaInit { .. } => 8,
         _ => 6,
     };
-    // Ancho por CONTENIDO (H1 T3 follow-up): los pies generados pueden ser
-    // más largos que las 60 col históricas — p. ej. colisión: `[esc] … [w]
-    // conservar más nuevo` — y truncarlos escondería teclas reales. Techo en
-    // el ancho del frame menos margen; suelo en las 60 históricas. Se mide
-    // en chars (los hints son ASCII + etiquetas Fluent cortas; los paths ya
-    // llegan con elipsis propia).
-    let contenido_max = cuerpo
-        .lines()
-        .map(|l| l.chars().count())
-        .chain(std::iter::once(titulo.chars().count() + 2))
-        .max()
-        .unwrap_or(0);
-    let ancho = u16::try_from(contenido_max + 4)
-        .unwrap_or(u16::MAX)
-        .clamp(60, frame.area().width.saturating_sub(4).max(60));
-    let area = centered(frame.area(), ancho, alto);
+    let area = centered(
+        frame.area(),
+        modal_width(&titulo, &cuerpo, frame.area().width),
+        alto,
+    );
     frame.render_widget(ratatui::widgets::Clear, area);
     let mut cuerpo = Paragraph::new(cuerpo).block(
         Block::default()
