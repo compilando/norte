@@ -348,6 +348,23 @@ impl Pane {
     pub fn set_skipped(&mut self, skipped: Option<u64>) {
         self.state.set_skipped(skipped);
     }
+
+    /// Decoración de plugin de `path` (G3b, ADR 0037) — delegado puro a
+    /// [`norte_frontend::PaneState::decoration_for`]. El render la pinta
+    /// como badge tras el hueco del badge hostil.
+    #[must_use]
+    pub fn decoration_for(&self, path: &VPath) -> Option<&norte_frontend::Decoration> {
+        self.state.decoration_for(path)
+    }
+
+    /// Instala el lote de decoraciones resuelto (G3b) — ver
+    /// `PaneState::set_decorations`.
+    pub fn set_decorations(
+        &mut self,
+        decorations: std::collections::HashMap<VPath, norte_frontend::Decoration>,
+    ) {
+        self.state.set_decorations(decorations);
+    }
 }
 
 /// Campo de texto activo del diálogo de búsqueda (`Alt+F7`, liveSearch T6).

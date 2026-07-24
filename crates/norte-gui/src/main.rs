@@ -616,13 +616,32 @@ impl NorteGui {
                     Ok((entries, skipped)) => {
                         // set_listing ya normaliza (ordena) internamente (#54);
                         // pre-ordenar aquí era un doble sort (#94).
-                        self.panes[pane].set_listing(dir, entries);
+                        self.panes[pane].set_listing(dir.clone(), entries);
                         // #96: badge de omitidas del contenedor (#93) — un
                         // listado incompleto jamás es silencioso, tampoco
                         // en la GUI.
                         self.panes[pane].set_skipped(skipped);
                         self.errors[pane] = None;
                         self.query[pane].clear();
+                        // G3b (ADR 0037): pide decoraciones de plugin para la
+                        // página VISIBLE recién aterrizada — asíncrono, NUNCA
+                        // bloquea el listado; llega tarde por
+                        // `SessionEvent::Decorated` y solo pinta si el pane
+                        // sigue en el MISMO dir/generación (guard abajo). Sin
+                        // guardia de "algún decorator activo": intentar cada
+                        // listado es barato (una RPC) y más honesto que un
+                        // flag cacheado que un F12 dejaría obsoleto.
+                        let paths: Vec<VPath> = self.panes[pane]
+                            .entries()
+                            .iter()
+                            .map(|e| e.path.clone())
+                            .collect();
+                        let _ = self.cmds.send(SessionCmd::Decorate {
+                            pane,
+                            generation,
+                            dir,
+                            paths,
+                        });
                         if std::env::var_os("NORTE_GUI_DEBUG").is_some() {
                             eprintln!(
                                 "[norte-gui] pane {pane} aplicó listado: {} entradas, cursor={}",
@@ -731,6 +750,25 @@ impl NorteGui {
                     "gui-banner-viewer-error",
                     &[("name", name.as_str()), ("error", error.as_str())],
                 ));
+            }
+            SessionEvent::Decorated {
+                pane,
+                generation,
+                dir,
+                decorations,
+            } => {
+                // Doble guard anti-stale (G3b): la generación Y el dir vigente
+                // del pane deben casar — un cd MÁS NUEVO ya pudo aterrizar
+                // (generación) o, más sutil, un `Decorate` en vuelo puede
+                // resolver DESPUÉS de que el pane vuelva a este MISMO dir tras
+                // pasar por otro (dir casa pero la generación vieja no debe
+                // pisar el listado actual igualmente) — ambos deben casar.
+                if !generation_is_current(self.generation[pane], generation)
+                    || self.panes[pane].dir() != &dir
+                {
+                    return;
+                }
+                self.panes[pane].set_decorations(decorations);
             }
             SessionEvent::ConnectFailed(msg) => {
                 // Sin esto `loading` queda clavado en `true` (nunca llega un
@@ -1879,6 +1917,27 @@ impl NorteGui {
         let color = entry_color(&self.theme, entry, self.effects.and_then(|e| e.glow));
         let dir_target = (entry.kind == EntryKind::Dir).then(|| entry.path.clone());
 
+        // G3b (ADR 0037): decoración de plugin para esta entrada, ya
+        // SANEADA (`norte_frontend::sanitize_decoration`) por el momento en
+        // que llegó a `PaneState` — este render solo PINTA, no vuelve a
+        // sanear. `role` resuelve al color del tema (mismo `styled_span_
+        // color` que ya pinta los spans de un preview con estilo, G3a — un
+        // único punto de resolución `Role → color`, no una copia paralela);
+        // sin `role` reconocido, un tono DERIVADO del propio color de la
+        // fila a alfa reducido hace de "dim" (GPUI no tiene un atributo DIM
+        // relativo como el terminal — este es el análogo más simple, sin
+        // añadir un campo nuevo a `ChromeColors` solo para esto).
+        let decoration_badge = self.panes[pane].decoration_for(&entry.path).and_then(|d| {
+            let badge = d.badge.as_deref()?;
+            let resolved = decoration_badge_color(
+                &self.theme,
+                d.role,
+                color,
+                self.effects.and_then(|e| e.glow),
+            );
+            Some((badge.to_owned(), resolved))
+        });
+
         // `Role::ListItem` con nombre accesible = `label` YA saneado (mismo
         // texto que se pinta — regla 1, jamás bytes crudos). La selección
         // bajo cursor (`highlighted`) es `aria_selected`; la marca de
@@ -1903,8 +1962,21 @@ impl NorteGui {
             .rounded(px(sp::RADIUS_ROW))
             .cursor_pointer()
             .text_color(color)
-            .truncate()
-            .child(SharedString::from(label));
+            // G3b: fila en flex ROW con dos hijos (nombre + badge) en vez de
+            // un único hijo de texto — el nombre sigue truncando solo (child
+            // interior con `.truncate()`), el badge nunca se recorta.
+            .flex()
+            .flex_row()
+            .items_center()
+            .child(div().flex_1().truncate().child(SharedString::from(label)));
+        if let Some((badge_text, badge_color)) = decoration_badge {
+            row = row.child(
+                div()
+                    .pl(px(sp::XS))
+                    .text_color(badge_color)
+                    .child(SharedString::from(badge_text)),
+            );
+        }
         if marked {
             row = row.bg(chrome.mark_bg);
         }
@@ -3079,6 +3151,28 @@ fn styled_span_color(
         .map(|c| glowed(c, glow))
 }
 
+/// Color de un badge de decoración de plugin (G3b, ADR 0037): reutiliza
+/// [`styled_span_color`] (mismo criterio "el rol gana" que un span de
+/// preview con estilo, G3a — un único punto de resolución `Role → color`).
+/// `DecorationWire` no lleva `fg` crudo (solo `role`, a diferencia de
+/// `SpanWire`), así que sin rol reconocido cae a un tono DERIVADO de `base`
+/// (el color por-tipo de la fila que ya se pinta) a alfa reducido — el
+/// análogo GPUI más simple de un `Modifier::DIM` de terminal relativo, sin
+/// justificar un campo nuevo en `ChromeColors` solo para este caso.
+fn decoration_badge_color(
+    theme: &Theme,
+    role: Option<norte_theme::Role>,
+    base: gpui::Rgba,
+    glow: Option<effects::Glow>,
+) -> gpui::Rgba {
+    let span = norte_frontend::ansi::StyledSpan {
+        text: String::new(),
+        role,
+        fg: None,
+    };
+    styled_span_color(theme, &span, glow).unwrap_or(gpui::Rgba { a: 0.55, ..base })
+}
+
 /// Aplica el brillo v1 de G1 (ADR 0036 decisión 3): `lerp(fg, white, strength
 /// times 0.25)` por canal, canal `a` intacto (el glow no toca la opacidad).
 /// `g = None` es un no-op explícito — así todo call-site puede pasar
@@ -4029,12 +4123,12 @@ mod tests {
     };
     use super::{
         ChromeColors, ConfirmQuit, FontSet, ImagePreview, affected_dirs, apply_viewer_command,
-        banner_safe, confirm_quit_should_open, confirm_quit_task_count, first_cancelable,
-        flicker_factor, flicker_scale, generation_is_current, glowed, has_pending_work,
-        image_preview_from, image_status, keymap_error_detail, modal_footer_colors,
-        modal_panel_colors, modal_title_colors, motion_active, pending_hint, retain_active,
-        row_label, styled_span_color, task_at_cursor, theme_map, unknown_preset_banner,
-        validated_family, viewer_header, viewer_status,
+        banner_safe, confirm_quit_should_open, confirm_quit_task_count, decoration_badge_color,
+        first_cancelable, flicker_factor, flicker_scale, generation_is_current, glowed,
+        has_pending_work, image_preview_from, image_status, keymap_error_detail,
+        modal_footer_colors, modal_panel_colors, modal_title_colors, motion_active, pending_hint,
+        retain_active, row_label, styled_span_color, task_at_cursor, theme_map,
+        unknown_preset_banner, validated_family, viewer_header, viewer_status,
     };
     use gpui::rgb;
     use norte_frontend::viewer::Viewer;
@@ -5126,6 +5220,57 @@ mod tests {
         let theme = Theme::preset_default();
         let span = ansi_span(None, None);
         assert_eq!(styled_span_color(&theme, &span, None), None);
+    }
+
+    // --- G3b: `decoration_badge_color` (badge de decorator de plugin) -----
+
+    /// Con un rol RECONOCIDO por el tema, el badge pinta ESE color (mismo
+    /// criterio que `styled_span_color_role_gana_a_fg`): el `base` de la
+    /// fila NUNCA se usa cuando el tema resuelve el rol.
+    #[test]
+    fn decoration_badge_color_con_rol_usa_el_tema() {
+        let theme = Theme::preset_default();
+        let base = rgb(0x112233);
+        let got = decoration_badge_color(&theme, Some(norte_theme::Role::Title), base, None);
+        assert_eq!(
+            got,
+            rgb(0x5fafd7),
+            "el color del tema para Title, no `base`"
+        );
+    }
+
+    /// Sin rol reconocido (o el tema no lo colorea): cae a `base` con alfa
+    /// reducido — el análogo de "dim" (nunca opaco al 100%, nunca un color
+    /// inventado que no venga del propio color de la fila).
+    #[test]
+    fn decoration_badge_color_sin_rol_deriva_de_base_con_alfa_reducido() {
+        let theme = Theme::preset_default();
+        let base = rgb(0x112233);
+        let got = decoration_badge_color(&theme, None, base, None);
+        assert_eq!(got.r, base.r);
+        assert_eq!(got.g, base.g);
+        assert_eq!(got.b, base.b);
+        assert!(
+            got.a < base.a,
+            "el alfa se reduce: {got:?} vs base {base:?}"
+        );
+    }
+
+    /// El glow se aplica DESPUÉS de resolver por rol (mismo criterio que
+    /// `styled_span_color_aplica_glow_encima`) — no en la rama "sin rol"
+    /// (esa ya deriva de `base`, que el caller ya glowed si aplicaba).
+    #[test]
+    fn decoration_badge_color_con_rol_aplica_glow() {
+        let theme = Theme::preset_default();
+        let base = rgb(0x112233);
+        let glow = effects::Glow { strength: 1.0 };
+        let sin_glow = decoration_badge_color(&theme, Some(norte_theme::Role::Title), base, None);
+        let con_glow =
+            decoration_badge_color(&theme, Some(norte_theme::Role::Title), base, Some(glow));
+        assert_ne!(
+            sin_glow, con_glow,
+            "el glow debe mover el color hacia blanco"
+        );
     }
 
     /// El glow de G1 se aplica DESPUÉS de resolver el color, tanto por

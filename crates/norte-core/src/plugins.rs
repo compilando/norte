@@ -158,6 +158,67 @@ pub(crate) fn to_wire_lines(
         .collect()
 }
 
+/// Convierte las rutas VISIBLES de una página a las entradas CRUDAS que
+/// cruzan al WIT `decorator::decorate`/`columns::column-values` (ADR 0037
+/// decisión 2): el BASENAME en bytes crudos (regla 1), NUNCA la ruta
+/// completa. Decisión de privacidad, no solo de forma: un decorator/columns
+/// ve el nombre de cada entrada visible, no dónde vive en el árbol — el
+/// mismo criterio que el guest real (`examples-wasm/decorator-demo`, T2) ya
+/// asume en su contrato (`decorator_wit_e2e_positional_roundtrip_wasm_real`
+/// pasa basenames como `b"module.rs"`, no paths). POSICIONAL 1:1 con
+/// `paths` — una entrada SIN nombre de fichero (path raíz) entrega un
+/// basename vacío, nunca se omite, para no romper el contrato posicional.
+pub(crate) fn paths_to_basenames(paths: &[norte_proto::VPath]) -> Vec<Vec<u8>> {
+    paths
+        .iter()
+        .map(|p| {
+            p.file_name()
+                .map(|s| norte_proto::Segment::as_bytes(s).to_vec())
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// Convierte el LOTE bruto que devuelve un guest DECORATOR
+/// (`DecoratorInstance::decorate`) al tipo de wire
+/// (`Vec<norte_proto::methods::DecorationWire>`), VALIDANDO el contrato
+/// posicional 1:1 (ADR 0037 tabla de decisión 1) antes de re-formar: si
+/// `out.len() != expected_len` el guest violó el contrato (bug del plugin, o
+/// runtime que se saltó `cap_total_bytes` de otra forma) — `None` fail-closed
+/// (el caller DESCARTA las decoraciones de ESE plugin entero, con aviso; el
+/// resto de la página se pinta igual, mismo criterio de fallback que un
+/// previewer que no aplica). `role` viaja SIN VALIDAR (mismo límite de
+/// responsabilidad que [`to_wire_lines`] — el frontend, no `norte-core`
+/// headless, conoce `norte_theme::Role`).
+pub(crate) fn decorations_to_wire_checked(
+    out: Vec<norte_plugin_host::decorator_iface::Decoration>,
+    expected_len: usize,
+) -> Option<Vec<norte_proto::methods::DecorationWire>> {
+    if out.len() != expected_len {
+        return None;
+    }
+    Some(
+        out.into_iter()
+            .map(|d| norte_proto::methods::DecorationWire {
+                badge: d.badge,
+                role: d.role,
+            })
+            .collect(),
+    )
+}
+
+/// Valida el contrato posicional 1:1 del LOTE bruto que devuelve un guest
+/// COLUMNS (`ColumnsInstance::column_values`): `None` fail-closed si
+/// `out.len() != expected_len` (ver [`decorations_to_wire_checked`], mismo
+/// criterio). Ya tiene la forma de wire (`Vec<Option<String>>`) — esta
+/// función solo GUARDA el contrato, no re-forma.
+pub(crate) fn column_values_checked(
+    out: Vec<Option<String>>,
+    expected_len: usize,
+) -> Option<Vec<Option<String>>> {
+    (out.len() == expected_len).then_some(out)
+}
+
 /// ¿El glob `pat` (`text/*` o exacto `application/json`) casa `mime`?
 fn mimetype_matches(pat: &str, mime: &str) -> bool {
     match pat.strip_suffix("/*") {
@@ -177,6 +238,12 @@ pub type ResolvedPreviewer = (
     norte_plugin_host::Capabilities,
     BTreeMap<String, String>,
 );
+
+/// Resultado de un elemento de [`PluginRegistry::resolve_decorators`] o de
+/// [`PluginRegistry::resolve_columns`]: misma forma `(id, name, wasm_path,
+/// capabilities, settings)` que [`ResolvedPreviewer`] — mismo alias en vez de
+/// repetir el tuple de 5 elementos (clippy `type_complexity`).
+pub type ResolvedDecorator = ResolvedPreviewer;
 
 /// Registro de plugins: catálogo descubierto + estado persistido fusionado.
 #[derive(Debug)]
@@ -493,6 +560,81 @@ impl PluginRegistry {
                 .flat_map(|c| c.mimetypes.iter())
                 .any(|pat| mimetype_matches(pat, mime));
             if !handles {
+                return None;
+            }
+            let wasm = Self::verified_wasm(&e.dir)?;
+            Some((
+                e.manifest.id.clone(),
+                e.manifest.name.clone(),
+                wasm,
+                e.manifest.capabilities.clone(),
+                e.settings.clone(),
+            ))
+        })
+    }
+
+    /// Resuelve TODOS los decorators APROBADOS y ACTIVADOS (ADR 0037
+    /// decisión 2), a diferencia de [`Self::resolve_previewer`] (que elige
+    /// el PRIMERO que casa): una página se decora con la superposición de
+    /// TODOS los plugins `decorator` consentidos — un badge de
+    /// "modificado por git" y otro de "bajo revisión" pueden convivir en la
+    /// misma entrada. Filtra por `category == Decorator` (a diferencia de
+    /// `resolve_previewer`, que no filtra por categoría porque
+    /// previewer/command comparten el MISMO world `norte-plugin`; decorator
+    /// tiene su PROPIO world `norte-decorator`, así que solo un plugin cuyo
+    /// binario lo implementa debe entrar aquí). Orden: el del catálogo
+    /// (`category, id` — determinista, ver [`Catalog::load_dir`]).
+    #[must_use]
+    pub fn resolve_decorators(&self) -> Vec<ResolvedDecorator> {
+        self.catalog
+            .plugins
+            .iter()
+            .filter_map(|e| {
+                if e.manifest.category != norte_plugin_host::Category::Decorator {
+                    return None;
+                }
+                let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
+                if !Self::approval_is_current(&st, &e.manifest) || !st.enabled {
+                    return None;
+                }
+                let wasm = Self::verified_wasm(&e.dir)?;
+                Some((
+                    e.manifest.id.clone(),
+                    e.manifest.name.clone(),
+                    wasm,
+                    e.manifest.capabilities.clone(),
+                    e.settings.clone(),
+                ))
+            })
+            .collect()
+    }
+
+    /// Resuelve el plugin `columns` APROBADO y ACTIVADO que declara la
+    /// columna `column_id` en `contributions.columns[].id` (M4 declaró la
+    /// contribución, ADR 0037 la respalda con WIT/host). A diferencia de
+    /// `resolve_decorators`, aquí SÍ el primero que casa basta (una columna
+    /// con ese id la aporta como mucho un plugin con sentido — dos plugins
+    /// declarando el MISMO id de columna es una colisión de configuración
+    /// del usuario, no algo que este método deba resolver mezclando
+    /// valores). Filtra por `category == Columns`, mismo razonamiento de
+    /// world dedicado que [`Self::resolve_decorators`].
+    #[must_use]
+    pub fn resolve_columns(&self, column_id: &str) -> Option<ResolvedDecorator> {
+        self.catalog.plugins.iter().find_map(|e| {
+            if e.manifest.category != norte_plugin_host::Category::Columns {
+                return None;
+            }
+            let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
+            if !Self::approval_is_current(&st, &e.manifest) || !st.enabled {
+                return None;
+            }
+            let declares = e
+                .manifest
+                .contributions
+                .columns
+                .iter()
+                .any(|c| c.id == column_id);
+            if !declares {
                 return None;
             }
             let wasm = Self::verified_wasm(&e.dir)?;
@@ -1314,5 +1456,199 @@ net = { hosts = ["evil.example"] }
             resolved.is_ok(),
             "un symlink dentro del dir es válido: {resolved:?}"
         );
+    }
+
+    // -------------------------------------------------------------------
+    // G3b (ADR 0037): `resolve_decorators`/`resolve_columns` + los helpers
+    // de validación posicional.
+
+    /// Manifiesto `decorator` mínimo.
+    const DECOR_MANIFEST: &str = r#"
+[plugin]
+id = "org.norte.decor"
+name = "Decor"
+publisher = "norte"
+version = "0.1.0"
+category = "decorator"
+[[contributions.decorator]]
+"#;
+
+    /// Un segundo decorator, para probar que `resolve_decorators` devuelve
+    /// TODOS los consentidos (no el primero, a diferencia de
+    /// `resolve_previewer`).
+    const DECOR_MANIFEST_2: &str = r#"
+[plugin]
+id = "org.norte.decor2"
+name = "Decor2"
+publisher = "norte"
+version = "0.1.0"
+category = "decorator"
+[[contributions.decorator]]
+"#;
+
+    /// Manifiesto `columns` que declara una columna `size-human`.
+    const COLUMNS_MANIFEST: &str = r#"
+[plugin]
+id = "org.norte.cols"
+name = "Cols"
+publisher = "norte"
+version = "0.1.0"
+category = "columns"
+[[contributions.columns]]
+id = "size-human"
+header = "Size"
+"#;
+
+    #[test]
+    fn resolve_decorators_fail_closed_sin_consentir() {
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.decor", DECOR_MANIFEST);
+        std::fs::write(
+            tmp.path()
+                .join("plugins")
+                .join("org.norte.decor")
+                .join("plugin.wasm"),
+            b"",
+        )
+        .unwrap();
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert!(
+            reg.resolve_decorators().is_empty(),
+            "un decorator no consentido jamás se resuelve"
+        );
+    }
+
+    #[test]
+    fn resolve_decorators_devuelve_todos_los_consentidos_no_solo_el_primero() {
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.decor", DECOR_MANIFEST);
+        write_plugin(tmp.path(), "org.norte.decor2", DECOR_MANIFEST_2);
+        for id in ["org.norte.decor", "org.norte.decor2"] {
+            std::fs::write(tmp.path().join("plugins").join(id).join("plugin.wasm"), b"").unwrap();
+        }
+        let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert!(reg.set_approval_in_memory("org.norte.decor", true));
+        assert!(reg.set_enabled_in_memory("org.norte.decor", true));
+        assert!(reg.set_approval_in_memory("org.norte.decor2", true));
+        assert!(reg.set_enabled_in_memory("org.norte.decor2", true));
+
+        let resolved = reg.resolve_decorators();
+        assert_eq!(
+            resolved.len(),
+            2,
+            "AMBOS decorators consentidos: {resolved:?}"
+        );
+        let ids: Vec<&str> = resolved.iter().map(|(id, ..)| id.as_str()).collect();
+        assert!(ids.contains(&"org.norte.decor"));
+        assert!(ids.contains(&"org.norte.decor2"));
+    }
+
+    #[test]
+    fn resolve_decorators_ignora_categoria_distinta_aunque_declare_contrib() {
+        // Un plugin `command` no entra por `resolve_decorators` aunque, por
+        // hipótesis, alguien copiara `[[contributions.decorator]]` en su
+        // manifiesto: el world dedicado (`norte-decorator`) exige que la
+        // categoría PRIMARIA sea `decorator` (a diferencia de
+        // previewer/command, que comparten world).
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.cmd", CMD_MANIFEST);
+        std::fs::write(
+            tmp.path()
+                .join("plugins")
+                .join("org.norte.cmd")
+                .join("plugin.wasm"),
+            b"",
+        )
+        .unwrap();
+        let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert!(reg.set_approval_in_memory("org.norte.cmd", true));
+        assert!(reg.set_enabled_in_memory("org.norte.cmd", true));
+        assert!(reg.resolve_decorators().is_empty());
+    }
+
+    #[test]
+    fn resolve_columns_fail_closed_y_por_id() {
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.cols", COLUMNS_MANIFEST);
+        std::fs::write(
+            tmp.path()
+                .join("plugins")
+                .join("org.norte.cols")
+                .join("plugin.wasm"),
+            b"",
+        )
+        .unwrap();
+        let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
+
+        assert!(
+            reg.resolve_columns("size-human").is_none(),
+            "sin consentir, ninguna columna se resuelve"
+        );
+
+        assert!(reg.set_approval_in_memory("org.norte.cols", true));
+        assert!(reg.set_enabled_in_memory("org.norte.cols", true));
+
+        let (id, name, wasm, _caps, _settings) = reg
+            .resolve_columns("size-human")
+            .expect("la columna declarada resuelve");
+        assert_eq!(id, "org.norte.cols");
+        assert_eq!(name, "Cols");
+        assert!(wasm.ends_with("plugin.wasm"));
+
+        assert!(
+            reg.resolve_columns("no-declarada").is_none(),
+            "un id de columna no declarado no resuelve"
+        );
+    }
+
+    #[test]
+    fn paths_to_basenames_extrae_el_nombre_no_la_ruta_completa() {
+        let paths = vec![
+            norte_proto::VPath::parse("file:///a/b/module.rs").unwrap(),
+            norte_proto::VPath::parse("file:///a/README.md").unwrap(),
+        ];
+        let names = paths_to_basenames(&paths);
+        assert_eq!(names, vec![b"module.rs".to_vec(), b"README.md".to_vec()]);
+    }
+
+    #[test]
+    fn decorations_to_wire_checked_longitud_correcta_pasa() {
+        use norte_plugin_host::decorator_iface::Decoration;
+        let out = vec![
+            Decoration {
+                badge: Some("M".to_string()),
+                role: Some("warning".to_string()),
+            },
+            Decoration {
+                badge: None,
+                role: None,
+            },
+        ];
+        let wire = decorations_to_wire_checked(out, 2).expect("longitud casa: Some");
+        assert_eq!(wire.len(), 2);
+        assert_eq!(wire[0].badge.as_deref(), Some("M"));
+        assert_eq!(wire[1].badge, None);
+    }
+
+    #[test]
+    fn decorations_to_wire_checked_longitud_distinta_es_none_fail_closed() {
+        use norte_plugin_host::decorator_iface::Decoration;
+        let out = vec![Decoration {
+            badge: Some("M".to_string()),
+            role: None,
+        }];
+        assert!(
+            decorations_to_wire_checked(out, 2).is_none(),
+            "un guest que rompe el contrato posicional se descarta entero"
+        );
+    }
+
+    #[test]
+    fn column_values_checked_longitud_correcta_y_distinta() {
+        assert_eq!(
+            column_values_checked(vec![Some("1".into()), None], 2),
+            Some(vec![Some("1".to_string()), None])
+        );
+        assert_eq!(column_values_checked(vec![Some("1".into())], 2), None);
     }
 }

@@ -1549,6 +1549,12 @@ fn to_value<T: serde::Serialize>(v: &T) -> Result<serde_json::Value, RpcError> {
         .map_err(|e| RpcError::protocol(codes::INTERNAL_ERROR, format!("serialization: {e}")))
 }
 
+// La tabla de dispatch crece un brazo por método nuevo (G3b añadió dos): es
+// una lista plana, no lógica anidada — trocearla en sub-funciones por
+// bloque de métodos no reduciría la complejidad real, solo la escondería
+// detrás de una indirección. Mismo criterio que otros dispatchers grandes
+// del árbol (ver `dispatch_fs_task`).
+#[allow(clippy::too_many_lines)]
 #[tracing::instrument(skip_all, fields(method = %req.method))]
 async fn dispatch(
     req: Request,
@@ -1675,6 +1681,13 @@ async fn dispatch(
         // criterio de apertura que su gemelo plano.
         methods::PLUGIN_PREVIEW_STYLED => {
             handle_plugin_preview_styled(req.params, &conn.actor, shared).await
+        }
+        // plugin.decorate / plugin.column_values (G3b, ADR 0037): ABIERTOS
+        // como el resto de `plugin.preview*`, con el mismo gate de lectura
+        // (#80) extendido al lote entero (`read_gate_all`).
+        methods::PLUGIN_DECORATE => handle_plugin_decorate(req.params, &conn.actor, shared).await,
+        methods::PLUGIN_COLUMN_VALUES => {
+            handle_plugin_column_values(req.params, &conn.actor, shared).await
         }
         _ => dispatch_fs_task(req, conn_id, conn.actor.clone(), shared).await,
     }
@@ -2320,6 +2333,147 @@ async fn handle_plugin_preview_styled(
             lines: crate::plugins::to_wire_lines(lines),
         }),
     })
+}
+
+/// Gate de LECTURA para agentes sobre un LOTE de rutas (G3b): mismo
+/// criterio que [`read_gate`] aplicado a CADA elemento de `paths`,
+/// cortando en la PRIMERA denegación (fail-fast, no acumula parcial). Un
+/// `Actor::User` sigue sin sandboxear (una sola comprobación barata
+/// bastaría, pero recorrer todas mantiene el código simétrico y no cambia
+/// el resultado); un `Actor::Agent` decora/valora columnas SOLO sobre
+/// entradas que ya podía listar bajo su scope — sin este gate, un agente
+/// fuera de scope podría usar `plugin.decorate`/`plugin.column_values`
+/// como un oráculo de existencia/nombre de rutas ajenas a su sandbox.
+fn read_gate_all(
+    actor: &Actor,
+    paths: &[norte_proto::VPath],
+    shared: &Arc<Shared>,
+) -> Result<(), RpcError> {
+    for path in paths {
+        read_gate(actor, path, shared)?;
+    }
+    Ok(())
+}
+
+/// `plugin.decorate` (G3b, ADR 0037 decisión 2): la SUPERPOSICIÓN de TODOS
+/// los plugins `decorator` APROBADOS y ACTIVADOS sobre `params.paths`
+/// (batched, POSICIONAL 1:1 — ver el rustdoc de
+/// [`norte_proto::methods::PluginDecorateResult`]). ABIERTO como sus
+/// gemelos `plugin.preview*` (decorar no consiente nada) pero con el MISMO
+/// gate de lectura (#80) que ellos, extendido a TODO el lote
+/// ([`read_gate_all`]): sin él, un agente exfiltraría existencia/nombres de
+/// rutas fuera de su scope pidiendo decoraciones sobre ellas.
+///
+/// Fail-closed POR PLUGIN (nunca por lote): un plugin que no instancia,
+/// trapea, o rompe el contrato posicional se OMITE del resultado con aviso
+/// en el log local — el resto de la página se pinta igual. `params.paths`
+/// vacío responde `{plugins: []}` sin resolver el catálogo.
+#[tracing::instrument(skip_all)]
+async fn handle_plugin_decorate(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::PluginDecorateParams = parse_params(params)?;
+    read_gate_all(actor, &p.paths, shared)?;
+    if p.paths.is_empty() {
+        return to_value(&methods::PluginDecorateResult {
+            plugins: Vec::new(),
+        });
+    }
+    let expected_len = p.paths.len();
+    let entries = crate::plugins::paths_to_basenames(&p.paths);
+    let resolved = {
+        let reg = shared.plugins.lock().expect("plugins lock sano");
+        reg.resolve_decorators()
+    };
+    let runtime = Arc::clone(&shared.plugin_runtime);
+    let plugins = tokio::task::spawn_blocking(move || {
+        let mut out = Vec::new();
+        for (id, _name, wasm, caps, settings) in resolved {
+            let Ok(mut inst) = runtime.instantiate_decorator(&wasm, caps) else {
+                tracing::warn!(plugin = %id, "decorator: fallo al instanciar, se omite del lote");
+                continue;
+            };
+            inst.set_settings(settings);
+            let Ok(raw) = inst.decorate(&entries) else {
+                tracing::warn!(plugin = %id, "decorator: fallo al ejecutar decorate, se omite del lote");
+                continue;
+            };
+            let Some(decorations) = crate::plugins::decorations_to_wire_checked(raw, expected_len)
+            else {
+                tracing::warn!(
+                    plugin = %id,
+                    "decorator: longitud no casa el contrato posicional, se omite del lote"
+                );
+                continue;
+            };
+            out.push(methods::PluginDecorations {
+                plugin_id: id,
+                decorations,
+            });
+        }
+        out
+    })
+    .await
+    .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "decorate task panicked"))?;
+    to_value(&methods::PluginDecorateResult { plugins })
+}
+
+/// `plugin.column_values` (G3b, ADR 0037 decisión 2): valores de la columna
+/// `params.column_id` para `params.paths`, del ÚNICO plugin `columns` que
+/// la declara ([`crate::PluginRegistry::resolve_columns`], primero-que-casa
+/// — a diferencia de `plugin.decorate`). Mismo gate de lectura por lote y
+/// mismo contrato de entradas (basenames) que `handle_plugin_decorate`.
+///
+/// Fail-closed: si el plugin no instancia, trapea, o rompe el contrato
+/// posicional, el resultado es un vector de `None` del tamaño de
+/// `params.paths` (celda vacía para toda la página) en vez de un error.
+#[tracing::instrument(skip_all)]
+async fn handle_plugin_column_values(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::PluginColumnValuesParams = parse_params(params)?;
+    read_gate_all(actor, &p.paths, shared)?;
+    if p.paths.is_empty() {
+        return to_value(&methods::PluginColumnValuesResult { values: Vec::new() });
+    }
+    let expected_len = p.paths.len();
+    let entries = crate::plugins::paths_to_basenames(&p.paths);
+    let resolved = {
+        let reg = shared.plugins.lock().expect("plugins lock sano");
+        reg.resolve_columns(&p.column_id)
+    };
+    let Some((id, _name, wasm, caps, settings)) = resolved else {
+        return to_value(&methods::PluginColumnValuesResult {
+            values: vec![None; expected_len],
+        });
+    };
+    let runtime = Arc::clone(&shared.plugin_runtime);
+    let column_id = p.column_id;
+    let values = tokio::task::spawn_blocking(move || {
+        let Ok(mut inst) = runtime.instantiate_columns(&wasm, caps) else {
+            tracing::warn!(plugin = %id, "columns: fallo al instanciar, celdas vacías");
+            return vec![None; expected_len];
+        };
+        inst.set_settings(settings);
+        let Ok(raw) = inst.column_values(&column_id, &entries) else {
+            tracing::warn!(plugin = %id, "columns: fallo al ejecutar, celdas vacías");
+            return vec![None; expected_len];
+        };
+        crate::plugins::column_values_checked(raw, expected_len).unwrap_or_else(|| {
+            tracing::warn!(
+                plugin = %id,
+                "columns: longitud no casa el contrato posicional, celdas vacías"
+            );
+            vec![None; expected_len]
+        })
+    })
+    .await
+    .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "column_values task panicked"))?;
+    to_value(&methods::PluginColumnValuesResult { values })
 }
 
 /// Instante de expiración de un scope a partir de su `ttl_ms`: clamp a

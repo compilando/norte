@@ -56,6 +56,53 @@ independently through `PROTOCOL_VERSION`.
   role-over-fg precedence and GUI unit tests for the pure color-resolution
   function.
 
+- **Row decorators and plugin columns, host + backend + both frontends
+  (G3b, ADR 0037):** `plugin.decorate`/`plugin.column_values` (wire-only
+  since 0.27.0/G3a) now have a real handler and are painted end to end.
+  New manifest `Category::Decorator` plus an (initially empty, additive)
+  `contributions.decorator` — the digest follows the SAME optional-section
+  pattern as `[config]`: a manifest without `[[contributions.decorator]]`
+  digests byte-identical to before this change, so no existing human
+  approval is invalidated by the mere existence of the new category.
+  `PluginRegistry::resolve_decorators` returns **every** approved+enabled
+  decorator plugin (unlike `resolve_previewer`'s first-match: multiple
+  decorators can badge the same page); `resolve_columns(id)` resolves the
+  one `columns` plugin declaring that column id. Both are gated on the
+  primary `category` (decorator/columns each get their own dedicated WIT
+  world, unlike previewer/command which share `norte-plugin`). The
+  entries that cross to a guest are **basenames**, never full paths
+  (`plugins::paths_to_basenames`) — a decorator/columns plugin sees a
+  name, not where it lives in the tree. `Backend::plugin_decorate`/
+  `plugin_column_values` (embedded + remote, daemon handlers
+  `handle_plugin_decorate`/`handle_plugin_column_values` gated by the same
+  read-gate as `fs.list`, extended to the whole batch) are fail-closed
+  **per plugin**, never per batch: a plugin that fails to instantiate,
+  traps, or breaks the positional 1:1 contract (checked by
+  `decorations_to_wire_checked`/`column_values_checked`) is dropped from
+  the result with a log warning — the rest of the page still paints.
+  TUI: after a listing lands, a background fetch (mirroring the existing
+  `Fill`/`StatProbe` one-in-flight pattern) decorates the loaded page and
+  installs the result on `PaneState`; `entry_item` paints a badge span
+  after the hostile-name-badge slot (role resolves through the theme,
+  unstyled falls back to dim). GUI: the same fetch rides the existing
+  `SessionCmd`/`SessionEvent` session channel (`Decorate`/`Decorated`,
+  double guard on generation *and* dir); `render_row` becomes a flex row
+  (name flex-grows and truncates, badge never does) and reuses
+  `styled_span_color` for role resolution — `DecorationWire` carries no
+  raw `fg`, so an unrecognized role derives a dim tone from the row's own
+  color instead. Every badge is masked and capped to 8 chars *after*
+  masking (`norte_frontend::sanitize_decoration`, shared by both
+  frontends — the same module also flattens the wire's per-plugin overlay
+  to one winning decoration per path, `merge_decorations`). Two new
+  columns/decorator demo guests (`examples-wasm/decorator-demo`,
+  `examples-wasm/columns-demo`) back a real-WASM e2e through
+  `Backend::Remote` against a real daemon socket. **Scope note:** GUI/TUI
+  column *cells* are not rendered in this change — `plugin.list`'s
+  `PluginInfo` does not expose `contributions.columns` today, so a
+  frontend has no wire-level way to discover which column ids exist
+  without a further (additive) protocol change; that's follow-up work,
+  tracked separately from this change's registry/wire/decorator-UI scope.
+
 - **GUI settings view (S4):** `app.settings` (`F11`, same shared preset
   binding as the TUI) opens a searchable, VSCode-style full-view swap over
   the same General catalog (S2) — search box, grouped list (General/

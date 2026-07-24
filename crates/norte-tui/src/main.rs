@@ -142,6 +142,63 @@ fn spawn_stat_probe(backend: &Backend, pane: usize, path: VPath) -> StatProbe {
     StatProbe { pane, path, rx }
 }
 
+/// Fetch de decoraciones de plugin EN VUELO (G3b, ADR 0037): el pane/dir
+/// destino y el canal one-shot. Molde de [`StatProbe`] — a lo sumo UNO
+/// global (mismo criterio simplificador que `fill`/`stat_probe`: un cd en
+/// OTRO pane mientras este sigue en vuelo lo reemplaza, perdiendo esa
+/// respuesta; documentado, no un bug — la próxima vez que se visite ese
+/// pane se vuelve a pedir). `dir` se conserva para descartar una respuesta
+/// TARDÍA que ya no corresponde al listado actual del pane (el usuario
+/// cd'eó de nuevo antes de que el daemon respondiera).
+struct DecorateFetch {
+    pane: usize,
+    dir: VPath,
+    rx: tokio::sync::oneshot::Receiver<
+        std::collections::HashMap<VPath, norte_frontend::Decoration>,
+    >,
+}
+
+/// Lanza el fetch de decoraciones (G3b) para TODAS las entradas actualmente
+/// listadas de `pane` (la "página visible" — el listado YA cargado, sea la
+/// primera página de un dir grande paginándose o el dir entero; el resto de
+/// un dir aún rellenándose queda sin decorar hasta la próxima visita, mismo
+/// alcance MVP documentado en el ADR/plan). Sin guardia especial de "algún
+/// decorator activado": `Backend::plugin_decorate` resuelve el catálogo en
+/// cada llamada (barato embebido, una RPC remota) — intentar cada listado y
+/// descartar en silencio si no hay decoradores consentidos es más simple y
+/// honesto que cachear un flag que podría quedar obsoleto tras un F12.
+/// `None` si el pane no tiene entradas (nada que decorar).
+fn spawn_decorate_fetch(
+    backend: &Backend,
+    pane: usize,
+    dir: VPath,
+    paths: Vec<VPath>,
+) -> Option<DecorateFetch> {
+    if paths.is_empty() {
+        return None;
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let b = backend.clone();
+    tokio::spawn(async move {
+        let plugins = b.plugin_decorate(&paths).await.unwrap_or_default();
+        let merged = norte_frontend::merge_decorations(&paths, &plugins);
+        let _ = tx.send(merged);
+    });
+    Some(DecorateFetch { pane, dir, rx })
+}
+
+/// Pane que un desenlace de `cd` acaba de ASENTAR (`Filling`/`Replaced`,
+/// listado nuevo YA en `app.panes[pane]`), o `None` si el cd no tocó ningún
+/// pane (`Failed`/`Cancelled`). NO consume `outcome` (préstamo): el llamante
+/// aún necesita pasarlo a [`apply_cd`] justo después.
+fn cd_landed_pane(outcome: &Cd) -> Option<usize> {
+    match outcome {
+        Cd::Filling(f) => Some(f.pane),
+        Cd::Replaced(pane) => Some(*pane),
+        Cd::Failed(..) | Cd::Cancelled => None,
+    }
+}
+
 /// Desenlace de un `cd`, para que el run loop actualice el relleno vivo.
 enum Cd {
     /// El pane se reemplazó y su RESTO se rellena en background.
@@ -627,6 +684,9 @@ async fn run(
     // selección).
     let mut stat_probe: Option<StatProbe> = None;
     let mut last_probed: Option<(usize, VPath)> = None;
+    // Fetch de decoraciones de plugin en vuelo (G3b, ADR 0037): a lo sumo
+    // uno, molde de `stat_probe`/`fill`.
+    let mut decorate_fetch: Option<DecorateFetch> = None;
     loop {
         // Barra Lua en cada vuelta, ANTES del draw (cacheada en el host).
         refresh_lua_status(app, lua_host.as_ref());
@@ -720,6 +780,25 @@ async fn run(
                     && let Some(entry) = res
                 {
                     app.panes[pr.pane].hydrate(&pr.path, entry.size, entry.mtime_ms);
+                }
+            }
+            res = async {
+                match &mut decorate_fetch {
+                    Some(f) => (&mut f.rx).await.ok(),
+                    None => std::future::pending().await,
+                }
+            } => {
+                // Fetch de decoraciones (G3b): se limpia SIEMPRE. Una
+                // respuesta tardía cuyo `dir` ya no case el del pane (el
+                // usuario cd'eó de nuevo mientras estaba en vuelo) se
+                // DESCARTA — nunca pinta badges de un listado que ya no se
+                // ve (mismo criterio anti-stale que el drain-guard de
+                // `apply_fill_msg` para búsqueda virtual).
+                if let Some(f) = decorate_fetch.take()
+                    && let Some(map) = res
+                    && app.panes[f.pane].dir() == &f.dir
+                {
+                    app.panes[f.pane].set_decorations(map);
                 }
             }
             msg = async {
@@ -842,6 +921,12 @@ async fn run(
                             key.code,
                         )
                         .await;
+                        if let Some(pane) = cd_landed_pane(&outcome) {
+                            let dir = app.panes[pane].dir().clone();
+                            let paths: Vec<VPath> =
+                                app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
+                            decorate_fetch = spawn_decorate_fetch(backend, pane, dir, paths);
+                        }
                         apply_cd(&mut fill, &mut last_probed, outcome);
                     } else if app.search_dialog.is_some() {
                         // Diálogo Alt+F7 (liveSearch T6): captura imprimibles
@@ -924,7 +1009,13 @@ async fn run(
                                         &cmd,
                                     )
                                     .await;
-                                    apply_cd(&mut fill, &mut last_probed, outcome);
+                                    if let Some(pane) = cd_landed_pane(&outcome) {
+                            let dir = app.panes[pane].dir().clone();
+                            let paths: Vec<VPath> =
+                                app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
+                            decorate_fetch = spawn_decorate_fetch(backend, pane, dir, paths);
+                        }
+                        apply_cd(&mut fill, &mut last_probed, outcome);
                                 }
                             }
                             _ => {}
@@ -984,6 +1075,12 @@ async fn run(
                             key.code,
                         )
                         .await;
+                        if let Some(pane) = cd_landed_pane(&outcome) {
+                            let dir = app.panes[pane].dir().clone();
+                            let paths: Vec<VPath> =
+                                app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
+                            decorate_fetch = spawn_decorate_fetch(backend, pane, dir, paths);
+                        }
                         apply_cd(&mut fill, &mut last_probed, outcome);
                     } else {
                         // Esc con un comando Lua en vuelo (BROWSE: sin modal
@@ -1113,7 +1210,13 @@ async fn run(
                                             "nav.enter",
                                         )
                                         .await;
-                                        apply_cd(&mut fill, &mut last_probed, outcome);
+                                        if let Some(pane) = cd_landed_pane(&outcome) {
+                            let dir = app.panes[pane].dir().clone();
+                            let paths: Vec<VPath> =
+                                app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
+                            decorate_fetch = spawn_decorate_fetch(backend, pane, dir, paths);
+                        }
+                        apply_cd(&mut fill, &mut last_probed, outcome);
                                     }
                                     continue;
                                 }
@@ -1165,7 +1268,13 @@ async fn run(
                                         &cmd,
                                     )
                                     .await;
-                                    apply_cd(&mut fill, &mut last_probed, outcome);
+                                    if let Some(pane) = cd_landed_pane(&outcome) {
+                            let dir = app.panes[pane].dir().clone();
+                            let paths: Vec<VPath> =
+                                app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
+                            decorate_fetch = spawn_decorate_fetch(backend, pane, dir, paths);
+                        }
+                        apply_cd(&mut fill, &mut last_probed, outcome);
                                     // Un cd (nav.parent…) apagó el modo virtual del
                                     // pane de búsqueda: suelta el run y cancela.
                                     reap_search_run(app, &mut search_run);

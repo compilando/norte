@@ -923,6 +923,162 @@ impl Backend {
             Self::Remote(r) => r.plugin_preview_styled(path).await,
         }
     }
+
+    /// Decora `paths` (G3b, ADR 0037 decisión 2): la SUPERPOSICIÓN de TODOS
+    /// los plugins `decorator` APROBADOS y ACTIVADOS ([`crate::PluginRegistry::
+    /// resolve_decorators`], plural — a diferencia del previewer que elige
+    /// el primero), batched — UNA llamada por plugin sobre la página
+    /// ENTERA, nunca entrada por entrada. `paths` son las rutas VISIBLES de
+    /// la página actual, en el orden en que se listan; cada
+    /// `PluginDecorations::decorations` es POSICIONAL 1:1 con `paths`. Los
+    /// `entries` que cruzan al guest son BASENAMES
+    /// (`crate::plugins::paths_to_basenames`) — un decorator ve el
+    /// nombre de cada entrada, no dónde vive en el árbol (privacidad, ver
+    /// el rustdoc de esa función).
+    ///
+    /// Fail-closed POR PLUGIN, nunca por lote entero: si un plugin no
+    /// instancia, su runtime trapea, o devuelve una longitud que no casa
+    /// `paths.len()` (violación de contrato,
+    /// `crate::plugins::decorations_to_wire_checked`), ESE plugin se
+    /// OMITE del resultado (con aviso en el log local) — el resto de
+    /// plugins y el resto de la página se pintan igual, mismo criterio de
+    /// degradación por-plugin que `plugin_preview`/`plugin_preview_styled`
+    /// (un enriquecimiento nunca debe bloquear el listado). `paths` vacío
+    /// devuelve `Ok(vec![])` sin resolver el catálogo (nada que decorar).
+    ///
+    /// # Errors
+    /// Solo por fallos de INFRAESTRUCTURA del propio `Backend` (I/O al
+    /// descubrir el catálogo, panic real de `spawn_blocking`) — jamás por
+    /// un plugin individual que falla (degrada, ver arriba).
+    pub async fn plugin_decorate(
+        &self,
+        paths: &[VPath],
+    ) -> Result<Vec<norte_proto::methods::PluginDecorations>, Error> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        match self {
+            Self::Embedded(_) => {
+                let dir = crate::connect::config_dir();
+                let entries = crate::plugins::paths_to_basenames(paths);
+                let expected_len = paths.len();
+                let plugins = tokio::task::spawn_blocking(
+                    move || -> Result<Vec<norte_proto::methods::PluginDecorations>, Error> {
+                        let reg = crate::PluginRegistry::discover(&dir)
+                            .map_err(|_| Error::Io { retryable: false })?;
+                        let runtime = norte_plugin_host::PluginRuntime::new()
+                            .map_err(|_| Error::Internal { panic: false })?;
+                        let mut out = Vec::new();
+                        for (id, _name, wasm, caps, settings) in reg.resolve_decorators() {
+                            let Ok(mut inst) = runtime.instantiate_decorator(&wasm, caps) else {
+                                tracing::warn!(
+                                    plugin = %id,
+                                    "decorator: fallo al instanciar, se omite del lote"
+                                );
+                                continue;
+                            };
+                            inst.set_settings(settings);
+                            let Ok(raw) = inst.decorate(&entries) else {
+                                tracing::warn!(
+                                    plugin = %id,
+                                    "decorator: fallo al ejecutar decorate, se omite del lote"
+                                );
+                                continue;
+                            };
+                            let Some(decorations) =
+                                crate::plugins::decorations_to_wire_checked(raw, expected_len)
+                            else {
+                                tracing::warn!(
+                                    plugin = %id,
+                                    "decorator: longitud no casa el contrato posicional, se omite del lote"
+                                );
+                                continue;
+                            };
+                            out.push(norte_proto::methods::PluginDecorations {
+                                plugin_id: id,
+                                decorations,
+                            });
+                        }
+                        Ok(out)
+                    },
+                )
+                .await
+                .map_err(|_| Error::Internal { panic: true })??;
+                Ok(plugins)
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.plugin_decorate(paths).await,
+        }
+    }
+
+    /// Valores de la columna `column_id` para `paths` (G3b, ADR 0037
+    /// decisión 2): a diferencia de [`Self::plugin_decorate`] (superposición
+    /// de TODOS los decorators), como mucho UN plugin `columns` aporta
+    /// `column_id` ([`crate::PluginRegistry::resolve_columns`],
+    /// primero-que-casa). Mismo contrato de entradas (basenames) que
+    /// `plugin_decorate`. Fail-closed: si el ÚNICO plugin que aporta la
+    /// columna no instancia, trapea, o rompe el contrato posicional, el
+    /// resultado es un vector de `None` del tamaño de `paths` (celda vacía
+    /// para toda la página) en vez de un error — una columna sin datos es
+    /// un enriquecimiento perdido, no un fallo del listado. `paths` vacío
+    /// devuelve `Ok(vec![])`.
+    ///
+    /// # Errors
+    /// Solo por fallos de INFRAESTRUCTURA (igual que [`Self::plugin_decorate`]).
+    pub async fn plugin_column_values(
+        &self,
+        column_id: &str,
+        paths: &[VPath],
+    ) -> Result<Vec<Option<String>>, Error> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        match self {
+            Self::Embedded(_) => {
+                let dir = crate::connect::config_dir();
+                let entries = crate::plugins::paths_to_basenames(paths);
+                let expected_len = paths.len();
+                let column_id_owned = column_id.to_owned();
+                let values = tokio::task::spawn_blocking(
+                    move || -> Result<Vec<Option<String>>, Error> {
+                        let reg = crate::PluginRegistry::discover(&dir)
+                            .map_err(|_| Error::Io { retryable: false })?;
+                        let Some((id, _name, wasm, caps, settings)) =
+                            reg.resolve_columns(&column_id_owned)
+                        else {
+                            return Ok(vec![None; expected_len]);
+                        };
+                        let runtime = norte_plugin_host::PluginRuntime::new()
+                            .map_err(|_| Error::Internal { panic: false })?;
+                        let Ok(mut inst) = runtime.instantiate_columns(&wasm, caps) else {
+                            tracing::warn!(plugin = %id, "columns: fallo al instanciar, celdas vacías");
+                            return Ok(vec![None; expected_len]);
+                        };
+                        inst.set_settings(settings);
+                        let Ok(raw) = inst.column_values(&column_id_owned, &entries) else {
+                            tracing::warn!(plugin = %id, "columns: fallo al ejecutar, celdas vacías");
+                            return Ok(vec![None; expected_len]);
+                        };
+                        Ok(
+                            crate::plugins::column_values_checked(raw, expected_len)
+                                .unwrap_or_else(|| {
+                                    tracing::warn!(
+                                        plugin = %id,
+                                        "columns: longitud no casa el contrato posicional, celdas vacías"
+                                    );
+                                    vec![None; expected_len]
+                                }),
+                        )
+                    },
+                )
+                .await
+                .map_err(|_| Error::Internal { panic: true })??;
+                Ok(values)
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.plugin_column_values(column_id, paths).await,
+        }
+    }
 }
 
 /// Mapea el fallo de ejecución de un plugin a la taxonomía del protocolo (modo
@@ -2032,6 +2188,60 @@ pub mod remote {
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             }
         }
+
+        /// `plugin.decorate` contra el daemon (G3b, ADR 0037): `MethodNotFound`
+        /// (mismos DOS triggers documentados en el ADR — un daemon 0.27 que aún
+        /// no cableó el handler, o un cliente que decide no llamarlo) cae a SIN
+        /// decoraciones (`Ok(vec![])`) — el listado se pinta igual, sin badges.
+        /// Cualquier OTRO error se propaga. `paths` vacío no llama al wire (nada
+        /// que decorar).
+        pub(super) async fn plugin_decorate(
+            &self,
+            paths: &[VPath],
+        ) -> Result<Vec<methods::PluginDecorations>, Error> {
+            if paths.is_empty() {
+                return Ok(Vec::new());
+            }
+            let client = self.client().await?;
+            let params = methods::PluginDecorateParams {
+                paths: paths.to_vec(),
+            };
+            let call =
+                client.call::<_, methods::PluginDecorateResult>(methods::PLUGIN_DECORATE, &params);
+            match tokio::time::timeout(CALL_TIMEOUT, call).await {
+                Ok(res) => map_decorate_result(res),
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            }
+        }
+
+        /// `plugin.column_values` contra el daemon (G3b, ADR 0037): mismo
+        /// criterio de fallback que [`Self::plugin_decorate`], pero la forma
+        /// "sin datos" es un vector de `None` del tamaño de `paths` (celda
+        /// vacía por entrada), no un vector vacío — el caller espera SIEMPRE
+        /// una celda por ruta (contrato posicional), incluso cuando la
+        /// columna no aplica en absoluto.
+        pub(super) async fn plugin_column_values(
+            &self,
+            column_id: &str,
+            paths: &[VPath],
+        ) -> Result<Vec<Option<String>>, Error> {
+            if paths.is_empty() {
+                return Ok(Vec::new());
+            }
+            let client = self.client().await?;
+            let params = methods::PluginColumnValuesParams {
+                column_id: column_id.to_owned(),
+                paths: paths.to_vec(),
+            };
+            let call = client.call::<_, methods::PluginColumnValuesResult>(
+                methods::PLUGIN_COLUMN_VALUES,
+                &params,
+            );
+            match tokio::time::timeout(CALL_TIMEOUT, call).await {
+                Ok(res) => map_column_values_result(res, paths.len()),
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            }
+        }
     }
 
     /// Traduce el `Result` crudo de `plugin.preview_styled` (G3a, ADR 0037)
@@ -2050,6 +2260,45 @@ pub mod remote {
                 if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
             {
                 Ok(None)
+            }
+            Err(e) => Err(to_taxonomy(e)),
+        }
+    }
+
+    /// Traduce el `Result` crudo de `plugin.decorate` (G3b, ADR 0037) al
+    /// contrato de [`RemoteBackend::plugin_decorate`]: `METHOD_NOT_FOUND` →
+    /// `Ok(vec![])` (sin decoraciones, mismo destino que "ningún decorator
+    /// consentido"); cualquier OTRO error va por la taxonomía normal.
+    fn map_decorate_result(
+        res: Result<methods::PluginDecorateResult, ClientError>,
+    ) -> Result<Vec<methods::PluginDecorations>, Error> {
+        match res {
+            Ok(r) => Ok(r.plugins),
+            Err(ClientError::Rpc(ref rpc))
+                if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
+            {
+                Ok(Vec::new())
+            }
+            Err(e) => Err(to_taxonomy(e)),
+        }
+    }
+
+    /// Traduce el `Result` crudo de `plugin.column_values` (G3b, ADR 0037)
+    /// al contrato de [`RemoteBackend::plugin_column_values`]:
+    /// `METHOD_NOT_FOUND` → `Ok(vec![None; expected_len])` (celda vacía por
+    /// entrada, NUNCA un vector vacío — el caller espera SIEMPRE una celda
+    /// por ruta, contrato posicional); cualquier OTRO error va por la
+    /// taxonomía normal.
+    fn map_column_values_result(
+        res: Result<methods::PluginColumnValuesResult, ClientError>,
+        expected_len: usize,
+    ) -> Result<Vec<Option<String>>, Error> {
+        match res {
+            Ok(r) => Ok(r.values),
+            Err(ClientError::Rpc(ref rpc))
+                if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
+            {
+                Ok(vec![None; expected_len])
             }
             Err(e) => Err(to_taxonomy(e)),
         }

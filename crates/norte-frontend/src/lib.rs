@@ -14,6 +14,7 @@
 
 pub mod ansi;
 pub mod config;
+mod decoration;
 mod display;
 pub mod keymap;
 pub mod nav;
@@ -24,6 +25,7 @@ mod sort;
 pub mod theme;
 pub mod viewer;
 
+pub use decoration::{BADGE_MAX_CHARS, Decoration, merge_decorations, sanitize_decoration};
 pub use display::{display_name, display_name_with, path_display, path_display_with};
 pub use pane::PaneState;
 pub use sort::sort_entries;

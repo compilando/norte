@@ -95,6 +95,44 @@ fn snapshot_navegacion() {
     insta::assert_snapshot!(render(&app_base()));
 }
 
+/// G3b (ADR 0037): badge de decorator de plugin, TRAS el hueco del badge de
+/// nombre hostil — `docs` lleva un badge con ROL reconocido (color del
+/// tema); `src` lleva un badge HOSTIL (control embebido, más largo que el
+/// tope de 8 chars) que debe llegar ya ENMASCARADO y TRUNCADO (nunca el
+/// control crudo, nunca más de 8 chars); `notas.txt` no lleva decoración —
+/// su fila se ve exactamente igual que antes de G3b (sin span extra).
+#[test]
+fn snapshot_decoracion_de_plugin_badge_hostil_enmascarado() {
+    let mut app = app_base();
+    let pane = app.focused_mut();
+    let by_name = |entries: &[Entry], name: &[u8]| -> VPath {
+        entries
+            .iter()
+            .find(|e| e.path.file_name().is_some_and(|n| n.as_bytes() == name))
+            .expect("entrada del fixture")
+            .path
+            .clone()
+    };
+    let entries = pane.entries().to_vec();
+    let mut decorations = std::collections::HashMap::new();
+    decorations.insert(
+        by_name(&entries, b"docs"),
+        norte_frontend::sanitize_decoration(&norte_proto::methods::DecorationWire {
+            badge: Some("M".to_string()),
+            role: Some("warning".to_string()),
+        }),
+    );
+    decorations.insert(
+        by_name(&entries, b"src"),
+        norte_frontend::sanitize_decoration(&norte_proto::methods::DecorationWire {
+            badge: Some("A\nBCDEFGHIJ".to_string()),
+            role: None,
+        }),
+    );
+    pane.set_decorations(decorations);
+    insta::assert_snapshot!(render(&app));
+}
+
 /// Quick search en modo filtro (spec 2026-07-18): el pane izquierdo lista
 /// SOLO los matches, con la línea de input `/{query} n/m` al pie y el
 /// cursor sobre la selección filtrada; el derecho sigue intacto.

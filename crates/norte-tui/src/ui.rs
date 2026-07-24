@@ -1142,7 +1142,7 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, them
         Some(vis) => (
             vis.iter()
                 .filter_map(|&i| pane.entries().get(i))
-                .map(|e| entry_item(e, theme, reinterpret))
+                .map(|e| entry_item(e, theme, reinterpret, pane.decoration_for(&e.path)))
                 .collect(),
             pane.quick()
                 .and_then(crate::nav::QuickSearch::selected_entry_index)
@@ -1151,7 +1151,7 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, them
         None => (
             pane.entries()
                 .iter()
-                .map(|e| entry_item(e, theme, reinterpret))
+                .map(|e| entry_item(e, theme, reinterpret, pane.decoration_for(&e.path)))
                 .collect(),
             (!pane.entries().is_empty()).then_some(pane.cursor()),
         ),
@@ -1168,6 +1168,7 @@ fn entry_item<'a>(
     entry: &'a norte_proto::Entry,
     theme: &TuiTheme,
     reinterpret: Option<norte_encoding::NameEncoding>,
+    decoration: Option<&norte_frontend::Decoration>,
 ) -> ListItem<'a> {
     let name = entry.path.file_name().map_or(&[][..], |n| n.as_bytes());
     // #57: con reinterpretación activa, los nombres no-UTF8 se decodifican
@@ -1185,7 +1186,25 @@ fn entry_item<'a>(
     );
     // Color por tipo/extensión de la entrada (ADR 0020 D2).
     let body = Span::styled(format!("{marker}{texto}"), theme.entry(name, entry.kind));
-    ListItem::new(Line::from(vec![badge, body]))
+    let mut spans = vec![badge, body];
+    // G3b (ADR 0037): badge de decorator, TRAS el hueco del badge hostil —
+    // ya SANEADO y acotado (`norte_frontend::sanitize_decoration`, aplicado
+    // antes de llegar aquí). Sin decoración para esta entrada, ningún span
+    // extra (ni siquiera un hueco): la fila se ve EXACTAMENTE igual que
+    // antes de G3b para quien no usa decoradores.
+    if let Some(badge_text) = decoration.and_then(|d| d.badge.as_deref()) {
+        let style = match decoration.and_then(|d| d.role) {
+            Some(role) => theme.role(role),
+            // Sin rol reconocido: dim por defecto — visible pero discreto,
+            // nunca el color "normal" de la entrada (se confundiría con el
+            // nombre) ni un color inventado por este frontend (ADR 0037: el
+            // tema del usuario manda, jamás un color crudo que no pidió).
+            None => ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM),
+        };
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(badge_text.to_string(), style));
+    }
+    ListItem::new(Line::from(spans))
 }
 
 fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {

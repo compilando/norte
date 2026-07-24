@@ -42,8 +42,8 @@ pub use config_values::{
 pub use manifest::{
     COMMAND_ID_MAX_CHARS, COMMAND_TITLE_MAX_CHARS, CONFIG_DESCRIPTION_MAX_CHARS,
     CONFIG_ENUM_MAX_VALUES, CONFIG_KEY_MAX_CHARS, CONFIG_MAX_KEYS, CONFIG_STRING_MAX_CHARS,
-    Category, ColumnContrib, CommandContrib, ConfigKeySpec, Contributions, HookContrib, Manifest,
-    ManifestError, PreviewerContrib, ProviderContrib,
+    Category, ColumnContrib, CommandContrib, ConfigKeySpec, Contributions, DecoratorContrib,
+    HookContrib, Manifest, ManifestError, PreviewerContrib, ProviderContrib,
 };
 pub use runtime::{
     ColumnsInstance, DecoratorInstance, PluginInstance, PluginRuntime, ProviderInstance,

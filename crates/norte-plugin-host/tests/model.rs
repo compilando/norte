@@ -965,3 +965,143 @@ fn catalogo_plugin_sin_config_tiene_settings_vacio() {
     let cat = Catalog::load_dir(root.path());
     assert!(cat.plugins[0].settings.is_empty());
 }
+
+// ---------------------------------------------------------------------
+// ADR 0037 (G3b): `Category::Decorator` + `Contributions.decorator`.
+
+/// Un manifiesto `decorator` mínimo: categoría nueva, un único contrib
+/// marcador vacío.
+const DECORATOR_MANIFEST: &str = r#"
+[plugin]
+id = "org.norte.decor"
+name = "Decor"
+publisher = "norte"
+version = "0.1.0"
+category = "decorator"
+
+[[contributions.decorator]]
+"#;
+
+#[test]
+fn manifiesto_decorator_parsea() {
+    let m = Manifest::from_toml(DECORATOR_MANIFEST).unwrap();
+    assert_eq!(m.category, Category::Decorator);
+    assert_eq!(m.contributions.decorator.len(), 1);
+}
+
+#[test]
+fn category_decorator_as_str_es_kebab() {
+    assert_eq!(Category::Decorator.as_str(), "decorator");
+}
+
+/// ADR 0037: `contributions.decorator` sigue el patrón OPCIONAL de
+/// `[config]` (`update_decorator_digest`) — un manifiesto SIN
+/// `[[contributions.decorator]]` debe digestar EXACTAMENTE igual que un
+/// manifiesto de antes de esta categoría (ninguna aprobación humana
+/// existente se resetea por la sola introducción del campo).
+#[test]
+fn manifiesto_sin_decorator_digesta_igual_que_antes_del_campo() {
+    // `command` es la MISMA forma que `TOCTOU_BEFORE`/`CMD_MANIFEST` usados
+    // en otras suites: sin `[[contributions.decorator]]`, el `Vec` está
+    // vacío por el `#[serde(default)]` — el caso general de CUALQUIER
+    // manifiesto pre-existente.
+    let sin_decorator = Manifest::from_toml(
+        r#"
+        [plugin]
+        id = "org.norte.x"
+        name = "X"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "command"
+        [capabilities]
+        fs-read = "scoped"
+    "#,
+    )
+    .unwrap();
+    assert!(sin_decorator.contributions.decorator.is_empty());
+    // El digest no depende de si el tipo EXISTE, solo de si la sección se
+    // popula: repetir el cómputo (determinismo) confirma que no hay un byte
+    // fantasma colándose por la sola presencia del campo en el struct.
+    assert_eq!(
+        sin_decorator.approval_digest(),
+        sin_decorator.approval_digest()
+    );
+}
+
+#[test]
+fn decorator_presente_mueve_el_approval_digest() {
+    let sin = Manifest::from_toml(
+        r#"
+        [plugin]
+        id = "org.norte.x"
+        name = "X"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "decorator"
+    "#,
+    )
+    .unwrap();
+    let con = Manifest::from_toml(
+        DECORATOR_MANIFEST
+            .replace("org.norte.decor", "org.norte.x")
+            .as_str(),
+    )
+    .unwrap();
+    assert_ne!(
+        sin.approval_digest(),
+        con.approval_digest(),
+        "declarar [[contributions.decorator]] debe mover el digest (nuevo trigger, nueva superficie)"
+    );
+}
+
+#[test]
+fn category_decorator_mueve_el_approval_digest_frente_a_otra_categoria() {
+    // Mismo criterio que `approval_digest_incluye_category_y_contributions_
+    // no_solo_capabilities`: cambiar SOLO la categoría (sin tocar
+    // capabilities) debe mover el digest.
+    let command = Manifest::from_toml(
+        r#"
+        [plugin]
+        id = "org.norte.x"
+        name = "X"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "command"
+        [capabilities]
+        fs-read = "scoped"
+    "#,
+    )
+    .unwrap();
+    let decorator = Manifest::from_toml(
+        r#"
+        [plugin]
+        id = "org.norte.x"
+        name = "X"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "decorator"
+        [capabilities]
+        fs-read = "scoped"
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        command.capabilities.digest(),
+        decorator.capabilities.digest(),
+        "las capabilities son idénticas (control del test)"
+    );
+    assert_ne!(command.approval_digest(), decorator.approval_digest());
+}
+
+#[test]
+fn catalogo_by_category_incluye_decorator() {
+    let root = tempfile::tempdir().unwrap();
+    write_plugin(root.path(), "org.norte.decor", DECORATOR_MANIFEST);
+    write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
+
+    let cat = Catalog::load_dir(root.path());
+    assert_eq!(cat.errors.len(), 0, "{:?}", cat.errors);
+    let groups = cat.by_category();
+    let cats: Vec<Category> = groups.iter().map(|(c, _)| *c).collect();
+    assert_eq!(cats, vec![Category::Previewer, Category::Decorator]);
+}

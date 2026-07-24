@@ -13,10 +13,11 @@
 //! y [`PaneState::refresh_quick`] (re-aplica el filtro vivo). La GUI hoy lista
 //! de una sola vez y no los usa; la TUI sí.
 
+use crate::decoration::Decoration;
 use crate::nav::{Mode, QuickSearch};
 use crate::sort::SortKey;
 use norte_proto::{Entry, VPath};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Estado no-render de un pane: directorio, entradas (normalizadas
 /// internamente — ya no exige orden previo del caller, ver [`PaneState::new`]),
@@ -71,6 +72,16 @@ pub struct PaneState {
     /// [`Self::set_listing`], case o no case con una entrada del listado.
     /// Identidad por `VPath` byte-exacto, igual que la memoria.
     pending_focus: Option<VPath>,
+    /// Decoraciones de plugin por entrada (G3b, ADR 0037), YA saneadas
+    /// ([`crate::decoration::sanitize_decoration`]): badge/rol de la
+    /// entrada, si algún decorator consentido decoró esta ruta. Se llena de
+    /// forma ASÍNCRONA tras el listado (nunca bloquea `set_listing`, ver el
+    /// caller en cada frontend) y por eso vive FUERA del reset de
+    /// `set_listing`/`begin_loading` normal — [`Self::set_listing`] y
+    /// [`Self::begin_loading`] SÍ la limpian (un listado nuevo invalida las
+    /// decoraciones del anterior; llegan tarde, no en silencio hasta
+    /// entonces) mediante [`Self::clear_decorations`].
+    decorations: HashMap<VPath, Decoration>,
 }
 
 /// Tope de la memoria de cursor por pane (spec §S1): sesión larga sin fuga
@@ -99,6 +110,7 @@ impl PaneState {
             skipped: None,
             cursor_memory: Vec::new(),
             pending_focus: None,
+            decorations: HashMap::new(),
         }
     }
 
@@ -178,6 +190,9 @@ impl PaneState {
         // #96: las omitidas eran del listado ANTERIOR; el caller fija las
         // frescas con `set_skipped` si su fuente las trae.
         self.skipped = None;
+        // G3b: las decoraciones eran del listado ANTERIOR (claves por
+        // `VPath` byte-exacto de OTRO dir) — un listado nuevo las invalida.
+        self.decorations.clear();
 
         let restored = self
             .pending_focus
@@ -218,6 +233,7 @@ impl PaneState {
         self.quick = None;
         self.marks.clear();
         self.skipped = None;
+        self.decorations.clear();
     }
 
     /// Omitidas del contenedor del listado actual (#93/#96) — ver el campo.
@@ -232,6 +248,34 @@ impl PaneState {
     /// arrastrar el de un listado anterior.
     pub fn set_skipped(&mut self, skipped: Option<u64>) {
         self.skipped = skipped;
+    }
+
+    /// Decoración de plugin de `path` (G3b), ya saneada — `None` si ningún
+    /// decorator consentido decoró esa ruta, o si las decoraciones de esta
+    /// página no han llegado todavía (fetch asíncrono en curso).
+    #[must_use]
+    pub fn decoration_for(&self, path: &VPath) -> Option<&Decoration> {
+        self.decorations.get(path)
+    }
+
+    /// Instala el LOTE de decoraciones ya resuelto y saneado (G3b): el
+    /// caller lo llama tras un `Backend::plugin_decorate` que responde para
+    /// EL MISMO listado que sigue activo (ver [`crate::merge_decorations`]
+    /// para construir el mapa desde el wire) — llamar con decoraciones de
+    /// un `dir` que ya no es el actual es un no-op observable inofensivo
+    /// (las claves por `VPath` de otro dir simplemente no casan ninguna
+    /// entrada visible), pero el caller debería descartar una respuesta
+    /// tardía cuyo `dir` no case el actual ANTES de llamar (ver el sitio de
+    /// la llamada en cada frontend).
+    pub fn set_decorations(&mut self, decorations: HashMap<VPath, Decoration>) {
+        self.decorations = decorations;
+    }
+
+    /// Limpia las decoraciones (G3b): llamado por [`Self::set_listing`]/
+    /// [`Self::begin_loading`] — expuesto también para que un caller pueda
+    /// forzar el reset (p. ej. al desactivar todos los decoradores).
+    pub fn clear_decorations(&mut self) {
+        self.decorations.clear();
     }
 
     /// Sube el cursor una posición (tope en 0). No-op si la lista está vacía.

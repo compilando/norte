@@ -80,6 +80,20 @@ pub enum SessionCmd {
         /// encima de lo que el usuario esté haciendo).
         generation: u64,
     },
+    /// Decora `paths` (G3b, ADR 0037): pide `plugin.decorate` para la
+    /// página VISIBLE que acaba de listar `pane` — mismo guard anti-stale
+    /// (`generation`/`dir`) que `List`/`OpenViewer`, así el `apply_event` de
+    /// la GUI descarta una respuesta tardía de un cd ya superado.
+    Decorate {
+        /// Pane destino (0|1).
+        pane: usize,
+        /// Generación del cd que lo pidió.
+        generation: u64,
+        /// Directorio listado (para el guard anti-stale al aplicar).
+        dir: VPath,
+        /// Rutas visibles a decorar, en el orden del listado.
+        paths: Vec<VPath>,
+    },
 }
 
 /// Contenido del viewer que cruza a la GUI (GUI-d T3).
@@ -167,6 +181,24 @@ pub enum SessionEvent {
         /// Generación del `OpenViewer` que lo pidió (guard anti-stale).
         generation: u64,
     },
+    /// Resultado de un `Decorate` (G3b, ADR 0037): el mapa YA aplanado y
+    /// SANEADO (`norte_frontend::merge_decorations`/`sanitize_decoration` —
+    /// el mismo criterio que la TUI, un solo lugar de saneado compartido
+    /// por ambos frontends). Un daemon sin decoradores consentidos (o un
+    /// `MethodNotFound` de un daemon viejo, ya absorbido por
+    /// `Backend::plugin_decorate`) da un mapa vacío, nunca un error — el
+    /// listado se pinta igual, sin badges.
+    Decorated {
+        /// Pane destino.
+        pane: usize,
+        /// Generación del cd que lo pidió (guard anti-stale).
+        generation: u64,
+        /// Directorio listado (guard anti-stale: debe casar el `dir`
+        /// vigente del pane al aplicar).
+        dir: VPath,
+        /// Decoraciones ya saneadas, por ruta.
+        decorations: HashMap<VPath, norte_frontend::Decoration>,
+    },
 }
 
 /// Arranca el hilo de sesión: conecta al `socket` UNA vez y sirve `cmd_rx`,
@@ -235,6 +267,28 @@ pub fn spawn(
                         tokio::spawn(
                             async move { open_viewer(&backend, path, generation, &tx).await },
                         );
+                    }
+                    SessionCmd::Decorate {
+                        pane,
+                        generation,
+                        dir,
+                        paths,
+                    } => {
+                        if paths.is_empty() {
+                            continue;
+                        }
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            let plugins = backend.plugin_decorate(&paths).await.unwrap_or_default();
+                            let decorations = norte_frontend::merge_decorations(&paths, &plugins);
+                            let _ = tx.send(SessionEvent::Decorated {
+                                pane,
+                                generation,
+                                dir,
+                                decorations,
+                            });
+                        });
                     }
                 }
             }

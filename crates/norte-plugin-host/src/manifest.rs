@@ -24,6 +24,9 @@ pub enum Category {
     Columns,
     /// Hooks before/after de operaciones.
     Hook,
+    /// Decora entradas visibles con un badge/rol tipo "git status" (ADR
+    /// 0037 decisión 2, interfaz WIT `decorator`, world `norte-decorator`).
+    Decorator,
 }
 
 impl Category {
@@ -36,11 +39,15 @@ impl Category {
             Category::Command => "command",
             Category::Columns => "columns",
             Category::Hook => "hook",
+            Category::Decorator => "decorator",
         }
     }
 
     /// Byte canónico y estable para el digest de aprobación (issue #69). NO se
     /// usa el discriminante del enum (podría reordenarse) sino un valor fijo.
+    /// `Decorator` = 5 (ADR 0037): un valor NUEVO al final, nunca reutiliza ni
+    /// reordena los existentes — los digests de manifiestos previos a esta
+    /// categoría no se ven afectados por su sola existencia.
     fn digest_tag(self) -> u8 {
         match self {
             Category::Previewer => 0,
@@ -48,6 +55,7 @@ impl Category {
             Category::Command => 2,
             Category::Columns => 3,
             Category::Hook => 4,
+            Category::Decorator => 5,
         }
     }
 }
@@ -96,6 +104,19 @@ pub struct HookContrib {
     pub on: String,
 }
 
+/// Un decorator declarado (ADR 0037 decisión 2): marcador VACÍO — a
+/// diferencia de [`PreviewerContrib`]/[`ColumnContrib`], un decorator no
+/// declara mimetypes ni ids: la interfaz WIT `decorator::decorate` se llama
+/// para TODA entrada visible de la página (batched, sin filtro previo por
+/// tipo). La entrada existe (en vez de que `category = "decorator"` baste
+/// por sí sola) para dejar sitio simétrico a futuros campos (p. ej. un glob
+/// de exclusión) sin otro cambio de forma del manifiesto; hoy es
+/// deliberadamente `{}` — `deny_unknown_fields` para que un campo hostil
+/// desconocido rechace el manifiesto en vez de ignorarse en silencio.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DecoratorContrib {}
+
 /// Lo que el plugin APORTA, por interfaz. Todo opcional: un plugin de una sola
 /// interfaz solo rellena la suya.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -116,6 +137,15 @@ pub struct Contributions {
     /// Hooks.
     #[serde(default)]
     pub hook: Vec<HookContrib>,
+    /// Decorators (ADR 0037 decisión 2). A diferencia de las demás
+    /// secciones, esta NO entra en `Contributions::update_digest`
+    /// (unconditional): sigue el patrón OPCIONAL de `[config]` — ver
+    /// `update_decorator_digest` — para que un manifiesto sin
+    /// `[[contributions.decorator]]` digeste EXACTAMENTE igual que antes de
+    /// esta categoría (las aprobaciones humanas ya existentes no se
+    /// resetean por la sola introducción del campo).
+    #[serde(default)]
+    pub decorator: Vec<DecoratorContrib>,
 }
 
 impl Contributions {
@@ -429,6 +459,29 @@ fn update_config_digest(config: &BTreeMap<String, ConfigKeySpec>, h: &mut sha2::
     }
 }
 
+/// Alimenta un hasher con la forma CANÓNICA de `contributions.decorator`, SIN
+/// finalizar (ADR 0037 decisión 2): mismo patrón OPCIONAL que
+/// [`update_config_digest`] — la sección `decorator:` SOLO se añade si el
+/// `Vec` NO está vacío, así que un manifiesto sin
+/// `[[contributions.decorator]]` (la inmensa mayoría, incluidos TODOS los
+/// manifiestos que existían antes de esta categoría) digesta EXACTAMENTE
+/// igual que antes de este cambio — ninguna aprobación humana existente se
+/// resetea por la sola introducción del campo. Un manifiesto que SÍ declara
+/// al menos un decorator mueve el digest (fuerza consentimiento) porque
+/// pasar a `category = "decorator"` cambia radicalmente cuándo/cómo se
+/// dispara el plugin.
+fn update_decorator_digest(decorator: &[DecoratorContrib], h: &mut sha2::Sha256) {
+    use sha2::Digest;
+    if decorator.is_empty() {
+        return;
+    }
+    // Domain separator FIJO, igual criterio que `update_config_digest`.
+    h.update(b"decorator:\n");
+    h.update((decorator.len() as u64).to_le_bytes());
+    // `DecoratorContrib` es `{}` hoy: nada más que digestar por entrada más
+    // allá del recuento — un futuro campo se añadiría aquí.
+}
+
 /// Bloque `[plugin]` del manifiesto.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -725,6 +778,8 @@ impl Manifest {
         self.contributions.update_digest(&mut h);
         self.capabilities.update_digest(&mut h);
         update_config_digest(&self.config, &mut h);
+        // ADR 0037: sección OPCIONAL igual que `config:` — ver su rustdoc.
+        update_decorator_digest(&self.contributions.decorator, &mut h);
         crate::capability::hex_lower(&h.finalize())
     }
 }
