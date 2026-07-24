@@ -69,10 +69,13 @@ Add three JSON-RPC methods rather than flags on the existing ones:
 
 New methods, not a flag, because the all-or-nothing preview shape stays
 simple (no partial-styling state to reason about at the type level, same
-argument that shaped `PluginPreviewResult` in M4-P5), and an old daemon that
-has never heard of `plugin.preview_styled` rejects it cleanly with
-`MethodNotFound` — the client falls back to plain `plugin.preview` with no
-flag-negotiation state machine on either side. `plugin.decorate` and
+argument that shaped `PluginPreviewResult` in M4-P5), and — within the
+window where these methods are actually reachable (see the accurate
+fallback story in Consequences below: an old, pre-0.27 daemon is never in
+that window at all, `version_compatible` rejects the handshake before any
+method call happens) — an unanswered call still falls back cleanly to plain
+`plugin.preview` via `MethodNotFound`, with no flag-negotiation state
+machine on either side. `plugin.decorate` and
 `plugin.column_values` were originally scoped for a LATER bump (the G3 plan
 had them as phase G3b, Task 4), but they were foreseeable at ADR time, so
 they fold into this SAME 0.27.0 bump rather than forcing a second
@@ -173,13 +176,26 @@ role-colored child element in the GUI row.
 
 ## Consequences
 
-- **The fallback contract is mandatory, not best-effort.** A client that
-  gained these methods talking to an OLD daemon (pre-0.27.0) receives
-  `MethodNotFound` for all three and MUST fall back to plain
-  `plugin.preview` / no decorations / no columns — the existing
-  "unknown method" taxonomy (ADR 0004) already covers this cleanly; no new
-  error variant was needed. An old client talking to a NEW daemon simply
-  never calls the new methods and observes no behavior change.
+- **The fallback contract is mandatory, not best-effort — and it has TWO
+  distinct triggers that must not be conflated.** A 0.27 client can never
+  even reach a pre-0.27 (0.26 or older) daemon with these methods:
+  `version_compatible` (`crates/norte-proto/src/methods.rs`) accepts only N
+  or N-1 on the SERVER side and rejects a client whose minor is NEWER than
+  the server's — `initialize` fails with `VERSION_MISMATCH` (-32001) before
+  a single RPC call is attempted, so a pre-0.27 daemon is out of the picture
+  entirely, not a `MethodNotFound` case. `MethodNotFound` (the existing
+  "unknown method" taxonomy, ADR 0004; no new error variant needed) is the
+  real trigger inside the SAME 0.27 window: a 0.27 daemon that has not yet
+  wired the handler for one of these methods (this ADR's bump is wire-only;
+  T3/T4 land the daemon-side implementation), or a client that inspects
+  `InitializeResult::protocol_version` and chooses not to call a method it
+  isn't confident the daemon answers yet. Both triggers land the client in
+  the same place — plain `plugin.preview` / no decorations / no columns —
+  so the OBSERVABLE fallback behavior described elsewhere in this ADR is
+  correct; only the mechanism differs, and getting the mechanism right
+  matters for anyone debugging why a call failed. An old (pre-0.27) client
+  talking to a NEW daemon simply never calls the new methods and observes no
+  behavior change, independent of both triggers above.
 - **The WIT rebuild story is load-bearing for THIS repo right now**, not
   just a documented future risk: T2 must rebuild `previewer-demo`,
   `command-demo`, and `ftp-provider.wasm` against `norte:plugin@0.6.0` in the

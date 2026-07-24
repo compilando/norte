@@ -145,10 +145,20 @@ use crate::{
 /// - [`PLUGIN_COLUMN_VALUES`] — valores de una columna aportada por un plugin
 ///   ([`PluginColumnValuesResult`], también posicional 1:1).
 ///
-/// Los tres son métodos NUEVOS (no flags sobre los existentes): un peer N-1
-/// los rechaza limpio con `MethodNotFound` (taxonomía de métodos desconocidos,
-/// ADR 0004) y el cliente cae a la superficie plana existente
-/// ([`PLUGIN_PREVIEW`], sin decoraciones, sin columnas). Topes del wire
+/// Los tres son métodos NUEVOS (no flags sobre los existentes). La ventana
+/// N/N-1 de [`version_compatible`] es MÁS ESTRECHA que "método desconocido":
+/// un cliente 0.27 NUNCA llega a llamarlos contra un daemon 0.26, porque
+/// `initialize` ya rechaza ese handshake con `VERSION_MISMATCH` (un cliente
+/// del futuro no negocia, ver el doctest de [`version_compatible`]) — el
+/// cliente jamás ve `MethodNotFound` en ESE escenario, ve el fallo de
+/// versión antes de intentar nada. `MethodNotFound` (taxonomía de métodos
+/// desconocidos, ADR 0004) SÍ aplica dentro de la MISMA ventana 0.27: un
+/// daemon 0.27 que aún no tiene el handler cableado (este bump es solo de
+/// wire; T3/T4 lo cablean) responde `MethodNotFound` a un cliente 0.27, que
+/// cae a la superficie plana existente ([`PLUGIN_PREVIEW`], sin
+/// decoraciones, sin columnas) — igual que cualquier cliente que decide NO
+/// llamarlos tras inspeccionar `InitializeResult::protocol_version` y
+/// preferir no arriesgarse. Topes del wire
 /// (server ENFORCE, cliente re-valida fail-closed a lo plano si se violan):
 /// ≤10 000 líneas, ≤64 spans/línea, texto de span ≤4 KiB, payload total
 /// ≤4 MiB (mismo tope de retorno del runtime, ya usado por
@@ -376,19 +386,28 @@ pub const PLUGIN_PREVIEW: &str = "plugin.preview";
 /// `plugin.preview_styled` — gemelo CON ESTILO de [`PLUGIN_PREVIEW`] (0.27.0,
 /// G3, ADR 0037): el mismo previewer devuelve líneas de spans con `role`/`fg`
 /// en vez de un string plano, para que el HOST pinte resaltado real (nunca el
-/// plugin). Mismo patrón all-or-nothing que [`PLUGIN_PREVIEW`]; un daemon N-1
-/// responde `MethodNotFound` y el cliente cae a [`PLUGIN_PREVIEW`].
+/// plugin). Mismo patrón all-or-nothing que [`PLUGIN_PREVIEW`]. Un daemon 0.26
+/// NUNCA lo ve: un cliente 0.27 no completa el handshake contra él
+/// (`VERSION_MISMATCH` en `initialize`, ver [`version_compatible`]).
+/// `MethodNotFound` es la respuesta dentro de la MISMA ventana 0.27 (un
+/// daemon 0.27 sin el handler aún cableado, T3/T4); el cliente cae a
+/// [`PLUGIN_PREVIEW`] igual en ambos casos.
 pub const PLUGIN_PREVIEW_STYLED: &str = "plugin.preview_styled";
 /// `plugin.decorate` — decoraciones tipo git-status por entrada, aportadas
 /// por plugins `decorator` APROBADOS y ACTIVADOS (0.27.0, G3, ADR 0037):
 /// batched sobre una página visible, POSICIONAL 1:1 con `params.paths`
-/// (ver [`PluginDecorateResult`]). Un daemon N-1 responde `MethodNotFound`;
-/// el frontend cae a listar sin decoraciones.
+/// (ver [`PluginDecorateResult`]). Un daemon 0.26 NUNCA lo ve (mismo
+/// `VERSION_MISMATCH` de handshake que [`PLUGIN_PREVIEW_STYLED`]);
+/// `MethodNotFound` de un daemon 0.27 sin handler aún cableado, o la
+/// decisión del cliente de no llamarlo, degradan igual a listar sin
+/// decoraciones.
 pub const PLUGIN_DECORATE: &str = "plugin.decorate";
 /// `plugin.column_values` — valores de una columna aportada por un plugin
 /// `columns` APROBADO y ACTIVADO (0.27.0, G3, ADR 0037), POSICIONAL 1:1 con
-/// `params.paths` (ver [`PluginColumnValuesResult`]). Un daemon N-1 responde
-/// `MethodNotFound`; el frontend cae a no mostrar la columna.
+/// `params.paths` (ver [`PluginColumnValuesResult`]). Misma historia de
+/// fallback que [`PLUGIN_DECORATE`]: un daemon 0.26 nunca lo ve
+/// (`VERSION_MISMATCH` de handshake); `MethodNotFound`/la decisión del
+/// cliente degradan a no mostrar la columna.
 pub const PLUGIN_COLUMN_VALUES: &str = "plugin.column_values";
 /// `rpc.cancel` — notificación client→server (#72): retira la request en
 /// vuelo cuyo `id` JSON-RPC se indica. Best-effort y SIN respuesta: la
