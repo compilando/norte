@@ -1692,7 +1692,9 @@ fn method_names_frozen() {
     // por el wire; PluginInfo gana columns (sin método nuevo).
     // 0.29.0 (#101): PluginPreview/PluginPreviewStyled ganan `lossy` (sin
     // método nuevo — solo campo aditivo).
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.29.0");
+    // 0.30.0 (columnas bloque 1, ADR 0039): atributos de provider — Entry.attrs,
+    // FsCapabilitiesResult.attrs y los dos attrs de petición (sin método nuevo).
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.30.0");
 }
 
 #[test]

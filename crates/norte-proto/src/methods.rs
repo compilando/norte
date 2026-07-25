@@ -193,7 +193,61 @@ use crate::{
 /// decodificación igual que ya hace el viewer crudo. Aditivo sobre 0.28.x
 /// (`#[serde(default)]` = un par N-1 se lee como `false`) — la ventana pasa a
 /// N=0.29.x/N-1=0.28.x.
-pub const PROTOCOL_VERSION: &str = "0.29.0";
+///
+/// 0.30.0 (columnas bloque 1, ADR 0039): ATRIBUTOS DE PROVIDER, tipados y bajo
+/// demanda — tres campos aditivos más el vocabulario del módulo
+/// [`attrs`](crate::attrs) ([`AttrType`](crate::AttrType),
+/// [`AttrHint`](crate::AttrHint), [`AttrInfo`](crate::AttrInfo),
+/// [`AttrValue`](crate::AttrValue)). [`FsCapabilitiesResult`] gana
+/// `attrs: Vec<AttrInfo>` (discovery: qué publica ESE provider, con tipo y
+/// pista de presentación); [`FsListParams`] y [`FsStatParams`] ganan
+/// `attrs: Vec<String>` (el cliente pide SOLO los ids que va a pintar, nada se
+/// entrega sin pedirlo); [`Entry`] gana
+/// `attrs: BTreeMap<String, AttrValue>`. Los tres llevan `skip_serializing_if`
+/// sobre el vacío, así que un peer 0.29 emite y recibe payloads idénticos BYTE
+/// A BYTE a los de antes — aditivo en el sentido fuerte, no solo en el de
+/// «campo desconocido que se ignora».
+///
+/// `AttrValue` deserializa A MANO (misma ruta que
+/// [`CapabilityFlags`](crate::CapabilityFlags): `#[serde(other)]` no existe
+/// para una variante CON datos) y degrada a `AttrValue::Unknown` TODO valor
+/// malformado — etiqueta desconocida (un peer del futuro, ADR 0004 aplicado a
+/// granularidad de celda), objeto AMBIGUO con dos o más etiquetas conocidas
+/// (las claves de un objeto JSON no están ordenadas, RFC 8259 §4, así que
+/// «gana la primera» dependería del capricho de un relay), payload del tipo
+/// JSON equivocado, `null`, no-objeto, base64 indecodificable, y texto o bytes
+/// por encima del tope. Ninguno es error duro: cuesta UNA celda, jamás la
+/// entrada ni la página.
+///
+/// Los dos campos de RECEPCIÓN filtran al decodificar y tampoco erran nunca.
+/// `Entry.attrs`: id malformado DESCARTADO, mapa acotado en
+/// [`ATTRS_MAX_REQUEST`](crate::ATTRS_MAX_REQUEST) quedándose con los ids más
+/// pequeños en orden de bytes, clave repetida last-wins.
+/// `FsCapabilitiesResult.attrs`: id malformado descartado, id REPETIDO
+/// first-wins (es una lista ORDENADA que el provider ranquea, al revés que un
+/// objeto JSON sin orden), label largo RECORTADO a
+/// [`ATTR_LABEL_MAX`](crate::ATTR_LABEL_MAX) en frontera de char (el id es lo
+/// que un cliente acciona: perder el atributo por lo cosmético sería el
+/// cambio malo), catálogo acotado en
+/// [`ATTRS_MAX_ADVERTISED`](crate::ATTRS_MAX_ADVERTISED) conservando los
+/// PRIMEROS del wire, y examen acotado en
+/// [`ATTRS_MAX_CATALOG_SCAN`](crate::ATTRS_MAX_CATALOG_SCAN) (el resto se
+/// drena sin materializar). Los dos campos de PETICIÓN, en cambio, NO filtran
+/// a propósito: llevan datos que este peer ENVÍA, así que un id malformado
+/// sobrevive al decode y es el `-32602` del daemon — que cablea el bloque 2 —
+/// en vez de blanquearse a «no pidió nada», lo que escondería el bug del
+/// llamante y haría intestable esa validación.
+///
+/// Este bump es SOLO de wire: ningún provider anuncia atributos todavía y el
+/// daemon ignora los ids pedidos, lo cual es honesto porque la AUSENCIA ya es
+/// una respuesta válida del contrato (pedir un id que el provider no ofrece
+/// nunca fue error: vuelve ausente). La ventana pasa a N=0.30.x/N-1=0.29.x, y
+/// la dirección que tiene que sostenerse es un cliente 0.29 contra un daemon
+/// 0.30: no envía `attrs`, no recibe `attrs`, nada cambia para él. La inversa
+/// no es una pregunta sobre atributos — [`version_compatible`] rechaza de
+/// plano a un cliente del FUTURO con `VERSION_MISMATCH`, antes de mirar campo
+/// alguno.
+pub const PROTOCOL_VERSION: &str = "0.30.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
