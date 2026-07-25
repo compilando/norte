@@ -293,6 +293,64 @@ fn el_schema_de_entry_attrs_lleva_los_topes_del_tipo() {
     }
 }
 
+/// (0.30.0, ADR 0039) Mismo criterio que el test anterior, para los tres campos
+/// de método: el artefacto es lo único que lee un implementador de TERCEROS, y
+/// un `array` abierto le diría que 100 ids arbitrarios son legales. Los topes
+/// vienen de las MISMAS constantes que aplica el código.
+///
+/// El catálogo lleva SOLO `maxItems`: la forma de sus elementos ya la describe
+/// `$defs/AttrInfo`, y su `id` es un `string` cuyo filtro vive en el
+/// deserializador del campo (un tercero que anuncie un id inválido no rompe:
+/// se le descarta, §5). Las dos PETICIONES sí restringen el ítem, porque ahí
+/// un id mal formado es `-32602` y el schema tiene que decirlo.
+#[test]
+fn el_schema_de_los_campos_de_metodo_lleva_los_topes_del_tipo() {
+    use norte_proto::attrs::{ATTR_ID_MAX, ATTRS_MAX_ADVERTISED, ATTRS_MAX_REQUEST};
+
+    let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
+
+    let catalogo = schema
+        .pointer("/$defs/FsCapabilitiesResult/properties/attrs")
+        .expect("FsCapabilitiesResult.attrs está en el artefacto");
+    assert_eq!(
+        catalogo.get("maxItems").and_then(serde_json::Value::as_u64),
+        Some(ATTRS_MAX_ADVERTISED as u64),
+        "el tope del catálogo viaja en el schema"
+    );
+    assert_eq!(
+        catalogo
+            .pointer("/items/$ref")
+            .and_then(serde_json::Value::as_str),
+        Some("#/$defs/AttrInfo"),
+        "el elemento es un AttrInfo, no un objeto libre"
+    );
+
+    for tipo in ["FsListParams", "FsStatParams"] {
+        let pedido = schema
+            .pointer(&format!("/$defs/{tipo}/properties/attrs"))
+            .unwrap_or_else(|| panic!("{tipo}.attrs está en el artefacto"));
+        assert_eq!(
+            pedido.get("maxItems").and_then(serde_json::Value::as_u64),
+            Some(ATTRS_MAX_REQUEST as u64),
+            "[{tipo}] el tope de ids pedidos viaja en el schema"
+        );
+        let item = pedido.get("items").unwrap_or_else(|| {
+            panic!("[{tipo}] los ids están restringidos, no son un string cualquiera")
+        });
+        assert_eq!(
+            item.get("maxLength").and_then(serde_json::Value::as_u64),
+            Some(ATTR_ID_MAX as u64),
+            "[{tipo}] longitud máxima del id"
+        );
+        assert_eq!(
+            item.get("pattern").and_then(serde_json::Value::as_str),
+            Some(r"^[a-z0-9_-]+(\.[a-z0-9_-]+)+$"),
+            "[{tipo}] el patrón es el MISMO que el de Entry.attrs \
+             (traducción ECMA-262 de is_valid_attr_id)"
+        );
+    }
+}
+
 /// Recoge `.rs` bajo `dir` (incluye `src/wire/`).
 fn collect_rs(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {

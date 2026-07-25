@@ -197,6 +197,7 @@ async fn initialize_negocia_y_es_obligatorio() {
                 path: vp("mem:///"),
                 limit: None,
                 cursor: None,
+                attrs: Vec::new(),
             },
         )
         .await
@@ -286,6 +287,7 @@ async fn fs_list_y_stat_responden_por_el_socket() {
                 path: vp("mem:///"),
                 limit: None,
                 cursor: None,
+                attrs: Vec::new(),
             },
         )
         .await
@@ -297,6 +299,7 @@ async fn fs_list_y_stat_responden_por_el_socket() {
             methods::FS_STAT,
             &FsStatParams {
                 path: vp("mem:///f.txt"),
+                attrs: Vec::new(),
             },
         )
         .await
@@ -317,6 +320,7 @@ async fn call_tracked_reporta_el_id_asignado() {
             norte_proto::methods::FS_STAT,
             &norte_proto::methods::FsStatParams {
                 path: vp("mem:///nope"),
+                attrs: Vec::new(),
             },
             move |id| s.lock().expect("lock").push(id),
         )
@@ -341,6 +345,7 @@ async fn list_page(
             path: vp(path),
             limit,
             cursor,
+            attrs: Vec::new(),
         },
     )
     .await
@@ -458,6 +463,7 @@ async fn fs_list_limit_cero_es_invalid_params() {
                 path: vp("mem:///"),
                 limit: Some(0),
                 cursor: None,
+                attrs: Vec::new(),
             },
         )
         .await
@@ -479,6 +485,7 @@ async fn fs_list_cursor_desconocido_es_cursor_expired() {
                     path: vp("mem:///"),
                     limit: Some(1),
                     cursor: Some(cur.to_string()),
+                    attrs: Vec::new(),
                 },
             )
             .await
@@ -510,6 +517,7 @@ async fn fs_list_cursor_de_otro_path_es_invalid_params() {
                 path: vp("mem:///otro"),
                 limit: Some(1),
                 cursor: Some(cur),
+                attrs: Vec::new(),
             },
         )
         .await
@@ -538,6 +546,7 @@ async fn fs_list_lru_expulsa_el_mas_viejo() {
                 path: vp("mem:///"),
                 limit: Some(1),
                 cursor: Some(cursores[0].clone()),
+                attrs: Vec::new(),
             },
         )
         .await
@@ -569,6 +578,7 @@ async fn fs_list_ttl_expira_el_listado() {
                 path: vp("mem:///"),
                 limit: Some(1),
                 cursor: Some(cur),
+                attrs: Vec::new(),
             },
         )
         .await
@@ -590,6 +600,7 @@ async fn fs_stat_de_inexistente_viaja_como_taxonomia_en_data() {
             methods::FS_STAT,
             &FsStatParams {
                 path: vp("mem:///nada"),
+                attrs: Vec::new(),
             },
         )
         .await
@@ -1395,6 +1406,7 @@ async fn fs_copy_progresa_hasta_completed() {
             methods::FS_STAT,
             &FsStatParams {
                 path: vp("mem:///dst.bin"),
+                attrs: Vec::new(),
             },
         )
         .await
@@ -1687,6 +1699,7 @@ async fn initialize_repetido_es_invalid_request() {
                 path: vp("mem:///"),
                 limit: None,
                 cursor: None,
+                attrs: Vec::new(),
             },
         )
         .await
@@ -1722,6 +1735,7 @@ async fn call_tras_el_cierre_no_se_cuelga() {
                 path: vp("mem:///"),
                 limit: None,
                 cursor: None,
+                attrs: Vec::new(),
             },
         ),
     )
@@ -2913,6 +2927,7 @@ async fn daemon_shutdown_de_agente_es_invalid_request() {
                 path: vp("mem:///"),
                 limit: None,
                 cursor: None,
+                attrs: Vec::new(),
             },
         )
         .await
@@ -3096,6 +3111,7 @@ async fn cerrar_conexion_libera_sus_listings_retenidos() {
         path: vp(c),
         limit: Some(1),
         cursor: None,
+        attrs: Vec::new(),
     };
 
     // Satura el tope GLOBAL (256): 32 conexiones × 8 listings retenidos.
@@ -3314,6 +3330,7 @@ async fn rpc_cancel_retira_el_ask_suspendido_sin_matar_la_conexion() {
             methods::FS_STAT,
             &FsStatParams {
                 path: vp("mem:///proj/src.txt"),
+                attrs: Vec::new(),
             },
         )
         .await
@@ -3472,6 +3489,7 @@ async fn decide_gana_a_un_cancel_posterior() {
             methods::FS_STAT,
             &FsStatParams {
                 path: vp("mem:///proj/src.txt"),
+                attrs: Vec::new(),
             },
         )
         .await
@@ -3549,6 +3567,7 @@ async fn frames_pipelined_durante_un_ask_se_procesan_tras_el_desenlace() {
                 methods::FS_STAT,
                 &FsStatParams {
                     path: vp("mem:///proj/src.txt"),
+                    attrs: Vec::new(),
                 },
             )
             .await
@@ -3738,6 +3757,7 @@ async fn fs_search_params_invalidos_no_crean_task() {
                 path: vp("mem:///"),
                 limit: None,
                 cursor: None,
+                attrs: Vec::new(),
             },
         )
         .await
@@ -3945,6 +3965,7 @@ async fn agente_sin_scope_no_lee_y_con_scope_si() {
             path: vp("mem:///proj"),
             limit: None,
             cursor: None,
+            attrs: Vec::new(),
         },
     )
     .await;
@@ -3953,6 +3974,7 @@ async fn agente_sin_scope_no_lee_y_con_scope_si() {
         methods::FS_STAT,
         &FsStatParams {
             path: vp("mem:///proj/a.txt"),
+            attrs: Vec::new(),
         },
     )
     .await;
@@ -3986,6 +4008,7 @@ async fn agente_sin_scope_no_lee_y_con_scope_si() {
                 path: vp("mem:///proj"),
                 limit: None,
                 cursor: None,
+                attrs: Vec::new(),
             },
         )
         .await
@@ -3996,6 +4019,7 @@ async fn agente_sin_scope_no_lee_y_con_scope_si() {
             methods::FS_STAT,
             &FsStatParams {
                 path: vp("mem:///proj/a.txt"),
+                attrs: Vec::new(),
             },
         )
         .await
@@ -4074,6 +4098,7 @@ async fn humano_lee_sin_scope() {
                 path: vp("mem:///x"),
                 limit: None,
                 cursor: None,
+                attrs: Vec::new(),
             },
         )
         .await
@@ -4236,6 +4261,7 @@ async fn degradacion_de_conexion_solo_a_humanos() {
             methods::FS_STAT,
             &FsStatParams {
                 path: vp("ftp://backup.example/"),
+                attrs: Vec::new(),
             },
         )
         .await

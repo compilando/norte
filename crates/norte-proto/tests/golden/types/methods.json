@@ -40,6 +40,16 @@
       "max_path": null
     }
   },
+  "fs_capabilities_result_con_attrs": {
+    "capabilities": {
+      "flags": "RENAME_ATOMIC | SYMLINKS",
+      "max_path": null
+    },
+    "attrs": [
+      { "id": "posix.mode", "label": "Mode", "type": "uint", "hint": "mode" },
+      { "id": "sftp.owner", "label": "Owner", "type": "bytes", "hint": "identity" }
+    ]
+  },
   "fs_copy_params": {
     "from": "file:///src/a.txt",
     "on_collision": "fail",
@@ -68,6 +78,12 @@
     "cursor": null,
     "limit": null,
     "path": "file:///home/user"
+  },
+  "fs_list_params_con_attrs": {
+    "cursor": null,
+    "limit": 500,
+    "path": "file:///home/user",
+    "attrs": ["posix.mode", "posix.uid"]
   },
   "fs_list_params_paginado": {
     "cursor": "3",
@@ -150,6 +166,10 @@
   },
   "fs_stat_params": {
     "path": "file:///home/user/doc.txt"
+  },
+  "fs_stat_params_con_attrs": {
+    "path": "file:///home/user/doc.txt",
+    "attrs": ["s3.storage_class"]
   },
   "fs_stat_result": {
     "entry": {

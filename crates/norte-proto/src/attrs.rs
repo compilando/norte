@@ -38,14 +38,20 @@ pub const ATTR_BYTES_MAX: usize = 256;
 /// outside the byte class is rejected: relaxing this rule later is
 /// backward-compatible, tightening it after 0.30 ships is not.
 ///
-/// An `Entry.attrs` key that fails this check is DROPPED from that entry by
-/// [`Entry::attrs`](crate::Entry::attrs)'s own deserialisation — never a hard
-/// error, mirroring the "unknown requested id comes back absent" rule (ADR
-/// 0039 §5). The same rule is a REQUIREMENT ON THE RECEIVER for an advertised
-/// catalog: an `AttrInfo` with a malformed id must be discarded rather than
-/// requested. Nothing enforces that yet, because `FsCapabilitiesResult` does
-/// not carry the catalog until the next task of this block; it becomes a
-/// property of the type when that field lands.
+/// Both RECEIVE-side fields enforce this by the TYPE, never leaving it to a
+/// caller, and neither is ever a hard error — the same spirit as "an unknown
+/// requested id comes back absent" (ADR 0039 §5):
+///
+/// - an `Entry.attrs` key that fails this check is DROPPED from that entry by
+///   [`Entry::attrs`](crate::Entry::attrs)'s own deserialisation;
+/// - an [`AttrInfo`] whose `id` fails it is DROPPED from the advertised
+///   catalog by
+///   [`FsCapabilitiesResult::attrs`](crate::methods::FsCapabilitiesResult)'s,
+///   so a malformed id can never be discovered and therefore never requested.
+///
+/// A REQUEST (`FsListParams::attrs`, `FsStatParams::attrs`) is the exception,
+/// deliberately: it is data being sent, not received, so it does not filter —
+/// a malformed id there survives decoding and is the daemon's `-32602`.
 ///
 /// ```
 /// use norte_proto::attrs::is_valid_attr_id;
@@ -143,13 +149,13 @@ pub enum AttrHint {
 /// One attribute a provider offers, as advertised by `fs.capabilities`
 /// ([`FsCapabilitiesResult::attrs`](crate::methods::FsCapabilitiesResult)).
 ///
-/// An `AttrInfo` whose `id` fails [`is_valid_attr_id`] must be DISCARDED by
-/// the receiver rather than requested — never a hard error, mirroring the
-/// "unknown requested id comes back absent" rule (ADR 0039 §5). That is a
-/// requirement on the reader for now: the catalog field does not exist until
-/// the next task of this block adds `FsCapabilitiesResult::attrs`, which is
-/// where the filter will live. The equivalent rule for entry keys is already
-/// enforced by the type — see [`Entry::attrs`](crate::Entry::attrs).
+/// An `AttrInfo` whose `id` fails [`is_valid_attr_id`] is DISCARDED at decode
+/// by [`FsCapabilitiesResult::attrs`](crate::methods::FsCapabilitiesResult)
+/// itself — never a hard error, mirroring the "unknown requested id comes back
+/// absent" rule (ADR 0039 §5), and never a duty left to the reader. The
+/// catalog is bounded at [`ATTRS_MAX_ADVERTISED`] descriptors there too. The
+/// equivalent rule for entry keys is enforced the same way — see
+/// [`Entry::attrs`](crate::Entry::attrs).
 ///
 /// `label` is provider text and therefore THIRD-PARTY (a WASM provider plugin
 /// writes it, an SFTP server influences it): mask it exactly like a plugin's
@@ -242,6 +248,55 @@ where
     }
 
     deserializer.deserialize_map(AttrMapVisitor)
+}
+
+/// Decodes the advertised attribute catalog of a
+/// [`FsCapabilitiesResult`](crate::methods::FsCapabilitiesResult) under the
+/// receive-side rules of ADR 0039 §4/§5; the contract itself is documented on
+/// [`FsCapabilitiesResult::attrs`](crate::methods::FsCapabilitiesResult), which
+/// is what a caller reads.
+pub(crate) fn deserialize_attr_catalog<'de, D>(deserializer: D) -> Result<Vec<AttrInfo>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct AttrCatalogVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for AttrCatalogVisitor {
+        type Value = Vec<AttrInfo>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a list of advertised attribute descriptors")
+        }
+
+        fn visit_seq<S: serde::de::SeqAccess<'de>>(
+            self,
+            mut access: S,
+        ) -> Result<Self::Value, S::Error> {
+            // Se conservan a lo sumo `ATTRS_MAX_ADVERTISED` descriptores — los
+            // PRIMEROS en orden de wire, que es el orden que el provider eligió
+            // y el que un selector de columnas muestra — descartando los ids mal
+            // formados. `size_hint` viene del peer: la reserva se acota al tope
+            // para que un seq que dice traer un millón no reserve un millón.
+            let cabidos = access.size_hint().unwrap_or(0).min(ATTRS_MAX_ADVERTISED);
+            let mut out: Vec<AttrInfo> = Vec::with_capacity(cabidos);
+            while out.len() < ATTRS_MAX_ADVERTISED {
+                let Some(info) = access.next_element::<AttrInfo>()? else {
+                    return Ok(out);
+                };
+                // Id mal formado: se descarta ESE descriptor, jamás la respuesta.
+                if is_valid_attr_id(&info.id) {
+                    out.push(info);
+                }
+            }
+            // Con el catálogo lleno nada más puede entrar: el resto se drena sin
+            // materializarlo (un catálogo gordo es un provider con un bug, no un
+            // peer roto — y tampoco un vector de 10 000 elementos en memoria).
+            while access.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+            Ok(out)
+        }
+    }
+
+    deserializer.deserialize_seq(AttrCatalogVisitor)
 }
 
 /// Maximum length of the base64 TEXT of an `AttrValue::Bytes` payload: the
@@ -721,6 +776,136 @@ mod tests {
         assert_eq!(map["a"], AttrValue::Uint(1));
         assert_eq!(map["b"], AttrValue::Unknown);
         assert_eq!(map["c"], AttrValue::Bool(false));
+    }
+
+    /// Decodifica un catálogo por el CAMPO REAL del wire, que es donde vive el
+    /// `deserialize_with`: probar el filtro por otra vía probaría otra cosa.
+    fn catalogo(attrs: &serde_json::Value) -> Vec<AttrInfo> {
+        let wire = serde_json::json!({
+            "capabilities": { "flags": "", "max_path": null },
+            "attrs": attrs,
+        });
+        serde_json::from_value::<crate::methods::FsCapabilitiesResult>(wire)
+            .expect("un catálogo hostil NUNCA rompe la respuesta")
+            .attrs
+    }
+
+    fn descriptor(id: &str) -> serde_json::Value {
+        serde_json::json!({ "id": id, "label": "L", "type": "uint", "hint": "opaque" })
+    }
+
+    #[test]
+    fn catalogo_descarta_los_ids_mal_formados_sin_romper() {
+        let vivos = catalogo(&serde_json::json!([
+            descriptor("posix.mode"),
+            descriptor("MODE"),
+            descriptor("mode"),
+            descriptor("../etc/passwd"),
+            descriptor("posix."),
+            descriptor(""),
+            descriptor("s3.storage_class"),
+        ]));
+        let ids: Vec<&str> = vivos.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(ids, ["posix.mode", "s3.storage_class"]);
+    }
+
+    #[test]
+    fn catalogo_se_trunca_al_tope_conservando_el_orden_del_wire() {
+        // Ids en orden DESCENDENTE: si el filtro ordenase (en vez de conservar
+        // el orden que eligió el provider), este test lo vería.
+        let total = ATTRS_MAX_ADVERTISED + 10;
+        let ids: Vec<String> = (0..total)
+            .map(|i| format!("ns.a{:03}", total - i))
+            .collect();
+        let vivos = catalogo(&serde_json::Value::Array(
+            ids.iter().map(|id| descriptor(id)).collect(),
+        ));
+
+        assert_eq!(
+            vivos.len(),
+            ATTRS_MAX_ADVERTISED,
+            "se trunca, no se rechaza"
+        );
+        let vistos: Vec<&str> = vivos.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(
+            vistos,
+            ids[..ATTRS_MAX_ADVERTISED]
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            "se conservan los PRIMEROS en orden de wire, sin reordenar"
+        );
+    }
+
+    #[test]
+    fn catalogo_bomba_no_materializa_lo_que_sobra() {
+        // 10 000 descriptores: se drena lo que pasa del tope sin construirlo.
+        let bomba: Vec<serde_json::Value> = (0..10_000)
+            .map(|i| descriptor(&format!("ns.a{i}")))
+            .collect();
+        assert_eq!(
+            catalogo(&serde_json::Value::Array(bomba)).len(),
+            ATTRS_MAX_ADVERTISED
+        );
+    }
+
+    #[test]
+    fn catalogo_ausente_o_vacio_es_vacio() {
+        assert!(catalogo(&serde_json::json!([])).is_empty());
+        let sin_campo = serde_json::json!({ "capabilities": { "flags": "", "max_path": null } });
+        let caps: crate::methods::FsCapabilitiesResult =
+            serde_json::from_value(sin_campo).expect("wire 0.29 válido");
+        assert!(caps.attrs.is_empty(), "ausente = el provider no publica");
+    }
+
+    #[test]
+    fn catalogo_con_tipo_o_pista_del_futuro_sobrevive_degradando() {
+        let vivos = catalogo(&serde_json::json!([{
+            "id": "futuro.attr",
+            "label": "L",
+            "type": "quaternion",
+            "hint": "holograma",
+        }]));
+        assert_eq!(vivos.len(), 1);
+        assert_eq!(vivos[0].ty, AttrType::Unknown);
+        assert_eq!(vivos[0].hint, AttrHint::Unknown);
+    }
+
+    #[test]
+    fn descriptor_estructuralmente_roto_si_es_error() {
+        // La indulgencia es para ids e ids de más; a un descriptor SIN `label`
+        // le falta un campo obligatorio: peer roto, no peer más nuevo.
+        let wire = serde_json::json!({
+            "capabilities": { "flags": "", "max_path": null },
+            "attrs": [{ "id": "posix.mode", "type": "uint", "hint": "mode" }],
+        });
+        assert!(serde_json::from_value::<crate::methods::FsCapabilitiesResult>(wire).is_err());
+    }
+
+    #[test]
+    fn el_catalogo_no_se_filtra_al_serializar() {
+        // Espejo de `Entry::attrs`: el bug de un productor se ve en el wire que
+        // emite, no lo blanquea el serializador.
+        let caps = crate::methods::FsCapabilitiesResult {
+            capabilities: crate::Capabilities {
+                flags: crate::CapabilityFlags::empty(),
+                max_path: None,
+            },
+            attrs: vec![AttrInfo {
+                id: "MODE".to_owned(),
+                label: "Mode".to_owned(),
+                ty: AttrType::Uint,
+                hint: AttrHint::Mode,
+            }],
+        };
+        let wire = serde_json::to_string(&caps).expect("serializable");
+        assert!(wire.contains("MODE"), "se emite tal cual: {wire}");
+        let vuelta: crate::methods::FsCapabilitiesResult =
+            serde_json::from_str(&wire).expect("decodifica");
+        assert!(
+            vuelta.attrs.is_empty(),
+            "y al volver, el filtro lo descarta"
+        );
     }
 
     #[test]

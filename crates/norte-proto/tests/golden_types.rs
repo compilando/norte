@@ -420,7 +420,7 @@ fn golden_methods() {
     check_methods_plugin(&fixtures);
     check_methods_rpc(&fixtures);
     check_methods_index(&fixtures);
-    assert_eq!(fixtures.len(), 94, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 97, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `index.*` (0.25.0, M4, ADR 0034): build + query del índice de búsqueda.
@@ -1158,15 +1158,10 @@ fn check_methods_connection(fixtures: &BTreeMap<String, Value>) {
     );
 }
 
-/// Familia fs.* + task.cancel (list/stat/copy/move/delete/task).
-fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
-    let sample_entry = Entry {
-        attrs: std::collections::BTreeMap::new(),
-        path: vpath("file:///home/user/doc.txt"),
-        kind: EntryKind::File,
-        size: Some(1234),
-        mtime_ms: Some(1_720_000_000_000),
-    };
+/// Params de `fs.list`/`fs.stat`. Los casos `_con_attrs` (0.30.0, ADR 0039)
+/// piden ids; los de al lado, SIN el campo, son la prueba de aditividad: un
+/// `attrs` vacío no viaja al wire.
+fn check_methods_fs_params(fixtures: &BTreeMap<String, Value>) {
     check_one(
         fixtures,
         "fs_list_params",
@@ -1174,6 +1169,7 @@ fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
             path: vpath("file:///home/user"),
             limit: None,
             cursor: None,
+            attrs: Vec::new(),
         },
     );
     check_one(
@@ -1183,8 +1179,47 @@ fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
             path: vpath("file:///home/user"),
             limit: Some(1000),
             cursor: Some("3".to_owned()),
+            attrs: Vec::new(),
         },
     );
+    check_one(
+        fixtures,
+        "fs_list_params_con_attrs",
+        &FsListParams {
+            path: vpath("file:///home/user"),
+            limit: Some(500),
+            cursor: None,
+            attrs: vec!["posix.mode".to_owned(), "posix.uid".to_owned()],
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_stat_params_con_attrs",
+        &FsStatParams {
+            path: vpath("file:///home/user/doc.txt"),
+            attrs: vec!["s3.storage_class".to_owned()],
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_stat_params",
+        &FsStatParams {
+            path: vpath("file:///home/user/doc.txt"),
+            attrs: Vec::new(),
+        },
+    );
+}
+
+/// Familia fs.* + task.cancel (list/stat/copy/move/delete/task).
+fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
+    let sample_entry = Entry {
+        attrs: std::collections::BTreeMap::new(),
+        path: vpath("file:///home/user/doc.txt"),
+        kind: EntryKind::File,
+        size: Some(1234),
+        mtime_ms: Some(1_720_000_000_000),
+    };
+    check_methods_fs_params(fixtures);
     check_one(
         fixtures,
         "fs_list_result",
@@ -1210,13 +1245,6 @@ fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
             entries: vec![sample_entry.clone()],
             next_cursor: None,
             skipped: Some(3),
-        },
-    );
-    check_one(
-        fixtures,
-        "fs_stat_params",
-        &FsStatParams {
-            path: vpath("file:///home/user/doc.txt"),
         },
     );
     check_one(
@@ -1471,6 +1499,31 @@ fn check_methods_v05(fixtures: &BTreeMap<String, Value>) {
                 flags: CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::SYMLINKS,
                 max_path: None,
             },
+            attrs: Vec::new(),
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_capabilities_result_con_attrs",
+        &FsCapabilitiesResult {
+            capabilities: Capabilities {
+                flags: CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::SYMLINKS,
+                max_path: None,
+            },
+            attrs: vec![
+                AttrInfo {
+                    id: "posix.mode".to_owned(),
+                    label: "Mode".to_owned(),
+                    ty: AttrType::Uint,
+                    hint: AttrHint::Mode,
+                },
+                AttrInfo {
+                    id: "sftp.owner".to_owned(),
+                    label: "Owner".to_owned(),
+                    ty: AttrType::Bytes,
+                    hint: AttrHint::Identity,
+                },
+            ],
         },
     );
 }

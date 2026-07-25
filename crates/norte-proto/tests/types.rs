@@ -1303,3 +1303,86 @@ fn rpc_cancel_params_round_trip_num_y_str() {
         serde_json::json!({"id": 7}),
     );
 }
+
+/// (0.30.0, ADR 0039) Los tres campos nuevos son aditivos: un wire N-1 (0.29.x)
+/// SIN ellos deserializa, y un valor vacío NO se emite.
+#[test]
+fn attrs_son_aditivos_en_ambas_direcciones() {
+    use norte_proto::methods::{FsCapabilitiesResult, FsListParams, FsStatParams};
+
+    let n1 = r#"{"path":"file:///home","limit":null,"cursor":null}"#;
+    let params: FsListParams = serde_json::from_str(n1).expect("wire N-1 válido");
+    assert!(params.attrs.is_empty(), "ausente = ninguno pedido");
+
+    let wire = serde_json::to_string(&params).unwrap();
+    assert!(
+        !wire.contains("attrs"),
+        "vacío no se emite (byte-idéntico a 0.29): {wire}"
+    );
+
+    let stat: FsStatParams =
+        serde_json::from_str(r#"{"path":"file:///home"}"#).expect("wire N-1 válido");
+    assert!(stat.attrs.is_empty());
+    assert!(!serde_json::to_string(&stat).unwrap().contains("attrs"));
+
+    let caps_n1 = r#"{"capabilities":{"flags":"RENAME_ATOMIC","max_path":null}}"#;
+    let caps: FsCapabilitiesResult = serde_json::from_str(caps_n1).expect("wire N-1 válido");
+    assert!(caps.attrs.is_empty());
+    assert!(!serde_json::to_string(&caps).unwrap().contains("attrs"));
+}
+
+/// (0.30.0, ADR 0039) La asimetría es DELIBERADA y ejecutable: el catálogo
+/// (dato RECIBIDO) filtra al decodificar; una petición (dato ENVIADO) no —
+/// un id mal formado sobrevive para que el daemon lo responda `-32602` en el
+/// bloque 2, en vez de convertirse en "no pidió nada".
+#[test]
+fn peticion_no_filtra_pero_el_catalogo_si() {
+    use norte_proto::methods::{FsCapabilitiesResult, FsListParams, FsStatParams};
+
+    let hostil = r#"{"path":"file:///home","attrs":["MODE","../etc/passwd"]}"#;
+    let list: FsListParams = serde_json::from_str(hostil).expect("la petición decodifica tal cual");
+    assert_eq!(list.attrs, ["MODE", "../etc/passwd"], "nada se descarta");
+    let stat: FsStatParams = serde_json::from_str(hostil).expect("igual en fs.stat");
+    assert_eq!(stat.attrs, ["MODE", "../etc/passwd"]);
+
+    let catalogo = r#"{
+        "capabilities": {"flags":"RENAME_ATOMIC","max_path":null},
+        "attrs": [
+            {"id":"MODE","label":"Mode","type":"uint","hint":"mode"},
+            {"id":"posix.mode","label":"Mode","type":"uint","hint":"mode"}
+        ]
+    }"#;
+    let caps: FsCapabilitiesResult =
+        serde_json::from_str(catalogo).expect("un catálogo hostil no rompe la respuesta");
+    let ids: Vec<&str> = caps.attrs.iter().map(|i| i.id.as_str()).collect();
+    assert_eq!(ids, ["posix.mode"], "el id mal formado no se puede pedir");
+}
+
+/// (0.30.0) Los ids del vocabulario que este bloque congela son válidos, y las
+/// formas hostiles NO lo son — el gate vive en el tipo, no en cada llamador.
+#[test]
+fn ids_del_vocabulario_inicial_son_validos() {
+    use norte_proto::attrs::is_valid_attr_id;
+
+    for id in [
+        "posix.mode",
+        "posix.uid",
+        "posix.gid",
+        "posix.nlink",
+        "posix.ctime_ms",
+        "win.attributes",
+        "sftp.owner",
+        "sftp.group",
+        "s3.storage_class",
+        "s3.etag",
+        "s3.content_type",
+        "archive.method",
+        "archive.packed_size",
+        "archive.crc32",
+    ] {
+        assert!(is_valid_attr_id(id), "{id} es del vocabulario de ADR 0039");
+    }
+    for hostil in ["../etc/passwd", "posix.mode\u{202E}", "POSIX.MODE", ""] {
+        assert!(!is_valid_attr_id(hostil), "{hostil:?} debe rechazarse");
+    }
+}

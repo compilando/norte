@@ -484,6 +484,40 @@ pub struct FsListParams {
     /// o expirado → [`Error::CursorExpired`](crate::Error::CursorExpired).
     #[serde(default)]
     pub cursor: Option<String>,
+    /// Ids of the provider attributes to deliver with each entry (0.30.0,
+    /// ADR 0039). Empty (the default, and the only possibility for a 0.29
+    /// client) = none: nothing is delivered unrequested. At most
+    /// [`ATTRS_MAX_REQUEST`](crate::attrs::ATTRS_MAX_REQUEST) ids, each
+    /// well-formed ([`is_valid_attr_id`](crate::attrs::is_valid_attr_id)) —
+    /// violating either is `-32602`. An id the provider does not offer is NOT
+    /// an error: it comes back absent, so a client with a stale catalog
+    /// degrades instead of failing.
+    ///
+    /// # No filtering deserialiser here, ON PURPOSE
+    ///
+    /// This is a REQUEST — data this peer is SENDING, not data it received —
+    /// so it deserialises plainly: whatever the wire carries lands in the
+    /// vector, malformed ids and over-cap length included. Silently dropping a
+    /// bad id here would turn "the client asked for `../etc/passwd`" into "the
+    /// client asked for nothing", hiding a caller's bug and making the
+    /// daemon-side validation untestable. The asymmetry with the two
+    /// RECEIVE-side fields — [`Entry::attrs`](crate::Entry::attrs) and
+    /// [`FsCapabilitiesResult::attrs`], which both filter at decode — is
+    /// deliberate: a bad cell or a bad advertised descriptor costs itself,
+    /// while a bad request is the daemon's `-32602` to raise (block 2).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend(
+            "maxItems" = crate::attrs::ATTRS_MAX_REQUEST,
+            "items" = serde_json::json!({
+                "type": "string",
+                "maxLength": crate::attrs::ATTR_ID_MAX,
+                "pattern": r"^[a-z0-9_-]+(\.[a-z0-9_-]+)+$",
+            })
+        ))
+    )]
+    pub attrs: Vec<String>,
 }
 
 /// Result de [`FS_LIST`].
@@ -517,6 +551,35 @@ pub struct FsListResult {
 pub struct FsStatParams {
     /// Nodo a consultar.
     pub path: VPath,
+    /// Ids of the provider attributes to deliver with the entry (0.30.0,
+    /// ADR 0039). Empty (the default, and the only possibility for a 0.29
+    /// client) = none: nothing is delivered unrequested. At most
+    /// [`ATTRS_MAX_REQUEST`](crate::attrs::ATTRS_MAX_REQUEST) ids, each
+    /// well-formed ([`is_valid_attr_id`](crate::attrs::is_valid_attr_id)) —
+    /// violating either is `-32602`. An id the provider does not offer is NOT
+    /// an error: it comes back absent, so a client with a stale catalog
+    /// degrades instead of failing.
+    ///
+    /// # No filtering deserialiser here, ON PURPOSE
+    ///
+    /// Same reason as [`FsListParams::attrs`]: this is a REQUEST, so a
+    /// malformed id survives decoding and is the daemon's `-32602` to raise
+    /// (block 2), instead of being laundered into "asked for nothing". Only
+    /// the RECEIVE-side fields — [`Entry::attrs`](crate::Entry::attrs) and
+    /// [`FsCapabilitiesResult::attrs`] — filter at decode.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend(
+            "maxItems" = crate::attrs::ATTRS_MAX_REQUEST,
+            "items" = serde_json::json!({
+                "type": "string",
+                "maxLength": crate::attrs::ATTR_ID_MAX,
+                "pattern": r"^[a-z0-9_-]+(\.[a-z0-9_-]+)+$",
+            })
+        ))
+    )]
+    pub attrs: Vec<String>,
 }
 
 /// Result de [`FS_STAT`].
@@ -861,11 +924,76 @@ pub struct FsCapabilitiesParams {
 }
 
 /// Result de [`FS_CAPABILITIES`].
+///
+/// ```
+/// use norte_proto::methods::FsCapabilitiesResult;
+/// // Un catálogo con un id mal formado NO llega al vector: se descarta al
+/// // decodificar, sin error (ver [`FsCapabilitiesResult::attrs`]).
+/// let wire = r#"{
+///     "capabilities": {"flags": "", "max_path": null},
+///     "attrs": [{"id": "MODE", "label": "Mode", "type": "uint", "hint": "mode"}]
+/// }"#;
+/// let caps: FsCapabilitiesResult = serde_json::from_str(wire).unwrap();
+/// assert!(caps.attrs.is_empty());
+/// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsCapabilitiesResult {
     /// Capabilities declaradas por el provider.
     pub capabilities: crate::Capabilities,
+    /// Provider attributes this provider offers (0.30.0, ADR 0039): the
+    /// discovery half of [`Entry::attrs`](crate::Entry::attrs). Empty (the
+    /// default, and the only possibility for a 0.29 peer) is omitted from the
+    /// wire entirely, so a response from a provider that publishes none is
+    /// byte-identical to 0.29's.
+    ///
+    /// [`AttrInfo::label`](crate::attrs::AttrInfo::label) is THIRD-PARTY text
+    /// — a frontend masks and clamps it exactly as it does a plugin's column
+    /// header. The ORDER is the provider's and it is meaningful: a column
+    /// picker paints the catalog in it, so it is never sorted here.
+    ///
+    /// # Rules applied ON DECODE
+    ///
+    /// This is RECEIVED data, so the same shape of filter that guards
+    /// [`Entry::attrs`](crate::Entry::attrs) guards it, and NEITHER rule is
+    /// ever an error:
+    ///
+    /// 1. An [`AttrInfo`](crate::attrs::AttrInfo) whose `id` is not
+    ///    well-formed ([`is_valid_attr_id`](crate::attrs::is_valid_attr_id))
+    ///    is DROPPED. An advertised id becomes a requested id, a configuration
+    ///    id and a map lookup downstream, so `MODE` or `../etc/passwd` must
+    ///    not survive the wire — and a caller must not have to remember to
+    ///    check.
+    /// 2. The vector is bounded at
+    ///    [`ATTRS_MAX_ADVERTISED`](crate::attrs::ATTRS_MAX_ADVERTISED)
+    ///    descriptors, keeping the FIRST ones in wire order and draining the
+    ///    rest without materialising them. A fat catalog is a buggy provider,
+    ///    not a broken peer, so it truncates rather than failing the call —
+    ///    the same spirit as an unknown requested id coming back absent.
+    ///
+    /// A descriptor that is not a well-formed `AttrInfo` at all (a missing
+    /// `label`, `attrs` that is not a list) IS a hard error: that is serde's
+    /// decision, and a peer that sends one is broken rather than newer — an
+    /// unknown `type` or `hint` from a NEWER peer already degrades to its
+    /// `Unknown` variant instead.
+    ///
+    /// # The filter is one-directional
+    ///
+    /// Serialisation is NOT filtered, and the field is public with no
+    /// constructor: a result built in-process with an invalid id emits it and
+    /// decodes back different. As with [`Entry::attrs`](crate::Entry::attrs),
+    /// a producer's bug must stay visible at the boundary that validates it
+    /// rather than be laundered by the serialiser.
+    #[serde(
+        default,
+        deserialize_with = "crate::attrs::deserialize_attr_catalog",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("maxItems" = crate::attrs::ATTRS_MAX_ADVERTISED))
+    )]
+    pub attrs: Vec<crate::attrs::AttrInfo>,
 }
 
 /// Params de [`TASK_CANCEL`].

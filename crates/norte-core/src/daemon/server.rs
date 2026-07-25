@@ -2858,7 +2858,13 @@ async fn dispatch_task_family(
                 .capabilities(&p.path)
                 .await
                 .map_err(RpcError::from)?;
-            to_value(&methods::FsCapabilitiesResult { capabilities })
+            // Ningún provider anuncia atributos todavía (ADR 0039, bloque 1 =
+            // solo wire): catálogo vacío = "este provider no publica ninguno",
+            // que es una respuesta válida del contrato.
+            to_value(&methods::FsCapabilitiesResult {
+                capabilities,
+                attrs: Vec::new(),
+            })
         }
         methods::TASK_CANCEL => {
             let p: methods::TaskCancelParams = parse_params(req.params)?;
