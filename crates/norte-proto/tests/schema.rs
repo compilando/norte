@@ -298,16 +298,40 @@ fn el_schema_de_entry_attrs_lleva_los_topes_del_tipo() {
 /// un `array` abierto le diría que 100 ids arbitrarios son legales. Los topes
 /// vienen de las MISMAS constantes que aplica el código.
 ///
-/// El catálogo lleva SOLO `maxItems`: la forma de sus elementos ya la describe
-/// `$defs/AttrInfo`, y su `id` es un `string` cuyo filtro vive en el
-/// deserializador del campo (un tercero que anuncie un id inválido no rompe:
-/// se le descarta, §5). Las dos PETICIONES sí restringen el ítem, porque ahí
-/// un id mal formado es `-32602` y el schema tiene que decirlo.
+/// El catálogo lleva `maxItems`; la forma de su ELEMENTO viaja en
+/// `$defs/AttrInfo`, que restringe `id` (patrón + longitud) y `label`
+/// (longitud) — las MISMAS reglas que aplica `sanitize_catalog` al decodificar.
+/// Las dos PETICIONES restringen el ítem en el propio campo, porque ahí un id
+/// mal formado es `-32602` y el schema tiene que decirlo.
 #[test]
 fn el_schema_de_los_campos_de_metodo_lleva_los_topes_del_tipo() {
-    use norte_proto::attrs::{ATTR_ID_MAX, ATTRS_MAX_ADVERTISED, ATTRS_MAX_REQUEST};
+    use norte_proto::attrs::{
+        ATTR_ID_MAX, ATTR_LABEL_MAX, ATTRS_MAX_ADVERTISED, ATTRS_MAX_REQUEST,
+    };
 
     let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
+
+    // El descriptor anunciado: id con forma y tope, label con tope.
+    let id = schema
+        .pointer("/$defs/AttrInfo/properties/id")
+        .expect("AttrInfo.id está en el artefacto");
+    assert_eq!(
+        id.get("maxLength").and_then(serde_json::Value::as_u64),
+        Some(ATTR_ID_MAX as u64),
+        "el tope del id viaja en el schema"
+    );
+    assert_eq!(
+        id.get("pattern").and_then(serde_json::Value::as_str),
+        Some(r"^[a-z0-9_-]+(\.[a-z0-9_-]+)+$"),
+        "el patrón es el MISMO que el de Entry.attrs"
+    );
+    assert_eq!(
+        schema
+            .pointer("/$defs/AttrInfo/properties/label/maxLength")
+            .and_then(serde_json::Value::as_u64),
+        Some(ATTR_LABEL_MAX as u64),
+        "el tope del label viaja en el schema (y `sanitize_catalog` lo recorta)"
+    );
 
     let catalogo = schema
         .pointer("/$defs/FsCapabilitiesResult/properties/attrs")

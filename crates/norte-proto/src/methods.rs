@@ -486,26 +486,40 @@ pub struct FsListParams {
     pub cursor: Option<String>,
     /// Ids of the provider attributes to deliver with each entry (0.30.0,
     /// ADR 0039). Empty (the default, and the only possibility for a 0.29
-    /// client) = none: nothing is delivered unrequested. At most
-    /// [`ATTRS_MAX_REQUEST`](crate::attrs::ATTRS_MAX_REQUEST) ids, each
-    /// well-formed ([`is_valid_attr_id`](crate::attrs::is_valid_attr_id)) —
-    /// violating either is `-32602`. An id the provider does not offer is NOT
-    /// an error: it comes back absent, so a client with a stale catalog
-    /// degrades instead of failing.
+    /// client) = none: nothing is delivered unrequested. The contract is at
+    /// most [`ATTRS_MAX_REQUEST`](crate::attrs::ATTRS_MAX_REQUEST) ids, each
+    /// well-formed ([`is_valid_attr_id`](crate::attrs::is_valid_attr_id)), and
+    /// violating either is `-32602` — a rule BLOCK 2 wires up: a 0.30.0 daemon
+    /// ships no producer and ignores the requested ids entirely, so today the
+    /// answer to any request is the same empty set of attributes. An id the
+    /// provider does not offer is NOT an error either way: it comes back
+    /// absent, so a client with a stale catalog degrades instead of failing.
     ///
-    /// # No filtering deserialiser here, ON PURPOSE
+    /// # Bounded at decode, but NOT validated — on purpose
     ///
-    /// This is a REQUEST — data this peer is SENDING, not data it received —
-    /// so it deserialises plainly: whatever the wire carries lands in the
-    /// vector, malformed ids and over-cap length included. Silently dropping a
-    /// bad id here would turn "the client asked for `../etc/passwd`" into "the
-    /// client asked for nothing", hiding a caller's bug and making the
-    /// daemon-side validation untestable. The asymmetry with the two
-    /// RECEIVE-side fields — [`Entry::attrs`](crate::Entry::attrs) and
+    /// This is a REQUEST: data this peer is SENDING, not data it received. So
+    /// whatever the wire carries lands in the vector VERBATIM — malformed ids
+    /// and over-cap length included. Silently dropping a bad id here would
+    /// turn "the client asked for `../etc/passwd`" into "the client asked for
+    /// nothing", hiding a caller's bug and making the daemon-side validation
+    /// untestable. The asymmetry with the two RECEIVE-side fields —
+    /// [`Entry::attrs`](crate::Entry::attrs) and
     /// [`FsCapabilitiesResult::attrs`], which both filter at decode — is
     /// deliberate: a bad cell or a bad advertised descriptor costs itself,
-    /// while a bad request is the daemon's `-32602` to raise (block 2).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// while a bad request is the daemon's `-32602` to raise.
+    ///
+    /// The one thing decoding does impose is a MEMORY bound, which is not
+    /// validation: only the first `ATTRS_MAX_REQUEST + 1` elements are kept
+    /// and the rest is drained unmaterialised, because a 16 MiB frame of
+    /// `["a","a",…]` would otherwise allocate ~15× its own size in `String`
+    /// headers before any daemon check could run. The `+ 1` is what keeps
+    /// over-cap OBSERVABLE (`attrs.len() > ATTRS_MAX_REQUEST`) instead of
+    /// trimming a violation into legality.
+    #[serde(
+        default,
+        deserialize_with = "crate::attrs::deserialize_attr_request",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     #[cfg_attr(
         feature = "schema",
         schemars(extend(
@@ -553,21 +567,28 @@ pub struct FsStatParams {
     pub path: VPath,
     /// Ids of the provider attributes to deliver with the entry (0.30.0,
     /// ADR 0039). Empty (the default, and the only possibility for a 0.29
-    /// client) = none: nothing is delivered unrequested. At most
-    /// [`ATTRS_MAX_REQUEST`](crate::attrs::ATTRS_MAX_REQUEST) ids, each
-    /// well-formed ([`is_valid_attr_id`](crate::attrs::is_valid_attr_id)) —
-    /// violating either is `-32602`. An id the provider does not offer is NOT
-    /// an error: it comes back absent, so a client with a stale catalog
-    /// degrades instead of failing.
+    /// client) = none: nothing is delivered unrequested. The contract is at
+    /// most [`ATTRS_MAX_REQUEST`](crate::attrs::ATTRS_MAX_REQUEST) ids, each
+    /// well-formed ([`is_valid_attr_id`](crate::attrs::is_valid_attr_id)), and
+    /// violating either is `-32602` — a rule BLOCK 2 wires up: a 0.30.0 daemon
+    /// ignores the requested ids entirely. An id the provider does not offer
+    /// is NOT an error either way: it comes back absent.
     ///
-    /// # No filtering deserialiser here, ON PURPOSE
+    /// # Bounded at decode, but NOT validated — on purpose
     ///
-    /// Same reason as [`FsListParams::attrs`]: this is a REQUEST, so a
-    /// malformed id survives decoding and is the daemon's `-32602` to raise
-    /// (block 2), instead of being laundered into "asked for nothing". Only
-    /// the RECEIVE-side fields — [`Entry::attrs`](crate::Entry::attrs) and
-    /// [`FsCapabilitiesResult::attrs`] — filter at decode.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Same as [`FsListParams::attrs`], for the same reasons: a malformed id
+    /// survives decoding and is the daemon's `-32602` to raise, instead of
+    /// being laundered into "asked for nothing"; only the RECEIVE-side fields
+    /// — [`Entry::attrs`](crate::Entry::attrs) and
+    /// [`FsCapabilitiesResult::attrs`] — filter. Decoding keeps the first
+    /// `ATTRS_MAX_REQUEST + 1` elements and drains the rest, which is a memory
+    /// bound (a 16 MiB frame of tiny ids would otherwise allocate ~15× its own
+    /// size) that leaves over-cap observable.
+    #[serde(
+        default,
+        deserialize_with = "crate::attrs::deserialize_attr_request",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     #[cfg_attr(
         feature = "schema",
         schemars(extend(
@@ -955,21 +976,42 @@ pub struct FsCapabilitiesResult {
     /// # Rules applied ON DECODE
     ///
     /// This is RECEIVED data, so the same shape of filter that guards
-    /// [`Entry::attrs`](crate::Entry::attrs) guards it, and NEITHER rule is
-    /// ever an error:
+    /// [`Entry::attrs`](crate::Entry::attrs) guards it: decoding runs
+    /// [`sanitize_catalog`](crate::attrs::sanitize_catalog), whose rules are
+    /// documented there in full and NONE of which is ever an error —
     ///
-    /// 1. An [`AttrInfo`](crate::attrs::AttrInfo) whose `id` is not
+    /// 1. an [`AttrInfo`](crate::attrs::AttrInfo) whose `id` is not
     ///    well-formed ([`is_valid_attr_id`](crate::attrs::is_valid_attr_id))
     ///    is DROPPED. An advertised id becomes a requested id, a configuration
     ///    id and a map lookup downstream, so `MODE` or `../etc/passwd` must
     ///    not survive the wire — and a caller must not have to remember to
-    ///    check.
-    /// 2. The vector is bounded at
+    ///    check;
+    /// 2. a REPEATED id is dropped, FIRST WINS — the opposite of
+    ///    [`Entry::attrs`](crate::Entry::attrs)'s last-wins, because this is
+    ///    an ordered list the provider ranked (where "first" means something)
+    ///    and that is an unordered JSON object (where it does not). Keeping
+    ///    both would let two consumers render the same bytes differently, one
+    ///    folding into a map and one using `find()`;
+    /// 3. an over-long `label` is CLAMPED to
+    ///    [`ATTR_LABEL_MAX`](crate::attrs::ATTR_LABEL_MAX) bytes on a char
+    ///    boundary; the descriptor survives, since the id is what a client
+    ///    acts on;
+    /// 4. the vector is bounded at
     ///    [`ATTRS_MAX_ADVERTISED`](crate::attrs::ATTRS_MAX_ADVERTISED)
-    ///    descriptors, keeping the FIRST ones in wire order and draining the
-    ///    rest without materialising them. A fat catalog is a buggy provider,
-    ///    not a broken peer, so it truncates rather than failing the call —
-    ///    the same spirit as an unknown requested id coming back absent.
+    ///    descriptors, keeping the FIRST in wire order — rules 1 and 2 run
+    ///    before a slot is taken, so rejects and duplicates never starve a
+    ///    legitimate later attribute. A fat catalog is a buggy provider, not a
+    ///    broken peer, so it truncates rather than failing the call: the same
+    ///    spirit as an unknown requested id coming back absent.
+    ///
+    /// Decoding additionally stops EXAMINING elements past
+    /// [`ATTRS_MAX_CATALOG_SCAN`](crate::attrs::ATTRS_MAX_CATALOG_SCAN) and
+    /// drains the rest unmaterialised, so a catalog padded with rejects costs
+    /// bounded work rather than unbounded work for an empty result.
+    ///
+    /// This filter is the DESERIALISER's, and an embedded backend never
+    /// crosses that boundary: a catalog obtained in-process must be passed
+    /// through `sanitize_catalog` explicitly. Same function, one contract.
     ///
     /// A descriptor that is not a well-formed `AttrInfo` at all (a missing
     /// `label`, `attrs` that is not a list) IS a hard error: that is serde's

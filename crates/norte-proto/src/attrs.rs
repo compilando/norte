@@ -20,9 +20,24 @@ pub const ATTRS_MAX_REQUEST: usize = 16;
 /// rejecting the response — the same spirit as an unrequested/unknown id
 /// coming back absent rather than failing the call.
 pub const ATTRS_MAX_ADVERTISED: usize = 64;
+/// Maximum number of advertised descriptors a decoder EXAMINES before it stops
+/// looking at all: [`ATTRS_MAX_ADVERTISED`] times four, so a catalog padded
+/// with rejects still has room to deliver a full useful one.
+///
+/// [`ATTRS_MAX_ADVERTISED`] alone bounds only what is KEPT. A peer that sends
+/// four million descriptors whose ids are all malformed would fill nothing and
+/// therefore be parsed in full — the decoder would do unbounded work for a
+/// result of zero. A peer that sends 256 unusable descriptors is buggy; one
+/// that sends four million is hostile, and the difference is not worth
+/// modelling: past this many examined elements the rest is drained without
+/// being materialised, whatever it contains.
+pub const ATTRS_MAX_CATALOG_SCAN: usize = ATTRS_MAX_ADVERTISED * 4;
 /// Maximum length of an attribute id, in bytes.
 pub const ATTR_ID_MAX: usize = 64;
-/// Maximum length of [`AttrInfo::label`], in bytes.
+/// Maximum length of [`AttrInfo::label`], in bytes. Enforced at decode by
+/// [`sanitize_catalog`], which CLAMPS an over-long label (on a char boundary)
+/// rather than dropping the descriptor: the id is what a client acts on, and a
+/// fat label is a cosmetic bug, not a reason to lose the attribute.
 pub const ATTR_LABEL_MAX: usize = 64;
 /// Maximum length of an [`AttrValue::Text`] value, in bytes.
 pub const ATTR_TEXT_MAX: usize = 256;
@@ -47,7 +62,16 @@ pub const ATTR_BYTES_MAX: usize = 256;
 /// - an [`AttrInfo`] whose `id` fails it is DROPPED from the advertised
 ///   catalog by
 ///   [`FsCapabilitiesResult::attrs`](crate::methods::FsCapabilitiesResult)'s,
-///   so a malformed id can never be discovered and therefore never requested.
+///   so a malformed id ACROSS THE WIRE can never be discovered and therefore
+///   never requested.
+///
+/// "Across the wire" is literal, and it matters: the filter lives at the
+/// deserialisation boundary, which an EMBEDDED backend (the default TUI/CLI
+/// configuration, no daemon in between) never crosses. A catalog obtained
+/// in-process — from a provider or, in block 2, from a WASM provider plugin,
+/// which the threat model treats as untrusted — must be passed through
+/// [`sanitize_catalog`] explicitly. That is the same function the
+/// deserialiser calls, so there is exactly one implementation of the rules.
 ///
 /// A REQUEST (`FsListParams::attrs`, `FsStatParams::attrs`) is the exception,
 /// deliberately: it is data being sent, not received, so it does not filter —
@@ -149,17 +173,20 @@ pub enum AttrHint {
 /// One attribute a provider offers, as advertised by `fs.capabilities`
 /// ([`FsCapabilitiesResult::attrs`](crate::methods::FsCapabilitiesResult)).
 ///
-/// An `AttrInfo` whose `id` fails [`is_valid_attr_id`] is DISCARDED at decode
-/// by [`FsCapabilitiesResult::attrs`](crate::methods::FsCapabilitiesResult)
-/// itself — never a hard error, mirroring the "unknown requested id comes back
-/// absent" rule (ADR 0039 §5), and never a duty left to the reader. The
-/// catalog is bounded at [`ATTRS_MAX_ADVERTISED`] descriptors there too. The
-/// equivalent rule for entry keys is enforced the same way — see
+/// An `AttrInfo` whose `id` fails [`is_valid_attr_id`], or that REPEATS an id
+/// already advertised, is DISCARDED by [`sanitize_catalog`] — which
+/// [`FsCapabilitiesResult::attrs`](crate::methods::FsCapabilitiesResult) runs
+/// at decode, and which an embedded backend must run itself. Never a hard
+/// error, mirroring the "unknown requested id comes back absent" rule (ADR
+/// 0039 §5), and never a duty left to the reader. The catalog is bounded at
+/// [`ATTRS_MAX_ADVERTISED`] descriptors there too. The equivalent rule for
+/// entry keys is enforced the same way — see
 /// [`Entry::attrs`](crate::Entry::attrs).
 ///
 /// `label` is provider text and therefore THIRD-PARTY (a WASM provider plugin
-/// writes it, an SFTP server influences it): mask it exactly like a plugin's
-/// column header before painting, and clamp it to [`ATTR_LABEL_MAX`].
+/// writes it, an SFTP server influences it): [`sanitize_catalog`] clamps it to
+/// [`ATTR_LABEL_MAX`] bytes, and a frontend still masks it exactly like a
+/// plugin's column header before painting.
 ///
 /// ```
 /// use norte_proto::attrs::{AttrHint, AttrInfo, AttrType};
@@ -175,15 +202,25 @@ pub enum AttrHint {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AttrInfo {
-    /// Attribute id, namespaced ([`is_valid_attr_id`]).
+    /// Attribute id, namespaced ([`is_valid_attr_id`]). A descriptor whose id
+    /// does not satisfy that check does not survive [`sanitize_catalog`].
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend(
+            "maxLength" = ATTR_ID_MAX,
+            "pattern" = r"^[a-z0-9_-]+(\.[a-z0-9_-]+)+$"
+        ))
+    )]
     pub id: String,
-    /// Human label. THIRD-PARTY text — mask and clamp before painting.
+    /// Human label. THIRD-PARTY text — masked before painting, and CLAMPED to
+    /// [`ATTR_LABEL_MAX`] bytes by [`sanitize_catalog`] at decode.
     ///
     /// This is a FALLBACK, not the primary source of a column header: a
     /// frontend should prefer a localized string keyed by the stable `id`
     /// (e.g. `t!("attr.posix.mode")`) and fall back to this masked provider
     /// label only for ids it does not recognize. First-party attributes
     /// still route their labels through `i18n/`.
+    #[cfg_attr(feature = "schema", schemars(extend("maxLength" = ATTR_LABEL_MAX)))]
     pub label: String,
     /// Declared type of the values of this attribute.
     #[serde(rename = "type")]
@@ -250,11 +287,92 @@ where
     deserializer.deserialize_map(AttrMapVisitor)
 }
 
+/// Applies the receive-side catalog rules of ADR 0039 §4/§5 to a list of
+/// advertised descriptors, in wire order, and never fails: a bad descriptor
+/// costs itself, never the catalog and never the `fs.capabilities` call.
+///
+/// 1. A descriptor whose `id` fails [`is_valid_attr_id`] is DROPPED — an
+///    advertised id becomes a requested id, a configuration id and a map
+///    lookup downstream.
+/// 2. A REPEATED id is dropped, FIRST WINS. A catalog is an ordered list the
+///    provider ranked, so "first" is meaningful — the opposite choice from
+///    [`Entry::attrs`](crate::Entry::attrs), where keys arrive in a JSON
+///    object, which RFC 8259 §4 leaves unordered, so there is no "first" to
+///    prefer and a repeat resolves last-wins like any JSON parser. Keeping
+///    both copies would be worse than either: a consumer folding the catalog
+///    into a map would render an attribute one way and a consumer using
+///    `find()` another, from the very same bytes.
+/// 3. An over-long `label` is CLAMPED to [`ATTR_LABEL_MAX`] bytes on a CHAR
+///    BOUNDARY (never mid-UTF-8, which would produce a `String` that is not
+///    valid text). The descriptor survives: a fat label is cosmetic, the id is
+///    what a client acts on.
+/// 4. The result is truncated to [`ATTRS_MAX_ADVERTISED`] descriptors, keeping
+///    the FIRST ones in wire order. Rules 1 and 2 run BEFORE a slot is taken,
+///    so rejects and duplicates never eat the budget a legitimate later
+///    attribute needs.
+///
+/// [`FsCapabilitiesResult::attrs`](crate::methods::FsCapabilitiesResult) runs
+/// this at decode. An EMBEDDED backend, which never crosses that boundary,
+/// must call it explicitly on any catalog it obtains in-process — from a
+/// provider or, in block 2, from a WASM provider plugin the threat model
+/// treats as untrusted. One implementation, both paths.
+///
+/// ```
+/// use norte_proto::attrs::{AttrHint, AttrInfo, AttrType, sanitize_catalog};
+/// let info = |id: &str, ty| AttrInfo {
+///     id: id.to_owned(),
+///     label: "L".to_owned(),
+///     ty,
+///     hint: AttrHint::Opaque,
+/// };
+/// let limpio = sanitize_catalog(vec![
+///     info("MODE", AttrType::Uint),        // id mal formado: fuera
+///     info("posix.mode", AttrType::Uint),  // gana el PRIMERO
+///     info("posix.mode", AttrType::Text),  // id repetido: fuera
+/// ]);
+/// assert_eq!(limpio.len(), 1);
+/// assert_eq!(limpio[0].ty, AttrType::Uint);
+/// ```
+#[must_use]
+pub fn sanitize_catalog(catalog: Vec<AttrInfo>) -> Vec<AttrInfo> {
+    let mut out: Vec<AttrInfo> = Vec::new();
+    for mut info in catalog {
+        if out.len() >= ATTRS_MAX_ADVERTISED {
+            break;
+        }
+        // Id inválido o repetido: se descarta ANTES de ocupar hueco. La
+        // búsqueda lineal recorre a lo sumo `ATTRS_MAX_ADVERTISED` entradas,
+        // así que no compensa un set aparte.
+        if !is_valid_attr_id(&info.id) || out.iter().any(|visto| visto.id == info.id) {
+            continue;
+        }
+        clamp_label(&mut info.label);
+        out.push(info);
+    }
+    out
+}
+
+/// Recorta `label` a [`ATTR_LABEL_MAX`] bytes por una FRONTERA DE CARÁCTER:
+/// cortar a media secuencia UTF-8 no es una opción (`String::truncate`
+/// entraría en pánico, y el byte suelto no sería texto).
+fn clamp_label(label: &mut String) {
+    if label.len() <= ATTR_LABEL_MAX {
+        return;
+    }
+    let mut corte = ATTR_LABEL_MAX;
+    while corte > 0 && !label.is_char_boundary(corte) {
+        corte -= 1;
+    }
+    label.truncate(corte);
+}
+
 /// Decodes the advertised attribute catalog of a
 /// [`FsCapabilitiesResult`](crate::methods::FsCapabilitiesResult) under the
-/// receive-side rules of ADR 0039 §4/§5; the contract itself is documented on
-/// [`FsCapabilitiesResult::attrs`](crate::methods::FsCapabilitiesResult), which
-/// is what a caller reads.
+/// receive-side rules of ADR 0039 §4/§5 — by calling [`sanitize_catalog`], so
+/// the wire path and the embedded path share ONE implementation. The contract
+/// itself is documented on
+/// [`FsCapabilitiesResult::attrs`](crate::methods::FsCapabilitiesResult),
+/// which is what a caller reads.
 pub(crate) fn deserialize_attr_catalog<'de, D>(deserializer: D) -> Result<Vec<AttrInfo>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -272,31 +390,74 @@ where
             self,
             mut access: S,
         ) -> Result<Self::Value, S::Error> {
-            // Se conservan a lo sumo `ATTRS_MAX_ADVERTISED` descriptores — los
-            // PRIMEROS en orden de wire, que es el orden que el provider eligió
-            // y el que un selector de columnas muestra — descartando los ids mal
-            // formados. `size_hint` viene del peer: la reserva se acota al tope
-            // para que un seq que dice traer un millón no reserve un millón.
-            let cabidos = access.size_hint().unwrap_or(0).min(ATTRS_MAX_ADVERTISED);
-            let mut out: Vec<AttrInfo> = Vec::with_capacity(cabidos);
-            while out.len() < ATTRS_MAX_ADVERTISED {
+            // Se EXAMINAN a lo sumo `ATTRS_MAX_CATALOG_SCAN` descriptores y el
+            // resto se drena sin materializarlo: acotar solo lo que se GUARDA
+            // dejaría a un peer que manda cuatro millones de ids inválidos
+            // parseándose entero para un resultado vacío. Lo examinado ya está
+            // acotado por el tamaño del frame, así que no hay amplificación.
+            // `size_hint` viene del peer: la reserva se acota igual, para que
+            // un seq que dice traer un millón no reserve un millón.
+            let cabidos = access.size_hint().unwrap_or(0).min(ATTRS_MAX_CATALOG_SCAN);
+            let mut crudo: Vec<AttrInfo> = Vec::with_capacity(cabidos);
+            while crudo.len() < ATTRS_MAX_CATALOG_SCAN {
                 let Some(info) = access.next_element::<AttrInfo>()? else {
+                    return Ok(sanitize_catalog(crudo));
+                };
+                crudo.push(info);
+            }
+            while access.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+            Ok(sanitize_catalog(crudo))
+        }
+    }
+
+    deserializer.deserialize_seq(AttrCatalogVisitor)
+}
+
+/// Bounds the MEMORY of a requested-id list at decode. This is NOT validation
+/// and deliberately not a filter: the contract of
+/// [`FsListParams::attrs`](crate::methods::FsListParams) is that a malformed
+/// or over-cap request reaches the daemon so it can answer `-32602`.
+///
+/// A 16 MiB frame of `["a","a",…]` is ~4 million elements, and each one costs
+/// a `String` header of its own — roughly 15× the bytes that arrived, decided
+/// before any daemon-side check can run. So the first
+/// [`ATTRS_MAX_REQUEST`] + 1 elements are kept VERBATIM and the rest is
+/// drained without being materialised. The `+ 1` is the point: over-cap stays
+/// OBSERVABLE as `attrs.len() > ATTRS_MAX_REQUEST`, so the daemon still sees a
+/// violation to reject rather than a list silently trimmed into legality.
+pub(crate) fn deserialize_attr_request<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct AttrRequestVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for AttrRequestVisitor {
+        type Value = Vec<String>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a list of requested attribute ids")
+        }
+
+        fn visit_seq<S: serde::de::SeqAccess<'de>>(
+            self,
+            mut access: S,
+        ) -> Result<Self::Value, S::Error> {
+            const TESTIGO: usize = ATTRS_MAX_REQUEST + 1;
+            let cabidos = access.size_hint().unwrap_or(0).min(TESTIGO);
+            let mut out: Vec<String> = Vec::with_capacity(cabidos);
+            while out.len() < TESTIGO {
+                let Some(id) = access.next_element::<String>()? else {
                     return Ok(out);
                 };
-                // Id mal formado: se descarta ESE descriptor, jamás la respuesta.
-                if is_valid_attr_id(&info.id) {
-                    out.push(info);
-                }
+                // Sin validar y sin deduplicar: tal cual vino.
+                out.push(id);
             }
-            // Con el catálogo lleno nada más puede entrar: el resto se drena sin
-            // materializarlo (un catálogo gordo es un provider con un bug, no un
-            // peer roto — y tampoco un vector de 10 000 elementos en memoria).
             while access.next_element::<serde::de::IgnoredAny>()?.is_some() {}
             Ok(out)
         }
     }
 
-    deserializer.deserialize_seq(AttrCatalogVisitor)
+    deserializer.deserialize_seq(AttrRequestVisitor)
 }
 
 /// Maximum length of the base64 TEXT of an `AttrValue::Bytes` payload: the
@@ -847,6 +1008,126 @@ mod tests {
             catalogo(&serde_json::Value::Array(bomba)).len(),
             ATTRS_MAX_ADVERTISED
         );
+    }
+
+    #[test]
+    fn catalogo_de_ids_invalidos_deja_de_examinarse() {
+        // Con ids INVÁLIDOS el tope de `ATTRS_MAX_ADVERTISED` no se llena
+        // nunca, así que sin el tope de ESCANEO se parsearía el vector entero
+        // para un resultado vacío: el trabajo tiene que estar acotado igual.
+        let mut bomba: Vec<serde_json::Value> = (0..ATTRS_MAX_CATALOG_SCAN + 500)
+            .map(|i| descriptor(&format!("INVALIDO{i}")))
+            .collect();
+        // Un id legítimo MÁS ALLÁ del escaneo: no se ve, y ese es el precio
+        // documentado de acotar (un peer así ya es hostil, no solo buggy).
+        bomba.push(descriptor("s3.etag"));
+        assert!(catalogo(&serde_json::Value::Array(bomba)).is_empty());
+
+        // Y justo EN el límite del escaneo el id bueno sí entra.
+        let mut al_limite: Vec<serde_json::Value> = (0..ATTRS_MAX_CATALOG_SCAN - 1)
+            .map(|i| descriptor(&format!("INVALIDO{i}")))
+            .collect();
+        al_limite.push(descriptor("s3.etag"));
+        let vivos = catalogo(&serde_json::Value::Array(al_limite));
+        assert_eq!(vivos.len(), 1);
+        assert_eq!(vivos[0].id, "s3.etag");
+    }
+
+    #[test]
+    fn catalogo_deduplica_por_id_ganando_el_primero() {
+        // Mismos bytes, dos consumidores: uno que pliega a mapa y otro que usa
+        // `find()`. Con las dos copias vivas pintarían el atributo distinto.
+        let vivos = catalogo(&serde_json::json!([
+            { "id": "posix.mode", "label": "Mode", "type": "uint", "hint": "mode" },
+            { "id": "posix.mode", "label": "Modo", "type": "text", "hint": "opaque" },
+        ]));
+        assert_eq!(vivos.len(), 1, "un id, un descriptor");
+        assert_eq!(vivos[0].ty, AttrType::Uint, "gana el PRIMERO");
+        assert_eq!(vivos[0].label, "Mode");
+    }
+
+    #[test]
+    fn los_duplicados_no_se_comen_el_presupuesto_del_catalogo() {
+        // 64 copias del mismo id seguidas de uno legítimo: si el duplicado
+        // ocupase hueco, `s3.etag` se quedaría fuera del tope.
+        let mut wire: Vec<serde_json::Value> = (0..ATTRS_MAX_ADVERTISED)
+            .map(|_| descriptor("posix.mode"))
+            .collect();
+        wire.push(descriptor("s3.etag"));
+        let vivos = catalogo(&serde_json::Value::Array(wire));
+        let ids: Vec<&str> = vivos.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(ids, ["posix.mode", "s3.etag"]);
+    }
+
+    #[test]
+    fn label_sobre_el_tope_se_recorta_por_frontera_de_caracter() {
+        // Multibyte a propósito: recortar a ciegas partiría una secuencia UTF-8
+        // (y `String::truncate` entraría en pánico).
+        let largo = "ñ".repeat(ATTR_LABEL_MAX); // 2 bytes por carácter
+        let vivos = catalogo(&serde_json::json!([{
+            "id": "posix.mode", "label": largo, "type": "uint", "hint": "mode",
+        }]));
+        assert_eq!(vivos.len(), 1, "un label gordo NO cuesta el descriptor");
+        assert!(vivos[0].label.len() <= ATTR_LABEL_MAX);
+        assert_eq!(
+            vivos[0].label,
+            "ñ".repeat(ATTR_LABEL_MAX / 2),
+            "se corta en frontera de carácter, sin bytes sueltos"
+        );
+
+        // El tope exacto no se toca.
+        let justo = "a".repeat(ATTR_LABEL_MAX);
+        let vivos = catalogo(&serde_json::json!([{
+            "id": "posix.mode", "label": justo, "type": "uint", "hint": "mode",
+        }]));
+        assert_eq!(vivos[0].label, justo);
+    }
+
+    #[test]
+    fn sanitize_catalog_es_idempotente() {
+        // La red del camino EMBEBIDO: aplicarla dos veces (wire y luego en
+        // proceso, o al revés) no puede cambiar el resultado.
+        let sucio = vec![
+            AttrInfo {
+                id: "MODE".to_owned(),
+                label: "x".repeat(ATTR_LABEL_MAX + 10),
+                ty: AttrType::Uint,
+                hint: AttrHint::Mode,
+            },
+            AttrInfo {
+                id: "posix.mode".to_owned(),
+                label: "x".repeat(ATTR_LABEL_MAX + 10),
+                ty: AttrType::Uint,
+                hint: AttrHint::Mode,
+            },
+        ];
+        let una = sanitize_catalog(sucio);
+        let dos = sanitize_catalog(una.clone());
+        assert_eq!(una, dos);
+        assert_eq!(una.len(), 1);
+        assert_eq!(una[0].label.len(), ATTR_LABEL_MAX);
+    }
+
+    #[test]
+    fn la_peticion_se_acota_en_memoria_pero_no_se_valida() {
+        use crate::methods::FsListParams;
+
+        // Tope + 1: el testigo de "se pasó" tiene que sobrevivir para que el
+        // daemon pueda responder -32602 (bloque 2).
+        let ids: Vec<String> = (0..10_000).map(|i| format!("ns.a{i}")).collect();
+        let wire = serde_json::json!({ "path": "file:///", "attrs": ids });
+        let params: FsListParams = serde_json::from_value(wire).expect("no es error de decode");
+        assert_eq!(params.attrs.len(), ATTRS_MAX_REQUEST + 1);
+        assert!(
+            params.attrs.len() > ATTRS_MAX_REQUEST,
+            "pasarse sigue siendo OBSERVABLE"
+        );
+        assert_eq!(params.attrs[0], "ns.a0", "y lo que queda viene VERBATIM");
+
+        // Nada se valida ni se deduplica por debajo del tope.
+        let wire = serde_json::json!({ "path": "file:///", "attrs": ["MODE", "MODE", ""] });
+        let params: FsListParams = serde_json::from_value(wire).expect("no es error de decode");
+        assert_eq!(params.attrs, ["MODE", "MODE", ""]);
     }
 
     #[test]

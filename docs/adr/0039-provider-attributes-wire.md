@@ -110,20 +110,49 @@ sides deserialise through a hand-written visitor, and neither ever errors:
   serialised its keys in; a key repeated within the same object resolves
   last-wins, as it would in any JSON parser.
 - `FsCapabilitiesResult.attrs` drops an `AttrInfo` whose id is malformed — so a
-  malformed id can never be discovered and therefore never requested — and
-  truncates the catalog at the 64 of §5, keeping the FIRST descriptors in wire
-  order and draining the rest without materialising them. The order is the
-  provider's and it is meaningful (a column picker paints the catalog in it),
-  so unlike the entry map it is never sorted. A descriptor that is not a
-  well-formed `AttrInfo` at all (a missing `label`) is still serde's hard
-  error: that peer is broken rather than newer, whereas an unknown `type` or
-  `hint` already degrades to its `Unknown` variant.
+  malformed id crossing the WIRE can never be discovered and therefore never
+  requested — drops a REPEATED id keeping the FIRST, clamps an over-long label
+  to the 64 bytes of §5 on a char boundary, and truncates the catalog at the 64
+  advertised entries of §5, keeping the FIRST descriptors in wire order. The
+  order is the provider's and it is meaningful (a column picker paints the
+  catalog in it), so unlike the entry map it is never sorted. A descriptor that
+  is not a well-formed `AttrInfo` at all (a missing `label`) is still serde's
+  hard error: that peer is broken rather than newer, whereas an unknown `type`
+  or `hint` already degrades to its `Unknown` variant.
+
+Repeats therefore resolve in OPPOSITE directions on the two receive sides, and
+the contrast is the reason: a catalog is an ordered list its provider ranked, so
+"first" is a real choice and first-wins keeps it; the keys of `Entry.attrs`
+arrive in a JSON object, which RFC 8259 §4 leaves unordered, so there is no
+first to prefer and last-wins matches what any JSON parser would do. Keeping
+both copies of an advertised id would be worse than either rule: a consumer
+folding the catalog into a map and one using `find()` would render the same
+bytes differently, which is a cross-frontend divergence (TUI vs GUI) from a
+single response. Rejects and duplicates are discarded BEFORE a slot is taken,
+so padding a catalog cannot starve a legitimate later attribute out of the 64.
+
+Both rules live in ONE function, `attrs::sanitize_catalog`, which the
+deserialiser calls. That is deliberate: the filter would otherwise sit only at
+the deserialisation boundary, which an EMBEDDED backend — the default TUI/CLI
+configuration — never crosses, so block 2's in-process catalogs (including
+those from a WASM provider plugin, untrusted by the threat model) would arrive
+unfiltered. The embedded path calls the same function rather than
+reimplementing the rules.
 
 The two REQUEST fields (`FsListParams.attrs`, `FsStatParams.attrs`) are the
-deliberate exception: they carry data this peer is SENDING, so they get no
-filtering deserialiser. Silently dropping a bad id there would turn "the client
-asked for `../etc/passwd`" into "the client asked for nothing", hiding a
-caller's bug and making the daemon-side `-32602` untestable.
+deliberate exception: they carry data this peer is SENDING, so nothing about
+them is filtered or deduplicated. Silently dropping a bad id there would turn
+"the client asked for `../etc/passwd`" into "the client asked for nothing",
+hiding a caller's bug and making the daemon-side `-32602` untestable.
+
+Two decode-time bounds exist purely for MEMORY, and neither is validation. A
+catalog stops being EXAMINED past 256 elements (4 × 64) and the rest is drained
+unmaterialised: bounding only what is KEPT would let a peer sending four
+million malformed descriptors be parsed in full for a result of zero. A request
+keeps its first 17 (16 + 1) elements and drains the rest: a 16 MiB frame of
+`["a","a",…]` is ~4 million elements and ~15× that in `String` headers, decided
+before any daemon-side check can run. The `+ 1` matters — over-cap must stay
+observable as `len() > 16` rather than be trimmed into legality.
 
 The filter is one-directional on purpose. Serialisation is not filtered and the
 fields are public, so an `Entry` or a catalog built in-process with a malformed
@@ -134,7 +163,9 @@ laundered by the serialiser, which would also make that validation untestable.
 Both the caps and the id shape travel in the published JSON Schema (ADR 0038),
 generated from the same constants the code applies: the artifact is the only
 thing a third-party implementer reads, and an open `object`/`array` there would
-tell them that 100 arbitrary ids are legal.
+tell them that 100 arbitrary ids are legal. That covers all four places an id
+or a label appears — the `Entry.attrs` keys, `AttrInfo::id`, `AttrInfo::label`,
+and the two requested-id lists — not just the map.
 
 `AttrInfo::label` and any `Text`/`Bytes` value is **third-party text**: an SFTP
 server controls `sftp.owner`, and a WASM provider plugin controls its own
@@ -148,6 +179,10 @@ preserved (hard rule 1); only the rendering is lossy.
 At most 16 requested ids per call, id ≤ 64 bytes, `AttrInfo::label` ≤ 64 bytes,
 `Text` ≤ 256 bytes, `Bytes` ≤ 256 bytes decoded. The ceiling a listing page can
 add is therefore bounded and predictable.
+
+`AttrInfo::label` is enforced at decode too, but by CLAMPING (on a char
+boundary) rather than dropping: the id is what a client acts on, and losing an
+attribute over a cosmetic field would be the wrong trade.
 
 The value caps are enforced **at decode**, by `AttrValue` itself, in the only
 way §3 allows: an over-cap `Text` or `Bytes` degrades that cell to `Unknown`
@@ -165,7 +200,12 @@ fat catalog is a buggy provider, not a broken peer.
 
 - Protocol 0.30.0. Purely additive: all three fields are
   `skip_serializing_if`-guarded, so a 0.29 peer emits and receives exactly
-  today's bytes. The N/N-1 window moves to N=0.30.x / N-1=0.29.x.
+  today's bytes. The N/N-1 window moves to N=0.30.x / N-1=0.29.x. The direction
+  that has to hold is a **0.29 client against a 0.30 daemon**: it sends no
+  `attrs`, receives none, and nothing changes for it. The reverse — a 0.30
+  client against a 0.29 daemon — is not an attribute question at all:
+  `version_compatible` rejects a client from the future outright, so that
+  handshake is `VERSION_MISMATCH` before any field is looked at.
 - `norte-proto` gains a `base64` dependency (0.22, already a vetted workspace
   dependency used by `norte-core` for `fs.read`). It is needed because
   `AttrValue::Bytes` owns its decode: leaving the value as a base64 `String`
