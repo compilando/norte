@@ -276,10 +276,17 @@ pub fn gpui_chord(
         "insert" => KeyCode::Insert,
         "delete" => KeyCode::Delete,
         // Nombres de keysym que el fallback imprimible rechazaría por
-        // multi-carácter (#103): en X11 `key` trae el NOMBRE de la tecla, no
-        // el carácter, y sin `key_char` estos bindings quedarían MUERTOS solo
-        // en la GUI. `plus` es además la única grafía del chord (`+` es el
-        // separador de modificadores en el keymap).
+        // multi-carácter (#103): son 4-8 chars, así que `(Some(c), None)` no
+        // casa y el chord se perdería. DEFENSA, no bug vivo: en la revisión
+        // pineada de gpui, `keystroke_from_xkb` ya mapea `Keysym::plus` →
+        // `"+"` (y asterisk/minus/slash/question/colon igual) ANTES de caer
+        // en `keysym_get_name`, así que hoy `key` nunca trae el nombre para
+        // estas teclas — verificado en el checkout del rev pineado, no
+        // inferido. Estos brazos existen para que un bump de gpui que
+        // cambie esa tabla no deje MUDOS `mark.invert` y compañía solo en la
+        // GUI, que vive fuera del workspace y no la cubre el gate normal.
+        // `plus` es además la única grafía del chord (`+` es el separador de
+        // modificadores en el keymap).
         "plus" => KeyCode::Char('+'),
         "asterisk" => KeyCode::Char('*'),
         "minus" => KeyCode::Char('-'),
