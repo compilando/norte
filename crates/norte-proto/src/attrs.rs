@@ -546,66 +546,173 @@ pub enum AttrValue {
     Unknown,
 }
 
-impl AttrValue {
-    /// Wire tags this protocol version recognises, in variant order.
-    const TAGS: [&'static str; 7] = [
-        "uint",
-        "int",
-        "text",
-        "bytes_b64",
-        "time_ms",
-        "bool",
-        "unknown",
+/// The tag of a cell, resolved from its KEY before the payload is read — which
+/// is the whole point: knowing the tag first lets the payload be decoded
+/// STRAIGHT into the scalar that tag needs, with no intermediate representation
+/// of it ever existing.
+///
+/// This is the ONE table of wire tags: both directions go through
+/// [`AttrTag::wire`], so a variant cannot be serialised under a name the reader
+/// does not know.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttrTag {
+    Uint,
+    Int,
+    Text,
+    BytesB64,
+    TimeMs,
+    Bool,
+    /// The RESERVED `"unknown"` tag: a known key whose payload is always
+    /// [`AttrValue::Unknown`], whatever it carries.
+    Reserved,
+}
+
+impl AttrTag {
+    /// Every tag this protocol version recognises, in variant order.
+    const ALL: [Self; 7] = [
+        Self::Uint,
+        Self::Int,
+        Self::Text,
+        Self::BytesB64,
+        Self::TimeMs,
+        Self::Bool,
+        Self::Reserved,
     ];
 
-    /// Interpret an already-parsed JSON value as a cell, degrading to
-    /// [`AttrValue::Unknown`] rather than failing (see the type docs).
-    ///
-    /// Every known tag is looked up by name, so the result does NOT depend on
-    /// the order the peer serialised its keys in — JSON objects are unordered
-    /// (RFC 8259 §4) and a relay that round-trips through a sorted map would
-    /// otherwise change the meaning of the very same document.
-    fn from_wire(raw: &serde_json::Value) -> Self {
-        use base64::Engine as _;
+    /// Wire name of the tag.
+    const fn wire(self) -> &'static str {
+        match self {
+            Self::Uint => "uint",
+            Self::Int => "int",
+            Self::Text => "text",
+            Self::BytesB64 => "bytes_b64",
+            Self::TimeMs => "time_ms",
+            Self::Bool => "bool",
+            Self::Reserved => "unknown",
+        }
+    }
 
-        let serde_json::Value::Object(map) = raw else {
-            return AttrValue::Unknown;
-        };
+    /// `None` = a key this protocol version does not know.
+    fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|tag| tag.wire() == key)
+    }
+}
 
-        let mut found: Option<(&str, &serde_json::Value)> = None;
-        for tag in Self::TAGS {
-            if let Some(payload) = map.get(tag) {
-                if found.is_some() {
-                    // Dos etiquetas conocidas: ambiguo, y un peer conforme
-                    // jamás lo emite. Degradar mantiene el resultado
-                    // independiente del orden de claves.
-                    return AttrValue::Unknown;
-                }
-                found = Some((tag, payload));
+/// A map key read WITHOUT allocating: only the tag matters, and a key that is
+/// not a tag is not worth a `String` (a hostile peer can send megabyte-long
+/// ones).
+struct TagKey(Option<AttrTag>);
+
+impl<'de> Deserialize<'de> for TagKey {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct KeyVisitor;
+
+        impl serde::de::Visitor<'_> for KeyVisitor {
+            type Value = TagKey;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an attribute value tag")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<TagKey, E> {
+                Ok(TagKey(AttrTag::from_key(v)))
             }
         }
-        // Claves no reconocidas de más: se ignoran (mismo criterio indulgente
-        // que cualquier campo desconocido de un struct del wire).
-        let Some((tag, payload)) = found else {
-            return AttrValue::Unknown;
-        };
 
-        match tag {
-            "uint" => payload.as_u64().map_or(AttrValue::Unknown, AttrValue::Uint),
-            "int" => payload.as_i64().map_or(AttrValue::Unknown, AttrValue::Int),
-            "text" => match payload.as_str() {
-                Some(s) if s.len() <= ATTR_TEXT_MAX => AttrValue::Text(s.to_owned()),
-                _ => AttrValue::Unknown,
-            },
-            "bytes_b64" => {
-                let Some(b64) = payload.as_str() else {
-                    return AttrValue::Unknown;
-                };
-                // Tope ANTES de decodificar: nunca se reserva el buffer que
-                // un payload gigante pide.
-                if b64.len() > ATTR_BYTES_B64_MAX {
-                    return AttrValue::Unknown;
-                }
+        deserializer.deserialize_str(KeyVisitor)
+    }
+}
+
+/// The ONE visitor behind [`AttrValue`]'s deserialisation, in two roles:
+///
+/// - `esperado: None` — the cell ENVELOPE. A map is scanned for its tag; any
+///   other JSON shape (`42`, `null`, `"texto"`, `[…]`) degrades.
+/// - `esperado: Some(tag)` — the PAYLOAD under an already-known tag. Each
+///   `visit_*` decodes straight into the variant that tag needs and returns
+///   [`AttrValue::Unknown`] for everything else, which is how "the payload has
+///   the wrong JSON type" stays a match arm instead of a deserialiser error.
+///
+/// No method of this visitor can fail on the VALUE side, which is what makes
+/// ADR 0039 §3 true rather than aspirational.
+struct CellVisitor {
+    esperado: Option<AttrTag>,
+}
+
+impl CellVisitor {
+    /// The payload had a shape this tag cannot use (or there is no tag yet).
+    const UNKNOWN: AttrValue = AttrValue::Unknown;
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for CellVisitor {
+    type Value = AttrValue;
+
+    fn deserialize<D: serde::Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> Result<AttrValue, D::Error> {
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for CellVisitor {
+    type Value = AttrValue;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.esperado {
+            None => f.write_str("a one-key tagged attribute value"),
+            Some(_) => f.write_str("the payload of an attribute value"),
+        }
+    }
+
+    fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<AttrValue, E> {
+        Ok(match self.esperado {
+            Some(AttrTag::Uint) => AttrValue::Uint(v),
+            Some(AttrTag::Int) => i64::try_from(v).map_or(Self::UNKNOWN, AttrValue::Int),
+            Some(AttrTag::TimeMs) => i64::try_from(v).map_or(Self::UNKNOWN, AttrValue::TimeMs),
+            _ => Self::UNKNOWN,
+        })
+    }
+
+    fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<AttrValue, E> {
+        Ok(match self.esperado {
+            // Un entero no negativo puede llegar por cualquiera de las dos
+            // visitas según el deserializador: se tratan igual a propósito.
+            Some(AttrTag::Uint) => u64::try_from(v).map_or(Self::UNKNOWN, AttrValue::Uint),
+            Some(AttrTag::Int) => AttrValue::Int(v),
+            Some(AttrTag::TimeMs) => AttrValue::TimeMs(v),
+            _ => Self::UNKNOWN,
+        })
+    }
+
+    fn visit_u128<E: serde::de::Error>(self, _v: u128) -> Result<AttrValue, E> {
+        Ok(Self::UNKNOWN)
+    }
+
+    fn visit_i128<E: serde::de::Error>(self, _v: i128) -> Result<AttrValue, E> {
+        Ok(Self::UNKNOWN)
+    }
+
+    fn visit_f64<E: serde::de::Error>(self, _v: f64) -> Result<AttrValue, E> {
+        Ok(Self::UNKNOWN)
+    }
+
+    fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<AttrValue, E> {
+        Ok(match self.esperado {
+            Some(AttrTag::Bool) => AttrValue::Bool(v),
+            _ => Self::UNKNOWN,
+        })
+    }
+
+    fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<AttrValue, E> {
+        use base64::Engine as _;
+
+        Ok(match self.esperado {
+            // El tope se comprueba ANTES de copiar: un texto gigante no se
+            // duplica en memoria solo para descartarlo después.
+            Some(AttrTag::Text) if v.len() <= ATTR_TEXT_MAX => AttrValue::Text(v.to_owned()),
+            // Y aquí, antes de DECODIFICAR: un payload enorme nunca reserva el
+            // buffer que pide.
+            Some(AttrTag::BytesB64) if v.len() <= ATTR_BYTES_B64_MAX => {
                 let engines = [
                     &base64::engine::general_purpose::STANDARD,
                     &base64::engine::general_purpose::STANDARD_NO_PAD,
@@ -614,19 +721,100 @@ impl AttrValue {
                 ];
                 engines
                     .iter()
-                    .find_map(|engine| engine.decode(b64).ok())
+                    .find_map(|engine| engine.decode(v).ok())
                     .filter(|bytes| bytes.len() <= ATTR_BYTES_MAX)
-                    .map_or(AttrValue::Unknown, AttrValue::Bytes)
+                    .map_or(Self::UNKNOWN, AttrValue::Bytes)
             }
-            "time_ms" => payload
-                .as_i64()
-                .map_or(AttrValue::Unknown, AttrValue::TimeMs),
-            "bool" => payload
-                .as_bool()
-                .map_or(AttrValue::Unknown, AttrValue::Bool),
-            // `"unknown"` es RESERVADA: cualquier payload vuelve a Unknown.
-            _ => AttrValue::Unknown,
+            _ => Self::UNKNOWN,
+        })
+    }
+
+    fn visit_bytes<E: serde::de::Error>(self, _v: &[u8]) -> Result<AttrValue, E> {
+        Ok(Self::UNKNOWN)
+    }
+
+    fn visit_unit<E: serde::de::Error>(self) -> Result<AttrValue, E> {
+        Ok(Self::UNKNOWN)
+    }
+
+    fn visit_none<E: serde::de::Error>(self) -> Result<AttrValue, E> {
+        Ok(Self::UNKNOWN)
+    }
+
+    fn visit_some<D: serde::Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> Result<AttrValue, D::Error> {
+        serde::de::IgnoredAny::deserialize(deserializer)?;
+        Ok(Self::UNKNOWN)
+    }
+
+    fn visit_seq<S: serde::de::SeqAccess<'de>>(self, mut access: S) -> Result<AttrValue, S::Error> {
+        // Se DRENA sin materializar (`IgnoredAny` recorre los tokens, no
+        // construye nada): un array anidado 200 niveles cuesta lo que ocupa en
+        // el frame y degrada esta celda, jamás la página.
+        while access.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+        Ok(Self::UNKNOWN)
+    }
+
+    fn visit_map<M: serde::de::MapAccess<'de>>(self, mut access: M) -> Result<AttrValue, M::Error> {
+        let Some(_) = self.esperado else {
+            return Self::envelope(access);
+        };
+        // Un objeto BAJO una etiqueta: igual que un array, se drena.
+        while access
+            .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+            .is_some()
+        {}
+        Ok(Self::UNKNOWN)
+    }
+}
+
+impl CellVisitor {
+    /// Scans the cell envelope: every key is looked up as a tag, the payload of
+    /// the ONE known tag is decoded in place, and everything else is drained.
+    ///
+    /// The decision is taken AFTER every key has been seen, so it does not
+    /// depend on the order the peer serialised them in — JSON objects are
+    /// unordered (RFC 8259 §4) and a relay that round-trips through a sorted
+    /// map must not be able to change the meaning of the very same document.
+    /// Exactly one known tag yields its variant; zero (an unrecognised tag from
+    /// a newer peer, or an empty object) and two-or-more (ambiguous, which a
+    /// conforming peer never emits) both yield [`AttrValue::Unknown`].
+    fn envelope<'de, M: serde::de::MapAccess<'de>>(mut access: M) -> Result<AttrValue, M::Error> {
+        let mut elegida: Option<(AttrTag, AttrValue)> = None;
+        let mut ambigua = false;
+
+        while let Some(TagKey(tag)) = access.next_key::<TagKey>()? {
+            // La MISMA etiqueta repetida no es ambigüedad: es una clave
+            // duplicada, y se resuelve last-wins como en cualquier parser JSON
+            // (y como hacía el `serde_json::Map` intermedio que esto sustituye).
+            let repetida = elegida
+                .as_ref()
+                .is_some_and(|(vista, _)| Some(*vista) == tag);
+            match tag {
+                Some(t) if !ambigua && (elegida.is_none() || repetida) => {
+                    let valor = access.next_value_seed(CellVisitor { esperado: Some(t) })?;
+                    elegida = Some((t, valor));
+                }
+                Some(_) => {
+                    ambigua = true;
+                    access.next_value::<serde::de::IgnoredAny>()?;
+                }
+                // Claves no reconocidas de más: se ignoran (mismo criterio
+                // indulgente que cualquier campo desconocido del wire), y su
+                // payload se drena sin materializarse.
+                None => {
+                    access.next_value::<serde::de::IgnoredAny>()?;
+                }
+            }
         }
+
+        Ok(if ambigua {
+            AttrValue::Unknown
+        } else {
+            elegida.map_or(AttrValue::Unknown, |(_, valor)| valor)
+        })
     }
 }
 
@@ -635,34 +823,54 @@ impl Serialize for AttrValue {
         use base64::Engine as _;
         use serde::ser::SerializeMap as _;
 
+        // La etiqueta sale de la MISMA tabla que lee el deserializador
+        // (`AttrTag::wire`): no hay forma de emitir un nombre que el lector no
+        // reconozca.
         let mut map = serializer.serialize_map(Some(1))?;
         match self {
-            AttrValue::Uint(v) => map.serialize_entry("uint", v)?,
-            AttrValue::Int(v) => map.serialize_entry("int", v)?,
-            AttrValue::Text(v) => map.serialize_entry("text", v)?,
+            AttrValue::Uint(v) => map.serialize_entry(AttrTag::Uint.wire(), v)?,
+            AttrValue::Int(v) => map.serialize_entry(AttrTag::Int.wire(), v)?,
+            AttrValue::Text(v) => map.serialize_entry(AttrTag::Text.wire(), v)?,
             AttrValue::Bytes(v) => map.serialize_entry(
-                "bytes_b64",
+                AttrTag::BytesB64.wire(),
                 &base64::engine::general_purpose::STANDARD.encode(v),
             )?,
-            AttrValue::TimeMs(v) => map.serialize_entry("time_ms", v)?,
-            AttrValue::Bool(v) => map.serialize_entry("bool", v)?,
-            AttrValue::Unknown => map.serialize_entry("unknown", &Option::<()>::None)?,
+            AttrValue::TimeMs(v) => map.serialize_entry(AttrTag::TimeMs.wire(), v)?,
+            AttrValue::Bool(v) => map.serialize_entry(AttrTag::Bool.wire(), v)?,
+            AttrValue::Unknown => {
+                map.serialize_entry(AttrTag::Reserved.wire(), &Option::<()>::None)?;
+            }
         }
         map.end()
     }
 }
 
 impl<'de> Deserialize<'de> for AttrValue {
-    /// Parses through [`serde_json::Value`] on purpose: JSON is the protocol's
-    /// only encoding (ADR 0011), and going through a self-describing value
-    /// turns "the payload has the wrong type" into a MATCH ARM instead of a
-    /// deserialiser error — which is what lets a bad cell degrade rather than
-    /// sink the entry that carries it. It is also the entry point for a
-    /// non-map input (`42`, `null`, `"texto"`): those arrive as values here
-    /// and degrade, where `deserialize_map` would have raised.
+    /// Reads the cell with a STREAMING visitor, never through an intermediate
+    /// [`serde_json::Value`]. `deserialize_any` is what turns "the payload has
+    /// the wrong JSON type" into a match arm instead of a deserialiser error,
+    /// and it is also the entry point for a non-map input (`42`, `null`,
+    /// `"texto"`), which degrades where `deserialize_map` would have raised.
+    /// JSON is the protocol's only encoding (ADR 0011), so requiring a
+    /// self-describing format costs nothing.
+    ///
+    /// Materialising the payload FIRST would have been shorter and is wrong
+    /// twice over, in ways that both contradict §3 of the ADR:
+    ///
+    /// - `serde_json`'s recursion limit applies while BUILDING a `Value`, so a
+    ///   ~250-byte payload nested 125 deep inside one cell of one entry failed
+    ///   the whole `fs.list` page with "recursion limit exceeded" — a hard
+    ///   error at the value level, and one that the very same bytes in an
+    ///   unknown field (the 0.29 shape) never caused, because derived serde
+    ///   skips those with [`IgnoredAny`](serde::de::IgnoredAny). Draining is
+    ///   iterative, so depth now costs only the bytes it occupies in the frame.
+    /// - a `Value` costs several times the bytes it came from, which is the
+    ///   amplification [`ATTRS_MAX_CATALOG_SCAN`], the `+ 1` request witness
+    ///   and the pre-decode base64 length check all exist to prevent. Here the
+    ///   caps are checked BEFORE anything is copied, and a payload that is not
+    ///   the shape its tag needs is never built at all.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = serde_json::Value::deserialize(deserializer)?;
-        Ok(AttrValue::from_wire(&raw))
+        deserializer.deserialize_any(CellVisitor { esperado: None })
     }
 }
 
@@ -917,6 +1125,70 @@ mod tests {
         assert_eq!(map["d"], AttrValue::Unknown);
         assert_eq!(map["e"], AttrValue::Unknown);
         assert_eq!(map["f"], AttrValue::Bool(false));
+    }
+
+    #[test]
+    fn un_payload_hondisimo_degrada_y_no_cuesta_la_pagina() {
+        // El caso que el hop por `serde_json::Value` convertía en error DURO:
+        // 200 niveles de anidamiento dentro de UNA celda reventaban el límite
+        // de recursión y con él la respuesta entera, cuando los MISMOS bytes en
+        // un campo desconocido (la forma 0.29) siempre se ignoraron sin drama.
+        let hondo = format!("{}{}", "[".repeat(200), "]".repeat(200));
+        let json = format!(
+            r#"{{"path":"file:///a","kind":"file","attrs":{{
+                "a.bomba": {{"uint": {hondo}}},
+                "b.hermana": {{"bool": true}}
+            }}}}"#
+        );
+        let e: crate::Entry = serde_json::from_str(&json).expect("una celda honda NO rompe nada");
+        assert_eq!(e.attrs["a.bomba"], AttrValue::Unknown, "la celda degrada");
+        assert_eq!(
+            e.attrs["b.hermana"],
+            AttrValue::Bool(true),
+            "y su hermana sobrevive: no se pierde ni la entrada ni la página"
+        );
+
+        // El mismo payload bajo una etiqueta DESCONOCIDA (se drena igual).
+        let suelto: AttrValue =
+            serde_json::from_str(&format!(r#"{{"cuaternion": {hondo}}}"#)).expect("degrada");
+        assert_eq!(suelto, AttrValue::Unknown);
+    }
+
+    #[test]
+    fn las_etiquetas_conocidas_van_y_vuelven() {
+        // Una sola tabla para las dos direcciones: lo que se emite se
+        // reconoce, y las siete etiquetas del wire están todas.
+        let nombres: Vec<&str> = AttrTag::ALL.iter().map(|t| t.wire()).collect();
+        assert_eq!(
+            nombres,
+            [
+                "uint",
+                "int",
+                "text",
+                "bytes_b64",
+                "time_ms",
+                "bool",
+                "unknown"
+            ],
+            "las etiquetas del wire están CONGELADAS (0.30.0)"
+        );
+        for tag in AttrTag::ALL {
+            assert_eq!(AttrTag::from_key(tag.wire()), Some(tag));
+        }
+        assert!(AttrTag::from_key("cuaternion").is_none());
+    }
+
+    #[test]
+    fn la_misma_etiqueta_repetida_es_last_wins_no_ambigua() {
+        // Una clave DUPLICADA no es lo mismo que dos etiquetas distintas: un
+        // parser JSON cualquiera se queda con la última, y así lo hacía el
+        // `serde_json::Map` intermedio al que sustituye el visitor. Se fija
+        // para que el cambio de implementación no mueva lo observable.
+        let v: AttrValue = serde_json::from_str(r#"{"uint":1,"uint":2}"#).unwrap();
+        assert_eq!(v, AttrValue::Uint(2));
+        // Y el duplicado tampoco vuelve ambigua una celda válida.
+        let v: AttrValue = serde_json::from_str(r#"{"uint":1,"uint":2,"aaa":0}"#).unwrap();
+        assert_eq!(v, AttrValue::Uint(2));
     }
 
     #[test]

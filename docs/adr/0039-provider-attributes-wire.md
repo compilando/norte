@@ -71,6 +71,18 @@ value over the caps of §5. Errors at value level never propagate: the
 containing message fails only when the JSON itself is unparseable or `attrs` is
 not an object at all, which serde decides on the parent type.
 
+That uniformity is why the value is read with a STREAMING visitor rather than
+materialised into a `serde_json::Value` first. The shorter route had two
+consequences that contradicted the rule above: `serde_json`'s recursion limit
+applies while BUILDING a value, so a ~250-byte payload nested 125 deep inside
+one cell of one entry failed the whole page — a value-level hard error, and one
+the very same bytes never caused in an unknown field, which derived serde skips
+with `IgnoredAny` — and a `Value` costs several times the bytes it came from,
+reintroducing exactly the amplification the bounds below exist to prevent. The
+visitor knows the tag before it reads the payload, so it decodes straight into
+the variant, checks the caps before copying anything, and drains everything
+else iteratively.
+
 An object carrying two or more KNOWN tags degrades too, rather than picking
 one. JSON objects are unordered (RFC 8259 §4), so "the first key wins" would
 make `{"uint":1,"bool":true}` and `{"bool":true,"uint":1}` — the same document —
