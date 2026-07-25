@@ -104,25 +104,32 @@
       ]
     },
     "AttrValue": {
-      "description": "One-key tagged attribute value; an unknown key degrades to Unknown.",
+      "description": "One-key tagged attribute value; an unknown, ambiguous, ill-typed or over-cap key degrades to Unknown.",
+      "maxProperties": 1,
       "minProperties": 1,
       "properties": {
         "bool": {
           "type": "boolean"
         },
         "bytes_b64": {
+          "contentEncoding": "base64",
+          "maxLength": 344,
           "type": "string"
         },
         "int": {
+          "format": "int64",
           "type": "integer"
         },
         "text": {
+          "maxLength": 256,
           "type": "string"
         },
         "time_ms": {
+          "format": "int64",
           "type": "integer"
         },
         "uint": {
+          "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },

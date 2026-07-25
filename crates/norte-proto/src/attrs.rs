@@ -179,6 +179,12 @@ pub struct AttrInfo {
     pub hint: AttrHint,
 }
 
+/// Maximum length of the base64 TEXT of an `AttrValue::Bytes` payload: the
+/// RFC 4648 expansion of [`ATTR_BYTES_MAX`] (4 characters per 3-byte group,
+/// padded). Checked BEFORE decoding, so an oversized payload never allocates
+/// the buffer it asks for.
+const ATTR_BYTES_B64_MAX: usize = 4 * ATTR_BYTES_MAX.div_ceil(3);
+
 /// The value of one attribute for one entry (ADR 0039).
 ///
 /// Absence of a key in `Entry::attrs` means the provider does not know the
@@ -187,10 +193,37 @@ pub struct AttrInfo {
 ///
 /// Wire: a one-key object tagged by variant — `{"uint": 33188}`,
 /// `{"bytes_b64": "//4="}`. Deserialisation is hand-written (the same route
-/// [`CapabilityFlags`](crate::CapabilityFlags) takes) so that a variant from a
-/// newer protocol degrades to [`AttrValue::Unknown`] instead of failing the
-/// whole entry: `#[serde(other)]` cannot express a catch-all on a
-/// data-carrying enum.
+/// [`CapabilityFlags`](crate::CapabilityFlags) takes) because
+/// `#[serde(other)]` cannot express a catch-all on a data-carrying enum.
+///
+/// # Every malformed value degrades; NOTHING here is a hard error
+///
+/// A value is one cell of one entry of a page, so a bad cell must cost that
+/// cell and nothing more (ADR 0039 §3). Deserialisation therefore yields
+/// [`AttrValue::Unknown`], never an error, for all of:
+///
+/// - a tag this protocol version does not know (a newer peer, ADR 0004);
+/// - an object carrying TWO OR MORE known tags (ambiguous — key order in JSON
+///   is not significant, so "the first one wins" would make the result depend
+///   on the whim of a relay that round-trips through a sorted map);
+/// - a payload of the wrong JSON type (`{"uint": "33188"}`);
+/// - a non-object, a `null`, or an empty object;
+/// - undecodable base64;
+/// - a payload OVER the caps — [`ATTR_TEXT_MAX`] bytes of `Text`, or
+///   [`ATTR_BYTES_MAX`] bytes of `Bytes` after decoding. The caps are
+///   enforced here, at decode; the daemon additionally enforces them on emit.
+///
+/// The containing message still fails when the JSON itself is unparseable or
+/// `attrs` is not an object — that is serde's job on the parent type.
+///
+/// `"unknown"` is a RESERVED wire tag: no future protocol version may name a
+/// real variant that. A component that reads a value and writes it back
+/// (a proxy, a cache) collapses a newer tag to `unknown` in the round trip —
+/// the same accepted trade-off as [`EntryKind::Other`](crate::EntryKind::Other).
+/// The loss is strictly worse here than for [`AttrType`]/[`AttrHint`]: those
+/// lose a TAG, this loses the tag AND its payload. A relay that means to be
+/// transparent must forward the raw JSON of the cell rather than a
+/// re-serialised `AttrValue`.
 ///
 /// ```
 /// use norte_proto::attrs::AttrValue;
@@ -198,6 +231,9 @@ pub struct AttrInfo {
 /// assert_eq!(v, AttrValue::Unknown);
 /// let n: AttrValue = serde_json::from_str(r#"{"uint": 33188}"#).unwrap();
 /// assert_eq!(n, AttrValue::Uint(33188));
+/// // Un payload del tipo JSON equivocado degrada la CELDA, no la entrada.
+/// let malo: AttrValue = serde_json::from_str(r#"{"uint": "33188"}"#).unwrap();
+/// assert_eq!(malo, AttrValue::Unknown);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AttrValue {
@@ -205,18 +241,112 @@ pub enum AttrValue {
     Uint(u64),
     /// Signed integer.
     Int(i64),
-    /// UTF-8 text. THIRD-PARTY — mask before painting.
+    /// UTF-8 text. THIRD-PARTY — mask before painting. Over
+    /// [`ATTR_TEXT_MAX`] bytes degrades to [`AttrValue::Unknown`].
     Text(String),
     /// Raw bytes (base64 on the wire): an owner name that is not UTF-8.
+    ///
+    /// EMITTED as RFC 4648 §4 — the standard alphabet (`+`, `/`) with
+    /// padding required. On READ the unpadded and URL-safe (`-`, `_`) forms
+    /// are accepted too, tried in that order: a producer using Go's
+    /// `RawStdEncoding` would otherwise lose every `Bytes` cell silently, and
+    /// widening what is accepted is backward-compatible. More than
+    /// [`ATTR_BYTES_MAX`] bytes AFTER decoding degrades to
+    /// [`AttrValue::Unknown`].
     Bytes(Vec<u8>),
     /// Milliseconds since the UTC epoch; negative is valid.
     TimeMs(i64),
     /// Boolean.
     Bool(bool),
-    /// A value this protocol version does not understand, or a corrupt
-    /// base64 payload. Never emitted by a conforming daemon; it exists so one
-    /// bad cell costs one cell, not the listing.
+    /// A value this protocol version does not understand, or one that is
+    /// malformed in any of the ways listed on the type. Never emitted by a
+    /// conforming daemon; it exists so one bad cell costs one cell, not the
+    /// listing.
     Unknown,
+}
+
+impl AttrValue {
+    /// Wire tags this protocol version recognises, in variant order.
+    const TAGS: [&'static str; 7] = [
+        "uint",
+        "int",
+        "text",
+        "bytes_b64",
+        "time_ms",
+        "bool",
+        "unknown",
+    ];
+
+    /// Interpret an already-parsed JSON value as a cell, degrading to
+    /// [`AttrValue::Unknown`] rather than failing (see the type docs).
+    ///
+    /// Every known tag is looked up by name, so the result does NOT depend on
+    /// the order the peer serialised its keys in — JSON objects are unordered
+    /// (RFC 8259 §4) and a relay that round-trips through a sorted map would
+    /// otherwise change the meaning of the very same document.
+    fn from_wire(raw: &serde_json::Value) -> Self {
+        use base64::Engine as _;
+
+        let serde_json::Value::Object(map) = raw else {
+            return AttrValue::Unknown;
+        };
+
+        let mut found: Option<(&str, &serde_json::Value)> = None;
+        for tag in Self::TAGS {
+            if let Some(payload) = map.get(tag) {
+                if found.is_some() {
+                    // Dos etiquetas conocidas: ambiguo, y un peer conforme
+                    // jamás lo emite. Degradar mantiene el resultado
+                    // independiente del orden de claves.
+                    return AttrValue::Unknown;
+                }
+                found = Some((tag, payload));
+            }
+        }
+        // Claves no reconocidas de más: se ignoran (mismo criterio indulgente
+        // que cualquier campo desconocido de un struct del wire).
+        let Some((tag, payload)) = found else {
+            return AttrValue::Unknown;
+        };
+
+        match tag {
+            "uint" => payload.as_u64().map_or(AttrValue::Unknown, AttrValue::Uint),
+            "int" => payload.as_i64().map_or(AttrValue::Unknown, AttrValue::Int),
+            "text" => match payload.as_str() {
+                Some(s) if s.len() <= ATTR_TEXT_MAX => AttrValue::Text(s.to_owned()),
+                _ => AttrValue::Unknown,
+            },
+            "bytes_b64" => {
+                let Some(b64) = payload.as_str() else {
+                    return AttrValue::Unknown;
+                };
+                // Tope ANTES de decodificar: nunca se reserva el buffer que
+                // un payload gigante pide.
+                if b64.len() > ATTR_BYTES_B64_MAX {
+                    return AttrValue::Unknown;
+                }
+                let engines = [
+                    &base64::engine::general_purpose::STANDARD,
+                    &base64::engine::general_purpose::STANDARD_NO_PAD,
+                    &base64::engine::general_purpose::URL_SAFE,
+                    &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                ];
+                engines
+                    .iter()
+                    .find_map(|engine| engine.decode(b64).ok())
+                    .filter(|bytes| bytes.len() <= ATTR_BYTES_MAX)
+                    .map_or(AttrValue::Unknown, AttrValue::Bytes)
+            }
+            "time_ms" => payload
+                .as_i64()
+                .map_or(AttrValue::Unknown, AttrValue::TimeMs),
+            "bool" => payload
+                .as_bool()
+                .map_or(AttrValue::Unknown, AttrValue::Bool),
+            // `"unknown"` es RESERVADA: cualquier payload vuelve a Unknown.
+            _ => AttrValue::Unknown,
+        }
+    }
 }
 
 impl Serialize for AttrValue {
@@ -242,63 +372,24 @@ impl Serialize for AttrValue {
 }
 
 impl<'de> Deserialize<'de> for AttrValue {
+    /// Parses through [`serde_json::Value`] on purpose: JSON is the protocol's
+    /// only encoding (ADR 0011), and going through a self-describing value
+    /// turns "the payload has the wrong type" into a MATCH ARM instead of a
+    /// deserialiser error — which is what lets a bad cell degrade rather than
+    /// sink the entry that carries it. It is also the entry point for a
+    /// non-map input (`42`, `null`, `"texto"`): those arrive as values here
+    /// and degrade, where `deserialize_map` would have raised.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct ValueVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for ValueVisitor {
-            type Value = AttrValue;
-
-            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("a one-key attribute value object, e.g. {\"uint\": 1}")
-            }
-
-            fn visit_map<M: serde::de::MapAccess<'de>>(
-                self,
-                mut map: M,
-            ) -> Result<AttrValue, M::Error> {
-                use base64::Engine as _;
-
-                let Some(tag) = map.next_key::<String>()? else {
-                    // Objeto VACÍO: peer roto, no peer nuevo. Error duro.
-                    return Err(serde::de::Error::custom("empty attribute value object"));
-                };
-                let value = match tag.as_str() {
-                    "uint" => AttrValue::Uint(map.next_value()?),
-                    "int" => AttrValue::Int(map.next_value()?),
-                    "text" => AttrValue::Text(map.next_value()?),
-                    "bytes_b64" => {
-                        let b64: String = map.next_value()?;
-                        match base64::engine::general_purpose::STANDARD.decode(&b64) {
-                            Ok(bytes) => AttrValue::Bytes(bytes),
-                            // Celda corrupta: degrada la CELDA, no la entrada.
-                            Err(_) => AttrValue::Unknown,
-                        }
-                    }
-                    "time_ms" => AttrValue::TimeMs(map.next_value()?),
-                    "bool" => AttrValue::Bool(map.next_value()?),
-                    _ => {
-                        // Variante de un protocolo MÁS NUEVO (ADR 0004).
-                        map.next_value::<serde::de::IgnoredAny>()?;
-                        AttrValue::Unknown
-                    }
-                };
-                // Claves de más: se ignoran (mismo criterio indulgente que
-                // cualquier campo desconocido de un struct del wire).
-                while map
-                    .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
-                    .is_some()
-                {}
-                Ok(value)
-            }
-        }
-
-        deserializer.deserialize_map(ValueVisitor)
+        let raw = serde_json::Value::deserialize(deserializer)?;
+        Ok(AttrValue::from_wire(&raw))
     }
 }
 
-// `AttrValue` serializes as a one-key tagged object, so its schema is an
-// object with one optional property per variant; the serde impls are
-// hand-written and cannot derive (same situation as `CapabilityFlags`).
+// `AttrValue` EMITS exactly one key (`maxProperties`), tagged by variant; the
+// serde impls are hand-written and cannot derive (same situation as
+// `CapabilityFlags`), so this schema is hand-written to match them. What it
+// ACCEPTS is wider — `additionalProperties` stays open, which is the
+// forward-compat door an unknown tag walks through (ADR 0004).
 #[cfg(feature = "schema")]
 impl schemars::JsonSchema for AttrValue {
     fn schema_name() -> std::borrow::Cow<'static, str> {
@@ -308,17 +399,23 @@ impl schemars::JsonSchema for AttrValue {
     fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
             "type": "object",
-            "description": "One-key tagged attribute value; an unknown key degrades to Unknown.",
+            "description": "One-key tagged attribute value; an unknown, ambiguous, \
+                            ill-typed or over-cap key degrades to Unknown.",
             "properties": {
-                "uint": { "type": "integer", "minimum": 0 },
-                "int": { "type": "integer" },
-                "text": { "type": "string" },
-                "bytes_b64": { "type": "string" },
-                "time_ms": { "type": "integer" },
+                "uint": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "int": { "type": "integer", "format": "int64" },
+                "text": { "type": "string", "maxLength": ATTR_TEXT_MAX },
+                "bytes_b64": {
+                    "type": "string",
+                    "contentEncoding": "base64",
+                    "maxLength": ATTR_BYTES_B64_MAX
+                },
+                "time_ms": { "type": "integer", "format": "int64" },
                 "bool": { "type": "boolean" },
                 "unknown": { "type": "null" }
             },
-            "minProperties": 1
+            "minProperties": 1,
+            "maxProperties": 1
         })
     }
 }
@@ -416,10 +513,129 @@ mod tests {
     }
 
     #[test]
-    fn envelope_roto_es_error_duro() {
-        // Un peer ROTO (no uno más nuevo): no hay nada que degradar.
-        assert!(serde_json::from_str::<AttrValue>("42").is_err());
-        assert!(serde_json::from_str::<AttrValue>("{}").is_err());
+    fn envelope_roto_degrada_a_unknown() {
+        // Ni un envelope roto es error DE VALOR: una celda mala cuesta una
+        // celda. Solo el JSON ilegible (o un `attrs` que no es objeto) rompe,
+        // y eso lo decide serde en el tipo padre.
+        for roto in ["42", "{}", "null", r#""texto""#] {
+            assert_eq!(
+                serde_json::from_str::<AttrValue>(roto).unwrap(),
+                AttrValue::Unknown,
+                "{roto} debería degradar"
+            );
+        }
+    }
+
+    #[test]
+    fn la_etiqueta_no_depende_del_orden_de_claves() {
+        // RFC 8259: un objeto JSON NO está ordenado. Un relay que pase por un
+        // mapa ordenado no puede cambiar el significado del documento.
+        for wire in [r#"{"uint":1,"aaa":0}"#, r#"{"aaa":0,"uint":1}"#] {
+            assert_eq!(
+                serde_json::from_str::<AttrValue>(wire).unwrap(),
+                AttrValue::Uint(1),
+                "{wire} debería dar Uint(1)"
+            );
+        }
+    }
+
+    #[test]
+    fn dos_etiquetas_conocidas_son_ambiguas_y_degradan() {
+        for wire in [r#"{"uint":1,"bool":true}"#, r#"{"bool":true,"uint":1}"#] {
+            assert_eq!(
+                serde_json::from_str::<AttrValue>(wire).unwrap(),
+                AttrValue::Unknown,
+                "{wire} es ambiguo: debería degradar en cualquier orden"
+            );
+        }
+    }
+
+    #[test]
+    fn payload_del_tipo_equivocado_degrada() {
+        for wire in [
+            r#"{"uint":"33188"}"#,
+            r#"{"uint":-1}"#,
+            r#"{"int":true}"#,
+            r#"{"text":42}"#,
+            r#"{"bytes_b64":["//4="]}"#,
+            r#"{"time_ms":"ayer"}"#,
+            r#"{"bool":1}"#,
+            r#"{"uint":null}"#,
+        ] {
+            assert_eq!(
+                serde_json::from_str::<AttrValue>(wire).unwrap(),
+                AttrValue::Unknown,
+                "{wire} debería degradar"
+            );
+        }
+    }
+
+    #[test]
+    fn texto_sobre_el_tope_degrada() {
+        let justo = "a".repeat(ATTR_TEXT_MAX);
+        let v: AttrValue = serde_json::from_value(serde_json::json!({ "text": justo })).unwrap();
+        assert_eq!(v, AttrValue::Text(justo), "el tope exacto vale");
+
+        let pasado = "a".repeat(ATTR_TEXT_MAX + 1);
+        let v: AttrValue = serde_json::from_value(serde_json::json!({ "text": pasado })).unwrap();
+        assert_eq!(v, AttrValue::Unknown, "un byte de más degrada");
+    }
+
+    #[test]
+    fn bytes_sobre_el_tope_degradan() {
+        use base64::Engine as _;
+
+        let justo = base64::engine::general_purpose::STANDARD.encode(vec![0xFFu8; ATTR_BYTES_MAX]);
+        assert!(justo.len() <= ATTR_BYTES_B64_MAX);
+        let v: AttrValue =
+            serde_json::from_value(serde_json::json!({ "bytes_b64": justo })).unwrap();
+        assert_eq!(v, AttrValue::Bytes(vec![0xFF; ATTR_BYTES_MAX]));
+
+        let pasado =
+            base64::engine::general_purpose::STANDARD.encode(vec![0xFFu8; ATTR_BYTES_MAX + 1]);
+        let v: AttrValue =
+            serde_json::from_value(serde_json::json!({ "bytes_b64": pasado })).unwrap();
+        assert_eq!(v, AttrValue::Unknown, "un byte decodificado de más degrada");
+
+        // Un payload ENORME se rechaza por longitud del texto, sin reservar
+        // el buffer que pide.
+        let bomba = "A".repeat(1_000_000);
+        let v: AttrValue =
+            serde_json::from_value(serde_json::json!({ "bytes_b64": bomba })).unwrap();
+        assert_eq!(v, AttrValue::Unknown);
+    }
+
+    #[test]
+    fn acepta_los_cuatro_dialectos_base64() {
+        // 0xFB 0xFF -> "+/8=" en el alfabeto estándar, "-_8" sin padding y
+        // URL-safe: un productor Go con RawStdEncoding no puede perder la celda.
+        let esperado = AttrValue::Bytes(vec![0xFB, 0xFF]);
+        for b64 in ["+/8=", "+/8", "-_8=", "-_8"] {
+            let v: AttrValue =
+                serde_json::from_value(serde_json::json!({ "bytes_b64": b64 })).unwrap();
+            assert_eq!(v, esperado, "{b64} debería decodificar");
+        }
+    }
+
+    #[test]
+    fn celda_mala_no_arrastra_a_sus_hermanas() {
+        // El invariante de todo el tipo: una celda rota cuesta UNA celda.
+        let json = r#"{
+            "a": {"uint": 1},
+            "b": {"uint": "33188"},
+            "c": {"quaternion": [0]},
+            "d": {"uint": 1, "bool": true},
+            "e": {"bytes_b64": "no es base64 !!"},
+            "f": {"bool": false}
+        }"#;
+        let map: std::collections::BTreeMap<String, AttrValue> =
+            serde_json::from_str(json).unwrap();
+        assert_eq!(map["a"], AttrValue::Uint(1));
+        assert_eq!(map["b"], AttrValue::Unknown);
+        assert_eq!(map["c"], AttrValue::Unknown);
+        assert_eq!(map["d"], AttrValue::Unknown);
+        assert_eq!(map["e"], AttrValue::Unknown);
+        assert_eq!(map["f"], AttrValue::Bool(false));
     }
 
     #[test]

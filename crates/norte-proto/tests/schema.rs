@@ -195,6 +195,41 @@ fn todo_tipo_con_schema_esta_en_el_artefacto() {
     );
 }
 
+/// `AttrValue` has a HAND-WRITTEN `JsonSchema` (its serde impls cannot be
+/// derived), so nothing but a test keeps it describing what the type really
+/// emits. The golden fixture `golden/types/attr_value.json` freezes the tag of
+/// every variant, so requiring the two key sets to be equal turns "added a
+/// variant, forgot the schema" into a red test.
+#[test]
+fn el_schema_de_attr_value_cubre_las_etiquetas_de_la_golden() {
+    let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
+    let props = schema
+        .pointer("/$defs/AttrValue/properties")
+        .and_then(serde_json::Value::as_object)
+        .expect("AttrValue tiene properties en el artefacto");
+    let del_schema: std::collections::BTreeSet<&str> = props.keys().map(String::as_str).collect();
+
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/types/attr_value.json");
+    let raw = std::fs::read_to_string(&fixture).expect("leer attr_value.json");
+    let casos: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&raw).expect("fixture JSON válida");
+    let de_la_golden: std::collections::BTreeSet<&str> = casos
+        .values()
+        .map(|caso| {
+            let obj = caso
+                .as_object()
+                .expect("cada caso es un objeto de una clave");
+            assert_eq!(obj.len(), 1, "un AttrValue emite EXACTAMENTE una clave");
+            obj.keys().next().expect("la clave").as_str()
+        })
+        .collect();
+
+    assert_eq!(
+        del_schema, de_la_golden,
+        "las properties de $defs/AttrValue y las etiquetas de attr_value.json deben coincidir"
+    );
+}
+
 /// Recoge `.rs` bajo `dir` (incluye `src/wire/`).
 fn collect_rs(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {

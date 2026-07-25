@@ -55,19 +55,33 @@ materialising and serialising it, not fetching it. A listing of 100 000 entries
 must not pay for columns nobody displays, and the lazy `d_type` fast path in
 `norte-vfs-local` (#52) must stay reachable. Requested-ids-only keeps both.
 
-### 3. An unknown value degrades; it does not break the listing
+### 3. A malformed value degrades; it does not break the listing
 
 `AttrValue` carries data, so `#[serde(other)]` cannot express a catch-all
 variant. `AttrValue` therefore implements `Deserialize` by hand — the same
-route `CapabilityFlags` already takes — and maps an unrecognised variant tag to
-`AttrValue::Unknown`. A protocol-N+1 daemon that adds a variant degrades one
-cell in one entry rather than failing the whole page, which is the ADR 0004
-contract applied at value granularity.
+route `CapabilityFlags` already takes.
 
-A malformed base64 payload in `bytes_b64` degrades the same way, for the same
-reason: one corrupt cell must not cost the user their listing. A malformed
-*envelope* (a non-object, or an object with no keys) is still a hard error —
-that is a broken peer, not a newer one.
+The rule is uniform, because "one bad cell costs one cell" is the entire point
+of the type: **at the value level, EVERY malformed payload becomes
+`AttrValue::Unknown`, and nothing is a hard error.** That covers an
+unrecognised tag (a protocol-N+1 daemon, the ADR 0004 contract applied at value
+granularity), a payload of the wrong JSON type (`{"uint": "33188"}`), a
+`null`, a non-object, an empty object, an undecodable base64 payload, and a
+value over the caps of §5. Errors at value level never propagate: the
+containing message fails only when the JSON itself is unparseable or `attrs` is
+not an object at all, which serde decides on the parent type.
+
+An object carrying two or more KNOWN tags degrades too, rather than picking
+one. JSON objects are unordered (RFC 8259 §4), so "the first key wins" would
+make `{"uint":1,"bool":true}` and `{"bool":true,"uint":1}` — the same document —
+parse differently, and any relay that round-trips through a sorted map could
+flip the result. Deserialisation therefore looks every known tag up by name and
+requires exactly one; a conforming peer never emits more.
+
+`bytes_b64` is emitted as RFC 4648 §4 (standard alphabet, padding required) and
+accepted in the unpadded and URL-safe forms as well: a producer using Go's
+`RawStdEncoding` would otherwise lose every `Bytes` cell silently, and widening
+what a reader accepts is backward-compatible.
 
 `AttrValue::Unknown` serialises as `{"unknown": null}`. A conforming daemon
 never emits it; it exists so a value that was read can be written back without
@@ -94,10 +108,16 @@ preserved (hard rule 1); only the rendering is lossy.
 
 ### 5. Caps
 
-Enforced by the server, re-validated by the client: at most 16 requested ids
-per call, id ≤ 64 bytes, `AttrInfo::label` ≤ 64 bytes, `Text` ≤ 256 bytes,
-`Bytes` ≤ 256 bytes decoded. The ceiling a listing page can add is therefore
-bounded and predictable. Requesting an unknown id is **not** an error: it comes
+At most 16 requested ids per call, id ≤ 64 bytes, `AttrInfo::label` ≤ 64 bytes,
+`Text` ≤ 256 bytes, `Bytes` ≤ 256 bytes decoded. The ceiling a listing page can
+add is therefore bounded and predictable.
+
+The value caps are enforced **at decode**, by `AttrValue` itself, in the only
+way §3 allows: an over-cap `Text` or `Bytes` degrades that cell to `Unknown`
+rather than failing the entry. A `bytes_b64` payload is rejected on the length
+of its base64 TEXT before it is decoded, so an oversized value never allocates
+the buffer it asks for. The daemon additionally enforces the caps on emit, so a
+conforming peer never puts a client in that position. Requesting an unknown id is **not** an error: it comes
 back absent, so a client holding a stale catalog degrades instead of failing.
 Symmetrically, a `fs.capabilities` catalog is capped at 64 advertised
 `AttrInfo` entries; exceeding it is **not** an error either — a client

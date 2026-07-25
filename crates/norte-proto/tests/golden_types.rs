@@ -4,7 +4,7 @@
 //! del contrato JSON-RPC; nombres, tipos y valores sí. Romper uno de estos
 //! tests = cambio de wire format = bump de versión + revisión doble.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::path::Path;
 
@@ -1686,18 +1686,55 @@ fn golden_attrs() {
             },
         )],
     );
-    check_family(
-        "attr_value.json",
-        &[
-            ("uint", AttrValue::Uint(33188)),
-            ("int", AttrValue::Int(-7)),
-            ("text", AttrValue::Text("STANDARD_IA".to_owned())),
-            // Bytes que NO son UTF-8: la razón de existir de la variante.
-            ("bytes_b64", AttrValue::Bytes(vec![0xFF, 0xFE])),
-            // Negativo: pre-1970 es real y el wire lo admite.
-            ("time_ms", AttrValue::TimeMs(-86_400_000)),
-            ("bool", AttrValue::Bool(true)),
-            ("unknown", AttrValue::Unknown),
-        ],
+    let attr_values = [
+        ("uint", AttrValue::Uint(33188)),
+        // u64::MAX: donde un cliente JS pierde el valor en su f64.
+        ("uint_max", AttrValue::Uint(u64::MAX)),
+        ("int", AttrValue::Int(-7)),
+        ("text", AttrValue::Text("STANDARD_IA".to_owned())),
+        // Bytes que NO son UTF-8: la razón de existir de la variante.
+        ("bytes_b64", AttrValue::Bytes(vec![0xFF, 0xFE])),
+        // Vacío NO es ausente: la celda existe y su valor son cero bytes.
+        ("bytes_b64_empty", AttrValue::Bytes(Vec::new())),
+        // Negativo: pre-1970 es real y el wire lo admite.
+        ("time_ms", AttrValue::TimeMs(-86_400_000)),
+        ("bool", AttrValue::Bool(true)),
+        ("unknown", AttrValue::Unknown),
+    ];
+    // Exhaustividad: `attr_value_tag` es un `match` sin comodín, así que una
+    // variante NUEVA rompe la compilación hasta que alguien la cubra; este
+    // set-check convierte "añadí la variante, olvidé la fixture" en rojo.
+    let cubiertas: BTreeSet<&str> = attr_values.iter().map(|(_, v)| attr_value_tag(v)).collect();
+    let todas: BTreeSet<&str> = ATTR_VALUE_TAGS.into_iter().collect();
+    assert_eq!(
+        cubiertas, todas,
+        "[attr_value.json] toda variante de AttrValue necesita al menos una fixture"
     );
+    check_family("attr_value.json", &attr_values);
+}
+
+/// Todas las etiquetas de wire de [`AttrValue`], cruzadas contra el `match`
+/// exhaustivo de [`attr_value_tag`].
+const ATTR_VALUE_TAGS: [&str; 7] = [
+    "uint",
+    "int",
+    "text",
+    "bytes_b64",
+    "time_ms",
+    "bool",
+    "unknown",
+];
+
+/// Etiqueta de wire de un valor. EXHAUSTIVO por construcción (sin `_`): añadir
+/// una variante a `AttrValue` rompe aquí la compilación.
+fn attr_value_tag(v: &AttrValue) -> &'static str {
+    match v {
+        AttrValue::Uint(_) => "uint",
+        AttrValue::Int(_) => "int",
+        AttrValue::Text(_) => "text",
+        AttrValue::Bytes(_) => "bytes_b64",
+        AttrValue::TimeMs(_) => "time_ms",
+        AttrValue::Bool(_) => "bool",
+        AttrValue::Unknown => "unknown",
+    }
 }
