@@ -1172,7 +1172,15 @@ impl NorteGui {
                     self.cd(f, p, cx);
                 }
             }
-            "mark.toggle" => self.panes[f].toggle_mark(),
+            // mc/Total Commander: marca la selección visible y avanza — la
+            // TUI y la GUI deben significar lo MISMO al despachar el mismo
+            // nombre de comando (#103 review MAJOR-2), así que la GUI llama
+            // a la misma composición del modelo compartido en vez de un
+            // `toggle_mark` suelto.
+            "mark.toggle" => self.panes[f].toggle_mark_and_advance(),
+            "mark.all" => self.panes[f].mark_all(),
+            "mark.invert" => self.panes[f].invert_marks(),
+            "mark.clear" => self.panes[f].clear_marks(),
             "pane.copy" => self.open_transfer_modal(TransferKind::Copy),
             "pane.move" => self.open_transfer_modal(TransferKind::Move),
             "pane.delete" => self.open_delete_modal(),
@@ -1185,7 +1193,9 @@ impl NorteGui {
             "task.prev" => self.task_cursor = self.task_cursor.saturating_sub(1),
             "task.dismiss" => self.dismiss_terminal_tasks(),
             "pane.view" => self.open_viewer(cx),
-            _ => {} // comando desconocido en runtime: no-op (el keymap ya validó)
+            // Inalcanzable: todo keymap se valida contra COMMANDS al cargar
+            // (fuente única) — mismo guard que la TUI (#103 review MINOR-7).
+            _ => debug_assert!(false, "comando validado sin brazo: {cmd}"),
         }
         // Tras un movimiento de cursor, sigue el scroll (issue #87).
         self.follow_cursor(f);

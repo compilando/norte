@@ -370,6 +370,16 @@ impl Pane {
         self.state.toggle_mark();
     }
 
+    /// mc/Total Commander: togglea la marca de la selección VISIBLE y avanza
+    /// (dentro del filtro si hay uno activo, si no el cursor real; sin
+    /// envolver en la última fila). Delegado puro a
+    /// [`norte_frontend::PaneState::toggle_mark_and_advance`] (#103, review:
+    /// la mecánica de "sobre qué avanza" no puede reimplementarse aquí ni en
+    /// el dispatch — vive una sola vez en el modelo compartido).
+    pub fn toggle_mark_and_advance(&mut self) {
+        self.state.toggle_mark_and_advance();
+    }
+
     /// Marca todas las entradas visibles. Delegado puro (#103).
     pub fn mark_all(&mut self) {
         self.state.mark_all();
@@ -2698,8 +2708,12 @@ mod tests {
         }
     }
 
-    /// #103: `Pane` delega la API de marcas en `PaneState` sin reimplementar
-    /// nada — mark/all/invert/clear ida y vuelta.
+    /// #103 review MAJOR-4: `Pane` delega la API de marcas en `PaneState`
+    /// sin reimplementar nada — pero el set de partida debe ser ASIMÉTRICO
+    /// en cada paso, o `mark_all`/`invert_marks`/`clear_marks` quedan
+    /// indistinguibles entre sí (p. ej. sobre un set vacío, `mark_all` e
+    /// `invert_marks` dan el mismo resultado). Cada aserción de abajo
+    /// falsaría si esa llamada se sustituyera por CUALQUIER otra delegada.
     #[test]
     fn pane_delegates_the_mark_api() {
         let mut p = Pane::new(
@@ -2707,26 +2721,52 @@ mod tests {
             vec![
                 e("mem:///a", EntryKind::File),
                 e("mem:///b", EntryKind::File),
+                e("mem:///c", EntryKind::File),
             ],
         );
-        p.mark_all();
-        assert_eq!(p.marks_len(), 2);
-        p.invert_marks();
-        assert_eq!(p.marks_len(), 0);
+        let a = p.entries()[0].clone();
+        let b = p.entries()[1].clone();
+        let c = p.entries()[2].clone();
+
+        // toggle_mark: marca SOLO la entrada bajo el cursor ("a").
         p.toggle_mark();
         assert_eq!(p.marks_len(), 1);
+        assert!(p.is_marked(&a) && !p.is_marked(&b) && !p.is_marked(&c));
+
+        // mark_all desde {a}: las TRES, incluida "a" — si esto llamara a
+        // invert_marks en su lugar, "a" se desmarcaría y el total sería 2.
+        p.mark_all();
+        assert_eq!(p.marks_len(), 3);
+        assert!(p.is_marked(&a) && p.is_marked(&b) && p.is_marked(&c));
+
+        // Reset a un set asimétrico de nuevo para poder distinguir invert.
+        p.clear_marks();
+        p.toggle_mark(); // {a}
+
+        // invert_marks desde {a}: exactamente LAS OTRAS DOS — ni el set
+        // vacío que daría clear_marks, ni las tres que daría mark_all.
+        p.invert_marks();
+        assert_eq!(p.marks_len(), 2);
+        assert!(!p.is_marked(&a) && p.is_marked(&b) && p.is_marked(&c));
+
+        // clear_marks desde {b, c}: vacío — invert_marks aquí daría {a}
+        // (marks_len 1), mark_all daría 3.
         p.clear_marks();
         assert_eq!(p.marks_len(), 0);
     }
 
-    /// El dispatch real de `mark.toggle` (main.rs) es `toggle_mark` seguido
-    /// de `move_down(1)` — mc/Total Commander: mantener Insert barre un
-    /// rango. `dispatch` en sí no es testeable aquí sin un daemon real (pide
-    /// `&Backend`/`&mut EventStream`), así que este test pinea el mismo par
-    /// de llamadas al nivel de `Pane`, que sí es puro: marca Y avanza, y en
-    /// la última fila `move_down` clampa — no envuelve a 0.
+    /// El dispatch real de `mark.toggle` (main.rs) es una ÚNICA llamada a
+    /// `toggle_mark_and_advance` (#103 review MAJOR-2: la composición
+    /// "marca + avanza" ya no se parte en dos llamadas del dispatch —
+    /// vive entera en el modelo compartido, que decide avanzar dentro del
+    /// filtro o el cursor real; ver
+    /// `norte_frontend::pane::tests::toggle_mark_and_advance_stays_inside_an_active_filter`
+    /// para el caso con filtro). `dispatch` en sí no es testeable aquí sin
+    /// un daemon real (pide `&Backend`/`&mut EventStream`), así que este
+    /// test pinea la misma llamada al nivel de `Pane`: marca Y avanza, y en
+    /// la última fila no envuelve.
     #[test]
-    fn mark_toggle_then_move_down_marks_and_advances_without_wrapping_at_the_end() {
+    fn mark_toggle_advances_without_wrapping_at_the_end() {
         let mut p = Pane::new(
             VPath::parse("mem:///").unwrap(),
             vec![
@@ -2738,15 +2778,13 @@ mod tests {
         let b = p.entries()[1].clone();
         assert_eq!(p.cursor(), 0);
 
-        p.toggle_mark();
-        p.move_down(1);
+        p.toggle_mark_and_advance();
         assert_eq!(p.marks_len(), 1);
         assert!(p.is_marked(&a), "la fila 0 quedó marcada");
         assert_eq!(p.cursor(), 1, "el cursor avanzó tras marcar");
 
         // Última fila: togglear + avanzar NO debe envolver a 0.
-        p.toggle_mark();
-        p.move_down(1);
+        p.toggle_mark_and_advance();
         assert_eq!(p.marks_len(), 2);
         assert!(p.is_marked(&b), "la fila 1 (última) también quedó marcada");
         assert_eq!(p.cursor(), 1, "clampado en la última fila, no envuelve");

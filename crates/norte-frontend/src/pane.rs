@@ -465,6 +465,29 @@ impl PaneState {
         }
     }
 
+    /// mc/Total Commander sweep (`insert`, #103): toggle-mark the VISIBLE
+    /// selection, then advance to the next visible row — holding the key
+    /// selects a range. With a [`Mode::Filter`] quick search active, "next"
+    /// means the next VISIBLE row within the filter ([`Self::quick_down`],
+    /// which does not wrap); the real cursor is left untouched, exactly as
+    /// [`Self::toggle_mark`] itself only ever acts on the filtered
+    /// selection. Without an active filter (or in [`Mode::Jump`], where
+    /// [`Self::selected`] already reads the real cursor), it advances the
+    /// real cursor ([`Self::page_down`], which clamps). Either way, at the
+    /// last visible row this marks WITHOUT wrapping back to the top.
+    pub fn toggle_mark_and_advance(&mut self) {
+        self.toggle_mark();
+        let filtering = self
+            .quick
+            .as_ref()
+            .is_some_and(|q| q.mode() == Mode::Filter);
+        if filtering {
+            self.quick_down();
+        } else {
+            self.page_down(1);
+        }
+    }
+
     /// ¿Está marcada esta entrada? (por su `VPath` absoluto).
     #[must_use]
     pub fn is_marked(&self, entry: &Entry) -> bool {
@@ -1962,6 +1985,59 @@ mod tests {
         p.quick_char('a');
         p.mark_all();
         assert_eq!(p.marks_len(), p.entries().len());
+    }
+
+    /// #103 review BLOCKER/MAJOR fix: `toggle_mark_and_advance` (mc/Total
+    /// Commander sweep, `insert`) marks the FILTERED selection and advances
+    /// WITHIN the filter — the real cursor (invisible to the user) must
+    /// never move under a `Mode::Filter` quick search. Two presses under the
+    /// filter `a` (visible: `aa`, `ab`) mark exactly those two and never
+    /// touch the hidden `zz`.
+    #[test]
+    fn toggle_mark_and_advance_stays_inside_an_active_filter() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///aa", EntryKind::File),
+                e("mem:///ab", EntryKind::File),
+                e("mem:///zz", EntryKind::File),
+            ],
+        );
+        p.quick_start(Mode::Filter);
+        p.quick_char('a'); // visible: aa, ab
+
+        p.toggle_mark_and_advance();
+        p.toggle_mark_and_advance();
+
+        assert_eq!(p.marks_len(), 2);
+        assert!(p.is_marked(&e("mem:///aa", EntryKind::File)));
+        assert!(p.is_marked(&e("mem:///ab", EntryKind::File)));
+        assert!(
+            !p.is_marked(&e("mem:///zz", EntryKind::File)),
+            "zz is hidden by the filter: never marked"
+        );
+        assert_eq!(
+            p.quick_visible().map(<[usize]>::len),
+            Some(2),
+            "the filter itself is untouched"
+        );
+
+        // The filter only has 2 visible rows, so the second press already
+        // clamped at the last one ("ab") without wrapping. A third press
+        // toggles "ab" back OFF — it never wraps onto the hidden "zz".
+        p.toggle_mark_and_advance();
+        assert!(
+            p.is_marked(&e("mem:///aa", EntryKind::File)),
+            "aa stays marked"
+        );
+        assert!(
+            !p.is_marked(&e("mem:///ab", EntryKind::File)),
+            "ab toggled back off, clamped at the last visible row"
+        );
+        assert!(
+            !p.is_marked(&e("mem:///zz", EntryKind::File)),
+            "sweeping never wraps onto a hidden entry"
+        );
     }
 
     #[test]

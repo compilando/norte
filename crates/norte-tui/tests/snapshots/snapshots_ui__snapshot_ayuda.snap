@@ -1,6 +1,5 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
-assertion_line: 585
 expression: "format!(\"{arriba}\\n===\\n{}\", render(&app))"
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"

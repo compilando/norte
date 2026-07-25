@@ -1289,7 +1289,17 @@ fn entry_item<'a>(
     // monocromo de `Role::Mark` es `dim`, que por sí solo se lee «inactivo»,
     // no «seleccionado». Va ANTES del badge hostil para que ni el badge ni la
     // decoración cambien de columna respecto a como se pintaban.
-    let gutter = Span::styled(if marked { "*" } else { " " }, theme.role(Role::Mark));
+    //
+    // El ESTILO también debe ser condicional, no solo el glyph (review
+    // BLOCKER): cada preset embarcado define `mark` como SOLO un `bg` (ver
+    // `crates/norte-theme/presets/*.toml`), así que un `Span::styled`
+    // incondicional pintaba esa franja de color en la columna 1 de CADA fila
+    // sin marcar — una franja permanente, no una señal de marca.
+    let gutter = if marked {
+        Span::styled("*", theme.role(Role::Mark))
+    } else {
+        Span::raw(" ")
+    };
     let mut spans = vec![gutter, badge, body];
     // G3b (ADR 0037): badge de decorator, TRAS el hueco del badge hostil —
     // ya SANEADO y acotado (`norte_frontend::sanitize_decoration`, aplicado

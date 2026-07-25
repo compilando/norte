@@ -1,6 +1,5 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
-assertion_line: 678
 expression: render_80x24(&app)
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"

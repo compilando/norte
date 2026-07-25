@@ -3295,14 +3295,15 @@ async fn dispatch(
                 app.modal = Some(Modal::ConfirmTransfer { kind, from, to });
             }
         }
-        // Insert/Ctrl+A/Ctrl+Shift+A/`*` (#103): mc/Total Commander — togglear
-        // marca esta entrada; `mark.toggle` además baja el cursor (mantener
-        // Insert barre un rango). `cursor.down`'s propio brazo arriba clampa en
-        // la última fila, así que el mismo `move_down(1)` aquí jamás envuelve.
-        "mark.toggle" => {
-            app.focused_mut().toggle_mark();
-            app.focused_mut().move_down(1);
-        }
+        // Insert/Ctrl+A/Ctrl+Shift+A/`*` (#103): mc/Total Commander —
+        // togglear la marca de esta entrada y avanzar (mantener Insert barre
+        // un rango). Review MAJOR: bajo un quick search en Filter,
+        // `toggle_mark` actúa sobre la selección FILTRADA mientras el cursor
+        // real es otra cosa — avanzar el cursor real desincroniza el rango
+        // barrido del filtro. La composición completa (marcar + a qué avanza
+        // según haya o no filtro, clampado sin envolver) vive en el modelo
+        // compartido.
+        "mark.toggle" => app.focused_mut().toggle_mark_and_advance(),
         "mark.all" => app.focused_mut().mark_all(),
         "mark.invert" => app.focused_mut().invert_marks(),
         "mark.clear" => app.focused_mut().clear_marks(),

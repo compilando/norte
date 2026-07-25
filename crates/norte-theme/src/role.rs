@@ -45,8 +45,14 @@ pub enum Role {
     PaneBackground,
     /// Focused pane interior background.
     PaneFocusBackground,
-    /// Marked-entry background (selection marks, distinct from the cursor's
-    /// `Selection`).
+    /// Marked entry (selection marks, distinct from the cursor's
+    /// `Selection`) — two different consumers, so a preset's `mark = { bg =
+    /// ... }` reads differently in each: the GUI applies it as the marked
+    /// row's BACKGROUND across the whole row; the TUI applies it only as the
+    /// style of a one-cell gutter glyph (`*`) at the start of the row, so the
+    /// same `bg` shows up as a small tinted cell rather than a full-row
+    /// background. Style it with `bg` only (no `fg`) so both readings stay
+    /// legible.
     Mark,
 }
 

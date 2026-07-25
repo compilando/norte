@@ -1,6 +1,5 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
-assertion_line: 721
 expression: render(&app)
 ---
 "┌⟨file⟩/ca┌ Paleta de comandos ──────────────────────────────────────┐─────────┐"
