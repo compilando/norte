@@ -3849,6 +3849,7 @@ mod archive_nav_tests {
 
     fn entry(wire: &str, kind: EntryKind) -> Entry {
         Entry {
+            attrs: std::collections::BTreeMap::new(),
             path: VPath::parse(wire).expect("wire de test"),
             kind,
             size: None,
@@ -3945,6 +3946,7 @@ mod search_fill_tests {
 
     fn file(dir: &VPath, name: &str) -> Entry {
         Entry {
+            attrs: std::collections::BTreeMap::new(),
             path: dir.join(Segment::new(name.as_bytes().to_vec()).unwrap()),
             kind: EntryKind::File,
             size: Some(1),

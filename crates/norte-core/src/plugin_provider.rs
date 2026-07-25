@@ -321,6 +321,7 @@ impl Provider for PluginProvider {
                 .map_err(|e| map_runtime_error(&e))?
                 .map_err(map_vfs_error)?;
             Ok(Entry {
+                attrs: std::collections::BTreeMap::new(),
                 path,
                 kind: map_kind(e.kind),
                 size: e.size,
@@ -361,6 +362,7 @@ impl Provider for PluginProvider {
                             continue;
                         };
                         out.push(Entry {
+                            attrs: std::collections::BTreeMap::new(),
                             path: dir.join(seg),
                             kind: map_kind(e.kind),
                             size: e.size,

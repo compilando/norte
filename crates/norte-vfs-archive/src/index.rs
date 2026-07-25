@@ -307,6 +307,7 @@ impl ArchiveIndex {
     pub(crate) fn entry_for(&self, at: &VPath, inner: &[Vec<u8>]) -> Result<Entry, Error> {
         if inner.is_empty() {
             return Ok(Entry {
+                attrs: std::collections::BTreeMap::new(),
                 path: at.clone(),
                 kind: EntryKind::Dir,
                 size: None,
@@ -315,6 +316,7 @@ impl ArchiveIndex {
         }
         let node = self.nodes.get(inner).ok_or(Error::NotFound)?;
         Ok(Entry {
+            attrs: std::collections::BTreeMap::new(),
             path: at.clone(),
             kind: node.kind,
             size: node.size,

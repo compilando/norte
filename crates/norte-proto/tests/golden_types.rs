@@ -88,6 +88,7 @@ fn golden_entry() {
             (
                 "file_full",
                 Entry {
+                    attrs: std::collections::BTreeMap::new(),
                     path: vpath("file:///home/user/doc.txt"),
                     kind: EntryKind::File,
                     size: Some(1234),
@@ -97,6 +98,7 @@ fn golden_entry() {
             (
                 "dir_no_meta",
                 Entry {
+                    attrs: std::collections::BTreeMap::new(),
                     path: vpath("file:///home/user"),
                     kind: EntryKind::Dir,
                     size: None,
@@ -106,6 +108,7 @@ fn golden_entry() {
             (
                 "symlink",
                 Entry {
+                    attrs: std::collections::BTreeMap::new(),
                     path: vpath("file:///ln"),
                     kind: EntryKind::Symlink,
                     size: None,
@@ -115,6 +118,7 @@ fn golden_entry() {
             (
                 "other_pre_epoch",
                 Entry {
+                    attrs: std::collections::BTreeMap::new(),
                     path: vpath("file:///dev-thing"),
                     kind: EntryKind::Other,
                     size: None,
@@ -124,10 +128,39 @@ fn golden_entry() {
             (
                 "hostile_name",
                 Entry {
+                    attrs: std::collections::BTreeMap::new(),
                     path: vpath("file:///informe%FF%FE.dat"),
                     kind: EntryKind::File,
                     size: Some(0),
                     mtime_ms: None,
+                },
+            ),
+            (
+                "con_attrs",
+                Entry {
+                    path: vpath("file:///home/user/doc.txt"),
+                    kind: EntryKind::File,
+                    size: Some(1234),
+                    mtime_ms: Some(1_720_000_000_000),
+                    attrs: BTreeMap::from([
+                        ("posix.mode".to_owned(), AttrValue::Uint(33188)),
+                        ("posix.uid".to_owned(), AttrValue::Uint(1000)),
+                        ("sftp.owner".to_owned(), AttrValue::Bytes(vec![0xFF, 0xFE])),
+                        (
+                            "s3.storage_class".to_owned(),
+                            AttrValue::Text("STANDARD_IA".to_owned()),
+                        ),
+                    ]),
+                },
+            ),
+            (
+                "attrs_vacios_se_omiten",
+                Entry {
+                    path: vpath("file:///home/user/otro.txt"),
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                    attrs: BTreeMap::new(),
                 },
             ),
         ],
@@ -1110,6 +1143,7 @@ fn check_methods_connection(fixtures: &BTreeMap<String, Value>) {
 /// Familia fs.* + task.cancel (list/stat/copy/move/delete/task).
 fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
     let sample_entry = Entry {
+        attrs: std::collections::BTreeMap::new(),
         path: vpath("file:///home/user/doc.txt"),
         kind: EntryKind::File,
         size: Some(1234),
@@ -1243,6 +1277,7 @@ fn check_methods_search(fixtures: &BTreeMap<String, Value>) {
         &SearchHits {
             task_id: TaskId::new(7),
             entries: vec![Entry {
+                attrs: std::collections::BTreeMap::new(),
                 path: vpath("file:///home/user/doc.txt"),
                 kind: EntryKind::File,
                 size: Some(1234),

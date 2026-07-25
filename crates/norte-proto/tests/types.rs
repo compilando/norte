@@ -23,6 +23,7 @@ where
 
 fn sample_entry() -> Entry {
     Entry {
+        attrs: std::collections::BTreeMap::new(),
         path: vpath("file:///home/user/doc.txt"),
         kind: EntryKind::File,
         size: Some(1234),
@@ -39,6 +40,7 @@ fn entry_roundtrip() {
 #[test]
 fn entry_none_fields_roundtrip() {
     let e = Entry {
+        attrs: std::collections::BTreeMap::new(),
         path: vpath("file:///dir"),
         kind: EntryKind::Dir,
         size: None,

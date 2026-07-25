@@ -391,18 +391,21 @@ fn collision_kind(real: &SegPath, requested: &SegPath) -> ConflictKind {
 fn entry_for_child(path: VPath, node: &Node) -> Entry {
     match node {
         Node::File { content, mtime, .. } => Entry {
+            attrs: std::collections::BTreeMap::new(),
             path,
             kind: EntryKind::File,
             size: Some(content.len() as u64),
             mtime_ms: Some(*mtime),
         },
         Node::Dir { mtime, .. } => Entry {
+            attrs: std::collections::BTreeMap::new(),
             path,
             kind: EntryKind::Dir,
             size: None,
             mtime_ms: Some(*mtime),
         },
         Node::Symlink { mtime, .. } => Entry {
+            attrs: std::collections::BTreeMap::new(),
             path,
             kind: EntryKind::Symlink,
             size: None,
@@ -427,18 +430,21 @@ fn entry_for(base: &VPath, key: &SegPath, node: &Node) -> Entry {
     }
     match node {
         Node::File { content, mtime, .. } => Entry {
+            attrs: std::collections::BTreeMap::new(),
             path: p,
             kind: EntryKind::File,
             size: Some(content.len() as u64),
             mtime_ms: Some(*mtime),
         },
         Node::Dir { mtime, .. } => Entry {
+            attrs: std::collections::BTreeMap::new(),
             path: p,
             kind: EntryKind::Dir,
             size: None,
             mtime_ms: Some(*mtime),
         },
         Node::Symlink { mtime, .. } => Entry {
+            attrs: std::collections::BTreeMap::new(),
             path: p,
             kind: EntryKind::Symlink,
             size: None,
@@ -466,6 +472,7 @@ impl Provider for MemProvider {
         let tree = self.lock();
         if key.is_empty() {
             return Ok(Entry {
+                attrs: std::collections::BTreeMap::new(),
                 path: p.clone(),
                 kind: EntryKind::Dir,
                 size: None,

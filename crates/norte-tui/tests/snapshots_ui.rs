@@ -18,6 +18,7 @@ fn vp(wire: &str) -> VPath {
 
 fn entry(dir: &VPath, name: &[u8], kind: EntryKind, size: Option<u64>) -> Entry {
     Entry {
+        attrs: std::collections::BTreeMap::new(),
         path: dir.join(Segment::new(name.to_vec()).unwrap()),
         kind,
         size,

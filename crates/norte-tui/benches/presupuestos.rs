@@ -152,6 +152,7 @@ fn bench_fill_100k(c: &mut Criterion) {
     let dir = VPath::parse("mem:///bench").expect("wire");
     let all: Vec<Entry> = (0..100_000)
         .map(|i| Entry {
+            attrs: std::collections::BTreeMap::new(),
             // Mezcla dirs/files y nombres desordenados (peor caso del merge
             // que el orden de llegada del FS, ya semi-ordenado).
             path: VPath::parse(&format!("mem:///bench/f{:06}", (i * 7919) % 100_000))

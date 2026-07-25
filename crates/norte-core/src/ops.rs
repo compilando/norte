@@ -1683,6 +1683,7 @@ async fn walk_following(
                             // ningún consumidor lo lee todavía.
                             out.push(PlanEntry {
                                 entry: Entry {
+                                    attrs: std::collections::BTreeMap::new(),
                                     path: entry.path,
                                     kind: EntryKind::Dir,
                                     size: None,

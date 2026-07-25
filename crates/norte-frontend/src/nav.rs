@@ -314,6 +314,7 @@ mod tests {
     // (no `mtime`) — ver crates/norte-proto/src/entry.rs.
     fn e(wire: &str) -> Entry {
         Entry {
+            attrs: std::collections::BTreeMap::new(),
             path: VPath::parse(wire).expect("wire"),
             kind: EntryKind::File,
             size: None,

@@ -291,6 +291,7 @@ fn entry_from(path: VPath, md: &std::fs::Metadata) -> Entry {
         (EntryKind::Other, None)
     };
     Entry {
+        attrs: std::collections::BTreeMap::new(),
         path,
         kind,
         size,
@@ -702,6 +703,7 @@ impl Provider for LocalProvider {
                         EntryKind::Other
                     };
                     Ok(Entry {
+                        attrs: std::collections::BTreeMap::new(),
                         path: base_vpath.join(seg),
                         kind,
                         size: None,

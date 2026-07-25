@@ -230,6 +230,7 @@ fn entry_from(path: VPath, md: &russh_sftp::protocol::FileAttributes) -> Entry {
     // mtime de sftp v3 es segundos u32 desde epoch.
     let mtime_ms = md.mtime.map(|s| i64::from(s) * 1000);
     Entry {
+        attrs: std::collections::BTreeMap::new(),
         path,
         kind,
         size,

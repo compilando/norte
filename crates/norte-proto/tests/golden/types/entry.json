@@ -28,5 +28,23 @@
     "kind": "file",
     "size": 0,
     "mtime_ms": null
+  },
+  "con_attrs": {
+    "path": "file:///home/user/doc.txt",
+    "kind": "file",
+    "size": 1234,
+    "mtime_ms": 1720000000000,
+    "attrs": {
+      "posix.mode": { "uint": 33188 },
+      "posix.uid": { "uint": 1000 },
+      "sftp.owner": { "bytes_b64": "//4=" },
+      "s3.storage_class": { "text": "STANDARD_IA" }
+    }
+  },
+  "attrs_vacios_se_omiten": {
+    "path": "file:///home/user/otro.txt",
+    "kind": "file",
+    "size": null,
+    "mtime_ms": null
   }
 }

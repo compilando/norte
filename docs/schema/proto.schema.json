@@ -401,8 +401,15 @@
       ]
     },
     "Entry": {
-      "description": "Metadatos de un nodo del VFS.\n\nCampos opcionales `None` = \"el provider no lo sabe\", nunca un 0 fingido.\n\n```\nuse norte_proto::{Entry, EntryKind, VPath};\nlet e = Entry {\n    path: VPath::parse(\"file:///a.txt\").unwrap(),\n    kind: EntryKind::File,\n    size: Some(42),\n    mtime_ms: None,\n};\nlet json = serde_json::to_string(&e).unwrap();\nassert_eq!(serde_json::from_str::<Entry>(&json).unwrap(), e);\n```",
+      "description": "Metadatos de un nodo del VFS.\n\nCampos opcionales `None` = \"el provider no lo sabe\", nunca un 0 fingido.\n\n```\nuse norte_proto::attrs::AttrValue;\nuse norte_proto::{Entry, EntryKind, VPath};\nlet e = Entry {\n    path: VPath::parse(\"file:///a.txt\").unwrap(),\n    kind: EntryKind::File,\n    size: Some(42),\n    mtime_ms: None,\n    attrs: [(\"posix.mode\".to_owned(), AttrValue::Uint(0o100_644))].into(),\n};\nlet json = serde_json::to_string(&e).unwrap();\nassert_eq!(serde_json::from_str::<Entry>(&json).unwrap(), e);\n\n// Sin attrs, el wire es EXACTAMENTE el de 0.29.\nlet plain = Entry { attrs: Default::default(), ..e };\nassert!(!serde_json::to_string(&plain).unwrap().contains(\"attrs\"));\n```",
       "properties": {
+        "attrs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AttrValue"
+          },
+          "description": "Provider attributes (0.30.0, ADR 0039): typed metadata BEYOND the four\nfields above, delivered only for the ids the client requested in\n`fs.list`/`fs.stat`. An absent key means the provider does not know the\nvalue — never a fabricated one. Empty (the default, and the only\npossibility for a 0.29 peer) is omitted from the wire entirely, so a\npayload without attributes is byte-identical to 0.29's.",
+          "type": "object"
+        },
         "kind": {
           "$ref": "#/$defs/EntryKind",
           "description": "Clase del nodo."

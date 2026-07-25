@@ -4103,6 +4103,7 @@ impl Provider for EcoProvider {
     }
     async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
         Ok(Entry {
+            attrs: std::collections::BTreeMap::new(),
             path: p.clone(),
             kind: EntryKind::Dir,
             size: None,

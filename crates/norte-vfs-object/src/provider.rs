@@ -296,6 +296,7 @@ fn map_err(e: &opendal::Error) -> Error {
 /// `Entry` de un fichero a partir de la metadata de opendal.
 fn file_entry(path: VPath, m: &Metadata) -> Entry {
     Entry {
+        attrs: std::collections::BTreeMap::new(),
         path,
         kind: EntryKind::File,
         size: Some(m.content_length()),
@@ -342,6 +343,7 @@ impl Provider for ObjectProvider {
         if key.is_empty() {
             // La raíz del provider (el bucket) siempre existe como dir.
             return Ok(Entry {
+                attrs: std::collections::BTreeMap::new(),
                 path: p.clone(),
                 kind: EntryKind::Dir,
                 size: None,
@@ -351,6 +353,7 @@ impl Provider for ObjectProvider {
         match self.stat_kind(&key).await? {
             Some((EntryKind::File, m)) => Ok(file_entry(p.clone(), &m)),
             Some((_, _)) => Ok(Entry {
+                attrs: std::collections::BTreeMap::new(),
                 path: p.clone(),
                 // El mtime de un marker no describe el "directorio" (los
                 // objetos de dentro cambian sin tocarlo): None honesto.
@@ -418,6 +421,7 @@ impl Provider for ObjectProvider {
                 let child = base.join(seg);
                 let entry = if is_dir {
                     Entry {
+                        attrs: std::collections::BTreeMap::new(),
                         path: child,
                         kind: EntryKind::Dir,
                         size: None,

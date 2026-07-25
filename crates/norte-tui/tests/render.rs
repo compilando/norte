@@ -35,12 +35,14 @@ fn frame_pinta_panes_y_badge_no_utf8() {
     let dir = vp("file:///casa");
     let mut entries = vec![
         Entry {
+            attrs: std::collections::BTreeMap::new(),
             path: dir.join(Segment::new(b"docs".to_vec()).unwrap()),
             kind: EntryKind::Dir,
             size: None,
             mtime_ms: None,
         },
         Entry {
+            attrs: std::collections::BTreeMap::new(),
             // é en latin-1: no-UTF8 → lossy + badge.
             path: dir.join(Segment::new(vec![0xE9]).unwrap()),
             kind: EntryKind::File,
@@ -120,6 +122,7 @@ fn badge_sobrevive_al_truncado_en_pane_estrecho() {
     let mut name = vec![b'x'; 200];
     name.push(0xE9); // los bytes malos, al FINAL: fuera del ancho visible
     let entries = vec![Entry {
+        attrs: std::collections::BTreeMap::new(),
         path: dir.join(Segment::new(name).unwrap()),
         kind: EntryKind::File,
         size: Some(1),
@@ -435,6 +438,7 @@ fn reinterpretar_nombres_pinta_legible_con_badge_e_indicador() {
     let dir = vp("file:///x");
     // "Папка" en cp866: no-UTF8 → lossy sin reinterpretar.
     let entries = vec![Entry {
+        attrs: std::collections::BTreeMap::new(),
         path: dir.join(Segment::new(b"\x8f\xa0\xaf\xaa\xa0".to_vec()).unwrap()),
         kind: EntryKind::File,
         size: Some(1),
@@ -496,6 +500,7 @@ fn modal_de_confirmacion_sigue_la_reinterpretacion() {
         .bytes;
     let target = dir.join(Segment::new(papka).unwrap());
     let entries = vec![Entry {
+        attrs: std::collections::BTreeMap::new(),
         path: target.clone(),
         kind: EntryKind::File,
         size: Some(1),
@@ -531,6 +536,7 @@ fn preview_del_match_bajo_el_cursor_en_la_barra() {
         Pane::new(dir.clone(), Vec::new()),
     );
     let hit = Entry {
+        attrs: std::collections::BTreeMap::new(),
         path: dir.join(Segment::new(b"main.rs".to_vec()).unwrap()),
         kind: EntryKind::File,
         size: Some(120),
