@@ -46,10 +46,10 @@ where the engine lives.
   `cursor.up`, `cursor.down`, `cursor.page-up`, `cursor.page-down`,
   `cursor.top`, `cursor.bottom`, `nav.enter`, and `nav.parent`.
 - TOML accepts values such as `f5`, `ctrl+c`, `alt+enter`, `g`, `G`, `tab`,
-  `esc`, `backspace`, `enter`, `space`, arrows, `pgup`, `pgdn`, `home`, and
-  `end`. A character's case encodes Shift; use `shift+` only with non-character
-  keys. The `+` character itself is reserved by the syntax until a `plus` alias
-  is added.
+  `esc`, `backspace`, `enter`, `space`, `plus`, arrows, `pgup`, `pgdn`, `home`,
+  and `end`. A character's case encodes Shift; use `shift+` only with non-character
+  keys. The `+` character is the modifier separator, so the key itself is
+  spelled `plus` — the only spelling (a bare `"+"` is `BadChord`).
 - Bundle `orthodox.toml`, `vim.toml`, and `cua.toml` with `include_str!` and
   parse them through the same path as user maps. `orthodox` is the default.
 - M1 defines `global` and `pane`; dialogs and viewers add contexts when their UIs

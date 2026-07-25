@@ -149,7 +149,9 @@ pub enum KeymapError {
     },
     /// `shift+<char>` jamás matchearía (el char YA codifica shift): se
     /// rechaza con diagnóstico en vez de ser un binding muerto.
-    #[error("{chord:?}: shift no se combina con caracteres — usa la mayúscula (\"G\")")]
+    #[error(
+        "{chord:?}: shift no se combina con caracteres — escribe la tecla ya «shifteada» (\"G\", \"plus\")"
+    )]
     ShiftWithChar {
         /// El texto ofensor.
         chord: String,
@@ -208,7 +210,9 @@ pub enum KeymapDiagnostic {
     },
 }
 
-/// Parsea `"ctrl+alt+x"`, `"f5"`, `"g"`, `"shift+f5"`, `"esc"`…
+/// Parsea `"ctrl+alt+x"`, `"f5"`, `"g"`, `"shift+f5"`, `"esc"`, `"plus"`…
+/// `+` es el separador de modificadores, así que `plus` es la ÚNICA forma de
+/// expresar esa tecla.
 ///
 /// # Errors
 /// [`KeymapError::BadChord`] si el texto no describe una tecla.
@@ -999,6 +1003,49 @@ mod tests {
         let c = Chord::new(Mods::default(), KeyCode::Char('+'));
         assert_eq!(c.to_string(), "plus");
         assert_eq!(parse_chord(&c.to_string()).unwrap(), c);
+    }
+
+    /// Table-wide `parse(display(c)) == c` property, scoped to the domain
+    /// where `Display` and `parse_chord` actually agree: every non-`Char`
+    /// key, `F(1..=12)`, and a char sample (space, `+`, an uppercase ASCII
+    /// letter, and a non-ASCII char).
+    ///
+    /// `F(n > 12)` is deliberately EXCLUDED: `Display` renders ANY `F(n)` as
+    /// `"f{n}"`, but `parse_chord` accepts only `1..=12`, so the two domains
+    /// disagree there — and `F(13)` is genuinely constructible at runtime
+    /// (classic xterm reports Shift+F1 as F13, and the TUI's crossterm
+    /// adapter forwards `F(n)` unclamped). That gap is tracked in #109, not
+    /// fixed here — clamping the crossterm adapter is separate work.
+    #[test]
+    fn display_and_parse_chord_round_trip_over_the_token_table() {
+        let non_char = [
+            KeyCode::Enter,
+            KeyCode::Tab,
+            KeyCode::Esc,
+            KeyCode::Backspace,
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Home,
+            KeyCode::End,
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+            KeyCode::Insert,
+            KeyCode::Delete,
+        ];
+        for code in non_char {
+            let c = Chord::new(Mods::default(), code);
+            assert_eq!(parse_chord(&c.to_string()).unwrap(), c, "{code:?}");
+        }
+        for n in 1..=12u8 {
+            let c = Chord::new(Mods::default(), KeyCode::F(n));
+            assert_eq!(parse_chord(&c.to_string()).unwrap(), c, "F({n})");
+        }
+        for ch in [' ', '+', 'G', 'ñ'] {
+            let c = Chord::new(Mods::default(), KeyCode::Char(ch));
+            assert_eq!(parse_chord(&c.to_string()).unwrap(), c, "{ch:?}");
+        }
     }
 
     #[test]
