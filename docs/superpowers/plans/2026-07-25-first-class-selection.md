@@ -30,7 +30,7 @@
 | `crates/norte-tui/src/main.rs` | command dispatch, bulk submission, conflict backlog | 6, 9, 10 |
 | `crates/norte-tui/src/ui.rs` | mark gutter, status-bar counter, pattern dialog render | 7, 8, 9 |
 | `crates/norte-gui/src/keymap.rs` | catalogue gains the commands; supplement drops `insert` | 5, 11 |
-| `crates/norte-gui/src/main.rs` | dispatch for all/invert/clear | 11 |
+| `crates/norte-gui/src/main.rs` | same-dir relist through `refill`; dispatch for all/invert/clear | 10b, 11 |
 
 ---
 
@@ -1024,6 +1024,18 @@ status-marked = { $n } marcadas, { $size }
 In `draw_status` in `crates/norte-tui/src/ui.rs`, where `pos_total` is built, add the marked segment and append it to the status line next to `pos_total`:
 
 ```rust
+    // Un refresh que se comió marcas JAMÁS es silencioso (#103): con la
+    // selección vacía, `marked_paths` cae al cursor, así que callarlo
+    // redirigiría la siguiente op en masa a algo que nadie marcó.
+    let pruned = if pane.pruned_marks() == 0 {
+        String::new()
+    } else {
+        format!(
+            "  {}",
+            ta("status-marks-pruned", &[("n", &pane.pruned_marks().to_string())])
+        )
+    };
+
     // Marcas (#103): cuántas y cuánto pesan. Se calla con 0 marcas — la
     // barra no gana ruido para quien no marca nada.
     let marked = if pane.marks_len() == 0 {
@@ -1042,7 +1054,9 @@ In `draw_status` in `crates/norte-tui/src/ui.rs`, where `pos_total` is built, ad
     };
 ```
 
-Then include `{marked}` in the same `format!` that already renders `{pos_total}`.
+Then include `{marked}{pruned}` in the same `format!` that already renders `{pos_total}`. Add a `Pane::pruned_marks` delegator alongside the ones from Task 6.
+
+Strings — `en.ftl`: `status-marks-pruned = { $n } marks dropped, their entries are gone`; `es.ftl`: `status-marks-pruned = { $n } marcas caídas, sus entradas ya no están`.
 
 - [ ] **Step 7: Write and run the status test**
 
@@ -1390,6 +1404,51 @@ Expected: PASS.
 ```bash
 git add crates/norte-frontend/src crates/norte-tui/src crates/norte-gui/src/main.rs
 git commit -m "feat(tui,frontend): bulk copy, move, and delete over the selection (#103)"
+```
+
+---
+
+### Task 10b: The GUI refreshes instead of re-`cd`-ing
+
+**Files:**
+- Modify: `crates/norte-gui/src/main.rs` (`relist_dirs` / `on_task_terminal` ~line 1040)
+- Test: `crates/norte-gui/src/main.rs`
+
+Without this, "marks survive a refresh" is true in the TUI and false in the GUI: the GUI's read-after-write calls `self.cd(pane, cur, cx)`, which goes through `begin_loading` + `set_listing` — the `cd` paths, which clear marks by design.
+
+- [ ] **Step 1: Write the failing test**
+
+```rust
+#[test]
+fn a_post_operation_relist_of_the_same_dir_keeps_the_marks() {
+    let mut app = test_app_with_entries(&["a", "b"]);
+    app.run_command("mark.all");
+    app.relist_dirs(/* same dir */);
+    assert_eq!(app.panes[app.focus].marks_len(), 2);
+}
+```
+
+Adapt it to however `relist_dirs` is actually invoked in the existing GUI tests — read them first.
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `cargo nextest run --manifest-path crates/norte-gui/Cargo.toml -E 'test(relist)'`
+Expected: FAIL — marks are 0, cleared by the `cd`.
+
+- [ ] **Step 3: Implement**
+
+In `relist_dirs`, when the listing that came back is for the pane's **current** directory (byte-exact `VPath` comparison), feed it through `PaneState::refill` instead of `cd`. Keep `cd` for an actual directory change. Do not widen the change beyond that branch.
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `cargo nextest run --manifest-path crates/norte-gui/Cargo.toml`
+Expected: PASS, including the existing cursor-after-delete tests — `refill` clamps the cursor by index, which is the orthodox behaviour those tests already assert.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/norte-gui/src/main.rs
+git commit -m "fix(gui): a same-dir relist refreshes instead of re-cd-ing, so marks survive (#103)"
 ```
 
 ---

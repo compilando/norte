@@ -116,6 +116,28 @@ future `extend` that starts dropping entries fails loudly.
 
 Nothing else changes: `cd` keeps clearing, refresh keeps preserving.
 
+**A prune is never silent.** `marked_paths()` falls back to the entry under
+the cursor when the mark set is empty — orthodox, and it stays. But once a
+refresh can empty the set on its own, that fallback becomes a hazard: the
+user marks three files, an external actor deletes them, and the next F8
+proposes an entry nobody selected. So `refill` records how many marks it
+dropped (`pruned_marks()`), and the frontends surface it. A selection that
+shrinks behind the user's back must be visible.
+
+**The GUI must refresh, not re-`cd`.** Today the GUI's read-after-write goes
+`on_task_terminal` → `relist_dirs` → `cd`, i.e. through `begin_loading` +
+`set_listing`, which clear. Left alone, "marks survive a refresh" would be
+false in the GUI while true in the TUI. Routing its same-directory relist
+through `refill` is part of this block.
+
+**Accepted TOCTOU.** Mark identity is the byte-exact path and nothing else
+(hard rule 1). If an external actor deletes an entry and recreates something
+else at the same path — a directory where a file was — the mark survives the
+refresh and the operation acts on whatever now lives there. Adding the kind
+to the mark key would narrow this without closing it (the entry can change
+again between the prune and the operation), and the real fix is the same
+node-identity work `NodeId` exists for. Recorded, not fixed.
+
 This satisfies spec §17 ("preserve selections by entry identity across sorts
 and refreshes") without introducing per-directory memory of marks: a `cd`
 never resurrects a stale selection.
