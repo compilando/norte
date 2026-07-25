@@ -101,11 +101,19 @@ ships is not.
 
 On the RECEIVE side the rule is enforced by the type, not left to callers:
 `Entry.attrs` deserialises through a hand-written map visitor that drops a
-malformed key (and bounds the map at 16 entries, keeping the smallest ids in
-byte order so the result does not depend on the peer's key order) instead of
-failing the entry — a contract that lived only in prose is one every consumer
-would have to remember, and an id becomes a configuration id and a map lookup
-downstream.
+malformed key, and bounds the map at 16 entries keeping the smallest ids in
+byte order, instead of failing the entry — a contract that lived only in prose
+is one every consumer would have to remember, and an id becomes a configuration
+id and a map lookup downstream. What that buys precisely: the SET of ids that
+survives does not depend on the order the peer serialised its keys in; a key
+repeated within the same object resolves last-wins, as it would in any JSON
+parser.
+
+The filter is one-directional on purpose. Serialisation is not filtered and the
+field is public, so an `Entry` built in-process with a malformed id emits it and
+decodes back different: a producer's bug must stay visible at the boundary that
+validates it (daemon-side, block 2) rather than being laundered by the
+serialiser, which would also make that validation untestable.
 
 `AttrInfo::label` and any `Text`/`Bytes` value is **third-party text**: an SFTP
 server controls `sftp.owner`, and a WASM provider plugin controls its own

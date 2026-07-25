@@ -230,6 +230,69 @@ fn el_schema_de_attr_value_cubre_las_etiquetas_de_la_golden() {
     );
 }
 
+/// (rust-review MINOR 5) El artefacto es lo único que un implementador de
+/// TERCEROS lee: si `Entry.attrs` fuese un `object` abierto, le estaría
+/// diciendo que 100 claves arbitrarias son legales. Las restricciones del tipo
+/// tienen que viajar en el schema, y los números tienen que venir de las
+/// MISMAS constantes que aplica el deserializador.
+///
+/// El `pattern` es la traducción ECMA-262 de [`is_valid_attr_id`]: uno o más
+/// segmentos `[a-z0-9_-]` separados por puntos, con al menos un punto. `$` sin
+/// flag `m` ancla al final de la cadena, así que no admite el `\n` final que
+/// sí colaría en otros dialectos. La función es la verdad; este test falla si
+/// alguien mueve una sin la otra.
+#[test]
+fn el_schema_de_entry_attrs_lleva_los_topes_del_tipo() {
+    use norte_proto::attrs::{ATTR_ID_MAX, ATTRS_MAX_REQUEST};
+
+    let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
+    let attrs = schema
+        .pointer("/$defs/Entry/properties/attrs")
+        .expect("Entry.attrs está en el artefacto");
+
+    assert_eq!(
+        attrs
+            .get("maxProperties")
+            .and_then(serde_json::Value::as_u64),
+        Some(ATTRS_MAX_REQUEST as u64),
+        "el tope del mapa viaja en el schema"
+    );
+    let nombres = attrs
+        .get("propertyNames")
+        .expect("las claves están restringidas, no son un string cualquiera");
+    assert_eq!(
+        nombres.get("maxLength").and_then(serde_json::Value::as_u64),
+        Some(ATTR_ID_MAX as u64)
+    );
+    assert_eq!(
+        nombres.get("pattern").and_then(serde_json::Value::as_str),
+        Some(r"^[a-z0-9_-]+(\.[a-z0-9_-]+)+$"),
+        "el patrón es la traducción ECMA-262 de is_valid_attr_id"
+    );
+
+    // Muestreo de acuerdo patrón ⇄ función: lo que el schema declara legal lo
+    // acepta el validador, y lo que declara ilegal lo rechaza.
+    for legal in [
+        "posix.mode",
+        "s3.storage_class",
+        "archive.packed-size",
+        "a.b",
+    ] {
+        assert!(norte_proto::attrs::is_valid_attr_id(legal));
+    }
+    for ilegal in [
+        "mode",
+        "MODE",
+        "../etc/passwd",
+        "posix.",
+        ".mode",
+        "a..b",
+        "",
+    ] {
+        assert!(!norte_proto::attrs::is_valid_attr_id(ilegal));
+    }
+}
+
 /// Recoge `.rs` bajo `dir` (incluye `src/wire/`).
 fn collect_rs(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {

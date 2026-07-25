@@ -38,10 +38,14 @@ pub const ATTR_BYTES_MAX: usize = 256;
 /// outside the byte class is rejected: relaxing this rule later is
 /// backward-compatible, tightening it after 0.30 ships is not.
 ///
-/// An [`AttrInfo`] whose id fails this check is DROPPED from the catalog,
-/// and an `Entry.attrs` key that fails it is DROPPED from that entry —
-/// never a hard error, mirroring the "unknown requested id comes back
-/// absent" rule (ADR 0039 §5).
+/// An `Entry.attrs` key that fails this check is DROPPED from that entry by
+/// [`Entry::attrs`](crate::Entry::attrs)'s own deserialisation — never a hard
+/// error, mirroring the "unknown requested id comes back absent" rule (ADR
+/// 0039 §5). The same rule is a REQUIREMENT ON THE RECEIVER for an advertised
+/// catalog: an `AttrInfo` with a malformed id must be discarded rather than
+/// requested. Nothing enforces that yet, because `FsCapabilitiesResult` does
+/// not carry the catalog until the next task of this block; it becomes a
+/// property of the type when that field lands.
 ///
 /// ```
 /// use norte_proto::attrs::is_valid_attr_id;
@@ -139,10 +143,13 @@ pub enum AttrHint {
 /// One attribute a provider offers, as advertised by `fs.capabilities`
 /// ([`FsCapabilitiesResult::attrs`](crate::methods::FsCapabilitiesResult)).
 ///
-/// An `AttrInfo` whose `id` fails [`is_valid_attr_id`] is DROPPED from the
-/// catalog, and an `Entry.attrs` key that fails it is DROPPED from that
-/// entry — never a hard error, mirroring the "unknown requested id comes
-/// back absent" rule (ADR 0039 §5).
+/// An `AttrInfo` whose `id` fails [`is_valid_attr_id`] must be DISCARDED by
+/// the receiver rather than requested — never a hard error, mirroring the
+/// "unknown requested id comes back absent" rule (ADR 0039 §5). That is a
+/// requirement on the reader for now: the catalog field does not exist until
+/// the next task of this block adds `FsCapabilitiesResult::attrs`, which is
+/// where the filter will live. The equivalent rule for entry keys is already
+/// enforced by the type — see [`Entry::attrs`](crate::Entry::attrs).
 ///
 /// `label` is provider text and therefore THIRD-PARTY (a WASM provider plugin
 /// writes it, an SFTP server influences it): mask it exactly like a plugin's
@@ -179,28 +186,9 @@ pub struct AttrInfo {
     pub hint: AttrHint,
 }
 
-/// Deserialises the attribute map of an [`Entry`](crate::Entry), applying the
-/// receive-side rules of ADR 0039 §4/§5 IN THE TYPE rather than leaving them to
-/// every caller — exactly as [`AttrValue`] enforces its own caps at decode.
-/// Neither rule is ever an error, for the reason a malformed cell degrades to
-/// [`AttrValue::Unknown`]: one bad key must cost that key, never the entry and
-/// never the page.
-///
-/// 1. A key that is not a well-formed id ([`is_valid_attr_id`]) is DROPPED. An
-///    attribute id becomes a configuration id and a map lookup downstream, so
-///    `MODE` or `../etc/passwd` must not survive the wire.
-/// 2. The map is bounded at [`ATTRS_MAX_REQUEST`] entries — a client can
-///    request at most that many ids, so a bigger map is a buggy or hostile
-///    peer. The SMALLEST [`ATTRS_MAX_REQUEST`] keys in byte order are kept,
-///    which makes the result independent of the order the peer serialised its
-///    keys in (JSON objects are unordered, RFC 8259 §4), the same property
-///    [`AttrValue`]'s tag selection has. At most
-///    `ATTRS_MAX_REQUEST + 1` entries ever exist at once and the values of
-///    dropped keys are never even parsed, so a 10 000-key object does not
-///    materialise a 10 000-entry map first.
-///
-/// A non-map `attrs` is still a hard error: that is serde's decision on the
-/// parent, and a peer that sends one is broken rather than newer.
+/// Decodes the attribute map of an [`Entry`](crate::Entry) under the
+/// receive-side rules of ADR 0039 §4/§5; the contract itself is documented on
+/// [`Entry::attrs`](crate::Entry::attrs), which is what a caller reads.
 pub(crate) fn deserialize_attr_map<'de, D>(
     deserializer: D,
 ) -> Result<std::collections::BTreeMap<String, AttrValue>, D::Error>
@@ -222,13 +210,23 @@ where
             self,
             mut access: M,
         ) -> Result<Self::Value, M::Error> {
+            // Se conservan a lo sumo `ATTRS_MAX_REQUEST` claves — las MENORES
+            // en orden de bytes — descartando los ids mal formados, y sin
+            // llegar a parsear el valor de lo que se descarta (nunca hay más
+            // de `ATTRS_MAX_REQUEST + 1` entradas vivas a la vez). El
+            // contrato completo está en el rustdoc de `Entry::attrs`.
             let mut out: BTreeMap<String, AttrValue> = BTreeMap::new();
             while let Some(key) = access.next_key::<String>()? {
                 // Id mal formado: se descarta la CLAVE, jamás la entrada.
                 let keep = is_valid_attr_id(&key)
-                    // Con el mapa lleno, una clave que ordena DESPUÉS de la
-                    // peor que ya se guarda no puede entrar: ni se parsea.
                     && (out.len() < ATTRS_MAX_REQUEST
+                        // Una clave REPETIDA ya ocupa su hueco: sobrescribe
+                        // (last-wins, como cualquier parser JSON) en vez de
+                        // depender de si el mapa estaba lleno al llegar.
+                        || out.contains_key(&key)
+                        // Con el mapa lleno, una clave que ordena DESPUÉS de
+                        // la peor que ya se guarda no puede entrar: ni se
+                        // parsea su valor.
                         || out.last_key_value().is_some_and(|(peor, _)| &key < peor));
                 if !keep {
                     access.next_value::<serde::de::IgnoredAny>()?;

@@ -83,9 +83,11 @@ fn entry_descarta_claves_de_atributo_mal_formadas() {
 
 /// (0.30.0, ADR 0039 §5) El mapa está ACOTADO al decodificar: un cliente puede
 /// pedir a lo sumo `ATTRS_MAX_REQUEST` ids, así que un mapa mayor es un peer
-/// con bugs o hostil. Se quedan las claves MENORES en orden de bytes, lo que
-/// hace el resultado independiente del orden en que el peer serializó — los
-/// objetos JSON no están ordenados (RFC 8259 §4).
+/// con bugs o hostil. Se quedan las claves MENORES en orden de bytes, así que
+/// el CONJUNTO de ids que sobrevive no depende del orden en que el peer
+/// serializó — los objetos JSON no están ordenados (RFC 8259 §4). Ojo: aquí
+/// las claves son DISTINTAS; el caso de una clave repetida (last-wins) lo
+/// cubre `entry_clave_de_atributo_repetida_es_last_wins`.
 #[test]
 fn entry_acota_el_mapa_de_atributos_de_forma_determinista() {
     use norte_proto::attrs::ATTRS_MAX_REQUEST;
@@ -120,6 +122,108 @@ fn entry_acota_el_mapa_de_atributos_de_forma_determinista() {
     assert_eq!(
         descendente, ascendente,
         "el resultado NO depende del orden de claves del wire"
+    );
+}
+
+/// (0.30.0, rust-review MAJOR 1) Una clave REPETIDA en el mismo objeto se
+/// resuelve last-wins — como en cualquier parser JSON, y como hacía el
+/// `BTreeMap` derivado al que este deserializador sustituye. El test de
+/// determinismo permuta claves DISTINTAS y no ve este caso: sin el atajo de
+/// "la clave ya está en el mapa", el valor conservado dependía de si el mapa
+/// estaba lleno cuando llegó el duplicado.
+#[test]
+fn entry_clave_de_atributo_repetida_es_last_wins() {
+    use norte_proto::attrs::ATTRS_MAX_REQUEST;
+
+    fn decodifica(pares: &[(String, u64)]) -> Entry {
+        let cuerpo: Vec<String> = pares
+            .iter()
+            .map(|(k, v)| format!("\"{k}\":{{\"uint\":{v}}}"))
+            .collect();
+        let json = format!(
+            r#"{{"path":"file:///a","kind":"file","attrs":{{{}}}}}"#,
+            cuerpo.join(",")
+        );
+        serde_json::from_str(&json).expect("una clave repetida NO rompe la entrada")
+    }
+
+    // Por DEBAJO del tope: el duplicado gana, esté donde esté.
+    let dup_al_final = decodifica(&[
+        ("a.00".to_owned(), 1),
+        ("b.00".to_owned(), 9),
+        ("a.00".to_owned(), 2),
+    ]);
+    let dup_al_principio = decodifica(&[
+        ("a.00".to_owned(), 1),
+        ("a.00".to_owned(), 2),
+        ("b.00".to_owned(), 9),
+    ]);
+    assert_eq!(dup_al_final.attrs["a.00"], AttrValue::Uint(2));
+    assert_eq!(dup_al_final.attrs, dup_al_principio.attrs);
+
+    // EN el tope, repitiendo la clave MAYOR (la que la poda expulsaría): el
+    // mapa ya está lleno cuando llega el duplicado en un orden y no en el
+    // otro, y aun así el resultado debe ser el mismo.
+    let llenas: Vec<(String, u64)> = (0..ATTRS_MAX_REQUEST)
+        .map(|i| (format!("a.{i:02}"), 1))
+        .collect();
+    let mayor = format!("a.{:02}", ATTRS_MAX_REQUEST - 1);
+
+    let mut dup_despues = llenas.clone();
+    dup_despues.push((mayor.clone(), 2));
+
+    let mut dup_antes = vec![(mayor.clone(), 1), (mayor.clone(), 2)];
+    dup_antes.extend(llenas.iter().filter(|(k, _)| *k != mayor).cloned());
+
+    let a = decodifica(&dup_despues);
+    let b = decodifica(&dup_antes);
+    assert_eq!(a.attrs.len(), ATTRS_MAX_REQUEST);
+    assert_eq!(
+        a.attrs[&mayor],
+        AttrValue::Uint(2),
+        "last-wins también con el mapa lleno"
+    );
+    assert_eq!(
+        a.attrs, b.attrs,
+        "mismos miembros en distinto orden → mismo resultado, valores incluidos"
+    );
+}
+
+/// (0.30.0, rust-review MAJOR 2) El filtro es de UNA dirección: `attrs` es un
+/// campo público sin constructor y la serialización NO filtra, así que un
+/// `Entry` construido en proceso con un id inválido o por encima del tope
+/// EMITE lo que lleva y vuelve DISTINTO. Se fija aquí para que nadie asuma
+/// round-trip identidad: el bug del productor tiene que seguir siendo visible
+/// en la frontera que lo valida (bloque 2), no lavado por el serializador.
+#[test]
+fn entry_construida_en_proceso_no_esta_filtrada_y_no_hace_roundtrip() {
+    use norte_proto::attrs::ATTRS_MAX_REQUEST;
+
+    let con_id_invalido = Entry {
+        attrs: std::collections::BTreeMap::from([("MODE".to_owned(), AttrValue::Uint(1))]),
+        ..sample_entry()
+    };
+    let wire = serde_json::to_string(&con_id_invalido).expect("serializable");
+    assert!(
+        wire.contains("MODE"),
+        "la serialización NO filtra: el bug del productor viaja: {wire}"
+    );
+    assert_ne!(
+        roundtrip(&con_id_invalido),
+        con_id_invalido,
+        "y al volver la clave inválida ya no está"
+    );
+
+    let gorda = Entry {
+        attrs: (0..ATTRS_MAX_REQUEST + 5)
+            .map(|i| (format!("test.attr_{i:02}"), AttrValue::Uint(i as u64)))
+            .collect(),
+        ..sample_entry()
+    };
+    assert_eq!(
+        roundtrip(&gorda).attrs.len(),
+        ATTRS_MAX_REQUEST,
+        "por encima del tope se emite entero pero se decodifica acotado"
     );
 }
 
