@@ -1,13 +1,14 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
+assertion_line: 237
 expression: texto.clone()
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│ /docs                                ││  cosa                                │"
-"│ /src                                 ││                                      │"
-"│ @enlace                              ││                                      │"
-"│  notas.txt                           ││                                      │"
-"│! �.dat                               ││                                      │"
+"│  /docs                               ││   cosa                               │"
+"│  /src                                ││                                      │"
+"│  @enlace                             ││                                      │"
+"│   notas.txt                          ││                                      │"
+"│ ! �.dat                              ││                                      │"
 "│                                      ││                                      │"
 "│                    ┌ Tema ──────────────────────────────┐                    │"
 "│                    │ default                            │                    │"

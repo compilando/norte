@@ -1,14 +1,14 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
-assertion_line: 389
+assertion_line: 390
 expression: texto
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│ /docs                                ││  cosa                                │"
-"│ /┌ Demo ──────────────────────────────────────────────────────────────────┐  │"
-"│ @│> verbose: true                                                         │  │"
+"│  /docs                               ││   cosa                               │"
+"│  ┌ Demo ──────────────────────────────────────────────────────────────────┐  │"
+"│  │> verbose: true                                                         │  │"
 "│  │  mode: fast                                                            │  │"
-"│! │   abc�gpj.exe                                                          │  │"
+"│ !│   abc�gpj.exe                                                          │  │"
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"

@@ -1,14 +1,14 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
-assertion_line: 575
+assertion_line: 678
 expression: render_80x24(&app)
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│ /docs                                ││  cosa                                │"
-"│ /┌ Ajustes ───────────────────────────────────────────────────────────────┐  │"
-"│ @│General                                                                 │  │"
+"│  /docs                               ││   cosa                               │"
+"│  ┌ Ajustes ───────────────────────────────────────────────────────────────┐  │"
+"│  │General                                                                 │  │"
 "│  │> Tema                         default                                  │  │"
-"│! │  Idioma                       auto                                     │  │"
+"│ !│  Idioma                       auto                                     │  │"
 "│  │  Tipografía de la interfaz                                             │  │"
 "│  │  Tipografía monoespaciada                                              │  │"
 "│  │  Tamaño de letra                                                       │  │"

@@ -357,6 +357,14 @@ impl Pane {
         self.state.decoration_for(path)
     }
 
+    /// ¿Está marcada esta entrada? (#103) — delegado puro a
+    /// [`norte_frontend::PaneState::is_marked`]. El render pinta un canalón
+    /// textual (`*`) al inicio de la fila.
+    #[must_use]
+    pub fn is_marked(&self, entry: &Entry) -> bool {
+        self.state.is_marked(entry)
+    }
+
     /// Instala el lote de decoraciones resuelto (G3b) — ver
     /// `PaneState::set_decorations`.
     pub fn set_decorations(

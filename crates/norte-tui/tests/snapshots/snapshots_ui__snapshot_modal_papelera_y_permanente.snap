@@ -1,13 +1,14 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
+assertion_line: 457
 expression: "format!(\"{papelera}\\n===\\n{permanente}\")"
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│ /docs                                ││  cosa                                │"
-"│ /src                                 ││                                      │"
-"│ @enlace                              ││                                      │"
-"│  notas.txt                           ││                                      │"
-"│! �.dat  ┌A la papelera─────────────────────────────────────────────┐         │"
+"│  /docs                               ││   cosa                               │"
+"│  /src                                ││                                      │"
+"│  @enlace                             ││                                      │"
+"│   notas.txt                          ││                                      │"
+"│ ! �.dat ┌A la papelera─────────────────────────────────────────────┐         │"
 "│         │⟨file⟩/casa/notas.txt                                     │         │"
 "│         │recuperable desde la papelera del sistema                 │         │"
 "│         │[enter] confirmar [y] aprobar [n] denegar [esc] cancelar  │         │"
@@ -21,11 +22,11 @@ expression: "format!(\"{papelera}\\n===\\n{permanente}\")"
 
 ===
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│ /docs                                ││  cosa                                │"
-"│ /src                                 ││                                      │"
-"│ @enlace                              ││                                      │"
-"│  notas.txt                           ││                                      │"
-"│! �.dat  ┌Borrar PERMANENTE─────────────────────────────────────────┐         │"
+"│  /docs                               ││   cosa                               │"
+"│  /src                                ││                                      │"
+"│  @enlace                             ││                                      │"
+"│   notas.txt                          ││                                      │"
+"│ ! �.dat ┌Borrar PERMANENTE─────────────────────────────────────────┐         │"
 "│         │⟨file⟩/casa/notas.txt                                     │         │"
 "│         │⚠ SIN papelera: esto no se puede deshacer                 │         │"
 "│         │[enter] confirmar [y] aprobar [n] denegar [esc] cancelar  │         │"

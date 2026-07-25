@@ -1,14 +1,14 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
-assertion_line: 91
+assertion_line: 167
 expression: render(&app)
 ---
 "┌! ⟨file⟩/casa/evil�dir────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│ /docs                                ││  cosa                                │"
-"│ /src                                 ││                                      │"
-"│ @enlace                              ││                                      │"
-"│  notas.t┌ Búsqueda ────────────────────────────────────────────────┐         │"
-"│! �.dat  │nombre (glob): *.rs_                                      │         │"
+"│  /docs                               ││   cosa                               │"
+"│  /src                                ││                                      │"
+"│  @enlace                             ││                                      │"
+"│   notas.┌ Búsqueda ────────────────────────────────────────────────┐         │"
+"│ ! �.dat │nombre (glob): *.rs_                                      │         │"
 "│         │contenido:                                                │         │"
 "│         │[F2] regex: no                                            │         │"
 "│         │[F3] mayús: no                                            │         │"

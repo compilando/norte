@@ -1,14 +1,14 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
-assertion_line: 617
+assertion_line: 721
 expression: render(&app)
 ---
 "┌⟨file⟩/ca┌ Paleta de comandos ──────────────────────────────────────┐─────────┐"
-"│ /docs   │ app.quit                 sa…de norte                   q │         │"
-"│ /src    │ pane.switch              ca…de pane                  tab │         │"
-"│ @enlace │ cursor.up                su…l cursor                  up │         │"
-"│  notas.t│ cursor.down              ba…cursor                  down │         │"
-"│! �.dat  ┌A la papelera─────────────────────────────────────────────┐         │"
+"│  /docs  │ app.quit                 sa…de norte                   q │         │"
+"│  /src   │ pane.switch              ca…de pane                  tab │         │"
+"│  @enlace│ cursor.up                su…l cursor                  up │         │"
+"│   notas.│ cursor.down              ba…cursor                  down │         │"
+"│ ! �.dat ┌A la papelera─────────────────────────────────────────────┐         │"
 "│         │⟨file⟩/casa/notas.txt                                     │         │"
 "│         │recuperable desde la papelera del sistema                 │         │"
 "│         │[enter] confirmar [y] aprobar [n] denegar [esc] cancelar  │         │"

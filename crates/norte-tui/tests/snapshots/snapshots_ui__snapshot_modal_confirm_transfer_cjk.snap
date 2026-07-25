@@ -1,13 +1,14 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
+assertion_line: 441
 expression: render(&app)
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│ /docs                                ││  cosa                                │"
-"│ /src                                 ││                                      │"
-"│ @enlace                              ││                                      │"
-"│  notas.txt                           ││                                      │"
-"│! �.dat  ┌Copiar────────────────────────────────────────────────────┐         │"
+"│  /docs                               ││   cosa                               │"
+"│  /src                                ││                                      │"
+"│  @enlace                             ││                                      │"
+"│   notas.txt                          ││                                      │"
+"│ ! �.dat ┌Copiar────────────────────────────────────────────────────┐         │"
 "│         │⟨file⟩/casa/notas.txt                                     │         │"
 "│         │→ ⟨file⟩/otro/日本語のファイル名.txt                      │         │" Hidden by multi-width symbols: [(26, " "), (28, " "), (30, " "), (32, " "), (34, " "), (36, " "), (38, " "), (40, " "), (42, " ")]
 "│         │[enter] confirmar [y] aprobar [n] denegar [esc] cancelar  │         │"

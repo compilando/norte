@@ -1221,7 +1221,15 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, them
         Some(vis) => (
             vis.iter()
                 .filter_map(|&i| pane.entries().get(i))
-                .map(|e| entry_item(e, theme, reinterpret, pane.decoration_for(&e.path)))
+                .map(|e| {
+                    entry_item(
+                        e,
+                        theme,
+                        reinterpret,
+                        pane.decoration_for(&e.path),
+                        pane.is_marked(e),
+                    )
+                })
                 .collect(),
             pane.quick()
                 .and_then(crate::nav::QuickSearch::selected_entry_index)
@@ -1230,7 +1238,15 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, them
         None => (
             pane.entries()
                 .iter()
-                .map(|e| entry_item(e, theme, reinterpret, pane.decoration_for(&e.path)))
+                .map(|e| {
+                    entry_item(
+                        e,
+                        theme,
+                        reinterpret,
+                        pane.decoration_for(&e.path),
+                        pane.is_marked(e),
+                    )
+                })
                 .collect(),
             (!pane.entries().is_empty()).then_some(pane.cursor()),
         ),
@@ -1248,13 +1264,14 @@ fn entry_item<'a>(
     theme: &TuiTheme,
     reinterpret: Option<norte_encoding::NameEncoding>,
     decoration: Option<&norte_frontend::Decoration>,
+    marked: bool,
 ) -> ListItem<'a> {
     let name = entry.path.file_name().map_or(&[][..], |n| n.as_bytes());
     // #57: con reinterpretación activa, los nombres no-UTF8 se decodifican
     // con el encoding elegido (display-only; el badge hostil se conserva —
     // el texto pintado difiere de los bytes reales).
     let (texto, hostil) = norte_frontend::display_name_with(name, reinterpret);
-    let marker = match entry.kind {
+    let kind_glyph = match entry.kind {
         EntryKind::Dir => "/",
         EntryKind::Symlink => "@",
         EntryKind::File | EntryKind::Other => " ",
@@ -1264,8 +1281,16 @@ fn entry_item<'a>(
         theme.role(Role::HostileBadge),
     );
     // Color por tipo/extensión de la entrada (ADR 0020 D2).
-    let body = Span::styled(format!("{marker}{texto}"), theme.entry(name, entry.kind));
-    let mut spans = vec![badge, body];
+    let body = Span::styled(
+        format!("{kind_glyph}{texto}"),
+        theme.entry(name, entry.kind),
+    );
+    // Canalón de marca (#103): señal TEXTUAL, jamás solo color — el fallback
+    // monocromo de `Role::Mark` es `dim`, que por sí solo se lee «inactivo»,
+    // no «seleccionado». Va ANTES del badge hostil para que ni el badge ni la
+    // decoración cambien de columna respecto a como se pintaban.
+    let gutter = Span::styled(if marked { "*" } else { " " }, theme.role(Role::Mark));
+    let mut spans = vec![gutter, badge, body];
     // G3b (ADR 0037): badge de decorator, TRAS el hueco del badge hostil —
     // ya SANEADO y acotado (`norte_frontend::sanitize_decoration`, aplicado
     // antes de llegar aquí). Sin decoración para esta entrada, ningún span
@@ -1284,6 +1309,87 @@ fn entry_item<'a>(
         spans.push(Span::styled(badge_text.to_string(), style));
     }
     ListItem::new(Line::from(spans))
+}
+
+#[cfg(test)]
+mod entry_item_tests {
+    use super::{HOSTILE_BADGE, entry_item};
+    use crate::theme::TuiTheme;
+    use norte_proto::{Entry, EntryKind, VPath};
+    use ratatui::widgets::ListItem;
+
+    fn e(wire: &str, k: EntryKind) -> Entry {
+        Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: VPath::parse(wire).unwrap(),
+            kind: k,
+            size: None,
+            mtime_ms: None,
+        }
+    }
+
+    /// Nombre no-UTF8 (bytes crudos vía `Segment`): dispara el badge hostil
+    /// sin pasar por reinterpretación.
+    fn e_hostile() -> Entry {
+        Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: VPath::parse("mem:///")
+                .unwrap()
+                .join(norte_proto::Segment::new(b"\xFF\xFE".to_vec()).unwrap()),
+            kind: EntryKind::File,
+            size: None,
+            mtime_ms: None,
+        }
+    }
+
+    /// `ListItem`'s span content is private to ratatui, so — like the
+    /// crate's other render tests (`tests/theme_render.rs`,
+    /// `tests/render.rs`) — this renders the row into a real `Buffer` and
+    /// reads it back cell by cell. The gutter and the hostile badge are each
+    /// exactly one cell wide by construction, so `span_texts()[0]` and `[1]`
+    /// are the true first two spans' text; later cells belong to the
+    /// (possibly multi-char) name span and are not meant to be compared
+    /// one-for-one with spans.
+    fn span_texts(item: &ListItem<'_>) -> Vec<String> {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::widgets::{List, Widget as _};
+        let area = Rect::new(0, 0, 40, 1);
+        let mut buf = Buffer::empty(area);
+        List::new(vec![item.clone()]).render(area, &mut buf);
+        (0..area.width)
+            .map(|x| buf[(x, 0)].symbol().to_string())
+            .collect()
+    }
+
+    fn first_span_text(item: &ListItem<'_>) -> String {
+        span_texts(item).into_iter().next().unwrap_or_default()
+    }
+
+    /// A marked row carries a TEXTUAL cue, never colour alone: `Role::Mark`'s
+    /// monochrome fallback is `dim`, which on its own reads as "inactive"
+    /// rather than "selected" (#103).
+    #[test]
+    fn a_marked_row_starts_with_the_mark_gutter() {
+        let entry = e("mem:///a", EntryKind::File);
+        let theme = TuiTheme::default();
+        let marked = entry_item(&entry, &theme, None, None, true);
+        let plain = entry_item(&entry, &theme, None, None, false);
+        assert_eq!(first_span_text(&marked), "*");
+        assert_eq!(first_span_text(&plain), " ");
+    }
+
+    /// The gutter goes BEFORE the hostile badge, so the badge column and the
+    /// decorator badge keep the positions they have today.
+    #[test]
+    fn the_gutter_precedes_the_hostile_badge() {
+        let entry = e_hostile();
+        let theme = TuiTheme::default();
+        let item = entry_item(&entry, &theme, None, None, true);
+        let texts = span_texts(&item);
+        assert_eq!(texts[0], "*");
+        assert_eq!(texts[1], HOSTILE_BADGE);
+    }
 }
 
 fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
