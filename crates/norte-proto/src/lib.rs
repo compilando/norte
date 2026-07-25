@@ -7,6 +7,7 @@
 
 pub mod wire;
 
+pub mod attrs;
 pub mod caps;
 pub mod entry;
 pub mod error;
@@ -15,6 +16,7 @@ pub mod task;
 pub mod transfer;
 pub mod vpath;
 
+pub use attrs::{AttrHint, AttrInfo, AttrType};
 pub use caps::{Capabilities, CapabilityFlags};
 pub use entry::{Entry, EntryKind};
 pub use error::{ConflictKind, Error};
