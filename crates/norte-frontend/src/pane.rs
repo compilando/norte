@@ -16,7 +16,7 @@
 use crate::decoration::Decoration;
 use crate::nav::{Mode, QuickSearch};
 use crate::sort::SortKey;
-use norte_proto::{Entry, VPath};
+use norte_proto::{Entry, EntryKind, VPath};
 use std::collections::{HashMap, HashSet};
 
 /// Estado no-render de un pane: directorio, entradas (normalizadas
@@ -486,6 +486,60 @@ impl PaneState {
     /// Limpia todas las marcas.
     pub fn clear_marks(&mut self) {
         self.marks.clear();
+    }
+
+    /// The indices a BULK mark acts on: the VISIBLE subset under an active
+    /// quick filter, the whole listing otherwise — what you see is what you
+    /// mark. While a fill is running ([`Self::loading`]) it reaches only what
+    /// has been drained so far; the pane already marks an in-progress listing
+    /// (the title in the TUI, a status line in the GUI), so the partial reach
+    /// is never silent.
+    fn markable_indices(&self) -> Vec<usize> {
+        match self.quick_visible() {
+            Some(vis) => vis.to_vec(),
+            None => (0..self.entries.len()).collect(),
+        }
+    }
+
+    /// Marks every entry of the visible set (see [`Self::markable_indices`]).
+    pub fn mark_all(&mut self) {
+        for i in self.markable_indices() {
+            let Some(path) = self.entries.get(i).map(|e| &e.path) else {
+                continue;
+            };
+            if !self.marks.contains(path) {
+                self.marks.insert(path.clone());
+            }
+        }
+    }
+
+    /// Flips the mark of every entry of the visible set (see
+    /// [`Self::markable_indices`]). Marks OUTSIDE that set SURVIVE untouched:
+    /// invert is "flip what you see", not "replace the selection with its
+    /// complement" — under a filter, [`Self::marked_paths`] can therefore
+    /// still return entries the user is not looking at.
+    pub fn invert_marks(&mut self) {
+        for i in self.markable_indices() {
+            let Some(path) = self.entries.get(i).map(|e| e.path.clone()) else {
+                continue;
+            };
+            if !self.marks.remove(&path) {
+                self.marks.insert(path);
+            }
+        }
+    }
+
+    /// Total size of every marked entry that is NOT a directory, saturating.
+    /// A symlink contributes its own size, never its target's. Directories
+    /// contribute 0: nothing here walks a tree, and a status bar that added
+    /// a directory's own inode size would be claiming a total it never
+    /// computed.
+    #[must_use]
+    pub fn marked_bytes(&self) -> u64 {
+        self.entries
+            .iter()
+            .filter(|e| e.kind != EntryKind::Dir && self.marks.contains(&e.path))
+            .fold(0u64, |acc, e| acc.saturating_add(e.size.unwrap_or(0)))
     }
 
     /// Marks dropped by the last [`Self::refill`] because their entry was
@@ -1690,5 +1744,164 @@ mod tests {
         p.quick_start(Mode::Filter);
         p.quick_char('\u{043f}');
         assert_eq!(p.quick_visible().map(<[usize]>::len), Some(1));
+    }
+
+    // --- #103 task 2: mark all, invert, and the marked byte total -------
+
+    #[test]
+    fn mark_all_marks_every_entry() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a", EntryKind::File),
+                e("mem:///b", EntryKind::File),
+            ],
+        );
+        p.mark_all();
+        assert_eq!(p.marks_len(), 2);
+    }
+
+    #[test]
+    fn invert_marks_flips_every_entry() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a", EntryKind::File),
+                e("mem:///b", EntryKind::File),
+            ],
+        );
+        p.toggle_mark(); // marks "a"
+        p.invert_marks();
+        assert_eq!(p.marked_paths(), vec![VPath::parse("mem:///b").unwrap()]);
+    }
+
+    #[test]
+    fn mark_all_under_a_filter_only_marks_the_visible() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///alfa", EntryKind::File),
+                e("mem:///beta", EntryKind::File),
+            ],
+        );
+        p.quick_start(Mode::Filter);
+        p.quick_char('a');
+        p.quick_char('l'); // matches "alfa" only
+        p.mark_all();
+        assert_eq!(
+            p.marks_len(),
+            1,
+            "marked_paths falls back to the cursor: pin the SET"
+        );
+        assert_eq!(p.marked_paths(), vec![VPath::parse("mem:///alfa").unwrap()]);
+    }
+
+    /// `invert` under a filter only flips the visible entries — the
+    /// counterpart of `mark_all_under_a_filter_only_marks_the_visible`
+    /// (nothing else pinned this direction).
+    #[test]
+    fn invert_under_a_filter_only_flips_the_visible() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///alfa", EntryKind::File),
+                e("mem:///beta", EntryKind::File),
+            ],
+        );
+        p.quick_start(Mode::Filter);
+        p.quick_char('a');
+        p.quick_char('l'); // only "alfa" visible
+        p.invert_marks();
+        assert_eq!(p.marks_len(), 1);
+        let entries: Vec<_> = p.entries().to_vec();
+        assert!(p.is_marked(&entries[0]), "alfa was visible: flipped");
+        assert!(!p.is_marked(&entries[1]), "beta was hidden: untouched");
+    }
+
+    /// Marks OUTSIDE the visible set survive an invert untouched: invert is
+    /// "flip what you see", not "replace the selection with its complement".
+    #[test]
+    fn invert_under_a_filter_leaves_a_hidden_mark_alone() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///alfa", EntryKind::File),
+                e("mem:///beta", EntryKind::File),
+            ],
+        );
+        p.cursor_down(); // "beta"
+        p.toggle_mark(); // marks "beta"
+        p.quick_start(Mode::Filter);
+        p.quick_char('a');
+        p.quick_char('l'); // only "alfa" visible now
+        p.invert_marks();
+        assert_eq!(p.marks_len(), 2, "beta survives, alfa gets flipped on");
+        assert!(p.is_marked(&e("mem:///alfa", EntryKind::File)));
+        assert!(p.is_marked(&e("mem:///beta", EntryKind::File)));
+    }
+
+    /// `Mode::Jump` marks the WHOLE listing, not just the jump target: unlike
+    /// `Mode::Filter`, `quick_visible()` returns `None` in Jump, so
+    /// `markable_indices` falls through to the full range. This is intended
+    /// (a narrower `markable_indices` under Jump would also pass every other
+    /// test in this file), so it needs its own pin.
+    #[test]
+    fn mark_all_under_jump_marks_the_whole_listing() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///alfa", EntryKind::File),
+                e("mem:///beta", EntryKind::File),
+            ],
+        );
+        p.quick_start(Mode::Jump);
+        p.quick_char('a');
+        p.mark_all();
+        assert_eq!(p.marks_len(), p.entries().len());
+    }
+
+    #[test]
+    fn marked_bytes_sums_files_and_ignores_dirs() {
+        let mut a = e("mem:///a", EntryKind::File);
+        a.size = Some(10);
+        let mut d = e("mem:///d", EntryKind::Dir);
+        d.size = Some(4096); // a provider may report a dir size; it must not count
+        let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), vec![a, d]);
+        p.mark_all();
+        assert_eq!(p.marked_bytes(), 10);
+    }
+
+    /// A file that is NOT marked must not contribute to the total: both of
+    /// the tests above mark every entry, so neither would catch
+    /// `marked_bytes` silently dropping the `self.marks.contains(...)` guard
+    /// and summing the whole directory.
+    #[test]
+    fn marked_bytes_counts_only_what_is_marked() {
+        let mut a = e("mem:///a", EntryKind::File);
+        a.size = Some(10);
+        let mut b = e("mem:///b", EntryKind::File);
+        b.size = Some(32);
+        let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), vec![a, b]);
+        p.toggle_mark(); // "a" only
+        assert_eq!(
+            p.marked_bytes(),
+            10,
+            "an unmarked file must not be in the total"
+        );
+    }
+
+    #[test]
+    fn marked_bytes_saturates_instead_of_overflowing() {
+        let mut a = e("mem:///a", EntryKind::File);
+        a.size = Some(u64::MAX);
+        let mut b = e("mem:///b", EntryKind::File);
+        b.size = Some(1);
+        let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), vec![a, b]);
+        p.mark_all();
+        assert_eq!(
+            p.marked_bytes(),
+            u64::MAX,
+            "a hostile listing must not panic in debug"
+        );
     }
 }
