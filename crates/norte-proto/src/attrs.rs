@@ -44,14 +44,22 @@ pub const ATTR_TEXT_MAX: usize = 256;
 /// Maximum length of an [`AttrValue::Bytes`] value, in bytes AFTER decoding.
 pub const ATTR_BYTES_MAX: usize = 256;
 
-/// Is `id` a well-formed, NAMESPACED attribute id: at least one `.`,
-/// non-empty `.`-separated segments each made of `[a-z0-9_-]`, at most
-/// [`ATTR_ID_MAX`] bytes total. Namespaced by its origin (`posix.mode`,
-/// `archive.packed_size`), with no central registry — a provider owns its
-/// namespace (ADR 0039). A bare word with no dot (`mode`), a dot with an
-/// empty segment on either side (`posix.`, `.mode`, `.`, `..`), or anything
-/// outside the byte class is rejected: relaxing this rule later is
+/// Is `id` a well-formed, NAMESPACED attribute id: at least one `.`, every
+/// `.`-separated segment starting with an ASCII LETTER and continuing in
+/// `[a-z0-9_-]`, at most [`ATTR_ID_MAX`] bytes total — the ECMA-262
+/// translation the published schema carries is
+/// `^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$`. Namespaced by its origin
+/// (`posix.mode`, `archive.packed_size`), with no central registry — a
+/// provider owns its namespace (ADR 0039). A bare word with no dot (`mode`), a
+/// dot with an empty segment on either side (`posix.`, `.mode`, `.`, `..`), or
+/// anything outside the byte class is rejected: relaxing this rule later is
 /// backward-compatible, tightening it after 0.30 ships is not.
+///
+/// The leading-letter rule is what rejects the shapes that would be read as
+/// something OTHER than an id downstream: `-x.y` is argv-shaped where block 2
+/// will take `--attrs <id>`, and `0.0` is float-shaped in a configuration file
+/// or a JSON document that keys columns by id. Neither is worth supporting, and
+/// 0.30 is the last version where excluding them costs nothing.
 ///
 /// Both RECEIVE-side fields enforce this by the TYPE, never leaving it to a
 /// caller, and neither is ever a hard error — the same spirit as "an unknown
@@ -82,11 +90,14 @@ pub const ATTR_BYTES_MAX: usize = 256;
 /// assert!(is_valid_attr_id("s3.storage_class"));
 /// assert!(!is_valid_attr_id("S3.StorageClass"));
 /// assert!(!is_valid_attr_id("mode"));
+/// // Cada segmento empieza por LETRA: ni forma de argv ni forma de float.
+/// assert!(!is_valid_attr_id("-x.y"));
+/// assert!(!is_valid_attr_id("0.0"));
 /// ```
 #[must_use]
 pub fn is_valid_attr_id(id: &str) -> bool {
     fn valid_segment(seg: &str) -> bool {
-        !seg.is_empty()
+        seg.bytes().next().is_some_and(|b| b.is_ascii_lowercase())
             && seg
                 .bytes()
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'-'))
@@ -208,7 +219,7 @@ pub struct AttrInfo {
         feature = "schema",
         schemars(extend(
             "maxLength" = ATTR_ID_MAX,
-            "pattern" = r"^[a-z0-9_-]+(\.[a-z0-9_-]+)+$"
+            "pattern" = r"^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$"
         ))
     )]
     pub id: String,
@@ -939,8 +950,24 @@ mod tests {
             ".mode",
             ".",
             "..",
+            // Cada segmento empieza por LETRA (0.30.0): un id con forma de
+            // argv (`--attrs -x.y` del bloque 2) o de float (`0.0` en un
+            // fichero de configuración) se lee como otra cosa aguas abajo.
+            "-.-",
+            "0.0",
+            "9-9.9-9",
+            "__.__",
+            "-x.y",
+            "x.-y",
+            "posix.0mode",
         ] {
             assert!(!is_valid_attr_id(bad), "{bad:?} debería rechazarse");
+        }
+
+        // Un DÍGITO dentro del segmento sigue valiendo: solo el primer byte
+        // está restringido (`s3.etag`, `posix.ctime_ms`).
+        for ok in ["s3.etag", "a1.b2", "posix.ctime_ms"] {
+            assert!(is_valid_attr_id(ok), "{ok} debería valer");
         }
 
         // ATTR_ID_MAX + 1 bytes se rechaza (frontera exclusiva: pinea `<=`, no `<`).

@@ -45,7 +45,7 @@
         "id": {
           "description": "Attribute id, namespaced ([`is_valid_attr_id`]). A descriptor whose id\ndoes not satisfy that check does not survive [`sanitize_catalog`].",
           "maxLength": 64,
-          "pattern": "^[a-z0-9_-]+(\\.[a-z0-9_-]+)+$",
+          "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$",
           "type": "string"
         },
         "label": {
@@ -414,7 +414,7 @@
           "maxProperties": 16,
           "propertyNames": {
             "maxLength": 64,
-            "pattern": "^[a-z0-9_-]+(\\.[a-z0-9_-]+)+$"
+            "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$"
           },
           "type": "object"
         },
@@ -908,7 +908,7 @@
           "description": "Ids of the provider attributes to deliver with each entry (0.30.0,\nADR 0039). Empty (the default, and the only possibility for a 0.29\nclient) = none: nothing is delivered unrequested. The contract is at\nmost [`ATTRS_MAX_REQUEST`](crate::attrs::ATTRS_MAX_REQUEST) ids, each\nwell-formed ([`is_valid_attr_id`](crate::attrs::is_valid_attr_id)), and\nviolating either is `-32602` — a rule BLOCK 2 wires up: a 0.30.0 daemon\nships no producer and ignores the requested ids entirely, so today the\nanswer to any request is the same empty set of attributes. An id the\nprovider does not offer is NOT an error either way: it comes back\nabsent, so a client with a stale catalog degrades instead of failing.\n\n# Bounded at decode, but NOT validated — on purpose\n\nThis is a REQUEST: data this peer is SENDING, not data it received. So\nwhatever the wire carries lands in the vector VERBATIM — malformed ids\nand over-cap length included. Silently dropping a bad id here would\nturn \"the client asked for `../etc/passwd`\" into \"the client asked for\nnothing\", hiding a caller's bug and making the daemon-side validation\nuntestable. The asymmetry with the two RECEIVE-side fields —\n[`Entry::attrs`](crate::Entry::attrs) and\n[`FsCapabilitiesResult::attrs`], which both filter at decode — is\ndeliberate: a bad cell or a bad advertised descriptor costs itself,\nwhile a bad request is the daemon's `-32602` to raise.\n\nThe one thing decoding does impose is a MEMORY bound, which is not\nvalidation: only the first `ATTRS_MAX_REQUEST + 1` elements are kept\nand the rest is drained unmaterialised, because a 16 MiB frame of\n`[\"a\",\"a\",…]` would otherwise allocate ~15× its own size in `String`\nheaders before any daemon check could run. The `+ 1` is what keeps\nover-cap OBSERVABLE (`attrs.len() > ATTRS_MAX_REQUEST`) instead of\ntrimming a violation into legality.",
           "items": {
             "maxLength": 64,
-            "pattern": "^[a-z0-9_-]+(\\.[a-z0-9_-]+)+$",
+            "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$",
             "type": "string"
           },
           "maxItems": 16,
@@ -1118,7 +1118,7 @@
           "description": "Ids of the provider attributes to deliver with the entry (0.30.0,\nADR 0039). Empty (the default, and the only possibility for a 0.29\nclient) = none: nothing is delivered unrequested. The contract is at\nmost [`ATTRS_MAX_REQUEST`](crate::attrs::ATTRS_MAX_REQUEST) ids, each\nwell-formed ([`is_valid_attr_id`](crate::attrs::is_valid_attr_id)), and\nviolating either is `-32602` — a rule BLOCK 2 wires up: a 0.30.0 daemon\nignores the requested ids entirely. An id the provider does not offer\nis NOT an error either way: it comes back absent.\n\n# Bounded at decode, but NOT validated — on purpose\n\nSame as [`FsListParams::attrs`], for the same reasons: a malformed id\nsurvives decoding and is the daemon's `-32602` to raise, instead of\nbeing laundered into \"asked for nothing\"; only the RECEIVE-side fields\n— [`Entry::attrs`](crate::Entry::attrs) and\n[`FsCapabilitiesResult::attrs`] — filter. Decoding keeps the first\n`ATTRS_MAX_REQUEST + 1` elements and drains the rest, which is a memory\nbound (a 16 MiB frame of tiny ids would otherwise allocate ~15× its own\nsize) that leaves over-cap observable.",
           "items": {
             "maxLength": 64,
-            "pattern": "^[a-z0-9_-]+(\\.[a-z0-9_-]+)+$",
+            "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$",
             "type": "string"
           },
           "maxItems": 16,

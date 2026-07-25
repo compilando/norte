@@ -21,7 +21,8 @@ independently through `PROTOCOL_VERSION`.
   client will actually paint (nothing is delivered unrequested), and `Entry.attrs`
   carries the values as `AttrValue` (`Uint | Int | Text | Bytes | TimeMs | Bool |
   Unknown`). Ids are namespaced by construction (at least one `.`, every segment
-  `[a-z0-9_-]`, ≤ 64 bytes) and the caps — 16 requested ids per call, 64 advertised
+  starting with an ASCII letter and continuing in `[a-z0-9_-]`, ≤ 64 bytes — so
+  neither the argv-shaped `-x.y` nor the float-shaped `0.0` is an id) and the caps — 16 requested ids per call, 64 advertised
   descriptors, 64-byte label, 256-byte `Text`/`Bytes` — travel in the published
   JSON Schema (ADR 0038). Wire-only for now: no provider advertises an attribute
   yet and the daemon ignores requested ids, which is a valid answer under the

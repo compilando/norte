@@ -136,7 +136,7 @@ pub struct Entry {
             "maxProperties" = crate::attrs::ATTRS_MAX_REQUEST,
             "propertyNames" = serde_json::json!({
                 "maxLength": crate::attrs::ATTR_ID_MAX,
-                "pattern": r"^[a-z0-9_-]+(\.[a-z0-9_-]+)+$",
+                "pattern": r"^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$",
             })
         ))
     )]

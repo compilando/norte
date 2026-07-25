@@ -266,7 +266,7 @@ fn el_schema_de_entry_attrs_lleva_los_topes_del_tipo() {
     );
     assert_eq!(
         nombres.get("pattern").and_then(serde_json::Value::as_str),
-        Some(r"^[a-z0-9_-]+(\.[a-z0-9_-]+)+$"),
+        Some(r"^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$"),
         "el patrón es la traducción ECMA-262 de is_valid_attr_id"
     );
 
@@ -288,6 +288,12 @@ fn el_schema_de_entry_attrs_lleva_los_topes_del_tipo() {
         ".mode",
         "a..b",
         "",
+        // Segmento que no empieza por letra (0.30.0): forma de argv y forma
+        // de float, que aguas abajo se leen como otra cosa.
+        "-x.y",
+        "0.0",
+        "9-9.9-9",
+        "__.__",
     ] {
         assert!(!norte_proto::attrs::is_valid_attr_id(ilegal));
     }
@@ -322,7 +328,7 @@ fn el_schema_de_los_campos_de_metodo_lleva_los_topes_del_tipo() {
     );
     assert_eq!(
         id.get("pattern").and_then(serde_json::Value::as_str),
-        Some(r"^[a-z0-9_-]+(\.[a-z0-9_-]+)+$"),
+        Some(r"^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$"),
         "el patrón es el MISMO que el de Entry.attrs"
     );
     assert_eq!(
@@ -368,7 +374,7 @@ fn el_schema_de_los_campos_de_metodo_lleva_los_topes_del_tipo() {
         );
         assert_eq!(
             item.get("pattern").and_then(serde_json::Value::as_str),
-            Some(r"^[a-z0-9_-]+(\.[a-z0-9_-]+)+$"),
+            Some(r"^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$"),
             "[{tipo}] el patrón es el MISMO que el de Entry.attrs \
              (traducción ECMA-262 de is_valid_attr_id)"
         );

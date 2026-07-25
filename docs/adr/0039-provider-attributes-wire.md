@@ -101,15 +101,25 @@ panicking, exactly as `EntryKind::Other` round-trips as `"other"`.
 
 ### 4. Attribute ids are namespaced and validated, labels are untrusted
 
-An id is namespaced by construction, not just by convention: at least one
-`.`, every `.`-separated segment non-empty and matching `[a-z0-9_-]`, at most
-64 bytes total. `posix.mode`, `sftp.owner`, `s3.storage_class`, and
-`archive.packed_size` are valid; a bare word with no dot (`mode`) or a dot
-with an empty segment on either side (`posix.`, `.mode`) is not. There is no
-central registry — a provider owns its namespace. Both peers validate; a
-malformed id in a request is `-32602`. The rule starts strict on purpose:
-relaxing a validator later is backward-compatible, tightening it after 0.30
-ships is not.
+An id is namespaced by construction, not just by convention: at least one `.`,
+every `.`-separated segment starting with an ASCII letter and continuing in
+`[a-z0-9_-]`, at most 64 bytes total —
+`^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$`. `posix.mode`, `sftp.owner`,
+`s3.storage_class`, `s3.etag` and `archive.packed_size` are valid; a bare word
+with no dot (`mode`) or a dot with an empty segment on either side (`posix.`,
+`.mode`) is not. There is no central registry — a provider owns its namespace.
+Both peers validate; a malformed id in a request is `-32602`. The rule starts
+strict on purpose: relaxing a validator later is backward-compatible,
+tightening it after 0.30 ships is not.
+
+The leading letter is the part of the rule that is about something other than
+tidiness: it is what keeps an id from being read as a DIFFERENT kind of token
+downstream. `-x.y` is argv-shaped, and block 2 takes `--attrs <id>` on the CLI;
+`0.0` is float-shaped in a configuration file that keys columns by id. Digits
+inside a segment stay legal, so `s3.etag` and `posix.ctime_ms` are unaffected.
+The timing argument above is the whole reason this lands now rather than later:
+`-.-`, `0.0`, `9-9.9-9` and `__.__` are ids no provider wants and every one of
+them is free to exclude today and impossible to exclude after 0.30 ships.
 
 On the RECEIVE side the rule is enforced by the type, not left to callers — a
 contract that lived only in prose is one every consumer would have to remember,

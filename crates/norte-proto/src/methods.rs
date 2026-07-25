@@ -581,7 +581,7 @@ pub struct FsListParams {
             "items" = serde_json::json!({
                 "type": "string",
                 "maxLength": crate::attrs::ATTR_ID_MAX,
-                "pattern": r"^[a-z0-9_-]+(\.[a-z0-9_-]+)+$",
+                "pattern": r"^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$",
             })
         ))
     )]
@@ -650,7 +650,7 @@ pub struct FsStatParams {
             "items" = serde_json::json!({
                 "type": "string",
                 "maxLength": crate::attrs::ATTR_ID_MAX,
-                "pattern": r"^[a-z0-9_-]+(\.[a-z0-9_-]+)+$",
+                "pattern": r"^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$",
             })
         ))
     )]

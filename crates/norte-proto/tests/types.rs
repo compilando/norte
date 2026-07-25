@@ -149,25 +149,25 @@ fn entry_clave_de_atributo_repetida_es_last_wins() {
 
     // Por DEBAJO del tope: el duplicado gana, esté donde esté.
     let dup_al_final = decodifica(&[
-        ("a.00".to_owned(), 1),
-        ("b.00".to_owned(), 9),
-        ("a.00".to_owned(), 2),
+        ("a.k00".to_owned(), 1),
+        ("b.k00".to_owned(), 9),
+        ("a.k00".to_owned(), 2),
     ]);
     let dup_al_principio = decodifica(&[
-        ("a.00".to_owned(), 1),
-        ("a.00".to_owned(), 2),
-        ("b.00".to_owned(), 9),
+        ("a.k00".to_owned(), 1),
+        ("a.k00".to_owned(), 2),
+        ("b.k00".to_owned(), 9),
     ]);
-    assert_eq!(dup_al_final.attrs["a.00"], AttrValue::Uint(2));
+    assert_eq!(dup_al_final.attrs["a.k00"], AttrValue::Uint(2));
     assert_eq!(dup_al_final.attrs, dup_al_principio.attrs);
 
     // EN el tope, repitiendo la clave MAYOR (la que la poda expulsaría): el
     // mapa ya está lleno cuando llega el duplicado en un orden y no en el
     // otro, y aun así el resultado debe ser el mismo.
     let llenas: Vec<(String, u64)> = (0..ATTRS_MAX_REQUEST)
-        .map(|i| (format!("a.{i:02}"), 1))
+        .map(|i| (format!("a.k{i:02}"), 1))
         .collect();
-    let mayor = format!("a.{:02}", ATTRS_MAX_REQUEST - 1);
+    let mayor = format!("a.k{:02}", ATTRS_MAX_REQUEST - 1);
 
     let mut dup_despues = llenas.clone();
     dup_despues.push((mayor.clone(), 2));
