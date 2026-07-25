@@ -102,16 +102,19 @@ from the TUI through `Pane::refresh_listing`), which replaces the listing of
 the same directory and does *not* touch marks. So a same-directory refresh
 already preserves them, by construction rather than by accident of naming.
 
-What is missing is pruning. A mark whose entry no longer exists must not
-linger:
+What is missing is pruning: a mark whose entry no longer exists must not
+linger, because `marked_paths()` feeds the bulk operations and a stale path
+would silently widen them. `refill` prunes the mark set to the paths present
+in the new listing.
 
-- `refill` prunes the mark set to the paths present in the new listing.
-- `set_loading(false)` prunes as well: with pagination (ADR 0017) the
-  complete set is only known when the fill ends, so a mark placed before the
-  fill finished is validated there.
+That is the only place it is needed. A paginated fill (ADR 0017) grows the
+listing through `extend`, which only **adds** entries, so a mark placed while
+the fill is still running always points at something present; pruning at the
+end of the fill would be unreachable code guarded by a test that could not
+tell its presence from its absence. A test pins the fill case instead, so a
+future `extend` that starts dropping entries fails loudly.
 
-Both call one private `prune_marks()`. Nothing else changes: `cd` keeps
-clearing, refresh keeps preserving.
+Nothing else changes: `cd` keeps clearing, refresh keeps preserving.
 
 This satisfies spec §17 ("preserve selections by entry identity across sorts
 and refreshes") without introducing per-directory memory of marks: a `cd`
@@ -248,7 +251,7 @@ Model, in `norte-frontend`:
 - A mark survives a re-sort and a same-directory refresh (`refill`).
 - A `cd` (`set_listing`, `begin_loading`) clears marks.
 - `refill` prunes a mark whose entry disappeared from the new listing.
-- `set_loading(false)` prunes at the end of a paginated fill.
+- A mark placed mid-fill survives the rest of the fill (`extend` only adds).
 - `mark_all` / `invert` / `mark_glob` respect the quick-search visible set.
 - A pattern cannot name the invalid bytes of a non-UTF-8 entry, but does
   match one whose valid suffix satisfies it; `toggle_mark` marks it either

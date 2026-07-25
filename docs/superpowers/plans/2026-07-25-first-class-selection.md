@@ -70,15 +70,17 @@ fn refill_prunes_a_mark_whose_entry_vanished() {
     assert_eq!(p.marks_len(), 0, "a mark is a claim about an entry that exists");
 }
 
+/// A fill only ADDS entries (`extend`), so a mark placed while it runs always
+/// points at something present. Pinned so a future `extend` that starts
+/// dropping entries fails here instead of silently widening a bulk operation.
 #[test]
-fn end_of_fill_prunes_marks() {
-    let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), vec![e("mem:///a", EntryKind::File)]);
-    p.toggle_mark();
+fn a_mark_placed_mid_fill_survives_the_rest_of_the_fill() {
+    let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), vec![e("mem:///b", EntryKind::File)]);
     p.set_loading(true);
-    // The fill replaces the listing without "a".
-    p.refill(vec![e("mem:///z", EntryKind::File)]);
+    p.toggle_mark();
+    p.extend(vec![e("mem:///a", EntryKind::File)]);
     p.set_loading(false);
-    assert_eq!(p.marks_len(), 0);
+    assert_eq!(p.marked_paths(), vec![VPath::parse("mem:///b").unwrap()]);
 }
 
 #[test]
@@ -96,7 +98,7 @@ If `cursor_to` is not the existing cursor-setter, use whatever the neighbouring 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo nextest run -p norte-frontend -E 'test(marks)'`
-Expected: `refill_prunes_a_mark_whose_entry_vanished` and `end_of_fill_prunes_marks` FAIL (the mark survives); the other two already pass.
+Expected: `refill_prunes_a_mark_whose_entry_vanished` FAILS (the mark survives); the other three already pass. The `test(marks)` filter does not match that test's name — widen it to `-E 'test(prune) or test(marks) or test(mid_fill)'`.
 
 - [ ] **Step 3: Implement pruning**
 
@@ -105,9 +107,10 @@ Add the private helper next to the other mark methods in `pane.rs`:
 ```rust
     /// Drops marks whose entry is no longer listed. A mark is a claim about
     /// an entry that EXISTS: a stale path would silently widen the next bulk
-    /// operation. Called from [`Self::refill`] (same-dir refresh) and from
-    /// the end of a paginated fill ([`Self::set_loading`] going false, ADR
-    /// 0017) — the two places where the listing settles without a `cd`.
+    /// operation. Called from [`Self::refill`], the same-dir refresh: the only
+    /// path that can drop an entry without a `cd`. A paginated fill
+    /// ([`Self::extend`], ADR 0017) only ADDS entries, so a mark placed
+    /// mid-fill always points at something present and needs no pruning there.
     fn prune_marks(&mut self) {
         if self.marks.is_empty() {
             return;
@@ -117,21 +120,7 @@ Add the private helper next to the other mark methods in `pane.rs`:
     }
 ```
 
-In `refill`, after `self.sort_keys = sort_keys;`, add `self.prune_marks();`.
-
-Replace `set_loading` with:
-
-```rust
-    pub fn set_loading(&mut self, loading: bool) {
-        let fill_finished = self.loading && !loading;
-        self.loading = loading;
-        if fill_finished {
-            self.prune_marks();
-        }
-    }
-```
-
-Extend the `set_loading` rustdoc with: `Al TERMINAR el fill (true→false) poda las marcas ([`Self::prune_marks`]): con paginación el conjunto completo solo se conoce aquí.`
+In `refill`, after `self.sort_keys = sort_keys;`, add `self.prune_marks();`. Leave `set_loading` alone — see the rustdoc above for why the fill needs no pruning.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
