@@ -10,6 +10,11 @@ authors.workspace = true
 
 [dependencies]
 bitflags.workspace = true
+# `AttrValue::Bytes` owns its decode (ADR 0039): the wire carries base64 and
+# the type hands consumers real bytes, so there is exactly ONE decode path and
+# a corrupt cell degrades in one place. Already a vetted workspace dependency
+# (`norte-core` uses it for `fs.read`); MIT OR Apache-2.0, no transitive deps.
+base64.workspace = true
 serde.workspace = true
 # El encoding JSON del protocolo (envelope ADR 0011): Value en params/result
 # y el framing NDJSON. Ya estaba en el árbol como dev-dep de todo el workspace.

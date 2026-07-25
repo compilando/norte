@@ -103,6 +103,35 @@
         }
       ]
     },
+    "AttrValue": {
+      "description": "One-key tagged attribute value; an unknown key degrades to Unknown.",
+      "minProperties": 1,
+      "properties": {
+        "bool": {
+          "type": "boolean"
+        },
+        "bytes_b64": {
+          "type": "string"
+        },
+        "int": {
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        },
+        "time_ms": {
+          "type": "integer"
+        },
+        "uint": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unknown": {
+          "type": "null"
+        }
+      },
+      "type": "object"
+    },
     "ByteRange": {
       "description": "Rango de bytes de una lectura: `offset` inicial y longitud opcional\n(`None` = hasta EOF). Lo exigen el resume de M2 (`.norte-partial` +\noffset) y el viewer (lectura parcial de archivos grandes).\n\n```\nuse norte_proto::ByteRange;\nlet r: ByteRange = serde_json::from_str(r#\"{\"offset\": 65536, \"len\": null}\"#).unwrap();\nassert_eq!(r, ByteRange { offset: 65536, len: None });\n```",
       "properties": {
@@ -2574,6 +2603,9 @@
     "attr_type": {
       "$ref": "#/$defs/AttrType"
     },
+    "attr_value": {
+      "$ref": "#/$defs/AttrValue"
+    },
     "byte_range": {
       "$ref": "#/$defs/ByteRange"
     },
@@ -2864,6 +2896,7 @@
     "attr_hint",
     "attr_info",
     "attr_type",
+    "attr_value",
     "byte_range",
     "capabilities",
     "capability_flags",

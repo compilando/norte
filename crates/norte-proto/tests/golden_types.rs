@@ -16,9 +16,9 @@ use norte_proto::methods::{
     TaskCancelResult, TaskListParams, TaskListResult,
 };
 use norte_proto::{
-    AttrHint, AttrInfo, AttrType, ByteRange, Capabilities, CapabilityFlags, CollisionPolicy,
-    ConflictKind, Entry, EntryKind, Error, ResumePolicy, SymlinkPolicy, TaskId, TaskKind,
-    TaskProgress, TaskState, VPath, VerifyPolicy,
+    AttrHint, AttrInfo, AttrType, AttrValue, ByteRange, Capabilities, CapabilityFlags,
+    CollisionPolicy, ConflictKind, Entry, EntryKind, Error, ResumePolicy, SymlinkPolicy, TaskId,
+    TaskKind, TaskProgress, TaskState, VPath, VerifyPolicy,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -1685,5 +1685,19 @@ fn golden_attrs() {
                 hint: AttrHint::Mode,
             },
         )],
+    );
+    check_family(
+        "attr_value.json",
+        &[
+            ("uint", AttrValue::Uint(33188)),
+            ("int", AttrValue::Int(-7)),
+            ("text", AttrValue::Text("STANDARD_IA".to_owned())),
+            // Bytes que NO son UTF-8: la razón de existir de la variante.
+            ("bytes_b64", AttrValue::Bytes(vec![0xFF, 0xFE])),
+            // Negativo: pre-1970 es real y el wire lo admite.
+            ("time_ms", AttrValue::TimeMs(-86_400_000)),
+            ("bool", AttrValue::Bool(true)),
+            ("unknown", AttrValue::Unknown),
+        ],
     );
 }

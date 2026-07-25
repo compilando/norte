@@ -2,12 +2,11 @@
 //! provider publishes beyond [`Entry`](crate::Entry)'s four fields — POSIX
 //! mode, SFTP owner, S3 storage class, archive packed size.
 //!
-//! Two pieces land in this module: the attribute vocabulary ([`AttrType`],
-//! [`AttrHint`]) and [`AttrInfo`] (what a provider offers, discovered
-//! through `fs.capabilities`). An id requested in `fs.list`/`fs.stat` is a
-//! plain `String`, validated with [`is_valid_attr_id`]. The value type
-//! carried in `Entry::attrs` — `AttrValue` — is a separate task; this block
-//! is the descriptor side only.
+//! Three pieces land in this module: the attribute vocabulary ([`AttrType`],
+//! [`AttrHint`]), [`AttrInfo`] (what a provider offers, discovered through
+//! `fs.capabilities`), and [`AttrValue`] (the per-entry cell carried in
+//! `Entry::attrs`). An id requested in `fs.list`/`fs.stat` is a plain
+//! `String`, validated with [`is_valid_attr_id`].
 
 use serde::{Deserialize, Serialize};
 
@@ -25,9 +24,9 @@ pub const ATTRS_MAX_ADVERTISED: usize = 64;
 pub const ATTR_ID_MAX: usize = 64;
 /// Maximum length of [`AttrInfo::label`], in bytes.
 pub const ATTR_LABEL_MAX: usize = 64;
-/// Maximum length of an `AttrValue::Text` value, in bytes.
+/// Maximum length of an [`AttrValue::Text`] value, in bytes.
 pub const ATTR_TEXT_MAX: usize = 256;
-/// Maximum length of an `AttrValue::Bytes` value, in bytes AFTER decoding.
+/// Maximum length of an [`AttrValue::Bytes`] value, in bytes AFTER decoding.
 pub const ATTR_BYTES_MAX: usize = 256;
 
 /// Is `id` a well-formed, NAMESPACED attribute id: at least one `.`,
@@ -180,6 +179,150 @@ pub struct AttrInfo {
     pub hint: AttrHint,
 }
 
+/// The value of one attribute for one entry (ADR 0039).
+///
+/// Absence of a key in `Entry::attrs` means the provider does not know the
+/// value — there is never a fabricated `0`, exactly as
+/// [`Entry::size`](crate::Entry::size) is `None` rather than zero.
+///
+/// Wire: a one-key object tagged by variant — `{"uint": 33188}`,
+/// `{"bytes_b64": "//4="}`. Deserialisation is hand-written (the same route
+/// [`CapabilityFlags`](crate::CapabilityFlags) takes) so that a variant from a
+/// newer protocol degrades to [`AttrValue::Unknown`] instead of failing the
+/// whole entry: `#[serde(other)]` cannot express a catch-all on a
+/// data-carrying enum.
+///
+/// ```
+/// use norte_proto::attrs::AttrValue;
+/// let v: AttrValue = serde_json::from_str(r#"{"variante_del_futuro": 1}"#).unwrap();
+/// assert_eq!(v, AttrValue::Unknown);
+/// let n: AttrValue = serde_json::from_str(r#"{"uint": 33188}"#).unwrap();
+/// assert_eq!(n, AttrValue::Uint(33188));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AttrValue {
+    /// Unsigned integer (mode word, packed size, uid).
+    Uint(u64),
+    /// Signed integer.
+    Int(i64),
+    /// UTF-8 text. THIRD-PARTY — mask before painting.
+    Text(String),
+    /// Raw bytes (base64 on the wire): an owner name that is not UTF-8.
+    Bytes(Vec<u8>),
+    /// Milliseconds since the UTC epoch; negative is valid.
+    TimeMs(i64),
+    /// Boolean.
+    Bool(bool),
+    /// A value this protocol version does not understand, or a corrupt
+    /// base64 payload. Never emitted by a conforming daemon; it exists so one
+    /// bad cell costs one cell, not the listing.
+    Unknown,
+}
+
+impl Serialize for AttrValue {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use base64::Engine as _;
+        use serde::ser::SerializeMap as _;
+
+        let mut map = serializer.serialize_map(Some(1))?;
+        match self {
+            AttrValue::Uint(v) => map.serialize_entry("uint", v)?,
+            AttrValue::Int(v) => map.serialize_entry("int", v)?,
+            AttrValue::Text(v) => map.serialize_entry("text", v)?,
+            AttrValue::Bytes(v) => map.serialize_entry(
+                "bytes_b64",
+                &base64::engine::general_purpose::STANDARD.encode(v),
+            )?,
+            AttrValue::TimeMs(v) => map.serialize_entry("time_ms", v)?,
+            AttrValue::Bool(v) => map.serialize_entry("bool", v)?,
+            AttrValue::Unknown => map.serialize_entry("unknown", &Option::<()>::None)?,
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for AttrValue {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ValueVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for ValueVisitor {
+            type Value = AttrValue;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a one-key attribute value object, e.g. {\"uint\": 1}")
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> Result<AttrValue, M::Error> {
+                use base64::Engine as _;
+
+                let Some(tag) = map.next_key::<String>()? else {
+                    // Objeto VACÍO: peer roto, no peer nuevo. Error duro.
+                    return Err(serde::de::Error::custom("empty attribute value object"));
+                };
+                let value = match tag.as_str() {
+                    "uint" => AttrValue::Uint(map.next_value()?),
+                    "int" => AttrValue::Int(map.next_value()?),
+                    "text" => AttrValue::Text(map.next_value()?),
+                    "bytes_b64" => {
+                        let b64: String = map.next_value()?;
+                        match base64::engine::general_purpose::STANDARD.decode(&b64) {
+                            Ok(bytes) => AttrValue::Bytes(bytes),
+                            // Celda corrupta: degrada la CELDA, no la entrada.
+                            Err(_) => AttrValue::Unknown,
+                        }
+                    }
+                    "time_ms" => AttrValue::TimeMs(map.next_value()?),
+                    "bool" => AttrValue::Bool(map.next_value()?),
+                    _ => {
+                        // Variante de un protocolo MÁS NUEVO (ADR 0004).
+                        map.next_value::<serde::de::IgnoredAny>()?;
+                        AttrValue::Unknown
+                    }
+                };
+                // Claves de más: se ignoran (mismo criterio indulgente que
+                // cualquier campo desconocido de un struct del wire).
+                while map
+                    .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                    .is_some()
+                {}
+                Ok(value)
+            }
+        }
+
+        deserializer.deserialize_map(ValueVisitor)
+    }
+}
+
+// `AttrValue` serializes as a one-key tagged object, so its schema is an
+// object with one optional property per variant; the serde impls are
+// hand-written and cannot derive (same situation as `CapabilityFlags`).
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for AttrValue {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "AttrValue".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "description": "One-key tagged attribute value; an unknown key degrades to Unknown.",
+            "properties": {
+                "uint": { "type": "integer", "minimum": 0 },
+                "int": { "type": "integer" },
+                "text": { "type": "string" },
+                "bytes_b64": { "type": "string" },
+                "time_ms": { "type": "integer" },
+                "bool": { "type": "boolean" },
+                "unknown": { "type": "null" }
+            },
+            "minProperties": 1
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,6 +376,70 @@ mod tests {
     fn attr_hint_desconocido_degrada() {
         let h: AttrHint = serde_json::from_str("\"pista_del_futuro\"").unwrap();
         assert_eq!(h, AttrHint::Unknown);
+    }
+
+    fn round_trip(v: &AttrValue) -> AttrValue {
+        let wire = serde_json::to_string(v).unwrap();
+        serde_json::from_str(&wire).unwrap()
+    }
+
+    #[test]
+    fn cada_variante_round_trip() {
+        for v in [
+            AttrValue::Uint(33188),
+            AttrValue::Int(-7),
+            AttrValue::Text("STANDARD_IA".to_owned()),
+            AttrValue::Bytes(vec![0xFF, 0xFE, b'a']),
+            AttrValue::TimeMs(-86_400_000),
+            AttrValue::Bool(true),
+        ] {
+            assert_eq!(round_trip(&v), v);
+        }
+    }
+
+    #[test]
+    fn wire_de_bytes_es_base64() {
+        let wire = serde_json::to_string(&AttrValue::Bytes(vec![0xFF, 0xFE])).unwrap();
+        assert_eq!(wire, r#"{"bytes_b64":"//4="}"#);
+    }
+
+    #[test]
+    fn variante_del_futuro_degrada_a_unknown() {
+        let v: AttrValue = serde_json::from_str(r#"{"quaternion":[1,2,3,4]}"#).unwrap();
+        assert_eq!(v, AttrValue::Unknown);
+    }
+
+    #[test]
+    fn base64_corrupto_degrada_a_unknown() {
+        let v: AttrValue = serde_json::from_str(r#"{"bytes_b64":"no es base64 !!"}"#).unwrap();
+        assert_eq!(v, AttrValue::Unknown);
+    }
+
+    #[test]
+    fn envelope_roto_es_error_duro() {
+        // Un peer ROTO (no uno más nuevo): no hay nada que degradar.
+        assert!(serde_json::from_str::<AttrValue>("42").is_err());
+        assert!(serde_json::from_str::<AttrValue>("{}").is_err());
+    }
+
+    #[test]
+    fn unknown_serializa_y_vuelve_a_unknown() {
+        assert_eq!(
+            serde_json::to_string(&AttrValue::Unknown).unwrap(),
+            r#"{"unknown":null}"#
+        );
+        assert_eq!(round_trip(&AttrValue::Unknown), AttrValue::Unknown);
+    }
+
+    #[test]
+    fn una_entrada_con_una_celda_futura_sobrevive_entera() {
+        // El punto de la degradación: la ENTRADA no se pierde por una celda.
+        let json = r#"{"a":{"uint":1},"b":{"quaternion":[0]},"c":{"bool":false}}"#;
+        let map: std::collections::BTreeMap<String, AttrValue> =
+            serde_json::from_str(json).unwrap();
+        assert_eq!(map["a"], AttrValue::Uint(1));
+        assert_eq!(map["b"], AttrValue::Unknown);
+        assert_eq!(map["c"], AttrValue::Bool(false));
     }
 
     #[test]

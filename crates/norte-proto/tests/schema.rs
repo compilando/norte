@@ -18,6 +18,7 @@ struct ProtocolSchema {
     attr_hint: AttrHint,
     attr_info: AttrInfo,
     attr_type: AttrType,
+    attr_value: AttrValue,
     byte_range: ByteRange,
     capabilities: Capabilities,
     capability_flags: CapabilityFlags,
