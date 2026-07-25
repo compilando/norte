@@ -101,6 +101,7 @@ impl std::fmt::Display for Chord {
         }
         match self.code {
             KeyCode::Char(' ') => f.write_str("space"),
+            KeyCode::Char('+') => f.write_str("plus"),
             KeyCode::Char(c) => write!(f, "{c}"),
             KeyCode::F(n) => write!(f, "f{n}"),
             KeyCode::Enter => f.write_str("enter"),
@@ -240,6 +241,11 @@ pub fn parse_chord(s: &str) -> Result<Chord, KeymapError> {
         "tab" => KeyCode::Tab,
         "esc" => KeyCode::Esc,
         "space" => KeyCode::Char(' '),
+        // `+` es el SEPARADOR de modificadores, así que un token "+" da key
+        // vacía y muere en BadChord: `plus` es la única forma de expresar la
+        // tecla (#103, mark.pattern-add). Aditivo: ningún keymap de usuario
+        // podía contener "+" como tecla, porque hoy no parsea.
+        "plus" => KeyCode::Char('+'),
         "backspace" => KeyCode::Backspace,
         "up" => KeyCode::Up,
         "down" => KeyCode::Down,
@@ -960,6 +966,39 @@ mod tests {
         for s in ["", "ctrl+", "megatecla", "ctrl+ctrl+c", "f99"] {
             assert!(parse_chord(s).is_err(), "{s:?} debe fallar");
         }
+    }
+
+    /// `+` is the modifier separator, so a bare "+" is unparseable and `plus`
+    /// is the only spelling. Pinned because a future refactor that "simplifies"
+    /// the token table would silently make the mark.pattern-add chord
+    /// unreachable (#103).
+    #[test]
+    fn plus_token_is_the_only_spelling_of_the_plus_key() {
+        assert_eq!(
+            parse_chord("plus").unwrap(),
+            Chord::new(Mods::default(), KeyCode::Char('+'))
+        );
+        assert!(matches!(
+            parse_chord("+"),
+            Err(KeymapError::BadChord { .. })
+        ));
+        assert_eq!(
+            parse_chord("ctrl+plus").unwrap(),
+            Chord::new(
+                Mods {
+                    ctrl: true,
+                    ..Default::default()
+                },
+                KeyCode::Char('+')
+            )
+        );
+    }
+
+    #[test]
+    fn plus_chord_round_trips_through_display() {
+        let c = Chord::new(Mods::default(), KeyCode::Char('+'));
+        assert_eq!(c.to_string(), "plus");
+        assert_eq!(parse_chord(&c.to_string()).unwrap(), c);
     }
 
     #[test]
