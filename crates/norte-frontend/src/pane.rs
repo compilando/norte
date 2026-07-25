@@ -38,6 +38,12 @@ pub struct PaneState {
     loading: bool,
     quick: Option<QuickSearch>,
     marks: HashSet<VPath>,
+    /// Marks dropped by the last [`Self::refill`] because their entry was gone
+    /// (#103). The frontends surface it: a selection that shrinks behind the
+    /// user's back must never be silent, because [`Self::marked_paths`] falls
+    /// back to the CURSOR entry once the set empties — a silent prune would
+    /// retarget the next bulk operation onto something nobody marked.
+    pruned_marks: usize,
     /// Reinterpretación de NOMBRES no-UTF8 para display (#57, spec §6.1):
     /// `Some(enc)` = «ver nombres como enc» — SOLO display, los bytes jamás
     /// se mutan (regla 1). Compartida por los frontends (#98/m2): el quick
@@ -105,6 +111,7 @@ impl PaneState {
             loading: false,
             quick: None,
             marks: HashSet::new(),
+            pruned_marks: 0,
             name_encoding: None,
             name_encoding_entry: 0,
             skipped: None,
@@ -187,6 +194,7 @@ impl PaneState {
         self.loading = false;
         self.quick = None;
         self.marks.clear();
+        self.pruned_marks = 0;
         // #96: las omitidas eran del listado ANTERIOR; el caller fija las
         // frescas con `set_skipped` si su fuente las trae.
         self.skipped = None;
@@ -232,6 +240,7 @@ impl PaneState {
         self.loading = true;
         self.quick = None;
         self.marks.clear();
+        self.pruned_marks = 0;
         self.skipped = None;
         self.decorations.clear();
     }
@@ -479,6 +488,39 @@ impl PaneState {
         self.marks.clear();
     }
 
+    /// Marks dropped by the last [`Self::refill`] because their entry was
+    /// gone (#103) — see the `pruned_marks` field. Zero after a `cd`
+    /// ([`Self::set_listing`]/[`Self::begin_loading`]) or when nothing was
+    /// pruned. A later task surfaces this in the status bar; this accessor
+    /// alone adds no UI.
+    #[must_use]
+    pub fn pruned_marks(&self) -> usize {
+        self.pruned_marks
+    }
+
+    /// Drops marks whose entry is no longer listed and returns how many were
+    /// dropped. A mark is a claim about an entry that EXISTS: a stale path
+    /// would silently widen the next bulk operation. Called from
+    /// [`Self::refill`], the same-dir refresh: the only path that can drop an
+    /// entry without a `cd`. A paginated fill ([`Self::extend`], ADR 0017)
+    /// only ADDS entries, so a mark placed mid-fill always points at
+    /// something present and needs no pruning there.
+    ///
+    /// Accepted TOCTOU: identity here is the byte-exact `VPath` alone (hard
+    /// rule 1) — the entry's `kind` is not part of it. If an external actor
+    /// deletes a marked file and recreates a directory at the same path
+    /// between listings, the mark survives the prune and a bulk operation
+    /// acts on whatever now lives at that path, file or directory.
+    fn prune_marks(&mut self) -> usize {
+        if self.marks.is_empty() {
+            return 0;
+        }
+        let before = self.marks.len();
+        let present: HashSet<&VPath> = self.entries.iter().map(|e| &e.path).collect();
+        self.marks.retain(|p| present.contains(p));
+        before - self.marks.len()
+    }
+
     /// Fija el cursor real a `i` con clamp (jamás fuera de rango). Para re-anclar
     /// tras localizar un índice concreto (p. ej. un hit de búsqueda). (#82)
     pub fn set_cursor(&mut self, i: usize) {
@@ -587,12 +629,18 @@ impl PaneState {
     /// flag de carga. Normaliza `entries` internamente (#54: cierra el mismo
     /// footgun que `new`/`set_listing` — idempotente si el caller ya venía
     /// ordenado). (#82)
+    ///
+    /// Marks are pruned to the paths present in `entries` (#103, see
+    /// [`Self::prune_marks`]/[`Self::pruned_marks`]) — the listing passed in
+    /// must be COMPLETE, since a partial page would silently discard the
+    /// marks it omits.
     pub fn refill(&mut self, entries: Vec<Entry>) {
         let quick_prev = self.quick_selected_path();
         let (entries, sort_keys) = crate::sort::sort_with_keys(entries);
         self.cursor = self.cursor.min(entries.len().saturating_sub(1));
         self.entries = entries;
         self.sort_keys = sort_keys;
+        self.pruned_marks = self.prune_marks();
         if let Some(q) = &mut self.quick {
             q.refresh(&self.entries, quick_prev.as_ref());
         }
@@ -1393,6 +1441,136 @@ mod tests {
         ]);
         assert_eq!(p.cursor(), 1, "clamp a la última entrada del listado nuevo");
         assert_eq!(p.entries().len(), 2);
+    }
+
+    #[test]
+    fn refill_keeps_marks_of_entries_that_survive() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a", EntryKind::File),
+                e("mem:///b", EntryKind::File),
+            ],
+        );
+        p.cursor_down(); // "b"
+        p.toggle_mark();
+        p.refill(vec![
+            e("mem:///a", EntryKind::File),
+            e("mem:///b", EntryKind::File),
+        ]);
+        assert_eq!(p.marks_len(), 1);
+        assert_eq!(p.marked_paths(), vec![VPath::parse("mem:///b").unwrap()]);
+    }
+
+    #[test]
+    fn refill_prunes_a_mark_whose_entry_vanished() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a", EntryKind::File),
+                e("mem:///b", EntryKind::File),
+            ],
+        );
+        p.cursor_down();
+        p.toggle_mark();
+        p.refill(vec![e("mem:///a", EntryKind::File)]);
+        assert_eq!(
+            p.marks_len(),
+            0,
+            "a mark is a claim about an entry that exists"
+        );
+    }
+
+    #[test]
+    fn refill_prunes_only_the_marks_whose_entry_vanished() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a", EntryKind::File),
+                e("mem:///b", EntryKind::File),
+                e("mem:///c", EntryKind::File),
+            ],
+        );
+        p.toggle_mark(); // "a"
+        p.cursor_down();
+        p.cursor_down();
+        p.toggle_mark(); // "c"
+        p.refill(vec![
+            e("mem:///a", EntryKind::File),
+            e("mem:///b", EntryKind::File),
+        ]);
+        assert_eq!(p.marks_len(), 1);
+        assert_eq!(p.marked_paths(), vec![VPath::parse("mem:///a").unwrap()]);
+    }
+
+    #[test]
+    fn refill_reports_how_many_marks_it_pruned() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a", EntryKind::File),
+                e("mem:///b", EntryKind::File),
+            ],
+        );
+        p.toggle_mark(); // "a"
+        p.cursor_down();
+        p.toggle_mark(); // "b"
+        p.refill(vec![e("mem:///a", EntryKind::File)]);
+        assert_eq!(p.pruned_marks(), 1);
+        assert_eq!(p.marks_len(), 1);
+    }
+
+    #[test]
+    fn a_fully_pruned_selection_falls_back_to_the_cursor_entry() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a", EntryKind::File),
+                e("mem:///b", EntryKind::File),
+            ],
+        );
+        p.cursor_down(); // "b"
+        p.toggle_mark();
+        p.refill(vec![e("mem:///a", EntryKind::File)]);
+        assert_eq!(p.pruned_marks(), 1);
+        // Documented consequence, NOT an endorsement: with the set empty the
+        // fallback takes over, so the caller must check `pruned_marks()`
+        // before treating `marked_paths()` as "what the user selected".
+        assert_eq!(p.marked_paths(), vec![VPath::parse("mem:///a").unwrap()]);
+    }
+
+    #[test]
+    fn a_mark_placed_mid_fill_survives_the_rest_of_the_fill() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![e("mem:///b", EntryKind::File)],
+        );
+        p.set_loading(true);
+        p.toggle_mark();
+        p.extend(vec![e("mem:///a", EntryKind::File)]);
+        p.set_loading(false);
+        assert_eq!(p.marked_paths(), vec![VPath::parse("mem:///b").unwrap()]);
+    }
+
+    #[test]
+    fn set_listing_to_the_same_dir_still_clears_marks() {
+        // Deliberate, not a bug: `set_listing` means "a listing arrived for a
+        // directory I navigated to" — even a `cd` that lands back on the SAME
+        // dir clears marks. Only `refill` means "refresh" and preserves what
+        // survives; this is the case neither `set_listing_limpia_las_marcas`
+        // (different dir) nor the `refill` tests (same dir, but via `refill`)
+        // cover.
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![e("mem:///a", EntryKind::File)],
+        );
+        p.toggle_mark();
+        assert_eq!(p.marks_len(), 1);
+        p.set_listing(
+            VPath::parse("mem:///").unwrap(),
+            vec![e("mem:///a", EntryKind::File)],
+        );
+        assert_eq!(p.marks_len(), 0);
     }
 
     /// #52: hydrate por path rellena size/mtime de la entrada viva; un path
