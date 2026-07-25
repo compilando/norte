@@ -9,6 +9,39 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Provider attributes on the wire (proto 0.30.0, ADR 0039):** protocol-specific
+  metadata — POSIX mode/uid/gid, an SFTP owner string, an S3 storage class, an
+  archive member's packed size — can finally reach a client *typed* rather than
+  pre-rendered, so a later block can paint it as a configurable column that still
+  sorts and formats correctly. Three additive fields: `FsCapabilitiesResult.attrs`
+  advertises what a provider offers (`AttrInfo` = `id`, `label`, `AttrType`,
+  `AttrHint` — the declared type and the suggested format/alignment are separate,
+  because two `Uint`s are painted very differently as a byte count and as a
+  permission word), `FsListParams.attrs`/`FsStatParams.attrs` request the ids a
+  client will actually paint (nothing is delivered unrequested), and `Entry.attrs`
+  carries the values as `AttrValue` (`Uint | Int | Text | Bytes | TimeMs | Bool |
+  Unknown`). Ids are namespaced by construction (at least one `.`, every segment
+  `[a-z0-9_-]`, ≤ 64 bytes) and the caps — 16 requested ids per call, 64 advertised
+  descriptors, 64-byte label, 256-byte `Text`/`Bytes` — travel in the published
+  JSON Schema (ADR 0038). Wire-only for now: no provider advertises an attribute
+  yet and the daemon ignores requested ids, which is a valid answer under the
+  contract. `norte-proto` gains `base64` (0.22, already a vetted workspace dep) so
+  `AttrValue::Bytes` owns its decode. Three properties are worth stating exactly:
+  - All three fields are `skip_serializing_if`-guarded, so a **0.29 peer emits and
+    receives byte-identical payloads**; the window becomes N=0.30.x / N-1=0.29.x.
+  - **Any malformed attribute VALUE degrades to `AttrValue::Unknown`** — an
+    unrecognised tag from a protocol-N+1 daemon (ADR 0004 applied at value
+    granularity), a wrong JSON type, a `null`, two known tags at once, undecodable
+    base64, an over-cap `Text`/`Bytes`. It costs one cell, never the entry and
+    never the page.
+  - **The two receive-side fields filter at decode and never error**, while the
+    two request fields deliberately do not. `Entry.attrs` drops a malformed key
+    and bounds the map at 16 (smallest ids in byte order, so the surviving set
+    does not depend on the peer's key order); `FsCapabilitiesResult.attrs` drops a
+    malformed or repeated id keeping the first, clamps an over-long label on a
+    char boundary, and truncates at 64, preserving the provider's own meaningful
+    order. A request keeps a bad id verbatim on purpose: the daemon must be able
+    to answer `-32602` instead of silently laundering a caller's bug.
 - **Protocol JSON Schema artifact (#13, ADR 0038):** `docs/schema/proto.schema.json`
   is now generated from the same `norte-proto` serde types that speak the wire,
   behind an optional `schema` cargo feature (off by default — the shipped crate
