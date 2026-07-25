@@ -149,6 +149,16 @@ struct NorteGui {
     /// list en vuelo — así la list superviviente no puede preceder a escrituras
     /// posteriores del burst (correctitud) sin pagar N lists redundantes.
     relist_pending: [bool; 2],
+    /// La list EN VUELO de este pane es un refresco (`relist_dirs`), no un
+    /// `cd` (#103): al aterrizar se aplica con `refill`, que CONSERVA las
+    /// marcas, en vez de `set_listing`, que las limpia por diseño.
+    ///
+    /// Invariante: solo lo escriben los dos únicos sitios que lanzan una list
+    /// —`cd` (a `false`) y `refresh_dir` (a `true`)—, y ambos incrementan la
+    /// generación, así que el flag SIEMPRE describe la petición más reciente.
+    /// El aterrizaje lo consume (`mem::take`) DESPUÉS del guard de generación,
+    /// para que un resultado stale no se lleve el flag de la petición viva.
+    refreshing: [bool; 2],
     /// Tema cacheado UNA vez (parsea TOML; no es gratis por-frame).
     theme: Theme,
     /// Interpretación de `theme.effects` (ADR 0036, G1 Task 4), resuelta UNA
@@ -475,6 +485,7 @@ impl NorteGui {
                     errors: [None, None],
                     generation: [0, 0],
                     relist_pending: [false, false],
+                    refreshing: [false, false],
                     theme,
                     effects,
                     cmds: cmd_tx,
@@ -544,6 +555,7 @@ impl NorteGui {
                     },
                     generation: [0, 0],
                     relist_pending: [false, false],
+                    refreshing: [false, false],
                     theme,
                     effects,
                     cmds: cmd_tx,
@@ -590,6 +602,10 @@ impl NorteGui {
     fn cd(&mut self, pane: usize, dir: VPath, _cx: &mut Context<Self>) {
         self.generation[pane] = self.generation[pane].wrapping_add(1);
         let generation = self.generation[pane];
+        // #103: esto es un `cd`, no un refresco — el listado que aterrice va
+        // por `set_listing` (limpia las marcas), aunque `refresh_dir` hubiera
+        // marcado el flag para una list anterior ya obsoleta.
+        self.refreshing[pane] = false;
         self.panes[pane].begin_loading(dir.clone());
         self.errors[pane] = None;
         self.query[pane].clear();
@@ -610,6 +626,40 @@ impl NorteGui {
             // este `cd` sobreviviría indefinidamente y podría aterrizar en
             // un `cd` futuro sin relación.
             self.panes[pane].clear_pending_focus();
+        }
+    }
+
+    /// RE-lista el dir en el que `pane` YA está (read-after-write tras una
+    /// mutación): manda el mismo `List` que un `cd`, pero SIN `begin_loading`
+    /// — ese es el camino del `cd` y limpia las marcas por diseño (#103). El
+    /// listado que aterrice se aplicará con `refill`, que las conserva y poda
+    /// las que ya no existan (ver `apply_landed_listing`).
+    ///
+    /// Sube el flag de carga a mano porque `relist_dirs` lo usa para coalescer
+    /// (#84): sin él, un burst de tasks terminales sobre el mismo dir mandaría
+    /// una list por task en vez de coalescer a una.
+    ///
+    /// El caller debe haber comprobado que `dir` es el dir ACTUAL del pane.
+    fn refresh_dir(&mut self, pane: usize, dir: VPath, _cx: &mut Context<Self>) {
+        self.generation[pane] = self.generation[pane].wrapping_add(1);
+        let generation = self.generation[pane];
+        self.refreshing[pane] = true;
+        self.panes[pane].set_loading(true);
+        let sent = self
+            .cmds
+            .send(SessionCmd::List {
+                pane,
+                generation,
+                dir,
+            })
+            .is_ok();
+        if !sent {
+            // El hilo de sesión murió: ningún `Listed` llegará para esta
+            // generación (mismo razonamiento que el guard de `cd`), así que
+            // deshace el estado transitorio en vez de dejar el pane "cargando"
+            // para siempre.
+            self.refreshing[pane] = false;
+            self.panes[pane].set_loading(false);
         }
     }
 
@@ -657,17 +707,31 @@ impl NorteGui {
                     }
                     return; // stale: un cd más nuevo ya avanzó la generación.
                 }
+                // #103: consumir el flag SOLO tras el guard de generación (ver
+                // el campo) — este resultado es el de la petición viva.
+                let refresh = std::mem::take(&mut self.refreshing[pane]);
                 match outcome {
                     Ok((entries, skipped)) => {
-                        // set_listing ya normaliza (ordena) internamente (#54);
-                        // pre-ordenar aquí era un doble sort (#94).
-                        self.panes[pane].set_listing(dir.clone(), entries);
+                        // set_listing/refill ya normalizan (ordenan) internamente
+                        // (#54); pre-ordenar aquí era un doble sort (#94).
+                        let refilled = apply_landed_listing(
+                            &mut self.panes[pane],
+                            dir.clone(),
+                            entries,
+                            refresh,
+                        );
                         // #96: badge de omitidas del contenedor (#93) — un
                         // listado incompleto jamás es silencioso, tampoco
                         // en la GUI.
                         self.panes[pane].set_skipped(skipped);
                         self.errors[pane] = None;
-                        self.query[pane].clear();
+                        if !refilled {
+                            // Solo el camino del `cd` mata el quick search vivo
+                            // (`set_listing`); `refill` lo RE-APLICA, así que
+                            // limpiar aquí su espejo dejaría la línea `/{query}`
+                            // del pie desincronizada del filtro real (#103).
+                            self.query[pane].clear();
+                        }
                         // G3b (ADR 0037): pide decoraciones de plugin para la
                         // página VISIBLE recién aterrizada — asíncrono, NUNCA
                         // bloquea el listado; llega tarde por
@@ -713,7 +777,7 @@ impl NorteGui {
                 if self.relist_pending[pane] {
                     self.relist_pending[pane] = false;
                     let cur = self.panes[pane].dir().clone();
-                    self.cd(pane, cur, cx);
+                    self.refresh_dir(pane, cur, cx);
                 }
             }
             SessionEvent::Submitted { task_id, op } => {
@@ -1037,7 +1101,10 @@ impl NorteGui {
                 // burst; el re-relist final garantiza ver el estado completo.
                 self.relist_pending[pane] = true;
             } else {
-                self.cd(pane, cur, cx);
+                // #103: `cur` ES el dir actual del pane (lo acabamos de leer de
+                // ahí y `dirs.contains` lo casó byte-exacto), así que esto es un
+                // REFRESCO, no un `cd`: las marcas sobreviven a la operación.
+                self.refresh_dir(pane, cur, cx);
             }
         }
     }
@@ -3208,6 +3275,42 @@ fn affected_dirs(op: &PendingOp) -> Vec<VPath> {
     }
 }
 
+/// Applies a listing that just landed to `pane`, choosing between the TWO
+/// entry points of `PaneState` (#103). PURA (sin GPUI): testeable sin levantar
+/// ventana.
+///
+/// - `refill` — the REFRESH path: the same dir re-listed after a mutation. It
+///   KEEPS the marks and prunes the ones whose entry is gone.
+/// - `set_listing` — the `cd` path: a different dir. It CLEARS the marks by
+///   design, because a selection does not survive navigating away.
+///
+/// `refresh` says the list was asked for by `relist_dirs` (read-after-write),
+/// not by a `cd`. It is NOT enough on its own: the dir that came back must
+/// also be the pane's current dir, compared BYTE-exactly (hard rule 1) — two
+/// directory names can render identically while differing in bytes, and
+/// keeping marks across that boundary would apply them to another dir's
+/// entries.
+///
+/// Returns `true` when it kept the marks (refill), `false` when it took the
+/// `cd` path.
+fn apply_landed_listing(
+    pane: &mut PaneState,
+    dir: VPath,
+    entries: Vec<Entry>,
+    refresh: bool,
+) -> bool {
+    if refresh && *pane.dir() == dir {
+        pane.refill(entries);
+        // `refill` no toca el flag de carga (un fill paginado lo gestiona
+        // aparte, ADR 0017); el refresco de la GUI sí lo había subido para que
+        // el coalescing de #84 lo vea, así que lo baja aquí.
+        pane.set_loading(false);
+        return true;
+    }
+    pane.set_listing(dir, entries);
+    false
+}
+
 /// La primera task, en orden de llegada de `order`, que NO está en estado
 /// terminal (#85). FALLBACK de `task.cancel`/F9 cuando el cursor de franja
 /// apunta a una terminal o la franja está vacía (#91, ver
@@ -5205,6 +5308,122 @@ mod tests {
             mode: DeleteMode::Trash,
         };
         assert_eq!(affected_dirs(&op), vec![VPath::parse("mem:///a").unwrap()]);
+    }
+
+    /// A pane on `mem:///` listing `names`, all files (helper of the
+    /// `apply_landed_listing` tests, #103).
+    fn pane_with(names: &[&str]) -> super::PaneState {
+        super::PaneState::new(VPath::parse("mem:///").unwrap(), entries_named(names))
+    }
+
+    /// `names` as `mem:///{name}` file entries (#103).
+    fn entries_named(names: &[&str]) -> Vec<norte_proto::Entry> {
+        names
+            .iter()
+            .map(|n| norte_proto::Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: VPath::parse(&format!("mem:///{n}")).unwrap(),
+                kind: EntryKind::File,
+                size: None,
+                mtime_ms: None,
+            })
+            .collect()
+    }
+
+    /// #103: el read-after-write de la GUI (`relist_dirs` → list → este
+    /// aplicador) sobre el MISMO dir es un REFRESCO, no un `cd` — conserva las
+    /// marcas. Antes iba por `cd` (`begin_loading` + `set_listing`) y cada
+    /// copy/move/delete borraba la selección, al revés que la TUI.
+    #[test]
+    fn a_post_operation_relist_of_the_same_dir_keeps_the_marks() {
+        let mut pane = pane_with(&["a", "b"]);
+        pane.mark_all();
+        assert_eq!(pane.marks_len(), 2);
+        let refilled = super::apply_landed_listing(
+            &mut pane,
+            VPath::parse("mem:///").unwrap(),
+            entries_named(&["a", "b"]),
+            true,
+        );
+        assert!(refilled, "el mismo dir relistado debe ir por refill");
+        assert_eq!(
+            pane.marks_len(),
+            2,
+            "un refresco del mismo dir conserva las marcas"
+        );
+    }
+
+    /// #103, el caso negativo: un listado de OTRO dir sigue siendo un `cd` y
+    /// LIMPIA las marcas, aunque el flag de refresco venga puesto. Sin este
+    /// test, un "siempre refill" pasaría el test de arriba.
+    #[test]
+    fn a_listing_for_a_different_dir_still_clears_the_marks() {
+        let mut pane = pane_with(&["a", "b"]);
+        pane.mark_all();
+        let refilled = super::apply_landed_listing(
+            &mut pane,
+            VPath::parse("mem:///otro").unwrap(),
+            entries_named(&["a", "b"]),
+            true,
+        );
+        assert!(!refilled, "otro dir jamás va por refill");
+        assert_eq!(pane.marks_len(), 0, "un cd limpia las marcas por diseño");
+        assert_eq!(pane.dir(), &VPath::parse("mem:///otro").unwrap());
+    }
+
+    /// #103: un `cd` al MISMO dir (F5 sobre el propio directorio, o un
+    /// `nav.enter` que vuelve donde ya estabas) NO es un refresco — sin
+    /// `refresh` el aplicador toma el camino del `cd` y limpia.
+    #[test]
+    fn a_cd_to_the_same_dir_is_not_a_refresh() {
+        let mut pane = pane_with(&["a", "b"]);
+        pane.mark_all();
+        let refilled = super::apply_landed_listing(
+            &mut pane,
+            VPath::parse("mem:///").unwrap(),
+            entries_named(&["a", "b"]),
+            false,
+        );
+        assert!(!refilled);
+        assert_eq!(pane.marks_len(), 0);
+    }
+
+    /// #103 + regla 1: la identidad del dir son los BYTES. Dos nombres que se
+    /// pintan igual (aquí `dir` ASCII contra su gemelo con un espacio de ancho
+    /// cero) NO son el mismo dir, así que el listado del gemelo es un `cd` y
+    /// limpia las marcas — jamás se conservan cruzando ese límite.
+    #[test]
+    fn the_same_dir_check_is_byte_exact_not_a_lookalike() {
+        let root = VPath::parse("mem:///").unwrap();
+        let dir = root
+            .clone()
+            .join(norte_proto::Segment::new(b"dir".to_vec()).unwrap());
+        // `dir` + U+200B ZERO WIDTH SPACE: se pinta igual, otros bytes.
+        let twin = root.join(norte_proto::Segment::new("dir\u{200B}".as_bytes().to_vec()).unwrap());
+        assert_ne!(twin, dir);
+        let mut pane = super::PaneState::new(dir, entries_named(&["a", "b"]));
+        pane.mark_all();
+        let refilled = super::apply_landed_listing(&mut pane, twin, entries_named(&["a"]), true);
+        assert!(!refilled, "un gemelo visual no es el mismo dir");
+        assert_eq!(pane.marks_len(), 0);
+    }
+
+    /// #103: el refresco PODA las marcas cuyas entradas desaparecieron (un
+    /// delete de lo marcado) y lo REPORTA por `pruned_marks` — una marca es una
+    /// afirmación sobre algo que EXISTE.
+    #[test]
+    fn a_refresh_prunes_the_marks_whose_entries_are_gone() {
+        let mut pane = pane_with(&["a", "b"]);
+        pane.mark_all();
+        let refilled = super::apply_landed_listing(
+            &mut pane,
+            VPath::parse("mem:///").unwrap(),
+            entries_named(&["a"]),
+            true,
+        );
+        assert!(refilled);
+        assert_eq!(pane.marks_len(), 1);
+        assert_eq!(pane.pruned_marks(), 1);
     }
 
     /// Construye un `TaskProgress` mínimo con `id`/`state` dados (helper de
