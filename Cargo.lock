@@ -4323,6 +4323,7 @@ dependencies = [
 name = "norte-frontend"
 version = "0.3.0-alpha.1"
 dependencies = [
+ "globset",
  "norte-config",
  "norte-encoding",
  "norte-i18n",

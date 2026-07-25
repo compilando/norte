@@ -69,7 +69,10 @@ pub fn fold(name: &[u8]) -> String {
 /// decodificado SIN enmascarar — un hazard enmascarado a `�` en pantalla no
 /// casa tecleando `�` (misma asimetría pre-existente del camino lossy con
 /// controles embebidos en UTF-8 válido). Los folds jamás se pintan.
-fn fold_with(name: &[u8], enc: Option<norte_encoding::NameEncoding>) -> String {
+///
+/// `pub(crate)` para que el marcado por patrón (#103) pliegue EXACTAMENTE
+/// igual que el quick search — un solo pipeline, jamás una copia divergente.
+pub(crate) fn fold_with(name: &[u8], enc: Option<norte_encoding::NameEncoding>) -> String {
     match (enc, std::str::from_utf8(name)) {
         (Some(e), Err(_)) => fold(norte_encoding::decode_name(name, e).as_bytes()),
         _ => fold(name),

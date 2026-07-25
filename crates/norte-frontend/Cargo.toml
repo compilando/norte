@@ -29,6 +29,10 @@ toml_edit.workspace = true
 # compartida en vez de duplicado. In-workspace, sin coste de build nuevo
 # fuera de compilar un crate que ya se compilaba de todas formas.
 norte-i18n.workspace = true
+# Glob de nombre para marcar por patrón (#103): la MISMA lib que usa
+# norte-core en fs.search, así que el patrón que el usuario aprende en la
+# búsqueda vale aquí. Ya está en el grafo (workspace dep), no entra nada nuevo.
+globset.workspace = true
 
 [dev-dependencies]
 norte-testkit.workspace = true

@@ -16,8 +16,19 @@
 use crate::decoration::Decoration;
 use crate::nav::{Mode, QuickSearch};
 use crate::sort::SortKey;
+use globset::GlobBuilder;
 use norte_proto::{Entry, EntryKind, VPath};
 use std::collections::{HashMap, HashSet};
+
+/// Why a mark-by-pattern was rejected (hard rule 6: typed library errors).
+#[derive(Debug, thiserror::Error)]
+pub enum PatternError {
+    /// The glob does not compile. Carries the `globset` diagnostic so the
+    /// dialog can show WHY, the same treatment `fs.search` gives an invalid
+    /// glob — the pattern is the user's own input, never a secret.
+    #[error("invalid pattern: {0}")]
+    Glob(#[from] globset::Error),
+}
 
 /// Estado no-render de un pane: directorio, entradas (normalizadas
 /// internamente — ya no exige orden previo del caller, ver [`PaneState::new`]),
@@ -527,6 +538,51 @@ impl PaneState {
                 self.marks.insert(path);
             }
         }
+    }
+
+    /// Marks (`mark = true`) or unmarks (`false`) the visible entries whose
+    /// name matches `pattern`, a glob. Returns how many marks CHANGED, so
+    /// the UI can report "12 marked" without recounting.
+    ///
+    /// Matching reuses the quick-search fold ([`crate::nav::fold_with`]:
+    /// lossy UTF-8 → NFC → lowercase → NFC, honouring the pane's name
+    /// reinterpretation) with a case-insensitive glob. A pattern therefore
+    /// addresses the text the pane DISPLAYS, never the raw bytes: the
+    /// invalid bytes of a non-UTF-8 name fold to U+FFFD and cannot be named,
+    /// though such a name still matches a pattern its valid part satisfies.
+    /// [`Self::toggle_mark`] always reaches it by hand, and
+    /// [`Self::marked_paths`] returns its original bytes (hard rule 1).
+    ///
+    /// # Errors
+    /// [`PatternError::Glob`] if the pattern does not compile. Nothing is
+    /// marked in that case.
+    pub fn mark_glob(&mut self, pattern: &str, mark: bool) -> Result<usize, PatternError> {
+        let matcher = GlobBuilder::new(pattern)
+            .case_insensitive(true)
+            .literal_separator(false)
+            .build()?
+            .compile_matcher();
+        let enc = self.name_encoding;
+        let mut changed = 0usize;
+        for i in self.markable_indices() {
+            let Some(entry) = self.entries.get(i) else {
+                continue;
+            };
+            let name = entry.path.file_name().map_or(&b""[..], |n| n.as_bytes());
+            if !matcher.is_match(crate::nav::fold_with(name, enc).as_str()) {
+                continue;
+            }
+            let path = entry.path.clone();
+            let hit = if mark {
+                self.marks.insert(path)
+            } else {
+                self.marks.remove(&path)
+            };
+            if hit {
+                changed += 1;
+            }
+        }
+        Ok(changed)
     }
 
     /// Total size of every marked entry that is NOT a directory, saturating.
@@ -1903,5 +1959,132 @@ mod tests {
             u64::MAX,
             "a hostile listing must not panic in debug"
         );
+    }
+
+    // --- #103: mark/unmark by glob ---------------------------------------
+
+    #[test]
+    fn mark_glob_marks_the_matching_names() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a.rs", EntryKind::File),
+                e("mem:///b.rs", EntryKind::File),
+                e("mem:///c.txt", EntryKind::File),
+            ],
+        );
+        assert_eq!(p.mark_glob("*.rs", true).unwrap(), 2);
+        assert_eq!(
+            p.marked_paths(),
+            vec![
+                VPath::parse("mem:///a.rs").unwrap(),
+                VPath::parse("mem:///b.rs").unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    fn mark_glob_is_case_insensitive() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![e("mem:///PHOTO.JPG", EntryKind::File)],
+        );
+        assert_eq!(p.mark_glob("*.jpg", true).unwrap(), 1);
+    }
+
+    #[test]
+    fn mark_glob_with_mark_false_unmarks_only_the_matches() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a.rs", EntryKind::File),
+                e("mem:///c.txt", EntryKind::File),
+            ],
+        );
+        p.mark_all();
+        assert_eq!(p.mark_glob("*.rs", false).unwrap(), 1);
+        assert_eq!(
+            p.marked_paths(),
+            vec![VPath::parse("mem:///c.txt").unwrap()]
+        );
+    }
+
+    #[test]
+    fn mark_glob_counts_only_the_marks_it_changed() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a.rs", EntryKind::File),
+                e("mem:///b.rs", EntryKind::File),
+            ],
+        );
+        p.mark_glob("a.rs", true).unwrap();
+        assert_eq!(
+            p.mark_glob("*.rs", true).unwrap(),
+            1,
+            "a.rs was already marked"
+        );
+    }
+
+    #[test]
+    fn an_invalid_glob_errors_and_marks_nothing() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![e("mem:///a.rs", EntryKind::File)],
+        );
+        assert!(p.mark_glob("[", true).is_err());
+        assert_eq!(p.marks_len(), 0);
+    }
+
+    #[test]
+    fn mark_glob_under_a_filter_only_reaches_the_visible() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///alfa.rs", EntryKind::File),
+                e("mem:///beta.rs", EntryKind::File),
+            ],
+        );
+        p.quick_start(crate::nav::Mode::Filter);
+        p.quick_char('a');
+        p.quick_char('l');
+        assert_eq!(p.mark_glob("*.rs", true).unwrap(), 1);
+        assert_eq!(p.marks_len(), 1);
+        assert!(p.is_marked(&p.entries()[0].clone()));
+    }
+
+    /// Hostile corpus (hard rule 1): a pattern addresses the DISPLAYED text,
+    /// so it cannot name the invalid bytes — but it does match a name whose
+    /// valid suffix satisfies it, and `marked_paths` gives the ORIGINAL
+    /// bytes back.
+    #[test]
+    fn mark_glob_matches_the_lossy_form_and_returns_raw_bytes() {
+        // mem:///<0xFF><0xFE>.rs — same hostile construction as the other
+        // hostile tests in this file (see
+        // `marca_identidad_por_bytes_del_path_nombre_hostil`).
+        let hostile = VPath::parse("mem:///")
+            .unwrap()
+            .join(norte_proto::Segment::new(vec![0xFF, 0xFE, b'.', b'r', b's']).unwrap());
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: hostile.clone(),
+                kind: EntryKind::File,
+                size: None,
+                mtime_ms: None,
+            }],
+        );
+        assert_eq!(p.mark_glob("*.rs", true).unwrap(), 1);
+        assert_eq!(
+            p.marked_paths(),
+            vec![hostile],
+            "raw bytes, never the lossy form"
+        );
+
+        // The invalid bytes themselves are unaddressable: they fold to
+        // U+FFFD.
+        p.clear_marks();
+        assert_eq!(p.mark_glob("\u{FFFD}*", true).unwrap(), 1);
     }
 }
