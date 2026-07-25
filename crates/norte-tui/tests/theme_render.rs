@@ -18,6 +18,7 @@ fn vp(wire: &str) -> VPath {
 fn app_con_dir(depth: ColorDepth) -> App {
     let dir = vp("file:///casa");
     let entries = vec![Entry {
+        attrs: std::collections::BTreeMap::new(),
         path: dir.join(Segment::new(b"docs".to_vec()).unwrap()),
         kind: EntryKind::Dir,
         size: None,

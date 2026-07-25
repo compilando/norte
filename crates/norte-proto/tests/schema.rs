@@ -15,6 +15,10 @@ use norte_proto::*;
 #[derive(schemars::JsonSchema)]
 #[allow(dead_code)]
 struct ProtocolSchema {
+    attr_hint: AttrHint,
+    attr_info: AttrInfo,
+    attr_type: AttrType,
+    attr_value: AttrValue,
     byte_range: ByteRange,
     capabilities: Capabilities,
     capability_flags: CapabilityFlags,
@@ -189,6 +193,192 @@ fn todo_tipo_con_schema_esta_en_el_artefacto() {
         "tipos con derive `schema` ausentes del artefacto (no alcanzables desde \
          ProtocolSchema — añádelos como campo): {missing:?}"
     );
+}
+
+/// `AttrValue` has a HAND-WRITTEN `JsonSchema` (its serde impls cannot be
+/// derived), so nothing but a test keeps it describing what the type really
+/// emits. The golden fixture `golden/types/attr_value.json` freezes the tag of
+/// every variant, so requiring the two key sets to be equal turns "added a
+/// variant, forgot the schema" into a red test.
+#[test]
+fn el_schema_de_attr_value_cubre_las_etiquetas_de_la_golden() {
+    let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
+    let props = schema
+        .pointer("/$defs/AttrValue/properties")
+        .and_then(serde_json::Value::as_object)
+        .expect("AttrValue tiene properties en el artefacto");
+    let del_schema: std::collections::BTreeSet<&str> = props.keys().map(String::as_str).collect();
+
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/types/attr_value.json");
+    let raw = std::fs::read_to_string(&fixture).expect("leer attr_value.json");
+    let casos: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&raw).expect("fixture JSON válida");
+    let de_la_golden: std::collections::BTreeSet<&str> = casos
+        .values()
+        .map(|caso| {
+            let obj = caso
+                .as_object()
+                .expect("cada caso es un objeto de una clave");
+            assert_eq!(obj.len(), 1, "un AttrValue emite EXACTAMENTE una clave");
+            obj.keys().next().expect("la clave").as_str()
+        })
+        .collect();
+
+    assert_eq!(
+        del_schema, de_la_golden,
+        "las properties de $defs/AttrValue y las etiquetas de attr_value.json deben coincidir"
+    );
+}
+
+/// (rust-review MINOR 5) El artefacto es lo único que un implementador de
+/// TERCEROS lee: si `Entry.attrs` fuese un `object` abierto, le estaría
+/// diciendo que 100 claves arbitrarias son legales. Las restricciones del tipo
+/// tienen que viajar en el schema, y los números tienen que venir de las
+/// MISMAS constantes que aplica el deserializador.
+///
+/// El `pattern` es la traducción ECMA-262 de [`is_valid_attr_id`]: uno o más
+/// segmentos `[a-z0-9_-]` separados por puntos, con al menos un punto. `$` sin
+/// flag `m` ancla al final de la cadena, así que no admite el `\n` final que
+/// sí colaría en otros dialectos. La función es la verdad; este test falla si
+/// alguien mueve una sin la otra.
+#[test]
+fn el_schema_de_entry_attrs_lleva_los_topes_del_tipo() {
+    use norte_proto::attrs::{ATTR_ID_MAX, ATTRS_MAX_REQUEST};
+
+    let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
+    let attrs = schema
+        .pointer("/$defs/Entry/properties/attrs")
+        .expect("Entry.attrs está en el artefacto");
+
+    assert_eq!(
+        attrs
+            .get("maxProperties")
+            .and_then(serde_json::Value::as_u64),
+        Some(ATTRS_MAX_REQUEST as u64),
+        "el tope del mapa viaja en el schema"
+    );
+    let nombres = attrs
+        .get("propertyNames")
+        .expect("las claves están restringidas, no son un string cualquiera");
+    assert_eq!(
+        nombres.get("maxLength").and_then(serde_json::Value::as_u64),
+        Some(ATTR_ID_MAX as u64)
+    );
+    assert_eq!(
+        nombres.get("pattern").and_then(serde_json::Value::as_str),
+        Some(r"^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$"),
+        "el patrón es la traducción ECMA-262 de is_valid_attr_id"
+    );
+
+    // Muestreo de acuerdo patrón ⇄ función: lo que el schema declara legal lo
+    // acepta el validador, y lo que declara ilegal lo rechaza.
+    for legal in [
+        "posix.mode",
+        "s3.storage_class",
+        "archive.packed-size",
+        "a.b",
+    ] {
+        assert!(norte_proto::attrs::is_valid_attr_id(legal));
+    }
+    for ilegal in [
+        "mode",
+        "MODE",
+        "../etc/passwd",
+        "posix.",
+        ".mode",
+        "a..b",
+        "",
+        // Segmento que no empieza por letra (0.30.0): forma de argv y forma
+        // de float, que aguas abajo se leen como otra cosa.
+        "-x.y",
+        "0.0",
+        "9-9.9-9",
+        "__.__",
+    ] {
+        assert!(!norte_proto::attrs::is_valid_attr_id(ilegal));
+    }
+}
+
+/// (0.30.0, ADR 0039) Mismo criterio que el test anterior, para los tres campos
+/// de método: el artefacto es lo único que lee un implementador de TERCEROS, y
+/// un `array` abierto le diría que 100 ids arbitrarios son legales. Los topes
+/// vienen de las MISMAS constantes que aplica el código.
+///
+/// El catálogo lleva `maxItems`; la forma de su ELEMENTO viaja en
+/// `$defs/AttrInfo`, que restringe `id` (patrón + longitud) y `label`
+/// (longitud) — las MISMAS reglas que aplica `sanitize_catalog` al decodificar.
+/// Las dos PETICIONES restringen el ítem en el propio campo, porque ahí un id
+/// mal formado es `-32602` y el schema tiene que decirlo.
+#[test]
+fn el_schema_de_los_campos_de_metodo_lleva_los_topes_del_tipo() {
+    use norte_proto::attrs::{
+        ATTR_ID_MAX, ATTR_LABEL_MAX, ATTRS_MAX_ADVERTISED, ATTRS_MAX_REQUEST,
+    };
+
+    let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
+
+    // El descriptor anunciado: id con forma y tope, label con tope.
+    let id = schema
+        .pointer("/$defs/AttrInfo/properties/id")
+        .expect("AttrInfo.id está en el artefacto");
+    assert_eq!(
+        id.get("maxLength").and_then(serde_json::Value::as_u64),
+        Some(ATTR_ID_MAX as u64),
+        "el tope del id viaja en el schema"
+    );
+    assert_eq!(
+        id.get("pattern").and_then(serde_json::Value::as_str),
+        Some(r"^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$"),
+        "el patrón es el MISMO que el de Entry.attrs"
+    );
+    assert_eq!(
+        schema
+            .pointer("/$defs/AttrInfo/properties/label/maxLength")
+            .and_then(serde_json::Value::as_u64),
+        Some(ATTR_LABEL_MAX as u64),
+        "el tope del label viaja en el schema (y `sanitize_catalog` lo recorta)"
+    );
+
+    let catalogo = schema
+        .pointer("/$defs/FsCapabilitiesResult/properties/attrs")
+        .expect("FsCapabilitiesResult.attrs está en el artefacto");
+    assert_eq!(
+        catalogo.get("maxItems").and_then(serde_json::Value::as_u64),
+        Some(ATTRS_MAX_ADVERTISED as u64),
+        "el tope del catálogo viaja en el schema"
+    );
+    assert_eq!(
+        catalogo
+            .pointer("/items/$ref")
+            .and_then(serde_json::Value::as_str),
+        Some("#/$defs/AttrInfo"),
+        "el elemento es un AttrInfo, no un objeto libre"
+    );
+
+    for tipo in ["FsListParams", "FsStatParams"] {
+        let pedido = schema
+            .pointer(&format!("/$defs/{tipo}/properties/attrs"))
+            .unwrap_or_else(|| panic!("{tipo}.attrs está en el artefacto"));
+        assert_eq!(
+            pedido.get("maxItems").and_then(serde_json::Value::as_u64),
+            Some(ATTRS_MAX_REQUEST as u64),
+            "[{tipo}] el tope de ids pedidos viaja en el schema"
+        );
+        let item = pedido.get("items").unwrap_or_else(|| {
+            panic!("[{tipo}] los ids están restringidos, no son un string cualquiera")
+        });
+        assert_eq!(
+            item.get("maxLength").and_then(serde_json::Value::as_u64),
+            Some(ATTR_ID_MAX as u64),
+            "[{tipo}] longitud máxima del id"
+        );
+        assert_eq!(
+            item.get("pattern").and_then(serde_json::Value::as_str),
+            Some(r"^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$"),
+            "[{tipo}] el patrón es el MISMO que el de Entry.attrs \
+             (traducción ECMA-262 de is_valid_attr_id)"
+        );
+    }
 }
 
 /// Recoge `.rs` bajo `dir` (incluye `src/wire/`).

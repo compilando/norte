@@ -2011,6 +2011,7 @@ mod tests {
 
     fn file(name: &str) -> Entry {
         Entry {
+            attrs: std::collections::BTreeMap::new(),
             path: root().join(norte_proto::Segment::new(name.as_bytes().to_vec()).unwrap()),
             kind: EntryKind::File,
             size: Some(1),

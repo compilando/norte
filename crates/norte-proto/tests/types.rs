@@ -3,8 +3,8 @@
 //! semántica de cada tipo. El wire byte-exacto vive en `golden_types.rs`.
 
 use norte_proto::{
-    Capabilities, CapabilityFlags, ConflictKind, Entry, EntryKind, Error, TaskId, TaskKind,
-    TaskProgress, TaskState, VPath,
+    AttrValue, Capabilities, CapabilityFlags, ConflictKind, Entry, EntryKind, Error, TaskId,
+    TaskKind, TaskProgress, TaskState, VPath,
 };
 
 fn vpath(wire: &str) -> VPath {
@@ -23,6 +23,7 @@ where
 
 fn sample_entry() -> Entry {
     Entry {
+        attrs: std::collections::BTreeMap::new(),
         path: vpath("file:///home/user/doc.txt"),
         kind: EntryKind::File,
         size: Some(1234),
@@ -39,10 +40,207 @@ fn entry_roundtrip() {
 #[test]
 fn entry_none_fields_roundtrip() {
     let e = Entry {
+        attrs: std::collections::BTreeMap::new(),
         path: vpath("file:///dir"),
         kind: EntryKind::Dir,
         size: None,
         mtime_ms: None,
+    };
+    assert_eq!(roundtrip(&e), e);
+}
+
+/// (0.30.0, ADR 0039 §4) Una clave de atributo mal formada se DESCARTA al
+/// decodificar — jamás es un error, igual que una celda malformada degrada a
+/// `Unknown`: una clave mala cuesta esa clave, nunca la entrada ni la página.
+/// El filtro vive en el TIPO, no en cada llamador, porque un id acaba siendo
+/// un id de configuración y una clave de lookup aguas abajo.
+#[test]
+fn entry_descarta_claves_de_atributo_mal_formadas() {
+    let json = r#"{
+        "path": "file:///a",
+        "kind": "file",
+        "attrs": {
+            "posix.mode": {"uint": 33188},
+            "s3.storage_class": {"text": "STANDARD_IA"},
+            "MODE": {"uint": 1},
+            "../etc/passwd": {"text": "no"},
+            "mode": {"uint": 2},
+            "": {"uint": 3},
+            "posix.": {"uint": 4},
+            "posix mode": {"uint": 5}
+        }
+    }"#;
+    let e: Entry = serde_json::from_str(json).expect("una clave mala NO rompe la entrada");
+
+    let claves: Vec<&str> = e.attrs.keys().map(String::as_str).collect();
+    assert_eq!(
+        claves,
+        vec!["posix.mode", "s3.storage_class"],
+        "solo sobreviven los ids bien formados y namespaced"
+    );
+    assert_eq!(e.attrs["posix.mode"], AttrValue::Uint(33188));
+}
+
+/// (0.30.0, ADR 0039 §5) El mapa está ACOTADO al decodificar: un cliente puede
+/// pedir a lo sumo `ATTRS_MAX_REQUEST` ids, así que un mapa mayor es un peer
+/// con bugs o hostil. Se quedan las claves MENORES en orden de bytes, así que
+/// el CONJUNTO de ids que sobrevive no depende del orden en que el peer
+/// serializó — los objetos JSON no están ordenados (RFC 8259 §4). Ojo: aquí
+/// las claves son DISTINTAS; el caso de una clave repetida (last-wins) lo
+/// cubre `entry_clave_de_atributo_repetida_es_last_wins`.
+#[test]
+fn entry_acota_el_mapa_de_atributos_de_forma_determinista() {
+    use norte_proto::attrs::ATTRS_MAX_REQUEST;
+
+    let ids: Vec<String> = (0..40).map(|i| format!("test.attr_{i:02}")).collect();
+    let celdas = |orden: &dyn Fn(&mut Vec<&String>)| {
+        let mut claves: Vec<&String> = ids.iter().collect();
+        orden(&mut claves);
+        let cuerpo: Vec<String> = claves
+            .iter()
+            .map(|id| format!("\"{id}\":{{\"uint\":1}}"))
+            .collect();
+        let json = format!(
+            r#"{{"path":"file:///a","kind":"file","attrs":{{{}}}}}"#,
+            cuerpo.join(",")
+        );
+        let e: Entry = serde_json::from_str(&json).expect("un mapa gordo NO rompe la entrada");
+        e.attrs.into_keys().collect::<Vec<String>>()
+    };
+
+    let esperado: Vec<String> = {
+        let mut v = ids.clone();
+        v.sort();
+        v.truncate(ATTRS_MAX_REQUEST);
+        v
+    };
+    assert_eq!(esperado.len(), ATTRS_MAX_REQUEST);
+
+    let ascendente = celdas(&|c| c.sort());
+    let descendente = celdas(&|c| c.sort_by(|a, b| b.cmp(a)));
+    assert_eq!(ascendente, esperado, "se quedan las menores en bytes");
+    assert_eq!(
+        descendente, ascendente,
+        "el resultado NO depende del orden de claves del wire"
+    );
+}
+
+/// (0.30.0, rust-review MAJOR 1) Una clave REPETIDA en el mismo objeto se
+/// resuelve last-wins — como en cualquier parser JSON, y como hacía el
+/// `BTreeMap` derivado al que este deserializador sustituye. El test de
+/// determinismo permuta claves DISTINTAS y no ve este caso: sin el atajo de
+/// "la clave ya está en el mapa", el valor conservado dependía de si el mapa
+/// estaba lleno cuando llegó el duplicado.
+#[test]
+fn entry_clave_de_atributo_repetida_es_last_wins() {
+    use norte_proto::attrs::ATTRS_MAX_REQUEST;
+
+    fn decodifica(pares: &[(String, u64)]) -> Entry {
+        let cuerpo: Vec<String> = pares
+            .iter()
+            .map(|(k, v)| format!("\"{k}\":{{\"uint\":{v}}}"))
+            .collect();
+        let json = format!(
+            r#"{{"path":"file:///a","kind":"file","attrs":{{{}}}}}"#,
+            cuerpo.join(",")
+        );
+        serde_json::from_str(&json).expect("una clave repetida NO rompe la entrada")
+    }
+
+    // Por DEBAJO del tope: el duplicado gana, esté donde esté.
+    let dup_al_final = decodifica(&[
+        ("a.k00".to_owned(), 1),
+        ("b.k00".to_owned(), 9),
+        ("a.k00".to_owned(), 2),
+    ]);
+    let dup_al_principio = decodifica(&[
+        ("a.k00".to_owned(), 1),
+        ("a.k00".to_owned(), 2),
+        ("b.k00".to_owned(), 9),
+    ]);
+    assert_eq!(dup_al_final.attrs["a.k00"], AttrValue::Uint(2));
+    assert_eq!(dup_al_final.attrs, dup_al_principio.attrs);
+
+    // EN el tope, repitiendo la clave MAYOR (la que la poda expulsaría): el
+    // mapa ya está lleno cuando llega el duplicado en un orden y no en el
+    // otro, y aun así el resultado debe ser el mismo.
+    let llenas: Vec<(String, u64)> = (0..ATTRS_MAX_REQUEST)
+        .map(|i| (format!("a.k{i:02}"), 1))
+        .collect();
+    let mayor = format!("a.k{:02}", ATTRS_MAX_REQUEST - 1);
+
+    let mut dup_despues = llenas.clone();
+    dup_despues.push((mayor.clone(), 2));
+
+    let mut dup_antes = vec![(mayor.clone(), 1), (mayor.clone(), 2)];
+    dup_antes.extend(llenas.iter().filter(|(k, _)| *k != mayor).cloned());
+
+    let a = decodifica(&dup_despues);
+    let b = decodifica(&dup_antes);
+    assert_eq!(a.attrs.len(), ATTRS_MAX_REQUEST);
+    assert_eq!(
+        a.attrs[&mayor],
+        AttrValue::Uint(2),
+        "last-wins también con el mapa lleno"
+    );
+    assert_eq!(
+        a.attrs, b.attrs,
+        "mismos miembros en distinto orden → mismo resultado, valores incluidos"
+    );
+}
+
+/// (0.30.0, rust-review MAJOR 2) El filtro es de UNA dirección: `attrs` es un
+/// campo público sin constructor y la serialización NO filtra, así que un
+/// `Entry` construido en proceso con un id inválido o por encima del tope
+/// EMITE lo que lleva y vuelve DISTINTO. Se fija aquí para que nadie asuma
+/// round-trip identidad: el bug del productor tiene que seguir siendo visible
+/// en la frontera que lo valida (bloque 2), no lavado por el serializador.
+#[test]
+fn entry_construida_en_proceso_no_esta_filtrada_y_no_hace_roundtrip() {
+    use norte_proto::attrs::ATTRS_MAX_REQUEST;
+
+    let con_id_invalido = Entry {
+        attrs: std::collections::BTreeMap::from([("MODE".to_owned(), AttrValue::Uint(1))]),
+        ..sample_entry()
+    };
+    let wire = serde_json::to_string(&con_id_invalido).expect("serializable");
+    assert!(
+        wire.contains("MODE"),
+        "la serialización NO filtra: el bug del productor viaja: {wire}"
+    );
+    assert_ne!(
+        roundtrip(&con_id_invalido),
+        con_id_invalido,
+        "y al volver la clave inválida ya no está"
+    );
+
+    let gorda = Entry {
+        attrs: (0..ATTRS_MAX_REQUEST + 5)
+            .map(|i| (format!("test.attr_{i:02}"), AttrValue::Uint(i as u64)))
+            .collect(),
+        ..sample_entry()
+    };
+    assert_eq!(
+        roundtrip(&gorda).attrs.len(),
+        ATTRS_MAX_REQUEST,
+        "por encima del tope se emite entero pero se decodifica acotado"
+    );
+}
+
+/// Guardia de regresión del filtro: una entrada normal (ids válidos, por
+/// debajo del tope) hace round-trip EXACTO, atributos incluidos.
+#[test]
+fn entry_con_atributos_validos_hace_roundtrip_exacto() {
+    let e = Entry {
+        attrs: std::collections::BTreeMap::from([
+            ("posix.mode".to_owned(), AttrValue::Uint(0o100_644)),
+            ("sftp.owner".to_owned(), AttrValue::Bytes(vec![0xFF, 0xFE])),
+            (
+                "s3.storage_class".to_owned(),
+                AttrValue::Text("STANDARD_IA".to_owned()),
+            ),
+        ]),
+        ..sample_entry()
     };
     assert_eq!(roundtrip(&e), e);
 }
@@ -701,11 +899,11 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.29.0 (#101): acepta 0.29.x (N) y 0.28.x (N-1), rechaza 0.27.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.29.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.28.0"), "N-1");
+    // 0.30.0 (ADR 0039): acepta 0.30.x (N) y 0.29.x (N-1), rechaza 0.28.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.30.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.29.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.27.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.28.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -1104,4 +1302,101 @@ fn rpc_cancel_params_round_trip_num_y_str() {
         .unwrap(),
         serde_json::json!({"id": 7}),
     );
+}
+
+/// (0.30.0, ADR 0039) Los CUATRO campos nuevos —repartidos en TRES superficies:
+/// catálogo, petición ×2 y entrada— son aditivos: un wire N-1 (0.29.x) SIN
+/// ellos deserializa, y un valor vacío NO se emite. (`Entry.attrs`, el cuarto,
+/// lo cubre `entry_con_atributos_validos_hace_roundtrip_exacto` y la golden
+/// `attrs_vacios_se_omiten`.)
+#[test]
+fn attrs_son_aditivos_en_ambas_direcciones() {
+    use norte_proto::methods::{FsCapabilitiesResult, FsListParams, FsStatParams};
+
+    let n1 = r#"{"path":"file:///home","limit":null,"cursor":null}"#;
+    let params: FsListParams = serde_json::from_str(n1).expect("wire N-1 válido");
+    assert!(params.attrs.is_empty(), "ausente = ninguno pedido");
+
+    let wire = serde_json::to_string(&params).unwrap();
+    assert!(
+        !wire.contains("attrs"),
+        "vacío no se emite (byte-idéntico a 0.29): {wire}"
+    );
+
+    let stat: FsStatParams =
+        serde_json::from_str(r#"{"path":"file:///home"}"#).expect("wire N-1 válido");
+    assert!(stat.attrs.is_empty());
+    assert!(!serde_json::to_string(&stat).unwrap().contains("attrs"));
+
+    let caps_n1 = r#"{"capabilities":{"flags":"RENAME_ATOMIC","max_path":null}}"#;
+    let caps: FsCapabilitiesResult = serde_json::from_str(caps_n1).expect("wire N-1 válido");
+    assert!(caps.attrs.is_empty());
+    assert!(!serde_json::to_string(&caps).unwrap().contains("attrs"));
+}
+
+/// (0.30.0, ADR 0039) La asimetría es DELIBERADA y ejecutable: el catálogo
+/// (dato RECIBIDO) filtra al decodificar; una petición (dato ENVIADO) no —
+/// un id mal formado sobrevive para que el daemon lo responda `-32602` en el
+/// bloque 2, en vez de convertirse en "no pidió nada".
+#[test]
+fn peticion_no_filtra_pero_el_catalogo_si() {
+    use norte_proto::methods::{FsCapabilitiesResult, FsListParams, FsStatParams};
+
+    let hostil = r#"{"path":"file:///home","attrs":["MODE","../etc/passwd"]}"#;
+    let list: FsListParams = serde_json::from_str(hostil).expect("la petición decodifica tal cual");
+    assert_eq!(list.attrs, ["MODE", "../etc/passwd"], "nada se descarta");
+    let stat: FsStatParams = serde_json::from_str(hostil).expect("igual en fs.stat");
+    assert_eq!(stat.attrs, ["MODE", "../etc/passwd"]);
+
+    let catalogo = r#"{
+        "capabilities": {"flags":"RENAME_ATOMIC","max_path":null},
+        "attrs": [
+            {"id":"MODE","label":"Mode","type":"uint","hint":"mode"},
+            {"id":"posix.mode","label":"Mode","type":"uint","hint":"mode"}
+        ]
+    }"#;
+    let caps: FsCapabilitiesResult =
+        serde_json::from_str(catalogo).expect("un catálogo hostil no rompe la respuesta");
+    let ids: Vec<&str> = caps.attrs.iter().map(|i| i.id.as_str()).collect();
+    assert_eq!(ids, ["posix.mode"], "el id mal formado no se puede pedir");
+}
+
+/// (0.30.0) Ids de EJEMPLO —plausibles, no un vocabulario: ADR 0039 §4 se niega
+/// explícitamente a un registro central y no registra ninguno de estos, que un
+/// provider puede o no publicar— con la forma bien construida, frente a las
+/// formas hostiles que NO lo están. Lo que se fija es la GRAMÁTICA, y que el
+/// gate vive en el tipo y no en cada llamador.
+#[test]
+fn ids_de_ejemplo_bien_formados() {
+    use norte_proto::attrs::is_valid_attr_id;
+
+    for id in [
+        "posix.mode",
+        "posix.uid",
+        "posix.gid",
+        "posix.nlink",
+        "posix.ctime_ms",
+        "win.attributes",
+        "sftp.owner",
+        "sftp.group",
+        "s3.storage_class",
+        "s3.etag",
+        "s3.content_type",
+        "archive.method",
+        "archive.packed_size",
+        "archive.crc32",
+    ] {
+        assert!(is_valid_attr_id(id), "{id} es un ejemplo bien formado");
+    }
+    for hostil in [
+        "../etc/passwd",
+        "posix.mode\u{202E}",
+        "POSIX.MODE",
+        "",
+        // Segmento que no empieza por letra (0.30.0): forma de argv y de float.
+        "-x.y",
+        "0.0",
+    ] {
+        assert!(!is_valid_attr_id(hostil), "{hostil:?} debe rechazarse");
+    }
 }

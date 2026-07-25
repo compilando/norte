@@ -28,5 +28,34 @@
     "kind": "file",
     "size": 0,
     "mtime_ms": null
+  },
+  "con_attrs": {
+    "path": "file:///home/user/doc.txt",
+    "kind": "file",
+    "size": 1234,
+    "mtime_ms": 1720000000000,
+    "attrs": {
+      "posix.mode": { "uint": 33188 },
+      "posix.uid": { "uint": 1000 },
+      "sftp.owner": { "bytes_b64": "//4=" },
+      "s3.storage_class": { "text": "STANDARD_IA" }
+    }
+  },
+  "attr_id_en_el_tope": {
+    "path": "file:///home/user/objeto.bin",
+    "kind": "file",
+    "size": 7,
+    "mtime_ms": null,
+    "attrs": {
+      "s3.x-amz-meta-una_clave_de_usuario_larguisima_pero_legal_64bytes": {
+        "text": "sí, 64 bytes exactos"
+      }
+    }
+  },
+  "attrs_vacios_se_omiten": {
+    "path": "file:///home/user/otro.txt",
+    "kind": "file",
+    "size": null,
+    "mtime_ms": null
   }
 }

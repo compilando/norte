@@ -4,7 +4,7 @@
 //! del contrato JSON-RPC; nombres, tipos y valores sí. Romper uno de estos
 //! tests = cambio de wire format = bump de versión + revisión doble.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::path::Path;
 
@@ -16,9 +16,9 @@ use norte_proto::methods::{
     TaskCancelResult, TaskListParams, TaskListResult,
 };
 use norte_proto::{
-    ByteRange, Capabilities, CapabilityFlags, CollisionPolicy, ConflictKind, Entry, EntryKind,
-    Error, ResumePolicy, SymlinkPolicy, TaskId, TaskKind, TaskProgress, TaskState, VPath,
-    VerifyPolicy,
+    AttrCatalog, AttrHint, AttrInfo, AttrType, AttrValue, ByteRange, Capabilities, CapabilityFlags,
+    CollisionPolicy, ConflictKind, Entry, EntryKind, Error, ResumePolicy, SymlinkPolicy, TaskId,
+    TaskKind, TaskProgress, TaskState, VPath, VerifyPolicy,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -88,6 +88,7 @@ fn golden_entry() {
             (
                 "file_full",
                 Entry {
+                    attrs: std::collections::BTreeMap::new(),
                     path: vpath("file:///home/user/doc.txt"),
                     kind: EntryKind::File,
                     size: Some(1234),
@@ -97,6 +98,7 @@ fn golden_entry() {
             (
                 "dir_no_meta",
                 Entry {
+                    attrs: std::collections::BTreeMap::new(),
                     path: vpath("file:///home/user"),
                     kind: EntryKind::Dir,
                     size: None,
@@ -106,6 +108,7 @@ fn golden_entry() {
             (
                 "symlink",
                 Entry {
+                    attrs: std::collections::BTreeMap::new(),
                     path: vpath("file:///ln"),
                     kind: EntryKind::Symlink,
                     size: None,
@@ -115,6 +118,7 @@ fn golden_entry() {
             (
                 "other_pre_epoch",
                 Entry {
+                    attrs: std::collections::BTreeMap::new(),
                     path: vpath("file:///dev-thing"),
                     kind: EntryKind::Other,
                     size: None,
@@ -124,10 +128,57 @@ fn golden_entry() {
             (
                 "hostile_name",
                 Entry {
+                    attrs: std::collections::BTreeMap::new(),
                     path: vpath("file:///informe%FF%FE.dat"),
                     kind: EntryKind::File,
                     size: Some(0),
                     mtime_ms: None,
+                },
+            ),
+            (
+                "con_attrs",
+                Entry {
+                    path: vpath("file:///home/user/doc.txt"),
+                    kind: EntryKind::File,
+                    size: Some(1234),
+                    mtime_ms: Some(1_720_000_000_000),
+                    attrs: BTreeMap::from([
+                        ("posix.mode".to_owned(), AttrValue::Uint(33188)),
+                        ("posix.uid".to_owned(), AttrValue::Uint(1000)),
+                        ("sftp.owner".to_owned(), AttrValue::Bytes(vec![0xFF, 0xFE])),
+                        (
+                            "s3.storage_class".to_owned(),
+                            AttrValue::Text("STANDARD_IA".to_owned()),
+                        ),
+                    ]),
+                },
+            ),
+            (
+                // Un id que PARECE hostil (larguísimo, con guiones) pero es
+                // LEGAL: exactamente `ATTR_ID_MAX` bytes, así que sobrevive al
+                // filtrado de decodificación y el match bidireccional se
+                // mantiene exacto.
+                "attr_id_en_el_tope",
+                Entry {
+                    path: vpath("file:///home/user/objeto.bin"),
+                    kind: EntryKind::File,
+                    size: Some(7),
+                    mtime_ms: None,
+                    attrs: BTreeMap::from([(
+                        "s3.x-amz-meta-una_clave_de_usuario_larguisima_pero_legal_64bytes"
+                            .to_owned(),
+                        AttrValue::Text("sí, 64 bytes exactos".to_owned()),
+                    )]),
+                },
+            ),
+            (
+                "attrs_vacios_se_omiten",
+                Entry {
+                    path: vpath("file:///home/user/otro.txt"),
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                    attrs: BTreeMap::new(),
                 },
             ),
         ],
@@ -369,7 +420,7 @@ fn golden_methods() {
     check_methods_plugin(&fixtures);
     check_methods_rpc(&fixtures);
     check_methods_index(&fixtures);
-    assert_eq!(fixtures.len(), 94, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 97, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `index.*` (0.25.0, M4, ADR 0034): build + query del índice de búsqueda.
@@ -1107,14 +1158,10 @@ fn check_methods_connection(fixtures: &BTreeMap<String, Value>) {
     );
 }
 
-/// Familia fs.* + task.cancel (list/stat/copy/move/delete/task).
-fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
-    let sample_entry = Entry {
-        path: vpath("file:///home/user/doc.txt"),
-        kind: EntryKind::File,
-        size: Some(1234),
-        mtime_ms: Some(1_720_000_000_000),
-    };
+/// Params de `fs.list`/`fs.stat`. Los casos `_con_attrs` (0.30.0, ADR 0039)
+/// piden ids; los de al lado, SIN el campo, son la prueba de aditividad: un
+/// `attrs` vacío no viaja al wire.
+fn check_methods_fs_params(fixtures: &BTreeMap<String, Value>) {
     check_one(
         fixtures,
         "fs_list_params",
@@ -1122,6 +1169,7 @@ fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
             path: vpath("file:///home/user"),
             limit: None,
             cursor: None,
+            attrs: Vec::new(),
         },
     );
     check_one(
@@ -1131,8 +1179,47 @@ fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
             path: vpath("file:///home/user"),
             limit: Some(1000),
             cursor: Some("3".to_owned()),
+            attrs: Vec::new(),
         },
     );
+    check_one(
+        fixtures,
+        "fs_list_params_con_attrs",
+        &FsListParams {
+            path: vpath("file:///home/user"),
+            limit: Some(500),
+            cursor: None,
+            attrs: vec!["posix.mode".to_owned(), "posix.uid".to_owned()],
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_stat_params_con_attrs",
+        &FsStatParams {
+            path: vpath("file:///home/user/doc.txt"),
+            attrs: vec!["s3.storage_class".to_owned()],
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_stat_params",
+        &FsStatParams {
+            path: vpath("file:///home/user/doc.txt"),
+            attrs: Vec::new(),
+        },
+    );
+}
+
+/// Familia fs.* + task.cancel (list/stat/copy/move/delete/task).
+fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
+    let sample_entry = Entry {
+        attrs: std::collections::BTreeMap::new(),
+        path: vpath("file:///home/user/doc.txt"),
+        kind: EntryKind::File,
+        size: Some(1234),
+        mtime_ms: Some(1_720_000_000_000),
+    };
+    check_methods_fs_params(fixtures);
     check_one(
         fixtures,
         "fs_list_result",
@@ -1158,13 +1245,6 @@ fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
             entries: vec![sample_entry.clone()],
             next_cursor: None,
             skipped: Some(3),
-        },
-    );
-    check_one(
-        fixtures,
-        "fs_stat_params",
-        &FsStatParams {
-            path: vpath("file:///home/user/doc.txt"),
         },
     );
     check_one(
@@ -1243,6 +1323,7 @@ fn check_methods_search(fixtures: &BTreeMap<String, Value>) {
         &SearchHits {
             task_id: TaskId::new(7),
             entries: vec![Entry {
+                attrs: std::collections::BTreeMap::new(),
                 path: vpath("file:///home/user/doc.txt"),
                 kind: EntryKind::File,
                 size: Some(1234),
@@ -1418,6 +1499,31 @@ fn check_methods_v05(fixtures: &BTreeMap<String, Value>) {
                 flags: CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::SYMLINKS,
                 max_path: None,
             },
+            attrs: AttrCatalog::default(),
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_capabilities_result_con_attrs",
+        &FsCapabilitiesResult {
+            capabilities: Capabilities {
+                flags: CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::SYMLINKS,
+                max_path: None,
+            },
+            attrs: AttrCatalog::new(vec![
+                AttrInfo {
+                    id: "posix.mode".to_owned(),
+                    label: "Mode".to_owned(),
+                    ty: AttrType::Uint,
+                    hint: AttrHint::Mode,
+                },
+                AttrInfo {
+                    id: "sftp.owner".to_owned(),
+                    label: "Owner".to_owned(),
+                    ty: AttrType::Bytes,
+                    hint: AttrHint::Identity,
+                },
+            ]),
         },
     );
 }
@@ -1586,7 +1692,9 @@ fn method_names_frozen() {
     // por el wire; PluginInfo gana columns (sin método nuevo).
     // 0.29.0 (#101): PluginPreview/PluginPreviewStyled ganan `lossy` (sin
     // método nuevo — solo campo aditivo).
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.29.0");
+    // 0.30.0 (columnas bloque 1, ADR 0039): atributos de provider — Entry.attrs,
+    // FsCapabilitiesResult.attrs y los dos attrs de petición (sin método nuevo).
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.30.0");
 }
 
 #[test]
@@ -1647,4 +1755,94 @@ fn golden_transfer() {
             ("hash", VerifyPolicy::Hash),
         ],
     );
+}
+
+#[test]
+fn golden_attrs() {
+    check_family(
+        "attr_type.json",
+        &[
+            ("uint", AttrType::Uint),
+            ("int", AttrType::Int),
+            ("text", AttrType::Text),
+            ("bytes", AttrType::Bytes),
+            ("time_ms", AttrType::TimeMs),
+            ("bool", AttrType::Bool),
+            ("unknown", AttrType::Unknown),
+        ],
+    );
+    check_family(
+        "attr_hint.json",
+        &[
+            ("size", AttrHint::Size),
+            ("timestamp", AttrHint::Timestamp),
+            ("mode", AttrHint::Mode),
+            ("identity", AttrHint::Identity),
+            ("opaque", AttrHint::Opaque),
+            ("unknown", AttrHint::Unknown),
+        ],
+    );
+    check_family(
+        "attr_info.json",
+        &[(
+            "posix_mode",
+            AttrInfo {
+                id: "posix.mode".to_owned(),
+                label: "Mode".to_owned(),
+                ty: AttrType::Uint,
+                hint: AttrHint::Mode,
+            },
+        )],
+    );
+    let attr_values = [
+        ("uint", AttrValue::Uint(33188)),
+        // u64::MAX: donde un cliente JS pierde el valor en su f64.
+        ("uint_max", AttrValue::Uint(u64::MAX)),
+        ("int", AttrValue::Int(-7)),
+        ("text", AttrValue::Text("STANDARD_IA".to_owned())),
+        // Bytes que NO son UTF-8: la razón de existir de la variante.
+        ("bytes_b64", AttrValue::Bytes(vec![0xFF, 0xFE])),
+        // Vacío NO es ausente: la celda existe y su valor son cero bytes.
+        ("bytes_b64_empty", AttrValue::Bytes(Vec::new())),
+        // Negativo: pre-1970 es real y el wire lo admite.
+        ("time_ms", AttrValue::TimeMs(-86_400_000)),
+        ("bool", AttrValue::Bool(true)),
+        ("unknown", AttrValue::Unknown),
+    ];
+    // Exhaustividad: `attr_value_tag` es un `match` sin comodín, así que una
+    // variante NUEVA rompe la compilación hasta que alguien la cubra; este
+    // set-check convierte "añadí la variante, olvidé la fixture" en rojo.
+    let cubiertas: BTreeSet<&str> = attr_values.iter().map(|(_, v)| attr_value_tag(v)).collect();
+    let todas: BTreeSet<&str> = ATTR_VALUE_TAGS.into_iter().collect();
+    assert_eq!(
+        cubiertas, todas,
+        "[attr_value.json] toda variante de AttrValue necesita al menos una fixture"
+    );
+    check_family("attr_value.json", &attr_values);
+}
+
+/// Todas las etiquetas de wire de [`AttrValue`], cruzadas contra el `match`
+/// exhaustivo de [`attr_value_tag`].
+const ATTR_VALUE_TAGS: [&str; 7] = [
+    "uint",
+    "int",
+    "text",
+    "bytes_b64",
+    "time_ms",
+    "bool",
+    "unknown",
+];
+
+/// Etiqueta de wire de un valor. EXHAUSTIVO por construcción (sin `_`): añadir
+/// una variante a `AttrValue` rompe aquí la compilación.
+fn attr_value_tag(v: &AttrValue) -> &'static str {
+    match v {
+        AttrValue::Uint(_) => "uint",
+        AttrValue::Int(_) => "int",
+        AttrValue::Text(_) => "text",
+        AttrValue::Bytes(_) => "bytes_b64",
+        AttrValue::TimeMs(_) => "time_ms",
+        AttrValue::Bool(_) => "bool",
+        AttrValue::Unknown => "unknown",
+    }
 }

@@ -32,6 +32,7 @@ impl Provider for EcoProvider {
     }
     async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
         Ok(Entry {
+            attrs: std::collections::BTreeMap::new(),
             path: p.clone(),
             kind: EntryKind::Dir,
             size: None,
@@ -493,6 +494,7 @@ impl Provider for FlipProvider {
             return Err(Error::ProviderUnavailable { retryable: true });
         }
         Ok(Entry {
+            attrs: std::collections::BTreeMap::new(),
             path: p.clone(),
             kind: EntryKind::Dir,
             size: None,
@@ -654,6 +656,7 @@ impl Provider for ZipHostProvider {
         self.check()?;
         if p.segments().last() == Some(b"a.zip".as_slice()) {
             return Ok(Entry {
+                attrs: std::collections::BTreeMap::new(),
                 path: p.clone(),
                 kind: EntryKind::File,
                 size: Some(self.zip.len() as u64),
@@ -661,6 +664,7 @@ impl Provider for ZipHostProvider {
             });
         }
         Ok(Entry {
+            attrs: std::collections::BTreeMap::new(),
             path: p.clone(),
             kind: EntryKind::Dir,
             size: None,

@@ -446,12 +446,14 @@ async fn walk_ignora_entradas_fuera_del_root_aunque_el_provider_las_liste() {
         inject_under: vp("mem:///proj"),
         inject: vec![
             Entry {
+                attrs: std::collections::BTreeMap::new(),
                 path: vp("mem:///secret.txt"),
                 kind: EntryKind::File,
                 size: None,
                 mtime_ms: None,
             },
             Entry {
+                attrs: std::collections::BTreeMap::new(),
                 path: vp("mem:///other"),
                 kind: EntryKind::Dir,
                 size: None,

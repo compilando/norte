@@ -197,6 +197,7 @@ async fn initialize_negocia_y_es_obligatorio() {
                 path: vp("mem:///"),
                 limit: None,
                 cursor: None,
+                attrs: Vec::new(),
             },
         )
         .await
@@ -224,7 +225,7 @@ async fn initialize_rechaza_version_incompatible() {
             },
         )
         .await
-        .expect_err("0.1.0 no es N ni N-1 de 0.29.0");
+        .expect_err("0.1.0 no es N ni N-1 de 0.30.0");
     match err {
         ClientError::Rpc(rpc) => {
             // Código PROPIO: la señal de upgrade jamás se parsea de message.
@@ -235,14 +236,14 @@ async fn initialize_rechaza_version_incompatible() {
         }
         other => panic!("esperaba Rpc, fue {other:?}"),
     }
-    // N-1 (0.28.x) SÍ entra.
+    // N-1 (0.29.x) SÍ entra.
     let c2 = Client::connect(&d.socket).await.expect("connect");
     let ok: methods::InitializeResult = c2
         .call(
             methods::INITIALIZE,
             &InitializeParams {
                 client_info: client_info(),
-                protocol_version: "0.28.2".into(),
+                protocol_version: "0.29.2".into(),
                 encodings: vec![],
                 agent_session: None,
             },
@@ -286,6 +287,7 @@ async fn fs_list_y_stat_responden_por_el_socket() {
                 path: vp("mem:///"),
                 limit: None,
                 cursor: None,
+                attrs: Vec::new(),
             },
         )
         .await
@@ -297,11 +299,53 @@ async fn fs_list_y_stat_responden_por_el_socket() {
             methods::FS_STAT,
             &FsStatParams {
                 path: vp("mem:///f.txt"),
+                attrs: Vec::new(),
             },
         )
         .await
         .expect("fs.stat");
     assert_eq!(stat.entry.size, Some(4));
+}
+
+/// (0.30.0, ADR 0039) El bloque 1 es SOLO wire, y tres sitios lo afirman —el
+/// ADR, el rustdoc de `PROTOCOL_VERSION` y `FsListParams::attrs`—: «el daemon
+/// IGNORA los ids pedidos». Sin este test esa afirmación no la comprobaba nada.
+///
+/// Pedir un id perfectamente bien formado tiene que SALIR BIEN (no `-32602`) y
+/// volver con `attrs` vacío en cada entrada: la ausencia ya es una respuesta
+/// válida del contrato (pedir un id que el provider no ofrece nunca fue error).
+///
+/// Se pone ROJO en cuanto el bloque 2 cablee la validación o un productor sin
+/// actualizar los tres textos: si `attrs` deja de venir vacío, o si un id
+/// legítimo empieza a ser error, es que el daemon ya NO ignora lo pedido y la
+/// documentación miente. Actualizar ambas cosas a la vez es justo el punto.
+#[tokio::test]
+async fn fs_list_ignora_los_atributos_pedidos_en_030() {
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///f.txt", b"hola").await;
+    let c = connected_client(&d).await;
+
+    let list: FsListResult = c
+        .call(
+            methods::FS_LIST,
+            &FsListParams {
+                path: vp("mem:///"),
+                limit: None,
+                cursor: None,
+                attrs: vec!["posix.mode".into()],
+            },
+        )
+        .await
+        .expect("pedir atributos NO es error: el daemon 0.30 los ignora");
+
+    assert_eq!(list.entries.len(), 1);
+    for e in &list.entries {
+        assert!(
+            e.attrs.is_empty(),
+            "ningún provider anuncia atributos todavía: {:?}",
+            e.attrs
+        );
+    }
 }
 
 #[tokio::test]
@@ -317,6 +361,7 @@ async fn call_tracked_reporta_el_id_asignado() {
             norte_proto::methods::FS_STAT,
             &norte_proto::methods::FsStatParams {
                 path: vp("mem:///nope"),
+                attrs: Vec::new(),
             },
             move |id| s.lock().expect("lock").push(id),
         )
@@ -341,6 +386,7 @@ async fn list_page(
             path: vp(path),
             limit,
             cursor,
+            attrs: Vec::new(),
         },
     )
     .await
@@ -458,6 +504,7 @@ async fn fs_list_limit_cero_es_invalid_params() {
                 path: vp("mem:///"),
                 limit: Some(0),
                 cursor: None,
+                attrs: Vec::new(),
             },
         )
         .await
@@ -479,6 +526,7 @@ async fn fs_list_cursor_desconocido_es_cursor_expired() {
                     path: vp("mem:///"),
                     limit: Some(1),
                     cursor: Some(cur.to_string()),
+                    attrs: Vec::new(),
                 },
             )
             .await
@@ -510,6 +558,7 @@ async fn fs_list_cursor_de_otro_path_es_invalid_params() {
                 path: vp("mem:///otro"),
                 limit: Some(1),
                 cursor: Some(cur),
+                attrs: Vec::new(),
             },
         )
         .await
@@ -538,6 +587,7 @@ async fn fs_list_lru_expulsa_el_mas_viejo() {
                 path: vp("mem:///"),
                 limit: Some(1),
                 cursor: Some(cursores[0].clone()),
+                attrs: Vec::new(),
             },
         )
         .await
@@ -569,6 +619,7 @@ async fn fs_list_ttl_expira_el_listado() {
                 path: vp("mem:///"),
                 limit: Some(1),
                 cursor: Some(cur),
+                attrs: Vec::new(),
             },
         )
         .await
@@ -590,6 +641,7 @@ async fn fs_stat_de_inexistente_viaja_como_taxonomia_en_data() {
             methods::FS_STAT,
             &FsStatParams {
                 path: vp("mem:///nada"),
+                attrs: Vec::new(),
             },
         )
         .await
@@ -1395,6 +1447,7 @@ async fn fs_copy_progresa_hasta_completed() {
             methods::FS_STAT,
             &FsStatParams {
                 path: vp("mem:///dst.bin"),
+                attrs: Vec::new(),
             },
         )
         .await
@@ -1648,7 +1701,7 @@ async fn frames_hostiles_y_formas_canonicas_crudas() {
 
     // initialize + daemon.shutdown con params null (golden canónico, M1).
     s.write_all(
-        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.28.0\",\"encodings\":[\"json\"]}}\n",
+        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.29.0\",\"encodings\":[\"json\"]}}\n",
     )
     .await
     .expect("write");
@@ -1687,6 +1740,7 @@ async fn initialize_repetido_es_invalid_request() {
                 path: vp("mem:///"),
                 limit: None,
                 cursor: None,
+                attrs: Vec::new(),
             },
         )
         .await
@@ -1722,6 +1776,7 @@ async fn call_tras_el_cierre_no_se_cuelga() {
                 path: vp("mem:///"),
                 limit: None,
                 cursor: None,
+                attrs: Vec::new(),
             },
         ),
     )
@@ -2913,6 +2968,7 @@ async fn daemon_shutdown_de_agente_es_invalid_request() {
                 path: vp("mem:///"),
                 limit: None,
                 cursor: None,
+                attrs: Vec::new(),
             },
         )
         .await
@@ -3096,6 +3152,7 @@ async fn cerrar_conexion_libera_sus_listings_retenidos() {
         path: vp(c),
         limit: Some(1),
         cursor: None,
+        attrs: Vec::new(),
     };
 
     // Satura el tope GLOBAL (256): 32 conexiones × 8 listings retenidos.
@@ -3314,6 +3371,7 @@ async fn rpc_cancel_retira_el_ask_suspendido_sin_matar_la_conexion() {
             methods::FS_STAT,
             &FsStatParams {
                 path: vp("mem:///proj/src.txt"),
+                attrs: Vec::new(),
             },
         )
         .await
@@ -3472,6 +3530,7 @@ async fn decide_gana_a_un_cancel_posterior() {
             methods::FS_STAT,
             &FsStatParams {
                 path: vp("mem:///proj/src.txt"),
+                attrs: Vec::new(),
             },
         )
         .await
@@ -3549,6 +3608,7 @@ async fn frames_pipelined_durante_un_ask_se_procesan_tras_el_desenlace() {
                 methods::FS_STAT,
                 &FsStatParams {
                     path: vp("mem:///proj/src.txt"),
+                    attrs: Vec::new(),
                 },
             )
             .await
@@ -3738,6 +3798,7 @@ async fn fs_search_params_invalidos_no_crean_task() {
                 path: vp("mem:///"),
                 limit: None,
                 cursor: None,
+                attrs: Vec::new(),
             },
         )
         .await
@@ -3945,6 +4006,7 @@ async fn agente_sin_scope_no_lee_y_con_scope_si() {
             path: vp("mem:///proj"),
             limit: None,
             cursor: None,
+            attrs: Vec::new(),
         },
     )
     .await;
@@ -3953,6 +4015,7 @@ async fn agente_sin_scope_no_lee_y_con_scope_si() {
         methods::FS_STAT,
         &FsStatParams {
             path: vp("mem:///proj/a.txt"),
+            attrs: Vec::new(),
         },
     )
     .await;
@@ -3986,6 +4049,7 @@ async fn agente_sin_scope_no_lee_y_con_scope_si() {
                 path: vp("mem:///proj"),
                 limit: None,
                 cursor: None,
+                attrs: Vec::new(),
             },
         )
         .await
@@ -3996,6 +4060,7 @@ async fn agente_sin_scope_no_lee_y_con_scope_si() {
             methods::FS_STAT,
             &FsStatParams {
                 path: vp("mem:///proj/a.txt"),
+                attrs: Vec::new(),
             },
         )
         .await
@@ -4074,6 +4139,7 @@ async fn humano_lee_sin_scope() {
                 path: vp("mem:///x"),
                 limit: None,
                 cursor: None,
+                attrs: Vec::new(),
             },
         )
         .await
@@ -4103,6 +4169,7 @@ impl Provider for EcoProvider {
     }
     async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
         Ok(Entry {
+            attrs: std::collections::BTreeMap::new(),
             path: p.clone(),
             kind: EntryKind::Dir,
             size: None,
@@ -4235,6 +4302,7 @@ async fn degradacion_de_conexion_solo_a_humanos() {
             methods::FS_STAT,
             &FsStatParams {
                 path: vp("ftp://backup.example/"),
+                attrs: Vec::new(),
             },
         )
         .await

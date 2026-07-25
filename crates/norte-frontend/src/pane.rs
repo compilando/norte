@@ -625,6 +625,7 @@ mod tests {
     use norte_proto::{Entry, EntryKind, VPath};
     fn e(w: &str, k: EntryKind) -> Entry {
         Entry {
+            attrs: std::collections::BTreeMap::new(),
             path: VPath::parse(w).unwrap(),
             kind: k,
             size: None,
@@ -813,12 +814,14 @@ mod tests {
             VPath::parse("mem:///").unwrap(),
             vec![
                 Entry {
+                    attrs: std::collections::BTreeMap::new(),
                     path: hostile.clone(),
                     kind: EntryKind::File,
                     size: None,
                     mtime_ms: None,
                 },
                 Entry {
+                    attrs: std::collections::BTreeMap::new(),
                     path: benign.clone(),
                     kind: EntryKind::File,
                     size: None,
@@ -866,12 +869,14 @@ mod tests {
             VPath::parse("mem:///").unwrap(),
             vec![
                 Entry {
+                    attrs: std::collections::BTreeMap::new(),
                     path: nfc.clone(),
                     kind: EntryKind::File,
                     size: None,
                     mtime_ms: None,
                 },
                 Entry {
+                    attrs: std::collections::BTreeMap::new(),
                     path: nfd.clone(),
                     kind: EntryKind::File,
                     size: None,
@@ -1057,12 +1062,14 @@ mod tests {
             root.clone(),
             vec![
                 Entry {
+                    attrs: std::collections::BTreeMap::new(),
                     path: hostile.clone(),
                     kind: EntryKind::File,
                     size: None,
                     mtime_ms: None,
                 },
                 Entry {
+                    attrs: std::collections::BTreeMap::new(),
                     path: benign.clone(),
                     kind: EntryKind::File,
                     size: None,
@@ -1085,12 +1092,14 @@ mod tests {
             root,
             vec![
                 Entry {
+                    attrs: std::collections::BTreeMap::new(),
                     path: hostile.clone(),
                     kind: EntryKind::File,
                     size: None,
                     mtime_ms: None,
                 },
                 Entry {
+                    attrs: std::collections::BTreeMap::new(),
                     path: benign,
                     kind: EntryKind::File,
                     size: None,
@@ -1471,6 +1480,7 @@ mod tests {
         let seg = norte_proto::Segment::new(papka).unwrap();
         let entries = vec![
             Entry {
+                attrs: std::collections::BTreeMap::new(),
                 path: dir.join(seg),
                 kind: EntryKind::File,
                 size: None,

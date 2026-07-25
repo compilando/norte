@@ -1722,6 +1722,15 @@ async fn walk_following(
                             // ningún consumidor lo lee todavía.
                             out.push(PlanEntry {
                                 entry: Entry {
+                                    // attrs: dir SINTÉTICO, vacío a
+                                    // propósito. Este `Entry` se RECONSTRUYE
+                                    // a partir del consumido, así que en
+                                    // cuanto haya providers que produzcan
+                                    // atributos (bloque 2) hay que decidir
+                                    // aquí si se propagan los del link o no
+                                    // se propaga ninguno: hoy no hay nada que
+                                    // perder, mañana sí.
+                                    attrs: std::collections::BTreeMap::new(),
                                     path: entry.path,
                                     kind: EntryKind::Dir,
                                     size: None,

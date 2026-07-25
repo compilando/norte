@@ -156,6 +156,7 @@ mod tests {
 
     fn e(w: &str, k: EntryKind) -> Entry {
         Entry {
+            attrs: std::collections::BTreeMap::new(),
             path: VPath::parse(w).unwrap(),
             kind: k,
             size: None,

@@ -44,3 +44,4 @@ edits.
 | [0036](0036-effects-schema-v1.md) | GUI effects schema v1 for theme `[effects]` | accepted |
 | [0037](0037-plugin-data-out-v2.md) | Plugin data-out v2: styled previews, decorators, columns | accepted |
 | [0038](0038-protocol-json-schema-and-semver-gate.md) | Protocol JSON Schema artifact and cargo-semver-checks gate | accepted |
+| [0039](0039-provider-attributes-wire.md) | Provider attributes on the wire (typed, on-demand, degrading) | accepted |

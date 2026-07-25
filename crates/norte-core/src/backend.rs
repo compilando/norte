@@ -1315,6 +1315,9 @@ pub mod remote {
                         path: st.dir.clone(),
                         limit: Some(LIST_PAGE),
                         cursor,
+                        // Ningún frontend pide atributos todavía (ADR 0039,
+                        // bloque 1 = solo wire): vacío = nada se entrega.
+                        attrs: Vec::new(),
                     },
                 )
                 .await?;
@@ -1759,6 +1762,7 @@ pub mod remote {
                         path: dir.clone(),
                         limit: Some(LIST_PAGE),
                         cursor: None,
+                        attrs: Vec::new(),
                     },
                 )
                 .await?;
@@ -1789,7 +1793,13 @@ pub mod remote {
 
         pub(super) async fn stat(&self, path: &VPath) -> Result<Entry, Error> {
             let r: FsStatResult = self
-                .call_timed(methods::FS_STAT, &FsStatParams { path: path.clone() })
+                .call_timed(
+                    methods::FS_STAT,
+                    &FsStatParams {
+                        path: path.clone(),
+                        attrs: Vec::new(),
+                    },
+                )
                 .await?;
             Ok(r.entry)
         }

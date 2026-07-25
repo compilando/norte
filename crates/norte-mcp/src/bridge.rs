@@ -166,6 +166,9 @@ impl Bridge {
                     path,
                     limit,
                     cursor,
+                    // El puente no expone atributos de provider (ADR 0039,
+                    // bloque 1 = solo wire): vacío = no se entrega ninguno.
+                    attrs: Vec::new(),
                 },
             )
             .await?;
@@ -187,7 +190,13 @@ impl Bridge {
     async fn tool_stat(&self, args: &Value) -> Result<Value, String> {
         let path = vpath_arg(args, "path")?;
         let r: methods::FsStatResult = self
-            .call(methods::FS_STAT, &methods::FsStatParams { path })
+            .call(
+                methods::FS_STAT,
+                &methods::FsStatParams {
+                    path,
+                    attrs: Vec::new(),
+                },
+            )
             .await?;
         Ok(json!({
             "path": r.entry.path.to_wire(),

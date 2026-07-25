@@ -1,0 +1,11 @@
+{
+  "uint": { "uint": 33188 },
+  "uint_max": { "uint": 18446744073709551615 },
+  "int": { "int": -7 },
+  "text": { "text": "STANDARD_IA" },
+  "bytes_b64": { "bytes_b64": "//4=" },
+  "bytes_b64_empty": { "bytes_b64": "" },
+  "time_ms": { "time_ms": -86400000 },
+  "bool": { "bool": true },
+  "unknown": { "unknown": null }
+}

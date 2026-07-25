@@ -1,5 +1,148 @@
 {
   "$defs": {
+    "AttrHint": {
+      "description": "What an attribute MEANS, so a frontend can pick a default format and\nalignment without a hard-coded table of ids. Two `Uint`s render very\ndifferently depending on this.\n\n`\"unknown\"` is a RESERVED wire tag: no future protocol version may name a\nreal variant that. A component that reads a value and writes it back\n(a proxy, a cache) collapses a newer tag to `unknown` in the round trip —\nthe same accepted trade-off as [`EntryKind::Other`](crate::EntryKind::Other).\n\n```\nuse norte_proto::attrs::AttrHint;\nlet h: AttrHint = serde_json::from_str(\"\\\"pista_del_futuro\\\"\").unwrap();\nassert_eq!(h, AttrHint::Unknown);\n```",
+      "oneOf": [
+        {
+          "const": "size",
+          "description": "A byte count: right-aligned, IEC/SI formatting applies.",
+          "type": "string"
+        },
+        {
+          "const": "timestamp",
+          "description": "A point in time: date formatting applies.",
+          "type": "string"
+        },
+        {
+          "const": "mode",
+          "description": "A POSIX permission word: octal or `rwx` formatting applies.",
+          "type": "string"
+        },
+        {
+          "const": "identity",
+          "description": "A user/group/owner identity: short text or a number.",
+          "type": "string"
+        },
+        {
+          "const": "opaque",
+          "description": "No presentation advice; render as plain text.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Hint of a newer protocol (fallback of deserialisation). A conforming\npeer NEVER emits it; a frontend that encounters it renders the value\nas if it were [`AttrHint::Opaque`].",
+          "type": "string"
+        }
+      ]
+    },
+    "AttrInfo": {
+      "description": "One attribute a provider offers, as advertised by `fs.capabilities`\n([`FsCapabilitiesResult::attrs`](crate::methods::FsCapabilitiesResult)).\n\nAn `AttrInfo` whose `id` fails [`is_valid_attr_id`], or that REPEATS an id\nalready advertised, is DISCARDED by [`sanitize_catalog`] — which\n[`FsCapabilitiesResult::attrs`](crate::methods::FsCapabilitiesResult) runs\nat decode, and which an embedded backend must run itself. Never a hard\nerror, mirroring the \"unknown requested id comes back absent\" rule (ADR\n0039 §5), and never a duty left to the reader. The catalog is bounded at\n[`ATTRS_MAX_ADVERTISED`] descriptors there too. The equivalent rule for\nentry keys is enforced the same way — see\n[`Entry::attrs`](crate::Entry::attrs).\n\n`label` is provider text and therefore THIRD-PARTY (a WASM provider plugin\nwrites it, an SFTP server influences it): [`sanitize_catalog`] clamps it to\n[`ATTR_LABEL_MAX`] bytes, and a frontend still masks it exactly like a\nplugin's column header before painting.\n\n```\nuse norte_proto::attrs::{AttrHint, AttrInfo, AttrType};\nlet info = AttrInfo {\n    id: \"posix.mode\".to_owned(),\n    label: \"Mode\".to_owned(),\n    ty: AttrType::Uint,\n    hint: AttrHint::Mode,\n};\nlet wire = serde_json::to_string(&info).unwrap();\nassert!(wire.contains(\"\\\"type\\\":\\\"uint\\\"\"));\n```",
+      "properties": {
+        "hint": {
+          "$ref": "#/$defs/AttrHint",
+          "description": "Presentation hint."
+        },
+        "id": {
+          "description": "Attribute id, namespaced ([`is_valid_attr_id`]). A descriptor whose id\ndoes not satisfy that check does not survive [`sanitize_catalog`].",
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$",
+          "type": "string"
+        },
+        "label": {
+          "description": "Human label. THIRD-PARTY text — masked before painting, and CLAMPED to\n[`ATTR_LABEL_MAX`] bytes by [`sanitize_catalog`] at decode.\n\nThis is a FALLBACK, not the primary source of a column header: a\nfrontend should prefer a localized string keyed by the stable `id`\n(e.g. `t!(\"attr.posix.mode\")`) and fall back to this masked provider\nlabel only for ids it does not recognize. First-party attributes\nstill route their labels through `i18n/`.\n\nThe cap is in BYTES here and the schema's `maxLength` counts CODE POINTS\n(JSON Schema 2020-12 §6.3.1): a 60-character CJK label is schema-legal\nand still gets clamped to ~21 characters. See ADR 0039 §5 — the\ndivergence is accepted and pinned by a test, not a bug to \"fix\" by\ncounting characters in the code.",
+          "maxLength": 64,
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/AttrType",
+          "description": "Declared type of the values of this attribute — ADVISORY, and never\nauthoritative over a cell.\n\nNothing stops a `{\"type\":\"uint\"}` descriptor from being paired with a\n`{\"text\": …}` cell: both decode cleanly, and only the rule below keeps\ntwo conforming frontends from rendering the same bytes differently\n(ADR 0039 §1).\n\n- At RENDER time the [`AttrValue`]'s own tag decides. A cell whose tag\n  contradicts this field is rendered as its actual variant and is NEVER\n  coerced into the declared one.\n- This field is for column-CONFIGURATION time: it picks the formatter\n  and the sort key for a column before any value has arrived. A column\n  configured from a `Uint` descriptor that then receives `Text` cells\n  sorts them as the text they are.\n- Agreement between the two is a PRODUCER obligation, enforced by block\n  2's provider conformance suite. A consumer cannot check it: holding\n  one cell, it has no way to know whether the catalog or the provider is\n  the one that is wrong."
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "type",
+        "hint"
+      ],
+      "type": "object"
+    },
+    "AttrType": {
+      "description": "Declared type of an attribute. An unknown value (protocol N+1) degrades to\n[`AttrType::Unknown`]: an old client ignores the attribute, it never breaks.\n\n`\"unknown\"` is a RESERVED wire tag: no future protocol version may name a\nreal variant that. A component that reads a value and writes it back\n(a proxy, a cache) collapses a newer tag to `unknown` in the round trip —\nthe same accepted trade-off as [`EntryKind::Other`](crate::EntryKind::Other).\n\n```\nuse norte_proto::attrs::AttrType;\nlet t: AttrType = serde_json::from_str(\"\\\"tipo_del_futuro\\\"\").unwrap();\nassert_eq!(t, AttrType::Unknown);\n```",
+      "oneOf": [
+        {
+          "const": "uint",
+          "description": "Unsigned integer.",
+          "type": "string"
+        },
+        {
+          "const": "int",
+          "description": "Signed integer.",
+          "type": "string"
+        },
+        {
+          "const": "text",
+          "description": "UTF-8 text (third-party: mask before painting).",
+          "type": "string"
+        },
+        {
+          "const": "bytes",
+          "description": "Raw bytes, base64 on the wire (a name that is not UTF-8). This is the\none pair whose names differ across the two surfaces: the declared type\nis `\"bytes\"`, while the values it describes are tagged `\"bytes_b64\"`\n([`AttrValue::Bytes`]) — the value tag names the ENCODING that carries\nthem, the type names what they ARE.",
+          "type": "string"
+        },
+        {
+          "const": "time_ms",
+          "description": "Milliseconds since the UTC epoch; negative is valid (pre-1970).",
+          "type": "string"
+        },
+        {
+          "const": "bool",
+          "description": "Boolean.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Type of a newer protocol (fallback of deserialisation). A conforming\npeer NEVER emits it as a declared type; a client that sees it on an\n[`AttrInfo`] should not request that attribute at all, since it has\nno way to interpret the values it would get back.",
+          "type": "string"
+        }
+      ]
+    },
+    "AttrValue": {
+      "description": "One-key tagged attribute value; an unknown, ambiguous, ill-typed or over-cap key degrades to Unknown.",
+      "maxProperties": 1,
+      "minProperties": 1,
+      "properties": {
+        "bool": {
+          "type": "boolean"
+        },
+        "bytes_b64": {
+          "contentEncoding": "base64",
+          "maxLength": 344,
+          "type": "string"
+        },
+        "int": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "text": {
+          "description": "UTF-8 text. NOTE: this maxLength counts CODE POINTS (JSON Schema 2020-12), while the cap it publishes is enforced in BYTES — a 256-code-point non-ASCII value is legal here and degrades to Unknown at decode. Deliberate; see ADR 0039 §5.",
+          "maxLength": 256,
+          "type": "string"
+        },
+        "time_ms": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "uint": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unknown": {
+          "type": "null"
+        }
+      },
+      "type": "object"
+    },
     "ByteRange": {
       "description": "Rango de bytes de una lectura: `offset` inicial y longitud opcional\n(`None` = hasta EOF). Lo exigen el resume de M2 (`.norte-partial` +\noffset) y el viewer (lectura parcial de archivos grandes).\n\n```\nuse norte_proto::ByteRange;\nlet r: ByteRange = serde_json::from_str(r#\"{\"offset\": 65536, \"len\": null}\"#).unwrap();\nassert_eq!(r, ByteRange { offset: 65536, len: None });\n```",
       "properties": {
@@ -262,8 +405,20 @@
       ]
     },
     "Entry": {
-      "description": "Metadatos de un nodo del VFS.\n\nCampos opcionales `None` = \"el provider no lo sabe\", nunca un 0 fingido.\n\n```\nuse norte_proto::{Entry, EntryKind, VPath};\nlet e = Entry {\n    path: VPath::parse(\"file:///a.txt\").unwrap(),\n    kind: EntryKind::File,\n    size: Some(42),\n    mtime_ms: None,\n};\nlet json = serde_json::to_string(&e).unwrap();\nassert_eq!(serde_json::from_str::<Entry>(&json).unwrap(), e);\n```",
+      "description": "Metadatos de un nodo del VFS.\n\nCampos opcionales `None` = \"el provider no lo sabe\", nunca un 0 fingido.\n\n```\nuse norte_proto::attrs::AttrValue;\nuse norte_proto::{Entry, EntryKind, VPath};\nlet e = Entry {\n    path: VPath::parse(\"file:///a.txt\").unwrap(),\n    kind: EntryKind::File,\n    size: Some(42),\n    mtime_ms: None,\n    attrs: [(\"posix.mode\".to_owned(), AttrValue::Uint(0o100_644))].into(),\n};\nlet json = serde_json::to_string(&e).unwrap();\nassert_eq!(serde_json::from_str::<Entry>(&json).unwrap(), e);\n\n// Sin attrs, el wire es EXACTAMENTE el de 0.29.\nlet plain = Entry { attrs: Default::default(), ..e };\nassert!(!serde_json::to_string(&plain).unwrap().contains(\"attrs\"));\n\n// Una clave de atributo mal formada NO llega al mapa: se descarta al\n// decodificar, sin error (ver [`Entry::attrs`]).\nlet wire = r#\"{\"path\":\"file:///a.txt\",\"kind\":\"file\",\"attrs\":{\"MODE\":{\"uint\":1}}}\"#;\nlet filtrada: Entry = serde_json::from_str(wire).unwrap();\nassert!(filtrada.attrs.is_empty());\n```\n\nOJO: `PartialEq`/`Eq`/`Hash` derivados son REPRESENTACIONALES, no de\nIDENTIDAD: dos `Entry` del MISMO nodo difieren si una se pidió con\natributos y la otra no, o si se pidieron ids distintos. Para \"¿es el mismo\nnodo?\" se compara [`Entry::path`]; estas derivaciones existen para\nfixtures, tests y deduplicado de listados idénticos, no para decidir\nidentidad.",
       "properties": {
+        "attrs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AttrValue"
+          },
+          "description": "Provider attributes (0.30.0, ADR 0039): typed metadata BEYOND the four\nfields above, delivered only for the ids the client requested in\n`fs.list`/`fs.stat`. Empty (the default, and the only possibility for a\n0.29 peer) is omitted from the wire entirely, so a payload without\nattributes is byte-identical to 0.29's.\n\nAn absent key has THREE possible causes and a caller cannot tell them\napart: the provider does not know the value (never a fabricated one),\nthe id the peer sent was malformed, or the id lost the byte-order cut\nof the cap below. The drop is deliberately not observable — a caller\ntreats absence as \"no value\", exactly as it does for a `None`\n[`size`](Entry::size).\n\n# Rules applied ON DECODE\n\nDeserialisation applies both of these, and NEITHER is ever an error:\none bad key costs that key, never the entry and never the page — the\nsame reason a malformed cell degrades to\n[`AttrValue::Unknown`](crate::attrs::AttrValue::Unknown).\n\n1. A key that is not a well-formed id\n   ([`is_valid_attr_id`](crate::attrs::is_valid_attr_id)) is DROPPED.\n   An attribute id becomes a configuration id and a map lookup\n   downstream, so `MODE` or `../etc/passwd` must not survive the wire.\n2. The map is bounded at\n   [`ATTRS_MAX_REQUEST`](crate::attrs::ATTRS_MAX_REQUEST) entries — a\n   client can request no more than that, so a bigger map is a buggy or\n   hostile peer. The SMALLEST ids in byte order are kept, so the SET of\n   ids that survives does not depend on the order the peer serialised\n   its keys in (JSON objects are unordered, RFC 8259 §4). A key\n   REPEATED in the same object resolves last-wins, as it would in any\n   JSON parser. At most `ATTRS_MAX_REQUEST + 1` entries ever exist at\n   once and a dropped key's value is never MATERIALISED — the tokens are\n   still walked, since JSON has to be traversed to be skipped, but\n   nothing is built from them — so a 10 000-key object does not\n   materialise a 10 000-entry map first.\n\nA non-map `attrs` IS a hard error: that is serde's decision on the\nparent, and a peer that sends one is broken rather than newer.\n\n# The filter is one-directional\n\nSerialisation is NOT filtered, and the field is public with no\nconstructor: an `Entry` built in-process with an invalid id or with\nmore than the cap emits exactly what it holds, and decoding that wire\ngives back a DIFFERENT `Entry`. That asymmetry is deliberate — a\nproducer's bug must stay visible at the boundary that validates it\ninstead of being laundered by the serialiser. A producer therefore\nvalidates before emitting; daemon-side enforcement lands in block 2 of\nthis feature.",
+          "maxProperties": 16,
+          "propertyNames": {
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$"
+          },
+          "type": "object"
+        },
         "kind": {
           "$ref": "#/$defs/EntryKind",
           "description": "Clase del nodo."
@@ -671,8 +826,16 @@
       "type": "object"
     },
     "FsCapabilitiesResult": {
-      "description": "Result de [`FS_CAPABILITIES`].",
+      "description": "Result de [`FS_CAPABILITIES`].\n\n```\nuse norte_proto::methods::FsCapabilitiesResult;\n// Un catálogo con un id mal formado NO llega al vector: se descarta al\n// decodificar, sin error (ver [`FsCapabilitiesResult::attrs`]).\nlet wire = r#\"{\n    \"capabilities\": {\"flags\": \"\", \"max_path\": null},\n    \"attrs\": [{\"id\": \"MODE\", \"label\": \"Mode\", \"type\": \"uint\", \"hint\": \"mode\"}]\n}\"#;\nlet caps: FsCapabilitiesResult = serde_json::from_str(wire).unwrap();\nassert!(caps.attrs.is_empty());\n```",
       "properties": {
+        "attrs": {
+          "description": "Provider attributes this provider offers (0.30.0, ADR 0039): the\ndiscovery half of [`Entry::attrs`](crate::Entry::attrs). Empty (the\ndefault, and the only possibility for a 0.29 peer) is omitted from the\nwire entirely, so a response from a provider that publishes none is\nbyte-identical to 0.29's.\n\n[`AttrInfo::label`](crate::attrs::AttrInfo::label) is THIRD-PARTY text\n— a frontend masks and clamps it exactly as it does a plugin's column\nheader. The ORDER is the provider's and it is meaningful: a column\npicker paints the catalog in it, so it is never sorted here.\n\n# Rules applied ON DECODE\n\nThis is RECEIVED data, so the same shape of filter that guards\n[`Entry::attrs`](crate::Entry::attrs) guards it: decoding runs\n[`sanitize_catalog`](crate::attrs::sanitize_catalog), whose rules are\ndocumented there in full and NONE of which is ever an error —\n\n1. an [`AttrInfo`](crate::attrs::AttrInfo) whose `id` is not\n   well-formed ([`is_valid_attr_id`](crate::attrs::is_valid_attr_id))\n   is DROPPED. An advertised id becomes a requested id, a configuration\n   id and a map lookup downstream, so `MODE` or `../etc/passwd` must\n   not survive the wire — and a caller must not have to remember to\n   check;\n2. a REPEATED id is dropped, FIRST WINS — the opposite of\n   [`Entry::attrs`](crate::Entry::attrs)'s last-wins, because this is\n   an ordered list the provider ranked (where \"first\" means something)\n   and that is an unordered JSON object (where it does not). Keeping\n   both would let two consumers render the same bytes differently, one\n   folding into a map and one using `find()`;\n3. an over-long `label` is CLAMPED to\n   [`ATTR_LABEL_MAX`](crate::attrs::ATTR_LABEL_MAX) bytes on a char\n   boundary; the descriptor survives, since the id is what a client\n   acts on;\n4. the vector is bounded at\n   [`ATTRS_MAX_ADVERTISED`](crate::attrs::ATTRS_MAX_ADVERTISED)\n   descriptors, keeping the FIRST in wire order — rules 1 and 2 run\n   before a slot is taken, so rejects and duplicates never starve a\n   legitimate later attribute. A fat catalog is a buggy provider, not a\n   broken peer, so it truncates rather than failing the call: the same\n   spirit as an unknown requested id coming back absent.\n\nDecoding additionally stops EXAMINING elements past\n[`ATTRS_MAX_CATALOG_SCAN`](crate::attrs::ATTRS_MAX_CATALOG_SCAN) and\ndrains the rest unmaterialised, so a catalog padded with rejects costs\nbounded work rather than unbounded work for an empty result.\n\nThose rules are NOT the deserialiser's alone: the field is an\n[`AttrCatalog`](crate::attrs::AttrCatalog), whose only constructor runs\n`sanitize_catalog` and whose contents are private. That matters because\nan EMBEDDED backend — the default TUI/CLI configuration, no daemon in\nbetween — never crosses the deserialisation boundary, so in block 2 a\ncatalog from a WASM provider plugin (untrusted by the threat model)\nwould otherwise reach a frontend unfiltered whenever someone forgot the\ncall. The wire shape is unchanged: a plain array of `AttrInfo`.\n\nA descriptor that is not a well-formed `AttrInfo` at all (a missing\n`label`, `attrs` that is not a list) IS a hard error: that is serde's\ndecision, and a peer that sends one is broken rather than newer — an\nunknown `type` or `hint` from a NEWER peer already degrades to its\n`Unknown` variant instead.\n\n# Unlike `Entry::attrs`, this cannot carry a producer's bug\n\n[`Entry::attrs`](crate::Entry::attrs) is a public map with no\nconstructor, so an entry built in-process with an invalid id emits it\nand decodes back different — deliberately, so a producer's bug stays\nvisible at the boundary that validates it. A catalog has no such hole:\nit cannot be built dirty in the first place, so serialisation has\nnothing to launder. The asymmetry is on purpose — an advertised id\nbecomes a REQUESTED id, a configuration id and a map lookup downstream,\nwhich is a longer blast radius than one entry's cell.",
+          "items": {
+            "$ref": "#/$defs/AttrInfo"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
         "capabilities": {
           "$ref": "#/$defs/Capabilities",
           "description": "Capabilities declaradas por el provider."
@@ -742,6 +905,16 @@
     "FsListParams": {
       "description": "Params de [`FS_LIST`] (paginación por cursor desde 0.8.0, ADR 0017).",
       "properties": {
+        "attrs": {
+          "description": "Ids of the provider attributes to deliver with each entry (0.30.0,\nADR 0039). Empty (the default, and the only possibility for a 0.29\nclient) = none: nothing is delivered unrequested. The contract is at\nmost [`ATTRS_MAX_REQUEST`](crate::attrs::ATTRS_MAX_REQUEST) ids, each\nwell-formed ([`is_valid_attr_id`](crate::attrs::is_valid_attr_id)), and\nviolating either is `-32602` — a rule BLOCK 2 wires up: a 0.30.0 daemon\nships no producer and ignores the requested ids entirely, so today the\nanswer to any request is the same empty set of attributes. An id the\nprovider does not offer is NOT an error either way: it comes back\nabsent, so a client with a stale catalog degrades instead of failing.\n\n# Bounded at decode, but NOT validated — on purpose\n\nThis is a REQUEST: data this peer is SENDING, not data it received. So\nwhatever the wire carries lands in the vector VERBATIM — malformed ids\nand over-cap length included. Silently dropping a bad id here would\nturn \"the client asked for `../etc/passwd`\" into \"the client asked for\nnothing\", hiding a caller's bug and making the daemon-side validation\nuntestable. The asymmetry with the two RECEIVE-side fields —\n[`Entry::attrs`](crate::Entry::attrs) and\n[`FsCapabilitiesResult::attrs`], which both filter at decode — is\ndeliberate: a bad cell or a bad advertised descriptor costs itself,\nwhile a bad request is the daemon's `-32602` to raise.\n\nThe one thing decoding does impose is a MEMORY bound, which is not\nvalidation: only the first `ATTRS_MAX_REQUEST + 1` elements are kept\nand the rest is drained unmaterialised, because a 16 MiB frame of\n`[\"a\",\"a\",…]` would otherwise allocate ~15× its own size in `String`\nheaders before any daemon check could run. The `+ 1` is what keeps\nover-cap OBSERVABLE (`attrs.len() > ATTRS_MAX_REQUEST`) instead of\ntrimming a violation into legality.",
+          "items": {
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "type": "array"
+        },
         "cursor": {
           "default": null,
           "description": "Cursor OPACO de la página siguiente (el `next_cursor` de la respuesta\nprevia). `None` = abre un listado nuevo. Jamás se parsea; desconocido\no expirado → [`Error::CursorExpired`](crate::Error::CursorExpired).",
@@ -942,6 +1115,16 @@
     "FsStatParams": {
       "description": "Params de [`FS_STAT`].",
       "properties": {
+        "attrs": {
+          "description": "Ids of the provider attributes to deliver with the entry (0.30.0,\nADR 0039). Empty (the default, and the only possibility for a 0.29\nclient) = none: nothing is delivered unrequested. The contract is at\nmost [`ATTRS_MAX_REQUEST`](crate::attrs::ATTRS_MAX_REQUEST) ids, each\nwell-formed ([`is_valid_attr_id`](crate::attrs::is_valid_attr_id)), and\nviolating either is `-32602` — a rule BLOCK 2 wires up: a 0.30.0 daemon\nignores the requested ids entirely. An id the provider does not offer\nis NOT an error either way: it comes back absent.\n\n# Bounded at decode, but NOT validated — on purpose\n\nSame as [`FsListParams::attrs`], for the same reasons: a malformed id\nsurvives decoding and is the daemon's `-32602` to raise, instead of\nbeing laundered into \"asked for nothing\"; only the RECEIVE-side fields\n— [`Entry::attrs`](crate::Entry::attrs) and\n[`FsCapabilitiesResult::attrs`] — filter. Decoding keeps the first\n`ATTRS_MAX_REQUEST + 1` elements and drains the rest, which is a memory\nbound (a 16 MiB frame of tiny ids would otherwise allocate ~15× its own\nsize) that leaves over-cap observable.",
+          "items": {
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "type": "array"
+        },
         "path": {
           "$ref": "#/$defs/VPath",
           "description": "Nodo a consultar."
@@ -2462,6 +2645,18 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Aggregate root: one field per top-level wire type. `schema_for!` emits each\nas a property and pulls every nested type into `$defs`, so the single\ndocument covers the whole protocol surface. Field values are never read.",
   "properties": {
+    "attr_hint": {
+      "$ref": "#/$defs/AttrHint"
+    },
+    "attr_info": {
+      "$ref": "#/$defs/AttrInfo"
+    },
+    "attr_type": {
+      "$ref": "#/$defs/AttrType"
+    },
+    "attr_value": {
+      "$ref": "#/$defs/AttrValue"
+    },
     "byte_range": {
       "$ref": "#/$defs/ByteRange"
     },
@@ -2749,6 +2944,10 @@
     }
   },
   "required": [
+    "attr_hint",
+    "attr_info",
+    "attr_type",
+    "attr_value",
     "byte_range",
     "capabilities",
     "capability_flags",
