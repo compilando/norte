@@ -132,7 +132,11 @@ pub enum AttrType {
     Int,
     /// UTF-8 text (third-party: mask before painting).
     Text,
-    /// Raw bytes, base64 on the wire (a name that is not UTF-8).
+    /// Raw bytes, base64 on the wire (a name that is not UTF-8). This is the
+    /// one pair whose names differ across the two surfaces: the declared type
+    /// is `"bytes"`, while the values it describes are tagged `"bytes_b64"`
+    /// ([`AttrValue::Bytes`]) — the value tag names the ENCODING that carries
+    /// them, the type names what they ARE.
     Bytes,
     /// Milliseconds since the UTC epoch; negative is valid (pre-1970).
     TimeMs,
@@ -231,9 +235,33 @@ pub struct AttrInfo {
     /// (e.g. `t!("attr.posix.mode")`) and fall back to this masked provider
     /// label only for ids it does not recognize. First-party attributes
     /// still route their labels through `i18n/`.
+    ///
+    /// The cap is in BYTES here and the schema's `maxLength` counts CODE POINTS
+    /// (JSON Schema 2020-12 §6.3.1): a 60-character CJK label is schema-legal
+    /// and still gets clamped to ~21 characters. See ADR 0039 §5 — the
+    /// divergence is accepted and pinned by a test, not a bug to "fix" by
+    /// counting characters in the code.
     #[cfg_attr(feature = "schema", schemars(extend("maxLength" = ATTR_LABEL_MAX)))]
     pub label: String,
-    /// Declared type of the values of this attribute.
+    /// Declared type of the values of this attribute — ADVISORY, and never
+    /// authoritative over a cell.
+    ///
+    /// Nothing stops a `{"type":"uint"}` descriptor from being paired with a
+    /// `{"text": …}` cell: both decode cleanly, and only the rule below keeps
+    /// two conforming frontends from rendering the same bytes differently
+    /// (ADR 0039 §1).
+    ///
+    /// - At RENDER time the [`AttrValue`]'s own tag decides. A cell whose tag
+    ///   contradicts this field is rendered as its actual variant and is NEVER
+    ///   coerced into the declared one.
+    /// - This field is for column-CONFIGURATION time: it picks the formatter
+    ///   and the sort key for a column before any value has arrived. A column
+    ///   configured from a `Uint` descriptor that then receives `Text` cells
+    ///   sorts them as the text they are.
+    /// - Agreement between the two is a PRODUCER obligation, enforced by block
+    ///   2's provider conformance suite. A consumer cannot check it: holding
+    ///   one cell, it has no way to know whether the catalog or the provider is
+    ///   the one that is wrong.
     #[serde(rename = "type")]
     pub ty: AttrType,
     /// Presentation hint.
@@ -266,9 +294,11 @@ where
         ) -> Result<Self::Value, M::Error> {
             // Se conservan a lo sumo `ATTRS_MAX_REQUEST` claves — las MENORES
             // en orden de bytes — descartando los ids mal formados, y sin
-            // llegar a parsear el valor de lo que se descarta (nunca hay más
-            // de `ATTRS_MAX_REQUEST + 1` entradas vivas a la vez). El
-            // contrato completo está en el rustdoc de `Entry::attrs`.
+            // MATERIALIZAR el valor de lo que se descarta: `IgnoredAny` recorre
+            // sus tokens (a JSON hay que atravesarlo para saltárselo) pero no
+            // construye nada, así que nunca hay más de `ATTRS_MAX_REQUEST + 1`
+            // entradas vivas a la vez. El contrato completo está en el rustdoc
+            // de `Entry::attrs`.
             let mut out: BTreeMap<String, AttrValue> = BTreeMap::new();
             while let Some(key) = access.next_key::<String>()? {
                 // Id mal formado: se descarta la CLAVE, jamás la entrada.
@@ -641,6 +671,14 @@ pub enum AttrValue {
     Text(String),
     /// Raw bytes (base64 on the wire): an owner name that is not UTF-8.
     ///
+    /// THIRD-PARTY, and the variant most likely to be painted wrong, because an
+    /// author holding a `Vec<u8>` reaches for `String::from_utf8_lossy`. Render
+    /// it through `norte_frontend::display_name(&bytes)` — the same
+    /// lossy-with-badge path that paints a non-UTF-8 FILENAME, so the user is
+    /// told the rendering is lossy instead of silently shown `�`. The bytes
+    /// themselves are never mutated (hard rule 1): only the rendering is lossy,
+    /// and the value that round-trips back onto the wire is the original.
+    ///
     /// EMITTED as RFC 4648 §4 — the standard alphabet (`+`, `/`) with
     /// padding required. On READ the unpadded and URL-safe (`-`, `_`) forms
     /// are accepted too, tried in that order: a producer using Go's
@@ -1007,7 +1045,15 @@ impl schemars::JsonSchema for AttrValue {
             "properties": {
                 "uint": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "int": { "type": "integer", "format": "int64" },
-                "text": { "type": "string", "maxLength": ATTR_TEXT_MAX },
+                "text": {
+                    "type": "string",
+                    "description": "UTF-8 text. NOTE: this maxLength counts CODE \
+                                    POINTS (JSON Schema 2020-12), while the cap it \
+                                    publishes is enforced in BYTES — a 256-code-point \
+                                    non-ASCII value is legal here and degrades to \
+                                    Unknown at decode. Deliberate; see ADR 0039 §5.",
+                    "maxLength": ATTR_TEXT_MAX
+                },
                 "bytes_b64": {
                     "type": "string",
                     "contentEncoding": "base64",
@@ -1484,6 +1530,32 @@ mod tests {
             "id": "posix.mode", "label": justo, "type": "uint", "hint": "mode",
         }]));
         assert_eq!(vivos[0].label, justo);
+    }
+
+    #[test]
+    fn los_topes_son_de_bytes_y_el_schema_cuenta_code_points() {
+        // Divergencia DELIBERADA (ADR 0039 §5): `maxLength` de JSON Schema
+        // 2020-12 cuenta code points, el código acota BYTES. Con no-ASCII las
+        // dos cuentas se separan, y se fija en las dos direcciones para que
+        // nadie la "arregle" aflojando el tope de memoria.
+        let cjk_texto = "文".repeat(200); // 200 code points, 600 bytes
+        assert_eq!(cjk_texto.chars().count(), 200, "legal para el schema");
+        assert!(cjk_texto.len() > ATTR_TEXT_MAX, "pero se pasa en BYTES");
+        let v: AttrValue =
+            serde_json::from_value(serde_json::json!({ "text": cjk_texto })).unwrap();
+        assert_eq!(v, AttrValue::Unknown, "y degrada, no se recorta");
+
+        let cjk_label = "文".repeat(60); // 60 code points, 180 bytes
+        assert_eq!(cjk_label.chars().count(), 60, "legal para el schema");
+        let vivos = catalogo(&serde_json::json!([{
+            "id": "posix.mode", "label": cjk_label, "type": "uint", "hint": "mode",
+        }]));
+        assert_eq!(vivos.len(), 1, "un label gordo no cuesta el descriptor");
+        assert_eq!(
+            vivos[0].label.chars().count(),
+            ATTR_LABEL_MAX / 3,
+            "se recorta a ~21 caracteres: 64 BYTES en frontera de char"
+        );
     }
 
     #[test]

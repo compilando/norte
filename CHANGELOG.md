@@ -13,7 +13,8 @@ independently through `PROTOCOL_VERSION`.
   metadata — POSIX mode/uid/gid, an SFTP owner string, an S3 storage class, an
   archive member's packed size — can finally reach a client *typed* rather than
   pre-rendered, so a later block can paint it as a configurable column that still
-  sorts and formats correctly. Three additive fields: `FsCapabilitiesResult.attrs`
+  sorts and formats correctly. Four additive fields across three surfaces —
+  catalog, request ×2, entry. `FsCapabilitiesResult.attrs` (an `AttrCatalog`)
   advertises what a provider offers (`AttrInfo` = `id`, `label`, `AttrType`,
   `AttrHint` — the declared type and the suggested format/alignment are separate,
   because two `Uint`s are painted very differently as a byte count and as a
@@ -22,13 +23,16 @@ independently through `PROTOCOL_VERSION`.
   carries the values as `AttrValue` (`Uint | Int | Text | Bytes | TimeMs | Bool |
   Unknown`). Ids are namespaced by construction (at least one `.`, every segment
   starting with an ASCII letter and continuing in `[a-z0-9_-]`, ≤ 64 bytes — so
-  neither the argv-shaped `-x.y` nor the float-shaped `0.0` is an id) and the caps — 16 requested ids per call, 64 advertised
-  descriptors, 64-byte label, 256-byte `Text`/`Bytes` — travel in the published
-  JSON Schema (ADR 0038). Wire-only for now: no provider advertises an attribute
-  yet and the daemon ignores requested ids, which is a valid answer under the
-  contract. `norte-proto` gains `base64` (0.22, already a vetted workspace dep) so
+  neither the argv-shaped `-x.y` nor the float-shaped `0.0` is an id) and the
+  caps — 16 requested ids per call, 64 advertised descriptors, 64-byte label,
+  256-byte `Text`/`Bytes`, all counted in BYTES where the schema's `maxLength`
+  counts code points — travel in the published JSON Schema (ADR 0038). The
+  request surfaces are `fs.list`/`fs.stat` only: `search.hits` and
+  `index.query` carry no attributes at 0.30. Wire-only for now: no provider
+  advertises an attribute yet and the daemon ignores requested ids, which is a
+  valid answer under the contract. `norte-proto` gains `base64` (0.22, already a vetted workspace dep) so
   `AttrValue::Bytes` owns its decode. Three properties are worth stating exactly:
-  - All three fields are `skip_serializing_if`-guarded, so a **0.29 peer emits and
+  - All four fields are `skip_serializing_if`-guarded, so a **0.29 peer emits and
     receives byte-identical payloads**; the window becomes N=0.30.x / N-1=0.29.x.
   - **Any malformed attribute VALUE degrades to `AttrValue::Unknown`** — an
     unrecognised tag from a protocol-N+1 daemon (ADR 0004 applied at value

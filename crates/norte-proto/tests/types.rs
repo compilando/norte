@@ -1304,8 +1304,11 @@ fn rpc_cancel_params_round_trip_num_y_str() {
     );
 }
 
-/// (0.30.0, ADR 0039) Los tres campos nuevos son aditivos: un wire N-1 (0.29.x)
-/// SIN ellos deserializa, y un valor vacío NO se emite.
+/// (0.30.0, ADR 0039) Los CUATRO campos nuevos —repartidos en TRES superficies:
+/// catálogo, petición ×2 y entrada— son aditivos: un wire N-1 (0.29.x) SIN
+/// ellos deserializa, y un valor vacío NO se emite. (`Entry.attrs`, el cuarto,
+/// lo cubre `entry_con_atributos_validos_hace_roundtrip_exacto` y la golden
+/// `attrs_vacios_se_omiten`.)
 #[test]
 fn attrs_son_aditivos_en_ambas_direcciones() {
     use norte_proto::methods::{FsCapabilitiesResult, FsListParams, FsStatParams};
@@ -1358,10 +1361,13 @@ fn peticion_no_filtra_pero_el_catalogo_si() {
     assert_eq!(ids, ["posix.mode"], "el id mal formado no se puede pedir");
 }
 
-/// (0.30.0) Los ids del vocabulario que este bloque congela son válidos, y las
-/// formas hostiles NO lo son — el gate vive en el tipo, no en cada llamador.
+/// (0.30.0) Ids de EJEMPLO —plausibles, no un vocabulario: ADR 0039 §4 se niega
+/// explícitamente a un registro central y no registra ninguno de estos, que un
+/// provider puede o no publicar— con la forma bien construida, frente a las
+/// formas hostiles que NO lo están. Lo que se fija es la GRAMÁTICA, y que el
+/// gate vive en el tipo y no en cada llamador.
 #[test]
-fn ids_del_vocabulario_inicial_son_validos() {
+fn ids_de_ejemplo_bien_formados() {
     use norte_proto::attrs::is_valid_attr_id;
 
     for id in [
@@ -1380,9 +1386,17 @@ fn ids_del_vocabulario_inicial_son_validos() {
         "archive.packed_size",
         "archive.crc32",
     ] {
-        assert!(is_valid_attr_id(id), "{id} es del vocabulario de ADR 0039");
+        assert!(is_valid_attr_id(id), "{id} es un ejemplo bien formado");
     }
-    for hostil in ["../etc/passwd", "posix.mode\u{202E}", "POSIX.MODE", ""] {
+    for hostil in [
+        "../etc/passwd",
+        "posix.mode\u{202E}",
+        "POSIX.MODE",
+        "",
+        // Segmento que no empieza por letra (0.30.0): forma de argv y de float.
+        "-x.y",
+        "0.0",
+    ] {
         assert!(!is_valid_attr_id(hostil), "{hostil:?} debe rechazarse");
     }
 }

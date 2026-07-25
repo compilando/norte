@@ -109,8 +109,10 @@ pub struct Entry {
     ///    its keys in (JSON objects are unordered, RFC 8259 §4). A key
     ///    REPEATED in the same object resolves last-wins, as it would in any
     ///    JSON parser. At most `ATTRS_MAX_REQUEST + 1` entries ever exist at
-    ///    once and a dropped key's value is never even parsed, so a
-    ///    10 000-key object does not materialise a 10 000-entry map first.
+    ///    once and a dropped key's value is never MATERIALISED — the tokens are
+    ///    still walked, since JSON has to be traversed to be skipped, but
+    ///    nothing is built from them — so a 10 000-key object does not
+    ///    materialise a 10 000-entry map first.
     ///
     /// A non-map `attrs` IS a hard error: that is serde's decision on the
     /// parent, and a peer that sends one is broken rather than newer.

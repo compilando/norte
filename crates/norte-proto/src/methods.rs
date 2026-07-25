@@ -195,18 +195,23 @@ use crate::{
 /// N=0.29.x/N-1=0.28.x.
 ///
 /// 0.30.0 (columnas bloque 1, ADR 0039): ATRIBUTOS DE PROVIDER, tipados y bajo
-/// demanda — tres campos aditivos más el vocabulario del módulo
+/// demanda — CUATRO campos aditivos repartidos en TRES superficies (catálogo,
+/// petición ×2, entrada) más el vocabulario del módulo
 /// [`attrs`](crate::attrs) ([`AttrType`](crate::AttrType),
 /// [`AttrHint`](crate::AttrHint), [`AttrInfo`](crate::AttrInfo),
 /// [`AttrValue`](crate::AttrValue)). [`FsCapabilitiesResult`] gana
-/// `attrs: Vec<AttrInfo>` (discovery: qué publica ESE provider, con tipo y
-/// pista de presentación); [`FsListParams`] y [`FsStatParams`] ganan
+/// `attrs: AttrCatalog` (discovery: qué publica ESE provider, con tipo y
+/// pista de presentación; en el wire, el array de `AttrInfo` de siempre);
+/// [`FsListParams`] y [`FsStatParams`] ganan
 /// `attrs: Vec<String>` (el cliente pide SOLO los ids que va a pintar, nada se
 /// entrega sin pedirlo); [`Entry`] gana
-/// `attrs: BTreeMap<String, AttrValue>`. Los tres llevan `skip_serializing_if`
-/// sobre el vacío, así que un peer 0.29 emite y recibe payloads idénticos BYTE
-/// A BYTE a los de antes — aditivo en el sentido fuerte, no solo en el de
-/// «campo desconocido que se ignora».
+/// `attrs: BTreeMap<String, AttrValue>`. Los cuatro llevan
+/// `skip_serializing_if` sobre el vacío, así que un peer 0.29 emite y recibe
+/// payloads idénticos BYTE A BYTE a los de antes — aditivo en el sentido
+/// fuerte, no solo en el de «campo desconocido que se ignora». Las
+/// superficies de PETICIÓN son `fs.list` y `fs.stat` y solo esas: ni las
+/// entradas de [`SEARCH_HITS`] ni los hits de [`INDEX_QUERY`] llevan atributos
+/// en 0.30.
 ///
 /// `AttrValue` deserializa A MANO (misma ruta que
 /// [`CapabilityFlags`](crate::CapabilityFlags): `#[serde(other)]` no existe
@@ -232,11 +237,24 @@ use crate::{
 /// [`ATTRS_MAX_ADVERTISED`](crate::ATTRS_MAX_ADVERTISED) conservando los
 /// PRIMEROS del wire, y examen acotado en
 /// [`ATTRS_MAX_CATALOG_SCAN`](crate::ATTRS_MAX_CATALOG_SCAN) (el resto se
-/// drena sin materializar). Los dos campos de PETICIÓN, en cambio, NO filtran
-/// a propósito: llevan datos que este peer ENVÍA, así que un id malformado
-/// sobrevive al decode y es el `-32602` del daemon — que cablea el bloque 2 —
-/// en vez de blanquearse a «no pidió nada», lo que escondería el bug del
-/// llamante y haría intestable esa validación.
+/// drena sin materializar). Además el catálogo es un tipo, no una llamada:
+/// [`AttrCatalog`](crate::AttrCatalog) tiene el vector privado y un único
+/// constructor que sanea, así que el camino EMBEBIDO (TUI/CLI por defecto, que
+/// no cruza la deserialización) queda cubierto igual que el del wire.
+///
+/// Los dos campos de PETICIÓN, en cambio, NO filtran a propósito: llevan datos
+/// que este peer ENVÍA, así que un id malformado sobrevive al decode y es el
+/// `-32602` del daemon — que cablea el bloque 2 — en vez de blanquearse a «no
+/// pidió nada», lo que escondería el bug del llamante y haría intestable esa
+/// validación. Con una excepción que NO es validación sino cota de MEMORIA: se
+/// conservan los primeros [`ATTRS_MAX_REQUEST`](crate::ATTRS_MAX_REQUEST) `+ 1`
+/// elementos y el resto se drena sin materializar, porque un frame de 16 MiB de
+/// ids diminutos reservaría ~15× su tamaño en cabeceras de `String` antes de
+/// que ningún chequeo del daemon pueda correr. Así que un id malformado
+/// sobrevive al decode SIEMPRE, pero a partir del elemento 17 el id ya no
+/// llega: lo que sobrevive es el TESTIGO de que se pasó (`attrs.len() >
+/// ATTRS_MAX_REQUEST`), que es lo que el daemon necesita para rechazar en vez
+/// de recortar la violación hasta hacerla legal.
 ///
 /// Este bump es SOLO de wire: ningún provider anuncia atributos todavía y el
 /// daemon ignora los ids pedidos, lo cual es honesto porque la AUSENCIA ya es

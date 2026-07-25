@@ -34,18 +34,42 @@ Three shapes were considered:
 
 ### 1. Attributes are declared, requested, and typed
 
-- `FsCapabilitiesResult` gains `attrs: Vec<AttrInfo>`, where `AttrInfo` is
+- `FsCapabilitiesResult` gains `attrs: AttrCatalog` (a sanitising newtype over
+  `Vec<AttrInfo>`; on the wire, an array), where `AttrInfo` is
   `{ id, label, type, hint }`. This is discovery: a client learns which
   attributes exist for a provider from the call it already makes.
 - `FsListParams` and `FsStatParams` gain `attrs: Vec<String>` — the client asks
   for the ids it will paint. Nothing is delivered unrequested.
 - `Entry` gains `attrs: BTreeMap<String, AttrValue>`, where `AttrValue` is
   `Uint | Int | Text | Bytes | TimeMs | Bool | Unknown`.
+- The REQUEST surfaces are `fs.list` and `fs.stat`, and only those. `search.hits`
+  entries and `index.query` hits carry no attributes at 0.30, so a pane fed by a
+  search or by the index cannot render attribute columns at this version — a
+  limitation block 2 inherits and must state in its UI rather than work around.
 
 `AttrType` (the declared type) and `AttrHint` (`Size`, `Timestamp`, `Mode`,
 `Identity`, `Opaque` — the default format and alignment a frontend should pick)
 are separate: two `Uint` attributes are formatted very differently depending on
 whether they are a byte count or a permission word.
+
+**Between the surfaces, the CELL is authoritative.** A `{"type":"uint"}`
+descriptor can be paired with a `{"text": …}` cell and both decode cleanly, so
+the rule has to be written down or two conforming frontends render the same
+bytes differently:
+
+- at RENDER time the cell's own tag decides. A cell whose tag contradicts the
+  declared type is rendered as its actual variant and is NEVER coerced into the
+  declared one;
+- `AttrType` is ADVISORY, and its use is at column-CONFIGURATION time: it picks
+  the formatter and the sort key for a column before any value has arrived. A
+  column configured from a `Uint` descriptor that then receives `Text` cells
+  sorts them as the text they are;
+- an id delivered that the client did not request is not an error, and carries
+  no obligation to render;
+- type agreement is therefore a PRODUCER obligation, enforced by block 2's
+  provider conformance suite. It is not something a consumer can check —
+  a consumer holding one cell has no way to know whether the catalog or the
+  provider is the one that is wrong.
 
 ### 2. On demand, not always
 
@@ -212,6 +236,16 @@ At most 16 requested ids per call, id ≤ 64 bytes, `AttrInfo::label` ≤ 64 byt
 `Text` ≤ 256 bytes, `Bytes` ≤ 256 bytes decoded. The ceiling a listing page can
 add is therefore bounded and predictable.
 
+Every one of those is a BYTE count, while the `maxLength` the published schema
+carries counts CODE POINTS (JSON Schema 2020-12 §6.3.1). The two diverge for
+non-ASCII: a 60-character CJK label is schema-legal and is still clamped to
+about 21 characters, and a 200-character CJK `Text` is schema-legal and still
+degrades to `Unknown`. The divergence is accepted rather than papered over —
+bytes are what a memory bound must be measured in, and rewriting the caps in
+characters would make the bound depend on the input's encoding. A test pins both
+sides so the next reader does not "fix" it in the direction that loosens the
+bound.
+
 `AttrInfo::label` is enforced at decode too, but by CLAMPING (on a char
 boundary) rather than dropping: the id is what a client acts on, and losing an
 attribute over a cosmetic field would be the wrong trade.
@@ -230,7 +264,8 @@ fat catalog is a buggy provider, not a broken peer.
 
 ## Consequences
 
-- Protocol 0.30.0. Purely additive: all three fields are
+- Protocol 0.30.0. Purely additive: all four fields — across three surfaces,
+  catalog, request ×2 and entry — are
   `skip_serializing_if`-guarded, so a 0.29 peer emits and receives exactly
   today's bytes. The N/N-1 window moves to N=0.30.x / N-1=0.29.x. The direction
   that has to hold is a **0.29 client against a 0.30 daemon**: it sends no
