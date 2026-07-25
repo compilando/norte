@@ -205,7 +205,7 @@ Five commands, using the names the GUI already dispatches:
 | `mark.toggle` | `insert` (mark and move down) | new | exists |
 | `mark.all` | `ctrl+a` | new | new |
 | `mark.invert` | `*` | new | new |
-| `mark.clear` | `ctrl+shift+a` | new | new |
+| `mark.clear` | `ctrl+A` | new | new |
 | `mark.pattern-add` | `plus` | new | later (no text input) |
 | `mark.pattern-remove` | `-` | new | later (no text input) |
 
@@ -216,6 +216,11 @@ failing the build. That leniency covers **preset** bindings only: a user or
 project layer naming an unknown command still errors, so a typo never dies
 quietly (ADR 0006). This is why `mark.pattern-*` can live in the shared
 presets before the GUI implements it.
+
+`ctrl+A` is spelled with the capital, not as `ctrl+shift+a`: the parser
+rejects `shift+<char>` with its own diagnostic (`keymap.rs:151`) because a
+character already encodes shift, and `Chord::new` drops the shift bit for
+`Char`.
 
 **The `+` chord does not parse today.** `parse_chord`
 (`crates/norte-frontend/src/keymap.rs:218`) splits on `'+'` as the modifier
