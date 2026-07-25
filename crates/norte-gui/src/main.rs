@@ -2210,6 +2210,42 @@ impl NorteGui {
         // construye el rango visible, no las N entradas del dir.
         col = col.child(list);
 
+        // Pie de SELECCIÓN (#103): cuántas marcas hay y si un refresh se comió
+        // alguna. Va POR PANE, no en una barra global, porque las marcas son
+        // estado del pane y la GUI enseña los dos a la vez — mismo criterio
+        // (y misma vecindad) que el badge `status-archive-skipped` de arriba.
+        //
+        // Una línea POR SEGMENTO, cada una `truncate()`: en una ventana
+        // estrecha un solo renglón compartido recortaría la COLA, y el aviso
+        // de poda es justo lo que no puede desaparecer. El aviso va PRIMERO
+        // (mismo orden que la TUI: `{pruned}{marked}`) y en `err_fg` sobre el
+        // fondo del pane (el par ya vetado por el banner de error de arriba),
+        // así que es al menos tan prominente como el recuento — es la
+        // advertencia; el recuento es informativo.
+        let (marked_txt, pruned_txt) = marks_status_segments(
+            pane.marks_len(),
+            pane.marked_bytes(),
+            pane.marked_dirs(),
+            pane.pruned_marks(),
+        );
+        if let Some(txt) = pruned_txt {
+            col = col.child(
+                div()
+                    .px(px(sp::S))
+                    .truncate()
+                    .text_color(chrome.err_fg)
+                    .child(SharedString::from(txt)),
+            );
+        }
+        if let Some(txt) = marked_txt {
+            col = col.child(
+                div()
+                    .px(px(sp::S))
+                    .truncate()
+                    .child(SharedString::from(txt)),
+            );
+        }
+
         // Línea `/{query}` al pie si el quick search está activo. La query la
         // tecleó el usuario, pero con IME/paste puede llegar con bidi/invisibles
         // crudos (review encoding BAJA): se sanea AL PINTAR, una sola vez, con
@@ -3456,6 +3492,52 @@ fn kind_indicator(kind: EntryKind) -> &'static str {
         EntryKind::File => "",
         EntryKind::Other => "?",
     }
+}
+
+/// Los dos textos con los que el pie del pane habla de la SELECCIÓN (#103):
+/// `(marcadas, podadas)`, cada uno `None` cuando no hay nada que decir.
+/// Espejo exacto de `marks_status_segments` en `crates/norte-tui/src/ui.rs`
+/// (commit `b84ee16`) — mismas claves Fluent, mismas reglas de composición,
+/// para que los dos frontends digan LO MISMO del mismo estado. Lo que no
+/// comparten es la disposición: la TUI concatena en su barra global, la GUI
+/// pinta una línea por segmento en el pane que las tiene (ver `render_pane`).
+///
+/// - Con 0 marcas y 0 podadas devuelve `(None, None)`: quien no marca nada no
+///   gana chrome nuevo.
+/// - `dirs > 0` cambia la clave a `status-marked-with-dirs`, porque
+///   `PaneState::marked_bytes` cuenta SOLO no-directorios a propósito (nada
+///   recorre el árbol): pintar «2 marked, 10 B» con un directorio dentro
+///   insinuaría un total que nadie calculó.
+/// - `pruned > 0` avisa SIEMPRE, con marcas vivas o sin ellas. Un refresh que
+///   se comió marcas jamás es silencioso: con la selección vacía
+///   `marked_paths` cae al cursor, así que callarlo redirigiría la siguiente
+///   op en masa a algo que nadie marcó.
+///
+/// PURA (sin GPUI): toma los contadores ya calculados por `PaneState` y
+/// formatea con `norte_frontend::human_bytes` — la GUI compone y pinta, no
+/// cuenta (regla 7). Testeable sin levantar ventana.
+#[must_use]
+fn marks_status_segments(
+    marks: usize,
+    bytes: u64,
+    dirs: usize,
+    pruned: usize,
+) -> (Option<String>, Option<String>) {
+    let marked = (marks > 0).then(|| {
+        let n = marks.to_string();
+        let size = norte_frontend::human_bytes(bytes);
+        if dirs == 0 {
+            norte_i18n::ta("status-marked", &[("n", &n), ("size", &size)])
+        } else {
+            norte_i18n::ta(
+                "status-marked-with-dirs",
+                &[("n", &n), ("size", &size), ("dirs", &dirs.to_string())],
+            )
+        }
+    });
+    let pruned =
+        (pruned > 0).then(|| norte_i18n::ta("status-marks-pruned", &[("n", &pruned.to_string())]));
+    (marked, pruned)
 }
 
 /// Línea de una task para la franja: `[copy] 42% running X`. `kind`/`state`
@@ -5424,6 +5506,75 @@ mod tests {
         assert!(refilled);
         assert_eq!(pane.marks_len(), 1);
         assert_eq!(pane.pruned_marks(), 1);
+    }
+
+    /// Los tests de `marks_status_segments` afirman literales INGLESES, así
+    /// que fijan el idioma en vez de heredar el del entorno (`norte_i18n`
+    /// resuelve por locale: en una máquina en español leerían el `es.ftl`).
+    /// `force` es de una sola vez por proceso — con nextest cada test corre
+    /// en el suyo, así que no compite con los tests que fijan `Es`.
+    fn en() {
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
+    }
+
+    /// #103: quien no marca nada no gana chrome nuevo. Sin marcas y sin poda
+    /// la barra del pane no dice NADA de marcas.
+    #[test]
+    fn no_marks_and_no_prune_render_nothing() {
+        en();
+        assert_eq!(super::marks_status_segments(0, 0, 0, 0), (None, None));
+    }
+
+    /// #103: con marcas, cuántas son y cuánto pesan (`human_bytes`
+    /// compartido, jamás un formateador propio de la GUI).
+    #[test]
+    fn marks_render_the_count_and_the_byte_total() {
+        en();
+        let (marked, pruned) = super::marks_status_segments(3, 1536, 0, 0);
+        assert_eq!(marked.as_deref(), Some("3 marked, 1.5 KiB"));
+        assert_eq!(pruned, None);
+    }
+
+    /// #103: `marked_bytes` cuenta SOLO no-directorios a propósito (nada
+    /// recorre el árbol), así que un directorio marcado se nombra aparte —
+    /// pintar «2 marked, 10 B» con un dir dentro insinuaría un total que
+    /// nadie calculó.
+    #[test]
+    fn a_marked_directory_is_named_separately() {
+        en();
+        let (marked, pruned) = super::marks_status_segments(2, 10, 1, 0);
+        assert_eq!(marked.as_deref(), Some("2 marked, 10 B + 1 dirs"));
+        assert_eq!(pruned, None);
+        // Y NO degrada al texto sin dirs: ese sería justamente el total
+        // mentiroso.
+        assert_ne!(marked.as_deref(), Some("2 marked, 10 B"));
+    }
+
+    /// #103: una poda JAMÁS es silenciosa. Con la selección vacía
+    /// `marked_paths` cae al cursor, así que callar la poda redirigiría la
+    /// siguiente op en masa a algo que nadie marcó.
+    #[test]
+    fn a_prune_is_never_silent() {
+        en();
+        let (marked, pruned) = super::marks_status_segments(0, 0, 0, 2);
+        assert_eq!(marked, None);
+        assert_eq!(
+            pruned.as_deref(),
+            Some("2 marks dropped, their entries are gone")
+        );
+    }
+
+    /// #103: una poda PARCIAL deja marcas vivas — se reportan las dos cosas,
+    /// el recuento y el aviso.
+    #[test]
+    fn marks_and_a_prune_are_reported_together() {
+        en();
+        let (marked, pruned) = super::marks_status_segments(1, 10, 0, 1);
+        assert_eq!(marked.as_deref(), Some("1 marked, 10 B"));
+        assert_eq!(
+            pruned.as_deref(),
+            Some("1 marks dropped, their entries are gone")
+        );
     }
 
     /// Construye un `TaskProgress` mínimo con `id`/`state` dados (helper de
