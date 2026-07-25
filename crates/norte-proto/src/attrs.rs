@@ -489,8 +489,10 @@ impl Serialize for AttrCatalog {
 }
 
 impl<'de> Deserialize<'de> for AttrCatalog {
-    /// Through the same sanitiser as [`AttrCatalog::new`], bounded so a padded
-    /// catalog costs bounded work (see [`deserialize_attr_catalog`]).
+    /// Through the same sanitiser as [`AttrCatalog::new`], and additionally
+    /// bounded: elements past [`ATTRS_MAX_CATALOG_SCAN`] are drained without
+    /// being materialised, so a catalog padded with rejects costs bounded work
+    /// rather than unbounded work for an empty result.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Ok(Self(deserialize_attr_catalog(deserializer)?))
     }
