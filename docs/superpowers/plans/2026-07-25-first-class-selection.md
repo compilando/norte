@@ -1229,6 +1229,8 @@ Add the dispatch arms next to the other mark commands:
         "mark.pattern-remove" => app.open_mark_pattern(false),
 ```
 
+**These two arms are also a bug fix, not just a feature.** `mark.pattern-add` and `mark.pattern-remove` are already in the TUI's `COMMANDS` and bound in all three presets, and the dispatch catch-all is `debug_assert!(false, "comando validado sin brazo: {cmd}")` — so pressing `+` or `-` in a pane **panics a debug build** today and is a silent no-op in release. The invariant that catch-all needs is "every `COMMANDS` entry has an arm"; this task is what restores it. Add a test that walks `COMMANDS` and asserts each name is dispatchable, so the next command added without an arm fails in CI instead of in a user's terminal.
+
 - [ ] **Step 5: Render it**
 
 In `ui.rs`, render `Modal::MarkPattern` with the same modal frame the other dialogs use: a title (`modal-mark-pattern-add` / `modal-mark-pattern-remove`), the pattern line passed through the SAME mask the quick-search input uses (`display_name(pattern.as_bytes())`), and the error line under it when present.

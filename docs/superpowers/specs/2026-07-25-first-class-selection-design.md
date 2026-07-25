@@ -58,6 +58,7 @@ index. New public API on `PaneState`:
 
 ```rust
 pub fn toggle_mark(&mut self);                          // exists
+pub fn toggle_mark_and_advance(&mut self);              // what `mark.toggle` runs
 pub fn marks_len(&self) -> usize;                       // exists, keeps its name
 pub fn marked_paths(&self) -> Vec<VPath>;               // exists
 pub fn mark_all(&mut self);
@@ -78,6 +79,15 @@ not walk directories, and the status bar must not imply otherwise.
 
 `marked_paths` keeps its cursor fallback: F5 with nothing marked still
 operates on the entry under the cursor, exactly as today.
+
+**Marking advances, and the advance is part of the command.** `mark.toggle`
+marks and then moves on, so holding the key sweeps a range (mc, Total
+Commander). That composite lives in `PaneState::toggle_mark_and_advance`,
+not in a frontend: `toggle_mark` acts on the *filtered* selection while a
+raw cursor move acts on the *real* cursor, so a frontend that composes the
+two by hand marks the wrong entry under an active filter and leaves the
+cursor on a row the filter hides. Both frontends call the one method, so
+the command means the same thing in each.
 
 **Visible set semantics.** When the quick-search filter is active,
 `mark_all`, `invert_marks`, and `mark_glob` operate on the **visible** subset
@@ -227,7 +237,7 @@ Five commands, using the names the GUI already dispatches:
 
 | Command | `orthodox` chord | TUI | GUI |
 | --- | --- | --- | --- |
-| `mark.toggle` | `insert` (mark and move down) | new | exists |
+| `mark.toggle` | `insert` (mark and advance) | new | exists |
 | `mark.all` | `ctrl+a` | new | new |
 | `mark.invert` | `*` | new | new |
 | `mark.clear` | `ctrl+A` | new | new |
