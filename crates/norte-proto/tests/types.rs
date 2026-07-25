@@ -3,8 +3,8 @@
 //! semántica de cada tipo. El wire byte-exacto vive en `golden_types.rs`.
 
 use norte_proto::{
-    Capabilities, CapabilityFlags, ConflictKind, Entry, EntryKind, Error, TaskId, TaskKind,
-    TaskProgress, TaskState, VPath,
+    AttrValue, Capabilities, CapabilityFlags, ConflictKind, Entry, EntryKind, Error, TaskId,
+    TaskKind, TaskProgress, TaskState, VPath,
 };
 
 fn vpath(wire: &str) -> VPath {
@@ -45,6 +45,98 @@ fn entry_none_fields_roundtrip() {
         kind: EntryKind::Dir,
         size: None,
         mtime_ms: None,
+    };
+    assert_eq!(roundtrip(&e), e);
+}
+
+/// (0.30.0, ADR 0039 §4) Una clave de atributo mal formada se DESCARTA al
+/// decodificar — jamás es un error, igual que una celda malformada degrada a
+/// `Unknown`: una clave mala cuesta esa clave, nunca la entrada ni la página.
+/// El filtro vive en el TIPO, no en cada llamador, porque un id acaba siendo
+/// un id de configuración y una clave de lookup aguas abajo.
+#[test]
+fn entry_descarta_claves_de_atributo_mal_formadas() {
+    let json = r#"{
+        "path": "file:///a",
+        "kind": "file",
+        "attrs": {
+            "posix.mode": {"uint": 33188},
+            "s3.storage_class": {"text": "STANDARD_IA"},
+            "MODE": {"uint": 1},
+            "../etc/passwd": {"text": "no"},
+            "mode": {"uint": 2},
+            "": {"uint": 3},
+            "posix.": {"uint": 4},
+            "posix mode": {"uint": 5}
+        }
+    }"#;
+    let e: Entry = serde_json::from_str(json).expect("una clave mala NO rompe la entrada");
+
+    let claves: Vec<&str> = e.attrs.keys().map(String::as_str).collect();
+    assert_eq!(
+        claves,
+        vec!["posix.mode", "s3.storage_class"],
+        "solo sobreviven los ids bien formados y namespaced"
+    );
+    assert_eq!(e.attrs["posix.mode"], AttrValue::Uint(33188));
+}
+
+/// (0.30.0, ADR 0039 §5) El mapa está ACOTADO al decodificar: un cliente puede
+/// pedir a lo sumo `ATTRS_MAX_REQUEST` ids, así que un mapa mayor es un peer
+/// con bugs o hostil. Se quedan las claves MENORES en orden de bytes, lo que
+/// hace el resultado independiente del orden en que el peer serializó — los
+/// objetos JSON no están ordenados (RFC 8259 §4).
+#[test]
+fn entry_acota_el_mapa_de_atributos_de_forma_determinista() {
+    use norte_proto::attrs::ATTRS_MAX_REQUEST;
+
+    let ids: Vec<String> = (0..40).map(|i| format!("test.attr_{i:02}")).collect();
+    let celdas = |orden: &dyn Fn(&mut Vec<&String>)| {
+        let mut claves: Vec<&String> = ids.iter().collect();
+        orden(&mut claves);
+        let cuerpo: Vec<String> = claves
+            .iter()
+            .map(|id| format!("\"{id}\":{{\"uint\":1}}"))
+            .collect();
+        let json = format!(
+            r#"{{"path":"file:///a","kind":"file","attrs":{{{}}}}}"#,
+            cuerpo.join(",")
+        );
+        let e: Entry = serde_json::from_str(&json).expect("un mapa gordo NO rompe la entrada");
+        e.attrs.into_keys().collect::<Vec<String>>()
+    };
+
+    let esperado: Vec<String> = {
+        let mut v = ids.clone();
+        v.sort();
+        v.truncate(ATTRS_MAX_REQUEST);
+        v
+    };
+    assert_eq!(esperado.len(), ATTRS_MAX_REQUEST);
+
+    let ascendente = celdas(&|c| c.sort());
+    let descendente = celdas(&|c| c.sort_by(|a, b| b.cmp(a)));
+    assert_eq!(ascendente, esperado, "se quedan las menores en bytes");
+    assert_eq!(
+        descendente, ascendente,
+        "el resultado NO depende del orden de claves del wire"
+    );
+}
+
+/// Guardia de regresión del filtro: una entrada normal (ids válidos, por
+/// debajo del tope) hace round-trip EXACTO, atributos incluidos.
+#[test]
+fn entry_con_atributos_validos_hace_roundtrip_exacto() {
+    let e = Entry {
+        attrs: std::collections::BTreeMap::from([
+            ("posix.mode".to_owned(), AttrValue::Uint(0o100_644)),
+            ("sftp.owner".to_owned(), AttrValue::Bytes(vec![0xFF, 0xFE])),
+            (
+                "s3.storage_class".to_owned(),
+                AttrValue::Text("STANDARD_IA".to_owned()),
+            ),
+        ]),
+        ..sample_entry()
     };
     assert_eq!(roundtrip(&e), e);
 }

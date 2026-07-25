@@ -99,6 +99,14 @@ malformed id in a request is `-32602`. The rule starts strict on purpose:
 relaxing a validator later is backward-compatible, tightening it after 0.30
 ships is not.
 
+On the RECEIVE side the rule is enforced by the type, not left to callers:
+`Entry.attrs` deserialises through a hand-written map visitor that drops a
+malformed key (and bounds the map at 16 entries, keeping the smallest ids in
+byte order so the result does not depend on the peer's key order) instead of
+failing the entry — a contract that lived only in prose is one every consumer
+would have to remember, and an id becomes a configuration id and a map lookup
+downstream.
+
 `AttrInfo::label` and any `Text`/`Bytes` value is **third-party text**: an SFTP
 server controls `sftp.owner`, and a WASM provider plugin controls its own
 labels. Frontends mask both through `norte_frontend::display_name` exactly as

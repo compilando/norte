@@ -179,6 +179,73 @@ pub struct AttrInfo {
     pub hint: AttrHint,
 }
 
+/// Deserialises the attribute map of an [`Entry`](crate::Entry), applying the
+/// receive-side rules of ADR 0039 §4/§5 IN THE TYPE rather than leaving them to
+/// every caller — exactly as [`AttrValue`] enforces its own caps at decode.
+/// Neither rule is ever an error, for the reason a malformed cell degrades to
+/// [`AttrValue::Unknown`]: one bad key must cost that key, never the entry and
+/// never the page.
+///
+/// 1. A key that is not a well-formed id ([`is_valid_attr_id`]) is DROPPED. An
+///    attribute id becomes a configuration id and a map lookup downstream, so
+///    `MODE` or `../etc/passwd` must not survive the wire.
+/// 2. The map is bounded at [`ATTRS_MAX_REQUEST`] entries — a client can
+///    request at most that many ids, so a bigger map is a buggy or hostile
+///    peer. The SMALLEST [`ATTRS_MAX_REQUEST`] keys in byte order are kept,
+///    which makes the result independent of the order the peer serialised its
+///    keys in (JSON objects are unordered, RFC 8259 §4), the same property
+///    [`AttrValue`]'s tag selection has. At most
+///    `ATTRS_MAX_REQUEST + 1` entries ever exist at once and the values of
+///    dropped keys are never even parsed, so a 10 000-key object does not
+///    materialise a 10 000-entry map first.
+///
+/// A non-map `attrs` is still a hard error: that is serde's decision on the
+/// parent, and a peer that sends one is broken rather than newer.
+pub(crate) fn deserialize_attr_map<'de, D>(
+    deserializer: D,
+) -> Result<std::collections::BTreeMap<String, AttrValue>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use std::collections::BTreeMap;
+
+    struct AttrMapVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for AttrMapVisitor {
+        type Value = BTreeMap<String, AttrValue>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a map of attribute id to attribute value")
+        }
+
+        fn visit_map<M: serde::de::MapAccess<'de>>(
+            self,
+            mut access: M,
+        ) -> Result<Self::Value, M::Error> {
+            let mut out: BTreeMap<String, AttrValue> = BTreeMap::new();
+            while let Some(key) = access.next_key::<String>()? {
+                // Id mal formado: se descarta la CLAVE, jamás la entrada.
+                let keep = is_valid_attr_id(&key)
+                    // Con el mapa lleno, una clave que ordena DESPUÉS de la
+                    // peor que ya se guarda no puede entrar: ni se parsea.
+                    && (out.len() < ATTRS_MAX_REQUEST
+                        || out.last_key_value().is_some_and(|(peor, _)| &key < peor));
+                if !keep {
+                    access.next_value::<serde::de::IgnoredAny>()?;
+                    continue;
+                }
+                out.insert(key, access.next_value()?);
+                if out.len() > ATTRS_MAX_REQUEST {
+                    out.pop_last();
+                }
+            }
+            Ok(out)
+        }
+    }
+
+    deserializer.deserialize_map(AttrMapVisitor)
+}
+
 /// Maximum length of the base64 TEXT of an `AttrValue::Bytes` payload: the
 /// RFC 4648 expansion of [`ATTR_BYTES_MAX`] (4 characters per 3-byte group,
 /// padded). Checked BEFORE decoding, so an oversized payload never allocates

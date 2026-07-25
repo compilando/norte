@@ -41,6 +41,17 @@
       "s3.storage_class": { "text": "STANDARD_IA" }
     }
   },
+  "attr_id_en_el_tope": {
+    "path": "file:///home/user/objeto.bin",
+    "kind": "file",
+    "size": 7,
+    "mtime_ms": null,
+    "attrs": {
+      "s3.x-amz-meta-una_clave_de_usuario_larguisima_pero_legal_64bytes": {
+        "text": "sí, 64 bytes exactos"
+      }
+    }
+  },
   "attrs_vacios_se_omiten": {
     "path": "file:///home/user/otro.txt",
     "kind": "file",

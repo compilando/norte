@@ -70,6 +70,22 @@ pub struct Entry {
     /// value — never a fabricated one. Empty (the default, and the only
     /// possibility for a 0.29 peer) is omitted from the wire entirely, so a
     /// payload without attributes is byte-identical to 0.29's.
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    ///
+    /// TWO rules are enforced AT DECODE by the type itself, so no caller can
+    /// forget them, and NEITHER is ever an error — one bad key costs that key,
+    /// never the entry and never the page:
+    ///
+    /// - a key that is not a well-formed id
+    ///   ([`is_valid_attr_id`](crate::attrs::is_valid_attr_id)) is DROPPED,
+    ///   because an id becomes a configuration id and a map lookup downstream;
+    /// - the map is bounded at
+    ///   [`ATTRS_MAX_REQUEST`](crate::attrs::ATTRS_MAX_REQUEST) entries,
+    ///   keeping the smallest ids in byte order — a client can request no more
+    ///   than that, so a bigger map is a buggy or hostile peer.
+    #[serde(
+        default,
+        deserialize_with = "crate::attrs::deserialize_attr_map",
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
     pub attrs: std::collections::BTreeMap<String, crate::attrs::AttrValue>,
 }

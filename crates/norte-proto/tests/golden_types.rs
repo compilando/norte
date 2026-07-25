@@ -154,6 +154,24 @@ fn golden_entry() {
                 },
             ),
             (
+                // Un id que PARECE hostil (larguísimo, con guiones) pero es
+                // LEGAL: exactamente `ATTR_ID_MAX` bytes, así que sobrevive al
+                // filtrado de decodificación y el match bidireccional se
+                // mantiene exacto.
+                "attr_id_en_el_tope",
+                Entry {
+                    path: vpath("file:///home/user/objeto.bin"),
+                    kind: EntryKind::File,
+                    size: Some(7),
+                    mtime_ms: None,
+                    attrs: BTreeMap::from([(
+                        "s3.x-amz-meta-una_clave_de_usuario_larguisima_pero_legal_64bytes"
+                            .to_owned(),
+                        AttrValue::Text("sí, 64 bytes exactos".to_owned()),
+                    )]),
+                },
+            ),
+            (
                 "attrs_vacios_se_omiten",
                 Entry {
                     path: vpath("file:///home/user/otro.txt"),
