@@ -21,6 +21,50 @@ pub fn trash_id(deleted_ms: u64, counter: u64) -> String {
     format!("{deleted_ms}-{counter}")
 }
 
+/// Identificador de una operación de papelerización, generado UNA vez por el
+/// engine (#99) y pasado a [`crate::Provider::trash`]. Lleva el `deleted_ms`
+/// (para el `.norte-info`) y se formatea al MISMO segmento que [`trash_id`],
+/// de modo que un reintento tras un fallo transitorio apunta al mismo destino
+/// determinista `.norte-trash/<id>/` — base de la idempotencia y de recuperar
+/// el `reversal_ref` del undo.
+///
+/// ```
+/// use norte_vfs::trash::TrashId;
+/// let id = TrashId::new(1_726_000_000_123, 5);
+/// assert_eq!(id.as_segment(), "1726000000123-5");
+/// assert_eq!(id.deleted_ms(), 1_726_000_000_123);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrashId {
+    deleted_ms: u64,
+    counter: u64,
+}
+
+impl TrashId {
+    /// Un id nuevo a partir del reloj de pared y un contador monótono de
+    /// sesión (el engine lo genera una vez por operación).
+    #[must_use]
+    pub fn new(deleted_ms: u64, counter: u64) -> Self {
+        Self {
+            deleted_ms,
+            counter,
+        }
+    }
+
+    /// Milisegundo de borrado que va al `.norte-info` (restore de M3).
+    #[must_use]
+    pub fn deleted_ms(&self) -> u64 {
+        self.deleted_ms
+    }
+
+    /// Segmento `<deleted_ms>-<counter>` para la ruta de la entrada; siempre
+    /// un [`Segment`] válido.
+    #[must_use]
+    pub fn as_segment(&self) -> String {
+        trash_id(self.deleted_ms, self.counter)
+    }
+}
+
 /// Rutas absolutas de una entrada de papelera para un path a borrar.
 #[derive(Debug, Clone)]
 pub struct TrashPaths {
@@ -163,6 +207,19 @@ mod tests {
         assert!(trash_id(1_726_000_000_123, 0) < trash_id(1_726_000_000_124, 0));
         // Siempre construye un Segment válido (sin `/`, sin NUL, no `.`/`..`).
         assert!(Segment::new(trash_id(1, 2).into_bytes()).is_ok());
+    }
+
+    #[test]
+    fn trash_id_carries_ms_and_formats_its_segment() {
+        // El engine genera el id UNA vez (#99): lleva el `deleted_ms` para el
+        // `.norte-info` y se formatea al MISMO segmento que `trash_id`.
+        let id = TrashId::new(1_726_000_000_123, 5);
+        assert_eq!(id.as_segment(), "1726000000123-5");
+        assert_eq!(id.as_segment(), trash_id(1_726_000_000_123, 5));
+        assert_eq!(id.deleted_ms(), 1_726_000_000_123);
+        // El segmento sirve para `plan` (Segment válido).
+        let p = VPath::parse("sftp://host/x").unwrap();
+        assert!(plan(&p, &id.as_segment()).is_ok());
     }
 
     #[test]

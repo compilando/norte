@@ -807,7 +807,14 @@ impl Provider for LocalProvider {
         blocking(move || node_id_native(&native, follow)).await
     }
 
-    async fn trash(&self, p: &VPath) -> Result<Option<VPath>, Error> {
+    async fn trash(
+        &self,
+        p: &VPath,
+        // La papelera NATIVA del OS no tiene destino recuperable estable: el
+        // id determinista del engine (#99) no aplica aquí (dest = None; el undo
+        // degrada como siempre en trash nativa). Solo lo usan las lógicas.
+        _id: &norte_vfs::trash::TrashId,
+    ) -> Result<Option<VPath>, Error> {
         self.ensure_caps().await;
         if !self.capabilities().flags.contains(CapabilityFlags::TRASH) {
             return Err(Error::Unsupported);

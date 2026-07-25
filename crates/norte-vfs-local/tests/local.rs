@@ -656,7 +656,13 @@ async fn restore_trashed_brings_back_by_original_path() {
     let victim = child(&LocalProvider::root(), b"v.txt");
 
     // Si la papelera del OS no está disponible en el runner, skip limpio.
-    if p.trash(&victim).await.is_err() {
+    if p.trash(
+        &victim,
+        &norte_vfs::trash::TrashId::new(0, u64::from(line!())),
+    )
+    .await
+    .is_err()
+    {
         eprintln!("skip: papelera del OS no disponible");
         return;
     }
@@ -689,7 +695,13 @@ async fn restore_trashed_preserves_hostile_bytes() {
     std::fs::write(&native, b"payload").expect("seed");
     let p = LocalProvider::rooted(dir.path().to_path_buf());
     let victim = child(&LocalProvider::root(), name);
-    if p.trash(&victim).await.is_err() {
+    if p.trash(
+        &victim,
+        &norte_vfs::trash::TrashId::new(0, u64::from(line!())),
+    )
+    .await
+    .is_err()
+    {
         eprintln!("skip: papelera del OS no disponible");
         return;
     }
@@ -727,7 +739,13 @@ async fn restore_trashed_is_strict() {
     // Destino ocupado: trashear, recrear algo en su sitio, restaurar → Conflict.
     std::fs::write(dir.path().join("v.txt"), b"orig").expect("seed");
     let victim = child(&LocalProvider::root(), b"v.txt");
-    if p.trash(&victim).await.is_err() {
+    if p.trash(
+        &victim,
+        &norte_vfs::trash::TrashId::new(0, u64::from(line!())),
+    )
+    .await
+    .is_err()
+    {
         eprintln!("skip: papelera del OS no disponible");
         return;
     }

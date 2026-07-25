@@ -259,7 +259,12 @@ async fn plugin_provider_satisface_el_contrato_de_lectura() {
         Some(Error::Unsupported)
     ));
     assert!(matches!(
-        p.trash(&existente).await.err(),
+        p.trash(
+            &existente,
+            &norte_vfs::trash::TrashId::new(0, u64::from(line!()))
+        )
+        .await
+        .err(),
         Some(Error::Unsupported)
     ));
     assert!(

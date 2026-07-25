@@ -497,7 +497,11 @@ impl Provider for PluginProvider {
 
     // `trash`/`symlink` no están en la interfaz WIT `provider` (stage 2): un
     // guest no los ofrece → Unsupported directo.
-    async fn trash(&self, _p: &VPath) -> Result<Option<VPath>, Error> {
+    async fn trash(
+        &self,
+        _p: &VPath,
+        _id: &norte_vfs::trash::TrashId,
+    ) -> Result<Option<VPath>, Error> {
         Err(Error::Unsupported)
     }
 

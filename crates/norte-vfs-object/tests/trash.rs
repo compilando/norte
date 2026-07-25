@@ -66,7 +66,13 @@ async fn trash_moves_file_and_writes_info() {
     let victim = root().join(Segment::new(b"victim.txt".to_vec()).unwrap());
     common::write_all(&p, &victim, b"contenido").await;
 
-    let dest = p.trash(&victim).await.expect("trash");
+    let dest = p
+        .trash(
+            &victim,
+            &norte_vfs::trash::TrashId::new(0, u64::from(line!())),
+        )
+        .await
+        .expect("trash");
 
     // Origen desaparece.
     assert!(matches!(
@@ -112,7 +118,9 @@ async fn trash_moves_directory_tree() {
     let deep = sub.join(Segment::new(b"b.txt".to_vec()).unwrap());
     common::write_all(&p, &deep, b"hondo").await;
 
-    p.trash(&dir).await.expect("trash");
+    p.trash(&dir, &norte_vfs::trash::TrashId::new(0, u64::from(line!())))
+        .await
+        .expect("trash");
     assert!(matches!(
         p.stat(&dir).await,
         Err(norte_proto::Error::NotFound)
@@ -136,7 +144,11 @@ async fn trash_without_capability_is_unsupported() {
     common::write_all(&p, &victim, b"y").await;
 
     assert!(matches!(
-        p.trash(&victim).await,
+        p.trash(
+            &victim,
+            &norte_vfs::trash::TrashId::new(0, u64::from(line!()))
+        )
+        .await,
         Err(norte_proto::Error::Unsupported)
     ));
     assert!(p.stat(&victim).await.is_ok());
@@ -147,11 +159,20 @@ async fn trash_refuses_to_trash_itself() {
     let p = fresh(true);
     let victim = root().join(Segment::new(b"v.txt".to_vec()).unwrap());
     common::write_all(&p, &victim, b"a").await;
-    p.trash(&victim).await.expect("trash");
+    p.trash(
+        &victim,
+        &norte_vfs::trash::TrashId::new(0, u64::from(line!())),
+    )
+    .await
+    .expect("trash");
 
     let trash_dir = root().join(Segment::new(trash::TRASH_DIR.to_vec()).unwrap());
     assert!(matches!(
-        p.trash(&trash_dir).await,
+        p.trash(
+            &trash_dir,
+            &norte_vfs::trash::TrashId::new(0, u64::from(line!()))
+        )
+        .await,
         Err(norte_proto::Error::Unsupported)
     ));
     assert!(p.stat(&trash_dir).await.is_ok());
@@ -165,7 +186,12 @@ async fn trash_preserves_hostile_basename() {
     let victim = root().join(Segment::new(hostile.clone()).unwrap());
     common::write_all(&p, &victim, b"z").await;
 
-    p.trash(&victim).await.expect("trash");
+    p.trash(
+        &victim,
+        &norte_vfs::trash::TrashId::new(0, u64::from(line!())),
+    )
+    .await
+    .expect("trash");
     assert!(matches!(
         p.stat(&victim).await,
         Err(norte_proto::Error::NotFound)

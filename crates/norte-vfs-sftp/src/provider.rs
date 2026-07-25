@@ -36,8 +36,6 @@ pub struct SftpProvider {
     /// Papelera lógica `.norte-trash/` activa (opt-in por conexión, ADR
     /// 0019). Off por defecto → no declara `TRASH` → borrado permanente.
     logical_trash: bool,
-    /// Contador monótono para desempatar ids de papelera del mismo ms.
-    trash_counter: AtomicU64,
 }
 
 impl SftpProvider {
@@ -55,7 +53,6 @@ impl SftpProvider {
             base,
             seq: AtomicU64::new(0),
             logical_trash: false,
-            trash_counter: AtomicU64::new(0),
         }
     }
 
@@ -67,9 +64,22 @@ impl SftpProvider {
         self
     }
 
-    /// Siguiente valor del contador monótono de ids de papelera.
-    fn next_counter(&self) -> u64 {
-        self.trash_counter.fetch_add(1, Ordering::Relaxed)
+    /// Lee y valida la `.norte-info` de una entrada de papelera: `true` solo si
+    /// decodifica exactamente a `p` (misma víctima). Distingue NUESTRA entrada
+    /// de una colisión ajena con el mismo id (#99, review rust MAJOR). Ausente,
+    /// ilegible o de otra víctima = `false`.
+    async fn trash_info_matches(&self, info: &VPath, p: &VPath) -> bool {
+        let Ok(mut stream) = self.read(info, None).await else {
+            return false;
+        };
+        let mut buf = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(b) => buf.extend_from_slice(&b),
+                Err(_) => return false,
+            }
+        }
+        trash::info_decode(&buf, p).is_ok_and(|i| i.original == *p)
     }
 
     /// Crea `dir` tolerando que ya exista (idempotente). Bajo concurrencia
@@ -561,51 +571,71 @@ impl Provider for SftpProvider {
             .map_err(|e| map_err(&e))
     }
 
-    async fn trash(&self, p: &VPath) -> Result<Option<VPath>, Error> {
+    async fn trash(&self, p: &VPath, id: &trash::TrashId) -> Result<Option<VPath>, Error> {
         if !self.logical_trash {
             return Err(Error::Unsupported);
         }
-        // Víctima ausente = `NotFound` limpio (como `remove`), sin crear una
-        // entrada de papelera huérfana (lstat: no sigue symlinks).
-        let _ = self.stat(p).await?;
+        // Entrada DETERMINISTA a partir del id del engine (#99): un reintento
+        // apunta a la misma `.norte-trash/<id>/`. `plan` valida `p` (rechaza
+        // papelerizar la propia papelera, ADR 0019) y da la raíz.
+        let paths = trash::plan(p, &id.as_segment())?;
+        let trash_root = paths.dir.parent().ok_or(Error::Unsupported)?;
 
-        // Reloj de pared + contador de sesión → id único y ordenable.
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+        // Idempotencia: si la víctima ya no está, esta op pudo aplicar en un
+        // intento transitorio anterior. Si nuestro payload determinista existe,
+        // devuélvelo (recupera el `reversal_ref`); si no, es un `NotFound`
+        // genuino (la víctima nunca existió), como `remove`.
+        match self.stat(p).await {
+            Ok(_) => {}
+            Err(Error::NotFound) => {
+                return match self.stat(&paths.payload).await {
+                    // Solo se reclama el payload si la `.norte-info` de la
+                    // entrada decodifica a `p` (misma víctima): una entrada
+                    // AJENA con el mismo id NO es nuestra (review rust MAJOR).
+                    Ok(_) if self.trash_info_matches(&paths.info, p).await => {
+                        Ok(Some(paths.payload))
+                    }
+                    Ok(_) => Err(Error::Conflict {
+                        conflict: ConflictKind::Exists,
+                    }),
+                    Err(Error::NotFound) => Err(Error::NotFound),
+                    Err(e) => Err(e),
+                };
+            }
+            Err(e) => return Err(e),
+        }
 
-        // Primer plan: valida `p` (rechaza papelerizar la propia papelera,
-        // ADR 0019) y da la raíz `.norte-trash`.
-        let first = trash::plan(p, &trash::trash_id(now_ms, self.next_counter()))?;
-        let trash_root = first.dir.parent().ok_or(Error::Unsupported)?;
-
-        // `.norte-trash/` idempotente: bajo concurrencia entre sesiones el
-        // `create_dir` perdedor puede dar `Failure` genérico (→ `Io`) en vez
-        // de `Conflict`; si ya existe, es benigno.
+        // `.norte-trash/` idempotente: bajo concurrencia el `create_dir`
+        // perdedor puede dar `Failure` genérico (→ `Io`) en vez de `Conflict`;
+        // si ya existe, es benigno.
         self.ensure_dir_idempotent(&trash_root).await?;
 
-        // `.norte-trash/<id>/` fresco. `<id>` solo es único POR SESIÓN; dos
-        // conexiones borrando en el mismo ms colisionan → reintenta con id
-        // nuevo (el contador avanza) en vez de fallar en duro.
-        let mut paths = first;
-        let mut attempts = 0u32;
-        loop {
-            match self.mkdir(&paths.dir).await {
-                Ok(()) => break,
-                Err(Error::Conflict {
-                    conflict: ConflictKind::Exists,
-                }) if attempts < 8 => {
-                    attempts += 1;
-                    paths = trash::plan(p, &trash::trash_id(now_ms, self.next_counter()))?;
+        // La entrada `<id>/`: `Conflict::Exists` es NUESTRO parcial (info
+        // ausente o decodifica a `p`) → sigue; una info AJENA con el mismo id
+        // es colisión REAL (el id es fijo, ya no se regenera) → se propaga sin
+        // pisar sus metadatos ni mezclar el árbol (review rust MAJOR).
+        match self.mkdir(&paths.dir).await {
+            Ok(()) => {}
+            Err(Error::Conflict {
+                conflict: ConflictKind::Exists,
+            }) => match self.stat(&paths.info).await {
+                Err(Error::NotFound) => {}
+                Ok(_) if self.trash_info_matches(&paths.info, p).await => {}
+                Ok(_) => {
+                    return Err(Error::Conflict {
+                        conflict: ConflictKind::Exists,
+                    });
                 }
                 Err(e) => return Err(e),
-            }
+            },
+            Err(e) => return Err(e),
         }
 
         // Escribe `.norte-info` ANTES de mover: si el rename falla, el origen
         // queda intacto y solo hay un info huérfano (basura limpiable), nunca
-        // un payload sin metadatos.
-        let info = trash::info_encode(p, now_ms);
+        // un payload sin metadatos. `deleted_ms` viene del id (mismo en cada
+        // reintento).
+        let info = trash::info_encode(p, id.deleted_ms());
         let mut sink = self.write(&paths.info).await?;
         sink.write(Bytes::from(info)).await?;
         sink.commit().await?;

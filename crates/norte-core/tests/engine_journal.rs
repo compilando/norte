@@ -137,6 +137,62 @@ async fn trash_records_trashed_restore() {
     );
 }
 
+/// #99 — la papelera NATIVA (dest `None`) tras un transitorio-tras-efecto
+/// degrada a `Ok(None)` (undo sin `reversal_ref`) pero NO falla la task: el
+/// ítem ya se trasheó, jamás pérdida. Antes fallaba al propagar el transitorio.
+#[tokio::test]
+async fn trash_nativo_transitorio_degrada_sin_fallar() {
+    let (engine, mem, journal) = setup().await; // MemProvider vanish (dest None)
+    write_file(&mem, "mem:///n.txt", b"x").await;
+
+    mem.faults().ambiguous_mutations(1);
+    let h = engine
+        .delete_with(&vp("mem:///n.txt"), DeleteMode::Trash)
+        .await
+        .expect("trash");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    let es = journal.journal().entries().await.expect("entries");
+    assert_eq!(es[0].op, "trashed");
+    assert_eq!(
+        es[0].reversal_ref, None,
+        "papelera nativa: el undo degrada, la task NO falla"
+    );
+}
+
+/// #99 — un trash lógico que APLICA el movimiento pero devuelve transitorio
+/// no debe fallar la task ni perder el `reversal_ref`: el engine reintenta con
+/// el MISMO id determinista y el provider recupera el payload. Antes (sin
+/// `trash_retrying`) la task fallaba en el primer transitorio.
+#[tokio::test]
+async fn trash_logico_transitorio_conserva_el_reversal_ref() {
+    let journal = Arc::new(SqliteJournal::new(
+        Journal::open_in_memory().await.expect("journal open"),
+    ));
+    let engine = Engine::with_observer(Arc::clone(&journal) as Arc<dyn MutationObserver>);
+    let mem = Arc::new(MemProvider::new().with_logical_trash());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    write_file(&mem, "mem:///t.txt", b"x").await;
+
+    // El movimiento aplica y aun así devuelve transitorio (una vez).
+    mem.faults().ambiguous_mutations(1);
+    let h = engine
+        .delete_with(&vp("mem:///t.txt"), DeleteMode::Trash)
+        .await
+        .expect("trash");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    let es = journal.journal().entries().await.expect("entries");
+    assert_eq!(es.len(), 1);
+    assert_eq!(es[0].op, "trashed");
+    let comp_ref = es[0].reversal_ref.clone().expect("reversal_ref preservado");
+    assert!(
+        String::from_utf8_lossy(&comp_ref).contains(".norte-trash/"),
+        "el payload recuperable sobrevive al transitorio: {:?}",
+        String::from_utf8_lossy(&comp_ref)
+    );
+}
+
 /// #32.1 — un COMMIT del write que APLICA (rename staging→final) pero
 /// devuelve transitorio no debe fallar la task ni perder el `Created`: se
 /// desambigua por presencia+tamaño del destino. Antes: el retry recopiaba,
