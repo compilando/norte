@@ -3405,33 +3405,6 @@ fn task_line(p: &norte_proto::TaskProgress) -> String {
         .to_string()
 }
 
-/// Cuántos items lista `modal_lines` antes de resumir el resto en "… y N más".
-const MODAL_ITEM_LIMIT: usize = 10;
-
-/// Hasta [`MODAL_ITEM_LIMIT`] nombres saneados (`display_name` por el nombre
-/// de archivo, jamás bytes crudos); si sobran, una línea final localizada
-/// (`gui-modal-more`, GUI-e T1). PURA (sin GPUI).
-fn item_lines(items: &[VPath]) -> Vec<String> {
-    let mut lines: Vec<String> = items
-        .iter()
-        .take(MODAL_ITEM_LIMIT)
-        .map(|p| {
-            let bytes = p.file_name().map_or(&b""[..], Segment::as_bytes);
-            let (name, hostile) = norte_frontend::display_name(bytes);
-            if hostile {
-                format!("{HOSTILE_BADGE} {name}")
-            } else {
-                name
-            }
-        })
-        .collect();
-    if items.len() > MODAL_ITEM_LIMIT {
-        let n = (items.len() - MODAL_ITEM_LIMIT).to_string();
-        lines.push(norte_i18n::ta("gui-modal-more", &[("n", n.as_str())]));
-    }
-    lines
-}
-
 /// Líneas de texto del cuerpo del modal activo (título + detalle), YA
 /// SANEADAS con `display_name`/`path_display` (jamás bytes crudos). Los
 /// verbos/título/modo van por Fluent (GUI-e T1, `gui-modal-*`); el `conflict`
@@ -3459,7 +3432,7 @@ fn modal_lines(m: &Modal) -> Vec<String> {
                 title_key,
                 &[("n", n.as_str()), ("to", to_line.as_str())],
             )];
-            lines.extend(item_lines(items));
+            lines.extend(norte_frontend::item_lines(items));
             lines
         }
         Modal::ConfirmDelete { items, permanent } => {
@@ -3473,7 +3446,7 @@ fn modal_lines(m: &Modal) -> Vec<String> {
                 norte_i18n::ta("gui-modal-delete-title", &[("n", n.as_str())]),
                 mode,
             ];
-            lines.extend(item_lines(items));
+            lines.extend(norte_frontend::item_lines(items));
             lines
         }
         Modal::ConflictResolve { pending, conflict } => {

@@ -1448,6 +1448,40 @@ impl App {
         self.open_next_pending();
     }
 
+    /// Abre el modal de copia/movimiento (F5/F6, #103 T10): orígenes = las
+    /// MARCAS del pane con foco (o el cursor si no hay ninguna), destino =
+    /// el DIRECTORIO del pane inactivo. No-op si no hay nada que transferir
+    /// (pane vacío): jamás un diálogo sobre un lote vacío.
+    pub fn open_transfer_modal(&mut self, kind: TransferKind) {
+        let items = self.focused().marked_paths();
+        if items.is_empty() {
+            return;
+        }
+        let to = self.panes[1 - self.focus].dir().clone();
+        self.modal = Some(Modal::ConfirmTransfer { kind, items, to });
+    }
+
+    /// Abre el modal de borrado (F8, #103 T10) sobre las MARCAS del pane con
+    /// foco (o el cursor si no hay ninguna). `permanent` lo decide el caller:
+    /// es `shift+F8`, o la ausencia de papelera en el provider — que se
+    /// sondea UNA vez por lote, no una por ítem (serían N round-trips de red
+    /// para responder siempre lo mismo). No-op si no hay nada que borrar.
+    pub fn open_delete_modal(&mut self, permanent: bool) {
+        let items = self.focused().marked_paths();
+        if items.is_empty() {
+            return;
+        }
+        self.modal = Some(Modal::ConfirmDelete { items, permanent });
+    }
+
+    /// Las marcas las CONSUME la operación (mc/Total Commander): se limpian
+    /// al ENVIAR el lote, no al completarse, para que jamás exista una
+    /// selección a medio consumir cuyo significado dependa de qué task
+    /// terminó (#103).
+    pub fn consume_marks(&mut self) {
+        self.focused_mut().clear_marks();
+    }
+
     /// Abre el modal de marcado por patrón (#103).
     pub fn open_mark_pattern(&mut self, mark: bool) {
         self.modal = Some(Modal::MarkPattern {
@@ -1696,21 +1730,25 @@ pub enum TransferKind {
 /// migrado.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Modal {
-    /// Confirmación de borrado (F8). `permanent = false` → papelera.
+    /// Confirmación de borrado (F8) sobre las MARCAS. `permanent = false` →
+    /// papelera.
     ConfirmDelete {
-        /// Lo que se borraría.
-        target: VPath,
-        /// `true` = borrado PERMANENTE (sin papelera aquí, o elección
-        /// explícita): el diálogo AVISA (ADR 0009).
+        /// Los ítems a borrar, en orden de listado.
+        items: Vec<VPath>,
+        /// Permanente (shift+F8, o sin papelera en el provider): el diálogo
+        /// AVISA (ADR 0009).
         permanent: bool,
     },
-    /// Confirmación de copy/move (F5/F6).
+    /// Confirmación de copia/movimiento sobre las MARCAS (#103). `to` es el
+    /// DIRECTORIO destino (el del otro pane): con varios ítems no hay un
+    /// nombre único que editar. El destino editable de un solo ítem, y el
+    /// rename que trae, viven en #105.
     ConfirmTransfer {
         /// Copy o Move.
         kind: TransferKind,
-        /// Origen (la entrada seleccionada).
-        from: VPath,
-        /// Destino (el dir del otro pane + el nombre).
+        /// Los orígenes, en orden de listado.
+        items: Vec<VPath>,
+        /// Directorio destino.
         to: VPath,
     },
     /// Colisión: elegir política y REENVIAR la operación entera (ADR 0005:
@@ -2877,6 +2915,85 @@ mod tests {
     /// nombres.
     fn app_with_entries(names: &[&str]) -> App {
         App::new(pane_con(names), Pane::new(root(), Vec::new()))
+    }
+
+    /// Como [`app_with_entries`], con el pane INACTIVO plantado en `dst`
+    /// (vacío): el destino ortodoxo de F5/F6 es el DIRECTORIO del otro pane
+    /// (#103 T10), así que los tests del lote necesitan un destino distinto
+    /// de la raíz de origen.
+    fn app_with_two_panes(names: &[&str], dst: &str) -> App {
+        App::new(
+            pane_con(names),
+            Pane::new(VPath::parse(dst).unwrap(), Vec::new()),
+        )
+    }
+
+    /// #103 T10: F5/F6 construyen el modal desde TODAS las marcas, y el
+    /// destino es el DIRECTORIO del otro pane (con varios ítems no hay un
+    /// nombre único que editar — eso es #105).
+    #[test]
+    fn copy_builds_the_modal_from_every_mark() {
+        let mut app = app_with_two_panes(&["a", "b", "c"], "mem:///dst");
+        app.focused_mut().mark_all();
+        assert_eq!(app.focused().marks_len(), 3, "las tres quedaron marcadas");
+        app.open_transfer_modal(TransferKind::Copy);
+        let Some(Modal::ConfirmTransfer { items, to, .. }) = &app.modal else {
+            panic!("no transfer modal");
+        };
+        assert_eq!(items.len(), 3);
+        assert_eq!(to, &VPath::parse("mem:///dst").unwrap());
+    }
+
+    /// Sin ninguna marca, F5 sigue operando sobre el CURSOR (el gesto
+    /// clásico no se pierde) — `marked_paths` cae al seleccionado.
+    #[test]
+    fn copy_without_marks_still_uses_the_cursor_entry() {
+        let mut app = app_with_two_panes(&["a", "b"], "mem:///dst");
+        assert_eq!(app.focused().marks_len(), 0, "sin marcas de partida");
+        app.open_transfer_modal(TransferKind::Copy);
+        let Some(Modal::ConfirmTransfer { items, .. }) = &app.modal else {
+            panic!("no transfer modal");
+        };
+        assert_eq!(items.len(), 1, "marked_paths falls back to the cursor");
+        assert_eq!(items[0], VPath::parse("mem:///a").unwrap());
+    }
+
+    /// Las marcas las CONSUME el ENVÍO del lote (mc/Total Commander): tras
+    /// `consume_marks` no queda una selección a medio consumir.
+    #[test]
+    fn submitting_a_bulk_operation_consumes_the_marks() {
+        let mut app = app_with_two_panes(&["a", "b"], "mem:///dst");
+        app.focused_mut().mark_all();
+        assert_eq!(app.focused().marks_len(), 2, "marcadas antes de enviar");
+        app.open_transfer_modal(TransferKind::Copy);
+        app.consume_marks();
+        assert_eq!(app.focused().marks_len(), 0);
+    }
+
+    /// F8 sobre las marcas: el modal lleva el lote entero y el modo
+    /// (papelera/permanente) que decidió el caller tras sondear la
+    /// capability UNA vez.
+    #[test]
+    fn delete_builds_the_modal_from_every_mark() {
+        let mut app = app_with_two_panes(&["a", "b", "c"], "mem:///dst");
+        app.focused_mut().mark_all();
+        app.open_delete_modal(true);
+        let Some(Modal::ConfirmDelete { items, permanent }) = &app.modal else {
+            panic!("no delete modal");
+        };
+        assert_eq!(items.len(), 3);
+        assert!(*permanent);
+    }
+
+    /// Un pane VACÍO no abre modal: no hay nada que copiar ni que borrar
+    /// (ni marcas ni cursor) — jamás un diálogo sobre un lote vacío.
+    #[test]
+    fn an_empty_pane_opens_no_bulk_modal() {
+        let mut app = app_with_two_panes(&[], "mem:///dst");
+        app.open_transfer_modal(TransferKind::Copy);
+        assert!(app.modal.is_none(), "sin ítems no hay modal de copia");
+        app.open_delete_modal(false);
+        assert!(app.modal.is_none(), "sin ítems no hay modal de borrado");
     }
 
     /// #103 T9: el modal de patrón marca/desmarca y reporta cuántas marcas

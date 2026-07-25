@@ -839,6 +839,18 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
         Modal::ApproveAgentOp { req } => u16::try_from(req.paths.len())
             .unwrap_or(u16::MAX)
             .saturating_add(4),
+        // #103 T10: una línea POR ítem listado (más la de resumen, si el
+        // lote no cabe entero), más las dos fijas (destino/modo + teclas) y
+        // los bordes — el mismo `body_lines + 3` que el resto. `centered`
+        // recorta contra el frame: en un terminal enano el lote se ve a
+        // medias, nunca desborda.
+        Modal::ConfirmDelete { items, .. } | Modal::ConfirmTransfer { items, .. } => {
+            let listadas = items.len().min(norte_frontend::MODAL_ITEM_LIMIT)
+                + usize::from(items.len() > norte_frontend::MODAL_ITEM_LIMIT);
+            u16::try_from(listadas)
+                .unwrap_or(u16::MAX)
+                .saturating_add(5)
+        }
         // host + algo + fingerprint + nota + teclas (5 líneas) + bordes.
         Modal::TrustHostKey { .. } => 9,
         // Un mensaje largo con wrap (~4 líneas a 58 cols) + bordes.
@@ -891,38 +903,47 @@ fn draw_modal(
 ) {
     use crate::app::{Modal, TransferKind};
     let (titulo, cuerpo): (String, String) = match modal {
-        Modal::ConfirmDelete { target, permanent } => (
+        // #103 T10: el lote va como LISTA — una ruta por línea, saneada y
+        // truncada por la política COMPARTIDA con la GUI
+        // (`norte_frontend::item_lines_with`), jamás dos rutas en la misma
+        // línea (un nombre hostil fabricaría una entrada de la lista).
+        Modal::ConfirmDelete { items, permanent } => (
             if *permanent {
                 t("modal-delete-permanent-title")
             } else {
                 t("modal-trash-title")
             },
-            format!(
-                "{}
-{}
-{}",
-                norte_frontend::path_display_with(target, reinterpret).0,
-                if *permanent {
-                    t("modal-delete-permanent-warning")
-                } else {
-                    t("modal-trash-note")
-                },
-                hints.confirm
-            ),
+            [
+                norte_frontend::item_lines_with(items, HOSTILE_BADGE, reinterpret),
+                vec![
+                    if *permanent {
+                        t("modal-delete-permanent-warning")
+                    } else {
+                        t("modal-trash-note")
+                    },
+                    hints.confirm.clone(),
+                ],
+            ]
+            .concat()
+            .join("\n"),
         ),
-        Modal::ConfirmTransfer { kind, from, to } => (
+        Modal::ConfirmTransfer { kind, items, to } => (
             match kind {
                 TransferKind::Copy => t("modal-copy-title"),
                 TransferKind::Move => t("modal-move-title"),
             },
-            format!(
-                "{}
-→ {}
-{}",
-                norte_frontend::path_display_with(from, reinterpret).0,
-                norte_frontend::path_display_with(to, reinterpret).0,
-                hints.confirm
-            ),
+            [
+                norte_frontend::item_lines_with(items, HOSTILE_BADGE, reinterpret),
+                vec![
+                    // El destino es un DIRECTORIO y va en SU línea, con la
+                    // flecha FUERA de banda: ningún nombre de la lista de
+                    // arriba puede imitar esta línea.
+                    format!("→ {}", norte_frontend::path_display_with(to, reinterpret).0),
+                    hints.confirm.clone(),
+                ],
+            ]
+            .concat()
+            .join("\n"),
         ),
         // #98/M1: la colisión llega ASYNC — usa el enc capturado al LANZAR
         // la operación (RetrySpec), jamás el del pane con foco al llegar.

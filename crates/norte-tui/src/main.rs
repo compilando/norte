@@ -2585,7 +2585,14 @@ async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream) -> 
                     // usuario informado (ADR 0009), jamás pisando un modal.
                     if app.modal.is_none() {
                         app.modal = Some(Modal::ConfirmDelete {
-                            target: target.clone(),
+                            // Reoferta de ESE ítem, no del lote: el resto
+                            // de tasks del lote sigue su curso. Confirmarla
+                            // vuelve a pasar por `submit_deletes`, que
+                            // CONSUME las marcas — las del lote original ya
+                            // se consumieron al enviarlo, así que solo
+                            // afectaría a marcas hechas en la ventana entre
+                            // el envío y este tick (sin modal abierto).
+                            items: vec![target.clone()],
                             permanent: true,
                         });
                     } else {
@@ -2722,22 +2729,12 @@ async fn on_dialog_key(
             // TrustHostKey y PISAR una aprobación de agente ya sacada de la
             // cola (quedaría huérfana hasta su TTL). Se difiere al final.
             match modal {
-                Modal::ConfirmDelete { target, permanent } => {
-                    let del_mode = if permanent {
-                        DeleteMode::Permanent
-                    } else {
-                        DeleteMode::Trash
-                    };
-                    match backend.delete(&target, del_mode).await {
-                        Ok(task) => {
-                            app.board
-                                .push_full(task, None, (!permanent).then(|| target.clone()));
-                        }
-                        Err(e) => app.message = Some(error_message(&e)),
-                    }
+                Modal::ConfirmDelete { items, permanent } => {
+                    submit_deletes(app, backend, &items, permanent).await;
                 }
-                Modal::ConfirmTransfer { kind, from, to } => {
-                    submit_transfer(app, backend, kind, from, to, TransferOptions::default()).await;
+                Modal::ConfirmTransfer { kind, items, to } => {
+                    submit_transfers(app, backend, kind, &items, &to, TransferOptions::default())
+                        .await;
                 }
                 // TrustLuaInit se intercepta ANTES en el run loop (necesita
                 // el LuaHost); MarkPattern (#103 T9) también, como texto
@@ -2813,6 +2810,71 @@ async fn decide_approval(app: &mut App, backend: &Backend, approval_id: u64, app
     }
 }
 
+/// Los pares `(origen, destino)` de un lote: cada ítem aterriza en el
+/// DIRECTORIO `to` con SU MISMO nombre — el nombre son BYTES (`Segment`,
+/// regla 1), jamás texto, así que un `Папка` o un `\xff` viaja intacto. Un
+/// ítem sin nombre (la raíz de un scheme) no es transferible y se descarta:
+/// no hay nada que colgar del destino.
+///
+/// PURA a propósito: el lote entero se ve sin levantar backend.
+fn transfer_dests(items: &[VPath], to: &VPath) -> Vec<(VPath, VPath)> {
+    items
+        .iter()
+        .filter_map(|from| {
+            let name = from.file_name()?.clone();
+            Some((from.clone(), to.join(name)))
+        })
+        .collect()
+}
+
+/// Envía el lote de copia/movimiento: UNA task POR ÍTEM (#103 T10), cada una
+/// con su progreso, su cancelación y sus entradas de journal propias —
+/// cancelar una no toca a las demás.
+///
+/// Un fallo NO aborta el lote: los ítems restantes se envían igual y el
+/// último error queda en la barra. Abandonar 4..n porque el 3 falló dejaría
+/// media selección hecha sin decirlo; el panel de tasks muestra el resultado
+/// de cada una por separado. Las colisiones no viajan por aquí: llegan
+/// ASÍNCRONAS al terminar la task y `on_tick` las ENCOLA
+/// (`pending_collisions`) para no pisar jamás un modal abierto.
+///
+/// Las marcas se consumen al ENVIAR el lote, no al completarse.
+async fn submit_transfers(
+    app: &mut App,
+    backend: &Backend,
+    kind: TransferKind,
+    items: &[VPath],
+    to: &VPath,
+    opts: TransferOptions,
+) {
+    for (from, dest) in transfer_dests(items, to) {
+        submit_transfer(app, backend, kind, from, dest, opts).await;
+    }
+    app.consume_marks();
+}
+
+/// Envía el lote de borrado: UNA task POR ÍTEM, mismo criterio que
+/// [`submit_transfers`] (un fallo no abandona el resto). El objetivo de
+/// papelera viaja con cada task para que un `Unsupported` reofrezca el
+/// PERMANENTE de ESE ítem (ADR 0009), no del lote entero.
+async fn submit_deletes(app: &mut App, backend: &Backend, items: &[VPath], permanent: bool) {
+    let del_mode = if permanent {
+        DeleteMode::Permanent
+    } else {
+        DeleteMode::Trash
+    };
+    for target in items {
+        match backend.delete(target, del_mode).await {
+            Ok(task) => {
+                app.board
+                    .push_full(task, None, (!permanent).then(|| target.clone()));
+            }
+            Err(e) => app.message = Some(error_message(&e)),
+        }
+    }
+    app.consume_marks();
+}
+
 /// Encola una transferencia y la registra en el panel con su contexto de
 /// reintento (para el diálogo de colisión).
 async fn submit_transfer(
@@ -2844,6 +2906,64 @@ async fn submit_transfer(
             );
         }
         Err(e) => app.message = Some(error_message(&e)),
+    }
+}
+
+#[cfg(test)]
+mod bulk_tests {
+    use super::transfer_dests;
+    use norte_proto::VPath;
+
+    fn vp(wire: &str) -> VPath {
+        VPath::parse(wire).expect("wire válido")
+    }
+
+    /// #103 T10: el lote se envía ENTERO — un par por ítem, cada uno con SU
+    /// nombre colgado del directorio destino. (Mutación de control: hacer
+    /// que el envío use solo el primer ítem rompe este test.)
+    #[test]
+    fn a_bulk_transfer_submits_every_item_not_just_the_first() {
+        let items = vec![vp("mem:///src/a"), vp("mem:///src/b"), vp("mem:///src/c")];
+        let pares = transfer_dests(&items, &vp("mem:///dst"));
+        assert_eq!(pares.len(), 3, "una task POR ítem");
+        assert_eq!(
+            pares.iter().map(|(_, d)| d.clone()).collect::<Vec<_>>(),
+            vec![vp("mem:///dst/a"), vp("mem:///dst/b"), vp("mem:///dst/c")],
+        );
+    }
+
+    /// Regla 1: el nombre son BYTES. Un nombre no-UTF8 llega al destino
+    /// byte a byte — el destino jamás se construye desde el texto pintado.
+    #[test]
+    fn a_bulk_transfer_keeps_non_utf8_names_byte_exact() {
+        let raw = b"caf\xff\xfe.txt".to_vec();
+        let seg = norte_proto::Segment::new(raw.clone()).expect("segmento");
+        let from = vp("mem:///src").join(seg);
+        let pares = transfer_dests(std::slice::from_ref(&from), &vp("mem:///dst"));
+        assert_eq!(pares.len(), 1);
+        assert_eq!(
+            pares[0].1.file_name().map(|s| s.as_bytes().to_vec()),
+            Some(raw),
+            "los bytes del nombre viajan intactos al destino",
+        );
+    }
+
+    /// El destino IGUAL que el origen (mismo dir en ambos panes) rinde un
+    /// par `from == to`: la decisión de qué hacer con eso es del engine
+    /// (colisión), no del frontend — que no debe inventarse un descarte.
+    #[test]
+    fn a_same_directory_transfer_maps_each_item_onto_itself() {
+        let items = vec![vp("mem:///src/a")];
+        let pares = transfer_dests(&items, &vp("mem:///src"));
+        assert_eq!(pares[0].0, pares[0].1);
+    }
+
+    /// Una raíz de scheme no tiene nombre que colgar del destino: se
+    /// descarta en vez de fabricar una ruta.
+    #[test]
+    fn a_rootless_item_is_dropped_from_the_batch() {
+        let root = VPath::root(norte_proto::Scheme::new("mem").unwrap(), None);
+        assert!(transfer_dests(&[root], &vp("mem:///dst")).is_empty());
     }
 }
 
@@ -3319,15 +3439,9 @@ async fn dispatch(
             } else {
                 TransferKind::Move
             };
-            // Destino ortodoxo: el dir del OTRO pane + el mismo nombre.
-            let other = &app.panes[1 - app.focus()];
-            let target = app.focused().selected().and_then(|e| {
-                let name = e.path.file_name()?.clone();
-                Some((e.path.clone(), other.dir().join(name)))
-            });
-            if let Some((from, to)) = target {
-                app.modal = Some(Modal::ConfirmTransfer { kind, from, to });
-            }
+            // Destino ortodoxo: el DIRECTORIO del otro pane. Los orígenes son
+            // las marcas, o el cursor si no hay ninguna (#103).
+            app.open_transfer_modal(kind);
         }
         // Insert/Ctrl+A/Ctrl+Shift+A/`*` (#103): mc/Total Commander —
         // togglear la marca de esta entrada y avanzar (mantener Insert barre
@@ -3347,19 +3461,20 @@ async fn dispatch(
         "mark.pattern-add" => app.open_mark_pattern(true),
         "mark.pattern-remove" => app.open_mark_pattern(false),
         "pane.delete" | "pane.delete-permanent" => {
-            if let Some(e) = app.focused().selected() {
-                // F8 = papelera si el provider la declara; sin ella, el
-                // MISMO diálogo avisa de PERMANENTE (degradación con
-                // usuario informado, ADR 0009). shift+f8 = permanente.
+            // F8 = papelera si el provider la declara; sin ella, el MISMO
+            // diálogo avisa de PERMANENTE (degradación con usuario
+            // informado, ADR 0009). shift+f8 = permanente. La capability se
+            // sondea UNA vez POR LOTE con el primer ítem (#103 T10): todas
+            // las marcas viven en el mismo directorio del mismo provider,
+            // así que N sondeos serían N round-trips de red para la misma
+            // respuesta.
+            if let Some(first) = app.focused().marked_paths().first() {
                 let hay_papelera = backend
-                    .capabilities(&e.path)
+                    .capabilities(first)
                     .await
                     .is_ok_and(|c| c.flags.contains(norte_proto::CapabilityFlags::TRASH));
                 let permanent = cmd == "pane.delete-permanent" || !hay_papelera;
-                app.modal = Some(Modal::ConfirmDelete {
-                    target: e.path.clone(),
-                    permanent,
-                });
+                app.open_delete_modal(permanent);
             }
         }
         "pane.view" => {

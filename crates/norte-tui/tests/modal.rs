@@ -23,7 +23,7 @@ fn vp(wire: &str) -> VPath {
 fn confirm() -> Modal {
     Modal::ConfirmTransfer {
         kind: TransferKind::Copy,
-        from: vp("file:///a"),
+        items: vec![vp("file:///a")],
         to: vp("file:///b"),
     }
 }
@@ -120,7 +120,7 @@ fn confirmacion_acepta_y_cancela() {
     // Comando fuera del allowlist: inerte (el diálogo sigue abierto).
     assert_eq!(dialog_action(&confirm(), "dialog.overwrite"), None);
     let borrar = Modal::ConfirmDelete {
-        target: vp("file:///x"),
+        items: vec![vp("file:///x")],
         permanent: false,
     };
     assert_eq!(

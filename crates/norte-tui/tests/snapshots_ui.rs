@@ -435,7 +435,7 @@ fn snapshot_modal_confirm_transfer_cjk() {
     let mut app = app_base();
     app.modal = Some(Modal::ConfirmTransfer {
         kind: TransferKind::Copy,
-        from: vp("file:///casa/notas.txt"),
+        items: vec![vp("file:///casa/notas.txt")],
         to: vp("file:///otro/日本語のファイル名.txt"),
     });
     insta::assert_snapshot!(render(&app));
@@ -445,12 +445,12 @@ fn snapshot_modal_confirm_transfer_cjk() {
 fn snapshot_modal_papelera_y_permanente() {
     let mut app = app_base();
     app.modal = Some(Modal::ConfirmDelete {
-        target: vp("file:///casa/notas.txt"),
+        items: vec![vp("file:///casa/notas.txt")],
         permanent: false,
     });
     let papelera = render(&app);
     app.modal = Some(Modal::ConfirmDelete {
-        target: vp("file:///casa/notas.txt"),
+        items: vec![vp("file:///casa/notas.txt")],
         permanent: true,
     });
     let permanente = render(&app);
@@ -692,7 +692,7 @@ fn snapshot_modal_pinta_encima_del_overlay_de_ajustes() {
         norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia(), &[]));
     app.settings = Some(settings);
     app.modal = Some(Modal::ConfirmDelete {
-        target: vp("file:///casa/notas.txt"),
+        items: vec![vp("file:///casa/notas.txt")],
         permanent: false,
     });
     insta::assert_snapshot!(render_80x24(&app));
@@ -715,7 +715,7 @@ fn snapshot_modal_pinta_encima_de_la_palette() {
     );
     app.palette = Some(norte_tui::app::Palette::new(rows));
     app.modal = Some(Modal::ConfirmDelete {
-        target: vp("file:///casa/notas.txt"),
+        items: vec![vp("file:///casa/notas.txt")],
         permanent: false,
     });
     insta::assert_snapshot!(render(&app));

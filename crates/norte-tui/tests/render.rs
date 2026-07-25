@@ -509,7 +509,7 @@ fn modal_de_confirmacion_sigue_la_reinterpretacion() {
     let mut app = App::new(Pane::new(dir.clone(), entries), Pane::new(dir, Vec::new()));
     assert_eq!(app.panes[0].cycle_name_encoding(), Some("IBM866"));
     app.modal = Some(norte_tui::app::Modal::ConfirmDelete {
-        target,
+        items: vec![target],
         permanent: false,
     });
     let mut terminal = Terminal::new(TestBackend::new(80, 12)).expect("terminal");
@@ -522,6 +522,58 @@ fn modal_de_confirmacion_sigue_la_reinterpretacion() {
     assert!(
         !contenido.contains("�����"),
         "no el lossy crudo: {contenido}"
+    );
+}
+
+/// #103 T10: el modal de un LOTE pinta una ruta POR LÍNEA (jamás dos
+/// pegadas por un joiner in-band que un nombre pudiera imitar), se corta en
+/// `MODAL_ITEM_LIMIT` y RESUME cuántas quedan fuera — un lote de 14 no puede
+/// parecer uno de 10. La flecha del destino va en SU propia línea.
+#[test]
+fn el_modal_de_un_lote_pinta_una_ruta_por_linea_y_resume_el_resto() {
+    let dir = vp("file:///casa");
+    let items: Vec<VPath> = (0..14)
+        .map(|i| dir.join(Segment::new(format!("f{i:02}").into_bytes()).unwrap()))
+        .collect();
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(vp("file:///otro"), Vec::new()),
+    );
+    app.modal = Some(norte_tui::app::Modal::ConfirmTransfer {
+        kind: norte_tui::app::TransferKind::Copy,
+        items,
+        to: vp("file:///otro"),
+    });
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let pintado = terminal.backend().to_string();
+    // Los 10 primeros, cada uno en su línea; el 11.º YA no se lista.
+    let nombres: Vec<String> = (0..norte_frontend::MODAL_ITEM_LIMIT)
+        .map(|i| format!("f{i:02}"))
+        .collect();
+    for nombre in &nombres {
+        let lineas = pintado.lines().filter(|l| l.contains(nombre)).count();
+        assert_eq!(
+            lineas, 1,
+            "{nombre} va en UNA línea, no {lineas}: {pintado}"
+        );
+    }
+    for linea in pintado.lines() {
+        let cuantos = nombres.iter().filter(|n| linea.contains(*n)).count();
+        assert!(cuantos <= 1, "dos ítems en la misma línea: {linea:?}");
+    }
+    assert!(!pintado.contains("f10"), "el 11.º no se lista: {pintado}");
+    // …y el resumen dice cuántos quedan fuera (14 - 10 = 4).
+    assert!(
+        pintado.lines().any(|l| l.contains('…') && l.contains('4')),
+        "falta el resumen de los que no caben: {pintado}"
+    );
+    // El destino, en su propia línea y con la flecha fuera de banda.
+    assert!(
+        pintado
+            .lines()
+            .any(|l| l.contains('→') && l.contains("/otro")),
+        "el destino va en su línea: {pintado}"
     );
 }
 
