@@ -16,7 +16,10 @@ pub mod task;
 pub mod transfer;
 pub mod vpath;
 
-pub use attrs::{AttrHint, AttrInfo, AttrType};
+pub use attrs::{
+    ATTR_BYTES_MAX, ATTR_ID_MAX, ATTR_LABEL_MAX, ATTR_TEXT_MAX, ATTRS_MAX_ADVERTISED,
+    ATTRS_MAX_REQUEST, AttrHint, AttrInfo, AttrType, is_valid_attr_id,
+};
 pub use caps::{Capabilities, CapabilityFlags};
 pub use entry::{Entry, EntryKind};
 pub use error::{ConflictKind, Error};

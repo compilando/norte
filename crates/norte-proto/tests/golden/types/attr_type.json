@@ -1,0 +1,9 @@
+{
+  "uint": "uint",
+  "int": "int",
+  "text": "text",
+  "bytes": "bytes",
+  "time_ms": "time_ms",
+  "bool": "bool",
+  "unknown": "unknown"
+}

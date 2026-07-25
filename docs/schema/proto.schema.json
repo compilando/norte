@@ -1,5 +1,108 @@
 {
   "$defs": {
+    "AttrHint": {
+      "description": "What an attribute MEANS, so a frontend can pick a default format and\nalignment without a hard-coded table of ids. Two `Uint`s render very\ndifferently depending on this.\n\n`\"unknown\"` is a RESERVED wire tag: no future protocol version may name a\nreal variant that. A component that reads a value and writes it back\n(a proxy, a cache) collapses a newer tag to `unknown` in the round trip —\nthe same accepted trade-off as [`EntryKind::Other`](crate::EntryKind::Other).\n\n```\nuse norte_proto::attrs::AttrHint;\nlet h: AttrHint = serde_json::from_str(\"\\\"pista_del_futuro\\\"\").unwrap();\nassert_eq!(h, AttrHint::Unknown);\n```",
+      "oneOf": [
+        {
+          "const": "size",
+          "description": "A byte count: right-aligned, IEC/SI formatting applies.",
+          "type": "string"
+        },
+        {
+          "const": "timestamp",
+          "description": "A point in time: date formatting applies.",
+          "type": "string"
+        },
+        {
+          "const": "mode",
+          "description": "A POSIX permission word: octal or `rwx` formatting applies.",
+          "type": "string"
+        },
+        {
+          "const": "identity",
+          "description": "A user/group/owner identity: short text or a number.",
+          "type": "string"
+        },
+        {
+          "const": "opaque",
+          "description": "No presentation advice; render as plain text.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Hint of a newer protocol (fallback of deserialisation). A conforming\npeer NEVER emits it; a frontend that encounters it renders the value\nas if it were [`AttrHint::Opaque`].",
+          "type": "string"
+        }
+      ]
+    },
+    "AttrInfo": {
+      "description": "One attribute a provider offers, as advertised by `fs.capabilities`\n([`FsCapabilitiesResult::attrs`](crate::methods::FsCapabilitiesResult)).\n\nAn `AttrInfo` whose `id` fails [`is_valid_attr_id`] is DROPPED from the\ncatalog, and an `Entry.attrs` key that fails it is DROPPED from that\nentry — never a hard error, mirroring the \"unknown requested id comes\nback absent\" rule (ADR 0039 §5).\n\n`label` is provider text and therefore THIRD-PARTY (a WASM provider plugin\nwrites it, an SFTP server influences it): mask it exactly like a plugin's\ncolumn header before painting, and clamp it to [`ATTR_LABEL_MAX`].\n\n```\nuse norte_proto::attrs::{AttrHint, AttrInfo, AttrType};\nlet info = AttrInfo {\n    id: \"posix.mode\".to_owned(),\n    label: \"Mode\".to_owned(),\n    ty: AttrType::Uint,\n    hint: AttrHint::Mode,\n};\nlet wire = serde_json::to_string(&info).unwrap();\nassert!(wire.contains(\"\\\"type\\\":\\\"uint\\\"\"));\n```",
+      "properties": {
+        "hint": {
+          "$ref": "#/$defs/AttrHint",
+          "description": "Presentation hint."
+        },
+        "id": {
+          "description": "Attribute id, namespaced ([`is_valid_attr_id`]).",
+          "type": "string"
+        },
+        "label": {
+          "description": "Human label. THIRD-PARTY text — mask and clamp before painting.\n\nThis is a FALLBACK, not the primary source of a column header: a\nfrontend should prefer a localized string keyed by the stable `id`\n(e.g. `t!(\"attr.posix.mode\")`) and fall back to this masked provider\nlabel only for ids it does not recognize. First-party attributes\nstill route their labels through `i18n/`.",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/AttrType",
+          "description": "Declared type of the values of this attribute."
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "type",
+        "hint"
+      ],
+      "type": "object"
+    },
+    "AttrType": {
+      "description": "Declared type of an attribute. An unknown value (protocol N+1) degrades to\n[`AttrType::Unknown`]: an old client ignores the attribute, it never breaks.\n\n`\"unknown\"` is a RESERVED wire tag: no future protocol version may name a\nreal variant that. A component that reads a value and writes it back\n(a proxy, a cache) collapses a newer tag to `unknown` in the round trip —\nthe same accepted trade-off as [`EntryKind::Other`](crate::EntryKind::Other).\n\n```\nuse norte_proto::attrs::AttrType;\nlet t: AttrType = serde_json::from_str(\"\\\"tipo_del_futuro\\\"\").unwrap();\nassert_eq!(t, AttrType::Unknown);\n```",
+      "oneOf": [
+        {
+          "const": "uint",
+          "description": "Unsigned integer.",
+          "type": "string"
+        },
+        {
+          "const": "int",
+          "description": "Signed integer.",
+          "type": "string"
+        },
+        {
+          "const": "text",
+          "description": "UTF-8 text (third-party: mask before painting).",
+          "type": "string"
+        },
+        {
+          "const": "bytes",
+          "description": "Raw bytes, base64 on the wire (a name that is not UTF-8).",
+          "type": "string"
+        },
+        {
+          "const": "time_ms",
+          "description": "Milliseconds since the UTC epoch; negative is valid (pre-1970).",
+          "type": "string"
+        },
+        {
+          "const": "bool",
+          "description": "Boolean.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Type of a newer protocol (fallback of deserialisation). A conforming\npeer NEVER emits it as a declared type; a client that sees it on an\n[`AttrInfo`] should not request that attribute at all, since it has\nno way to interpret the values it would get back.",
+          "type": "string"
+        }
+      ]
+    },
     "ByteRange": {
       "description": "Rango de bytes de una lectura: `offset` inicial y longitud opcional\n(`None` = hasta EOF). Lo exigen el resume de M2 (`.norte-partial` +\noffset) y el viewer (lectura parcial de archivos grandes).\n\n```\nuse norte_proto::ByteRange;\nlet r: ByteRange = serde_json::from_str(r#\"{\"offset\": 65536, \"len\": null}\"#).unwrap();\nassert_eq!(r, ByteRange { offset: 65536, len: None });\n```",
       "properties": {
@@ -2462,6 +2565,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Aggregate root: one field per top-level wire type. `schema_for!` emits each\nas a property and pulls every nested type into `$defs`, so the single\ndocument covers the whole protocol surface. Field values are never read.",
   "properties": {
+    "attr_hint": {
+      "$ref": "#/$defs/AttrHint"
+    },
+    "attr_info": {
+      "$ref": "#/$defs/AttrInfo"
+    },
+    "attr_type": {
+      "$ref": "#/$defs/AttrType"
+    },
     "byte_range": {
       "$ref": "#/$defs/ByteRange"
     },
@@ -2749,6 +2861,9 @@
     }
   },
   "required": [
+    "attr_hint",
+    "attr_info",
+    "attr_type",
     "byte_range",
     "capabilities",
     "capability_flags",

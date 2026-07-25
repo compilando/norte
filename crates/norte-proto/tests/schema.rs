@@ -15,6 +15,9 @@ use norte_proto::*;
 #[derive(schemars::JsonSchema)]
 #[allow(dead_code)]
 struct ProtocolSchema {
+    attr_hint: AttrHint,
+    attr_info: AttrInfo,
+    attr_type: AttrType,
     byte_range: ByteRange,
     capabilities: Capabilities,
     capability_flags: CapabilityFlags,

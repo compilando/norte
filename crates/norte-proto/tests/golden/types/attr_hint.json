@@ -1,0 +1,8 @@
+{
+  "size": "size",
+  "timestamp": "timestamp",
+  "mode": "mode",
+  "identity": "identity",
+  "opaque": "opaque",
+  "unknown": "unknown"
+}

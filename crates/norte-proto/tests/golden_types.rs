@@ -16,9 +16,9 @@ use norte_proto::methods::{
     TaskCancelResult, TaskListParams, TaskListResult,
 };
 use norte_proto::{
-    ByteRange, Capabilities, CapabilityFlags, CollisionPolicy, ConflictKind, Entry, EntryKind,
-    Error, ResumePolicy, SymlinkPolicy, TaskId, TaskKind, TaskProgress, TaskState, VPath,
-    VerifyPolicy,
+    AttrHint, AttrInfo, AttrType, ByteRange, Capabilities, CapabilityFlags, CollisionPolicy,
+    ConflictKind, Entry, EntryKind, Error, ResumePolicy, SymlinkPolicy, TaskId, TaskKind,
+    TaskProgress, TaskState, VPath, VerifyPolicy,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -1646,5 +1646,44 @@ fn golden_transfer() {
             ("length", VerifyPolicy::Length),
             ("hash", VerifyPolicy::Hash),
         ],
+    );
+}
+
+#[test]
+fn golden_attrs() {
+    check_family(
+        "attr_type.json",
+        &[
+            ("uint", AttrType::Uint),
+            ("int", AttrType::Int),
+            ("text", AttrType::Text),
+            ("bytes", AttrType::Bytes),
+            ("time_ms", AttrType::TimeMs),
+            ("bool", AttrType::Bool),
+            ("unknown", AttrType::Unknown),
+        ],
+    );
+    check_family(
+        "attr_hint.json",
+        &[
+            ("size", AttrHint::Size),
+            ("timestamp", AttrHint::Timestamp),
+            ("mode", AttrHint::Mode),
+            ("identity", AttrHint::Identity),
+            ("opaque", AttrHint::Opaque),
+            ("unknown", AttrHint::Unknown),
+        ],
+    );
+    check_family(
+        "attr_info.json",
+        &[(
+            "posix_mode",
+            AttrInfo {
+                id: "posix.mode".to_owned(),
+                label: "Mode".to_owned(),
+                ty: AttrType::Uint,
+                hint: AttrHint::Mode,
+            },
+        )],
     );
 }

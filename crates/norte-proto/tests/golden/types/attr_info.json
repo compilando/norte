@@ -1,0 +1,8 @@
+{
+  "posix_mode": {
+    "id": "posix.mode",
+    "label": "Mode",
+    "type": "uint",
+    "hint": "mode"
+  }
+}

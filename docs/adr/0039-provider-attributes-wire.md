@@ -75,10 +75,15 @@ panicking, exactly as `EntryKind::Other` round-trips as `"other"`.
 
 ### 4. Attribute ids are namespaced and validated, labels are untrusted
 
-An id matches `[a-z0-9._-]{1,64}` and is namespaced by its origin:
-`posix.mode`, `sftp.owner`, `s3.storage_class`, `archive.packed_size`. There is
-no central registry — a provider owns its namespace. Both peers validate;
-a malformed id in a request is `-32602`.
+An id is namespaced by construction, not just by convention: at least one
+`.`, every `.`-separated segment non-empty and matching `[a-z0-9_-]`, at most
+64 bytes total. `posix.mode`, `sftp.owner`, `s3.storage_class`, and
+`archive.packed_size` are valid; a bare word with no dot (`mode`) or a dot
+with an empty segment on either side (`posix.`, `.mode`) is not. There is no
+central registry — a provider owns its namespace. Both peers validate; a
+malformed id in a request is `-32602`. The rule starts strict on purpose:
+relaxing a validator later is backward-compatible, tightening it after 0.30
+ships is not.
 
 `AttrInfo::label` and any `Text`/`Bytes` value is **third-party text**: an SFTP
 server controls `sftp.owner`, and a WASM provider plugin controls its own
@@ -94,6 +99,10 @@ per call, id ≤ 64 bytes, `AttrInfo::label` ≤ 64 bytes, `Text` ≤ 256 bytes,
 `Bytes` ≤ 256 bytes decoded. The ceiling a listing page can add is therefore
 bounded and predictable. Requesting an unknown id is **not** an error: it comes
 back absent, so a client holding a stale catalog degrades instead of failing.
+Symmetrically, a `fs.capabilities` catalog is capped at 64 advertised
+`AttrInfo` entries; exceeding it is **not** an error either — a client
+TRUNCATES the advertised vector rather than rejecting the response, because a
+fat catalog is a buggy provider, not a broken peer.
 
 ## Consequences
 
