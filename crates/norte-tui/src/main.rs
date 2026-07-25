@@ -3295,6 +3295,17 @@ async fn dispatch(
                 app.modal = Some(Modal::ConfirmTransfer { kind, from, to });
             }
         }
+        // Insert/Ctrl+A/Ctrl+Shift+A/`*` (#103): mc/Total Commander — togglear
+        // marca esta entrada; `mark.toggle` además baja el cursor (mantener
+        // Insert barre un rango). `cursor.down`'s propio brazo arriba clampa en
+        // la última fila, así que el mismo `move_down(1)` aquí jamás envuelve.
+        "mark.toggle" => {
+            app.focused_mut().toggle_mark();
+            app.focused_mut().move_down(1);
+        }
+        "mark.all" => app.focused_mut().mark_all(),
+        "mark.invert" => app.focused_mut().invert_marks(),
+        "mark.clear" => app.focused_mut().clear_marks(),
         "pane.delete" | "pane.delete-permanent" => {
             if let Some(e) = app.focused().selected() {
                 // F8 = papelera si el provider la declara; sin ella, el

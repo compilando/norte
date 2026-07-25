@@ -365,6 +365,56 @@ impl Pane {
         self.state.is_marked(entry)
     }
 
+    /// Togglea la marca de la entrada seleccionada. Delegado puro (#103).
+    pub fn toggle_mark(&mut self) {
+        self.state.toggle_mark();
+    }
+
+    /// Marca todas las entradas visibles. Delegado puro (#103).
+    pub fn mark_all(&mut self) {
+        self.state.mark_all();
+    }
+
+    /// Invierte las marcas de las entradas visibles. Delegado puro (#103).
+    pub fn invert_marks(&mut self) {
+        self.state.invert_marks();
+    }
+
+    /// Quita todas las marcas. Delegado puro (#103).
+    pub fn clear_marks(&mut self) {
+        self.state.clear_marks();
+    }
+
+    /// Marca/desmarca por glob; devuelve cuántas marcas cambió (#103).
+    ///
+    /// # Errors
+    /// Si el patrón no compila.
+    pub fn mark_glob(
+        &mut self,
+        pattern: &str,
+        mark: bool,
+    ) -> Result<usize, norte_frontend::PatternError> {
+        self.state.mark_glob(pattern, mark)
+    }
+
+    /// Cuántas entradas marcadas. Delegado puro (#103).
+    #[must_use]
+    pub fn marks_len(&self) -> usize {
+        self.state.marks_len()
+    }
+
+    /// Tamaño total de los FICHEROS marcados. Delegado puro (#103).
+    #[must_use]
+    pub fn marked_bytes(&self) -> u64 {
+        self.state.marked_bytes()
+    }
+
+    /// Sobre qué opera la acción: marcas, o cursor si no hay. Delegado puro (#103).
+    #[must_use]
+    pub fn marked_paths(&self) -> Vec<VPath> {
+        self.state.marked_paths()
+    }
+
     /// Instala el lote de decoraciones resuelto (G3b) — ver
     /// `PaneState::set_decorations`.
     pub fn set_decorations(
@@ -2621,6 +2671,70 @@ mod tests {
         p.begin_search(root());
         p.refresh_listing(vec![file("a")]);
         assert!(!p.virtual_search, "refresh_listing apaga virtual");
+    }
+
+    fn e(wire: &str, k: EntryKind) -> Entry {
+        Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: VPath::parse(wire).unwrap(),
+            kind: k,
+            size: None,
+            mtime_ms: None,
+        }
+    }
+
+    /// #103: `Pane` delega la API de marcas en `PaneState` sin reimplementar
+    /// nada — mark/all/invert/clear ida y vuelta.
+    #[test]
+    fn pane_delegates_the_mark_api() {
+        let mut p = Pane::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a", EntryKind::File),
+                e("mem:///b", EntryKind::File),
+            ],
+        );
+        p.mark_all();
+        assert_eq!(p.marks_len(), 2);
+        p.invert_marks();
+        assert_eq!(p.marks_len(), 0);
+        p.toggle_mark();
+        assert_eq!(p.marks_len(), 1);
+        p.clear_marks();
+        assert_eq!(p.marks_len(), 0);
+    }
+
+    /// El dispatch real de `mark.toggle` (main.rs) es `toggle_mark` seguido
+    /// de `move_down(1)` — mc/Total Commander: mantener Insert barre un
+    /// rango. `dispatch` en sí no es testeable aquí sin un daemon real (pide
+    /// `&Backend`/`&mut EventStream`), así que este test pinea el mismo par
+    /// de llamadas al nivel de `Pane`, que sí es puro: marca Y avanza, y en
+    /// la última fila `move_down` clampa — no envuelve a 0.
+    #[test]
+    fn mark_toggle_then_move_down_marks_and_advances_without_wrapping_at_the_end() {
+        let mut p = Pane::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a", EntryKind::File),
+                e("mem:///b", EntryKind::File),
+            ],
+        );
+        let a = p.entries()[0].clone();
+        let b = p.entries()[1].clone();
+        assert_eq!(p.cursor(), 0);
+
+        p.toggle_mark();
+        p.move_down(1);
+        assert_eq!(p.marks_len(), 1);
+        assert!(p.is_marked(&a), "la fila 0 quedó marcada");
+        assert_eq!(p.cursor(), 1, "el cursor avanzó tras marcar");
+
+        // Última fila: togglear + avanzar NO debe envolver a 0.
+        p.toggle_mark();
+        p.move_down(1);
+        assert_eq!(p.marks_len(), 2);
+        assert!(p.is_marked(&b), "la fila 1 (última) también quedó marcada");
+        assert_eq!(p.cursor(), 1, "clampado en la última fila, no envuelve");
     }
 }
 
