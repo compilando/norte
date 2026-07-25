@@ -525,6 +525,53 @@ fn modal_de_confirmacion_sigue_la_reinterpretacion() {
     );
 }
 
+/// #103 T9 (extra work item 2): el patrón de `Modal::MarkPattern` es texto
+/// NO confiable — llega por paste tan fácil como tecleado — así que debe
+/// enmascararse con el MISMO `display_name` que usa el input del quick
+/// search antes de llegar al buffer, y lo mismo su diagnóstico: el mensaje
+/// de `PatternError::Glob` EMBEBE el patrón verbatim (rustdoc de
+/// `PatternError`). Camino REAL de punta a punta (no un modal a mano):
+/// teclea el override RTL del corpus canónico carácter a carácter y cierra
+/// con un `[` sin parear para forzar un glob inválido — el error que vuelve
+/// de `mark_glob` contiene el RTL crudo, y el render no debe dejarlo pasar.
+#[test]
+fn mark_pattern_modal_enmascara_el_patron_hostil_y_su_error() {
+    let dir = vp("file:///x");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir, Vec::new()),
+    );
+    let rtl = norte_testkit::corpus::hostile_names()
+        .into_iter()
+        .find(|n| n.id == "rtl_override")
+        .expect("fixture del corpus")
+        .bytes;
+    let pattern = String::from_utf8(rtl).expect("fixture rtl_override es UTF-8 válida");
+
+    app.open_mark_pattern(true);
+    for c in pattern.chars() {
+        app.mark_pattern_push(c);
+    }
+    app.mark_pattern_push('['); // glob mal formado: fuerza PatternError
+    assert!(
+        app.mark_pattern_confirm().is_err(),
+        "el corchete sin parear no debe compilar como glob"
+    );
+    assert!(app.modal.is_some(), "el modal queda abierto con el error");
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 12)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let contenido = terminal.backend().to_string();
+    assert!(
+        !contenido.contains('\u{202E}'),
+        "el override RTL crudo no debe llegar al buffer (patrón NI error): {contenido}"
+    );
+    assert!(
+        contenido.contains('\u{FFFD}'),
+        "el patrón hostil debe pintarse enmascarado: {contenido}"
+    );
+}
+
 /// #81: el contexto del match de contenido (línea + preview) del hit BAJO EL
 /// CURSOR se pinta en la barra del pane virtual — saneado (un preview hostil
 /// jamás pinta controles crudos).

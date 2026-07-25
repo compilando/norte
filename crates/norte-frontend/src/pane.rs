@@ -1875,6 +1875,12 @@ mod tests {
 
     // --- #103 task 2: mark all, invert, and the marked byte total -------
 
+    /// Asymmetric starting state (#103 T9 review debt): pre-mark "a" before
+    /// calling `mark_all`. `mark_all` only ADDS, so "a" stays marked and "b"
+    /// gets added — total 2. A body accidentally rewritten to call
+    /// `invert_marks` instead would FLIP "a" back off (it was already
+    /// marked) while still marking "b" — total 1 — and this assertion would
+    /// catch it; starting from an empty set cannot tell the two apart.
     #[test]
     fn mark_all_marks_every_entry() {
         let mut p = PaneState::new(
@@ -1884,6 +1890,7 @@ mod tests {
                 e("mem:///b", EntryKind::File),
             ],
         );
+        p.toggle_mark(); // pre-marks "a" (asymmetric start)
         p.mark_all();
         assert_eq!(p.marks_len(), 2);
     }
@@ -1902,6 +1909,13 @@ mod tests {
         assert_eq!(p.marked_paths(), vec![VPath::parse("mem:///b").unwrap()]);
     }
 
+    /// Asymmetric starting state (#103 T9 review debt): pre-mark "alfa"
+    /// (the ONLY entry the filter leaves visible) before filtering and
+    /// calling `mark_all`. `mark_all` is idempotent on an already-marked
+    /// visible entry, so it stays marked — total 1. A body accidentally
+    /// rewritten to call `invert_marks` instead would FLIP it back off —
+    /// total 0 — and this assertion would catch it; starting from an empty
+    /// set cannot tell the two apart (both give 1).
     #[test]
     fn mark_all_under_a_filter_only_marks_the_visible() {
         let mut p = PaneState::new(
@@ -1911,6 +1925,7 @@ mod tests {
                 e("mem:///beta", EntryKind::File),
             ],
         );
+        p.toggle_mark(); // pre-marks "alfa" (asymmetric start)
         p.quick_start(Mode::Filter);
         p.quick_char('a');
         p.quick_char('l'); // matches "alfa" only
@@ -1972,6 +1987,15 @@ mod tests {
     /// `markable_indices` falls through to the full range. This is intended
     /// (a narrower `markable_indices` under Jump would also pass every other
     /// test in this file), so it needs its own pin.
+    ///
+    /// Asymmetric starting state (#103 T9 review debt): pre-mark "alfa"
+    /// before jumping and calling `mark_all`. Correct behavior keeps BOTH
+    /// entries marked (the pre-mark stays, "beta" gets added) — total ==
+    /// `entries().len()`. A body accidentally rewritten to call
+    /// `invert_marks` instead would flip "alfa" back off while still
+    /// marking "beta" — total 1, short of `entries().len()` — and this
+    /// assertion would catch it; starting from an empty set cannot (both
+    /// give the full length).
     #[test]
     fn mark_all_under_jump_marks_the_whole_listing() {
         let mut p = PaneState::new(
@@ -1981,6 +2005,7 @@ mod tests {
                 e("mem:///beta", EntryKind::File),
             ],
         );
+        p.toggle_mark(); // pre-marks "alfa" (asymmetric start)
         p.quick_start(Mode::Jump);
         p.quick_char('a');
         p.mark_all();

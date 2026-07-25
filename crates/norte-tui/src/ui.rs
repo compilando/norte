@@ -843,8 +843,34 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
         Modal::TrustHostKey { .. } => 9,
         // Un mensaje largo con wrap (~4 líneas a 58 cols) + bordes.
         Modal::TrustLuaInit { .. } => 8,
+        // Patrón + hint (2 líneas) o + la línea de error (3), más bordes
+        // (#103 T9: mismo cómputo `body_lines + 3` que el resto).
+        Modal::MarkPattern { error, .. } => {
+            if error.is_some() {
+                6
+            } else {
+                5
+            }
+        }
         _ => 6,
     }
+}
+
+/// Si `modal` tiñe el borde de aviso (rol `warning`): un borrado PERMANENTE
+/// o una decisión de seguridad (aprobar una op de agente, confiar en una
+/// host key o en un `init.lua` de proyecto). Factorizado fuera de
+/// `draw_modal` (clippy `too_many_lines`).
+fn is_warning_modal(modal: &crate::app::Modal) -> bool {
+    use crate::app::Modal;
+    matches!(
+        modal,
+        Modal::ConfirmDelete {
+            permanent: true,
+            ..
+        } | Modal::ApproveAgentOp { .. }
+            | Modal::TrustHostKey { .. }
+            | Modal::TrustLuaInit { .. }
+    )
 }
 
 /// Caja centrada del modal.
@@ -935,19 +961,17 @@ fn draw_modal(
             t("modal-confirm-quit-title"),
             format!("{}\n{}", t("modal-confirm-quit-body"), hints.confirm),
         ),
+        // #103 T9: ver `mark_pattern_modal_text` (enmascarado, no un texto
+        // fijo — el patrón/error son de usuario).
+        Modal::MarkPattern {
+            mark,
+            pattern,
+            error,
+        } => mark_pattern_modal_text(*mark, pattern, error.as_deref()),
     };
     // Un borrado PERMANENTE (o aprobar una mutación de agente) tiñe el borde
     // de aviso (rol `warning`).
-    let permanent = matches!(
-        modal,
-        Modal::ConfirmDelete {
-            permanent: true,
-            ..
-        } | Modal::ApproveAgentOp { .. }
-            | Modal::TrustHostKey { .. }
-            | Modal::TrustLuaInit { .. }
-    );
-    let border = if permanent {
+    let border = if is_warning_modal(modal) {
         theme.role(Role::Warning)
     } else {
         theme.role(Role::ModalBorder)
@@ -1016,6 +1040,28 @@ fn approval_modal_text(
     }
     lineas.push(hint.to_owned());
     (t("modal-approval-title"), lineas.join("\n"))
+}
+
+/// Título+cuerpo de `Modal::MarkPattern` (#103 T9), factorizado fuera de
+/// `draw_modal` (clippy `too_many_lines`). Texto libre, NO una superficie de
+/// decisión de seguridad — sigue la MISMA disciplina que el resto
+/// (enmascarado con `display_name`, jamás crudo): un patrón llega por paste
+/// tan fácil como tecleado, y `PatternError` EMBEBE el patrón verbatim en su
+/// mensaje (rustdoc de `PatternError::Glob`) — el enmascarado alcanza
+/// también a la línea de error.
+fn mark_pattern_modal_text(mark: bool, pattern: &str, error: Option<&str>) -> (String, String) {
+    let (masked, _) = display_name(pattern.as_bytes());
+    let mut lines = vec![format!("{masked}_"), t("modal-mark-pattern-hint")];
+    if let Some(err) = error {
+        let (masked_err, _) = display_name(err.as_bytes());
+        lines.push(masked_err);
+    }
+    let title = if mark {
+        t("modal-mark-pattern-add")
+    } else {
+        t("modal-mark-pattern-remove")
+    };
+    (title, lines.join("\n"))
 }
 
 /// Texto `(título, cuerpo)` del modal TOFU (#45). host/algo/fingerprint

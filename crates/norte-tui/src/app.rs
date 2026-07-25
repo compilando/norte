@@ -1436,6 +1436,69 @@ impl App {
         self.open_next_collision();
     }
 
+    /// Cierra cualquier modal abierto SIN actuar sobre él — el equivalente
+    /// genérico de un `DialogOutcome::Cancelled` para los modales de texto
+    /// libre (`Modal::MarkPattern`, #103 T9) que no pasan por el ALLOWLIST
+    /// de [`dialog_action`] y por tanto no tienen su propio Esc en
+    /// `on_dialog_key`. Abre la siguiente pendiente en cola, misma
+    /// disciplina que cerrar cualquier otro modal (jamás pisar una
+    /// aprobación/colisión que llegó mientras este estaba abierto).
+    pub fn close_modal(&mut self) {
+        self.modal = None;
+        self.open_next_pending();
+    }
+
+    /// Abre el modal de marcado por patrón (#103).
+    pub fn open_mark_pattern(&mut self, mark: bool) {
+        self.modal = Some(Modal::MarkPattern {
+            mark,
+            pattern: String::new(),
+            error: None,
+        });
+    }
+
+    /// Añade un carácter al patrón en curso. No-op sin modal de patrón.
+    pub fn mark_pattern_push(&mut self, c: char) {
+        if let Some(Modal::MarkPattern { pattern, error, .. }) = &mut self.modal {
+            pattern.push(c);
+            *error = None;
+        }
+    }
+
+    /// Borra el último carácter del patrón. No-op sin modal de patrón.
+    pub fn mark_pattern_pop(&mut self) {
+        if let Some(Modal::MarkPattern { pattern, error, .. }) = &mut self.modal {
+            pattern.pop();
+            *error = None;
+        }
+    }
+
+    /// Aplica el patrón: cierra el modal y devuelve cuántas marcas cambió.
+    /// Un patrón inválido DEJA el modal abierto con el diagnóstico — el
+    /// usuario conserva lo tecleado para corregirlo.
+    ///
+    /// # Errors
+    /// Si el glob no compila.
+    pub fn mark_pattern_confirm(&mut self) -> Result<usize, norte_frontend::PatternError> {
+        let Some(Modal::MarkPattern { mark, pattern, .. }) = &self.modal else {
+            return Ok(0);
+        };
+        let (mark, pattern) = (*mark, pattern.clone());
+        match self.focused_mut().mark_glob(&pattern, mark) {
+            Ok(changed) => {
+                self.modal = None;
+                Ok(changed)
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                if let Some(Modal::MarkPattern { error, .. }) = &mut self.modal {
+                    *error = Some(msg);
+                }
+                Err(e)
+            }
+        }
+    }
+
     /// Abre el popup de navegación (spec 2026-07-18): historial del pane
     /// con foco (más reciente primero) o la copia de hotlist. Los items se
     /// construyen YA saneados aquí (`nav_item_display`); una entrada de
@@ -1715,6 +1778,19 @@ pub enum Modal {
     /// atajo de salida de emergencia se mantiene inmediato en todos los
     /// overlays, igual que antes de S2.
     ConfirmQuit,
+    /// Marcar (`mark = true`) o desmarcar por patrón (`+`/`-`, #103). El
+    /// texto es la query CRUDA del usuario; se enmascara al pintarla, igual
+    /// que el quick search (un patrón puede llegar por PASTE con bidi o
+    /// invisibles).
+    MarkPattern {
+        /// Marcar, o desmarcar.
+        mark: bool,
+        /// Lo tecleado hasta ahora.
+        pattern: String,
+        /// Diagnóstico del último intento fallido, para pintarlo bajo el
+        /// campo. `None` = aún no se ha confirmado nada.
+        error: Option<String>,
+    },
 }
 
 /// S2 (`[ui] confirm_quit`): si el brazo de despacho de `app.quit` debe abrir
@@ -1890,7 +1966,11 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
                 _ => DialogOutcome::Cancelled, // dialog.deny | dialog.cancel
             })
         }
-        Modal::TrustLuaInit { .. } => None,
+        // #103 T9: `MarkPattern` es texto libre, como el diálogo de
+        // búsqueda — el run loop lo intercepta ANTES de llegar aquí (raw
+        // chars, jamás el contexto `dialog`), igual que `TrustLuaInit`.
+        // Ambos devuelven `None` siempre.
+        Modal::TrustLuaInit { .. } | Modal::MarkPattern { .. } => None,
     }
 }
 
@@ -2788,6 +2868,60 @@ mod tests {
         assert_eq!(p.marks_len(), 2);
         assert!(p.is_marked(&b), "la fila 1 (última) también quedó marcada");
         assert_eq!(p.cursor(), 1, "clampado en la última fila, no envuelve");
+    }
+
+    /// App de un solo listado de nombres, sobre `mem://` (task 9, #103):
+    /// vía `pane_con` — mismo orden real que pinta la UI — con foco en el
+    /// pane lleno; el otro vacío. Nombre distinto de `app_with_sized_entries`
+    /// (`tests/status_marks.rs`): esa lleva tamaño explícito, esta solo
+    /// nombres.
+    fn app_with_entries(names: &[&str]) -> App {
+        App::new(pane_con(names), Pane::new(root(), Vec::new()))
+    }
+
+    /// #103 T9: el modal de patrón marca/desmarca y reporta cuántas marcas
+    /// cambió — camino feliz (glob válido, matches reales).
+    #[test]
+    fn the_pattern_modal_marks_and_reports_how_many() {
+        let mut app = app_with_entries(&["a.rs", "b.rs", "c.txt"]);
+        app.open_mark_pattern(true);
+        assert!(matches!(
+            app.modal,
+            Some(Modal::MarkPattern { mark: true, .. })
+        ));
+        app.mark_pattern_push('*');
+        app.mark_pattern_push('.');
+        app.mark_pattern_push('r');
+        app.mark_pattern_push('s');
+        let changed = app.mark_pattern_confirm().expect("valid glob");
+        assert_eq!(changed, 2);
+        assert!(app.modal.is_none());
+        assert_eq!(app.focused().marks_len(), 2);
+    }
+
+    /// Un patrón inválido (glob que no compila) deja el modal ABIERTO con el
+    /// diagnóstico — el usuario conserva lo tecleado para corregirlo — y no
+    /// marca nada.
+    #[test]
+    fn an_invalid_pattern_keeps_the_modal_open_and_marks_nothing() {
+        let mut app = app_with_entries(&["a.rs"]);
+        app.open_mark_pattern(true);
+        app.mark_pattern_push('[');
+        assert!(app.mark_pattern_confirm().is_err());
+        assert!(app.modal.is_some(), "the user keeps their text to fix it");
+        assert_eq!(app.focused().marks_len(), 0);
+    }
+
+    /// Cancelar (`close_modal`, el equivalente genérico de Esc para un modal
+    /// de texto libre) no marca nada, aunque el usuario ya hubiera tecleado
+    /// un patrón.
+    #[test]
+    fn the_pattern_modal_cancels_without_marking() {
+        let mut app = app_with_entries(&["a.rs"]);
+        app.open_mark_pattern(true);
+        app.mark_pattern_push('*');
+        app.close_modal();
+        assert_eq!(app.focused().marks_len(), 0);
     }
 }
 

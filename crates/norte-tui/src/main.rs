@@ -1065,6 +1065,34 @@ async fn run(
                             app.quit = true;
                             continue;
                         }
+                        // `Modal::MarkPattern` (#103 T9) es TEXTO libre, como
+                        // el diálogo de búsqueda de arriba: consume
+                        // caracteres crudos ANTES del contexto `dialog` — no
+                        // tiene ALLOWLIST de `dialog_action` (`ctrl+c` ya
+                        // quedó resuelto arriba, igual que para el resto de
+                        // modales).
+                        if matches!(app.modal, Some(Modal::MarkPattern { .. })) {
+                            let plain = key.modifiers.is_empty()
+                                || key.modifiers == KeyModifiers::SHIFT;
+                            match key.code {
+                                KeyCode::Char(c) if plain => app.mark_pattern_push(c),
+                                KeyCode::Backspace if plain => app.mark_pattern_pop(),
+                                // Un `Err` deja el diagnóstico en el propio
+                                // modal (`mark_pattern_confirm`, que lo deja
+                                // abierto): nada más que hacer aquí.
+                                KeyCode::Enter if plain => {
+                                    if let Ok(n) = app.mark_pattern_confirm() {
+                                        app.message = Some(ta(
+                                            "msg-marked-by-pattern",
+                                            &[("n", &n.to_string())],
+                                        ));
+                                    }
+                                }
+                                KeyCode::Esc if plain => app.close_modal(),
+                                _ => {}
+                            }
+                            continue;
+                        }
                         // El modal TOFU (#45) puede NAVEGAR al confiar: su Cd
                         // se aplica igual que el de un comando.
                         let outcome = on_dialog_key(
@@ -2712,8 +2740,14 @@ async fn on_dialog_key(
                     submit_transfer(app, backend, kind, from, to, TransferOptions::default()).await;
                 }
                 // TrustLuaInit se intercepta ANTES en el run loop (necesita
-                // el LuaHost): inalcanzable aquí — no-op defensivo.
-                Modal::Collision { .. } | Modal::TrustLuaInit { .. } => {}
+                // el LuaHost); MarkPattern (#103 T9) también, como texto
+                // libre (mismo motivo que la búsqueda) — `dialog_action`
+                // devuelve `None` para ambos, así que `on_dialog_key` ya
+                // habría retornado antes de llegar a este match: inalcanzable
+                // aquí, no-op defensivo.
+                Modal::Collision { .. }
+                | Modal::TrustLuaInit { .. }
+                | Modal::MarkPattern { .. } => {}
                 // S2 (`[ui] confirm_quit`): confirmar cierra — el run loop
                 // lo detecta en su chequeo de `app.quit` de cada vuelta
                 // (main.rs, tope del `loop`).
@@ -3307,6 +3341,11 @@ async fn dispatch(
         "mark.all" => app.focused_mut().mark_all(),
         "mark.invert" => app.focused_mut().invert_marks(),
         "mark.clear" => app.focused_mut().clear_marks(),
+        // `+`/`-` (#103 T9): abren el modal de patrón (texto libre, ver el
+        // brazo `app.modal.is_some()` de arriba) — marcar/desmarcar
+        // corre al confirmar (`mark_pattern_confirm`), no aquí.
+        "mark.pattern-add" => app.open_mark_pattern(true),
+        "mark.pattern-remove" => app.open_mark_pattern(false),
         "pane.delete" | "pane.delete-permanent" => {
             if let Some(e) = app.focused().selected() {
                 // F8 = papelera si el provider la declara; sin ella, el
@@ -3453,6 +3492,97 @@ async fn dispatch(
         _ => debug_assert!(false, "comando validado sin brazo: {cmd}"),
     }
     cd_outcome
+}
+
+/// #103 T9: `mark.pattern-add`/`-remove` llegaron a `COMMANDS` y a los tres
+/// presets (`keymap.rs`) SIN un brazo en `dispatch` — el comodín final es
+/// `debug_assert!(false, ...)`, así que pulsar `+`/`-` PANICABA un build
+/// debug (silencioso en release, un no-op). El fix ideal invocaría
+/// `dispatch` con cada nombre de `COMMANDS` y comprobaría que no cae al
+/// comodín, pero eso resultó INALCANZABLE sin reescribir `dispatch`:
+///
+/// - Es `async fn` y pide un `&mut EventStream` REAL. `EventStream::new()`
+///   arranca un hilo que llama a `poll_internal` de inmediato, y ESO panica
+///   fuera de un terminal real (`"reader source not set"`, interno de
+///   crossterm, sin gancho de test expuesto) — confirmado empíricamente al
+///   intentarlo. Coincide con un límite YA señalado en este código
+///   (`app.rs`, comentario junto a
+///   `mark_toggle_advances_without_wrapping_at_the_end`: "`dispatch` en sí
+///   no es testeable aquí sin un daemon real").
+/// - No hay una estructura PURA aparte que decida los brazos: extraer una
+///   tabla comando→acción sería una reescritura de `dispatch` (~270 líneas
+///   de match) fuera de alcance de esta tarea.
+///
+/// Así que esto pinea la propiedad MÁS DÉBIL que SÍ es alcanzable sin
+/// ejecutar ni reescribir `dispatch`: cada nombre de `COMMANDS` aparece como
+/// LITERAL DE CADENA dentro del cuerpo fuente real de la función (extraído
+/// de este mismo fichero por conteo de llaves desde la firma). Cubre
+/// EXACTAMENTE la clase de bug que motivó esta tarea — un comando de
+/// `COMMANDS` sin ningún string coincidente en el cuerpo, como
+/// `mark.pattern-add` antes de este commit.
+///
+/// Lo que NO cubre, a propósito documentado: que el literal encontrado sea
+/// código VIVO (uno que solo viviera dentro de un comentario colaría); que
+/// el brazo sea semánticamente correcto (cosa de sus propios tests); ni que
+/// el comando no caiga por accidente en el brazo de OTRO (un typo que
+/// coincida con un string ajeno no se detecta). El conteo de llaves asume
+/// que las llaves DENTRO de los literales de cadena del cuerpo están
+/// balanceadas — cierto hoy (el único caso, el format string del propio
+/// comodín `"...: {cmd}"`, es 1 abre + 1 cierra) pero no está garantizado
+/// para siempre; un desbalance futuro haría panicar la extracción con un
+/// mensaje claro, jamás pasar en silencio.
+#[cfg(test)]
+mod command_dispatch_tests {
+    use super::COMMANDS;
+
+    /// Cuerpo de `async fn dispatch(` de este mismo fichero, desde su `{`
+    /// de apertura hasta el `}` que la cierra (conteo de llaves: sin tirar
+    /// de `syn` para un solo test, regla 8 de CLAUDE.md — nueva dependencia
+    /// solo se justifica con un uso real).
+    fn dispatch_body() -> &'static str {
+        const SRC: &str = include_str!("main.rs");
+        let sig = SRC
+            .find("async fn dispatch(")
+            .expect("dispatch debe existir en este fichero");
+        let open = SRC[sig..].find('{').expect("firma con cuerpo") + sig;
+        let mut depth = 0i32;
+        for (i, c) in SRC[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &SRC[open..=open + i];
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("cuerpo de dispatch sin cierre (conteo de llaves desbalanceado)");
+    }
+
+    #[test]
+    fn every_command_has_a_matching_string_literal_in_dispatch() {
+        let body = dispatch_body();
+        // Sanity: la extracción encontró el cuerpo REAL, no un prefijo
+        // vacío o cortado en falso por algún string con llaves.
+        assert!(
+            body.contains("\"cursor.up\"") && body.contains("cd_outcome"),
+            "extracción de dispatch_body sospechosa: {} bytes",
+            body.len()
+        );
+        let missing: Vec<&str> = COMMANDS
+            .iter()
+            .copied()
+            .filter(|cmd| !body.contains(&format!("\"{cmd}\"")))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "COMMANDS sin literal coincidente en el cuerpo de dispatch — \
+             pulsarlos hoy panica el comodín en debug (y es un no-op en \
+             release): {missing:?}"
+        );
+    }
 }
 
 /// Parsea una `key` de fila de plugin de la palette

@@ -21,6 +21,9 @@ modal-lua-trust-title = Run project init.lua?
 modal-lua-trust-body = { $path } (sha256 { $hash }) will run WITH YOUR PERMISSIONS. A cloned repo's script can do anything you can. y = trust and run · n/Esc = deny (remembered until the file changes)
 modal-confirm-quit-title = Quit norte?
 modal-confirm-quit-body = Close the application.
+modal-mark-pattern-add = Mark by pattern
+modal-mark-pattern-remove = Unmark by pattern
+modal-mark-pattern-hint = glob, for example *.rs
 
 # --- Status bar messages ---
 msg-done = done
@@ -154,6 +157,7 @@ status-marked-with-dirs = { $n } marked, { $size } + { $dirs } dirs
 status-marks-pruned = { $n } marks dropped, their entries are gone
 msg-names-encoding = names shown as { $enc } (display only; bytes unchanged)
 msg-names-encoding-off = names shown as-is (reinterpretation off)
+msg-marked-by-pattern = { $n } marks changed
 msg-open-no-opener = no opener configured for { $mime } (see openers.toml)
 msg-open-missing-program = opener needs `{ $program }` — not installed
 msg-open-remote = openers only work on local files

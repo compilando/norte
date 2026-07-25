@@ -21,6 +21,9 @@ modal-lua-trust-title = ¿Ejecutar el init.lua del proyecto?
 modal-lua-trust-body = { $path } (sha256 { $hash }) se ejecutará CON TUS PERMISOS. El script de un repo clonado puede hacer todo lo que tú puedas. y = confiar y ejecutar · n/Esc = denegar (se recuerda hasta que el fichero cambie)
 modal-confirm-quit-title = ¿Salir de norte?
 modal-confirm-quit-body = Cierra la aplicación.
+modal-mark-pattern-add = Marcar por patrón
+modal-mark-pattern-remove = Desmarcar por patrón
+modal-mark-pattern-hint = glob, por ejemplo *.rs
 
 # --- Mensajes de la barra ---
 msg-done = hecho
@@ -154,6 +157,7 @@ status-marked-with-dirs = { $n } marcadas, { $size } + { $dirs } dirs
 status-marks-pruned = { $n } marcas caídas, sus entradas ya no están
 msg-names-encoding = nombres mostrados como { $enc } (solo display; los bytes no cambian)
 msg-names-encoding-off = nombres tal cual (reinterpretación apagada)
+msg-marked-by-pattern = { $n } marcas cambiadas
 msg-open-no-opener = sin opener configurado para { $mime } (ver openers.toml)
 msg-open-missing-program = el opener necesita `{ $program }` — no instalado
 msg-open-remote = los openers solo funcionan con archivos locales
