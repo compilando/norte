@@ -22,12 +22,15 @@ use std::collections::{HashMap, HashSet};
 
 /// Why a mark-by-pattern was rejected (hard rule 6: typed library errors).
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum PatternError {
-    /// The glob does not compile. Carries the `globset` diagnostic so the
-    /// dialog can show WHY, the same treatment `fs.search` gives an invalid
-    /// glob — the pattern is the user's own input, never a secret.
-    #[error("invalid pattern: {0}")]
-    Glob(#[from] globset::Error),
+    /// The glob does not compile. Carries the `globset` diagnostic, which
+    /// EMBEDS the user's pattern verbatim — a frontend MUST mask it before
+    /// painting it (`display_name`), exactly as it masks a file name: a
+    /// pattern arrives by paste as easily as by typing, and can carry bidi
+    /// overrides or invisibles.
+    #[error("{0}")]
+    Glob(String),
 }
 
 /// Estado no-render de un pane: directorio, entradas (normalizadas
@@ -512,7 +515,7 @@ impl PaneState {
         }
     }
 
-    /// Marks every entry of the visible set (see [`Self::markable_indices`]).
+    /// Marks every entry of the visible set (see `markable_indices`).
     pub fn mark_all(&mut self) {
         for i in self.markable_indices() {
             let Some(path) = self.entries.get(i).map(|e| &e.path) else {
@@ -525,7 +528,7 @@ impl PaneState {
     }
 
     /// Flips the mark of every entry of the visible set (see
-    /// [`Self::markable_indices`]). Marks OUTSIDE that set SURVIVE untouched:
+    /// `markable_indices`). Marks OUTSIDE that set SURVIVE untouched:
     /// invert is "flip what you see", not "replace the selection with its
     /// complement" — under a filter, [`Self::marked_paths`] can therefore
     /// still return entries the user is not looking at.
@@ -541,26 +544,56 @@ impl PaneState {
     }
 
     /// Marks (`mark = true`) or unmarks (`false`) the visible entries whose
-    /// name matches `pattern`, a glob. Returns how many marks CHANGED, so
-    /// the UI can report "12 marked" without recounting.
+    /// name matches `pattern`, a glob. Returns how many marks it ADDED or
+    /// REMOVED, never the resulting total — a pattern that only re-marks
+    /// what was already marked returns 0 even though the selection is
+    /// non-empty; read [`Self::marks_len`] for the total.
     ///
-    /// Matching reuses the quick-search fold ([`crate::nav::fold_with`]:
-    /// lossy UTF-8 → NFC → lowercase → NFC, honouring the pane's name
-    /// reinterpretation) with a case-insensitive glob. A pattern therefore
-    /// addresses the text the pane DISPLAYS, never the raw bytes: the
-    /// invalid bytes of a non-UTF-8 name fold to U+FFFD and cannot be named,
-    /// though such a name still matches a pattern its valid part satisfies.
-    /// [`Self::toggle_mark`] always reaches it by hand, and
-    /// [`Self::marked_paths`] returns its original bytes (hard rule 1).
+    /// Matching folds BOTH sides through the quick-search pipeline
+    /// ([`nav::fold_with`](crate::nav::fold_with): lossy UTF-8 → NFC →
+    /// lowercase → NFC, honouring the pane's name reinterpretation) before
+    /// compiling the glob, so a pattern matches the FOLDED name, not the
+    /// text the pane paints: [`crate::display_name_with`] additionally
+    /// MASKS bidi overrides and invisibles to U+FFFD, which the fold does
+    /// not — a name typed exactly as painted only matches if it is already
+    /// NFC, lowercase, and free of masked characters. `globset`'s own
+    /// `case_insensitive` only reaches ASCII (it compiles with the `(?-u)`
+    /// flag), so folding the pattern is what makes non-ASCII case and NFD
+    /// input match at all — kept on anyway as an ASCII safety net.
+    ///
+    /// A non-UTF-8 name's invalid bytes fold to U+FFFD and cannot be named
+    /// INDIVIDUALLY — but typing U+FFFD in the pattern names ALL of them at
+    /// once, matching every hostile name whose lossy form collapses there.
+    /// [`Self::toggle_mark`] always reaches an entry by hand regardless, and
+    /// [`Self::marked_paths`] returns each mark's original bytes untouched
+    /// (hard rule 1).
+    ///
+    /// `?` and a character class (`[...]`) count UTF-8 BYTES, not
+    /// characters — a consequence of the `(?-u)` byte-mode glob compiles in
+    /// (see issue #110): `a?o` does not match `año`, whose `ñ` is
+    /// two bytes. Unmarking down to an empty set re-arms
+    /// [`Self::marked_paths`]'s cursor fallback (it returns the entry under
+    /// the cursor when no marks remain) — a caller must read the count this
+    /// method returns rather than assume the mark set still reflects what
+    /// the user last saw.
     ///
     /// # Errors
     /// [`PatternError::Glob`] if the pattern does not compile. Nothing is
     /// marked in that case.
     pub fn mark_glob(&mut self, pattern: &str, mark: bool) -> Result<usize, PatternError> {
-        let matcher = GlobBuilder::new(pattern)
-            .case_insensitive(true)
-            .literal_separator(false)
-            .build()?
+        // El patrón se pliega con el MISMO pipeline que el nombre (#103): el
+        // fold es Unicode, `case_insensitive` de globset es solo-ASCII
+        // (emite `(?-u)`), así que sin plegar la aguja un patrón NFD o una
+        // mayúscula no-ASCII no casarían NADA en silencio.
+        let folded = crate::nav::fold(pattern.as_bytes());
+        let matcher = GlobBuilder::new(&folded)
+            .case_insensitive(true) // red de seguridad ASCII; el fold hace el trabajo Unicode
+            .backslash_escape(true) // si no, la semántica de `\` depende del SO (globset la
+            // hace depender de `is_separator('\\')`, true en unix, false en
+            // windows) — `\` es un byte de nombre legal en Linux (corpus
+            // `win_backslash`) y el patrón debe casarlo igual en las dos.
+            .build()
+            .map_err(|e| PatternError::Glob(e.to_string()))?
             .compile_matcher();
         let enc = self.name_encoding;
         let mut changed = 0usize;
@@ -741,7 +774,7 @@ impl PaneState {
     /// ordenado). (#82)
     ///
     /// Marks are pruned to the paths present in `entries` (#103, see
-    /// [`Self::prune_marks`]/[`Self::pruned_marks`]) — the listing passed in
+    /// `prune_marks`/[`Self::pruned_marks`]) — the listing passed in
     /// must be COMPLETE, since a partial page would silently discard the
     /// marks it omits.
     pub fn refill(&mut self, entries: Vec<Entry>) {
@@ -1983,13 +2016,34 @@ mod tests {
         );
     }
 
+    /// review: the direction that actually needs a fold is an UPPERCASE
+    /// pattern against a lowercase name — the reverse always worked because
+    /// the fold already lowercases the haystack regardless of `globset`'s
+    /// own `case_insensitive` knob. Also pins the non-ASCII case: `globset`'s
+    /// knob is ASCII-only (`(?-u)` byte mode), so `É*` only reaches
+    /// `étude.txt` because `mark_glob` folds the PATTERN too (BLOCKER C).
     #[test]
     fn mark_glob_is_case_insensitive() {
         let mut p = PaneState::new(
             VPath::parse("mem:///").unwrap(),
-            vec![e("mem:///PHOTO.JPG", EntryKind::File)],
+            vec![e("mem:///photo.jpg", EntryKind::File)],
         );
-        assert_eq!(p.mark_glob("*.jpg", true).unwrap(), 1);
+        assert_eq!(
+            p.mark_glob("*.JPG", true).unwrap(),
+            1,
+            "uppercase ASCII pattern, lowercase name"
+        );
+
+        let mut p2 = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![e("mem:///étude.txt", EntryKind::File)],
+        );
+        assert_eq!(
+            p2.mark_glob("É*", true).unwrap(),
+            1,
+            "uppercase non-ASCII pattern, lowercase name — globset's own \
+             case_insensitive can't do this, only the pattern fold can"
+        );
     }
 
     #[test]
@@ -2003,6 +2057,10 @@ mod tests {
         );
         p.mark_all();
         assert_eq!(p.mark_glob("*.rs", false).unwrap(), 1);
+        // An empty mark set makes `marked_paths` fall back to the cursor
+        // entry (see its rustdoc) — a one-element vector could then be
+        // satisfied by ZERO marks. Pin the count first.
+        assert_eq!(p.marks_len(), 1);
         assert_eq!(
             p.marked_paths(),
             vec![VPath::parse("mem:///c.txt").unwrap()]
@@ -2053,10 +2111,12 @@ mod tests {
         assert!(p.is_marked(&p.entries()[0].clone()));
     }
 
-    /// Hostile corpus (hard rule 1): a pattern addresses the DISPLAYED text,
-    /// so it cannot name the invalid bytes — but it does match a name whose
-    /// valid suffix satisfies it, and `marked_paths` gives the ORIGINAL
-    /// bytes back.
+    /// Hostile corpus (hard rule 1): a pattern addresses the FOLDED text
+    /// (lossy → NFC → lowercase → NFC), never the raw bytes — the invalid
+    /// bytes of a non-UTF-8 name fold to U+FFFD and cannot be named
+    /// INDIVIDUALLY, though typing U+FFFD names ALL of them at once (a name
+    /// whose valid suffix satisfies the rest of the pattern still matches).
+    /// `marked_paths` gives the ORIGINAL bytes back regardless.
     #[test]
     fn mark_glob_matches_the_lossy_form_and_returns_raw_bytes() {
         // mem:///<0xFF><0xFE>.rs — same hostile construction as the other
@@ -2082,9 +2142,370 @@ mod tests {
             "raw bytes, never the lossy form"
         );
 
-        // The invalid bytes themselves are unaddressable: they fold to
-        // U+FFFD.
+        // The invalid bytes themselves are unaddressable INDIVIDUALLY: they
+        // fold to U+FFFD, and typing U+FFFD names all of them at once.
         p.clear_marks();
         assert_eq!(p.mark_glob("\u{FFFD}*", true).unwrap(), 1);
+    }
+
+    /// Symmetry pin (review requirement, the one that guards the fold
+    /// forever): for EVERY name in the canonical hostile corpus, a pattern
+    /// built from that name's own RAW (unfolded) text — escaped only for
+    /// the glob metacharacters it happens to contain — must still mark
+    /// exactly that entry, and `marked_paths` must return its exact bytes.
+    ///
+    /// This is what actually exercises `mark_glob` folding the PATTERN
+    /// (BLOCKER C): before that fix, `GlobBuilder` compiled the pattern
+    /// AS-IS while the haystack was already folded (NFC + lowercase) — an
+    /// NFD name's raw (decomposed) text then never matched its own
+    /// (composed) haystack. Fails today for `nfd_e_acute`,
+    /// `nfd_uppercase_composed_only_lowercase`, and `name_max_nfd_overflow`.
+    #[test]
+    fn mark_glob_pattern_from_each_names_own_text_marks_exactly_that_entry() {
+        fn escape_glob(s: &str) -> String {
+            let mut out = String::with_capacity(s.len());
+            for c in s.chars() {
+                if matches!(c, '*' | '?' | '[' | ']' | '{' | '}' | '\\') {
+                    out.push('\\');
+                }
+                out.push(c);
+            }
+            out
+        }
+
+        for name in norte_testkit::corpus::hostile_names() {
+            let dir = VPath::parse("mem:///").unwrap();
+            let seg = norte_proto::Segment::new(name.bytes.clone()).unwrap();
+            let path = dir.clone().join(seg);
+            let mut p = PaneState::new(
+                dir,
+                vec![Entry {
+                    attrs: std::collections::BTreeMap::new(),
+                    path: path.clone(),
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                }],
+            );
+            let raw = String::from_utf8_lossy(&name.bytes).into_owned();
+            let pattern = escape_glob(&raw);
+            let changed = p.mark_glob(&pattern, true).unwrap_or_else(|err| {
+                panic!("[{}] pattern {pattern:?} must compile: {err}", name.id)
+            });
+            assert_eq!(
+                changed, 1,
+                "[{}] a pattern from its own text must mark exactly this \
+                 entry (pattern {pattern:?})",
+                name.id
+            );
+            assert_eq!(p.marks_len(), 1, "[{}] exactly one mark", name.id);
+            assert_eq!(
+                p.marked_paths(),
+                vec![path],
+                "[{}] raw bytes back, never the lossy/folded form",
+                name.id
+            );
+        }
+    }
+
+    /// A pattern typed exactly as an NFD name is painted (macOS trap,
+    /// CLAUDE.md) matches its NFD twin only because `mark_glob` folds the
+    /// pattern to NFC before compiling (BLOCKER C). Also pins the
+    /// name-reinterpretation branch (#57): `П*` reaches `cp866_papka` only
+    /// under an active IBM866 reinterpretation — a mutant that folds the
+    /// haystack with `fold_with(name, None)` instead of
+    /// `fold_with(name, self.name_encoding)` would make this fail, since
+    /// the raw bytes aren't valid UTF-8 and their plain lossy fold is
+    /// unrelated Unicode replacement text, not Cyrillic.
+    #[test]
+    fn mark_glob_matches_nfd_typed_pattern_and_reinterpreted_uppercase() {
+        let nfd_name = "an\u{0303}o.txt";
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![e(&format!("mem:///{nfd_name}"), EntryKind::File)],
+        );
+        assert_eq!(
+            p.mark_glob(nfd_name, true).unwrap(),
+            1,
+            "NFD-typed pattern must find its NFD twin"
+        );
+
+        let papka = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == "cp866_papka")
+            .expect("fixture del corpus")
+            .bytes;
+        let dir = VPath::parse("mem:///").unwrap();
+        let seg = norte_proto::Segment::new(papka).unwrap();
+        let mut p2 = PaneState::new(
+            dir.clone(),
+            vec![Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: dir.join(seg),
+                kind: EntryKind::File,
+                size: None,
+                mtime_ms: None,
+            }],
+        );
+        assert_eq!(p2.cycle_name_encoding(), Some("IBM866"));
+        assert_eq!(
+            p2.mark_glob("П*", true).unwrap(),
+            1,
+            "uppercase Cyrillic pattern must reach the reinterpreted name"
+        );
+    }
+
+    /// Collapse pin (review requirement): `lossy_collapse_ff`/
+    /// `lossy_collapse_fe` are two DISTINCT byte sequences (`\xFF.rs` vs
+    /// `\xFE.rs`) whose lossy fold collapses to the SAME `"\u{FFFD}.rs"` —
+    /// without this pair the collapse can't be pinned at all: with a single
+    /// hostile entry, "matches this one" and "matches every invalid name"
+    /// are indistinguishable.
+    #[test]
+    fn mark_glob_collapse_pin() {
+        let names = norte_testkit::corpus::hostile_names();
+        let ff = names
+            .iter()
+            .find(|n| n.id == "lossy_collapse_ff")
+            .expect("fixture del corpus")
+            .bytes
+            .clone();
+        let fe = names
+            .iter()
+            .find(|n| n.id == "lossy_collapse_fe")
+            .expect("fixture del corpus")
+            .bytes
+            .clone();
+        let dir = VPath::parse("mem:///").unwrap();
+        let path_ff = dir.clone().join(norte_proto::Segment::new(ff).unwrap());
+        let path_fe = dir.clone().join(norte_proto::Segment::new(fe).unwrap());
+        let clean = dir
+            .clone()
+            .join(norte_proto::Segment::new(b"clean.rs".to_vec()).unwrap());
+        let mut p = PaneState::new(
+            dir,
+            vec![
+                Entry {
+                    attrs: std::collections::BTreeMap::new(),
+                    path: path_ff.clone(),
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                },
+                Entry {
+                    attrs: std::collections::BTreeMap::new(),
+                    path: path_fe.clone(),
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                },
+                Entry {
+                    attrs: std::collections::BTreeMap::new(),
+                    path: clean,
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                },
+            ],
+        );
+        // ONE pattern (U+FFFD, unaddressable individually) reaches BOTH
+        // distinct byte sequences, never the clean name.
+        assert_eq!(p.mark_glob("\u{FFFD}*", true).unwrap(), 2);
+        assert_eq!(p.marks_len(), 2);
+        let mut marked = p.marked_paths();
+        marked.sort();
+        let mut expected = vec![path_ff, path_fe];
+        expected.sort();
+        assert_eq!(marked, expected, "both original byte sequences, untouched");
+
+        // Separately: a many-to-one selector over byte-exact identities —
+        // the counterpart of `marcas_distinguen_gemelos_nfc_y_nfd_sin_plegar`
+        // (which pins that a TOGGLE never folds gemelos). Here, deliberately,
+        // ONE NFC pattern marks BOTH the NFC and NFD é twins: `mark_glob`
+        // matches by folded TEXT, an intentional many-to-one selector, while
+        // each mark's IDENTITY (its `VPath`) stays byte-exact — this is the
+        // opposite property from toggle's byte-exact SELECTION, not a
+        // regression of it.
+        let nfc = names
+            .iter()
+            .find(|n| n.id == "nfc_e_acute")
+            .expect("fixture del corpus")
+            .bytes
+            .clone();
+        let nfd = names
+            .iter()
+            .find(|n| n.id == "nfd_e_acute")
+            .expect("fixture del corpus")
+            .bytes
+            .clone();
+        let dir2 = VPath::parse("mem:///").unwrap();
+        let path_nfc = dir2.clone().join(norte_proto::Segment::new(nfc).unwrap());
+        let path_nfd = dir2.clone().join(norte_proto::Segment::new(nfd).unwrap());
+        let mut p2 = PaneState::new(
+            dir2,
+            vec![
+                Entry {
+                    attrs: std::collections::BTreeMap::new(),
+                    path: path_nfc.clone(),
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                },
+                Entry {
+                    attrs: std::collections::BTreeMap::new(),
+                    path: path_nfd.clone(),
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                },
+            ],
+        );
+        assert_eq!(
+            p2.mark_glob("é", true).unwrap(),
+            2,
+            "a many-to-one selector over byte-exact identities: ONE NFC \
+             pattern deliberately marks BOTH the NFC and NFD é twins — the \
+             counterpart of toggle's byte-exact selection, not a regression \
+             of it"
+        );
+        assert_eq!(p2.marks_len(), 2);
+    }
+
+    /// Byte-granularity pin (issue #110, KNOWN behaviour — not fixed here):
+    /// `globset` compiles `?`/character classes in `(?-u)` byte mode, so
+    /// they count UTF-8 BYTES, not characters. `ñ` is 2 bytes: a single-byte
+    /// wildcard or byte class never reaches it.
+    #[test]
+    fn mark_glob_matches_utf8_bytes_not_characters() {
+        let dir = VPath::parse("mem:///").unwrap();
+        let anio = dir
+            .clone()
+            .join(norte_proto::Segment::new("a\u{f1}o.txt".as_bytes().to_vec()).unwrap());
+        let axo = dir
+            .clone()
+            .join(norte_proto::Segment::new(b"axo.txt".to_vec()).unwrap());
+        let mut p = PaneState::new(
+            dir,
+            vec![
+                Entry {
+                    attrs: std::collections::BTreeMap::new(),
+                    path: anio.clone(),
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                },
+                Entry {
+                    attrs: std::collections::BTreeMap::new(),
+                    path: axo.clone(),
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                },
+            ],
+        );
+        assert_eq!(
+            p.mark_glob("a?o.txt", true).unwrap(),
+            1,
+            "one byte-wildcard only covers axo.txt; ñ is 2 bytes"
+        );
+        assert_eq!(p.marks_len(), 1);
+        assert_eq!(p.marked_paths(), vec![axo.clone()]);
+        p.clear_marks();
+
+        assert_eq!(
+            p.mark_glob("a??o.txt", true).unwrap(),
+            1,
+            "two byte-wildcards cover ñ's two bytes"
+        );
+        assert_eq!(p.marks_len(), 1);
+        assert_eq!(p.marked_paths(), vec![anio]);
+        p.clear_marks();
+
+        assert_eq!(
+            p.mark_glob("a[\u{f1}x]o.txt", true).unwrap(),
+            1,
+            "a byte class never matches a multi-byte char either"
+        );
+        assert_eq!(p.marks_len(), 1);
+        assert_eq!(p.marked_paths(), vec![axo]);
+    }
+
+    /// Masking-divergence pin: rows are painted through
+    /// [`crate::display_name_with`], which MASKS bidi overrides to U+FFFD;
+    /// `mark_glob`'s fold does NOT mask them. Typing exactly what the pane
+    /// PAINTED therefore does not name what the fold preserves.
+    #[test]
+    fn mark_glob_pattern_diverges_from_the_painted_text_for_bidi_hazards() {
+        let rtl = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == "rtl_override")
+            .expect("fixture del corpus")
+            .bytes;
+        let (painted, hostile) = crate::display_name_with(&rtl, None);
+        assert!(hostile, "rtl_override is flagged hostile");
+        assert!(
+            painted.contains('\u{FFFD}'),
+            "display_name_with masks the RLO override to U+FFFD: {painted:?}"
+        );
+
+        let dir = VPath::parse("mem:///").unwrap();
+        let seg = norte_proto::Segment::new(rtl.clone()).unwrap();
+        let mut p = PaneState::new(
+            dir.clone(),
+            vec![Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: dir.join(seg),
+                kind: EntryKind::File,
+                size: None,
+                mtime_ms: None,
+            }],
+        );
+        assert_eq!(
+            p.mark_glob(&painted, true).unwrap(),
+            0,
+            "the painted (U+FFFD-masked) text is not what the fold matches \
+             against — the fold preserves the raw RLO, unmasked"
+        );
+    }
+
+    /// Backslash pin: `backslash_escape(true)` (BLOCKER C) makes `\`
+    /// consistently an escape character regardless of host OS — `globset`'s
+    /// own default depends on `is_separator('\\')` (true on unix, false on
+    /// windows; it also rewrites `\` to `/` in the haystack there), so the
+    /// SAME pattern would otherwise answer differently per platform. `\` is
+    /// a legal Linux filename byte (corpus `win_backslash`).
+    #[test]
+    fn mark_glob_backslash_matches_only_when_escaped() {
+        let name = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == "win_backslash")
+            .expect("fixture del corpus")
+            .bytes; // a\b: 3 bytes, a literal backslash in the middle.
+        let dir = VPath::parse("mem:///").unwrap();
+        let seg = norte_proto::Segment::new(name).unwrap();
+        let mut p = PaneState::new(
+            dir.clone(),
+            vec![Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: dir.join(seg),
+                kind: EntryKind::File,
+                size: None,
+                mtime_ms: None,
+            }],
+        );
+        // An escaped backslash (`\\` in the pattern) matches the literal byte.
+        assert_eq!(
+            p.mark_glob("a\\\\b", true).unwrap(),
+            1,
+            "escaped backslash matches the literal byte"
+        );
+        p.clear_marks();
+        // A lone backslash is the escape character itself: `\b` escapes `b`
+        // to a literal `b`, so the compiled pattern means "ab", not "a\b".
+        assert_eq!(
+            p.mark_glob("a\\b", true).unwrap(),
+            0,
+            "unescaped backslash is consumed as an escape, not a literal match"
+        );
     }
 }

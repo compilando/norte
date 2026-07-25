@@ -138,5 +138,15 @@
     "id": "utf8_accidental_cp866",
     "hex": "d0b0",
     "why": "bytes cp866 que TAMBIÉN son UTF-8 válido ('а' cirílica): la reinterpretación NO los toca (regla mixto-sin-mojibake) — indistinguible sin metadatos"
+  },
+  {
+    "id": "lossy_collapse_ff",
+    "hex": "ff2e7273",
+    "why": "\\xFF.rs: byte inválido en solitario que colapsa al lossy '�.rs' — pareja con lossy_collapse_fe (bytes DISTINTOS, mismo pliegue) para pinear que un selector por texto plegado (mark_glob #103) alcanza AMBOS con un solo patrón mientras la identidad sigue siendo byte-exacta"
+  },
+  {
+    "id": "lossy_collapse_fe",
+    "hex": "fe2e7273",
+    "why": "\\xFE.rs: la pareja de lossy_collapse_ff — bytes DISTINTOS (0xFE vs 0xFF), mismo pliegue lossy '�.rs'; sin este par el colapso a U+FFFD no se puede pinear (con una sola entrada hostil, 'casa esta' y 'casa todas las inválidas' son indistinguibles)"
   }
 ]
