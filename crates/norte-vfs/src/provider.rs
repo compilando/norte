@@ -164,12 +164,19 @@ pub trait Provider: Send + Sync {
     /// `reversal_ref` para el undo. `None` si es la papelera NATIVA del OS (sin
     /// ruta estable expuesta) o una papelera "vanish" de test.
     ///
+    /// `id` lo genera el engine UNA vez por operación (#99): la papelera lógica
+    /// construye su entrada determinista `.norte-trash/<id>/` con él, de modo
+    /// que la operación es IDEMPOTENTE — un reintento tras un fallo transitorio
+    /// converge en la misma entrada (víctima ya movida + destino presente →
+    /// `Some(payload)`) en vez de crear una segunda o perder el `reversal_ref`.
+    /// Las papeleras nativas/vanish lo ignoran (sin destino recuperable).
+    ///
     /// Excepciones de plataforma conocidas (ADR 0009, issues #25/#26):
     /// Windows puede DESTRUIR ítems no reciclables (auto-respuesta del
     /// nuke warning); freedesktop cross-device degrada a copy+delete
     /// interno (potencialmente largo e incancelable a mitad).
-    async fn trash(&self, p: &VPath) -> Result<Option<VPath>, Error> {
-        let _ = p;
+    async fn trash(&self, p: &VPath, id: &crate::trash::TrashId) -> Result<Option<VPath>, Error> {
+        let _ = (p, id);
         Err(Error::Unsupported)
     }
 

@@ -113,7 +113,25 @@ pub(crate) async fn revert_entry(
             {
                 return Ok(Reverted::SkippedNoTrash);
             }
-            let (comp_op, comp_reversal, comp_ref) = match provider.trash(&path).await {
+            // Id del trash compensatorio (#99): el `seq` del evento deshecho
+            // (único) hace de contador; DENTRO de un `undo_session` el `now_ms`
+            // se computa una vez por reversa, así que el reintento de
+            // `trash_retrying` converge. (Entre invocaciones SEPARADAS de undo
+            // el `now_ms` difiere: solo `seq` es estable — acotado, sin pérdida.)
+            // Se enruta por `trash_retrying` para que un transitorio-tras-efecto
+            // no pierda el `reversal_ref` también en el camino del undo.
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+            let comp_trash_id = norte_vfs::trash::TrashId::new(now_ms, entry.seq.unsigned_abs());
+            let (comp_op, comp_reversal, comp_ref) = match crate::ops::trash_retrying(
+                provider,
+                &path,
+                &comp_trash_id,
+                &tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            {
                 Ok(dest) => ("trashed", Reversal::RestoreTrash, dest),
                 Err(e) => return Ok(Reverted::Blocked(e)),
             };

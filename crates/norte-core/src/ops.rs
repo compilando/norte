@@ -102,6 +102,38 @@ async fn remove_retrying(
     }
 }
 
+/// `trash` con reintentos y desambiguación (#99). Tras un fallo transitorio el
+/// efecto pudo aplicarse. La papelera LÓGICA, con el MISMO id determinista,
+/// recupera el payload en el reintento (`Some`, conserva el `reversal_ref` del
+/// undo). La NATIVA no expone destino recuperable: un `NotFound` en el
+/// reintento significa "ya no está" (lo trasheó nuestra primera aplicación) →
+/// `Ok(None)`, el undo degrada como siempre en trash nativa. Un `NotFound` SIN
+/// transitorio previo es la víctima que nunca existió: se propaga.
+pub(crate) async fn trash_retrying(
+    provider: &dyn Provider,
+    path: &VPath,
+    id: &norte_vfs::trash::TrashId,
+    cancel: &CancellationToken,
+) -> Result<Option<VPath>, Error> {
+    let mut attempt = 0u32;
+    let mut ambiguous = false;
+    loop {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        match provider.trash(path, id).await {
+            Ok(dest) => return Ok(dest),
+            Err(Error::NotFound) if ambiguous => return Ok(None),
+            Err(e) if attempt < MAX_RETRIES && is_transient(&e) && !cancel.is_cancelled() => {
+                ambiguous = true;
+                backoff_or_cancel(cancel, attempt).await?;
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// `mkdir` con reintentos y desambiguación (#32.2). CONTRATO: el caller ya
 /// verificó que el destino NO preexistía (pre-stat de [`ensure_dir`]) — con
 /// esa garantía, un `Conflict` tras un fallo transitorio es nuestra primera
@@ -1425,7 +1457,14 @@ pub(crate) async fn delete_task(
             p.entries_total = Some(1);
             p.current = Some(path.clone());
         });
-        let dest = provider.trash(&path).await?;
+        // Id determinista de la operación (#99): reloj de pared UNA vez +
+        // el id numérico de la task como contador — estable en todo reintento.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+        let trash_id =
+            norte_vfs::trash::TrashId::new(now_ms, ctx.progress.snapshot().task_id.get());
+        let dest = trash_retrying(&*provider, &path, &trash_id, &ctx.cancel).await?;
         observer
             .on_mutation(
                 &Mutation::Trashed {
@@ -1730,6 +1769,26 @@ fn is_descendant(child: &VPath, ancestor: &VPath) -> bool {
 #[cfg(test)]
 mod tests {
     use super::rename_auto_candidate;
+
+    /// Cancelación limpia de `trash_retrying` (regla 3): un token ya cancelado
+    /// devuelve `Cancelled` SIN tocar el provider (la víctima inexistente ni
+    /// siquiera se consulta → no hay `NotFound`), y el bucle de reintento
+    /// observa el token en cada vuelta.
+    #[tokio::test]
+    async fn trash_retrying_honra_el_token_cancelado() {
+        use norte_proto::{Error, VPath};
+        use norte_testkit::MemProvider;
+        use norte_vfs::trash::TrashId;
+        use tokio_util::sync::CancellationToken;
+
+        let mem = MemProvider::new().with_logical_trash();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let id = TrashId::new(0, 0);
+        let r = super::trash_retrying(&mem, &VPath::parse("mem:///x").expect("wire"), &id, &cancel)
+            .await;
+        assert!(matches!(r, Err(Error::Cancelled)), "{r:?}");
+    }
 
     /// Rama NEGATIVA de la desambiguación de symlink (encoding-auditor,
     /// fixture 3): tras un transitorio, el Conflict con un link AJENO

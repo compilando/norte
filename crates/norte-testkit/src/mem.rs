@@ -125,6 +125,12 @@ pub struct MemProvider {
     /// archive que omitió entradas de su índice. `None` (default) = backend
     /// que lista todo lo que existe.
     list_skipped: Option<u64>,
+    /// Papelera LÓGICA (#99, cierra deuda H2): con ella, `trash` mueve la
+    /// víctima a `.norte-trash/<id>/payload` y devuelve `Some(payload)`
+    /// (destino recuperable) en vez de la papelera "vanish" (`None`). Modela un
+    /// provider remoto con `logical_trash` (sftp/object) para probar la
+    /// idempotencia y la recuperación del `reversal_ref`.
+    logical_trash: bool,
     tree: Arc<Mutex<Tree>>,
     faults: Arc<Faults>,
 }
@@ -179,9 +185,19 @@ impl MemProvider {
             norm: Normalization::default(),
             node_ids: true,
             list_skipped: None,
+            logical_trash: false,
             tree: Arc::new(Mutex::new(Tree::default())),
             faults: Arc::new(Faults::default()),
         }
+    }
+
+    /// Activa la papelera LÓGICA (#99): `trash` mueve a
+    /// `.norte-trash/<id>/payload` y devuelve `Some(payload)` en vez de la
+    /// papelera "vanish". Requiere la capability `TRASH` (la trae [`Self::new`]).
+    #[must_use]
+    pub fn with_logical_trash(mut self) -> Self {
+        self.logical_trash = true;
+        self
     }
 
     /// Simula un provider de CONTENEDOR que omitió `n` entradas de su índice
@@ -269,6 +285,19 @@ impl Default for MemProvider {
 /// Igualdad con fold ASCII (los límites están documentados en [`MemProvider`]).
 fn fold_eq_path(a: &SegPath, b: &SegPath) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.eq_ignore_ascii_case(y))
+}
+
+/// La `.norte-info` en `info_key` decodifica exactamente a `p` (misma
+/// víctima): la entrada de papelera es NUESTRA, no una colisión ajena con el
+/// mismo id (#99, review rust MAJOR). `info_decode` ya exige mismo
+/// scheme+authority; aquí se compara la ruta original completa.
+fn info_matches(tree: &Tree, info_key: &SegPath, p: &VPath) -> bool {
+    matches!(
+        tree.nodes.get(info_key),
+        Some(Node::File { content, .. })
+            if norte_vfs::trash::info_decode(content, p)
+                .is_ok_and(|i| i.original == *p)
+    )
 }
 
 /// ¿Misma forma NFC segmento a segmento? Solo si ambos son UTF-8 válido.
@@ -818,7 +847,11 @@ impl Provider for MemProvider {
         self.ambiguous_gate()
     }
 
-    async fn trash(&self, p: &VPath) -> Result<Option<VPath>, Error> {
+    async fn trash(
+        &self,
+        p: &VPath,
+        id: &norte_vfs::trash::TrashId,
+    ) -> Result<Option<VPath>, Error> {
         if !self.caps.flags.contains(CapabilityFlags::TRASH) {
             return Err(Error::Unsupported);
         }
@@ -827,6 +860,9 @@ impl Provider for MemProvider {
         // La raíz no se trashea: el path es el problema (como local).
         if key.is_empty() {
             return Err(Error::InvalidPath);
+        }
+        if self.logical_trash {
+            return self.trash_logical(p, id);
         }
         let lk = self.lookup();
         let mut tree = self.lock();
@@ -843,8 +879,13 @@ impl Provider for MemProvider {
             tree.nodes.remove(&k);
         }
         tree.tick();
+        drop(tree);
         // Papelera "vanish" de test: el subárbol desaparece de la vista, sin
-        // destino recuperable expuesto (como la papelera nativa del OS).
+        // destino recuperable expuesto (como la papelera nativa del OS). El
+        // `ambiguous_gate` simula el transitorio-tras-efecto (#17/#99): el
+        // reintento verá la víctima ausente y `trash_retrying` degrada a
+        // `Ok(None)` (sin `reversal_ref`, como la papelera nativa).
+        self.ambiguous_gate()?;
         Ok(None)
     }
 
@@ -927,6 +968,98 @@ impl MemProvider {
         } else {
             Ok(())
         }
+    }
+
+    /// Papelera LÓGICA (#99): mueve la víctima a `.norte-trash/<id>/payload` y
+    /// devuelve el destino recuperable. El `id` determinista la hace
+    /// IDEMPOTENTE — si la víctima ya no está pero el payload sí, esta op ya
+    /// aplicó en un intento transitorio anterior → `Some(payload)` (sin víctima
+    /// ni payload = `NotFound` genuino). Dir markers e info se insertan
+    /// directamente (sin consumir faults); el movimiento reusa la re-clave de
+    /// `rename`; un único [`Self::ambiguous_gate`] al final simula el
+    /// transitorio-tras-efecto que `trash_retrying` recupera.
+    fn trash_logical(
+        &self,
+        p: &VPath,
+        id: &norte_vfs::trash::TrashId,
+    ) -> Result<Option<VPath>, Error> {
+        let paths = norte_vfs::trash::plan(p, &id.as_segment())?;
+        let trash_root = paths.dir.parent().ok_or(Error::Unsupported)?;
+        let victim_key = seg_path(p);
+        let dir_key = seg_path(&paths.dir);
+        let root_key = seg_path(&trash_root);
+        let info_key = seg_path(&paths.info);
+        let payload_key = seg_path(&paths.payload);
+        let lk = self.lookup();
+        {
+            let mut tree = self.lock();
+            let Some(real_from) = resolve(&tree, lk, &victim_key) else {
+                // Víctima ausente. Idempotencia: payload presente = ya aplicó,
+                // pero SOLO si la `.norte-info` de la entrada es NUESTRA (misma
+                // víctima). Una entrada AJENA con el mismo id no se reclama
+                // (review rust MAJOR): se reporta colisión, no un payload que
+                // no es de `p`. Sin payload = `NotFound` genuino.
+                if resolve(&tree, lk, &payload_key).is_none() {
+                    return Err(Error::NotFound);
+                }
+                return if info_matches(&tree, &info_key, p) {
+                    Ok(Some(paths.payload))
+                } else {
+                    Err(Error::Conflict {
+                        conflict: ConflictKind::Exists,
+                    })
+                };
+            };
+            // La entrada `<id>` ya existe con una info AJENA (otra víctima, mismo
+            // id): colisión real — no se pisa su `.norte-info` ni se mezcla el
+            // árbol. Ausente o nuestra = seguimos (nuestro parcial).
+            if tree.nodes.contains_key(&info_key) && !info_matches(&tree, &info_key, p) {
+                return Err(Error::Conflict {
+                    conflict: ConflictKind::Exists,
+                });
+            }
+            let mtime = tree.tick();
+            // Markers `.norte-trash` y `.norte-trash/<id>` (idempotentes).
+            for dkey in [&root_key, &dir_key] {
+                if !tree.nodes.contains_key(dkey) {
+                    let id = tree.new_id();
+                    tree.nodes.insert(dkey.clone(), Node::Dir { mtime, id });
+                }
+            }
+            // `.norte-info` (sobrescribir un parcial es benigno).
+            let content = norte_vfs::trash::info_encode(p, id.deleted_ms());
+            let info_id = tree.new_id();
+            tree.nodes.insert(
+                info_key,
+                Node::File {
+                    content,
+                    mtime,
+                    id: info_id,
+                },
+            );
+            // Mueve el subárbol víctima → payload preservando identidad.
+            let moved: Vec<(SegPath, Node)> = tree
+                .nodes
+                .iter()
+                .filter(|(k, _)| k.starts_with(&real_from))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            for (k, _) in &moved {
+                tree.nodes.remove(k);
+            }
+            for (k, mut node) in moved {
+                let mut new_key = payload_key.clone();
+                new_key.extend_from_slice(&k[real_from.len()..]);
+                let (Node::Dir { mtime: m, .. }
+                | Node::File { mtime: m, .. }
+                | Node::Symlink { mtime: m, .. }) = &mut node;
+                *m = mtime;
+                tree.nodes.insert(new_key, node);
+            }
+        }
+        // El movimiento YA se aplicó; el transitorio llega DESPUÉS (#17).
+        self.ambiguous_gate()?;
+        Ok(Some(paths.payload))
     }
 
     async fn copy_native_inner(&self, from: &VPath, to: &VPath) -> Result<(), Error> {

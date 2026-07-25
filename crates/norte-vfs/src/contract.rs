@@ -466,13 +466,18 @@ macro_rules! provider_contract {
                     let _ = sink.commit().await;
                 }
                 if p.capabilities().flags.contains(CapabilityFlags::TRASH) {
-                    p.trash(&dir).await.expect("trash");
+                    p.trash(&dir, &$crate::trash::TrashId::new(0, 0))
+                        .await
+                        .expect("trash");
                     assert_eq!(
                         p.stat(&dir).await.expect_err("se fue"),
                         Error::NotFound
                     );
                 } else {
-                    assert!(matches!(p.trash(&dir).await, Err(Error::Unsupported)));
+                    assert!(matches!(
+                        p.trash(&dir, &$crate::trash::TrashId::new(0, 0)).await,
+                        Err(Error::Unsupported)
+                    ));
                     assert!(p.stat(&dir).await.is_ok(), "sin papelera NO se toca");
                 }
             }

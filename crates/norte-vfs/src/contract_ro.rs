@@ -360,7 +360,9 @@ macro_rules! readonly_provider_contract {
                     Some(Error::Unsupported)
                 ));
                 assert!(matches!(
-                    p.trash(&existente).await.err(),
+                    p.trash(&existente, &$crate::trash::TrashId::new(0, 0))
+                        .await
+                        .err(),
                     Some(Error::Unsupported)
                 ));
                 assert!(matches!(

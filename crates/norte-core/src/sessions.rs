@@ -553,8 +553,12 @@ impl Provider for SessionProvider {
     async fn read_link(&self, p: &norte_proto::VPath) -> Result<Vec<u8>, Error> {
         self.observe(self.inner.read_link(p).await)
     }
-    async fn trash(&self, p: &norte_proto::VPath) -> Result<Option<norte_proto::VPath>, Error> {
-        self.observe(self.inner.trash(p).await)
+    async fn trash(
+        &self,
+        p: &norte_proto::VPath,
+        id: &norte_vfs::trash::TrashId,
+    ) -> Result<Option<norte_proto::VPath>, Error> {
+        self.observe(self.inner.trash(p, id).await)
     }
     async fn gc_partials(
         &self,
@@ -667,7 +671,11 @@ mod tests {
         async fn read_link(&self, _p: &VPath) -> Result<Vec<u8>, Error> {
             Err(pu())
         }
-        async fn trash(&self, _p: &VPath) -> Result<Option<VPath>, Error> {
+        async fn trash(
+            &self,
+            _p: &VPath,
+            _id: &norte_vfs::trash::TrashId,
+        ) -> Result<Option<VPath>, Error> {
             Err(pu())
         }
         async fn gc_partials(&self, _d: &VPath, _o: Duration) -> Result<usize, Error> {
@@ -800,7 +808,7 @@ mod tests {
         evicta!(w.read(&p, None).await);
         evicta!(w.node_id(&p, norte_vfs::FollowLinks::No).await);
         evicta!(w.read_link(&p).await);
-        evicta!(w.trash(&p).await);
+        evicta!(w.trash(&p, &norte_vfs::trash::TrashId::new(0, 0)).await);
         evicta!(w.gc_partials(&p, Duration::from_secs(1)).await);
         evicta!(w.restore_trashed(&p).await);
         evicta!(w.symlink(&p, b"t", norte_vfs::SymlinkKind::File).await);

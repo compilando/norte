@@ -77,7 +77,12 @@ async fn trash_moves_tree_and_writes_info() {
     sink.commit().await.expect("commit");
 
     // A la papelera.
-    p.trash(&victim).await.expect("trash");
+    p.trash(
+        &victim,
+        &norte_vfs::trash::TrashId::new(0, u64::from(line!())),
+    )
+    .await
+    .expect("trash");
 
     // El origen desaparece.
     assert!(matches!(
@@ -118,7 +123,11 @@ async fn trash_without_capability_is_unsupported() {
     sink.commit().await.expect("commit");
 
     assert!(matches!(
-        p.trash(&victim).await,
+        p.trash(
+            &victim,
+            &norte_vfs::trash::TrashId::new(0, u64::from(line!()))
+        )
+        .await,
         Err(norte_proto::Error::Unsupported)
     ));
     // El origen sigue ahí (no se degradó a permanente).
@@ -138,7 +147,12 @@ async fn trash_preserves_hostile_basename() {
     sink.write(Bytes::from_static(b"z")).await.expect("chunk");
     sink.commit().await.expect("commit");
 
-    p.trash(&victim).await.expect("trash");
+    p.trash(
+        &victim,
+        &norte_vfs::trash::TrashId::new(0, u64::from(line!())),
+    )
+    .await
+    .expect("trash");
     assert!(matches!(
         p.stat(&victim).await,
         Err(norte_proto::Error::NotFound)
@@ -171,7 +185,9 @@ async fn trash_moves_directory_tree() {
         .expect("chunk");
     sink.commit().await.expect("commit");
 
-    p.trash(&dir).await.expect("trash");
+    p.trash(&dir, &norte_vfs::trash::TrashId::new(0, u64::from(line!())))
+        .await
+        .expect("trash");
     assert!(matches!(
         p.stat(&dir).await,
         Err(norte_proto::Error::NotFound)
@@ -199,11 +215,20 @@ async fn trash_refuses_to_trash_itself() {
     let mut sink = p.write(&victim).await.expect("write");
     sink.write(Bytes::from_static(b"a")).await.expect("chunk");
     sink.commit().await.expect("commit");
-    p.trash(&victim).await.expect("trash");
+    p.trash(
+        &victim,
+        &norte_vfs::trash::TrashId::new(0, u64::from(line!())),
+    )
+    .await
+    .expect("trash");
 
     let trash_dir = root().join(Segment::new(trash::TRASH_DIR.to_vec()).unwrap());
     assert!(matches!(
-        p.trash(&trash_dir).await,
+        p.trash(
+            &trash_dir,
+            &norte_vfs::trash::TrashId::new(0, u64::from(line!()))
+        )
+        .await,
         Err(norte_proto::Error::Unsupported)
     ));
     // La papelera sigue en pie.
