@@ -255,7 +255,14 @@ help-cmd-task-cancel = cancel the most recent task
 # G3c: GUI-only commands (no TUI equivalent — its multi-select/task strip
 # use different bindings) surfaced now that the GUI's command palette lists
 # `app.palette`/`app.extensions` and needs help text for every GUI command.
+# `mark.toggle` moved into the shared presets (#103) — kept here since the
+# id predates that move and both frontends still reference it.
 help-cmd-mark-toggle = toggle mark on the entry under the cursor
+help-cmd-mark-all = mark every visible entry
+help-cmd-mark-invert = invert the marks
+help-cmd-mark-clear = clear every mark
+help-cmd-mark-pattern-add = mark by pattern
+help-cmd-mark-pattern-remove = unmark by pattern
 help-cmd-task-next = highlight the next task
 help-cmd-task-prev = highlight the previous task
 help-cmd-task-dismiss = dismiss finished tasks from the strip

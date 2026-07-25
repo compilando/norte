@@ -88,6 +88,12 @@ pub const COMMANDS: &[&str] = &[
     "pane.hotlist",
     "pane.search",
     "pane.names-encoding",
+    "mark.toggle",
+    "mark.all",
+    "mark.invert",
+    "mark.clear",
+    "mark.pattern-add",
+    "mark.pattern-remove",
 ];
 
 /// Los comandos del contexto `dialog` (H1, issue #24) — la lista CERRADA
@@ -266,5 +272,59 @@ mod tests {
             dialog_hint_id("dialog.toggle-enabled"),
             "dialog-cmd-toggle-enabled"
         );
+    }
+
+    /// The six mark commands resolve in the three factory presets (#103). A
+    /// preset that loses one leaves the selection unreachable by keyboard,
+    /// which is the regression class the GUI already hit once.
+    #[test]
+    fn mark_commands_resolve_in_the_three_presets() {
+        let expected = [
+            (Chord::new(Mods::default(), KeyCode::Insert), "mark.toggle"),
+            (
+                Chord::new(
+                    Mods {
+                        ctrl: true,
+                        ..Default::default()
+                    },
+                    KeyCode::Char('a'),
+                ),
+                "mark.all",
+            ),
+            (
+                Chord::new(Mods::default(), KeyCode::Char('*')),
+                "mark.invert",
+            ),
+            (
+                Chord::new(
+                    Mods {
+                        ctrl: true,
+                        ..Default::default()
+                    },
+                    KeyCode::Char('A'),
+                ),
+                "mark.clear",
+            ),
+            (
+                Chord::new(Mods::default(), KeyCode::Char('+')),
+                "mark.pattern-add",
+            ),
+            (
+                Chord::new(Mods::default(), KeyCode::Char('-')),
+                "mark.pattern-remove",
+            ),
+        ];
+        for (name, preset) in presets() {
+            let eff = Effective::build_for(&preset, &[], COMMANDS, Screen::Browse)
+                .unwrap_or_else(|e| panic!("preset {name}: {e}"));
+            for (chord, command) in &expected {
+                let mut r = Resolver::new(eff.clone());
+                assert_eq!(
+                    r.push(*chord),
+                    Resolution::Run((*command).to_owned()),
+                    "preset {name}: {command}"
+                );
+            }
+        }
     }
 }

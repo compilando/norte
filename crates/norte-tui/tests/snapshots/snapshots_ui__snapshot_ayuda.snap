@@ -1,6 +1,6 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
-assertion_line: 484
+assertion_line: 585
 expression: "format!(\"{arriba}\\n===\\n{}\", render(&app))"
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
@@ -23,17 +23,17 @@ expression: "format!(\"{arriba}\\n===\\n{}\", render(&app))"
 ===
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
 "│ ┌ Ayuda — teclas activas — [esc/q/f1] cerrar   [↑/↓/pgup/pgdn] desplazar ──┐ │"
+"│ │  ctrl+A         quitar todas las marcas                                  │ │"
+"│ │  *              invertir las marcas                                      │ │"
+"│ │  plus           marcar por patrón                                        │ │"
+"│!│  -              desmarcar por patrón                                     │ │"
+"│ │  q              salir de norte                                           │ │"
+"│ │  f10            salir de norte                                           │ │"
 "│ │  ctrl+c         salir de norte                                           │ │"
 "│ │  tab            cambiar de pane                                          │ │"
 "│ │  f1             esta ayuda                                               │ │"
-"│!│  f9             elegir tema                                              │ │"
+"│ │  f9             elegir tema                                              │ │"
 "│ │  f11            ajustes                                                  │ │"
 "│ │  f12            gestor de extensiones                                    │ │"
-"│ │  ctrl+p         paleta de comandos                                       │ │"
-"│ │                                                                          │ │"
-"│ │── Viewer ──                                                              │ │"
-"│ │  q              cerrar el viewer                                         │ │"
-"│ │  esc            cerrar el viewer                                         │ │"
-"│ │  f3             cerrar el viewer                                         │ │"
 "└─└──────────────────────────────────────────────────────────────────────────┘─┘"
 " ⟨file⟩/casa  2/5                                                               "

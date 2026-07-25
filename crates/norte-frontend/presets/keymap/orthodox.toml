@@ -36,6 +36,12 @@ keymap = [
     { on = ["alt+f7"], run = "pane.search" },
     { on = ["alt+e"], run = "pane.names-encoding" },
     { on = ["ctrl+d"], run = "pane.hotlist" },
+    { on = ["insert"], run = "mark.toggle" },
+    { on = ["ctrl+a"], run = "mark.all" },
+    { on = ["ctrl+A"], run = "mark.clear" },
+    { on = ["*"], run = "mark.invert" },
+    { on = ["plus"], run = "mark.pattern-add" },
+    { on = ["-"], run = "mark.pattern-remove" },
 ]
 
 [viewer]

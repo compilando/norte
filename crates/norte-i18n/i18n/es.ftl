@@ -259,7 +259,14 @@ help-cmd-task-cancel = cancelar la task más reciente
 # bindings para multi-selección/franja de tasks) — hacen falta ahora que la
 # paleta de comandos de la GUI lista `app.palette`/`app.extensions` y
 # necesita texto de ayuda para todo comando de la GUI.
+# `mark.toggle` pasó a los presets compartidos (#103) — se queda aquí porque
+# el id es anterior a ese cambio y ambos frontends lo siguen usando.
 help-cmd-mark-toggle = marcar/desmarcar la entrada bajo el cursor
+help-cmd-mark-all = marcar todas las entradas visibles
+help-cmd-mark-invert = invertir las marcas
+help-cmd-mark-clear = quitar todas las marcas
+help-cmd-mark-pattern-add = marcar por patrón
+help-cmd-mark-pattern-remove = desmarcar por patrón
 help-cmd-task-next = resaltar la siguiente task
 help-cmd-task-prev = resaltar la task anterior
 help-cmd-task-dismiss = descartar las tasks terminadas de la franja

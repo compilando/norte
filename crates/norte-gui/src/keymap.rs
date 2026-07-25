@@ -36,6 +36,9 @@ pub const COMMANDS: &[&str] = &[
     "nav.enter",
     "nav.parent",
     "mark.toggle",
+    "mark.all",
+    "mark.invert",
+    "mark.clear",
     "pane.copy",
     "pane.move",
     "pane.delete",
@@ -124,11 +127,13 @@ fn preset(name: &str) -> KeymapFile {
 /// [`todo_comando_gui_es_alcanzable_desde_el_preset_default`] (indirectamente,
 /// vía `build_effectives`/`build_effectives_preset_only`, que la invocan
 /// siempre).
+///
+/// `insert`→`mark.toggle` salió de aquí al entrar en los presets
+/// compartidos (#103); el resto sigue siendo GUI-only.
 fn gui_supplement() -> KeymapFile {
     const TOML: &str = r#"
 [pane]
 prepend_keymap = [
-    { on = ["insert"], run = "mark.toggle" },
     { on = ["ctrl+n"], run = "task.next" },
     { on = ["ctrl+b"], run = "task.prev" },
     { on = ["ctrl+l"], run = "task.dismiss" },
