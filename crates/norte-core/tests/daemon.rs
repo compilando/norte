@@ -307,6 +307,47 @@ async fn fs_list_y_stat_responden_por_el_socket() {
     assert_eq!(stat.entry.size, Some(4));
 }
 
+/// (0.30.0, ADR 0039) El bloque 1 es SOLO wire, y tres sitios lo afirman —el
+/// ADR, el rustdoc de `PROTOCOL_VERSION` y `FsListParams::attrs`—: «el daemon
+/// IGNORA los ids pedidos». Sin este test esa afirmación no la comprobaba nada.
+///
+/// Pedir un id perfectamente bien formado tiene que SALIR BIEN (no `-32602`) y
+/// volver con `attrs` vacío en cada entrada: la ausencia ya es una respuesta
+/// válida del contrato (pedir un id que el provider no ofrece nunca fue error).
+///
+/// Se pone ROJO en cuanto el bloque 2 cablee la validación o un productor sin
+/// actualizar los tres textos: si `attrs` deja de venir vacío, o si un id
+/// legítimo empieza a ser error, es que el daemon ya NO ignora lo pedido y la
+/// documentación miente. Actualizar ambas cosas a la vez es justo el punto.
+#[tokio::test]
+async fn fs_list_ignora_los_atributos_pedidos_en_030() {
+    let d = spawn_daemon(None).await;
+    write_file(&d.mem, "mem:///f.txt", b"hola").await;
+    let c = connected_client(&d).await;
+
+    let list: FsListResult = c
+        .call(
+            methods::FS_LIST,
+            &FsListParams {
+                path: vp("mem:///"),
+                limit: None,
+                cursor: None,
+                attrs: vec!["posix.mode".into()],
+            },
+        )
+        .await
+        .expect("pedir atributos NO es error: el daemon 0.30 los ignora");
+
+    assert_eq!(list.entries.len(), 1);
+    for e in &list.entries {
+        assert!(
+            e.attrs.is_empty(),
+            "ningún provider anuncia atributos todavía: {:?}",
+            e.attrs
+        );
+    }
+}
+
 #[tokio::test]
 async fn call_tracked_reporta_el_id_asignado() {
     let d = spawn_daemon(None).await;
