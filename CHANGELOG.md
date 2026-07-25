@@ -35,14 +35,17 @@ independently through `PROTOCOL_VERSION`.
     granularity), a wrong JSON type, a `null`, two known tags at once, undecodable
     base64, an over-cap `Text`/`Bytes`. It costs one cell, never the entry and
     never the page.
-  - **The two receive-side fields filter at decode and never error**, while the
-    two request fields deliberately do not. `Entry.attrs` drops a malformed key
+  - **The two receive-side fields filter and never error**, while the two
+    request fields deliberately do not. `Entry.attrs` drops a malformed key
     and bounds the map at 16 (smallest ids in byte order, so the surviving set
-    does not depend on the peer's key order); `FsCapabilitiesResult.attrs` drops a
+    does not depend on the peer's key order); `FsCapabilitiesResult.attrs` is an
+    `AttrCatalog` — a newtype with a private field whose only constructor drops a
     malformed or repeated id keeping the first, clamps an over-long label on a
     char boundary, and truncates at 64, preserving the provider's own meaningful
-    order. A request keeps a bad id verbatim on purpose: the daemon must be able
-    to answer `-32602` instead of silently laundering a caller's bug.
+    order. Making it a type rather than a call is what covers the EMBEDDED
+    TUI/CLI path, which never crosses the deserialisation boundary where a plain
+    filter would sit. A request keeps a bad id verbatim on purpose: the daemon
+    must be able to answer `-32602` instead of silently laundering a caller's bug.
 - **Protocol JSON Schema artifact (#13, ADR 0038):** `docs/schema/proto.schema.json`
   is now generated from the same `norte-proto` serde types that speak the wire,
   behind an optional `schema` cargo feature (off by default — the shipped crate

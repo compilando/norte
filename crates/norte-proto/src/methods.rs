@@ -1063,9 +1063,14 @@ pub struct FsCapabilitiesResult {
     /// drains the rest unmaterialised, so a catalog padded with rejects costs
     /// bounded work rather than unbounded work for an empty result.
     ///
-    /// This filter is the DESERIALISER's, and an embedded backend never
-    /// crosses that boundary: a catalog obtained in-process must be passed
-    /// through `sanitize_catalog` explicitly. Same function, one contract.
+    /// Those rules are NOT the deserialiser's alone: the field is an
+    /// [`AttrCatalog`](crate::attrs::AttrCatalog), whose only constructor runs
+    /// `sanitize_catalog` and whose contents are private. That matters because
+    /// an EMBEDDED backend — the default TUI/CLI configuration, no daemon in
+    /// between — never crosses the deserialisation boundary, so in block 2 a
+    /// catalog from a WASM provider plugin (untrusted by the threat model)
+    /// would otherwise reach a frontend unfiltered whenever someone forgot the
+    /// call. The wire shape is unchanged: a plain array of `AttrInfo`.
     ///
     /// A descriptor that is not a well-formed `AttrInfo` at all (a missing
     /// `label`, `attrs` that is not a list) IS a hard error: that is serde's
@@ -1073,23 +1078,25 @@ pub struct FsCapabilitiesResult {
     /// unknown `type` or `hint` from a NEWER peer already degrades to its
     /// `Unknown` variant instead.
     ///
-    /// # The filter is one-directional
+    /// # Unlike `Entry::attrs`, this cannot carry a producer's bug
     ///
-    /// Serialisation is NOT filtered, and the field is public with no
-    /// constructor: a result built in-process with an invalid id emits it and
-    /// decodes back different. As with [`Entry::attrs`](crate::Entry::attrs),
-    /// a producer's bug must stay visible at the boundary that validates it
-    /// rather than be laundered by the serialiser.
-    #[serde(
-        default,
-        deserialize_with = "crate::attrs::deserialize_attr_catalog",
-        skip_serializing_if = "Vec::is_empty"
-    )]
+    /// [`Entry::attrs`](crate::Entry::attrs) is a public map with no
+    /// constructor, so an entry built in-process with an invalid id emits it
+    /// and decodes back different — deliberately, so a producer's bug stays
+    /// visible at the boundary that validates it. A catalog has no such hole:
+    /// it cannot be built dirty in the first place, so serialisation has
+    /// nothing to launder. The asymmetry is on purpose — an advertised id
+    /// becomes a REQUESTED id, a configuration id and a map lookup downstream,
+    /// which is a longer blast radius than one entry's cell.
+    #[serde(default, skip_serializing_if = "crate::attrs::AttrCatalog::is_empty")]
     #[cfg_attr(
         feature = "schema",
-        schemars(extend("maxItems" = crate::attrs::ATTRS_MAX_ADVERTISED))
+        schemars(
+            with = "Vec<crate::attrs::AttrInfo>",
+            extend("maxItems" = crate::attrs::ATTRS_MAX_ADVERTISED)
+        )
     )]
-    pub attrs: Vec<crate::attrs::AttrInfo>,
+    pub attrs: crate::attrs::AttrCatalog,
 }
 
 /// Params de [`TASK_CANCEL`].

@@ -2860,10 +2860,11 @@ async fn dispatch_task_family(
                 .map_err(RpcError::from)?;
             // Ningún provider anuncia atributos todavía (ADR 0039, bloque 1 =
             // solo wire): catálogo vacío = "este provider no publica ninguno",
-            // que es una respuesta válida del contrato.
+            // que es una respuesta válida del contrato. Cuando el bloque 2 lo
+            // llene, `AttrCatalog::new` es el único camino y sanea por el tipo.
             to_value(&methods::FsCapabilitiesResult {
                 capabilities,
-                attrs: Vec::new(),
+                attrs: norte_proto::AttrCatalog::default(),
             })
         }
         methods::TASK_CANCEL => {

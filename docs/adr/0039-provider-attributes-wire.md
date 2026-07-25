@@ -153,13 +153,19 @@ bytes differently, which is a cross-frontend divergence (TUI vs GUI) from a
 single response. Rejects and duplicates are discarded BEFORE a slot is taken,
 so padding a catalog cannot starve a legitimate later attribute out of the 64.
 
-Both rules live in ONE function, `attrs::sanitize_catalog`, which the
-deserialiser calls. That is deliberate: the filter would otherwise sit only at
-the deserialisation boundary, which an EMBEDDED backend — the default TUI/CLI
-configuration — never crosses, so block 2's in-process catalogs (including
-those from a WASM provider plugin, untrusted by the threat model) would arrive
-unfiltered. The embedded path calls the same function rather than
-reimplementing the rules.
+Both rules live in ONE function, `attrs::sanitize_catalog`, and the catalog is
+not a `Vec<AttrInfo>` but an `attrs::AttrCatalog`: a newtype whose field is
+private and whose only constructor runs that function. A filter that sat only
+on the deserialisation boundary would be a filter the DEFAULT configuration
+never applies — an EMBEDDED backend (TUI/CLI with no daemon in between) does not
+cross it — so block 2's in-process catalogs, including those from a WASM
+provider plugin the threat model treats as untrusted, would reach a frontend
+unvalidated whenever someone forgot the call. `PluginColumnInfo` (ADR 0037),
+which validates no id and caps no length, is the standing evidence that the call
+gets forgotten. Block 2's embedded path therefore MUST hand its catalog to
+`AttrCatalog::new` — which is not a discipline to remember but the only way to
+produce the type the field holds. `sanitize_catalog` stays public because block
+2 assembles and reorders plain vectors before wrapping one.
 
 The two REQUEST fields (`FsListParams.attrs`, `FsStatParams.attrs`) are the
 deliberate exception: they carry data this peer is SENDING, so nothing about
@@ -176,11 +182,15 @@ keeps its first 17 (16 + 1) elements and drains the rest: a 16 MiB frame of
 before any daemon-side check can run. The `+ 1` matters — over-cap must stay
 observable as `len() > 16` rather than be trimmed into legality.
 
-The filter is one-directional on purpose. Serialisation is not filtered and the
-fields are public, so an `Entry` or a catalog built in-process with a malformed
+For `Entry.attrs` the filter is one-directional on purpose. Serialisation is not
+filtered and the field is public, so an entry built in-process with a malformed
 id emits it and decodes back different: a producer's bug must stay visible at
 the boundary that validates it (daemon-side, block 2) rather than being
 laundered by the serialiser, which would also make that validation untestable.
+The catalog has no such hole to leave open — it cannot be built dirty at all —
+and the asymmetry is deliberate: an advertised id becomes a REQUESTED id, a
+configuration id and a map lookup downstream, a blast radius longer than one
+cell of one entry.
 
 Both the caps and the id shape travel in the published JSON Schema (ADR 0038),
 generated from the same constants the code applies: the artifact is the only

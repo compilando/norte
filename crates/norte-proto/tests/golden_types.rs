@@ -16,7 +16,7 @@ use norte_proto::methods::{
     TaskCancelResult, TaskListParams, TaskListResult,
 };
 use norte_proto::{
-    AttrHint, AttrInfo, AttrType, AttrValue, ByteRange, Capabilities, CapabilityFlags,
+    AttrCatalog, AttrHint, AttrInfo, AttrType, AttrValue, ByteRange, Capabilities, CapabilityFlags,
     CollisionPolicy, ConflictKind, Entry, EntryKind, Error, ResumePolicy, SymlinkPolicy, TaskId,
     TaskKind, TaskProgress, TaskState, VPath, VerifyPolicy,
 };
@@ -1499,7 +1499,7 @@ fn check_methods_v05(fixtures: &BTreeMap<String, Value>) {
                 flags: CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::SYMLINKS,
                 max_path: None,
             },
-            attrs: Vec::new(),
+            attrs: AttrCatalog::default(),
         },
     );
     check_one(
@@ -1510,7 +1510,7 @@ fn check_methods_v05(fixtures: &BTreeMap<String, Value>) {
                 flags: CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::SYMLINKS,
                 max_path: None,
             },
-            attrs: vec![
+            attrs: AttrCatalog::new(vec![
                 AttrInfo {
                     id: "posix.mode".to_owned(),
                     label: "Mode".to_owned(),
@@ -1523,7 +1523,7 @@ fn check_methods_v05(fixtures: &BTreeMap<String, Value>) {
                     ty: AttrType::Bytes,
                     hint: AttrHint::Identity,
                 },
-            ],
+            ]),
         },
     );
 }

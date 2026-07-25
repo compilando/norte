@@ -322,11 +322,13 @@ where
 ///    so rejects and duplicates never eat the budget a legitimate later
 ///    attribute needs.
 ///
-/// [`FsCapabilitiesResult::attrs`](crate::methods::FsCapabilitiesResult) runs
-/// this at decode. An EMBEDDED backend, which never crosses that boundary,
-/// must call it explicitly on any catalog it obtains in-process — from a
-/// provider or, in block 2, from a WASM provider plugin the threat model
-/// treats as untrusted. One implementation, both paths.
+/// Prefer [`AttrCatalog::new`], which is this function plus the guarantee that
+/// the result cannot be un-sanitised afterwards; that is what
+/// [`FsCapabilitiesResult::attrs`](crate::methods::FsCapabilitiesResult) holds,
+/// on the wire path and the embedded path alike. This function stays public
+/// because block 2 assembles and reorders plain `Vec<AttrInfo>` before wrapping
+/// one, but a catalog that reaches a frontend should be an `AttrCatalog` — a
+/// rule enforced by a type is a rule nobody has to remember.
 ///
 /// ```
 /// use norte_proto::attrs::{AttrHint, AttrInfo, AttrType, sanitize_catalog};
@@ -361,6 +363,107 @@ pub fn sanitize_catalog(catalog: Vec<AttrInfo>) -> Vec<AttrInfo> {
         out.push(info);
     }
     out
+}
+
+/// An advertised attribute catalog that CANNOT hold anything
+/// [`sanitize_catalog`] would have removed: the only way to build one runs the
+/// sanitiser, and the field is private, so the rules of ADR 0039 §4/§5 hold by
+/// construction rather than by anyone remembering to call a function.
+///
+/// That distinction is the whole reason the type exists. The filter used to
+/// live only on the deserialisation boundary, which the DEFAULT embedded
+/// TUI/CLI configuration never crosses — no daemon in between — so in block 2 a
+/// catalog coming from a WASM provider plugin (untrusted by the threat model)
+/// would have reached a frontend with unvalidated ids and unclamped labels
+/// unless a human remembered one call. `PluginColumnInfo` (ADR 0037), which
+/// validates no id and caps no length, is the precedent that says the call
+/// would eventually be forgotten.
+///
+/// On the wire it is a plain ARRAY of [`AttrInfo`] — serialisation is
+/// transparent and deserialisation goes through the same sanitiser, so nothing
+/// about the 0.30 wire shape changes.
+///
+/// ```
+/// use norte_proto::attrs::{AttrCatalog, AttrHint, AttrInfo, AttrType};
+/// let info = |id: &str| AttrInfo {
+///     id: id.to_owned(),
+///     label: "L".to_owned(),
+///     ty: AttrType::Uint,
+///     hint: AttrHint::Opaque,
+/// };
+/// // Un id mal formado no llega al catálogo ni construyéndolo en proceso.
+/// let catalogo = AttrCatalog::new(vec![info("MODE"), info("posix.mode")]);
+/// assert_eq!(catalogo.len(), 1);
+/// assert_eq!(catalogo[0].id, "posix.mode");
+/// // Y el wire es el array de siempre.
+/// let wire = serde_json::to_string(&catalogo).unwrap();
+/// assert!(wire.starts_with('['), "{wire}");
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AttrCatalog(Vec<AttrInfo>);
+
+impl AttrCatalog {
+    /// Sanitises `catalog` ([`sanitize_catalog`]) and keeps the result. This is
+    /// the ONLY constructor: there is no way to obtain an `AttrCatalog` whose
+    /// contents did not go through the rules.
+    #[must_use]
+    pub fn new(catalog: Vec<AttrInfo>) -> Self {
+        Self(sanitize_catalog(catalog))
+    }
+
+    /// Does this provider advertise no attribute at all? (An empty catalog is
+    /// omitted from the wire, which is what keeps a 0.29 payload byte-identical.)
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl std::ops::Deref for AttrCatalog {
+    type Target = [AttrInfo];
+
+    fn deref(&self) -> &[AttrInfo] {
+        &self.0
+    }
+}
+
+impl From<Vec<AttrInfo>> for AttrCatalog {
+    fn from(catalog: Vec<AttrInfo>) -> Self {
+        Self::new(catalog)
+    }
+}
+
+impl IntoIterator for AttrCatalog {
+    type Item = AttrInfo;
+    type IntoIter = std::vec::IntoIter<AttrInfo>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a AttrCatalog {
+    type Item = &'a AttrInfo;
+    type IntoIter = std::slice::Iter<'a, AttrInfo>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl Serialize for AttrCatalog {
+    /// TRANSPARENT: the wire carries the array, never a wrapper object.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for AttrCatalog {
+    /// Through the same sanitiser as [`AttrCatalog::new`], bounded so a padded
+    /// catalog costs bounded work (see [`deserialize_attr_catalog`]).
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self(deserialize_attr_catalog(deserializer)?))
+    }
 }
 
 /// Recorta `label` a [`ATTR_LABEL_MAX`] bytes por una FRONTERA DE CARÁCTER:
@@ -1238,9 +1341,10 @@ mod tests {
         assert_eq!(map["c"], AttrValue::Bool(false));
     }
 
-    /// Decodifica un catálogo por el CAMPO REAL del wire, que es donde vive el
-    /// `deserialize_with`: probar el filtro por otra vía probaría otra cosa.
-    fn catalogo(attrs: &serde_json::Value) -> Vec<AttrInfo> {
+    /// Decodifica un catálogo por el CAMPO REAL del wire, que es donde vive la
+    /// deserialización de [`AttrCatalog`]: probar el filtro por otra vía
+    /// probaría otra cosa.
+    fn catalogo(attrs: &serde_json::Value) -> AttrCatalog {
         let wire = serde_json::json!({
             "capabilities": { "flags": "", "max_path": null },
             "attrs": attrs,
@@ -1463,29 +1567,59 @@ mod tests {
     }
 
     #[test]
-    fn el_catalogo_no_se_filtra_al_serializar() {
-        // Espejo de `Entry::attrs`: el bug de un productor se ve en el wire que
-        // emite, no lo blanquea el serializador.
+    fn un_catalogo_sucio_no_se_puede_construir_ni_en_proceso() {
+        // El camino EMBEBIDO (TUI/CLI por defecto) no cruza la
+        // deserialización, así que la regla no puede vivir solo ahí: el tipo
+        // no admite un id inválido, venga del wire o de un plugin WASM.
         let caps = crate::methods::FsCapabilitiesResult {
             capabilities: crate::Capabilities {
                 flags: crate::CapabilityFlags::empty(),
                 max_path: None,
             },
-            attrs: vec![AttrInfo {
-                id: "MODE".to_owned(),
-                label: "Mode".to_owned(),
-                ty: AttrType::Uint,
-                hint: AttrHint::Mode,
-            }],
+            attrs: AttrCatalog::new(vec![
+                AttrInfo {
+                    id: "MODE".to_owned(),
+                    label: "Mode".to_owned(),
+                    ty: AttrType::Uint,
+                    hint: AttrHint::Mode,
+                },
+                AttrInfo {
+                    id: "posix.mode".to_owned(),
+                    label: "x".repeat(ATTR_LABEL_MAX + 10),
+                    ty: AttrType::Uint,
+                    hint: AttrHint::Mode,
+                },
+            ]),
         };
         let wire = serde_json::to_string(&caps).expect("serializable");
-        assert!(wire.contains("MODE"), "se emite tal cual: {wire}");
+        assert!(!wire.contains("MODE"), "el id inválido no existe: {wire}");
+        assert!(
+            wire.contains(r#""attrs":[{"#),
+            "y el wire sigue siendo el ARRAY de siempre: {wire}"
+        );
+        assert_eq!(caps.attrs.len(), 1);
+        assert_eq!(caps.attrs[0].label.len(), ATTR_LABEL_MAX);
+
+        // Round-trip EXACTO: no hay estado que el decode pueda cambiar.
         let vuelta: crate::methods::FsCapabilitiesResult =
             serde_json::from_str(&wire).expect("decodifica");
-        assert!(
-            vuelta.attrs.is_empty(),
-            "y al volver, el filtro lo descarta"
-        );
+        assert_eq!(vuelta, caps);
+    }
+
+    #[test]
+    fn el_catalogo_itera_y_desreferencia_como_un_slice() {
+        let catalogo = AttrCatalog::new(vec![AttrInfo {
+            id: "posix.mode".to_owned(),
+            label: "Mode".to_owned(),
+            ty: AttrType::Uint,
+            hint: AttrHint::Mode,
+        }]);
+        let por_ref: Vec<&str> = (&catalogo).into_iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(por_ref, ["posix.mode"]);
+        assert_eq!(catalogo.first().map(|i| i.ty), Some(AttrType::Uint));
+        let por_valor: Vec<AttrInfo> = catalogo.into_iter().collect();
+        assert_eq!(por_valor.len(), 1);
+        assert!(AttrCatalog::default().is_empty());
     }
 
     #[test]
