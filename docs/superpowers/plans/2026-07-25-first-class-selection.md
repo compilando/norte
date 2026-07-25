@@ -1058,6 +1058,8 @@ Then include `{marked}{pruned}` in the same `format!` that already renders `{pos
 
 Strings — `en.ftl`: `status-marks-pruned = { $n } marks dropped, their entries are gone`; `es.ftl`: `status-marks-pruned = { $n } marcas caídas, sus entradas ya no están`.
 
+**Directories must not read as zero.** `marked_bytes` counts non-directories only, deliberately — nothing here walks a tree. Rendered as `{n} marked, {size}`, a selection of one 10-byte file plus a 40 GiB directory says "2 marked, 10 B", which reads like a transfer size and is not one. So add `PaneState::marked_dirs() -> usize` (count of marked entries whose `kind == EntryKind::Dir`, with its own test) and render the directories separately: `status-marked-with-dirs = { $n } marked, { $size } + { $dirs } dirs` / `{ $n } marcadas, { $size } + { $dirs } dirs`, falling back to `status-marked` when `marked_dirs()` is 0. The bar never implies a total it did not compute.
+
 - [ ] **Step 7: Write and run the status test**
 
 ```rust
