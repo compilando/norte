@@ -17,6 +17,7 @@ pub mod columns;
 pub mod config;
 mod decoration;
 mod display;
+mod format;
 pub mod keymap;
 pub mod nav;
 pub mod openers;
@@ -30,5 +31,6 @@ pub mod viewer;
 
 pub use decoration::{BADGE_MAX_CHARS, Decoration, merge_decorations, sanitize_decoration};
 pub use display::{display_name, display_name_with, path_display, path_display_with};
+pub use format::human_bytes;
 pub use pane::{PaneState, PatternError};
 pub use sort::sort_entries;

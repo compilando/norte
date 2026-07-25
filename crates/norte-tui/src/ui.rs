@@ -1392,6 +1392,47 @@ mod entry_item_tests {
     }
 }
 
+/// Segmentos `(marked, pruned)` de la status bar sobre las marcas (#103).
+/// Extraído de `draw_status` (que ya rozaba `too_many_lines`) — pura
+/// composición de texto, sin efecto de render.
+fn marks_status_segments(pane: &Pane) -> (String, String) {
+    // Un refresh que se comió marcas JAMÁS es silencioso: con la selección
+    // vacía, `marked_paths` cae al cursor, así que callarlo redirigiría la
+    // siguiente op en masa a algo que nadie marcó.
+    let pruned = if pane.pruned_marks() == 0 {
+        String::new()
+    } else {
+        format!(
+            "  {}",
+            ta(
+                "status-marks-pruned",
+                &[("n", &pane.pruned_marks().to_string())]
+            )
+        )
+    };
+    // Cuántas marcas y cuánto pesan. Se calla con 0 marcas — la barra no
+    // gana ruido para quien no marca nada.
+    let marked = if pane.marks_len() == 0 {
+        String::new()
+    } else {
+        let n = pane.marks_len().to_string();
+        let size = norte_frontend::human_bytes(pane.marked_bytes());
+        let dirs = pane.marked_dirs();
+        if dirs == 0 {
+            format!("  {}", ta("status-marked", &[("n", &n), ("size", &size)]))
+        } else {
+            format!(
+                "  {}",
+                ta(
+                    "status-marked-with-dirs",
+                    &[("n", &n), ("size", &size), ("dirs", &dirs.to_string())],
+                )
+            )
+        }
+    };
+    (marked, pruned)
+}
+
 fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let pane = app.focused();
     let total = pane.entries().len();
@@ -1404,6 +1445,7 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     } else {
         format!("  {pos}/{total}")
     };
+    let (marked, pruned) = marks_status_segments(pane);
     let (dir_texto, dir_hostil) =
         norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
     let marca = if dir_hostil { HOSTILE_BADGE } else { "" };
@@ -1489,7 +1531,7 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
             Some(enc) => format!("  {}", ta("status-names-encoding", &[("enc", enc.label())])),
             None => String::new(),
         };
-        format!(" {marca}{dir_texto}{pos_total}{omitidas}{nombres}{seq}")
+        format!(" {marca}{dir_texto}{pos_total}{marked}{pruned}{omitidas}{nombres}{seq}")
     };
     frame.render_widget(
         Paragraph::new(text).style(app.theme.role(Role::StatusBar)),

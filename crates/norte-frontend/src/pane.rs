@@ -631,6 +631,21 @@ impl PaneState {
             .fold(0u64, |acc, e| acc.saturating_add(e.size.unwrap_or(0)))
     }
 
+    /// How many marked entries are directories. [`Self::marked_bytes`]
+    /// deliberately excludes directories (nothing here walks a tree), so a
+    /// status bar that renders `marked_bytes` alone would understate a
+    /// selection that includes one: a marked 10-byte file plus a 40 GiB
+    /// directory must not read as "2 marked, 10 B" — that reads like a
+    /// transfer size and is not one. Callers name the directory count
+    /// separately instead of folding it into a total nobody computed.
+    #[must_use]
+    pub fn marked_dirs(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| e.kind == EntryKind::Dir && self.marks.contains(&e.path))
+            .count()
+    }
+
     /// Marks dropped by the last [`Self::refill`] because their entry was
     /// gone (#103) — see the `pruned_marks` field. Zero after a `cd`
     /// ([`Self::set_listing`]/[`Self::begin_loading`]) or when nothing was
@@ -1992,6 +2007,36 @@ mod tests {
             u64::MAX,
             "a hostile listing must not panic in debug"
         );
+    }
+
+    #[test]
+    fn marked_dirs_counts_only_marked_directories() {
+        let mut a = e("mem:///a", EntryKind::File);
+        a.size = Some(10);
+        let d = e("mem:///d", EntryKind::Dir);
+        let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), vec![a, d]);
+        assert_eq!(p.marked_dirs(), 0, "nothing marked yet");
+        p.mark_all();
+        assert_eq!(p.marked_dirs(), 1, "one of the two marked entries is a dir");
+    }
+
+    /// A directory that is NOT marked must not contribute: mirrors
+    /// `marked_bytes_counts_only_what_is_marked` for the dir counter.
+    #[test]
+    fn marked_dirs_ignores_unmarked_directories() {
+        let f = e("mem:///a", EntryKind::File);
+        let d = e("mem:///d", EntryKind::Dir);
+        let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), vec![f, d]);
+        // `sort_entries` puts directories first, so the file is at index 1
+        // regardless of construction order.
+        let file_idx = p
+            .entries()
+            .iter()
+            .position(|entry| entry.kind == EntryKind::File)
+            .expect("the file is in the listing");
+        p.set_cursor(file_idx);
+        p.toggle_mark(); // marks the file only, not the directory
+        assert_eq!(p.marked_dirs(), 0);
     }
 
     // --- #103: mark/unmark by glob ---------------------------------------

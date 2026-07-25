@@ -409,6 +409,21 @@ impl Pane {
         self.state.marked_bytes()
     }
 
+    /// Cuántas entradas marcadas son directorios. Delegado puro (#103) —
+    /// ver [`norte_frontend::PaneState::marked_dirs`].
+    #[must_use]
+    pub fn marked_dirs(&self) -> usize {
+        self.state.marked_dirs()
+    }
+
+    /// Marcas que el último refresh en el mismo directorio descartó porque su
+    /// entrada desapareció. Delegado puro (#103) — ver
+    /// [`norte_frontend::PaneState::pruned_marks`].
+    #[must_use]
+    pub fn pruned_marks(&self) -> usize {
+        self.state.pruned_marks()
+    }
+
     /// Sobre qué opera la acción: marcas, o cursor si no hay. Delegado puro (#103).
     #[must_use]
     pub fn marked_paths(&self) -> Vec<VPath> {
