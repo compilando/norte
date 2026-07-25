@@ -275,6 +275,14 @@ pub fn gpui_chord(
         "pagedown" => KeyCode::PageDown,
         "insert" => KeyCode::Insert,
         "delete" => KeyCode::Delete,
+        // Nombres de keysym que el fallback imprimible rechazaría por
+        // multi-carácter (#103): en X11 `key` trae el NOMBRE de la tecla, no
+        // el carácter, y sin `key_char` estos bindings quedarían MUERTOS solo
+        // en la GUI. `plus` es además la única grafía del chord (`+` es el
+        // separador de modificadores en el keymap).
+        "plus" => KeyCode::Char('+'),
+        "asterisk" => KeyCode::Char('*'),
+        "minus" => KeyCode::Char('-'),
         f if f.len() >= 2 && f.starts_with('f') && f[1..].chars().all(|c| c.is_ascii_digit()) => {
             let n: u8 = f[1..].parse().ok()?;
             if (1..=12).contains(&n) {
@@ -525,6 +533,36 @@ prepend_keymap = [{ on = ["insert"], run = "cursor.up" }]
             gpui_chord("e", false, false, false, Some("e\u{0301}")),
             None
         );
+    }
+
+    /// #103 review: X11/Wayland keysym NAMES the printable fallback would
+    /// reject outright (`"plus"`/`"asterisk"`/`"minus"` are multi-character,
+    /// so `(Some(c), None)` never matches) — the mark preset bindings
+    /// (`plus`/`*`/`-`) would go silently dead in the GUI whenever
+    /// `key_char` is absent or empty. Covers each token BOTH ways: with
+    /// `key_char` present (the printable fallback already resolves it, so
+    /// this half passes with or without the fix) and absent/empty (only the
+    /// named arm resolves it — this half is the RED case).
+    #[test]
+    fn gpui_chord_nombres_de_keysym_para_la_puntuacion_de_los_presets() {
+        let cases = [("plus", '+'), ("asterisk", '*'), ("minus", '-')];
+        for (key, ch) in cases {
+            assert_eq!(
+                gpui_chord(key, false, false, false, Some(&ch.to_string())),
+                Some(Chord::new(Mods::default(), KeyCode::Char(ch))),
+                "{key}: con key_char presente"
+            );
+            assert_eq!(
+                gpui_chord(key, false, false, false, None),
+                Some(Chord::new(Mods::default(), KeyCode::Char(ch))),
+                "{key}: sin key_char"
+            );
+            assert_eq!(
+                gpui_chord(key, false, false, false, Some("")),
+                Some(Chord::new(Mods::default(), KeyCode::Char(ch))),
+                "{key}: key_char vacío"
+            );
+        }
     }
 
     /// Un directorio de scratch único por test, para `NORTE_CONFIG_DIR`
