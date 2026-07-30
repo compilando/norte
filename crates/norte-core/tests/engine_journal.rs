@@ -310,3 +310,58 @@ async fn mkdir_sobre_dir_preexistente_no_emite_created() {
         "un dir preexistente jamás gana Created: {es:?}"
     );
 }
+
+/// #104 `fs.mkdir`: crear UN dir journalea `Created` con undo (regla 4).
+#[tokio::test]
+async fn mkdir_records_created_with_valid_chain() {
+    let (engine, mem, journal) = setup().await;
+    let h = engine.mkdir(&vp("mem:///nueva")).await.expect("mkdir");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    let entry = mem.stat(&vp("mem:///nueva")).await.expect("stat");
+    assert_eq!(entry.kind, norte_proto::EntryKind::Dir);
+
+    let es = journal.journal().entries().await.expect("entries");
+    assert_eq!(es.len(), 1);
+    assert_eq!(es[0].op, "created");
+    assert_eq!(es[0].path, b"mem:///nueva");
+    assert_eq!(es[0].reversal, "delete");
+    assert!(
+        journal
+            .journal()
+            .verify_chain()
+            .await
+            .expect("verify")
+            .is_intact()
+    );
+}
+
+/// #104: un nodo previo en el destino es `Conflict` — crear afirma un nombre
+/// LIBRE, sin idempotencia silenciosa — y JAMÁS journalea un Created ajeno.
+#[tokio::test]
+async fn mkdir_sobre_nodo_existente_es_conflict_sin_created() {
+    let (engine, mem, journal) = setup().await;
+    write_file(&mem, "mem:///ocupado", b"x").await;
+
+    let h = engine.mkdir(&vp("mem:///ocupado")).await.expect("submit");
+    assert!(matches!(h.join().await, TaskState::Failed { .. }));
+    let es = journal.journal().entries().await.expect("entries");
+    assert!(es.is_empty(), "un fallo no journalea nada");
+
+    // Un DIR preexistente tampoco es éxito (no somos mkdir -p ni merge).
+    mem.mkdir(&vp("mem:///ya")).await.expect("mkdir directo");
+    let h = engine.mkdir(&vp("mem:///ya")).await.expect("submit");
+    assert!(matches!(h.join().await, TaskState::Failed { .. }));
+}
+
+/// #104: sin `-p` — el padre debe existir.
+#[tokio::test]
+async fn mkdir_sin_padre_falla() {
+    let (engine, _mem, journal) = setup().await;
+    let h = engine
+        .mkdir(&vp("mem:///no-existe/hija"))
+        .await
+        .expect("submit");
+    assert!(matches!(h.join().await, TaskState::Failed { .. }));
+    assert!(journal.journal().entries().await.expect("e").is_empty());
+}

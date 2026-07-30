@@ -356,6 +356,19 @@ impl Backend {
         }
     }
 
+    /// Creación de UN directorio como Task (#104, F7). Sin `-p`; destino
+    /// ocupado = `Conflict{Exists}`.
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo.
+    pub async fn mkdir(&self, path: &VPath) -> Result<TaskRef, Error> {
+        match self {
+            Self::Embedded(engine) => Ok(TaskRef::from_handle(&engine.mkdir(path).await?)),
+            #[cfg(unix)]
+            Self::Remote(r) => r.mkdir(path).await,
+        }
+    }
+
     /// (Re)construye el índice de `root` como Task (M4, ADR 0034).
     ///
     /// # Errors
@@ -1967,6 +1980,16 @@ pub mod remote {
                 )
                 .await?;
             Ok(self.own_task(result.task_id, TaskKind::Delete))
+        }
+
+        pub(super) async fn mkdir(&self, path: &VPath) -> Result<TaskRef, Error> {
+            let result: FsTaskResult = self
+                .call_timed_guarded(
+                    methods::FS_MKDIR,
+                    &norte_proto::methods::FsMkdirParams { path: path.clone() },
+                )
+                .await?;
+            Ok(self.own_task(result.task_id, TaskKind::Mkdir))
         }
 
         /// `fs.search` (live search T5): lanza la Task y devuelve el `rx` por el

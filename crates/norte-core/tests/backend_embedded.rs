@@ -90,6 +90,19 @@ async fn embedded_copy_move_delete_como_tasks() {
     );
 }
 
+/// #104: mkdir como Task por el backend embebido — crea, y el destino
+/// ocupado falla (sin -p, sin idempotencia).
+#[tokio::test]
+async fn embedded_mkdir_como_task() {
+    let (backend, mem) = embedded();
+    let task = backend.mkdir(&vp("mem:///nueva")).await.expect("mkdir");
+    assert_eq!(task.join().await, TaskState::Completed);
+    assert!(mem.stat(&vp("mem:///nueva")).await.is_ok());
+
+    let task = backend.mkdir(&vp("mem:///nueva")).await.expect("submit");
+    assert!(matches!(task.join().await, TaskState::Failed { .. }));
+}
+
 #[tokio::test]
 async fn embedded_cancel_via_canceller() {
     let (backend, mem) = embedded();

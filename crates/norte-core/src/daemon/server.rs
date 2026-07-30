@@ -1446,7 +1446,7 @@ async fn handle_value(
             // por construcción: dropear un future no puede devolver Approved).
             let cancelable = matches!(
                 req.method.as_str(),
-                methods::FS_COPY | methods::FS_MOVE | methods::FS_DELETE
+                methods::FS_COPY | methods::FS_MOVE | methods::FS_DELETE | methods::FS_MKDIR
             );
             let response = if cancelable {
                 let cancel = CancellationToken::new();
@@ -2797,6 +2797,16 @@ async fn dispatch_fs_task(
             let handle = shared
                 .engine
                 .delete_with_as(&p.path, p.mode, actor.clone())
+                .await
+                .map_err(RpcError::from)?;
+            register_task(shared, handle, actor)
+        }
+        // fs.mkdir (0.31.0, #104): Task, mismo molde que delete.
+        methods::FS_MKDIR => {
+            let p: methods::FsMkdirParams = parse_params(req.params)?;
+            let handle = shared
+                .engine
+                .mkdir_as(&p.path, actor.clone())
                 .await
                 .map_err(RpcError::from)?;
             register_task(shared, handle, actor)

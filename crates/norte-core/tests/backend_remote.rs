@@ -197,6 +197,16 @@ async fn remote_copy_list_read_capabilities_como_el_embebido() {
 /// dueña se quedaría sin canal y los `ask` de policy caducarían a `deny`
 /// en silencio (MAJOR del rust-reviewer sobre e408373). El orden importa:
 /// el clon intenta robar ANTES que el dueño reclame los suyos.
+/// #104: fs.mkdir por el wire — Task remota hasta terminal, y el dir existe.
+#[tokio::test]
+async fn remote_mkdir_como_task() {
+    let d = spawn_daemon().await;
+    let backend = Backend::Remote(remote(&d).await);
+    let task = backend.mkdir(&vp("mem:///wire-dir")).await.expect("mkdir");
+    assert_eq!(join_ref(task).await, TaskState::Completed);
+    assert!(d.mem.stat(&vp("mem:///wire-dir")).await.is_ok());
+}
+
 #[tokio::test]
 async fn un_clon_no_roba_los_canales_del_dueno() {
     let d = spawn_daemon().await;

@@ -833,6 +833,45 @@ impl Engine {
         ))
     }
 
+    /// Creación de UN directorio como Task (#104, F7). Sin `-p` (padre
+    /// ausente = `NotFound`), destino ocupado = `Conflict{Exists}`. Journal
+    /// `Created` con undo (regla 4).
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si el scheme no tiene provider registrado.
+    pub async fn mkdir(&self, path: &VPath) -> Result<TaskHandle, Error> {
+        self.mkdir_as(path, crate::journal::Actor::User).await
+    }
+
+    /// [`Self::mkdir`] con ACTOR explícito (camino agéntico, M3-3): gateado
+    /// por [`crate::policy::PolicyOp::Mkdir`] PRE-efecto.
+    ///
+    /// # Errors
+    /// [`Error::PolicyDenied`] si la policy deniega; [`Error::Unsupported`]
+    /// si el scheme no tiene provider registrado.
+    #[tracing::instrument(skip(self, actor), fields(path = %span_path(path)))]
+    pub async fn mkdir_as(
+        &self,
+        path: &VPath,
+        actor: crate::journal::Actor,
+    ) -> Result<TaskHandle, Error> {
+        self.gate(&actor, crate::policy::PolicyOp::Mkdir, &[path])
+            .await?;
+        let provider = self.provider_for(path).await?;
+        let observer = Arc::clone(&self.observer);
+        let path = path.clone();
+        let key = path.scheme().to_owned();
+        Ok(self.sched.submit(
+            &key,
+            TaskKind::Mkdir,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| {
+                Box::pin(async move { ops::mkdir_task(provider, path, observer, &ctx).await })
+            }),
+        ))
+    }
+
     /// Capabilities del provider que sirve `p` (para que el frontend
     /// decida, p. ej., si el F8 va a papelera o avisa de permanente).
     ///

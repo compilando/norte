@@ -1509,6 +1509,43 @@ pub(crate) async fn delete_task(
     Ok(())
 }
 
+/// Task de `fs.mkdir` (#104, F7): UN directorio, sin `-p`. Pre-stat (#32)
+/// para no reclamar jamás como nuestro un nodo preexistente: CUALQUIER nodo
+/// previo — dir incluido — es `Conflict{Exists}` (crear afirma un nombre
+/// LIBRE; la idempotencia silenciosa de `ensure_dir` es de los merges de
+/// copia, no de un F7). Con el pre-stat en `NotFound`, `mkdir_retrying`
+/// desambigua los transitorios y el `Created` llega al journal (regla 4)
+/// exactamente cuando el dir es nuestro.
+pub(crate) async fn mkdir_task(
+    provider: Arc<dyn Provider>,
+    path: VPath,
+    observer: Arc<dyn MutationObserver>,
+    ctx: &TaskCtx,
+) -> Result<(), Error> {
+    if ctx.cancel.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
+    ctx.progress.update(|p| {
+        p.entries_total = Some(1);
+        p.current = Some(path.clone());
+    });
+    match with_retry(&ctx.cancel, || provider.stat(&path).boxed()).await {
+        Ok(_) => {
+            return Err(Error::Conflict {
+                conflict: ConflictKind::Exists,
+            });
+        }
+        Err(Error::NotFound) => {}
+        Err(e) => return Err(e),
+    }
+    mkdir_retrying(&*provider, &path, &ctx.cancel).await?;
+    observer
+        .on_mutation(&Mutation::Created(&path), &ctx.actor)
+        .await?;
+    ctx.progress.update(|p| p.entries_done = 1);
+    Ok(())
+}
+
 /// Recorre el árbol bajo `root` (sin incluirlo). Garantía de orden: todo
 /// directorio aparece ANTES que cualquiera de sus descendientes.
 async fn walk(
@@ -1797,6 +1834,48 @@ mod tests {
         let r = super::trash_retrying(&mem, &VPath::parse("mem:///x").expect("wire"), &id, &cancel)
             .await;
         assert!(matches!(r, Err(Error::Cancelled)), "{r:?}");
+    }
+
+    /// Cancelación limpia de `mkdir_task` (regla 3, #104): un token ya
+    /// cancelado devuelve `Cancelled` ANTES de tocar el provider — ni
+    /// pre-stat, ni mkdir, ni `Created` al journal (el observer registraría
+    /// la mutación; un mkdir no aplicado no debe llegar jamás).
+    #[tokio::test]
+    async fn mkdir_task_honra_el_token_cancelado() {
+        use crate::journal::Actor;
+        use crate::progress::ProgressReporter;
+        use crate::scheduler::TaskCtx;
+        use norte_proto::{Error, TaskId, TaskKind, VPath};
+        use norte_testkit::MemProvider;
+        use norte_vfs::Provider as _;
+        use std::sync::Arc;
+        use tokio_util::sync::CancellationToken;
+
+        let mem = Arc::new(MemProvider::new());
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let (reporter, _rx) = ProgressReporter::new(TaskId::new(1), TaskKind::Mkdir);
+        let ctx = TaskCtx {
+            cancel,
+            progress: Arc::new(reporter),
+            actor: Actor::User,
+        };
+        let observer: Arc<dyn crate::MutationObserver> = Arc::new(crate::observer::NoopObserver);
+        let r = super::mkdir_task(
+            mem.clone(),
+            VPath::parse("mem:///x").expect("wire"),
+            observer,
+            &ctx,
+        )
+        .await;
+        assert!(matches!(r, Err(Error::Cancelled)), "{r:?}");
+        assert!(
+            (*mem)
+                .stat(&VPath::parse("mem:///x").expect("wire"))
+                .await
+                .is_err(),
+            "nada creado bajo cancelación"
+        );
     }
 
     /// Rama NEGATIVA de la desambiguación de symlink (encoding-auditor,
