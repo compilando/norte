@@ -136,12 +136,18 @@ pub(crate) async fn trash_retrying(
 
 /// `mkdir` con reintentos y desambiguación (#32.2). CONTRATO: el caller ya
 /// verificó que el destino NO preexistía (pre-stat de [`ensure_dir`]) — con
-/// esa garantía, un `Conflict` tras un fallo transitorio es nuestra primera
-/// aplicación (o un tercero concurrente en la ventana, indistinguible y
-/// igual de inofensivo: el undo de un dir con contenido ajeno falla limpio
-/// en `remove`) y cuenta como ÉXITO, con su `Created` para el journal. Un
-/// `Conflict` SIN transitorio previo sí es colisión real (carrera externa):
-/// se propaga y la política del caller decide.
+/// esa garantía, un `Conflict` tras un fallo transitorio es CANDIDATO a
+/// nuestra primera aplicación y se VERIFICA listándolo (#104 review
+/// MAJOR-1, mismo criterio que `symlink_retrying`): un dir que acabamos de
+/// crear no puede tener contenido — vacío = nuestro (`Ok`, con su `Created`
+/// para el journal); con contenido = de un tercero, `Conflict` fail-safe.
+/// Sin la verificación, un `Created` falsamente reclamado haría que el undo
+/// (M3-2 enruta `Created` por PAPELERA, ya no `remove`) mandara a trash el
+/// dir AJENO con su contenido. Ventana residual honesta: un tercero que
+/// crea el dir y AÚN no metió nada pasa por nuestro (indistinguible sin
+/// node-id); su undo trashea un dir VACÍO ajeno — recuperable y acotado.
+/// Un `Conflict` SIN transitorio previo sí es colisión real (carrera
+/// externa): se propaga sin listar y la política del caller decide.
 async fn mkdir_retrying(
     p: &dyn Provider,
     path: &VPath,
@@ -154,7 +160,14 @@ async fn mkdir_retrying(
             return Err(Error::Cancelled);
         }
         match p.mkdir(path).await {
-            Err(Error::Conflict { .. }) if ambiguous => return Ok(()),
+            Err(e @ Error::Conflict { .. }) if ambiguous => {
+                let mut stream = with_retry(cancel, || p.list(path).boxed()).await?;
+                return match stream.next().await {
+                    None => Ok(()),
+                    Some(Ok(_)) => Err(e),
+                    Some(Err(le)) => Err(le),
+                };
+            }
             Err(e) if attempt < MAX_RETRIES && is_transient(&e) && !cancel.is_cancelled() => {
                 ambiguous = true;
                 backoff_or_cancel(cancel, attempt).await?;
@@ -1514,8 +1527,9 @@ pub(crate) async fn delete_task(
 /// previo — dir incluido — es `Conflict{Exists}` (crear afirma un nombre
 /// LIBRE; la idempotencia silenciosa de `ensure_dir` es de los merges de
 /// copia, no de un F7). Con el pre-stat en `NotFound`, `mkdir_retrying`
-/// desambigua los transitorios y el `Created` llega al journal (regla 4)
-/// exactamente cuando el dir es nuestro.
+/// desambigua los transitorios (verificando VACÍO el dir ambiguo — ver su
+/// rustdoc y la ventana residual que documenta) y el `Created` llega al
+/// journal (regla 4) cuando el dir es nuestro.
 pub(crate) async fn mkdir_task(
     provider: Arc<dyn Provider>,
     path: VPath,
@@ -1834,6 +1848,51 @@ mod tests {
         let r = super::trash_retrying(&mem, &VPath::parse("mem:///x").expect("wire"), &id, &cancel)
             .await;
         assert!(matches!(r, Err(Error::Cancelled)), "{r:?}");
+    }
+
+    /// #104 review MAJOR-1: el `Conflict` ambiguo de `mkdir_retrying` se
+    /// VERIFICA listando — un dir ajeno CON CONTENIDO jamás se reclama como
+    /// nuestro (el `Created` falso haría que un undo lo mandara entero a la
+    /// papelera). La ventana residual (dir ajeno aún VACÍO) se acepta y se
+    /// pinea como decisión: recuperable de trash, indistinguible sin
+    /// node-id.
+    #[tokio::test]
+    async fn mkdir_retrying_no_reclama_un_dir_ajeno_con_contenido() {
+        use norte_proto::{Error, VPath};
+        use norte_testkit::MemProvider;
+        use norte_vfs::Provider as _;
+        use tokio_util::sync::CancellationToken;
+
+        let mem = MemProvider::new();
+        let dir = VPath::parse("mem:///x").expect("wire");
+        // Tercero: dir CON contenido, ya presente cuando llega el retry.
+        mem.mkdir(&dir).await.expect("mkdir ajeno");
+        {
+            let mut s = mem
+                .write(&VPath::parse("mem:///x/suyo.txt").expect("wire"))
+                .await
+                .expect("write");
+            s.write(bytes::Bytes::from_static(b"ajeno"))
+                .await
+                .expect("chunk");
+            s.commit().await.expect("commit");
+        }
+        // Primer intento: transitorio SIN aplicar → ambiguous.
+        mem.faults().unavailable_for_next(1);
+        let cancel = CancellationToken::new();
+        let r = super::mkdir_retrying(&mem, &dir, &cancel).await;
+        assert!(
+            matches!(r, Err(Error::Conflict { .. })),
+            "un dir con contenido es de un tercero, jamás nuestro: {r:?}"
+        );
+
+        // Decisión pineada: el dir ajeno VACÍO sí pasa por nuestro (ventana
+        // residual documentada en el rustdoc de `mkdir_retrying`).
+        let vacio = VPath::parse("mem:///vacio").expect("wire");
+        mem.mkdir(&vacio).await.expect("mkdir ajeno vacío");
+        mem.faults().unavailable_for_next(1);
+        let r = super::mkdir_retrying(&mem, &vacio, &cancel).await;
+        assert!(r.is_ok(), "{r:?}");
     }
 
     /// Cancelación limpia de `mkdir_task` (regla 3, #104): un token ya

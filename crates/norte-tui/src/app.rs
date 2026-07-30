@@ -1648,30 +1648,43 @@ impl App {
         self.open_next_pending();
     }
 
-    /// Valida el nombre y cierra el modal devolviendo el DESTINO completo
-    /// (dir del pane con foco + nombre como [`norte_proto::Segment`] — la
-    /// validación es la del `VPath`: ni vacío, ni `/`, ni NUL, ni `.`/`..`).
-    /// Un nombre inválido DEJA el modal abierto con el diagnóstico y
-    /// devuelve `None`; el caller lanza la task con `Some`.
+    /// Valida el nombre y devuelve el DESTINO completo (dir del pane con
+    /// foco + nombre como [`norte_proto::Segment`] — la validación es la
+    /// del `VPath`: ni vacío, ni `/`, ni NUL, ni `.`/`..`). NO cierra el
+    /// modal (#104 review MINOR-1): el caller lo cierra con
+    /// [`Self::mkdir_submitted`] SOLO tras encolar la task — un submit que
+    /// falla (policy, conexión) deja el diagnóstico con
+    /// [`Self::mkdir_set_error`] y el usuario CONSERVA lo tecleado. Un
+    /// nombre inválido deja su diagnóstico aquí mismo y devuelve `None`.
     pub fn mkdir_confirm(&mut self) -> Option<VPath> {
         let Some(Modal::Mkdir { name, .. }) = &self.modal else {
             return None;
         };
-        let seg = norte_proto::Segment::new(name.as_bytes().to_vec());
-        match seg {
-            Ok(seg) => {
-                let target = self.focused().dir().join(seg);
-                self.modal = None;
-                self.open_next_pending();
-                Some(target)
-            }
+        match norte_proto::Segment::new(name.as_bytes().to_vec()) {
+            Ok(seg) => Some(self.focused().dir().join(seg)),
             Err(e) => {
                 let msg = e.to_string();
-                if let Some(Modal::Mkdir { error, .. }) = &mut self.modal {
-                    *error = Some(msg);
-                }
+                self.mkdir_set_error(msg);
                 None
             }
+        }
+    }
+
+    /// Cierra el modal tras un submit que SÍ encoló (#104): misma
+    /// disciplina de cierre que el resto (jamás dejar una pendiente
+    /// esperando).
+    pub fn mkdir_submitted(&mut self) {
+        if matches!(self.modal, Some(Modal::Mkdir { .. })) {
+            self.modal = None;
+            self.open_next_pending();
+        }
+    }
+
+    /// Deja el diagnóstico de un submit fallido en el modal (#104): el
+    /// nombre tecleado sobrevive para corregir y reintentar.
+    pub fn mkdir_set_error(&mut self, msg: String) {
+        if let Some(Modal::Mkdir { error, .. }) = &mut self.modal {
+            *error = Some(msg);
         }
     }
 
@@ -2994,7 +3007,19 @@ mod tests {
         }
         let target = app.mkdir_confirm().expect("nombre válido");
         assert_eq!(target, VPath::parse("mem:///docs").unwrap());
-        assert!(app.modal.is_none(), "confirmar cierra el modal");
+        assert!(
+            app.modal.is_some(),
+            "confirmar NO cierra: cierra el submit que encoló (MINOR-1)"
+        );
+        // Un submit fallido deja el diagnóstico y conserva el nombre…
+        app.mkdir_set_error("policy".into());
+        assert!(matches!(
+            &app.modal,
+            Some(Modal::Mkdir { error: Some(_), name }) if name == "docs"
+        ));
+        // …y el que encoló, cierra.
+        app.mkdir_submitted();
+        assert!(app.modal.is_none(), "submitted cierra el modal");
 
         // Vacío: error, modal abierto.
         app.open_mkdir();

@@ -1114,10 +1114,14 @@ async fn run(
                                 KeyCode::Enter if plain => {
                                     if let Some(target) = app.mkdir_confirm() {
                                         match backend.mkdir(&target).await {
-                                            Ok(task) => app.board.push(task, None),
-                                            Err(e) => {
-                                                app.message = Some(error_message(&e));
+                                            Ok(task) => {
+                                                app.board.push(task, None);
+                                                app.mkdir_submitted();
                                             }
+                                            // MINOR-1: el nombre sobrevive
+                                            // al fallo del submit.
+                                            Err(e) => app
+                                                .mkdir_set_error(error_message(&e)),
                                         }
                                     }
                                 }
@@ -3494,8 +3498,16 @@ async fn dispatch(
         // corre al confirmar (`mark_pattern_confirm`), no aquí.
         "mark.pattern-add" => app.open_mark_pattern(true),
         "mark.pattern-remove" => app.open_mark_pattern(false),
-        // #104: F7 — crear directorio en el pane con foco.
-        "pane.mkdir" => app.open_mkdir(),
+        // #104: F7 — crear directorio en el pane con foco. En el pane
+        // VIRTUAL de búsqueda no hay directorio destino visible (review
+        // MINOR-2: `dir()` es la raíz del walk, no lo que se pinta).
+        "pane.mkdir" => {
+            if app.focused().virtual_search {
+                app.message = Some(t("msg-mkdir-in-search"));
+            } else {
+                app.open_mkdir();
+            }
+        }
         "pane.delete" | "pane.delete-permanent" => {
             // F8 = papelera si el provider la declara; sin ella, el MISMO
             // diálogo avisa de PERMANENTE (degradación con usuario

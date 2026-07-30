@@ -163,6 +163,7 @@ status-marks-pruned = { $n } marcas caídas, sus entradas ya no están
 msg-names-encoding = nombres mostrados como { $enc } (solo display; los bytes no cambian)
 msg-names-encoding-off = nombres tal cual (reinterpretación apagada)
 msg-hidden-shown = entradas ocultas visibles
+msg-mkdir-in-search = los resultados de búsqueda no tienen directorio destino — sal antes de la búsqueda
 msg-hidden-hidden = entradas ocultas escondidas
 msg-marked-by-pattern = { $n } marcas cambiadas
 msg-open-no-opener = sin opener configurado para { $mime } (ver openers.toml)
