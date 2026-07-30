@@ -378,6 +378,11 @@ pub struct CommonConfig {
     /// Project — presentation-only, same class as the other `[ui]` scalars
     /// above.
     pub ui_confirm_quit: ConfirmQuit,
+    /// `[ui] show_hidden` (#107, last-wins; None = show everything). Honored
+    /// from ALL layers including Project — presentation-only, same class as
+    /// the other `[ui]` scalars above: hiding dotfiles cannot launch, write,
+    /// or redirect anything.
+    pub ui_show_hidden: Option<bool>,
     /// `[daemon] mode` (last-wins; None = embedded; never from Project —
     /// fail-closed, review MAJOR-1). Startup only.
     pub daemon_mode: Option<crate::schema::DaemonMode>,
@@ -580,6 +585,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_font_size: Option<f32> = None;
     let mut ui_reduce_motion: Option<bool> = None;
     let mut ui_confirm_quit = ConfirmQuit::default();
+    let mut ui_show_hidden: Option<bool> = None;
     let mut daemon_mode: Option<DaemonMode> = None;
     let mut daemon_socket: Option<PathBuf> = None;
     let mut hotlist: Vec<HotlistItem> = Vec::new();
@@ -620,6 +626,9 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             )?;
             if let Some(cq) = &parsed.ui.confirm_quit {
                 ui_confirm_quit = parse_confirm_quit(cq, &norte)?;
+            }
+            if let Some(sh) = parsed.ui.show_hidden {
+                ui_show_hidden = Some(sh);
             }
             // `[daemon]` is NOT honored from Project either (review MAJOR-1):
             // a foreign repo must not redirect the core transport to an
@@ -674,6 +683,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_font_size,
         ui_reduce_motion,
         ui_confirm_quit,
+        ui_show_hidden,
         daemon_mode,
         daemon_socket,
         hotlist,
@@ -970,6 +980,41 @@ mod hotlist_tests {
         assert_eq!(cfg.ui_font.as_deref(), Some("Inter"));
         assert_eq!(cfg.ui_mono_font.as_deref(), Some("JetBrains Mono"));
         assert!((cfg.ui_font_size.unwrap() - 15.5).abs() < f32::EPSILON);
+    }
+
+    /// `[ui] show_hidden` (#107): last-wins, todas las capas — misma clase
+    /// presentación-solo que `reduce_motion`. Ausente = None (el frontend
+    /// muestra todo).
+    #[test]
+    fn ui_show_hidden_carga_last_wins_y_ausente_es_none() {
+        let system = tempfile::tempdir().unwrap();
+        std::fs::write(
+            system.path().join("norte.toml"),
+            "[ui]\nshow_hidden = true\n",
+        )
+        .unwrap();
+        let user = tempfile::tempdir().unwrap();
+        std::fs::write(
+            user.path().join("norte.toml"),
+            "[ui]\nshow_hidden = false\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (system.path().to_path_buf(), Layer::System),
+                (user.path().to_path_buf(), Layer::User),
+            ],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.ui_show_hidden, Some(false), "last-wins");
+
+        let empty = tempfile::tempdir().unwrap();
+        std::fs::write(empty.path().join("norte.toml"), "").unwrap();
+        let layers = Layers {
+            dirs: vec![(empty.path().to_path_buf(), Layer::User)],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.ui_show_hidden, None, "ausente = None (mostrar todo)");
     }
 
     /// `[ui] reduce_motion` (G2 a11y override, spec §17): last-wins, honored

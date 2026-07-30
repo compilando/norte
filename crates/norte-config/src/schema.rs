@@ -158,6 +158,14 @@ pub struct UiSection {
     /// `quick_search`) so its diagnostic can include the source path.
     #[serde(default)]
     pub confirm_quit: Option<String>,
+    /// Whether panes show hidden entries at startup (#107): unix dot-entries,
+    /// decided on the raw bytes of the last path segment. Absent = `true`
+    /// (show everything — the conservative default: nothing the provider
+    /// lists silently disappears until the user asks). `pane.toggle-hidden`
+    /// (Ctrl+H) flips it per pane at runtime; this key only seeds the
+    /// initial state.
+    #[serde(default)]
+    pub show_hidden: Option<bool>,
 }
 
 /// The `[keymap]` section of `norte.toml`.

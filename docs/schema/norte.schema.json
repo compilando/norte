@@ -245,6 +245,14 @@
             "null"
           ]
         },
+        "show_hidden": {
+          "default": null,
+          "description": "Whether panes show hidden entries at startup (#107): unix dot-entries,\ndecided on the raw bytes of the last path segment. Absent = `true`\n(show everything — the conservative default: nothing the provider\nlists silently disappears until the user asks). `pane.toggle-hidden`\n(Ctrl+H) flips it per pane at runtime; this key only seeds the\ninitial state.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "theme": {
           "default": null,
           "description": "Theme preset name (`default`, `catppuccin-mocha`, `gruvbox-dark`,\n`nord`, `gruvbox-light`, or `catppuccin-latte`) or a path to a custom\nTOML theme (ADR 0020). When absent, use `default`.",
