@@ -9,6 +9,11 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **First-class selection (#103):** mark, mark all, invert, clear, and mark or
+  unmark by glob, in both frontends; marks survive a refresh (vanished entries
+  are pruned, and the status bar says how many), and copy, move, and delete
+  operate on the whole selection, consuming the marks on submit. The pattern
+  dialog is TUI-only for now — the GUI has no text input yet.
 - **Provider attributes on the wire (proto 0.30.0, ADR 0039):** protocol-specific
   metadata — POSIX mode/uid/gid, an SFTP owner string, an S3 storage class, an
   archive member's packed size — can finally reach a client *typed* rather than

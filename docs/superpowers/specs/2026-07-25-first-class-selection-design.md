@@ -231,6 +231,16 @@ size formatter, which does not exist anywhere in the workspace yet. It goes
 into `norte-frontend::format` in this block, and the columns work (#108)
 reuses it rather than adding a second one.
 
+As built, the counter grew three refinements the review demanded: marked
+directories are named separately (`{n} marked, {size} + {dirs} dirs`) so the
+bar never implies a byte total it did not compute; a refresh that pruned
+marks says how many it dropped (§2's "never silent", rendered); and the
+warnings — incomplete listing, name-reinterpretation badge — order **ahead**
+of the marked counter, because the line has no width budget and ratatui
+clips the tail: at a narrow width the informational counter must be what
+clips first. A real width budget that ellipsises the directory instead of
+clipping any field is recorded as debt in #103.
+
 ### 6. Commands, presets, i18n
 
 Five commands, using the names the GUI already dispatches:
