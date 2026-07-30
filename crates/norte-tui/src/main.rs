@@ -1101,6 +1101,31 @@ async fn run(
                             }
                             continue;
                         }
+                        // `Modal::Mkdir` (#104): mismo molde de texto libre.
+                        // El submit vive AQUÍ (async): el modal valida y
+                        // devuelve el destino; la task se registra en el
+                        // board como cualquier otra mutación.
+                        if matches!(app.modal, Some(Modal::Mkdir { .. })) {
+                            let plain = key.modifiers.is_empty()
+                                || key.modifiers == KeyModifiers::SHIFT;
+                            match key.code {
+                                KeyCode::Char(c) if plain => app.mkdir_push(c),
+                                KeyCode::Backspace if plain => app.mkdir_pop(),
+                                KeyCode::Enter if plain => {
+                                    if let Some(target) = app.mkdir_confirm() {
+                                        match backend.mkdir(&target).await {
+                                            Ok(task) => app.board.push(task, None),
+                                            Err(e) => {
+                                                app.message = Some(error_message(&e));
+                                            }
+                                        }
+                                    }
+                                }
+                                KeyCode::Esc if plain => app.cancel_mkdir(),
+                                _ => {}
+                            }
+                            continue;
+                        }
                         // El modal TOFU (#45) puede NAVEGAR al confiar: su Cd
                         // se aplica igual que el de un comando.
                         let outcome = on_dialog_key(
@@ -2752,7 +2777,8 @@ async fn on_dialog_key(
                 // aquí, no-op defensivo.
                 Modal::Collision { .. }
                 | Modal::TrustLuaInit { .. }
-                | Modal::MarkPattern { .. } => {}
+                | Modal::MarkPattern { .. }
+                | Modal::Mkdir { .. } => {}
                 // S2 (`[ui] confirm_quit`): confirmar cierra — el run loop
                 // lo detecta en su chequeo de `app.quit` de cada vuelta
                 // (main.rs, tope del `loop`).
@@ -3468,6 +3494,8 @@ async fn dispatch(
         // corre al confirmar (`mark_pattern_confirm`), no aquí.
         "mark.pattern-add" => app.open_mark_pattern(true),
         "mark.pattern-remove" => app.open_mark_pattern(false),
+        // #104: F7 — crear directorio en el pane con foco.
+        "pane.mkdir" => app.open_mkdir(),
         "pane.delete" | "pane.delete-permanent" => {
             // F8 = papelera si el provider la declara; sin ella, el MISMO
             // diálogo avisa de PERMANENTE (degradación con usuario

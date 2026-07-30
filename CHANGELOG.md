@@ -9,6 +9,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Create directory — F7 (#104, proto 0.31.0):** `fs.mkdir` as a policy-
+  gated, journalled Task (`Created` with undo; clean cancellation), wired
+  end to end: engine, daemon (rpc.cancel-able), both backend modes, a TUI
+  F7 dialog with the same masking discipline as the pattern dialog, and
+  `norte mkdir` in the CLI. Not `mkdir -p`: the parent must exist, and any
+  occupant — a directory included — is a conflict. The GUI picks it up
+  when it grows text input (same explicit gap as mark-by-pattern).
 - **Hidden-entry toggle (#107):** Ctrl+H (and Alt+.) shows or hides unix
   dot-entries per pane, in both frontends; `[ui] show_hidden` seeds the
   startup state. Presentation only — the provider keeps listing everything,

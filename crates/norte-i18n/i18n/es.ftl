@@ -25,6 +25,8 @@ modal-mark-pattern-add = Marcar por patrón
 modal-mark-pattern-remove = Desmarcar por patrón
 modal-mark-pattern-hint = glob, por ejemplo *.rs
 modal-mark-pattern-keys = [enter] confirmar · [esc] cancelar
+modal-mkdir = Crear directorio
+modal-mkdir-hint = nombre del directorio nuevo
 
 # --- Mensajes de la barra ---
 msg-done = hecho
@@ -105,6 +107,7 @@ cli-runtime-error = norte: no se pudo arrancar el runtime: { $error }
 cli-enqueue-copy = no se pudo encolar la copia
 cli-enqueue-move = no se pudo encolar el move
 cli-enqueue-delete = no se pudo encolar el borrado
+cli-enqueue-mkdir = no se pudo encolar el mkdir
 cli-list-failed = list falló
 cli-entry-unreadable = entrada ilegible
 cli-serialize-failed = no se pudo serializar
@@ -291,6 +294,7 @@ help-cmd-viewer-bottom = ir al final
 help-cmd-viewer-encoding = recargar como… (siguiente encoding)
 help-cmd-pane-names-encoding = ver nombres como… (cp437/cp866/Shift-JIS/GBK/…; solo display)
 help-cmd-pane-toggle-hidden = mostrar u ocultar entradas ocultas
+help-cmd-pane-mkdir = crear un directorio (F7)
 help-cmd-viewer-encoding-auto = volver a la detección automática
 help-cmd-viewer-hex = alternar vista hexadecimal
 help-cmd-pane-search = buscar por nombre/contenido (Alt+F7)

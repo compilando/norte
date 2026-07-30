@@ -858,8 +858,8 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
         Modal::TrustLuaInit { .. } => 8,
         // Patrón + hint + teclas (3 líneas) o + la línea de error (4), más
         // bordes (#103 T9: mismo cómputo `body_lines + 3` que el resto).
-        // Sin error cae al comodín `6` de abajo (match_same_arms).
-        Modal::MarkPattern { error: Some(_), .. } => 7,
+        // Sin error caen al comodín `6` de abajo (match_same_arms).
+        Modal::MarkPattern { error: Some(_), .. } | Modal::Mkdir { error: Some(_), .. } => 7,
         _ => 6,
     }
 }
@@ -985,6 +985,9 @@ fn draw_modal(
             pattern,
             error,
         } => mark_pattern_modal_text(*mark, pattern, error.as_deref()),
+        // #104: mismo enmascarado que el patrón — nombre y error son de
+        // usuario (paste con bidi/invisibles incluido).
+        Modal::Mkdir { name, error } => mkdir_modal_text(name, error.as_deref()),
     };
     // Un borrado PERMANENTE (o aprobar una mutación de agente) tiñe el borde
     // de aviso (rol `warning`).
@@ -1096,6 +1099,39 @@ fn mark_pattern_modal_text(mark: bool, pattern: &str, error: Option<&str>) -> (S
         t("modal-mark-pattern-remove")
     };
     (title, lines.join("\n"))
+}
+
+/// Título+cuerpo de `Modal::Mkdir` (#104): mismo contrato de enmascarado
+/// que `mark_pattern_modal_text` — nombre y diagnóstico son texto de
+/// usuario (el error de `Segment::new`/del engine puede embeber el nombre).
+fn mkdir_modal_text(name: &str, error: Option<&str>) -> (String, String) {
+    let (masked, hostil) = display_name(name.as_bytes());
+    let campo = if hostil {
+        format!("{HOSTILE_BADGE} {masked}_")
+    } else {
+        format!("{masked}_")
+    };
+    let mut lines = vec![campo, t("modal-mkdir-hint"), t("modal-mark-pattern-keys")];
+    if let Some(err) = error {
+        let (masked_err, _) = display_name(err.as_bytes());
+        lines.push(masked_err);
+    }
+    (t("modal-mkdir"), lines.join("\n"))
+}
+
+#[cfg(test)]
+mod mkdir_modal_text_tests {
+    use super::mkdir_modal_text;
+
+    /// Mismo pin que el del patrón (#103 M4): fn PURA — un RLO crudo en el
+    /// nombre Y en el error sale enmascarado en AMBAS líneas.
+    #[test]
+    fn masks_a_raw_rtl_override_in_name_and_error() {
+        let hostile = "abc\u{202E}rid";
+        let (_, cuerpo) = mkdir_modal_text(hostile, Some(hostile));
+        assert!(!cuerpo.contains('\u{202E}'), "{cuerpo:?}");
+        assert_eq!(cuerpo.matches('\u{FFFD}').count(), 2, "{cuerpo:?}");
+    }
 }
 
 #[cfg(test)]

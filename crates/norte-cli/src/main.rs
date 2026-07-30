@@ -82,6 +82,12 @@ enum Cmd {
         /// Nodo a borrar
         path: PathBuf,
     },
+    /// Crea UN directorio (sin `-p`: el padre debe existir; destino
+    /// ocupado = conflicto) — #104
+    Mkdir {
+        /// Directorio a crear (el último segmento es el nombre nuevo)
+        path: PathBuf,
+    },
     /// Establece una conexión remota (por nombre de `connections.toml` o
     /// URL `sftp://…`/`ftp://…`), con el flujo TOFU interactivo (fase 6e)
     Connect {
@@ -470,6 +476,16 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             }
             .map_err(|e| anyhow::anyhow!("{e}"))
             .context(norte_i18n::t("cli-enqueue-delete"))?;
+            Ok(run_task(task, false).await)
+        }
+        Cmd::Mkdir { path } => {
+            let target = vpath(&path)?;
+            let task = match backend.mkdir(&target).await {
+                Err(e) if tofu_confirm(&backend, &e).await? => backend.mkdir(&target).await,
+                other => other,
+            }
+            .map_err(|e| anyhow::anyhow!("{e}"))
+            .context(norte_i18n::t("cli-enqueue-mkdir"))?;
             Ok(run_task(task, false).await)
         }
         Cmd::Plugin { cmd } => plugin_cmd(&backend, cmd).await,

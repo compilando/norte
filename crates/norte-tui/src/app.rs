@@ -1603,6 +1603,78 @@ impl App {
         }
     }
 
+    /// Abre el modal de crear directorio (F7, #104).
+    pub fn open_mkdir(&mut self) {
+        self.modal = Some(Modal::Mkdir {
+            name: String::new(),
+            error: None,
+        });
+    }
+
+    /// Añade un carácter al nombre en curso. No-op sin modal de mkdir.
+    /// Tope en `chars` como el patrón (#103): un paste accidental no
+    /// desborda el modal; el límite REAL del nombre lo pone el provider.
+    pub fn mkdir_push(&mut self, c: char) {
+        if let Some(Modal::Mkdir { name, error }) = &mut self.modal {
+            if name.chars().count() >= MARK_PATTERN_MAX_CHARS {
+                return;
+            }
+            name.push(c);
+            *error = None;
+        }
+    }
+
+    /// Borra el último carácter del nombre. No-op sin modal de mkdir.
+    pub fn mkdir_pop(&mut self) {
+        if let Some(Modal::Mkdir { name, error }) = &mut self.modal {
+            name.pop();
+            *error = None;
+        }
+    }
+
+    /// Cancela `Modal::Mkdir` sin crear nada — el Esc de ESTE modal de
+    /// texto libre (mismo contrato y guard que [`Self::cancel_mark_pattern`]:
+    /// un modal de DECISIÓN jamás se cierra por aquí).
+    pub fn cancel_mkdir(&mut self) {
+        if !matches!(self.modal, Some(Modal::Mkdir { .. })) {
+            debug_assert!(
+                false,
+                "solo los modales de texto libre se cierran sin decisión; \
+                 un modal de DECISIÓN debe denegar por on_dialog_key"
+            );
+            return;
+        }
+        self.modal = None;
+        self.open_next_pending();
+    }
+
+    /// Valida el nombre y cierra el modal devolviendo el DESTINO completo
+    /// (dir del pane con foco + nombre como [`norte_proto::Segment`] — la
+    /// validación es la del `VPath`: ni vacío, ni `/`, ni NUL, ni `.`/`..`).
+    /// Un nombre inválido DEJA el modal abierto con el diagnóstico y
+    /// devuelve `None`; el caller lanza la task con `Some`.
+    pub fn mkdir_confirm(&mut self) -> Option<VPath> {
+        let Some(Modal::Mkdir { name, .. }) = &self.modal else {
+            return None;
+        };
+        let seg = norte_proto::Segment::new(name.as_bytes().to_vec());
+        match seg {
+            Ok(seg) => {
+                let target = self.focused().dir().join(seg);
+                self.modal = None;
+                self.open_next_pending();
+                Some(target)
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                if let Some(Modal::Mkdir { error, .. }) = &mut self.modal {
+                    *error = Some(msg);
+                }
+                None
+            }
+        }
+    }
+
     /// Abre el popup de navegación (spec 2026-07-18): historial del pane
     /// con foco (más reciente primero) o la copia de hotlist. Los items se
     /// construyen YA saneados aquí (`nav_item_display`); una entrada de
@@ -1899,6 +1971,16 @@ pub enum Modal {
         /// campo. `None` = aún no se ha confirmado nada.
         error: Option<String>,
     },
+    /// Crear directorio (F7, #104). Texto libre como [`Modal::MarkPattern`]:
+    /// el nombre CRUDO del usuario, enmascarado al pintarlo (un nombre
+    /// llega por paste con bidi/invisibles tan fácil como un patrón).
+    Mkdir {
+        /// Lo tecleado hasta ahora.
+        name: String,
+        /// Diagnóstico del último intento inválido (`VPath` o del engine),
+        /// pintado bajo el campo.
+        error: Option<String>,
+    },
 }
 
 /// Tope de caracteres del patrón de [`Modal::MarkPattern`] (#103 T9 review
@@ -2083,7 +2165,7 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         // búsqueda — el run loop lo intercepta ANTES de llegar aquí (raw
         // chars, jamás el contexto `dialog`), igual que `TrustLuaInit`.
         // Ambos devuelven `None` siempre.
-        Modal::TrustLuaInit { .. } | Modal::MarkPattern { .. } => None,
+        Modal::TrustLuaInit { .. } | Modal::MarkPattern { .. } | Modal::Mkdir { .. } => None,
     }
 }
 
@@ -2899,6 +2981,49 @@ mod tests {
             size: None,
             mtime_ms: None,
         }
+    }
+
+    /// #104: el modal de F7 valida con las reglas del `VPath` y devuelve el
+    /// destino completo; inválido = diagnóstico en el modal, jamás submit.
+    #[test]
+    fn el_modal_mkdir_valida_y_construye_el_destino() {
+        let mut app = app_with_entries(&["a"]);
+        app.open_mkdir();
+        for c in "docs".chars() {
+            app.mkdir_push(c);
+        }
+        let target = app.mkdir_confirm().expect("nombre válido");
+        assert_eq!(target, VPath::parse("mem:///docs").unwrap());
+        assert!(app.modal.is_none(), "confirmar cierra el modal");
+
+        // Vacío: error, modal abierto.
+        app.open_mkdir();
+        assert!(app.mkdir_confirm().is_none());
+        assert!(
+            matches!(&app.modal, Some(Modal::Mkdir { error: Some(_), .. })),
+            "el diagnóstico queda en el modal"
+        );
+
+        // `..` es DotSegment: jamás un destino.
+        app.mkdir_push('.');
+        app.mkdir_push('.');
+        assert!(app.mkdir_confirm().is_none());
+        assert!(matches!(
+            &app.modal,
+            Some(Modal::Mkdir { error: Some(_), .. })
+        ));
+
+        // `/` embebido: InvalidByte.
+        app.cancel_mkdir();
+        app.open_mkdir();
+        for c in "a/b".chars() {
+            app.mkdir_push(c);
+        }
+        assert!(app.mkdir_confirm().is_none());
+
+        // Cancelar cierra sin nada.
+        app.cancel_mkdir();
+        assert!(app.modal.is_none());
     }
 
     /// #107 review MAJOR-1: los hits de una búsqueda son EXPLÍCITOS — el
