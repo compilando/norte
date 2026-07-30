@@ -332,6 +332,7 @@ gui-modal-footer-conflict = o overwrite   s skip   c/Esc cancel
 gui-task-kind-copy = copy
 gui-task-kind-move = move
 gui-task-kind-delete = delete
+gui-task-kind-mkdir = mkdir
 gui-task-kind-undo = undo
 gui-task-kind-search = search
 gui-task-kind-index = index

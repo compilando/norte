@@ -41,6 +41,7 @@ struct ProtocolSchema {
     fs_delete_params: FsDeleteParams,
     fs_list_params: FsListParams,
     fs_list_result: FsListResult,
+    fs_mkdir_params: FsMkdirParams,
     fs_move_params: FsMoveParams,
     fs_read_params: FsReadParams,
     fs_read_result: FsReadResult,

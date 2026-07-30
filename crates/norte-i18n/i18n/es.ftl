@@ -335,6 +335,7 @@ gui-modal-footer-delete = y confirmar   p alternar permanente   n/Esc cancelar
 gui-modal-footer-conflict = o sobrescribir   s saltar   c/Esc cancelar
 gui-task-kind-copy = copy
 gui-task-kind-move = move
+gui-task-kind-mkdir = mkdir
 gui-task-kind-delete = delete
 gui-task-kind-undo = undo
 gui-task-kind-search = search

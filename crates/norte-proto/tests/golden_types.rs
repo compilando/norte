@@ -379,6 +379,20 @@ fn golden_task_progress() {
                 },
             ),
             (
+                // 0.31.0 (#104): TaskKind::Mkdir en el wire.
+                "running_mkdir",
+                TaskProgress {
+                    task_id: TaskId::new(9),
+                    kind: TaskKind::Mkdir,
+                    state: TaskState::Running,
+                    bytes_done: 0,
+                    bytes_total: None,
+                    entries_done: 0,
+                    entries_total: Some(1),
+                    current: Some(vpath("file:///tmp/nueva-carpeta")),
+                },
+            ),
+            (
                 "pending_unknown_totals",
                 TaskProgress {
                     task_id: TaskId::new(1),
@@ -420,7 +434,8 @@ fn golden_methods() {
     check_methods_plugin(&fixtures);
     check_methods_rpc(&fixtures);
     check_methods_index(&fixtures);
-    assert_eq!(fixtures.len(), 97, "[methods.json] fixtures sin caso Rust");
+    // 97 → 98 en 0.31.0: + fs_mkdir_params (#104).
+    assert_eq!(fixtures.len(), 98, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `index.*` (0.25.0, M4, ADR 0034): build + query del índice de búsqueda.
@@ -1278,6 +1293,14 @@ fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
             task_id: TaskId::new(7),
         },
     );
+    // 0.31.0 (#104): fs.mkdir.
+    check_one(
+        fixtures,
+        "fs_mkdir_params",
+        &norte_proto::methods::FsMkdirParams {
+            path: vpath("file:///tmp/nueva-carpeta"),
+        },
+    );
     check_methods_search(fixtures);
     check_one(
         fixtures,
@@ -1694,7 +1717,9 @@ fn method_names_frozen() {
     // método nuevo — solo campo aditivo).
     // 0.30.0 (columnas bloque 1, ADR 0039): atributos de provider — Entry.attrs,
     // FsCapabilitiesResult.attrs y los dos attrs de petición (sin método nuevo).
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.30.0");
+    // 0.31.0 (#104): fs.mkdir (Task) + TaskKind::Mkdir. Aditivo sobre 0.30.x.
+    assert_eq!(methods::FS_MKDIR, "fs.mkdir");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.31.0");
 }
 
 #[test]

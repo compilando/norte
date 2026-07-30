@@ -124,6 +124,9 @@
     ],
     "next_cursor": "3"
   },
+  "fs_mkdir_params": {
+    "path": "file:///tmp/nueva-carpeta"
+  },
   "fs_move_params": {
     "from": "file:///src/dir",
     "on_collision": "fail",

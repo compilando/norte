@@ -976,6 +976,19 @@
       ],
       "type": "object"
     },
+    "FsMkdirParams": {
+      "description": "Params de [`FS_MKDIR`] (#104).",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/VPath",
+          "description": "Directorio a crear, COMPLETO (el último segmento es el nombre nuevo).\nEl padre debe existir; no hay `-p`."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
     "FsMoveParams": {
       "description": "Params de [`FS_MOVE`].",
       "properties": {
@@ -1149,7 +1162,7 @@
       "type": "object"
     },
     "FsTaskResult": {
-      "description": "Result de [`FS_COPY`], [`FS_MOVE`] y [`FS_DELETE`]: la Task creada.\nEl progreso llega por [`TASK_PROGRESS`].",
+      "description": "Result de [`FS_COPY`], [`FS_MOVE`], [`FS_DELETE`] y [`FS_MKDIR`]: la Task\ncreada. El progreso llega por [`TASK_PROGRESS`].",
       "properties": {
         "task_id": {
           "$ref": "#/$defs/TaskId",
@@ -2402,6 +2415,11 @@
           "type": "string"
         },
         {
+          "const": "mkdir",
+          "description": "Creación de un directorio (`fs.mkdir`, #104). Mutación: pasa por el\njournal como `Created` con su undo (regla 4). Entra en 0.31.0; un\ncliente N-1 (0.30.x) la degrada a [`TaskKind::Unknown`] vía el\n`serde(other)`, mismo caso que `Search`/`Index`.",
+          "type": "string"
+        },
+        {
           "const": "index",
           "description": "Construcción/actualización del índice de búsqueda de un subtree\n(`index.build`, M4). Entra en 0.25.0; un cliente N-1 (0.24.x) la degrada a\n[`TaskKind::Unknown`] vía el `serde(other)`.",
           "type": "string"
@@ -2723,6 +2741,9 @@
     "fs_list_result": {
       "$ref": "#/$defs/FsListResult"
     },
+    "fs_mkdir_params": {
+      "$ref": "#/$defs/FsMkdirParams"
+    },
     "fs_move_params": {
       "$ref": "#/$defs/FsMoveParams"
     },
@@ -2970,6 +2991,7 @@
     "fs_delete_params",
     "fs_list_params",
     "fs_list_result",
+    "fs_mkdir_params",
     "fs_move_params",
     "fs_read_params",
     "fs_read_result",

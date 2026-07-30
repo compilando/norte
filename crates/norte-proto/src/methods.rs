@@ -265,7 +265,12 @@ use crate::{
 /// no es una pregunta sobre atributos — [`version_compatible`] rechaza de
 /// plano a un cliente del FUTURO con `VERSION_MISMATCH`, antes de mirar campo
 /// alguno.
-pub const PROTOCOL_VERSION: &str = "0.30.0";
+/// 0.31.0 (#104): método nuevo `fs.mkdir` (aditivo — [`FsMkdirParams`] →
+/// [`FsTaskResult`], la misma forma de Task que copy/move/delete) y variante
+/// `TaskKind::Mkdir`. Ventana N=0.31.x / N-1=0.30.x: un cliente 0.30 jamás
+/// llama al método nuevo y degrada el kind nuevo a `TaskKind::Unknown` por su
+/// `serde(other)` (presente desde 0.10) — nada que gatear en emisión.
+pub const PROTOCOL_VERSION: &str = "0.31.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -372,6 +377,17 @@ pub const FS_MOVE: &str = "fs.move";
 /// `fs.delete` — borrado como Task: papelera (default) o permanente
 /// (recursivo post-order) — ADR 0009.
 pub const FS_DELETE: &str = "fs.delete";
+/// `fs.mkdir` — creación de UN directorio como Task (#104, F7). NO es
+/// `mkdir -p`: el padre debe existir (`NotFound` si no), y un nodo previo en
+/// el destino es `Conflict` — crear es una afirmación sobre un nombre LIBRE.
+/// El `ConflictKind` es el del provider del DESTINO: `Exists` para un nodo
+/// byte-exacto (dir previo incluido — sin idempotencia silenciosa),
+/// `CaseCollision`/`Normalization` si el filesystem destino colapsa el
+/// nombre con uno existente (pitfall macOS/Windows: se evalúa contra el
+/// destino, no contra el origen). Sin `on_collision`: crear no ofrece
+/// políticas de choque. Journal `Created` con undo (regla 4); gateado por
+/// `PolicyOp::Mkdir`.
+pub const FS_MKDIR: &str = "fs.mkdir";
 /// `fs.search` — búsqueda viva bajo un subtree (spec §17.1a): nombre por
 /// glob O regex, contenido por literal O regex. Devuelve una Task
 /// (`TaskKind::Search`); los hits llegan por la notificación
@@ -742,8 +758,17 @@ pub struct FsDeleteParams {
     pub mode: DeleteMode,
 }
 
-/// Result de [`FS_COPY`], [`FS_MOVE`] y [`FS_DELETE`]: la Task creada.
-/// El progreso llega por [`TASK_PROGRESS`].
+/// Params de [`FS_MKDIR`] (#104).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsMkdirParams {
+    /// Directorio a crear, COMPLETO (el último segmento es el nombre nuevo).
+    /// El padre debe existir; no hay `-p`.
+    pub path: VPath,
+}
+
+/// Result de [`FS_COPY`], [`FS_MOVE`], [`FS_DELETE`] y [`FS_MKDIR`]: la Task
+/// creada. El progreso llega por [`TASK_PROGRESS`].
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsTaskResult {

@@ -899,11 +899,11 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.30.0 (ADR 0039): acepta 0.30.x (N) y 0.29.x (N-1), rechaza 0.28.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.30.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.29.0"), "N-1");
+    // 0.31.0 (#104): acepta 0.31.x (N) y 0.30.x (N-1), rechaza 0.29.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.31.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.30.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.28.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.29.9"),
         "N-2 fuera de la ventana"
     );
 }

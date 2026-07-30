@@ -798,6 +798,7 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 // T6 de liveSearch — aquí solo evita el `match` no exhaustivo.
                 norte_proto::TaskKind::Search => "search",
                 norte_proto::TaskKind::Index => "index",
+                norte_proto::TaskKind::Mkdir => "mkdir",
                 // Clase de un daemon N+1: etiqueta genérica, no rompe la UI.
                 norte_proto::TaskKind::Unknown => "task",
             };

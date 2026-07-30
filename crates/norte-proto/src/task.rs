@@ -72,6 +72,11 @@ pub enum TaskKind {
     /// (desde 0.10) — recibirla la degrada a [`TaskKind::Unknown`] sin
     /// fallar el parse. Sin gating de emisión necesario para este borde.
     Search,
+    /// Creación de un directorio (`fs.mkdir`, #104). Mutación: pasa por el
+    /// journal como `Created` con su undo (regla 4). Entra en 0.31.0; un
+    /// cliente N-1 (0.30.x) la degrada a [`TaskKind::Unknown`] vía el
+    /// `serde(other)`, mismo caso que `Search`/`Index`.
+    Mkdir,
     /// Construcción/actualización del índice de búsqueda de un subtree
     /// (`index.build`, M4). Entra en 0.25.0; un cliente N-1 (0.24.x) la degrada a
     /// [`TaskKind::Unknown`] vía el `serde(other)`.
