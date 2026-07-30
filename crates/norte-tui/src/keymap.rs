@@ -20,7 +20,11 @@ use crossterm::event::{KeyCode as CtCode, KeyModifiers as CtMods};
 pub fn chord_from_crossterm(mods: CtMods, code: CtCode) -> Option<Chord> {
     let neutral = match code {
         CtCode::Char(c) => KeyCode::Char(c),
-        CtCode::F(n) => KeyCode::F(n),
+        // Clamp a f1..=f12, como el adaptador de la GUI (#109): xterm
+        // clásico reporta Shift+F1 como F13, y un F(n>12) no casa ningún
+        // binding (`parse_chord` lo rechaza) ni re-parsea su `Display`
+        // ("f13") — mejor tecla-no-modelada que un chord irrepresentable.
+        CtCode::F(n @ 1..=12) => KeyCode::F(n),
         CtCode::Enter => KeyCode::Enter,
         CtCode::Tab => KeyCode::Tab,
         CtCode::Esc => KeyCode::Esc,
@@ -193,6 +197,22 @@ mod tests {
     fn chord_from_crossterm_devuelve_none_para_teclas_no_modeladas() {
         assert_eq!(chord_from_crossterm(CtMods::NONE, CtCode::BackTab), None);
         assert_eq!(chord_from_crossterm(CtMods::NONE, CtCode::CapsLock), None);
+    }
+
+    /// #109: xterm clásico reporta Shift+F1 como `F13`, así que un `F(13)`
+    /// es construible EN RUNTIME desde este adaptador — pero `parse_chord`
+    /// solo acepta `f1..=f12`, con lo que el chord no puede casar ningún
+    /// binding y su `Display` (`"f13"`) no re-parsea. Mismo clamp que el
+    /// adaptador de la GUI: fuera de rango = tecla no modelada, `None`.
+    #[test]
+    fn chord_from_crossterm_clampa_f13_y_superiores_como_no_modeladas() {
+        assert_eq!(chord_from_crossterm(CtMods::NONE, CtCode::F(13)), None);
+        assert_eq!(chord_from_crossterm(CtMods::NONE, CtCode::F(0)), None);
+        assert_eq!(chord_from_crossterm(CtMods::NONE, CtCode::F(255)), None);
+        assert_eq!(
+            chord_from_crossterm(CtMods::NONE, CtCode::F(12)),
+            Some(Chord::new(Mods::default(), KeyCode::F(12)))
+        );
     }
 
     #[test]

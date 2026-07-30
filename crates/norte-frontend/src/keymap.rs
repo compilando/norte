@@ -1012,10 +1012,11 @@ mod tests {
     ///
     /// `F(n > 12)` is deliberately EXCLUDED: `Display` renders ANY `F(n)` as
     /// `"f{n}"`, but `parse_chord` accepts only `1..=12`, so the two domains
-    /// disagree there — and `F(13)` is genuinely constructible at runtime
-    /// (classic xterm reports Shift+F1 as F13, and the TUI's crossterm
-    /// adapter forwards `F(n)` unclamped). That gap is tracked in #109, not
-    /// fixed here — clamping the crossterm adapter is separate work.
+    /// disagree there. Since #109 both frontend adapters clamp to `1..=12`
+    /// (classic xterm reports Shift+F1 as F13 — the TUI adapter used to
+    /// forward it unclamped), so no runtime path constructs one; the type
+    /// still allows it, and this property scopes itself to the shared
+    /// domain rather than pretending `Display` is total.
     #[test]
     fn display_and_parse_chord_round_trip_over_the_token_table() {
         let non_char = [
