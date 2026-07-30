@@ -3,11 +3,16 @@
 //! the same way instead of growing three formatters.
 
 /// Human-readable byte size: exact below 1 KiB, one decimal and a binary
-/// unit above. Never panics and never overflows — `u64::MAX` is `16.0 EiB`.
+/// unit above. Never panics and never overflows — `u64::MAX` is `16.0 EiB`
+/// (there is no `ZiB` arm: it is unreachable, `u64::MAX` tops out at 16 EiB).
 ///
 /// The unit is NOT localised: `KiB`/`MiB` are the same token in every locale
 /// norte ships, and a translated unit would make sizes incomparable between
-/// screenshots and bug reports. The surrounding sentence IS localised.
+/// screenshots and bug reports. Neither is the decimal separator — this
+/// always prints `1.5 KiB`, never the Spanish `1,5 KiB` — so the value stays
+/// a single unambiguous token a bug report or a `grep` can match verbatim;
+/// only the surrounding sentence is localised. The next reviewer wondering
+/// whether to "fix" the comma: don't, that's this rustdoc's answer.
 ///
 /// ```
 /// use norte_frontend::human_bytes;
@@ -15,7 +20,7 @@
 /// ```
 #[must_use]
 pub fn human_bytes(n: u64) -> String {
-    const UNITS: [&str; 7] = ["KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB"];
+    const UNITS: [&str; 6] = ["KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
     if n < 1024 {
         return format!("{n} B");
     }
@@ -27,7 +32,14 @@ pub fn human_bytes(n: u64) -> String {
     #[allow(clippy::cast_precision_loss)]
     let mut value = n as f64 / 1024.0;
     let mut unit = 0usize;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
+    // Promote on the ROUNDED value, not the raw one (review MAJOR M2): the
+    // output prints one decimal, so anything that rounds up to `10240.0`
+    // (i.e. `1024.0` at the printed precision) must already have promoted —
+    // otherwise `value` in `[1023.95, 1024.0)` prints as `"1024.0 KiB"`, a
+    // string that must never exist. `(value * 10.0).round()` mirrors the
+    // `{value:.1}` formatting below at integer precision, so the promotion
+    // decision and the printed digit agree by construction.
+    while (value * 10.0).round() >= 10240.0 && unit + 1 < UNITS.len() {
         value /= 1024.0;
         unit += 1;
     }
@@ -49,6 +61,20 @@ mod tests {
         assert_eq!(human_bytes(1024), "1.0 KiB");
         assert_eq!(human_bytes(1536), "1.5 KiB");
         assert_eq!(human_bytes(1024 * 1024), "1.0 MiB");
+    }
+
+    /// Review MAJOR M2: the loop used to promote on the UNROUNDED value
+    /// while the output rounds to one decimal, so anything in
+    /// `[1023.95, 1024.0)` of a unit printed as `"1024.0 <unit>"` — a string
+    /// that must never appear. `1_048_575` B is `1024.0 KiB` unrounded
+    /// (`1_048_575 / 1024.0 = 1023.999...`); `1_073_741_823` B is
+    /// `1024.0 MiB` unrounded the same way one level up. The three values
+    /// the sibling test above checks (1024, 1536, 1 MiB) are exactly the
+    /// ones that cannot expose this — none of them sits near a boundary.
+    #[test]
+    fn values_just_under_a_unit_boundary_promote_instead_of_rounding_to_the_next_unit() {
+        assert_eq!(human_bytes(1_048_575), "1.0 MiB");
+        assert_eq!(human_bytes(1_073_741_823), "1.0 GiB");
     }
 
     #[test]

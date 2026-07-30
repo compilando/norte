@@ -24,6 +24,7 @@ modal-confirm-quit-body = Close the application.
 modal-mark-pattern-add = Mark by pattern
 modal-mark-pattern-remove = Unmark by pattern
 modal-mark-pattern-hint = glob, for example *.rs
+modal-mark-pattern-keys = [enter] confirm · [esc] cancel
 
 # --- Status bar messages ---
 msg-done = done

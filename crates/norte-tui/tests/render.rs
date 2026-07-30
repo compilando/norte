@@ -614,13 +614,23 @@ fn mark_pattern_modal_enmascara_el_patron_hostil_y_su_error() {
     let mut terminal = Terminal::new(TestBackend::new(80, 12)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     let contenido = terminal.backend().to_string();
+    // Review MAJOR M4: `!contains('\u{202E}')` por sí sola NUNCA puede
+    // fallar aquí — U+202E es de ancho cero y el renderer de párrafo de
+    // ratatui se COME los grafemas de ancho cero, enmascarados o no. Se
+    // conserva como comprobación barata (documenta la intención), pero la
+    // aserción que de verdad pinea el enmascarado es el CONTEO de U+FFFD:
+    // uno por línea enmascarada. `contains('\u{FFFD}')` a secas lo
+    // satisfacía con SOLO el patrón enmascarado — borrar el `display_name`
+    // de la línea de error dejaba el test en verde. El unit test puro de
+    // `mark_pattern_modal_text` (ui.rs) cubre el enmascarado en sí; este
+    // E2E cubre que la ruta completa (push → confirm → draw) lo conserva.
     assert!(
         !contenido.contains('\u{202E}'),
         "el override RTL crudo no debe llegar al buffer (patrón NI error): {contenido}"
     );
     assert!(
-        contenido.contains('\u{FFFD}'),
-        "el patrón hostil debe pintarse enmascarado: {contenido}"
+        contenido.matches('\u{FFFD}').count() >= 2,
+        "patrón Y error deben enmascararse — no solo uno: {contenido}"
     );
 }
 

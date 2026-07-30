@@ -1436,14 +1436,31 @@ impl App {
         self.open_next_collision();
     }
 
-    /// Cierra cualquier modal abierto SIN actuar sobre él — el equivalente
-    /// genérico de un `DialogOutcome::Cancelled` para los modales de texto
-    /// libre (`Modal::MarkPattern`, #103 T9) que no pasan por el ALLOWLIST
-    /// de [`dialog_action`] y por tanto no tienen su propio Esc en
-    /// `on_dialog_key`. Abre la siguiente pendiente en cola, misma
-    /// disciplina que cerrar cualquier otro modal (jamás pisar una
-    /// aprobación/colisión que llegó mientras este estaba abierto).
-    pub fn close_modal(&mut self) {
+    /// Cancela `Modal::MarkPattern` SIN marcar nada — el equivalente de un
+    /// `DialogOutcome::Cancelled` para ESTE modal de texto libre (#103 T9),
+    /// que no pasa por el ALLOWLIST de [`dialog_action`] y por tanto no
+    /// tiene su propio Esc en `on_dialog_key`. Abre la siguiente pendiente
+    /// en cola, misma disciplina que cerrar cualquier otro modal (jamás
+    /// pisar una aprobación/colisión que llegó mientras este estaba
+    /// abierto).
+    ///
+    /// Deliberadamente NO genérico sobre `self.modal` (review rust MAJOR
+    /// M1): para `Modal::ApproveAgentOp` cerrar sin más deja al agente sin
+    /// respuesta hasta el TTL del daemon — el cierre real de ESE modal
+    /// (`on_dialog_key`, `DialogOutcome::Cancelled`) empareja el cierre con
+    /// un `policy.decide(approve: false)` async, algo que un método
+    /// síncrono no puede hacer. El guard estructural (`debug_assert!`) hace
+    /// del allowlist "solo modales de texto libre" algo que el compilador
+    /// de tests, no la disciplina del caller, hace cumplir.
+    pub fn cancel_mark_pattern(&mut self) {
+        if !matches!(self.modal, Some(Modal::MarkPattern { .. })) {
+            debug_assert!(
+                false,
+                "solo los modales de texto libre se cierran sin decisión; \
+                 un modal de DECISIÓN debe denegar por on_dialog_key"
+            );
+            return;
+        }
         self.modal = None;
         self.open_next_pending();
     }
@@ -1494,6 +1511,13 @@ impl App {
     /// Añade un carácter al patrón en curso. No-op sin modal de patrón.
     pub fn mark_pattern_push(&mut self, c: char) {
         if let Some(Modal::MarkPattern { pattern, error, .. }) = &mut self.modal {
+            // #103 T9 review MINOR: un patrón pegado por accidente (varios
+            // KB de portapapeles) desbordaría el ancho del modal y recortaría
+            // el hint — tope silencioso, como el resto de campos de texto de
+            // este overlay no tienen un límite de terminal que los frene.
+            if pattern.chars().count() >= MARK_PATTERN_MAX_CHARS {
+                return;
+            }
             pattern.push(c);
             *error = None;
         }
@@ -1521,6 +1545,10 @@ impl App {
         match self.focused_mut().mark_glob(&pattern, mark) {
             Ok(changed) => {
                 self.modal = None;
+                // Misma disciplina que CUALQUIER otro cierre de modal
+                // (`on_dialog_key`, `cancel_mark_pattern`): jamás dejar una
+                // aprobación/colisión encolada esperando a la próxima tecla.
+                self.open_next_pending();
                 Ok(changed)
             }
             Err(e) => {
@@ -1830,6 +1858,11 @@ pub enum Modal {
         error: Option<String>,
     },
 }
+
+/// Tope de caracteres del patrón de [`Modal::MarkPattern`] (#103 T9 review
+/// MINOR): en `chars()`, no bytes — igual criterio que [`DETAIL_MAX_CHARS`],
+/// un carácter multibyte cuenta una vez.
+pub const MARK_PATTERN_MAX_CHARS: usize = 256;
 
 /// S2 (`[ui] confirm_quit`): si el brazo de despacho de `app.quit` debe abrir
 /// [`Modal::ConfirmQuit`] en vez de cerrar de inmediato. Pura — el run loop
@@ -3029,16 +3062,84 @@ mod tests {
         assert_eq!(app.focused().marks_len(), 0);
     }
 
-    /// Cancelar (`close_modal`, el equivalente genérico de Esc para un modal
-    /// de texto libre) no marca nada, aunque el usuario ya hubiera tecleado
-    /// un patrón.
+    /// #103 T9 review MINOR: `Modal::MarkPattern` no tiene ALLOWLIST — es
+    /// texto libre, el run loop lo intercepta ANTES del contexto `dialog`
+    /// (main.rs). Esto pinea la mitad de seguridad de esa afirmación:
+    /// NINGÚN comando del vocabulario `dialog.*`, ni siquiera
+    /// `dialog.confirm` (Enter), puede confirmarlo a través de
+    /// `dialog_action` — si alguna vez este modal se colara al contexto
+    /// `dialog` por un bug de enrutado, seguiría siendo inerte ahí.
+    #[test]
+    fn dialog_action_es_siempre_none_para_mark_pattern() {
+        let m = Modal::MarkPattern {
+            mark: true,
+            pattern: String::new(),
+            error: None,
+        };
+        for cmd in crate::keymap::DIALOG_COMMANDS {
+            assert_eq!(
+                dialog_action(&m, cmd),
+                None,
+                "{cmd} no debe confirmar/cancelar MarkPattern vía dialog_action"
+            );
+        }
+    }
+
+    /// Cancelar (`cancel_mark_pattern`, el Esc de este modal de texto libre)
+    /// no marca nada, aunque el usuario ya hubiera tecleado un patrón — y
+    /// cierra el modal, la propiedad real que este test debía pinear.
     #[test]
     fn the_pattern_modal_cancels_without_marking() {
         let mut app = app_with_entries(&["a.rs"]);
         app.open_mark_pattern(true);
         app.mark_pattern_push('*');
-        app.close_modal();
+        app.cancel_mark_pattern();
+        assert!(app.modal.is_none(), "cancel closes the modal");
         assert_eq!(app.focused().marks_len(), 0);
+    }
+
+    /// Review rust MAJOR M1: `cancel_mark_pattern` NO es un cierre genérico
+    /// — con un `Modal::ApproveAgentOp` abierto (llegado, p. ej., mientras
+    /// el usuario tecleaba un patrón que luego se sustituyó), debe dejarlo
+    /// INTACTO. Cerrarlo sin el `policy.decide(approve: false)` async que
+    /// hace `on_dialog_key` dejaría al agente sin respuesta hasta el TTL
+    /// del daemon, y al humano sin volver a ver la pregunta.
+    ///
+    /// El guard es un `debug_assert!`: en ESTE build (test = dev,
+    /// `debug-assertions` activas) panica ANTES de tocar `self.modal` — se
+    /// captura con `catch_unwind` para poder comprobar el estado posterior
+    /// en la misma aserción; en release sería un no-op y la función
+    /// devolvería temprano igual, mismo resultado sobre el modal.
+    #[test]
+    fn cancel_mark_pattern_leaves_an_approval_modal_untouched() {
+        let mut app = app_with_entries(&["a.rs"]);
+        let approval = Modal::ApproveAgentOp {
+            req: norte_proto::methods::PolicyApprovalRequired {
+                approval_id: 7,
+                session: Some("s1".into()),
+                op: "copy".into(),
+                paths: vec!["mem:///proj/a".into(), "mem:///proj/b".into()],
+                ttl_ms: 60_000,
+            },
+        };
+        app.modal = Some(approval.clone());
+        // Silencia el hook de pánico por defecto: el panic se captura y se
+        // espera, no debe ensuciar la salida de este test con un backtrace.
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            app.cancel_mark_pattern();
+        }));
+        std::panic::set_hook(prev_hook);
+        assert!(
+            result.is_err(),
+            "el guard debe panicar en debug ante el mal uso"
+        );
+        assert_eq!(
+            app.modal,
+            Some(approval),
+            "an approval modal must not be closeable without a decision"
+        );
     }
 }
 

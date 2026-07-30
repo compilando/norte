@@ -24,6 +24,7 @@ modal-confirm-quit-body = Cierra la aplicación.
 modal-mark-pattern-add = Marcar por patrón
 modal-mark-pattern-remove = Desmarcar por patrón
 modal-mark-pattern-hint = glob, por ejemplo *.rs
+modal-mark-pattern-keys = [enter] confirmar · [esc] cancelar
 
 # --- Mensajes de la barra ---
 msg-done = hecho

@@ -855,15 +855,10 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
         Modal::TrustHostKey { .. } => 9,
         // Un mensaje largo con wrap (~4 líneas a 58 cols) + bordes.
         Modal::TrustLuaInit { .. } => 8,
-        // Patrón + hint (2 líneas) o + la línea de error (3), más bordes
-        // (#103 T9: mismo cómputo `body_lines + 3` que el resto).
-        Modal::MarkPattern { error, .. } => {
-            if error.is_some() {
-                6
-            } else {
-                5
-            }
-        }
+        // Patrón + hint + teclas (3 líneas) o + la línea de error (4), más
+        // bordes (#103 T9: mismo cómputo `body_lines + 3` que el resto).
+        // Sin error cae al comodín `6` de abajo (match_same_arms).
+        Modal::MarkPattern { error: Some(_), .. } => 7,
         _ => 6,
     }
 }
@@ -1071,8 +1066,25 @@ fn approval_modal_text(
 /// mensaje (rustdoc de `PatternError::Glob`) — el enmascarado alcanza
 /// también a la línea de error.
 fn mark_pattern_modal_text(mark: bool, pattern: &str, error: Option<&str>) -> (String, String) {
-    let (masked, _) = display_name(pattern.as_bytes());
-    let mut lines = vec![format!("{masked}_"), t("modal-mark-pattern-hint")];
+    let (masked, hostil) = display_name(pattern.as_bytes());
+    // #103 T9 review MINOR: `PaneState::mark_glob` compila el patrón CRUDO,
+    // no el enmascarado — aquí el display difiere de verdad de lo que
+    // decide el match, así que un patrón hostil lleva el mismo badge que un
+    // nombre de fichero hostil (mismo idioma que `draw_search_dialog`'s
+    // root line).
+    let campo = if hostil {
+        format!("{HOSTILE_BADGE} {masked}_")
+    } else {
+        format!("{masked}_")
+    };
+    // #103 T9 review MINOR: este modal no pasa por `DialogHints` (texto
+    // libre, sin ALLOWLIST que generar un pie de página) — como
+    // `search-hint`/`palette-hint`, sus teclas van fijas en Fluent.
+    let mut lines = vec![
+        campo,
+        t("modal-mark-pattern-hint"),
+        t("modal-mark-pattern-keys"),
+    ];
     if let Some(err) = error {
         let (masked_err, _) = display_name(err.as_bytes());
         lines.push(masked_err);
@@ -1083,6 +1095,43 @@ fn mark_pattern_modal_text(mark: bool, pattern: &str, error: Option<&str>) -> (S
         t("modal-mark-pattern-remove")
     };
     (title, lines.join("\n"))
+}
+
+#[cfg(test)]
+mod mark_pattern_modal_text_tests {
+    use super::mark_pattern_modal_text;
+
+    /// Review MAJOR M4: `mark_pattern_modal_text` es pura — testear el
+    /// enmascarado directamente en vez de a través de un buffer
+    /// `TestBackend`, donde el renderer de párrafo de ratatui se COME los
+    /// grafemas de ancho cero: U+202E jamás sobrevive AHÍ, enmascarado o
+    /// no, así que una aserción de test de render contra él no puede fallar
+    /// nunca (la clase de bug que motivó este test). Un patrón Y un error
+    /// que llevan un RLO crudo deben salir enmascarados los DOS: ni un
+    /// U+202E sobrevive, y U+FFFD aparece exactamente dos veces — una por
+    /// línea enmascarada.
+    #[test]
+    fn masks_a_raw_rtl_override_in_both_the_pattern_and_the_error() {
+        let hostile = "abc\u{202E}gpj.exe";
+        let (_, cuerpo) = mark_pattern_modal_text(true, hostile, Some(hostile));
+        assert!(
+            !cuerpo.contains('\u{202E}'),
+            "raw RTL override must not survive: {cuerpo:?}"
+        );
+        assert_eq!(
+            cuerpo.matches('\u{FFFD}').count(),
+            2,
+            "one U+FFFD per masked line (pattern + error): {cuerpo:?}"
+        );
+    }
+
+    /// Sin error, solo la línea del patrón se enmascara: un solo U+FFFD.
+    #[test]
+    fn masks_only_the_pattern_line_when_there_is_no_error() {
+        let hostile = "abc\u{202E}gpj.exe";
+        let (_, cuerpo) = mark_pattern_modal_text(true, hostile, None);
+        assert_eq!(cuerpo.matches('\u{FFFD}').count(), 1);
+    }
 }
 
 /// Texto `(título, cuerpo)` del modal TOFU (#45). host/algo/fingerprint
@@ -1608,7 +1657,16 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
             Some(enc) => format!("  {}", ta("status-names-encoding", &[("enc", enc.label())])),
             None => String::new(),
         };
-        format!(" {marca}{dir_texto}{pos_total}{marked}{pruned}{omitidas}{nombres}{seq}")
+        // Review MAJOR M3: los AVISOS (`omitidas` — listado incompleto,
+        // "jamás silencioso" — y `nombres` — el badge de reinterpretación,
+        // "el usuario debe saberlo en todo momento") van ANTES que el
+        // contador informativo de marcas. La línea no tiene presupuesto de
+        // ancho y ratatui recorta la cola: con `marked`/`pruned` primero (25+
+        // celdas fácil) un path largo a 80 columnas empujaba el badge de
+        // encoding fuera del recorte. Deuda real (#103): un presupuesto de
+        // ancho que elipsise `dir_texto` para que NINGÚN campo posterior se
+        // recorte jamás, en vez de solo reordenar por prioridad.
+        format!(" {marca}{dir_texto}{pos_total}{omitidas}{nombres}{pruned}{marked}{seq}")
     };
     frame.render_widget(
         Paragraph::new(text).style(app.theme.role(Role::StatusBar)),

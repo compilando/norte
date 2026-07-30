@@ -1088,7 +1088,7 @@ async fn run(
                                         ));
                                     }
                                 }
-                                KeyCode::Esc if plain => app.close_modal(),
+                                KeyCode::Esc if plain => app.cancel_mark_pattern(),
                                 _ => {}
                             }
                             continue;
@@ -3629,23 +3629,28 @@ async fn dispatch(
 ///   de match) fuera de alcance de esta tarea.
 ///
 /// Así que esto pinea la propiedad MÁS DÉBIL que SÍ es alcanzable sin
-/// ejecutar ni reescribir `dispatch`: cada nombre de `COMMANDS` aparece como
-/// LITERAL DE CADENA dentro del cuerpo fuente real de la función (extraído
-/// de este mismo fichero por conteo de llaves desde la firma). Cubre
-/// EXACTAMENTE la clase de bug que motivó esta tarea — un comando de
-/// `COMMANDS` sin ningún string coincidente en el cuerpo, como
-/// `mark.pattern-add` antes de este commit.
+/// ejecutar ni reescribir `dispatch`: cada nombre de `COMMANDS` aparece
+/// dentro del cuerpo fuente real de la función (extraído de este mismo
+/// fichero por conteo de llaves desde la firma) en una línea de la forma
+/// `"cmd" => ...` — no basta con que el nombre aparezca en cualquier parte
+/// (review MAJOR M5: un nombre mencionado solo en un comentario colaba
+/// antes). Cubre EXACTAMENTE la clase de bug que motivó esta tarea — un
+/// comando de `COMMANDS` sin ningún brazo, como `mark.pattern-add` antes de
+/// aquel commit.
 ///
-/// Lo que NO cubre, a propósito documentado: que el literal encontrado sea
-/// código VIVO (uno que solo viviera dentro de un comentario colaría); que
-/// el brazo sea semánticamente correcto (cosa de sus propios tests); ni que
-/// el comando no caiga por accidente en el brazo de OTRO (un typo que
-/// coincida con un string ajeno no se detecta). El conteo de llaves asume
-/// que las llaves DENTRO de los literales de cadena del cuerpo están
-/// balanceadas — cierto hoy (el único caso, el format string del propio
-/// comodín `"...: {cmd}"`, es 1 abre + 1 cierra) pero no está garantizado
-/// para siempre; un desbalance futuro haría panicar la extracción con un
-/// mensaje claro, jamás pasar en silencio.
+/// Lo que NO cubre, a propósito documentado: que el brazo sea
+/// semánticamente correcto (cosa de sus propios tests); ni que el comando
+/// no caiga por accidente en el brazo de OTRO (un typo que coincida con un
+/// string ajeno no se detecta). El conteo de llaves asume que las llaves
+/// DENTRO de los literales de cadena del cuerpo están balanceadas — cierto
+/// hoy (el único caso, el format string del propio comodín `"...: {cmd}"`,
+/// es 1 abre + 1 cierra) pero no está garantizado para siempre; la
+/// sanity-check de `dispatch_body` (cabeza Y cola de la extracción, review
+/// M5) hace que un desbalance futuro panique RUIDOSO en vez de comprobar en
+/// silencio un cuerpo truncado.
+///
+/// El fix real — convertir esto en un error de compilación en vez de un
+/// escaneo de texto — está fuera de alcance aquí: issue #112.
 #[cfg(test)]
 mod command_dispatch_tests {
     use super::COMMANDS;
@@ -3654,6 +3659,16 @@ mod command_dispatch_tests {
     /// de apertura hasta el `}` que la cierra (conteo de llaves: sin tirar
     /// de `syn` para un solo test, regla 8 de CLAUDE.md — nueva dependencia
     /// solo se justifica con un uso real).
+    ///
+    /// `SRC.find("async fn dispatch(")` toma la PRIMERA ocurrencia — y el
+    /// fichero ya tiene TRES: la firma real (arriba, T9), esta misma
+    /// rustdoc y el string literal del propio `.find(...)` de abajo. Hoy el
+    /// orden textual salva la extracción (la firma real es la primera de
+    /// las tres). Mover este módulo de test POR ENCIMA de `dispatch`
+    /// invertiría el orden: el `.find` engancharía con su PROPIO string
+    /// literal (el primero en aparecer en el fichero) y la extracción
+    /// apuntaría a texto sin sentido, en silencio — el módulo debe quedarse
+    /// DEBAJO de la firma real.
     fn dispatch_body() -> &'static str {
         const SRC: &str = include_str!("main.rs");
         let sig = SRC
@@ -3676,26 +3691,40 @@ mod command_dispatch_tests {
         panic!("cuerpo de dispatch sin cierre (conteo de llaves desbalanceado)");
     }
 
+    /// Review MAJOR M5 (dos agujeros cerrados):
+    ///
+    /// (a) exigir que el literal viva en una línea que TAMBIÉN contenga
+    /// `=>` — un nombre de comando mencionado solo en un comentario ya no
+    /// basta.
+    ///
+    /// (b) sanity de la COLA de la extracción, no solo de la cabeza: el
+    /// cuerpo debe llegar hasta el comodín final (`comando validado sin
+    /// brazo`) — un conteo de llaves mal cerrado por algún cambio futuro
+    /// falla RUIDOSO aquí en vez de comprobar en silencio un cuerpo
+    /// truncado.
     #[test]
-    fn every_command_has_a_matching_string_literal_in_dispatch() {
+    fn every_command_has_a_matching_arm_literal_in_dispatch() {
         let body = dispatch_body();
-        // Sanity: la extracción encontró el cuerpo REAL, no un prefijo
-        // vacío o cortado en falso por algún string con llaves.
         assert!(
-            body.contains("\"cursor.up\"") && body.contains("cd_outcome"),
+            body.contains("\"cursor.up\" =>") && body.contains("comando validado sin brazo"),
             "extracción de dispatch_body sospechosa: {} bytes",
             body.len()
         );
         let missing: Vec<&str> = COMMANDS
             .iter()
             .copied()
-            .filter(|cmd| !body.contains(&format!("\"{cmd}\"")))
+            .filter(|cmd| {
+                let needle = format!("\"{cmd}\"");
+                !body
+                    .lines()
+                    .any(|line| line.contains(&needle) && line.contains("=>"))
+            })
             .collect();
         assert!(
             missing.is_empty(),
-            "COMMANDS sin literal coincidente en el cuerpo de dispatch — \
-             pulsarlos hoy panica el comodín en debug (y es un no-op en \
-             release): {missing:?}"
+            "COMMANDS sin brazo `\"cmd\" => ...` en dispatch — pulsarlos \
+             hoy panica el comodín en debug (y es un no-op en release): \
+             {missing:?}"
         );
     }
 }

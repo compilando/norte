@@ -28,7 +28,10 @@ pub enum PatternError {
     /// EMBEDS the user's pattern verbatim — a frontend MUST mask it before
     /// painting it (`display_name`), exactly as it masks a file name: a
     /// pattern arrives by paste as easily as by typing, and can carry bidi
-    /// overrides or invisibles.
+    /// overrides or invisibles. It quotes the FOLDED pattern
+    /// ([`PaneState::mark_glob`] lowercases and NFC-normalises via
+    /// `nav::fold` before compiling), not what the user typed — `ABC[`
+    /// reports `'abc['`, text the user never typed.
     #[error("{0}")]
     Glob(String),
 }
