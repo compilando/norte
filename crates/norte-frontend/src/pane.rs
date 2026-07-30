@@ -114,6 +114,17 @@ fn unicode_glob_regex(glob: &globset::Glob) -> Result<String, PatternError> {
     Ok(out)
 }
 
+/// ¿Entrada oculta? (#107): decisión por BYTES del ÚLTIMO segmento — la
+/// regla 1 manda — con el criterio unix del `.` (0x2E) inicial. `a.txt` no
+/// lo es; un nombre no-UTF8 que empieza por 0x2E sí. El atributo hidden de
+/// Windows llegará por los attrs del wire (proto 0.30) cuando algún
+/// provider lo anuncie.
+fn is_hidden_entry(e: &Entry) -> bool {
+    e.path
+        .file_name()
+        .is_some_and(|n| n.as_bytes().first() == Some(&b'.'))
+}
+
 /// Estado no-render de un pane: directorio, entradas (normalizadas
 /// internamente — ya no exige orden previo del caller, ver [`PaneState::new`]),
 /// cursor y quick search.
@@ -173,6 +184,17 @@ pub struct PaneState {
     /// [`Self::set_listing`], case o no case con una entrada del listado.
     /// Identidad por `VPath` byte-exacto, igual que la memoria.
     pending_focus: Option<VPath>,
+    /// Mostrar entradas ocultas (#107). `true` por defecto (el constructor
+    /// no sabe de config; el frontend fija el default de `[ui] show_hidden`
+    /// con [`Self::set_show_hidden`] tras construir). SOLO presentación
+    /// (regla 7 al revés: la decisión vive aquí, compartida, y el provider
+    /// sigue listando todo).
+    show_hidden: bool,
+    /// Entradas apartadas por la ocultación (#107): las de último segmento
+    /// con `.` inicial cuando `show_hidden == false`. Se devuelven al
+    /// listado (merge ordenado) al volver a mostrar — apartar, no tirar,
+    /// para que el toggle no necesite re-listar. Vacío con `show_hidden`.
+    hidden_stash: Vec<Entry>,
     /// Decoraciones de plugin por entrada (G3b, ADR 0037), YA saneadas
     /// ([`crate::decoration::sanitize_decoration`]): badge/rol de la
     /// entrada, si algún decorator consentido decoró esta ruta. Se llena de
@@ -212,8 +234,90 @@ impl PaneState {
             skipped: None,
             cursor_memory: Vec::new(),
             pending_focus: None,
+            show_hidden: true,
+            hidden_stash: Vec::new(),
             decorations: HashMap::new(),
         }
+    }
+
+    /// ¿Se muestran las entradas ocultas? (#107)
+    #[must_use]
+    pub fn show_hidden(&self) -> bool {
+        self.show_hidden
+    }
+
+    /// Cuántas entradas del listado actual están APARTADAS por la
+    /// ocultación (#107). 0 con [`Self::show_hidden`] activo. El pie del
+    /// pane lo pinta con la misma disciplina que `skipped`: un listado que
+    /// enseña menos de lo que hay jamás es silencioso.
+    #[must_use]
+    pub fn hidden_count(&self) -> usize {
+        self.hidden_stash.len()
+    }
+
+    /// Fija la visibilidad de ocultos (#107). Mostrar devuelve el stash al
+    /// listado por el MISMO camino que un lote paginado ([`Self::extend`]:
+    /// merge ordenado, cursor re-anclado por path, quick re-aplicado).
+    /// Ocultar aparta los dotfiles, re-ancla el cursor por path (clamp si
+    /// estaba sobre uno) y PODA sus marcas con el contador de
+    /// [`Self::pruned_marks`] — la misma regla que `refill`: una selección
+    /// que alimenta un bulk op jamás encoge en silencio.
+    pub fn set_show_hidden(&mut self, show: bool) {
+        if show == self.show_hidden {
+            return;
+        }
+        self.show_hidden = show;
+        if show {
+            let stash = std::mem::take(&mut self.hidden_stash);
+            self.extend(stash);
+            return;
+        }
+        let anchor = self.entries.get(self.cursor).map(|e| e.path.clone());
+        let quick_prev = self.quick_selected_path();
+        let mut kept = Vec::with_capacity(self.entries.len());
+        let mut kept_keys = Vec::with_capacity(self.sort_keys.len());
+        // Partición manteniendo `sort_keys` índice-paralela (#54): un
+        // retain solo sobre `entries` las desalinearía.
+        for (entry, key) in std::mem::take(&mut self.entries)
+            .into_iter()
+            .zip(std::mem::take(&mut self.sort_keys))
+        {
+            if is_hidden_entry(&entry) {
+                self.hidden_stash.push(entry);
+            } else {
+                kept.push(entry);
+                kept_keys.push(key);
+            }
+        }
+        self.entries = kept;
+        self.sort_keys = kept_keys;
+        self.cursor = anchor
+            .and_then(|p| self.entries.iter().position(|e| e.path == p))
+            .unwrap_or_else(|| self.cursor.min(self.entries.len().saturating_sub(1)));
+        self.pruned_marks = self.prune_marks();
+        if let Some(q) = &mut self.quick {
+            q.refresh(&self.entries, quick_prev.as_ref());
+        }
+        self.quick_sync_jump();
+    }
+
+    /// Toggle de [`Self::set_show_hidden`]; devuelve el estado nuevo.
+    pub fn toggle_hidden(&mut self) -> bool {
+        self.set_show_hidden(!self.show_hidden);
+        self.show_hidden
+    }
+
+    /// Aparta de `entries` las ocultas hacia el stash si la ocultación está
+    /// activa (#107); passthrough si no. Para los puntos de INGESTIÓN
+    /// ([`Self::set_listing`], [`Self::extend`], [`Self::refill`]).
+    fn stash_hidden(&mut self, entries: Vec<Entry>) -> Vec<Entry> {
+        if self.show_hidden {
+            return entries;
+        }
+        let (hidden, visible): (Vec<Entry>, Vec<Entry>) =
+            entries.into_iter().partition(is_hidden_entry);
+        self.hidden_stash.extend(hidden);
+        visible
     }
 
     /// Reinterpretación de nombres activa (#57): los renders pintan con ella
@@ -281,6 +385,10 @@ impl PaneState {
     /// ([`Self::remember_cursor`]) para el `dir` nuevo, con clamp; (3) si
     /// ninguna aplica, 0 — el comportamiento de siempre.
     pub fn set_listing(&mut self, dir: VPath, entries: Vec<Entry>) {
+        // #107: stash del listado ANTERIOR fuera; el nuevo se filtra al
+        // entrar si la ocultación está activa.
+        self.hidden_stash.clear();
+        let entries = self.stash_hidden(entries);
         let (entries, sort_keys) = crate::sort::sort_with_keys(entries);
         self.dir = dir;
         self.entries = entries;
@@ -337,6 +445,7 @@ impl PaneState {
         self.marks.clear();
         self.pruned_marks = 0;
         self.skipped = None;
+        self.hidden_stash.clear(); // #107: era del listado anterior
         self.decorations.clear();
     }
 
@@ -887,6 +996,9 @@ impl PaneState {
     /// al PATH seleccionado (clamp por índice si desapareció) y RE-APLICA el
     /// quick por path. Lote vacío = no-op. (#82)
     pub fn extend(&mut self, batch: Vec<Entry>) {
+        // #107: las ocultas del lote se apartan ANTES del merge — un lote
+        // que queda vacío tras el filtro sigue alimentando el stash.
+        let batch = self.stash_hidden(batch);
         if batch.is_empty() {
             return;
         }
@@ -916,6 +1028,10 @@ impl PaneState {
     /// marks it omits.
     pub fn refill(&mut self, entries: Vec<Entry>) {
         let quick_prev = self.quick_selected_path();
+        // #107: el refill trae el listado COMPLETO del dir — el stash se
+        // reconstruye fresco de él, nunca se acumula con el anterior.
+        self.hidden_stash.clear();
+        let entries = self.stash_hidden(entries);
         let (entries, sort_keys) = crate::sort::sort_with_keys(entries);
         self.cursor = self.cursor.min(entries.len().saturating_sub(1));
         self.entries = entries;
@@ -966,6 +1082,141 @@ mod tests {
             .map(|n| e(&format!("mem:///{n}"), EntryKind::File))
             .collect();
         PaneState::new(VPath::parse("mem:///").unwrap(), es)
+    }
+
+    /// #107: ocultar es PRESENTACIÓN — el provider lista todo, el pane
+    /// aparta las de punto inicial a un stash y las devuelve al mostrar,
+    /// mezcladas en orden (reusa `extend`). Solo el ÚLTIMO segmento
+    /// decide: `a.txt` no es oculto.
+    #[test]
+    fn ocultar_aparta_los_dotfiles_y_mostrar_los_devuelve_en_orden() {
+        let mut p = pane(&[".git", "a.txt", ".hidden", "b"]);
+        assert_eq!(p.entries().len(), 4);
+        assert!(p.show_hidden(), "default: se muestra todo");
+        p.set_show_hidden(false);
+        let names: Vec<_> = p.entries().iter().map(|e| e.path.clone()).collect();
+        assert_eq!(
+            names,
+            vec![
+                VPath::parse("mem:///a.txt").unwrap(),
+                VPath::parse("mem:///b").unwrap()
+            ],
+            "solo el último segmento con '.' inicial se oculta"
+        );
+        assert_eq!(p.hidden_count(), 2);
+        p.set_show_hidden(true);
+        assert_eq!(p.entries().len(), 4, "mostrar restaura TODAS");
+        assert_eq!(p.hidden_count(), 0);
+        // Y el orden vuelve a ser el canónico (merge, no append).
+        let first = p.entries().first().map(|e| e.path.clone());
+        assert_eq!(first, Some(VPath::parse("mem:///.git").unwrap()));
+    }
+
+    #[test]
+    fn un_listado_nuevo_bajo_ocultacion_filtra_al_entrar() {
+        let mut p = pane(&["x"]);
+        p.set_show_hidden(false);
+        p.set_listing(
+            VPath::parse("mem:///sub").unwrap(),
+            vec![
+                e("mem:///sub/.env", EntryKind::File),
+                e("mem:///sub/main.rs", EntryKind::File),
+            ],
+        );
+        assert_eq!(p.entries().len(), 1);
+        assert_eq!(p.hidden_count(), 1);
+        p.set_show_hidden(true);
+        assert_eq!(p.entries().len(), 2);
+    }
+
+    #[test]
+    fn un_fill_paginado_bajo_ocultacion_aparta_el_lote() {
+        let mut p = pane(&["a"]);
+        p.set_show_hidden(false);
+        p.set_loading(true);
+        p.extend(vec![
+            e("mem:///.b", EntryKind::File),
+            e("mem:///c", EntryKind::File),
+        ]);
+        assert_eq!(p.entries().len(), 2, "a + c");
+        assert_eq!(p.hidden_count(), 1);
+        // Un lote SOLO de ocultas no rompe nada.
+        p.extend(vec![e("mem:///.d", EntryKind::File)]);
+        assert_eq!(p.entries().len(), 2);
+        assert_eq!(p.hidden_count(), 2);
+    }
+
+    /// Ocultar PODA las marcas de las entradas que desaparecen de la vista
+    /// (misma disciplina que `refill`, #103): una selección invisible
+    /// alimentando el siguiente F8 es exactamente el hazard que el
+    /// contador `pruned_marks` existe para hacer ruidoso.
+    #[test]
+    fn ocultar_poda_las_marcas_de_los_dotfiles_y_lo_reporta() {
+        let mut p = pane(&[".secret", "a"]);
+        p.mark_all();
+        assert_eq!(p.marks_len(), 2);
+        p.set_show_hidden(false);
+        assert_eq!(p.marks_len(), 1, "la marca de .secret cae");
+        assert_eq!(p.pruned_marks(), 1, "y JAMÁS en silencio");
+        assert_eq!(p.marked_paths(), vec![VPath::parse("mem:///a").unwrap()]);
+    }
+
+    #[test]
+    fn ocultar_reancla_el_cursor_por_path() {
+        let mut p = pane(&[".a", ".b", "c"]);
+        p.cursor_down();
+        p.cursor_down(); // "c"
+        p.set_show_hidden(false);
+        assert_eq!(p.entries().len(), 1);
+        assert_eq!(p.cursor(), 0);
+        assert_eq!(
+            p.selected().map(|e| e.path.clone()),
+            Some(VPath::parse("mem:///c").unwrap()),
+            "el cursor sigue sobre la MISMA entrada visible"
+        );
+    }
+
+    #[test]
+    fn refill_bajo_ocultacion_reemplaza_el_stash_sin_duplicar() {
+        let mut p = pane(&[".a", "b"]);
+        p.set_show_hidden(false);
+        assert_eq!(p.hidden_count(), 1);
+        p.refill(vec![
+            e("mem:///.a", EntryKind::File),
+            e("mem:///.z", EntryKind::File),
+            e("mem:///b", EntryKind::File),
+        ]);
+        assert_eq!(p.entries().len(), 1);
+        assert_eq!(p.hidden_count(), 2, "stash FRESCO del refill, sin dup");
+        p.set_show_hidden(true);
+        assert_eq!(p.entries().len(), 3, "sin duplicados tras mostrar");
+    }
+
+    /// Regla 1: la decisión es por BYTES del último segmento — un nombre
+    /// no-UTF8 que empieza por `.` (0x2E) se oculta igual; uno hostil que
+    /// no, sigue visible.
+    #[test]
+    fn ocultar_decide_por_bytes_no_por_texto() {
+        let dir = VPath::parse("mem:///").unwrap();
+        let dot_hostile = dir
+            .clone()
+            .join(norte_proto::Segment::new(b".\xff\xfe".to_vec()).unwrap());
+        let plain_hostile = dir
+            .clone()
+            .join(norte_proto::Segment::new(b"\xff\xfe".to_vec()).unwrap());
+        let mk = |p: &VPath| Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: p.clone(),
+            kind: EntryKind::File,
+            size: None,
+            mtime_ms: None,
+        };
+        let mut p = PaneState::new(dir, vec![mk(&dot_hostile), mk(&plain_hostile)]);
+        p.set_show_hidden(false);
+        assert_eq!(p.entries().len(), 1);
+        assert_eq!(p.entries()[0].path, plain_hostile);
+        p.set_show_hidden(true);
+        assert_eq!(p.entries().len(), 2, "los bytes vuelven intactos");
     }
 
     #[test]
