@@ -2315,10 +2315,11 @@ impl NorteGui {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let bytes = entry.path.file_name().map_or(&b""[..], Segment::as_bytes);
-        let mut label = row_label(bytes, entry.kind);
-        if marked {
-            label = format!("{MARK_MARKER} {label}");
-        }
+        // #111: el marcador vive en un canalón propio (abajo), no en el
+        // label — el nombre accesible queda limpio (`aria_toggled` ya
+        // lleva el estado de marca a AT) y el nombre no salta de columna
+        // al marcar.
+        let label = row_label(bytes, entry.kind);
         let color = entry_color(&self.theme, entry, self.effects.and_then(|e| e.glow));
         let dir_target = (entry.kind == EntryKind::Dir).then(|| entry.path.clone());
 
@@ -2373,6 +2374,19 @@ impl NorteGui {
             .flex()
             .flex_row()
             .items_center()
+            // Canalón de marca (#111): pista TEXTUAL además del fondo —
+            // el equivalente del `*` del gutter de la TUI, que no depende
+            // de percibir el matiz. Ancho FIJO y presente SIEMPRE (vacío
+            // sin marca), para que marcar no desplace el nombre; el color
+            // sale de `Role::Mark` como en la TUI, con fallback propio
+            // legible sobre `mark_bg`.
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(14.0))
+                    .text_color(chrome_mark_fg(&self.theme))
+                    .child(SharedString::from(if marked { MARK_MARKER } else { "" })),
+            )
             .child(div().flex_1().truncate().child(SharedString::from(label)));
         if let Some((badge_text, badge_color)) = decoration_badge {
             row = row.child(
@@ -4125,6 +4139,9 @@ const QUICK_FG: u32 = 0xfbbf24;
 /// Fondo de una fila MARCADA (distinto de `SEL_BG`, que es la selección bajo
 /// cursor — marca y selección son ortogonales, ver `render_row`).
 const MARK_BG: u32 = 0x3d3315;
+/// Fallback del GLIFO de marca del canalón (#111): ámbar que lee bien
+/// sobre `MARK_BG` y sobre el fondo del pane.
+const MARK_FG: u32 = 0xd7af5f;
 
 /// Color de chrome del tema, con la constante pre-C2 como fallback: SOLO el
 /// canal que el tema deja sin declarar para el rol cae al valor histórico —
@@ -4135,6 +4152,14 @@ fn chrome(theme: &Theme, role: Role, fg: bool, fallback: u32) -> gpui::Rgba {
     let style = theme.style(role);
     let c = if fg { style.fg } else { style.bg };
     c.map_or(gpui::rgb(fallback), theme_map::to_gpui_rgba)
+}
+
+/// Color del glifo del canalón de marca (#111): el `fg` de [`Role::Mark`]
+/// del tema, con fallback ámbar legible sobre [`MARK_BG`]. Función y no un
+/// campo de `ChromeColors` porque solo lo usa el canalón — el struct pinea
+/// sus campos en tests y crecerlo por un único caller no compra nada.
+fn chrome_mark_fg(theme: &Theme) -> gpui::Rgba {
+    chrome(theme, Role::Mark, true, MARK_FG)
 }
 
 /// Tipografía resuelta para la sesión (GP; corregido en la revisión final del
@@ -4900,16 +4925,16 @@ mod tests {
     use super::effects;
     use super::{
         BANNER_DETAIL_MAX_CHARS, BG, BORDER_FOCUS, BORDER_UNFOCUS, ERR_FG, FG, HEADER_BG, MARK_BG,
-        PANE_BG, PANE_BG_FOCUS, QUICK_FG, SEL_BG,
+        MARK_FG, PANE_BG, PANE_BG_FOCUS, QUICK_FG, SEL_BG,
     };
     use super::{
         ChromeColors, ConfirmQuit, FontSet, ImagePreview, affected_dirs, apply_viewer_command,
-        banner_safe, confirm_quit_should_open, confirm_quit_task_count, decoration_badge_color,
-        first_cancelable, flicker_factor, flicker_scale, generation_is_current, glowed,
-        has_pending_work, image_preview_from, image_status, keymap_error_detail,
-        modal_footer_colors, modal_panel_colors, modal_title_colors, motion_active, pending_hint,
-        retain_active, row_label, styled_span_color, task_at_cursor, theme_map,
-        unknown_preset_banner, validated_family, viewer_header, viewer_status,
+        banner_safe, chrome_mark_fg, confirm_quit_should_open, confirm_quit_task_count,
+        decoration_badge_color, first_cancelable, flicker_factor, flicker_scale,
+        generation_is_current, glowed, has_pending_work, image_preview_from, image_status,
+        keymap_error_detail, modal_footer_colors, modal_panel_colors, modal_title_colors,
+        motion_active, pending_hint, retain_active, row_label, styled_span_color, task_at_cursor,
+        theme_map, unknown_preset_banner, validated_family, viewer_header, viewer_status,
     };
     use gpui::rgb;
     use norte_frontend::viewer::Viewer;
@@ -5980,6 +6005,20 @@ mod tests {
         // Par quick-search: match empareja texto oscuro sobre resaltado dorado.
         assert_eq!(c.quick_fg, gpui::rgb(0x1c1c1c), "match.fg");
         assert_eq!(c.quick_bg, gpui::rgb(0xd7af5f), "match.bg");
+    }
+
+    /// Glifo del canalón de marca (#111): el preset `default` declara solo
+    /// `mark.bg`, así que el glifo cae al fallback ámbar `MARK_FG`; un tema
+    /// que declara `mark.fg` lo reemplaza.
+    #[test]
+    fn el_glifo_de_marca_resuelve_fg_del_tema_o_fallback() {
+        let d = norte_theme::Theme::preset_default();
+        assert_eq!(chrome_mark_fg(&d), gpui::rgb(MARK_FG));
+        let t = norte_theme::Theme::from_toml(
+            "name = \"x\"\n[roles]\nmark = { fg = \"#ff00ff\", bg = \"#101010\" }\n",
+        )
+        .expect("tema con mark.fg parsea");
+        assert_eq!(chrome_mark_fg(&t), gpui::rgb(0xff00ff));
     }
 
     /// Un tema mínimo que no declara `[roles]` dispara el fallback de
