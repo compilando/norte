@@ -36,6 +36,76 @@ pub enum PatternError {
     Glob(String),
 }
 
+/// Recompila el regex byte-mode de un [`globset::Glob`] en modo Unicode
+/// (#110): globset compila con `(?-u)`, donde `?` consume UN BYTE y una
+/// clase casa byte a byte — `a?o` no casaba `año` (ñ = 2 bytes) y `a[ñx]o`
+/// casaba `axo` pero JAMÁS `año`, marcando en silencio otro fichero que el
+/// nombrado. globset sigue siendo la ÚNICA autoridad de sintaxis (misma
+/// lib que `fs.search`): esto solo traduce su salida.
+///
+/// La traducción decodifica los runs de escapes `\xNN` con NN ≥ 0x80 —
+/// la ÚNICA forma en que globset emite los bytes no-ASCII del patrón
+/// (`&str`, así que los runs son SIEMPRE UTF-8 completo) — de vuelta a sus
+/// caracteres, que nunca son metacaracteres de regex y van literales tanto
+/// dentro como fuera de una clase. Un rango de clase con extremos
+/// multibyte (`[ñ-ü]` → `[\xc3\xb1-\xc3\xbc]`) también cae bien: el `-`
+/// ASCII corta el run y cada extremo decodifica a su char. `(?-u)` se pela
+/// del prefijo; `(?i)` sobrevive y pasa a ser case-folding Unicode (red de
+/// seguridad — el fold ya minusculiza ambos lados).
+///
+/// # Errors
+/// [`PatternError::Glob`] si un run decodificado no es UTF-8 válido — no
+/// debería ocurrir con la globset pineada (test de guardia
+/// `globset_regex_shape_is_the_one_this_translation_expects`); fail-loud
+/// antes que casar bytes que el usuario no escribió.
+fn unicode_glob_regex(glob: &globset::Glob) -> Result<String, PatternError> {
+    let src = glob.regex();
+    let stripped = src.strip_prefix("(?-u)").unwrap_or(src);
+    let mut out = String::with_capacity(stripped.len());
+    let mut run: Vec<u8> = Vec::new();
+    let flush = |run: &mut Vec<u8>, out: &mut String| -> Result<(), PatternError> {
+        if run.is_empty() {
+            return Ok(());
+        }
+        let decoded = std::str::from_utf8(run).map_err(|_| {
+            PatternError::Glob(
+                "internal: the glob compiled to byte escapes that do not \
+                 form UTF-8 characters"
+                    .to_owned(),
+            )
+        })?;
+        out.push_str(decoded);
+        run.clear();
+        Ok(())
+    };
+    let bytes = stripped.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\'
+            && i + 3 < bytes.len()
+            && bytes[i + 1] == b'x'
+            && let Ok(b) = u8::from_str_radix(&stripped[i + 2..i + 4], 16)
+            && b >= 0x80
+        {
+            run.push(b);
+            i += 4;
+            continue;
+        }
+        flush(&mut run, &mut out)?;
+        // Copia el resto tal cual — incluidos escapes ASCII (`\.`), cuyo
+        // significado es idéntico en modo Unicode.
+        let step = if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            1 + stripped[i + 1..].chars().next().map_or(0, char::len_utf8)
+        } else {
+            stripped[i..].chars().next().map_or(1, char::len_utf8)
+        };
+        out.push_str(&stripped[i..i + step]);
+        i += step;
+    }
+    flush(&mut run, &mut out)?;
+    Ok(out)
+}
+
 /// Estado no-render de un pane: directorio, entradas (normalizadas
 /// internamente — ya no exige orden previo del caller, ver [`PaneState::new`]),
 /// cursor y quick search.
@@ -582,10 +652,10 @@ impl PaneState {
     /// text the pane paints: [`crate::display_name_with`] additionally
     /// MASKS bidi overrides and invisibles to U+FFFD, which the fold does
     /// not — a name typed exactly as painted only matches if it is already
-    /// NFC, lowercase, and free of masked characters. `globset`'s own
-    /// `case_insensitive` only reaches ASCII (it compiles with the `(?-u)`
-    /// flag), so folding the pattern is what makes non-ASCII case and NFD
-    /// input match at all — kept on anyway as an ASCII safety net.
+    /// NFC, lowercase, and free of masked characters. Folding the pattern
+    /// is what makes NFD input match; the glob's `case_insensitive` — full
+    /// Unicode case-folding since the #110 recompile — stays on as a
+    /// safety net on top of the fold's lowercasing.
     ///
     /// A non-UTF-8 name's invalid bytes fold to U+FFFD and cannot be named
     /// INDIVIDUALLY — but typing U+FFFD in the pattern names ALL of them at
@@ -594,9 +664,9 @@ impl PaneState {
     /// [`Self::marked_paths`] returns each mark's original bytes untouched
     /// (hard rule 1).
     ///
-    /// `?` and a character class (`[...]`) count UTF-8 BYTES, not
-    /// characters — a consequence of the `(?-u)` byte-mode glob compiles in
-    /// (see issue #110): `a?o` does not match `año`, whose `ñ` is
+    /// `?` and a character class (`[...]`) count CHARACTERS (#110): the
+    /// glob's byte-mode regex is recompiled in Unicode mode
+    /// ([`unicode_glob_regex`]), so `a?o` matches `año` even though `ñ` is
     /// two bytes. Unmarking down to an empty set re-arms
     /// [`Self::marked_paths`]'s cursor fallback (it returns the entry under
     /// the cursor when no marks remain) — a caller must read the count this
@@ -612,15 +682,20 @@ impl PaneState {
         // (emite `(?-u)`), así que sin plegar la aguja un patrón NFD o una
         // mayúscula no-ASCII no casarían NADA en silencio.
         let folded = crate::nav::fold(pattern.as_bytes());
-        let matcher = GlobBuilder::new(&folded)
-            .case_insensitive(true) // red de seguridad ASCII; el fold hace el trabajo Unicode
+        let glob = GlobBuilder::new(&folded)
+            .case_insensitive(true) // red de seguridad; con el regex Unicode es case-folding real
             .backslash_escape(true) // si no, la semántica de `\` depende del SO (globset la
             // hace depender de `is_separator('\\')`, true en unix, false en
             // windows) — `\` es un byte de nombre legal en Linux (corpus
             // `win_backslash`) y el patrón debe casarlo igual en las dos.
             .build()
-            .map_err(|e| PatternError::Glob(e.to_string()))?
-            .compile_matcher();
+            .map_err(|e| PatternError::Glob(e.to_string()))?;
+        // Modo Unicode (#110): `?`/clases cuentan CARACTERES, no bytes.
+        // Los regex de glob son lineales y el motor de `regex` no
+        // backtrackea, así que no hay ReDoS que limitar aquí; el modal ya
+        // acota el patrón a 256 chars.
+        let matcher = regex::Regex::new(&unicode_glob_regex(&glob)?)
+            .map_err(|e| PatternError::Glob(e.to_string()))?;
         let enc = self.name_encoding;
         let mut changed = 0usize;
         for i in self.markable_indices() {
@@ -2520,12 +2595,50 @@ mod tests {
         assert_eq!(p2.marks_len(), 2);
     }
 
-    /// Byte-granularity pin (issue #110, KNOWN behaviour — not fixed here):
-    /// `globset` compiles `?`/character classes in `(?-u)` byte mode, so
-    /// they count UTF-8 BYTES, not characters. `ñ` is 2 bytes: a single-byte
-    /// wildcard or byte class never reaches it.
+    /// Guard for the #110 translation ([`unicode_glob_regex`]): pins the
+    /// SHAPE of globset's output that the byte-run decoding relies on —
+    /// the `(?-u)` prefix, and non-ASCII pattern bytes emitted as
+    /// consecutive `\xNN` escapes (also across a class range's `-`). A
+    /// globset upgrade that changes either fails HERE, loudly, instead of
+    /// letting patterns silently stop matching non-ASCII names.
     #[test]
-    fn mark_glob_matches_utf8_bytes_not_characters() {
+    fn globset_regex_shape_is_the_one_this_translation_expects() {
+        let build = |p: &str| {
+            GlobBuilder::new(p)
+                .case_insensitive(true)
+                .backslash_escape(true)
+                .build()
+                .unwrap()
+        };
+        assert!(build("a").regex().starts_with("(?-u)"));
+        let lit = build("a\u{f1}o").regex().to_owned();
+        assert!(lit.contains(r"\xc3\xb1"), "ñ as a byte-escape run: {lit}");
+        let class = build("[\u{f1}x]").regex().to_owned();
+        assert!(class.contains(r"[\xc3\xb1x]"), "class run: {class}");
+        let range = build("[\u{f1}-\u{fc}]").regex().to_owned();
+        assert!(
+            range.contains(r"\xc3\xb1-\xc3\xbc"),
+            "range endpoints as runs split by ASCII '-': {range}"
+        );
+
+        // And the translation of those shapes, end to end:
+        assert_eq!(
+            unicode_glob_regex(&build("a\u{f1}o")).unwrap(),
+            "(?i)^a\u{f1}o$"
+        );
+        assert_eq!(
+            unicode_glob_regex(&build("[\u{f1}-\u{fc}]")).unwrap(),
+            "(?i)^[\u{f1}-\u{fc}]$"
+        );
+    }
+
+    /// Character-granularity (#110, fixed): `?` consumes one CHARACTER and
+    /// a class matches char-wise — `a?o.txt` covers `año.txt`, and
+    /// `a[ñx]o.txt` covers both twins. globset alone compiles `(?-u)` byte
+    /// mode, where `ñ` is 2 bytes and both patterns silently marked a
+    /// DIFFERENT file than the one named.
+    #[test]
+    fn mark_glob_matches_characters_not_utf8_bytes() {
         let dir = VPath::parse("mem:///").unwrap();
         let anio = dir
             .clone()
@@ -2554,28 +2667,42 @@ mod tests {
         );
         assert_eq!(
             p.mark_glob("a?o.txt", true).unwrap(),
-            1,
-            "one byte-wildcard only covers axo.txt; ñ is 2 bytes"
+            2,
+            "one char-wildcard covers año.txt AND axo.txt"
         );
-        assert_eq!(p.marks_len(), 1);
-        assert_eq!(p.marked_paths(), vec![axo.clone()]);
+        assert_eq!(p.marks_len(), 2);
         p.clear_marks();
 
         assert_eq!(
             p.mark_glob("a??o.txt", true).unwrap(),
-            1,
-            "two byte-wildcards cover ñ's two bytes"
+            0,
+            "two wildcards are two CHARACTERS — neither 3-char name matches"
         );
-        assert_eq!(p.marks_len(), 1);
-        assert_eq!(p.marked_paths(), vec![anio]);
         p.clear_marks();
 
         assert_eq!(
             p.mark_glob("a[\u{f1}x]o.txt", true).unwrap(),
-            1,
-            "a byte class never matches a multi-byte char either"
+            2,
+            "a character class reaches a multi-byte char"
         );
-        assert_eq!(p.marks_len(), 1);
+        assert_eq!(p.marks_len(), 2);
+        p.clear_marks();
+
+        // A class RANGE spanning non-ASCII endpoints is char-wise too.
+        assert_eq!(
+            p.mark_glob("a[\u{f0}-\u{f2}]o.txt", true).unwrap(),
+            1,
+            "ñ (U+00F1) sits inside the U+00F0..U+00F2 range"
+        );
+        assert_eq!(p.marked_paths(), vec![anio]);
+        p.clear_marks();
+
+        // A NEGATED class over chars: `axo` has no ñ, `año` does.
+        assert_eq!(
+            p.mark_glob("a[!\u{f1}]o.txt", true).unwrap(),
+            1,
+            "negated char class excludes año.txt only"
+        );
         assert_eq!(p.marked_paths(), vec![axo]);
     }
 

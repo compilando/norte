@@ -33,6 +33,10 @@ norte-i18n.workspace = true
 # norte-core en fs.search, así que el patrón que el usuario aprende en la
 # búsqueda vale aquí. Ya está en el grafo (workspace dep), no entra nada nuevo.
 globset.workspace = true
+# Motor Unicode para el patrón de marcado (#110): el regex byte-mode de
+# globset se recompila char-wise (`?` = un carácter, no un byte). Ya está
+# en el grafo (workspace dep de norte-core), no entra nada nuevo.
+regex.workspace = true
 
 [dev-dependencies]
 norte-testkit.workspace = true
