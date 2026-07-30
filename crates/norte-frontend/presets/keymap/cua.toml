@@ -42,6 +42,7 @@ keymap = [
     { on = ["alt+f7"], run = "pane.search" },
     { on = ["alt+e"], run = "pane.names-encoding" },
     { on = ["ctrl+h"], run = "pane.toggle-hidden" },
+    { on = ["alt+."], run = "pane.toggle-hidden" },
     { on = ["ctrl+d"], run = "pane.hotlist" },
     { on = ["insert"], run = "mark.toggle" },
     { on = ["ctrl+a"], run = "mark.all" },

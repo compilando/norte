@@ -47,6 +47,13 @@ pub struct Pane {
     /// [`Pane::virtual_search`]; la barra lo pinta para el hit bajo el
     /// cursor. Se limpia al salir del modo virtual (cd/listado real).
     pub search_matches: std::collections::HashMap<VPath, norte_proto::methods::MatchInfo>,
+    /// Preferencia de ocultos del USUARIO (#107): el pane virtual de
+    /// búsqueda SUSPENDE el filtro (un hit es una petición EXPLÍCITA — un
+    /// `.env` buscado que desapareciera en silencio bajo `[ui] show_hidden
+    /// = false` es el MAJOR-1 del review), y al volver a un listado real se
+    /// restaura esto. Un Ctrl+H DENTRO del pane virtual actúa sobre los
+    /// resultados pero no toca la preferencia.
+    show_hidden_pref: bool,
 }
 
 /// Estado de presentación de una búsqueda viva (`Alt+F7`, liveSearch T6): el
@@ -81,6 +88,7 @@ impl Pane {
             search_state: SearchState::Running,
             search_error: None,
             search_matches: std::collections::HashMap::new(),
+            show_hidden_pref: true,
         }
     }
 
@@ -254,6 +262,9 @@ impl Pane {
     /// pane como virtual (la barra pinta `search-status-running`) y mata
     /// cualquier quick search vivo (filtraba OTRA cosa).
     pub fn begin_search(&mut self, root: VPath) {
+        // #107: los hits son EXPLÍCITOS — el filtro de ocultos se suspende
+        // en el pane virtual (la preferencia queda en `show_hidden_pref`).
+        self.state.set_show_hidden(true);
         self.state.set_listing(root, Vec::new());
         self.virtual_search = true;
         self.search_state = SearchState::Running;
@@ -268,6 +279,10 @@ impl Pane {
     /// Reemplaza el contenido tras un cd/refresh, reseteando el cursor.
     /// Un quick search vivo muere: filtraba OTRO listado.
     pub fn set_listing(&mut self, dir: VPath, entries: Vec<Entry>) {
+        // #107: al volver a un listado real, la preferencia de ocultos del
+        // usuario vuelve a mandar ANTES de ingerir (el filtro se aplica al
+        // entrar el listado).
+        self.state.set_show_hidden(self.show_hidden_pref);
         self.state.set_listing(dir, entries);
         self.virtual_search = false;
         self.search_matches.clear();
@@ -294,6 +309,9 @@ impl Pane {
         skipped: Option<u64>,
     ) {
         self.state.remember_cursor();
+        // #107: mismo restablecimiento que `set_listing` — este es el cd
+        // real paginado de la TUI.
+        self.state.set_show_hidden(self.show_hidden_pref);
         self.state.set_listing(dir, first_page);
         self.state.set_loading(more);
         self.virtual_search = false;
@@ -440,14 +458,21 @@ impl Pane {
         self.state.marked_paths()
     }
 
-    /// Toggle de ocultos (#107); devuelve el estado nuevo. Delegado puro.
+    /// Toggle de ocultos (#107); devuelve el estado nuevo. En el pane
+    /// virtual actúa sobre los RESULTADOS sin tocar la preferencia — al
+    /// volver a un listado real manda `show_hidden_pref`.
     pub fn toggle_hidden(&mut self) -> bool {
-        self.state.toggle_hidden()
+        let now = self.state.toggle_hidden();
+        if !self.virtual_search {
+            self.show_hidden_pref = now;
+        }
+        now
     }
 
-    /// Siembra la visibilidad de ocultos desde `[ui] show_hidden` (#107).
-    /// Delegado puro.
+    /// Siembra la visibilidad de ocultos desde `[ui] show_hidden` (#107):
+    /// fija la preferencia Y el estado actual.
     pub fn set_show_hidden(&mut self, show: bool) {
+        self.show_hidden_pref = show;
         self.state.set_show_hidden(show);
     }
 
@@ -2874,6 +2899,63 @@ mod tests {
             size: None,
             mtime_ms: None,
         }
+    }
+
+    /// #107 review MAJOR-1: los hits de una búsqueda son EXPLÍCITOS — el
+    /// pane virtual suspende el filtro de ocultos. Con `[ui] show_hidden =
+    /// false`, buscar "env" DEBE enseñar `.env`: tragárselo en silencio
+    /// (mientras el contador de hits decía 1 sobre un pane vacío) era el
+    /// bug. Al volver a un listado real, la preferencia vuelve a mandar.
+    #[test]
+    fn el_pane_virtual_de_busqueda_ensena_hits_ocultos() {
+        let mut p = Pane::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///.env", EntryKind::File),
+                e("mem:///a", EntryKind::File),
+            ],
+        );
+        p.set_show_hidden(false); // seed de config: ocultar
+        assert_eq!(p.entries().len(), 1, "el listado real filtra");
+
+        p.begin_search(VPath::parse("mem:///").unwrap());
+        p.extend_listing(vec![e("mem:///sub/.env", EntryKind::File)]);
+        assert_eq!(
+            p.entries().len(),
+            1,
+            "el hit oculto ES visible en el pane virtual"
+        );
+
+        // Ctrl+H dentro del pane virtual filtra los RESULTADOS…
+        p.toggle_hidden();
+        assert_eq!(p.entries().len(), 0);
+
+        // …pero NO toca la preferencia: el listado real vuelve filtrando
+        // (y un toggle en el real sí la cambia).
+        p.set_listing(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///.env", EntryKind::File),
+                e("mem:///a", EntryKind::File),
+            ],
+        );
+        assert_eq!(p.entries().len(), 1, "la preferencia (ocultar) manda");
+        p.toggle_hidden();
+        assert_eq!(p.entries().len(), 2, "toggle real: mostrar");
+        p.begin_listing(
+            VPath::parse("mem:///sub").unwrap(),
+            vec![
+                e("mem:///sub/.git", EntryKind::Dir),
+                e("mem:///sub/x", EntryKind::File),
+            ],
+            false,
+            None,
+        );
+        assert_eq!(
+            p.entries().len(),
+            2,
+            "begin_listing respeta la preferencia nueva (mostrar)"
+        );
     }
 
     /// #103 review MAJOR-4: `Pane` delega la API de marcas en `PaneState`

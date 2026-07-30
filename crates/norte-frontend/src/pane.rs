@@ -405,6 +405,11 @@ impl PaneState {
         // `VPath` byte-exacto de OTRO dir) — un listado nuevo las invalida.
         self.decorations.clear();
 
+        // #107 review MINOR-1 (aceptado): el hint se resuelve contra el
+        // listado YA filtrado — volver del interior de un dir oculto con la
+        // ocultación activa pierde el foco (cae a memoria/0). Corregirlo
+        // exigiría buscar en el stash y elegir un vecino visible; coste no
+        // pagado hasta que moleste de verdad.
         let restored = self
             .pending_focus
             .take()
@@ -1055,6 +1060,9 @@ impl PaneState {
     /// Hidrata size/mtime de la entrada `path` (stat on-demand, #52). No-op si
     /// la entrada ya no está (un refresh la pisó). No reordena: size/mtime no
     /// participan en el sort.
+    /// (#107 review MINOR-5, aceptado: un stat que resuelve tras moverse su
+    /// entrada al stash de ocultos se pierde — al re-mostrar, la fila pinta
+    /// `None` hasta la siguiente sonda de foco. Autocurativo y barato.)
     pub fn hydrate(&mut self, path: &VPath, size: Option<u64>, mtime_ms: Option<i64>) {
         if let Some(e) = self.entries.iter_mut().find(|e| &e.path == path) {
             e.size = e.size.or(size);

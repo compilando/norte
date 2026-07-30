@@ -9,6 +9,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Hidden-entry toggle (#107):** Ctrl+H (and Alt+.) shows or hides unix
+  dot-entries per pane, in both frontends; `[ui] show_hidden` seeds the
+  startup state. Presentation only — the provider keeps listing everything,
+  and while hiding, the pane says how many entries are stashed. Hiding
+  prunes marks of the entries it removes (reported, never silent), and the
+  live-search results pane is exempt: a hit you asked for is never
+  swallowed by the filter.
 - **First-class selection (#103):** mark, mark all, invert, clear, and mark or
   unmark by glob, in both frontends; marks survive a refresh (vanished entries
   are pruned, and the status bar says how many), and copy, move, and delete
