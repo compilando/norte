@@ -82,14 +82,82 @@ fn nfc_name(name: &[u8]) -> String {
     String::from_utf8_lossy(name).nfc().collect()
 }
 
+/// Recompila el regex byte-mode de un [`globset::Glob`] en modo Unicode
+/// (#110): globset compila con `(?-u)`, donde `?` consume UN BYTE y una
+/// clase casa byte a byte — `a?o` no casaba `año` (ñ = 2 bytes). globset
+/// sigue siendo la única autoridad de sintaxis; esto solo traduce su
+/// salida: pela el prefijo `(?-u)` y decodifica los runs de escapes `\xNN`
+/// con NN ≥ 0x80 — la única forma en que globset emite los bytes no-ASCII
+/// del patrón (`&str`, así que los runs son siempre UTF-8 completo) — de
+/// vuelta a sus caracteres, literales dentro y fuera de una clase.
+///
+/// COPIA deliberada del traductor de `norte-frontend::pane` (mismo
+/// criterio que el fold, duplicado core/frontend): no hay crate común por
+/// debajo de ambos donde quepa sin arrastrar `globset`+`regex` a un crate
+/// ajeno. Cada copia pinea la forma de globset con su propio test guardia.
+///
+/// # Errors
+/// [`SearchError::BadGlob`] si un run decodificado no es UTF-8 válido — no
+/// debería ocurrir con la globset pineada; fail-loud antes que casar bytes
+/// que el usuario no escribió.
+fn unicode_glob_regex(glob: &globset::Glob) -> Result<String, SearchError> {
+    let src = glob.regex();
+    let stripped = src.strip_prefix("(?-u)").unwrap_or(src);
+    let mut out = String::with_capacity(stripped.len());
+    let mut run: Vec<u8> = Vec::new();
+    let flush = |run: &mut Vec<u8>, out: &mut String| -> Result<(), SearchError> {
+        if run.is_empty() {
+            return Ok(());
+        }
+        let decoded = std::str::from_utf8(run).map_err(|_| {
+            SearchError::BadGlob(
+                "internal: the glob compiled to byte escapes that do not \
+                 form UTF-8 characters"
+                    .to_owned(),
+            )
+        })?;
+        out.push_str(decoded);
+        run.clear();
+        Ok(())
+    };
+    let bytes = stripped.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\'
+            && bytes.get(i + 1) == Some(&b'x')
+            && let Some(hex) = stripped.get(i + 2..i + 4)
+            && let Ok(b) = u8::from_str_radix(hex, 16)
+            && b >= 0x80
+        {
+            run.push(b);
+            i += 4;
+            continue;
+        }
+        flush(&mut run, &mut out)?;
+        // Copia el resto tal cual — incluidos escapes ASCII (`\.`), cuyo
+        // significado es idéntico en modo Unicode.
+        let step = if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            1 + stripped[i + 1..].chars().next().map_or(0, char::len_utf8)
+        } else {
+            stripped[i..].chars().next().map_or(1, char::len_utf8)
+        };
+        out.push_str(&stripped[i..i + step]);
+        i += step;
+    }
+    flush(&mut run, &mut out)?;
+    Ok(out)
+}
+
 /// Matcher del NOMBRE (último segmento del path): glob O regex, EXCLUYENTES
 /// por eje. Ambos aplican el fold NFC descrito en el módulo antes de comparar.
 #[derive(Debug)]
 pub enum NameMatcher {
-    /// Glob compilado (el patrón ya viene foldeado igual que el input).
+    /// Glob recompilado en modo Unicode (#110, `unicode_glob_regex`): `?`
+    /// y las clases cuentan caracteres. El patrón ya viene foldeado igual
+    /// que el input.
     Glob {
-        /// Matcher de `globset` sobre el patrón foldeado.
-        matcher: globset::GlobMatcher,
+        /// Regex Unicode traducida del glob foldeado.
+        matcher: regex::Regex,
         /// Si `false`, input y patrón se foldean a minúsculas.
         case_sensitive: bool,
     },
@@ -109,8 +177,20 @@ impl NameMatcher {
         let glob = globset::GlobBuilder::new(&folded)
             .build()
             .map_err(|e| SearchError::BadGlob(e.to_string()))?;
+        // Modo Unicode (#110): `?`/clases cuentan CARACTERES, no bytes.
+        // Mismo `size_limit` que el eje regex — el patrón es input del
+        // usuario y esta es una API pública sin tope propio de longitud.
+        // `dot_matches_new_line`: globset compila su matcher con ese flag,
+        // y `*`/`?` traducen a `.`-derivados — sin él, un nombre con `\n`
+        // (byte legal en unix; corpus `control_newline`) dejaría de casar
+        // `*` EN SILENCIO, el inverso del bug que esto arregla.
+        let matcher = regex::RegexBuilder::new(&unicode_glob_regex(&glob)?)
+            .size_limit(REGEX_SIZE_LIMIT)
+            .dot_matches_new_line(true)
+            .build()
+            .map_err(|e| SearchError::BadGlob(e.to_string()))?;
         Ok(Self::Glob {
-            matcher: glob.compile_matcher(),
+            matcher,
             case_sensitive,
         })
     }
@@ -138,7 +218,7 @@ impl NameMatcher {
             Self::Glob {
                 matcher,
                 case_sensitive,
-            } => matcher.is_match(fold_name(name_bytes, *case_sensitive)),
+            } => matcher.is_match(&fold_name(name_bytes, *case_sensitive)),
             Self::Regex(re) => re.is_match(&nfc_name(name_bytes)),
         }
     }
@@ -884,6 +964,58 @@ mod tests {
         // Bytes no-UTF8: no panic, matchea sobre el lossy.
         let m = NameMatcher::glob("*", false).expect("glob");
         assert!(m.matches(b"\xFF\xFE"));
+    }
+
+    /// #110 (mismo fix que el marcado por patrón del frontend): `?` y las
+    /// clases cuentan CARACTERES, no bytes UTF-8 — globset a solas compila
+    /// `(?-u)` byte-mode, donde `a?o` no casaba `año` (ñ = 2 bytes) y
+    /// `a[ñx]o` casaba `axo` pero jamás `año`. El patrón que el usuario
+    /// aprende en la búsqueda vale en el marcado y viceversa.
+    #[test]
+    fn glob_cuenta_caracteres_no_bytes_utf8() {
+        let m = NameMatcher::glob("a?o.txt", false).expect("glob");
+        assert!(m.matches("a\u{f1}o.txt".as_bytes()), "? = un carácter");
+        assert!(m.matches(b"axo.txt"));
+        let m = NameMatcher::glob("a[\u{f1}x]o.txt", false).expect("glob");
+        assert!(m.matches("a\u{f1}o.txt".as_bytes()), "clase con multibyte");
+        assert!(m.matches(b"axo.txt"));
+        let m = NameMatcher::glob("a[\u{f0}-\u{f2}]o.txt", false).expect("glob");
+        assert!(m.matches("a\u{f1}o.txt".as_bytes()), "rango multibyte");
+        assert!(!m.matches(b"axo.txt"));
+        // Astral (4 bytes UTF-8): un carácter, no cuatro.
+        let m = NameMatcher::glob("?.txt", false).expect("glob");
+        assert!(m.matches("\u{1D11E}.txt".as_bytes()), "𝄞 = UN carácter");
+    }
+
+    /// La traducción #110 debe CONSERVAR `dot_matches_new_line` (globset
+    /// compila su matcher con él): `\n` es un byte legal de nombre en unix
+    /// (corpus `control_newline`) y `*`/`?` traducen a `.`-derivados —
+    /// perder el flag haría que `*` dejara de casar esos nombres EN
+    /// SILENCIO, el inverso del bug byte/carácter.
+    #[test]
+    fn glob_sigue_casando_nombres_con_newline() {
+        let m = NameMatcher::glob("*", false).expect("glob");
+        assert!(m.matches(b"a\nb"));
+        let m = NameMatcher::glob("a?b", false).expect("glob");
+        assert!(m.matches(b"a\nb"), "? tambien cruza \\n, como en globset");
+        let m = NameMatcher::glob("*.txt", false).expect("glob");
+        assert!(m.matches(b"a\nb.txt"));
+    }
+
+    /// Guardia de la forma del regex de globset que la traducción #110
+    /// decodifica (`unicode_glob_regex`): prefijo `(?-u)` y bytes no-ASCII
+    /// como runs de escapes `\xNN`. Un upgrade de globset que cambie
+    /// cualquiera falla AQUÍ, ruidoso, en vez de dejar de casar nombres
+    /// no-ASCII en silencio. (El frontend pinea la suya igual —
+    /// `globset_regex_shape_is_the_one_this_translation_expects` en
+    /// `norte-frontend::pane` — porque cada lado tiene su copia del
+    /// traductor, mismo criterio que el fold duplicado.)
+    #[test]
+    fn la_forma_del_regex_de_globset_es_la_que_la_traduccion_espera() {
+        let g = globset::GlobBuilder::new("a\u{f1}o").build().expect("glob");
+        assert!(g.regex().starts_with("(?-u)"), "{}", g.regex());
+        assert!(g.regex().contains(r"\xc3\xb1"), "{}", g.regex());
+        assert_eq!(unicode_glob_regex(&g).expect("traducción"), "^a\u{f1}o$");
     }
 
     #[test]

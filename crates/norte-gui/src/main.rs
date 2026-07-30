@@ -2377,13 +2377,15 @@ impl NorteGui {
             // Canalón de marca (#111): pista TEXTUAL además del fondo —
             // el equivalente del `*` del gutter de la TUI, que no depende
             // de percibir el matiz. Ancho FIJO y presente SIEMPRE (vacío
-            // sin marca), para que marcar no desplace el nombre; el color
-            // sale de `Role::Mark` como en la TUI, con fallback propio
-            // legible sobre `mark_bg`.
+            // sin marca), para que marcar no desplace el nombre; ~1em del
+            // tamaño configurado (`ui_font_size` es del usuario — un px
+            // fijo recortaría el glifo a tamaños grandes); el color sale
+            // de `Role::Mark` como en la TUI, con fallback propio legible
+            // sobre `mark_bg`.
             .child(
                 div()
                     .flex_none()
-                    .w(px(14.0))
+                    .w(self.fonts.size)
                     .text_color(chrome_mark_fg(&self.theme))
                     .child(SharedString::from(if marked { MARK_MARKER } else { "" })),
             )

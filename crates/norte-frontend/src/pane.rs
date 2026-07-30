@@ -50,8 +50,12 @@ pub enum PatternError {
 /// dentro como fuera de una clase. Un rango de clase con extremos
 /// multibyte (`[ñ-ü]` → `[\xc3\xb1-\xc3\xbc]`) también cae bien: el `-`
 /// ASCII corta el run y cada extremo decodifica a su char. `(?-u)` se pela
-/// del prefijo; `(?i)` sobrevive y pasa a ser case-folding Unicode (red de
-/// seguridad — el fold ya minusculiza ambos lados).
+/// del prefijo; el resto de flags pasa tal cual.
+///
+/// COPIA deliberada del traductor de `norte-core::search` (mismo criterio
+/// que el fold, duplicado core/frontend): no hay crate común por debajo de
+/// ambos donde quepa sin arrastrar `globset`+`regex` a un crate ajeno.
+/// Cada copia pinea la forma de globset con su propio test guardia.
 ///
 /// # Errors
 /// [`PatternError::Glob`] si un run decodificado no es UTF-8 válido — no
@@ -81,10 +85,14 @@ fn unicode_glob_regex(glob: &globset::Glob) -> Result<String, PatternError> {
     let bytes = stripped.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
+        // `stripped.get(..)` y no un slice directo: si un `\x` precediera a
+        // un char multibyte, el rango i+2..i+4 partiría el char y un slice
+        // directo PANICARÍA — inalcanzable con la globset pineada, pero
+        // esta función falla por Result, no por panic.
         if bytes[i] == b'\\'
-            && i + 3 < bytes.len()
-            && bytes[i + 1] == b'x'
-            && let Ok(b) = u8::from_str_radix(&stripped[i + 2..i + 4], 16)
+            && bytes.get(i + 1) == Some(&b'x')
+            && let Some(hex) = stripped.get(i + 2..i + 4)
+            && let Ok(b) = u8::from_str_radix(hex, 16)
             && b >= 0x80
         {
             run.push(b);
@@ -653,9 +661,11 @@ impl PaneState {
     /// MASKS bidi overrides and invisibles to U+FFFD, which the fold does
     /// not — a name typed exactly as painted only matches if it is already
     /// NFC, lowercase, and free of masked characters. Folding the pattern
-    /// is what makes NFD input match; the glob's `case_insensitive` — full
-    /// Unicode case-folding since the #110 recompile — stays on as a
-    /// safety net on top of the fold's lowercasing.
+    /// is what makes NFD and uppercase input match: the fold is the ONE
+    /// definition of name equality, shared with the quick search. The glob
+    /// deliberately does NOT add `case_insensitive` on top — regex-crate
+    /// case folding is wider than the fold (`s` would match `ſ` U+017F)
+    /// and would mark files the quick search considers distinct.
     ///
     /// A non-UTF-8 name's invalid bytes fold to U+FFFD and cannot be named
     /// INDIVIDUALLY — but typing U+FFFD in the pattern names ALL of them at
@@ -666,7 +676,7 @@ impl PaneState {
     ///
     /// `?` and a character class (`[...]`) count CHARACTERS (#110): the
     /// glob's byte-mode regex is recompiled in Unicode mode
-    /// ([`unicode_glob_regex`]), so `a?o` matches `año` even though `ñ` is
+    /// (`unicode_glob_regex`), so `a?o` matches `año` even though `ñ` is
     /// two bytes. Unmarking down to an empty set re-arms
     /// [`Self::marked_paths`]'s cursor fallback (it returns the entry under
     /// the cursor when no marks remain) — a caller must read the count this
@@ -682,8 +692,12 @@ impl PaneState {
         // (emite `(?-u)`), así que sin plegar la aguja un patrón NFD o una
         // mayúscula no-ASCII no casarían NADA en silencio.
         let folded = crate::nav::fold(pattern.as_bytes());
+        // SIN `case_insensitive`: el fold ya minusculiza AMBOS lados, y el
+        // `(?i)` del regex Unicode es case-folding MÁS ANCHO que el fold
+        // (`s` casaría `ſ` U+017F, `μ` casaría `µ` U+00B5) — marcaría
+        // ficheros que el quick search considera distintos. UNA sola
+        // definición de igualdad: la del fold (audit #110).
         let glob = GlobBuilder::new(&folded)
-            .case_insensitive(true) // red de seguridad; con el regex Unicode es case-folding real
             .backslash_escape(true) // si no, la semántica de `\` depende del SO (globset la
             // hace depender de `is_separator('\\')`, true en unix, false en
             // windows) — `\` es un byte de nombre legal en Linux (corpus
@@ -691,10 +705,17 @@ impl PaneState {
             .build()
             .map_err(|e| PatternError::Glob(e.to_string()))?;
         // Modo Unicode (#110): `?`/clases cuentan CARACTERES, no bytes.
-        // Los regex de glob son lineales y el motor de `regex` no
-        // backtrackea, así que no hay ReDoS que limitar aquí; el modal ya
-        // acota el patrón a 256 chars.
-        let matcher = regex::Regex::new(&unicode_glob_regex(&glob)?)
+        // `size_limit` porque esto es API pública sin tope propio (el modal
+        // de la TUI acota a 256 chars, pero nada obliga a otros callers);
+        // el motor de `regex` es lineal, así que el guard es de memoria del
+        // programa compilado, no de backtracking. `dot_matches_new_line`:
+        // globset compila su matcher con ese flag y `*`/`?` traducen a
+        // `.`-derivados — sin él, un nombre con `\n` (byte legal en unix,
+        // corpus `control_newline`) dejaría de casar `*` EN SILENCIO.
+        let matcher = regex::RegexBuilder::new(&unicode_glob_regex(&glob)?)
+            .size_limit(1 << 20)
+            .dot_matches_new_line(true)
+            .build()
             .map_err(|e| PatternError::Glob(e.to_string()))?;
         let enc = self.name_encoding;
         let mut changed = 0usize;
@@ -2603,13 +2624,9 @@ mod tests {
     /// letting patterns silently stop matching non-ASCII names.
     #[test]
     fn globset_regex_shape_is_the_one_this_translation_expects() {
-        let build = |p: &str| {
-            GlobBuilder::new(p)
-                .case_insensitive(true)
-                .backslash_escape(true)
-                .build()
-                .unwrap()
-        };
+        // Same builder config as `mark_glob` (no `case_insensitive` — the
+        // fold owns case, see the rustdoc there).
+        let build = |p: &str| GlobBuilder::new(p).backslash_escape(true).build().unwrap();
         assert!(build("a").regex().starts_with("(?-u)"));
         let lit = build("a\u{f1}o").regex().to_owned();
         assert!(lit.contains(r"\xc3\xb1"), "ñ as a byte-escape run: {lit}");
@@ -2624,19 +2641,131 @@ mod tests {
         // And the translation of those shapes, end to end:
         assert_eq!(
             unicode_glob_regex(&build("a\u{f1}o")).unwrap(),
-            "(?i)^a\u{f1}o$"
+            "^a\u{f1}o$"
         );
         assert_eq!(
             unicode_glob_regex(&build("[\u{f1}-\u{fc}]")).unwrap(),
-            "(?i)^[\u{f1}-\u{fc}]$"
+            "^[\u{f1}-\u{fc}]$"
         );
+        // Astral endpoints (4-byte UTF-8 runs): 𝄞..𝄢 stays a CHAR range.
+        assert_eq!(
+            unicode_glob_regex(&build("[\u{1D11E}-\u{1D122}]")).unwrap(),
+            "^[\u{1D11E}-\u{1D122}]$"
+        );
+    }
+
+    /// The #110 recompile must PRESERVE globset's `dot_matches_new_line`
+    /// (audit MAJOR-1): `\n` is a legal name byte on unix (corpus
+    /// `control_newline`) and `*`/`?` translate to `.`-derived tokens —
+    /// losing the flag makes `*` silently stop matching those names, the
+    /// INVERSE of the byte/char bug. `mark_glob("*")` must equal mark-all
+    /// over the whole hostile corpus.
+    #[test]
+    fn mark_glob_star_still_reaches_names_with_newlines() {
+        let dir = VPath::parse("mem:///").unwrap();
+        let entries: Vec<Entry> = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .map(|n| Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: dir
+                    .clone()
+                    .join(norte_proto::Segment::new(n.bytes.clone()).unwrap()),
+                kind: EntryKind::File,
+                size: None,
+                mtime_ms: None,
+            })
+            .collect();
+        let total = entries.len();
+        let mut p = PaneState::new(dir.clone(), entries);
+        assert_eq!(
+            p.mark_glob("*", true).unwrap(),
+            total,
+            "'*' IS mark-all — a name the wildcard cannot reach would feed \
+             the next bulk op a survivor set the user never chose"
+        );
+        p.clear_marks();
+
+        // Direct pin on the `?` token crossing `\n`, like globset's does.
+        let nl = dir.join(norte_proto::Segment::new(b"a\nb".to_vec()).unwrap());
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: nl,
+                kind: EntryKind::File,
+                size: None,
+                mtime_ms: None,
+            }],
+        );
+        assert_eq!(p.mark_glob("a?b", true).unwrap(), 1, "? crosses \\n");
+    }
+
+    /// Case decision pin (audit MINOR-2): equality is the FOLD's, and only
+    /// the fold's. Regex-crate `(?i)` would additionally fold `ſ` (U+017F)
+    /// to `s` — wider than `nav::fold`'s `to_lowercase`, so a pattern `s.*`
+    /// would mark a file the quick search filter treats as distinct. The
+    /// glob therefore compiles WITHOUT `case_insensitive`; flipping it back
+    /// on fails here.
+    #[test]
+    fn mark_glob_case_equality_is_the_folds_not_the_regex_crates() {
+        let dir = VPath::parse("mem:///").unwrap();
+        let long_s = dir
+            .clone()
+            .join(norte_proto::Segment::new("\u{17f}.txt".as_bytes().to_vec()).unwrap());
+        let mut p = PaneState::new(
+            dir,
+            vec![Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: long_s,
+                kind: EntryKind::File,
+                size: None,
+                mtime_ms: None,
+            }],
+        );
+        assert_eq!(
+            p.mark_glob("s.txt", true).unwrap(),
+            0,
+            "ſ folds to itself; only regex-crate case folding equates it \
+             with s, and that is NOT the pane's definition of equality"
+        );
+        assert_eq!(p.mark_glob("\u{17f}.txt", true).unwrap(), 1);
+    }
+
+    /// Escaped-backslash adjacency (audit hole 4): in `a\\xc3o` the `\\`
+    /// pair is one token, so `xc3` is LITERAL text — the translation must
+    /// not re-scan it as a byte escape. Kills any future
+    /// scan-and-replace-`\xNN` rewrite of the tokenizer.
+    #[test]
+    fn mark_glob_escaped_backslash_before_hex_text_stays_literal() {
+        let dir = VPath::parse("mem:///").unwrap();
+        let lit = dir
+            .clone()
+            .join(norte_proto::Segment::new(b"a\\xc3o".to_vec()).unwrap());
+        let anio = dir
+            .clone()
+            .join(norte_proto::Segment::new("a\u{c3}o".as_bytes().to_vec()).unwrap());
+        let mk = |path: &VPath| Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: path.clone(),
+            kind: EntryKind::File,
+            size: None,
+            mtime_ms: None,
+        };
+        let mut p = PaneState::new(dir, vec![mk(&lit), mk(&anio)]);
+        assert_eq!(
+            p.mark_glob("a\\\\xc3o", true).unwrap(),
+            1,
+            "the pattern names the literal-backslash file, nothing else"
+        );
+        assert_eq!(p.marked_paths(), vec![lit]);
     }
 
     /// Character-granularity (#110, fixed): `?` consumes one CHARACTER and
     /// a class matches char-wise — `a?o.txt` covers `año.txt`, and
     /// `a[ñx]o.txt` covers both twins. globset alone compiles `(?-u)` byte
     /// mode, where `ñ` is 2 bytes and both patterns silently marked a
-    /// DIFFERENT file than the one named.
+    /// DIFFERENT file than the one named. Astral chars (4-byte UTF-8) are
+    /// one character too.
     #[test]
     fn mark_glob_matches_characters_not_utf8_bytes() {
         let dir = VPath::parse("mem:///").unwrap();
@@ -2704,6 +2833,23 @@ mod tests {
             "negated char class excludes año.txt only"
         );
         assert_eq!(p.marked_paths(), vec![axo]);
+
+        // Astral: 𝄞 is FOUR UTF-8 bytes and exactly ONE `?`.
+        let dir = VPath::parse("mem:///").unwrap();
+        let clef = dir
+            .clone()
+            .join(norte_proto::Segment::new("\u{1D11E}.txt".as_bytes().to_vec()).unwrap());
+        let mut p = PaneState::new(
+            dir,
+            vec![Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: clef,
+                kind: EntryKind::File,
+                size: None,
+                mtime_ms: None,
+            }],
+        );
+        assert_eq!(p.mark_glob("?.txt", true).unwrap(), 1, "𝄞 = ONE char");
     }
 
     /// Masking-divergence pin: rows are painted through
