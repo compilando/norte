@@ -381,6 +381,13 @@ impl NorteGui {
             .and_then(|cfg| cfg.common.ui_reduce_motion)
             .unwrap_or(false);
         cx.set_reduce_motion(reduce_motion);
+        // #107: `[ui] show_hidden` siembra el estado INICIAL de ambos panes
+        // (mismo contrato que la TUI; Ctrl+H lo cambia por pane después).
+        let show_hidden = loaded
+            .as_ref()
+            .ok()
+            .and_then(|cfg| cfg.common.ui_show_hidden)
+            .unwrap_or(true);
 
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
@@ -522,6 +529,9 @@ impl NorteGui {
                     ],
                     plugin_config_summaries: Vec::new(),
                 };
+                for pane in &mut gui.panes {
+                    pane.set_show_hidden(show_hidden);
+                }
                 gui.spawn_event_loop(event_rx, cx);
                 gui.cd(0, dir.clone(), cx);
                 gui.cd(1, dir, cx);
@@ -1260,6 +1270,10 @@ impl NorteGui {
             "task.prev" => self.task_cursor = self.task_cursor.saturating_sub(1),
             "task.dismiss" => self.dismiss_terminal_tasks(),
             "pane.view" => self.open_viewer(cx),
+            // #107: presentación-solo, el pane aparta/devuelve dotfiles.
+            "pane.toggle-hidden" => {
+                self.panes[f].toggle_hidden();
+            }
             // Inalcanzable: todo keymap se valida contra COMMANDS al cargar
             // (fuente única) — mismo guard que la TUI (#103 review MINOR-7).
             _ => debug_assert!(false, "comando validado sin brazo: {cmd}"),
@@ -2204,6 +2218,18 @@ impl NorteGui {
                         &[("n", &n.to_string())],
                     ))),
             );
+        }
+
+        // #107: ocultación activa con entradas apartadas — misma disciplina
+        // y vecindad que `status-archive-skipped`: el listado enseña menos
+        // de lo que hay y eso jamás es silencioso. Informativo, no aviso:
+        // hereda el fg del pane (quick_fg SIN su fondo es ilegible en el
+        // tema default — el comentario del badge de arriba ya lo veta).
+        if pane.hidden_count() > 0 {
+            col = col.child(div().px(px(sp::S)).child(SharedString::from(norte_i18n::ta(
+                "status-hidden",
+                &[("n", &pane.hidden_count().to_string())],
+            ))));
         }
 
         // Lista de entradas, virtualizada (issue #87): `uniform_list` solo

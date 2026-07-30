@@ -125,3 +125,18 @@ fn the_names_encoding_badge_survives_clipping_ahead_of_the_marked_summary() {
         "the encoding badge must survive clipping ahead of the marked summary: {text}"
     );
 }
+
+/// #107: la ocultación activa con entradas apartadas se anuncia en la barra
+/// — un listado que enseña menos de lo que hay jamás es silencioso (misma
+/// disciplina que `status-archive-skipped`). Con la ocultación apagada, o
+/// sin dotfiles en el dir, la barra calla.
+#[test]
+fn the_status_bar_reports_hidden_entries_only_while_hiding() {
+    let mut app = app_with_sized_entries(vec![(".env", 1), ("main.rs", 10)]);
+    assert!(!status_text(&app).contains("hidden"), "default: se ve todo");
+    app.focused_mut().toggle_hidden();
+    let text = status_text(&app);
+    assert!(text.contains("1 hidden"), "badge: {text}");
+    app.focused_mut().toggle_hidden();
+    assert!(!status_text(&app).contains("hidden"), "al mostrar, calla");
+}

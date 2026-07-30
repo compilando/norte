@@ -1657,6 +1657,14 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
             Some(enc) => format!("  {}", ta("status-names-encoding", &[("enc", enc.label())])),
             None => String::new(),
         };
+        // #107: ocultación activa con entradas apartadas — misma disciplina
+        // que `omitidas`: un listado que enseña menos de lo que hay jamás
+        // es silencioso. Se calla con 0 apartadas (dir sin dotfiles) y con
+        // la ocultación apagada.
+        let ocultas = match pane.hidden_count() {
+            0 => String::new(),
+            n => format!("  {}", ta("status-hidden", &[("n", &n.to_string())])),
+        };
         // Review MAJOR M3: los AVISOS (`omitidas` — listado incompleto,
         // "jamás silencioso" — y `nombres` — el badge de reinterpretación,
         // "el usuario debe saberlo en todo momento") van ANTES que el
@@ -1666,7 +1674,7 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         // encoding fuera del recorte. Deuda real (#103): un presupuesto de
         // ancho que elipsise `dir_texto` para que NINGÚN campo posterior se
         // recorte jamás, en vez de solo reordenar por prioridad.
-        format!(" {marca}{dir_texto}{pos_total}{omitidas}{nombres}{pruned}{marked}{seq}")
+        format!(" {marca}{dir_texto}{pos_total}{omitidas}{nombres}{ocultas}{pruned}{marked}{seq}")
     };
     frame.render_widget(
         Paragraph::new(text).style(app.theme.role(Role::StatusBar)),

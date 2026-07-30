@@ -440,6 +440,23 @@ impl Pane {
         self.state.marked_paths()
     }
 
+    /// Toggle de ocultos (#107); devuelve el estado nuevo. Delegado puro.
+    pub fn toggle_hidden(&mut self) -> bool {
+        self.state.toggle_hidden()
+    }
+
+    /// Siembra la visibilidad de ocultos desde `[ui] show_hidden` (#107).
+    /// Delegado puro.
+    pub fn set_show_hidden(&mut self, show: bool) {
+        self.state.set_show_hidden(show);
+    }
+
+    /// Entradas apartadas por la ocultación (#107). Delegado puro.
+    #[must_use]
+    pub fn hidden_count(&self) -> usize {
+        self.state.hidden_count()
+    }
+
     /// Instala el lote de decoraciones resuelto (G3b) — ver
     /// `PaneState::set_decorations`.
     pub fn set_decorations(

@@ -412,6 +412,14 @@ async fn main() -> Result<()> {
             .map_err(|e| anyhow::anyhow!("{e}"))?,
     );
     let mut app = App::new(left, right);
+    // #107: `[ui] show_hidden` siembra el estado INICIAL de ambos panes;
+    // Ctrl+H lo cambia por pane en runtime (el hot-reload no lo pisa — un
+    // toggle del usuario no debe deshacerse porque otro campo cambió).
+    if let Some(show) = cfg.common.ui_show_hidden {
+        for pane in &mut app.panes {
+            pane.set_show_hidden(show);
+        }
+    }
     apply_theme(&mut app, &cfg);
     // Copia de la hotlist en el App (spec 2026-07-18): la fuente del popup
     // `Ctrl+D`; se refresca en cada hot-reload OK (`reload_config`).
@@ -3513,6 +3521,16 @@ async fn dispatch(
             app.message = Some(match label {
                 Some(enc) => ta("msg-names-encoding", &[("enc", enc)]),
                 None => t("msg-names-encoding-off"),
+            });
+        }
+        "pane.toggle-hidden" => {
+            // #107: presentación-solo — el pane aparta/devuelve dotfiles,
+            // el provider no re-lista. El anuncio va por la barra.
+            let showing = app.focused_mut().toggle_hidden();
+            app.message = Some(if showing {
+                t("msg-hidden-shown")
+            } else {
+                t("msg-hidden-hidden")
             });
         }
         "app.theme" => app.open_theme_picker(),
