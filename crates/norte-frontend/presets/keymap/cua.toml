@@ -89,6 +89,7 @@ keymap = [
     { on = ["pgdn"], run = "dialog.page-down" },
     { on = ["a"], run = "dialog.add" },
     { on = ["e"], run = "dialog.toggle-enabled" },
+    { on = ["space"], run = "dialog.toggle-enabled" },
     { on = ["d"], run = "dialog.remove" },
     { on = ["shift+up"], run = "dialog.move-up" },
     { on = ["shift+down"], run = "dialog.move-down" },
