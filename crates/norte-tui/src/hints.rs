@@ -127,7 +127,19 @@ impl DialogHints {
             // are dropped from the PRINTED hint (never from dispatch — see
             // `without_navigation`).
             picker: dialog_hints(&without_navigation(ALLOW_PICKER), eff),
-            columns: dialog_hints(&without_navigation(ALLOW_COLUMNS), eff),
+            // #108 7a: además de la navegación, el pie del picker de
+            // columnas omite los verbos de REORDENACIÓN — shift+↑/↓ son las
+            // flechas con shift, autoevidentes junto a up/down, y con ellos
+            // el hint (101 celdas en es) no cabe en un frame de 80 (mismo
+            // MAJOR-1 que motivó `without_navigation`). Solo el hint
+            // IMPRESO: `ALLOW_COLUMNS` y el dispatch no cambian.
+            columns: dialog_hints(
+                &without_navigation(ALLOW_COLUMNS)
+                    .into_iter()
+                    .filter(|c| !matches!(*c, "dialog.move-up" | "dialog.move-down"))
+                    .collect::<Vec<_>>(),
+                eff,
+            ),
             extensions: dialog_hints(&without_navigation(ALLOW_EXTENSIONS), eff),
             plugin_config: dialog_hints(&without_navigation(ALLOW_PLUGIN_CONFIG), eff),
             nav_list: dialog_hints(&without_navigation(ALLOW_NAV_HOTLIST), eff),
