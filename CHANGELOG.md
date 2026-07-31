@@ -9,6 +9,15 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Rename and editable destination name (#105):** Shift+F6 renames in
+  place (a Move to the entry's own parent — correct inside search results
+  too), and F5/F6 with a single item opens an editable destination name
+  prefilled with the original; multi-item batches keep the list confirm.
+  Byte-exact by rule 1: an untouched prefill copies the ORIGINAL bytes
+  (never the lossy form), editing works on the displayed text, and a name
+  still containing U+FFFD is rejected instead of writing mojibake.
+  Collisions reuse the existing dialog; a failed submit keeps the typed
+  name. TUI only — the GUI still has no text input.
 - **Create directory — F7 (#104, proto 0.31.0):** `fs.mkdir` as a policy-
   gated, journalled Task (`Created` with undo; clean cancellation), wired
   end to end: engine, daemon (rpc.cancel-able), both backend modes, a TUI

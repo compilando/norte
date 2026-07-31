@@ -94,6 +94,7 @@ pub const COMMANDS: &[&str] = &[
     "pane.names-encoding",
     "pane.toggle-hidden",
     "pane.mkdir",
+    "pane.rename",
     "mark.toggle",
     "mark.all",
     "mark.invert",

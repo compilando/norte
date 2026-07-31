@@ -1130,6 +1130,46 @@ async fn run(
                             }
                             continue;
                         }
+                        // `Modal::TransferName` (#105): mismo molde. El
+                        // submit reusa `submit_transfer` — colisiones por el
+                        // camino existente (`Modal::Collision` + backlog).
+                        if matches!(app.modal, Some(Modal::TransferName { .. })) {
+                            let plain = key.modifiers.is_empty()
+                                || key.modifiers == KeyModifiers::SHIFT;
+                            match key.code {
+                                KeyCode::Char(c) if plain => app.transfer_name_push(c),
+                                KeyCode::Backspace if plain => app.transfer_name_pop(),
+                                KeyCode::Enter if plain => {
+                                    if let Some((kind, from, dest)) =
+                                        app.transfer_name_confirm()
+                                    {
+                                        // Cierra SOLO si encoló (disciplina
+                                        // MINOR-1 de #104): un submit
+                                        // fallido conserva el nombre; el
+                                        // detalle queda en la barra.
+                                        if submit_transfer(
+                                            app,
+                                            backend,
+                                            kind,
+                                            from,
+                                            dest,
+                                            TransferOptions::default(),
+                                        )
+                                        .await
+                                        {
+                                            app.transfer_name_submitted();
+                                        } else {
+                                            app.transfer_name_set_error(t(
+                                                "msg-transfer-name-failed",
+                                            ));
+                                        }
+                                    }
+                                }
+                                KeyCode::Esc if plain => app.cancel_transfer_name(),
+                                _ => {}
+                            }
+                            continue;
+                        }
                         // El modal TOFU (#45) puede NAVEGAR al confiar: su Cd
                         // se aplica igual que el de un comando.
                         let outcome = on_dialog_key(
@@ -2782,7 +2822,8 @@ async fn on_dialog_key(
                 Modal::Collision { .. }
                 | Modal::TrustLuaInit { .. }
                 | Modal::MarkPattern { .. }
-                | Modal::Mkdir { .. } => {}
+                | Modal::Mkdir { .. }
+                | Modal::TransferName { .. } => {}
                 // S2 (`[ui] confirm_quit`): confirmar cierra — el run loop
                 // lo detecta en su chequeo de `app.quit` de cada vuelta
                 // (main.rs, tope del `loop`).
@@ -2886,7 +2927,7 @@ async fn submit_transfers(
     opts: TransferOptions,
 ) {
     for (from, dest) in transfer_dests(items, to) {
-        submit_transfer(app, backend, kind, from, dest, opts).await;
+        let _submitted = submit_transfer(app, backend, kind, from, dest, opts).await;
     }
     app.consume_marks();
 }
@@ -2915,6 +2956,8 @@ async fn submit_deletes(app: &mut App, backend: &Backend, items: &[VPath], perma
 
 /// Encola una transferencia y la registra en el panel con su contexto de
 /// reintento (para el diálogo de colisión).
+/// Devuelve `true` si la task ENCOLÓ (#105: el modal de nombre editable
+/// solo se cierra entonces); un fallo deja el error en la barra.
 async fn submit_transfer(
     app: &mut App,
     backend: &Backend,
@@ -2922,7 +2965,7 @@ async fn submit_transfer(
     from: VPath,
     to: VPath,
     opts: TransferOptions,
-) {
+) -> bool {
     let res = match kind {
         TransferKind::Copy => backend.copy(&from, &to, opts).await,
         TransferKind::Move => backend.move_(&from, &to, opts).await,
@@ -2942,8 +2985,12 @@ async fn submit_transfer(
                     name_encoding,
                 }),
             );
+            true
         }
-        Err(e) => app.message = Some(error_message(&e)),
+        Err(e) => {
+            app.message = Some(error_message(&e));
+            false
+        }
     }
 }
 
@@ -3478,9 +3525,19 @@ async fn dispatch(
                 TransferKind::Move
             };
             // Destino ortodoxo: el DIRECTORIO del otro pane. Los orígenes son
-            // las marcas, o el cursor si no hay ninguna (#103).
-            app.open_transfer_modal(kind);
+            // las marcas, o el cursor si no hay ninguna (#103). Con UN solo
+            // ítem, el nombre de destino es EDITABLE (#105); el lote multi
+            // sigue en el confirm de lista (no hay un nombre único).
+            if app.focused().marked_paths().len() <= 1 {
+                app.open_transfer_name(kind);
+            } else {
+                app.open_transfer_modal(kind);
+            }
         }
+        // #105: shift+F6 — rename in situ (Move al PADRE de `from`, nombre
+        // editable). Correcto también en el pane virtual: el destino sale
+        // del propio path del hit, no del dir del pane.
+        "pane.rename" => app.open_rename(),
         // Insert/Ctrl+A/Ctrl+Shift+A/`*` (#103): mc/Total Commander —
         // togglear la marca de esta entrada y avanzar (mantener Insert barre
         // un rango). Review MAJOR: bajo un quick search en Filter,

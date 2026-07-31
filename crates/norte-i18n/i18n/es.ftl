@@ -27,6 +27,12 @@ modal-mark-pattern-hint = glob, por ejemplo *.rs
 modal-mark-pattern-keys = [enter] confirmar · [esc] cancelar
 modal-mkdir = Crear directorio
 modal-mkdir-hint = nombre del directorio nuevo
+modal-transfer-name-copy = Copiar a
+modal-transfer-name-move = Mover a
+modal-transfer-name-hint = nombre en el destino (edítalo para renombrar)
+msg-transfer-name-fffd = el nombre aún contiene el carácter de sustitución — reescríbelo limpio
+msg-transfer-name-same = mismo nombre y sitio: nada que hacer
+msg-transfer-name-failed = no se pudo encolar — el nombre se conserva
 
 # --- Mensajes de la barra ---
 msg-done = hecho
@@ -296,6 +302,7 @@ help-cmd-viewer-encoding = recargar como… (siguiente encoding)
 help-cmd-pane-names-encoding = ver nombres como… (cp437/cp866/Shift-JIS/GBK/…; solo display)
 help-cmd-pane-toggle-hidden = mostrar u ocultar entradas ocultas
 help-cmd-pane-mkdir = crear un directorio (F7)
+help-cmd-pane-rename = renombrar in situ (Shift+F6)
 help-cmd-viewer-encoding-auto = volver a la detección automática
 help-cmd-viewer-hex = alternar vista hexadecimal
 help-cmd-pane-search = buscar por nombre/contenido (Alt+F7)

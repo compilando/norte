@@ -1603,6 +1603,163 @@ impl App {
         }
     }
 
+    /// Abre el nombre de destino editable (#105) para el ítem ÚNICO (la
+    /// marca única, o el cursor): F5/F6 con 0–1 marcas. El caller decide la
+    /// ruta multi-ítem ([`Self::open_transfer_modal`]). No-op sin ítem.
+    pub fn open_transfer_name(&mut self, kind: TransferKind) {
+        let items = self.focused().marked_paths();
+        let [from] = items.as_slice() else {
+            return;
+        };
+        let to_dir = self.panes[1 - self.focus].dir().clone();
+        self.open_transfer_name_with(kind, from.clone(), to_dir);
+    }
+
+    /// Abre el rename in situ (shift+F6, #105): Move con destino en el
+    /// PADRE del propio `from` — no el dir del pane, que en el pane VIRTUAL
+    /// de búsqueda es la raíz del walk y renombraría moviendo el hit de
+    /// sitio. Siempre sobre el cursor (las marcas no renombran en bloque —
+    /// eso sería un batch-rename, otra feature). No-op sobre una raíz.
+    pub fn open_rename(&mut self) {
+        let Some(from) = self.focused().selected().map(|e| e.path.clone()) else {
+            return;
+        };
+        let Some(to_dir) = from.parent() else {
+            return;
+        };
+        self.open_transfer_name_with(TransferKind::Move, from, to_dir);
+    }
+
+    fn open_transfer_name_with(&mut self, kind: TransferKind, from: VPath, to_dir: VPath) {
+        let original = from
+            .file_name()
+            .map_or(Vec::new(), |n| n.as_bytes().to_vec());
+        let name = String::from_utf8_lossy(&original).into_owned();
+        self.modal = Some(Modal::TransferName {
+            kind,
+            from,
+            to_dir,
+            name,
+            original,
+            touched: false,
+            error: None,
+        });
+    }
+
+    /// Añade un carácter al nombre en curso (#105). Marca `touched`: desde
+    /// el primer edit, el nombre es el TEXTO. No-op sin el modal.
+    pub fn transfer_name_push(&mut self, c: char) {
+        if let Some(Modal::TransferName {
+            name,
+            touched,
+            error,
+            ..
+        }) = &mut self.modal
+        {
+            if name.chars().count() >= MARK_PATTERN_MAX_CHARS {
+                return;
+            }
+            name.push(c);
+            *touched = true;
+            *error = None;
+        }
+    }
+
+    /// Borra el último carácter (#105). Marca `touched`.
+    pub fn transfer_name_pop(&mut self) {
+        if let Some(Modal::TransferName {
+            name,
+            touched,
+            error,
+            ..
+        }) = &mut self.modal
+        {
+            name.pop();
+            *touched = true;
+            *error = None;
+        }
+    }
+
+    /// Cancela sin transferir — mismo contrato guarded que
+    /// [`Self::cancel_mkdir`].
+    pub fn cancel_transfer_name(&mut self) {
+        if !matches!(self.modal, Some(Modal::TransferName { .. })) {
+            debug_assert!(
+                false,
+                "solo los modales de texto libre se cierran sin decisión; \
+                 un modal de DECISIÓN debe denegar por on_dialog_key"
+            );
+            return;
+        }
+        self.modal = None;
+        self.open_next_pending();
+    }
+
+    /// Valida y devuelve `(kind, from, dest)` SIN cerrar el modal (misma
+    /// disciplina que [`Self::mkdir_confirm`]: cierra el submit que encoló,
+    /// vía [`Self::transfer_name_submitted`]). Reglas: sin tocar → los
+    /// BYTES originales (regla 1); tocado → los bytes del texto, y un texto
+    /// que aún contiene U+FFFD (residuo del prefill lossy de un nombre
+    /// hostil) se RECHAZA — confirmarlo escribiría mojibake real en disco.
+    /// `dest == from` también se rechaza (no-op; en rename, «mismo
+    /// nombre»). El nombre pasa por [`norte_proto::Segment`] (ni vacío, ni
+    /// `/`, ni NUL, ni `.`/`..`).
+    pub fn transfer_name_confirm(&mut self) -> Option<(TransferKind, VPath, VPath)> {
+        let Some(Modal::TransferName {
+            kind,
+            from,
+            to_dir,
+            name,
+            original,
+            touched,
+            ..
+        }) = &self.modal
+        else {
+            return None;
+        };
+        let bytes = if *touched {
+            if name.contains('\u{FFFD}') {
+                let msg = norte_i18n::t("msg-transfer-name-fffd");
+                self.transfer_name_set_error(msg);
+                return None;
+            }
+            name.as_bytes().to_vec()
+        } else {
+            original.clone()
+        };
+        let (kind, from, to_dir) = (*kind, from.clone(), to_dir.clone());
+        match norte_proto::Segment::new(bytes) {
+            Ok(seg) => {
+                let dest = to_dir.join(seg);
+                if dest == from {
+                    self.transfer_name_set_error(norte_i18n::t("msg-transfer-name-same"));
+                    return None;
+                }
+                Some((kind, from, dest))
+            }
+            Err(e) => {
+                self.transfer_name_set_error(e.to_string());
+                None
+            }
+        }
+    }
+
+    /// Cierra el modal tras un submit que SÍ encoló (#105).
+    pub fn transfer_name_submitted(&mut self) {
+        if matches!(self.modal, Some(Modal::TransferName { .. })) {
+            self.modal = None;
+            self.open_next_pending();
+        }
+    }
+
+    /// Deja el diagnóstico de un intento fallido (#105): el texto tecleado
+    /// sobrevive para corregir.
+    pub fn transfer_name_set_error(&mut self, msg: String) {
+        if let Some(Modal::TransferName { error, .. }) = &mut self.modal {
+            *error = Some(msg);
+        }
+    }
+
     /// Abre el modal de crear directorio (F7, #104).
     pub fn open_mkdir(&mut self) {
         self.modal = Some(Modal::Mkdir {
@@ -1984,6 +2141,29 @@ pub enum Modal {
         /// campo. `None` = aún no se ha confirmado nada.
         error: Option<String>,
     },
+    /// Nombre de destino editable (#105): F5/F6 de UN solo ítem, y el
+    /// rename in situ (shift+F6 — `to_dir` es el MISMO dir). Multi-ítem
+    /// sigue en [`Modal::ConfirmTransfer`]: no hay un nombre único que
+    /// editar. Texto libre como [`Modal::Mkdir`].
+    TransferName {
+        /// Copy o Move (rename = Move con `to_dir` == dir de `from`).
+        kind: TransferKind,
+        /// Origen, bytes exactos.
+        from: VPath,
+        /// Directorio destino (el del otro pane; el propio en rename).
+        to_dir: VPath,
+        /// El nombre como TEXTO editable (lo que se pinta, enmascarado).
+        /// Solo manda si `touched`; sin tocar, el confirm usa `original`.
+        name: String,
+        /// Bytes ORIGINALES del nombre de `from` (regla 1): un F5 sin
+        /// editar copia estos bytes, jamás la forma lossy del prefill.
+        original: Vec<u8>,
+        /// ¿Se editó alguna vez? El primer push/pop lo fija: desde ahí el
+        /// nombre es el texto (doctrina #103: editas lo que VES).
+        touched: bool,
+        /// Diagnóstico del último intento inválido.
+        error: Option<String>,
+    },
     /// Crear directorio (F7, #104). Texto libre como [`Modal::MarkPattern`]:
     /// el nombre CRUDO del usuario, enmascarado al pintarlo (un nombre
     /// llega por paste con bidi/invisibles tan fácil como un patrón).
@@ -2178,7 +2358,10 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         // búsqueda — el run loop lo intercepta ANTES de llegar aquí (raw
         // chars, jamás el contexto `dialog`), igual que `TrustLuaInit`.
         // Ambos devuelven `None` siempre.
-        Modal::TrustLuaInit { .. } | Modal::MarkPattern { .. } | Modal::Mkdir { .. } => None,
+        Modal::TrustLuaInit { .. }
+        | Modal::MarkPattern { .. }
+        | Modal::Mkdir { .. }
+        | Modal::TransferName { .. } => None,
     }
 }
 
@@ -2993,6 +3176,143 @@ mod tests {
             kind: k,
             size: None,
             mtime_ms: None,
+        }
+    }
+
+    /// #105: F5 de UN ítem abre el nombre editable prefijado con el nombre
+    /// ORIGINAL. Sin tocar, el confirm usa los BYTES crudos (regla 1: un
+    /// nombre no-UTF8 copiado sin editar jamás pasa por el lossy).
+    #[test]
+    fn transfer_name_sin_editar_conserva_los_bytes_originales() {
+        let dir = VPath::parse("mem:///").unwrap();
+        let hostile = dir
+            .clone()
+            .join(norte_proto::Segment::new(b"informe\xFF\xFE.dat".to_vec()).unwrap());
+        let mut app = App::new(
+            Pane::new(
+                dir.clone(),
+                vec![Entry {
+                    attrs: std::collections::BTreeMap::new(),
+                    path: hostile.clone(),
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                }],
+            ),
+            Pane::new(VPath::parse("mem:///dst").unwrap(), Vec::new()),
+        );
+        app.open_transfer_name(TransferKind::Copy);
+        let (kind, from, dest) = app.transfer_name_confirm().expect("válido");
+        assert_eq!(kind, TransferKind::Copy);
+        assert_eq!(from, hostile);
+        assert_eq!(
+            dest,
+            VPath::parse("mem:///dst")
+                .unwrap()
+                .join(norte_proto::Segment::new(b"informe\xFF\xFE.dat".to_vec()).unwrap()),
+            "bytes crudos al destino, jamás la forma lossy"
+        );
+    }
+
+    /// #105: editar sustituye el nombre por el TEXTO tecleado; y un texto
+    /// que aún contiene U+FFFD (residuo del prefill lossy de un nombre
+    /// hostil) se RECHAZA — confirmarlo escribiría mojibake en disco.
+    #[test]
+    fn transfer_name_editado_usa_el_texto_y_rechaza_fffd() {
+        let dir = VPath::parse("mem:///").unwrap();
+        let hostile = dir
+            .clone()
+            .join(norte_proto::Segment::new(b"x\xFF.dat".to_vec()).unwrap());
+        let mut app = App::new(
+            Pane::new(
+                dir.clone(),
+                vec![Entry {
+                    attrs: std::collections::BTreeMap::new(),
+                    path: hostile,
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                }],
+            ),
+            Pane::new(VPath::parse("mem:///dst").unwrap(), Vec::new()),
+        );
+        app.open_transfer_name(TransferKind::Copy);
+        // Tocar el campo (borra el último char del prefill lossy): el texto
+        // sigue llevando el U+FFFD del prefill → rechazo con diagnóstico.
+        app.transfer_name_pop();
+        assert!(app.transfer_name_confirm().is_none());
+        assert!(matches!(
+            &app.modal,
+            Some(Modal::TransferName { error: Some(_), .. })
+        ));
+        // Reescrito limpio: vale, y son los bytes del texto.
+        while matches!(&app.modal, Some(Modal::TransferName { name, .. }) if !name.is_empty()) {
+            app.transfer_name_pop();
+        }
+        for c in "limpio.dat".chars() {
+            app.transfer_name_push(c);
+        }
+        let (_, _, dest) = app.transfer_name_confirm().expect("limpio");
+        assert_eq!(dest, VPath::parse("mem:///dst/limpio.dat").unwrap());
+    }
+
+    /// #105: shift+F6 — rename in situ: destino = MISMO dir; confirmar sin
+    /// cambiar el nombre es error (no-op), y un nombre nuevo construye el
+    /// destino en el propio dir.
+    #[test]
+    fn rename_construye_en_el_mismo_dir_y_rechaza_el_mismo_nombre() {
+        let mut app = app_with_entries(&["a.txt"]);
+        app.open_rename();
+        assert!(
+            app.transfer_name_confirm().is_none(),
+            "mismo nombre = no-op, jamás un submit"
+        );
+        assert!(matches!(
+            &app.modal,
+            Some(Modal::TransferName { error: Some(_), .. })
+        ));
+        app.transfer_name_push('2'); // "a.txt2"
+        let (kind, from, dest) = app.transfer_name_confirm().expect("nombre nuevo");
+        assert_eq!(kind, TransferKind::Move);
+        assert_eq!(from, VPath::parse("mem:///a.txt").unwrap());
+        assert_eq!(dest, VPath::parse("mem:///a.txt2").unwrap());
+    }
+
+    /// #105 (regla 1, corpus canónico): renombrar un nombre hostil a uno
+    /// limpio conserva el `from` BYTE-EXACTO para cada nombre del corpus —
+    /// el origen jamás pasa por texto, solo el nombre nuevo es tecleado.
+    #[test]
+    fn rename_de_cada_nombre_hostil_del_corpus_conserva_el_from() {
+        let dir = VPath::parse("mem:///").unwrap();
+        for (i, hostile) in norte_testkit::corpus::hostile_names().iter().enumerate() {
+            let from = dir
+                .clone()
+                .join(norte_proto::Segment::new(hostile.bytes.clone()).unwrap());
+            let mut app = App::new(
+                Pane::new(
+                    dir.clone(),
+                    vec![Entry {
+                        attrs: std::collections::BTreeMap::new(),
+                        path: from.clone(),
+                        kind: EntryKind::File,
+                        size: None,
+                        mtime_ms: None,
+                    }],
+                ),
+                Pane::new(dir.clone(), Vec::new()),
+            );
+            app.open_rename();
+            while matches!(&app.modal, Some(Modal::TransferName { name, .. }) if !name.is_empty()) {
+                app.transfer_name_pop();
+            }
+            for c in "limpio".chars() {
+                app.transfer_name_push(c);
+            }
+            let (_, got_from, dest) = app
+                .transfer_name_confirm()
+                .unwrap_or_else(|| panic!("corpus[{i}] {}", hostile.id));
+            assert_eq!(got_from, from, "corpus[{i}]: from byte-exacto");
+            assert_eq!(dest, VPath::parse("mem:///limpio").unwrap());
         }
     }
 

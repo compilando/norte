@@ -854,12 +854,17 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
         }
         // host + algo + fingerprint + nota + teclas (5 líneas) + bordes.
         Modal::TrustHostKey { .. } => 9,
-        // Un mensaje largo con wrap (~4 líneas a 58 cols) + bordes.
-        Modal::TrustLuaInit { .. } => 8,
-        // Patrón + hint + teclas (3 líneas) o + la línea de error (4), más
-        // bordes (#103 T9: mismo cómputo `body_lines + 3` que el resto).
+        // TrustLuaInit: un mensaje largo con wrap (~4 líneas a 58 cols) +
+        // bordes. TransferName con error (#105): dir destino + campo + hint
+        // + teclas + error (5 líneas), +3.
+        Modal::TrustLuaInit { .. } | Modal::TransferName { error: Some(_), .. } => 8,
+        // Patrón/mkdir + hint + teclas (3 líneas) o + la línea de error (4),
+        // más bordes (#103 T9: mismo cómputo `body_lines + 3` que el resto).
         // Sin error caen al comodín `6` de abajo (match_same_arms).
-        Modal::MarkPattern { error: Some(_), .. } | Modal::Mkdir { error: Some(_), .. } => 7,
+        // TransferName sin error: 4 líneas de cuerpo (dir destino incluido).
+        Modal::MarkPattern { error: Some(_), .. }
+        | Modal::Mkdir { error: Some(_), .. }
+        | Modal::TransferName { .. } => 7,
         _ => 6,
     }
 }
@@ -890,15 +895,15 @@ fn is_warning_modal(modal: &crate::app::Modal) -> bool {
 /// frontera de confianza (van por `display_name` crudo a propósito). `hints`
 /// (H1 T3, #24) trae los pies de página GENERADOS de cada modal — uno por
 /// campo, ya resueltos del efectivo `dialog` vigente.
-fn draw_modal(
-    frame: &mut Frame<'_>,
+/// Título+cuerpo del modal activo, extraído de `draw_modal` (clippy
+/// `too_many_lines` al crecer la familia de modales).
+fn modal_title_body(
     modal: &crate::app::Modal,
-    theme: &TuiTheme,
     reinterpret: Option<norte_encoding::NameEncoding>,
     hints: &crate::hints::DialogHints,
-) {
+) -> (String, String) {
     use crate::app::{Modal, TransferKind};
-    let (titulo, cuerpo): (String, String) = match modal {
+    match modal {
         // #103 T10: el lote va como LISTA — una ruta por línea, saneada y
         // truncada por la política COMPARTIDA con la GUI
         // (`norte_frontend::item_lines_with`), jamás dos rutas en la misma
@@ -988,7 +993,27 @@ fn draw_modal(
         // #104: mismo enmascarado que el patrón — nombre y error son de
         // usuario (paste con bidi/invisibles incluido).
         Modal::Mkdir { name, error } => mkdir_modal_text(name, error.as_deref()),
-    };
+        // #105: nombre de destino editable — dir destino + campo + error,
+        // todo de usuario y todo enmascarado.
+        Modal::TransferName {
+            kind,
+            to_dir,
+            name,
+            error,
+            ..
+        } => transfer_name_modal_text(*kind, to_dir, name, error.as_deref()),
+    }
+}
+
+fn draw_modal(
+    frame: &mut Frame<'_>,
+    modal: &crate::app::Modal,
+    theme: &TuiTheme,
+    reinterpret: Option<norte_encoding::NameEncoding>,
+    hints: &crate::hints::DialogHints,
+) {
+    use crate::app::Modal;
+    let (titulo, cuerpo) = modal_title_body(modal, reinterpret, hints);
     // Un borrado PERMANENTE (o aprobar una mutación de agente) tiñe el borde
     // de aviso (rol `warning`).
     let border = if is_warning_modal(modal) {
@@ -1117,6 +1142,46 @@ fn mkdir_modal_text(name: &str, error: Option<&str>) -> (String, String) {
         lines.push(masked_err);
     }
     (t("modal-mkdir"), lines.join("\n"))
+}
+
+/// Título+cuerpo de `Modal::TransferName` (#105): mismo contrato de
+/// enmascarado que `mkdir_modal_text` — el dir destino, el nombre y el
+/// diagnóstico son texto/bytes de usuario. El dir va en su propia línea
+/// (jamás un joiner in-band con el nombre — disciplina de los modales de
+/// #103).
+fn transfer_name_modal_text(
+    kind: crate::app::TransferKind,
+    to_dir: &norte_proto::VPath,
+    name: &str,
+    error: Option<&str>,
+) -> (String, String) {
+    let (masked, hostil) = display_name(name.as_bytes());
+    let campo = if hostil {
+        format!("{HOSTILE_BADGE} {masked}_")
+    } else {
+        format!("{masked}_")
+    };
+    let (dir_line, dir_hostil) = norte_frontend::path_display(to_dir);
+    let dir_line = if dir_hostil {
+        format!("{HOSTILE_BADGE} {dir_line}")
+    } else {
+        dir_line
+    };
+    let mut lines = vec![
+        format!("→ {dir_line}"),
+        campo,
+        t("modal-transfer-name-hint"),
+        t("modal-mark-pattern-keys"),
+    ];
+    if let Some(err) = error {
+        let (masked_err, _) = display_name(err.as_bytes());
+        lines.push(masked_err);
+    }
+    let title = match kind {
+        crate::app::TransferKind::Copy => t("modal-transfer-name-copy"),
+        crate::app::TransferKind::Move => t("modal-transfer-name-move"),
+    };
+    (title, lines.join("\n"))
 }
 
 #[cfg(test)]
