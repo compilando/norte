@@ -9,6 +9,20 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **TUI column picker — Alt+C (#108 block 7a):** a keyboard-driven overlay
+  over the shared picker model: `e`/space toggles a column on or off (name
+  is pinned first and immutable), Shift+↑/↓ — or vim-style `K`/`J` —
+  reorders below the pinned name, Ctrl+S applies the header-click sort
+  semantics to the row under the cursor, Enter applies to the session AND
+  persists to `norte.toml`, Esc discards. The save target is one rule,
+  stated in the title: the pane's scheme if the config already has an entry
+  for it, otherwise the `[ui.columns]` default. Non-builtin ids (attr:/
+  plugin:/unparseable) appear as inert-but-editable rows, masked in the
+  render, and survive a save verbatim — cleaning the user's config is
+  doctor's job. Also fixed here: editing `[ui.columns]` outside now
+  hot-reloads into the session (dead since block 4), and a configured
+  mid-list `name` is normalized to the front (the TUI budgets the first
+  width as the name).
 - **Size and date in the GUI listing (#108 block 6):** the pane paints the
   same default column set as the TUI — name, size (IEC), modified (relative
   time) — from the shared layout, under a header row with the ▲/▼ sort
