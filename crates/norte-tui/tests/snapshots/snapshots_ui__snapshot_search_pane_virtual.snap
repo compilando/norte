@@ -3,9 +3,9 @@ source: crates/norte-tui/tests/snapshots_ui.rs
 expression: render(&app)
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│   año.txt                            ││   cosa                               │"
-"│   main.rs                            ││                                      │"
-"│                                      ││                                      │"
+"│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
+"│   año.txt              88 B          ││   cosa                  1 B          │"
+"│   main.rs             120 B          ││                                      │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"

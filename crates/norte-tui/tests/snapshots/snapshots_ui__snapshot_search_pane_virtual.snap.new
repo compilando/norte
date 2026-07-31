@@ -1,12 +1,12 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
+assertion_line: 194
 expression: render(&app)
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
-"│  /docs                               ││   cosa                  1 B          │"
-"│  /src                                ││                                      │"
-"│   notas.txt           420 B          ││                                      │"
+"│Nombre▲                 Tamaño Modific││Nombre▲                 Tamaño Modific│"
+"│   año.txt                88 B        ││   cosa                    1 B        │"
+"│   main.rs               120 B        ││                                      │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"
@@ -16,5 +16,6 @@ expression: render(&app)
 "│                                      ││                                      │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"
-"└ /s 3/5 ──────────────────────────────┘└──────────────────────────────────────┘"
-" ⟨file⟩/casa                                                                    "
+"│                                      ││                                      │"
+"└──────────────────────────────────────┘└──────────────────────────────────────┘"
+" búsqueda: 2 hits (buscando…)                                                   "

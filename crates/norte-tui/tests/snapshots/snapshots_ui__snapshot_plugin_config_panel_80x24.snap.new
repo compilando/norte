@@ -1,13 +1,14 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
-expression: texto.clone()
+assertion_line: 390
+expression: texto
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
-"│  ┌ Extensiones ───────────────────────────────────────────────────────────┐  │"
-"│  │previewer                                                               │  │"
-"│  │> Demo v1.0.0 [fs-read] ✓ ⚠ sin aprobar                                 │  │"
-"│  │                                                                        │  │"
+"│Nombre▲                 Tamaño Modific││Nombre▲                 Tamaño Modific│"
+"│  ┌ Demo ──────────────────────────────────────────────────────────────────┐  │"
+"│  │> verbose: true                                                         │  │"
+"│  │  mode: fast                                                            │  │"
+"│  │   abc�gpj.exe                                                          │  │"
 "│ !│                                                                        │  │"
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"
@@ -23,6 +24,6 @@ expression: texto.clone()
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"
-"│  └ [enter] confirmar [y] aprobar [esc] cancelar [e] activar ──────────────┘  │"
+"│  └ [enter] confirmar [esc] cancelar ──────────────────────────────────────┘  │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘"
 " ⟨file⟩/casa  2/5                                                               "

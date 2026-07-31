@@ -9,6 +9,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Size and date in the TUI listing (#108 block 5):** the pane paints the
+  default column set — name, size (IEC), modified (relative time) — under a
+  dim header line carrying the sort indicator; absent values stay blank
+  (never a fabricated 0), hostile names keep their badge and never break
+  the column alignment, and the first-render budget is unchanged (~0.7ms
+  for 100k entries). Column choice/config and the picker are the next
+  blocks of the approved design.
 - **Manual refresh — Ctrl+R (#106, beta minimum):** reloads both panes
   through the same cancellable path as the post-mutation refresh — marks
   survive by identity with visible pruning, cursor is kept by index, and

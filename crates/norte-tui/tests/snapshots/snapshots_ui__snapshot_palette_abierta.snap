@@ -3,12 +3,12 @@ source: crates/norte-tui/tests/snapshots_ui.rs
 expression: render(&app)
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│  /docs                               ││   cosa                               │"
+"│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
+"│  /docs                               ││   cosa                  1 B          │"
 "│  /src                                ││                                      │"
 "│  @enlace                             ││                                      │"
-"│   notas.txt                          ││                                      │"
-"│ ! �.dat                              ││                                      │"
-"│         ┌ Paleta de comandos ──────────────────────────────────────┐         │"
+"│   notas.txt           420 B          ││                                      │"
+"│ ! �.dat ┌ Paleta de comandos ──────────────────────────────────────┐         │"
 "│         │ cursor.top               ir…ncipio                  home │         │"
 "│         │ viewer.top               ir…ncipio                  home │         │"
 "│         └ /principio  [↑/↓/pgup/pgdn] navegar · [enter] ejecutar · ┘         │"

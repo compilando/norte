@@ -3,12 +3,12 @@ source: crates/norte-tui/tests/snapshots_ui.rs
 expression: texto
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│  /docs                               ││   cosa                               │"
+"│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
 "│  ┌ Demo ──────────────────────────────────────────────────────────────────┐  │"
 "│  │> verbose: true                                                         │  │"
 "│  │  mode: fast                                                            │  │"
-"│ !│   abc�gpj.exe                                                          │  │"
-"│  │                                                                        │  │"
+"│  │   abc�gpj.exe                                                          │  │"
+"│ !│                                                                        │  │"
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"

@@ -1,9 +1,10 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
+assertion_line: 275
 expression: texto.clone()
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
+"│Nombre▲                 Tamaño Modific││Nombre▲                 Tamaño Modific│"
 "│  ┌ Extensiones ───────────────────────────────────────────────────────────┐  │"
 "│  │previewer                                                               │  │"
 "│  │> Demo v1.0.0 [fs-read] ✓ ⚠ sin aprobar                                 │  │"

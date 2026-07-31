@@ -1,9 +1,10 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
+assertion_line: 585
 expression: "format!(\"{arriba}\\n===\\n{}\", render(&app))"
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│N┌ Ayuda — teclas activas — [esc/q/f1] cerrar   [↑/↓/pgup/pgdn] desplazar ──┐a│"
+"│N┌ Ayuda — teclas activas — [esc/q/f1] cerrar   [↑/↓/pgup/pgdn] desplazar ──┐c│"
 "│ │                                                                          │ │"
 "│ │── Navegación (panes) ──                                                  │ │"
 "│ │  up             subir el cursor                                          │ │"
@@ -21,7 +22,7 @@ expression: "format!(\"{arriba}\\n===\\n{}\", render(&app))"
 
 ===
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│N┌ Ayuda — teclas activas — [esc/q/f1] cerrar   [↑/↓/pgup/pgdn] desplazar ──┐a│"
+"│N┌ Ayuda — teclas activas — [esc/q/f1] cerrar   [↑/↓/pgup/pgdn] desplazar ──┐c│"
 "│ │  ctrl+h         mostrar u ocultar entradas ocultas                       │ │"
 "│ │  alt+.          mostrar u ocultar entradas ocultas                       │ │"
 "│ │  ctrl+d         directorios favoritos                                    │ │"

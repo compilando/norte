@@ -1,10 +1,11 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
+assertion_line: 457
 expression: "format!(\"{papelera}\\n===\\n{permanente}\")"
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
-"│  /docs                               ││   cosa                  1 B          │"
+"│Nombre▲                 Tamaño Modific││Nombre▲                 Tamaño Modific│"
+"│  /docs                               ││   cosa                    1 B        │"
 "│  /src                                ││                                      │"
 "│  @enlace                             ││                                      │"
 "│   notas.┌A la papelera─────────────────────────────────────────────┐         │"
@@ -21,8 +22,8 @@ expression: "format!(\"{papelera}\\n===\\n{permanente}\")"
 
 ===
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
-"│  /docs                               ││   cosa                  1 B          │"
+"│Nombre▲                 Tamaño Modific││Nombre▲                 Tamaño Modific│"
+"│  /docs                               ││   cosa                    1 B        │"
 "│  /src                                ││                                      │"
 "│  @enlace                             ││                                      │"
 "│   notas.┌Borrar PERMANENTE─────────────────────────────────────────┐         │"

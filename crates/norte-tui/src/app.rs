@@ -482,6 +482,17 @@ impl Pane {
         self.state.hidden_count()
     }
 
+    /// El orden activo del listado (#108). Delegado puro.
+    #[must_use]
+    pub fn sort(&self) -> norte_frontend::SortSpec {
+        self.state.sort()
+    }
+
+    /// Cambia el orden del listado (#108). Delegado puro.
+    pub fn set_sort(&mut self, spec: norte_frontend::SortSpec) {
+        self.state.set_sort(spec);
+    }
+
     /// Instala el lote de decoraciones resuelto (G3b) — ver
     /// `PaneState::set_decorations`.
     pub fn set_decorations(
@@ -595,6 +606,9 @@ pub use norte_frontend::{display_name, path_display, sort_entries};
 pub struct App {
     /// Los dos paneles (izquierda, derecha).
     pub panes: [Pane; 2],
+    /// `now` para las celdas de tiempo RELATIVO (#108 L5): `None` = reloj
+    /// real; los tests de snapshot fijan `Some(ms)` para render estable.
+    pub render_now_ms: Option<i64>,
     /// Índice del pane con foco (invariante 0|1: privado, ver [`Self::focus`]).
     focus: usize,
     /// `true` cuando el usuario pidió salir.
@@ -1317,6 +1331,7 @@ impl App {
     pub fn new(left: Pane, right: Pane) -> Self {
         Self {
             panes: [left, right],
+            render_now_ms: None,
             focus: 0,
             quit: false,
             pending: String::new(),

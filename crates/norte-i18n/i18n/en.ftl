@@ -165,6 +165,10 @@ status-names-encoding = names: { $enc }
 status-hidden = { $n } hidden
 # --- Column cells (#108) ---
 col-time-now = now
+col-header-name = Name
+col-header-size = Size
+col-header-mtime = Modified
+col-header-kind = Kind
 col-time-min = { $n }m ago
 col-time-hour = { $n }h ago
 col-time-day = { $n }d ago

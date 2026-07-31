@@ -3,12 +3,12 @@ source: crates/norte-tui/tests/snapshots_ui.rs
 expression: texto
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│  /docs                               ││   cosa                               │"
+"│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
 "│  ┌ Extensiones ───────────────────────────────────────────────────────────┐  │"
 "│  │previewer                                                               │  │"
 "│  │> Demo v1.0.0 [fs-read] ✓                                               │  │"
-"│ !│   abc�gpj.exe                                                          │  │"
-"│  │                                                                        │  │"
+"│  │   abc�gpj.exe                                                          │  │"
+"│ !│                                                                        │  │"
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"

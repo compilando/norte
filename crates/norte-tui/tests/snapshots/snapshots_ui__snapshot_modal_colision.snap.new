@@ -1,18 +1,19 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
+assertion_line: 425
 expression: render(&app)
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
-"│  /docs                               ││   cosa                  1 B          │"
+"│Nombre▲                 Tamaño Modific││Nombre▲                 Tamaño Modific│"
+"│  /docs                               ││   cosa                    1 B        │"
 "│  /src                                ││                                      │"
 "│  @enlace                             ││                                      │"
-"│   notas.txt           420 B          ││                                      │"
-"│ ! �.da┌ Favoritos ───────────────────────────────────────────────────┐       │"
-"│       │ trabajo — ⟨file⟩/home/o/work                                 │       │"
-"│       │ rota ruta inválida                                           │       │"
-"│       └ [enter] confirmar [esc] cancelar [a] añadir [d] borrar ──────┘       │"
-"│                                      ││                                      │"
+"│  ┌Colisión────────────────────────────────────────────────────────────────┐  │"
+"│ !│el destino ya existe:                                                   │  │"
+"│  │⟨file⟩/otro/notas.txt                                                   │  │"
+"│  │[esc] cancelar [o] sobrescribir [s] saltar [r] renombrar [w] más nuevo  │  │"
+"│  │                                                                        │  │"
+"│  └────────────────────────────────────────────────────────────────────────┘  │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"

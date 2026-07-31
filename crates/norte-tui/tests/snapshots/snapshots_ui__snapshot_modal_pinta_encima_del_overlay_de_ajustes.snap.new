@@ -1,9 +1,10 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
+assertion_line: 698
 expression: render_80x24(&app)
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
+"│Nombre▲                 Tamaño Modific││Nombre▲                 Tamaño Modific│"
 "│  ┌ Ajustes ───────────────────────────────────────────────────────────────┐  │"
 "│  │General                                                                 │  │"
 "│  │> Tema                         default                                  │  │"
@@ -11,12 +12,12 @@ expression: render_80x24(&app)
 "│ !│  Tipografía de la interfaz                                             │  │"
 "│  │  Tipografía monoespaciada                                              │  │"
 "│  │  Tamaño de letra                                                       │  │"
-"│  │  Modo de búsqueda rápida      filter                                   │  │"
-"│  │  Reducir movimiento           false                                    │  │"
-"│  │  Confirmar antes de salir     auto                                     │  │"
-"│  │  Preset de keymap             orthodox                                 │  │"
-"│  │Plugins                                                                 │  │"
-"│  │  Ajustes de plugins                                                    │  │"
+"│  │  Modo┌A la papelera─────────────────────────────────────────────┐      │  │"
+"│  │  Redu│notas.txt                                                 │      │  │"
+"│  │  Conf│recuperable desde la papelera del sistema                 │      │  │"
+"│  │  Pres│[enter] confirmar [y] aprobar [n] denegar [esc] cancelar  │      │  │"
+"│  │Plugin│                                                          │      │  │"
+"│  │  Ajus└──────────────────────────────────────────────────────────┘      │  │"
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"

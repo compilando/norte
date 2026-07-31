@@ -1,12 +1,15 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
+assertion_line: 134
 expression: render(&app)
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
-"│  /docs                               ││   cosa                  1 B          │"
-"│  /src                                ││                                      │"
-"│   notas.txt           420 B          ││                                      │"
+"│Nombre▲                 Tamaño Modific││Nombre▲                 Tamaño Modific│"
+"│  /docs M                             ││   cosa                    1 B        │"
+"│  /src A�BCDEFG                       ││                                      │"
+"│  @enlace                             ││                                      │"
+"│   notas.txt             420 B        ││                                      │"
+"│ ! �.dat                   7 B        ││                                      │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"
@@ -14,7 +17,5 @@ expression: render(&app)
 "│                                      ││                                      │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"
-"│                                      ││                                      │"
-"│                                      ││                                      │"
-"└ /s 3/5 ──────────────────────────────┘└──────────────────────────────────────┘"
-" ⟨file⟩/casa                                                                    "
+"└──────────────────────────────────────┘└──────────────────────────────────────┘"
+" ⟨file⟩/casa  2/5                                                               "

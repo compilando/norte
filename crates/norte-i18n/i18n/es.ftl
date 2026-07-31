@@ -165,6 +165,10 @@ status-names-encoding = nombres: { $enc }
 status-hidden = { $n } ocultas
 # --- Celdas de columnas (#108) ---
 col-time-now = ahora
+col-header-name = Nombre
+col-header-size = Tamaño
+col-header-mtime = Fecha
+col-header-kind = Tipo
 col-time-min = hace { $n }m
 col-time-hour = hace { $n }h
 col-time-day = hace { $n }d

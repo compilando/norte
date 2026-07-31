@@ -735,3 +735,57 @@ mod model_tests {
         assert_eq!(format_mtime(now, TimeFormat::Iso, now), "2024-07-03T09:46Z");
     }
 }
+
+/// El set de columnas POR DEFECTO (#108 L4): `name`, `size`, `mtime` con
+/// los formatos por hint del spec (size → iec/derecha, mtime → relative).
+/// El bloque 4 (config `[ui.columns]`) lo sustituirá por el del usuario;
+/// hasta entonces ambos frontends pintan esto.
+#[must_use]
+pub fn default_layout_items() -> Vec<(Builtin, LayoutItem)> {
+    vec![
+        (
+            Builtin::Name,
+            LayoutItem {
+                policy: WidthPolicy::Flex { min: 10, weight: 1 },
+                measured: 0,
+                is_name: true,
+            },
+        ),
+        // Los anchos de las columnas no-nombre INCLUYEN su separador (1
+        // celda a la izquierda): el layout presupuesta el ancho TOTAL de la
+        // fila — sin esto, la última columna desbordaba el pane y el
+        // terminal la recortaba. 11 = «1023.9 GiB» (10) + separador;
+        // 10 = «hace 364d» (9) + separador.
+        (
+            Builtin::Size,
+            LayoutItem {
+                policy: WidthPolicy::Fixed(11),
+                measured: 0,
+                is_name: false,
+            },
+        ),
+        (
+            Builtin::Mtime,
+            LayoutItem {
+                policy: WidthPolicy::Fixed(10),
+                measured: 0,
+                is_name: false,
+            },
+        ),
+    ]
+}
+
+/// Texto de la celda de una columna BUILTIN no-nombre (#108 L5): `None` =
+/// ausencia (un dir sin size, un mtime desconocido) — se pinta blanco,
+/// jamás un `0` fabricado. `now_ms` lo inyecta el caller (estabilidad de
+/// snapshots y pureza).
+#[must_use]
+pub fn builtin_cell(entry: &norte_proto::Entry, col: Builtin, now_ms: i64) -> Option<String> {
+    match col {
+        Builtin::Name | Builtin::Kind => None, // el nombre lo pinta el frontend
+        Builtin::Size => entry.size.map(|n| format_size(n, SizeFormat::Iec)),
+        Builtin::Mtime => entry
+            .mtime_ms
+            .map(|ms| format_mtime(ms, TimeFormat::Relative, now_ms)),
+    }
+}

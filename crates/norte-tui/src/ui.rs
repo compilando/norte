@@ -52,8 +52,17 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(rows[0]);
+    // #108 L5: `now` de las celdas de tiempo relativo — UNA lectura por
+    // frame; los tests lo fijan (`App::render_now_ms`) para snapshots
+    // estables.
+    let now_ms = app.render_now_ms.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+    });
+
     for (i, pane) in app.panes.iter().enumerate() {
-        draw_pane(frame, cols[i], pane, app.focus() == i, &app.theme);
+        draw_pane(frame, cols[i], pane, app.focus() == i, &app.theme, now_ms);
     }
     draw_tasks(frame, rows[1], app);
     draw_status(frame, rows[2], app);
@@ -240,6 +249,79 @@ fn draw_nav_popup(
     let mut state = ListState::default();
     state.select(selected);
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// Anchos de las columnas por defecto (#108) para el ancho interior del
+/// pane: `(builtin, ancho)` de las columnas VIVAS, en orden de pintado.
+fn column_widths(inner_width: u16) -> Vec<(norte_frontend::columns::Builtin, u16)> {
+    let defaults = norte_frontend::columns::default_layout_items();
+    let items: Vec<_> = defaults.iter().map(|(_, it)| *it).collect();
+    let placed = norte_frontend::columns::layout(inner_width, &items);
+    defaults
+        .iter()
+        .zip(placed)
+        .filter_map(|((b, _), w)| w.map(|w| (*b, w)))
+        .collect()
+}
+
+/// La línea de cabecera (#108 L5): etiquetas Fluent, la del orden activo
+/// con `▲`/`▼`. Ancho fiel al de las celdas de las filas.
+fn column_header_line(
+    widths: &[(norte_frontend::columns::Builtin, u16)],
+    sort: norte_frontend::SortSpec,
+) -> String {
+    use norte_frontend::columns::Builtin;
+    use norte_frontend::{SortColumn, SortDir};
+    let mut out = String::new();
+    for (i, (col, w)) in widths.iter().enumerate() {
+        let label = match col {
+            Builtin::Name => t("col-header-name"),
+            Builtin::Size => t("col-header-size"),
+            Builtin::Mtime => t("col-header-mtime"),
+            Builtin::Kind => t("col-header-kind"),
+        };
+        let activa = matches!(
+            (col, sort.column),
+            (Builtin::Name, SortColumn::Name)
+                | (Builtin::Size, SortColumn::Size)
+                | (Builtin::Mtime, SortColumn::Mtime)
+        );
+        let label = if activa {
+            let flecha = if sort.dir == SortDir::Asc {
+                "▲"
+            } else {
+                "▼"
+            };
+            format!("{label}{flecha}")
+        } else {
+            label
+        };
+        let w = usize::from(*w);
+        if i == 0 {
+            // Nombre: alineado a la izquierda (deja el hueco del canalón).
+            let recortada: String = if label.width() > w {
+                label.chars().take(w).collect()
+            } else {
+                label
+            };
+            let pad = w.saturating_sub(recortada.width());
+            out.push_str(&recortada);
+            out.push_str(&" ".repeat(pad));
+        } else {
+            // No-nombre: el ancho incluye el separador — contenido a la
+            // derecha dentro de w-1, misma cuenta que la celda.
+            let contenido = w.saturating_sub(1);
+            let recortada: String = if label.width() > contenido {
+                label.chars().take(contenido).collect()
+            } else {
+                label
+            };
+            let pad = w.saturating_sub(recortada.width());
+            out.push_str(&" ".repeat(pad));
+            out.push_str(&recortada);
+        }
+    }
+    out
 }
 
 /// Overlay del catálogo de extensiones (M4-P3): la lista de plugins AGRUPADA
@@ -1437,7 +1519,14 @@ fn centered(base: Rect, w: u16, h: u16) -> Rect {
     }
 }
 
-fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, theme: &TuiTheme) {
+fn draw_pane(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    pane: &Pane,
+    focused: bool,
+    theme: &TuiTheme,
+    now_ms: i64,
+) {
     let border_style = if focused {
         theme.role(Role::BorderFocus)
     } else {
@@ -1484,6 +1573,10 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, them
     // posición DENTRO del filtrado. En Jump (quick_visible = None) el
     // listado va entero y manda el cursor real.
     let reinterpret = pane.name_encoding();
+    // #108 L5: anchos de columna del ancho INTERIOR del pane, una vez por
+    // frame — las filas y la cabecera comparten el mismo layout.
+    let inner_w = block.inner(area).width;
+    let widths = &column_widths(inner_w);
     let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = match pane.quick_visible() {
         Some(vis) => (
             vis.iter()
@@ -1495,6 +1588,8 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, them
                         reinterpret,
                         pane.decoration_for(&e.path),
                         pane.is_marked(e),
+                        widths,
+                        now_ms,
                     )
                 })
                 .collect(),
@@ -1512,18 +1607,38 @@ fn draw_pane(frame: &mut Frame<'_>, area: Rect, pane: &Pane, focused: bool, them
                         reinterpret,
                         pane.decoration_for(&e.path),
                         pane.is_marked(e),
+                        widths,
+                        now_ms,
                     )
                 })
                 .collect(),
             (!pane.entries().is_empty()).then_some(pane.cursor()),
         ),
     };
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(theme.role(Role::Selection));
+    // #108 L5: bloque a mano — dentro, UNA línea de cabecera de columnas
+    // (dim, con el indicador ▲/▼ del orden activo) y el listado debajo.
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+    let (header_area, list_area) = {
+        let mut cab = inner;
+        cab.height = 1;
+        let mut lst = inner;
+        lst.y = inner.y.saturating_add(1);
+        lst.height = inner.height.saturating_sub(1);
+        (cab, lst)
+    };
+    frame.render_widget(
+        Paragraph::new(column_header_line(widths, pane.sort()))
+            .style(ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM)),
+        header_area,
+    );
+    let list = List::new(items).highlight_style(theme.role(Role::Selection));
     let mut state = ListState::default();
     state.select(selected);
-    frame.render_stateful_widget(list, area, &mut state);
+    frame.render_stateful_widget(list, list_area, &mut state);
 }
 
 fn entry_item<'a>(
@@ -1532,6 +1647,8 @@ fn entry_item<'a>(
     reinterpret: Option<norte_encoding::NameEncoding>,
     decoration: Option<&norte_frontend::Decoration>,
     marked: bool,
+    widths: &[(norte_frontend::columns::Builtin, u16)],
+    now_ms: i64,
 ) -> ListItem<'a> {
     let name = entry.path.file_name().map_or(&[][..], |n| n.as_bytes());
     // #57: con reinterpretación activa, los nombres no-UTF8 se decodifican
@@ -1584,6 +1701,59 @@ fn entry_item<'a>(
         };
         spans.push(Span::raw(" "));
         spans.push(Span::styled(badge_text.to_string(), style));
+    }
+    // #108 L5: celdas de columnas tras el nombre. El bloque del nombre
+    // (canalón+badge+glyph+texto+decoración) se TRUNCA a su ancho de layout
+    // (elipsis central, consciente de celdas — CJK/emoji no desbordan) y
+    // se rellena; cada celda no-nombre va alineada a la DERECHA en su
+    // ancho, dim, con un espacio separador. Ausencia = celda en blanco,
+    // jamás un 0 fabricado.
+    if let Some((_, name_w)) = widths.first() {
+        let name_w = usize::from(*name_w);
+        let usado: usize = spans.iter().map(|sp| sp.content.width()).sum();
+        if usado > name_w {
+            // Recorta el TEXTO del nombre (último span de texto largo es el
+            // body, índice 2) — los fijos (canalón/badge/glyph) se quedan.
+            let fijo: usize = usado - spans[2].content.width() + 1; // +1 glyph dentro del body
+            let presupuesto =
+                name_w.saturating_sub(fijo.saturating_sub(spans[2].content.width().min(fijo)));
+            let _ = presupuesto;
+            // Simplicidad honesta: recorta el body entero con elipsis
+            // central a lo que quede tras los demás spans.
+            let otros: usize = spans
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != 2)
+                .map(|(_, sp)| sp.content.width())
+                .sum();
+            let body_w = name_w.saturating_sub(otros);
+            let recortado = middle_ellipsis(&spans[2].content, body_w);
+            spans[2] = Span::styled(recortado, spans[2].style);
+        }
+        let usado: usize = spans.iter().map(|sp| sp.content.width()).sum();
+        if usado < name_w {
+            spans.push(Span::raw(" ".repeat(name_w - usado)));
+        }
+        for (col, w) in widths.iter().skip(1) {
+            let cell =
+                norte_frontend::columns::builtin_cell(entry, *col, now_ms).unwrap_or_default();
+            // El ancho INCLUYE el separador (default_layout_items): la
+            // celda se alinea a la derecha dentro de w-1 y siempre queda
+            // ≥1 espacio a su izquierda.
+            let w = usize::from(*w);
+            let contenido = w.saturating_sub(1);
+            let cw = cell.width();
+            let recortada: String = if cw > contenido {
+                cell.chars().take(contenido).collect()
+            } else {
+                cell
+            };
+            let pad = w.saturating_sub(recortada.width());
+            spans.push(Span::styled(
+                format!("{}{recortada}", " ".repeat(pad)),
+                ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM),
+            ));
+        }
     }
     ListItem::new(Line::from(spans))
 }
@@ -1650,8 +1820,8 @@ mod entry_item_tests {
     fn a_marked_row_starts_with_the_mark_gutter() {
         let entry = e("mem:///a", EntryKind::File);
         let theme = TuiTheme::default();
-        let marked = entry_item(&entry, &theme, None, None, true);
-        let plain = entry_item(&entry, &theme, None, None, false);
+        let marked = entry_item(&entry, &theme, None, None, true, &[], 0);
+        let plain = entry_item(&entry, &theme, None, None, false, &[], 0);
         assert_eq!(first_span_text(&marked), "*");
         assert_eq!(first_span_text(&plain), " ");
     }
@@ -1662,7 +1832,7 @@ mod entry_item_tests {
     fn the_gutter_precedes_the_hostile_badge() {
         let entry = e_hostile();
         let theme = TuiTheme::default();
-        let item = entry_item(&entry, &theme, None, None, true);
+        let item = entry_item(&entry, &theme, None, None, true, &[], 0);
         let texts = span_texts(&item);
         assert_eq!(texts[0], "*");
         assert_eq!(texts[1], HOSTILE_BADGE);

@@ -3,12 +3,12 @@ source: crates/norte-tui/tests/snapshots_ui.rs
 expression: render_80x24(&app)
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│  /docs                               ││   cosa                               │"
+"│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
 "│  ┌ Ajustes ───────────────────────────────────────────────────────────────┐  │"
 "│  │General                                                                 │  │"
 "│  │> Tema                         default                                  │  │"
-"│ !│  Idioma                       auto                                     │  │"
-"│  │  Tipografía de la interfaz                                             │  │"
+"│  │  Idioma                       auto                                     │  │"
+"│ !│  Tipografía de la interfaz                                             │  │"
 "│  │  Tipografía monoespaciada                                              │  │"
 "│  │  Tamaño de letra                                                       │  │"
 "│  │  Modo┌A la papelera─────────────────────────────────────────────┐      │  │"
