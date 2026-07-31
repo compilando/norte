@@ -2,3 +2,4 @@
 **/*.rs.bk
 lcov.info
 .DS_Store
+*.snap.new

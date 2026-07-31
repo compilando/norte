@@ -251,6 +251,23 @@ fn draw_nav_popup(
     frame.render_stateful_widget(list, area, &mut state);
 }
 
+/// Prefijo de `s` que cabe en `max` CELDAS (review MN2/MN3): recorte
+/// consciente de ancho — un char de doble celda jamás desborda el
+/// presupuesto (el recorte por `chars()` sí lo hacía).
+fn take_width(s: &str, max: usize) -> String {
+    let mut out = String::new();
+    let mut usado = 0usize;
+    for c in s.chars() {
+        let cw = c.width().unwrap_or(0);
+        if usado + cw > max {
+            break;
+        }
+        usado += cw;
+        out.push(c);
+    }
+    out
+}
+
 /// Anchos de las columnas por defecto (#108) para el ancho interior del
 /// pane: `(builtin, ancho)` de las columnas VIVAS, en orden de pintado.
 fn column_widths(inner_width: u16) -> Vec<(norte_frontend::columns::Builtin, u16)> {
@@ -286,39 +303,41 @@ fn column_header_line(
                 | (Builtin::Size, SortColumn::Size)
                 | (Builtin::Mtime, SortColumn::Mtime)
         );
-        let label = if activa {
-            let flecha = if sort.dir == SortDir::Asc {
-                "▲"
-            } else {
-                "▼"
-            };
-            format!("{label}{flecha}")
-        } else {
-            label
-        };
         let w = usize::from(*w);
+        let flecha = if sort.dir == SortDir::Asc {
+            '▲'
+        } else {
+            '▼'
+        };
         if i == 0 {
             // Nombre: alineado a la izquierda (deja el hueco del canalón).
-            let recortada: String = if label.width() > w {
-                label.chars().take(w).collect()
-            } else {
-                label
-            };
-            let pad = w.saturating_sub(recortada.width());
-            out.push_str(&recortada);
+            // La flecha se añade TRAS recortar (review MN2): el indicador
+            // de dirección sobrevive a cualquier locale; recorte por ANCHO
+            // (take_width), jamás por chars.
+            let budget = if activa { w.saturating_sub(1) } else { w };
+            let mut cab = take_width(&label, budget);
+            if activa {
+                cab.push(flecha);
+            }
+            let pad = w.saturating_sub(cab.width());
+            out.push_str(&cab);
             out.push_str(&" ".repeat(pad));
         } else {
             // No-nombre: el ancho incluye el separador — contenido a la
             // derecha dentro de w-1, misma cuenta que la celda.
             let contenido = w.saturating_sub(1);
-            let recortada: String = if label.width() > contenido {
-                label.chars().take(contenido).collect()
+            let budget = if activa {
+                contenido.saturating_sub(1)
             } else {
-                label
+                contenido
             };
-            let pad = w.saturating_sub(recortada.width());
+            let mut cab = take_width(&label, budget);
+            if activa {
+                cab.push(flecha);
+            }
+            let pad = w.saturating_sub(cab.width());
             out.push_str(&" ".repeat(pad));
-            out.push_str(&recortada);
+            out.push_str(&cab);
         }
     }
     out
@@ -1281,6 +1300,49 @@ fn transfer_name_modal_text(
 }
 
 #[cfg(test)]
+mod entry_item_columns_tests {
+    use super::*;
+    use norte_proto::{EntryKind, VPath};
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::{List, Widget as _};
+
+    /// review #108-5 M2: una decoración CJK (16 celdas) con la columna del
+    /// nombre a su mínimo NO desplaza las celdas — la decoración cae antes
+    /// que romper la alineación, y el ancho total de la fila es EXACTO.
+    #[test]
+    fn una_decoracion_ancha_jamas_desplaza_las_columnas() {
+        use norte_frontend::columns::{Builtin, LayoutItem, WidthPolicy};
+        let entry = norte_proto::Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: VPath::parse("mem:///f.txt").unwrap(),
+            kind: EntryKind::File,
+            size: Some(7),
+            mtime_ms: None,
+        };
+        let deco = norte_frontend::Decoration {
+            badge: Some("全全全全全全全全".to_owned()),
+            role: None,
+        };
+        let theme = TuiTheme::default();
+        let widths = [(Builtin::Name, 10u16), (Builtin::Size, 11u16)];
+        let _ = LayoutItem {
+            policy: WidthPolicy::Auto,
+            measured: 0,
+            is_name: false,
+        };
+        let item = entry_item(&entry, &theme, None, Some(&deco), false, &widths, 0);
+        // Renderiza a un buffer del ancho EXACTO del presupuesto: si la
+        // fila desbordara, la celda de tamaño perdería su cola.
+        let area = Rect::new(0, 0, 21, 1);
+        let mut buf = Buffer::empty(area);
+        List::new(vec![item]).render(area, &mut buf);
+        let fila: String = (0..21).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+        assert_eq!(fila, "   f.txt          7 B", "{fila:?}");
+    }
+}
+
+#[cfg(test)]
 mod transfer_name_modal_text_tests {
     use super::transfer_name_modal_text;
     use crate::app::TransferKind;
@@ -1447,6 +1509,11 @@ fn clamp_chars(s: &str, max: usize) -> String {
 /// TUI hoy) a cabeza+cola ANTES de medir nada — el resto de la función seguía
 /// igual sobre esa entrada ya acotada.
 fn middle_ellipsis(s: &str, max: usize) -> String {
+    if max == 0 {
+        // review #108-5 M2: con presupuesto 0 devolvía "…" (ancho 1 > 0) y
+        // rompía por una celda el invariante del caller.
+        return String::new();
+    }
     let char_cap = max.saturating_mul(4);
     let chars: Vec<char> = s.chars().collect();
     // `true` si el backstop tuvo que descartar chars por CUENTA (no por
@@ -1710,16 +1777,22 @@ fn entry_item<'a>(
     // jamás un 0 fabricado.
     if let Some((_, name_w)) = widths.first() {
         let name_w = usize::from(*name_w);
+        // review #108-5 M2: la DECORACIÓN también entra en el presupuesto
+        // del nombre — un badge CJK (8 chars = 16 celdas) desplazaba todas
+        // las celdas de la fila. Si no cabe dejando ≥3 celdas de nombre,
+        // fuera la decoración entera (separador incluido): el nombre manda.
+        if spans.len() > 3 {
+            let deco: usize = spans[3..].iter().map(|sp| sp.content.width()).sum();
+            let fijos: usize = spans[..2].iter().map(|sp| sp.content.width()).sum();
+            if fijos + deco + 3 > name_w {
+                spans.truncate(3);
+            }
+        }
         let usado: usize = spans.iter().map(|sp| sp.content.width()).sum();
         if usado > name_w {
-            // Recorta el TEXTO del nombre (último span de texto largo es el
-            // body, índice 2) — los fijos (canalón/badge/glyph) se quedan.
-            let fijo: usize = usado - spans[2].content.width() + 1; // +1 glyph dentro del body
-            let presupuesto =
-                name_w.saturating_sub(fijo.saturating_sub(spans[2].content.width().min(fijo)));
-            let _ = presupuesto;
-            // Simplicidad honesta: recorta el body entero con elipsis
-            // central a lo que quede tras los demás spans.
+            // Recorta el TEXTO del nombre (el span del body, índice 2) con
+            // elipsis central a lo que quede tras los demás spans — los
+            // fijos (canalón/badge) y la decoración se quedan.
             let otros: usize = spans
                 .iter()
                 .enumerate()
@@ -1731,6 +1804,10 @@ fn entry_item<'a>(
             spans[2] = Span::styled(recortado, spans[2].style);
         }
         let usado: usize = spans.iter().map(|sp| sp.content.width()).sum();
+        debug_assert!(
+            usado <= name_w,
+            "el bloque del nombre desborda su columna: {usado} > {name_w}"
+        );
         if usado < name_w {
             spans.push(Span::raw(" ".repeat(name_w - usado)));
         }
@@ -1744,7 +1821,7 @@ fn entry_item<'a>(
             let contenido = w.saturating_sub(1);
             let cw = cell.width();
             let recortada: String = if cw > contenido {
-                cell.chars().take(contenido).collect()
+                take_width(&cell, contenido)
             } else {
                 cell
             };
