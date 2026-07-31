@@ -327,6 +327,11 @@ mod tests {
         // sin cambios → vacío
         let p2 = ColumnsPicker::open(&settings_vacios(), "file", SortSpec::default());
         assert!(p2.finish().formats.is_empty());
+        // Ciclar y VOLVER al valor de apertura también es "sin cambios":
+        // el diff es contra opened_format, no un flag de "tocado".
+        p.cycle_format(); // si → exact
+        p.cycle_format(); // exact → iec (valor de apertura)
+        assert!(p.finish().formats.is_empty());
     }
 
     /// El seed parte del estilo RESUELTO del scheme, no del default: con un
