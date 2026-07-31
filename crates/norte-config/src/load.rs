@@ -1887,6 +1887,40 @@ mod persist_columns_tests {
         );
     }
 
+    /// Par positivo del guard (pin del walk por `TableLike`): un `[ui]` en
+    /// forma INLINE (`ui = { theme = "nord" }`) pasa `is_table_like` y el
+    /// escritor debe ESCRIBIR A TRAVÉS de él — un walk por `as_table_mut`
+    /// (solo `Item::Table`) lo rechazaría — sin perder el valor previo.
+    #[test]
+    fn persist_columns_escribe_a_traves_de_ui_inline() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("norte.toml"), "ui = { theme = \"nord\" }\n").expect("seed");
+        persist_columns(
+            dir.path(),
+            None,
+            &["name".to_owned()],
+            PersistSort {
+                column: "name",
+                descending: false,
+                dirs_first: true,
+            },
+        )
+        .expect("tabla inline: el guard no debe rechazarla");
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let cfg = load(&layers).expect("load");
+        assert_eq!(
+            cfg.ui_columns.default_columns.as_deref(),
+            Some(&["name".to_owned()][..])
+        );
+        assert_eq!(
+            cfg.ui_theme.as_deref(),
+            Some("nord"),
+            "el valor inline previo sobrevive a la escritura"
+        );
+    }
+
     /// Guard de forma nivel a nivel (mismo criterio que `persist_set`): un
     /// nivel escalar (`ui = 3`) es `Err(InvalidData)` LIMPIO, no un panic
     /// que tumbaría el hilo de fondo — y el fichero queda intacto.
