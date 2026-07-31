@@ -184,6 +184,10 @@ pub struct PaneState {
     /// [`Self::set_listing`], case o no case con una entrada del listado.
     /// Identidad por `VPath` byte-exacto, igual que la memoria.
     pending_focus: Option<VPath>,
+    /// Orden elegido del listado (#108 L7). Default = name/asc/dirs-first
+    /// (el orden histórico). Cambia por [`PaneState::set_sort`], que
+    /// re-ordena en sitio re-anclando el cursor por path.
+    sort: crate::sort::SortSpec,
     /// Mostrar entradas ocultas (#107). `true` por defecto (el constructor
     /// no sabe de config; el frontend fija el default de `[ui] show_hidden`
     /// con [`Self::set_show_hidden`] tras construir). SOLO presentación
@@ -219,7 +223,8 @@ impl PaneState {
     /// Cursor en 0, sin quick search, sin carga pendiente.
     #[must_use]
     pub fn new(dir: VPath, entries: Vec<Entry>) -> Self {
-        let (entries, sort_keys) = crate::sort::sort_with_keys(entries);
+        let (entries, sort_keys) =
+            crate::sort::sort_with_keys_spec(entries, crate::sort::SortSpec::default());
         Self {
             dir,
             entries,
@@ -236,6 +241,7 @@ impl PaneState {
             pending_focus: None,
             show_hidden: true,
             hidden_stash: Vec::new(),
+            sort: crate::sort::SortSpec::default(),
             decorations: HashMap::new(),
         }
     }
@@ -295,6 +301,38 @@ impl PaneState {
             .and_then(|p| self.entries.iter().position(|e| e.path == p))
             .unwrap_or_else(|| self.cursor.min(self.entries.len().saturating_sub(1)));
         self.pruned_marks = self.prune_marks();
+        if let Some(q) = &mut self.quick {
+            q.refresh(&self.entries, quick_prev.as_ref());
+        }
+        self.quick_sync_jump();
+    }
+
+    /// El orden activo del listado (#108).
+    #[must_use]
+    pub fn sort(&self) -> crate::sort::SortSpec {
+        self.sort
+    }
+
+    /// Cambia el orden del listado (#108 L7): re-ordena EN SITIO (claves
+    /// #54 conservadas — solo cambia el comparador), re-ancla el cursor al
+    /// PATH seleccionado y re-aplica el quick vivo. Las marcas no se tocan
+    /// (van por identidad). No-op si el spec no cambia.
+    pub fn set_sort(&mut self, spec: crate::sort::SortSpec) {
+        if spec == self.sort {
+            return;
+        }
+        self.sort = spec;
+        let anchor = self.entries.get(self.cursor).map(|e| e.path.clone());
+        let quick_prev = self.quick_selected_path();
+        let mut pares: Vec<(Entry, crate::sort::SortKey)> = std::mem::take(&mut self.entries)
+            .into_iter()
+            .zip(std::mem::take(&mut self.sort_keys))
+            .collect();
+        pares.sort_by(|a, b| crate::sort::cmp_keyed_with((&a.1, &a.0), (&b.1, &b.0), self.sort));
+        (self.entries, self.sort_keys) = pares.into_iter().unzip();
+        self.cursor = anchor
+            .and_then(|p| self.entries.iter().position(|e| e.path == p))
+            .unwrap_or_else(|| self.cursor.min(self.entries.len().saturating_sub(1)));
         if let Some(q) = &mut self.quick {
             q.refresh(&self.entries, quick_prev.as_ref());
         }
@@ -389,7 +427,7 @@ impl PaneState {
         // entrar si la ocultación está activa.
         self.hidden_stash.clear();
         let entries = self.stash_hidden(entries);
-        let (entries, sort_keys) = crate::sort::sort_with_keys(entries);
+        let (entries, sort_keys) = crate::sort::sort_with_keys_spec(entries, self.sort);
         self.dir = dir;
         self.entries = entries;
         self.sort_keys = sort_keys;
@@ -1009,8 +1047,14 @@ impl PaneState {
         }
         let quick_prev = self.quick_selected_path();
         let anchor = self.entries.get(self.cursor).map(|e| e.path.clone());
-        let (batch, batch_keys) = crate::sort::sort_with_keys(batch);
-        crate::sort::merge_keyed(&mut self.entries, &mut self.sort_keys, batch, batch_keys);
+        let (batch, batch_keys) = crate::sort::sort_with_keys_spec(batch, self.sort);
+        crate::sort::merge_keyed_spec(
+            &mut self.entries,
+            &mut self.sort_keys,
+            batch,
+            batch_keys,
+            self.sort,
+        );
         self.cursor = anchor
             .and_then(|p| self.entries.iter().position(|e| e.path == p))
             .unwrap_or_else(|| self.cursor.min(self.entries.len().saturating_sub(1)));
@@ -1037,7 +1081,7 @@ impl PaneState {
         // reconstruye fresco de él, nunca se acumula con el anterior.
         self.hidden_stash.clear();
         let entries = self.stash_hidden(entries);
-        let (entries, sort_keys) = crate::sort::sort_with_keys(entries);
+        let (entries, sort_keys) = crate::sort::sort_with_keys_spec(entries, self.sort);
         self.cursor = self.cursor.min(entries.len().saturating_sub(1));
         self.entries = entries;
         self.sort_keys = sort_keys;
@@ -1090,6 +1134,61 @@ mod tests {
             .map(|n| e(&format!("mem:///{n}"), EntryKind::File))
             .collect();
         PaneState::new(VPath::parse("mem:///").unwrap(), es)
+    }
+
+    /// #108 L7: `set_sort` re-ordena en sitio, re-ancla el cursor por PATH
+    /// y no toca las marcas (van por identidad); `extend` bajo el spec
+    /// activo mergea en el orden nuevo.
+    #[test]
+    fn set_sort_reordena_reancla_y_extiende_bajo_el_spec() {
+        use crate::sort::{SortColumn, SortDir, SortSpec};
+        let mk = |n: &str, size: Option<u64>| {
+            let mut e = e(&format!("mem:///{n}"), EntryKind::File);
+            e.size = size;
+            e
+        };
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![mk("a", Some(30)), mk("b", Some(10)), mk("c", Some(20))],
+        );
+        p.cursor_down(); // "b"
+        p.toggle_mark(); // marca "b"
+        let spec = SortSpec {
+            column: SortColumn::Size,
+            dir: SortDir::Asc,
+            dirs_first: true,
+        };
+        p.set_sort(spec);
+        let orden: Vec<_> = p.entries().iter().map(|e| e.path.clone()).collect();
+        assert_eq!(
+            orden,
+            vec![
+                VPath::parse("mem:///b").unwrap(),
+                VPath::parse("mem:///c").unwrap(),
+                VPath::parse("mem:///a").unwrap()
+            ]
+        );
+        assert_eq!(
+            p.selected().map(|e| e.path.clone()),
+            Some(VPath::parse("mem:///b").unwrap()),
+            "cursor re-anclado por path"
+        );
+        assert_eq!(p.marks_len(), 1, "las marcas van por identidad");
+
+        // Un fill que llega DESPUÉS mergea bajo el spec activo.
+        p.set_loading(true);
+        p.extend(vec![mk("d", Some(15))]);
+        let orden: Vec<_> = p.entries().iter().map(|e| e.path.clone()).collect();
+        assert_eq!(
+            orden,
+            vec![
+                VPath::parse("mem:///b").unwrap(),
+                VPath::parse("mem:///d").unwrap(),
+                VPath::parse("mem:///c").unwrap(),
+                VPath::parse("mem:///a").unwrap()
+            ],
+            "el lote entra en su posición bajo size/asc"
+        );
     }
 
     /// #107: ocultar es PRESENTACIÓN — el provider lista todo, el pane

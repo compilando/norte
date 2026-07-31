@@ -35,4 +35,4 @@ pub use display::{display_name, display_name_with, path_display, path_display_wi
 pub use format::human_bytes;
 pub use modal::{MODAL_ITEM_LIMIT, item_lines, item_lines_with};
 pub use pane::{PaneState, PatternError};
-pub use sort::sort_entries;
+pub use sort::{SortColumn, SortDir, SortSpec, sort_entries, sort_entries_with};
