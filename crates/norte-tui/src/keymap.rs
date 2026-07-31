@@ -54,55 +54,94 @@ pub fn chord_from_crossterm(mods: CtMods, code: CtCode) -> Option<Chord> {
 /// Los comandos que el TUI sabe ejecutar — la fuente ÚNICA contra la que
 /// se valida todo keymap (los mismos nombres que verán la palette y el
 /// wire, ADR 0006).
-pub const COMMANDS: &[&str] = &[
-    "app.quit",
-    "pane.switch",
-    "cursor.up",
-    "cursor.down",
-    "cursor.page-up",
-    "cursor.page-down",
-    "cursor.top",
-    "cursor.bottom",
-    "nav.enter",
-    "nav.parent",
-    "app.help",
-    "app.theme",
-    "app.extensions",
-    "app.palette",
-    "app.settings",
-    "pane.copy",
-    "pane.move",
-    "pane.delete",
-    "pane.delete-permanent",
-    "pane.view",
-    "pane.open",
-    "task.cancel",
-    "viewer.close",
-    "viewer.up",
-    "viewer.down",
-    "viewer.page-up",
-    "viewer.page-down",
-    "viewer.top",
-    "viewer.bottom",
-    "viewer.encoding",
-    "viewer.encoding-auto",
-    "viewer.hex",
-    "pane.quick-search",
-    "pane.history",
-    "pane.hotlist",
-    "pane.search",
-    "pane.names-encoding",
-    "pane.toggle-hidden",
-    "pane.mkdir",
-    "pane.rename",
-    "pane.refresh",
-    "mark.toggle",
-    "mark.all",
-    "mark.invert",
-    "mark.clear",
-    "mark.pattern-add",
-    "mark.pattern-remove",
-];
+/// Una sola fuente para el vocabulario de comandos (#112): el macro emite
+/// `COMMANDS` (la lista de validación de siempre, misma superficie pública)
+/// Y el enum [`Command`] con una variante por nombre. `dispatch` (main.rs)
+/// matchea el enum SIN comodín: un comando nuevo sin brazo, o un brazo sin
+/// variante, es un ERROR DE COMPILACIÓN — la clase de bug que motivó esto
+/// (`mark.pattern-*` en COMMANDS sin brazo: pánico en debug, no-op mudo en
+/// release) deja de existir en runtime.
+macro_rules! commands {
+    ($($name:literal => $variant:ident,)+) => {
+        /// Los comandos que el TUI sabe ejecutar — la fuente ÚNICA contra la
+        /// que se valida todo keymap (los mismos nombres que verán la palette
+        /// y el wire, ADR 0006).
+        pub const COMMANDS: &[&str] = &[$($name),+];
+
+        /// El vocabulario de `dispatch`, tipado (#112). Se parsea UNA vez en
+        /// la frontera (resolver/palette -> [`Command::parse`]); a partir de
+        /// ahí el compilador exige un brazo por variante.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Command {
+            $(
+                #[doc = concat!("`", $name, "`")]
+                $variant,
+            )+
+        }
+
+        impl Command {
+            /// Nombre -> variante. `None` = fuera del vocabulario (el keymap
+            /// lo valida al cargar; `lua:`/`plugin:` se enrutan ANTES).
+            #[must_use]
+            pub fn parse(s: &str) -> Option<Self> {
+                match s {
+                    $($name => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+commands! {
+    "app.quit" => AppQuit,
+    "pane.switch" => PaneSwitch,
+    "cursor.up" => CursorUp,
+    "cursor.down" => CursorDown,
+    "cursor.page-up" => CursorPageUp,
+    "cursor.page-down" => CursorPageDown,
+    "cursor.top" => CursorTop,
+    "cursor.bottom" => CursorBottom,
+    "nav.enter" => NavEnter,
+    "nav.parent" => NavParent,
+    "app.help" => AppHelp,
+    "app.theme" => AppTheme,
+    "app.extensions" => AppExtensions,
+    "app.palette" => AppPalette,
+    "app.settings" => AppSettings,
+    "pane.copy" => PaneCopy,
+    "pane.move" => PaneMove,
+    "pane.delete" => PaneDelete,
+    "pane.delete-permanent" => PaneDeletePermanent,
+    "pane.view" => PaneView,
+    "pane.open" => PaneOpen,
+    "task.cancel" => TaskCancel,
+    "viewer.close" => ViewerClose,
+    "viewer.up" => ViewerUp,
+    "viewer.down" => ViewerDown,
+    "viewer.page-up" => ViewerPageUp,
+    "viewer.page-down" => ViewerPageDown,
+    "viewer.top" => ViewerTop,
+    "viewer.bottom" => ViewerBottom,
+    "viewer.encoding" => ViewerEncoding,
+    "viewer.encoding-auto" => ViewerEncodingAuto,
+    "viewer.hex" => ViewerHex,
+    "pane.quick-search" => PaneQuickSearch,
+    "pane.history" => PaneHistory,
+    "pane.hotlist" => PaneHotlist,
+    "pane.search" => PaneSearch,
+    "pane.names-encoding" => PaneNamesEncoding,
+    "pane.toggle-hidden" => PaneToggleHidden,
+    "pane.mkdir" => PaneMkdir,
+    "pane.rename" => PaneRename,
+    "pane.refresh" => PaneRefresh,
+    "mark.toggle" => MarkToggle,
+    "mark.all" => MarkAll,
+    "mark.invert" => MarkInvert,
+    "mark.clear" => MarkClear,
+    "mark.pattern-add" => MarkPatternAdd,
+    "mark.pattern-remove" => MarkPatternRemove,
+}
 
 /// Los comandos del contexto `dialog` (H1, issue #24) — la lista CERRADA
 /// que el TUI pasa a [`Effective::build_for`] para `Screen::Dialog`. Cada
@@ -178,6 +217,18 @@ pub fn presets() -> Vec<(&'static str, KeymapFile)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #112: `COMMANDS` y `Command` nacen del MISMO macro — cada nombre
+    /// parsea a su variante. Trivial por construcción; pinea contra un
+    /// futuro edit a mano de la lista fuera del macro.
+    #[test]
+    fn cada_nombre_de_commands_parsea_a_una_variante() {
+        for name in COMMANDS {
+            assert!(Command::parse(name).is_some(), "{name}");
+        }
+        assert!(Command::parse("no.existe").is_none());
+        assert!(Command::parse("plugin:x:y").is_none(), "plugin: va aparte");
+    }
 
     #[test]
     fn chord_from_crossterm_traduce_teclas_conocidas() {

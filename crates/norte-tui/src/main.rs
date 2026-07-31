@@ -29,8 +29,8 @@ use norte_tui::app::{
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::hints::DialogHints;
 use norte_tui::keymap::{
-    COMMANDS, DIALOG_COMMANDS, Effective, Resolution, Resolver, Screen, chord_from_crossterm,
-    presets,
+    COMMANDS, Command, DIALOG_COMMANDS, Effective, Resolution, Resolver, Screen,
+    chord_from_crossterm, presets,
 };
 use norte_tui::lua::{
     CommandRun, Layer, LuaHost, PaneCtx, RunOutcome, StatusInput, TrustDecision, TrustStore,
@@ -1001,12 +1001,42 @@ async fn run(
                                 let cmd = app.palette.as_ref().and_then(Palette::selected);
                                 app.palette = None;
                                 if let Some(cmd) = cmd {
+                                    // (P1) Enter sobre una fila de PLUGIN: la
+                                    // `key` es `plugin:{id}:{command}`
+                                    // (`palette::plugin_rows`, jamás pintada)
+                                    // — no vive en `COMMANDS`, así que se
+                                    // enruta AQUÍ, antes del vocabulario
+                                    // tipado (#112). El resultado del plugin
+                                    // es texto NO confiable: `detail_for_bar`
+                                    // (enmascarado + tope, patrón #73).
+                                    if let Some((id, command)) = parse_plugin_key(&cmd) {
+                                        app.message = Some(
+                                            match backend
+                                                .plugin_run_command(id, command, "")
+                                                .await
+                                            {
+                                                Ok(output) => ta(
+                                                    "msg-plugin-run-ok",
+                                                    &[("output", &detail_for_bar(&output))],
+                                                ),
+                                                Err(e) => error_message(&e),
+                                            },
+                                        );
+                                        continue;
+                                    }
                                     // MISMA función de despacho que el
                                     // resolver del keymap invoca (#dispatch):
                                     // un comando elegido en la palette corre
                                     // EXACTAMENTE como si su tecla se
                                     // hubiera pulsado — incluida la apertura
                                     // de otro overlay (p.ej. `app.help`).
+                                    // Las filas de la palette nacen de
+                                    // `COMMANDS`, así que el parse no puede
+                                    // fallar; el guard es defensivo (#112).
+                                    let Some(cmd) = Command::parse(&cmd) else {
+                                        debug_assert!(false, "palette fuera de COMMANDS");
+                                        continue;
+                                    };
                                     let outcome = dispatch(
                                         app,
                                         backend,
@@ -1015,7 +1045,7 @@ async fn run(
                                         quick_mode,
                                         confirm_quit,
                                         &cfg,
-                                        &cmd,
+                                        cmd,
                                     )
                                     .await;
                                     if let Some(pane) = cd_landed_pane(&outcome) {
@@ -1313,7 +1343,7 @@ async fn run(
                                             quick_mode,
                                             confirm_quit,
                                             &cfg,
-                                            "nav.enter",
+                                            Command::NavEnter,
                                         )
                                         .await;
                                         if let Some(pane) = cd_landed_pane(&outcome) {
@@ -1363,6 +1393,13 @@ async fn run(
                                         );
                                         continue;
                                     }
+                                    // #112: el keymap se validó contra
+                                    // COMMANDS al cargar — el parse no puede
+                                    // fallar; guard defensivo.
+                                    let Some(cmd) = Command::parse(&cmd) else {
+                                        debug_assert!(false, "keymap fuera de COMMANDS");
+                                        continue;
+                                    };
                                     let outcome = dispatch(
                                         app,
                                         backend,
@@ -1371,7 +1408,7 @@ async fn run(
                                         quick_mode,
                                         confirm_quit,
                                         &cfg,
-                                        &cmd,
+                                        cmd,
                                     )
                                     .await;
                                     if let Some(pane) = cd_landed_pane(&outcome) {
@@ -3427,7 +3464,7 @@ async fn dispatch(
     // S3 (`app.settings`): la config VIGENTE — solo leída, para construir
     // las filas del overlay al abrirlo (`crate::settings::build_rows`).
     cfg: &config::LoadedConfig,
-    cmd: &str,
+    cmd: Command,
 ) -> Cd {
     // Solo los cd (nav.enter/nav.parent) tocan el relleno en background; el
     // resto de comandos lo dejan como está (`Cancelled`).
@@ -3439,34 +3476,34 @@ async fn dispatch(
         // hardcodeados de Ctrl+C repartidos por el resto de este fichero
         // (cada overlay tiene el suyo, documentado in situ) son la salida de
         // emergencia — se quedan INMEDIATOS a propósito, jamás preguntan.
-        "app.quit" => {
+        Command::AppQuit => {
             if norte_tui::app::quit_needs_confirm(confirm_quit, app.board.has_active()) {
                 app.modal = Some(Modal::ConfirmQuit);
             } else {
                 app.quit = true;
             }
         }
-        "pane.switch" => app.switch_focus(),
+        Command::PaneSwitch => app.switch_focus(),
         // `/` (spec 2026-07-18): arranca el quick search en el modo de la
         // config. Con uno ya activo las teclas se comen antes del resolver,
         // así que este brazo solo corre para ABRIRLO — sin recursión.
-        "pane.quick-search" => app.focused_mut().quick_start(quick_mode),
+        Command::PaneQuickSearch => app.focused_mut().quick_start(quick_mode),
         // `Alt+↓` / `Ctrl+D` (spec 2026-07-18): con el popup abierto sus
         // teclas se comen antes del resolver (patrón overlay) — estos
         // brazos solo corren para ABRIRLO.
-        "pane.history" => app.open_nav_popup(NavPopupKind::History),
-        "pane.hotlist" => app.open_nav_popup(NavPopupKind::Hotlist),
+        Command::PaneHistory => app.open_nav_popup(NavPopupKind::History),
+        Command::PaneHotlist => app.open_nav_popup(NavPopupKind::Hotlist),
         // `Alt+F7` (liveSearch T6): abre el diálogo de búsqueda viva. Con él
         // abierto sus teclas se comen antes del resolver (patrón overlay) —
         // este brazo solo corre para ABRIRLO.
-        "pane.search" => app.open_search_dialog(),
-        "cursor.up" => app.focused_mut().move_up(1),
-        "cursor.down" => app.focused_mut().move_down(1),
-        "cursor.page-up" => app.focused_mut().move_up(PAGE),
-        "cursor.page-down" => app.focused_mut().move_down(PAGE),
-        "cursor.top" => app.focused_mut().move_to_start(),
-        "cursor.bottom" => app.focused_mut().move_to_end(),
-        "nav.enter" => {
+        Command::PaneSearch => app.open_search_dialog(),
+        Command::CursorUp => app.focused_mut().move_up(1),
+        Command::CursorDown => app.focused_mut().move_down(1),
+        Command::CursorPageUp => app.focused_mut().move_up(PAGE),
+        Command::CursorPageDown => app.focused_mut().move_down(PAGE),
+        Command::CursorTop => app.focused_mut().move_to_start(),
+        Command::CursorBottom => app.focused_mut().move_to_end(),
+        Command::NavEnter => {
             // También symlinks: si apunta a un dir, el provider listará; si
             // no, el cd falla y se absorbe — qué es "entrable" lo decide el
             // core, no el TUI (regla 7). Un File .zip/.tar entra como
@@ -3482,7 +3519,7 @@ async fn dispatch(
                 cd_outcome = cd(app, backend, events, dir).await;
             }
         }
-        "nav.parent" => {
+        Command::NavParent => {
             // Salir de la raíz interior de un archivo = el dir que CONTIENE
             // al contenedor (el padre sintáctico sería un compuesto sin
             // marcador: malformado, ADR 0018).
@@ -3518,8 +3555,8 @@ async fn dispatch(
                 app.message = Some(t("msg-nav-at-top"));
             }
         }
-        "pane.copy" | "pane.move" => {
-            let kind = if cmd == "pane.copy" {
+        Command::PaneCopy | Command::PaneMove => {
+            let kind = if cmd == Command::PaneCopy {
                 TransferKind::Copy
             } else {
                 TransferKind::Move
@@ -3537,13 +3574,13 @@ async fn dispatch(
         // #105: shift+F6 — rename in situ (Move al PADRE de `from`, nombre
         // editable). Correcto también en el pane virtual: el destino sale
         // del propio path del hit, no del dir del pane.
-        "pane.rename" => app.open_rename(),
+        Command::PaneRename => app.open_rename(),
         // #106: Ctrl+R — recarga manual. Reusa el refresh post-mutación
         // (cancelable regla 3; marcas sobreviven vía refill con poda
         // VISIBLE, cursor por índice; el pane virtual de búsqueda se salta
         // — sus hits no viven en un dir). Ambos panes, como tras una task
         // propia: un cambio externo raramente respeta el foco.
-        "pane.refresh" => refresh_panes(app, backend, events).await,
+        Command::PaneRefresh => refresh_panes(app, backend, events).await,
         // Insert/Ctrl+A/Ctrl+Shift+A/`*` (#103): mc/Total Commander —
         // togglear la marca de esta entrada y avanzar (mantener Insert barre
         // un rango). Review MAJOR: bajo un quick search en Filter,
@@ -3552,26 +3589,26 @@ async fn dispatch(
         // barrido del filtro. La composición completa (marcar + a qué avanza
         // según haya o no filtro, clampado sin envolver) vive en el modelo
         // compartido.
-        "mark.toggle" => app.focused_mut().toggle_mark_and_advance(),
-        "mark.all" => app.focused_mut().mark_all(),
-        "mark.invert" => app.focused_mut().invert_marks(),
-        "mark.clear" => app.focused_mut().clear_marks(),
+        Command::MarkToggle => app.focused_mut().toggle_mark_and_advance(),
+        Command::MarkAll => app.focused_mut().mark_all(),
+        Command::MarkInvert => app.focused_mut().invert_marks(),
+        Command::MarkClear => app.focused_mut().clear_marks(),
         // `+`/`-` (#103 T9): abren el modal de patrón (texto libre, ver el
         // brazo `app.modal.is_some()` de arriba) — marcar/desmarcar
         // corre al confirmar (`mark_pattern_confirm`), no aquí.
-        "mark.pattern-add" => app.open_mark_pattern(true),
-        "mark.pattern-remove" => app.open_mark_pattern(false),
+        Command::MarkPatternAdd => app.open_mark_pattern(true),
+        Command::MarkPatternRemove => app.open_mark_pattern(false),
         // #104: F7 — crear directorio en el pane con foco. En el pane
         // VIRTUAL de búsqueda no hay directorio destino visible (review
         // MINOR-2: `dir()` es la raíz del walk, no lo que se pinta).
-        "pane.mkdir" => {
+        Command::PaneMkdir => {
             if app.focused().virtual_search {
                 app.message = Some(t("msg-mkdir-in-search"));
             } else {
                 app.open_mkdir();
             }
         }
-        "pane.delete" | "pane.delete-permanent" => {
+        Command::PaneDelete | Command::PaneDeletePermanent => {
             // F8 = papelera si el provider la declara; sin ella, el MISMO
             // diálogo avisa de PERMANENTE (degradación con usuario
             // informado, ADR 0009). shift+f8 = permanente. La capability se
@@ -3584,11 +3621,11 @@ async fn dispatch(
                     .capabilities(first)
                     .await
                     .is_ok_and(|c| c.flags.contains(norte_proto::CapabilityFlags::TRASH));
-                let permanent = cmd == "pane.delete-permanent" || !hay_papelera;
+                let permanent = cmd == Command::PaneDeletePermanent || !hay_papelera;
                 app.open_delete_modal(permanent);
             }
         }
-        "pane.view" => {
+        Command::PaneView => {
             // También symlinks (mismo criterio que nav.enter): si apunta a
             // un dir, el read fallará con mensaje visible.
             let target = app
@@ -3600,24 +3637,24 @@ async fn dispatch(
                 open_viewer(app, backend, events, path).await;
             }
         }
-        "pane.open" => resolve_opener(app),
-        "viewer.close" => app.viewer = None,
-        "viewer.up" => viewer_do(app, |v| v.scroll_up(1)),
-        "viewer.down" => viewer_do(app, |v| v.scroll_down(1)),
-        "viewer.page-up" => viewer_do(app, |v| v.scroll_up(norte_tui::viewer::PAGE)),
-        "viewer.page-down" => viewer_do(app, |v| v.scroll_down(norte_tui::viewer::PAGE)),
-        "viewer.top" => viewer_do(app, norte_tui::viewer::Viewer::scroll_top),
-        "viewer.bottom" => viewer_do(app, norte_tui::viewer::Viewer::scroll_bottom),
-        "viewer.encoding" => viewer_do(app, norte_tui::viewer::Viewer::cycle_encoding),
-        "viewer.encoding-auto" => viewer_do(app, norte_tui::viewer::Viewer::reset_encoding),
-        "viewer.hex" => viewer_do(app, norte_tui::viewer::Viewer::toggle_hex),
-        "app.help" => {
+        Command::PaneOpen => resolve_opener(app),
+        Command::ViewerClose => app.viewer = None,
+        Command::ViewerUp => viewer_do(app, |v| v.scroll_up(1)),
+        Command::ViewerDown => viewer_do(app, |v| v.scroll_down(1)),
+        Command::ViewerPageUp => viewer_do(app, |v| v.scroll_up(norte_tui::viewer::PAGE)),
+        Command::ViewerPageDown => viewer_do(app, |v| v.scroll_down(norte_tui::viewer::PAGE)),
+        Command::ViewerTop => viewer_do(app, norte_tui::viewer::Viewer::scroll_top),
+        Command::ViewerBottom => viewer_do(app, norte_tui::viewer::Viewer::scroll_bottom),
+        Command::ViewerEncoding => viewer_do(app, norte_tui::viewer::Viewer::cycle_encoding),
+        Command::ViewerEncodingAuto => viewer_do(app, norte_tui::viewer::Viewer::reset_encoding),
+        Command::ViewerHex => viewer_do(app, norte_tui::viewer::Viewer::toggle_hex),
+        Command::AppHelp => {
             app.help = Some(Help {
                 lines: help_lines.to_vec(),
                 scroll: 0,
             });
         }
-        "pane.names-encoding" => {
+        Command::PaneNamesEncoding => {
             // #57: cicla la reinterpretación de nombres no-UTF8 del pane con
             // foco (display-only, regla 1). El anuncio va por la barra.
             let label = app.focused_mut().cycle_name_encoding();
@@ -3626,7 +3663,7 @@ async fn dispatch(
                 None => t("msg-names-encoding-off"),
             });
         }
-        "pane.toggle-hidden" => {
+        Command::PaneToggleHidden => {
             // #107: presentación-solo — el pane aparta/devuelve dotfiles,
             // el provider no re-lista. El anuncio va por la barra.
             let showing = app.focused_mut().toggle_hidden();
@@ -3636,8 +3673,8 @@ async fn dispatch(
                 t("msg-hidden-hidden")
             });
         }
-        "app.theme" => app.open_theme_picker(),
-        "app.extensions" => match backend.plugins_list().await {
+        Command::AppTheme => app.open_theme_picker(),
+        Command::AppExtensions => match backend.plugins_list().await {
             // El catálogo llega YA ordenado por categoría e id desde el core.
             Ok(list) => {
                 // (P1 encoding audit F1) INGEST: clampa+enmascara `description`
@@ -3670,7 +3707,7 @@ async fn dispatch(
         // palette entera, solo degradarla (sin filas de plugin + un aviso),
         // mismo principio "un error de listado no tumba el TUI" del resto
         // de `dispatch`.
-        "app.palette" => {
+        Command::AppPalette => {
             // MINOR-6 (H1 close): Ctrl+P/`:` viven en `[global]`, fundido en
             // AMBOS efectivos — la palette puede abrirse desde el viewer
             // también, no solo desde browse (`rows_for_context` doc).
@@ -3693,161 +3730,22 @@ async fn dispatch(
         // al abrir, jamás una copia arrastrada). Sección Plugins (G3c): un
         // resumen POR plugin con `[config]` (real ahora, ya no la nota
         // informativa de P2 — `plugin_config_summaries`).
-        "app.settings" => {
+        Command::AppSettings => {
             let summaries = plugin_config_summaries(backend).await;
             app.settings = Some(Settings::new(norte_tui::settings::build_rows(
                 cfg, &summaries,
             )));
         }
-        "task.cancel" => {
+        Command::TaskCancel => {
             app.message = Some(if app.board.cancel_last_running() {
                 t("msg-cancelling")
             } else {
                 t("msg-no-tasks")
             });
-        }
-        // (P1) Enter sobre una fila de plugin de la palette: `cmd` es la
-        // `key` de despacho `plugin:{id}:{command}` (`palette::plugin_rows`,
-        // JAMÁS pintada) — no vive en `COMMANDS`, así que necesita su propio
-        // brazo ANTES del comodín de abajo. `parse_plugin_key` documenta por
-        // qué el split es inequívoco pese a que `command` no tiene charset
-        // validado. El resultado del plugin es texto NO confiable: por
-        // `detail_for_bar` (enmascarado + tope, patrón #73) antes de la
-        // barra de estado.
-        _ if cmd.starts_with("plugin:") => {
-            if let Some((id, command)) = parse_plugin_key(cmd) {
-                app.message = Some(match backend.plugin_run_command(id, command, "").await {
-                    Ok(output) => ta("msg-plugin-run-ok", &[("output", &detail_for_bar(&output))]),
-                    Err(e) => error_message(&e),
-                });
-            }
-        }
-        // Inalcanzable: todo keymap se valida contra COMMANDS al cargar
-        // (y COMMANDS vive en la lib: una sola fuente) — salvo el brazo de
-        // plugin de arriba, que no vive en COMMANDS a propósito.
-        _ => debug_assert!(false, "comando validado sin brazo: {cmd}"),
+        } // Sin comodín (#112): `Command` es exhaustivo — un comando nuevo
+          // sin brazo es un error de COMPILACIÓN, no un pánico de runtime.
     }
     cd_outcome
-}
-
-/// #103 T9: `mark.pattern-add`/`-remove` llegaron a `COMMANDS` y a los tres
-/// presets (`keymap.rs`) SIN un brazo en `dispatch` — el comodín final es
-/// `debug_assert!(false, ...)`, así que pulsar `+`/`-` PANICABA un build
-/// debug (silencioso en release, un no-op). El fix ideal invocaría
-/// `dispatch` con cada nombre de `COMMANDS` y comprobaría que no cae al
-/// comodín, pero eso resultó INALCANZABLE sin reescribir `dispatch`:
-///
-/// - Es `async fn` y pide un `&mut EventStream` REAL. `EventStream::new()`
-///   arranca un hilo que llama a `poll_internal` de inmediato, y ESO panica
-///   fuera de un terminal real (`"reader source not set"`, interno de
-///   crossterm, sin gancho de test expuesto) — confirmado empíricamente al
-///   intentarlo. Coincide con un límite YA señalado en este código
-///   (`app.rs`, comentario junto a
-///   `mark_toggle_advances_without_wrapping_at_the_end`: "`dispatch` en sí
-///   no es testeable aquí sin un daemon real").
-/// - No hay una estructura PURA aparte que decida los brazos: extraer una
-///   tabla comando→acción sería una reescritura de `dispatch` (~270 líneas
-///   de match) fuera de alcance de esta tarea.
-///
-/// Así que esto pinea la propiedad MÁS DÉBIL que SÍ es alcanzable sin
-/// ejecutar ni reescribir `dispatch`: cada nombre de `COMMANDS` aparece
-/// dentro del cuerpo fuente real de la función (extraído de este mismo
-/// fichero por conteo de llaves desde la firma) en una línea de la forma
-/// `"cmd" => ...` — no basta con que el nombre aparezca en cualquier parte
-/// (review MAJOR M5: un nombre mencionado solo en un comentario colaba
-/// antes). Cubre EXACTAMENTE la clase de bug que motivó esta tarea — un
-/// comando de `COMMANDS` sin ningún brazo, como `mark.pattern-add` antes de
-/// aquel commit.
-///
-/// Lo que NO cubre, a propósito documentado: que el brazo sea
-/// semánticamente correcto (cosa de sus propios tests); ni que el comando
-/// no caiga por accidente en el brazo de OTRO (un typo que coincida con un
-/// string ajeno no se detecta). El conteo de llaves asume que las llaves
-/// DENTRO de los literales de cadena del cuerpo están balanceadas — cierto
-/// hoy (el único caso, el format string del propio comodín `"...: {cmd}"`,
-/// es 1 abre + 1 cierra) pero no está garantizado para siempre; la
-/// sanity-check de `dispatch_body` (cabeza Y cola de la extracción, review
-/// M5) hace que un desbalance futuro panique RUIDOSO en vez de comprobar en
-/// silencio un cuerpo truncado.
-///
-/// El fix real — convertir esto en un error de compilación en vez de un
-/// escaneo de texto — está fuera de alcance aquí: issue #112.
-#[cfg(test)]
-mod command_dispatch_tests {
-    use super::COMMANDS;
-
-    /// Cuerpo de `async fn dispatch(` de este mismo fichero, desde su `{`
-    /// de apertura hasta el `}` que la cierra (conteo de llaves: sin tirar
-    /// de `syn` para un solo test, regla 8 de CLAUDE.md — nueva dependencia
-    /// solo se justifica con un uso real).
-    ///
-    /// `SRC.find("async fn dispatch(")` toma la PRIMERA ocurrencia — y el
-    /// fichero ya tiene TRES: la firma real (arriba, T9), esta misma
-    /// rustdoc y el string literal del propio `.find(...)` de abajo. Hoy el
-    /// orden textual salva la extracción (la firma real es la primera de
-    /// las tres). Mover este módulo de test POR ENCIMA de `dispatch`
-    /// invertiría el orden: el `.find` engancharía con su PROPIO string
-    /// literal (el primero en aparecer en el fichero) y la extracción
-    /// apuntaría a texto sin sentido, en silencio — el módulo debe quedarse
-    /// DEBAJO de la firma real.
-    fn dispatch_body() -> &'static str {
-        const SRC: &str = include_str!("main.rs");
-        let sig = SRC
-            .find("async fn dispatch(")
-            .expect("dispatch debe existir en este fichero");
-        let open = SRC[sig..].find('{').expect("firma con cuerpo") + sig;
-        let mut depth = 0i32;
-        for (i, c) in SRC[open..].char_indices() {
-            match c {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return &SRC[open..=open + i];
-                    }
-                }
-                _ => {}
-            }
-        }
-        panic!("cuerpo de dispatch sin cierre (conteo de llaves desbalanceado)");
-    }
-
-    /// Review MAJOR M5 (dos agujeros cerrados):
-    ///
-    /// (a) exigir que el literal viva en una línea que TAMBIÉN contenga
-    /// `=>` — un nombre de comando mencionado solo en un comentario ya no
-    /// basta.
-    ///
-    /// (b) sanity de la COLA de la extracción, no solo de la cabeza: el
-    /// cuerpo debe llegar hasta el comodín final (`comando validado sin
-    /// brazo`) — un conteo de llaves mal cerrado por algún cambio futuro
-    /// falla RUIDOSO aquí en vez de comprobar en silencio un cuerpo
-    /// truncado.
-    #[test]
-    fn every_command_has_a_matching_arm_literal_in_dispatch() {
-        let body = dispatch_body();
-        assert!(
-            body.contains("\"cursor.up\" =>") && body.contains("comando validado sin brazo"),
-            "extracción de dispatch_body sospechosa: {} bytes",
-            body.len()
-        );
-        let missing: Vec<&str> = COMMANDS
-            .iter()
-            .copied()
-            .filter(|cmd| {
-                let needle = format!("\"{cmd}\"");
-                !body
-                    .lines()
-                    .any(|line| line.contains(&needle) && line.contains("=>"))
-            })
-            .collect();
-        assert!(
-            missing.is_empty(),
-            "COMMANDS sin brazo `\"cmd\" => ...` en dispatch — pulsarlos \
-             hoy panica el comodín en debug (y es un no-op en release): \
-             {missing:?}"
-        );
-    }
 }
 
 /// Parsea una `key` de fila de plugin de la palette
