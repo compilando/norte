@@ -58,7 +58,7 @@ pub fn sort_entries(entries: &mut [Entry]) {
 }
 
 /// [`sort_entries`] bajo un [`SortSpec`] explícito (#108 L7). Estable;
-/// mismo orden que [`sort_with_keys`]/[`merge_keyed`] con el mismo spec.
+/// mismo orden que `sort_with_keys_spec`/`merge_keyed_spec` con el mismo spec.
 pub fn sort_entries_with(entries: &mut [Entry], spec: SortSpec) {
     let keys: Vec<SortKey> = entries.iter().map(sort_key).collect();
     // sort_by sobre índices sería más alloc-frugal, pero este camino solo
@@ -92,7 +92,7 @@ fn name_bytes(e: &Entry) -> &[u8] {
 /// OJO: `PartialEq`/`Eq` derivados son REPRESENTACIONALES, no semánticos
 /// (#94): un nombre ya-NFC (`nfc: None`) y su gemelo NFD (`nfc: Some(..)`)
 /// tienen la MISMA clave efectiva pero `!=` como structs. Nada compara
-/// `SortKey`s por igualdad para lógica — solo [`cmp_keyed`] define el orden.
+/// `SortKey`s por igualdad para lógica — solo `cmp_keyed_with` define el orden.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SortKey {
     not_dir: bool,
@@ -116,7 +116,7 @@ pub(crate) fn sort_key(e: &Entry) -> SortKey {
 /// ([`sort_key`]). Desde #94 el emparejamiento es load-bearing para la clave
 /// PRIMARIA (un `None` se resuelve leyendo la entry) — una clave ajena ya no
 /// corrompe solo el desempate, corrompe el orden en silencio.
-/// [`cmp_keyed`] bajo un [`SortSpec`] (#108 L7). Orden, con cada regla
+/// `cmp_keyed_with` bajo un [`SortSpec`] (#108 L7). Orden, con cada regla
 /// load-bearing:
 /// 1. grupo dirs (si `dirs_first`) — SIEMPRE ascendente;
 /// 2. la columna, invertida si `Desc`; un valor AUSENTE (dir sin size,
@@ -190,7 +190,7 @@ fn cmp_missing_last<T: Ord>(lhs: Option<T>, rhs: Option<T>, dir: SortDir) -> std
 
 /// Ordena `entries` computando sus claves UNA vez y devuelve ambas
 /// (índice-paralelas). Estable, mismo orden que [`sort_entries`].
-/// [`sort_with_keys`] bajo un [`SortSpec`] (#108 L7).
+/// `sort_with_keys_spec` bajo un [`SortSpec`] (#108 L7).
 pub(crate) fn sort_with_keys_spec(
     entries: Vec<Entry>,
     spec: SortSpec,
@@ -200,7 +200,7 @@ pub(crate) fn sort_with_keys_spec(
     pares.into_iter().map(|(k, e)| (e, k)).unzip()
 }
 
-/// [`merge_keyed`] bajo un [`SortSpec`] (#108 L7): AMBOS runs deben venir
+/// `merge_keyed_spec` bajo un [`SortSpec`] (#108 L7): AMBOS runs deben venir
 /// ordenados por el MISMO spec.
 pub(crate) fn merge_keyed_spec(
     entries: &mut Vec<Entry>,

@@ -324,6 +324,13 @@ impl PaneState {
         self.sort = spec;
         let anchor = self.entries.get(self.cursor).map(|e| e.path.clone());
         let quick_prev = self.quick_selected_path();
+        // Mismo guard anti-truncado que merge_keyed_spec (review m1): un
+        // zip de paralelas desincronizadas PERDERÍA entradas en silencio.
+        debug_assert_eq!(
+            self.entries.len(),
+            self.sort_keys.len(),
+            "entries↔sort_keys desincronizados"
+        );
         let mut pares: Vec<(Entry, crate::sort::SortKey)> = std::mem::take(&mut self.entries)
             .into_iter()
             .zip(std::mem::take(&mut self.sort_keys))

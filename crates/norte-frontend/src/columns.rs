@@ -305,24 +305,29 @@ pub struct LayoutItem {
 /// 2. Si el total no cabe, se descartan columnas desde la MÁS A LA DERECHA
 ///    de MENOR peso (las `Fixed`/`Auto` cuentan como peso 0) hasta caber.
 /// 3. El NOMBRE jamás se descarta y jamás baja de [`NAME_MIN`] (si ni eso
-///    cabe, se lleva todo lo disponible).
-/// 4. Suma de anchos devueltos ≤ `available`; cada ancho devuelto ≥ 1.
+///    cabe, se lleva `available.max(1)` — con `available == 0` devuelve 1:
+///    un nombre de ancho cero es impintable).
+/// 4. Suma de anchos devueltos ≤ `available` SALVO la excepción del suelo
+///    del nombre de la regla 3; cada ancho devuelto ≥ 1.
 #[must_use]
 pub fn layout(available: u16, items: &[LayoutItem]) -> Vec<Option<u16>> {
+    debug_assert!(
+        items.iter().filter(|it| it.is_name).count() <= 1,
+        "a lo sumo UNA columna de nombre (review m2)"
+    );
     let mut alive: Vec<bool> = items.iter().map(|_| true).collect();
     loop {
         // Base de cada columna viva.
         let base: Vec<u16> = items
             .iter()
-            .map(|it| match it.policy {
-                WidthPolicy::Fixed(w) => w.max(1),
-                WidthPolicy::Auto => it.measured.clamp(1, AUTO_CEILING),
-                WidthPolicy::Flex { min, .. } => {
-                    if it.is_name {
-                        min.max(NAME_MIN)
-                    } else {
-                        min.max(1)
-                    }
+            .map(|it| {
+                // El suelo del nombre aplica bajo CUALQUIER política
+                // (review m2): el contrato de la regla 3 no es Flex-only.
+                let floor = if it.is_name { NAME_MIN } else { 1 };
+                match it.policy {
+                    WidthPolicy::Fixed(w) => w.max(floor),
+                    WidthPolicy::Auto => it.measured.clamp(floor, AUTO_CEILING.max(floor)),
+                    WidthPolicy::Flex { min, .. } => min.max(floor),
                 }
             })
             .collect();
@@ -335,18 +340,18 @@ pub fn layout(available: u16, items: &[LayoutItem]) -> Vec<Option<u16>> {
         if total <= u32::from(available) {
             // Cabe: reparte el sobrante entre las Flex vivas por peso.
             let sobrante = u32::from(available) - total;
-            let peso_total: u32 = items
+            let peso_total: u64 = items
                 .iter()
                 .zip(&alive)
                 .filter(|(_, a)| **a)
                 .map(|(it, _)| match it.policy {
-                    WidthPolicy::Flex { weight, .. } => u32::from(weight),
+                    WidthPolicy::Flex { weight, .. } => u64::from(weight),
                     _ => 0,
                 })
                 .sum();
             let mut out = Vec::with_capacity(items.len());
-            let mut repartido = 0u32;
-            let mut flex_vistos = 0u32;
+            let mut repartido = 0u64;
+            let mut flex_vistos = 0u64;
             for (i, it) in items.iter().enumerate() {
                 if !alive[i] {
                     out.push(None);
@@ -354,16 +359,20 @@ pub fn layout(available: u16, items: &[LayoutItem]) -> Vec<Option<u16>> {
                 }
                 let extra = match it.policy {
                     WidthPolicy::Flex { weight, .. } if peso_total > 0 => {
-                        flex_vistos += u32::from(weight);
-                        // Reparto acumulativo sin restos perdidos.
-                        let hasta = sobrante * flex_vistos / peso_total;
+                        flex_vistos += u64::from(weight);
+                        // Reparto acumulativo sin restos perdidos. En u64
+                        // (review M1): sobrante(≤65535) × pesos acumulados
+                        // (sin tope: config/plugins) desbordaba u32 con
+                        // pesos grandes — panic en debug, anchos basura en
+                        // release.
+                        let hasta = u64::from(sobrante) * flex_vistos / peso_total;
                         let e = hasta - repartido;
                         repartido = hasta;
                         e
                     }
                     _ => 0,
                 };
-                let w = u32::from(base[i]) + extra;
+                let w = u64::from(base[i]) + extra;
                 out.push(Some(u16::try_from(w).unwrap_or(u16::MAX)));
             }
             return out;
@@ -467,7 +476,17 @@ fn iso_utc_minutes(ms: i64) -> String {
         month_shift - 9
     };
     let year = if month <= 2 { year_base + 1 } else { year_base };
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}Z")
+    // Años negativos (mtime basura de un archivo corrupto): forma ISO 8601
+    // expandida `-0005-…` — `{:04}` a secas contaría el signo dentro del
+    // ancho (review m4).
+    if year < 0 {
+        format!(
+            "-{:04}-{month:02}-{day:02}T{hour:02}:{min:02}Z",
+            year.unsigned_abs()
+        )
+    } else {
+        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}Z")
+    }
 }
 
 /// Modo POSIX en octal (`0644`) — para el bloque 2 (attrs); vive aquí para
@@ -487,11 +506,23 @@ pub fn format_mode_rwx(mode: u32) -> String {
     };
     let mut out = String::with_capacity(10);
     out.push(tipo);
-    for shift in [6u32, 3, 0] {
+    // (shift, bit especial, letra con x, letra sin x): setuid/setgid/sticky
+    // como `ls` de verdad (review m5) — un setuid jamás se pinta ordinario.
+    for (shift, special, low, up) in [
+        (6u32, 0o4000u32, 's', 'S'),
+        (3, 0o2000, 's', 'S'),
+        (0, 0o1000, 't', 'T'),
+    ] {
         let bits = (mode >> shift) & 0o7;
         out.push(if bits & 0o4 != 0 { 'r' } else { '-' });
         out.push(if bits & 0o2 != 0 { 'w' } else { '-' });
-        out.push(if bits & 0o1 != 0 { 'x' } else { '-' });
+        let x = bits & 0o1 != 0;
+        out.push(match (mode & special != 0, x) {
+            (true, true) => low,
+            (true, false) => up,
+            (false, true) => 'x',
+            (false, false) => '-',
+        });
     }
     out
 }
@@ -623,6 +654,66 @@ mod model_tests {
         assert_eq!(format_mode_rwx(0o100_644), "-rw-r--r--");
         assert_eq!(format_mode_rwx(0o040_755), "drwxr-xr-x");
         assert_eq!(format_mode_rwx(0o120_777), "lrwxrwxrwx");
+        // Review m5: setuid/setgid/sticky como ls — jamás ordinarios.
+        assert_eq!(format_mode_rwx(0o104_755), "-rwsr-xr-x");
+        assert_eq!(format_mode_rwx(0o102_745), "-rwxr-Sr-x");
+        assert_eq!(format_mode_rwx(0o041_775), "drwxrwxr-t");
+        assert_eq!(format_mode_rwx(0o041_774), "drwxrwxr-T");
+    }
+
+    /// Review m3: available=0 → el nombre recibe 1 (impintable a 0), la
+    /// excepción documentada de la regla 3/4. Y m1: pesos enormes no
+    /// desbordan (u64).
+    #[test]
+    fn layout_bordes_cero_y_pesos_enormes() {
+        let items = [
+            it(WidthPolicy::Flex { min: 10, weight: 1 }, 0, true),
+            it(WidthPolicy::Fixed(9), 0, false),
+        ];
+        assert_eq!(layout(0, &items), vec![Some(1), None]);
+
+        let gordos = [
+            it(
+                WidthPolicy::Flex {
+                    min: 10,
+                    weight: u16::MAX,
+                },
+                0,
+                true,
+            ),
+            it(
+                WidthPolicy::Flex {
+                    min: 4,
+                    weight: u16::MAX,
+                },
+                0,
+                false,
+            ),
+            it(
+                WidthPolicy::Flex {
+                    min: 4,
+                    weight: u16::MAX,
+                },
+                0,
+                false,
+            ),
+        ];
+        let w = layout(u16::MAX, &gordos);
+        let suma: u32 = w.iter().flatten().map(|x| u32::from(*x)).sum();
+        assert!(
+            u16::try_from(suma).is_ok(),
+            "sin overflow del reparto: {w:?}"
+        );
+    }
+
+    /// Review m4: año negativo en forma ISO expandida, ancho 4 + signo.
+    #[test]
+    fn iso_utc_anio_negativo() {
+        // ~ -63_113_904_000_000 ms ≈ año -31 (aprox); pinea el FORMATO.
+        let s = iso_utc_minutes(-63_200_000_000_000);
+        assert!(s.starts_with('-'), "{s}");
+        let year_part = &s[1..5];
+        assert!(year_part.chars().all(|c| c.is_ascii_digit()), "{s}");
     }
 
     /// `Relative` por Fluent, `now` inyectado: puro y estable.
