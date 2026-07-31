@@ -9,6 +9,14 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Size and date in the GUI listing (#108 block 6):** the pane paints the
+  same default column set as the TUI — name, size (IEC), modified (relative
+  time) — from the shared layout, under a header row with the ▲/▼ sort
+  indicator; the plugin-column headers (G3c) join that row over their fixed
+  cells. Sortable headers (Name/Size/Mtime) are clickable: a click flips or
+  switches the sort and is remembered per pane for the session, surviving
+  cd — persisting it is the picker's job (block 7, with the context menu).
+  Absent values stay blank (never a fabricated 0).
 - **Column and sort configuration (#108 block 4):** `[ui.columns]` chooses
   which built-in columns each pane paints and the sort order — globally and
   per scheme (an override REPLACES the list; sort vocabulary is closed and

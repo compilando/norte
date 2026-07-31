@@ -122,6 +122,10 @@ struct NorteGui {
     /// SORT por scheme (las celdas llegan en el bloque 6). OJO: `columns`
     /// (a secas) son las columnas de PLUGIN por pane (G3c) — otra cosa.
     column_settings: norte_frontend::columns::ColumnsSettings,
+    /// Orden elegido por click en la cabecera (#108 b6), POR PANE y de
+    /// SESIÓN: sobrevive al cd (gana a `column_settings.sort_for`) pero no
+    /// se persiste — persistir es del picker (bloque 7, `persist_set`).
+    sort_override: [Option<norte_frontend::SortSpec>; 2],
     /// Pane con el foco (0|1): recibe el input de teclado.
     focus: usize,
     /// Texto del quick search por pane, PARALELO a `PaneState` solo para
@@ -498,6 +502,7 @@ impl NorteGui {
                         PaneState::new(dir.clone(), Vec::new()),
                     ],
                     column_settings: norte_frontend::columns::ColumnsSettings::default(),
+                    sort_override: [None, None],
                     focus: 0,
                     query: [String::new(), String::new()],
                     errors: [None, None],
@@ -568,6 +573,7 @@ impl NorteGui {
                         PaneState::new(placeholder, Vec::new()),
                     ],
                     column_settings: norte_frontend::columns::ColumnsSettings::default(),
+                    sort_override: [None, None],
                     focus: 0,
                     query: [String::new(), String::new()],
                     errors: {
@@ -635,7 +641,9 @@ impl NorteGui {
         self.refreshing[pane] = false;
         // #108 b4: el orden del scheme destino se aplica ANTES de que
         // aterrice el listado (set_listing ingiere bajo el spec del pane).
-        let spec = self.column_settings.sort_for(dir.scheme());
+        // #108 b6: el override de sesión (click en cabecera) gana a la config.
+        let spec =
+            self.sort_override[pane].unwrap_or_else(|| self.column_settings.sort_for(dir.scheme()));
         self.panes[pane].set_sort(spec);
         self.panes[pane].begin_loading(dir.clone());
         self.errors[pane] = None;
@@ -2083,19 +2091,61 @@ impl NorteGui {
         cx.notify();
     }
 
+    /// Click en una cabecera ordenable (#108 b6): aplica `after_click` al
+    /// orden ACTUAL del pane (no al de config — dos clicks seguidos deben
+    /// alternar), re-ordena in place (`set_sort` re-ancla cursor y quick) y
+    /// recuerda la elección para los próximos cd de este pane.
+    fn on_sort_click(
+        &mut self,
+        pane: usize,
+        col: norte_frontend::SortColumn,
+        cx: &mut Context<Self>,
+    ) {
+        let spec = self.panes[pane].sort().after_click(col);
+        self.panes[pane].set_sort(spec);
+        self.sort_override[pane] = Some(spec);
+        self.focus = pane;
+        cx.notify();
+    }
+
     /// Pinta una columna (un pane).
     fn render_pane(
         &self,
         i: usize,
         chrome: &ChromeColors,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let pane = &self.panes[i];
         let focused = self.focus == i;
+        // #108 b6: geometría de columnas del frame — el advance del mono ('0';
+        // en una monoespaciada todo glifo simple mide la celda), las celdas
+        // interiores aproximadas y el MISMO column_widths() que pinta la TUI.
+        let ts = cx.text_system();
+        let font_id = ts.resolve_font(&self.fonts.mono);
+        let ch: f32 = ts
+            .advance(font_id, self.fonts.size, '0')
+            .map_or(f32::from(self.fonts.size) * 0.6, |a| f32::from(a.width));
+        let cells = pane_inner_cells(
+            f32::from(window.viewport_size().width),
+            ch,
+            f32::from(self.fonts.size),
+        );
+        let widths = norte_frontend::columns::column_widths(
+            &self.column_settings,
+            pane.dir().scheme(),
+            cells,
+        );
+        let now_ms: i64 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
         // Copia barata (todo `Copy`) para moverla dentro del closure
         // `'static` de `cx.processor` — no puede capturar `&ChromeColors`
         // prestado de este frame, que no vive tanto como el closure.
         let chrome_owned = *chrome;
+        // #108 b6: copia de `widths` para el closure (la original queda para
+        // la fila de cabeceras de más abajo).
+        let widths_owned = widths.clone();
 
         let (path_txt, path_hostile) = norte_frontend::path_display(pane.dir());
         let header = if path_hostile {
@@ -2137,7 +2187,19 @@ impl NorteGui {
                         // se anima con la ventana enfocada (`with_animation`
                         // de GPUI NO lo comprueba solo; ver doc de
                         // `render_row`).
-                        this.render_row(i, j, &e, hl, marked, &chrome_owned, window, cx)
+                        this.render_row(
+                            i,
+                            j,
+                            &e,
+                            hl,
+                            marked,
+                            &chrome_owned,
+                            &widths_owned,
+                            now_ms,
+                            ch,
+                            window,
+                            cx,
+                        )
                     })
                     .collect()
             }),
@@ -2262,6 +2324,100 @@ impl NorteGui {
             ))));
         }
 
+        // #108 b6: fila de cabeceras de columna sobre el listado — mono (misma
+        // geometría de celda que las filas), dim, con ▲/▼ en la columna del
+        // orden activo. Las cabeceras ordenables son botones (`Role::Button`,
+        // cursor pointer, hover); `Kind` y las columnas de plugin no (sin
+        // SortColumn). El canalón de marca se replica como hueco fijo para que
+        // la cabecera del nombre arranque donde arranca el nombre.
+        {
+            let sort = pane.sort();
+            let dim = gpui::Rgba {
+                a: 0.55,
+                ..chrome.fg
+            };
+            let arrow = if sort.dir == norte_frontend::SortDir::Asc {
+                "▲"
+            } else {
+                "▼"
+            };
+            let mut header_row = div()
+                .id(format!("col-header-{i}"))
+                .flex_none()
+                .h(self.fonts.row_h)
+                .px(px(sp::S))
+                .flex()
+                .flex_row()
+                .items_center()
+                .font(self.fonts.mono.clone())
+                .text_color(dim)
+                .child(
+                    div()
+                        .flex_none()
+                        .w(self.fonts.size)
+                        .child(SharedString::from("")),
+                );
+            for (k, (col_b, w)) in widths.iter().enumerate() {
+                let is_name = matches!(col_b, norte_frontend::columns::Builtin::Name);
+                let label_key = match col_b {
+                    norte_frontend::columns::Builtin::Name => "col-header-name",
+                    norte_frontend::columns::Builtin::Size => "col-header-size",
+                    norte_frontend::columns::Builtin::Mtime => "col-header-mtime",
+                    norte_frontend::columns::Builtin::Kind => "col-header-kind",
+                };
+                let sortable = norte_frontend::columns::sort_column(*col_b);
+                let active = sortable == Some(sort.column);
+                let label = if active {
+                    format!("{}{arrow}", norte_i18n::t(label_key))
+                } else {
+                    norte_i18n::t(label_key)
+                };
+                let mut cell = div()
+                    .id(format!("col-header-{i}-{k}"))
+                    .overflow_hidden()
+                    .child(div().truncate().child(SharedString::from(label)));
+                cell = if is_name {
+                    cell.flex_1()
+                } else {
+                    cell.flex_none()
+                        .w(px(f32::from(*w) * ch))
+                        .pl(px(ch))
+                        .flex()
+                        .flex_row()
+                        .justify_end()
+                };
+                if let Some(sc) = sortable {
+                    let hover_bg = chrome.hover_bg;
+                    cell = cell
+                        .role(gpui::Role::Button)
+                        .aria_label(norte_i18n::t(label_key))
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(hover_bg))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                                this.on_sort_click(i, sc, cx);
+                            }),
+                        );
+                }
+                header_row = header_row.child(cell);
+            }
+            // Cabeceras de las columnas de plugin (G3c): misma geometría fija
+            // de 96px que sus celdas, no ordenables. Ya saneadas en
+            // columns_ready.
+            for (_id, header) in &self.columns[i] {
+                header_row = header_row.child(
+                    div()
+                        .flex_none()
+                        .pl(px(sp::XS))
+                        .w(px(96.0))
+                        .truncate()
+                        .child(SharedString::from(header.clone())),
+                );
+            }
+            col = col.child(header_row);
+        }
+
         // Lista de entradas, virtualizada (issue #87): `uniform_list` solo
         // construye el rango visible, no las N entradas del dir.
         col = col.child(list);
@@ -2367,6 +2523,9 @@ impl NorteGui {
         highlighted: bool,
         marked: bool,
         chrome: &ChromeColors,
+        widths: &[(norte_frontend::columns::Builtin, u16)],
+        now_ms: i64,
+        ch: f32,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -2452,6 +2611,34 @@ impl NorteGui {
                     .pl(px(sp::XS))
                     .text_color(badge_color)
                     .child(SharedString::from(badge_text)),
+            );
+        }
+        // #108 b6: celdas builtin tras el bloque del nombre (canalón+nombre+
+        // badge, que absorbe el resto vía flex_1) y ANTES de las celdas de
+        // plugin (G3c) — mismo orden que la TUI. Ancho FIJO en px = celdas de
+        // layout() × advance del mono; contenido a la DERECHA con ≥1 celda de
+        // separador (pl), presupuesto idéntico al de la TUI (el ancho INCLUYE
+        // el separador). Ausencia (`None` de builtin_cell — el size de un dir,
+        // un mtime desconocido) = celda en blanco, jamás un 0 fabricado. Color:
+        // el de la fila a alfa reducido — el mismo "dim relativo" que el
+        // fallback del badge de decoración (GPUI no tiene Modifier::DIM).
+        for (col, w) in widths
+            .iter()
+            .filter(|(b, _)| !matches!(b, norte_frontend::columns::Builtin::Name))
+        {
+            let cell =
+                norte_frontend::columns::builtin_cell(entry, *col, now_ms).unwrap_or_default();
+            row = row.child(
+                div()
+                    .flex_none()
+                    .w(px(f32::from(*w) * ch))
+                    .pl(px(ch))
+                    .flex()
+                    .flex_row()
+                    .justify_end()
+                    .overflow_hidden()
+                    .text_color(gpui::Rgba { a: 0.55, ..color })
+                    .child(div().truncate().child(SharedString::from(cell))),
             );
         }
         // G3c (cierra el deferral GUI de G3b): una celda de ancho FIJO por
@@ -4221,6 +4408,29 @@ fn chrome_mark_fg(theme: &Theme) -> gpui::Rgba {
     chrome(theme, Role::Mark, true, MARK_FG)
 }
 
+/// Chrome horizontal fijo de un pane (#108 b6): `border_2` a ambos lados
+/// (2px × 2) + `px(sp::S)` de padding a ambos lados. El canalón de marca va
+/// aparte (depende de `fonts.size`).
+const PANE_CHROME_PX: f32 = 4.0 + 2.0 * sp::S;
+
+/// Celdas mono que caben en el interior de un pane (#108 b6), aproximando
+/// el ancho del pane como viewport/2 (los dos panes son `flex_1` iguales).
+/// PURA a propósito (testeable sin `TextSystem`): el caller mide `ch` con
+/// `cx.text_system().advance(…, '0')`. El error de aproximación lo absorbe
+/// el nombre (`flex_1`) — `layout()` solo decide qué columnas CABEN.
+fn pane_inner_cells(viewport_w: f32, ch: f32, gutter: f32) -> u16 {
+    if ch <= 0.0 {
+        return 0;
+    }
+    let inner = viewport_w / 2.0 - PANE_CHROME_PX - gutter;
+    if inner <= 0.0 {
+        return 0;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let cells = (inner / ch).floor() as u16;
+    cells
+}
+
 /// Tipografía resuelta para la sesión (GP; corregido en la revisión final del
 /// GP, hallazgo CRÍTICO): fuente de chrome (UI) para cabeceras/banners/franja
 /// de tasks y fuente mono para listados/visor — alineación de columnas
@@ -4543,8 +4753,8 @@ impl Render for NorteGui {
                 .flex_row()
                 .overflow_hidden()
                 .gap(px(sp::XS))
-                .child(self.render_pane(0, &chrome, cx))
-                .child(self.render_pane(1, &chrome, cx));
+                .child(self.render_pane(0, &chrome, window, cx))
+                .child(self.render_pane(1, &chrome, window, cx));
             root = root.child(panes_row).child(self.render_task_strip(&chrome));
         }
 
@@ -4992,8 +5202,9 @@ mod tests {
         decoration_badge_color, first_cancelable, flicker_factor, flicker_scale,
         generation_is_current, glowed, has_pending_work, image_preview_from, image_status,
         keymap_error_detail, modal_footer_colors, modal_panel_colors, modal_title_colors,
-        motion_active, pending_hint, retain_active, row_label, styled_span_color, task_at_cursor,
-        theme_map, unknown_preset_banner, validated_family, viewer_header, viewer_status,
+        motion_active, pane_inner_cells, pending_hint, retain_active, row_label, styled_span_color,
+        task_at_cursor, theme_map, unknown_preset_banner, validated_family, viewer_header,
+        viewer_status,
     };
     use gpui::rgb;
     use norte_frontend::viewer::Viewer;
@@ -5002,6 +5213,19 @@ mod tests {
 
     fn vp() -> VPath {
         VPath::parse("mem:///a.txt").unwrap()
+    }
+
+    /// #108 b6: celdas interiores aproximadas del pane — viewport/2 menos el
+    /// chrome fijo (bordes + padding) y el canalón de marca, a suelo 0.
+    #[test]
+    fn pane_inner_cells_aritmetica_y_suelos() {
+        // 1280px de ventana, celda de 8.4px, canalón de 14px:
+        // (640 − 12 − 14) / 8.4 = 73.1… → 73.
+        assert_eq!(pane_inner_cells(1280.0, 8.4, 14.0), 73);
+        // Ventana absurda de 10px: jamás pánico, 0 celdas.
+        assert_eq!(pane_inner_cells(10.0, 8.4, 14.0), 0);
+        // Celda no-positiva (advance imposible): 0, no división por cero.
+        assert_eq!(pane_inner_cells(1280.0, 0.0, 14.0), 0);
     }
 
     /// El guard de generación: dos cds sobre el mismo pane (A luego B) →
