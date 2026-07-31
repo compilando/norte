@@ -230,6 +230,9 @@ settings-hint-gui = [↑/↓/pgup/pgdn/click] navegar · [enter/click] editar ·
 # comando built-in copiando su texto exacto.
 palette-plugin-prefix = extensión
 theme-picker-title = Tema
+columns-picker-title = Columnas — { $target }
+columns-picker-target-default = todos los schemes
+msg-columns-saved = columnas guardadas
 ext-title = Extensiones
 ext-empty = no hay extensiones instaladas
 ext-unapproved = sin aprobar
@@ -315,6 +318,7 @@ help-cmd-viewer-bottom = ir al final
 help-cmd-viewer-encoding = recargar como… (siguiente encoding)
 help-cmd-pane-names-encoding = ver nombres como… (cp437/cp866/Shift-JIS/GBK/…; solo display)
 help-cmd-pane-toggle-hidden = mostrar u ocultar entradas ocultas
+help-cmd-pane-columns = selector de columnas
 help-cmd-pane-mkdir = crear un directorio (F7)
 help-cmd-pane-rename = renombrar in situ (Shift+F6)
 help-cmd-pane-refresh = recargar ambos panes (Ctrl+R)
@@ -411,6 +415,9 @@ dialog-cmd-page-down = av pág
 dialog-cmd-add = añadir
 dialog-cmd-toggle-enabled = activar
 dialog-cmd-remove = borrar
+dialog-cmd-move-up = subir
+dialog-cmd-move-down = bajar
+dialog-cmd-sort = ordenar por
 
 # --- norte doctor (H2): diagnóstico de solo lectura sobre capas de config,
 # keymaps, plugins y conexiones.

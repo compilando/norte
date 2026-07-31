@@ -645,6 +645,11 @@ pub struct App {
     pub theme: crate::theme::TuiTheme,
     /// Selector de tema abierto (popup): None = cerrado.
     pub theme_picker: Option<ThemePicker>,
+    /// Overlay del picker de columnas (#108 7a): mismo patrón que
+    /// `theme_picker` — un Option en App, NO una variante de Modal (Modal es
+    /// confirmación; esto es lista con cursor). El modelo vive en
+    /// norte-frontend (`ColumnsPicker`, regla 7).
+    pub columns_picker: Option<norte_frontend::columns_picker::ColumnsPicker>,
     /// Gestor de extensiones abierto (overlay del catálogo, M4-P3): None =
     /// cerrado.
     pub extensions: Option<ExtensionManager>,
@@ -1349,6 +1354,7 @@ impl App {
             pending_approvals: std::collections::VecDeque::new(),
             theme: crate::theme::TuiTheme::default(),
             theme_picker: None,
+            columns_picker: None,
             extensions: None,
             lua_pending_trust: None,
             lua_status: None,
@@ -1423,6 +1429,19 @@ impl App {
             original: self.theme.clone(),
         });
         self.preview_theme();
+    }
+
+    /// Abre el picker de columnas para el pane con foco (#108 7a): parte del
+    /// set efectivo de su scheme y de su orden VIVO (el del pane, no el de
+    /// config — un sort de cabecera previo no se pierde al abrir).
+    pub fn open_columns_picker(&mut self) {
+        let scheme = self.focused().dir().scheme().to_owned();
+        let sort = self.focused().sort();
+        self.columns_picker = Some(norte_frontend::columns_picker::ColumnsPicker::open(
+            &self.columns,
+            &scheme,
+            sort,
+        ));
     }
 
     /// Aplica al vuelo el tema resaltado en el popup (preview en vivo).
@@ -2322,6 +2341,22 @@ pub const ALLOW_TRUST_HOST: &[&str] = &["dialog.approve", "dialog.deny", "dialog
 pub const ALLOW_PICKER: &[&str] = &[
     "dialog.up",
     "dialog.down",
+    "dialog.confirm",
+    "dialog.cancel",
+];
+
+/// ALLOWLIST del picker de columnas (#108 7a, `on_columns_key`, main.rs) —
+/// única fuente para dispatch y para el hint generado del pie
+/// (`hints::DialogHints::columns`), patrón #24. `confirm` SÍ aplica+persiste
+/// (mismo criterio que [`ALLOW_PICKER`]: elegir columnas solo toca la config
+/// propia, no es una mutación de datos que Enter deba proteger).
+pub const ALLOW_COLUMNS: &[&str] = &[
+    "dialog.up",
+    "dialog.down",
+    "dialog.toggle-enabled",
+    "dialog.move-up",
+    "dialog.move-down",
+    "dialog.sort",
     "dialog.confirm",
     "dialog.cancel",
 ];

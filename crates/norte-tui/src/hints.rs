@@ -97,6 +97,8 @@ pub struct DialogHints {
     pub trust_host: String,
     /// Selector de tema (`App::theme_picker`).
     pub picker: String,
+    /// Picker de columnas (`App::columns_picker`, #108 7a).
+    pub columns: String,
     /// Gestor de extensiones (`App::extensions`).
     pub extensions: String,
     /// Panel de `[config]` de un plugin dentro del gestor de extensiones
@@ -109,12 +111,12 @@ pub struct DialogHints {
 }
 
 impl DialogHints {
-    /// Reconstruye los siete hints del efectivo `dialog` vigente.
+    /// Reconstruye todos los hints del efectivo `dialog` vigente.
     #[must_use]
     pub fn build(eff: &Effective) -> Self {
         use crate::app::{
-            ALLOW_APPROVAL, ALLOW_COLLISION, ALLOW_CONFIRM, ALLOW_EXTENSIONS, ALLOW_NAV_HOTLIST,
-            ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, ALLOW_TRUST_HOST,
+            ALLOW_APPROVAL, ALLOW_COLLISION, ALLOW_COLUMNS, ALLOW_CONFIRM, ALLOW_EXTENSIONS,
+            ALLOW_NAV_HOTLIST, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, ALLOW_TRUST_HOST,
         };
         Self {
             confirm: dialog_hints(ALLOW_CONFIRM, eff),
@@ -125,6 +127,7 @@ impl DialogHints {
             // are dropped from the PRINTED hint (never from dispatch — see
             // `without_navigation`).
             picker: dialog_hints(&without_navigation(ALLOW_PICKER), eff),
+            columns: dialog_hints(&without_navigation(ALLOW_COLUMNS), eff),
             extensions: dialog_hints(&without_navigation(ALLOW_EXTENSIONS), eff),
             plugin_config: dialog_hints(&without_navigation(ALLOW_PLUGIN_CONFIG), eff),
             nav_list: dialog_hints(&without_navigation(ALLOW_NAV_HOTLIST), eff),

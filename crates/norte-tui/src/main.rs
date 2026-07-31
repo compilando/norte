@@ -20,11 +20,11 @@ use norte_proto::DeleteMode;
 use norte_proto::methods::{FsSearchParams, SearchHits};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{
-    ALLOW_EXTENSIONS, ALLOW_NAV_HOTLIST, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, App, DialogOutcome,
-    ExtensionManager, Help, KeymapsError, Modal, NavPopupKind, Palette, Pane, PendingWrite,
-    PickerAction, SearchDialog, SearchState, Settings, SettingsEditError, TransferKind,
-    config_error_category, detail_for_bar, dialog_action, error_category, error_message,
-    io_error_category, keymaps_error_category, theme_error_category, trust_lua_key,
+    ALLOW_COLUMNS, ALLOW_EXTENSIONS, ALLOW_NAV_HOTLIST, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, App,
+    DialogOutcome, ExtensionManager, Help, KeymapsError, Modal, NavPopupKind, Palette, Pane,
+    PendingWrite, PickerAction, SearchDialog, SearchState, Settings, SettingsEditError,
+    TransferKind, config_error_category, detail_for_bar, dialog_action, error_category,
+    error_message, io_error_category, keymaps_error_category, theme_error_category, trust_lua_key,
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::hints::DialogHints;
@@ -920,6 +920,11 @@ async fn run(
                     app.message = None;
                     if app.theme_picker.is_some() {
                         on_theme_picker_key(app, dialog_resolver, key.modifiers, key.code).await;
+                    } else if app.columns_picker.is_some() {
+                        // Picker de columnas (#108 7a): mismo puesto en la
+                        // cadena que el selector de tema (overlay antes que
+                        // el brazo del modal, precedencia existente).
+                        on_columns_key(app, dialog_resolver, key.modifiers, key.code).await;
                     } else if app.extensions.is_some() {
                         on_extensions_key(app, backend, dialog_resolver, key.modifiers, key.code)
                             .await;
@@ -1567,6 +1572,103 @@ async fn on_theme_picker_key(
     }
 }
 
+/// Teclas del picker de columnas (#108 7a): resuelve por keymap (pantalla
+/// `dialog`) y filtra por [`ALLOW_COLUMNS`] — misma disciplina única-fuente
+/// que el resto de overlays (#24). `ctrl+c` conserva su salida global,
+/// hardcodeado ANTES de resolver, como los demás overlays.
+async fn on_columns_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifiers, code: KeyCode) {
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return;
+    }
+    let Some(chord) = chord_from_crossterm(mods, code) else {
+        return; // tecla no modelada por el keymap: ignorar
+    };
+    let cmd = match resolver.push(chord) {
+        Resolution::Run(cmd) => cmd,
+        // Sin semántica de secuencia definida para overlays (T2): ignorar y
+        // reiniciar el estado de resolución.
+        Resolution::Pending(_) => {
+            resolver.reset();
+            return;
+        }
+        Resolution::Reset => return,
+    };
+    if !ALLOW_COLUMNS.contains(&cmd.as_str()) {
+        return; // fuera del allowlist de este overlay: inerte
+    }
+    let Some(p) = app.columns_picker.as_mut() else {
+        return;
+    };
+    match cmd.as_str() {
+        "dialog.up" => p.up(),
+        "dialog.down" => p.down(),
+        "dialog.toggle-enabled" => p.toggle(),
+        "dialog.move-up" => p.move_up(),
+        "dialog.move-down" => p.move_down(),
+        "dialog.sort" => p.sort_current(),
+        "dialog.cancel" => app.columns_picker = None,
+        "dialog.confirm" => {
+            let picked = p.finish();
+            app.columns_picker = None;
+            apply_picked_columns(app, picked).await;
+        }
+        _ => {} // ya filtrado por ALLOW_COLUMNS; inalcanzable en la práctica
+    }
+}
+
+/// Aplica el resultado del picker (#108 7a): sesión primero (settings en
+/// memoria + re-sort de TODO pane, `apply_scheme_sort` es no-op donde el
+/// spec no cambia), disco después (`config::persist_columns` en
+/// `spawn_blocking` — regla 2). A la barra va la CATEGORÍA del error, jamás
+/// el Display del SO (#73).
+async fn apply_picked_columns(app: &mut App, picked: norte_frontend::columns_picker::Picked) {
+    app.columns
+        .apply_picked(picked.scheme_target.as_deref(), &picked.ids, picked.sort);
+    for i in 0..app.panes.len() {
+        app.apply_scheme_sort(i);
+    }
+    let Some(dir) = config::user_config_dir() else {
+        app.message = Some(t("msg-settings-no-config-dir"));
+        return;
+    };
+    let ids = picked.ids.clone();
+    let scheme = picked.scheme_target.clone();
+    let sort = picked.sort;
+    let res = tokio::task::spawn_blocking(move || {
+        config::persist_columns(
+            &dir,
+            scheme.as_deref(),
+            &ids,
+            config::PersistSort {
+                column: match sort.column {
+                    norte_frontend::SortColumn::Name => "name",
+                    norte_frontend::SortColumn::Size => "size",
+                    norte_frontend::SortColumn::Mtime => "mtime",
+                },
+                descending: sort.dir == norte_frontend::SortDir::Desc,
+                dirs_first: sort.dirs_first,
+            },
+        )
+    })
+    .await;
+    match res {
+        Ok(Ok(_path)) => app.message = Some(t("msg-columns-saved")),
+        Ok(Err(e)) => {
+            app.message = Some(ta(
+                "msg-settings-save-failed",
+                &[("error", &io_error_category(&e))],
+            ));
+        }
+        // Un panic en el write es un bug nuestro: que no tumbe la TUI (misma
+        // disciplina que `persist_setting`) — se anuncia y queda traza.
+        Err(e) => {
+            tracing::error!(error = %e, "tarea de fondo de persist_columns no terminó");
+            app.message = Some(t("msg-settings-save-crashed"));
+        }
+    }
+}
+
 /// Qué hacer tras procesar una tecla del overlay de ajustes — separa el
 /// cómputo PURO (dentro del borrow de `app.settings`, `on_settings_key`) del
 /// I/O async (`persist_setting`, fuera de ese borrow): `Settings::activate`/
@@ -2203,6 +2305,16 @@ async fn reload_config(
                 app.hotlist.clone_from(&cfg.common.hotlist);
                 // Openers (#28): recargados con el resto de la config.
                 app.openers = cfg.openers.clone();
+                // #108 7a: `[ui.columns]` editado fuera también refresca la
+                // sesión (antes solo arrancaba); el re-sort mantiene los
+                // panes coherentes con el fichero — el persist del picker
+                // dispara este mismo camino y es idempotente con lo ya
+                // aplicado en memoria.
+                app.columns =
+                    norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns);
+                for i in 0..app.panes.len() {
+                    app.apply_scheme_sort(i);
+                }
                 // Bindings `lua:` descartados del keymap de PROYECTO
                 // (seguridad — mismo aviso que en el arranque; máximo
                 // porque `global` se fusiona en las tres pantallas, H1 T2
@@ -3685,6 +3797,7 @@ async fn dispatch(
             });
         }
         Command::AppTheme => app.open_theme_picker(),
+        Command::PaneColumns => app.open_columns_picker(),
         Command::AppExtensions => match backend.plugins_list().await {
             // El catálogo llega YA ordenado por categoría e id desde el core.
             Ok(list) => {

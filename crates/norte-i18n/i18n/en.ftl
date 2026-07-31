@@ -229,6 +229,9 @@ settings-hint-gui = [↑/↓/pgup/pgdn/click] navigate · [enter/click] edit · 
 # by copying its exact display text.
 palette-plugin-prefix = extension
 theme-picker-title = Theme
+columns-picker-title = Columns — { $target }
+columns-picker-target-default = all schemes
+msg-columns-saved = columns saved
 ext-title = Extensions
 ext-empty = no extensions installed
 ext-unapproved = not approved
@@ -311,6 +314,7 @@ help-cmd-viewer-bottom = go to bottom
 help-cmd-viewer-encoding = reload as… (next encoding)
 help-cmd-pane-names-encoding = show names as… (cp437/cp866/Shift-JIS/GBK/…; display only)
 help-cmd-pane-toggle-hidden = show or hide hidden entries
+help-cmd-pane-columns = column picker
 help-cmd-pane-mkdir = create a directory (F7)
 help-cmd-pane-rename = rename in place (Shift+F6)
 help-cmd-pane-refresh = reload both panes (Ctrl+R)
@@ -406,6 +410,9 @@ dialog-cmd-page-down = pg dn
 dialog-cmd-add = add
 dialog-cmd-toggle-enabled = toggle
 dialog-cmd-remove = remove
+dialog-cmd-move-up = move up
+dialog-cmd-move-down = move down
+dialog-cmd-sort = sort by
 
 # --- norte doctor (H2): read-only diagnostics over config layers,
 # keymaps, plugins and connections.

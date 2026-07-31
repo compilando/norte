@@ -80,6 +80,9 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(picker) = &app.theme_picker {
         draw_theme_picker(frame, picker, &app.theme, &app.dialog_hints.picker);
     }
+    if let Some(p) = &app.columns_picker {
+        draw_columns_picker(frame, p, &app.theme, &app.dialog_hints.columns);
+    }
     if let Some(mgr) = &app.extensions {
         if let Some(panel) = &mgr.config {
             draw_plugin_config_panel(frame, panel, &app.theme, &app.dialog_hints.plugin_config);
@@ -578,6 +581,79 @@ fn draw_theme_picker(
         .highlight_style(theme.role(Role::Selection));
     let mut state = ListState::default();
     state.select(Some(picker.cursor));
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// Overlay del picker de columnas (#108 7a): lista con cursor — checkbox,
+/// etiqueta (Fluent para builtins; el id CRUDO enmascarado para los que no
+/// parsean o no tienen renderer — texto de config del usuario, #73: se
+/// pinta con `mask_terminal_hazards`) y la flecha del sort en la fila de su
+/// columna. Mismo esqueleto que [`draw_theme_picker`] (Clear + centrado,
+/// `List` + `ListState` con highlight `Role::Selection`, hint generado en
+/// `title_bottom`, ancho por contenido en CELDAS con suelo del footer).
+fn draw_columns_picker(
+    frame: &mut Frame<'_>,
+    p: &norte_frontend::columns_picker::ColumnsPicker,
+    theme: &TuiTheme,
+    hint: &str,
+) {
+    use norte_frontend::columns::{Builtin, sort_column};
+    let target = if p.scheme_override() {
+        p.scheme().to_owned()
+    } else {
+        t("columns-picker-target-default")
+    };
+    let titulo = ta("columns-picker-title", &[("target", &target)]);
+    let filas: Vec<String> = p
+        .rows()
+        .iter()
+        .map(|r| {
+            let marca = if r.enabled { "[x]" } else { "[ ]" };
+            let etiqueta = match r.builtin {
+                Some(Builtin::Name) => t("col-header-name"),
+                Some(Builtin::Size) => t("col-header-size"),
+                Some(Builtin::Mtime) => t("col-header-mtime"),
+                Some(Builtin::Kind) => t("col-header-kind"),
+                None => norte_encoding::mask_terminal_hazards(&r.id),
+            };
+            let flecha = match r.builtin.and_then(sort_column) {
+                Some(sc) if sc == p.sort().column => {
+                    if p.sort().dir == norte_frontend::SortDir::Asc {
+                        " ▲"
+                    } else {
+                        " ▼"
+                    }
+                }
+                _ => "",
+            };
+            format!(" {marca} {etiqueta}{flecha}")
+        })
+        .collect();
+    let footer_w = Line::raw(format!(" {hint} ")).width();
+    let contenido_w = filas
+        .iter()
+        .map(|f| Line::raw(f.as_str()).width())
+        .max()
+        .unwrap_or(0);
+    let ancho = u16::try_from(footer_w.max(contenido_w).saturating_add(4))
+        .unwrap_or(u16::MAX)
+        .max(34)
+        .min(frame.area().width);
+    let rows = u16::try_from(p.rows().len()).unwrap_or(8) + 2;
+    let area = centered(frame.area(), ancho, rows.min(frame.area().height.max(3)));
+    frame.render_widget(ratatui::widgets::Clear, area);
+    let items: Vec<ListItem<'_>> = filas.into_iter().map(ListItem::new).collect();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {titulo} "))
+        .title_style(theme.role(Role::Title))
+        .title_bottom(Line::raw(format!(" {hint} ")))
+        .border_style(theme.role(Role::ModalBorder));
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(theme.role(Role::Selection));
+    let mut state = ListState::default();
+    state.select(Some(p.cursor()));
     frame.render_stateful_widget(list, area, &mut state);
 }
 

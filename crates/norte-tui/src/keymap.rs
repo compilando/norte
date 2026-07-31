@@ -132,6 +132,7 @@ commands! {
     "pane.search" => PaneSearch,
     "pane.names-encoding" => PaneNamesEncoding,
     "pane.toggle-hidden" => PaneToggleHidden,
+    "pane.columns" => PaneColumns,
     "pane.mkdir" => PaneMkdir,
     "pane.rename" => PaneRename,
     "pane.refresh" => PaneRefresh,
@@ -167,6 +168,9 @@ pub const DIALOG_COMMANDS: &[&str] = &[
     "dialog.add",
     "dialog.toggle-enabled",
     "dialog.remove",
+    "dialog.move-up",
+    "dialog.move-down",
+    "dialog.sort",
 ];
 
 /// Id de Fluent con la descripción de un comando (`app.quit` →
@@ -347,6 +351,57 @@ mod tests {
             dialog_hint_id("dialog.toggle-enabled"),
             "dialog-cmd-toggle-enabled"
         );
+    }
+
+    /// #108 7a: las teclas del picker de columnas resuelven en los TRES
+    /// presets A TRAVÉS del adaptador de crossterm real — pinea las
+    /// decisiones de chord verificadas en el plan:
+    /// - `shift+up`/`shift+down` → move-up/move-down: `parse_chord`
+    ///   CONSERVA shift en teclas no-Char y `chord_from_crossterm` también,
+    ///   así que el chord del preset casa el evento SHIFT+flecha.
+    /// - `K`/`J` → move-up/move-down: crossterm entrega `Char('J')`+SHIFT y
+    ///   `Chord::new` DESCARTA shift en Char — casa el binding `"J"`.
+    ///   (`shift+j` como texto NO parsea: `ShiftWithChar`.)
+    /// - `ctrl+s` → dialog.sort: `s` a secas ya es `dialog.skip` (colisión
+    ///   del modal de colisiones) — el fallback del plan.
+    #[test]
+    fn columns_picker_chords_resuelven_via_adaptador_crossterm() {
+        let expected = [
+            ((CtMods::SHIFT, CtCode::Up), "dialog.move-up"),
+            ((CtMods::SHIFT, CtCode::Down), "dialog.move-down"),
+            ((CtMods::SHIFT, CtCode::Char('K')), "dialog.move-up"),
+            ((CtMods::SHIFT, CtCode::Char('J')), "dialog.move-down"),
+            ((CtMods::CONTROL, CtCode::Char('s')), "dialog.sort"),
+        ];
+        let known: Vec<&str> = COMMANDS
+            .iter()
+            .copied()
+            .chain(DIALOG_COMMANDS.iter().copied())
+            .collect();
+        for (nombre, preset) in presets() {
+            let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog)
+                .unwrap_or_else(|e| panic!("preset {nombre}: {e}"));
+            for ((mods, code), command) in &expected {
+                let mut r = Resolver::new(eff.clone());
+                let chord = chord_from_crossterm(*mods, *code)
+                    .unwrap_or_else(|| panic!("preset {nombre}: chord no modelado {code:?}"));
+                assert_eq!(
+                    r.push(chord),
+                    Resolution::Run((*command).to_owned()),
+                    "preset {nombre}: {command}"
+                );
+            }
+            // Y `alt+c` abre el picker desde el pane.
+            let browse = Effective::build_for(&preset, &[], COMMANDS, Screen::Browse)
+                .unwrap_or_else(|e| panic!("preset {nombre}: {e}"));
+            let mut r = Resolver::new(browse);
+            let alt_c = chord_from_crossterm(CtMods::ALT, CtCode::Char('c')).expect("alt+c");
+            assert_eq!(
+                r.push(alt_c),
+                Resolution::Run("pane.columns".to_owned()),
+                "preset {nombre}: pane.columns"
+            );
+        }
     }
 
     /// The six mark commands resolve in the three factory presets (#103). A

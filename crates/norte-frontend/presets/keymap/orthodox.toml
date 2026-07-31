@@ -40,6 +40,7 @@ keymap = [
     { on = ["ctrl+r"], run = "pane.refresh" },
     { on = ["ctrl+h"], run = "pane.toggle-hidden" },
     { on = ["alt+."], run = "pane.toggle-hidden" },
+    { on = ["alt+c"], run = "pane.columns" },
     { on = ["ctrl+d"], run = "pane.hotlist" },
     { on = ["insert"], run = "mark.toggle" },
     { on = ["ctrl+a"], run = "mark.all" },
@@ -83,4 +84,9 @@ keymap = [
     { on = ["a"], run = "dialog.add" },
     { on = ["e"], run = "dialog.toggle-enabled" },
     { on = ["d"], run = "dialog.remove" },
+    { on = ["shift+up"], run = "dialog.move-up" },
+    { on = ["shift+down"], run = "dialog.move-down" },
+    { on = ["K"], run = "dialog.move-up" },
+    { on = ["J"], run = "dialog.move-down" },
+    { on = ["ctrl+s"], run = "dialog.sort" },
 ]
