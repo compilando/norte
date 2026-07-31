@@ -130,6 +130,20 @@ pub fn check_columns(layers: &Layers) -> Vec<Finding> {
             ),
         });
     }
+    // #108 7b: un `[[ui.columns.spec]]` con id imposible o con un formato
+    // que no casa con su columna (p. ej. `iec` en mtime) — se aplicó el
+    // default al pintar, jamás un drop mudo.
+    for raw in &st.bad_specs {
+        findings.push(Finding {
+            section: "config",
+            severity: Severity::Warn,
+            code: "columns-bad-spec",
+            detail: format!(
+                "[ui.columns.spec] id imposible o formato que no casa con su columna (se aplica el default al pintar): {}",
+                sanitize_detail(raw)
+            ),
+        });
+    }
     findings
 }
 
@@ -568,6 +582,28 @@ mod tests {
             "{f:?}"
         );
         assert!(f.iter().any(|x| x.code == "columns-no-renderer"), "{f:?}");
+    }
+
+    /// #108 7b: un spec cuyo formato no casa con su columna (`iec` en un
+    /// timestamp) = Warn `columns-bad-spec` nombrando el id — el render
+    /// aplica el default en silencio, así que doctor es quien lo cuenta.
+    #[test]
+    fn columns_spec_que_no_casa_se_reporta() {
+        let dir = tempfile::tempdir().expect("tmp");
+        std::fs::write(
+            dir.path().join("norte.toml"),
+            "[[ui.columns.spec]]\nid = \"mtime\"\nformat = \"iec\"\n",
+        )
+        .expect("write");
+        let layers = norte_config::Layers {
+            dirs: vec![(dir.path().to_path_buf(), norte_config::Layer::User)],
+        };
+        let f = super::check_columns(&layers);
+        assert!(
+            f.iter()
+                .any(|x| x.code == "columns-bad-spec" && x.detail.contains("mtime")),
+            "{f:?}"
+        );
     }
     use std::ffi::OsString;
 

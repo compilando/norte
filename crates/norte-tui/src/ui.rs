@@ -279,21 +279,33 @@ fn take_width(s: &str, max: usize) -> String {
     out
 }
 
-/// La línea de cabecera (#108 L5): etiquetas Fluent, la del orden activo
-/// con `▲`/`▼`. Ancho fiel al de las celdas de las filas.
+/// La línea de cabecera (#108 L5): etiquetas Fluent (o la `header` custom
+/// del spec, #108 7b — YA saneada y capada al resolver, aquí solo el
+/// recorte por ancho), la del orden activo con `▲`/`▼`. Ancho fiel al de
+/// las celdas de las filas; el `align` del estilo elige el lado del
+/// relleno en las no-nombre, en paso con sus celdas.
 fn column_header_line(
-    widths: &[(norte_frontend::columns::Builtin, u16)],
+    cols: &[(
+        norte_frontend::columns::Builtin,
+        u16,
+        norte_frontend::columns::ColumnStyle,
+    )],
     sort: norte_frontend::SortSpec,
 ) -> String {
     use norte_frontend::SortDir;
-    use norte_frontend::columns::Builtin;
+    use norte_frontend::columns::{Align, Builtin};
     let mut out = String::new();
-    for (i, (col, w)) in widths.iter().enumerate() {
-        let label = match col {
-            Builtin::Name => t("col-header-name"),
-            Builtin::Size => t("col-header-size"),
-            Builtin::Mtime => t("col-header-mtime"),
-            Builtin::Kind => t("col-header-kind"),
+    for (i, (col, w, style)) in cols.iter().enumerate() {
+        // #108 7b: la cabecera custom sustituye a la etiqueta Fluent. NO se
+        // re-enmascara: `ColumnsSettings::resolve` es el único choke point.
+        let label = match &style.header {
+            Some(h) => h.clone(),
+            None => match col {
+                Builtin::Name => t("col-header-name"),
+                Builtin::Size => t("col-header-size"),
+                Builtin::Mtime => t("col-header-mtime"),
+                Builtin::Kind => t("col-header-kind"),
+            },
         };
         let activa = norte_frontend::columns::sort_column(*col) == Some(sort.column);
         let w = usize::from(*w);
@@ -306,7 +318,8 @@ fn column_header_line(
             // Nombre: alineado a la izquierda (deja el hueco del canalón).
             // La flecha se añade TRAS recortar (review MN2): el indicador
             // de dirección sobrevive a cualquier locale; recorte por ANCHO
-            // (take_width), jamás por chars.
+            // (take_width), jamás por chars. El layout del nombre no lo
+            // toca ningún `align` (#108 7b): su bloque manda.
             let budget = if activa { w.saturating_sub(1) } else { w };
             let mut cab = take_width(&label, budget);
             if activa {
@@ -316,8 +329,10 @@ fn column_header_line(
             out.push_str(&cab);
             out.push_str(&" ".repeat(pad));
         } else {
-            // No-nombre: el ancho incluye el separador — contenido a la
-            // derecha dentro de w-1, misma cuenta que la celda.
+            // No-nombre: el ancho incluye el separador — contenido dentro
+            // de w-1, misma cuenta que la celda. Derecha: relleno delante.
+            // Izquierda (#108 7b): el separador sigue ABRIENDO el ancho,
+            // el contenido va tras él y el relleno cae a la derecha.
             let contenido = w.saturating_sub(1);
             let budget = if activa {
                 contenido.saturating_sub(1)
@@ -328,9 +343,19 @@ fn column_header_line(
             if activa {
                 cab.push(flecha);
             }
-            let pad = w.saturating_sub(cab.width());
-            out.push_str(&" ".repeat(pad));
-            out.push_str(&cab);
+            match style.align {
+                Align::Right => {
+                    let pad = w.saturating_sub(cab.width());
+                    out.push_str(&" ".repeat(pad));
+                    out.push_str(&cab);
+                }
+                Align::Left => {
+                    let pad = w.saturating_sub(cab.width().saturating_add(1));
+                    out.push(' ');
+                    out.push_str(&cab);
+                    out.push_str(&" ".repeat(pad));
+                }
+            }
         }
     }
     out
@@ -1382,7 +1407,7 @@ mod entry_item_columns_tests {
     /// que romper la alineación, y el ancho total de la fila es EXACTO.
     #[test]
     fn una_decoracion_ancha_jamas_desplaza_las_columnas() {
-        use norte_frontend::columns::{Builtin, LayoutItem, WidthPolicy};
+        use norte_frontend::columns::{Builtin, ColumnStyle, LayoutItem, WidthPolicy};
         let entry = norte_proto::Entry {
             attrs: std::collections::BTreeMap::new(),
             path: VPath::parse("mem:///f.txt").unwrap(),
@@ -1395,7 +1420,18 @@ mod entry_item_columns_tests {
             role: None,
         };
         let theme = TuiTheme::default();
-        let widths = [(Builtin::Name, 10u16), (Builtin::Size, 11u16)];
+        let widths = [
+            (
+                Builtin::Name,
+                10u16,
+                ColumnStyle::default_for(Builtin::Name),
+            ),
+            (
+                Builtin::Size,
+                11u16,
+                ColumnStyle::default_for(Builtin::Size),
+            ),
+        ];
         let _ = LayoutItem {
             policy: WidthPolicy::Auto,
             measured: 0,
@@ -1656,6 +1692,25 @@ fn centered(base: Rect, w: u16, h: u16) -> Rect {
     }
 }
 
+/// Columnas VIVAS de un pane con su estilo resuelto (#108 7b): los anchos
+/// del layout compartido más `style_for`, UNA vez por columna y por frame
+/// (`style_for` pliega mapas y clona el header — por fila × columna sería
+/// O(filas × columnas) de lookups idénticos).
+fn styled_columns(
+    settings: &norte_frontend::columns::ColumnsSettings,
+    scheme: &str,
+    inner_w: u16,
+) -> Vec<(
+    norte_frontend::columns::Builtin,
+    u16,
+    norte_frontend::columns::ColumnStyle,
+)> {
+    norte_frontend::columns::column_widths(settings, scheme, inner_w)
+        .into_iter()
+        .map(|(b, w)| (b, w, settings.style_for(scheme, b)))
+        .collect()
+}
+
 fn draw_pane(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -1712,9 +1767,10 @@ fn draw_pane(
     // listado va entero y manda el cursor real.
     let reinterpret = pane.name_encoding();
     // #108 L5: anchos de columna del ancho INTERIOR del pane, una vez por
-    // frame — las filas y la cabecera comparten el mismo layout.
+    // frame — las filas y la cabecera comparten el mismo layout (con el
+    // estilo 7b resuelto por columna, ver `styled_columns`).
     let inner_w = block.inner(area).width;
-    let widths = &norte_frontend::columns::column_widths(settings, pane.dir().scheme(), inner_w);
+    let cols = &styled_columns(settings, pane.dir().scheme(), inner_w);
     let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = match pane.quick_visible() {
         Some(vis) => (
             vis.iter()
@@ -1726,7 +1782,7 @@ fn draw_pane(
                         reinterpret,
                         pane.decoration_for(&e.path),
                         pane.is_marked(e),
-                        widths,
+                        cols,
                         now_ms,
                     )
                 })
@@ -1745,7 +1801,7 @@ fn draw_pane(
                         reinterpret,
                         pane.decoration_for(&e.path),
                         pane.is_marked(e),
-                        widths,
+                        cols,
                         now_ms,
                     )
                 })
@@ -1769,7 +1825,7 @@ fn draw_pane(
         (cab, lst)
     };
     frame.render_widget(
-        Paragraph::new(column_header_line(widths, pane.sort()))
+        Paragraph::new(column_header_line(cols, pane.sort()))
             .style(ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM)),
         header_area,
     );
@@ -1785,7 +1841,11 @@ fn entry_item<'a>(
     reinterpret: Option<norte_encoding::NameEncoding>,
     decoration: Option<&norte_frontend::Decoration>,
     marked: bool,
-    widths: &[(norte_frontend::columns::Builtin, u16)],
+    cols: &[(
+        norte_frontend::columns::Builtin,
+        u16,
+        norte_frontend::columns::ColumnStyle,
+    )],
     now_ms: i64,
 ) -> ListItem<'a> {
     let name = entry.path.file_name().map_or(&[][..], |n| n.as_bytes());
@@ -1843,10 +1903,10 @@ fn entry_item<'a>(
     // #108 L5: celdas de columnas tras el nombre. El bloque del nombre
     // (canalón+badge+glyph+texto+decoración) se TRUNCA a su ancho de layout
     // (elipsis central, consciente de celdas — CJK/emoji no desbordan) y
-    // se rellena; cada celda no-nombre va alineada a la DERECHA en su
-    // ancho, dim, con un espacio separador. Ausencia = celda en blanco,
-    // jamás un 0 fabricado.
-    if let Some((_, name_w)) = widths.first() {
+    // se rellena; cada celda no-nombre va alineada según su estilo (#108
+    // 7b, derecha por defecto) en su ancho, dim, con un espacio separador.
+    // Ausencia = celda en blanco, jamás un 0 fabricado.
+    if let Some((_, name_w, _)) = cols.first() {
         let name_w = usize::from(*name_w);
         // review #108-5 M2: la DECORACIÓN también entra en el presupuesto
         // del nombre — un badge CJK (8 chars = 16 celdas) desplazaba todas
@@ -1882,12 +1942,15 @@ fn entry_item<'a>(
         if usado < name_w {
             spans.push(Span::raw(" ".repeat(name_w - usado)));
         }
-        for (col, w) in widths.iter().skip(1) {
-            let cell =
-                norte_frontend::columns::builtin_cell(entry, *col, now_ms).unwrap_or_default();
-            // El ancho INCLUYE el separador (default_layout_items): la
-            // celda se alinea a la derecha dentro de w-1 y siempre queda
-            // ≥1 espacio a su izquierda.
+        for (col, w, style) in cols.iter().skip(1) {
+            let cell = norte_frontend::columns::styled_cell(entry, *col, now_ms, style)
+                .unwrap_or_default();
+            // El ancho INCLUYE el separador (default_layout_items): el
+            // contenido vive dentro de w-1 y siempre queda ≥1 espacio de
+            // separador. Derecha (default): relleno delante. Izquierda
+            // (#108 7b): el separador sigue ABRIENDO el presupuesto, el
+            // contenido va tras él y el relleno cae a la derecha — la
+            // misma cuenta, invertida.
             let w = usize::from(*w);
             let contenido = w.saturating_sub(1);
             let cw = cell.width();
@@ -1896,9 +1959,18 @@ fn entry_item<'a>(
             } else {
                 cell
             };
-            let pad = w.saturating_sub(recortada.width());
+            let texto = match style.align {
+                norte_frontend::columns::Align::Right => {
+                    let pad = w.saturating_sub(recortada.width());
+                    format!("{}{recortada}", " ".repeat(pad))
+                }
+                norte_frontend::columns::Align::Left => {
+                    let pad = w.saturating_sub(recortada.width().saturating_add(1));
+                    format!(" {recortada}{}", " ".repeat(pad))
+                }
+            };
             spans.push(Span::styled(
-                format!("{}{recortada}", " ".repeat(pad)),
+                texto,
                 ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM),
             ));
         }

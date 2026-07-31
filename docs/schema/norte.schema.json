@@ -109,6 +109,55 @@
       },
       "type": "object"
     },
+    "ColumnSpecSection": {
+      "additionalProperties": false,
+      "description": "One `[[ui.columns.spec]]` entry (#108 block 7b): per-column\npresentation. Keyed by `id`; a scheme block may carry its own `spec`\nentries that win for panes on that scheme.",
+      "properties": {
+        "align": {
+          "default": null,
+          "description": "`\"left\"` | `\"right\"` — closed, validated at load.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format": {
+          "default": null,
+          "description": "`\"exact\"` | `\"iec\"` | `\"si\"` | `\"relative\"` | `\"iso\"` — closed,\nvalidated at load; whether it FITS the column is the frontend's\ncall (doctor reports mismatches).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "header": {
+          "default": null,
+          "description": "Custom header label (free text; the frontend sanitizes and caps).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Column id this entry styles (required).",
+          "type": "string"
+        },
+        "width": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WidthSection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`\"auto\"` | `{ fixed = n }` | `{ min = n, weight = m }` — cells,\nvalidated to `[1, 64]` at load."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
     "DaemonMode": {
       "description": "Core transport. This changes transport only, not behaviour.",
       "oneOf": [
@@ -209,6 +258,16 @@
             }
           ],
           "description": "Sort for panes on this scheme."
+        },
+        "spec": {
+          "description": "`[[ui.columns.scheme.<scheme>.spec]]` entries: per-column\npresentation for panes on this scheme; they win over the global\n`spec` entries at resolve.",
+          "items": {
+            "$ref": "#/$defs/ColumnSpecSection"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -279,6 +338,16 @@
             }
           ],
           "description": "Global sort order. Absent = name/asc/dirs-first."
+        },
+        "spec": {
+          "description": "`[[ui.columns.spec]]` entries (#108 block 7b): per-column\npresentation, keyed by `id`.",
+          "items": {
+            "$ref": "#/$defs/ColumnSpecSection"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -373,6 +442,55 @@
         }
       },
       "type": "object"
+    },
+    "WidthSection": {
+      "anyOf": [
+        {
+          "description": "`\"auto\"` (any other string is a load error).",
+          "type": "string"
+        },
+        {
+          "description": "`{ fixed = n }`.",
+          "properties": {
+            "fixed": {
+              "description": "Cells.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "fixed"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`{ min = n, weight = m }`.",
+          "properties": {
+            "min": {
+              "description": "Floor in cells.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "weight": {
+              "default": 0,
+              "description": "Share weight (0 = never grows).",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "min"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "The `width` of a spec entry. NOTE: this enum is `untagged`, and serde\nignores `deny_unknown_fields` inside untagged struct-syntax variants —\nan unknown key next to `fixed`/`min` is silently ignored, never an\nerror (pinned by `width_fixed_con_campo_extra_comportamiento_serde` in\n`load.rs`). The vocabularies and ranges themselves ARE validated at\nload."
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

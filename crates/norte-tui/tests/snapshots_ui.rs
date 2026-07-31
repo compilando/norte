@@ -283,6 +283,68 @@ fn snapshot_columns_picker_80x24() {
     insta::assert_snapshot!(texto);
 }
 
+/// #108 7b: `[[ui.columns.spec]]` vivo en el pane — `size` con formato SI
+/// («1.5 kB», no «1.5 KiB»), cabecera custom `Peso` (sustituye a «Tamaño»)
+/// y ancho fijo 9; `kind` alineado a la IZQUIERDA (contenido tras el
+/// separador, relleno a la derecha — el default derecho queda pineado por
+/// `snapshot_navegacion`). La cabecera hostil no se re-pina aquí: el choke
+/// point es `ColumnsSettings::resolve` (unit test en norte-frontend).
+#[test]
+fn snapshot_columns_spec_size_si_header_custom_kind_izquierda() {
+    let izq = vp("file:///casa");
+    let der = vp("file:///otro");
+    let mut entries = vec![
+        entry(&izq, b"docs", EntryKind::Dir, None),
+        entry(&izq, b"grande.bin", EntryKind::File, Some(1500)),
+        entry(&izq, b"notas.txt", EntryKind::File, Some(420)),
+    ];
+    sort_entries(&mut entries);
+    let mut app = App::new(
+        Pane::new(izq, entries),
+        Pane::new(
+            der.clone(),
+            vec![entry(&der, b"cosa", EntryKind::File, Some(1))],
+        ),
+    );
+    app.dialog_hints = default_dialog_hints();
+    // `kind` no está en el set por defecto: lista explícita — con el width
+    // fijo 9 del spec de size, 10+9+10+9 = 38 celdas casan EXACTAS en el
+    // interior del pane y `kind` no se descarta.
+    let mut cfg = norte_config::ColumnsConfig {
+        default_columns: Some(vec![
+            "name".into(),
+            "size".into(),
+            "mtime".into(),
+            "kind".into(),
+        ]),
+        ..Default::default()
+    };
+    cfg.specs.insert(
+        "size".into(),
+        norte_config::ColumnSpec {
+            format: Some("si".into()),
+            header: Some("Peso".into()),
+            width: Some(norte_config::WidthChoice::Fixed(9)),
+            ..Default::default()
+        },
+    );
+    cfg.specs.insert(
+        "kind".into(),
+        norte_config::ColumnSpec {
+            align: Some(norte_config::AlignChoice::Left),
+            ..Default::default()
+        },
+    );
+    app.columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg);
+    let texto = render(&app);
+    assert!(texto.contains("Peso"), "cabecera custom del spec:\n{texto}");
+    assert!(
+        texto.contains("1.5 kB") && !texto.contains("KiB"),
+        "size en SI, no IEC:\n{texto}"
+    );
+    insta::assert_snapshot!(texto);
+}
+
 /// MAJOR-1 item (d): igual que el selector de tema, para el gestor de
 /// extensiones (`app.extensions`, M4-P3) — su hint tras (a)+(b) (labels
 /// cortas + sin flechas) más el sizing por footer de (c) deben caber

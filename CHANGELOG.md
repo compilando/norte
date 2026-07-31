@@ -9,6 +9,19 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Per-column presentation — `[[ui.columns.spec]]` (#108 block 7b):** a
+  spec entry keyed by column `id` sets `width` (`"auto"` / `{ fixed = n }` /
+  `{ min = n, weight = m }`), `align` (`left`/`right`), `format` (size:
+  `exact`/`iec`/`si`; mtime: `relative`/`iso`) and a custom `header`
+  (sanitized and capped at resolve), globally or per scheme (scheme wins,
+  last-wins per field). Both frontends honor the resolved style at the same
+  points they already read the shared layout: custom headers replace the
+  Fluent label, cells format through `styled_cell`, align picks the padding
+  side, and width overrides flow through the shared layout. Every
+  vocabulary is closed and validated at load (a typo is a load error naming
+  the path); whether a format fits its column is a resolve-time diagnostic:
+  the default is applied and `norte doctor` reports it as
+  `columns-bad-spec` (masked, capped) — never a silent skip.
 - **TUI column picker — Alt+C (#108 block 7a):** a keyboard-driven overlay
   over the shared picker model: `e`/space toggles a column on or off (name
   is pinned first and immutable), Shift+↑/↓ — or vim-style `K`/`J` —

@@ -2138,11 +2138,18 @@ impl NorteGui {
             ch,
             f32::from(self.fonts.size),
         );
-        let widths = norte_frontend::columns::column_widths(
-            &self.column_settings,
-            pane.dir().scheme(),
-            cells,
-        );
+        // #108 7b: el ESTILO de cada columna se resuelve aquí, UNA vez por
+        // columna y frame (`style_for` pliega mapas y clona el header — por
+        // fila × columna sería O(filas × columnas) de lookups idénticos).
+        let scheme = pane.dir().scheme();
+        let cols: Vec<(
+            norte_frontend::columns::Builtin,
+            u16,
+            norte_frontend::columns::ColumnStyle,
+        )> = norte_frontend::columns::column_widths(&self.column_settings, scheme, cells)
+            .into_iter()
+            .map(|(b, w)| (b, w, self.column_settings.style_for(scheme, b)))
+            .collect();
         let now_ms: i64 = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
@@ -2150,9 +2157,9 @@ impl NorteGui {
         // `'static` de `cx.processor` — no puede capturar `&ChromeColors`
         // prestado de este frame, que no vive tanto como el closure.
         let chrome_owned = *chrome;
-        // #108 b6: copia de `widths` para el closure (la original queda para
+        // #108 b6: copia de `cols` para el closure (la original queda para
         // la fila de cabeceras de más abajo).
-        let widths_owned = widths.clone();
+        let cols_owned = cols.clone();
 
         let (path_txt, path_hostile) = norte_frontend::path_display(pane.dir());
         let header = if path_hostile {
@@ -2201,7 +2208,7 @@ impl NorteGui {
                             hl,
                             marked,
                             &chrome_owned,
-                            &widths_owned,
+                            &cols_owned,
                             now_ms,
                             ch,
                             window,
@@ -2364,7 +2371,7 @@ impl NorteGui {
                         .w(self.fonts.size)
                         .child(SharedString::from("")),
                 );
-            for (k, (col_b, w)) in widths.iter().enumerate() {
+            for (k, (col_b, w, style)) in cols.iter().enumerate() {
                 let is_name = matches!(col_b, norte_frontend::columns::Builtin::Name);
                 let label_key = match col_b {
                     norte_frontend::columns::Builtin::Name => "col-header-name",
@@ -2374,10 +2381,16 @@ impl NorteGui {
                 };
                 let sortable = norte_frontend::columns::sort_column(*col_b);
                 let active = sortable == Some(sort.column);
+                // #108 7b: la cabecera custom del spec (YA saneada y capada
+                // al resolver — único choke point) sustituye a la Fluent.
+                let base = style
+                    .header
+                    .clone()
+                    .unwrap_or_else(|| norte_i18n::t(label_key));
                 let label = if active {
-                    format!("{}{arrow}", norte_i18n::t(label_key))
+                    format!("{base}{arrow}")
                 } else {
-                    norte_i18n::t(label_key)
+                    base.clone()
                 };
                 let mut cell = div()
                     .id(format!("col-header-{i}-{k}"))
@@ -2386,18 +2399,25 @@ impl NorteGui {
                 cell = if is_name {
                     cell.flex_1()
                 } else {
-                    cell.flex_none()
+                    // #108 7b: el `align` del estilo elige el lado, en paso
+                    // con las celdas de las filas; el separador (pl) sigue
+                    // abriendo el ancho en ambos casos.
+                    let cell = cell
+                        .flex_none()
                         .w(px(f32::from(*w) * ch))
                         .pl(px(ch))
                         .flex()
-                        .flex_row()
-                        .justify_end()
+                        .flex_row();
+                    match style.align {
+                        norte_frontend::columns::Align::Left => cell.justify_start(),
+                        norte_frontend::columns::Align::Right => cell.justify_end(),
+                    }
                 };
                 if let Some(sc) = sortable {
                     let hover_bg = chrome.hover_bg;
                     cell = cell
                         .role(gpui::Role::Button)
-                        .aria_label(norte_i18n::t(label_key))
+                        .aria_label(base)
                         .cursor_pointer()
                         .hover(move |s| s.bg(hover_bg))
                         .on_mouse_down(
@@ -2530,7 +2550,11 @@ impl NorteGui {
         highlighted: bool,
         marked: bool,
         chrome: &ChromeColors,
-        widths: &[(norte_frontend::columns::Builtin, u16)],
+        cols: &[(
+            norte_frontend::columns::Builtin,
+            u16,
+            norte_frontend::columns::ColumnStyle,
+        )],
         now_ms: i64,
         ch: f32,
         window: &Window,
@@ -2629,20 +2653,27 @@ impl NorteGui {
         // un mtime desconocido) = celda en blanco, jamás un 0 fabricado. Color:
         // el de la fila a alfa reducido — el mismo "dim relativo" que el
         // fallback del badge de decoración (GPUI no tiene Modifier::DIM).
-        for (col, w) in widths
+        for (col, w, style) in cols
             .iter()
-            .filter(|(b, _)| !matches!(b, norte_frontend::columns::Builtin::Name))
+            .filter(|(b, _, _)| !matches!(b, norte_frontend::columns::Builtin::Name))
         {
-            let cell =
-                norte_frontend::columns::builtin_cell(entry, *col, now_ms).unwrap_or_default();
+            // #108 7b: formato del estilo resuelto (hoisted por frame en
+            // `render_pane`) y `align` eligiendo el lado — el separador
+            // (pl) sigue abriendo el ancho en ambos casos.
+            let cell = norte_frontend::columns::styled_cell(entry, *col, now_ms, style)
+                .unwrap_or_default();
+            let celda = div()
+                .flex_none()
+                .w(px(f32::from(*w) * ch))
+                .pl(px(ch))
+                .flex()
+                .flex_row();
+            let celda = match style.align {
+                norte_frontend::columns::Align::Left => celda.justify_start(),
+                norte_frontend::columns::Align::Right => celda.justify_end(),
+            };
             row = row.child(
-                div()
-                    .flex_none()
-                    .w(px(f32::from(*w) * ch))
-                    .pl(px(ch))
-                    .flex()
-                    .flex_row()
-                    .justify_end()
+                celda
                     .overflow_hidden()
                     .text_color(gpui::Rgba { a: 0.55, ..color })
                     .child(div().truncate().child(SharedString::from(cell))),
