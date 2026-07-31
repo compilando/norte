@@ -579,10 +579,12 @@ mod settings_tests {
                 norte_config::SchemeColumns {
                     columns: Some(vec!["name".into(), "kind".into()]),
                     sort: None,
+                    ..Default::default()
                 },
             )]
             .into_iter()
             .collect(),
+            ..Default::default()
         };
         let st = ColumnsSettings::resolve(&cfg);
         assert_eq!(

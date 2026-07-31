@@ -3407,6 +3407,7 @@ mod tests {
                 dirs_first: true,
             }),
             schemes: std::collections::BTreeMap::new(),
+            ..Default::default()
         };
         app.columns = ColumnsSettings::resolve(&cfg);
         app.apply_scheme_sort(0);

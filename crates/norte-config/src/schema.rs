@@ -193,6 +193,10 @@ pub struct UiColumnsSection {
     /// makes "why is this column here?" unanswerable).
     #[serde(default)]
     pub scheme: Option<std::collections::BTreeMap<String, SchemeColumnsSection>>,
+    /// `[[ui.columns.spec]]` entries (#108 block 7b): per-column
+    /// presentation, keyed by `id`.
+    #[serde(default)]
+    pub spec: Option<Vec<ColumnSpecSection>>,
 }
 
 /// A sort choice inside `[ui.columns]`.
@@ -222,6 +226,64 @@ pub struct SchemeColumnsSection {
     /// Sort for panes on this scheme.
     #[serde(default)]
     pub sort: Option<SortSection>,
+    /// `[[ui.columns.scheme.<scheme>.spec]]` entries: per-column
+    /// presentation for panes on this scheme; they win over the global
+    /// `spec` entries at resolve.
+    #[serde(default)]
+    pub spec: Option<Vec<ColumnSpecSection>>,
+}
+
+/// One `[[ui.columns.spec]]` entry (#108 block 7b): per-column
+/// presentation. Keyed by `id`; a scheme block may carry its own `spec`
+/// entries that win for panes on that scheme.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ColumnSpecSection {
+    /// Column id this entry styles (required).
+    pub id: String,
+    /// `"auto"` | `{ fixed = n }` | `{ min = n, weight = m }` — cells,
+    /// validated to `[1, 64]` at load.
+    #[serde(default)]
+    pub width: Option<WidthSection>,
+    /// `"left"` | `"right"` — closed, validated at load.
+    #[serde(default)]
+    pub align: Option<String>,
+    /// `"exact"` | `"iec"` | `"si"` | `"relative"` | `"iso"` — closed,
+    /// validated at load; whether it FITS the column is the frontend's
+    /// call (doctor reports mismatches).
+    #[serde(default)]
+    pub format: Option<String>,
+    /// Custom header label (free text; the frontend sanitizes and caps).
+    #[serde(default)]
+    pub header: Option<String>,
+}
+
+/// The `width` of a spec entry. NOTE: this enum is `untagged`, and serde
+/// ignores `deny_unknown_fields` inside untagged struct-syntax variants —
+/// an unknown key next to `fixed`/`min` is silently ignored, never an
+/// error (pinned by `width_fixed_con_campo_extra_comportamiento_serde` in
+/// `load.rs`). The vocabularies and ranges themselves ARE validated at
+/// load.
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum WidthSection {
+    /// `"auto"` (any other string is a load error).
+    Keyword(String),
+    /// `{ fixed = n }`.
+    Fixed {
+        /// Cells.
+        fixed: u16,
+    },
+    /// `{ min = n, weight = m }`.
+    Flex {
+        /// Floor in cells.
+        min: u16,
+        /// Share weight (0 = never grows).
+        #[serde(default)]
+        weight: u16,
+    },
 }
 
 /// The `[keymap]` section of `norte.toml`.

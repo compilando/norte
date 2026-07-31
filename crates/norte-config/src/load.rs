@@ -549,6 +549,8 @@ pub struct ColumnsConfig {
     pub sort: Option<SortChoice>,
     /// Overrides por scheme (la lista REEMPLAZA, jamás mezcla).
     pub schemes: std::collections::BTreeMap<String, SchemeColumns>,
+    /// Specs globales por id de columna (#108 7b), ya validados.
+    pub specs: std::collections::BTreeMap<String, ColumnSpec>,
 }
 
 /// Override de un scheme dentro de [`ColumnsConfig`].
@@ -558,6 +560,49 @@ pub struct SchemeColumns {
     pub columns: Option<Vec<String>>,
     /// Orden del scheme; `None` = hereda el global.
     pub sort: Option<SortChoice>,
+    /// Specs del scheme por id (#108 7b); al resolver GANAN sobre los
+    /// globales.
+    pub specs: std::collections::BTreeMap<String, ColumnSpec>,
+}
+
+/// Width elegido en un spec (#108 7b), ya validado a `[1, 64]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WidthChoice {
+    /// Ancho de la celda más ancha de la página (techo del frontend).
+    Auto,
+    /// Fijo en celdas.
+    Fixed(u16),
+    /// Reparto por peso con suelo.
+    Flex {
+        /// Suelo en celdas.
+        min: u16,
+        /// Peso del reparto.
+        weight: u16,
+    },
+}
+
+/// Align elegido en un spec (#108 7b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignChoice {
+    /// Izquierda.
+    Left,
+    /// Derecha.
+    Right,
+}
+
+/// Un `[[ui.columns.spec]]` resuelto (#108 7b): vocabularios YA validados
+/// (typo = error de carga, patrón sort); `format` queda como string —
+/// si CASA con la columna lo decide el frontend (doctor reporta).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ColumnSpec {
+    /// Ancho, si el spec lo fija.
+    pub width: Option<WidthChoice>,
+    /// Alineación, si el spec la fija.
+    pub align: Option<AlignChoice>,
+    /// Formato (vocabulario global cerrado; encaje por-columna = frontend).
+    pub format: Option<String>,
+    /// Cabecera propia (texto libre; el frontend la sanea y capa).
+    pub header: Option<String>,
 }
 
 /// The merged `norte.toml` scalars — everything that is NOT a frontend-only
@@ -762,6 +807,11 @@ fn merge_ui_columns(
     if let Some(sort) = &cols.sort {
         acc.sort = Some(parse_sort_section(sort, norte)?);
     }
+    if let Some(spec) = &cols.spec {
+        for (id, s) in parse_spec_entries(spec, norte, "[ui.columns]")? {
+            fold_spec_into(&mut acc.specs, id, s);
+        }
+    }
     if let Some(schemes) = &cols.scheme {
         for (k, v) in schemes {
             let entry = acc.schemes.entry(k.clone()).or_default();
@@ -771,9 +821,131 @@ fn merge_ui_columns(
             if let Some(sort) = &v.sort {
                 entry.sort = Some(parse_sort_section(sort, norte)?);
             }
+            if let Some(spec) = &v.spec {
+                for (id, s) in parse_spec_entries(spec, norte, "[ui.columns.scheme]")? {
+                    fold_spec_into(&mut entry.specs, id, s);
+                }
+            }
         }
     }
     Ok(())
+}
+
+/// Valida las entradas `[[ui.columns.spec]]` de UNA capa (#108 7b): el `id`
+/// es un set abierto (lo parsea el frontend, lo reporta doctor), pero cada
+/// vocabulario es CERRADO — un typo es error de carga con la ruta culpable
+/// (patrón sort), jamás un skip silencioso. Un `id` repetido dentro de la
+/// capa fusiona last-wins POR CAMPO, igual que entre capas (mismo criterio
+/// que la hotlist intra-capa). El diagnóstico jamás cita el valor crudo
+/// (#73).
+fn parse_spec_entries(
+    raw: &[schema::ColumnSpecSection],
+    norte: &Path,
+    label: &str,
+) -> Result<std::collections::BTreeMap<String, ColumnSpec>, ConfigError> {
+    let mut out = std::collections::BTreeMap::new();
+    for entry in raw {
+        if entry.id.is_empty() {
+            return Err(ConfigError::Toml {
+                path: norte.to_path_buf(),
+                message: format!("{label} spec.id: no puede estar vacío"),
+            });
+        }
+        let width = entry
+            .width
+            .as_ref()
+            .map(|w| parse_spec_width(w, norte, label))
+            .transpose()?;
+        let align = match entry.align.as_deref() {
+            None => None,
+            Some("left") => Some(AlignChoice::Left),
+            Some("right") => Some(AlignChoice::Right),
+            Some(_) => {
+                return Err(ConfigError::Toml {
+                    path: norte.to_path_buf(),
+                    message: format!("{label} spec.align: left | right"),
+                });
+            }
+        };
+        let format = match entry.format.as_deref() {
+            None => None,
+            Some(f @ ("exact" | "iec" | "si" | "relative" | "iso")) => Some(f.to_owned()),
+            Some(_) => {
+                return Err(ConfigError::Toml {
+                    path: norte.to_path_buf(),
+                    message: format!("{label} spec.format: exact | iec | si | relative | iso"),
+                });
+            }
+        };
+        fold_spec_into(
+            &mut out,
+            entry.id.clone(),
+            ColumnSpec {
+                width,
+                align,
+                format,
+                header: entry.header.clone(),
+            },
+        );
+    }
+    Ok(out)
+}
+
+/// Valida el `width` de un spec (#108 7b): keyword solo `"auto"`;
+/// `fixed`/`min` acotados a `[1, 64]` (0 celdas no pinta nada y >64 se
+/// come el pane). `weight` queda libre (0 = no crece, documentado).
+fn parse_spec_width(
+    raw: &schema::WidthSection,
+    norte: &Path,
+    label: &str,
+) -> Result<WidthChoice, ConfigError> {
+    let range_err = || ConfigError::Toml {
+        path: norte.to_path_buf(),
+        message: format!("{label} spec.width: fixed/min fuera de rango [1, 64]"),
+    };
+    match raw {
+        schema::WidthSection::Keyword(s) if s == "auto" => Ok(WidthChoice::Auto),
+        schema::WidthSection::Keyword(_) => Err(ConfigError::Toml {
+            path: norte.to_path_buf(),
+            message: format!(
+                "{label} spec.width: \"auto\" | {{ fixed = n }} | {{ min = n, weight = m }}"
+            ),
+        }),
+        schema::WidthSection::Fixed { fixed } => (1..=64)
+            .contains(fixed)
+            .then_some(WidthChoice::Fixed(*fixed))
+            .ok_or_else(range_err),
+        schema::WidthSection::Flex { min, weight } => (1..=64)
+            .contains(min)
+            .then_some(WidthChoice::Flex {
+                min: *min,
+                weight: *weight,
+            })
+            .ok_or_else(range_err),
+    }
+}
+
+/// Fusiona `spec` sobre `map[id]` last-wins POR CAMPO (`Some` pisa, `None`
+/// conserva la capa anterior) — el mismo criterio en la fusión intra-capa
+/// y entre capas.
+fn fold_spec_into(
+    map: &mut std::collections::BTreeMap<String, ColumnSpec>,
+    id: String,
+    spec: ColumnSpec,
+) {
+    let e = map.entry(id).or_default();
+    if let Some(w) = spec.width {
+        e.width = Some(w);
+    }
+    if let Some(a) = spec.align {
+        e.align = Some(a);
+    }
+    if let Some(f) = spec.format {
+        e.format = Some(f);
+    }
+    if let Some(h) = spec.header {
+        e.header = Some(h);
+    }
 }
 
 /// Valida un [`crate::schema::SortSection`] (#108): vocabulario CERRADO,
@@ -1329,6 +1501,123 @@ mod hotlist_tests {
             dirs: vec![(bad.path().to_path_buf(), Layer::User)],
         };
         assert!(load(&layers).is_err());
+    }
+
+    /// Carga una única capa User desde un string TOML (harness compacto para
+    /// los tests de `[[ui.columns.spec]]`; mismo esqueleto que
+    /// `ui_columns_carga_valida_y_fusiona`).
+    fn carga_una_capa_result(toml: &str) -> Result<CommonConfig, ConfigError> {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("norte.toml"), toml).unwrap();
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        load(&layers)
+    }
+
+    fn carga_una_capa(toml: &str) -> CommonConfig {
+        carga_una_capa_result(toml).expect("carga")
+    }
+
+    /// `[[ui.columns.spec]]` (#108 7b): parse de la capa única — spec global
+    /// por id + spec de scheme que convive (la precedencia al RESOLVER es
+    /// del frontend; aquí solo se pina que ambos mapas llegan).
+    #[test]
+    fn ui_columns_spec_carga_valida_y_precedencia_scheme() {
+        let toml = r#"
+[[ui.columns.spec]]
+id = "size"
+format = "si"
+header = "Peso"
+width = { fixed = 9 }
+
+[[ui.columns.spec]]
+id = "kind"
+align = "left"
+
+[[ui.columns.scheme.sftp.spec]]
+id = "size"
+format = "exact"
+"#;
+        let cfg = carga_una_capa(toml);
+        let g = cfg.ui_columns.specs.get("size").expect("spec global size");
+        assert_eq!(g.format.as_deref(), Some("si"));
+        assert_eq!(g.header.as_deref(), Some("Peso"));
+        assert_eq!(g.width, Some(WidthChoice::Fixed(9)));
+        assert_eq!(
+            cfg.ui_columns.specs.get("kind").and_then(|s| s.align),
+            Some(AlignChoice::Left)
+        );
+        let sc = cfg.ui_columns.schemes.get("sftp").expect("scheme");
+        assert_eq!(
+            sc.specs.get("size").and_then(|s| s.format.as_deref()),
+            Some("exact")
+        );
+    }
+
+    /// Vocabularios CERRADOS del spec (#108 7b): typo/rango = error de carga
+    /// (patrón sort), jamás un skip silencioso.
+    #[test]
+    fn ui_columns_spec_vocabularios_cerrados_fallan_al_cargar() {
+        for toml in [
+            "[[ui.columns.spec]]\nid = \"size\"\nformat = \"sise\"\n",
+            "[[ui.columns.spec]]\nid = \"size\"\nalign = \"middle\"\n",
+            "[[ui.columns.spec]]\nid = \"size\"\nwidth = \"anchisimo\"\n",
+            "[[ui.columns.spec]]\nid = \"size\"\nwidth = { fixed = 0 }\n",
+            "[[ui.columns.spec]]\nid = \"size\"\nwidth = { fixed = 200 }\n",
+            "[[ui.columns.spec]]\nformat = \"iec\"\n", // sin id
+        ] {
+            assert!(carga_una_capa_result(toml).is_err(), "debió fallar: {toml}");
+        }
+    }
+
+    /// Pin de comportamiento serde (#108 7b): `WidthSection` es `untagged`
+    /// y serde IGNORA `deny_unknown_fields` dentro de variantes struct de
+    /// un enum untagged — un campo extra junto a `fixed` se ignora en
+    /// silencio (no es error ni panic). Documentado en el rustdoc de
+    /// `schema::WidthSection`; si serde cambia, este test avisa.
+    #[test]
+    fn width_fixed_con_campo_extra_comportamiento_serde() {
+        let cfg = carga_una_capa(
+            "[[ui.columns.spec]]\nid = \"size\"\nwidth = { fixed = 9, extra = 1 }\n",
+        );
+        assert_eq!(
+            cfg.ui_columns.specs.get("size").and_then(|s| s.width),
+            Some(WidthChoice::Fixed(9)),
+            "campo extra ignorado, fixed sobrevive"
+        );
+    }
+
+    /// Merge de specs entre capas (#108 7b): last-wins POR CAMPO por id —
+    /// mismo criterio que el resto de `[ui.columns]`.
+    #[test]
+    fn ui_columns_spec_merge_por_id_ultimo_gana_por_campo() {
+        let system = tempfile::tempdir().unwrap();
+        std::fs::write(
+            system.path().join("norte.toml"),
+            "[[ui.columns.spec]]\nid = \"size\"\nformat = \"iec\"\nheader = \"A\"\n",
+        )
+        .unwrap();
+        let user = tempfile::tempdir().unwrap();
+        std::fs::write(
+            user.path().join("norte.toml"),
+            "[[ui.columns.spec]]\nid = \"size\"\nformat = \"si\"\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (system.path().to_path_buf(), Layer::System),
+                (user.path().to_path_buf(), Layer::User),
+            ],
+        };
+        let cfg = load(&layers).expect("carga");
+        let s = cfg.ui_columns.specs.get("size").expect("spec size");
+        assert_eq!(s.format.as_deref(), Some("si"), "capa user gana el campo");
+        assert_eq!(
+            s.header.as_deref(),
+            Some("A"),
+            "campo no re-declarado conserva la capa anterior"
+        );
     }
 
     /// `[ui] show_hidden` (#107): last-wins, todas las capas — misma clase

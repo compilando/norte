@@ -316,6 +316,7 @@ mod tests {
                 norte_config::SchemeColumns {
                     columns: Some(vec!["name".into(), "mtime".into()]),
                     sort: None,
+                    ..Default::default()
                 },
             )]
             .into(),
