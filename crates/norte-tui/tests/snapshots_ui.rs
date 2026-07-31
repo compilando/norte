@@ -246,6 +246,43 @@ fn snapshot_theme_picker_80x24() {
     );
 }
 
+/// #108 7a: el picker de columnas a 80×24 — checkbox por fila, flecha del
+/// sort en la columna vigente, y una fila de id OPACO hostil (config del
+/// usuario con RLO incrustado) pintada ENMASCARADA, jamás cruda (#73).
+/// Mismas garantías ruidosas que `snapshot_theme_picker_80x24`: el hint
+/// generado presente y entero (sin truncado silencioso del footer).
+#[test]
+fn snapshot_columns_picker_80x24() {
+    let mut app = app_base();
+    // Config hostil ANTES de abrir: el picker parte del set resuelto.
+    let cfg = norte_config::ColumnsConfig {
+        default_columns: Some(vec![
+            "name".into(),
+            "size".into(),
+            "mtime".into(),
+            "attr:x\u{202E}evil".into(),
+        ]),
+        ..Default::default()
+    };
+    app.columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg);
+    app.open_columns_picker();
+    let texto = render_80x24(&app);
+    let hint = &app.dialog_hints.columns;
+    assert!(
+        !hint.is_empty(),
+        "el preset orthodox liga toggle/sort/confirm/cancel al picker"
+    );
+    assert!(
+        texto.contains(hint.as_str()),
+        "el hint generado debe caber ENTERO, sin cortes: hint={hint:?}\n{texto}"
+    );
+    assert!(
+        !texto.contains('\u{202E}'),
+        "el RLO de la config jamás llega crudo al terminal:\n{texto}"
+    );
+    insta::assert_snapshot!(texto);
+}
+
 /// MAJOR-1 item (d): igual que el selector de tema, para el gestor de
 /// extensiones (`app.extensions`, M4-P3) — su hint tras (a)+(b) (labels
 /// cortas + sin flechas) más el sizing por footer de (c) deben caber
