@@ -303,6 +303,7 @@ help-cmd-pane-names-encoding = ver nombres como… (cp437/cp866/Shift-JIS/GBK/�
 help-cmd-pane-toggle-hidden = mostrar u ocultar entradas ocultas
 help-cmd-pane-mkdir = crear un directorio (F7)
 help-cmd-pane-rename = renombrar in situ (Shift+F6)
+help-cmd-pane-refresh = recargar ambos panes (Ctrl+R)
 help-cmd-viewer-encoding-auto = volver a la detección automática
 help-cmd-viewer-hex = alternar vista hexadecimal
 help-cmd-pane-search = buscar por nombre/contenido (Alt+F7)

@@ -95,6 +95,7 @@ pub const COMMANDS: &[&str] = &[
     "pane.toggle-hidden",
     "pane.mkdir",
     "pane.rename",
+    "pane.refresh",
     "mark.toggle",
     "mark.all",
     "mark.invert",

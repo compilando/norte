@@ -299,6 +299,7 @@ help-cmd-pane-names-encoding = show names as… (cp437/cp866/Shift-JIS/GBK/…; 
 help-cmd-pane-toggle-hidden = show or hide hidden entries
 help-cmd-pane-mkdir = create a directory (F7)
 help-cmd-pane-rename = rename in place (Shift+F6)
+help-cmd-pane-refresh = reload both panes (Ctrl+R)
 help-cmd-viewer-encoding-auto = back to auto-detection
 help-cmd-viewer-hex = toggle hex view
 help-cmd-pane-search = search by name/content (Alt+F7)

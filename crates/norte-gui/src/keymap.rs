@@ -48,6 +48,7 @@ pub const COMMANDS: &[&str] = &[
     "task.dismiss",
     "pane.view",
     "pane.toggle-hidden",
+    "pane.refresh",
 ];
 
 /// Comandos del contexto Viewer (pantalla del visor F3).

@@ -9,6 +9,11 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Manual refresh — Ctrl+R (#106, beta minimum):** reloads both panes
+  through the same cancellable path as the post-mutation refresh — marks
+  survive by identity with visible pruning, cursor is kept by index, and
+  a live-search results pane is left alone. Real directory watching stays
+  tracked in #106.
 - **Rename and editable destination name (#105):** Shift+F6 renames in
   place (a Move to the entry's own parent — correct inside search results
   too), and F5/F6 with a single item opens an editable destination name

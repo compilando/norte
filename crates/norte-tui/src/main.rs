@@ -3538,6 +3538,12 @@ async fn dispatch(
         // editable). Correcto también en el pane virtual: el destino sale
         // del propio path del hit, no del dir del pane.
         "pane.rename" => app.open_rename(),
+        // #106: Ctrl+R — recarga manual. Reusa el refresh post-mutación
+        // (cancelable regla 3; marcas sobreviven vía refill con poda
+        // VISIBLE, cursor por índice; el pane virtual de búsqueda se salta
+        // — sus hits no viven en un dir). Ambos panes, como tras una task
+        // propia: un cambio externo raramente respeta el foco.
+        "pane.refresh" => refresh_panes(app, backend, events).await,
         // Insert/Ctrl+A/Ctrl+Shift+A/`*` (#103): mc/Total Commander —
         // togglear la marca de esta entrada y avanzar (mantener Insert barre
         // un rango). Review MAJOR: bajo un quick search en Filter,

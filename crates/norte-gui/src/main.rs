@@ -1270,6 +1270,15 @@ impl NorteGui {
             "task.prev" => self.task_cursor = self.task_cursor.saturating_sub(1),
             "task.dismiss" => self.dismiss_terminal_tasks(),
             "pane.view" => self.open_viewer(cx),
+            // #106: recarga manual de AMBOS panes por el mismo camino que el
+            // read-after-write (refresh same-dir → refill: marcas sobreviven
+            // con poda visible).
+            "pane.refresh" => {
+                for pane in 0..self.panes.len() {
+                    let dir = self.panes[pane].dir().clone();
+                    self.refresh_dir(pane, dir, cx);
+                }
+            }
             // #107: presentación-solo, el pane aparta/devuelve dotfiles.
             "pane.toggle-hidden" => {
                 self.panes[f].toggle_hidden();
