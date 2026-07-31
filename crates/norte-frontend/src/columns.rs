@@ -533,6 +533,35 @@ mod settings_tests {
     use crate::sort::{SortColumn, SortDir};
 
     #[test]
+    fn column_widths_conjunto_default_a_80_celdas() {
+        let s = ColumnsSettings::default();
+        let w = column_widths(&s, "file", 80);
+        let cols: Vec<Builtin> = w.iter().map(|(b, _)| *b).collect();
+        assert_eq!(cols, vec![Builtin::Name, Builtin::Size, Builtin::Mtime]);
+        // El nombre absorbe el resto: suma == disponible.
+        assert_eq!(w.iter().map(|(_, x)| *x).sum::<u16>(), 80);
+    }
+
+    #[test]
+    fn column_widths_estrecho_solo_nombre() {
+        let s = ColumnsSettings::default();
+        let w = column_widths(&s, "file", 12);
+        assert_eq!(
+            w.iter().map(|(b, _)| *b).collect::<Vec<_>>(),
+            vec![Builtin::Name]
+        );
+    }
+
+    #[test]
+    fn sort_column_mapea_builtins_ordenables() {
+        use crate::sort::SortColumn;
+        assert_eq!(sort_column(Builtin::Name), Some(SortColumn::Name));
+        assert_eq!(sort_column(Builtin::Size), Some(SortColumn::Size));
+        assert_eq!(sort_column(Builtin::Mtime), Some(SortColumn::Mtime));
+        assert_eq!(sort_column(Builtin::Kind), None);
+    }
+
+    #[test]
     fn resolve_parsea_diagnostica_y_resuelve_por_scheme() {
         let cfg = norte_config::ColumnsConfig {
             default_columns: Some(vec![
@@ -993,6 +1022,39 @@ fn map_sort(s: Option<&norte_config::SortChoice>) -> crate::sort::SortSpec {
             SortDir::Asc
         },
         dirs_first: s.dirs_first,
+    }
+}
+
+/// Anchos de las columnas (#108) para un ancho interior en CELDAS:
+/// `(builtin, ancho)` de las columnas VIVAS de `settings` para `scheme`,
+/// en orden de pintado — una columna sin sitio no aparece. Compartido
+/// TUI/GUI: ambos frontends pintan el MISMO conjunto del mismo [`layout`].
+#[must_use]
+pub fn column_widths(
+    settings: &ColumnsSettings,
+    scheme: &str,
+    inner_width: u16,
+) -> Vec<(Builtin, u16)> {
+    let set = settings.layout_items_for(scheme);
+    let items: Vec<_> = set.iter().map(|(_, it)| *it).collect();
+    let placed = layout(inner_width, &items);
+    set.iter()
+        .zip(placed)
+        .filter_map(|((b, _), w)| w.map(|w| (*b, w)))
+        .collect()
+}
+
+/// La columna de orden que corresponde a un builtin, si es ordenable.
+/// `Kind` no lo es (no hay `SortColumn::Kind`): su cabecera no lleva
+/// flecha ni es clicable.
+#[must_use]
+pub fn sort_column(b: Builtin) -> Option<crate::sort::SortColumn> {
+    use crate::sort::SortColumn;
+    match b {
+        Builtin::Name => Some(SortColumn::Name),
+        Builtin::Size => Some(SortColumn::Size),
+        Builtin::Mtime => Some(SortColumn::Mtime),
+        Builtin::Kind => None,
     }
 }
 

@@ -26,6 +26,30 @@ impl Default for SortSpec {
     }
 }
 
+impl SortSpec {
+    /// El resultado de un click en la cabecera de `col` (#108 b6): la columna
+    /// activa invierte su dirección; una columna nueva ordena por ella
+    /// ASCENDENTE. `dirs_first` jamás cambia por click — es una preferencia,
+    /// no un criterio de columna. Compartido: la cabecera de la GUI hoy, los
+    /// pickers de ambos frontends en el bloque 7.
+    #[must_use]
+    pub fn after_click(self, col: SortColumn) -> Self {
+        if self.column == col {
+            let dir = match self.dir {
+                SortDir::Asc => SortDir::Desc,
+                SortDir::Desc => SortDir::Asc,
+            };
+            Self { dir, ..self }
+        } else {
+            Self {
+                column: col,
+                dir: SortDir::Asc,
+                ..self
+            }
+        }
+    }
+}
+
 /// Columna de orden (#108). Solo built-ins por ahora — `attr:`/`plugin:`
 /// llegan con los bloques 2/7 del diseño de columnas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -346,6 +370,44 @@ mod tests {
 
         assert_eq!(entries, esperado, "merge_keyed ≡ sort_entries del total");
         assert_eq!(keys.len(), entries.len());
+    }
+
+    #[test]
+    fn after_click_misma_columna_invierte_la_direccion() {
+        let s = SortSpec {
+            column: SortColumn::Size,
+            dir: SortDir::Asc,
+            dirs_first: true,
+        };
+        let t = s.after_click(SortColumn::Size);
+        assert_eq!(
+            t,
+            SortSpec {
+                column: SortColumn::Size,
+                dir: SortDir::Desc,
+                dirs_first: true,
+            }
+        );
+        // Y el segundo click vuelve a Asc.
+        assert_eq!(t.after_click(SortColumn::Size).dir, SortDir::Asc);
+    }
+
+    #[test]
+    fn after_click_columna_nueva_asc_y_dirs_first_intacto() {
+        let s = SortSpec {
+            column: SortColumn::Name,
+            dir: SortDir::Desc,
+            dirs_first: false,
+        };
+        let t = s.after_click(SortColumn::Mtime);
+        assert_eq!(
+            t,
+            SortSpec {
+                column: SortColumn::Mtime,
+                dir: SortDir::Asc,
+                dirs_first: false,
+            }
+        );
     }
 }
 

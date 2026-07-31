@@ -276,30 +276,14 @@ fn take_width(s: &str, max: usize) -> String {
     out
 }
 
-/// Anchos de las columnas por defecto (#108) para el ancho interior del
-/// pane: `(builtin, ancho)` de las columnas VIVAS, en orden de pintado.
-fn column_widths(
-    settings: &norte_frontend::columns::ColumnsSettings,
-    scheme: &str,
-    inner_width: u16,
-) -> Vec<(norte_frontend::columns::Builtin, u16)> {
-    let set = settings.layout_items_for(scheme);
-    let items: Vec<_> = set.iter().map(|(_, it)| *it).collect();
-    let placed = norte_frontend::columns::layout(inner_width, &items);
-    set.iter()
-        .zip(placed)
-        .filter_map(|((b, _), w)| w.map(|w| (*b, w)))
-        .collect()
-}
-
 /// La línea de cabecera (#108 L5): etiquetas Fluent, la del orden activo
 /// con `▲`/`▼`. Ancho fiel al de las celdas de las filas.
 fn column_header_line(
     widths: &[(norte_frontend::columns::Builtin, u16)],
     sort: norte_frontend::SortSpec,
 ) -> String {
+    use norte_frontend::SortDir;
     use norte_frontend::columns::Builtin;
-    use norte_frontend::{SortColumn, SortDir};
     let mut out = String::new();
     for (i, (col, w)) in widths.iter().enumerate() {
         let label = match col {
@@ -308,12 +292,7 @@ fn column_header_line(
             Builtin::Mtime => t("col-header-mtime"),
             Builtin::Kind => t("col-header-kind"),
         };
-        let activa = matches!(
-            (col, sort.column),
-            (Builtin::Name, SortColumn::Name)
-                | (Builtin::Size, SortColumn::Size)
-                | (Builtin::Mtime, SortColumn::Mtime)
-        );
+        let activa = norte_frontend::columns::sort_column(*col) == Some(sort.column);
         let w = usize::from(*w);
         let flecha = if sort.dir == SortDir::Asc {
             '▲'
@@ -1655,7 +1634,7 @@ fn draw_pane(
     // #108 L5: anchos de columna del ancho INTERIOR del pane, una vez por
     // frame — las filas y la cabecera comparten el mismo layout.
     let inner_w = block.inner(area).width;
-    let widths = &column_widths(settings, pane.dir().scheme(), inner_w);
+    let widths = &norte_frontend::columns::column_widths(settings, pane.dir().scheme(), inner_w);
     let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = match pane.quick_visible() {
         Some(vis) => (
             vis.iter()
