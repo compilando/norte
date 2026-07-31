@@ -2101,6 +2101,13 @@ impl NorteGui {
         col: norte_frontend::SortColumn,
         cx: &mut Context<Self>,
     ) {
+        // El scrim del modal PINTA pero no ocluye eventos de ratón en GPUI
+        // (no hay `.occlude()` en este árbol): sin este guard, un click en
+        // una cabecera detrás de un confirm mutaría el orden del pane. El
+        // barrido `.occlude()` de todos los overlays queda como follow-up.
+        if self.modal.is_some() {
+            return;
+        }
         let spec = self.panes[pane].sort().after_click(col);
         self.panes[pane].set_sort(spec);
         self.sort_override[pane] = Some(spec);
@@ -4409,9 +4416,11 @@ fn chrome_mark_fg(theme: &Theme) -> gpui::Rgba {
 }
 
 /// Chrome horizontal fijo de un pane (#108 b6): `border_2` a ambos lados
-/// (2px × 2) + `px(sp::S)` de padding a ambos lados. El canalón de marca va
-/// aparte (depende de `fonts.size`).
-const PANE_CHROME_PX: f32 = 4.0 + 2.0 * sp::S;
+/// (2px × 2) + `px(sp::S)` de padding a ambos lados + la MITAD del hueco
+/// entre panes (`gap(px(sp::XS))` de la fila de panes — viewport/2 lo
+/// ignora, y cada pane paga media). El canalón de marca va aparte (depende
+/// de `fonts.size`).
+const PANE_CHROME_PX: f32 = 4.0 + 2.0 * sp::S + sp::XS / 2.0;
 
 /// Celdas mono que caben en el interior de un pane (#108 b6), aproximando
 /// el ancho del pane como viewport/2 (los dos panes son `flex_1` iguales).
@@ -5220,8 +5229,8 @@ mod tests {
     #[test]
     fn pane_inner_cells_aritmetica_y_suelos() {
         // 1280px de ventana, celda de 8.4px, canalón de 14px:
-        // (640 − 12 − 14) / 8.4 = 73.1… → 73.
-        assert_eq!(pane_inner_cells(1280.0, 8.4, 14.0), 73);
+        // (640 − 13 − 14) / 8.4 = 72.97… → 72.
+        assert_eq!(pane_inner_cells(1280.0, 8.4, 14.0), 72);
         // Ventana absurda de 10px: jamás pánico, 0 celdas.
         assert_eq!(pane_inner_cells(10.0, 8.4, 14.0), 0);
         // Celda no-positiva (advance imposible): 0, no división por cero.
