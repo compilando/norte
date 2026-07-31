@@ -610,6 +610,18 @@ mod settings_tests {
     }
 
     #[test]
+    fn layout_items_normaliza_name_al_frente() {
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: Some(vec!["size".into(), "name".into()]),
+            ..Default::default()
+        };
+        let s = ColumnsSettings::resolve(&cfg);
+        let items = s.layout_items_for("file");
+        assert_eq!(items[0].0, Builtin::Name);
+        assert_eq!(items[1].0, Builtin::Size);
+    }
+
+    #[test]
     fn sin_config_todo_es_default() {
         let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
         assert_eq!(st.sort_for("file"), crate::sort::SortSpec::default());
@@ -879,6 +891,13 @@ pub struct ColumnsSettings {
     default_sort: crate::sort::SortSpec,
     schemes:
         std::collections::BTreeMap<String, (Option<Vec<ColumnId>>, Option<crate::sort::SortSpec>)>,
+    /// La lista `default` CRUDA tal cual vino de config (#108 7a): el picker
+    /// preserva y re-persiste los ids que no parsean o no tienen renderer —
+    /// paralela a `default_set`, [`Self::apply_picked`] las mantiene en paso.
+    raw_default: Option<Vec<String>>,
+    /// Listas crudas por scheme; solo hay entrada si el scheme configuró
+    /// `columns` (un override solo-sort no lista aquí). Paralela a `schemes`.
+    raw_schemes: std::collections::BTreeMap<String, Vec<String>>,
     /// Ids configurados que NO parsean (diagnóstico para doctor).
     pub invalid: Vec<String>,
     /// Ids válidos sin renderer todavía (`attr:`/`plugin:`).
@@ -895,10 +914,14 @@ impl ColumnsSettings {
             ..Self::default()
         };
         out.default_set = cfg.default_columns.as_ref().map(|ids| parse_ids(ids));
+        out.raw_default.clone_from(&cfg.default_columns);
         for (scheme, sc) in &cfg.schemes {
             let cols = sc.columns.as_ref().map(|ids| parse_ids(ids));
             let sort = sc.sort.as_ref().map(|s| map_sort(Some(s)));
             out.schemes.insert(scheme.clone(), (cols, sort));
+            if let Some(raw) = &sc.columns {
+                out.raw_schemes.insert(scheme.clone(), raw.clone());
+            }
         }
         if let Some(ids) = &cfg.default_columns {
             out.collect_diagnostics(ids);
@@ -941,8 +964,9 @@ impl ColumnsSettings {
 
     /// Los items de layout BUILTIN para un pane en `scheme`, en orden de
     /// pintado. Los `attr:`/`plugin:` configurados se SALTAN (sin renderer
-    /// aún — doctor los nombra); una lista sin `name` lo antepone (el
-    /// nombre jamás desaparece del pane).
+    /// aún — doctor los nombra); el nombre jamás desaparece NI deja de ir
+    /// primero — la TUI presupuesta la primera columna como el nombre
+    /// (#108 7a: un `name` a mitad de lista se normaliza al frente).
     #[must_use]
     pub fn layout_items_for(&self, scheme: &str) -> Vec<(Builtin, LayoutItem)> {
         let ids = self
@@ -962,10 +986,64 @@ impl ColumnsSettings {
                 out.push((*b, builtin_layout_item(*b)));
             }
         }
-        if !out.iter().any(|(b, _)| *b == Builtin::Name) {
-            out.insert(0, (Builtin::Name, builtin_layout_item(Builtin::Name)));
+        match out.iter().position(|(b, _)| *b == Builtin::Name) {
+            Some(pos) if pos > 0 => {
+                let name = out.remove(pos);
+                out.insert(0, name);
+            }
+            Some(_) => {}
+            None => out.insert(0, (Builtin::Name, builtin_layout_item(Builtin::Name))),
         }
         out
+    }
+
+    /// La lista de ids CONFIGURADA efectiva para `scheme` en forma Display,
+    /// override del scheme > default > set built-in (#108 7a). Preserva los
+    /// ids sin renderer y los que no parsean: el picker los enseña y los
+    /// re-persiste ENTEROS — limpiar la config del usuario no es su trabajo
+    /// (doctor los reporta).
+    #[must_use]
+    pub fn raw_ids_for(&self, scheme: &str) -> Vec<String> {
+        if let Some(ids) = self.raw_schemes.get(scheme) {
+            return ids.clone();
+        }
+        if let Some(ids) = &self.raw_default {
+            return ids.clone();
+        }
+        default_layout_items()
+            .iter()
+            .map(|(b, _)| ColumnId::Builtin(*b).to_string())
+            .collect()
+    }
+
+    /// ¿Tiene `scheme` una entrada propia en la config (columns o sort)?
+    /// Decide el TARGET del picker: con entrada, el save escribe el scheme;
+    /// sin ella, el default (#108 7a — una regla, dicha en el título).
+    #[must_use]
+    pub fn has_scheme_entry(&self, scheme: &str) -> bool {
+        self.schemes.contains_key(scheme)
+    }
+
+    /// Aplica el resultado del picker EN MEMORIA (#108 7a): mismas semánticas
+    /// que el write-back a disco (`persist_columns`) para que la sesión y el
+    /// fichero no diverjan mientras llega el hot-reload. Mantiene en paso las
+    /// listas crudas y las parseadas.
+    pub fn apply_picked(
+        &mut self,
+        target: Option<&str>,
+        ids: &[String],
+        sort: crate::sort::SortSpec,
+    ) {
+        let parsed = parse_ids(ids);
+        if let Some(s) = target {
+            self.raw_schemes.insert(s.to_owned(), ids.to_vec());
+            self.schemes
+                .insert(s.to_owned(), (Some(parsed), Some(sort)));
+        } else {
+            self.raw_default = Some(ids.to_vec());
+            self.default_set = Some(parsed);
+            self.default_sort = sort;
+        }
     }
 }
 

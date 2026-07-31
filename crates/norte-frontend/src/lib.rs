@@ -14,6 +14,7 @@
 
 pub mod ansi;
 pub mod columns;
+pub mod columns_picker;
 pub mod config;
 mod decoration;
 mod display;
