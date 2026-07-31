@@ -130,6 +130,159 @@ pub fn persist_set(
     Ok(path)
 }
 
+/// El `sort` a persistir (#108 7a) — espejo consciente de [`SortChoice`]:
+/// este writer serializa EXACTAMENTE el vocabulario que `load` parsea en
+/// `parse_sort_section` (`column` = `name`|`size`|`mtime`, `dir` =
+/// `asc`|`desc`, `dirs_first` bool), pineado por el round-trip test de al
+/// lado. Toma strings/bools crudos (no [`SortChoice`]) porque el caller es
+/// un frontend que ya habla el vocabulario Display de las columnas.
+#[derive(Debug, Clone, Copy)]
+pub struct PersistSort<'a> {
+    /// `"name"` | `"size"` | `"mtime"` (vocabulario cerrado del load).
+    pub column: &'a str,
+    /// `true` = descendente (se serializa como `dir = "desc"`).
+    pub descending: bool,
+    /// Directorios primero.
+    pub dirs_first: bool,
+}
+
+/// Escribe la selección del picker de columnas (#108 7a) en el `norte.toml`
+/// de `dir`, PRESERVANDO comentarios y formato (`toml_edit`, mismo patrón
+/// que [`persist_set`]): `scheme = None` fija `[ui.columns]` `default` +
+/// `sort`; `Some(s)` fija `[ui.columns.scheme.<s>]` `columns` + `sort`.
+/// Primera escritura ANIDADA del persistidor — `persist_set` solo sabe de
+/// `[section] key = escalar` — y primer valor ARRAY: las tablas intermedias
+/// nacen implícitas (no emiten cabeceras vacías), la hoja nace EXPLÍCITA
+/// (un `[ui.columns]` legible, mismo criterio que `persist_set`).
+///
+/// CONTRATO de forma: el guard `is_table_like` de [`persist_set`] se aplica
+/// nivel a nivel ANTES de mutar nada — un nivel escalar (`ui = 3`) indexado
+/// panicaría (ver el CONTRATO de `persist_set`) y tumbaría el hilo de fondo
+/// del caller. BLOQUEANTE: I/O de FS síncrono — el caller DEBE envolverla
+/// en `spawn_blocking` (regla 2), mismo patrón que `persist_hotlist_add`.
+///
+/// # Errors
+/// [`std::io::Error`] si el TOML existente no parsea, un nivel existente de
+/// la cadena no es una tabla (forma inesperada), o falla el I/O.
+pub fn persist_columns(
+    dir: &std::path::Path,
+    scheme: Option<&str>,
+    ids: &[String],
+    sort: PersistSort<'_>,
+) -> std::io::Result<PathBuf> {
+    use std::io::{Error, ErrorKind};
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join("norte.toml");
+    let mut doc = match std::fs::read_to_string(&path) {
+        Ok(s) => s.parse::<toml_edit::DocumentMut>().map_err(|_| {
+            // security review item 4 (C1, NIT F4): `toml_edit`'s parse
+            // error `Display` quotes the offending document line — a
+            // hostile `name`/`path` persisted earlier (#73 discipline)
+            // would otherwise reach whatever shows this `io::Error`
+            // (the TUI status bar). Name the file, never the content.
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "{} no parsea: TOML inválido; corrígelo o bórralo",
+                    path.display()
+                ),
+            )
+        })?,
+        Err(e) if e.kind() == ErrorKind::NotFound => toml_edit::DocumentMut::new(),
+        Err(e) => return Err(e),
+    };
+    let segs: Vec<&str> = match scheme {
+        None => vec!["ui", "columns"],
+        Some(s) => vec!["ui", "columns", "scheme", s],
+    };
+    // Guard de forma nivel a nivel, de SOLO LECTURA y ANTES de tocar nada
+    // (mismo criterio `is_table_like` que `persist_set`): un nivel que se
+    // corta (no existe) hace segura la creación de todo lo de debajo.
+    {
+        let mut nivel: &dyn toml_edit::TableLike = doc.as_table();
+        for (i, seg) in segs.iter().enumerate() {
+            let Some(item) = nivel.get(seg) else { break };
+            if !item.is_table_like() {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "{}: [{}] no es una tabla (forma inesperada); corrígelo o bórralo",
+                        path.display(),
+                        segs[..=i].join(".")
+                    ),
+                ));
+            }
+            let Some(t) = item.as_table_like() else {
+                // Inalcanzable: `is_table_like` acaba de pasar (es
+                // literalmente `as_table_like().is_some()`).
+                break;
+            };
+            nivel = t;
+        }
+    }
+    // Mutación: camina/crea la cadena con `entry` sobre `TableLike` — NO
+    // con el operador de índice, cuyo `IndexMut` en este `toml_edit`
+    // materializa los niveles que falten como tablas INLINE con dotted-keys
+    // (`ui = { columns.default = … }`), ilegible para un fichero editable a
+    // mano. Cada nivel nuevo nace `Item::Table`: intermedios IMPLÍCITOS (no
+    // emiten cabecera propia), la hoja EXPLÍCITA (`[ui.columns]` legible,
+    // mismo criterio que `persist_set`); una hoja `Item::Table` ya existente
+    // se fuerza a explícita; una inline (`ui = { columns = {…} }`) se
+    // respeta tal cual. Seguro tras el guard: ya no hay nivel no-tabla.
+    let mut t: &mut dyn toml_edit::TableLike = doc.as_table_mut();
+    for (i, seg) in segs.iter().enumerate() {
+        let es_hoja = i + 1 == segs.len();
+        let item = t.entry(seg).or_insert_with(|| {
+            let mut nt = toml_edit::Table::new();
+            nt.set_implicit(!es_hoja);
+            toml_edit::Item::Table(nt)
+        });
+        if es_hoja && let Some(tab) = item.as_table_mut() {
+            tab.set_implicit(false);
+        }
+        t = item.as_table_like_mut().ok_or_else(|| {
+            // Inalcanzable: el guard de arriba ya rechazó todo nivel
+            // existente no-tabla y los nuevos nacen `Item::Table` — pero un
+            // `Err` limpio antes que un `unwrap` (regla 6).
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "{}: [{}] no es una tabla (forma inesperada); corrígelo o bórralo",
+                    path.display(),
+                    segs[..=i].join(".")
+                ),
+            )
+        })?;
+    }
+    let mut arr = toml_edit::Array::new();
+    for id in ids {
+        // Ids TAL CUAL (set abierto — `attr:`/`plugin:`/no-parseables):
+        // `toml_edit` escapa, jamás inyecta TOML (pin en `persist_set`).
+        arr.push(id.as_str());
+    }
+    // La clave de la lista difiere por diseño del schema (#108 block 4):
+    // `default` bajo `[ui.columns]`, `columns` en un override de scheme.
+    let list_key = if scheme.is_none() {
+        "default"
+    } else {
+        "columns"
+    };
+    t.insert(
+        list_key,
+        toml_edit::Item::Value(toml_edit::Value::Array(arr)),
+    );
+    let mut sort_tbl = toml_edit::InlineTable::new();
+    sort_tbl.insert("column", sort.column.into());
+    sort_tbl.insert("dir", if sort.descending { "desc" } else { "asc" }.into());
+    sort_tbl.insert("dirs_first", sort.dirs_first.into());
+    t.insert(
+        "sort",
+        toml_edit::Item::Value(toml_edit::Value::InlineTable(sort_tbl)),
+    );
+    std::fs::write(&path, doc.to_string())?;
+    Ok(path)
+}
+
 /// Añade (o reemplaza si `name` ya existe) una entrada `[[hotlist]]` en el
 /// `norte.toml` de `dir`, PRESERVANDO comentarios y formato (mismo patrón
 /// `toml_edit` que [`persist_ui_theme_to`]). `wire_path` se guarda TAL
@@ -1626,5 +1779,134 @@ mod persist_set_tests {
             .expect("tabla inline: el guard no debe rechazarla");
         let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
         assert!(s.contains("lang"), "{s}");
+    }
+}
+
+/// Tests de [`persist_columns`] (#108 7a): el PRIMER valor array que el
+/// persistidor escribe jamás — el round trip por el `load` real es el pin
+/// del contrato (los nombres de clave del sort son EXACTAMENTE los que
+/// parsea `parse_sort_section`: `column`/`dir`/`dirs_first`).
+#[cfg(test)]
+mod persist_columns_tests {
+    use super::*;
+
+    /// Sin scheme → `[ui.columns] default + sort`, y el `load` real lo relee
+    /// idéntico (ids opacos incluidos — el picker jamás limpia la config).
+    #[test]
+    fn persist_columns_default_round_tripea_por_load() {
+        let dir = tempfile::tempdir().unwrap();
+        persist_columns(
+            dir.path(),
+            None,
+            &[
+                "name".to_owned(),
+                "mtime".to_owned(),
+                "attr:posix.mode".to_owned(),
+            ],
+            PersistSort {
+                column: "mtime",
+                descending: true,
+                dirs_first: true,
+            },
+        )
+        .expect("escritura");
+        // La hoja se emite EXPLÍCITA (un `[ui.columns]` legible), no como
+        // dotted-keys implícitos — mismo criterio que `persist_set`.
+        let texto = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert!(texto.contains("[ui.columns]"), "hoja explícita: {texto}");
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let cfg = load(&layers).expect("load");
+        assert_eq!(
+            cfg.ui_columns.default_columns.as_deref(),
+            Some(
+                &[
+                    "name".to_owned(),
+                    "mtime".to_owned(),
+                    "attr:posix.mode".to_owned()
+                ][..]
+            )
+        );
+        assert_eq!(
+            cfg.ui_columns.sort,
+            Some(SortChoice {
+                column: SortColumnKey::Mtime,
+                descending: true,
+                dirs_first: true
+            })
+        );
+    }
+
+    /// Con scheme → `[ui.columns.scheme.<s>] columns + sort`, preservando
+    /// comentarios y lo previo del fichero (`toml_edit`).
+    #[test]
+    fn persist_columns_scheme_escribe_el_override_y_preserva_comentarios() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("norte.toml"),
+            "# mi config\n[ui]\ntheme = \"default\"\n",
+        )
+        .expect("seed");
+        persist_columns(
+            dir.path(),
+            Some("sftp"),
+            &["name".to_owned(), "size".to_owned()],
+            PersistSort {
+                column: "size",
+                descending: false,
+                dirs_first: true,
+            },
+        )
+        .expect("escritura");
+        let texto = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert!(
+            texto.contains("# mi config"),
+            "comentarios preservados: {texto}"
+        );
+        assert!(
+            texto.contains("theme = \"default\""),
+            "lo previo intacto: {texto}"
+        );
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let cfg = load(&layers).expect("load");
+        let sc = cfg.ui_columns.schemes.get("sftp").expect("override sftp");
+        assert_eq!(
+            sc.columns.as_deref(),
+            Some(&["name".to_owned(), "size".to_owned()][..])
+        );
+        assert_eq!(
+            sc.sort,
+            Some(SortChoice {
+                column: SortColumnKey::Size,
+                descending: false,
+                dirs_first: true
+            })
+        );
+    }
+
+    /// Guard de forma nivel a nivel (mismo criterio que `persist_set`): un
+    /// nivel escalar (`ui = 3`) es `Err(InvalidData)` LIMPIO, no un panic
+    /// que tumbaría el hilo de fondo — y el fichero queda intacto.
+    #[test]
+    fn persist_columns_rechaza_ui_no_tabla_sin_panico() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("norte.toml"), "ui = 3\n").expect("seed");
+        let err = persist_columns(
+            dir.path(),
+            None,
+            &["name".to_owned()],
+            PersistSort {
+                column: "name",
+                descending: false,
+                dirs_first: true,
+            },
+        )
+        .expect_err("forma inesperada");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert_eq!(s, "ui = 3\n", "el fichero no se toca en el camino de error");
     }
 }
