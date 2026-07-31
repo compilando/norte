@@ -163,6 +163,12 @@ status-connection-degraded = ⚠ { $scheme }://{ $host } — texto plano
 status-archive-skipped = ⚠ { $n } entradas omitidas (nombres hostiles/límites)
 status-names-encoding = nombres: { $enc }
 status-hidden = { $n } ocultas
+# --- Celdas de columnas (#108) ---
+col-time-now = ahora
+col-time-min = hace { $n }m
+col-time-hour = hace { $n }h
+col-time-day = hace { $n }d
+col-time-year = hace { $n }a
 status-marked = { $n } marcadas, { $size }
 status-marked-with-dirs = { $n } marcadas, { $size } + { $dirs } dirs
 status-marks-pruned = { $n } marcas caídas, sus entradas ya no están

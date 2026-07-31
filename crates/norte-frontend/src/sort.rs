@@ -171,16 +171,16 @@ fn cmp_name(a: (&SortKey, &Entry), b: (&SortKey, &Entry)) -> std::cmp::Ordering 
 /// direcciones»: los presentes se comparan (invertidos si `Desc`), un
 /// ausente pierde contra cualquier presente, dos ausentes empatan (decide
 /// el desempate por nombre del caller).
-fn cmp_missing_last<T: Ord>(
-    lhs: Option<T>,
-    rhs: Option<T>,
-    dir: SortDir,
-) -> std::cmp::Ordering {
+fn cmp_missing_last<T: Ord>(lhs: Option<T>, rhs: Option<T>, dir: SortDir) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     match (lhs, rhs) {
         (Some(lv), Some(rv)) => {
             let ord = lv.cmp(&rv);
-            if dir == SortDir::Desc { ord.reverse() } else { ord }
+            if dir == SortDir::Desc {
+                ord.reverse()
+            } else {
+                ord
+            }
         }
         (Some(_), None) => Ordering::Less,
         (None, Some(_)) => Ordering::Greater,
@@ -332,9 +332,14 @@ mod tests {
         ];
 
         let (mut entries, mut keys) = sort_with_keys_spec(izquierda.clone(), SortSpec::default());
-        let (batch_entries, batch_keys) =
-            sort_with_keys_spec(derecha.clone(), SortSpec::default());
-        merge_keyed_spec(&mut entries, &mut keys, batch_entries, batch_keys, SortSpec::default());
+        let (batch_entries, batch_keys) = sort_with_keys_spec(derecha.clone(), SortSpec::default());
+        merge_keyed_spec(
+            &mut entries,
+            &mut keys,
+            batch_entries,
+            batch_keys,
+            SortSpec::default(),
+        );
 
         let mut esperado: Vec<Entry> = izquierda.into_iter().chain(derecha).collect();
         sort_entries(&mut esperado);
