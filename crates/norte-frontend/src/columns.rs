@@ -881,6 +881,56 @@ pub fn default_layout_items() -> Vec<(Builtin, LayoutItem)> {
     ]
 }
 
+/// Tope de una cabecera custom (#108 7b), en caracteres TRAS enmascarar.
+pub const HEADER_MAX_CHARS: usize = 24;
+
+/// Estilo RESUELTO de una columna (#108 7b): lo que el spec fija más los
+/// defaults del builtin. El `header` llega YA saneado y capado a
+/// [`HEADER_MAX_CHARS`] — el único choke point es
+/// [`ColumnsSettings::resolve`], nunca el render (que va por frame).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnStyle {
+    /// Formato de tamaño (solo lo lee `Size`).
+    pub size_format: SizeFormat,
+    /// Formato de tiempo (solo lo lee `Mtime`).
+    pub time_format: TimeFormat,
+    /// Alineación efectiva.
+    pub align: Align,
+    /// Cabecera propia (saneada, ≤ [`HEADER_MAX_CHARS`]); `None` = la
+    /// etiqueta Fluent de siempre.
+    pub header: Option<String>,
+}
+
+impl ColumnStyle {
+    /// Los defaults del builtin sin spec: iec/relative, nombre a la
+    /// izquierda y el resto a la derecha — la convención que ya pintaban
+    /// ambos frontends.
+    #[must_use]
+    pub fn default_for(b: Builtin) -> Self {
+        Self {
+            size_format: SizeFormat::Iec,
+            time_format: TimeFormat::Relative,
+            align: if b == Builtin::Name {
+                Align::Left
+            } else {
+                Align::Right
+            },
+            header: None,
+        }
+    }
+}
+
+/// ¿Casa `fmt` (vocabulario global YA validado en config) con la columna?
+/// `Name`/`Kind` no admiten formato alguno; los de `mode`/attrs llegan con
+/// el bloque 2.
+fn format_fits(b: Builtin, fmt: &str) -> bool {
+    match b {
+        Builtin::Size => matches!(fmt, "exact" | "iec" | "si"),
+        Builtin::Mtime => matches!(fmt, "relative" | "iso"),
+        Builtin::Name | Builtin::Kind => false,
+    }
+}
+
 /// Config de columnas RESUELTA (#108 bloque 4): ids parseados, sort
 /// mapeado, overrides por scheme. Los ids que no parsean van a
 /// [`ColumnsSettings::invalid`] — se saltan al pintar y los reporta
@@ -900,10 +950,26 @@ pub struct ColumnsSettings {
     /// Listas crudas por scheme; solo hay entrada si el scheme configuró
     /// `columns` (un override solo-sort no lista aquí). Paralela a `schemes`.
     raw_schemes: std::collections::BTreeMap<String, Vec<String>>,
+    /// Specs globales retenidos al resolver (#108 7b), YA saneados: header
+    /// enmascarado y capado a [`HEADER_MAX_CHARS`], formatos que no casan
+    /// con su columna retirados (y diagnosticados en [`Self::bad_specs`]).
+    /// Único choke point — [`Self::style_for`] solo pliega campos.
+    specs_global: std::collections::BTreeMap<String, norte_config::ColumnSpec>,
+    /// Specs por scheme, mismos saneos; al plegar GANAN sobre los globales
+    /// campo a campo.
+    specs_schemes: std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, norte_config::ColumnSpec>,
+    >,
     /// Ids configurados que NO parsean (diagnóstico para doctor).
     pub invalid: Vec<String>,
     /// Ids válidos sin renderer todavía (`attr:`/`plugin:`).
     pub unrenderable: Vec<String>,
+    /// Specs `[[ui.columns.spec]]` con id imposible o con un formato que no
+    /// casa con su columna (#108 7b): se aplica el default y doctor lo
+    /// reporta (`columns-bad-spec`) — jamás un drop mudo ni un fallo de
+    /// arranque.
+    pub bad_specs: Vec<String>,
 }
 
 impl ColumnsSettings {
@@ -933,7 +999,106 @@ impl ColumnsSettings {
                 out.collect_diagnostics(ids);
             }
         }
+        // #108 7b: retén los specs SANEADOS aquí (choke point único) —
+        // `style_for` va por frame y no debe volver a sanear ni diagnosticar.
+        out.specs_global = out.sanitize_specs(&cfg.specs);
+        for (scheme, sc) in &cfg.schemes {
+            if !sc.specs.is_empty() {
+                let sane = out.sanitize_specs(&sc.specs);
+                out.specs_schemes.insert(scheme.clone(), sane);
+            }
+        }
         out
+    }
+
+    /// Saneo de un mapa de specs al resolver (#108 7b): id imposible →
+    /// [`Self::bad_specs`] y fuera; formato que no casa con su builtin →
+    /// [`Self::bad_specs`] y campo retirado (se aplicará el default);
+    /// header enmascarado ([`sanitize_header`]) y capado a
+    /// [`HEADER_MAX_CHARS`] (vacío tras enmascarar = `None`, cae a Fluent).
+    /// Los ids `attr:`/`plugin:` se retienen tal cual: sus formatos llegan
+    /// con sus renderers (bloques 2/6/7) y hoy nadie los pinta.
+    fn sanitize_specs(
+        &mut self,
+        specs: &std::collections::BTreeMap<String, norte_config::ColumnSpec>,
+    ) -> std::collections::BTreeMap<String, norte_config::ColumnSpec> {
+        let mut out = std::collections::BTreeMap::new();
+        for (raw, spec) in specs {
+            let mut spec = spec.clone();
+            match raw.parse::<ColumnId>() {
+                Err(_) => {
+                    self.push_bad_spec(raw);
+                    continue; // id imposible: el spec entero es diagnóstico
+                }
+                Ok(ColumnId::Builtin(b)) => {
+                    if let Some(fmt) = spec.format.as_deref()
+                        && !format_fits(b, fmt)
+                    {
+                        self.push_bad_spec(raw);
+                        spec.format = None; // default, jamás el spec roto
+                    }
+                }
+                Ok(ColumnId::Attr(_) | ColumnId::Plugin { .. }) => {}
+            }
+            if let Some(h) = spec.header.as_deref() {
+                let sane: String = sanitize_header(h).chars().take(HEADER_MAX_CHARS).collect();
+                spec.header = (!sane.is_empty()).then_some(sane);
+            }
+            out.insert(raw.clone(), spec);
+        }
+        out
+    }
+
+    /// Añade un diagnóstico de spec, deduplicado por id (una entrada por id
+    /// ofensor, venga del mapa global o de un scheme).
+    fn push_bad_spec(&mut self, raw: &str) {
+        if !self.bad_specs.iter().any(|b| b == raw) {
+            self.bad_specs.push(raw.to_owned());
+        }
+    }
+
+    /// El estilo efectivo de un builtin en `scheme` (#108 7b): defaults del
+    /// builtin ← spec global ← spec del scheme, campo a campo (`Some`
+    /// gana). Los formatos ya vienen validados y con encaje comprobado en
+    /// [`Self::resolve`]; aquí el fallback conserva el default — jamás un
+    /// panic.
+    #[must_use]
+    pub fn style_for(&self, scheme: &str, builtin: Builtin) -> ColumnStyle {
+        let key = ColumnId::Builtin(builtin).to_string();
+        let mut style = ColumnStyle::default_for(builtin);
+        let global = self.specs_global.get(&key);
+        let scoped = self.specs_schemes.get(scheme).and_then(|m| m.get(&key));
+        for spec in [global, scoped].into_iter().flatten() {
+            if let Some(a) = spec.align {
+                style.align = match a {
+                    norte_config::AlignChoice::Left => Align::Left,
+                    norte_config::AlignChoice::Right => Align::Right,
+                };
+            }
+            if let Some(fmt) = spec.format.as_deref() {
+                match builtin {
+                    Builtin::Size => {
+                        style.size_format = match fmt {
+                            "exact" => SizeFormat::Exact,
+                            "si" => SizeFormat::Si,
+                            _ => SizeFormat::Iec,
+                        };
+                    }
+                    Builtin::Mtime => {
+                        style.time_format = match fmt {
+                            "iso" => TimeFormat::Iso,
+                            _ => TimeFormat::Relative,
+                        };
+                    }
+                    // Sin formato posible: resolve ya lo retiró y diagnosticó.
+                    Builtin::Name | Builtin::Kind => {}
+                }
+            }
+            if spec.header.is_some() {
+                style.header.clone_from(&spec.header);
+            }
+        }
+        style
     }
 
     fn collect_diagnostics(&mut self, ids: &[String]) {
@@ -969,6 +1134,13 @@ impl ColumnsSettings {
     /// aún — doctor los nombra); el nombre jamás desaparece NI deja de ir
     /// primero — la TUI presupuesta la primera columna como el nombre
     /// (#108 7a: un `name` a mitad de lista se normaliza al frente).
+    ///
+    /// #108 7b: el `width` de un `[[ui.columns.spec]]` (global ← scheme)
+    /// SUSTITUYE la política del item — también sobre el set por defecto.
+    /// Un width sobre `name` se aplica pero conserva `is_name: true`: las
+    /// reglas de suelo del nombre de [`layout`] (regla 3, [`NAME_MIN`],
+    /// jamás descartado) siguen ganando — un `fixed = 1` en el nombre no lo
+    /// vuelve impintable.
     #[must_use]
     pub fn layout_items_for(&self, scheme: &str) -> Vec<(Builtin, LayoutItem)> {
         let ids = self
@@ -976,27 +1148,55 @@ impl ColumnsSettings {
             .get(scheme)
             .and_then(|(c, _)| c.as_ref())
             .or(self.default_set.as_ref());
-        let Some(ids) = ids else {
-            return default_layout_items();
-        };
-        let mut out: Vec<(Builtin, LayoutItem)> = Vec::new();
-        for id in ids {
-            if let ColumnId::Builtin(b) = id {
-                if out.iter().any(|(x, _)| x == b) {
-                    continue;
+        let mut out = match ids {
+            None => default_layout_items(),
+            Some(ids) => {
+                let mut out: Vec<(Builtin, LayoutItem)> = Vec::new();
+                for id in ids {
+                    if let ColumnId::Builtin(b) = id {
+                        if out.iter().any(|(x, _)| x == b) {
+                            continue;
+                        }
+                        out.push((*b, builtin_layout_item(*b)));
+                    }
                 }
-                out.push((*b, builtin_layout_item(*b)));
+                match out.iter().position(|(b, _)| *b == Builtin::Name) {
+                    Some(pos) if pos > 0 => {
+                        let name = out.remove(pos);
+                        out.insert(0, name);
+                    }
+                    Some(_) => {}
+                    None => out.insert(0, (Builtin::Name, builtin_layout_item(Builtin::Name))),
+                }
+                out
             }
-        }
-        match out.iter().position(|(b, _)| *b == Builtin::Name) {
-            Some(pos) if pos > 0 => {
-                let name = out.remove(pos);
-                out.insert(0, name);
-            }
-            Some(_) => {}
-            None => out.insert(0, (Builtin::Name, builtin_layout_item(Builtin::Name))),
-        }
+        };
+        self.apply_width_overrides(scheme, &mut out);
         out
+    }
+
+    /// Pliega el `width` de los specs (global ← scheme, `Some` gana) sobre
+    /// la política de cada item (#108 7b). `is_name` no se toca: los suelos
+    /// del nombre en [`layout`] mandan.
+    fn apply_width_overrides(&self, scheme: &str, items: &mut [(Builtin, LayoutItem)]) {
+        for (b, item) in items.iter_mut() {
+            let key = ColumnId::Builtin(*b).to_string();
+            let global = self.specs_global.get(&key).and_then(|s| s.width);
+            let scoped = self
+                .specs_schemes
+                .get(scheme)
+                .and_then(|m| m.get(&key))
+                .and_then(|s| s.width);
+            if let Some(w) = scoped.or(global) {
+                item.policy = match w {
+                    norte_config::WidthChoice::Auto => WidthPolicy::Auto,
+                    norte_config::WidthChoice::Fixed(n) => WidthPolicy::Fixed(n),
+                    norte_config::WidthChoice::Flex { min, weight } => {
+                        WidthPolicy::Flex { min, weight }
+                    }
+                };
+            }
+        }
     }
 
     /// La lista de ids CONFIGURADA efectiva para `scheme` en forma Display,
@@ -1040,6 +1240,10 @@ impl ColumnsSettings {
         // `unrenderable`) NO se recalculan aquí — `collect_diagnostics` solo
         // AÑADE, jamás retira entradas rancias, así que llamarla mentiría;
         // el re-resolve del hot-reload es quien los refresca honestos.
+        // #108 7b: los mapas de specs retenidos (`specs_global`/
+        // `specs_schemes`) son independientes de la LISTA de columnas — un
+        // spec estiliza su id «allí donde aparezca», así que elegir columnas
+        // en el picker no los toca y no hay nada que mantener en paso aquí.
         let parsed = parse_ids(ids);
         if let Some(s) = target {
             self.raw_schemes.insert(s.to_owned(), ids.to_vec());
@@ -1142,12 +1346,17 @@ pub fn sort_column(b: Builtin) -> Option<crate::sort::SortColumn> {
     }
 }
 
-/// Texto de la celda de una columna BUILTIN no-nombre (#108 L5): `None` =
-/// ausencia (un dir sin size, un mtime desconocido) — se pinta blanco,
-/// jamás un `0` fabricado. `now_ms` lo inyecta el caller (estabilidad de
-/// snapshots y pureza).
+/// Texto de la celda de una columna BUILTIN no-nombre (#108 L5) con un
+/// [`ColumnStyle`] resuelto (7b): `None` = ausencia (un dir sin size, un
+/// mtime desconocido) — se pinta blanco, jamás un `0` fabricado. `now_ms`
+/// lo inyecta el caller (estabilidad de snapshots y pureza).
 #[must_use]
-pub fn builtin_cell(entry: &norte_proto::Entry, col: Builtin, now_ms: i64) -> Option<String> {
+pub fn styled_cell(
+    entry: &norte_proto::Entry,
+    col: Builtin,
+    now_ms: i64,
+    style: &ColumnStyle,
+) -> Option<String> {
     match col {
         Builtin::Name => None, // el nombre lo pinta el frontend
         Builtin::Kind => Some(norte_i18n::t(match entry.kind {
@@ -1156,9 +1365,145 @@ pub fn builtin_cell(entry: &norte_proto::Entry, col: Builtin, now_ms: i64) -> Op
             norte_proto::EntryKind::Symlink => "col-kind-symlink",
             norte_proto::EntryKind::Other => "col-kind-other",
         })),
-        Builtin::Size => entry.size.map(|n| format_size(n, SizeFormat::Iec)),
+        Builtin::Size => entry.size.map(|n| format_size(n, style.size_format)),
         Builtin::Mtime => entry
             .mtime_ms
-            .map(|ms| format_mtime(ms, TimeFormat::Relative, now_ms)),
+            .map(|ms| format_mtime(ms, style.time_format, now_ms)),
+    }
+}
+
+/// [`styled_cell`] con los defaults del builtin (iec/relative) — la firma
+/// histórica pre-7b, conducta idéntica (pineada por los tests existentes).
+#[must_use]
+pub fn builtin_cell(entry: &norte_proto::Entry, col: Builtin, now_ms: i64) -> Option<String> {
+    styled_cell(entry, col, now_ms, &ColumnStyle::default_for(col))
+}
+
+#[cfg(test)]
+mod style_tests {
+    use super::*;
+
+    #[test]
+    fn style_for_aplica_spec_global_y_scheme_gana() {
+        let mut cfg = norte_config::ColumnsConfig::default();
+        cfg.specs.insert(
+            "size".into(),
+            norte_config::ColumnSpec {
+                format: Some("si".into()),
+                header: Some("Peso".into()),
+                width: Some(norte_config::WidthChoice::Fixed(9)),
+                ..Default::default()
+            },
+        );
+        let mut sc = norte_config::SchemeColumns::default();
+        sc.specs.insert(
+            "size".into(),
+            norte_config::ColumnSpec {
+                format: Some("exact".into()),
+                ..Default::default()
+            },
+        );
+        cfg.schemes.insert("sftp".into(), sc);
+        let s = ColumnsSettings::resolve(&cfg);
+        assert_eq!(
+            s.style_for("file", Builtin::Size).size_format,
+            SizeFormat::Si
+        );
+        assert_eq!(
+            s.style_for("sftp", Builtin::Size).size_format,
+            SizeFormat::Exact
+        );
+        // header del global sobrevive en el scheme (last-wins POR CAMPO).
+        assert_eq!(
+            s.style_for("sftp", Builtin::Size).header.as_deref(),
+            Some("Peso")
+        );
+        // width override llega al layout.
+        let items = s.layout_items_for("file");
+        let size = items
+            .iter()
+            .find(|(b, _)| *b == Builtin::Size)
+            .expect("size");
+        assert_eq!(size.1.policy, WidthPolicy::Fixed(9));
+    }
+
+    #[test]
+    fn spec_formato_que_no_casa_es_diagnostico_no_aplicado() {
+        let mut cfg = norte_config::ColumnsConfig::default();
+        cfg.specs.insert(
+            "mtime".into(),
+            norte_config::ColumnSpec {
+                format: Some("iec".into()), // iec en un timestamp: no casa
+                ..Default::default()
+            },
+        );
+        let s = ColumnsSettings::resolve(&cfg);
+        assert_eq!(
+            s.style_for("file", Builtin::Mtime).time_format,
+            TimeFormat::Relative
+        );
+        assert!(s.bad_specs.iter().any(|b| b.contains("mtime")));
+    }
+
+    #[test]
+    fn spec_id_que_no_parsea_es_diagnostico() {
+        let mut cfg = norte_config::ColumnsConfig::default();
+        cfg.specs.insert(
+            "rota!!".into(),
+            norte_config::ColumnSpec {
+                header: Some("X".into()),
+                ..Default::default()
+            },
+        );
+        let s = ColumnsSettings::resolve(&cfg);
+        assert!(s.bad_specs.iter().any(|b| b.contains("rota!!")));
+    }
+
+    #[test]
+    fn spec_header_hostil_se_sanea_y_capa_al_resolver() {
+        let mut cfg = norte_config::ColumnsConfig::default();
+        cfg.specs.insert(
+            "size".into(),
+            norte_config::ColumnSpec {
+                header: Some(format!("A\u{202E}{}", "x".repeat(60))),
+                ..Default::default()
+            },
+        );
+        let s = ColumnsSettings::resolve(&cfg);
+        let h = s.style_for("file", Builtin::Size).header.expect("header");
+        assert!(!h.chars().any(norte_encoding::is_terminal_hazard));
+        assert!(h.chars().count() <= HEADER_MAX_CHARS);
+    }
+
+    #[test]
+    fn builtin_cell_honra_el_formato() {
+        let e = norte_proto::Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: norte_proto::VPath::parse("mem:///a.bin").unwrap(),
+            kind: norte_proto::EntryKind::File,
+            size: Some(2048),
+            mtime_ms: Some(0),
+        };
+        let styled = ColumnStyle {
+            size_format: SizeFormat::Exact,
+            ..ColumnStyle::default_for(Builtin::Size)
+        };
+        assert_eq!(
+            styled_cell(&e, Builtin::Size, 0, &styled).as_deref(),
+            Some("2048")
+        );
+        // El wrapper por defecto no cambia de conducta (Iec).
+        assert_eq!(
+            builtin_cell(&e, Builtin::Size, 0).as_deref(),
+            Some("2.0 KiB")
+        );
+    }
+
+    #[test]
+    fn default_for_alineaciones() {
+        assert_eq!(ColumnStyle::default_for(Builtin::Name).align, Align::Left);
+        assert_eq!(ColumnStyle::default_for(Builtin::Size).align, Align::Right);
+        assert_eq!(ColumnStyle::default_for(Builtin::Mtime).align, Align::Right);
+        assert_eq!(ColumnStyle::default_for(Builtin::Kind).align, Align::Right);
     }
 }
