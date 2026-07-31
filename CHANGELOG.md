@@ -22,6 +22,16 @@ independently through `PROTOCOL_VERSION`.
   the path); whether a format fits its column is a resolve-time diagnostic:
   the default is applied and `norte doctor` reports it as
   `columns-bad-spec` (masked, capped) — never a silent skip.
+- **Column format cycling in the picker — `f` (#108 block 7b):** inside the
+  Alt+C picker, `f` rotates the format of the row under the cursor through
+  its closed vocabulary (size: `iec`/`si`/`exact`; mtime: `relative`/`iso`;
+  name/kind/opaque rows have no format) and the row shows the current value
+  (` · iec`). The cycle starts from the RESOLVED style of the pane's scheme,
+  and Enter persists only the formats that actually changed, each as a
+  replace-by-id `[[ui.columns.spec]]` entry that preserves the entry's other
+  fields (header/width/align) — the session sees the new format immediately,
+  in lockstep with the file. Width cycling stays deferred (needs numeric
+  entry UX).
 - **TUI column picker — Alt+C (#108 block 7a):** a keyboard-driven overlay
   over the shared picker model: `e`/space toggles a column on or off (name
   is pinned first and immutable), Shift+↑/↓ — or vim-style `K`/`J` —

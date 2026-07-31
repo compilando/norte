@@ -417,7 +417,11 @@ dialog-cmd-toggle-enabled = activar
 dialog-cmd-remove = borrar
 dialog-cmd-move-up = subir
 dialog-cmd-move-down = bajar
-dialog-cmd-sort = ordenar por
+# «ordenar» a secas: con «ordenar por» el hint del picker de columnas
+# (que suma [f] formato en 7b) mide 77 celdas y no cabe entero en un
+# frame de 80 (interior 78) — el guard ruidoso del snapshot lo pinea.
+dialog-cmd-sort = ordenar
+dialog-cmd-cycle-format = formato
 
 # --- norte doctor (H2): diagnóstico de solo lectura sobre capas de config,
 # keymaps, plugins y conexiones.

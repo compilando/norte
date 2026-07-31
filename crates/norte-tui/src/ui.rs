@@ -651,7 +651,14 @@ fn draw_columns_picker(
                 }
                 _ => "",
             };
-            format!(" {marca} {etiqueta}{flecha}")
+            // #108 7b: el formato vigente de la fila (vocabulario ASCII
+            // cerrado — sin enmascarar), ciclable con `f`.
+            let formato = r
+                .format
+                .as_deref()
+                .map(|f| format!(" · {f}"))
+                .unwrap_or_default();
+            format!(" {marca} {etiqueta}{flecha}{formato}")
         })
         .collect();
     let footer_w = Line::raw(format!(" {hint} ")).width();

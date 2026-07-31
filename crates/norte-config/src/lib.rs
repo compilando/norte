@@ -22,8 +22,8 @@ pub use dirs::{
 pub use load::{
     AiSettings, AlignChoice, ColumnSpec, ColumnsConfig, CommonConfig, ConfirmQuit, HotlistItem,
     PersistSort, QuickSearch, SchemeColumns, SortChoice, SortColumnKey, WidthChoice, load,
-    persist_columns, persist_hotlist_add, persist_hotlist_remove, persist_set, persist_ui_theme,
-    persist_ui_theme_to,
+    persist_column_format, persist_columns, persist_hotlist_add, persist_hotlist_remove,
+    persist_set, persist_ui_theme, persist_ui_theme_to,
 };
 pub use schema::{
     AiProviderEntry, AiSection, ArchiveSection, ConfigError, DEFAULT_PRESET, DaemonMode,

@@ -1101,6 +1101,17 @@ impl ColumnsSettings {
         style
     }
 
+    /// Aplica EN MEMORIA un formato elegido en el picker (#108 7b):
+    /// actualiza (o crea) la entrada retenida de `specs_global` para `id` —
+    /// el mismo lockstep sesión↔disco que [`Self::apply_picked`] frente a
+    /// `persist_column_format`, para que `style_for` lo vea al instante sin
+    /// esperar al hot-reload. `format` llega del vocabulario cerrado del
+    /// picker (ya encaja con su columna): sin re-saneo. Un spec del MISMO id
+    /// a nivel de scheme sigue ganando (persistencia por scheme = diferido).
+    pub fn apply_format(&mut self, id: &str, format: &str) {
+        self.specs_global.entry(id.to_owned()).or_default().format = Some(format.to_owned());
+    }
+
     fn collect_diagnostics(&mut self, ids: &[String]) {
         for raw in ids {
             match raw.parse::<ColumnId>() {
@@ -1505,5 +1516,42 @@ mod style_tests {
         assert_eq!(ColumnStyle::default_for(Builtin::Size).align, Align::Right);
         assert_eq!(ColumnStyle::default_for(Builtin::Mtime).align, Align::Right);
         assert_eq!(ColumnStyle::default_for(Builtin::Kind).align, Align::Right);
+    }
+
+    /// #108 7b: `apply_format` actualiza el spec retenido y `style_for` lo
+    /// ve al instante (lockstep sesión↔disco del picker); una entrada
+    /// existente conserva sus otros campos (header).
+    #[test]
+    fn apply_format_actualiza_el_estilo_en_sesion() {
+        let cfg = norte_config::ColumnsConfig {
+            specs: [(
+                "size".to_owned(),
+                norte_config::ColumnSpec {
+                    header: Some("Peso".to_owned()),
+                    ..Default::default()
+                },
+            )]
+            .into(),
+            ..Default::default()
+        };
+        let mut s = ColumnsSettings::resolve(&cfg);
+        assert_eq!(
+            s.style_for("file", Builtin::Size).size_format,
+            SizeFormat::Iec
+        );
+        s.apply_format("size", "si");
+        let estilo = s.style_for("file", Builtin::Size);
+        assert_eq!(estilo.size_format, SizeFormat::Si, "visible al instante");
+        assert_eq!(
+            estilo.header.as_deref(),
+            Some("Peso"),
+            "los otros campos del spec sobreviven"
+        );
+        // Sin entrada previa: se crea.
+        s.apply_format("mtime", "iso");
+        assert_eq!(
+            s.style_for("file", Builtin::Mtime).time_format,
+            TimeFormat::Iso
+        );
     }
 }

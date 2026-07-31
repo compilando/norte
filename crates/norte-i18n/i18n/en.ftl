@@ -413,6 +413,7 @@ dialog-cmd-remove = remove
 dialog-cmd-move-up = move up
 dialog-cmd-move-down = move down
 dialog-cmd-sort = sort by
+dialog-cmd-cycle-format = format
 
 # --- norte doctor (H2): read-only diagnostics over config layers,
 # keymaps, plugins and connections.

@@ -2357,6 +2357,7 @@ pub const ALLOW_COLUMNS: &[&str] = &[
     "dialog.move-up",
     "dialog.move-down",
     "dialog.sort",
+    "dialog.cycle-format",
     "dialog.confirm",
     "dialog.cancel",
 ];

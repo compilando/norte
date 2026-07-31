@@ -16,6 +16,12 @@ pub struct PickerRow {
     pub builtin: Option<Builtin>,
     /// Activa = aparece en la lista persistida.
     pub enabled: bool,
+    /// Formato VIGENTE de la fila (#108 7b): vocabulario ASCII cerrado
+    /// (`"iec"`…); `Some` solo para Size/Mtime — el resto no admite formato.
+    pub format: Option<String>,
+    /// El formato al ABRIR: [`ColumnsPicker::finish`] solo emite los
+    /// CAMBIADOS. Privado: nace igual que `format` y no se toca después.
+    opened_format: Option<String>,
 }
 
 /// Resultado de confirmar el picker.
@@ -27,6 +33,65 @@ pub struct Picked {
     pub sort: SortSpec,
     /// `Some(scheme)` si el save va al override del scheme; `None` = default.
     pub scheme_target: Option<String>,
+    /// Formatos CAMBIADOS respecto a la apertura (#108 7b), como
+    /// `(id, formato)`: solo lo tocado viaja al disco — un spec por
+    /// columna, reemplazo por id (`persist_column_format`).
+    pub formats: Vec<(String, String)>,
+}
+
+/// Vocabulario CERRADO de formatos ciclables por builtin (#108 7b): el
+/// mismo conjunto que valida la config (`format_fits` en `columns`);
+/// Name/Kind no admiten formato y los opacos aún no tienen renderer.
+fn format_vocab(b: Builtin) -> &'static [&'static str] {
+    match b {
+        Builtin::Size => &["iec", "si", "exact"],
+        Builtin::Mtime => &["relative", "iso"],
+        Builtin::Name | Builtin::Kind => &[],
+    }
+}
+
+/// Formato VIGENTE de un builtin al abrir (#108 7b): del estilo RESUELTO
+/// del scheme (`style_for` ya pliega spec global ← scheme) — un ciclo
+/// parte de lo que el pane pinta de verdad, no del default.
+fn seeded_format(settings: &ColumnsSettings, scheme: &str, b: Builtin) -> Option<String> {
+    use crate::columns::{SizeFormat, TimeFormat};
+    match b {
+        Builtin::Size => Some(
+            match settings.style_for(scheme, b).size_format {
+                SizeFormat::Iec => "iec",
+                SizeFormat::Si => "si",
+                SizeFormat::Exact => "exact",
+            }
+            .to_owned(),
+        ),
+        Builtin::Mtime => Some(
+            match settings.style_for(scheme, b).time_format {
+                TimeFormat::Relative => "relative",
+                TimeFormat::Iso => "iso",
+            }
+            .to_owned(),
+        ),
+        Builtin::Name | Builtin::Kind => None,
+    }
+}
+
+/// Construye una fila sembrando `format`/`opened_format` del estilo
+/// resuelto — un único sitio para el invariante «nacen iguales».
+fn make_row(
+    id: String,
+    builtin: Option<Builtin>,
+    enabled: bool,
+    settings: &ColumnsSettings,
+    scheme: &str,
+) -> PickerRow {
+    let format = builtin.and_then(|b| seeded_format(settings, scheme, b));
+    PickerRow {
+        id,
+        builtin,
+        enabled,
+        opened_format: format.clone(),
+        format,
+    }
 }
 
 /// Estado del picker. `open` parte del set EFECTIVO del pane (override del
@@ -60,11 +125,7 @@ impl ColumnsPicker {
             if builtin.is_some() && rows.iter().any(|r| r.builtin == builtin) {
                 continue;
             }
-            rows.push(PickerRow {
-                id: id.clone(),
-                builtin,
-                enabled: true,
-            });
+            rows.push(make_row(id.clone(), builtin, true, settings, scheme));
         }
         // name primero e inmutable (contrato del render).
         if let Some(pos) = rows.iter().position(|r| r.builtin == Some(Builtin::Name)) {
@@ -73,21 +134,25 @@ impl ColumnsPicker {
         } else {
             rows.insert(
                 0,
-                PickerRow {
-                    id: ColumnId::Builtin(Builtin::Name).to_string(),
-                    builtin: Some(Builtin::Name),
-                    enabled: true,
-                },
+                make_row(
+                    ColumnId::Builtin(Builtin::Name).to_string(),
+                    Some(Builtin::Name),
+                    true,
+                    settings,
+                    scheme,
+                ),
             );
         }
         // Catálogo restante, deshabilitado, en orden canónico.
         for b in [Builtin::Size, Builtin::Mtime, Builtin::Kind] {
             if !rows.iter().any(|r| r.builtin == Some(b)) {
-                rows.push(PickerRow {
-                    id: ColumnId::Builtin(b).to_string(),
-                    builtin: Some(b),
-                    enabled: false,
-                });
+                rows.push(make_row(
+                    ColumnId::Builtin(b).to_string(),
+                    Some(b),
+                    false,
+                    settings,
+                    scheme,
+                ));
             }
         }
         Self {
@@ -179,6 +244,31 @@ impl ColumnsPicker {
         }
     }
 
+    /// Cicla el formato de la fila bajo el cursor por su vocabulario
+    /// cerrado (#108 7b): size `iec→si→exact→iec`, mtime
+    /// `relative→iso→relative`; no-op en name/kind/opacas (sin formato).
+    pub fn cycle_format(&mut self) {
+        let Some(r) = self.rows.get_mut(self.cursor) else {
+            return;
+        };
+        let Some(b) = r.builtin else { return };
+        let vocab = format_vocab(b);
+        let Some(cur) = r.format.as_deref() else {
+            return;
+        };
+        let Some(i) = vocab.iter().position(|v| *v == cur) else {
+            return;
+        };
+        r.format = Some(vocab[(i + 1) % vocab.len()].to_owned());
+    }
+
+    /// Formato vigente de la fila bajo el cursor (`None` = no admite
+    /// formato: name/kind/opacas).
+    #[must_use]
+    pub fn format_of_cursor(&self) -> Option<String> {
+        self.rows.get(self.cursor).and_then(|r| r.format.clone())
+    }
+
     /// El resultado a aplicar/persistir al confirmar.
     #[must_use]
     pub fn finish(&self) -> Picked {
@@ -191,6 +281,12 @@ impl ColumnsPicker {
                 .collect(),
             sort: self.sort,
             scheme_target: self.scheme_override.then(|| self.scheme.clone()),
+            formats: self
+                .rows
+                .iter()
+                .filter(|r| r.format != r.opened_format)
+                .filter_map(|r| r.format.clone().map(|f| (r.id.clone(), f)))
+                .collect(),
         }
     }
 }
@@ -203,6 +299,62 @@ mod tests {
 
     fn settings_vacios() -> ColumnsSettings {
         ColumnsSettings::resolve(&norte_config::ColumnsConfig::default())
+    }
+
+    #[test]
+    fn cycle_format_rota_el_vocabulario_de_la_columna() {
+        let mut p = ColumnsPicker::open(&settings_vacios(), "file", SortSpec::default());
+        p.down(); // size (formato default iec)
+        p.cycle_format();
+        assert_eq!(p.format_of_cursor().as_deref(), Some("si"));
+        p.cycle_format();
+        assert_eq!(p.format_of_cursor().as_deref(), Some("exact"));
+        p.cycle_format();
+        assert_eq!(p.format_of_cursor().as_deref(), Some("iec")); // vuelta completa
+        // name/kind/opacos: no-op.
+        p.up();
+        p.cycle_format();
+        assert_eq!(p.format_of_cursor(), None);
+    }
+
+    #[test]
+    fn finish_lleva_solo_los_formatos_cambiados() {
+        let mut p = ColumnsPicker::open(&settings_vacios(), "file", SortSpec::default());
+        p.down();
+        p.cycle_format(); // size → si
+        let picked = p.finish();
+        assert_eq!(picked.formats, vec![("size".to_owned(), "si".to_owned())]);
+        // sin cambios → vacío
+        let p2 = ColumnsPicker::open(&settings_vacios(), "file", SortSpec::default());
+        assert!(p2.finish().formats.is_empty());
+    }
+
+    /// El seed parte del estilo RESUELTO del scheme, no del default: con un
+    /// spec `format = "si"` en config, el primer ciclo va si→exact.
+    #[test]
+    fn open_siembra_el_formato_del_estilo_resuelto() {
+        let cfg = norte_config::ColumnsConfig {
+            specs: [(
+                "size".to_owned(),
+                norte_config::ColumnSpec {
+                    format: Some("si".to_owned()),
+                    ..Default::default()
+                },
+            )]
+            .into(),
+            ..Default::default()
+        };
+        let s = ColumnsSettings::resolve(&cfg);
+        let mut p = ColumnsPicker::open(&s, "file", SortSpec::default());
+        p.down(); // size
+        assert_eq!(p.format_of_cursor().as_deref(), Some("si"));
+        p.cycle_format();
+        assert_eq!(p.format_of_cursor().as_deref(), Some("exact"));
+        // Y finish emite el cambio RELATIVO a la apertura (si→exact).
+        assert_eq!(
+            p.finish().formats,
+            vec![("size".to_owned(), "exact".to_owned())]
+        );
     }
 
     #[test]

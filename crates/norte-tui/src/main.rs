@@ -1607,6 +1607,7 @@ async fn on_columns_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifie
         "dialog.move-up" => p.move_up(),
         "dialog.move-down" => p.move_down(),
         "dialog.sort" => p.sort_current(),
+        "dialog.cycle-format" => p.cycle_format(),
         "dialog.cancel" => app.columns_picker = None,
         "dialog.confirm" => {
             let picked = p.finish();
@@ -1625,6 +1626,12 @@ async fn on_columns_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifie
 async fn apply_picked_columns(app: &mut App, picked: norte_frontend::columns_picker::Picked) {
     app.columns
         .apply_picked(picked.scheme_target.as_deref(), &picked.ids, picked.sort);
+    // #108 7b: los formatos ciclados también EN SESIÓN antes del disco —
+    // mismo lockstep (`apply_format` toca el spec retenido que lee
+    // `style_for`).
+    for (id, fmt) in &picked.formats {
+        app.columns.apply_format(id, fmt);
+    }
     for i in 0..app.panes.len() {
         app.apply_scheme_sort(i);
     }
@@ -1635,7 +1642,11 @@ async fn apply_picked_columns(app: &mut App, picked: norte_frontend::columns_pic
     let ids = picked.ids.clone();
     let scheme = picked.scheme_target.clone();
     let sort = picked.sort;
+    let formats = picked.formats.clone();
     let res = tokio::task::spawn_blocking(move || {
+        // Todas las escrituras en UNA tarea de fondo, secuenciales sobre el
+        // mismo fichero (#108 7b): la lista+sort y después cada formato
+        // ciclado — un solo desenlace, un solo toast.
         config::persist_columns(
             &dir,
             scheme.as_deref(),
@@ -1649,11 +1660,15 @@ async fn apply_picked_columns(app: &mut App, picked: norte_frontend::columns_pic
                 descending: sort.dir == norte_frontend::SortDir::Desc,
                 dirs_first: sort.dirs_first,
             },
-        )
+        )?;
+        for (id, fmt) in &formats {
+            config::persist_column_format(&dir, id, fmt)?;
+        }
+        Ok::<_, std::io::Error>(())
     })
     .await;
     match res {
-        Ok(Ok(_path)) => app.message = Some(t("msg-columns-saved")),
+        Ok(Ok(())) => app.message = Some(t("msg-columns-saved")),
         Ok(Err(e)) => {
             app.message = Some(ta(
                 "msg-settings-save-failed",

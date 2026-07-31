@@ -96,4 +96,5 @@ keymap = [
     { on = ["K"], run = "dialog.move-up" },
     { on = ["J"], run = "dialog.move-down" },
     { on = ["ctrl+s"], run = "dialog.sort" },
+    { on = ["f"], run = "dialog.cycle-format" },
 ]

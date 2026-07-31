@@ -177,90 +177,14 @@ pub fn persist_columns(
     ids: &[String],
     sort: PersistSort<'_>,
 ) -> std::io::Result<PathBuf> {
-    use std::io::{Error, ErrorKind};
     std::fs::create_dir_all(dir)?;
     let path = dir.join("norte.toml");
-    let mut doc = match std::fs::read_to_string(&path) {
-        Ok(s) => s.parse::<toml_edit::DocumentMut>().map_err(|_| {
-            // security review item 4 (C1, NIT F4): `toml_edit`'s parse
-            // error `Display` quotes the offending document line — a
-            // hostile `name`/`path` persisted earlier (#73 discipline)
-            // would otherwise reach whatever shows this `io::Error`
-            // (the TUI status bar). Name the file, never the content.
-            Error::new(
-                ErrorKind::InvalidData,
-                format!(
-                    "{} no parsea: TOML inválido; corrígelo o bórralo",
-                    path.display()
-                ),
-            )
-        })?,
-        Err(e) if e.kind() == ErrorKind::NotFound => toml_edit::DocumentMut::new(),
-        Err(e) => return Err(e),
-    };
+    let mut doc = open_user_toml(&path)?;
     let segs: Vec<&str> = match scheme {
         None => vec!["ui", "columns"],
         Some(s) => vec!["ui", "columns", "scheme", s],
     };
-    // Guard de forma nivel a nivel, de SOLO LECTURA y ANTES de tocar nada
-    // (mismo criterio `is_table_like` que `persist_set`): un nivel que se
-    // corta (no existe) hace segura la creación de todo lo de debajo.
-    {
-        let mut nivel: &dyn toml_edit::TableLike = doc.as_table();
-        for (i, seg) in segs.iter().enumerate() {
-            let Some(item) = nivel.get(seg) else { break };
-            if !item.is_table_like() {
-                return Err(Error::new(
-                    ErrorKind::InvalidData,
-                    format!(
-                        "{}: [{}] no es una tabla (forma inesperada); corrígelo o bórralo",
-                        path.display(),
-                        segs[..=i].join(".")
-                    ),
-                ));
-            }
-            let Some(t) = item.as_table_like() else {
-                // Inalcanzable: `is_table_like` acaba de pasar (es
-                // literalmente `as_table_like().is_some()`).
-                break;
-            };
-            nivel = t;
-        }
-    }
-    // Mutación: camina/crea la cadena con `entry` sobre `TableLike` — NO
-    // con el operador de índice, cuyo `IndexMut` en este `toml_edit`
-    // materializa los niveles que falten como tablas INLINE con dotted-keys
-    // (`ui = { columns.default = … }`), ilegible para un fichero editable a
-    // mano. Cada nivel nuevo nace `Item::Table`: intermedios IMPLÍCITOS (no
-    // emiten cabecera propia), la hoja EXPLÍCITA (`[ui.columns]` legible,
-    // mismo criterio que `persist_set`); una hoja `Item::Table` ya existente
-    // se fuerza a explícita; una inline (`ui = { columns = {…} }`) se
-    // respeta tal cual. Seguro tras el guard: ya no hay nivel no-tabla.
-    let mut t: &mut dyn toml_edit::TableLike = doc.as_table_mut();
-    for (i, seg) in segs.iter().enumerate() {
-        let es_hoja = i + 1 == segs.len();
-        let item = t.entry(seg).or_insert_with(|| {
-            let mut nt = toml_edit::Table::new();
-            nt.set_implicit(!es_hoja);
-            toml_edit::Item::Table(nt)
-        });
-        if es_hoja && let Some(tab) = item.as_table_mut() {
-            tab.set_implicit(false);
-        }
-        t = item.as_table_like_mut().ok_or_else(|| {
-            // Inalcanzable: el guard de arriba ya rechazó todo nivel
-            // existente no-tabla y los nuevos nacen `Item::Table` — pero un
-            // `Err` limpio antes que un `unwrap` (regla 6).
-            Error::new(
-                ErrorKind::InvalidData,
-                format!(
-                    "{}: [{}] no es una tabla (forma inesperada); corrígelo o bórralo",
-                    path.display(),
-                    segs[..=i].join(".")
-                ),
-            )
-        })?;
-    }
+    let t = nested_table_mut(&mut doc, &path, &segs)?;
     let mut arr = toml_edit::Array::new();
     for id in ids {
         // Ids TAL CUAL (set abierto — `attr:`/`plugin:`/no-parseables):
@@ -286,6 +210,145 @@ pub fn persist_columns(
         "sort",
         toml_edit::Item::Value(toml_edit::Value::InlineTable(sort_tbl)),
     );
+    std::fs::write(&path, doc.to_string())?;
+    Ok(path)
+}
+
+/// Lee (o crea, si no existe) el `norte.toml` de `path` como documento
+/// `toml_edit`, con el error de parseo SANEADO — el `Display` de
+/// `toml_edit` cita la línea ofensora, y un `name`/`path` hostil
+/// persistido antes llegaría a quien muestre este `io::Error` (la status
+/// bar, #73): se nombra el fichero, jamás el contenido. Compartido por los
+/// escritores de columnas (`persist_columns`/`persist_column_format`).
+fn open_user_toml(path: &std::path::Path) -> std::io::Result<toml_edit::DocumentMut> {
+    use std::io::{Error, ErrorKind};
+    match std::fs::read_to_string(path) {
+        Ok(s) => s.parse::<toml_edit::DocumentMut>().map_err(|_| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "{} no parsea: TOML inválido; corrígelo o bórralo",
+                    path.display()
+                ),
+            )
+        }),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(toml_edit::DocumentMut::new()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Camina/crea la cadena `segs` de tablas bajo `doc` (#108 7a/7b — DOS
+/// callers: [`persist_columns`] y [`persist_column_format`]) y devuelve la
+/// hoja mutable.
+///
+/// Guard de forma nivel a nivel, de SOLO LECTURA y ANTES de tocar nada
+/// (mismo criterio `is_table_like` que `persist_set`): un nivel que se
+/// corta (no existe) hace segura la creación de todo lo de debajo. La
+/// mutación camina con `entry` sobre `TableLike` — NO con el operador de
+/// índice, cuyo `IndexMut` en este `toml_edit` materializa los niveles que
+/// falten como tablas INLINE con dotted-keys (`ui = { columns.default = … }`),
+/// ilegible para un fichero editable a mano. Cada nivel nuevo nace
+/// `Item::Table`: intermedios IMPLÍCITOS (sin cabecera propia), la hoja
+/// EXPLÍCITA (`[ui.columns]` legible, mismo criterio que `persist_set`);
+/// una hoja `Item::Table` ya existente se fuerza a explícita; una inline
+/// (`ui = { columns = {…} }`) se respeta tal cual.
+fn nested_table_mut<'d>(
+    doc: &'d mut toml_edit::DocumentMut,
+    path: &std::path::Path,
+    segs: &[&str],
+) -> std::io::Result<&'d mut dyn toml_edit::TableLike> {
+    use std::io::{Error, ErrorKind};
+    let forma = |hasta: usize| {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "{}: [{}] no es una tabla (forma inesperada); corrígelo o bórralo",
+                path.display(),
+                segs[..=hasta].join(".")
+            ),
+        )
+    };
+    {
+        let mut nivel: &dyn toml_edit::TableLike = doc.as_table();
+        for (i, seg) in segs.iter().enumerate() {
+            let Some(item) = nivel.get(seg) else { break };
+            if !item.is_table_like() {
+                return Err(forma(i));
+            }
+            let Some(t) = item.as_table_like() else {
+                // Inalcanzable: `is_table_like` acaba de pasar (es
+                // literalmente `as_table_like().is_some()`).
+                break;
+            };
+            nivel = t;
+        }
+    }
+    // Seguro tras el guard: ya no hay nivel existente no-tabla.
+    let mut t: &mut dyn toml_edit::TableLike = doc.as_table_mut();
+    for (i, seg) in segs.iter().enumerate() {
+        let es_hoja = i + 1 == segs.len();
+        let item = t.entry(seg).or_insert_with(|| {
+            let mut nt = toml_edit::Table::new();
+            nt.set_implicit(!es_hoja);
+            toml_edit::Item::Table(nt)
+        });
+        if es_hoja && let Some(tab) = item.as_table_mut() {
+            tab.set_implicit(false);
+        }
+        // Inalcanzable el `Err`: el guard ya rechazó todo nivel existente
+        // no-tabla y los nuevos nacen `Item::Table` — pero un `Err` limpio
+        // antes que un `unwrap` (regla 6).
+        t = item.as_table_like_mut().ok_or_else(|| forma(i))?;
+    }
+    Ok(t)
+}
+
+/// Fija (o crea) el `format` del `[[ui.columns.spec]]` de id `id` (#108
+/// 7b): reemplazo POR ID que PRESERVA el resto de campos de la entrada
+/// (`header`/`width`/`align`) y los comentarios del fichero — el
+/// precedente `ArrayOfTables` de [`persist_hotlist_add`], incluido su
+/// guard de forma (`spec` existente que no sea array de tablas = error
+/// limpio, jamás pánico).
+///
+/// CONTRATO: `id` viene del vocabulario del picker (ids Display de
+/// builtins) y `format` del vocabulario CERRADO de formatos ya validado
+/// contra su columna; `toml_edit` escapa igualmente. BLOQUEANTE: I/O de FS
+/// síncrono — el caller DEBE envolverla en `spawn_blocking` (regla 2).
+///
+/// # Errors
+/// [`std::io::Error`] si el TOML existente no parsea, un nivel de
+/// `[ui.columns]` no es tabla, `spec` existe con otra forma, o falla el
+/// I/O.
+pub fn persist_column_format(dir: &Path, id: &str, format: &str) -> std::io::Result<PathBuf> {
+    use std::io::{Error, ErrorKind};
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join("norte.toml");
+    let mut doc = open_user_toml(&path)?;
+    let t = nested_table_mut(&mut doc, &path, &["ui", "columns"])?;
+    let arr = t
+        .entry("spec")
+        .or_insert_with(|| toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()))
+        .as_array_of_tables_mut()
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "{}: `spec` no es un array de tablas (forma inesperada); corrígelo o bórralo",
+                    path.display()
+                ),
+            )
+        })?;
+    if let Some(existing) = arr
+        .iter_mut()
+        .find(|tb| tb.get("id").and_then(|v| v.as_str()) == Some(id))
+    {
+        existing["format"] = toml_edit::value(format);
+    } else {
+        let mut tb = toml_edit::Table::new();
+        tb["id"] = toml_edit::value(id);
+        tb["format"] = toml_edit::value(format);
+        arr.push(tb);
+    }
     std::fs::write(&path, doc.to_string())?;
     Ok(path)
 }
@@ -2277,5 +2340,88 @@ mod persist_columns_tests {
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
         assert_eq!(s, "ui = 3\n", "el fichero no se toca en el camino de error");
+    }
+
+    /// #108 7b: sin entrada previa, `persist_column_format` crea el
+    /// `[[ui.columns.spec]]` con `id` + `format`.
+    #[test]
+    fn persist_column_format_crea_la_entrada() {
+        let dir = tempfile::tempdir().unwrap();
+        persist_column_format(dir.path(), "size", "si").expect("escritura");
+        let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert!(
+            s.contains("[[ui.columns.spec]]"),
+            "AoT bajo [ui.columns]: {s}"
+        );
+        assert!(s.contains(r#"id = "size""#), "{s}");
+        assert!(s.contains(r#"format = "si""#), "{s}");
+    }
+
+    /// Reemplazo POR ID: la entrada existente conserva sus OTROS campos
+    /// (header) y los comentarios del fichero; jamás nace una segunda
+    /// entrada para el mismo id.
+    #[test]
+    fn persist_column_format_reemplaza_por_id_preservando_campos() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("norte.toml"),
+            "# mi config\n[[ui.columns.spec]]\nid = \"size\"\nheader = \"Peso\"\nformat = \"iec\"\n",
+        )
+        .expect("seed");
+        persist_column_format(dir.path(), "size", "exact").expect("escritura");
+        let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert!(s.contains("# mi config"), "comentarios preservados: {s}");
+        assert!(
+            s.contains(r#"header = "Peso""#),
+            "los otros campos sobreviven: {s}"
+        );
+        assert!(s.contains(r#"format = "exact""#), "{s}");
+        assert!(!s.contains(r#"format = "iec""#), "sin entrada vieja: {s}");
+        assert_eq!(
+            s.matches(r#"id = "size""#).count(),
+            1,
+            "UNA entrada por id: {s}"
+        );
+    }
+
+    /// El `load` real relee lo escrito: dos ids → dos specs con su formato.
+    #[test]
+    fn persist_column_format_round_tripea_por_load() {
+        let dir = tempfile::tempdir().unwrap();
+        persist_column_format(dir.path(), "size", "si").expect("size");
+        persist_column_format(dir.path(), "mtime", "iso").expect("mtime");
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let cfg = load(&layers).expect("load");
+        assert_eq!(
+            cfg.ui_columns
+                .specs
+                .get("size")
+                .and_then(|sp| sp.format.as_deref()),
+            Some("si")
+        );
+        assert_eq!(
+            cfg.ui_columns
+                .specs
+                .get("mtime")
+                .and_then(|sp| sp.format.as_deref()),
+            Some("iso")
+        );
+    }
+
+    /// Guard de forma del precedente hotlist: `spec` escalar = error
+    /// limpio, sin pánico y sin tocar el fichero.
+    #[test]
+    fn persist_column_format_rechaza_spec_no_array_sin_panico() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("norte.toml"), "[ui.columns]\nspec = 3\n").expect("seed");
+        let err = persist_column_format(dir.path(), "size", "si").expect_err("forma inesperada");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert_eq!(
+            s, "[ui.columns]\nspec = 3\n",
+            "el fichero no se toca en el camino de error"
+        );
     }
 }

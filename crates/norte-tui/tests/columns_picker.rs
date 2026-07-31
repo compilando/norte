@@ -25,10 +25,14 @@ fn app() -> App {
 }
 
 /// La mitad EN SESIÓN de `apply_picked_columns` (main.rs): settings en
-/// memoria + re-sort de ambos panes.
+/// memoria (lista+sort y formatos ciclados, #108 7b) + re-sort de ambos
+/// panes.
 fn aplicar(app: &mut App, picked: &norte_frontend::columns_picker::Picked) {
     app.columns
         .apply_picked(picked.scheme_target.as_deref(), &picked.ids, picked.sort);
+    for (id, fmt) in &picked.formats {
+        app.columns.apply_format(id, fmt);
+    }
     for i in 0..2 {
         app.apply_scheme_sort(i);
     }
@@ -52,6 +56,10 @@ fn persistir(dir: &std::path::Path, picked: &norte_frontend::columns_picker::Pic
         },
     )
     .expect("persistencia");
+    // #108 7b: los formatos ciclados, como en el binario — tras la lista.
+    for (id, fmt) in &picked.formats {
+        norte_tui::config::persist_column_format(dir, id, fmt).expect("persistencia de formato");
+    }
 }
 
 /// Los builtin visibles del layout efectivo, en orden.
@@ -134,6 +142,53 @@ fn picker_toggle_persiste_la_lista() {
     assert!(s.contains("default = ["), "lista persistida: {s}");
     assert!(s.contains(r#""mtime""#), "mtime en la lista: {s}");
     assert!(!s.contains(r#""size""#), "size no debe persistirse: {s}");
+}
+
+/// #108 7b: `f` sobre size cicla iec→si; confirmar lo aplica EN SESIÓN
+/// (`style_for` lo ve al instante) y persiste un `[[ui.columns.spec]]` con
+/// `id = "size"`, `format = "si"` que el `load` real relee.
+#[test]
+fn picker_cicla_formato_y_persiste_spec() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut app = app();
+    app.open_columns_picker();
+    {
+        let p = app.columns_picker.as_mut().expect("picker abierto");
+        p.down(); // size
+        p.cycle_format(); // iec → si
+        assert_eq!(p.format_of_cursor().as_deref(), Some("si"));
+    }
+    let picked = app
+        .columns_picker
+        .as_ref()
+        .expect("picker abierto")
+        .finish();
+    app.columns_picker = None;
+    assert_eq!(picked.formats, vec![("size".to_owned(), "si".to_owned())]);
+    aplicar(&mut app, &picked);
+    assert_eq!(
+        app.columns.style_for("file", Builtin::Size).size_format,
+        norte_frontend::columns::SizeFormat::Si,
+        "la sesión ve el formato al instante"
+    );
+    persistir(dir.path(), &picked);
+    let s = std::fs::read_to_string(dir.path().join("norte.toml")).expect("leer");
+    assert!(s.contains(r#"id = "size""#), "spec persistido: {s}");
+    assert!(s.contains(r#"format = "si""#), "formato persistido: {s}");
+    // Round-trip por el loader REAL del frontend (capas del TUI).
+    let layers = norte_tui::config::Layers {
+        dirs: vec![(dir.path().to_path_buf(), norte_tui::config::Layer::User)],
+    };
+    let cfg = norte_tui::config::load(&layers).expect("load");
+    assert_eq!(
+        cfg.common
+            .ui_columns
+            .specs
+            .get("size")
+            .and_then(|sp| sp.format.as_deref()),
+        Some("si"),
+        "el fichero escrito re-carga con el spec"
+    );
 }
 
 /// Esc descarta: ni los settings de la sesión ni el disco cambian —

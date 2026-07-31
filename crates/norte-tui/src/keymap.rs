@@ -171,6 +171,7 @@ pub const DIALOG_COMMANDS: &[&str] = &[
     "dialog.move-up",
     "dialog.move-down",
     "dialog.sort",
+    "dialog.cycle-format",
 ];
 
 /// Id de Fluent con la descripción de un comando (`app.quit` →
@@ -372,6 +373,8 @@ mod tests {
             ((CtMods::SHIFT, CtCode::Char('K')), "dialog.move-up"),
             ((CtMods::SHIFT, CtCode::Char('J')), "dialog.move-down"),
             ((CtMods::CONTROL, CtCode::Char('s')), "dialog.sort"),
+            // #108 7b: `f` cicla el formato (libre en los tres [dialog]).
+            ((CtMods::NONE, CtCode::Char('f')), "dialog.cycle-format"),
         ];
         let known: Vec<&str> = COMMANDS
             .iter()
