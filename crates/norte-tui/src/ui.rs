@@ -639,7 +639,11 @@ fn draw_columns_picker(
         .unwrap_or(u16::MAX)
         .max(34)
         .min(frame.area().width);
-    let rows = u16::try_from(p.rows().len()).unwrap_or(8) + 2;
+    // M2 revisión 7a: saturante — una config hostil de 65k ids desbordaría
+    // el `+ 2` en debug; el `.min(alto del frame)` de abajo sigue clampando.
+    let rows = u16::try_from(p.rows().len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
     let area = centered(frame.area(), ancho, rows.min(frame.area().height.max(3)));
     frame.render_widget(ratatui::widgets::Clear, area);
     let items: Vec<ListItem<'_>> = filas.into_iter().map(ListItem::new).collect();

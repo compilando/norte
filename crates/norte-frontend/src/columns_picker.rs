@@ -53,8 +53,12 @@ impl ColumnsPicker {
                 Ok(ColumnId::Builtin(b)) => Some(b),
                 _ => None,
             };
+            // Dedup SOLO de builtins (mismo criterio que layout_items_for).
+            // Los duplicados OPACOS se PRESERVAN a propósito: son intención
+            // de config del usuario y el picker jamás la limpia (doctor la
+            // reporta) — no "arreglar" este if para deduplicarlos.
             if builtin.is_some() && rows.iter().any(|r| r.builtin == builtin) {
-                continue; // dedup builtin, mismo criterio que layout_items_for
+                continue;
             }
             rows.push(PickerRow {
                 id: id.clone(),

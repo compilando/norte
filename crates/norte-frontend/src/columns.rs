@@ -1034,6 +1034,10 @@ impl ColumnsSettings {
         ids: &[String],
         sort: crate::sort::SortSpec,
     ) {
+        // M3 revisión 7a: los diagnósticos de doctor (`invalid`/
+        // `unrenderable`) NO se recalculan aquí — `collect_diagnostics` solo
+        // AÑADE, jamás retira entradas rancias, así que llamarla mentiría;
+        // el re-resolve del hot-reload es quien los refresca honestos.
         let parsed = parse_ids(ids);
         if let Some(s) = target {
             self.raw_schemes.insert(s.to_owned(), ids.to_vec());

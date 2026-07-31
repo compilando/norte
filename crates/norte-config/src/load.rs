@@ -161,6 +161,13 @@ pub struct PersistSort<'a> {
 /// del caller. BLOQUEANTE: I/O de FS síncrono — el caller DEBE envolverla
 /// en `spawn_blocking` (regla 2), mismo patrón que `persist_hotlist_add`.
 ///
+/// CONTRATO: `scheme` debe ser un scheme de `VPath` VALIDADO
+/// (`[a-z][a-z0-9+.-]*`), como entregan los callers actuales
+/// (`VPath::scheme()`). `toml_edit` escapa la clave igualmente — no hay
+/// inyección — pero un string arbitrario viajaría en el `Display` del
+/// error del guard de forma, convirtiéndolo en carrier de contenido
+/// hostil (#73).
+///
 /// # Errors
 /// [`std::io::Error`] si el TOML existente no parsea, un nivel existente de
 /// la cadena no es una tabla (forma inesperada), o falla el I/O.
@@ -1835,6 +1842,45 @@ mod persist_columns_tests {
                 descending: true,
                 dirs_first: true
             })
+        );
+    }
+
+    /// Pin M1/L1 (revisión 7a): el PRIMER camino de escritura de ARRAY del
+    /// persistidor con un id hostil (comilla + salto de línea + header de
+    /// sección + RLO embebidos). `toml_edit` lo escapa (multi-line escapes),
+    /// jamás inyecta TOML: el `load` real relee la lista BYTE-IDÉNTICA, el
+    /// hostil sigue siendo UN elemento y la config no gana artefactos
+    /// (schemes intacto). El pin hostil existente
+    /// (`hotlist_round_trip_name_hostil_byte_identico`) solo cubría Values
+    /// escalares.
+    #[test]
+    fn persist_columns_id_hostil_round_tripea_por_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let hostil = "x\"]\n[evil]\u{202E}";
+        persist_columns(
+            dir.path(),
+            None,
+            &["name".to_owned(), hostil.to_owned()],
+            PersistSort {
+                column: "name",
+                descending: false,
+                dirs_first: true,
+            },
+        )
+        .expect("escritura");
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let cfg = load(&layers).expect("el id hostil no rompe el TOML");
+        assert_eq!(
+            cfg.ui_columns.default_columns.as_deref(),
+            Some(&["name".to_owned(), hostil.to_owned()][..]),
+            "la lista round-tripea byte-idéntica, sin inyección"
+        );
+        assert!(
+            cfg.ui_columns.schemes.is_empty(),
+            "sin artefactos inyectados: {:?}",
+            cfg.ui_columns.schemes
         );
     }
 
