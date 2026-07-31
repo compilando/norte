@@ -1611,8 +1611,9 @@ impl App {
         let [from] = items.as_slice() else {
             return;
         };
+        let from_marks = self.focused().marks_len() > 0;
         let to_dir = self.panes[1 - self.focus].dir().clone();
-        self.open_transfer_name_with(kind, from.clone(), to_dir);
+        self.open_transfer_name_with(kind, from.clone(), to_dir, from_marks);
     }
 
     /// Abre el rename in situ (shift+F6, #105): Move con destino en el
@@ -1627,14 +1628,29 @@ impl App {
         let Some(to_dir) = from.parent() else {
             return;
         };
-        self.open_transfer_name_with(TransferKind::Move, from, to_dir);
+        self.open_transfer_name_with(TransferKind::Move, from, to_dir, false);
     }
 
-    fn open_transfer_name_with(&mut self, kind: TransferKind, from: VPath, to_dir: VPath) {
+    fn open_transfer_name_with(
+        &mut self,
+        kind: TransferKind,
+        from: VPath,
+        to_dir: VPath,
+        from_marks: bool,
+    ) {
         let original = from
             .file_name()
             .map_or(Vec::new(), |n| n.as_bytes().to_vec());
-        let name = String::from_utf8_lossy(&original).into_owned();
+        let enc = self.focused().name_encoding();
+        // Prefill = lo que el pane PINTA (#98/M1): bajo reinterpretación,
+        // un nombre no-UTF8 se decodifica (#57) en vez de pasar por lossy
+        // — editar produce el texto que se VE; sin tocar siguen mandando
+        // los bytes originales.
+        let name = match (enc, std::str::from_utf8(&original)) {
+            (_, Ok(s)) => s.to_owned(),
+            (Some(e), Err(_)) => norte_encoding::decode_name(&original, e),
+            (None, Err(_)) => String::from_utf8_lossy(&original).into_owned(),
+        };
         self.modal = Some(Modal::TransferName {
             kind,
             from,
@@ -1642,6 +1658,8 @@ impl App {
             name,
             original,
             touched: false,
+            from_marks,
+            enc,
             error: None,
         });
     }
@@ -1665,7 +1683,9 @@ impl App {
         }
     }
 
-    /// Borra el último carácter (#105). Marca `touched`.
+    /// Borra el último carácter (#105). Marca `touched` SOLO si borró algo
+    /// (review MINOR-5: un pop vacío no debe estrechar la vía de bytes
+    /// originales).
     pub fn transfer_name_pop(&mut self) {
         if let Some(Modal::TransferName {
             name,
@@ -1673,8 +1693,8 @@ impl App {
             error,
             ..
         }) = &mut self.modal
+            && name.pop().is_some()
         {
-            name.pop();
             *touched = true;
             *error = None;
         }
@@ -1701,6 +1721,12 @@ impl App {
     /// BYTES originales (regla 1); tocado → los bytes del texto, y un texto
     /// que aún contiene U+FFFD (residuo del prefill lossy de un nombre
     /// hostil) se RECHAZA — confirmarlo escribiría mojibake real en disco.
+    /// El guard no distingue residuo de intención: también un U+FFFD
+    /// TECLEADO a propósito se rechaza (asimetría deliberada con el mkdir,
+    /// que no tiene prefill lossy del que heredar residuos). Bajo
+    /// reinterpretación (#57), un nombre TOCADO escribe los bytes UTF-8 del
+    /// texto decodificado — transcodifica a propósito: «ver el nombre bien
+    /// y arreglarlo» es el caso de uso, y el intocado sigue byte-exacto.
     /// `dest == from` también se rechaza (no-op; en rename, «mismo
     /// nombre»). El nombre pasa por [`norte_proto::Segment`] (ni vacío, ni
     /// `/`, ni NUL, ni `.`/`..`).
@@ -1744,9 +1770,15 @@ impl App {
         }
     }
 
-    /// Cierra el modal tras un submit que SÍ encoló (#105).
+    /// Cierra el modal tras un submit que SÍ encoló (#105) y, si el origen
+    /// era la MARCA, la CONSUME (review MAJOR-1 — misma doctrina que el
+    /// lote: la selección se consume al ENVIAR). Esc y los fallos jamás
+    /// consumen.
     pub fn transfer_name_submitted(&mut self) {
-        if matches!(self.modal, Some(Modal::TransferName { .. })) {
+        if let Some(Modal::TransferName { from_marks, .. }) = &self.modal {
+            if *from_marks {
+                self.focused_mut().clear_marks();
+            }
             self.modal = None;
             self.open_next_pending();
         }
@@ -2161,6 +2193,16 @@ pub enum Modal {
         /// ¿Se editó alguna vez? El primer push/pop lo fija: desde ahí el
         /// nombre es el texto (doctrina #103: editas lo que VES).
         touched: bool,
+        /// El origen era la MARCA (no el cursor): el submit que encola la
+        /// CONSUME (#105 review MAJOR-1 — mc/TC: la selección se consume al
+        /// enviar, también con un solo ítem). Un rename (cursor) jamás.
+        from_marks: bool,
+        /// Reinterpretación de nombres del pane al ABRIR (#98/M1 y #105
+        /// review MAJOR-2): el prefill de un nombre no-UTF8 es el TEXTO que
+        /// el pane pinta bajo ella (decode #57), no el lossy — sin esto un
+        /// fichero cp437 era irrenombrable (todo edit tropezaba con el
+        /// guard de U+FFFD). El render del dir destino usa la misma.
+        enc: Option<norte_encoding::NameEncoding>,
         /// Diagnóstico del último intento inválido.
         error: Option<String>,
     },
@@ -3276,6 +3318,49 @@ mod tests {
         assert_eq!(kind, TransferKind::Move);
         assert_eq!(from, VPath::parse("mem:///a.txt").unwrap());
         assert_eq!(dest, VPath::parse("mem:///a.txt2").unwrap());
+    }
+
+    /// #105 review MAJOR-1: el submit de UN ítem que vino de la MARCA la
+    /// CONSUME (doctrina mc/TC del lote); un rename (cursor) jamás toca
+    /// las marcas, y Esc tampoco.
+    #[test]
+    fn el_submit_de_un_item_consume_la_marca_y_el_rename_no() {
+        let dir = VPath::parse("mem:///").unwrap();
+        let mk = |n: &str| Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: dir.join(norte_proto::Segment::new(n.as_bytes().to_vec()).unwrap()),
+            kind: EntryKind::File,
+            size: None,
+            mtime_ms: None,
+        };
+        let mut app = App::new(
+            Pane::new(dir.clone(), vec![mk("a"), mk("b")]),
+            Pane::new(VPath::parse("mem:///dst").unwrap(), Vec::new()),
+        );
+        app.focused_mut().toggle_mark(); // marca "a"
+        app.focused_mut().move_down(1); // cursor en "b"
+        app.open_transfer_name(TransferKind::Copy);
+        let (_, from, _) = app.transfer_name_confirm().expect("válido");
+        assert_eq!(
+            from,
+            VPath::parse("mem:///a").unwrap(),
+            "la MARCA, no el cursor"
+        );
+        app.transfer_name_submitted();
+        assert_eq!(app.focused().marks_len(), 0, "el envío consume la marca");
+
+        // Esc no consume.
+        app.focused_mut().toggle_mark(); // marca "b" (cursor sigue ahí)
+        app.open_transfer_name(TransferKind::Copy);
+        app.cancel_transfer_name();
+        assert_eq!(app.focused().marks_len(), 1, "cancelar conserva la marca");
+
+        // Rename (cursor) no toca marcas ajenas.
+        app.open_rename();
+        app.transfer_name_push('2');
+        assert!(app.transfer_name_confirm().is_some());
+        app.transfer_name_submitted();
+        assert_eq!(app.focused().marks_len(), 1, "el rename no consume marcas");
     }
 
     /// #105 (regla 1, corpus canónico): renombrar un nombre hostil a uno

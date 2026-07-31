@@ -852,19 +852,18 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
                 .unwrap_or(u16::MAX)
                 .saturating_add(5)
         }
-        // host + algo + fingerprint + nota + teclas (5 líneas) + bordes.
-        Modal::TrustHostKey { .. } => 9,
+        // TrustHostKey: host + algo + fingerprint + nota + teclas (5 líneas)
+        // + bordes. TransferName con error (#105): origen + dir destino +
+        // campo + hint + teclas + error (6 líneas), +3.
+        Modal::TrustHostKey { .. } | Modal::TransferName { error: Some(_), .. } => 9,
         // TrustLuaInit: un mensaje largo con wrap (~4 líneas a 58 cols) +
-        // bordes. TransferName con error (#105): dir destino + campo + hint
-        // + teclas + error (5 líneas), +3.
-        Modal::TrustLuaInit { .. } | Modal::TransferName { error: Some(_), .. } => 8,
+        // bordes. TransferName sin error: 5 líneas de cuerpo (origen y dir
+        // destino incluidos), +3.
+        Modal::TrustLuaInit { .. } | Modal::TransferName { .. } => 8,
         // Patrón/mkdir + hint + teclas (3 líneas) o + la línea de error (4),
         // más bordes (#103 T9: mismo cómputo `body_lines + 3` que el resto).
         // Sin error caen al comodín `6` de abajo (match_same_arms).
-        // TransferName sin error: 4 líneas de cuerpo (dir destino incluido).
-        Modal::MarkPattern { error: Some(_), .. }
-        | Modal::Mkdir { error: Some(_), .. }
-        | Modal::TransferName { .. } => 7,
+        Modal::MarkPattern { error: Some(_), .. } | Modal::Mkdir { error: Some(_), .. } => 7,
         _ => 6,
     }
 }
@@ -997,14 +996,21 @@ fn modal_title_body(
         // todo de usuario y todo enmascarado.
         Modal::TransferName {
             kind,
+            from,
             to_dir,
             name,
             error,
+            enc,
             ..
-        } => transfer_name_modal_text(*kind, to_dir, name, error.as_deref()),
+        } => transfer_name_modal_text(*kind, from, to_dir, name, error.as_deref(), *enc),
     }
 }
 
+/// Pinta el modal activo: borde (de aviso en las superficies de decisión
+/// duras), título y cuerpo de `modal_title_body`. `reinterpret` es la
+/// reinterpretación del pane con foco AL PINTAR — los modales que capturan
+/// la suya al abrir (`Collision` #98/M1, `TransferName` #105) la ignoran a
+/// favor de la capturada.
 fn draw_modal(
     frame: &mut Frame<'_>,
     modal: &crate::app::Modal,
@@ -1151,9 +1157,11 @@ fn mkdir_modal_text(name: &str, error: Option<&str>) -> (String, String) {
 /// #103).
 fn transfer_name_modal_text(
     kind: crate::app::TransferKind,
+    from: &norte_proto::VPath,
     to_dir: &norte_proto::VPath,
     name: &str,
     error: Option<&str>,
+    enc: Option<norte_encoding::NameEncoding>,
 ) -> (String, String) {
     let (masked, hostil) = display_name(name.as_bytes());
     let campo = if hostil {
@@ -1161,14 +1169,20 @@ fn transfer_name_modal_text(
     } else {
         format!("{masked}_")
     };
-    let (dir_line, dir_hostil) = norte_frontend::path_display(to_dir);
-    let dir_line = if dir_hostil {
-        format!("{HOSTILE_BADGE} {dir_line}")
-    } else {
-        dir_line
+    // #105 review MAJOR-2/MINOR-1: origen y dir destino, cada uno en SU
+    // línea con la flecha fuera de banda, bajo la reinterpretación
+    // CAPTURADA al abrir (#98/M1 — jamás la del pane al pintar).
+    let badge_line = |p: &norte_proto::VPath| {
+        let (line, hostil) = norte_frontend::path_display_with(p, enc);
+        if hostil {
+            format!("{HOSTILE_BADGE} {line}")
+        } else {
+            line
+        }
     };
     let mut lines = vec![
-        format!("→ {dir_line}"),
+        badge_line(from),
+        format!("→ {}", badge_line(to_dir)),
         campo,
         t("modal-transfer-name-hint"),
         t("modal-mark-pattern-keys"),
@@ -1182,6 +1196,41 @@ fn transfer_name_modal_text(
         crate::app::TransferKind::Move => t("modal-transfer-name-move"),
     };
     (title, lines.join("\n"))
+}
+
+#[cfg(test)]
+mod transfer_name_modal_text_tests {
+    use super::transfer_name_modal_text;
+    use crate::app::TransferKind;
+    use norte_proto::VPath;
+
+    /// #105 review MINOR-2 (misma clase que el M4 del patrón): fn PURA — un
+    /// RLO crudo en nombre y error sale enmascarado, y un byte hostil en el
+    /// ORIGEN y el dir destino jamás llega crudo (`path_display` los enmascara
+    /// y llevan badge).
+    #[test]
+    fn masks_every_user_surface() {
+        let hostile = "abc\u{202E}rid";
+        let from = VPath::parse("mem:///src/a%FF.txt").unwrap();
+        let to_dir = VPath::parse("mem:///dst%FE").unwrap();
+        let (_, cuerpo) = transfer_name_modal_text(
+            TransferKind::Move,
+            &from,
+            &to_dir,
+            hostile,
+            Some(hostile),
+            None,
+        );
+        assert!(!cuerpo.contains('\u{202E}'), "{cuerpo:?}");
+        assert!(
+            cuerpo.matches('\u{FFFD}').count() >= 4,
+            "nombre + error (RLO) y origen + destino (bytes): {cuerpo:?}"
+        );
+        assert!(
+            cuerpo.matches(super::HOSTILE_BADGE).count() >= 2,
+            "{cuerpo:?}"
+        );
+    }
 }
 
 #[cfg(test)]
