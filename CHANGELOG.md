@@ -9,6 +9,15 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Column and sort configuration (#108 block 4):** `[ui.columns]` chooses
+  which built-in columns each pane paints and the sort order — globally and
+  per scheme (an override REPLACES the list; sort vocabulary is closed and
+  validated at load). Both frontends seed the sort at startup and re-apply
+  it when a cd lands on another scheme (the GUI consumes the sort only —
+  its cells arrive with block 6). A configured column id that does not
+  parse, or that has no renderer yet (attr:/plugin:), never disappears
+  silently: `norte doctor` names it. Per-column width/format overrides
+  (`[[ui.columns.spec]]`) land with the picker block.
 - **Size and date in the TUI listing (#108 block 5):** the pane paints the
   default column set — name, size (IEC), modified (relative time) — under a
   dim header line carrying the sort indicator; absent values stay blank

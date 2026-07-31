@@ -343,6 +343,63 @@ pub struct AiSettings {
     pub providers: std::collections::BTreeMap<String, crate::schema::AiProviderEntry>,
 }
 
+/// `[ui.columns] sort` resuelto y VALIDADO (#108): vocabulario cerrado —
+/// un valor inválido es error de carga con la ruta culpable (patrón
+/// `quick_search`). El default reproduce el orden histórico.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SortChoice {
+    /// Columna de orden.
+    pub column: SortColumnKey,
+    /// Dirección.
+    pub descending: bool,
+    /// Directorios primero.
+    pub dirs_first: bool,
+}
+
+impl Default for SortChoice {
+    fn default() -> Self {
+        Self {
+            column: SortColumnKey::Name,
+            descending: false,
+            dirs_first: true,
+        }
+    }
+}
+
+/// Columna de orden del vocabulario CERRADO de config (#108). El frontend
+/// la mapea a su `SortSpec`; separada para no invertir la dirección de
+/// dependencias (config no conoce al frontend).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortColumnKey {
+    /// Nombre.
+    Name,
+    /// Tamaño.
+    Size,
+    /// Fecha de modificación.
+    Mtime,
+}
+
+/// `[ui.columns]` resuelto (#108): ids CRUDOS (set abierto — los parsea el
+/// frontend, los reporta doctor) + sort validado + overrides por scheme.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ColumnsConfig {
+    /// Ids de columna en orden de pintado; `None` = default built-in.
+    pub default_columns: Option<Vec<String>>,
+    /// Orden global; `None` = histórico (name/asc/dirs-first).
+    pub sort: Option<SortChoice>,
+    /// Overrides por scheme (la lista REEMPLAZA, jamás mezcla).
+    pub schemes: std::collections::BTreeMap<String, SchemeColumns>,
+}
+
+/// Override de un scheme dentro de [`ColumnsConfig`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SchemeColumns {
+    /// Lista de columnas del scheme; `None` = hereda la default.
+    pub columns: Option<Vec<String>>,
+    /// Orden del scheme; `None` = hereda el global.
+    pub sort: Option<SortChoice>,
+}
+
 /// The merged `norte.toml` scalars — everything that is NOT a frontend-only
 /// pass (keymap layers, openers). Core consumers read `archive_*`/`ai`;
 /// frontends wrap this in their own loaded-config type.
@@ -378,6 +435,9 @@ pub struct CommonConfig {
     /// Project — presentation-only, same class as the other `[ui]` scalars
     /// above.
     pub ui_confirm_quit: ConfirmQuit,
+    /// `[ui.columns]` (#108, last-wins POR CAMPO; schemes se fusionan por
+    /// clave con el último ganando). Presentación-solo: todas las capas.
+    pub ui_columns: ColumnsConfig,
     /// `[ui] show_hidden` (#107, last-wins; None = show everything). Honored
     /// from ALL layers including Project — presentation-only, same class as
     /// the other `[ui]` scalars above: hiding dotfiles cannot launch, write,
@@ -529,6 +589,68 @@ fn merge_ui_fonts(
     Ok(())
 }
 
+/// Fusiona una capa de `[ui.columns]` sobre el acumulado (#108): last-wins
+/// por campo; los schemes se fusionan por clave (el último gana por campo).
+fn merge_ui_columns(
+    acc: &mut ColumnsConfig,
+    cols: &crate::schema::UiColumnsSection,
+    norte: &Path,
+) -> Result<(), ConfigError> {
+    if let Some(d) = &cols.default {
+        acc.default_columns = Some(d.clone());
+    }
+    if let Some(sort) = &cols.sort {
+        acc.sort = Some(parse_sort_section(sort, norte)?);
+    }
+    if let Some(schemes) = &cols.scheme {
+        for (k, v) in schemes {
+            let entry = acc.schemes.entry(k.clone()).or_default();
+            if let Some(c) = &v.columns {
+                entry.columns = Some(c.clone());
+            }
+            if let Some(sort) = &v.sort {
+                entry.sort = Some(parse_sort_section(sort, norte)?);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Valida un [`crate::schema::SortSection`] (#108): vocabulario CERRADO,
+/// inválido = error con la ruta (patrón `quick_search`). Los campos
+/// ausentes caen al default histórico.
+fn parse_sort_section(
+    raw: &crate::schema::SortSection,
+    norte: &Path,
+) -> Result<SortChoice, ConfigError> {
+    let column = match raw.column.as_deref() {
+        None | Some("name") => SortColumnKey::Name,
+        Some("size") => SortColumnKey::Size,
+        Some("mtime") => SortColumnKey::Mtime,
+        Some(_) => {
+            return Err(ConfigError::Toml {
+                path: norte.to_path_buf(),
+                message: "[ui.columns] sort.column: name | size | mtime".to_owned(),
+            });
+        }
+    };
+    let descending = match raw.dir.as_deref() {
+        None | Some("asc") => false,
+        Some("desc") => true,
+        Some(_) => {
+            return Err(ConfigError::Toml {
+                path: norte.to_path_buf(),
+                message: "[ui.columns] sort.dir: asc | desc".to_owned(),
+            });
+        }
+    };
+    Ok(SortChoice {
+        column,
+        descending,
+        dirs_first: raw.dirs_first.unwrap_or(true),
+    })
+}
+
 /// Parses `[ui] quick_search`'s raw string into [`QuickSearch`]. Same #73
 /// caution as `toml_diag`: a hostile TOML could stuff a bidi/kilometric
 /// string into anything, and this is a two-value field — naming the
@@ -586,6 +708,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_reduce_motion: Option<bool> = None;
     let mut ui_confirm_quit = ConfirmQuit::default();
     let mut ui_show_hidden: Option<bool> = None;
+    let mut ui_columns = ColumnsConfig::default();
     let mut daemon_mode: Option<DaemonMode> = None;
     let mut daemon_socket: Option<PathBuf> = None;
     let mut hotlist: Vec<HotlistItem> = Vec::new();
@@ -627,8 +750,9 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             if let Some(cq) = &parsed.ui.confirm_quit {
                 ui_confirm_quit = parse_confirm_quit(cq, &norte)?;
             }
-            if let Some(sh) = parsed.ui.show_hidden {
-                ui_show_hidden = Some(sh);
+            ui_show_hidden = parsed.ui.show_hidden.or(ui_show_hidden);
+            if let Some(cols) = &parsed.ui.columns {
+                merge_ui_columns(&mut ui_columns, cols, &norte)?;
             }
             // `[daemon]` is NOT honored from Project either (review MAJOR-1):
             // a foreign repo must not redirect the core transport to an
@@ -684,6 +808,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_reduce_motion,
         ui_confirm_quit,
         ui_show_hidden,
+        ui_columns,
         daemon_mode,
         daemon_socket,
         hotlist,
@@ -980,6 +1105,70 @@ mod hotlist_tests {
         assert_eq!(cfg.ui_font.as_deref(), Some("Inter"));
         assert_eq!(cfg.ui_mono_font.as_deref(), Some("JetBrains Mono"));
         assert!((cfg.ui_font_size.unwrap() - 15.5).abs() < f32::EPSILON);
+    }
+
+    /// `[ui.columns]` (#108): sort validado (vocabulario cerrado, inválido
+    /// = error con ruta), ids crudos last-wins, schemes fusionados por
+    /// clave con el último ganando por campo.
+    #[test]
+    fn ui_columns_carga_valida_y_fusiona() {
+        let system = tempfile::tempdir().unwrap();
+        std::fs::write(
+            system.path().join("norte.toml"),
+            "[ui.columns]\ndefault = [\"name\", \"size\"]\nsort = { column = \"mtime\", dir = \"desc\" }\n[ui.columns.scheme.sftp]\ncolumns = [\"name\", \"attr:posix.mode\"]\n",
+        )
+        .unwrap();
+        let user = tempfile::tempdir().unwrap();
+        std::fs::write(
+            user.path().join("norte.toml"),
+            "[ui.columns.scheme.sftp]\nsort = { column = \"size\" }\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (system.path().to_path_buf(), Layer::System),
+                (user.path().to_path_buf(), Layer::User),
+            ],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(
+            cfg.ui_columns.default_columns.as_deref(),
+            Some(&["name".to_owned(), "size".to_owned()][..])
+        );
+        assert_eq!(
+            cfg.ui_columns.sort,
+            Some(SortChoice {
+                column: SortColumnKey::Mtime,
+                descending: true,
+                dirs_first: true
+            })
+        );
+        let sftp = &cfg.ui_columns.schemes["sftp"];
+        assert_eq!(
+            sftp.columns.as_deref(),
+            Some(&["name".to_owned(), "attr:posix.mode".to_owned()][..]),
+            "la capa user no la pisó (solo trajo sort)"
+        );
+        assert_eq!(
+            sftp.sort,
+            Some(SortChoice {
+                column: SortColumnKey::Size,
+                descending: false,
+                dirs_first: true
+            })
+        );
+
+        // Vocabulario cerrado: columna de sort inválida = error de carga.
+        let bad = tempfile::tempdir().unwrap();
+        std::fs::write(
+            bad.path().join("norte.toml"),
+            "[ui.columns]\nsort = { column = \"colour\" }\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![(bad.path().to_path_buf(), Layer::User)],
+        };
+        assert!(load(&layers).is_err());
     }
 
     /// `[ui] show_hidden` (#107): last-wins, todas las capas — misma clase

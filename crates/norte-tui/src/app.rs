@@ -606,6 +606,10 @@ pub use norte_frontend::{display_name, path_display, sort_entries};
 pub struct App {
     /// Los dos paneles (izquierda, derecha).
     pub panes: [Pane; 2],
+    /// Config de columnas resuelta (#108 bloque 4): set por scheme + sort.
+    /// La siembra el arranque desde `[ui.columns]`; el render y los hooks
+    /// de cd la consultan.
+    pub columns: norte_frontend::columns::ColumnsSettings,
     /// `now` para las celdas de tiempo RELATIVO (#108 L5): `None` = reloj
     /// real; los tests de snapshot fijan `Some(ms)` para render estable.
     pub render_now_ms: Option<i64>,
@@ -1332,6 +1336,7 @@ impl App {
         Self {
             panes: [left, right],
             render_now_ms: None,
+            columns: norte_frontend::columns::ColumnsSettings::default(),
             focus: 0,
             quit: false,
             pending: String::new(),
@@ -1554,6 +1559,15 @@ impl App {
     /// terminó (#103).
     pub fn consume_marks(&mut self) {
         self.focused_mut().clear_marks();
+    }
+
+    /// Aplica a `pane` el orden de SU scheme según la config (#108 b4):
+    /// llamado al aterrizar un cd (el scheme puede haber cambiado) y al
+    /// arrancar. `set_sort` es no-op si el spec no cambia.
+    pub fn apply_scheme_sort(&mut self, pane: usize) {
+        let scheme = self.panes[pane].dir().scheme().to_owned();
+        let spec = self.columns.sort_for(&scheme);
+        self.panes[pane].set_sort(spec);
     }
 
     /// Abre el modal de marcado por patrón (#103).
@@ -3333,6 +3347,47 @@ mod tests {
         assert_eq!(kind, TransferKind::Move);
         assert_eq!(from, VPath::parse("mem:///a.txt").unwrap());
         assert_eq!(dest, VPath::parse("mem:///a.txt2").unwrap());
+    }
+
+    /// #108 b4: `apply_scheme_sort` aplica el orden de la config al pane
+    /// según su scheme — el hook de cd y el arranque pasan por aquí.
+    #[test]
+    fn apply_scheme_sort_ordena_por_la_config() {
+        use norte_frontend::columns::ColumnsSettings;
+        let dir = VPath::parse("mem:///").unwrap();
+        let mk = |n: &str, size: Option<u64>| {
+            let mut e = e(&format!("mem:///{n}"), EntryKind::File);
+            e.size = size;
+            e
+        };
+        let mut app = App::new(
+            Pane::new(dir.clone(), vec![mk("a", Some(3)), mk("b", Some(1))]),
+            Pane::new(dir, Vec::new()),
+        );
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: None,
+            sort: Some(norte_config::SortChoice {
+                column: norte_config::SortColumnKey::Size,
+                descending: false,
+                dirs_first: true,
+            }),
+            schemes: std::collections::BTreeMap::new(),
+        };
+        app.columns = ColumnsSettings::resolve(&cfg);
+        app.apply_scheme_sort(0);
+        let orden: Vec<_> = app.panes[0]
+            .entries()
+            .iter()
+            .map(|e| e.path.clone())
+            .collect();
+        assert_eq!(
+            orden,
+            vec![
+                VPath::parse("mem:///b").unwrap(),
+                VPath::parse("mem:///a").unwrap()
+            ],
+            "size asc desde la config"
+        );
     }
 
     /// #105 review MAJOR-1: el submit de UN ítem que vino de la MARCA la

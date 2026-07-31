@@ -118,6 +118,10 @@ mod sp {
 struct NorteGui {
     /// Los dos panes (modelo puro compartido con la TUI).
     panes: [PaneState; 2],
+    /// Config de columnas resuelta (#108 b4): hoy la GUI solo consume el
+    /// SORT por scheme (las celdas llegan en el bloque 6). OJO: `columns`
+    /// (a secas) son las columnas de PLUGIN por pane (G3c) — otra cosa.
+    column_settings: norte_frontend::columns::ColumnsSettings,
     /// Pane con el foco (0|1): recibe el input de teclado.
     focus: usize,
     /// Texto del quick search por pane, PARALELO a `PaneState` solo para
@@ -388,6 +392,12 @@ impl NorteGui {
             .ok()
             .and_then(|cfg| cfg.common.ui_show_hidden)
             .unwrap_or(true);
+        // #108 b4: columnas/orden resueltos del `[ui.columns]` cargado.
+        let columns_settings = loaded
+            .as_ref()
+            .ok()
+            .map(|cfg| norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns))
+            .unwrap_or_default();
 
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
@@ -487,6 +497,7 @@ impl NorteGui {
                         PaneState::new(dir.clone(), Vec::new()),
                         PaneState::new(dir.clone(), Vec::new()),
                     ],
+                    column_settings: norte_frontend::columns::ColumnsSettings::default(),
                     focus: 0,
                     query: [String::new(), String::new()],
                     errors: [None, None],
@@ -529,8 +540,13 @@ impl NorteGui {
                     ],
                     plugin_config_summaries: Vec::new(),
                 };
+                gui.column_settings = columns_settings;
                 for pane in &mut gui.panes {
                     pane.set_show_hidden(show_hidden);
+                }
+                let spec = gui.column_settings.sort_for(dir.scheme());
+                for pane in &mut gui.panes {
+                    pane.set_sort(spec);
                 }
                 gui.spawn_event_loop(event_rx, cx);
                 gui.cd(0, dir.clone(), cx);
@@ -551,6 +567,7 @@ impl NorteGui {
                         PaneState::new(placeholder.clone(), Vec::new()),
                         PaneState::new(placeholder, Vec::new()),
                     ],
+                    column_settings: norte_frontend::columns::ColumnsSettings::default(),
                     focus: 0,
                     query: [String::new(), String::new()],
                     errors: {
@@ -616,6 +633,10 @@ impl NorteGui {
         // por `set_listing` (limpia las marcas), aunque `refresh_dir` hubiera
         // marcado el flag para una list anterior ya obsoleta.
         self.refreshing[pane] = false;
+        // #108 b4: el orden del scheme destino se aplica ANTES de que
+        // aterrice el listado (set_listing ingiere bajo el spec del pane).
+        let spec = self.column_settings.sort_for(dir.scheme());
+        self.panes[pane].set_sort(spec);
         self.panes[pane].begin_loading(dir.clone());
         self.errors[pane] = None;
         self.query[pane].clear();

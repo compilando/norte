@@ -166,6 +166,62 @@ pub struct UiSection {
     /// initial state.
     #[serde(default)]
     pub show_hidden: Option<bool>,
+    /// `[ui.columns]` (#108 block 4): column selection and sort order.
+    #[serde(default)]
+    pub columns: Option<UiColumnsSection>,
+}
+
+/// The `[ui.columns]` section (#108, columns design Layer 4). Column IDS are
+/// raw strings here (an open set — `attr:`/`plugin:` forms exist before
+/// their renderer does): the frontend parses them and `norte doctor`
+/// reports the unusable ones. The SORT vocabulary is closed and validated
+/// at load (same pattern as `quick_search`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct UiColumnsSection {
+    /// Column ids in paint order (`"name"`, `"size"`, `"mtime"`, `"kind"`,
+    /// `"attr:<id>"`, `"plugin:<plugin>/<column>"`). Absent = the built-in
+    /// default (`name`, `size`, `mtime`).
+    #[serde(default)]
+    pub default: Option<Vec<String>>,
+    /// Global sort order. Absent = name/asc/dirs-first.
+    #[serde(default)]
+    pub sort: Option<SortSection>,
+    /// Per-scheme overrides, keyed by scheme (`sftp`, `s3`…). An override
+    /// REPLACES the column list — it never merges (design decision: merging
+    /// makes "why is this column here?" unanswerable).
+    #[serde(default)]
+    pub scheme: Option<std::collections::BTreeMap<String, SchemeColumnsSection>>,
+}
+
+/// A sort choice inside `[ui.columns]`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SortSection {
+    /// `"name"` | `"size"` | `"mtime"` — closed, validated at load.
+    #[serde(default)]
+    pub column: Option<String>,
+    /// `"asc"` | `"desc"` — closed, validated at load.
+    #[serde(default)]
+    pub dir: Option<String>,
+    /// Directories first (default `true`).
+    #[serde(default)]
+    pub dirs_first: Option<bool>,
+}
+
+/// One scheme's override inside `[ui.columns.scheme.<scheme>]`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SchemeColumnsSection {
+    /// Column ids for panes on this scheme (replaces the default list).
+    #[serde(default)]
+    pub columns: Option<Vec<String>>,
+    /// Sort for panes on this scheme.
+    #[serde(default)]
+    pub sort: Option<SortSection>,
 }
 
 /// The `[keymap]` section of `norte.toml`.

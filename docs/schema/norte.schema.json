@@ -184,10 +184,120 @@
       },
       "type": "object"
     },
+    "SchemeColumnsSection": {
+      "additionalProperties": false,
+      "description": "One scheme's override inside `[ui.columns.scheme.<scheme>]`.",
+      "properties": {
+        "columns": {
+          "default": null,
+          "description": "Column ids for panes on this scheme (replaces the default list).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "sort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SortSection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Sort for panes on this scheme."
+        }
+      },
+      "type": "object"
+    },
+    "SortSection": {
+      "additionalProperties": false,
+      "description": "A sort choice inside `[ui.columns]`.",
+      "properties": {
+        "column": {
+          "default": null,
+          "description": "`\"name\"` | `\"size\"` | `\"mtime\"` — closed, validated at load.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dir": {
+          "default": null,
+          "description": "`\"asc\"` | `\"desc\"` — closed, validated at load.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dirs_first": {
+          "default": null,
+          "description": "Directories first (default `true`).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "UiColumnsSection": {
+      "additionalProperties": false,
+      "description": "The `[ui.columns]` section (#108, columns design Layer 4). Column IDS are\nraw strings here (an open set — `attr:`/`plugin:` forms exist before\ntheir renderer does): the frontend parses them and `norte doctor`\nreports the unusable ones. The SORT vocabulary is closed and validated\nat load (same pattern as `quick_search`).",
+      "properties": {
+        "default": {
+          "default": null,
+          "description": "Column ids in paint order (`\"name\"`, `\"size\"`, `\"mtime\"`, `\"kind\"`,\n`\"attr:<id>\"`, `\"plugin:<plugin>/<column>\"`). Absent = the built-in\ndefault (`name`, `size`, `mtime`).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "scheme": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SchemeColumnsSection"
+          },
+          "description": "Per-scheme overrides, keyed by scheme (`sftp`, `s3`…). An override\nREPLACES the column list — it never merges (design decision: merging\nmakes \"why is this column here?\" unanswerable).",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "sort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SortSection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Global sort order. Absent = name/asc/dirs-first."
+        }
+      },
+      "type": "object"
+    },
     "UiSection": {
       "additionalProperties": false,
       "description": "The `[ui]` section of `norte.toml`.",
       "properties": {
+        "columns": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UiColumnsSection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`[ui.columns]` (#108 block 4): column selection and sort order."
+        },
         "confirm_quit": {
           "default": null,
           "description": "Whether `app.quit` confirms before closing (S2): `\"auto\"` (default)\nconfirms only with pending work (active tasks in the TUI's board,\ntasks/marks in the GUI — the behavior before this setting existed,\npreserved as the default rather than a fixed point in time);\n`\"always\"` always confirms, even with nothing pending; `\"never\"`\ncloses immediately.\n\n[`crate::load::load`] rejects other values (same pattern as\n`quick_search`) so its diagnostic can include the source path.",

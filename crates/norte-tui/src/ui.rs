@@ -62,7 +62,15 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     });
 
     for (i, pane) in app.panes.iter().enumerate() {
-        draw_pane(frame, cols[i], pane, app.focus() == i, &app.theme, now_ms);
+        draw_pane(
+            frame,
+            cols[i],
+            pane,
+            app.focus() == i,
+            &app.theme,
+            now_ms,
+            &app.columns,
+        );
     }
     draw_tasks(frame, rows[1], app);
     draw_status(frame, rows[2], app);
@@ -270,12 +278,15 @@ fn take_width(s: &str, max: usize) -> String {
 
 /// Anchos de las columnas por defecto (#108) para el ancho interior del
 /// pane: `(builtin, ancho)` de las columnas VIVAS, en orden de pintado.
-fn column_widths(inner_width: u16) -> Vec<(norte_frontend::columns::Builtin, u16)> {
-    let defaults = norte_frontend::columns::default_layout_items();
-    let items: Vec<_> = defaults.iter().map(|(_, it)| *it).collect();
+fn column_widths(
+    settings: &norte_frontend::columns::ColumnsSettings,
+    scheme: &str,
+    inner_width: u16,
+) -> Vec<(norte_frontend::columns::Builtin, u16)> {
+    let set = settings.layout_items_for(scheme);
+    let items: Vec<_> = set.iter().map(|(_, it)| *it).collect();
     let placed = norte_frontend::columns::layout(inner_width, &items);
-    defaults
-        .iter()
+    set.iter()
         .zip(placed)
         .filter_map(|((b, _), w)| w.map(|w| (*b, w)))
         .collect()
@@ -1593,6 +1604,7 @@ fn draw_pane(
     focused: bool,
     theme: &TuiTheme,
     now_ms: i64,
+    settings: &norte_frontend::columns::ColumnsSettings,
 ) {
     let border_style = if focused {
         theme.role(Role::BorderFocus)
@@ -1643,7 +1655,7 @@ fn draw_pane(
     // #108 L5: anchos de columna del ancho INTERIOR del pane, una vez por
     // frame — las filas y la cabecera comparten el mismo layout.
     let inner_w = block.inner(area).width;
-    let widths = &column_widths(inner_w);
+    let widths = &column_widths(settings, pane.dir().scheme(), inner_w);
     let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = match pane.quick_visible() {
         Some(vis) => (
             vis.iter()

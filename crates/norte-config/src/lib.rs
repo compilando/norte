@@ -20,8 +20,9 @@ pub use dirs::{
     user_config_dir, user_config_dir_from,
 };
 pub use load::{
-    AiSettings, CommonConfig, ConfirmQuit, HotlistItem, QuickSearch, load, persist_hotlist_add,
-    persist_hotlist_remove, persist_set, persist_ui_theme, persist_ui_theme_to,
+    AiSettings, ColumnsConfig, CommonConfig, ConfirmQuit, HotlistItem, QuickSearch, SchemeColumns,
+    SortChoice, SortColumnKey, load, persist_hotlist_add, persist_hotlist_remove, persist_set,
+    persist_ui_theme, persist_ui_theme_to,
 };
 pub use schema::{
     AiProviderEntry, AiSection, ArchiveSection, ConfigError, DEFAULT_PRESET, DaemonMode,

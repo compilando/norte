@@ -528,6 +528,69 @@ pub fn format_mode_rwx(mode: u32) -> String {
 }
 
 #[cfg(test)]
+mod settings_tests {
+    use super::*;
+    use crate::sort::{SortColumn, SortDir};
+
+    #[test]
+    fn resolve_parsea_diagnostica_y_resuelve_por_scheme() {
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: Some(vec![
+                "size".into(),
+                "rota!!".into(),
+                "attr:posix.mode".into(),
+            ]),
+            sort: Some(norte_config::SortChoice {
+                column: norte_config::SortColumnKey::Mtime,
+                descending: true,
+                dirs_first: true,
+            }),
+            schemes: [(
+                "sftp".to_owned(),
+                norte_config::SchemeColumns {
+                    columns: Some(vec!["name".into(), "kind".into()]),
+                    sort: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let st = ColumnsSettings::resolve(&cfg);
+        assert_eq!(
+            st.invalid,
+            vec!["rota!!".to_owned()],
+            "diagnóstico, no drop mudo"
+        );
+        assert_eq!(st.unrenderable, vec!["attr:posix.mode".to_owned()]);
+
+        // Default: size + (attr saltado) → name ANTEPUESTO (jamás sin nombre).
+        let items = st.layout_items_for("file");
+        let cols: Vec<Builtin> = items.iter().map(|(b, _)| *b).collect();
+        assert_eq!(cols, vec![Builtin::Name, Builtin::Size]);
+
+        // Scheme: reemplaza la lista entera.
+        let items = st.layout_items_for("sftp");
+        let cols: Vec<Builtin> = items.iter().map(|(b, _)| *b).collect();
+        assert_eq!(cols, vec![Builtin::Name, Builtin::Kind]);
+
+        // Sort: global mtime/desc; sftp hereda el global (sin override).
+        let s = st.sort_for("file");
+        assert_eq!((s.column, s.dir), (SortColumn::Mtime, SortDir::Desc));
+        let s = st.sort_for("sftp");
+        assert_eq!((s.column, s.dir), (SortColumn::Mtime, SortDir::Desc));
+    }
+
+    #[test]
+    fn sin_config_todo_es_default() {
+        let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
+        assert_eq!(st.sort_for("file"), crate::sort::SortSpec::default());
+        let items = st.layout_items_for("file");
+        assert_eq!(items.len(), 3, "name+size+mtime");
+        assert!(st.invalid.is_empty() && st.unrenderable.is_empty());
+    }
+}
+
+#[cfg(test)]
 mod model_tests {
     use super::*;
     use std::str::FromStr as _;
@@ -775,6 +838,164 @@ pub fn default_layout_items() -> Vec<(Builtin, LayoutItem)> {
     ]
 }
 
+/// Config de columnas RESUELTA (#108 bloque 4): ids parseados, sort
+/// mapeado, overrides por scheme. Los ids que no parsean van a
+/// [`ColumnsSettings::invalid`] — se saltan al pintar y los reporta
+/// `norte doctor` (jamás un drop silencioso ni un error de arranque).
+/// Los `attr:`/`plugin:` parsean pero aún no tienen renderer (bloques
+/// 2/6/7): se listan en [`ColumnsSettings::unrenderable`].
+#[derive(Debug, Clone, Default)]
+pub struct ColumnsSettings {
+    default_set: Option<Vec<ColumnId>>,
+    default_sort: crate::sort::SortSpec,
+    schemes:
+        std::collections::BTreeMap<String, (Option<Vec<ColumnId>>, Option<crate::sort::SortSpec>)>,
+    /// Ids configurados que NO parsean (diagnóstico para doctor).
+    pub invalid: Vec<String>,
+    /// Ids válidos sin renderer todavía (`attr:`/`plugin:`).
+    pub unrenderable: Vec<String>,
+}
+
+impl ColumnsSettings {
+    /// Resuelve la config cruda (#108). Nunca falla: lo inválido se
+    /// acumula como diagnóstico.
+    #[must_use]
+    pub fn resolve(cfg: &norte_config::ColumnsConfig) -> Self {
+        let mut out = Self {
+            default_sort: map_sort(cfg.sort.as_ref()),
+            ..Self::default()
+        };
+        out.default_set = cfg.default_columns.as_ref().map(|ids| parse_ids(ids));
+        for (scheme, sc) in &cfg.schemes {
+            let cols = sc.columns.as_ref().map(|ids| parse_ids(ids));
+            let sort = sc.sort.as_ref().map(|s| map_sort(Some(s)));
+            out.schemes.insert(scheme.clone(), (cols, sort));
+        }
+        if let Some(ids) = &cfg.default_columns {
+            out.collect_diagnostics(ids);
+        }
+        for sc in cfg.schemes.values() {
+            if let Some(ids) = &sc.columns {
+                out.collect_diagnostics(ids);
+            }
+        }
+        out
+    }
+
+    fn collect_diagnostics(&mut self, ids: &[String]) {
+        for raw in ids {
+            match raw.parse::<ColumnId>() {
+                Err(_) => {
+                    if !self.invalid.contains(raw) {
+                        self.invalid.push(raw.clone());
+                    }
+                }
+                Ok(ColumnId::Attr(_) | ColumnId::Plugin { .. }) => {
+                    if !self.unrenderable.contains(raw) {
+                        self.unrenderable.push(raw.clone());
+                    }
+                }
+                Ok(ColumnId::Builtin(_)) => {}
+            }
+        }
+    }
+
+    /// El orden para un pane en `scheme` (#108): el del scheme, o el
+    /// global, o el histórico.
+    #[must_use]
+    pub fn sort_for(&self, scheme: &str) -> crate::sort::SortSpec {
+        self.schemes
+            .get(scheme)
+            .and_then(|(_, s)| *s)
+            .unwrap_or(self.default_sort)
+    }
+
+    /// Los items de layout BUILTIN para un pane en `scheme`, en orden de
+    /// pintado. Los `attr:`/`plugin:` configurados se SALTAN (sin renderer
+    /// aún — doctor los nombra); una lista sin `name` lo antepone (el
+    /// nombre jamás desaparece del pane).
+    #[must_use]
+    pub fn layout_items_for(&self, scheme: &str) -> Vec<(Builtin, LayoutItem)> {
+        let ids = self
+            .schemes
+            .get(scheme)
+            .and_then(|(c, _)| c.as_ref())
+            .or(self.default_set.as_ref());
+        let Some(ids) = ids else {
+            return default_layout_items();
+        };
+        let mut out: Vec<(Builtin, LayoutItem)> = Vec::new();
+        for id in ids {
+            if let ColumnId::Builtin(b) = id {
+                if out.iter().any(|(x, _)| x == b) {
+                    continue;
+                }
+                out.push((*b, builtin_layout_item(*b)));
+            }
+        }
+        if !out.iter().any(|(b, _)| *b == Builtin::Name) {
+            out.insert(0, (Builtin::Name, builtin_layout_item(Builtin::Name)));
+        }
+        out
+    }
+}
+
+/// Item de layout por defecto de cada builtin (#108): mismos anchos que
+/// [`default_layout_items`] — separador INCLUIDO en las no-nombre.
+#[must_use]
+pub fn builtin_layout_item(b: Builtin) -> LayoutItem {
+    match b {
+        Builtin::Name => LayoutItem {
+            policy: WidthPolicy::Flex { min: 10, weight: 1 },
+            measured: 0,
+            is_name: true,
+        },
+        Builtin::Size => LayoutItem {
+            policy: WidthPolicy::Fixed(11),
+            measured: 0,
+            is_name: false,
+        },
+        Builtin::Mtime => LayoutItem {
+            policy: WidthPolicy::Fixed(10),
+            measured: 0,
+            is_name: false,
+        },
+        // «dir»/«file»/«symlink»/«other» localizados; 9 = «symlink»(7)+sep
+        // con margen.
+        Builtin::Kind => LayoutItem {
+            policy: WidthPolicy::Fixed(9),
+            measured: 0,
+            is_name: false,
+        },
+    }
+}
+
+fn parse_ids(ids: &[String]) -> Vec<ColumnId> {
+    ids.iter()
+        .filter_map(|raw| raw.parse::<ColumnId>().ok())
+        .collect()
+}
+
+fn map_sort(s: Option<&norte_config::SortChoice>) -> crate::sort::SortSpec {
+    use crate::sort::{SortColumn, SortDir, SortSpec};
+    let Some(s) = s else {
+        return SortSpec::default();
+    };
+    SortSpec {
+        column: match s.column {
+            norte_config::SortColumnKey::Name => SortColumn::Name,
+            norte_config::SortColumnKey::Size => SortColumn::Size,
+            norte_config::SortColumnKey::Mtime => SortColumn::Mtime,
+        },
+        dir: if s.descending {
+            SortDir::Desc
+        } else {
+            SortDir::Asc
+        },
+        dirs_first: s.dirs_first,
+    }
+}
+
 /// Texto de la celda de una columna BUILTIN no-nombre (#108 L5): `None` =
 /// ausencia (un dir sin size, un mtime desconocido) — se pinta blanco,
 /// jamás un `0` fabricado. `now_ms` lo inyecta el caller (estabilidad de
@@ -782,7 +1003,13 @@ pub fn default_layout_items() -> Vec<(Builtin, LayoutItem)> {
 #[must_use]
 pub fn builtin_cell(entry: &norte_proto::Entry, col: Builtin, now_ms: i64) -> Option<String> {
     match col {
-        Builtin::Name | Builtin::Kind => None, // el nombre lo pinta el frontend
+        Builtin::Name => None, // el nombre lo pinta el frontend
+        Builtin::Kind => Some(norte_i18n::t(match entry.kind {
+            norte_proto::EntryKind::Dir => "col-kind-dir",
+            norte_proto::EntryKind::File => "col-kind-file",
+            norte_proto::EntryKind::Symlink => "col-kind-symlink",
+            norte_proto::EntryKind::Other => "col-kind-other",
+        })),
         Builtin::Size => entry.size.map(|n| format_size(n, SizeFormat::Iec)),
         Builtin::Mtime => entry
             .mtime_ms

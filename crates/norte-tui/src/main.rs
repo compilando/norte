@@ -412,6 +412,12 @@ async fn main() -> Result<()> {
             .map_err(|e| anyhow::anyhow!("{e}"))?,
     );
     let mut app = App::new(left, right);
+    // #108 b4: columnas y orden desde `[ui.columns]` — resuelto UNA vez;
+    // los ids inválidos no rompen el arranque (doctor los reporta).
+    app.columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns);
+    for i in 0..app.panes.len() {
+        app.apply_scheme_sort(i);
+    }
     // #107: `[ui] show_hidden` siembra el estado INICIAL de ambos panes;
     // Ctrl+H lo cambia por pane en runtime (el hot-reload no lo pisa — un
     // toggle del usuario no debe deshacerse porque otro campo cambió).
@@ -931,6 +937,7 @@ async fn run(
                         )
                         .await;
                         if let Some(pane) = cd_landed_pane(&outcome) {
+                            app.apply_scheme_sort(pane);
                             let dir = app.panes[pane].dir().clone();
                             let paths: Vec<VPath> =
                                 app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
@@ -1049,6 +1056,7 @@ async fn run(
                                     )
                                     .await;
                                     if let Some(pane) = cd_landed_pane(&outcome) {
+                            app.apply_scheme_sort(pane);
                             let dir = app.panes[pane].dir().clone();
                             let paths: Vec<VPath> =
                                 app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
@@ -1212,6 +1220,7 @@ async fn run(
                         )
                         .await;
                         if let Some(pane) = cd_landed_pane(&outcome) {
+                            app.apply_scheme_sort(pane);
                             let dir = app.panes[pane].dir().clone();
                             let paths: Vec<VPath> =
                                 app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
@@ -1347,6 +1356,7 @@ async fn run(
                                         )
                                         .await;
                                         if let Some(pane) = cd_landed_pane(&outcome) {
+                            app.apply_scheme_sort(pane);
                             let dir = app.panes[pane].dir().clone();
                             let paths: Vec<VPath> =
                                 app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
@@ -1412,6 +1422,7 @@ async fn run(
                                     )
                                     .await;
                                     if let Some(pane) = cd_landed_pane(&outcome) {
+                            app.apply_scheme_sort(pane);
                             let dir = app.panes[pane].dir().clone();
                             let paths: Vec<VPath> =
                                 app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();

@@ -96,6 +96,50 @@ pub fn check_config(layers: &Layers, env: &impl Fn(&str) -> Option<OsString>) ->
     findings
 }
 
+/// `[ui.columns]` (#108 b4): ids que no parsean = Warn (se saltan al
+/// pintar — «un id configurado que desaparece en silencio es un bug, no
+/// una degradación», spec de columnas §Diagnostics); ids válidos sin
+/// renderer todavía (`attr:`/`plugin:`) = Warn informativo con el bloque
+/// que los traerá.
+#[must_use]
+pub fn check_columns(layers: &Layers) -> Vec<Finding> {
+    let Ok(cfg) = norte_config::load(layers) else {
+        return Vec::new(); // el parse ya lo reporta check_config
+    };
+    let st = norte_frontend::columns::ColumnsSettings::resolve(&cfg.ui_columns);
+    let mut findings = Vec::new();
+    for raw in &st.invalid {
+        findings.push(Finding {
+            section: "config",
+            severity: Severity::Warn,
+            code: "columns-bad-id",
+            detail: format!(
+                "[ui.columns] id no reconocido (se salta al pintar): {}",
+                sanitize_detail(raw)
+            ),
+        });
+    }
+    for raw in &st.unrenderable {
+        findings.push(Finding {
+            section: "config",
+            severity: Severity::Warn,
+            code: "columns-no-renderer",
+            detail: format!(
+                "[ui.columns] id válido sin renderer aún (attrs/plugins de columnas llegan en bloques posteriores de #108): {}",
+                sanitize_detail(raw)
+            ),
+        });
+    }
+    findings
+}
+
+/// Un id de columna viene de un TOML del usuario pero puede llegar por
+/// copy-paste hostil: enmascarado + tope, jamás crudo en la salida.
+fn sanitize_detail(raw: &str) -> String {
+    let masked = norte_frontend::display_name(raw.as_bytes()).0;
+    masked.chars().take(64).collect()
+}
+
 /// Decision 3: if `NORTE_CONFIG_DIR` is set (non-empty) AND the LEGACY dir
 /// (what [`norte_config::user_config_dir_from`] would resolve to WITHOUT
 /// that override — `XDG_CONFIG_HOME`/`HOME`/platform default) contains any
@@ -503,6 +547,28 @@ pub fn check_connections(
 
 #[cfg(test)]
 mod tests {
+
+    /// #108 b4: un id roto = Warn nombrado (jamás drop silencioso); un
+    /// `attr:`/`plugin:` válido = Warn «sin renderer aún».
+    #[test]
+    fn columns_ids_rotos_y_sin_renderer_se_reportan() {
+        let dir = tempfile::tempdir().expect("tmp");
+        std::fs::write(
+            dir.path().join("norte.toml"),
+            "[ui.columns]\ndefault = [\"name\", \"sise\", \"attr:posix.mode\"]\n",
+        )
+        .expect("write");
+        let layers = norte_config::Layers {
+            dirs: vec![(dir.path().to_path_buf(), norte_config::Layer::User)],
+        };
+        let f = super::check_columns(&layers);
+        assert!(
+            f.iter()
+                .any(|x| x.code == "columns-bad-id" && x.detail.contains("sise")),
+            "{f:?}"
+        );
+        assert!(f.iter().any(|x| x.code == "columns-no-renderer"), "{f:?}");
+    }
     use std::ffi::OsString;
 
     use norte_config::{Layer, Layers};
