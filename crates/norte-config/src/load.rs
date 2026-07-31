@@ -338,12 +338,20 @@ pub fn persist_column_format(dir: &Path, id: &str, format: &str) -> std::io::Res
                 ),
             )
         })?;
-    if let Some(existing) = arr
+    // TODAS las entradas del id, no solo la primera (MAJOR revisión 7b): el
+    // loader fusiona duplicados intra-capa LAST-wins por campo — escribir
+    // solo la primera dejaría la sesión y el fichero divergentes tras un
+    // reload (el duplicado tardío pisa lo recién guardado con el toast ya
+    // enseñado). Actualizarlas todas auto-sana la divergencia.
+    let mut alguna = false;
+    for tb in arr
         .iter_mut()
-        .find(|tb| tb.get("id").and_then(|v| v.as_str()) == Some(id))
+        .filter(|tb| tb.get("id").and_then(|v| v.as_str()) == Some(id))
     {
-        existing["format"] = toml_edit::value(format);
-    } else {
+        tb["format"] = toml_edit::value(format);
+        alguna = true;
+    }
+    if !alguna {
         let mut tb = toml_edit::Table::new();
         tb["id"] = toml_edit::value(id);
         tb["format"] = toml_edit::value(format);
@@ -2407,6 +2415,43 @@ mod persist_columns_tests {
                 .get("mtime")
                 .and_then(|sp| sp.format.as_deref()),
             Some("iso")
+        );
+    }
+
+    /// MAJOR revisión 7b: con DOS entradas del mismo id editadas a mano, el
+    /// loader honra la ÚLTIMA (merge intra-capa last-wins por campo) — el
+    /// writer debe actualizarlas TODAS o el reload revierte lo recién
+    /// guardado. Tras persistir, ambas llevan el formato nuevo y el `load`
+    /// real devuelve el valor persistido.
+    #[test]
+    fn persist_column_format_actualiza_todos_los_duplicados() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("norte.toml"),
+            "[[ui.columns.spec]]\nid = \"size\"\nformat = \"iec\"\n\n\
+             [[ui.columns.spec]]\nid = \"size\"\nformat = \"exact\"\n",
+        )
+        .expect("seed");
+        persist_column_format(dir.path(), "size", "si").expect("escritura");
+        let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert_eq!(
+            s.matches(r#"format = "si""#).count(),
+            2,
+            "TODOS los duplicados llevan el formato nuevo: {s}"
+        );
+        assert!(!s.contains(r#"format = "iec""#), "{s}");
+        assert!(!s.contains(r#"format = "exact""#), "{s}");
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let cfg = load(&layers).expect("load");
+        assert_eq!(
+            cfg.ui_columns
+                .specs
+                .get("size")
+                .and_then(|sp| sp.format.as_deref()),
+            Some("si"),
+            "el reload devuelve lo persistido, no el duplicado rancio"
         );
     }
 

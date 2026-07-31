@@ -30,8 +30,11 @@ independently through `PROTOCOL_VERSION`.
   and Enter persists only the formats that actually changed, each as a
   replace-by-id `[[ui.columns.spec]]` entry that preserves the entry's other
   fields (header/width/align) — the session sees the new format immediately,
-  in lockstep with the file. Width cycling stays deferred (needs numeric
-  entry UX).
+  in lockstep with the file. One exception: a row whose format is pinned by
+  a scheme-level spec is LOCKED in the picker (cycling would write a global
+  entry the scheme override keeps masking, and leak into other schemes) —
+  edit the scheme spec in `norte.toml` instead. Width cycling stays
+  deferred (needs numeric entry UX).
 - **TUI column picker — Alt+C (#108 block 7a):** a keyboard-driven overlay
   over the shared picker model: `e`/space toggles a column on or off (name
   is pinned first and immutable), Shift+↑/↓ — or vim-style `K`/`J` —

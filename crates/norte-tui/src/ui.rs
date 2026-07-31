@@ -350,9 +350,14 @@ fn column_header_line(
                     out.push_str(&cab);
                 }
                 Align::Left => {
-                    let pad = w.saturating_sub(cab.width().saturating_add(1));
-                    out.push(' ');
-                    out.push_str(&cab);
+                    // m1 revisión 7b: emisión clampada a EXACTAMENTE `w`
+                    // celdas — con `w == 1` y flecha activa, «espacio +
+                    // flecha» emitía 2 y corría toda la cabecera a su
+                    // derecha (el separador gana: abre el ancho, como en
+                    // las celdas).
+                    let clamped = take_width(&format!(" {cab}"), w);
+                    let pad = w.saturating_sub(clamped.width());
+                    out.push_str(&clamped);
                     out.push_str(&" ".repeat(pad));
                 }
             }
@@ -2321,6 +2326,49 @@ mod ellipsis_tests {
             "el backstop de cuenta de chars no acotó la salida: {} chars (cota {cota})",
             out.chars().count()
         );
+    }
+}
+
+#[cfg(test)]
+mod column_header_line_tests {
+    use super::column_header_line;
+    use norte_frontend::columns::{Align, Builtin, ColumnStyle};
+    use norte_frontend::{SortColumn, SortDir, SortSpec};
+    use unicode_width::UnicodeWidthStr;
+
+    fn estilo(b: Builtin, align: Align, header: &str) -> ColumnStyle {
+        ColumnStyle {
+            align,
+            header: Some(header.to_owned()),
+            ..ColumnStyle::default_for(b)
+        }
+    }
+
+    /// m1 revisión 7b: columna IZQUIERDA de una celda con la flecha del
+    /// sort activa — la emisión queda clampada a exactamente `w` (antes
+    /// «espacio + flecha» eran 2 celdas y corrían toda la cabecera a su
+    /// derecha; con 2 celdas la flecha sí cabe tras el separador).
+    #[test]
+    fn header_izquierda_de_una_celda_con_flecha_no_desborda() {
+        let sort = SortSpec {
+            column: SortColumn::Size,
+            dir: SortDir::Asc,
+            dirs_first: true,
+        };
+        let cols = [
+            (Builtin::Name, 6, estilo(Builtin::Name, Align::Left, "N")),
+            (Builtin::Size, 1, estilo(Builtin::Size, Align::Left, "S")),
+        ];
+        let linea = column_header_line(&cols, sort);
+        assert_eq!(linea.width(), 7, "exactamente la suma de anchos: {linea:?}");
+        assert_eq!(linea, "N      ");
+        let cols = [
+            (Builtin::Name, 6, estilo(Builtin::Name, Align::Left, "N")),
+            (Builtin::Size, 2, estilo(Builtin::Size, Align::Left, "S")),
+        ];
+        let linea = column_header_line(&cols, sort);
+        assert_eq!(linea.width(), 8, "{linea:?}");
+        assert_eq!(linea, "N      ▲");
     }
 }
 

@@ -920,14 +920,64 @@ impl ColumnStyle {
     }
 }
 
+/// Tabla ÚNICA str ↔ enum del vocabulario de formatos de `Size` (#108 7b
+/// m3), en el ORDEN del ciclo del picker. La consumen `format_fits`,
+/// `next_format`, `format_name` y `style_for` — antes eran CUATRO copias
+/// (config aparte); el bloque 2 (attrs) extiende tablas, no matches
+/// dispersos. Las cadenas deben ser subconjunto del vocabulario global que
+/// acepta la config (`norte-config/src/load.rs`, parse del spec) — pineado
+/// por test.
+const SIZE_FORMATS: &[(&str, SizeFormat)] = &[
+    ("iec", SizeFormat::Iec),
+    ("si", SizeFormat::Si),
+    ("exact", SizeFormat::Exact),
+];
+
+/// Tabla str ↔ enum de `Mtime` — mismas reglas que [`SIZE_FORMATS`].
+const TIME_FORMATS: &[(&str, TimeFormat)] =
+    &[("relative", TimeFormat::Relative), ("iso", TimeFormat::Iso)];
+
 /// ¿Casa `fmt` (vocabulario global YA validado en config) con la columna?
 /// `Name`/`Kind` no admiten formato alguno; los de `mode`/attrs llegan con
 /// el bloque 2.
 fn format_fits(b: Builtin, fmt: &str) -> bool {
     match b {
-        Builtin::Size => matches!(fmt, "exact" | "iec" | "si"),
-        Builtin::Mtime => matches!(fmt, "relative" | "iso"),
+        Builtin::Size => SIZE_FORMATS.iter().any(|(s, _)| *s == fmt),
+        Builtin::Mtime => TIME_FORMATS.iter().any(|(s, _)| *s == fmt),
         Builtin::Name | Builtin::Kind => false,
+    }
+}
+
+/// El siguiente formato del ciclo del picker (#108 7b): rota la tabla del
+/// builtin; `None` = la columna no admite formato (name/kind) o `current`
+/// no está en la tabla.
+#[must_use]
+pub fn next_format(b: Builtin, current: &str) -> Option<&'static str> {
+    fn advance<T>(tab: &'static [(&'static str, T)], cur: &str) -> Option<&'static str> {
+        let i = tab.iter().position(|(s, _)| *s == cur)?;
+        Some(tab[(i + 1) % tab.len()].0)
+    }
+    match b {
+        Builtin::Size => advance(SIZE_FORMATS, current),
+        Builtin::Mtime => advance(TIME_FORMATS, current),
+        Builtin::Name | Builtin::Kind => None,
+    }
+}
+
+/// El nombre-str del formato vigente de un estilo (seed del picker): la
+/// misma tabla, en dirección enum → str.
+#[must_use]
+pub fn format_name(b: Builtin, style: &ColumnStyle) -> Option<&'static str> {
+    match b {
+        Builtin::Size => SIZE_FORMATS
+            .iter()
+            .find(|(_, f)| *f == style.size_format)
+            .map(|(s, _)| *s),
+        Builtin::Mtime => TIME_FORMATS
+            .iter()
+            .find(|(_, f)| *f == style.time_format)
+            .map(|(s, _)| *s),
+        Builtin::Name | Builtin::Kind => None,
     }
 }
 
@@ -1076,19 +1126,19 @@ impl ColumnsSettings {
                 };
             }
             if let Some(fmt) = spec.format.as_deref() {
+                // m3 revisión 7b: str → enum por la tabla única; un nombre
+                // fuera de tabla conserva el default (resolve ya lo retiró
+                // y diagnosticó).
                 match builtin {
                     Builtin::Size => {
-                        style.size_format = match fmt {
-                            "exact" => SizeFormat::Exact,
-                            "si" => SizeFormat::Si,
-                            _ => SizeFormat::Iec,
-                        };
+                        if let Some((_, f)) = SIZE_FORMATS.iter().find(|(s, _)| *s == fmt) {
+                            style.size_format = *f;
+                        }
                     }
                     Builtin::Mtime => {
-                        style.time_format = match fmt {
-                            "iso" => TimeFormat::Iso,
-                            _ => TimeFormat::Relative,
-                        };
+                        if let Some((_, f)) = TIME_FORMATS.iter().find(|(s, _)| *s == fmt) {
+                            style.time_format = *f;
+                        }
                     }
                     // Sin formato posible: resolve ya lo retiró y diagnosticó.
                     Builtin::Name | Builtin::Kind => {}
@@ -1110,6 +1160,21 @@ impl ColumnsSettings {
     /// a nivel de scheme sigue ganando (persistencia por scheme = diferido).
     pub fn apply_format(&mut self, id: &str, format: &str) {
         self.specs_global.entry(id.to_owned()).or_default().format = Some(format.to_owned());
+    }
+
+    /// ¿Fija un spec DEL SCHEME el formato de `builtin`? (#108 7b m2). Con
+    /// un override así, ciclar en el picker escribiría el spec GLOBAL que
+    /// el del scheme seguiría enmascarando — sesión y disco «consistentes»
+    /// pero invisibles (toast mentiroso) y con fuga a otros schemes: el
+    /// picker BLOQUEA esas filas. El formato retenido ya está validado
+    /// contra su columna en [`Self::resolve`].
+    #[must_use]
+    pub fn format_pinned_by_scheme(&self, scheme: &str, builtin: Builtin) -> bool {
+        let key = ColumnId::Builtin(builtin).to_string();
+        self.specs_schemes
+            .get(scheme)
+            .and_then(|m| m.get(&key))
+            .is_some_and(|sp| sp.format.is_some())
     }
 
     fn collect_diagnostics(&mut self, ids: &[String]) {
@@ -1553,5 +1618,39 @@ mod style_tests {
             s.style_for("file", Builtin::Mtime).time_format,
             TimeFormat::Iso
         );
+    }
+
+    /// m3 revisión 7b: las cadenas de las tablas del frontend son
+    /// SUBCONJUNTO del vocabulario global que acepta la config
+    /// (`norte-config/src/load.rs`, `parse del spec`: `"exact" | "iec" |
+    /// "si" | "relative" | "iso"` — hardcodeado aquí porque config no
+    /// puede depender del frontend para compartir la const). Un nombre
+    /// nuevo en la tabla sin su lado config sería un spec imposible de
+    /// escribir.
+    #[test]
+    fn la_tabla_de_formatos_es_subconjunto_del_vocabulario_de_config() {
+        let config_vocab = ["exact", "iec", "si", "relative", "iso"];
+        for (s, _) in SIZE_FORMATS {
+            assert!(config_vocab.contains(s), "{s} no está en config");
+        }
+        for (s, _) in TIME_FORMATS {
+            assert!(config_vocab.contains(s), "{s} no está en config");
+        }
+        // Y la dirección enum→str cubre TODO valor de los enums (un enum
+        // nuevo sin fila en la tabla rompería el seed del picker).
+        for f in [SizeFormat::Exact, SizeFormat::Iec, SizeFormat::Si] {
+            let style = ColumnStyle {
+                size_format: f,
+                ..ColumnStyle::default_for(Builtin::Size)
+            };
+            assert!(format_name(Builtin::Size, &style).is_some(), "{f:?}");
+        }
+        for f in [TimeFormat::Relative, TimeFormat::Iso] {
+            let style = ColumnStyle {
+                time_format: f,
+                ..ColumnStyle::default_for(Builtin::Mtime)
+            };
+            assert!(format_name(Builtin::Mtime, &style).is_some(), "{f:?}");
+        }
     }
 }

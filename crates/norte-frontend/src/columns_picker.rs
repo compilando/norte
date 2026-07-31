@@ -19,6 +19,11 @@ pub struct PickerRow {
     /// Formato VIGENTE de la fila (#108 7b): vocabulario ASCII cerrado
     /// (`"iec"`…); `Some` solo para Size/Mtime — el resto no admite formato.
     pub format: Option<String>,
+    /// BLOQUEADA (m2 revisión 7b): un spec DEL SCHEME fija el formato — el
+    /// picker solo escribe el spec GLOBAL, que el override seguiría
+    /// enmascarando (toast mentiroso + fuga a otros schemes). La fila
+    /// enseña su formato pero el ciclo es no-op y `finish` jamás la emite.
+    pub format_locked: bool,
     /// El formato al ABRIR: [`ColumnsPicker::finish`] solo emite los
     /// CAMBIADOS. Privado: nace igual que `format` y no se toca después.
     opened_format: Option<String>,
@@ -39,44 +44,10 @@ pub struct Picked {
     pub formats: Vec<(String, String)>,
 }
 
-/// Vocabulario CERRADO de formatos ciclables por builtin (#108 7b): el
-/// mismo conjunto que valida la config (`format_fits` en `columns`);
-/// Name/Kind no admiten formato y los opacos aún no tienen renderer.
-fn format_vocab(b: Builtin) -> &'static [&'static str] {
-    match b {
-        Builtin::Size => &["iec", "si", "exact"],
-        Builtin::Mtime => &["relative", "iso"],
-        Builtin::Name | Builtin::Kind => &[],
-    }
-}
-
-/// Formato VIGENTE de un builtin al abrir (#108 7b): del estilo RESUELTO
-/// del scheme (`style_for` ya pliega spec global ← scheme) — un ciclo
-/// parte de lo que el pane pinta de verdad, no del default.
-fn seeded_format(settings: &ColumnsSettings, scheme: &str, b: Builtin) -> Option<String> {
-    use crate::columns::{SizeFormat, TimeFormat};
-    match b {
-        Builtin::Size => Some(
-            match settings.style_for(scheme, b).size_format {
-                SizeFormat::Iec => "iec",
-                SizeFormat::Si => "si",
-                SizeFormat::Exact => "exact",
-            }
-            .to_owned(),
-        ),
-        Builtin::Mtime => Some(
-            match settings.style_for(scheme, b).time_format {
-                TimeFormat::Relative => "relative",
-                TimeFormat::Iso => "iso",
-            }
-            .to_owned(),
-        ),
-        Builtin::Name | Builtin::Kind => None,
-    }
-}
-
 /// Construye una fila sembrando `format`/`opened_format` del estilo
-/// resuelto — un único sitio para el invariante «nacen iguales».
+/// RESUELTO del scheme (`style_for` ya pliega spec global ← scheme, vía la
+/// tabla única [`crate::columns::format_name`], m3) — un único sitio para
+/// el invariante «nacen iguales» — y el candado de scheme (m2).
 fn make_row(
     id: String,
     builtin: Option<Builtin>,
@@ -84,11 +55,15 @@ fn make_row(
     settings: &ColumnsSettings,
     scheme: &str,
 ) -> PickerRow {
-    let format = builtin.and_then(|b| seeded_format(settings, scheme, b));
+    let format = builtin
+        .and_then(|b| crate::columns::format_name(b, &settings.style_for(scheme, b)))
+        .map(str::to_owned);
+    let format_locked = builtin.is_some_and(|b| settings.format_pinned_by_scheme(scheme, b));
     PickerRow {
         id,
         builtin,
         enabled,
+        format_locked,
         opened_format: format.clone(),
         format,
     }
@@ -245,21 +220,24 @@ impl ColumnsPicker {
     }
 
     /// Cicla el formato de la fila bajo el cursor por su vocabulario
-    /// cerrado (#108 7b): size `iec→si→exact→iec`, mtime
-    /// `relative→iso→relative`; no-op en name/kind/opacas (sin formato).
+    /// cerrado (#108 7b, tabla única [`crate::columns::next_format`]): size
+    /// `iec→si→exact→iec`, mtime `relative→iso→relative`; no-op en
+    /// name/kind/opacas (sin formato) y en filas BLOQUEADAS por un spec de
+    /// scheme (m2 — ver [`PickerRow::format_locked`]).
     pub fn cycle_format(&mut self) {
         let Some(r) = self.rows.get_mut(self.cursor) else {
             return;
         };
+        if r.format_locked {
+            return;
+        }
         let Some(b) = r.builtin else { return };
-        let vocab = format_vocab(b);
         let Some(cur) = r.format.as_deref() else {
             return;
         };
-        let Some(i) = vocab.iter().position(|v| *v == cur) else {
-            return;
-        };
-        r.format = Some(vocab[(i + 1) % vocab.len()].to_owned());
+        if let Some(next) = crate::columns::next_format(b, cur) {
+            r.format = Some(next.to_owned());
+        }
     }
 
     /// Formato vigente de la fila bajo el cursor (`None` = no admite
@@ -281,10 +259,12 @@ impl ColumnsPicker {
                 .collect(),
             sort: self.sort,
             scheme_target: self.scheme_override.then(|| self.scheme.clone()),
+            // Las bloqueadas jamás se emiten (m2): el ciclo ya es no-op en
+            // ellas — el filtro extra es defensa en profundidad.
             formats: self
                 .rows
                 .iter()
-                .filter(|r| r.format != r.opened_format)
+                .filter(|r| !r.format_locked && r.format != r.opened_format)
                 .filter_map(|r| r.format.clone().map(|f| (r.id.clone(), f)))
                 .collect(),
         }
@@ -315,6 +295,58 @@ mod tests {
         p.up();
         p.cycle_format();
         assert_eq!(p.format_of_cursor(), None);
+    }
+
+    /// m2 revisión 7b: un spec DEL SCHEME con formato BLOQUEA el ciclo —
+    /// el global que escribiríamos quedaría enmascarado por el override
+    /// (toast mentiroso) y fugaría a otros schemes. La fila sigue
+    /// enseñando el formato vigente.
+    #[test]
+    fn formato_fijado_por_scheme_bloquea_el_ciclo() {
+        let cfg = norte_config::ColumnsConfig {
+            schemes: [(
+                "sftp".to_owned(),
+                norte_config::SchemeColumns {
+                    specs: [(
+                        "size".to_owned(),
+                        norte_config::ColumnSpec {
+                            format: Some("exact".to_owned()),
+                            ..Default::default()
+                        },
+                    )]
+                    .into(),
+                    ..Default::default()
+                },
+            )]
+            .into(),
+            ..Default::default()
+        };
+        let s = ColumnsSettings::resolve(&cfg);
+        let mut p = ColumnsPicker::open(&s, "sftp", SortSpec::default());
+        p.down(); // size
+        assert_eq!(
+            p.format_of_cursor().as_deref(),
+            Some("exact"),
+            "la fila enseña el formato resuelto del scheme"
+        );
+        assert!(p.rows()[p.cursor()].format_locked, "candado de scheme");
+        p.cycle_format();
+        assert_eq!(
+            p.format_of_cursor().as_deref(),
+            Some("exact"),
+            "bloqueada: el ciclo es no-op"
+        );
+        assert!(
+            p.finish().formats.is_empty(),
+            "jamás se emite una bloqueada"
+        );
+        // El MISMO builtin en otro scheme sigue libre (el candado es del
+        // scheme, no global).
+        let mut libre = ColumnsPicker::open(&s, "file", SortSpec::default());
+        libre.down();
+        assert!(!libre.rows()[libre.cursor()].format_locked);
+        libre.cycle_format();
+        assert_eq!(libre.format_of_cursor().as_deref(), Some("si"));
     }
 
     #[test]
