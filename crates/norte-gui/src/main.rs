@@ -1439,6 +1439,11 @@ impl NorteGui {
             let key_for_bg = key.clone();
             let (persisted, fresh_cfg, fresh_keymap) = cx
                 .background_spawn(async move {
+                    // Escrituras de norte.toml SERIALIZADAS (review 7c
+                    // MAJOR-1); ver CONFIG_WRITE_SERIAL.
+                    let _guard = CONFIG_WRITE_SERIAL
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     let persisted = norte_config::persist_set(&dir, section, &key_for_bg, value);
                     let fresh_cfg = persisted
                         .is_ok()
@@ -1737,6 +1742,11 @@ impl NorteGui {
                 .as_deref()
                 .is_none_or(|s| self.panes[pane].dir().scheme() == s);
             if scheme_matches {
+                // Con guardado GLOBAL, un pane cuyo scheme tiene sort propio
+                // re-siembra a ESE sort (el global queda enmascarado) y aun
+                // así pierde su click de sesión — PARIDAD deliberada con la
+                // TUI (apply_scheme_sort barre todos los panes); review 7c
+                // MINOR-3 lo registra como decisión, no bug.
                 self.sort_override[pane] = None;
                 let spec = self
                     .column_settings
@@ -1755,6 +1765,11 @@ impl NorteGui {
         cx.spawn(async move |this, cx| {
             let outcome = cx
                 .background_spawn(async move {
+                    // Escrituras de norte.toml SERIALIZADAS (review 7c
+                    // MAJOR-1); ver CONFIG_WRITE_SERIAL.
+                    let _guard = CONFIG_WRITE_SERIAL
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     norte_config::persist_columns(
                         &dir,
                         scheme.as_deref(),
@@ -2185,6 +2200,8 @@ impl NorteGui {
         click_count: usize,
         cx: &mut Context<Self>,
     ) {
+        // El flash también se despide con el ratón (review 7c MINOR-4a).
+        self.flash = None;
         self.focus = pane;
         // Un click cancela cualquier filtro (el cursor real vuelve a mandar) y
         // se posa en `idx`: sin `set_cursor` en PaneState, se emula home + page.
@@ -2255,6 +2272,8 @@ impl NorteGui {
         if self.modal.is_some() || self.columns_picker.is_some() {
             return;
         }
+        // El flash también se despide con el ratón (review 7c MINOR-4a).
+        self.flash = None;
         let spec = self.panes[pane].sort().after_click(col);
         self.panes[pane].set_sort(spec);
         self.sort_override[pane] = Some(spec);
@@ -3292,7 +3311,6 @@ impl NorteGui {
         view: &columns_view::ColumnsView,
         chrome: &ChromeColors,
     ) -> impl IntoElement {
-        use norte_frontend::columns::{Builtin, sort_column};
         let p = &view.picker;
         let target = if p.scheme_override() {
             p.scheme().to_owned()
@@ -3311,30 +3329,9 @@ impl NorteGui {
             .font(self.fonts.ui.clone());
         for (pos, row) in p.rows().iter().enumerate() {
             let selected = pos == p.cursor();
-            let mark = if row.enabled { "[x]" } else { "[ ]" };
-            let label = match row.builtin {
-                Some(Builtin::Name) => norte_i18n::t("col-header-name"),
-                Some(Builtin::Size) => norte_i18n::t("col-header-size"),
-                Some(Builtin::Mtime) => norte_i18n::t("col-header-mtime"),
-                Some(Builtin::Kind) => norte_i18n::t("col-header-kind"),
-                None => norte_encoding::mask_terminal_hazards(&row.id),
-            };
-            let arrow = match row.builtin.and_then(sort_column) {
-                Some(sc) if sc == p.sort().column => {
-                    if p.sort().dir == norte_frontend::SortDir::Desc {
-                        " ▼"
-                    } else {
-                        " ▲"
-                    }
-                }
-                _ => "",
-            };
-            let fmt = row
-                .format
-                .as_deref()
-                .map(|f| format!(" · {f}"))
-                .unwrap_or_default();
-            let text = format!("{mark} {label}{arrow}{fmt}");
+            // Choke point compartido y testeable (encoding 7c H1/H2):
+            // masking + cap del label viven en columns_view::row_display.
+            let (text, label) = columns_view::row_display(row, p.sort());
             let mut r = div()
                 .id(format!("columns-row-{pos}"))
                 .role(gpui::Role::ListItem)
@@ -5025,8 +5022,15 @@ impl Render for NorteGui {
         // Flash transitorio (#108 7c): resultado del guardado del picker —
         // una línea, mismo lenguaje visual que el banner de arranque
         // (err_fg sobre bg para errores; header para éxito). Se despide con
-        // la siguiente tecla (`on_key`).
-        if let Some((msg, is_error)) = &self.flash {
+        // la siguiente tecla o click (`on_key`/`on_row_click`/
+        // `on_sort_click`). Solo sobre el dual-pane: un persist que aterrice
+        // con F11/F12/visor abiertos no pinta una línea suelta encima
+        // (review 7c MINOR-4b).
+        if self.settings_view.is_none()
+            && self.extensions.is_none()
+            && self.viewer.is_none()
+            && let Some((msg, is_error)) = &self.flash
+        {
             let (bg, fg) = if *is_error {
                 (chrome.bg, chrome.err_fg)
             } else {
@@ -5129,11 +5133,16 @@ impl Render for NorteGui {
 
         // Overlay del picker de columnas (#108 7c): mismo patrón que la
         // paleta, pintado antes del modal (el modal sigue ganando encima).
+        // `.occlude()`: a diferencia de los scrims heredados, este SÍ come
+        // los eventos de ratón — sin él, un click detrás robaba foco/cursor
+        // y un doble-click hacía cd bajo el picker (review 7c MINOR-2; el
+        // barrido de los demás overlays sigue siendo follow-up).
         if let Some(view) = &self.columns_picker {
             root = root.child(
                 div()
                     .absolute()
                     .inset_0()
+                    .occlude()
                     .flex()
                     .items_center()
                     .justify_center()
@@ -5325,6 +5334,15 @@ fn banner_safe(s: &str) -> String {
 /// «Permiso denegado», …) sin que Fluent tenga ninguna oportunidad de
 /// traducirlo: mezclarlo en un banner por lo demás localizado rompe la
 /// paridad de idioma (regla 1: nunca texto crudo del sistema).
+/// Serializa TODA escritura de `norte.toml` del GUI (review 7c MAJOR-1):
+/// los persist son read-modify-write SIN lock ni tmp+rename, y las tareas
+/// de `background_spawn` van detached en un pool multihilo — dos writers
+/// intercalados perderían la actualización del primero (o reescribirían
+/// desde una lectura parcial). Se bloquea DENTRO del background task, jamás
+/// en el hilo de render. El fix de fondo (persist_* atómico en norte-config)
+/// es follow-up con issue; esto cierra la carrera intra-proceso.
+static CONFIG_WRITE_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn io_error_category(e: &std::io::Error) -> String {
     let key = match e.kind() {
         std::io::ErrorKind::NotFound => "err-not-found",
