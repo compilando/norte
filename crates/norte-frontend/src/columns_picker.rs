@@ -75,7 +75,7 @@ fn make_row(
         Some(cid) => {
             let style = settings.style_for_id(scheme, cid, catalog);
             let hint = style.hint;
-            let format = crate::columns::format_name_id(cid, hint, &style).map(str::to_owned);
+            let format = crate::columns::format_name_id(cid, &style).map(str::to_owned);
             let locked = settings.format_pinned_by_scheme_id(scheme, cid);
             let label = matches!(cid, ColumnId::Attr(_) | ColumnId::Plugin { .. })
                 .then(|| crate::columns::header_label(cid, &style, catalog));
@@ -628,6 +628,58 @@ mod tests {
         let a = ColumnsPicker::open(&st, "file", SortSpec::default());
         let b = ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), None);
         assert_eq!(a.rows(), b.rows());
+    }
+
+    /// #117 review tarea 4 (a): una fila OFRECIDA del catálogo (nace
+    /// deshabilitada) se puede encender y su id viaja en `finish().ids` —
+    /// ofrecer sin poder elegir sería un picker de mentira.
+    #[test]
+    fn fila_ofrecida_del_catalogo_se_enciende_y_viaja_en_finish() {
+        use norte_proto::attrs::{AttrHint, AttrInfo, AttrType};
+        let cat = norte_proto::AttrCatalog::new(vec![AttrInfo {
+            id: "posix.uid".into(),
+            label: "UID".into(),
+            ty: AttrType::Uint,
+            hint: AttrHint::Identity,
+        }]);
+        let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
+        let mut p = ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), Some(&cat));
+        assert!(!p.finish().ids.contains(&"attr:posix.uid".to_owned()));
+        while p.rows()[p.cursor()].id != "attr:posix.uid" {
+            p.down();
+        }
+        p.toggle();
+        assert!(p.rows()[p.cursor()].enabled);
+        assert!(p.finish().ids.contains(&"attr:posix.uid".to_owned()));
+    }
+
+    /// #117 review tarea 4 (b): un label HOSTIL del catálogo llega YA
+    /// enmascarado a `PickerRow.label` (`header_label` es el choke point; el
+    /// re-enmascarado de los frontends es cinturón, no la defensa).
+    #[test]
+    fn label_hostil_del_catalogo_llega_enmascarado() {
+        use norte_proto::attrs::{AttrHint, AttrInfo, AttrType};
+        let cat = norte_proto::AttrCatalog::new(vec![AttrInfo {
+            // `mem.` no es namespace de primera parte: sin clave Fluent, el
+            // label del catálogo es el que se enseña.
+            id: "mem.owner".into(),
+            label: "Owner\u{202e}evil".into(),
+            ty: AttrType::Bytes,
+            hint: AttrHint::Identity,
+        }]);
+        let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
+        let p = ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), Some(&cat));
+        let fila = p
+            .rows()
+            .iter()
+            .find(|r| r.id == "attr:mem.owner")
+            .expect("fila ofrecida");
+        let label = fila.label.as_deref().expect("label del catálogo");
+        assert!(
+            !label.chars().any(norte_encoding::is_terminal_hazard),
+            "hazard crudo en label: {label:?}"
+        );
+        assert!(label.contains("Owner"), "conserva lo inocuo: {label:?}");
     }
 
     #[test]

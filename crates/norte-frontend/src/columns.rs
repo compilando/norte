@@ -998,8 +998,10 @@ const MODE_FORMATS: &[(&str, ModeFormat)] =
     &[("rwx", ModeFormat::Rwx), ("octal", ModeFormat::Octal)];
 
 /// ¿Casa `fmt` (vocabulario global YA validado en config) con la columna?
-/// `Name`/`Kind` no admiten formato alguno; los de `mode`/attrs llegan con
-/// el bloque 2.
+/// SOLO builtins: `Name`/`Kind` no admiten formato alguno. Los formatos de
+/// attrs NO pasan por aquí a propósito (#117): despachan por el hint del
+/// catálogo al plegar (`style_for_id`) y una palabra que no casa conserva
+/// el default — no extender esta función para attrs.
 fn format_fits(b: Builtin, fmt: &str) -> bool {
     match b {
         Builtin::Size => SIZE_FORMATS.iter().any(|(s, _)| *s == fmt),
@@ -1051,17 +1053,14 @@ pub fn next_format_id(
 }
 
 /// El nombre-str del formato vigente para cualquier columna (#117) — seed
-/// del picker, dirección enum → str, por el hint en attrs.
+/// del picker, dirección enum → str, por el hint DEL PROPIO estilo en
+/// attrs (`style.hint`: un solo origen, sin param que pueda desincronizar).
 #[must_use]
-pub fn format_name_id(
-    id: &ColumnId,
-    hint: norte_proto::attrs::AttrHint,
-    style: &ColumnStyle,
-) -> Option<&'static str> {
+pub fn format_name_id(id: &ColumnId, style: &ColumnStyle) -> Option<&'static str> {
     use norte_proto::attrs::AttrHint;
     match id {
         ColumnId::Builtin(b) => format_name(*b, style),
-        ColumnId::Attr(_) => match hint {
+        ColumnId::Attr(_) => match style.hint {
             AttrHint::Size => SIZE_FORMATS
                 .iter()
                 .find(|(_, f)| *f == style.size_format)
@@ -1987,18 +1986,33 @@ mod style_tests {
             };
             assert!(format_name(Builtin::Mtime, &style).is_some(), "{f:?}");
         }
-        // #117: la dirección enum→str de Mode va por el hint (attrs).
+        // #117: la dirección enum→str de Mode va por el hint DEL estilo
+        // (attrs).
         let mode_id = ColumnId::Attr("posix.mode".into());
         for f in [ModeFormat::Rwx, ModeFormat::Octal] {
             let style = ColumnStyle {
                 mode_format: f,
+                hint: norte_proto::attrs::AttrHint::Mode,
                 ..ColumnStyle::default_for_id(&mode_id, None)
             };
-            assert!(
-                format_name_id(&mode_id, norte_proto::attrs::AttrHint::Mode, &style).is_some(),
-                "{f:?}"
-            );
+            assert!(format_name_id(&mode_id, &style).is_some(), "{f:?}");
         }
+    }
+
+    /// #117 review tarea 4: las TRES tablas de formato son DISJUNTAS entre
+    /// sí. El pliegue de `style_for_id` busca la palabra en size→time→mode
+    /// y asigna al primer campo que case: una palabra repetida en dos
+    /// tablas escribiría el campo equivocado en silencio.
+    #[test]
+    fn las_tablas_de_formatos_no_comparten_palabras() {
+        let todas: Vec<&str> = SIZE_FORMATS
+            .iter()
+            .map(|(s, _)| *s)
+            .chain(TIME_FORMATS.iter().map(|(s, _)| *s))
+            .chain(MODE_FORMATS.iter().map(|(s, _)| *s))
+            .collect();
+        let unicas: std::collections::BTreeSet<&str> = todas.iter().copied().collect();
+        assert_eq!(unicas.len(), todas.len(), "palabra duplicada: {todas:?}");
     }
 }
 
