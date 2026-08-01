@@ -210,9 +210,27 @@ impl Backend {
     /// Taxonomía del protocolo; con el daemon caído,
     /// `ProviderUnavailable{retryable:true}`.
     pub async fn list_stream(&self, dir: &VPath) -> Result<(EntryStream, Option<u64>), Error> {
+        self.list_stream_with(dir, &[]).await
+    }
+
+    /// [`Backend::list_stream`] pidiendo atributos por entrada (#108 bloque
+    /// 2). `attrs` son ids del catálogo (`Backend::attr_catalog`); un id no
+    /// anunciado viene ausente, jamás es error.
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo; con el daemon caído,
+    /// `ProviderUnavailable{retryable:true}`.
+    pub async fn list_stream_with(
+        &self,
+        dir: &VPath,
+        attrs: &[String],
+    ) -> Result<(EntryStream, Option<u64>), Error> {
         match self {
             Self::Embedded(engine) => {
-                let stream = engine.list(dir).await?;
+                let opt = norte_vfs::ListOptions {
+                    attrs: norte_vfs::AttrRequest::sanitized(attrs.to_vec()),
+                };
+                let stream = engine.list_with(dir, &opt).await?;
                 // Best-effort: un fallo aquí no tumba un listado que ya abrió
                 // (mismo contrato que el daemon) — degrada a "desconocido",
                 // pero JAMÁS en silencio (el punto de #93 es la señal).
@@ -223,7 +241,7 @@ impl Backend {
                 Ok((stream, skipped))
             }
             #[cfg(unix)]
-            Self::Remote(r) => r.list_stream(dir).await,
+            Self::Remote(r) => r.list_stream(dir, attrs.to_vec()).await,
         }
     }
 
@@ -245,7 +263,21 @@ impl Backend {
     /// Taxonomía del protocolo; con el daemon caído,
     /// `ProviderUnavailable{retryable:true}`.
     pub async fn list_with_skipped(&self, dir: &VPath) -> Result<(Vec<Entry>, Option<u64>), Error> {
-        let (mut stream, skipped) = self.list_stream(dir).await?;
+        self.list_with_skipped_attrs(dir, &[]).await
+    }
+
+    /// [`Backend::list_with_skipped`] pidiendo atributos por entrada (#108
+    /// bloque 2) — el `ls --attrs` de la CLI.
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo; con el daemon caído,
+    /// `ProviderUnavailable{retryable:true}`.
+    pub async fn list_with_skipped_attrs(
+        &self,
+        dir: &VPath,
+        attrs: &[String],
+    ) -> Result<(Vec<Entry>, Option<u64>), Error> {
+        let (mut stream, skipped) = self.list_stream_with(dir, attrs).await?;
         let mut entries = Vec::new();
         while let Some(item) = stream.next().await {
             entries.push(item?);
@@ -285,16 +317,45 @@ impl Backend {
         }
     }
 
+    /// Catálogo de attrs del provider que sirve `path` (#108 bloque 2),
+    /// SIEMPRE saneado: el embebido pasa por `Engine::attr_catalog`
+    /// (`AttrCatalog::new`, ADR 0039 §4) y el remoto por el deserializador
+    /// del wire (mismo saneo por el tipo).
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo.
+    pub async fn attr_catalog(&self, path: &VPath) -> Result<norte_proto::AttrCatalog, Error> {
+        match self {
+            Self::Embedded(engine) => engine.attr_catalog(path).await,
+            #[cfg(unix)]
+            Self::Remote(r) => r.attr_catalog(path).await,
+        }
+    }
+
     /// Metadatos de un nodo (`fs.stat`).
     ///
     /// # Errors
     /// Taxonomía del protocolo; con el daemon caído,
     /// `ProviderUnavailable{retryable:true}`.
     pub async fn stat(&self, path: &VPath) -> Result<Entry, Error> {
+        self.stat_attrs(path, &[]).await
+    }
+
+    /// [`Backend::stat`] pidiendo atributos por entrada (#108 bloque 2).
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo; con el daemon caído,
+    /// `ProviderUnavailable{retryable:true}`.
+    pub async fn stat_attrs(&self, path: &VPath, attrs: &[String]) -> Result<Entry, Error> {
         match self {
-            Self::Embedded(engine) => engine.stat(path).await,
+            Self::Embedded(engine) => {
+                let opt = norte_vfs::ListOptions {
+                    attrs: norte_vfs::AttrRequest::sanitized(attrs.to_vec()),
+                };
+                engine.stat_with(path, &opt).await
+            }
             #[cfg(unix)]
-            Self::Remote(r) => r.stat(path).await,
+            Self::Remote(r) => r.stat(path, attrs.to_vec()).await,
         }
     }
 
@@ -1308,6 +1369,11 @@ pub mod remote {
         buffer: std::collections::VecDeque<Entry>,
         cursor: Option<String>,
         done: bool,
+        /// Ids de attrs del ARRANQUE (#108 bloque 2): el daemon ignora los de
+        /// una continuación (el stream retenido nació con ellos), pero se
+        /// re-mandan igual — si el cursor expira y el cliente reinicia, el
+        /// nuevo listado pide lo mismo.
+        attrs: Vec<String>,
     }
 
     /// Un paso del stream paginado: sirve del buffer o pide la página siguiente.
@@ -1328,9 +1394,7 @@ pub mod remote {
                         path: st.dir.clone(),
                         limit: Some(LIST_PAGE),
                         cursor,
-                        // Ningún frontend pide atributos todavía (ADR 0039,
-                        // bloque 1 = solo wire): vacío = nada se entrega.
-                        attrs: Vec::new(),
+                        attrs: st.attrs.clone(),
                     },
                 )
                 .await?;
@@ -1765,6 +1829,7 @@ pub mod remote {
         pub(super) async fn list_stream(
             &self,
             dir: &VPath,
+            attrs: Vec<String>,
         ) -> Result<(EntryStream, Option<u64>), Error> {
             // Primera página síncrona: un `NotFound`/`TypeMismatch` sale en el
             // Result, no como primer item del stream (paridad con el embebido).
@@ -1775,7 +1840,7 @@ pub mod remote {
                         path: dir.clone(),
                         limit: Some(LIST_PAGE),
                         cursor: None,
-                        attrs: Vec::new(),
+                        attrs: attrs.clone(),
                     },
                 )
                 .await?;
@@ -1787,6 +1852,7 @@ pub mod remote {
                 buffer: first.entries.into(),
                 cursor: first.next_cursor,
                 done,
+                attrs,
             };
             Ok((
                 futures::stream::try_unfold(state, page_step).boxed(),
@@ -1795,22 +1861,31 @@ pub mod remote {
         }
 
         pub(super) async fn capabilities(&self, path: &VPath) -> Result<Capabilities, Error> {
-            let r: FsCapabilitiesResult = self
-                .call_timed(
-                    methods::FS_CAPABILITIES,
-                    &FsCapabilitiesParams { path: path.clone() },
-                )
-                .await?;
-            Ok(r.capabilities)
+            Ok(self.capabilities_full(path).await?.capabilities)
         }
 
-        pub(super) async fn stat(&self, path: &VPath) -> Result<Entry, Error> {
+        pub(super) async fn attr_catalog(
+            &self,
+            path: &VPath,
+        ) -> Result<norte_proto::AttrCatalog, Error> {
+            Ok(self.capabilities_full(path).await?.attrs)
+        }
+
+        async fn capabilities_full(&self, path: &VPath) -> Result<FsCapabilitiesResult, Error> {
+            self.call_timed(
+                methods::FS_CAPABILITIES,
+                &FsCapabilitiesParams { path: path.clone() },
+            )
+            .await
+        }
+
+        pub(super) async fn stat(&self, path: &VPath, attrs: Vec<String>) -> Result<Entry, Error> {
             let r: FsStatResult = self
                 .call_timed(
                     methods::FS_STAT,
                     &FsStatParams {
                         path: path.clone(),
-                        attrs: Vec::new(),
+                        attrs,
                     },
                 )
                 .await?;

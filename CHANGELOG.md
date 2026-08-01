@@ -9,6 +9,24 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Provider attributes produced end-to-end (#108 block 2):** the wire that
+  0.30.0 shipped now carries real data. `Provider` gains defaulted
+  `attrs()`/`list_with()`/`stat_with()` (`ListOptions`/`AttrRequest`);
+  producers: local (`posix.mode`/`uid`/`gid`/`nlink`/`ctime_ms` on unix,
+  `win.attributes` on Windows — the #52 lazy listing stays untouched unless
+  an advertised id is requested), sftp (`posix.mode`/`uid`/`gid` off the
+  already-parsed SFTP attrs), object (`s3.etag`; `s3.content_type` on stat),
+  archive-zip (`archive.method`/`packed_size`/`crc32`, kept even for
+  encrypted entries) and the testkit `MemProvider` (hostile synthetic
+  values). The daemon publishes the catalog through `fs.capabilities`,
+  rejects malformed or over-16 requested ids (`-32602`), forwards only
+  advertised ids and enforces emit caps per entry; paginated listings keep
+  the request from the opening call. The conformance suites gain an
+  attributes contract (type agreement, request scoping, caps,
+  unknown-id absence). CLI: `ls --attrs <id>` (repeatable; wire-exact under
+  `--json`, masked column in human output). Deferred with issues:
+  `sftp.owner`/`group` names (#114), `s3.storage_class` (#115).
+
 - **Per-column presentation — `[[ui.columns.spec]]` (#108 block 7b):** a
   spec entry keyed by column `id` sets `width` (`"auto"` / `{ fixed = n }` /
   `{ min = n, weight = m }`), `align` (`left`/`right`), `format` (size:

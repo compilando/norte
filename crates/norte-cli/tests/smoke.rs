@@ -279,3 +279,31 @@ fn mcp_serve_help_menciona_session() {
     let help = String::from_utf8_lossy(&out.stdout);
     assert!(help.contains("--session"), "help: {help}");
 }
+
+// ---------- ls --attrs (#108 bloque 2) ----------
+
+#[cfg(unix)]
+#[test]
+fn ls_attrs_posix_via_json() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), b"hola").expect("seed");
+    let out = norte()
+        .args(["ls", "--json", "--attrs", "posix.mode"])
+        .arg(dir.path())
+        .assert()
+        .success();
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("json válido");
+    // Forma wire del bloque 1: {"posix.mode": {"uint": N}}.
+    let mode = &v[0]["attrs"]["posix.mode"]["uint"];
+    assert!(mode.is_u64(), "posix.mode uint presente: {v}");
+
+    // Y en humano: columna `posix.mode=N` al final de la línea.
+    let out = norte()
+        .args(["ls", "--attrs", "posix.mode"])
+        .arg(dir.path())
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(text.contains("posix.mode="), "columna humana: {text}");
+}

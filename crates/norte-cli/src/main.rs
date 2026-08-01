@@ -48,6 +48,10 @@ enum Cmd {
         /// Salida JSON (paths en forma wire, lossless)
         #[arg(long)]
         json: bool,
+        /// Atributos de provider a pedir por entrada, repetible (p. ej.
+        /// `--attrs posix.mode`); el catálogo lo publica `fs.capabilities`
+        #[arg(long = "attrs", value_name = "ID")]
+        attrs: Vec<String>,
     },
     /// Copia archivo o directorio (recursivo), con progreso y Ctrl-C limpio
     Cp {
@@ -412,7 +416,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // en el `tracing::warn!` del daemon.
     let mut degraded = backend.take_degraded();
     let result = match cli.cmd {
-        Cmd::Ls { path, json } => ls(&backend, &path, json).await,
+        Cmd::Ls { path, json, attrs } => ls(&backend, &path, json, &attrs).await,
         Cmd::Connect { target } => connect_cmd(&backend, &target, cli.daemon).await,
         Cmd::Cp {
             src,
@@ -1556,12 +1560,19 @@ async fn connect_cmd(backend: &Backend, target: &str, daemon: bool) -> anyhow::R
     Ok(ExitCode::SUCCESS)
 }
 
-async fn ls(backend: &Backend, path: &std::path::Path, json: bool) -> anyhow::Result<ExitCode> {
+async fn ls(
+    backend: &Backend,
+    path: &std::path::Path,
+    json: bool,
+    attrs: &[String],
+) -> anyhow::Result<ExitCode> {
     let target = vpath(path)?;
     let (mut entries, skipped): (Vec<Entry>, Option<u64>) =
-        match backend.list_with_skipped(&target).await {
+        match backend.list_with_skipped_attrs(&target, attrs).await {
             // Primer contacto TOFU: confirmar y reintentar UNA vez.
-            Err(e) if tofu_confirm(backend, &e).await? => backend.list_with_skipped(&target).await,
+            Err(e) if tofu_confirm(backend, &e).await? => {
+                backend.list_with_skipped_attrs(&target, attrs).await
+            }
             other => other,
         }
         .map_err(|e| anyhow::anyhow!("{e}"))
@@ -1596,6 +1607,7 @@ async fn ls(backend: &Backend, path: &std::path::Path, json: bool) -> anyhow::Re
             .context(norte_i18n::t("cli-serialize-failed"))?;
         println!();
     } else {
+        use std::fmt::Write as _;
         for e in &entries {
             let marker = match e.kind {
                 EntryKind::Dir => "d",
@@ -1604,10 +1616,34 @@ async fn ls(backend: &Backend, path: &std::path::Path, json: bool) -> anyhow::Re
                 EntryKind::Other => "?",
             };
             let size = e.size.map_or_else(String::new, |s| s.to_string());
-            println!("{marker}\t{size}\t{}", e.path.display_lossy());
+            let mut line = format!("{marker}\t{size}\t{}", e.path.display_lossy());
+            // Attrs pedidos (#108 bloque 2), en el orden de la petición;
+            // ausente = columna que no se pinta (jamás un 0 inventado).
+            for id in attrs {
+                if let Some(v) = e.attrs.get(id) {
+                    let _ = write!(line, "\t{id}={}", render_attr_value(v));
+                }
+            }
+            println!("{line}");
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Valor de attr para el `ls` humano. Texto y bytes son de TERCEROS:
+/// `escape_debug` neutraliza controles, RTL e invisibles; los bytes pasan por
+/// lossy ANTES (regla 1: la pérdida es explícita y solo de presentación —
+/// `--json` conserva la forma wire exacta).
+fn render_attr_value(v: &norte_proto::AttrValue) -> String {
+    use norte_proto::AttrValue as V;
+    match v {
+        V::Uint(n) => n.to_string(),
+        V::Int(n) | V::TimeMs(n) => n.to_string(),
+        V::Bool(b) => b.to_string(),
+        V::Text(s) => s.escape_debug().to_string(),
+        V::Bytes(b) => String::from_utf8_lossy(b).escape_debug().to_string(),
+        V::Unknown => "?".to_owned(),
+    }
 }
 
 /// Corre una Task pintando progreso en stderr; Ctrl-C cancela cooperativamente

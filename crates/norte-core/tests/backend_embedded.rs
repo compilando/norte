@@ -193,3 +193,43 @@ async fn embedded_errores_son_taxonomia() {
         Error::NotFound
     );
 }
+
+// ---------- attrs (#108 bloque 2) ----------
+
+#[tokio::test]
+async fn embedded_sanea_catalogo_y_pide_attrs() {
+    let engine = Engine::new();
+    let mem = Arc::new(MemProvider::new().with_synthetic_attrs());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    let backend = Backend::Embedded(Arc::new(engine));
+    write_file(&mem, "mem:///f.txt", b"x").await;
+
+    // Catálogo por el camino embebido: pasa por AttrCatalog::new (ADR 0039 §4).
+    let cat = backend
+        .attr_catalog(&vp("mem:///"))
+        .await
+        .expect("catálogo");
+    assert!(cat.iter().any(|a| a.id == "mem.owner"), "catálogo: {cat:?}");
+
+    // stat_attrs materializa lo pedido; bytes crudos sobreviven (regla 1).
+    let e = backend
+        .stat_attrs(&vp("mem:///f.txt"), &["mem.owner".to_owned()])
+        .await
+        .expect("stat_attrs");
+    assert!(matches!(
+        e.attrs.get("mem.owner"),
+        Some(norte_proto::AttrValue::Bytes(_))
+    ));
+
+    // list_with_skipped_attrs: cada entrada lleva lo pedido; sin pedir, nada.
+    let (entries, _) = backend
+        .list_with_skipped_attrs(&vp("mem:///"), &["mem.mode".to_owned()])
+        .await
+        .expect("list attrs");
+    assert!(entries.iter().all(|e| e.attrs.contains_key("mem.mode")));
+    let (bare, _) = backend
+        .list_with_skipped(&vp("mem:///"))
+        .await
+        .expect("list");
+    assert!(bare.iter().all(|e| e.attrs.is_empty()));
+}
