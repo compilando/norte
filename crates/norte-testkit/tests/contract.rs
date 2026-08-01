@@ -52,3 +52,12 @@ norte_vfs::provider_contract! {
     root: MemProvider::root(),
     hostile_names: hostile(),
 }
+
+// Attrs sintéticos hostiles (#108 bloque 2): el contrato de attrs deja de
+// auto-skipearse y ejercita valores reales (Bytes no-UTF-8, RTL, ZWJ).
+norte_vfs::provider_contract! {
+    mod mem_attrs,
+    factory: MemProvider::new().with_synthetic_attrs(),
+    root: MemProvider::root(),
+    hostile_names: hostile(),
+}

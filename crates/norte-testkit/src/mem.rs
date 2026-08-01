@@ -131,6 +131,10 @@ pub struct MemProvider {
     /// provider remoto con `logical_trash` (sftp/object) para probar la
     /// idempotencia y la recuperación del `reversal_ref`.
     logical_trash: bool,
+    /// Catálogo sintético de attrs (#108 bloque 2): vacío (default) = provider
+    /// sin attrs; [`Self::with_synthetic_attrs`] lo puebla con valores
+    /// deterministas y deliberadamente hostiles.
+    attr_defs: Vec<norte_proto::AttrInfo>,
     tree: Arc<Mutex<Tree>>,
     faults: Arc<Faults>,
 }
@@ -186,9 +190,31 @@ impl MemProvider {
             node_ids: true,
             list_skipped: None,
             logical_trash: false,
+            attr_defs: Vec::new(),
             tree: Arc::new(Mutex::new(Tree::default())),
             faults: Arc::new(Faults::default()),
         }
+    }
+
+    /// Atributos SINTÉTICOS deterministas (#108 bloque 2) con valores
+    /// deliberadamente hostiles: dueño no-UTF-8 (`Bytes`), texto con RTL
+    /// override + ZWJ. Para probar plumbing y render sin un provider real.
+    #[must_use]
+    pub fn with_synthetic_attrs(mut self) -> Self {
+        use norte_proto::{AttrHint, AttrInfo, AttrType};
+        let mk = |id: &str, label: &str, ty, hint| AttrInfo {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            ty,
+            hint,
+        };
+        self.attr_defs = vec![
+            mk("mem.owner", "Owner", AttrType::Bytes, AttrHint::Identity),
+            mk("mem.note", "Note", AttrType::Text, AttrHint::Opaque),
+            mk("mem.mode", "Mode", AttrType::Uint, AttrHint::Mode),
+            mk("mem.stamp", "Stamp", AttrType::TimeMs, AttrHint::Timestamp),
+        ];
+        self
     }
 
     /// Activa la papelera LÓGICA (#99): `trash` mueve a
@@ -252,6 +278,74 @@ impl MemProvider {
     #[must_use]
     pub fn faults(&self) -> Arc<Faults> {
         Arc::clone(&self.faults)
+    }
+
+    /// Cuerpo compartido de `stat`/`stat_with` (#108 bloque 2): jamás
+    /// delegar entre ellos vía los defaults del trait (recursión).
+    async fn stat_inner(&self, p: &VPath, req: &norte_vfs::AttrRequest) -> Result<Entry, Error> {
+        self.faults.op_gate().await?;
+        let key = seg_path(p);
+        let lk = self.lookup();
+        let tree = self.lock();
+        if key.is_empty() {
+            return Ok(Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: p.clone(),
+                kind: EntryKind::Dir,
+                size: None,
+                mtime_ms: Some(0),
+            });
+        }
+        let real = resolve_traversing(&tree, lk, &key).ok_or(Error::NotFound)?;
+        let node = tree.nodes.get(&real).ok_or(Error::NotFound)?;
+        Ok(entry_for(p, &real, node, &self.attr_defs, req))
+    }
+
+    /// Cuerpo compartido de `list`/`list_with` (#108 bloque 2).
+    async fn list_inner(
+        &self,
+        p: &VPath,
+        req: &norte_vfs::AttrRequest,
+    ) -> Result<EntryStream, Error> {
+        self.faults.op_gate().await?;
+        let key = seg_path(p);
+        if self.faults.list_fails_for(&key) {
+            return Err(Error::Io { retryable: true });
+        }
+        let lk = self.lookup();
+        let tree = self.lock();
+        // El filtro de hijos usa la clave REAL: listar con otra caja debe
+        // ver lo mismo que stat (coherencia con el FS simulado). Como un
+        // opendir de verdad, la travesía sigue symlinks intermedios Y el
+        // link final.
+        let real = if key.is_empty() {
+            key
+        } else {
+            let mut real = resolve_traversing(&tree, lk, &key).ok_or(Error::NotFound)?;
+            if let Some(Node::Symlink { target, .. }) = tree.nodes.get(&real) {
+                real = resolve_symlink(&tree, lk, &real, target).map_err(|_| Error::NotFound)?;
+            }
+            if !matches!(tree.nodes.get(&real), Some(Node::Dir { .. })) {
+                return Err(Error::Conflict {
+                    conflict: ConflictKind::TypeMismatch,
+                });
+            }
+            real
+        };
+        // Los paths de los hijos cuelgan del path PEDIDO (con el nombre
+        // REAL de la hoja): listar a través de un link debe dar paths
+        // utilizables bajo ese link, como en un FS real.
+        let entries: Vec<Result<Entry, Error>> = tree
+            .nodes
+            .iter()
+            .filter(|(k, _)| k.len() == real.len() + 1 && k.starts_with(&real))
+            .map(|(k, node)| {
+                let name = k.last().expect("clave de hijo no vacía").clone();
+                let seg = norte_proto::Segment::new(name).expect("clave del árbol ya validada");
+                Ok(entry_for_child(p.join(seg), node, &self.attr_defs, req))
+            })
+            .collect();
+        Ok(futures::stream::iter(entries).boxed())
     }
 
     /// La raíz de este provider: `mem:///`.
@@ -415,26 +509,79 @@ fn collision_kind(real: &SegPath, requested: &SegPath) -> ConflictKind {
     }
 }
 
+/// Valores sintéticos DETERMINISTAS por nodo (#108 bloque 2): función pura
+/// de (catálogo, petición, kind, mtime). Los valores son deliberadamente
+/// hostiles — el masking es problema de los frontends, no del provider.
+fn synthetic_attrs(
+    defs: &[norte_proto::AttrInfo],
+    req: &norte_vfs::AttrRequest,
+    node: &Node,
+) -> std::collections::BTreeMap<String, norte_proto::AttrValue> {
+    use norte_proto::AttrValue;
+    let mut out = std::collections::BTreeMap::new();
+    if defs.is_empty() || req.is_empty() {
+        return out;
+    }
+    let quiere = |id: &str| defs.iter().any(|d| d.id == id) && req.wants(id);
+    if quiere("mem.owner") {
+        // Dueño NO-UTF-8: bytes crudos, jamás String (regla 1).
+        out.insert(
+            "mem.owner".to_owned(),
+            AttrValue::Bytes(b"due\xf1o-\xff\xfe".to_vec()),
+        );
+    }
+    if quiere("mem.note") {
+        // RTL override + ZWJ: humo para el masking de los frontends.
+        out.insert(
+            "mem.note".to_owned(),
+            AttrValue::Text("\u{202e}atón\u{202c} a\u{200d}b".to_owned()),
+        );
+    }
+    if quiere("mem.mode") {
+        let mode = match node {
+            Node::Dir { .. } => 0o040_755,
+            Node::File { .. } => 0o100_644,
+            Node::Symlink { .. } => 0o120_777,
+        };
+        out.insert("mem.mode".to_owned(), AttrValue::Uint(mode));
+    }
+    if quiere("mem.stamp") {
+        let mtime = match node {
+            Node::File { mtime, .. } | Node::Dir { mtime, .. } | Node::Symlink { mtime, .. } => {
+                *mtime
+            }
+        };
+        out.insert("mem.stamp".to_owned(), AttrValue::TimeMs(mtime));
+    }
+    out
+}
+
 /// [`Entry`] de un hijo con path YA construido (listados: el padre es el
 /// path PEDIDO, no la clave canónica — ver `list`).
-fn entry_for_child(path: VPath, node: &Node) -> Entry {
+fn entry_for_child(
+    path: VPath,
+    node: &Node,
+    defs: &[norte_proto::AttrInfo],
+    req: &norte_vfs::AttrRequest,
+) -> Entry {
+    let attrs = synthetic_attrs(defs, req, node);
     match node {
         Node::File { content, mtime, .. } => Entry {
-            attrs: std::collections::BTreeMap::new(),
+            attrs,
             path,
             kind: EntryKind::File,
             size: Some(content.len() as u64),
             mtime_ms: Some(*mtime),
         },
         Node::Dir { mtime, .. } => Entry {
-            attrs: std::collections::BTreeMap::new(),
+            attrs,
             path,
             kind: EntryKind::Dir,
             size: None,
             mtime_ms: Some(*mtime),
         },
         Node::Symlink { mtime, .. } => Entry {
-            attrs: std::collections::BTreeMap::new(),
+            attrs,
             path,
             kind: EntryKind::Symlink,
             size: None,
@@ -446,7 +593,13 @@ fn entry_for_child(path: VPath, node: &Node) -> Entry {
 /// Reconstruye la [`Entry`] de una clave del árbol sobre el scheme y la
 /// authority de `base` (la authority se preserva: la identidad del path en el
 /// wire no puede cambiar por pasar por el provider).
-fn entry_for(base: &VPath, key: &SegPath, node: &Node) -> Entry {
+fn entry_for(
+    base: &VPath,
+    key: &SegPath,
+    node: &Node,
+    defs: &[norte_proto::AttrInfo],
+    req: &norte_vfs::AttrRequest,
+) -> Entry {
     let authority = base
         .authority()
         .map(|a| Authority::new(a).expect("authority ya validada por VPath"));
@@ -457,29 +610,7 @@ fn entry_for(base: &VPath, key: &SegPath, node: &Node) -> Entry {
     for seg in key {
         p = p.join(norte_proto::Segment::new(seg.clone()).expect("clave del árbol ya validada"));
     }
-    match node {
-        Node::File { content, mtime, .. } => Entry {
-            attrs: std::collections::BTreeMap::new(),
-            path: p,
-            kind: EntryKind::File,
-            size: Some(content.len() as u64),
-            mtime_ms: Some(*mtime),
-        },
-        Node::Dir { mtime, .. } => Entry {
-            attrs: std::collections::BTreeMap::new(),
-            path: p,
-            kind: EntryKind::Dir,
-            size: None,
-            mtime_ms: Some(*mtime),
-        },
-        Node::Symlink { mtime, .. } => Entry {
-            attrs: std::collections::BTreeMap::new(),
-            path: p,
-            kind: EntryKind::Symlink,
-            size: None,
-            mtime_ms: Some(*mtime),
-        },
-    }
+    entry_for_child(p, node, defs, req)
 }
 
 #[async_trait]
@@ -495,22 +626,11 @@ impl Provider for MemProvider {
     }
 
     async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
-        self.faults.op_gate().await?;
-        let key = seg_path(p);
-        let lk = self.lookup();
-        let tree = self.lock();
-        if key.is_empty() {
-            return Ok(Entry {
-                attrs: std::collections::BTreeMap::new(),
-                path: p.clone(),
-                kind: EntryKind::Dir,
-                size: None,
-                mtime_ms: Some(0),
-            });
-        }
-        let real = resolve_traversing(&tree, lk, &key).ok_or(Error::NotFound)?;
-        let node = tree.nodes.get(&real).ok_or(Error::NotFound)?;
-        Ok(entry_for(p, &real, node))
+        self.stat_inner(p, &norte_vfs::AttrRequest::default()).await
+    }
+
+    async fn stat_with(&self, p: &VPath, opt: &norte_vfs::ListOptions) -> Result<Entry, Error> {
+        self.stat_inner(p, &opt.attrs).await
     }
 
     async fn node_id(
@@ -558,45 +678,19 @@ impl Provider for MemProvider {
     }
 
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
-        self.faults.op_gate().await?;
-        let key = seg_path(p);
-        if self.faults.list_fails_for(&key) {
-            return Err(Error::Io { retryable: true });
-        }
-        let lk = self.lookup();
-        let tree = self.lock();
-        // El filtro de hijos usa la clave REAL: listar con otra caja debe
-        // ver lo mismo que stat (coherencia con el FS simulado). Como un
-        // opendir de verdad, la travesía sigue symlinks intermedios Y el
-        // link final.
-        let real = if key.is_empty() {
-            key
-        } else {
-            let mut real = resolve_traversing(&tree, lk, &key).ok_or(Error::NotFound)?;
-            if let Some(Node::Symlink { target, .. }) = tree.nodes.get(&real) {
-                real = resolve_symlink(&tree, lk, &real, target).map_err(|_| Error::NotFound)?;
-            }
-            if !matches!(tree.nodes.get(&real), Some(Node::Dir { .. })) {
-                return Err(Error::Conflict {
-                    conflict: ConflictKind::TypeMismatch,
-                });
-            }
-            real
-        };
-        // Los paths de los hijos cuelgan del path PEDIDO (con el nombre
-        // REAL de la hoja): listar a través de un link debe dar paths
-        // utilizables bajo ese link, como en un FS real.
-        let entries: Vec<Result<Entry, Error>> = tree
-            .nodes
-            .iter()
-            .filter(|(k, _)| k.len() == real.len() + 1 && k.starts_with(&real))
-            .map(|(k, node)| {
-                let name = k.last().expect("clave de hijo no vacía").clone();
-                let seg = norte_proto::Segment::new(name).expect("clave del árbol ya validada");
-                Ok(entry_for_child(p.join(seg), node))
-            })
-            .collect();
-        Ok(futures::stream::iter(entries).boxed())
+        self.list_inner(p, &norte_vfs::AttrRequest::default()).await
+    }
+
+    async fn list_with(
+        &self,
+        p: &VPath,
+        opt: &norte_vfs::ListOptions,
+    ) -> Result<EntryStream, Error> {
+        self.list_inner(p, &opt.attrs).await
+    }
+
+    fn attrs(&self) -> &[norte_proto::AttrInfo] {
+        &self.attr_defs
     }
 
     async fn read(

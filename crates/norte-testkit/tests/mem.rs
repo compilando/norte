@@ -684,3 +684,64 @@ async fn faults_cuenta_las_llamadas_a_read() {
     let _ = read_all(&mem, "mem:///f").await.expect("read");
     assert_eq!(faults.read_calls(), 2);
 }
+
+// ---------- attrs sintéticos (#108 bloque 2) ----------
+
+#[tokio::test]
+async fn synthetic_attrs_hostiles_y_deterministas() {
+    use norte_vfs::{AttrRequest, ListOptions};
+    let mem = MemProvider::new().with_synthetic_attrs();
+    write_file(&mem, "mem:///f.txt", b"x").await;
+    let opt = ListOptions {
+        attrs: AttrRequest::sanitized(
+            ["mem.owner", "mem.note", "mem.mode", "mem.stamp"].map(str::to_owned),
+        ),
+    };
+    let e = mem
+        .stat_with(&vp("mem:///f.txt"), &opt)
+        .await
+        .expect("stat_with");
+    // Dueño no-UTF-8: BYTES crudos, jamás String (regla 1).
+    assert_eq!(
+        e.attrs.get("mem.owner"),
+        Some(&norte_proto::AttrValue::Bytes(
+            b"due\xf1o-\xff\xfe".to_vec()
+        ))
+    );
+    // Texto hostil: RTL override + ZWJ, dentro del tope.
+    let Some(norte_proto::AttrValue::Text(note)) = e.attrs.get("mem.note") else {
+        panic!("mem.note debe ser Text");
+    };
+    assert!(note.contains('\u{202e}') && note.contains('\u{200d}'));
+    assert_eq!(
+        e.attrs.get("mem.mode"),
+        Some(&norte_proto::AttrValue::Uint(0o100_644))
+    );
+    assert!(matches!(
+        e.attrs.get("mem.stamp"),
+        Some(norte_proto::AttrValue::TimeMs(_))
+    ));
+
+    // Petición parcial: SOLO lo pedido.
+    let solo = ListOptions {
+        attrs: AttrRequest::sanitized(["mem.mode".to_owned()]),
+    };
+    let e = mem
+        .stat_with(&vp("mem:///f.txt"), &solo)
+        .await
+        .expect("stat_with");
+    assert_eq!(e.attrs.len(), 1);
+
+    // Sin pedir → sin attrs, también en list.
+    assert!(
+        mem.stat(&vp("mem:///f.txt"))
+            .await
+            .expect("stat")
+            .attrs
+            .is_empty()
+    );
+    let mut s = mem.list(&vp("mem:///")).await.expect("list");
+    while let Some(e) = s.next().await {
+        assert!(e.expect("entrada").attrs.is_empty());
+    }
+}
