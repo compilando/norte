@@ -50,9 +50,11 @@ macro_rules! provider_contract {
             use $crate::__private::bytes::Bytes;
             use $crate::__private::futures::StreamExt;
             use $crate::__private::norte_proto::{
+                ATTR_BYTES_MAX, ATTR_TEXT_MAX, ATTRS_MAX_ADVERTISED, AttrType, AttrValue,
                 CapabilityFlags, ConflictKind, EntryKind, Error, Segment, VPath,
+                is_valid_attr_id,
             };
-            use $crate::{ByteSink, Provider};
+            use $crate::{AttrRequest, ByteSink, ListOptions, Provider};
 
             fn seg(bytes: &[u8]) -> Segment {
                 Segment::new(bytes.to_vec()).expect("segmento válido de contrato")
@@ -1030,6 +1032,138 @@ macro_rules! provider_contract {
                         }
                     }
                 }
+            }
+
+            // ---------- attrs (#108 bloque 2, ADR 0039) ----------
+
+            fn attr_type_matches(ty: AttrType, v: &AttrValue) -> bool {
+                matches!(
+                    (ty, v),
+                    (AttrType::Uint, AttrValue::Uint(_))
+                        | (AttrType::Int, AttrValue::Int(_))
+                        | (AttrType::Text, AttrValue::Text(_))
+                        | (AttrType::Bytes, AttrValue::Bytes(_))
+                        | (AttrType::TimeMs, AttrValue::TimeMs(_))
+                        | (AttrType::Bool, AttrValue::Bool(_))
+                )
+            }
+
+            /// Contrato por entrada: solo ids pedidos, todos anunciados, tipo
+            /// declarado ⟺ variante producida, Text/Bytes dentro de tope.
+            fn assert_attrs_contract(
+                catalog: &[$crate::__private::norte_proto::AttrInfo],
+                requested: &AttrRequest,
+                entry: &$crate::__private::norte_proto::Entry,
+            ) {
+                for (id, v) in &entry.attrs {
+                    assert!(
+                        requested.wants(id),
+                        "attr NO pedido en {:?}: {id:?}",
+                        entry.path.display_lossy()
+                    );
+                    let info = catalog
+                        .iter()
+                        .find(|a| &a.id == id)
+                        .unwrap_or_else(|| panic!("attr no anunciado: {id:?}"));
+                    assert!(
+                        attr_type_matches(info.ty, v),
+                        "tipo declarado {:?} no casa con {v:?} para {id:?}",
+                        info.ty
+                    );
+                    match v {
+                        AttrValue::Text(s) => {
+                            assert!(s.len() <= ATTR_TEXT_MAX, "Text sobre tope: {id:?}");
+                        }
+                        AttrValue::Bytes(b) => {
+                            assert!(b.len() <= ATTR_BYTES_MAX, "Bytes sobre tope: {id:?}");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            #[tokio::test]
+            async fn contract_attrs_catalog_is_sane() {
+                let p = $factory;
+                let catalog = p.attrs();
+                assert!(catalog.len() <= ATTRS_MAX_ADVERTISED, "catálogo sobre tope");
+                let mut seen = std::collections::BTreeSet::new();
+                for info in catalog {
+                    assert!(
+                        is_valid_attr_id(&info.id),
+                        "id inválido en catálogo: {:?}",
+                        info.id
+                    );
+                    assert!(seen.insert(info.id.clone()), "id duplicado: {:?}", info.id);
+                }
+            }
+
+            #[tokio::test]
+            async fn contract_attrs_values_match_declared_types() {
+                let p = $factory;
+                if p.attrs().is_empty() {
+                    eprintln!("skip: catálogo de attrs vacío");
+                    return;
+                }
+                let root: VPath = $root;
+                write_all(&p, &child(&root, b"attrs-probe.txt"), b"contenido de prueba").await;
+                let ids: Vec<String> = p.attrs().iter().map(|a| a.id.clone()).collect();
+                let opt = ListOptions {
+                    attrs: AttrRequest::sanitized(ids),
+                };
+                let catalog = p.attrs().to_vec();
+
+                // stat_with sobre el archivo sembrado.
+                let e = p
+                    .stat_with(&child(&root, b"attrs-probe.txt"), &opt)
+                    .await
+                    .expect("stat_with");
+                assert_attrs_contract(&catalog, &opt.attrs, &e);
+
+                // list_with sobre la raíz: TODA entrada cumple.
+                let mut stream = p.list_with(&root, &opt).await.expect("list_with");
+                let mut n = 0usize;
+                while let Some(e) = stream.next().await {
+                    let e = e.expect("entrada del listado");
+                    assert_attrs_contract(&catalog, &opt.attrs, &e);
+                    n += 1;
+                }
+                assert!(n >= 1, "el listado debe contener el probe");
+            }
+
+            #[tokio::test]
+            async fn contract_attrs_empty_request_yields_bare_entries() {
+                let p = $factory;
+                let root: VPath = $root;
+                write_all(&p, &child(&root, b"attrs-bare.txt"), b"x").await;
+                let opt = ListOptions::default();
+                let e = p
+                    .stat_with(&child(&root, b"attrs-bare.txt"), &opt)
+                    .await
+                    .expect("stat_with");
+                assert!(e.attrs.is_empty(), "sin petición no hay attrs");
+                let mut stream = p.list_with(&root, &opt).await.expect("list_with");
+                while let Some(e) = stream.next().await {
+                    assert!(
+                        e.expect("entrada").attrs.is_empty(),
+                        "sin petición no hay attrs"
+                    );
+                }
+            }
+
+            #[tokio::test]
+            async fn contract_attrs_unknown_requested_id_is_absent_not_error() {
+                let p = $factory;
+                let root: VPath = $root;
+                write_all(&p, &child(&root, b"attrs-unk.txt"), b"x").await;
+                let opt = ListOptions {
+                    attrs: AttrRequest::sanitized(["zz.does-not-exist".to_owned()]),
+                };
+                let e = p
+                    .stat_with(&child(&root, b"attrs-unk.txt"), &opt)
+                    .await
+                    .expect("id desconocido jamás es error");
+                assert!(!e.attrs.contains_key("zz.does-not-exist"));
             }
         }
     };
