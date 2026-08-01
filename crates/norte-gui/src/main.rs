@@ -290,6 +290,11 @@ struct NorteGui {
     /// same z-order and key-capture slot as the palette (modal wins).
     /// Esc discards; Enter applies in-session and persists (TUI parity).
     columns_picker: Option<columns_view::ColumnsView>,
+    /// Transient one-line notice `(message, is_error)` — today only the
+    /// picker's save outcome (#108 7c; the TUI uses `app.message`, the
+    /// settings status only renders inside its own view). Cleared on the
+    /// NEXT keypress: honest without new chrome.
+    flash: Option<(String, bool)>,
     /// Columnas contribuidas por plugins `columns` aprobados+activados,
     /// por pane (G3c, cierra el deferral GUI de G3b): `(id, header YA
     /// enmascarado)`, en el orden en que `plugin.list` las devolvió
@@ -543,6 +548,7 @@ impl NorteGui {
                     settings_view: None,
                     palette: None,
                     columns_picker: None,
+                    flash: None,
                     extensions: None,
                     columns: [Vec::new(), Vec::new()],
                     column_values: [
@@ -624,6 +630,7 @@ impl NorteGui {
                     settings_view: None,
                     palette: None,
                     columns_picker: None,
+                    flash: None,
                     extensions: None,
                     columns: [Vec::new(), Vec::new()],
                     column_values: [
@@ -1704,13 +1711,87 @@ impl NorteGui {
         }
     }
 
-    /// Aplica el resultado del picker (#108 7c) — cuerpo real en T4.
+    /// Aplica el resultado del picker (#108 7c): SESIÓN primero (settings
+    /// compartidos + formatos + re-seed del sort por pane), DISCO después
+    /// (un solo background task: `persist_columns` + N×
+    /// `persist_column_format` — regla 2, precedente
+    /// `commit_settings_write`: nada de I/O en el hilo de render). El sort
+    /// persistido SUPERSEDE el click de sesión: `sort_override` se limpia
+    /// en los panes cuyo scheme cubre el guardado (deuda del bloque 6).
     fn apply_picked_columns(
         &mut self,
         picked: norte_frontend::columns_picker::Picked,
         cx: &mut Context<Self>,
     ) {
-        let _ = (picked, cx);
+        self.column_settings.apply_picked(
+            picked.scheme_target.as_deref(),
+            &picked.ids,
+            picked.sort,
+        );
+        for (id, fmt) in &picked.formats {
+            self.column_settings.apply_format(id, fmt);
+        }
+        for pane in 0..self.panes.len() {
+            let scheme_matches = picked
+                .scheme_target
+                .as_deref()
+                .is_none_or(|s| self.panes[pane].dir().scheme() == s);
+            if scheme_matches {
+                self.sort_override[pane] = None;
+                let spec = self
+                    .column_settings
+                    .sort_for(self.panes[pane].dir().scheme());
+                self.panes[pane].set_sort(spec);
+            }
+        }
+        let Some(dir) = norte_config::user_config_dir() else {
+            self.flash = Some((norte_i18n::t("msg-settings-no-config-dir"), true));
+            return;
+        };
+        let scheme = picked.scheme_target.clone();
+        let ids = picked.ids.clone();
+        let sort = picked.sort;
+        let formats = picked.formats.clone();
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_spawn(async move {
+                    norte_config::persist_columns(
+                        &dir,
+                        scheme.as_deref(),
+                        &ids,
+                        norte_config::PersistSort {
+                            column: match sort.column {
+                                norte_frontend::SortColumn::Name => "name",
+                                norte_frontend::SortColumn::Size => "size",
+                                norte_frontend::SortColumn::Mtime => "mtime",
+                            },
+                            descending: sort.dir == norte_frontend::SortDir::Desc,
+                            dirs_first: sort.dirs_first,
+                        },
+                    )?;
+                    for (id, fmt) in &formats {
+                        norte_config::persist_column_format(&dir, id, fmt)?;
+                    }
+                    Ok::<(), std::io::Error>(())
+                })
+                .await;
+            this.update(cx, |view, cx| {
+                view.flash = Some(match outcome {
+                    Ok(()) => (norte_i18n::t("msg-columns-saved"), false),
+                    // Categoría del error, jamás el Display crudo del OS
+                    // (mismo criterio que apply_settings_write_result).
+                    Err(e) => (
+                        norte_i18n::ta(
+                            "msg-settings-save-failed",
+                            &[("error", &io_error_category(&e))],
+                        ),
+                        true,
+                    ),
+                });
+                cx.notify();
+            })
+        })
+        .detach();
     }
 
     /// Abre el gestor de extensiones (`app.extensions`, `f12`, G3c): nace
@@ -1888,6 +1969,10 @@ impl NorteGui {
     /// `maybe_open_quick` si es un imprimible sin binding.
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let ks = &event.keystroke;
+
+        // El flash (aviso transitorio de una línea, #108 7c) vive hasta la
+        // SIGUIENTE tecla: cualquier pulsación lo despide.
+        self.flash = None;
 
         // Volcado estructural del árbol a11y (Step 3, GUI-e T2): F12 SOLO
         // bajo `NORTE_GUI_DEBUG` (si la variable no está, F12 sigue su curso
@@ -4935,6 +5020,27 @@ impl Render for NorteGui {
                 );
             }
             root = root.child(banner);
+        }
+
+        // Flash transitorio (#108 7c): resultado del guardado del picker —
+        // una línea, mismo lenguaje visual que el banner de arranque
+        // (err_fg sobre bg para errores; header para éxito). Se despide con
+        // la siguiente tecla (`on_key`).
+        if let Some((msg, is_error)) = &self.flash {
+            let (bg, fg) = if *is_error {
+                (chrome.bg, chrome.err_fg)
+            } else {
+                (chrome.header_bg, chrome.header_fg)
+            };
+            root = root.child(
+                div()
+                    .px(px(sp::S))
+                    .py(px(1.0)) // sub-XS: acento fino de una línea
+                    .bg(bg)
+                    .text_color(fg)
+                    .truncate()
+                    .child(SharedString::from(msg.clone())),
+            );
         }
 
         // Vista de ajustes (F11, S4) a pantalla completa, gestor de
