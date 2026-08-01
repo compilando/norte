@@ -301,10 +301,57 @@ fn map_err(e: &opendal::Error) -> Error {
     }
 }
 
+/// Catálogo de attrs del provider object (#108 bloque 2).
+///
+/// `s3.etag` viaja en `ListObjectsV2` Y en `HeadObject` (gratis en ambos);
+/// `s3.content_type` SOLO llega en stat (`HeadObject`) — en listados va
+/// ausente, que es contrato-legal ("absence means absence"; la hidratación
+/// de la UI re-statea la entrada enfocada). `s3.storage_class` es imposible
+/// con opendal 0.58 (lo descarta al parsear el XML) — deuda con issue
+/// propio en el cierre del bloque.
+fn catalogo_s3() -> &'static [norte_proto::AttrInfo] {
+    use norte_proto::{AttrHint, AttrInfo, AttrType};
+    static CAT: std::sync::LazyLock<Vec<AttrInfo>> = std::sync::LazyLock::new(|| {
+        let mk = |id: &str, label: &str| AttrInfo {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            ty: AttrType::Text,
+            hint: AttrHint::Opaque,
+        };
+        vec![mk("s3.etag", "ETag"), mk("s3.content_type", "Content-Type")]
+    });
+    &CAT
+}
+
+/// Materializa los attrs pedidos desde la metadata de opendal. Un valor
+/// sobre el tope de Text se OMITE (jamás se trunca en silencio: la celda
+/// ausente es honesta, la recortada mentiría).
+fn attrs_from_meta(
+    m: &Metadata,
+    req: &norte_vfs::AttrRequest,
+) -> std::collections::BTreeMap<String, norte_proto::AttrValue> {
+    use norte_proto::AttrValue;
+    let mut out = std::collections::BTreeMap::new();
+    if req.is_empty() {
+        return out;
+    }
+    let mut texto = |id: &str, v: Option<&str>| {
+        if let Some(s) = v
+            && req.wants(id)
+            && s.len() <= norte_proto::ATTR_TEXT_MAX
+        {
+            out.insert(id.to_owned(), AttrValue::Text(s.to_owned()));
+        }
+    };
+    texto("s3.etag", m.etag());
+    texto("s3.content_type", m.content_type());
+    out
+}
+
 /// `Entry` de un fichero a partir de la metadata de opendal.
-fn file_entry(path: VPath, m: &Metadata) -> Entry {
+fn file_entry(path: VPath, m: &Metadata, req: &norte_vfs::AttrRequest) -> Entry {
     Entry {
-        attrs: std::collections::BTreeMap::new(),
+        attrs: attrs_from_meta(m, req),
         path,
         kind: EntryKind::File,
         size: Some(m.content_length()),
@@ -347,6 +394,14 @@ impl Provider for ObjectProvider {
     }
 
     async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
+        self.stat_with(p, &norte_vfs::ListOptions::default()).await
+    }
+
+    fn attrs(&self) -> &[norte_proto::AttrInfo] {
+        catalogo_s3()
+    }
+
+    async fn stat_with(&self, p: &VPath, opt: &norte_vfs::ListOptions) -> Result<Entry, Error> {
         let key = self.key(p)?;
         if key.is_empty() {
             // La raíz del provider (el bucket) siempre existe como dir.
@@ -359,7 +414,7 @@ impl Provider for ObjectProvider {
             });
         }
         match self.stat_kind(&key).await? {
-            Some((EntryKind::File, m)) => Ok(file_entry(p.clone(), &m)),
+            Some((EntryKind::File, m)) => Ok(file_entry(p.clone(), &m, &opt.attrs)),
             Some((_, _)) => Ok(Entry {
                 attrs: std::collections::BTreeMap::new(),
                 path: p.clone(),
@@ -374,6 +429,14 @@ impl Provider for ObjectProvider {
     }
 
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
+        self.list_with(p, &norte_vfs::ListOptions::default()).await
+    }
+
+    async fn list_with(
+        &self,
+        p: &VPath,
+        opt: &norte_vfs::ListOptions,
+    ) -> Result<EntryStream, Error> {
         let dir = self.dir_key(p)?;
         if !dir.is_empty() {
             // NotFound / no-dir van en el Result, no como primer item.
@@ -390,11 +453,13 @@ impl Provider for ObjectProvider {
         let lister = self.op.lister(&dir).await.map_err(|e| map_err(&e))?;
         let base = p.clone();
         let self_key = dir;
+        let req = opt.attrs.clone();
         // Stream PEREZOSO: opendal pagina con su ContinuationToken por debajo
         // (punto de contacto con la paginación por cursor, ADR 0017).
         let stream = lister.map_err(|e| map_err(&e)).try_filter_map(move |oe| {
             let base = base.clone();
             let self_key = self_key.clone();
+            let req = req.clone();
             async move {
                 let path = oe.path();
                 // opendal devuelve el propio dir listado como entrada; al
@@ -436,7 +501,7 @@ impl Provider for ObjectProvider {
                         mtime_ms: None,
                     }
                 } else {
-                    file_entry(child, oe.metadata())
+                    file_entry(child, oe.metadata(), &req)
                 };
                 Ok(Some(entry))
             }

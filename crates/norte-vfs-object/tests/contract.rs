@@ -52,3 +52,50 @@ norte_vfs::provider_contract! {
     root: ObjectProvider::root("s3", Authority::new("norte-test").expect("authority válida")),
     hostile_names: hostile_names(),
 }
+
+// ---------- attrs s3 (#108 bloque 2) ----------
+
+#[tokio::test]
+async fn attrs_s3_etag_y_content_type() {
+    use futures::StreamExt;
+    use norte_proto::{AttrValue, Segment};
+    use norte_vfs::{AttrRequest, ListOptions, Provider};
+
+    let p = fresh();
+    let root = ObjectProvider::root(
+        "s3",
+        Authority::new("norte-test").expect("authority válida"),
+    );
+    let f = root.join(Segment::new(b"o.txt".to_vec()).expect("segmento válido"));
+    {
+        let mut sink = p.write(&f).await.expect("write abre");
+        norte_vfs::ByteSink::write(&mut *sink, bytes::Bytes::from_static(b"x"))
+            .await
+            .expect("chunk entra");
+        sink.commit().await.expect("commit publica");
+    }
+    let opt = ListOptions {
+        attrs: AttrRequest::sanitized(["s3.etag", "s3.content_type"].map(str::to_owned)),
+    };
+    // services-fs puede no dar etag/content_type: si están, son Text acotado
+    // (la forma la pinea el contrato; el valor REAL lo cubre el nightly MinIO).
+    let e = p.stat_with(&f, &opt).await.expect("stat_with");
+    for id in ["s3.etag", "s3.content_type"] {
+        if let Some(v) = e.attrs.get(id) {
+            let AttrValue::Text(s) = v else {
+                panic!("{id} debe ser Text, fue {v:?}");
+            };
+            assert!(s.len() <= norte_proto::ATTR_TEXT_MAX);
+        }
+    }
+    // list_with: mismas reglas por entrada, y jamás un id no pedido.
+    let mut s = p.list_with(&root, &opt).await.expect("list_with");
+    while let Some(e) = s.next().await {
+        let e = e.expect("entrada");
+        for id in e.attrs.keys() {
+            assert!(opt.attrs.wants(id), "id no pedido: {id}");
+        }
+    }
+    // Sin pedir → nada.
+    assert!(p.stat(&f).await.expect("stat").attrs.is_empty());
+}
