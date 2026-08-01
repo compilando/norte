@@ -902,6 +902,10 @@ struct OpenListing {
     /// listado: cada página lo repite (el cliente puede engancharse en
     /// cualquiera; el total es por-contenedor, no por página).
     skipped: Option<u64>,
+    /// Petición de attrs RESUELTA al abrir el listado (#108 bloque 2): el
+    /// stream nació con ella, así que las continuaciones la reusan para el
+    /// cinturón de emisión (los `attrs` de una continuación se ignoran).
+    attrs: norte_vfs::AttrRequest,
     /// Decrementa el contador GLOBAL al soltarse el listado (remove/evict/
     /// sweep/muerte de la conexión): contabilidad RAII, sin decrementos
     /// dispersos (M1 del rust-reviewer).
@@ -999,9 +1003,99 @@ async fn drain_page(
     }
 }
 
+/// Valida la petición de attrs del wire (#108 bloque 2, ADR 0039 §4): id
+/// malformado o más de `ATTRS_MAX_REQUEST` (el deserializador materializa
+/// 16+1 como testigo) = `-32602`. Pedir un id VÁLIDO pero desconocido NO es
+/// error (viene ausente — un cliente con catálogo rancio degrada).
+fn validate_attr_request(ids: &[String]) -> Result<(), RpcError> {
+    if ids.len() > norte_proto::ATTRS_MAX_REQUEST {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            format!(
+                "attrs: at most {} ids per call",
+                norte_proto::ATTRS_MAX_REQUEST
+            ),
+        ));
+    }
+    if let Some(bad) = ids.iter().find(|id| !norte_proto::is_valid_attr_id(id)) {
+        // `escape_debug`: el id inválido es entrada hostil — jamás crudo en
+        // un mensaje de error (controles, RTL, invisibles).
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            format!("attrs: malformed id \"{}\"", bad.escape_debug()),
+        ));
+    }
+    Ok(())
+}
+
+/// Valida `p.attrs` y lo cruza con el catálogo del provider de `path`:
+/// devuelve la petición que de verdad viaja al provider. Un id válido pero
+/// NO anunciado se cae aquí — el daemon solo reenvía ids que el provider
+/// anuncia, jamás inventa celdas (ADR 0039 §1).
+async fn resolve_attr_request(
+    ids: &[String],
+    path: &norte_proto::VPath,
+    shared: &Arc<Shared>,
+) -> Result<norte_vfs::AttrRequest, RpcError> {
+    validate_attr_request(ids)?;
+    if ids.is_empty() {
+        return Ok(norte_vfs::AttrRequest::default());
+    }
+    let advertised = shared
+        .engine
+        .attr_catalog(path)
+        .await
+        .map_err(RpcError::from)?;
+    Ok(norte_vfs::AttrRequest::sanitized(
+        ids.iter()
+            .filter(|id| advertised.iter().any(|a| &a.id == *id))
+            .cloned(),
+    ))
+}
+
+/// Cinturón de emisión (ADR 0039 §5): solo ids pedidos, y Text/Bytes dentro
+/// de tope. Un provider con bug pierde la CELDA, jamás rompe la página —
+/// y jamás se trunca un valor en silencio (la celda recortada mentiría).
+fn enforce_attr_caps(entry: &mut norte_proto::Entry, allowed: &norte_vfs::AttrRequest) {
+    entry.attrs.retain(|id, v| {
+        allowed.wants(id)
+            && match v {
+                norte_proto::AttrValue::Text(s) => s.len() <= norte_proto::ATTR_TEXT_MAX,
+                norte_proto::AttrValue::Bytes(b) => b.len() <= norte_proto::ATTR_BYTES_MAX,
+                _ => true,
+            }
+    });
+}
+
+/// El handler de `fs.stat` (#108 bloque 2): valida la petición de attrs, la
+/// cruza con lo anunciado, materializa y aplica el cinturón de emisión. El
+/// `read_gate` (#80) lo aplica el arm del dispatch.
+async fn handle_fs_stat(
+    p: methods::FsStatParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let request = resolve_attr_request(&p.attrs, &p.path, shared).await?;
+    let mut entry = shared
+        .engine
+        .stat_with(
+            &p.path,
+            &norte_vfs::ListOptions {
+                attrs: request.clone(),
+            },
+        )
+        .await
+        .map_err(RpcError::from)?;
+    enforce_attr_caps(&mut entry, &request);
+    to_value(&methods::FsStatResult { entry })
+}
+
 /// El handler de `fs.list` con paginación por cursor (ADR 0017). Cláusula ADR
 /// 0004: sin `cursor` NI `limit` drena el listado COMPLETO con `next_cursor:
 /// null` (un cliente 0.7 recibe exactamente lo de antes).
+///
+/// Attrs (#108 bloque 2): la petición se valida y resuelve AL ABRIR; una
+/// continuación por cursor IGNORA `p.attrs` (el stream retenido nació con
+/// sus opciones — re-mandarlos no cambia nada, la validación sí corre).
 #[tracing::instrument(level = "debug", skip_all, fields(path = %p.path.display_lossy(), paginado = p.cursor.is_some()))]
 async fn handle_fs_list(
     p: methods::FsListParams,
@@ -1025,13 +1119,25 @@ async fn handle_fs_list(
     let now = std::time::Instant::now();
     let mut entries = Vec::new();
 
+    // La validación de attrs corre SIEMPRE (también con cursor: un id
+    // malformado es -32602 aunque la continuación no lo use).
+    validate_attr_request(&p.attrs)?;
+
     // Continuación: el cursor es el id opaco de un listado retenido.
     if let Some(cur) = &p.cursor {
         return continue_listing(cur, &p.path, cap, now, conn, entries).await;
     }
 
-    // Listado NUEVO (sin cursor).
-    let mut stream = shared.engine.list(&p.path).await.map_err(RpcError::from)?;
+    // Listado NUEVO (sin cursor): solo ids anunciados viajan al provider.
+    let request = resolve_attr_request(&p.attrs, &p.path, shared).await?;
+    let opt = norte_vfs::ListOptions {
+        attrs: request.clone(),
+    };
+    let mut stream = shared
+        .engine
+        .list_with(&p.path, &opt)
+        .await
+        .map_err(RpcError::from)?;
     // Omitidas del contenedor (#93), capturado UNA vez al abrir (el índice
     // archive ya está caliente tras el `list`). Un error aquí NO tumba un
     // listado que ya abrió: degrada a `None` (= desconocido, lo de antes) —
@@ -1045,11 +1151,16 @@ async fn handle_fs_list(
             None
         });
     match drain_page(&mut stream, cap, &mut entries).await {
-        Ok(Drained::Done) => to_value(&methods::FsListResult {
-            entries,
-            next_cursor: None,
-            skipped,
-        }),
+        Ok(Drained::Done) => {
+            for e in &mut entries {
+                enforce_attr_caps(e, &request);
+            }
+            to_value(&methods::FsListResult {
+                entries,
+                next_cursor: None,
+                skipped,
+            })
+        }
         Ok(Drained::More) => {
             // Presión GLOBAL (M1): por encima del tope no se retiene — se drena
             // el resto EN LÍNEA y se devuelve completo (libera el hilo blocking
@@ -1058,6 +1169,9 @@ async fn handle_fs_list(
             if shared.open_listings.load(Ordering::SeqCst) >= GLOBAL_MAX_LISTINGS {
                 match drain_page(&mut stream, None, &mut entries).await {
                     Ok(_) => {
+                        for e in &mut entries {
+                            enforce_attr_caps(e, &request);
+                        }
                         return to_value(&methods::FsListResult {
                             entries,
                             next_cursor: None,
@@ -1071,6 +1185,9 @@ async fn handle_fs_list(
             shared.open_listings.fetch_add(1, Ordering::SeqCst);
             let id = conn.next_listing_id;
             conn.next_listing_id += 1;
+            for e in &mut entries {
+                enforce_attr_caps(e, &request);
+            }
             conn.listings.insert(
                 id,
                 OpenListing {
@@ -1078,6 +1195,7 @@ async fn handle_fs_list(
                     stream,
                     last_used: now,
                     skipped,
+                    attrs: request,
                     _guard: ListingGuard {
                         global: Arc::clone(&shared.open_listings),
                     },
@@ -1116,10 +1234,13 @@ async fn continue_listing(
             ));
         }
         let skipped = listing.skipped;
-        (
-            drain_page(&mut listing.stream, cap, &mut entries).await,
-            skipped,
-        )
+        let drained = drain_page(&mut listing.stream, cap, &mut entries).await;
+        // Cinturón de emisión con la petición del ABRIR (#108 bloque 2).
+        let allowed = listing.attrs.clone();
+        for e in &mut entries {
+            enforce_attr_caps(e, &allowed);
+        }
+        (drained, skipped)
     };
     match drained {
         Ok(Drained::More) => {
@@ -2716,8 +2837,7 @@ async fn dispatch_fs_task(
         methods::FS_STAT => {
             let p: methods::FsStatParams = parse_params(req.params)?;
             read_gate(&actor, &p.path, shared)?; // #80
-            let entry = shared.engine.stat(&p.path).await.map_err(RpcError::from)?;
-            to_value(&methods::FsStatResult { entry })
+            handle_fs_stat(p, shared).await
         }
         // index.query (0.25.0, M4): lectura directa del índice.
         methods::INDEX_QUERY => {
@@ -2868,13 +2988,17 @@ async fn dispatch_task_family(
                 .capabilities(&p.path)
                 .await
                 .map_err(RpcError::from)?;
-            // Ningún provider anuncia atributos todavía (ADR 0039, bloque 1 =
-            // solo wire): catálogo vacío = "este provider no publica ninguno",
-            // que es una respuesta válida del contrato. Cuando el bloque 2 lo
-            // llene, `AttrCatalog::new` es el único camino y sanea por el tipo.
+            // Catálogo del provider (#108 bloque 2), SIEMPRE saneado:
+            // `Engine::attr_catalog` pasa por `AttrCatalog::new` — único
+            // camino al wire (ADR 0039 §4).
+            let attrs = shared
+                .engine
+                .attr_catalog(&p.path)
+                .await
+                .map_err(RpcError::from)?;
             to_value(&methods::FsCapabilitiesResult {
                 capabilities,
-                attrs: norte_proto::AttrCatalog::default(),
+                attrs,
             })
         }
         methods::TASK_CANCEL => {

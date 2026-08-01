@@ -389,6 +389,38 @@ impl Engine {
         self.provider_for(p).await?.list(p).await
     }
 
+    /// [`Self::stat`] con opciones (#108 bloque 2): atributos por entrada.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si no hay provider para el scheme; los del provider.
+    pub async fn stat_with(&self, p: &VPath, opt: &norte_vfs::ListOptions) -> Result<Entry, Error> {
+        self.provider_for(p).await?.stat_with(p, opt).await
+    }
+
+    /// [`Self::list`] con opciones (#108 bloque 2): atributos por entrada.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si no hay provider para el scheme; los del provider.
+    pub async fn list_with(
+        &self,
+        p: &VPath,
+        opt: &norte_vfs::ListOptions,
+    ) -> Result<EntryStream, Error> {
+        self.provider_for(p).await?.list_with(p, opt).await
+    }
+
+    /// Catálogo de attrs del provider de `p`, SANEADO: `AttrCatalog::new` es
+    /// el único camino al wire y también el del backend embebido (ADR 0039
+    /// §4 — un catálogo en proceso jamás se cuela sin sanear).
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si no hay provider para el scheme.
+    pub async fn attr_catalog(&self, p: &VPath) -> Result<norte_proto::AttrCatalog, Error> {
+        Ok(norte_proto::AttrCatalog::new(
+            self.provider_for(p).await?.attrs().to_vec(),
+        ))
+    }
+
     /// Inyecta el proveedor de IA para el rename revisable (M4-A2, ADR 0031).
     ///
     /// # Panics

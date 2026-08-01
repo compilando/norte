@@ -1774,13 +1774,12 @@ async fn walk_following(
                             out.push(PlanEntry {
                                 entry: Entry {
                                     // attrs: dir SINTÉTICO, vacío a
-                                    // propósito. Este `Entry` se RECONSTRUYE
-                                    // a partir del consumido, así que en
-                                    // cuanto haya providers que produzcan
-                                    // atributos (bloque 2) hay que decidir
-                                    // aquí si se propagan los del link o no
-                                    // se propaga ninguno: hoy no hay nada que
-                                    // perder, mañana sí.
+                                    // propósito (decisión del bloque 2 de
+                                    // #108): un `PlanEntry` es interno del
+                                    // core — los atributos son presentación
+                                    // de listados y NO se propagan del link
+                                    // consumido (describirían al LINK, no al
+                                    // dir sintético que lo sustituye).
                                     attrs: std::collections::BTreeMap::new(),
                                     path: entry.path,
                                     kind: EntryKind::Dir,

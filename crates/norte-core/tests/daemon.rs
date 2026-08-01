@@ -59,10 +59,18 @@ async fn spawn_daemon(idle: Option<Duration>) -> TestDaemon {
 }
 
 async fn spawn_daemon_ttl(idle: Option<Duration>, listing_ttl: Duration) -> TestDaemon {
+    spawn_daemon_mem(idle, listing_ttl, MemProvider::new()).await
+}
+
+async fn spawn_daemon_mem(
+    idle: Option<Duration>,
+    listing_ttl: Duration,
+    mem: MemProvider,
+) -> TestDaemon {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
     let engine = Arc::new(Engine::new());
-    let mem = Arc::new(MemProvider::new());
+    let mem = Arc::new(mem);
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
     let daemon = Daemon::bind(
         engine,
@@ -307,45 +315,148 @@ async fn fs_list_y_stat_responden_por_el_socket() {
     assert_eq!(stat.entry.size, Some(4));
 }
 
-/// (0.30.0, ADR 0039) El bloque 1 es SOLO wire, y tres sitios lo afirman —el
-/// ADR, el rustdoc de `PROTOCOL_VERSION` y `FsListParams::attrs`—: «el daemon
-/// IGNORA los ids pedidos». Sin este test esa afirmación no la comprobaba nada.
-///
-/// Pedir un id perfectamente bien formado tiene que SALIR BIEN (no `-32602`) y
-/// volver con `attrs` vacío en cada entrada: la ausencia ya es una respuesta
-/// válida del contrato (pedir un id que el provider no ofrece nunca fue error).
-///
-/// Se pone ROJO en cuanto el bloque 2 cablee la validación o un productor sin
-/// actualizar los tres textos: si `attrs` deja de venir vacío, o si un id
-/// legítimo empieza a ser error, es que el daemon ya NO ignora lo pedido y la
-/// documentación miente. Actualizar ambas cosas a la vez es justo el punto.
-#[tokio::test]
-async fn fs_list_ignora_los_atributos_pedidos_en_030() {
-    let d = spawn_daemon(None).await;
-    write_file(&d.mem, "mem:///f.txt", b"hola").await;
-    let c = connected_client(&d).await;
+// ---------- attrs por el wire (#108 bloque 2, ADR 0039) ----------
+// (Sustituye al pin del bloque 1 «el daemon ignora los ids pedidos»: desde
+// este bloque el daemon valida, cruza con lo anunciado y materializa.)
 
-    let list: FsListResult = c
+fn assert_rpc_code(err: &ClientError, code: i64) {
+    match err {
+        ClientError::Rpc(rpc) => assert_eq!(rpc.code, code, "código RPC: {rpc:?}"),
+        other => panic!("esperaba error RPC {code}, fue {other:?}"),
+    }
+}
+
+/// Daemon con `MemProvider` de attrs sintéticos: el catálogo llega por
+/// `fs.capabilities` (saneado por `AttrCatalog::new`) y `fs.list`/`fs.stat`
+/// materializan lo pedido∩anunciado.
+async fn spawn_daemon_attrs() -> TestDaemon {
+    spawn_daemon_mem(
+        None,
+        Duration::from_mins(2),
+        MemProvider::new().with_synthetic_attrs(),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn fs_capabilities_publica_el_catalogo_del_provider() {
+    let d = spawn_daemon_attrs().await;
+    let c = connected_client(&d).await;
+    let r: methods::FsCapabilitiesResult = c
         .call(
+            methods::FS_CAPABILITIES,
+            &methods::FsCapabilitiesParams {
+                path: vp("mem:///"),
+            },
+        )
+        .await
+        .expect("fs.capabilities");
+    assert!(
+        r.attrs.iter().any(|a| a.id == "mem.owner"),
+        "catálogo publicado: {:?}",
+        r.attrs
+    );
+}
+
+#[tokio::test]
+async fn fs_list_attrs_malformado_o_sobre_tope_es_invalid_params() {
+    let d = spawn_daemon_attrs().await;
+    let c = connected_client(&d).await;
+    // Id malformado (mayúsculas) → -32602.
+    let err = c
+        .call::<_, FsListResult>(
             methods::FS_LIST,
             &FsListParams {
                 path: vp("mem:///"),
                 limit: None,
                 cursor: None,
-                attrs: vec!["posix.mode".into()],
+                attrs: vec!["MAYUS.no".into()],
             },
         )
         .await
-        .expect("pedir atributos NO es error: el daemon 0.30 los ignora");
+        .expect_err("id malformado debe ser error");
+    assert_rpc_code(&err, codes::INVALID_PARAMS);
+    // 17 ids válidos (el deserializador materializa 16+1 como testigo).
+    let err = c
+        .call::<_, FsListResult>(
+            methods::FS_LIST,
+            &FsListParams {
+                path: vp("mem:///"),
+                limit: None,
+                cursor: None,
+                attrs: (0..17).map(|i| format!("a.b{i}")).collect(),
+            },
+        )
+        .await
+        .expect_err("sobre-tope debe ser error");
+    assert_rpc_code(&err, codes::INVALID_PARAMS);
+}
 
-    assert_eq!(list.entries.len(), 1);
-    for e in &list.entries {
-        assert!(
-            e.attrs.is_empty(),
-            "ningún provider anuncia atributos todavía: {:?}",
-            e.attrs
-        );
+#[tokio::test]
+async fn fs_stat_devuelve_solo_lo_pedido_y_anunciado() {
+    let d = spawn_daemon_attrs().await;
+    write_file(&d.mem, "mem:///f.txt", b"hola").await;
+    let c = connected_client(&d).await;
+    let r: FsStatResult = c
+        .call(
+            methods::FS_STAT,
+            &FsStatParams {
+                path: vp("mem:///f.txt"),
+                attrs: vec!["mem.mode".into(), "zz.desconocido".into()],
+            },
+        )
+        .await
+        .expect("fs.stat");
+    assert!(
+        matches!(
+            r.entry.attrs.get("mem.mode"),
+            Some(norte_proto::AttrValue::Uint(_))
+        ),
+        "mem.mode materializado: {:?}",
+        r.entry.attrs
+    );
+    // Id válido pero no anunciado: AUSENTE, jamás error.
+    assert!(!r.entry.attrs.contains_key("zz.desconocido"));
+    assert_eq!(r.entry.attrs.len(), 1);
+}
+
+#[tokio::test]
+async fn fs_list_paginado_conserva_los_attrs_del_arranque() {
+    let d = spawn_daemon_attrs().await;
+    seed(&d.mem, 3).await;
+    let c = connected_client(&d).await;
+    // Primera página CON attrs; continuaciones SIN re-mandarlos.
+    let mut r: FsListResult = c
+        .call(
+            methods::FS_LIST,
+            &FsListParams {
+                path: vp("mem:///"),
+                limit: Some(1),
+                cursor: None,
+                attrs: vec!["mem.mode".into()],
+            },
+        )
+        .await
+        .expect("fs.list");
+    let mut total = 0;
+    loop {
+        // TODA entrada de TODA página lleva el attr del arranque (la última
+        // página puede venir vacía: el stream no sabe que acabó hasta
+        // drenarla).
+        for e in &r.entries {
+            assert!(
+                e.attrs.contains_key("mem.mode"),
+                "entrada sin mem.mode: {e:?}"
+            );
+        }
+        total += r.entries.len();
+        let Some(cursor) = r.next_cursor.clone() else {
+            break;
+        };
+        // La continuación no re-manda attrs: el stream retenido ya los lleva.
+        r = list_page(&c, "mem:///", Some(1), Some(cursor)).await;
     }
+    assert_eq!(total, 3);
 }
 
 #[tokio::test]
