@@ -2817,7 +2817,7 @@ impl NorteGui {
         // plugin (G3c) — mismo orden que la TUI. Ancho FIJO en px = celdas de
         // layout() × advance del mono; contenido a la DERECHA con ≥1 celda de
         // separador (pl), presupuesto idéntico al de la TUI (el ancho INCLUYE
-        // el separador). Ausencia (`None` de builtin_cell — el size de un dir,
+        // el separador). Ausencia (`None` de styled_cell — el size de un dir,
         // un mtime desconocido) = celda en blanco, jamás un 0 fabricado. Color:
         // el de la fila a alfa reducido — el mismo "dim relativo" que el
         // fallback del badge de decoración (GPUI no tiene Modifier::DIM).

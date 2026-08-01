@@ -130,6 +130,21 @@ pub fn check_columns(layers: &Layers) -> Vec<Finding> {
             ),
         });
     }
+    // #117: un `attr:` por encima del cap de petición por lista — el funnel
+    // no lo pinta ni lo pide (pintado == pedido), así que doctor es quien
+    // lo cuenta.
+    for raw in &st.attrs_over_cap {
+        findings.push(Finding {
+            section: "config",
+            severity: Severity::Warn,
+            code: "columns-attrs-over-cap",
+            detail: format!(
+                "[ui.columns] attr por encima del cap de {} por lista (ni se pinta ni se pide): {}",
+                norte_proto::attrs::ATTRS_MAX_REQUEST,
+                sanitize_detail(raw)
+            ),
+        });
+    }
     // #108 7b: un `[[ui.columns.spec]]` con id imposible o con un formato
     // que no casa con su columna (p. ej. `iec` en mtime) — se aplicó el
     // default al pintar, jamás un drop mudo.
@@ -591,6 +606,28 @@ mod tests {
             !f.iter()
                 .any(|x| x.code == "columns-no-renderer" && x.detail.contains("attr:")),
             "un attr: no dispara columns-no-renderer: {f:?}"
+        );
+    }
+
+    /// #117: el attr 17.º de una lista supera el cap de petición — ni se
+    /// pinta ni se pide, y doctor lo nombra (`columns-attrs-over-cap`).
+    #[test]
+    fn columns_attrs_sobre_el_cap_se_reportan() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let attrs: Vec<String> = (0..17).map(|i| format!("\"attr:mem.a{i:02}\"")).collect();
+        std::fs::write(
+            dir.path().join("norte.toml"),
+            format!("[ui.columns]\ndefault = [\"name\", {}]\n", attrs.join(", ")),
+        )
+        .expect("write");
+        let layers = norte_config::Layers {
+            dirs: vec![(dir.path().to_path_buf(), norte_config::Layer::User)],
+        };
+        let f = super::check_columns(&layers);
+        assert!(
+            f.iter()
+                .any(|x| x.code == "columns-attrs-over-cap" && x.detail.contains("mem.a16")),
+            "{f:?}"
         );
     }
 

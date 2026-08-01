@@ -1077,6 +1077,12 @@ pub struct ColumnsSettings {
     /// Ids válidos sin renderer todavía — SOLO `plugin:` desde #117 (los
     /// `attr:` se pintan por el funnel generalizado).
     pub unrenderable: Vec<String>,
+    /// Ids `attr:` configurados MÁS ALLÁ del cap de petición
+    /// ([`norte_proto::ATTRS_MAX_REQUEST`]) en alguna lista (#117 review):
+    /// el funnel no los pinta y el pane no los pide — pintado == pedido,
+    /// jamás una columna permanentemente en blanco; doctor los nombra
+    /// (`columns-attrs-over-cap`).
+    pub attrs_over_cap: Vec<String>,
     /// Specs `[[ui.columns.spec]]` con id imposible o con un formato que no
     /// casa con su columna (#108 7b): se aplica el default y doctor lo
     /// reporta (`columns-bad-spec`) — jamás un drop mudo ni un fallo de
@@ -1249,6 +1255,11 @@ impl ColumnsSettings {
     }
 
     fn collect_diagnostics(&mut self, ids: &[String]) {
+        // #117 review: el cap de attrs pedibles es POR LISTA pintada
+        // (default o scheme), con el mismo dedup que `layout_items_for` —
+        // un dup no consume hueco. Para un `attr:` la forma cruda y la
+        // Display coinciden, así que el dedup por raw basta.
+        let mut attrs_vistos: Vec<&String> = Vec::new();
         for raw in ids {
             match raw.parse::<ColumnId>() {
                 Err(_) => {
@@ -1261,7 +1272,17 @@ impl ColumnsSettings {
                         self.unrenderable.push(raw.clone());
                     }
                 }
-                Ok(ColumnId::Builtin(_) | ColumnId::Attr(_)) => {}
+                Ok(ColumnId::Attr(_)) => {
+                    if !attrs_vistos.contains(&raw) {
+                        attrs_vistos.push(raw);
+                        if attrs_vistos.len() > norte_proto::ATTRS_MAX_REQUEST
+                            && !self.attrs_over_cap.contains(raw)
+                        {
+                            self.attrs_over_cap.push(raw.clone());
+                        }
+                    }
+                }
+                Ok(ColumnId::Builtin(_)) => {}
             }
         }
     }
@@ -1301,10 +1322,22 @@ impl ColumnsSettings {
                 let mut out: Vec<(ColumnId, LayoutItem)> = Vec::new();
                 for id in ids {
                     match id {
-                        ColumnId::Plugin { .. } => continue,
-                        _ if out.iter().any(|(x, _)| x == id) => continue,
+                        ColumnId::Plugin { .. } => {}
+                        _ if out.iter().any(|(x, _)| x == id) => {}
                         ColumnId::Builtin(b) => out.push((id.clone(), builtin_layout_item(*b))),
-                        ColumnId::Attr(_) => out.push((id.clone(), attr_layout_item())),
+                        // #117 review: a lo sumo ATTRS_MAX_REQUEST attrs —
+                        // pintado == pedido (`attr_ids_for`); el resto es
+                        // diagnóstico (`attrs_over_cap`, doctor lo nombra),
+                        // jamás una columna permanentemente en blanco.
+                        ColumnId::Attr(_) => {
+                            let attrs = out
+                                .iter()
+                                .filter(|(x, _)| matches!(x, ColumnId::Attr(_)))
+                                .count();
+                            if attrs < norte_proto::ATTRS_MAX_REQUEST {
+                                out.push((id.clone(), attr_layout_item()));
+                            }
+                        }
                     }
                 }
                 let name = ColumnId::Builtin(Builtin::Name);
@@ -1348,8 +1381,10 @@ impl ColumnsSettings {
     }
 
     /// Los ids attr CONFIGURADOS y renderizables de `scheme` (#117): lo
-    /// que el pane pide en `fs.list`. Dedup del funnel; capado a
-    /// [`norte_proto::ATTRS_MAX_REQUEST`] (el daemon rechazaría más).
+    /// que el pane pide en `fs.list`. Dedup del funnel; el cap a
+    /// [`norte_proto::ATTRS_MAX_REQUEST`] ya lo aplica `layout_items_for`
+    /// (pintado == pedido) — el `take` de aquí es cinturón (el daemon
+    /// rechazaría más).
     #[must_use]
     pub fn attr_ids_for(&self, scheme: &str) -> Vec<String> {
         self.layout_items_for(scheme)
@@ -1600,10 +1635,12 @@ fn attr_cell(v: &norte_proto::AttrValue, style: &ColumnStyle, now_ms: i64) -> Op
             _ => i.to_string(),
         }),
         AttrValue::TimeMs(ms) => Some(format_mtime(*ms, style.time_format, now_ms)),
-        AttrValue::Text(s) => sanitize_cell(Some(s)),
+        // Presente-pero-impintable (enmascara a vacío) = «?» visible: el
+        // blanco queda RESERVADO para AUSENTE (#117 review).
+        AttrValue::Text(s) => sanitize_cell(Some(s)).or_else(|| Some("?".to_owned())),
         AttrValue::Bytes(b) => {
             let (shown, _hostil) = crate::display_name(b);
-            sanitize_cell(Some(&shown))
+            sanitize_cell(Some(&shown)).or_else(|| Some("?".to_owned()))
         }
         AttrValue::Bool(b) => Some(norte_i18n::t(if *b {
             "col-cell-yes"
@@ -1650,10 +1687,17 @@ pub fn header_label(
             Builtin::Kind => "col-header-kind",
         }),
         ColumnId::Attr(aid) => {
-            let key = format!("col-attr-{}", aid.replace(['.', '_'], "-"));
-            let loc = norte_i18n::t(&key);
-            if loc != key {
-                return loc;
+            // #117 review: la clave Fluent solo se deriva para namespaces
+            // de PRIMERA parte — un id de provider como `posix-mode`
+            // aplanaría al MISMO `col-attr-posix-mode` y robaría la
+            // traducción de `posix.mode`.
+            const FIRST_PARTY: &[&str] = &["posix.", "win.", "s3.", "archive."];
+            if FIRST_PARTY.iter().any(|ns| aid.starts_with(ns)) {
+                let key = format!("col-attr-{}", aid.replace(['.', '_'], "-"));
+                let loc = norte_i18n::t(&key);
+                if loc != key {
+                    return loc;
+                }
             }
             if let Some(info) = catalog.and_then(|c| c.iter().find(|i| i.id == *aid)) {
                 let sane: String = sanitize_header(&info.label)
@@ -2006,6 +2050,20 @@ mod attr_funnel_tests {
             "{cell2:?}"
         );
         assert!(cell2.contains('\u{FFFD}'), "lossy marcado: {cell2:?}");
+        // Presente-pero-impintable (enmascara/trunca a vacío) → «?» — el
+        // blanco queda reservado para AUSENTE. Un valor todo-hostil NO
+        // enmascara a vacío (cada hazard pasa a U+FFFD visible): el caso
+        // vacío real es la cadena vacía presente.
+        let vacio = entry_with(&[("mem.note", AttrValue::Text(String::new()))]);
+        assert_eq!(styled_cell(&vacio, &id, 0, &style).as_deref(), Some("?"));
+        let vacio2 = entry_with(&[("mem.owner", AttrValue::Bytes(Vec::new()))]);
+        assert_eq!(styled_cell(&vacio2, &id2, 0, &style).as_deref(), Some("?"));
+        let hostil = entry_with(&[("mem.note", AttrValue::Text("\u{202e}\u{200b}".into()))]);
+        assert_eq!(
+            styled_cell(&hostil, &id, 0, &style).as_deref(),
+            Some("\u{FFFD}\u{FFFD}"),
+            "todo-hostil = enmascarado VISIBLE, no vacío"
+        );
     }
 
     #[test]
@@ -2058,5 +2116,53 @@ mod attr_funnel_tests {
         // TimeMs siempre formatea como tiempo, con o sin hint.
         let t = styled_cell(&e(AttrValue::TimeMs(0)), &id, 60_000, &opaco).expect("celda");
         assert!(!t.is_empty());
+    }
+
+    /// #117 review: el formato `octal` del hint Mode y el fallback decimal
+    /// de un word que no cabe en u32 (no es un modo — jamás un panic).
+    #[test]
+    fn modo_octal_y_desbordado_a_decimal() {
+        let id = ColumnId::Attr("x.m".into());
+        let mut style = ColumnStyle::default_for_id(&id, None);
+        style.hint = AttrHint::Mode;
+        style.mode_format = ModeFormat::Octal;
+        let e = entry_with(&[("x.m", AttrValue::Uint(0o100_644))]);
+        assert_eq!(styled_cell(&e, &id, 0, &style).as_deref(), Some("0644"));
+        let gordo = u64::from(u32::MAX) + 1;
+        let esperado = gordo.to_string();
+        for fmt in [ModeFormat::Rwx, ModeFormat::Octal] {
+            style.mode_format = fmt;
+            let e2 = entry_with(&[("x.m", AttrValue::Uint(gordo))]);
+            assert_eq!(
+                styled_cell(&e2, &id, 0, &style).as_deref(),
+                Some(esperado.as_str()),
+                "{fmt:?}"
+            );
+        }
+    }
+
+    /// #117 review: attrs por encima de [`norte_proto::ATTRS_MAX_REQUEST`]
+    /// ni se pintan ni se piden (pintado == pedido — sin columnas
+    /// permanentemente en blanco) y quedan diagnosticados.
+    #[test]
+    fn attrs_sobre_el_cap_pintado_igual_a_pedido() {
+        let mut ids: Vec<String> = vec!["name".into()];
+        ids.extend((0..17).map(|i| format!("attr:mem.a{i:02}")));
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: Some(ids),
+            ..Default::default()
+        };
+        let st = ColumnsSettings::resolve(&cfg);
+        let painted: Vec<String> = st
+            .layout_items_for("file")
+            .into_iter()
+            .filter_map(|(id, _)| match id {
+                ColumnId::Attr(a) => Some(a),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(painted.len(), norte_proto::ATTRS_MAX_REQUEST);
+        assert_eq!(painted, st.attr_ids_for("file"), "pintado == pedido");
+        assert_eq!(st.attrs_over_cap, vec!["attr:mem.a16".to_owned()]);
     }
 }
