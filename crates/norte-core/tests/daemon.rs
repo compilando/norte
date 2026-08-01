@@ -4434,3 +4434,63 @@ async fn degradacion_de_conexion_solo_a_humanos() {
         "un agente no recibe connection.degraded: {colado:?}"
     );
 }
+
+/// H1 (encoding review #108-b2): los valores HOSTILES cruzan el socket de
+/// verdad — `Bytes` no-UTF-8 byte-exacto tras `encode(bytes_b64)+decode`, y
+/// `Text` con RTL override/ZWJ char-exacto tras el cinturón de emisión.
+#[tokio::test]
+async fn attrs_hostiles_cruzan_el_socket_byte_exactos() {
+    let d = spawn_daemon_attrs().await;
+    write_file(&d.mem, "mem:///f.txt", b"x").await;
+    let c = connected_client(&d).await;
+    let r: FsStatResult = c
+        .call(
+            methods::FS_STAT,
+            &FsStatParams {
+                path: vp("mem:///f.txt"),
+                attrs: vec!["mem.owner".into(), "mem.note".into()],
+            },
+        )
+        .await
+        .expect("fs.stat");
+    assert_eq!(
+        r.entry.attrs.get("mem.owner"),
+        Some(&norte_proto::AttrValue::Bytes(
+            b"due\xf1o-\xff\xfe".to_vec()
+        )),
+        "bytes crudos byte-exactos tras el wire"
+    );
+    assert_eq!(
+        r.entry.attrs.get("mem.note"),
+        Some(&norte_proto::AttrValue::Text(
+            "\u{202e}atón\u{202c} a\u{200d}b".to_owned()
+        )),
+        "texto hostil char-exacto tras el wire"
+    );
+}
+
+/// m2 (protocol-guardian #108-b2): garantía del bloque 1 que sigue viva —
+/// pedir un id BIEN FORMADO a un provider con catálogo VACÍO sale bien en
+/// `fs.list` (no -32602) y las entradas vienen peladas.
+#[tokio::test]
+async fn fs_list_id_valido_sobre_catalogo_vacio_no_es_error() {
+    let d = spawn_daemon(None).await; // MemProvider SIN attrs sintéticos
+    write_file(&d.mem, "mem:///f.txt", b"hola").await;
+    let c = connected_client(&d).await;
+    let list: FsListResult = c
+        .call(
+            methods::FS_LIST,
+            &FsListParams {
+                path: vp("mem:///"),
+                limit: None,
+                cursor: None,
+                attrs: vec!["posix.mode".into()],
+            },
+        )
+        .await
+        .expect("id válido sobre catálogo vacío jamás es error");
+    assert_eq!(list.entries.len(), 1);
+    for e in &list.entries {
+        assert!(e.attrs.is_empty(), "catálogo vacío = entradas peladas");
+    }
+}

@@ -231,6 +231,18 @@ impl Backend {
                     attrs: norte_vfs::AttrRequest::sanitized(attrs.to_vec()),
                 };
                 let stream = engine.list_with(dir, &opt).await?;
+                // Mismo cinturón de emisión que el daemon (ADR 0039 §5): un
+                // provider con bug no cuela ids no pedidos ni valores sobre
+                // tope por la ruta in-process.
+                let belt = opt.attrs.clone();
+                let stream = stream
+                    .map(move |item| {
+                        item.map(|mut e| {
+                            belt.retain_conforming(&mut e);
+                            e
+                        })
+                    })
+                    .boxed();
                 // Best-effort: un fallo aquí no tumba un listado que ya abrió
                 // (mismo contrato que el daemon) — degrada a "desconocido",
                 // pero JAMÁS en silencio (el punto de #93 es la señal).
@@ -352,7 +364,10 @@ impl Backend {
                 let opt = norte_vfs::ListOptions {
                     attrs: norte_vfs::AttrRequest::sanitized(attrs.to_vec()),
                 };
-                engine.stat_with(path, &opt).await
+                let mut entry = engine.stat_with(path, &opt).await?;
+                // Mismo cinturón de emisión que el daemon (ADR 0039 §5).
+                opt.attrs.retain_conforming(&mut entry);
+                Ok(entry)
             }
             #[cfg(unix)]
             Self::Remote(r) => r.stat(path, attrs.to_vec()).await,

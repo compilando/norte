@@ -380,9 +380,14 @@ fn attrs_from_md(
             out.insert("posix.nlink".to_owned(), AttrValue::Uint(md.nlink()));
         }
         if req.wants("posix.ctime_ms") {
-            // ctime en ms; en pre-1970 (ctime negativo) el redondeo de la
-            // parte nsec va hacia cero — desviación ≤1ms, aceptada.
-            let ms = md.ctime() * 1000 + md.ctime_nsec() / 1_000_000;
+            // ctime en ms, exactamente floor(ms real): tv_nsec ∈ [0, 1e9),
+            // así que también en pre-1970 la desviación es < 1ms (redondeo
+            // hacia −∞). Saturante: un FUSE/imagen forjada puede devolver
+            // st_ctime cerca de i64::MAX y el overflow mataría el listado.
+            let ms = md
+                .ctime()
+                .saturating_mul(1000)
+                .saturating_add(md.ctime_nsec() / 1_000_000);
             out.insert("posix.ctime_ms".to_owned(), AttrValue::TimeMs(ms));
         }
     }
@@ -885,9 +890,22 @@ impl Provider for LocalProvider {
                     // entrada (`DirEntry::metadata` NO sigue symlinks), que
                     // además hidrata size/mtime de gratis. Sigue dentro del
                     // productor bloqueante — jamás I/O en el ejecutor async.
-                    let md = d.metadata().map_err(|e| map_io(&e))?;
-                    Ok(entry_from(base_vpath.join(seg), &md, &req))
+                    //
+                    // Carrera readdir→lstat: una entrada borrada entre ambos
+                    // ya NO existe — se OMITE (None), no mata un listado de
+                    // un dir vivo (/tmp, build dirs). Otros errores sí son
+                    // fatales, como en el camino sin promoción.
+                    match d.metadata() {
+                        Ok(md) => Ok(Some(entry_from(base_vpath.join(seg), &md, &req))),
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                        Err(e) => Err(map_io(&e)),
+                    }
                 });
+                let item = match item {
+                    Ok(None) => continue,
+                    Ok(Some(entry)) => Ok(entry),
+                    Err(e) => Err(e),
+                };
                 let stop = item.is_err();
                 if tx.blocking_send(item).is_err() {
                     // Receptor soltado: cancelación cooperativa del listado.

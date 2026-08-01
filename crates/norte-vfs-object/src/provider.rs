@@ -453,13 +453,15 @@ impl Provider for ObjectProvider {
         let lister = self.op.lister(&dir).await.map_err(|e| map_err(&e))?;
         let base = p.clone();
         let self_key = dir;
-        let req = opt.attrs.clone();
+        // Arc: la petición es solo-lectura y el closure clona POR ENTRADA —
+        // sin Arc cada objeto listado pagaría un Vec<String> nuevo.
+        let req = std::sync::Arc::new(opt.attrs.clone());
         // Stream PEREZOSO: opendal pagina con su ContinuationToken por debajo
         // (punto de contacto con la paginación por cursor, ADR 0017).
         let stream = lister.map_err(|e| map_err(&e)).try_filter_map(move |oe| {
             let base = base.clone();
             let self_key = self_key.clone();
-            let req = req.clone();
+            let req = std::sync::Arc::clone(&req);
             async move {
                 let path = oe.path();
                 // opendal devuelve el propio dir listado como entrada; al

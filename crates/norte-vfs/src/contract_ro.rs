@@ -56,8 +56,7 @@ macro_rules! readonly_provider_contract {
 
             use $crate::__private::futures::StreamExt;
             use $crate::__private::norte_proto::{
-                ATTR_BYTES_MAX, ATTR_TEXT_MAX, ATTRS_MAX_ADVERTISED, AttrType, AttrValue,
-                ByteRange, CapabilityFlags, EntryKind, Error, Segment, VPath, is_valid_attr_id,
+                ByteRange, CapabilityFlags, EntryKind, Error, Segment, VPath,
             };
             use $crate::{AttrRequest, ListOptions, Provider};
 
@@ -393,67 +392,15 @@ macro_rules! readonly_provider_contract {
             }
 
             // ---------- attrs (#108 bloque 2, ADR 0039) ----------
-
-            fn attr_type_matches(ty: AttrType, v: &AttrValue) -> bool {
-                matches!(
-                    (ty, v),
-                    (AttrType::Uint, AttrValue::Uint(_))
-                        | (AttrType::Int, AttrValue::Int(_))
-                        | (AttrType::Text, AttrValue::Text(_))
-                        | (AttrType::Bytes, AttrValue::Bytes(_))
-                        | (AttrType::TimeMs, AttrValue::TimeMs(_))
-                        | (AttrType::Bool, AttrValue::Bool(_))
-                )
-            }
-
-            /// Contrato por entrada: solo ids pedidos, todos anunciados, tipo
-            /// declarado ⟺ variante producida, Text/Bytes dentro de tope.
-            fn assert_attrs_contract(
-                catalog: &[$crate::__private::norte_proto::AttrInfo],
-                requested: &AttrRequest,
-                entry: &$crate::__private::norte_proto::Entry,
-            ) {
-                for (id, v) in &entry.attrs {
-                    assert!(
-                        requested.wants(id),
-                        "attr NO pedido en {:?}: {id:?}",
-                        entry.path.display_lossy()
-                    );
-                    let info = catalog
-                        .iter()
-                        .find(|a| &a.id == id)
-                        .unwrap_or_else(|| panic!("attr no anunciado: {id:?}"));
-                    assert!(
-                        attr_type_matches(info.ty, v),
-                        "tipo declarado {:?} no casa con {v:?} para {id:?}",
-                        info.ty
-                    );
-                    match v {
-                        AttrValue::Text(s) => {
-                            assert!(s.len() <= ATTR_TEXT_MAX, "Text sobre tope: {id:?}");
-                        }
-                        AttrValue::Bytes(b) => {
-                            assert!(b.len() <= ATTR_BYTES_MAX, "Bytes sobre tope: {id:?}");
-                        }
-                        _ => {}
-                    }
-                }
-            }
+            // Aserciones compartidas con la suite RW:
+            // `__private::contract_attrs` (una divergencia debilitaría una
+            // suite en silencio).
+            use $crate::__private::contract_attrs::{assert_attrs_contract, assert_catalog_sane};
 
             #[tokio::test]
             async fn ro_attrs_catalog_is_sane() {
                 let p = $factory;
-                let catalog = p.attrs();
-                assert!(catalog.len() <= ATTRS_MAX_ADVERTISED, "catálogo sobre tope");
-                let mut seen = std::collections::BTreeSet::new();
-                for info in catalog {
-                    assert!(
-                        is_valid_attr_id(&info.id),
-                        "id inválido en catálogo: {:?}",
-                        info.id
-                    );
-                    assert!(seen.insert(info.id.clone()), "id duplicado: {:?}", info.id);
-                }
+                assert_catalog_sane(p.attrs());
             }
 
             #[tokio::test]

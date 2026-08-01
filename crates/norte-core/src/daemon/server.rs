@@ -1032,6 +1032,11 @@ fn validate_attr_request(ids: &[String]) -> Result<(), RpcError> {
 /// devuelve la petición que de verdad viaja al provider. Un id válido pero
 /// NO anunciado se cae aquí — el daemon solo reenvía ids que el provider
 /// anuncia, jamás inventa celdas (ADR 0039 §1).
+///
+/// Dos resoluciones de provider (catálogo aquí, `list_with`/`stat_with` en
+/// el handler): si la conexión se remapea entre ambas, la petición filtrada
+/// puede no casar con el catálogo nuevo — degrada a AUSENCIA, que es
+/// contrato-legal. No "arreglar" con un lookup único bajo lock.
 async fn resolve_attr_request(
     ids: &[String],
     path: &norte_proto::VPath,
@@ -1053,18 +1058,12 @@ async fn resolve_attr_request(
     ))
 }
 
-/// Cinturón de emisión (ADR 0039 §5): solo ids pedidos, y Text/Bytes dentro
-/// de tope. Un provider con bug pierde la CELDA, jamás rompe la página —
-/// y jamás se trunca un valor en silencio (la celda recortada mentiría).
+/// Cinturón de emisión (ADR 0039 §5): delega en el belt compartido de
+/// `AttrRequest` — mismo filtro que aplica el backend embebido, así ninguna
+/// ruta (wire o in-process) emite ids no pedidos, valores sobre tope o
+/// `Unknown`.
 fn enforce_attr_caps(entry: &mut norte_proto::Entry, allowed: &norte_vfs::AttrRequest) {
-    entry.attrs.retain(|id, v| {
-        allowed.wants(id)
-            && match v {
-                norte_proto::AttrValue::Text(s) => s.len() <= norte_proto::ATTR_TEXT_MAX,
-                norte_proto::AttrValue::Bytes(b) => b.len() <= norte_proto::ATTR_BYTES_MAX,
-                _ => true,
-            }
-    });
+    allowed.retain_conforming(entry);
 }
 
 /// El handler de `fs.stat` (#108 bloque 2): valida la petición de attrs, la
