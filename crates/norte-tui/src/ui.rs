@@ -612,10 +612,10 @@ fn draw_theme_picker(
 }
 
 /// Overlay del picker de columnas (#108 7a): lista con cursor — checkbox,
-/// etiqueta (Fluent para builtins; el id CRUDO enmascarado para los que no
-/// parsean o no tienen renderer — texto de config del usuario, #73: se
-/// pinta con `mask_terminal_hazards`) y la flecha del sort en la fila de su
-/// columna. Mismo esqueleto que [`draw_theme_picker`] (Clear + centrado,
+/// etiqueta (Fluent para builtins; `label` del modelo para attr/plugin,
+/// #117; el id CRUDO enmascarado para los que no parsean — texto de config
+/// del usuario, #73: se pinta con `mask_terminal_hazards`) y la flecha del
+/// sort en la fila de su columna. Mismo esqueleto que [`draw_theme_picker`] (Clear + centrado,
 /// `List` + `ListState` con highlight `Role::Selection`, hint generado en
 /// `title_bottom`, ancho por contenido en CELDAS con suelo del footer).
 fn draw_columns_picker(
@@ -641,7 +641,10 @@ fn draw_columns_picker(
                 Some(Builtin::Size) => t("col-header-size"),
                 Some(Builtin::Mtime) => t("col-header-mtime"),
                 Some(Builtin::Kind) => t("col-header-kind"),
-                None => norte_encoding::mask_terminal_hazards(&r.id),
+                // #117: attr/plugin traen `label` (header_label, YA
+                // enmascarada al abrir); los que no parsean caen al id. El
+                // re-enmascarado es cinturón, no el choke point.
+                None => norte_encoding::mask_terminal_hazards(r.label.as_deref().unwrap_or(&r.id)),
             };
             let flecha = match r.builtin.and_then(sort_column) {
                 Some(sc) if sc == p.sort().column => {

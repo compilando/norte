@@ -940,11 +940,15 @@ fn parse_spec_entries(
         };
         let format = match entry.format.as_deref() {
             None => None,
-            Some(f @ ("exact" | "iec" | "si" | "relative" | "iso")) => Some(f.to_owned()),
+            Some(f @ ("exact" | "iec" | "si" | "relative" | "iso" | "octal" | "rwx")) => {
+                Some(f.to_owned())
+            }
             Some(_) => {
                 return Err(ConfigError::Toml {
                     path: norte.to_path_buf(),
-                    message: format!("{label} spec.format: exact | iec | si | relative | iso"),
+                    message: format!(
+                        "{label} spec.format: exact | iec | si | relative | iso | octal | rwx"
+                    ),
                 });
             }
         };

@@ -12,18 +12,29 @@ pub struct PickerRow {
     /// Id tal cual viaja a la config (`"size"`, `"attr:posix.mode"`…).
     pub id: String,
     /// `Some` para los builtin (etiqueta localizada, sort); `None` para
-    /// ids sin renderer o que no parsean — se enseñan y preservan.
+    /// attr/plugin (etiqueta en [`Self::label`], #117) y para los ids que
+    /// no parsean — se enseñan y preservan.
     pub builtin: Option<Builtin>,
     /// Activa = aparece en la lista persistida.
     pub enabled: bool,
     /// Formato VIGENTE de la fila (#108 7b): vocabulario ASCII cerrado
-    /// (`"iec"`…); `Some` solo para Size/Mtime — el resto no admite formato.
+    /// (`"iec"`…); `Some` para Size/Mtime y para attrs con hint Size/
+    /// Timestamp/Mode (#117) — el resto no admite formato.
     pub format: Option<String>,
     /// BLOQUEADA (m2 revisión 7b): un spec DEL SCHEME fija el formato — el
     /// picker solo escribe el spec GLOBAL, que el override seguiría
     /// enmascarando (toast mentiroso + fuga a otros schemes). La fila
     /// enseña su formato pero el ciclo es no-op y `finish` jamás la emite.
     pub format_locked: bool,
+    /// Etiqueta de display para filas NO builtin (#117): la de
+    /// [`crate::columns::header_label`] al abrir (localizada / label del
+    /// catálogo YA enmascarado / id saneado). `None` en builtins (Fluent
+    /// en vivo) y en ids que no parsean (los frontends caen al id crudo,
+    /// que ellos enmascaran).
+    pub label: Option<String>,
+    /// Hint del catálogo al abrir (attrs): decide la tabla del ciclo de
+    /// formato. `Opaque` = sin ciclo.
+    pub hint: norte_proto::attrs::AttrHint,
     /// El formato al ABRIR: [`ColumnsPicker::finish`] solo emite los
     /// CAMBIADOS. Privado: nace igual que `format` y no se toca después.
     opened_format: Option<String>,
@@ -54,16 +65,31 @@ fn make_row(
     enabled: bool,
     settings: &ColumnsSettings,
     scheme: &str,
+    catalog: Option<&norte_proto::AttrCatalog>,
 ) -> PickerRow {
-    let format = builtin
-        .and_then(|b| crate::columns::format_name(b, &settings.style_for(scheme, b)))
-        .map(str::to_owned);
-    let format_locked = builtin.is_some_and(|b| settings.format_pinned_by_scheme(scheme, b));
+    // #117: un solo parse por fila — attr y plugin dejan de ser opacos: el
+    // estilo resuelto trae su hint (tabla del ciclo) y `header_label` su
+    // etiqueta (ya enmascarada). Los ids que NO parsean siguen opacos.
+    let parsed = id.parse::<ColumnId>().ok();
+    let (hint, format, format_locked, label) = match &parsed {
+        Some(cid) => {
+            let style = settings.style_for_id(scheme, cid, catalog);
+            let hint = style.hint;
+            let format = crate::columns::format_name_id(cid, hint, &style).map(str::to_owned);
+            let locked = settings.format_pinned_by_scheme_id(scheme, cid);
+            let label = matches!(cid, ColumnId::Attr(_) | ColumnId::Plugin { .. })
+                .then(|| crate::columns::header_label(cid, &style, catalog));
+            (hint, format, locked, label)
+        }
+        None => (norte_proto::attrs::AttrHint::Opaque, None, false, None),
+    };
     PickerRow {
         id,
         builtin,
         enabled,
         format_locked,
+        label,
+        hint,
         opened_format: format.clone(),
         format,
     }
@@ -83,9 +109,24 @@ pub struct ColumnsPicker {
 }
 
 impl ColumnsPicker {
-    /// Construye el picker para el pane en `scheme` con su orden actual.
+    /// Construye el picker para el pane en `scheme` con su orden actual,
+    /// sin catálogo de provider ([`Self::open_with_catalog`] con `None`).
     #[must_use]
     pub fn open(settings: &ColumnsSettings, scheme: &str, current_sort: SortSpec) -> Self {
+        Self::open_with_catalog(settings, scheme, current_sort, None)
+    }
+
+    /// Construye el picker con el catálogo de attrs del provider (#117):
+    /// los attrs ANUNCIADOS y no configurados se ofrecen deshabilitados al
+    /// final — el picker OFRECE, no impone — y las filas attr ganan hint
+    /// (ciclo de formato) y etiqueta del catálogo.
+    #[must_use]
+    pub fn open_with_catalog(
+        settings: &ColumnsSettings,
+        scheme: &str,
+        current_sort: SortSpec,
+        catalog: Option<&norte_proto::AttrCatalog>,
+    ) -> Self {
         let raw = settings.raw_ids_for(scheme);
         let mut rows: Vec<PickerRow> = Vec::new();
         for id in &raw {
@@ -100,7 +141,14 @@ impl ColumnsPicker {
             if builtin.is_some() && rows.iter().any(|r| r.builtin == builtin) {
                 continue;
             }
-            rows.push(make_row(id.clone(), builtin, true, settings, scheme));
+            rows.push(make_row(
+                id.clone(),
+                builtin,
+                true,
+                settings,
+                scheme,
+                catalog,
+            ));
         }
         // name primero e inmutable (contrato del render).
         if let Some(pos) = rows.iter().position(|r| r.builtin == Some(Builtin::Name)) {
@@ -115,6 +163,7 @@ impl ColumnsPicker {
                     true,
                     settings,
                     scheme,
+                    catalog,
                 ),
             );
         }
@@ -127,7 +176,18 @@ impl ColumnsPicker {
                     false,
                     settings,
                     scheme,
+                    catalog,
                 ));
+            }
+        }
+        // Catálogo de PROVIDER (#117): attrs anunciados y no configurados,
+        // deshabilitados, tras los builtins — el picker OFRECE, no impone.
+        if let Some(cat) = catalog {
+            for info in cat {
+                let id = format!("attr:{}", info.id);
+                if !rows.iter().any(|r| r.id == id) {
+                    rows.push(make_row(id, None, false, settings, scheme, catalog));
+                }
             }
         }
         Self {
@@ -220,8 +280,9 @@ impl ColumnsPicker {
     }
 
     /// Cicla el formato de la fila bajo el cursor por su vocabulario
-    /// cerrado (#108 7b, tabla única [`crate::columns::next_format`]): size
-    /// `iec→si→exact→iec`, mtime `relative→iso→relative`; no-op en
+    /// cerrado (#108 7b, tabla única [`crate::columns::next_format_id`]):
+    /// size `iec→si→exact→iec`, mtime `relative→iso→relative`, attrs por
+    /// la tabla de su hint (#117: Mode `rwx→octal→rwx`…); no-op en
     /// name/kind/opacas (sin formato) y en filas BLOQUEADAS por un spec de
     /// scheme (m2 — ver [`PickerRow::format_locked`]).
     pub fn cycle_format(&mut self) {
@@ -231,11 +292,13 @@ impl ColumnsPicker {
         if r.format_locked {
             return;
         }
-        let Some(b) = r.builtin else { return };
+        let Ok(cid) = r.id.parse::<ColumnId>() else {
+            return;
+        };
         let Some(cur) = r.format.as_deref() else {
             return;
         };
-        if let Some(next) = crate::columns::next_format(b, cur) {
+        if let Some(next) = crate::columns::next_format_id(&cid, r.hint, cur) {
             r.format = Some(next.to_owned());
         }
     }
@@ -495,6 +558,76 @@ mod tests {
         p.down();
         p.toggle();
         assert!(!p.finish().ids.contains(&"attr:posix.mode".to_owned()));
+    }
+
+    #[test]
+    fn open_with_catalog_ofrece_attrs_no_configurados() {
+        use norte_proto::attrs::{AttrHint, AttrInfo, AttrType};
+        let cat = norte_proto::AttrCatalog::new(vec![
+            AttrInfo {
+                id: "posix.mode".into(),
+                label: "Mode".into(),
+                ty: AttrType::Uint,
+                hint: AttrHint::Mode,
+            },
+            AttrInfo {
+                id: "posix.uid".into(),
+                label: "UID".into(),
+                ty: AttrType::Uint,
+                hint: AttrHint::Identity,
+            },
+        ]);
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: Some(vec!["name".into(), "attr:posix.mode".into()]),
+            ..Default::default()
+        };
+        let st = ColumnsSettings::resolve(&cfg);
+        let mut p = ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), Some(&cat));
+        // El configurado sigue habilitado; el anunciado no-configurado aparece
+        // deshabilitado al final, UNA sola vez.
+        let uid: Vec<_> = p
+            .rows()
+            .iter()
+            .filter(|r| r.id == "attr:posix.uid")
+            .collect();
+        assert_eq!(uid.len(), 1);
+        assert!(!uid[0].enabled);
+        assert_eq!(
+            p.rows()
+                .iter()
+                .filter(|r| r.id == "attr:posix.mode")
+                .count(),
+            1
+        );
+        // La fila attr con hint Mode cicla formato: rwx → octal.
+        let modo = p
+            .rows()
+            .iter()
+            .position(|r| r.id == "attr:posix.mode")
+            .unwrap();
+        assert_eq!(p.rows()[modo].format.as_deref(), Some("rwx"));
+        while p.cursor() != modo {
+            p.down();
+        }
+        p.cycle_format();
+        assert_eq!(p.format_of_cursor().as_deref(), Some("octal"));
+        p.cycle_format();
+        assert_eq!(p.format_of_cursor().as_deref(), Some("rwx"), "vuelta");
+        // Y la anunciada Identity no admite formato (sin tabla para su hint).
+        while p.cursor() + 1 < p.rows().len() {
+            p.down();
+        }
+        assert_eq!(p.rows()[p.cursor()].id, "attr:posix.uid");
+        p.cycle_format();
+        assert_eq!(p.format_of_cursor(), None);
+    }
+
+    #[test]
+    fn open_sin_catalogo_conserva_la_conducta_historica() {
+        let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
+        let a = ColumnsPicker::open(&st, "file", SortSpec::default());
+        let b = ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), None);
+        assert_eq!(a.rows(), b.rows());
     }
 
     #[test]

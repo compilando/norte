@@ -1024,6 +1024,62 @@ pub fn next_format(b: Builtin, current: &str) -> Option<&'static str> {
     }
 }
 
+/// El siguiente formato del ciclo del picker para CUALQUIER columna
+/// (#117): builtin por su tabla; attr por la tabla de su hint (Size/
+/// Timestamp/Mode); el resto no admite formato.
+#[must_use]
+pub fn next_format_id(
+    id: &ColumnId,
+    hint: norte_proto::attrs::AttrHint,
+    current: &str,
+) -> Option<&'static str> {
+    use norte_proto::attrs::AttrHint;
+    fn advance<T>(tab: &'static [(&'static str, T)], cur: &str) -> Option<&'static str> {
+        let i = tab.iter().position(|(s, _)| *s == cur)?;
+        Some(tab[(i + 1) % tab.len()].0)
+    }
+    match id {
+        ColumnId::Builtin(b) => next_format(*b, current),
+        ColumnId::Attr(_) => match hint {
+            AttrHint::Size => advance(SIZE_FORMATS, current),
+            AttrHint::Timestamp => advance(TIME_FORMATS, current),
+            AttrHint::Mode => advance(MODE_FORMATS, current),
+            _ => None,
+        },
+        ColumnId::Plugin { .. } => None,
+    }
+}
+
+/// El nombre-str del formato vigente para cualquier columna (#117) — seed
+/// del picker, dirección enum → str, por el hint en attrs.
+#[must_use]
+pub fn format_name_id(
+    id: &ColumnId,
+    hint: norte_proto::attrs::AttrHint,
+    style: &ColumnStyle,
+) -> Option<&'static str> {
+    use norte_proto::attrs::AttrHint;
+    match id {
+        ColumnId::Builtin(b) => format_name(*b, style),
+        ColumnId::Attr(_) => match hint {
+            AttrHint::Size => SIZE_FORMATS
+                .iter()
+                .find(|(_, f)| *f == style.size_format)
+                .map(|(s, _)| *s),
+            AttrHint::Timestamp => TIME_FORMATS
+                .iter()
+                .find(|(_, f)| *f == style.time_format)
+                .map(|(s, _)| *s),
+            AttrHint::Mode => MODE_FORMATS
+                .iter()
+                .find(|(_, f)| *f == style.mode_format)
+                .map(|(s, _)| *s),
+            _ => None,
+        },
+        ColumnId::Plugin { .. } => None,
+    }
+}
+
 /// El nombre-str del formato vigente de un estilo (seed del picker): la
 /// misma tabla, en dirección enum → str.
 #[must_use]
@@ -1395,6 +1451,17 @@ impl ColumnsSettings {
             })
             .take(norte_proto::ATTRS_MAX_REQUEST)
             .collect()
+    }
+
+    /// Huella ORDENADA de [`Self::attr_ids_for`] (#117, review tarea 3):
+    /// decide si un cambio de columnas exige re-listar. Ordenada porque un
+    /// mero reorden de columnas no cambia QUÉ valores hay que pedir — ambos
+    /// frontends comparan huellas antes/después con esta única definición.
+    #[must_use]
+    pub fn attr_fingerprint(&self, scheme: &str) -> Vec<String> {
+        let mut ids = self.attr_ids_for(scheme);
+        ids.sort_unstable();
+        ids
     }
 
     /// La lista de ids CONFIGURADA efectiva para `scheme` en forma Display,
@@ -1888,17 +1955,20 @@ mod style_tests {
     /// m3 revisión 7b: las cadenas de las tablas del frontend son
     /// SUBCONJUNTO del vocabulario global que acepta la config
     /// (`norte-config/src/load.rs`, `parse del spec`: `"exact" | "iec" |
-    /// "si" | "relative" | "iso"` — hardcodeado aquí porque config no
-    /// puede depender del frontend para compartir la const). Un nombre
-    /// nuevo en la tabla sin su lado config sería un spec imposible de
-    /// escribir.
+    /// "si" | "relative" | "iso" | "octal" | "rwx"` — hardcodeado aquí
+    /// porque config no puede depender del frontend para compartir la
+    /// const). Un nombre nuevo en la tabla sin su lado config sería un
+    /// spec imposible de escribir.
     #[test]
     fn la_tabla_de_formatos_es_subconjunto_del_vocabulario_de_config() {
-        let config_vocab = ["exact", "iec", "si", "relative", "iso"];
+        let config_vocab = ["exact", "iec", "si", "relative", "iso", "octal", "rwx"];
         for (s, _) in SIZE_FORMATS {
             assert!(config_vocab.contains(s), "{s} no está en config");
         }
         for (s, _) in TIME_FORMATS {
+            assert!(config_vocab.contains(s), "{s} no está en config");
+        }
+        for (s, _) in MODE_FORMATS {
             assert!(config_vocab.contains(s), "{s} no está en config");
         }
         // Y la dirección enum→str cubre TODO valor de los enums (un enum
@@ -1916,6 +1986,18 @@ mod style_tests {
                 ..ColumnStyle::default_for(Builtin::Mtime)
             };
             assert!(format_name(Builtin::Mtime, &style).is_some(), "{f:?}");
+        }
+        // #117: la dirección enum→str de Mode va por el hint (attrs).
+        let mode_id = ColumnId::Attr("posix.mode".into());
+        for f in [ModeFormat::Rwx, ModeFormat::Octal] {
+            let style = ColumnStyle {
+                mode_format: f,
+                ..ColumnStyle::default_for_id(&mode_id, None)
+            };
+            assert!(
+                format_name_id(&mode_id, norte_proto::attrs::AttrHint::Mode, &style).is_some(),
+                "{f:?}"
+            );
         }
     }
 }
@@ -1988,6 +2070,37 @@ mod attr_funnel_tests {
         // sin attrs configurados → vacío (no se paga el wire).
         let st2 = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
         assert!(st2.attr_ids_for("file").is_empty());
+    }
+
+    /// Pin del invariante de `attr_fingerprint` (#117 review tarea 3): la
+    /// huella va ORDENADA — reordenar columnas produce la MISMA huella (no
+    /// re-lista), quitar/añadir un attr la cambia.
+    #[test]
+    fn attr_fingerprint_es_orden_estable() {
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: Some(vec![
+                "name".into(),
+                "attr:mem.owner".into(),
+                "attr:mem.mode".into(),
+            ]),
+            ..Default::default()
+        };
+        let st = ColumnsSettings::resolve(&cfg);
+        let huella = st.attr_fingerprint("file");
+        assert_eq!(huella, vec!["mem.mode".to_owned(), "mem.owner".to_owned()]);
+        let reordenada = norte_config::ColumnsConfig {
+            default_columns: Some(vec![
+                "attr:mem.mode".into(),
+                "name".into(),
+                "attr:mem.owner".into(),
+            ]),
+            ..Default::default()
+        };
+        assert_eq!(
+            ColumnsSettings::resolve(&reordenada).attr_fingerprint("file"),
+            huella,
+            "reorden = misma huella"
+        );
     }
 
     #[test]

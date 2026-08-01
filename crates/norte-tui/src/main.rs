@@ -1646,17 +1646,13 @@ async fn on_columns_key(
 /// Los ids attr CONFIGURADOS de cada pane visible (#117): la huella que
 /// decide si un cambio de columnas exige re-listar — los valores attr solo
 /// llegan pidiéndolos en `fs.list`, así que un id nuevo con el listado
-/// viejo pintaría blanco (ausencia) hasta el próximo cd. ORDENADA por pane
-/// (review MINOR-1): un mero reorden de columnas no cambia qué valores hay
-/// que pedir y no debe re-listar nada.
+/// viejo pintaría blanco (ausencia) hasta el próximo cd. La huella ordenada
+/// vive en el modelo (`attr_fingerprint`, review tarea 3): una única
+/// definición para ambos frontends.
 fn pane_attr_ids(app: &App) -> Vec<Vec<String>> {
     app.panes
         .iter()
-        .map(|p| {
-            let mut ids = app.columns.attr_ids_for(p.dir().scheme());
-            ids.sort_unstable();
-            ids
-        })
+        .map(|p| app.columns.attr_fingerprint(p.dir().scheme()))
         .collect()
 }
 

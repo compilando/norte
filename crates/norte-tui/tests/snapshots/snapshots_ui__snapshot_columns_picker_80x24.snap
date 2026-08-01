@@ -14,7 +14,7 @@ expression: texto
 "│ [x] Nombre ▲                                                                ││"
 "│ [x] Tamaño · iec                                                            ││"
 "│ [x] Fecha · relative                                                        ││"
-"│ [x] attr:x�evil                                                             ││"
+"│ [x] x�evil                                                                  ││"
 "│ [ ] Tipo                                                                    ││"
 "└ [enter] confirmar [esc] cancelar [e] activar [ctrl+s] ordenar [f] formato ──┘│"
 "│                                      ││                                      │"

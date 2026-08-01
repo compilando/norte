@@ -84,7 +84,11 @@ pub fn row_display(row: &PickerRow, sort: SortSpec) -> (String, String) {
         Some(Builtin::Size) => norte_i18n::t("col-header-size"),
         Some(Builtin::Mtime) => norte_i18n::t("col-header-mtime"),
         Some(Builtin::Kind) => norte_i18n::t("col-header-kind"),
-        None => norte_encoding::mask_terminal_hazards(&row.id)
+        // #117: attr/plugin rows carry `label` (header_label, masked at
+        // open); unparsable ids fall back to the raw id. The re-mask+cap
+        // here stays the render choke point (P1 lesson): defense in depth,
+        // never a bypass.
+        None => norte_encoding::mask_terminal_hazards(row.label.as_deref().unwrap_or(&row.id))
             .chars()
             .take(OPAQUE_LABEL_MAX_CHARS)
             .collect(),

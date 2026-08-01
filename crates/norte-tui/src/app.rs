@@ -1455,15 +1455,20 @@ impl App {
 
     /// Abre el picker de columnas para el pane con foco (#108 7a): parte del
     /// set efectivo de su scheme y de su orden VIVO (el del pane, no el de
-    /// config — un sort de cabecera previo no se pierde al abrir).
+    /// config — un sort de cabecera previo no se pierde al abrir). Con el
+    /// catálogo cacheado del scheme (#117): el picker OFRECE los attrs
+    /// anunciados por el provider y cicla sus formatos por hint.
     pub fn open_columns_picker(&mut self) {
         let scheme = self.focused().dir().scheme().to_owned();
         let sort = self.focused().sort();
-        self.columns_picker = Some(norte_frontend::columns_picker::ColumnsPicker::open(
-            &self.columns,
-            &scheme,
-            sort,
-        ));
+        self.columns_picker = Some(
+            norte_frontend::columns_picker::ColumnsPicker::open_with_catalog(
+                &self.columns,
+                &scheme,
+                sort,
+                self.attr_catalog(&scheme),
+            ),
+        );
     }
 
     /// Aplica al vuelo el tema resaltado en el popup (preview en vivo).

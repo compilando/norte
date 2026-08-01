@@ -1707,16 +1707,19 @@ impl NorteGui {
 
     /// Abre el picker de columnas (`pane.columns`, `alt+c`, #108 7c) sobre
     /// el scheme y el sort VIVO del pane enfocado (el sort del pane ya
-    /// pliega `sort_override`, misma semilla que la TUI).
+    /// pliega `sort_override`, misma semilla que la TUI). Con el catálogo
+    /// cacheado del scheme (#117): el picker OFRECE los attrs anunciados
+    /// por el provider y cicla sus formatos por hint.
     fn open_columns_picker(&mut self) {
         let f = self.focus;
         let scheme = self.panes[f].dir().scheme().to_owned();
         let sort = self.panes[f].sort();
         self.columns_picker = Some(columns_view::ColumnsView::new(
-            norte_frontend::columns_picker::ColumnsPicker::open(
+            norte_frontend::columns_picker::ColumnsPicker::open_with_catalog(
                 &self.column_settings,
                 &scheme,
                 sort,
+                self.attr_catalogs.get(&scheme),
             ),
         ));
     }
@@ -1744,16 +1747,13 @@ impl NorteGui {
     /// Los ids attr CONFIGURADOS de cada pane (#117): la huella que decide
     /// si un cambio de columnas exige re-listar — los valores attr solo
     /// llegan pidiéndolos en `fs.list`, así que un id nuevo con el listado
-    /// viejo pintaría blanco (ausencia) hasta el próximo cd. ORDENADA por
-    /// pane (paridad TUI, review tarea 2): un mero reorden de columnas no
-    /// cambia qué valores hay que pedir y no debe re-listar nada.
+    /// viejo pintaría blanco (ausencia) hasta el próximo cd. La huella
+    /// ordenada vive en el modelo (`attr_fingerprint`, review tarea 3):
+    /// una única definición para ambos frontends.
     fn pane_attr_ids(&self) -> [Vec<String>; 2] {
         std::array::from_fn(|i| {
-            let mut ids = self
-                .column_settings
-                .attr_ids_for(self.panes[i].dir().scheme());
-            ids.sort_unstable();
-            ids
+            self.column_settings
+                .attr_fingerprint(self.panes[i].dir().scheme())
         })
     }
 

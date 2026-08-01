@@ -123,7 +123,7 @@
         },
         "format": {
           "default": null,
-          "description": "`\"exact\"` | `\"iec\"` | `\"si\"` | `\"relative\"` | `\"iso\"` — closed,\nvalidated at load; whether it FITS the column is the frontend's\ncall (doctor reports mismatches).",
+          "description": "`\"exact\"` | `\"iec\"` | `\"si\"` | `\"relative\"` | `\"iso\"` | `\"octal\"` |\n`\"rwx\"` — closed, validated at load; whether it FITS the column is\nthe frontend's call (doctor reports mismatches).",
           "type": [
             "string",
             "null"
