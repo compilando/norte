@@ -232,6 +232,7 @@ palette-plugin-prefix = extensión
 theme-picker-title = Tema
 columns-picker-title = Columnas — { $target }
 columns-picker-target-default = todos los schemes
+columns-picker-hint-gui = Espacio activa · Shift+↑/↓ mueve · S ordena · F formato · Enter aplica · Esc cierra
 msg-columns-saved = columnas guardadas
 ext-title = Extensiones
 ext-empty = no hay extensiones instaladas

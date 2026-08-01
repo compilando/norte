@@ -3196,6 +3196,115 @@ impl NorteGui {
             )
     }
 
+    /// Pinta el picker de columnas (#108 7c, `alt+c`): mismo idioma visual
+    /// que la paleta (header/lista/footer, 560px, teclado-only). Labels de
+    /// builtins vía Fluent `col-header-*`; ids opacos (`attr:`/`plugin:`/
+    /// basura) ENMASCARADOS con `mask_terminal_hazards` y preservados
+    /// verbatim en el modelo (#73 — limpiar config es de doctor, no del
+    /// picker). El formato es vocabulario ASCII cerrado: seguro en crudo.
+    fn render_columns_picker(
+        &self,
+        view: &columns_view::ColumnsView,
+        chrome: &ChromeColors,
+    ) -> impl IntoElement {
+        use norte_frontend::columns::{Builtin, sort_column};
+        let p = &view.picker;
+        let target = if p.scheme_override() {
+            p.scheme().to_owned()
+        } else {
+            norte_i18n::t("columns-picker-target-default")
+        };
+        let title = norte_i18n::ta("columns-picker-title", &[("target", &target)]);
+        let mut body = div()
+            .id("columns-rows")
+            .role(gpui::Role::List)
+            .aria_label(title.clone())
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .max_h(px(420.0))
+            .font(self.fonts.ui.clone());
+        for (pos, row) in p.rows().iter().enumerate() {
+            let selected = pos == p.cursor();
+            let mark = if row.enabled { "[x]" } else { "[ ]" };
+            let label = match row.builtin {
+                Some(Builtin::Name) => norte_i18n::t("col-header-name"),
+                Some(Builtin::Size) => norte_i18n::t("col-header-size"),
+                Some(Builtin::Mtime) => norte_i18n::t("col-header-mtime"),
+                Some(Builtin::Kind) => norte_i18n::t("col-header-kind"),
+                None => norte_encoding::mask_terminal_hazards(&row.id),
+            };
+            let arrow = match row.builtin.and_then(sort_column) {
+                Some(sc) if sc == p.sort().column => {
+                    if p.sort().dir == norte_frontend::SortDir::Desc {
+                        " ▼"
+                    } else {
+                        " ▲"
+                    }
+                }
+                _ => "",
+            };
+            let fmt = row
+                .format
+                .as_deref()
+                .map(|f| format!(" · {f}"))
+                .unwrap_or_default();
+            let text = format!("{mark} {label}{arrow}{fmt}");
+            let mut r = div()
+                .id(format!("columns-row-{pos}"))
+                .role(gpui::Role::ListItem)
+                .aria_label(label.clone())
+                .aria_selected(selected)
+                .flex()
+                .flex_row()
+                .items_center()
+                .px(px(sp::S))
+                .py(px(1.0)) // sub-XS: acento fino de una línea
+                .rounded(px(sp::RADIUS_ROW))
+                .child(div().flex_1().truncate().child(SharedString::from(text)));
+            if row.format_locked {
+                // Formato fijado por scheme-spec: fila atenuada (7b).
+                r = r.opacity(0.6);
+            }
+            if selected {
+                r = r.bg(chrome.sel_bg);
+                if let Some(fg) = chrome.sel_fg {
+                    r = r.text_color(fg);
+                }
+            }
+            body = body.child(r);
+        }
+        div()
+            .id("columns-picker-view")
+            .role(gpui::Role::Document)
+            .aria_label(title.clone())
+            .w(px(560.0))
+            .flex()
+            .flex_col()
+            .border_2()
+            .border_color(chrome.border_focus)
+            .bg(chrome.pane_bg_focus)
+            .child(
+                div()
+                    .px(px(sp::S))
+                    .py(px(sp::XS))
+                    .bg(chrome.header_bg)
+                    .text_color(chrome.header_fg)
+                    .truncate()
+                    .child(SharedString::from(title)),
+            )
+            .child(body)
+            .child(
+                div()
+                    .px(px(sp::S))
+                    .py(px(1.0)) // sub-XS: acento fino de una línea
+                    .bg(chrome.quick_bg)
+                    .text_color(chrome.quick_fg)
+                    .truncate()
+                    .child(SharedString::from(norte_i18n::t("columns-picker-hint-gui"))),
+            )
+    }
+
     /// Pinta el gestor de extensiones a pantalla COMPLETA (G3c, `f12`):
     /// mismo idioma visual que `render_settings` (header/lista/footer);
     /// dos sub-vistas mutuamente excluyentes — la lista de plugins, o (si
@@ -4909,6 +5018,21 @@ impl Render for NorteGui {
                     .justify_center()
                     .bg(rgba(0x000000aa))
                     .child(self.render_palette(view, &chrome)),
+            );
+        }
+
+        // Overlay del picker de columnas (#108 7c): mismo patrón que la
+        // paleta, pintado antes del modal (el modal sigue ganando encima).
+        if let Some(view) = &self.columns_picker {
+            root = root.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(rgba(0x000000aa))
+                    .child(self.render_columns_picker(view, &chrome)),
             );
         }
 
