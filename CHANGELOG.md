@@ -9,6 +9,17 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **GUI column picker — Alt+C (#108 block 7c):** the GUI gets the same
+  picker the TUI ships, as an overlay panel over the shared model: toggle
+  (Space/E), reorder (Shift+↑/↓), sort by the cursor's column (S), cycle
+  format (F); Enter applies in-session and persists (columns + sort +
+  changed formats), Esc discards. Applying clears the session header-click
+  sort override for the panes the save targets — the persisted sort
+  supersedes it. Opaque ids render masked and length-capped (screen readers
+  included); the panel scrim occludes mouse input; all GUI config writes are
+  now serialized (follow-up for atomic persist: #116). Closes the last
+  block of the columns design.
+
 - **Provider attributes produced end-to-end (#108 block 2):** the wire that
   0.30.0 shipped now carries real data. `Provider` gains defaulted
   `attrs()`/`list_with()`/`stat_with()` (`ListOptions`/`AttrRequest`);
