@@ -285,6 +285,15 @@ pub enum TimeFormat {
     Iso,
 }
 
+/// Formato de un word de modo POSIX (#117).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModeFormat {
+    /// `-rw-r--r--` (tipo + rwx, setuid/sticky incluidos).
+    Rwx,
+    /// Octal (`644`).
+    Octal,
+}
+
 /// Entrada del [`layout`]: política + medida de la página (para `Auto`) +
 /// si es la columna del NOMBRE (jamás se descarta).
 #[derive(Debug, Clone, Copy)]
@@ -536,8 +545,15 @@ mod settings_tests {
     fn column_widths_conjunto_default_a_80_celdas() {
         let s = ColumnsSettings::default();
         let w = column_widths(&s, "file", 80);
-        let cols: Vec<Builtin> = w.iter().map(|(b, _)| *b).collect();
-        assert_eq!(cols, vec![Builtin::Name, Builtin::Size, Builtin::Mtime]);
+        let cols: Vec<ColumnId> = w.iter().map(|(id, _)| id.clone()).collect();
+        assert_eq!(
+            cols,
+            vec![
+                ColumnId::Builtin(Builtin::Name),
+                ColumnId::Builtin(Builtin::Size),
+                ColumnId::Builtin(Builtin::Mtime)
+            ]
+        );
         // El nombre absorbe el resto: suma == disponible.
         assert_eq!(w.iter().map(|(_, x)| *x).sum::<u16>(), 80);
     }
@@ -547,8 +563,8 @@ mod settings_tests {
         let s = ColumnsSettings::default();
         let w = column_widths(&s, "file", 12);
         assert_eq!(
-            w.iter().map(|(b, _)| *b).collect::<Vec<_>>(),
-            vec![Builtin::Name]
+            w.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
+            vec![ColumnId::Builtin(Builtin::Name)]
         );
     }
 
@@ -592,17 +608,18 @@ mod settings_tests {
             vec!["rota!!".to_owned()],
             "diagnóstico, no drop mudo"
         );
-        assert_eq!(st.unrenderable, vec!["attr:posix.mode".to_owned()]);
+        // #117: los attr: YA se pintan — nada sin renderer aquí.
+        assert!(st.unrenderable.is_empty(), "{:?}", st.unrenderable);
 
-        // Default: size + (attr saltado) → name ANTEPUESTO (jamás sin nombre).
+        // Default: size + attr → name ANTEPUESTO (jamás sin nombre).
         let items = st.layout_items_for("file");
-        let cols: Vec<Builtin> = items.iter().map(|(b, _)| *b).collect();
-        assert_eq!(cols, vec![Builtin::Name, Builtin::Size]);
+        let cols: Vec<String> = items.iter().map(|(id, _)| id.to_string()).collect();
+        assert_eq!(cols, vec!["name", "size", "attr:posix.mode"]);
 
         // Scheme: reemplaza la lista entera.
         let items = st.layout_items_for("sftp");
-        let cols: Vec<Builtin> = items.iter().map(|(b, _)| *b).collect();
-        assert_eq!(cols, vec![Builtin::Name, Builtin::Kind]);
+        let cols: Vec<String> = items.iter().map(|(id, _)| id.to_string()).collect();
+        assert_eq!(cols, vec!["name", "kind"]);
 
         // Sort: global mtime/desc; sftp hereda el global (sin override).
         let s = st.sort_for("file");
@@ -619,8 +636,8 @@ mod settings_tests {
         };
         let s = ColumnsSettings::resolve(&cfg);
         let items = s.layout_items_for("file");
-        assert_eq!(items[0].0, Builtin::Name);
-        assert_eq!(items[1].0, Builtin::Size);
+        assert_eq!(items[0].0, ColumnId::Builtin(Builtin::Name));
+        assert_eq!(items[1].0, ColumnId::Builtin(Builtin::Size));
     }
 
     #[test]
@@ -894,6 +911,11 @@ pub struct ColumnStyle {
     pub size_format: SizeFormat,
     /// Formato de tiempo (solo lo lee `Mtime`).
     pub time_format: TimeFormat,
+    /// Formato de modo (solo lo leen celdas attr con hint `Mode`).
+    pub mode_format: ModeFormat,
+    /// Hint del catálogo para columnas attr (`Opaque` si no hay catálogo
+    /// o la columna es builtin — los builtin no lo leen).
+    pub hint: norte_proto::attrs::AttrHint,
     /// Alineación efectiva.
     pub align: Align,
     /// Cabecera propia (saneada, ≤ [`HEADER_MAX_CHARS`]); `None` = la
@@ -910,12 +932,44 @@ impl ColumnStyle {
         Self {
             size_format: SizeFormat::Iec,
             time_format: TimeFormat::Relative,
+            mode_format: ModeFormat::Rwx,
+            hint: norte_proto::attrs::AttrHint::Opaque,
             align: if b == Builtin::Name {
                 Align::Left
             } else {
                 Align::Right
             },
             header: None,
+        }
+    }
+
+    /// Defaults de CUALQUIER columna (#117): builtin = `default_for`;
+    /// attr = alineación y hint del catálogo (`Opaque`/izquierda sin él,
+    /// Size/Timestamp/Mode a la derecha); plugin = texto a la izquierda.
+    #[must_use]
+    pub fn default_for_id(id: &ColumnId, catalog: Option<&norte_proto::AttrCatalog>) -> Self {
+        use norte_proto::attrs::AttrHint;
+        match id {
+            ColumnId::Builtin(b) => Self::default_for(*b),
+            ColumnId::Attr(aid) => {
+                let hint = catalog
+                    .and_then(|c| c.iter().find(|i| i.id == *aid))
+                    .map_or(AttrHint::Opaque, |i| i.hint);
+                Self {
+                    align: match hint {
+                        AttrHint::Size | AttrHint::Timestamp | AttrHint::Mode => Align::Right,
+                        _ => Align::Left,
+                    },
+                    hint,
+                    // `default_for(Kind)` solo aporta los campos no-align
+                    // (iec/relative/rwx, header None); su align se pisa.
+                    ..Self::default_for(Builtin::Kind)
+                }
+            }
+            ColumnId::Plugin { .. } => Self {
+                align: Align::Left,
+                ..Self::default_for(Builtin::Kind)
+            },
         }
     }
 }
@@ -936,6 +990,12 @@ const SIZE_FORMATS: &[(&str, SizeFormat)] = &[
 /// Tabla str ↔ enum de `Mtime` — mismas reglas que [`SIZE_FORMATS`].
 const TIME_FORMATS: &[(&str, TimeFormat)] =
     &[("relative", TimeFormat::Relative), ("iso", TimeFormat::Iso)];
+
+/// Tabla str ↔ enum de columnas con hint `Mode` — mismas reglas que
+/// [`SIZE_FORMATS`]. Las cadenas entran al vocabulario global de config
+/// en la tarea 4 de #117.
+const MODE_FORMATS: &[(&str, ModeFormat)] =
+    &[("rwx", ModeFormat::Rwx), ("octal", ModeFormat::Octal)];
 
 /// ¿Casa `fmt` (vocabulario global YA validado en config) con la columna?
 /// `Name`/`Kind` no admiten formato alguno; los de `mode`/attrs llegan con
@@ -985,8 +1045,9 @@ pub fn format_name(b: Builtin, style: &ColumnStyle) -> Option<&'static str> {
 /// mapeado, overrides por scheme. Los ids que no parsean van a
 /// [`ColumnsSettings::invalid`] — se saltan al pintar y los reporta
 /// `norte doctor` (jamás un drop silencioso ni un error de arranque).
-/// Los `attr:`/`plugin:` parsean pero aún no tienen renderer (bloques
-/// 2/6/7): se listan en [`ColumnsSettings::unrenderable`].
+/// Los `attr:` se pintan por el funnel generalizado (#117); los `plugin:`
+/// aún no tienen renderer y se listan en
+/// [`ColumnsSettings::unrenderable`].
 #[derive(Debug, Clone, Default)]
 pub struct ColumnsSettings {
     default_set: Option<Vec<ColumnId>>,
@@ -1013,7 +1074,8 @@ pub struct ColumnsSettings {
     >,
     /// Ids configurados que NO parsean (diagnóstico para doctor).
     pub invalid: Vec<String>,
-    /// Ids válidos sin renderer todavía (`attr:`/`plugin:`).
+    /// Ids válidos sin renderer todavía — SOLO `plugin:` desde #117 (los
+    /// `attr:` se pintan por el funnel generalizado).
     pub unrenderable: Vec<String>,
     /// Specs `[[ui.columns.spec]]` con id imposible o con un formato que no
     /// casa con su columna (#108 7b): se aplica el default y doctor lo
@@ -1066,8 +1128,10 @@ impl ColumnsSettings {
     /// [`Self::bad_specs`] y campo retirado (se aplicará el default);
     /// header enmascarado ([`sanitize_header`]) y capado a
     /// [`HEADER_MAX_CHARS`] (vacío tras enmascarar = `None`, cae a Fluent).
-    /// Los ids `attr:`/`plugin:` se retienen tal cual: sus formatos llegan
-    /// con sus renderers (bloques 2/6/7) y hoy nadie los pinta.
+    /// Los ids `attr:`/`plugin:` se retienen tal cual (#117): sus formatos
+    /// pasan sin validar aquí — al plegar (`style_for_id`) solo casan las
+    /// palabras de [`MODE_FORMATS`]/[`SIZE_FORMATS`]/[`TIME_FORMATS`], una
+    /// desconocida conserva el default.
     fn sanitize_specs(
         &mut self,
         specs: &std::collections::BTreeMap<String, norte_config::ColumnSpec>,
@@ -1107,15 +1171,20 @@ impl ColumnsSettings {
         }
     }
 
-    /// El estilo efectivo de un builtin en `scheme` (#108 7b): defaults del
-    /// builtin ← spec global ← spec del scheme, campo a campo (`Some`
-    /// gana). Los formatos ya vienen validados y con encaje comprobado en
-    /// [`Self::resolve`]; aquí el fallback conserva el default — jamás un
-    /// panic.
+    /// El estilo efectivo de CUALQUIER columna en `scheme` (#117):
+    /// defaults ← spec global ← spec del scheme, campo a campo. El formato
+    /// str se pliega por la tabla que lo contenga (size/time/mode) — en
+    /// builtins resolve ya validó el encaje; en attrs el hint decide qué
+    /// campo se LEE al pintar, así que plegar los tres es inocuo.
     #[must_use]
-    pub fn style_for(&self, scheme: &str, builtin: Builtin) -> ColumnStyle {
-        let key = ColumnId::Builtin(builtin).to_string();
-        let mut style = ColumnStyle::default_for(builtin);
+    pub fn style_for_id(
+        &self,
+        scheme: &str,
+        id: &ColumnId,
+        catalog: Option<&norte_proto::AttrCatalog>,
+    ) -> ColumnStyle {
+        let key = id.to_string();
+        let mut style = ColumnStyle::default_for_id(id, catalog);
         let global = self.specs_global.get(&key);
         let scoped = self.specs_schemes.get(scheme).and_then(|m| m.get(&key));
         for spec in [global, scoped].into_iter().flatten() {
@@ -1126,22 +1195,12 @@ impl ColumnsSettings {
                 };
             }
             if let Some(fmt) = spec.format.as_deref() {
-                // m3 revisión 7b: str → enum por la tabla única; un nombre
-                // fuera de tabla conserva el default (resolve ya lo retiró
-                // y diagnosticó).
-                match builtin {
-                    Builtin::Size => {
-                        if let Some((_, f)) = SIZE_FORMATS.iter().find(|(s, _)| *s == fmt) {
-                            style.size_format = *f;
-                        }
-                    }
-                    Builtin::Mtime => {
-                        if let Some((_, f)) = TIME_FORMATS.iter().find(|(s, _)| *s == fmt) {
-                            style.time_format = *f;
-                        }
-                    }
-                    // Sin formato posible: resolve ya lo retiró y diagnosticó.
-                    Builtin::Name | Builtin::Kind => {}
+                if let Some((_, f)) = SIZE_FORMATS.iter().find(|(s, _)| *s == fmt) {
+                    style.size_format = *f;
+                } else if let Some((_, f)) = TIME_FORMATS.iter().find(|(s, _)| *s == fmt) {
+                    style.time_format = *f;
+                } else if let Some((_, f)) = MODE_FORMATS.iter().find(|(s, _)| *s == fmt) {
+                    style.mode_format = *f;
                 }
             }
             if spec.header.is_some() {
@@ -1149,6 +1208,12 @@ impl ColumnsSettings {
             }
         }
         style
+    }
+
+    /// [`Self::style_for_id`] para un builtin — la firma histórica (7b).
+    #[must_use]
+    pub fn style_for(&self, scheme: &str, builtin: Builtin) -> ColumnStyle {
+        self.style_for_id(scheme, &ColumnId::Builtin(builtin), None)
     }
 
     /// Aplica EN MEMORIA un formato elegido en el picker (#108 7b):
@@ -1170,7 +1235,13 @@ impl ColumnsSettings {
     /// contra su columna en [`Self::resolve`].
     #[must_use]
     pub fn format_pinned_by_scheme(&self, scheme: &str, builtin: Builtin) -> bool {
-        let key = ColumnId::Builtin(builtin).to_string();
+        self.format_pinned_by_scheme_id(scheme, &ColumnId::Builtin(builtin))
+    }
+
+    /// [`Self::format_pinned_by_scheme`] para cualquier id (#117).
+    #[must_use]
+    pub fn format_pinned_by_scheme_id(&self, scheme: &str, id: &ColumnId) -> bool {
+        let key = id.to_string();
         self.specs_schemes
             .get(scheme)
             .and_then(|m| m.get(&key))
@@ -1185,12 +1256,12 @@ impl ColumnsSettings {
                         self.invalid.push(raw.clone());
                     }
                 }
-                Ok(ColumnId::Attr(_) | ColumnId::Plugin { .. }) => {
+                Ok(ColumnId::Plugin { .. }) => {
                     if !self.unrenderable.contains(raw) {
                         self.unrenderable.push(raw.clone());
                     }
                 }
-                Ok(ColumnId::Builtin(_)) => {}
+                Ok(ColumnId::Builtin(_) | ColumnId::Attr(_)) => {}
             }
         }
     }
@@ -1205,44 +1276,45 @@ impl ColumnsSettings {
             .unwrap_or(self.default_sort)
     }
 
-    /// Los items de layout BUILTIN para un pane en `scheme`, en orden de
-    /// pintado. Los `attr:`/`plugin:` configurados se SALTAN (sin renderer
-    /// aún — doctor los nombra); el nombre jamás desaparece NI deja de ir
-    /// primero — la TUI presupuesta la primera columna como el nombre
-    /// (#108 7a: un `name` a mitad de lista se normaliza al frente).
-    ///
-    /// #108 7b: el `width` de un `[[ui.columns.spec]]` (global ← scheme)
-    /// SUSTITUYE la política del item — también sobre el set por defecto.
-    /// Un width sobre `name` se aplica pero conserva `is_name: true`: las
-    /// reglas de suelo del nombre de [`layout`] (regla 3, [`NAME_MIN`],
-    /// jamás descartado) siguen ganando — un `fixed = 1` en el nombre no lo
-    /// vuelve impintable.
+    /// Los items de layout para un pane en `scheme`, en orden de pintado
+    /// (#117: builtins Y attrs; los `plugin:` configurados se SALTAN — sin
+    /// renderer aún, doctor los nombra). Dedup por id; el nombre jamás
+    /// desaparece ni deja de ir primero. El `width` de un
+    /// `[[ui.columns.spec]]` (global ← scheme) SUSTITUYE la política del
+    /// item — sobre cualquier columna, también attrs. Un width sobre `name`
+    /// se aplica pero conserva `is_name: true`: las reglas de suelo del
+    /// nombre de [`layout`] (regla 3, [`NAME_MIN`], jamás descartado)
+    /// siguen ganando.
     #[must_use]
-    pub fn layout_items_for(&self, scheme: &str) -> Vec<(Builtin, LayoutItem)> {
+    pub fn layout_items_for(&self, scheme: &str) -> Vec<(ColumnId, LayoutItem)> {
         let ids = self
             .schemes
             .get(scheme)
             .and_then(|(c, _)| c.as_ref())
             .or(self.default_set.as_ref());
         let mut out = match ids {
-            None => default_layout_items(),
+            None => default_layout_items()
+                .into_iter()
+                .map(|(b, it)| (ColumnId::Builtin(b), it))
+                .collect::<Vec<_>>(),
             Some(ids) => {
-                let mut out: Vec<(Builtin, LayoutItem)> = Vec::new();
+                let mut out: Vec<(ColumnId, LayoutItem)> = Vec::new();
                 for id in ids {
-                    if let ColumnId::Builtin(b) = id {
-                        if out.iter().any(|(x, _)| x == b) {
-                            continue;
-                        }
-                        out.push((*b, builtin_layout_item(*b)));
+                    match id {
+                        ColumnId::Plugin { .. } => continue,
+                        _ if out.iter().any(|(x, _)| x == id) => continue,
+                        ColumnId::Builtin(b) => out.push((id.clone(), builtin_layout_item(*b))),
+                        ColumnId::Attr(_) => out.push((id.clone(), attr_layout_item())),
                     }
                 }
-                match out.iter().position(|(b, _)| *b == Builtin::Name) {
+                let name = ColumnId::Builtin(Builtin::Name);
+                match out.iter().position(|(id, _)| *id == name) {
                     Some(pos) if pos > 0 => {
-                        let name = out.remove(pos);
-                        out.insert(0, name);
+                        let n = out.remove(pos);
+                        out.insert(0, n);
                     }
                     Some(_) => {}
-                    None => out.insert(0, (Builtin::Name, builtin_layout_item(Builtin::Name))),
+                    None => out.insert(0, (name, builtin_layout_item(Builtin::Name))),
                 }
                 out
             }
@@ -1254,9 +1326,9 @@ impl ColumnsSettings {
     /// Pliega el `width` de los specs (global ← scheme, `Some` gana) sobre
     /// la política de cada item (#108 7b). `is_name` no se toca: los suelos
     /// del nombre en [`layout`] mandan.
-    fn apply_width_overrides(&self, scheme: &str, items: &mut [(Builtin, LayoutItem)]) {
-        for (b, item) in items.iter_mut() {
-            let key = ColumnId::Builtin(*b).to_string();
+    fn apply_width_overrides(&self, scheme: &str, items: &mut [(ColumnId, LayoutItem)]) {
+        for (id, item) in items.iter_mut() {
+            let key = id.to_string();
             let global = self.specs_global.get(&key).and_then(|s| s.width);
             let scoped = self
                 .specs_schemes
@@ -1273,6 +1345,21 @@ impl ColumnsSettings {
                 };
             }
         }
+    }
+
+    /// Los ids attr CONFIGURADOS y renderizables de `scheme` (#117): lo
+    /// que el pane pide en `fs.list`. Dedup del funnel; capado a
+    /// [`norte_proto::ATTRS_MAX_REQUEST`] (el daemon rechazaría más).
+    #[must_use]
+    pub fn attr_ids_for(&self, scheme: &str) -> Vec<String> {
+        self.layout_items_for(scheme)
+            .into_iter()
+            .filter_map(|(id, _)| match id {
+                ColumnId::Attr(a) => Some(a),
+                _ => None,
+            })
+            .take(norte_proto::ATTRS_MAX_REQUEST)
+            .collect()
     }
 
     /// La lista de ids CONFIGURADA efectiva para `scheme` en forma Display,
@@ -1363,6 +1450,18 @@ pub fn builtin_layout_item(b: Builtin) -> LayoutItem {
     }
 }
 
+/// Item de layout por defecto de una columna attr (#117): `Fixed(12)`
+/// (separador incluido) — el ancho fino se ajusta con el width override
+/// del spec, que llega gratis por `apply_width_overrides`.
+#[must_use]
+pub fn attr_layout_item() -> LayoutItem {
+    LayoutItem {
+        policy: WidthPolicy::Fixed(12),
+        measured: 0,
+        is_name: false,
+    }
+}
+
 fn parse_ids(ids: &[String]) -> Vec<ColumnId> {
     ids.iter()
         .filter_map(|raw| raw.parse::<ColumnId>().ok())
@@ -1390,7 +1489,7 @@ fn map_sort(s: Option<&norte_config::SortChoice>) -> crate::sort::SortSpec {
 }
 
 /// Anchos de las columnas (#108) para un ancho interior en CELDAS:
-/// `(builtin, ancho)` de las columnas VIVAS de `settings` para `scheme`,
+/// `(id, ancho)` de las columnas VIVAS de `settings` para `scheme`,
 /// en orden de pintado — una columna sin sitio no aparece. Compartido
 /// TUI/GUI: ambos frontends pintan el MISMO conjunto del mismo [`layout`].
 #[must_use]
@@ -1398,13 +1497,13 @@ pub fn column_widths(
     settings: &ColumnsSettings,
     scheme: &str,
     inner_width: u16,
-) -> Vec<(Builtin, u16)> {
+) -> Vec<(ColumnId, u16)> {
     let set = settings.layout_items_for(scheme);
     let items: Vec<_> = set.iter().map(|(_, it)| *it).collect();
     let placed = layout(inner_width, &items);
-    set.iter()
+    set.into_iter()
         .zip(placed)
-        .filter_map(|((b, _), w)| w.map(|w| (*b, w)))
+        .filter_map(|((id, _), w)| w.map(|w| (id, w)))
         .collect()
 }
 
@@ -1422,29 +1521,48 @@ pub fn sort_column(b: Builtin) -> Option<crate::sort::SortColumn> {
     }
 }
 
-/// Texto de la celda de una columna BUILTIN no-nombre (#108 L5) con un
-/// [`ColumnStyle`] resuelto (7b): `None` = ausencia (un dir sin size, un
-/// mtime desconocido) — se pinta blanco, jamás un `0` fabricado. `now_ms`
-/// lo inyecta el caller (estabilidad de snapshots y pureza).
+/// [`sort_column`] para cualquier id: attr/plugin no son ordenables (el
+/// vocabulario de sort es cerrado: name/size/mtime — spec Layer 7 nota
+/// #117).
+#[must_use]
+pub fn sort_column_id(id: &ColumnId) -> Option<crate::sort::SortColumn> {
+    match id {
+        ColumnId::Builtin(b) => sort_column(*b),
+        ColumnId::Attr(_) | ColumnId::Plugin { .. } => None,
+    }
+}
+
+/// Texto de la celda de una columna no-nombre (#108 L5, #117 sobre
+/// [`ColumnId`]) con un [`ColumnStyle`] resuelto (7b): `None` = ausencia
+/// (un dir sin size, un attr que el provider no mandó) — se pinta blanco,
+/// jamás un `0` fabricado. `now_ms` lo inyecta el caller (estabilidad de
+/// snapshots y pureza). Los `plugin:` no tienen renderer aquí: `None`.
 #[must_use]
 pub fn styled_cell(
     entry: &norte_proto::Entry,
-    col: Builtin,
+    col: &ColumnId,
     now_ms: i64,
     style: &ColumnStyle,
 ) -> Option<String> {
     match col {
-        Builtin::Name => None, // el nombre lo pinta el frontend
-        Builtin::Kind => Some(norte_i18n::t(match entry.kind {
-            norte_proto::EntryKind::Dir => "col-kind-dir",
-            norte_proto::EntryKind::File => "col-kind-file",
-            norte_proto::EntryKind::Symlink => "col-kind-symlink",
-            norte_proto::EntryKind::Other => "col-kind-other",
-        })),
-        Builtin::Size => entry.size.map(|n| format_size(n, style.size_format)),
-        Builtin::Mtime => entry
-            .mtime_ms
-            .map(|ms| format_mtime(ms, style.time_format, now_ms)),
+        ColumnId::Builtin(b) => match b {
+            Builtin::Name => None, // el nombre lo pinta el frontend
+            Builtin::Kind => Some(norte_i18n::t(match entry.kind {
+                norte_proto::EntryKind::Dir => "col-kind-dir",
+                norte_proto::EntryKind::File => "col-kind-file",
+                norte_proto::EntryKind::Symlink => "col-kind-symlink",
+                norte_proto::EntryKind::Other => "col-kind-other",
+            })),
+            Builtin::Size => entry.size.map(|n| format_size(n, style.size_format)),
+            Builtin::Mtime => entry
+                .mtime_ms
+                .map(|ms| format_mtime(ms, style.time_format, now_ms)),
+        },
+        ColumnId::Attr(id) => entry
+            .attrs
+            .get(id)
+            .and_then(|v| attr_cell(v, style, now_ms)),
+        ColumnId::Plugin { .. } => None,
     }
 }
 
@@ -1452,7 +1570,110 @@ pub fn styled_cell(
 /// histórica pre-7b, conducta idéntica (pineada por los tests existentes).
 #[must_use]
 pub fn builtin_cell(entry: &norte_proto::Entry, col: Builtin, now_ms: i64) -> Option<String> {
-    styled_cell(entry, col, now_ms, &ColumnStyle::default_for(col))
+    styled_cell(
+        entry,
+        &ColumnId::Builtin(col),
+        now_ms,
+        &ColumnStyle::default_for(col),
+    )
+}
+
+/// Celda de un valor attr (#117): el TAG del valor decide (ADR 0039 §1 —
+/// jamás coaccionado al tipo declarado); el hint del estilo refina los
+/// numéricos. Text/Bytes son de TERCEROS: enmascarados y capados por
+/// [`sanitize_cell`]; Bytes pasa antes por el lossy MARCADO de
+/// [`crate::display_name`] (regla 1: los bytes originales no se tocan).
+fn attr_cell(v: &norte_proto::AttrValue, style: &ColumnStyle, now_ms: i64) -> Option<String> {
+    use norte_proto::attrs::{AttrHint, AttrValue};
+    match v {
+        AttrValue::Uint(n) => Some(match style.hint {
+            AttrHint::Size => format_size(*n, style.size_format),
+            AttrHint::Mode => format_mode(*n, style.mode_format),
+            AttrHint::Timestamp => i64::try_from(*n).map_or_else(
+                |_| n.to_string(),
+                |ms| format_mtime(ms, style.time_format, now_ms),
+            ),
+            _ => n.to_string(),
+        }),
+        AttrValue::Int(i) => Some(match style.hint {
+            AttrHint::Timestamp => format_mtime(*i, style.time_format, now_ms),
+            _ => i.to_string(),
+        }),
+        AttrValue::TimeMs(ms) => Some(format_mtime(*ms, style.time_format, now_ms)),
+        AttrValue::Text(s) => sanitize_cell(Some(s)),
+        AttrValue::Bytes(b) => {
+            let (shown, _hostil) = crate::display_name(b);
+            sanitize_cell(Some(&shown))
+        }
+        AttrValue::Bool(b) => Some(norte_i18n::t(if *b {
+            "col-cell-yes"
+        } else {
+            "col-cell-no"
+        })),
+        // Una celda mala cuesta una celda: visible, jamás blanco (blanco =
+        // AUSENTE).
+        AttrValue::Unknown => Some("?".to_owned()),
+    }
+}
+
+/// Modo POSIX según formato. Un valor que no cabe en u32 no es un modo:
+/// decimal crudo, jamás un panic ni un truncado silencioso.
+fn format_mode(n: u64, fmt: ModeFormat) -> String {
+    match u32::try_from(n) {
+        Ok(m) => match fmt {
+            ModeFormat::Rwx => format_mode_rwx(m),
+            ModeFormat::Octal => format_mode_octal(m),
+        },
+        Err(_) => n.to_string(),
+    }
+}
+
+/// Etiqueta de cabecera de CUALQUIER columna (#117), compartida TUI/GUI:
+/// el `header` custom del spec gana (YA saneado al resolver); builtin →
+/// Fluent; attr → Fluent por id de primera parte (`col-attr-posix-mode`),
+/// si no el label del catálogo ENMASCARADO, si no el id saneado. `t()`
+/// devuelve la clave cuando falta: se detecta comparando.
+#[must_use]
+pub fn header_label(
+    id: &ColumnId,
+    style: &ColumnStyle,
+    catalog: Option<&norte_proto::AttrCatalog>,
+) -> String {
+    if let Some(h) = &style.header {
+        return h.clone();
+    }
+    match id {
+        ColumnId::Builtin(b) => norte_i18n::t(match b {
+            Builtin::Name => "col-header-name",
+            Builtin::Size => "col-header-size",
+            Builtin::Mtime => "col-header-mtime",
+            Builtin::Kind => "col-header-kind",
+        }),
+        ColumnId::Attr(aid) => {
+            let key = format!("col-attr-{}", aid.replace(['.', '_'], "-"));
+            let loc = norte_i18n::t(&key);
+            if loc != key {
+                return loc;
+            }
+            if let Some(info) = catalog.and_then(|c| c.iter().find(|i| i.id == *aid)) {
+                let sane: String = sanitize_header(&info.label)
+                    .chars()
+                    .take(HEADER_MAX_CHARS)
+                    .collect();
+                if !sane.is_empty() {
+                    return sane;
+                }
+            }
+            sanitize_header(aid)
+                .chars()
+                .take(HEADER_MAX_CHARS)
+                .collect()
+        }
+        ColumnId::Plugin { plugin, column } => sanitize_header(&format!("{plugin}/{column}"))
+            .chars()
+            .take(HEADER_MAX_CHARS)
+            .collect(),
+    }
 }
 
 #[cfg(test)]
@@ -1498,7 +1719,7 @@ mod style_tests {
         let items = s.layout_items_for("file");
         let size = items
             .iter()
-            .find(|(b, _)| *b == Builtin::Size)
+            .find(|(id, _)| *id == ColumnId::Builtin(Builtin::Size))
             .expect("size");
         assert_eq!(size.1.policy, WidthPolicy::Fixed(9));
     }
@@ -1565,7 +1786,7 @@ mod style_tests {
             ..ColumnStyle::default_for(Builtin::Size)
         };
         assert_eq!(
-            styled_cell(&e, Builtin::Size, 0, &styled).as_deref(),
+            styled_cell(&e, &ColumnId::Builtin(Builtin::Size), 0, &styled).as_deref(),
             Some("2048")
         );
         // El wrapper por defecto no cambia de conducta (Iec).
@@ -1652,5 +1873,190 @@ mod style_tests {
             };
             assert!(format_name(Builtin::Mtime, &style).is_some(), "{f:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod attr_funnel_tests {
+    use super::*;
+    use norte_proto::attrs::{AttrHint, AttrInfo, AttrType, AttrValue};
+
+    fn catalog() -> norte_proto::AttrCatalog {
+        norte_proto::AttrCatalog::new(vec![
+            AttrInfo {
+                id: "mem.mode".into(),
+                label: "Mode".into(),
+                ty: AttrType::Uint,
+                hint: AttrHint::Mode,
+            },
+            AttrInfo {
+                id: "mem.owner".into(),
+                label: "Owner\u{202e}evil".into(),
+                ty: AttrType::Bytes,
+                hint: AttrHint::Identity,
+            },
+        ])
+    }
+
+    fn entry_with(attrs: &[(&str, AttrValue)]) -> norte_proto::Entry {
+        let mut e = norte_proto::Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: norte_proto::VPath::parse("mem:///a.bin").unwrap(),
+            kind: norte_proto::EntryKind::File,
+            size: Some(1),
+            mtime_ms: Some(0),
+        };
+        for (k, v) in attrs {
+            e.attrs.insert((*k).to_owned(), v.clone());
+        }
+        e
+    }
+
+    #[test]
+    fn layout_items_for_incluye_attrs_y_deduplica() {
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: Some(vec![
+                "name".into(),
+                "attr:mem.mode".into(),
+                "attr:mem.mode".into(), // dup: una sola columna
+                "size".into(),
+            ]),
+            ..Default::default()
+        };
+        let st = ColumnsSettings::resolve(&cfg);
+        let items = st.layout_items_for("file");
+        let ids: Vec<String> = items.iter().map(|(id, _)| id.to_string()).collect();
+        assert_eq!(ids, vec!["name", "attr:mem.mode", "size"]);
+        // attr default: Fixed(12), no-nombre.
+        let attr = &items[1].1;
+        assert_eq!(attr.policy, WidthPolicy::Fixed(12));
+        assert!(!attr.is_name);
+    }
+
+    #[test]
+    fn attr_ids_for_devuelve_los_configurados_del_scheme() {
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: Some(vec!["name".into(), "attr:mem.mode".into()]),
+            ..Default::default()
+        };
+        let st = ColumnsSettings::resolve(&cfg);
+        assert_eq!(st.attr_ids_for("file"), vec!["mem.mode".to_owned()]);
+        // sin attrs configurados → vacío (no se paga el wire).
+        let st2 = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
+        assert!(st2.attr_ids_for("file").is_empty());
+    }
+
+    #[test]
+    fn attr_ya_no_es_unrenderable_plugin_si() {
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: Some(vec![
+                "name".into(),
+                "attr:posix.mode".into(),
+                "plugin:git/branch".into(),
+            ]),
+            ..Default::default()
+        };
+        let st = ColumnsSettings::resolve(&cfg);
+        assert_eq!(st.unrenderable, vec!["plugin:git/branch".to_owned()]);
+    }
+
+    #[test]
+    fn styled_cell_attr_por_tag_del_valor_con_hint() {
+        let cat = catalog();
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: Some(vec!["name".into(), "attr:mem.mode".into()]),
+            ..Default::default()
+        };
+        let st = ColumnsSettings::resolve(&cfg);
+        let id = ColumnId::Attr("mem.mode".into());
+        let style = st.style_for_id("file", &id, Some(&cat));
+        assert_eq!(style.hint, AttrHint::Mode);
+        assert_eq!(style.align, Align::Right);
+        let e = entry_with(&[("mem.mode", AttrValue::Uint(0o100_644))]);
+        assert_eq!(
+            styled_cell(&e, &id, 0, &style).as_deref(),
+            Some("-rw-r--r--")
+        );
+        // Ausente → None (blanco), jamás un valor fabricado.
+        let vacio = entry_with(&[]);
+        assert_eq!(styled_cell(&vacio, &id, 0, &style), None);
+        // Unknown → "?" (una celda mala cuesta una celda).
+        let raro = entry_with(&[("mem.mode", AttrValue::Unknown)]);
+        assert_eq!(styled_cell(&raro, &id, 0, &style).as_deref(), Some("?"));
+    }
+
+    #[test]
+    fn attr_text_y_bytes_hostiles_se_enmascaran() {
+        let id = ColumnId::Attr("mem.note".into());
+        let style = ColumnStyle::default_for_id(&id, None);
+        let e = entry_with(&[(
+            "mem.note",
+            AttrValue::Text("\u{202e}atón\u{202c} a\u{200d}b".into()),
+        )]);
+        let cell = styled_cell(&e, &id, 0, &style).expect("celda");
+        assert!(
+            !cell.chars().any(norte_encoding::is_terminal_hazard),
+            "{cell:?}"
+        );
+        let id2 = ColumnId::Attr("mem.owner".into());
+        let e2 = entry_with(&[("mem.owner", AttrValue::Bytes(b"due\xf1o-\xff\xfe".to_vec()))]);
+        let cell2 = styled_cell(&e2, &id2, 0, &style).expect("celda");
+        assert!(
+            !cell2.chars().any(norte_encoding::is_terminal_hazard),
+            "{cell2:?}"
+        );
+        assert!(cell2.contains('\u{FFFD}'), "lossy marcado: {cell2:?}");
+    }
+
+    #[test]
+    fn header_label_fluent_catalogo_o_id_enmascarado() {
+        let cat = catalog();
+        // Primera-parte: clave Fluent (existe col-attr-posix-mode).
+        let id = ColumnId::Attr("posix.mode".into());
+        let style = ColumnStyle::default_for_id(&id, None);
+        let h = header_label(&id, &style, None);
+        assert_ne!(h, "col-attr-posix-mode", "clave Fluent debe existir");
+        assert!(!h.starts_with("col-attr-"), "{h:?}");
+        // Desconocido con catálogo: label del provider ENMASCARADO.
+        let id2 = ColumnId::Attr("mem.owner".into());
+        let h2 = header_label(
+            &id2,
+            &ColumnStyle::default_for_id(&id2, Some(&cat)),
+            Some(&cat),
+        );
+        assert!(
+            !h2.chars().any(norte_encoding::is_terminal_hazard),
+            "{h2:?}"
+        );
+        // Desconocido sin catálogo: el id (charset seguro tras sanitize).
+        let id3 = ColumnId::Attr("mem.stamp".into());
+        let h3 = header_label(&id3, &ColumnStyle::default_for_id(&id3, None), None);
+        assert_eq!(h3, "mem.stamp");
+        // El header custom del spec GANA siempre.
+        let mut st = ColumnStyle::default_for_id(&id3, None);
+        st.header = Some("Custom".into());
+        assert_eq!(header_label(&id3, &st, None), "Custom");
+    }
+
+    #[test]
+    fn attr_cell_todos_los_tags() {
+        let opaco = ColumnStyle::default_for_id(&ColumnId::Attr("x.y".into()), None);
+        let e = |v: AttrValue| entry_with(&[("x.y", v)]);
+        let id = ColumnId::Attr("x.y".into());
+        assert_eq!(
+            styled_cell(&e(AttrValue::Uint(42)), &id, 0, &opaco).as_deref(),
+            Some("42")
+        );
+        assert_eq!(
+            styled_cell(&e(AttrValue::Int(-5)), &id, 0, &opaco).as_deref(),
+            Some("-5")
+        );
+        assert_eq!(
+            styled_cell(&e(AttrValue::Bool(true)), &id, 0, &opaco),
+            Some(norte_i18n::t("col-cell-yes"))
+        );
+        // TimeMs siempre formatea como tiempo, con o sin hint.
+        let t = styled_cell(&e(AttrValue::TimeMs(0)), &id, 60_000, &opaco).expect("celda");
+        assert!(!t.is_empty());
     }
 }

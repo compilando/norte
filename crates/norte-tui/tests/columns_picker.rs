@@ -62,12 +62,16 @@ fn persistir(dir: &std::path::Path, picked: &norte_frontend::columns_picker::Pic
     }
 }
 
-/// Los builtin visibles del layout efectivo, en orden.
+/// Los builtin visibles del layout efectivo, en orden (#117: el layout ya
+/// habla `ColumnId`; aquí solo hay builtins configurados).
 fn builtins(app: &App) -> Vec<Builtin> {
     app.columns
         .layout_items_for("file")
         .iter()
-        .map(|(b, _)| *b)
+        .filter_map(|(id, _)| match id {
+            norte_frontend::columns::ColumnId::Builtin(b) => Some(*b),
+            _ => None,
+        })
         .collect()
 }
 

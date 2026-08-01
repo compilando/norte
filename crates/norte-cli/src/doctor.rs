@@ -99,8 +99,8 @@ pub fn check_config(layers: &Layers, env: &impl Fn(&str) -> Option<OsString>) ->
 /// `[ui.columns]` (#108 b4): ids que no parsean = Warn (se saltan al
 /// pintar — «un id configurado que desaparece en silencio es un bug, no
 /// una degradación», spec de columnas §Diagnostics); ids válidos sin
-/// renderer todavía (`attr:`/`plugin:`) = Warn informativo con el bloque
-/// que los traerá.
+/// renderer todavía (SOLO `plugin:` desde #117 — los `attr:` ya se
+/// pintan) = Warn informativo con el wiring que los traerá.
 #[must_use]
 pub fn check_columns(layers: &Layers) -> Vec<Finding> {
     let Ok(cfg) = norte_config::load(layers) else {
@@ -125,7 +125,7 @@ pub fn check_columns(layers: &Layers) -> Vec<Finding> {
             severity: Severity::Warn,
             code: "columns-no-renderer",
             detail: format!(
-                "[ui.columns] id válido sin renderer aún (attrs/plugins de columnas llegan en bloques posteriores de #108): {}",
+                "[ui.columns] id válido sin renderer aún (las celdas de plugin llegan con el wiring de columnas de plugins, #117): {}",
                 sanitize_detail(raw)
             ),
         });
@@ -563,13 +563,14 @@ pub fn check_connections(
 mod tests {
 
     /// #108 b4: un id roto = Warn nombrado (jamás drop silencioso); un
-    /// `attr:`/`plugin:` válido = Warn «sin renderer aún».
+    /// `plugin:` válido = Warn «sin renderer aún». #117: los `attr:` YA se
+    /// pintan — jamás disparan `columns-no-renderer`.
     #[test]
     fn columns_ids_rotos_y_sin_renderer_se_reportan() {
         let dir = tempfile::tempdir().expect("tmp");
         std::fs::write(
             dir.path().join("norte.toml"),
-            "[ui.columns]\ndefault = [\"name\", \"sise\", \"attr:posix.mode\"]\n",
+            "[ui.columns]\ndefault = [\"name\", \"sise\", \"attr:posix.mode\", \"plugin:demo/x\"]\n",
         )
         .expect("write");
         let layers = norte_config::Layers {
@@ -581,7 +582,16 @@ mod tests {
                 .any(|x| x.code == "columns-bad-id" && x.detail.contains("sise")),
             "{f:?}"
         );
-        assert!(f.iter().any(|x| x.code == "columns-no-renderer"), "{f:?}");
+        assert!(
+            f.iter()
+                .any(|x| x.code == "columns-no-renderer" && x.detail.contains("plugin:demo/x")),
+            "{f:?}"
+        );
+        assert!(
+            !f.iter()
+                .any(|x| x.code == "columns-no-renderer" && x.detail.contains("attr:")),
+            "un attr: no dispara columns-no-renderer: {f:?}"
+        );
     }
 
     /// #108 7b: un spec cuyo formato no casa con su columna (`iec` en un

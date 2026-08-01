@@ -286,28 +286,21 @@ fn take_width(s: &str, max: usize) -> String {
 /// relleno en las no-nombre, en paso con sus celdas.
 fn column_header_line(
     cols: &[(
-        norte_frontend::columns::Builtin,
+        norte_frontend::columns::ColumnId,
         u16,
         norte_frontend::columns::ColumnStyle,
     )],
     sort: norte_frontend::SortSpec,
 ) -> String {
     use norte_frontend::SortDir;
-    use norte_frontend::columns::{Align, Builtin};
+    use norte_frontend::columns::Align;
     let mut out = String::new();
     for (i, (col, w, style)) in cols.iter().enumerate() {
-        // #108 7b: la cabecera custom sustituye a la etiqueta Fluent. NO se
-        // re-enmascara: `ColumnsSettings::resolve` es el único choke point.
-        let label = match &style.header {
-            Some(h) => h.clone(),
-            None => match col {
-                Builtin::Name => t("col-header-name"),
-                Builtin::Size => t("col-header-size"),
-                Builtin::Mtime => t("col-header-mtime"),
-                Builtin::Kind => t("col-header-kind"),
-            },
-        };
-        let activa = norte_frontend::columns::sort_column(*col) == Some(sort.column);
+        // #117: etiqueta compartida TUI/GUI (header custom del spec →
+        // Fluent → catálogo enmascarado → id). NO se re-enmascara aquí:
+        // `header_label` ya devuelve texto seguro.
+        let label = norte_frontend::columns::header_label(col, style, None);
+        let activa = norte_frontend::columns::sort_column_id(col) == Some(sort.column);
         let w = usize::from(*w);
         let flecha = if sort.dir == SortDir::Asc {
             '▲'
@@ -1419,7 +1412,7 @@ mod entry_item_columns_tests {
     /// que romper la alineación, y el ancho total de la fila es EXACTO.
     #[test]
     fn una_decoracion_ancha_jamas_desplaza_las_columnas() {
-        use norte_frontend::columns::{Builtin, ColumnStyle, LayoutItem, WidthPolicy};
+        use norte_frontend::columns::{Builtin, ColumnId, ColumnStyle, LayoutItem, WidthPolicy};
         let entry = norte_proto::Entry {
             attrs: std::collections::BTreeMap::new(),
             path: VPath::parse("mem:///f.txt").unwrap(),
@@ -1434,12 +1427,12 @@ mod entry_item_columns_tests {
         let theme = TuiTheme::default();
         let widths = [
             (
-                Builtin::Name,
+                ColumnId::Builtin(Builtin::Name),
                 10u16,
                 ColumnStyle::default_for(Builtin::Name),
             ),
             (
-                Builtin::Size,
+                ColumnId::Builtin(Builtin::Size),
                 11u16,
                 ColumnStyle::default_for(Builtin::Size),
             ),
@@ -1704,22 +1697,27 @@ fn centered(base: Rect, w: u16, h: u16) -> Rect {
     }
 }
 
-/// Columnas VIVAS de un pane con su estilo resuelto (#108 7b): los anchos
-/// del layout compartido más `style_for`, UNA vez por columna y por frame
-/// (`style_for` pliega mapas y clona el header — por fila × columna sería
-/// O(filas × columnas) de lookups idénticos).
+/// Columnas VIVAS de un pane con su estilo resuelto (#108 7b, #117 sobre
+/// `ColumnId`): los anchos del layout compartido más `style_for_id`, UNA
+/// vez por columna y por frame (`style_for_id` pliega mapas y clona el
+/// header — por fila × columna sería O(filas × columnas) de lookups
+/// idénticos). Catálogo `None`: el wiring de attrs en vivo llega con la
+/// tarea 2 de #117.
 fn styled_columns(
     settings: &norte_frontend::columns::ColumnsSettings,
     scheme: &str,
     inner_w: u16,
 ) -> Vec<(
-    norte_frontend::columns::Builtin,
+    norte_frontend::columns::ColumnId,
     u16,
     norte_frontend::columns::ColumnStyle,
 )> {
     norte_frontend::columns::column_widths(settings, scheme, inner_w)
         .into_iter()
-        .map(|(b, w)| (b, w, settings.style_for(scheme, b)))
+        .map(|(id, w)| {
+            let s = settings.style_for_id(scheme, &id, None);
+            (id, w, s)
+        })
         .collect()
 }
 
@@ -1854,7 +1852,7 @@ fn entry_item<'a>(
     decoration: Option<&norte_frontend::Decoration>,
     marked: bool,
     cols: &[(
-        norte_frontend::columns::Builtin,
+        norte_frontend::columns::ColumnId,
         u16,
         norte_frontend::columns::ColumnStyle,
     )],
@@ -1955,8 +1953,8 @@ fn entry_item<'a>(
             spans.push(Span::raw(" ".repeat(name_w - usado)));
         }
         for (col, w, style) in cols.iter().skip(1) {
-            let cell = norte_frontend::columns::styled_cell(entry, *col, now_ms, style)
-                .unwrap_or_default();
+            let cell =
+                norte_frontend::columns::styled_cell(entry, col, now_ms, style).unwrap_or_default();
             // El ancho INCLUYE el separador (default_layout_items): el
             // contenido vive dentro de w-1 y siempre queda ≥1 espacio de
             // separador. Derecha (default): relleno delante. Izquierda
@@ -2332,7 +2330,7 @@ mod ellipsis_tests {
 #[cfg(test)]
 mod column_header_line_tests {
     use super::column_header_line;
-    use norte_frontend::columns::{Align, Builtin, ColumnStyle};
+    use norte_frontend::columns::{Align, Builtin, ColumnId, ColumnStyle};
     use norte_frontend::{SortColumn, SortDir, SortSpec};
     use unicode_width::UnicodeWidthStr;
 
@@ -2356,15 +2354,31 @@ mod column_header_line_tests {
             dirs_first: true,
         };
         let cols = [
-            (Builtin::Name, 6, estilo(Builtin::Name, Align::Left, "N")),
-            (Builtin::Size, 1, estilo(Builtin::Size, Align::Left, "S")),
+            (
+                ColumnId::Builtin(Builtin::Name),
+                6,
+                estilo(Builtin::Name, Align::Left, "N"),
+            ),
+            (
+                ColumnId::Builtin(Builtin::Size),
+                1,
+                estilo(Builtin::Size, Align::Left, "S"),
+            ),
         ];
         let linea = column_header_line(&cols, sort);
         assert_eq!(linea.width(), 7, "exactamente la suma de anchos: {linea:?}");
         assert_eq!(linea, "N      ");
         let cols = [
-            (Builtin::Name, 6, estilo(Builtin::Name, Align::Left, "N")),
-            (Builtin::Size, 2, estilo(Builtin::Size, Align::Left, "S")),
+            (
+                ColumnId::Builtin(Builtin::Name),
+                6,
+                estilo(Builtin::Name, Align::Left, "N"),
+            ),
+            (
+                ColumnId::Builtin(Builtin::Size),
+                2,
+                estilo(Builtin::Size, Align::Left, "S"),
+            ),
         ];
         let linea = column_header_line(&cols, sort);
         assert_eq!(linea.width(), 8, "{linea:?}");

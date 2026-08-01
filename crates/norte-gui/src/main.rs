@@ -2305,16 +2305,21 @@ impl NorteGui {
             f32::from(self.fonts.size),
         );
         // #108 7b: el ESTILO de cada columna se resuelve aquí, UNA vez por
-        // columna y frame (`style_for` pliega mapas y clona el header — por
-        // fila × columna sería O(filas × columnas) de lookups idénticos).
+        // columna y frame (`style_for_id` pliega mapas y clona el header —
+        // por fila × columna sería O(filas × columnas) de lookups
+        // idénticos). Catálogo `None`: el wiring de attrs en vivo llega con
+        // la tarea 3 de #117.
         let scheme = pane.dir().scheme();
         let cols: Vec<(
-            norte_frontend::columns::Builtin,
+            norte_frontend::columns::ColumnId,
             u16,
             norte_frontend::columns::ColumnStyle,
         )> = norte_frontend::columns::column_widths(&self.column_settings, scheme, cells)
             .into_iter()
-            .map(|(b, w)| (b, w, self.column_settings.style_for(scheme, b)))
+            .map(|(id, w)| {
+                let s = self.column_settings.style_for_id(scheme, &id, None);
+                (id, w, s)
+            })
             .collect();
         let now_ms: i64 = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -2538,21 +2543,18 @@ impl NorteGui {
                         .child(SharedString::from("")),
                 );
             for (k, (col_b, w, style)) in cols.iter().enumerate() {
-                let is_name = matches!(col_b, norte_frontend::columns::Builtin::Name);
-                let label_key = match col_b {
-                    norte_frontend::columns::Builtin::Name => "col-header-name",
-                    norte_frontend::columns::Builtin::Size => "col-header-size",
-                    norte_frontend::columns::Builtin::Mtime => "col-header-mtime",
-                    norte_frontend::columns::Builtin::Kind => "col-header-kind",
-                };
-                let sortable = norte_frontend::columns::sort_column(*col_b);
+                let is_name = matches!(
+                    col_b,
+                    norte_frontend::columns::ColumnId::Builtin(
+                        norte_frontend::columns::Builtin::Name
+                    )
+                );
+                let sortable = norte_frontend::columns::sort_column_id(col_b);
                 let active = sortable == Some(sort.column);
-                // #108 7b: la cabecera custom del spec (YA saneada y capada
-                // al resolver — único choke point) sustituye a la Fluent.
-                let base = style
-                    .header
-                    .clone()
-                    .unwrap_or_else(|| norte_i18n::t(label_key));
+                // #117: etiqueta compartida TUI/GUI (header custom del spec
+                // → Fluent → catálogo enmascarado → id) — `header_label` ya
+                // devuelve texto seguro, sin re-enmascarar aquí.
+                let base = norte_frontend::columns::header_label(col_b, style, None);
                 let label = if active {
                     format!("{base}{arrow}")
                 } else {
@@ -2717,7 +2719,7 @@ impl NorteGui {
         marked: bool,
         chrome: &ChromeColors,
         cols: &[(
-            norte_frontend::columns::Builtin,
+            norte_frontend::columns::ColumnId,
             u16,
             norte_frontend::columns::ColumnStyle,
         )],
@@ -2819,15 +2821,17 @@ impl NorteGui {
         // un mtime desconocido) = celda en blanco, jamás un 0 fabricado. Color:
         // el de la fila a alfa reducido — el mismo "dim relativo" que el
         // fallback del badge de decoración (GPUI no tiene Modifier::DIM).
-        for (col, w, style) in cols
-            .iter()
-            .filter(|(b, _, _)| !matches!(b, norte_frontend::columns::Builtin::Name))
-        {
+        for (col, w, style) in cols.iter().filter(|(id, _, _)| {
+            !matches!(
+                id,
+                norte_frontend::columns::ColumnId::Builtin(norte_frontend::columns::Builtin::Name)
+            )
+        }) {
             // #108 7b: formato del estilo resuelto (hoisted por frame en
             // `render_pane`) y `align` eligiendo el lado — el separador
             // (pl) sigue abriendo el ancho en ambos casos.
-            let cell = norte_frontend::columns::styled_cell(entry, *col, now_ms, style)
-                .unwrap_or_default();
+            let cell =
+                norte_frontend::columns::styled_cell(entry, col, now_ms, style).unwrap_or_default();
             let celda = div()
                 .flex_none()
                 .w(px(f32::from(*w) * ch))
