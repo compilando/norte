@@ -615,8 +615,10 @@ pub struct App {
     pub render_now_ms: Option<i64>,
     /// Catálogo de attrs por SCHEME (#117): una llamada a
     /// `fs.capabilities` por scheme nuevo y por sesión; alimenta hints y
-    /// cabeceras del render y las filas del picker (tarea 4).
-    pub attr_catalogs: std::collections::HashMap<String, norte_proto::AttrCatalog>,
+    /// cabeceras del render y las filas del picker (tarea 4). Privado:
+    /// lectura por [`Self::attr_catalog`], escritura por
+    /// [`Self::insert_attr_catalog`].
+    attr_catalogs: std::collections::HashMap<String, norte_proto::AttrCatalog>,
     /// Índice del pane con foco (invariante 0|1: privado, ver [`Self::focus`]).
     focus: usize,
     /// `true` cuando el usuario pidió salir.
@@ -1398,6 +1400,13 @@ impl App {
     #[must_use]
     pub fn attr_catalog(&self, scheme: &str) -> Option<&norte_proto::AttrCatalog> {
         self.attr_catalogs.get(scheme)
+    }
+
+    /// Cachea el catálogo de `scheme` (#117): lo llaman el arranque y el
+    /// flujo de cd tras su `fs.capabilities` — una vez por scheme y sesión
+    /// (un fallo no cachea nada: el próximo cd al scheme reintenta).
+    pub fn insert_attr_catalog(&mut self, scheme: String, catalog: norte_proto::AttrCatalog) {
+        self.attr_catalogs.insert(scheme, catalog);
     }
 
     /// El pane con foco.

@@ -408,13 +408,12 @@ async fn main() -> Result<()> {
     let right = initial_pane(&backend, &start, &start_attrs).await?;
     let mut app = App::new(left, right);
     app.columns = columns;
-    // #117: el catálogo del scheme de arranque, solo si hay columnas attr
-    // configuradas (hints y cabeceras desde el primer frame); un fallo NO
-    // tumba el arranque — sin catálogo se pinta con defaults Opaque.
-    if !start_attrs.is_empty()
-        && let Ok(cat) = backend.attr_catalog(&start).await
-    {
-        app.attr_catalogs.insert(start.scheme().to_owned(), cat);
+    // #117: el catálogo del scheme de arranque — incondicional, como el cd
+    // (una vez por scheme y sesión; el picker de la tarea 4 lo quiere
+    // aunque no haya columnas attr configuradas); un fallo NO tumba el
+    // arranque — sin catálogo se pinta con defaults Opaque.
+    if let Ok(cat) = backend.attr_catalog(&start).await {
+        app.insert_attr_catalog(start.scheme().to_owned(), cat);
     }
     for i in 0..app.panes.len() {
         app.apply_scheme_sort(i);
@@ -722,21 +721,11 @@ async fn run(
         }
         tokio::select! {
             _ = tick.tick() => {
-                // Un refresh de panes (mutación terminada) reescribe AMBOS
-                // panes con el listado COMPLETO → suelta el relleno paginado
-                // en curso (su drenador duplicaría entradas, BLOCKER del
-                // rust-reviewer).
-                if on_tick(app, backend, &mut events).await {
-                    fill = None;
-                    // Un refresh re-lazifica las entries (nuevo listado): la
-                    // dedup previa quedaría bloqueando un re-probe legítimo
-                    // de la MISMA selección (MAJOR-1).
-                    last_probed = None;
-                    // Un refresh de panes (refresh_listing) apaga el modo
-                    // virtual del pane de búsqueda: suelta el run (su drenador
-                    // alimentaría un listado real) y cancela si sigue vivo.
-                    reap_search_run(app, &mut search_run);
-                }
+                // Mutación terminada → refresh de panes; el ritual completo
+                // (drenador/sonda #52/búsqueda) vive en `after_panes_refresh`
+                // — ÚNICO para los tres disparadores del refresh (#117).
+                let refreshed = on_tick(app, backend, &mut events).await;
+                after_panes_refresh(app, refreshed, &mut fill, &mut last_probed, &mut search_run);
             }
             Some(task) = async {
                 match &mut foreign_tasks {
@@ -909,8 +898,14 @@ async fn run(
                 )
                 .await;
                 if pane_attr_ids(app) != attrs_before {
-                    refresh_panes(app, backend, &mut events).await;
-                    fill = None;
+                    let refreshed = refresh_panes(app, backend, &mut events).await;
+                    after_panes_refresh(
+                        app,
+                        refreshed,
+                        &mut fill,
+                        &mut last_probed,
+                        &mut search_run,
+                    );
                 }
                 // Hot-reload del scripting Lua (ADR 0026): host NUEVO entero
                 // (jamás estado a medias). Un `CommandRun` en vuelo retiene
@@ -937,10 +932,15 @@ async fn run(
                             // #117: el set de attrs pintado cambió — los
                             // valores solo llegan pidiéndolos, así que se
                             // re-lista por el MISMO camino que tras una
-                            // mutación; el drenador viejo se suelta (el
-                            // refresh reescribe ambos panes completos).
-                            refresh_panes(app, backend, &mut events).await;
-                            fill = None;
+                            // mutación (ritual en `after_panes_refresh`).
+                            let refreshed = refresh_panes(app, backend, &mut events).await;
+                            after_panes_refresh(
+                                app,
+                                refreshed,
+                                &mut fill,
+                                &mut last_probed,
+                                &mut search_run,
+                            );
                         }
                     } else if app.extensions.is_some() {
                         on_extensions_key(app, backend, dialog_resolver, key.modifiers, key.code)
@@ -1646,11 +1646,17 @@ async fn on_columns_key(
 /// Los ids attr CONFIGURADOS de cada pane visible (#117): la huella que
 /// decide si un cambio de columnas exige re-listar — los valores attr solo
 /// llegan pidiéndolos en `fs.list`, así que un id nuevo con el listado
-/// viejo pintaría blanco (ausencia) hasta el próximo cd.
+/// viejo pintaría blanco (ausencia) hasta el próximo cd. ORDENADA por pane
+/// (review MINOR-1): un mero reorden de columnas no cambia qué valores hay
+/// que pedir y no debe re-listar nada.
 fn pane_attr_ids(app: &App) -> Vec<Vec<String>> {
     app.panes
         .iter()
-        .map(|p| app.columns.attr_ids_for(p.dir().scheme()))
+        .map(|p| {
+            let mut ids = app.columns.attr_ids_for(p.dir().scheme());
+            ids.sort_unstable();
+            ids
+        })
         .collect()
 }
 
@@ -2852,15 +2858,15 @@ fn refresh_lua_status(app: &mut App, lua_host: Option<&LuaHost>) {
 /// pisa un modal abierto, hallazgo B1); el resto → mensaje por categoría +
 /// refresh de ambos panes (una mutación pudo cambiarlos).
 /// (Strings de mensaje hardcodeados hasta Fluent — fase 9, issue #1.)
-/// Devuelve `true` si ha REFRESCADO los panes (una mutación terminó): el run
-/// loop suelta entonces cualquier relleno paginado en curso — `refresh_panes`
-/// reescribe AMBOS panes con el listado completo, así que un drenador viejo
-/// duplicaría entradas si siguiera vivo.
-async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream) -> bool {
+/// Devuelve qué panes REFRESCÓ (una mutación terminó y `refresh_panes` los
+/// reescribió con el listado completo): el run loop aplica entonces el
+/// ritual de [`after_panes_refresh`] — un drenador viejo de un pane
+/// re-listado duplicaría entradas si siguiera vivo.
+async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream) -> [bool; 2] {
     let finished = app.board.tick();
     if finished.is_empty() {
         app.open_next_pending();
-        return false;
+        return [false; 2];
     }
     let mut refresh = false;
     for fin in finished {
@@ -2908,16 +2914,21 @@ async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream) -> 
     }
     app.open_next_pending();
     if refresh {
-        refresh_panes(app, backend, events).await;
+        refresh_panes(app, backend, events).await
+    } else {
+        [false; 2]
     }
-    refresh
 }
 
 /// Recarga ambos panes tras una mutación (pueden mostrar el mismo dir).
 /// CANCELABLE como el cd (regla 3): Esc abandona el refresh (los panes se
 /// quedan como estaban), Ctrl-C sale. El cursor se conserva por ÍNDICE
 /// (tras un delete queda en la siguiente entrada — semántica ortodoxa).
-async fn refresh_panes(app: &mut App, backend: &Backend, events: &mut EventStream) {
+/// Devuelve qué panes recibieron DE VERDAD el listado completo (#117
+/// review): un Esc a medias abandona el resto — con esto el caller
+/// ([`after_panes_refresh`]) decide si suelta el drenador paginado (#78).
+async fn refresh_panes(app: &mut App, backend: &Backend, events: &mut EventStream) -> [bool; 2] {
+    let mut refreshed = [false; 2];
     for i in 0..app.panes.len() {
         // Un pane en modo virtual de búsqueda (liveSearch T6) NO se
         // auto-refresca: `refresh_listing` lo sacaría del modo virtual y el
@@ -2946,6 +2957,7 @@ async fn refresh_panes(app: &mut App, backend: &Backend, events: &mut EventStrea
                             // esto, el badge conservaba el valor del listado
                             // anterior (rancio) tras una mutación.
                             app.panes[i].set_skipped(skipped);
+                            refreshed[i] = true;
                         }
                         // Sin silencio: el dir pudo desaparecer (issue #20).
                         Err(e) => app.message = Some(ta("msg-refresh-error", &[("error", &error_category(&e))])),
@@ -2960,19 +2972,46 @@ async fn refresh_panes(app: &mut App, backend: &Backend, events: &mut EventStrea
                             match (key.code, key.modifiers) {
                                 (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
                                     app.quit = true;
-                                    return;
+                                    return refreshed;
                                 }
-                                (KeyCode::Esc, _) => return,
+                                (KeyCode::Esc, _) => return refreshed,
                                 _ => {}
                             }
                         }
                         Some(Ok(_)) => {}
-                        Some(Err(_)) | None => return,
+                        Some(Err(_)) | None => return refreshed,
                     }
                 }
             }
         }
     }
+    refreshed
+}
+
+/// El ritual tras un [`refresh_panes`], ÚNICO para sus tres disparadores
+/// (mutación terminada en `on_tick`, confirm del picker y hot-reload de
+/// `[ui.columns]` — #117 review): el drenador paginado se suelta SOLO si su
+/// pane fue re-listado de verdad (soltarlo a ciegas tras un Esc a medias
+/// dejaría el pane colgado en `loading` para siempre, #78 — su relleno
+/// sigue siendo válido); la dedup de la sonda #52 se invalida (un listado
+/// nuevo re-lazifica las entries y un re-probe de la MISMA selección es
+/// legítimo, MAJOR-1); y el run de búsqueda se cosecha ([`reap_search_run`]
+/// ya es no-op si su pane sigue en modo virtual).
+fn after_panes_refresh(
+    app: &App,
+    refreshed: [bool; 2],
+    fill: &mut Option<Fill>,
+    last_probed: &mut Option<(usize, VPath)>,
+    search_run: &mut Option<SearchRun>,
+) {
+    if refreshed == [false; 2] {
+        return;
+    }
+    if fill.as_ref().is_some_and(|f| refreshed[f.pane]) {
+        *fill = None;
+    }
+    *last_probed = None;
+    reap_search_run(app, search_run);
 }
 
 /// Teclas de un modal abierto, resueltas contra el contexto `dialog` del
@@ -3765,7 +3804,9 @@ async fn dispatch(
         // VISIBLE, cursor por índice; el pane virtual de búsqueda se salta
         // — sus hits no viven en un dir). Ambos panes, como tras una task
         // propia: un cambio externo raramente respeta el foco.
-        Command::PaneRefresh => refresh_panes(app, backend, events).await,
+        Command::PaneRefresh => {
+            refresh_panes(app, backend, events).await;
+        }
         // Insert/Ctrl+A/Ctrl+Shift+A/`*` (#103): mc/Total Commander —
         // togglear la marca de esta entrada y avanzar (mantener Insert barre
         // un rango). Review MAJOR: bajo un quick search en Filter,
@@ -4164,14 +4205,15 @@ fn archive_root_for(e: &norte_proto::Entry) -> Option<VPath> {
 /// attrs configurados (#117) — sin ellos las celdas attr nacerían en
 /// blanco hasta el primer cd/refresh. Regla 7: todo por el `Backend`.
 async fn initial_pane(backend: &Backend, start: &VPath, attrs: &[String]) -> Result<Pane> {
-    Ok(Pane::new(
-        start.clone(),
-        backend
-            .list_with_skipped_attrs(start, attrs)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?
-            .0,
-    ))
+    let (entries, skipped) = backend
+        .list_with_skipped_attrs(start, attrs)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let mut pane = Pane::new(start.clone(), entries);
+    // #93: las omitidas del contenedor también en el ARRANQUE — el badge no
+    // debe nacer vacío teniendo el dato gratis (review #117 tarea 2).
+    pane.set_skipped(skipped);
+    Ok(pane)
 }
 
 /// Listado COMPLETO de `dir` (para `refresh_panes` tras una mutación:
@@ -4300,7 +4342,7 @@ async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPa
     // (cache en `App::attr_catalogs` — hints y cabeceras del render).
     let scheme = dir.scheme().to_owned();
     let attrs = app.columns.attr_ids_for(&scheme);
-    let fetch_catalog = !app.attr_catalogs.contains_key(&scheme);
+    let fetch_catalog = app.attr_catalog(&scheme).is_none();
     let fut = first_page(backend, &dir, &attrs, fetch_catalog);
     tokio::pin!(fut);
     loop {
@@ -4311,7 +4353,7 @@ async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPa
                         // #117: el catálogo recién llegado se cachea por
                         // scheme — los frames siguientes ya pintan con hints.
                         if let Some(cat) = catalog {
-                            app.attr_catalogs.insert(scheme.clone(), cat);
+                            app.insert_attr_catalog(scheme.clone(), cat);
                         }
                         // #54: NO ordenamos aquí — `begin_listing` ->
                         // `PaneState::set_listing` normaliza internamente.
