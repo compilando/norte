@@ -45,3 +45,46 @@ norte_vfs::provider_contract! {
     root: SftpProvider::root(Authority::new("test:22").expect("authority válida")),
     hostile_names: hostile_names(),
 }
+
+// ---------- attrs posix (#108 bloque 2) ----------
+
+#[tokio::test]
+async fn attrs_posix_desde_file_attributes() {
+    use futures::StreamExt;
+    use norte_proto::{AttrValue, Segment};
+    use norte_vfs::{AttrRequest, ListOptions, Provider};
+
+    let p = fresh().await;
+    let root = SftpProvider::root(Authority::new("test:22").expect("authority válida"));
+    let f = root.join(Segment::new(b"f.txt".to_vec()).expect("segmento válido"));
+    {
+        let mut sink = p.write(&f).await.expect("write abre");
+        norte_vfs::ByteSink::write(&mut *sink, bytes::Bytes::from_static(b"x"))
+            .await
+            .expect("chunk entra");
+        sink.commit().await.expect("commit publica");
+    }
+    let opt = ListOptions {
+        attrs: AttrRequest::sanitized(["posix.mode", "posix.uid", "posix.gid"].map(str::to_owned)),
+    };
+    let e = p.stat_with(&f, &opt).await.expect("stat_with");
+    // El server in-proc sirve el FS del host: mode SIEMPRE presente.
+    assert!(
+        matches!(e.attrs.get("posix.mode"), Some(AttrValue::Uint(_))),
+        "posix.mode presente y Uint: {:?}",
+        e.attrs
+    );
+    for id in ["posix.uid", "posix.gid"] {
+        if let Some(v) = e.attrs.get(id) {
+            assert!(matches!(v, AttrValue::Uint(_)), "{id} debe ser Uint");
+        }
+    }
+
+    // list_with lleva lo mismo por entrada.
+    let mut s = p.list_with(&root, &opt).await.expect("list_with");
+    let le = s.next().await.expect("una entrada").expect("ok");
+    assert!(le.attrs.contains_key("posix.mode"));
+
+    // Sin pedir → nada.
+    assert!(p.stat(&f).await.expect("stat").attrs.is_empty());
+}

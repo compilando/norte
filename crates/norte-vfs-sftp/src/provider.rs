@@ -226,7 +226,36 @@ fn is_norte_partial(name: &str) -> bool {
         .is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
 }
 
-fn entry_from(path: VPath, md: &russh_sftp::protocol::FileAttributes) -> Entry {
+/// Catálogo de attrs del provider sftp (#108 bloque 2): lo que el
+/// `SSH_FXP_ATTRS` de v3 YA trae parseado — cero round-trips extra.
+///
+/// NOTA (deuda): `sftp.owner`/`sftp.group` como `Bytes` exigen el longname
+/// crudo de `SSH_FXP_NAME`; russh-sftp 2.3 lo descarta antes de su API de
+/// cliente y decodifica `user`/`group` a `None` SIEMPRE en v3 (el wire solo
+/// lleva uid/gid). Adyacente a #37 — issue propio en el cierre del bloque.
+fn catalogo_sftp() -> &'static [norte_proto::AttrInfo] {
+    use norte_proto::{AttrHint, AttrInfo, AttrType};
+    static CAT: std::sync::LazyLock<Vec<AttrInfo>> = std::sync::LazyLock::new(|| {
+        let mk = |id: &str, label: &str, hint| AttrInfo {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            ty: AttrType::Uint,
+            hint,
+        };
+        vec![
+            mk("posix.mode", "Mode", AttrHint::Mode),
+            mk("posix.uid", "UID", AttrHint::Identity),
+            mk("posix.gid", "GID", AttrHint::Identity),
+        ]
+    });
+    &CAT
+}
+
+fn entry_from(
+    path: VPath,
+    md: &russh_sftp::protocol::FileAttributes,
+    req: &norte_vfs::AttrRequest,
+) -> Entry {
     let kind = if md.is_symlink() {
         EntryKind::Symlink
     } else if md.is_dir() {
@@ -239,8 +268,35 @@ fn entry_from(path: VPath, md: &russh_sftp::protocol::FileAttributes) -> Entry {
     let size = (kind == EntryKind::File).then(|| md.len());
     // mtime de sftp v3 es segundos u32 desde epoch.
     let mtime_ms = md.mtime.map(|s| i64::from(s) * 1000);
+    // Ausencia significa ausencia: un campo que el servidor no mandó se
+    // omite, jamás se fabrica un 0 (#108 bloque 2).
+    let mut attrs = std::collections::BTreeMap::new();
+    if let Some(perm) = md.permissions
+        && req.wants("posix.mode")
+    {
+        attrs.insert(
+            "posix.mode".to_owned(),
+            norte_proto::AttrValue::Uint(u64::from(perm)),
+        );
+    }
+    if let Some(uid) = md.uid
+        && req.wants("posix.uid")
+    {
+        attrs.insert(
+            "posix.uid".to_owned(),
+            norte_proto::AttrValue::Uint(u64::from(uid)),
+        );
+    }
+    if let Some(gid) = md.gid
+        && req.wants("posix.gid")
+    {
+        attrs.insert(
+            "posix.gid".to_owned(),
+            norte_proto::AttrValue::Uint(u64::from(gid)),
+        );
+    }
     Entry {
-        attrs: std::collections::BTreeMap::new(),
+        attrs,
         path,
         kind,
         size,
@@ -279,6 +335,10 @@ impl Provider for SftpProvider {
     }
 
     async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
+        self.stat_with(p, &norte_vfs::ListOptions::default()).await
+    }
+
+    async fn stat_with(&self, p: &VPath, opt: &norte_vfs::ListOptions) -> Result<Entry, Error> {
         let remote = self.remote(p)?;
         // lstat: describe el LINK, jamás lo sigue (contención de symlinks
         // trampa — ADR 0013).
@@ -287,10 +347,22 @@ impl Provider for SftpProvider {
             .symlink_metadata(remote)
             .await
             .map_err(|e| map_err(&e))?;
-        Ok(entry_from(p.clone(), &md))
+        Ok(entry_from(p.clone(), &md, &opt.attrs))
+    }
+
+    fn attrs(&self) -> &[norte_proto::AttrInfo] {
+        catalogo_sftp()
     }
 
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
+        self.list_with(p, &norte_vfs::ListOptions::default()).await
+    }
+
+    async fn list_with(
+        &self,
+        p: &VPath,
+        opt: &norte_vfs::ListOptions,
+    ) -> Result<EntryStream, Error> {
         let remote = self.remote(p)?;
         let base = p.clone();
         let dir = self
@@ -322,7 +394,7 @@ impl Provider for SftpProvider {
                 break;
             };
             let child = base.join(seg);
-            entries.push(Ok(entry_from(child, &dent.metadata())));
+            entries.push(Ok(entry_from(child, &dent.metadata(), &opt.attrs)));
         }
         Ok(futures::stream::iter(entries).boxed())
     }
