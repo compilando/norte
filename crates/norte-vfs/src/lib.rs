@@ -9,12 +9,14 @@
 
 mod contract;
 mod contract_ro;
+mod options;
 mod provider;
 mod sink;
 pub mod trash;
 
 pub use norte_proto as proto;
 pub use norte_proto::{ByteRange, Capabilities, CapabilityFlags, Entry, EntryKind, Error, VPath};
+pub use options::{AttrRequest, ListOptions};
 pub use provider::{ByteStream, EntryStream, FollowLinks, NodeId, Provider, SymlinkKind};
 pub use sink::ByteSink;
 

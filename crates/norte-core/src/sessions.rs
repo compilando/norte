@@ -527,11 +527,28 @@ impl Provider for SessionProvider {
     fn capabilities(&self) -> norte_proto::Capabilities {
         self.inner.capabilities()
     }
+    fn attrs(&self) -> &[norte_proto::AttrInfo] {
+        self.inner.attrs()
+    }
     async fn stat(&self, p: &norte_proto::VPath) -> Result<norte_proto::Entry, Error> {
         self.observe(self.inner.stat(p).await)
     }
+    async fn stat_with(
+        &self,
+        p: &norte_proto::VPath,
+        opt: &norte_vfs::ListOptions,
+    ) -> Result<norte_proto::Entry, Error> {
+        self.observe(self.inner.stat_with(p, opt).await)
+    }
     async fn list(&self, p: &norte_proto::VPath) -> Result<norte_vfs::EntryStream, Error> {
         self.observe(self.inner.list(p).await)
+    }
+    async fn list_with(
+        &self,
+        p: &norte_proto::VPath,
+        opt: &norte_vfs::ListOptions,
+    ) -> Result<norte_vfs::EntryStream, Error> {
+        self.observe(self.inner.list_with(p, opt).await)
     }
     async fn list_skipped(&self, p: &norte_proto::VPath) -> Result<Option<u64>, Error> {
         self.observe(self.inner.list_skipped(p).await)
@@ -645,10 +662,36 @@ mod tests {
                 max_path: None,
             }
         }
+        fn attrs(&self) -> &[norte_proto::AttrInfo] {
+            static UNO: std::sync::LazyLock<Vec<norte_proto::AttrInfo>> =
+                std::sync::LazyLock::new(|| {
+                    vec![norte_proto::AttrInfo {
+                        id: "allpu.x".into(),
+                        label: "x".into(),
+                        ty: norte_proto::AttrType::Bool,
+                        hint: norte_proto::AttrHint::Opaque,
+                    }]
+                });
+            &UNO
+        }
         async fn stat(&self, _p: &VPath) -> Result<norte_proto::Entry, Error> {
             Err(pu())
         }
+        async fn stat_with(
+            &self,
+            _p: &VPath,
+            _opt: &norte_vfs::ListOptions,
+        ) -> Result<norte_proto::Entry, Error> {
+            Err(pu())
+        }
         async fn list(&self, _p: &VPath) -> Result<norte_vfs::EntryStream, Error> {
+            Err(pu())
+        }
+        async fn list_with(
+            &self,
+            _p: &VPath,
+            _opt: &norte_vfs::ListOptions,
+        ) -> Result<norte_vfs::EntryStream, Error> {
             Err(pu())
         }
         async fn list_skipped(&self, _p: &VPath) -> Result<Option<u64>, Error> {
@@ -803,7 +846,9 @@ mod tests {
         }
 
         evicta!(w.stat(&p).await);
+        evicta!(w.stat_with(&p, &norte_vfs::ListOptions::default()).await);
         evicta!(w.list(&p).await);
+        evicta!(w.list_with(&p, &norte_vfs::ListOptions::default()).await);
         evicta!(w.list_skipped(&p).await);
         evicta!(w.read(&p, None).await);
         evicta!(w.node_id(&p, norte_vfs::FollowLinks::No).await);
@@ -819,5 +864,9 @@ mod tests {
         evicta!(w.remove(&p).await);
         evicta!(w.rename(&p, &p).await);
         evicta!(w.copy_native(&p, &p).await);
+
+        // Métodos sin `Result` (no evictan): pass-through pineado — el hueco
+        // que este test tenía con `capabilities` no se repite con `attrs`.
+        assert_eq!(w.attrs().len(), 1, "attrs() delega en el interior");
     }
 }

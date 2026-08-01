@@ -10,8 +10,9 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use norte_proto::{ByteRange, Capabilities, Entry, Error, VPath};
+use norte_proto::{AttrInfo, ByteRange, Capabilities, Entry, Error, VPath};
 
+use crate::options::ListOptions;
 use crate::sink::ByteSink;
 
 /// Stream de entradas de un listado (`fs.list`), perezoso y cancelable
@@ -79,6 +80,9 @@ pub type ByteStream = BoxStream<'static, Result<Bytes, Error>>;
 /// let p = VPath::parse("null:///").unwrap();
 /// let skipped = futures::executor::block_on(NullProvider.list_skipped(&p)).unwrap();
 /// assert_eq!(skipped, None);
+///
+/// // Defaults del bloque 2 (#108): catálogo vacío, list_with ≡ list.
+/// assert!(NullProvider.attrs().is_empty());
 /// ```
 // OJO mantenimiento: todo método NUEVO de este trait (aunque tenga default)
 // debe delegarse también en `SessionProvider` (norte-core/src/sessions.rs) —
@@ -113,6 +117,34 @@ pub trait Provider: Send + Sync {
     async fn list_skipped(&self, p: &VPath) -> Result<Option<u64>, Error> {
         let _ = p;
         Ok(None)
+    }
+
+    /// Catálogo de atributos por entrada que este provider sabe materializar
+    /// (#108 bloque 2, ADR 0039). Default: ninguno. Un provider con catálogo
+    /// NO vacío DEBE sobreescribir [`Self::list_with`] y [`Self::stat_with`]
+    /// — la suite contractual fija el acuerdo de tipos declarado
+    /// ([`norte_proto::AttrType`]) contra los valores producidos.
+    ///
+    /// Los ids/labels de aquí son del lado provider; el daemon los envuelve
+    /// en `AttrCatalog::new` (que sanea) antes de tocar el wire, y el backend
+    /// embebido debe hacer lo mismo (ADR 0039 §4).
+    fn attrs(&self) -> &[AttrInfo] {
+        &[]
+    }
+
+    /// [`Self::list`] con opciones. El default ignora las opciones y produce
+    /// entradas peladas — correcto para cualquier provider con catálogo
+    /// vacío. Ausencia significa ausencia: un id pedido desconocido o no
+    /// producible se OMITE de `Entry::attrs`, jamás se fabrica.
+    async fn list_with(&self, p: &VPath, opt: &ListOptions) -> Result<EntryStream, Error> {
+        let _ = opt;
+        self.list(p).await
+    }
+
+    /// [`Self::stat`] con opciones. Mismo contrato que [`Self::list_with`].
+    async fn stat_with(&self, p: &VPath, opt: &ListOptions) -> Result<Entry, Error> {
+        let _ = opt;
+        self.stat(p).await
     }
 
     /// Contenido de un archivo como stream de chunks. `range: None` = el
