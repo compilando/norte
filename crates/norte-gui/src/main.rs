@@ -286,6 +286,10 @@ struct NorteGui {
     /// with `settings_view`/`viewer`/dual-pane, same swap pattern as
     /// `settings_view`.
     extensions: Option<extensions_view::ExtensionsView>,
+    /// The column picker overlay (#108 7c, `alt+c`): `Some` while open,
+    /// same z-order and key-capture slot as the palette (modal wins).
+    /// Esc discards; Enter applies in-session and persists (TUI parity).
+    columns_picker: Option<columns_view::ColumnsView>,
     /// Columnas contribuidas por plugins `columns` aprobados+activados,
     /// por pane (G3c, cierra el deferral GUI de G3b): `(id, header YA
     /// enmascarado)`, en el orden en que `plugin.list` las devolvió
@@ -538,6 +542,7 @@ impl NorteGui {
                     cfg_snapshot,
                     settings_view: None,
                     palette: None,
+                    columns_picker: None,
                     extensions: None,
                     columns: [Vec::new(), Vec::new()],
                     column_values: [
@@ -618,6 +623,7 @@ impl NorteGui {
                     cfg_snapshot,
                     settings_view: None,
                     palette: None,
+                    columns_picker: None,
                     extensions: None,
                     columns: [Vec::new(), Vec::new()],
                     column_values: [
@@ -1261,6 +1267,7 @@ impl NorteGui {
             "app.settings" => self.open_settings(),
             "app.palette" => self.open_palette(),
             "app.extensions" => self.open_extensions(),
+            "pane.columns" => self.open_columns_picker(),
             "pane.switch" => self.focus = 1 - self.focus,
             "cursor.up" => self.panes[f].cursor_up(),
             "cursor.down" => self.panes[f].cursor_down(),
@@ -1661,6 +1668,51 @@ impl NorteGui {
         }
     }
 
+    /// Abre el picker de columnas (`pane.columns`, `alt+c`, #108 7c) sobre
+    /// el scheme y el sort VIVO del pane enfocado (el sort del pane ya
+    /// pliega `sort_override`, misma semilla que la TUI).
+    fn open_columns_picker(&mut self) {
+        let f = self.focus;
+        let scheme = self.panes[f].dir().scheme().to_owned();
+        let sort = self.panes[f].sort();
+        self.columns_picker = Some(columns_view::ColumnsView::new(
+            norte_frontend::columns_picker::ColumnsPicker::open(
+                &self.column_settings,
+                &scheme,
+                sort,
+            ),
+        ));
+    }
+
+    /// Maneja UNA tecla con el picker de columnas abierto. A diferencia de
+    /// la paleta, aquí SOLO se gatea platform/alt: shift es reorden y ctrl+s
+    /// es sinónimo de sort (paridad TUI).
+    fn on_columns_key(&mut self, ks: &gpui::Keystroke, cx: &mut Context<Self>) {
+        if ks.modifiers.platform || ks.modifiers.alt {
+            return;
+        }
+        let Some(view) = &mut self.columns_picker else {
+            return;
+        };
+        match view.on_key(ks.key.as_str(), ks.modifiers.shift, ks.modifiers.control) {
+            columns_view::ColumnsOutcome::None => {}
+            columns_view::ColumnsOutcome::Close => self.columns_picker = None,
+            columns_view::ColumnsOutcome::Apply(picked) => {
+                self.columns_picker = None;
+                self.apply_picked_columns(picked, cx);
+            }
+        }
+    }
+
+    /// Aplica el resultado del picker (#108 7c) — cuerpo real en T4.
+    fn apply_picked_columns(
+        &mut self,
+        picked: norte_frontend::columns_picker::Picked,
+        cx: &mut Context<Self>,
+    ) {
+        let _ = (picked, cx);
+    }
+
     /// Abre el gestor de extensiones (`app.extensions`, `f12`, G3c): nace
     /// en estado "cargando" (`ExtensionsView::loading`) — el catálogo
     /// llega ASYNC (`SessionCmd::PluginsList` → `apply_event`,
@@ -1903,6 +1955,14 @@ impl NorteGui {
             return;
         }
 
+        // Picker de columnas abierto (alt+c, #108 7c): overlay como la
+        // paleta, captura fija — nada cae al dual-pane de abajo.
+        if self.columns_picker.is_some() {
+            self.on_columns_key(ks, cx);
+            cx.notify();
+            return;
+        }
+
         // Paleta de comandos abierta (`ctrl+p`, G3c): un OVERLAY, no un
         // full-view swap (se pinta encima del dual-pane, ver `render`) —
         // pero captura teclado con la MISMA prioridad que ajustes/
@@ -2105,8 +2165,9 @@ impl NorteGui {
         // El scrim del modal PINTA pero no ocluye eventos de ratón en GPUI
         // (no hay `.occlude()` en este árbol): sin este guard, un click en
         // una cabecera detrás de un confirm mutaría el orden del pane. El
-        // barrido `.occlude()` de todos los overlays queda como follow-up.
-        if self.modal.is_some() {
+        // picker de columnas (7c) comparte scrim no-ocluyente → mismo guard.
+        // El barrido `.occlude()` de todos los overlays queda como follow-up.
+        if self.modal.is_some() || self.columns_picker.is_some() {
             return;
         }
         let spec = self.panes[pane].sort().after_click(col);
@@ -4816,6 +4877,7 @@ impl Render for NorteGui {
         let pending = if self.settings_view.is_some()
             || self.extensions.is_some()
             || self.palette.is_some()
+            || self.columns_picker.is_some()
         {
             &[][..]
         } else {

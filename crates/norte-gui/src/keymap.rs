@@ -49,6 +49,9 @@ pub const COMMANDS: &[&str] = &[
     "pane.view",
     "pane.toggle-hidden",
     "pane.refresh",
+    // #108 7c: column picker overlay — the shared presets already bind
+    // `alt+c` to `pane.columns` in all three, so no supplement needed.
+    "pane.columns",
 ];
 
 /// Comandos del contexto Viewer (pantalla del visor F3).
