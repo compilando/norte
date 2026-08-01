@@ -613,6 +613,10 @@ pub struct App {
     /// `now` para las celdas de tiempo RELATIVO (#108 L5): `None` = reloj
     /// real; los tests de snapshot fijan `Some(ms)` para render estable.
     pub render_now_ms: Option<i64>,
+    /// Catálogo de attrs por SCHEME (#117): una llamada a
+    /// `fs.capabilities` por scheme nuevo y por sesión; alimenta hints y
+    /// cabeceras del render y las filas del picker (tarea 4).
+    pub attr_catalogs: std::collections::HashMap<String, norte_proto::AttrCatalog>,
     /// Índice del pane con foco (invariante 0|1: privado, ver [`Self::focus`]).
     focus: usize,
     /// `true` cuando el usuario pidió salir.
@@ -1341,6 +1345,7 @@ impl App {
         Self {
             panes: [left, right],
             render_now_ms: None,
+            attr_catalogs: std::collections::HashMap::new(),
             columns: norte_frontend::columns::ColumnsSettings::default(),
             focus: 0,
             quit: false,
@@ -1385,6 +1390,14 @@ impl App {
     #[must_use]
     pub fn focus(&self) -> usize {
         self.focus
+    }
+
+    /// El catálogo cacheado del scheme dado, si llegó (#117): `None` = el
+    /// `fs.capabilities` aún no corrió o falló — se pinta con defaults
+    /// Opaque y la cabecera cae al id, jamás se bloquea el render.
+    #[must_use]
+    pub fn attr_catalog(&self, scheme: &str) -> Option<&norte_proto::AttrCatalog> {
+        self.attr_catalogs.get(scheme)
     }
 
     /// El pane con foco.

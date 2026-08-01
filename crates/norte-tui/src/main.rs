@@ -397,24 +397,25 @@ async fn main() -> Result<()> {
     // claro en vez de un panic.
     let start = norte_vfs_local::vpath_from_native(&cwd)
         .map_err(|e| anyhow::anyhow!("cwd no representable como VPath: {e}"))?;
-    let left = Pane::new(
-        start.clone(),
-        backend
-            .list(&start)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?,
-    );
-    let right = Pane::new(
-        start.clone(),
-        backend
-            .list(&start)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?,
-    );
-    let mut app = App::new(left, right);
     // #108 b4: columnas y orden desde `[ui.columns]` — resuelto UNA vez;
-    // los ids inválidos no rompen el arranque (doctor los reporta).
-    app.columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns);
+    // los ids inválidos no rompen el arranque (doctor los reporta). ANTES de
+    // los listados iniciales (#117): ellos también piden los attrs
+    // configurados — sin esto, las celdas attr nacen en blanco hasta el
+    // primer cd/refresh.
+    let columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns);
+    let start_attrs = columns.attr_ids_for(start.scheme());
+    let left = initial_pane(&backend, &start, &start_attrs).await?;
+    let right = initial_pane(&backend, &start, &start_attrs).await?;
+    let mut app = App::new(left, right);
+    app.columns = columns;
+    // #117: el catálogo del scheme de arranque, solo si hay columnas attr
+    // configuradas (hints y cabeceras desde el primer frame); un fallo NO
+    // tumba el arranque — sin catálogo se pinta con defaults Opaque.
+    if !start_attrs.is_empty()
+        && let Ok(cat) = backend.attr_catalog(&start).await
+    {
+        app.attr_catalogs.insert(start.scheme().to_owned(), cat);
+    }
     for i in 0..app.panes.len() {
         app.apply_scheme_sort(i);
     }
@@ -889,6 +890,10 @@ async fn run(
             } => {
                 reload_at = None;
                 while cfg_rx.try_recv().is_ok() {}
+                // #117: si el reload cambia los attrs configurados de un
+                // pane visible, hay que re-listar (los valores solo llegan
+                // pidiéndolos) — mismo camino que el confirm del picker.
+                let attrs_before = pane_attr_ids(app);
                 reload_config(
                     app,
                     backend,
@@ -903,6 +908,10 @@ async fn run(
                     &mut cfg,
                 )
                 .await;
+                if pane_attr_ids(app) != attrs_before {
+                    refresh_panes(app, backend, &mut events).await;
+                    fill = None;
+                }
                 // Hot-reload del scripting Lua (ADR 0026): host NUEVO entero
                 // (jamás estado a medias). Un `CommandRun` en vuelo retiene
                 // el estado VIEJO vía sus handles clonados (documentado en
@@ -924,7 +933,15 @@ async fn run(
                         // Picker de columnas (#108 7a): mismo puesto en la
                         // cadena que el selector de tema (overlay antes que
                         // el brazo del modal, precedencia existente).
-                        on_columns_key(app, dialog_resolver, key.modifiers, key.code).await;
+                        if on_columns_key(app, dialog_resolver, key.modifiers, key.code).await {
+                            // #117: el set de attrs pintado cambió — los
+                            // valores solo llegan pidiéndolos, así que se
+                            // re-lista por el MISMO camino que tras una
+                            // mutación; el drenador viejo se suelta (el
+                            // refresh reescribe ambos panes completos).
+                            refresh_panes(app, backend, &mut events).await;
+                            fill = None;
+                        }
                     } else if app.extensions.is_some() {
                         on_extensions_key(app, backend, dialog_resolver, key.modifiers, key.code)
                             .await;
@@ -1575,14 +1592,21 @@ async fn on_theme_picker_key(
 /// Teclas del picker de columnas (#108 7a): resuelve por keymap (pantalla
 /// `dialog`) y filtra por [`ALLOW_COLUMNS`] — misma disciplina única-fuente
 /// que el resto de overlays (#24). `ctrl+c` conserva su salida global,
-/// hardcodeado ANTES de resolver, como los demás overlays.
-async fn on_columns_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifiers, code: KeyCode) {
+/// hardcodeado ANTES de resolver, como los demás overlays. Devuelve `true`
+/// si un confirm cambió el set de attrs pintado (#117): el run loop
+/// re-lista entonces (mismo camino que tras una mutación).
+async fn on_columns_key(
+    app: &mut App,
+    resolver: &mut Resolver,
+    mods: KeyModifiers,
+    code: KeyCode,
+) -> bool {
     if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
         app.quit = true;
-        return;
+        return false;
     }
     let Some(chord) = chord_from_crossterm(mods, code) else {
-        return; // tecla no modelada por el keymap: ignorar
+        return false; // tecla no modelada por el keymap: ignorar
     };
     let cmd = match resolver.push(chord) {
         Resolution::Run(cmd) => cmd,
@@ -1590,15 +1614,15 @@ async fn on_columns_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifie
         // reiniciar el estado de resolución.
         Resolution::Pending(_) => {
             resolver.reset();
-            return;
+            return false;
         }
-        Resolution::Reset => return,
+        Resolution::Reset => return false,
     };
     if !ALLOW_COLUMNS.contains(&cmd.as_str()) {
-        return; // fuera del allowlist de este overlay: inerte
+        return false; // fuera del allowlist de este overlay: inerte
     }
     let Some(p) = app.columns_picker.as_mut() else {
-        return;
+        return false;
     };
     match cmd.as_str() {
         "dialog.up" => p.up(),
@@ -1612,18 +1636,36 @@ async fn on_columns_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifie
         "dialog.confirm" => {
             let picked = p.finish();
             app.columns_picker = None;
-            apply_picked_columns(app, picked).await;
+            return apply_picked_columns(app, picked).await;
         }
         _ => {} // ya filtrado por ALLOW_COLUMNS; inalcanzable en la práctica
     }
+    false
+}
+
+/// Los ids attr CONFIGURADOS de cada pane visible (#117): la huella que
+/// decide si un cambio de columnas exige re-listar — los valores attr solo
+/// llegan pidiéndolos en `fs.list`, así que un id nuevo con el listado
+/// viejo pintaría blanco (ausencia) hasta el próximo cd.
+fn pane_attr_ids(app: &App) -> Vec<Vec<String>> {
+    app.panes
+        .iter()
+        .map(|p| app.columns.attr_ids_for(p.dir().scheme()))
+        .collect()
 }
 
 /// Aplica el resultado del picker (#108 7a): sesión primero (settings en
 /// memoria + re-sort de TODO pane, `apply_scheme_sort` es no-op donde el
 /// spec no cambia), disco después (`config::persist_columns` en
 /// `spawn_blocking` — regla 2). A la barra va la CATEGORÍA del error, jamás
-/// el Display del SO (#73).
-async fn apply_picked_columns(app: &mut App, picked: norte_frontend::columns_picker::Picked) {
+/// el Display del SO (#73). Devuelve `true` si el set de attrs pintado de
+/// algún pane visible cambió (#117): el caller re-lista entonces por el
+/// mismo camino que tras una mutación.
+async fn apply_picked_columns(
+    app: &mut App,
+    picked: norte_frontend::columns_picker::Picked,
+) -> bool {
+    let attrs_before = pane_attr_ids(app);
     app.columns
         .apply_picked(picked.scheme_target.as_deref(), &picked.ids, picked.sort);
     // #108 7b: los formatos ciclados también EN SESIÓN antes del disco —
@@ -1635,9 +1677,10 @@ async fn apply_picked_columns(app: &mut App, picked: norte_frontend::columns_pic
     for i in 0..app.panes.len() {
         app.apply_scheme_sort(i);
     }
+    let needs_refresh = pane_attr_ids(app) != attrs_before;
     let Some(dir) = config::user_config_dir() else {
         app.message = Some(t("msg-settings-no-config-dir"));
-        return;
+        return needs_refresh;
     };
     let ids = picked.ids.clone();
     let scheme = picked.scheme_target.clone();
@@ -1682,6 +1725,7 @@ async fn apply_picked_columns(app: &mut App, picked: norte_frontend::columns_pic
             app.message = Some(t("msg-settings-save-crashed"));
         }
     }
+    needs_refresh
 }
 
 /// Qué hacer tras procesar una tecla del overlay de ajustes — separa el
@@ -2883,7 +2927,10 @@ async fn refresh_panes(app: &mut App, backend: &Backend, events: &mut EventStrea
             continue;
         }
         let dir = app.panes[i].dir().clone();
-        let fut = listing(backend, &dir);
+        // #117: mismos attrs que un cd a este dir — el refresh no puede
+        // dejar las celdas attr en blanco (valores solo si se piden).
+        let attrs = app.columns.attr_ids_for(dir.scheme());
+        let fut = listing(backend, &dir, &attrs);
         tokio::pin!(fut);
         loop {
             tokio::select! {
@@ -4113,33 +4160,72 @@ fn archive_root_for(e: &norte_proto::Entry) -> Option<VPath> {
     VPath::archive_compose(format, &e.path, &[]).ok()
 }
 
+/// Pane inicial del arranque: listado COMPLETO de `start` pidiendo los
+/// attrs configurados (#117) — sin ellos las celdas attr nacerían en
+/// blanco hasta el primer cd/refresh. Regla 7: todo por el `Backend`.
+async fn initial_pane(backend: &Backend, start: &VPath, attrs: &[String]) -> Result<Pane> {
+    Ok(Pane::new(
+        start.clone(),
+        backend
+            .list_with_skipped_attrs(start, attrs)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .0,
+    ))
+}
+
 /// Listado COMPLETO de `dir` (para `refresh_panes` tras una mutación:
 /// conserva el cursor por índice). Una entrada con error corta el listado —
 /// mejor un error honesto que un listado silenciosamente incompleto. #54: NO
 /// ordena aquí — `refresh_listing`/`PaneState::refill` normalizan
-/// internamente, un sort manual sería trabajo duplicado.
-async fn listing(backend: &Backend, dir: &VPath) -> Result<(Vec<Entry>, Option<u64>), Error> {
-    backend.list_with_skipped(dir).await
+/// internamente, un sort manual sería trabajo duplicado. `attrs` (#117):
+/// los ids attr configurados del scheme — pedidos en el `fs.list`; un id
+/// no anunciado viene ausente (celda en blanco), jamás es error.
+async fn listing(
+    backend: &Backend,
+    dir: &VPath,
+    attrs: &[String],
+) -> Result<(Vec<Entry>, Option<u64>), Error> {
+    backend.list_with_skipped_attrs(dir, attrs).await
 }
 
 /// Primera página de `dir` (hasta [`FIRST_PAGE`]) más el stream con el RESTO
 /// (o `None` si el dir cabía en la primera página) y las omitidas del
 /// contenedor (#93). El primer render no espera al listado entero (ADR 0017).
-/// Regla 7: el TUI no toca el FS.
+/// Regla 7: el TUI no toca el FS. `attrs`/`fetch_catalog` (#117): pide los
+/// attrs configurados y, una vez por scheme y sesión, el catálogo del
+/// provider (cuarto elemento de la tupla).
 async fn first_page(
     backend: &Backend,
     dir: &VPath,
-) -> Result<(Vec<Entry>, Option<EntryStream>, Option<u64>), Error> {
-    let (mut stream, skipped) = backend.list_stream(dir).await?;
+    attrs: &[String],
+    fetch_catalog: bool,
+) -> Result<
+    (
+        Vec<Entry>,
+        Option<EntryStream>,
+        Option<u64>,
+        Option<norte_proto::AttrCatalog>,
+    ),
+    Error,
+> {
+    // El catálogo ANTES del stream (misma conexión, una vez por scheme);
+    // un fallo del catálogo NO tumba el cd: sin hints se pinta Opaque.
+    let catalog = if fetch_catalog {
+        backend.attr_catalog(dir).await.ok()
+    } else {
+        None
+    };
+    let (mut stream, skipped) = backend.list_stream_with(dir, attrs).await?;
     let mut first = Vec::with_capacity(FIRST_PAGE);
     while first.len() < FIRST_PAGE {
         match stream.next().await {
             Some(item) => first.push(item?),
             // El dir cabía en la primera página: no hay resto que drenar.
-            None => return Ok((first, None, skipped)),
+            None => return Ok((first, None, skipped, catalog)),
         }
     }
-    Ok((first, Some(stream), skipped))
+    Ok((first, Some(stream), skipped, catalog))
 }
 
 /// Arranca el drenador del RESTO del listado: envía lotes coalescidos al run
@@ -4209,13 +4295,24 @@ async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPa
     // nav.enter/nav.parent, quick-Enter (dispatch nav.enter), retry TOFU y
     // los popups de historial/hotlist — sin repetirlo por call-site.
     let prev = app.focused().dir().clone();
-    let fut = first_page(backend, &dir);
+    // #117: los attrs CONFIGURADOS del scheme de destino se piden en el
+    // listado; el catálogo del provider se trae UNA vez por scheme y sesión
+    // (cache en `App::attr_catalogs` — hints y cabeceras del render).
+    let scheme = dir.scheme().to_owned();
+    let attrs = app.columns.attr_ids_for(&scheme);
+    let fetch_catalog = !app.attr_catalogs.contains_key(&scheme);
+    let fut = first_page(backend, &dir, &attrs, fetch_catalog);
     tokio::pin!(fut);
     loop {
         tokio::select! {
             res = &mut fut => {
                 match res {
-                    Ok((first, stream, skipped)) => {
+                    Ok((first, stream, skipped, catalog)) => {
+                        // #117: el catálogo recién llegado se cachea por
+                        // scheme — los frames siguientes ya pintan con hints.
+                        if let Some(cat) = catalog {
+                            app.attr_catalogs.insert(scheme.clone(), cat);
+                        }
                         // #54: NO ordenamos aquí — `begin_listing` ->
                         // `PaneState::set_listing` normaliza internamente.
                         let more = stream.is_some();

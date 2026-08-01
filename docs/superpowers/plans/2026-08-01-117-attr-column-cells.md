@@ -671,7 +671,7 @@ git commit -m "feat(frontend): ColumnId render funnel + attr cells (#117)"
 - Modify: `crates/norte-tui/src/ui.rs` (pass the real catalog)
 - Test: rendered-buffer hostile test in `ui.rs` tests (or the TUI's snapshot test mod, wherever the block-5 render tests live — find with `grep -rn "col-header-name\|render" crates/norte-tui/src/ui.rs | grep test`)
 
-- [ ] **Step 2.1: Write the failing render test** (in the same test mod as the block-5 rendered-buffer tests; mirror their harness — they build a `Pane` from `Entry` literals and render to a `ratatui` buffer):
+- [x] **Step 2.1: Write the failing render test** (in the same test mod as the block-5 rendered-buffer tests; mirror their harness — they build a `Pane` from `Entry` literals and render to a `ratatui` buffer):
 
 ```rust
 #[test]
@@ -700,12 +700,12 @@ fn celdas_attr_hostiles_enmascaradas_y_ausencia_en_blanco() {
 
 (The exact harness calls come from the neighboring block-5 tests — reuse their `TestBackend`/buffer-scan helpers verbatim.)
 
-- [ ] **Step 2.2: Run it to verify it fails**
+- [x] **Step 2.2: Run it to verify it fails**
 
 Run: `cargo nextest run -p norte-tui celdas_attr 2>/dev/null; echo EXIT=$?`
 Expected: FAIL — the pane never received the attrs → blank cells everywhere (assert 2 fails), because rendering works since Task 1 but nothing requests attrs. If it fails to compile because `draw_pane` lacks the catalog param, that also counts.
 
-- [ ] **Step 2.3: Implement**
+- [x] **Step 2.3: Implement**
 
 1. **`App` cache** (`crates/norte-tui/src/app.rs`): add field + accessor + setter:
 
@@ -785,16 +785,16 @@ if let Some(cat) = catalog {
 
 5. **Picker-apply refresh**: `apply_picked_columns` (~1626) computes the focused pane's `attr_ids_for` before and after `app.columns.apply_picked(...)`; if changed, the caller triggers the existing refresh path (the call site at ~1614 is inside the run loop where `backend`/`events` are in scope — call `refresh_panes(app, backend, events).await` exactly as the post-mutation flow does). Simplest shape: make `apply_picked_columns` return `bool` (needs_refresh) and act at the call site.
 
-- [ ] **Step 2.4: Run the tests**
+- [x] **Step 2.4: Run the tests**
 
 Run:
 ```sh
 cargo nextest run -p norte-tui 2>/dev/null; echo EXIT=$?
-cargo clippy -p norte-tui --all-targets 2>/dev/null; echo EXIT=$?
+cargo clippy -p norte-tui --all-targets -- -D warnings 2>/dev/null; echo EXIT=$?
 ```
 Expected: `EXIT=0` both. The Step-2.1 test must now pass — the harness renders entries whose `attrs` maps are populated by the test itself (no daemon in unit tests; the request-path change is covered by compile + the existing block-2 Backend tests).
 
-- [ ] **Step 2.5: Commit**
+- [x] **Step 2.5: Commit**
 
 ```bash
 git add -A
@@ -1039,7 +1039,7 @@ Run `cargo nextest run -p norte-config 2>/dev/null; echo EXIT=$?` — if the `no
 
 ```sh
 cargo nextest run -p norte-frontend -p norte-config -p norte-tui 2>/dev/null; echo EXIT=$?
-cargo clippy -p norte-frontend -p norte-config -p norte-tui --all-targets 2>/dev/null; echo EXIT=$?
+cargo clippy -p norte-frontend -p norte-config -p norte-tui --all-targets -- -D warnings 2>/dev/null; echo EXIT=$?
 just check-gui; echo EXIT=$?
 just gui-ci; echo EXIT=$?
 ```

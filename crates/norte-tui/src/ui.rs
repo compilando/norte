@@ -70,6 +70,9 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
             &app.theme,
             now_ms,
             &app.columns,
+            // #117 tarea 2: el catálogo cacheado del scheme del pane (hints
+            // y cabeceras); sin él se pinta con defaults, jamás se espera.
+            app.attr_catalog(pane.dir().scheme()),
         );
     }
     draw_tasks(frame, rows[1], app);
@@ -291,6 +294,7 @@ fn column_header_line(
         norte_frontend::columns::ColumnStyle,
     )],
     sort: norte_frontend::SortSpec,
+    catalog: Option<&norte_proto::AttrCatalog>,
 ) -> String {
     use norte_frontend::SortDir;
     use norte_frontend::columns::Align;
@@ -299,7 +303,7 @@ fn column_header_line(
         // #117: etiqueta compartida TUI/GUI (header custom del spec →
         // Fluent → catálogo enmascarado → id). NO se re-enmascara aquí:
         // `header_label` ya devuelve texto seguro.
-        let label = norte_frontend::columns::header_label(col, style, None);
+        let label = norte_frontend::columns::header_label(col, style, catalog);
         let activa = norte_frontend::columns::sort_column_id(col) == Some(sort.column);
         let w = usize::from(*w);
         let flecha = if sort.dir == SortDir::Asc {
@@ -1454,6 +1458,95 @@ mod entry_item_columns_tests {
 }
 
 #[cfg(test)]
+mod draw_pane_attr_tests {
+    use super::*;
+    use norte_proto::{Segment, VPath};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn entry(dir: &VPath, name: &str) -> norte_proto::Entry {
+        norte_proto::Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: dir.join(Segment::new(name.as_bytes().to_vec()).unwrap()),
+            kind: EntryKind::File,
+            size: Some(1),
+            mtime_ms: None,
+        }
+    }
+
+    /// #117 tarea 2: celdas attr con valores HOSTILES de un provider pintadas
+    /// end-to-end por `draw_pane` (config resuelta → layout → celda): jamás
+    /// un char peligroso crudo, lossy MARCADO (U+FFFD) para Bytes no-UTF8,
+    /// ausencia = blanco y cabecera con el id como fallback (sin catálogo).
+    #[test]
+    fn celdas_attr_hostiles_enmascaradas_y_ausencia_en_blanco() {
+        use norte_proto::attrs::AttrValue;
+        // Config: name + attr:mem.owner (Bytes no-UTF8) + attr:mem.note
+        // (bidi RTL + ZWJ).
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: Some(vec![
+                "name".into(),
+                "attr:mem.owner".into(),
+                "attr:mem.note".into(),
+            ]),
+            ..Default::default()
+        };
+        let settings = norte_frontend::columns::ColumnsSettings::resolve(&cfg);
+        let dir = VPath::parse("mem:///d").unwrap();
+        let mut e1 = entry(&dir, "aaa");
+        e1.attrs.insert(
+            "mem.owner".into(),
+            AttrValue::Bytes(b"due\xf1o-\xff\xfe".to_vec()),
+        );
+        e1.attrs.insert(
+            "mem.note".into(),
+            AttrValue::Text("\u{202e}at\u{f3}n\u{202c} a\u{200d}b".into()),
+        );
+        let e2 = entry(&dir, "bbb"); // SIN attrs: celdas en blanco
+        let pane = Pane::new(dir, vec![e1, e2]);
+        let theme = TuiTheme::default();
+        let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal de test");
+        terminal
+            .draw(|f| draw_pane(f, f.area(), &pane, true, &theme, 0, &settings, None))
+            .expect("draw");
+        let text = terminal.backend().to_string();
+        // 1. Ninguna celda del buffer lleva un char peligroso crudo
+        //    (controles, overrides bidi, invisibles — spec §6). Por línea:
+        //    los `\n` que une `to_string` son del harness, no del buffer.
+        assert!(
+            text.lines()
+                .all(|l| l.chars().all(|c| !norte_encoding::is_terminal_hazard(c))),
+            "hazard crudo en el render: {text:?}"
+        );
+        // 2. La fila de e1 pinta el owner LOSSY y MARCADO (U+FFFD visible).
+        let fila_e1 = text
+            .lines()
+            .find(|l| l.contains("aaa"))
+            .expect("fila de aaa");
+        assert!(
+            fila_e1.contains('\u{FFFD}'),
+            "owner lossy sin marcar: {fila_e1:?}"
+        );
+        // 3. La fila de e2 (sin attrs) pinta las columnas attr EN BLANCO:
+        //    quitando el nombre, los bordes y los espacios no queda nada
+        //    (blanco = AUSENTE, jamás un valor fabricado).
+        let fila_e2 = text
+            .lines()
+            .find(|l| l.contains("bbb"))
+            .expect("fila de bbb");
+        // (Las comillas por línea las pone el Display de `TestBackend`.)
+        let resto: String = fila_e2
+            .replace("bbb", "")
+            .chars()
+            .filter(|c| !c.is_whitespace() && *c != '│' && *c != '"')
+            .collect();
+        assert_eq!(resto, "", "ausencia debe ser blanco: {fila_e2:?}");
+        // 4. La cabecera lleva el id como fallback (sin catálogo aquí).
+        assert!(text.contains("mem.owner"), "cabecera sin id: {text}");
+    }
+}
+
+#[cfg(test)]
 mod transfer_name_modal_text_tests {
     use super::transfer_name_modal_text;
     use crate::app::TransferKind;
@@ -1701,12 +1794,14 @@ fn centered(base: Rect, w: u16, h: u16) -> Rect {
 /// `ColumnId`): los anchos del layout compartido más `style_for_id`, UNA
 /// vez por columna y por frame (`style_for_id` pliega mapas y clona el
 /// header — por fila × columna sería O(filas × columnas) de lookups
-/// idénticos). Catálogo `None`: el wiring de attrs en vivo llega con la
-/// tarea 2 de #117.
+/// idénticos). El catálogo viene del cache por scheme de `App` (#117
+/// tarea 2): refina los defaults de las columnas attr (hint); `None` =
+/// aún no llegó o falló — defaults Opaque, jamás bloquea el render.
 fn styled_columns(
     settings: &norte_frontend::columns::ColumnsSettings,
     scheme: &str,
     inner_w: u16,
+    catalog: Option<&norte_proto::AttrCatalog>,
 ) -> Vec<(
     norte_frontend::columns::ColumnId,
     u16,
@@ -1715,12 +1810,13 @@ fn styled_columns(
     norte_frontend::columns::column_widths(settings, scheme, inner_w)
         .into_iter()
         .map(|(id, w)| {
-            let s = settings.style_for_id(scheme, &id, None);
+            let s = settings.style_for_id(scheme, &id, catalog);
             (id, w, s)
         })
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)] // wiring del render, no API
 fn draw_pane(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -1729,6 +1825,7 @@ fn draw_pane(
     theme: &TuiTheme,
     now_ms: i64,
     settings: &norte_frontend::columns::ColumnsSettings,
+    catalog: Option<&norte_proto::AttrCatalog>,
 ) {
     let border_style = if focused {
         theme.role(Role::BorderFocus)
@@ -1780,7 +1877,7 @@ fn draw_pane(
     // frame — las filas y la cabecera comparten el mismo layout (con el
     // estilo 7b resuelto por columna, ver `styled_columns`).
     let inner_w = block.inner(area).width;
-    let cols = &styled_columns(settings, pane.dir().scheme(), inner_w);
+    let cols = &styled_columns(settings, pane.dir().scheme(), inner_w, catalog);
     let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = match pane.quick_visible() {
         Some(vis) => (
             vis.iter()
@@ -1835,7 +1932,7 @@ fn draw_pane(
         (cab, lst)
     };
     frame.render_widget(
-        Paragraph::new(column_header_line(cols, pane.sort()))
+        Paragraph::new(column_header_line(cols, pane.sort(), catalog))
             .style(ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM)),
         header_area,
     );
@@ -2365,7 +2462,7 @@ mod column_header_line_tests {
                 estilo(Builtin::Size, Align::Left, "S"),
             ),
         ];
-        let linea = column_header_line(&cols, sort);
+        let linea = column_header_line(&cols, sort, None);
         assert_eq!(linea.width(), 7, "exactamente la suma de anchos: {linea:?}");
         assert_eq!(linea, "N      ");
         let cols = [
@@ -2380,7 +2477,7 @@ mod column_header_line_tests {
                 estilo(Builtin::Size, Align::Left, "S"),
             ),
         ];
-        let linea = column_header_line(&cols, sort);
+        let linea = column_header_line(&cols, sort, None);
         assert_eq!(linea.width(), 8, "{linea:?}");
         assert_eq!(linea, "N      ▲");
     }
