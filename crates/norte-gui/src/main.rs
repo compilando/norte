@@ -123,6 +123,10 @@ struct NorteGui {
     /// SORT por scheme (las celdas llegan en el bloque 6). OJO: `columns`
     /// (a secas) son las columnas de PLUGIN por pane (G3c) — otra cosa.
     column_settings: norte_frontend::columns::ColumnsSettings,
+    /// Catálogo de attrs por SCHEME (#117): lo puebla `SessionEvent::AttrCatalog`
+    /// (una petición por scheme nuevo y sesión, decidida en `cd`/`refresh_dir`);
+    /// alimenta hints y cabeceras del render. Sin entrada = defaults Opaque.
+    attr_catalogs: std::collections::HashMap<String, norte_proto::AttrCatalog>,
     /// Orden elegido por click en la cabecera (#108 b6), POR PANE y de
     /// SESIÓN: sobrevive al cd (gana a `column_settings.sort_for`) pero no
     /// se persiste — persistir es del picker (bloque 7, `persist_set`).
@@ -512,6 +516,7 @@ impl NorteGui {
                         PaneState::new(dir.clone(), Vec::new()),
                     ],
                     column_settings: norte_frontend::columns::ColumnsSettings::default(),
+                    attr_catalogs: std::collections::HashMap::new(),
                     sort_override: [None, None],
                     focus: 0,
                     query: [String::new(), String::new()],
@@ -585,6 +590,7 @@ impl NorteGui {
                         PaneState::new(placeholder, Vec::new()),
                     ],
                     column_settings: norte_frontend::columns::ColumnsSettings::default(),
+                    attr_catalogs: std::collections::HashMap::new(),
                     sort_override: [None, None],
                     focus: 0,
                     query: [String::new(), String::new()],
@@ -662,12 +668,19 @@ impl NorteGui {
         self.panes[pane].begin_loading(dir.clone());
         self.errors[pane] = None;
         self.query[pane].clear();
+        // #117: los ids attr configurados del scheme destino viajan con la
+        // list (sin pedirlos, las celdas attr pintan blanco); el catálogo se
+        // pide solo si este scheme aún no está en caché (una vez por sesión).
+        let attrs = self.column_settings.attr_ids_for(dir.scheme());
+        let fetch_catalog = !self.attr_catalogs.contains_key(dir.scheme());
         let sent = self
             .cmds
             .send(SessionCmd::List {
                 pane,
                 generation,
                 dir,
+                attrs,
+                fetch_catalog,
             })
             .is_ok();
         if !sent {
@@ -698,12 +711,18 @@ impl NorteGui {
         let generation = self.generation[pane];
         self.refreshing[pane] = true;
         self.panes[pane].set_loading(true);
+        // #117: mismo par attrs/catálogo que `cd` — un refresco también debe
+        // pedir los valores attr que el pane pinta.
+        let attrs = self.column_settings.attr_ids_for(dir.scheme());
+        let fetch_catalog = !self.attr_catalogs.contains_key(dir.scheme());
         let sent = self
             .cmds
             .send(SessionCmd::List {
                 pane,
                 generation,
                 dir,
+                attrs,
+                fetch_catalog,
             })
             .is_ok();
         if !sent {
@@ -832,6 +851,12 @@ impl NorteGui {
                     let cur = self.panes[pane].dir().clone();
                     self.refresh_dir(pane, cur, cx);
                 }
+            }
+            SessionEvent::AttrCatalog { scheme, catalog } => {
+                // #117: sin guard de generación — el catálogo es por scheme,
+                // no por cd, y un catálogo "tardío" sigue siendo el correcto.
+                self.attr_catalogs.insert(scheme, catalog);
+                cx.notify();
             }
             SessionEvent::Submitted { task_id, op } => {
                 self.inflight.insert(task_id, op);
@@ -1716,8 +1741,25 @@ impl NorteGui {
         }
     }
 
+    /// Los ids attr CONFIGURADOS de cada pane (#117): la huella que decide
+    /// si un cambio de columnas exige re-listar — los valores attr solo
+    /// llegan pidiéndolos en `fs.list`, así que un id nuevo con el listado
+    /// viejo pintaría blanco (ausencia) hasta el próximo cd. ORDENADA por
+    /// pane (paridad TUI, review tarea 2): un mero reorden de columnas no
+    /// cambia qué valores hay que pedir y no debe re-listar nada.
+    fn pane_attr_ids(&self) -> [Vec<String>; 2] {
+        std::array::from_fn(|i| {
+            let mut ids = self
+                .column_settings
+                .attr_ids_for(self.panes[i].dir().scheme());
+            ids.sort_unstable();
+            ids
+        })
+    }
+
     /// Aplica el resultado del picker (#108 7c): SESIÓN primero (settings
-    /// compartidos + formatos + re-seed del sort por pane), DISCO después
+    /// compartidos + formatos + re-seed del sort por pane + re-list de los
+    /// panes cuyo set de attrs pintado cambió, #117), DISCO después
     /// (un solo background task: `persist_columns` + N×
     /// `persist_column_format` — regla 2, precedente
     /// `commit_settings_write`: nada de I/O en el hilo de render). El sort
@@ -1728,6 +1770,7 @@ impl NorteGui {
         picked: norte_frontend::columns_picker::Picked,
         cx: &mut Context<Self>,
     ) {
+        let attrs_before = self.pane_attr_ids();
         self.column_settings.apply_picked(
             picked.scheme_target.as_deref(),
             &picked.ids,
@@ -1752,6 +1795,17 @@ impl NorteGui {
                     .column_settings
                     .sort_for(self.panes[pane].dir().scheme());
                 self.panes[pane].set_sort(spec);
+            }
+        }
+        // #117: los panes cuyo set de attrs PINTADO cambió se re-listan por
+        // el mismo camino que un read-after-write (`refresh_dir`: bump de
+        // generación + `refill`, que conserva las marcas). ANTES del persist
+        // — un fallo de disco no debe dejar celdas attr en blanco.
+        let attrs_after = self.pane_attr_ids();
+        for pane in 0..self.panes.len() {
+            if attrs_after[pane] != attrs_before[pane] {
+                let dir = self.panes[pane].dir().clone();
+                self.refresh_dir(pane, dir, cx);
             }
         }
         let Some(dir) = norte_config::user_config_dir() else {
@@ -2307,9 +2361,10 @@ impl NorteGui {
         // #108 7b: el ESTILO de cada columna se resuelve aquí, UNA vez por
         // columna y frame (`style_for_id` pliega mapas y clona el header —
         // por fila × columna sería O(filas × columnas) de lookups
-        // idénticos). Catálogo `None`: el wiring de attrs en vivo llega con
-        // la tarea 3 de #117.
+        // idénticos). Catálogo del scheme (#117): cacheado por sesión
+        // (`attr_catalogs`); sin entrada aún = defaults Opaque.
         let scheme = pane.dir().scheme();
+        let catalog = self.attr_catalogs.get(scheme);
         let cols: Vec<(
             norte_frontend::columns::ColumnId,
             u16,
@@ -2317,7 +2372,7 @@ impl NorteGui {
         )> = norte_frontend::columns::column_widths(&self.column_settings, scheme, cells)
             .into_iter()
             .map(|(id, w)| {
-                let s = self.column_settings.style_for_id(scheme, &id, None);
+                let s = self.column_settings.style_for_id(scheme, &id, catalog);
                 (id, w, s)
             })
             .collect();
@@ -2554,7 +2609,7 @@ impl NorteGui {
                 // #117: etiqueta compartida TUI/GUI (header custom del spec
                 // → Fluent → catálogo enmascarado → id) — `header_label` ya
                 // devuelve texto seguro, sin re-enmascarar aquí.
-                let base = norte_frontend::columns::header_label(col_b, style, None);
+                let base = norte_frontend::columns::header_label(col_b, style, catalog);
                 let label = if active {
                     format!("{base}{arrow}")
                 } else {
@@ -2830,8 +2885,7 @@ impl NorteGui {
             // #108 7b: formato del estilo resuelto (hoisted por frame en
             // `render_pane`) y `align` eligiendo el lado — el separador
             // (pl) sigue abriendo el ancho en ambos casos.
-            let cell =
-                norte_frontend::columns::styled_cell(entry, col, now_ms, style).unwrap_or_default();
+            let cell = row_cell_text(entry, col, now_ms, style);
             let celda = div()
                 .flex_none()
                 .w(px(f32::from(*w) * ch))
@@ -4036,6 +4090,21 @@ fn row_label(bytes: &[u8], kind: EntryKind) -> String {
         name,
         kind_indicator(kind),
     )
+}
+
+/// Texto de una celda no-nombre de la fila (#108 b6/#117): el `styled_cell`
+/// compartido con la TUI, con la ausencia (`None` — el size de un dir, un
+/// attr que el provider no mandó) aplanada a blanco, jamás un valor
+/// fabricado. Función PURA (sin GPUI), como `row_label`, para poder testear
+/// el camino de celdas de la GUI con valores attr hostiles sin ventana/GPU.
+#[must_use]
+fn row_cell_text(
+    entry: &Entry,
+    col: &norte_frontend::columns::ColumnId,
+    now_ms: i64,
+    style: &norte_frontend::columns::ColumnStyle,
+) -> String {
+    norte_frontend::columns::styled_cell(entry, col, now_ms, style).unwrap_or_default()
 }
 
 /// Indicador de tipo: «/» dir, «@» symlink, nada para archivo, «?» para lo demás.
@@ -5622,6 +5691,85 @@ mod tests {
                 fixture.id,
             );
         }
+    }
+
+    /// #117 tarea 3: el camino de celdas de la GUI (`row_cell_text`, el
+    /// MISMO que pinta `render_row`) con valores attr HOSTILES de un
+    /// provider: jamás un char peligroso crudo, lossy MARCADO (U+FFFD)
+    /// para Bytes no-UTF8, ausencia = celda en blanco y cabecera con el id
+    /// como fallback sin catálogo — las mismas aserciones que el test
+    /// gemelo de la TUI (`celdas_attr_hostiles_…` en `ui.rs`), sobre
+    /// funciones puras (sin ventana/GPU).
+    #[test]
+    fn celdas_attr_hostiles_enmascaradas_y_ausencia_en_blanco() {
+        use norte_frontend::columns::ColumnId;
+        use norte_proto::attrs::AttrValue;
+        fn entry(dir: &VPath, name: &str) -> norte_proto::Entry {
+            norte_proto::Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: dir.join(norte_proto::Segment::new(name.as_bytes().to_vec()).unwrap()),
+                kind: EntryKind::File,
+                size: Some(1),
+                mtime_ms: None,
+            }
+        }
+        // Config: name + attr:mem.owner (Bytes no-UTF8) + attr:mem.note
+        // (bidi RTL + ZWJ).
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: Some(vec![
+                "name".into(),
+                "attr:mem.owner".into(),
+                "attr:mem.note".into(),
+            ]),
+            ..Default::default()
+        };
+        let settings = norte_frontend::columns::ColumnsSettings::resolve(&cfg);
+        let dir = VPath::parse("mem:///d").unwrap();
+        let mut e1 = entry(&dir, "aaa");
+        e1.attrs.insert(
+            "mem.owner".into(),
+            AttrValue::Bytes(b"due\xf1o-\xff\xfe".to_vec()),
+        );
+        e1.attrs.insert(
+            "mem.note".into(),
+            AttrValue::Text("\u{202e}at\u{f3}n\u{202c} a\u{200d}b".into()),
+        );
+        let e2 = entry(&dir, "bbb"); // SIN attrs: celdas en blanco
+        let owner = ColumnId::Attr("mem.owner".to_owned());
+        let note = ColumnId::Attr("mem.note".to_owned());
+        for id in [&owner, &note] {
+            let style = settings.style_for_id("mem", id, None);
+            // 1. Ninguna celda pintada lleva un char peligroso crudo
+            //    (controles, overrides bidi, invisibles — spec §6).
+            let celda = super::row_cell_text(&e1, id, 0, &style);
+            assert!(
+                !celda.chars().any(norte_encoding::is_terminal_hazard),
+                "hazard crudo en la celda de {id}: {celda:?}"
+            );
+            // 3. Sin el attr (e2), la celda es BLANCO (ausencia), jamás un
+            //    valor fabricado.
+            assert_eq!(
+                super::row_cell_text(&e2, id, 0, &style),
+                "",
+                "ausencia debe ser blanco en {id}"
+            );
+        }
+        // 2. El owner (Bytes no-UTF8) pinta LOSSY y MARCADO (U+FFFD visible).
+        let style = settings.style_for_id("mem", &owner, None);
+        let celda_owner = super::row_cell_text(&e1, &owner, 0, &style);
+        assert!(
+            celda_owner.contains('\u{FFFD}'),
+            "owner lossy sin marcar: {celda_owner:?}"
+        );
+        // La note hostil se enmascara pero NO desaparece (presente ≠ blanco).
+        let style = settings.style_for_id("mem", &note, None);
+        assert!(
+            !super::row_cell_text(&e1, &note, 0, &style).is_empty(),
+            "un attr presente-pero-hostil jamás pinta blanco"
+        );
+        // 4. La cabecera cae al id saneado como fallback (sin catálogo aquí).
+        let label = norte_frontend::columns::header_label(&owner, &style, None);
+        assert!(label.contains("mem.owner"), "cabecera sin id: {label:?}");
     }
 
     /// El badge hostil (`⚠`) aparece cuando `display_name` marca el nombre

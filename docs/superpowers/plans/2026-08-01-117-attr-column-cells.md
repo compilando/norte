@@ -809,7 +809,7 @@ git commit -m "feat(tui): request configured attrs + per-scheme catalog cache (#
 - Modify: `crates/norte-gui/src/session.rs` (List carries attrs; catalog event)
 - Modify: `crates/norte-gui/src/main.rs` (cache + pass catalog to render; List senders include attrs; picker-apply refresh)
 
-- [ ] **Step 3.1: Extend the session protocol** (`crates/norte-gui/src/session.rs`):
+- [x] **Step 3.1: Extend the session protocol** (`crates/norte-gui/src/session.rs`):
 
 `SessionCmd::List` gains `attrs: Vec<String>` and `fetch_catalog: bool`; `SessionEvent` gains:
 
@@ -845,7 +845,7 @@ Worker handling (~line 365):
                     }
 ```
 
-- [ ] **Step 3.2: Wire the app side** (`crates/norte-gui/src/main.rs`):
+- [x] **Step 3.2: Wire the app side** (`crates/norte-gui/src/main.rs`):
 
 - Field `attr_catalogs: std::collections::HashMap<String, norte_proto::AttrCatalog>` (init at both construction sites, ~550/632 pattern from `columns_picker: None`).
 - Every `SessionCmd::List` sender adds `attrs: self.column_settings.attr_ids_for(scheme)` and `fetch_catalog: !self.attr_catalogs.contains_key(scheme)` (find senders: `grep -n "SessionCmd::List" crates/norte-gui/src/main.rs`).
@@ -853,14 +853,14 @@ Worker handling (~line 365):
 - The render paths from Task 1 replace their `None` catalog with `self.attr_catalogs.get(scheme)`.
 - Picker apply (`apply_picked` handler ~1728): if the focused pane's `attr_ids_for` changed across the apply, re-send `SessionCmd::List` for the affected panes (same generation bump as a manual reload).
 
-- [ ] **Step 3.3: GUI test** — extend the columns render test in `main.rs`/`columns_view.rs` test mod (wherever block-6 cell tests live; `grep -n "styled_cell\|column_widths" crates/norte-gui/src/main.rs | grep -i test`): an `Entry` with a hostile `Text` attr renders masked and an entry without the attr renders blank — same assertions as the TUI test, over the GUI's cell-string builder (the GUI cell path is pure string code; no window needed).
+- [x] **Step 3.3: GUI test** — extend the columns render test in `main.rs`/`columns_view.rs` test mod (wherever block-6 cell tests live; `grep -n "styled_cell\|column_widths" crates/norte-gui/src/main.rs | grep -i test`): an `Entry` with a hostile `Text` attr renders masked and an entry without the attr renders blank — same assertions as the TUI test, over the GUI's cell-string builder (the GUI cell path is pure string code; no window needed).
 
-- [ ] **Step 3.4: Run the gates**
+- [x] **Step 3.4: Run the gates**
 
 Run: `just check-gui; echo EXIT=$?` then `just gui-ci; echo EXIT=$?` (or the GUI test invocation the justfile uses).
 Expected: `EXIT=0` both.
 
-- [ ] **Step 3.5: Commit**
+- [x] **Step 3.5: Commit**
 
 ```bash
 git add -A

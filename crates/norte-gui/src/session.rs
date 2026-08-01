@@ -65,6 +65,14 @@ pub enum SessionCmd {
         generation: u64,
         /// Directorio a listar.
         dir: VPath,
+        /// Ids attr CONFIGURADOS del scheme (#117): los valores solo llegan
+        /// pidiéndolos en `fs.list` — sin ellos las celdas attr pintan
+        /// blanco (ausencia).
+        attrs: Vec<String>,
+        /// Pide el [`norte_proto::AttrCatalog`] del scheme ANTES de listar
+        /// (#117): una vez por scheme y sesión (la GUI lo decide mirando su
+        /// caché); un fallo del catálogo JAMÁS tumba el listado.
+        fetch_catalog: bool,
     },
     /// Lanza una operación mutante (copy/move/delete) como task.
     Submit(PendingOp),
@@ -207,6 +215,13 @@ pub enum SessionEvent {
         /// Entradas + omitidas del contenedor (#93/#96) o error aplanado a
         /// String (ya renderizable).
         outcome: Result<(Vec<Entry>, Option<u64>), String>,
+    },
+    /// Catálogo de attrs del scheme (#117): una vez por scheme y sesión.
+    AttrCatalog {
+        /// Scheme al que pertenece (clave de la caché de la GUI).
+        scheme: String,
+        /// El catálogo YA saneado (lo sanea el deserializador del wire).
+        catalog: norte_proto::AttrCatalog,
     },
     /// La conexión inicial con el daemon falló (mensaje ya renderizable).
     ConnectFailed(String),
@@ -366,12 +381,23 @@ pub fn spawn(
                         pane,
                         generation,
                         dir,
+                        attrs,
+                        fetch_catalog,
                     } => {
                         let backend = Backend::Remote(remote.clone());
                         let tx = event_tx.clone();
                         tokio::spawn(async move {
+                            // #117: el catálogo ANTES del listado (misma
+                            // conexión, una vez por scheme); un fallo NO
+                            // tumba el listado — sin hints se pinta Opaque.
+                            if fetch_catalog && let Ok(catalog) = backend.attr_catalog(&dir).await {
+                                let _ = tx.send(SessionEvent::AttrCatalog {
+                                    scheme: dir.scheme().to_owned(),
+                                    catalog,
+                                });
+                            }
                             let outcome = backend
-                                .list_with_skipped(&dir)
+                                .list_with_skipped_attrs(&dir, &attrs)
                                 .await
                                 .map_err(|e| format!("{e}"));
                             let _ = tx.send(SessionEvent::Listed {
