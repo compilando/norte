@@ -9,6 +9,29 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Provider attribute columns rendered in both frontends (#117):** the
+  `attr:` columns the config, model and picker already accepted now paint
+  real cells. The shared render funnel is `ColumnId`-typed end to end;
+  attr cells format by the value's own tag refined by the catalog hint
+  (sizes IEC/SI/exact, timestamps relative/ISO, POSIX modes `rwx`/`octal`
+  — two new spec format words), third-party `Text`/`Bytes` values render
+  masked and capped (bytes lossy-with-U+FFFD, originals untouched), blank
+  strictly means absent (`?` = present but unpaintable). Panes request the
+  configured attr ids on every listing and cache the provider catalog once
+  per scheme (`fs.capabilities`); the picker now OFFERS advertised
+  provider columns (disabled rows, localized or masked labels) and cycles
+  attr formats by hint. Column headers resolve localized → masked catalog
+  label → sanitized id. `norte doctor` retires `columns-no-renderer` for
+  `attr:` (plugin cells still pending) and gains
+  `columns-attrs-over-cap` (>16 configured) and
+  `columns-attr-id-not-wire-safe` (an id that parses but is illegal on the
+  wire is skipped instead of failing remote listings). The TUI/GUI refresh
+  affected panes when a picker apply or hot-reload changes the requested
+  attr set; painted always equals requested. Follow-up filed: #118
+  (pre-existing Ctrl+R refresh ritual gap). No wire change (additive 0.30
+  contract). Sorting stays on the closed name/size/mtime vocabulary —
+  sorting by attr columns is future work.
+
 - **GUI column picker — Alt+C (#108 block 7c):** the GUI gets the same
   picker the TUI ships, as an overlay panel over the shared model: toggle
   (Space/E), reorder (Shift+↑/↓), sort by the cursor's column (S), cycle
