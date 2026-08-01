@@ -198,7 +198,9 @@ impl MemProvider {
 
     /// Atributos SINTÉTICOS deterministas (#108 bloque 2) con valores
     /// deliberadamente hostiles: dueño no-UTF-8 (`Bytes`), texto con RTL
-    /// override + ZWJ. Para probar plumbing y render sin un provider real.
+    /// override + ZWJ, texto ANCHO (CJK + familia emoji ZWJ, #117
+    /// encoding-audit L2). Para probar plumbing y render sin un provider
+    /// real.
     #[must_use]
     pub fn with_synthetic_attrs(mut self) -> Self {
         use norte_proto::{AttrHint, AttrInfo, AttrType};
@@ -213,6 +215,7 @@ impl MemProvider {
             mk("mem.note", "Note", AttrType::Text, AttrHint::Opaque),
             mk("mem.mode", "Mode", AttrType::Uint, AttrHint::Mode),
             mk("mem.stamp", "Stamp", AttrType::TimeMs, AttrHint::Timestamp),
+            mk("mem.wide", "Wide", AttrType::Text, AttrHint::Opaque),
         ];
         self
     }
@@ -535,6 +538,24 @@ fn synthetic_attrs(
         out.insert(
             "mem.note".to_owned(),
             AttrValue::Text("\u{202e}atón\u{202c} a\u{200d}b".to_owned()),
+        );
+    }
+    if quiere("mem.wide") {
+        // Texto ANCHO (#117 encoding-audit L2): CJK double-width + la
+        // MISMA familia emoji ZWJ del corpus (`emoji_zwj_family`, fuente
+        // única) — grapheme multi-codepoint para pinear que una celda
+        // ancha jamás desplaza la columna vecina en los frontends.
+        let familia = crate::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == "emoji_zwj_family")
+            // El corpus embebido siempre trae la fixture (UTF-8 puro);
+            // si algún día se renombrara, el valor queda solo-CJK y los
+            // pins de anchura de los frontends lo delatarían.
+            .and_then(|n| String::from_utf8(n.bytes).ok())
+            .unwrap_or_default();
+        out.insert(
+            "mem.wide".to_owned(),
+            AttrValue::Text(format!("日本語{familia}")),
         );
     }
     if quiere("mem.mode") {

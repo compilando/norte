@@ -145,6 +145,22 @@ pub fn check_columns(layers: &Layers) -> Vec<Finding> {
             ),
         });
     }
+    // #117 encoding-audit M1: un `attr:` que parsea como columna pero cuyo
+    // id no es legal en el wire (`is_valid_attr_id`: minúsculas con
+    // namespace) — el funnel lo salta y el pane no lo pide (pedido a un
+    // daemon sería -32602 y tumbaría el fs.list entero): doctor lo nombra
+    // porque el id "parece" bien y nada más lo cuenta.
+    for raw in &st.attrs_not_wire_safe {
+        findings.push(Finding {
+            section: "config",
+            severity: Severity::Warn,
+            code: "columns-attr-id-not-wire-safe",
+            detail: format!(
+                "[ui.columns] attr que parsea pero no es un id legal del wire (minúsculas con namespace, p. ej. posix.mode — la columna se salta): {}",
+                sanitize_detail(raw)
+            ),
+        });
+    }
     // #108 7b: un `[[ui.columns.spec]]` con id imposible o con un formato
     // que no casa con su columna (p. ej. `iec` en mtime) — se aplicó el
     // default al pintar, jamás un drop mudo.
@@ -627,6 +643,36 @@ mod tests {
         assert!(
             f.iter()
                 .any(|x| x.code == "columns-attrs-over-cap" && x.detail.contains("mem.a16")),
+            "{f:?}"
+        );
+    }
+
+    /// #117 encoding-audit M1: un `attr:` que parsea pero no es un id
+    /// legal del wire (typo de caja) — la columna se salta y doctor lo
+    /// nombra (`columns-attr-id-not-wire-safe`); sin esto sería invisible
+    /// (el id parsea bien y nada más lo cuenta).
+    #[test]
+    fn columns_attr_id_no_wire_safe_se_reporta() {
+        let dir = tempfile::tempdir().expect("tmp");
+        std::fs::write(
+            dir.path().join("norte.toml"),
+            "[ui.columns]\ndefault = [\"name\", \"attr:Posix.Mode\", \"attr:posix.mode\"]\n",
+        )
+        .expect("write");
+        let layers = norte_config::Layers {
+            dirs: vec![(dir.path().to_path_buf(), norte_config::Layer::User)],
+        };
+        let f = super::check_columns(&layers);
+        assert!(
+            f.iter()
+                .any(|x| x.code == "columns-attr-id-not-wire-safe"
+                    && x.detail.contains("Posix.Mode")),
+            "{f:?}"
+        );
+        // El bien formado no dispara nada.
+        assert!(
+            !f.iter().any(|x| x.code == "columns-attr-id-not-wire-safe"
+                && x.detail.contains("attr:posix.mode")),
             "{f:?}"
         );
     }

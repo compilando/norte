@@ -857,6 +857,27 @@ mod model_tests {
         assert_eq!(format_mtime(now + 10_000, TimeFormat::Relative, now), "now");
         assert_eq!(format_mtime(now, TimeFormat::Iso, now), "2024-07-03T09:46Z");
     }
+
+    /// #117 encoding-audit L3: tiempos EXTREMOS (mtime basura de un
+    /// provider hostil) — jamás un panic, siempre una cadena con forma.
+    #[test]
+    fn tiempos_extremos_sin_panic_y_con_forma() {
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
+        // ISO en ambos extremos del rango: forma RFC-3339 (año expandido
+        // en el negativo), nunca vacío.
+        let min = iso_utc_minutes(i64::MIN);
+        assert!(min.starts_with('-') && min.ends_with('Z'), "{min}");
+        let max = iso_utc_minutes(i64::MAX);
+        assert!(max.ends_with('Z') && max.contains('T'), "{max}");
+        // Relative con delta saturante en ambos sentidos: pasado remoto =
+        // años; futuro remoto (delta negativo) = «now».
+        let pasado = format_mtime(i64::MIN, TimeFormat::Relative, i64::MAX);
+        assert!(pasado.contains('y'), "{pasado}");
+        assert_eq!(
+            format_mtime(i64::MAX, TimeFormat::Relative, i64::MIN),
+            "now"
+        );
+    }
 }
 
 /// El set de columnas POR DEFECTO (#108 L4): `name`, `size`, `mtime` con
@@ -1138,6 +1159,15 @@ pub struct ColumnsSettings {
     /// jamás una columna permanentemente en blanco; doctor los nombra
     /// (`columns-attrs-over-cap`).
     pub attrs_over_cap: Vec<String>,
+    /// Ids `attr:` que parsean como columna pero cuyo id attr NO es legal
+    /// en el wire (#117 encoding-audit M1,
+    /// [`norte_proto::attrs::is_valid_attr_id`]: minúsculas con namespace —
+    /// `attr:Posix.Mode` parsea y aun así el daemon lo rechazaría con
+    /// -32602 tumbando el `fs.list` ENTERO). El funnel los salta y el pane
+    /// no los pide (pintado == pedido, jamás una columna en blanco ni un
+    /// listado muerto); la forma cruda se preserva para picker/persist y
+    /// doctor los nombra (`columns-attr-id-not-wire-safe`).
+    pub attrs_not_wire_safe: Vec<String>,
     /// Specs `[[ui.columns.spec]]` con id imposible o con un formato que no
     /// casa con su columna (#108 7b): se aplica el default y doctor lo
     /// reporta (`columns-bad-spec`) — jamás un drop mudo ni un fallo de
@@ -1327,8 +1357,16 @@ impl ColumnsSettings {
                         self.unrenderable.push(raw.clone());
                     }
                 }
-                Ok(ColumnId::Attr(_)) => {
-                    if !attrs_vistos.contains(&raw) {
+                Ok(ColumnId::Attr(a)) => {
+                    // #117 encoding-audit M1: un id que parsea como columna
+                    // pero no es legal en el wire jamás se pinta ni se pide
+                    // (`layout_items_for` lo salta) — no consume hueco del
+                    // cap, igual que no consume columna.
+                    if !norte_proto::attrs::is_valid_attr_id(&a) {
+                        if !self.attrs_not_wire_safe.contains(raw) {
+                            self.attrs_not_wire_safe.push(raw.clone());
+                        }
+                    } else if !attrs_vistos.contains(&raw) {
                         attrs_vistos.push(raw);
                         if attrs_vistos.len() > norte_proto::ATTRS_MAX_REQUEST
                             && !self.attrs_over_cap.contains(raw)
@@ -1384,13 +1422,19 @@ impl ColumnsSettings {
                         // pintado == pedido (`attr_ids_for`); el resto es
                         // diagnóstico (`attrs_over_cap`, doctor lo nombra),
                         // jamás una columna permanentemente en blanco.
-                        ColumnId::Attr(_) => {
-                            let attrs = out
-                                .iter()
-                                .filter(|(x, _)| matches!(x, ColumnId::Attr(_)))
-                                .count();
-                            if attrs < norte_proto::ATTRS_MAX_REQUEST {
-                                out.push((id.clone(), attr_layout_item()));
+                        // Encoding-audit M1: solo ids LEGALES del wire — un
+                        // `attr:Posix.Mode` pedido a un daemon sería -32602
+                        // y tumbaría el listado entero; se salta aquí
+                        // (diagnóstico `attrs_not_wire_safe`).
+                        ColumnId::Attr(a) => {
+                            if norte_proto::attrs::is_valid_attr_id(a) {
+                                let attrs = out
+                                    .iter()
+                                    .filter(|(x, _)| matches!(x, ColumnId::Attr(_)))
+                                    .count();
+                                if attrs < norte_proto::ATTRS_MAX_REQUEST {
+                                    out.push((id.clone(), attr_layout_item()));
+                                }
                             }
                         }
                     }
@@ -2086,6 +2130,71 @@ mod attr_funnel_tests {
         assert!(st2.attr_ids_for("file").is_empty());
     }
 
+    /// #117 encoding-audit M1: un `attr:` que parsea pero no es un id
+    /// LEGAL del wire (`is_valid_attr_id` — aquí una typo de caja) ni se
+    /// pinta ni se pide: pedido a un daemon sería -32602 y tumbaría el
+    /// `fs.list` entero. Va al diagnóstico y la forma cruda se preserva
+    /// para el picker.
+    #[test]
+    fn attr_id_no_wire_safe_ni_se_pinta_ni_se_pide() {
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: Some(vec![
+                "name".into(),
+                "attr:Posix.Mode".into(),
+                "attr:mem.mode".into(),
+            ]),
+            ..Default::default()
+        };
+        let st = ColumnsSettings::resolve(&cfg);
+        assert_eq!(st.attr_ids_for("file"), vec!["mem.mode".to_owned()]);
+        let pintadas: Vec<String> = st
+            .layout_items_for("file")
+            .iter()
+            .map(|(id, _)| id.to_string())
+            .collect();
+        assert!(
+            !pintadas.contains(&"attr:Posix.Mode".to_owned()),
+            "{pintadas:?}"
+        );
+        assert_eq!(st.attrs_not_wire_safe, vec!["attr:Posix.Mode".to_owned()]);
+        // No es `invalid` (parsea) y la forma cruda sigue para el picker.
+        assert!(st.invalid.is_empty());
+        assert!(
+            st.raw_ids_for("file")
+                .contains(&"attr:Posix.Mode".to_owned())
+        );
+    }
+
+    /// #117 encoding-audit M1, corpus completo: NINGÚN nombre hostil del
+    /// corpus canónico es un attr id legal del wire — configurado como
+    /// `attr:<hostil>` jamás llega a `attr_ids_for` (el pane no lo pide) y
+    /// siempre queda diagnosticado.
+    #[test]
+    fn corpus_hostil_como_attr_id_jamas_llega_al_wire() {
+        for fixture in norte_testkit::corpus::hostile_names() {
+            // Solo los UTF-8: un id de columna es String de config.
+            let Ok(name) = String::from_utf8(fixture.bytes.clone()) else {
+                continue;
+            };
+            let id = format!("attr:{name}");
+            let cfg = norte_config::ColumnsConfig {
+                default_columns: Some(vec!["name".into(), id.clone()]),
+                ..Default::default()
+            };
+            let st = ColumnsSettings::resolve(&cfg);
+            assert!(
+                st.attr_ids_for("file").is_empty(),
+                "{} llegaría al wire",
+                fixture.id
+            );
+            assert!(
+                st.attrs_not_wire_safe.contains(&id),
+                "{} sin diagnóstico",
+                fixture.id
+            );
+        }
+    }
+
     /// Pin del invariante de `attr_fingerprint` (#117 review tarea 3): la
     /// huella va ORDENADA — reordenar columnas produce la MISMA huella (no
     /// re-lista), quitar/añadir un attr la cambia.
@@ -2154,6 +2263,23 @@ mod attr_funnel_tests {
         // Unknown → "?" (una celda mala cuesta una celda).
         let raro = entry_with(&[("mem.mode", AttrValue::Unknown)]);
         assert_eq!(styled_cell(&raro, &id, 0, &style).as_deref(), Some("?"));
+    }
+
+    /// #117 encoding-audit L3: un `Uint` que no cabe en i64 bajo hint
+    /// Timestamp cae a decimal crudo — jamás un panic ni un tiempo
+    /// fabricado por truncado.
+    #[test]
+    fn uint_desbordado_bajo_hint_timestamp_cae_a_decimal() {
+        let id = ColumnId::Attr("mem.stamp".into());
+        let style = ColumnStyle {
+            hint: AttrHint::Timestamp,
+            ..ColumnStyle::default_for_id(&id, None)
+        };
+        let e = entry_with(&[("mem.stamp", AttrValue::Uint(u64::MAX))]);
+        assert_eq!(
+            styled_cell(&e, &id, 0, &style).as_deref(),
+            Some(u64::MAX.to_string().as_str())
+        );
     }
 
     #[test]

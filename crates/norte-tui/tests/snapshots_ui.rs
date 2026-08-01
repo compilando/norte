@@ -283,6 +283,31 @@ fn snapshot_columns_picker_80x24() {
     insta::assert_snapshot!(texto);
 }
 
+/// #117 encoding-audit L1: un id de config KILOMÉTRICO que no parsea se
+/// enseña en el picker CAPADO a `HEADER_MAX_CHARS` (paridad GUI) — sin el
+/// cap el overlay entero se ensancharía hasta el frame por un solo id.
+#[test]
+fn picker_capa_un_id_opaco_kilometrico() {
+    let mut app = app_base();
+    let kilometrico = "x".repeat(60); // no parsea: ni builtin ni attr:/plugin:
+    let cfg = norte_config::ColumnsConfig {
+        default_columns: Some(vec!["name".into(), kilometrico.clone()]),
+        ..Default::default()
+    };
+    app.columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg);
+    app.open_columns_picker();
+    let texto = render_80x24(&app);
+    let cap = norte_frontend::columns::HEADER_MAX_CHARS;
+    assert!(
+        texto.contains(&"x".repeat(cap)),
+        "la fila capada debe verse:\n{texto}"
+    );
+    assert!(
+        !texto.contains(&"x".repeat(cap + 1)),
+        "jamás más de {cap} chars del id opaco:\n{texto}"
+    );
+}
+
 /// #108 7b: `[[ui.columns.spec]]` vivo en el pane — `size` con formato SI
 /// («1.5 kB», no «1.5 KiB»), cabecera custom `Peso` (sustituye a «Tamaño»)
 /// y ancho fijo 9; `kind` alineado a la IZQUIERDA (contenido tras el

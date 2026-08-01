@@ -643,8 +643,13 @@ fn draw_columns_picker(
                 Some(Builtin::Kind) => t("col-header-kind"),
                 // #117: attr/plugin traen `label` (header_label, YA
                 // enmascarada al abrir); los que no parsean caen al id. El
-                // re-enmascarado es cinturón, no el choke point.
-                None => norte_encoding::mask_terminal_hazards(r.label.as_deref().unwrap_or(&r.id)),
+                // re-enmascarado es cinturón, no el choke point; el cap
+                // (encoding-audit L1, paridad GUI) evita que un id
+                // kilométrico de config ensanche el overlay entero.
+                None => norte_encoding::mask_terminal_hazards(r.label.as_deref().unwrap_or(&r.id))
+                    .chars()
+                    .take(norte_frontend::columns::HEADER_MAX_CHARS)
+                    .collect(),
             };
             let flecha = match r.builtin.and_then(sort_column) {
                 Some(sc) if sc == p.sort().column => {
@@ -1546,6 +1551,58 @@ mod draw_pane_attr_tests {
         assert_eq!(resto, "", "ausencia debe ser blanco: {fila_e2:?}");
         // 4. La cabecera lleva el id como fallback (sin catálogo aquí).
         assert!(text.contains("mem.owner"), "cabecera sin id: {text}");
+    }
+
+    /// #117 encoding-audit L2: una celda attr ANCHA (CJK double-width + la
+    /// familia emoji ZWJ del corpus — el valor `mem.wide` de `MemProvider`)
+    /// JAMÁS desplaza la columna vecina: la x de la celda del tamaño es
+    /// idéntica entre la fila ancha y una fila en blanco (espejo de
+    /// `una_decoracion_ancha_jamas_desplaza_las_columnas`). Lo pineado es
+    /// la alineación de celdas del buffer de ratatui; el colapso de ZWJ en
+    /// un terminal real es la limitación preexistente que ya comparte la
+    /// columna del nombre.
+    #[test]
+    fn celda_attr_ancha_jamas_desplaza_la_columna_vecina() {
+        use norte_proto::attrs::AttrValue;
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: Some(vec!["name".into(), "attr:mem.wide".into(), "size".into()]),
+            ..Default::default()
+        };
+        let settings = norte_frontend::columns::ColumnsSettings::resolve(&cfg);
+        let dir = VPath::parse("mem:///d").unwrap();
+        let mut e1 = entry(&dir, "aaa");
+        e1.attrs.insert(
+            "mem.wide".into(),
+            AttrValue::Text("日本語👨\u{200d}👩\u{200d}👧\u{200d}👦".into()),
+        );
+        let e2 = entry(&dir, "bbb"); // SIN attrs: la celda ancha en blanco
+        let pane = Pane::new(dir, vec![e1, e2]);
+        let theme = TuiTheme::default();
+        let mut terminal = Terminal::new(TestBackend::new(60, 8)).expect("terminal de test");
+        terminal
+            .draw(|f| draw_pane(f, f.area(), &pane, true, &theme, 0, &settings, None))
+            .expect("draw");
+        let buf = terminal.backend().buffer();
+        // La x (en CELDAS del buffer, no chars) del «1» del tamaño en la
+        // fila que contiene `name`.
+        let size_x = |name: &str| -> u16 {
+            for y in 0..buf.area.height {
+                let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+                if row.contains(name) {
+                    for x in 0..buf.area.width {
+                        if buf[(x, y)].symbol() == "1" {
+                            return x;
+                        }
+                    }
+                }
+            }
+            panic!("fila {name} sin celda de tamaño");
+        };
+        assert_eq!(
+            size_x("aaa"),
+            size_x("bbb"),
+            "la celda ancha desplazó la columna del tamaño"
+        );
     }
 }
 
