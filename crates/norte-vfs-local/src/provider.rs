@@ -279,7 +279,7 @@ fn mtime_ms(md: &std::fs::Metadata) -> Option<i64> {
     }
 }
 
-fn entry_from(path: VPath, md: &std::fs::Metadata) -> Entry {
+fn entry_from(path: VPath, md: &std::fs::Metadata, req: &norte_vfs::AttrRequest) -> Entry {
     let ft = md.file_type();
     let (kind, size) = if ft.is_symlink() {
         (EntryKind::Symlink, None)
@@ -291,12 +291,114 @@ fn entry_from(path: VPath, md: &std::fs::Metadata) -> Entry {
         (EntryKind::Other, None)
     };
     Entry {
-        attrs: std::collections::BTreeMap::new(),
+        attrs: attrs_from_md(md, req),
         path,
         kind,
         size,
         mtime_ms: mtime_ms(md),
     }
+}
+
+/// Catálogo de attrs del provider local (#108 bloque 2): POSIX en unix,
+/// `win.attributes` en Windows. Todo sale de la `Metadata` ya en mano —
+/// cero syscalls extra sobre `stat`; en `list` exige la promoción por
+/// entrada (ver `list_with`).
+#[cfg(unix)]
+fn catalogo_local() -> &'static [norte_proto::AttrInfo] {
+    use norte_proto::{AttrHint, AttrInfo, AttrType};
+    static CAT: std::sync::LazyLock<Vec<AttrInfo>> = std::sync::LazyLock::new(|| {
+        let mk = |id: &str, label: &str, ty, hint| AttrInfo {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            ty,
+            hint,
+        };
+        vec![
+            mk("posix.mode", "Mode", AttrType::Uint, AttrHint::Mode),
+            mk("posix.uid", "UID", AttrType::Uint, AttrHint::Identity),
+            mk("posix.gid", "GID", AttrType::Uint, AttrHint::Identity),
+            mk("posix.nlink", "Links", AttrType::Uint, AttrHint::Opaque),
+            mk(
+                "posix.ctime_ms",
+                "Changed",
+                AttrType::TimeMs,
+                AttrHint::Timestamp,
+            ),
+        ]
+    });
+    &CAT
+}
+
+/// Ver [`catalogo_local`] (variante Windows).
+#[cfg(windows)]
+fn catalogo_local() -> &'static [norte_proto::AttrInfo] {
+    use norte_proto::{AttrHint, AttrInfo, AttrType};
+    static CAT: std::sync::LazyLock<Vec<AttrInfo>> = std::sync::LazyLock::new(|| {
+        vec![AttrInfo {
+            id: "win.attributes".to_owned(),
+            label: "Attributes".to_owned(),
+            ty: AttrType::Uint,
+            hint: AttrHint::Opaque,
+        }]
+    });
+    &CAT
+}
+
+#[cfg(not(any(unix, windows)))]
+fn catalogo_local() -> &'static [norte_proto::AttrInfo] {
+    &[]
+}
+
+/// Materializa los attrs pedidos desde una `Metadata` YA en mano. `mode` es
+/// el `st_mode` crudo (bits de tipo incluidos); los formatters deciden la
+/// presentación (octal/rwx).
+fn attrs_from_md(
+    md: &std::fs::Metadata,
+    req: &norte_vfs::AttrRequest,
+) -> std::collections::BTreeMap<String, norte_proto::AttrValue> {
+    use norte_proto::AttrValue;
+    let mut out = std::collections::BTreeMap::new();
+    if req.is_empty() {
+        return out;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if req.wants("posix.mode") {
+            out.insert(
+                "posix.mode".to_owned(),
+                AttrValue::Uint(u64::from(md.mode())),
+            );
+        }
+        if req.wants("posix.uid") {
+            out.insert("posix.uid".to_owned(), AttrValue::Uint(u64::from(md.uid())));
+        }
+        if req.wants("posix.gid") {
+            out.insert("posix.gid".to_owned(), AttrValue::Uint(u64::from(md.gid())));
+        }
+        if req.wants("posix.nlink") {
+            out.insert("posix.nlink".to_owned(), AttrValue::Uint(md.nlink()));
+        }
+        if req.wants("posix.ctime_ms") {
+            // ctime en ms; en pre-1970 (ctime negativo) el redondeo de la
+            // parte nsec va hacia cero — desviación ≤1ms, aceptada.
+            let ms = md.ctime() * 1000 + md.ctime_nsec() / 1_000_000;
+            out.insert("posix.ctime_ms".to_owned(), AttrValue::TimeMs(ms));
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if req.wants("win.attributes") {
+            out.insert(
+                "win.attributes".to_owned(),
+                AttrValue::Uint(u64::from(md.file_attributes())),
+            );
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    let _ = md;
+    out
 }
 
 /// Ante una colisión ya confirmada: ¿el nombre EXACTO (bytes) está en el
@@ -643,14 +745,23 @@ impl Provider for LocalProvider {
     }
 
     async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
+        self.stat_with(p, &norte_vfs::ListOptions::default()).await
+    }
+
+    async fn stat_with(&self, p: &VPath, opt: &norte_vfs::ListOptions) -> Result<Entry, Error> {
         self.ensure_caps().await;
         let native = self.native(p)?;
         let vpath = p.clone();
+        let req = opt.attrs.clone();
         blocking(move || {
             let md = std::fs::symlink_metadata(&native).map_err(|e| map_io(&e))?;
-            Ok(entry_from(vpath, &md))
+            Ok(entry_from(vpath, &md, &req))
         })
         .await
+    }
+
+    fn attrs(&self) -> &[norte_proto::AttrInfo] {
+        catalogo_local()
     }
 
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
@@ -709,6 +820,73 @@ impl Provider for LocalProvider {
                         size: None,
                         mtime_ms: None,
                     })
+                });
+                let stop = item.is_err();
+                if tx.blocking_send(item).is_err() {
+                    // Receptor soltado: cancelación cooperativa del listado.
+                    return;
+                }
+                if stop {
+                    return;
+                }
+            }
+        });
+        Ok(ReceiverStream::new(rx).boxed())
+    }
+
+    async fn list_with(
+        &self,
+        p: &VPath,
+        opt: &norte_vfs::ListOptions,
+    ) -> Result<EntryStream, Error> {
+        // Sin attr anunciado en la petición: camino rápido lazy (#52) intacto.
+        let advertised = catalogo_local();
+        if !opt
+            .attrs
+            .iter()
+            .any(|id| advertised.iter().any(|a| a.id == id))
+        {
+            return self.list(p).await;
+        }
+        self.ensure_caps().await;
+        let native = self.native(p)?;
+        // Misma validación previa síncrona que `list` (NotFound / no-dir en
+        // el Result, no como primer item del stream).
+        {
+            let probe = native.clone();
+            blocking(move || {
+                let md = std::fs::metadata(&probe).map_err(|e| map_io(&e))?;
+                if md.is_dir() {
+                    Ok(())
+                } else {
+                    Err(Error::Conflict {
+                        conflict: ConflictKind::TypeMismatch,
+                    })
+                }
+            })
+            .await?;
+        }
+        let base_vpath = p.clone();
+        let req = opt.attrs.clone();
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Entry, Error>>(64);
+        spawn_guarded_producer(tx, move |tx| {
+            let rd = match std::fs::read_dir(&native) {
+                Ok(rd) => rd,
+                Err(e) => {
+                    let _ = tx.blocking_send(Err(map_io(&e)));
+                    return;
+                }
+            };
+            for dent in rd {
+                let item = dent.map_err(|e| map_io(&e)).and_then(|d| {
+                    let seg = Segment::new(os_to_bytes(&d.file_name()))
+                        .map_err(|_| Error::InvalidPath)?;
+                    // Promoción (#108 bloque 2): attrs pedidos → un lstat por
+                    // entrada (`DirEntry::metadata` NO sigue symlinks), que
+                    // además hidrata size/mtime de gratis. Sigue dentro del
+                    // productor bloqueante — jamás I/O en el ejecutor async.
+                    let md = d.metadata().map_err(|e| map_io(&e))?;
+                    Ok(entry_from(base_vpath.join(seg), &md, &req))
                 });
                 let stop = item.is_err();
                 if tx.blocking_send(item).is_err() {

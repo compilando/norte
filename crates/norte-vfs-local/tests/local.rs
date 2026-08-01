@@ -757,3 +757,71 @@ async fn restore_trashed_is_strict() {
     // No pisó: el nuevo contenido sigue intacto.
     assert_eq!(std::fs::read(dir.path().join("v.txt")).unwrap(), b"nuevo");
 }
+
+// ---------- attrs posix (#108 bloque 2) ----------
+
+#[cfg(unix)]
+#[tokio::test]
+async fn attrs_posix_en_stat_y_list() {
+    use norte_proto::AttrValue;
+    use norte_vfs::{AttrRequest, ListOptions};
+    use std::os::unix::fs::MetadataExt;
+    let (p, root, base) = provider();
+    std::fs::write(base.join("a.txt"), b"hola").expect("seed");
+    let opt = ListOptions {
+        attrs: AttrRequest::sanitized(
+            [
+                "posix.mode",
+                "posix.uid",
+                "posix.gid",
+                "posix.nlink",
+                "posix.ctime_ms",
+            ]
+            .map(str::to_owned),
+        ),
+    };
+    let e = p
+        .stat_with(&child(&root, b"a.txt"), &opt)
+        .await
+        .expect("stat_with");
+    let md = std::fs::symlink_metadata(base.join("a.txt")).expect("md");
+    assert_eq!(
+        e.attrs.get("posix.mode"),
+        Some(&AttrValue::Uint(u64::from(md.mode())))
+    );
+    assert_eq!(
+        e.attrs.get("posix.uid"),
+        Some(&AttrValue::Uint(u64::from(md.uid())))
+    );
+    assert_eq!(
+        e.attrs.get("posix.gid"),
+        Some(&AttrValue::Uint(u64::from(md.gid())))
+    );
+    assert_eq!(
+        e.attrs.get("posix.nlink"),
+        Some(&AttrValue::Uint(md.nlink()))
+    );
+    assert!(matches!(
+        e.attrs.get("posix.ctime_ms"),
+        Some(AttrValue::TimeMs(_))
+    ));
+
+    // list_with promociona: attrs presentes Y size/mtime hidratados de paso.
+    let mut s = p.list_with(&root, &opt).await.expect("list_with");
+    let le = s.next().await.expect("una entrada").expect("ok");
+    assert!(le.attrs.contains_key("posix.mode"));
+    assert!(le.size.is_some(), "la promoción a metadata llena size");
+
+    // Camino rápido intacto (#52): sin petición, lazy como siempre.
+    let mut s = p.list(&root).await.expect("list");
+    let le = s.next().await.expect("una entrada").expect("ok");
+    assert!(le.attrs.is_empty() && le.size.is_none());
+
+    // Petición SIN attr local anunciado: también camino lazy.
+    let ajeno = ListOptions {
+        attrs: AttrRequest::sanitized(["s3.etag".to_owned()]),
+    };
+    let mut s = p.list_with(&root, &ajeno).await.expect("list_with");
+    let le = s.next().await.expect("una entrada").expect("ok");
+    assert!(le.attrs.is_empty() && le.size.is_none());
+}
