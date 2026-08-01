@@ -107,6 +107,7 @@ pub(crate) fn build_index_gz<R: Read>(
                 mtime_ms,
                 locator: None,
                 link_target,
+                zip: None,
             },
             EntryShape::File { offset, size } => Node {
                 kind: EntryKind::File,
@@ -114,6 +115,7 @@ pub(crate) fn build_index_gz<R: Read>(
                 mtime_ms,
                 locator: Some(Locator::Gz { offset, size }),
                 link_target: None,
+                zip: None,
             },
             EntryShape::Other => Node {
                 kind: EntryKind::Other,
@@ -121,6 +123,7 @@ pub(crate) fn build_index_gz<R: Read>(
                 mtime_ms,
                 locator: None,
                 link_target: None,
+                zip: None,
             },
         };
         index.insert_entry(&raw_name, node, limits)?;

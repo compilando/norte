@@ -126,6 +126,17 @@ pub(crate) enum Locator {
     Gz { offset: u64, size: u64 },
 }
 
+/// Tripleta zip retenida para attrs (#108 bloque 2), INDEPENDIENTE del
+/// `Locator` (que solo existe para entradas legibles): method/crc/packed se
+/// conservan TAMBIÉN en cifradas o de método no soportado — justo donde
+/// `archive.method` más interesa. `None` en tar/tar.gz, dirs y symlinks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ZipExtra {
+    pub method: u16,
+    pub crc32: u32,
+    pub comp_size: u64,
+}
+
 /// Un nodo del árbol virtual.
 #[derive(Debug, Clone)]
 pub(crate) struct Node {
@@ -137,6 +148,8 @@ pub(crate) struct Node {
     pub locator: Option<Locator>,
     /// Target crudo de un symlink de tar.
     pub link_target: Option<Vec<u8>>,
+    /// Metadatos zip por entrada para attrs (#108 bloque 2).
+    pub zip: Option<ZipExtra>,
 }
 
 impl Node {
@@ -147,6 +160,7 @@ impl Node {
             mtime_ms,
             locator: None,
             link_target: None,
+            zip: None,
         }
     }
 }
@@ -304,7 +318,12 @@ impl ArchiveIndex {
     }
 
     /// El `Entry` wire de un nodo (o de la raíz sintética del contenedor).
-    pub(crate) fn entry_for(&self, at: &VPath, inner: &[Vec<u8>]) -> Result<Entry, Error> {
+    pub(crate) fn entry_for(
+        &self,
+        at: &VPath,
+        inner: &[Vec<u8>],
+        req: &norte_vfs::AttrRequest,
+    ) -> Result<Entry, Error> {
         if inner.is_empty() {
             return Ok(Entry {
                 attrs: std::collections::BTreeMap::new(),
@@ -316,12 +335,60 @@ impl ArchiveIndex {
         }
         let node = self.nodes.get(inner).ok_or(Error::NotFound)?;
         Ok(Entry {
-            attrs: std::collections::BTreeMap::new(),
+            attrs: zip_attrs(node.zip.as_ref(), req),
             path: at.clone(),
             kind: node.kind,
             size: node.size,
             mtime_ms: node.mtime_ms,
         })
+    }
+}
+
+/// Materializa los attrs zip pedidos (#108 bloque 2) desde la tripleta
+/// retenida en el índice: cero I/O en tiempo de consulta.
+fn zip_attrs(
+    extra: Option<&ZipExtra>,
+    req: &norte_vfs::AttrRequest,
+) -> std::collections::BTreeMap<String, norte_proto::AttrValue> {
+    use norte_proto::AttrValue;
+    let mut out = std::collections::BTreeMap::new();
+    let Some(z) = extra else {
+        return out;
+    };
+    if req.wants("archive.method") {
+        out.insert(
+            "archive.method".to_owned(),
+            AttrValue::Text(zip_method_name(z.method)),
+        );
+    }
+    if req.wants("archive.packed_size") {
+        out.insert(
+            "archive.packed_size".to_owned(),
+            AttrValue::Uint(z.comp_size),
+        );
+    }
+    if req.wants("archive.crc32") {
+        out.insert(
+            "archive.crc32".to_owned(),
+            AttrValue::Uint(u64::from(z.crc32)),
+        );
+    }
+    out
+}
+
+/// Nombre humano del método zip (APPNOTE §4.4.5); desconocido = "method-N",
+/// jamás falla. Es un id ASCII de vocabulario, no texto del archivo.
+fn zip_method_name(m: u16) -> String {
+    match m {
+        0 => "store".to_owned(),
+        8 => "deflate".to_owned(),
+        9 => "deflate64".to_owned(),
+        12 => "bzip2".to_owned(),
+        14 => "lzma".to_owned(),
+        93 => "zstd".to_owned(),
+        95 => "xz".to_owned(),
+        99 => "aes".to_owned(),
+        n => format!("method-{n}"),
     }
 }
 
@@ -336,6 +403,7 @@ mod tests {
             mtime_ms: Some(0),
             locator: Some(Locator::Tar { offset: 0, size: 1 }),
             link_target: None,
+            zip: None,
         }
     }
 

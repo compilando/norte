@@ -516,3 +516,13 @@ async fn pax_global_header_crudo_no_fantasmea() {
         b"si"
     );
 }
+
+// ---------- attrs (#108 bloque 2): tar NO anuncia ninguno ----------
+
+#[tokio::test]
+async fn attrs_tar_catalogo_vacio() {
+    use norte_testkit::TarSmith;
+    let tar = TarSmith::new().file(b"f.txt", b"x").build();
+    let (p, _root) = common::tar_provider(&tar).await;
+    assert!(norte_vfs::Provider::attrs(&p).is_empty());
+}

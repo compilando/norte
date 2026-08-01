@@ -100,6 +100,7 @@ pub(crate) fn build_index<R: Read + Seek>(
                 mtime_ms,
                 locator: None,
                 link_target,
+                zip: None,
             },
             EntryShape::File { offset, size } => {
                 if offset
@@ -117,6 +118,7 @@ pub(crate) fn build_index<R: Read + Seek>(
                     mtime_ms,
                     locator: Some(Locator::Tar { offset, size }),
                     link_target: None,
+                    zip: None,
                 }
             }
             EntryShape::Other => Node {
@@ -125,6 +127,7 @@ pub(crate) fn build_index<R: Read + Seek>(
                 mtime_ms,
                 locator: None,
                 link_target: None,
+                zip: None,
             },
         };
         index.insert_entry(&raw_name, node, limits)?;

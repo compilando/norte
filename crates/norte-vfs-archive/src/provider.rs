@@ -875,6 +875,35 @@ impl Drop for CancelOnDrop {
     }
 }
 
+/// Catálogo de attrs del formato zip (#108 bloque 2): todo sale del CD ya
+/// indexado — cero I/O por consulta.
+fn catalogo_zip() -> &'static [norte_proto::AttrInfo] {
+    use norte_proto::{AttrHint, AttrInfo, AttrType};
+    static CAT: std::sync::LazyLock<Vec<AttrInfo>> = std::sync::LazyLock::new(|| {
+        vec![
+            AttrInfo {
+                id: "archive.method".to_owned(),
+                label: "Method".to_owned(),
+                ty: AttrType::Text,
+                hint: AttrHint::Opaque,
+            },
+            AttrInfo {
+                id: "archive.packed_size".to_owned(),
+                label: "Packed".to_owned(),
+                ty: AttrType::Uint,
+                hint: AttrHint::Size,
+            },
+            AttrInfo {
+                id: "archive.crc32".to_owned(),
+                label: "CRC-32".to_owned(),
+                ty: AttrType::Uint,
+                hint: AttrHint::Opaque,
+            },
+        ]
+    });
+    &CAT
+}
+
 #[async_trait]
 impl Provider for ArchiveProvider {
     fn scheme(&self) -> &str {
@@ -891,9 +920,25 @@ impl Provider for ArchiveProvider {
     }
 
     async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
+        self.stat_with(p, &norte_vfs::ListOptions::default()).await
+    }
+
+    async fn stat_with(&self, p: &VPath, opt: &norte_vfs::ListOptions) -> Result<Entry, Error> {
         let aref = self.split(p)?;
         let cached = self.index_for(&aref).await?;
-        cached.index.entry_for(p, &Self::inner_key(&aref))
+        cached
+            .index
+            .entry_for(p, &Self::inner_key(&aref), &opt.attrs)
+    }
+
+    /// Catálogo por FORMATO (#108 bloque 2): zip retiene method/crc/packed
+    /// en su CD; tar/tar.gz no tienen method ni CRC por entrada (y el packed
+    /// por entrada de un stream gz sólido no significa nada) → vacío.
+    fn attrs(&self) -> &[norte_proto::AttrInfo] {
+        match self.format {
+            Format::Zip => catalogo_zip(),
+            Format::Tar | Format::TarGz => &[],
+        }
     }
 
     /// Listado de un dir del árbol virtual.
@@ -910,6 +955,14 @@ impl Provider for ArchiveProvider {
     /// Info-ZIP 0x7075 se ignora por diseño — jamás sustituye el nombre ni
     /// mata el archivo (H3 cerrado).
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
+        self.list_with(p, &norte_vfs::ListOptions::default()).await
+    }
+
+    async fn list_with(
+        &self,
+        p: &VPath,
+        opt: &norte_vfs::ListOptions,
+    ) -> Result<EntryStream, Error> {
         let aref = self.split(p)?;
         let cached = self.index_for(&aref).await?;
         let index = &cached.index;
@@ -932,7 +985,7 @@ impl Provider for ArchiveProvider {
             let child_path = p.join(seg);
             let mut child_key = key.clone();
             child_key.push(name.clone());
-            entries.push(index.entry_for(&child_path, &child_key));
+            entries.push(index.entry_for(&child_path, &child_key, &opt.attrs));
         }
         Ok(futures::stream::iter(entries).boxed())
     }

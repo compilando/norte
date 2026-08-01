@@ -65,6 +65,13 @@ pub(crate) fn build_index<R: Read + Seek>(
                     uncomp_size: entry.uncomp_size,
                 }),
                 link_target: None,
+                // SIEMPRE, también sin locator (#108 bloque 2): method es
+                // precisamente más interesante en cifradas/no-soportadas.
+                zip: Some(crate::index::ZipExtra {
+                    method: entry.method,
+                    crc32: entry.crc32,
+                    comp_size: entry.comp_size,
+                }),
             }
         };
         index.insert_entry(&entry.name_raw, node, limits)?;

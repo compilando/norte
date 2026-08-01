@@ -722,3 +722,63 @@ async fn zip_con_datos_prependados_se_rechaza_documentado() {
     }
     assert!(matches!(got_err, Some(Error::Corrupt)), "fue {got_err:?}");
 }
+
+// ---------- attrs zip (#108 bloque 2) ----------
+
+#[tokio::test]
+async fn attrs_zip_method_packed_crc() {
+    use norte_proto::AttrValue;
+    use norte_vfs::{AttrRequest, ListOptions};
+
+    // Una entrada normal (store) y una CIFRADA (bit 0: sin locator).
+    let zip = ZipSmith::new()
+        .file(b"normal.txt", b"contenido")
+        .file_raw(b"cifrada.txt", b"xxxx", 8, 1)
+        .build();
+    let (p, root) = common::zip_provider(&zip).await;
+    let opt = ListOptions {
+        attrs: AttrRequest::sanitized(
+            ["archive.method", "archive.packed_size", "archive.crc32"].map(str::to_owned),
+        ),
+    };
+    let e = p
+        .stat_with(&root.join(seg(b"normal.txt")), &opt)
+        .await
+        .expect("stat_with");
+    assert_eq!(
+        e.attrs.get("archive.method"),
+        Some(&AttrValue::Text("store".to_owned()))
+    );
+    assert_eq!(
+        e.attrs.get("archive.packed_size"),
+        Some(&AttrValue::Uint(b"contenido".len() as u64))
+    );
+    assert!(matches!(
+        e.attrs.get("archive.crc32"),
+        Some(AttrValue::Uint(_))
+    ));
+
+    // La CIFRADA (no legible, locator None) SÍ conserva sus attrs: method
+    // es precisamente más interesante ahí.
+    let enc = p
+        .stat_with(&root.join(seg(b"cifrada.txt")), &opt)
+        .await
+        .expect("stat_with de cifrada");
+    assert_eq!(
+        enc.attrs.get("archive.method"),
+        Some(&AttrValue::Text("deflate".to_owned()))
+    );
+
+    // list_with lleva lo mismo por entrada; sin pedir → nada.
+    let mut s = p.list_with(&root, &opt).await.expect("list_with");
+    while let Some(e) = s.next().await {
+        assert!(e.expect("entrada").attrs.contains_key("archive.method"));
+    }
+    assert!(
+        p.stat(&root.join(seg(b"normal.txt")))
+            .await
+            .expect("stat")
+            .attrs
+            .is_empty()
+    );
+}
