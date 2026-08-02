@@ -478,7 +478,7 @@ async fn main() -> Result<()> {
     let approvals = backend.take_approvals();
     // #44: avisos `connection.degraded` del daemon → indicador persistente.
     let degraded = backend.take_degraded();
-    let mut help_lines = norte_tui::help::build(&browse_eff, &viewer_eff);
+    let mut help_lines = norte_tui::help::build(&browse_eff, &viewer_eff, &dialog_eff);
     // Filas de la command palette (H1 T4): PRECOMPUTADAS de los efectivos
     // browse/viewer ANTES de que se muevan al `Resolver` de abajo — mismo
     // criterio que `help_lines`/`dialog_hints`.
@@ -2439,7 +2439,7 @@ async fn reload_config(
                     .max(viewer.discarded_lua_bindings())
                     .max(dialog.discarded_lua_bindings());
                 // La ayuda refleja el keymap VIGENTE: se reconstruye aquí.
-                *help_lines = norte_tui::help::build(&browse, &viewer);
+                *help_lines = norte_tui::help::build(&browse, &viewer, &dialog);
                 app.help = None;
                 // Filas de la palette (H1 T4): reconstruidas del keymap
                 // VIGENTE, ANTES de que se mueva al resolver de abajo —

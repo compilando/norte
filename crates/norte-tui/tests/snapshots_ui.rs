@@ -698,9 +698,24 @@ fn snapshot_ayuda() {
         norte_tui::keymap::Effective::build_for(preset, &[], norte_tui::keymap::COMMANDS, screen)
             .unwrap()
     };
+    // #113: la sección de diálogos sale del efectivo `dialog`, cuyo
+    // vocabulario une COMMANDS y DIALOG_COMMANDS (como `build_keymaps`).
+    let dialog_known: Vec<&str> = norte_tui::keymap::COMMANDS
+        .iter()
+        .copied()
+        .chain(norte_tui::keymap::DIALOG_COMMANDS.iter().copied())
+        .collect();
+    let dialog = norte_tui::keymap::Effective::build_for(
+        preset,
+        &[],
+        &dialog_known,
+        norte_tui::keymap::Screen::Dialog,
+    )
+    .unwrap();
     let lines = norte_tui::help::build(
         &build(norte_tui::keymap::Screen::Browse),
         &build(norte_tui::keymap::Screen::Viewer),
+        &dialog,
     );
     app.help = Some(norte_tui::app::Help { lines, scroll: 0 });
     let arriba = render(&app);

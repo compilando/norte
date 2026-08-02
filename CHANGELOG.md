@@ -632,6 +632,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Dialog keys are now discoverable in-app (#113):** the F1 help gains a
+  "Dialogs and overlays" section built from the effective `dialog` keymap —
+  the same generated-from-config invariant as the other sections. Overlay
+  footers stay space-filtered (arrows and, in the columns picker, the
+  reorder verbs are dropped to fit 80 columns), but every dialog verb and
+  its real chord is now listed somewhere reachable without opening the
+  manual; a note clarifies each dialog supports its own subset.
 - **Config writes are now atomic and cross-process safe (#116):** every
   `norte.toml` persist helper (theme, settings, columns, formats, hotlist)
   used to read-modify-write the file in place — two writers (e.g. the GUI
