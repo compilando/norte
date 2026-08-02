@@ -195,7 +195,10 @@ fn cd_landed_pane(outcome: &Cd) -> Option<usize> {
     match outcome {
         Cd::Filling(f) => Some(f.pane),
         Cd::Replaced(pane) => Some(*pane),
-        Cd::Failed(..) | Cd::Cancelled => None,
+        // Un refresh re-lista IN SITU (mismo dir, orden ya aplicado): no hay
+        // aterrizaje que ordenar ni decoración nueva que pedir — paridad con
+        // el camino de `on_tick`, que tampoco lo hace.
+        Cd::Refreshed(..) | Cd::Failed(..) | Cd::Cancelled => None,
     }
 }
 
@@ -217,6 +220,11 @@ enum Cd {
     Failed(Error),
     /// El cd se abandonó (Esc/Ctrl-C): nada cambió, el relleno sigue.
     Cancelled,
+    /// #118: `pane.refresh` (Ctrl+R) re-listó estos panes DESDE `dispatch`
+    /// (que no ve `fill`/`last_probed`): el desenlace viaja al run loop para
+    /// que [`apply_cd`] aplique el ritual post-refresh — mismo `[bool; 2]`
+    /// que devuelve [`refresh_panes`] (`true` = listado completo asentado).
+    Refreshed([bool; 2]),
 }
 
 /// MINOR-4 (H1 close): un modal puede llegar de forma ASÍNCRONA (p. ej.
@@ -311,7 +319,8 @@ mod palette_modal_guard_tests {
 /// regla 3); un REEMPLAZO del MISMO pane lo suelta (su drenador drenaría el
 /// listado viejo sobre el nuevo); un FALLO o un cd ABANDONADO no tocan el pane
 /// —sigue en su listado anterior, cuyo relleno continúa siendo válido— así que
-/// no tocan el fill (#78).
+/// no tocan el fill (#78). Un `Refreshed` (#118) delega en
+/// [`release_refreshed_fill`]: el mismo ritual que [`after_panes_refresh`].
 fn apply_cd(fill: &mut Option<Fill>, last_probed: &mut Option<(usize, VPath)>, outcome: Cd) {
     match outcome {
         Cd::Filling(f) => {
@@ -329,7 +338,33 @@ fn apply_cd(fill: &mut Option<Fill>, last_probed: &mut Option<(usize, VPath)>, o
         // El pane no cambió: su relleno (si lo había) sigue drenando el mismo
         // listado. Soltarlo aquí lo dejaba colgado en `loading=true` (#78).
         Cd::Failed(..) | Cd::Cancelled => {}
+        // #118: Ctrl+R desde `dispatch` — misma semántica que el ritual de
+        // los otros disparadores (`after_panes_refresh`), un solo cuerpo.
+        // `reap_search_run` no hace falta aquí: `refresh_panes` SALTA los
+        // panes virtuales (jamás los saca del modo), así que no hay run de
+        // búsqueda que cosechar por este camino.
+        Cd::Refreshed(refreshed) => release_refreshed_fill(refreshed, fill, last_probed),
     }
+}
+
+/// Núcleo del ritual post-refresh (#117 review, #118): suelta el drenador
+/// paginado SOLO si su pane fue re-listado de verdad (soltarlo a ciegas tras
+/// un Esc a medias dejaría el pane colgado en `loading` para siempre, #78) e
+/// invalida la dedup de la sonda #52 (un listado nuevo re-lazifica las
+/// entries). Cuerpo ÚNICO para [`after_panes_refresh`] (run loop) y el brazo
+/// `Cd::Refreshed` de [`apply_cd`] (Ctrl+R vía `dispatch`).
+fn release_refreshed_fill(
+    refreshed: [bool; 2],
+    fill: &mut Option<Fill>,
+    last_probed: &mut Option<(usize, VPath)>,
+) {
+    if refreshed == [false; 2] {
+        return;
+    }
+    if fill.as_ref().is_some_and(|f| refreshed[f.pane]) {
+        *fill = None;
+    }
+    *last_probed = None;
 }
 
 /// Aplica un mensaje del drenador de paginación (ADR 0017) al pane. Si el pane
@@ -3003,10 +3038,7 @@ fn after_panes_refresh(
     if refreshed == [false; 2] {
         return;
     }
-    if fill.as_ref().is_some_and(|f| refreshed[f.pane]) {
-        *fill = None;
-    }
-    *last_probed = None;
+    release_refreshed_fill(refreshed, fill, last_probed);
     reap_search_run(app, search_run);
 }
 
@@ -3800,8 +3832,11 @@ async fn dispatch(
         // VISIBLE, cursor por índice; el pane virtual de búsqueda se salta
         // — sus hits no viven en un dir). Ambos panes, como tras una task
         // propia: un cambio externo raramente respeta el foco.
+        // #118: el desenlace VIAJA al run loop (`Cd::Refreshed`) — dispatch
+        // no ve `fill`/`last_probed`, y sin el ritual un drenador paginado
+        // vivo duplicaría filas sobre el listado recién completo.
         Command::PaneRefresh => {
-            refresh_panes(app, backend, events).await;
+            cd_outcome = Cd::Refreshed(refresh_panes(app, backend, events).await);
         }
         // Insert/Ctrl+A/Ctrl+Shift+A/`*` (#103): mc/Total Commander —
         // togglear la marca de esta entrada y avanzar (mantener Insert barre
@@ -4619,5 +4654,75 @@ mod apply_cd_tests {
         let mut lp = None;
         apply_cd(&mut f, &mut lp, Cd::Cancelled);
         assert!(f.is_some());
+    }
+
+    /// #118: Ctrl+R re-listó el pane 0 (listado COMPLETO nuevo) — su
+    /// drenador viejo duplicaría filas si siguiera vivo. La dedup de la
+    /// sonda #52 también caduca: el listado nuevo re-lazifica las entries.
+    #[test]
+    fn refreshed_suelta_el_fill_del_pane_relistado() {
+        let mut f = Some(fill(0));
+        let mut lp = Some((0, norte_proto::VPath::parse("file:///d/x").unwrap()));
+        apply_cd(&mut f, &mut lp, Cd::Refreshed([true, false]));
+        assert!(f.is_none(), "el drenador del listado viejo se suelta");
+        assert!(lp.is_none(), "la dedup de la sonda #52 caduca");
+    }
+
+    /// #118: Esc a medias — el pane 1 NO llegó a re-listarse, su relleno
+    /// paginado sigue siendo válido (#78: soltarlo lo colgaba en loading).
+    #[test]
+    fn refreshed_a_medias_conserva_el_fill_del_pane_no_relistado() {
+        let mut f = Some(fill(1));
+        let mut lp = None;
+        apply_cd(&mut f, &mut lp, Cd::Refreshed([true, false]));
+        assert!(
+            f.is_some(),
+            "el fill del pane NO re-listado sobrevive al Esc a medias"
+        );
+    }
+
+    /// #118: refresh totalmente abandonado (Esc antes del primer pane) o
+    /// ambos panes en modo virtual: nada cambió, nada se toca.
+    #[test]
+    fn refreshed_vacio_no_toca_nada() {
+        let mut f = Some(fill(0));
+        let mut lp = Some((0, norte_proto::VPath::parse("file:///d/x").unwrap()));
+        apply_cd(&mut f, &mut lp, Cd::Refreshed([false, false]));
+        assert!(f.is_some(), "sin pane re-listado, el fill sigue");
+        assert!(lp.is_some(), "sin pane re-listado, la dedup sigue");
+    }
+}
+
+#[cfg(test)]
+mod refresh_ritual_tests {
+    use super::{App, Fill, FillMsg, Pane, SearchRun, after_panes_refresh};
+    use norte_proto::VPath;
+
+    fn fill(pane: usize) -> Fill {
+        let (_tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
+        Fill { pane, rx }
+    }
+
+    fn app() -> App {
+        let d = VPath::parse("file:///d").expect("wire de test");
+        App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()))
+    }
+
+    /// #118 (regresión pedida en el issue): un Esc a medias del refresh
+    /// re-listó el pane 0 pero ABANDONÓ el 1 — el ritual solo puede soltar
+    /// el drenador del pane re-listado de verdad; el del otro sigue drenando
+    /// un listado que sigue siendo el suyo (#78).
+    #[test]
+    fn esc_a_medias_conserva_el_fill_del_pane_no_refrescado() {
+        let app = app();
+        let mut f = Some(fill(1));
+        let mut lp = Some((1, VPath::parse("file:///d/x").unwrap()));
+        let mut sr: Option<SearchRun> = None;
+        after_panes_refresh(&app, [true, false], &mut f, &mut lp, &mut sr);
+        assert!(
+            f.is_some(),
+            "el fill del pane 1 (no re-listado) sobrevive al Esc a medias"
+        );
+        assert!(lp.is_none(), "la dedup de la sonda #52 caduca igualmente");
     }
 }

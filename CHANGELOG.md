@@ -632,6 +632,16 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Ctrl+R skipped the post-refresh ritual (#118):** `pane.refresh` ran from
+  the command dispatcher, which cannot see the run loop's paginated fill or
+  the stat-probe dedup — with a large listing still streaming in, the old
+  drainer kept appending batches onto the freshly refreshed pane
+  (duplicated rows until the next cd) and the focused entry could refuse to
+  re-hydrate its lazified size. The refresh outcome now travels back to the
+  run loop (`Cd::Refreshed`), which applies the same ritual as
+  mutation-completed refreshes: the drainer is released only for panes that
+  truly got a complete listing (an Esc mid-refresh keeps the other pane's
+  still-valid fill), and the probe dedup is invalidated.
 - **Daemon plugin previews skipped host-side text decoding (#101):** the
   `plugin.preview`/`plugin.preview_styled` daemon handlers passed RAW bytes
   to the previewer guest, unlike the embedded backend, which decodes to text
