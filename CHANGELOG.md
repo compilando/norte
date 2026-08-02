@@ -7,6 +7,8 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+## [0.3.0-alpha.2] - 2026-08-02
+
 ### Added
 
 - **The TUI watches the visible directories (#106):** external changes to
@@ -800,5 +802,6 @@ and some daemon/socket tests are only available in CI environments.
 - Writes inside ZIP archives; list, restore, and purge operations for logical
   trash; and the M5 GUI.
 
-[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.1...HEAD
+[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.2...HEAD
+[0.3.0-alpha.2]: https://github.com/compilando/norte/compare/v0.3.0-alpha.1...v0.3.0-alpha.2
 [0.3.0-alpha.1]: https://github.com/compilando/norte/releases/tag/v0.3.0-alpha.1
