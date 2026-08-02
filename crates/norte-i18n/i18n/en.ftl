@@ -193,6 +193,7 @@ col-attr-archive-crc32 = CRC-32
 status-marked = { $n } marked, { $size }
 status-marked-with-dirs = { $n } marked, { $size } + { $dirs } dirs
 status-marks-pruned = { $n } marks dropped, their entries are gone
+status-watch-degraded = directory watching degraded to polling (inotify limit?) — creates/deletes/renames show up within seconds; edits to existing files are not detected
 msg-names-encoding = names shown as { $enc } (display only; bytes unchanged)
 msg-names-encoding-off = names shown as-is (reinterpretation off)
 msg-hidden-shown = hidden entries shown

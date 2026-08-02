@@ -354,6 +354,30 @@ mod palette_modal_guard_tests {
         );
     }
 
+    /// #106 (review MAJOR-2): un evento de vigilancia JAMÁS refresca con
+    /// un overlay abierto o un quick search tecleándose — `refresh_panes`
+    /// se comería las teclas y Esc cambiaría de significado. El evento
+    /// queda encolado y dispara al despejarse.
+    #[test]
+    fn watch_refresh_gateado_por_overlays() {
+        let mut a = app();
+        assert!(watch_refresh_allowed(&a), "sin overlays: permitido");
+        a.modal = Some(approval_modal());
+        assert!(!watch_refresh_allowed(&a), "modal abierto: encolado");
+        a.modal = None;
+        a.help = Some(norte_tui::app::Help {
+            lines: Vec::new(),
+            scroll: 0,
+        });
+        assert!(!watch_refresh_allowed(&a), "ayuda abierta: encolado");
+        a.help = None;
+        a.panes[0].quick_start(nav::Mode::Filter);
+        assert!(
+            !watch_refresh_allowed(&a),
+            "quick search tecleándose: encolado"
+        );
+    }
+
     /// S3: el mismo caso para `app.settings` — un modal en vuelo (p.ej. una
     /// aprobación de policy) gana sobre el overlay de ajustes abierto.
     #[test]
@@ -795,7 +819,20 @@ async fn run(
     // Fetch de decoraciones de plugin en vuelo (G3b, ADR 0037): a lo sumo
     // uno, molde de `stat_probe`/`fill`.
     let mut decorate_fetch: [Option<DecorateFetch>; 2] = [None, None];
+    // #106 (watching): vigilancia de los dirs visibles — notify con
+    // fallback a sondeo (pitfall inotify). El conjunto vigilado se
+    // re-sincroniza en CADA vuelta (diff barato, no-op sin cambios).
+    // Regla 2, exención puntual (review MINOR-6): crear el watcher y los
+    // watch()/unwatch() de rewatch son syscalls cortas inline (mismo
+    // criterio documentado que el draw síncrono de ratatui más abajo);
+    // solo corren al arrancar o al CAMBIAR de dir.
+    let mut dir_watch = norte_tui::watch::DirWatch::new();
+    let mut dir_watch_alive = true;
     loop {
+        dir_watch.rewatch(&watch_targets(app));
+        if dir_watch.take_degraded_notice() {
+            app.message = Some(t("status-watch-degraded"));
+        }
         // Barra Lua en cada vuelta, ANTES del draw (cacheada en el host).
         refresh_lua_status(app, lua_host.as_ref());
         // Exención puntual de la regla 2: el draw escribe stdout síncrono
@@ -820,6 +857,32 @@ async fn run(
                 // — ÚNICO para los tres disparadores del refresh (#117).
                 let refreshed = on_tick(app, backend, &mut events).await;
                 after_panes_refresh(app, refreshed, &mut fill, &mut last_probed, &mut search_run);
+            }
+            ev = dir_watch.rx.recv(), if dir_watch_alive && watch_refresh_allowed(app) => {
+                // #106: cambio EXTERNO en un dir vigilado (debounced) —
+                // mismo camino que pane.refresh (Ctrl+R): refresh
+                // cancelable + ritual #118. GATEADO (review MAJOR-2): con
+                // un overlay/quick abierto, `refresh_panes` se comería las
+                // teclas del usuario y Esc cambiaría de significado — la
+                // precondición deja el evento ENCOLADO (canal de capacidad
+                // 1) y dispara al cerrarse el overlay.
+                if let Some(()) = ev {
+                    let refreshed = refresh_panes(app, backend, &mut events).await;
+                    after_panes_refresh(
+                        app,
+                        refreshed,
+                        &mut fill,
+                        &mut last_probed,
+                        &mut search_run,
+                    );
+                } else {
+                    // Inalcanzable con `dir_watch` vivo (retiene el emisor
+                    // crudo): si pasara, DESARMAR el brazo — un canal
+                    // cerrado devolvería None en bucle (spin al 100%,
+                    // review MINOR-1).
+                    tracing::warn!("dir watch pipeline murió; brazo desarmado");
+                    dir_watch_alive = false;
+                }
             }
             Some(task) = async {
                 match &mut foreign_tasks {
@@ -1777,12 +1840,45 @@ async fn on_columns_key(
     false
 }
 
+/// ¿Puede un evento de vigilancia disparar un refresh AHORA? (#106,
+/// review MAJOR-2): con cualquier overlay abierto o un quick search
+/// tecleándose, `refresh_panes` consumiría las teclas del usuario (su loop
+/// de cancelación descarta todo lo que no sea Esc/Ctrl-C) y Esc pasaría a
+/// significar «abandona el refresh» — jamás pisar la interacción en curso.
+/// El evento queda encolado (capacidad 1) y dispara al despejarse.
+fn watch_refresh_allowed(app: &App) -> bool {
+    app.modal.is_none()
+        && app.palette.is_none()
+        && app.settings.is_none()
+        && app.help.is_none()
+        && app.viewer.is_none()
+        && app.theme_picker.is_none()
+        && app.columns_picker.is_none()
+        && app.extensions.is_none()
+        && app.nav_popup.is_none()
+        && app.search_dialog.is_none()
+        && app.panes.iter().all(|p| p.quick().is_none())
+}
+
+/// Dirs NATIVOS vigilables de los panes (#106): solo `file://` (un dir
+/// sftp/S3/archive no tiene inotify — su refresh sigue siendo Ctrl+R) y
+/// solo panes reales (el virtual de búsqueda no muestra un dir). Puro:
+/// `vpath_to_native` no toca el FS.
+fn watch_targets(app: &App) -> [Option<std::path::PathBuf>; 2] {
+    std::array::from_fn(|i| {
+        let p = &app.panes[i];
+        if p.virtual_search {
+            return None;
+        }
+        norte_vfs_local::vpath_to_native(p.dir()).ok()
+    })
+}
+
 /// Los ids attr CONFIGURADOS de cada pane visible (#117): la huella que
 /// decide si un cambio de columnas exige re-listar — los valores attr solo
 /// llegan pidiéndolos en `fs.list`, así que un id nuevo con el listado
 /// viejo pintaría blanco (ausencia) hasta el próximo cd. La huella ordenada
-/// vive en el modelo (`attr_fingerprint`, review tarea 3): una única
-/// definición para ambos frontends.
+/// vive en el modelo (una única definición para ambos frontends).
 fn pane_attr_ids(app: &App) -> Vec<Vec<String>> {
     // #117-follow-up (review MAJOR-1): huella COMBINADA attr+plugin, única
     // definición en el modelo (`pane_fingerprint`) para ambos frontends —

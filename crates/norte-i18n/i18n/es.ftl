@@ -193,6 +193,7 @@ col-attr-archive-crc32 = CRC-32
 status-marked = { $n } marcadas, { $size }
 status-marked-with-dirs = { $n } marcadas, { $size } + { $dirs } dirs
 status-marks-pruned = { $n } marcas caídas, sus entradas ya no están
+status-watch-degraded = vigilancia de directorios degradada a sondeo (¿límite de inotify?) — crear/borrar/renombrar se ve en segundos; editar un fichero existente no se detecta
 msg-names-encoding = nombres mostrados como { $enc } (solo display; los bytes no cambian)
 msg-names-encoding-off = nombres tal cual (reinterpretación apagada)
 msg-hidden-shown = entradas ocultas visibles

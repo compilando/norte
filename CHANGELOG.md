@@ -9,6 +9,22 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The TUI watches the visible directories (#106):** external changes to
+  the panes' local directories now refresh automatically — a native
+  watcher (inotify/FSEvents/ReadDirectoryChangesW) over both visible
+  `file://` dirs, with a graceful fallback to a 2-second mtime poll (with
+  a one-time status notice) when the watcher cannot start or the inotify
+  watch limit is hit, never a failure. Events are debounced with a true
+  trailing edge plus a floor between refreshes, so a large copy into the
+  watched directory coalesces instead of refreshing every 300 ms; a watch
+  event never interrupts an open dialog, overlay, or quick search — it
+  queues and fires when the interaction ends. The refresh takes the same
+  cancellable path as Ctrl+R (marks survive, #118 ritual). Remote and
+  archive panes remain manual-refresh (no inotify there); polling-mode
+  limits are stated honestly in the notice (edits to existing file
+  contents don't change the parent dir's mtime). GUI watching is still
+  pending on #106.
+
 - **Plugin column cells rendered in both frontends (#117 follow-up):**
   `plugin:<plugin>/<column>` ids configured in `[ui.columns]` now paint
   real cells through the shared column funnel — default width 12 (spec

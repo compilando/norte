@@ -25,6 +25,7 @@ norte-i18n.workspace = true
 norte-proto.workspace = true
 norte-theme.workspace = true
 norte-vfs-local.workspace = true
+notify.workspace = true
 schemars = { workspace = true, features = ["derive"], optional = true }
 serde.workspace = true
 thiserror.workspace = true

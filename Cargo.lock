@@ -4462,6 +4462,7 @@ dependencies = [
  "norte-theme",
  "norte-vfs",
  "norte-vfs-local",
+ "notify",
  "proptest",
  "ratatui",
  "schemars 1.2.1",

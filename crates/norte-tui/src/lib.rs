@@ -16,3 +16,4 @@ pub mod tasks;
 pub mod theme;
 pub mod ui;
 pub mod viewer;
+pub mod watch;
