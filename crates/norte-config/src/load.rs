@@ -70,6 +70,12 @@ pub fn persist_ui_theme_to(dir: &std::path::Path, name: &str) -> std::io::Result
 /// si puede indexar) — así el guard nunca rechaza una forma que la propia
 /// librería aceptaría.
 ///
+/// Desde #116 la escritura es SEGURA entre procesos: toma el lock advisory
+/// `norte.toml.lock` ANTES de leer (puede bloquear mientras otro proceso
+/// persiste — ver `lock_user_toml`) y reemplaza el fichero vía tmp +
+/// `rename` atómico (`write_user_toml`): un lector concurrente jamás ve
+/// un fichero a medias. Aplica a TODA la familia `persist_*`.
+///
 /// # Errors
 /// [`std::io::Error`] si no hay dir de usuario, el TOML existente no parsea,
 /// la sección existente no es una tabla (forma inesperada, ver el CONTRATO
@@ -82,6 +88,8 @@ pub fn persist_set(
 ) -> std::io::Result<PathBuf> {
     use std::io::{Error, ErrorKind};
     std::fs::create_dir_all(dir)?;
+    // #116: lock ANTES de leer — el RMW entero es la sección crítica.
+    let _lock = lock_user_toml(dir)?;
     let path = dir.join("norte.toml");
     let mut doc = match std::fs::read_to_string(&path) {
         Ok(s) => s.parse::<toml_edit::DocumentMut>().map_err(|_| {
@@ -126,7 +134,7 @@ pub fn persist_set(
         toml_edit::Item::Table(t)
     });
     table[key] = toml_edit::Item::Value(value);
-    std::fs::write(&path, doc.to_string())?;
+    write_user_toml(&path, &doc)?;
     Ok(path)
 }
 
@@ -178,6 +186,8 @@ pub fn persist_columns(
     sort: PersistSort<'_>,
 ) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
+    // #116: lock ANTES de leer — el RMW entero es la sección crítica.
+    let _lock = lock_user_toml(dir)?;
     let path = dir.join("norte.toml");
     let mut doc = open_user_toml(&path)?;
     let segs: Vec<&str> = match scheme {
@@ -210,8 +220,76 @@ pub fn persist_columns(
         "sort",
         toml_edit::Item::Value(toml_edit::Value::InlineTable(sort_tbl)),
     );
-    std::fs::write(&path, doc.to_string())?;
+    write_user_toml(&path, &doc)?;
     Ok(path)
+}
+
+/// Lock advisory cross-process del `norte.toml` (#116): `flock`/`LockFileEx`
+/// sobre el hermano DEDICADO `norte.toml.lock` — jamás sobre el propio
+/// `norte.toml`: la escritura atómica lo reemplaza por `rename` (inode
+/// nuevo) y un lock sobre el inode viejo no excluiría al siguiente
+/// escritor. Los escritores lo toman ANTES de leer: la sección crítica es
+/// el ciclo lee-modifica-escribe ENTERO (lost update cerrado, también
+/// entre procesos — GUI + TUI sobre el mismo fichero). Se libera al soltar
+/// el guard (cerrar el descriptor); el SO lo suelta igualmente si el
+/// proceso muere — no hay locks rancios tras un crash.
+struct UserTomlLock {
+    /// Mantiene vivo el descriptor bloqueado; drop = cerrar = unlock.
+    _file: std::fs::File,
+}
+
+/// Toma (bloqueando) el lock de escritores de `dir`. BLOQUEANTE como el
+/// resto del persistidor (regla 2: el caller ya envuelve en
+/// `spawn_blocking`); los escritores son cortos — retener el lock
+/// milisegundos — y no hay locks anidados, así que la espera no acota:
+/// un peer VIVO pero colgado reteniéndolo es el único caso patológico
+/// (decisión: bloquear simple; el SO libera al morir el proceso).
+///
+/// La apertura es SIN truncar (review #116 MAJOR-1): `File::create`
+/// (`CREATE_ALWAYS`) sobre un lockfile que otro proceso tiene bajo
+/// `LockFileEx` puede FALLAR en Windows (sharing/lock violation) en vez de
+/// llegar al `lock()` que espera — exactamente la contención GUI+TUI que
+/// este lock cierra. En POSIX truncar un fichero vacío era inocuo, pero la
+/// forma canónica de abrir un lockfile es no tocarlo jamás.
+fn lock_user_toml(dir: &Path) -> std::io::Result<UserTomlLock> {
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(dir.join("norte.toml.lock"))?;
+    file.lock()?;
+    Ok(UserTomlLock { _file: file })
+}
+
+/// Escritura ATÓMICA del `norte.toml` (#116): tmp hermano + `rename`
+/// (atómico en POSIX; `std::fs::rename` reemplaza también en Windows). Un
+/// lector concurrente ve el fichero viejo o el nuevo COMPLETO — jamás un
+/// truncado a medias que parsee "bien" y del que un escritor posterior
+/// reconstruya el documento perdiendo secciones ajenas. `sync_all` antes
+/// del rename evita la ventana fichero-vacío-tras-crash; el rename mismo
+/// puede perderse en un corte de luz (sin fsync del dir, a propósito):
+/// reaparece la config VIEJA — consistente, solo rancia. Un tmp huérfano
+/// de un crash es inocuo: la siguiente escritura (mismo nombre, bajo el
+/// lock) lo pisa. Los permisos del fichero existente se COPIAN al tmp
+/// (review #116 MINOR-2: sin esto un `chmod 600` del usuario se ensanchaba
+/// al umask en el reemplazo). Limitación Windows conocida: un proceso
+/// externo (editor, AV) con `norte.toml` abierto sin `FILE_SHARE_DELETE`
+/// hace fallar el rename con sharing violation — la persistencia falla
+/// visible, sin retry (los lectores de Rust std comparten en modo full).
+fn write_user_toml(path: &Path, doc: &toml_edit::DocumentMut) -> std::io::Result<()> {
+    use std::io::Write;
+    let tmp = path.with_file_name("norte.toml.tmp");
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(doc.to_string().as_bytes())?;
+        match std::fs::metadata(path) {
+            Ok(meta) => f.set_permissions(meta.permissions())?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)
 }
 
 /// Lee (o crea, si no existe) el `norte.toml` de `path` como documento
@@ -322,6 +400,8 @@ fn nested_table_mut<'d>(
 pub fn persist_column_format(dir: &Path, id: &str, format: &str) -> std::io::Result<PathBuf> {
     use std::io::{Error, ErrorKind};
     std::fs::create_dir_all(dir)?;
+    // #116: lock ANTES de leer — el RMW entero es la sección crítica.
+    let _lock = lock_user_toml(dir)?;
     let path = dir.join("norte.toml");
     let mut doc = open_user_toml(&path)?;
     let t = nested_table_mut(&mut doc, &path, &["ui", "columns"])?;
@@ -357,7 +437,7 @@ pub fn persist_column_format(dir: &Path, id: &str, format: &str) -> std::io::Res
         tb["format"] = toml_edit::value(format);
         arr.push(tb);
     }
-    std::fs::write(&path, doc.to_string())?;
+    write_user_toml(&path, &doc)?;
     Ok(path)
 }
 
@@ -378,6 +458,8 @@ pub fn persist_column_format(dir: &Path, id: &str, format: &str) -> std::io::Res
 pub fn persist_hotlist_add(dir: &Path, name: &str, wire_path: &str) -> std::io::Result<PathBuf> {
     use std::io::{Error, ErrorKind};
     std::fs::create_dir_all(dir)?;
+    // #116: lock ANTES de leer — el RMW entero es la sección crítica.
+    let _lock = lock_user_toml(dir)?;
     let path = dir.join("norte.toml");
     let mut doc = match std::fs::read_to_string(&path) {
         Ok(s) => s.parse::<toml_edit::DocumentMut>().map_err(|_| {
@@ -417,7 +499,7 @@ pub fn persist_hotlist_add(dir: &Path, name: &str, wire_path: &str) -> std::io::
         t["path"] = toml_edit::value(wire_path);
         arr.push(t);
     }
-    std::fs::write(&path, doc.to_string())?;
+    write_user_toml(&path, &doc)?;
     Ok(path)
 }
 
@@ -438,6 +520,14 @@ pub fn persist_hotlist_add(dir: &Path, name: &str, wire_path: &str) -> std::io::
 pub fn persist_hotlist_remove(dir: &Path, name: &str) -> std::io::Result<PathBuf> {
     use std::io::{Error, ErrorKind};
     let path = dir.join("norte.toml");
+    // #116: lock ANTES de leer. Este writer no crea el dir (solo borra):
+    // dir inexistente = nada que borrar = el mismo no-op documentado que
+    // el `norte.toml` ausente de abajo.
+    let _lock = match lock_user_toml(dir) {
+        Ok(l) => l,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(path),
+        Err(e) => return Err(e),
+    };
     let mut doc = match std::fs::read_to_string(&path) {
         Ok(s) => s.parse::<toml_edit::DocumentMut>().map_err(|_| {
             // security review item 4 (C1, NIT F4): `toml_edit`'s parse
@@ -467,7 +557,7 @@ pub fn persist_hotlist_remove(dir: &Path, name: &str) -> std::io::Result<PathBuf
         let before = arr.len();
         arr.retain(|t| t.get("name").and_then(|v| v.as_str()) != Some(name));
         if arr.len() != before {
-            std::fs::write(&path, doc.to_string())?;
+            write_user_toml(&path, &doc)?;
         }
     }
     Ok(path)
@@ -2472,5 +2562,106 @@ mod persist_columns_tests {
             s, "[ui.columns]\nspec = 3\n",
             "el fichero no se toca en el camino de error"
         );
+    }
+}
+
+#[cfg(test)]
+mod persist_atomicity_tests {
+    use super::*;
+
+    /// #116: los escritores toman el lock advisory cross-process
+    /// (`norte.toml.lock`) ANTES de leer. Con el lock en manos de "otro
+    /// proceso" (otro descriptor — mismo mecanismo `flock`/`LockFileEx`),
+    /// `persist_set` BLOQUEA hasta la liberación; sin lock, dos RMW se
+    /// intercalan y el segundo escribe sobre una lectura rancia (lost
+    /// update).
+    #[test]
+    fn persist_set_espera_el_lock_de_otro_escritor() {
+        let dir = tempfile::tempdir().unwrap();
+        // Mismo open SIN truncar que `lock_user_toml` (review MAJOR-1).
+        let holder = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(dir.path().join("norte.toml.lock"))
+            .unwrap();
+        holder.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let d = dir.path().to_path_buf();
+        let writer = std::thread::spawn(move || {
+            let r = persist_set(&d, "ui", "theme", toml_edit::Value::from("nord"));
+            let _ = tx.send(());
+            r
+        });
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(300))
+                .is_err(),
+            "persist_set NO debe completar mientras otro escritor tiene el lock"
+        );
+        // Cinturón (review MINOR-6): además de no completar, no ha ESCRITO —
+        // el lock se toma antes de leer, así que ni el tmp ni el fichero
+        // final pueden existir aún.
+        assert!(
+            !dir.path().join("norte.toml").exists(),
+            "nada escrito mientras el lock está en manos ajenas"
+        );
+        drop(holder); // flock/LockFileEx se libera al cerrar el descriptor
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("liberado el lock, el escritor completa");
+        writer.join().unwrap().expect("escritura");
+        let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert!(s.contains("theme"), "la escritura aterrizó tras el lock");
+    }
+
+    /// #116: dos escritores RMW concurrentes sobre claves distintas no se
+    /// pisan — ambas claves sobreviven con su último valor en el fichero
+    /// final (sin lock, una lectura rancia descarta la clave del otro).
+    #[test]
+    fn escritores_concurrentes_no_pierden_claves() {
+        let dir = tempfile::tempdir().unwrap();
+        let d1 = dir.path().to_path_buf();
+        let d2 = dir.path().to_path_buf();
+        let a = std::thread::spawn(move || {
+            for i in 0..25 {
+                persist_set(&d1, "ui", "alpha", toml_edit::Value::from(i)).expect("a");
+            }
+        });
+        let b = std::thread::spawn(move || {
+            for i in 0..25 {
+                persist_set(&d2, "ui", "beta", toml_edit::Value::from(i)).expect("b");
+            }
+        });
+        a.join().unwrap();
+        b.join().unwrap();
+        let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        let doc: toml_edit::DocumentMut = s.parse().expect("el fichero final parsea");
+        let ui = doc["ui"].as_table_like().expect("[ui] presente");
+        assert_eq!(
+            ui.get("alpha").and_then(toml_edit::Item::as_integer),
+            Some(24),
+            "la última escritura de `alpha` sobrevive"
+        );
+        assert_eq!(
+            ui.get("beta").and_then(toml_edit::Item::as_integer),
+            Some(24),
+            "la última escritura de `beta` sobrevive"
+        );
+    }
+
+    /// #116 (pin): la escritura es tmp hermano + rename — tras persistir no
+    /// queda temporal residual en el dir (un crash a medias deja como mucho
+    /// un tmp huérfano que la siguiente escritura pisa; jamás un
+    /// `norte.toml` truncado).
+    #[test]
+    fn persistir_no_deja_tmp_residual() {
+        let dir = tempfile::tempdir().unwrap();
+        persist_set(dir.path(), "ui", "theme", toml_edit::Value::from("nord")).expect("escritura");
+        persist_hotlist_add(dir.path(), "docs", "file:///docs").expect("hotlist");
+        let residuales: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains("tmp"))
+            .collect();
+        assert!(residuales.is_empty(), "tmp residual: {residuales:?}");
     }
 }

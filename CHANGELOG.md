@@ -632,6 +632,18 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Config writes are now atomic and cross-process safe (#116):** every
+  `norte.toml` persist helper (theme, settings, columns, formats, hotlist)
+  used to read-modify-write the file in place — two writers (e.g. the GUI
+  and the TUI on the same config) could interleave and silently drop each
+  other's changes, and a concurrent reader could catch a truncated file
+  whose partial parse a later write would then rewrite, losing unrelated
+  user sections. Writers now take a cross-process advisory lock
+  (`norte.toml.lock`, held for the whole read-modify-write; released by
+  the OS even on crash) and replace the file via a synced sibling tmp +
+  atomic rename, preserving existing file permissions — readers see the
+  old or the new file, never a torn one. The same pattern is filed as
+  #119 for per-plugin `config.toml` writes.
 - **Ctrl+R skipped the post-refresh ritual (#118):** `pane.refresh` ran from
   the command dispatcher, which cannot see the run loop's paginated fill or
   the stat-probe dedup — with a large listing still streaming in, the old
