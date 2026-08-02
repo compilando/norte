@@ -9,6 +9,23 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Plugin column cells rendered in both frontends (#117 follow-up):**
+  `plugin:<plugin>/<column>` ids configured in `[ui.columns]` now paint
+  real cells through the shared column funnel — default width 12 (spec
+  width/align/header overrides apply), headers via the shared label
+  resolver, capped at 8 plugin columns per list (painted always equals
+  requested; `norte doctor` reports the excess as
+  `columns-plugins-over-cap` and retires `columns-no-renderer`). Values
+  arrive asynchronously per listing (piggybacked on the decoration fetch
+  in the TUI, the session Columns command in the GUI), are validated
+  against the live catalog (approved + enabled + the column declared by
+  THAT plugin), sanitized and capped on ingest, and defensively re-masked
+  at render; absent stays blank. The GUI's previous behavior of
+  unconditionally painting every declared plugin column at a fixed 96px
+  is retired: `[ui.columns]` is now the single source of truth. Deferred
+  to #120: offering declared plugin columns in the picker, and
+  disambiguating duplicate bare column ids across plugins.
+
 - **Provider attribute columns rendered in both frontends (#117):** the
   `attr:` columns the config, model and picker already accepted now paint
   real cells. The shared render funnel is `ColumnId`-typed end to end;

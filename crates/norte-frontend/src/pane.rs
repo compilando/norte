@@ -209,6 +209,13 @@ pub struct PaneState {
     /// decoraciones del anterior; llegan tarde, no en silencio hasta
     /// entonces) mediante [`Self::clear_decorations`].
     decorations: HashMap<VPath, Decoration>,
+    /// Valores de columnas `plugin:` por entrada (#117-follow-up), espejo
+    /// asíncrono de `decorations`: clave exterior = id Display de la
+    /// columna (`plugin:<p>/<c>`), interior = `VPath` del listado ACTUAL →
+    /// valor YA saneado en el ingest ([`crate::columns::sanitize_cell`]).
+    /// [`Self::set_listing`]/[`Self::begin_loading`] lo limpian (un
+    /// listado nuevo invalida los valores del anterior).
+    plugin_columns: HashMap<String, HashMap<VPath, String>>,
 }
 
 /// Tope de la memoria de cursor por pane (spec §S1): sesión larga sin fuga
@@ -243,6 +250,7 @@ impl PaneState {
             hidden_stash: Vec::new(),
             sort: crate::sort::SortSpec::default(),
             decorations: HashMap::new(),
+            plugin_columns: HashMap::new(),
         }
     }
 
@@ -449,6 +457,7 @@ impl PaneState {
         // G3b: las decoraciones eran del listado ANTERIOR (claves por
         // `VPath` byte-exacto de OTRO dir) — un listado nuevo las invalida.
         self.decorations.clear();
+        self.plugin_columns.clear();
 
         // #107 review MINOR-1 (aceptado): el hint se resuelve contra el
         // listado YA filtrado — volver del interior de un dir oculto con la
@@ -497,6 +506,7 @@ impl PaneState {
         self.skipped = None;
         self.hidden_stash.clear(); // #107: era del listado anterior
         self.decorations.clear();
+        self.plugin_columns.clear();
     }
 
     /// Omitidas del contenedor del listado actual (#93/#96) — ver el campo.
@@ -539,6 +549,27 @@ impl PaneState {
     /// forzar el reset (p. ej. al desactivar todos los decoradores).
     pub fn clear_decorations(&mut self) {
         self.decorations.clear();
+    }
+
+    /// Instala el LOTE de valores de columnas `plugin:` (#117-follow-up):
+    /// clave exterior = id Display (`plugin:<p>/<c>`), interior = `VPath`
+    /// del listado activo → valor saneado
+    /// ([`crate::columns::sanitize_column_values`] en el ingest). Mismo
+    /// contrato anti-rancio que [`Self::set_decorations`]: el caller
+    /// descarta una respuesta tardía cuyo `dir` no case el actual.
+    pub fn set_plugin_columns(&mut self, columns: HashMap<String, HashMap<VPath, String>>) {
+        self.plugin_columns = columns;
+    }
+
+    /// Celda de la columna `plugin:` `display_id` para `path`
+    /// (#117-follow-up): `None` = sin valor (blanco, jamás fabricado). El
+    /// valor se RE-enmascara defensivamente al servirlo (doctrina P1: bidi
+    /// sin mascarar en ratatui DESAPARECE en silencio — los consumidores no
+    /// confían en que el ingest ya saneara).
+    #[must_use]
+    pub fn plugin_cell(&self, display_id: &str, path: &VPath) -> Option<String> {
+        let v = self.plugin_columns.get(display_id)?.get(path)?;
+        crate::columns::sanitize_cell(Some(v))
     }
 
     /// Sube el cursor una posición (tope en 0). No-op si la lista está vacía.
@@ -3293,6 +3324,71 @@ mod tests {
             p.mark_glob("a\\b", true).unwrap(),
             0,
             "unescaped backslash is consumed as an escape, not a literal match"
+        );
+    }
+
+    /// #117-follow-up: los valores de columnas `plugin:` viven en un
+    /// side-map del pane (espejo de `decorations` — claves por `VPath` del
+    /// listado ACTUAL): `plugin_cell` los sirve RE-enmascarados
+    /// defensivamente (doctrina P1: los consumidores no confían en el
+    /// ingest), y un listado nuevo los invalida igual que las decoraciones.
+    #[test]
+    fn plugin_columns_side_map_re_enmascara_y_se_limpia() {
+        let mut p = pane(&["a", "b"]);
+        let path = VPath::parse("mem:///a").unwrap();
+        let mut per_path = std::collections::HashMap::new();
+        // Valor con RLO crudo: el render jamás lo pinta sin U+FFFD.
+        per_path.insert(path.clone(), "main\u{202E}evil".to_owned());
+        let mut cols = std::collections::HashMap::new();
+        cols.insert("plugin:git/branch".to_owned(), per_path);
+        p.set_plugin_columns(cols);
+        let cell = p
+            .plugin_cell("plugin:git/branch", &path)
+            .expect("valor presente");
+        assert!(
+            !cell.contains('\u{202E}'),
+            "hazard crudo en la celda: {cell:?}"
+        );
+        assert!(
+            cell.contains('\u{FFFD}'),
+            "el hazard se enmascara: {cell:?}"
+        );
+        assert!(cell.starts_with("main"));
+        // Columna desconocida o path sin valor → None (blanco).
+        assert_eq!(p.plugin_cell("plugin:git/otro", &path), None);
+        assert_eq!(
+            p.plugin_cell("plugin:git/branch", &VPath::parse("mem:///b").unwrap()),
+            None
+        );
+        // Un listado nuevo invalida el side-map (claves de OTRO listado).
+        p.set_listing(VPath::parse("mem:///d").unwrap(), Vec::new());
+        assert_eq!(p.plugin_cell("plugin:git/branch", &path), None);
+    }
+
+    /// Audit F4 (#117-follow-up): las claves del side-map son `VPath`
+    /// BYTE-exactas — dos nombres no-UTF8 distintos cuyo display lossy
+    /// COLAPSA al mismo `�` (corpus `lossy_collapse_ff`/`_fe`) conservan
+    /// celdas separadas. Si alguien "simplifica" mañana keyeando por
+    /// display, los valores se mezclarían entre ficheros distintos y esto
+    /// se pone rojo.
+    #[test]
+    fn plugin_columns_clava_por_bytes_no_por_display() {
+        let mut p = pane(&[]);
+        let ff = VPath::parse("mem:///%FF").unwrap();
+        let fe = VPath::parse("mem:///%FE").unwrap();
+        let mut per_path = std::collections::HashMap::new();
+        per_path.insert(ff.clone(), "uno".to_owned());
+        per_path.insert(fe.clone(), "dos".to_owned());
+        let mut cols = std::collections::HashMap::new();
+        cols.insert("plugin:git/branch".to_owned(), per_path);
+        p.set_plugin_columns(cols);
+        assert_eq!(
+            p.plugin_cell("plugin:git/branch", &ff).as_deref(),
+            Some("uno")
+        );
+        assert_eq!(
+            p.plugin_cell("plugin:git/branch", &fe).as_deref(),
+            Some("dos")
         );
     }
 }

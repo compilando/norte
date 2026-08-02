@@ -143,19 +143,29 @@ fn spawn_stat_probe(backend: &Backend, pane: usize, path: VPath) -> StatProbe {
 }
 
 /// Fetch de decoraciones de plugin EN VUELO (G3b, ADR 0037): el pane/dir
-/// destino y el canal one-shot. Molde de [`StatProbe`] — a lo sumo UNO
-/// global (mismo criterio simplificador que `fill`/`stat_probe`: un cd en
-/// OTRO pane mientras este sigue en vuelo lo reemplaza, perdiendo esa
-/// respuesta; documentado, no un bug — la próxima vez que se visite ese
-/// pane se vuelve a pedir). `dir` se conserva para descartar una respuesta
-/// TARDÍA que ya no corresponde al listado actual del pane (el usuario
-/// cd'eó de nuevo antes de que el daemon respondiera).
+/// destino y el canal one-shot. Molde de [`StatProbe`] — UNO POR PANE
+/// (#117-follow-up review MINOR-2: con un slot global, un cd en el pane B
+/// pisaba el fetch en vuelo del A y sus columnas `plugin:` configuradas
+/// quedaban en blanco hasta el próximo cd de A — con las columnas ahora
+/// config-driven eso contradecía «jamás una columna permanentemente en
+/// blanco»). `dir` se conserva para descartar una respuesta TARDÍA que ya
+/// no corresponde al listado actual del pane. Límite heredado del diseño
+/// de decoraciones (review MINOR-3): `paths` es la página YA listada al
+/// asentar el cd — entradas drenadas DESPUÉS por el fill incremental
+/// (#52/#54) no viajan en la petición y pintan blanco hasta el próximo
+/// re-list (documentado, mismo alcance que las decoraciones).
+/// Valores de columnas `plugin:` por id Display → `VPath` → celda saneada
+/// (#117-follow-up) — el shape que consume `PaneState::set_plugin_columns`.
+type PluginColumnValues =
+    std::collections::HashMap<String, std::collections::HashMap<VPath, String>>;
+
 struct DecorateFetch {
     pane: usize,
     dir: VPath,
-    rx: tokio::sync::oneshot::Receiver<
+    rx: tokio::sync::oneshot::Receiver<(
         std::collections::HashMap<VPath, norte_frontend::Decoration>,
-    >,
+        PluginColumnValues,
+    )>,
 }
 
 /// Lanza el fetch de decoraciones (G3b) para TODAS las entradas actualmente
@@ -168,11 +178,16 @@ struct DecorateFetch {
 /// descartar en silencio si no hay decoradores consentidos es más simple y
 /// honesto que cachear un flag que podría quedar obsoleto tras un F12.
 /// `None` si el pane no tiene entradas (nada que decorar).
+/// #117-follow-up: el MISMO viaje trae también los valores de las columnas
+/// `plugin:` CONFIGURADAS del scheme (`plugin_cols` = pares
+/// (plugin, columna) de `ColumnsSettings::plugin_ids_for`) — un solo slot
+/// en vuelo, un solo guard anti-stale.
 fn spawn_decorate_fetch(
     backend: &Backend,
     pane: usize,
     dir: VPath,
     paths: Vec<VPath>,
+    plugin_cols: Vec<(String, String)>,
 ) -> Option<DecorateFetch> {
     if paths.is_empty() {
         return None;
@@ -182,9 +197,53 @@ fn spawn_decorate_fetch(
     tokio::spawn(async move {
         let plugins = b.plugin_decorate(&paths).await.unwrap_or_default();
         let merged = norte_frontend::merge_decorations(&paths, &plugins);
-        let _ = tx.send(merged);
+        // Review MINOR-1 (regla 3 en espíritu): un fetch SUPERADO (el run
+        // loop pisó el slot → rx dropeado) corta antes de cada RPC restante
+        // en vez de gastar hasta 8 llamadas cuyo send fallará igual.
+        let cols = fetch_plugin_columns(&b, &plugin_cols, &paths, || tx.is_closed()).await;
+        let _ = tx.send((merged, cols));
     });
     Some(DecorateFetch { pane, dir, rx })
+}
+
+/// Valores de las columnas `plugin:` configuradas (#117-follow-up): la
+/// validación de pertenencia + dedupe de colisiones vive en el modelo
+/// COMPARTIDO (`norte_frontend::columns::validated_plugin_requests` —
+/// review MAJOR-1: una sola definición para ambos frontends; colisión de
+/// id bare = blanco antes que atribución falsa, desambiguación real =
+/// issue #120). Fail-soft por columna: catálogo caído o RPC fallida =
+/// celdas en blanco, jamás un error de listado. `superseded` corta entre
+/// RPCs cuando el fetch ya fue pisado (review MINOR-1).
+async fn fetch_plugin_columns(
+    backend: &Backend,
+    requested: &[(String, String)],
+    paths: &[VPath],
+    superseded: impl Fn() -> bool,
+) -> PluginColumnValues {
+    let mut out = std::collections::HashMap::new();
+    if requested.is_empty() {
+        return out;
+    }
+    let Ok(list) = backend.plugins_list().await else {
+        return out;
+    };
+    for (plugin, column) in
+        norte_frontend::columns::validated_plugin_requests(requested, &list.plugins)
+    {
+        if superseded() {
+            return out;
+        }
+        let raw = backend
+            .plugin_column_values(&column, paths)
+            .await
+            .unwrap_or_default();
+        let sanitized = norte_frontend::columns::sanitize_column_values(paths, &raw);
+        out.insert(
+            norte_frontend::columns::plugin_display_id(&plugin, &column),
+            sanitized,
+        );
+    }
+    out
 }
 
 /// Pane que un desenlace de `cd` acaba de ASENTAR (`Filling`/`Replaced`,
@@ -735,7 +794,7 @@ async fn run(
     let mut last_probed: Option<(usize, VPath)> = None;
     // Fetch de decoraciones de plugin en vuelo (G3b, ADR 0037): a lo sumo
     // uno, molde de `stat_probe`/`fill`.
-    let mut decorate_fetch: Option<DecorateFetch> = None;
+    let mut decorate_fetch: [Option<DecorateFetch>; 2] = [None, None];
     loop {
         // Barra Lua en cada vuelta, ANTES del draw (cacheada en el host).
         refresh_lua_status(app, lua_host.as_ref());
@@ -821,10 +880,18 @@ async fn run(
                     app.panes[pr.pane].hydrate(&pr.path, entry.size, entry.mtime_ms);
                 }
             }
-            res = async {
-                match &mut decorate_fetch {
-                    Some(f) => (&mut f.rx).await.ok(),
-                    None => std::future::pending().await,
+            (slot, res) = async {
+                // Un slot POR PANE (review MINOR-2): se espera al primero
+                // que responda; con ambos vacíos, pendiente.
+                let [slot_a, slot_b] = &mut decorate_fetch;
+                match (slot_a, slot_b) {
+                    (Some(a), Some(b)) => tokio::select! {
+                        r = &mut a.rx => (0, r.ok()),
+                        r = &mut b.rx => (1, r.ok()),
+                    },
+                    (Some(a), None) => (0, (&mut a.rx).await.ok()),
+                    (None, Some(b)) => (1, (&mut b.rx).await.ok()),
+                    (None, None) => std::future::pending().await,
                 }
             } => {
                 // Fetch de decoraciones (G3b): se limpia SIEMPRE. Una
@@ -833,11 +900,14 @@ async fn run(
                 // DESCARTA — nunca pinta badges de un listado que ya no se
                 // ve (mismo criterio anti-stale que el drain-guard de
                 // `apply_fill_msg` para búsqueda virtual).
-                if let Some(f) = decorate_fetch.take()
-                    && let Some(map) = res
+                if let Some(f) = decorate_fetch[slot].take()
+                    && let Some((map, cols)) = res
                     && app.panes[f.pane].dir() == &f.dir
                 {
                     app.panes[f.pane].set_decorations(map);
+                    // #117-follow-up: los valores de columnas plugin: viajan
+                    // en el mismo fetch y comparten el guard anti-stale.
+                    app.panes[f.pane].set_plugin_columns(cols);
                 }
             }
             msg = async {
@@ -998,7 +1068,9 @@ async fn run(
                             let dir = app.panes[pane].dir().clone();
                             let paths: Vec<VPath> =
                                 app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
-                            decorate_fetch = spawn_decorate_fetch(backend, pane, dir, paths);
+                            let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
+                            decorate_fetch[pane] =
+                                spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                         }
                         apply_cd(&mut fill, &mut last_probed, outcome);
                     } else if app.search_dialog.is_some() {
@@ -1117,7 +1189,9 @@ async fn run(
                             let dir = app.panes[pane].dir().clone();
                             let paths: Vec<VPath> =
                                 app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
-                            decorate_fetch = spawn_decorate_fetch(backend, pane, dir, paths);
+                            let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
+                            decorate_fetch[pane] =
+                                spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                         }
                         apply_cd(&mut fill, &mut last_probed, outcome);
                                     // Paridad con el sitio del resolver (#118
@@ -1293,7 +1367,9 @@ async fn run(
                             let dir = app.panes[pane].dir().clone();
                             let paths: Vec<VPath> =
                                 app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
-                            decorate_fetch = spawn_decorate_fetch(backend, pane, dir, paths);
+                            let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
+                            decorate_fetch[pane] =
+                                spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                         }
                         apply_cd(&mut fill, &mut last_probed, outcome);
                     } else {
@@ -1429,7 +1505,9 @@ async fn run(
                             let dir = app.panes[pane].dir().clone();
                             let paths: Vec<VPath> =
                                 app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
-                            decorate_fetch = spawn_decorate_fetch(backend, pane, dir, paths);
+                            let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
+                            decorate_fetch[pane] =
+                                spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                         }
                         apply_cd(&mut fill, &mut last_probed, outcome);
                                         // Paridad con el sitio del resolver
@@ -1502,7 +1580,9 @@ async fn run(
                             let dir = app.panes[pane].dir().clone();
                             let paths: Vec<VPath> =
                                 app.panes[pane].entries().iter().map(|e| e.path.clone()).collect();
-                            decorate_fetch = spawn_decorate_fetch(backend, pane, dir, paths);
+                            let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
+                            decorate_fetch[pane] =
+                                spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                         }
                         apply_cd(&mut fill, &mut last_probed, outcome);
                                     // Un cd (nav.parent…) apagó el modo virtual del
@@ -1704,9 +1784,13 @@ async fn on_columns_key(
 /// vive en el modelo (`attr_fingerprint`, review tarea 3): una única
 /// definición para ambos frontends.
 fn pane_attr_ids(app: &App) -> Vec<Vec<String>> {
+    // #117-follow-up (review MAJOR-1): huella COMBINADA attr+plugin, única
+    // definición en el modelo (`pane_fingerprint`) para ambos frontends —
+    // un cambio SOLO de plugins también re-lista (el re-list respawnea el
+    // fetch de valores; sin él la columna nueva quedaría en blanco).
     app.panes
         .iter()
-        .map(|p| app.columns.attr_fingerprint(p.dir().scheme()))
+        .map(|p| app.columns.pane_fingerprint(p.dir().scheme()))
         .collect()
 }
 

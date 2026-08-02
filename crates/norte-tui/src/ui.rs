@@ -1454,7 +1454,7 @@ mod entry_item_columns_tests {
             measured: 0,
             is_name: false,
         };
-        let item = entry_item(&entry, &theme, None, Some(&deco), false, &widths, 0);
+        let item = entry_item(&entry, &theme, None, Some(&deco), false, &widths, None, 0);
         // Renderiza a un buffer del ancho EXACTO del presupuesto: si la
         // fila desbordara, la celda de tamaño perdería su cola.
         let area = Rect::new(0, 0, 21, 1);
@@ -1950,6 +1950,7 @@ fn draw_pane(
                         pane.decoration_for(&e.path),
                         pane.is_marked(e),
                         cols,
+                        Some(pane),
                         now_ms,
                     )
                 })
@@ -1969,6 +1970,7 @@ fn draw_pane(
                         pane.decoration_for(&e.path),
                         pane.is_marked(e),
                         cols,
+                        Some(pane),
                         now_ms,
                     )
                 })
@@ -2002,6 +2004,7 @@ fn draw_pane(
     frame.render_stateful_widget(list, list_area, &mut state);
 }
 
+#[allow(clippy::too_many_arguments)] // fila de render: cada arg es una fuente de pintado, no API
 fn entry_item<'a>(
     entry: &'a norte_proto::Entry,
     theme: &TuiTheme,
@@ -2013,6 +2016,10 @@ fn entry_item<'a>(
         u16,
         norte_frontend::columns::ColumnStyle,
     )],
+    // #117-follow-up: fuente de las celdas `plugin:` (side-map del pane —
+    // sus valores no viven en la `Entry`). `None` solo en tests de formato
+    // sin columnas de plugin.
+    plugin_cells: Option<&Pane>,
     now_ms: i64,
 ) -> ListItem<'a> {
     let name = entry.path.file_name().map_or(&[][..], |n| n.as_bytes());
@@ -2110,8 +2117,16 @@ fn entry_item<'a>(
             spans.push(Span::raw(" ".repeat(name_w - usado)));
         }
         for (col, w, style) in cols.iter().skip(1) {
-            let cell =
-                norte_frontend::columns::styled_cell(entry, col, now_ms, style).unwrap_or_default();
+            // #117-follow-up: las celdas `plugin:` salen del side-map del
+            // pane (re-enmascaradas allí); el resto, de la Entry como
+            // siempre. Ausencia = blanco en ambos caminos.
+            let cell = match col {
+                norte_frontend::columns::ColumnId::Plugin { .. } => plugin_cells
+                    .and_then(|p| p.plugin_cell(&col.to_string(), &entry.path))
+                    .unwrap_or_default(),
+                _ => norte_frontend::columns::styled_cell(entry, col, now_ms, style)
+                    .unwrap_or_default(),
+            };
             // El ancho INCLUYE el separador (default_layout_items): el
             // contenido vive dentro de w-1 y siempre queda ≥1 espacio de
             // separador. Derecha (default): relleno delante. Izquierda
@@ -2207,8 +2222,8 @@ mod entry_item_tests {
     fn a_marked_row_starts_with_the_mark_gutter() {
         let entry = e("mem:///a", EntryKind::File);
         let theme = TuiTheme::default();
-        let marked = entry_item(&entry, &theme, None, None, true, &[], 0);
-        let plain = entry_item(&entry, &theme, None, None, false, &[], 0);
+        let marked = entry_item(&entry, &theme, None, None, true, &[], None, 0);
+        let plain = entry_item(&entry, &theme, None, None, false, &[], None, 0);
         assert_eq!(first_span_text(&marked), "*");
         assert_eq!(first_span_text(&plain), " ");
     }
@@ -2219,7 +2234,7 @@ mod entry_item_tests {
     fn the_gutter_precedes_the_hostile_badge() {
         let entry = e_hostile();
         let theme = TuiTheme::default();
-        let item = entry_item(&entry, &theme, None, None, true, &[], 0);
+        let item = entry_item(&entry, &theme, None, None, true, &[], None, 0);
         let texts = span_texts(&item);
         assert_eq!(texts[0], "*");
         assert_eq!(texts[1], HOSTILE_BADGE);

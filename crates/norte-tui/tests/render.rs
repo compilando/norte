@@ -68,6 +68,72 @@ fn frame_pinta_panes_y_badge_no_utf8() {
     );
 }
 
+/// #117-follow-up: una columna `plugin:` configurada en `[ui.columns]`
+/// pinta cabecera (etiqueta `plugin/columna` saneada) y celda (valor del
+/// side-map del pane, llegado por el fetch asíncrono); una entrada sin
+/// valor queda en blanco — jamás fabricado.
+#[test]
+fn columna_plugin_configurada_pinta_cabecera_y_celda() {
+    let dir = vp("file:///x");
+    let mut entries = vec![
+        Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: dir.join(Segment::new(b"a.txt".to_vec()).unwrap()),
+            kind: EntryKind::File,
+            size: None,
+            mtime_ms: None,
+        },
+        Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: dir.join(Segment::new(b"b.txt".to_vec()).unwrap()),
+            kind: EntryKind::File,
+            size: None,
+            mtime_ms: None,
+        },
+    ];
+    sort_entries(&mut entries);
+    let mut app = App::new(
+        Pane::new(dir.clone(), entries),
+        Pane::new(dir.clone(), Vec::new()),
+    );
+    app.columns = norte_frontend::columns::ColumnsSettings::resolve(&norte_config::ColumnsConfig {
+        default_columns: Some(vec!["name".into(), "plugin:git/branch".into()]),
+        ..Default::default()
+    });
+    let mut per_path = std::collections::HashMap::new();
+    per_path.insert(
+        dir.join(Segment::new(b"a.txt".to_vec()).unwrap()),
+        "main".to_owned(),
+    );
+    // Audit F3: un valor con RLO CRUDO metido directamente en el side-map
+    // (simulando un ingest que dejó de sanear) — el re-mask defensivo de
+    // `plugin_cell` es la última línea y debe verse en el FRAME (en
+    // ratatui un bidi crudo desaparece en silencio, no "se ve raro").
+    per_path.insert(
+        dir.join(Segment::new(b"b.txt".to_vec()).unwrap()),
+        "x\u{202E}y".to_owned(),
+    );
+    let mut cols = std::collections::HashMap::new();
+    cols.insert("plugin:git/branch".to_owned(), per_path);
+    app.panes[0].set_plugin_columns(cols);
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 10)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let contenido = terminal.backend().to_string();
+    assert!(
+        contenido.contains("git/branch"),
+        "cabecera de la columna plugin visible: {contenido}"
+    );
+    assert!(
+        contenido.contains("main"),
+        "celda del side-map visible: {contenido}"
+    );
+    assert!(
+        !contenido.contains('\u{202E}') && contenido.contains('\u{FFFD}'),
+        "el RLO del valor hostil llega ENMASCARADO al frame: {contenido}"
+    );
+}
+
 /// ADR 0006: la secuencia pendiente se pinta en la status bar.
 #[test]
 fn la_secuencia_pendiente_se_ve_en_la_status_bar() {

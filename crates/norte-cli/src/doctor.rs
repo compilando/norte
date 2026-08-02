@@ -98,9 +98,9 @@ pub fn check_config(layers: &Layers, env: &impl Fn(&str) -> Option<OsString>) ->
 
 /// `[ui.columns]` (#108 b4): ids que no parsean = Warn (se saltan al
 /// pintar — «un id configurado que desaparece en silencio es un bug, no
-/// una degradación», spec de columnas §Diagnostics); ids válidos sin
-/// renderer todavía (SOLO `plugin:` desde #117 — los `attr:` ya se
-/// pintan) = Warn informativo con el wiring que los traerá.
+/// una degradación», spec de columnas §Diagnostics). Los `plugin:` y los
+/// `attr:` se pintan ambos por el funnel (#117 y su follow-up): sus
+/// diagnósticos restantes son los caps y la legalidad wire de los attrs.
 #[must_use]
 pub fn check_columns(layers: &Layers) -> Vec<Finding> {
     let Ok(cfg) = norte_config::load(layers) else {
@@ -119,13 +119,17 @@ pub fn check_columns(layers: &Layers) -> Vec<Finding> {
             ),
         });
     }
-    for raw in &st.unrenderable {
+    // #117-follow-up: las celdas `plugin:` ya se pintan — `columns-no-
+    // renderer` se retira; el único diagnóstico que les queda es el cap
+    // (espejo de `columns-attrs-over-cap`).
+    for raw in &st.plugins_over_cap {
         findings.push(Finding {
             section: "config",
             severity: Severity::Warn,
-            code: "columns-no-renderer",
+            code: "columns-plugins-over-cap",
             detail: format!(
-                "[ui.columns] id válido sin renderer aún (las celdas de plugin llegan con el wiring de columnas de plugins, #117): {}",
+                "[ui.columns] columna de plugin por encima del cap de {} por lista (ni se pinta ni se pide): {}",
+                norte_frontend::columns::PLUGIN_COLUMNS_MAX_REQUEST,
                 sanitize_detail(raw)
             ),
         });
@@ -593,11 +597,12 @@ pub fn check_connections(
 #[cfg(test)]
 mod tests {
 
-    /// #108 b4: un id roto = Warn nombrado (jamás drop silencioso); un
-    /// `plugin:` válido = Warn «sin renderer aún». #117: los `attr:` YA se
-    /// pintan — jamás disparan `columns-no-renderer`.
+    /// #108 b4: un id roto = Warn nombrado (jamás drop silencioso).
+    /// #117-follow-up: los `plugin:` YA se pintan (como los `attr:` desde
+    /// #117) — `columns-no-renderer` está RETIRADO y no dispara para nadie;
+    /// solo les queda el diagnóstico del cap.
     #[test]
-    fn columns_ids_rotos_y_sin_renderer_se_reportan() {
+    fn columns_ids_rotos_se_reportan_y_no_renderer_esta_retirado() {
         let dir = tempfile::tempdir().expect("tmp");
         std::fs::write(
             dir.path().join("norte.toml"),
@@ -614,14 +619,32 @@ mod tests {
             "{f:?}"
         );
         assert!(
-            f.iter()
-                .any(|x| x.code == "columns-no-renderer" && x.detail.contains("plugin:demo/x")),
-            "{f:?}"
+            !f.iter().any(|x| x.code == "columns-no-renderer"),
+            "columns-no-renderer retirado — plugin: se pinta: {f:?}"
         );
+    }
+
+    /// #117-follow-up: la columna de plugin 9.ª de una lista supera el cap
+    /// de petición — ni se pinta ni se pide, y doctor la nombra
+    /// (`columns-plugins-over-cap`, espejo del cap de attrs).
+    #[test]
+    fn columns_plugins_sobre_el_cap_se_reportan() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let cols: Vec<String> = (0..9).map(|i| format!("\"plugin:p/c{i}\"")).collect();
+        std::fs::write(
+            dir.path().join("norte.toml"),
+            format!("[ui.columns]\ndefault = [\"name\", {}]\n", cols.join(", ")),
+        )
+        .expect("write");
+        let layers = norte_config::Layers {
+            dirs: vec![(dir.path().to_path_buf(), norte_config::Layer::User)],
+        };
+        let f = super::check_columns(&layers);
         assert!(
-            !f.iter()
-                .any(|x| x.code == "columns-no-renderer" && x.detail.contains("attr:")),
-            "un attr: no dispara columns-no-renderer: {f:?}"
+            f.iter().any(|x| {
+                x.code == "columns-plugins-over-cap" && x.detail.contains("plugin:p/c8")
+            }),
+            "{f:?}"
         );
     }
 

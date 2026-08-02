@@ -383,6 +383,22 @@ impl Pane {
         self.state.is_marked(entry)
     }
 
+    /// Celda de una columna `plugin:` (#117-follow-up) — delegado puro a
+    /// [`norte_frontend::PaneState::plugin_cell`].
+    #[must_use]
+    pub fn plugin_cell(&self, display_id: &str, path: &VPath) -> Option<String> {
+        self.state.plugin_cell(display_id, path)
+    }
+
+    /// Instala el lote de valores de columnas `plugin:` (#117-follow-up) —
+    /// delegado puro a [`norte_frontend::PaneState::set_plugin_columns`].
+    pub fn set_plugin_columns(
+        &mut self,
+        columns: std::collections::HashMap<String, std::collections::HashMap<VPath, String>>,
+    ) {
+        self.state.set_plugin_columns(columns);
+    }
+
     /// Togglea la marca de la entrada seleccionada. Delegado puro (#103).
     pub fn toggle_mark(&mut self) {
         self.state.toggle_mark();

@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use norte_core::backend::{Backend, TaskCanceller, TaskRef, remote::RemoteBackend};
-use norte_proto::methods::{ClientInfo, PluginColumnInfo, PluginInfo, PluginLoadError};
+use norte_proto::methods::{ClientInfo, PluginInfo, PluginLoadError};
 use norte_proto::{Entry, Error, TaskId, TaskProgress, TaskState, VPath};
 use tokio::sync::mpsc;
 
@@ -102,12 +102,14 @@ pub enum SessionCmd {
         /// Rutas visibles a decorar, en el orden del listado.
         paths: Vec<VPath>,
     },
-    /// Valores de columna (G3c, cierra el deferral GUI de G3b): descubre las
-    /// columnas de plugins `columns` APROBADOS y ACTIVADOS (`plugin.list`),
-    /// y pide `plugin.column_values` para CADA columna declarada sobre la
-    /// página visible — todo resuelto en el hilo de sesión, la GUI recibe UN
-    /// solo evento con cabeceras+valores YA saneados. Mismo guard anti-stale
-    /// que `Decorate`.
+    /// Valores de columna (G3c; #117-follow-up: CONFIG-driven): pide
+    /// `plugin.column_values` para cada par (plugin, columna) CONFIGURADO
+    /// en `[ui.columns]` (`requested`), validando pertenencia contra el
+    /// catálogo vivo (`plugin.list`: aprobado + habilitado + columna
+    /// declarada por ESE plugin). La GUI recibe UN solo evento con los
+    /// valores YA saneados, clave = id Display (`plugin:<p>/<c>`) — las
+    /// cabeceras las pinta el funnel (`header_label`), ya no viajan aquí.
+    /// Mismo guard anti-stale que `Decorate`.
     Columns {
         /// Pane destino (0|1).
         pane: usize,
@@ -117,6 +119,9 @@ pub enum SessionCmd {
         dir: VPath,
         /// Rutas visibles a valorar, en el orden del listado.
         paths: Vec<VPath>,
+        /// Pares (plugin, columna) configurados para el scheme del pane
+        /// (`ColumnsSettings::plugin_ids_for` — cap ya aplicado).
+        requested: Vec<(String, String)>,
     },
     /// Catálogo de plugins (G3c): alimenta la paleta (filas de comando de
     /// plugin) y el gestor de extensiones.
@@ -282,10 +287,10 @@ pub enum SessionEvent {
         /// Decoraciones ya saneadas, por ruta.
         decorations: HashMap<VPath, norte_frontend::Decoration>,
     },
-    /// Resultado de `Columns` (G3c): una entrada por columna DECLARADA
-    /// (`(id, header)`, header YA enmascarado) más el mapa de valores YA
-    /// saneados de ESA columna. Ninguna columna declarada = `columns: []`
-    /// (nunca error — mismo criterio indulgente que `Decorated`).
+    /// Resultado de `Columns` (#117-follow-up): los valores de las columnas
+    /// `plugin:` CONFIGURADAS, YA saneados y validados contra el catálogo.
+    /// Columna no consentida/no declarada = ausente (celdas en blanco,
+    /// nunca error — mismo criterio indulgente que `Decorated`).
     ColumnsReady {
         /// Pane destino.
         pane: usize,
@@ -293,10 +298,8 @@ pub enum SessionEvent {
         generation: u64,
         /// Directorio listado (guard anti-stale).
         dir: VPath,
-        /// Columnas declaradas por plugins aprobados+activados, YA
-        /// saneadas (`id`, `header` enmascarado).
-        columns: Vec<(String, String)>,
-        /// Valores por columna (`id`) → por ruta → celda YA saneada.
+        /// Valores por id Display (`plugin:<p>/<c>`) → ruta → celda YA
+        /// saneada — el shape de `PaneState::set_plugin_columns`.
         values: HashMap<String, HashMap<VPath, String>>,
     },
     /// Catálogo de plugins (G3c): respuesta a `PluginsList`.
@@ -451,14 +454,16 @@ pub fn spawn(
                         generation,
                         dir,
                         paths,
+                        requested,
                     } => {
-                        if paths.is_empty() {
+                        if paths.is_empty() || requested.is_empty() {
                             continue;
                         }
                         let backend = Backend::Remote(remote.clone());
                         let tx = event_tx.clone();
                         tokio::spawn(async move {
-                            columns_ready(&backend, pane, generation, dir, paths, &tx).await;
+                            columns_ready(&backend, pane, generation, dir, paths, requested, &tx)
+                                .await;
                         });
                     }
                     SessionCmd::PluginsList => {
@@ -585,45 +590,40 @@ async fn columns_ready(
     generation: u64,
     dir: VPath,
     paths: Vec<VPath>,
+    requested: Vec<(String, String)>,
     tx: &mpsc::UnboundedSender<SessionEvent>,
 ) {
-    let Ok(list) = backend.plugins_list().await else {
-        let _ = tx.send(SessionEvent::ColumnsReady {
-            pane,
-            generation,
-            dir,
-            columns: Vec::new(),
-            values: HashMap::new(),
-        });
-        return;
-    };
-    let mut declared: Vec<PluginColumnInfo> = Vec::new();
-    for p in list.plugins.iter().filter(|p| p.approved && p.enabled) {
-        for c in &p.columns {
-            if !declared.iter().any(|d| d.id == c.id) {
-                declared.push(c.clone());
-            }
-        }
-    }
-    let mut columns = Vec::new();
+    // #117-follow-up: validación de pertenencia + dedupe de colisiones en
+    // el modelo COMPARTIDO (`validated_plugin_requests` — review MAJOR-1:
+    // una sola definición para ambos frontends; colisión de id bare =
+    // blanco antes que atribución falsa, desambiguación real = issue
+    // #120). Fail-soft por columna (catálogo caído o RPC fallida = celdas
+    // en blanco). `tx.is_closed()` corta entre RPCs solo en el teardown de
+    // la sesión (review MINOR-1; un supersede por generación no cierra el
+    // canal — lo descarta el guard de `apply_event`).
     let mut values = HashMap::new();
-    for c in declared {
-        let raw = backend
-            .plugin_column_values(&c.id, &paths)
-            .await
-            .unwrap_or_default();
-        let sanitized = norte_frontend::columns::sanitize_column_values(&paths, &raw);
-        columns.push((
-            c.id.clone(),
-            norte_frontend::columns::sanitize_header(&c.header),
-        ));
-        values.insert(c.id, sanitized);
+    if let Ok(list) = backend.plugins_list().await {
+        for (plugin, column) in
+            norte_frontend::columns::validated_plugin_requests(&requested, &list.plugins)
+        {
+            if tx.is_closed() {
+                return;
+            }
+            let raw = backend
+                .plugin_column_values(&column, &paths)
+                .await
+                .unwrap_or_default();
+            let sanitized = norte_frontend::columns::sanitize_column_values(&paths, &raw);
+            values.insert(
+                norte_frontend::columns::plugin_display_id(&plugin, &column),
+                sanitized,
+            );
+        }
     }
     let _ = tx.send(SessionEvent::ColumnsReady {
         pane,
         generation,
         dir,
-        columns,
         values,
     });
 }

@@ -299,15 +299,6 @@ struct NorteGui {
     /// settings status only renders inside its own view). Cleared on the
     /// NEXT keypress: honest without new chrome.
     flash: Option<(String, bool)>,
-    /// Columnas contribuidas por plugins `columns` aprobados+activados,
-    /// por pane (G3c, cierra el deferral GUI de G3b): `(id, header YA
-    /// enmascarado)`, en el orden en que `plugin.list` las devolvió
-    /// (deduplicadas por id). Vacío = ninguna — el listado se pinta sin
-    /// columnas extra, mismo criterio indulgente que las decoraciones.
-    columns: [Vec<(String, String)>; 2],
-    /// Valores de columna por pane: `id` → por ruta → celda YA saneada
-    /// (G3c). Refrescado junto a `columns` en cada `SessionEvent::ColumnsReady`.
-    column_values: [std::collections::HashMap<String, std::collections::HashMap<VPath, String>>; 2],
     /// Última respuesta de `SessionCmd::PluginConfigSummaries` (G3c),
     /// cacheada para que `set_settings_status` (que refresca las filas
     /// tras CUALQUIER escritura general, no solo un cambio de plugin)
@@ -555,11 +546,6 @@ impl NorteGui {
                     columns_picker: None,
                     flash: None,
                     extensions: None,
-                    columns: [Vec::new(), Vec::new()],
-                    column_values: [
-                        std::collections::HashMap::new(),
-                        std::collections::HashMap::new(),
-                    ],
                     plugin_config_summaries: Vec::new(),
                 };
                 gui.column_settings = columns_settings;
@@ -638,11 +624,6 @@ impl NorteGui {
                     columns_picker: None,
                     flash: None,
                     extensions: None,
-                    columns: [Vec::new(), Vec::new()],
-                    column_values: [
-                        std::collections::HashMap::new(),
-                        std::collections::HashMap::new(),
-                    ],
                     plugin_config_summaries: Vec::new(),
                 }
             }
@@ -823,13 +804,18 @@ impl NorteGui {
                             dir: dir.clone(),
                             paths: paths.clone(),
                         });
-                        // G3c (cierra el deferral GUI de G3b): mismo criterio
-                        // que Decorate, batched sobre la MISMA página visible.
+                        // #117-follow-up (antes G3c incondicional): SOLO las
+                        // columnas plugin: CONFIGURADAS del scheme, mismo
+                        // criterio que Decorate sobre la MISMA página.
+                        let requested = self
+                            .column_settings
+                            .plugin_ids_for(self.panes[pane].dir().scheme());
                         let _ = self.cmds.send(SessionCmd::Columns {
                             pane,
                             generation,
                             dir,
                             paths,
+                            requested,
                         });
                         if std::env::var_os("NORTE_GUI_DEBUG").is_some() {
                             eprintln!(
@@ -984,7 +970,6 @@ impl NorteGui {
                 pane,
                 generation,
                 dir,
-                columns,
                 values,
             } => {
                 // Mismo guard doble anti-stale que `Decorated`.
@@ -993,8 +978,9 @@ impl NorteGui {
                 {
                     return;
                 }
-                self.columns[pane] = columns;
-                self.column_values[pane] = values;
+                // #117-follow-up: al side-map compartido del pane — el
+                // funnel pinta desde ahí (paridad TUI).
+                self.panes[pane].set_plugin_columns(values);
             }
             SessionEvent::PluginsListed(res) => match res {
                 Ok((plugins, errors)) => {
@@ -1751,9 +1737,12 @@ impl NorteGui {
     /// ordenada vive en el modelo (`attr_fingerprint`, review tarea 3):
     /// una única definición para ambos frontends.
     fn pane_attr_ids(&self) -> [Vec<String>; 2] {
+        // #117-follow-up (review MAJOR-1): huella COMBINADA attr+plugin,
+        // única definición en el modelo (`pane_fingerprint`) para ambos
+        // frontends — un cambio solo de plugins también re-lista.
         std::array::from_fn(|i| {
             self.column_settings
-                .attr_fingerprint(self.panes[i].dir().scheme())
+                .pane_fingerprint(self.panes[i].dir().scheme())
         })
     }
 
@@ -2652,19 +2641,9 @@ impl NorteGui {
                 }
                 header_row = header_row.child(cell);
             }
-            // Cabeceras de las columnas de plugin (G3c): misma geometría fija
-            // de 96px que sus celdas, no ordenables. Ya saneadas en
-            // columns_ready.
-            for (_id, header) in &self.columns[i] {
-                header_row = header_row.child(
-                    div()
-                        .flex_none()
-                        .pl(px(sp::XS))
-                        .w(px(96.0))
-                        .truncate()
-                        .child(SharedString::from(header.clone())),
-                );
-            }
+            // #117-follow-up: las cabeceras de columnas plugin: salen del
+            // funnel (header_label, no ordenables — sort_column_id=None);
+            // el loop fijo de 96px de G3c murió con la config-driven.
             col = col.child(header_row);
         }
 
@@ -2885,7 +2864,14 @@ impl NorteGui {
             // #108 7b: formato del estilo resuelto (hoisted por frame en
             // `render_pane`) y `align` eligiendo el lado — el separador
             // (pl) sigue abriendo el ancho en ambos casos.
-            let cell = row_cell_text(entry, col, now_ms, style);
+            // #117-follow-up: las celdas plugin: salen del side-map del
+            // pane (re-enmascaradas allí); el resto, de la Entry.
+            let cell = match col {
+                norte_frontend::columns::ColumnId::Plugin { .. } => self.panes[pane]
+                    .plugin_cell(&col.to_string(), &entry.path)
+                    .unwrap_or_default(),
+                _ => row_cell_text(entry, col, now_ms, style),
+            };
             let celda = div()
                 .flex_none()
                 .w(px(f32::from(*w) * ch))
@@ -2903,30 +2889,9 @@ impl NorteGui {
                     .child(div().truncate().child(SharedString::from(cell))),
             );
         }
-        // G3c (cierra el deferral GUI de G3b): una celda de ancho FIJO por
-        // columna DECLARADA para este pane (`self.columns[pane]`, ya
-        // saneada — `session::columns_ready`), en blanco si esta entrada
-        // no tiene valor (`None` en el wire — "no aplica", distinto de una
-        // cadena vacía real). Mono (coherente con el resto del listado) +
-        // un tono atenuado — mismo criterio "presente pero no el dato
-        // principal" que la description de un plugin en el gestor de
-        // extensiones.
-        for (col_id, _header) in &self.columns[pane] {
-            let cell = self.column_values[pane]
-                .get(col_id)
-                .and_then(|m| m.get(&entry.path))
-                .cloned()
-                .unwrap_or_default();
-            row = row.child(
-                div()
-                    .pl(px(sp::XS))
-                    .w(px(96.0))
-                    .truncate()
-                    .font(self.fonts.mono.clone())
-                    .text_color(chrome.quick_fg)
-                    .child(SharedString::from(cell)),
-            );
-        }
+        // #117-follow-up: las celdas plugin: viven ahora en el funnel de
+        // arriba (config-driven, side-map del pane) — el loop fijo de 96px
+        // de G3c murió con ellas.
         if marked {
             row = row.bg(chrome.mark_bg);
         }

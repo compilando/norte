@@ -18,6 +18,14 @@ use norte_proto::VPath;
 /// width.
 pub const COLUMN_VALUE_MAX_CHARS: usize = 32;
 
+/// Cap de columnas `plugin:` PEDIBLES por lista pintada (#117-follow-up) —
+/// espejo del [`norte_proto::ATTRS_MAX_REQUEST`] de los attrs, pero local
+/// del frontend: cada columna de plugin cuesta UNA RPC
+/// `plugin.column_values` por listado, así que el cap acota trabajo, no
+/// wire. Pintado == pedido; el excedente es diagnóstico
+/// (`plugins_over_cap`, doctor lo nombra), jamás una columna en blanco.
+pub const PLUGIN_COLUMNS_MAX_REQUEST: usize = 8;
+
 /// Masks a column HEADER ([`norte_proto::methods::PluginColumnInfo::header`],
 /// plugin text — untrusted).
 #[must_use]
@@ -57,6 +65,122 @@ pub fn sanitize_column_values(
         .zip(values.iter())
         .filter_map(|(p, v)| sanitize_cell(v.as_deref()).map(|s| (p.clone(), s)))
         .collect()
+}
+
+/// Id Display de una columna `plugin:` (#117-follow-up, audit F5): pasa
+/// por el `Display` REAL de [`ColumnId`] — jamás un `format!` ad-hoc que
+/// pueda derivar del parser (un drift = celdas permanentemente en blanco
+/// sin diagnóstico, la clave del side-map dejaría de casar).
+#[must_use]
+pub fn plugin_display_id(plugin: &str, column: &str) -> String {
+    ColumnId::Plugin {
+        plugin: plugin.to_owned(),
+        column: column.to_owned(),
+    }
+    .to_string()
+}
+
+/// Filtra los pares (plugin, columna) CONFIGURADOS contra el catálogo vivo
+/// (#117-follow-up, review MAJOR-1: única definición para ambos frontends —
+/// la validación de PERTENENCIA es lo que impide que un id configurado
+/// pinte la columna de un plugin que jamás la declaró): sobrevive un par
+/// solo si su plugin está aprobado + habilitado Y declara ESA columna.
+/// Además DEDUPLICA por id bare de columna (review MAJOR-2): el wire
+/// `plugin.column_values` resuelve first-match por id bare entre plugins —
+/// dos pares consentidos con la misma columna servirían los MISMOS valores
+/// bajo dos cabeceras distintas (datos mal atribuidos); se conserva el
+/// primero y el resto queda en blanco (ausencia visible, jamás atribución
+/// falsa; desambiguación real = issue #120).
+#[must_use]
+pub fn validated_plugin_requests(
+    requested: &[(String, String)],
+    plugins: &[norte_proto::methods::PluginInfo],
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (plugin, column) in requested {
+        let declared = plugins.iter().any(|p| {
+            p.approved && p.enabled && p.id == *plugin && p.columns.iter().any(|c| c.id == *column)
+        });
+        if declared && !out.iter().any(|(_, c)| c == column) {
+            out.push((plugin.clone(), column.clone()));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod validated_plugin_requests_tests {
+    use super::*;
+
+    fn plugin(
+        id: &str,
+        cols: &[&str],
+        approved: bool,
+        enabled: bool,
+    ) -> norte_proto::methods::PluginInfo {
+        norte_proto::methods::PluginInfo {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            publisher: String::new(),
+            version: "1.0.0".to_owned(),
+            category: "columns".to_owned(),
+            capabilities: Vec::new(),
+            approved,
+            enabled,
+            description: None,
+            commands: Vec::new(),
+            columns: cols
+                .iter()
+                .map(|c| norte_proto::methods::PluginColumnInfo {
+                    id: (*c).to_owned(),
+                    header: (*c).to_owned(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Pertenencia: solo sobrevive el par cuyo plugin (aprobado+habilitado)
+    /// declara ESA columna — ni columnas ajenas ni plugins sin consentir.
+    #[test]
+    fn filtra_por_pertenencia_y_consentimiento() {
+        let plugins = vec![
+            plugin("git", &["branch"], true, true),
+            plugin("otro", &["status"], false, true),
+            plugin("apagado", &["x"], true, false),
+        ];
+        let requested = vec![
+            ("git".to_owned(), "branch".to_owned()),
+            ("git".to_owned(), "status".to_owned()), // git NO declara status
+            ("otro".to_owned(), "status".to_owned()), // sin aprobar
+            ("apagado".to_owned(), "x".to_owned()),  // deshabilitado
+            ("fantasma".to_owned(), "y".to_owned()), // no existe
+        ];
+        assert_eq!(
+            validated_plugin_requests(&requested, &plugins),
+            vec![("git".to_owned(), "branch".to_owned())]
+        );
+    }
+
+    /// Review MAJOR-2: dos plugins consentidos con el MISMO id bare de
+    /// columna — el wire es first-match, así que servir ambos pintaría los
+    /// valores de uno bajo la cabecera del otro. Se conserva el primero;
+    /// el segundo queda en blanco (ausencia visible, jamás datos ajenos).
+    #[test]
+    fn colision_de_id_bare_conserva_solo_el_primero() {
+        let plugins = vec![
+            plugin("a", &["branch"], true, true),
+            plugin("b", &["branch"], true, true),
+        ];
+        let requested = vec![
+            ("a".to_owned(), "branch".to_owned()),
+            ("b".to_owned(), "branch".to_owned()),
+        ];
+        assert_eq!(
+            validated_plugin_requests(&requested, &plugins),
+            vec![("a".to_owned(), "branch".to_owned())],
+            "el par de b se omite: blanco antes que atribución falsa (#120)"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -608,8 +732,9 @@ mod settings_tests {
             vec!["rota!!".to_owned()],
             "diagnóstico, no drop mudo"
         );
-        // #117: los attr: YA se pintan — nada sin renderer aquí.
-        assert!(st.unrenderable.is_empty(), "{:?}", st.unrenderable);
+        // #117 y follow-up: attr: y plugin: se pintan ambos — el único
+        // diagnóstico de cap presente aquí debe estar vacío.
+        assert!(st.plugins_over_cap.is_empty(), "{:?}", st.plugins_over_cap);
 
         // Default: size + attr → name ANTEPUESTO (jamás sin nombre).
         let items = st.layout_items_for("file");
@@ -646,7 +771,7 @@ mod settings_tests {
         assert_eq!(st.sort_for("file"), crate::sort::SortSpec::default());
         let items = st.layout_items_for("file");
         assert_eq!(items.len(), 3, "name+size+mtime");
-        assert!(st.invalid.is_empty() && st.unrenderable.is_empty());
+        assert!(st.invalid.is_empty() && st.plugins_over_cap.is_empty());
     }
 }
 
@@ -1121,9 +1246,8 @@ pub fn format_name(b: Builtin, style: &ColumnStyle) -> Option<&'static str> {
 /// mapeado, overrides por scheme. Los ids que no parsean van a
 /// [`ColumnsSettings::invalid`] — se saltan al pintar y los reporta
 /// `norte doctor` (jamás un drop silencioso ni un error de arranque).
-/// Los `attr:` se pintan por el funnel generalizado (#117); los `plugin:`
-/// aún no tienen renderer y se listan en
-/// [`ColumnsSettings::unrenderable`].
+/// Los `attr:` (#117) y los `plugin:` (follow-up) se pintan ambos por el
+/// funnel generalizado, cada familia con su cap pintado == pedido.
 #[derive(Debug, Clone, Default)]
 pub struct ColumnsSettings {
     default_set: Option<Vec<ColumnId>>,
@@ -1150,9 +1274,11 @@ pub struct ColumnsSettings {
     >,
     /// Ids configurados que NO parsean (diagnóstico para doctor).
     pub invalid: Vec<String>,
-    /// Ids válidos sin renderer todavía — SOLO `plugin:` desde #117 (los
-    /// `attr:` se pintan por el funnel generalizado).
-    pub unrenderable: Vec<String>,
+    /// Ids `plugin:` configurados MÁS ALLÁ del cap de petición
+    /// ([`PLUGIN_COLUMNS_MAX_REQUEST`]) en alguna lista: el funnel no los
+    /// pinta y el pane no los pide (pintado == pedido); doctor los nombra
+    /// (`columns-plugins-over-cap`).
+    pub plugins_over_cap: Vec<String>,
     /// Ids `attr:` configurados MÁS ALLÁ del cap de petición
     /// ([`norte_proto::ATTRS_MAX_REQUEST`]) en alguna lista (#117 review):
     /// el funnel no los pinta y el pane no los pide — pintado == pedido,
@@ -1345,6 +1471,7 @@ impl ColumnsSettings {
         // un dup no consume hueco. Para un `attr:` la forma cruda y la
         // Display coinciden, así que el dedup por raw basta.
         let mut attrs_vistos: Vec<&String> = Vec::new();
+        let mut plugins_vistos: Vec<&String> = Vec::new();
         for raw in ids {
             match raw.parse::<ColumnId>() {
                 Err(_) => {
@@ -1352,9 +1479,16 @@ impl ColumnsSettings {
                         self.invalid.push(raw.clone());
                     }
                 }
+                // #117-follow-up: los `plugin:` YA se pintan — el único
+                // diagnóstico que les queda es el cap (espejo de los attrs).
                 Ok(ColumnId::Plugin { .. }) => {
-                    if !self.unrenderable.contains(raw) {
-                        self.unrenderable.push(raw.clone());
+                    if !plugins_vistos.contains(&raw) {
+                        plugins_vistos.push(raw);
+                        if plugins_vistos.len() > PLUGIN_COLUMNS_MAX_REQUEST
+                            && !self.plugins_over_cap.contains(raw)
+                        {
+                            self.plugins_over_cap.push(raw.clone());
+                        }
                     }
                 }
                 Ok(ColumnId::Attr(a)) => {
@@ -1391,8 +1525,8 @@ impl ColumnsSettings {
     }
 
     /// Los items de layout para un pane en `scheme`, en orden de pintado
-    /// (#117: builtins Y attrs; los `plugin:` configurados se SALTAN — sin
-    /// renderer aún, doctor los nombra). Dedup por id; el nombre jamás
+    /// (#117 y follow-up: builtins, attrs Y `plugin:` — cada familia con su
+    /// cap pintado == pedido). Dedup por id; el nombre jamás
     /// desaparece ni deja de ir primero. El `width` de un
     /// `[[ui.columns.spec]]` (global ← scheme) SUSTITUYE la política del
     /// item — sobre cualquier columna, también attrs. Un width sobre `name`
@@ -1415,8 +1549,19 @@ impl ColumnsSettings {
                 let mut out: Vec<(ColumnId, LayoutItem)> = Vec::new();
                 for id in ids {
                     match id {
-                        ColumnId::Plugin { .. } => {}
                         _ if out.iter().any(|(x, _)| x == id) => {}
+                        // #117-follow-up: mismo trato que los attrs — item
+                        // por defecto (width override por spec gratis) y cap
+                        // pintado == pedido (cada columna es una RPC).
+                        ColumnId::Plugin { .. } => {
+                            let plugins = out
+                                .iter()
+                                .filter(|(x, _)| matches!(x, ColumnId::Plugin { .. }))
+                                .count();
+                            if plugins < PLUGIN_COLUMNS_MAX_REQUEST {
+                                out.push((id.clone(), plugin_layout_item()));
+                            }
+                        }
                         ColumnId::Builtin(b) => out.push((id.clone(), builtin_layout_item(*b))),
                         // #117 review: a lo sumo ATTRS_MAX_REQUEST attrs —
                         // pintado == pedido (`attr_ids_for`); el resto es
@@ -1504,6 +1649,51 @@ impl ColumnsSettings {
     pub fn attr_fingerprint(&self, scheme: &str) -> Vec<String> {
         let mut ids = self.attr_ids_for(scheme);
         ids.sort_unstable();
+        ids
+    }
+
+    /// Las columnas `plugin:` CONFIGURADAS y pintables de `scheme`
+    /// (#117-follow-up), como pares `(plugin, columna)` en orden de
+    /// pintado — lo que el frontend pide vía `plugin.column_values` (el
+    /// id del wire es la COLUMNA bare; el plugin valida pertenencia
+    /// contra el catálogo `plugin.list`). Cap ya aplicado por
+    /// `layout_items_for` (pintado == pedido).
+    #[must_use]
+    pub fn plugin_ids_for(&self, scheme: &str) -> Vec<(String, String)> {
+        self.layout_items_for(scheme)
+            .into_iter()
+            .filter_map(|(id, _)| match id {
+                ColumnId::Plugin { plugin, column } => Some((plugin, column)),
+                _ => None,
+            })
+            .take(PLUGIN_COLUMNS_MAX_REQUEST)
+            .collect()
+    }
+
+    /// Huella ORDENADA de [`Self::plugin_ids_for`] — espejo de
+    /// [`Self::attr_fingerprint`]: decide si un cambio de columnas exige
+    /// re-pedir valores de plugin (un reorden no).
+    #[must_use]
+    pub fn plugin_fingerprint(&self, scheme: &str) -> Vec<(String, String)> {
+        let mut ids = self.plugin_ids_for(scheme);
+        ids.sort_unstable();
+        ids
+    }
+
+    /// Huella COMBINADA attr+plugin de un pane (#117-follow-up, review
+    /// MAJOR-1): la ÚNICA definición de «¿cambió lo que este pane pide?»
+    /// para ambos frontends — attr ids más los display ids `plugin:` en
+    /// forma ordenada. Si divergiera por frontend, uno dejaría de
+    /// re-listar ante un cambio solo-de-plugins y la columna nueva
+    /// quedaría permanentemente en blanco.
+    #[must_use]
+    pub fn pane_fingerprint(&self, scheme: &str) -> Vec<String> {
+        let mut ids = self.attr_fingerprint(scheme);
+        ids.extend(
+            self.plugin_fingerprint(scheme)
+                .into_iter()
+                .map(|(p, c)| plugin_display_id(&p, &c)),
+        );
         ids
     }
 
@@ -1607,6 +1797,19 @@ pub fn attr_layout_item() -> LayoutItem {
     }
 }
 
+/// Item de layout por defecto de una columna `plugin:` (#117-follow-up):
+/// mismo `Fixed(12)` que los attrs — los valores están capados a
+/// [`COLUMN_VALUE_MAX_CHARS`] en el ingest y el ancho fino se ajusta con
+/// el width override del spec.
+#[must_use]
+pub fn plugin_layout_item() -> LayoutItem {
+    LayoutItem {
+        policy: WidthPolicy::Fixed(12),
+        measured: 0,
+        is_name: false,
+    }
+}
+
 fn parse_ids(ids: &[String]) -> Vec<ColumnId> {
     ids.iter()
         .filter_map(|raw| raw.parse::<ColumnId>().ok())
@@ -1681,7 +1884,9 @@ pub fn sort_column_id(id: &ColumnId) -> Option<crate::sort::SortColumn> {
 /// [`ColumnId`]) con un [`ColumnStyle`] resuelto (7b): `None` = ausencia
 /// (un dir sin size, un attr que el provider no mandó) — se pinta blanco,
 /// jamás un `0` fabricado. `now_ms` lo inyecta el caller (estabilidad de
-/// snapshots y pureza). Los `plugin:` no tienen renderer aquí: `None`.
+/// snapshots y pureza). Los `plugin:` devuelven `None` AQUÍ a propósito:
+/// sus valores no viven en la `Entry` sino en el side-map del pane
+/// (`PaneState::plugin_cell`) — el render los resuelve por ese camino.
 #[must_use]
 pub fn styled_cell(
     entry: &norte_proto::Entry,
@@ -2226,8 +2431,11 @@ mod attr_funnel_tests {
         );
     }
 
+    /// #117-follow-up: los `plugin:` ya tienen renderer — entran al layout
+    /// como los attrs (item por defecto, width override por spec) y dejan
+    /// de ser diagnóstico. El campo `unrenderable` murió con ellos.
     #[test]
-    fn attr_ya_no_es_unrenderable_plugin_si() {
+    fn plugin_entra_al_layout_como_columna() {
         let cfg = norte_config::ColumnsConfig {
             default_columns: Some(vec![
                 "name".into(),
@@ -2237,7 +2445,63 @@ mod attr_funnel_tests {
             ..Default::default()
         };
         let st = ColumnsSettings::resolve(&cfg);
-        assert_eq!(st.unrenderable, vec!["plugin:git/branch".to_owned()]);
+        let items = st.layout_items_for("file");
+        assert!(
+            items.iter().any(|(id, _)| matches!(
+                id,
+                ColumnId::Plugin { plugin, column } if plugin == "git" && column == "branch"
+            )),
+            "plugin:git/branch pintable: {items:?}"
+        );
+        // Petición: qué columnas de plugin pedir para el scheme, en forma
+        // (plugin, columna) — espejo de `attr_ids_for`.
+        assert_eq!(
+            st.plugin_ids_for("file"),
+            vec![("git".to_owned(), "branch".to_owned())]
+        );
+        // Huella orden-insensible, espejo de `attr_fingerprint`.
+        let reordenada = norte_config::ColumnsConfig {
+            default_columns: Some(vec![
+                "plugin:git/branch".into(),
+                "name".into(),
+                "attr:posix.mode".into(),
+            ]),
+            ..Default::default()
+        };
+        assert_eq!(
+            ColumnsSettings::resolve(&reordenada).plugin_fingerprint("file"),
+            st.plugin_fingerprint("file"),
+            "reorden = misma huella"
+        );
+    }
+
+    /// #117-follow-up: cap de columnas de plugin por lista pintada
+    /// ([`PLUGIN_COLUMNS_MAX_REQUEST`]) — pintado == pedido (cada columna
+    /// es una RPC `plugin.column_values`); el resto es diagnóstico, jamás
+    /// una columna permanentemente en blanco.
+    #[test]
+    fn plugin_over_cap_diagnosticado_y_no_pintado() {
+        let mut ids = vec!["name".to_owned()];
+        for i in 0..=PLUGIN_COLUMNS_MAX_REQUEST {
+            ids.push(format!("plugin:p/c{i}"));
+        }
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: Some(ids),
+            ..Default::default()
+        };
+        let st = ColumnsSettings::resolve(&cfg);
+        let pintadas = st
+            .layout_items_for("file")
+            .iter()
+            .filter(|(id, _)| matches!(id, ColumnId::Plugin { .. }))
+            .count();
+        assert_eq!(pintadas, PLUGIN_COLUMNS_MAX_REQUEST);
+        assert_eq!(st.plugin_ids_for("file").len(), PLUGIN_COLUMNS_MAX_REQUEST);
+        assert_eq!(
+            st.plugins_over_cap,
+            vec![format!("plugin:p/c{PLUGIN_COLUMNS_MAX_REQUEST}")],
+            "el excedente se nombra, no se silencia"
+        );
     }
 
     #[test]
@@ -2347,6 +2611,24 @@ mod attr_funnel_tests {
         let mut st = ColumnStyle::default_for_id(&id3, None);
         st.header = Some("Custom".into());
         assert_eq!(header_label(&id3, &st, None), "Custom");
+    }
+
+    /// Audit F2 (#117-follow-up): un id `plugin:` HOSTIL de una config de
+    /// capa de proyecto (RLO/ZWSP parsean — `from_str` acepta cualquier
+    /// segmento no vacío) jamás llega crudo a la cabecera: el brazo Plugin
+    /// de `header_label` enmascara — y ni TUI ni GUI re-enmascaran después
+    /// (confían en este choke point; una regresión aquí desaparecería la
+    /// línea de cabeceras entera en ratatui).
+    #[test]
+    fn header_label_plugin_enmascara_id_hostil() {
+        let id: ColumnId = "plugin:e\u{202E}vil/c\u{200B}ol".parse().expect("parsea");
+        let h = header_label(&id, &ColumnStyle::default_for_id(&id, None), None);
+        assert!(
+            !h.chars().any(norte_encoding::is_terminal_hazard),
+            "hazard crudo en la cabecera: {h:?}"
+        );
+        assert!(h.contains('\u{FFFD}'), "enmascarado visible: {h:?}");
+        assert!(h.contains("vil/c"), "el resto del id sobrevive: {h:?}");
     }
 
     #[test]
