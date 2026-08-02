@@ -642,6 +642,13 @@ independently through `PROTOCOL_VERSION`.
   mutation-completed refreshes: the drainer is released only for panes that
   truly got a complete listing (an Esc mid-refresh keeps the other pane's
   still-valid fill), and the probe dedup is invalidated.
+- **Palette and quick-search dispatch sites missed the resolver's
+  post-command tail (#118 review):** a cd chosen from the command palette
+  (or a quick-search Enter landing in a hit directory) could exit a pane's
+  virtual search mode without cancelling the live search task, and a
+  `pane.open` picked from the palette left the resolved external command
+  queued until the next keypress. Both sites now reap the search run; the
+  palette also launches the pending opener immediately.
 - **Daemon plugin previews skipped host-side text decoding (#101):** the
   `plugin.preview`/`plugin.preview_styled` daemon handlers passed RAW bytes
   to the previewer guest, unlike the embedded backend, which decodes to text

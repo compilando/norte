@@ -1120,6 +1120,18 @@ async fn run(
                             decorate_fetch = spawn_decorate_fetch(backend, pane, dir, paths);
                         }
                         apply_cd(&mut fill, &mut last_probed, outcome);
+                                    // Paridad con el sitio del resolver (#118
+                                    // review): un cd elegido en la palette
+                                    // (nav.parent…) también puede apagar el
+                                    // modo virtual — cosecha del run (regla 3);
+                                    // y un `pane.open` de la palette deja su
+                                    // comando externo resuelto — lanzarlo YA,
+                                    // no en la siguiente tecla.
+                                    reap_search_run(app, &mut search_run);
+                                    if let Some((program, argv)) = app.pending_open.take() {
+                                        app.message =
+                                            Some(launch_opener(terminal, program, argv).await);
+                                    }
                                 }
                             }
                             _ => {}
@@ -1420,6 +1432,13 @@ async fn run(
                             decorate_fetch = spawn_decorate_fetch(backend, pane, dir, paths);
                         }
                         apply_cd(&mut fill, &mut last_probed, outcome);
+                                        // Paridad con el sitio del resolver
+                                        // (#118 review): el Enter del quick
+                                        // search ES un nav.enter — entrar en
+                                        // un hit apaga el modo virtual del
+                                        // pane; sin cosecha, la Task de
+                                        // búsqueda quedaba viva (regla 3).
+                                        reap_search_run(app, &mut search_run);
                                     }
                                     continue;
                                 }
