@@ -476,6 +476,21 @@ fn persist_plugin_setting_item(
     }
     let dir = config_dir.join("plugins").join(plugin_id);
     std::fs::create_dir_all(&dir)?;
+    // #119 (plantilla #116, `norte-config::load`): lock advisory
+    // cross-process sobre el hermano DEDICADO `config.toml.lock`, tomado
+    // ANTES de leer — el RMW entero es la sección crítica (GUI+TUI sobre el
+    // mismo plugin). Apertura SIN truncar (#116 MAJOR-1: `CREATE_ALWAYS`
+    // sobre un lock `LockFileEx` ajeno puede FALLAR en Windows en vez de
+    // esperar). El SO libera al morir el proceso — sin locks rancios.
+    // Duplicado deliberado de los helpers de norte-config (crates
+    // desacoplados; misma doctrina que el fold core/frontend).
+    let lock_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(dir.join("config.toml.lock"))?;
+    lock_file.lock()?;
+    let _lock = lock_file; // vivo hasta el final del RMW; drop = unlock
     let path = dir.join("config.toml");
     let mut doc = match std::fs::read_to_string(&path) {
         Ok(s) => s.parse::<toml_edit::DocumentMut>().map_err(|_| {
@@ -495,13 +510,122 @@ fn persist_plugin_setting_item(
         Err(e) => return Err(e),
     };
     doc[key] = item;
-    std::fs::write(&path, doc.to_string())?;
+    // #119: reemplazo ATÓMICO — tmp hermano + permisos del existente +
+    // `sync_all` + rename (POSIX atómico; Windows reemplaza). Un lector
+    // concurrente ve el fichero viejo o el nuevo COMPLETO, jamás un
+    // truncado. Tmp huérfano de un crash = inocuo (lo pisa la siguiente
+    // escritura, mismo nombre bajo el lock).
+    let tmp = path.with_file_name("config.toml.tmp");
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(doc.to_string().as_bytes())?;
+        match std::fs::metadata(&path) {
+            Ok(meta) => f.set_permissions(meta.permissions())?,
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, &path)?;
     Ok(path)
 }
 
 #[cfg(test)]
 mod persist_plugin_setting_tests {
     use super::*;
+
+    /// #119: el escritor toma el lock advisory cross-process
+    /// (`config.toml.lock` del dir del plugin) ANTES de leer — con el lock
+    /// en manos de otro descriptor, `persist_plugin_setting` BLOQUEA hasta
+    /// la liberación (sin él, dos RMW GUI+TUI se intercalan y el segundo
+    /// escribe sobre una lectura rancia).
+    #[test]
+    fn persist_espera_el_lock_de_otro_escritor() {
+        let base = tempfile::tempdir().unwrap();
+        let plugin_dir = base.path().join("plugins/org.norte.demo");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        // Mismo open SIN truncar que el lock real (#116 MAJOR-1).
+        let holder = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(plugin_dir.join("config.toml.lock"))
+            .unwrap();
+        holder.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let d = base.path().to_path_buf();
+        let writer = std::thread::spawn(move || {
+            let r = persist_plugin_setting(&d, "org.norte.demo", "mode", "slow");
+            let _ = tx.send(());
+            r
+        });
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(300))
+                .is_err(),
+            "persist NO debe completar mientras otro escritor tiene el lock"
+        );
+        assert!(
+            !plugin_dir.join("config.toml").exists(),
+            "nada escrito mientras el lock está en manos ajenas"
+        );
+        drop(holder);
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("liberado el lock, el escritor completa");
+        writer.join().unwrap().expect("escritura");
+    }
+
+    /// #119: dos escritores RMW concurrentes sobre claves distintas no se
+    /// pisan — ambas sobreviven con su último valor.
+    #[test]
+    fn escritores_concurrentes_no_pierden_claves() {
+        let base = tempfile::tempdir().unwrap();
+        let d1 = base.path().to_path_buf();
+        let d2 = base.path().to_path_buf();
+        let a = std::thread::spawn(move || {
+            for i in 0..25 {
+                persist_plugin_setting(&d1, "org.norte.demo", "alpha", &i.to_string()).expect("a");
+            }
+        });
+        let b = std::thread::spawn(move || {
+            for i in 0..25 {
+                persist_plugin_setting(&d2, "org.norte.demo", "beta", &i.to_string()).expect("b");
+            }
+        });
+        a.join().unwrap();
+        b.join().unwrap();
+        let s = std::fs::read_to_string(
+            base.path()
+                .join("plugins/org.norte.demo")
+                .join("config.toml"),
+        )
+        .unwrap();
+        let doc: toml_edit::DocumentMut = s.parse().expect("el fichero final parsea");
+        assert_eq!(
+            doc.get("alpha").and_then(|i| i.as_str()),
+            Some("24"),
+            "la última escritura de `alpha` sobrevive"
+        );
+        assert_eq!(
+            doc.get("beta").and_then(|i| i.as_str()),
+            Some("24"),
+            "la última escritura de `beta` sobrevive"
+        );
+    }
+
+    /// #119 (pin): escritura tmp hermano + rename — sin temporal residual.
+    #[test]
+    fn persistir_no_deja_tmp_residual() {
+        let base = tempfile::tempdir().unwrap();
+        persist_plugin_setting(base.path(), "org.norte.demo", "mode", "slow").unwrap();
+        let plugin_dir = base.path().join("plugins/org.norte.demo");
+        let residuales: Vec<String> = std::fs::read_dir(&plugin_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains("tmp"))
+            .collect();
+        assert!(residuales.is_empty(), "tmp residual: {residuales:?}");
+    }
 
     #[test]
     fn round_trip_preservando_comentarios() {

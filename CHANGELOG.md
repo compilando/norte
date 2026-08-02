@@ -649,8 +649,8 @@ independently through `PROTOCOL_VERSION`.
   (`norte.toml.lock`, held for the whole read-modify-write; released by
   the OS even on crash) and replace the file via a synced sibling tmp +
   atomic rename, preserving existing file permissions — readers see the
-  old or the new file, never a torn one. The same pattern is filed as
-  #119 for per-plugin `config.toml` writes.
+  old or the new file, never a torn one. Per-plugin `config.toml` writes
+  got the same treatment (#119).
 - **Ctrl+R skipped the post-refresh ritual (#118):** `pane.refresh` ran from
   the command dispatcher, which cannot see the run loop's paginated fill or
   the stat-probe dedup — with a large listing still streaming in, the old
