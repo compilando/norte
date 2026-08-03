@@ -7,6 +7,21 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **AI rename over the wire (M4-IA, ADR 0031, proto 0.32.0):** new
+  `ai.rename_plan` method — a direct response, cancellable via
+  `rpc.cancel`, that returns the reviewable plan and never mutates.
+  The daemon builds the configured AI provider at startup (opt-in,
+  degrading — a broken `[ai]` never aborts `norte daemon run`), denies
+  agents fail-closed, and caps the instruction at 4 KiB. TUI and GUI
+  gain the full flow (`pane.ai-rename`): instruction prompt → reviewable
+  plan modal (target dir shown, numbered pairs, hostile names masked and
+  badged, scrollable window, plans over 256 entries rejected en bloc) →
+  N journaled `fs.move` tasks with undo. A malformed pair from a
+  hostile or broken daemon aborts the whole apply before any move is
+  submitted (shared `validate_ai_plan` belt in `norte-frontend`).
+
 ## [0.3.0-alpha.2] - 2026-08-02
 
 ### Added
