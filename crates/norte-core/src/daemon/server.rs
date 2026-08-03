@@ -107,6 +107,9 @@ const MAX_SCOPE_TTL_MS: u64 = 24 * 60 * 60 * 1000;
 /// Cada cuánto barre el server los listados retenidos expirados de una
 /// conexión VIVA-pero-muda (además del barrido perezoso en cada `fs.list`).
 const LISTING_SWEEP: Duration = Duration::from_secs(30);
+/// Tope del prompt de `ai.rename_plan` (security review M4-IA): los tokens de
+/// ENTRADA son el coste del proveedor; el frame de 16 MiB no es un límite.
+const MAX_AI_INSTRUCTION_BYTES: usize = 4 * 1024;
 
 /// Configuración del daemon.
 #[derive(Debug, Clone)]
@@ -2869,7 +2872,23 @@ async fn dispatch_fs_task(
         // Respuesta DIRECTA; cancelable (#72) — la llamada al proveedor tarda.
         methods::AI_RENAME_PLAN => {
             let p: methods::AiRenamePlanParams = parse_params(req.params)?;
+            if p.instruction.len() > MAX_AI_INSTRUCTION_BYTES {
+                return Err(RpcError::protocol(
+                    codes::INVALID_PARAMS,
+                    format!("instruction supera {MAX_AI_INSTRUCTION_BYTES} bytes"),
+                ));
+            }
             read_gate(&actor, &p.dir, shared)?; // #80
+            // IA solo para el humano (M4-IA security): un agente con scope de
+            // lectura NO puede quemar cuota del proveedor ni empujar basenames
+            // + instrucción fuera de la máquina sin rastro (el path de lectura
+            // no journaliza). El MCP tampoco expone ai.* como tool. Categoría
+            // del vocabulario CERRADO de [`crate::policy::DenyReason`].
+            if !matches!(actor, Actor::User) {
+                return Err(RpcError::from(norte_proto::Error::PolicyDenied {
+                    rule: "not-approved".into(),
+                }));
+            }
             let plan = shared
                 .engine
                 .ai_rename_plan(&p.dir, &p.instruction)

@@ -4655,6 +4655,60 @@ async fn agente_sin_scope_no_puede_ai_rename_plan() {
     }
 }
 
+/// MINOR-1 (security review M4-IA): la IA es SOLO para el humano — un agente
+/// CON scope de lectura VIVO pasa el `read_gate` pero se deniega igualmente
+/// (`not-approved`, vocabulario cerrado): no quema cuota del proveedor ni
+/// empuja basenames + instrucción fuera de la máquina sin rastro (el path de
+/// lectura no journaliza).
+#[tokio::test]
+async fn agente_con_scope_tampoco_puede_ai_rename_plan() {
+    let d = spawn_daemon_policy().await;
+    let agent = connected_agent(&d, "s1").await;
+    let human = connected_client(&d).await;
+    grant_copy_scope(&agent, &human, "s1").await;
+    let err = agent
+        .call::<_, methods::AiRenamePlanResult>(
+            methods::AI_RENAME_PLAN,
+            &methods::AiRenamePlanParams {
+                dir: vp("mem:///proj"),
+                instruction: "x".into(),
+            },
+        )
+        .await
+        .expect_err("agente con scope: la IA sigue vedada");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"),
+            "PolicyDenied not-approved, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// MINOR-2 (security review M4-IA): la instrucción se capa server-side ANTES
+/// de tocar engine o proveedor — los tokens de ENTRADA son el coste; el frame
+/// de 16 MiB no es un límite.
+#[tokio::test]
+async fn instruccion_desmesurada_es_invalid_params() {
+    let d = spawn_daemon_ai("[]").await;
+    let c = connected_client(&d).await;
+    let err = c
+        .call::<_, methods::AiRenamePlanResult>(
+            methods::AI_RENAME_PLAN,
+            &methods::AiRenamePlanParams {
+                dir: vp("mem:///"),
+                instruction: "x".repeat(5 * 1024),
+            },
+        )
+        .await
+        .expect_err("instrucción de 5 KiB → error de protocolo");
+    match err {
+        ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
 /// #72 sobre `ai.rename_plan`: la llamada al proveedor puede tardar — un
 /// `rpc.cancel` dropea el dispatch en vuelo (el stream HTTP aborta con el
 /// drop) y responde `Error::Cancelled` sin matar la conexión.
