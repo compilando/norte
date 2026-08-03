@@ -333,13 +333,21 @@ fn index_semantic_embebido_cablea_proveedor() {
     );
 
     // (b) [ai] + embed_provider hacia un endpoint muerto: el wiring instala
-    // el proveedor y el error es SUYO (conexión), no Unsupported.
+    // el proveedor y el error es SUYO (conexión), no Unsupported. Puerto
+    // HERMÉTICO: bind a :0 (el OS elige uno libre) y drop inmediato — el
+    // connect posterior es un refuse determinista y rápido, sin depender de
+    // que un puerto fijo esté libre (o peor, escuchando) en la máquina de CI.
+    let muerto = std::net::TcpListener::bind("127.0.0.1:0").expect("bind :0");
+    let addr = muerto.local_addr().expect("addr");
+    drop(muerto);
     let cfg = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         cfg.path().join("norte.toml"),
-        "[ai]\nenabled = true\nembed_provider = \"emb\"\n\n\
-         [ai.providers.emb]\nkind = \"ollama\"\nmodel = \"m\"\n\
-         base_url = \"http://127.0.0.1:9\"\n",
+        format!(
+            "[ai]\nenabled = true\nembed_provider = \"emb\"\n\n\
+             [ai.providers.emb]\nkind = \"ollama\"\nmodel = \"m\"\n\
+             base_url = \"http://{addr}\"\n"
+        ),
     )
     .expect("norte.toml");
     let out = norte()

@@ -112,7 +112,7 @@ const LISTING_SWEEP: Duration = Duration::from_secs(30);
 const MAX_AI_INSTRUCTION_BYTES: usize = 4 * 1024;
 /// Tope de la query de `index.search_semantic` (mismo cinturón que la
 /// instrucción de `ai.rename_plan`).
-const MAX_AI_QUERY_BYTES: usize = 4 * 1024;
+const MAX_AI_QUERY_BYTES: usize = MAX_AI_INSTRUCTION_BYTES;
 
 /// Configuración del daemon.
 #[derive(Debug, Clone)]

@@ -438,26 +438,8 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     {
         match tokio::task::spawn_blocking(norte_core::ai::AiConfig::load).await {
             Ok(Ok(config)) => {
-                if let Some(pcfg) = config.embed_provider_config().cloned() {
-                    match norte_core::ai::resolve_and_build(
-                        &pcfg,
-                        norte_core::connect::config_dir(),
-                    )
-                    .await
-                    {
-                        Ok(p) => engine.set_ai_embed_provider(p),
-                        Err(e) => eprintln!(
-                            "aviso: proveedor de embeddings no disponible ({e}); \
-                             index embed/semantic darán Unsupported"
-                        ),
-                    }
-                } else if config.embed_provider.is_some() {
-                    // Nombrado pero inexistente en [ai.providers] — distinto de
-                    // "sin configurar" (silencio: los embeddings son opt-in).
-                    eprintln!(
-                        "aviso: embed_provider nombra un proveedor que no existe en \
-                         [ai.providers]; index embed/semantic darán Unsupported"
-                    );
+                if let Some(w) = norte_core::ai::install_embed_provider(&engine, &config).await {
+                    eprintln!("{w}");
                 }
                 engine.set_ai_config(config);
             }
@@ -1295,26 +1277,9 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
                         }
                     }
                     // Embeddings (M4-IA-2): proveedor propio, opt-in igual.
-                    if let Some(pcfg) = config.embed_provider_config().cloned() {
-                        match norte_core::ai::resolve_and_build(
-                            &pcfg,
-                            norte_core::connect::config_dir(),
-                        )
-                        .await
-                        {
-                            Ok(p) => engine.set_ai_embed_provider(p),
-                            Err(e) => eprintln!(
-                                "aviso: proveedor de embeddings no disponible ({e}); \
-                                 index.embed/search_semantic darán Unsupported"
-                            ),
-                        }
-                    } else if config.embed_provider.is_some() {
-                        // Nombrado pero inexistente en [ai.providers] — distinto
-                        // de "sin configurar" (silencio: los embeddings son opt-in).
-                        eprintln!(
-                            "aviso: embed_provider nombra un proveedor que no existe en \
-                             [ai.providers]; index.embed/search_semantic darán Unsupported"
-                        );
+                    if let Some(w) = norte_core::ai::install_embed_provider(&engine, &config).await
+                    {
+                        eprintln!("{w}");
                     }
                     engine.set_ai_config(config);
                 }

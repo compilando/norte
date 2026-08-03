@@ -209,6 +209,41 @@ pub async fn resolve_and_build(
     build_provider(cfg, secret)
 }
 
+/// Instala el proveedor de embeddings de `config` en `engine` (M4-IA-2):
+/// `embed_provider_config()` → [`resolve_and_build`] →
+/// [`crate::Engine::set_ai_embed_provider`]. Fuente ÚNICA del wiring que
+/// comparten daemon-run, la CLI embebida y la TUI embebida — antes vivía
+/// triplicado y divergiría al primer cambio.
+///
+/// Devuelve un aviso IMPRIMIBLE (el caller decide el canal — eprintln en
+/// CLI/TUI; el core no escribe a stderr) cuando el proveedor no se pudo
+/// instalar: construcción fallida, o `embed_provider` nombra un proveedor
+/// inexistente en `[ai.providers]` (distinto de "sin configurar", que es
+/// silencio — los embeddings son opt-in). `None` = instalado o no
+/// configurado.
+pub async fn install_embed_provider(engine: &crate::Engine, config: &AiConfig) -> Option<String> {
+    if let Some(pcfg) = config.embed_provider_config().cloned() {
+        match resolve_and_build(&pcfg, crate::connect::config_dir()).await {
+            Ok(p) => {
+                engine.set_ai_embed_provider(p);
+                None
+            }
+            Err(e) => Some(format!(
+                "aviso: proveedor de embeddings no disponible ({e}); \
+                 index.embed/search_semantic darán Unsupported"
+            )),
+        }
+    } else if config.embed_provider.is_some() {
+        Some(
+            "aviso: embed_provider nombra un proveedor que no existe en \
+             [ai.providers]; index.embed/search_semantic darán Unsupported"
+                .to_owned(),
+        )
+    } else {
+        None
+    }
+}
+
 /// Operación de IA gateada.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiOp {
