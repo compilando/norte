@@ -76,6 +76,11 @@ pub struct Engine {
     /// sin IA (`ai_rename_plan` → `Unsupported`). Inyectado con
     /// [`Self::set_ai_provider`].
     ai_provider: RwLock<Option<norte_ai::SharedAiProvider>>,
+    /// Proveedor de EMBEDDINGS (M4-IA-2, ADR 0031 A3). Separado del de chat:
+    /// `[ai].embed_provider` puede nombrar otro proveedor/modelo. `None` =
+    /// sin embeddings (`index.embed` → `Unsupported`). Inyectado con
+    /// [`Self::set_ai_embed_provider`].
+    ai_embed: RwLock<Option<norte_ai::SharedAiProvider>>,
     /// Config `[ai]` (opt-in/local-only/denied-paths). Default deshabilitado
     /// → el gate rechaza toda operación de IA.
     ai_config: RwLock<crate::ai::AiConfig>,
@@ -107,6 +112,7 @@ impl Engine {
             approvals: Arc::new(crate::approval::DenyAll),
             archive_limits: RwLock::new(norte_vfs_archive::Limits::default()),
             ai_provider: RwLock::new(None),
+            ai_embed: RwLock::new(None),
             ai_config: RwLock::new(crate::ai::AiConfig::default()),
             index: None,
         }
@@ -143,6 +149,7 @@ impl Engine {
             approvals: Arc::new(crate::approval::DenyAll),
             archive_limits: RwLock::new(norte_vfs_archive::Limits::default()),
             ai_provider: RwLock::new(None),
+            ai_embed: RwLock::new(None),
             ai_config: RwLock::new(crate::ai::AiConfig::default()),
             index: None,
         }
@@ -429,6 +436,17 @@ impl Engine {
         *self.ai_provider.write().expect("ai_provider lock sano") = Some(provider);
     }
 
+    /// Inyecta el proveedor de EMBEDDINGS para `index.embed` /
+    /// `index.search_semantic` (M4-IA-2, ADR 0031 A3). Separado de
+    /// [`Self::set_ai_provider`]: `[ai].embed_provider` puede nombrar otro
+    /// proveedor/modelo que el del rename.
+    ///
+    /// # Panics
+    /// Solo por envenenamiento del lock interno (irrecuperable).
+    pub fn set_ai_embed_provider(&self, provider: norte_ai::SharedAiProvider) {
+        *self.ai_embed.write().expect("ai_embed lock sano") = Some(provider);
+    }
+
     /// Fija la config `[ai]` (opt-in/local-only/denied-paths). Sin ella el
     /// gate rechaza toda operación de IA (default deshabilitado).
     ///
@@ -476,14 +494,7 @@ impl Engine {
             let config = self.ai_config.read().expect("ai_config lock sano").clone();
             crate::ai::AiGate::new(&config)
                 .check(crate::ai::AiOp::Rename, provider.is_local(), &[dir])
-                .map_err(|reason| Error::PolicyDenied {
-                    rule: match reason {
-                        crate::ai::AiDenied::Disabled => "ai-disabled",
-                        crate::ai::AiDenied::LocalOnly => "ai-local-only",
-                        crate::ai::AiDenied::DeniedPath => "ai-denied-path",
-                    }
-                    .to_owned(),
-                })?;
+                .map_err(|reason| ai_denied_to_error(&reason))?;
         }
 
         // Nombres base de los archivos del dir (a través del provider, jamás
@@ -675,6 +686,83 @@ impl Engine {
             }),
         );
         Ok((handle, report))
+    }
+
+    /// Task `index.embed`: embeddings de los ficheros ya indexados de `root`
+    /// (M4-IA-2, ADR 0031 A3). Filtrado ANTES de leer (`denied_prefixes`,
+    /// heurística de texto), prefijos acotados, skip por hash — ver
+    /// [`crate::index_embed`].
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] sin índice instalado ([`Self::with_index`]),
+    /// sin proveedor de embeddings ([`Self::set_ai_embed_provider`]) o sin
+    /// proveedor resoluble en la config; [`Error::NotFound`] sin `index.build`
+    /// previo de `root` (fail-loud en la RESPUESTA, no en el join);
+    /// [`Error::PolicyDenied`] si el gate de IA rechaza (IA off, local-only
+    /// sobre remoto, `root` bajo un `denied_prefix`).
+    ///
+    /// # Panics
+    /// Solo por envenenamiento de un lock interno (irrecuperable).
+    #[tracing::instrument(skip(self, actor), fields(root = %span_path(&root)))]
+    pub async fn index_embed_as(
+        &self,
+        root: VPath,
+        actor: crate::journal::Actor,
+    ) -> Result<TaskHandle, Error> {
+        let index = self.index.clone().ok_or(Error::Unsupported)?;
+        let embedder = self
+            .ai_embed
+            .read()
+            .expect("ai_embed lock sano")
+            .clone()
+            .ok_or(Error::Unsupported)?;
+        // Gate PRE-contenido (spec §9): nada se lee ni sale hasta que pasa.
+        // El clon de la config evita retener el lock a través de los await.
+        let (model, denied) = {
+            let config = self.ai_config.read().expect("ai_config lock sano").clone();
+            let model = config
+                .embed_provider_config()
+                .ok_or(Error::Unsupported)?
+                .model
+                .clone();
+            crate::ai::AiGate::new(&config)
+                .check(crate::ai::AiOp::Embed, embedder.is_local(), &[&root])
+                .map_err(|reason| ai_denied_to_error(&reason))?;
+            (model, config.denied_prefixes.clone())
+        };
+        // Pre-check fail-loud en la RESPUESTA: sin build previo no hay
+        // universo que embeber — mejor `NotFound` inmediato que una Task que
+        // falla al join.
+        let no_build = index
+            .files_for_embed(&root)
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, "index.embed: pre-check del índice falló");
+                Error::Io {
+                    retryable: e.is_retryable(),
+                }
+            })?
+            .is_empty();
+        if no_build {
+            return Err(Error::NotFound);
+        }
+        let provider = self.provider_for(&root).await?;
+        let key = root.scheme().to_owned();
+        let handle = self.sched.submit(
+            &key,
+            TaskKind::Embed,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| {
+                Box::pin(async move {
+                    crate::index_embed::embed_for_index(
+                        provider, embedder, index, root, model, denied, &ctx,
+                    )
+                    .await
+                })
+            }),
+        );
+        Ok(handle)
     }
 
     /// Consulta el índice de `root` por `text` (M4). Lectura directa (no Task).
@@ -1098,10 +1186,24 @@ fn span_path(p: &VPath) -> String {
     }
 }
 
+/// Mapea un rechazo del gate de IA a [`Error::PolicyDenied`] con el
+/// vocabulario CERRADO del wire (M4-A2/IA-2): la categoría, jamás el detalle
+/// de la config. Compartido por `ai_rename_plan` e `index_embed_as`.
+fn ai_denied_to_error(reason: &crate::ai::AiDenied) -> Error {
+    Error::PolicyDenied {
+        rule: match reason {
+            crate::ai::AiDenied::Disabled => "ai-disabled",
+            crate::ai::AiDenied::LocalOnly => "ai-local-only",
+            crate::ai::AiDenied::DeniedPath => "ai-denied-path",
+        }
+        .to_owned(),
+    }
+}
+
 /// Mapea un [`norte_ai::AiError`] a la taxonomía del wire (M4-A2). El detalle
 /// (mensajes del proveedor, que jamás contienen la clave por construcción)
 /// queda en el log; el wire lleva la categoría.
-fn ai_to_proto_error(e: &norte_ai::AiError) -> Error {
+pub(crate) fn ai_to_proto_error(e: &norte_ai::AiError) -> Error {
     use norte_ai::AiError as A;
     match e {
         A::Auth => Error::PermissionDenied,

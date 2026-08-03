@@ -13,6 +13,7 @@ pub mod daemon;
 mod engine;
 pub mod ftp_plugin;
 mod index_build;
+mod index_embed;
 pub mod journal;
 pub mod logging;
 mod observer;
