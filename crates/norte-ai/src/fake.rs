@@ -103,12 +103,15 @@ impl AiProvider for FakeEmbed {
     }
 
     async fn embed(&self, inputs: &[String]) -> Result<Vec<Vec<f32>>, AiError> {
-        if let Some(d) = self.delay {
-            tokio::time::sleep(d).await;
-        }
+        // Se registra ANTES de la latencia: "qué salió hacia el proveedor" se
+        // decide al llamar, y un future cancelado en mitad del delay también
+        // debe constar como intento.
         // Invariante: el lock solo se envenena si un test hizo panic con él
         // tomado; propagar ese panic es lo correcto en un fake de test.
         self.calls.lock().expect("test lock").push(inputs.to_vec());
+        if let Some(d) = self.delay {
+            tokio::time::sleep(d).await;
+        }
         if self
             .rate_limited_budget
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
@@ -152,5 +155,6 @@ mod tests {
             Err(crate::AiError::RateLimited { .. })
         ));
         assert!(f.embed(&["x".into()]).await.is_ok());
+        assert_eq!(f.calls.lock().unwrap().len(), 2);
     }
 }
