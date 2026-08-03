@@ -39,6 +39,14 @@
           },
           "type": "array"
         },
+        "embed_provider": {
+          "default": null,
+          "description": "Provider name used for embeddings (`index.embed` /\n`index.search_semantic`). Absent in every layer = no embeddings (the\nmethods degrade to `Unsupported`). Later-layer-wins merge (same as\nother `Option` scalars in this schema).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "enabled": {
           "default": null,
           "description": "AI enabled. `None`/`false` = the gate rejects every operation.\n`Option` (not a plain `bool`) so layer merge distinguishes \"absent\"\n(inherit the lower layer's value) from \"explicitly false\".",

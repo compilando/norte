@@ -660,6 +660,9 @@ pub struct AiSettings {
     pub denied_prefixes: Vec<norte_proto::VPath>,
     /// Provider selected for rename.
     pub rename_provider: Option<String>,
+    /// Provider selected for embeddings (`index.embed` /
+    /// `index.search_semantic`). `None` = no embeddings.
+    pub embed_provider: Option<String>,
     /// Providers by name (`BTreeMap` keeps deterministic order).
     pub providers: std::collections::BTreeMap<String, crate::schema::AiProviderEntry>,
 }
@@ -852,6 +855,9 @@ fn merge_ai_layer(
     }
     if let Some(v) = a.rename_provider {
         ai.rename_provider = Some(v);
+    }
+    if let Some(v) = a.embed_provider {
+        ai.embed_provider = Some(v);
     }
     for (i, p) in a.denied_prefixes.iter().enumerate() {
         let vp = VPath::parse(p).map_err(|_| ConfigError::Toml {
@@ -2051,6 +2057,46 @@ format = "exact"
             Some("y".to_owned()),
             "scalar last-present-wins, independent of the providers map"
         );
+    }
+
+    /// `embed_provider` (M4-IA-2) is a plain `Option` scalar like
+    /// `rename_provider`: last-present-wins across layers, and absent in
+    /// every layer means `None` (no embeddings).
+    #[test]
+    fn ai_embed_provider_last_layer_wins() {
+        let sistema = tempfile::tempdir().unwrap();
+        std::fs::write(
+            sistema.path().join("norte.toml"),
+            "[ai]\nembed_provider = \"ollama-local\"\n",
+        )
+        .unwrap();
+        let usuario = tempfile::tempdir().unwrap();
+        std::fs::write(
+            usuario.path().join("norte.toml"),
+            "[ai]\nembed_provider = \"otro\"\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (sistema.path().to_path_buf(), Layer::System),
+                (usuario.path().to_path_buf(), Layer::User),
+            ],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(
+            cfg.ai.embed_provider,
+            Some("otro".to_owned()),
+            "scalar last-present-wins"
+        );
+
+        // Absent in every layer: stays `None`.
+        let vacio = tempfile::tempdir().unwrap();
+        std::fs::write(vacio.path().join("norte.toml"), "[ai]\nenabled = true\n").unwrap();
+        let layers = Layers {
+            dirs: vec![(vacio.path().to_path_buf(), Layer::System)],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.ai.embed_provider, None, "absent in all layers => None");
     }
 
     /// Review MAJOR-1: `[daemon]` from the project layer must NOT be

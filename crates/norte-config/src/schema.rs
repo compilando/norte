@@ -320,6 +320,12 @@ pub struct AiSection {
     /// (same as other `Option` scalars in this schema).
     #[serde(default)]
     pub rename_provider: Option<String>,
+    /// Provider name used for embeddings (`index.embed` /
+    /// `index.search_semantic`). Absent in every layer = no embeddings (the
+    /// methods degrade to `Unsupported`). Later-layer-wins merge (same as
+    /// other `Option` scalars in this schema).
+    #[serde(default)]
+    pub embed_provider: Option<String>,
     /// Declared providers (`[ai.providers.<name>]`). By-name, later-layer-wins
     /// merge: a provider redeclared in a higher layer replaces the lower
     /// layer's entry for that name, other names are untouched.

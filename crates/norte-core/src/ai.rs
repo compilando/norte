@@ -26,6 +26,10 @@ pub struct AiConfig {
     pub denied_prefixes: Vec<VPath>,
     /// Nombre del proveedor a usar para el rename IA (de `providers`).
     pub rename_provider: Option<String>,
+    /// Nombre del proveedor para embeddings (`index.embed` /
+    /// `index.search_semantic`), de `providers`. Mismo contrato que
+    /// `rename_provider`; ausente = sin embeddings.
+    pub embed_provider: Option<String>,
     /// Proveedores declarados (`[ai.providers.<nombre>]`).
     pub providers: Vec<AiProviderConfig>,
 }
@@ -83,6 +87,18 @@ impl AiConfig {
         }
     }
 
+    /// Proveedor de embeddings: el nombrado en `embed_provider`, o el único
+    /// configurado si solo hay uno, o `None` (misma regla que
+    /// [`Self::rename_provider_config`]).
+    #[must_use]
+    pub fn embed_provider_config(&self) -> Option<&AiProviderConfig> {
+        match &self.embed_provider {
+            Some(name) => self.providers.iter().find(|p| &p.name == name),
+            None if self.providers.len() == 1 => self.providers.first(),
+            None => None,
+        }
+    }
+
     /// Build from the already-merged `[ai]` settings (norte-config).
     fn from_settings(s: norte_config::AiSettings) -> Self {
         Self {
@@ -90,6 +106,7 @@ impl AiConfig {
             local_only: s.local_only,
             denied_prefixes: s.denied_prefixes,
             rename_provider: s.rename_provider,
+            embed_provider: s.embed_provider,
             providers: s
                 .providers
                 .into_iter()
@@ -192,11 +209,14 @@ pub async fn resolve_and_build(
     build_provider(cfg, secret)
 }
 
-/// Operación de IA gateada (v1: solo rename).
+/// Operación de IA gateada.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiOp {
     /// Sugerencia de renombrado por lote.
     Rename,
+    /// `index.embed` / `index.search_semantic` — prefijos de contenido o la
+    /// query salen hacia el proveedor.
+    Embed,
 }
 
 /// Motivo por el que el gate rechazó una operación de IA.
@@ -486,6 +506,30 @@ mod tests {
         // sin construir desde aquí — ver su rustdoc).
         assert!(load_from_toml("[ai]\ndenied_prefixes = [\"no-es-url\"]\n").is_err());
         assert!(load_from_toml("[ai]\nenabled = \"si\"\n").is_err());
+    }
+
+    #[test]
+    fn embed_provider_config_named_else_single_else_none() {
+        let mut cfg = AiConfig::default();
+        assert!(cfg.embed_provider_config().is_none());
+        cfg.providers.push(AiProviderConfig {
+            name: "solo".into(),
+            kind: "ollama".into(),
+            model: "nomic-embed-text".into(),
+            base_url: None,
+        });
+        // un único proveedor sin nombre explícito ⇒ ese
+        assert_eq!(cfg.embed_provider_config().unwrap().name, "solo");
+        cfg.providers.push(AiProviderConfig {
+            name: "b".into(),
+            kind: "ollama".into(),
+            model: "x".into(),
+            base_url: None,
+        });
+        // dos y sin nombre ⇒ None (ambiguo)
+        assert!(cfg.embed_provider_config().is_none());
+        cfg.embed_provider = Some("b".into());
+        assert_eq!(cfg.embed_provider_config().unwrap().name, "b");
     }
 
     fn vp(s: &str) -> VPath {
