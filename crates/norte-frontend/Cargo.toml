@@ -37,6 +37,12 @@ globset.workspace = true
 # globset se recompila char-wise (`?` = un carácter, no un byte). Ya está
 # en el grafo (workspace dep de norte-core), no entra nada nuevo.
 regex.workspace = true
+# Ancho de CELDA para la elipsis media (`middle_ellipsis`, hoisted del TUI por
+# el audit M4-IA-2 H1): CJK/emoji ocupan 2 columnas y presupuestar por chars
+# desborda el ancho → el frontend re-trunca por la derecha comiéndose la cola
+# (#79). Herramienta estándar (la usa la propia ratatui, misma versión ya en el
+# árbol vía norte-tui), MIT/Apache, mantenida — no entra nada nuevo al grafo.
+unicode-width = "0.2"
 
 [dev-dependencies]
 norte-testkit.workspace = true

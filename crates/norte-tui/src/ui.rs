@@ -1992,92 +1992,12 @@ fn clamp_chars(s: &str, max: usize) -> String {
     out
 }
 
-/// Elipsis MEDIA a `max` CELDAS de terminal: conserva cabeza (scheme) y cola
-/// (nombre) —lo que identifica la ruta ante un humano— y marca el recorte con
-/// `…`. Presupuesta por ANCHO DE CELDA (CJK/emoji ocupan 2 columnas), no por
-/// chars: contar chars desbordaba `max` con nombres densos y ratatui
-/// re-truncaba por la DERECHA, comiéndose justo la cola que la elipsis media
-/// existe para preservar (#79). Para ASCII (celdas == chars) el resultado es
-/// idéntico al anterior.
-///
-/// P1 encoding audit F2 (LOW): backstop por CUENTA DE CHARS antes del
-/// caminante por ancho. Un combining mark (`U+0301`…) o un ZWJ pesa CERO
-/// celdas — un flood de millones de ellos pegados a un solo char visible
-/// tiene ancho total ≤ `max` (el early-return de abajo lo devolvería
-/// INTACTO, sin cortar nada) o, si desborda por el char visible, el
-/// caminante de cabeza/cola seguiría acumulando chars de ancho 0 sin nunca
-/// tocar su presupuesto — en ningún caso el tamaño del STRING (memoria,
-/// trabajo de `display_name`/render aguas arriba) queda acotado por `max`
-/// aunque el ANCHO sí. Si `s` trae más de `4*max` chars, se pre-recorta por
-/// CHARS (generoso: bastante mayor que cualquier `max` de celdas real de la
-/// TUI hoy) a cabeza+cola ANTES de medir nada — el resto de la función seguía
-/// igual sobre esa entrada ya acotada.
-fn middle_ellipsis(s: &str, max: usize) -> String {
-    if max == 0 {
-        // review #108-5 M2: con presupuesto 0 devolvía "…" (ancho 1 > 0) y
-        // rompía por una celda el invariante del caller.
-        return String::new();
-    }
-    let char_cap = max.saturating_mul(4);
-    let chars: Vec<char> = s.chars().collect();
-    // `true` si el backstop tuvo que descartar chars por CUENTA (no por
-    // ancho) — en ese caso se FUERZA la elipsis más abajo aunque el ancho
-    // resultante quepa en `max`: spec §6, jamás pérdida silenciosa. Sin
-    // esto, un flood de zero-width recortado a `char_cap` podría terminar
-    // pesando 0 celdas y devolverse INTACTO (ya recortado, pero sin marcar)
-    // por el early-return de ancho.
-    let (chars, cortado_por_chars) = if chars.len() > char_cap {
-        let head_n = char_cap / 2;
-        let tail_n = char_cap - head_n;
-        let recorte: Vec<char> = chars[..head_n]
-            .iter()
-            .chain(chars[chars.len() - tail_n..].iter())
-            .copied()
-            .collect();
-        (recorte, true)
-    } else {
-        (chars, false)
-    };
-    let cell = |c: char| UnicodeWidthChar::width(c).unwrap_or(0);
-    if !cortado_por_chars && chars.iter().copied().map(cell).sum::<usize>() <= max {
-        return chars.into_iter().collect();
-    }
-    let s = &chars[..];
-    // Una celda para el `…`; el resto se reparte cabeza/cola. Cada mitad
-    // acumula chars mientras el siguiente QUEPA entero en su presupuesto: un
-    // char ancho que no cabe se descarta (nunca se parte una celda).
-    let budget = max.saturating_sub(1);
-    let head_budget = budget / 2;
-    let tail_budget = budget - head_budget;
-
-    let mut head = String::new();
-    let mut used = 0usize;
-    for &c in s {
-        let w = cell(c);
-        if used + w > head_budget {
-            break;
-        }
-        used += w;
-        head.push(c);
-    }
-
-    let mut tail: Vec<char> = Vec::new();
-    let mut used_tail = 0usize;
-    for &c in s.iter().rev() {
-        let w = cell(c);
-        if used_tail + w > tail_budget {
-            break;
-        }
-        used_tail += w;
-        tail.push(c);
-    }
-    tail.reverse();
-
-    let mut out = head;
-    out.push('…');
-    out.extend(tail);
-    out
-}
+/// Elipsis MEDIA por ancho de celda: AHORA vive en `norte-frontend`
+/// (encoding audit M4-IA-2 H1) — el invariante «un path kilométrico jamás
+/// expulsa el campo que va detrás» no es propio de un terminal, la GUI lo
+/// necesitaba igual. Re-import local para que todo el módulo (y sus tests)
+/// la llame por su nombre corto, sin cambiar una sola salida de render.
+use norte_frontend::middle_ellipsis;
 
 fn centered(base: Rect, w: u16, h: u16) -> Rect {
     let w = w.min(base.width);
@@ -2942,6 +2862,53 @@ mod semantic_hits_modal_tests {
                 );
             }
         }
+    }
+
+    /// Encoding audit M4-IA-2 S1 (fixture `score_spoof_inband`): un nombre
+    /// que IMITA la columna de score (`informe · 0.99.txt`: middle dot +
+    /// decimales, todo imprimible — NO hay badge que avise) jamás desplaza
+    /// al score REAL. Se pinea en dos formas: el fixture tal cual (cabe
+    /// entero, el score genuino queda el ÚLTIMO campo) y el fixture inflado
+    /// a >120 chars (fuerza la elipsis media: el path se RECORTA, marcado,
+    /// pero el score sigue ahí — jamás al revés).
+    #[test]
+    fn score_spoof_inband_jamas_desplaza_al_score_real() {
+        let fixture = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == "score_spoof_inband")
+            .expect("fixture del corpus");
+        let dir = VPath::parse("mem:///d").expect("wire válido");
+        let señuelo = String::from_utf8(fixture.bytes.clone()).expect("el fixture es UTF-8");
+
+        let path = dir
+            .clone()
+            .join(Segment::new(fixture.bytes.clone()).expect("segmento del corpus"));
+        let (_, body) = semantic_hits_modal_text(&[hit(path, 0.91)], 0, 0);
+        let linea = body.lines().next().expect("la línea del hit");
+        assert!(
+            linea.contains(&señuelo),
+            "el señuelo se pinta tal cual (es un nombre legítimo): {linea:?}"
+        );
+        assert!(
+            linea.trim_end().ends_with("0.91"),
+            "el score REAL es el campo FINAL: {linea:?}"
+        );
+
+        // Inflado: el señuelo al final de un nombre kilométrico. El recorte
+        // se come el PATH (elipsis media, marcada), nunca el score.
+        let mut largo = b"x".repeat(120);
+        largo.extend_from_slice(&fixture.bytes);
+        let path = dir.join(Segment::new(largo).expect("segmento válido"));
+        let (_, body) = semantic_hits_modal_text(&[hit(path, 0.91)], 0, 0);
+        let linea = body.lines().next().expect("la línea del hit");
+        assert!(
+            linea.trim_end().ends_with("0.91"),
+            "path kilométrico: el score REAL sigue siendo el campo FINAL: {linea:?}"
+        );
+        assert!(
+            linea.contains('…'),
+            "el recorte del path se MARCA (spec §6): {linea:?}"
+        );
     }
 
     /// M4-IA-2: con 12 hits la ventana pinta 10 desde `offset` con

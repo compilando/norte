@@ -148,5 +148,10 @@
     "id": "lossy_collapse_fe",
     "hex": "fe2e7273",
     "why": "\\xFE.rs: la pareja de lossy_collapse_ff — bytes DISTINTOS (0xFE vs 0xFF), mismo pliegue lossy '�.rs'; sin este par el colapso a U+FFFD no se puede pinear (con una sola entrada hostil, 'casa esta' y 'casa todas las inválidas' son indistinguibles)"
+  },
+  {
+    "id": "score_spoof_inband",
+    "hex": "696e666f726d6520c2b720302e39392e747874",
+    "why": "informe · 0.99.txt: middle dot (U+00B7) + decimales IMPRIMIBLES que imitan la columna de score de los modales de hits semánticos (TUI y GUI) — ningún char es enmascarable, así que NO hay badge que avise; si el recorte de la caja expulsa el score REAL de la cola, el único texto con pinta de score que queda visible es el del atacante. Pinea que el score genuino sigue siendo el campo FINAL y visible"
   }
 ]

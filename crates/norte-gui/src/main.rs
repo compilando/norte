@@ -4596,8 +4596,10 @@ fn modal_lines(m: &Modal) -> Vec<String> {
         // cursor (`>`) FUERA de banda en columna fija ANTES del badge (un
         // path no puede imitarlo: va enmascarado y tras la etiqueta numerada
         // ABSOLUTA), path por `path_display` (mask + flag hostil) con badge
-        // Rust-side y score `{:.2}` al final; los divs truncan
-        // (`render_modal`, badge prefijado — jamás se lo come el corte). El
+        // Rust-side y score `{:.2}` al final. El path se acota con
+        // `middle_ellipsis` ANTES de interpolarlo (audit H1): el score va el
+        // ÚLTIMO y NO puede depender del `.truncate()` del div, que recorta
+        // por la derecha en silencio y lo expulsaría de la caja. El
         // indicador de desbordamiento lleva badge si algún hit OCULTO es
         // hostil. Los hits ya pasaron `validate_semantic_hits` al ingerirse,
         // pero un daemon N+1/comprometido podría mandar cualquier cosa — se
@@ -4614,6 +4616,21 @@ fn modal_lines(m: &Modal) -> Vec<String> {
             let mut lines = vec![norte_i18n::t("modal-semantic-hits")];
             for (i, h) in hits.iter().enumerate().take(last).skip(offset) {
                 let (path, hostil) = norte_frontend::path_display(&h.path);
+                // Encoding audit M4-IA-2 H1: el path se ACOTA aquí, ANTES de
+                // interpolarlo — jamás se delega el recorte al `.truncate()`
+                // del div. El score va el ÚLTIMO en `modal-semantic-hit`, así
+                // que un path kilométrico lo empujaba fuera de la caja y el
+                // corte por la derecha se lo comía; si además el path llevaba
+                // incrustado un `· 0.99` (middle dot + dígitos: chars
+                // imprimibles, NO enmascarables → NI SIQUIERA hay badge que
+                // avise), el único texto con pinta de score que quedaba
+                // visible era el del atacante. Presupuesto = el MISMO 44 de
+                // la TUI (`semantic_hits_modal_text`): en GPUI no hay modelo
+                // de columnas, pero 44 celdas + la etiqueta `N.` + ` · 0.42`
+                // entran de sobra en el modal (max_w 560px) y compartir la
+                // cifra mantiene el invariante idéntico en ambos frontends.
+                // Es reserva de sitio para el campo de cola, no cosmética.
+                let path = norte_frontend::middle_ellipsis(&path, 44);
                 let n = (i + 1).to_string();
                 let score = format!("{:.2}", h.score);
                 let line = hostile_badged(
@@ -6434,6 +6451,79 @@ mod tests {
         assert!(
             more.contains(&format!("{total}/{total}")) && !more.starts_with(super::HOSTILE_BADGE),
             "sin ocultos hostiles el desbordamiento va limpio: {more:?}"
+        );
+    }
+
+    /// Encoding audit M4-IA-2 H1/S1 (espejo del pin de la TUI
+    /// `score_spoof_inband_jamas_desplaza_al_score_real`): la GUI NO puede
+    /// delegar el recorte del path al `.truncate()` del div. El score va el
+    /// ÚLTIMO campo de `modal-semantic-hit`, así que un path kilométrico lo
+    /// empujaba fuera de la caja; si además el path lleva incrustado el
+    /// fixture `score_spoof_inband` (`informe · 0.99.txt`: middle dot +
+    /// decimales IMPRIMIBLES — nada enmascarable, NI SIQUIERA hay badge), el
+    /// único texto con pinta de score que quedaba visible era el falso.
+    /// `modal_lines` acota el path con `middle_ellipsis` ANTES de
+    /// interpolarlo: el score REAL (`0.91`, distinguible del señuelo `0.99`)
+    /// sigue presente y final, y el recorte del path va MARCADO con `…`.
+    #[test]
+    fn semantic_hit_largo_con_score_spoof_no_expulsa_el_score_real() {
+        use super::Modal;
+        use norte_proto::Segment;
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
+        let fixture = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == "score_spoof_inband")
+            .expect("fixture del corpus");
+        let señuelo = String::from_utf8(fixture.bytes.clone()).expect("el fixture es UTF-8");
+        let dir = VPath::parse("mem:///docs").unwrap();
+
+        // 1) El fixture tal cual: cabe entero, el score REAL cierra la línea.
+        let m = Modal::SemanticHits {
+            hits: vec![norte_proto::methods::SemanticHit {
+                path: dir
+                    .clone()
+                    .join(Segment::new(fixture.bytes.clone()).unwrap()),
+                score: 0.91,
+            }],
+            offset: 0,
+            cursor: 0,
+        };
+        let lines = super::modal_lines(&m);
+        let hit = &lines[1];
+        assert!(
+            hit.contains(&señuelo),
+            "el señuelo se pinta tal cual (es un nombre legítimo): {hit:?}"
+        );
+        assert!(
+            hit.trim_end().ends_with("0.91"),
+            "el score REAL es el campo FINAL: {hit:?}"
+        );
+
+        // 2) Kilométrico (>120 chars) con el señuelo al final: el recorte se
+        // come el PATH (elipsis media, marcada), JAMÁS el score.
+        let mut largo = b"x".repeat(120);
+        largo.extend_from_slice(&fixture.bytes);
+        let m = Modal::SemanticHits {
+            hits: vec![norte_proto::methods::SemanticHit {
+                path: dir.join(Segment::new(largo).unwrap()),
+                score: 0.91,
+            }],
+            offset: 0,
+            cursor: 0,
+        };
+        let lines = super::modal_lines(&m);
+        let hit = &lines[1];
+        assert!(
+            hit.trim_end().ends_with("0.91"),
+            "path kilométrico: el score REAL sigue siendo el campo FINAL: {hit:?}"
+        );
+        assert!(
+            hit.contains('…'),
+            "el recorte del path se MARCA (spec §6): {hit:?}"
+        );
+        assert!(
+            hit.chars().count() < 120,
+            "el path se acotó ANTES de interpolar, no se dejó al div: {hit:?}"
         );
     }
 

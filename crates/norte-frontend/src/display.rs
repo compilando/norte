@@ -3,6 +3,7 @@
 //! pérdida silenciosa, jamás controles/bidi crudos.
 
 use norte_proto::VPath;
+use unicode_width::UnicodeWidthChar;
 
 /// ¿Debe enmascararse en un terminal? DELEGA en
 /// [`norte_encoding::is_terminal_hazard`] (fuente ÚNICA del set — antes vivía
@@ -136,6 +137,113 @@ pub fn path_display_with(
         out.push_str(&texto);
     }
     (out, hostil)
+}
+
+/// Elipsis MEDIA a `max` CELDAS de terminal: conserva cabeza (scheme) y cola
+/// (nombre) —lo que identifica la ruta ante un humano— y marca el recorte con
+/// `…`. Presupuesta por ANCHO DE CELDA (CJK/emoji ocupan 2 columnas), no por
+/// chars: contar chars desbordaba `max` con nombres densos y ratatui
+/// re-truncaba por la DERECHA, comiéndose justo la cola que la elipsis media
+/// existe para preservar (#79). Para ASCII (celdas == chars) el resultado es
+/// idéntico al anterior.
+///
+/// COMPARTIDA por ambos frontends (encoding audit M4-IA-2 H1): vivía privada
+/// en la TUI, pero el motivo por el que existe no es cosmético ni propio de un
+/// terminal — es que un path kilométrico JAMÁS expulse de la caja el campo que
+/// va DESPUÉS de él (el score de un hit semántico, el `→ destino` de un plan).
+/// La GUI se apoyaba en el `.truncate()` del div, que recorta por la derecha
+/// en silencio: un path largo con un `· 0.99` incrustado (chars imprimibles,
+/// sin badge) dejaba visible SOLO el score falso. En GPUI el presupuesto por
+/// celdas no mide píxeles, pero es una cota CONSERVADORA (un char ancho cuenta
+/// 2) y suficiente para reservar sitio al campo de cola.
+///
+/// P1 encoding audit F2 (LOW): backstop por CUENTA DE CHARS antes del
+/// caminante por ancho. Un combining mark (`U+0301`…) o un ZWJ pesa CERO
+/// celdas — un flood de millones de ellos pegados a un solo char visible
+/// tiene ancho total ≤ `max` (el early-return de abajo lo devolvería
+/// INTACTO, sin cortar nada) o, si desborda por el char visible, el
+/// caminante de cabeza/cola seguiría acumulando chars de ancho 0 sin nunca
+/// tocar su presupuesto — en ningún caso el tamaño del STRING (memoria,
+/// trabajo de `display_name`/render aguas arriba) queda acotado por `max`
+/// aunque el ANCHO sí. Si `s` trae más de `4*max` chars, se pre-recorta por
+/// CHARS (generoso: bastante mayor que cualquier `max` de celdas real de la
+/// TUI hoy) a cabeza+cola ANTES de medir nada — el resto de la función seguía
+/// igual sobre esa entrada ya acotada.
+///
+/// ```
+/// use norte_frontend::middle_ellipsis;
+/// // Lo que ya cabe vuelve INTACTO.
+/// assert_eq!(middle_ellipsis("file:///d/a.txt", 46), "file:///d/a.txt");
+/// // Lo que desborda conserva cabeza y cola, y MARCA el recorte.
+/// let out = middle_ellipsis("file:///muy/larga/ruta/hacia/final.txt", 20);
+/// assert!(out.starts_with("file:") && out.ends_with(".txt") && out.contains('…'));
+/// ```
+#[must_use]
+pub fn middle_ellipsis(s: &str, max: usize) -> String {
+    if max == 0 {
+        // review #108-5 M2: con presupuesto 0 devolvía "…" (ancho 1 > 0) y
+        // rompía por una celda el invariante del caller.
+        return String::new();
+    }
+    let char_cap = max.saturating_mul(4);
+    let chars: Vec<char> = s.chars().collect();
+    // `true` si el backstop tuvo que descartar chars por CUENTA (no por
+    // ancho) — en ese caso se FUERZA la elipsis más abajo aunque el ancho
+    // resultante quepa en `max`: spec §6, jamás pérdida silenciosa. Sin
+    // esto, un flood de zero-width recortado a `char_cap` podría terminar
+    // pesando 0 celdas y devolverse INTACTO (ya recortado, pero sin marcar)
+    // por el early-return de ancho.
+    let (chars, cortado_por_chars) = if chars.len() > char_cap {
+        let head_n = char_cap / 2;
+        let tail_n = char_cap - head_n;
+        let recorte: Vec<char> = chars[..head_n]
+            .iter()
+            .chain(chars[chars.len() - tail_n..].iter())
+            .copied()
+            .collect();
+        (recorte, true)
+    } else {
+        (chars, false)
+    };
+    let cell = |c: char| UnicodeWidthChar::width(c).unwrap_or(0);
+    if !cortado_por_chars && chars.iter().copied().map(cell).sum::<usize>() <= max {
+        return chars.into_iter().collect();
+    }
+    let s = &chars[..];
+    // Una celda para el `…`; el resto se reparte cabeza/cola. Cada mitad
+    // acumula chars mientras el siguiente QUEPA entero en su presupuesto: un
+    // char ancho que no cabe se descarta (nunca se parte una celda).
+    let budget = max.saturating_sub(1);
+    let head_budget = budget / 2;
+    let tail_budget = budget - head_budget;
+
+    let mut head = String::new();
+    let mut used = 0usize;
+    for &c in s {
+        let w = cell(c);
+        if used + w > head_budget {
+            break;
+        }
+        used += w;
+        head.push(c);
+    }
+
+    let mut tail: Vec<char> = Vec::new();
+    let mut used_tail = 0usize;
+    for &c in s.iter().rev() {
+        let w = cell(c);
+        if used_tail + w > tail_budget {
+            break;
+        }
+        used_tail += w;
+        tail.push(c);
+    }
+    tail.reverse();
+
+    let mut out = head;
+    out.push('…');
+    out.extend(tail);
+    out
 }
 
 #[cfg(test)]

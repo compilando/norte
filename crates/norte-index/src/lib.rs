@@ -366,8 +366,23 @@ impl Index {
         Ok(rows
             .into_iter()
             .filter_map(|r| {
-                // Un path corrupto (imposible: lo escribió `build`) se salta.
-                let path = VPath::parse(&r.get::<String, _>("path")).ok()?;
+                // Un path corrupto (imposible: lo escribió `build`) se salta
+                // — pero JAMÁS en silencio (encoding audit M4-IA-2 S3): un
+                // salto mudo aquí deja un fichero sin embedding y sin rastro
+                // de por qué, y el scheduler lo reintentaría en cada pasada.
+                // Se registra el rowid y la LONGITUD en bytes del TEXT
+                // guardado; nunca el path (bytes de usuario, spec §6 — un
+                // nombre hostil no se vuelca crudo a un log).
+                let file_id: i64 = r.get("id");
+                let raw: String = r.get("path");
+                let Ok(path) = VPath::parse(&raw) else {
+                    tracing::warn!(
+                        file_id,
+                        path_len = raw.len(),
+                        "fila de `files` con path ilegible: se salta para embedding"
+                    );
+                    return None;
+                };
                 Some(EmbedCandidate {
                     file_id: r.get("id"),
                     path,
@@ -453,7 +468,8 @@ impl Index {
     ) -> Result<Vec<(VPath, Vec<f32>)>, IndexError> {
         let rows = if let Some(root) = root {
             sqlx::query(
-                "SELECT f.path AS path, e.dim AS dim, e.vec AS vec FROM embeddings e
+                "SELECT e.file_id AS file_id, f.path AS path, e.dim AS dim, e.vec AS vec
+                 FROM embeddings e
                  JOIN files f ON f.id = e.file_id
                  WHERE f.root_id = ?1 AND e.model = ?2",
             )
@@ -463,7 +479,8 @@ impl Index {
             .await?
         } else {
             sqlx::query(
-                "SELECT f.path AS path, e.dim AS dim, e.vec AS vec FROM embeddings e
+                "SELECT e.file_id AS file_id, f.path AS path, e.dim AS dim, e.vec AS vec
+                 FROM embeddings e
                  JOIN files f ON f.id = e.file_id
                  WHERE e.model = ?1",
             )
@@ -474,7 +491,21 @@ impl Index {
         Ok(rows
             .into_iter()
             .filter_map(|r| {
-                let path = VPath::parse(&r.get::<String, _>("path")).ok()?;
+                // Path ilegible ⇒ se salta, pero con RASTRO (encoding audit
+                // M4-IA-2 S3): sin el warn, un embedding húerfano desaparece
+                // de toda búsqueda semántica sin que nada lo diga. Se
+                // registra el `file_id` y la longitud del TEXT, jamás los
+                // bytes del path (spec §6: no se vuelcan crudos a un log).
+                let file_id: i64 = r.get("file_id");
+                let raw: String = r.get("path");
+                let Ok(path) = VPath::parse(&raw) else {
+                    tracing::warn!(
+                        file_id,
+                        path_len = raw.len(),
+                        "embedding con path ilegible: se salta en la búsqueda"
+                    );
+                    return None;
+                };
                 let v = decode_vec(&r.get::<Vec<u8>, _>("vec"))?;
                 // Coherencia dim⟷blob: una fila corrupta se salta, no panica.
                 (i64::try_from(v.len()) == Ok(r.get::<i64, _>("dim"))).then_some((path, v))
