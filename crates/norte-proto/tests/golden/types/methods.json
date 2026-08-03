@@ -8,6 +8,9 @@
       { "from": "IMG 001.jpg", "to": "2024-01-01-beach.jpg" }
     ]
   },
+  "ai_rename_plan_result_empty": {
+    "entries": []
+  },
   "connection_degraded": {
     "host": "backup.example",
     "reason": "tls-auth-rejected",

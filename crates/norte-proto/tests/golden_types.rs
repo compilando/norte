@@ -435,8 +435,9 @@ fn golden_methods() {
     check_methods_rpc(&fixtures);
     check_methods_index(&fixtures);
     check_methods_ai(&fixtures);
-    // 98 → 100 en 0.32.0: + ai_rename_plan_params/result (M4-IA, ADR 0031).
-    assert_eq!(fixtures.len(), 100, "[methods.json] fixtures sin caso Rust");
+    // 98 → 101 en 0.32.0: + ai_rename_plan_params/result/result_empty (M4-IA,
+    // ADR 0031).
+    assert_eq!(fixtures.len(), 101, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `ai.*` (0.32.0, M4-IA, ADR 0031): plan de rename revisable.
@@ -461,6 +462,13 @@ fn check_methods_ai(fixtures: &BTreeMap<String, Value>) {
                 to: "2024-01-01-beach.jpg".into(),
             }],
         },
+    );
+    // Plan vacío = el modelo no propuso cambios (estado significativo, no un
+    // caso omitido): fija la forma del wire, no solo el caso feliz.
+    check_one(
+        fixtures,
+        "ai_rename_plan_result_empty",
+        &AiRenamePlanResult { entries: vec![] },
     );
 }
 
