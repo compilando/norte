@@ -171,6 +171,16 @@ pub enum SessionCmd {
         /// Argumento (vacío si ninguno).
         arg: String,
     },
+    /// Pide un plan de rename IA (`ai.rename_plan`, M4-IA): el daemon manda
+    /// los basenames de `dir` al proveedor (tras su gate de IA) y devuelve
+    /// parejas from→to REVISABLES — este método jamás muta; aplicar es
+    /// N `Submit` normales tras la confirmación del humano.
+    AiRenamePlan {
+        /// Directorio objetivo del plan.
+        dir: VPath,
+        /// Instrucción del usuario (ya recortada y no vacía).
+        instruction: String,
+    },
 }
 
 /// Contenido del viewer que cruza a la GUI (GUI-d T3).
@@ -347,6 +357,17 @@ pub enum SessionEvent {
     PluginRunResult(String),
     /// `plugin.run_command` falló (G3c) — mensaje ya renderizable.
     PluginRunFailed(String),
+    /// Resultado de `AiRenamePlan` (M4-IA): las parejas del plan (posiblemente
+    /// vacías = el modelo no propuso cambios) o el error aplanado a String
+    /// (mismo helper que los arms vecinos). `dir` viaja de vuelta para abrir
+    /// el modal del plan sobre el dir que lo PIDIÓ, aunque el pane ya haya
+    /// navegado a otro sitio.
+    AiRenamePlan {
+        /// Directorio objetivo del plan (el del prompt, no el vigente).
+        dir: VPath,
+        /// Parejas from→to o error ya renderizable.
+        result: Result<Vec<norte_proto::methods::AiRenameEntry>, String>,
+    },
 }
 
 /// Arranca el hilo de sesión: conecta al `socket` UNA vez y sirve `cmd_rx`,
@@ -555,6 +576,18 @@ pub fn spawn(
                                         .send(SessionEvent::PluginGovernanceFailed(format!("{e}")));
                                 }
                             }
+                        });
+                    }
+                    SessionCmd::AiRenamePlan { dir, instruction } => {
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            let result = backend
+                                .ai_rename_plan(&dir, &instruction)
+                                .await
+                                .map(|r| r.entries)
+                                .map_err(|e| format!("{e}"));
+                            let _ = tx.send(SessionEvent::AiRenamePlan { dir, result });
                         });
                     }
                     SessionCmd::PluginRunCommand { id, command, arg } => {

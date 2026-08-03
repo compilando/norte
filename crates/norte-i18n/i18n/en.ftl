@@ -208,6 +208,9 @@ msg-names-encoding-off = names shown as-is (reinterpretation off)
 msg-hidden-shown = hidden entries shown
 msg-mkdir-in-search = search results have no destination directory — leave the search first
 msg-ai-rename-running = AI rename: thinking… (Esc cancels)
+# GUI variant: the GUI has no path to abort the in-flight request, so it must
+# not promise "Esc cancels" (never a false affordance).
+gui-msg-ai-rename-running = AI rename: thinking…
 msg-ai-rename-empty = AI rename: the model proposed no changes
 msg-ai-rename-failed = AI rename failed: { $error }
 msg-ai-rename-applied = AI rename: { $n } move(s) submitted

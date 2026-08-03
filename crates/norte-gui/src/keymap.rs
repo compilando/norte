@@ -52,6 +52,11 @@ pub const COMMANDS: &[&str] = &[
     // #108 7c: column picker overlay — the shared presets already bind
     // `alt+c` to `pane.columns` in all three, so no supplement needed.
     "pane.columns",
+    // M4-IA: prompt + plan revisable de rename IA. Los presets compartidos
+    // no lo bindean (en la TUI se alcanza por paleta); la GUI le da `alt+i`
+    // vía `gui_supplement` para pasar el pin de alcanzabilidad
+    // (`todo_comando_gui_es_alcanzable_desde_el_preset_default`).
+    "pane.ai-rename",
 ];
 
 /// Comandos del contexto Viewer (pantalla del visor F3).
@@ -134,7 +139,11 @@ fn preset(name: &str) -> KeymapFile {
 /// siempre).
 ///
 /// `insert`→`mark.toggle` salió de aquí al entrar en los presets
-/// compartidos (#103); el resto sigue siendo GUI-only.
+/// compartidos (#103); el resto sigue siendo GUI-only. `alt+i` →
+/// `pane.ai-rename` (M4-IA) es NUEVO (no venía del preset privado retirado):
+/// los presets compartidos no bindean el comando (la TUI lo alcanza por
+/// paleta) y el pin de alcanzabilidad de la GUI exige al menos un chord —
+/// `alt+i` está libre en los tres presets de fábrica.
 fn gui_supplement() -> KeymapFile {
     const TOML: &str = r#"
 [pane]
@@ -143,6 +152,7 @@ prepend_keymap = [
     { on = ["ctrl+b"], run = "task.prev" },
     { on = ["ctrl+l"], run = "task.dismiss" },
     { on = ["delete"], run = "pane.delete" },
+    { on = ["alt+i"], run = "pane.ai-rename" },
 ]
 "#;
     parse_keymap(TOML).unwrap_or_else(|e| panic!("supplemento GUI embebido inválido: {e}"))

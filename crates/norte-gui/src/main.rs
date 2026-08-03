@@ -196,6 +196,11 @@ struct NorteGui {
     /// simple: se drenan al cerrar el modal actual). Evita que un 2.º conflicto
     /// pise al 1.º y se pierda sin aviso.
     conflict_backlog: Vec<(modal::PendingTransfer, norte_proto::ConflictKind)>,
+    /// Plan de rename IA retenido (M4-IA, molde TUI `pending_ai_plan`): llegó
+    /// con otro modal abierto (aprobación, colisión…) y espera su turno —
+    /// jamás lo pisa. Se abre al cerrarse el modal activo, DESPUÉS de drenar
+    /// `conflict_backlog` (los conflictos van primero, como en la TUI).
+    pending_ai_plan: Option<(VPath, Vec<norte_proto::methods::AiRenameEntry>)>,
     /// Orden de llegada de las tasks (render estable; `task_progress` no ordena).
     task_order: Vec<norte_proto::TaskId>,
     /// Cursor de la franja de tasks (#91): índice dentro de `task_order` que
@@ -523,6 +528,7 @@ impl NorteGui {
                     inflight: std::collections::HashMap::new(),
                     task_progress: std::collections::HashMap::new(),
                     conflict_backlog: Vec::new(),
+                    pending_ai_plan: None,
                     task_order: Vec::new(),
                     task_cursor: 0,
                     scrolls: [
@@ -601,6 +607,7 @@ impl NorteGui {
                     inflight: std::collections::HashMap::new(),
                     task_progress: std::collections::HashMap::new(),
                     conflict_backlog: Vec::new(),
+                    pending_ai_plan: None,
                     task_order: Vec::new(),
                     task_cursor: 0,
                     scrolls: [
@@ -1071,6 +1078,36 @@ impl NorteGui {
             SessionEvent::PluginRunFailed(msg) => {
                 self.errors[self.focus] = Some(msg);
             }
+            SessionEvent::AiRenamePlan { dir, result } => match result {
+                Ok(entries) if entries.is_empty() => {
+                    self.errors[self.focus] = Some(norte_i18n::t("msg-ai-rename-empty"));
+                }
+                Ok(entries) => {
+                    // Retira el "pensando…" del banner: el plan ES la
+                    // respuesta.
+                    self.errors[self.focus] = None;
+                    if self.modal.is_none() {
+                        self.modal = Some(Modal::AiRenamePlan {
+                            dir,
+                            entries,
+                            offset: 0,
+                        });
+                    } else {
+                        // Otro modal abierto (colisión…): el plan espera su
+                        // turno, jamás lo pisa (molde TUI `pending_ai_plan`).
+                        self.pending_ai_plan = Some((dir, entries));
+                    }
+                }
+                Err(msg) => {
+                    // `msg` es el `Display` categórico del error proto (lo
+                    // aplanó la sesión); `banner_safe` es cinturón, como en
+                    // `msg-plugin-run-ok`.
+                    self.errors[self.focus] = Some(norte_i18n::ta(
+                        "msg-ai-rename-failed",
+                        &[("error", banner_safe(&msg).as_str())],
+                    ));
+                }
+            },
         }
     }
 
@@ -1116,6 +1153,33 @@ impl NorteGui {
         if let Some((pending, conflict)) = self.conflict_backlog.pop() {
             self.modal = Some(Modal::ConflictResolve { pending, conflict });
         }
+    }
+
+    /// Al cerrar un modal, abre el plan IA retenido (M4-IA, molde TUI) si
+    /// ningún otro modal ganó el turno — `open_next_conflict` se llama ANTES
+    /// que esto en todos los cierres (los conflictos drenan primero).
+    fn open_pending_ai_plan(&mut self) {
+        if self.modal.is_some() {
+            return;
+        }
+        if let Some((dir, entries)) = self.pending_ai_plan.take() {
+            self.modal = Some(Modal::AiRenamePlan {
+                dir,
+                entries,
+                offset: 0,
+            });
+        }
+    }
+
+    /// Abre el prompt de instrucción del rename IA (M4-IA, `pane.ai-rename`):
+    /// el plan aterrizará sobre el dir VIVO del pane activo en este instante
+    /// (viaja dentro del modal y de la petición — un `cd` posterior no lo
+    /// cambia de sitio).
+    fn open_ai_rename(&mut self) {
+        self.modal = Some(Modal::AiRenamePrompt {
+            dir: self.panes[self.focus].dir().clone(),
+            query: Vec::new(),
+        });
     }
 
     /// Una task llegó a terminal: si falló por conflicto, encola/abre el modal
@@ -1316,6 +1380,7 @@ impl NorteGui {
             "pane.copy" => self.open_transfer_modal(TransferKind::Copy),
             "pane.move" => self.open_transfer_modal(TransferKind::Move),
             "pane.delete" => self.open_delete_modal(),
+            "pane.ai-rename" => self.open_ai_rename(),
             "task.cancel" => self.cancel_task_under_cursor(),
             "task.next" => {
                 if !self.task_order.is_empty() {
@@ -2060,20 +2125,61 @@ impl NorteGui {
 
         // Con un modal abierto, la tecla va al modal (captura fija).
         if let Some(m) = &mut self.modal {
-            match modal::on_key(m, &ks.key) {
+            // El prompt IA acepta tecleo libre: un ctrl/alt/super-chord no
+            // debe teclearse en el buffer (mismo gate que `on_settings_key`;
+            // los modales de decisión conservan su comportamiento previo).
+            if matches!(m, Modal::AiRenamePrompt { .. })
+                && (ks.modifiers.control || ks.modifiers.alt || ks.modifiers.platform)
+            {
+                cx.notify();
+                return;
+            }
+            let was_ai_plan = matches!(m, Modal::AiRenamePlan { .. });
+            match modal::on_key(m, &ks.key, ks.key_char.as_deref()) {
                 ModalOutcome::Ignored | ModalOutcome::StayOpen => {}
                 ModalOutcome::Dismiss => {
                     self.modal = None;
                     self.open_next_conflict();
+                    self.open_pending_ai_plan();
                 }
                 ModalOutcome::Submit(ops) => {
                     self.modal = None;
+                    if was_ai_plan {
+                        // Paridad TUI (`msg-ai-rename-applied`): el banner
+                        // resume cuántos moves salieron del plan confirmado.
+                        let n = ops.len().to_string();
+                        self.errors[self.focus] = Some(norte_i18n::ta(
+                            "msg-ai-rename-applied",
+                            &[("n", n.as_str())],
+                        ));
+                    }
                     for op in ops {
                         let _ = self.cmds.send(SessionCmd::Submit(op));
                     }
                     self.open_next_conflict();
+                    self.open_pending_ai_plan();
                 }
                 ModalOutcome::Quit => cx.quit(),
+                ModalOutcome::RequestAiPlan { dir, instruction } => {
+                    self.modal = None;
+                    let _ = self
+                        .cmds
+                        .send(SessionCmd::AiRenamePlan { dir, instruction });
+                    // Clave gui-* propia: la de la TUI promete "Esc cancela"
+                    // y la GUI (hoy) no tiene camino para abortar la petición
+                    // en vuelo — jamás una affordance falsa.
+                    self.errors[self.focus] = Some(norte_i18n::t("gui-msg-ai-rename-running"));
+                    self.open_next_conflict();
+                    self.open_pending_ai_plan();
+                }
+                ModalOutcome::InvalidPlan => {
+                    // Cinturón fail-loud (paridad TUI audit MAJOR-2): plan
+                    // adulterado — NADA se sometió.
+                    self.modal = None;
+                    self.errors[self.focus] = Some(norte_i18n::t("msg-ai-rename-invalid-plan"));
+                    self.open_next_conflict();
+                    self.open_pending_ai_plan();
+                }
             }
             cx.notify();
             return;
@@ -3738,6 +3844,10 @@ impl NorteGui {
             Modal::ConfirmDelete { .. } => "gui-modal-footer-delete",
             Modal::ConflictResolve { .. } => "gui-modal-footer-conflict",
             Modal::ConfirmQuit { .. } => "gui-modal-footer-quit",
+            // Claves COMPARTIDAS con la TUI (mismas teclas y semántica en
+            // GPUI: Enter/Esc, y/n, ↓/↑).
+            Modal::AiRenamePrompt { .. } => "modal-ai-rename-hint",
+            Modal::AiRenamePlan { .. } => "modal-ai-rename-plan-hint",
         });
         // La línea de modo (índice 1 en ConfirmDelete) se alerta en rojo si es
         // borrado PERMANENTE.
@@ -4265,6 +4375,93 @@ fn modal_lines(m: &Modal) -> Vec<String> {
                 )]
             }
         }
+        Modal::AiRenamePrompt { query, .. } => {
+            // Molde TUI `ai_rename_modal_text`: la instrucción es texto de
+            // usuario (un paste trae bidi/invisibles tan fácil como un
+            // nombre) — enmascarada SIEMPRE, con badge y cursor `_`.
+            let (masked, hostil) = norte_frontend::display_name(query);
+            vec![
+                norte_i18n::t("modal-ai-rename"),
+                hostile_badged(hostil, format!("{masked}_")),
+            ]
+        }
+        // Paridad TUI `ai_rename_plan_modal_text` (doctrina
+        // encoding-auditor): primera línea del cuerpo = dir OBJETIVO
+        // etiquetado fuera de banda (audit MAJOR-1); después la VENTANA de
+        // `AI_RENAME_PAIR_LIMIT` parejas desde `offset` (audit MAJOR-3: el
+        // plan entero es revisable por scroll ↓/↑). Cada nombre en SU línea
+        // — el `from` con etiqueta numerada ABSOLUTA fuera de banda (audit
+        // MINOR-4, corpus `arrow_join_spoof`) y el `→` del destino al INICIO
+        // de su línea; badge Rust-side ([`hostile_badged`]) y truncado por
+        // los divs (`.truncate()` de `render_modal` — el badge va prefijado,
+        // jamás se lo come el corte). El indicador de desbordamiento lleva
+        // badge si alguna pareja OCULTA es hostil (lo escondido no se cuela
+        // limpio). Aunque el engine garantiza UTF-8 en el wire, un daemon
+        // N+1/comprometido podría mandar cualquier cosa — defensivo SIEMPRE.
+        Modal::AiRenamePlan {
+            dir,
+            entries,
+            offset,
+        } => {
+            // Cinturón de render: el clamp vive en `modal::on_key`, pero un
+            // offset fuera de rango jamás debe pintar una ventana vacía.
+            let offset = (*offset).min(entries.len().saturating_sub(modal::AI_RENAME_PAIR_LIMIT));
+            let last = (offset + modal::AI_RENAME_PAIR_LIMIT).min(entries.len());
+            let (dir_txt, dir_hostil) = norte_frontend::path_display(dir);
+            let mut lines = vec![
+                norte_i18n::t("modal-ai-rename-plan"),
+                hostile_badged(
+                    dir_hostil,
+                    norte_i18n::ta("modal-ai-rename-dir", &[("dir", dir_txt.as_str())]),
+                ),
+            ];
+            for (i, e) in entries.iter().enumerate().take(last).skip(offset) {
+                let (from, from_hostil) = norte_frontend::display_name(e.from.as_bytes());
+                let (to, to_hostil) = norte_frontend::display_name(e.to.as_bytes());
+                let n = (i + 1).to_string();
+                lines.push(hostile_badged(
+                    from_hostil,
+                    norte_i18n::ta(
+                        "modal-ai-rename-pair-from",
+                        &[("n", n.as_str()), ("from", from.as_str())],
+                    ),
+                ));
+                lines.push(hostile_badged(
+                    to_hostil,
+                    norte_i18n::ta("modal-ai-rename-pair-to", &[("to", to.as_str())]),
+                ));
+            }
+            if entries.len() > modal::AI_RENAME_PAIR_LIMIT {
+                let hidden_hostil = entries.iter().enumerate().any(|(i, e)| {
+                    (i < offset || i >= last)
+                        && (norte_frontend::display_name(e.from.as_bytes()).1
+                            || norte_frontend::display_name(e.to.as_bytes()).1)
+                });
+                let shown = last.to_string();
+                let total = entries.len().to_string();
+                lines.push(hostile_badged(
+                    hidden_hostil,
+                    norte_i18n::ta(
+                        "modal-ai-rename-more",
+                        &[("shown", shown.as_str()), ("total", total.as_str())],
+                    ),
+                ));
+            }
+            lines
+        }
+    }
+}
+
+/// Prefija el badge hostil FUERA de la traducción (paridad TUI
+/// `badge_prefixed`, audit MINOR-5: el mecanismo del badge no puede depender
+/// de que cada locale conserve un `{ $badge }` — concatenación Rust-side,
+/// translation-proof). Con espacio, como el resto de badges de esta GUI.
+#[must_use]
+fn hostile_badged(hostil: bool, line: String) -> String {
+    if hostil {
+        format!("{HOSTILE_BADGE} {line}")
+    } else {
+        line
     }
 }
 
@@ -5801,12 +5998,14 @@ mod tests {
         }
     }
 
-    /// `modal_lines` sobre TODO el corpus hostil, para las TRES variantes de
-    /// `Modal`: ninguna línea del panel deja un `is_terminal_hazard` crudo
-    /// (título, item saneado, o el `from → to` de un conflicto) — mismo patrón
-    /// que `task_line_nunca_deja_hazards_crudos_del_corpus_hostil` (review
-    /// encoding: el modal es la superficie que confirma un BORRADO a ciegas si
-    /// se pinta mal).
+    /// `modal_lines` sobre TODO el corpus hostil, para TODAS las variantes de
+    /// `Modal` con contenido de usuario: ninguna línea del panel deja un
+    /// `is_terminal_hazard` crudo (título, item saneado, el `from → to` de un
+    /// conflicto, el plan IA — from Y to — o la query pegada del prompt IA) —
+    /// mismo patrón que `task_line_nunca_deja_hazards_crudos_del_corpus_
+    /// hostil` (review encoding: el modal es la superficie que confirma un
+    /// BORRADO — o un plan de renames de un modelo — a ciegas si se pinta
+    /// mal).
     #[test]
     fn modal_lines_nunca_deja_hazards_crudos_del_corpus_hostil() {
         use super::{Modal, PendingTransfer, TransferKind};
@@ -5818,6 +6017,9 @@ mod tests {
             };
             let item = VPath::parse("mem:///").unwrap().join(seg);
             let to = VPath::parse("mem:///dst").unwrap();
+            // M4-IA: el wire garantiza UTF-8 (String) — la vista lossy del
+            // fixture es exactamente lo que un daemon hostil podría colar.
+            let hostile_name = String::from_utf8_lossy(&fixture.bytes).into_owned();
 
             let modals = [
                 Modal::ConfirmTransfer {
@@ -5837,6 +6039,28 @@ mod tests {
                     },
                     conflict: ConflictKind::Exists,
                 },
+                // Plan IA: hostil en el dir objetivo Y en AMBAS posiciones
+                // de la pareja (un `to` hostil renombraría A un hazard).
+                Modal::AiRenamePlan {
+                    dir: item.clone(),
+                    entries: vec![
+                        norte_proto::methods::AiRenameEntry {
+                            from: hostile_name.clone(),
+                            to: "limpio.txt".into(),
+                        },
+                        norte_proto::methods::AiRenameEntry {
+                            from: "limpio.txt".into(),
+                            to: hostile_name.clone(),
+                        },
+                    ],
+                    offset: 0,
+                },
+                // Prompt IA con la query PEGADA en bytes crudos (el buffer
+                // admite cualquier cosa que entre por un paste).
+                Modal::AiRenamePrompt {
+                    dir: to.clone(),
+                    query: fixture.bytes.clone(),
+                },
             ];
             for m in &modals {
                 for line in super::modal_lines(m) {
@@ -5848,6 +6072,76 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// M4-IA (paridad TUI audit MAJOR-3/MINOR-5): la ventana del plan pinta
+    /// [`crate::modal::AI_RENAME_PAIR_LIMIT`] parejas desde `offset`, el
+    /// indicador de desbordamiento dice `shown/total` y lleva el badge si
+    /// alguna pareja OCULTA es hostil — lo escondido jamás se cuela limpio.
+    #[test]
+    fn ai_plan_modal_ventana_overflow_y_badge_de_ocultas() {
+        use super::Modal;
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
+        let limit = crate::modal::AI_RENAME_PAIR_LIMIT;
+        let mut entries: Vec<norte_proto::methods::AiRenameEntry> = (1..=6)
+            .map(|i| norte_proto::methods::AiRenameEntry {
+                from: format!("f{i}.txt"),
+                to: format!("t{i}.txt"),
+            })
+            .collect();
+        // La 6.ª (OCULTA con offset 0) es hostil (bidi RLO).
+        entries[5].from = "\u{202E}evil.txt".into();
+        let m = Modal::AiRenamePlan {
+            dir: VPath::parse("mem:///docs").unwrap(),
+            entries: entries.clone(),
+            offset: 0,
+        };
+        let lines = super::modal_lines(&m);
+        // título + dir + 5 parejas × 2 líneas + desbordamiento.
+        assert_eq!(lines.len(), 2 + limit * 2 + 1, "{lines:?}");
+        assert!(
+            lines[2].contains("1.") && lines[2].contains("f1.txt"),
+            "from numerado fuera de banda: {:?}",
+            lines[2]
+        );
+        assert!(
+            lines[3].starts_with('→') && lines[3].contains("t1.txt"),
+            "flecha al INICIO de la línea del to: {:?}",
+            lines[3]
+        );
+        let more = lines.last().unwrap();
+        assert!(
+            more.starts_with(super::HOSTILE_BADGE),
+            "pareja oculta hostil ⇒ badge en el desbordamiento: {more:?}"
+        );
+        assert!(
+            more.contains("5/6"),
+            "el desbordamiento dice shown/total: {more:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("evil")),
+            "la pareja oculta NO se pinta con offset 0: {lines:?}"
+        );
+
+        // Con offset 1 la hostil ENTRA en la ventana (ya no está oculta):
+        // su línea lleva el badge y el desbordamiento ya no.
+        let m = Modal::AiRenamePlan {
+            dir: VPath::parse("mem:///docs").unwrap(),
+            entries,
+            offset: 1,
+        };
+        let lines = super::modal_lines(&m);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with(super::HOSTILE_BADGE) && l.contains("6.")),
+            "la pareja hostil visible lleva SU badge: {lines:?}"
+        );
+        let more = lines.last().unwrap();
+        assert!(
+            more.contains("6/6") && !more.starts_with(super::HOSTILE_BADGE),
+            "sin ocultas hostiles el desbordamiento va limpio: {more:?}"
+        );
     }
 
     /// GUI-e T1 (i18n): con el locale forzado a ES, el modal de borrado

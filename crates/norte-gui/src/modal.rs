@@ -9,6 +9,18 @@
 use norte_core::TransferOptions;
 use norte_proto::{CollisionPolicy, ConflictKind, DeleteMode, VPath};
 
+/// Parejas del plan IA visibles a la vez en [`Modal::AiRenamePlan`] (ventana
+/// de scroll — paridad con `norte_tui::app::AI_RENAME_PAIR_LIMIT`, audit
+/// MAJOR-3: el plan ENTERO es revisable por scroll, jamás se aplica una cola
+/// invisible). Única fuente para el render (`modal_lines` en `main.rs`) y el
+/// clamp del scroll de [`on_key`].
+pub const AI_RENAME_PAIR_LIMIT: usize = 5;
+
+/// Tope de caracteres de la instrucción de [`Modal::AiRenamePrompt`] (molde
+/// TUI `MARK_PATTERN_MAX_CHARS`): un paste accidental no desborda el modal;
+/// el límite REAL (4 KiB) lo pone el daemon.
+pub const AI_INSTRUCTION_MAX_CHARS: usize = 256;
+
 /// Copia o movimiento (la clase de una transferencia).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransferKind {
@@ -80,6 +92,30 @@ pub enum Modal {
         /// Suma de marcas activas en ambos panes.
         marks: usize,
     },
+    /// Prompt de instrucción del rename IA (M4-IA). Query en BYTES (molde
+    /// `PaletteView`): push/backspace UTF-8-boundary-aware; se pinta
+    /// enmascarada (`modal_lines`), jamás cruda.
+    AiRenamePrompt {
+        /// Dir del pane activo al abrir (viaja al daemon y luego al plan).
+        dir: VPath,
+        /// La instrucción tecleada hasta ahora, en bytes UTF-8.
+        query: Vec<u8>,
+    },
+    /// Plan de rename IA revisable (M4-IA): superficie de DECISIÓN —
+    /// `y`/`enter` aplica (tras el cinturón [`validate_ai_plan`]), `n`/Esc
+    /// descarta, `up`/`down` desplazan la ventana de
+    /// [`AI_RENAME_PAIR_LIMIT`] parejas.
+    AiRenamePlan {
+        /// Dir sobre el que se aplican los moves.
+        dir: VPath,
+        /// Parejas from→to del modelo (proto; UTF-8 garantizado por el
+        /// engine, pero se re-valida y se pinta a la defensiva igual).
+        entries: Vec<norte_proto::methods::AiRenameEntry>,
+        /// Primera pareja visible de la ventana de scroll (paridad TUI
+        /// audit MAJOR-3: sin esto, la cola de un plan largo se aplicaría
+        /// sin poder verse).
+        offset: usize,
+    },
 }
 
 /// La transferencia que originó un conflicto (para reemitir con otra política).
@@ -108,6 +144,19 @@ pub enum ModalOutcome {
     /// debe cerrar la ventana (`cx.quit()`) — este módulo es puro y no puede
     /// hacerlo por sí mismo.
     Quit,
+    /// Enter en [`Modal::AiRenamePrompt`] con instrucción no vacía: el caller
+    /// cierra el modal, manda `SessionCmd::AiRenamePlan` y avisa en el banner
+    /// (`msg-ai-rename-running`).
+    RequestAiPlan {
+        /// Dir del prompt (viaja tal cual a la sesión).
+        dir: VPath,
+        /// Instrucción ya recortada (trim), no vacía.
+        instruction: String,
+    },
+    /// El plan falló el cinturón [`validate_ai_plan`] (paridad TUI audit
+    /// MAJOR-2): un daemon hostil/roto mandó un segmento inválido — el caller
+    /// cierra el modal SIN someter NADA y avisa (`msg-ai-rename-invalid-plan`).
+    InvalidPlan,
 }
 
 /// Destino absoluto de un item copiado/movido a `to_dir`: `to_dir` + nombre del
@@ -117,9 +166,51 @@ pub fn dest_for(to_dir: &VPath, item: &VPath) -> Option<VPath> {
     item.file_name().map(|n| to_dir.join(n.clone()))
 }
 
+/// Valida TODAS las parejas del plan como [`norte_proto::Segment`] (cinturón
+/// fail-loud, paridad con `norte_tui::main::validate_ai_plan`, audit
+/// MAJOR-2): un plan bien formado del engine JAMÁS trae un segmento inválido
+/// (el daemon los validó al armarlo), así que UN rechazo aquí delata un
+/// daemon hostil/roto — `None` aborta el lote ENTERO, jamás un skip
+/// silencioso que aplique "lo demás" de un plan adulterado.
+#[must_use]
+pub fn validate_ai_plan(
+    entries: &[norte_proto::methods::AiRenameEntry],
+) -> Option<Vec<(norte_proto::Segment, norte_proto::Segment)>> {
+    entries
+        .iter()
+        .map(|e| {
+            Some((
+                norte_proto::Segment::new(e.from.as_bytes().to_vec()).ok()?,
+                norte_proto::Segment::new(e.to.as_bytes().to_vec()).ok()?,
+            ))
+        })
+        .collect()
+}
+
+/// El carácter único que teclea `key` — copia local de
+/// `palette_view::typed_char` (misma justificación que la de ese fichero: un
+/// helper puro de 4 líneas no amerita superficie `pub(crate)` compartida).
+fn typed_char(key: &str, key_char: Option<&str>) -> Option<char> {
+    if key == "space" {
+        return Some(' ');
+    }
+    single_char(key_char).or_else(|| single_char(Some(key)))
+}
+
+fn single_char(s: Option<&str>) -> Option<char> {
+    let s = s?;
+    let mut it = s.chars();
+    match (it.next(), it.next()) {
+        (Some(c), None) => Some(c),
+        _ => None,
+    }
+}
+
 /// Enruta una tecla (nombre GPUI) al modal, mutándolo si hace falta. `main.rs`
 /// llama a esto cuando hay un modal abierto, ANTES del mapeo de navegación.
-pub fn on_key(modal: &mut Modal, key: &str) -> ModalOutcome {
+/// `key_char` solo lo consume [`Modal::AiRenamePrompt`] (tecleo libre, molde
+/// `PaletteView`); el caller ya lo anula bajo ctrl/alt/platform.
+pub fn on_key(modal: &mut Modal, key: &str, key_char: Option<&str>) -> ModalOutcome {
     match modal {
         Modal::ConfirmTransfer { kind, items, to } => match key {
             "y" => {
@@ -186,6 +277,90 @@ pub fn on_key(modal: &mut Modal, key: &str) -> ModalOutcome {
             "n" | "escape" => ModalOutcome::Dismiss,
             _ => ModalOutcome::Ignored,
         },
+        Modal::AiRenamePrompt { dir, query } => match key {
+            "enter" => {
+                // La query es UTF-8 por construcción (`push_char`); lossy es
+                // cinturón por si alguien construyera el modal con bytes
+                // arbitrarios (el test hostil lo hace a propósito).
+                let instruction = String::from_utf8_lossy(query).trim().to_owned();
+                if instruction.is_empty() {
+                    return ModalOutcome::StayOpen;
+                }
+                ModalOutcome::RequestAiPlan {
+                    dir: dir.clone(),
+                    instruction,
+                }
+            }
+            "escape" => ModalOutcome::Dismiss,
+            "backspace" => {
+                // Retira el último carácter UTF-8 COMPLETO (molde
+                // `PaletteView::backspace`), jamás un byte suelto.
+                if query.is_empty() {
+                    return ModalOutcome::Ignored;
+                }
+                let mut cut = query.len() - 1;
+                while cut > 0 && (query[cut] & 0b1100_0000) == 0b1000_0000 {
+                    cut -= 1;
+                }
+                query.truncate(cut);
+                ModalOutcome::StayOpen
+            }
+            _ => {
+                if let Some(c) = typed_char(key, key_char) {
+                    if c.is_control()
+                        || String::from_utf8_lossy(query).chars().count()
+                            >= AI_INSTRUCTION_MAX_CHARS
+                    {
+                        return ModalOutcome::Ignored;
+                    }
+                    let mut buf = [0u8; 4];
+                    query.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                    ModalOutcome::StayOpen
+                } else {
+                    ModalOutcome::Ignored
+                }
+            }
+        },
+        Modal::AiRenamePlan {
+            dir,
+            entries,
+            offset,
+        } => match key {
+            // La convención "Enter jamás confirma" aplica a modales de
+            // CONSENTIMIENTO/destructivos (aprobación de agente, quit); este
+            // es un plan REVISADO por el humano — `y/Enter` aplica, igual
+            // que la TUI (`modal-ai-rename-plan-hint`).
+            "y" | "enter" => {
+                // Cinturón fail-loud (paridad TUI audit MAJOR-2): TODAS las
+                // parejas se validan ANTES de someter la primera.
+                let Some(pairs) = validate_ai_plan(entries) else {
+                    return ModalOutcome::InvalidPlan;
+                };
+                let ops = pairs
+                    .into_iter()
+                    .map(|(from, to)| PendingOp::Transfer {
+                        kind: TransferKind::Move,
+                        from: dir.join(from),
+                        to: dir.join(to),
+                        opts: TransferOptions::default(),
+                    })
+                    .collect();
+                ModalOutcome::Submit(ops)
+            }
+            "n" | "escape" => ModalOutcome::Dismiss,
+            "down" | "up" => {
+                // El scroll JAMÁS confirma ni cancela (paridad TUI
+                // `ai_plan_scroll`): ventana clampada a [0, len - ventana].
+                let max = entries.len().saturating_sub(AI_RENAME_PAIR_LIMIT);
+                *offset = if key == "down" {
+                    (*offset + 1).min(max)
+                } else {
+                    offset.saturating_sub(1)
+                };
+                ModalOutcome::StayOpen
+            }
+            _ => ModalOutcome::Ignored,
+        },
     }
 }
 
@@ -238,7 +413,7 @@ mod tests {
             items: vec![vp("mem:///src/a"), vp("mem:///src/b")],
             to: vp("mem:///dst"),
         };
-        let out = on_key(&mut m, "y");
+        let out = on_key(&mut m, "y", None);
         assert_eq!(
             out,
             ModalOutcome::Submit(vec![
@@ -265,9 +440,9 @@ mod tests {
             items: vec![vp("mem:///src/a")],
             to: vp("mem:///dst"),
         };
-        assert_eq!(on_key(&mut m, "n"), ModalOutcome::Dismiss);
-        assert_eq!(on_key(&mut m, "escape"), ModalOutcome::Dismiss);
-        assert_eq!(on_key(&mut m, "x"), ModalOutcome::Ignored);
+        assert_eq!(on_key(&mut m, "n", None), ModalOutcome::Dismiss);
+        assert_eq!(on_key(&mut m, "escape", None), ModalOutcome::Dismiss);
+        assert_eq!(on_key(&mut m, "x", None), ModalOutcome::Ignored);
     }
 
     #[test]
@@ -276,19 +451,19 @@ mod tests {
             items: vec![vp("mem:///a")],
             permanent: false,
         };
-        assert_eq!(on_key(&mut m, "p"), ModalOutcome::StayOpen);
+        assert_eq!(on_key(&mut m, "p", None), ModalOutcome::StayOpen);
         assert_eq!(
-            on_key(&mut m, "y"),
+            on_key(&mut m, "y", None),
             ModalOutcome::Submit(vec![PendingOp::Delete {
                 path: vp("mem:///a"),
                 mode: DeleteMode::Permanent,
             }])
         );
         // "tab" es alias de "p" para el toggle.
-        assert_eq!(on_key(&mut m, "tab"), ModalOutcome::StayOpen);
+        assert_eq!(on_key(&mut m, "tab", None), ModalOutcome::StayOpen);
         // "n"/"escape" descartan sin importar el estado de `permanent`.
-        assert_eq!(on_key(&mut m, "n"), ModalOutcome::Dismiss);
-        assert_eq!(on_key(&mut m, "escape"), ModalOutcome::Dismiss);
+        assert_eq!(on_key(&mut m, "n", None), ModalOutcome::Dismiss);
+        assert_eq!(on_key(&mut m, "escape", None), ModalOutcome::Dismiss);
     }
 
     #[test]
@@ -298,7 +473,7 @@ mod tests {
             permanent: false,
         };
         assert_eq!(
-            on_key(&mut m, "y"),
+            on_key(&mut m, "y", None),
             ModalOutcome::Submit(vec![PendingOp::Delete {
                 path: vp("mem:///a"),
                 mode: DeleteMode::Trash,
@@ -316,7 +491,7 @@ mod tests {
             },
             conflict: ConflictKind::Exists,
         };
-        let out = on_key(&mut m, "o");
+        let out = on_key(&mut m, "o", None);
         match out {
             ModalOutcome::Submit(ops) => {
                 assert_eq!(ops.len(), 1);
@@ -331,7 +506,7 @@ mod tests {
         }
 
         // "s" reemite con Skip (cubre el otro brazo de política).
-        let out = on_key(&mut m, "s");
+        let out = on_key(&mut m, "s", None);
         match out {
             ModalOutcome::Submit(ops) => {
                 assert_eq!(ops.len(), 1);
@@ -356,8 +531,8 @@ mod tests {
             },
             conflict: ConflictKind::Exists,
         };
-        assert_eq!(on_key(&mut m, "c"), ModalOutcome::Dismiss);
-        assert_eq!(on_key(&mut m, "escape"), ModalOutcome::Dismiss);
+        assert_eq!(on_key(&mut m, "c", None), ModalOutcome::Dismiss);
+        assert_eq!(on_key(&mut m, "escape", None), ModalOutcome::Dismiss);
     }
 
     /// Revisión C2/G0 IMPORTANT 3: "y" confirma la salida (el caller en
@@ -367,12 +542,144 @@ mod tests {
     #[test]
     fn confirm_quit_y_confirma_n_o_escape_cancelan() {
         let mut m = Modal::ConfirmQuit { tasks: 2, marks: 1 };
-        assert_eq!(on_key(&mut m, "y"), ModalOutcome::Quit);
-        assert_eq!(on_key(&mut m, "n"), ModalOutcome::Dismiss);
-        assert_eq!(on_key(&mut m, "escape"), ModalOutcome::Dismiss);
-        assert_eq!(on_key(&mut m, "x"), ModalOutcome::Ignored);
+        assert_eq!(on_key(&mut m, "y", None), ModalOutcome::Quit);
+        assert_eq!(on_key(&mut m, "n", None), ModalOutcome::Dismiss);
+        assert_eq!(on_key(&mut m, "escape", None), ModalOutcome::Dismiss);
+        assert_eq!(on_key(&mut m, "x", None), ModalOutcome::Ignored);
         // Pin explícito de la convención del modal de aprobación: Enter
         // JAMÁS confirma una acción destructiva/consentimiento.
-        assert_eq!(on_key(&mut m, "enter"), ModalOutcome::Ignored);
+        assert_eq!(on_key(&mut m, "enter", None), ModalOutcome::Ignored);
+    }
+
+    /// M4-IA: Enter en el prompt con texto pide el plan (instrucción
+    /// recortada), vacío/espacios se queda abierto sin pedir nada, y Esc
+    /// descarta.
+    #[test]
+    fn ai_prompt_enter_pide_plan_y_esc_descarta() {
+        let mut m = Modal::AiRenamePrompt {
+            dir: vp("mem:///docs"),
+            query: Vec::new(),
+        };
+        // Vacío: StayOpen (nada viaja al daemon).
+        assert_eq!(on_key(&mut m, "enter", None), ModalOutcome::StayOpen);
+        // Solo espacios: sigue vacío tras el trim.
+        assert_eq!(on_key(&mut m, "space", None), ModalOutcome::StayOpen);
+        assert_eq!(on_key(&mut m, "enter", None), ModalOutcome::StayOpen);
+        for c in "kebab".chars() {
+            let buf = c.to_string();
+            assert_eq!(
+                on_key(&mut m, &buf, Some(&buf)),
+                ModalOutcome::StayOpen,
+                "teclear {c:?} debe quedarse abierto"
+            );
+        }
+        assert_eq!(
+            on_key(&mut m, "enter", None),
+            ModalOutcome::RequestAiPlan {
+                dir: vp("mem:///docs"),
+                instruction: "kebab".into(),
+            }
+        );
+        assert_eq!(on_key(&mut m, "escape", None), ModalOutcome::Dismiss);
+    }
+
+    /// M4-IA: backspace retira el último carácter UTF-8 COMPLETO (jamás un
+    /// byte suelto — molde `PaletteView::backspace`).
+    #[test]
+    fn ai_prompt_backspace_respeta_fronteras_utf8() {
+        let mut m = Modal::AiRenamePrompt {
+            dir: vp("mem:///d"),
+            query: Vec::new(),
+        };
+        assert_eq!(on_key(&mut m, "a", Some("a")), ModalOutcome::StayOpen);
+        assert_eq!(on_key(&mut m, "ñ", Some("ñ")), ModalOutcome::StayOpen);
+        assert_eq!(on_key(&mut m, "backspace", None), ModalOutcome::StayOpen);
+        let Modal::AiRenamePrompt { query, .. } = &m else {
+            unreachable!()
+        };
+        assert_eq!(query, b"a", "la ñ (2 bytes) se retiró entera");
+    }
+
+    /// M4-IA: `y` aplica el plan como moves `dir/from → dir/to` (opciones
+    /// default) y `n` descarta.
+    #[test]
+    fn ai_plan_y_aplica_como_moves_y_n_descarta() {
+        let entry = norte_proto::methods::AiRenameEntry {
+            from: "a.txt".into(),
+            to: "b.txt".into(),
+        };
+        let mut m = Modal::AiRenamePlan {
+            dir: vp("mem:///docs"),
+            entries: vec![entry],
+            offset: 0,
+        };
+        assert_eq!(
+            on_key(&mut m, "y", None),
+            ModalOutcome::Submit(vec![PendingOp::Transfer {
+                kind: TransferKind::Move,
+                from: vp("mem:///docs/a.txt"),
+                to: vp("mem:///docs/b.txt"),
+                opts: TransferOptions::default(),
+            }])
+        );
+        assert_eq!(on_key(&mut m, "n", None), ModalOutcome::Dismiss);
+        assert_eq!(on_key(&mut m, "escape", None), ModalOutcome::Dismiss);
+        assert_eq!(on_key(&mut m, "x", None), ModalOutcome::Ignored);
+    }
+
+    /// M4-IA cinturón fail-loud (paridad TUI audit MAJOR-2): UNA pareja
+    /// inválida (aquí un `to` con `/`) aborta el plan ENTERO — `InvalidPlan`,
+    /// cero ops — aunque el resto de parejas fuera legítimo.
+    #[test]
+    fn ai_plan_invalido_no_somete_nada() {
+        let ok = norte_proto::methods::AiRenameEntry {
+            from: "a.txt".into(),
+            to: "b.txt".into(),
+        };
+        let evil = norte_proto::methods::AiRenameEntry {
+            from: "c.txt".into(),
+            to: "../evil".into(),
+        };
+        for entries in [vec![evil.clone()], vec![ok.clone(), evil.clone()]] {
+            let mut m = Modal::AiRenamePlan {
+                dir: vp("mem:///docs"),
+                entries,
+                offset: 0,
+            };
+            assert_eq!(on_key(&mut m, "y", None), ModalOutcome::InvalidPlan);
+            assert_eq!(on_key(&mut m, "enter", None), ModalOutcome::InvalidPlan);
+        }
+    }
+
+    /// M4-IA scroll (paridad TUI audit MAJOR-3): `down`/`up` desplazan la
+    /// ventana clampada a `[0, len - AI_RENAME_PAIR_LIMIT]` y JAMÁS
+    /// confirman ni cancelan.
+    #[test]
+    fn ai_plan_scroll_clampa_y_no_decide() {
+        let entries: Vec<_> = (0..7)
+            .map(|i| norte_proto::methods::AiRenameEntry {
+                from: format!("f{i}.txt"),
+                to: format!("t{i}.txt"),
+            })
+            .collect();
+        let mut m = Modal::AiRenamePlan {
+            dir: vp("mem:///d"),
+            entries,
+            offset: 0,
+        };
+        for expected in [1, 2, 2, 2] {
+            assert_eq!(on_key(&mut m, "down", None), ModalOutcome::StayOpen);
+            let Modal::AiRenamePlan { offset, .. } = &m else {
+                unreachable!()
+            };
+            assert_eq!(*offset, expected, "clamp en len - ventana = 2");
+        }
+        for expected in [1, 0, 0] {
+            assert_eq!(on_key(&mut m, "up", None), ModalOutcome::StayOpen);
+            let Modal::AiRenamePlan { offset, .. } = &m else {
+                unreachable!()
+            };
+            assert_eq!(*offset, expected);
+        }
     }
 }

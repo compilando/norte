@@ -208,6 +208,9 @@ msg-names-encoding-off = nombres tal cual (reinterpretación apagada)
 msg-hidden-shown = entradas ocultas visibles
 msg-mkdir-in-search = los resultados de búsqueda no tienen directorio destino — sal antes de la búsqueda
 msg-ai-rename-running = Renombrado IA: pensando… (Esc cancela)
+# Variante GUI: la GUI no tiene camino para abortar la petición en vuelo, así
+# que no debe prometer "Esc cancela" (jamás una affordance falsa).
+gui-msg-ai-rename-running = Renombrado IA: pensando…
 msg-ai-rename-empty = Renombrado IA: el modelo no propuso cambios
 msg-ai-rename-failed = el renombrado IA falló: { $error }
 msg-ai-rename-applied = Renombrado IA: { $n } movimientos enviados
