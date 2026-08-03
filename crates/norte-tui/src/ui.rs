@@ -35,48 +35,57 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         Block::default().style(app.theme.role(Role::Background)),
         frame.area(),
     );
+    // El viewer sustituye a los panes, NUNCA a los overlays: antes este
+    // brazo hacía `return` y CUALQUIER overlay abierto con el viewer
+    // encima quedaba invisible aunque el run loop ya le hubiera dado la
+    // tecla (su brazo va ANTES del viewer en la cadena) — la ayuda (F1),
+    // el selector de tema, los ajustes, la palette y hasta un modal
+    // asíncrono de aprobación se comían el teclado sin pintar un píxel:
+    // el viewer parecía colgado y F1 "dejaba de funcionar". Los píxeles
+    // deben decir quién manda (mismo criterio que el modal pintado el
+    // último, más abajo).
     if let Some(viewer) = &app.viewer {
         draw_viewer(frame, viewer, app);
-        return;
-    }
-    let tasks_h = u16::try_from(app.board.rows().len().min(6)).unwrap_or(6);
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),
-            Constraint::Length(tasks_h),
-            Constraint::Length(1),
-        ])
-        .split(frame.area());
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(rows[0]);
-    // #108 L5: `now` de las celdas de tiempo relativo — UNA lectura por
-    // frame; los tests lo fijan (`App::render_now_ms`) para snapshots
-    // estables.
-    let now_ms = app.render_now_ms.unwrap_or_else(|| {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-    });
+    } else {
+        let tasks_h = u16::try_from(app.board.rows().len().min(6)).unwrap_or(6);
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(1),
+                Constraint::Length(tasks_h),
+                Constraint::Length(1),
+            ])
+            .split(frame.area());
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(rows[0]);
+        // #108 L5: `now` de las celdas de tiempo relativo — UNA lectura por
+        // frame; los tests lo fijan (`App::render_now_ms`) para snapshots
+        // estables.
+        let now_ms = app.render_now_ms.unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        });
 
-    for (i, pane) in app.panes.iter().enumerate() {
-        draw_pane(
-            frame,
-            cols[i],
-            pane,
-            app.focus() == i,
-            &app.theme,
-            now_ms,
-            &app.columns,
-            // #117 tarea 2: el catálogo cacheado del scheme del pane (hints
-            // y cabeceras); sin él se pinta con defaults, jamás se espera.
-            app.attr_catalog(pane.dir().scheme()),
-        );
+        for (i, pane) in app.panes.iter().enumerate() {
+            draw_pane(
+                frame,
+                cols[i],
+                pane,
+                app.focus() == i,
+                &app.theme,
+                now_ms,
+                &app.columns,
+                // #117 tarea 2: el catálogo cacheado del scheme del pane (hints
+                // y cabeceras); sin él se pinta con defaults, jamás se espera.
+                app.attr_catalog(pane.dir().scheme()),
+            );
+        }
+        draw_tasks(frame, rows[1], app);
+        draw_status(frame, rows[2], app);
     }
-    draw_tasks(frame, rows[1], app);
-    draw_status(frame, rows[2], app);
     if let Some(help) = &app.help {
         draw_help(frame, help, &app.theme);
     }

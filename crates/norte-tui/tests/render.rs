@@ -830,3 +830,67 @@ fn modal_semantic_enmascara_hits_hostiles() {
         "el hit limpio se pinta entero: {contenido}"
     );
 }
+
+/// La ayuda (F1) se PINTA sobre el viewer. `f1 → app.help` vive en
+/// `[global]` del preset, así que sigue vigente en `Screen::Viewer`: el
+/// run loop enruta la tecla, `app.help` pasa a `Some`… y el draw hacía
+/// `return` justo después del viewer, dejando el overlay INVISIBLE. Como
+/// el brazo de `app.help` del run loop va ANTES del viewer, ese overlay
+/// fantasma se comía TODAS las teclas siguientes: F1 "dejaba de
+/// funcionar" y el viewer parecía muerto.
+#[test]
+fn la_ayuda_se_pinta_sobre_el_viewer() {
+    let _ = norte_i18n::force(norte_i18n::Lang::En);
+    let dir = vp("file:///x");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir, Vec::new()),
+    );
+    app.viewer = Some(norte_tui::viewer::Viewer::new(
+        vp("file:///x/notas.txt"),
+        b"cuerpo del fichero\n".to_vec(),
+        false,
+    ));
+    app.help = Some(norte_tui::app::Help {
+        lines: vec!["  f1             this help".to_owned()],
+        scroll: 0,
+    });
+    let mut terminal = Terminal::new(TestBackend::new(70, 12)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let contenido = terminal.backend().to_string();
+    assert!(
+        contenido.contains("this help"),
+        "la ayuda es visible sobre el viewer: {contenido}"
+    );
+}
+
+/// Mismo fallo, consecuencia de SEGURIDAD: un modal asíncrono (aprobación
+/// de policy, colisión, confirmación) llegado con el viewer abierto se
+/// enruta ANTES que el viewer (`app.modal` gana la tecla) pero quedaba sin
+/// pintar — el usuario respondía a ciegas a un diálogo que no veía.
+#[test]
+fn un_modal_se_pinta_sobre_el_viewer() {
+    let _ = norte_i18n::force(norte_i18n::Lang::En);
+    let dir = vp("file:///x");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir, Vec::new()),
+    );
+    app.dialog_hints = default_dialog_hints();
+    app.viewer = Some(norte_tui::viewer::Viewer::new(
+        vp("file:///x/notas.txt"),
+        b"cuerpo del fichero\n".to_vec(),
+        false,
+    ));
+    app.modal = Some(norte_tui::app::Modal::ConfirmDelete {
+        items: vec![vp("file:///x/borrame.txt")],
+        permanent: true,
+    });
+    let mut terminal = Terminal::new(TestBackend::new(70, 12)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let contenido = terminal.backend().to_string();
+    assert!(
+        contenido.contains("borrame.txt"),
+        "el modal es visible sobre el viewer: {contenido}"
+    );
+}
