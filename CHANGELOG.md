@@ -9,6 +9,35 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Semantic index (M4-IA-2, ADR 0031 A3, proto 0.33.0):** two new
+  methods over the wire. `index.embed` is a cancellable Task
+  (`TaskKind::Embed`) that embeds the files a previous `index.build`
+  already indexed: it filters by `denied_prefixes`, an
+  extension-based text heuristic and a size cap **before reading a
+  single byte**, then reads bounded 32 KiB prefixes through the
+  providers, skips anything whose `(sha256, model)` is unchanged, and
+  batches 16 texts per provider call with a bounded, cancel-aware
+  retry on rate limits. `index.search_semantic` is a direct response,
+  cancellable via `rpc.cancel`: one embedding call for the query plus
+  a brute-force cosine scan over the stored vectors (`k` clamped to
+  100, query capped at 4 KiB, scores guaranteed finite). Vectors live
+  in the existing index database as an additive `embeddings` table
+  (f32 little-endian, cascading with the file row); a vector from
+  another model counts as absent and is regenerated. Both endpoints
+  are human-only — content prefixes and the query leave the process,
+  so agent connections are denied fail-closed — and both pass the
+  full AI gate (`enabled`, `local_only`, `denied_prefixes`).
+  Configuration is `[ai] embed_provider`; local Ollama is the
+  expected default. New CLI verbs `norte index embed` and `norte index
+  semantic`, plus a semantic search flow in both frontends
+  (`pane.semantic-search`): query prompt → cancellable search (TUI) →
+  hostile-safe hit list (masked paths, badges, scores that a crafted
+  path cannot push out of view) → Enter navigates to the file. A
+  hostile or broken daemon cannot flood either frontend: the shared
+  `validate_semantic_hits` belt in `norte-frontend` rejects any
+  response over the wire ceiling or carrying a non-finite score,
+  whole, never truncated.
+
 - **AI rename over the wire (M4-IA, ADR 0031, proto 0.32.0):** new
   `ai.rename_plan` method — a direct response, cancellable via
   `rpc.cancel`, that returns the reviewable plan and never mutates.

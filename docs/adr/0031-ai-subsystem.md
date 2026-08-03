@@ -90,6 +90,18 @@ default per task routing). Search: embed the query, brute-force cosine top-k
 (SQLite scan; ANN only if a real corpus proves it necessary). Wire:
 `index.build` (Task) + `index.search_semantic` — own bump when it lands.
 
+**Amendment (M4-IA-2, proto 0.33.0, 2026-08-03).** As built, embedding is a
+SEPARATE Task `index.embed` (`TaskKind::Embed`) rather than a flag on the
+FTS5 `index.build` of ADR 0034: the name index stays fast and free of the AI
+gate, embedding is opt-in and AI-gated, and it reuses the `files` rows
+`index.build` already wrote (`NotFound` without a prior build). The
+`embeddings` table is additive on the same DB, keyed by `file_id` with
+`ON DELETE CASCADE`, invalidated by `(text_hash, model)` — a vector from
+another model counts as absent. Provider selection is `[ai] embed_provider`.
+Both `index.embed` and `index.search_semantic` are human-only on the wire:
+content prefixes and the query leave the process, so an agent connection is
+denied fail-closed.
+
 ## Consequences
 
 - reqwest becomes a direct dependency of norte-ai only; deny-audited.
