@@ -229,6 +229,7 @@ msg-ai-rename-in-search = el renombrado IA no está disponible en un pane de bú
 msg-semantic-running = Búsqueda semántica: pensando… (Esc cancela)
 msg-semantic-empty = Búsqueda semántica: sin resultados
 msg-semantic-failed = la búsqueda semántica falló: { $error }
+msg-semantic-invalid = búsqueda semántica: respuesta inválida del daemon — no se muestra nada
 msg-semantic-in-search = no disponible en un pane de búsqueda
 msg-hidden-hidden = entradas ocultas escondidas
 msg-marked-by-pattern = { $n } marcas cambiadas

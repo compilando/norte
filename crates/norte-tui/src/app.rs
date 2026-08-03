@@ -2580,6 +2580,20 @@ pub enum Modal {
 /// el alto del modal y el clamp de [`App::semantic_cursor`].
 pub const SEMANTIC_HIT_LIMIT: usize = 10;
 
+/// Cinturón de INGESTIÓN de los hits semánticos (paridad IA-1 con el belt
+/// del plan de rename): un daemon CONFORME jamás supera
+/// [`norte_proto::methods::INDEX_SEMANTIC_MAX_K`] — el server recorta `k` a
+/// ese techo contractual —, así que superarlo delata un daemon hostil/N+1
+/// inflando la respuesta. `None` = rechazo EN BLOQUE (la barra dice
+/// `msg-semantic-invalid`, cero hits pintados); `Some` devuelve los hits
+/// intactos. Pura para que el guard sea testeable sin run loop.
+#[must_use]
+pub fn semantic_hits_belt(
+    hits: Vec<norte_proto::methods::SemanticHit>,
+) -> Option<Vec<norte_proto::methods::SemanticHit>> {
+    (hits.len() <= norte_proto::methods::INDEX_SEMANTIC_MAX_K as usize).then_some(hits)
+}
+
 /// Parejas del plan IA visibles a la vez en [`Modal::AiRenamePlan`] (ventana
 /// de scroll, audit MAJOR-3) — la constante vive en `norte-frontend`
 /// (compartida con la GUI, quality review 78eb243 MAJOR-1); re-export para

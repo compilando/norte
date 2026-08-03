@@ -229,6 +229,7 @@ msg-ai-rename-in-search = AI rename is not available in a search pane
 msg-semantic-running = Semantic search: thinking… (Esc cancels)
 msg-semantic-empty = Semantic search: no hits
 msg-semantic-failed = Semantic search failed: { $error }
+msg-semantic-invalid = Semantic search: invalid response from the daemon — nothing shown
 msg-semantic-in-search = Not available in a search pane
 msg-hidden-hidden = hidden entries hidden
 msg-marked-by-pattern = { $n } marks changed

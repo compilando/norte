@@ -24,7 +24,8 @@ use norte_tui::app::{
     DialogOutcome, ExtensionManager, Help, KeymapsError, Modal, NavPopupKind, Palette, Pane,
     PendingWrite, PickerAction, SearchDialog, SearchState, Settings, SettingsEditError,
     TransferKind, config_error_category, detail_for_bar, dialog_action, error_category,
-    error_message, io_error_category, keymaps_error_category, theme_error_category, trust_lua_key,
+    error_message, io_error_category, keymaps_error_category, semantic_hits_belt,
+    theme_error_category, trust_lua_key,
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::hints::DialogHints;
@@ -1158,20 +1159,30 @@ async fn run(
                     Ok(Ok(hits)) if hits.is_empty() => {
                         app.message = Some(t("msg-semantic-empty"));
                     }
-                    Ok(Ok(hits)) => {
-                        app.message = None;
-                        if app.modal.is_none() {
-                            app.modal = Some(Modal::SemanticHits {
-                                hits,
-                                offset: 0,
-                                cursor: 0,
-                            });
-                        } else {
-                            // Otro modal abierto (aprobación, colisión…):
-                            // los hits esperan su turno, jamás lo pisan.
-                            pending_semantic = Some(hits);
+                    // Cinturón de INGESTIÓN (paridad IA-1): una respuesta
+                    // por encima del techo contractual del server delata un
+                    // daemon hostil/N+1 — rechazo en bloque, ni se abre el
+                    // modal (el guard es `semantic_hits_belt`, pura y
+                    // testeada en app.rs).
+                    Ok(Ok(hits)) => match semantic_hits_belt(hits) {
+                        None => {
+                            app.message = Some(t("msg-semantic-invalid"));
                         }
-                    }
+                        Some(hits) => {
+                            app.message = None;
+                            if app.modal.is_none() {
+                                app.modal = Some(Modal::SemanticHits {
+                                    hits,
+                                    offset: 0,
+                                    cursor: 0,
+                                });
+                            } else {
+                                // Otro modal abierto (aprobación, colisión…):
+                                // los hits esperan su turno, jamás lo pisan.
+                                pending_semantic = Some(hits);
+                            }
+                        }
+                    },
                     Ok(Err(e)) => {
                         app.message = Some(ta(
                             "msg-semantic-failed",
