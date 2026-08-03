@@ -2894,18 +2894,9 @@ async fn dispatch_fs_task(
                 .ai_rename_plan(&p.dir, &p.instruction)
                 .await
                 .map_err(RpcError::from)?;
-            let entries = plan
-                .entries
-                .into_iter()
-                .map(|e| methods::AiRenameEntry {
-                    // Invariante del engine: el plan solo contiene nombres
-                    // UTF-8 (hostiles rechazados fail-loud pre-proveedor), la
-                    // conversión lossy es identidad.
-                    from: String::from_utf8_lossy(e.from.as_bytes()).into_owned(),
-                    to: String::from_utf8_lossy(e.to.as_bytes()).into_owned(),
-                })
-                .collect();
-            to_value(&methods::AiRenamePlanResult { entries })
+            // Mapeo core→proto compartido con `Backend::Embedded`
+            // (`ai_plan_to_proto`): lossy-identidad por invariante del engine.
+            to_value(&crate::backend::ai_plan_to_proto(plan))
         }
         // index.build (0.25.0, M4): Task. El resultado (indexed/removed) NO se
         // reenvía por wire aún (task completa = hecho); un fetch de report es

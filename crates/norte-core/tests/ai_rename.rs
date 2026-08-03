@@ -188,6 +188,24 @@ async fn respuesta_hostil_no_produce_plan_parcial() {
     assert!(engine.ai_rename_plan(&vp("mem:///d"), "x").await.is_err());
 }
 
+/// El brazo `Embedded` de [`norte_core::backend::Backend`] devuelve el plan
+/// ya mapeado
+/// a tipos del protocolo (paridad con el brazo remoto).
+#[tokio::test]
+async fn backend_embebido_devuelve_el_plan_en_tipos_proto() {
+    let (engine, mem, _) = engine_with(r#"[{"from":"a.txt","to":"b.txt"}]"#, true, enabled());
+    mkdirp(&mem, "mem:///d").await;
+    write_file(&mem, "mem:///d/a.txt").await;
+    let backend = norte_core::backend::Backend::Embedded(std::sync::Arc::new(engine));
+    let plan = backend
+        .ai_rename_plan(&vp("mem:///d"), "renombra")
+        .await
+        .expect("plan");
+    assert_eq!(plan.entries.len(), 1);
+    assert_eq!(plan.entries[0].from, "a.txt");
+    assert_eq!(plan.entries[0].to, "b.txt");
+}
+
 struct CapturingAi {
     captured: Arc<std::sync::Mutex<String>>,
 }

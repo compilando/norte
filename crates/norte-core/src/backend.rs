@@ -32,6 +32,23 @@ fn index_hit_to_proto(h: norte_index::IndexHit) -> norte_proto::methods::IndexHi
     }
 }
 
+/// Core → proto: el plan solo contiene nombres UTF-8 (invariante del engine:
+/// hostiles rechazados fail-loud pre-proveedor) — lossy es identidad.
+pub(crate) fn ai_plan_to_proto(
+    plan: crate::ai::RenamePlan,
+) -> norte_proto::methods::AiRenamePlanResult {
+    norte_proto::methods::AiRenamePlanResult {
+        entries: plan
+            .entries
+            .into_iter()
+            .map(|e| norte_proto::methods::AiRenameEntry {
+                from: String::from_utf8_lossy(e.from.as_bytes()).into_owned(),
+                to: String::from_utf8_lossy(e.to.as_bytes()).into_owned(),
+            })
+            .collect(),
+    }
+}
+
 /// El tipo de stream que devuelve [`Backend::list_stream`] (ADR 0017),
 /// re-exportado para que los frontends lo nombren sin depender de `norte-vfs`.
 pub use norte_vfs::EntryStream;
@@ -481,6 +498,28 @@ impl Backend {
             }
             #[cfg(unix)]
             Self::Remote(r) => r.index_query(root, text, limit).await,
+        }
+    }
+
+    /// Plan de rename revisable de `dir` vía IA (M4-IA, ADR 0031). NO muta:
+    /// aplicar el plan son N [`Backend::move_`] gobernados.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] sin proveedor de IA; [`Error::PolicyDenied`]
+    /// del gate de IA (off, local-only, denied prefix); taxonomía del
+    /// protocolo para fallos del proveedor.
+    pub async fn ai_rename_plan(
+        &self,
+        dir: &VPath,
+        instruction: &str,
+    ) -> Result<norte_proto::methods::AiRenamePlanResult, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let plan = engine.ai_rename_plan(dir, instruction).await?;
+                Ok(ai_plan_to_proto(plan))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.ai_rename_plan(dir, instruction).await,
         }
     }
 
@@ -1314,6 +1353,9 @@ pub mod remote {
     /// Tope de una llamada RPC: un daemon vivo-pero-atascado (stat sobre un
     /// NFS muerto) jamás congela el frontend (M4 del rust-reviewer).
     const CALL_TIMEOUT: Duration = Duration::from_secs(30);
+    /// Timeout de llamadas de IA: el proveedor (modelo remoto) tarda
+    /// legítimamente mucho más que un fs.*. Cancel-on-drop igualmente.
+    const AI_CALL_TIMEOUT: Duration = Duration::from_mins(2);
     /// Entradas por página al listar un dir remoto (ADR 0017): acota el frame
     /// de respuesta y el tiempo de UNA llamada.
     const LIST_PAGE: u32 = 1000;
@@ -1802,9 +1844,27 @@ pub mod remote {
         /// daemon muere PRE-efecto y la Task no nace huérfana sin canceller
         /// (la ventana del driver Lua que abandona el run con el submit en
         /// vuelo). Un id cuyo dispatch YA terminó es un no-op en el daemon.
-        /// Solo lo usan las MUTACIONES (fs.copy/move/delete): son las únicas
-        /// que el daemon envuelve en su brazo de cancelación (#72).
+        /// Solo lo usan las MUTACIONES (fs.copy/move/delete) y
+        /// `ai.rename_plan`: son los únicos métodos que el daemon envuelve en
+        /// su brazo de cancelación (#72).
         async fn call_timed_guarded<P, R>(&self, method: &str, params: &P) -> Result<R, Error>
+        where
+            P: serde::Serialize,
+            R: serde::de::DeserializeOwned,
+        {
+            self.call_timed_guarded_with(CALL_TIMEOUT, method, params)
+                .await
+        }
+
+        /// Como [`Self::call_timed_guarded`] con timeout EXPLÍCITO: la llamada
+        /// de IA usa [`AI_CALL_TIMEOUT`] (un modelo remoto tarda legítimamente
+        /// más que el [`CALL_TIMEOUT`] de un fs.*).
+        async fn call_timed_guarded_with<P, R>(
+            &self,
+            timeout: Duration,
+            method: &str,
+            params: &P,
+        ) -> Result<R, Error>
         where
             P: serde::Serialize,
             R: serde::de::DeserializeOwned,
@@ -1817,7 +1877,7 @@ pub mod remote {
             };
             let id_cell = std::sync::Arc::clone(&guard.id);
             let res = match tokio::time::timeout(
-                CALL_TIMEOUT,
+                timeout,
                 client.call_tracked(method, params, |id| {
                     // El contador del Client arranca en 1: `0` = «aún sin id».
                     id_cell.store(id, std::sync::atomic::Ordering::SeqCst);
@@ -2053,6 +2113,25 @@ pub mod remote {
                 )
                 .await?;
             Ok(r.hits)
+        }
+
+        /// `ai.rename_plan` (0.32.0, M4-IA): respuesta directa con el timeout
+        /// LARGO de IA y cancel-on-drop (el daemon lo tiene en su brazo de
+        /// cancelación #72 — abandonar la espera corta el dispatch).
+        pub(super) async fn ai_rename_plan(
+            &self,
+            dir: &VPath,
+            instruction: &str,
+        ) -> Result<methods::AiRenamePlanResult, Error> {
+            self.call_timed_guarded_with(
+                AI_CALL_TIMEOUT,
+                methods::AI_RENAME_PLAN,
+                &methods::AiRenamePlanParams {
+                    dir: dir.clone(),
+                    instruction: instruction.to_string(),
+                },
+            )
+            .await
         }
 
         pub(super) async fn delete(

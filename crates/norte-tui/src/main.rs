@@ -671,6 +671,25 @@ async fn make_backend(
         engine.set_connector(Arc::new(norte_core::connect::ConnectionManager::new(
             norte_core::connect::config_dir(),
         )));
+        // IA (M4-IA): opt-in; sin [ai] el backend degrada (Unsupported).
+        match tokio::task::spawn_blocking(norte_core::ai::AiConfig::load).await {
+            Ok(Ok(ai_cfg)) => {
+                if let Some(pcfg) = ai_cfg.rename_provider_config().cloned() {
+                    match norte_core::ai::resolve_and_build(
+                        &pcfg,
+                        norte_core::connect::config_dir(),
+                    )
+                    .await
+                    {
+                        Ok(provider) => engine.set_ai_provider(provider),
+                        Err(e) => eprintln!("aviso: proveedor de IA no disponible ({e})"),
+                    }
+                }
+                engine.set_ai_config(ai_cfg);
+            }
+            Ok(Err(e)) => eprintln!("aviso: [ai] inválido ({e})"),
+            Err(e) => eprintln!("aviso: carga de [ai] falló ({e})"),
+        }
         return Ok(Backend::Embedded(Arc::new(engine)));
     }
     #[cfg(not(unix))]
