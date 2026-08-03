@@ -123,9 +123,10 @@ impl Index {
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
-            // SQLite NO aplica FK sin este pragma por conexión: sin él, el
-            // sweep de `files` dejaría embeddings huérfanos (el CASCADE del
-            // schema sería letra muerta).
+            // PIN, no cambio: sqlx 0.8 ya emite `PRAGMA foreign_keys = ON` por
+            // defecto, pero el CASCADE de `embeddings` DEPENDE de ello (SQLite
+            // solo lo aplica por conexión), así que se fija explícito por si el
+            // default de la dependencia cambia.
             .foreign_keys(true);
         let pool = SqlitePoolOptions::new().connect_with(opts).await?;
         let idx = Self { pool };
@@ -357,8 +358,9 @@ impl Index {
     /// [`IndexError::Sqlite`].
     pub async fn files_for_embed(&self, root: &VPath) -> Result<Vec<EmbedCandidate>, IndexError> {
         let rid = root_id(root);
-        let rows = sqlx::query("SELECT id, path, size FROM files WHERE root_id = ?1 AND kind = 0")
+        let rows = sqlx::query("SELECT id, path, size FROM files WHERE root_id = ?1 AND kind = ?2")
             .bind(rid)
+            .bind(kind_to_i64(EntryKind::File))
             .fetch_all(&self.pool)
             .await?;
         Ok(rows
@@ -379,7 +381,11 @@ impl Index {
 
     /// `text_hash` por `file_id` de los embeddings de `root` calculados con
     /// `model`. Un embedding de un modelo DISTINTO no aparece (stale = ausente):
-    /// el caller lo tratará como pendiente de re-embeber.
+    /// el caller lo tratará como pendiente de re-embeber. Una fila con BLOB
+    /// incoherente (`length(vec) != dim * 4`) TAMPOCO aparece: como
+    /// [`Self::embeddings_for_root`] la salta en búsqueda, reportar su hash la
+    /// dejaría "al día" para el scheduler pero invisible — ausente aquí ⇒ se
+    /// re-embebe y se repara sola.
     ///
     /// # Errors
     /// [`IndexError::Sqlite`].
@@ -392,7 +398,8 @@ impl Index {
         let rows = sqlx::query(
             "SELECT e.file_id, e.text_hash FROM embeddings e
              JOIN files f ON f.id = e.file_id
-             WHERE f.root_id = ?1 AND e.model = ?2",
+             WHERE f.root_id = ?1 AND e.model = ?2
+               AND length(e.vec) = e.dim * 4",
         )
         .bind(rid)
         .bind(model)
@@ -796,6 +803,84 @@ mod tests {
     fn decode_vec_rejects_ragged_blob() {
         assert_eq!(decode_vec(&encode_vec(&[1.5, -2.0])), Some(vec![1.5, -2.0]));
         assert_eq!(decode_vec(&[0u8; 5]), None);
+    }
+
+    #[tokio::test]
+    async fn embedding_hashes_skips_corrupt_blob_so_it_reembeds() {
+        let idx = Index::open_memory().await.unwrap();
+        let root = root();
+        let tok = CancellationToken::new();
+        idx.build(&root, vec![entry(&root, b"a.txt")], &tok)
+            .await
+            .unwrap();
+        let id = idx.files_for_embed(&root).await.unwrap()[0].file_id;
+        idx.upsert_embedding(id, "m", &[1.0, 0.0], b"h")
+            .await
+            .unwrap();
+        // Corrompe el BLOB a mano (length != dim * 4): la fila debe leerse como
+        // AUSENTE en embedding_hashes — si devolviera el hash, el scheduler la
+        // creería al día y jamás se repararía (review MAJOR-1).
+        sqlx::query("UPDATE embeddings SET vec = X'00' WHERE file_id = ?")
+            .bind(id)
+            .execute(&idx.pool)
+            .await
+            .unwrap();
+        assert!(idx.embedding_hashes(&root, "m").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn rebuild_with_file_present_preserves_embedding() {
+        let idx = Index::open_memory().await.unwrap();
+        let root = root();
+        let tok = CancellationToken::new();
+        idx.build(&root, vec![entry(&root, b"a.txt")], &tok)
+            .await
+            .unwrap();
+        let id = idx.files_for_embed(&root).await.unwrap()[0].file_id;
+        idx.upsert_embedding(id, "m", &[1.0], b"h").await.unwrap();
+        // Rebuild con el fichero AÚN presente: el upsert de `build` debe
+        // conservar el rowid (ON CONFLICT DO UPDATE, jamás INSERT OR REPLACE)
+        // o el CASCADE barrería TODOS los embeddings en cada rebuild.
+        idx.build(&root, vec![entry(&root, b"a.txt")], &tok)
+            .await
+            .unwrap();
+        assert_eq!(
+            idx.embeddings_for_root(Some(&root), "m")
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "el rebuild preserva el embedding (rowid estable)"
+        );
+    }
+
+    #[tokio::test]
+    async fn embedding_hostile_path_roundtrips_byte_exact() {
+        let idx = Index::open_memory().await.unwrap();
+        let root = root();
+        let hostile = b"informe-a\xff\xfe.txt"; // no-UTF8
+        let tok = CancellationToken::new();
+        idx.build(&root, vec![entry(&root, hostile)], &tok)
+            .await
+            .unwrap();
+        let cands = idx.files_for_embed(&root).await.unwrap();
+        assert_eq!(cands.len(), 1);
+        idx.upsert_embedding(cands[0].file_id, "m", &[1.0], b"h")
+            .await
+            .unwrap();
+        let vecs = idx.embeddings_for_root(Some(&root), "m").await.unwrap();
+        assert_eq!(
+            vecs[0].0.file_name().unwrap().as_bytes(),
+            hostile,
+            "el nombre no-UTF8 vuelve BYTE-EXACTO por la ruta de embeddings"
+        );
+    }
+
+    #[tokio::test]
+    async fn upsert_embedding_nonexistent_file_id_errors() {
+        let idx = Index::open_memory().await.unwrap();
+        // FK: un file_id que no existe en `files` se RECHAZA, no se inserta.
+        assert!(idx.upsert_embedding(999, "m", &[1.0], b"h").await.is_err());
     }
 
     #[tokio::test]
