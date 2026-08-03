@@ -104,6 +104,21 @@ struct AiRenameRun {
     dir: VPath,
 }
 
+/// Hits que pide la búsqueda semántica del TUI (M4-IA-2): la ventana del
+/// modal enseña 10 y el resto queda a un scroll; el server además recorta a
+/// su propio tope (`INDEX_SEMANTIC_MAX_K`).
+const SEMANTIC_K: u32 = 20;
+
+/// Petición `index.search_semantic` EN VUELO (M4-IA-2). Mismo contrato de
+/// cancelación que [`AiRenameRun`] (regla 3): `abort()` dropea el future del
+/// backend → `rpc.cancel` (remoto) / drop (embebido); DROPEAR el handle solo
+/// desvincula. Sin dir capturado: la consulta va contra TODOS los roots del
+/// índice (`root = None`), navegar mientras piensa no la invalida.
+struct SemanticRun {
+    /// La llamada al índice+modelo, spawneada.
+    handle: tokio::task::JoinHandle<Result<Vec<norte_proto::methods::SemanticHit>, Error>>,
+}
+
 /// Mensaje del drenador de un listado paginado al run loop.
 enum FillMsg {
     /// Un lote más de entradas para el pane.
@@ -854,6 +869,12 @@ async fn run(
     // de `App` es específica de aprobaciones) y se abre en cuanto no haya
     // modal — jamás pisar (disciplina `open_next_pending`).
     let mut pending_ai_plan: Option<(VPath, Vec<norte_proto::methods::AiRenameEntry>)> = None;
+    // Búsqueda semántica en vuelo (M4-IA-2): mismo molde que `ai_rename_run`
+    // — a lo sumo una, relanzar aborta la anterior, Esc (BROWSE) cancela.
+    let mut semantic_run: Option<SemanticRun> = None;
+    // Hits listos llegados con OTRO modal abierto: se RETIENEN aquí y se
+    // abren en cuanto no haya modal (disciplina `pending_ai_plan`).
+    let mut pending_semantic: Option<Vec<norte_proto::methods::SemanticHit>> = None;
     // Scripting Lua (M4, ADR 0026): host por capas con trust TOFU. Como
     // `fill`, el estado vive en el run loop. El run en vuelo (a lo sumo UNO:
     // el estado Lua es uno) se pollea inline en el select — `CommandRun` es
@@ -894,6 +915,17 @@ async fn run(
                 dir,
                 entries,
                 offset: 0,
+            });
+        }
+        // Hits semánticos retenidos (M4-IA-2): misma disciplina. Si el plan
+        // IA de arriba acaba de abrir, el `is_none` los deja esperando.
+        if app.modal.is_none()
+            && let Some(hits) = pending_semantic.take()
+        {
+            app.modal = Some(Modal::SemanticHits {
+                hits,
+                offset: 0,
+                cursor: 0,
             });
         }
         // Barra Lua en cada vuelta, ANTES del draw (cacheada en el host).
@@ -1111,6 +1143,43 @@ async fn run(
                         // no hay plan que abrir, el run ya está cosechado.)
                         Err(_join) => {}
                     }
+                }
+            }
+            res = async {
+                // index.search_semantic en vuelo (M4-IA-2): cosecha sin
+                // bloquear — molde del brazo de `ai_rename_run`.
+                match &mut semantic_run {
+                    Some(r) => (&mut r.handle).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                semantic_run = None;
+                match res {
+                    Ok(Ok(hits)) if hits.is_empty() => {
+                        app.message = Some(t("msg-semantic-empty"));
+                    }
+                    Ok(Ok(hits)) => {
+                        app.message = None;
+                        if app.modal.is_none() {
+                            app.modal = Some(Modal::SemanticHits {
+                                hits,
+                                offset: 0,
+                                cursor: 0,
+                            });
+                        } else {
+                            // Otro modal abierto (aprobación, colisión…):
+                            // los hits esperan su turno, jamás lo pisan.
+                            pending_semantic = Some(hits);
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        app.message = Some(ta(
+                            "msg-semantic-failed",
+                            &[("error", &detail_for_bar(&error_category(&e)))],
+                        ));
+                    }
+                    // Abortado por Esc: silencio, la barra ya se limpió.
+                    Err(_join) => {}
                 }
             }
             outcome = async {
@@ -1527,6 +1596,40 @@ async fn run(
                             }
                             continue;
                         }
+                        // `Modal::SemanticQuery` (M4-IA-2): mismo molde de
+                        // texto libre. Enter SPAWNEA la consulta al índice
+                        // (root = None: todos los roots) y cierra el prompt;
+                        // la cosecha vive en el select.
+                        if matches!(app.modal, Some(Modal::SemanticQuery { .. })) {
+                            let plain = key.modifiers.is_empty()
+                                || key.modifiers == KeyModifiers::SHIFT;
+                            match key.code {
+                                KeyCode::Char(c) if plain => app.semantic_push(c),
+                                KeyCode::Backspace if plain => app.semantic_pop(),
+                                KeyCode::Enter if plain => {
+                                    if let Some(query) = app.semantic_confirm() {
+                                        let b = backend.clone();
+                                        let handle = tokio::spawn(async move {
+                                            b.index_search_semantic(None, &query, SEMANTIC_K)
+                                                .await
+                                        });
+                                        // Relanzar con un run vivo lo ABORTA
+                                        // (dropear el handle solo desvincula):
+                                        // a lo sumo una consulta en vuelo.
+                                        if let Some(old) =
+                                            semantic_run.replace(SemanticRun { handle })
+                                        {
+                                            old.handle.abort();
+                                        }
+                                        app.message = Some(t("msg-semantic-running"));
+                                        app.semantic_submitted();
+                                    }
+                                }
+                                KeyCode::Esc if plain => app.cancel_semantic(),
+                                _ => {}
+                            }
+                            continue;
+                        }
                         // `Modal::TransferName` (#105): mismo molde. El
                         // submit reusa `submit_transfer` — colisiones por el
                         // camino existente (`Modal::Collision` + backlog).
@@ -1608,6 +1711,17 @@ async fn run(
                             && key.modifiers.is_empty()
                             && key.code == KeyCode::Esc
                             && let Some(run) = ai_rename_run.take()
+                        {
+                            run.handle.abort();
+                            app.message = None;
+                            continue;
+                        }
+                        // Esc con una búsqueda semántica en vuelo (BROWSE,
+                        // M4-IA-2): mismo contrato de cancelación (regla 3).
+                        if app.viewer.is_none()
+                            && key.modifiers.is_empty()
+                            && key.code == KeyCode::Esc
+                            && let Some(run) = semantic_run.take()
                         {
                             run.handle.abort();
                             app.message = None;
@@ -3439,16 +3553,7 @@ async fn on_dialog_key(
         }
         Resolution::Reset => return Cd::Cancelled,
     };
-    // M4-IA (audit MAJOR-3): scroll del plan IA — mueve la VENTANA de
-    // parejas y JAMÁS confirma/cancela. Mismo par de comandos que los
-    // pickers (`ALLOW_PICKER`); para `dialog_action` up/down están FUERA
-    // del allowlist de decisión de este modal (devuelve `None`, pin en
-    // tests/modal.rs), así que el enrutado vive aquí, como el dispatch de
-    // los pickers vive en su `on_*_key`.
-    if matches!(app.modal, Some(Modal::AiRenamePlan { .. }))
-        && matches!(cmd.as_str(), "dialog.up" | "dialog.down")
-    {
-        app.ai_plan_scroll(cmd.as_str() == "dialog.down");
+    if modal_scroll(app, cmd.as_str()) {
         return Cd::Cancelled;
     }
     let Some(outcome) = dialog_action(&modal, &cmd) else {
@@ -3490,6 +3595,7 @@ async fn on_dialog_key(
                 | Modal::MarkPattern { .. }
                 | Modal::Mkdir { .. }
                 | Modal::AiRenameInstruction { .. }
+                | Modal::SemanticQuery { .. }
                 | Modal::TransferName { .. } => {}
                 // `AiRenamePlan` (M4-IA) SÍ es una superficie de decisión:
                 // confirmar aplica el plan REVISADO — N fs.move gobernados
@@ -3498,6 +3604,18 @@ async fn on_dialog_key(
                 // scroll (audit MAJOR-3) hace revisable el plan entero.
                 Modal::AiRenamePlan { dir, entries, .. } => {
                     apply_ai_rename(app, backend, &dir, &entries).await;
+                }
+                // M4-IA-2: confirmar NAVEGA al hit bajo el cursor
+                // (`semantic_hit_cd`). El `Cd` vuelve al caller (apply_cd +
+                // decorate), como el retry TOFU; si el cd abrió un modal
+                // (otro HostKeyUnknown), la siguiente pendiente espera —
+                // jamás pisar.
+                Modal::SemanticHits { hits, cursor, .. } => {
+                    let outcome = semantic_hit_cd(app, backend, events, &hits, cursor).await;
+                    if app.modal.is_none() {
+                        app.open_next_pending();
+                    }
+                    return outcome;
                 }
                 // S2 (`[ui] confirm_quit`): confirmar cierra — el run loop
                 // lo detecta en su chequeo de `app.quit` de cada vuelta
@@ -4012,6 +4130,58 @@ async fn on_search_enter(
     }
 }
 
+/// up/down sobre los modales con ventana propia — el scroll del plan IA
+/// (M4-IA, audit MAJOR-3) y el cursor de los hits semánticos (M4-IA-2).
+/// Mueven la VENTANA o el CURSOR y JAMÁS confirman/cancelan: mismo par de
+/// comandos que los pickers (`ALLOW_PICKER`); para `dialog_action` up/down
+/// están FUERA del allowlist de decisión de estos modales (devuelve `None`,
+/// pin en tests/modal.rs), así que el enrutado vive aquí, como el dispatch
+/// de los pickers vive en su `on_*_key`. `true` = comando CONSUMIDO.
+fn modal_scroll(app: &mut App, cmd: &str) -> bool {
+    if !matches!(cmd, "dialog.up" | "dialog.down") {
+        return false;
+    }
+    let down = cmd == "dialog.down";
+    match app.modal {
+        Some(Modal::AiRenamePlan { .. }) => {
+            app.ai_plan_scroll(down);
+            true
+        }
+        Some(Modal::SemanticHits { .. }) => {
+            app.semantic_cursor(down);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Enter sobre un hit del modal semántico (M4-IA-2): cd al PADRE del hit y
+/// deja el cursor sobre él por path (molde [`on_search_enter`]; si cayó en
+/// una página aún no drenada, el cursor se queda arriba, v1). Devuelve el
+/// `Cd` para que el caller lo aplique (`apply_cd` + decorate);
+/// `Cd::Cancelled` = nada que navegar (hits vacíos defensivo o hit raíz sin
+/// padre).
+async fn semantic_hit_cd(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    hits: &[norte_proto::methods::SemanticHit],
+    cursor: usize,
+) -> Cd {
+    let Some(hit) = hits.get(cursor).map(|h| h.path.clone()) else {
+        return Cd::Cancelled;
+    };
+    let Some(parent) = hit.parent() else {
+        return Cd::Cancelled;
+    };
+    let pane = app.focus();
+    let outcome = cd(app, backend, events, parent).await;
+    if let Some(i) = app.panes[pane].entries().iter().position(|e| e.path == hit) {
+        app.panes[pane].set_cursor(i);
+    }
+    outcome
+}
+
 /// Suelta el [`SearchRun`] si su pane SALIÓ del modo virtual (un `cd`/refresh
 /// lo apagó): su drenador alimentaría un listado real. Cancela la Task si
 /// sigue viva (regla 3).
@@ -4306,6 +4476,18 @@ async fn dispatch(
                 app.message = Some(t("msg-ai-rename-in-search"));
             } else {
                 app.open_ai_rename();
+            }
+        }
+        // M4-IA-2: búsqueda semántica sobre el índice (todos los roots). En
+        // el pane VIRTUAL de búsqueda el prompt colisionaría con la
+        // semántica Esc/Enter propia del modo (mismo criterio que
+        // `PaneAiRename`). Las teclas del prompt y la petición viven en el
+        // run loop (intercepción Tier-A + `SemanticRun`).
+        Command::PaneSemanticSearch => {
+            if app.focused().virtual_search {
+                app.message = Some(t("msg-semantic-in-search"));
+            } else {
+                app.open_semantic_search();
             }
         }
         Command::PaneDelete | Command::PaneDeletePermanent => {

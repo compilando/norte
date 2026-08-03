@@ -780,3 +780,53 @@ fn preview_del_match_bajo_el_cursor_en_la_barra() {
         "controles/bidi enmascarados en la barra: {contenido:?}"
     );
 }
+
+/// M4-IA-2 (doctrina encoding-auditor): el modal de hits semánticos pinta
+/// paths del ÍNDICE — controles/bidi → `�` con badge; un path kilométrico no
+/// expulsa el score de la caja (elipsis media); el marcador `>` del cursor va
+/// fuera de banda al inicio de su línea.
+#[test]
+fn modal_semantic_enmascara_hits_hostiles() {
+    let dir = vp("file:///x");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir.clone(), Vec::new()),
+    );
+    let hostil_largo = format!("{}\u{202e}oculto.txt", "x".repeat(120));
+    app.modal = Some(norte_tui::app::Modal::SemanticHits {
+        hits: vec![
+            norte_proto::methods::SemanticHit {
+                path: dir
+                    .join(Segment::new(hostil_largo.into_bytes()).expect("segmento del fixture")),
+                score: 0.91,
+            },
+            norte_proto::methods::SemanticHit {
+                path: vp("file:///x/limpio.txt"),
+                score: 0.45,
+            },
+        ],
+        offset: 0,
+        cursor: 0,
+    });
+    let mut terminal = Terminal::new(TestBackend::new(70, 12)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let contenido = terminal.backend().to_string();
+
+    assert!(
+        contenido.contains("0.91"),
+        "el score jamás se expulsa de la caja: {contenido}"
+    );
+    assert!(contenido.contains('\u{FFFD}'), "bidi → �: {contenido}");
+    assert!(
+        contenido.contains('!'),
+        "el enmascarado se MARCA (spec §6): {contenido}"
+    );
+    assert!(
+        contenido.contains('>'),
+        "marcador de cursor fuera de banda: {contenido}"
+    );
+    assert!(
+        contenido.contains("limpio.txt"),
+        "el hit limpio se pinta entero: {contenido}"
+    );
+}

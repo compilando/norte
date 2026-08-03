@@ -2072,6 +2072,120 @@ impl App {
         }
     }
 
+    /// Abre el prompt de consulta de la búsqueda semántica (M4-IA-2).
+    pub fn open_semantic_search(&mut self) {
+        self.modal = Some(Modal::SemanticQuery {
+            query: String::new(),
+            error: None,
+        });
+    }
+
+    /// Añade un carácter a la consulta en curso. No-op sin su modal.
+    /// Mismo tope en `chars` que la instrucción IA: un paste accidental no
+    /// desborda el modal; el límite REAL lo pone el daemon.
+    pub fn semantic_push(&mut self, c: char) {
+        if let Some(Modal::SemanticQuery { query, error }) = &mut self.modal {
+            if query.chars().count() >= MARK_PATTERN_MAX_CHARS {
+                return;
+            }
+            query.push(c);
+            *error = None;
+        }
+    }
+
+    /// Borra el último carácter de la consulta. No-op sin su modal.
+    pub fn semantic_pop(&mut self) {
+        if let Some(Modal::SemanticQuery { query, error }) = &mut self.modal {
+            query.pop();
+            *error = None;
+        }
+    }
+
+    /// Cancela `Modal::SemanticQuery` sin lanzar nada — el Esc de ESTE modal
+    /// de texto libre (mismo contrato y guard que [`Self::cancel_ai_rename`]:
+    /// un modal de DECISIÓN jamás se cierra por aquí).
+    pub fn cancel_semantic(&mut self) {
+        if !matches!(self.modal, Some(Modal::SemanticQuery { .. })) {
+            debug_assert!(
+                false,
+                "solo los modales de texto libre se cierran sin decisión; \
+                 un modal de DECISIÓN debe denegar por on_dialog_key"
+            );
+            return;
+        }
+        self.modal = None;
+        self.open_next_pending();
+    }
+
+    /// Valida y devuelve la consulta; NO cierra el modal — el caller cierra
+    /// con [`Self::semantic_submitted`] tras SPAWNEAR la petición (mismo
+    /// contrato que [`Self::ai_rename_confirm`]: los fallos del modelo llegan
+    /// ASÍNCRONOS y salen por la barra, `msg-semantic-failed`, no por el
+    /// modal). Una consulta vacía deja su diagnóstico aquí mismo y devuelve
+    /// `None`.
+    pub fn semantic_confirm(&mut self) -> Option<String> {
+        if let Some(Modal::SemanticQuery { query, error }) = &mut self.modal {
+            let text = query.trim();
+            if text.is_empty() {
+                *error = Some(t("modal-semantic-empty-query"));
+                return None;
+            }
+            return Some(text.to_owned());
+        }
+        None
+    }
+
+    /// Cierra el prompt tras un lanzamiento que SÍ salió (M4-IA-2): misma
+    /// disciplina de cierre que [`Self::ai_rename_submitted`] (jamás dejar
+    /// una pendiente esperando).
+    pub fn semantic_submitted(&mut self) {
+        if matches!(self.modal, Some(Modal::SemanticQuery { .. })) {
+            self.modal = None;
+            self.open_next_pending();
+        }
+    }
+
+    /// Deja un diagnóstico bajo el campo con el texto CONSERVADO. Como
+    /// [`Self::ai_rename_set_error`]: solo cubre diagnósticos SÍNCRONOS
+    /// previos al spawn (hoy, la consulta vacía la marca el propio
+    /// [`Self::semantic_confirm`]); un fallo del modelo llega ASYNC con el
+    /// prompt ya cerrado y va a la barra, jamás por aquí.
+    pub fn semantic_set_error(&mut self, msg: String) {
+        if let Some(Modal::SemanticQuery { error, .. }) = &mut self.modal {
+            *error = Some(msg);
+        }
+    }
+
+    /// Mueve el cursor de hits (`down` = true baja); la ventana sigue al
+    /// cursor, clampada en ambos extremos. No-op sin su modal. El scroll
+    /// JAMÁS confirma ni cancela — `dialog_action` devuelve `None` para
+    /// `dialog.up`/`dialog.down` en este modal (fuera de su allowlist de
+    /// decisión) y el run loop enruta esos comandos aquí (molde
+    /// [`Self::ai_plan_scroll`]).
+    pub fn semantic_cursor(&mut self, down: bool) {
+        if let Some(Modal::SemanticHits {
+            hits,
+            offset,
+            cursor,
+        }) = &mut self.modal
+        {
+            if hits.is_empty() {
+                return;
+            }
+            *cursor = if down {
+                (*cursor + 1).min(hits.len() - 1)
+            } else {
+                cursor.saturating_sub(1)
+            };
+            if *cursor < *offset {
+                *offset = *cursor;
+            }
+            if *cursor >= *offset + SEMANTIC_HIT_LIMIT {
+                *offset = *cursor + 1 - SEMANTIC_HIT_LIMIT;
+            }
+        }
+    }
+
     /// Abre el popup de navegación (spec 2026-07-18): historial del pane
     /// con foco (más reciente primero) o la copia de hotlist. Los items se
     /// construyen YA saneados aquí (`nav_item_display`); una entrada de
@@ -2267,7 +2381,11 @@ pub enum TransferKind {
 /// `Modal::TrustLuaInit`, que el run loop intercepta ANTES (necesita el
 /// `LuaHost`) y resuelve con [`trust_lua_key`] — decisión 8 del plan H1, no
 /// migrado.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Sin `Eq` (M4-IA-2): [`Modal::SemanticHits`] arrastra el `score: f64` de
+/// [`norte_proto::methods::SemanticHit`], que es solo `PartialEq` — como su
+/// tipo de proto.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Modal {
     /// Confirmación de borrado (F8) sobre las MARCAS. `permanent = false` →
     /// papelera.
@@ -2434,7 +2552,33 @@ pub enum Modal {
         /// sin poder verse.
         offset: usize,
     },
+    /// Prompt de consulta de la búsqueda semántica (M4-IA-2). Texto libre,
+    /// molde [`Modal::AiRenameInstruction`]: la consulta CRUDA del usuario,
+    /// enmascarada al pintarla (una consulta llega por paste con
+    /// bidi/invisibles tan fácil como una instrucción).
+    SemanticQuery {
+        /// Lo tecleado hasta ahora.
+        query: String,
+        /// Diagnóstico del último intento fallido, bajo el campo.
+        error: Option<String>,
+    },
+    /// Hits de la búsqueda semántica (M4-IA-2): superficie de DECISIÓN con
+    /// cursor. Confirmar NAVEGA al hit bajo el cursor (cd al padre +
+    /// re-anclado, molde `on_search_enter`); Esc/cancel cierra.
+    SemanticHits {
+        /// Hits del índice, mejor primero (proto, score siempre finito).
+        hits: Vec<norte_proto::methods::SemanticHit>,
+        /// Primer hit visible de la ventana (sigue al cursor).
+        offset: usize,
+        /// Hit resaltado — el que Enter abre.
+        cursor: usize,
+    },
 }
+
+/// Hits semánticos visibles a la vez en [`Modal::SemanticHits`] (ventana de
+/// scroll, molde [`AI_RENAME_PAIR_LIMIT`]) — la comparten el render (`ui`),
+/// el alto del modal y el clamp de [`App::semantic_cursor`].
+pub const SEMANTIC_HIT_LIMIT: usize = 10;
 
 /// Parejas del plan IA visibles a la vez en [`Modal::AiRenamePlan`] (ventana
 /// de scroll, audit MAJOR-3) — la constante vive en `norte-frontend`
@@ -2602,10 +2746,14 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         // INICIADO y REVISADO por el humano — semántica [`ALLOW_CONFIRM`]
         // (Enter confirma, como un delete/transfer), NO el allowlist de
         // aprobación de agentes (`ALLOW_APPROVAL`, que excluye confirm).
+        // M4-IA-2: `SemanticHits` es igualmente una superficie de decisión
+        // sobre contenido PEDIDO por el humano — Enter navega al hit bajo el
+        // cursor, no muta nada.
         Modal::ConfirmDelete { .. }
         | Modal::ConfirmTransfer { .. }
         | Modal::ConfirmQuit
-        | Modal::AiRenamePlan { .. } => {
+        | Modal::AiRenamePlan { .. }
+        | Modal::SemanticHits { .. } => {
             if !ALLOW_CONFIRM.contains(&cmd) {
                 return None;
             }
@@ -2652,6 +2800,7 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         | Modal::MarkPattern { .. }
         | Modal::Mkdir { .. }
         | Modal::AiRenameInstruction { .. }
+        | Modal::SemanticQuery { .. }
         | Modal::TransferName { .. } => None,
     }
 }

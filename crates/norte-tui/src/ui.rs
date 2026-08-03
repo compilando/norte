@@ -12,7 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{AI_RENAME_PAIR_LIMIT, App, Pane, display_name};
+use crate::app::{AI_RENAME_PAIR_LIMIT, App, Pane, SEMANTIC_HIT_LIMIT, display_name};
 use crate::theme::TuiTheme;
 use norte_i18n::{t, ta};
 
@@ -1079,7 +1079,8 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
         // Sin error caen al comodín `6` de abajo (match_same_arms).
         Modal::MarkPattern { error: Some(_), .. }
         | Modal::Mkdir { error: Some(_), .. }
-        | Modal::AiRenameInstruction { error: Some(_), .. } => 7,
+        | Modal::AiRenameInstruction { error: Some(_), .. }
+        | Modal::SemanticQuery { error: Some(_), .. } => 7,
         // M4-IA: la línea del dir (audit MAJOR-1) + dos por pareja de la
         // VENTANA + el indicador (si el plan no cabe entero) + el hint, más
         // bordes — mismo cómputo dinámico `body_lines + 3` que
@@ -1089,6 +1090,15 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
             let lineas = 1
                 + 2 * entries.len().min(AI_RENAME_PAIR_LIMIT)
                 + usize::from(entries.len() > AI_RENAME_PAIR_LIMIT)
+                + 1;
+            u16::try_from(lineas).unwrap_or(u16::MAX).saturating_add(3)
+        }
+        // M4-IA-2: un hit POR LÍNEA de la ventana + el indicador (si el
+        // lote no cabe entero) + el hint — mismo cómputo dinámico
+        // `body_lines + 3` que el plan IA. Estable al scroll.
+        Modal::SemanticHits { hits, .. } => {
+            let lineas = hits.len().min(SEMANTIC_HIT_LIMIT)
+                + usize::from(hits.len() > SEMANTIC_HIT_LIMIT)
                 + 1;
             u16::try_from(lineas).unwrap_or(u16::MAX).saturating_add(3)
         }
@@ -1232,6 +1242,16 @@ fn modal_title_body(
             entries,
             offset,
         } => ai_rename_plan_modal_text(dir, entries, *offset),
+        // M4-IA-2: mismo enmascarado que la instrucción IA — consulta y
+        // error son texto de usuario.
+        Modal::SemanticQuery { query, error } => semantic_query_modal_text(query, error.as_deref()),
+        // M4-IA-2: ventana de hits con cursor (enmascarado defensivo, ver
+        // `semantic_hits_modal_text`).
+        Modal::SemanticHits {
+            hits,
+            offset,
+            cursor,
+        } => semantic_hits_modal_text(hits, *offset, *cursor),
         // #105: nombre de destino editable — dir destino + campo + error,
         // todo de usuario y todo enmascarado.
         Modal::TransferName {
@@ -1496,6 +1516,91 @@ fn ai_rename_plan_modal_text(
     }
     lines.push(t("modal-ai-rename-plan-hint"));
     (t("modal-ai-rename-plan"), lines.join("\n"))
+}
+
+/// Título+cuerpo de `Modal::SemanticQuery` (M4-IA-2): mismo contrato de
+/// enmascarado que `ai_rename_modal_text` — la consulta y el diagnóstico son
+/// texto de usuario. Misma línea de teclas compartida (FIX-A): el modal
+/// cuadra con el brazo de altura conjunto (7 con error / 6 sin él).
+fn semantic_query_modal_text(query: &str, error: Option<&str>) -> (String, String) {
+    let (masked, hostil) = display_name(query.as_bytes());
+    let campo = if hostil {
+        format!("{HOSTILE_BADGE} {masked}_")
+    } else {
+        format!("{masked}_")
+    };
+    let mut lines = vec![
+        campo,
+        t("modal-semantic-hint"),
+        t("modal-mark-pattern-keys"),
+    ];
+    if let Some(err) = error {
+        let (masked_err, _) = display_name(err.as_bytes());
+        lines.push(masked_err);
+    }
+    (t("modal-semantic"), lines.join("\n"))
+}
+
+/// Título+cuerpo de `Modal::SemanticHits` (M4-IA-2, doctrina
+/// encoding-auditor, molde `ai_rename_plan_modal_text`): la VENTANA de
+/// [`SEMANTIC_HIT_LIMIT`] hits desde `offset`, un hit POR LÍNEA con marcador
+/// de cursor (`>`) y etiqueta numerada ABSOLUTA fuera de banda, path por
+/// `norte_frontend::path_display` (mask + flag hostil) con badge Rust-side
+/// ([`badge_prefixed`]) y elipsis media (un path kilométrico no expulsa el
+/// score de la caja); el score `{:.2}` al final. El indicador de
+/// desbordamiento lleva badge si algún hit OCULTO es hostil (lo escondido no
+/// se cuela limpio). Aunque el engine garantiza el wire, un daemon
+/// N+1/comprometido podría mandar cualquier cosa — se pinta a la defensiva
+/// SIEMPRE.
+fn semantic_hits_modal_text(
+    hits: &[norte_proto::methods::SemanticHit],
+    offset: usize,
+    cursor: usize,
+) -> (String, String) {
+    // Cinturón de render: el clamp vive en `App::semantic_cursor`, pero un
+    // offset fuera de rango jamás debe pintar una ventana vacía.
+    let offset = offset.min(hits.len().saturating_sub(SEMANTIC_HIT_LIMIT));
+    let last = (offset + SEMANTIC_HIT_LIMIT).min(hits.len());
+    let mut lines = Vec::new();
+    for (i, h) in hits.iter().enumerate().take(last).skip(offset) {
+        let (path, hostil) = norte_frontend::path_display(&h.path);
+        let line = badge_prefixed(
+            hostil,
+            ta(
+                "modal-semantic-hit",
+                &[
+                    ("n", &(i + 1).to_string()),
+                    ("path", &middle_ellipsis(&path, 44)),
+                    ("score", &format!("{:.2}", h.score)),
+                ],
+            ),
+        );
+        // Marcador de cursor FUERA de banda, en columna fija ANTES del badge
+        // (un path no puede imitarlo: va enmascarado y tras la etiqueta).
+        lines.push(if i == cursor {
+            format!("> {line}")
+        } else {
+            format!("  {line}")
+        });
+    }
+    if hits.len() > SEMANTIC_HIT_LIMIT {
+        let hidden_hostil = hits
+            .iter()
+            .enumerate()
+            .any(|(i, h)| (i < offset || i >= last) && norte_frontend::path_display(&h.path).1);
+        lines.push(badge_prefixed(
+            hidden_hostil,
+            ta(
+                "modal-semantic-more",
+                &[
+                    ("shown", &last.to_string()),
+                    ("total", &hits.len().to_string()),
+                ],
+            ),
+        ));
+    }
+    lines.push(t("modal-semantic-hits-hint"));
+    (t("modal-semantic-hits"), lines.join("\n"))
 }
 
 /// Título+cuerpo de `Modal::TransferName` (#105): mismo contrato de
@@ -2783,6 +2888,134 @@ mod ai_rename_plan_modal_tests {
         // limpia — el indicador ya no marca.
         let (_, body2) = ai_rename_plan_modal_text(&dir(), &entries, 1);
         let ind2 = body2.lines().nth(11).expect("indicador");
+        assert!(!ind2.starts_with(HOSTILE_BADGE), "{body2:?}");
+    }
+}
+
+#[cfg(test)]
+mod semantic_hits_modal_tests {
+    use super::{HOSTILE_BADGE, modal_height, semantic_hits_modal_text};
+    use norte_proto::methods::SemanticHit;
+    use norte_proto::{Segment, VPath};
+
+    fn hit(path: VPath, score: f64) -> SemanticHit {
+        SemanticHit { path, score }
+    }
+
+    fn hits(n: u16) -> Vec<SemanticHit> {
+        (1..=n)
+            .map(|i| {
+                hit(
+                    VPath::parse(&format!("mem:///d/f{i}")).expect("wire válido"),
+                    1.0 - f64::from(i) / 100.0,
+                )
+            })
+            .collect()
+    }
+
+    /// M4-IA-2 (corpus canónico, molde del sweep del plan IA): cada nombre
+    /// hostil como último segmento del path de un hit — ningún char de
+    /// `is_terminal_hazard` sobrevive en el texto pintado, y cuando el
+    /// enmascarado altera el path la línea va MARCADA con el badge.
+    #[test]
+    fn barrido_corpus_ningun_hazard_sobrevive_y_el_enmascarado_marca() {
+        for n in norte_testkit::corpus::hostile_names() {
+            let path = VPath::parse("mem:///d")
+                .expect("wire válido")
+                .join(Segment::new(n.bytes.clone()).expect("segmento del corpus"));
+            let hostil = norte_frontend::path_display(&path).1;
+            let (_, body) = semantic_hits_modal_text(&[hit(path, 0.5)], 0, 0);
+            // Por LÍNEA: el `\n` que separa las líneas del cuerpo es un
+            // control legítimo del formato, no contenido pintado.
+            assert!(
+                !body
+                    .lines()
+                    .any(|l| l.chars().any(norte_encoding::is_terminal_hazard)),
+                "corpus {}: un hazard sobrevivió al render: {body:?}",
+                n.id
+            );
+            if hostil {
+                assert!(
+                    body.contains(HOSTILE_BADGE),
+                    "corpus {}: enmascarado SIN badge: {body:?}",
+                    n.id
+                );
+            }
+        }
+    }
+
+    /// M4-IA-2: con 12 hits la ventana pinta 10 desde `offset` con
+    /// numeración ABSOLUTA y marcador `>` en la fila del cursor; el
+    /// indicador dice posición/total, el score va al final de la línea y el
+    /// alto del modal cuadra con las líneas pintadas.
+    #[test]
+    fn hits_largos_ventana_cursor_indicador_y_alto() {
+        let hits = hits(12);
+        let (_, body) = semantic_hits_modal_text(&hits, 0, 3);
+        let lines: Vec<&str> = body.lines().collect();
+        // 10 hits + indicador + hint = 12.
+        assert_eq!(lines.len(), 12, "{body:?}");
+        assert!(
+            lines[0].contains("1.") && lines[0].contains("f1"),
+            "{body:?}"
+        );
+        assert!(
+            lines[3].starts_with("> ") && lines[3].contains("4."),
+            "marcador en la fila del cursor: {body:?}"
+        );
+        assert_eq!(
+            lines.iter().filter(|l| l.starts_with("> ")).count(),
+            1,
+            "un solo cursor: {body:?}"
+        );
+        assert!(lines[0].contains("0.99"), "score al final: {body:?}");
+        assert!(lines[10].contains("10/12"), "indicador: {body:?}");
+        assert!(!body.contains("f11"), "la cola espera al scroll: {body:?}");
+        // La ventana sigue al cursor: offset 2 = hits 3..=12, numeración
+        // absoluta, cursor al fondo visible.
+        let (_, body2) = semantic_hits_modal_text(&hits, 2, 11);
+        let lines2: Vec<&str> = body2.lines().collect();
+        assert_eq!(lines2.len(), 12, "alto ESTABLE al scroll: {body2:?}");
+        assert!(
+            lines2[0].contains("3.") && lines2[0].contains("f3"),
+            "{body2:?}"
+        );
+        assert!(
+            lines2[9].starts_with("> ") && lines2[9].contains("12."),
+            "{body2:?}"
+        );
+        assert!(lines2[10].contains("12/12"), "{body2:?}");
+        // Un offset desbocado se clampa en el render (cinturón).
+        let (_, body3) = semantic_hits_modal_text(&hits, 999, 0);
+        assert!(body3.contains("f12"), "{body3:?}");
+        // Alto: 12 líneas de cuerpo + 3 de marco.
+        let modal = crate::app::Modal::SemanticHits {
+            hits,
+            offset: 0,
+            cursor: 0,
+        };
+        assert_eq!(modal_height(&modal), 15);
+    }
+
+    /// M4-IA-2: el indicador de desbordamiento delata un hit hostil OCULTO
+    /// (lo no visible jamás se cuela "limpio"), y deja de marcar cuando el
+    /// scroll lo pone a la vista.
+    #[test]
+    fn indicador_marca_hostil_oculto() {
+        let mut hits = hits(11);
+        hits[10] = hit(
+            VPath::parse("mem:///d")
+                .expect("wire válido")
+                .join(Segment::new(b"x\xe2\x80\xaey".to_vec()).expect("segmento")),
+            0.1,
+        );
+        let (_, body) = semantic_hits_modal_text(&hits, 0, 0);
+        let ind = body.lines().nth(10).expect("indicador");
+        assert!(ind.starts_with(HOSTILE_BADGE), "{body:?}");
+        // offset 1: el hostil entra en la ventana; el oculto (hit 1) es
+        // limpio — el indicador ya no marca.
+        let (_, body2) = semantic_hits_modal_text(&hits, 1, 10);
+        let ind2 = body2.lines().nth(10).expect("indicador");
         assert!(!ind2.starts_with(HOSTILE_BADGE), "{body2:?}");
     }
 }

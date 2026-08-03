@@ -110,6 +110,7 @@ commands! {
     "app.palette" => AppPalette,
     "app.settings" => AppSettings,
     "pane.ai-rename" => PaneAiRename,
+    "pane.semantic-search" => PaneSemanticSearch,
     "pane.copy" => PaneCopy,
     "pane.move" => PaneMove,
     "pane.delete" => PaneDelete,

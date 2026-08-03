@@ -448,3 +448,116 @@ fn las_colisiones_hacen_cola_y_jamas_pisan_un_modal() {
     app.open_next_collision();
     assert_eq!(app.modal, None, "cola vacía");
 }
+
+/// Hits semánticos de fixture (M4-IA-2): `n` paths distintos, score
+/// descendente.
+fn semantic_hits(n: u16) -> Modal {
+    Modal::SemanticHits {
+        hits: (1..=n)
+            .map(|i| norte_proto::methods::SemanticHit {
+                path: vp(&format!("file:///d/f{i}")),
+                score: 1.0 - f64::from(i) / 100.0,
+            })
+            .collect(),
+        offset: 0,
+        cursor: 0,
+    }
+}
+
+/// M4-IA-2: el prompt de consulta sigue la disciplina del de instrucción IA
+/// — confirmar NO cierra (devuelve la consulta trimmed); solo
+/// `semantic_submitted` cierra tras spawnear.
+#[test]
+fn semantic_query_modal_edita_y_confirma() {
+    let mut app = app();
+    app.open_semantic_search();
+    for c in "facturas 2024".chars() {
+        app.semantic_push(c);
+    }
+    assert_eq!(app.semantic_confirm().as_deref(), Some("facturas 2024"));
+    assert!(
+        matches!(app.modal, Some(Modal::SemanticQuery { .. })),
+        "confirmar no cierra: cierra el submit"
+    );
+    app.semantic_submitted();
+    assert!(app.modal.is_none());
+}
+
+/// M4-IA-2: confirmar con la consulta vacía no devuelve nada y deja el
+/// diagnóstico bajo el campo (el modal sigue abierto); `semantic_set_error`
+/// conserva lo tecleado.
+#[test]
+fn semantic_query_vacia_no_confirma() {
+    let mut app = app();
+    app.open_semantic_search();
+    assert!(app.semantic_confirm().is_none());
+    assert!(matches!(
+        &app.modal,
+        Some(Modal::SemanticQuery { error: Some(_), .. })
+    ));
+    app.semantic_push('q');
+    app.semantic_set_error("boom".into());
+    match &app.modal {
+        Some(Modal::SemanticQuery { query, error }) => {
+            assert_eq!(query, "q");
+            assert_eq!(error.as_deref(), Some("boom"));
+        }
+        other => panic!("modal inesperado: {other:?}"),
+    }
+}
+
+/// M4-IA-2: el cursor de hits clampa en ambos extremos y la VENTANA le
+/// sigue (baja al pasar del borde inferior, sube al pasar del superior).
+#[test]
+fn semantic_hits_cursor_scroll_clampa() {
+    let estado = |app: &norte_tui::app::App| match &app.modal {
+        Some(Modal::SemanticHits { offset, cursor, .. }) => (*offset, *cursor),
+        other => panic!("modal inesperado: {other:?}"),
+    };
+    let mut app = app();
+    app.modal = Some(semantic_hits(12));
+    app.semantic_cursor(false);
+    assert_eq!(estado(&app), (0, 0), "no retrocede bajo cero");
+    for _ in 0..99 {
+        app.semantic_cursor(true);
+    }
+    assert_eq!(
+        estado(&app),
+        (2, 11),
+        "cursor clampa en len-1 y la ventana lo sigue (12 - 10)"
+    );
+    for _ in 0..99 {
+        app.semantic_cursor(false);
+    }
+    assert_eq!(estado(&app), (0, 0), "la ventana vuelve a subir con él");
+}
+
+/// M4-IA-2: `SemanticHits` confirma como decisión (`ALLOW_CONFIRM`, Enter
+/// navega) y up/down son INERTES para `dialog_action` (el run loop enruta el
+/// cursor, jamás es un desenlace); el prompt de consulta es texto libre y
+/// nunca pasa por aquí.
+#[test]
+fn semantic_hits_confirma_como_decision_y_cursor_es_inerte() {
+    for cmd in ["dialog.confirm", "dialog.approve"] {
+        assert_eq!(
+            dialog_action(&semantic_hits(1), cmd),
+            Some(DialogOutcome::Confirmed),
+            "comando {cmd}"
+        );
+    }
+    for cmd in ["dialog.cancel", "dialog.deny"] {
+        assert_eq!(
+            dialog_action(&semantic_hits(1), cmd),
+            Some(DialogOutcome::Cancelled),
+            "comando {cmd}"
+        );
+    }
+    assert_eq!(dialog_action(&semantic_hits(1), "dialog.up"), None);
+    assert_eq!(dialog_action(&semantic_hits(1), "dialog.down"), None);
+    let prompt = Modal::SemanticQuery {
+        query: String::new(),
+        error: None,
+    };
+    assert_eq!(dialog_action(&prompt, "dialog.confirm"), None);
+    assert_eq!(dialog_action(&prompt, "dialog.approve"), None);
+}
