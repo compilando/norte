@@ -785,6 +785,81 @@ impl Engine {
         })
     }
 
+    /// `index.search_semantic`: UNA llamada de embed para la query + barrido
+    /// coseno en Rust sobre los vectores del root (`None` ⇒ todos). Sin ANN
+    /// (ADR 0031: solo si un corpus real lo justifica). `k` se recorta a
+    /// `[1, INDEX_SEMANTIC_MAX_K]`. Los scores son SIEMPRE finitos (cinturón
+    /// anti-NaN: `serde_json` serializa `NaN` como `null` y envenenaría la
+    /// respuesta entera en el cliente).
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] sin índice, sin proveedor de embeddings o sin
+    /// proveedor resoluble en la config; [`Error::PolicyDenied`] si el gate de
+    /// IA rechaza (IA off, local-only sobre remoto, `root` denegado); errores
+    /// del proveedor mapeados a la taxonomía del wire; del índice a `Io`.
+    ///
+    /// # Panics
+    /// Solo por envenenamiento de un lock interno (irrecuperable).
+    #[tracing::instrument(
+        skip(self, query),
+        fields(root = root.map(span_path).unwrap_or_default())
+    )]
+    pub async fn index_search_semantic(
+        &self,
+        root: Option<&VPath>,
+        query: &str,
+        k: u32,
+    ) -> Result<Vec<(VPath, f64)>, Error> {
+        let index = self.index.clone().ok_or(Error::Unsupported)?;
+        let embedder = self
+            .ai_embed
+            .read()
+            .expect("ai_embed lock sano")
+            .clone()
+            .ok_or(Error::Unsupported)?;
+        // Gate PRE-embed (spec §9): la query no sale al proveedor hasta que
+        // pasa. El clon de la config evita retener el lock a través del await.
+        let model = {
+            let config = self.ai_config.read().expect("ai_config lock sano").clone();
+            let model = config
+                .embed_provider_config()
+                .ok_or(Error::Unsupported)?
+                .model
+                .clone();
+            let paths: Vec<&VPath> = root.into_iter().collect();
+            crate::ai::AiGate::new(&config)
+                .check(crate::ai::AiOp::Embed, embedder.is_local(), &paths)
+                .map_err(|reason| ai_denied_to_error(&reason))?;
+            model
+        };
+        let k = usize::try_from(k.clamp(1, norte_proto::methods::INDEX_SEMANTIC_MAX_K))
+            .expect("MAX_K=100 cabe en usize");
+        let qvec = embedder
+            .embed(&[query.to_owned()])
+            .await
+            .map_err(|e| ai_to_proto_error(&e))?
+            .into_iter()
+            .next()
+            // Proveedor mentiroso (0 vectores por 1 input): mala conducta del
+            // PROVEEDOR, no retryable — mismo criterio que `flush_batch`.
+            .ok_or(Error::ProviderUnavailable { retryable: false })?;
+        let vectors = index
+            .embeddings_for_root(root, &model)
+            .await
+            .map_err(|e| crate::index_embed::index_to_proto(&e))?;
+        let mut scored: Vec<(VPath, f64)> = vectors
+            .into_iter()
+            .filter_map(|(path, v)| {
+                crate::index_embed::cosine(&qvec, &v).map(|s| (path, f64::from(s)))
+            })
+            .collect();
+        // `cosine` garantiza scores finitos ⇒ partial_cmp jamás falla aquí;
+        // el `unwrap_or` es solo cinturón (orden estable, no panic).
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(k);
+        Ok(scored)
+    }
+
     /// Copia (recursiva si es dir) como Task, con las políticas por defecto
     /// (`Fail` + `Preserve`).
     ///

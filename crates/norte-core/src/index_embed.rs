@@ -52,9 +52,33 @@ pub(crate) fn is_text_candidate(path: &VPath, size: Option<u64>) -> bool {
     EMBED_TEXT_EXTS.contains(&ext.to_ascii_lowercase().as_slice())
 }
 
+/// Similitud coseno. `None` si las dimensiones difieren, un vector es nulo o
+/// el resultado no es finito (cinturón: un `NaN` serializado por `serde_json`
+/// se vuelve `null` y envenena la respuesta entera en el cliente — el score
+/// del wire es SIEMPRE finito).
+pub(crate) fn cosine(a: &[f32], b: &[f32]) -> Option<f32> {
+    if a.len() != b.len() || a.is_empty() {
+        return None;
+    }
+    let (mut dot, mut na, mut nb) = (0.0f32, 0.0f32, 0.0f32);
+    for (x, y) in a.iter().zip(b) {
+        dot += x * y;
+        na += x * x;
+        nb += y * y;
+    }
+    let denom = na.sqrt() * nb.sqrt();
+    // `>` es falso para 0.0 y para NaN: ambos casos ⇒ None.
+    if denom > 0.0 {
+        let s = dot / denom;
+        s.is_finite().then_some(s)
+    } else {
+        None
+    }
+}
+
 /// Mapea un [`norte_index::IndexError`] a la taxonomía del wire (mismo
 /// criterio que `index_build_as`: `BUSY`/`LOCKED` de `SQLite` ⇒ retryable).
-fn index_to_proto(e: &norte_index::IndexError) -> Error {
+pub(crate) fn index_to_proto(e: &norte_index::IndexError) -> Error {
     tracing::warn!(error = %e, "index.embed: error del índice");
     Error::Io {
         retryable: e.is_retryable(),
@@ -251,5 +275,20 @@ mod tests {
         assert!(is_text_candidate(&vp("mem:///a.md"), None));
         // Punto final (extensión vacía) → no.
         assert!(!is_text_candidate(&vp("mem:///raro."), Some(10)));
+    }
+
+    #[test]
+    fn cosine_golden_order() {
+        let q = [1.0f32, 0.0];
+        assert!((cosine(&q, &[1.0, 0.0]).unwrap() - 1.0).abs() < 1e-6);
+        assert!(cosine(&q, &[0.0, 1.0]).unwrap().abs() < 1e-6);
+        assert!((cosine(&q, &[-1.0, 0.0]).unwrap() + 1.0).abs() < 1e-6);
+        let mid = cosine(&q, &[1.0, 1.0]).unwrap();
+        assert!(mid > 0.0 && mid < 1.0);
+        // dim mismatch y vector nulo ⇒ None (se ignora, no rompe)
+        assert!(cosine(&q, &[1.0]).is_none());
+        assert!(cosine(&q, &[0.0, 0.0]).is_none());
+        // no finito ⇒ None (cinturón: jamás un score NaN en el wire)
+        assert!(cosine(&q, &[f32::NAN, 0.0]).is_none());
     }
 }

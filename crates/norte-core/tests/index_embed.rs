@@ -303,3 +303,107 @@ async fn embed_gate_disabled_is_policy_denied() {
         "con IA deshabilitada nada sale al proveedor"
     );
 }
+
+/// Seed + build + embed (Completed): precondición de los tests de búsqueda.
+async fn seed_and_embed(engine: &Engine, mem: &MemProvider) {
+    write_file(mem, "mem:///a.txt", b"contenido alfa").await;
+    write_file(mem, "mem:///b.md", b"contenido beta").await;
+    build(engine, "mem:///").await;
+    let h = engine
+        .index_embed_as(vp("mem:///"), Actor::User)
+        .await
+        .expect("index_embed_as");
+    assert_eq!(h.join().await, TaskState::Completed);
+}
+
+#[tokio::test]
+async fn semantic_search_finds_exact_content_top1() {
+    let (engine, mem, _fake) = setup().await;
+    seed_and_embed(&engine, &mem).await;
+
+    // query == contenido exacto de a.txt ⇒ FakeEmbed determinista ⇒ vector
+    // idéntico ⇒ cos ~1.0 y top-1.
+    let hits = engine
+        .index_search_semantic(Some(&vp("mem:///")), "contenido alfa", 10)
+        .await
+        .expect("search alfa");
+    assert!(!hits.is_empty(), "hay embeddings, tiene que haber hits");
+    assert_eq!(hits[0].0, vp("mem:///a.txt"));
+    assert!((hits[0].1 - 1.0).abs() < 1e-5, "score top-1: {}", hits[0].1);
+
+    // root None también encuentra (barrido global).
+    let hits = engine
+        .index_search_semantic(None, "contenido beta", 10)
+        .await
+        .expect("search beta");
+    assert_eq!(hits[0].0, vp("mem:///b.md"));
+    // Todos los scores finitos (cinturón anti-NaN del wire) y orden descendente.
+    assert!(hits.iter().all(|(_, s)| s.is_finite()));
+    assert!(hits.windows(2).all(|w| w[0].1 >= w[1].1));
+}
+
+#[tokio::test]
+async fn semantic_search_clamps_k_and_ignores_stale_model() {
+    let (engine, mem, _fake) = setup().await;
+    seed_and_embed(&engine, &mem).await;
+
+    // k=0 ⇒ clamp a 1 ⇒ como mucho 1 hit (no error).
+    let hits = engine
+        .index_search_semantic(Some(&vp("mem:///")), "contenido alfa", 0)
+        .await
+        .expect("k=0 no es error");
+    assert_eq!(hits.len(), 1, "k=0 se recorta a 1");
+
+    // k=1000 ⇒ clamp al MAX del wire, sin error.
+    let hits = engine
+        .index_search_semantic(Some(&vp("mem:///")), "contenido alfa", 1000)
+        .await
+        .expect("k=1000 no es error");
+    assert_eq!(hits.len(), 2, "solo hay 2 vectores");
+
+    // Cambio de modelo en config ⇒ los vectores persistidos son stale para el
+    // modelo nuevo ⇒ invisibles ⇒ 0 hits.
+    let mut cfg = ai_cfg();
+    cfg.providers[0].model = "otro-modelo".into();
+    engine.set_ai_config(cfg);
+    let hits = engine
+        .index_search_semantic(Some(&vp("mem:///")), "contenido alfa", 10)
+        .await
+        .expect("modelo nuevo no es error");
+    assert!(hits.is_empty(), "vectores de otro modelo son invisibles");
+}
+
+#[tokio::test]
+async fn semantic_search_unsupported_and_gate() {
+    // Engine con índice pero SIN proveedor de embeddings ⇒ Unsupported.
+    let index = norte_index::Index::open_memory().await.expect("index");
+    let engine = Engine::new().with_index(Arc::new(index));
+    engine.set_ai_config(ai_cfg());
+    match engine
+        .index_search_semantic(Some(&vp("mem:///")), "hola", 10)
+        .await
+    {
+        Err(norte_proto::Error::Unsupported) => {}
+        other => panic!("esperaba Unsupported sin proveedor, fue {other:?}"),
+    }
+
+    // Con proveedor pero IA off ⇒ PolicyDenied (gate PRE-embed).
+    let (engine, mem, fake) = setup().await;
+    seed_and_embed(&engine, &mem).await;
+    let mut cfg = ai_cfg();
+    cfg.enabled = false;
+    engine.set_ai_config(cfg);
+    let before = fake.calls.lock().expect("calls lock").len();
+    match engine
+        .index_search_semantic(Some(&vp("mem:///")), "contenido alfa", 10)
+        .await
+    {
+        Err(norte_proto::Error::PolicyDenied { .. }) => {}
+        other => panic!("esperaba PolicyDenied con IA off, fue {other:?}"),
+    }
+    assert_eq!(
+        fake.calls.lock().expect("calls lock").len(),
+        before,
+        "con IA off la query jamás sale al proveedor"
+    );
+}
