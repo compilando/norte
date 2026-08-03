@@ -3331,10 +3331,16 @@ async fn on_dialog_key(
                 // devuelve `None` para ambos, así que `on_dialog_key` ya
                 // habría retornado antes de llegar a este match: inalcanzable
                 // aquí, no-op defensivo.
+                // `AiRenamePlan` (M4-IA) SÍ es una superficie de decisión:
+                // confirmar APLICARÁ el plan (N fs.move) — Task 5 cablea el
+                // apply; de momento solo cierra (el run loop que abre el
+                // modal también llega en Task 5, así que es inalcanzable).
                 Modal::Collision { .. }
                 | Modal::TrustLuaInit { .. }
                 | Modal::MarkPattern { .. }
                 | Modal::Mkdir { .. }
+                | Modal::AiRenameInstruction { .. }
+                | Modal::AiRenamePlan { .. }
                 | Modal::TransferName { .. } => {}
                 // S2 (`[ui] confirm_quit`): confirmar cierra — el run loop
                 // lo detecta en su chequeo de `app.quit` de cada vuelta
@@ -4086,6 +4092,16 @@ async fn dispatch(
                 app.message = Some(t("msg-mkdir-in-search"));
             } else {
                 app.open_mkdir();
+            }
+        }
+        // M4-IA: rename asistido del dir con foco. En el pane VIRTUAL de
+        // búsqueda no hay un directorio único que renombrar (mismo criterio
+        // que `PaneMkdir`). Task 5 cablea el run loop (teclas + petición).
+        Command::PaneAiRename => {
+            if app.focused().virtual_search {
+                app.message = Some(t("msg-ai-rename-in-search"));
+            } else {
+                app.open_ai_rename();
             }
         }
         Command::PaneDelete | Command::PaneDeletePermanent => {

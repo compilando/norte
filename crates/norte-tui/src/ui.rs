@@ -1076,7 +1076,9 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
         // Patrón/mkdir + hint + teclas (3 líneas) o + la línea de error (4),
         // más bordes (#103 T9: mismo cómputo `body_lines + 3` que el resto).
         // Sin error caen al comodín `6` de abajo (match_same_arms).
-        Modal::MarkPattern { error: Some(_), .. } | Modal::Mkdir { error: Some(_), .. } => 7,
+        Modal::MarkPattern { error: Some(_), .. }
+        | Modal::Mkdir { error: Some(_), .. }
+        | Modal::AiRenameInstruction { error: Some(_), .. } => 7,
         _ => 6,
     }
 }
@@ -1205,6 +1207,14 @@ fn modal_title_body(
         // #104: mismo enmascarado que el patrón — nombre y error son de
         // usuario (paste con bidi/invisibles incluido).
         Modal::Mkdir { name, error } => mkdir_modal_text(name, error.as_deref()),
+        // M4-IA: mismo enmascarado que mkdir — instrucción y error son texto
+        // de usuario (paste con bidi/invisibles incluido).
+        Modal::AiRenameInstruction { instruction, error } => {
+            ai_rename_modal_text(instruction, error.as_deref())
+        }
+        // M4-IA mínimo para compilar: Task 5 pinta las parejas from→to (el
+        // run loop que ABRE este modal también se cablea allí).
+        Modal::AiRenamePlan { .. } => (t("modal-ai-rename-plan"), t("modal-ai-rename-plan-hint")),
         // #105: nombre de destino editable — dir destino + campo + error,
         // todo de usuario y todo enmascarado.
         Modal::TransferName {
@@ -1361,6 +1371,24 @@ fn mkdir_modal_text(name: &str, error: Option<&str>) -> (String, String) {
         lines.push(masked_err);
     }
     (t("modal-mkdir"), lines.join("\n"))
+}
+
+/// Título+cuerpo de `Modal::AiRenameInstruction` (M4-IA): mismo contrato de
+/// enmascarado que `mkdir_modal_text` — la instrucción y el diagnóstico son
+/// texto de usuario.
+fn ai_rename_modal_text(instruction: &str, error: Option<&str>) -> (String, String) {
+    let (masked, hostil) = display_name(instruction.as_bytes());
+    let campo = if hostil {
+        format!("{HOSTILE_BADGE} {masked}_")
+    } else {
+        format!("{masked}_")
+    };
+    let mut lines = vec![campo, t("modal-ai-rename-hint")];
+    if let Some(err) = error {
+        let (masked_err, _) = display_name(err.as_bytes());
+        lines.push(masked_err);
+    }
+    (t("modal-ai-rename"), lines.join("\n"))
 }
 
 /// Título+cuerpo de `Modal::TransferName` (#105): mismo contrato de

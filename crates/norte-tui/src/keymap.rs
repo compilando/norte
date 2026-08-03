@@ -109,6 +109,7 @@ commands! {
     "app.extensions" => AppExtensions,
     "app.palette" => AppPalette,
     "app.settings" => AppSettings,
+    "pane.ai-rename" => PaneAiRename,
     "pane.copy" => PaneCopy,
     "pane.move" => PaneMove,
     "pane.delete" => PaneDelete,

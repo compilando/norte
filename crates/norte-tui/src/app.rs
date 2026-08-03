@@ -1968,6 +1968,87 @@ impl App {
         }
     }
 
+    /// Abre el prompt de instrucción del rename IA (M4-IA).
+    pub fn open_ai_rename(&mut self) {
+        self.modal = Some(Modal::AiRenameInstruction {
+            instruction: String::new(),
+            error: None,
+        });
+    }
+
+    /// Añade un carácter a la instrucción en curso. No-op sin su modal.
+    /// Tope en `chars` como el patrón (#103): un paste accidental no
+    /// desborda el modal; el límite REAL (4 KiB) lo pone el daemon.
+    pub fn ai_rename_push(&mut self, c: char) {
+        if let Some(Modal::AiRenameInstruction { instruction, error }) = &mut self.modal {
+            if instruction.chars().count() >= MARK_PATTERN_MAX_CHARS {
+                return;
+            }
+            instruction.push(c);
+            *error = None;
+        }
+    }
+
+    /// Borra el último carácter de la instrucción. No-op sin su modal.
+    pub fn ai_rename_pop(&mut self) {
+        if let Some(Modal::AiRenameInstruction { instruction, error }) = &mut self.modal {
+            instruction.pop();
+            *error = None;
+        }
+    }
+
+    /// Cancela `Modal::AiRenameInstruction` sin lanzar nada — el Esc de ESTE
+    /// modal de texto libre (mismo contrato y guard que
+    /// [`Self::cancel_mkdir`]: un modal de DECISIÓN jamás se cierra por
+    /// aquí).
+    pub fn cancel_ai_rename(&mut self) {
+        if !matches!(self.modal, Some(Modal::AiRenameInstruction { .. })) {
+            debug_assert!(
+                false,
+                "solo los modales de texto libre se cierran sin decisión; \
+                 un modal de DECISIÓN debe denegar por on_dialog_key"
+            );
+            return;
+        }
+        self.modal = None;
+        self.open_next_pending();
+    }
+
+    /// Valida y devuelve la instrucción; NO cierra el modal (molde #104
+    /// review MINOR-1: el caller cierra con [`Self::ai_rename_submitted`]
+    /// SOLO tras lanzar la petición — un fallo deja el diagnóstico con
+    /// [`Self::ai_rename_set_error`] y el usuario CONSERVA lo tecleado).
+    /// Una instrucción vacía deja su diagnóstico aquí mismo y devuelve
+    /// `None`.
+    pub fn ai_rename_confirm(&mut self) -> Option<String> {
+        if let Some(Modal::AiRenameInstruction { instruction, error }) = &mut self.modal {
+            let text = instruction.trim();
+            if text.is_empty() {
+                *error = Some(t("modal-ai-rename-empty-instruction"));
+                return None;
+            }
+            return Some(text.to_owned());
+        }
+        None
+    }
+
+    /// Cierra el prompt tras un lanzamiento que SÍ salió (M4-IA): misma
+    /// disciplina de cierre que [`Self::mkdir_submitted`] (jamás dejar una
+    /// pendiente esperando).
+    pub fn ai_rename_submitted(&mut self) {
+        if matches!(self.modal, Some(Modal::AiRenameInstruction { .. })) {
+            self.modal = None;
+            self.open_next_pending();
+        }
+    }
+
+    /// Deja el diagnóstico de un lanzamiento fallido; el texto sobrevive.
+    pub fn ai_rename_set_error(&mut self, msg: String) {
+        if let Some(Modal::AiRenameInstruction { error, .. }) = &mut self.modal {
+            *error = Some(msg);
+        }
+    }
+
     /// Abre el popup de navegación (spec 2026-07-18): historial del pane
     /// con foco (más reciente primero) o la copia de hotlist. Los items se
     /// construyen YA saneados aquí (`nav_item_display`); una entrada de
@@ -2307,6 +2388,24 @@ pub enum Modal {
         /// pintado bajo el campo.
         error: Option<String>,
     },
+    /// Prompt de instrucción del rename IA (M4-IA). Texto libre, molde
+    /// [`Modal::Mkdir`]: la instrucción CRUDA del usuario, enmascarada al
+    /// pintarla (una instrucción llega por paste con bidi/invisibles tan
+    /// fácil como un nombre).
+    AiRenameInstruction {
+        /// Lo tecleado hasta ahora.
+        instruction: String,
+        /// Diagnóstico del último intento fallido, bajo el campo.
+        error: Option<String>,
+    },
+    /// Plan de rename IA revisable (M4-IA): superficie de DECISIÓN. Confirmar
+    /// aplica (contenido revisado por el humano); Esc/cancel descarta.
+    AiRenamePlan {
+        /// Dir sobre el que se aplican los moves.
+        dir: VPath,
+        /// Parejas from→to del modelo (proto, UTF-8 garantizado).
+        entries: Vec<norte_proto::methods::AiRenameEntry>,
+    },
 }
 
 /// Tope de caracteres del patrón de [`Modal::MarkPattern`] (#103 T9 review
@@ -2465,7 +2564,14 @@ pub const ALLOW_NAV_HOTLIST: &[&str] = &[
 pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
     use norte_proto::CollisionPolicy as P;
     match modal {
-        Modal::ConfirmDelete { .. } | Modal::ConfirmTransfer { .. } | Modal::ConfirmQuit => {
+        // M4-IA: `AiRenamePlan` es una superficie de decisión sobre contenido
+        // INICIADO y REVISADO por el humano — semántica [`ALLOW_CONFIRM`]
+        // (Enter confirma, como un delete/transfer), NO el allowlist de
+        // aprobación de agentes (`ALLOW_APPROVAL`, que excluye confirm).
+        Modal::ConfirmDelete { .. }
+        | Modal::ConfirmTransfer { .. }
+        | Modal::ConfirmQuit
+        | Modal::AiRenamePlan { .. } => {
             if !ALLOW_CONFIRM.contains(&cmd) {
                 return None;
             }
@@ -2511,6 +2617,7 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         Modal::TrustLuaInit { .. }
         | Modal::MarkPattern { .. }
         | Modal::Mkdir { .. }
+        | Modal::AiRenameInstruction { .. }
         | Modal::TransferName { .. } => None,
     }
 }

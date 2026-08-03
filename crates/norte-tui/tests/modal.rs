@@ -258,6 +258,98 @@ fn presets_orthodox() -> norte_tui::keymap::KeymapFile {
         .1
 }
 
+/// App de dos panes sobre el mismo dir, sin entradas (fixture de los tests
+/// de estado M4-IA).
+fn app() -> norte_tui::app::App {
+    use norte_tui::app::{App, Pane};
+    let dir = vp("file:///x");
+    App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir, Vec::new()),
+    )
+}
+
+/// Plan de rename IA con una pareja (fixture del test de allowlist).
+fn ai_plan() -> Modal {
+    Modal::AiRenamePlan {
+        dir: vp("file:///x"),
+        entries: vec![norte_proto::methods::AiRenameEntry {
+            from: "a".into(),
+            to: "b".into(),
+        }],
+    }
+}
+
+/// M4-IA: el prompt de instrucción sigue la disciplina de `Mkdir` (#104
+/// review MINOR-1) — confirmar NO cierra; un fallo del lanzamiento deja el
+/// diagnóstico y CONSERVA lo tecleado; solo `ai_rename_submitted` cierra.
+#[test]
+fn ai_rename_instruccion_conserva_texto_tras_fallo() {
+    let mut app = app();
+    app.open_ai_rename();
+    for c in "kebab".chars() {
+        app.ai_rename_push(c);
+    }
+    assert_eq!(app.ai_rename_confirm().as_deref(), Some("kebab"));
+    app.ai_rename_set_error("boom".into());
+    match &app.modal {
+        Some(Modal::AiRenameInstruction { instruction, error }) => {
+            assert_eq!(instruction, "kebab");
+            assert_eq!(error.as_deref(), Some("boom"));
+        }
+        other => panic!("modal inesperado: {other:?}"),
+    }
+    app.ai_rename_submitted();
+    assert!(app.modal.is_none());
+}
+
+/// M4-IA: confirmar con la instrucción vacía no devuelve nada y deja el
+/// diagnóstico bajo el campo (el modal sigue abierto).
+#[test]
+fn ai_rename_confirm_vacio_no_devuelve_y_deja_diagnostico() {
+    let mut app = app();
+    app.open_ai_rename();
+    assert!(app.ai_rename_confirm().is_none());
+    assert!(matches!(
+        &app.modal,
+        Some(Modal::AiRenameInstruction { error: Some(_), .. })
+    ));
+}
+
+/// M4-IA: `AiRenamePlan` es una superficie de decisión sobre contenido
+/// iniciado y REVISADO por el humano — usa `ALLOW_CONFIRM` (Enter confirma,
+/// como un delete), NO el allowlist de aprobación de agentes: que
+/// `dialog.confirm` confirme aquí es exactamente lo que `ALLOW_APPROVAL`
+/// prohíbe (pin `aprobacion_ignora_confirm`), y los comandos de colisión
+/// son inertes. El prompt de instrucción es texto libre: jamás pasa por
+/// `dialog_action`.
+#[test]
+fn plan_ia_confirma_como_confirmacion_no_como_aprobacion_de_agente() {
+    for cmd in ["dialog.confirm", "dialog.approve"] {
+        assert_eq!(
+            dialog_action(&ai_plan(), cmd),
+            Some(DialogOutcome::Confirmed),
+            "comando {cmd}"
+        );
+    }
+    for cmd in ["dialog.cancel", "dialog.deny"] {
+        assert_eq!(
+            dialog_action(&ai_plan(), cmd),
+            Some(DialogOutcome::Cancelled),
+            "comando {cmd}"
+        );
+    }
+    // Fuera del allowlist de ESTE modal: inerte.
+    assert_eq!(dialog_action(&ai_plan(), "dialog.overwrite"), None);
+    // Texto libre (como Mkdir/MarkPattern): el run loop lo intercepta ANTES.
+    let prompt = Modal::AiRenameInstruction {
+        instruction: String::new(),
+        error: None,
+    };
+    assert_eq!(dialog_action(&prompt, "dialog.confirm"), None);
+    assert_eq!(dialog_action(&prompt, "dialog.approve"), None);
+}
+
 /// Las aprobaciones hacen cola como las colisiones (jamás pisan un modal
 /// abierto) y tienen PRIORIDAD sobre ellas: una aprobación vence por TTL en
 /// el daemon; una colisión espera lo que haga falta.
