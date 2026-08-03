@@ -1161,6 +1161,33 @@ impl PaneState {
             e.mtime_ms = e.mtime_ms.or(mtime_ms);
         }
     }
+
+    /// Paths candidatos a [`Self::hydrate`] en la ventana VISIBLE: entradas
+    /// `File` sin `size` a `radius` filas del cursor (#52, listado lazy).
+    /// Modelo COMPARTIDO por los dos frontends (regla 7): sondear solo la
+    /// entrada ENFOCADA dejaba las columnas Tamaño/Fecha en blanco en todas
+    /// las demás filas, que es justo lo que un gestor ortodoxo tiene que
+    /// enseñar.
+    ///
+    /// `radius` APROXIMA el viewport: el alto real lo decide el widget al
+    /// pintar, así que la ventana se centra en el cursor con margen en vez
+    /// de mentir sobre lo visible. Un `Dir` jamás se sondea (su celda de
+    /// tamaño va en blanco a propósito) y una entrada ya hidratada deja de
+    /// ser candidata sola — el caller no necesita llevar más estado que la
+    /// dedup de los que YA pidió (un stat fallido, si no, se reintenta en
+    /// bucle).
+    #[must_use]
+    pub fn needs_stat_window(&self, radius: usize) -> Vec<VPath> {
+        let lo = self.cursor.saturating_sub(radius);
+        let hi = self.cursor.saturating_add(radius).saturating_add(1);
+        self.entries
+            .iter()
+            .take(hi)
+            .skip(lo)
+            .filter(|e| e.kind == EntryKind::File && e.size.is_none())
+            .map(|e| e.path.clone())
+            .collect()
+    }
 }
 
 #[cfg(test)]

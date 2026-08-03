@@ -137,17 +137,36 @@ struct Fill {
     rx: tokio::sync::mpsc::Receiver<FillMsg>,
 }
 
-/// Sonda one-shot de stat on-focus (#52): hidrata size/mtime de la entrada
-/// seleccionada cuando el listado lazy los dejó en None. A lo sumo UNA en
-/// vuelo; dedup por `(pane, path)` (un stat fallido no se reintenta hasta
-/// cambiar la selección — sin martillear un provider roto). Acotada con
-/// timeout (`STAT_PROBE_TIMEOUT`): un provider colgado no bloquea la sonda
+/// Sonda de stat del VIEWPORT (#52): hidrata size/mtime de las entradas
+/// VISIBLES que el listado lazy dejó en None — no solo la enfocada, o las
+/// columnas Tamaño/Fecha quedan en blanco en todas las demás filas. A lo
+/// sumo UNA tanda en vuelo, acotada a [`STAT_BATCH_MAX`] paths y resuelta
+/// con concurrencia [`STAT_BATCH_CONCURRENCY`] (una sesión remota no puede
+/// pagar N RTT en serie). Dedup por `(pane, path)` en el conjunto `probed`
+/// del run loop: un stat fallido no se reintenta hasta que el listado se
+/// renueve (sin martillear un provider roto). Cada stat va acotado con
+/// timeout (`STAT_PROBE_TIMEOUT`): un provider colgado no bloquea la tanda
 /// para siempre.
 struct StatProbe {
-    pane: usize,
-    path: VPath,
-    rx: tokio::sync::oneshot::Receiver<Option<Entry>>,
+    rx: tokio::sync::oneshot::Receiver<Vec<(usize, VPath, Entry)>>,
 }
+
+/// Dedup de la sonda #52: `(pane, path)` ya pedidos. Se vacía con cada
+/// listado nuevo (cd/refresh) — las entries vuelven a nacer lazy.
+type Probed = std::collections::HashSet<(usize, VPath)>;
+
+/// Radio en filas de la ventana que la sonda #52 hidrata alrededor del
+/// cursor de cada pane (aproximación del viewport: el alto real lo decide
+/// el widget al pintar). Cubre un terminal alto con margen.
+const STAT_WINDOW_RADIUS: usize = 64;
+
+/// Tope de paths por tanda de la sonda #52: lo que no entre se pide en la
+/// siguiente vuelta, ya sin los que la tanda anterior hidrató.
+const STAT_BATCH_MAX: usize = 64;
+
+/// Stats simultáneos dentro de una tanda (#52): acota las peticiones en
+/// vuelo contra el daemon sin serializar la latencia de la pantalla entera.
+const STAT_BATCH_CONCURRENCY: usize = 8;
 
 /// Tope del stat de la sonda on-focus (#52, MINOR-1): un provider remoto
 /// colgado no debe dejar la sonda en vuelo indefinidamente — vencido el
@@ -155,20 +174,33 @@ struct StatProbe {
 /// hasta cambiar la selección).
 const STAT_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Lanza la sonda de `StatProbe`: clona el `Backend` (barato, Arc interno) y
-/// el path para que la task no retenga el préstamo del run loop.
-fn spawn_stat_probe(backend: &Backend, pane: usize, path: VPath) -> StatProbe {
+/// Lanza la tanda de `StatProbe`: clona el `Backend` (barato, Arc interno) y
+/// los paths para que la task no retenga el préstamo del run loop. Los
+/// fallos (error del provider o timeout) simplemente no vuelven — la entrada
+/// se queda lazy y la dedup del run loop evita el reintento en bucle.
+fn spawn_stat_probe(backend: &Backend, paths: Vec<(usize, VPath)>) -> StatProbe {
+    use futures::StreamExt as _;
     let (tx, rx) = tokio::sync::oneshot::channel();
     let b = backend.clone();
-    let p = path.clone();
     tokio::spawn(async move {
-        let res = tokio::time::timeout(STAT_PROBE_TIMEOUT, b.stat(&p))
-            .await
-            .ok()
-            .and_then(Result::ok);
-        let _ = tx.send(res);
+        let hidratadas: Vec<(usize, VPath, Entry)> = futures::stream::iter(paths)
+            .map(|(pane, path)| {
+                let b = b.clone();
+                async move {
+                    let entry = tokio::time::timeout(STAT_PROBE_TIMEOUT, b.stat(&path))
+                        .await
+                        .ok()
+                        .and_then(Result::ok)?;
+                    Some((pane, path, entry))
+                }
+            })
+            .buffer_unordered(STAT_BATCH_CONCURRENCY)
+            .filter_map(|r| async move { r })
+            .collect()
+            .await;
+        let _ = tx.send(hidratadas);
     });
-    StatProbe { pane, path, rx }
+    StatProbe { rx }
 }
 
 /// Fetch de decoraciones de plugin EN VUELO (G3b, ADR 0037): el pane/dir
@@ -466,16 +498,16 @@ mod palette_modal_guard_tests {
 /// —sigue en su listado anterior, cuyo relleno continúa siendo válido— así que
 /// no tocan el fill (#78). Un `Refreshed` (#118) delega en
 /// [`release_refreshed_fill`]: el mismo ritual que [`after_panes_refresh`].
-fn apply_cd(fill: &mut Option<Fill>, last_probed: &mut Option<(usize, VPath)>, outcome: Cd) {
+fn apply_cd(fill: &mut Option<Fill>, last_probed: &mut Probed, outcome: Cd) {
     match outcome {
         Cd::Filling(f) => {
             // Listado nuevo (lazy): la dedup de la sonda #52 caduca — la
             // misma entrada re-enfocada debe poder re-hidratarse.
-            *last_probed = None;
+            last_probed.clear();
             *fill = Some(f);
         }
         Cd::Replaced(pane) => {
-            *last_probed = None;
+            last_probed.clear();
             if fill.as_ref().is_some_and(|f| f.pane == pane) {
                 *fill = None;
             }
@@ -498,18 +530,14 @@ fn apply_cd(fill: &mut Option<Fill>, last_probed: &mut Option<(usize, VPath)>, o
 /// invalida la dedup de la sonda #52 (un listado nuevo re-lazifica las
 /// entries). Cuerpo ÚNICO para [`after_panes_refresh`] (run loop) y el brazo
 /// `Cd::Refreshed` de [`apply_cd`] (Ctrl+R vía `dispatch`).
-fn release_refreshed_fill(
-    refreshed: [bool; 2],
-    fill: &mut Option<Fill>,
-    last_probed: &mut Option<(usize, VPath)>,
-) {
+fn release_refreshed_fill(refreshed: [bool; 2], fill: &mut Option<Fill>, last_probed: &mut Probed) {
     if refreshed == [false; 2] {
         return;
     }
     if fill.as_ref().is_some_and(|f| refreshed[f.pane]) {
         *fill = None;
     }
-    *last_probed = None;
+    last_probed.clear();
 }
 
 /// Aplica un mensaje del drenador de paginación (ADR 0017) al pane. Si el pane
@@ -921,7 +949,7 @@ async fn run(
     // cada uno la suya (no reintenta un stat fallido hasta cambiar
     // selección).
     let mut stat_probe: Option<StatProbe> = None;
-    let mut last_probed: Option<(usize, VPath)> = None;
+    let mut last_probed: Probed = Probed::new();
     // Fetch de decoraciones de plugin en vuelo (G3b, ADR 0037): a lo sumo
     // uno, molde de `stat_probe`/`fill`.
     let mut decorate_fetch: [Option<DecorateFetch>; 2] = [None, None];
@@ -970,14 +998,19 @@ async fn run(
         if app.quit {
             return Ok(());
         }
-        // #52: listado lazy — la entrada enfocada sin size se hidrata con una
-        // sonda one-shot (máx. una en vuelo; dedup por (pane, path)).
-        if stat_probe.is_none()
-            && let Some((pane_idx, path)) = app.focused_needs_stat()
-            && last_probed.as_ref() != Some(&(pane_idx, path.clone()))
-        {
-            last_probed = Some((pane_idx, path.clone()));
-            stat_probe = Some(spawn_stat_probe(backend, pane_idx, path));
+        // #52: listado lazy — las entradas VISIBLES sin size se hidratan por
+        // tandas (máx. una en vuelo; dedup por (pane, path) en `last_probed`).
+        if stat_probe.is_none() {
+            let tanda: Vec<(usize, VPath)> = app
+                .needs_stat_window(STAT_WINDOW_RADIUS)
+                .into_iter()
+                .filter(|c| !last_probed.contains(c))
+                .take(STAT_BATCH_MAX)
+                .collect();
+            if !tanda.is_empty() {
+                last_probed.extend(tanda.iter().cloned());
+                stat_probe = Some(spawn_stat_probe(backend, tanda));
+            }
         }
         tokio::select! {
             _ = tick.tick() => {
@@ -1059,17 +1092,17 @@ async fn run(
             }
             res = async {
                 match &mut stat_probe {
-                    Some(pr) => (&mut pr.rx).await.ok().flatten(),
+                    Some(pr) => (&mut pr.rx).await.ok(),
                     None => std::future::pending().await,
                 }
             } => {
-                // Sonda de stat on-focus (#52): se limpia SIEMPRE (haya dado
-                // `Some` o el stat fallara/canal se cerrara) — la dedup por
-                // `last_probed` evita reintentar hasta cambiar la selección.
-                if let Some(pr) = stat_probe.take()
-                    && let Some(entry) = res
-                {
-                    app.panes[pr.pane].hydrate(&pr.path, entry.size, entry.mtime_ms);
+                // Sonda de stat del viewport (#52): el slot se limpia SIEMPRE
+                // (haya hidratado algo, fallara el stat o se cerrara el canal)
+                // — la dedup por `last_probed` evita reintentar hasta que un
+                // listado nuevo la vacíe.
+                stat_probe = None;
+                for (pane, path, entry) in res.unwrap_or_default() {
+                    app.panes[pane].hydrate(&path, entry.size, entry.mtime_ms);
                 }
             }
             (slot, res) = async {
@@ -3576,7 +3609,7 @@ fn after_panes_refresh(
     app: &App,
     refreshed: [bool; 2],
     fill: &mut Option<Fill>,
-    last_probed: &mut Option<(usize, VPath)>,
+    last_probed: &mut Probed,
     search_run: &mut Option<SearchRun>,
 ) {
     if refreshed == [false; 2] {
@@ -4146,7 +4179,7 @@ async fn on_search_escape(
     backend: &Backend,
     events: &mut EventStream,
     fill: &mut Option<Fill>,
-    last_probed: &mut Option<(usize, VPath)>,
+    last_probed: &mut Probed,
     search_run: &mut Option<SearchRun>,
 ) {
     let Some(s) = search_run.as_ref() else {
@@ -4170,7 +4203,7 @@ async fn on_search_enter(
     backend: &Backend,
     events: &mut EventStream,
     fill: &mut Option<Fill>,
-    last_probed: &mut Option<(usize, VPath)>,
+    last_probed: &mut Probed,
     search_run: &mut Option<SearchRun>,
 ) {
     let Some(hit) = app.focused().selected().map(|e| e.path.clone()) else {
@@ -5298,7 +5331,7 @@ mod search_fill_tests {
 
 #[cfg(test)]
 mod apply_cd_tests {
-    use super::{Cd, Fill, FillMsg, apply_cd};
+    use super::{Cd, Fill, FillMsg, Probed, apply_cd};
     use norte_proto::Error;
 
     fn fill(pane: usize) -> Fill {
@@ -5310,7 +5343,7 @@ mod apply_cd_tests {
     #[test]
     fn replaced_suelta_el_fill_del_pane() {
         let mut f = Some(fill(0));
-        let mut lp = None;
+        let mut lp = Probed::new();
         apply_cd(&mut f, &mut lp, Cd::Replaced(0));
         assert!(f.is_none(), "el fill del listado viejo se suelta");
     }
@@ -5319,7 +5352,7 @@ mod apply_cd_tests {
     #[test]
     fn replaced_de_otro_pane_no_toca() {
         let mut f = Some(fill(0));
-        let mut lp = None;
+        let mut lp = Probed::new();
         apply_cd(&mut f, &mut lp, Cd::Replaced(1));
         assert!(f.is_some(), "el fill del pane 0 sobrevive");
     }
@@ -5329,7 +5362,7 @@ mod apply_cd_tests {
     #[test]
     fn failed_conserva_el_fill() {
         let mut f = Some(fill(0));
-        let mut lp = None;
+        let mut lp = Probed::new();
         apply_cd(&mut f, &mut lp, Cd::Failed(Error::NotFound));
         assert!(
             f.is_some(),
@@ -5341,7 +5374,7 @@ mod apply_cd_tests {
     #[test]
     fn cancelled_conserva_el_fill() {
         let mut f = Some(fill(0));
-        let mut lp = None;
+        let mut lp = Probed::new();
         apply_cd(&mut f, &mut lp, Cd::Cancelled);
         assert!(f.is_some());
     }
@@ -5352,10 +5385,10 @@ mod apply_cd_tests {
     #[test]
     fn refreshed_suelta_el_fill_del_pane_relistado() {
         let mut f = Some(fill(0));
-        let mut lp = Some((0, norte_proto::VPath::parse("file:///d/x").unwrap()));
+        let mut lp = Probed::from([(0, norte_proto::VPath::parse("file:///d/x").unwrap())]);
         apply_cd(&mut f, &mut lp, Cd::Refreshed([true, false]));
         assert!(f.is_none(), "el drenador del listado viejo se suelta");
-        assert!(lp.is_none(), "la dedup de la sonda #52 caduca");
+        assert!(lp.is_empty(), "la dedup de la sonda #52 caduca");
     }
 
     /// #118: Esc a medias — el pane 1 NO llegó a re-listarse, su relleno
@@ -5363,7 +5396,7 @@ mod apply_cd_tests {
     #[test]
     fn refreshed_a_medias_conserva_el_fill_del_pane_no_relistado() {
         let mut f = Some(fill(1));
-        let mut lp = None;
+        let mut lp = Probed::new();
         apply_cd(&mut f, &mut lp, Cd::Refreshed([true, false]));
         assert!(
             f.is_some(),
@@ -5376,16 +5409,16 @@ mod apply_cd_tests {
     #[test]
     fn refreshed_vacio_no_toca_nada() {
         let mut f = Some(fill(0));
-        let mut lp = Some((0, norte_proto::VPath::parse("file:///d/x").unwrap()));
+        let mut lp = Probed::from([(0, norte_proto::VPath::parse("file:///d/x").unwrap())]);
         apply_cd(&mut f, &mut lp, Cd::Refreshed([false, false]));
         assert!(f.is_some(), "sin pane re-listado, el fill sigue");
-        assert!(lp.is_some(), "sin pane re-listado, la dedup sigue");
+        assert!(!lp.is_empty(), "sin pane re-listado, la dedup sigue");
     }
 }
 
 #[cfg(test)]
 mod refresh_ritual_tests {
-    use super::{App, Fill, FillMsg, Pane, SearchRun, after_panes_refresh};
+    use super::{App, Fill, FillMsg, Pane, Probed, SearchRun, after_panes_refresh};
     use norte_proto::VPath;
 
     fn fill(pane: usize) -> Fill {
@@ -5406,13 +5439,13 @@ mod refresh_ritual_tests {
     fn esc_a_medias_conserva_el_fill_del_pane_no_refrescado() {
         let app = app();
         let mut f = Some(fill(1));
-        let mut lp = Some((1, VPath::parse("file:///d/x").unwrap()));
+        let mut lp = Probed::from([(1, VPath::parse("file:///d/x").unwrap())]);
         let mut sr: Option<SearchRun> = None;
         after_panes_refresh(&app, [true, false], &mut f, &mut lp, &mut sr);
         assert!(
             f.is_some(),
             "el fill del pane 1 (no re-listado) sobrevive al Esc a medias"
         );
-        assert!(lp.is_none(), "la dedup de la sonda #52 caduca igualmente");
+        assert!(lp.is_empty(), "la dedup de la sonda #52 caduca igualmente");
     }
 }

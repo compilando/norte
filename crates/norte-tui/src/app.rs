@@ -336,6 +336,13 @@ impl Pane {
         self.state.hydrate(path, size, mtime_ms);
     }
 
+    /// Paths VISIBLES sin `size` a `radius` filas del cursor (#52) —
+    /// delegado puro a [`norte_frontend::PaneState::needs_stat_window`].
+    #[must_use]
+    pub fn needs_stat_window(&self, radius: usize) -> Vec<VPath> {
+        self.state.needs_stat_window(radius)
+    }
+
     /// El drenador terminó: el listado ya está completo. El quick search se
     /// re-aplica por contrato (hoy no muta entries: refresh barato; si algún
     /// día el cierre re-sortea, el filtro no se queda con índices muertos).
@@ -1437,6 +1444,26 @@ impl App {
     pub fn focused_needs_stat(&self) -> Option<(usize, VPath)> {
         let e = self.focused().selected()?;
         (e.kind == EntryKind::File && e.size.is_none()).then(|| (self.focus(), e.path.clone()))
+    }
+
+    /// Candidatas a hidratar de la VENTANA visible (#52, listado lazy) en
+    /// LOS DOS panes — ambos se pintan a la vez, así que sondear solo la
+    /// entrada enfocada dejaba las columnas Tamaño/Fecha en blanco en todo
+    /// lo demás. El pane con foco va primero; la selección DENTRO de cada
+    /// pane es del modelo compartido
+    /// ([`norte_frontend::PaneState::needs_stat_window`], regla 7).
+    #[must_use]
+    pub fn needs_stat_window(&self, radius: usize) -> Vec<(usize, VPath)> {
+        let mut out = Vec::new();
+        for pane_idx in [self.focus(), self.focus() ^ 1] {
+            out.extend(
+                self.panes[pane_idx]
+                    .needs_stat_window(radius)
+                    .into_iter()
+                    .map(|p| (pane_idx, p)),
+            );
+        }
+        out
     }
 
     /// El pane con foco, mutable.
@@ -3066,6 +3093,64 @@ mod tests {
         p.set_loading(true);
         p.finish_listing();
         assert!(!p.loading());
+    }
+
+    /// #52: `needs_stat_window` hidrata lo VISIBLE, no solo lo enfocado —
+    /// las columnas Tamaño/Fecha salían en blanco en todas las filas salvo
+    /// la del cursor. Los dos panes se pintan a la vez, así que los dos
+    /// aportan candidatas (el enfocado primero); fuera del radio, no; un
+    /// Dir, nunca; ya hidratada, tampoco.
+    #[test]
+    fn needs_stat_window_cubre_los_dos_panes_dentro_del_radio() {
+        let lazy = |n: &str| {
+            let mut e = file(n);
+            e.size = None;
+            e
+        };
+        let mut dir_lazy = lazy("z-dir");
+        dir_lazy.kind = EntryKind::Dir;
+        let izq = vec![lazy("a.txt"), lazy("b.txt"), lazy("c.txt"), dir_lazy];
+        let der = vec![lazy("d.txt"), file("e.txt")];
+        let mut app = App::new(Pane::new(root(), izq), Pane::new(root(), der));
+        // `Pane::new` ordena (dirs primero): [z-dir, a, b, c].
+        app.panes[0].set_cursor(1);
+
+        let ventana = app.needs_stat_window(1);
+        let nombres: Vec<String> = ventana
+            .iter()
+            .map(|(p, path)| format!("{p}:{}", path.display_lossy()))
+            .collect();
+        assert!(
+            nombres
+                .iter()
+                .any(|n| n.starts_with("0:") && n.ends_with("/a.txt"))
+                && nombres
+                    .iter()
+                    .any(|n| n.starts_with("0:") && n.ends_with("/b.txt")),
+            "cursor ± radio del pane con foco: {nombres:?}"
+        );
+        assert!(
+            !nombres.iter().any(|n| n.contains("c.txt")),
+            "fuera del radio no se sondea: {nombres:?}"
+        );
+        assert!(
+            !nombres.iter().any(|n| n.contains("z-dir")),
+            "un Dir jamás se sondea: {nombres:?}"
+        );
+        assert!(
+            nombres
+                .iter()
+                .any(|n| n.starts_with("1:") && n.ends_with("/d.txt")),
+            "el pane SIN foco también se pinta: {nombres:?}"
+        );
+        assert!(
+            !nombres.iter().any(|n| n.contains("e.txt")),
+            "ya hidratada, no es candidata: {nombres:?}"
+        );
+        assert_eq!(ventana[0].0, 0, "el pane con foco va primero");
+
+        // Un radio generoso alcanza el listado entero de ambos panes.
+        assert_eq!(app.needs_stat_window(64).len(), 4);
     }
 
     /// #52: `focused_needs_stat` señala la entrada File enfocada SIN `size`
