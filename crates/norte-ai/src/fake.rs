@@ -23,6 +23,10 @@ pub struct FakeEmbed {
     pub calls: Mutex<Vec<Vec<String>>>,
     /// Latencia artificial por llamada (ventana para tests de cancelación).
     pub delay: Option<Duration>,
+    /// `retry_after` que reportan los [`AiError::RateLimited`] inyectados.
+    /// Default `Some(0)`: reintento inmediato (tests rápidos); un valor alto
+    /// abre ventana para tests de cancelación durante la espera de reintento.
+    pub retry_after: Option<u64>,
     rate_limited_budget: AtomicU32,
 }
 
@@ -35,6 +39,7 @@ impl FakeEmbed {
             local: true,
             calls: Mutex::new(Vec::new()),
             delay: None,
+            retry_after: Some(0),
             rate_limited_budget: AtomicU32::new(0),
         }
     }
@@ -118,7 +123,7 @@ impl AiProvider for FakeEmbed {
             .is_ok()
         {
             return Err(AiError::RateLimited {
-                retry_after: Some(0),
+                retry_after: self.retry_after,
             });
         }
         Ok(inputs.iter().map(|t| self.vec_for(t)).collect())

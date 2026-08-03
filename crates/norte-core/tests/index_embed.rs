@@ -177,11 +177,25 @@ async fn embed_denied_prefixes_excluded_before_read() {
     );
 }
 
+/// Espera (acotada) a que el proveedor fake haya recibido al menos un batch:
+/// la task está provablemente en vuelo.
+async fn wait_first_call(fake: &FakeEmbed) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while fake.calls.lock().expect("calls lock").is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "el primer batch nunca llegó al proveedor"
+        );
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+}
+
 #[tokio::test]
 async fn embed_clean_cancellation() {
-    // 40 ficheros → 3 batches; 50ms de latencia por batch = ventana amplia
-    // para que el cancel del medio corte el bucle entre batches.
-    let (engine, mem, _fake) = setup_with(
+    // 40 ficheros → 3 batches; 50ms de latencia por batch. Se cancela cuando
+    // el primer batch está provablemente EN VUELO (observado en `calls`):
+    // quedan batches por delante, así que el corte es determinista.
+    let (engine, mem, fake) = setup_with(
         FakeEmbed::new(8).with_delay(Duration::from_millis(50)),
         ai_cfg(),
     )
@@ -200,13 +214,9 @@ async fn embed_clean_cancellation() {
         .index_embed_as(vp("mem:///"), Actor::User)
         .await
         .expect("index_embed_as");
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    wait_first_call(&fake).await;
     h.cancel();
-    let st = h.join().await;
-    assert!(
-        matches!(st, TaskState::Cancelled | TaskState::Completed),
-        "cancelado o completado antes del corte, fue {st:?}"
-    );
+    assert_eq!(h.join().await, TaskState::Cancelled);
 
     // El índice queda coherente: un embed posterior completa sin problemas.
     let h2 = engine
@@ -214,6 +224,31 @@ async fn embed_clean_cancellation() {
         .await
         .expect("embed tras cancelar");
     assert_eq!(h2.join().await, TaskState::Completed);
+}
+
+#[tokio::test]
+async fn embed_cancel_during_rate_limit_retry_is_prompt() {
+    // Rate-limit persistente con retry_after alto: la task queda en el sleep
+    // de reintento (clamp 30s). El cancel debe cortarlo YA (select), no al
+    // vencer el sleep (que acabaría en Failed tras ~60s).
+    let mut fake = FakeEmbed::new(8).with_rate_limited(99);
+    fake.retry_after = Some(60);
+    let (engine, mem, fake) = setup_with(fake, ai_cfg()).await;
+    write_file(&mem, "mem:///a.txt", b"contenido alfa").await;
+    build(&engine, "mem:///").await;
+
+    let h = engine
+        .index_embed_as(vp("mem:///"), Actor::User)
+        .await
+        .expect("index_embed_as");
+    wait_first_call(&fake).await;
+    h.cancel();
+    let start = std::time::Instant::now();
+    assert_eq!(h.join().await, TaskState::Cancelled);
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "la cancelación no espera al sleep de reintento"
+    );
 }
 
 #[tokio::test]

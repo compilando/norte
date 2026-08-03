@@ -1176,8 +1176,9 @@ impl Engine {
 /// Forma de un `VPath` para SPANS de tracing: `display_lossy`, salvo que el
 /// userinfo de la authority contenga `:` — un password inline en la URL
 /// (`sftp://u:pass@h`) se rechaza al parsear la conexión, pero el span se
-/// abre ANTES: jamás debe llegar a un log (regla 10).
-fn span_path(p: &VPath) -> String {
+/// abre ANTES: jamás debe llegar a un log (regla 10). `pub(crate)`: también
+/// redacta los logs de `index_embed`.
+pub(crate) fn span_path(p: &VPath) -> String {
     match p.authority() {
         Some(a) if a.rsplit_once('@').is_some_and(|(ui, _)| ui.contains(':')) => {
             format!("<{} ***>", p.scheme())

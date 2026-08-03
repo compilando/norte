@@ -84,12 +84,15 @@ async fn read_prefix(provider: &dyn Provider, path: &VPath) -> Result<Vec<u8>, E
 }
 
 /// Envía `batch` al proveedor (con reintento acotado ante rate-limit) y
-/// persiste los vectores. Deja `batch` vacío al completar.
+/// persiste los vectores. Deja `batch` vacío al completar. La espera de
+/// reintento es cancel-aware (regla 3: el retry loop es un inner loop — un
+/// cancel no debe esperar hasta 30s a que venza el sleep).
 async fn flush_batch(
     embedder: &dyn norte_ai::AiProvider,
     index: &norte_index::Index,
     model: &str,
     batch: &mut Vec<(i64, String, [u8; 32])>,
+    ctx: &TaskCtx,
 ) -> Result<(), Error> {
     if batch.is_empty() {
         return Ok(());
@@ -105,7 +108,10 @@ async fn flush_batch(
                 // Espera acotada: lo que pida el server (clamp 30s) o 1s.
                 let secs = retry_after.unwrap_or(1).min(30);
                 tracing::debug!(attempt, secs, "proveedor rate-limited; reintentando");
-                tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                tokio::select! {
+                    () = ctx.cancel.cancelled() => return Err(Error::Cancelled),
+                    () = tokio::time::sleep(std::time::Duration::from_secs(secs)) => {}
+                }
                 attempt += 1;
             }
             Err(e) => return Err(crate::engine::ai_to_proto_error(&e)),
@@ -114,12 +120,14 @@ async fn flush_batch(
     if vectors.len() != batch.len() {
         // Proveedor mentiroso: dijo N entradas y devolvió otra cosa. Zipear a
         // ciegas asociaría vectores a ficheros equivocados — mejor fallar.
+        // Mala conducta del PROVEEDOR (no un bug nuestro): taxonomía
+        // ProviderUnavailable, no retryable (repetir no lo arregla).
         tracing::warn!(
             expected = batch.len(),
             got = vectors.len(),
             "index.embed: el proveedor devolvió un número de vectores inesperado"
         );
-        return Err(Error::Internal { panic: false });
+        return Err(Error::ProviderUnavailable { retryable: false });
     }
     for ((file_id, _, hash), vec) in batch.iter().zip(vectors.iter()) {
         index
@@ -181,9 +189,18 @@ pub(crate) async fn embed_for_index(
             p.current = Some(cand.path.clone());
         });
         // Fichero ilegible: pudo morir entre el build y el embed — se salta
-        // (cuenta como examinado), no tumba la task.
-        let Ok(bytes) = read_prefix(provider.as_ref(), &cand.path).await else {
-            continue;
+        // (cuenta como examinado), no tumba la task. Al log (path redactado
+        // como los spans), jamás en silencio.
+        let bytes = match read_prefix(provider.as_ref(), &cand.path).await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    path = %crate::engine::span_path(&cand.path),
+                    "index.embed: prefijo ilegible; se salta"
+                );
+                continue;
+            }
         };
         let hash: [u8; 32] = Sha256::digest(&bytes).into();
         if known
@@ -195,10 +212,15 @@ pub(crate) async fn embed_for_index(
         let text = String::from_utf8_lossy(&bytes).into_owned();
         batch.push((cand.file_id, text, hash));
         if batch.len() >= EMBED_BATCH {
-            flush_batch(embedder.as_ref(), &index, &model, &mut batch).await?;
+            flush_batch(embedder.as_ref(), &index, &model, &mut batch, ctx).await?;
         }
     }
-    flush_batch(embedder.as_ref(), &index, &model, &mut batch).await?;
+    // Chequeo también antes del flush final: un cancel llegado en la última
+    // vuelta no debe disparar un batch más hacia el proveedor.
+    if ctx.cancel.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
+    flush_batch(embedder.as_ref(), &index, &model, &mut batch, ctx).await?;
     Ok(())
 }
 
