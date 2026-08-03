@@ -326,18 +326,20 @@ enum Cd {
 /// de la palette del run loop excluye este caso de su condición (deja de
 /// consumir la tecla) y la rama del modal cierra la palette, ahora obsoleta,
 /// nada más entrar — la MISMA tecla cae al modal en la misma iteración.
+///
+/// GENERALIZADO a TODOS los overlays: el guard valía solo para la palette y
+/// los ajustes, pero el modal se pinta el ÚLTIMO —por encima de CUALQUIER
+/// overlay ([`norte_tui::ui::draw`])— mientras la cadena de teclado del run
+/// loop resolvía ANTES contra el selector de tema, el picker de columnas, el
+/// gestor de extensiones, el popup de navegación, el diálogo de búsqueda y la
+/// ayuda. Los píxeles decían «responde al modal» y la tecla se iba a otra
+/// parte: en el diálogo de búsqueda y en el campo de nombre del popup se
+/// colaba como TEXTO tecleado, y en el gestor de extensiones como un
+/// `dialog.toggle-enabled`/`dialog.remove` sobre el plugin resaltado — la
+/// misma edición silenciosa de MINOR-4, con peor desenlace.
 #[must_use]
-fn modal_preempts_palette(app: &App) -> bool {
-    app.palette.is_some() && app.modal.is_some()
-}
-
-/// S3: el mismo guard que [`modal_preempts_palette`], para el overlay de
-/// ajustes — un modal asíncrono (p.ej. una aprobación de policy) SIEMPRE
-/// gana sobre `app.settings` abierto, igual razón: una tecla de respuesta al
-/// modal no debe colarse como edición silenciosa de un ajuste.
-#[must_use]
-fn modal_preempts_settings(app: &App) -> bool {
-    app.settings.is_some() && app.modal.is_some()
+fn modal_wins(app: &App) -> bool {
+    app.modal.is_some()
 }
 
 #[cfg(test)]
@@ -367,19 +369,50 @@ mod palette_modal_guard_tests {
     #[test]
     fn modal_preempts_palette_solo_cuando_ambos_estan_abiertos() {
         let mut a = app();
-        assert!(
-            !modal_preempts_palette(&a),
-            "sin overlays abiertos, nada que preceder"
-        );
+        assert!(!modal_wins(&a), "sin modal, nadie precede a nadie");
         a.palette = Some(Palette::new(Vec::new()));
         assert!(
-            !modal_preempts_palette(&a),
+            !modal_wins(&a),
             "solo la palette abierta: la palette maneja sus teclas normalmente"
         );
         a.modal = Some(approval_modal());
         assert!(
-            modal_preempts_palette(&a),
+            modal_wins(&a),
             "un modal en vuelo con la palette abierta DEBE ganarle"
+        );
+    }
+
+    /// El guard vale para CUALQUIER overlay, no solo palette/ajustes: el
+    /// modal se pinta el último (por encima de todos), así que la tecla que
+    /// el usuario dirige a lo que VE tiene que llegarle. Antes el selector
+    /// de tema, el picker de columnas, el gestor de extensiones, el popup de
+    /// navegación, el diálogo de búsqueda y la ayuda resolvían PRIMERO y se
+    /// comían la respuesta al modal (en los dos con campo de texto, como
+    /// texto tecleado; en extensiones, como toggle/borrado del plugin
+    /// resaltado).
+    #[test]
+    fn el_modal_gana_a_todos_los_overlays() {
+        let mut a = app();
+        a.theme_picker = Some(norte_tui::app::ThemePicker {
+            names: Vec::new(),
+            cursor: 0,
+            original: a.theme.clone(),
+        });
+        a.extensions = Some(norte_tui::app::ExtensionManager {
+            plugins: Vec::new(),
+            errors: Vec::new(),
+            cursor: 0,
+            config: None,
+        });
+        a.help = Some(norte_tui::app::Help {
+            lines: Vec::new(),
+            scroll: 0,
+        });
+        assert!(!modal_wins(&a), "sin modal, cada overlay manda en su tecla");
+        a.modal = Some(approval_modal());
+        assert!(
+            modal_wins(&a),
+            "con overlays abiertos, el modal sigue ganando la tecla"
         );
     }
 
@@ -412,15 +445,15 @@ mod palette_modal_guard_tests {
     #[test]
     fn modal_preempts_settings_solo_cuando_ambos_estan_abiertos() {
         let mut a = app();
-        assert!(!modal_preempts_settings(&a));
+        assert!(!modal_wins(&a));
         a.settings = Some(Settings::new(Vec::new()));
         assert!(
-            !modal_preempts_settings(&a),
+            !modal_wins(&a),
             "solo el overlay de ajustes abierto: maneja sus teclas normalmente"
         );
         a.modal = Some(approval_modal());
         assert!(
-            modal_preempts_settings(&a),
+            modal_wins(&a),
             "un modal en vuelo con ajustes abierto DEBE ganarle"
         );
     }
@@ -1291,9 +1324,9 @@ async fn run(
                     && key.kind == crossterm::event::KeyEventKind::Press
                 {
                     app.message = None;
-                    if app.theme_picker.is_some() {
+                    if app.theme_picker.is_some() && !modal_wins(app) {
                         on_theme_picker_key(app, dialog_resolver, key.modifiers, key.code).await;
-                    } else if app.columns_picker.is_some() {
+                    } else if app.columns_picker.is_some() && !modal_wins(app) {
                         // Picker de columnas (#108 7a): mismo puesto en la
                         // cadena que el selector de tema (overlay antes que
                         // el brazo del modal, precedencia existente).
@@ -1311,10 +1344,10 @@ async fn run(
                                 &mut search_run,
                             );
                         }
-                    } else if app.extensions.is_some() {
+                    } else if app.extensions.is_some() && !modal_wins(app) {
                         on_extensions_key(app, backend, dialog_resolver, key.modifiers, key.code)
                             .await;
-                    } else if app.nav_popup.is_some() {
+                    } else if app.nav_popup.is_some() && !modal_wins(app) {
                         // Popup historial/hotlist (spec 2026-07-18): Enter
                         // sobre un item NAVEGA por el flujo de cd normal —
                         // su desenlace toca el relleno como cualquier cd.
@@ -1337,7 +1370,7 @@ async fn run(
                                 spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                         }
                         apply_cd(&mut fill, &mut last_probed, outcome);
-                    } else if app.search_dialog.is_some() {
+                    } else if app.search_dialog.is_some() && !modal_wins(app) {
                         // Diálogo Alt+F7 (liveSearch T6): captura imprimibles
                         // como los demás overlays; Enter con criterio lanza la
                         // búsqueda (abre el pane virtual) — el resto de teclas
@@ -1348,7 +1381,7 @@ async fn run(
                             launch_search(app, backend, &mut fill, &mut search_run, params)
                                 .await;
                         }
-                    } else if app.palette.is_some() && !modal_preempts_palette(app) {
+                    } else if app.palette.is_some() && !modal_wins(app) {
                         // Command palette (H1 T4): editor de filtro libre,
                         // como el diálogo de búsqueda de arriba — sus
                         // teclas son FIJAS, no resuelven por el contexto
@@ -1474,12 +1507,14 @@ async fn run(
                             }
                             _ => {}
                         }
-                    } else if app.settings.is_some() && !modal_preempts_settings(app) {
+                    } else if app.settings.is_some() && !modal_wins(app) {
                         // Overlay de ajustes (S3): mismo criterio que la
                         // palette de arriba (decisión 8 del plan H1) — sus
                         // teclas son fijas, hardcodeadas en `on_settings_key`.
                         on_settings_key(app, key.modifiers, key.code).await;
-                    } else if let Some(help) = &mut app.help {
+                    } else if !modal_wins(app)
+                        && let Some(help) = &mut app.help
+                    {
                         // Teclas de la ayuda: fijas, como los diálogos (#24).
                         // ctrl+c conserva su significado global (salir).
                         match (key.modifiers, key.code) {
@@ -1501,6 +1536,12 @@ async fn run(
                         // desaparecer dentro del filtro de la palette. El
                         // overlay de ajustes (S3) es el MISMO caso: un modal
                         // asíncrono (p.ej. una aprobación de policy) gana.
+                        // El resto de overlays (selector de tema, picker de
+                        // columnas, extensiones, popup de navegación,
+                        // diálogo de búsqueda, ayuda) también ceden la tecla
+                        // (`modal_wins`) pero NO se cierran: sus filas no
+                        // caducan como las de la palette/ajustes, y el
+                        // usuario los recupera intactos al responder.
                         app.palette = None;
                         app.settings = None;
                         // El TOFU de Lua se resuelve AQUÍ (necesita el host,
