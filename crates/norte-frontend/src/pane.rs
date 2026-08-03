@@ -1084,7 +1084,17 @@ impl PaneState {
             return;
         }
         let quick_prev = self.quick_selected_path();
-        let anchor = self.entries.get(self.cursor).map(|e| e.path.clone());
+        // El cursor EN EL TOPE se ancla a la POSICIÓN, no al path: la
+        // primera página de un dir paginado llega en orden de `readdir`
+        // (hash del FS), así que su primer elemento una vez ordenado es
+        // arbitrario. Anclarlo por path clavaba el cursor en mitad del
+        // listado final —un dir de 5000 entradas abría enseñando la COLA—
+        // aunque el usuario no hubiera tocado nada. En cuanto mueve el
+        // cursor, el anclaje por path vuelve a mandar (rellenar no debe
+        // mover su selección bajo los pies).
+        let anchor = (self.cursor > 0)
+            .then(|| self.entries.get(self.cursor).map(|e| e.path.clone()))
+            .flatten();
         let (batch, batch_keys) = crate::sort::sort_with_keys_spec(batch, self.sort);
         crate::sort::merge_keyed_spec(
             &mut self.entries,
@@ -1960,6 +1970,32 @@ mod tests {
             p.selected().unwrap().path,
             VPath::parse("mem:///z").unwrap(),
             "la selección sigue el path pese al re-orden"
+        );
+    }
+
+    /// El cursor EN EL TOPE se queda en el tope mientras el listado se
+    /// rellena: la primera página de un dir paginado llega en orden de
+    /// `readdir` (hash del FS), así que su primer elemento ORDENADO es
+    /// arbitrario — anclar por path ahí dejaba el cursor clavado en mitad
+    /// del listado final (en un dir de 5000 ficheros, el pane abría
+    /// mostrando la COLA en vez del principio). Anclar por path sigue
+    /// valiendo en cuanto el usuario mueve el cursor.
+    #[test]
+    fn extend_con_el_cursor_en_el_tope_lo_deja_en_el_tope() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![e("mem:///m", EntryKind::File)],
+        );
+        assert_eq!(p.cursor(), 0);
+        p.extend(vec![
+            e("mem:///a", EntryKind::File),
+            e("mem:///b", EntryKind::File),
+        ]);
+        assert_eq!(p.cursor(), 0, "el cursor sigue en la primera fila");
+        assert_eq!(
+            p.selected().unwrap().path,
+            VPath::parse("mem:///a").unwrap(),
+            "y esa fila es el principio REAL del listado ya mergeado"
         );
     }
 
