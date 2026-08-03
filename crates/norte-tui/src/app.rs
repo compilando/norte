@@ -2437,10 +2437,10 @@ pub enum Modal {
 }
 
 /// Parejas del plan IA visibles a la vez en [`Modal::AiRenamePlan`] (ventana
-/// de scroll, audit MAJOR-3); el indicador de desbordamiento resume la
-/// posición. Única fuente para el render (`ui`), el alto del modal y el
-/// clamp de [`App::ai_plan_scroll`].
-pub const AI_RENAME_PAIR_LIMIT: usize = 5;
+/// de scroll, audit MAJOR-3) — la constante vive en `norte-frontend`
+/// (compartida con la GUI, quality review 78eb243 MAJOR-1); re-export para
+/// el render (`ui`), el alto del modal y el clamp de [`App::ai_plan_scroll`].
+pub use norte_frontend::AI_RENAME_PAIR_LIMIT;
 
 /// Tope de caracteres del patrón de [`Modal::MarkPattern`] (#103 T9 review
 /// MINOR): en `chars()`, no bytes — igual criterio que [`DETAIL_MAX_CHARS`],

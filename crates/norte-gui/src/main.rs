@@ -67,6 +67,7 @@ mod columns_view;
 mod effects;
 mod extensions_view;
 mod keymap;
+mod keys;
 mod modal;
 mod palette_view;
 mod session;
@@ -1078,9 +1079,19 @@ impl NorteGui {
             SessionEvent::PluginRunFailed(msg) => {
                 self.errors[self.focus] = Some(msg);
             }
+            // deuda: el banner llega al pane ENFOCADO, no al solicitante
+            // (igual que PluginRunResult) — un `pane.switch` durante el
+            // "pensando…" deja el aviso en el pane equivocado.
             SessionEvent::AiRenamePlan { dir, result } => match result {
                 Ok(entries) if entries.is_empty() => {
                     self.errors[self.focus] = Some(norte_i18n::t("msg-ai-rename-empty"));
+                }
+                // Cinturón de INGESTIÓN (quality review 78eb243 MINOR-5): un
+                // plan legítimo del engine queda muy por debajo del tope;
+                // superarlo delata un daemon hostil/N+1 inflando la
+                // respuesta — rechazo en bloque, ni se abre el modal.
+                Ok(entries) if entries.len() > norte_frontend::MAX_AI_PLAN_ENTRIES => {
+                    self.errors[self.focus] = Some(norte_i18n::t("msg-ai-rename-invalid-plan"));
                 }
                 Ok(entries) => {
                     // Retira el "pensando…" del banner: el plan ES la
@@ -1094,8 +1105,14 @@ impl NorteGui {
                         });
                     } else {
                         // Otro modal abierto (colisión…): el plan espera su
-                        // turno, jamás lo pisa (molde TUI `pending_ai_plan`).
-                        self.pending_ai_plan = Some((dir, entries));
+                        // turno, jamás pisa al modal activo (molde TUI
+                        // `pending_ai_plan`). Si YA había un plan retenido,
+                        // gana el más NUEVO y la pérdida se DICE (quality
+                        // review 78eb243 MINOR-3: jamás un descarte mudo).
+                        if self.pending_ai_plan.replace((dir, entries)).is_some() {
+                            self.errors[self.focus] =
+                                Some(norte_i18n::t("gui-msg-ai-rename-superseded"));
+                        }
                     }
                 }
                 Err(msg) => {
@@ -2048,13 +2065,8 @@ impl NorteGui {
             _ => {
                 // Imprimible: fidelidad al carácter REALMENTE tecleado
                 // (`key_char`, respeta shift/layout); `"space"` llega con
-                // nombre, no como carácter suelto.
-                let ch = if ks.key == "space" {
-                    Some(' ')
-                } else {
-                    single_char(ks.key_char.as_deref()).or_else(|| single_char(Some(&ks.key)))
-                };
-                match ch {
+                // nombre, no como carácter suelto (`keys::typed_char`).
+                match keys::typed_char(&ks.key, ks.key_char.as_deref()) {
                     Some(c) if !c.is_control() => {
                         self.panes[f].quick_char(c);
                         self.query[f].push(c);
@@ -2074,7 +2086,8 @@ impl NorteGui {
     /// con más de un carácter, así que el filtro por longitud ya las excluye.
     fn maybe_open_quick(&mut self, ks: &gpui::Keystroke) {
         let f = self.focus;
-        let ch = single_char(ks.key_char.as_deref()).or_else(|| single_char(Some(&ks.key)));
+        let ch =
+            keys::single_char(ks.key_char.as_deref()).or_else(|| keys::single_char(Some(&ks.key)));
         if let Some(c) = ch
             && c.is_alphanumeric()
         {
@@ -3948,16 +3961,6 @@ fn modal_title_colors(chrome: &ChromeColors) -> (gpui::Rgba, gpui::Rgba) {
 #[must_use]
 fn modal_footer_colors(chrome: &ChromeColors) -> (gpui::Rgba, Option<gpui::Rgba>) {
     (chrome.sel_bg, chrome.sel_fg)
-}
-
-/// El primer carácter de `s` si `s` es exactamente uno.
-fn single_char(s: Option<&str>) -> Option<char> {
-    let s = s?;
-    let mut it = s.chars();
-    match (it.next(), it.next()) {
-        (Some(c), None) => Some(c),
-        _ => None,
-    }
 }
 
 /// El `ConflictKind` de un estado terminal fallido por conflicto, o `None` si

@@ -1064,6 +1064,16 @@ async fn run(
                         Ok(Ok(plan)) if plan.entries.is_empty() => {
                             app.message = Some(t("msg-ai-rename-empty"));
                         }
+                        // Cinturón de INGESTIÓN (quality review 78eb243
+                        // MINOR-5): un plan legítimo del engine queda muy
+                        // por debajo del tope; superarlo delata un daemon
+                        // hostil/N+1 inflando la respuesta — rechazo en
+                        // bloque, ni se abre el modal.
+                        Ok(Ok(plan))
+                            if plan.entries.len() > norte_frontend::MAX_AI_PLAN_ENTRIES =>
+                        {
+                            app.message = Some(t("msg-ai-rename-invalid-plan"));
+                        }
                         Ok(Ok(plan)) => {
                             app.message = None;
                             let ready = (run.dir, plan.entries);
@@ -3649,30 +3659,11 @@ async fn submit_transfer(
     }
 }
 
-/// Valida TODAS las parejas del plan como [`norte_proto::Segment`] (cinturón
-/// fail-loud, audit MAJOR-2): un plan bien formado del engine JAMÁS trae un
-/// segmento inválido (el daemon los validó al armarlo), así que UN rechazo
-/// aquí delata un daemon hostil/roto — `None` aborta el lote ENTERO, jamás
-/// un skip silencioso que aplique "lo demás" de un plan adulterado.
-///
-/// PURA a propósito: testeable sin backend (audit MINOR-6e).
-fn validate_ai_plan(
-    entries: &[norte_proto::methods::AiRenameEntry],
-) -> Option<Vec<(norte_proto::Segment, norte_proto::Segment)>> {
-    entries
-        .iter()
-        .map(|e| {
-            Some((
-                norte_proto::Segment::new(e.from.as_bytes().to_vec()).ok()?,
-                norte_proto::Segment::new(e.to.as_bytes().to_vec()).ok()?,
-            ))
-        })
-        .collect()
-}
-
 /// Aplica un plan de rename IA CONFIRMADO (M4-IA): un `fs.move` gobernado
 /// (journal + policy + colisiones del engine) por pareja, en el ORDEN del
-/// plan (molde CLI). PRE-valida el plan entero ([`validate_ai_plan`], audit
+/// plan (molde CLI). PRE-valida el plan entero
+/// ([`norte_frontend::validate_ai_plan`], cinturón COMPARTIDO con la GUI —
+/// quality review 78eb243 MAJOR-1 — audit
 /// MAJOR-2): una pareja inválida = plan adulterado → NADA se encola y la
 /// barra lo dice. El primer fallo de SUBMIT para el lote — lo ya encolado
 /// sigue en el board — y deja el detalle en la barra; si todo encoló, la
@@ -3683,7 +3674,7 @@ async fn apply_ai_rename(
     dir: &VPath,
     entries: &[norte_proto::methods::AiRenameEntry],
 ) {
-    let Some(pairs) = validate_ai_plan(entries) else {
+    let Some(pairs) = norte_frontend::validate_ai_plan(entries) else {
         app.message = Some(t("msg-ai-rename-invalid-plan"));
         return;
     };
@@ -3711,48 +3702,6 @@ async fn apply_ai_rename(
     }
     if n > 0 {
         app.message = Some(ta("msg-ai-rename-applied", &[("n", &n.to_string())]));
-    }
-}
-
-#[cfg(test)]
-mod ai_plan_tests {
-    use super::validate_ai_plan;
-    use norte_proto::methods::AiRenameEntry;
-
-    fn e(from: &str, to: &str) -> AiRenameEntry {
-        AiRenameEntry {
-            from: from.into(),
-            to: to.into(),
-        }
-    }
-
-    /// Audit MAJOR-2 (fail-loud): UNA pareja inválida — traversal `..`,
-    /// separador embebido o nombre vacío — tumba el plan ENTERO (`None`),
-    /// jamás un skip silencioso que aplique "lo demás" de un plan
-    /// adulterado por un daemon hostil/roto.
-    #[test]
-    fn una_pareja_invalida_tumba_el_plan_entero() {
-        assert!(validate_ai_plan(&[e("a", "b"), e("c", "..")]).is_none());
-        assert!(validate_ai_plan(&[e("a/b", "c"), e("d", "e")]).is_none());
-        assert!(validate_ai_plan(&[e("", "x")]).is_none());
-        assert!(validate_ai_plan(&[e("ok", "tambien-ok"), e("x", "a/b")]).is_none());
-    }
-
-    /// Un plan bien formado conserva orden y longitud, bytes exactos.
-    #[test]
-    fn un_plan_valido_conserva_orden_y_longitud() {
-        let pairs = validate_ai_plan(&[e("a", "b"), e("c", "d")]).expect("plan válido");
-        assert_eq!(pairs.len(), 2);
-        assert_eq!(pairs[0].0.as_bytes(), b"a");
-        assert_eq!(pairs[0].1.as_bytes(), b"b");
-        assert_eq!(pairs[1].0.as_bytes(), b"c");
-        assert_eq!(pairs[1].1.as_bytes(), b"d");
-    }
-
-    /// El plan vacío es válido (y `apply_ai_rename` no encola nada).
-    #[test]
-    fn un_plan_vacio_es_valido() {
-        assert_eq!(validate_ai_plan(&[]).expect("vacío válido").len(), 0);
     }
 }
 

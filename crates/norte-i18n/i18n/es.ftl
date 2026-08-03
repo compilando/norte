@@ -211,6 +211,9 @@ msg-ai-rename-running = Renombrado IA: pensando… (Esc cancela)
 # Variante GUI: la GUI no tiene camino para abortar la petición en vuelo, así
 # que no debe prometer "Esc cancela" (jamás una affordance falsa).
 gui-msg-ai-rename-running = Renombrado IA: pensando…
+# Un plan retenido (esperando tras un modal abierto) fue reemplazado por una
+# petición más nueva antes de poder revisarse — la pérdida se dice, jamás muda.
+gui-msg-ai-rename-superseded = Renombrado IA: plan anterior descartado (nueva petición)
 msg-ai-rename-empty = Renombrado IA: el modelo no propuso cambios
 msg-ai-rename-failed = el renombrado IA falló: { $error }
 msg-ai-rename-applied = Renombrado IA: { $n } movimientos enviados

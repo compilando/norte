@@ -13,6 +13,8 @@ use norte_frontend::plugin_config::{PendingConfigWrite, PluginConfigState};
 use norte_frontend::settings::SettingsEditError;
 use norte_proto::methods::{PluginInfo, PluginLoadError};
 
+use crate::keys::typed_char;
+
 /// Drill-down panel over ONE plugin's `[config]` — mirrors the TUI's
 /// `norte_tui::app::PluginConfigPanel`.
 #[derive(Debug)]
@@ -235,24 +237,6 @@ fn on_config_key(panel: &mut ConfigPanel, key: &str, key_char: Option<&str>) -> 
             None => ExtensionsOutcome::None,
         },
         _ => ExtensionsOutcome::None,
-    }
-}
-
-/// The single char `key` types — local copy of `settings_view::typed_char`
-/// (same rationale as that file's own doc).
-fn typed_char(key: &str, key_char: Option<&str>) -> Option<char> {
-    if key == "space" {
-        return Some(' ');
-    }
-    single_char(key_char).or_else(|| single_char(Some(key)))
-}
-
-fn single_char(s: Option<&str>) -> Option<char> {
-    let s = s?;
-    let mut it = s.chars();
-    match (it.next(), it.next()) {
-        (Some(c), None) => Some(c),
-        _ => None,
     }
 }
 

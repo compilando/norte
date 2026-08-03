@@ -211,6 +211,9 @@ msg-ai-rename-running = AI rename: thinking… (Esc cancels)
 # GUI variant: the GUI has no path to abort the in-flight request, so it must
 # not promise "Esc cancels" (never a false affordance).
 gui-msg-ai-rename-running = AI rename: thinking…
+# A retained plan (waiting behind an open modal) was replaced by a newer
+# request before the human could review it — the loss is said, never silent.
+gui-msg-ai-rename-superseded = AI rename: previous plan discarded (new request)
 msg-ai-rename-empty = AI rename: the model proposed no changes
 msg-ai-rename-failed = AI rename failed: { $error }
 msg-ai-rename-applied = AI rename: { $n } move(s) submitted

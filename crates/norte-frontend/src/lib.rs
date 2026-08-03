@@ -34,6 +34,9 @@ pub mod viewer;
 pub use decoration::{BADGE_MAX_CHARS, Decoration, merge_decorations, sanitize_decoration};
 pub use display::{display_name, display_name_with, path_display, path_display_with};
 pub use format::human_bytes;
-pub use modal::{MODAL_ITEM_LIMIT, item_lines, item_lines_with};
+pub use modal::{
+    AI_RENAME_PAIR_LIMIT, MAX_AI_PLAN_ENTRIES, MODAL_ITEM_LIMIT, item_lines, item_lines_with,
+    validate_ai_plan,
+};
 pub use pane::{PaneState, PatternError};
 pub use sort::{SortColumn, SortDir, SortSpec, sort_entries, sort_entries_with};

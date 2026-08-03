@@ -9,12 +9,14 @@
 use norte_core::TransferOptions;
 use norte_proto::{CollisionPolicy, ConflictKind, DeleteMode, VPath};
 
-/// Parejas del plan IA visibles a la vez en [`Modal::AiRenamePlan`] (ventana
-/// de scroll — paridad con `norte_tui::app::AI_RENAME_PAIR_LIMIT`, audit
-/// MAJOR-3: el plan ENTERO es revisable por scroll, jamás se aplica una cola
-/// invisible). Única fuente para el render (`modal_lines` en `main.rs`) y el
-/// clamp del scroll de [`on_key`].
-pub const AI_RENAME_PAIR_LIMIT: usize = 5;
+use crate::keys::typed_char;
+
+/// Ventana de parejas del plan IA — la constante y el cinturón
+/// [`norte_frontend::validate_ai_plan`] viven en `norte-frontend`
+/// (compartidos con la TUI, quality review 78eb243 MAJOR-1); re-export para
+/// el render (`modal_lines` en `main.rs`) y el clamp del scroll de
+/// [`on_key`].
+pub use norte_frontend::AI_RENAME_PAIR_LIMIT;
 
 /// Tope de caracteres de la instrucción de [`Modal::AiRenamePrompt`] (molde
 /// TUI `MARK_PATTERN_MAX_CHARS`): un paste accidental no desborda el modal;
@@ -102,7 +104,8 @@ pub enum Modal {
         query: Vec<u8>,
     },
     /// Plan de rename IA revisable (M4-IA): superficie de DECISIÓN —
-    /// `y`/`enter` aplica (tras el cinturón [`validate_ai_plan`]), `n`/Esc
+    /// `y`/`enter` aplica (tras el cinturón
+    /// [`norte_frontend::validate_ai_plan`]), `n`/Esc
     /// descarta, `up`/`down` desplazan la ventana de
     /// [`AI_RENAME_PAIR_LIMIT`] parejas.
     AiRenamePlan {
@@ -153,7 +156,8 @@ pub enum ModalOutcome {
         /// Instrucción ya recortada (trim), no vacía.
         instruction: String,
     },
-    /// El plan falló el cinturón [`validate_ai_plan`] (paridad TUI audit
+    /// El plan falló el cinturón [`norte_frontend::validate_ai_plan`]
+    /// (paridad TUI audit
     /// MAJOR-2): un daemon hostil/roto mandó un segmento inválido — el caller
     /// cierra el modal SIN someter NADA y avisa (`msg-ai-rename-invalid-plan`).
     InvalidPlan,
@@ -164,46 +168,6 @@ pub enum ModalOutcome {
 #[must_use]
 pub fn dest_for(to_dir: &VPath, item: &VPath) -> Option<VPath> {
     item.file_name().map(|n| to_dir.join(n.clone()))
-}
-
-/// Valida TODAS las parejas del plan como [`norte_proto::Segment`] (cinturón
-/// fail-loud, paridad con `norte_tui::main::validate_ai_plan`, audit
-/// MAJOR-2): un plan bien formado del engine JAMÁS trae un segmento inválido
-/// (el daemon los validó al armarlo), así que UN rechazo aquí delata un
-/// daemon hostil/roto — `None` aborta el lote ENTERO, jamás un skip
-/// silencioso que aplique "lo demás" de un plan adulterado.
-#[must_use]
-pub fn validate_ai_plan(
-    entries: &[norte_proto::methods::AiRenameEntry],
-) -> Option<Vec<(norte_proto::Segment, norte_proto::Segment)>> {
-    entries
-        .iter()
-        .map(|e| {
-            Some((
-                norte_proto::Segment::new(e.from.as_bytes().to_vec()).ok()?,
-                norte_proto::Segment::new(e.to.as_bytes().to_vec()).ok()?,
-            ))
-        })
-        .collect()
-}
-
-/// El carácter único que teclea `key` — copia local de
-/// `palette_view::typed_char` (misma justificación que la de ese fichero: un
-/// helper puro de 4 líneas no amerita superficie `pub(crate)` compartida).
-fn typed_char(key: &str, key_char: Option<&str>) -> Option<char> {
-    if key == "space" {
-        return Some(' ');
-    }
-    single_char(key_char).or_else(|| single_char(Some(key)))
-}
-
-fn single_char(s: Option<&str>) -> Option<char> {
-    let s = s?;
-    let mut it = s.chars();
-    match (it.next(), it.next()) {
-        (Some(c), None) => Some(c),
-        _ => None,
-    }
 }
 
 /// Enruta una tecla (nombre GPUI) al modal, mutándolo si hace falta. `main.rs`
@@ -333,7 +297,7 @@ pub fn on_key(modal: &mut Modal, key: &str, key_char: Option<&str>) -> ModalOutc
             "y" | "enter" => {
                 // Cinturón fail-loud (paridad TUI audit MAJOR-2): TODAS las
                 // parejas se validan ANTES de someter la primera.
-                let Some(pairs) = validate_ai_plan(entries) else {
+                let Some(pairs) = norte_frontend::validate_ai_plan(entries) else {
                     return ModalOutcome::InvalidPlan;
                 };
                 let ops = pairs

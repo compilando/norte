@@ -24,6 +24,7 @@ use norte_frontend::palette::{Row, first_chord};
 use norte_i18n::t;
 
 use crate::keymap::COMMANDS;
+use crate::keys::typed_char;
 
 /// Fluent id for a command's help text: `help-cmd-<dashed>` — same
 /// derivation the TUI's `help`/`palette` modules use (shared `help-cmd-*`
@@ -232,25 +233,6 @@ pub fn on_key(view: &mut PaletteView, key: &str, key_char: Option<&str>) -> Pale
             }
             PaletteOutcome::None
         }
-    }
-}
-
-/// The single char `key` types — local copy of `settings_view::typed_char`
-/// (same rationale as that file's own doc: a 4-line pure helper isn't
-/// worth a shared `pub(crate)` surface for two callers).
-fn typed_char(key: &str, key_char: Option<&str>) -> Option<char> {
-    if key == "space" {
-        return Some(' ');
-    }
-    single_char(key_char).or_else(|| single_char(Some(key)))
-}
-
-fn single_char(s: Option<&str>) -> Option<char> {
-    let s = s?;
-    let mut it = s.chars();
-    match (it.next(), it.next()) {
-        (Some(c), None) => Some(c),
-        _ => None,
     }
 }
 

@@ -16,6 +16,8 @@
 
 use norte_frontend::settings::{PendingWrite, SettingsEditError, SettingsState, wire_key};
 
+use crate::keys::typed_char;
+
 /// The status line under the row list: the result of the last write
 /// (saved/failed), or `None` before any edit this session. Scoped to this
 /// screen — the GUI has no shared banner surface an ephemeral settings
@@ -83,29 +85,6 @@ pub enum SettingsOutcome {
 #[must_use]
 pub fn gui_applies_live(id: &str) -> bool {
     !matches!(wire_key(id), ("ui", key) if key == "lang")
-}
-
-/// The single char `key` types, respecting layout/shift (`key_char`) with a
-/// fallback to the named key itself — same fidelity contract as the pane
-/// quick-search (`NorteGui::quick_key`) and the viewer's chord adapter.
-/// `"space"` arrives named, not as a literal char.
-fn typed_char(key: &str, key_char: Option<&str>) -> Option<char> {
-    if key == "space" {
-        return Some(' ');
-    }
-    single_char(key_char).or_else(|| single_char(Some(key)))
-}
-
-/// The first char of `s` if `s` is EXACTLY one — local copy of
-/// `crate::single_char` (kept private/duplicated on purpose: a 4-line pure
-/// helper isn't worth a `pub(crate)` surface on `main.rs` for one caller).
-fn single_char(s: Option<&str>) -> Option<char> {
-    let s = s?;
-    let mut it = s.chars();
-    match (it.next(), it.next()) {
-        (Some(c), None) => Some(c),
-        _ => None,
-    }
 }
 
 /// Keyboard routing (GPUI key names, e.g. `"escape"`, `"backspace"`, a

@@ -17,6 +17,53 @@ use norte_proto::{Segment, VPath};
 /// cuántos quedan fuera (un lote de 500 no puede parecer uno de 10).
 pub const MODAL_ITEM_LIMIT: usize = 10;
 
+/// Parejas del plan de rename IA (M4-IA) visibles a la vez en el modal del
+/// plan (ventana de scroll, audit MAJOR-3: el plan ENTERO es revisable por
+/// scroll — sin ventana, la cola de un plan largo se aplicaría sin poder
+/// verse). Única fuente para el render, el alto del modal (TUI) y el clamp
+/// del scroll en ambos frontends.
+pub const AI_RENAME_PAIR_LIMIT: usize = 5;
+
+/// Tope de parejas que un frontend ACEPTA de `ai.rename_plan` (M4-IA,
+/// cinturón de ingestión): el engine acota los planes legítimos MUY por
+/// debajo (los basenames de UN directorio), así que un plan que lo supere
+/// delata un daemon hostil/N+1 inflando la respuesta — se rechaza EN BLOQUE
+/// (mismo mensaje que un plan adulterado), jamás se trocea ni se revisa "lo
+/// que quepa".
+pub const MAX_AI_PLAN_ENTRIES: usize = 256;
+
+/// Valida TODAS las parejas del plan como [`Segment`] (cinturón fail-loud,
+/// audit MAJOR-2, compartido por TUI y GUI): un plan bien formado del engine
+/// JAMÁS trae un segmento inválido (el daemon los validó al armarlo), así
+/// que UN rechazo aquí delata un daemon hostil/roto — `None` aborta el lote
+/// ENTERO, jamás un skip silencioso que aplique «lo demás» de un plan
+/// adulterado.
+///
+/// PURA a propósito: testeable sin backend (audit MINOR-6e).
+///
+/// ```
+/// use norte_proto::methods::AiRenameEntry;
+/// let ok = AiRenameEntry { from: "a.txt".into(), to: "b.txt".into() };
+/// assert!(norte_frontend::validate_ai_plan(std::slice::from_ref(&ok)).is_some());
+/// let evil = AiRenameEntry { from: "c.txt".into(), to: "../evil".into() };
+/// // UNA pareja inválida tumba el plan ENTERO, aunque el resto sea legítimo.
+/// assert!(norte_frontend::validate_ai_plan(&[ok, evil]).is_none());
+/// ```
+#[must_use]
+pub fn validate_ai_plan(
+    entries: &[norte_proto::methods::AiRenameEntry],
+) -> Option<Vec<(Segment, Segment)>> {
+    entries
+        .iter()
+        .map(|e| {
+            Some((
+                Segment::new(e.from.as_bytes().to_vec()).ok()?,
+                Segment::new(e.to.as_bytes().to_vec()).ok()?,
+            ))
+        })
+        .collect()
+}
+
 /// Badge por defecto de [`item_lines`]: el aviso que ya usaba el modal de la
 /// GUI. Los frontends con un badge propio (el TUI usa `!`, ASCII, por los
 /// terminales que no pintan `⚠`) pasan el suyo a [`item_lines_with`] — el
@@ -85,6 +132,48 @@ pub fn item_lines_with(
         lines.push(norte_i18n::ta("gui-modal-more", &[("n", n.as_str())]));
     }
     lines
+}
+
+#[cfg(test)]
+mod ai_plan_tests {
+    use super::validate_ai_plan;
+    use norte_proto::methods::AiRenameEntry;
+
+    fn e(from: &str, to: &str) -> AiRenameEntry {
+        AiRenameEntry {
+            from: from.into(),
+            to: to.into(),
+        }
+    }
+
+    /// Audit MAJOR-2 (fail-loud): UNA pareja inválida — traversal `..`,
+    /// separador embebido o nombre vacío — tumba el plan ENTERO (`None`),
+    /// jamás un skip silencioso que aplique "lo demás" de un plan
+    /// adulterado por un daemon hostil/roto.
+    #[test]
+    fn una_pareja_invalida_tumba_el_plan_entero() {
+        assert!(validate_ai_plan(&[e("a", "b"), e("c", "..")]).is_none());
+        assert!(validate_ai_plan(&[e("a/b", "c"), e("d", "e")]).is_none());
+        assert!(validate_ai_plan(&[e("", "x")]).is_none());
+        assert!(validate_ai_plan(&[e("ok", "tambien-ok"), e("x", "a/b")]).is_none());
+    }
+
+    /// Un plan bien formado conserva orden y longitud, bytes exactos.
+    #[test]
+    fn un_plan_valido_conserva_orden_y_longitud() {
+        let pairs = validate_ai_plan(&[e("a", "b"), e("c", "d")]).expect("plan válido");
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].0.as_bytes(), b"a");
+        assert_eq!(pairs[0].1.as_bytes(), b"b");
+        assert_eq!(pairs[1].0.as_bytes(), b"c");
+        assert_eq!(pairs[1].1.as_bytes(), b"d");
+    }
+
+    /// El plan vacío es válido (los frontends no encolan nada con él).
+    #[test]
+    fn un_plan_vacio_es_valido() {
+        assert_eq!(validate_ai_plan(&[]).expect("vacío válido").len(), 0);
+    }
 }
 
 #[cfg(test)]
