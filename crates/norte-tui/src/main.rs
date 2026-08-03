@@ -104,10 +104,11 @@ struct AiRenameRun {
     dir: VPath,
 }
 
-/// Hits que pide la búsqueda semántica del TUI (M4-IA-2): la ventana del
-/// modal enseña 10 y el resto queda a un scroll; el server además recorta a
-/// su propio tope (`INDEX_SEMANTIC_MAX_K`).
-const SEMANTIC_K: u32 = 20;
+/// Hits que pide la búsqueda semántica (M4-IA-2): compartido con la GUI
+/// desde `norte-frontend` (la MISMA consulta debe devolver lo mismo en
+/// ambos frontends); ver su doc para la relación con `SEMANTIC_HIT_LIMIT`
+/// y el techo del server.
+use norte_frontend::SEMANTIC_K;
 
 /// Petición `index.search_semantic` EN VUELO (M4-IA-2). Mismo contrato de
 /// cancelación que [`AiRenameRun`] (regla 3): `abort()` dropea el future del

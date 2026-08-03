@@ -183,19 +183,15 @@ pub enum SessionCmd {
     },
     /// Búsqueda semántica sobre el índice (`index.search_semantic`,
     /// M4-IA-2): el daemon embebe la query con el proveedor de IA (tras su
-    /// gate) y devuelve hasta [`SEMANTIC_K`] hits path+score sobre TODOS los
-    /// roots (`root = None`, paridad TUI). No muta nada.
+    /// gate) y devuelve hasta [`norte_frontend::SEMANTIC_K`] hits
+    /// path+score sobre TODOS los roots (`root = None`, paridad TUI — el
+    /// `k` es compartido para que la MISMA consulta devuelva lo mismo en
+    /// ambos frontends). No muta nada.
     SemanticSearch {
         /// Consulta del usuario (ya recortada y no vacía).
         query: String,
     },
 }
-
-/// `k` pedido a `index.search_semantic` (paridad TUI `SEMANTIC_K`): más que
-/// la ventana del modal ([`crate::modal::SEMANTIC_HIT_LIMIT`] = 10, se
-/// scrollea) y muy por debajo del techo contractual del server
-/// (`INDEX_SEMANTIC_MAX_K` = 100).
-const SEMANTIC_K: u32 = 20;
 
 /// Contenido del viewer que cruza a la GUI (GUI-d T3).
 pub enum ViewerContent {
@@ -617,7 +613,7 @@ pub fn spawn(
                         let tx = event_tx.clone();
                         tokio::spawn(async move {
                             let result = backend
-                                .index_search_semantic(None, &query, SEMANTIC_K)
+                                .index_search_semantic(None, &query, norte_frontend::SEMANTIC_K)
                                 .await
                                 .map_err(|e| format!("{e}"));
                             let _ = tx.send(SessionEvent::SemanticHits { result });

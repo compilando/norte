@@ -27,8 +27,22 @@ pub const AI_RENAME_PAIR_LIMIT: usize = 5;
 /// Hits de la búsqueda semántica (M4-IA-2) visibles a la vez en el modal de
 /// hits (ventana de scroll con cursor, molde [`AI_RENAME_PAIR_LIMIT`]).
 /// Única fuente para el render, el alto del modal (TUI) y el clamp del
-/// cursor en ambos frontends.
+/// cursor en ambos frontends. El `k` que se PIDE al server es
+/// [`SEMANTIC_K`]: mayor que esta ventana (el resto queda a un scroll).
 pub const SEMANTIC_HIT_LIMIT: usize = 10;
+
+/// `k` que ambos frontends piden a `index.search_semantic` (M4-IA-2): mayor
+/// que la ventana del modal ([`SEMANTIC_HIT_LIMIT`] — el resto queda a un
+/// scroll) y muy por debajo del techo contractual del server
+/// (`INDEX_SEMANTIC_MAX_K` = 100, que además recorta por su cuenta). Única
+/// fuente para TUI y GUI: pedir `k` distintos haría que la MISMA consulta
+/// devolviera resultados distintos por frontend.
+///
+/// ```
+/// assert!(norte_frontend::SEMANTIC_K as usize > norte_frontend::SEMANTIC_HIT_LIMIT);
+/// assert!(norte_frontend::SEMANTIC_K <= norte_proto::methods::INDEX_SEMANTIC_MAX_K);
+/// ```
+pub const SEMANTIC_K: u32 = 20;
 
 /// Tope de parejas que un frontend ACEPTA de `ai.rename_plan` (M4-IA,
 /// cinturón de ingestión): el engine acota los planes legítimos MUY por

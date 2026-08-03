@@ -1260,6 +1260,20 @@ impl NorteGui {
         }
     }
 
+    /// Drena lo retenido al cerrarse un modal, en el ORDEN de prioridad del
+    /// contrato (única fuente — cada `ModalOutcome` que cierra el modal
+    /// llama aquí, jamás a los `open_*` sueltos): (1) conflictos
+    /// (`conflict_backlog`, bloquean transferencias vivas), (2) el plan IA
+    /// retenido (`pending_ai_plan`, molde TUI), (3) los hits semánticos
+    /// retenidos (`pending_semantic`). Cada `open_*` es no-op si el anterior
+    /// ya ocupó el turno — solo UNO abre por cierre, el resto sigue
+    /// esperando.
+    fn drain_pending_modals(&mut self) {
+        self.open_next_conflict();
+        self.open_pending_ai_plan();
+        self.open_pending_semantic();
+    }
+
     /// Abre el prompt de instrucción del rename IA (M4-IA, `pane.ai-rename`):
     /// el plan aterrizará sobre el dir VIVO del pane activo en este instante
     /// (viaja dentro del modal y de la petición — un `cd` posterior no lo
@@ -2235,9 +2249,7 @@ impl NorteGui {
                 ModalOutcome::Ignored | ModalOutcome::StayOpen => {}
                 ModalOutcome::Dismiss => {
                     self.modal = None;
-                    self.open_next_conflict();
-                    self.open_pending_ai_plan();
-                    self.open_pending_semantic();
+                    self.drain_pending_modals();
                 }
                 ModalOutcome::Submit(ops) => {
                     self.modal = None;
@@ -2253,9 +2265,7 @@ impl NorteGui {
                     for op in ops {
                         let _ = self.cmds.send(SessionCmd::Submit(op));
                     }
-                    self.open_next_conflict();
-                    self.open_pending_ai_plan();
-                    self.open_pending_semantic();
+                    self.drain_pending_modals();
                 }
                 ModalOutcome::Quit => cx.quit(),
                 ModalOutcome::RequestAiPlan { dir, instruction } => {
@@ -2267,18 +2277,14 @@ impl NorteGui {
                     // y la GUI (hoy) no tiene camino para abortar la petición
                     // en vuelo — jamás una affordance falsa.
                     self.errors[self.focus] = Some(norte_i18n::t("gui-msg-ai-rename-running"));
-                    self.open_next_conflict();
-                    self.open_pending_ai_plan();
-                    self.open_pending_semantic();
+                    self.drain_pending_modals();
                 }
                 ModalOutcome::InvalidPlan => {
                     // Cinturón fail-loud (paridad TUI audit MAJOR-2): plan
                     // adulterado — NADA se sometió.
                     self.modal = None;
                     self.errors[self.focus] = Some(norte_i18n::t("msg-ai-rename-invalid-plan"));
-                    self.open_next_conflict();
-                    self.open_pending_ai_plan();
-                    self.open_pending_semantic();
+                    self.drain_pending_modals();
                 }
                 ModalOutcome::RequestSemantic { query } => {
                     self.modal = None;
@@ -2293,9 +2299,7 @@ impl NorteGui {
                     // "Esc cancela" y la GUI no tiene camino para abortar la
                     // petición en vuelo — jamás una affordance falsa.
                     self.errors[self.focus] = Some(norte_i18n::t("gui-msg-semantic-running"));
-                    self.open_next_conflict();
-                    self.open_pending_ai_plan();
-                    self.open_pending_semantic();
+                    self.drain_pending_modals();
                 }
                 ModalOutcome::NavigateTo(path) => {
                     self.modal = None;
@@ -2310,9 +2314,7 @@ impl NorteGui {
                         self.panes[f].set_pending_focus(path);
                         self.cd(f, parent, cx);
                     }
-                    self.open_next_conflict();
-                    self.open_pending_ai_plan();
-                    self.open_pending_semantic();
+                    self.drain_pending_modals();
                 }
             }
             cx.notify();
