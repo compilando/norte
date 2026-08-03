@@ -202,6 +202,14 @@ struct NorteGui {
     /// jamás lo pisa. Se abre al cerrarse el modal activo, DESPUÉS de drenar
     /// `conflict_backlog` (los conflictos van primero, como en la TUI).
     pending_ai_plan: Option<(VPath, Vec<norte_proto::methods::AiRenameEntry>)>,
+    /// Hits semánticos retenidos (M4-IA-2, molde `pending_ai_plan`): llegaron
+    /// con otro modal abierto y esperan su turno — jamás lo pisan. Se abren
+    /// al cerrarse el modal activo, DESPUÉS de `conflict_backlog` y de
+    /// `pending_ai_plan` (mismo orden que la llegada de sus drenadores).
+    /// Invariante anti-stale (lección TUI Task 8): mandar una NUEVA
+    /// `SemanticSearch` lo limpia — unos hits viejos jamás aterrizan como si
+    /// respondieran a la consulta nueva.
+    pending_semantic: Option<Vec<norte_proto::methods::SemanticHit>>,
     /// Orden de llegada de las tasks (render estable; `task_progress` no ordena).
     task_order: Vec<norte_proto::TaskId>,
     /// Cursor de la franja de tasks (#91): índice dentro de `task_order` que
@@ -530,6 +538,7 @@ impl NorteGui {
                     task_progress: std::collections::HashMap::new(),
                     conflict_backlog: Vec::new(),
                     pending_ai_plan: None,
+                    pending_semantic: None,
                     task_order: Vec::new(),
                     task_cursor: 0,
                     scrolls: [
@@ -609,6 +618,7 @@ impl NorteGui {
                     task_progress: std::collections::HashMap::new(),
                     conflict_backlog: Vec::new(),
                     pending_ai_plan: None,
+                    pending_semantic: None,
                     task_order: Vec::new(),
                     task_cursor: 0,
                     scrolls: [
@@ -1125,6 +1135,51 @@ impl NorteGui {
                     ));
                 }
             },
+            // Espejo del arm de arriba (M4-IA-2); mismo caveat #121 (el
+            // banner va al pane ENFOCADO, no al solicitante).
+            SessionEvent::SemanticHits { result } => match result {
+                Ok(hits) if hits.is_empty() => {
+                    self.errors[self.focus] = Some(norte_i18n::t("msg-semantic-empty"));
+                }
+                // Cinturón de INGESTIÓN compartido con la TUI
+                // (`norte_frontend::validate_semantic_hits`): superar el
+                // techo contractual del server o colar un score no finito
+                // delata un daemon hostil/N+1 — rechazo en bloque, ni se
+                // abre el modal.
+                Ok(hits) => match norte_frontend::validate_semantic_hits(hits) {
+                    None => {
+                        self.errors[self.focus] = Some(norte_i18n::t("msg-semantic-invalid"));
+                    }
+                    Some(hits) => {
+                        // Retira el "pensando…" del banner: los hits SON la
+                        // respuesta.
+                        self.errors[self.focus] = None;
+                        if self.modal.is_none() {
+                            self.modal = Some(Modal::SemanticHits {
+                                hits,
+                                offset: 0,
+                                cursor: 0,
+                            });
+                        } else {
+                            // Otro modal abierto: los hits esperan su turno,
+                            // jamás pisan al modal activo. Si YA había hits
+                            // retenidos, ganan los NUEVOS y la pérdida se
+                            // DICE (molde ai-rename, quality review 78eb243
+                            // MINOR-3: jamás un descarte mudo).
+                            if self.pending_semantic.replace(hits).is_some() {
+                                self.errors[self.focus] =
+                                    Some(norte_i18n::t("gui-msg-semantic-superseded"));
+                            }
+                        }
+                    }
+                },
+                Err(msg) => {
+                    self.errors[self.focus] = Some(norte_i18n::ta(
+                        "msg-semantic-failed",
+                        &[("error", banner_safe(&msg).as_str())],
+                    ));
+                }
+            },
         }
     }
 
@@ -1188,6 +1243,23 @@ impl NorteGui {
         }
     }
 
+    /// Al cerrar un modal, abre los hits semánticos retenidos (M4-IA-2) si
+    /// ningún otro modal ganó el turno — se llama SIEMPRE después de
+    /// `open_next_conflict` y `open_pending_ai_plan` (conflictos primero,
+    /// luego el plan IA, luego esto).
+    fn open_pending_semantic(&mut self) {
+        if self.modal.is_some() {
+            return;
+        }
+        if let Some(hits) = self.pending_semantic.take() {
+            self.modal = Some(Modal::SemanticHits {
+                hits,
+                offset: 0,
+                cursor: 0,
+            });
+        }
+    }
+
     /// Abre el prompt de instrucción del rename IA (M4-IA, `pane.ai-rename`):
     /// el plan aterrizará sobre el dir VIVO del pane activo en este instante
     /// (viaja dentro del modal y de la petición — un `cd` posterior no lo
@@ -1197,6 +1269,13 @@ impl NorteGui {
             dir: self.panes[self.focus].dir().clone(),
             query: Vec::new(),
         });
+    }
+
+    /// Abre el prompt de la búsqueda semántica (M4-IA-2,
+    /// `pane.semantic-search`): sin dir — la búsqueda es global (root =
+    /// None, paridad TUI `SEMANTIC_K`).
+    fn open_semantic_search(&mut self) {
+        self.modal = Some(Modal::SemanticQuery { query: Vec::new() });
     }
 
     /// Una task llegó a terminal: si falló por conflicto, encola/abre el modal
@@ -1398,6 +1477,7 @@ impl NorteGui {
             "pane.move" => self.open_transfer_modal(TransferKind::Move),
             "pane.delete" => self.open_delete_modal(),
             "pane.ai-rename" => self.open_ai_rename(),
+            "pane.semantic-search" => self.open_semantic_search(),
             "task.cancel" => self.cancel_task_under_cursor(),
             "task.next" => {
                 if !self.task_order.is_empty() {
@@ -2138,11 +2218,14 @@ impl NorteGui {
 
         // Con un modal abierto, la tecla va al modal (captura fija).
         if let Some(m) = &mut self.modal {
-            // El prompt IA acepta tecleo libre: un ctrl/alt/super-chord no
-            // debe teclearse en el buffer (mismo gate que `on_settings_key`;
-            // los modales de decisión conservan su comportamiento previo).
-            if matches!(m, Modal::AiRenamePrompt { .. })
-                && (ks.modifiers.control || ks.modifiers.alt || ks.modifiers.platform)
+            // Los prompts IA/semántico aceptan tecleo libre: un
+            // ctrl/alt/super-chord no debe teclearse en el buffer (mismo
+            // gate que `on_settings_key`; los modales de decisión conservan
+            // su comportamiento previo).
+            if matches!(
+                m,
+                Modal::AiRenamePrompt { .. } | Modal::SemanticQuery { .. }
+            ) && (ks.modifiers.control || ks.modifiers.alt || ks.modifiers.platform)
             {
                 cx.notify();
                 return;
@@ -2154,6 +2237,7 @@ impl NorteGui {
                     self.modal = None;
                     self.open_next_conflict();
                     self.open_pending_ai_plan();
+                    self.open_pending_semantic();
                 }
                 ModalOutcome::Submit(ops) => {
                     self.modal = None;
@@ -2171,6 +2255,7 @@ impl NorteGui {
                     }
                     self.open_next_conflict();
                     self.open_pending_ai_plan();
+                    self.open_pending_semantic();
                 }
                 ModalOutcome::Quit => cx.quit(),
                 ModalOutcome::RequestAiPlan { dir, instruction } => {
@@ -2184,6 +2269,7 @@ impl NorteGui {
                     self.errors[self.focus] = Some(norte_i18n::t("gui-msg-ai-rename-running"));
                     self.open_next_conflict();
                     self.open_pending_ai_plan();
+                    self.open_pending_semantic();
                 }
                 ModalOutcome::InvalidPlan => {
                     // Cinturón fail-loud (paridad TUI audit MAJOR-2): plan
@@ -2192,6 +2278,41 @@ impl NorteGui {
                     self.errors[self.focus] = Some(norte_i18n::t("msg-ai-rename-invalid-plan"));
                     self.open_next_conflict();
                     self.open_pending_ai_plan();
+                    self.open_pending_semantic();
+                }
+                ModalOutcome::RequestSemantic { query } => {
+                    self.modal = None;
+                    // Invariante anti-stale (lección TUI Task 8): una nueva
+                    // consulta INVALIDA cualquier hit retenido de la
+                    // anterior — sin esto, unos hits viejos esperando turno
+                    // se abrirían como si respondieran a ESTA consulta.
+                    self.pending_semantic = None;
+                    let _ = self.cmds.send(SessionCmd::SemanticSearch { query });
+                    // Clave gui-* propia (misma doctrina que
+                    // `gui-msg-ai-rename-running`): la de la TUI promete
+                    // "Esc cancela" y la GUI no tiene camino para abortar la
+                    // petición en vuelo — jamás una affordance falsa.
+                    self.errors[self.focus] = Some(norte_i18n::t("gui-msg-semantic-running"));
+                    self.open_next_conflict();
+                    self.open_pending_ai_plan();
+                    self.open_pending_semantic();
+                }
+                ModalOutcome::NavigateTo(path) => {
+                    self.modal = None;
+                    // Navega a la UBICACIÓN del hit: cd al padre con el
+                    // cursor pendiente sobre la entrada (mismo mecanismo que
+                    // `nav.parent`, spec 2026-07-24 §S1: `set_pending_focus`
+                    // se consume al aterrizar el listado — byte-exacto, y si
+                    // el hit ya no existe el cursor cae al default). Un hit
+                    // raíz sin padre no navega (paridad TUI `Cd::Cancelled`).
+                    if let Some(parent) = path.parent() {
+                        let f = self.focus;
+                        self.panes[f].set_pending_focus(path);
+                        self.cd(f, parent, cx);
+                    }
+                    self.open_next_conflict();
+                    self.open_pending_ai_plan();
+                    self.open_pending_semantic();
                 }
             }
             cx.notify();
@@ -3861,6 +3982,11 @@ impl NorteGui {
             // GPUI: Enter/Esc, y/n, ↓/↑).
             Modal::AiRenamePrompt { .. } => "modal-ai-rename-hint",
             Modal::AiRenamePlan { .. } => "modal-ai-rename-plan-hint",
+            // "Esc cancela" aquí es honesto: cancela el MODAL (la petición
+            // solo se manda al pulsar Enter) — a diferencia del banner
+            // `gui-msg-semantic-running`, que no puede prometer aborto.
+            Modal::SemanticQuery { .. } => "modal-semantic-hint",
+            Modal::SemanticHits { .. } => "modal-semantic-hits-hint",
         });
         // La línea de modo (índice 1 en ConfirmDelete) se alerta en rojo si es
         // borrado PERMANENTE.
@@ -4447,6 +4573,74 @@ fn modal_lines(m: &Modal) -> Vec<String> {
                     hidden_hostil,
                     norte_i18n::ta(
                         "modal-ai-rename-more",
+                        &[("shown", shown.as_str()), ("total", total.as_str())],
+                    ),
+                ));
+            }
+            lines
+        }
+        Modal::SemanticQuery { query } => {
+            // Molde `AiRenamePrompt`: la consulta es texto de usuario (un
+            // paste trae bidi/invisibles tan fácil como un nombre) —
+            // enmascarada SIEMPRE, con badge y cursor `_`.
+            let (masked, hostil) = norte_frontend::display_name(query);
+            vec![
+                norte_i18n::t("modal-semantic"),
+                hostile_badged(hostil, format!("{masked}_")),
+            ]
+        }
+        // Paridad TUI `semantic_hits_modal_text` (doctrina encoding-auditor,
+        // molde del plan IA de arriba): un hit POR LÍNEA con marcador de
+        // cursor (`>`) FUERA de banda en columna fija ANTES del badge (un
+        // path no puede imitarlo: va enmascarado y tras la etiqueta numerada
+        // ABSOLUTA), path por `path_display` (mask + flag hostil) con badge
+        // Rust-side y score `{:.2}` al final; los divs truncan
+        // (`render_modal`, badge prefijado — jamás se lo come el corte). El
+        // indicador de desbordamiento lleva badge si algún hit OCULTO es
+        // hostil. Los hits ya pasaron `validate_semantic_hits` al ingerirse,
+        // pero un daemon N+1/comprometido podría mandar cualquier cosa — se
+        // pinta a la defensiva SIEMPRE.
+        Modal::SemanticHits {
+            hits,
+            offset,
+            cursor,
+        } => {
+            // Cinturón de render: el clamp vive en `modal::on_key`, pero un
+            // offset fuera de rango jamás debe pintar una ventana vacía.
+            let offset = (*offset).min(hits.len().saturating_sub(modal::SEMANTIC_HIT_LIMIT));
+            let last = (offset + modal::SEMANTIC_HIT_LIMIT).min(hits.len());
+            let mut lines = vec![norte_i18n::t("modal-semantic-hits")];
+            for (i, h) in hits.iter().enumerate().take(last).skip(offset) {
+                let (path, hostil) = norte_frontend::path_display(&h.path);
+                let n = (i + 1).to_string();
+                let score = format!("{:.2}", h.score);
+                let line = hostile_badged(
+                    hostil,
+                    norte_i18n::ta(
+                        "modal-semantic-hit",
+                        &[
+                            ("n", n.as_str()),
+                            ("path", path.as_str()),
+                            ("score", score.as_str()),
+                        ],
+                    ),
+                );
+                lines.push(if i == *cursor {
+                    format!("> {line}")
+                } else {
+                    format!("  {line}")
+                });
+            }
+            if hits.len() > modal::SEMANTIC_HIT_LIMIT {
+                let hidden_hostil = hits.iter().enumerate().any(|(i, h)| {
+                    (i < offset || i >= last) && norte_frontend::path_display(&h.path).1
+                });
+                let shown = last.to_string();
+                let total = hits.len().to_string();
+                lines.push(hostile_badged(
+                    hidden_hostil,
+                    norte_i18n::ta(
+                        "modal-semantic-more",
                         &[("shown", shown.as_str()), ("total", total.as_str())],
                     ),
                 ));
@@ -6065,6 +6259,19 @@ mod tests {
                     dir: to.clone(),
                     query: fixture.bytes.clone(),
                 },
+                // M4-IA-2: prompt semántico con la misma query pegada…
+                Modal::SemanticQuery {
+                    query: fixture.bytes.clone(),
+                },
+                // …y hits con el path hostil (visible Y bajo el cursor).
+                Modal::SemanticHits {
+                    hits: vec![norte_proto::methods::SemanticHit {
+                        path: item.clone(),
+                        score: 0.87,
+                    }],
+                    offset: 0,
+                    cursor: 0,
+                },
             ];
             for m in &modals {
                 for line in super::modal_lines(m) {
@@ -6145,6 +6352,86 @@ mod tests {
         assert!(
             more.contains("6/6") && !more.starts_with(super::HOSTILE_BADGE),
             "sin ocultas hostiles el desbordamiento va limpio: {more:?}"
+        );
+    }
+
+    /// M4-IA-2 (molde `ai_plan_modal_ventana_overflow_y_badge_de_ocultas`):
+    /// la ventana de hits pinta [`crate::modal::SEMANTIC_HIT_LIMIT`] hits
+    /// desde `offset` con marcador de cursor `>` FUERA de banda y score
+    /// `{:.2}`, el indicador de desbordamiento dice `shown/total` y lleva el
+    /// badge si algún hit OCULTO es hostil — lo escondido jamás se cuela
+    /// limpio.
+    #[test]
+    fn semantic_hits_modal_ventana_cursor_overflow_y_badge_de_ocultos() {
+        use super::Modal;
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
+        let limit = crate::modal::SEMANTIC_HIT_LIMIT;
+        let total = limit + 2;
+        let mut hits: Vec<norte_proto::methods::SemanticHit> = (1..=total)
+            .map(|i| norte_proto::methods::SemanticHit {
+                path: VPath::parse(&format!("mem:///docs/f{i}.txt")).unwrap(),
+                score: 0.5,
+            })
+            .collect();
+        // El último (OCULTO con offset 0) es hostil (bidi RLO).
+        hits[total - 1].path = VPath::parse("mem:///docs")
+            .unwrap()
+            .join(norte_proto::Segment::new("\u{202E}evil.txt".as_bytes().to_vec()).unwrap());
+        let m = Modal::SemanticHits {
+            hits: hits.clone(),
+            offset: 0,
+            cursor: 1,
+        };
+        let lines = super::modal_lines(&m);
+        // título + `limit` hits + desbordamiento.
+        assert_eq!(lines.len(), 1 + limit + 1, "{lines:?}");
+        assert!(
+            lines[1].starts_with("  ") && lines[1].contains("1.") && lines[1].contains("f1.txt"),
+            "hit sin cursor: etiqueta numerada absoluta fuera de banda: {:?}",
+            lines[1]
+        );
+        assert!(
+            lines[2].starts_with("> ") && lines[2].contains("2."),
+            "el hit bajo el cursor lleva el marcador `>` en columna fija: {:?}",
+            lines[2]
+        );
+        assert!(
+            lines[1].contains("0.50"),
+            "el score va con dos decimales: {:?}",
+            lines[1]
+        );
+        let more = lines.last().unwrap();
+        assert!(
+            more.starts_with(super::HOSTILE_BADGE),
+            "hit oculto hostil ⇒ badge en el desbordamiento: {more:?}"
+        );
+        assert!(
+            more.contains(&format!("{limit}/{total}")),
+            "el desbordamiento dice shown/total: {more:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains('\u{202E}')),
+            "el bidi crudo del hit oculto no se cuela en NINGUNA línea: {lines:?}"
+        );
+
+        // Con offset 2 el hostil ENTRA en la ventana (ya no está oculto):
+        // su línea lleva el badge tras el marcador y el desbordamiento no.
+        let m = Modal::SemanticHits {
+            hits,
+            offset: 2,
+            cursor: total - 1,
+        };
+        let lines = super::modal_lines(&m);
+        assert!(
+            lines.iter().any(|l| {
+                l.starts_with(&format!("> {}", super::HOSTILE_BADGE)) && l.contains("12.")
+            }),
+            "el hit hostil visible lleva SU badge tras el marcador: {lines:?}"
+        );
+        let more = lines.last().unwrap();
+        assert!(
+            more.contains(&format!("{total}/{total}")) && !more.starts_with(super::HOSTILE_BADGE),
+            "sin ocultos hostiles el desbordamiento va limpio: {more:?}"
         );
     }
 

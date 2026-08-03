@@ -227,6 +227,13 @@ msg-ai-rename-applied = Renombrado IA: { $n } movimientos enviados
 msg-ai-rename-invalid-plan = renombrado IA: plan inválido del daemon — no se aplicó nada
 msg-ai-rename-in-search = el renombrado IA no está disponible en un pane de búsqueda
 msg-semantic-running = Búsqueda semántica: pensando… (Esc cancela)
+# Variante GUI: la GUI no tiene camino para abortar la petición en vuelo, así
+# que no debe prometer "Esc cancela" (jamás una affordance falsa).
+gui-msg-semantic-running = Búsqueda semántica: pensando…
+# Unos hits retenidos (esperando tras un modal abierto) fueron reemplazados por
+# un resultado más nuevo antes de poder revisarse — la pérdida se dice, jamás
+# muda.
+gui-msg-semantic-superseded = Búsqueda semántica: hits anteriores descartados (nuevo resultado)
 msg-semantic-empty = Búsqueda semántica: sin resultados
 msg-semantic-failed = la búsqueda semántica falló: { $error }
 msg-semantic-invalid = búsqueda semántica: respuesta inválida del daemon — no se muestra nada

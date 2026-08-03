@@ -57,6 +57,11 @@ pub const COMMANDS: &[&str] = &[
     // vía `gui_supplement` para pasar el pin de alcanzabilidad
     // (`todo_comando_gui_es_alcanzable_desde_el_preset_default`).
     "pane.ai-rename",
+    // M4-IA-2: prompt + hits navegables de la búsqueda semántica. Igual que
+    // `pane.ai-rename`, los presets compartidos no lo bindean — la GUI le da
+    // `alt+s` vía `gui_supplement` (ver su comentario) para pasar el pin de
+    // alcanzabilidad.
+    "pane.semantic-search",
 ];
 
 /// Comandos del contexto Viewer (pantalla del visor F3).
@@ -143,7 +148,13 @@ fn preset(name: &str) -> KeymapFile {
 /// `pane.ai-rename` (M4-IA) es NUEVO (no venía del preset privado retirado):
 /// los presets compartidos no bindean el comando (la TUI lo alcanza por
 /// paleta) y el pin de alcanzabilidad de la GUI exige al menos un chord —
-/// `alt+i` está libre en los tres presets de fábrica.
+/// `alt+i` está libre en los tres presets de fábrica. `alt+s` →
+/// `pane.semantic-search` (M4-IA-2) sigue el mismo criterio: libre en los
+/// tres presets (que solo usan alt+c/alt+e/alt+down/alt+f7/alt+enter/alt+x)
+/// y en este supplemento. NO `alt+shift+s`: la gramática del keymap
+/// compartido rechaza `shift+<char>` (el char debe ir ya «shifteado», y un
+/// `alt+S` dependería de la fidelidad de `key_char` bajo alt — frágil por
+/// plataforma), así que el chord llano es el robusto, como `alt+i`.
 fn gui_supplement() -> KeymapFile {
     const TOML: &str = r#"
 [pane]
@@ -153,6 +164,7 @@ prepend_keymap = [
     { on = ["ctrl+l"], run = "task.dismiss" },
     { on = ["delete"], run = "pane.delete" },
     { on = ["alt+i"], run = "pane.ai-rename" },
+    { on = ["alt+s"], run = "pane.semantic-search" },
 ]
 "#;
     parse_keymap(TOML).unwrap_or_else(|e| panic!("supplemento GUI embebido inválido: {e}"))

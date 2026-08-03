@@ -227,6 +227,12 @@ msg-ai-rename-applied = AI rename: { $n } move(s) submitted
 msg-ai-rename-invalid-plan = AI rename: invalid plan from the daemon — nothing applied
 msg-ai-rename-in-search = AI rename is not available in a search pane
 msg-semantic-running = Semantic search: thinking… (Esc cancels)
+# GUI variant: the GUI has no path to abort the in-flight request, so it must
+# not promise "Esc cancels" (never a false affordance).
+gui-msg-semantic-running = Semantic search: thinking…
+# Retained hits (waiting behind an open modal) were replaced by a newer
+# result before the human could review them — the loss is said, never silent.
+gui-msg-semantic-superseded = Semantic search: previous hits discarded (new result)
 msg-semantic-empty = Semantic search: no hits
 msg-semantic-failed = Semantic search failed: { $error }
 msg-semantic-invalid = Semantic search: invalid response from the daemon — nothing shown

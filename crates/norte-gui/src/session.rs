@@ -181,7 +181,21 @@ pub enum SessionCmd {
         /// Instrucción del usuario (ya recortada y no vacía).
         instruction: String,
     },
+    /// Búsqueda semántica sobre el índice (`index.search_semantic`,
+    /// M4-IA-2): el daemon embebe la query con el proveedor de IA (tras su
+    /// gate) y devuelve hasta [`SEMANTIC_K`] hits path+score sobre TODOS los
+    /// roots (`root = None`, paridad TUI). No muta nada.
+    SemanticSearch {
+        /// Consulta del usuario (ya recortada y no vacía).
+        query: String,
+    },
 }
+
+/// `k` pedido a `index.search_semantic` (paridad TUI `SEMANTIC_K`): más que
+/// la ventana del modal ([`crate::modal::SEMANTIC_HIT_LIMIT`] = 10, se
+/// scrollea) y muy por debajo del techo contractual del server
+/// (`INDEX_SEMANTIC_MAX_K` = 100).
+const SEMANTIC_K: u32 = 20;
 
 /// Contenido del viewer que cruza a la GUI (GUI-d T3).
 pub enum ViewerContent {
@@ -367,6 +381,14 @@ pub enum SessionEvent {
         dir: VPath,
         /// Parejas from→to o error ya renderizable.
         result: Result<Vec<norte_proto::methods::AiRenameEntry>, String>,
+    },
+    /// Resultado de `SemanticSearch` (M4-IA-2): los hits path+score
+    /// (posiblemente vacíos = sin resultados) o el error aplanado a String
+    /// (mismo helper que los arms vecinos). Sin `dir`: la búsqueda es
+    /// global (root = None), el modal no aterriza sobre ningún dir concreto.
+    SemanticHits {
+        /// Hits path+score o error ya renderizable.
+        result: Result<Vec<norte_proto::methods::SemanticHit>, String>,
     },
 }
 
@@ -588,6 +610,17 @@ pub fn spawn(
                                 .map(|r| r.entries)
                                 .map_err(|e| format!("{e}"));
                             let _ = tx.send(SessionEvent::AiRenamePlan { dir, result });
+                        });
+                    }
+                    SessionCmd::SemanticSearch { query } => {
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            let result = backend
+                                .index_search_semantic(None, &query, SEMANTIC_K)
+                                .await
+                                .map_err(|e| format!("{e}"));
+                            let _ = tx.send(SessionEvent::SemanticHits { result });
                         });
                     }
                     SessionCmd::PluginRunCommand { id, command, arg } => {

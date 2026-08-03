@@ -18,6 +18,12 @@ use crate::keys::typed_char;
 /// [`on_key`].
 pub use norte_frontend::AI_RENAME_PAIR_LIMIT;
 
+/// Ventana de hits del modal semántico (M4-IA-2) — la constante y el
+/// cinturón [`norte_frontend::validate_semantic_hits`] viven en
+/// `norte-frontend` (compartidos con la TUI); re-export para el render
+/// (`modal_lines` en `main.rs`) y el clamp del cursor de [`on_key`].
+pub use norte_frontend::SEMANTIC_HIT_LIMIT;
+
 /// Tope de caracteres de la instrucción de [`Modal::AiRenamePrompt`] (molde
 /// TUI `MARK_PATTERN_MAX_CHARS`): un paste accidental no desborda el modal;
 /// el límite REAL (4 KiB) lo pone el daemon.
@@ -119,6 +125,29 @@ pub enum Modal {
         /// sin poder verse).
         offset: usize,
     },
+    /// Prompt de consulta de la búsqueda semántica (M4-IA-2). Query en
+    /// BYTES (molde [`Modal::AiRenamePrompt`]): push/backspace
+    /// UTF-8-boundary-aware; se pinta enmascarada (`modal_lines`), jamás
+    /// cruda. Sin `dir`: la búsqueda es global (root = None, paridad TUI).
+    SemanticQuery {
+        /// La consulta tecleada hasta ahora, en bytes UTF-8.
+        query: Vec<u8>,
+    },
+    /// Hits de la búsqueda semántica (M4-IA-2): superficie de NAVEGACIÓN —
+    /// `y`/`enter` abre la ubicación del hit bajo el cursor
+    /// ([`ModalOutcome::NavigateTo`]), `n`/Esc cierra, `up`/`down` mueven
+    /// el cursor con ventana de [`SEMANTIC_HIT_LIMIT`] que lo sigue
+    /// (molde TUI `semantic_cursor`).
+    SemanticHits {
+        /// Hits path+score (ya pasaron el cinturón
+        /// [`norte_frontend::validate_semantic_hits`] en la ingestión; se
+        /// pintan a la defensiva igual).
+        hits: Vec<norte_proto::methods::SemanticHit>,
+        /// Primer hit visible de la ventana de scroll.
+        offset: usize,
+        /// Hit bajo el cursor (índice ABSOLUTO en `hits`).
+        cursor: usize,
+    },
 }
 
 /// La transferencia que originó un conflicto (para reemitir con otra política).
@@ -161,6 +190,17 @@ pub enum ModalOutcome {
     /// MAJOR-2): un daemon hostil/roto mandó un segmento inválido — el caller
     /// cierra el modal SIN someter NADA y avisa (`msg-ai-rename-invalid-plan`).
     InvalidPlan,
+    /// Enter en [`Modal::SemanticQuery`] con consulta no vacía (M4-IA-2): el
+    /// caller cierra el modal, manda `SessionCmd::SemanticSearch` y avisa en
+    /// el banner (`gui-msg-semantic-running`).
+    RequestSemantic {
+        /// Consulta ya recortada (trim), no vacía.
+        query: String,
+    },
+    /// `y`/Enter sobre un hit de [`Modal::SemanticHits`] (M4-IA-2): el
+    /// caller cierra el modal y navega el pane activo a la ubicación del
+    /// hit (cd al padre + cursor sobre la entrada).
+    NavigateTo(VPath),
 }
 
 /// Destino absoluto de un item copiado/movido a `to_dir`: `to_dir` + nombre del
@@ -321,6 +361,86 @@ pub fn on_key(modal: &mut Modal, key: &str, key_char: Option<&str>) -> ModalOutc
                 } else {
                     offset.saturating_sub(1)
                 };
+                ModalOutcome::StayOpen
+            }
+            _ => ModalOutcome::Ignored,
+        },
+        // M4-IA-2: espejo byte a byte de `AiRenamePrompt` (tecleo libre,
+        // backspace UTF-8-boundary-aware, tope de chars) — solo cambia el
+        // outcome del Enter (RequestSemantic, sin dir).
+        Modal::SemanticQuery { query } => match key {
+            "enter" => {
+                // UTF-8 por construcción (`push_char`); lossy es cinturón por
+                // si alguien construyera el modal con bytes arbitrarios (el
+                // test hostil lo hace a propósito).
+                let q = String::from_utf8_lossy(query).trim().to_owned();
+                if q.is_empty() {
+                    return ModalOutcome::StayOpen;
+                }
+                ModalOutcome::RequestSemantic { query: q }
+            }
+            "escape" => ModalOutcome::Dismiss,
+            "backspace" => {
+                // Retira el último carácter UTF-8 COMPLETO (molde
+                // `PaletteView::backspace`), jamás un byte suelto.
+                if query.is_empty() {
+                    return ModalOutcome::Ignored;
+                }
+                let mut cut = query.len() - 1;
+                while cut > 0 && (query[cut] & 0b1100_0000) == 0b1000_0000 {
+                    cut -= 1;
+                }
+                query.truncate(cut);
+                ModalOutcome::StayOpen
+            }
+            _ => {
+                if let Some(c) = typed_char(key, key_char) {
+                    if c.is_control()
+                        || String::from_utf8_lossy(query).chars().count()
+                            >= AI_INSTRUCTION_MAX_CHARS
+                    {
+                        return ModalOutcome::Ignored;
+                    }
+                    let mut buf = [0u8; 4];
+                    query.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                    ModalOutcome::StayOpen
+                } else {
+                    ModalOutcome::Ignored
+                }
+            }
+        },
+        Modal::SemanticHits {
+            hits,
+            offset,
+            cursor,
+        } => match key {
+            // Igual que el plan IA: superficie ya REVISADA por el humano y
+            // no destructiva (navegar no muta) — `y/Enter` abre, como la TUI
+            // (`modal-semantic-hits-hint`).
+            "y" | "enter" => match hits.get(*cursor) {
+                Some(h) => ModalOutcome::NavigateTo(h.path.clone()),
+                // Defensivo: sin hit bajo el cursor (hits vacíos — la
+                // ingestión no abre este modal vacío) no hay nada que abrir.
+                None => ModalOutcome::Dismiss,
+            },
+            "n" | "escape" => ModalOutcome::Dismiss,
+            "down" | "up" => {
+                // Cursor con ventana que lo sigue (molde TUI
+                // `semantic_cursor`); JAMÁS confirma ni cancela.
+                if hits.is_empty() {
+                    return ModalOutcome::Ignored;
+                }
+                *cursor = if key == "down" {
+                    (*cursor + 1).min(hits.len() - 1)
+                } else {
+                    cursor.saturating_sub(1)
+                };
+                if *cursor < *offset {
+                    *offset = *cursor;
+                }
+                if *cursor >= *offset + SEMANTIC_HIT_LIMIT {
+                    *offset = *cursor + 1 - SEMANTIC_HIT_LIMIT;
+                }
                 ModalOutcome::StayOpen
             }
             _ => ModalOutcome::Ignored,
@@ -645,5 +765,133 @@ mod tests {
             };
             assert_eq!(*offset, expected);
         }
+    }
+
+    /// M4-IA-2: Enter en el prompt semántico con texto pide la búsqueda
+    /// (consulta recortada), vacío/espacios se queda abierto sin pedir
+    /// nada, y Esc descarta (espejo de `ai_prompt_enter_pide_plan_y_esc_
+    /// descarta`).
+    #[test]
+    fn semantic_query_enter_pide_busqueda_y_esc_descarta() {
+        let mut m = Modal::SemanticQuery { query: Vec::new() };
+        // Vacío: StayOpen (nada viaja al daemon).
+        assert_eq!(on_key(&mut m, "enter", None), ModalOutcome::StayOpen);
+        // Solo espacios: sigue vacío tras el trim.
+        assert_eq!(on_key(&mut m, "space", None), ModalOutcome::StayOpen);
+        assert_eq!(on_key(&mut m, "enter", None), ModalOutcome::StayOpen);
+        for c in "facturas".chars() {
+            let buf = c.to_string();
+            assert_eq!(
+                on_key(&mut m, &buf, Some(&buf)),
+                ModalOutcome::StayOpen,
+                "teclear {c:?} debe quedarse abierto"
+            );
+        }
+        assert_eq!(
+            on_key(&mut m, "enter", None),
+            ModalOutcome::RequestSemantic {
+                query: "facturas".into(),
+            }
+        );
+        assert_eq!(on_key(&mut m, "escape", None), ModalOutcome::Dismiss);
+    }
+
+    /// M4-IA-2: backspace retira el último carácter UTF-8 COMPLETO (jamás
+    /// un byte suelto — mismo molde que el prompt IA).
+    #[test]
+    fn semantic_query_backspace_respeta_fronteras_utf8() {
+        let mut m = Modal::SemanticQuery { query: Vec::new() };
+        assert_eq!(on_key(&mut m, "a", Some("a")), ModalOutcome::StayOpen);
+        assert_eq!(on_key(&mut m, "ñ", Some("ñ")), ModalOutcome::StayOpen);
+        assert_eq!(on_key(&mut m, "backspace", None), ModalOutcome::StayOpen);
+        let Modal::SemanticQuery { query } = &m else {
+            unreachable!()
+        };
+        assert_eq!(query, b"a", "la ñ (2 bytes) se retiró entera");
+    }
+
+    fn semantic_hits(n: usize) -> Vec<norte_proto::methods::SemanticHit> {
+        (0..n)
+            .map(|i| norte_proto::methods::SemanticHit {
+                path: vp(&format!("mem:///docs/f{i}.txt")),
+                score: 0.9 - (i as f64) * 0.01,
+            })
+            .collect()
+    }
+
+    /// M4-IA-2: `y`/Enter navegan al hit bajo el cursor (`NavigateTo` con
+    /// SU path), `n`/Esc cierran y cualquier otra tecla se ignora.
+    #[test]
+    fn semantic_hits_enter_navega_al_hit_del_cursor_y_esc_cierra() {
+        let mut m = Modal::SemanticHits {
+            hits: semantic_hits(3),
+            offset: 0,
+            cursor: 1,
+        };
+        assert_eq!(
+            on_key(&mut m, "enter", None),
+            ModalOutcome::NavigateTo(vp("mem:///docs/f1.txt"))
+        );
+        assert_eq!(
+            on_key(&mut m, "y", None),
+            ModalOutcome::NavigateTo(vp("mem:///docs/f1.txt"))
+        );
+        assert_eq!(on_key(&mut m, "n", None), ModalOutcome::Dismiss);
+        assert_eq!(on_key(&mut m, "escape", None), ModalOutcome::Dismiss);
+        assert_eq!(on_key(&mut m, "x", None), ModalOutcome::Ignored);
+    }
+
+    /// M4-IA-2 defensivo: un cursor fuera de rango (o hits vacíos, que la
+    /// ingestión no abre) no navega a NADA — Dismiss, jamás un panic.
+    #[test]
+    fn semantic_hits_cursor_fuera_de_rango_no_navega() {
+        let mut m = Modal::SemanticHits {
+            hits: Vec::new(),
+            offset: 0,
+            cursor: 0,
+        };
+        assert_eq!(on_key(&mut m, "enter", None), ModalOutcome::Dismiss);
+        assert_eq!(on_key(&mut m, "down", None), ModalOutcome::Ignored);
+        let mut m = Modal::SemanticHits {
+            hits: semantic_hits(2),
+            offset: 0,
+            cursor: 9,
+        };
+        assert_eq!(on_key(&mut m, "y", None), ModalOutcome::Dismiss);
+    }
+
+    /// M4-IA-2 (molde TUI `semantic_cursor`): `down`/`up` mueven el CURSOR
+    /// clampado a `[0, len-1]`, la ventana lo sigue por ambos extremos y el
+    /// scroll JAMÁS confirma ni cancela.
+    #[test]
+    fn semantic_hits_cursor_clampa_y_la_ventana_lo_sigue() {
+        let n = SEMANTIC_HIT_LIMIT + 2;
+        let mut m = Modal::SemanticHits {
+            hits: semantic_hits(n),
+            offset: 0,
+            cursor: 0,
+        };
+        // Baja hasta el fondo (y una de más: clamp en len-1).
+        for _ in 0..n {
+            assert_eq!(on_key(&mut m, "down", None), ModalOutcome::StayOpen);
+        }
+        let Modal::SemanticHits { offset, cursor, .. } = &m else {
+            unreachable!()
+        };
+        assert_eq!(*cursor, n - 1, "clamp en len - 1");
+        assert_eq!(
+            *offset,
+            n - SEMANTIC_HIT_LIMIT,
+            "la ventana siguió al cursor por abajo"
+        );
+        // Sube hasta arriba (y una de más: clamp en 0).
+        for _ in 0..n {
+            assert_eq!(on_key(&mut m, "up", None), ModalOutcome::StayOpen);
+        }
+        let Modal::SemanticHits { offset, cursor, .. } = &m else {
+            unreachable!()
+        };
+        assert_eq!(*cursor, 0);
+        assert_eq!(*offset, 0, "la ventana siguió al cursor por arriba");
     }
 }
