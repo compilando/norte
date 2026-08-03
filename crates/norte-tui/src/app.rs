@@ -2014,12 +2014,12 @@ impl App {
         self.open_next_pending();
     }
 
-    /// Valida y devuelve la instrucción; NO cierra el modal (molde #104
-    /// review MINOR-1: el caller cierra con [`Self::ai_rename_submitted`]
-    /// SOLO tras lanzar la petición — un fallo deja el diagnóstico con
-    /// [`Self::ai_rename_set_error`] y el usuario CONSERVA lo tecleado).
-    /// Una instrucción vacía deja su diagnóstico aquí mismo y devuelve
-    /// `None`.
+    /// Valida y devuelve la instrucción; NO cierra el modal — el caller
+    /// cierra con [`Self::ai_rename_submitted`] tras SPAWNEAR la petición
+    /// (audit INFO-7: el spawn en sí no falla; los fallos del modelo llegan
+    /// ASÍNCRONOS y salen por la barra, `msg-ai-rename-failed`, no por el
+    /// modal). Una instrucción vacía deja su diagnóstico aquí mismo y
+    /// devuelve `None`.
     pub fn ai_rename_confirm(&mut self) -> Option<String> {
         if let Some(Modal::AiRenameInstruction { instruction, error }) = &mut self.modal {
             let text = instruction.trim();
@@ -2042,10 +2042,33 @@ impl App {
         }
     }
 
-    /// Deja el diagnóstico de un lanzamiento fallido; el texto sobrevive.
+    /// Deja un diagnóstico bajo el campo con el texto CONSERVADO. Audit
+    /// INFO-7: en el flujo real solo cubre diagnósticos SÍNCRONOS previos al
+    /// spawn (hoy, la instrucción vacía la marca el propio
+    /// [`Self::ai_rename_confirm`]); un fallo del modelo llega ASYNC con el
+    /// prompt ya cerrado y va a la barra, jamás por aquí.
     pub fn ai_rename_set_error(&mut self, msg: String) {
         if let Some(Modal::AiRenameInstruction { error, .. }) = &mut self.modal {
             *error = Some(msg);
+        }
+    }
+
+    /// Desplaza la ventana del plan IA (audit MAJOR-3): `down` avanza una
+    /// pareja, si no retrocede; clampado a `[0, len - ventana]`. No-op sin
+    /// su modal. El scroll JAMÁS confirma ni cancela — `dialog_action`
+    /// devuelve `None` para `dialog.up`/`dialog.down` en este modal (fuera
+    /// de su allowlist de decisión) y el run loop enruta esos comandos aquí.
+    pub fn ai_plan_scroll(&mut self, down: bool) {
+        if let Some(Modal::AiRenamePlan {
+            entries, offset, ..
+        }) = &mut self.modal
+        {
+            let max = entries.len().saturating_sub(AI_RENAME_PAIR_LIMIT);
+            *offset = if down {
+                (*offset + 1).min(max)
+            } else {
+                offset.saturating_sub(1)
+            };
         }
     }
 
@@ -2405,8 +2428,19 @@ pub enum Modal {
         dir: VPath,
         /// Parejas from→to del modelo (proto, UTF-8 garantizado).
         entries: Vec<norte_proto::methods::AiRenameEntry>,
+        /// Primera pareja visible de la ventana (audit MAJOR-3): el plan
+        /// ENTERO es revisable por scroll ([`App::ai_plan_scroll`]) — sin
+        /// esto, la cola de un plan > [`AI_RENAME_PAIR_LIMIT`] se aplicaba
+        /// sin poder verse.
+        offset: usize,
     },
 }
+
+/// Parejas del plan IA visibles a la vez en [`Modal::AiRenamePlan`] (ventana
+/// de scroll, audit MAJOR-3); el indicador de desbordamiento resume la
+/// posición. Única fuente para el render (`ui`), el alto del modal y el
+/// clamp de [`App::ai_plan_scroll`].
+pub const AI_RENAME_PAIR_LIMIT: usize = 5;
 
 /// Tope de caracteres del patrón de [`Modal::MarkPattern`] (#103 T9 review
 /// MINOR): en `chars()`, no bytes — igual criterio que [`DETAIL_MAX_CHARS`],

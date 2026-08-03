@@ -883,7 +883,11 @@ async fn run(
         if app.modal.is_none()
             && let Some((dir, entries)) = pending_ai_plan.take()
         {
-            app.modal = Some(Modal::AiRenamePlan { dir, entries });
+            app.modal = Some(Modal::AiRenamePlan {
+                dir,
+                entries,
+                offset: 0,
+            });
         }
         // Barra Lua en cada vuelta, ANTES del draw (cacheada en el host).
         refresh_lua_status(app, lua_host.as_ref());
@@ -1065,7 +1069,11 @@ async fn run(
                             let ready = (run.dir, plan.entries);
                             if app.modal.is_none() {
                                 let (dir, entries) = ready;
-                                app.modal = Some(Modal::AiRenamePlan { dir, entries });
+                                app.modal = Some(Modal::AiRenamePlan {
+                                    dir,
+                                    entries,
+                                    offset: 0,
+                                });
                             } else {
                                 // Otro modal abierto (aprobación, colisión…):
                                 // el plan espera su turno, jamás lo pisa.
@@ -3411,6 +3419,18 @@ async fn on_dialog_key(
         }
         Resolution::Reset => return Cd::Cancelled,
     };
+    // M4-IA (audit MAJOR-3): scroll del plan IA — mueve la VENTANA de
+    // parejas y JAMÁS confirma/cancela. Mismo par de comandos que los
+    // pickers (`ALLOW_PICKER`); para `dialog_action` up/down están FUERA
+    // del allowlist de decisión de este modal (devuelve `None`, pin en
+    // tests/modal.rs), así que el enrutado vive aquí, como el dispatch de
+    // los pickers vive en su `on_*_key`.
+    if matches!(app.modal, Some(Modal::AiRenamePlan { .. }))
+        && matches!(cmd.as_str(), "dialog.up" | "dialog.down")
+    {
+        app.ai_plan_scroll(cmd.as_str() == "dialog.down");
+        return Cd::Cancelled;
+    }
     let Some(outcome) = dialog_action(&modal, &cmd) else {
         return Cd::Cancelled; // comando fuera del allowlist de ESTE modal
     };
@@ -3453,8 +3473,10 @@ async fn on_dialog_key(
                 | Modal::TransferName { .. } => {}
                 // `AiRenamePlan` (M4-IA) SÍ es una superficie de decisión:
                 // confirmar aplica el plan REVISADO — N fs.move gobernados
-                // (journal + policy), en el orden del plan (molde CLI).
-                Modal::AiRenamePlan { dir, entries } => {
+                // (journal + policy), en el orden del plan (molde CLI). Se
+                // aplican TODAS las parejas, no solo la ventana visible: el
+                // scroll (audit MAJOR-3) hace revisable el plan entero.
+                Modal::AiRenamePlan { dir, entries, .. } => {
                     apply_ai_rename(app, backend, &dir, &entries).await;
                 }
                 // S2 (`[ui] confirm_quit`): confirmar cierra — el run loop
@@ -3627,27 +3649,46 @@ async fn submit_transfer(
     }
 }
 
+/// Valida TODAS las parejas del plan como [`norte_proto::Segment`] (cinturón
+/// fail-loud, audit MAJOR-2): un plan bien formado del engine JAMÁS trae un
+/// segmento inválido (el daemon los validó al armarlo), así que UN rechazo
+/// aquí delata un daemon hostil/roto — `None` aborta el lote ENTERO, jamás
+/// un skip silencioso que aplique "lo demás" de un plan adulterado.
+///
+/// PURA a propósito: testeable sin backend (audit MINOR-6e).
+fn validate_ai_plan(
+    entries: &[norte_proto::methods::AiRenameEntry],
+) -> Option<Vec<(norte_proto::Segment, norte_proto::Segment)>> {
+    entries
+        .iter()
+        .map(|e| {
+            Some((
+                norte_proto::Segment::new(e.from.as_bytes().to_vec()).ok()?,
+                norte_proto::Segment::new(e.to.as_bytes().to_vec()).ok()?,
+            ))
+        })
+        .collect()
+}
+
 /// Aplica un plan de rename IA CONFIRMADO (M4-IA): un `fs.move` gobernado
 /// (journal + policy + colisiones del engine) por pareja, en el ORDEN del
-/// plan (molde CLI). El primer fallo PARA el lote — lo ya encolado sigue en
-/// el board — y deja el detalle en la barra; si todo encoló, la barra
-/// resume cuántos moves salieron.
+/// plan (molde CLI). PRE-valida el plan entero ([`validate_ai_plan`], audit
+/// MAJOR-2): una pareja inválida = plan adulterado → NADA se encola y la
+/// barra lo dice. El primer fallo de SUBMIT para el lote — lo ya encolado
+/// sigue en el board — y deja el detalle en la barra; si todo encoló, la
+/// barra resume cuántos moves salieron.
 async fn apply_ai_rename(
     app: &mut App,
     backend: &Backend,
     dir: &VPath,
     entries: &[norte_proto::methods::AiRenameEntry],
 ) {
+    let Some(pairs) = validate_ai_plan(entries) else {
+        app.message = Some(t("msg-ai-rename-invalid-plan"));
+        return;
+    };
     let mut n = 0usize;
-    for e in entries {
-        // Cinturón: el engine ya validó `to` como `Segment` al armar el
-        // plan; revalidar aquí es barato y un daemon N+1 no cuela un `..`.
-        let (Ok(from), Ok(to)) = (
-            norte_proto::Segment::new(e.from.as_bytes().to_vec()),
-            norte_proto::Segment::new(e.to.as_bytes().to_vec()),
-        ) else {
-            continue;
-        };
+    for (from, to) in pairs {
         match backend
             .move_(&dir.join(from), &dir.join(to), TransferOptions::default())
             .await
@@ -3670,6 +3711,48 @@ async fn apply_ai_rename(
     }
     if n > 0 {
         app.message = Some(ta("msg-ai-rename-applied", &[("n", &n.to_string())]));
+    }
+}
+
+#[cfg(test)]
+mod ai_plan_tests {
+    use super::validate_ai_plan;
+    use norte_proto::methods::AiRenameEntry;
+
+    fn e(from: &str, to: &str) -> AiRenameEntry {
+        AiRenameEntry {
+            from: from.into(),
+            to: to.into(),
+        }
+    }
+
+    /// Audit MAJOR-2 (fail-loud): UNA pareja inválida — traversal `..`,
+    /// separador embebido o nombre vacío — tumba el plan ENTERO (`None`),
+    /// jamás un skip silencioso que aplique "lo demás" de un plan
+    /// adulterado por un daemon hostil/roto.
+    #[test]
+    fn una_pareja_invalida_tumba_el_plan_entero() {
+        assert!(validate_ai_plan(&[e("a", "b"), e("c", "..")]).is_none());
+        assert!(validate_ai_plan(&[e("a/b", "c"), e("d", "e")]).is_none());
+        assert!(validate_ai_plan(&[e("", "x")]).is_none());
+        assert!(validate_ai_plan(&[e("ok", "tambien-ok"), e("x", "a/b")]).is_none());
+    }
+
+    /// Un plan bien formado conserva orden y longitud, bytes exactos.
+    #[test]
+    fn un_plan_valido_conserva_orden_y_longitud() {
+        let pairs = validate_ai_plan(&[e("a", "b"), e("c", "d")]).expect("plan válido");
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].0.as_bytes(), b"a");
+        assert_eq!(pairs[0].1.as_bytes(), b"b");
+        assert_eq!(pairs[1].0.as_bytes(), b"c");
+        assert_eq!(pairs[1].1.as_bytes(), b"d");
+    }
+
+    /// El plan vacío es válido (y `apply_ai_rename` no encola nada).
+    #[test]
+    fn un_plan_vacio_es_valido() {
+        assert_eq!(validate_ai_plan(&[]).expect("vacío válido").len(), 0);
     }
 }
 

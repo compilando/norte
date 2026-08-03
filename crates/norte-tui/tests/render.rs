@@ -433,6 +433,7 @@ fn modal_de_plan_ai_enmascara_y_no_oculta_el_destino() {
             from: from_largo,
             to: "destino-final.txt".into(),
         }],
+        offset: 0,
     });
     let mut terminal = Terminal::new(TestBackend::new(60, 14)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");

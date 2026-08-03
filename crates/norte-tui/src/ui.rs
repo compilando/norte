@@ -12,7 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{App, Pane, display_name};
+use crate::app::{AI_RENAME_PAIR_LIMIT, App, Pane, display_name};
 use crate::theme::TuiTheme;
 use norte_i18n::{t, ta};
 
@@ -1079,11 +1079,14 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
         Modal::MarkPattern { error: Some(_), .. }
         | Modal::Mkdir { error: Some(_), .. }
         | Modal::AiRenameInstruction { error: Some(_), .. } => 7,
-        // M4-IA: dos líneas por pareja pintada + la de resumen (si el plan
-        // no cabe entero) + el hint, más bordes — mismo cómputo dinámico
-        // `body_lines + 3` que ConfirmDelete/ConfirmTransfer.
+        // M4-IA: la línea del dir (audit MAJOR-1) + dos por pareja de la
+        // VENTANA + el indicador (si el plan no cabe entero) + el hint, más
+        // bordes — mismo cómputo dinámico `body_lines + 3` que
+        // ConfirmDelete/ConfirmTransfer. Estable al scroll: la ventana
+        // clampada siempre pinta `min(len, LIMIT)` parejas.
         Modal::AiRenamePlan { entries, .. } => {
-            let lineas = 2 * entries.len().min(AI_RENAME_PAIR_LIMIT)
+            let lineas = 1
+                + 2 * entries.len().min(AI_RENAME_PAIR_LIMIT)
                 + usize::from(entries.len() > AI_RENAME_PAIR_LIMIT)
                 + 1;
             u16::try_from(lineas).unwrap_or(u16::MAX).saturating_add(3)
@@ -1221,9 +1224,13 @@ fn modal_title_body(
         Modal::AiRenameInstruction { instruction, error } => {
             ai_rename_modal_text(instruction, error.as_deref())
         }
-        // M4-IA: parejas from→to del plan revisable (enmascarado defensivo,
-        // ver `ai_rename_plan_modal_text`).
-        Modal::AiRenamePlan { entries, .. } => ai_rename_plan_modal_text(entries),
+        // M4-IA: dir objetivo + ventana de parejas from→to del plan
+        // revisable (enmascarado defensivo, ver `ai_rename_plan_modal_text`).
+        Modal::AiRenamePlan {
+            dir,
+            entries,
+            offset,
+        } => ai_rename_plan_modal_text(dir, entries, *offset),
         // #105: nombre de destino editable — dir destino + campo + error,
         // todo de usuario y todo enmascarado.
         Modal::TransferName {
@@ -1407,44 +1414,84 @@ fn ai_rename_modal_text(instruction: &str, error: Option<&str>) -> (String, Stri
     (t("modal-ai-rename"), lines.join("\n"))
 }
 
-/// Tope de parejas pintadas del plan IA; el resto se resume en una línea
-/// (molde `MODAL_ITEM_LIMIT` de los confirmes de lote).
-const AI_RENAME_PAIR_LIMIT: usize = 5;
+/// Prefija el badge hostil FUERA de la traducción (audit MINOR-5: el
+/// mecanismo del badge no puede depender de que cada locale conserve un
+/// `{ $badge }` — concatenación Rust-side, translation-proof).
+fn badge_prefixed(hostil: bool, line: String) -> String {
+    if hostil {
+        format!("{HOSTILE_BADGE}{line}")
+    } else {
+        line
+    }
+}
 
 /// Título+cuerpo de `Modal::AiRenamePlan` (M4-IA, doctrina encoding-auditor):
-/// cada nombre en SU línea, `→` fuera de banda al INICIO de la línea del
-/// destino (jamás un joiner in-band que un nombre pueda imitar), elipsis
-/// media (un `from` kilométrico no expulsa el `to` de la caja) y enmascarado
-/// MARCADO con badge. Aunque el engine garantiza UTF-8 en el wire, un daemon
+/// primera línea = el dir OBJETIVO etiquetado fuera de banda (audit MAJOR-1
+/// — el humano decide sabiendo DÓNDE aterriza el plan); después la VENTANA
+/// de [`AI_RENAME_PAIR_LIMIT`] parejas desde `offset` (audit MAJOR-3: el
+/// plan entero es revisable por scroll). Cada nombre en SU línea — el `from`
+/// con etiqueta numerada ABSOLUTA fuera de banda (audit MINOR-4, corpus
+/// `arrow_join_spoof`: un nombre puede imitar la flecha, no el `n.` al
+/// margen), el `→` del destino al INICIO de su línea — elipsis media (un
+/// `from` kilométrico no expulsa el `to` de la caja) y enmascarado MARCADO
+/// con badge ([`badge_prefixed`], Rust-side). El indicador de desbordamiento
+/// lleva badge si alguna pareja OCULTA es hostil (lo escondido no se cuela
+/// limpio). Aunque el engine garantiza UTF-8 en el wire, un daemon
 /// N+1/comprometido podría mandar cualquier cosa — se pinta a la defensiva
 /// SIEMPRE, como el modal de aprobación.
-fn ai_rename_plan_modal_text(entries: &[norte_proto::methods::AiRenameEntry]) -> (String, String) {
-    let mut lines = Vec::new();
-    for e in entries.iter().take(AI_RENAME_PAIR_LIMIT) {
+fn ai_rename_plan_modal_text(
+    dir: &norte_proto::VPath,
+    entries: &[norte_proto::methods::AiRenameEntry],
+    offset: usize,
+) -> (String, String) {
+    // Cinturón de render: el clamp vive en `App::ai_plan_scroll`, pero un
+    // offset fuera de rango jamás debe pintar una ventana vacía.
+    let offset = offset.min(entries.len().saturating_sub(AI_RENAME_PAIR_LIMIT));
+    let last = (offset + AI_RENAME_PAIR_LIMIT).min(entries.len());
+    let (dir_txt, dir_hostil) = norte_frontend::path_display(dir);
+    let mut lines = vec![badge_prefixed(
+        dir_hostil,
+        ta(
+            "modal-ai-rename-dir",
+            &[("dir", &middle_ellipsis(&dir_txt, 46))],
+        ),
+    )];
+    for (i, e) in entries.iter().enumerate().take(last).skip(offset) {
         let (from, from_hostil) = display_name(e.from.as_bytes());
         let (to, to_hostil) = display_name(e.to.as_bytes());
-        lines.push(ta(
-            "modal-ai-rename-pair-from",
-            &[
-                ("badge", if from_hostil { HOSTILE_BADGE } else { "" }),
-                ("from", &middle_ellipsis(&from, 46)),
-            ],
+        lines.push(badge_prefixed(
+            from_hostil,
+            ta(
+                "modal-ai-rename-pair-from",
+                &[
+                    ("n", &(i + 1).to_string()),
+                    ("from", &middle_ellipsis(&from, 46)),
+                ],
+            ),
         ));
-        lines.push(ta(
-            "modal-ai-rename-pair-to",
-            &[(
-                "to",
-                &format!(
-                    "{}{}",
-                    if to_hostil { HOSTILE_BADGE } else { "" },
-                    middle_ellipsis(&to, 44),
-                ),
-            )],
+        lines.push(badge_prefixed(
+            to_hostil,
+            ta(
+                "modal-ai-rename-pair-to",
+                &[("to", &middle_ellipsis(&to, 44))],
+            ),
         ));
     }
     if entries.len() > AI_RENAME_PAIR_LIMIT {
-        let n = entries.len() - AI_RENAME_PAIR_LIMIT;
-        lines.push(ta("modal-ai-rename-more", &[("n", &n.to_string())]));
+        let hidden_hostil = entries.iter().enumerate().any(|(i, e)| {
+            (i < offset || i >= last)
+                && (display_name(e.from.as_bytes()).1 || display_name(e.to.as_bytes()).1)
+        });
+        lines.push(badge_prefixed(
+            hidden_hostil,
+            ta(
+                "modal-ai-rename-more",
+                &[
+                    ("shown", &last.to_string()),
+                    ("total", &entries.len().to_string()),
+                ],
+            ),
+        ));
     }
     lines.push(t("modal-ai-rename-plan-hint"));
     (t("modal-ai-rename-plan"), lines.join("\n"))
@@ -2583,6 +2630,159 @@ mod ellipsis_tests {
             "el backstop de cuenta de chars no acotó la salida: {} chars (cota {cota})",
             out.chars().count()
         );
+    }
+}
+
+#[cfg(test)]
+mod ai_rename_plan_modal_tests {
+    use super::{HOSTILE_BADGE, ai_rename_plan_modal_text, display_name, modal_height};
+    use norte_proto::VPath;
+    use norte_proto::methods::AiRenameEntry;
+
+    fn dir() -> VPath {
+        VPath::parse("mem:///proyecto").expect("wire válido")
+    }
+
+    fn entry(from: &str, to: &str) -> AiRenameEntry {
+        AiRenameEntry {
+            from: from.into(),
+            to: to.into(),
+        }
+    }
+
+    /// Audit MINOR-6a (corpus canónico, molde del sweep de `app.rs`): cada
+    /// nombre hostil, en la posición `from` Y en la `to` — ningún char de
+    /// `is_terminal_hazard` sobrevive en el texto pintado, y cuando el
+    /// enmascarado altera el nombre la línea va MARCADA con el badge.
+    #[test]
+    fn barrido_corpus_ningun_hazard_sobrevive_y_el_enmascarado_marca() {
+        for n in norte_testkit::corpus::hostile_names() {
+            let name = String::from_utf8_lossy(&n.bytes).into_owned();
+            let casos = [
+                (name.clone(), "limpio.txt".to_owned()),
+                ("limpio.txt".to_owned(), name.clone()),
+            ];
+            for (from, to) in casos {
+                let hostil = display_name(from.as_bytes()).1 || display_name(to.as_bytes()).1;
+                let (_, body) = ai_rename_plan_modal_text(&dir(), &[entry(&from, &to)], 0);
+                // Por LÍNEA: el `\n` que separa las líneas del cuerpo es un
+                // control legítimo del formato, no contenido pintado.
+                assert!(
+                    !body
+                        .lines()
+                        .any(|l| l.chars().any(norte_encoding::is_terminal_hazard)),
+                    "corpus {}: un hazard sobrevivió al render: {body:?}",
+                    n.id
+                );
+                if hostil {
+                    assert!(
+                        body.contains(HOSTILE_BADGE),
+                        "corpus {}: enmascarado SIN badge: {body:?}",
+                        n.id
+                    );
+                }
+            }
+        }
+    }
+
+    /// Audit MINOR-4 (corpus `arrow_join_spoof`): un `from` que IMITA la
+    /// flecha no fabrica una pareja falsa — el `from` lleva su etiqueta
+    /// numerada fuera de banda en SU línea y el destino REAL conserva la
+    /// suya con la flecha al inicio.
+    #[test]
+    fn arrow_join_spoof_no_fabrica_pareja() {
+        let spoof = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == "arrow_join_spoof")
+            .expect("fixture del corpus");
+        let from = String::from_utf8_lossy(&spoof.bytes).into_owned();
+        let (_, body) = ai_rename_plan_modal_text(&dir(), &[entry(&from, "real.txt")], 0);
+        let lines: Vec<&str> = body.lines().collect();
+        // dir + from + to + hint = 4 líneas exactas: el spoof no añade una.
+        assert_eq!(lines.len(), 4, "{body:?}");
+        assert!(lines[1].contains("1."), "etiqueta fuera de banda: {body:?}");
+        assert!(
+            lines[2].starts_with('→') && lines[2].contains("real.txt"),
+            "el destino real conserva SU línea: {body:?}"
+        );
+    }
+
+    /// Audit MINOR-6c: un destino hostil (RLO del corpus) se enmascara y su
+    /// línea va marcada — el badge antecede incluso a la flecha.
+    #[test]
+    fn destino_hostil_enmascara_y_marca() {
+        let rtl = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == "rtl_override")
+            .expect("fixture del corpus");
+        let to = String::from_utf8_lossy(&rtl.bytes).into_owned();
+        let (_, body) = ai_rename_plan_modal_text(&dir(), &[entry("limpio.txt", &to)], 0);
+        let to_line = body.lines().nth(2).expect("línea del destino");
+        assert!(to_line.starts_with(HOSTILE_BADGE), "{body:?}");
+        assert!(to_line.contains('\u{FFFD}'), "{body:?}");
+        assert!(
+            !to_line.chars().any(norte_encoding::is_terminal_hazard),
+            "{body:?}"
+        );
+    }
+
+    /// Audit MAJOR-3: con 7 parejas la ventana pinta 5 desde `offset` con
+    /// numeración ABSOLUTA, el indicador dice posición/total y el alto del
+    /// modal cuadra con las líneas pintadas.
+    #[test]
+    fn plan_largo_ventana_indicador_y_alto() {
+        let entries: Vec<AiRenameEntry> = (1..=7)
+            .map(|i| entry(&format!("f{i}"), &format!("t{i}")))
+            .collect();
+        let (_, body) = ai_rename_plan_modal_text(&dir(), &entries, 0);
+        let lines: Vec<&str> = body.lines().collect();
+        // dir + 5 parejas × 2 + indicador + hint = 13.
+        assert_eq!(lines.len(), 13, "{body:?}");
+        assert!(
+            lines[1].contains("1.") && lines[1].contains("f1"),
+            "{body:?}"
+        );
+        assert!(lines[11].contains("5/7"), "indicador: {body:?}");
+        assert!(!body.contains("f6"), "la cola espera al scroll: {body:?}");
+        // offset 2 = parejas 3..=7, numeración absoluta, indicador al tope.
+        let (_, body2) = ai_rename_plan_modal_text(&dir(), &entries, 2);
+        let lines2: Vec<&str> = body2.lines().collect();
+        assert_eq!(lines2.len(), 13, "alto ESTABLE al scroll: {body2:?}");
+        assert!(
+            lines2[1].contains("3.") && lines2[1].contains("f3"),
+            "{body2:?}"
+        );
+        assert!(body2.contains("f7"), "{body2:?}");
+        assert!(lines2[11].contains("7/7"), "{body2:?}");
+        // Un offset desbocado se clampa en el render (cinturón).
+        let (_, body3) = ai_rename_plan_modal_text(&dir(), &entries, 999);
+        assert!(body3.contains("f7"), "{body3:?}");
+        // Alto: 13 líneas de cuerpo + 3 de marco.
+        let modal = crate::app::Modal::AiRenamePlan {
+            dir: dir(),
+            entries,
+            offset: 0,
+        };
+        assert_eq!(modal_height(&modal), 16);
+    }
+
+    /// Audit MAJOR-3: el indicador de desbordamiento delata una pareja
+    /// hostil OCULTA (lo no visible jamás se cuela "limpio"), y deja de
+    /// marcar cuando el scroll la pone a la vista.
+    #[test]
+    fn indicador_marca_hostil_oculto() {
+        let mut entries: Vec<AiRenameEntry> = (1..=6)
+            .map(|i| entry(&format!("f{i}"), &format!("t{i}")))
+            .collect();
+        entries[5] = entry("x\u{202e}y", "limpio.txt");
+        let (_, body) = ai_rename_plan_modal_text(&dir(), &entries, 0);
+        let ind = body.lines().nth(11).expect("indicador");
+        assert!(ind.starts_with(HOSTILE_BADGE), "{body:?}");
+        // offset 1: la hostil entra en la ventana; la oculta (pareja 1) es
+        // limpia — el indicador ya no marca.
+        let (_, body2) = ai_rename_plan_modal_text(&dir(), &entries, 1);
+        let ind2 = body2.lines().nth(11).expect("indicador");
+        assert!(!ind2.starts_with(HOSTILE_BADGE), "{body2:?}");
     }
 }
 

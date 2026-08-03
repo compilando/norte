@@ -277,12 +277,15 @@ fn ai_plan() -> Modal {
             from: "a".into(),
             to: "b".into(),
         }],
+        offset: 0,
     }
 }
 
 /// M4-IA: el prompt de instrucción sigue la disciplina de `Mkdir` (#104
-/// review MINOR-1) — confirmar NO cierra; un fallo del lanzamiento deja el
-/// diagnóstico y CONSERVA lo tecleado; solo `ai_rename_submitted` cierra.
+/// review MINOR-1) — confirmar NO cierra; `ai_rename_set_error` deja un
+/// diagnóstico SÍNCRONO conservando lo tecleado (audit INFO-7: en el flujo
+/// real los fallos del modelo llegan async con el prompt ya cerrado y van
+/// a la barra); solo `ai_rename_submitted` cierra.
 #[test]
 fn ai_rename_instruccion_conserva_texto_tras_fallo() {
     let mut app = app();
@@ -339,8 +342,12 @@ fn plan_ia_confirma_como_confirmacion_no_como_aprobacion_de_agente() {
             "comando {cmd}"
         );
     }
-    // Fuera del allowlist de ESTE modal: inerte.
+    // Fuera del allowlist de ESTE modal: inerte. up/down INCLUIDOS (audit
+    // MAJOR-3): el scroll de la ventana lo enruta el run loop, jamás es un
+    // desenlace — scrollear no confirma ni cancela.
     assert_eq!(dialog_action(&ai_plan(), "dialog.overwrite"), None);
+    assert_eq!(dialog_action(&ai_plan(), "dialog.up"), None);
+    assert_eq!(dialog_action(&ai_plan(), "dialog.down"), None);
     // Texto libre (como Mkdir/MarkPattern): el run loop lo intercepta ANTES.
     let prompt = Modal::AiRenameInstruction {
         instruction: String::new(),
@@ -348,6 +355,36 @@ fn plan_ia_confirma_como_confirmacion_no_como_aprobacion_de_agente() {
     };
     assert_eq!(dialog_action(&prompt, "dialog.confirm"), None);
     assert_eq!(dialog_action(&prompt, "dialog.approve"), None);
+}
+
+/// Audit MAJOR-3: el scroll del plan clampa la ventana a `[0, len - 5]`
+/// (jamás pasa de largo ni se hace negativo) y avanza/retrocede de una en
+/// una con numeración estable.
+#[test]
+fn scroll_del_plan_clampa_en_ambos_extremos() {
+    let offset_de = |app: &norte_tui::app::App| match &app.modal {
+        Some(Modal::AiRenamePlan { offset, .. }) => *offset,
+        other => panic!("modal inesperado: {other:?}"),
+    };
+    let mut app = app();
+    app.modal = Some(Modal::AiRenamePlan {
+        dir: vp("file:///x"),
+        entries: (1..=7)
+            .map(|i| norte_proto::methods::AiRenameEntry {
+                from: format!("f{i}"),
+                to: format!("t{i}"),
+            })
+            .collect(),
+        offset: 0,
+    });
+    app.ai_plan_scroll(false);
+    assert_eq!(offset_de(&app), 0, "no retrocede bajo cero");
+    for _ in 0..10 {
+        app.ai_plan_scroll(true);
+    }
+    assert_eq!(offset_de(&app), 2, "clampa en len - ventana (7 - 5)");
+    app.ai_plan_scroll(false);
+    assert_eq!(offset_de(&app), 1);
 }
 
 /// Las aprobaciones hacen cola como las colisiones (jamás pisan un modal
