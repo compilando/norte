@@ -32,22 +32,11 @@ fn index_hit_to_proto(h: norte_index::IndexHit) -> norte_proto::methods::IndexHi
     }
 }
 
-/// Core → proto: el plan solo contiene nombres UTF-8 (invariante del engine:
-/// hostiles rechazados fail-loud pre-proveedor) — lossy es identidad.
-pub(crate) fn ai_plan_to_proto(
-    plan: crate::ai::RenamePlan,
-) -> norte_proto::methods::AiRenamePlanResult {
-    norte_proto::methods::AiRenamePlanResult {
-        entries: plan
-            .entries
-            .into_iter()
-            .map(|e| norte_proto::methods::AiRenameEntry {
-                from: String::from_utf8_lossy(e.from.as_bytes()).into_owned(),
-                to: String::from_utf8_lossy(e.to.as_bytes()).into_owned(),
-            })
-            .collect(),
-    }
-}
+/// Timeout de llamadas de IA: el proveedor (modelo remoto) tarda
+/// legítimamente mucho más que un fs.*. Acota AMBOS brazos de
+/// [`Backend::ai_rename_plan`] (embebido y remoto — cancel-on-drop en el
+/// remoto igualmente).
+const AI_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(2);
 
 /// El tipo de stream que devuelve [`Backend::list_stream`] (ADR 0017),
 /// re-exportado para que los frontends lo nombren sin depender de `norte-vfs`.
@@ -502,12 +491,15 @@ impl Backend {
     }
 
     /// Plan de rename revisable de `dir` vía IA (M4-IA, ADR 0031). NO muta:
-    /// aplicar el plan son N [`Backend::move_`] gobernados.
+    /// aplicar el plan son N [`Backend::move_`] gobernados. AMBOS brazos
+    /// están acotados por [`AI_CALL_TIMEOUT`]: un endpoint de proveedor en
+    /// dead-air jamás cuelga el frontend embebido ni el remoto.
     ///
     /// # Errors
     /// [`Error::Unsupported`] sin proveedor de IA; [`Error::PolicyDenied`]
-    /// del gate de IA (off, local-only, denied prefix); taxonomía del
-    /// protocolo para fallos del proveedor.
+    /// del gate de IA (off, local-only, denied prefix);
+    /// [`Error::ProviderUnavailable`] (retryable) al agotar el timeout;
+    /// taxonomía del protocolo para fallos del proveedor.
     pub async fn ai_rename_plan(
         &self,
         dir: &VPath,
@@ -515,8 +507,11 @@ impl Backend {
     ) -> Result<norte_proto::methods::AiRenamePlanResult, Error> {
         match self {
             Self::Embedded(engine) => {
-                let plan = engine.ai_rename_plan(dir, instruction).await?;
-                Ok(ai_plan_to_proto(plan))
+                let plan =
+                    tokio::time::timeout(AI_CALL_TIMEOUT, engine.ai_rename_plan(dir, instruction))
+                        .await
+                        .map_err(|_| Error::ProviderUnavailable { retryable: true })??;
+                Ok(crate::ai::ai_plan_to_proto(plan))
             }
             #[cfg(unix)]
             Self::Remote(r) => r.ai_rename_plan(dir, instruction).await,
@@ -1344,7 +1339,7 @@ pub mod remote {
     use norte_vfs::EntryStream;
     use tokio::sync::{mpsc, watch};
 
-    use super::{ConnEvent, TaskCanceller, TaskRef};
+    use super::{AI_CALL_TIMEOUT, ConnEvent, TaskCanceller, TaskRef};
     use crate::daemon::{Client, ClientError};
     use crate::engine::TransferOptions;
 
@@ -1353,9 +1348,6 @@ pub mod remote {
     /// Tope de una llamada RPC: un daemon vivo-pero-atascado (stat sobre un
     /// NFS muerto) jamás congela el frontend (M4 del rust-reviewer).
     const CALL_TIMEOUT: Duration = Duration::from_secs(30);
-    /// Timeout de llamadas de IA: el proveedor (modelo remoto) tarda
-    /// legítimamente mucho más que un fs.*. Cancel-on-drop igualmente.
-    const AI_CALL_TIMEOUT: Duration = Duration::from_mins(2);
     /// Entradas por página al listar un dir remoto (ADR 0017): acota el frame
     /// de respuesta y el tiempo de UNA llamada.
     const LIST_PAGE: u32 = 1000;
@@ -1844,9 +1836,11 @@ pub mod remote {
         /// daemon muere PRE-efecto y la Task no nace huérfana sin canceller
         /// (la ventana del driver Lua que abandona el run con el submit en
         /// vuelo). Un id cuyo dispatch YA terminó es un no-op en el daemon.
-        /// Solo lo usan las MUTACIONES (fs.copy/move/delete) y
-        /// `ai.rename_plan`: son los únicos métodos que el daemon envuelve en
-        /// su brazo de cancelación (#72).
+        /// Lo usan las mutaciones (fs.copy/move/delete/mkdir), `index.build`
+        /// y — vía [`Self::call_timed_guarded_with`] — `ai.rename_plan`. El
+        /// daemon envuelve en su brazo de cancelación (#72) todos esos
+        /// métodos MENOS `index.build`: para ese el guard es best-effort (el
+        /// `rpc.cancel` no encuentra dispatch que cortar).
         async fn call_timed_guarded<P, R>(&self, method: &str, params: &P) -> Result<R, Error>
         where
             P: serde::Serialize,

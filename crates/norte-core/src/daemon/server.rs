@@ -2896,7 +2896,7 @@ async fn dispatch_fs_task(
                 .map_err(RpcError::from)?;
             // Mapeo core→proto compartido con `Backend::Embedded`
             // (`ai_plan_to_proto`): lossy-identidad por invariante del engine.
-            to_value(&crate::backend::ai_plan_to_proto(plan))
+            to_value(&crate::ai::ai_plan_to_proto(plan))
         }
         // index.build (0.25.0, M4): Task. El resultado (indexed/removed) NO se
         // reenvía por wire aún (task completa = hecho); un fetch de report es

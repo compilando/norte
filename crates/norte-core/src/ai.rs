@@ -277,6 +277,21 @@ pub struct RenamePlan {
     pub entries: Vec<RenameEntry>,
 }
 
+/// Core → proto: el plan solo contiene nombres UTF-8 (invariante del engine:
+/// hostiles rechazados fail-loud pre-proveedor) — lossy es identidad.
+pub(crate) fn ai_plan_to_proto(plan: RenamePlan) -> norte_proto::methods::AiRenamePlanResult {
+    norte_proto::methods::AiRenamePlanResult {
+        entries: plan
+            .entries
+            .into_iter()
+            .map(|e| norte_proto::methods::AiRenameEntry {
+                from: String::from_utf8_lossy(e.from.as_bytes()).into_owned(),
+                to: String::from_utf8_lossy(e.to.as_bytes()).into_owned(),
+            })
+            .collect(),
+    }
+}
+
 /// Construye la petición de chat del rename: envía SOLO los nombres base
 /// (bytes crudos → display lossy-marcado; un nombre hostil con U+FFFD se
 /// rechaza fail-loud, jamás se manda) + la instrucción. Pide JSON estricto.

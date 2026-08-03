@@ -672,6 +672,11 @@ async fn make_backend(
             norte_core::connect::config_dir(),
         )));
         // IA (M4-IA): opt-in; sin [ai] el backend degrada (Unsupported).
+        // Diagnóstico por eprintln, no tracing (rust review MINOR-4): el TUI
+        // no instala subscriber (`logging::init` es de cli/daemon; un fmt a
+        // stderr pelearía con la pantalla alternativa) — un `tracing::warn!`
+        // aquí se descartaría mudo, y este punto es PRE-ratatui, donde stderr
+        // aún llega al terminal. Mismo patrón que el wiring del daemon-run.
         match tokio::task::spawn_blocking(norte_core::ai::AiConfig::load).await {
             Ok(Ok(ai_cfg)) => {
                 if let Some(pcfg) = ai_cfg.rename_provider_config().cloned() {

@@ -189,8 +189,7 @@ async fn respuesta_hostil_no_produce_plan_parcial() {
 }
 
 /// El brazo `Embedded` de [`norte_core::backend::Backend`] devuelve el plan
-/// ya mapeado
-/// a tipos del protocolo (paridad con el brazo remoto).
+/// ya mapeado a tipos del protocolo (paridad con el brazo remoto).
 #[tokio::test]
 async fn backend_embebido_devuelve_el_plan_en_tipos_proto() {
     let (engine, mem, _) = engine_with(r#"[{"from":"a.txt","to":"b.txt"}]"#, true, enabled());
@@ -204,6 +203,19 @@ async fn backend_embebido_devuelve_el_plan_en_tipos_proto() {
     assert_eq!(plan.entries.len(), 1);
     assert_eq!(plan.entries[0].from, "a.txt");
     assert_eq!(plan.entries[0].to, "b.txt");
+}
+
+/// El timeout del brazo embebido no se traga los errores del engine:
+/// `Unsupported` (sin proveedor) atraviesa el wrapper intacto.
+#[tokio::test]
+async fn backend_embebido_propaga_unsupported_sin_proveedor() {
+    let engine = Engine::new(); // sin set_ai_provider
+    let backend = norte_core::backend::Backend::Embedded(Arc::new(engine));
+    let err = backend
+        .ai_rename_plan(&vp("mem:///"), "x")
+        .await
+        .expect_err("sin proveedor");
+    assert!(matches!(err, Error::Unsupported), "fue {err:?}");
 }
 
 struct CapturingAi {
