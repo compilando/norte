@@ -122,7 +122,11 @@ impl Index {
             .filename(path)
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal);
+            .synchronous(SqliteSynchronous::Normal)
+            // SQLite NO aplica FK sin este pragma por conexión: sin él, el
+            // sweep de `files` dejaría embeddings huérfanos (el CASCADE del
+            // schema sería letra muerta).
+            .foreign_keys(true);
         let pool = SqlitePoolOptions::new().connect_with(opts).await?;
         let idx = Self { pool };
         idx.migrate().await?;
@@ -141,7 +145,9 @@ impl Index {
     /// # Errors
     /// [`IndexError::Sqlite`] si la migración falla.
     pub async fn open_memory() -> Result<Self, IndexError> {
-        let opts = SqliteConnectOptions::new().in_memory(true);
+        let opts = SqliteConnectOptions::new()
+            .in_memory(true)
+            .foreign_keys(true);
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(opts)
@@ -190,6 +196,22 @@ impl Index {
                  INSERT INTO files_fts(files_fts, rowid, name_display, path_display)
                  VALUES ('delete', old.id, old.name_display, old.path_display);
              END",
+        )
+        .execute(&self.pool)
+        .await?;
+        // Embeddings semánticos (M4-IA-2, ADR 0031 A3). Aditivo: un DB viejo gana
+        // la tabla en el siguiente open. Invalidación por (text_hash, model): un
+        // vector de otro modelo cuenta como ausente. El borrado de `files` (sweep
+        // del build) arrastra el embedding vía ON DELETE CASCADE — requiere
+        // foreign_keys(true) en la conexión (se activa en open/open_memory).
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS embeddings (
+                 file_id   INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+                 model     TEXT NOT NULL,
+                 dim       INTEGER NOT NULL,
+                 vec       BLOB NOT NULL,
+                 text_hash BLOB NOT NULL
+             )",
         )
         .execute(&self.pool)
         .await?;
@@ -326,6 +348,166 @@ impl Index {
         }
         Ok(hits)
     }
+
+    /// Filas de `files` con `kind = file` bajo `root`: el UNIVERSO de
+    /// `index.embed` (los dirs/symlinks/other no se embeben). Vacío ⇒ sin
+    /// build previo de ese root.
+    ///
+    /// # Errors
+    /// [`IndexError::Sqlite`].
+    pub async fn files_for_embed(&self, root: &VPath) -> Result<Vec<EmbedCandidate>, IndexError> {
+        let rid = root_id(root);
+        let rows = sqlx::query("SELECT id, path, size FROM files WHERE root_id = ?1 AND kind = 0")
+            .bind(rid)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| {
+                // Un path corrupto (imposible: lo escribió `build`) se salta.
+                let path = VPath::parse(&r.get::<String, _>("path")).ok()?;
+                Some(EmbedCandidate {
+                    file_id: r.get("id"),
+                    path,
+                    size: r
+                        .get::<Option<i64>, _>("size")
+                        .and_then(|s| u64::try_from(s).ok()),
+                })
+            })
+            .collect())
+    }
+
+    /// `text_hash` por `file_id` de los embeddings de `root` calculados con
+    /// `model`. Un embedding de un modelo DISTINTO no aparece (stale = ausente):
+    /// el caller lo tratará como pendiente de re-embeber.
+    ///
+    /// # Errors
+    /// [`IndexError::Sqlite`].
+    pub async fn embedding_hashes(
+        &self,
+        root: &VPath,
+        model: &str,
+    ) -> Result<std::collections::HashMap<i64, Vec<u8>>, IndexError> {
+        let rid = root_id(root);
+        let rows = sqlx::query(
+            "SELECT e.file_id, e.text_hash FROM embeddings e
+             JOIN files f ON f.id = e.file_id
+             WHERE f.root_id = ?1 AND e.model = ?2",
+        )
+        .bind(rid)
+        .bind(model)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get::<i64, _>("file_id"), r.get::<Vec<u8>, _>("text_hash")))
+            .collect())
+    }
+
+    /// Inserta o reemplaza el embedding de `file_id` (un vector por fichero:
+    /// re-embeber con otro modelo o hash SUSTITUYE al anterior).
+    ///
+    /// # Errors
+    /// [`IndexError::Sqlite`] (p. ej. `file_id` inexistente viola la FK).
+    pub async fn upsert_embedding(
+        &self,
+        file_id: i64,
+        model: &str,
+        vec: &[f32],
+        text_hash: &[u8],
+    ) -> Result<(), IndexError> {
+        sqlx::query(
+            "INSERT INTO embeddings (file_id, model, dim, vec, text_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(file_id) DO UPDATE SET
+                 model = excluded.model, dim = excluded.dim,
+                 vec = excluded.vec, text_hash = excluded.text_hash",
+        )
+        .bind(file_id)
+        .bind(model)
+        .bind(i64::try_from(vec.len()).unwrap_or(i64::MAX))
+        .bind(encode_vec(vec))
+        .bind(text_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Los embeddings de `model` como `(path, vector)`: de un `root` concreto, o
+    /// de TODOS los roots si `root` es `None`. Las filas con BLOB corrupto o
+    /// `dim` incoherente se SALTAN (jamás rompen la búsqueda).
+    ///
+    /// # Errors
+    /// [`IndexError::Sqlite`].
+    pub async fn embeddings_for_root(
+        &self,
+        root: Option<&VPath>,
+        model: &str,
+    ) -> Result<Vec<(VPath, Vec<f32>)>, IndexError> {
+        let rows = if let Some(root) = root {
+            sqlx::query(
+                "SELECT f.path AS path, e.dim AS dim, e.vec AS vec FROM embeddings e
+                 JOIN files f ON f.id = e.file_id
+                 WHERE f.root_id = ?1 AND e.model = ?2",
+            )
+            .bind(root_id(root))
+            .bind(model)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                "SELECT f.path AS path, e.dim AS dim, e.vec AS vec FROM embeddings e
+                 JOIN files f ON f.id = e.file_id
+                 WHERE e.model = ?1",
+            )
+            .bind(model)
+            .fetch_all(&self.pool)
+            .await?
+        };
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| {
+                let path = VPath::parse(&r.get::<String, _>("path")).ok()?;
+                let v = decode_vec(&r.get::<Vec<u8>, _>("vec"))?;
+                // Coherencia dim⟷blob: una fila corrupta se salta, no panica.
+                (i64::try_from(v.len()) == Ok(r.get::<i64, _>("dim"))).then_some((path, v))
+            })
+            .collect())
+    }
+}
+
+/// Fila de `files` candidata a embedding (`kind = file`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbedCandidate {
+    /// Rowid de `files` (clave del embedding).
+    pub file_id: i64,
+    /// Path completo (bytes exactos, wire encoding).
+    pub path: VPath,
+    /// Tamaño si el build lo conocía.
+    pub size: Option<u64>,
+}
+
+/// Codifica un vector como BLOB f32 little-endian (`dim * 4` bytes).
+#[must_use]
+pub fn encode_vec(v: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(v.len() * 4);
+    for f in v {
+        out.extend_from_slice(&f.to_le_bytes());
+    }
+    out
+}
+
+/// Decodifica un BLOB f32-LE. `None` si la longitud no es múltiplo de 4.
+#[must_use]
+pub fn decode_vec(blob: &[u8]) -> Option<Vec<f32>> {
+    if !blob.len().is_multiple_of(4) {
+        return None;
+    }
+    Some(
+        blob.chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect(),
+    )
 }
 
 /// Id estable del root desde su forma canónica (`scheme://authority` + base).
@@ -524,5 +706,112 @@ mod tests {
             sanitize_fts_query("a*b \"c\""),
             Some("\"ab\"* \"c\"*".to_owned())
         );
+    }
+
+    #[tokio::test]
+    async fn embedding_upsert_and_fetch_roundtrip() {
+        let idx = Index::open_memory().await.unwrap();
+        let root = root();
+        let tok = CancellationToken::new();
+        idx.build(&root, vec![entry(&root, b"a.txt")], &tok)
+            .await
+            .unwrap();
+        let cands = idx.files_for_embed(&root).await.unwrap();
+        assert_eq!(cands.len(), 1);
+        let id = cands[0].file_id;
+        idx.upsert_embedding(id, "m1", &[1.0, 0.0], b"hash-a")
+            .await
+            .unwrap();
+        let hashes = idx.embedding_hashes(&root, "m1").await.unwrap();
+        assert_eq!(hashes.get(&id).map(Vec::as_slice), Some(&b"hash-a"[..]));
+        let vecs = idx.embeddings_for_root(Some(&root), "m1").await.unwrap();
+        assert_eq!(vecs, vec![(cands[0].path.clone(), vec![1.0, 0.0])]);
+        // Re-embed del mismo fichero: el upsert reemplaza vector y hash.
+        idx.upsert_embedding(id, "m1", &[0.0, 1.0], b"hash-b")
+            .await
+            .unwrap();
+        let vecs = idx.embeddings_for_root(Some(&root), "m1").await.unwrap();
+        assert_eq!(vecs[0].1, vec![0.0, 1.0]);
+    }
+
+    #[tokio::test]
+    async fn embedding_model_filter_and_all_roots() {
+        let idx = Index::open_memory().await.unwrap();
+        let root = root();
+        let tok = CancellationToken::new();
+        idx.build(&root, vec![entry(&root, b"a.txt")], &tok)
+            .await
+            .unwrap();
+        let id = idx.files_for_embed(&root).await.unwrap()[0].file_id;
+        idx.upsert_embedding(id, "old-model", &[1.0], b"h")
+            .await
+            .unwrap();
+        // Modelo distinto ⇒ el embedding viejo cuenta como AUSENTE.
+        assert!(
+            idx.embedding_hashes(&root, "new-model")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            idx.embeddings_for_root(Some(&root), "new-model")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        // Sin filtro de root: aparece el del modelo viejo.
+        assert_eq!(
+            idx.embeddings_for_root(None, "old-model")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn rebuild_sweep_cascades_embedding_delete() {
+        let idx = Index::open_memory().await.unwrap();
+        let root = root();
+        let tok = CancellationToken::new();
+        idx.build(&root, vec![entry(&root, b"a.txt")], &tok)
+            .await
+            .unwrap();
+        let id = idx.files_for_embed(&root).await.unwrap()[0].file_id;
+        idx.upsert_embedding(id, "m", &[1.0], b"h").await.unwrap();
+        // Rebuild sin el fichero: el sweep borra la fila de `files` y el
+        // ON DELETE CASCADE arrastra su embedding (pin de foreign_keys=ON).
+        idx.build(&root, std::iter::empty::<IndexEntry>(), &tok)
+            .await
+            .unwrap();
+        assert!(
+            idx.embeddings_for_root(Some(&root), "m")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn decode_vec_rejects_ragged_blob() {
+        assert_eq!(decode_vec(&encode_vec(&[1.5, -2.0])), Some(vec![1.5, -2.0]));
+        assert_eq!(decode_vec(&[0u8; 5]), None);
+    }
+
+    #[tokio::test]
+    async fn files_for_embed_only_kind_file() {
+        let idx = Index::open_memory().await.unwrap();
+        let root = root();
+        let tok = CancellationToken::new();
+        let dir = IndexEntry {
+            path: root.join(Segment::new(b"sub".to_vec()).unwrap()),
+            kind: EntryKind::Dir,
+            size: None,
+            mtime_ms: None,
+        };
+        idx.build(&root, vec![entry(&root, b"a.txt"), dir], &tok)
+            .await
+            .unwrap();
+        assert_eq!(idx.files_for_embed(&root).await.unwrap().len(), 1);
     }
 }
