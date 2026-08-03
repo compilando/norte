@@ -23,11 +23,11 @@ struct RawName {
     why: String,
 }
 
-/// Los 30 nombres hostiles canónicos.
+/// Los 31 nombres hostiles canónicos.
 ///
 /// ```
 /// let names = norte_testkit::corpus::hostile_names();
-/// assert_eq!(names.len(), 30);
+/// assert_eq!(names.len(), 31);
 /// // Todos son segmentos VPath válidos (sin NUL ni `/`).
 /// for n in &names {
 ///     assert!(norte_proto::Segment::new(n.bytes.clone()).is_ok(), "{}", n.id);
