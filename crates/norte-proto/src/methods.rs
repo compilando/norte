@@ -270,7 +270,11 @@ use crate::{
 /// `TaskKind::Mkdir`. Ventana N=0.31.x / N-1=0.30.x: un cliente 0.30 jamás
 /// llama al método nuevo y degrada el kind nuevo a `TaskKind::Unknown` por su
 /// `serde(other)` (presente desde 0.10) — nada que gatear en emisión.
-pub const PROTOCOL_VERSION: &str = "0.31.0";
+/// 0.32.0 (M4-IA, ADR 0031): método nuevo `ai.rename_plan` (aditivo —
+/// [`AiRenamePlanParams`] → [`AiRenamePlanResult`], respuesta directa
+/// cancelable con `rpc.cancel`). Ventana N=0.32.x / N-1=0.31.x: un cliente
+/// 0.31 jamás llama al método nuevo — nada que gatear en emisión.
+pub const PROTOCOL_VERSION: &str = "0.32.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -418,6 +422,12 @@ pub const INDEX_BUILD: &str = "index.build";
 /// Consulta el índice de un root por texto (M4, ADR 0034). Respuesta DIRECTA (no
 /// Task): [`IndexQueryResult`].
 pub const INDEX_QUERY: &str = "index.query";
+/// Sugiere un plan de rename REVISABLE para `dir` (M4-IA, ADR 0031). Respuesta
+/// DIRECTA (no Task) pero CANCELABLE con `rpc.cancel` (#72): la llamada al
+/// proveedor de IA puede tardar segundos. NO muta nada — aplicar el plan son N
+/// [`FS_MOVE`] ordinarios (journal + undo + policy).
+/// [`AiRenamePlanParams`] → [`AiRenamePlanResult`].
+pub const AI_RENAME_PLAN: &str = "ai.rename_plan";
 /// `search.hits` — notificación server→client con un LOTE de resultados de
 /// [`FS_SEARCH`]. SOLO viaja a la conexión que lanzó la búsqueda (jamás
 /// broadcast, mismo criterio direccional que
@@ -890,6 +900,38 @@ pub struct IndexHit {
 pub struct IndexQueryResult {
     /// Hits (bm25, más relevante primero).
     pub hits: Vec<IndexHit>,
+}
+
+/// Params de [`AI_RENAME_PLAN`] (M4-IA, ADR 0031).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiRenamePlanParams {
+    /// Directorio cuyos basenames se envían al proveedor (tras el gate de IA).
+    pub dir: VPath,
+    /// Instrucción del usuario.
+    pub instruction: String,
+}
+
+/// Una pareja del plan de [`AI_RENAME_PLAN`]. Nombres BASE, UTF-8 garantizado:
+/// el engine rechaza nombres hostiles fail-loud ANTES de llamar al proveedor y
+/// valida `to` como `Segment` (sin `/`, `..`, NUL, `!` ni `\`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiRenameEntry {
+    /// Nombre existente en `dir`.
+    pub from: String,
+    /// Nombre destino propuesto.
+    pub to: String,
+}
+
+/// Resultado de [`AI_RENAME_PLAN`]: el plan REVISABLE (spec §9). Vacío = el
+/// modelo no propuso cambios. El plan es el producto: aplicarlo son N
+/// [`FS_MOVE`] gobernados; este método jamás muta.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiRenamePlanResult {
+    /// Parejas from→to (solo las que cambian de nombre).
+    pub entries: Vec<AiRenameEntry>,
 }
 
 /// Identidad de un cliente (va en [`InitializeParams`]).

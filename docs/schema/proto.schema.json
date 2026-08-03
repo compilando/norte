@@ -1,5 +1,57 @@
 {
   "$defs": {
+    "AiRenameEntry": {
+      "description": "Una pareja del plan de [`AI_RENAME_PLAN`]. Nombres BASE, UTF-8 garantizado:\nel engine rechaza nombres hostiles fail-loud ANTES de llamar al proveedor y\nvalida `to` como `Segment` (sin `/`, `..`, NUL, `!` ni `\\`).",
+      "properties": {
+        "from": {
+          "description": "Nombre existente en `dir`.",
+          "type": "string"
+        },
+        "to": {
+          "description": "Nombre destino propuesto.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "AiRenamePlanParams": {
+      "description": "Params de [`AI_RENAME_PLAN`] (M4-IA, ADR 0031).",
+      "properties": {
+        "dir": {
+          "$ref": "#/$defs/VPath",
+          "description": "Directorio cuyos basenames se envían al proveedor (tras el gate de IA)."
+        },
+        "instruction": {
+          "description": "Instrucción del usuario.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dir",
+        "instruction"
+      ],
+      "type": "object"
+    },
+    "AiRenamePlanResult": {
+      "description": "Resultado de [`AI_RENAME_PLAN`]: el plan REVISABLE (spec §9). Vacío = el\nmodelo no propuso cambios. El plan es el producto: aplicarlo son N\n[`FS_MOVE`] gobernados; este método jamás muta.",
+      "properties": {
+        "entries": {
+          "description": "Parejas from→to (solo las que cambian de nombre).",
+          "items": {
+            "$ref": "#/$defs/AiRenameEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "type": "object"
+    },
     "AttrHint": {
       "description": "What an attribute MEANS, so a frontend can pick a default format and\nalignment without a hard-coded table of ids. Two `Uint`s render very\ndifferently depending on this.\n\n`\"unknown\"` is a RESERVED wire tag: no future protocol version may name a\nreal variant that. A component that reads a value and writes it back\n(a proxy, a cache) collapses a newer tag to `unknown` in the round trip —\nthe same accepted trade-off as [`EntryKind::Other`](crate::EntryKind::Other).\n\n```\nuse norte_proto::attrs::AttrHint;\nlet h: AttrHint = serde_json::from_str(\"\\\"pista_del_futuro\\\"\").unwrap();\nassert_eq!(h, AttrHint::Unknown);\n```",
       "oneOf": [
@@ -2663,6 +2715,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Aggregate root: one field per top-level wire type. `schema_for!` emits each\nas a property and pulls every nested type into `$defs`, so the single\ndocument covers the whole protocol surface. Field values are never read.",
   "properties": {
+    "ai_rename_entry": {
+      "$ref": "#/$defs/AiRenameEntry"
+    },
+    "ai_rename_plan_params": {
+      "$ref": "#/$defs/AiRenamePlanParams"
+    },
+    "ai_rename_plan_result": {
+      "$ref": "#/$defs/AiRenamePlanResult"
+    },
     "attr_hint": {
       "$ref": "#/$defs/AttrHint"
     },
@@ -2965,6 +3026,9 @@
     }
   },
   "required": [
+    "ai_rename_entry",
+    "ai_rename_plan_params",
+    "ai_rename_plan_result",
     "attr_hint",
     "attr_info",
     "attr_type",

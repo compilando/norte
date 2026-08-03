@@ -434,8 +434,34 @@ fn golden_methods() {
     check_methods_plugin(&fixtures);
     check_methods_rpc(&fixtures);
     check_methods_index(&fixtures);
-    // 97 → 98 en 0.31.0: + fs_mkdir_params (#104).
-    assert_eq!(fixtures.len(), 98, "[methods.json] fixtures sin caso Rust");
+    check_methods_ai(&fixtures);
+    // 98 → 100 en 0.32.0: + ai_rename_plan_params/result (M4-IA, ADR 0031).
+    assert_eq!(fixtures.len(), 100, "[methods.json] fixtures sin caso Rust");
+}
+
+/// Familia `ai.*` (0.32.0, M4-IA, ADR 0031): plan de rename revisable.
+fn check_methods_ai(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::VPath;
+    use norte_proto::methods::{AiRenameEntry, AiRenamePlanParams, AiRenamePlanResult};
+    // Dir HOSTIL (no-UTF8, percent-encoded en el wire de VPath).
+    check_one(
+        fixtures,
+        "ai_rename_plan_params",
+        &AiRenamePlanParams {
+            dir: VPath::parse("file:///home/user/fotos-a%FF%FE").unwrap(),
+            instruction: "kebab-case, date first".into(),
+        },
+    );
+    check_one(
+        fixtures,
+        "ai_rename_plan_result",
+        &AiRenamePlanResult {
+            entries: vec![AiRenameEntry {
+                from: "IMG 001.jpg".into(),
+                to: "2024-01-01-beach.jpg".into(),
+            }],
+        },
+    );
 }
 
 /// Familia `index.*` (0.25.0, M4, ADR 0034): build + query del índice de búsqueda.
@@ -1719,7 +1745,9 @@ fn method_names_frozen() {
     // FsCapabilitiesResult.attrs y los dos attrs de petición (sin método nuevo).
     // 0.31.0 (#104): fs.mkdir (Task) + TaskKind::Mkdir. Aditivo sobre 0.30.x.
     assert_eq!(methods::FS_MKDIR, "fs.mkdir");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.31.0");
+    // 0.32.0 (M4-IA, ADR 0031): ai.rename_plan — respuesta directa cancelable.
+    assert_eq!(methods::AI_RENAME_PLAN, "ai.rename_plan");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.32.0");
 }
 
 #[test]

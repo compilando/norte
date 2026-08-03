@@ -1,4 +1,13 @@
 {
+  "ai_rename_plan_params": {
+    "dir": "file:///home/user/fotos-a%FF%FE",
+    "instruction": "kebab-case, date first"
+  },
+  "ai_rename_plan_result": {
+    "entries": [
+      { "from": "IMG 001.jpg", "to": "2024-01-01-beach.jpg" }
+    ]
+  },
   "connection_degraded": {
     "host": "backup.example",
     "reason": "tls-auth-rejected",

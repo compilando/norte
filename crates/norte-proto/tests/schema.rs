@@ -15,6 +15,9 @@ use norte_proto::*;
 #[derive(schemars::JsonSchema)]
 #[allow(dead_code)]
 struct ProtocolSchema {
+    ai_rename_entry: AiRenameEntry,
+    ai_rename_plan_params: AiRenamePlanParams,
+    ai_rename_plan_result: AiRenamePlanResult,
     attr_hint: AttrHint,
     attr_info: AttrInfo,
     attr_type: AttrType,
