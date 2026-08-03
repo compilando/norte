@@ -2410,7 +2410,7 @@
           "description": "Path del fichero (wire encoding)."
         },
         "score": {
-          "description": "Similitud coseno en `[-1, 1]` (mayor = más afín).",
+          "description": "Similitud coseno en `[-1, 1]` (mayor = más afín).\nSiempre finito: el server jamás emite NaN/Infinity (cinturón en el\nengine — un no-finito serializaría como null y envenenaría la\nrespuesta).",
           "format": "double",
           "type": "number"
         }
