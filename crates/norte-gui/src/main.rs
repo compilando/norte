@@ -4257,6 +4257,7 @@ fn task_line(p: &norte_proto::TaskProgress) -> String {
         TaskKind::Search => "gui-task-kind-search",
         TaskKind::Mkdir => "gui-task-kind-mkdir",
         TaskKind::Index => "gui-task-kind-index",
+        TaskKind::Embed => "gui-task-kind-embed",
         TaskKind::Unknown => "gui-task-kind-unknown",
     });
     let pct = match p.entries_total {

@@ -81,6 +81,10 @@ pub enum TaskKind {
     /// (`index.build`, M4). Entra en 0.25.0; un cliente N-1 (0.24.x) la degrada a
     /// [`TaskKind::Unknown`] vía el `serde(other)`.
     Index,
+    /// `index.embed` (0.33.0): generación de embeddings del índice semántico.
+    /// Un cliente N-1 (0.32.x) la degrada a [`TaskKind::Unknown`] por su
+    /// `serde(other)`.
+    Embed,
     /// Clase desconocida: un daemon N+1 (0.11+) envió un kind que ESTE proto no
     /// conoce → se acepta como genérica en vez de fallar el parse (forward-compat
     /// desde 0.10, como [`TaskState::Unknown`]). No cubre el borde hacia atrás

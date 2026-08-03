@@ -1012,6 +1012,7 @@ fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 norte_proto::TaskKind::Search => "search",
                 norte_proto::TaskKind::Index => "index",
                 norte_proto::TaskKind::Mkdir => "mkdir",
+                norte_proto::TaskKind::Embed => "embed",
                 // Clase de un daemon N+1: etiqueta genérica, no rompe la UI.
                 norte_proto::TaskKind::Unknown => "task",
             };

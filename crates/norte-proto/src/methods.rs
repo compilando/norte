@@ -274,7 +274,14 @@ use crate::{
 /// [`AiRenamePlanParams`] → [`AiRenamePlanResult`], respuesta directa
 /// cancelable con `rpc.cancel`). Ventana N=0.32.x / N-1=0.31.x: un cliente
 /// 0.31 jamás llama al método nuevo — nada que gatear en emisión.
-pub const PROTOCOL_VERSION: &str = "0.32.0";
+/// 0.33.0 (M4-IA-2, ADR 0031 A3): métodos nuevos `index.embed` (Task de
+/// embeddings — [`IndexEmbedParams`] → [`FsTaskResult`]) y
+/// `index.search_semantic` (request directa cancelable con `rpc.cancel` —
+/// [`IndexSearchSemanticParams`] → [`IndexSearchSemanticResult`]) más la
+/// variante `TaskKind::Embed`. Ventana N=0.33.x / N-1=0.32.x: un cliente
+/// 0.32 jamás llama a los métodos nuevos y degrada el kind nuevo a
+/// `TaskKind::Unknown` por su `serde(other)` — nada que gatear en emisión.
+pub const PROTOCOL_VERSION: &str = "0.33.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -422,6 +429,21 @@ pub const INDEX_BUILD: &str = "index.build";
 /// Consulta el índice de un root por texto (M4, ADR 0034). Respuesta DIRECTA (no
 /// Task): [`IndexQueryResult`].
 pub const INDEX_QUERY: &str = "index.query";
+/// `index.embed` — Task ([`TaskKind::Embed`](crate::TaskKind), 0.33.0): genera
+/// embeddings de los ficheros ya indexados de un root vía el proveedor de IA
+/// configurado (`[ai] embed_provider`). Requiere `index.build` previo
+/// (`NotFound` si el root no tiene filas). Gate de IA completo; SOLO conexión
+/// humana (una de agente recibe `PolicyDenied`): prefijos de contenido salen
+/// del proceso.
+pub const INDEX_EMBED: &str = "index.embed";
+/// `index.search_semantic` — request directa (0.33.0), cancelable con
+/// `rpc.cancel`: un embed de la query + barrido coseno en el core. `k` se
+/// recorta a [`INDEX_SEMANTIC_MAX_K`]. SOLO conexión humana, como
+/// [`INDEX_EMBED`] — la query sale hacia el proveedor.
+pub const INDEX_SEARCH_SEMANTIC: &str = "index.search_semantic";
+/// Tope de `k` en [`INDEX_SEARCH_SEMANTIC`]. Pedir más no es error: se
+/// recorta (mismo patrón que [`FS_LIST_MAX_PAGE`]).
+pub const INDEX_SEMANTIC_MAX_K: u32 = 100;
 /// Sugiere un plan de rename REVISABLE para `dir` (M4-IA, ADR 0031). Respuesta
 /// DIRECTA (no Task) pero CANCELABLE con `rpc.cancel` (#72): la llamada al
 /// proveedor de IA puede tardar segundos. NO muta nada — aplicar el plan son N
@@ -900,6 +922,46 @@ pub struct IndexHit {
 pub struct IndexQueryResult {
     /// Hits (bm25, más relevante primero).
     pub hits: Vec<IndexHit>,
+}
+
+/// Params de [`INDEX_EMBED`] (0.33.0, M4-IA-2).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexEmbedParams {
+    /// Root YA indexado con `index.build` (misma clave exacta).
+    pub root: VPath,
+}
+
+/// Params de [`INDEX_SEARCH_SEMANTIC`] (0.33.0, M4-IA-2).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexSearchSemanticParams {
+    /// Root a consultar; ausente ⇒ todos los roots del índice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<VPath>,
+    /// Consulta en lenguaje natural (sale hacia el proveedor de IA).
+    pub query: String,
+    /// Máximo de hits; el server recorta a [`INDEX_SEMANTIC_MAX_K`].
+    pub k: u32,
+}
+
+/// Un hit semántico: path + similitud coseno. Sin `Eq` (a diferencia de sus
+/// hermanos de `index.*`): `score` es `f64`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SemanticHit {
+    /// Path del fichero (wire encoding).
+    pub path: VPath,
+    /// Similitud coseno en `[-1, 1]` (mayor = más afín).
+    pub score: f64,
+}
+
+/// Result de [`INDEX_SEARCH_SEMANTIC`] (0.33.0), mejor primero.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IndexSearchSemanticResult {
+    /// Hits ordenados por score descendente.
+    pub hits: Vec<SemanticHit>,
 }
 
 /// Params de [`AI_RENAME_PLAN`] (M4-IA, ADR 0031).

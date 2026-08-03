@@ -1280,6 +1280,19 @@
       ],
       "type": "object"
     },
+    "IndexEmbedParams": {
+      "description": "Params de [`INDEX_EMBED`] (0.33.0, M4-IA-2).",
+      "properties": {
+        "root": {
+          "$ref": "#/$defs/VPath",
+          "description": "Root YA indexado con `index.build` (misma clave exacta)."
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
     "IndexHit": {
       "description": "Un hit de [`INDEX_QUERY`] (M4). `path` en bytes crudos vía [`VPath`].",
       "properties": {
@@ -1347,6 +1360,53 @@
           "description": "Hits (bm25, más relevante primero).",
           "items": {
             "$ref": "#/$defs/IndexHit"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "hits"
+      ],
+      "type": "object"
+    },
+    "IndexSearchSemanticParams": {
+      "description": "Params de [`INDEX_SEARCH_SEMANTIC`] (0.33.0, M4-IA-2).",
+      "properties": {
+        "k": {
+          "description": "Máximo de hits; el server recorta a [`INDEX_SEMANTIC_MAX_K`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "query": {
+          "description": "Consulta en lenguaje natural (sale hacia el proveedor de IA).",
+          "type": "string"
+        },
+        "root": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Root a consultar; ausente ⇒ todos los roots del índice."
+        }
+      },
+      "required": [
+        "query",
+        "k"
+      ],
+      "type": "object"
+    },
+    "IndexSearchSemanticResult": {
+      "description": "Result de [`INDEX_SEARCH_SEMANTIC`] (0.33.0), mejor primero.",
+      "properties": {
+        "hits": {
+          "description": "Hits ordenados por score descendente.",
+          "items": {
+            "$ref": "#/$defs/SemanticHit"
           },
           "type": "array"
         }
@@ -2342,6 +2402,25 @@
       ],
       "type": "object"
     },
+    "SemanticHit": {
+      "description": "Un hit semántico: path + similitud coseno. Sin `Eq` (a diferencia de sus\nhermanos de `index.*`): `score` es `f64`.",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/VPath",
+          "description": "Path del fichero (wire encoding)."
+        },
+        "score": {
+          "description": "Similitud coseno en `[-1, 1]` (mayor = más afín).",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "path",
+        "score"
+      ],
+      "type": "object"
+    },
     "ServerInfo": {
       "description": "Identidad del servidor (va en [`InitializeResult`]).",
       "properties": {
@@ -2474,6 +2553,11 @@
         {
           "const": "index",
           "description": "Construcción/actualización del índice de búsqueda de un subtree\n(`index.build`, M4). Entra en 0.25.0; un cliente N-1 (0.24.x) la degrada a\n[`TaskKind::Unknown`] vía el `serde(other)`.",
+          "type": "string"
+        },
+        {
+          "const": "embed",
+          "description": "`index.embed` (0.33.0): generación de embeddings del índice semántico.\nUn cliente N-1 (0.32.x) la degrada a [`TaskKind::Unknown`] por su\n`serde(other)`.",
           "type": "string"
         },
         {
@@ -2838,6 +2922,9 @@
     "index_build_result": {
       "$ref": "#/$defs/IndexBuildResult"
     },
+    "index_embed_params": {
+      "$ref": "#/$defs/IndexEmbedParams"
+    },
     "index_hit": {
       "$ref": "#/$defs/IndexHit"
     },
@@ -2846,6 +2933,12 @@
     },
     "index_query_result": {
       "$ref": "#/$defs/IndexQueryResult"
+    },
+    "index_search_semantic_params": {
+      "$ref": "#/$defs/IndexSearchSemanticParams"
+    },
+    "index_search_semantic_result": {
+      "$ref": "#/$defs/IndexSearchSemanticResult"
     },
     "initialize_params": {
       "$ref": "#/$defs/InitializeParams"
@@ -2982,6 +3075,9 @@
     "search_hits": {
       "$ref": "#/$defs/SearchHits"
     },
+    "semantic_hit": {
+      "$ref": "#/$defs/SemanticHit"
+    },
     "server_info": {
       "$ref": "#/$defs/ServerInfo"
     },
@@ -3067,9 +3163,12 @@
     "grant_scope_result",
     "index_build_params",
     "index_build_result",
+    "index_embed_params",
     "index_hit",
     "index_query_params",
     "index_query_result",
+    "index_search_semantic_params",
+    "index_search_semantic_result",
     "initialize_params",
     "initialize_result",
     "match_info",
@@ -3115,6 +3214,7 @@
     "resume_policy",
     "rpc_cancel_params",
     "search_hits",
+    "semantic_hit",
     "server_info",
     "span_wire",
     "symlink_policy",

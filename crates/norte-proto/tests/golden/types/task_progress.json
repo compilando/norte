@@ -9,6 +9,18 @@
     "entries_total": 3,
     "current": "file:///src/informe%FF%FE.dat"
   },
+  "running_embed": {
+    "task_id": 11,
+    "kind": "embed",
+    "state": {
+      "kind": "running"
+    },
+    "bytes_done": 0,
+    "bytes_total": null,
+    "entries_done": 2,
+    "entries_total": 10,
+    "current": "file:///home/user/doc.txt"
+  },
   "running_mkdir": {
     "task_id": 9,
     "kind": "mkdir",

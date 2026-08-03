@@ -379,6 +379,20 @@ fn golden_task_progress() {
                 },
             ),
             (
+                // 0.33.0 (M4-IA-2): TaskKind::Embed en el wire.
+                "running_embed",
+                TaskProgress {
+                    task_id: TaskId::new(11),
+                    kind: TaskKind::Embed,
+                    state: TaskState::Running,
+                    bytes_done: 0,
+                    bytes_total: None,
+                    entries_done: 2,
+                    entries_total: Some(10),
+                    current: Some(vpath("file:///home/user/doc.txt")),
+                },
+            ),
+            (
                 // 0.31.0 (#104): TaskKind::Mkdir en el wire.
                 "running_mkdir",
                 TaskProgress {
@@ -436,8 +450,10 @@ fn golden_methods() {
     check_methods_index(&fixtures);
     check_methods_ai(&fixtures);
     // 98 → 101 en 0.32.0: + ai_rename_plan_params/result/result_empty (M4-IA,
-    // ADR 0031).
-    assert_eq!(fixtures.len(), 101, "[methods.json] fixtures sin caso Rust");
+    // ADR 0031). 101 → 106 en 0.33.0: + index_embed_params,
+    // index_search_semantic_params(/_no_root)/result y semantic_hit (M4-IA-2,
+    // ADR 0031 A3).
+    assert_eq!(fixtures.len(), 106, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `ai.*` (0.32.0, M4-IA, ADR 0031): plan de rename revisable.
@@ -475,7 +491,8 @@ fn check_methods_ai(fixtures: &BTreeMap<String, Value>) {
 /// Familia `index.*` (0.25.0, M4, ADR 0034): build + query del índice de búsqueda.
 fn check_methods_index(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
-        IndexBuildParams, IndexBuildResult, IndexHit, IndexQueryParams, IndexQueryResult,
+        IndexBuildParams, IndexBuildResult, IndexEmbedParams, IndexHit, IndexQueryParams,
+        IndexQueryResult, IndexSearchSemanticParams, IndexSearchSemanticResult, SemanticHit,
     };
     use norte_proto::{EntryKind, VPath};
     check_one(
@@ -522,6 +539,55 @@ fn check_methods_index(fixtures: &BTreeMap<String, Value>) {
                 kind: EntryKind::File,
                 size: Some(4096),
                 mtime_ms: None,
+            }],
+        },
+    );
+    // 0.33.0 (M4-IA-2, ADR 0031 A3): index.embed (Task) + index.search_semantic
+    // (directa cancelable). Scores EXACTOS en binario (0.5) para que el
+    // round-trip de f64 no tenga nada que redondear.
+    check_one(
+        fixtures,
+        "index_embed_params",
+        &IndexEmbedParams {
+            root: VPath::parse("file:///home/user").unwrap(),
+        },
+    );
+    check_one(
+        fixtures,
+        "index_search_semantic_params",
+        &IndexSearchSemanticParams {
+            root: Some(VPath::parse("file:///home/user").unwrap()),
+            query: "informe anual".into(),
+            k: 20,
+        },
+    );
+    // Pinea la AUSENCIA de `root` en el wire (default + skip_serializing_if):
+    // sin la clave, no `"root": null`.
+    check_one(
+        fixtures,
+        "index_search_semantic_params_no_root",
+        &IndexSearchSemanticParams {
+            root: None,
+            query: "informe".into(),
+            k: 20,
+        },
+    );
+    // Un hit con nombre HOSTIL (no-UTF8, percent-encoded en el wire de VPath).
+    check_one(
+        fixtures,
+        "semantic_hit",
+        &SemanticHit {
+            path: VPath::parse("file:///home/user/informe-a%FF%FE.txt").unwrap(),
+            score: 0.5,
+        },
+    );
+    check_one(
+        fixtures,
+        "index_search_semantic_result",
+        &IndexSearchSemanticResult {
+            hits: vec![SemanticHit {
+                path: VPath::parse("file:///home/user/a.txt").unwrap(),
+                score: 0.5,
             }],
         },
     );
@@ -1755,7 +1821,12 @@ fn method_names_frozen() {
     assert_eq!(methods::FS_MKDIR, "fs.mkdir");
     // 0.32.0 (M4-IA, ADR 0031): ai.rename_plan — respuesta directa cancelable.
     assert_eq!(methods::AI_RENAME_PLAN, "ai.rename_plan");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.32.0");
+    // 0.33.0 (M4-IA-2, ADR 0031 A3): index.embed (Task, TaskKind::Embed) +
+    // index.search_semantic (directa cancelable, k recortado al tope).
+    assert_eq!(methods::INDEX_EMBED, "index.embed");
+    assert_eq!(methods::INDEX_SEARCH_SEMANTIC, "index.search_semantic");
+    assert_eq!(methods::INDEX_SEMANTIC_MAX_K, 100);
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.33.0");
 }
 
 #[test]

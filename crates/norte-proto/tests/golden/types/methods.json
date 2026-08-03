@@ -208,6 +208,9 @@
     "indexed": 128,
     "removed": 3
   },
+  "index_embed_params": {
+    "root": "file:///home/user"
+  },
   "index_hit": {
     "kind": "file",
     "mtime_ms": 1700000000000,
@@ -225,6 +228,23 @@
         "kind": "file",
         "path": "file:///home/user/informe-anual.txt",
         "size": 4096
+      }
+    ]
+  },
+  "index_search_semantic_params": {
+    "k": 20,
+    "query": "informe anual",
+    "root": "file:///home/user"
+  },
+  "index_search_semantic_params_no_root": {
+    "k": 20,
+    "query": "informe"
+  },
+  "index_search_semantic_result": {
+    "hits": [
+      {
+        "path": "file:///home/user/a.txt",
+        "score": 0.5
       }
     ]
   },
@@ -589,6 +609,10 @@
       }
     ],
     "task_id": 7
+  },
+  "semantic_hit": {
+    "path": "file:///home/user/informe-a%FF%FE.txt",
+    "score": 0.5
   },
   "span_wire_bare": {
     "text": "fn"

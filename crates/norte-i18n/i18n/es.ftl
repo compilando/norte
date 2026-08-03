@@ -410,6 +410,7 @@ gui-task-kind-delete = delete
 gui-task-kind-undo = undo
 gui-task-kind-search = search
 gui-task-kind-index = index
+gui-task-kind-embed = embed
 gui-task-kind-unknown = task
 gui-task-state-pending = pending
 gui-task-state-running = running
