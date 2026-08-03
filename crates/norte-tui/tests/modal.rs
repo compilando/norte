@@ -561,32 +561,3 @@ fn semantic_hits_confirma_como_decision_y_cursor_es_inerte() {
     assert_eq!(dialog_action(&prompt, "dialog.confirm"), None);
     assert_eq!(dialog_action(&prompt, "dialog.approve"), None);
 }
-
-/// M4-IA-2 (paridad IA-1 con el belt del plan): el cinturón de ingestión
-/// acepta hasta el techo contractual del server (`INDEX_SEMANTIC_MAX_K` — un
-/// daemon conforme jamás lo supera) con los hits INTACTOS, y rechaza EN
-/// BLOQUE una respuesta inflada (daemon hostil/N+1) — jamás un recorte
-/// silencioso.
-#[test]
-fn semantic_hits_belt_rechaza_en_bloque_sobre_el_techo() {
-    use norte_tui::app::semantic_hits_belt;
-    let hits = |n: usize| -> Vec<norte_proto::methods::SemanticHit> {
-        (1..=n)
-            .map(|i| norte_proto::methods::SemanticHit {
-                path: vp(&format!("file:///d/f{i}")),
-                score: 0.5,
-            })
-            .collect()
-    };
-    let max = usize::try_from(norte_proto::methods::INDEX_SEMANTIC_MAX_K).expect("techo pequeño");
-    let ok = semantic_hits_belt(hits(max));
-    assert_eq!(
-        ok.as_ref().map(Vec::len),
-        Some(max),
-        "el techo exacto pasa intacto"
-    );
-    assert!(
-        semantic_hits_belt(hits(max + 1)).is_none(),
-        "uno más = rechazo en bloque"
-    );
-}

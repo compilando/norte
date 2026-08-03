@@ -24,6 +24,12 @@ pub const MODAL_ITEM_LIMIT: usize = 10;
 /// del scroll en ambos frontends.
 pub const AI_RENAME_PAIR_LIMIT: usize = 5;
 
+/// Hits de la búsqueda semántica (M4-IA-2) visibles a la vez en el modal de
+/// hits (ventana de scroll con cursor, molde [`AI_RENAME_PAIR_LIMIT`]).
+/// Única fuente para el render, el alto del modal (TUI) y el clamp del
+/// cursor en ambos frontends.
+pub const SEMANTIC_HIT_LIMIT: usize = 10;
+
 /// Tope de parejas que un frontend ACEPTA de `ai.rename_plan` (M4-IA,
 /// cinturón de ingestión): el engine acota los planes legítimos MUY por
 /// debajo (los basenames de UN directorio), así que un plan que lo supere
@@ -62,6 +68,35 @@ pub fn validate_ai_plan(
             ))
         })
         .collect()
+}
+
+/// Cinturón de INGESTIÓN de los hits semánticos (M4-IA-2, paridad con el
+/// belt del plan IA, compartido por TUI y GUI): un daemon CONFORME jamás
+/// supera [`norte_proto::methods::INDEX_SEMANTIC_MAX_K`] (el server recorta
+/// `k` a ese techo contractual) ni emite scores no finitos (el engine los
+/// filtra) — superar el techo o colar un NaN/∞ delata un daemon hostil/N+1
+/// inflando o envenenando la respuesta. `None` = rechazo EN BLOQUE (cero
+/// hits pintados, jamás un recorte silencioso); `Some` devuelve los hits
+/// intactos.
+///
+/// PURA a propósito: testeable sin backend, como [`validate_ai_plan`].
+///
+/// ```
+/// use norte_proto::VPath;
+/// use norte_proto::methods::SemanticHit;
+/// let ok = SemanticHit { path: VPath::parse("mem:///a").unwrap(), score: 0.9 };
+/// assert!(norte_frontend::validate_semantic_hits(vec![ok.clone()]).is_some());
+/// // UN score no finito tumba la respuesta ENTERA, aunque el resto sea legítimo.
+/// let evil = SemanticHit { path: VPath::parse("mem:///b").unwrap(), score: f64::NAN };
+/// assert!(norte_frontend::validate_semantic_hits(vec![ok, evil]).is_none());
+/// ```
+#[must_use]
+pub fn validate_semantic_hits(
+    hits: Vec<norte_proto::methods::SemanticHit>,
+) -> Option<Vec<norte_proto::methods::SemanticHit>> {
+    (hits.len() <= norte_proto::methods::INDEX_SEMANTIC_MAX_K as usize
+        && hits.iter().all(|h| h.score.is_finite()))
+    .then_some(hits)
 }
 
 /// Badge por defecto de [`item_lines`]: el aviso que ya usaba el modal de la
@@ -173,6 +208,57 @@ mod ai_plan_tests {
     #[test]
     fn un_plan_vacio_es_valido() {
         assert_eq!(validate_ai_plan(&[]).expect("vacío válido").len(), 0);
+    }
+}
+
+#[cfg(test)]
+mod semantic_hits_tests {
+    use super::validate_semantic_hits;
+    use norte_proto::VPath;
+    use norte_proto::methods::{INDEX_SEMANTIC_MAX_K, SemanticHit};
+
+    fn hits(n: usize) -> Vec<SemanticHit> {
+        (1..=n)
+            .map(|i| SemanticHit {
+                path: VPath::parse(&format!("mem:///d/f{i}")).expect("wire válido"),
+                score: 0.5,
+            })
+            .collect()
+    }
+
+    /// M4-IA-2 (paridad IA-1 con el belt del plan): el cinturón acepta hasta
+    /// el techo contractual del server (`INDEX_SEMANTIC_MAX_K` — un daemon
+    /// conforme jamás lo supera) con los hits INTACTOS, y rechaza EN BLOQUE
+    /// una respuesta inflada (daemon hostil/N+1) — jamás un recorte
+    /// silencioso.
+    #[test]
+    fn el_techo_exacto_pasa_y_uno_mas_se_rechaza_en_bloque() {
+        let max = usize::try_from(INDEX_SEMANTIC_MAX_K).expect("techo pequeño");
+        let ok = validate_semantic_hits(hits(max));
+        assert_eq!(
+            ok.as_ref().map(Vec::len),
+            Some(max),
+            "el techo exacto pasa intacto"
+        );
+        assert!(
+            validate_semantic_hits(hits(max + 1)).is_none(),
+            "uno más = rechazo en bloque"
+        );
+    }
+
+    /// UN score no finito (NaN/∞ — el engine los filtra, así que solo un
+    /// daemon hostil/roto los emite) tumba la respuesta ENTERA, aunque el
+    /// resto sea legítimo.
+    #[test]
+    fn un_score_no_finito_tumba_la_respuesta_entera() {
+        for evil in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut lote = hits(3);
+            lote[1].score = evil;
+            assert!(
+                validate_semantic_hits(lote).is_none(),
+                "score {evil} debe rechazar en bloque"
+            );
+        }
     }
 }
 

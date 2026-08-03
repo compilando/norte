@@ -24,8 +24,7 @@ use norte_tui::app::{
     DialogOutcome, ExtensionManager, Help, KeymapsError, Modal, NavPopupKind, Palette, Pane,
     PendingWrite, PickerAction, SearchDialog, SearchState, Settings, SettingsEditError,
     TransferKind, config_error_category, detail_for_bar, dialog_action, error_category,
-    error_message, io_error_category, keymaps_error_category, semantic_hits_belt,
-    theme_error_category, trust_lua_key,
+    error_message, io_error_category, keymaps_error_category, theme_error_category, trust_lua_key,
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::hints::DialogHints;
@@ -1160,11 +1159,12 @@ async fn run(
                         app.message = Some(t("msg-semantic-empty"));
                     }
                     // Cinturón de INGESTIÓN (paridad IA-1): una respuesta
-                    // por encima del techo contractual del server delata un
-                    // daemon hostil/N+1 — rechazo en bloque, ni se abre el
-                    // modal (el guard es `semantic_hits_belt`, pura y
-                    // testeada en app.rs).
-                    Ok(Ok(hits)) => match semantic_hits_belt(hits) {
+                    // por encima del techo contractual del server o con un
+                    // score no finito delata un daemon hostil/N+1 — rechazo
+                    // en bloque, ni se abre el modal (el guard es
+                    // `norte_frontend::validate_semantic_hits`, pura y
+                    // compartida con la GUI).
+                    Ok(Ok(hits)) => match norte_frontend::validate_semantic_hits(hits) {
                         None => {
                             app.message = Some(t("msg-semantic-invalid"));
                         }
@@ -1190,6 +1190,8 @@ async fn run(
                         ));
                     }
                     // Abortado por Esc: silencio, la barra ya se limpió.
+                    // (Un pánico del future del backend cae aquí también:
+                    // no hay hits que abrir, el run ya está cosechado.)
                     Err(_join) => {}
                 }
             }
@@ -1598,6 +1600,11 @@ async fn run(
                                         {
                                             old.handle.abort();
                                         }
+                                        // Invariante: lanzar VACÍA el stash —
+                                        // un plan retenido de una petición
+                                        // ANTERIOR jamás debe abrirse como si
+                                        // fuera de esta.
+                                        pending_ai_plan = None;
                                         app.message = Some(t("msg-ai-rename-running"));
                                         app.ai_rename_submitted();
                                     }
@@ -1632,6 +1639,11 @@ async fn run(
                                         {
                                             old.handle.abort();
                                         }
+                                        // Invariante: lanzar VACÍA el stash —
+                                        // unos hits retenidos de una consulta
+                                        // ANTERIOR jamás deben abrirse como si
+                                        // fueran de esta.
+                                        pending_semantic = None;
                                         app.message = Some(t("msg-semantic-running"));
                                         app.semantic_submitted();
                                     }
