@@ -894,3 +894,47 @@ fn un_modal_se_pinta_sobre_el_viewer() {
         "el modal es visible sobre el viewer: {contenido}"
     );
 }
+
+/// El modal de nombre en destino (#105) elide las rutas por el MEDIO, como
+/// el de aprobación y el de colisión: una ruta kilométrica se recortaba a
+/// pelo contra el borde de la caja (`modal_width` topa contra el frame y el
+/// `Paragraph` no envuelve), así que la COLA del destino —el dir al que se
+/// copia de verdad— quedaba expulsada sin ni siquiera un `…` que lo
+/// delatara.
+#[test]
+fn el_modal_de_nombre_en_destino_elide_las_rutas() {
+    let _ = norte_i18n::force(norte_i18n::Lang::En);
+    let hondo = "/tmp/claude-1000/-home-oscar-work-wot-projects-high-norte/fd0480d7-a010-40be";
+    let dir = vp(&format!("file://{hondo}/origen"));
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(vp(&format!("file://{hondo}/destino")), Vec::new()),
+    );
+    app.dialog_hints = default_dialog_hints();
+    app.modal = Some(norte_tui::app::Modal::TransferName {
+        kind: norte_tui::app::TransferKind::Copy,
+        from: dir.join(Segment::new(b"grande.log".to_vec()).unwrap()),
+        to_dir: vp(&format!("file://{hondo}/destino")),
+        name: "grande.log".to_owned(),
+        original: b"grande.log".to_vec(),
+        touched: false,
+        from_marks: false,
+        enc: None,
+        error: None,
+    });
+    let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let contenido = terminal.backend().to_string();
+    assert!(
+        contenido.contains('…'),
+        "la ruta larga se elide, no se corta a pelo: {contenido}"
+    );
+    assert!(
+        contenido.contains("destino"),
+        "la COLA del destino sobrevive al recorte: {contenido}"
+    );
+    assert!(
+        contenido.contains("grande.log"),
+        "el nombre editable sigue visible: {contenido}"
+    );
+}

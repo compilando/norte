@@ -26,6 +26,12 @@ use norte_i18n::{t, ta};
 /// propia del usuario, riesgo aceptado.
 pub(crate) const HOSTILE_BADGE: &str = "!";
 
+/// Presupuesto en CHARS de una ruta dentro de un modal, antes de la elipsis
+/// media. El mismo que ya usaban el modal de aprobación y el de colisión:
+/// `modal_width` crece hasta el ancho del frame, así que el recorte lo pone
+/// el contenido — jamás el borde de la caja, que corta a pelo.
+const MODAL_PATH_CHARS: usize = 46;
+
 /// Pinta el frame completo: panes (o viewer) + panel de tasks + barra de
 /// estado + modal por encima.
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
@@ -1633,9 +1639,16 @@ fn transfer_name_modal_text(
     };
     // #105 review MAJOR-2/MINOR-1: origen y dir destino, cada uno en SU
     // línea con la flecha fuera de banda, bajo la reinterpretación
-    // CAPTURADA al abrir (#98/M1 — jamás la del pane al pintar).
+    // CAPTURADA al abrir (#98/M1 — jamás la del pane al pintar). La ruta
+    // va con ELIPSIS MEDIA, como en el modal de aprobación y el de
+    // colisión: `modal_width` topa contra el ancho del frame y el
+    // `Paragraph` de `draw_modal` no envuelve, así que una ruta honda se
+    // cortaba a pelo contra el borde y expulsaba de la caja la COLA del
+    // destino — justo lo que el usuario necesita ver para saber dónde
+    // aterriza la copia — sin ni un `…` que lo delatara.
     let badge_line = |p: &norte_proto::VPath| {
         let (line, hostil) = norte_frontend::path_display_with(p, enc);
+        let line = middle_ellipsis(&line, MODAL_PATH_CHARS);
         if hostil {
             format!("{HOSTILE_BADGE} {line}")
         } else {
