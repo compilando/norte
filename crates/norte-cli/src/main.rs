@@ -1188,6 +1188,29 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
             engine.set_connector(std::sync::Arc::new(
                 norte_core::connect::ConnectionManager::new(norte_core::connect::config_dir()),
             ));
+            // IA (M4-IA, ADR 0031): opt-in. Sin [ai], sin proveedor o con
+            // config rota el engine degrada (ai.* → Unsupported / gate
+            // PolicyDenied); jamás aborta el arranque del daemon.
+            match tokio::task::spawn_blocking(norte_core::ai::AiConfig::load).await {
+                Ok(Ok(config)) => {
+                    if let Some(pcfg) = config.rename_provider_config().cloned() {
+                        match norte_core::ai::resolve_and_build(
+                            &pcfg,
+                            norte_core::connect::config_dir(),
+                        )
+                        .await
+                        {
+                            Ok(provider) => engine.set_ai_provider(provider),
+                            Err(e) => eprintln!(
+                                "aviso: proveedor de IA no disponible ({e}); ai.* dará Unsupported"
+                            ),
+                        }
+                    }
+                    engine.set_ai_config(config);
+                }
+                Ok(Err(e)) => eprintln!("aviso: [ai] inválido ({e}); ai.* dará Unsupported"),
+                Err(e) => eprintln!("aviso: carga de [ai] falló ({e}); ai.* dará Unsupported"),
+            }
             let daemon = Daemon::bind_with_policy(
                 std::sync::Arc::new(engine),
                 scopes,

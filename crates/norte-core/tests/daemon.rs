@@ -4494,3 +4494,211 @@ async fn fs_list_id_valido_sobre_catalogo_vacio_no_es_error() {
         assert!(e.attrs.is_empty(), "catálogo vacío = entradas peladas");
     }
 }
+
+// ---------- ai.rename_plan (M4-IA, ADR 0031) ----------
+
+/// Proveedor de IA falso (copiado de `ai_rename.rs` — los binarios de test no
+/// comparten código): devuelve un JSON canned en dos deltas. `delay` retrasa
+/// la entrega para dejar la request EN VUELO (test de rpc.cancel, #72).
+struct FakeAi {
+    reply: String,
+    delay: Option<Duration>,
+}
+
+#[async_trait]
+impl norte_ai::AiProvider for FakeAi {
+    #[allow(clippy::unnecessary_literal_bound)] // firma del trait (&self→&str)
+    fn id(&self) -> &str {
+        "fake"
+    }
+    fn capabilities(&self) -> norte_ai::AiCaps {
+        norte_ai::AiCaps::STREAMING
+    }
+    fn is_local(&self) -> bool {
+        true
+    }
+    async fn chat(
+        &self,
+        _req: norte_ai::ChatRequest,
+    ) -> Result<norte_ai::ChatStream, norte_ai::AiError> {
+        use futures::StreamExt as _;
+        if let Some(d) = self.delay {
+            tokio::time::sleep(d).await;
+        }
+        // Entrega en DOS deltas para ejercitar el drenado del stream.
+        let (a, b) = self.reply.split_at(self.reply.len() / 2);
+        let items = vec![Ok(a.to_owned()), Ok(b.to_owned())];
+        Ok(futures::stream::iter(items).boxed())
+    }
+    async fn list_models(&self) -> Result<Vec<norte_ai::ModelInfo>, norte_ai::AiError> {
+        Ok(vec![norte_ai::ModelInfo {
+            id: "fake".into(),
+            context_window: None,
+        }])
+    }
+}
+
+/// Daemon con proveedor de IA fake instalado y `[ai]` habilitado (M4-IA).
+async fn spawn_daemon_ai(reply: &str) -> TestDaemon {
+    spawn_daemon_ai_delay(reply, None).await
+}
+
+/// Como [`spawn_daemon_ai`] pero el proveedor RETRASA su respuesta: la
+/// request queda en vuelo hasta que un `rpc.cancel` la retire.
+async fn spawn_daemon_ai_slow(reply: &str, delay: Duration) -> TestDaemon {
+    spawn_daemon_ai_delay(reply, Some(delay)).await
+}
+
+async fn spawn_daemon_ai_delay(reply: &str, delay: Option<Duration>) -> TestDaemon {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    let engine = Arc::new(Engine::new());
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    engine.set_ai_provider(Arc::new(FakeAi {
+        reply: reply.to_owned(),
+        delay,
+    }));
+    engine.set_ai_config(norte_core::ai::AiConfig {
+        enabled: true,
+        ..Default::default()
+    });
+    let daemon = Daemon::bind(
+        engine,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+            plugins_dir: None,
+        },
+    )
+    .await
+    .expect("bind");
+    let run = tokio::spawn(daemon.run());
+    TestDaemon {
+        socket,
+        run,
+        _dir: dir,
+        mem,
+    }
+}
+
+#[tokio::test]
+async fn ai_rename_plan_responde_por_el_socket() {
+    let d = spawn_daemon_ai(r#"[{"from":"a.txt","to":"informe-a.txt"}]"#).await;
+    write_file(&d.mem, "mem:///a.txt", b"x").await;
+    let c = connected_client(&d).await;
+    let plan: methods::AiRenamePlanResult = c
+        .call(
+            methods::AI_RENAME_PLAN,
+            &methods::AiRenamePlanParams {
+                dir: vp("mem:///"),
+                instruction: "prefija informe-".into(),
+            },
+        )
+        .await
+        .expect("ai.rename_plan");
+    assert_eq!(plan.entries.len(), 1);
+    assert_eq!(plan.entries[0].from, "a.txt");
+    assert_eq!(plan.entries[0].to, "informe-a.txt");
+}
+
+/// Sin proveedor instalado el daemon responde `Unsupported`, no un panic ni
+/// un error opaco (mismo contrato que el engine embebido).
+#[tokio::test]
+async fn ai_rename_plan_sin_proveedor_es_unsupported() {
+    let d = spawn_daemon(None).await; // sin set_ai_provider
+    let c = connected_client(&d).await;
+    let err = c
+        .call::<_, methods::AiRenamePlanResult>(
+            methods::AI_RENAME_PLAN,
+            &methods::AiRenamePlanParams {
+                dir: vp("mem:///"),
+                instruction: "x".into(),
+            },
+        )
+        .await
+        .expect_err("sin proveedor → error");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(norte_proto::Error::Unsupported)),
+            "Unsupported, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// El gate de LECTURA (#80) también cubre `ai.rename_plan`: un agente sin
+/// scope no lista nombres vía la IA (denegado ANTES de tocar el engine).
+#[tokio::test]
+async fn agente_sin_scope_no_puede_ai_rename_plan() {
+    let d = spawn_daemon_policy().await;
+    let agent = connected_agent(&d, "s1").await;
+    let err = agent
+        .call::<_, methods::AiRenamePlanResult>(
+            methods::AI_RENAME_PLAN,
+            &methods::AiRenamePlanParams {
+                dir: vp("mem:///"),
+                instruction: "x".into(),
+            },
+        )
+        .await
+        .expect_err("agente sin scope denegado");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
+            "PolicyDenied out-of-scope, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// #72 sobre `ai.rename_plan`: la llamada al proveedor puede tardar — un
+/// `rpc.cancel` dropea el dispatch en vuelo (el stream HTTP aborta con el
+/// drop) y responde `Error::Cancelled` sin matar la conexión.
+#[tokio::test]
+async fn rpc_cancel_aborta_ai_rename_plan_en_vuelo() {
+    // FakeAi con delay grande: la request queda EN VUELO hasta el cancel.
+    let d = spawn_daemon_ai_slow("[]", Duration::from_secs(30)).await;
+    let c = Arc::new(connected_client(&d).await);
+
+    let id_slot = Arc::new(std::sync::Mutex::new(None::<u64>));
+    let caller = Arc::clone(&c);
+    let slot = Arc::clone(&id_slot);
+    let call = tokio::spawn(async move {
+        caller
+            .call_tracked::<_, methods::AiRenamePlanResult>(
+                methods::AI_RENAME_PLAN,
+                &methods::AiRenamePlanParams {
+                    dir: vp("mem:///"),
+                    instruction: "x".into(),
+                },
+                move |id| *slot.lock().expect("id lock") = Some(id),
+            )
+            .await
+    });
+
+    let id = loop {
+        if let Some(id) = *id_slot.lock().expect("id lock") {
+            break id;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    c.notify(
+        methods::RPC_CANCEL,
+        &methods::RpcCancelParams {
+            id: norte_proto::wire::RequestId::Num(id),
+        },
+    )
+    .expect("rpc.cancel notify");
+
+    match call.await.expect("join") {
+        Err(ClientError::Rpc(rpc)) => {
+            assert_eq!(rpc.code, codes::APP_ERROR);
+            assert_eq!(rpc.data, Some(Error::Cancelled));
+        }
+        other => panic!("esperaba Cancelled, fue {other:?}"),
+    }
+}

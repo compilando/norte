@@ -1566,7 +1566,11 @@ async fn handle_value(
             // por construcción: dropear un future no puede devolver Approved).
             let cancelable = matches!(
                 req.method.as_str(),
-                methods::FS_COPY | methods::FS_MOVE | methods::FS_DELETE | methods::FS_MKDIR
+                methods::FS_COPY
+                    | methods::FS_MOVE
+                    | methods::FS_DELETE
+                    | methods::FS_MKDIR
+                    | methods::AI_RENAME_PLAN
             );
             let response = if cancelable {
                 let cancel = CancellationToken::new();
@@ -2823,6 +2827,9 @@ async fn handle_fs_search(
 /// Las familias `fs.*`/`task.*` del dispatch (separadas por tamaño). El
 /// `actor` viene de la conexión (M3-3b): las mutaciones se journalizan y
 /// evalúan bajo él.
+// Lista plana de brazos, un método por brazo — mismo criterio que `dispatch`:
+// trocearla no reduciría la complejidad real, solo la escondería.
+#[allow(clippy::too_many_lines)]
 async fn dispatch_fs_task(
     req: Request,
     conn_id: u64,
@@ -2857,6 +2864,29 @@ async fn dispatch_fs_task(
                 })
                 .collect();
             to_value(&methods::IndexQueryResult { hits })
+        }
+        // ai.rename_plan (0.32.0, M4-IA, ADR 0031): plan de rename revisable.
+        // Respuesta DIRECTA; cancelable (#72) — la llamada al proveedor tarda.
+        methods::AI_RENAME_PLAN => {
+            let p: methods::AiRenamePlanParams = parse_params(req.params)?;
+            read_gate(&actor, &p.dir, shared)?; // #80
+            let plan = shared
+                .engine
+                .ai_rename_plan(&p.dir, &p.instruction)
+                .await
+                .map_err(RpcError::from)?;
+            let entries = plan
+                .entries
+                .into_iter()
+                .map(|e| methods::AiRenameEntry {
+                    // Invariante del engine: el plan solo contiene nombres
+                    // UTF-8 (hostiles rechazados fail-loud pre-proveedor), la
+                    // conversión lossy es identidad.
+                    from: String::from_utf8_lossy(e.from.as_bytes()).into_owned(),
+                    to: String::from_utf8_lossy(e.to.as_bytes()).into_owned(),
+                })
+                .collect();
+            to_value(&methods::AiRenamePlanResult { entries })
         }
         // index.build (0.25.0, M4): Task. El resultado (indexed/removed) NO se
         // reenvía por wire aún (task completa = hecho); un fetch de report es
