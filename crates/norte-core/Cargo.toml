@@ -58,6 +58,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# FakeEmbed determinista para los tests de index.embed (M4-IA-2). La feature
+# `testutil` solo se activa en tests: el build normal no la ve.
+norte-ai = { workspace = true, features = ["testutil"] }
 # Servidores SSH y FTP in-process para el test de integración del connection
 # manager (mismo arnés que norte-connect; sin Docker).
 libunftp.workspace = true

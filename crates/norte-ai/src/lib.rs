@@ -9,6 +9,8 @@ mod http;
 mod provider;
 
 pub mod anthropic;
+#[cfg(feature = "testutil")]
+pub mod fake;
 pub mod ollama;
 pub mod openai_compat;
 
