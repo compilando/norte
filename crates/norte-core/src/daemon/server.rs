@@ -2927,12 +2927,16 @@ async fn dispatch_fs_task(
         // exfiltra contenido sin rastro. Categoría del vocabulario CERRADO
         // de [`crate::policy::DenyReason`].
         methods::INDEX_EMBED => {
-            let p: methods::IndexEmbedParams = parse_params(req.params)?;
+            // El gate de actor va ANTES del parseo A PROPÓSITO (security
+            // audit M4-IA-2): un agente recibe `PolicyDenied` sea cual sea
+            // la validez de sus params, y jamás distingue "params malos" de
+            // "vedado" — la respuesta no depende de nada que él controle.
             if !matches!(actor, Actor::User) {
                 return Err(RpcError::from(norte_proto::Error::PolicyDenied {
                     rule: "not-approved".into(),
                 }));
             }
+            let p: methods::IndexEmbedParams = parse_params(req.params)?;
             read_gate(&actor, &p.root, shared)?; // #80
             let handle = shared
                 .engine
@@ -2949,12 +2953,14 @@ async fn dispatch_fs_task(
         // que tarde el proveedor. SOLO humano (la query SALE hacia el
         // proveedor), mismo criterio que index.embed / ai.rename_plan.
         methods::INDEX_SEARCH_SEMANTIC => {
-            let p: methods::IndexSearchSemanticParams = parse_params(req.params)?;
+            // Igual que `index.embed`: gate de actor ANTES del parseo (security
+            // audit M4-IA-2), para que un agente vea siempre `PolicyDenied`.
             if !matches!(actor, Actor::User) {
                 return Err(RpcError::from(norte_proto::Error::PolicyDenied {
                     rule: "not-approved".into(),
                 }));
             }
+            let p: methods::IndexSearchSemanticParams = parse_params(req.params)?;
             if p.query.len() > MAX_AI_QUERY_BYTES {
                 return Err(RpcError::protocol(
                     codes::INVALID_PARAMS,

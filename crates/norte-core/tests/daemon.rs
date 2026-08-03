@@ -4848,6 +4848,36 @@ async fn agente_no_puede_embed_ni_semantic() {
     assert_not_approved(err);
 }
 
+/// El veto al agente precede al PARSEO de params (security audit M4-IA-2): con
+/// params MALFORMADOS la respuesta sigue siendo `PolicyDenied not-approved` y
+/// nunca `INVALID_PARAMS`. Así el agente no distingue "schema malo" de
+/// "vedado" — nada de lo que envía cambia lo que ve.
+#[tokio::test]
+async fn agente_con_params_malformados_ve_policy_denied_no_invalid_params() {
+    let d = spawn_daemon_embed(None).await;
+    let agent = connected_agent(&d, "s1").await;
+    let assert_not_approved = |err: ClientError| match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"),
+            "PolicyDenied not-approved (nunca INVALID_PARAMS), fue {rpc:?}"
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    };
+    let err = agent
+        .call::<_, serde_json::Value>(methods::INDEX_EMBED, &serde_json::json!({ "root": 42 }))
+        .await
+        .expect_err("agente: index.embed vedado pese a params malos");
+    assert_not_approved(err);
+    let err = agent
+        .call::<_, serde_json::Value>(
+            methods::INDEX_SEARCH_SEMANTIC,
+            &serde_json::json!({ "query": [] }),
+        )
+        .await
+        .expect_err("agente: index.search_semantic vedado pese a params malos");
+    assert_not_approved(err);
+}
+
 /// Camino feliz por el socket: build → embed → `search_semantic` devuelve el
 /// fichero sembrado como primer hit, con un score que es un número JSON
 /// FINITO (el cinturón anti-NaN del engine es contractual: un `NaN`
