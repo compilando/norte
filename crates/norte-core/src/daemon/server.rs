@@ -110,6 +110,9 @@ const LISTING_SWEEP: Duration = Duration::from_secs(30);
 /// Tope del prompt de `ai.rename_plan` (security review M4-IA): los tokens de
 /// ENTRADA son el coste del proveedor; el frame de 16 MiB no es un límite.
 const MAX_AI_INSTRUCTION_BYTES: usize = 4 * 1024;
+/// Tope de la query de `index.search_semantic` (mismo cinturón que la
+/// instrucción de `ai.rename_plan`).
+const MAX_AI_QUERY_BYTES: usize = 4 * 1024;
 
 /// Configuración del daemon.
 #[derive(Debug, Clone)]
@@ -1574,6 +1577,7 @@ async fn handle_value(
                     | methods::FS_DELETE
                     | methods::FS_MKDIR
                     | methods::AI_RENAME_PLAN
+                    | methods::INDEX_SEARCH_SEMANTIC
             );
             let response = if cancelable {
                 let cancel = CancellationToken::new();
@@ -2915,6 +2919,61 @@ async fn dispatch_fs_task(
                 .map_err(RpcError::from)?;
             let task_id = register_task_id(shared, handle, actor.clone())?;
             to_value(&methods::FsTaskResult { task_id })
+        }
+        // index.embed (0.33.0, M4-IA-2): Task de embeddings del root ya
+        // indexado. SOLO humano, fail-closed como ai.rename_plan: los
+        // prefijos de CONTENIDO salen del proceso hacia el proveedor y el
+        // path de lectura no journaliza — un agente no quema cuota ni
+        // exfiltra contenido sin rastro. Categoría del vocabulario CERRADO
+        // de [`crate::policy::DenyReason`].
+        methods::INDEX_EMBED => {
+            let p: methods::IndexEmbedParams = parse_params(req.params)?;
+            if !matches!(actor, Actor::User) {
+                return Err(RpcError::from(norte_proto::Error::PolicyDenied {
+                    rule: "not-approved".into(),
+                }));
+            }
+            read_gate(&actor, &p.root, shared)?; // #80
+            let handle = shared
+                .engine
+                .index_embed_as(p.root, actor.clone())
+                .await
+                .map_err(RpcError::from)?;
+            // INVARIANTE (#64): CERO `.await` entre el submit del engine
+            // (dentro de `index_embed_as`) y este register.
+            let task_id = register_task_id(shared, handle, actor.clone())?;
+            to_value(&methods::FsTaskResult { task_id })
+        }
+        // index.search_semantic (0.33.0, M4-IA-2): respuesta DIRECTA,
+        // cancelable con rpc.cancel (#72) — el embed de la query tarda lo
+        // que tarde el proveedor. SOLO humano (la query SALE hacia el
+        // proveedor), mismo criterio que index.embed / ai.rename_plan.
+        methods::INDEX_SEARCH_SEMANTIC => {
+            let p: methods::IndexSearchSemanticParams = parse_params(req.params)?;
+            if !matches!(actor, Actor::User) {
+                return Err(RpcError::from(norte_proto::Error::PolicyDenied {
+                    rule: "not-approved".into(),
+                }));
+            }
+            if p.query.len() > MAX_AI_QUERY_BYTES {
+                return Err(RpcError::protocol(
+                    codes::INVALID_PARAMS,
+                    format!("query supera {MAX_AI_QUERY_BYTES} bytes"),
+                ));
+            }
+            if let Some(root) = &p.root {
+                read_gate(&actor, root, shared)?; // #80
+            }
+            let hits = shared
+                .engine
+                .index_search_semantic(p.root.as_ref(), &p.query, p.k)
+                .await
+                .map_err(RpcError::from)?;
+            let hits = hits
+                .into_iter()
+                .map(|(path, score)| methods::SemanticHit { path, score })
+                .collect();
+            to_value(&methods::IndexSearchSemanticResult { hits })
         }
         methods::FS_COPY => {
             let p: methods::FsCopyParams = parse_params(req.params)?;

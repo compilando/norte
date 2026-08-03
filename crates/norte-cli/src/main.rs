@@ -199,6 +199,22 @@ enum IndexCmd {
         #[arg(long, default_value_t = 50)]
         limit: u32,
     },
+    /// Genera embeddings del root ya indexado (requiere `[ai]` + `embed_provider`)
+    Embed {
+        /// Raíz ya indexada con `index build`
+        path: PathBuf,
+    },
+    /// Búsqueda semántica; sin --root busca en todos los roots
+    Semantic {
+        /// Consulta en lenguaje natural
+        text: String,
+        /// Raíz cuyo índice consultar (por defecto, todos)
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Tope de resultados (el server recorta a su máximo)
+        #[arg(long, default_value_t = 20)]
+        k: u32,
+    },
 }
 
 /// Subcomandos de auditoría (M3-5).
@@ -912,6 +928,35 @@ async fn index_cmd(backend: &Backend, cmd: IndexCmd) -> anyhow::Result<ExitCode>
             }
             Ok(ExitCode::SUCCESS)
         }
+        IndexCmd::Embed { path } => {
+            let root = vpath(&path)?;
+            let task = backend
+                .index_embed(&root)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))
+                .context("no se pudo lanzar el index embed")?;
+            Ok(run_task(task, false).await)
+        }
+        IndexCmd::Semantic { text, root, k } => {
+            let root = root.as_deref().map(vpath).transpose()?;
+            let hits = backend
+                .index_search_semantic(root.as_ref(), &text, k)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))
+                .context("búsqueda semántica")?;
+            for h in &hits {
+                // Paths con nombres arbitrarios hacia un terminal: MISMO
+                // enmascarado marcado que el plan de `norte ai rename`
+                // (`display_name` por segmento vía `path_display`, hazards
+                // → � y el `!` delata la alteración).
+                let (texto, hostil) = norte_frontend::path_display(&h.path);
+                println!("{:.2}\t{}{texto}", h.score, if hostil { "!" } else { "" });
+            }
+            if hits.is_empty() {
+                eprintln!("(sin resultados)");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
     }
 }
 
@@ -1205,6 +1250,28 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
                                 "aviso: proveedor de IA no disponible ({e}); ai.* dará Unsupported"
                             ),
                         }
+                    }
+                    // Embeddings (M4-IA-2): proveedor propio, opt-in igual.
+                    if let Some(pcfg) = config.embed_provider_config().cloned() {
+                        match norte_core::ai::resolve_and_build(
+                            &pcfg,
+                            norte_core::connect::config_dir(),
+                        )
+                        .await
+                        {
+                            Ok(p) => engine.set_ai_embed_provider(p),
+                            Err(e) => eprintln!(
+                                "aviso: proveedor de embeddings no disponible ({e}); \
+                                 index.embed/search_semantic darán Unsupported"
+                            ),
+                        }
+                    } else if config.embed_provider.is_some() {
+                        // Nombrado pero inexistente en [ai.providers] — distinto
+                        // de "sin configurar" (silencio: los embeddings son opt-in).
+                        eprintln!(
+                            "aviso: embed_provider nombra un proveedor que no existe en \
+                             [ai.providers]; index.embed/search_semantic darán Unsupported"
+                        );
                     }
                     engine.set_ai_config(config);
                 }

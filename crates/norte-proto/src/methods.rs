@@ -440,6 +440,7 @@ pub const INDEX_EMBED: &str = "index.embed";
 /// `rpc.cancel`: un embed de la query + barrido coseno en el core. `k` se
 /// recorta a [`INDEX_SEMANTIC_MAX_K`]. SOLO conexión humana, como
 /// [`INDEX_EMBED`] — la query sale hacia el proveedor.
+/// La query está topada server-side (4 KiB) — exceso ⇒ `INVALID_PARAMS`.
 pub const INDEX_SEARCH_SEMANTIC: &str = "index.search_semantic";
 /// Tope de `k` en [`INDEX_SEARCH_SEMANTIC`]. Pedir más no es error: se
 /// recorta (mismo patrón que [`FS_LIST_MAX_PAGE`]).
@@ -953,6 +954,9 @@ pub struct SemanticHit {
     /// Path del fichero (wire encoding).
     pub path: VPath,
     /// Similitud coseno en `[-1, 1]` (mayor = más afín).
+    /// Siempre finito: el server jamás emite NaN/Infinity (cinturón en el
+    /// engine — un no-finito serializaría como null y envenenaría la
+    /// respuesta).
     pub score: f64,
 }
 

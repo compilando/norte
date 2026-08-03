@@ -490,6 +490,61 @@ impl Backend {
         }
     }
 
+    /// Genera embeddings de los ficheros ya indexados de `root` como Task
+    /// (M4-IA-2). Requiere `index.build` previo del MISMO root.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] sin índice o sin proveedor de embeddings;
+    /// [`Error::NotFound`] sin `index.build` previo (en la RESPUESTA, no en
+    /// el join); [`Error::PolicyDenied`] del gate de IA; taxonomía del
+    /// protocolo.
+    pub async fn index_embed(&self, root: &VPath) -> Result<TaskRef, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let handle = engine
+                    .index_embed_as(root.clone(), crate::journal::Actor::User)
+                    .await?;
+                Ok(TaskRef::from_handle(&handle))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.index_embed(root).await,
+        }
+    }
+
+    /// Búsqueda semántica sobre los embeddings del índice (M4-IA-2):
+    /// `root = None` busca en todos los roots. AMBOS brazos acotados por
+    /// `AI_CALL_TIMEOUT` (el embed de la query va al proveedor), como
+    /// [`Backend::ai_rename_plan`].
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] sin índice o sin proveedor de embeddings;
+    /// [`Error::PolicyDenied`] del gate de IA;
+    /// [`Error::ProviderUnavailable`] (retryable) al agotar el timeout;
+    /// taxonomía del protocolo.
+    pub async fn index_search_semantic(
+        &self,
+        root: Option<&VPath>,
+        query: &str,
+        k: u32,
+    ) -> Result<Vec<norte_proto::methods::SemanticHit>, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let hits = tokio::time::timeout(
+                    AI_CALL_TIMEOUT,
+                    engine.index_search_semantic(root, query, k),
+                )
+                .await
+                .map_err(|_| Error::ProviderUnavailable { retryable: true })??;
+                Ok(hits
+                    .into_iter()
+                    .map(|(path, score)| norte_proto::methods::SemanticHit { path, score })
+                    .collect())
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.index_search_semantic(root, query, k).await,
+        }
+    }
+
     /// Plan de rename revisable de `dir` vía IA (M4-IA, ADR 0031). NO muta:
     /// aplicar el plan son N [`Backend::move_`] gobernados. AMBOS brazos
     /// están acotados por `AI_CALL_TIMEOUT` (2 min): un endpoint de proveedor en
@@ -2103,6 +2158,39 @@ pub mod remote {
                         root: root.clone(),
                         text: text.to_string(),
                         limit,
+                    },
+                )
+                .await?;
+            Ok(r.hits)
+        }
+
+        pub(super) async fn index_embed(&self, root: &VPath) -> Result<TaskRef, Error> {
+            let result: FsTaskResult = self
+                .call_timed_guarded(
+                    methods::INDEX_EMBED,
+                    &methods::IndexEmbedParams { root: root.clone() },
+                )
+                .await?;
+            Ok(self.own_task(result.task_id, TaskKind::Embed))
+        }
+
+        /// `index.search_semantic` (0.33.0, M4-IA-2): respuesta directa con
+        /// el timeout LARGO de IA y cancel-on-drop (el daemon la tiene en su
+        /// brazo de cancelación #72 — abandonar la espera corta el dispatch).
+        pub(super) async fn index_search_semantic(
+            &self,
+            root: Option<&VPath>,
+            query: &str,
+            k: u32,
+        ) -> Result<Vec<methods::SemanticHit>, Error> {
+            let r: methods::IndexSearchSemanticResult = self
+                .call_timed_guarded_with(
+                    AI_CALL_TIMEOUT,
+                    methods::INDEX_SEARCH_SEMANTIC,
+                    &methods::IndexSearchSemanticParams {
+                        root: root.cloned(),
+                        query: query.to_owned(),
+                        k,
                     },
                 )
                 .await?;

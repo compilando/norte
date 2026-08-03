@@ -4756,3 +4756,269 @@ async fn rpc_cancel_aborta_ai_rename_plan_en_vuelo() {
         other => panic!("esperaba Cancelled, fue {other:?}"),
     }
 }
+
+// ---------- index.embed / index.search_semantic (M4-IA-2) ----------
+
+/// Daemon con índice en memoria + proveedor de embeddings fake (M4-IA-2):
+/// `[ai]` habilitado con un proveedor `fake` declarado como `embed_provider`.
+/// `delay` retrasa cada `embed` para dejar la request EN VUELO (rpc.cancel).
+async fn spawn_daemon_embed(delay: Option<Duration>) -> TestDaemon {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    let index = norte_core::Index::open_memory()
+        .await
+        .expect("index memoria");
+    let engine = Arc::new(Engine::new().with_index(Arc::new(index)));
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    let mut fake = norte_ai::fake::FakeEmbed::new(8);
+    if let Some(d) = delay {
+        fake = fake.with_delay(d);
+    }
+    engine.set_ai_embed_provider(Arc::new(fake));
+    engine.set_ai_config(norte_core::ai::AiConfig {
+        enabled: true,
+        embed_provider: Some("fake".into()),
+        providers: vec![norte_core::ai::AiProviderConfig {
+            name: "fake".into(),
+            kind: "ollama".into(),
+            model: "fake-model".into(),
+            base_url: None,
+        }],
+        ..Default::default()
+    });
+    let daemon = Daemon::bind(
+        engine,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+            plugins_dir: None,
+        },
+    )
+    .await
+    .expect("bind");
+    let run = tokio::spawn(daemon.run());
+    TestDaemon {
+        socket,
+        run,
+        _dir: dir,
+        mem,
+    }
+}
+
+/// M4-IA-2 security: los embeddings son SOLO para el humano — una conexión de
+/// agente ve `PolicyDenied not-approved` en `index.embed` Y en
+/// `index.search_semantic` ANTES de cualquier gate de lectura o engine (los
+/// prefijos de contenido / la query saldrían del proceso, mismo criterio que
+/// `ai.rename_plan`).
+#[tokio::test]
+async fn agente_no_puede_embed_ni_semantic() {
+    let d = spawn_daemon_embed(None).await;
+    let agent = connected_agent(&d, "s1").await;
+    let assert_not_approved = |err: ClientError| match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"),
+            "PolicyDenied not-approved, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    };
+    let err = agent
+        .call::<_, FsTaskResult>(
+            methods::INDEX_EMBED,
+            &methods::IndexEmbedParams {
+                root: vp("mem:///"),
+            },
+        )
+        .await
+        .expect_err("agente: index.embed vedado");
+    assert_not_approved(err);
+    let err = agent
+        .call::<_, methods::IndexSearchSemanticResult>(
+            methods::INDEX_SEARCH_SEMANTIC,
+            &methods::IndexSearchSemanticParams {
+                root: None,
+                query: "x".into(),
+                k: 5,
+            },
+        )
+        .await
+        .expect_err("agente: index.search_semantic vedado");
+    assert_not_approved(err);
+}
+
+/// Camino feliz por el socket: build → embed → `search_semantic` devuelve el
+/// fichero sembrado como primer hit, con un score que es un número JSON
+/// FINITO (el cinturón anti-NaN del engine es contractual: un `NaN`
+/// serializaría como `null` y rompería la respuesta en el cliente).
+#[tokio::test]
+async fn semantic_por_el_socket_devuelve_hits() {
+    let d = spawn_daemon_embed(None).await;
+    d.mem.mkdir(&vp("mem:///r")).await.expect("mkdir r");
+    write_file(&d.mem, "mem:///r/a.txt", b"contenido alfa").await;
+    let mut c = connected_client(&d).await;
+
+    let t: FsTaskResult = c
+        .call(
+            methods::INDEX_BUILD,
+            &methods::IndexBuildParams {
+                root: vp("mem:///r"),
+            },
+        )
+        .await
+        .expect("index.build");
+    let seen = drain_task(&mut c, t.task_id.get()).await;
+    assert_eq!(seen.last().expect("terminal").state, TaskState::Completed);
+
+    let t: FsTaskResult = c
+        .call(
+            methods::INDEX_EMBED,
+            &methods::IndexEmbedParams {
+                root: vp("mem:///r"),
+            },
+        )
+        .await
+        .expect("index.embed");
+    let seen = drain_task(&mut c, t.task_id.get()).await;
+    assert_eq!(seen.last().expect("terminal").state, TaskState::Completed);
+
+    let r: methods::IndexSearchSemanticResult = c
+        .call(
+            methods::INDEX_SEARCH_SEMANTIC,
+            &methods::IndexSearchSemanticParams {
+                root: Some(vp("mem:///r")),
+                query: "contenido alfa".into(),
+                k: 5,
+            },
+        )
+        .await
+        .expect("index.search_semantic");
+    let top = r.hits.first().expect("al menos un hit");
+    assert_eq!(top.path, vp("mem:///r/a.txt"));
+    assert!(
+        top.score.is_finite(),
+        "score finito por contrato del wire, fue {}",
+        top.score
+    );
+}
+
+/// Fail-loud EN LA RESPUESTA (no en el join de la Task): `index.embed` sobre
+/// un root jamás construido con `index.build` es `NotFound` inmediato.
+#[tokio::test]
+async fn embed_sin_build_previo_es_not_found() {
+    let d = spawn_daemon_embed(None).await;
+    let c = connected_client(&d).await;
+    let err = c
+        .call::<_, FsTaskResult>(
+            methods::INDEX_EMBED,
+            &methods::IndexEmbedParams {
+                root: vp("mem:///nunca"),
+            },
+        )
+        .await
+        .expect_err("sin build previo → error");
+    match err {
+        ClientError::Rpc(rpc) => {
+            assert_eq!(rpc.code, codes::APP_ERROR);
+            assert_eq!(rpc.data, Some(norte_proto::Error::NotFound));
+        }
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// #72 sobre `index.search_semantic`: el embed de la query puede tardar — un
+/// `rpc.cancel` dropea el dispatch en vuelo y responde `Error::Cancelled`
+/// sin matar la conexión (espejo de `rpc_cancel_aborta_ai_rename_plan_en_vuelo`).
+#[tokio::test]
+async fn rpc_cancel_aborta_search_semantic_en_vuelo() {
+    // FakeEmbed con delay grande: la request queda EN VUELO hasta el cancel.
+    let d = spawn_daemon_embed(Some(Duration::from_secs(30))).await;
+    let c = Arc::new(connected_client(&d).await);
+
+    let id_slot = Arc::new(std::sync::Mutex::new(None::<u64>));
+    let caller = Arc::clone(&c);
+    let slot = Arc::clone(&id_slot);
+    let call = tokio::spawn(async move {
+        caller
+            .call_tracked::<_, methods::IndexSearchSemanticResult>(
+                methods::INDEX_SEARCH_SEMANTIC,
+                &methods::IndexSearchSemanticParams {
+                    root: None,
+                    query: "x".into(),
+                    k: 5,
+                },
+                move |id| *slot.lock().expect("id lock") = Some(id),
+            )
+            .await
+    });
+
+    let id = loop {
+        if let Some(id) = *id_slot.lock().expect("id lock") {
+            break id;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    c.notify(
+        methods::RPC_CANCEL,
+        &methods::RpcCancelParams {
+            id: norte_proto::wire::RequestId::Num(id),
+        },
+    )
+    .expect("rpc.cancel notify");
+
+    match call.await.expect("join") {
+        Err(ClientError::Rpc(rpc)) => {
+            assert_eq!(rpc.code, codes::APP_ERROR);
+            assert_eq!(rpc.data, Some(Error::Cancelled));
+        }
+        other => panic!("esperaba Cancelled, fue {other:?}"),
+    }
+}
+
+/// La query se capa server-side ANTES de tocar engine o proveedor (mismo
+/// cinturón de 4 KiB que la instrucción de `ai.rename_plan`): los tokens de
+/// ENTRADA son el coste; el frame de 16 MiB no es un límite.
+#[tokio::test]
+async fn semantic_query_gigante_es_invalid_params() {
+    let d = spawn_daemon_embed(None).await;
+    let c = connected_client(&d).await;
+    let err = c
+        .call::<_, methods::IndexSearchSemanticResult>(
+            methods::INDEX_SEARCH_SEMANTIC,
+            &methods::IndexSearchSemanticParams {
+                root: None,
+                query: "x".repeat(5 * 1024),
+                k: 5,
+            },
+        )
+        .await
+        .expect_err("query de 5 KiB → error de protocolo");
+    match err {
+        ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// Pedir un `k` desmesurado NO es error: se recorta a `INDEX_SEMANTIC_MAX_K`
+/// (mismo patrón que `FS_LIST_MAX_PAGE` — el contrato documentado del wire).
+#[tokio::test]
+async fn semantic_k_desmesurado_no_es_error() {
+    let d = spawn_daemon_embed(None).await;
+    let c = connected_client(&d).await;
+    let r: methods::IndexSearchSemanticResult = c
+        .call(
+            methods::INDEX_SEARCH_SEMANTIC,
+            &methods::IndexSearchSemanticParams {
+                root: None,
+                query: "x".into(),
+                k: 100_000,
+            },
+        )
+        .await
+        .expect("k gigante se recorta, jamás error");
+    assert!(
+        r.hits.len() <= usize::try_from(methods::INDEX_SEMANTIC_MAX_K).expect("cabe"),
+        "el clamp acota los hits"
+    );
+}
