@@ -307,3 +307,52 @@ fn ls_attrs_posix_via_json() {
     let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
     assert!(text.contains("posix.mode="), "columna humana: {text}");
 }
+
+// ---------- index semantic embebido cablea el proveedor (M4-IA-2) ----------
+
+/// Fix follow-up M4-IA-2: el path embebido de `run()` CABLEA el proveedor de
+/// embeddings. Contraste en dos corridas sobre el mismo binario:
+/// (a) sin `[ai]` → el engine no tiene proveedor: "Unsupported";
+/// (b) con `[ai]` + `embed_provider` hacia un endpoint MUERTO → el fallo viene
+///     del PROVEEDOR (ya cableado), jamás "Unsupported". El secreto va por
+///     env (`NORTE_SECRET_AI_EMB`) para no tocar el keyring del OS en CI.
+#[test]
+fn index_semantic_embebido_cablea_proveedor() {
+    // (a) config dir vacío: sin [ai] no hay proveedor → Unsupported.
+    let vacio = tempfile::tempdir().expect("tempdir");
+    let out = norte()
+        .env("NORTE_CONFIG_DIR", vacio.path())
+        .args(["index", "semantic", "hola"])
+        .output()
+        .expect("run");
+    assert!(!out.status.success(), "sin [ai] debe fallar");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.to_ascii_lowercase().contains("unsupported"),
+        "sin [ai] el engine no tiene proveedor: {stderr}"
+    );
+
+    // (b) [ai] + embed_provider hacia un endpoint muerto: el wiring instala
+    // el proveedor y el error es SUYO (conexión), no Unsupported.
+    let cfg = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        cfg.path().join("norte.toml"),
+        "[ai]\nenabled = true\nembed_provider = \"emb\"\n\n\
+         [ai.providers.emb]\nkind = \"ollama\"\nmodel = \"m\"\n\
+         base_url = \"http://127.0.0.1:9\"\n",
+    )
+    .expect("norte.toml");
+    let out = norte()
+        .env("NORTE_CONFIG_DIR", cfg.path())
+        .env("NORTE_SECRET_AI_EMB", "x")
+        .args(["index", "semantic", "hola"])
+        .output()
+        .expect("run");
+    assert!(!out.status.success(), "endpoint muerto debe fallar");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.to_ascii_lowercase().contains("unsupported"),
+        "con [ai]+embed_provider el proveedor está CABLEADO (el fallo es del \
+         proveedor, no Unsupported): {stderr}"
+    );
+}

@@ -422,6 +422,49 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     engine.set_connector(Arc::new(norte_core::connect::ConnectionManager::new(
         norte_core::connect::config_dir(),
     )));
+    // Embeddings (M4-IA-2): el engine embebido lleva el índice (arriba) pero
+    // sin proveedor `index embed`/`semantic` darían Unsupported aun con
+    // `[ai]` + embed_provider configurados. El bloque es LAZY: cargar `[ai]`
+    // (config + resolución de secreto) solo lo pagan los dos comandos que lo
+    // consumen — jamás un `ls`. Con `--daemon` el dueño del proveedor es el
+    // daemon (su propio wiring en daemon-run).
+    if !cli.daemon
+        && matches!(
+            cli.cmd,
+            Cmd::Index {
+                cmd: IndexCmd::Embed { .. } | IndexCmd::Semantic { .. }
+            }
+        )
+    {
+        match tokio::task::spawn_blocking(norte_core::ai::AiConfig::load).await {
+            Ok(Ok(config)) => {
+                if let Some(pcfg) = config.embed_provider_config().cloned() {
+                    match norte_core::ai::resolve_and_build(
+                        &pcfg,
+                        norte_core::connect::config_dir(),
+                    )
+                    .await
+                    {
+                        Ok(p) => engine.set_ai_embed_provider(p),
+                        Err(e) => eprintln!(
+                            "aviso: proveedor de embeddings no disponible ({e}); \
+                             index embed/semantic darán Unsupported"
+                        ),
+                    }
+                } else if config.embed_provider.is_some() {
+                    // Nombrado pero inexistente en [ai.providers] — distinto de
+                    // "sin configurar" (silencio: los embeddings son opt-in).
+                    eprintln!(
+                        "aviso: embed_provider nombra un proveedor que no existe en \
+                         [ai.providers]; index embed/semantic darán Unsupported"
+                    );
+                }
+                engine.set_ai_config(config);
+            }
+            Ok(Err(e)) => eprintln!("aviso: [ai] inválido ({e})"),
+            Err(e) => eprintln!("aviso: carga de [ai] falló ({e})"),
+        }
+    }
 
     let mut backend = make_backend(engine, cli.daemon, cli.socket).await?;
     // #44: toma el canal de avisos de degradación ANTES de correr el comando
