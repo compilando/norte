@@ -374,6 +374,20 @@ async fn semantic_search_clamps_k_and_ignores_stale_model() {
 }
 
 #[tokio::test]
+async fn semantic_search_garbage_query_vector_is_provider_error() {
+    // `FakeEmbed` de dim 0 ⇒ vector de query VACÍO: proveedor basura. El
+    // cinturón lo convierte en error honesto (misma taxonomía que la mentira
+    // de 0 vectores), jamás 0 hits en silencio. Las variantes NaN/norma-cero
+    // comparten la misma rama (norm2 no finita o ≤0) y quedan documentadas en
+    // el engine; FakeEmbed no tiene knob para emitirlas.
+    let (engine, _mem, _fake) = setup_with(FakeEmbed::new(0), ai_cfg()).await;
+    match engine.index_search_semantic(None, "hola", 10).await {
+        Err(norte_proto::Error::ProviderUnavailable { retryable: false }) => {}
+        other => panic!("esperaba ProviderUnavailable no-retryable, fue {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn semantic_search_unsupported_and_gate() {
     // Engine con índice pero SIN proveedor de embeddings ⇒ Unsupported.
     let index = norte_index::Index::open_memory().await.expect("index");

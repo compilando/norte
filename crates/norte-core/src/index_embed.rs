@@ -76,6 +76,14 @@ pub(crate) fn cosine(a: &[f32], b: &[f32]) -> Option<f32> {
     }
 }
 
+/// Recorta `k` al rango del wire `[1, INDEX_SEMANTIC_MAX_K]`
+/// (`index.search_semantic`).
+pub(crate) fn clamp_k(k: u32) -> usize {
+    // Invariante: MAX_K=100 cabe en usize en cualquier plataforma.
+    usize::try_from(k.clamp(1, norte_proto::methods::INDEX_SEMANTIC_MAX_K))
+        .expect("MAX_K cabe en usize")
+}
+
 /// Mapea un [`norte_index::IndexError`] a la taxonomía del wire (mismo
 /// criterio que `index_build_as`: `BUSY`/`LOCKED` de `SQLite` ⇒ retryable).
 pub(crate) fn index_to_proto(e: &norte_index::IndexError) -> Error {
@@ -290,5 +298,12 @@ mod tests {
         assert!(cosine(&q, &[0.0, 0.0]).is_none());
         // no finito ⇒ None (cinturón: jamás un score NaN en el wire)
         assert!(cosine(&q, &[f32::NAN, 0.0]).is_none());
+    }
+
+    #[test]
+    fn clamp_k_pins_wire_bounds() {
+        assert_eq!(clamp_k(0), 1, "k=0 se recorta a 1");
+        assert_eq!(clamp_k(1000), 100, "tope superior = INDEX_SEMANTIC_MAX_K");
+        assert_eq!(clamp_k(50), 50, "dentro del rango pasa tal cual");
     }
 }

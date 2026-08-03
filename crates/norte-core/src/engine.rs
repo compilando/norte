@@ -802,7 +802,7 @@ impl Engine {
     /// Solo por envenenamiento de un lock interno (irrecuperable).
     #[tracing::instrument(
         skip(self, query),
-        fields(root = root.map(span_path).unwrap_or_default())
+        fields(root = root.map_or_else(|| "<all>".into(), span_path))
     )]
     pub async fn index_search_semantic(
         &self,
@@ -832,8 +832,7 @@ impl Engine {
                 .map_err(|reason| ai_denied_to_error(&reason))?;
             model
         };
-        let k = usize::try_from(k.clamp(1, norte_proto::methods::INDEX_SEMANTIC_MAX_K))
-            .expect("MAX_K=100 cabe en usize");
+        let k = crate::index_embed::clamp_k(k);
         let qvec = embedder
             .embed(&[query.to_owned()])
             .await
@@ -843,6 +842,13 @@ impl Engine {
             // Proveedor mentiroso (0 vectores por 1 input): mala conducta del
             // PROVEEDOR, no retryable — mismo criterio que `flush_batch`.
             .ok_or(Error::ProviderUnavailable { retryable: false })?;
+        // Cinturón proveedor-basura: un vector de query vacío, con componentes
+        // no finitos o de norma cero no puede puntuar nada — mejor un error
+        // honesto que 0 hits en silencio. (Norma finita ⇒ componentes finitos.)
+        let norm2: f32 = qvec.iter().map(|x| x * x).sum();
+        if qvec.is_empty() || !norm2.is_finite() || norm2 <= 0.0 {
+            return Err(Error::ProviderUnavailable { retryable: false });
+        }
         let vectors = index
             .embeddings_for_root(root, &model)
             .await
@@ -853,9 +859,9 @@ impl Engine {
                 crate::index_embed::cosine(&qvec, &v).map(|s| (path, f64::from(s)))
             })
             .collect();
-        // `cosine` garantiza scores finitos ⇒ partial_cmp jamás falla aquí;
-        // el `unwrap_or` es solo cinturón (orden estable, no panic).
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        // `total_cmp` es orden TOTAL: jamás el panic de `sort_by` con un
+        // comparador no total (Rust ≥1.81).
+        scored.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
         scored.truncate(k);
         Ok(scored)
     }
