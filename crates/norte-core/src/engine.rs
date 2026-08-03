@@ -690,8 +690,9 @@ impl Engine {
 
     /// Task `index.embed`: embeddings de los ficheros ya indexados de `root`
     /// (M4-IA-2, ADR 0031 A3). Filtrado ANTES de leer (`denied_prefixes`,
-    /// heurística de texto), prefijos acotados, skip por hash — ver
-    /// [`crate::index_embed`].
+    /// heurística de texto), prefijos acotados, skip por hash — ver el módulo
+    /// privado `index_embed` (sin enlace: el gate de docs rechaza enlazar a
+    /// item privado desde doc pública).
     ///
     /// # Errors
     /// [`Error::Unsupported`] sin índice instalado ([`Self::with_index`]),
