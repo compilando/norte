@@ -1079,7 +1079,7 @@ impl NorteGui {
             SessionEvent::PluginRunFailed(msg) => {
                 self.errors[self.focus] = Some(msg);
             }
-            // deuda: el banner llega al pane ENFOCADO, no al solicitante
+            // deuda (#121): el banner llega al pane ENFOCADO, no al solicitante
             // (igual que PluginRunResult) — un `pane.switch` durante el
             // "pensando…" deja el aviso en el pane equivocado.
             SessionEvent::AiRenamePlan { dir, result } => match result {

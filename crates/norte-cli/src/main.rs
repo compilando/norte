@@ -1380,11 +1380,18 @@ async fn ai_cmd(cmd: AiCmd) -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     println!("{}", norte_i18n::t("cli-ai-rename-plan"));
+    // Nombres controlados por el MODELO: enmascarar hazards de terminal
+    // (bidi/invisibles → �) y MARCAR el enmascarado, como TUI/GUI. Un reply
+    // UTF-8 válido puede traer RLO y spoofear el prompt de confirmación.
+    let masked = |bytes: &[u8]| {
+        let (texto, hostil) = norte_frontend::display_name(bytes);
+        format!("{}{texto}", if hostil { "!" } else { "" })
+    };
     for e in &plan.entries {
         println!(
             "  {} → {}",
-            String::from_utf8_lossy(e.from.as_bytes()),
-            String::from_utf8_lossy(e.to.as_bytes())
+            masked(e.from.as_bytes()),
+            masked(e.to.as_bytes())
         );
     }
 
@@ -1411,14 +1418,14 @@ async fn ai_cmd(cmd: AiCmd) -> anyhow::Result<ExitCode> {
                 TaskState::Completed => ok += 1,
                 other => eprintln!(
                     "norte: {} → {}: {other:?}",
-                    String::from_utf8_lossy(e.from.as_bytes()),
-                    String::from_utf8_lossy(e.to.as_bytes())
+                    masked(e.from.as_bytes()),
+                    masked(e.to.as_bytes())
                 ),
             },
             Err(err) => eprintln!(
                 "norte: {} → {}: {err}",
-                String::from_utf8_lossy(e.from.as_bytes()),
-                String::from_utf8_lossy(e.to.as_bytes())
+                masked(e.from.as_bytes()),
+                masked(e.to.as_bytes())
             ),
         }
     }

@@ -1086,7 +1086,10 @@ async fn run(
                                 });
                             } else {
                                 // Otro modal abierto (aprobación, colisión…):
-                                // el plan espera su turno, jamás lo pisa.
+                                // el plan espera su turno, jamás lo pisa. A
+                                // diferencia de la GUI (banner superseded), aquí
+                                // el overwrite es inalcanzable: run único en
+                                // vuelo y el prompt no abre sobre otro modal.
                                 pending_ai_plan = Some(ready);
                             }
                         }
