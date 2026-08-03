@@ -91,6 +91,19 @@ struct SearchRun {
     state: SearchState,
 }
 
+/// Petición `ai.rename_plan` EN VUELO (M4-IA). Abortar el `JoinHandle`
+/// cancela (regla 3): el abort dropea el future del backend en el runtime →
+/// `CancelOnAbandon` envía `rpc.cancel` (remoto) / el timeout+drop aborta el
+/// stream (embebido). OJO: DROPEAR el handle solo DESVINCULA la task de
+/// tokio — cancelar exige `abort()` explícito.
+struct AiRenameRun {
+    /// La llamada al modelo, spawneada (es la única llamada larga del loop).
+    handle: tokio::task::JoinHandle<Result<norte_proto::methods::AiRenamePlanResult, Error>>,
+    /// Dir del pane al LANZAR; el plan se aplica AQUÍ aunque el usuario
+    /// navegue mientras el modelo piensa.
+    dir: VPath,
+}
+
 /// Mensaje del drenador de un listado paginado al run loop.
 enum FillMsg {
     /// Un lote más de entradas para el pane.
@@ -827,6 +840,13 @@ async fn run(
     // Búsqueda viva en curso (liveSearch T6): a lo sumo una (el pane virtual
     // es uno). Molde `Fill`: se drena en el select y se suelta al salir.
     let mut search_run: Option<SearchRun> = None;
+    // Petición ai.rename_plan en vuelo (M4-IA): a lo sumo una — relanzar
+    // aborta la anterior. Se cosecha en el select y Esc (BROWSE) la cancela.
+    let mut ai_rename_run: Option<AiRenameRun> = None;
+    // Plan IA listo llegado con OTRO modal abierto: se RETIENE aquí (la cola
+    // de `App` es específica de aprobaciones) y se abre en cuanto no haya
+    // modal — jamás pisar (disciplina `open_next_pending`).
+    let mut pending_ai_plan: Option<(VPath, Vec<norte_proto::methods::AiRenameEntry>)> = None;
     // Scripting Lua (M4, ADR 0026): host por capas con trust TOFU. Como
     // `fill`, el estado vive en el run loop. El run en vuelo (a lo sumo UNO:
     // el estado Lua es uno) se pollea inline en el select — `CommandRun` es
@@ -856,6 +876,14 @@ async fn run(
         dir_watch.rewatch(&watch_targets(app));
         if dir_watch.take_degraded_notice() {
             app.message = Some(t("status-watch-degraded"));
+        }
+        // Plan IA retenido (M4-IA): abre en cuanto el modal activo se cierra.
+        // Las aprobaciones no compiten aquí: con la cola no vacía y sin modal,
+        // `open_next_pending` ya habría abierto una al cerrarse el anterior.
+        if app.modal.is_none()
+            && let Some((dir, entries)) = pending_ai_plan.take()
+        {
+            app.modal = Some(Modal::AiRenamePlan { dir, entries });
         }
         // Barra Lua en cada vuelta, ANTES del draw (cacheada en el host).
         refresh_lua_status(app, lua_host.as_ref());
@@ -1018,6 +1046,44 @@ async fn run(
                 }
             } => {
                 drain_search(app, &mut search_run, hits);
+            }
+            res = async {
+                // ai.rename_plan en vuelo (M4-IA): cosecha sin bloquear —
+                // el brazo solo se arma con un run vivo (molde stat_probe).
+                match &mut ai_rename_run {
+                    Some(r) => (&mut r.handle).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                if let Some(run) = ai_rename_run.take() {
+                    match res {
+                        Ok(Ok(plan)) if plan.entries.is_empty() => {
+                            app.message = Some(t("msg-ai-rename-empty"));
+                        }
+                        Ok(Ok(plan)) => {
+                            app.message = None;
+                            let ready = (run.dir, plan.entries);
+                            if app.modal.is_none() {
+                                let (dir, entries) = ready;
+                                app.modal = Some(Modal::AiRenamePlan { dir, entries });
+                            } else {
+                                // Otro modal abierto (aprobación, colisión…):
+                                // el plan espera su turno, jamás lo pisa.
+                                pending_ai_plan = Some(ready);
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            app.message = Some(ta(
+                                "msg-ai-rename-failed",
+                                &[("error", &detail_for_bar(&error_category(&e)))],
+                            ));
+                        }
+                        // Abortado por Esc: silencio, la barra ya se limpió.
+                        // (Un pánico del future del backend cae aquí también:
+                        // no hay plan que abrir, el run ya está cosechado.)
+                        Err(_join) => {}
+                    }
+                }
             }
             outcome = async {
                 match &mut lua_run {
@@ -1398,6 +1464,41 @@ async fn run(
                             }
                             continue;
                         }
+                        // `Modal::AiRenameInstruction` (M4-IA): mismo molde de
+                        // texto libre que Mkdir. Enter SPAWNEA la petición al
+                        // modelo (la única llamada larga del loop) y cierra el
+                        // prompt; la cosecha vive en el select.
+                        if matches!(app.modal, Some(Modal::AiRenameInstruction { .. })) {
+                            let plain = key.modifiers.is_empty()
+                                || key.modifiers == KeyModifiers::SHIFT;
+                            match key.code {
+                                KeyCode::Char(c) if plain => app.ai_rename_push(c),
+                                KeyCode::Backspace if plain => app.ai_rename_pop(),
+                                KeyCode::Enter if plain => {
+                                    if let Some(instruction) = app.ai_rename_confirm() {
+                                        let dir = app.focused().dir().clone();
+                                        let b = backend.clone();
+                                        let d = dir.clone();
+                                        let handle = tokio::spawn(async move {
+                                            b.ai_rename_plan(&d, &instruction).await
+                                        });
+                                        // Relanzar con un run vivo lo ABORTA
+                                        // (dropear el handle solo desvincula):
+                                        // a lo sumo una petición en vuelo.
+                                        if let Some(old) =
+                                            ai_rename_run.replace(AiRenameRun { handle, dir })
+                                        {
+                                            old.handle.abort();
+                                        }
+                                        app.message = Some(t("msg-ai-rename-running"));
+                                        app.ai_rename_submitted();
+                                    }
+                                }
+                                KeyCode::Esc if plain => app.cancel_ai_rename(),
+                                _ => {}
+                            }
+                            continue;
+                        }
                         // `Modal::TransferName` (#105): mismo molde. El
                         // submit reusa `submit_transfer` — colisiones por el
                         // camino existente (`Modal::Collision` + backlog).
@@ -1469,6 +1570,19 @@ async fn run(
                             && let Some((_, token)) = &lua_run
                         {
                             token.cancel();
+                            continue;
+                        }
+                        // Esc con ai.rename_plan en vuelo (BROWSE, M4-IA):
+                        // cancelar (regla 3) y CONSUMIR la tecla. Abortar
+                        // dropea el future del backend en el runtime →
+                        // rpc.cancel (remoto) / drop del stream (embebido).
+                        if app.viewer.is_none()
+                            && key.modifiers.is_empty()
+                            && key.code == KeyCode::Esc
+                            && let Some(run) = ai_rename_run.take()
+                        {
+                            run.handle.abort();
+                            app.message = None;
                             continue;
                         }
                         // Pane virtual de búsqueda (liveSearch T6): con un
@@ -3331,17 +3445,18 @@ async fn on_dialog_key(
                 // devuelve `None` para ambos, así que `on_dialog_key` ya
                 // habría retornado antes de llegar a este match: inalcanzable
                 // aquí, no-op defensivo.
-                // `AiRenamePlan` (M4-IA) SÍ es una superficie de decisión:
-                // confirmar APLICARÁ el plan (N fs.move) — Task 5 cablea el
-                // apply; de momento solo cierra (el run loop que abre el
-                // modal también llega en Task 5, así que es inalcanzable).
                 Modal::Collision { .. }
                 | Modal::TrustLuaInit { .. }
                 | Modal::MarkPattern { .. }
                 | Modal::Mkdir { .. }
                 | Modal::AiRenameInstruction { .. }
-                | Modal::AiRenamePlan { .. }
                 | Modal::TransferName { .. } => {}
+                // `AiRenamePlan` (M4-IA) SÍ es una superficie de decisión:
+                // confirmar aplica el plan REVISADO — N fs.move gobernados
+                // (journal + policy), en el orden del plan (molde CLI).
+                Modal::AiRenamePlan { dir, entries } => {
+                    apply_ai_rename(app, backend, &dir, &entries).await;
+                }
                 // S2 (`[ui] confirm_quit`): confirmar cierra — el run loop
                 // lo detecta en su chequeo de `app.quit` de cada vuelta
                 // (main.rs, tope del `loop`).
@@ -3509,6 +3624,52 @@ async fn submit_transfer(
             app.message = Some(error_message(&e));
             false
         }
+    }
+}
+
+/// Aplica un plan de rename IA CONFIRMADO (M4-IA): un `fs.move` gobernado
+/// (journal + policy + colisiones del engine) por pareja, en el ORDEN del
+/// plan (molde CLI). El primer fallo PARA el lote — lo ya encolado sigue en
+/// el board — y deja el detalle en la barra; si todo encoló, la barra
+/// resume cuántos moves salieron.
+async fn apply_ai_rename(
+    app: &mut App,
+    backend: &Backend,
+    dir: &VPath,
+    entries: &[norte_proto::methods::AiRenameEntry],
+) {
+    let mut n = 0usize;
+    for e in entries {
+        // Cinturón: el engine ya validó `to` como `Segment` al armar el
+        // plan; revalidar aquí es barato y un daemon N+1 no cuela un `..`.
+        let (Ok(from), Ok(to)) = (
+            norte_proto::Segment::new(e.from.as_bytes().to_vec()),
+            norte_proto::Segment::new(e.to.as_bytes().to_vec()),
+        ) else {
+            continue;
+        };
+        match backend
+            .move_(&dir.join(from), &dir.join(to), TransferOptions::default())
+            .await
+        {
+            Ok(task) => {
+                app.board.push(task, None);
+                n += 1;
+            }
+            Err(e) => {
+                app.message = Some(ta(
+                    "msg-ai-rename-failed",
+                    &[("error", &detail_for_bar(&error_category(&e)))],
+                ));
+                // Primer fallo para; el detalle del fallo NO se pisa con el
+                // resumen de éxito (desviación consciente del molde: la
+                // barra es una línea y el fallo es lo accionable).
+                return;
+            }
+        }
+    }
+    if n > 0 {
+        app.message = Some(ta("msg-ai-rename-applied", &[("n", &n.to_string())]));
     }
 }
 
@@ -4096,7 +4257,8 @@ async fn dispatch(
         }
         // M4-IA: rename asistido del dir con foco. En el pane VIRTUAL de
         // búsqueda no hay un directorio único que renombrar (mismo criterio
-        // que `PaneMkdir`). Task 5 cablea el run loop (teclas + petición).
+        // que `PaneMkdir`). Las teclas del prompt y la petición viven en el
+        // run loop (intercepción Tier-A + `AiRenameRun`).
         Command::PaneAiRename => {
             if app.focused().virtual_search {
                 app.message = Some(t("msg-ai-rename-in-search"));

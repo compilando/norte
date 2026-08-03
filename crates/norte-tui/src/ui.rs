@@ -1079,6 +1079,15 @@ fn modal_height(modal: &crate::app::Modal) -> u16 {
         Modal::MarkPattern { error: Some(_), .. }
         | Modal::Mkdir { error: Some(_), .. }
         | Modal::AiRenameInstruction { error: Some(_), .. } => 7,
+        // M4-IA: dos líneas por pareja pintada + la de resumen (si el plan
+        // no cabe entero) + el hint, más bordes — mismo cómputo dinámico
+        // `body_lines + 3` que ConfirmDelete/ConfirmTransfer.
+        Modal::AiRenamePlan { entries, .. } => {
+            let lineas = 2 * entries.len().min(AI_RENAME_PAIR_LIMIT)
+                + usize::from(entries.len() > AI_RENAME_PAIR_LIMIT)
+                + 1;
+            u16::try_from(lineas).unwrap_or(u16::MAX).saturating_add(3)
+        }
         _ => 6,
     }
 }
@@ -1212,9 +1221,9 @@ fn modal_title_body(
         Modal::AiRenameInstruction { instruction, error } => {
             ai_rename_modal_text(instruction, error.as_deref())
         }
-        // M4-IA mínimo para compilar: Task 5 pinta las parejas from→to (el
-        // run loop que ABRE este modal también se cablea allí).
-        Modal::AiRenamePlan { .. } => (t("modal-ai-rename-plan"), t("modal-ai-rename-plan-hint")),
+        // M4-IA: parejas from→to del plan revisable (enmascarado defensivo,
+        // ver `ai_rename_plan_modal_text`).
+        Modal::AiRenamePlan { entries, .. } => ai_rename_plan_modal_text(entries),
         // #105: nombre de destino editable — dir destino + campo + error,
         // todo de usuario y todo enmascarado.
         Modal::TransferName {
@@ -1383,12 +1392,62 @@ fn ai_rename_modal_text(instruction: &str, error: Option<&str>) -> (String, Stri
     } else {
         format!("{masked}_")
     };
-    let mut lines = vec![campo, t("modal-ai-rename-hint")];
+    // FIX-A (review T4): misma línea de teclas compartida que
+    // `mkdir_modal_text` — así este modal cuadra con el brazo de altura
+    // conjunto (7 con error / 6 sin él) en vez de pintar una línea menos.
+    let mut lines = vec![
+        campo,
+        t("modal-ai-rename-hint"),
+        t("modal-mark-pattern-keys"),
+    ];
     if let Some(err) = error {
         let (masked_err, _) = display_name(err.as_bytes());
         lines.push(masked_err);
     }
     (t("modal-ai-rename"), lines.join("\n"))
+}
+
+/// Tope de parejas pintadas del plan IA; el resto se resume en una línea
+/// (molde `MODAL_ITEM_LIMIT` de los confirmes de lote).
+const AI_RENAME_PAIR_LIMIT: usize = 5;
+
+/// Título+cuerpo de `Modal::AiRenamePlan` (M4-IA, doctrina encoding-auditor):
+/// cada nombre en SU línea, `→` fuera de banda al INICIO de la línea del
+/// destino (jamás un joiner in-band que un nombre pueda imitar), elipsis
+/// media (un `from` kilométrico no expulsa el `to` de la caja) y enmascarado
+/// MARCADO con badge. Aunque el engine garantiza UTF-8 en el wire, un daemon
+/// N+1/comprometido podría mandar cualquier cosa — se pinta a la defensiva
+/// SIEMPRE, como el modal de aprobación.
+fn ai_rename_plan_modal_text(entries: &[norte_proto::methods::AiRenameEntry]) -> (String, String) {
+    let mut lines = Vec::new();
+    for e in entries.iter().take(AI_RENAME_PAIR_LIMIT) {
+        let (from, from_hostil) = display_name(e.from.as_bytes());
+        let (to, to_hostil) = display_name(e.to.as_bytes());
+        lines.push(ta(
+            "modal-ai-rename-pair-from",
+            &[
+                ("badge", if from_hostil { HOSTILE_BADGE } else { "" }),
+                ("from", &middle_ellipsis(&from, 46)),
+            ],
+        ));
+        lines.push(ta(
+            "modal-ai-rename-pair-to",
+            &[(
+                "to",
+                &format!(
+                    "{}{}",
+                    if to_hostil { HOSTILE_BADGE } else { "" },
+                    middle_ellipsis(&to, 44),
+                ),
+            )],
+        ));
+    }
+    if entries.len() > AI_RENAME_PAIR_LIMIT {
+        let n = entries.len() - AI_RENAME_PAIR_LIMIT;
+        lines.push(ta("modal-ai-rename-more", &[("n", &n.to_string())]));
+    }
+    lines.push(t("modal-ai-rename-plan-hint"));
+    (t("modal-ai-rename-plan"), lines.join("\n"))
 }
 
 /// Título+cuerpo de `Modal::TransferName` (#105): mismo contrato de

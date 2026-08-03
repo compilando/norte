@@ -415,6 +415,44 @@ fn modal_de_aprobacion_enmascara_marca_y_no_oculta_el_destino() {
     );
 }
 
+/// M4-IA (doctrina encoding-auditor): el plan de rename IA pinta contenido
+/// del MODELO — controles/bidi → `�` con badge; un `from` kilométrico no
+/// expulsa el `to` de la caja (elipsis media); `→` fuera de banda al inicio
+/// de la línea del destino (jamás joiner in-band).
+#[test]
+fn modal_de_plan_ai_enmascara_y_no_oculta_el_destino() {
+    let dir = vp("file:///x");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir.clone(), Vec::new()),
+    );
+    let from_largo = format!("{}\u{202e}oculto.txt", "x".repeat(120));
+    app.modal = Some(norte_tui::app::Modal::AiRenamePlan {
+        dir,
+        entries: vec![norte_proto::methods::AiRenameEntry {
+            from: from_largo,
+            to: "destino-final.txt".into(),
+        }],
+    });
+    let mut terminal = Terminal::new(TestBackend::new(60, 14)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let contenido = terminal.backend().to_string();
+
+    assert!(
+        contenido.contains("destino-final"),
+        "el destino jamás se expulsa de la caja: {contenido}"
+    );
+    assert!(contenido.contains('\u{FFFD}'), "bidi → �: {contenido}");
+    assert!(
+        contenido.contains('!'),
+        "el enmascarado se MARCA (spec §6): {contenido}"
+    );
+    assert!(
+        contenido.contains('→'),
+        "flecha fuera de banda en la línea del destino: {contenido}"
+    );
+}
+
 /// Encoding audit H1: un chord hostil (`norte_testkit::corpus::
 /// hostile_chords`) ligado a `dialog.approve` desde una capa (el modelo
 /// de `./.norte/keymap.toml`, capa de PROYECTO sin trust) no debe
