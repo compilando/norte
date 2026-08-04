@@ -416,6 +416,14 @@
             "null"
           ]
         },
+        "mouse": {
+          "default": null,
+          "description": "Whether the TUI captures the mouse (click, wheel, drag). Absent =\n`true` (captured).\n\nCapture is not free: while it is on, the TERMINAL stops seeing the\nbutton presses it uses for its own text selection, so\nselect-and-middle-click-paste needs Shift held down in most\nterminals. `false` gives the terminal its mouse back and leaves norte\nkeyboard-only. The GUI ignores this key — it has no terminal to\nshare the pointer with.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "quick_search": {
           "default": null,
           "description": "Quick-search mode for `/`: `\"filter\"` narrows the listing (the default),\nwhile `\"jump\"` moves the cursor without changing the listing.\n\n[`crate::load::load`] rejects other values so its diagnostic can\ninclude the source configuration path. Invalid values never silently\nfall back.",

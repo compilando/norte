@@ -166,6 +166,17 @@ pub struct UiSection {
     /// initial state.
     #[serde(default)]
     pub show_hidden: Option<bool>,
+    /// Whether the TUI captures the mouse (click, wheel, drag). Absent =
+    /// `true` (captured).
+    ///
+    /// Capture is not free: while it is on, the TERMINAL stops seeing the
+    /// button presses it uses for its own text selection, so
+    /// select-and-middle-click-paste needs Shift held down in most
+    /// terminals. `false` gives the terminal its mouse back and leaves norte
+    /// keyboard-only. The GUI ignores this key — it has no terminal to
+    /// share the pointer with.
+    #[serde(default)]
+    pub mouse: Option<bool>,
     /// `[ui.columns]` (#108 block 4): column selection and sort order.
     #[serde(default)]
     pub columns: Option<UiColumnsSection>,

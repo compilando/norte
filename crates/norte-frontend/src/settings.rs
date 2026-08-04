@@ -138,6 +138,18 @@ const CATALOG: &[SettingDef] = &[
         applies_live: true,
     },
     SettingDef {
+        // TUI only: the GUI has no terminal to share the pointer with, so
+        // there is nothing there for this to turn off. It is in the CURATED
+        // catalog anyway because it is the one key a user needs to find
+        // when the terminal stops selecting text (see the `mouse` help
+        // topic) — and a setting you only learn about from a config file
+        // you did not know existed is not discoverable.
+        id: "ui.mouse",
+        section: Section::General,
+        kind: SettingKind::Bool,
+        applies_live: true,
+    },
+    SettingDef {
         id: "ui.confirm-quit",
         section: Section::General,
         kind: SettingKind::Enum(&["auto", "always", "never"]),
@@ -232,6 +244,9 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
         }
         .to_owned(),
         "ui.reduce-motion" => cfg.common.ui_reduce_motion.unwrap_or(false).to_string(),
+        // Absent = captured: the row shows `true`, which is what the TUI
+        // actually does, rather than an empty cell for a real behavior.
+        "ui.mouse" => cfg.common.ui_mouse.unwrap_or(true).to_string(),
         "ui.confirm-quit" => cfg.common.ui_confirm_quit.as_str().to_owned(),
         "keymap.preset" => cfg.common.preset.clone(),
         // Unreachable for anything in `CATALOG` (pinned by the coverage

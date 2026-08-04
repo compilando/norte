@@ -439,6 +439,39 @@ impl Pane {
         self.state.mark_all();
     }
 
+    /// Marca (o desmarca) UNA entrada por su índice. Delegado puro al
+    /// primitivo que necesita el ctrl+click
+    /// ([`norte_frontend::PaneState::set_mark`]).
+    pub fn set_mark(&mut self, index: usize, marked: bool) {
+        self.state.set_mark(index, marked);
+    }
+
+    /// Marca el rango entre dos índices, inclusive y en cualquier orden;
+    /// devuelve cuántas marcas cambió. ADITIVO. Delegado puro a
+    /// [`norte_frontend::PaneState::mark_range`].
+    pub fn mark_range(&mut self, from: usize, to: usize) -> usize {
+        self.state.mark_range(from, to)
+    }
+
+    /// Arma un barrido de puntero. Delegado puro a
+    /// [`norte_frontend::PaneState::begin_sweep`].
+    pub fn begin_sweep(&mut self) {
+        self.state.begin_sweep();
+    }
+
+    /// Fija la extensión ACTUAL de un barrido (rubber-band: devuelve lo que
+    /// deja de cubrir). Delegado puro a
+    /// [`norte_frontend::PaneState::apply_sweep`].
+    pub fn apply_sweep(&mut self, from: usize, to: usize) -> usize {
+        self.state.apply_sweep(from, to)
+    }
+
+    /// Cierra un barrido, soltando su baseline. Delegado puro a
+    /// [`norte_frontend::PaneState::end_sweep`].
+    pub fn end_sweep(&mut self) {
+        self.state.end_sweep();
+    }
+
     /// Invierte las marcas de las entradas visibles. Delegado puro (#103).
     pub fn invert_marks(&mut self) {
         self.state.invert_marks();
@@ -760,6 +793,11 @@ pub struct App {
     /// OK, ANTES de que los efectivos se muevan al `Resolver`. Abrir la
     /// palette (`dispatch`, brazo `app.palette`) solo clona esta snapshot.
     pub palette_rows: Vec<crate::palette::Row>,
+    /// Estado del ratón (captura aparte, que es de la terminal): la
+    /// geometría PINTADA del último frame, el gesto armado y el último
+    /// click. La geometría la devuelve el run loop tras cada `draw`
+    /// (#124): sin ella no se resuelve ningún click.
+    pub mouse: crate::mouse::MouseState,
     /// Overlay de ajustes abierto (`app.settings`, S3): `None` = cerrado.
     /// Sus filas se reconstruyen del `cfg` VIGENTE en cada hot-reload OK
     /// (`main::reload_config`, `Settings::refresh`) — a diferencia de
@@ -1431,6 +1469,7 @@ impl App {
             dialog_hints: crate::hints::DialogHints::default(),
             palette: None,
             palette_rows: Vec::new(),
+            mouse: crate::mouse::MouseState::default(),
             settings: None,
         }
     }
@@ -1504,6 +1543,18 @@ impl App {
     /// Alterna el foco entre los dos panes (Tab, keymap mc).
     pub fn switch_focus(&mut self) {
         self.focus ^= 1;
+    }
+
+    /// Da el foco al pane `i`. Un índice fuera de `0|1` se IGNORA (el
+    /// invariante de `focus` es de la propia `App`): el único emisor de
+    /// índices que no son literales es el hit test del ratón, y ahí un
+    /// índice imposible es un bug nuestro, no algo que deba dejar el foco
+    /// apuntando a un pane que no existe.
+    pub fn set_focus(&mut self, i: usize) {
+        debug_assert!(i < self.panes.len(), "pane fuera de rango");
+        if i < self.panes.len() {
+            self.focus = i;
+        }
     }
 
     /// Abre el popup selector de tema (ADR 0020): lista de presets, cursor en el

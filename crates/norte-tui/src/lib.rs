@@ -9,6 +9,7 @@ pub mod help;
 pub mod hints;
 pub mod keymap;
 pub mod lua;
+pub mod mouse;
 pub mod nav;
 pub mod palette;
 pub mod settings;

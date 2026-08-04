@@ -83,6 +83,114 @@ pub fn pane_list_rows(app: &App, frame_height: u16) -> u16 {
         .saturating_sub(3) // bordes del bloque (2) + cabecera de columnas (1)
 }
 
+/// Primer índice PINTADO de un listado de `total` items con `selected`
+/// seleccionado en un área de `height` filas.
+///
+/// Existe para que el DRAW y el HIT TEST del ratón ([`pane_geometry`])
+/// compartan UNA sola fuente del scroll. `draw_pane` se lo pasa al
+/// `ListState` en vez de dejar que ratatui lo deduzca: la deducción de
+/// ratatui coincide hoy con esta fórmula (arranca del offset del estado —
+/// 0 en un `ListState` nuevo — y baja lo justo para que la selección
+/// entre), pero si algún día dejara de coincidir, el ratón resolvería
+/// clicks contra un scroll que la pantalla no tiene, y eso no se ve: se
+/// marca el fichero de al lado.
+///
+/// El TUI no guarda scroll independiente del cursor — el listado se
+/// desplaza porque el cursor se sale de la ventana, y por eso el cursor
+/// acaba pegado al borde inferior en cuanto se pasa de la primera página.
+/// Es también lo que hace que la rueda (que mueve el cursor) desplace el
+/// listado.
+#[must_use]
+fn list_offset(selected: Option<usize>, total: usize, height: u16) -> usize {
+    let height = usize::from(height);
+    let (Some(selected), true) = (selected, height > 0) else {
+        return 0;
+    };
+    // `min(total-1)` calca el clamp de ratatui: un selected fuera de rango
+    // no debe pintar (ni resolver) una ventana vacía.
+    let selected = selected.min(total.saturating_sub(1));
+    selected.saturating_sub(height - 1)
+}
+
+/// La geometría PINTADA de los dos panes en un frame de `area`, o `None`
+/// cuando este frame no pinta panes (visor abierto).
+///
+/// Mismo trato que [`pane_list_rows`] (#124): el draw es quien sabe dónde
+/// cayó cada cosa, así que el run loop devuelve esto al modelo
+/// ([`crate::mouse::MouseState::set_geometry`]) tras cada frame y el ratón resuelve sus
+/// clicks contra la ÚLTIMA pantalla que el usuario vio, no contra una
+/// recalculada a ojo. Se computa aquí, junto al layout que replica, para
+/// que cambiarlo rompa el test de geometría de al lado y no el ratón en
+/// silencio.
+///
+/// Las filas de un pane, de arriba abajo: borde superior (1), cabecera de
+/// columnas (1), el listado, borde inferior (1). Las columnas: borde
+/// izquierdo (1), contenido, borde derecho (1). Todo lo que no sea listado
+/// es CROMO, y un click ahí resuelve a «este pane, ninguna fila».
+#[must_use]
+pub fn pane_geometry(app: &App, area: Rect) -> Option<[crate::mouse::PaneGeometry; 2]> {
+    if app.viewer.is_some() {
+        return None;
+    }
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(tasks_rows(app)),
+            Constraint::Length(1),
+        ])
+        .split(area);
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(rows[0]);
+    let mut out = [crate::mouse::PaneGeometry::default(); 2];
+    for (i, pane) in app.panes.iter().enumerate() {
+        let block = cols[i];
+        // Interior del bloque con `Borders::ALL`, sin construir el bloque:
+        // un margen de 1 por lado. `title_bottom` (el input del quick
+        // search) NO consume filas — se pinta sobre el borde inferior.
+        let inner_w = block.width.saturating_sub(2);
+        let inner_h = block.height.saturating_sub(2);
+        let (painted, selected) = painted_len_and_selection(pane);
+        // La cabecera de columnas se come la primera fila del interior.
+        let list_rows = inner_h.saturating_sub(1);
+        out[i] = crate::mouse::PaneGeometry {
+            x: block.x,
+            y: block.y,
+            width: block.width,
+            height: block.height,
+            first_list_row: block.y.saturating_add(2),
+            list_rows: if inner_w == 0 || inner_h == 0 {
+                0
+            } else {
+                list_rows
+            },
+            offset: list_offset(selected, painted, list_rows),
+        };
+    }
+    Some(out)
+}
+
+/// Cuántos items pinta un pane y cuál va resaltado, EN COORDENADAS DE LO
+/// PINTADO (posición dentro del filtro cuando hay quick search en modo
+/// filtro, índice absoluto si no). Lo comparten `draw_pane` y
+/// [`pane_geometry`] para que el scroll salga del mismo cálculo.
+fn painted_len_and_selection(pane: &Pane) -> (usize, Option<usize>) {
+    match pane.quick_visible() {
+        Some(vis) => (
+            vis.len(),
+            pane.quick()
+                .and_then(crate::nav::QuickSearch::selected_entry_index)
+                .and_then(|s| vis.iter().position(|&i| i == s)),
+        ),
+        None => (
+            pane.entries().len(),
+            (!pane.entries().is_empty()).then_some(pane.cursor()),
+        ),
+    }
+}
+
 /// Pinta el frame completo: panes (o viewer) + panel de tasks + barra de
 /// estado + modal por encima.
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
@@ -2179,45 +2287,44 @@ fn draw_pane(
     // estilo 7b resuelto por columna, ver `styled_columns`).
     let inner_w = block.inner(area).width;
     let cols = &styled_columns(settings, pane.dir().scheme(), inner_w, catalog);
-    let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = match pane.quick_visible() {
-        Some(vis) => (
-            vis.iter()
-                .filter_map(|&i| pane.entries().get(i))
-                .map(|e| {
-                    entry_item(
-                        e,
-                        theme,
-                        reinterpret,
-                        pane.decoration_for(&e.path),
-                        pane.is_marked(e),
-                        cols,
-                        Some(pane),
-                        now_ms,
-                    )
-                })
-                .collect(),
-            pane.quick()
-                .and_then(crate::nav::QuickSearch::selected_entry_index)
-                .and_then(|s| vis.iter().position(|&i| i == s)),
-        ),
-        None => (
-            pane.entries()
-                .iter()
-                .map(|e| {
-                    entry_item(
-                        e,
-                        theme,
-                        reinterpret,
-                        pane.decoration_for(&e.path),
-                        pane.is_marked(e),
-                        cols,
-                        Some(pane),
-                        now_ms,
-                    )
-                })
-                .collect(),
-            (!pane.entries().is_empty()).then_some(pane.cursor()),
-        ),
+    // La selección PINTADA sale de la misma función que la usa el hit test
+    // del ratón ([`painted_len_and_selection`]): el scroll de abajo se
+    // deriva de ella, y dos cálculos distintos harían que un click cayera
+    // en la fila de al lado.
+    let (painted_len, selected) = painted_len_and_selection(pane);
+    let items: Vec<ListItem<'_>> = match pane.quick_visible() {
+        Some(vis) => vis
+            .iter()
+            .filter_map(|&i| pane.entries().get(i))
+            .map(|e| {
+                entry_item(
+                    e,
+                    theme,
+                    reinterpret,
+                    pane.decoration_for(&e.path),
+                    pane.is_marked(e),
+                    cols,
+                    Some(pane),
+                    now_ms,
+                )
+            })
+            .collect(),
+        None => pane
+            .entries()
+            .iter()
+            .map(|e| {
+                entry_item(
+                    e,
+                    theme,
+                    reinterpret,
+                    pane.decoration_for(&e.path),
+                    pane.is_marked(e),
+                    cols,
+                    Some(pane),
+                    now_ms,
+                )
+            })
+            .collect(),
     };
     // #108 L5: bloque a mano — dentro, UNA línea de cabecera de columnas
     // (dim, con el indicador ▲/▼ del orden activo) y el listado debajo.
@@ -2242,6 +2349,15 @@ fn draw_pane(
     let list = List::new(items).highlight_style(theme.role(Role::Selection));
     let mut state = ListState::default();
     state.select(selected);
+    // Scroll EXPLÍCITO y no deducido por ratatui: el hit test del ratón
+    // resuelve contra esta misma fórmula ([`list_offset`]) y las dos deben
+    // salir del mismo sitio — ver su doc.
+    // `painted_len` y NO `items.len()`: el `filter_map` de arriba puede
+    // descartar un índice imposible del filtro, y entonces las dos cuentas
+    // discreparían — el hit test usa la de `painted_len_and_selection` y
+    // TODO click de ese pane caería desplazado, en silencio. Con la misma
+    // fuente, un índice imposible se ve como un hueco al pintar.
+    *state.offset_mut() = list_offset(selected, painted_len, list_area.height);
     frame.render_stateful_widget(list, list_area, &mut state);
 }
 

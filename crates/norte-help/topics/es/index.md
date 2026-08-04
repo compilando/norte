@@ -2,7 +2,7 @@
 id = "index"
 title = "Esto es norte"
 tags = ["basics"]
-see_also = ["panes", "selection", "copying", "remote", "archives"]
+see_also = ["panes", "selection", "mouse", "copying", "remote", "archives"]
 +++
 norte es un gestor de ficheros ortodoxo. Dos paneles, el teclado por delante y
 los mismos comandos tanto si los ficheros están en esta máquina como si viven
@@ -17,6 +17,7 @@ directorios locales.
 
 - [[panes]] — los dos paneles, el foco y por qué el otro es el destino
 - [[selection]] — marcar sobre qué van a actuar los comandos
+- [[mouse]] — click, rueda y arrastre, y qué le cuesta la captura al terminal
 - [[copying]] — copiar, mover, borrar y cancelar sin perder datos
 - [[remote]] — SFTP, FTP y almacenamiento de objetos compatible con S3
 - [[archives]] — entrar en un `.zip` o un `.tar` como si fuera un directorio

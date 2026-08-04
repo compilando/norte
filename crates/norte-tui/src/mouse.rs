@@ -1,0 +1,547 @@
+//! El ratón de la TUI: captura de la terminal, geometría pintada, hit test
+//! y traducción de eventos crossterm a los gestos COMPARTIDOS de
+//! [`norte_frontend::mouse`].
+//!
+//! Aquí no vive ninguna regla de marcado: qué marca un arrastre, cuándo un
+//! gesto es una transferencia y cuándo un barrido, y con qué modificadores,
+//! lo decide `norte-frontend` para los dos frontends a la vez (regla 7).
+//! Este módulo hace las tres cosas que SÍ son de la terminal: pedirle al
+//! emulador que reporte el ratón, saber qué celda es qué fila, y aplicar
+//! los [`Effect`] resultantes sobre el modelo.
+//!
+//! # La captura no es gratis
+//!
+//! Con la captura activa el TERMINAL deja de ver los botones que usa para
+//! su propia selección de texto: seleccionar-y-pegar con el ratón deja de
+//! funcionar como el usuario lo tiene aprendido. En casi todos los
+//! emuladores mantener Mayús mientras se arrastra devuelve la selección
+//! nativa, y `[ui] mouse = false` la devuelve del todo. Eso es información
+//! de USUARIO, no un comentario: vive en el tema `mouse` de la ayuda y en
+//! la descripción del ajuste `ui.mouse`.
+
+use std::io::Write;
+use std::time::{Duration, Instant};
+
+#[cfg(windows)]
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use norte_frontend::mouse::{Drag, Effect, Mods, Press, Spot};
+use norte_i18n::t;
+
+use crate::app::App;
+
+/// Ventana de un doble click. crossterm NO reporta dobles clicks (ningún
+/// protocolo de ratón de terminal los tiene): los cuenta esta ventana sobre
+/// la MISMA fila del MISMO pane, que es también la regla que evita que dos
+/// clicks a filas distintas se lean como uno doble.
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+
+/// Filas que mueve un tacto de rueda. Tres es lo que usan casi todos los
+/// terminales y navegadores; una sola fila hace la rueda inútil en un
+/// listado largo y una página entera pierde el sitio.
+const WHEEL_ROWS: usize = 3;
+
+/// La geometría PINTADA de un pane, en celdas de la terminal.
+///
+/// La rellena [`crate::ui::pane_geometry`] después de cada frame y la
+/// guarda el modelo (#124): el hit test resuelve contra la última pantalla
+/// que el usuario vio de verdad, no contra un layout recalculado a mano que
+/// puede haber cambiado ya.
+///
+/// Deliberadamente SIN tipos de ratatui: es estado del modelo, y el modelo
+/// no conoce el motor de render.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PaneGeometry {
+    /// Columna izquierda del bloque (borde incluido).
+    pub x: u16,
+    /// Fila superior del bloque (borde incluido).
+    pub y: u16,
+    /// Ancho del bloque, bordes incluidos.
+    pub width: u16,
+    /// Alto del bloque, bordes incluidos.
+    pub height: u16,
+    /// Primera fila de LISTADO: `y + 2` (borde superior + cabecera de
+    /// columnas). Se guarda calculada, no derivada en el hit test, para que
+    /// el día que el pane gane o pierda una fila de cromo haya UN sitio que
+    /// cambiar.
+    pub first_list_row: u16,
+    /// Cuántas filas de listado se pintaron. `0` = el pane no tiene sitio
+    /// para ninguna (terminal diminuto): entonces NINGUNA fila resuelve.
+    pub list_rows: u16,
+    /// Primer índice PINTADO del listado (el scroll). En coordenadas de lo
+    /// pintado: bajo un filtro de quick search es una posición dentro del
+    /// subconjunto visible, no un índice de `entries`.
+    pub offset: usize,
+}
+
+impl PaneGeometry {
+    /// ¿Cae `(col, row)` dentro del bloque de este pane, bordes incluidos?
+    #[must_use]
+    pub const fn contains(&self, col: u16, row: u16) -> bool {
+        col >= self.x
+            && col < self.x.saturating_add(self.width)
+            && row >= self.y
+            && row < self.y.saturating_add(self.height)
+    }
+
+    /// El índice PINTADO bajo `(col, row)`, o `None` si ahí no hay fila de
+    /// listado.
+    ///
+    /// `None` cubre TODO el cromo, y cada caso está aquí a propósito porque
+    /// el fallo natural sería saturar hacia una fila real: el borde
+    /// superior con su título (la ruta del pane), la cabecera de columnas,
+    /// el borde inferior (donde además se pinta el input del quick search),
+    /// las dos columnas de los bordes laterales, y el hueco BAJO la última
+    /// entrada de un listado corto. Un click en el vacío de un pane a
+    /// medio llenar no debe marcar la última entrada.
+    #[must_use]
+    pub fn painted_row_at(&self, col: u16, row: u16) -> Option<usize> {
+        if col == self.x || col.saturating_add(1) == self.x.saturating_add(self.width) {
+            return None; // bordes laterales
+        }
+        let k = row.checked_sub(self.first_list_row)?; // borde superior + cabecera
+        if k >= self.list_rows {
+            return None; // borde inferior (y cualquier fila más allá)
+        }
+        Some(self.offset.saturating_add(usize::from(k)))
+    }
+}
+
+/// Dónde cayó un click.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hit {
+    /// Pane bajo el puntero (0 = izquierda).
+    pub pane: usize,
+    /// Índice ABSOLUTO en `entries` de la fila pulsada, o `None` si se
+    /// pulsó cromo o el vacío bajo el listado. `None` sigue siendo un hit:
+    /// la rueda y el foco quieren el pane aunque no haya fila.
+    pub index: Option<usize>,
+}
+
+/// Estado de ratón que vive en el modelo: la geometría del último frame, el
+/// gesto armado y el instante del último click (para el doble).
+#[derive(Debug, Default)]
+pub struct MouseState {
+    /// `None` = el último frame no pintó panes (visor abierto) o todavía no
+    /// hubo frame. Sin geometría no se resuelve NADA: un click contra una
+    /// pantalla que no existe es peor que un click ignorado.
+    geometry: Option<[PaneGeometry; 2]>,
+    /// La máquina de gestos compartida (`norte-frontend`).
+    drag: Drag,
+    /// `(cuándo, dónde)` del último click izquierdo, para el doble.
+    last_click: Option<(Instant, Spot)>,
+}
+
+impl MouseState {
+    /// Guarda la geometría del frame recién pintado (#124).
+    pub fn set_geometry(&mut self, geometry: Option<[PaneGeometry; 2]>) {
+        self.geometry = geometry;
+        if geometry.is_none() {
+            // Sin panes en pantalla no hay dónde soltar: un gesto armado
+            // que sobreviviera a abrir el visor volvería a marcar al
+            // cerrarlo, contra un listado que pudo cambiar entero.
+            self.drag.cancel();
+        }
+    }
+
+    /// La geometría del último frame.
+    #[must_use]
+    pub const fn geometry(&self) -> Option<&[PaneGeometry; 2]> {
+        self.geometry.as_ref()
+    }
+}
+
+/// Qué debe hacer el run loop tras un evento de ratón. Todo lo que se puede
+/// hacer sobre el modelo ya está hecho al volver; esto es solo lo que
+/// necesita al backend o a la terminal, que este módulo no tiene.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum After {
+    /// Nada: el evento se resolvió entero aquí.
+    #[default]
+    Nothing,
+    /// Doble click sobre una fila: despacha `nav.enter`, EL MISMO comando
+    /// del teclado (jamás un segundo camino que entre en directorios por su
+    /// cuenta).
+    Enter,
+}
+
+/// El índice ABSOLUTO en `entries` de una posición PINTADA del pane.
+///
+/// Bajo un filtro de quick search lo pintado es el subconjunto visible, así
+/// que la posición se traduce por él; sin filtro, lo pintado ES `entries`.
+/// Fuera de rango (listado más corto que la ventana, o listado que cambió
+/// entre el frame y el click) devuelve `None` en vez de saturar.
+fn absolute_index(pane: &crate::app::Pane, painted: usize) -> Option<usize> {
+    match pane.quick_visible() {
+        Some(vis) => vis.get(painted).copied(),
+        None => (painted < pane.entries().len()).then_some(painted),
+    }
+}
+
+/// Resuelve `(col, row)` contra la geometría del último frame.
+///
+/// `None` = fuera de los dos panes (panel de tasks, barra de estado) o sin
+/// geometría (visor abierto).
+#[must_use]
+pub fn hit_test(app: &App, col: u16, row: u16) -> Option<Hit> {
+    let geometry = app.mouse.geometry()?;
+    let (pane, geom) = geometry
+        .iter()
+        .enumerate()
+        .find(|(_, g)| g.contains(col, row))?;
+    Some(Hit {
+        pane,
+        index: geom
+            .painted_row_at(col, row)
+            .and_then(|painted| absolute_index(&app.panes[pane], painted)),
+    })
+}
+
+/// Los dos modificadores que el marcado entiende. El resto (alt, super) es
+/// asunto del keymap, no de estos gestos.
+fn mods(m: KeyModifiers) -> Mods {
+    Mods::new(
+        m.contains(KeyModifiers::CONTROL),
+        m.contains(KeyModifiers::SHIFT),
+    )
+}
+
+/// ¿Hay un overlay comiéndose la interacción? Con uno abierto los panes
+/// siguen pintados DEBAJO, así que la geometría sigue siendo válida y un
+/// click resolvería una fila perfectamente — y movería el cursor de un
+/// listado que el usuario no está mirando, bajo un modal que le está
+/// preguntando algo. El teclado ya se enruta así (`modal_wins` y la cadena
+/// de overlays del run loop); el ratón hace lo mismo, de una pieza.
+fn overlay_open(app: &App) -> bool {
+    app.modal.is_some()
+        || app.viewer.is_some()
+        || app.help.is_some()
+        || app.palette.is_some()
+        || app.settings.is_some()
+        || app.theme_picker.is_some()
+        || app.columns_picker.is_some()
+        || app.extensions.is_some()
+        || app.nav_popup.is_some()
+        || app.search_dialog.is_some()
+}
+
+/// Un evento de ratón de crossterm, con el reloj real.
+pub fn handle(app: &mut App, ev: MouseEvent) -> After {
+    handle_at(app, ev, Instant::now())
+}
+
+/// Como [`handle`] con el instante inyectado: el doble click es una ventana
+/// de tiempo, y un test que dependiera del reloj de la máquina sería un
+/// test que falla en CI un martes.
+pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
+    if overlay_open(app) {
+        return After::Nothing;
+    }
+    let hit = hit_test(app, ev.column, ev.row);
+    let m = mods(ev.modifiers);
+    match ev.kind {
+        MouseEventKind::ScrollUp => scroll(app, hit, false),
+        MouseEventKind::ScrollDown => scroll(app, hit, true),
+        MouseEventKind::Down(MouseButton::Left) => return press(app, hit, m, now),
+        MouseEventKind::Drag(MouseButton::Left) => {
+            // Una motion fuera de toda fila NO se reporta: pasar por encima
+            // de la cabecera a mitad de un barrido no puede cancelarlo (lo
+            // dice el contrato de `Drag::motion`).
+            if let Some(spot) = spot(hit) {
+                let fx = app.mouse.drag.motion(spot);
+                apply(app, &fx);
+            }
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            let fx = app.mouse.drag.release(spot(hit), m);
+            apply(app, &fx);
+            for pane in &mut app.panes {
+                pane.end_sweep();
+            }
+        }
+        // Botón derecho: NADA todavía. El menú contextual es la tarea 4 del
+        // plan; inventarle aquí un segundo menú sería garantizar que los dos
+        // frontends acaben con menús distintos.
+        _ => {}
+    }
+    After::Nothing
+}
+
+/// El `Spot` de un hit que cayó sobre una fila de verdad.
+fn spot(hit: Option<Hit>) -> Option<Spot> {
+    let hit = hit?;
+    Some(Spot::new(hit.pane, hit.index?))
+}
+
+/// Rueda: desplaza el listado BAJO EL PUNTERO, tenga el foco o no — mirar
+/// una cosa y rodar sobre otra es el gesto normal con dos paneles, y robarle
+/// el foco al pane activo por pasar el ratón por encima sería peor que no
+/// desplazar nada.
+///
+/// «Desplazar» aquí es mover el cursor de ese pane: el TUI no guarda scroll
+/// independiente (ver `ui::list_offset`), la ventana pintada sale del
+/// cursor. Con un filtro de quick search activo mueve la selección DEL
+/// FILTRO, que es lo que está pintado.
+fn scroll(app: &mut App, hit: Option<Hit>, down: bool) {
+    let Some(hit) = hit else { return };
+    let pane = &mut app.panes[hit.pane];
+    if pane.quick().is_some() {
+        for _ in 0..WHEEL_ROWS {
+            if down {
+                pane.quick_down();
+            } else {
+                pane.quick_up();
+            }
+        }
+    } else if down {
+        pane.move_down(WHEEL_ROWS);
+    } else {
+        pane.move_up(WHEEL_ROWS);
+    }
+}
+
+/// Botón izquierdo abajo.
+fn press(app: &mut App, hit: Option<Hit>, m: Mods, now: Instant) -> After {
+    let Some(hit) = hit else {
+        // Fuera de los panes (panel de tasks, barra de estado): el gesto
+        // armado muere; nada de arrastrar desde ahí.
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        return After::Nothing;
+    };
+    let Some(index) = hit.index else {
+        // Cromo del pane (bordes, cabecera, hueco bajo la última entrada):
+        // enfoca ese pane y ya. Sigue siendo una acción útil —el título con
+        // la ruta es un blanco grande— y no toca ni cursor ni marcas.
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        app.set_focus(hit.pane);
+        return After::Nothing;
+    };
+    let at = Spot::new(hit.pane, index);
+    // Doble click ANTES de la máquina de gestos: entrar en un directorio no
+    // es un gesto de marcado, y con ctrl/shift pulsados lo que el usuario
+    // pide es marcar, no navegar.
+    if m == Mods::NONE
+        && app
+            .mouse
+            .last_click
+            .is_some_and(|(when, prev)| prev == at && now.duration_since(when) <= DOUBLE_CLICK)
+    {
+        app.mouse.last_click = None;
+        app.mouse.drag.cancel();
+        app.set_focus(hit.pane);
+        app.panes[hit.pane].set_cursor(index);
+        return After::Enter;
+    }
+    // Solo un click LIMPIO puede ser la primera mitad de un doble. Un
+    // ctrl+click es un gesto discreto y completo; leerlo como primera mitad
+    // hace que marcar una fila y volver a pulsarla enseguida —para
+    // arrastrarla, que es justo lo que se hace después de marcar— entre en
+    // el directorio en vez de arrancar el arrastre.
+    app.mouse.last_click = (m == Mods::NONE).then_some((now, at));
+    let marked = app.panes[hit.pane]
+        .entries()
+        .get(index)
+        .is_some_and(|e| app.panes[hit.pane].is_marked(e));
+    // El ancla de un shift+click es lo que el usuario VE resaltado, no el
+    // cursor real: bajo un quick search en modo filtro el resaltado sale de
+    // la selección del filtro y el cursor real puede estar en cualquier
+    // parte del listado completo, así que tomarlo a él como ancla marca un
+    // rango que empieza en una fila que nadie está mirando.
+    let cursor = painted_anchor(&app.panes[hit.pane]);
+    let fx = app.mouse.drag.press(Press {
+        at,
+        marked,
+        cursor,
+        mods: m,
+    });
+    apply(app, &fx);
+    // Un click LIMPIO cierra el quick search del pane pulsado, y solo él.
+    //
+    // El orden importa y la excepción también. Con el filtro puesto se
+    // pinta un SUBCONJUNTO: el resaltado sale de la selección del filtro,
+    // así que mover el cursor real no movería nada visible y la siguiente
+    // operación actuaría sobre la fila del filtro y no sobre la pulsada.
+    // Cerrarlo arregla eso — el índice es ABSOLUTO y sobrevive a que
+    // vuelva el listado entero.
+    //
+    // Pero cerrarlo ANTES de marcar sería mucho peor que no cerrarlo:
+    // `mark_range`/`set_mark`/`apply_sweep` consultan el filtro para no
+    // alcanzar lo que esconde (ver su rustdoc), y sin filtro un
+    // shift+click marca TODOS los índices intermedios — los ocultos
+    // incluidos — que es justo el ensanchamiento silencioso de la
+    // siguiente copia o borrado que esos guards existen para impedir. Por
+    // eso va DESPUÉS de `apply`, y por eso solo para el gesto que no marca
+    // nada: la pulsación limpia arma el barrido pero no marca (contrato de
+    // `Drag::press`), y para cuando llegue la primera motion el listado ya
+    // se habrá repintado entero.
+    if m == Mods::NONE {
+        app.panes[hit.pane].quick_cancel();
+    }
+    After::Nothing
+}
+
+/// El índice ABSOLUTO de la fila RESALTADA de un pane: la selección del
+/// quick search cuando filtra (que es lo que se pinta,
+/// `ui::painted_len_and_selection`), el cursor real si no.
+fn painted_anchor(pane: &crate::app::Pane) -> usize {
+    pane.quick()
+        .and_then(crate::nav::QuickSearch::selected_entry_index)
+        .unwrap_or_else(|| pane.cursor())
+}
+
+/// Aplica los efectos que devuelve la máquina compartida. Cada uno mapea
+/// sobre UNA operación que ya existía en `PaneState`: este módulo no
+/// inventa ninguna.
+fn apply(app: &mut App, effects: &[Effect]) {
+    for effect in effects {
+        match *effect {
+            // Jamás toca el quick search: marcar con el filtro puesto es
+            // lo que hace que el marcado no alcance lo que el filtro
+            // esconde. Quien lo cierra es `press`, y solo para el click
+            // limpio, DESPUÉS de aplicar los efectos (ver su comentario).
+            Effect::MoveCursor { pane, index } => {
+                app.set_focus(pane);
+                app.panes[pane].set_cursor(index);
+            }
+            Effect::SetMark {
+                pane,
+                index,
+                marked,
+            } => app.panes[pane].set_mark(index, marked),
+            Effect::MarkRange { pane, from, to } => {
+                app.panes[pane].mark_range(from, to);
+            }
+            Effect::BeginSweep { pane } => app.panes[pane].begin_sweep(),
+            Effect::SweepRange { pane, from, to } => {
+                app.panes[pane].apply_sweep(from, to);
+            }
+            // Arrastrar entre paneles NO transfiere todavía en la TUI: el
+            // drop es la tarea 5 del plan y solo llega a la GUI. Se dice en
+            // voz alta en la barra en vez de tragarse el gesto — un
+            // arrastre que no hace nada Y no explica nada se lee como que
+            // el ratón está roto.
+            Effect::Transfer { .. } => {
+                app.message = Some(t("msg-mouse-transfer-unavailable"));
+            }
+        }
+    }
+}
+
+/// La captura de ratón de la terminal, con su estado.
+///
+/// Un tipo y no un `bool` suelto porque las secuencias de activar y
+/// desactivar tienen que ir emparejadas con lo que la terminal cree: pedir
+/// dos veces la activación es inofensivo, pero DEJARLA puesta al salir (o
+/// al ceder la terminal a otro programa) deja al usuario con un emulador
+/// que escupe basura de escape en cuanto mueve el ratón.
+#[derive(Debug, Default)]
+pub struct Capture {
+    active: bool,
+}
+
+impl Capture {
+    /// Captura apagada (el estado de una terminal recién tomada).
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { active: false }
+    }
+
+    /// ¿Está pedida ahora mismo?
+    #[must_use]
+    pub const fn active(&self) -> bool {
+        self.active
+    }
+
+    /// Pide (o retira) la captura si hace falta. Idempotente: es lo que deja
+    /// que el hot-reload de `[ui] mouse` llame a esto en cada recarga sin
+    /// mandarle a la terminal secuencias que no cambian nada.
+    ///
+    /// # Errors
+    /// La de escribir en `out`.
+    pub fn set(&mut self, want: bool, out: &mut impl Write) -> std::io::Result<()> {
+        if want == self.active {
+            return Ok(());
+        }
+        write_capture(want, out)?;
+        self.active = want;
+        Ok(())
+    }
+}
+
+/// Los modos de ratón que se piden, y NO se usa
+/// `crossterm::event::EnableMouseCapture` para pedirlos.
+///
+/// Ese comando añade `?1003h` (*any-event tracking*): la terminal reporta un
+/// evento por CADA celda que cruza el puntero, con todos los botones
+/// sueltos. Este módulo tira esos eventos ([`handle_at`], brazo `_`), pero
+/// para entonces ya han despertado el run loop, que repinta el frame entero
+/// en cada vuelta — y el frame cuesta lo que cuesta el listado (`draw_pane`
+/// construye un `ListItem` por entrada, no por fila visible). Pasear el
+/// ratón por encima de la ventana, sin pulsar nada, se convierte en cientos
+/// de repintados: medido, ~1 ms de frame con 100 entradas y ~38 ms con
+/// 20 000. Y lo pagaría también quien jamás toca el ratón.
+///
+/// Se piden entonces solo los tres modos que este módulo CONSUME: normal
+/// (`?1000`, pulsar y soltar), button-event (`?1002`, movimiento SOLO con un
+/// botón pulsado — de ahí salen los `Drag`) y SGR (`?1006`, coordenadas más
+/// allá de la columna 223; sin él una terminal ancha reporta basura). Se
+/// deja fuera `?1015` (modo rxvt) porque `?1006` lo sustituye y crossterm
+/// entiende los dos.
+#[cfg(not(windows))]
+const CAPTURE_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+
+/// Los mismos modos, retirados en orden inverso (ver [`CAPTURE_ON`]).
+#[cfg(not(windows))]
+const CAPTURE_OFF: &str = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+
+/// Escribe la petición (o la retirada) de captura.
+///
+/// En Windows sigue yendo por crossterm: allí `EnableMouseCapture` no manda
+/// ANSI NUNCA (su `is_ansi_code_supported` devuelve `false` siempre), sino
+/// una llamada a la consola — escribir escapes a mano sería un
+/// no-op silencioso en una consola legacy.
+fn write_capture(want: bool, out: &mut impl Write) -> std::io::Result<()> {
+    #[cfg(not(windows))]
+    {
+        out.write_all(if want { CAPTURE_ON } else { CAPTURE_OFF }.as_bytes())?;
+        out.flush()
+    }
+    #[cfg(windows)]
+    {
+        if want {
+            crossterm::execute!(out, EnableMouseCapture)
+        } else {
+            crossterm::execute!(out, DisableMouseCapture)
+        }
+    }
+}
+
+/// Suelta la captura antes de ceder la terminal a un programa externo
+/// (`run_opener`), y devuelve si estaba puesta para poder restituirla.
+///
+/// Sin esto el programa lanzado hereda una terminal en modo ratón que él no
+/// pidió: `less` o un editor recibirían las secuencias de cada movimiento
+/// como si fueran teclas, y al salir el usuario tendría un terminal que ya
+/// nadie está escuchando.
+///
+/// # Errors
+/// La de escribir en `out`.
+pub fn release_for_suspend(cap: &mut Capture, out: &mut impl Write) -> std::io::Result<bool> {
+    let was = cap.active();
+    cap.set(false, out)?;
+    Ok(was)
+}
+
+/// Restituye la captura al volver del programa externo, si la había.
+///
+/// # Errors
+/// La de escribir en `out`.
+pub fn restore_after_suspend(
+    cap: &mut Capture,
+    was: bool,
+    out: &mut impl Write,
+) -> std::io::Result<()> {
+    cap.set(was, out)
+}

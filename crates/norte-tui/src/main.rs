@@ -35,6 +35,7 @@ use norte_tui::keymap::{
 use norte_tui::lua::{
     CommandRun, Layer, LuaHost, PaneCtx, RunOutcome, StatusInput, TrustDecision, TrustStore,
 };
+use norte_tui::mouse;
 use norte_tui::nav;
 use norte_tui::tasks::RetrySpec;
 use norte_tui::ui;
@@ -686,8 +687,10 @@ async fn main() -> Result<()> {
     }
 
     let mut terminal = ratatui::init();
+    let mut capture = arm_mouse(&cfg, &mut app);
     let res = run(
         &mut terminal,
+        &mut capture,
         &mut app,
         &backend,
         &mut resolver,
@@ -706,9 +709,41 @@ async fn main() -> Result<()> {
         degraded,
     )
     .await;
+    let _ = capture.set(false, &mut std::io::stdout());
     ratatui::restore();
     drop(watch);
     res
+}
+
+/// Pide la captura de ratón si `[ui] mouse` no la desactiva (default ON).
+///
+/// Se pide ANTES de entrar al run loop y `main` la retira SIEMPRE al salir,
+/// pase lo que pase: una terminal devuelta en modo ratón escupe secuencias
+/// de escape en cuanto el usuario mueve el puntero, y para entonces ya no
+/// queda nadie escuchándolas.
+///
+/// Un emulador que no acepte la secuencia no es motivo para no arrancar: se
+/// sigue sin ratón y se dice por la barra, jamás en silencio (el usuario
+/// hará click y no pasará nada).
+fn arm_mouse(cfg: &config::LoadedConfig, app: &mut App) -> mouse::Capture {
+    // El hook de pánico de `ratatui::init` sale de la pantalla alternativa y
+    // del raw mode, pero la captura de ratón es un DECSET de la terminal
+    // entera: no se va con la pantalla. Sin esto, un panic dejaría al
+    // usuario en su shell con el ratón todavía capturado, escupiendo
+    // secuencias que ya no lee nadie. Se envuelve el hook vigente (el de
+    // ratatui, ya instalado) en vez de sustituirlo: primero se suelta el
+    // ratón, después él restaura lo suyo e imprime el panic.
+    let previo = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+        previo(info);
+    }));
+    let mut capture = mouse::Capture::new();
+    if let Err(e) = capture.set(cfg.common.ui_mouse.unwrap_or(true), &mut std::io::stdout()) {
+        tracing::warn!(error = %e, "no se pudo activar la captura de ratón");
+        app.message = Some(t("msg-mouse-capture-failed"));
+    }
+    capture
 }
 
 /// Flags booleanos del TUI.
@@ -929,6 +964,10 @@ fn build_keymaps(
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // wiring del binario, no API
 async fn run(
     terminal: &mut ratatui::DefaultTerminal,
+    // Captura de ratón: la crea `main` (dueño de la terminal) y la retira
+    // al salir; aquí se ENCIENDE y se APAGA en caliente (`[ui] mouse`) y se
+    // suelta alrededor de cada suspensión por opener externo.
+    capture: &mut mouse::Capture,
     app: &mut App,
     backend: &Backend,
     resolver: &mut Resolver,
@@ -1056,6 +1095,13 @@ async fn run(
         for pane in &mut app.panes {
             pane.set_viewport_rows(filas);
         }
+        // MISMO trato para la geometría del ratón: el draw es quien sabe
+        // dónde cayó cada pane y con qué scroll, así que la devuelve al
+        // modelo y el hit test resuelve contra la pantalla que el usuario
+        // está mirando. Sin esto habría que recalcular el layout en cada
+        // click, y un click resuelto contra un layout que no es el pintado
+        // no falla ruidosamente: marca el fichero de al lado.
+        app.mouse.set_geometry(ui::pane_geometry(app, pintado.area));
         // #52: listado lazy — las entradas VISIBLES sin size se hidratan por
         // tandas (máx. una en vuelo; dedup por (pane, path) en `last_probed`).
         if stat_probe.is_none() {
@@ -1390,6 +1436,24 @@ async fn run(
                     &mut cfg,
                 )
                 .await;
+                // `[ui] mouse` en caliente: encenderla o apagarla sin
+                // reiniciar. `set` es idempotente, así que un reload que
+                // no tocó la clave (o que falló entero, dejando la config
+                // vigente) no manda nada a la terminal.
+                //
+                // Exención puntual de la regla 2, la MISMA que el draw de
+                // arriba: son unos pocos bytes de escape a stdout síncrono,
+                // acotados, y solo cuando la clave CAMBIA.
+                if let Err(e) =
+                    capture.set(cfg.common.ui_mouse.unwrap_or(true), &mut std::io::stdout())
+                {
+                    // Y se dice, como en el arranque: quien acaba de
+                    // encender el ratón desde el overlay de ajustes y se
+                    // encuentra con que hacer click no hace nada merece
+                    // saber por qué (antes esto solo iba al log).
+                    tracing::warn!(error = %e, "no se pudo cambiar la captura de ratón");
+                    app.message = Some(t("msg-mouse-capture-failed"));
+                }
                 if pane_attr_ids(app) != attrs_before {
                     let refreshed = refresh_panes(app, backend, &mut events).await;
                     after_panes_refresh(
@@ -1411,7 +1475,52 @@ async fn run(
             }
             maybe = events.next() => {
                 let Some(event) = maybe else { return Ok(()); };
-                if let Event::Key(key) = event.context("evento de terminal")?
+                let event = event.context("evento de terminal")?;
+                // Ratón (`[ui] mouse`): solo llega si la captura está
+                // pedida — sin ella el emulador no reporta nada y este
+                // brazo no corre. La semántica del gesto (marcar, barrer,
+                // transferir) vive en `norte-frontend` (regla 7); aquí solo
+                // se resuelve la celda y se aplica.
+                if let Event::Mouse(me) = event {
+                    match mouse::handle(app, me) {
+                        mouse::After::Nothing => {}
+                        // Doble click = `nav.enter`, por el MISMO `dispatch`
+                        // que la tecla: mismo cd, mismo relleno paginado,
+                        // misma cosecha de la búsqueda viva. Un segundo
+                        // camino para entrar en un directorio sería un
+                        // segundo sitio donde arreglar cada bug de cd.
+                        mouse::After::Enter => {
+                            let outcome = dispatch(
+                                app,
+                                backend,
+                                &mut events,
+                                help_lines,
+                                quick_mode,
+                                confirm_quit,
+                                &cfg,
+                                Command::NavEnter,
+                            )
+                            .await;
+                            if let Some(pane) = cd_landed_pane(&outcome) {
+                                app.apply_scheme_sort(pane);
+                                let dir = app.panes[pane].dir().clone();
+                                let paths: Vec<VPath> = app.panes[pane]
+                                    .entries()
+                                    .iter()
+                                    .map(|e| e.path.clone())
+                                    .collect();
+                                let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
+                                decorate_fetch[pane] =
+                                    spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
+                            }
+                            apply_cd(&mut fill, &mut last_probed, outcome);
+                            // Paridad con el sitio del resolver: entrar en
+                            // un hit apaga el modo virtual del pane, y hay
+                            // que cosechar el run (regla 3).
+                            reap_search_run(app, &mut search_run);
+                        }
+                    }
+                } else if let Event::Key(key) = event
                     && key.kind == crossterm::event::KeyEventKind::Press
                 {
                     app.message = None;
@@ -1591,7 +1700,7 @@ async fn run(
                                     // no en la siguiente tecla.
                                     reap_search_run(app, &mut search_run);
                                     if let Some(pending) = app.pending_open.take() {
-                                        app.message = Some(launch_opener(terminal, pending).await);
+                                        app.message = Some(launch_opener(terminal, capture, pending).await);
                                     }
                                 }
                             }
@@ -2090,7 +2199,7 @@ async fn run(
                                     // resuelto — el run loop (dueño de la
                                     // terminal) sondea el binario y lo lanza.
                                     if let Some(pending) = app.pending_open.take() {
-                                        app.message = Some(launch_opener(terminal, pending).await);
+                                        app.message = Some(launch_opener(terminal, capture, pending).await);
                                     }
                                 }
                                 Resolution::Pending(_) => {
@@ -4414,6 +4523,9 @@ fn resolve_opener(app: &mut App) {
 /// resultado (binario ausente / lanzado / fallo de spawn).
 async fn launch_opener(
     terminal: &mut ratatui::DefaultTerminal,
+    // Suspender la TUI cede la terminal ENTERA: la captura de ratón se
+    // suelta antes y se restituye después ([`run_opener`]).
+    capture: &mut mouse::Capture,
     pending: norte_tui::app::PendingOpen,
 ) -> String {
     let norte_tui::app::PendingOpen {
@@ -4438,7 +4550,7 @@ async fn launch_opener(
             ),
         };
     }
-    match run_opener(terminal, argv).await {
+    match run_opener(terminal, capture, argv).await {
         Ok(_) => ta("msg-open-launched", &[("program", &program)]),
         Err(e) => ta(
             "msg-open-failed",
@@ -4482,6 +4594,7 @@ async fn spawn_detached(argv: Vec<std::ffi::OsString>) -> std::io::Result<()> {
 /// el join o falle una syscall intermedia — para no dejarla en raw-off. #28.
 async fn run_opener(
     terminal: &mut ratatui::DefaultTerminal,
+    capture: &mut mouse::Capture,
     argv: Vec<std::ffi::OsString>,
 ) -> std::io::Result<std::process::ExitStatus> {
     use crossterm::terminal::{
@@ -4493,6 +4606,12 @@ async fn run_opener(
         !argv.is_empty(),
         "el argv de un opener siempre trae el binario"
     );
+    // La captura de ratón se suelta ANTES de nada: el programa que viene
+    // detrás no la pidió, y heredarla le mete cada movimiento del puntero
+    // por stdin como si fueran teclas. Escritura síncrona a stdout, misma
+    // exención puntual de la regla 2 que el resto de esta función (que ya
+    // maneja la pantalla alternativa y el raw mode igual).
+    let raton = mouse::release_for_suspend(capture, &mut std::io::stdout())?;
     disable_raw_mode()?;
     // A partir de aquí la terminal está fuera del modo TUI: restaurar pase lo
     // que pase antes de devolver.
@@ -4506,6 +4625,10 @@ async fn run_opener(
     let mut restore = || -> std::io::Result<()> {
         crossterm::execute!(std::io::stdout(), EnterAlternateScreen)?;
         enable_raw_mode()?;
+        // Y se restituye exactamente como estaba: si el usuario la tenía
+        // apagada (`[ui] mouse = false`), volver del opener no se la
+        // enciende.
+        mouse::restore_after_suspend(capture, raton, &mut std::io::stdout())?;
         terminal.clear()
     };
     let restored = restore();

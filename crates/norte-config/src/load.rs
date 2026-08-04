@@ -812,6 +812,11 @@ pub struct CommonConfig {
     /// the other `[ui]` scalars above: hiding dotfiles cannot launch, write,
     /// or redirect anything.
     pub ui_show_hidden: Option<bool>,
+    /// `[ui] mouse` (last-wins; None = captured). Honored from ALL layers
+    /// including Project — presentation-only, same class as the other
+    /// `[ui]` scalars above: capturing (or not capturing) the pointer
+    /// cannot launch, write, or redirect anything.
+    pub ui_mouse: Option<bool>,
     /// `[daemon] mode` (last-wins; None = embedded; never from Project —
     /// fail-closed, review MAJOR-1). Startup only.
     pub daemon_mode: Option<crate::schema::DaemonMode>,
@@ -959,6 +964,23 @@ fn merge_ui_fonts(
         *ui_reduce_motion = Some(rm);
     }
     Ok(())
+}
+
+/// Merges one layer's `[ui]` BOOLEANS (`show_hidden`, `mouse`) into the
+/// accumulators (last-present-wins). No validation: any bool is valid, and
+/// both are presentation-only, so every layer including Project is honored
+/// (same class as `theme`/`lang`).
+///
+/// A function of its own for the same reason as [`merge_ui_fonts`]: [`load`]
+/// is a single pass over the layers and clippy caps its length, so each new
+/// key has to bring its own merge rather than another line in the loop.
+fn merge_ui_flags(
+    ui_show_hidden: &mut Option<bool>,
+    ui_mouse: &mut Option<bool>,
+    ui: &crate::schema::UiSection,
+) {
+    *ui_show_hidden = ui.show_hidden.or(*ui_show_hidden);
+    *ui_mouse = ui.mouse.or(*ui_mouse);
 }
 
 /// Fusiona una capa de `[ui.columns]` sobre el acumulado (#108): last-wins
@@ -1210,7 +1232,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_font_size: Option<f32> = None;
     let mut ui_reduce_motion: Option<bool> = None;
     let mut ui_confirm_quit = ConfirmQuit::default();
-    let mut ui_show_hidden: Option<bool> = None;
+    let (mut ui_show_hidden, mut ui_mouse) = (None, None);
     let mut ui_columns = ColumnsConfig::default();
     let mut daemon_mode: Option<DaemonMode> = None;
     let mut daemon_socket: Option<PathBuf> = None;
@@ -1227,6 +1249,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                 path: norte.clone(),
                 message: toml_diag(&raw, &e),
             })?;
+            merge_ui_flags(&mut ui_show_hidden, &mut ui_mouse, &parsed.ui);
             if let Some(p) = parsed.keymap.preset {
                 preset = Some(p);
             }
@@ -1253,7 +1276,6 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             if let Some(cq) = &parsed.ui.confirm_quit {
                 ui_confirm_quit = parse_confirm_quit(cq, &norte)?;
             }
-            ui_show_hidden = parsed.ui.show_hidden.or(ui_show_hidden);
             if let Some(cols) = &parsed.ui.columns {
                 merge_ui_columns(&mut ui_columns, cols, &norte)?;
             }
@@ -1311,6 +1333,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_reduce_motion,
         ui_confirm_quit,
         ui_show_hidden,
+        ui_mouse,
         ui_columns,
         daemon_mode,
         daemon_socket,
@@ -1824,6 +1847,35 @@ format = "exact"
         };
         let cfg = load(&layers).expect("carga");
         assert_eq!(cfg.ui_show_hidden, None, "ausente = None (mostrar todo)");
+    }
+
+    /// `[ui] mouse`: last-wins, todas las capas — misma clase
+    /// presentación-solo que `show_hidden`. Ausente = None, que el frontend
+    /// lee como CAPTURAR (el default va en el frontend, no aquí: la config
+    /// distingue «no lo dijo» de «dijo true», y solo así un `mouse = true`
+    /// explícito puede ganarle a un `false` de una capa anterior).
+    #[test]
+    fn ui_mouse_carga_last_wins_y_ausente_es_none() {
+        let system = tempfile::tempdir().unwrap();
+        std::fs::write(system.path().join("norte.toml"), "[ui]\nmouse = false\n").unwrap();
+        let user = tempfile::tempdir().unwrap();
+        std::fs::write(user.path().join("norte.toml"), "[ui]\nmouse = true\n").unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (system.path().to_path_buf(), Layer::System),
+                (user.path().to_path_buf(), Layer::User),
+            ],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.ui_mouse, Some(true), "last-wins");
+
+        let empty = tempfile::tempdir().unwrap();
+        std::fs::write(empty.path().join("norte.toml"), "").unwrap();
+        let layers = Layers {
+            dirs: vec![(empty.path().to_path_buf(), Layer::User)],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.ui_mouse, None, "ausente = None (el frontend captura)");
     }
 
     /// `[ui] reduce_motion` (G2 a11y override, spec §17): last-wins, honored
