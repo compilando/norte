@@ -836,6 +836,66 @@ impl PaneState {
         }
     }
 
+    /// Marks every entry between two indices of [`Self::entries`],
+    /// INCLUSIVE, in either order (`mark_range(7, 2)` is `mark_range(2, 7)`)
+    /// — the primitive a shift+click and a pointer sweep need, where the
+    /// anchor sits either side of the pointer and the caller should not
+    /// have to sort them first. Returns how many marks it ADDED, never the
+    /// resulting total, exactly like [`Self::mark_glob`]: a range over
+    /// already-marked entries returns 0 while the selection stays
+    /// non-empty; read [`Self::marks_len`] for the total.
+    ///
+    /// It only ever ADDS — there is no range unmarker, and
+    /// [`Self::set_mark`] is the only way to clear one by index.
+    ///
+    /// Under an active [`Mode::Filter`] quick search it reaches only the
+    /// VISIBLE subset (`markable_indices`, the same rule as
+    /// [`Self::mark_all`]): what you cannot see, you cannot mark. A range
+    /// whose ends straddle a filtered-out entry leaves that entry alone, so
+    /// the next bulk operation never widens onto a file the filter was
+    /// hiding. Indices outside the listing are ignored, which makes this a
+    /// no-op on an empty listing — a pointer resolves an index against a
+    /// listing that may already have changed.
+    pub fn mark_range(&mut self, from: usize, to: usize) -> usize {
+        let (lo, hi) = if from <= to { (from, to) } else { (to, from) };
+        let mut changed = 0usize;
+        for i in self.markable_indices() {
+            if i < lo || i > hi {
+                continue;
+            }
+            let Some(path) = self.entries.get(i).map(|e| e.path.clone()) else {
+                continue;
+            };
+            if self.marks.insert(path) {
+                changed += 1;
+            }
+        }
+        changed
+    }
+
+    /// Marks (`marked = true`) or unmarks (`false`) ONE entry by its index
+    /// in [`Self::entries`] — the primitive a ctrl+click needs, naming a row
+    /// directly instead of the cursor ([`Self::toggle_mark`], which only
+    /// ever reaches the selection). No-op if the index is outside the
+    /// listing.
+    ///
+    /// Unlike the bulk markers it does NOT consult the quick filter: the
+    /// caller is naming ONE row it just resolved from a pointer, so the row
+    /// is visible by construction, and re-filtering here would only turn a
+    /// stale index into a silent no-op instead of a mark the user can see.
+    /// Unmarking down to an empty set re-arms [`Self::marked_paths`]'s
+    /// cursor fallback, the same caveat [`Self::mark_glob`] carries.
+    pub fn set_mark(&mut self, index: usize, marked: bool) {
+        let Some(path) = self.entries.get(index).map(|e| e.path.clone()) else {
+            return;
+        };
+        if marked {
+            self.marks.insert(path);
+        } else {
+            self.marks.remove(&path);
+        }
+    }
+
     /// Flips the mark of every entry of the visible set (see
     /// `markable_indices`). Marks OUTSIDE that set SURVIVE untouched:
     /// invert is "flip what you see", not "replace the selection with its
@@ -2927,6 +2987,81 @@ mod tests {
         p.set_cursor(file_idx);
         p.toggle_mark(); // marks the file only, not the directory
         assert_eq!(p.marked_dirs(), 0);
+    }
+
+    // --- ratón T1: rango y marca por índice -------------------------------
+
+    /// El rango marca en LOS DOS SENTIDOS: el ancla de un shift+click o de
+    /// un barrido puede quedar por encima o por debajo del puntero, y el
+    /// frontend no debe tener que ordenarlos antes de llamar. Devuelve las
+    /// marcas que CAMBIÓ (convención de `mark_glob`), no el total.
+    #[test]
+    fn mark_range_marca_en_los_dos_sentidos() {
+        let mut p = pane(&["a", "b", "c", "d"]);
+        assert_eq!(p.mark_range(1, 2), 2, "b y c");
+        p.clear_marks();
+        assert_eq!(p.mark_range(2, 1), 2, "al revés, el MISMO rango");
+        assert_eq!(p.marked_paths().len(), 2);
+        assert!(p.is_marked(&e("mem:///b", EntryKind::File)));
+        assert!(p.is_marked(&e("mem:///c", EntryKind::File)));
+        assert!(!p.is_marked(&e("mem:///a", EntryKind::File)));
+        assert!(!p.is_marked(&e("mem:///d", EntryKind::File)));
+        // Solo AÑADE: re-marcar lo ya marcado cambia 0 aunque la selección
+        // siga llena — el caller lee el contador, no lo confunde con el total.
+        assert_eq!(p.mark_range(1, 2), 0);
+        assert_eq!(p.marks_len(), 2);
+    }
+
+    /// Bajo un filtro vivo el rango alcanza SOLO lo visible, igual que
+    /// `mark_all`: lo que el usuario no ve no se marca. Sin esta regla, un
+    /// rango cuyos extremos abrazan una entrada oculta por el filtro la
+    /// marcaría a ciegas y la siguiente operación masiva (copiar, BORRAR)
+    /// se ensancharía sobre un fichero que nadie eligió.
+    #[test]
+    fn mark_range_bajo_filtro_solo_marca_lo_visible() {
+        let mut p = pane(&["alfa", "beta", "alga"]);
+        p.quick_start(Mode::Filter);
+        p.quick_char('a');
+        p.quick_char('l'); // deja visibles "alfa" y "alga", oculta "beta"
+        let visibles = p.quick_visible().expect("filtro activo").to_vec();
+        assert_eq!(visibles.len(), 2, "el filtro deja dos");
+        // Rango sobre TODO el listado: los extremos abrazan la oculta.
+        assert_eq!(p.mark_range(0, p.entries().len() - 1), 2);
+        assert!(p.is_marked(&e("mem:///alfa", EntryKind::File)));
+        assert!(p.is_marked(&e("mem:///alga", EntryKind::File)));
+        assert!(
+            !p.is_marked(&e("mem:///beta", EntryKind::File)),
+            "beta estaba oculta por el filtro: jamás se marca"
+        );
+        assert_eq!(p.marks_len(), 2, "marked_paths cae al cursor: clava el SET");
+    }
+
+    /// Listado vacío (o índices fuera de rango) = no-op, sin panic: el
+    /// frontend resuelve el índice desde la posición del puntero y puede
+    /// llegar tarde a un pane que acaba de vaciarse.
+    #[test]
+    fn mark_range_en_listado_vacio_no_hace_nada() {
+        let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), Vec::new());
+        assert_eq!(p.mark_range(0, 0), 0);
+        assert_eq!(p.mark_range(3, 9), 0);
+        assert_eq!(p.marks_len(), 0);
+        let mut q = pane(&["a"]);
+        assert_eq!(q.mark_range(5, 7), 0, "rango entero fuera del listado");
+        assert_eq!(q.marks_len(), 0);
+    }
+
+    /// `set_mark` nombra UNA fila por índice (lo que necesita el
+    /// ctrl+click), a diferencia de `toggle_mark`, que solo alcanza el
+    /// cursor. Fuera de rango: no-op.
+    #[test]
+    fn set_mark_pone_y_quita_una_sola_entrada() {
+        let mut p = pane(&["a", "b"]);
+        p.set_mark(1, true);
+        assert_eq!(p.marked_paths(), vec![VPath::parse("mem:///b").unwrap()]);
+        p.set_mark(1, false);
+        assert_eq!(p.marks_len(), 0);
+        p.set_mark(9, true);
+        assert_eq!(p.marks_len(), 0, "índice fuera del listado: no-op");
     }
 
     // --- #103: mark/unmark by glob ---------------------------------------

@@ -22,6 +22,7 @@ mod display;
 mod format;
 pub mod keymap;
 mod modal;
+pub mod mouse;
 pub mod nav;
 pub mod openers;
 pub mod palette;
