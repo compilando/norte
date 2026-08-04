@@ -21,7 +21,7 @@
 // Cada módulo lo descomenta SU tarea de esta fase (ver el plan H3a):
 // mod check; // tarea 8
 // mod corpus; // tarea 7
-// mod front_matter; // tarea 3
+mod front_matter; // tarea 3
 mod model; // tarea 2
 // mod parse; // tareas 4 y 5
 // mod resolve; // tarea 9
