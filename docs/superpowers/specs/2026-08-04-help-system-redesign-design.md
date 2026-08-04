@@ -42,25 +42,40 @@ command is undocumented, a link dangles, or a locale falls behind.
 
 ## Architecture — `norte-help`
 
-New workspace crate `crates/norte-help` (lib, `thiserror`, `#![warn(missing_docs)]`).
+New workspace crate `crates/norte-help` (lib, `#![warn(missing_docs)]`).
 Depends on nothing from `norte-core` or any frontend; every frontend and the
 CLI depend on it. Requires an ADR (structural change plus a new declared file
 format).
 
+**No new external dependencies**: `serde` + `toml` (front matter), `thiserror`
+(typed errors), `norte-i18n` (locale enum) and `norte-encoding` (hazard
+masking) are all already in the graph. Masking reuses
+`norte_encoding::is_terminal_hazard`, already the single source of the hazard
+set — `norte-frontend`'s `must_mask` is a one-line delegate to it, so help
+shares the definition without depending on any frontend (the dependency runs
+the other way).
+
 ### 1. Embedded topic corpus
 
-`crates/norte-help/topics/{en,es}/*.md`, embedded with `include_dir!`. No
-runtime I/O, no path resolution, works in a static binary. Front matter:
+`crates/norte-help/topics/{en,es}/*.md`, embedded with an explicit
+`include_str!` table (the `norte-theme` presets and `norte-i18n` catalogs
+already do exactly this — no new dependency, and a test cross-checks the table
+against the directory so a forgotten entry fails the build). No runtime I/O,
+no path resolution, works in a static binary.
+
+Front matter is **TOML between `+++` fences**, not YAML: the workspace already
+parses TOML everywhere and pulling a YAML crate in for six header fields would
+not survive rule 8.
 
 ```markdown
----
-id: copying
-title: Copying across backends
-tags: [doing, transfer]
-see_also: [selection, remote, archives]
-commands: [fs.copy, fs.copy-as, fs.move]
-context: ["dialog.collision"]
----
++++
+id = "copying"
+title = "Copying across backends"
+tags = ["doing", "transfer"]
+see_also = ["selection", "remote", "archives"]
+commands = ["fs.copy", "fs.copy-as", "fs.move"]
+context = ["dialog.collision"]
++++
 Pick files in the left pane, then {{cmd:fs.copy}}. The **other** pane is the
 destination — always, whatever it holds: a local directory, an SFTP host, an
 S3 bucket, the inside of a `.zip`.
