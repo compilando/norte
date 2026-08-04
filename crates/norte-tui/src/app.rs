@@ -219,6 +219,19 @@ impl Pane {
         self.state.page_down(n);
     }
 
+    /// Filas de listado pintadas en el último frame (#124) — delegado puro a
+    /// [`norte_frontend::PaneState::set_viewport_rows`].
+    pub fn set_viewport_rows(&mut self, rows: usize) {
+        self.state.set_viewport_rows(rows);
+    }
+
+    /// Cuántas filas mueve una página en este pane (#124) — delegado puro a
+    /// [`norte_frontend::PaneState::page_step`].
+    #[must_use]
+    pub fn page_step(&self) -> usize {
+        self.state.page_step()
+    }
+
     /// Cursor a la primera entrada.
     pub fn move_to_start(&mut self) {
         self.state.home();

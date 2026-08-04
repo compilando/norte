@@ -938,3 +938,47 @@ fn el_modal_de_nombre_en_destino_elide_las_rutas() {
         "el nombre editable sigue visible: {contenido}"
     );
 }
+
+/// #124: `ui::pane_list_rows` cuenta EXACTAMENTE las filas de listado que el
+/// frame pinta — es el número que el run loop devuelve al modelo para que la
+/// paginación y la sonda de stat dejen de adivinar el viewport. Si el layout
+/// del pane cambia (un borde, una línea de cabecera, el panel de tasks),
+/// este test cae y obliga a corregir la aritmética en vez de dejarla
+/// mintiendo.
+#[test]
+fn pane_list_rows_cuenta_las_filas_que_de_verdad_se_pintan() {
+    let _ = norte_i18n::force(norte_i18n::Lang::En);
+    let dir = vp("file:///x");
+    // Muchas más entradas que filas: el pane se llena entero.
+    let entries: Vec<Entry> = (0..60)
+        .map(|i| Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: dir
+                .join(Segment::new(format!("f{i:03}.txt").into_bytes()).unwrap())
+                .clone(),
+            kind: EntryKind::File,
+            size: Some(1),
+            mtime_ms: None,
+        })
+        .collect();
+    let mut app = App::new(Pane::new(dir.clone(), entries), Pane::new(dir, Vec::new()));
+    app.render_now_ms = Some(0);
+    for alto in [10u16, 16, 24] {
+        let mut terminal = Terminal::new(TestBackend::new(60, alto)).expect("terminal");
+        terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+        let pintado = terminal.backend().to_string();
+        let filas = pintado.lines().filter(|l| l.contains(".txt")).count();
+        assert_eq!(
+            usize::from(ui::pane_list_rows(&app, alto)),
+            filas,
+            "alto {alto}: la cuenta debe ser la del buffer real:\n{pintado}"
+        );
+    }
+    // Con el visor abierto no se pinta ningún pane: cero filas visibles.
+    app.viewer = Some(norte_tui::viewer::Viewer::new(
+        vp("file:///x/f000.txt"),
+        b"x".to_vec(),
+        false,
+    ));
+    assert_eq!(ui::pane_list_rows(&app, 24), 0);
+}

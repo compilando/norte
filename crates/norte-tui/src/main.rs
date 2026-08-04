@@ -994,9 +994,18 @@ async fn run(
         refresh_lua_status(app, lua_host.as_ref());
         // Exención puntual de la regla 2: el draw escribe stdout síncrono
         // (patrón async oficial de ratatui; acotado, runtime multi-thread).
-        terminal.draw(|f| ui::draw(f, app))?;
+        let pintado = terminal.draw(|f| ui::draw(f, app))?;
         if app.quit {
             return Ok(());
+        }
+        // #124: el alto REAL del viewport vuelve al modelo tras cada frame —
+        // la paginación (`page_step`) y el radio de la sonda de stat salen de
+        // ahí en vez de constantes que mienten en cualquier terminal que no
+        // mida justo eso. Con el visor abierto son 0 filas (ningún pane
+        // pintado) y el modelo vuelve a sus fallbacks.
+        let filas = usize::from(ui::pane_list_rows(app, pintado.area.height));
+        for pane in &mut app.panes {
+            pane.set_viewport_rows(filas);
         }
         // #52: listado lazy — las entradas VISIBLES sin size se hidratan por
         // tandas (máx. una en vuelo; dedup por (pane, path) en `last_probed`).
@@ -4451,8 +4460,16 @@ async fn dispatch(
         Command::PaneSearch => app.open_search_dialog(),
         Command::CursorUp => app.focused_mut().move_up(1),
         Command::CursorDown => app.focused_mut().move_down(1),
-        Command::CursorPageUp => app.focused_mut().move_up(PAGE),
-        Command::CursorPageDown => app.focused_mut().move_down(PAGE),
+        // #124: una PÁGINA es una pantalla del pane (menos una fila de
+        // contexto), no una constante — el alto real llega del último frame.
+        Command::CursorPageUp => {
+            let paso = app.focused().page_step();
+            app.focused_mut().move_up(paso);
+        }
+        Command::CursorPageDown => {
+            let paso = app.focused().page_step();
+            app.focused_mut().move_down(paso);
+        }
         Command::CursorTop => app.focused_mut().move_to_start(),
         Command::CursorBottom => app.focused_mut().move_to_end(),
         Command::NavEnter => {

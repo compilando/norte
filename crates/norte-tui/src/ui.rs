@@ -32,6 +32,33 @@ pub(crate) const HOSTILE_BADGE: &str = "!";
 /// el contenido — jamás el borde de la caja, que corta a pelo.
 const MODAL_PATH_CHARS: usize = 46;
 
+/// Filas del panel de tasks en un frame (tope 6): parte del layout de
+/// [`draw`], extraída para que [`pane_list_rows`] cuente lo MISMO que se
+/// pinta.
+fn tasks_rows(app: &App) -> u16 {
+    u16::try_from(app.board.rows().len().min(6)).unwrap_or(6)
+}
+
+/// Filas de LISTADO que cada pane pinta en un frame de alto `frame_height`
+/// (#124): el alto del frame menos el panel de tasks y la barra de estado
+/// (layout de [`draw`]), menos los dos bordes del bloque del pane y su línea
+/// de cabecera de columnas ([`draw_pane`]). El run loop la devuelve al
+/// modelo (`PaneState::set_viewport_rows`) para que la paginación y la sonda
+/// de stat dejen de adivinar el viewport. Un test de render la ancla contra
+/// las filas que aparecen de verdad en el buffer — si el layout cambia, ese
+/// test cae aquí.
+#[must_use]
+pub fn pane_list_rows(app: &App, frame_height: u16) -> u16 {
+    // Con el visor abierto no se pinta ningún pane: 0 filas visibles.
+    if app.viewer.is_some() {
+        return 0;
+    }
+    frame_height
+        .saturating_sub(tasks_rows(app))
+        .saturating_sub(1) // barra de estado
+        .saturating_sub(3) // bordes del bloque (2) + cabecera de columnas (1)
+}
+
 /// Pinta el frame completo: panes (o viewer) + panel de tasks + barra de
 /// estado + modal por encima.
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
@@ -53,7 +80,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(viewer) = &app.viewer {
         draw_viewer(frame, viewer, app);
     } else {
-        let tasks_h = u16::try_from(app.board.rows().len().min(6)).unwrap_or(6);
+        let tasks_h = tasks_rows(app);
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([

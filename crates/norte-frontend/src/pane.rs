@@ -216,7 +216,21 @@ pub struct PaneState {
     /// [`Self::set_listing`]/[`Self::begin_loading`] lo limpian (un
     /// listado nuevo invalida los valores del anterior).
     plugin_columns: HashMap<String, HashMap<VPath, String>>,
+    /// Filas de listado que el frontend pintó de este pane en el ÚLTIMO
+    /// frame (#124). El alto real lo decide el widget al pintar, así que el
+    /// modelo no puede deducirlo: el frontend lo DEVUELVE con
+    /// [`Self::set_viewport_rows`] y de ahí salen el salto de página
+    /// ([`Self::page_step`]) y el radio de la sonda de stat
+    /// ([`Self::needs_stat_window`]) — antes eran constantes que mentían en
+    /// cualquier terminal que no midiera justo eso. `None` = todavía sin
+    /// pintar (o pane tapado, p. ej. con el visor abierto): manda el
+    /// fallback del caller.
+    viewport_rows: Option<usize>,
 }
+
+/// Salto de página sin frame pintado todavía (#124): el valor histórico,
+/// solo hasta el primer [`PaneState::set_viewport_rows`].
+pub const DEFAULT_PAGE: usize = 10;
 
 /// Tope de la memoria de cursor por pane (spec §S1): sesión larga sin fuga
 /// de memoria sin depender de una nueva dependencia (LRU a mano sobre un
@@ -251,6 +265,7 @@ impl PaneState {
             sort: crate::sort::SortSpec::default(),
             decorations: HashMap::new(),
             plugin_columns: HashMap::new(),
+            viewport_rows: None,
         }
     }
 
@@ -1162,6 +1177,29 @@ impl PaneState {
         }
     }
 
+    /// Filas de listado que este pane pintó en el ÚLTIMO frame (#124): el
+    /// alto real lo decide el widget al pintar, así que el frontend lo
+    /// devuelve aquí y el modelo deja de adivinarlo. `None` hasta el primer
+    /// frame (o si el pane no se pintó: con el visor abierto, p. ej.).
+    pub fn set_viewport_rows(&mut self, rows: usize) {
+        self.viewport_rows = (rows > 0).then_some(rows);
+    }
+
+    /// Filas visibles del último frame (#124) — ver [`Self::set_viewport_rows`].
+    #[must_use]
+    pub fn viewport_rows(&self) -> Option<usize> {
+        self.viewport_rows
+    }
+
+    /// Cuántas filas mueve una página (#124): una PANTALLA menos una fila de
+    /// contexto, como los gestores ortodoxos — nunca menos de una. Sin frame
+    /// pintado todavía cae a [`DEFAULT_PAGE`].
+    #[must_use]
+    pub fn page_step(&self) -> usize {
+        self.viewport_rows
+            .map_or(DEFAULT_PAGE, |r| r.saturating_sub(1).max(1))
+    }
+
     /// Paths candidatos a [`Self::hydrate`] en la ventana VISIBLE: entradas
     /// `File` sin `size` a `radius` filas del cursor (#52, listado lazy).
     /// Modelo COMPARTIDO por los dos frontends (regla 7): sondear solo la
@@ -1169,15 +1207,19 @@ impl PaneState {
     /// las demás filas, que es justo lo que un gestor ortodoxo tiene que
     /// enseñar.
     ///
-    /// `radius` APROXIMA el viewport: el alto real lo decide el widget al
-    /// pintar, así que la ventana se centra en el cursor con margen en vez
-    /// de mentir sobre lo visible. Un `Dir` jamás se sondea (su celda de
+    /// El radio sale del alto REAL del último frame
+    /// ([`Self::set_viewport_rows`], #124) y cae a `fallback` mientras no
+    /// haya frame. Un radio igual al alto CUBRE la pantalla entera sea cual
+    /// sea el scroll —lo visible siempre cae dentro de `cursor ± alto`— y de
+    /// paso pre-carga una pantalla en cada sentido, así que desplazarse no
+    /// estrena celdas en blanco. Un `Dir` jamás se sondea (su celda de
     /// tamaño va en blanco a propósito) y una entrada ya hidratada deja de
     /// ser candidata sola — el caller no necesita llevar más estado que la
     /// dedup de los que YA pidió (un stat fallido, si no, se reintenta en
     /// bucle).
     #[must_use]
-    pub fn needs_stat_window(&self, radius: usize) -> Vec<VPath> {
+    pub fn needs_stat_window(&self, fallback: usize) -> Vec<VPath> {
+        let radius = self.viewport_rows.unwrap_or(fallback);
         let lo = self.cursor.saturating_sub(radius);
         let hi = self.cursor.saturating_add(radius).saturating_add(1);
         self.entries
@@ -1998,6 +2040,45 @@ mod tests {
             VPath::parse("mem:///z").unwrap(),
             "la selección sigue el path pese al re-orden"
         );
+    }
+
+    /// #124: el alto del viewport lo devuelve el frontend tras pintar, y de
+    /// ahí salen el salto de página (una pantalla menos una fila de
+    /// contexto) y el radio de la sonda de stat. Sin frame pintado mandan
+    /// los fallbacks.
+    #[test]
+    fn el_viewport_pintado_manda_en_pagina_y_sonda() {
+        let lazy = |n: &str| {
+            let mut x = e(&format!("mem:///{n}"), EntryKind::File);
+            x.size = None;
+            x
+        };
+        let entries: Vec<Entry> = (0..100).map(|i| lazy(&format!("f{i:03}"))).collect();
+        let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), entries);
+        assert_eq!(p.viewport_rows(), None, "sin pintar todavía");
+        assert_eq!(p.page_step(), DEFAULT_PAGE, "sin frame: fallback histórico");
+        assert_eq!(
+            p.needs_stat_window(3).len(),
+            4,
+            "sin frame manda el fallback del caller: cursor 0 ± 3"
+        );
+
+        p.set_viewport_rows(30);
+        assert_eq!(p.viewport_rows(), Some(30));
+        assert_eq!(p.page_step(), 29, "una pantalla menos una fila de contexto");
+        assert_eq!(
+            p.needs_stat_window(3).len(),
+            31,
+            "el radio pasa a ser el alto REAL, no el fallback"
+        );
+
+        // Un pane de una sola fila sigue avanzando (jamás un salto de 0).
+        p.set_viewport_rows(1);
+        assert_eq!(p.page_step(), 1);
+        // Pane tapado (visor abierto): vuelve a mandar el fallback.
+        p.set_viewport_rows(0);
+        assert_eq!(p.viewport_rows(), None);
+        assert_eq!(p.page_step(), DEFAULT_PAGE);
     }
 
     /// El cursor EN EL TOPE se queda en el tope mientras el listado se
