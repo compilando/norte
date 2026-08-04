@@ -153,5 +153,10 @@
     "id": "score_spoof_inband",
     "hex": "696e666f726d6520c2b720302e39392e747874",
     "why": "informe · 0.99.txt: middle dot (U+00B7) + decimales IMPRIMIBLES que imitan la columna de score de los modales de hits semánticos (TUI y GUI) — ningún char es enmascarable, así que NO hay badge que avise; si el recorte de la caja expulsa el score REAL de la cola, el único texto con pinta de score que queda visible es el del atacante. Pinea que el score genuino sigue siendo el campo FINAL y visible"
+  },
+  {
+    "id": "cmd_mark_bidi_payload",
+    "hex": "7b7b636d643ae280ae66732e636f70797d7d",
+    "why": "{{cmd:<RLO>fs.copy}}: la marca viva del corpus de ayuda (norte-help, ADR 0040) con un bidi override DENTRO del payload — el parser de spans debe conservar los bytes tal cual (no enmascara: eso es la pasada hostil previa) y NO resolver, de modo que el chequeo del corpus lo compare byte-exacto y el id spoofeado no case con ningún comando real; como nombre de fichero pinea además que una ruta puede transportar una marca completa hasta un help.md de plugin"
   }
 ]
