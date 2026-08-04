@@ -2274,8 +2274,24 @@ Apply their findings before starting H3b.
 
 - **Do not** add a dependency in this phase. If something seems to need one,
   it is a design error — raise it instead of adding the crate (rule 8).
-- Spanish is the language of code comments and test names in this repository;
-  documentation under `docs/` is English. Follow both.
+- **Language (decided 2026-08-04, mid-execution):** `norte-help` follows
+  `norte-config`, the most recent crate, and is **English throughout** —
+  rustdoc, implementation comments and test names. The code blocks in Tasks 2
+  to 9 below were written in Spanish before that decision; translate them as
+  you go, keeping every "why" note intact. The rest of the workspace keeps its
+  existing Spanish comments; this is not a repo-wide migration.
+- **Obligation carried into Task 5 (from the Task 2 review):** `Block::Table`
+  now documents that every row arrives normalised to `header.len()` — the
+  parser pads missing cells and drops the excess — so a renderer may index by
+  column without a length check. Task 5's `cells`/table branch must enforce
+  that, with a test for a ragged row, because those cells come from a plain
+  split over hostile plugin `help.md`.
+- **Correction to Task 3 (found in review):** the plan's `split` ended with
+  `.strip_prefix('\n').unwrap_or("")`, which silently returns an EMPTY body
+  when the closing-fence line carries trailing content — a stray space, a
+  `++++` line, or a CRLF checkout produce a topic that parses and renders
+  blank. The shipped implementation rejects trailing content with a dedicated
+  `FrontMatterError` variant and accepts `\r\n` on both fences.
 - The `lib.rs` module list is written in full in Task 1 and commented back in
   piece by piece. If a task fails to compile with "file not found for module",
   check that only the modules that exist are uncommented.

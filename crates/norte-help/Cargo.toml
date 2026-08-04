@@ -1,0 +1,22 @@
+[package]
+name = "norte-help"
+description = "Embedded, localized help corpus for norte (ADR 0040): markdown-lite topics with TOML front matter, a render-agnostic model, and a hostile mode for plugin help"
+license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+norte-encoding.workspace = true
+norte-i18n.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+norte-testkit.workspace = true
+
+[lints]
+workspace = true

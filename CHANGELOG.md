@@ -9,6 +9,43 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Help corpus (H3a, ADR 0040):** new crate `norte-help`, the foundation of
+  the help-system redesign. Topics are markdown-lite files with TOML front
+  matter between `+++` fences, embedded through an explicit `include_str!`
+  table (the `norte-theme` preset pattern) with a test that cross-checks the
+  table against the directory, so a topic file cannot be silently left out.
+  The markdown accepted is a **closed vocabulary** — headings, paragraphs,
+  bullets, fenced code, tables, callouts, inline strong/emph/code — plus two
+  **live marks** the parser deliberately leaves unresolved: `{{cmd:id}}` and
+  `[[topic]]`. A frontend resolves them at draw time through the new
+  `ChordResolver` seam, so the prose shows the key the user actually has bound
+  and can never claim a chord that a rebind has moved. Ships six seed topics
+  in English and Spanish (index, panes, selection, copying, remote, archives),
+  every factual claim in them verified against the code rather than against
+  the design docs.
+  A second parse mode reads plugin-supplied `help.md` as hostile input: it
+  never fails and never panics, decodes through `norte-encoding` (so a
+  BOM'd file keeps its header instead of losing it), bounds source bytes,
+  line length, block count and total table cells, masks terminal hazards
+  where the data is built, and reports `truncated`/`lossy` for the UI badge.
+  A plugin's topic id is host-assigned, its `{{cmd:…}}` marks must be
+  namespaced to itself, and its `[[…]]` links are inert — so plugin help
+  cannot shadow a built-in topic, forge a reference to a host command, or
+  link into the host corpus.
+  Integrity checks (`check_corpus`, `check_commands`, `check_contexts`)
+  report findings as data for both the test suite and the future `norte
+  doctor`, covering locale parity, duplicate ids, dangling links,
+  unknown/undocumented commands, unknown/duplicate contexts, stale allowlist
+  entries, and marks typed where the parser cannot make them live. A gate in
+  `norte-tui` fails the build when a command in the vocabulary appears in no
+  topic, with a hand-written allowlist that phase H3h drains to zero.
+  The canonical `norte-testkit` corpus grows a fixture for the live mark
+  itself (`cmd_mark_bidi_payload`, hostile names 31 → 32): a bidi override
+  inside a `{{cmd:…}}` payload, which the parser must carry byte-for-byte so
+  the gate's byte-exact cross-check refuses to ship it.
+  No frontend renders any of this yet — `norte-tui` takes the crate as a
+  **dev-dependency only**, for the gate; the F1 overlay is phase H3b/H3c.
+
 - **Semantic index (M4-IA-2, ADR 0031 A3, proto 0.33.0):** two new
   methods over the wire. `index.embed` is a cancellable Task
   (`TaskKind::Embed`) that embeds the files a previous `index.build`
