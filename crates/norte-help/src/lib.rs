@@ -24,7 +24,7 @@ mod corpus; // task 7
 mod front_matter; // task 3
 mod model; // task 2
 mod parse; // tasks 4 and 5
-// mod resolve; // task 9
+mod resolve; // task 9
 
 // Public re-exports, in the same order; each one uncommented by its task:
 pub use check::{
@@ -35,4 +35,4 @@ pub use corpus::{topic, topic_ids, topics}; // task 7
 pub use model::{Availability, Block, Callout, CommandRow, Origin, Reason, Span, Topic, TopicId}; // task 2
 pub use norte_i18n::Lang;
 pub use parse::{Limits, ParseError, Parsed, parse_trusted, parse_untrusted}; // tasks 4, 5 and 6
-// pub use resolve::ChordResolver; // task 9
+pub use resolve::{ChordResolver, CommandText, ResolvedRow, render_command, render_span, rows_of}; // task 9

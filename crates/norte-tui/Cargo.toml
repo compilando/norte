@@ -55,6 +55,10 @@ unicode-width = "0.2"
 bytes.workspace = true
 criterion.workspace = true
 insta.workspace = true
+# Solo dev: la puerta de documentación (`tests/help_gate.rs`, ADR 0040)
+# cruza el corpus con el vocabulario de comandos. El binario NO enlaza el
+# corpus todavía — lo hará H3c, cuando F1 lo pinte.
+norte-help.workspace = true
 norte-i18n.workspace = true
 norte-testkit.workspace = true
 proptest.workspace = true

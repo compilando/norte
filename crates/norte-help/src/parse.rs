@@ -136,7 +136,7 @@ const INVISIBLE: [char; 5] = [
 /// rule that always holds is worth more than a mode-dependent one nobody can
 /// keep in their head. The consequence is deliberate: an id whose bytes were
 /// invalid UTF-8 (lossy-decoded to `U+FFFD`) also stays literal text.
-fn is_blank_id(id: &str) -> bool {
+pub(crate) fn is_blank_id(id: &str) -> bool {
     id.chars()
         .all(|c| c.is_whitespace() || c == '\u{FFFD}' || INVISIBLE.contains(&c))
 }
