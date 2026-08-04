@@ -20,8 +20,10 @@ pub(crate) const CMD_OPEN: &str = "{{cmd:";
 /// Closer of a command reference.
 const CMD_CLOSE: &str = "}}";
 
-/// Opener of a topic link.
-const LINK_OPEN: &str = "[[";
+/// Opener of a topic link. Crate-visible for the same reason [`CMD_OPEN`] is:
+/// a link written where this parser never looks is inert exactly as a command
+/// mark is, and both checks must search for the needle this file opens on.
+pub(crate) const LINK_OPEN: &str = "[[";
 
 /// Closer of a topic link.
 const LINK_CLOSE: &str = "]]";

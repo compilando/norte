@@ -27,7 +27,7 @@ use std::fmt;
 use norte_i18n::Lang;
 
 use crate::model::{Block, Span, Topic};
-use crate::parse::CMD_OPEN;
+use crate::parse::{CMD_OPEN, LINK_OPEN};
 
 /// The locales the embedded corpus ships, and the input [`check_corpus`]
 /// builds from.
@@ -65,8 +65,8 @@ const _: fn(Lang) = |lang| match lang {
 /// not. Hence a named constant and not a hard-coded `Lang::En` in two bodies.
 const VOCABULARY_LOCALE: Lang = Lang::En;
 
-/// Where an inert command mark was found — a block whose text the parser never
-/// cuts into spans, so a `{{cmd:…}}` inside it can only ever render literally.
+/// Where an inert mark was found — a block whose text the parser never cuts
+/// into spans, so a mark inside it can only ever render literally.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Inert {
     /// In a heading.
@@ -84,6 +84,42 @@ impl Inert {
         }
     }
 }
+
+/// Which of the corpus' two live marks was written somewhere inert.
+///
+/// The corpus has exactly two, and they fail identically: a `{{cmd:…}}` the
+/// reader cannot press, a `[[…]]` the reader cannot follow. Reporting them
+/// through one finding with a kind — rather than one finding each, or worse,
+/// only the first one anybody thought of — is what keeps the two from drifting
+/// apart again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mark {
+    /// A command reference, `{{cmd:…}}`.
+    Command,
+    /// A topic link, `[[…]]`.
+    TopicLink,
+}
+
+impl Mark {
+    /// The opener this mark is recognised by, straight from the parser.
+    fn opener(self) -> &'static str {
+        match self {
+            Self::Command => CMD_OPEN,
+            Self::TopicLink => LINK_OPEN,
+        }
+    }
+
+    /// The words [`Issue`]'s `Display` uses for this mark.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Command => "command mark",
+            Self::TopicLink => "topic link",
+        }
+    }
+}
+
+/// Both marks, in the order findings are reported for one piece of text.
+const MARKS: [Mark; 2] = [Mark::Command, Mark::TopicLink];
 
 /// Why an allowlist entry is dead weight. Both causes mean the same repair —
 /// delete the line — but not the same story, and a backlog whose entries
@@ -188,19 +224,25 @@ pub enum Issue {
         /// Locale the collision is in.
         lang: Lang,
     },
-    /// A `{{cmd:…}}` written where the parser cannot read it: a heading, or a
-    /// table cell. It renders as literal braces and does nothing.
+    /// A live mark written where the parser cannot read it: a heading, or a
+    /// table cell. It renders as literal braces or brackets and does nothing.
     ///
-    /// It is its own finding rather than a mention, because it is invisible to
-    /// every other check by construction — the command is neither documented
-    /// (there is nothing to press) nor mentioned (there is no `CommandRef`), so
-    /// a bogus id typed into a table passes the vocabulary cross-check in
-    /// SILENCE. A keys-and-answers table is the single most natural place for
-    /// an author to type a chord mark, and "the reader can see the braces" is
-    /// the mitigation this crate refuses to rely on anywhere else.
-    InertCommandMark {
+    /// It is its own finding, and not a mention or a link, because it is
+    /// invisible to every other check by construction. A `{{cmd:…}}` there is
+    /// neither documented (there is nothing to press) nor mentioned (there is
+    /// no `CommandRef`), so a bogus id typed into a table passes the vocabulary
+    /// cross-check in SILENCE; a `[[…]]` there is not in `links`, so it never
+    /// dangles however wrong its target. Both are the same defect, which is why
+    /// they are one variant with a [`Mark`] rather than two that can drift.
+    ///
+    /// A keys-and-answers table is the single most natural place for an author
+    /// to type a chord mark, and "the reader can see the brackets" is the
+    /// mitigation this crate refuses to rely on anywhere else.
+    InertMark {
         /// Topic holding it.
         topic: String,
+        /// Which mark it is.
+        mark: Mark,
         /// What kind of block it landed in.
         block: Inert,
         /// The offending text, whole, so it can be grepped for. Never a
@@ -284,14 +326,16 @@ impl fmt::Display for Issue {
                 f,
                 "[{lang:?}] `{first}` and `{second}` both claim the context `{context}`"
             ),
-            Self::InertCommandMark {
+            Self::InertMark {
                 topic,
+                mark,
                 block,
                 text,
                 lang,
             } => write!(
                 f,
-                "[{lang:?}] `{topic}` has a command mark in a {}, where it renders literally: {text}",
+                "[{lang:?}] `{topic}` has a {} in a {}, where it renders literally: {text}",
+                mark.label(),
                 block.label()
             ),
             Self::StaleAllowEntry {
@@ -370,35 +414,44 @@ fn mentions(t: &Topic) -> BTreeSet<String> {
     out
 }
 
-/// Every inert `{{cmd:…}}` of a topic: the marks written where the parser
-/// never looks for one. See [`Issue::InertCommandMark`].
+/// Every inert mark of a topic — `{{cmd:…}}` and `[[…]]` alike, written where
+/// the parser never looks for one. See [`Issue::InertMark`].
 ///
-/// [`Block::Code`] is deliberately EXCLUDED. A fence is where one documents
-/// the syntax itself, so a literal mark there is the author saying exactly what
-/// they meant; flagging it would make the one legitimate use of the text
-/// unwritable. The other two block kinds have no such use: nobody writes
-/// `{{cmd:…}}` into a heading or a table cell on purpose.
+/// BOTH marks, from one walk over one list of openers. The alternative,
+/// checking the mark somebody happened to think of first, ships a checker that
+/// catches one of two identical defects — and a reader of this module would
+/// reasonably assume otherwise.
 ///
-/// Detection is by OPENER, sharing the parser's own constant rather than
-/// spelling it again. A mark that is unclosed, blank or otherwise refused is
-/// still inert text with braces in it, and still worth reporting: the author
-/// meant a key either way.
-fn inert_marks(t: &Topic) -> Vec<(Inert, String)> {
+/// [`Block::Code`] is deliberately EXCLUDED, for both. A fence is where one
+/// documents the syntax itself, so a literal mark there is the author saying
+/// exactly what they meant; flagging it would make the one legitimate use of
+/// the text unwritable. The other two block kinds have no such use: nobody
+/// writes a mark into a heading or a table cell on purpose.
+///
+/// Detection is by OPENER, sharing the parser's own constants rather than
+/// spelling them again. A mark that is unclosed, blank or otherwise refused is
+/// still inert text with braces or brackets in it, and still worth reporting:
+/// the author meant a key, or a jump, either way.
+fn inert_marks(t: &Topic) -> Vec<(Mark, Inert, String)> {
+    /// One piece of text that the parser will never cut into spans.
+    fn scan(out: &mut Vec<(Mark, Inert, String)>, block: Inert, text: &str) {
+        for mark in MARKS {
+            if text.contains(mark.opener()) {
+                out.push((mark, block, text.to_owned()));
+            }
+        }
+    }
+
     let mut out = Vec::new();
     for block in &t.blocks {
         match block {
-            Block::Heading { text, .. } if text.contains(CMD_OPEN) => {
-                out.push((Inert::Heading, text.clone()));
-            }
+            Block::Heading { text, .. } => scan(&mut out, Inert::Heading, text),
             Block::Table { header, rows } => {
                 for cell in header.iter().chain(rows.iter().flatten()) {
-                    if cell.contains(CMD_OPEN) {
-                        out.push((Inert::TableCell, cell.clone()));
-                    }
+                    scan(&mut out, Inert::TableCell, cell);
                 }
             }
-            Block::Heading { .. }
-            | Block::Code { .. }
+            Block::Code { .. }
             | Block::Paragraph(_)
             | Block::Bullets(_)
             | Block::Callout { .. } => {}
@@ -408,7 +461,13 @@ fn inert_marks(t: &Topic) -> Vec<(Inert, String)> {
 }
 
 /// Every topic id a topic points at: `see_also` plus the `[[links]]` of its
-/// body. Sorted and deduplicated, for the reason [`mentions`] is.
+/// body. Sorted and deduplicated: a topic linked three times is one link, and
+/// the order a `Vec` walk happens to produce is not something a diff should be
+/// sensitive to.
+///
+/// Only LIVE links, so a `[[…]]` typed into a heading or a table cell is not
+/// here — and cannot dangle however wrong its target. [`inert_marks`] is what
+/// catches those.
 fn links(t: &Topic) -> BTreeSet<String> {
     let mut out: BTreeSet<String> = t.see_also.iter().map(ToString::to_string).collect();
     out.extend(spans_of(t).into_iter().filter_map(|s| match s {
@@ -419,13 +478,13 @@ fn links(t: &Topic) -> BTreeSet<String> {
 }
 
 /// Checks a set of locales against each other: topic parity, unique ids, links
-/// that resolve, and command marks written where they render literally. The
-/// logic behind [`check_corpus`].
+/// that resolve, and marks written where they render literally. The logic
+/// behind [`check_corpus`].
 ///
 /// Everything here is checkable with no external vocabulary — which is why the
 /// inert-mark check lives in this function and not in [`check_commands_in`],
-/// even though it is about a command: whether the mark can be pressed does not
-/// depend on what the frontend knows.
+/// even for `{{cmd:…}}`: whether a mark can be pressed does not depend on what
+/// the frontend knows.
 ///
 /// Ids are compared BYTE-EXACTLY, like everywhere else in this crate
 /// ([`crate::TopicId`] never normalises). A check that folded case or trimmed
@@ -497,9 +556,10 @@ pub fn check_locales(locales: &[(Lang, &[Topic])]) -> Vec<Issue> {
                     });
                 }
             }
-            for (block, text) in inert_marks(t) {
-                issues.push(Issue::InertCommandMark {
+            for (mark, block, text) in inert_marks(t) {
+                issues.push(Issue::InertMark {
                     topic: t.id.to_string(),
+                    mark,
                     block,
                     text,
                     lang,
@@ -511,8 +571,8 @@ pub fn check_locales(locales: &[(Lang, &[Topic])]) -> Vec<Issue> {
 }
 
 /// Checks the EMBEDDED corpus: locale parity, unique ids, links that resolve,
-/// no inert command marks. Needs no external vocabulary, so it is the one check
-/// that can run anywhere.
+/// no inert marks. Needs no external vocabulary, so it is the one check that
+/// can run anywhere.
 ///
 /// ```
 /// use norte_help::check_corpus;
@@ -984,42 +1044,116 @@ mod tests {
         );
         // …and it is not IGNORED. The vocabulary cross-check cannot see it —
         // this is the other half of the same page.
+        let inert = |block, text: &str| Issue::InertMark {
+            topic: "remote".to_owned(),
+            mark: Mark::Command,
+            block,
+            text: text.to_owned(),
+            lang: Lang::En,
+        };
         assert_eq!(
             check_locales(&[(Lang::En, std::slice::from_ref(&t))]),
             vec![
-                Issue::InertCommandMark {
-                    topic: "remote".to_owned(),
-                    block: Inert::Heading,
-                    text: "{{cmd:pane.copy}}".to_owned(),
-                    lang: Lang::En,
-                },
-                Issue::InertCommandMark {
-                    topic: "remote".to_owned(),
-                    block: Inert::TableCell,
-                    text: "{{cmd:pane.copy}}".to_owned(),
-                    lang: Lang::En,
-                },
-                Issue::InertCommandMark {
-                    topic: "remote".to_owned(),
-                    block: Inert::TableCell,
-                    text: "{{cmd:pane.copy}}".to_owned(),
-                    lang: Lang::En,
-                },
+                inert(Inert::Heading, "{{cmd:pane.copy}}"),
+                inert(Inert::TableCell, "{{cmd:pane.copy}}"),
+                inert(Inert::TableCell, "{{cmd:pane.copy}}"),
             ],
             "header cell and body cell alike; the code fence is exempt"
         );
     }
 
     #[test]
-    fn a_command_mark_in_a_code_fence_is_left_alone() {
+    fn a_topic_link_typed_into_a_table_cell_or_a_heading_is_inert_the_same_way() {
+        // The sibling defect, and the reason [`Issue::InertMark`] carries a
+        // kind. A `[[…]]` written here is not in `links`, so it never dangles
+        // however wrong its target: catching the command mark and not this one
+        // would be a checker that covers one of two identical failures.
+        let mut t = topic("panes");
+        t.blocks = vec![
+            Block::Heading {
+                level: 1,
+                text: "[[nowhere]]".to_owned(),
+            },
+            Block::Table {
+                header: vec!["See".to_owned()],
+                rows: vec![vec!["[[nowhere]]".to_owned()]],
+            },
+        ];
+        let inert = |block| Issue::InertMark {
+            topic: "panes".to_owned(),
+            mark: Mark::TopicLink,
+            block,
+            text: "[[nowhere]]".to_owned(),
+            lang: Lang::En,
+        };
+        assert_eq!(
+            check_locales(&[(Lang::En, &[t])]),
+            vec![inert(Inert::Heading), inert(Inert::TableCell)],
+            "a link the reader cannot follow, and no `DanglingLink` to find it"
+        );
+        // The two kinds must be distinguishable in the report as well as in
+        // the data: a doctor line that said "mark" for both would send the
+        // author looking for the wrong six characters.
+        assert_eq!(
+            inert(Inert::TableCell).to_string(),
+            "[En] `panes` has a topic link in a table cell, \
+             where it renders literally: [[nowhere]]"
+        );
+        assert_eq!(
+            Issue::InertMark {
+                topic: "panes".to_owned(),
+                mark: Mark::Command,
+                block: Inert::Heading,
+                text: "{{cmd:pane.copy}}".to_owned(),
+                lang: Lang::En,
+            }
+            .to_string(),
+            "[En] `panes` has a command mark in a heading, \
+             where it renders literally: {{cmd:pane.copy}}"
+        );
+    }
+
+    #[test]
+    fn one_cell_holding_both_marks_reports_both() {
+        let mut t = topic("panes");
+        t.blocks = vec![Block::Table {
+            header: vec!["press {{cmd:pane.copy}}, see [[copying]]".to_owned()],
+            rows: Vec::new(),
+        }];
+        let text = "press {{cmd:pane.copy}}, see [[copying]]".to_owned();
+        assert_eq!(
+            check_locales(&[(Lang::En, &[t])]),
+            vec![
+                Issue::InertMark {
+                    topic: "panes".to_owned(),
+                    mark: Mark::Command,
+                    block: Inert::TableCell,
+                    text: text.clone(),
+                    lang: Lang::En,
+                },
+                Issue::InertMark {
+                    topic: "panes".to_owned(),
+                    mark: Mark::TopicLink,
+                    block: Inert::TableCell,
+                    text,
+                    lang: Lang::En,
+                },
+            ],
+            "one scan per mark, so neither hides behind the other"
+        );
+    }
+
+    #[test]
+    fn neither_mark_is_flagged_inside_a_code_fence() {
         // A fence is where one documents the syntax ITSELF. Flagging it would
-        // make the single legitimate use of these six characters unwritable,
-        // and this crate's own `parse_trusted` doctest is an example of the
-        // kind of page that needs it.
+        // make the single legitimate use of these characters unwritable, and
+        // this crate's own `parse_trusted` doctest is an example of the kind
+        // of page that needs it. The exemption covers BOTH marks: there is no
+        // reason it would hold for one and not the other.
         let mut t = topic("index");
         t.blocks = vec![Block::Code {
             lang: Some("markdown".to_owned()),
-            text: "press {{cmd:pane.copy}} to copy\n".to_owned(),
+            text: "press {{cmd:pane.copy}} to copy, then see [[copying]]\n".to_owned(),
         }];
         assert_eq!(check_locales(&[(Lang::En, &[t])]), Vec::new());
     }
@@ -1027,22 +1161,28 @@ mod tests {
     #[test]
     fn an_unclosed_inert_mark_is_reported_too() {
         // Detection is by OPENER: a mark that is malformed, blank or refused
-        // is still braces on screen where the author meant a key, and still
-        // something no other check can see.
-        let mut t = topic("remote");
-        t.blocks = vec![Block::Table {
-            header: vec!["Key".to_owned()],
-            rows: vec![vec!["{{cmd:pane.copy".to_owned()]],
-        }];
-        assert_eq!(
-            check_locales(&[(Lang::En, &[t])]),
-            vec![Issue::InertCommandMark {
-                topic: "remote".to_owned(),
-                block: Inert::TableCell,
-                text: "{{cmd:pane.copy".to_owned(),
-                lang: Lang::En,
-            }]
-        );
+        // is still braces or brackets on screen where the author meant a key
+        // or a jump, and still something no other check can see.
+        for (mark, text) in [
+            (Mark::Command, "{{cmd:pane.copy"),
+            (Mark::TopicLink, "[[copying"),
+        ] {
+            let mut t = topic("remote");
+            t.blocks = vec![Block::Table {
+                header: vec!["Key".to_owned()],
+                rows: vec![vec![text.to_owned()]],
+            }];
+            assert_eq!(
+                check_locales(&[(Lang::En, &[t])]),
+                vec![Issue::InertMark {
+                    topic: "remote".to_owned(),
+                    mark,
+                    block: Inert::TableCell,
+                    text: text.to_owned(),
+                    lang: Lang::En,
+                }]
+            );
+        }
     }
 
     #[test]
@@ -1235,10 +1375,15 @@ mod tests {
                 second,
                 lang,
             },
-            Issue::InertCommandMark {
-                topic, block, text, ..
-            } => Issue::InertCommandMark {
+            Issue::InertMark {
                 topic,
+                mark,
+                block,
+                text,
+                ..
+            } => Issue::InertMark {
+                topic,
+                mark,
                 block,
                 text,
                 lang,
