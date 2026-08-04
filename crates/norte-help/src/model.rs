@@ -5,16 +5,43 @@
 use std::fmt;
 
 /// Identificador de un tema (`id` del front matter), único por corpus.
+///
+/// El id NO se normaliza ni se valida ni se enmascara: conserva los bytes
+/// tal cual llegaron. Es deliberado — las comprobaciones del corpus
+/// (`see_also`, `[[tema]]`) comparan byte-exactas, y una normalización
+/// silenciosa aquí haría que dos ids distintos colisionaran sin que nadie
+/// lo viera. Por eso `" Copying "` y `"copying"` son ids DISTINTOS.
+///
+/// Consecuencia para quien construya un id desde texto de TERCEROS: hay que
+/// enmascarar ANTES de construirlo, nunca después. Eso es exactamente lo que
+/// hace `parse_untrusted` (tarea 6) con los `help.md` de plugins.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TopicId(String);
 
 impl TopicId {
     /// Construye un id a partir de cualquier cosa que sea texto.
+    ///
+    /// ```
+    /// use norte_help::TopicId;
+    ///
+    /// let id = TopicId::new("copying");
+    /// assert_eq!(id.as_str(), "copying");
+    ///
+    /// // Los bytes se conservan: no hay trim ni minusculizado.
+    /// assert_ne!(TopicId::new(" Copying "), id);
+    /// ```
+    #[must_use]
     pub fn new(s: impl Into<String>) -> Self {
         Self(s.into())
     }
 
     /// El id como `&str`.
+    ///
+    /// ```
+    /// use norte_help::TopicId;
+    ///
+    /// assert_eq!(TopicId::new("selection").as_str(), "selection");
+    /// ```
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -101,7 +128,15 @@ pub enum Block {
     Table {
         /// Celdas de la cabecera.
         header: Vec<String>,
-        /// Filas, cada una con el mismo número de celdas que la cabecera.
+        /// Filas ya NORMALIZADAS a `header.len()` celdas: el parser rellena
+        /// con celdas vacías las que falten y descarta las que sobren, así
+        /// que un renderer puede indexar por columna sin comprobar la
+        /// longitud.
+        ///
+        /// La normalización vive en el parser (tarea 5), no aquí; este tipo
+        /// es el contrato que aquel debe honrar. Importa porque las filas
+        /// salen de un `split` sobre un `help.md` de plugin —texto hostil—
+        /// y una fila irregular haría pánico al pintar.
         rows: Vec<Vec<String>>,
     },
     /// Aviso destacado.
@@ -114,7 +149,17 @@ pub enum Block {
 }
 
 /// Por qué un comando no puede ejecutarse ahora mismo.
+///
+/// Las variantes no llevan texto: cada una se traduce a una clave Fluent al
+/// pintar, así el mismo motivo se explica en el idioma del usuario y con las
+/// palabras de cada frontend.
+///
+/// `#[non_exhaustive]` a propósito: la fase H3d conecta las fuentes reales de
+/// disponibilidad (capacidades del backend, estado del plugin, `DenyReason`
+/// de la policy) y hará falta afinar variantes. Marcarlo hoy significa que
+/// añadirlas entonces no rompe los `match` de los tres frontends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Reason {
     /// El backend del pane activo es de solo lectura (p. ej. dentro de un zip).
     ReadOnlyBackend,
@@ -148,6 +193,20 @@ impl Availability {
     }
 
     /// El motivo, si la fila está indisponible.
+    ///
+    /// ```
+    /// use norte_help::{Availability, Reason};
+    ///
+    /// let ok = Availability::Available;
+    /// assert!(ok.is_available());
+    /// assert_eq!(ok.reason(), None);
+    ///
+    /// let ro = Availability::Unavailable {
+    ///     reason: Reason::ReadOnlyBackend,
+    /// };
+    /// assert!(!ro.is_available());
+    /// assert_eq!(ro.reason(), Some(Reason::ReadOnlyBackend));
+    /// ```
     #[must_use]
     pub fn reason(self) -> Option<Reason> {
         match self {
@@ -193,10 +252,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn topic_id_normaliza_y_muestra() {
+    fn topic_id_conserva_los_bytes_y_se_muestra() {
         let id = TopicId::new("copying");
         assert_eq!(id.as_str(), "copying");
         assert_eq!(id.to_string(), "copying");
+
+        // NO normaliza: ni recorta espacios ni baja a minúsculas. Si algún
+        // día lo hiciera, `see_also` y `[[tema]]` empezarían a resolver a
+        // temas que el autor no escribió.
+        let raro = TopicId::new(" Copying ");
+        assert_eq!(raro.as_str(), " Copying ");
+        assert_eq!(raro.to_string(), " Copying ");
+        assert_ne!(raro, id, "dos ids distintos jamás deben colisionar");
     }
 
     #[test]
