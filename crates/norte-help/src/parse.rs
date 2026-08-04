@@ -136,6 +136,13 @@ const INVISIBLE: [char; 5] = [
 /// rule that always holds is worth more than a mode-dependent one nobody can
 /// keep in their head. The consequence is deliberate: an id whose bytes were
 /// invalid UTF-8 (lossy-decoded to `U+FFFD`) also stays literal text.
+///
+/// The name is narrower than the predicate has turned out to be. What it
+/// really answers is "does this string PAINT anything?", and `crate::resolve`
+/// asks it of a chord and of a label — neither of which is an id — so that a
+/// mark whose text would be a gap on screen falls through to the next step of
+/// its fallback chain. Sharing one definition is the point: a string the
+/// parser would refuse as an id must not be quietly accepted as a key.
 pub(crate) fn is_blank_id(id: &str) -> bool {
     id.chars()
         .all(|c| c.is_whitespace() || c == '\u{FFFD}' || INVISIBLE.contains(&c))

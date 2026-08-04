@@ -57,14 +57,42 @@ pub trait ChordResolver {
     /// this (`norte_encoding::mask_terminal_hazards`). Masking here instead
     /// would put the terminal's rules inside a render-agnostic crate, and
     /// the GUI does not share them.
+    ///
+    /// # Which screen the chord comes from
+    ///
+    /// There is no context parameter, and that is a decision rather than an
+    /// omission. A frontend has several keymaps at once — the TUI builds an
+    /// `Effective` per `Screen` (browse, viewer, dialog) — so an implementor
+    /// must pick one. The rule is: resolve a command in the screen THAT
+    /// COMMAND lives in, never in the screen the reader happens to be on.
+    /// `{{cmd:dialog.approve}}` inside a page about copying must show the key
+    /// that approves, which only exists in the dialog keymap; a context
+    /// supplied by the caller would answer about the PAGE, which is the wrong
+    /// question, and every frontend would pass the wrong value in good faith.
+    ///
+    /// A command bound in one screen resolves exactly. A `[global]` command is
+    /// in all of them with the same chord, so it resolves exactly too. What
+    /// remains is a command bound in more than one screen with DIFFERENT
+    /// chords: take the first in the frontend's own precedence order — the
+    /// order `first_chord` already walks — and know that the page then shows a
+    /// key that works in one screen and not another. No command in the TUI is
+    /// in that state today; if one ever is, it is the keymap that wants
+    /// fixing, not this rule.
     fn chord(&self, command: &str) -> Option<String>;
 
     /// A SHORT label for the command — what the reader sees when there is no
     /// key to show, and the second column of a runnable row. In the TUI it is
     /// the Fluent catalogue (`help-cmd-*`), so it arrives translated.
     ///
-    /// Returning something blank is not fatal: the helpers below fall through
-    /// to the command id rather than paint a gap.
+    /// **If you have no label for the command, return an EMPTY string. Never
+    /// return your lookup key.** The fallback chain below then names the
+    /// command (`dialog.approve`), which is at least something the reader can
+    /// search for. This is not a hypothetical: `norte_i18n::t` returns the
+    /// requested id when the catalogue has no entry, so the obvious one-liner
+    /// — `t(&help_id(command))` — silently paints `help-cmd-dialog-approve` at
+    /// the reader and defeats the chain by never being blank. An implementor
+    /// wanting that behaviour must check the catalogue for a miss and return
+    /// `String::new()`.
     fn label(&self, command: &str) -> String;
 
     /// Whether the command can run RIGHT NOW, in the context the page is
@@ -82,6 +110,25 @@ pub trait ChordResolver {
 /// ones that are not — which is the exact lie this module exists to prevent.
 ///
 /// Both variants are guaranteed NON-BLANK; see [`render_command`].
+///
+/// Deliberately NOT `#[non_exhaustive]`, unlike [`crate::Reason`] and for the
+/// same kind of reason [`crate::Issue`] is not: the question it answers —
+/// "does the reader have a key for this, or not?" — has exactly two answers,
+/// and a renderer that did not handle both could not paint the mark at all. A
+/// third variant would be a change of meaning, not an extension, and should
+/// break every `match` that exists. Renderers that do not care about the
+/// distinction call [`CommandText::text`] and never match.
+///
+/// ```
+/// use norte_help::CommandText;
+///
+/// // The two answers, and a renderer choosing a style from them.
+/// let key = CommandText::Chord("F5".to_owned());
+/// let name = CommandText::Name("copy files".to_owned());
+/// let style = |c: &CommandText| if c.is_chord() { "key" } else { "prose" };
+/// assert_eq!((style(&key), key.text()), ("key", "F5"));
+/// assert_eq!((style(&name), name.text()), ("prose", "copy files"));
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CommandText {
     /// The user's effective key for the command.
@@ -150,6 +197,28 @@ impl CommandText {
 /// One definition, so a chord the parser would have refused as an id is not
 /// silently accepted here as a key.
 ///
+/// # The id is painted, and this crate does not mask it
+///
+/// The last step of the chain puts a COMMAND ID on screen, and nothing here
+/// masks it. Safe for the two ways an id can arrive, for two different
+/// reasons:
+///
+/// - From a plugin topic, `parse_untrusted` has already refused any id it
+///   could not paint (`is_own_command` rejects terminal hazards, `U+FFFD` and
+///   invisibles outright, and never rewrites), so what reaches here is clean
+///   by construction.
+/// - From the BUILT-IN corpus, it is not: trusted mode does not charset-check
+///   a `{{cmd:…}}` id, and `parse.rs` pins that `{{cmd:\u{202E}fs.copy}}`
+///   survives with its bytes intact. What makes it safe is the documentation
+///   gate (`norte-tui/tests/help_gate.rs`): every id the corpus names is
+///   cross-checked BYTE-EXACTLY against the frontend's command vocabulary, so
+///   a spoofed id fails the build as `Issue::UnknownCommand` — it cannot ship.
+///
+/// That second invariant lives in another crate's test suite, which is why it
+/// is written down here, next to the code that relies on it. A frontend
+/// rendering a corpus that has NOT been through that gate (a third-party topic
+/// set, say) must mask the result itself.
+///
 /// ```
 /// use norte_help::{Availability, ChordResolver, CommandText, render_command};
 ///
@@ -176,23 +245,47 @@ impl CommandText {
 /// ```
 #[must_use]
 pub fn render_command(command: &str, r: &(impl ChordResolver + ?Sized)) -> CommandText {
-    if let Some(chord) = r.chord(command).filter(|c| !is_blank_id(c)) {
-        return CommandText::Chord(chord);
+    match chord_or_none(command, r) {
+        Some(chord) => CommandText::Chord(chord),
+        None => CommandText::Name(label_or_id(command, r)),
     }
+}
+
+/// Step one of the chain: the effective chord, unless it paints nothing.
+///
+/// Shared by [`render_command`] and [`rows_of`] rather than written twice, so
+/// a mark and the row below it can never disagree about whether the user has
+/// a key.
+fn chord_or_none(command: &str, r: &(impl ChordResolver + ?Sized)) -> Option<String> {
+    r.chord(command).filter(|c| !is_blank_id(c))
+}
+
+/// Steps two and three: the resolver's short label, or the command id when
+/// there is none to paint. See [`ChordResolver::label`] — a resolver with no
+/// entry must return blank, not its lookup key.
+fn label_or_id(command: &str, r: &(impl ChordResolver + ?Sized)) -> String {
     let label = r.label(command);
-    CommandText::Name(if is_blank_id(&label) {
+    if is_blank_id(&label) {
         command.to_owned()
     } else {
         label
-    })
+    }
 }
 
-/// The display text of one [`Span`].
+/// The display text of one [`Span`] — the PLAIN-TEXT path.
 ///
 /// Everything that carries its own payload renders as that payload: this
 /// function decides TEXT, never style. Whether `Strong` is bold, `Code`
 /// boxed or a `TopicLink` underlined is the renderer's business, and it still
 /// has the `Span` in hand to decide it.
+///
+/// It does flatten away the one distinction a STYLING renderer needs, though:
+/// what comes back for a `{{cmd:…}}` no longer says whether it is a key or a
+/// name. A renderer that paints keys differently from prose — which is every
+/// renderer with a key style — calls [`render_command`] for that span instead
+/// and matches on the [`CommandText`]. This function is for the renderings
+/// with no styles to choose between: `norte help` piped to a file, a
+/// clipboard copy, an assertion in a test.
 ///
 /// A [`Span::TopicLink`] renders as the id of the page it opens — the same
 /// string the reader types into the help index and the same one `see_also`
@@ -238,6 +331,33 @@ pub fn render_span(span: &Span, r: &(impl ChordResolver + ?Sized)) -> String {
 /// row IS a `CommandRow` that has been through a resolver, and a renderer
 /// that only wants to dispatch it reaches for `row.command` — the same
 /// dispatch key the palette sends, never painted.
+///
+/// ```
+/// use norte_help::{Availability, ChordResolver, Lang, Reason, rows_of, topic};
+///
+/// struct ReadOnly;
+///
+/// impl ChordResolver for ReadOnly {
+///     fn chord(&self, command: &str) -> Option<String> {
+///         (command == "pane.copy").then(|| "F5".to_owned())
+///     }
+///     fn label(&self, command: &str) -> String {
+///         command.to_owned()
+///     }
+///     fn availability(&self, _command: &str) -> Availability {
+///         Availability::Unavailable { reason: Reason::ReadOnlyBackend }
+///     }
+/// }
+///
+/// let copying = topic(Lang::En, "copying").expect("the `copying` topic");
+/// let row = &rows_of(copying, &ReadOnly)[0];
+/// // Everything a renderer needs for one line: what to dispatch, what to
+/// // call it, which key to show, and why it is dimmed.
+/// assert_eq!(row.row.command, "pane.copy");
+/// assert_eq!(row.label, "pane.copy");
+/// assert_eq!(row.chord.as_deref(), Some("F5"));
+/// assert_eq!(row.row.avail.reason(), Some(Reason::ReadOnlyBackend));
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedRow {
     /// The command and its availability in this context.
@@ -286,25 +406,17 @@ pub fn rows_of(topic: &Topic, r: &(impl ChordResolver + ?Sized)) -> Vec<Resolved
     topic
         .commands
         .iter()
-        .map(|command| {
-            // The same fallback chain as a `{{cmd:…}}` mark, so a command
-            // reads the same in the prose and in the table below it.
-            let (chord, label) = match render_command(command, r) {
-                CommandText::Chord(chord) => (Some(chord), r.label(command)),
-                CommandText::Name(name) => (None, name),
-            };
-            ResolvedRow {
-                row: CommandRow {
-                    command: command.clone(),
-                    avail: r.availability(command),
-                },
-                label: if is_blank_id(&label) {
-                    command.clone()
-                } else {
-                    label
-                },
-                chord,
-            }
+        .map(|command| ResolvedRow {
+            row: CommandRow {
+                command: command.clone(),
+                avail: r.availability(command),
+            },
+            // The same two steps a `{{cmd:…}}` mark takes, through the same
+            // helpers, so a command reads the same in the prose and in the
+            // table below it. A row shows BOTH — the chord column and the
+            // label column — where a mark shows whichever it has.
+            label: label_or_id(command, r),
+            chord: chord_or_none(command, r),
         })
         .collect()
 }
@@ -312,7 +424,7 @@ pub fn rows_of(topic: &Topic, r: &(impl ChordResolver + ?Sized)) -> Vec<Resolved
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Availability, Reason, Span, TopicId};
+    use crate::model::{Availability, Block, Reason, Span, TopicId};
 
     /// A frontend, faked: one command bound, one unavailable, and a label
     /// built from the id so a wrong lookup is visible in the assertion.
@@ -322,6 +434,7 @@ mod tests {
         fn chord(&self, command: &str) -> Option<String> {
             match command {
                 "pane.copy" => Some("F5".to_owned()),
+                "pane.delete" => Some("F8".to_owned()),
                 // A resolver that answers with something that paints
                 // nothing: the render must not put it on screen.
                 "pane.move" => Some("  ".to_owned()),
@@ -332,8 +445,10 @@ mod tests {
         fn label(&self, command: &str) -> String {
             match command {
                 // A label that paints nothing is the same defect one step
-                // further down the fallback chain.
-                "task.cancel" => String::new(),
+                // further down the fallback chain. `pane.delete` has one
+                // missing while HAVING a key: the two columns of a row fall
+                // back independently.
+                "task.cancel" | "pane.delete" => String::new(),
                 _ => format!("label of {command}"),
             }
         }
@@ -346,6 +461,24 @@ mod tests {
             } else {
                 Availability::Available
             }
+        }
+    }
+
+    /// A frontend that knows nothing: no keymap and no catalogue. Every
+    /// question falls through to the last step of the chain.
+    struct Bare;
+
+    impl ChordResolver for Bare {
+        fn chord(&self, _command: &str) -> Option<String> {
+            None
+        }
+
+        fn label(&self, _command: &str) -> String {
+            String::new()
+        }
+
+        fn availability(&self, _command: &str) -> Availability {
+            Availability::Available
         }
     }
 
@@ -392,6 +525,64 @@ mod tests {
             "task.cancel",
             "a blank label leaves the id, which is at least true"
         );
+    }
+
+    #[test]
+    fn a_row_with_a_key_but_no_label_still_names_its_command() {
+        // The two columns fall back INDEPENDENTLY: the chord is there, and
+        // the label column must not be an empty cell just because the
+        // catalogue has a hole. (`render_command` cannot cover this on its
+        // own — it stops at the chord and never looks at the label.)
+        let topic = crate::corpus::topic(crate::Lang::En, "copying").expect("`copying`");
+        let row = rows_of(topic, &Fake)
+            .into_iter()
+            .find(|r| r.row.command == "pane.delete")
+            .expect("`copying` documents `pane.delete`");
+        assert_eq!(row.chord.as_deref(), Some("F8"));
+        assert_eq!(row.label, "pane.delete");
+    }
+
+    #[test]
+    fn a_hazard_in_a_trusted_command_id_reaches_the_renderer_unmasked() {
+        // The invariant `render_command`'s rustdoc states, made visible where
+        // it is RELIED ON. Trusted mode does not charset-check a `{{cmd:…}}`
+        // id, so a bidi override in the built-in corpus arrives here intact —
+        // this module masks nothing. What keeps it off a screen is the
+        // documentation gate in `norte-tui`, which compares the id against
+        // the command vocabulary byte-exactly and fails the build.
+        //
+        // Driven through the real path (corpus text → parser → span → render)
+        // rather than a hand-built `Span`: the claim is about what the
+        // PARSER hands over, and the fixture is the canonical one.
+        let (_, line) = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .map(|n| (n.id.clone(), String::from_utf8_lossy(&n.bytes).into_owned()))
+            .find(|(id, _)| id == "cmd_mark_bidi_payload")
+            .expect("the fixture lives in the canonical corpus");
+        let doc = format!("+++\nid = \"t\"\ntitle = \"T\"\n+++\n{line}\n");
+        let parsed = crate::parse::parse_trusted(&doc).expect("a valid topic");
+        let Some(Block::Paragraph(spans)) = parsed.topic.blocks.first() else {
+            panic!("one paragraph: {:?}", parsed.topic.blocks);
+        };
+        let [Span::CommandRef(id)] = spans.as_slice() else {
+            panic!("one command reference: {spans:?}");
+        };
+
+        // `Bare` knows nothing about the spoofed id — which is what a real
+        // resolver is, since the id matches no command: the chain runs all
+        // the way to its last step, the id itself.
+        let rendered = render_span(&spans[0], &Bare);
+        assert_eq!(
+            rendered.as_bytes(),
+            id.as_bytes(),
+            "no key is bound to a spoofed id, so the chain reaches the id \
+             itself — and hands it over byte for byte"
+        );
+        assert!(
+            rendered.contains('\u{202E}'),
+            "this crate does not mask; the gate is what refuses to ship it"
+        );
+        assert_ne!(id.as_str(), "pane.copy", "it never passes for a command");
     }
 
     #[test]

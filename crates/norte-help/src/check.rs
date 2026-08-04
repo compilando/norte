@@ -732,6 +732,14 @@ pub fn check_commands(known: &[&str], allow: &[&str]) -> Vec<Issue> {
 /// accident of corpus order, which is worse: it works, until someone reorders
 /// the table.
 ///
+/// There is a THIRD, and it is not checked here yet: a known context that NO
+/// topic claims, where F1 opens nothing at all. The spec asks for exactly one
+/// topic per context, and today only `browse` has one — the viewer and the
+/// dialogs have none, and this function is silent about it. Adding it needs a
+/// variant on [`Issue`] (and therefore a line in its `Display`), which is
+/// phase H3c's job, when F1 actually performs the lookup; `norte-tui`'s
+/// `tests/help_gate.rs` carries the same note at the call site.
+///
 /// ```
 /// use norte_help::{Issue, Lang, Origin, Topic, TopicId, check_contexts_in};
 ///
