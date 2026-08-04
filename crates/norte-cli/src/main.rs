@@ -18,6 +18,57 @@ use norte_vfs_local::LocalProvider;
 
 mod doctor;
 
+/// Ruta del binario de frontend a lanzar: el HERMANO de `exe` si existe,
+/// si no el nombre pelado (que el `PATH` resolverá). Puro para poder
+/// fijarlo en un test — el orden importa: un `norte` recién instalado tiene
+/// que preferir el `norte-tui` de su propia tanda antes que uno más viejo
+/// que ande antes en el `PATH`.
+fn frontend_program(exe: Option<&std::path::Path>, bin: &str) -> PathBuf {
+    exe.and_then(std::path::Path::parent)
+        .map(|d| d.join(bin))
+        .filter(|p| p.is_file())
+        .unwrap_or_else(|| PathBuf::from(bin))
+}
+
+/// Localiza un binario HERMANO (`norte-tui`/`norte-gui`) y le cede el
+/// proceso. Busca primero JUNTO a este ejecutable —así un `norte` recién
+/// instalado usa el `norte-tui` de la misma tanda, y no otro más viejo que
+/// haya antes en el `PATH`— y si no está, deja que el `PATH` decida.
+///
+/// En unix hace `exec`: el frontend HEREDA el proceso (mismo pid, misma
+/// terminal, mismas señales), así que Ctrl-C, el tamaño del terminal y el
+/// código de salida se comportan como si se hubiera lanzado directamente,
+/// sin un `norte` de más esperando en medio. En el resto de plataformas se
+/// lanza como hijo y se propaga su código de salida.
+fn exec_frontend(bin: &str, args: &[std::ffi::OsString]) -> anyhow::Result<ExitCode> {
+    let programa = frontend_program(std::env::current_exe().ok().as_deref(), bin);
+    let mut cmd = std::process::Command::new(&programa);
+    cmd.args(args);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        // `exec` solo VUELVE si falló: el error de abajo es el único camino.
+        let e = cmd.exec();
+        Err(anyhow::Error::new(e).context(format!(
+            "no se pudo ejecutar `{bin}` ({}) — instálalo con `cargo install --path crates/{bin}`",
+            programa.display()
+        )))
+    }
+    #[cfg(not(unix))]
+    {
+        let estado = cmd.status().with_context(|| {
+            format!(
+                "no se pudo ejecutar `{bin}` ({}) — instálalo con `cargo install --path crates/{bin}`",
+                programa.display()
+            )
+        })?;
+        Ok(ExitCode::from(
+            u8::try_from(estado.code().unwrap_or(1)).unwrap_or(1),
+        ))
+    }
+}
+
 /// Código de salida convencional para "interrumpido por SIGINT".
 const EXIT_CANCELLED: u8 = 130;
 
@@ -156,6 +207,23 @@ enum Cmd {
     Audit {
         #[command(subcommand)]
         cmd: AuditCmd,
+    },
+    /// Abre el frontend de TERMINAL (`norte-tui`) en este directorio (o en
+    /// el que se pase). Los argumentos viajan tal cual al binario
+    /// (`norte tui --help` los explica)
+    #[command(disable_help_flag = true)]
+    Tui {
+        /// Argumentos para `norte-tui`, verbatim
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<std::ffi::OsString>,
+    },
+    /// Abre el frontend GRÁFICO (`norte-gui`). Los argumentos viajan tal
+    /// cual al binario
+    #[command(disable_help_flag = true)]
+    Gui {
+        /// Argumentos para `norte-gui`, verbatim
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<std::ffi::OsString>,
     },
     /// Diagnósticos de solo lectura sobre capas de config y keymaps (H2)
     Doctor {
@@ -394,6 +462,14 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     if let Cmd::Audit { cmd } = cli.cmd {
         return audit_cmd(cmd).await;
     }
+    // Los frontends son procesos APARTE (el TUI toma la terminal, la GUI
+    // abre ventana): este CLI solo los localiza y les cede el proceso —
+    // nada de engine ni daemon aquí.
+    match cli.cmd {
+        Cmd::Tui { ref args } => return exec_frontend("norte-tui", args),
+        Cmd::Gui { ref args } => return exec_frontend("norte-gui", args),
+        _ => {}
+    }
     // Doctor es solo-lectura sobre config/keymaps (H2): ni engine ni daemon.
     if let Cmd::Doctor { json } = cli.cmd {
         return doctor_cmd(json).await;
@@ -535,7 +611,11 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         }
         Cmd::Plugin { cmd } => plugin_cmd(&backend, cmd).await,
         Cmd::Index { cmd } => index_cmd(&backend, cmd).await,
-        Cmd::Audit { .. } | Cmd::Ai { .. } | Cmd::Doctor { .. } => unreachable!("manejado arriba"),
+        Cmd::Audit { .. }
+        | Cmd::Ai { .. }
+        | Cmd::Doctor { .. }
+        | Cmd::Tui { .. }
+        | Cmd::Gui { .. } => unreachable!("manejado arriba"),
         #[cfg(unix)]
         Cmd::Daemon { .. } | Cmd::Mcp { .. } | Cmd::Policy { .. } | Cmd::Undo { .. } => {
             unreachable!("manejado arriba")
@@ -1906,5 +1986,35 @@ mod tests {
         assert_eq!(tab, "a\\tb");
         assert_eq!(render_attr_value(&AttrValue::Uint(7)), "7");
         assert_eq!(render_attr_value(&AttrValue::Unknown), "?");
+    }
+}
+
+#[cfg(test)]
+mod frontend_tests {
+    use super::frontend_program;
+
+    /// El hermano de al lado GANA al `PATH`: `norte` y `norte-tui` se
+    /// instalan juntos, y mezclarlos con otra tanda es justo el fallo que
+    /// costó una sesión de depuración (un binario de julio leyendo una
+    /// config de agosto).
+    #[test]
+    fn prefiere_el_binario_hermano_y_si_no_cae_al_path() {
+        let d = tempfile::tempdir().expect("tempdir");
+        let exe = d.path().join("norte");
+        std::fs::write(&exe, b"#!/bin/true\n").expect("write");
+        // Sin hermano todavía: nombre pelado para que resuelva el PATH.
+        assert_eq!(
+            frontend_program(Some(&exe), "norte-tui"),
+            std::path::PathBuf::from("norte-tui")
+        );
+        // Con hermano: ruta absoluta a ESE.
+        let hermano = d.path().join("norte-tui");
+        std::fs::write(&hermano, b"#!/bin/true\n").expect("write");
+        assert_eq!(frontend_program(Some(&exe), "norte-tui"), hermano);
+        // Sin saber dónde estamos: el PATH decide.
+        assert_eq!(
+            frontend_program(None, "norte-gui"),
+            std::path::PathBuf::from("norte-gui")
+        );
     }
 }

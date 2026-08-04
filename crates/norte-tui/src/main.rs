@@ -568,10 +568,13 @@ fn apply_fill_msg(app: &mut App, fill: &mut Option<Fill>, pane: usize, msg: Opti
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Args: preset posicional (`norte-tui vim`, capa MÁS alta sobre
-    // norte.toml) + flags `--daemon`/`--socket` (fase 3 M2). Parseo a mano:
-    // el TUI evita clap para no arrastrar su peso en el arranque.
-    let (cli_preset, cli_daemon, cli_socket) = parse_args();
+    // Args: DIR posicional + `--preset`/`--daemon`/`--socket`. `--help` y
+    // `--version` salen ANTES de tocar el terminal (antes se ignoraban como
+    // flag desconocido y el binario moría al no poder abrir la TTY).
+    let Some(args) = args_or_exit(parse_args(std::env::args_os().skip(1)))? else {
+        return Ok(()); // `--help`/`--version`: ya impreso.
+    };
+    let (cli_preset, cli_daemon, cli_socket) = (args.preset, args.daemon, args.socket);
     let layers = config::standard_layers();
     let cfg = config::load_async(layers.clone())
         .await
@@ -598,7 +601,17 @@ async fn main() -> Result<()> {
 
     let mut backend = make_backend(&cfg, cli_daemon, cli_socket).await?;
 
-    let cwd = std::env::current_dir().context("cwd")?;
+    // El DIR posicional manda sobre el `cwd`; se valida aquí para dar un
+    // error claro en vez de un listado fallido dentro del TUI ya arrancado.
+    let cwd = match args.dir {
+        Some(d) => {
+            let meta = std::fs::metadata(&d)
+                .with_context(|| format!("no se puede abrir {}", d.display()))?;
+            anyhow::ensure!(meta.is_dir(), "{} no es un directorio", d.display());
+            std::path::absolute(&d).unwrap_or(d)
+        }
+        None => std::env::current_dir().context("cwd")?,
+    };
     // Un cwd UNC de Windows (\\server\share, \\wsl$\…) ya round-trip-ea:
     // vpath_from_native lo mete como primer segmento y to_native lo restituye
     // como base de la raíz del OS (#22). Un cwd irrepresentable aún da error
@@ -707,25 +720,95 @@ async fn main() -> Result<()> {
     res
 }
 
-/// Parsea los argumentos: preset posicional + `--daemon`/`--socket`.
-fn parse_args() -> (Option<String>, bool, Option<std::path::PathBuf>) {
-    let mut preset = None;
-    let mut daemon = false;
-    let mut socket = None;
-    let mut it = std::env::args_os().skip(1);
+/// Lo que la línea de comandos pide (parseo a mano: el TUI evita clap para
+/// no arrastrar su peso en el arranque).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Args {
+    /// Directorio de arranque (posicional). `None` = el `cwd`.
+    dir: Option<std::path::PathBuf>,
+    /// Preset de keymap (`--preset vim`), capa MÁS alta sobre `norte.toml`.
+    preset: Option<String>,
+    /// Hablar con el daemon en vez del core embebido.
+    daemon: bool,
+    /// Socket del daemon.
+    socket: Option<std::path::PathBuf>,
+    /// Imprimir ayuda y salir.
+    help: bool,
+    /// Imprimir versión y salir.
+    version: bool,
+    /// Flag desconocido encontrado (se nombra en el error).
+    unknown: Option<String>,
+}
+
+/// Texto de `--help`. En INGLÉS y sin Fluent a propósito: se imprime ANTES
+/// de negociar el idioma (que sale de la config, que aún no se ha leído).
+const USAGE: &str = "\
+norte-tui — orthodox file manager, terminal frontend
+
+Usage: norte-tui [OPTIONS] [DIR]
+
+Arguments:
+  [DIR]  Directory to start in (default: the current directory)
+
+Options:
+      --preset <NAME>  Keymap preset (orthodox|vim|cua); overrides norte.toml
+      --daemon         Talk to the daemon instead of the embedded core
+      --socket <PATH>  Daemon socket (default: $XDG_RUNTIME_DIR/norte/daemon.sock)
+  -h, --help           Print help
+  -V, --version        Print version
+";
+
+/// Resuelve los argumentos "de salida inmediata": imprime `--help`/
+/// `--version` (devolviendo `None`, el caller termina) y convierte un flag
+/// desconocido en error. Antes `--help` caía en el brazo de "ignora" y el
+/// binario seguía hasta intentar tomar la TTY, donde moría con un panic de
+/// ratatui.
+fn args_or_exit(args: Args) -> Result<Option<Args>> {
+    if args.help {
+        print!("{USAGE}");
+        return Ok(None);
+    }
+    if args.version {
+        println!("norte-tui {}", env!("CARGO_PKG_VERSION"));
+        return Ok(None);
+    }
+    if let Some(flag) = &args.unknown {
+        anyhow::bail!("unknown flag `{flag}` — try `norte-tui --help`");
+    }
+    Ok(Some(args))
+}
+
+/// Parsea los argumentos (SIN `argv[0]`: el caller lo salta). Un flag DESCONOCIDO ya no se traga en silencio:
+/// se nombra y el binario sale con error, en vez de arrancar ignorándolo (o,
+/// peor, de intentar tomar el terminal para morir después — que es lo que
+/// hacía `--help`).
+fn parse_args<I, S>(argv: I) -> Args
+where
+    I: IntoIterator<Item = S>,
+    S: Into<std::ffi::OsString>,
+{
+    let mut out = Args::default();
+    let mut it = argv.into_iter().map(Into::into);
     while let Some(arg) = it.next() {
-        let a = arg.to_string_lossy();
-        match a.as_ref() {
-            "--daemon" => daemon = true,
-            "--socket" => {
-                socket = it.next().map(std::path::PathBuf::from);
+        let a = arg.to_string_lossy().into_owned();
+        match a.as_str() {
+            "-h" | "--help" => out.help = true,
+            "-V" | "--version" => out.version = true,
+            "--daemon" => out.daemon = true,
+            "--socket" => out.socket = it.next().map(std::path::PathBuf::from),
+            "--preset" => out.preset = it.next().map(|s| s.to_string_lossy().into_owned()),
+            s if s.starts_with('-') && s != "-" => {
+                if out.unknown.is_none() {
+                    out.unknown = Some(s.to_owned());
+                }
             }
-            s if s.starts_with("--") => {} // flag desconocido: ignora (compat)
-            _ if preset.is_none() => preset = Some(a.into_owned()),
+            // Posicional: el DIR de arranque. Se conserva como `OsString`
+            // (regla 1: un nombre de dir no tiene por qué ser UTF-8).
+            _ if out.dir.is_none() => out.dir = Some(std::path::PathBuf::from(arg)),
             _ => {}
         }
     }
-    (preset, daemon, socket)
+    out
 }
 
 /// Elige el transporte (regla 7): `--daemon` o `[daemon] mode = daemon`
@@ -5464,5 +5547,66 @@ mod refresh_ritual_tests {
             "el fill del pane 1 (no re-listado) sobrevive al Esc a medias"
         );
         assert!(lp.is_empty(), "la dedup de la sonda #52 caduca igualmente");
+    }
+}
+
+#[cfg(test)]
+mod parse_args_tests {
+    use super::{Args, parse_args};
+
+    /// El posicional es el DIR de arranque (antes era el preset de keymap,
+    /// que nadie adivinaba); el preset pasa a `--preset`.
+    #[test]
+    fn el_posicional_es_el_dir_y_el_preset_es_un_flag() {
+        let a = parse_args(["/tmp/x", "--preset", "vim"]);
+        assert_eq!(a.dir.as_deref(), Some(std::path::Path::new("/tmp/x")));
+        assert_eq!(a.preset.as_deref(), Some("vim"));
+        assert!(!a.daemon && a.socket.is_none());
+    }
+
+    /// `--help`/`--version` se RECONOCEN: antes caían en el brazo de "flag
+    /// desconocido, ignora" y el binario seguía hasta intentar tomar la TTY,
+    /// donde moría con un panic de ratatui en vez de imprimir la ayuda.
+    #[test]
+    fn help_y_version_se_reconocen() {
+        assert!(parse_args(["--help"]).help);
+        assert!(parse_args(["-h"]).help);
+        assert!(parse_args(["--version"]).version);
+        assert!(parse_args(["-V"]).version);
+    }
+
+    /// Un flag desconocido se NOMBRA (el caller sale con error) en vez de
+    /// arrancar como si nada.
+    #[test]
+    fn un_flag_desconocido_no_se_traga() {
+        let a = parse_args(["--nope", "/tmp"]);
+        assert_eq!(a.unknown.as_deref(), Some("--nope"));
+        assert_eq!(a.dir.as_deref(), Some(std::path::Path::new("/tmp")));
+    }
+
+    /// `--daemon`/`--socket` siguen igual, y sin argumentos no se pide nada.
+    #[test]
+    fn daemon_socket_y_vacio() {
+        let a = parse_args(["--daemon", "--socket", "/run/n.sock"]);
+        assert!(a.daemon);
+        assert_eq!(
+            a.socket.as_deref(),
+            Some(std::path::Path::new("/run/n.sock"))
+        );
+        assert_eq!(
+            parse_args(std::iter::empty::<std::ffi::OsString>()),
+            Args::default()
+        );
+    }
+
+    /// Regla 1: un dir con bytes no-UTF8 llega ENTERO al `PathBuf` (nada de
+    /// `to_string_lossy` en el camino del dato).
+    #[test]
+    #[cfg(unix)]
+    fn el_dir_no_utf8_sobrevive() {
+        use std::os::unix::ffi::OsStringExt as _;
+        let crudo = std::ffi::OsString::from_vec(b"/tmp/due\xffo".to_vec());
+        let a = parse_args([crudo.clone()]);
+        assert_eq!(a.dir.as_deref(), Some(std::path::Path::new(&crudo)));
     }
 }

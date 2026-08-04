@@ -28,13 +28,32 @@ On Windows, run this command in PowerShell:
 irm https://github.com/compilando/norte/releases/latest/download/norte-tui-installer.ps1 | iex
 ```
 
-Start the terminal interface with `norte-tui`.
-
 To install from source instead, run `make setup`, followed by:
 
 ```sh
-cargo install --path crates/norte-tui --locked
+cargo install --path crates/norte-cli --locked   # the `norte` command
+cargo install --path crates/norte-tui --locked   # terminal interface
+cargo install --path crates/norte-gui --locked   # graphical interface (optional, GPU)
 ```
+
+## Run
+
+```sh
+norte tui              # terminal interface, in the current directory
+norte tui ~/code       # ...in another directory
+norte tui --preset vim # ...with a keymap preset (orthodox|vim|cua)
+norte gui              # graphical interface
+```
+
+`norte tui` and `norte gui` hand the process over to `norte-tui` and
+`norte-gui`, which can also be launched directly — they take the same
+arguments (`norte-tui --help`). Both start in the current directory, read
+the same configuration, and need no daemon: the core runs embedded unless
+`--daemon` says otherwise.
+
+The `norte` command itself is the non-interactive side: `ls`, `cp`, `mv`,
+`rm`, `mkdir`, `connect`, `daemon`, `mcp`, `policy`, `undo`, `index`, `ai`,
+`audit`, `doctor`. Run `norte --help` for the full list.
 
 ## Documentation
 

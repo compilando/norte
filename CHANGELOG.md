@@ -709,6 +709,20 @@ independently through `PROTOCOL_VERSION`.
   only materialised when it differs from the raw name bytes (non-ASCII NFD
   names); ASCII, already-NFC, and non-UTF-8 names no longer allocate.
 
+### Added
+
+- **`norte tui` and `norte gui`:** the CLI now launches either frontend,
+  handing the process over (unix `exec`: same pid, same terminal, same
+  signals) and preferring the binary installed next to itself over
+  whatever the `PATH` finds first. Arguments pass through verbatim.
+
+- **`norte-tui` takes a starting directory** and real `--help`/
+  `--version`. The positional argument used to be the keymap preset,
+  which nobody guessed; it is now the directory to open, with the preset
+  behind `--preset`. An unknown flag is named and refused instead of
+  being silently ignored — `--help` used to fall into that branch and
+  the binary died trying to take over a terminal.
+
 ### Fixed
 
 - **The F1 help no longer disappears, and neither do the columns
