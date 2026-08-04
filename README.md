@@ -43,13 +43,14 @@ norte tui              # terminal interface, in the current directory
 norte tui ~/code       # ...in another directory
 norte tui --preset vim # ...with a keymap preset (orthodox|vim|cua)
 norte gui              # graphical interface
+norte gui ~/code       # ...in another directory
 ```
 
 `norte tui` and `norte gui` hand the process over to `norte-tui` and
-`norte-gui`, which can also be launched directly — they take the same
-arguments (`norte-tui --help`). Both start in the current directory, read
-the same configuration, and need no daemon: the core runs embedded unless
-`--daemon` says otherwise.
+`norte-gui`, which can also be launched directly — both take `[DIR]` and
+`--socket` (`--help` lists the rest). They read the same configuration. The
+TUI runs the core embedded unless `--daemon` says otherwise; the GUI always
+talks to the daemon.
 
 The `norte` command itself is the non-interactive side: `ls`, `cp`, `mv`,
 `rm`, `mkdir`, `connect`, `daemon`, `mcp`, `policy`, `undo`, `index`, `ai`,

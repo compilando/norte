@@ -716,6 +716,12 @@ independently through `PROTOCOL_VERSION`.
   signals) and preferring the binary installed next to itself over
   whatever the `PATH` finds first. Arguments pass through verbatim.
 
+- **`norte-gui` takes a starting directory** too, plus `--socket`,
+  `--help` and `--version`. Command line beats `NORTE_DIR`/`NORTE_SOCKET`,
+  which beat the current directory and the daemon's own socket — resolved
+  in one place (`LoadConfig::resolve`), with no `set_var` detour. The
+  binary also stops reporting version `0.0.0`.
+
 - **`norte-tui` takes a starting directory** and real `--help`/
   `--version`. The positional argument used to be the keymap preset,
   which nobody guessed; it is now the directory to open, with the preset

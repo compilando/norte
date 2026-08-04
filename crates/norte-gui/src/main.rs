@@ -346,6 +346,7 @@ impl NorteGui {
         window: &mut Window,
         cx: &mut Context<Self>,
         loaded: &Result<norte_frontend::config::FrontendConfig, norte_config::ConfigError>,
+        inicio: &Startup,
     ) -> Self {
         let (preset_name, theme_spec, mut startup_banner): (
             String,
@@ -516,7 +517,7 @@ impl NorteGui {
         // directamente — `quick_search_mode` ya vive ahí.
         let quick_mode = cfg_snapshot.quick_search_mode;
 
-        match LoadConfig::from_env() {
+        match LoadConfig::resolve(inicio.dir.clone(), inicio.socket.clone()) {
             Ok(cfg) => {
                 let LoadConfig { socket, dir } = cfg;
                 let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -6041,7 +6042,80 @@ fn unknown_preset_banner(preset_name: &str) -> Option<String> {
     ))
 }
 
+/// Lo que la línea de comandos fija para el arranque de la sesión, ya
+/// validado: gana al entorno en [`LoadConfig::resolve`].
+struct Startup {
+    /// Directorio inicial de ambos panes.
+    dir: Option<norte_proto::VPath>,
+    /// Socket del daemon.
+    socket: Option<std::path::PathBuf>,
+}
+
+/// Flags con valor de la GUI. Sin `--daemon`: la GUI SIEMPRE habla con el
+/// daemon (no tiene modo embebido), así que el flag no significaría nada.
+const VALUE_FLAGS: &[&str] = &["--socket"];
+
+/// Texto de `--help`. En inglés y sin Fluent, igual que el del TUI: se
+/// imprime antes de negociar el idioma (que sale de la config).
+const USAGE: &str = "\
+norte-gui — orthodox file manager, graphical frontend
+
+Usage: norte-gui [OPTIONS] [DIR]
+
+Arguments:
+  [DIR]  Directory to start in (default: $NORTE_DIR, else the current directory)
+
+Options:
+      --socket <PATH>  Daemon socket (default: $NORTE_SOCKET, else the daemon's own)
+  -h, --help           Print help
+  -V, --version        Print version
+";
+
 fn main() {
+    // Argumentos (mismo parser COMPARTIDO que el TUI,
+    // `norte_frontend::cli`): `[DIR]` posicional y `--socket`. `--help`/
+    // `--version` salen antes de abrir ventana; un flag desconocido se
+    // NOMBRA y aborta, jamás se ignora en silencio.
+    let args = norte_frontend::cli::parse(std::env::args_os().skip(1), &[], VALUE_FLAGS);
+    if args.help {
+        print!("{USAGE}");
+        return;
+    }
+    if args.version {
+        println!("norte-gui {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    if let Some(flag) = &args.unknown {
+        eprintln!("norte-gui: unknown flag `{flag}` — try `norte-gui --help`");
+        std::process::exit(2);
+    }
+    // El DIR de la línea de comandos se valida AQUÍ para fallar con un
+    // mensaje en el terminal en vez de con un banner dentro de una ventana
+    // ya abierta. Viaja (con el socket) hasta `LoadConfig::resolve`, que es
+    // el único sitio que decide entre línea de comandos, entorno y default.
+    let dir_cli = args.dir.as_ref().map(|dir| {
+        let meta = std::fs::metadata(dir).unwrap_or_else(|e| {
+            eprintln!("norte-gui: no se puede abrir {}: {e}", dir.display());
+            std::process::exit(2);
+        });
+        if !meta.is_dir() {
+            eprintln!("norte-gui: {} no es un directorio", dir.display());
+            std::process::exit(2);
+        }
+        let absoluto = std::path::absolute(dir).unwrap_or_else(|_| dir.clone());
+        norte_vfs_local::vpath_from_native(&absoluto).unwrap_or_else(|e| {
+            eprintln!(
+                "norte-gui: {} no es representable como VPath: {e}",
+                dir.display()
+            );
+            std::process::exit(2);
+        })
+    });
+    let inicio = Startup {
+        dir: dir_cli,
+        socket: args.path("--socket"),
+    };
+
     // Configuración real (C2): capas compartidas — escalares + keymap.
     // Bloqueante A PROPÓSITO: arranque, antes de que exista la ventana; no
     // hay runtime async aquí todavía. UNA sola carga (el keymap.rs de la GUI
@@ -6099,7 +6173,7 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |window, cx| cx.new(|cx| NorteGui::new(window, cx, &loaded)),
+            |window, cx| cx.new(|cx| NorteGui::new(window, cx, &loaded, &inicio)),
         )
         .expect("no se pudo abrir la ventana GPUI");
 

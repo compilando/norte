@@ -13,6 +13,7 @@
 #![warn(missing_docs)]
 
 pub mod ansi;
+pub mod cli;
 pub mod columns;
 pub mod columns_picker;
 pub mod config;

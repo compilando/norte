@@ -7,7 +7,10 @@
 # sin `*.workspace = true` ni `rust-version` heredado.
 [package]
 name = "norte-gui"
-version = "0.0.0"
+# Sigue a la versión del workspace A MANO (el crate está excluido, no puede
+# heredarla): `norte-gui --version` mentía con un 0.0.0 mientras se instala
+# junto a `norte`/`norte-tui`.
+version = "0.3.0-alpha.2"
 edition = "2024"
 publish = false
 license = "AGPL-3.0-only"

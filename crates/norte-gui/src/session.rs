@@ -32,16 +32,25 @@ pub struct LoadConfig {
 }
 
 impl LoadConfig {
-    /// Resuelve desde el entorno: `NORTE_SOCKET` o el default del daemon;
-    /// `NORTE_DIR` (wire) o el `cwd`.
+    /// Resuelve el arranque de la sesión con precedencia LÍNEA DE COMANDOS
+    /// → entorno → default: `dir`/`--socket` ganan a `NORTE_DIR`/
+    /// `NORTE_SOCKET`, que ganan al `cwd` y al socket propio del daemon.
+    /// Punto ÚNICO de esta resolución: el `main` no se cuela por
+    /// `std::env::set_var` (que además es `unsafe`, prohibido en el crate).
     ///
     /// # Errors
-    /// `NORTE_DIR` no parsea, o el `cwd` no se puede leer/convertir.
-    pub fn from_env() -> anyhow::Result<Self> {
-        let socket = match std::env::var_os("NORTE_SOCKET") {
-            Some(s) => PathBuf::from(s),
-            None => norte_core::daemon::default_socket_path(None),
+    /// `NORTE_DIR` no parsea como `VPath`, o el `cwd` no se puede leer.
+    pub fn resolve(dir: Option<VPath>, socket: Option<PathBuf>) -> anyhow::Result<Self> {
+        let socket = match socket {
+            Some(s) => s,
+            None => match std::env::var_os("NORTE_SOCKET") {
+                Some(s) => PathBuf::from(s),
+                None => norte_core::daemon::default_socket_path(None),
+            },
         };
+        if let Some(dir) = dir {
+            return Ok(Self { socket, dir });
+        }
         let dir = match std::env::var("NORTE_DIR") {
             Ok(wire) => VPath::parse(&wire)
                 .map_err(|e| anyhow::anyhow!("NORTE_DIR no es un VPath válido: {e}"))?,
