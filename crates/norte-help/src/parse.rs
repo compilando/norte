@@ -298,9 +298,10 @@ pub enum ParseError {
 /// ```
 ///
 /// The header fields (`title`, `tags`, `see_also`, `commands`, `context`) are
-/// copied RAW, which is right here and an OBLIGATION for `parse_untrusted`
-/// (task 6): `Origin::Plugin` promises "already masked", so the hostile entry
-/// point must mask the header too — the body masking never touches it.
+/// copied RAW, which is right here and would be a hole on the hostile path:
+/// [`Origin::Plugin`] promises "already masked", so [`parse_untrusted`] masks
+/// and caps the header fields it keeps and drops the rest — the body masking
+/// never touches them.
 ///
 /// # Errors
 /// [`ParseError::FrontMatter`] if the `+++` header is missing, unterminated,
@@ -313,8 +314,8 @@ pub fn parse_trusted(source: &str) -> Result<Parsed, ParseError> {
     let (blocks, truncated) = blocks_of(body, limits, false);
     Ok(Parsed {
         topic: Topic {
-            // Raw, and only sound because this is the TRUSTED corpus. Task 6
-            // masks these five fields; see the note above.
+            // Raw, and only sound because this is the TRUSTED corpus.
+            // `parse_untrusted` masks them; see the note above.
             id: TopicId::new(fm.id),
             title: fm.title,
             tags: fm.tags,
@@ -327,6 +328,175 @@ pub fn parse_trusted(source: &str) -> Result<Parsed, ParseError> {
         truncated,
         lossy: false,
     })
+}
+
+/// Ceiling, in CHARACTERS, on every string a plugin contributes to the model
+/// outside the body: the header's `id` and `title`, each entry of its
+/// `commands`, and the manifest's `publisher`.
+///
+/// 280 characters, the number the plugin manifest already applies to
+/// `description` and to a command's id and title
+/// (`CONFIG_DESCRIPTION_MAX_CHARS`). Reusing it means one number a reviewer
+/// has to hold in their head instead of two, and it is generous enough for a
+/// real title while far too small to paint a screen.
+///
+/// CHARACTERS and not bytes for the manifest's own reason: a non-ASCII
+/// language must not pay the cap early. Masking replaces one character with
+/// exactly one `U+FFFD`, so the cap holds identically before and after it.
+///
+/// This is a DISPLAY bound, not a memory one — [`Limits::max_bytes`] already
+/// bounds the whole source. What it buys is that a plugin cannot hand the UI
+/// a 60 KiB "title".
+const MAX_HEADER_CHARS: usize = 280;
+
+/// Truncates to `max` bytes without splitting a UTF-8 character (when the
+/// bytes are UTF-8 at all).
+///
+/// The walk back cannot underflow and cannot loop: `cut` only decreases, and
+/// the guards stop it at 0. When `max >= bytes.len()` nothing is examined,
+/// so a slice of pure continuation bytes — which is not valid UTF-8 at all —
+/// either comes back whole or is walked down to empty.
+fn cut_at_boundary(bytes: &[u8], max: usize) -> &[u8] {
+    let mut cut = max.min(bytes.len());
+    // Walk back while the cut byte is a `10xxxxxx` continuation byte.
+    while cut > 0 && cut < bytes.len() && bytes[cut] & 0b1100_0000 == 0b1000_0000 {
+        cut -= 1;
+    }
+    &bytes[..cut]
+}
+
+/// Masks and bounds ONE third-party string on its way into the model, raising
+/// `truncated` if the cap bit.
+///
+/// Every string a plugin header contributes goes through here. [`Origin`]
+/// documents a plugin topic as "third-party text, already masked and bounded
+/// by the parser", and that promise is only true if it holds for the header
+/// too: the body masking of [`blocks_of`] never touches these fields.
+fn header_string(s: &str, truncated: &mut bool) -> String {
+    let mut chars = s.chars();
+    let cut: String = chars.by_ref().take(MAX_HEADER_CHARS).collect();
+    // `by_ref().take(n)` consumed exactly `n`, so this is the (n+1)-th
+    // character: its presence is the only evidence that something was cut,
+    // and it costs one step instead of a second full count.
+    *truncated |= chars.next().is_some();
+    mask_if(cut, true)
+}
+
+/// Parses a plugin `help.md`. NEVER fails: with no header it falls back to
+/// `fallback_id` for id and title, decodes invalid UTF-8 lossily, bounds by
+/// [`Limits::untrusted`], and masks terminal hazards AT PARSE TIME (masking
+/// lives where the data is built, exactly as the palette rows do, instead of
+/// being scattered across every frontend).
+///
+/// ```
+/// use norte_help::{Origin, parse_untrusted};
+///
+/// // Not even UTF-8, and no header: it still comes back as a topic.
+/// let parsed = parse_untrusted(b"hi \xff\xfe", "acme.ftp", None);
+/// assert_eq!(parsed.topic.id.as_str(), "acme.ftp");
+/// assert_eq!(parsed.topic.title, "acme.ftp");
+/// assert!(parsed.lossy && !parsed.truncated);
+/// assert!(matches!(parsed.topic.origin, Origin::Plugin { .. }));
+/// ```
+///
+/// # What a plugin header may and may not say
+///
+/// `tags`, `see_also` and `context` are DROPPED, deliberately, even when the
+/// header declares them. A plugin does not get to file itself under the
+/// host's index groups (`tags`), link INTO host topics (`see_also`), or claim
+/// a UI context so that F1 opens its page instead of the host's
+/// (`context`). Only the `commands` it documents survive, masked and capped
+/// like every other header string; enforcing that those ids are namespaced to
+/// the plugin is host-side work and lands with the registry in phase H3e —
+/// this crate only guarantees the fields it drops.
+///
+/// `id` and `title` are honoured when the header declares them, because a
+/// plugin naming its own page is exactly what the header is for — unless what
+/// it declares is BLANK, in which case `fallback_id` takes over rather than
+/// leaving an unaddressable topic or a nameless page. Both are
+/// masked and capped at 280 characters — the same cap the plugin manifest
+/// applies to `description` — as is `publisher`, which arrives from the
+/// manifest with no bound of its own. A cap that bit raises
+/// [`Parsed::truncated`], so the UI badge tells the reader that what they are
+/// looking at is not everything the plugin wrote.
+#[must_use]
+pub fn parse_untrusted(bytes: &[u8], fallback_id: &str, publisher: Option<String>) -> Parsed {
+    let limits = Limits::untrusted();
+    let mut truncated = bytes.len() > limits.max_bytes;
+    let head = cut_at_boundary(bytes, limits.max_bytes);
+    let text = String::from_utf8_lossy(head);
+    // `Cow::Owned` is exactly "at least one byte was replaced": the flag
+    // means what it says, no heuristic involved.
+    let lossy = matches!(text, std::borrow::Cow::Owned(_));
+
+    // ANY header failure degrades to "there is no header", never to an error:
+    // the whole text becomes the body. A cut that lands mid-header is the
+    // common case here, and losing the entire document over it would be a
+    // denial of service dressed up as strictness.
+    let (fm, body) = match front_matter::split(&text) {
+        Ok((fm, body)) => (Some(fm), body),
+        Err(_) => (None, text.as_ref()),
+    };
+    let (blocks, cut) = blocks_of(body, limits, true);
+    truncated |= cut;
+
+    // A header field that is BLANK falls back too, and blank is the parser's
+    // own notion of it (`is_blank_id`): whitespace or `U+FFFD`, so a field
+    // whose bytes were invalid UTF-8, or nothing but masked hazards, counts.
+    // `id = ""` would otherwise produce an unaddressable topic and an empty
+    // title would render as a nameless page — both are one keystroke away for
+    // a hostile author, and the plugin id is the only name we can trust.
+    let id = header_string(
+        fm.as_ref().map_or(fallback_id, |f| f.id.as_str()),
+        &mut truncated,
+    );
+    let id = if is_blank_id(&id) {
+        header_string(fallback_id, &mut truncated)
+    } else {
+        id
+    };
+    let title = header_string(
+        fm.as_ref().map_or(fallback_id, |f| f.title.as_str()),
+        &mut truncated,
+    );
+    let title = if is_blank_id(&title) {
+        header_string(fallback_id, &mut truncated)
+    } else {
+        title
+    };
+    let commands = fm.map_or_else(Vec::new, |f| {
+        f.commands
+            .iter()
+            .map(|c| header_string(c, &mut truncated))
+            .collect()
+    });
+    // The catalogue validates a plugin id to reverse-DNS ASCII, so masking is
+    // a no-op for every id that got that far. It runs anyway: this entry point
+    // is fed over the wire in phase H3e and must not depend on a caller's
+    // validation for a claim it makes itself.
+    let origin_id = header_string(fallback_id, &mut truncated);
+    let publisher = publisher.map(|p| header_string(&p, &mut truncated));
+
+    Parsed {
+        topic: Topic {
+            id: TopicId::new(id),
+            title,
+            // Dropped on purpose; see the rustdoc above.
+            tags: Vec::new(),
+            see_also: Vec::new(),
+            commands,
+            context: Vec::new(),
+            blocks,
+            origin: Origin::Plugin {
+                id: origin_id,
+                publisher,
+                truncated,
+                lossy,
+            },
+        },
+        truncated,
+        lossy,
+    }
 }
 
 /// Turns the body into blocks. `mask` masks terminal hazards in every text
@@ -1510,6 +1680,42 @@ p\u{202E}ara\n\n\
                 Block::Paragraph(vec![Span::Text("three".to_owned())]),
             ]
         );
+    }
+
+    #[test]
+    fn the_byte_cut_never_underflows_and_never_loops() {
+        // The three degenerate inputs of the backward walk. Each one used to
+        // be a plausible panic or hang on the path that reads a plugin file.
+        assert_eq!(cut_at_boundary(b"abc", 0), b"", "max == 0 examines nothing");
+        assert_eq!(
+            cut_at_boundary(b"abc", 99),
+            b"abc",
+            "max > len is not a cut, and the guard keeps the index in range"
+        );
+        // Pure continuation bytes: not valid UTF-8 at ANY offset, so the walk
+        // has no boundary to find and must stop at 0 instead of stepping
+        // below it. The bytes are exactly what a lossy decode later turns
+        // into `U+FFFD`.
+        let all_cont = [0x80_u8; 16];
+        assert_eq!(cut_at_boundary(&all_cont, 8), b"", "walked down to empty");
+        assert_eq!(
+            cut_at_boundary(&all_cont, 16),
+            &all_cont,
+            "a cut at the end examines nothing, invalid or not"
+        );
+        assert_eq!(cut_at_boundary(&[], 0), b"");
+        assert_eq!(cut_at_boundary(&[], 8), b"");
+
+        // The real job: a multi-byte character straddling the cut.
+        assert_eq!(cut_at_boundary("añ".as_bytes(), 2), b"a");
+        assert_eq!(cut_at_boundary("añ".as_bytes(), 3), "añ".as_bytes());
+        for max in 0..=4 {
+            let out = cut_at_boundary("日x".as_bytes(), max);
+            assert!(
+                std::str::from_utf8(out).is_ok(),
+                "max={max}: cut a character in half"
+            );
+        }
     }
 
     #[test]
