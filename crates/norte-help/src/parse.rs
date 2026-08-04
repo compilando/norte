@@ -96,6 +96,26 @@ impl Closers {
     }
 }
 
+/// Is this id nothing but blanks? An id that is must never become a live
+/// mark: the corpus checks read a `CommandRef` as a claim that the command
+/// exists.
+///
+/// `trim().is_empty()` is not enough, and the gap is on the hostile path.
+/// Masking runs BEFORE the span parse (see [`spans_masked`]) and several
+/// members of the hazard set are WHITESPACE — `\t`, `\r`, U+000B, U+000C,
+/// U+0085, U+2028 and U+2029. Masking turns each of them into `U+FFFD`, which
+/// is NOT whitespace, so a plain trim finds content where there was none and
+/// `{{cmd:\t}}` fabricates a command reference out of a tab.
+///
+/// `U+FFFD` counts as blank in EVERY mode, trusted included, rather than only
+/// when `mask` is on: it is never part of a real command or topic id, and one
+/// rule that always holds is worth more than a mode-dependent one nobody can
+/// keep in their head. The consequence is deliberate: an id whose bytes were
+/// invalid UTF-8 (lossy-decoded to `U+FFFD`) also stays literal text.
+fn is_blank_id(id: &str) -> bool {
+    id.chars().all(|c| c.is_whitespace() || c == '\u{FFFD}')
+}
+
 /// `{{cmd:…}}` and `[[…]]`, the corpus' two own marks.
 fn take_mark(rest: &str, closers: &mut Closers) -> Option<(Span, usize)> {
     if closers.cmd
@@ -107,7 +127,7 @@ fn take_mark(rest: &str, closers: &mut Closers) -> Option<(Span, usize)> {
             return None;
         };
         let id = after[..end].trim();
-        if id.is_empty() {
+        if is_blank_id(id) {
             return None;
         }
         return Some((
@@ -124,7 +144,7 @@ fn take_mark(rest: &str, closers: &mut Closers) -> Option<(Span, usize)> {
             return None;
         };
         let id = after[..end].trim();
-        if id.is_empty() {
+        if is_blank_id(id) {
             return None;
         }
         return Some((
@@ -170,11 +190,24 @@ pub struct Limits {
     pub max_bytes: usize,
     /// Maximum number of blocks a body may produce. Beyond it the parser
     /// stops and raises [`Parsed::truncated`], keeping everything already
-    /// parsed.
+    /// parsed. It bounds the block COUNT and nothing else — a single block
+    /// can hold an arbitrary number of cells or items, which is what
+    /// [`Limits::max_cells`] is for.
     pub max_blocks: usize,
     /// Maximum bytes of a single line, code-fence content included. A longer
     /// line is cut on a `char` boundary; the rest of the line is dropped.
     pub max_line_bytes: usize,
+    /// Maximum table cells a whole body may produce, header cells included.
+    ///
+    /// This is the only ceiling on the PRODUCT of a table's width by its
+    /// height, and without it the row normalisation is a memory amplifier:
+    /// rows are padded to the header width, so a 1024-cell header followed by
+    /// 31744 one-byte rows turns 64 KiB of source into 32.5M cells and 750
+    /// MiB of RSS. Neither of the other ceilings sees it — `max_blocks`
+    /// counts a whole table as ONE block and `max_line_bytes` bounds the
+    /// width, never the product. The budget runs across the entire body, not
+    /// per table, otherwise `max_blocks` tables could each spend it in full.
+    pub max_cells: usize,
 }
 
 impl Limits {
@@ -191,6 +224,7 @@ impl Limits {
             max_bytes: 256 * 1024,
             max_blocks: 4096,
             max_line_bytes: 8 * 1024,
+            max_cells: 64 * 1024,
         }
     }
 
@@ -208,6 +242,7 @@ impl Limits {
             max_bytes: 64 * 1024,
             max_blocks: 512,
             max_line_bytes: 2 * 1024,
+            max_cells: 8 * 1024,
         }
     }
 }
@@ -217,8 +252,15 @@ impl Limits {
 pub struct Parsed {
     /// The parsed topic.
     pub topic: Topic,
-    /// Some limit of [`Limits`] bit, and content was dropped. It feeds the
-    /// UI badge: a reader must never mistake a cut topic for a complete one.
+    /// A [`Limits`] ceiling was hit and the parser stopped short. It feeds
+    /// the UI badge: a reader must never mistake a cut topic for a complete
+    /// one.
+    ///
+    /// It is exactly "a ceiling was hit", not "every byte the source had is
+    /// in the model". One shape of loss is deliberately NOT flagged: cells
+    /// past the header width of a table, which `normalise_row` drops because
+    /// they have no column to live in — flagging them would badge every
+    /// topic with a typo'd table row as truncated.
     pub truncated: bool,
     /// The source was not valid UTF-8 and was decoded lossily. Always `false`
     /// for [`parse_trusted`], whose input is already a `&str`.
@@ -255,6 +297,11 @@ pub enum ParseError {
 /// );
 /// ```
 ///
+/// The header fields (`title`, `tags`, `see_also`, `commands`, `context`) are
+/// copied RAW, which is right here and an OBLIGATION for `parse_untrusted`
+/// (task 6): `Origin::Plugin` promises "already masked", so the hostile entry
+/// point must mask the header too — the body masking never touches it.
+///
 /// # Errors
 /// [`ParseError::FrontMatter`] if the `+++` header is missing, unterminated,
 /// carries trailing content on its closing fence, or is not valid TOML. The
@@ -266,6 +313,8 @@ pub fn parse_trusted(source: &str) -> Result<Parsed, ParseError> {
     let (blocks, truncated) = blocks_of(body, limits, false);
     Ok(Parsed {
         topic: Topic {
+            // Raw, and only sound because this is the TRUSTED corpus. Task 6
+            // masks these five fields; see the note above.
             id: TopicId::new(fm.id),
             title: fm.title,
             tags: fm.tags,
@@ -285,16 +334,21 @@ pub fn parse_trusted(source: &str) -> Result<Parsed, ParseError> {
 ///
 /// Line-oriented and single-pass: the grammar has no nesting, so a block is
 /// decided by the prefix of its first line and nothing needs to be
-/// backtracked. Returns the blocks and whether any limit bit.
+/// backtracked. Returns the blocks and whether a [`Limits`] ceiling was hit.
 fn blocks_of(body: &str, limits: Limits, mask: bool) -> (Vec<Block>, bool) {
     let mut out = Vec::new();
     let mut truncated = false;
     let mut lines = body.lines().peekable();
     let mut para: Vec<String> = Vec::new();
+    let mut cells_left = limits.max_cells;
 
     while let Some(raw) = lines.next() {
         if out.len() >= limits.max_blocks {
-            truncated = true;
+            // Only content LOST is truncation. A body that ends in blank
+            // lines exactly at the cap lost nothing, and a badge that cries
+            // "truncated" over trailing whitespace teaches the reader to
+            // ignore it.
+            truncated |= !raw.trim().is_empty() || lines.any(|l| !l.trim().is_empty());
             break;
         }
         let (line, cut) = clamp_line(raw, limits);
@@ -316,13 +370,15 @@ fn blocks_of(body: &str, limits: Limits, mask: bool) -> (Vec<Block>, bool) {
                 }
                 let (l, cut) = clamp_line(l, limits);
                 truncated |= cut;
-                text.push_str(l);
+                // Mask each line, never the assembled text: `\n` is a control
+                // character and therefore a hazard, so masking afterwards
+                // would turn the separators the PARSER wrote into `U+FFFD`
+                // and collapse the code block into one unreadable line.
+                // Masking applies to the plugin's bytes, not to our structure.
+                text.push_str(&mask_if(l.to_owned(), mask));
                 text.push('\n');
             }
-            out.push(Block::Code {
-                lang,
-                text: mask_if(text, mask),
-            });
+            out.push(Block::Code { lang, text });
         } else if let Some(rest) = line.strip_prefix('#') {
             flush(&mut para, &mut out, mask);
             // One `#` is already stripped, so the hashes left here are the
@@ -352,20 +408,32 @@ fn blocks_of(body: &str, limits: Limits, mask: bool) -> (Vec<Block>, bool) {
             // `to_owned` on purpose: `peek` borrows `lines` for the WHOLE body
             // of the `while let`, so the inner `next()` would not compile with
             // a live reference into the buffer.
-            while let Some(next) = lines
-                .peek()
-                .and_then(|l| l.strip_prefix("- "))
-                .map(str::to_owned)
-            {
+            while let Some(next) = lines.peek().map(|l| (*l).to_owned()) {
+                // Clamp BEFORE stripping the marker, exactly as the first item
+                // was clamped before `strip_prefix`: measuring after the strip
+                // would hand items 2..n two bytes more budget than item 1.
                 let (next, cut) = clamp_line(&next, limits);
+                let Some(item) = next.strip_prefix("- ") else {
+                    break;
+                };
                 truncated |= cut;
-                items.push(spans_masked(next, mask));
+                items.push(spans_masked(item, mask));
                 lines.next();
             }
             out.push(Block::Bullets(items));
         } else if line.starts_with('|') {
             flush(&mut para, &mut out, mask);
-            let header = cells(line, mask);
+            let mut header = cells(line, mask);
+            // Every cell of this body, header cells included, comes out of one
+            // budget. Rows are padded to the header width, so it is the
+            // PRODUCT width × height that has to be bounded, and nothing else
+            // here sees that product: see [`Limits::max_cells`].
+            if header.len() > cells_left {
+                header.truncate(cells_left);
+                truncated = true;
+            }
+            cells_left -= header.len();
+            let width = header.len();
             // The `|---|---|` line is SYNTAX, not data. It is skipped only
             // when it really is one: swallowing the next `|` line
             // unconditionally would silently eat the first ROW of a table
@@ -380,10 +448,18 @@ fn blocks_of(body: &str, limits: Limits, mask: bool) -> (Vec<Block>, bool) {
                 .filter(|l| l.starts_with('|'))
                 .map(|l| (*l).to_owned())
             {
+                lines.next();
+                if width == 0 || cells_left < width {
+                    // Out of budget: the remaining rows of THIS table are
+                    // drained rather than left to the outer loop, which would
+                    // otherwise open a fresh empty table per line.
+                    truncated = true;
+                    continue;
+                }
+                cells_left -= width;
                 let (row, cut) = clamp_line(&row, limits);
                 truncated |= cut;
-                rows.push(normalise_row(cells(row, mask), header.len()));
-                lines.next();
+                rows.push(normalise_row(cells(row, mask), width));
             }
             out.push(Block::Table { header, rows });
         } else {
@@ -393,8 +469,8 @@ fn blocks_of(body: &str, limits: Limits, mask: bool) -> (Vec<Block>, bool) {
     flush(&mut para, &mut out, mask);
     // One iteration can push the pending paragraph AND its own block, so the
     // cap may be overshot by one. Clamping here makes `blocks.len() <=
-    // max_blocks` hold unconditionally: on the hostile path that is a memory
-    // bound, not a hint.
+    // max_blocks` hold unconditionally. It bounds the block COUNT only —
+    // what a block may hold is bounded by `max_line_bytes` and `max_cells`.
     if out.len() > limits.max_blocks {
         out.truncate(limits.max_blocks);
         truncated = true;
@@ -457,6 +533,12 @@ fn is_separator_row(line: &str) -> bool {
 /// row, because these cells come from a plain `split` over a plugin
 /// `help.md`: a ragged row is one keystroke away for a hostile author, and it
 /// would land as a panic while drawing.
+///
+/// The dropped cells are deliberately NOT reported through
+/// [`Parsed::truncated`]: a cell past the header width has no column to be
+/// drawn in, and flagging it would badge every topic with a typo'd row as
+/// truncated. The PADDING side is what has to be paid for, and it is —
+/// against [`Limits::max_cells`], by the caller.
 fn normalise_row(mut row: Vec<String>, width: usize) -> Vec<String> {
     row.truncate(width);
     row.resize_with(width, String::new);
@@ -475,12 +557,18 @@ fn callout_kind(rest: &str) -> (Callout, &str) {
 
 /// [`spans`], masking the line FIRST when the content is third-party.
 ///
-/// Before and not after, for two reasons. `TopicId` documents that it never
-/// normalises what it is given, so a `[[topic]]` id must arrive already
-/// masked — masking the `Span` afterwards would mean rebuilding the id. And
-/// no hazard is part of the mark syntax (`{`, `[`, `*`, `` ` ``), so masking
-/// first cannot change how the line is CUT: it only changes the bytes each
-/// span carries.
+/// Before and not after because `TopicId` documents that it never normalises
+/// what it is given, so a `[[topic]]` id must arrive already masked — masking
+/// the `Span` afterwards would mean tearing the id apart and rebuilding it.
+///
+/// The ordering is NOT free, and it is worth being precise about the price.
+/// No hazard is one of the mark DELIMITERS (`{`, `[`, `*`, `` ` ``), so
+/// masking first cannot move where a mark opens or closes. It can still
+/// change a decision made about a mark's CONTENT: seven members of the hazard
+/// set are whitespace (`\t`, `\r`, U+000B, U+000C, U+0085, U+2028, U+2029)
+/// and `U+FFFD` is not, so the "is this id blank?" test would flip and
+/// `{{cmd:\t}}` would fabricate a command reference. That is why the test is
+/// [`is_blank_id`] and not `trim().is_empty()`.
 fn spans_masked(line: &str, mask: bool) -> Vec<Span> {
     if mask {
         spans(&norte_encoding::mask_terminal_hazards(line))
@@ -597,6 +685,35 @@ mod tests {
         );
     }
 
+    /// Asserts that `line` produces no live mark under BOTH mask settings,
+    /// and that whatever it does produce still carries every byte of the
+    /// (possibly masked) line.
+    ///
+    /// Both settings, because masking runs before the span parse and can
+    /// therefore change what the parser decides about a mark's content — see
+    /// [`is_blank_id`]. A test that only ever ran with `mask == false` let
+    /// exactly that bug through.
+    fn no_live_mark_either_way(line: &str) {
+        for mask in [false, true] {
+            let out = spans_masked(line, mask);
+            assert!(
+                !out.iter()
+                    .any(|s| matches!(s, Span::CommandRef(_) | Span::TopicLink(_))),
+                "mask={mask}: {line:?} fabricated a live mark: {out:?}"
+            );
+            let expected = if mask {
+                norte_encoding::mask_terminal_hazards(line)
+            } else {
+                line.to_owned()
+            };
+            assert_eq!(
+                payloads(&out).concat(),
+                expected,
+                "mask={mask}: {line:?} lost bytes"
+            );
+        }
+    }
+
     #[test]
     fn an_empty_id_stays_literal_text() {
         assert_eq!(
@@ -605,6 +722,8 @@ mod tests {
             "an empty CommandRef would claim a command with no name exists"
         );
         assert_eq!(spans("[[]]"), vec![Span::Text("[[]]".to_owned())]);
+        no_live_mark_either_way("{{cmd:}}");
+        no_live_mark_either_way("[[]]");
     }
 
     #[test]
@@ -615,6 +734,22 @@ mod tests {
             "trimming to nothing is still nothing"
         );
         assert_eq!(spans("[[   ]]"), vec![Span::Text("[[   ]]".to_owned())]);
+
+        // The whitespace that is ALSO a terminal hazard. Under masking each
+        // of these becomes `U+FFFD`, which is not whitespace: with a plain
+        // `trim().is_empty()` the id would stop looking blank and the parser
+        // would invent a command out of a tab.
+        for ws in [
+            "\t", "\r", "\u{000B}", "\u{000C}", "\u{0085}", "\u{2028}", "\u{2029}",
+        ] {
+            no_live_mark_either_way(&format!("{{{{cmd:{ws}}}}}"));
+            no_live_mark_either_way(&format!("[[{ws}]]"));
+            // Mixed with ordinary spaces, and with the replacement character
+            // written out literally: still blank, still not a mark.
+            no_live_mark_either_way(&format!("{{{{cmd: {ws} }}}}"));
+        }
+        no_live_mark_either_way("{{cmd:\u{FFFD}}}");
+        no_live_mark_either_way("[[\u{FFFD}\u{FFFD}]]");
     }
 
     #[test]
@@ -767,17 +902,32 @@ mod tests {
                 }
                 // The exact shape, whenever the splice cannot end the mark
                 // early: one span, payload byte-identical to the name.
+                let live_mark = open == CMD_OPEN || open == LINK_OPEN;
+                let trimmed = if live_mark {
+                    text.trim()
+                } else {
+                    text.as_str()
+                };
                 if !text.contains(close) && !text.trim().is_empty() {
-                    let trimmed = if open == CMD_OPEN || open == LINK_OPEN {
-                        text.trim()
+                    if live_mark && is_blank_id(trimmed) {
+                        // A name that lossy-decoded to nothing but `U+FFFD`
+                        // (`latin1_e_acute` is a lone `0xE9`) is a BLANK id:
+                        // an id made only of replacement characters names no
+                        // command and no topic, so the mark stays literal
+                        // text. Not fabricating is the whole point of this
+                        // test — see `is_blank_id`.
+                        assert_eq!(
+                            payloads(&out),
+                            vec![line.as_str()],
+                            "[{id}] in {open}…{close}: a blank id must stay literal"
+                        );
                     } else {
-                        text.as_str()
-                    };
-                    assert_eq!(
-                        payloads(&out),
-                        vec![trimmed],
-                        "[{id}] in {open}…{close}: expected one span with the name verbatim"
-                    );
+                        assert_eq!(
+                            payloads(&out),
+                            vec![trimmed],
+                            "[{id}] in {open}…{close}: expected one span with the name verbatim"
+                        );
+                    }
                 }
             }
         }
@@ -918,10 +1068,152 @@ key = 1\n\
     }
 
     /// The blocks of a body under the built-in limits, trusted mode.
+    ///
+    /// The `!truncated` assertion is part of the claim: none of these bodies
+    /// comes near a ceiling. Cells dropped by `normalise_row` are the one
+    /// loss `Parsed::truncated` deliberately does not report — its rustdoc
+    /// says so — which is why the ragged-table test can use this helper.
     fn blocks(body: &str) -> Vec<Block> {
         let (out, truncated) = blocks_of(body, Limits::built_in(), false);
         assert!(!truncated, "this body fits: {out:?}");
         out
+    }
+
+    /// Every piece of text the blocks carry, in order.
+    ///
+    /// The `match` is exhaustive on purpose: a new [`Block`] variant that
+    /// carries text must be added here, or the masking assertions would
+    /// quietly stop covering it.
+    fn texts(blocks: &[Block]) -> Vec<String> {
+        fn owned(spans: &[Span]) -> Vec<String> {
+            payloads(spans).into_iter().map(str::to_owned).collect()
+        }
+        let mut out = Vec::new();
+        for b in blocks {
+            match b {
+                Block::Heading { text, .. } => out.push(text.clone()),
+                Block::Paragraph(spans) | Block::Callout { spans, .. } => {
+                    out.extend(owned(spans));
+                }
+                Block::Bullets(items) => out.extend(items.iter().flat_map(|i| owned(i))),
+                Block::Code { lang, text } => {
+                    out.extend(lang.clone());
+                    out.push(text.clone());
+                }
+                Block::Table { header, rows } => {
+                    out.extend(header.iter().cloned());
+                    out.extend(rows.iter().flat_map(|r| r.iter().cloned()));
+                }
+            }
+        }
+        out
+    }
+
+    /// Cells held by a list of blocks, header cells included.
+    fn cell_count(out: &[Block]) -> usize {
+        out.iter()
+            .map(|b| match b {
+                Block::Table { header, rows } => {
+                    header.len() + rows.iter().map(Vec::len).sum::<usize>()
+                }
+                _ => 0,
+            })
+            .sum()
+    }
+
+    #[test]
+    fn a_wide_header_over_many_rows_cannot_amplify_memory() {
+        // The row normalisation pads every row to the header width, so a
+        // table costs width × height cells while the source pays for width +
+        // height BYTES. Measured before `max_cells` existed: 64 KiB of this
+        // shape produced 32_505_856 cells and 749 MiB of RSS. `max_blocks`
+        // does not see it (one table is one block) and `max_line_bytes` bounds
+        // the width, never the product.
+        let limits = Limits::untrusted();
+        let mut body = "|a".repeat(1024);
+        body.push_str("|\n");
+        body.push_str(&"|\n".repeat(40_000));
+        body.truncate(limits.max_bytes);
+
+        let (out, truncated) = blocks_of(&body, limits, true);
+        assert!(truncated, "a table cut short must say so");
+        assert!(
+            cell_count(&out) <= limits.max_cells,
+            "cells={} over the ceiling of {}",
+            cell_count(&out),
+            limits.max_cells
+        );
+        // The budget is spent across the WHOLE body, not per table: many
+        // tables cannot each claim a full ceiling.
+        let many = "| a | b |\n| 1 | 2 |\n\n".repeat(4000);
+        let tight = Limits {
+            max_cells: 100,
+            ..Limits::built_in()
+        };
+        let (out, truncated) = blocks_of(&many, tight, false);
+        assert!(truncated);
+        assert!(cell_count(&out) <= 100, "cells={}", cell_count(&out));
+        // Still bounded when the budget runs out mid-table, and the leftover
+        // rows do not each open a table of their own.
+        let (out, _) = blocks_of("| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n", tight, false);
+        assert_eq!(out.len(), 1, "{out:?}");
+    }
+
+    #[test]
+    fn masking_reaches_every_text_a_block_carries() {
+        // One smoke test over the hostile path: every block kind carries a
+        // RIGHT-TO-LEFT OVERRIDE, and none may reach a renderer. Task 6 owns
+        // the full hostile suite; this exists so the masked path is exercised
+        // at all, which is what would have caught the `is_blank_id` bug.
+        let body = "# h\u{202E}1\n\n\
+p\u{202E}ara\n\n\
+- it\u{202E}em\n\n\
+> \u{26A0} car\u{202E}eful\n\n\
+| a\u{202E}1 | b |\n|---|---|\n| c\u{202E}1 | d |\n\n\
+```to\u{202E}ml\nco\u{202E}de\n```\n";
+        let (out, _) = blocks_of(body, Limits::untrusted(), true);
+        assert_eq!(out.len(), 6, "{out:?}");
+        // The REAL strings, never `{:?}`: Debug escapes `\u{202e}` into ASCII,
+        // so an assertion over formatted output would pass just as happily
+        // with masking switched off.
+        let masked = texts(&out);
+        assert_eq!(masked.len(), 10, "every text of every block: {masked:?}");
+        for t in &masked {
+            assert!(
+                !t.contains('\u{202E}'),
+                "a bidi override survived masking: {t:?}"
+            );
+        }
+        assert_eq!(
+            masked.iter().filter(|t| t.contains('\u{FFFD}')).count(),
+            8,
+            "one per override, and the two clean cells untouched: {masked:?}"
+        );
+        // The parser's own structure is NOT content: the `\n` it writes
+        // between the lines of a code block is a control character, and
+        // masking the assembled text would have eaten it.
+        assert_eq!(
+            masked.last().map(String::as_str),
+            Some("co\u{FFFD}de\n"),
+            "the code block keeps its line breaks: {masked:?}"
+        );
+        // The same body unmasked keeps its bytes: masking is the ONLY
+        // difference, not a change of shape.
+        let (plain, _) = blocks_of(body, Limits::untrusted(), false);
+        assert_eq!(plain.len(), out.len());
+        let plain = texts(&plain);
+        assert_eq!(
+            plain.iter().filter(|t| t.contains('\u{202E}')).count(),
+            8,
+            "the trusted path carries them raw: {plain:?}"
+        );
+        for (a, b) in plain.iter().zip(&masked) {
+            assert_eq!(
+                a.replace('\u{202E}', "\u{FFFD}"),
+                *b,
+                "masking replaced exactly the hazard, one char for one char"
+            );
+        }
     }
 
     #[test]
@@ -1098,6 +1390,16 @@ key = 1\n\
             out[0],
             Block::Paragraph(vec![Span::Text("para".to_owned())])
         );
+
+        // Reaching the cap is not the same as LOSING something. A body that
+        // ends in blank lines exactly at the cap dropped nothing, and a badge
+        // that cries wolf over trailing whitespace teaches the reader to
+        // ignore it.
+        let (out, truncated) = blocks_of("# a\n# b\n\n\n", limits, false);
+        assert_eq!(out.len(), 2);
+        assert!(!truncated, "only blank lines were left: nothing was lost");
+        let (_, truncated) = blocks_of("# a\n# b\n\n\n# c\n", limits, false);
+        assert!(truncated, "a heading was left behind: that IS truncation");
     }
 
     #[test]
