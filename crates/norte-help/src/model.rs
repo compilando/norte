@@ -1,25 +1,25 @@
-//! Modelo del corpus: lo que el parser produce y lo que cada frontend
-//! renderiza. Deliberadamente sin nada de UI — ni colores, ni anchos, ni
-//! tipos de ratatui/GPUI (regla 7).
+//! The corpus model: what the parser produces and what each frontend
+//! renders. Deliberately free of anything UI — no colours, no widths, no
+//! ratatui/GPUI types (rule 7).
 
 use std::fmt;
 
-/// Identificador de un tema (`id` del front matter), único por corpus.
+/// Identifier of a topic (the `id` of the front matter), unique per corpus.
 ///
-/// El id NO se normaliza ni se valida ni se enmascara: conserva los bytes
-/// tal cual llegaron. Es deliberado — las comprobaciones del corpus
-/// (`see_also`, `[[tema]]`) comparan byte-exactas, y una normalización
-/// silenciosa aquí haría que dos ids distintos colisionaran sin que nadie
-/// lo viera. Por eso `" Copying "` y `"copying"` son ids DISTINTOS.
+/// The id is NOT normalised, NOT validated and NOT masked: it keeps the
+/// bytes exactly as they arrived. That is deliberate — the corpus checks
+/// (`see_also`, `[[topic]]`) compare byte-exactly, and a silent
+/// normalisation here would let two distinct ids collide without anyone
+/// noticing. That is why `" Copying "` and `"copying"` are DIFFERENT ids.
 ///
-/// Consecuencia para quien construya un id desde texto de TERCEROS: hay que
-/// enmascarar ANTES de construirlo, nunca después. Eso es exactamente lo que
-/// hace `parse_untrusted` (tarea 6) con los `help.md` de plugins.
+/// Consequence for anyone building an id out of THIRD-PARTY text: mask
+/// BEFORE constructing it, never after. That is exactly what
+/// `parse_untrusted` (task 6) does with plugin `help.md` files.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TopicId(String);
 
 impl TopicId {
-    /// Construye un id a partir de cualquier cosa que sea texto.
+    /// Builds an id from anything that is text.
     ///
     /// ```
     /// use norte_help::TopicId;
@@ -27,7 +27,7 @@ impl TopicId {
     /// let id = TopicId::new("copying");
     /// assert_eq!(id.as_str(), "copying");
     ///
-    /// // Los bytes se conservan: no hay trim ni minusculizado.
+    /// // The bytes are kept: no trimming, no lowercasing.
     /// assert_ne!(TopicId::new(" Copying "), id);
     /// ```
     #[must_use]
@@ -35,7 +35,7 @@ impl TopicId {
         Self(s.into())
     }
 
-    /// El id como `&str`.
+    /// The id as a `&str`.
     ///
     /// ```
     /// use norte_help::TopicId;
@@ -54,145 +54,146 @@ impl fmt::Display for TopicId {
     }
 }
 
-/// De dónde sale un tema: del binario o de un plugin de terceros.
+/// Where a topic comes from: the binary, or a third-party plugin.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Origin {
-    /// Tema del corpus embebido: texto CONFIABLE, jamás enmascarado.
+    /// Topic from the embedded corpus: TRUSTED text, never masked.
     BuiltIn,
-    /// Tema de un `help.md` de plugin: texto de TERCEROS, ya enmascarado y
-    /// acotado por el parser (ver `parse_untrusted`).
+    /// Topic from a plugin `help.md`: THIRD-PARTY text, already masked and
+    /// bounded by the parser (see `parse_untrusted`).
     Plugin {
-        /// Id del plugin en el catálogo.
+        /// Plugin id in the catalogue.
         id: String,
-        /// `publisher` del manifiesto, si lo declara.
+        /// The manifest's `publisher`, if it declares one.
         publisher: Option<String>,
-        /// El contenido excedió algún tope y se recortó.
+        /// The content exceeded some limit and was truncated.
         truncated: bool,
-        /// El fichero no era UTF-8 válido y se decodificó con pérdida.
+        /// The file was not valid UTF-8 and was decoded lossily.
         lossy: bool,
     },
 }
 
-/// Tipo de aviso de un [`Block::Callout`].
+/// Kind of notice of a [`Block::Callout`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Callout {
-    /// Nota neutra.
+    /// Neutral note.
     Note,
-    /// Advertencia (algo puede salir mal).
+    /// Warning (something may go wrong).
     Warn,
-    /// Truco (algo va más rápido).
+    /// Tip (something goes faster).
     Tip,
 }
 
-/// Fragmento en línea dentro de un bloque.
+/// Inline fragment inside a block.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Span {
-    /// Texto llano.
+    /// Plain text.
     Text(String),
-    /// Énfasis fuerte (`**así**`).
+    /// Strong emphasis (`**like this**`).
     Strong(String),
-    /// Énfasis (`*así*`).
+    /// Emphasis (`*like this*`).
     Emph(String),
-    /// Código en línea (`` `así` ``).
+    /// Inline code (`` `like this` ``).
     Code(String),
-    /// Referencia a un comando (`{{cmd:fs.copy}}`), SIN resolver: el chord
-    /// lo pone el frontend con `ChordResolver` (tarea 9).
+    /// Reference to a command (`{{cmd:fs.copy}}`), UNRESOLVED: the chord is
+    /// filled in by the frontend with `ChordResolver` (task 9).
     CommandRef(String),
-    /// Salto a otro tema (`[[selection]]`), SIN resolver.
+    /// Jump to another topic (`[[selection]]`), UNRESOLVED.
     TopicLink(TopicId),
 }
 
-/// Bloque de contenido. Vocabulario CERRADO (ADR 0040): que un `help.md`
-/// hostil no pueda expresar más que esto es justo lo que lo hace seguro.
+/// Content block. A CLOSED vocabulary (ADR 0040): the fact that a hostile
+/// `help.md` cannot express anything beyond this is precisely what makes it
+/// safe.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Block {
-    /// Encabezado de nivel 1..=3.
+    /// Heading of level 1..=3.
     Heading {
-        /// Nivel, saturado a 1..=3.
+        /// Level, saturated to 1..=3.
         level: u8,
-        /// Texto del encabezado.
+        /// Heading text.
         text: String,
     },
-    /// Párrafo.
+    /// Paragraph.
     Paragraph(Vec<Span>),
-    /// Lista de puntos (un nivel, sin anidar).
+    /// Bullet list (one level, no nesting).
     Bullets(Vec<Vec<Span>>),
-    /// Bloque de código con lenguaje opcional.
+    /// Code block with an optional language.
     Code {
-        /// Etiqueta de lenguaje de la valla, si la hay.
+        /// Language label of the fence, if any.
         lang: Option<String>,
-        /// Contenido literal, sin interpretar marcas.
+        /// Literal content, with no marks interpreted.
         text: String,
     },
-    /// Tabla simple con cabecera.
+    /// Simple table with a header.
     Table {
-        /// Celdas de la cabecera.
+        /// Header cells.
         header: Vec<String>,
-        /// Filas ya NORMALIZADAS a `header.len()` celdas: el parser rellena
-        /// con celdas vacías las que falten y descarta las que sobren, así
-        /// que un renderer puede indexar por columna sin comprobar la
-        /// longitud.
+        /// Rows already NORMALISED to `header.len()` cells: the parser pads
+        /// the missing ones with empty cells and drops the extra ones, so a
+        /// renderer can index by column without checking the length.
         ///
-        /// La normalización vive en el parser (tarea 5), no aquí; este tipo
-        /// es el contrato que aquel debe honrar. Importa porque las filas
-        /// salen de un `split` sobre un `help.md` de plugin —texto hostil—
-        /// y una fila irregular haría pánico al pintar.
+        /// The normalisation lives in the parser (task 5), not here; this
+        /// type is the contract the parser must honour. It matters because
+        /// the rows come out of a `split` over a plugin `help.md` — hostile
+        /// text — and a ragged row would panic while drawing.
         rows: Vec<Vec<String>>,
     },
-    /// Aviso destacado.
+    /// Highlighted notice.
     Callout {
-        /// Tipo de aviso.
+        /// Kind of notice.
         kind: Callout,
-        /// Contenido del aviso.
+        /// Content of the notice.
         spans: Vec<Span>,
     },
 }
 
-/// Por qué un comando no puede ejecutarse ahora mismo.
+/// Why a command cannot run right now.
 ///
-/// Las variantes no llevan texto: cada una se traduce a una clave Fluent al
-/// pintar, así el mismo motivo se explica en el idioma del usuario y con las
-/// palabras de cada frontend.
+/// The variants carry no text: each one is translated into a Fluent key at
+/// draw time, so the same reason is explained in the user's language and in
+/// each frontend's own words.
 ///
-/// `#[non_exhaustive]` a propósito: la fase H3d conecta las fuentes reales de
-/// disponibilidad (capacidades del backend, estado del plugin, `DenyReason`
-/// de la policy) y hará falta afinar variantes. Marcarlo hoy significa que
-/// añadirlas entonces no rompe los `match` de los tres frontends.
+/// `#[non_exhaustive]` on purpose: phase H3d wires up the real sources of
+/// availability (backend capabilities, plugin state, the policy's
+/// `DenyReason`) and the variants will need refining. Marking it today means
+/// that adding them then does not break the `match`es of the three
+/// frontends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Reason {
-    /// El backend del pane activo es de solo lectura (p. ej. dentro de un zip).
+    /// The active pane's backend is read-only (e.g. inside a zip).
     ReadOnlyBackend,
-    /// El backend no ofrece esa capacidad.
+    /// The backend does not offer that capability.
     Unsupported,
-    /// El plugin dueño del comando está desactivado o sin aprobar.
+    /// The plugin owning the command is disabled or unapproved.
     PluginInactive,
-    /// La policy lo niega para el actor actual.
+    /// The policy denies it for the current actor.
     PolicyDenied,
-    /// La conexión está degradada.
+    /// The connection is degraded.
     ConnectionDegraded,
 }
 
-/// Disponibilidad de una fila de comando en el contexto ACTUAL.
+/// Availability of a command row in the CURRENT context.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Availability {
-    /// Se puede ejecutar ahora.
+    /// It can run now.
     Available,
-    /// No se puede, con motivo para explicarlo.
+    /// It cannot, with a reason to explain it.
     Unavailable {
-        /// Motivo mostrado junto a la fila atenuada.
+        /// Reason shown next to the dimmed row.
         reason: Reason,
     },
 }
 
 impl Availability {
-    /// `true` si la fila puede ejecutarse.
+    /// `true` if the row can run.
     #[must_use]
     pub fn is_available(self) -> bool {
         matches!(self, Self::Available)
     }
 
-    /// El motivo, si la fila está indisponible.
+    /// The reason, if the row is unavailable.
     ///
     /// ```
     /// use norte_help::{Availability, Reason};
@@ -216,34 +217,34 @@ impl Availability {
     }
 }
 
-/// Fila ejecutable de un tema: un comando que el usuario puede lanzar desde
-/// la ayuda con la MISMA vía de despacho que la palette.
+/// Runnable row of a topic: a command the user can launch from the help with
+/// the SAME dispatch path as the palette.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommandRow {
-    /// Id del comando (`fs.copy`, `plugin:<id>:<cmd>`).
+    /// Command id (`fs.copy`, `plugin:<id>:<cmd>`).
     pub command: String,
-    /// Disponibilidad en el contexto actual (la inyecta el frontend).
+    /// Availability in the current context (injected by the frontend).
     pub avail: Availability,
 }
 
-/// Un tema del corpus, ya parseado.
+/// A parsed topic of the corpus.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Topic {
-    /// Id único.
+    /// Unique id.
     pub id: TopicId,
-    /// Título mostrado.
+    /// Displayed title.
     pub title: String,
-    /// Etiquetas de agrupación en el índice.
+    /// Grouping tags for the index.
     pub tags: Vec<String>,
-    /// Temas relacionados.
+    /// Related topics.
     pub see_also: Vec<TopicId>,
-    /// Comandos que el tema documenta, en orden de aparición deseada.
+    /// Commands the topic documents, in the desired display order.
     pub commands: Vec<String>,
-    /// Contextos de UI que abren ESTE tema con F1.
+    /// UI contexts that open THIS topic with F1.
     pub context: Vec<String>,
-    /// Cuerpo.
+    /// Body.
     pub blocks: Vec<Block>,
-    /// Procedencia.
+    /// Provenance.
     pub origin: Origin,
 }
 
@@ -252,22 +253,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn topic_id_conserva_los_bytes_y_se_muestra() {
+    fn a_topic_id_keeps_its_bytes_and_displays_them() {
         let id = TopicId::new("copying");
         assert_eq!(id.as_str(), "copying");
         assert_eq!(id.to_string(), "copying");
 
-        // NO normaliza: ni recorta espacios ni baja a minúsculas. Si algún
-        // día lo hiciera, `see_also` y `[[tema]]` empezarían a resolver a
-        // temas que el autor no escribió.
-        let raro = TopicId::new(" Copying ");
-        assert_eq!(raro.as_str(), " Copying ");
-        assert_eq!(raro.to_string(), " Copying ");
-        assert_ne!(raro, id, "dos ids distintos jamás deben colisionar");
+        // It does NOT normalise: no trimming, no lowercasing. If it ever
+        // did, `see_also` and `[[topic]]` would start resolving to topics
+        // the author never wrote.
+        let odd = TopicId::new(" Copying ");
+        assert_eq!(odd.as_str(), " Copying ");
+        assert_eq!(odd.to_string(), " Copying ");
+        assert_ne!(odd, id, "two distinct ids must never collide");
     }
 
     #[test]
-    fn una_fila_indisponible_lleva_su_motivo() {
+    fn an_unavailable_row_carries_its_reason() {
         let row = CommandRow {
             command: "fs.copy".to_owned(),
             avail: Availability::Unavailable {
@@ -278,7 +279,7 @@ mod tests {
         assert_eq!(
             row.avail.reason(),
             Some(Reason::ReadOnlyBackend),
-            "la UI necesita el motivo para explicarlo, no solo el hecho"
+            "the UI needs the reason to explain it, not just the fact"
         );
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "norte-help"
-description = "Corpus de ayuda embebido y localizado: temas en markdown-lite con front matter TOML, modelo agnóstico del render y modo hostil para la ayuda de plugins"
+description = "Embedded, localized help corpus for norte (ADR 0040): markdown-lite topics with TOML front matter, a render-agnostic model, and a hostile mode for plugin help"
 license = "MIT OR Apache-2.0"
 version.workspace = true
 edition.workspace = true

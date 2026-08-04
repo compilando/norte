@@ -1,35 +1,35 @@
-//! Corpus de ayuda de norte (ADR 0040): temas en markdown-lite con front
-//! matter TOML, embebidos en el binario y localizados.
+//! norte's help corpus (ADR 0040): markdown-lite topics with TOML front
+//! matter, embedded in the binary and localized.
 //!
-//! Este crate NO pinta nada: devuelve un modelo tipado ([`Block`]/[`Span`])
-//! que cada frontend renderiza con su propia tecnología (ratatui, GPUI,
-//! texto plano). Las dos marcas vivas del corpus —`{{cmd:id}}` y
-//! `[[tema]]`— llegan SIN resolver: el chord se resuelve al pintar contra
-//! el keymap efectivo del usuario, así la prosa jamás miente sobre teclas.
+//! This crate draws NOTHING: it returns a typed model ([`Block`]/[`Span`])
+//! that each frontend renders with its own technology (ratatui, GPUI, plain
+//! text). The two live marks of the corpus — `{{cmd:id}}` and `[[topic]]` —
+//! arrive UNRESOLVED: the chord is resolved at draw time against the user's
+//! effective keymap, so the prose can never lie about keys.
 //!
-//! Ejemplo del rustdoc (lo reactiva la tarea 10 de esta fase, cuando
-//! `corpus` ya existe y el doctest puede compilar):
+//! Example from the rustdoc (task 10 of this phase reactivates it, once
+//! `corpus` exists and the doctest can compile):
 //!
 //! ```text
 //! use norte_help::{Lang, topic};
-//! let t = topic(Lang::En, "index").expect("el índice existe");
+//! let t = topic(Lang::En, "index").expect("the index topic exists");
 //! assert_eq!(t.title, "Welcome to norte");
 //! ```
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-// Cada módulo lo descomenta SU tarea de esta fase (ver el plan H3a):
-// mod check; // tarea 8
-// mod corpus; // tarea 7
-mod front_matter; // tarea 3
-mod model; // tarea 2
-// mod parse; // tareas 4 y 5
-// mod resolve; // tarea 9
+// Each module is uncommented by ITS OWN task of this phase (see the H3a plan):
+// mod check; // task 8
+// mod corpus; // task 7
+mod front_matter; // task 3
+mod model; // task 2
+// mod parse; // tasks 4 and 5
+// mod resolve; // task 9
 
-// Reexports públicos, en el mismo orden; cada uno lo descomenta su tarea:
-// pub use check::{Issue, check_commands, check_contexts, check_corpus}; // tarea 8
-// pub use corpus::{topic, topic_ids, topics}; // tarea 7
-pub use model::{Availability, Block, Callout, CommandRow, Origin, Reason, Span, Topic, TopicId}; // tarea 2
+// Public re-exports, in the same order; each one uncommented by its task:
+// pub use check::{Issue, check_commands, check_contexts, check_corpus}; // task 8
+// pub use corpus::{topic, topic_ids, topics}; // task 7
+pub use model::{Availability, Block, Callout, CommandRow, Origin, Reason, Span, Topic, TopicId}; // task 2
 pub use norte_i18n::Lang;
-// pub use parse::{Limits, ParseError, Parsed, parse_trusted, parse_untrusted}; // tareas 4 y 5
-// pub use resolve::ChordResolver; // tarea 9
+// pub use parse::{Limits, ParseError, Parsed, parse_trusted, parse_untrusted}; // tasks 4 and 5
+// pub use resolve::ChordResolver; // task 9
