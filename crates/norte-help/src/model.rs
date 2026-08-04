@@ -13,8 +13,10 @@ use std::fmt;
 /// noticing. That is why `" Copying "` and `"copying"` are DIFFERENT ids.
 ///
 /// Consequence for anyone building an id out of THIRD-PARTY text: mask
-/// BEFORE constructing it, never after. That is exactly what
-/// `parse_untrusted` (task 6) does with plugin `help.md` files.
+/// BEFORE constructing it, never after. `parse_untrusted` goes further and
+/// does not build one out of third-party text at all — a plugin topic's id is
+/// the HOST-ASSIGNED plugin id, so a `help.md` declaring `id = "copying"`
+/// cannot shadow the built-in topic of that name.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TopicId(String);
 
@@ -61,8 +63,18 @@ pub enum Origin {
     BuiltIn,
     /// Topic from a plugin `help.md`: THIRD-PARTY text, already masked and
     /// bounded by the parser (see `parse_untrusted`).
+    ///
+    /// Two fields of the topic are deliberately NOT masked, and both are
+    /// identities rather than prose: this `id`, which the HOST assigns, and
+    /// [`Topic::commands`] / [`Span::CommandRef`], which are dispatch keys.
+    /// Masking an identity is not a safety measure — it is not injective, so
+    /// it silently maps distinct keys onto one — and the parser refuses a key
+    /// it could not paint instead of rewriting it. The same `key`/`text`
+    /// split the command palette makes.
     Plugin {
-        /// Plugin id in the catalogue.
+        /// Plugin id in the catalogue: a LOOKUP KEY, assigned by the host and
+        /// kept byte-exact. It is what a registry or approval lookup matches
+        /// on, so the caller must pass one it has validated.
         id: String,
         /// The manifest's `publisher`, if it declares one.
         publisher: Option<String>,
@@ -97,6 +109,12 @@ pub enum Span {
     Code(String),
     /// Reference to a command (`{{cmd:fs.copy}}`), UNRESOLVED: the chord is
     /// filled in by the frontend with `ChordResolver` (task 9).
+    ///
+    /// A DISPATCH KEY, byte-exact and never masked. From a plugin topic it is
+    /// always that plugin's own `plugin:{id}:{command}` — `parse_untrusted`
+    /// refuses anything else, so a plugin cannot borrow the host's warning
+    /// chrome and the host's real chord to make `{{cmd:fs.delete}}` look like
+    /// the host asking.
     CommandRef(String),
     /// Jump to another topic (`[[selection]]`), UNRESOLVED.
     TopicLink(TopicId),
@@ -238,7 +256,8 @@ pub struct Topic {
     pub tags: Vec<String>,
     /// Related topics.
     pub see_also: Vec<TopicId>,
-    /// Commands the topic documents, in the desired display order.
+    /// Commands the topic documents, in the desired display order. Dispatch
+    /// keys, never masked — see [`Origin::Plugin`] and [`Span::CommandRef`].
     pub commands: Vec<String>,
     /// UI contexts that open THIS topic with F1.
     pub context: Vec<String>,

@@ -22,8 +22,8 @@ const LINK_CLOSE: &str = "]]";
 
 /// Cuts a line into [`Span`]s. A badly closed mark stays literal text: it
 /// never produces a reference to a command nobody wrote.
-fn spans(line: &str) -> Vec<Span> {
-    spans_counted(line).0
+fn spans(line: &str, mode: Mode<'_>) -> Vec<Span> {
+    spans_counted(line, mode).0
 }
 
 /// [`spans`], plus how many tail scans came back empty.
@@ -32,13 +32,13 @@ fn spans(line: &str) -> Vec<Span> {
 /// bounded by one per mark kind, whatever the input. Tests assert on it
 /// instead of on a stopwatch, because a wall clock measures the machine and
 /// this measures the algorithm.
-fn spans_counted(line: &str) -> (Vec<Span>, usize) {
+fn spans_counted(line: &str, mode: Mode<'_>) -> (Vec<Span>, usize) {
     let mut out = Vec::new();
     let mut text = String::new();
     let mut rest = line;
     let mut closers = Closers::new();
     while !rest.is_empty() {
-        let taken = take_mark(rest, &mut closers).or_else(|| take_delim(rest));
+        let taken = take_mark(rest, &mut closers, mode).or_else(|| take_delim(rest));
         if let Some((span, len)) = taken {
             if !text.is_empty() {
                 out.push(Span::Text(std::mem::take(&mut text)));
@@ -96,6 +96,22 @@ impl Closers {
     }
 }
 
+/// Characters that paint NOTHING and are not in
+/// `norte_encoding::is_terminal_hazard`.
+///
+/// That predicate is a cross-crate contract (`norte-frontend` names, the
+/// viewer, this parser) and widening it is not this crate's call, so the
+/// local consequence is handled locally: these characters are treated as
+/// BLANK. Without that, `title = "ㅤㅤㅤ"` — three U+3164 HANGUL FILLERs —
+/// is a non-empty string that renders as a nameless page.
+const INVISIBLE: [char; 5] = [
+    '\u{2064}', // INVISIBLE PLUS
+    '\u{3164}', // HANGUL FILLER
+    '\u{115F}', // HANGUL CHOSEONG FILLER
+    '\u{180E}', // MONGOLIAN VOWEL SEPARATOR
+    '\u{2800}', // BRAILLE PATTERN BLANK
+];
+
 /// Is this id nothing but blanks? An id that is must never become a live
 /// mark: the corpus checks read a `CommandRef` as a claim that the command
 /// exists.
@@ -113,11 +129,105 @@ impl Closers {
 /// keep in their head. The consequence is deliberate: an id whose bytes were
 /// invalid UTF-8 (lossy-decoded to `U+FFFD`) also stays literal text.
 fn is_blank_id(id: &str) -> bool {
-    id.chars().all(|c| c.is_whitespace() || c == '\u{FFFD}')
+    id.chars()
+        .all(|c| c.is_whitespace() || c == '\u{FFFD}' || INVISIBLE.contains(&c))
+}
+
+/// What the parser is reading. It decides three things at once — masking,
+/// which live marks may exist, and which command ids belong to the author —
+/// because they are one decision: how much this text is trusted to say.
+#[derive(Clone, Copy, Debug)]
+enum Mode<'a> {
+    /// The embedded corpus. Our own text: nothing masked, every mark live.
+    Trusted,
+    /// A plugin `help.md`, on behalf of the plugin whose HOST-ASSIGNED id
+    /// this is. Masked, and the live marks restricted to what a plugin may
+    /// say about itself.
+    Plugin(&'a str),
+}
+
+impl Mode<'_> {
+    /// Does this text get its terminal hazards masked?
+    fn masks(self) -> bool {
+        matches!(self, Self::Plugin(_))
+    }
+
+    /// May `{{cmd:id}}` become a live reference here?
+    ///
+    /// A plugin may only reference ITS OWN commands. Otherwise a `help.md`
+    /// writes `> ⚠ Press {{cmd:fs.delete}} to apply the update` and gets the
+    /// host's warning chrome, the host's real effective chord resolved at
+    /// render time, and a runnable row on the same dispatch path as the
+    /// palette — added after approval, since help is outside the approval
+    /// digest. The refusal lives HERE, where the data is built, not in the
+    /// frontend that will draw it.
+    fn allows_command(self, id: &str) -> bool {
+        match self {
+            Self::Trusted => !is_blank_id(id),
+            Self::Plugin(plugin) => is_own_command(id, plugin),
+        }
+    }
+
+    /// May `[[topic]]` become a live link here?
+    ///
+    /// Never from a plugin. `see_also` is dropped so a plugin cannot link
+    /// into the host's topics; a `[[…]]` in the body is the same jump
+    /// through the other door, and the two must agree.
+    fn allows_link(self) -> bool {
+        matches!(self, Self::Trusted)
+    }
+}
+
+/// Prefix of a plugin command's dispatch key, as built by the palette
+/// (`norte-frontend`): `plugin:{plugin_id}:{command_id}`.
+const COMMAND_PREFIX: &str = "plugin:";
+
+/// Ceiling on a command id, in characters. The honest maximum is
+/// `plugin:` + a 128-char plugin id + `:` + a 64-char command id = 200, so
+/// this cannot bite a real command. Anything longer is not a dispatch key,
+/// and it is DROPPED rather than truncated: a truncated key is a different
+/// key, which could name something else entirely.
+const MAX_COMMAND_ID_CHARS: usize = 200;
+
+/// Is `id` a dispatch key for a command belonging to `plugin`?
+///
+/// The rule is the palette's: `plugin:{plugin_id}:{command_id}`, where the
+/// plugin id is charset-validated by the core and can never contain `:`, so
+/// the split is unambiguous. Same reasoning as the palette's mandatory
+/// `[extension]` prefix on plugin rows — a plugin naming its command exactly
+/// like a built-in must not be able to pass for one.
+///
+/// Everything here REJECTS; nothing rewrites. A command id is an identity, so
+/// masking it would be worse than useless: it would produce a key that
+/// resolves to nothing, or to the wrong thing. A key we could not paint
+/// safely is a key we refuse — which is also what lets the model promise that
+/// every string it carries is free of terminal hazards.
+fn is_own_command(id: &str, plugin: &str) -> bool {
+    // A plugin id that is empty, or that carries the separator, would make
+    // the split ambiguous. Fail closed: this entry point is fed over the
+    // wire and does not get to assume the caller validated anything.
+    if plugin.is_empty() || plugin.contains(':') {
+        return false;
+    }
+    if id.chars().count() > MAX_COMMAND_ID_CHARS {
+        return false;
+    }
+    // `U+FFFD` too: it is what a masked hazard and an undecodable byte both
+    // become, and neither is part of a command anyone can dispatch.
+    if id
+        .chars()
+        .any(|c| c == '\u{FFFD}' || INVISIBLE.contains(&c) || norte_encoding::is_terminal_hazard(c))
+    {
+        return false;
+    }
+    id.strip_prefix(COMMAND_PREFIX)
+        .and_then(|rest| rest.strip_prefix(plugin))
+        .and_then(|rest| rest.strip_prefix(':'))
+        .is_some_and(|cmd| !is_blank_id(cmd))
 }
 
 /// `{{cmd:…}}` and `[[…]]`, the corpus' two own marks.
-fn take_mark(rest: &str, closers: &mut Closers) -> Option<(Span, usize)> {
+fn take_mark(rest: &str, closers: &mut Closers, mode: Mode<'_>) -> Option<(Span, usize)> {
     if closers.cmd
         && let Some(after) = rest.strip_prefix(CMD_OPEN)
     {
@@ -127,7 +237,10 @@ fn take_mark(rest: &str, closers: &mut Closers) -> Option<(Span, usize)> {
             return None;
         };
         let id = after[..end].trim();
-        if is_blank_id(id) {
+        // A refused mark degrades to literal text, exactly as a malformed
+        // one does: the reader still sees the sentence, and the `{{cmd:…}}`
+        // left in it is the evidence that something claimed to be a command.
+        if !mode.allows_command(id) {
             return None;
         }
         return Some((
@@ -144,7 +257,7 @@ fn take_mark(rest: &str, closers: &mut Closers) -> Option<(Span, usize)> {
             return None;
         };
         let id = after[..end].trim();
-        if is_blank_id(id) {
+        if !mode.allows_link() || is_blank_id(id) {
             return None;
         }
         return Some((
@@ -194,8 +307,16 @@ pub struct Limits {
     /// can hold an arbitrary number of cells or items, which is what
     /// [`Limits::max_cells`] is for.
     pub max_blocks: usize,
-    /// Maximum bytes of a single line, code-fence content included. A longer
+    /// Maximum bytes of a SOURCE line, code-fence content included. A longer
     /// line is cut on a `char` boundary; the rest of the line is dropped.
+    ///
+    /// The bound is on the source, not on the model. Masking runs after the
+    /// clamp and replaces a 1-byte control with a 3-byte `U+FFFD`, so a line
+    /// of nothing but controls reaches the model at three times this number —
+    /// and never more, since 3 bytes is the most a single character can grow
+    /// to. Clamping again afterwards was the alternative and it is worse: it
+    /// would cut a line whose masked form is over the ceiling while its
+    /// source was not, which is a loss the source cannot explain.
     pub max_line_bytes: usize,
     /// Maximum table cells a whole body may produce, header cells included.
     ///
@@ -262,9 +383,61 @@ pub struct Parsed {
     /// they have no column to live in — flagging them would badge every
     /// topic with a typo'd table row as truncated.
     pub truncated: bool,
-    /// The source was not valid UTF-8 and was decoded lossily. Always `false`
-    /// for [`parse_trusted`], whose input is already a `&str`.
+    /// Some byte of the source did not decode under the detected encoding and
+    /// came out as `U+FFFD`. Always `false` for [`parse_trusted`], whose input
+    /// is already a `&str`.
+    ///
+    /// It is NOT "the bytes were not UTF-8": [`parse_untrusted`] detects the
+    /// encoding before decoding, so a windows-1252 or UTF-16 `help.md` reads
+    /// correctly and is not lossy. What the flag reports is text that could
+    /// not be recovered under ANY reading the parser was willing to make.
     pub lossy: bool,
+}
+
+impl Parsed {
+    /// ORs in flags a caller learnt out of band, in BOTH places they live:
+    /// this struct and the [`Origin::Plugin`] copy a renderer reads.
+    ///
+    /// This is the seam for the phase H3e wire hop. The host parses a plugin
+    /// `help.md` (say `truncated == true`), sends the ALREADY BOUNDED
+    /// markdown over the protocol, and the frontend parses that. Both flags
+    /// come out structurally false on the second parse — the text arrives
+    /// short and clean, so nothing trips a ceiling and nothing fails to
+    /// decode — and the badge, which is the whole user-facing mitigation for
+    /// hostile help, would silently go clean. Only the sender knows, so the
+    /// sender has to be able to say.
+    ///
+    /// It only ever ORs: a caller cannot clear a flag this parse raised.
+    ///
+    /// ```
+    /// use norte_help::{Origin, parse_untrusted};
+    ///
+    /// // What the frontend re-parses: already bounded, nothing to flag.
+    /// let parsed = parse_untrusted(b"body", "acme.ftp", None);
+    /// assert!(!parsed.truncated);
+    ///
+    /// let parsed = parsed.fold_flags(true, false);
+    /// assert!(parsed.truncated && !parsed.lossy);
+    /// let Origin::Plugin { truncated, .. } = parsed.topic.origin else {
+    ///     unreachable!("a plugin topic")
+    /// };
+    /// assert!(truncated, "the copy the renderer reads is corrected too");
+    /// ```
+    #[must_use]
+    pub fn fold_flags(mut self, truncated: bool, lossy: bool) -> Self {
+        self.truncated |= truncated;
+        self.lossy |= lossy;
+        if let Origin::Plugin {
+            truncated: t,
+            lossy: l,
+            ..
+        } = &mut self.topic.origin
+        {
+            *t |= truncated;
+            *l |= lossy;
+        }
+        self
+    }
 }
 
 /// Why a TRUSTED topic could not be parsed.
@@ -311,7 +484,7 @@ pub enum ParseError {
 pub fn parse_trusted(source: &str) -> Result<Parsed, ParseError> {
     let (fm, body) = front_matter::split(source)?;
     let limits = Limits::built_in();
-    let (blocks, truncated) = blocks_of(body, limits, false);
+    let (blocks, truncated) = blocks_of(body, limits, Mode::Trusted);
     Ok(Parsed {
         topic: Topic {
             // Raw, and only sound because this is the TRUSTED corpus.
@@ -349,20 +522,77 @@ pub fn parse_trusted(source: &str) -> Result<Parsed, ParseError> {
 /// a 60 KiB "title".
 const MAX_HEADER_CHARS: usize = 280;
 
+/// How far the boundary walk may step back: a UTF-8 character is at most four
+/// bytes, so three continuation bytes is the most that can ever precede a cut
+/// that landed inside one.
+const MAX_WALK_BACK: usize = 3;
+
 /// Truncates to `max` bytes without splitting a UTF-8 character (when the
 /// bytes are UTF-8 at all).
 ///
 /// The walk back cannot underflow and cannot loop: `cut` only decreases, and
-/// the guards stop it at 0. When `max >= bytes.len()` nothing is examined,
-/// so a slice of pure continuation bytes — which is not valid UTF-8 at all —
-/// either comes back whole or is walked down to empty.
+/// the guards stop it at 0. It is also BOUNDED to [`MAX_WALK_BACK`] steps,
+/// which is not an optimisation — without it, a source of pure continuation
+/// bytes (`0x80` repeated, valid UTF-8 at no offset at all) walks the cut down
+/// to ZERO and the whole document vanishes: 64 KiB in, an empty topic out,
+/// with `lossy` reporting clean because there was nothing left to decode.
+/// Failing to find a boundary within three steps means these are not UTF-8
+/// bytes, so the cut stands where it was and the decoder deals with them.
+///
+/// For a non-UTF-8 encoding this is a best-effort cut and nothing more; the
+/// real safety net is `norte_encoding::decode` with `complete = false`, which
+/// leaves a sequence split by the cut PENDING instead of calling it a loss.
 fn cut_at_boundary(bytes: &[u8], max: usize) -> &[u8] {
     let mut cut = max.min(bytes.len());
+    let floor = cut.saturating_sub(MAX_WALK_BACK);
     // Walk back while the cut byte is a `10xxxxxx` continuation byte.
-    while cut > 0 && cut < bytes.len() && bytes[cut] & 0b1100_0000 == 0b1000_0000 {
+    while cut > floor && cut < bytes.len() && bytes[cut] & 0b1100_0000 == 0b1000_0000 {
         cut -= 1;
     }
     &bytes[..cut]
+}
+
+/// Decodes a plugin file into text, plus whether anything failed to decode.
+///
+/// This is the house text boundary (ADR 0008): `norte_encoding::detect` then
+/// `decode`, the same pipeline the viewer uses. Hard-coding a UTF-8 read
+/// instead was two bugs at once — a `help.md` saved by a Windows editor
+/// carries a `EF BB BF` BOM, which made the `+++` prefix fail and threw the
+/// entire front matter away with no badge at all, and a UTF-16 or
+/// windows-1252 file rendered as mojibake with every flag clean.
+///
+/// `head` is the bounded prefix that will actually be parsed; `bytes` is the
+/// whole source, used for the DECISION and for the honesty of the flag.
+fn decode_source(bytes: &[u8], head: &[u8]) -> (String, bool) {
+    let utf8_whole = std::str::from_utf8(bytes).is_ok();
+    let encoding = match norte_encoding::detect(bytes) {
+        // A BOM is certainty, not statistics.
+        norte_encoding::Detection::Text {
+            encoding,
+            bom: true,
+        } => encoding,
+        // Valid UTF-8 IS UTF-8. Asking chardetng about a file we can already
+        // read invites a statistical guess to mangle a short document.
+        _ if utf8_whole => norte_encoding::UTF_8,
+        norte_encoding::Detection::Text { encoding, .. } => encoding,
+        // NUL and no BOM: `detect` calls that binary, which for a file the
+        // user opens means the hexview. There is no hexview for a help topic,
+        // and refusing to show a plugin's page over one stray NUL is worse
+        // than showing it with the NUL masked.
+        norte_encoding::Detection::Binary => norte_encoding::UTF_8,
+    };
+    let cut = head.len() < bytes.len();
+    // `complete = false` when the tail was cut: a multi-byte sequence split
+    // by OUR ceiling is pending, not a loss.
+    let decoded = norte_encoding::decode(head, encoding, !cut);
+    // The cut must not be able to hide a decode failure. Beyond the ceiling
+    // nothing is decoded, so for UTF-8 — every `help.md` a human writes — the
+    // whole-input check above answers it in constant memory. For any other
+    // encoding the discarded tail is genuinely unexamined, which is the price
+    // of not decoding an arbitrarily large file to set one bit; `truncated`
+    // is already raised in that case, so the badge is never silent.
+    let lossy = decoded.had_errors || (cut && encoding == norte_encoding::UTF_8 && !utf8_whole);
+    (decoded.text, lossy)
 }
 
 /// Masks and bounds ONE third-party string on its way into the model, raising
@@ -382,52 +612,69 @@ fn header_string(s: &str, truncated: &mut bool) -> String {
     mask_if(cut, true)
 }
 
-/// Parses a plugin `help.md`. NEVER fails: with no header it falls back to
-/// `fallback_id` for id and title, decodes invalid UTF-8 lossily, bounds by
-/// [`Limits::untrusted`], and masks terminal hazards AT PARSE TIME (masking
-/// lives where the data is built, exactly as the palette rows do, instead of
-/// being scattered across every frontend).
+/// Most commands one topic may document. A help page lists the handful of
+/// commands its prose is about; a long list belongs in the palette, which is
+/// built from the manifest and not from prose.
+///
+/// The cap is a memory bound as much as a display one: the front matter is
+/// TOML and sits outside [`Limits`], so a 64 KiB header of nothing but
+/// `commands = ["", "", …]` used to become tens of thousands of entries —
+/// measured at 4093 with realistic ids, 21829 with empty ones — every one of
+/// them a runnable row on the same dispatch path as the palette.
+const MAX_HEADER_COMMANDS: usize = 16;
+
+/// Parses a plugin `help.md`. NEVER fails: it detects the encoding and
+/// decodes accordingly, bounds by [`Limits::untrusted`], and masks terminal
+/// hazards AT PARSE TIME (masking lives where the data is built, exactly as
+/// the palette rows do, instead of being scattered across every frontend).
+///
+/// `fallback_id` is the plugin's id, supplied by the HOST registry — it is
+/// not plugin input, and the caller MUST pass an id it has validated (the
+/// catalogue restricts them to `[A-Za-z0-9-]` segments). It is used verbatim,
+/// because it is an identity: see the note on ids below.
 ///
 /// ```
 /// use norte_help::{Origin, parse_untrusted};
 ///
-/// // Not even UTF-8, and no header: it still comes back as a topic.
-/// let parsed = parse_untrusted(b"hi \xff\xfe", "acme.ftp", None);
+/// // A UTF-8 BOM, no header, and a lone invalid byte: still a topic.
+/// let parsed = parse_untrusted(b"\xef\xbb\xbfhi \xff", "acme.ftp", None);
 /// assert_eq!(parsed.topic.id.as_str(), "acme.ftp");
 /// assert_eq!(parsed.topic.title, "acme.ftp");
 /// assert!(parsed.lossy && !parsed.truncated);
 /// assert!(matches!(parsed.topic.origin, Origin::Plugin { .. }));
 /// ```
 ///
-/// # What a plugin header may and may not say
+/// # What a plugin may and may not say
 ///
-/// `tags`, `see_also` and `context` are DROPPED, deliberately, even when the
-/// header declares them. A plugin does not get to file itself under the
-/// host's index groups (`tags`), link INTO host topics (`see_also`), or claim
-/// a UI context so that F1 opens its page instead of the host's
-/// (`context`). Only the `commands` it documents survive, masked and capped
-/// like every other header string; enforcing that those ids are namespaced to
-/// the plugin is host-side work and lands with the registry in phase H3e —
-/// this crate only guarantees the fields it drops.
+/// The topic id is HOST-ASSIGNED: whatever the header declares, the id is
+/// `fallback_id`. A plugin writing `id = "copying"` would otherwise shadow
+/// the built-in topic of that name once the corpus and the registry share one
+/// id space, and every built-in `[[copying]]` link would land in plugin prose.
 ///
-/// `id` and `title` are honoured when the header declares them, because a
-/// plugin naming its own page is exactly what the header is for — unless what
-/// it declares is BLANK, in which case `fallback_id` takes over rather than
-/// leaving an unaddressable topic or a nameless page. Both are
-/// masked and capped at 280 characters — the same cap the plugin manifest
-/// applies to `description` — as is `publisher`, which arrives from the
-/// manifest with no bound of its own. A cap that bit raises
-/// [`Parsed::truncated`], so the UI badge tells the reader that what they are
-/// looking at is not everything the plugin wrote.
+/// `tags`, `see_also` and `context` are DROPPED for the same reason, even
+/// when the header declares them: a plugin does not get to file itself under
+/// the host's index groups (`tags`), link INTO host topics (`see_also`), or
+/// claim a UI context so that F1 opens its page instead of the host's
+/// (`context`). In the body, `[[topic]]` degrades to literal text — the same
+/// jump through the other door — and `{{cmd:id}}` survives only when `id` is
+/// this plugin's own dispatch key, `plugin:{fallback_id}:{command}`.
+///
+/// What a plugin DOES get to say is its `title`, masked and capped at 280
+/// characters (the cap the manifest already applies to `description`), and
+/// the ids of its own commands, at most sixteen of them.
+/// `publisher` is masked and capped the same way.
+///
+/// Command ids are DISPATCH KEYS: they are never masked, because masking an
+/// identity produces a key that resolves to nothing or to something else.
+/// They are accepted or REFUSED, never rewritten — which is what lets the
+/// model still promise that every string it carries is free of terminal
+/// hazards.
 #[must_use]
 pub fn parse_untrusted(bytes: &[u8], fallback_id: &str, publisher: Option<String>) -> Parsed {
     let limits = Limits::untrusted();
     let mut truncated = bytes.len() > limits.max_bytes;
     let head = cut_at_boundary(bytes, limits.max_bytes);
-    let text = String::from_utf8_lossy(head);
-    // `Cow::Owned` is exactly "at least one byte was replaced": the flag
-    // means what it says, no heuristic involved.
-    let lossy = matches!(text, std::borrow::Cow::Owned(_));
+    let (text, lossy) = decode_source(bytes, head);
 
     // ANY header failure degrades to "there is no header", never to an error:
     // the whole text becomes the body. A cut that lands mid-header is the
@@ -435,51 +682,51 @@ pub fn parse_untrusted(bytes: &[u8], fallback_id: &str, publisher: Option<String
     // denial of service dressed up as strictness.
     let (fm, body) = match front_matter::split(&text) {
         Ok((fm, body)) => (Some(fm), body),
-        Err(_) => (None, text.as_ref()),
+        Err(_) => (None, text.as_str()),
     };
-    let (blocks, cut) = blocks_of(body, limits, true);
+    let (blocks, cut) = blocks_of(body, limits, Mode::Plugin(fallback_id));
     truncated |= cut;
 
-    // A header field that is BLANK falls back too, and blank is the parser's
-    // own notion of it (`is_blank_id`): whitespace or `U+FFFD`, so a field
-    // whose bytes were invalid UTF-8, or nothing but masked hazards, counts.
-    // `id = ""` would otherwise produce an unaddressable topic and an empty
-    // title would render as a nameless page — both are one keystroke away for
-    // a hostile author, and the plugin id is the only name we can trust.
-    let id = header_string(
-        fm.as_ref().map_or(fallback_id, |f| f.id.as_str()),
-        &mut truncated,
-    );
-    let id = if is_blank_id(&id) {
-        header_string(fallback_id, &mut truncated)
-    } else {
-        id
-    };
-    let title = header_string(
-        fm.as_ref().map_or(fallback_id, |f| f.title.as_str()),
-        &mut truncated,
-    );
+    // Masked FIRST, then tested for blankness: a title of nothing but bidi
+    // overrides is not blank as bytes and is blank as pixels. An empty title
+    // renders a nameless page, so the host-assigned id takes over.
+    let title = fm
+        .as_ref()
+        .map_or_else(String::new, |f| header_string(&f.title, &mut truncated));
     let title = if is_blank_id(&title) {
-        header_string(fallback_id, &mut truncated)
+        fallback_id.to_owned()
     } else {
         title
     };
     let commands = fm.map_or_else(Vec::new, |f| {
-        f.commands
-            .iter()
-            .map(|c| header_string(c, &mut truncated))
-            .collect()
+        let mut out: Vec<String> = f
+            .commands
+            .into_iter()
+            // Same predicate as the body's `{{cmd:…}}`, so the two doors
+            // agree: its own commands, non-blank, and never rewritten.
+            .filter(|c| is_own_command(c, fallback_id))
+            .collect();
+        if out.len() > MAX_HEADER_COMMANDS {
+            out.truncate(MAX_HEADER_COMMANDS);
+            truncated = true;
+        }
+        out
     });
-    // The catalogue validates a plugin id to reverse-DNS ASCII, so masking is
-    // a no-op for every id that got that far. It runs anyway: this entry point
-    // is fed over the wire in phase H3e and must not depend on a caller's
-    // validation for a claim it makes itself.
-    let origin_id = header_string(fallback_id, &mut truncated);
-    let publisher = publisher.map(|p| header_string(&p, &mut truncated));
+    // A capped `publisher` does NOT raise `truncated`. The badge is about the
+    // PLUGIN'S DOCUMENT — "what you are reading is not all of it" — and
+    // `publisher` is manifest metadata the host passed in alongside it.
+    // Conflating them badges a byte-complete `help.md` because someone's
+    // company name is long, and a badge that cries wolf gets ignored.
+    let publisher = publisher.map(|p| header_string(&p, &mut false));
 
     Parsed {
         topic: Topic {
-            id: TopicId::new(id),
+            // Verbatim, in both copies: this is a LOOKUP KEY, and masking is
+            // not injective — `acme<RLO>ftp` and `acme<ZWSP>ftp` would
+            // collapse onto the same string, so a registry lookup could match
+            // the wrong plugin. It is host-supplied and host-validated, so
+            // there is nothing to mask in the first place.
+            id: TopicId::new(fallback_id),
             title,
             // Dropped on purpose; see the rustdoc above.
             tags: Vec::new(),
@@ -488,7 +735,7 @@ pub fn parse_untrusted(bytes: &[u8], fallback_id: &str, publisher: Option<String
             context: Vec::new(),
             blocks,
             origin: Origin::Plugin {
-                id: origin_id,
+                id: fallback_id.to_owned(),
                 publisher,
                 truncated,
                 lossy,
@@ -505,7 +752,7 @@ pub fn parse_untrusted(bytes: &[u8], fallback_id: &str, publisher: Option<String
 /// Line-oriented and single-pass: the grammar has no nesting, so a block is
 /// decided by the prefix of its first line and nothing needs to be
 /// backtracked. Returns the blocks and whether a [`Limits`] ceiling was hit.
-fn blocks_of(body: &str, limits: Limits, mask: bool) -> (Vec<Block>, bool) {
+fn blocks_of(body: &str, limits: Limits, mode: Mode<'_>) -> (Vec<Block>, bool) {
     let mut out = Vec::new();
     let mut truncated = false;
     let mut lines = body.lines().peekable();
@@ -525,10 +772,11 @@ fn blocks_of(body: &str, limits: Limits, mask: bool) -> (Vec<Block>, bool) {
         truncated |= cut;
 
         if line.trim().is_empty() {
-            flush(&mut para, &mut out, mask);
+            flush(&mut para, &mut out, mode);
         } else if let Some(rest) = line.strip_prefix("```") {
-            flush(&mut para, &mut out, mask);
-            let lang = (!rest.trim().is_empty()).then(|| mask_if(rest.trim().to_owned(), mask));
+            flush(&mut para, &mut out, mode);
+            let lang =
+                (!rest.trim().is_empty()).then(|| mask_if(rest.trim().to_owned(), mode.masks()));
             let mut text = String::new();
             // An unterminated fence deliberately eats the rest of the input:
             // `by_ref` leaves the outer `while let` on an exhausted iterator,
@@ -545,12 +793,12 @@ fn blocks_of(body: &str, limits: Limits, mask: bool) -> (Vec<Block>, bool) {
                 // would turn the separators the PARSER wrote into `U+FFFD`
                 // and collapse the code block into one unreadable line.
                 // Masking applies to the plugin's bytes, not to our structure.
-                text.push_str(&mask_if(l.to_owned(), mask));
+                text.push_str(&mask_if(l.to_owned(), mode.masks()));
                 text.push('\n');
             }
             out.push(Block::Code { lang, text });
         } else if let Some(rest) = line.strip_prefix('#') {
-            flush(&mut para, &mut out, mask);
+            flush(&mut para, &mut out, mode);
             // One `#` is already stripped, so the hashes left here are the
             // ones ABOVE level 1. Clamped to 3 — the model documents 1..=3 —
             // by counting, never by arithmetic that could overflow `u8`:
@@ -563,18 +811,18 @@ fn blocks_of(body: &str, limits: Limits, mask: bool) -> (Vec<Block>, bool) {
             let text = rest.trim_start_matches('#').trim();
             out.push(Block::Heading {
                 level,
-                text: mask_if(text.to_owned(), mask),
+                text: mask_if(text.to_owned(), mode.masks()),
             });
         } else if let Some(rest) = line.strip_prefix("> ") {
-            flush(&mut para, &mut out, mask);
+            flush(&mut para, &mut out, mode);
             let (kind, body) = callout_kind(rest);
             out.push(Block::Callout {
                 kind,
-                spans: spans_masked(body, mask),
+                spans: spans_masked(body, mode),
             });
         } else if let Some(rest) = line.strip_prefix("- ") {
-            flush(&mut para, &mut out, mask);
-            let mut items = vec![spans_masked(rest, mask)];
+            flush(&mut para, &mut out, mode);
+            let mut items = vec![spans_masked(rest, mode)];
             // `to_owned` on purpose: `peek` borrows `lines` for the WHOLE body
             // of the `while let`, so the inner `next()` would not compile with
             // a live reference into the buffer.
@@ -587,13 +835,13 @@ fn blocks_of(body: &str, limits: Limits, mask: bool) -> (Vec<Block>, bool) {
                     break;
                 };
                 truncated |= cut;
-                items.push(spans_masked(item, mask));
+                items.push(spans_masked(item, mode));
                 lines.next();
             }
             out.push(Block::Bullets(items));
         } else if line.starts_with('|') {
-            flush(&mut para, &mut out, mask);
-            let mut header = cells(line, mask);
+            flush(&mut para, &mut out, mode);
+            let mut header = cells(line, mode);
             // Every cell of this body, header cells included, comes out of one
             // budget. Rows are padded to the header width, so it is the
             // PRODUCT width × height that has to be bounded, and nothing else
@@ -629,14 +877,14 @@ fn blocks_of(body: &str, limits: Limits, mask: bool) -> (Vec<Block>, bool) {
                 cells_left -= width;
                 let (row, cut) = clamp_line(&row, limits);
                 truncated |= cut;
-                rows.push(normalise_row(cells(row, mask), width));
+                rows.push(normalise_row(cells(row, mode), width));
             }
             out.push(Block::Table { header, rows });
         } else {
             para.push(line.to_owned());
         }
     }
-    flush(&mut para, &mut out, mask);
+    flush(&mut para, &mut out, mode);
     // One iteration can push the pending paragraph AND its own block, so the
     // cap may be overshot by one. Clamping here makes `blocks.len() <=
     // max_blocks` hold unconditionally. It bounds the block COUNT only —
@@ -651,12 +899,22 @@ fn blocks_of(body: &str, limits: Limits, mask: bool) -> (Vec<Block>, bool) {
 /// Emits the paragraph built up so far, if there is one, and empties the
 /// buffer. Lines are joined with a single space: a hard-wrapped corpus must
 /// reflow to the reader's width, not show ours.
-fn flush(para: &mut Vec<String>, out: &mut Vec<Block>, mask: bool) {
-    if !para.is_empty() {
-        let joined = para.join(" ");
-        out.push(Block::Paragraph(spans_masked(&joined, mask)));
-        para.clear();
+fn flush(para: &mut Vec<String>, out: &mut Vec<Block>, mode: Mode<'_>) {
+    if para.is_empty() {
+        return;
     }
+    let mut spans = Vec::new();
+    for (i, line) in para.iter().enumerate() {
+        if i > 0 {
+            // The joiner is OUR structure, not the author's bytes, so it is
+            // written after the line was parsed on its own. That ordering is
+            // the point: see [`merge_text`].
+            spans.push(Span::Text(" ".to_owned()));
+        }
+        spans.extend(spans_masked(line, mode));
+    }
+    out.push(Block::Paragraph(merge_text(spans)));
+    para.clear();
 }
 
 /// Cuts a line to `max_line_bytes`, always on a `char` boundary. Returns the
@@ -677,10 +935,10 @@ fn clamp_line(raw: &str, limits: Limits) -> (&str, bool) {
 }
 
 /// The cells of a table line, without their pipes and trimmed.
-fn cells(line: &str, mask: bool) -> Vec<String> {
+fn cells(line: &str, mode: Mode<'_>) -> Vec<String> {
     line.trim_matches('|')
         .split('|')
-        .map(|c| mask_if(c.trim().to_owned(), mask))
+        .map(|c| mask_if(c.trim().to_owned(), mode.masks()))
         .collect()
 }
 
@@ -739,12 +997,35 @@ fn callout_kind(rest: &str) -> (Callout, &str) {
 /// and `U+FFFD` is not, so the "is this id blank?" test would flip and
 /// `{{cmd:\t}}` would fabricate a command reference. That is why the test is
 /// [`is_blank_id`] and not `trim().is_empty()`.
-fn spans_masked(line: &str, mask: bool) -> Vec<Span> {
-    if mask {
-        spans(&norte_encoding::mask_terminal_hazards(line))
+fn spans_masked(line: &str, mode: Mode<'_>) -> Vec<Span> {
+    if mode.masks() {
+        spans(&norte_encoding::mask_terminal_hazards(line), mode)
     } else {
-        spans(line)
+        spans(line, mode)
     }
+}
+
+/// Concatenates adjacent [`Span::Text`].
+///
+/// A paragraph is parsed LINE BY LINE and welded back together here. Parsing
+/// the joined text instead would let a mark straddle a line break: a body of
+/// `{{cmd:` then `fs.copy}}` holds no complete mark on either line, yet the
+/// joined string does — a reference nobody wrote, and one that a line-by-line
+/// host-side validator could never see coming. This is the mirror of the code
+/// block, where masking runs per line and the joining comes after.
+///
+/// Merging back matters for the reader: a hard-wrapped corpus must reach the
+/// renderer as ONE text span, so it reflows to the reader's width.
+fn merge_text(spans: Vec<Span>) -> Vec<Span> {
+    let mut out: Vec<Span> = Vec::with_capacity(spans.len());
+    for span in spans {
+        if let (Some(Span::Text(prev)), Span::Text(next)) = (out.last_mut(), &span) {
+            prev.push_str(next);
+            continue;
+        }
+        out.push(span);
+    }
+    out
 }
 
 /// Masks terminal hazards when the content is third-party.
@@ -766,6 +1047,18 @@ fn mask_if(s: String, mask: bool) -> String {
 mod tests {
     use super::*;
     use crate::model::{Block, Callout, Span, TopicId};
+
+    /// [`super::spans`] in TRUSTED mode: most of these cases are about the
+    /// grammar, which is the same in both modes. The hostile-mode
+    /// restrictions have their own tests, here and in `tests/hostile.rs`.
+    fn spans(line: &str) -> Vec<Span> {
+        super::spans(line, Mode::Trusted)
+    }
+
+    /// [`super::spans_counted`] in trusted mode.
+    fn spans_counted(line: &str) -> (Vec<Span>, usize) {
+        super::spans_counted(line, Mode::Trusted)
+    }
 
     #[test]
     fn plain_text_is_a_single_span() {
@@ -855,23 +1148,23 @@ mod tests {
         );
     }
 
-    /// Asserts that `line` produces no live mark under BOTH mask settings,
-    /// and that whatever it does produce still carries every byte of the
-    /// (possibly masked) line.
+    /// Asserts that `line` produces no live mark in EITHER mode, and that
+    /// whatever it does produce still carries every byte of the (possibly
+    /// masked) line.
     ///
-    /// Both settings, because masking runs before the span parse and can
+    /// Both modes, because masking runs before the span parse and can
     /// therefore change what the parser decides about a mark's content — see
-    /// [`is_blank_id`]. A test that only ever ran with `mask == false` let
-    /// exactly that bug through.
+    /// [`is_blank_id`]. A test that only ever ran trusted let exactly that
+    /// bug through.
     fn no_live_mark_either_way(line: &str) {
-        for mask in [false, true] {
-            let out = spans_masked(line, mask);
+        for mode in [Mode::Trusted, Mode::Plugin("acme")] {
+            let out = spans_masked(line, mode);
             assert!(
                 !out.iter()
                     .any(|s| matches!(s, Span::CommandRef(_) | Span::TopicLink(_))),
-                "mask={mask}: {line:?} fabricated a live mark: {out:?}"
+                "{mode:?}: {line:?} fabricated a live mark: {out:?}"
             );
-            let expected = if mask {
+            let expected = if mode.masks() {
                 norte_encoding::mask_terminal_hazards(line)
             } else {
                 line.to_owned()
@@ -879,7 +1172,7 @@ mod tests {
             assert_eq!(
                 payloads(&out).concat(),
                 expected,
-                "mask={mask}: {line:?} lost bytes"
+                "{mode:?}: {line:?} lost bytes"
             );
         }
     }
@@ -1244,7 +1537,7 @@ key = 1\n\
     /// loss `Parsed::truncated` deliberately does not report — its rustdoc
     /// says so — which is why the ragged-table test can use this helper.
     fn blocks(body: &str) -> Vec<Block> {
-        let (out, truncated) = blocks_of(body, Limits::built_in(), false);
+        let (out, truncated) = blocks_of(body, Limits::built_in(), Mode::Trusted);
         assert!(!truncated, "this body fits: {out:?}");
         out
     }
@@ -1305,7 +1598,7 @@ key = 1\n\
         body.push_str(&"|\n".repeat(40_000));
         body.truncate(limits.max_bytes);
 
-        let (out, truncated) = blocks_of(&body, limits, true);
+        let (out, truncated) = blocks_of(&body, limits, Mode::Plugin("acme"));
         assert!(truncated, "a table cut short must say so");
         assert!(
             cell_count(&out) <= limits.max_cells,
@@ -1320,12 +1613,16 @@ key = 1\n\
             max_cells: 100,
             ..Limits::built_in()
         };
-        let (out, truncated) = blocks_of(&many, tight, false);
+        let (out, truncated) = blocks_of(&many, tight, Mode::Trusted);
         assert!(truncated);
         assert!(cell_count(&out) <= 100, "cells={}", cell_count(&out));
         // Still bounded when the budget runs out mid-table, and the leftover
         // rows do not each open a table of their own.
-        let (out, _) = blocks_of("| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n", tight, false);
+        let (out, _) = blocks_of(
+            "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n",
+            tight,
+            Mode::Trusted,
+        );
         assert_eq!(out.len(), 1, "{out:?}");
     }
 
@@ -1341,7 +1638,7 @@ p\u{202E}ara\n\n\
 > \u{26A0} car\u{202E}eful\n\n\
 | a\u{202E}1 | b |\n|---|---|\n| c\u{202E}1 | d |\n\n\
 ```to\u{202E}ml\nco\u{202E}de\n```\n";
-        let (out, _) = blocks_of(body, Limits::untrusted(), true);
+        let (out, _) = blocks_of(body, Limits::untrusted(), Mode::Plugin("acme"));
         assert_eq!(out.len(), 6, "{out:?}");
         // The REAL strings, never `{:?}`: Debug escapes `\u{202e}` into ASCII,
         // so an assertion over formatted output would pass just as happily
@@ -1369,7 +1666,7 @@ p\u{202E}ara\n\n\
         );
         // The same body unmasked keeps its bytes: masking is the ONLY
         // difference, not a change of shape.
-        let (plain, _) = blocks_of(body, Limits::untrusted(), false);
+        let (plain, _) = blocks_of(body, Limits::untrusted(), Mode::Trusted);
         assert_eq!(plain.len(), out.len());
         let plain = texts(&plain);
         assert_eq!(
@@ -1511,14 +1808,14 @@ p\u{202E}ara\n\n\
         assert_eq!(clamp_line("aaaaa", limits), ("aaaaa", false));
 
         // And through the parser: the flag reaches the caller.
-        let (out, truncated) = blocks_of("aaaañ tail\n", limits, false);
+        let (out, truncated) = blocks_of("aaaañ tail\n", limits, Mode::Trusted);
         assert!(truncated, "a cut line must raise the flag");
         assert_eq!(
             out,
             vec![Block::Paragraph(vec![Span::Text("aaaa".to_owned())])]
         );
         // A line cut down to nothing is a blank line, not a block.
-        let (out, truncated) = blocks_of("ñx\n", tight, false);
+        let (out, truncated) = blocks_of("ñx\n", tight, Mode::Trusted);
         assert!(truncated);
         assert!(out.is_empty(), "{out:?}");
     }
@@ -1529,7 +1826,7 @@ p\u{202E}ara\n\n\
             max_blocks: 2,
             ..Limits::built_in()
         };
-        let (out, truncated) = blocks_of("# a\n# b\n# c\n# d\n", limits, false);
+        let (out, truncated) = blocks_of("# a\n# b\n# c\n# d\n", limits, Mode::Trusted);
         assert!(truncated);
         assert_eq!(
             out,
@@ -1553,7 +1850,7 @@ p\u{202E}ara\n\n\
             max_blocks: 1,
             ..Limits::built_in()
         };
-        let (out, truncated) = blocks_of("para\n# h\n", one, false);
+        let (out, truncated) = blocks_of("para\n# h\n", one, Mode::Trusted);
         assert!(truncated);
         assert_eq!(out.len(), 1, "{out:?}");
         assert_eq!(
@@ -1565,10 +1862,10 @@ p\u{202E}ara\n\n\
         // ends in blank lines exactly at the cap dropped nothing, and a badge
         // that cries wolf over trailing whitespace teaches the reader to
         // ignore it.
-        let (out, truncated) = blocks_of("# a\n# b\n\n\n", limits, false);
+        let (out, truncated) = blocks_of("# a\n# b\n\n\n", limits, Mode::Trusted);
         assert_eq!(out.len(), 2);
         assert!(!truncated, "only blank lines were left: nothing was lost");
-        let (_, truncated) = blocks_of("# a\n# b\n\n\n# c\n", limits, false);
+        let (_, truncated) = blocks_of("# a\n# b\n\n\n# c\n", limits, Mode::Trusted);
         assert!(truncated, "a heading was left behind: that IS truncation");
     }
 
@@ -1693,11 +1990,22 @@ p\u{202E}ara\n\n\
             "max > len is not a cut, and the guard keeps the index in range"
         );
         // Pure continuation bytes: not valid UTF-8 at ANY offset, so the walk
-        // has no boundary to find and must stop at 0 instead of stepping
-        // below it. The bytes are exactly what a lossy decode later turns
-        // into `U+FFFD`.
+        // has no boundary to find. It must stop after `MAX_WALK_BACK` steps
+        // rather than march the cut down to zero and hand back an EMPTY
+        // document — which is what it used to do, silently, for a 64 KiB
+        // file. The bytes are exactly what the decoder later turns into
+        // `U+FFFD`.
         let all_cont = [0x80_u8; 16];
-        assert_eq!(cut_at_boundary(&all_cont, 8), b"", "walked down to empty");
+        assert_eq!(
+            cut_at_boundary(&all_cont, 8).len(),
+            8 - MAX_WALK_BACK,
+            "the walk is bounded: content survives bytes that are not UTF-8"
+        );
+        assert_eq!(
+            cut_at_boundary(&all_cont, 2).len(),
+            0,
+            "and it still cannot step below zero"
+        );
         assert_eq!(
             cut_at_boundary(&all_cont, 16),
             &all_cont,
@@ -1732,7 +2040,7 @@ p\u{202E}ara\n\n\
         for name in &names {
             for prefix in ["", "# ", "> ", "- ", "|", "```"] {
                 let body = format!("{prefix}{name}\n");
-                let (out, _) = blocks_of(&body, Limits::built_in(), false);
+                let (out, _) = blocks_of(&body, Limits::built_in(), Mode::Trusted);
                 assert!(out.len() <= 2, "{prefix:?} + {name:?} -> {out:?}");
                 if let Some(Block::Table { header, rows }) = out.first() {
                     assert!(rows.iter().all(|r| r.len() == header.len()));
@@ -1740,7 +2048,7 @@ p\u{202E}ara\n\n\
             }
         }
         let all = names.join("\n");
-        let (out, truncated) = blocks_of(&all, Limits::built_in(), false);
+        let (out, truncated) = blocks_of(&all, Limits::built_in(), Mode::Trusted);
         assert!(!truncated);
         assert!(!out.is_empty());
     }

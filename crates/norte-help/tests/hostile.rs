@@ -5,6 +5,11 @@
 //! Everything asserted here is a claim `Origin::Plugin` makes in its rustdoc
 //! — "third-party text, already masked and bounded by the parser". A claim
 //! nobody tests is a comment.
+//!
+//! The exception the model documents is exercised too: an identity is never
+//! masked. The plugin id is host-assigned and kept byte-exact, and a command
+//! id is a dispatch key the parser accepts or REFUSES but never rewrites, so
+//! the hazard sweep still covers both.
 
 use norte_help::{Block, Callout, Limits, Origin, Parsed, Span, Topic, parse_untrusted};
 
@@ -44,9 +49,13 @@ fn without_front_matter_it_neither_fails_nor_invents_a_title() {
 }
 
 #[test]
-fn invalid_utf8_decodes_lossily_and_raises_the_flag() {
-    let mut src = HEAD.as_bytes().to_vec();
-    src.extend_from_slice(b"\xff\xfe body");
+fn a_byte_the_detected_encoding_cannot_decode_raises_the_lossy_flag() {
+    // A UTF-8 BOM is CERTAINTY, not statistics: the encoding is settled, so
+    // the invalid byte that follows really is a decode failure and the badge
+    // must say so.
+    let mut src = b"\xef\xbb\xbf".to_vec();
+    src.extend_from_slice(HEAD.as_bytes());
+    src.extend_from_slice(b"body \xff\n");
     let parsed = parse_untrusted(&src, "p", None);
     assert!(parsed.lossy, "the flag feeds the UI badge");
     assert!(!parsed.topic.blocks.is_empty());
@@ -54,6 +63,49 @@ fn invalid_utf8_decodes_lossily_and_raises_the_flag() {
         panic!("a plugin topic");
     };
     assert!(lossy, "the model carries it too, not just the parse result");
+}
+
+#[test]
+fn a_utf8_bom_does_not_destroy_the_front_matter() {
+    // `EF BB BF` is what a Windows editor writes by default. Before the
+    // decode went through `norte_encoding`, those three bytes made the `+++`
+    // prefix fail: the header was lost, the raw TOML rendered as prose, and
+    // BOTH flags stayed false — a total loss with no badge.
+    let mut src = b"\xef\xbb\xbf".to_vec();
+    src.extend_from_slice("+++\nid = \"x\"\ntitle = \"Real title\"\n+++\nbody\n".as_bytes());
+    let parsed = parse_untrusted(&src, "acme.plugin", None);
+    assert_eq!(
+        parsed.topic.title, "Real title",
+        "the BOM is a byte-order mark, not content"
+    );
+    assert_eq!(
+        parsed.topic.blocks,
+        vec![Block::Paragraph(vec![Span::Text("body".to_owned())])],
+        "the TOML must not leak into the prose"
+    );
+    assert!(!parsed.truncated && !parsed.lossy);
+}
+
+#[test]
+fn every_content_fixture_decodes_to_its_declared_text() {
+    // The canonical content corpus, each one used as a plugin `help.md`.
+    // Asserting the boolean alone is what let mojibake through: a UTF-16LE
+    // file read as UTF-8 sets no flag and renders as garbage, so the
+    // assertion has to be against the DECODED TEXT.
+    let fixtures = norte_testkit::corpus::content_fixtures();
+    assert!(fixtures.len() >= 11, "the canonical corpus must not shrink");
+    for f in &fixtures {
+        let parsed = parse_untrusted(&f.bytes, "acme.plugin", None);
+        let text = paragraph_text(&parsed);
+        // The expected value is the decoded text with the SAME masking the
+        // parser applies — one fixture is a raw control injection, and
+        // masking it is the other half of this crate's job. Anything else
+        // that differs is a decode bug.
+        let expected = norte_encoding::mask_terminal_hazards(f.decoded.trim_end_matches('\n'));
+        assert_eq!(text, expected, "[{}] decoded as {:?}", f.id, text);
+        assert!(!parsed.lossy, "[{}] every fixture decodes cleanly", f.id);
+        assert_no_hazard(&parsed.topic, f.id);
+    }
 }
 
 #[test]
@@ -85,20 +137,161 @@ fn a_bidi_override_never_reaches_the_model_raw() {
 #[test]
 fn a_plugin_command_mark_survives_as_a_reference() {
     // A plugin documenting its OWN command is the whole point of the hostile
-    // mode: the mark must survive masking, unresolved.
-    let src = format!("{HEAD}run {{{{cmd:acme:sync}}}}\n");
+    // mode. The id is the DISPATCH KEY the palette already uses,
+    // `plugin:{plugin_id}:{command_id}` — the namespace is what tells a
+    // plugin's command apart from the host's.
+    let src = format!("{HEAD}run {{{{cmd:plugin:acme:sync}}}}\n");
     let parsed = parse_untrusted(src.as_bytes(), "acme", None);
-    let has_ref = parsed.topic.blocks.iter().any(|b| match b {
-        Block::Paragraph(spans) => spans
-            .iter()
-            .any(|s| matches!(s, Span::CommandRef(c) if c == "acme:sync")),
-        _ => false,
-    });
-    assert!(
-        has_ref,
+    assert_eq!(
+        command_refs(&parsed),
+        vec!["plugin:acme:sync".to_owned()],
         "the plugin documents ITS commands: {:?}",
         parsed.topic.blocks
     );
+}
+
+#[test]
+fn a_plugin_cannot_fabricate_a_reference_to_a_host_command() {
+    // The full payload from the audit. Warning chrome the host owns, the
+    // host's REAL effective chord resolved at render time, and an executable
+    // row — added after approval, since help is outside the approval digest.
+    // The mark must degrade to literal text exactly as a malformed one does.
+    let src = "+++\nid = \"x\"\ntitle = \"X\"\ncommands = [\"fs.delete\"]\n+++\n\
+> \u{26A0} **Action required.** Press {{cmd:fs.delete}} to apply the update.\n";
+    let parsed = parse_untrusted(src.as_bytes(), "acme", None);
+    assert!(
+        command_refs(&parsed).is_empty(),
+        "a host command was fabricated: {:?}",
+        parsed.topic.blocks
+    );
+    assert!(
+        parsed.topic.commands.is_empty(),
+        "the header list is the same door: {:?}",
+        parsed.topic.commands
+    );
+    // Degraded, not deleted: the reader still sees the sentence, and the
+    // literal mark in it is the evidence that something claimed to be a
+    // command and was refused.
+    let text = block_text(&parsed);
+    assert!(text.contains("{{cmd:fs.delete}}"), "{text:?}");
+
+    // Every near miss is refused too: a sibling plugin, a prefix that only
+    // looks like ours, and the bare `{plugin}:{cmd}` form that is NOT the
+    // dispatch key.
+    for id in [
+        "plugin:other:sync",
+        "plugin:acmex:sync",
+        "plugin:acme",
+        "plugin:acme:",
+        "acme:sync",
+        "fs.copy",
+        "plugin::sync",
+    ] {
+        let src = format!("{HEAD}run {{{{cmd:{id}}}}}\n");
+        let parsed = parse_untrusted(src.as_bytes(), "acme", None);
+        assert!(
+            command_refs(&parsed).is_empty(),
+            "{id:?} passed the namespace check"
+        );
+    }
+}
+
+#[test]
+fn a_plugin_cannot_claim_a_built_in_topic_id() {
+    // `id = "copying"` would shadow the host topic once the corpus and the
+    // registry share one id space, and every built-in `[[copying]]` link
+    // would jump into plugin prose. The topic id is HOST-ASSIGNED: whatever
+    // the header says, the id is the one the caller passed in.
+    let src = "+++\nid = \"copying\"\ntitle = \"Copying\"\n+++\nbody\n";
+    let parsed = parse_untrusted(src.as_bytes(), "acme.plugin", None);
+    assert_eq!(
+        parsed.topic.id.as_str(),
+        "acme.plugin",
+        "the header id is IGNORED, not honoured"
+    );
+    assert_eq!(
+        parsed.topic.title, "Copying",
+        "the title is the plugin's to choose: it names a page, it does not address one"
+    );
+}
+
+#[test]
+fn a_topic_link_in_plugin_prose_degrades_to_literal_text() {
+    // `see_also` is dropped so a plugin cannot link into host topics; a
+    // `[[…]]` in the body is the same jump through the other door. The body
+    // must agree with the header.
+    let src = format!("{HEAD}see [[copying]] for more\n");
+    let parsed = parse_untrusted(src.as_bytes(), "acme", None);
+    let links: Vec<Span> = parsed
+        .topic
+        .blocks
+        .iter()
+        .flat_map(collect_spans)
+        .filter(|s| matches!(s, Span::TopicLink(_)))
+        .collect();
+    assert!(links.is_empty(), "a link into the host corpus: {links:?}");
+    assert!(block_text(&parsed).contains("[[copying]]"));
+}
+
+#[test]
+fn a_live_mark_cannot_straddle_a_line_break() {
+    // The paragraph joiner used to weld a mark out of two lines: neither
+    // source line holds a complete `{{cmd:…}}`, yet the joined text did. It
+    // is the mirror of the code-block bug — there, mask per line then join;
+    // here, parse per line then join — and it also defeats any line-by-line
+    // host-side validator.
+    let src = format!("{HEAD}{{{{cmd:\nplugin:acme:sync}}}}\n");
+    let parsed = parse_untrusted(src.as_bytes(), "acme", None);
+    assert!(
+        command_refs(&parsed).is_empty(),
+        "a mark was welded across a line break: {:?}",
+        parsed.topic.blocks
+    );
+    let text = block_text(&parsed);
+    assert!(text.contains("{{cmd: plugin:acme:sync}}"), "{text:?}");
+    // The same for a topic link, and in trusted-shaped prose the reflow is
+    // unchanged: two lines still join into ONE text span with one space.
+    let src = format!("{HEAD}one\ntwo\n");
+    let parsed = parse_untrusted(src.as_bytes(), "acme", None);
+    assert_eq!(
+        parsed.topic.blocks,
+        vec![Block::Paragraph(vec![Span::Text("one two".to_owned())])]
+    );
+}
+
+#[test]
+fn blank_command_ids_in_the_header_are_dropped() {
+    // The body refuses a blank id (`{{cmd:}}` stays literal text); the
+    // header used to accept one and hand the UI an executable row with no
+    // name. Same predicate, both doors.
+    let src = "+++\nid = \"x\"\ntitle = \"X\"\n\
+commands = [\"\", \"   \", \"\u{202E}\", \"plugin:acme:\", \"plugin:acme:  \"]\n+++\nbody\n";
+    let parsed = parse_untrusted(src.as_bytes(), "acme", None);
+    assert!(
+        parsed.topic.commands.is_empty(),
+        "{:?}",
+        parsed.topic.commands
+    );
+}
+
+#[test]
+fn a_header_cannot_declare_an_unbounded_number_of_commands() {
+    // The front matter used to sit entirely outside `Limits`: a 64 KiB
+    // header-only file turned into tens of thousands of command entries,
+    // every one of them an executable row on the same dispatch path as the
+    // palette, and `truncated` stayed false.
+    let mut header = "+++\nid = \"x\"\ntitle = \"X\"\ncommands = [".to_owned();
+    while header.len() < Limits::untrusted().max_bytes - 16 {
+        header.push_str("\"plugin:acme:a\",");
+    }
+    header.push_str("]\n+++\n");
+    let parsed = parse_untrusted(header.as_bytes(), "acme", None);
+    assert!(
+        parsed.topic.commands.len() <= 16,
+        "{} command rows out of one 64 KiB header",
+        parsed.topic.commands.len()
+    );
+    assert!(parsed.truncated, "a dropped command is content lost");
 }
 
 #[test]
@@ -113,7 +306,7 @@ id = \"mine\"\n\
 title = \"Mine\"\n\
 tags = [\"doing\"]\n\
 see_also = [\"copying\"]\n\
-commands = [\"acme:sync\"]\n\
+commands = [\"plugin:acme:sync\"]\n\
 context = [\"pane\"]\n\
 +++\n\
 body\n";
@@ -124,11 +317,15 @@ body\n";
     assert!(t.context.is_empty(), "context: {:?}", t.context);
     assert_eq!(
         t.commands,
-        vec!["acme:sync".to_owned()],
+        vec!["plugin:acme:sync".to_owned()],
         "its own commands are the one header list that survives"
     );
-    assert_eq!(t.id.as_str(), "mine", "the header id is honoured");
-    assert_eq!(t.title, "Mine");
+    assert_eq!(
+        t.id.as_str(),
+        "acme",
+        "the id is host-assigned, never the header's"
+    );
+    assert_eq!(t.title, "Mine", "the title IS the plugin's to choose");
 }
 
 // --- Hardening.
@@ -167,24 +364,38 @@ fn the_canonical_hostile_corpus_as_a_plugin_body_is_neither_a_panic_nor_a_hazard
 }
 
 #[test]
-fn the_non_utf8_content_fixtures_set_lossy_exactly_when_they_are_not_utf8() {
-    // The `\xff\xfe` fixtures (a UTF-16LE BOM read as if it were markdown)
-    // and the rest of the canonical content corpus, fed in as a plugin
-    // `help.md`. `lossy` is not a heuristic: it is exactly "these bytes were
-    // not UTF-8".
-    let fixtures = norte_testkit::corpus::content_fixtures();
-    assert!(fixtures.len() >= 11, "the canonical corpus must not shrink");
-    for f in &fixtures {
-        let src = [HEAD.as_bytes(), &f.bytes].concat();
-        let parsed = parse_untrusted(&src, "acme.plugin", None);
-        assert_eq!(
-            parsed.lossy,
-            std::str::from_utf8(&f.bytes).is_err(),
-            "[{}] the flag must mean exactly what it says",
-            f.id
-        );
-        assert_no_hazard(&parsed.topic, f.id);
-    }
+fn a_source_of_pure_continuation_bytes_still_yields_its_content() {
+    // 64 KiB + 1 of `0x80`: no lead byte anywhere, so the boundary walk used
+    // to march the cut all the way down to ZERO and hand back an empty
+    // document — `truncated = true`, `lossy = false`, no blocks at all. The
+    // walk is bounded now: a UTF-8 character is at most four bytes, so
+    // failing to find a boundary within three means these are not UTF-8
+    // bytes and the cut stands where it was.
+    let src = vec![0x80_u8; Limits::untrusted().max_bytes + 1];
+    let parsed = parse_untrusted(&src, "acme.plugin", None);
+    assert!(parsed.truncated, "a byte was dropped: say so");
+    assert!(
+        !parsed.topic.blocks.is_empty(),
+        "the whole document vanished"
+    );
+    assert_no_hazard(&parsed.topic, "continuation bytes");
+}
+
+#[test]
+fn a_cut_cannot_hide_a_decode_failure_in_the_tail() {
+    // `lossy` used to be computed on the CUT PREFIX, so a file whose invalid
+    // bytes all sat past the ceiling reported clean. The prefix here is
+    // spotless ASCII and the tail is not, and the badge must still fire.
+    let mut src = b"\xef\xbb\xbf".to_vec();
+    src.extend_from_slice(HEAD.as_bytes());
+    src.extend(std::iter::repeat_n(b'a', Limits::untrusted().max_bytes));
+    src.extend_from_slice(b"\xff\xfe");
+    let parsed = parse_untrusted(&src, "acme.plugin", None);
+    assert!(parsed.truncated);
+    assert!(
+        parsed.lossy,
+        "the tail we refused to read was not clean either"
+    );
 }
 
 #[test]
@@ -199,7 +410,11 @@ fn a_valid_header_over_a_ten_mebibyte_line_is_bounded() {
     let parsed = parse_untrusted(&src, "p", None);
     assert!(parsed.truncated, "10 MiB cannot come back whole");
     assert!(!parsed.lossy, "ASCII is UTF-8");
-    assert_eq!(parsed.topic.id.as_str(), "x", "the header survived the cut");
+    assert_eq!(
+        parsed.topic.title, "X",
+        "the header survived the cut (the id is host-assigned, so it proves nothing)"
+    );
+    assert_eq!(parsed.topic.id.as_str(), "p");
     assert_eq!(
         parsed.topic.blocks.len(),
         1,
@@ -213,6 +428,28 @@ fn a_valid_header_over_a_ten_mebibyte_line_is_bounded() {
         len <= Limits::untrusted().max_line_bytes,
         "the line ceiling bounds what reaches the model: {len}"
     );
+}
+
+#[test]
+fn masking_can_grow_a_line_threefold_and_no_further() {
+    // `max_line_bytes` bounds the SOURCE line. Masking runs afterwards and
+    // replaces a 1-byte control with a 3-byte `U+FFFD`, so the model line
+    // can reach 3x the ceiling — and not one byte more, since 3 bytes is the
+    // most a single character can grow to. The old assertion used ASCII
+    // only, which is exactly why it never saw this.
+    let limits = Limits::untrusted();
+    let src = format!("{HEAD}{}\n", "\u{0007}".repeat(limits.max_line_bytes * 2));
+    let parsed = parse_untrusted(src.as_bytes(), "p", None);
+    let Some(Block::Paragraph(spans)) = parsed.topic.blocks.first() else {
+        panic!("a paragraph: {:?}", parsed.topic.blocks);
+    };
+    let len: usize = spans.iter().map(|s| payload(s).len()).sum();
+    assert_eq!(
+        len,
+        limits.max_line_bytes * 3,
+        "one U+FFFD per source byte, three bytes each"
+    );
+    assert!(parsed.truncated, "the source line WAS cut");
 }
 
 #[test]
@@ -242,12 +479,18 @@ fn a_header_title_at_the_cap_survives_and_one_char_over_is_cut() {
 }
 
 #[test]
-fn the_publisher_is_masked_and_bounded_like_every_other_third_party_string() {
+fn the_publisher_is_masked_and_bounded_without_badging_the_document() {
     // `publisher` comes from the plugin manifest, which caps `description`
     // and the command ids but NOT this field: it arrives unbounded and
     // unmasked, and it lands in the model.
     let publisher = format!("Acme \u{202E}Corp{}", "!".repeat(HEADER_CHARS));
     let parsed = parse_untrusted(b"body", "p", Some(publisher));
+    assert!(
+        !parsed.truncated,
+        "the badge speaks about the plugin's DOCUMENT: 4 bytes of body, \
+         byte-complete. Capping a host-supplied metadata field is not the \
+         document being cut, and conflating them cries wolf."
+    );
     let Origin::Plugin {
         publisher,
         truncated,
@@ -259,7 +502,38 @@ fn the_publisher_is_masked_and_bounded_like_every_other_third_party_string() {
     let publisher = publisher.expect("declared");
     assert!(!publisher.contains('\u{202E}'), "{publisher:?}");
     assert_eq!(publisher.chars().count(), HEADER_CHARS);
-    assert!(truncated, "a cut publisher is still a cut");
+    assert!(!truncated);
+}
+
+#[test]
+fn fold_flags_carries_a_badge_across_the_wire_hop() {
+    // Phase H3e parses host-side, sends the ALREADY BOUNDED markdown, and
+    // the frontend parses it again. Both flags are structurally false on the
+    // second parse — the text arrives short and clean — so the badge, the
+    // whole user-facing mitigation for hostile help, would silently go
+    // clean. `fold_flags` is the seam that carries it.
+    let parsed = parse_untrusted(b"body", "acme.plugin", None);
+    assert!(!parsed.truncated && !parsed.lossy);
+
+    let folded = parsed.fold_flags(true, true);
+    assert!(folded.truncated && folded.lossy);
+    let Origin::Plugin {
+        truncated, lossy, ..
+    } = folded.topic.origin
+    else {
+        panic!("a plugin topic");
+    };
+    assert!(
+        truncated && lossy,
+        "the copy inside the model is what a renderer reads"
+    );
+
+    // It only ever ORs: a flag already raised cannot be cleared by a caller
+    // that received a clean one.
+    let mut src = HEAD.as_bytes().to_vec();
+    src.extend(std::iter::repeat_n(b'a', Limits::untrusted().max_bytes * 2));
+    let parsed = parse_untrusted(&src, "p", None).fold_flags(false, false);
+    assert!(parsed.truncated);
 }
 
 #[test]
@@ -285,7 +559,11 @@ commands = [\"acme:s\u{202E}ync\"]\n+++\n"
             src.push(b'\n');
         }
     }
-    src.extend_from_slice(b"```s\xffh\n\xfe code \x1b]0;x\x07\n```\n");
+    // A fence whose `lang` carries a REAL hazard. It used to carry a lone
+    // `\xff`, which lossy-decodes to `U+FFFD` — not a hazard — so the `lang`
+    // masking was never actually exercised by this test.
+    src.extend_from_slice("```s\u{202E}h\n code \u{1B}]0;x\u{07}\n```\n".as_bytes());
+    src.extend_from_slice(b"\xfe\n");
     src.extend_from_slice("| a\u{202E} | b |\n|---|---|\n| c\u{0000} | d |\n".as_bytes());
 
     let parsed = parse_untrusted(&src, "acme.plugin", Some("Acme \u{202E}Corp".to_owned()));
@@ -295,35 +573,75 @@ commands = [\"acme:s\u{202E}ync\"]\n+++\n"
         !parsed.topic.blocks.is_empty(),
         "bounding is not the same as discarding"
     );
-    // The spoofed header strings reached the model MASKED, so neither can
-    // pass for the clean thing it imitates.
-    assert_eq!(parsed.topic.id.as_str(), "i\u{FFFD}d");
+    assert!(
+        parsed
+            .topic
+            .blocks
+            .iter()
+            .any(|b| matches!(b, Block::Code { lang: Some(l), .. } if l.contains('\u{FFFD}'))),
+        "the fence label is third-party text too: {:?}",
+        parsed.topic.blocks
+    );
+    // The id is HOST-ASSIGNED and kept verbatim; the spoofed title reached
+    // the model masked, so it cannot pass for the clean thing it imitates;
+    // and the un-namespaced command was refused outright.
+    assert_eq!(parsed.topic.id.as_str(), "acme.plugin");
     assert_eq!(parsed.topic.title, "T\u{FFFD}itle");
-    assert_eq!(parsed.topic.commands, vec!["acme:s\u{FFFD}ync".to_owned()]);
+    assert!(parsed.topic.commands.is_empty());
 }
 
 #[test]
-fn a_blank_header_id_or_title_falls_back_to_the_plugin_id() {
-    // Both are one keystroke away for a hostile author: `id = ""` leaves an
-    // unaddressable topic and an empty title renders a nameless page. Blank
-    // is the parser's own notion of it — whitespace or `U+FFFD` — so a field
-    // that was nothing but hazards counts as blank once masked.
-    for (id, title) in [
-        ("", ""),
-        ("   ", "\t"),
-        ("\u{202E}", "\u{202E}\u{202E}"),
-        ("\u{FFFD}", " \u{FFFD} "),
+fn a_hostile_fallback_id_is_kept_verbatim_as_the_identity() {
+    // `fallback_id` is supplied by the HOST registry, not by the plugin, and
+    // both `Topic.id` and `Origin::Plugin.id` are LOOKUP KEYS. Masking them
+    // destroyed identity: `acme\u{202E}ftp`, `acme\u{200B}ftp` and
+    // `acme\u{07}ftp` all collapsed onto the same masked string, so a
+    // registry lookup would match the WRONG plugin. Verbatim, always — the
+    // caller is required to pass an id it has validated.
+    let ids = ["acme\u{202E}ftp", "acme\u{200B}ftp", "acme\u{07}ftp"];
+    let mut seen = std::collections::HashSet::new();
+    for id in ids {
+        let parsed = parse_untrusted(b"body", id, None);
+        assert_eq!(parsed.topic.id.as_str(), id, "the key was mutated");
+        let Origin::Plugin { id: origin_id, .. } = &parsed.topic.origin else {
+            panic!("a plugin topic");
+        };
+        assert_eq!(origin_id, id, "both copies of the key, byte for byte");
+        assert!(seen.insert(origin_id.clone()), "two ids collapsed into one");
+        // A key is never a cut, whatever its length.
+        let long = "a".repeat(HEADER_CHARS * 4);
+        let parsed = parse_untrusted(b"body", &long, None);
+        assert_eq!(parsed.topic.id.as_str(), long);
+        assert!(!parsed.truncated);
+    }
+    assert_eq!(seen.len(), ids.len());
+}
+
+#[test]
+fn a_blank_header_title_falls_back_to_the_plugin_id() {
+    // An empty title renders a nameless page, and it is one keystroke away
+    // for a hostile author. Blank is the parser's own notion of it:
+    // whitespace, `U+FFFD`, or a character that paints NOTHING — U+3164
+    // HANGUL FILLER and friends are not in the hazard set (that set is a
+    // cross-crate contract this crate does not widen), so blankness is where
+    // they are handled.
+    for title in [
+        "",
+        "   ",
+        "\\t",
+        "\u{202E}\u{202E}",
+        " \u{FFFD} ",
+        "\u{3164}\u{3164}\u{3164}",
+        "\u{2064}\u{115F}\u{180E}\u{2800}",
     ] {
-        let src = format!("+++\nid = \"{id}\"\ntitle = \"{title}\"\n+++\nbody\n");
+        let src = format!("+++\nid = \"x\"\ntitle = \"{title}\"\n+++\nbody\n");
         let parsed = parse_untrusted(src.as_bytes(), "acme.plugin", None);
-        assert_eq!(parsed.topic.id.as_str(), "acme.plugin", "id {id:?}");
         assert_eq!(parsed.topic.title, "acme.plugin", "title {title:?}");
     }
-    // A non-blank field is still honoured, hazards and all — masked, never
+    // A non-blank title is still honoured, hazards and all — masked, never
     // dropped: losing a real title over one bad character would be worse.
-    let src = "+++\nid = \"a\u{202E}b\"\ntitle = \"c\u{202E}d\"\n+++\nbody\n";
+    let src = "+++\nid = \"x\"\ntitle = \"c\u{202E}d\"\n+++\nbody\n";
     let parsed = parse_untrusted(src.as_bytes(), "acme.plugin", None);
-    assert_eq!(parsed.topic.id.as_str(), "a\u{FFFD}b");
     assert_eq!(parsed.topic.title, "c\u{FFFD}d");
 }
 
@@ -365,6 +683,30 @@ fn paragraph_text(parsed: &Parsed) -> String {
         .collect()
 }
 
+/// The text of EVERY block, concatenated: what a reader would end up seeing.
+fn block_text(parsed: &Parsed) -> String {
+    parsed
+        .topic
+        .blocks
+        .iter()
+        .flat_map(|b| collect_spans(b).iter().map(payload).collect::<Vec<_>>())
+        .collect()
+}
+
+/// Every command reference the body produced, in order.
+fn command_refs(parsed: &Parsed) -> Vec<String> {
+    parsed
+        .topic
+        .blocks
+        .iter()
+        .flat_map(collect_spans)
+        .filter_map(|s| match s {
+            Span::CommandRef(c) => Some(c),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The bytes a span carries: no syntax, just what a renderer would paint (or,
 /// for the live marks, the id it would resolve).
 fn payload(span: &Span) -> String {
@@ -399,6 +741,10 @@ fn strings(topic: &Topic) -> Vec<(&'static str, String)> {
     ];
     out.extend(topic.tags.iter().map(|t| ("tag", t.clone())));
     out.extend(topic.see_also.iter().map(|t| ("see_also", t.to_string())));
+    // A command id is a DISPATCH KEY, never masked — masking a key destroys
+    // the identity it exists to carry. It is swept all the same, because the
+    // parser REFUSES a key it could not paint safely instead of rewriting
+    // it, which is what keeps this assertion true.
     out.extend(topic.commands.iter().map(|c| ("command", c.clone())));
     out.extend(topic.context.iter().map(|c| ("context", c.clone())));
     match &topic.origin {
@@ -418,8 +764,10 @@ fn strings(topic: &Topic) -> Vec<(&'static str, String)> {
                 out.extend(lang.iter().map(|l| ("code.lang", l.clone())));
                 // The `\n` between lines is the PARSER's structure, not the
                 // plugin's bytes: masking it would collapse the block into
-                // one unreadable line. Every other line is swept.
-                out.extend(text.lines().map(|l| ("code.text", l.to_owned())));
+                // one unreadable line. Every other byte is swept — split on
+                // `\n` and NOT `lines()`, which also strips a trailing `\r`
+                // and would let a raw CR walk straight through the sweep.
+                out.extend(text.split('\n').map(|l| ("code.text", l.to_owned())));
             }
             Block::Table { header, rows } => {
                 assert!(
