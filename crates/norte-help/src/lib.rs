@@ -23,7 +23,7 @@
 // mod corpus; // task 7
 mod front_matter; // task 3
 mod model; // task 2
-// mod parse; // tasks 4 and 5
+mod parse; // tasks 4 and 5
 // mod resolve; // task 9
 
 // Public re-exports, in the same order; each one uncommented by its task:
