@@ -28,8 +28,8 @@ mod parse; // tasks 4 and 5
 
 // Public re-exports, in the same order; each one uncommented by its task:
 pub use check::{
-    Issue, check_commands, check_commands_in, check_contexts, check_contexts_in, check_corpus,
-    check_locales,
+    Inert, Issue, Stale, check_commands, check_commands_in, check_contexts, check_contexts_in,
+    check_corpus, check_locales,
 }; // task 8
 pub use corpus::{topic, topic_ids, topics}; // task 7
 pub use model::{Availability, Block, Callout, CommandRow, Origin, Reason, Span, Topic, TopicId}; // task 2

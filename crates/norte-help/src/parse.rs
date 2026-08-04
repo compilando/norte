@@ -9,7 +9,13 @@ use crate::model::{Block, Callout, Origin, Span, Topic, TopicId};
 /// Opener of a command reference. Opener and closer are constants so that
 /// the needle we search for and the number of bytes we skip can never
 /// desynchronise: every offset below is derived from these literals.
-const CMD_OPEN: &str = "{{cmd:";
+///
+/// Shared with `check` (crate-visible, nothing more) so that the check for
+/// marks written where this parser never looks — a heading, a table cell —
+/// searches for the SAME needle this one opens on. Two spellings of the opener
+/// would drift, and the drift would be silent in the direction that matters:
+/// a mark the parser recognises and the check does not.
+pub(crate) const CMD_OPEN: &str = "{{cmd:";
 
 /// Closer of a command reference.
 const CMD_CLOSE: &str = "}}";
