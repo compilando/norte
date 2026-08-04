@@ -43,6 +43,7 @@ keymap = [
     { on = ["alt+c"], run = "pane.columns" },
     { on = ["ctrl+d"], run = "pane.hotlist" },
     { on = ["insert"], run = "mark.toggle" },
+    { on = ["space"], run = "mark.toggle" },
     { on = ["ctrl+a"], run = "mark.all" },
     { on = ["ctrl+A"], run = "mark.clear" },
     { on = ["*"], run = "mark.invert" },

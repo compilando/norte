@@ -51,6 +51,7 @@ keymap = [
     # ctrl+b (libre aquí) para pane.hotlist. Anotado en la spec (navTC T3/T6).
     { on = ["ctrl+b"], run = "pane.hotlist" },
     { on = ["insert"], run = "mark.toggle" },
+    { on = ["space"], run = "mark.toggle" },
     # `v` visual-select muscle memory, además de `insert` (#103).
     { on = ["v"], run = "mark.toggle" },
     { on = ["ctrl+a"], run = "mark.all" },

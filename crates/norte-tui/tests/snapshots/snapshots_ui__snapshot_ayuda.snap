@@ -1,5 +1,6 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
+assertion_line: 724
 expression: "format!(\"{arriba}\\n===\\n{}\", render(&app))"
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
@@ -27,12 +28,12 @@ expression: "format!(\"{arriba}\\n===\\n{}\", render(&app))"
 "│ │  alt+c          selector de columnas                                     │ │"
 "│ │  ctrl+d         directorios favoritos                                    │ │"
 "│ │  insert         marcar/desmarcar la entrada bajo el cursor               │ │"
+"│ │  space          marcar/desmarcar la entrada bajo el cursor               │ │"
 "│ │  ctrl+a         marcar todas las entradas visibles                       │ │"
 "│ │  ctrl+A         quitar todas las marcas                                  │ │"
 "│ │  *              invertir las marcas                                      │ │"
 "│ │  plus           marcar por patrón                                        │ │"
 "│ │  -              desmarcar por patrón                                     │ │"
 "│ │  q              salir de norte                                           │ │"
-"│ │  f10            salir de norte                                           │ │"
 "└─└──────────────────────────────────────────────────────────────────────────┘─┘"
 " ⟨file⟩/casa  2/5                                                               "
