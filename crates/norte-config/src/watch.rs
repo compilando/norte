@@ -3,7 +3,7 @@
 //! fallback, so frontends can hot-reload `norte.toml`/`keymap.toml`/
 //! `openers.toml` without blocking their async runtime.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::dirs::Layers;
 
@@ -46,12 +46,39 @@ pub async fn watch(layers: &Layers, tx: tokio::sync::mpsc::Sender<()>) -> Watch 
     let watcher = tokio::task::spawn_blocking(move || {
         let mut watcher = notify::recommended_watcher({
             move |res: Result<notify::Event, notify::Error>| {
+                // El watcher nativo vigila el DIRECTORIO entero (no hay
+                // vigilancia por fichero portable), y el dir de config del
+                // usuario tiene vecinos VIVOS: `index.db` (índice
+                // semántico), `journal.db`/`-shm`, el lockfile de los
+                // persist. `SQLite` escribe ahí mientras la app corre, así
+                // que sin este filtro cada escritura disparaba un
+                // hot-reload completo — que cierra la ayuda (F1) y la
+                // paleta abiertas y pinta «config recargada». Solo cuentan
+                // las tres capas TOML, las MISMAS que mira el snapshot del
+                // polling ([`CONFIG_FILES`]).
+                //
                 // También en Err (M3 de la revisión): un error de notify
                 // significa "puedes haber perdido eventos" — releer TODO es
-                // exactamente la respuesta correcta. try_send: los cambios
-                // se coalescen; perder uno con el canal lleno es inocuo.
-                let _ = res;
-                let _ = tx2.try_send(());
+                // exactamente la respuesta correcta, y un evento SIN rutas
+                // (backends que no las traen) se trata igual de
+                // conservador. try_send: los cambios se coalescen; perder
+                // uno con el canal lleno es inocuo.
+                let interesa = match &res {
+                    Err(_) => true,
+                    // `Access(_)` es LECTURA (incluido el open que hace el
+                    // propio reload al releer las capas): no cambia nada y,
+                    // sin descartarlo, el reload se realimentaba —
+                    // recargar abre norte.toml, el open dispara otro
+                    // reload. Toda escritura llega igualmente como
+                    // `Create`/`Modify`/`Remove`.
+                    Ok(ev) => {
+                        !matches!(ev.kind, notify::EventKind::Access(_))
+                            && (ev.paths.is_empty() || ev.paths.iter().any(|p| is_config_file(p)))
+                    }
+                };
+                if interesa {
+                    let _ = tx2.try_send(());
+                }
             }
         })
         .ok()?;
@@ -141,6 +168,22 @@ fn spawn_poll(
     });
 }
 
+/// Las capas TOML que una edición puede cambiar: lo ÚNICO que dispara un
+/// hot-reload, tanto por el watcher nativo (que solo puede vigilar el dir
+/// entero) como por el snapshot del polling. Cualquier otro fichero del dir
+/// de config —`index.db`, `journal.db`, lockfiles— es ruido de la propia
+/// app.
+const CONFIG_FILES: [&str; 3] = ["norte.toml", "keymap.toml", "openers.toml"];
+
+/// ¿Es `p` una de las capas de [`CONFIG_FILES`]? Por NOMBRE de fichero: el
+/// watcher entrega rutas absolutas del dir vigilado, y un rename de
+/// `norte.toml.tmp` a `norte.toml` (cómo escriben los editores, y cómo
+/// escribe el propio persist atómico) llega con el destino entre sus rutas.
+fn is_config_file(p: &Path) -> bool {
+    p.file_name()
+        .is_some_and(|n| CONFIG_FILES.iter().any(|c| n == *c))
+}
+
 /// Snapshot de (mtime, tamaño) de los archivos de config presentes — el
 /// tamaño caza escrituras dentro de la granularidad del mtime del FS.
 fn snapshot(layers: &Layers) -> Vec<(PathBuf, std::time::SystemTime, u64)> {
@@ -151,7 +194,7 @@ fn snapshot(layers: &Layers) -> Vec<(PathBuf, std::time::SystemTime, u64)> {
         // dir ENTERO y ya captaba sus ediciones, pero el fallback de
         // polling solo miraba norte.toml/keymap.toml — un openers.toml
         // editado bajo polling puro (watcher nativo caído) se perdía.
-        for name in ["norte.toml", "keymap.toml", "openers.toml"] {
+        for name in CONFIG_FILES {
             let p = dir.join(name);
             if let Ok(md) = std::fs::metadata(&p)
                 && let Ok(m) = md.modified()
