@@ -1138,8 +1138,9 @@ impl PaneState {
     /// `prune_marks`/[`Self::pruned_marks`]) — the listing passed in
     /// must be COMPLETE, since a partial page would silently discard the
     /// marks it omits.
-    pub fn refill(&mut self, entries: Vec<Entry>) {
+    pub fn refill(&mut self, mut entries: Vec<Entry>) {
         let quick_prev = self.quick_selected_path();
+        self.inherit_known_metadata(&mut entries);
         // #107: el refill trae el listado COMPLETO del dir — el stash se
         // reconstruye fresco de él, nunca se acumula con el anterior.
         self.hidden_stash.clear();
@@ -1164,16 +1165,54 @@ impl PaneState {
         }
     }
 
+    /// Traslada a `entries` el size/mtime que este pane YA conocía para el
+    /// mismo path, solo donde el listado nuevo no lo trae.
+    ///
+    /// El motivo es visual y concreto: un `fs.list` local no hace `stat` de
+    /// cada entrada (#52), así que un refresco del MISMO dir llega pelado y,
+    /// instalado tal cual, vacía las columnas de tamaño y fecha hasta que la
+    /// sonda las rellena. Con el watcher (#106) refrescando en cada evento
+    /// del directorio eso se ve como un parpadeo continuo. Heredar no
+    /// congela nada: un listado que sí trae el dato gana, y
+    /// [`Self::hydrate`] —la sonda— gana a ambos.
+    fn inherit_known_metadata(&self, entries: &mut [Entry]) {
+        // Los ocultos cuentan: el toggle de ocultación los devuelve al
+        // listado y perderían el dato si solo mirásemos lo visible.
+        let known: HashMap<&VPath, (Option<u64>, Option<i64>)> = self
+            .entries
+            .iter()
+            .chain(self.hidden_stash.iter())
+            .filter(|e| e.size.is_some() || e.mtime_ms.is_some())
+            .map(|e| (&e.path, (e.size, e.mtime_ms)))
+            .collect();
+        if known.is_empty() {
+            return;
+        }
+        for entry in entries {
+            if let Some(&(size, mtime_ms)) = known.get(&entry.path) {
+                entry.size = entry.size.or(size);
+                entry.mtime_ms = entry.mtime_ms.or(mtime_ms);
+            }
+        }
+    }
+
     /// Hidrata size/mtime de la entrada `path` (stat on-demand, #52). No-op si
     /// la entrada ya no está (un refresh la pisó). No reordena: size/mtime no
     /// participan en el sort.
+    ///
+    /// La sonda es AUTORITATIVA: acaba de mirar el fichero, así que su valor
+    /// pisa el que hubiera (que puede venir heredado de antes del refresco,
+    /// ver [`Self::inherit_known_metadata`] — sin esto, un fichero que crece
+    /// mostraría para siempre el tamaño con el que se listó la primera vez).
+    /// Lo que NO pisa es con `None`: un stat que falla o un provider que no
+    /// sabe el dato jamás borra uno que sí se conocía.
     /// (#107 review MINOR-5, aceptado: un stat que resuelve tras moverse su
     /// entrada al stash de ocultos se pierde — al re-mostrar, la fila pinta
     /// `None` hasta la siguiente sonda de foco. Autocurativo y barato.)
     pub fn hydrate(&mut self, path: &VPath, size: Option<u64>, mtime_ms: Option<i64>) {
         if let Some(e) = self.entries.iter_mut().find(|e| &e.path == path) {
-            e.size = e.size.or(size);
-            e.mtime_ms = e.mtime_ms.or(mtime_ms);
+            e.size = size.or(e.size);
+            e.mtime_ms = mtime_ms.or(e.mtime_ms);
         }
     }
 
@@ -2439,6 +2478,68 @@ mod tests {
         assert_eq!(p.marks_len(), 0);
     }
 
+    /// El refresco NO puede vaciar las columnas. Un listado fresco del MISMO
+    /// dir llega SIN size/mtime (stat perezoso, #52), así que instalarlo tal
+    /// cual deja las celdas de tamaño y fecha en blanco hasta que la sonda
+    /// las rellena: con el watcher (#106) refrescando en cada evento, eso es
+    /// un parpadeo constante. `refill` hereda por path lo que ya se sabía.
+    #[test]
+    fn refill_hereda_size_y_mtime_ya_conocidos() {
+        let mut entries = vec![
+            e("mem:///a", EntryKind::File),
+            e("mem:///b", EntryKind::File),
+        ];
+        entries[0].size = Some(42);
+        entries[0].mtime_ms = Some(1000);
+        crate::sort_entries(&mut entries);
+        let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), entries);
+
+        // Lo que devuelve un `fs.list` del mismo dir: pelado.
+        p.refill(vec![
+            e("mem:///a", EntryKind::File),
+            e("mem:///b", EntryKind::File),
+        ]);
+
+        let a = p
+            .entries()
+            .iter()
+            .find(|x| x.path == VPath::parse("mem:///a").unwrap())
+            .expect("a sigue en el listado");
+        assert_eq!(a.size, Some(42), "el tamaño conocido sobrevive al refresco");
+        assert_eq!(a.mtime_ms, Some(1000), "y la fecha también");
+        let b = p
+            .entries()
+            .iter()
+            .find(|x| x.path == VPath::parse("mem:///b").unwrap())
+            .expect("b sigue en el listado");
+        assert_eq!(b.size, None, "lo que nunca se supo sigue sin saberse");
+    }
+
+    /// La herencia anterior no puede congelar un valor rancio: el listado
+    /// fresco manda cuando SÍ trae el dato (un provider que lo conoce), y la
+    /// sonda posterior manda siempre — si no, un fichero que crece mostraría
+    /// para siempre el tamaño con el que se listó la primera vez.
+    #[test]
+    fn el_dato_fresco_gana_a_la_herencia_y_la_sonda_gana_a_ambos() {
+        let mut entries = vec![e("mem:///a", EntryKind::File)];
+        entries[0].size = Some(42);
+        let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), entries);
+
+        let mut fresco = e("mem:///a", EntryKind::File);
+        fresco.size = Some(100);
+        p.refill(vec![fresco]);
+        assert_eq!(p.entries()[0].size, Some(100), "el listado fresco manda");
+
+        p.hydrate(&VPath::parse("mem:///a").unwrap(), Some(7), Some(7));
+        assert_eq!(p.entries()[0].size, Some(7), "la sonda es autoritativa");
+        p.hydrate(&VPath::parse("mem:///a").unwrap(), None, None);
+        assert_eq!(
+            p.entries()[0].size,
+            Some(7),
+            "una sonda que no sabe nada jamás borra lo que sí se sabe"
+        );
+    }
+
     /// #52: hydrate por path rellena size/mtime de la entrada viva; un path
     /// desconocido es no-op; el orden no cambia (size/mtime no ordenan).
     #[test]
@@ -2453,7 +2554,10 @@ mod tests {
         let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), entries);
 
         p.hydrate(&VPath::parse("mem:///a").unwrap(), Some(5), Some(1000));
-        p.hydrate(&VPath::parse("mem:///b").unwrap(), Some(1), Some(2)); // or-semantics: no pisa
+        // La sonda PISA lo que hubiera: acaba de mirar el fichero. Antes se
+        // conservaba el valor previo, y eso congelaba un tamaño heredado de
+        // antes del refresco (ver `inherit_known_metadata`).
+        p.hydrate(&VPath::parse("mem:///b").unwrap(), Some(1), Some(2));
         p.hydrate(&VPath::parse("mem:///no-existe").unwrap(), Some(7), Some(7)); // no-op
 
         let orden: Vec<_> = p
@@ -2482,8 +2586,8 @@ mod tests {
             .unwrap();
         assert_eq!(
             b.size,
-            Some(999),
-            "or-semantics: el valor previo se conserva"
+            Some(1),
+            "el dato recién medido gana al que ya había"
         );
 
         let c = p
