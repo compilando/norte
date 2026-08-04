@@ -42,7 +42,7 @@ fn tasks_rows(app: &App) -> u16 {
 /// Filas de LISTADO que cada pane pinta en un frame de alto `frame_height`
 /// (#124): el alto del frame menos el panel de tasks y la barra de estado
 /// (layout de [`draw`]), menos los dos bordes del bloque del pane y su línea
-/// de cabecera de columnas ([`draw_pane`]). El run loop la devuelve al
+/// de cabecera de columnas (`draw_pane`, privado). El run loop la devuelve al
 /// modelo (`PaneState::set_viewport_rows`) para que la paginación y la sonda
 /// de stat dejen de adivinar el viewport. Un test de render la ancla contra
 /// las filas que aparecen de verdad en el buffer — si el layout cambia, ese
