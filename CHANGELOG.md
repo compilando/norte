@@ -711,6 +711,53 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The F1 help no longer disappears, and neither do the columns
+  (bugfixing session):** seven defects that only showed up by driving
+  the real app.
+  - Overlays are painted over the viewer. `ui::draw` returned right
+    after the viewer, so any overlay opened on top of it stayed
+    invisible while still swallowing every keystroke — the run loop
+    routes them before the viewer, and `f1 -> app.help` is a `[global]`
+    binding, so it is live on the viewer screen too.
+  - An in-flight modal wins the key over every overlay, not just the
+    palette and the settings pane. The modal is painted last, above
+    everything, but the key chain resolved first against the theme
+    picker, columns picker, extension manager, nav popup, search dialog
+    and help — so a keystroke aimed at the modal landed in a text field
+    or toggled the highlighted plugin.
+  - The transfer-name modal elides its paths in the middle instead of
+    letting the box border cut them, which used to expel the tail of the
+    destination with nothing to signal it.
+  - A cursor at the top stays at the top while a paginated listing
+    fills. It was re-anchored to the path under it, and the first page
+    of a local listing arrives in readdir order, so a 5000-file
+    directory opened showing its tail.
+  - Size and Date are hydrated for every visible row in both panes
+    (TUI and GUI, #123), not just the focused one — with the lazy local
+    listing (#52) those columns were otherwise blank.
+  - Paging and the stat probe use the real viewport height (#124)
+    instead of a fixed 10 rows and a fixed radius.
+  - Config hot-reload only fires for `norte.toml`/`keymap.toml`/
+    `openers.toml`. The native watcher can only watch a directory and
+    forwarded every event, so `index.db`/`journal.db` writes — SQLite,
+    in the same directory — reloaded the config and closed the open help
+    and palette. Read events (`Access`) are ignored too: the reload
+    re-reads the layers, so counting an open as a change fed the cycle.
+  - Text inherits the THEME's foreground. Only the background came from
+    the theme, so every span without an explicit `fg` (including the
+    column cells and header, painted with a bare `DIM`) kept the
+    TERMINAL's foreground: with a light theme in a dark terminal they
+    were painted almost in the background color. Two tests over every
+    shipped preset now pin this and a 3:1 floor for text.
+
+- **Semantic signals reach WCAG AA in every preset:** `error`, `warning`
+  and `hostile-badge` — the last one marks a masked name (spec §6), a
+  security surface — fell as low as 2.31:1 against their own theme
+  background. Adjusted in `catppuccin-latte`, `gruvbox-light`, `nord`
+  and `gruvbox-dark`, keeping each palette's hue, and pinned by a test
+  over all presets. Decorative roles (borders, status bar accents) keep
+  their looks and their lower floor.
+
 - **Dialog keys are now discoverable in-app (#113):** the F1 help gains a
   "Dialogs and overlays" section built from the effective `dialog` keymap —
   the same generated-from-config invariant as the other sections. Overlay

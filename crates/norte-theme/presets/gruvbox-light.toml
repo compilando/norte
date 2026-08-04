@@ -13,7 +13,7 @@ status-bar       = { fg = "#fbf1c7", bg = "#b57614" }
 title            = { fg = "#af3a03", bold = true }
 hostile-badge    = { fg = "#9d0006", bold = true }
 error            = { fg = "#9d0006" }
-warning          = { fg = "#b57614" }
+warning          = { fg = "#976311" } # AA sobre light0: el faded_yellow #b57614 da 3.33:1
 info             = { fg = "#076678" }
 match            = { fg = "#fbf1c7", bg = "#b57614" }
 pane-background       = { bg = "#f2e5bc" } # light0_soft

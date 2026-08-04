@@ -9,8 +9,8 @@ border-unfocused = { fg = "#4c566a", dim = true }
 modal-border     = { fg = "#b48ead" }
 status-bar       = { fg = "#2e3440", bg = "#88c0d0" }
 title            = { fg = "#88c0d0", bold = true }
-hostile-badge    = { fg = "#bf616a", bold = true }
-error            = { fg = "#bf616a" }
+hostile-badge    = { fg = "#cf888f", bold = true } # AA: señal de seguridad, spec §6
+error            = { fg = "#cf888f" } # AA sobre polar night: el aurora red #bf616a da 3.05:1
 warning          = { fg = "#ebcb8b" }
 info             = { fg = "#81a1c1" }
 match            = { fg = "#2e3440", bg = "#ebcb8b" }

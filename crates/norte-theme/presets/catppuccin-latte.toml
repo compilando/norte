@@ -13,7 +13,7 @@ status-bar       = { fg = "#eff1f5", bg = "#1e66f5" }
 title            = { fg = "#1e66f5", bold = true }
 hostile-badge    = { fg = "#d20f39", bold = true }
 error            = { fg = "#d20f39" }
-warning          = { fg = "#df8e1d" }
+warning          = { fg = "#996214" } # AA sobre latte base: el yellow #df8e1d da 2.31:1
 info             = { fg = "#1e66f5" }
 match            = { fg = "#eff1f5", bg = "#df8e1d" }
 pane-background       = { bg = "#e6e9ef" } # mantle
