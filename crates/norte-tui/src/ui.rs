@@ -32,6 +32,30 @@ pub(crate) const HOSTILE_BADGE: &str = "!";
 /// el contenido — jamás el borde de la caja, que corta a pelo.
 const MODAL_PATH_CHARS: usize = 46;
 
+/// Estilo BASE del tema: fondo de [`Role::Background`] más el frente de
+/// [`Role::Regular`]. Es lo que hace que un span SIN `fg` propio
+/// (`Span::raw`/`Line::raw`, o un `Modifier::DIM` a secas) herede el frente
+/// del TEMA y no el del TERMINAL — con un tema claro en un terminal oscuro
+/// eso último pinta texto casi del color del fondo. Un tema sin `background`
+/// no fija frente base: se queda con el del terminal, que es el que le pega.
+fn base_style(theme: &TuiTheme) -> ratatui::style::Style {
+    let base = theme.role(Role::Background);
+    if base.bg.is_some() {
+        base.patch(theme.role(Role::Regular))
+    } else {
+        base
+    }
+}
+
+/// `Clear` + repintado de la base del tema sobre `area`: el widget `Clear` de
+/// ratatui deja las celdas en el estilo POR DEFECTO (frente y fondo del
+/// terminal), así que un overlay que solo hace `Clear` pierde el fondo Y el
+/// frente del tema, y su texto sin `fg` vuelve a caer al del terminal.
+fn clear_themed(frame: &mut Frame<'_>, area: Rect, theme: &TuiTheme) {
+    frame.render_widget(ratatui::widgets::Clear, area);
+    frame.render_widget(Block::default().style(base_style(theme)), area);
+}
+
 /// Filas del panel de tasks en un frame (tope 6): parte del layout de
 /// [`draw`], extraída para que [`pane_list_rows`] cuente lo MISMO que se
 /// pinta.
@@ -64,10 +88,18 @@ pub fn pane_list_rows(app: &App, frame_height: u16) -> u16 {
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
     // Fondo BASE del tema (ADR 0020): se pinta primero; los estilos de texto
     // (solo fg) lo conservan. Sin `background` en el tema = fondo del terminal.
-    frame.render_widget(
-        Block::default().style(app.theme.role(Role::Background)),
-        frame.area(),
-    );
+    //
+    // El FRENTE de `Regular` va en la misma base: un span sin `fg` propio
+    // (`Span::raw`/`Line::raw`, o un `Modifier::DIM` a secas como el de las
+    // celdas de columna y la cabecera) hereda el frente por defecto del
+    // TERMINAL, que no tiene por qué pegar con el fondo del TEMA — con un
+    // tema claro en un terminal oscuro salía texto casi del color del fondo
+    // (Tamaño/Fecha/Tipo, la cabecera de columnas y los cuerpos de los
+    // overlays, invisibles). Pintarlo aquí lo arregla para TODO el frame de
+    // una vez, sin tocar cada span: quien quiera otro color sigue fijando el
+    // suyo. Un tema sin `background` tampoco pinta frente base (se queda con
+    // el del terminal, que es el que hace juego).
+    frame.render_widget(Block::default().style(base_style(&app.theme)), frame.area());
     // El viewer sustituye a los panes, NUNCA a los overlays: antes este
     // brazo hacía `return` y CUALQUIER overlay abierto con el viewer
     // encima quedaba invisible aunque el run loop ya le hubiera dado la
@@ -211,7 +243,7 @@ fn draw_search_dialog(
     ]
     .join("\n");
     let area = centered(frame.area(), 60, 8);
-    frame.render_widget(ratatui::widgets::Clear, area);
+    clear_themed(frame, area, theme);
     frame.render_widget(
         Paragraph::new(cuerpo).block(
             Block::default()
@@ -265,7 +297,7 @@ fn draw_nav_popup(
         .max(64);
     let rows = u16::try_from(popup.items().len().max(1)).unwrap_or(8) + 2;
     let area = centered(frame.area(), ancho, rows.min(frame.area().height.max(3)));
-    frame.render_widget(ratatui::widgets::Clear, area);
+    clear_themed(frame, area, theme);
     // Items largos: elipsis MEDIA (cabeza + cola, como los modales de
     // rutas) al ancho interior — el truncado derecho de ratatui haría
     // indistinguibles dos rutas con prefijo común (BAJA-3).
@@ -437,7 +469,7 @@ fn draw_extensions(
         ancho,
         frame.area().height.saturating_sub(4).max(6),
     );
-    frame.render_widget(ratatui::widgets::Clear, area);
+    clear_themed(frame, area, theme);
     // Ancho útil para la segunda línea (description, P1): igual criterio que
     // `draw_palette` (borde + margen), NO el `ancho` de la caja completa.
     let inner = usize::from(area.width.saturating_sub(4));
@@ -505,7 +537,7 @@ fn draw_plugin_config_panel(
         ancho,
         frame.area().height.saturating_sub(4).max(6),
     );
-    frame.render_widget(ratatui::widgets::Clear, area);
+    clear_themed(frame, area, theme);
     let mut lines: Vec<Line<'_>> = Vec::new();
     let rows = panel.state.rows();
     if rows.is_empty() {
@@ -633,7 +665,7 @@ fn draw_theme_picker(
         .min(frame.area().width);
     let rows = u16::try_from(picker.names.len()).unwrap_or(8) + 2;
     let area = centered(frame.area(), ancho, rows.min(frame.area().height.max(3)));
-    frame.render_widget(ratatui::widgets::Clear, area);
+    clear_themed(frame, area, theme);
     let items: Vec<ListItem<'_>> = picker
         .names
         .iter()
@@ -729,7 +761,7 @@ fn draw_columns_picker(
         .unwrap_or(u16::MAX)
         .saturating_add(2);
     let area = centered(frame.area(), ancho, rows.min(frame.area().height.max(3)));
-    frame.render_widget(ratatui::widgets::Clear, area);
+    clear_themed(frame, area, theme);
     let items: Vec<ListItem<'_>> = filas.into_iter().map(ListItem::new).collect();
     let block = Block::default()
         .borders(Borders::ALL)
@@ -752,7 +784,7 @@ fn draw_help(frame: &mut Frame<'_>, help: &crate::app::Help, theme: &TuiTheme) {
         frame.area().width.saturating_sub(4).max(20),
         frame.area().height.saturating_sub(2).max(6),
     );
-    frame.render_widget(ratatui::widgets::Clear, area);
+    clear_themed(frame, area, theme);
     let inner_h = area.height.saturating_sub(2) as usize;
     let lines: Vec<Line<'_>> = help
         .lines
@@ -799,7 +831,7 @@ fn draw_palette(frame: &mut Frame<'_>, palette: &crate::app::Palette, theme: &Tu
         .unwrap_or(u16::MAX)
         .saturating_add(2);
     let area = centered(frame.area(), 60, rows.min(frame.area().height.max(3)));
-    frame.render_widget(ratatui::widgets::Clear, area);
+    clear_themed(frame, area, theme);
     let inner = usize::from(area.width.saturating_sub(3));
     let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = if palette.visible().is_empty() {
         (vec![ListItem::new(Line::raw(" —"))], None)
@@ -855,7 +887,7 @@ fn draw_settings(frame: &mut Frame<'_>, settings: &crate::app::Settings, theme: 
         .min(frame.area().width);
     let alto = frame.area().height.saturating_sub(4).max(6);
     let area = centered(frame.area(), ancho, alto);
-    frame.render_widget(ratatui::widgets::Clear, area);
+    clear_themed(frame, area, theme);
 
     let footer = if settings.is_editing() {
         let (buf, _) = display_name(settings.edit_buffer().unwrap_or_default().as_bytes());
@@ -1336,7 +1368,7 @@ fn draw_modal(
         modal_width(&titulo, &cuerpo, frame.area().width),
         alto,
     );
-    frame.render_widget(ratatui::widgets::Clear, area);
+    clear_themed(frame, area, theme);
     let mut cuerpo = Paragraph::new(cuerpo).block(
         Block::default()
             .borders(Borders::ALL)

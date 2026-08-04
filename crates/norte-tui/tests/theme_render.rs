@@ -137,3 +137,152 @@ fn degradacion_evita_rgb_en_terminal_pobre() {
         .all(|cell| !matches!(cell.fg, Color::Rgb(..)) && !matches!(cell.bg, Color::Rgb(..)));
     assert!(ningun_rgb, "un terminal de 16 colores no debe recibir Rgb");
 }
+
+/// Ningún glifo VISIBLE puede quedarse con el frente del TERMINAL cuando el
+/// tema fija un fondo propio: sobre un tema claro con un terminal oscuro (o
+/// al revés) eso pinta texto del color del fondo — invisible. Así
+/// desaparecían las celdas de Tamaño/Fecha/Tipo y la cabecera de columnas,
+/// que se pintaban con un `Modifier::DIM` a secas: `dim` + `fg` del
+/// terminal.
+///
+/// Se comprueba en TODOS los presets embarcados y con los overlays de texto
+/// abiertos (ayuda, paleta, ajustes, modal), que también pintaban con
+/// `Line::raw`.
+#[test]
+fn ningun_texto_hereda_el_frente_del_terminal_con_tema_de_fondo() {
+    for nombre in norte_theme::preset_names() {
+        let theme = Theme::preset(nombre)
+            .expect("preset parsea")
+            .expect("preset existe");
+        let dir = vp("file:///casa");
+        let entries = vec![
+            Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: dir.join(Segment::new(b"docs".to_vec()).unwrap()),
+                kind: EntryKind::Dir,
+                size: None,
+                mtime_ms: None,
+            },
+            Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: dir.join(Segment::new(b"notas.txt".to_vec()).unwrap()),
+                kind: EntryKind::File,
+                size: Some(4096),
+                mtime_ms: Some(1),
+            },
+        ];
+        let mut app = App::new(Pane::new(dir.clone(), entries), Pane::new(dir, Vec::new()));
+        app.theme = TuiTheme::new(theme, ColorDepth::Truecolor);
+        app.render_now_ms = Some(2);
+        app.help = Some(norte_tui::app::Help {
+            lines: vec!["  f1             ayuda".to_owned()],
+            scroll: 0,
+        });
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+        let buffer = terminal.backend().buffer().clone();
+        let huerfanas: Vec<String> = buffer
+            .content
+            .iter()
+            .filter(|c| c.symbol() != " " && c.fg == Color::Reset)
+            .map(|c| c.symbol().to_owned())
+            .collect();
+        assert!(
+            huerfanas.is_empty(),
+            "{nombre}: {} glifos con el frente del terminal sobre el fondo del tema: {:?}",
+            huerfanas.len(),
+            &huerfanas[..huerfanas.len().min(20)]
+        );
+    }
+}
+
+/// Contraste de TEXTO por preset (segunda mitad de la revisión de temas):
+/// ningún glifo de texto puede caer por debajo de 3:1 sobre su propio fondo
+/// —el umbral WCAG AA de componentes de interfaz—, que es justo lo que
+/// rompía el bug de las columnas (frente del terminal sobre fondo del tema:
+/// contraste ~1:1, invisible).
+///
+/// El listón NO es el 4.5 de texto de cuerpo a propósito: las barras y
+/// acentos de los presets (p. ej. la barra de estado de `gruvbox-light`,
+/// crema sobre ámbar, 3.33:1) son decisiones de paleta del tema, no
+/// accidentes, y subirlas es cambiar su aspecto. Los glifos de dibujo de
+/// caja quedan fuera —un borde sin foco es decoración deliberadamente
+/// apagada (`dim`)—; lo pintado con `Modifier::DIM` (celdas de columna,
+/// cabecera) se mide por su color SIN atenuar, que es lo único que el buffer
+/// conoce: la atenuación la aplica el terminal, y sobre un fondo claro la
+/// oscurece (más contraste, no menos).
+#[test]
+fn el_texto_de_cada_preset_llega_al_suelo_de_contraste() {
+    fn luminancia(c: (u8, u8, u8)) -> f64 {
+        let canal = |v: u8| {
+            let s = f64::from(v) / 255.0;
+            if s <= 0.039_28 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * canal(c.0) + 0.7152 * canal(c.1) + 0.0722 * canal(c.2)
+    }
+    fn contraste(a: (u8, u8, u8), b: (u8, u8, u8)) -> f64 {
+        let (l1, l2) = (luminancia(a), luminancia(b));
+        let (alto, bajo) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+        (alto + 0.05) / (bajo + 0.05)
+    }
+    fn rgb(c: Color) -> Option<(u8, u8, u8)> {
+        match c {
+            Color::Rgb(r, g, b) => Some((r, g, b)),
+            _ => None,
+        }
+    }
+
+    let dir = vp("file:///casa");
+    for nombre in norte_theme::preset_names() {
+        let entries = vec![
+            Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: dir.join(Segment::new(b"docs".to_vec()).unwrap()),
+                kind: EntryKind::Dir,
+                size: None,
+                mtime_ms: None,
+            },
+            Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: dir.join(Segment::new(b"notas.txt".to_vec()).unwrap()),
+                kind: EntryKind::File,
+                size: Some(4096),
+                mtime_ms: Some(1),
+            },
+        ];
+        let mut app = App::new(
+            Pane::new(dir.clone(), entries),
+            Pane::new(dir.clone(), Vec::new()),
+        );
+        app.theme = TuiTheme::new(
+            Theme::preset(nombre).expect("parsea").expect("existe"),
+            ColorDepth::Truecolor,
+        );
+        app.render_now_ms = Some(2);
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).expect("terminal");
+        terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+        for celda in &terminal.backend().buffer().content {
+            let glifo = celda.symbol();
+            let decoracion = glifo == " "
+                || glifo
+                    .chars()
+                    .all(|c| matches!(c, '\u{2500}'..='\u{257f}' | '\u{2580}'..='\u{259f}'));
+            if decoracion {
+                continue;
+            }
+            let (Some(fg), Some(bg)) = (rgb(celda.fg), rgb(celda.bg)) else {
+                continue;
+            };
+            let r = contraste(fg, bg);
+            assert!(
+                r >= 3.0,
+                "{nombre}: el glifo {glifo:?} se pinta a {r:.2}:1 sobre su fondo (el suelo es 3.0)"
+            );
+        }
+    }
+}
