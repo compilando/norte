@@ -144,6 +144,22 @@ pub struct PaneState {
     loading: bool,
     quick: Option<QuickSearch>,
     marks: HashSet<VPath>,
+    /// Snapshot of `marks` from before the pointer sweep in progress, so
+    /// that [`Self::apply_sweep`] can RESTORE it and re-mark, making a drag
+    /// that retreats give back the rows it pulled off. `None` = no sweep, or
+    /// a sweep armed but not yet applied (the clone is deliberately lazy:
+    /// a plain click arms a sweep it usually never uses, and cloning the
+    /// mark set on every click would be a cost nobody asked for).
+    ///
+    /// Dropped by every listing change ([`Self::set_listing`],
+    /// [`Self::begin_loading`], [`Self::refill`]): a baseline is a claim
+    /// about entries that were listed, and restoring it over a listing that
+    /// moved underneath would resurrect marks the prune already dropped.
+    sweep_baseline: Option<HashSet<VPath>>,
+    /// Extent (`lo..=hi`, clamped nowhere) the sweep in progress applied
+    /// last, so the next [`Self::apply_sweep`] can give back exactly the
+    /// rows that left the range instead of rebuilding the mark set.
+    sweep_extent: Option<(usize, usize)>,
     /// Marks dropped by the last [`Self::refill`] because their entry was gone
     /// (#103). The frontends surface it: a selection that shrinks behind the
     /// user's back must never be silent, because [`Self::marked_paths`] falls
@@ -254,6 +270,8 @@ impl PaneState {
             loading: false,
             quick: None,
             marks: HashSet::new(),
+            sweep_baseline: None,
+            sweep_extent: None,
             pruned_marks: 0,
             name_encoding: None,
             name_encoding_entry: 0,
@@ -323,6 +341,8 @@ impl PaneState {
         self.cursor = anchor
             .and_then(|p| self.entries.iter().position(|e| e.path == p))
             .unwrap_or_else(|| self.cursor.min(self.entries.len().saturating_sub(1)));
+        self.sweep_baseline = None;
+        self.sweep_extent = None;
         self.pruned_marks = self.prune_marks();
         if let Some(q) = &mut self.quick {
             q.refresh(&self.entries, quick_prev.as_ref());
@@ -465,6 +485,8 @@ impl PaneState {
         self.loading = false;
         self.quick = None;
         self.marks.clear();
+        self.sweep_baseline = None;
+        self.sweep_extent = None;
         self.pruned_marks = 0;
         // #96: las omitidas eran del listado ANTERIOR; el caller fija las
         // frescas con `set_skipped` si su fuente las trae.
@@ -517,6 +539,8 @@ impl PaneState {
         self.loading = true;
         self.quick = None;
         self.marks.clear();
+        self.sweep_baseline = None;
+        self.sweep_extent = None;
         self.pruned_marks = 0;
         self.skipped = None;
         self.hidden_stash.clear(); // #107: era del listado anterior
@@ -845,32 +869,192 @@ impl PaneState {
     /// already-marked entries returns 0 while the selection stays
     /// non-empty; read [`Self::marks_len`] for the total.
     ///
-    /// It only ever ADDS — there is no range unmarker, and
-    /// [`Self::set_mark`] is the only way to clear one by index.
+    /// It only ever ADDS — this is the ADDITIVE marker, the one a
+    /// shift+click wants (it extends a selection built by hand and must not
+    /// take anything back). A pointer SWEEP wants the opposite and uses
+    /// [`Self::apply_sweep`], which rubber-bands against a baseline.
+    /// [`Self::set_mark`] is the only way to clear a mark by index.
     ///
     /// Under an active [`Mode::Filter`] quick search it reaches only the
     /// VISIBLE subset (`markable_indices`, the same rule as
     /// [`Self::mark_all`]): what you cannot see, you cannot mark. A range
     /// whose ends straddle a filtered-out entry leaves that entry alone, so
     /// the next bulk operation never widens onto a file the filter was
-    /// hiding. Indices outside the listing are ignored, which makes this a
-    /// no-op on an empty listing — a pointer resolves an index against a
-    /// listing that may already have changed.
+    /// hiding.
+    ///
+    /// The range is CLAMPED to the listing, not rejected: a range that runs
+    /// off the end marks up to the last entry, which is exactly what a hit
+    /// test in the blank area below the last row produces. A range entirely
+    /// outside the listing (and any range on an empty listing) therefore
+    /// marks nothing.
+    ///
+    /// ```
+    /// # use norte_frontend::PaneState;
+    /// # use norte_proto::{Entry, EntryKind, VPath};
+    /// # fn e(w: &str) -> Entry {
+    /// #     Entry { attrs: Default::default(), path: VPath::parse(w).unwrap(),
+    /// #             kind: EntryKind::File, size: None, mtime_ms: None }
+    /// # }
+    /// let mut p = PaneState::new(
+    ///     VPath::parse("mem:///").unwrap(),
+    ///     vec![e("mem:///a"), e("mem:///b"), e("mem:///c")],
+    /// );
+    /// assert_eq!(p.mark_range(2, 0), 3, "either order, inclusive");
+    /// // The return is what CHANGED, never the resulting total: re-marking
+    /// // the same range changes nothing while the selection stays full.
+    /// assert_eq!(p.mark_range(0, 2), 0);
+    /// assert_eq!(p.marks_len(), 3);
+    /// ```
     pub fn mark_range(&mut self, from: usize, to: usize) -> usize {
         let (lo, hi) = if from <= to { (from, to) } else { (to, from) };
+        // Recorre el RANGO, no todo el listado: un barrido re-enuncia su
+        // rango a ritmo de evento de puntero, y `markable_indices` cuesta
+        // un `Vec` del tamaño del listado en cada llamada.
+        let Some(last) = self.entries.len().checked_sub(1) else {
+            return 0;
+        };
+        if lo > last {
+            return 0;
+        }
+        let hi = hi.min(last);
         let mut changed = 0usize;
-        for i in self.markable_indices() {
-            if i < lo || i > hi {
+        for i in lo..=hi {
+            if !self.is_markable(i) {
                 continue;
             }
-            let Some(path) = self.entries.get(i).map(|e| e.path.clone()) else {
+            let Some(entry) = self.entries.get(i) else {
                 continue;
             };
-            if self.marks.insert(path) {
-                changed += 1;
+            // `contains` antes de clonar: la re-emisión de un barrido pasa
+            // por aquí a ritmo de evento de puntero y la inmensa mayoría de
+            // las filas del rango ya están marcadas — clonar un `VPath`
+            // para que el `HashSet` lo tire era el coste dominante.
+            if self.marks.contains(&entry.path) {
+                continue;
             }
+            let path = entry.path.clone();
+            self.marks.insert(path);
+            changed += 1;
         }
         changed
+    }
+
+    /// Arms a pointer sweep: drops any baseline left by a previous one, so
+    /// the next [`Self::apply_sweep`] snapshots the marks as they are NOW.
+    /// Cheap (no clone); call it when the gesture starts.
+    ///
+    /// Without this, a sweep that follows unrelated marking (a ctrl+click,
+    /// a `mark_glob`) would restore the previous gesture's baseline and
+    /// silently drop everything marked in between.
+    pub fn begin_sweep(&mut self) {
+        self.sweep_baseline = None;
+        self.sweep_extent = None;
+    }
+
+    /// Applies the CURRENT extent of a pointer sweep: gives back the rows
+    /// the sweep covered a moment ago and no longer does, then marks
+    /// `from..=to` through [`Self::mark_range`], so the filter still decides
+    /// what is reachable. Returns the marks added on top of what was already
+    /// there.
+    ///
+    /// Both directions are DELTAS over the extent that changed, never a
+    /// rebuild: rows that LEFT the range are given back (only those the
+    /// sweep itself added — anything in the baseline is untouched) and only
+    /// rows that ENTERED it are marked. A one-row motion therefore costs one
+    /// row. This matters: at GPUI's per-pixel event rate on a 20 000-entry
+    /// pane, restoring a snapshot per motion measured 7.1 ms per event and
+    /// re-marking the whole range 2.7 ms, against 0.03 ms for the delta.
+    ///
+    /// The extent is dropped by any listing change, so the first call after
+    /// one re-marks its whole range rather than trusting indices that moved.
+    /// A quick filter that changes DURING a gesture is not re-examined: a
+    /// row that becomes visible mid-sweep stays unmarked until the pointer
+    /// moves over it again. Nothing is lost, and a drag with a hand on the
+    /// filter is not a gesture worth a full rescan per motion.
+    ///
+    /// This is what makes a drag RUBBER-BAND. An add-only sweep leaves
+    /// behind everything the pointer ever touched: overshooting by fifteen
+    /// rows and pulling back leaves fifteen files marked, and because an
+    /// overshoot happens at the viewport edge under autoscroll, those rows
+    /// are precisely the ones that just scrolled out of sight. The next
+    /// bulk operation would then act on files the user pulled back from and
+    /// cannot see — and with no range unmarker, undoing that by hand is one
+    /// ctrl+click per surplus row.
+    ///
+    /// The baseline is a snapshot of the mark SET, so marks made before the
+    /// gesture survive every retreat. It is dropped by any listing change
+    /// (see the `sweep_baseline` field); after one, the next call
+    /// re-snapshots and the sweep simply starts rubber-banding from there.
+    pub fn apply_sweep(&mut self, from: usize, to: usize) -> usize {
+        let (lo, hi) = if from <= to { (from, to) } else { (to, from) };
+        if self.sweep_baseline.is_none() {
+            // Foto perezosa: el gesto pudo armarse en un simple click que
+            // jamás barre, y clonar el conjunto de marcas en cada click
+            // sería un coste que nadie pidió.
+            self.sweep_baseline = Some(self.marks.clone());
+            self.sweep_extent = None;
+        }
+        if let (Some(baseline), Some((plo, phi))) = (&self.sweep_baseline, self.sweep_extent) {
+            let phi = phi.min(self.entries.len().saturating_sub(1));
+            let mut soltar: Vec<VPath> = Vec::new();
+            for i in plo..=phi {
+                if i >= lo && i <= hi {
+                    continue;
+                }
+                let Some(entry) = self.entries.get(i) else {
+                    continue;
+                };
+                // Solo se suelta lo que puso ESTE barrido: lo que ya estaba
+                // marcado antes del gesto está en la baseline y no se toca.
+                if !baseline.contains(&entry.path) {
+                    soltar.push(entry.path.clone());
+                }
+            }
+            for path in soltar {
+                self.marks.remove(&path);
+            }
+        }
+        // Marca solo lo que ENTRA en el rango: el resto del solape ya lo
+        // marcó una llamada anterior de este mismo barrido. Dos intervalos
+        // como mucho, así que un motion de una fila cuesta una fila y no un
+        // repaso del listado entero.
+        let previo = self.sweep_extent;
+        self.sweep_extent = Some((lo, hi));
+        match previo {
+            Some((plo, phi)) if lo <= phi && hi >= plo => {
+                let mut changed = 0usize;
+                if lo < plo {
+                    changed += self.mark_range(lo, plo - 1);
+                }
+                if hi > phi {
+                    changed += self.mark_range(phi + 1, hi);
+                }
+                changed
+            }
+            _ => self.mark_range(lo, hi),
+        }
+    }
+
+    /// Ends a pointer sweep, releasing its baseline. Idempotent, and not
+    /// required for correctness ([`Self::begin_sweep`] re-arms anyway) —
+    /// it only stops a mark-set-sized snapshot from outliving the gesture.
+    pub fn end_sweep(&mut self) {
+        self.sweep_baseline = None;
+        self.sweep_extent = None;
+    }
+
+    /// Is this index reachable by a mark right now? The VISIBLE subset
+    /// under an active [`Mode::Filter`] quick search, any listed index
+    /// otherwise — `markable_indices` without materialising it.
+    fn is_markable(&self, index: usize) -> bool {
+        match self.quick_visible() {
+            // `vis` viene en orden ASCENDENTE (`nav::matches_folded`
+            // enumera `entries` en orden y filtra), invariante clavada por
+            // `quick_visible_viene_en_orden_ascendente`: la búsqueda
+            // binaria evita un barrido lineal por cada fila del rango.
+            Some(vis) => vis.binary_search(&index).is_ok(),
+            None => index < self.entries.len(),
+        }
     }
 
     /// Marks (`marked = true`) or unmarks (`false`) ONE entry by its index
@@ -879,13 +1063,22 @@ impl PaneState {
     /// ever reaches the selection). No-op if the index is outside the
     /// listing.
     ///
-    /// Unlike the bulk markers it does NOT consult the quick filter: the
-    /// caller is naming ONE row it just resolved from a pointer, so the row
-    /// is visible by construction, and re-filtering here would only turn a
-    /// stale index into a silent no-op instead of a mark the user can see.
+    /// MARKING respects the quick filter and UNMARKING does not, and the
+    /// asymmetry is deliberate. An index is resolved from a painted frame
+    /// against a listing that is not index-stable — an incremental fill
+    /// inserts entries, a `refill` prunes them, a re-sort moves them — so by
+    /// the time the index arrives here it can name a different entry than
+    /// the one under the pointer, possibly one the filter hides. Marking
+    /// the wrong entry WIDENS the next bulk operation onto a file nobody
+    /// chose; unmarking the wrong entry only ever shrinks it. Only the
+    /// first of those can destroy data, so only the first is refused.
+    ///
     /// Unmarking down to an empty set re-arms [`Self::marked_paths`]'s
     /// cursor fallback, the same caveat [`Self::mark_glob`] carries.
     pub fn set_mark(&mut self, index: usize, marked: bool) {
+        if marked && !self.is_markable(index) {
+            return;
+        }
         let Some(path) = self.entries.get(index).map(|e| e.path.clone()) else {
             return;
         };
@@ -1209,6 +1402,8 @@ impl PaneState {
         self.cursor = self.cursor.min(entries.len().saturating_sub(1));
         self.entries = entries;
         self.sort_keys = sort_keys;
+        self.sweep_baseline = None;
+        self.sweep_extent = None;
         self.pruned_marks = self.prune_marks();
         if let Some(q) = &mut self.quick {
             q.refresh(&self.entries, quick_prev.as_ref());
@@ -3050,6 +3245,18 @@ mod tests {
         assert_eq!(q.marks_len(), 0);
     }
 
+    /// Un rango que se sale del listado se RECORTA, no se rechaza: es
+    /// exactamente lo que produce un hit test en el hueco bajo la última
+    /// fila, y rechazarlo entero convertiría un barrido hasta el final del
+    /// pane en un no-op.
+    #[test]
+    fn mark_range_recorta_al_listado() {
+        let mut p = pane(&["a", "b", "c"]);
+        assert_eq!(p.mark_range(1, 999), 2, "marca hasta la última entrada");
+        assert_eq!(p.marks_len(), 2);
+        assert!(!p.is_marked(&e("mem:///a", EntryKind::File)));
+    }
+
     /// `set_mark` nombra UNA fila por índice (lo que necesita el
     /// ctrl+click), a diferencia de `toggle_mark`, que solo alcanza el
     /// cursor. Fuera de rango: no-op.
@@ -3062,6 +3269,187 @@ mod tests {
         assert_eq!(p.marks_len(), 0);
         p.set_mark(9, true);
         assert_eq!(p.marks_len(), 0, "índice fuera del listado: no-op");
+    }
+
+    /// Marcar respeta el filtro y DESMARCAR no. El índice viene de un frame
+    /// ya pintado contra un listado que no es estable (un fill inserta, un
+    /// refill poda, un re-orden mueve): puede nombrar otra entrada, y bajo
+    /// filtro una que el usuario no ve. Marcar de más ENSANCHA la siguiente
+    /// operación masiva sobre un fichero que nadie eligió; desmarcar de más
+    /// solo la encoge. Solo lo primero destruye datos, así que solo lo
+    /// primero se rechaza.
+    #[test]
+    fn set_mark_marca_solo_lo_visible_pero_desmarca_siempre() {
+        // Ordenado: alfa(0), alga(1), beta(2), zeta(3).
+        let mut p = pane(&["alfa", "beta", "alga", "zeta"]);
+        p.set_mark(2, true); // "beta" marcada ANTES de filtrar
+        p.quick_start(Mode::Filter);
+        p.quick_char('a');
+        p.quick_char('l'); // visibles: alfa(0) y alga(1); ocultas: beta, zeta
+        // Estado de partida asimétrico (lección de los tests de #103): la
+        // fila que se intenta marcar NO puede estar ya marcada, o marcarla
+        // de más no cambiaría el total y el test no vería nada.
+        p.set_mark(3, true);
+        assert_eq!(
+            p.marks_len(),
+            1,
+            "marcar una fila oculta ('zeta'): rechazado — solo queda 'beta'"
+        );
+        assert!(!p.is_marked(&e("mem:///zeta", EntryKind::File)));
+        p.set_mark(2, false);
+        assert_eq!(
+            p.marks_len(),
+            0,
+            "desmarcar una fila oculta: siempre permitido (solo encoge)"
+        );
+        p.set_mark(0, true);
+        assert_eq!(p.marks_len(), 1, "la visible sí se marca");
+    }
+
+    // --- ratón T1 (fix): el barrido rebota contra su baseline -------------
+
+    /// El barrido DEVUELVE lo que el puntero se pasó. Un barrido aditivo
+    /// deja marcado todo lo que llegó a tocar: pasarse veinte filas y
+    /// volver dejaba diecisiete ficheros marcados, y como el exceso ocurre
+    /// en el borde del viewport bajo autoscroll, esas filas son justo las
+    /// que acaban de salir de la pantalla — la siguiente operación masiva
+    /// actuaría sobre ficheros invisibles de los que el usuario se echó
+    /// atrás, sin más reparación que un ctrl+click por fila.
+    #[test]
+    fn el_barrido_devuelve_las_filas_del_exceso_al_retroceder() {
+        let nombres: Vec<String> = (0..10).map(|i| format!("f{i}")).collect();
+        let refs: Vec<&str> = nombres.iter().map(String::as_str).collect();
+        let mut p = pane(&refs);
+        p.begin_sweep();
+        p.apply_sweep(2, 8); // el puntero se pasa hasta la 8
+        assert_eq!(p.marks_len(), 7);
+        p.apply_sweep(2, 4); // y el usuario vuelve
+        assert_eq!(p.marks_len(), 3, "solo 2, 3 y 4 siguen marcadas");
+        assert!(!p.is_marked(&e("mem:///f5", EntryKind::File)));
+        assert!(!p.is_marked(&e("mem:///f8", EntryKind::File)));
+    }
+
+    /// La baseline es una foto del CONJUNTO de marcas: lo marcado a mano
+    /// antes del gesto sobrevive a cada retroceso. Sin esto, rebotar el
+    /// barrido borraría una selección que el usuario construyó con
+    /// ctrl+click.
+    #[test]
+    fn el_barrido_conserva_lo_marcado_antes_del_gesto() {
+        let mut p = pane(&["a", "b", "c", "d", "e"]);
+        p.set_mark(0, true); // marcado a mano, fuera del rango del barrido
+        p.begin_sweep();
+        p.apply_sweep(2, 4);
+        assert_eq!(p.marks_len(), 4);
+        p.apply_sweep(2, 2); // retrocede del todo
+        assert_eq!(p.marks_len(), 2, "queda 'a' (a mano) y 'c' (el ancla)");
+        assert!(p.is_marked(&e("mem:///a", EntryKind::File)));
+        assert!(p.is_marked(&e("mem:///c", EntryKind::File)));
+    }
+
+    /// `begin_sweep` suelta la baseline del gesto anterior: sin eso, un
+    /// barrido nuevo restauraría la foto del anterior y borraría en
+    /// silencio todo lo marcado entre medias.
+    #[test]
+    fn begin_sweep_no_restaura_la_baseline_del_gesto_anterior() {
+        let mut p = pane(&["a", "b", "c", "d"]);
+        p.begin_sweep();
+        p.apply_sweep(0, 1); // gesto 1: marca a, b
+        p.set_mark(3, true); // ctrl+click entre gestos
+        p.begin_sweep(); // gesto 2
+        p.apply_sweep(2, 2);
+        assert_eq!(p.marks_len(), 4, "a, b y d sobreviven; c es del barrido");
+        assert!(p.is_marked(&e("mem:///d", EntryKind::File)));
+    }
+
+    /// Un cambio de listado suelta la baseline: restaurarla sobre entradas
+    /// que se movieron resucitaría marcas que el prune ya había tirado.
+    #[test]
+    fn un_refill_suelta_la_baseline_del_barrido() {
+        let mut p = pane(&["a", "b", "c"]);
+        p.begin_sweep();
+        p.apply_sweep(0, 2);
+        assert_eq!(p.marks_len(), 3);
+        // "c" desaparece del dir; el refill poda su marca.
+        p.refill(vec![
+            e("mem:///a", EntryKind::File),
+            e("mem:///b", EntryKind::File),
+        ]);
+        assert_eq!(p.pruned_marks(), 1);
+        p.apply_sweep(0, 0); // el barrido sigue vivo y re-fotografía
+        assert_eq!(p.marks_len(), 2, "a y b: 'c' NO resucita");
+        assert_eq!(p.entries().len(), 2);
+    }
+
+    /// El barrido sigue respetando el filtro (pasa por `mark_range`), y la
+    /// baseline conserva las marcas ocultas que no puede tocar.
+    #[test]
+    fn el_barrido_bajo_filtro_solo_alcanza_lo_visible() {
+        // El listado se ordena: alfa(0), alga(1), beta(2).
+        let mut p = pane(&["alfa", "beta", "alga"]);
+        p.set_mark(2, true); // "beta", marcada antes de filtrar
+        p.quick_start(Mode::Filter);
+        p.quick_char('a');
+        p.quick_char('l'); // visibles: "alfa" (0) y "alga" (1)
+        p.begin_sweep();
+        p.apply_sweep(0, 2);
+        assert_eq!(p.marks_len(), 3, "las dos visibles + la oculta de antes");
+        p.apply_sweep(0, 0);
+        assert_eq!(p.marks_len(), 2, "suelta 'alga'; 'beta' oculta sobrevive");
+        assert!(p.is_marked(&e("mem:///beta", EntryKind::File)));
+    }
+
+    /// El barrido re-marca lo que VUELVE a entrar en el rango. Marcar y
+    /// desmarcar por delta (solo lo que entra y lo que sale) es lo que hace
+    /// que un motion cueste una fila y no un repaso del listado, pero un
+    /// delta mal cerrado dejaría huecos sin marcar en mitad del rango —
+    /// invisibles hasta que la operación masiva se saltara un fichero.
+    #[test]
+    fn el_barrido_re_marca_lo_que_vuelve_a_entrar_en_el_rango() {
+        let nombres: Vec<String> = (0..10).map(|i| format!("f{i}")).collect();
+        let refs: Vec<&str> = nombres.iter().map(String::as_str).collect();
+        let mut p = pane(&refs);
+        p.begin_sweep();
+        p.apply_sweep(2, 8);
+        p.apply_sweep(2, 4); // retrocede: suelta 5..8
+        p.apply_sweep(2, 6); // y vuelve a avanzar
+        assert_eq!(p.marks_len(), 5, "2..6 sin huecos");
+        for i in 2..=6 {
+            assert!(
+                p.is_marked(&e(&format!("mem:///f{i}"), EntryKind::File)),
+                "f{i} debe seguir marcada"
+            );
+        }
+        assert!(!p.is_marked(&e("mem:///f7", EntryKind::File)));
+    }
+
+    /// Los índices de `quick_visible` vienen en orden ASCENDENTE. No es un
+    /// detalle: `is_markable` los busca en BINARIO, así que un día en que
+    /// `nav` devolviera otro orden el filtro dejaría de aplicarse a filas
+    /// sueltas — marcando en silencio lo que el usuario no ve.
+    #[test]
+    fn quick_visible_viene_en_orden_ascendente() {
+        let mut p = pane(&["alfa", "beta", "alga", "zeta", "algo"]);
+        p.quick_start(Mode::Filter);
+        p.quick_char('a');
+        p.quick_char('l');
+        let vis = p.quick_visible().expect("filtro activo");
+        assert!(vis.len() > 1, "hacen falta varios para ver el orden");
+        assert!(
+            vis.windows(2).all(|w| w[0] < w[1]),
+            "índices ascendentes y sin repetir: {vis:?}"
+        );
+    }
+
+    /// `apply_sweep` sin `begin_sweep` se auto-fotografía en la primera
+    /// llamada: un frontend que se salte el armado sigue rebotando bien en
+    /// vez de acumular.
+    #[test]
+    fn apply_sweep_sin_begin_se_fotografia_en_la_primera_llamada() {
+        let mut p = pane(&["a", "b", "c", "d"]);
+        p.set_mark(3, true);
+        p.apply_sweep(0, 2);
+        p.apply_sweep(0, 0);
+        assert_eq!(p.marks_len(), 2, "queda 'a' (barrido) y 'd' (previa)");
     }
 
     // --- #103: mark/unmark by glob ---------------------------------------

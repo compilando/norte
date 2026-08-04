@@ -131,6 +131,21 @@ Commit: `feat(gui): right-click context menu`.
       Task 1's state machine and is tested there; the GUI test asserts the
       submitted command matches what the keyboard path would submit.
 
+**Known consequence of the Task 1 fork, decide here:** a press on an UNMARKED
+row arms a mark sweep, so dragging a single unmarked file to the other pane
+transfers NOTHING — it sweeps one row and marks it. That is the most common
+drag in any file manager. It follows from the mark-state fork as specified (a
+transfer carries the marks, and an unmarked row has none), so it is not a
+defect in `norte-frontend::mouse`; it is a gap this task must close. The
+options, none of them free: promote the sweep to a transfer when the pointer
+crosses into the other pane (the drag then means two things depending on where
+it ends, and the feedback must say so before the drop); or mark the pressed row
+implicitly at the start of a cross-pane drag (a gesture that silently changes
+the selection); or leave it and require a mark first (honest, and what an
+orthodox file manager already teaches, but it will read as broken to anyone
+arriving from a desktop file manager). Whichever wins, say so in the help topic
+of Task 6.
+
 Commit: `feat(gui): drag and drop between panes`.
 
 ---
