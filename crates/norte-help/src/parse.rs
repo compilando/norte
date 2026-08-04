@@ -3,7 +3,8 @@
 //! terminal — that is the security barrier, not an allowlist bolted on
 //! afterwards.
 
-use crate::model::{Span, TopicId};
+use crate::front_matter::{self, FrontMatterError};
+use crate::model::{Block, Callout, Origin, Span, Topic, TopicId};
 
 /// Opener of a command reference. Opener and closer are constants so that
 /// the needle we search for and the number of bytes we skip can never
@@ -21,15 +22,6 @@ const LINK_CLOSE: &str = "]]";
 
 /// Cuts a line into [`Span`]s. A badly closed mark stays literal text: it
 /// never produces a reference to a command nobody wrote.
-// Narrowest possible suppression: the module is private and nothing outside
-// its own tests calls `spans` yet — the block parser will, in task 5 of this
-// phase. It sits on `spans` ALONE because rustc treats a lint-allowed item
-// as a live root, so everything `spans` reaches (`take_mark`, `take_delim`,
-// the four constants) is analysed honestly and would be reported if it
-// really went unused. `expect` and not `allow` so that the day task 5 calls
-// `spans` the expectation goes unfulfilled and the compiler forces this line
-// out; task 5 deletes it.
-#[cfg_attr(not(test), expect(dead_code))]
 fn spans(line: &str) -> Vec<Span> {
     spans_counted(line).0
 }
@@ -165,10 +157,357 @@ fn take_delim(rest: &str) -> Option<(Span, usize)> {
     None
 }
 
+/// Parser limits. The embedded corpus uses [`Limits::built_in`]; a plugin
+/// `help.md` uses [`Limits::untrusted`].
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    /// Ceiling on the SOURCE, in bytes. It is applied by the entry point
+    /// BEFORE anything is parsed — `parse_untrusted` (task 6) cuts the input
+    /// on a UTF-8 boundary and raises [`Parsed::truncated`]. [`parse_trusted`]
+    /// does not apply it: the embedded corpus is a build-time input, and
+    /// silently amputating a topic there would hide a corpus bug instead of
+    /// reporting it.
+    pub max_bytes: usize,
+    /// Maximum number of blocks a body may produce. Beyond it the parser
+    /// stops and raises [`Parsed::truncated`], keeping everything already
+    /// parsed.
+    pub max_blocks: usize,
+    /// Maximum bytes of a single line, code-fence content included. A longer
+    /// line is cut on a `char` boundary; the rest of the line is dropped.
+    pub max_line_bytes: usize,
+}
+
+impl Limits {
+    /// Limits for the embedded corpus, which we wrote ourselves.
+    ///
+    /// ```
+    /// use norte_help::Limits;
+    ///
+    /// assert!(Limits::built_in().max_blocks > Limits::untrusted().max_blocks);
+    /// ```
+    #[must_use]
+    pub fn built_in() -> Self {
+        Self {
+            max_bytes: 256 * 1024,
+            max_blocks: 4096,
+            max_line_bytes: 8 * 1024,
+        }
+    }
+
+    /// Limits for a third-party `help.md`: tighter, because the file arrives
+    /// from a plugin and the only thing bounding it is this struct.
+    ///
+    /// ```
+    /// use norte_help::Limits;
+    ///
+    /// assert!(Limits::untrusted().max_bytes < Limits::built_in().max_bytes);
+    /// ```
+    #[must_use]
+    pub fn untrusted() -> Self {
+        Self {
+            max_bytes: 64 * 1024,
+            max_blocks: 512,
+            max_line_bytes: 2 * 1024,
+        }
+    }
+}
+
+/// Parse result: the topic plus what had to be cut.
+#[derive(Clone, Debug)]
+pub struct Parsed {
+    /// The parsed topic.
+    pub topic: Topic,
+    /// Some limit of [`Limits`] bit, and content was dropped. It feeds the
+    /// UI badge: a reader must never mistake a cut topic for a complete one.
+    pub truncated: bool,
+    /// The source was not valid UTF-8 and was decoded lossily. Always `false`
+    /// for [`parse_trusted`], whose input is already a `&str`.
+    pub lossy: bool,
+}
+
+/// Why a TRUSTED topic could not be parsed.
+///
+/// `#[non_exhaustive]` on purpose: the corpus checks grow reasons to reject a
+/// topic, and adding one must not break the `match`es of whoever reports
+/// them. There is no such enum on the hostile path — `parse_untrusted` (task
+/// 6) never fails, it degrades.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ParseError {
+    /// The front matter is missing, unterminated or not valid TOML.
+    #[error("front matter: {0}")]
+    FrontMatter(#[from] FrontMatterError),
+}
+
+/// Parses a topic from the embedded corpus. A failure here is a build
+/// failure: the suite parses the whole corpus (see `tests/corpus.rs`).
+///
+/// ```
+/// use norte_help::{Block, parse_trusted};
+///
+/// let src = "+++\nid = \"copying\"\ntitle = \"Copying\"\n+++\n# Copying\n";
+/// let parsed = parse_trusted(src).expect("a valid topic");
+/// assert_eq!(parsed.topic.id.as_str(), "copying");
+/// assert!(!parsed.truncated && !parsed.lossy);
+/// assert_eq!(
+///     parsed.topic.blocks,
+///     vec![Block::Heading { level: 1, text: "Copying".to_owned() }]
+/// );
+/// ```
+///
+/// # Errors
+/// [`ParseError::FrontMatter`] if the `+++` header is missing, unterminated,
+/// carries trailing content on its closing fence, or is not valid TOML. The
+/// BODY never fails: whatever the parser cannot express degrades into
+/// paragraphs.
+pub fn parse_trusted(source: &str) -> Result<Parsed, ParseError> {
+    let (fm, body) = front_matter::split(source)?;
+    let limits = Limits::built_in();
+    let (blocks, truncated) = blocks_of(body, limits, false);
+    Ok(Parsed {
+        topic: Topic {
+            id: TopicId::new(fm.id),
+            title: fm.title,
+            tags: fm.tags,
+            see_also: fm.see_also.into_iter().map(TopicId::new).collect(),
+            commands: fm.commands,
+            context: fm.context,
+            blocks,
+            origin: Origin::BuiltIn,
+        },
+        truncated,
+        lossy: false,
+    })
+}
+
+/// Turns the body into blocks. `mask` masks terminal hazards in every text
+/// produced (hostile mode, task 6).
+///
+/// Line-oriented and single-pass: the grammar has no nesting, so a block is
+/// decided by the prefix of its first line and nothing needs to be
+/// backtracked. Returns the blocks and whether any limit bit.
+fn blocks_of(body: &str, limits: Limits, mask: bool) -> (Vec<Block>, bool) {
+    let mut out = Vec::new();
+    let mut truncated = false;
+    let mut lines = body.lines().peekable();
+    let mut para: Vec<String> = Vec::new();
+
+    while let Some(raw) = lines.next() {
+        if out.len() >= limits.max_blocks {
+            truncated = true;
+            break;
+        }
+        let (line, cut) = clamp_line(raw, limits);
+        truncated |= cut;
+
+        if line.trim().is_empty() {
+            flush(&mut para, &mut out, mask);
+        } else if let Some(rest) = line.strip_prefix("```") {
+            flush(&mut para, &mut out, mask);
+            let lang = (!rest.trim().is_empty()).then(|| mask_if(rest.trim().to_owned(), mask));
+            let mut text = String::new();
+            // An unterminated fence deliberately eats the rest of the input:
+            // `by_ref` leaves the outer `while let` on an exhausted iterator,
+            // so this terminates with EXACTLY one `Code` block. The closing
+            // fence, when it exists, is consumed and not re-examined.
+            for l in lines.by_ref() {
+                if l.starts_with("```") {
+                    break;
+                }
+                let (l, cut) = clamp_line(l, limits);
+                truncated |= cut;
+                text.push_str(l);
+                text.push('\n');
+            }
+            out.push(Block::Code {
+                lang,
+                text: mask_if(text, mask),
+            });
+        } else if let Some(rest) = line.strip_prefix('#') {
+            flush(&mut para, &mut out, mask);
+            // One `#` is already stripped, so the hashes left here are the
+            // ones ABOVE level 1. Clamped to 3 — the model documents 1..=3 —
+            // by counting, never by arithmetic that could overflow `u8`:
+            // `#######` is level 3, not level 7 and not a panic.
+            let level = match rest.chars().take_while(|c| *c == '#').count() {
+                0 => 1,
+                1 => 2,
+                _ => 3,
+            };
+            let text = rest.trim_start_matches('#').trim();
+            out.push(Block::Heading {
+                level,
+                text: mask_if(text.to_owned(), mask),
+            });
+        } else if let Some(rest) = line.strip_prefix("> ") {
+            flush(&mut para, &mut out, mask);
+            let (kind, body) = callout_kind(rest);
+            out.push(Block::Callout {
+                kind,
+                spans: spans_masked(body, mask),
+            });
+        } else if let Some(rest) = line.strip_prefix("- ") {
+            flush(&mut para, &mut out, mask);
+            let mut items = vec![spans_masked(rest, mask)];
+            // `to_owned` on purpose: `peek` borrows `lines` for the WHOLE body
+            // of the `while let`, so the inner `next()` would not compile with
+            // a live reference into the buffer.
+            while let Some(next) = lines
+                .peek()
+                .and_then(|l| l.strip_prefix("- "))
+                .map(str::to_owned)
+            {
+                let (next, cut) = clamp_line(&next, limits);
+                truncated |= cut;
+                items.push(spans_masked(next, mask));
+                lines.next();
+            }
+            out.push(Block::Bullets(items));
+        } else if line.starts_with('|') {
+            flush(&mut para, &mut out, mask);
+            let header = cells(line, mask);
+            // The `|---|---|` line is SYNTAX, not data. It is skipped only
+            // when it really is one: swallowing the next `|` line
+            // unconditionally would silently eat the first ROW of a table
+            // whose author forgot the separator, and a lost row reads as a
+            // fact that was never documented.
+            if lines.peek().is_some_and(|l| is_separator_row(l)) {
+                lines.next();
+            }
+            let mut rows = Vec::new();
+            while let Some(row) = lines
+                .peek()
+                .filter(|l| l.starts_with('|'))
+                .map(|l| (*l).to_owned())
+            {
+                let (row, cut) = clamp_line(&row, limits);
+                truncated |= cut;
+                rows.push(normalise_row(cells(row, mask), header.len()));
+                lines.next();
+            }
+            out.push(Block::Table { header, rows });
+        } else {
+            para.push(line.to_owned());
+        }
+    }
+    flush(&mut para, &mut out, mask);
+    // One iteration can push the pending paragraph AND its own block, so the
+    // cap may be overshot by one. Clamping here makes `blocks.len() <=
+    // max_blocks` hold unconditionally: on the hostile path that is a memory
+    // bound, not a hint.
+    if out.len() > limits.max_blocks {
+        out.truncate(limits.max_blocks);
+        truncated = true;
+    }
+    (out, truncated)
+}
+
+/// Emits the paragraph built up so far, if there is one, and empties the
+/// buffer. Lines are joined with a single space: a hard-wrapped corpus must
+/// reflow to the reader's width, not show ours.
+fn flush(para: &mut Vec<String>, out: &mut Vec<Block>, mask: bool) {
+    if !para.is_empty() {
+        let joined = para.join(" ");
+        out.push(Block::Paragraph(spans_masked(&joined, mask)));
+        para.clear();
+    }
+}
+
+/// Cuts a line to `max_line_bytes`, always on a `char` boundary. Returns the
+/// line and whether anything was dropped.
+///
+/// The backward walk cannot underflow: index 0 is a boundary of every `&str`,
+/// so it stops there at the very latest — even for a line whose FIRST
+/// character is multi-byte and already longer than the limit.
+fn clamp_line(raw: &str, limits: Limits) -> (&str, bool) {
+    if raw.len() <= limits.max_line_bytes {
+        return (raw, false);
+    }
+    let mut cut = limits.max_line_bytes;
+    while !raw.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    (&raw[..cut], true)
+}
+
+/// The cells of a table line, without their pipes and trimmed.
+fn cells(line: &str, mask: bool) -> Vec<String> {
+    line.trim_matches('|')
+        .split('|')
+        .map(|c| mask_if(c.trim().to_owned(), mask))
+        .collect()
+}
+
+/// Is this the `|---|:--:|` separator? Every cell non-empty and made only of
+/// `-` and `:`. A data row never matches, which is what lets a table with no
+/// separator keep its first row.
+fn is_separator_row(line: &str) -> bool {
+    line.starts_with('|')
+        && line.trim_matches('|').split('|').all(|c| {
+            let c = c.trim();
+            !c.is_empty() && c.chars().all(|ch| ch == '-' || ch == ':')
+        })
+}
+
+/// A row with EXACTLY `width` cells: the missing ones padded empty, the extra
+/// ones dropped.
+///
+/// [`Block::Table`] documents this so a renderer can index by column without
+/// checking the length. It is enforced here, at the only place that builds a
+/// row, because these cells come from a plain `split` over a plugin
+/// `help.md`: a ragged row is one keystroke away for a hostile author, and it
+/// would land as a panic while drawing.
+fn normalise_row(mut row: Vec<String>, width: usize) -> Vec<String> {
+    row.truncate(width);
+    row.resize_with(width, String::new);
+    row
+}
+
+/// Callout kind from its leading emoji; without one, a note.
+fn callout_kind(rest: &str) -> (Callout, &str) {
+    for (marker, kind) in [("\u{26A0}", Callout::Warn), ("\u{1F4A1}", Callout::Tip)] {
+        if let Some(body) = rest.strip_prefix(marker) {
+            return (kind, body.trim_start());
+        }
+    }
+    (Callout::Note, rest)
+}
+
+/// [`spans`], masking the line FIRST when the content is third-party.
+///
+/// Before and not after, for two reasons. `TopicId` documents that it never
+/// normalises what it is given, so a `[[topic]]` id must arrive already
+/// masked — masking the `Span` afterwards would mean rebuilding the id. And
+/// no hazard is part of the mark syntax (`{`, `[`, `*`, `` ` ``), so masking
+/// first cannot change how the line is CUT: it only changes the bytes each
+/// span carries.
+fn spans_masked(line: &str, mask: bool) -> Vec<Span> {
+    if mask {
+        spans(&norte_encoding::mask_terminal_hazards(line))
+    } else {
+        spans(line)
+    }
+}
+
+/// Masks terminal hazards when the content is third-party.
+///
+/// `norte_encoding::mask_terminal_hazards` is the SINGLE source of the hazard
+/// set (controls, bidi overrides, invisibles Cf/Zl/Zp, tag chars; ZWJ is
+/// deliberately allowed for composed emoji) — the same one `norte-frontend`
+/// uses for names. Takes the `String` by value so the trusted path pays
+/// nothing: with `mask == false` it hands the very same buffer back.
+fn mask_if(s: String, mask: bool) -> String {
+    if mask {
+        norte_encoding::mask_terminal_hazards(&s)
+    } else {
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Span, TopicId};
+    use crate::model::{Block, Callout, Span, TopicId};
 
     #[test]
     fn plain_text_is_a_single_span() {
@@ -504,5 +843,397 @@ mod tests {
             "still nothing fabricated"
         );
         assert_eq!(scans, 2, "one per mark kind, whatever the length");
+    }
+
+    // --- The block parser.
+
+    const DOC: &str = "+++\n\
+id = \"t\"\n\
+title = \"T\"\n\
++++\n\
+# Heading\n\
+\n\
+A paragraph with {{cmd:fs.copy}}.\n\
+\n\
+- one\n\
+- two\n\
+\n\
+```toml\n\
+key = 1\n\
+```\n\
+\n\
+> \u{26A0} careful\n\
+\n\
+| a | b |\n\
+|---|---|\n\
+| 1 | 2 |\n";
+
+    #[test]
+    fn parses_the_six_block_kinds() {
+        let parsed = parse_trusted(DOC).expect("valid document");
+        let t = parsed.topic;
+        assert_eq!(t.id.as_str(), "t");
+        assert_eq!(t.blocks.len(), 6, "blocks: {:?}", t.blocks);
+        assert_eq!(
+            t.blocks[0],
+            Block::Heading {
+                level: 1,
+                text: "Heading".to_owned()
+            }
+        );
+        assert!(matches!(t.blocks[1], Block::Paragraph(_)));
+        assert_eq!(
+            t.blocks[2],
+            Block::Bullets(vec![
+                vec![Span::Text("one".to_owned())],
+                vec![Span::Text("two".to_owned())],
+            ])
+        );
+        assert_eq!(
+            t.blocks[3],
+            Block::Code {
+                lang: Some("toml".to_owned()),
+                text: "key = 1\n".to_owned()
+            }
+        );
+        assert_eq!(
+            t.blocks[4],
+            Block::Callout {
+                kind: Callout::Warn,
+                spans: vec![Span::Text("careful".to_owned())]
+            }
+        );
+        assert_eq!(
+            t.blocks[5],
+            Block::Table {
+                header: vec!["a".to_owned(), "b".to_owned()],
+                rows: vec![vec!["1".to_owned(), "2".to_owned()]],
+            }
+        );
+    }
+
+    #[test]
+    fn trusted_mode_fails_on_a_broken_header() {
+        assert!(parse_trusted("no fences here").is_err());
+    }
+
+    /// The blocks of a body under the built-in limits, trusted mode.
+    fn blocks(body: &str) -> Vec<Block> {
+        let (out, truncated) = blocks_of(body, Limits::built_in(), false);
+        assert!(!truncated, "this body fits: {out:?}");
+        out
+    }
+
+    #[test]
+    fn a_ragged_table_row_is_normalised_to_the_header_width() {
+        // `Block::Table` PROMISES every row has `header.len()` cells so a
+        // renderer may index by column with no length check. Both directions
+        // of raggedness are attacker-reachable through a plugin `help.md`:
+        // the short row would panic on `row[2]`, the long one would paint a
+        // column the header never announced.
+        let out = blocks("| a | b | c |\n|---|---|---|\n| 1 |\n| 1 | 2 | 3 | 4 | 5 |\n");
+        assert_eq!(
+            out,
+            vec![Block::Table {
+                header: vec!["a".to_owned(), "b".to_owned(), "c".to_owned()],
+                rows: vec![
+                    vec!["1".to_owned(), String::new(), String::new()],
+                    vec!["1".to_owned(), "2".to_owned(), "3".to_owned()],
+                ],
+            }]
+        );
+        let Some(Block::Table { header, rows }) = out.first() else {
+            panic!("a table");
+        };
+        assert!(
+            rows.iter().all(|r| r.len() == header.len()),
+            "the contract holds for EVERY row, not just the ones we spelled out"
+        );
+    }
+
+    #[test]
+    fn an_unterminated_code_fence_consumes_to_the_end() {
+        // The fence opens and never closes. It must swallow the rest of the
+        // input as ONE code block: no panic, no infinite loop, and above all
+        // no re-entry into the outer loop with the same line.
+        let out = blocks("```sh\nrm -rf /\n# not a heading\n- not a bullet\n");
+        assert_eq!(
+            out,
+            vec![Block::Code {
+                lang: Some("sh".to_owned()),
+                text: "rm -rf /\n# not a heading\n- not a bullet\n".to_owned(),
+            }],
+            "everything after the opener is content, not markup"
+        );
+        // The degenerate shapes: a bare fence, and a fence as the last line.
+        assert_eq!(
+            blocks("```\n"),
+            vec![Block::Code {
+                lang: None,
+                text: String::new()
+            }]
+        );
+        assert_eq!(
+            blocks("text\n```"),
+            vec![
+                Block::Paragraph(vec![Span::Text("text".to_owned())]),
+                Block::Code {
+                    lang: None,
+                    text: String::new()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn seven_hashes_clamp_to_level_three() {
+        // The model documents levels 1..=3. The count is clamped, never
+        // arithmetic on a `u8` that could overflow, and `#` alone must not
+        // underflow the "hashes above level 1" count either.
+        assert_eq!(
+            blocks("####### seven hashes\n"),
+            vec![Block::Heading {
+                level: 3,
+                text: "seven hashes".to_owned()
+            }]
+        );
+        for (src, level) in [("# a\n", 1), ("## a\n", 2), ("### a\n", 3), ("#### a\n", 3)] {
+            assert_eq!(
+                blocks(src),
+                vec![Block::Heading {
+                    level,
+                    text: "a".to_owned()
+                }],
+                "{src:?}"
+            );
+        }
+        assert_eq!(
+            blocks("#\n"),
+            vec![Block::Heading {
+                level: 1,
+                text: String::new()
+            }],
+            "a lone hash is an empty heading, not a panic"
+        );
+        assert_eq!(
+            blocks("#no space\n"),
+            vec![Block::Heading {
+                level: 1,
+                text: "no space".to_owned()
+            }],
+            "the space is not part of the grammar"
+        );
+    }
+
+    #[test]
+    fn an_overlong_line_is_cut_on_a_char_boundary() {
+        let limits = Limits {
+            max_line_bytes: 5,
+            ..Limits::built_in()
+        };
+        // `ñ` is two bytes straddling the cut at 5: the walk back lands on 4.
+        let (line, cut) = clamp_line("aaaañ", limits);
+        assert_eq!((line, cut), ("aaaa", true), "never half a character");
+
+        // The worst case for the backward walk: the FIRST character is
+        // multi-byte and already longer than the limit, so the only boundary
+        // at or below the cut is index 0. It stops there — the loop cannot
+        // step below 0 and panic on underflow.
+        let tight = Limits {
+            max_line_bytes: 1,
+            ..Limits::built_in()
+        };
+        assert_eq!(clamp_line("ñx", tight), ("", true));
+        assert_eq!(clamp_line("日本語", tight), ("", true));
+        // Exactly at the limit is not a cut.
+        assert_eq!(clamp_line("aaaaa", limits), ("aaaaa", false));
+
+        // And through the parser: the flag reaches the caller.
+        let (out, truncated) = blocks_of("aaaañ tail\n", limits, false);
+        assert!(truncated, "a cut line must raise the flag");
+        assert_eq!(
+            out,
+            vec![Block::Paragraph(vec![Span::Text("aaaa".to_owned())])]
+        );
+        // A line cut down to nothing is a blank line, not a block.
+        let (out, truncated) = blocks_of("ñx\n", tight, false);
+        assert!(truncated);
+        assert!(out.is_empty(), "{out:?}");
+    }
+
+    #[test]
+    fn more_blocks_than_the_cap_truncate_and_keep_the_prefix() {
+        let limits = Limits {
+            max_blocks: 2,
+            ..Limits::built_in()
+        };
+        let (out, truncated) = blocks_of("# a\n# b\n# c\n# d\n", limits, false);
+        assert!(truncated);
+        assert_eq!(
+            out,
+            vec![
+                Block::Heading {
+                    level: 1,
+                    text: "a".to_owned()
+                },
+                Block::Heading {
+                    level: 1,
+                    text: "b".to_owned()
+                },
+            ],
+            "what was already parsed is kept: truncating is not discarding"
+        );
+
+        // One iteration can emit the pending paragraph AND its own block, so
+        // the cap is checked again at the end: `blocks.len() <= max_blocks`
+        // holds unconditionally, which on the hostile path is a memory bound.
+        let one = Limits {
+            max_blocks: 1,
+            ..Limits::built_in()
+        };
+        let (out, truncated) = blocks_of("para\n# h\n", one, false);
+        assert!(truncated);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(
+            out[0],
+            Block::Paragraph(vec![Span::Text("para".to_owned())])
+        );
+    }
+
+    #[test]
+    fn a_table_survives_a_missing_separator() {
+        // Header alone: a table with no rows, never a panic on `rows[0]`.
+        assert_eq!(
+            blocks("| a | b |\n"),
+            vec![Block::Table {
+                header: vec!["a".to_owned(), "b".to_owned()],
+                rows: Vec::new(),
+            }]
+        );
+        // Separator missing entirely: the first data row is DATA. Skipping
+        // the second line unconditionally would eat it silently — a row that
+        // vanishes is a documented fact the reader never gets.
+        assert_eq!(
+            blocks("| a | b |\n| 1 | 2 |\n"),
+            vec![Block::Table {
+                header: vec!["a".to_owned(), "b".to_owned()],
+                rows: vec![vec!["1".to_owned(), "2".to_owned()]],
+            }]
+        );
+        // An alignment separator is still syntax, in either spelling.
+        assert_eq!(
+            blocks("| a | b |\n|:--|--:|\n| 1 | 2 |\n"),
+            blocks("| a | b |\n|---|---|\n| 1 | 2 |\n")
+        );
+    }
+
+    #[test]
+    fn the_callout_grammar_needs_a_space_after_the_marker() {
+        // Emoji with no space after it: still a warning, and the body is
+        // trimmed on the way out.
+        assert_eq!(
+            blocks("> \u{26A0}careful\n"),
+            vec![Block::Callout {
+                kind: Callout::Warn,
+                spans: vec![Span::Text("careful".to_owned())],
+            }]
+        );
+        assert_eq!(
+            blocks("> \u{1F4A1} faster\n"),
+            vec![Block::Callout {
+                kind: Callout::Tip,
+                spans: vec![Span::Text("faster".to_owned())],
+            }]
+        );
+        assert_eq!(
+            blocks("> plain\n"),
+            vec![Block::Callout {
+                kind: Callout::Note,
+                spans: vec![Span::Text("plain".to_owned())],
+            }],
+            "no marker, neutral note"
+        );
+        // `>` with NO space is NOT a callout under this grammar: it falls
+        // through to a paragraph, keeping the `>` as literal text. Pinned so
+        // that widening the grammar is a deliberate change, not a drift.
+        assert_eq!(
+            blocks(">no space\n"),
+            vec![Block::Paragraph(vec![Span::Text(">no space".to_owned())])]
+        );
+        assert_eq!(
+            blocks(">\n"),
+            vec![Block::Paragraph(vec![Span::Text(">".to_owned())])]
+        );
+        // `"> "` alone: a callout whose body is empty, not a panic.
+        assert_eq!(
+            blocks("> \n"),
+            vec![Block::Callout {
+                kind: Callout::Note,
+                spans: Vec::new()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_plain_line_after_bullets_becomes_its_own_paragraph() {
+        // The bullet run must stop at the first non-bullet line and NOT
+        // swallow it: text eaten into a list is text the reader never sees.
+        assert_eq!(
+            blocks("- one\n- two\nnot a bullet\n- three\n"),
+            vec![
+                Block::Bullets(vec![
+                    vec![Span::Text("one".to_owned())],
+                    vec![Span::Text("two".to_owned())],
+                ]),
+                Block::Paragraph(vec![Span::Text("not a bullet".to_owned())]),
+                Block::Bullets(vec![vec![Span::Text("three".to_owned())]]),
+            ]
+        );
+        // A dash with no space is not a bullet either.
+        assert_eq!(
+            blocks("-nope\n"),
+            vec![Block::Paragraph(vec![Span::Text("-nope".to_owned())])]
+        );
+    }
+
+    #[test]
+    fn consecutive_lines_join_into_one_paragraph() {
+        // Blank lines are the only paragraph separator; the joiner is a
+        // single space, so a hard-wrapped corpus reflows instead of showing
+        // its wrapping.
+        assert_eq!(
+            blocks("one\ntwo\n\nthree\n"),
+            vec![
+                Block::Paragraph(vec![Span::Text("one two".to_owned())]),
+                Block::Paragraph(vec![Span::Text("three".to_owned())]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_body_of_hostile_names_parses_into_blocks_without_panicking() {
+        // Every hostile name of the canonical corpus, one per line and again
+        // spliced into each block prefix. Trusted mode (no masking) on
+        // purpose: this pins the STRUCTURE — task 6 pins the masking on the
+        // same parser.
+        let names: Vec<String> = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .map(|n| String::from_utf8_lossy(&n.bytes).into_owned())
+            .collect();
+        assert!(names.len() >= 32, "the canonical corpus must not shrink");
+        for name in &names {
+            for prefix in ["", "# ", "> ", "- ", "|", "```"] {
+                let body = format!("{prefix}{name}\n");
+                let (out, _) = blocks_of(&body, Limits::built_in(), false);
+                assert!(out.len() <= 2, "{prefix:?} + {name:?} -> {out:?}");
+                if let Some(Block::Table { header, rows }) = out.first() {
+                    assert!(rows.iter().all(|r| r.len() == header.len()));
+                }
+            }
+        }
+        let all = names.join("\n");
+        let (out, truncated) = blocks_of(&all, Limits::built_in(), false);
+        assert!(!truncated);
+        assert!(!out.is_empty());
     }
 }

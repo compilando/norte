@@ -90,15 +90,6 @@ fn strip_line_break(s: &str) -> Option<&str> {
 ///   anything besides the fence.
 /// - [`FrontMatterError::Toml`] if the header is not valid TOML or declares
 ///   an unknown field.
-// Narrowest possible suppression: the module is private and nothing outside
-// its own tests calls `split` yet — `parse` will, in task 5 of this phase.
-// It sits on `split` ALONE because rustc treats a lint-allowed item as a live
-// root, so everything `split` reaches (the fences, `FrontMatter`,
-// `FrontMatterError`, `strip_line_break`) is analysed honestly and would be
-// reported if it really went unused. `expect` and not `allow` so that the day
-// task 5 calls `split` the expectation goes unfulfilled and the compiler
-// forces this line out; task 5 deletes it.
-#[cfg_attr(not(test), expect(dead_code))]
 pub fn split(source: &str) -> Result<(FrontMatter, &str), FrontMatterError> {
     let rest = source
         .strip_prefix(FENCE)
