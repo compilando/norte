@@ -12,7 +12,10 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use norte_help::{Lang, Span, Topic, TopicId, parse_trusted, topic, topic_ids, topics};
+use norte_help::{
+    Issue, Lang, Span, Topic, TopicId, check_commands, check_contexts, check_corpus, parse_trusted,
+    topic, topic_ids, topics,
+};
 
 /// Both locales, so every check below runs twice by construction instead of
 /// by copy-paste.
@@ -322,4 +325,95 @@ fn no_topic_trips_a_limits_ceiling() {
             assert!(!parsed.lossy, "{lang:?}/{id}: the topic decoded lossily");
         }
     }
+}
+
+// --- Integrity checks (`norte_help::check`) against the SHIPPED corpus.
+//
+// These are the positive half: run over the real six topics, every check must
+// come back with an empty list. The negative half — a dangling link, a
+// duplicate id, an unknown command — lives in the crate's own unit tests and
+// is driven by SYNTHETIC topics, because the way to prove a check fires is to
+// hand it a broken corpus, not to break the one we ship.
+
+/// Every command the six seed topics document: the union of their `commands`
+/// front matter and the `{{cmd:…}}` marks in their bodies.
+///
+/// Written out rather than derived from the corpus, for the reason `EXPECTED`
+/// is: a list computed from the corpus cannot notice that the corpus stopped
+/// documenting something. A mark added or dropped shows up here as a diff, and
+/// the number is the one phase H3h has to move.
+const DOCUMENTED: [&str; 19] = [
+    "mark.all",
+    "mark.clear",
+    "mark.invert",
+    "mark.pattern-add",
+    "mark.pattern-remove",
+    "mark.toggle",
+    "nav.enter",
+    "nav.parent",
+    "pane.copy",
+    "pane.delete",
+    "pane.delete-permanent",
+    "pane.history",
+    "pane.hotlist",
+    "pane.move",
+    "pane.names-encoding",
+    "pane.refresh",
+    "pane.switch",
+    "pane.view",
+    "task.cancel",
+];
+
+/// The UI contexts a topic may claim, mirroring the frontend's `Screen`.
+///
+/// Written out because `norte-help` does not depend on a frontend (rule 7 in
+/// reverse: the corpus knows nothing about ratatui or GPUI). Task 9 wires the
+/// real vocabulary from `norte-tui`, where the enum lives; this is the pin
+/// that the corpus does not drift in the meantime.
+const CONTEXTS: [&str; 3] = ["browse", "viewer", "dialog"];
+
+#[test]
+fn the_shipped_corpus_has_no_integrity_issues() {
+    assert_eq!(
+        check_corpus(),
+        Vec::new(),
+        "the shipped corpus must be internally consistent"
+    );
+}
+
+#[test]
+fn the_shipped_corpus_mentions_exactly_the_commands_it_documents() {
+    // `known` == what the corpus documents, so BOTH directions must come back
+    // clean: nothing mentioned that is outside the list (no `UnknownCommand`)
+    // and nothing in the list that no topic documents (no
+    // `UndocumentedCommand`). One list pins both halves.
+    assert_eq!(check_commands(&DOCUMENTED, &[]), Vec::new());
+}
+
+#[test]
+fn the_shipped_corpus_claims_only_contexts_the_ui_has() {
+    assert_eq!(check_contexts(&CONTEXTS), Vec::new());
+}
+
+#[test]
+fn a_command_the_corpus_never_mentions_is_reported_undocumented() {
+    // The shape task 9 depends on: the TUI's vocabulary is far bigger than
+    // what six topics cover, and every uncovered command must surface as ONE
+    // `UndocumentedCommand` rather than being rounded off silently.
+    let mut known = DOCUMENTED.to_vec();
+    known.push("app.quit");
+    let issues = check_commands(&known, &[]);
+    assert_eq!(
+        issues,
+        vec![Issue::UndocumentedCommand {
+            command: "app.quit".to_owned(),
+            lang: Lang::En,
+        }],
+        "exactly the uncovered command, and nothing else"
+    );
+    assert_eq!(
+        check_commands(&known, &["app.quit"]),
+        Vec::new(),
+        "the allowlist silences ONLY what it enumerates"
+    );
 }

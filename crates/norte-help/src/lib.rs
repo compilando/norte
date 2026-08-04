@@ -19,7 +19,7 @@
 #![warn(missing_docs)]
 
 // Each module is uncommented by ITS OWN task of this phase (see the H3a plan):
-// mod check; // task 8
+mod check; // task 8
 mod corpus; // task 7
 mod front_matter; // task 3
 mod model; // task 2
@@ -27,7 +27,10 @@ mod parse; // tasks 4 and 5
 // mod resolve; // task 9
 
 // Public re-exports, in the same order; each one uncommented by its task:
-// pub use check::{Issue, check_commands, check_contexts, check_corpus}; // task 8
+pub use check::{
+    Issue, check_commands, check_commands_in, check_contexts, check_contexts_in, check_corpus,
+    check_locales,
+}; // task 8
 pub use corpus::{topic, topic_ids, topics}; // task 7
 pub use model::{Availability, Block, Callout, CommandRow, Origin, Reason, Span, Topic, TopicId}; // task 2
 pub use norte_i18n::Lang;
