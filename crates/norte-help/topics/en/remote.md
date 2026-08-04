@@ -8,12 +8,17 @@ commands = ["pane.hotlist", "pane.history", "pane.refresh"]
 A pane holds a remote location the same way it holds a directory. The address
 is a URL, and its scheme says who answers:
 
-| Scheme | What it reaches                            |
-|--------|--------------------------------------------|
-| file   | this machine                               |
-| sftp   | file transfer over SSH                     |
-| ftp    | plain FTP                                  |
-| s3     | S3-compatible object storage               |
+| Scheme | What it reaches                            | Served by          |
+|--------|--------------------------------------------|--------------------|
+| file   | this machine                               | built in           |
+| sftp   | file transfer over SSH                     | built in           |
+| ftp    | plain FTP                                  | a sandboxed plugin |
+| s3     | S3-compatible object storage               | built in           |
+
+FTP is the odd one out: it is served by a WebAssembly plugin that ships inside
+norte and touches the network only through a socket the host opens for it, at
+an address the host resolved and vetted first. That is a deliberate place to
+put the oldest and least trustworthy of the four.
 
 # Getting there
 
@@ -25,27 +30,37 @@ name = "work"
 path = "sftp://you@host/srv/data"
 ```
 
-Then {{cmd:pane.hotlist}} opens the list and Enter takes that pane there.
+Then {{cmd:pane.hotlist}} opens the list and confirming takes that pane there.
 {{cmd:pane.history}} brings you back to somewhere the pane has already been
 this session. From that point on every command in this help works unchanged —
 {{cmd:pane.refresh}} especially, since a remote directory is not watched and
 will not notice a change on its own.
 
+A favourite is only an address. How a connection authenticates, and what it is
+allowed to do, lives separately in `connections.toml` — so a favourite gives
+away nothing but a path.
+
 The first time you reach an unknown SSH host, norte shows you its fingerprint
-and asks. Compare it out of band before you trust it: that dialog is the only
-moment anyone gets to notice a machine-in-the-middle, and Enter deliberately
-does not answer it.
+and asks. Compare it against the host through some other channel before you
+accept: that dialog is the only moment anyone gets to notice a machine sitting
+in the middle, and it deliberately has no default answer.
 
 # Secrets
 
-A password or an access key is kept in the **system keyring**. The
-configuration holds a reference to it and never the secret itself, so a config
-directory can be copied, backed up or committed without leaking anything.
+`connections.toml` holds references, never secrets. When a connection needs
+one, it is looked for in three places, in order: the `NORTE_SECRET_`
+environment variable for that connection, then the **system keyring**, then an
+encrypted `secrets.age` file. The first hit wins, so a machine with no keyring
+— a server, a container — still works through the other two.
 
-That is also why a password does not go in the URL: an address of the form
+An S3 access key id is not on that list, because it is not a secret: it is an
+identifier, and it sits in `connections.toml` in the clear. The secret access
+key beside it does go through the resolver.
+
+It is also why a password never goes in the URL: an address of the form
 `sftp://user:pass@host` is rejected rather than quietly accepted, because a URL
 ends up in history, in logs and on screen.
 
-> ⚠ Plain FTP encrypts nothing — not the password, not the files. On anything that leaves your own network, prefer `sftp://`.
+> ⚠ FTP is plaintext. Not "unless you turn on TLS" — there is no FTPS yet, so the setting means nothing and the password and every byte of every file cross the network in the clear. Each FTP connection says so. Off your own network, use `sftp://`.
 
 > ⚠ Object storage has **no directories**. A folder there is a common prefix of the keys under it, so an empty folder exists only if something wrote a marker object for it, and removing the last key under a prefix makes the folder itself disappear. Renaming one is a copy of every key followed by a delete of every key, not an instant operation.

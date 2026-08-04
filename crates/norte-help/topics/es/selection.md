@@ -16,7 +16,7 @@ Un comando actúa sobre las entradas marcadas o, si no hay ninguna marcada,
 sobre la que está bajo el cursor. No hay un tercer caso, y por eso un lote de
 uno no necesita tecla propia.
 
-- {{cmd:mark.toggle}} marca la entrada bajo el cursor y baja una fila, así que manteniéndola pulsada barres un rango
+- {{cmd:mark.toggle}} invierte la marca de la entrada bajo el cursor y baja una fila, así que manteniéndola pulsada barres un rango — y volver a barrer hacia atrás las desmarca
 - {{cmd:mark.all}} marca todo lo que el listado esté mostrando
 - {{cmd:mark.invert}} invierte las marcas de lo que se ve y deja el resto como estaba
 - {{cmd:mark.clear}} las quita todas

@@ -21,4 +21,4 @@ directorios locales.
 - [[remote]] — SFTP, FTP y almacenamiento de objetos compatible con S3
 - [[archives]] — entrar en un `.zip` o un `.tar` como si fuera un directorio
 
-> 💡 Las teclas que aparecen en esta ayuda salen de **tu** keymap. Si reasignas un comando, esta página dice la tecla nueva: nunca estuvo escrita aquí.
+> 💡 Las teclas de esta ayuda no están escritas en el texto: cada una se consulta en **tu** keymap al dibujar la página. Reasigna un comando y estas páginas dirán la tecla que hayas elegido.

@@ -16,7 +16,7 @@ A command acts on the marked entries, or on the entry under the cursor when
 nothing is marked. There is no third case, which is why a batch of one needs
 no special key.
 
-- {{cmd:mark.toggle}} marks the entry under the cursor and steps down one row, so holding it sweeps a range
+- {{cmd:mark.toggle}} flips the mark on the entry under the cursor and steps down a row, so holding it sweeps a range — and sweeping back over it unmarks it again
 - {{cmd:mark.all}} marks everything the listing is showing
 - {{cmd:mark.invert}} flips the marks of what is showing, and leaves the rest alone
 - {{cmd:mark.clear}} drops them all

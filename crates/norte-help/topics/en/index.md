@@ -20,4 +20,4 @@ bucket is the same two keys as copying between two local directories.
 - [[remote]] — SFTP, FTP and S3-compatible object storage
 - [[archives]] — walking into a `.zip` or a `.tar` as if it were a directory
 
-> 💡 Every key named in this help is read from **your** keymap. Rebind a command and this page says the new key, because it was never written down here in the first place.
+> 💡 The keys in this help are not written into the text: each one is looked up in **your** keymap as the page is drawn. Rebind a command and these pages name the key you chose.

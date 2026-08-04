@@ -7,16 +7,25 @@ commands = ["nav.enter", "nav.parent", "pane.view", "pane.names-encoding"]
 +++
 {{cmd:nav.enter}} on an archive walks into it. The pane lists what is inside,
 the cursor moves as usual, {{cmd:pane.view}} opens an entry in the viewer, and
-{{cmd:nav.parent}} walks back out. There is no unpacking step and no temporary
-directory anywhere.
+{{cmd:nav.parent}} walks back out. Nothing is unpacked into a folder you have
+to find and delete afterwards.
 
 Three containers are addressable, recognised by extension:
 
-| Format | Extension       |
-|--------|-----------------|
-| zip    | .zip            |
-| tar    | .tar            |
-| tar+gz | .tar.gz, .tgz   |
+| Format | Extension       | Read by                             |
+|--------|-----------------|-------------------------------------|
+| zip    | .zip            | seeking straight to the entry       |
+| tar    | .tar            | seeking straight to the entry       |
+| tar+gz | .tar.gz, .tgz   | decompressing; see below            |
+
+A `.tar.gz` cannot be seeked: reaching the last entry means decompressing
+everything before it. Browsing one is therefore fine, and reading several
+entries out of one would mean starting over each time — so from the second
+read of the same archive, norte decompresses it once into a scratch file and
+serves the rest from there. That file is anonymous and unlinked, so it never
+appears in a listing and the space returns by itself when norte lets go of it,
+but while it exists it is as large as the decompressed archive. Above a
+gigabyte it is not built at all, and reads fall back to the slow path.
 
 # The ! in the path
 
