@@ -133,11 +133,11 @@ pub fn on_key(view: &mut SettingsView, key: &str, key_char: Option<&str>) -> Set
                 SettingsOutcome::None
             }
             "pageup" => {
-                s.page_up(super::PAGE);
+                s.page_up(norte_frontend::DEFAULT_PAGE);
                 SettingsOutcome::None
             }
             "pagedown" => {
-                s.page_down(super::PAGE);
+                s.page_down(norte_frontend::DEFAULT_PAGE);
                 SettingsOutcome::None
             }
             "enter" => activate(s),

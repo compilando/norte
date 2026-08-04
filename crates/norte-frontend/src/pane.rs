@@ -1222,10 +1222,20 @@ impl PaneState {
         let radius = self.viewport_rows.unwrap_or(fallback);
         let lo = self.cursor.saturating_sub(radius);
         let hi = self.cursor.saturating_add(radius).saturating_add(1);
-        self.entries
-            .iter()
-            .take(hi)
-            .skip(lo)
+        self.needs_stat_at(lo..hi)
+    }
+
+    /// [`Self::needs_stat_window`] sobre índices ABSOLUTOS explícitos: el
+    /// frontend que conoce su rango visible EXACTO no tiene que aproximarlo
+    /// con un radio alrededor del cursor. La GUI lo recibe de `uniform_list`
+    /// (que solo pide las filas que va a pintar), así que con un scroll de
+    /// rueda —que mueve la ventana SIN mover el cursor— sigue hidratando lo
+    /// que se ve. Índices fuera del listado se ignoran.
+    #[must_use]
+    pub fn needs_stat_at(&self, indices: impl IntoIterator<Item = usize>) -> Vec<VPath> {
+        indices
+            .into_iter()
+            .filter_map(|i| self.entries.get(i))
             .filter(|e| e.kind == EntryKind::File && e.size.is_none())
             .map(|e| e.path.clone())
             .collect()
@@ -2079,6 +2089,42 @@ mod tests {
         p.set_viewport_rows(0);
         assert_eq!(p.viewport_rows(), None);
         assert_eq!(p.page_step(), DEFAULT_PAGE);
+    }
+
+    /// #123: `needs_stat_at` filtra un rango ABSOLUTO explícito (el que la
+    /// GUI recibe de `uniform_list`), con el mismo criterio que la ventana
+    /// por radio: solo `File` sin `size`, y los índices fuera del listado se
+    /// ignoran en vez de reventar.
+    #[test]
+    fn needs_stat_at_filtra_el_rango_explicito() {
+        let lazy = |n: &str| {
+            let mut x = e(&format!("mem:///{n}"), EntryKind::File);
+            x.size = None;
+            x
+        };
+        let mut ya = lazy("b");
+        ya.size = Some(7);
+        let mut dir = lazy("c");
+        dir.kind = EntryKind::Dir;
+        // `PaneState::new` ordena (dirs primero): [c, a, b, d].
+        let p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![lazy("a"), ya, dir, lazy("d")],
+        );
+        let paths = p.needs_stat_at(0..99);
+        let nombres: Vec<String> = paths
+            .iter()
+            .map(norte_proto::VPath::display_lossy)
+            .collect();
+        assert!(
+            nombres.iter().any(|n| n.ends_with("/a")) && nombres.iter().any(|n| n.ends_with("/d")),
+            "los File lazy del rango: {nombres:?}"
+        );
+        assert_eq!(paths.len(), 2, "ni el Dir ni el ya hidratado: {nombres:?}");
+        assert!(
+            p.needs_stat_at(50..99).is_empty(),
+            "un rango fuera del listado no aporta nada"
+        );
     }
 
     /// El cursor EN EL TOPE se queda en el tope mientras el listado se

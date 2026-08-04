@@ -83,9 +83,10 @@ use session::{LoadConfig, SessionCmd, SessionEvent};
 /// ([`norte_frontend::display_name`] devuelve el bool).
 const HOSTILE_BADGE: &str = "⚠";
 
-/// Salto de página (↑↓ de 10 en 10) — orden de magnitud de una pantalla del
-/// spike; el fill/scroll fino es optimización posterior.
-const PAGE: usize = 10;
+/// Tope de rutas por tanda de hidratación (#123): una pantalla visible más
+/// su pre-carga cabe de sobra; el tope solo evita que un pane gigantesco
+/// (o un rango raro) dispare cientos de `fs.stat` de golpe.
+const STAT_BATCH_MAX: usize = 128;
 
 /// Filas de chrome que le restamos al alto del viewport para derivar cuántas
 /// filas de contenido pedirle a `Viewer::rows` en `render_viewer`: cabecera +
@@ -158,6 +159,13 @@ struct NorteGui {
     /// mismo pane — robusto incluso ante A→B→A, que un simple compare de `dir`
     /// no distingue (ver `generation_is_current`).
     generation: [u64; 2],
+    /// Rutas de las que YA se pidió un `fs.stat` de hidratación (#52/#123),
+    /// por pane: el listado local llega LAZY y la GUI sondea las filas
+    /// VISIBLES, así que sin esta dedup cada frame volvería a pedir lo
+    /// mismo — y un stat FALLIDO (la ruta se queda sin `size`) se
+    /// reintentaría en bucle. Se vacía con cada listado nuevo, que
+    /// re-lazifica las entradas.
+    probed: [std::collections::HashSet<VPath>; 2],
     /// Relist coalescido pendiente por pane (#84): un read-after-write que se
     /// saltó porque el pane YA cargaba ese dir se re-dispara al aterrizar la
     /// list en vuelo — así la list superviviente no puede preceder a escrituras
@@ -527,6 +535,10 @@ impl NorteGui {
                     query: [String::new(), String::new()],
                     errors: [None, None],
                     generation: [0, 0],
+                    probed: [
+                        std::collections::HashSet::new(),
+                        std::collections::HashSet::new(),
+                    ],
                     relist_pending: [false, false],
                     refreshing: [false, false],
                     theme,
@@ -607,6 +619,10 @@ impl NorteGui {
                         [Some(msg.clone()), Some(msg)]
                     },
                     generation: [0, 0],
+                    probed: [
+                        std::collections::HashSet::new(),
+                        std::collections::HashSet::new(),
+                    ],
                     relist_pending: [false, false],
                     refreshing: [false, false],
                     theme,
@@ -795,6 +811,9 @@ impl NorteGui {
                         // listado incompleto jamás es silencioso, tampoco
                         // en la GUI.
                         self.panes[pane].set_skipped(skipped);
+                        // #123: listado nuevo = entradas otra vez lazy, así
+                        // que la dedup de la hidratación caduca entera.
+                        self.probed[pane].clear();
                         self.errors[pane] = None;
                         if !refilled {
                             // Solo el camino del `cd` mata el quick search vivo
@@ -971,6 +990,25 @@ impl NorteGui {
                     return;
                 }
                 self.panes[pane].set_decorations(decorations);
+            }
+            SessionEvent::Hydrated {
+                pane,
+                generation,
+                dir,
+                entries,
+            } => {
+                // Mismo guard doble anti-stale que `Decorated`: un cd más
+                // nuevo (generación) o una vuelta al MISMO dir con otra
+                // generación no deben recibir stats del listado viejo.
+                if !generation_is_current(self.generation[pane], generation)
+                    || self.panes[pane].dir() != &dir
+                {
+                    return;
+                }
+                for (path, size, mtime_ms) in entries {
+                    self.panes[pane].hydrate(&path, size, mtime_ms);
+                }
+                cx.notify();
             }
             SessionEvent::ConnectFailed(msg) => {
                 // Sin esto `loading` queda clavado en `true` (nunca llega un
@@ -1347,6 +1385,36 @@ impl NorteGui {
         }
     }
 
+    /// Pide hidratar (`fs.stat`) las filas de `pane` cuyos índices ABSOLUTOS
+    /// están en `indices` y llegaron LAZY (#52: `norte-vfs-local` no statea
+    /// por entrada, así que `size`/`mtime` vienen en `None` y las columnas
+    /// Tamaño/Fecha se pintarían en blanco para siempre — #123).
+    ///
+    /// Se llama desde el processor de `uniform_list`, que da el rango
+    /// VISIBLE EXACTO: así también cubre el scroll de rueda, que mueve la
+    /// ventana sin tocar el cursor. Barato de repetir por frame: `probed`
+    /// deja pasar cada ruta UNA vez por listado, así que en régimen
+    /// estacionario no manda nada. Asíncrono y fail-soft como `Decorate`:
+    /// llega tarde por `SessionEvent::Hydrated` con el mismo guard
+    /// anti-stale, o no llega y la celda se queda en blanco.
+    fn request_hydration(&mut self, pane: usize, indices: impl IntoIterator<Item = usize>) {
+        let paths = hydration_batch(
+            self.panes[pane].needs_stat_at(indices),
+            &self.probed[pane],
+            STAT_BATCH_MAX,
+        );
+        if paths.is_empty() {
+            return;
+        }
+        self.probed[pane].extend(paths.iter().cloned());
+        let _ = self.cmds.send(SessionCmd::StatBatch {
+            pane,
+            generation: self.generation[pane],
+            dir: self.panes[pane].dir().clone(),
+            paths,
+        });
+    }
+
     /// Tras mover el cursor de `pane`, hace que la lista virtualizada
     /// (`uniform_list`, issue #87) lo mantenga visible — scroll no-estricto:
     /// no-op si ya está en pantalla.
@@ -1465,8 +1533,18 @@ impl NorteGui {
             "cursor.down" => self.panes[f].cursor_down(),
             "cursor.top" => self.panes[f].home(),
             "cursor.bottom" => self.panes[f].end(),
-            "cursor.page-up" => self.panes[f].page_up(PAGE),
-            "cursor.page-down" => self.panes[f].page_down(PAGE),
+            // #124: una PÁGINA es una pantalla del pane (menos una fila de
+            // contexto): el alto real lo devuelve `uniform_list` en cada
+            // frame; hasta el primero manda el fallback del modelo
+            // (`norte_frontend::pane::DEFAULT_PAGE`).
+            "cursor.page-up" => {
+                let paso = self.panes[f].page_step();
+                self.panes[f].page_up(paso);
+            }
+            "cursor.page-down" => {
+                let paso = self.panes[f].page_step();
+                self.panes[f].page_down(paso);
+            }
             "nav.enter" => self.activate_enter(cx),
             "nav.parent" => {
                 let dir = self.panes[f].dir().clone();
@@ -2637,14 +2715,34 @@ impl NorteGui {
             SharedString::from(format!("entries-{i}")),
             item_count,
             cx.processor(move |this, range: Range<usize>, window, cx| {
+                // #124: `uniform_list` solo pide las filas que va a pintar,
+                // así que este rango ES el viewport — el modelo deja de
+                // adivinar su alto (paginación y radio de la sonda salen de
+                // ahí).
+                this.panes[i].set_viewport_rows(range.len());
                 let pane = &this.panes[i];
                 let sel_path = pane.selected().map(|e| e.path.clone());
                 // Mapea el rango (índices dentro de la lista VISIBLE) a índices
                 // ABSOLUTOS de `entries()`, respetando el filtro quick.
                 let abs: Vec<usize> = match pane.quick_visible() {
-                    Some(vis) => range.filter_map(|k| vis.get(k).copied()).collect(),
-                    None => range.collect(),
+                    Some(vis) => range.clone().filter_map(|k| vis.get(k).copied()).collect(),
+                    None => range.clone().collect(),
                 };
+                // #123: hidrata lo que se ve (y una pantalla de pre-carga a
+                // cada lado, para que desplazarse no estrene celdas en
+                // blanco). Deduplicado por `probed`: en régimen estacionario
+                // esta llamada no manda nada.
+                let margen = range.len();
+                let pre = range.start.saturating_sub(margen)..range.start;
+                let post = range.end..range.end.saturating_add(margen);
+                let vecinos: Vec<usize> = match this.panes[i].quick_visible() {
+                    Some(vis) => pre
+                        .chain(post)
+                        .filter_map(|k| vis.get(k).copied())
+                        .collect(),
+                    None => pre.chain(post).collect(),
+                };
+                this.request_hydration(i, abs.iter().copied().chain(vecinos));
                 abs.into_iter()
                     .map(|j| {
                         // Clona la entrada (barata: VPath + kind + dos
@@ -4267,6 +4365,23 @@ fn confirm_quit_should_open(mode: ConfirmQuit, pending: bool) -> bool {
 /// `dir`) es robusto ante A→B→A — dos cds distintos al MISMO dir tienen
 /// generaciones distintas, un dir-compare los confundiría.
 #[must_use]
+/// Tanda de hidratación a pedir (#123): las candidatas que NO se pidieron ya
+/// para este listado, hasta `max`. Puro para poder fijarlo en un test — la
+/// dedup es lo que hace barato llamar a `request_hydration` en cada frame, y
+/// lo que impide que un stat FALLIDO (la fila se queda sin `size`, así que
+/// vuelve a ser candidata) se reintente en bucle.
+fn hydration_batch(
+    candidates: Vec<VPath>,
+    probed: &std::collections::HashSet<VPath>,
+    max: usize,
+) -> Vec<VPath> {
+    candidates
+        .into_iter()
+        .filter(|p| !probed.contains(p))
+        .take(max)
+        .collect()
+}
+
 fn generation_is_current(current: u64, incoming: u64) -> bool {
     current == incoming
 }
@@ -6003,11 +6118,11 @@ mod tests {
         ChromeColors, ConfirmQuit, FontSet, ImagePreview, affected_dirs, apply_viewer_command,
         banner_safe, chrome_mark_fg, confirm_quit_should_open, confirm_quit_task_count,
         decoration_badge_color, first_cancelable, flicker_factor, flicker_scale,
-        generation_is_current, glowed, has_pending_work, image_preview_from, image_status,
-        keymap_error_detail, modal_footer_colors, modal_panel_colors, modal_title_colors,
-        motion_active, pane_inner_cells, pending_hint, retain_active, row_label, styled_span_color,
-        task_at_cursor, theme_map, unknown_preset_banner, validated_family, viewer_header,
-        viewer_status,
+        generation_is_current, glowed, has_pending_work, hydration_batch, image_preview_from,
+        image_status, keymap_error_detail, modal_footer_colors, modal_panel_colors,
+        modal_title_colors, motion_active, pane_inner_cells, pending_hint, retain_active,
+        row_label, styled_span_color, task_at_cursor, theme_map, unknown_preset_banner,
+        validated_family, viewer_header, viewer_status,
     };
     use gpui::rgb;
     use norte_frontend::viewer::Viewer;
@@ -7927,5 +8042,32 @@ mod tests {
         let (resolved, warn) = validated_family(Some("NopeFont 9000"), &known, "JetBrains Mono");
         assert_eq!(resolved, "JetBrains Mono");
         assert_eq!(warn.as_deref(), Some("NopeFont 9000"));
+    }
+
+    /// #123: la tanda de hidratación deja fuera lo YA pedido y respeta el
+    /// tope. Sin la dedup, cada frame volvería a pedir las mismas rutas —
+    /// y una que el daemon no supo statear (se queda sin `size`, así que
+    /// sigue siendo candidata) se reintentaría en bucle.
+    #[test]
+    fn hydration_batch_deduplica_y_acota() {
+        let vp = |w: &str| VPath::parse(w).expect("wire de test");
+        let candidatas = vec![vp("mem:///a"), vp("mem:///b"), vp("mem:///c")];
+        let mut probed = std::collections::HashSet::new();
+        probed.insert(vp("mem:///b"));
+        assert_eq!(
+            hydration_batch(candidatas.clone(), &probed, 10),
+            vec![vp("mem:///a"), vp("mem:///c")],
+            "lo ya pedido no se repite"
+        );
+        assert_eq!(
+            hydration_batch(candidatas.clone(), &probed, 1),
+            vec![vp("mem:///a")],
+            "el tope corta la tanda"
+        );
+        let todas: std::collections::HashSet<VPath> = candidatas.iter().cloned().collect();
+        assert!(
+            hydration_batch(candidatas, &todas, 10).is_empty(),
+            "en régimen estacionario no se manda nada"
+        );
     }
 }

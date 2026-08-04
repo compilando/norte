@@ -102,6 +102,21 @@ pub enum SessionCmd {
         /// Rutas visibles a decorar, en el orden del listado.
         paths: Vec<VPath>,
     },
+    /// Hidrata `size`/`mtime` de `paths` (#52/#123): el listado local llega
+    /// LAZY (`size: None` — `norte-vfs-local` no statea por entrada) y sin
+    /// esto las columnas Tamaño/Fecha se pintan en blanco para siempre. Se
+    /// pide solo para las filas VISIBLES (`uniform_list` da el rango exacto)
+    /// y con el mismo guard anti-stale (`generation`/`dir`) que `Decorate`.
+    StatBatch {
+        /// Pane destino (0|1).
+        pane: usize,
+        /// Generación del cd que lo pidió.
+        generation: u64,
+        /// Directorio listado (para el guard anti-stale al aplicar).
+        dir: VPath,
+        /// Rutas visibles sin `size`, en el orden del listado.
+        paths: Vec<VPath>,
+    },
     /// Valores de columna (G3c; #117-follow-up: CONFIG-driven): pide
     /// `plugin.column_values` para cada par (plugin, columna) CONFIGURADO
     /// en `[ui.columns]` (`requested`), validando pertenencia contra el
@@ -307,6 +322,21 @@ pub enum SessionEvent {
         /// Decoraciones ya saneadas, por ruta.
         decorations: HashMap<VPath, norte_frontend::Decoration>,
     },
+    /// Resultado de un `StatBatch` (#52/#123): `(ruta, size, mtime_ms)` de
+    /// los stats que RESPONDIERON. Un stat fallido o vencido simplemente no
+    /// viaja — la fila se queda lazy y la dedup del caller evita el
+    /// reintento en bucle (mismo criterio indulgente que `Decorated`: una
+    /// celda en blanco, jamás un error de listado).
+    Hydrated {
+        /// Pane destino.
+        pane: usize,
+        /// Generación del cd que lo pidió (guard anti-stale).
+        generation: u64,
+        /// Directorio listado (guard anti-stale).
+        dir: VPath,
+        /// Entradas hidratadas: ruta, tamaño, mtime.
+        entries: Vec<(VPath, Option<u64>, Option<i64>)>,
+    },
     /// Resultado de `Columns` (#117-follow-up): los valores de las columnas
     /// `plugin:` CONFIGURADAS, YA saneados y validados contra el catálogo.
     /// Columna no consentida/no declarada = ausente (celdas en blanco,
@@ -488,6 +518,27 @@ pub fn spawn(
                             });
                         });
                     }
+                    SessionCmd::StatBatch {
+                        pane,
+                        generation,
+                        dir,
+                        paths,
+                    } => {
+                        if paths.is_empty() {
+                            continue;
+                        }
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            let entries = stat_batch(&backend, paths).await;
+                            let _ = tx.send(SessionEvent::Hydrated {
+                                pane,
+                                generation,
+                                dir,
+                                entries,
+                            });
+                        });
+                    }
                     SessionCmd::Columns {
                         pane,
                         generation,
@@ -637,6 +688,42 @@ pub fn spawn(
             }
         });
     });
+}
+
+/// Stats simultáneos dentro de una tanda de `StatBatch` (#123): acota las
+/// peticiones en vuelo contra el daemon sin serializar la latencia de la
+/// pantalla entera (mismo número que la sonda de la TUI).
+const STAT_CONCURRENCY: usize = 8;
+
+/// Resuelve `StatBatch` (#52/#123): un `fs.stat` por ruta, en tandas de
+/// [`STAT_CONCURRENCY`], devolviendo SOLO las que respondieron. Fail-soft
+/// como `Decorate`/`Columns`: un stat que falla no aborta el resto ni
+/// produce un error de listado — esa fila se queda con la celda en blanco
+/// y el caller, que ya la anotó como pedida, no la reintenta en bucle. Sin
+/// timeout propio, igual que los otros dos brazos asíncronos de este
+/// worker: la vida de la petición la acota la conexión.
+async fn stat_batch(
+    backend: &Backend,
+    paths: Vec<VPath>,
+) -> Vec<(VPath, Option<u64>, Option<i64>)> {
+    let mut out = Vec::with_capacity(paths.len());
+    for chunk in paths.chunks(STAT_CONCURRENCY) {
+        let mut set = tokio::task::JoinSet::new();
+        for path in chunk {
+            let backend = backend.clone();
+            let path = path.clone();
+            set.spawn(async move {
+                let entry = backend.stat(&path).await.ok()?;
+                Some((path, entry.size, entry.mtime_ms))
+            });
+        }
+        while let Some(res) = set.join_next().await {
+            if let Ok(Some(hidratada)) = res {
+                out.push(hidratada);
+            }
+        }
+    }
+    out
 }
 
 /// Resuelve `Columns` (G3c): descubre columnas de plugins `columns`
