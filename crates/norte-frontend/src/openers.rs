@@ -243,6 +243,52 @@ pub fn guess_mime(name: &[u8]) -> &'static str {
     }
 }
 
+/// El lanzador del PROPIO escritorio: el programa que el sistema tiene
+/// asociado al fichero. Es el último recurso de `pane.open` cuando `ns.toml`
+/// no declara ningún opener para ese mimetype — sin esto, un usuario que no
+/// ha escrito configuración no puede abrir nada.
+///
+/// Devuelve `(programa, argv)` listos para `spawn`; el binario se sondea
+/// aparte con [`program_available`] (un Linux sin `xdg-utils` instalado es
+/// un caso real, no teórico).
+///
+/// El argv se construye byte a byte desde la ruta NATIVA, nunca desde una
+/// conversión a texto (regla 1): un nombre no-UTF8 llega intacto al
+/// programa asociado.
+///
+/// Por plataforma:
+/// - **Linux y demás unix**: `xdg-open`, el estándar de freedesktop.
+/// - **macOS**: `open`, que viene en el sistema base.
+/// - **Windows**: `explorer.exe`, NO `cmd /C start`. La diferencia importa:
+///   `cmd` re-interpreta su línea de comandos, así que un nombre de fichero
+///   con `&` o `^` puede ejecutar lo que no debe; `explorer.exe` recibe el
+///   argumento tal cual. (`explorer` devuelve código de salida 1 incluso
+///   cuando abre bien — por eso este camino no interpreta el estado.)
+///
+/// ```
+/// # use std::path::Path;
+/// let (program, argv) = norte_frontend::openers::system_opener(Path::new("/tmp/a.pdf"));
+/// assert!(!program.is_empty());
+/// assert_eq!(argv.last().map(std::ffi::OsString::as_os_str), Some(Path::new("/tmp/a.pdf").as_os_str()));
+/// ```
+#[must_use]
+pub fn system_opener(file: &Path) -> (String, Vec<std::ffi::OsString>) {
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "explorer.exe"
+    } else {
+        "xdg-open"
+    };
+    (
+        program.to_owned(),
+        vec![
+            std::ffi::OsString::from(program),
+            file.as_os_str().to_os_string(),
+        ],
+    )
+}
+
 /// ¿El glob `pat` (`text/*` o exacto `application/pdf`) casa `mime`?
 fn mimetype_matches(pat: &str, mime: &str) -> bool {
     match pat.strip_suffix("/*") {
@@ -402,6 +448,40 @@ command = ["open", "-t", "%f"]
         // Stem no-UTF8 pero extensión ASCII: la extensión manda (byte-split).
         assert_eq!(guess_mime(b"caf\xe9\xff.txt"), "text/plain");
         assert_eq!(guess_mime(b"\xff\xff.png"), "image/png");
+    }
+
+    /// El lanzador del sistema pasa la ruta como UN argumento propio y
+    /// byte-exacto: un nombre no-UTF8 o con metacaracteres de shell llega
+    /// intacto y jamás se re-interpreta (por eso Windows usa `explorer.exe`
+    /// y no `cmd /C start`).
+    #[test]
+    fn system_opener_pasa_la_ruta_como_argumento_byte_exacto() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let hostil =
+                std::path::PathBuf::from(OsStr::from_bytes(b"/tmp/a & b; rm -rf \xff\xfe.pdf"));
+            let (program, argv) = system_opener(&hostil);
+            assert_eq!(argv.len(), 2, "binario + fichero, sin shell de por medio");
+            assert_eq!(argv[0], OsString::from(&program));
+            assert_eq!(
+                argv[1].as_os_str().as_bytes(),
+                b"/tmp/a & b; rm -rf \xff\xfe.pdf",
+                "la ruta viaja byte a byte"
+            );
+        }
+        let (program, argv) = system_opener(Path::new("/tmp/x.pdf"));
+        assert!(!program.is_empty());
+        assert_eq!(argv[1], OsString::from("/tmp/x.pdf"));
+        // El binario del plato de cada plataforma, no uno inventado.
+        let esperado = if cfg!(target_os = "macos") {
+            "open"
+        } else if cfg!(target_os = "windows") {
+            "explorer.exe"
+        } else {
+            "xdg-open"
+        };
+        assert_eq!(program, esperado);
     }
 
     #[test]

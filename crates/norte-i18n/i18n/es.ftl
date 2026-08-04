@@ -240,7 +240,6 @@ msg-semantic-invalid = búsqueda semántica: respuesta inválida del daemon — 
 msg-semantic-in-search = la búsqueda semántica no está disponible en un pane de búsqueda
 msg-hidden-hidden = entradas ocultas escondidas
 msg-marked-by-pattern = { $n } marcas cambiadas
-msg-open-no-opener = sin opener configurado para { $mime } (ver openers.toml)
 msg-open-missing-program = el opener necesita `{ $program }` — no instalado
 msg-open-remote = los openers solo funcionan con archivos locales
 msg-open-launched = abierto con { $program }

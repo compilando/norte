@@ -1590,9 +1590,8 @@ async fn run(
                                     // comando externo resuelto — lanzarlo YA,
                                     // no en la siguiente tecla.
                                     reap_search_run(app, &mut search_run);
-                                    if let Some((program, argv)) = app.pending_open.take() {
-                                        app.message =
-                                            Some(launch_opener(terminal, program, argv).await);
+                                    if let Some(pending) = app.pending_open.take() {
+                                        app.message = Some(launch_opener(terminal, pending).await);
                                     }
                                 }
                             }
@@ -2090,9 +2089,8 @@ async fn run(
                                     // #28: `pane.open` dejó un comando externo
                                     // resuelto — el run loop (dueño de la
                                     // terminal) sondea el binario y lo lanza.
-                                    if let Some((program, argv)) = app.pending_open.take() {
-                                        app.message =
-                                            Some(launch_opener(terminal, program, argv).await);
+                                    if let Some(pending) = app.pending_open.take() {
+                                        app.message = Some(launch_opener(terminal, pending).await);
                                     }
                                 }
                                 Resolution::Pending(_) => {
@@ -4350,12 +4348,14 @@ fn reap_search_run(app: &App, search_run: &mut Option<SearchRun>) {
     }
 }
 
-/// Resuelve el opener (#28) del fichero seleccionado y, si TODO valida, deja
-/// el `(programa, argv)` en `app.pending_open` para que el run loop lo lance
-/// (es dueño de la terminal). Cada fallo va a la barra — degradación limpia,
-/// jamás un lanzamiento a ciegas: sin fichero (no-op), remoto/archivo
-/// (`msg-open-remote`), sin opener para el mime (`msg-open-no-opener`), o
-/// binario ausente (`msg-open-missing-program`).
+/// Resuelve el opener (#28) del fichero seleccionado y deja en
+/// `app.pending_open` lo que el run loop —dueño de la terminal— lanzará.
+/// Primero manda `ns.toml`; sin regla para ese mimetype queda el lanzador
+/// del escritorio, que es lo que hace que F4 funcione sin haber escrito
+/// configuración. Cada fallo va a la barra —degradación limpia, jamás un
+/// lanzamiento a ciegas—: sin fichero (no-op), remoto o dentro de un archivo
+/// (`msg-open-remote`), o binario ausente (`msg-open-missing-program`, que
+/// también cubre un Linux sin `xdg-utils`).
 fn resolve_opener(app: &mut App) {
     use norte_frontend::openers;
     let Some(path) = app
@@ -4376,7 +4376,17 @@ fn resolve_opener(app: &mut App) {
             .map_or(&[][..], norte_proto::Segment::as_bytes),
     );
     let Some(opener) = app.openers.resolve(mime) else {
-        app.message = Some(ta("msg-open-no-opener", &[("mime", mime)]));
+        // Sin regla en `ns.toml` para este mimetype queda el último recurso:
+        // el lanzador del propio escritorio. Antes esto era un mensaje de
+        // error, lo que obligaba a escribir configuración para abrir un PDF.
+        // Va `detached` — entrega el fichero al programa asociado y vuelve,
+        // así que suspender la TUI solo pintaría un parpadeo.
+        let (program, argv) = openers::system_opener(&native);
+        app.pending_open = Some(norte_tui::app::PendingOpen {
+            program,
+            argv,
+            detached: true,
+        });
         return;
     };
     let program = opener.program().to_owned();
@@ -4391,7 +4401,11 @@ fn resolve_opener(app: &mut App) {
             .map(std::path::Path::to_path_buf)
             .unwrap_or_default()
     });
-    app.pending_open = Some((program, opener.argv(&[&native], &dir)));
+    app.pending_open = Some(norte_tui::app::PendingOpen {
+        program,
+        argv: opener.argv(&[&native], &dir),
+        detached: false,
+    });
 }
 
 /// Sondea el binario del opener en el PATH (#28) — I/O de disco en
@@ -4400,9 +4414,13 @@ fn resolve_opener(app: &mut App) {
 /// resultado (binario ausente / lanzado / fallo de spawn).
 async fn launch_opener(
     terminal: &mut ratatui::DefaultTerminal,
-    program: String,
-    argv: Vec<std::ffi::OsString>,
+    pending: norte_tui::app::PendingOpen,
 ) -> String {
+    let norte_tui::app::PendingOpen {
+        program,
+        argv,
+        detached,
+    } = pending;
     let prog = program.clone();
     let available =
         tokio::task::spawn_blocking(move || norte_frontend::openers::program_available(&prog))
@@ -4411,6 +4429,15 @@ async fn launch_opener(
     if !available {
         return ta("msg-open-missing-program", &[("program", &program)]);
     }
+    if detached {
+        return match spawn_detached(argv).await {
+            Ok(()) => ta("msg-open-launched", &[("program", &program)]),
+            Err(e) => ta(
+                "msg-open-failed",
+                &[("program", &program), ("error", &e.to_string())],
+            ),
+        };
+    }
     match run_opener(terminal, argv).await {
         Ok(_) => ta("msg-open-launched", &[("program", &program)]),
         Err(e) => ta(
@@ -4418,6 +4445,34 @@ async fn launch_opener(
             &[("program", &program), ("error", &e.to_string())],
         ),
     }
+}
+
+/// Lanza el comando SIN tocar la terminal: el lanzador del escritorio
+/// (`xdg-open`/`open`/`explorer.exe`) entrega el fichero al programa asociado
+/// y termina, así que suspender la TUI para él sería un parpadeo gratis. El
+/// stdio va a `null` — un lanzador hablador no puede escribir encima del
+/// listado. El hijo se espera en segundo plano (regla 2: en `spawn_blocking`),
+/// que es lo que lo entierra: sin ese `wait` quedaría zombi hasta que muriese
+/// el propio norte.
+async fn spawn_detached(argv: Vec<std::ffi::OsString>) -> std::io::Result<()> {
+    debug_assert!(
+        !argv.is_empty(),
+        "el argv del lanzador del sistema siempre trae el binario"
+    );
+    let mut child = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+    })
+    .await
+    .map_err(std::io::Error::other)??;
+    tokio::task::spawn_blocking(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 /// Suspende el TUI (sale de la pantalla alternativa + raw mode), lanza el
@@ -5335,6 +5390,78 @@ mod archive_nav_tests {
             "tar+gz+file:///d/%FF%FE.tgz/!",
             "los bytes crudos sobreviven el compose"
         );
+    }
+}
+
+#[cfg(test)]
+mod open_tests {
+    use super::{App, Pane, resolve_opener};
+    use norte_proto::{Entry, EntryKind, Segment, VPath};
+
+    fn pane_con(nombre: &str) -> Pane {
+        let dir = VPath::parse("file:///d").expect("wire de test");
+        let entry = Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: dir.join(Segment::new(nombre.as_bytes().to_vec()).unwrap()),
+            kind: EntryKind::File,
+            size: Some(1),
+            mtime_ms: None,
+        };
+        Pane::new(dir, vec![entry])
+    }
+
+    /// Sin regla en `ns.toml` para el mimetype, F4 cae en el lanzador del
+    /// escritorio en vez de rendirse con un mensaje. Antes esto obligaba a
+    /// escribir configuración para abrir un PDF.
+    #[test]
+    fn sin_opener_declarado_cae_en_el_lanzador_del_sistema() {
+        let mut app = App::new(pane_con("informe.pdf"), pane_con("otro.txt"));
+        resolve_opener(&mut app);
+        let pending = app.pending_open.expect("F4 resuelve algo que lanzar");
+        assert!(
+            pending.detached,
+            "el lanzador del escritorio no suspende la TUI"
+        );
+        assert_eq!(pending.argv.len(), 2, "binario + fichero, sin shell");
+        assert!(
+            pending.argv[1].to_string_lossy().ends_with("informe.pdf"),
+            "abre el fichero bajo el cursor: {:?}",
+            pending.argv
+        );
+        assert!(app.message.is_none(), "y no deja un error en la barra");
+    }
+
+    /// Un opener declarado sigue mandando, y ese SÍ se queda con la terminal
+    /// (puede ser `bat` o un editor).
+    #[test]
+    fn un_opener_declarado_gana_y_toma_la_terminal() {
+        let mut app = App::new(pane_con("notas.txt"), pane_con("x.txt"));
+        app.openers = norte_frontend::openers::OpenersConfig::parse(
+            "[[opener]]\nmime = \"text/*\"\ncommand = [\"bat\", \"%f\"]\n",
+        )
+        .expect("config de test");
+        resolve_opener(&mut app);
+        let pending = app.pending_open.expect("F4 resuelve el opener declarado");
+        assert_eq!(pending.program, "bat");
+        assert!(!pending.detached);
+    }
+
+    /// Un fichero remoto no tiene ruta nativa: ni opener declarado ni
+    /// lanzador del sistema pueden abrirlo, y el usuario debe enterarse.
+    #[test]
+    fn un_fichero_remoto_no_lanza_nada() {
+        let dir = VPath::parse("sftp://host/d").expect("wire de test");
+        let entry = Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: dir.join(Segment::new(b"a.pdf".to_vec()).unwrap()),
+            kind: EntryKind::File,
+            size: Some(1),
+            mtime_ms: None,
+        };
+        let mut app = App::new(Pane::new(dir.clone(), vec![entry]), Pane::new(dir, vec![]));
+        resolve_opener(&mut app);
+        assert!(app.pending_open.is_none());
+        assert!(app.message.is_some(), "lo dice en la barra");
     }
 }
 

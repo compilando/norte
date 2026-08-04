@@ -638,6 +638,23 @@ impl SearchDialog {
 // viewer) sigan resolviendo sin cambios.
 pub use norte_frontend::{display_name, path_display, sort_entries};
 
+/// Comando externo que `pane.open` (F4) dejó resuelto y el run loop lanzará
+/// (#28). Se separa la resolución del lanzamiento porque el dueño de la
+/// terminal es el run loop, no el despacho.
+pub struct PendingOpen {
+    /// Binario a sondear en el `PATH` antes de lanzar nada.
+    pub program: String,
+    /// argv completo, con el binario en `[0]` y las rutas byte-exactas.
+    pub argv: Vec<std::ffi::OsString>,
+    /// `true` cuando es el lanzador del escritorio (`xdg-open`/`open`/
+    /// `explorer.exe`): entrega el fichero al programa asociado y vuelve
+    /// enseguida, así que la TUI **no** se suspende — hacerlo pintaría un
+    /// parpadeo de pantalla completa para nada. `false` es un opener
+    /// declarado en `ns.toml`, que puede ser `bat` o un editor y necesita la
+    /// terminal entera para sí.
+    pub detached: bool,
+}
+
 /// Estado completo del TUI: dos panes y el foco.
 pub struct App {
     /// Los dos paneles (izquierda, derecha).
@@ -724,10 +741,10 @@ pub struct App {
     /// Openers declarativos fusionados (#28): clonados en arranque y en cada
     /// hot-reload OK. Fuente de `pane.open` (F4). Vacío = sin openers.
     pub openers: norte_frontend::openers::OpenersConfig,
-    /// Comando externo resuelto por `pane.open` y pendiente de lanzar (#28):
-    /// `(programa, argv)`. `dispatch` lo fija tras validar; el run loop —
-    /// dueño de la terminal — suspende el TUI, lo ejecuta y restaura.
-    pub pending_open: Option<(String, Vec<std::ffi::OsString>)>,
+    /// Comando externo resuelto por `pane.open` y pendiente de lanzar (#28).
+    /// `dispatch` lo fija tras validar; el run loop —dueño de la terminal—
+    /// lo ejecuta.
+    pub pending_open: Option<PendingOpen>,
     /// Hints de pie de página de los overlays de diálogo (H1 T3, #24),
     /// PRECOMPUTADOS del efectivo `dialog` vigente — igual que `help_lines`
     /// en `main.rs`, se reconstruyen en el arranque y en cada hot-reload OK
