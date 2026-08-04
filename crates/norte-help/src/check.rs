@@ -689,7 +689,9 @@ pub fn check_commands_in(
     issues
 }
 
-/// [`check_commands_in`] over the embedded corpus, in [`VOCABULARY_LOCALE`].
+/// [`check_commands_in`] over the embedded corpus, in the vocabulary locale
+/// (`Lang::En`; the locales are cross-checked for parity separately, so one
+/// pass is enough to report a finding once instead of twice).
 ///
 /// ```
 /// use norte_help::{Issue, check_commands};
@@ -793,7 +795,8 @@ pub fn check_contexts_in(lang: Lang, topics: &[Topic], known: &[&str]) -> Vec<Is
     issues
 }
 
-/// [`check_contexts_in`] over the embedded corpus, in [`VOCABULARY_LOCALE`].
+/// [`check_contexts_in`] over the embedded corpus, in the vocabulary locale
+/// (`Lang::En`; see [`check_commands`] for why one pass is enough).
 ///
 /// ```
 /// use norte_help::check_contexts;

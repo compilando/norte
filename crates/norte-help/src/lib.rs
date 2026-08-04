@@ -7,13 +7,44 @@
 //! arrive UNRESOLVED: the chord is resolved at draw time against the user's
 //! effective keymap, so the prose can never lie about keys.
 //!
-//! Example from the rustdoc (task 10 of this phase reactivates it, once
-//! `corpus` exists and the doctest can compile):
+//! The shape of that promise, end to end — a topic out of the corpus, a mark
+//! still unresolved inside it, and a frontend turning it into a key:
 //!
-//! ```text
-//! use norte_help::{Lang, topic};
-//! let t = topic(Lang::En, "index").expect("the index topic exists");
-//! assert_eq!(t.title, "Welcome to norte");
+//! ```
+//! use norte_help::{Availability, Block, ChordResolver, Lang, Span, render_span, topic};
+//!
+//! // What only a FRONTEND knows: the user's effective keymap, how to name a
+//! // command, and whether it can run in the pane being drawn (rule 7 — no UI
+//! // and no core state in this crate, so all three arrive through the trait).
+//! struct Keymap;
+//!
+//! impl ChordResolver for Keymap {
+//!     fn chord(&self, command: &str) -> Option<String> {
+//!         // This user moved copy off F5.
+//!         (command == "pane.copy").then(|| "Ctrl+C".to_owned())
+//!     }
+//!     fn label(&self, command: &str) -> String {
+//!         command.to_owned()
+//!     }
+//!     fn availability(&self, _command: &str) -> Availability {
+//!         Availability::Available
+//!     }
+//! }
+//!
+//! let index = topic(Lang::En, "index").expect("the index topic exists");
+//! assert_eq!(index.title, "Welcome to norte");
+//!
+//! // The corpus stores the command ID and never a key, so the mark is still
+//! // a `CommandRef` after parsing…
+//! let copying = topic(Lang::En, "copying").expect("the copying topic exists");
+//! let mark = Span::CommandRef("pane.copy".to_owned());
+//! assert!(
+//!     copying.blocks.iter().any(|b| matches!(b, Block::Paragraph(s) if s.contains(&mark))),
+//!     "the prose refers to the command, not to a chord"
+//! );
+//!
+//! // …and it becomes the key this reader actually has, at draw time.
+//! assert_eq!(render_span(&mark, &Keymap), "Ctrl+C");
 //! ```
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

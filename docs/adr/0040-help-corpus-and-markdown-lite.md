@@ -51,16 +51,41 @@ the user has rebound.
 
 Trusted (built-in corpus): errors are hard, and a test parses the whole corpus
 so a malformed topic cannot ship. Untrusted (plugin `help.md`): never fails,
-applies caps (64 KiB, block count, line length), decodes invalid UTF-8
-lossily, and masks terminal hazards at parse time, recording
-`truncated`/`lossy` flags for the UI badge.
+applies caps, decodes with loss rather than refusing, and masks terminal
+hazards at parse time, recording `truncated`/`lossy` flags for the UI badge.
+
+Two points moved during implementation and are recorded here rather than left
+to the code to explain:
+
+- The caps are **four**, not three: source bytes (64 KiB), block count, line
+  length, and **total table cells**. The fourth is not redundant — rows are
+  padded to the header width, so a wide header over many short rows amplifies
+  a bounded source into an unbounded number of cells, and neither the block
+  count (a table is one block) nor the line length (a bound on width, never on
+  the product) can see it.
+- Decoding goes through the house text boundary (ADR 0008):
+  `norte_encoding::detect` then `decode`, the same pipeline the viewer uses,
+  rather than a bare `from_utf8_lossy`. A `help.md` saved by a Windows editor
+  carries a UTF-8 BOM, which a raw UTF-8 read leaves in front of the `+++`
+  fence — the header then fails to parse and the topic silently loses its
+  title and its commands.
 
 ### 6. Masking reuses the existing hazard set
 
-Masking reuses `norte_encoding::is_terminal_hazard`, already the single source
-of the hazard set (`norte-frontend`'s `must_mask` is a one-line delegate to
-it). `norte-help` must not depend on `norte-frontend`; the dependency runs the
-other way.
+Masking reuses `norte_encoding::mask_terminal_hazards` and its
+`is_terminal_hazard` predicate, already the single source of the hazard set
+(`norte-frontend`'s `must_mask` is a one-line delegate to it). `norte-help`
+must not depend on `norte-frontend`; the dependency runs the other way.
+
+With one stopgap, recorded because it is a deviation from "single source":
+`norte-help` carries a small local `INVISIBLE` set used by its blank-id
+predicate, because `is_terminal_hazard` enumerates code points instead of
+testing a Unicode property and misses several invisibles — `U+3164` HANGUL
+FILLER among them, which is general category `Lo` and no `Cf`/`Zl`/`Zp`
+enumeration will ever reach. Fixing the shared predicate touches
+`norte-encoding` plus snapshot pins in `norte-tui` and `norte-gui`, so it was
+deliberately kept out of this phase: **issue #125**. The local set goes away
+when #125 lands.
 
 ## Consequences
 
