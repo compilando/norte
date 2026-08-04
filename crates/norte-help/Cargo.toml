@@ -1,0 +1,22 @@
+[package]
+name = "norte-help"
+description = "Corpus de ayuda embebido y localizado: temas en markdown-lite con front matter TOML, modelo agnóstico del render y modo hostil para la ayuda de plugins"
+license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+norte-encoding.workspace = true
+norte-i18n.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+norte-testkit.workspace = true
+
+[lints]
+workspace = true

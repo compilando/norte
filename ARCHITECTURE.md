@@ -32,6 +32,7 @@ the protocol, a frontend cannot provide it.
 | `norte-tui` | The ratatui dual-pane terminal frontend. | AGPL-3.0-only |
 | `norte-gui` | The GPUI graphical frontend. | AGPL-3.0-only |
 | `norte-frontend` | UI-independent state and behaviour shared by the TUI and GUI. | MIT OR Apache-2.0 |
+| `norte-help` | Help corpus and markdown-lite model, consumed by TUI/GUI/CLI (ADR 0040). | MIT OR Apache-2.0 |
 | `norte-encoding` | Text encoding detection and decoding. | MIT OR Apache-2.0 |
 | `norte-i18n` | Fluent localization resources shared by the frontends. | MIT OR Apache-2.0 |
 | `norte-theme` | Semantic theme roles, true-colour values, terminal fallbacks, and bundled presets. | MIT OR Apache-2.0 |
