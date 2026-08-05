@@ -48,6 +48,14 @@
 //!   cierra sin colarse a la fila de debajo. Una entrada deshabilitada
 //!   registra un listener que sólo hace `cx.stop_propagation()`, para que
 //!   pulsarla no cierre el menú por ese scrim.
+//!   **Drag & drop entre panes** (tarea 5): soltar sobre el otro pane abre
+//!   el MISMO modal de confirmación que `pane.copy`/`pane.move`
+//!   ([`transfer_modal`], fuente única) — un drop es una mutación y no tiene
+//!   una ruta más silenciosa. Qué filas viajan y si copia o mueve lo decide
+//!   la máquina compartida; esta capa pinta el aviso de lo que haría soltar
+//!   ahora ([`norte_frontend::mouse::Drag::pending`]) y lo refresca con
+//!   `on_modifiers_changed` de la raíz, porque shift baja y sube sin que el
+//!   puntero se mueva.
 //! - **async → UI**: `cx.spawn` + `this.update` + `cx.notify()`, con un canal
 //!   `tokio::mpsc` que cruza desde el hilo de sesión tokio (ver `session.rs`).
 //! - **Accesibilidad (AccessKit, GUI-e T2)**: `div().id(...)` (convierte a
@@ -82,7 +90,7 @@ use gpui_platform::application;
 use std::ops::Range;
 
 use norte_config::ConfirmQuit;
-use norte_frontend::mouse::{Drag, Effect, Mods, Press, Spot};
+use norte_frontend::mouse::{Drag, Effect, Mods, Pending, Press, Spot};
 use norte_frontend::settings::PendingWrite;
 use norte_frontend::{PaneState, nav::Mode};
 use norte_proto::{Entry, EntryKind, Segment, VPath};
@@ -377,6 +385,13 @@ struct MouseState {
     drag: Drag,
     /// La [`MouseValidity`] del frame anterior, para detectar el cambio.
     validity: MouseValidity,
+    /// Los modificadores VIVOS, para el aviso de lo que haría soltar ahora
+    /// ([`Drag::pending`]). Se refrescan con cada evento de ratón y también
+    /// con el `on_modifiers_changed` de la raíz: shift puede bajar o subir
+    /// sin que el puntero se mueva ni un píxel, y el aviso tiene que
+    /// cambiar de «copiar» a «mover» en ese mismo instante — la decisión se
+    /// lee AL SOLTAR, así que un aviso rancio sería una promesa falsa.
+    mods: Mods,
 }
 
 /// Todo lo que tiene que seguir siendo verdad para que un gesto en vuelo
@@ -408,13 +423,30 @@ struct MouseApplied {
     /// `follow_cursor` (la lista virtualizada de GPUI no sigue al cursor
     /// sola). `None` = ningún cursor cambió.
     moved_cursor: Option<usize>,
-    /// El gesto pidió una transferencia entre panes.
-    transfer: bool,
+    /// El gesto soltó una transferencia entre panes (`None` = ninguna).
+    transfer: Option<DropRequest>,
     /// La tanda no estaba vacía. Un `motion` que no cambia de fila no emite
     /// NADA (contrato de `Drag::motion`), y repintar por cada píxel que
     /// recorre el puntero sobre la misma fila sería el coste que ese
     /// contrato existe para evitar.
     changed: bool,
+}
+
+/// Un drop consumado: lo que [`Effect::Transfer`] pide, tal cual, sin
+/// interpretarlo. Existe para que el cableado de GPUI (`on_mouse_up`) y la
+/// apertura del modal sean dos pasos separables — uno testeable sin ventana.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DropRequest {
+    /// Pane del que salen las entradas.
+    from_pane: usize,
+    /// Pane sobre el que se soltó.
+    to_pane: usize,
+    /// `true` = mover, `false` = copiar (modificadores AL SOLTAR).
+    move_files: bool,
+    /// `Some(idx)` = arrastre PROMOVIDO desde una fila sin marcar: viaja
+    /// esa fila sola y las marcas del pane no se leen ni se tocan. `None` =
+    /// las marcas del pane de origen (el arrastre de una selección).
+    promoted: Option<usize>,
 }
 
 /// Los dos modificadores que el marcado entiende. `platform` (⌘) se deja
@@ -472,12 +504,27 @@ fn apply_mouse_effects(
             Effect::SweepRange { pane, from, to } => {
                 panes[pane].apply_sweep(from, to);
             }
-            // Arrastrar entre paneles NO transfiere todavía: el drop es la
-            // tarea 5 del plan. El caller lo dice en voz alta (`flash`) en vez
-            // de tragarse el gesto — un arrastre que no hace nada Y no explica
-            // nada se lee como que el ratón está roto. Mismo criterio que la
-            // TUI (`msg-mouse-transfer-unavailable`).
-            Effect::Transfer { .. } => out.transfer = true,
+            // El barrido cruzó al otro pane y la máquina lo promovió a
+            // transferencia: devuelve lo que llevara marcado. Una promoción
+            // cambia lo que el gesto HACE, no lo que está seleccionado.
+            Effect::RevertSweep { pane } => panes[pane].revert_sweep(),
+            // El drop. Aquí NO se abre nada: el modelo puro no puede, y
+            // sobre todo no debe decidirlo solo — el caller comprueba que no
+            // haya nada delante y enruta por el MISMO modal que el teclado
+            // (ver `NorteGui::on_mouse_release`).
+            Effect::Transfer {
+                from_pane,
+                to_pane,
+                move_files,
+                promoted,
+            } => {
+                out.transfer = Some(DropRequest {
+                    from_pane,
+                    to_pane,
+                    move_files,
+                    promoted,
+                });
+            }
         }
     }
     out
@@ -585,6 +632,101 @@ fn expire_stale_gesture(mouse: &mut MouseState, validity: MouseValidity) {
     mouse.validity = validity;
 }
 
+/// El modal de confirmación de una transferencia `from` → `to`, o `None` si
+/// no hay nada que transferir (un pane vacío, un índice que ya no nombra
+/// ninguna fila).
+///
+/// **Fuente ÚNICA de qué se somete en una copia o un movimiento**, la
+/// tecla y el arrastre por igual. El plan lo exige por una razón que no es
+/// de estilo: un drop es una mutación, y una segunda ruta —aunque hoy
+/// naciera idéntica— se quedaría sin la confirmación, sin el modal de
+/// colisión, sin la entrada de journal o sin el undo en cuanto una de las
+/// dos cambiara. Por eso el drop no construye `Modal::ConfirmTransfer`: pide
+/// el mismo que pediría `pane.copy`.
+///
+/// `promoted` es la única diferencia entre las dos entradas, y solo dice
+/// SOBRE QUÉ actúa: `None` = las marcas del pane (`marked_paths`, la fuente
+/// única de siempre); `Some(idx)` = esa fila sola, porque el gesto se
+/// promovió desde una fila SIN marcar y las marcas del pane —si las hay—
+/// son otra cosa que el usuario no está arrastrando.
+fn transfer_modal(
+    panes: &[PaneState; 2],
+    from: usize,
+    to: usize,
+    kind: TransferKind,
+    promoted: Option<usize>,
+) -> Option<Modal> {
+    let items: Vec<VPath> = match promoted {
+        Some(idx) => panes[from]
+            .entries()
+            .get(idx)
+            .map(|e| vec![e.path.clone()])
+            .unwrap_or_default(),
+        None => panes[from].marked_paths(),
+    };
+    if items.is_empty() {
+        return None;
+    }
+    Some(Modal::ConfirmTransfer {
+        kind,
+        items,
+        to: panes[to].dir().clone(),
+    })
+}
+
+/// El modal que abre un drop: [`transfer_modal`] con lo que pidió el gesto.
+fn drop_modal(panes: &[PaneState; 2], req: DropRequest) -> Option<Modal> {
+    let kind = if req.move_files {
+        TransferKind::Move
+    } else {
+        TransferKind::Copy
+    };
+    transfer_modal(panes, req.from_pane, req.to_pane, kind, req.promoted)
+}
+
+/// Cuántas entradas viajarían en `pending` y a qué dir, para el aviso que se
+/// pinta ANTES de soltar. `None` = no hay drop pendiente (o no hay nada que
+/// llevar), y entonces no se anuncia nada.
+///
+/// Sale de la MISMA lectura que [`drop_modal`] (marcas o la fila promovida),
+/// así que el aviso no puede prometer un número distinto del que acabará en
+/// el modal.
+fn drop_hint(panes: &[PaneState; 2], pending: Option<Pending>) -> Option<(usize, String)> {
+    let Some(Pending::Drop {
+        from_pane,
+        to_pane,
+        move_files,
+        promoted,
+    }) = pending
+    else {
+        return None;
+    };
+    let n = match promoted {
+        Some(idx) => usize::from(panes[from_pane].entries().get(idx).is_some()),
+        None => panes[from_pane].marked_paths().len(),
+    };
+    if n == 0 {
+        return None;
+    }
+    // El dir destino se pinta con el MISMO saneado que la cabecera del pane
+    // (regla 1: display siempre lossy y marcado si es hostil).
+    let (to_txt, hostile) = norte_frontend::path_display(panes[to_pane].dir());
+    let to_txt = if hostile {
+        format!("{HOSTILE_BADGE} {to_txt}")
+    } else {
+        to_txt
+    };
+    let key = if move_files {
+        "gui-drag-move"
+    } else {
+        "gui-drag-copy"
+    };
+    Some((
+        to_pane,
+        norte_i18n::ta(key, &[("n", &n.to_string()), ("to", &to_txt)]),
+    ))
+}
+
 /// Botón izquierdo abajo sobre una fila: alimenta la máquina compartida con
 /// lo que solo el frontend sabe (si la fila estaba marcada, dónde está el
 /// ancla visible) y aplica lo que devuelve.
@@ -595,6 +737,7 @@ fn mouse_press(
     at: Spot,
     mods: Mods,
 ) -> MouseApplied {
+    mouse.mods = mods;
     let marked = panes[at.pane]
         .entries()
         .get(at.index)
@@ -615,7 +758,9 @@ fn mouse_motion(
     panes: &mut [PaneState; 2],
     focus: &mut usize,
     at: Spot,
+    mods: Mods,
 ) -> MouseApplied {
+    mouse.mods = mods;
     let fx = mouse.drag.motion(at);
     apply_mouse_effects(panes, focus, &fx)
 }
@@ -630,6 +775,7 @@ fn mouse_release(
     at: Option<Spot>,
     mods: Mods,
 ) -> MouseApplied {
+    mouse.mods = mods;
     let fx = mouse.drag.release(at, mods);
     let applied = apply_mouse_effects(panes, focus, &fx);
     // Suelta la baseline del barrido (una foto del conjunto de marcas): no
@@ -1539,14 +1685,34 @@ impl NorteGui {
 
     /// Abre el modal de copia/movimiento: origen = marcas/cursor del pane
     /// activo, destino = dir del pane inactivo. No-op si no hay nada que mover.
+    ///
+    /// El camino del TECLADO (`pane.copy`/`pane.move`); el del arrastre entra
+    /// por [`Self::drop_transfer`]. Los dos pasan por [`transfer_modal`], que
+    /// es lo que garantiza que un drop someta exactamente lo mismo.
     fn open_transfer_modal(&mut self, kind: TransferKind) {
         let f = self.focus;
-        let items = self.panes[f].marked_paths();
-        if items.is_empty() {
+        if let Some(modal) = transfer_modal(&self.panes, f, 1 - f, kind, None) {
+            self.modal = Some(modal);
+        }
+    }
+
+    /// Un drop consumado sobre el otro pane: abre el MISMO modal de
+    /// confirmación que la tecla de copiar o mover (ver [`transfer_modal`]).
+    ///
+    /// Con cualquier overlay delante no abre nada (mismo criterio, overlay o
+    /// menú contextual, que caduca los gestos). En la práctica no llega — un
+    /// modal ya caducó el gesto en `render`, ver
+    /// [`Self::expire_stale_mouse_gesture`] — pero el guard es barato y lo
+    /// que evita no lo es: reemplazar el modal abierto por este perdería la
+    /// decisión que el usuario tenía delante — y si el que estaba abierto era
+    /// un `ConflictResolve`, perdería además la transferencia que lo abrió.
+    fn drop_transfer(&mut self, req: DropRequest) {
+        if self.overlay_in_front() || self.context_menu.is_some() {
             return;
         }
-        let to = self.panes[1 - f].dir().clone();
-        self.modal = Some(Modal::ConfirmTransfer { kind, items, to });
+        if let Some(modal) = drop_modal(&self.panes, req) {
+            self.modal = Some(modal);
+        }
     }
 
     /// Abre el modal de borrado sobre las marcas/cursor del pane activo.
@@ -3011,12 +3177,13 @@ impl NorteGui {
     /// así que esto no necesita throttling propio por encima del que ya trae
     /// la máquina — GPUI reporta el puntero por píxel, pero la máquina lo
     /// deduplica por fila.
-    fn on_row_drag(&mut self, pane: usize, idx: usize, cx: &mut Context<Self>) {
+    fn on_row_drag(&mut self, pane: usize, idx: usize, mods: Mods, cx: &mut Context<Self>) {
         let applied = mouse_motion(
             &mut self.mouse,
             &mut self.panes,
             &mut self.focus,
             Spot::new(pane, idx),
+            mods,
         );
         if let Some(p) = applied.moved_cursor {
             self.follow_cursor(p);
@@ -3030,13 +3197,14 @@ impl NorteGui {
     /// sobre ninguna fila (el `on_mouse_up` de la raíz): el gesto se cancela
     /// en vez de adivinar un destino — un destino inferido es una operación
     /// de ficheros que nadie pidió.
+    ///
+    /// Un drop sobre el OTRO pane abre el modal de confirmación de copiar o
+    /// mover; sobre el propio pane de origen no hace nada (contrato de
+    /// `Drag::release`, que ni siquiera emite el efecto).
     fn on_mouse_release(&mut self, at: Option<Spot>, mods: Mods, cx: &mut Context<Self>) {
         let applied = mouse_release(&mut self.mouse, &mut self.panes, &mut self.focus, at, mods);
-        if applied.transfer {
-            // Tarea 5 del plan (drag & drop entre panes). Hasta entonces se
-            // dice en voz alta, igual que la TUI: un arrastre que no hace nada
-            // y tampoco explica nada se lee como que el ratón está roto.
-            self.flash = Some((norte_i18n::t("gui-mouse-transfer-unavailable"), false));
+        if let Some(req) = applied.transfer {
+            self.drop_transfer(req);
         }
         if let Some(p) = applied.moved_cursor {
             self.follow_cursor(p);
@@ -3250,15 +3418,22 @@ impl NorteGui {
     }
 
     /// Pinta una columna (un pane).
+    ///
+    /// `drop_pane` es el pane sobre el que caería un drop AHORA MISMO (tarea
+    /// 5): el destino se resalta mientras el puntero lo sobrevuela con el
+    /// botón pulsado. El aviso de qué haría (cuántas entradas, copiar o
+    /// mover) va en la línea que pinta `render`; esto solo dice DÓNDE.
     fn render_pane(
         &self,
         i: usize,
         chrome: &ChromeColors,
+        drop_pane: Option<usize>,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let pane = &self.panes[i];
         let focused = self.focus == i;
+        let drop_target = drop_pane == Some(i);
         // #108 b6: geometría de columnas del frame — el advance del mono ('0';
         // en una monoespaciada todo glifo simple mide la celda), las celdas
         // interiores aproximadas y el MISMO column_widths() que pinta la TUI.
@@ -3415,7 +3590,14 @@ impl NorteGui {
             .flex_col()
             .overflow_hidden()
             .border_2()
-            .border_color(if focused {
+            // El destino de un drop gana sobre el foco: el pane con foco es
+            // casi siempre el ORIGEN del arrastre (la pulsación se lo lleva),
+            // así que pintar el destino con `border_focus` los dejaría
+            // idénticos justo cuando importa distinguirlos. `sel_bg` es el
+            // color de «esto es lo que estás señalando» del tema.
+            .border_color(if drop_target {
+                chrome.sel_bg
+            } else if focused {
                 chrome.border_focus
             } else {
                 chrome.border_unfocus
@@ -3882,7 +4064,7 @@ impl NorteGui {
                 // también al pasear el ratón sin pulsar nada, y un barrido que
                 // arrancara ahí marcaría por su cuenta.
                 if ev.pressed_button == Some(MouseButton::Left) {
-                    this.on_row_drag(pane, idx, cx);
+                    this.on_row_drag(pane, idx, mouse_mods(ev.modifiers), cx);
                 }
             }))
             .on_mouse_up(
@@ -6397,6 +6579,22 @@ impl Render for NorteGui {
                     this.on_mouse_release(None, mouse_mods(ev.modifiers), cx);
                 }),
             )
+            // Shift baja o sube A MITAD del arrastre y el puntero no se
+            // mueve: sin esto el aviso seguiría diciendo «copiar» mientras
+            // el drop ya movería (la decisión se lee AL SOLTAR). GPUI
+            // despacha `ModifiersChanged` por el camino del FOCO, y la raíz
+            // lo tiene (`track_focus`), así que un solo listener aquí cubre
+            // la ventana entera. Solo repinta si hay un gesto armado: el
+            // modificador se pulsa mil veces por sesión fuera de un
+            // arrastre.
+            .on_modifiers_changed(
+                cx.listener(|this, ev: &gpui::ModifiersChangedEvent, _w, cx| {
+                    this.mouse.mods = mouse_mods(ev.modifiers);
+                    if this.mouse.drag.kind().is_some() {
+                        cx.notify();
+                    }
+                }),
+            )
             .flex()
             .flex_col()
             .size_full()
@@ -6489,6 +6687,31 @@ impl Render for NorteGui {
             );
         }
 
+        // Aviso de lo que haría SOLTAR ahora mismo (tarea 5): a qué pane,
+        // cuántas entradas y si copia o mueve. No es decoración — el mismo
+        // gesto significa marcar o transferir según dónde acabe (promoción,
+        // ver `norte_frontend::mouse`) y el flag copiar/mover se lee al
+        // soltar, así que esta línea es lo único que se interpone entre el
+        // usuario y una mutación que creía otra. Sale de `Drag::pending`,
+        // que responde con las MISMAS reglas que el drop: la etiqueta no
+        // puede prometer una cosa y la operación hacer otra.
+        let drop_target = drop_hint(&self.panes, self.mouse.drag.pending(self.mouse.mods));
+        let drop_pane: Option<usize> = drop_target.as_ref().map(|(p, _)| *p);
+        if let Some((_, msg)) = &drop_target {
+            root = root.child(
+                div()
+                    .px(px(sp::S))
+                    .py(px(1.0)) // sub-XS: acento fino de una línea
+                    // Par honesto de `Match` (fondo Y texto), el mismo que
+                    // usa el quick search: un estado VIVO del puntero, no un
+                    // resultado como el flash.
+                    .bg(chrome.quick_bg)
+                    .text_color(chrome.quick_fg)
+                    .truncate()
+                    .child(SharedString::from(msg.clone())),
+            );
+        }
+
         // Vista de ajustes (F11, S4) a pantalla completa, gestor de
         // extensiones (F12, G3c) a pantalla completa, visor (F3), el
         // estado «abriendo…» mientras llega, o el dual-pane: pantallas
@@ -6516,8 +6739,8 @@ impl Render for NorteGui {
                 .flex_row()
                 .overflow_hidden()
                 .gap(px(sp::XS))
-                .child(self.render_pane(0, &chrome, window, cx))
-                .child(self.render_pane(1, &chrome, window, cx));
+                .child(self.render_pane(0, &chrome, drop_pane, window, cx))
+                .child(self.render_pane(1, &chrome, drop_pane, window, cx));
             root = root.child(panes_row).child(self.render_task_strip(&chrome));
         }
 
@@ -7090,8 +7313,11 @@ mod tests {
         ContextMenu, clipboard_text, context_menu, context_target, expire_stale_menu, keymap,
         menu_origin, rename_modal_for, scheme_is_read_only,
     };
+    // Drag & drop entre panes (tarea 5 del plan de ratón).
+    use super::transfer_modal;
+    use super::{DropRequest, Modal, ModalOutcome, TransferKind, drop_hint, drop_modal, modal};
     use gpui::rgb;
-    use norte_frontend::mouse::{Mods, Spot};
+    use norte_frontend::mouse::{Mods, Pending, Spot};
     use norte_frontend::viewer::Viewer;
     use norte_proto::{EntryKind, Segment, VPath};
     use norte_theme::Theme;
@@ -9205,12 +9431,24 @@ mod tests {
             "la pulsación arma el barrido pero todavía no marca"
         );
 
-        let _ = mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 15));
+        let _ = mouse_motion(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 15),
+            Mods::NONE,
+        );
         assert_eq!(panes[0].marks_len(), 14, "2..=15");
         assert!(marcada(&panes[0], 15));
 
         // Retroceso: el rango se encoge y el exceso se SUELTA.
-        let _ = mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 5));
+        let _ = mouse_motion(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 5),
+            Mods::NONE,
+        );
         assert_eq!(panes[0].marks_len(), 4, "2..=5");
         for i in 6..=15 {
             assert!(!marcada(&panes[0], i), "la fila {i} debía soltarse");
@@ -9254,8 +9492,20 @@ mod tests {
             Spot::new(0, 2),
             Mods::NONE,
         );
-        let _ = mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 15));
-        let _ = mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 4));
+        let _ = mouse_motion(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 15),
+            Mods::NONE,
+        );
+        let _ = mouse_motion(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 4),
+            Mods::NONE,
+        );
         let _ = mouse_release(
             &mut mouse,
             &mut panes,
@@ -9288,7 +9538,7 @@ mod tests {
         assert_eq!(focus, 0);
         assert_eq!(panes[0].cursor(), 3);
         assert_eq!(aplicado.moved_cursor, Some(0));
-        assert!(!aplicado.transfer);
+        assert!(aplicado.transfer.is_none());
         assert_eq!(panes[0].marks_len(), 0);
 
         let aplicado = mouse_release(
@@ -9336,7 +9586,13 @@ mod tests {
             Spot::new(0, 2),
             Mods::NONE,
         );
-        let cruce = mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(1, 4));
+        let cruce = mouse_motion(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(1, 4),
+            Mods::NONE,
+        );
         assert!(!cruce.changed, "una transferencia no marca por el camino");
         let soltar = mouse_release(
             &mut mouse,
@@ -9345,7 +9601,16 @@ mod tests {
             Some(Spot::new(1, 4)),
             Mods::NONE,
         );
-        assert!(soltar.transfer, "el gesto pide transferencia");
+        assert_eq!(
+            soltar.transfer,
+            Some(DropRequest {
+                from_pane: 0,
+                to_pane: 1,
+                move_files: false,
+                promoted: None,
+            }),
+            "el gesto pide transferencia de las MARCAS del pane 0"
+        );
         assert_eq!(panes[0].marks_len(), 1, "las marcas del origen intactas");
         assert_eq!(panes[1].marks_len(), 0, "y el destino sin marcar nada");
     }
@@ -9366,15 +9631,27 @@ mod tests {
             Spot::new(0, 1),
             Mods::NONE,
         );
-        let _ = mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 4));
+        let _ = mouse_motion(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 4),
+            Mods::NONE,
+        );
         assert_eq!(panes[0].marks_len(), 4);
 
         let aplicado = mouse_release(&mut mouse, &mut panes, &mut focus, None, Mods::NONE);
-        assert!(!aplicado.changed && !aplicado.transfer);
+        assert!(!aplicado.changed && aplicado.transfer.is_none());
         assert_eq!(panes[0].marks_len(), 4, "lo ya marcado se queda");
 
         // Y el gesto quedó DESARMADO: un motion posterior no marca sola.
-        let huerfano = mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 9));
+        let huerfano = mouse_motion(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 9),
+            Mods::NONE,
+        );
         assert!(!huerfano.changed);
         assert_eq!(panes[0].marks_len(), 4);
     }
@@ -9402,7 +9679,13 @@ mod tests {
             Spot::new(0, 1),
             Mods::NONE,
         );
-        let _ = mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 3));
+        let _ = mouse_motion(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 3),
+            Mods::NONE,
+        );
         assert_eq!(panes[0].marks_len(), 3, "1..=3");
 
         // Aterriza un listado nuevo en ese pane: los índices del gesto dejan
@@ -9417,7 +9700,13 @@ mod tests {
         expire_stale_gesture(&mut mouse, nueva);
 
         let mut panes = panes_con(10);
-        let huerfano = mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 9));
+        let huerfano = mouse_motion(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 9),
+            Mods::NONE,
+        );
         assert!(
             !huerfano.changed,
             "el gesto caducó: una motion posterior no marca por su cuenta"
@@ -9454,8 +9743,356 @@ mod tests {
                 hidden: true,
             },
         );
-        assert!(!mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 6)).changed);
+        assert!(
+            !mouse_motion(
+                &mut mouse,
+                &mut panes,
+                &mut focus,
+                Spot::new(0, 6),
+                Mods::NONE
+            )
+            .changed
+        );
         assert_eq!(panes[0].marks_len(), 0);
+    }
+
+    // --- Drag & drop entre panes (plan de ratón, tarea 5) ------------------
+    //
+    // QUÉ ficheros, en qué dirección y si copia o mueve son decisiones de
+    // `norte_frontend::mouse` y están clavadas allí. Lo que se clava aquí es
+    // lo único que es de la GUI: que el drop somete EXACTAMENTE lo mismo que
+    // la tecla, que un modal abierto lo desactiva, y que un arrastre
+    // promovido no cambia la selección.
+
+    /// El drop y la tecla de copiar someten lo MISMO. No solo el mismo
+    /// modal: las mismas operaciones al confirmarlo, que es lo que acaba en
+    /// el daemon (y por tanto en el journal, en el undo y en el gate de
+    /// policy). Un drop es una mutación como cualquier otra; una segunda
+    /// ruta más silenciosa es justo lo que este test existe para impedir.
+    #[test]
+    fn el_drop_somete_exactamente_lo_mismo_que_la_tecla_de_copiar() {
+        let mut panes = panes_con(6);
+        for i in [1usize, 3, 4] {
+            panes[0].set_mark(i, true);
+        }
+
+        // Camino del TECLADO (`pane.copy` con el foco en el pane 0).
+        let por_teclado =
+            transfer_modal(&panes, 0, 1, TransferKind::Copy, None).expect("hay marcas");
+        // Camino del ARRASTRE: soltar esas marcas sobre el pane 1.
+        let por_arrastre = drop_modal(
+            &panes,
+            DropRequest {
+                from_pane: 0,
+                to_pane: 1,
+                move_files: false,
+                promoted: None,
+            },
+        )
+        .expect("hay marcas");
+        assert_eq!(por_teclado, por_arrastre, "el mismo modal");
+
+        // Y lo que se somete al confirmarlo, también.
+        let confirmar = |mut m: Modal| match modal::on_key(&mut m, "y", None) {
+            ModalOutcome::Submit(ops) => ops,
+            otro => panic!("confirmar debía someter, dio {otro:?}"),
+        };
+        let ops = confirmar(por_teclado);
+        assert_eq!(ops.len(), 3, "las tres marcas");
+        assert_eq!(ops, confirmar(por_arrastre));
+
+        // Y con shift al soltar es el mismo camino con `Move`.
+        let mover = drop_modal(
+            &panes,
+            DropRequest {
+                from_pane: 0,
+                to_pane: 1,
+                move_files: true,
+                promoted: None,
+            },
+        )
+        .expect("hay marcas");
+        assert_eq!(
+            mover,
+            transfer_modal(&panes, 0, 1, TransferKind::Move, None).expect("hay marcas"),
+            "mover pasa por la MISMA función que `pane.move`"
+        );
+    }
+
+    /// El flag copiar/mover lo decide el shift que hay AL SOLTAR, aunque se
+    /// pulsara después de empezar el arrastre: quien cambia de idea a mitad
+    /// no debe acabar MOVIENDO (mutación destructiva en el origen) lo que
+    /// creía copiar. Gesto completo, extremo a extremo.
+    #[test]
+    fn el_shift_del_release_decide_aunque_se_pulse_a_mitad_del_arrastre() {
+        let mut mouse = MouseState::default();
+        let mut panes = panes_con(8);
+        let mut focus = 0usize;
+        panes[0].set_mark(2, true);
+
+        // Pulsa SIN shift sobre la fila marcada y arrastra al otro pane.
+        let _ = mouse_press(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 2),
+            Mods::NONE,
+        );
+        let _ = mouse_motion(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(1, 1),
+            Mods::NONE,
+        );
+        // …y solo entonces baja el shift.
+        let soltar = mouse_release(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Some(Spot::new(1, 1)),
+            Mods::SHIFT,
+        );
+        let req = soltar.transfer.expect("soltó sobre el otro pane");
+        assert!(req.move_files, "shift al soltar: MUEVE");
+        assert_eq!(
+            drop_modal(&panes, req),
+            transfer_modal(&panes, 0, 1, TransferKind::Move, None),
+            "y sale por el mismo modal que la tecla de mover"
+        );
+    }
+
+    /// Soltar sobre el pane de ORIGEN no somete nada: copiar un directorio
+    /// sobre sí mismo no es lo que pidió quien se arrepintió a medio camino.
+    #[test]
+    fn soltar_en_el_pane_de_origen_no_somete_nada() {
+        let mut mouse = MouseState::default();
+        let mut panes = panes_con(8);
+        let mut focus = 0usize;
+        panes[0].set_mark(2, true);
+
+        let _ = mouse_press(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 2),
+            Mods::NONE,
+        );
+        let _ = mouse_motion(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(1, 1),
+            Mods::NONE,
+        );
+        let soltar = mouse_release(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Some(Spot::new(0, 5)), // vuelve a casa y suelta
+            Mods::NONE,
+        );
+        assert!(soltar.transfer.is_none(), "no hay drop que abrir");
+        assert_eq!(panes[0].marks_len(), 1, "y la selección, intacta");
+    }
+
+    /// Arrastrar una fila SIN marcar al otro pane la transfiere a ella sola
+    /// (promoción, ver `norte_frontend::mouse`) — y no toca las marcas del
+    /// pane, que son otra cosa. Sin esta distinción el arrastre más común de
+    /// cualquier file manager copiaría los once ficheros marcados en vez del
+    /// que el usuario tiene cogido.
+    #[test]
+    fn un_arrastre_promovido_lleva_su_fila_y_no_las_marcas() {
+        let mut mouse = MouseState::default();
+        let mut panes = panes_con(10);
+        let mut focus = 0usize;
+        for i in [7usize, 8] {
+            panes[0].set_mark(i, true);
+        }
+        let arrastrada = panes[0].entries()[2].path.clone();
+
+        let _ = mouse_press(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 2),
+            Mods::NONE,
+        );
+        let _ = mouse_motion(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(1, 4),
+            Mods::NONE,
+        );
+        let soltar = mouse_release(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Some(Spot::new(1, 4)),
+            Mods::NONE,
+        );
+        let req = soltar.transfer.expect("cruzó de pane: es un drop");
+        assert_eq!(req.promoted, Some(2));
+
+        let Some(Modal::ConfirmTransfer { kind, items, to }) = drop_modal(&panes, req) else {
+            panic!("un drop promovido abre el modal de confirmación");
+        };
+        assert_eq!(kind, TransferKind::Copy);
+        assert_eq!(items, vec![arrastrada], "SOLO la fila arrastrada");
+        assert_eq!(&to, panes[1].dir());
+        assert_eq!(
+            panes[0].marks_len(),
+            2,
+            "las marcas del pane no se tocan: la promoción cambia lo que el \
+             gesto HACE, no lo que está seleccionado"
+        );
+        assert!(!marcada(&panes[0], 2), "ni marca la fila arrastrada");
+    }
+
+    /// Un arrastre promovido CANCELADO deja las marcas exactamente como
+    /// estaban — incluidas las filas que el barrido llegó a marcar antes de
+    /// cruzar de pane. Es la mitad del contrato que hace aceptable que un
+    /// mismo gesto signifique dos cosas según dónde acabe.
+    #[test]
+    fn un_arrastre_promovido_cancelado_deja_las_marcas_como_estaban() {
+        let mut mouse = MouseState::default();
+        let mut panes = panes_con(12);
+        let mut focus = 0usize;
+        panes[0].set_mark(9, true); // marca previa, ajena al gesto
+
+        let _ = mouse_press(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 2),
+            Mods::NONE,
+        );
+        // Barre 2..=5 de camino…
+        let _ = mouse_motion(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 5),
+            Mods::NONE,
+        );
+        assert_eq!(panes[0].marks_len(), 5, "2..=5 + la previa");
+        // …y cruza al otro pane: el gesto pasa a ser una transferencia y
+        // devuelve lo barrido.
+        let _ = mouse_motion(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(1, 3),
+            Mods::NONE,
+        );
+        assert_eq!(panes[0].marks_len(), 1, "solo sobrevive la marca previa");
+
+        // Soltar sobre el cromo (fuera de toda fila) cancela.
+        let soltar = mouse_release(&mut mouse, &mut panes, &mut focus, None, Mods::NONE);
+        assert!(soltar.transfer.is_none(), "cancelado: no hay drop");
+        assert_eq!(panes[0].marks_len(), 1);
+        assert!(
+            marcada(&panes[0], 9),
+            "y es EXACTAMENTE la que había antes del gesto"
+        );
+    }
+
+    /// Un drop sobre el otro pane con un modal abierto no hace NADA: el
+    /// modal caduca el gesto en `render` (`expire_stale_mouse_gesture`), así
+    /// que el release ya no encuentra nada armado. `drop_transfer` repite el
+    /// guard por si acaso — reemplazar el modal abierto por el del drop
+    /// perdería la decisión que el usuario tenía delante.
+    #[test]
+    fn un_drop_con_un_modal_abierto_no_somete_nada() {
+        let mut mouse = MouseState::default();
+        let mut panes = panes_con(10);
+        let mut focus = 0usize;
+        let epochs = [panes[0].listing_epoch(), panes[1].listing_epoch()];
+        panes[0].set_mark(2, true);
+        expire_stale_gesture(
+            &mut mouse,
+            MouseValidity {
+                epochs,
+                hidden: false,
+            },
+        );
+        let _ = mouse_press(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 2),
+            Mods::NONE,
+        );
+        // Se abre un modal a mitad del arrastre (una task que falla por
+        // colisión, p. ej.): el frame siguiente caduca el gesto.
+        expire_stale_gesture(
+            &mut mouse,
+            MouseValidity {
+                epochs,
+                hidden: true,
+            },
+        );
+        let soltar = mouse_release(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Some(Spot::new(1, 4)),
+            Mods::NONE,
+        );
+        assert!(soltar.transfer.is_none(), "el gesto ya no existe");
+        assert_eq!(panes[0].marks_len(), 1, "y nada cambió de selección");
+    }
+
+    /// El aviso dice las dos cosas que el usuario necesita ANTES de soltar:
+    /// cuántas entradas viajan y si va a copiar o a mover. Y cambia con el
+    /// shift, que se lee vivo: sin eso la etiqueta prometería una copia
+    /// mientras el drop movería.
+    #[test]
+    fn el_aviso_del_drop_dice_cuantas_y_si_copia_o_mueve() {
+        let mut panes = panes_con(10);
+        for i in [1usize, 3, 4] {
+            panes[0].set_mark(i, true);
+        }
+        let drop = |move_files, promoted| {
+            drop_hint(
+                &panes,
+                Some(Pending::Drop {
+                    from_pane: 0,
+                    to_pane: 1,
+                    move_files,
+                    promoted,
+                }),
+            )
+        };
+
+        let (destino, copiar) = drop(false, None).expect("hay marcas que llevar");
+        assert_eq!(destino, 1, "resalta el pane de DESTINO");
+        assert!(copiar.contains('3'), "las tres marcas: {copiar:?}");
+        let (_, mover) = drop(true, None).expect("hay marcas que llevar");
+        assert_ne!(copiar, mover, "copiar y mover no pueden leerse igual");
+        assert_eq!(
+            copiar,
+            norte_i18n::ta(
+                "gui-drag-copy",
+                &[
+                    ("n", "3"),
+                    ("to", &norte_frontend::path_display(panes[1].dir()).0)
+                ]
+            )
+        );
+
+        // Promovido: UNA fila, aunque el pane tenga tres marcas — el mismo
+        // número que acabará en el modal.
+        let (_, promovido) = drop(false, Some(6)).expect("la fila 6 existe");
+        assert!(promovido.contains('1'), "una sola fila: {promovido:?}");
+
+        // Sin drop pendiente no se anuncia nada.
+        assert!(drop_hint(&panes, None).is_none());
+        assert!(drop_hint(&panes, Some(Pending::Marking { pane: 0 })).is_none());
+        assert!(drop_hint(&panes, Some(Pending::Carrying { from_pane: 0 })).is_none());
+        // Ni cuando no hay nada que llevar (índice que ya no existe).
+        assert!(drop(false, Some(99)).is_none());
     }
 
     // --- Menú contextual del botón derecho (plan de ratón, tarea 4) --------

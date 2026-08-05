@@ -466,6 +466,13 @@ fn apply(app: &mut App, effects: &[Effect]) {
             Effect::SweepRange { pane, from, to } => {
                 app.panes[pane].apply_sweep(from, to);
             }
+            // El barrido cruzó al otro panel y la máquina lo promovió a
+            // transferencia: devuelve lo que llevara marcado. La TUI todavía
+            // no suelta (el mensaje de más abajo lo dice), pero el gesto se
+            // comporta igual que en la GUI — las reglas son las mismas para
+            // los dos frontends, que es el motivo de que vivan en
+            // `norte-frontend`.
+            Effect::RevertSweep { pane } => app.panes[pane].revert_sweep(),
             // Arrastrar entre paneles NO transfiere todavía en la TUI: el
             // drop es la tarea 5 del plan y solo llega a la GUI. Se dice en
             // voz alta en la barra en vez de tragarse el gesto — un

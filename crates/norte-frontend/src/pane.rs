@@ -1094,6 +1094,61 @@ impl PaneState {
         }
     }
 
+    /// Gives back EVERYTHING the sweep in progress marked, restoring the
+    /// baseline [`Self::apply_sweep`] snapshotted, and keeps the gesture
+    /// armed: a later `apply_sweep` starts rubber-banding from the same
+    /// baseline, so a pointer that leaves and comes back loses nothing.
+    ///
+    /// It is [`Self::apply_sweep`] with an EMPTY extent, and it exists for
+    /// the moment a mark sweep stops being one: a drag that crosses into the
+    /// other pane is promoted to a transfer
+    /// ([`crate::mouse::Effect::RevertSweep`]), and a promotion changes what
+    /// the gesture DOES, not what is selected — the rows it swept on the way
+    /// out must not stay marked behind it.
+    ///
+    /// Marks made BEFORE the gesture survive (they are in the baseline),
+    /// exactly as they survive a retreat. Without an armed sweep it is a
+    /// no-op.
+    ///
+    /// ```
+    /// # use norte_frontend::PaneState;
+    /// # use norte_proto::{Entry, EntryKind, VPath};
+    /// # fn e(w: &str) -> Entry {
+    /// #     Entry { attrs: Default::default(), path: VPath::parse(w).unwrap(),
+    /// #             kind: EntryKind::File, size: None, mtime_ms: None }
+    /// # }
+    /// let mut p = PaneState::new(
+    ///     VPath::parse("mem:///").unwrap(),
+    ///     vec![e("mem:///a"), e("mem:///b"), e("mem:///c")],
+    /// );
+    /// p.set_mark(2, true); // marca previa al gesto
+    /// p.begin_sweep();
+    /// p.apply_sweep(0, 1);
+    /// assert_eq!(p.marks_len(), 3);
+    /// p.revert_sweep();
+    /// assert_eq!(p.marks_len(), 1, "solo sobrevive la marca previa");
+    /// ```
+    pub fn revert_sweep(&mut self) {
+        let extent = self.sweep_extent.take();
+        let mut soltar: Vec<VPath> = Vec::new();
+        if let (Some(baseline), Some((lo, hi))) = (self.sweep_baseline.as_ref(), extent) {
+            let hi = hi.min(self.entries.len().saturating_sub(1));
+            for i in lo..=hi {
+                let Some(entry) = self.entries.get(i) else {
+                    continue;
+                };
+                // Solo se suelta lo que puso ESTE barrido: lo anterior al
+                // gesto está en la baseline y no se toca.
+                if !baseline.contains(&entry.path) {
+                    soltar.push(entry.path.clone());
+                }
+            }
+        }
+        for path in soltar {
+            self.marks.remove(&path);
+        }
+    }
+
     /// Ends a pointer sweep, releasing its baseline. Idempotent, and not
     /// required for correctness ([`Self::begin_sweep`] re-arms anyway) —
     /// it only stops a mark-set-sized snapshot from outliving the gesture.

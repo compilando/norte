@@ -474,6 +474,12 @@ impl Pane {
         self.state.apply_sweep(from, to)
     }
 
+    /// Devuelve lo que marcó el barrido en curso, dejándolo armado.
+    /// Delegado puro a [`norte_frontend::PaneState::revert_sweep`].
+    pub fn revert_sweep(&mut self) {
+        self.state.revert_sweep();
+    }
+
     /// Cierra un barrido, soltando su baseline. Delegado puro a
     /// [`norte_frontend::PaneState::end_sweep`].
     pub fn end_sweep(&mut self) {

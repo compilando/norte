@@ -97,7 +97,8 @@ Commit: `feat(tui): mouse capture, click, wheel and drag marking`.
       `mouse::after_frame`) — in the GUI a relist lands ASYNC, mid-drag.
 - [x] A drag that starts on a marked row is a transfer: it says so
       (`gui-mouse-transfer-unavailable`, both locales) instead of marking or
-      doing nothing. Task 5 replaces the message with the drop.
+      doing nothing. Task 5 replaced the message with the drop, and the key
+      with `gui-drag-copy`/`gui-drag-move`.
 
 Commit: `feat(gui): ctrl and shift click, and drag, mark entries`.
 
@@ -140,33 +141,45 @@ Commit: `feat(gui): right-click context menu`.
 
 **Files:** `crates/norte-gui/src/main.rs`, i18n catalogs.
 
-- [ ] Dragging from a pane onto the other pane transfers: **copy by default,
+- [x] Dragging from a pane onto the other pane transfers: **copy by default,
       move with shift held at release**. The decision is read at RELEASE, not at
       press, so the user can change their mind mid-drag — and the feedback must
-      say which one will happen.
-- [ ] The drop routes through the same task submission the keyboard copy/move
+      say which one will happen. `Drag::pending(mods)` answers "what would a
+      release do RIGHT NOW" with the same rules as `release`, so the label
+      cannot promise one thing and the drop do another; the GUI re-reads it on
+      `on_modifiers_changed`, because shift goes down without the pointer
+      moving a pixel.
+- [x] The drop routes through the same task submission the keyboard copy/move
       uses: same confirmation, same collision dialog, same journal entry, same
-      undo. A drop must not become a second, quieter mutation path.
-- [ ] Visual feedback: the source rows, the drop target pane, and a label
+      undo. A drop must not become a second, quieter mutation path. One
+      function, `transfer_modal`, is now the single source of what a copy or a
+      move submits; `pane.copy`/`pane.move` and the drop both call it, and the
+      GUI test confirms both modals and compares the `PendingOp`s.
+- [x] Visual feedback: the source rows, the drop target pane, and a label
       saying copy or move. Dropping on the source pane itself is a no-op.
-- [ ] Tests: the pure part (which files, which direction, copy vs move) lives in
+- [x] Tests: the pure part (which files, which direction, copy vs move) lives in
       Task 1's state machine and is tested there; the GUI test asserts the
       submitted command matches what the keyboard path would submit.
 
-**Known consequence of the Task 1 fork, decide here:** a press on an UNMARKED
-row arms a mark sweep, so dragging a single unmarked file to the other pane
-transfers NOTHING — it sweeps one row and marks it. That is the most common
-drag in any file manager. It follows from the mark-state fork as specified (a
-transfer carries the marks, and an unmarked row has none), so it is not a
-defect in `norte-frontend::mouse`; it is a gap this task must close. The
-options, none of them free: promote the sweep to a transfer when the pointer
-crosses into the other pane (the drag then means two things depending on where
-it ends, and the feedback must say so before the drop); or mark the pressed row
-implicitly at the start of a cross-pane drag (a gesture that silently changes
-the selection); or leave it and require a mark first (honest, and what an
-orthodox file manager already teaches, but it will read as broken to anyone
-arriving from a desktop file manager). Whichever wins, say so in the help topic
-of Task 6.
+**Known consequence of the Task 1 fork — DECIDED: promote.** A press on an
+UNMARKED row arms a mark sweep, so dragging a single unmarked file to the other
+pane would transfer NOTHING — it would sweep one row and mark it, which is the
+most common drag in any file manager. Of the three options, the sweep is now
+PROMOTED to a transfer of the pressed row the moment the pointer crosses into
+the other pane. The objection to it — that the gesture then means two things
+depending on where it ends — is answered by the feedback: `Drag::pending`
+tells the frontend what a release would do, and the GUI renders it (how many
+items, to which pane, copy or move) before the button comes up. Promotion
+changes what the gesture DOES, not what is selected: the pressed row is never
+marked, and the rows the sweep marked on the way out are given back
+(`Effect::RevertSweep`), so a cancelled drag leaves the selection exactly as it
+was. A sweep armed with shift is NOT promotable — shift means "extend the
+range", and reading a range that ends past the pane boundary as a drop would
+turn a marking gesture into a MOVE of the whole selection.
+
+The TUI drives the same machine, so it promotes too; it just cannot drop yet
+and keeps saying so (`msg-mouse-transfer-unavailable`). Task 6's help topic
+must state the promotion rule for both frontends.
 
 Commit: `feat(gui): drag and drop between panes`.
 
