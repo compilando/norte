@@ -496,6 +496,17 @@ fn apply_mouse_effects(
 /// puestas haría que el menú dijera una cosa y la op tocara otra. Una fila
 /// pulsada que SÍ está marcada no toca nada: el objetivo son las marcas.
 ///
+/// **El precio, asumido a sabiendas**: esa selección se DESCARTA y no hay
+/// forma de recuperarla — ni Esc sobre el menú la devuelve (cuando el menú se
+/// abre, ya se soltó). Se acepta porque el fallo que evita es peor y
+/// silencioso (operar sobre once ficheros creyendo señalar uno) mientras que
+/// este es visible al instante: las once filas se apagan a la vez que aparece
+/// el menú, y su cabecera nombra la única que queda. Por eso la línea de
+/// objetivo del panel no es decoración: es lo único que se interpone entre el
+/// usuario y una operación sobre el conjunto equivocado, y no debe poder
+/// perderse de vista (va la PRIMERA, con el fondo de cabecera, y jamás
+/// comparte renglón con una entrada).
+///
 /// Pura respecto a GPUI (sólo `PaneState`), para poder clavar la regla sin
 /// levantar ventana.
 fn context_target(
@@ -528,6 +539,29 @@ fn expire_stale_menu(menu: &mut Option<ContextMenu>, epochs: [u64; 2]) {
     if stale {
         *menu = None;
     }
+}
+
+/// El modal de renombrado para `from`, o `None` si `from` no se puede
+/// renombrar porque no tiene nombre ni padre (una raíz).
+///
+/// El destino es el PADRE de la propia entrada, no el `dir` del pane: son lo
+/// mismo en el listado normal, pero no en un pane virtual (un listado de
+/// resultados, donde el `dir` es la raíz del recorrido) — ahí tomar el del
+/// pane renombraría MOVIENDO el fichero de sitio. Mismo criterio que la TUI
+/// (`open_rename`), y por eso es una función aparte: es la parte que se
+/// puede equivocar en silencio.
+#[must_use]
+fn rename_modal_for(from: &VPath) -> Option<Modal> {
+    let to_dir = from.parent()?;
+    // Los bytes REALES del nombre actual siembran el campo (regla 1): ni
+    // decodificados ni pasados por lossy — ver [`Modal::RenamePrompt`].
+    let name = from.file_name()?.as_bytes().to_vec();
+    Some(Modal::RenamePrompt {
+        from: from.clone(),
+        to_dir,
+        name,
+        error: None,
+    })
 }
 
 /// El texto que `pane.copy-path` deja en el portapapeles: una ruta por línea,
@@ -1594,6 +1628,24 @@ impl NorteGui {
         self.open_pending_semantic();
     }
 
+    /// Abre el renombrado in situ (`pane.rename`, shift+F6): el destino es el
+    /// PADRE de la entrada bajo el cursor, no el dir del pane — renombrar no
+    /// mueve de sitio. Siempre sobre el cursor (`selected`, que respeta el
+    /// filtro quick como el visor): las marcas no renombran en bloque, eso
+    /// sería un batch-rename. No-op sobre una raíz (no tiene padre ni nombre)
+    /// y no-op sin selección.
+    ///
+    /// El nombre nace sembrado con los BYTES reales del actual — ver
+    /// [`Modal::RenamePrompt`] para por qué bytes y no texto.
+    fn open_rename(&mut self) {
+        let Some(from) = self.panes[self.focus].selected().map(|e| e.path.clone()) else {
+            return;
+        };
+        if let Some(modal) = rename_modal_for(&from) {
+            self.modal = Some(modal);
+        }
+    }
+
     /// Abre el prompt de instrucción del rename IA (M4-IA, `pane.ai-rename`):
     /// el plan aterrizará sobre el dir VIVO del pane activo en este instante
     /// (viaja dentro del modal y de la petición — un `cd` posterior no lo
@@ -1850,6 +1902,7 @@ impl NorteGui {
             "pane.copy" => self.open_transfer_modal(TransferKind::Copy),
             "pane.move" => self.open_transfer_modal(TransferKind::Move),
             "pane.delete" => self.open_delete_modal(),
+            "pane.rename" => self.open_rename(),
             "pane.ai-rename" => self.open_ai_rename(),
             // Plan de ratón (tarea 4): al portapapeles, no al daemon — es la
             // única op de esta lista que no toca ningún backend.
@@ -2601,7 +2654,9 @@ impl NorteGui {
             // su comportamiento previo).
             if matches!(
                 m,
-                Modal::AiRenamePrompt { .. } | Modal::SemanticQuery { .. }
+                Modal::AiRenamePrompt { .. }
+                    | Modal::SemanticQuery { .. }
+                    | Modal::RenamePrompt { .. }
             ) && (ks.modifiers.control || ks.modifiers.alt || ks.modifiers.platform)
             {
                 cx.notify();
@@ -4808,6 +4863,7 @@ impl NorteGui {
             Modal::ConfirmQuit { .. } => "gui-modal-footer-quit",
             // Claves COMPARTIDAS con la TUI (mismas teclas y semántica en
             // GPUI: Enter/Esc, y/n, ↓/↑).
+            Modal::RenamePrompt { .. } => "gui-modal-rename-footer",
             Modal::AiRenamePrompt { .. } => "modal-ai-rename-hint",
             Modal::AiRenamePlan { .. } => "modal-ai-rename-plan-hint",
             // "Esc cancela" aquí es honesto: cancela el MODAL (la petición
@@ -4816,16 +4872,17 @@ impl NorteGui {
             Modal::SemanticQuery { .. } => "modal-semantic-hint",
             Modal::SemanticHits { .. } => "modal-semantic-hits-hint",
         });
-        // La línea de modo (índice 1 en ConfirmDelete) se alerta en rojo si es
-        // borrado PERMANENTE.
-        let alert_line = matches!(
-            m,
+        // Líneas que van en rojo: el modo de un borrado PERMANENTE (índice 1
+        // en ConfirmDelete) y el diagnóstico del renombrado, que `modal_lines`
+        // pone SIEMPRE el último. Un error del mismo color que el resto se
+        // lee como una línea más del formulario.
+        let alert_line = match m {
             Modal::ConfirmDelete {
-                permanent: true,
-                ..
-            }
-        )
-        .then_some(1);
+                permanent: true, ..
+            } => Some(1),
+            Modal::RenamePrompt { error: Some(_), .. } => Some(lines.len().saturating_sub(1)),
+            _ => None,
+        };
 
         let mut panel = div()
             .id("modal")
@@ -5383,6 +5440,41 @@ fn modal_lines(m: &Modal) -> Vec<String> {
                     ],
                 )]
             }
+        }
+        // Renombrado in situ (`pane.rename`): tres líneas etiquetadas FUERA
+        // de banda, una por nombre — el actual y el que se está tecleando —
+        // con badge por línea y el cursor `_` al final del editable. Jamás
+        // en el mismo renglón con un `→` en medio: la doctrina del corpus
+        // hostil (`arrow_join_spoof`) es que un nombre no puede llevarse por
+        // delante la etiqueta de otro. Los dos van ENMASCARADOS: el actual
+        // sale del disco y el editable puede llegar por paste.
+        Modal::RenamePrompt {
+            from, name, error, ..
+        } => {
+            let actual = from.file_name().map_or(&b""[..], Segment::as_bytes);
+            let (actual_txt, actual_hostil) = norte_frontend::display_name(actual);
+            let (nuevo_txt, nuevo_hostil) = norte_frontend::display_name(name);
+            let mut lines = vec![
+                norte_i18n::t("gui-modal-rename-title"),
+                hostile_badged(
+                    actual_hostil,
+                    norte_i18n::ta("gui-modal-rename-from", &[("name", actual_txt.as_str())]),
+                ),
+                hostile_badged(
+                    nuevo_hostil,
+                    norte_i18n::ta(
+                        "gui-modal-rename-to",
+                        &[("name", format!("{nuevo_txt}_").as_str())],
+                    ),
+                ),
+            ];
+            // El diagnóstico del último intento: `banner_safe` por si un
+            // error futuro llegara a citar texto de terceros (los de hoy
+            // —`VPathError`, Fluent— son taxonomía cerrada).
+            if let Some(e) = error {
+                lines.push(banner_safe(e));
+            }
+            lines
         }
         Modal::AiRenamePrompt { query, .. } => {
             // Molde TUI `ai_rename_modal_text`: la instrucción es texto de
@@ -6996,7 +7088,7 @@ mod tests {
     // Menú contextual (tarea 4 del plan de ratón).
     use super::{
         ContextMenu, clipboard_text, context_menu, context_target, expire_stale_menu, keymap,
-        menu_origin, scheme_is_read_only,
+        menu_origin, rename_modal_for, scheme_is_read_only,
     };
     use gpui::rgb;
     use norte_frontend::mouse::{Mods, Spot};
@@ -7267,6 +7359,15 @@ mod tests {
                 Modal::AiRenamePrompt {
                     dir: to.clone(),
                     query: fixture.bytes.clone(),
+                },
+                // Rename: hostil en el nombre ACTUAL (sale del disco) y en
+                // el editable (entra por paste), en el mismo modal — y con
+                // un diagnóstico pendiente, que es una línea más que pintar.
+                Modal::RenamePrompt {
+                    from: item.clone(),
+                    to_dir: VPath::parse("mem:///").unwrap(),
+                    name: fixture.bytes.clone(),
+                    error: Some(norte_i18n::t("msg-transfer-name-same")),
                 },
                 // M4-IA-2: prompt semántico con la misma query pegada…
                 Modal::SemanticQuery {
@@ -9521,6 +9622,66 @@ mod tests {
             VPath::parse(lineas[1]).expect("el wire se reparsea"),
             control
         );
+    }
+
+    // --- Renombrado in situ (`pane.rename`) --------------------------------
+
+    /// El destino de un rename es el PADRE de la entrada, no el `dir` del
+    /// pane, y el nombre nace con los BYTES reales del actual. En un pane
+    /// virtual (resultados de búsqueda) el `dir` es la raíz del recorrido:
+    /// tomarlo movería el fichero de sitio en vez de renombrarlo.
+    #[test]
+    fn el_rename_aterriza_en_el_padre_con_los_bytes_del_nombre_actual() {
+        let from = VPath::parse("mem:///hondo/sub/%FF%FE.bin").unwrap();
+        let Some(super::Modal::RenamePrompt {
+            to_dir,
+            name,
+            error,
+            from: f,
+        }) = rename_modal_for(&from)
+        else {
+            panic!("una entrada con padre y nombre abre el modal");
+        };
+        assert_eq!(f, from);
+        assert_eq!(
+            to_dir,
+            VPath::parse("mem:///hondo/sub").unwrap(),
+            "el padre de la ENTRADA, no el dir del pane"
+        );
+        assert_eq!(
+            name.as_slice(),
+            b"\xFF\xFE.bin",
+            "sembrado con los bytes reales, sin decodificar ni lossy"
+        );
+        assert!(error.is_none());
+    }
+
+    /// Una raíz no tiene nombre ni padre: no hay nada que renombrar y no se
+    /// abre modal (jamás un panic).
+    #[test]
+    fn una_raiz_no_se_renombra() {
+        assert!(rename_modal_for(&VPath::parse("mem:///").unwrap()).is_none());
+    }
+
+    /// Las claves Fluent del modal de rename son claves REALES en los dos
+    /// locales (una errata se pintaría como el propio id, y el test de
+    /// paridad de `norte-i18n` no la vería: comprueba que los catálogos
+    /// coinciden, no que este fichero los nombre bien).
+    #[test]
+    fn las_claves_del_modal_de_rename_existen_en_ambos_locales() {
+        use norte_i18n::{Lang, t_in};
+        for clave in [
+            "gui-modal-rename-title",
+            "gui-modal-rename-from",
+            "gui-modal-rename-to",
+            "gui-modal-rename-footer",
+            // Compartida con la TUI: mismo mensaje, mismo significado.
+            "msg-transfer-name-same",
+        ] {
+            for lang in [Lang::Es, Lang::En] {
+                assert_ne!(t_in(lang, clave), clave, "falta {clave} en {lang:?}");
+            }
+        }
     }
 
     /// TODA entrada del menú despacha un comando que el TECLADO también

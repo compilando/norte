@@ -110,17 +110,20 @@ Commit: `feat(gui): ctrl and shift click, and drag, mark entries`.
 - [x] A menu at the pointer with the operations that already exist as commands:
       open (`nav.enter`), view, copy, move, rename, delete, and "copy path".
       Every entry dispatches the SAME command the keyboard does — no second
-      code path. Two of the seven needed a decision: the GUI has no plain
-      rename (`pane.rename` is TUI-only), so the entry runs the AI rename and
-      its label says out loud that it acts on the whole folder; and "copy
-      path" had no command anywhere, so it became one — `pane.copy-path`,
-      `alt+y`, in the palette like the rest, with the menu as one caller and
-      not its owner.
+      code path. Two of them had no command to dispatch and both became real
+      commands rather than menu-only actions: `pane.rename` (rename in place,
+      `shift+f6` — the name and the chord were already in the shared presets;
+      only the GUI implementation was missing) and `pane.copy-path` (`alt+y`).
+      The AI rename keeps its own entry, separately labelled, because it is a
+      different operation (it acts on the whole folder).
 - [x] The menu acts on the marks when the clicked row is marked, and on the
       clicked row alone when it is not. That is the rule every file manager
       uses and the one users expect. Clicking an UNMARKED row drops that
       pane's marks (desktop behaviour): `marked_paths` prefers marks, so
-      leaving them would make the menu say "1" and the copy take eleven.
+      leaving them would make the menu say "1" and the copy take eleven. The
+      discarded selection cannot be recovered — a deliberate trade, stated in
+      `context_target`'s own header, taken because the failure it prevents is
+      silent and this one is visible the instant the menu opens.
 - [x] Entries that cannot run right now (read-only backend, remote without the
       capability) are shown disabled with the reason, reusing the `Availability`
       vocabulary `norte-help` already defines rather than inventing a second one.

@@ -152,6 +152,17 @@ fn gated(ok: bool, reason: Reason) -> Availability {
     }
 }
 
+/// El PRIMER motivo cuya condición se cumple, o `Available` si ninguna. El
+/// orden de la lista es el de importancia: con dos impedimentos a la vez se
+/// explica el que el usuario tendría que resolver primero (soltar marcas no
+/// hace escribible un zip).
+fn first_failure(checks: &[(bool, Reason)]) -> Availability {
+    match checks.iter().find(|(hit, _)| *hit) {
+        Some((_, reason)) => no(*reason),
+        None => Availability::Available,
+    }
+}
+
 /// Las entradas del menú, en orden de pintado. TODAS aparecen SIEMPRE: lo que
 /// cambia entre contextos es su [`Availability`], no la lista.
 #[must_use]
@@ -187,9 +198,22 @@ pub fn items(facts: &Facts) -> Vec<Item> {
             ),
         },
         Item {
-            // El único rename que la GUI tiene HOY es el de IA, y actúa sobre
-            // la carpeta entera, no sobre el objetivo del menú: la etiqueta lo
-            // dice en voz alta en vez de fingir un alcance que no tiene.
+            // Renombrar de verdad (`pane.rename`, shift+F6): UNA entrada, la
+            // del cursor. Con varias marcas se apaga en vez de renombrar la
+            // del cursor a espaldas del objetivo que el menú anuncia —
+            // renombrar en bloque sería un batch-rename, otra feature.
+            command: "pane.rename",
+            label_key: "gui-menu-rename",
+            avail: first_failure(&[
+                (facts.source_read_only, Reason::ReadOnlyBackend),
+                (!single, Reason::WrongTarget),
+            ]),
+        },
+        Item {
+            // El rename de IA sigue estando, y sigue siendo OTRA cosa: actúa
+            // sobre la carpeta entera, no sobre el objetivo del menú, y la
+            // etiqueta lo dice en voz alta en vez de fingir un alcance que no
+            // tiene.
             command: "pane.ai-rename",
             label_key: "gui-menu-rename-ai",
             avail: gated(!facts.source_read_only, Reason::ReadOnlyBackend),
@@ -343,7 +367,7 @@ mod tests {
     #[test]
     fn el_menu_tiene_las_mismas_entradas_en_todo_contexto() {
         let esperados: Vec<&str> = items(&facts()).iter().map(|i| i.command).collect();
-        assert_eq!(esperados.len(), 7);
+        assert_eq!(esperados.len(), 8);
         for (kind, ro_src, ro_dst, count) in [
             (EntryKind::Dir, false, false, 1),
             (EntryKind::File, true, true, 9),
@@ -453,6 +477,48 @@ mod tests {
             no(Reason::WrongTarget),
             "cuatro marcas no se «abren»"
         );
+    }
+
+    /// Renombrar es UNA entrada: con varias marcas se apaga (renombraría la
+    /// del cursor a espaldas del objetivo que el menú anuncia), y dentro de
+    /// un archivo se apaga por el backend — con los dos impedimentos a la
+    /// vez gana el del backend, que es el que habría que resolver primero.
+    /// La entrada de IA sigue siendo OTRA, y no depende del recuento porque
+    /// actúa sobre la carpeta.
+    #[test]
+    fn renombrar_es_una_sola_entrada_y_la_de_ia_es_otra() {
+        let avail = |f: &Facts, cmd: &str| {
+            items(f)
+                .into_iter()
+                .find(|i| i.command == cmd)
+                .unwrap_or_else(|| panic!("falta {cmd}"))
+                .avail
+        };
+        assert_eq!(avail(&facts(), "pane.rename"), Availability::Available);
+        assert_eq!(avail(&facts(), "pane.ai-rename"), Availability::Available);
+
+        let marcas = Facts {
+            count: 7,
+            ..facts()
+        };
+        assert_eq!(avail(&marcas, "pane.rename"), no(Reason::WrongTarget));
+        assert_eq!(
+            avail(&marcas, "pane.ai-rename"),
+            Availability::Available,
+            "el rename de IA es de la CARPETA: el recuento no le afecta"
+        );
+
+        let zip = Facts {
+            count: 7,
+            source_read_only: true,
+            ..facts()
+        };
+        assert_eq!(
+            avail(&zip, "pane.rename"),
+            no(Reason::ReadOnlyBackend),
+            "con dos impedimentos gana el del backend"
+        );
+        assert_eq!(avail(&zip, "pane.ai-rename"), no(Reason::ReadOnlyBackend));
     }
 
     /// Esc cierra; ↑/↓ mueven sin salirse; una tecla ajena se consume.

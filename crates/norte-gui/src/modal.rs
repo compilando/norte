@@ -29,6 +29,14 @@ pub use norte_frontend::SEMANTIC_HIT_LIMIT;
 /// el límite REAL (4 KiB) lo pone el daemon.
 pub const AI_INSTRUCTION_MAX_CHARS: usize = 256;
 
+/// Tope de BYTES del nombre de [`Modal::RenamePrompt`]. Anti-paste, no una
+/// regla de nombres: el límite real por componente lo pone el backend (255
+/// bytes en la mayoría de filesystems y en MinIO, otra cosa en otros) y
+/// quien lo hace cumplir es él, no este modal. Por eso el tope es holgado y
+/// sólo frena lo que se AÑADE: un nombre ya existente más largo que esto se
+/// siembra entero y se puede seguir editando (borrar siempre vale).
+pub const RENAME_NAME_MAX_BYTES: usize = 512;
+
 /// Copia o movimiento (la clase de una transferencia).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransferKind {
@@ -124,6 +132,37 @@ pub enum Modal {
         /// audit MAJOR-3: sin esto, la cola de un plan largo se aplicaría
         /// sin poder verse).
         offset: usize,
+    },
+    /// Renombrar in situ (`pane.rename`, shift+F6 — paridad de SEMÁNTICA con
+    /// el `TransferName` de la TUI en su modo rename, no de widget).
+    ///
+    /// Tres cosas que lo definen, y las tres importan:
+    ///
+    /// - El destino es el PADRE de `from`, no el dir del pane: renombrar
+    ///   nunca mueve de sitio.
+    /// - Actúa sobre UNA entrada (el cursor). Las marcas no renombran en
+    ///   bloque — eso sería un batch-rename, otra feature.
+    /// - El nombre editable son BYTES, sembrados con los del nombre real. La
+    ///   TUI siembra TEXTO (decodificado o lossy) y por eso necesita un flag
+    ///   `touched` y un guard anti-`U+FFFD`: sin ellos, renombrar un nombre
+    ///   no-UTF8 escribiría el residuo lossy en disco. Aquí no hay residuo
+    ///   que heredar porque no hay decodificación: los bytes que no toca el
+    ///   usuario salen byte-exactos, incluso si edita el resto del nombre
+    ///   (un `.bak` al final de un nombre CP437 conserva el prefijo crudo).
+    ///   El precio es que un `U+FFFD` TECLEADO a propósito sí se acepta —
+    ///   asimetría deliberada con la TUI, que no puede distinguirlo del
+    ///   residuo y por eso lo rechaza.
+    RenamePrompt {
+        /// Entrada a renombrar (absoluta): también es la fuente del nombre
+        /// ORIGINAL que se pinta y contra el que se compara el destino.
+        from: VPath,
+        /// Padre de `from` — dónde aterriza el nombre nuevo.
+        to_dir: VPath,
+        /// El nombre en edición, en BYTES (sembrado con los de `from`).
+        name: Vec<u8>,
+        /// Diagnóstico del último intento inválido, bajo el campo. El texto
+        /// tecleado sobrevive para corregirlo (paridad TUI).
+        error: Option<String>,
     },
     /// Prompt de consulta de la búsqueda semántica (M4-IA-2). Query en
     /// BYTES (molde [`Modal::AiRenamePrompt`]): push/backspace
@@ -280,6 +319,74 @@ pub fn on_key(modal: &mut Modal, key: &str, key_char: Option<&str>) -> ModalOutc
             "y" => ModalOutcome::Quit,
             "n" | "escape" => ModalOutcome::Dismiss,
             _ => ModalOutcome::Ignored,
+        },
+        Modal::RenamePrompt {
+            from,
+            to_dir,
+            name,
+            error,
+        } => match key {
+            "enter" => {
+                // El nombre sale tal cual (BYTES) — ni decodificado ni
+                // recodificado. `Segment` es quien dice qué es un nombre
+                // válido (ni vacío, ni `/`, ni NUL, ni `.`/`..`), la misma
+                // puerta que usa el resto del programa.
+                match norte_proto::Segment::new(name.clone()) {
+                    Ok(seg) => {
+                        let dest = to_dir.join(seg);
+                        if dest == *from {
+                            // Renombrar a lo mismo no es una op: someterlo
+                            // gastaría una task y un apunte de journal para
+                            // nada.
+                            *error = Some(norte_i18n::t("msg-transfer-name-same"));
+                            return ModalOutcome::StayOpen;
+                        }
+                        ModalOutcome::Submit(vec![PendingOp::Transfer {
+                            kind: TransferKind::Move,
+                            from: from.clone(),
+                            to: dest,
+                            opts: TransferOptions::default(),
+                        }])
+                    }
+                    Err(e) => {
+                        // Taxonomía cerrada de `VPathError`: sin bytes del
+                        // usuario dentro (por eso se interpola cruda, mismo
+                        // criterio que los banners del protocolo).
+                        *error = Some(e.to_string());
+                        ModalOutcome::StayOpen
+                    }
+                }
+            }
+            "escape" => ModalOutcome::Dismiss,
+            "backspace" => {
+                // Retira el último carácter UTF-8 COMPLETO cuando lo hay; un
+                // byte suelto no-UTF8 (el `0xFF` de un nombre CP437) se
+                // retira solo, que es lo único honesto: no forma parte de
+                // ningún carácter.
+                if name.is_empty() {
+                    return ModalOutcome::Ignored;
+                }
+                let mut cut = name.len() - 1;
+                while cut > 0 && (name[cut] & 0b1100_0000) == 0b1000_0000 {
+                    cut -= 1;
+                }
+                name.truncate(cut);
+                *error = None;
+                ModalOutcome::StayOpen
+            }
+            _ => {
+                if let Some(c) = typed_char(key, key_char) {
+                    if c.is_control() || name.len() + c.len_utf8() > RENAME_NAME_MAX_BYTES {
+                        return ModalOutcome::Ignored;
+                    }
+                    let mut buf = [0u8; 4];
+                    name.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                    *error = None;
+                    ModalOutcome::StayOpen
+                } else {
+                    ModalOutcome::Ignored
+                }
+            }
         },
         Modal::AiRenamePrompt { dir, query } => match key {
             "enter" => {
@@ -893,5 +1000,180 @@ mod tests {
         };
         assert_eq!(*cursor, 0);
         assert_eq!(*offset, 0, "la ventana siguió al cursor por arriba");
+    }
+
+    // --- Renombrado in situ (`pane.rename`) -------------------------------
+    //
+    // Lo que se clava aquí es lo que distingue este modal de un campo de
+    // texto: que el nombre son BYTES de punta a punta. Un nombre que no es
+    // UTF-8 (un zip de MS-DOS, un tar de otra máquina) tiene que poder
+    // renombrarse sin que la GUI lo reescriba de camino.
+
+    /// Un nombre inválido como UTF-8 se siembra y VUELVE byte-exacto: el
+    /// usuario añade una extensión al final y los bytes crudos del principio
+    /// llegan intactos al destino. Es la propiedad entera del diseño de
+    /// bytes: con un buffer de texto, esos `0xFF 0xFE` habrían salido como
+    /// `U+FFFD` y el rename habría creado un fichero con otro nombre.
+    #[test]
+    fn un_nombre_no_utf8_sobrevive_al_rename_byte_a_byte() {
+        let from = vp("mem:///d/%FF%FE.bin");
+        let original = from.file_name().unwrap().as_bytes().to_vec();
+        assert_eq!(original, b"\xFF\xFE.bin", "sembrado con los bytes reales");
+        let mut m = Modal::RenamePrompt {
+            from: from.clone(),
+            to_dir: vp("mem:///d"),
+            name: original.clone(),
+            error: None,
+        };
+        for c in ".bak".chars() {
+            assert_eq!(
+                on_key(&mut m, "", Some(&c.to_string())),
+                ModalOutcome::StayOpen
+            );
+        }
+        let ModalOutcome::Submit(ops) = on_key(&mut m, "enter", None) else {
+            panic!("enter con un nombre nuevo válido somete");
+        };
+        let [
+            PendingOp::Transfer {
+                kind,
+                from: f,
+                to,
+                opts,
+            },
+        ] = ops.as_slice()
+        else {
+            panic!("un rename es UN move: {ops:?}");
+        };
+        assert_eq!(*kind, TransferKind::Move, "renombrar es mover");
+        assert_eq!(*f, from);
+        assert_eq!(*opts, TransferOptions::default());
+        assert_eq!(
+            to.file_name().unwrap().as_bytes(),
+            b"\xFF\xFE.bin.bak",
+            "el prefijo crudo llega intacto, sin un solo U+FFFD"
+        );
+        assert_eq!(to.parent().as_ref(), Some(&vp("mem:///d")), "mismo dir");
+    }
+
+    /// Confirmar sin tocar nada no somete: renombrar a lo mismo no es una op
+    /// (gastaría task y apunte de journal para nada). El modal SIGUE abierto,
+    /// con el diagnóstico y el nombre tecleado intactos.
+    #[test]
+    fn confirmar_el_mismo_nombre_no_somete_y_lo_dice() {
+        let from = vp("mem:///d/%FF%FE.bin");
+        let mut m = Modal::RenamePrompt {
+            from: from.clone(),
+            to_dir: vp("mem:///d"),
+            name: from.file_name().unwrap().as_bytes().to_vec(),
+            error: None,
+        };
+        assert_eq!(on_key(&mut m, "enter", None), ModalOutcome::StayOpen);
+        let Modal::RenamePrompt { name, error, .. } = &m else {
+            unreachable!()
+        };
+        assert!(error.is_some(), "el motivo se dice");
+        assert_eq!(
+            name.as_slice(),
+            b"\xFF\xFE.bin",
+            "y lo tecleado sobrevive para corregirlo"
+        );
+    }
+
+    /// Un nombre que `Segment` rechaza (`..`, vacío, con `/`) no somete nada
+    /// y deja el diagnóstico bajo el campo.
+    #[test]
+    fn un_nombre_invalido_no_somete_y_deja_el_motivo() {
+        for malo in [&b".."[..], &b""[..], &b"a/b"[..]] {
+            let mut m = Modal::RenamePrompt {
+                from: vp("mem:///d/x"),
+                to_dir: vp("mem:///d"),
+                name: malo.to_vec(),
+                error: None,
+            };
+            assert_eq!(
+                on_key(&mut m, "enter", None),
+                ModalOutcome::StayOpen,
+                "{malo:?} no debe someterse"
+            );
+            let Modal::RenamePrompt { error, .. } = &m else {
+                unreachable!()
+            };
+            assert!(error.is_some(), "sin motivo para {malo:?}");
+        }
+    }
+
+    /// Backspace retira un carácter UTF-8 COMPLETO cuando lo hay, y un byte
+    /// suelto no-UTF8 cuando no (no forma parte de ningún carácter). El tope
+    /// anti-paste sólo frena lo que se AÑADE.
+    #[test]
+    fn backspace_respeta_los_caracteres_y_los_bytes_sueltos() {
+        let mut m = Modal::RenamePrompt {
+            from: vp("mem:///d/x"),
+            to_dir: vp("mem:///d"),
+            name: "añ".as_bytes().to_vec(),
+            error: None,
+        };
+        assert_eq!(on_key(&mut m, "backspace", None), ModalOutcome::StayOpen);
+        let Modal::RenamePrompt { name, .. } = &m else {
+            unreachable!()
+        };
+        assert_eq!(
+            name.as_slice(),
+            "a".as_bytes(),
+            "la ñ entera, no medio byte"
+        );
+
+        let mut m = Modal::RenamePrompt {
+            from: vp("mem:///d/x"),
+            to_dir: vp("mem:///d"),
+            name: vec![b'a', 0xFF],
+            error: None,
+        };
+        on_key(&mut m, "backspace", None);
+        let Modal::RenamePrompt { name, .. } = &m else {
+            unreachable!()
+        };
+        assert_eq!(name.as_slice(), b"a", "el byte suelto se va solo");
+
+        // Vacío: nada que retirar.
+        on_key(&mut m, "backspace", None);
+        let mut vacio = m;
+        assert_eq!(on_key(&mut vacio, "backspace", None), ModalOutcome::Ignored);
+    }
+
+    /// El tope de bytes frena el paste sin bloquear la edición de un nombre
+    /// que ya era más largo (borrar siempre vale).
+    #[test]
+    fn el_tope_del_nombre_solo_frena_lo_que_se_anade() {
+        let largo = vec![b'x'; RENAME_NAME_MAX_BYTES + 10];
+        let mut m = Modal::RenamePrompt {
+            from: vp("mem:///d/x"),
+            to_dir: vp("mem:///d"),
+            name: largo.clone(),
+            error: None,
+        };
+        assert_eq!(
+            on_key(&mut m, "", Some("z")),
+            ModalOutcome::Ignored,
+            "no crece más"
+        );
+        assert_eq!(on_key(&mut m, "backspace", None), ModalOutcome::StayOpen);
+        let Modal::RenamePrompt { name, .. } = &m else {
+            unreachable!()
+        };
+        assert_eq!(name.len(), largo.len() - 1, "pero sí se puede acortar");
+    }
+
+    /// Esc cierra sin renombrar.
+    #[test]
+    fn esc_cierra_el_rename_sin_someter() {
+        let mut m = Modal::RenamePrompt {
+            from: vp("mem:///d/x"),
+            to_dir: vp("mem:///d"),
+            name: b"x".to_vec(),
+            error: None,
+        };
+        assert_eq!(on_key(&mut m, "escape", None), ModalOutcome::Dismiss);
     }
 }

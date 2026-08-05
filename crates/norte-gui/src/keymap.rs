@@ -42,6 +42,11 @@ pub const COMMANDS: &[&str] = &[
     "pane.copy",
     "pane.move",
     "pane.delete",
+    // Renombrado in situ. El nombre y el chord (`shift+f6`) son los del
+    // catálogo COMPARTIDO —los tres presets ya lo bindean para la TUI—, así
+    // que no necesita supplemento: lo que faltaba era la implementación, no
+    // el binding.
+    "pane.rename",
     "task.cancel",
     "task.next",
     "task.prev",
