@@ -79,7 +79,7 @@ impl History {
     ///
     /// Feeds BOTH structures: [`History::push`] for the MRU the popup paints,
     /// and the back stack for the trail `nav.back` walks. They are fed from
-    /// the same event but kept apart on purpose — see the [`History::back`]
+    /// the same event but kept apart on purpose — see the `History::back`
     /// field docs for why one cannot serve as the other.
     ///
     /// Skips the trail push when `prev` is already its top, mirroring the
