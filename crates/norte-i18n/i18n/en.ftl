@@ -238,6 +238,10 @@ msg-semantic-failed = Semantic search failed: { $error }
 msg-semantic-invalid = Semantic search: invalid response from the daemon — nothing shown
 msg-semantic-in-search = Semantic search is not available in a search pane
 msg-hidden-hidden = hidden entries hidden
+# H3b: Enter on a help row that documents an OVERLAY verb (`dialog.*`). Those
+# are not dispatchable from a pane, so nothing runs — said out loud, because a
+# swallowed Enter reads as a command that ran.
+msg-help-not-runnable = that row documents an overlay key, not a command a pane can run
 msg-marked-by-pattern = { $n } marks changed
 msg-mouse-capture-failed = the terminal did not accept mouse capture: norte stays keyboard-only
 # Drag in flight, BOTH frontends: what a release would do right now. Never

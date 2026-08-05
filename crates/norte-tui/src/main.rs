@@ -21,12 +21,14 @@ use norte_proto::methods::{FsSearchParams, SearchHits};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{
     ALLOW_COLUMNS, ALLOW_EXTENSIONS, ALLOW_NAV_HOTLIST, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, App,
-    DialogOutcome, ExtensionManager, HelpView, KeymapsError, Modal, NavPopupKind, Palette, Pane,
-    PendingWrite, PickerAction, SearchDialog, SearchState, Settings, SettingsEditError,
-    TransferKind, config_error_category, detail_for_bar, dialog_action, error_category,
-    error_message, io_error_category, keymaps_error_category, theme_error_category, trust_lua_key,
+    DialogOutcome, ExtensionManager, HelpOutcome, HelpView, KeymapsError, Modal, NavPopupKind,
+    Palette, Pane, PendingWrite, PickerAction, SearchDialog, SearchState, Settings,
+    SettingsEditError, TransferKind, config_error_category, detail_for_bar, dialog_action,
+    error_category, error_message, io_error_category, keymaps_error_category, theme_error_category,
+    trust_lua_key,
 };
 use norte_tui::config::{self, Layers, WatchMode};
+use norte_tui::help::TuiChords;
 use norte_tui::hints::DialogHints;
 use norte_tui::keymap::{
     COMMANDS, Command, DIALOG_COMMANDS, Effective, Resolution, Resolver, Screen,
@@ -657,6 +659,12 @@ async fn main() -> Result<()> {
     // #44: avisos `connection.degraded` del daemon → indicador persistente.
     let degraded = backend.take_degraded();
     let mut help_lines = norte_tui::help::build(&browse_eff, &viewer_eff, &dialog_eff);
+    // H3b: the chord resolver the help corpus is rendered through. Built from
+    // the SAME three effectives as `help_lines` and BEFORE they move into the
+    // `Resolver`s below (it borrows), and rebuilt alongside them on every hot
+    // reload — the obligation `TuiChords`' own rustdoc states: a rebind that
+    // does not reach this resolver is a page that teaches the OLD key.
+    app.help_chords = Arc::new(TuiChords::new(&browse_eff, &viewer_eff, &dialog_eff, lang));
     // Filas de la command palette (H1 T4): PRECOMPUTADAS de los efectivos
     // browse/viewer ANTES de que se muevan al `Resolver` de abajo — mismo
     // criterio que `help_lines`/`dialog_hints`.
@@ -697,6 +705,7 @@ async fn main() -> Result<()> {
         &mut viewer_resolver,
         &mut dialog_resolver,
         &mut help_lines,
+        lang,
         layers,
         cli_preset,
         cfg.quick_search_mode,
@@ -974,6 +983,13 @@ async fn run(
     viewer_resolver: &mut Resolver,
     dialog_resolver: &mut Resolver,
     help_lines: &mut Vec<String>,
+    // H3b: the NEGOTIATED language (`NORTE_LANG` > `[ui] lang` > environment,
+    // the same value handed to `norte_i18n::force`). The help corpus is
+    // per-locale, so the overlay must open on the locale the rest of the UI
+    // already speaks — `Lang::from_env()` here would hand a reader whose
+    // `[ui] lang` says `es` an English corpus inside a Spanish UI. Fixed for
+    // the session: `force` is called once, so the hot reload keeps this value.
+    lang: norte_i18n::Lang,
     layers: Layers,
     cli_preset: Option<String>,
     // Modo del quick search (`[ui] quick_search`): vive en el run loop como
@@ -1440,6 +1456,7 @@ async fn run(
                     viewer_resolver,
                     dialog_resolver,
                     help_lines,
+                    lang,
                     &layers,
                     cli_preset.as_deref(),
                     &mut quick_mode,
@@ -1506,6 +1523,7 @@ async fn run(
                                 backend,
                                 &mut events,
                                 help_lines,
+                                lang,
                                 quick_mode,
                                 confirm_quit,
                                 &cfg,
@@ -1686,6 +1704,7 @@ async fn run(
                                         backend,
                                         &mut events,
                                         help_lines,
+                                        lang,
                                         quick_mode,
                                         confirm_quit,
                                         &cfg,
@@ -1723,28 +1742,53 @@ async fn run(
                         // teclas son fijas, hardcodeadas en `on_settings_key`.
                         on_settings_key(app, key.modifiers, key.code).await;
                     } else if !modal_wins(app)
-                        && let Some(help) = &mut app.help
+                        && app.help.is_some()
                     {
-                        // H3b STUB — task 7 replaces this whole arm with the
-                        // real routing (the `dialog` resolver filtered through
-                        // `app::help_action`/`ALLOW_HELP`, filter capture
-                        // included). Until then the overlay keeps the keys it
-                        // had, mapped onto the new model so the crate is not
-                        // left broken and the page stays navigable.
-                        // ctrl+c conserva su significado global (salir).
-                        match (key.modifiers, key.code) {
-                            (KeyModifiers::CONTROL, KeyCode::Char('c')) => app.quit = true,
-                            (
-                                KeyModifiers::NONE,
-                                KeyCode::Esc | KeyCode::Char('q') | KeyCode::F(1),
-                            ) => app.help = None,
-                            (KeyModifiers::NONE, KeyCode::Up) => help.state.up(),
-                            (KeyModifiers::NONE, KeyCode::Down) => help.state.down(),
-                            (KeyModifiers::NONE, KeyCode::PageUp) => help.state.page_up(PAGE),
-                            (KeyModifiers::NONE, KeyCode::PageDown) => help.state.page_down(PAGE),
-                            (KeyModifiers::NONE, KeyCode::Tab) => help.state.toggle_focus(),
-                            (KeyModifiers::NONE, KeyCode::Enter) => help.state.open_selected(),
-                            _ => {}
+                        // H3b: overlay de ayuda. La ruta de teclas vive en
+                        // `on_help_key` (testeable, como `on_columns_key`);
+                        // aquí solo queda lo que necesita el run loop, que es
+                        // DESPACHAR la fila activada. El overlay ya se cerró:
+                        // el comando actúa sobre los panes de debajo y la
+                        // ayuda taparía la confirmación que abra.
+                        if let Some(cmd) =
+                            on_help_key(app, dialog_resolver, key.modifiers, key.code)
+                        {
+                            // MISMO despacho y MISMA contabilidad posterior que
+                            // el Enter de la palette: una fila de la ayuda es
+                            // `nav.parent` tanto como lo es una de la palette,
+                            // así que el camino del cd (relleno paginado,
+                            // decoración, cosecha de la búsqueda viva, opener
+                            // externo pendiente) tiene que ser el mismo.
+                            let outcome = dispatch(
+                                app,
+                                backend,
+                                &mut events,
+                                help_lines,
+                                lang,
+                                quick_mode,
+                                confirm_quit,
+                                &cfg,
+                                cmd,
+                            )
+                            .await;
+                            if let Some(pane) = cd_landed_pane(&outcome) {
+                                app.apply_scheme_sort(pane);
+                                let dir = app.panes[pane].dir().clone();
+                                let paths: Vec<VPath> = app.panes[pane]
+                                    .entries()
+                                    .iter()
+                                    .map(|e| e.path.clone())
+                                    .collect();
+                                let plugin_cols = app.columns.plugin_ids_for(dir.scheme());
+                                decorate_fetch[pane] =
+                                    spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
+                            }
+                            apply_cd(&mut fill, &mut last_probed, outcome);
+                            reap_search_run(app, &mut search_run);
+                            if let Some(pending) = app.pending_open.take() {
+                                app.message =
+                                    Some(launch_opener(terminal, capture, pending).await);
+                            }
                         }
                     } else if app.modal.is_some() {
                         // MINOR-4 (H1 close): un modal llegado mientras la
@@ -2119,6 +2163,7 @@ async fn run(
                                             backend,
                                             &mut events,
                                             help_lines,
+                                            lang,
                                             quick_mode,
                                             confirm_quit,
                                             &cfg,
@@ -2194,6 +2239,7 @@ async fn run(
                                         backend,
                                         &mut events,
                                         help_lines,
+                                        lang,
                                         quick_mode,
                                         confirm_quit,
                                         &cfg,
@@ -2399,6 +2445,438 @@ async fn on_columns_key(
         _ => {} // ya filtrado por ALLOW_COLUMNS; inalcanzable en la práctica
     }
     false
+}
+
+/// Routes one key inside the help overlay (H3b), and answers with the command
+/// the run loop must DISPATCH — `Some` only for `Enter` on a runnable body
+/// row, and only after this function has already closed the overlay.
+///
+/// Extracted from the run loop for the same reason as [`on_columns_key`]:
+/// everything here is decidable from `App` plus the `dialog` resolver, and the
+/// dispatch it hands back is the one thing that is not.
+///
+/// TWO REGIMES, the same split the palette and the search dialog already have:
+///
+/// * While the sidebar filter is open the keys are FIXED. There is no
+///   `dialog.*` verb for "type a character", so resolving through the keymap
+///   here would make every printable key mean whatever it is bound to instead
+///   of itself. `Esc` LEAVES the box keeping the text — the model's contract:
+///   leaving a search is not undoing it, `Backspace` is what empties it.
+/// * Otherwise the key resolves through the shared `dialog` resolver like
+///   every other overlay's, and the resulting command is filtered through
+///   [`norte_tui::app::help_action`]/`ALLOW_HELP` — the SAME list the footer
+///   hint is generated from. A verb outside it is inert.
+///
+/// Two keys keep their global meaning ahead of both regimes (H1 T2, as in
+/// every other overlay): `ctrl+c` quits, and `ctrl+p` hands what the reader
+/// has typed to the command palette — the two are the same model at different
+/// speeds (the `help` topic says as much), so the filter should not have to be
+/// retyped to cross between them.
+fn on_help_key(
+    app: &mut App,
+    resolver: &mut Resolver,
+    mods: KeyModifiers,
+    code: KeyCode,
+) -> Option<Command> {
+    // Salida de emergencia global, hardcodeada ANTES de resolver — como en
+    // todos los overlays (la de este fichero, jamás `Command::AppQuit`: no
+    // pregunta).
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return None;
+    }
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('p') {
+        let filter = app.help.as_ref()?.state.filter_raw().to_owned();
+        app.help = None;
+        // Sin filas de plugin: `Command::AppPalette` las pide al backend y
+        // esta función es SÍNCRONA a propósito (todo lo demás aquí lo es).
+        // Degradación conocida y acotada — los built-ins, que es lo que la
+        // ayuda documenta, están todos.
+        let mut palette = Palette::new(norte_tui::palette::rows_for_context(
+            &app.palette_rows,
+            app.viewer.is_some(),
+        ));
+        // El filtro CRUDO (`filter_raw`, no el enmascarado para pintar): es
+        // lo que se empareja, y la palette lo vuelve a enmascarar al pintarlo.
+        for c in filter.chars() {
+            palette.push_char(c);
+        }
+        app.palette = Some(palette);
+        return None;
+    }
+    // Régimen 1: editor de filtro. Teclas FIJAS (ver la doc de arriba).
+    if app.help.as_ref()?.state.filtering() {
+        // `plain` como en la palette: SHIFT es parte de teclear una mayúscula,
+        // no un modificador que cambie el significado de la tecla.
+        let plain = mods.is_empty() || mods == KeyModifiers::SHIFT;
+        let help = app.help.as_mut()?;
+        match code {
+            KeyCode::Char(c) if plain => help.state.push_char(c),
+            KeyCode::Backspace if plain => help.state.backspace(),
+            // Ambas SALEN de la caja conservando el texto: Esc porque el
+            // modelo lo promete, Enter porque el filtro ya está aplicado (la
+            // lateral se rehace en cada carácter) y lo único que queda por
+            // hacer es devolverle las flechas a la navegación.
+            KeyCode::Esc | KeyCode::Enter if plain => help.state.end_filter(),
+            // Sin salir de la caja: elegir un acierto mientras se sigue
+            // afinando la búsqueda es el gesto que hace útil un filtro.
+            KeyCode::Up if plain => help.state.up(),
+            KeyCode::Down if plain => help.state.down(),
+            _ => {}
+        }
+        return None;
+    }
+
+    // Régimen 2: el keymap manda (contexto `dialog`, rebindeable).
+    let chord = chord_from_crossterm(mods, code)?;
+    let cmd = match resolver.push(chord) {
+        Resolution::Run(cmd) => cmd,
+        // Sin semántica de secuencia definida para overlays (T2): ignorar y
+        // reiniciar el estado de resolución.
+        Resolution::Pending(_) => {
+            resolver.reset();
+            return None;
+        }
+        Resolution::Reset => return None,
+    };
+    // La tecla que ABRE la ayuda la CIERRA. `app.help` es un comando de
+    // `[global]`, no un verbo de diálogo, así que no vive en `ALLOW_HELP` y
+    // sin esta rama F1 sería inerte dentro de la ayuda — la única tecla del
+    // teclado que el lector tiene garantizada para este overlay, sin efecto.
+    // Se resuelve por el keymap igual que todo lo demás (un rebind de
+    // `app.help` mueve las DOS mitades del interruptor a la vez); lo
+    // hardcodeado es el significado, no la tecla. Mismo criterio que F9 en
+    // `on_theme_picker_key`.
+    if cmd == "app.help" {
+        app.help = None;
+        return None;
+    }
+    // Fuera de `ALLOW_HELP` la tecla es INERTE (misma disciplina que el resto
+    // de overlays: la semántica vive en código, el keymap solo asigna teclas).
+    let outcome = norte_tui::app::help_action(&cmd)?;
+
+    let help = app.help.as_mut()?;
+    match outcome {
+        HelpOutcome::Up => help.state.up(),
+        HelpOutcome::Down => help.state.down(),
+        HelpOutcome::PageUp => help.state.page_up(PAGE),
+        HelpOutcome::PageDown => help.state.page_down(PAGE),
+        HelpOutcome::TogglePane => help.state.toggle_focus(),
+        HelpOutcome::StartFilter => help.state.start_filter(),
+        // Con historial, vuelve; SIN historial, cierra. Es lo que convierte
+        // `Backspace` en una tecla honesta en vez de una muerta en la raíz:
+        // "atrás" desde donde no se puede ir más atrás es salir.
+        HelpOutcome::Back => {
+            if !help.state.back() {
+                app.help = None;
+            }
+        }
+        HelpOutcome::Close => app.help = None,
+        HelpOutcome::Activate => match help.state.action().cloned() {
+            // Un enlace se sigue y la ayuda SIGUE abierta: leer no es salir.
+            Some(norte_frontend::help::Action::Open(id)) => help.state.open(&id),
+            Some(norte_frontend::help::Action::Run(cmd)) => {
+                // La lista `commands` de un tema puede nombrar un verbo
+                // `dialog.*` — el tema `help` documenta tres — y ésos son
+                // vocabulario de overlay, no algo que un pane pueda correr:
+                // no están en `COMMANDS` y `Command::parse` los rechaza. Se
+                // dice y la ayuda se queda abierta; comerse el Enter en
+                // silencio se leería como que el comando corrió. (El resto
+                // de ids del corpus SÍ parsean: la puerta de documentación
+                // los cruza byte a byte contra `COMMANDS ∪ DIALOG_COMMANDS`.)
+                let Some(parsed) = Command::parse(&cmd) else {
+                    // La barra de estado se ve: el overlay ocupa el frame
+                    // menos una fila arriba y otra abajo, y la barra es esa
+                    // última fila (`ui::help_layout`).
+                    app.message = Some(t("msg-help-not-runnable"));
+                    return None;
+                };
+                // Cerrar ANTES de despachar es deliberado: el comando actúa
+                // sobre los panes de debajo y la ayuda taparía la
+                // confirmación que abra.
+                app.help = None;
+                return Some(parsed);
+            }
+            // Foco en la lateral: Enter abre el tema del cursor.
+            None => help.state.open_selected(),
+        },
+    }
+    None
+}
+
+/// The help overlay's key routing, driven through [`on_help_key`] — the same
+/// seam the run loop uses, so these exercise the WIRING (allowlist, the two
+/// regimes, what closes the overlay, what the run loop is asked to dispatch)
+/// and not the model underneath, which has its own tests in
+/// `norte_frontend::help`.
+#[cfg(test)]
+mod help_key_tests {
+    use super::*;
+    use norte_frontend::help::{Focus, SidebarRow};
+    use norte_help::{Lang, TopicId};
+
+    /// An effective of the orthodox preset over the WHOLE vocabulary: the
+    /// `dialog` screen merges `[global]` too, so `DIALOG_COMMANDS` alone
+    /// would make `build_for` reject the preset outright.
+    fn eff(screen: Screen) -> Effective {
+        let (_, preset) = presets()
+            .into_iter()
+            .find(|(n, _)| *n == "orthodox")
+            .expect("preset orthodox");
+        let known: Vec<&str> = COMMANDS
+            .iter()
+            .copied()
+            .chain(DIALOG_COMMANDS.iter().copied())
+            .collect();
+        Effective::build_for(&preset, &[], &known, screen).expect("efectivo del preset")
+    }
+
+    fn dialog_resolver() -> Resolver {
+        Resolver::new(eff(Screen::Dialog))
+    }
+
+    fn app_with_help() -> App {
+        let d = VPath::parse("file:///x").expect("wire de test");
+        let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()));
+        app.help = Some(HelpView::new(Lang::En, Vec::new()));
+        app
+    }
+
+    /// One unmodified key press.
+    fn press(app: &mut App, resolver: &mut Resolver, code: KeyCode) -> Option<Command> {
+        on_help_key(app, resolver, KeyModifiers::NONE, code)
+    }
+
+    fn state(app: &App) -> &norte_frontend::help::HelpState {
+        &app.help.as_ref().expect("overlay abierto").state
+    }
+
+    fn topic_ids(app: &App) -> Vec<String> {
+        state(app)
+            .rows()
+            .iter()
+            .filter_map(|r| match r {
+                SidebarRow::Topic { id, .. } => Some(id.as_str().to_owned()),
+                SidebarRow::Group { .. } => None,
+            })
+            .collect()
+    }
+
+    /// `/` opens the filter, the characters narrow the sidebar, and `Esc`
+    /// leaves the box KEEPING what was typed — the model's contract, and the
+    /// reason the filter is not a modal editor: leaving a search is not
+    /// undoing it.
+    #[test]
+    fn the_filter_editor_types_narrows_and_keeps_its_text_on_esc() {
+        let mut app = app_with_help();
+        let mut r = dialog_resolver();
+        let todos = topic_ids(&app);
+        assert!(todos.len() > 3, "el corpus trae varias páginas: {todos:?}");
+
+        press(&mut app, &mut r, KeyCode::Char('/'));
+        assert!(state(&app).filtering(), "`/` abre el filtro");
+
+        for c in "copying".chars() {
+            press(&mut app, &mut r, KeyCode::Char(c));
+        }
+        let filtrados = topic_ids(&app);
+        assert_eq!(
+            filtrados,
+            vec!["copying".to_owned()],
+            "la lateral se estrecha a lo tecleado"
+        );
+        assert!(
+            filtrados.len() < todos.len(),
+            "el filtro tiene que quitar algo o no filtra nada"
+        );
+
+        // Y las teclas son FIJAS: `/` es un carácter más dentro de la caja, no
+        // el verbo `dialog.filter` otra vez.
+        press(&mut app, &mut r, KeyCode::Char('/'));
+        assert_eq!(state(&app).filter_raw(), "copying/");
+        press(&mut app, &mut r, KeyCode::Backspace);
+        assert_eq!(state(&app).filter_raw(), "copying");
+
+        press(&mut app, &mut r, KeyCode::Esc);
+        assert!(!state(&app).filtering(), "Esc sale de la caja");
+        assert_eq!(
+            state(&app).filter_raw(),
+            "copying",
+            "…CONSERVANDO el texto: salir de una búsqueda no es deshacerla"
+        );
+        assert!(app.help.is_some(), "y Esc en la caja NO cierra el overlay");
+    }
+
+    /// Enter sobre una fila `Action::Run` devuelve el comando que el run loop
+    /// debe despachar — el MISMO id que mandaría la palette — y deja el
+    /// overlay CERRADO: el comando actúa sobre los panes de debajo.
+    #[test]
+    fn enter_on_a_runnable_row_hands_the_command_over_and_closes() {
+        let mut app = app_with_help();
+        let mut r = dialog_resolver();
+        app.help
+            .as_mut()
+            .expect("abierto")
+            .state
+            .open(&TopicId::new("copying"));
+        press(&mut app, &mut r, KeyCode::Tab);
+        assert_eq!(state(&app).focus(), Focus::Body, "Tab pasa al cuerpo");
+
+        let cmd = press(&mut app, &mut r, KeyCode::Enter);
+        assert_eq!(
+            cmd,
+            Some(Command::PaneCopy),
+            "la primera fila de `copying` es `pane.copy`"
+        );
+        assert!(
+            app.help.is_none(),
+            "el overlay se cierra ANTES de despachar"
+        );
+    }
+
+    /// La lista `commands` de un tema puede nombrar un verbo `dialog.*` (el
+    /// tema `help` documenta tres): no son despachables desde un pane. No se
+    /// despacha nada, el overlay SIGUE abierto y se dice — comerse el Enter
+    /// en silencio se leería como que el comando corrió.
+    #[test]
+    fn enter_on_a_dialog_verb_row_dispatches_nothing_and_says_so() {
+        let mut app = app_with_help();
+        let mut r = dialog_resolver();
+        app.help
+            .as_mut()
+            .expect("abierto")
+            .state
+            .open(&TopicId::new("help"));
+        press(&mut app, &mut r, KeyCode::Tab);
+        // `commands` del tema `help`: app.help, app.palette, dialog.filter…
+        press(&mut app, &mut r, KeyCode::Down);
+        press(&mut app, &mut r, KeyCode::Down);
+        assert_eq!(
+            state(&app).action(),
+            Some(&norte_frontend::help::Action::Run("dialog.filter".into())),
+            "la tercera fila del tema `help` es un verbo de overlay"
+        );
+
+        let cmd = press(&mut app, &mut r, KeyCode::Enter);
+        assert_eq!(cmd, None, "un `dialog.*` no se despacha desde un pane");
+        assert!(app.help.is_some(), "y el overlay se queda donde estaba");
+        assert_eq!(
+            app.message.as_deref(),
+            Some(norte_i18n::t("msg-help-not-runnable").as_str()),
+            "el Enter no puede desaparecer en silencio"
+        );
+    }
+
+    /// Enter sobre un enlace lo SIGUE y el overlay sigue abierto (leer no es
+    /// salir); `dialog.back` vuelve a la página de la que venía.
+    #[test]
+    fn enter_on_a_link_follows_it_and_back_returns() {
+        let mut app = app_with_help();
+        let mut r = dialog_resolver();
+        assert_eq!(state(&app).current().as_str(), "index");
+        // El índice no tiene `commands`: todas sus acciones son `see_also`.
+        press(&mut app, &mut r, KeyCode::Tab);
+        assert_eq!(state(&app).focus(), Focus::Body);
+        let destino = match state(&app).action() {
+            Some(norte_frontend::help::Action::Open(id)) => id.as_str().to_owned(),
+            otro => panic!("la primera acción del índice es un enlace: {otro:?}"),
+        };
+
+        let cmd = press(&mut app, &mut r, KeyCode::Enter);
+        assert_eq!(cmd, None, "un enlace no despacha nada");
+        assert!(app.help.is_some(), "…y el overlay SIGUE abierto");
+        assert_eq!(state(&app).current().as_str(), destino);
+
+        press(&mut app, &mut r, KeyCode::Backspace);
+        assert!(app.help.is_some(), "volver tampoco cierra");
+        assert_eq!(state(&app).current().as_str(), "index");
+    }
+
+    /// `dialog.back` en la RAÍZ (sin historial) cierra el overlay. Es lo que
+    /// convierte `Backspace` en una tecla honesta en vez de una muerta.
+    #[test]
+    fn back_at_the_root_closes_the_overlay() {
+        let mut app = app_with_help();
+        let mut r = dialog_resolver();
+        press(&mut app, &mut r, KeyCode::Backspace);
+        assert!(
+            app.help.is_none(),
+            "sin historial, «atrás» solo puede significar salir"
+        );
+    }
+
+    /// Un verbo `dialog.*` FUERA de `ALLOW_HELP` es INERTE aquí, aunque el
+    /// keymap lo tenga bien atado: la semántica de cada overlay vive en
+    /// código. `y` es `dialog.approve` en el preset orthodox.
+    #[test]
+    fn a_verb_outside_the_allowlist_is_inert() {
+        let mut app = app_with_help();
+        let mut r = dialog_resolver();
+        let antes = state(&app).current().clone();
+        let cmd = press(&mut app, &mut r, KeyCode::Char('y'));
+        assert_eq!(cmd, None);
+        assert!(app.help.is_some(), "`dialog.approve` no cierra la ayuda");
+        assert_eq!(state(&app).current(), &antes, "ni navega");
+    }
+
+    /// La tecla que abre la ayuda la cierra: F1 resuelve a `app.help`, que
+    /// NO está en `ALLOW_HELP` (es de `[global]`), y sin su rama propia sería
+    /// inerte justo dentro del overlay que abre.
+    #[test]
+    fn the_key_that_opens_the_help_closes_it() {
+        let mut app = app_with_help();
+        let mut r = dialog_resolver();
+        let cmd = press(&mut app, &mut r, KeyCode::F(1));
+        assert_eq!(cmd, None, "cerrar no despacha nada");
+        assert!(app.help.is_none(), "F1 dentro de la ayuda la cierra");
+    }
+
+    /// …pero no mientras se teclea en el filtro: ahí la caja consume la
+    /// tecla, como en la palette y el diálogo de búsqueda.
+    #[test]
+    fn the_filter_box_keeps_the_toggle_key() {
+        let mut app = app_with_help();
+        let mut r = dialog_resolver();
+        press(&mut app, &mut r, KeyCode::Char('/'));
+        assert!(state(&app).filtering());
+        press(&mut app, &mut r, KeyCode::F(1));
+        assert!(
+            app.help.is_some(),
+            "una tecla de función dentro del editor no cierra el overlay"
+        );
+    }
+
+    /// `ctrl+c` conserva su salida global y `ctrl+p` cruza a la palette
+    /// LLEVÁNDOSE el filtro — los dos son el mismo modelo a dos velocidades
+    /// (lo dice el tema `help`), así que no hay que reteclearlo.
+    #[test]
+    fn ctrl_c_quits_and_ctrl_p_hands_the_filter_to_the_palette() {
+        let mut app = app_with_help();
+        let mut r = dialog_resolver();
+        on_help_key(&mut app, &mut r, KeyModifiers::CONTROL, KeyCode::Char('c'));
+        assert!(app.quit, "la salida de emergencia va antes que todo");
+
+        let mut app = app_with_help();
+        app.palette_rows =
+            norte_tui::palette::build_rows(&eff(Screen::Browse), &eff(Screen::Viewer));
+        press(&mut app, &mut r, KeyCode::Char('/'));
+        for c in "copy".chars() {
+            press(&mut app, &mut r, KeyCode::Char(c));
+        }
+        on_help_key(&mut app, &mut r, KeyModifiers::CONTROL, KeyCode::Char('p'));
+        assert!(app.help.is_none(), "la ayuda cede el sitio");
+        let palette = app.palette.as_ref().expect("la palette abrió");
+        assert!(
+            !palette.visible().is_empty(),
+            "el filtro llegó y sigue casando algo"
+        );
+        assert!(
+            palette.visible().len() < palette.rows().len(),
+            "…y de verdad filtró: {} de {}",
+            palette.visible().len(),
+            palette.rows().len()
+        );
+    }
 }
 
 /// ¿Puede un evento de vigilancia disparar un refresh AHORA? (#106,
@@ -3135,6 +3613,11 @@ async fn reload_config(
     viewer_resolver: &mut Resolver,
     dialog_resolver: &mut Resolver,
     help_lines: &mut Vec<String>,
+    // H3b: the negotiated language, so the rebuilt `TuiChords` answers in the
+    // same locale it did at startup. Session-fixed (`norte_i18n::force` runs
+    // once), so a `[ui] lang` edited in the file does NOT take effect here —
+    // the same restriction the rest of the i18n already has.
+    lang: norte_i18n::Lang,
     layers: &Layers,
     cli_preset: Option<&str>,
     quick_mode: &mut nav::Mode,
@@ -3181,6 +3664,13 @@ async fn reload_config(
                     .max(dialog.discarded_lua_bindings());
                 // La ayuda refleja el keymap VIGENTE: se reconstruye aquí.
                 *help_lines = norte_tui::help::build(&browse, &viewer, &dialog);
+                // H3b: and so does the resolver the CORPUS is rendered
+                // through — same effectives, same moment, before they move
+                // into the resolvers below (`TuiChords` borrows). A rebind
+                // that reached `help_lines` but not this one would leave the
+                // generated keyboard page right and every `{{cmd:…}}` mark in
+                // the prose teaching the OLD key.
+                app.help_chords = Arc::new(TuiChords::new(&browse, &viewer, &dialog, lang));
                 app.help = None;
                 // Filas de la palette (H1 T4): reconstruidas del keymap
                 // VIGENTE, ANTES de que se mueva al resolver de abajo —
@@ -4665,6 +5155,9 @@ async fn dispatch(
     backend: &Backend,
     events: &mut EventStream,
     help_lines: &[String],
+    // H3b: the negotiated language `Command::AppHelp` opens the corpus in.
+    // See the same parameter on `run`.
+    lang: norte_i18n::Lang,
     quick_mode: nav::Mode,
     confirm_quit: config::ConfirmQuit,
     // S3 (`app.settings`): la config VIGENTE — solo leída, para construir
@@ -4890,14 +5383,15 @@ async fn dispatch(
         Command::ViewerEncodingAuto => viewer_do(app, norte_tui::viewer::Viewer::reset_encoding),
         Command::ViewerHex => viewer_do(app, norte_tui::viewer::Viewer::toggle_hex),
         Command::AppHelp => {
-            // H3b STUB — task 7 owns this wiring. The language must be the
-            // NEGOTIATED one (`[ui] lang` beats the environment; see the
-            // `norte_i18n::force` call in `main`), which dispatch does not
-            // receive yet: task 7 threads it in along with the key handling.
-            app.help = Some(HelpView::new(
-                norte_i18n::Lang::from_env(),
-                help_lines.to_vec(),
-            ));
+            // H3b: the corpus opens in the NEGOTIATED language (`NORTE_LANG` >
+            // `[ui] lang` > environment — the value `main` handed to
+            // `norte_i18n::force`), never `Lang::from_env()`: the corpus is
+            // per-locale and a page in another language than the chrome around
+            // it is the same bug as a half-translated dialog. `help_lines` is
+            // the body of the synthetic keyboard entry, snapshotted from the
+            // VIGENTE keymap (rebuilt by the hot reload, which also closes an
+            // open overlay so no snapshot survives a rebind).
+            app.help = Some(HelpView::new(lang, help_lines.to_vec()));
         }
         Command::PaneNamesEncoding => {
             // #57: cicla la reinterpretación de nombres no-UTF8 del pane con

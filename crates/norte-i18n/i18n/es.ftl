@@ -239,6 +239,10 @@ msg-semantic-failed = la búsqueda semántica falló: { $error }
 msg-semantic-invalid = búsqueda semántica: respuesta inválida del daemon — no se muestra nada
 msg-semantic-in-search = la búsqueda semántica no está disponible en un pane de búsqueda
 msg-hidden-hidden = entradas ocultas escondidas
+# H3b: Enter sobre una fila de la ayuda que documenta un verbo de OVERLAY
+# (`dialog.*`). No son despachables desde un pane, así que no corre nada — y
+# se dice, porque un Enter comido se lee como un comando que sí corrió.
+msg-help-not-runnable = esa fila documenta una tecla de overlay, no un comando que un pane pueda correr
 msg-marked-by-pattern = { $n } marcas cambiadas
 msg-mouse-capture-failed = el terminal no aceptó la captura de ratón: norte se queda solo con teclado
 # Arrastre EN VUELO, en LOS DOS frontends: qué haría soltar ahora mismo.

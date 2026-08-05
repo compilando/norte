@@ -92,8 +92,9 @@ fn label_id(command: &str) -> String {
 /// (H3b): the user's effective chord, a short label, and whether the command
 /// can run now.
 ///
-/// **Must be rebuilt wherever `help_lines` is** — `main.rs:3165`, the
-/// hot-reload arm — and from the same effectives, for the same reason:
+/// **Must be rebuilt wherever `help_lines` is** — `main`'s startup and
+/// `reload_config`'s hot-reload arm, where `App::help_chords` is assigned next
+/// to it — and from the same effectives, for the same reason:
 /// a rebind that does not reach this resolver is a help page that teaches
 /// the OLD key. It holds no borrows precisely so the rebuild can be a whole
 /// new value swapped in, exactly as `help_lines` and `DialogHints` are.
