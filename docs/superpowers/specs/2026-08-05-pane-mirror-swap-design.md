@@ -1,0 +1,177 @@
+# Passing a location between panes — mirror, pull, swap
+
+- Date: 2026-08-05
+- Status: approved
+- Related: ADR 0006 (keymap), spec §17 (required product capabilities), the
+  2026-07-18 navigation design (history, hotlist, cursor memory)
+
+## Problem
+
+norte has two panes and no way to say "the other one should be here". Preparing
+a copy means navigating to the same place twice, or navigating one pane and
+then walking the other there by hand. Every orthodox file manager solves this
+with two or three keys — Krusader binds `Ctrl+←`/`Ctrl+→` and `Ctrl+U`,
+Midnight Commander binds `Alt+i` and `Ctrl+u` — and norte binds none: today the
+vocabulary has `pane.switch` (move the focus), `pane.history` and
+`pane.hotlist`, and nothing that moves a *location* across.
+
+norte has no tabs; it has exactly two panes (M1). This design is about those
+two.
+
+## Vocabulary
+
+Three commands, named relative to the FOCUS rather than to the screen:
+
+| command | effect | default chord |
+| --- | --- | --- |
+| `pane.mirror` | the unfocused pane goes where this one is | `alt+i` |
+| `pane.pull` | this pane goes where the other one is | `alt+u` |
+| `pane.swap` | the two panes exchange locations | `ctrl+u` (`alt+s` in the `vim` preset) |
+
+Focus-relative and not screen-absolute (`send-left`/`send-right`, the Krusader
+shape) because a focus-relative command reads the same wherever the focus is,
+and that is what lets the help, the palette and the GUI describe it in one
+sentence. A screen-absolute pair would need the reader to know which side has
+the focus before it could say what the key does.
+
+`ctrl+u` is free in the `orthodox` and `cua` presets. The `vim` preset already
+binds it to `cursor.page-up`, which is the vim idiom and outranks a borrowed
+one, so `pane.swap` takes `alt+s` there.
+
+Nothing new goes into `norte.toml`. All three are ordinary commands: they enter
+`COMMANDS`, so they are rebindable from any keymap layer, they appear in the
+command palette, in the help, and in `norte doctor`'s keymap check, and a user
+who wants Krusader's exact keys writes three lines in their own layer.
+
+## Semantics
+
+### Mirror and pull are navigation
+
+Both reuse the existing `cd`: the same path `nav.enter` takes, with its history
+entry, its per-directory cursor memory (arrive somewhere you have been and the
+cursor is where you left it), its watcher registration and its TOFU prompt when
+the destination is an unknown host.
+
+Only the LOCATION travels. Marks, quick filter, sort and cursor are not copied:
+the destination pane behaves exactly as if the user had navigated there
+themselves. Copying marks across would make two panes that look alike and hold
+different truths, which is how someone deletes on the wrong side.
+
+One structural change is required, and it is the only one: `cd` today always
+acts on `app.focused_mut()`. It needs to take the target pane. Every existing
+caller passes the focused pane and behaves as before.
+
+### Swap is not navigation
+
+`pane.swap` exchanges the two panes and touches no disk: no listing is
+re-fetched, nothing can fail, and marks, filters, sort and cursor all survive
+because the whole pane moves rather than being rebuilt.
+
+The focus stays on the same PHYSICAL SIDE, as in Krusader: someone looking at
+the left half keeps looking at the left half, which now holds what the right
+half held. Moving the focus with the content would make the command a no-op
+from the user's point of view.
+
+Swap pushes no history entry on either pane. Nothing navigated: the panes are
+where they were, on the other side. `pane.swap` twice is exactly the identity,
+and a history that recorded it would fill each pane's `pane.history` popup with
+places the reader never went — the popup lists the directories a pane has been
+in, and after two swaps it would list its own current directory twice.
+
+The histories must MOVE with the panes, and this is not free: the history is
+not part of `PaneState`, it is `App::history: [History; 2]`, one more array
+indexed by pane. Swap has to exchange it explicitly. Leave it behind and each
+pane shows the trail of the content that used to be on that side — a popup full
+of places the reader never went, offering to take them "back" somewhere they
+have never been.
+
+### The trap: state indexed by pane outside `app.panes`
+
+`app.panes` is not the only place that knows a pane index. So do:
+
+- `App::history: [History; 2]`, the per-pane navigation trail behind
+  `pane.history`;
+- the in-flight `Fill` — the drain of a paginated listing — which carries the
+  pane it is filling;
+- `decorate_fetch[2]`, the plugin column fetches;
+- `last_probed`, the `(pane, path)` dedup of the on-focus `stat` probe;
+- the directory watcher (`watch.rs`), which tracks one directory per pane.
+
+A bare `mem::swap` of `app.panes` leaves one pane's listing draining into the
+other and both histories attached to the wrong side. So the swap is: exchange
+`panes`, exchange `history`, exchange `decorate_fetch`, flip the pane index of
+the live `Fill` if there is one, clear `last_probed` (it is only a cache), and
+re-point the watcher.
+
+That is six lines, and omitting any one of them is a bug a green test suite
+does not see — the listing keeps arriving, just into the wrong half of the
+screen. Each of the six gets its own test.
+
+The list is also a warning about the shape of `App`: every one of these is a
+`[T; 2]` that has to be kept in step with `panes` by hand, and swap is the
+first operation that reorders them. If a seventh appears, it will be found the
+same way this one was — by someone reading for it. A follow-up worth
+considering, and out of scope here, is moving these into the pane itself so
+there is one thing to exchange rather than six.
+
+## Edges
+
+**Remote destinations.** Mirroring onto an unvisited SSH host connects, and may
+raise the TOFU modal or a policy approval, exactly as navigating there would.
+This is the case the feature exists for — preparing a local→remote copy without
+walking the tree twice — so it is not restricted.
+
+**Archives.** Mirroring inside a `.zip` mirrors the path inside the archive.
+The composed scheme is just a location.
+
+**Failure.** If the `cd` fails — gone, refused, connection dead — the other
+pane STAYS WHERE IT WAS and the error goes to the status bar. A convenience
+gesture may not leave a pane blank.
+
+**Virtual panes.** From a live-search results pane, `mirror` and `pull` are
+refused with a message: a list of hits is not a location, and the directory the
+search ran under is not on screen, so silently sending the other pane there
+would be a jump the reader cannot predict. `swap` DOES work: exchanging two
+panes needs neither to be addressable, and moving a result list to the other
+side is a legitimate thing to want.
+
+**Both panes already in the same place.** `mirror` and `pull` are silent
+no-ops. `swap` still exchanges, because two panes on one directory still differ
+in marks, filter, cursor and sort.
+
+## What it drags through the house
+
+Three new commands cost more than their code, and all of it is enforced:
+
+- `help-cmd-pane-mirror`, `-pull`, `-swap` in both locales, or the i18n parity
+  suite fails;
+- bindings in the three presets;
+- a paragraph in the help corpus, or the documentation gate fails the build —
+  its allowlist has a ceiling that can only shrink. The *Two panes, one
+  destination* topic is where they belong, since that is the page about exactly
+  this relationship.
+
+## Testing
+
+- Mirror, pull and swap on the happy path, including that mirror leaves the
+  focus where it was and swap leaves it on the same side.
+- A `cd` that fails leaves the other pane untouched, and says so.
+- Mirror and pull are refused from a virtual search pane; swap is not.
+- **Swap with a `Fill` in flight** — the test that catches the pane-index bug:
+  the batches must keep arriving into the pane that asked for them.
+- Swap exchanges `history`: after swapping, each pane's `pane.history` popup
+  lists where the CONTENT in front of the reader has been, not where that side
+  of the screen has been.
+- Swap exchanges `decorate_fetch` and re-points the watcher.
+- Mirror onto an unknown host raises the TOFU modal rather than silently
+  failing or silently trusting.
+- Both panes on one directory: mirror is a no-op, swap still exchanges marks.
+
+## Out of scope
+
+- **Opening the directory under the cursor in the other pane** (Krusader folds
+  this into the same key). Deliberately not built: it makes one key mean two
+  things depending on what the cursor happens to be on.
+- Copying marks, filter or cursor with the location.
+- Tabs. norte has two panes; if tabs ever arrive, these commands work per
+  visible pane and need no change.
