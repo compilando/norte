@@ -177,9 +177,38 @@ was. A sweep armed with shift is NOT promotable — shift means "extend the
 range", and reading a range that ends past the pane boundary as a drop would
 turn a marking gesture into a MOVE of the whole selection.
 
-The TUI drives the same machine, so it promotes too; it just cannot drop yet
-and keeps saying so (`msg-mouse-transfer-unavailable`). Task 6's help topic
-must state the promotion rule for both frontends.
+The TUI drives the same machine, so it promotes too — and since the TUI drop
+landed it behaves identically: same rules, same `Drag::pending` feedback (in the
+status bar), same submission. Task 6's help topic states the promotion rule for
+both frontends.
+
+---
+
+### Task 5b: Drag and drop between panes (TUI)
+
+**Files:** `crates/norte-tui/src/{mouse,app,ui,main}.rs`, i18n catalogs.
+
+- [x] The same rules as the GUI: copy by default, move with shift held AT
+      RELEASE, a press on an unmarked row promoted to a one-row transfer when
+      the pointer crosses, a drop on the source pane a no-op, marks restored
+      exactly on cancel.
+- [x] It routes through the SAME submission the keyboard `pane.copy`/`pane.move`
+      use. `App::open_transfer(kind, from, to, promoted)` is now the single
+      source of what a transfer submits — the key and the drop both call it, and
+      it owns the "one item ⇒ editable name (#105), several ⇒ list confirm"
+      decision that used to live in `dispatch`. A promoted drop never consumes
+      the pane's marks: the row it carries was never marked.
+- [x] Feedback before the drop: the status bar renders `Drag::pending` (the same
+      source the release reads) as "Drop to COPY/MOVE n item(s) → dir". Shared
+      keys with the GUI, renamed `gui-drag-*` → `drag-*`; the TUI-only
+      `msg-mouse-transfer-unavailable` is gone from both catalogs. The
+      modifiers come from the last mouse event, because a terminal reports the
+      keyboard only alongside a mouse report while the button is down.
+- [x] Tests: the drop opens the same modal the key opens for the same
+      selection, shift at release decides, a drop at home submits nothing, a
+      cancelled drag restores the marks, and the hint matches the drop.
+
+Commit: `feat(tui): drag and drop between panes`.
 
 Commit: `feat(gui): drag and drop between panes`.
 

@@ -716,11 +716,7 @@ fn drop_hint(panes: &[PaneState; 2], pending: Option<Pending>) -> Option<(usize,
     } else {
         to_txt
     };
-    let key = if move_files {
-        "gui-drag-move"
-    } else {
-        "gui-drag-copy"
-    };
+    let key = if move_files { "drag-move" } else { "drag-copy" };
     Some((
         to_pane,
         norte_i18n::ta(key, &[("n", &n.to_string()), ("to", &to_txt)]),
@@ -10074,7 +10070,7 @@ mod tests {
         assert_eq!(
             copiar,
             norte_i18n::ta(
-                "gui-drag-copy",
+                "drag-copy",
                 &[
                     ("n", "3"),
                     ("to", &norte_frontend::path_display(panes[1].dir()).0)

@@ -1711,17 +1711,61 @@ impl App {
         self.open_next_pending();
     }
 
-    /// Abre el modal de copia/movimiento (F5/F6, #103 T10): orígenes = las
-    /// MARCAS del pane con foco (o el cursor si no hay ninguna), destino =
-    /// el DIRECTORIO del pane inactivo. No-op si no hay nada que transferir
-    /// (pane vacío): jamás un diálogo sobre un lote vacío.
-    pub fn open_transfer_modal(&mut self, kind: TransferKind) {
-        let items = self.focused().marked_paths();
-        if items.is_empty() {
-            return;
+    /// Abre la confirmación de una copia o un movimiento `from` → `to`.
+    ///
+    /// **Fuente ÚNICA de qué somete una transferencia**, la tecla (F5/F6) y
+    /// el arrastre por igual. No es estilo: un drop es una mutación, y una
+    /// segunda ruta —aunque hoy naciera idéntica— se quedaría sin la
+    /// confirmación, sin el modal de colisión, sin la entrada de journal o
+    /// sin el undo en cuanto una de las dos cambiara. Por eso el drop no
+    /// construye ningún modal: pide el mismo que pediría `pane.copy`.
+    /// Gemela de `transfer_modal` en la GUI.
+    ///
+    /// `promoted` es la única diferencia entre las dos entradas, y solo dice
+    /// SOBRE QUÉ actúa: `None` = las marcas del pane (o el cursor si no hay
+    /// ninguna — `marked_paths`, la fuente única de siempre); `Some(idx)` =
+    /// esa fila sola, porque el gesto se promovió desde una fila SIN marcar
+    /// y las marcas del pane —si las hay— son otra cosa que el usuario no
+    /// está arrastrando.
+    ///
+    /// Con UN solo ítem el nombre de destino es EDITABLE (#105); el lote
+    /// multi sigue en el confirm de lista (no hay un nombre único). No-op si
+    /// no hay nada que transferir: jamás un diálogo sobre un lote vacío.
+    pub fn open_transfer(
+        &mut self,
+        kind: TransferKind,
+        from: usize,
+        to: usize,
+        promoted: Option<usize>,
+    ) {
+        let items: Vec<VPath> = match promoted {
+            Some(idx) => self.panes[from]
+                .entries()
+                .get(idx)
+                .map(|e| vec![e.path.clone()])
+                .unwrap_or_default(),
+            None => self.panes[from].marked_paths(),
+        };
+        let to_dir = self.panes[to].dir().clone();
+        match items.as_slice() {
+            [] => {}
+            [one] => {
+                // `from_marks` decide si el envío CONSUME la selección
+                // ([`Self::transfer_name_submitted`]). Un arrastre promovido
+                // jamás la consume: la promoción cambia lo que el gesto
+                // HACE, no lo que está seleccionado — y lo marcado puede ser
+                // otra cosa que el usuario no ha soltado.
+                let from_marks = promoted.is_none() && self.panes[from].marks_len() > 0;
+                self.open_transfer_name_with(kind, from, one.clone(), to_dir, from_marks);
+            }
+            _ => {
+                self.modal = Some(Modal::ConfirmTransfer {
+                    kind,
+                    items,
+                    to: to_dir,
+                });
+            }
         }
-        let to = self.panes[1 - self.focus].dir().clone();
-        self.modal = Some(Modal::ConfirmTransfer { kind, items, to });
     }
 
     /// Abre el modal de borrado (F8, #103 T10) sobre las MARCAS del pane con
@@ -1816,19 +1860,6 @@ impl App {
         }
     }
 
-    /// Abre el nombre de destino editable (#105) para el ítem ÚNICO (la
-    /// marca única, o el cursor): F5/F6 con 0–1 marcas. El caller decide la
-    /// ruta multi-ítem ([`Self::open_transfer_modal`]). No-op sin ítem.
-    pub fn open_transfer_name(&mut self, kind: TransferKind) {
-        let items = self.focused().marked_paths();
-        let [from] = items.as_slice() else {
-            return;
-        };
-        let from_marks = self.focused().marks_len() > 0;
-        let to_dir = self.panes[1 - self.focus].dir().clone();
-        self.open_transfer_name_with(kind, from.clone(), to_dir, from_marks);
-    }
-
     /// Abre el rename in situ (shift+F6, #105): Move con destino en el
     /// PADRE del propio `from` — no el dir del pane, que en el pane VIRTUAL
     /// de búsqueda es la raíz del walk y renombraría moviendo el hit de
@@ -1841,12 +1872,17 @@ impl App {
         let Some(to_dir) = from.parent() else {
             return;
         };
-        self.open_transfer_name_with(TransferKind::Move, from, to_dir, false);
+        self.open_transfer_name_with(TransferKind::Move, self.focus, from, to_dir, false);
     }
 
+    /// El modal de nombre editable. `from_pane` es el pane de ORIGEN y no se
+    /// da por hecho que sea el que tiene el foco: un drop nace en el pane
+    /// donde bajó el botón, y de ahí sale la reinterpretación de nombres
+    /// (#57) con la que se siembra el campo.
     fn open_transfer_name_with(
         &mut self,
         kind: TransferKind,
+        from_pane: usize,
         from: VPath,
         to_dir: VPath,
         from_marks: bool,
@@ -1854,7 +1890,7 @@ impl App {
         let original = from
             .file_name()
             .map_or(Vec::new(), |n| n.as_bytes().to_vec());
-        let enc = self.focused().name_encoding();
+        let enc = self.panes[from_pane].name_encoding();
         // Prefill = lo que el pane PINTA (#98/M1): bajo reinterpretación,
         // un nombre no-UTF8 se decodifica (#57) en vez de pasar por lossy
         // — editar produce el texto que se VE; sin tocar siguen mandando
@@ -3822,7 +3858,7 @@ mod tests {
             ),
             Pane::new(VPath::parse("mem:///dst").unwrap(), Vec::new()),
         );
-        app.open_transfer_name(TransferKind::Copy);
+        app.open_transfer(TransferKind::Copy, 0, 1, None);
         let (kind, from, dest) = app.transfer_name_confirm().expect("válido");
         assert_eq!(kind, TransferKind::Copy);
         assert_eq!(from, hostile);
@@ -3857,7 +3893,7 @@ mod tests {
             ),
             Pane::new(VPath::parse("mem:///dst").unwrap(), Vec::new()),
         );
-        app.open_transfer_name(TransferKind::Copy);
+        app.open_transfer(TransferKind::Copy, 0, 1, None);
         // Tocar el campo (borra el último char del prefill lossy): el texto
         // sigue llevando el U+FFFD del prefill → rechazo con diagnóstico.
         app.transfer_name_pop();
@@ -3960,7 +3996,7 @@ mod tests {
         );
         app.focused_mut().toggle_mark(); // marca "a"
         app.focused_mut().move_down(1); // cursor en "b"
-        app.open_transfer_name(TransferKind::Copy);
+        app.open_transfer(TransferKind::Copy, 0, 1, None);
         let (_, from, _) = app.transfer_name_confirm().expect("válido");
         assert_eq!(
             from,
@@ -3972,7 +4008,7 @@ mod tests {
 
         // Esc no consume.
         app.focused_mut().toggle_mark(); // marca "b" (cursor sigue ahí)
-        app.open_transfer_name(TransferKind::Copy);
+        app.open_transfer(TransferKind::Copy, 0, 1, None);
         app.cancel_transfer_name();
         assert_eq!(app.focused().marks_len(), 1, "cancelar conserva la marca");
 
@@ -4244,7 +4280,7 @@ mod tests {
         let mut app = app_with_two_panes(&["a", "b", "c"], "mem:///dst");
         app.focused_mut().mark_all();
         assert_eq!(app.focused().marks_len(), 3, "las tres quedaron marcadas");
-        app.open_transfer_modal(TransferKind::Copy);
+        app.open_transfer(TransferKind::Copy, 0, 1, None);
         let Some(Modal::ConfirmTransfer { items, to, .. }) = &app.modal else {
             panic!("no transfer modal");
         };
@@ -4253,17 +4289,68 @@ mod tests {
     }
 
     /// Sin ninguna marca, F5 sigue operando sobre el CURSOR (el gesto
-    /// clásico no se pierde) — `marked_paths` cae al seleccionado.
+    /// clásico no se pierde) — `marked_paths` cae al seleccionado. Con UN
+    /// solo ítem la puerta abre el nombre EDITABLE (#105), no el confirm de
+    /// lista: es la misma decisión para la tecla y para un drop.
     #[test]
     fn copy_without_marks_still_uses_the_cursor_entry() {
         let mut app = app_with_two_panes(&["a", "b"], "mem:///dst");
         assert_eq!(app.focused().marks_len(), 0, "sin marcas de partida");
-        app.open_transfer_modal(TransferKind::Copy);
-        let Some(Modal::ConfirmTransfer { items, .. }) = &app.modal else {
+        app.open_transfer(TransferKind::Copy, 0, 1, None);
+        let Some(Modal::TransferName {
+            from,
+            to_dir,
+            from_marks,
+            ..
+        }) = &app.modal
+        else {
             panic!("no transfer modal");
         };
-        assert_eq!(items.len(), 1, "marked_paths falls back to the cursor");
-        assert_eq!(items[0], VPath::parse("mem:///a").unwrap());
+        assert_eq!(
+            from,
+            &VPath::parse("mem:///a").unwrap(),
+            "marked_paths falls back to the cursor"
+        );
+        assert_eq!(to_dir, &VPath::parse("mem:///dst").unwrap());
+        assert!(!from_marks, "no había marca que consumir");
+    }
+
+    /// Un arrastre PROMOVIDO lleva la fila del press y NADA más: ni las
+    /// marcas del pane (que son otra cosa que el usuario no ha soltado) ni
+    /// su consumo al enviar. La promoción cambia lo que el gesto HACE, no lo
+    /// que está seleccionado.
+    #[test]
+    fn a_promoted_transfer_carries_one_row_and_does_not_consume_the_marks() {
+        let mut app = app_with_two_panes(&["a", "b", "c"], "mem:///dst");
+        app.focused_mut().mark_all();
+        assert_eq!(app.focused().marks_len(), 3);
+        app.open_transfer(TransferKind::Copy, 0, 1, Some(2));
+        let Some(Modal::TransferName {
+            from, from_marks, ..
+        }) = &app.modal
+        else {
+            panic!("un solo ítem: nombre editable");
+        };
+        assert_eq!(
+            from,
+            &VPath::parse("mem:///c").unwrap(),
+            "la fila promovida, no las tres marcas"
+        );
+        assert!(!from_marks, "el envío NO puede consumir las marcas");
+        app.transfer_name_submitted();
+        assert_eq!(app.focused().marks_len(), 3, "las marcas siguen ahí");
+    }
+
+    /// Un índice promovido que ya no nombra ninguna fila (el listado encogió
+    /// entre el gesto y el drop) no abre nada: jamás un diálogo sobre un
+    /// lote vacío, y jamás cayendo hacia las marcas —que sería copiar lo que
+    /// nadie arrastró—.
+    #[test]
+    fn a_promoted_index_out_of_range_opens_nothing() {
+        let mut app = app_with_two_panes(&["a", "b"], "mem:///dst");
+        app.focused_mut().mark_all();
+        app.open_transfer(TransferKind::Copy, 0, 1, Some(9));
+        assert!(app.modal.is_none());
     }
 
     /// Las marcas las CONSUME el ENVÍO del lote (mc/Total Commander): tras
@@ -4273,7 +4360,7 @@ mod tests {
         let mut app = app_with_two_panes(&["a", "b"], "mem:///dst");
         app.focused_mut().mark_all();
         assert_eq!(app.focused().marks_len(), 2, "marcadas antes de enviar");
-        app.open_transfer_modal(TransferKind::Copy);
+        app.open_transfer(TransferKind::Copy, 0, 1, None);
         app.consume_marks();
         assert_eq!(app.focused().marks_len(), 0);
     }
@@ -4298,7 +4385,7 @@ mod tests {
     #[test]
     fn an_empty_pane_opens_no_bulk_modal() {
         let mut app = app_with_two_panes(&[], "mem:///dst");
-        app.open_transfer_modal(TransferKind::Copy);
+        app.open_transfer(TransferKind::Copy, 0, 1, None);
         assert!(app.modal.is_none(), "sin ítems no hay modal de copia");
         app.open_delete_modal(false);
         assert!(app.modal.is_none(), "sin ítems no hay modal de borrado");

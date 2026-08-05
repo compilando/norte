@@ -8,7 +8,7 @@
 
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use norte_proto::{Entry, EntryKind, Segment, VPath};
-use norte_tui::app::{App, Pane};
+use norte_tui::app::{App, Modal, Pane, TransferKind};
 use norte_tui::mouse::{self, After};
 use norte_tui::ui;
 use ratatui::Terminal;
@@ -373,30 +373,224 @@ fn un_arrastre_marca_lo_que_barre() {
     assert_eq!(app.panes[0].marks_len(), 4, "filas 1..=4");
 }
 
-/// Arrastrar una selección al otro panel NO copia todavía en la TUI (el
-/// drop es la tarea 5 del plan, y solo llega a la GUI), pero LO DICE. Un
-/// gesto que no hace nada y además no explica nada se lee como que el ratón
-/// está roto, y el usuario lo repite. Además: no marca nada por el camino
-/// —el gesto era una transferencia, no un barrido— y no toca el destino.
+/// Soltar una selección en el otro panel abre EXACTAMENTE el modal que
+/// abriría la tecla de copiar sobre esa misma selección.
+///
+/// Es la aserción que sostiene todo lo demás: un drop es una mutación, y si
+/// no entra por la misma puerta que F5 se queda sin la confirmación, sin el
+/// diálogo de colisión, sin la entrada de journal, sin el undo o sin la
+/// puerta de policy — y no de golpe, sino el día que una de las dos rutas
+/// cambie. Se comparan los MODALES, no una descripción de ellos: son lo que
+/// se somete.
 #[test]
-fn arrastrar_marcas_al_otro_panel_avisa_en_vez_de_no_hacer_nada() {
+fn un_drop_abre_el_mismo_modal_que_la_tecla_de_copiar() {
     let mut app = app_pintada(10);
-    let _ = mouse::handle(&mut app, ev_con(ABAJO, 5, FILA0 + 2, KeyModifiers::CONTROL));
-    assert_eq!(app.panes[0].marks_len(), 1, "una marca a mano");
-    app.message = None;
+    // Dos marcas a mano (con dos, la puerta abre el confirm de lista).
+    for fila in [1, 2] {
+        let _ = mouse::handle(
+            &mut app,
+            ev_con(ABAJO, 5, FILA0 + fila, KeyModifiers::CONTROL),
+        );
+    }
+    assert_eq!(app.panes[0].marks_len(), 2);
 
-    // Pulsa SOBRE la fila marcada y suelta en el otro panel.
-    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 2));
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 35, FILA0 + 2));
-    let _ = mouse::handle(&mut app, ev(ARRIBA, 35, FILA0 + 2));
+    // Lo que somete el TECLADO con esta misma selección.
+    app.open_transfer(TransferKind::Copy, 0, 1, None);
+    let por_teclado = app.modal.take().expect("F5 abre modal");
+
+    // Y ahora el ratón: pulsa SOBRE una fila marcada y suelta en el otro.
+    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 1));
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 35, FILA0 + 1));
+    let _ = mouse::handle(&mut app, ev(ARRIBA, 35, FILA0 + 1));
 
     assert_eq!(
-        app.message.as_deref(),
-        Some(norte_i18n::t("msg-mouse-transfer-unavailable").as_str()),
-        "el gesto se explica en la barra"
+        app.modal.as_ref(),
+        Some(&por_teclado),
+        "el drop somete lo mismo que la tecla, o hay dos rutas de mutación"
     );
-    assert_eq!(app.panes[0].marks_len(), 1, "no barrió: era transferencia");
+    assert_eq!(app.panes[0].marks_len(), 2, "no barrió: era transferencia");
     assert_eq!(app.panes[1].marks_len(), 0, "el destino, intacto");
+}
+
+/// El flag copiar/mover se lee AL SOLTAR: el MISMO arrastre acaba en un
+/// modal de copia o en uno de movimiento según se tenga Mayús pulsado
+/// cuando sube el botón. Es lo que deja cambiar de idea a mitad de gesto sin
+/// mover (mutación destructiva en el origen) lo que se creía copiar.
+#[test]
+fn mayus_al_soltar_decide_copiar_o_mover() {
+    let arrastra = |mods: KeyModifiers| {
+        let mut app = app_pintada(10);
+        let _ = mouse::handle(&mut app, ev_con(ABAJO, 5, FILA0 + 2, KeyModifiers::CONTROL));
+        let _ = mouse::handle(&mut app, ev_con(ABAJO, 5, FILA0 + 3, KeyModifiers::CONTROL));
+        // La pulsación va SIN Mayús en los dos casos: solo cambia el release.
+        let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 2));
+        let _ = mouse::handle(&mut app, ev(ARRASTRE, 35, FILA0 + 2));
+        let _ = mouse::handle(&mut app, ev_con(ARRIBA, 35, FILA0 + 2, mods));
+        match app.modal {
+            Some(Modal::ConfirmTransfer { kind, .. }) => kind,
+            otro => panic!("se esperaba un confirm de transferencia: {otro:?}"),
+        }
+    };
+    assert_eq!(arrastra(KeyModifiers::NONE), TransferKind::Copy);
+    assert_eq!(arrastra(KeyModifiers::SHIFT), TransferKind::Move);
+}
+
+/// Un arrastre que nace en una fila SIN marcar y cruza al otro panel se
+/// promueve a transferencia de ESA fila —el arrastre más común de cualquier
+/// file manager— y devuelve las marcas que barrió de camino. Lo que viaja es
+/// la fila del press, no las once marcas que el pane pudiera tener.
+#[test]
+fn un_arrastre_promovido_lleva_su_fila_y_devuelve_lo_que_barrio() {
+    let mut app = app_pintada(10);
+    // Una marca previa, ajena al gesto.
+    let _ = mouse::handle(&mut app, ev_con(ABAJO, 5, FILA0 + 7, KeyModifiers::CONTROL));
+    assert_eq!(app.panes[0].marks_len(), 1);
+
+    // Press en una fila SIN marcar, barrido de camino, y cruce al otro panel.
+    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 1));
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 3));
+    assert_eq!(app.panes[0].marks_len(), 4, "barrió 1..=3 de camino");
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 35, FILA0 + 1));
+    assert_eq!(
+        app.panes[0].marks_len(),
+        1,
+        "al cruzar devuelve lo barrido: solo queda la marca previa"
+    );
+    let _ = mouse::handle(&mut app, ev(ARRIBA, 35, FILA0 + 1));
+
+    let esperado = app.panes[0].entries()[1].path.clone();
+    let Some(Modal::TransferName {
+        from, from_marks, ..
+    }) = &app.modal
+    else {
+        panic!("un solo ítem: nombre editable, como F5 con una entrada");
+    };
+    assert_eq!(from, &esperado, "la fila del press, no la marca ajena");
+    assert!(!from_marks, "el envío no puede consumir una marca ajena");
+    assert_eq!(app.panes[0].marks_len(), 1, "y sigue intacta");
+}
+
+/// Soltar sobre el PANE DE ORIGEN no somete nada: es un no-op explícito, no
+/// una copia de un directorio sobre sí mismo, y lo pide quien se arrepintió
+/// a medio arrastre y volvió a casa.
+#[test]
+fn soltar_en_el_panel_de_origen_no_somete_nada() {
+    let mut app = app_pintada(10);
+    let _ = mouse::handle(&mut app, ev_con(ABAJO, 5, FILA0 + 2, KeyModifiers::CONTROL));
+    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 2));
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 35, FILA0 + 2)); // pasea…
+    let _ = mouse::handle(&mut app, ev(ARRIBA, 5, FILA0 + 6)); // …y vuelve
+    assert!(app.modal.is_none(), "ni modal ni transferencia");
+    assert_eq!(app.panes[0].marks_len(), 1, "la marca sigue puesta");
+}
+
+/// Un arrastre CANCELADO deja la selección exactamente como estaba. Es la
+/// mitad del contrato que hace aceptable que el gesto signifique dos cosas
+/// según dónde acabe: abortarlo tiene que devolver el estado de antes.
+///
+/// Se cancela soltando sobre el CROMO (la barra de estado), que es donde
+/// acaba el gesto de quien se arrepiente: soltar fuera de toda fila no
+/// adivina un destino.
+#[test]
+fn un_arrastre_cancelado_restituye_las_marcas() {
+    let mut app = app_pintada(10);
+    for fila in [5, 6] {
+        let _ = mouse::handle(
+            &mut app,
+            ev_con(ABAJO, 5, FILA0 + fila, KeyModifiers::CONTROL),
+        );
+    }
+    let marcadas = |app: &App| -> Vec<bool> {
+        app.panes[0]
+            .entries()
+            .iter()
+            .map(|e| app.panes[0].is_marked(e))
+            .collect()
+    };
+    let antes = marcadas(&app);
+
+    // Press en una fila sin marcar, barre, cruza (promueve) y suelta en la
+    // barra de estado, que no pertenece a ningún pane.
+    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0));
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 3));
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 35, FILA0 + 3));
+    let _ = mouse::handle(&mut app, ev(ARRIBA, 5, H - 1));
+
+    assert!(app.modal.is_none(), "cancelar no somete nada");
+    assert_eq!(
+        marcadas(&app),
+        antes,
+        "las marcas, exactamente las de antes"
+    );
+}
+
+/// El aviso de la barra sale de `Drag::pending`, la MISMA fuente que lee el
+/// release, así que no puede prometer una cosa y el drop hacer otra: se
+/// contrasta el texto pendiente con el modal que abre soltar ahí mismo.
+///
+/// Y no se anuncia nada mientras el gesto está en casa (soltar ahí es un
+/// no-op: prometer una copia que no va a ocurrir es peor que no prometer
+/// nada) ni cuando el gesto es un barrido.
+#[test]
+fn la_barra_anuncia_lo_que_haria_soltar_ahora() {
+    let mut app = app_pintada(10);
+    let _ = mouse::handle(&mut app, ev_con(ABAJO, 5, FILA0 + 2, KeyModifiers::CONTROL));
+    let _ = mouse::handle(&mut app, ev_con(ABAJO, 5, FILA0 + 3, KeyModifiers::CONTROL));
+
+    // Barrido en casa: nada que anunciar.
+    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 8));
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 9));
+    assert_eq!(mouse::drop_hint(&app), None, "marcando no se promete nada");
+
+    // Transferencia todavía sobre su propio panel: tampoco.
+    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 2));
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 5));
+    assert_eq!(mouse::drop_hint(&app), None, "en casa soltar es un no-op");
+
+    // Sobre el otro panel: dice cuántas y que COPIA…
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 35, FILA0 + 1));
+    let copia = mouse::drop_hint(&app).expect("hay drop pendiente");
+    assert!(copia.contains('2'), "las dos marcas: {copia}");
+    // El destino con el MISMO saneado que la cabecera del pane (regla 1).
+    let (destino, _) = norte_frontend::path_display_with(app.panes[1].dir(), None);
+    assert_eq!(
+        copia,
+        norte_i18n::ta("drag-copy", &[("n", "2"), ("to", &destino)]),
+    );
+    // …y la barra lo PINTA (por encima de cualquier mensaje pendiente).
+    app.message = Some("un mensaje cualquiera".to_owned());
+    assert!(
+        pintar(&mut app).last().expect("barra de estado").contains(
+            copia
+                .split_once("  ")
+                .map_or(copia.as_str(), |(cabeza, _)| cabeza)
+        ),
+        "el aviso manda sobre la barra mientras dura el arrastre"
+    );
+
+    // Con Mayús, MOVER — y el drop hace lo prometido.
+    let mut con_mayus = ev(ARRASTRE, 35, FILA0 + 2);
+    con_mayus.modifiers = KeyModifiers::SHIFT;
+    let _ = mouse::handle(&mut app, con_mayus);
+    let mover = mouse::drop_hint(&app).expect("sigue habiendo drop");
+    assert_eq!(
+        mover,
+        norte_i18n::ta("drag-move", &[("n", "2"), ("to", &destino)]),
+    );
+    let _ = mouse::handle(&mut app, ev_con(ARRIBA, 35, FILA0 + 2, KeyModifiers::SHIFT));
+    assert!(
+        matches!(
+            app.modal,
+            Some(Modal::ConfirmTransfer {
+                kind: TransferKind::Move,
+                ref items,
+                ..
+            }) if items.len() == 2
+        ),
+        "el drop hace exactamente lo que el aviso prometía: {:?}",
+        app.modal
+    );
+    assert_eq!(mouse::drop_hint(&app), None, "y al soltar deja de anunciar");
 }
 
 /// Marcar con el ratón bajo un quick search en modo FILTRO no alcanza lo

@@ -241,7 +241,12 @@ msg-semantic-in-search = la búsqueda semántica no está disponible en un pane 
 msg-hidden-hidden = entradas ocultas escondidas
 msg-marked-by-pattern = { $n } marcas cambiadas
 msg-mouse-capture-failed = el terminal no aceptó la captura de ratón: norte se queda solo con teclado
-msg-mouse-transfer-unavailable = arrastrar entre paneles todavía no copia en la TUI: marca y usa la tecla de copiar o mover
+# Arrastre EN VUELO, en LOS DOS frontends: qué haría soltar ahora mismo.
+# Jamás solo de la GUI — la barra de estado de la TUI dice lo mismo desde
+# la misma fuente (`Drag::pending`), así que no pueden prometer drops
+# distintos.
+drag-copy = Soltar para COPIAR { $n } elemento(s) → { $to }   (con shift, mover)
+drag-move = Soltar para MOVER { $n } elemento(s) → { $to }   (suelta shift para copiar)
 msg-open-missing-program = el opener necesita `{ $program }` — no instalado
 msg-open-remote = los openers solo funcionan con archivos locales
 msg-open-launched = abierto con { $program }
@@ -415,8 +420,6 @@ gui-viewer-image-unreadable = imagen ilegible
 gui-a11y-pane-left = panel izquierdo
 gui-a11y-pane-right = panel derecho
 gui-a11y-tasks = tareas en curso
-gui-drag-copy = Soltar para COPIAR { $n } elemento(s) → { $to }   (con shift, mover)
-gui-drag-move = Soltar para MOVER { $n } elemento(s) → { $to }   (suelta shift para copiar)
 gui-menu-acts-on = actúa sobre { $target }
 gui-menu-target-marks = { $n } elementos marcados
 gui-menu-entry-disabled = { $label } — { $reason }

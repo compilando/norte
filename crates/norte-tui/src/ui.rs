@@ -2667,7 +2667,14 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     // pane de búsqueda viva (liveSearch T6) pinta `search-status-*` (los hits
     // = `entries.len()`); si no, el hook Lua de statusbar (M4, ya saneado por
     // el host) sustituye la línea default del pane con foco.
-    let text = if let Some(msg) = &app.message {
+    // Un arrastre EN VUELO manda sobre todo lo demás mientras dure. Es lo
+    // único de esta línea que anuncia una MUTACIÓN a punto de proponerse, y
+    // el gesto pide la decisión (copiar o mover) ANTES de que el botón suba:
+    // sin este renglón el usuario suelta a ciegas. Dura lo que dura el botón
+    // pulsado y no consume nada — el mensaje que tape sigue ahí al soltar.
+    let text = if let Some(drag) = crate::mouse::drop_hint(app) {
+        format!(" {drag}")
+    } else if let Some(msg) = &app.message {
         format!(" {msg}")
     } else if pane.virtual_search {
         use crate::app::SearchState;

@@ -4758,14 +4758,13 @@ async fn dispatch(
                 TransferKind::Move
             };
             // Destino ortodoxo: el DIRECTORIO del otro pane. Los orígenes son
-            // las marcas, o el cursor si no hay ninguna (#103). Con UN solo
-            // ítem, el nombre de destino es EDITABLE (#105); el lote multi
-            // sigue en el confirm de lista (no hay un nombre único).
-            if app.focused().marked_paths().len() <= 1 {
-                app.open_transfer_name(kind);
-            } else {
-                app.open_transfer_modal(kind);
-            }
+            // las marcas, o el cursor si no hay ninguna (#103). El resto —
+            // nombre editable con un solo ítem (#105), confirm de lista con
+            // varios— lo decide `open_transfer`, que es la MISMA puerta por
+            // la que entra un drop del ratón: una segunda ruta para someter
+            // una transferencia es una ruta que se queda sin confirmación,
+            // sin colisiones o sin undo en cuanto una de las dos cambie.
+            app.open_transfer(kind, app.focus(), app.focus() ^ 1, None);
         }
         // #105: shift+F6 — rename in situ (Move al PADRE de `from`, nombre
         // editable). Correcto también en el pane virtual: el destino sale

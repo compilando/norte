@@ -25,10 +25,10 @@ use std::time::{Duration, Instant};
 #[cfg(windows)]
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use norte_frontend::mouse::{Drag, Effect, Mods, Press, Spot};
-use norte_i18n::t;
+use norte_frontend::mouse::{Drag, Effect, Mods, Pending, Press, Spot};
 
-use crate::app::App;
+use crate::app::{App, TransferKind};
+use crate::ui::HOSTILE_BADGE;
 
 /// Ventana de un doble click. crossterm NO reporta dobles clicks (ningún
 /// protocolo de ratón de terminal los tiene): los cuenta esta ventana sobre
@@ -152,6 +152,17 @@ pub struct MouseState {
     last_click: Option<(Instant, Spot)>,
     /// La [`Vigencia`] del frame anterior, para detectar el cambio.
     vigencia: Vigencia,
+    /// Los modificadores del ÚLTIMO evento de ratón, para que [`drop_hint`]
+    /// pueda preguntarle a [`Drag::pending`] qué haría soltar AHORA.
+    ///
+    /// Se recuerdan porque una terminal no reporta el teclado mientras el
+    /// botón está pulsado: crossterm trae los modificadores DENTRO de cada
+    /// evento de ratón, así que pulsar Mayús sin mover el puntero no llega
+    /// hasta la siguiente celda que se cruce. El aviso se actualiza
+    /// entonces, no antes — es un límite del protocolo, no una elección, y
+    /// por eso el aviso nombra los dos desenlaces («con Mayús, mover») en
+    /// vez de fiarlo todo a que el modificador se vea reflejado al instante.
+    last_mods: Mods,
 }
 
 impl MouseState {
@@ -246,6 +257,55 @@ pub fn hit_test(app: &App, col: u16, row: u16) -> Option<Hit> {
     })
 }
 
+/// Lo que la barra de estado dice de un arrastre EN VUELO: cuántos ítems
+/// viajarían, a qué directorio, y si soltar ahora COPIA o MUEVE. `None` = no
+/// hay drop pendiente (no hay gesto, se está marcando, o el puntero sigue en
+/// casa — soltar ahí es un no-op explícito y prometer una copia que no va a
+/// ocurrir es peor que no prometer nada).
+///
+/// El aviso NO se calcula aparte: sale de [`Drag::pending`], la misma fuente
+/// y las mismas reglas que lee [`Drag::release`], y cuenta los ítems con la
+/// misma lectura que [`App::open_transfer`] (las marcas, o la fila
+/// promovida). Un aviso derivado por su cuenta acabaría prometiendo una
+/// copia mientras el drop mueve, o «3 elementos» mientras viaja uno.
+///
+/// Gemelo de `drop_hint` en la GUI, hasta la clave de Fluent.
+#[must_use]
+pub fn drop_hint(app: &App) -> Option<String> {
+    let Some(Pending::Drop {
+        from_pane,
+        to_pane,
+        move_files,
+        promoted,
+    }) = app.mouse.drag.pending(app.mouse.last_mods)
+    else {
+        return None;
+    };
+    let n = match promoted {
+        Some(idx) => usize::from(app.panes[from_pane].entries().get(idx).is_some()),
+        None => app.panes[from_pane].marked_paths().len(),
+    };
+    if n == 0 {
+        return None;
+    }
+    // El dir destino, con el MISMO saneado que la cabecera del pane (regla
+    // 1: display siempre lossy, y marcado si es hostil).
+    let (to_txt, hostil) = norte_frontend::path_display_with(
+        app.panes[to_pane].dir(),
+        app.panes[to_pane].name_encoding(),
+    );
+    let to_txt = if hostil {
+        format!("{HOSTILE_BADGE} {to_txt}")
+    } else {
+        to_txt
+    };
+    let key = if move_files { "drag-move" } else { "drag-copy" };
+    Some(norte_i18n::ta(
+        key,
+        &[("n", &n.to_string()), ("to", &to_txt)],
+    ))
+}
+
 /// Los dos modificadores que el marcado entiende. El resto (alt, super) es
 /// asunto del keymap, no de estos gestos.
 fn mods(m: KeyModifiers) -> Mods {
@@ -288,6 +348,7 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
     }
     let hit = hit_test(app, ev.column, ev.row);
     let m = mods(ev.modifiers);
+    app.mouse.last_mods = m;
     match ev.kind {
         MouseEventKind::ScrollUp => scroll(app, hit, false),
         MouseEventKind::ScrollDown => scroll(app, hit, true),
@@ -467,19 +528,38 @@ fn apply(app: &mut App, effects: &[Effect]) {
                 app.panes[pane].apply_sweep(from, to);
             }
             // El barrido cruzó al otro panel y la máquina lo promovió a
-            // transferencia: devuelve lo que llevara marcado. La TUI todavía
-            // no suelta (el mensaje de más abajo lo dice), pero el gesto se
-            // comporta igual que en la GUI — las reglas son las mismas para
-            // los dos frontends, que es el motivo de que vivan en
-            // `norte-frontend`.
+            // transferencia: devuelve lo que llevara marcado. Una promoción
+            // cambia lo que el gesto HACE, no lo que está seleccionado.
             Effect::RevertSweep { pane } => app.panes[pane].revert_sweep(),
-            // Arrastrar entre paneles NO transfiere todavía en la TUI: el
-            // drop es la tarea 5 del plan y solo llega a la GUI. Se dice en
-            // voz alta en la barra en vez de tragarse el gesto — un
-            // arrastre que no hace nada Y no explica nada se lee como que
-            // el ratón está roto.
-            Effect::Transfer { .. } => {
-                app.message = Some(t("msg-mouse-transfer-unavailable"));
+            // El drop. Abre EXACTAMENTE el mismo modal que la tecla de
+            // copiar o mover (`App::open_transfer`, fuente única): misma
+            // confirmación, mismo diálogo de colisión, misma entrada de
+            // journal, mismo undo, misma puerta de policy. Un drop es una
+            // mutación y no tiene un camino más silencioso que las demás.
+            //
+            // No hace falta guard de overlay: `handle_at` ya retorna antes
+            // de tocar nada si hay uno delante, y `after_frame` caduca el
+            // gesto en cuanto aparece.
+            Effect::Transfer {
+                from_pane,
+                to_pane,
+                move_files,
+                promoted,
+            } => {
+                let kind = if move_files {
+                    TransferKind::Move
+                } else {
+                    TransferKind::Copy
+                };
+                // El lote se consume del pane con FOCO (`consume_marks` tras
+                // enviar), y el origen de un drop es el pane donde bajó el
+                // botón. El foco YA está ahí —la pulsación lo puso— pero
+                // dejarlo dicho convierte un invariante accidental en uno
+                // escrito: si algún día una motion sobre el otro panel
+                // moviera el foco, las marcas se consumirían del pane
+                // equivocado en silencio.
+                app.set_focus(from_pane);
+                app.open_transfer(kind, from_pane, to_pane, promoted);
             }
         }
     }

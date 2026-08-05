@@ -240,7 +240,11 @@ msg-semantic-in-search = Semantic search is not available in a search pane
 msg-hidden-hidden = hidden entries hidden
 msg-marked-by-pattern = { $n } marks changed
 msg-mouse-capture-failed = the terminal did not accept mouse capture: norte stays keyboard-only
-msg-mouse-transfer-unavailable = dragging between panes does not copy yet in the TUI: mark, then use the copy or move key
+# Drag in flight, BOTH frontends: what a release would do right now. Never
+# GUI-only — the TUI status bar says the same thing from the same source
+# (`Drag::pending`), so the two cannot promise different drops.
+drag-copy = Drop to COPY { $n } item(s) → { $to }   (hold shift to move)
+drag-move = Drop to MOVE { $n } item(s) → { $to }   (release shift to copy)
 msg-open-missing-program = opener needs `{ $program }` — not installed
 msg-open-remote = openers only work on local files
 msg-open-launched = opened with { $program }
@@ -410,8 +414,6 @@ gui-viewer-image-unreadable = unreadable image
 gui-a11y-pane-left = left pane
 gui-a11y-pane-right = right pane
 gui-a11y-tasks = tasks in progress
-gui-drag-copy = Drop to COPY { $n } item(s) → { $to }   (hold shift to move)
-gui-drag-move = Drop to MOVE { $n } item(s) → { $to }   (release shift to copy)
 gui-menu-acts-on = acts on { $target }
 gui-menu-target-marks = { $n } marked items
 gui-menu-entry-disabled = { $label } — { $reason }
