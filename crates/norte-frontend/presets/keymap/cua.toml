@@ -98,4 +98,7 @@ keymap = [
     { on = ["J"], run = "dialog.move-down" },
     { on = ["ctrl+s"], run = "dialog.sort" },
     { on = ["f"], run = "dialog.cycle-format" },
+    { on = ["tab"], run = "dialog.pane" },
+    { on = ["backspace"], run = "dialog.back" },
+    { on = ["/"], run = "dialog.filter" },
 ]

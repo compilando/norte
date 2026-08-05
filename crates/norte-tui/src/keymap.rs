@@ -174,6 +174,14 @@ pub const DIALOG_COMMANDS: &[&str] = &[
     "dialog.move-down",
     "dialog.sort",
     "dialog.cycle-format",
+    // H3b — verbs the help overlay adds. They are `dialog.*` and not
+    // `app.*` because they only mean anything inside an overlay: "the other
+    // pane of this overlay", "the page I came from", "start filtering this
+    // list". Documented in the `help` topic, so the documentation gate is
+    // paid in the same change that introduces them.
+    "dialog.pane",
+    "dialog.back",
+    "dialog.filter",
 ];
 
 /// Id de Fluent con la descripción de un comando (`app.quit` →

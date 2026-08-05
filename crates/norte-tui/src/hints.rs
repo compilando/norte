@@ -108,6 +108,8 @@ pub struct DialogHints {
     /// `NavPopupKind::Hotlist`) — el historial no pinta footer, igual que
     /// antes de H1.
     pub nav_list: String,
+    /// Help overlay (`App::help`, H3b).
+    pub help: String,
 }
 
 impl DialogHints {
@@ -116,7 +118,7 @@ impl DialogHints {
     pub fn build(eff: &Effective) -> Self {
         use crate::app::{
             ALLOW_APPROVAL, ALLOW_COLLISION, ALLOW_COLUMNS, ALLOW_CONFIRM, ALLOW_EXTENSIONS,
-            ALLOW_NAV_HOTLIST, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, ALLOW_TRUST_HOST,
+            ALLOW_HELP, ALLOW_NAV_HOTLIST, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, ALLOW_TRUST_HOST,
         };
         Self {
             confirm: dialog_hints(ALLOW_CONFIRM, eff),
@@ -143,6 +145,7 @@ impl DialogHints {
             extensions: dialog_hints(&without_navigation(ALLOW_EXTENSIONS), eff),
             plugin_config: dialog_hints(&without_navigation(ALLOW_PLUGIN_CONFIG), eff),
             nav_list: dialog_hints(&without_navigation(ALLOW_NAV_HOTLIST), eff),
+            help: dialog_hints(&without_navigation(ALLOW_HELP), eff),
         }
     }
 }
@@ -299,6 +302,36 @@ mod tests {
         // El picker SÍ conserva confirm/cancel (no son navegación).
         assert!(hints.picker.contains("[enter]"));
         assert!(hints.picker.contains("[esc]"));
+    }
+
+    /// H3b: the help overlay's footer is GENERATED like every other
+    /// overlay's — the three verbs it adds must reach it with their chords.
+    #[test]
+    fn el_hint_de_la_ayuda_lista_sus_verbos_propios() {
+        let (_, preset) = crate::keymap::presets()
+            .into_iter()
+            .find(|(n, _)| *n == "orthodox")
+            .expect("preset orthodox");
+        // The `dialog` effective ALSO merges the preset's `[global]` section,
+        // so `DIALOG_COMMANDS` alone is not a sufficient known-command
+        // vocabulary (`build_for` fails with `UnknownCommand { run:
+        // "app.quit" }`). Same union as
+        // `overlays_no_modales_omiten_navegacion_del_hint`.
+        let known: Vec<&str> = crate::keymap::COMMANDS
+            .iter()
+            .copied()
+            .chain(crate::keymap::DIALOG_COMMANDS.iter().copied())
+            .collect();
+        let eff =
+            crate::keymap::Effective::build_for(&preset, &[], &known, Screen::Dialog).unwrap();
+        let hints = DialogHints::build(&eff);
+        for cmd in ["dialog.filter", "dialog.back", "dialog.pane"] {
+            assert!(
+                hints.help.contains(&t(&crate::keymap::dialog_hint_id(cmd))),
+                "{cmd} debe aparecer en el pie de la ayuda: {}",
+                hints.help
+            );
+        }
     }
 
     /// [`without_navigation`] filtra SOLO las cuatro entradas de navegación,

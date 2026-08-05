@@ -509,6 +509,9 @@ dialog-cmd-move-down = bajar
 # frame de 80 (interior 78) — el guard ruidoso del snapshot lo pinea.
 dialog-cmd-sort = ordenar
 dialog-cmd-cycle-format = formato
+dialog-cmd-pane = otro panel
+dialog-cmd-back = atrás
+dialog-cmd-filter = filtrar
 
 # --- norte doctor (H2): diagnóstico de solo lectura sobre capas de config,
 # keymaps, plugins y conexiones.

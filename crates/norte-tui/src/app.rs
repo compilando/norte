@@ -2886,6 +2886,23 @@ pub const ALLOW_NAV_HOTLIST: &[&str] = &[
     "dialog.cancel",
 ];
 
+/// Verbs the help overlay dispatches (H3b). Navigation, confirm (run the
+/// focused row or follow the focused link), cancel (close), plus its own
+/// three. Nothing that mutates: the overlay itself changes no files — a
+/// command it RUNS goes through the normal dispatch, with its own
+/// confirmation, gate and journal entry.
+pub const ALLOW_HELP: &[&str] = &[
+    "dialog.up",
+    "dialog.down",
+    "dialog.page-up",
+    "dialog.page-down",
+    "dialog.confirm",
+    "dialog.cancel",
+    "dialog.pane",
+    "dialog.back",
+    "dialog.filter",
+];
+
 /// Mapea un comando `dialog.*` YA RESUELTO (por el
 /// [`Resolver`](crate::keymap::Resolver) del efectivo `dialog`, H1 #24) al
 /// desenlace del modal activo, filtrando por el ALLOWLIST del modal
