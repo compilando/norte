@@ -6,6 +6,7 @@
 pub mod app;
 pub mod config;
 pub mod help;
+pub mod help_render;
 pub mod hints;
 pub mod keymap;
 pub mod lua;
