@@ -17,12 +17,25 @@ just disk                               # Where the build cache went
 just prune                              # Reclaim it without a full rebuild
 ```
 
-Pace CI to avoid slowing iteration. While iterating, prefer the targeted
-`just t <crate>` and `just c <crate>`. Use `just ci-fast` for a normal
-pre-commit check; it skips the `cov` gate, which re-instruments proto/vfs/core
-in a separate target (~34s fixed plus a rebuild). Run the full `just ci` once
-per change — never on a loop — and only when you touched proto/vfs/core logic
-(the sole crates under the 85% coverage gate) or at the final close of the work.
+Pace CI to avoid slowing iteration. **The ladder, cheap to expensive — climb a
+rung only when the one below it is green:**
+
+| step | when | warm cost |
+| --- | --- | --- |
+| `just t <crate>` | the RED→GREEN loop | ~10s |
+| `just ci-fast` | before calling a task done | ~34s |
+| `just ci` | before a commit or a push | ~143s |
+
+`cov` is 76% of `just ci` (109s of 143s) and can only move if you touched
+proto/vfs/core — the sole crates under the 85% gate — so keep it out of the
+loop. Filtering tests (`-E 'test(...)'`) buys nothing: compilation dominates,
+and running the whole suite is ~12s. Run the full `just ci` once per change,
+never on a loop.
+
+**An intermittently red test is a bug, not noise.** Do not re-run it until it
+goes green: that demonstrates nothing and hides the cause. There are ~26
+wall-clock `sleep()`s in the suite, and under load any of them can lose its
+race. Diagnose it — the repo's rule is test-first on bugs.
 
 **Go through `just`, not through bare `cargo`, for anything that compiles the
 workspace.** Cargo keys its artifacts on the feature set, so `cargo nextest run
@@ -36,6 +49,14 @@ coverage target without forcing a rebuild from scratch; `just prune-all` is the
 hammer. `just ci` refuses to start below 40 GB free, because running out of
 disk mid-build corrupts artifacts and surfaces as linker errors that look like
 code bugs.
+
+**Concurrent sessions get a worktree each: `scripts/wt.sh <name>`.** Never two
+sessions on one tree. They clobber each other's edits without a word — the
+serious risk — and they serialize on cargo's exclusive `target/` lock, each
+recompiling what the other just built. A worktree isolates both. It is not
+free: its `target/` is its own, so it is another ~30 GB and one cold build
+(~250s). Use it when sessions genuinely overlap, and `git worktree remove` when
+they stop — a forgotten worktree is 30 GB of nothing (`just disk` lists them).
 
 ## Workspace map
 
