@@ -3250,12 +3250,12 @@ impl NorteGui {
             return;
         };
         self.follow_cursor(pane);
-        let facts = context_menu::Facts {
+        let facts = context_menu::facts_for(
             kind,
-            count: target.count(),
-            source_read_only: scheme_is_read_only(self.panes[pane].dir().scheme()),
-            dest_read_only: scheme_is_read_only(self.panes[1 - pane].dir().scheme()),
-        };
+            target.count(),
+            scheme_is_read_only(self.panes[pane].dir().scheme()),
+            scheme_is_read_only(self.panes[1 - pane].dir().scheme()),
+        );
         self.context_menu = Some(ContextMenu::open(
             pane,
             self.panes[pane].listing_epoch(),
@@ -10164,12 +10164,7 @@ mod tests {
     /// listado que había al abrirlo. El del OTRO pane no le incumbe.
     #[test]
     fn el_menu_se_cierra_con_un_listado_nuevo_en_su_pane() {
-        let facts = context_menu::Facts {
-            kind: EntryKind::File,
-            count: 1,
-            source_read_only: false,
-            dest_read_only: false,
-        };
+        let facts = context_menu::facts_for(EntryKind::File, 1, false, false);
         let abierto = || {
             Some(ContextMenu::open(
                 1,
@@ -10323,12 +10318,7 @@ mod tests {
     /// una que el teclado no tenga.
     #[test]
     fn cada_entrada_del_menu_tiene_equivalente_de_teclado() {
-        let facts = context_menu::Facts {
-            kind: EntryKind::File,
-            count: 1,
-            source_read_only: false,
-            dest_read_only: false,
-        };
+        let facts = context_menu::facts_for(EntryKind::File, 1, false, false);
         let (browse, _) = keymap::build_effectives_preset_only("orthodox");
         let con_chord: std::collections::HashSet<&str> =
             browse.bindings().iter().map(|(_, cmd)| *cmd).collect();

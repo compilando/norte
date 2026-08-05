@@ -475,10 +475,20 @@ gui-menu-move = Move to the other pane
 gui-menu-rename-ai = Rename with AI (whole folder)…
 gui-menu-delete = Delete
 gui-menu-copy-path = Copy path
-gui-menu-reason-read-only = read-only backend
-gui-menu-reason-wrong-target = does not apply to this selection
-gui-menu-reason-unavailable = unavailable right now
 gui-menu-copied = { $n } path(s) copied to the clipboard
+
+# --- Why a command cannot run (H3d) — SHARED by both frontends: the GUI
+# dims a context-menu entry and the TUI dims a help row with the same
+# wording, from `norte_frontend::availability::reason_key`. No `gui-` prefix
+# on purpose. `reason-unavailable` is the fallback for a `Reason` variant
+# added after this catalogue (the enum is `#[non_exhaustive]`).
+reason-read-only = read-only backend
+reason-wrong-target = does not apply to this selection
+reason-unsupported = the backend does not support it
+reason-plugin-inactive = the plugin is disabled or unapproved
+reason-policy-denied = the policy denies it
+reason-connection-degraded = degraded connection
+reason-unavailable = unavailable right now
 gui-modal-rename-title = Rename
 gui-modal-rename-from = current: { $name }
 gui-modal-rename-to = new: { $name }

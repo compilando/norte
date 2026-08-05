@@ -484,10 +484,21 @@ gui-menu-move = Mover al otro panel
 gui-menu-rename-ai = Renombrar con IA (toda la carpeta)…
 gui-menu-delete = Borrar
 gui-menu-copy-path = Copiar la ruta
-gui-menu-reason-read-only = backend de solo lectura
-gui-menu-reason-wrong-target = no aplica a esta selección
-gui-menu-reason-unavailable = no disponible ahora
 gui-menu-copied = { $n } ruta(s) copiada(s) al portapapeles
+
+# --- Por qué un comando no puede correr (H3d) — COMPARTIDAS por los dos
+# frontends: la GUI apaga una entrada del menú contextual y la TUI atenúa una
+# fila de la ayuda con el mismo texto, vía
+# `norte_frontend::availability::reason_key`. Sin prefijo `gui-` a propósito.
+# `reason-unavailable` es el fallback de una variante de `Reason` añadida
+# después de este catálogo (el enum es `#[non_exhaustive]`).
+reason-read-only = backend de solo lectura
+reason-wrong-target = no aplica a esta selección
+reason-unsupported = el backend no lo soporta
+reason-plugin-inactive = la extensión está desactivada o sin aprobar
+reason-policy-denied = la policy lo deniega
+reason-connection-degraded = conexión degradada
+reason-unavailable = no disponible ahora
 gui-modal-rename-title = Renombrar
 gui-modal-rename-from = actual: { $name }
 gui-modal-rename-to = nuevo: { $name }

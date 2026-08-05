@@ -12,9 +12,12 @@
 //!    justo el error que la regla existe para evitar.
 //! 2. **Qué se puede ejecutar AHORA.** Una entrada que no puede correr se
 //!    pinta DESHABILITADA con su motivo, nunca escondida — un menú que cambia
-//!    de forma no se aprende. El vocabulario de motivos es el de
-//!    [`norte_help`] ([`Availability`]/[`Reason`]), el mismo que consumirá la
-//!    ayuda: uno solo, no dos.
+//!    de forma no se aprende. El veredicto NO se decide aquí: lo da la tabla
+//!    compartida [`norte_frontend::availability`], la misma que atenúa las
+//!    filas de la ayuda en la TUI (H3d). Una tabla, dos frontends: un menú
+//!    que apaga «copiar» mientras la ayuda lo anuncia disponible es peor que
+//!    cualquiera de los dos por separado. El vocabulario de motivos es el de
+//!    [`norte_help`] ([`Availability`]/[`Reason`]).
 //! 3. **Qué comando dispara cada entrada.** SIEMPRE uno de
 //!    [`crate::keymap::COMMANDS`], el mismo nombre que resuelve el teclado y
 //!    que ejecuta `NorteGui::run_command`. Este módulo no ejecuta nada: sólo
@@ -24,7 +27,8 @@
 //! clave, no la cadena), así que el menú habla el idioma vigente y no el que
 //! hubiera al abrirlo.
 
-use norte_help::{Availability, Reason};
+use norte_frontend::availability::{Facts, reason_key, verdict};
+use norte_help::Availability;
 use norte_proto::EntryKind;
 
 /// Tope de caracteres del nombre que la cabecera del menú cita (encoding: el
@@ -109,127 +113,70 @@ impl Item {
     }
 }
 
-/// Clave Fluent de un motivo. El `match` lleva comodín A PROPÓSITO:
-/// [`Reason`] es `#[non_exhaustive]` (la fase H3d de la ayuda le añadirá
-/// variantes), y un motivo futuro debe degradar a «no disponible» en vez de
-/// romper la compilación de este frontend.
-fn reason_key(reason: Reason) -> &'static str {
-    match reason {
-        Reason::ReadOnlyBackend => "gui-menu-reason-read-only",
-        Reason::WrongTarget => "gui-menu-reason-wrong-target",
-        _ => "gui-menu-reason-unavailable",
-    }
-}
-
-/// Lo que el frontend sabe del estado y el menú necesita para decidir qué
-/// puede correr. Nada de esto se recalcula mientras el menú está abierto: un
-/// menú que cambia bajo el puntero es peor que uno desfasado, que además
-/// caduca solo (ver [`ContextMenu::is_stale`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Facts {
-    /// Tipo de la entrada pulsada.
-    pub kind: EntryKind,
-    /// Cuántas entradas abarca el objetivo.
-    pub count: usize,
-    /// El backend del pane pulsado es de solo lectura (dentro de un archivo).
-    pub source_read_only: bool,
-    /// El backend del OTRO pane (el destino de copiar/mover) es de solo
-    /// lectura.
-    pub dest_read_only: bool,
-}
-
-/// Deshabilitado por `reason`.
-fn no(reason: Reason) -> Availability {
-    Availability::Unavailable { reason }
-}
-
-/// `Available` si `ok`, si no deshabilitado por `reason`.
-fn gated(ok: bool, reason: Reason) -> Availability {
-    if ok {
-        Availability::Available
-    } else {
-        no(reason)
-    }
-}
-
-/// El PRIMER motivo cuya condición se cumple, o `Available` si ninguna. El
-/// orden de la lista es el de importancia: con dos impedimentos a la vez se
-/// explica el que el usuario tendría que resolver primero (soltar marcas no
-/// hace escribible un zip).
-fn first_failure(checks: &[(bool, Reason)]) -> Availability {
-    match checks.iter().find(|(hit, _)| *hit) {
-        Some((_, reason)) => no(*reason),
-        None => Availability::Available,
+/// Los [`Facts`] de la GUI a partir de lo que sabe de la fila pulsada. Es la
+/// mitad que el frontend NO puede delegar, y por eso vive aquí: la tabla
+/// compartida pregunta «se puede entrar» / «se puede ver», no «qué tipo de
+/// entrada es», porque los dos frontends contestan distinto. En la GUI, Enter
+/// entra en un DIRECTORIO y nada más (no hay composición de scheme de archivo
+/// como en la TUI, donde un `.zip` se entra), y el visor abre FICHEROS; las
+/// dos cosas exigen además que el objetivo sea UNO solo: «abrir» once
+/// ficheros a la vez no significa nada.
+///
+/// Nada de esto se recalcula mientras el menú está abierto: un menú que cambia
+/// bajo el puntero es peor que uno desfasado, que además caduca solo (ver
+/// [`ContextMenu::is_stale`]).
+#[must_use]
+pub fn facts_for(
+    kind: EntryKind,
+    count: usize,
+    source_read_only: bool,
+    dest_read_only: bool,
+) -> Facts {
+    let single = count == 1;
+    Facts {
+        enterable: single && kind == EntryKind::Dir,
+        viewable: single && kind == EntryKind::File,
+        single,
+        source_read_only,
+        dest_read_only,
+        // La GUI no sigue la pista de las degradaciones de conexión (la TUI sí,
+        // por scheme). Además hoy no veta nada en la tabla: «degradada»
+        // significa sesión sin cifrar, no sesión inservible.
+        degraded: false,
     }
 }
 
 /// Las entradas del menú, en orden de pintado. TODAS aparecen SIEMPRE: lo que
-/// cambia entre contextos es su [`Availability`], no la lista.
+/// cambia entre contextos es su [`Availability`], no la lista. Cada
+/// [`Availability`] la da [`verdict`]: este módulo aporta la LISTA y las
+/// etiquetas, jamás un criterio propio de disponibilidad.
 #[must_use]
 pub fn items(facts: &Facts) -> Vec<Item> {
-    let single = facts.count == 1;
-    vec![
-        Item {
-            // «Abrir» es lo que hace Enter: entrar en el directorio. La GUI no
-            // tiene abridor externo (`pane.open` es de la TUI), así que sobre
-            // un fichero no hay comando que despachar y la entrada lo dice.
-            command: "nav.enter",
-            label_key: "gui-menu-open",
-            avail: gated(single && facts.kind == EntryKind::Dir, Reason::WrongTarget),
-        },
-        Item {
-            command: "pane.view",
-            label_key: "gui-menu-view",
-            avail: gated(single && facts.kind == EntryKind::File, Reason::WrongTarget),
-        },
-        Item {
-            // Copiar LEE del origen (un zip vale) y ESCRIBE en el destino.
-            command: "pane.copy",
-            label_key: "gui-menu-copy",
-            avail: gated(!facts.dest_read_only, Reason::ReadOnlyBackend),
-        },
-        Item {
-            // Mover escribe en los DOS: borra en el origen.
-            command: "pane.move",
-            label_key: "gui-menu-move",
-            avail: gated(
-                !facts.dest_read_only && !facts.source_read_only,
-                Reason::ReadOnlyBackend,
-            ),
-        },
-        Item {
-            // Renombrar de verdad (`pane.rename`, shift+F6): UNA entrada, la
-            // del cursor. Con varias marcas se apaga en vez de renombrar la
-            // del cursor a espaldas del objetivo que el menú anuncia —
-            // renombrar en bloque sería un batch-rename, otra feature.
-            command: "pane.rename",
-            label_key: "gui-menu-rename",
-            avail: first_failure(&[
-                (facts.source_read_only, Reason::ReadOnlyBackend),
-                (!single, Reason::WrongTarget),
-            ]),
-        },
-        Item {
-            // El rename de IA sigue estando, y sigue siendo OTRA cosa: actúa
-            // sobre la carpeta entera, no sobre el objetivo del menú, y la
-            // etiqueta lo dice en voz alta en vez de fingir un alcance que no
-            // tiene.
-            command: "pane.ai-rename",
-            label_key: "gui-menu-rename-ai",
-            avail: gated(!facts.source_read_only, Reason::ReadOnlyBackend),
-        },
-        Item {
-            command: "pane.delete",
-            label_key: "gui-menu-delete",
-            avail: gated(!facts.source_read_only, Reason::ReadOnlyBackend),
-        },
-        Item {
-            // Copiar la ruta no toca el backend: vale hasta dentro de un zip.
-            command: "pane.copy-path",
-            label_key: "gui-menu-copy-path",
-            avail: Availability::Available,
-        },
+    // «Abrir» es lo que hace Enter: entrar en el directorio. La GUI no tiene
+    // abridor externo (`pane.open` es de la TUI), así que sobre un fichero no
+    // hay comando que despachar y la entrada lo dice (vía `enterable`).
+    //
+    // El rename de IA sigue estando, y sigue siendo OTRA cosa que
+    // `pane.rename`: actúa sobre la carpeta entera, no sobre el objetivo del
+    // menú, y la etiqueta lo dice en voz alta en vez de fingir un alcance que
+    // no tiene.
+    [
+        ("nav.enter", "gui-menu-open"),
+        ("pane.view", "gui-menu-view"),
+        ("pane.copy", "gui-menu-copy"),
+        ("pane.move", "gui-menu-move"),
+        ("pane.rename", "gui-menu-rename"),
+        ("pane.ai-rename", "gui-menu-rename-ai"),
+        ("pane.delete", "gui-menu-delete"),
+        ("pane.copy-path", "gui-menu-copy-path"),
     ]
+    .into_iter()
+    .map(|(command, label_key)| Item {
+        command,
+        label_key,
+        avail: verdict(command, facts),
+    })
+    .collect()
 }
 
 /// Lo que una tecla le hace al menú.
@@ -333,15 +280,17 @@ impl ContextMenu {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use norte_help::Reason;
     use norte_i18n::{Lang, t_in};
 
     fn facts() -> Facts {
-        Facts {
-            kind: EntryKind::File,
-            count: 1,
-            source_read_only: false,
-            dest_read_only: false,
-        }
+        facts_for(EntryKind::File, 1, false, false)
+    }
+
+    /// Deshabilitado por `reason` (los tests comparan veredictos completos;
+    /// la tabla compartida no exporta su propio atajo).
+    fn no(reason: Reason) -> Availability {
+        Availability::Unavailable { reason }
     }
 
     fn menu(f: &Facts, target: Target) -> ContextMenu {
@@ -373,12 +322,7 @@ mod tests {
             (EntryKind::File, true, true, 9),
             (EntryKind::Symlink, false, true, 3),
         ] {
-            let f = Facts {
-                kind,
-                count,
-                source_read_only: ro_src,
-                dest_read_only: ro_dst,
-            };
+            let f = facts_for(kind, count, ro_src, ro_dst);
             let got: Vec<&str> = items(&f).iter().map(|i| i.command).collect();
             assert_eq!(got, esperados, "la lista cambió con {kind:?}");
         }
@@ -389,12 +333,7 @@ mod tests {
     /// algo se ejecutó).
     #[test]
     fn una_entrada_deshabilitada_no_despacha() {
-        let f = Facts {
-            kind: EntryKind::File,
-            count: 1,
-            source_read_only: true,
-            dest_read_only: true,
-        };
+        let f = facts_for(EntryKind::File, 1, true, true);
         let mut m = menu(&f, Target::Entry("x".into()));
         let borrar = m
             .items
@@ -422,12 +361,7 @@ mod tests {
     /// El motivo se PINTA junto a la entrada apagada, no sólo se guarda.
     #[test]
     fn la_entrada_deshabilitada_dice_su_motivo() {
-        let f = Facts {
-            kind: EntryKind::Dir,
-            count: 1,
-            source_read_only: false,
-            dest_read_only: true,
-        };
+        let f = facts_for(EntryKind::Dir, 1, false, true);
         let m = menu(&f, Target::Entry("d".into()));
         let mover = m.items.iter().find(|i| i.command == "pane.move").unwrap();
         let texto = mover.text();
@@ -448,10 +382,7 @@ mod tests {
     /// ficheros a la vez no significa nada.
     #[test]
     fn abrir_y_ver_dependen_del_tipo_y_de_ser_uno_solo() {
-        let dir = Facts {
-            kind: EntryKind::Dir,
-            ..facts()
-        };
+        let dir = facts_for(EntryKind::Dir, 1, false, false);
         let abrir = |f: &Facts| {
             items(f)
                 .into_iter()
@@ -471,7 +402,7 @@ mod tests {
         assert_eq!(abrir(&facts()), no(Reason::WrongTarget));
         assert_eq!(ver(&facts()), Availability::Available);
 
-        let varios = Facts { count: 4, ..dir };
+        let varios = facts_for(EntryKind::Dir, 4, false, false);
         assert_eq!(
             abrir(&varios),
             no(Reason::WrongTarget),
@@ -497,10 +428,7 @@ mod tests {
         assert_eq!(avail(&facts(), "pane.rename"), Availability::Available);
         assert_eq!(avail(&facts(), "pane.ai-rename"), Availability::Available);
 
-        let marcas = Facts {
-            count: 7,
-            ..facts()
-        };
+        let marcas = facts_for(EntryKind::File, 7, false, false);
         assert_eq!(avail(&marcas, "pane.rename"), no(Reason::WrongTarget));
         assert_eq!(
             avail(&marcas, "pane.ai-rename"),
@@ -508,11 +436,7 @@ mod tests {
             "el rename de IA es de la CARPETA: el recuento no le afecta"
         );
 
-        let zip = Facts {
-            count: 7,
-            source_read_only: true,
-            ..facts()
-        };
+        let zip = facts_for(EntryKind::File, 7, true, false);
         assert_eq!(
             avail(&zip, "pane.rename"),
             no(Reason::ReadOnlyBackend),
@@ -572,10 +496,12 @@ mod tests {
             "gui-menu-target-marks",
             "gui-menu-entry-disabled",
             "gui-menu-hint",
-            "gui-menu-reason-read-only",
-            "gui-menu-reason-wrong-target",
-            "gui-menu-reason-unavailable",
             "gui-menu-copied",
+            // Los motivos ya no llevan prefijo `gui-`: son COMPARTIDOS con la
+            // ayuda de la TUI (H3d), y los nombra
+            // `norte_frontend::availability::reason_key`.
+            reason_key(Reason::ReadOnlyBackend),
+            reason_key(Reason::WrongTarget),
         ]);
         for clave in claves {
             for lang in [Lang::Es, Lang::En] {
