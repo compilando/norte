@@ -358,8 +358,11 @@ impl Backend {
     /// caches the catalogue for its columns and the flags to answer
     /// "read-only?" without asking again — paid two round trips for one
     /// message. Remote mode makes a single `fs.capabilities` call here;
-    /// embedded mode asks the engine twice, which is two in-process lookups
-    /// and no I/O at all.
+    /// embedded mode asks the engine twice, which is two provider lookups
+    /// instead of one and no extra round trip on the wire. Not "no I/O at
+    /// all": both halves go through `Engine::provider_for`, which for a remote
+    /// scheme can resolve or establish the connection first — true of
+    /// `file://`, false of an embedded `sftp` pane.
     ///
     /// # Errors
     /// Taxonomía del protocolo.

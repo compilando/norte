@@ -20,7 +20,9 @@ independently through `PROTOCOL_VERSION`.
   the answer norte was already fetching for the columns and throwing half
   away, so knowing this costs no extra round trip, and a degraded connection
   is finally kept as data instead of a sentence — two degraded connections no
-  longer overwrite each other.
+  longer overwrite each other, and the status bar names the most recent one
+  and says how many more there are, masked like every other name that arrives
+  from somewhere else.
   Three things it deliberately does not claim: policy denial, because in the
   embedded app you are the human, whom the policy engine never denies;
   the difference between a plugin that was never approved and one whose

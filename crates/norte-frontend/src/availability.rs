@@ -18,6 +18,28 @@
 //! - **Which commands exist.** An id the table has no arm for is available
 //!   (see [`verdict`]): the table is a list of known IMPEDIMENTS, not a
 //!   registry of commands.
+//! - **Impediments of STATE.** This is the boundary of what dimming MEANS
+//!   here, and it is a decision rather than a gap. The table models
+//!   impediments of BACKEND (the location refuses mutation) and of TARGET (the
+//!   entry the command would act on is the wrong kind, or there are too many
+//!   of them). It never models "there is nothing to do right now": `task.cancel`
+//!   with no task running, `nav.parent` at the root, `nav.back` and
+//!   `nav.forward` on an empty trail are all knowable no-ops in common states,
+//!   and all four stay lit. Two reasons. A trail that is empty AT THIS INSTANT
+//!   is not the same kind of fact as a backend that cannot write — the first
+//!   changes with the next keystroke and the second needs the reader to go
+//!   somewhere else — and a reader who learns "dimmed means it does not apply
+//!   here" from one row must not meet a row where it meant "not yet". The
+//!   frontends have all of these facts in hand and could fill them cheaply;
+//!   the reason they do not is this paragraph, not the cost. Pinned by
+//!   `la_tabla_no_modela_impedimentos_de_estado`.
+//!
+//! One veto is knowable, in scope, and DEFERRED: `pane.open` (the TUI's F4)
+//! refuses anything the openers cannot resolve to a native path, and
+//! [`Reason::Unsupported`] already has its Fluent strings. It needs a seventh
+//! field in [`Facts`] — "the focused entry has a native path" — which no
+//! caller computes today, so it arrives with the change that adds it rather
+//! than being quietly missing.
 
 use norte_help::{Availability, Reason};
 
@@ -108,13 +130,18 @@ pub fn reason_key(reason: Reason) -> &'static str {
 /// leaves it, so the scheme alone is enough to know.
 ///
 /// It exists for the moment BEFORE the capability flags have arrived. A
-/// frontend that caches `Capabilities` per scheme should prefer the flags and
-/// fall back here (see `norte_tui::app::App::pane_read_only`); one that caches
-/// nothing has only this. Either way it answers too MUCH read-only, never too
-/// little: a backend that refuses writes for some other reason says so when
-/// the task is submitted, which is a real error the user sees, whereas
-/// claiming a read-only location is writable would offer an operation that
-/// cannot exist.
+/// frontend that caches `Capabilities` per connection should prefer the flags
+/// and fall back here (see `norte_tui::app::App::pane_read_only`); one that
+/// caches nothing has only this.
+///
+/// It dims only what is read-only BY CONSTRUCTION, and everything else it
+/// reports writable: a read-only SFTP export and an S3 bucket the credentials
+/// cannot write to both come back `false` here. That is the safe direction and
+/// it is the reason the fallback is allowed to be this crude — every wrong
+/// answer offers an operation that then refuses with a real error the reader
+/// sees, whereas the opposite mistake, dimming a location that would have
+/// accepted the write, teaches the reader that the app cannot do something it
+/// can and is not corrected by anything.
 ///
 /// ```
 /// use norte_frontend::availability::scheme_is_read_only;
@@ -225,7 +252,12 @@ pub fn verdict(command: &str, facts: &Facts) -> Availability {
         // saltándose la papelera sigue siendo escribir en el origen. Sin este
         // brazo la página de copiado atenuaba F8 y dejaba shift+F8 encendido
         // dentro de un zip — dos filas contiguas contándose lo contrario.
-        "pane.ai-rename" | "pane.delete" | "pane.delete-permanent" => {
+        //
+        // `pane.mkdir` (F7) crea DENTRO del pane con foco, que es el origen:
+        // mismo veto y por la misma razón. Sin brazo caía en el fail-OPEN y el
+        // lector llegaba a teclear el nombre en el modal antes de que el
+        // despacho fallara.
+        "pane.ai-rename" | "pane.delete" | "pane.delete-permanent" | "pane.mkdir" => {
             gated(!facts.source_read_only, Reason::ReadOnlyBackend)
         }
         // Aquí caen dos cosas distintas, y conviene no confundirlas al leer:
@@ -401,6 +433,46 @@ mod tests {
                 verdict(cmd, &dentro_de_un_zip).reason(),
                 Some(Reason::ReadOnlyBackend),
                 "{cmd} ofrecido dentro de un backend de solo lectura"
+            );
+        }
+    }
+
+    /// MAJOR-3(a): crear un directorio ESCRIBE en el pane con foco, así que se
+    /// veta con el mismo criterio que borrar. Sin brazo caía en el fail-OPEN y
+    /// dentro de un zip la ayuda ofrecía F7: el lector teclea un nombre en el
+    /// modal, lo confirma y el despacho falla. Es el MISMO argumento que la
+    /// propia fase usó para añadir `pane.delete-permanent` — dos filas
+    /// contiguas contándose lo contrario.
+    #[test]
+    fn crear_directorio_se_veta_como_escribir() {
+        let dentro_de_un_zip = Facts {
+            source_read_only: true,
+            ..one_file()
+        };
+        assert_eq!(
+            verdict("pane.mkdir", &dentro_de_un_zip).reason(),
+            Some(Reason::ReadOnlyBackend),
+        );
+        assert!(
+            verdict("pane.mkdir", &one_file()).is_available(),
+            "fuera de un backend de solo lectura se ofrece"
+        );
+    }
+
+    /// MAJOR-3(b): la tabla modela impedimentos de BACKEND y de OBJETIVO, y
+    /// jamás de ESTADO. Estos cuatro son no-ops CONOCIDOS en estados comunes
+    /// —nada corriendo, en la raíz, sin rastro— y aun así se ofrecen: un
+    /// rastro que está vacío AHORA no es la misma clase de hecho que un
+    /// backend que no sabe escribir, y el lector que ve una fila apagada
+    /// aprende «esto no se puede aquí», no «esto no tiene nada que hacer
+    /// todavía». La decisión está escrita en la rustdoc del módulo; este test
+    /// es dónde se cambia si algún día se decide lo contrario.
+    #[test]
+    fn la_tabla_no_modela_impedimentos_de_estado() {
+        for cmd in ["task.cancel", "nav.parent", "nav.back", "nav.forward"] {
+            assert!(
+                verdict(cmd, &one_file()).is_available(),
+                "{cmd} atenuado por un impedimento de ESTADO"
             );
         }
     }

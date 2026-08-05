@@ -182,10 +182,20 @@ pub struct TuiChords {
     /// Frozen and not read live, which is the same decision the GUI's context
     /// menu makes and for the same reason: the reader walks a page whose rows
     /// were dimmed under one set of facts, and a row that changed verdict
-    /// halfway down — because a task finished and repainted a pane — would
-    /// make the page disagree with itself. Stale for the lifetime of one
-    /// overlay is the price, and it is small: the facts are about WHERE the
-    /// panes are, which the reader cannot change without closing the help.
+    /// halfway down — because the cursor moved, or a frame was laid out at a
+    /// different width — would make the page disagree with itself.
+    ///
+    /// What the freeze buys is "no verdict changes because the READER moved",
+    /// and only that. It is NOT stale for the whole lifetime of the overlay,
+    /// because two of these facts do go out of date on their own: the two
+    /// read-only ones cannot change without a `cd`, which needs a key the help
+    /// is eating, but `enterable` and `viewable` describe the entry under the
+    /// cursor, and a copy or a delete finishing while the help is open re-lists
+    /// both panes underneath it (the `tick` arm of the run loop has no overlay
+    /// guard, unlike the `dir_watch` one). So the refresh funnel re-freezes —
+    /// `main::after_panes_refresh`, which all three refresh triggers go
+    /// through. Without it a row said "does not apply to this selection" about
+    /// a selection that no longer existed.
     ///
     /// Before the first freeze it is [`Facts`] with nothing impeded, so the
     /// resolver dims NOTHING. That is the table's own fail-open default

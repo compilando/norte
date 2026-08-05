@@ -113,6 +113,24 @@ impl Item {
     }
 }
 
+/// Qué LADOS se niegan a mutar, para [`facts_for`].
+///
+/// Un par de booleanos con nombre y no dos parámetros sueltos: el literal de
+/// struct que esto sustituyó nombraba los dos campos en el sitio de la
+/// llamada, y una firma `(…, bool, bool)` los deja intercambiables en
+/// silencio. Cambiados de orden compila, y `pane.copy`/`pane.move` quedan
+/// vetados al revés — el menú prohíbe copiar hacia un destino escribible y
+/// ofrece copiar hacia uno que no lo es, que es casi verosímil. Clippy no
+/// avisa: `fn_params_excessive_bools` no salta hasta tres, y los tests que
+/// pasan `true, true` no distinguen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadOnly {
+    /// El pane sobre el que el comando ACTÚA (el del menú).
+    pub source: bool,
+    /// El pane al que escribiría (el otro).
+    pub dest: bool,
+}
+
 /// Los [`Facts`] de la GUI a partir de lo que sabe de la fila pulsada. Es la
 /// mitad que el frontend NO puede delegar, y por eso vive aquí: la tabla
 /// compartida pregunta «se puede entrar» / «se puede ver», no «qué tipo de
@@ -126,13 +144,12 @@ impl Item {
 /// bajo el puntero es peor que uno desfasado, que además caduca solo (ver
 /// [`ContextMenu::is_stale`]).
 #[must_use]
-pub fn facts_for(
-    kind: EntryKind,
-    count: usize,
-    source_read_only: bool,
-    dest_read_only: bool,
-) -> Facts {
+pub fn facts_for(kind: EntryKind, count: usize, read_only: ReadOnly) -> Facts {
     let single = count == 1;
+    let ReadOnly {
+        source: source_read_only,
+        dest: dest_read_only,
+    } = read_only;
     Facts {
         enterable: single && kind == EntryKind::Dir,
         viewable: single && kind == EntryKind::File,
@@ -289,7 +306,14 @@ mod tests {
     use norte_i18n::{Lang, t_in};
 
     fn facts() -> Facts {
-        facts_for(EntryKind::File, 1, false, false)
+        facts_for(
+            EntryKind::File,
+            1,
+            ReadOnly {
+                source: false,
+                dest: false,
+            },
+        )
     }
 
     /// Deshabilitado por `reason` (los tests comparan veredictos completos;
@@ -327,7 +351,14 @@ mod tests {
             (EntryKind::File, true, true, 9),
             (EntryKind::Symlink, false, true, 3),
         ] {
-            let f = facts_for(kind, count, ro_src, ro_dst);
+            let f = facts_for(
+                kind,
+                count,
+                ReadOnly {
+                    source: ro_src,
+                    dest: ro_dst,
+                },
+            );
             let got: Vec<&str> = items(&f).iter().map(|i| i.command).collect();
             assert_eq!(got, esperados, "la lista cambió con {kind:?}");
         }
@@ -338,7 +369,14 @@ mod tests {
     /// algo se ejecutó).
     #[test]
     fn una_entrada_deshabilitada_no_despacha() {
-        let f = facts_for(EntryKind::File, 1, true, true);
+        let f = facts_for(
+            EntryKind::File,
+            1,
+            ReadOnly {
+                source: true,
+                dest: true,
+            },
+        );
         let mut m = menu(&f, Target::Entry("x".into()));
         let borrar = m
             .items
@@ -366,7 +404,14 @@ mod tests {
     /// El motivo se PINTA junto a la entrada apagada, no sólo se guarda.
     #[test]
     fn la_entrada_deshabilitada_dice_su_motivo() {
-        let f = facts_for(EntryKind::Dir, 1, false, true);
+        let f = facts_for(
+            EntryKind::Dir,
+            1,
+            ReadOnly {
+                source: false,
+                dest: true,
+            },
+        );
         let m = menu(&f, Target::Entry("d".into()));
         let mover = m.items.iter().find(|i| i.command == "pane.move").unwrap();
         let texto = mover.text();
@@ -387,7 +432,14 @@ mod tests {
     /// ficheros a la vez no significa nada.
     #[test]
     fn abrir_y_ver_dependen_del_tipo_y_de_ser_uno_solo() {
-        let dir = facts_for(EntryKind::Dir, 1, false, false);
+        let dir = facts_for(
+            EntryKind::Dir,
+            1,
+            ReadOnly {
+                source: false,
+                dest: false,
+            },
+        );
         let abrir = |f: &Facts| {
             items(f)
                 .into_iter()
@@ -407,7 +459,14 @@ mod tests {
         assert_eq!(abrir(&facts()), no(Reason::WrongTarget));
         assert_eq!(ver(&facts()), Availability::Available);
 
-        let varios = facts_for(EntryKind::Dir, 4, false, false);
+        let varios = facts_for(
+            EntryKind::Dir,
+            4,
+            ReadOnly {
+                source: false,
+                dest: false,
+            },
+        );
         assert_eq!(
             abrir(&varios),
             no(Reason::WrongTarget),
@@ -433,7 +492,14 @@ mod tests {
         assert_eq!(avail(&facts(), "pane.rename"), Availability::Available);
         assert_eq!(avail(&facts(), "pane.ai-rename"), Availability::Available);
 
-        let marcas = facts_for(EntryKind::File, 7, false, false);
+        let marcas = facts_for(
+            EntryKind::File,
+            7,
+            ReadOnly {
+                source: false,
+                dest: false,
+            },
+        );
         assert_eq!(avail(&marcas, "pane.rename"), no(Reason::WrongTarget));
         assert_eq!(
             avail(&marcas, "pane.ai-rename"),
@@ -441,7 +507,14 @@ mod tests {
             "el rename de IA es de la CARPETA: el recuento no le afecta"
         );
 
-        let zip = facts_for(EntryKind::File, 7, true, false);
+        let zip = facts_for(
+            EntryKind::File,
+            7,
+            ReadOnly {
+                source: true,
+                dest: false,
+            },
+        );
         assert_eq!(
             avail(&zip, "pane.rename"),
             no(Reason::ReadOnlyBackend),

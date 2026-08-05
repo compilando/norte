@@ -1437,12 +1437,59 @@ fn la_ayuda_dentro_de_un_zip_pinta_la_razon_del_veto() {
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     let texto = terminal.backend().to_string();
+    let buffer = terminal.backend().buffer().clone();
 
     let razon = norte_i18n::t_in(norte_i18n::Lang::Es, "reason-read-only");
     assert!(
         texto.contains(&razon),
         "la fila vetada tiene que decir POR QUÉ ({razon}):\n{texto}"
     );
+
+    // Y la OTRA mitad de la función: la fila está ATENUADA. Decir la razón
+    // sobre una fila que se sigue pintando como pulsable es media feature, y
+    // es la mitad que el ojo lee primero — el volcado de texto no lleva
+    // estilos, así que esto va celda a celda.
+    //
+    // Se comprueban los DOS tramos que `row_line` decide por separado: el
+    // chord (`Mark` si se puede pulsar, `Info` si no — una fila apagada no
+    // puede vestir de tecla) y el texto. Solo el color de FRENTE: el fondo se
+    // lo pone el bloque del overlay y no dice nada de la disponibilidad.
+    let filas = row_texts(&buffer);
+    let estilos = all_row_styles(&buffer);
+    let y = filas
+        .iter()
+        .position(|f| f.contains(&razon))
+        .expect("la fila con la razón cae dentro del frame");
+    let fg_de = |x: usize| estilos[y][x].fg.expect("cada celda pintada tiene frente");
+    let en = |aguja: &str| -> usize {
+        let byte = filas[y].find(aguja).expect("el trozo está en la fila");
+        filas[y][..byte].chars().count()
+    };
+    let atenuado = app.theme.role(norte_theme::Role::Info).fg;
+    let normal = app.theme.role(norte_theme::Role::Regular).fg;
+    let tecla = app.theme.role(norte_theme::Role::Mark).fg;
+    assert!(
+        atenuado != normal && atenuado != tecla,
+        "el tema tiene que distinguir los tres roles o esto no prueba nada"
+    );
+
+    let x_razon = en(&razon);
+    for x in x_razon..x_razon + razon.chars().count() {
+        assert_eq!(
+            Some(fg_de(x)),
+            atenuado,
+            "la fila dice la razón pero se pinta como si se pudiera pulsar: {:?}",
+            filas[y]
+        );
+    }
+    let x_chord = en("F5");
+    assert_eq!(
+        Some(fg_de(x_chord)),
+        atenuado,
+        "el chord de una fila vetada no puede seguir vestido de tecla: {:?}",
+        filas[y]
+    );
+    assert_ne!(Some(fg_de(x_chord)), tecla);
 }
 
 #[test]

@@ -90,6 +90,7 @@ use gpui_platform::application;
 use std::ops::Range;
 
 use norte_config::ConfirmQuit;
+use norte_frontend::availability::scheme_is_read_only;
 use norte_frontend::mouse::{Drag, Effect, Mods, Pending, Press, Spot};
 use norte_frontend::settings::PendingWrite;
 use norte_frontend::{PaneState, nav::Mode};
@@ -3250,11 +3251,16 @@ impl NorteGui {
             return;
         };
         self.follow_cursor(pane);
+        // El criterio de solo-lectura de la GUI es SINTÁCTICO y punto: a
+        // diferencia de la TUI no cachea `Capabilities` por conexión, así que
+        // aquí `scheme_is_read_only` es la respuesta, no el respaldo.
         let facts = context_menu::facts_for(
             kind,
             target.count(),
-            scheme_is_read_only(self.panes[pane].dir().scheme()),
-            scheme_is_read_only(self.panes[1 - pane].dir().scheme()),
+            context_menu::ReadOnly {
+                source: scheme_is_read_only(self.panes[pane].dir().scheme()),
+                dest: scheme_is_read_only(self.panes[1 - pane].dir().scheme()),
+            },
         );
         self.context_menu = Some(ContextMenu::open(
             pane,
@@ -5145,14 +5151,6 @@ fn menu_origin(anchor: (f32, f32), panel: (f32, f32), viewport: (f32, f32)) -> (
     let y = anchor.1.min(viewport.1 - panel.1).max(0.0);
     (x, y)
 }
-
-// ¿El backend de este scheme es de SOLO LECTURA? Vivía AQUÍ, inline, y ahora
-// es de `norte_frontend::availability` (H3d tarea 2): la TUI necesitaba el
-// mismo criterio sintáctico para el momento previo a que lleguen las caps, y
-// dos copias de «qué scheme es de solo lectura» se separan en cuanto se añada
-// un formato de archivo. La GUI sigue sin cachear `Capabilities` por conexión,
-// así que aquí este ES el criterio, no el respaldo.
-use norte_frontend::availability::scheme_is_read_only;
 
 /// Colores de la SUPERFICIE del panel del modal: `pane_bg_focus` + `fg` — el
 /// mismo par que ya usan los panes (`render_pane`), porque `Regular.fg` está
@@ -10158,7 +10156,14 @@ mod tests {
     /// listado que había al abrirlo. El del OTRO pane no le incumbe.
     #[test]
     fn el_menu_se_cierra_con_un_listado_nuevo_en_su_pane() {
-        let facts = context_menu::facts_for(EntryKind::File, 1, false, false);
+        let facts = context_menu::facts_for(
+            EntryKind::File,
+            1,
+            context_menu::ReadOnly {
+                source: false,
+                dest: false,
+            },
+        );
         let abierto = || {
             Some(ContextMenu::open(
                 1,
@@ -10305,7 +10310,14 @@ mod tests {
     /// una que el teclado no tenga.
     #[test]
     fn cada_entrada_del_menu_tiene_equivalente_de_teclado() {
-        let facts = context_menu::facts_for(EntryKind::File, 1, false, false);
+        let facts = context_menu::facts_for(
+            EntryKind::File,
+            1,
+            context_menu::ReadOnly {
+                source: false,
+                dest: false,
+            },
+        );
         let (browse, _) = keymap::build_effectives_preset_only("orthodox");
         let con_chord: std::collections::HashSet<&str> =
             browse.bindings().iter().map(|(_, cmd)| *cmd).collect();

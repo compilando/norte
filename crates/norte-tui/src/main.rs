@@ -1057,7 +1057,7 @@ async fn main() -> Result<()> {
     // dos mitades), así que se cachean juntas — sin ellas la ayuda del primer
     // F1 caería al criterio sintáctico teniendo el dato al alcance.
     if let Ok(both) = backend.capabilities_and_attrs(&start).await {
-        cache_capabilities(&mut app, start.scheme(), both);
+        cache_capabilities(&mut app, &start, both);
     }
     for i in 0..app.panes.len() {
         app.apply_scheme_sort(i);
@@ -5336,8 +5336,18 @@ async fn refresh_panes(app: &mut App, backend: &Backend, events: &mut EventStrea
 /// nuevo re-lazifica las entries y un re-probe de la MISMA selección es
 /// legítimo, MAJOR-1); y el run de búsqueda se cosecha ([`reap_search_run`]
 /// ya es no-op si su pane sigue en modo virtual).
+///
+/// Y, si la ayuda está abierta, sus hechos se RECONGELAN (review MAJOR-2). El
+/// congelado existe para que un veredicto no cambie porque el lector se mueva
+/// por la página; no para sobrevivir a que el listado que describe deje de
+/// existir. `enterable` y `viewable` hablan de la entrada bajo el cursor, y
+/// este es el embudo por el que pasan los TRES disparadores del refresh — el
+/// del `tick` incluido, que no tiene guarda de overlay, así que una copia o un
+/// borrado terminan re-listando los panes con la ayuda delante. Recongelar
+/// aquí conserva «ningún veredicto cambia porque el lector se desplace» y
+/// tira «ningún veredicto cambia porque el mundo cambie».
 fn after_panes_refresh(
-    app: &App,
+    app: &mut App,
     refreshed: [bool; 2],
     fill: &mut [Option<Fill>; 2],
     last_probed: &mut Probed,
@@ -5348,6 +5358,9 @@ fn after_panes_refresh(
     }
     release_refreshed_fill(refreshed, fill, last_probed);
     reap_search_run(app, search_run);
+    if app.help.is_some() {
+        app.freeze_help_facts();
+    }
 }
 
 /// Confiar en la host key y REINTENTAR la navegación que el TOFU interrumpió
@@ -7815,19 +7828,39 @@ async fn listing(
 /// donde nada lo mira.
 fn cache_capabilities(
     app: &mut App,
-    scheme: &str,
+    dir: &VPath,
     (caps, catalog): (norte_proto::Capabilities, norte_proto::AttrCatalog),
 ) {
-    app.insert_attr_catalog(scheme.to_owned(), catalog);
-    app.insert_caps(scheme.to_owned(), caps);
+    app.insert_attr_catalog(dir.scheme().to_owned(), catalog);
+    app.insert_caps(dir, caps);
+}
+
+/// Whether a cd to `dir` still has to ask `fs.capabilities`.
+///
+/// The two halves of that response are cached with DIFFERENT keys and the gate
+/// has to ask about both, which is the whole reason this is a named function
+/// and not an `is_none()` inline in [`cd_in`]. The attribute catalogue is per
+/// scheme — a wrong column hint is cosmetic. The capability flags are per
+/// scheme AND authority (`App::caps`), because a veto that answers for the
+/// wrong server is not cosmetic: gating on the catalogue alone meant the first
+/// `sftp` host to be visited answered "is this read-only?" for every other
+/// `sftp` host of the session, since no second call was ever made.
+///
+/// So it fetches when EITHER half is missing, and the redundant fetch — a
+/// second authority of a scheme whose catalogue is already cached — is one
+/// call per connection, which is what asking the connection its own
+/// capabilities costs.
+fn needs_capabilities(app: &App, dir: &VPath) -> bool {
+    app.attr_catalog(dir.scheme()).is_none() || app.caps(dir).is_none()
 }
 
 /// Primera página de `dir` (hasta [`FIRST_PAGE`]) más el stream con el RESTO
 /// (o `None` si el dir cabía en la primera página) y las omitidas del
 /// contenedor (#93). El primer render no espera al listado entero (ADR 0017).
-/// Regla 7: el TUI no toca el FS. `attrs`/`fetch_catalog` (#117): pide los
-/// attrs configurados y, una vez por scheme y sesión, el catálogo del
-/// provider (cuarto elemento de la tupla).
+/// Regla 7: el TUI no toca el FS. `attrs`/`fetch_caps` (#117): pide los
+/// attrs configurados y, cuando el llamador dice que falta algo por cachear
+/// ([`needs_capabilities`]), la respuesta de `fs.capabilities` (cuarto
+/// elemento de la tupla).
 ///
 /// H3d: ese cuarto elemento son las DOS mitades de `fs.capabilities` —
 /// `Capabilities` y catálogo — porque el wire las trae juntas
@@ -7838,7 +7871,7 @@ async fn first_page(
     backend: &Backend,
     dir: &VPath,
     attrs: &[String],
-    fetch_catalog: bool,
+    fetch_caps: bool,
 ) -> Result<
     (
         Vec<Entry>,
@@ -7848,9 +7881,10 @@ async fn first_page(
     ),
     Error,
 > {
-    // El catálogo ANTES del stream (misma conexión, una vez por scheme);
-    // un fallo del catálogo NO tumba el cd: sin hints se pinta Opaque.
-    let catalog = if fetch_catalog {
+    // Las capacidades ANTES del stream (misma conexión, y solo cuando falta
+    // algo por cachear — `needs_capabilities`); un fallo NO tumba el cd: sin
+    // hints se pinta Opaque y el solo-lectura cae al criterio sintáctico.
+    let catalog = if fetch_caps {
         backend.capabilities_and_attrs(dir).await.ok()
     } else {
         None
@@ -7978,11 +8012,11 @@ async fn cd_in(
     let prev = app.panes[pane].dir().clone();
     // #117: los attrs CONFIGURADOS del scheme de destino se piden en el
     // listado; el catálogo del provider se trae UNA vez por scheme y sesión
-    // (cache en `App::attr_catalogs` — hints y cabeceras del render).
-    let scheme = dir.scheme().to_owned();
-    let attrs = app.columns.attr_ids_for(&scheme);
-    let fetch_catalog = app.attr_catalog(&scheme).is_none();
-    let fut = first_page(backend, &dir, &attrs, fetch_catalog);
+    // (cache en `App::attr_catalogs` — hints y cabeceras del render), y las
+    // caps una vez por CONEXIÓN (ver `needs_capabilities`).
+    let attrs = app.columns.attr_ids_for(dir.scheme());
+    let fetch_caps = needs_capabilities(app, &dir);
+    let fut = first_page(backend, &dir, &attrs, fetch_caps);
     tokio::pin!(fut);
     loop {
         tokio::select! {
@@ -7995,7 +8029,7 @@ async fn cd_in(
                         // que responde «¿este pane es de solo lectura?» sin
                         // otra ronda (`App::pane_read_only`).
                         if let Some(both) = catalog {
-                            cache_capabilities(app, &scheme, both);
+                            cache_capabilities(app, &dir, both);
                         }
                         // #54: NO ordenamos aquí — `begin_listing` ->
                         // `PaneState::set_listing` normaliza internamente.
@@ -8185,8 +8219,19 @@ mod help_freeze_tests {
 
 #[cfg(test)]
 mod caps_cache_tests {
-    use super::{App, Pane, cache_capabilities};
+    use super::{App, Pane, cache_capabilities, needs_capabilities};
     use norte_proto::VPath;
+
+    fn vp(wire: &str) -> VPath {
+        VPath::parse(wire).expect("wire de test")
+    }
+
+    fn app_en(dir: &VPath) -> App {
+        App::new(
+            Pane::new(dir.clone(), Vec::new()),
+            Pane::new(dir.clone(), Vec::new()),
+        )
+    }
 
     /// H3d: `fs.capabilities` devuelve catálogo Y flags en una respuesta, y
     /// las dos mitades se cachean. La que se tiraba era la de los flags, y
@@ -8194,20 +8239,17 @@ mod caps_cache_tests {
     /// preguntase si el pane era de solo lectura.
     #[test]
     fn se_cachean_las_dos_mitades_de_una_respuesta() {
-        let dir = VPath::parse("mem:///").expect("wire de test");
-        let mut app = App::new(
-            Pane::new(dir.clone(), Vec::new()),
-            Pane::new(dir, Vec::new()),
-        );
+        let dir = vp("mem:///");
+        let mut app = app_en(&dir);
         let caps = norte_proto::Capabilities {
             flags: norte_proto::CapabilityFlags::READ_ONLY,
             max_path: None,
         };
         let catalog = norte_proto::AttrCatalog::new(Vec::new());
 
-        cache_capabilities(&mut app, "mem", (caps, catalog));
+        cache_capabilities(&mut app, &dir, (caps, catalog));
 
-        assert_eq!(app.caps("mem"), Some(&caps), "los flags se quedaron");
+        assert_eq!(app.caps(&dir), Some(&caps), "los flags se quedaron");
         assert!(
             app.attr_catalog("mem").is_some(),
             "y el catálogo, que es la mitad que ya se guardaba"
@@ -8215,6 +8257,81 @@ mod caps_cache_tests {
         // Y el efecto que la ayuda consume: con el flag puesto, el pane es de
         // solo lectura sin volver a preguntar a nadie.
         assert!(app.pane_read_only(0));
+    }
+
+    /// MAJOR-1, la otra mitad: la puerta que decide si se pregunta tiene que
+    /// preguntar lo MISMO que responde el caché. Gateada solo por el catálogo
+    /// —que es por scheme—, un `cd` a un segundo host de `sftp` no volvía a
+    /// llamar jamás, así que las caps del primero contestaban por él durante
+    /// toda la sesión.
+    #[test]
+    fn otra_authority_del_mismo_scheme_vuelve_a_preguntar() {
+        let a = vp("sftp://a.org/");
+        let b = vp("sftp://b.org/");
+        let mut app = app_en(&a);
+        assert!(needs_capabilities(&app, &a), "sin nada cacheado, se pide");
+
+        cache_capabilities(
+            &mut app,
+            &a,
+            (
+                norte_proto::Capabilities {
+                    flags: norte_proto::CapabilityFlags::READ_ONLY,
+                    max_path: None,
+                },
+                norte_proto::AttrCatalog::new(Vec::new()),
+            ),
+        );
+
+        assert!(
+            !needs_capabilities(&app, &a),
+            "al mismo host no se le pregunta dos veces"
+        );
+        assert!(
+            needs_capabilities(&app, &b),
+            "b.org no ha contestado nunca: hay que preguntarle a ÉL"
+        );
+    }
+
+    /// La costura entera, contra un backend REAL: `first_page` con la puerta
+    /// abierta trae las caps y el `cd` las guarda.
+    ///
+    /// Sin esto, el cableado podía revertirse en silencio y la suite quedaba
+    /// verde: `App::pane_read_only` cae al criterio SINTÁCTICO del scheme
+    /// cuando no hay caps, y hoy los dos coinciden en todo provider que
+    /// existe. Ninguna otra prueba distingue «llegaron los flags» de «el
+    /// scheme lo parecía».
+    #[tokio::test]
+    async fn la_primera_pagina_trae_las_caps_y_el_cd_las_guarda() {
+        use norte_core::backend::Backend;
+        use std::sync::Arc;
+
+        let engine = norte_core::Engine::new();
+        engine.register_provider(Arc::new(norte_testkit::MemProvider::new()));
+        let backend = Backend::Embedded(Arc::new(engine));
+        let dir = vp("mem:///");
+
+        let (_first, _stream, _skipped, both) = super::first_page(&backend, &dir, &[], true)
+            .await
+            .expect("el listado del provider de memoria");
+        let both = both.expect("con la puerta abierta llegan las DOS mitades");
+
+        let mut app = app_en(&dir);
+        assert!(app.caps(&dir).is_none());
+        cache_capabilities(&mut app, &dir, both);
+        assert!(
+            app.caps(&dir).is_some(),
+            "las caps de la respuesta tienen que quedarse en el caché"
+        );
+
+        // Y con la puerta CERRADA no se pregunta: el cuarto elemento es None.
+        let (_f, _s, _k, ninguna) = super::first_page(&backend, &dir, &[], false)
+            .await
+            .expect("el listado igual");
+        assert!(
+            ninguna.is_none(),
+            "con la puerta cerrada no hay ronda extra"
+        );
     }
 }
 
@@ -8744,15 +8861,60 @@ mod refresh_ritual_tests {
     /// un listado que sigue siendo el suyo (#78).
     #[test]
     fn esc_a_medias_conserva_el_fill_del_pane_no_refrescado() {
-        let app = app();
+        let mut app = app();
         let mut f = [None, Some(fill())];
         let mut lp = Probed::from([(1, VPath::parse("file:///d/x").unwrap())]);
         let mut sr: Option<SearchRun> = None;
-        after_panes_refresh(&app, [true, false], &mut f, &mut lp, &mut sr);
+        after_panes_refresh(&mut app, [true, false], &mut f, &mut lp, &mut sr);
         assert!(
             f[1].is_some(),
             "el fill del pane 1 (no re-listado) sobrevive al Esc a medias"
         );
         assert!(lp.is_empty(), "la dedup de la sonda #52 caduca igualmente");
+    }
+
+    /// MAJOR-2: congelar impide que un veredicto cambie porque el lector se
+    /// MUEVA, y eso está bien. Lo que no puede impedir es que cambie porque el
+    /// MUNDO cambie: el brazo del `tick` no lleva guarda de overlay (a
+    /// diferencia del de `dir_watch`, gateado por `watch_refresh_allowed`), así
+    /// que una copia o un borrado que terminan con la ayuda abierta re-listan
+    /// los dos panes y la entrada que los hechos describían puede haberse ido.
+    /// La fila decía «no aplica a esta selección» de una selección que ya no
+    /// existía.
+    #[test]
+    fn un_refresh_bajo_la_ayuda_abierta_recongela_los_hechos() {
+        use norte_help::ChordResolver as _;
+
+        let d = VPath::parse("file:///d").expect("wire de test");
+        let fichero = norte_proto::Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: d.join(norte_proto::Segment::new(b"leeme.txt".to_vec()).expect("segmento")),
+            kind: norte_proto::EntryKind::File,
+            size: Some(3),
+            mtime_ms: None,
+        };
+        let mut app = App::new(
+            Pane::new(d.clone(), vec![fichero]),
+            Pane::new(d, Vec::new()),
+        );
+        super::open_contextual_help(&mut app, norte_help::Lang::En, &[]);
+        assert!(
+            app.help_chords.availability("pane.view").is_available(),
+            "con un fichero bajo el cursor, F3 se puede pulsar"
+        );
+
+        // La tarea termina, el refresh entra por debajo del overlay y se lleva
+        // por delante la entrada de la que hablaban los hechos.
+        app.panes[0].refresh_listing(Vec::new());
+        let mut f = [None, None];
+        let mut lp = Probed::new();
+        let mut sr: Option<SearchRun> = None;
+        after_panes_refresh(&mut app, [true, false], &mut f, &mut lp, &mut sr);
+
+        assert_eq!(
+            app.help_chords.availability("pane.view").reason(),
+            Some(norte_help::Reason::WrongTarget),
+            "el listado cambió: los hechos tienen que volver a congelarse"
+        );
     }
 }

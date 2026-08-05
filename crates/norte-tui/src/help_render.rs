@@ -348,7 +348,10 @@ pub fn render_block<'a>(
 ///
 /// If the reason ALONE does not fit, it takes the ellipsis and the label is
 /// dropped entirely — there is nothing else to give up, and a row that says
-/// `read-onl…` still points at the right kind of answer.
+/// `read-onl…` still points at the right kind of answer. The same happens a
+/// couple of cells EARLIER, while the label technically still fits: one or two
+/// cells of a label is a lone `…`, and `f5    … — read-only backend` reads as a
+/// bug in the renderer rather than as a name that was shortened.
 fn row_line<'a>(
     row: &norte_help::ResolvedRow,
     col: usize,
@@ -359,6 +362,9 @@ fn row_line<'a>(
     /// Between the label and the reason. Spaced em dash, as the status bar
     /// spells the same join.
     const SEP: &str = " — ";
+    /// Fewest cells worth spending on a truncated label. Below this the label
+    /// is dropped entirely — see the `for_label` arm.
+    const MIN_LABEL: usize = 4;
 
     let chord = row.chord.as_deref().unwrap_or(NO_CHORD);
     let available = row.row.avail.is_available();
@@ -384,8 +390,14 @@ fn row_line<'a>(
             let reason = norte_i18n::t_in(lang, norte_frontend::availability::reason_key(reason));
             // What is left once the reason and its separator are paid for. Zero
             // means the reason is the whole line.
+            // What is left once the reason and its separator are paid for. A
+            // budget under MIN_LABEL is folded into the same case as zero: it
+            // is WITHIN the width, but one or two cells of a label is `…` or
+            // `d…`, which reads as a rendering fault rather than as a
+            // shortened name. Dropping it gives those cells to the reason,
+            // which is the half worth keeping.
             let for_label = budget.saturating_sub(SEP.width() + reason.width());
-            if for_label == 0 {
+            if for_label < MIN_LABEL {
                 fit(&reason, budget)
             } else {
                 format!("{}{SEP}{reason}", fit(&row.label, for_label))
@@ -901,6 +913,24 @@ mod tests {
             !fila.contains("do pane"),
             "sin sitio, la etiqueta no se pinta a medias: {fila:?}"
         );
+
+        // MINOR-8: los anchos donde a la etiqueta le tocaban una o dos celdas.
+        // Caben dentro del presupuesto, así que el caso «cero» no los cogía y
+        // la fila salía como `f5    … — read-only backend`: una elipsis
+        // solitaria no es un nombre acortado, es lo que parece un fallo del
+        // pintor. Se pliegan al mismo caso que el cero.
+        for ancho in 27..=29 {
+            let filas = filas_a(ancho);
+            let fila = filas.first().expect("hay filas");
+            assert!(
+                fila.contains(&razon),
+                "a {ancho} celdas la razón es lo que se conserva: {fila:?}"
+            );
+            assert!(
+                !fila.contains(" … — ") && !fila.contains("… — "),
+                "elipsis solitaria donde iba la etiqueta ({ancho}): {fila:?}"
+            );
+        }
     }
 
     fn flatten(lines: &[Line<'_>]) -> String {

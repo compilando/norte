@@ -702,6 +702,33 @@ pub struct PendingOpen {
     pub detached: bool,
 }
 
+/// The key of the capability cache: a scheme AND the authority it is served
+/// by, which together are ONE backend. Owned because the map owns its keys and
+/// the lookups are per help open, not per frame.
+type CapsKey = (String, Option<String>);
+
+/// The location `at` belongs to, as a cache key. Everything below the
+/// authority is dropped on purpose: capabilities are a property of the
+/// backend, not of the directory (a flag that varies per directory needs a
+/// probe — see `App::caps`).
+fn caps_key(at: &VPath) -> CapsKey {
+    (
+        at.scheme().to_owned(),
+        at.authority().map(std::borrow::ToOwned::to_owned),
+    )
+}
+
+/// How many connection degradations `App` retains at once.
+///
+/// #44 held ONE, as an `Option<String>`, so it was bounded by construction; a
+/// collection keyed on a scheme the WIRE supplies is not, and the daemon is
+/// not the only thing that can send those notifications. Thirty-two is far
+/// more than the seven schemes that exist, so the cap can only ever be reached
+/// by something abnormal — and when it is, the oldest report is dropped and the
+/// reader keeps the ones that just arrived. Same discipline as the daemon's
+/// retained listings and its approvals cap.
+const DEGRADED_MAX: usize = 32;
+
 /// Estado completo del TUI: dos panes y el foco.
 pub struct App {
     /// Los dos paneles (izquierda, derecha).
@@ -719,7 +746,7 @@ pub struct App {
     /// lectura por [`Self::attr_catalog`], escritura por
     /// [`Self::insert_attr_catalog`].
     attr_catalogs: std::collections::HashMap<String, norte_proto::AttrCatalog>,
-    /// Capability flags per SCHEME, the other half of the same response.
+    /// Capability flags per LOCATION, the other half of the same response.
     ///
     /// `fs.capabilities` answers with `capabilities` AND `attrs` in one
     /// message, and this crate was keeping only the attrs — so the honest
@@ -729,16 +756,26 @@ pub struct App {
     /// [`Self::attr_catalogs`] (`main::first_page`), so caching it costs
     /// nothing.
     ///
-    /// Keyed by scheme, exactly like the attr catalogue and with the same
-    /// known imprecision: two `sftp` hosts share one entry. That is why it
-    /// answers questions about the SHAPE of a backend (read-only, ADR 0018)
-    /// and is not used as a substitute for a per-path probe of something that
-    /// can differ between two locations of one scheme — `pane.delete`'s
-    /// `TRASH` check stays a probe for that reason.
+    /// Keyed by scheme AND authority (`caps_key`), which the attr catalogue
+    /// beside it is not, and the asymmetry is the point: a scheme is not one
+    /// place. `sftp://a.org` and `sftp://b.org` are two servers that answer
+    /// this question independently, as are two S3 endpoints and two FTP
+    /// connections of the same plugin provider. Keyed by scheme alone, the
+    /// first host to answer would veto — or fail to veto — every other host of
+    /// its scheme for the rest of the session, and nothing would ever correct
+    /// it. No built-in provider makes `READ_ONLY` differ per authority today
+    /// (an archive and a plugin provider both decide it per scheme), so that
+    /// bug would not fire yet; [`Self::caps`] is a general accessor to every
+    /// flag, and the next one to be read this way must not be the one that
+    /// finds out.
+    ///
+    /// It is still a per-LOCATION cache and not a per-PATH one: a flag that
+    /// can differ between two directories of one connection needs a probe, and
+    /// `pane.delete`'s `TRASH` check stays a probe for exactly that reason.
     ///
     /// Private: read through [`Self::caps`], written through
     /// [`Self::insert_caps`].
-    caps: std::collections::HashMap<String, norte_proto::Capabilities>,
+    caps: std::collections::HashMap<CapsKey, norte_proto::Capabilities>,
     /// Índice del pane con foco (invariante 0|1: privado, ver [`Self::focus`]).
     focus: usize,
     /// `true` cuando el usuario pidió salir.
@@ -799,9 +836,16 @@ pub struct App {
     /// fact to read. The value is kept whole and the banner
     /// ([`Self::connection_banner`]) is built from it on demand.
     ///
-    /// Keyed by scheme, so `sftp` and `ftp` coexist. Two HOSTS on one scheme
-    /// still collapse into one entry — the same imprecision [`Self::caps`]
-    /// carries, and the banner does not claim otherwise.
+    /// One entry per scheme, so `sftp` and `ftp` coexist. Two HOSTS on one
+    /// scheme still collapse into one entry, and the banner does not claim
+    /// otherwise.
+    ///
+    /// A `VecDeque` in arrival order rather than a map, for two reasons that
+    /// the map could not give: it is CAPPED at `DEGRADED_MAX` (a map keyed on
+    /// a wire-supplied string grows as far as the sender wants), and the newest
+    /// report is `back()`, which is the one the banner names when there are
+    /// several. Lookup is a scan of at most 32 short strings, on the path that
+    /// assembles the help's facts — not a per-frame one.
     ///
     /// NEVER CLEARED, deliberately. A degradation is not known to be resolved
     /// without a successful reconnect that reports the session encrypted, and
@@ -814,7 +858,7 @@ pub struct App {
     ///
     /// Private: read through [`Self::degraded_for`] /
     /// [`Self::connection_banner`], written through [`Self::note_degraded`].
-    degraded: std::collections::HashMap<String, norte_proto::methods::ConnectionDegraded>,
+    degraded: std::collections::VecDeque<norte_proto::methods::ConnectionDegraded>,
     /// Historial de directorios por pane (spec 2026-07-18, `Alt+↓`): mismo
     /// índice que `panes`. Vive en `App` y no en `Pane` (el historial no es
     /// estado de render): cada cd EXITOSO empuja el dir anterior (main.rs).
@@ -1532,7 +1576,7 @@ impl App {
             extensions: None,
             lua_pending_trust: None,
             lua_status: None,
-            degraded: std::collections::HashMap::new(),
+            degraded: std::collections::VecDeque::new(),
             history: [
                 crate::nav::History::default(),
                 crate::nav::History::default(),
@@ -1594,23 +1638,29 @@ impl App {
         self.attr_catalogs.insert(scheme, catalog);
     }
 
-    /// The cached capability flags of `scheme`, if the response has landed.
+    /// The cached capability flags of the location `at` belongs to, if the
+    /// response has landed.
+    ///
+    /// Takes the PATH and not a scheme so that the caller cannot accidentally
+    /// ask a coarser question than the cache answers: the key is scheme plus
+    /// authority (see the `caps` field), and a `&str` parameter would have made
+    /// "`sftp`" a legal thing to ask about.
     ///
     /// `None` means "not asked yet, or the call failed" and never "no
     /// capabilities": a caller must degrade rather than read absence as a
     /// denial (see [`Self::pane_read_only`] for the shape of that).
     #[must_use]
-    pub fn caps(&self, scheme: &str) -> Option<&norte_proto::Capabilities> {
-        self.caps.get(scheme)
+    pub fn caps(&self, at: &VPath) -> Option<&norte_proto::Capabilities> {
+        self.caps.get(&caps_key(at))
     }
 
-    /// Caches the capability flags of `scheme`.
+    /// Caches the capability flags of the location `at` belongs to.
     ///
     /// Called from the same place as [`Self::insert_attr_catalog`] and with
     /// the halves of ONE `fs.capabilities` response — see [`Self::caps`]'
     /// field docs for why keeping only the attrs was waste.
-    pub fn insert_caps(&mut self, scheme: String, caps: norte_proto::Capabilities) {
-        self.caps.insert(scheme, caps);
+    pub fn insert_caps(&mut self, at: &VPath, caps: norte_proto::Capabilities) {
+        self.caps.insert(caps_key(at), caps);
     }
 
     /// Whether the pane's location refuses mutation.
@@ -1619,10 +1669,14 @@ impl App {
     /// SYNTACTICALLY from the scheme until they do
     /// ([`norte_frontend::availability::scheme_is_read_only`]) — an archive
     /// scheme is read-only by construction, so the guess is right for the case
-    /// that matters and wrong only in the direction of offering something that
-    /// will then fail honestly. It never claims a location is writable that
-    /// the flags say is not: `READ_ONLY`'s own contract is that the UI vetoes
-    /// upfront.
+    /// that matters.
+    ///
+    /// Where the guess is wrong it errs toward WRITABLE, never toward
+    /// read-only: a read-only SFTP export answers `false` here until its flags
+    /// land, so the help offers a copy into it and the submitted task fails
+    /// with an error the reader sees. That is the direction to be wrong in.
+    /// Once the flags are in they decide, `READ_ONLY` included — its own
+    /// contract is that the UI vetoes upfront.
     ///
     /// An index outside `0|1` is `false`, i.e. "writable, as far as this
     /// knows": the callers are the `Facts` assembly and the help, and a
@@ -1632,10 +1686,9 @@ impl App {
         let Some(p) = self.panes.get(pane) else {
             return false;
         };
-        let scheme = p.dir().scheme();
-        match self.caps(scheme) {
+        match self.caps(p.dir()) {
             Some(c) => c.flags.contains(norte_proto::CapabilityFlags::READ_ONLY),
-            None => norte_frontend::availability::scheme_is_read_only(scheme),
+            None => norte_frontend::availability::scheme_is_read_only(p.dir().scheme()),
         }
     }
 
@@ -1695,6 +1748,11 @@ impl App {
     /// every page the reader walks is judged against one context — see
     /// [`crate::help::TuiChords`]' `facts` for why a live read would make a
     /// page disagree with itself.
+    ///
+    /// And called AGAIN whenever the listing underneath is replaced with the
+    /// overlay still open (`main::after_panes_refresh`): the freeze is against
+    /// the reader moving, not against the world moving, and `enterable` /
+    /// `viewable` describe an entry a finished task can delete.
     pub fn freeze_help_facts(&mut self) {
         let facts = self.help_facts();
         self.help_chords = std::sync::Arc::new(self.help_chords.with_facts(facts));
@@ -1702,11 +1760,17 @@ impl App {
 
     /// Records a `connection.degraded` notification (#44).
     ///
-    /// Keyed by scheme, so a second scheme does not evict the first. A repeat
-    /// for the SAME scheme replaces the entry: the newest report is the one
-    /// worth showing, and the old one described the same session.
+    /// One entry per scheme, so a second scheme does not evict the first, and a
+    /// repeat for the SAME scheme replaces the entry AND becomes the newest:
+    /// the latest report is the one worth naming, and the old one described the
+    /// same session. Past `DEGRADED_MAX` the oldest is dropped — see the
+    /// `degraded` field for why a wire-fed collection needs a ceiling.
     pub fn note_degraded(&mut self, d: norte_proto::methods::ConnectionDegraded) {
-        self.degraded.insert(d.scheme.clone(), d);
+        self.degraded.retain(|old| old.scheme != d.scheme);
+        self.degraded.push_back(d);
+        while self.degraded.len() > DEGRADED_MAX {
+            self.degraded.pop_front();
+        }
     }
 
     /// The degradation reported for `scheme`, if any.
@@ -1716,34 +1780,53 @@ impl App {
     /// wire vocabulary means "unencrypted", not "unusable".
     #[must_use]
     pub fn degraded_for(&self, scheme: &str) -> Option<&norte_proto::methods::ConnectionDegraded> {
-        self.degraded.get(scheme)
+        self.degraded.iter().rev().find(|d| d.scheme == scheme)
     }
 
     /// The persistent status-bar banner, or `None` when nothing degraded.
     ///
-    /// With ONE degradation it names the connection, exactly as #44 did. With
-    /// several it reports how MANY instead of picking one: showing one and
-    /// hiding the rest is what the pre-formatted string did by accident, and a
-    /// reader who has two plaintext sessions must not be told about one.
+    /// It always NAMES a connection — the most recent one — and appends how
+    /// many others there are. Reporting a bare count ("2 connections in
+    /// plaintext") beats silently overwriting one report with another, but
+    /// combined with never clearing it means the identity of every degraded
+    /// session is lost for the rest of the session, and "which one?" is the
+    /// only question this indicator exists to answer.
+    ///
+    /// Scheme and host are masked (`norte_frontend::display_name`) and the
+    /// host is clamped: both are wire-supplied strings, and the status bar is
+    /// the one place in the TUI they reach unfiltered. A host of control
+    /// characters or bidi overrides is exactly what an attacker sends to a
+    /// security indicator.
     ///
     /// Never cleared once set — see the `degraded` field for why that is a
     /// decision and not an omission.
     #[must_use]
     pub fn connection_banner(&self) -> Option<String> {
-        let mut it = self.degraded.values();
-        let first = it.next()?;
-        if it.next().is_none() {
+        /// Cells the host gets before the middle ellipsis takes over. Long
+        /// enough for a real FQDN, short enough that the banner cannot push
+        /// everything else off the status bar.
+        const HOST_MAX: usize = 48;
+
+        let last = self.degraded.back()?;
+        let scheme = norte_frontend::display_name(last.scheme.as_bytes()).0;
+        let host = norte_frontend::middle_ellipsis(
+            &norte_frontend::display_name(last.host.as_bytes()).0,
+            HOST_MAX,
+        );
+        let otras = self.degraded.len() - 1;
+        if otras == 0 {
             return Some(ta(
                 "status-connection-degraded",
-                &[
-                    ("scheme", first.scheme.as_str()),
-                    ("host", first.host.as_str()),
-                ],
+                &[("scheme", &scheme), ("host", &host)],
             ));
         }
         Some(ta(
             "status-connections-degraded",
-            &[("n", &self.degraded.len().to_string())],
+            &[
+                ("scheme", &scheme),
+                ("host", &host),
+                ("n", &otras.to_string()),
+            ],
         ))
     }
 
@@ -4135,18 +4218,55 @@ mod tests {
         }
     }
 
-    /// Las caps se cachean por SCHEME, como el catálogo de atributos, y por
-    /// la misma razón: `fs.capabilities` devuelve las dos mitades en UNA
-    /// llamada y la TUI ya la hace para las columnas. Tirar la mitad de caps
-    /// y luego sondear otra vez sería pagar dos rondas por un dato que ya
-    /// llegó.
+    /// Las caps se cachean por LOCALIZACIÓN, y por la misma razón que el
+    /// catálogo de atributos se pide: `fs.capabilities` devuelve las dos
+    /// mitades en UNA llamada y la TUI ya la hace para las columnas. Tirar la
+    /// mitad de caps y luego sondear otra vez sería pagar dos rondas por un
+    /// dato que ya llegó.
     #[test]
-    fn las_caps_se_cachean_por_scheme() {
+    fn las_caps_se_cachean_por_localizacion() {
         let mut app = app_dos_panes();
-        assert!(app.caps("mem").is_none(), "sin sembrar, no se inventa nada");
-        app.insert_caps("mem".to_owned(), caps_de_test());
-        assert!(app.caps("mem").is_some());
-        assert!(app.caps("sftp").is_none(), "un scheme no responde por otro");
+        let mem = vp("mem:///");
+        assert!(app.caps(&mem).is_none(), "sin sembrar, no se inventa nada");
+        app.insert_caps(&mem, caps_de_test());
+        assert!(app.caps(&mem).is_some());
+        assert!(
+            app.caps(&vp("sftp://ejemplo.org/")).is_none(),
+            "un scheme no responde por otro"
+        );
+    }
+
+    /// MAJOR-1: `sftp` no es UN sitio. Dos hosts del mismo scheme son dos
+    /// backends distintos, y el caché tiene que contarlos aparte o el primero
+    /// que contesta decide por todos los demás durante la sesión entera. Hoy
+    /// ningún provider del árbol declara `READ_ONLY` por localización (el
+    /// archivo y los plugins lo deciden por scheme), así que la clave por
+    /// scheme sola no fallaba — por suerte, no por diseño, y `App::caps` es un
+    /// accesor general que invita a leer cualquier flag.
+    #[test]
+    fn dos_authorities_del_mismo_scheme_no_se_responden() {
+        let a = vp("sftp://a.org/");
+        let b = vp("sftp://b.org/");
+        let mut app = App::new(
+            Pane::new(a.clone(), Vec::new()),
+            Pane::new(b.clone(), Vec::new()),
+        );
+        app.insert_caps(
+            &a,
+            norte_proto::Capabilities {
+                flags: norte_proto::CapabilityFlags::READ_ONLY,
+                max_path: None,
+            },
+        );
+        assert!(app.pane_read_only(0), "a.org dijo que es de solo lectura");
+        assert!(
+            app.caps(&b).is_none(),
+            "a b.org no se le ha preguntado nada todavía"
+        );
+        assert!(
+            !app.pane_read_only(1),
+            "b.org no puede heredar el veto de a.org: son dos backends"
+        );
     }
 
     /// Antes de que llegue la primera respuesta, la respuesta honesta es «no
@@ -4172,15 +4292,16 @@ mod tests {
     #[test]
     fn con_caps_manda_el_flag_read_only() {
         let mut app = app_dos_panes();
+        let dir = app.panes[0].dir().clone();
         app.insert_caps(
-            "mem".to_owned(),
+            &dir,
             norte_proto::Capabilities {
                 flags: norte_proto::CapabilityFlags::READ_ONLY,
                 max_path: None,
             },
         );
         assert!(app.pane_read_only(0));
-        app.insert_caps("mem".to_owned(), caps_de_test());
+        app.insert_caps(&dir, caps_de_test());
         assert!(!app.pane_read_only(0), "sin el flag, escribible");
     }
 
@@ -4315,14 +4436,57 @@ mod tests {
         app.note_degraded(degradacion_de_test("ftp", "b.org"));
         assert!(app.degraded_for("sftp").is_some());
         assert!(app.degraded_for("ftp").is_some());
-        // Y la barra deja de mentir sobre cuántas hay: con una sola nombra la
-        // conexión; con dos dice que son dos, en vez de enseñar una y callar
-        // la otra.
+        // Y la barra deja de mentir sobre cuántas hay. Nombra la ÚLTIMA y dice
+        // cuántas más: un recuento pelado («2 conexiones en texto plano»), con
+        // el aviso que jamás se limpia, dejaba al lector sin poder averiguar
+        // NUNCA cuáles eran — y esa es la única pregunta que este indicador
+        // existe para contestar.
         let banner = app.connection_banner().expect("hay aviso");
-        assert!(banner.contains('2'), "el recuento no salió: {banner}");
         assert!(
-            !banner.contains("a.org") && !banner.contains("b.org"),
-            "con varias no se elige una y se esconden las demás: {banner}"
+            banner.contains("b.org"),
+            "la más reciente se nombra: {banner}"
+        );
+        assert!(banner.contains('1'), "y cuántas más hay: {banner}");
+    }
+
+    /// MINOR-5: el `Option<String>` de #44 estaba acotado por construcción;
+    /// una colección con clave que viene del WIRE no lo está. El tope es
+    /// generoso —hay siete schemes— así que solo lo alcanza algo anómalo, y
+    /// cuando pasa se tira lo más viejo y se conserva lo que acaba de llegar.
+    #[test]
+    fn las_degradaciones_tienen_tope() {
+        let mut app = app_dos_panes();
+        for i in 0..(super::DEGRADED_MAX + 10) {
+            app.note_degraded(degradacion_de_test(&format!("s{i}"), "host"));
+        }
+        assert_eq!(app.degraded.len(), super::DEGRADED_MAX);
+        assert!(
+            app.degraded_for("s0").is_none(),
+            "la más vieja es la que se cae"
+        );
+        assert!(
+            app.degraded_for(&format!("s{}", super::DEGRADED_MAX + 9))
+                .is_some(),
+            "la última en llegar se queda"
+        );
+    }
+
+    /// El host lo elige el OTRO extremo, y la barra de estado es el sitio
+    /// donde llegaba crudo mientras el resto de la TUI enmascara. Un host con
+    /// controles o bidi es exactamente lo que se le manda a un indicador de
+    /// seguridad para que mienta.
+    #[test]
+    fn el_aviso_enmascara_un_host_hostil() {
+        let mut app = app_dos_panes();
+        app.note_degraded(degradacion_de_test("sftp", "ma\u{202e}gro.org\n"));
+        let banner = app.connection_banner().expect("hay aviso");
+        assert!(
+            !banner.contains('\u{202e}') && !banner.contains('\n'),
+            "el host llegó crudo a la barra: {banner:?}"
+        );
+        assert!(
+            banner.contains('\u{FFFD}'),
+            "y el enmascarado se VE (jamás pérdida silenciosa): {banner:?}"
         );
     }
 
