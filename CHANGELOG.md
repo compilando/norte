@@ -9,6 +9,22 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Help about where you actually are (H3c):** `F1` no longer always opens the
+  index. From the viewer it opens the viewer's page, from a collision dialog
+  the copying page, from the host-key prompt the remote page — the mapping
+  lives in the corpus, so moving an explanation from one page to another is an
+  edit to prose. Pressed over a dialog, the help reads about *that* dialog and
+  `Esc` puts you back in front of the question without answering it. While the
+  page covers a dialog the dialog's own keys are inert, and its footer says so
+  instead of advertising keys that do nothing. A dialog that arrives *while*
+  you are reading closes the help rather than hiding behind it: an approval
+  you cannot see is an approval you cannot answer — and if you leave the page
+  open over one, its timeout denies the agent, which is the safe direction.
+  `F1` on a command-palette row opens the page that documents that command,
+  the other half of the `Ctrl+P` handoff the help already had.
+  Five places have their own page so far; the rest fall back to the index and
+  are listed, one per line with its reason, in the gate that will not let them
+  be forgotten.
 - **Passing a location between the panes:** `Alt+i` sends this pane's location
   to the other one and leaves the focus where it is — the fastest way to line
   up a copy, because the destination is whatever the other pane holds. `Alt+u`
