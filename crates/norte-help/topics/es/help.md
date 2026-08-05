@@ -23,6 +23,11 @@ cierra la ayuda y lanza el comando igual que lo lanzaría su tecla: la misma
 confirmación, la misma política, la misma entrada en el diario. Enter sobre un
 enlace lo sigue, y {{cmd:dialog.back}} te devuelve a la página de la que venías.
 
+Las filas de los verbos del propio overlay —los tres de esta página— son la
+excepción. Salen para que puedas consultar su tecla, pero solo significan algo
+dentro de un overlay, así que un pane no tiene nada que lanzar: Enter sobre una
+de ellas te lo dice y deja la ayuda abierta.
+
 {{cmd:dialog.filter}} empieza a filtrar la lista de la izquierda. Busca en los
 títulos, en los ids de las páginas y en los comandos que cada una documenta —el
 comando, por el principio del id o de cualquiera de sus partes separadas por

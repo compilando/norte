@@ -20,6 +20,7 @@ use std::collections::HashMap;
 
 use norte_help::{Availability, ChordResolver};
 use norte_i18n::t;
+use unicode_width::UnicodeWidthStr;
 
 use crate::keymap::{Effective, Screen, dialog_hint_id, help_id};
 
@@ -37,6 +38,23 @@ fn paint_chord(raw: &str) -> String {
     norte_encoding::mask_terminal_hazards(raw)
 }
 
+/// Width in CELLS of the chord column of the cheatsheet.
+const CHORD_COLUMN: usize = 14;
+
+/// Padding that takes `seq` up to `col` CELLS, or nothing when it is already
+/// wider.
+///
+/// Not `{seq:<14}`: `std::fmt`'s width counts CHARS, so a chord bound to a
+/// wide codepoint (CJK, an emoji — `parse_chord` accepts any lone codepoint
+/// as a `KeyCode::Char`, and a project `./.norte/keymap.toml` carries no
+/// trust) padded to 14 chars occupies more than 14 columns and shoves the
+/// label out of its column. H3b promotes these lines into the help overlay
+/// body, where they sit beside prose that IS cell-correct
+/// (`crate::help_render`), so the drift is now visible side by side.
+fn pad_to(seq: &str, col: usize) -> String {
+    " ".repeat(col.saturating_sub(seq.width()))
+}
+
 /// Builds the help lines from the effective keymaps of the three screens:
 /// every binding with its catalogue description, in real precedence order
 /// (what the key DOES, not what the preset says).
@@ -51,7 +69,11 @@ pub fn build(browse: &Effective, viewer: &Effective, dialog: &Effective) -> Vec<
         out.push(format!("── {title} ──"));
         for (seq, cmd) in eff.bindings() {
             let seq = paint_chord(&seq);
-            out.push(format!("  {seq:<14} {}", t(&help_id(cmd))));
+            out.push(format!(
+                "  {seq}{} {}",
+                pad_to(&seq, CHORD_COLUMN),
+                t(&help_id(cmd))
+            ));
         }
     }
     // #113: the `dialog.*` verbs were invisible in the app (overlay footers
@@ -64,7 +86,11 @@ pub fn build(browse: &Effective, viewer: &Effective, dialog: &Effective) -> Vec<
     out.push(format!("  {}", t("help-dialog-note")));
     for (seq, cmd) in dialog.bindings() {
         let seq = paint_chord(&seq);
-        out.push(format!("  {seq:<14} {}", t(&label_id(cmd))));
+        out.push(format!(
+            "  {seq}{} {}",
+            pad_to(&seq, CHORD_COLUMN),
+            t(&label_id(cmd))
+        ));
     }
     out
 }

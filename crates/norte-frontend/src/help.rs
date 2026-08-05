@@ -30,12 +30,12 @@ const INDEX_ID: &str = "index";
 /// would be three places to forget. H3h may replace it with a real topic;
 /// nothing outside this module has to change if it does.
 ///
-/// One consequence of having no corpus entry: the filter can only reach this
-/// page through the literal `keys`, because its localized label lives in the
-/// frontend (`t!("help-topic-keys")`) and this module has no Fluent access on
-/// purpose. A Spanish reader typing `teclado` will not find it. That is a
-/// known gap owned by task 6, which paints the label, and not something to
-/// paper over here with a second copy of the translation.
+/// Having no corpus entry, it also has no corpus TITLE: the frontend hands
+/// its localized label to [`HelpState::new`] and the row carries it like any
+/// other title, so the filter reaches this page by the name it is painted
+/// with (`teclado` finds it in Spanish) without this module ever touching
+/// Fluent. The id stays a match too, and is the fallback when a frontend
+/// passes a blank label.
 pub const KEYS_ID: &str = "keys";
 
 /// Tag the keyboard page is grouped under.
@@ -56,9 +56,10 @@ pub enum SidebarRow {
         /// Its title, already the corpus' own (masked at parse for plugins).
         ///
         /// The one exception is the synthetic [`KEYS_ID`] entry, whose title
-        /// is its own id: this module has no Fluent access on purpose, so the
-        /// frontend paints `t!("help-topic-keys")` for that row. The id as a
-        /// fallback beats an empty label if a frontend ever forgets.
+        /// is the label the frontend handed to [`HelpState::new`]: this
+        /// module has no Fluent access on purpose. Painters can therefore
+        /// print this field for EVERY row, with no special case, and the
+        /// filter matches what is on screen.
         title: String,
     },
 }
@@ -87,7 +88,9 @@ pub enum Action {
 /// use norte_frontend::help::{Focus, HelpState};
 /// use norte_help::{Lang, TopicId};
 ///
-/// let mut help = HelpState::new(Lang::En);
+/// // The label of the synthetic keyboard page comes from the frontend's own
+/// // catalogue — this model never touches Fluent.
+/// let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
 /// assert_eq!(help.current().as_str(), "index");
 /// assert_eq!(help.focus(), Focus::Topics);
 ///
@@ -104,6 +107,8 @@ pub enum Action {
 #[derive(Clone, Debug)]
 pub struct HelpState {
     lang: Lang,
+    /// Label of the synthetic [`KEYS_ID`] row, as the frontend paints it.
+    keys_label: String,
     current: TopicId,
     history: Vec<TopicId>,
     rows: Vec<SidebarRow>,
@@ -119,10 +124,17 @@ pub struct HelpState {
 impl HelpState {
     /// Opens the overlay on the index topic of `lang`.
     ///
+    /// `keys_label` is the title of the synthetic [`KEYS_ID`] row, already
+    /// localized by the caller: this module has no Fluent access on purpose
+    /// (the same page is named differently in the TUI and the GUI), so the
+    /// label is data here like every corpus title, and the filter matches it
+    /// like every corpus title. A blank label falls back to the id, which
+    /// beats an empty sidebar row if a frontend ever forgets.
+    ///
     /// See the type's own example: the constructor is where the reader lands,
     /// so its behaviour is documented there alongside what follows from it.
     #[must_use]
-    pub fn new(lang: Lang) -> Self {
+    pub fn new(lang: Lang, keys_label: String) -> Self {
         // The index is the entry point, but the corpus is data: if it ever
         // ships without one, opening on the first page beats opening on a
         // blank body that no key can leave.
@@ -131,8 +143,14 @@ impl HelpState {
             .find(|t| t.id.as_str() == INDEX_ID)
             .or_else(|| topics(lang).first())
             .map_or_else(|| TopicId::new(KEYS_ID), |t| t.id.clone());
+        let keys_label = if keys_label.trim().is_empty() {
+            KEYS_ID.to_owned()
+        } else {
+            keys_label
+        };
         let mut state = Self {
             lang,
+            keys_label,
             current,
             history: Vec::new(),
             rows: Vec::new(),
@@ -153,6 +171,25 @@ impl HelpState {
     #[must_use]
     pub fn current(&self) -> &TopicId {
         &self.current
+    }
+
+    /// The corpus locale this overlay was opened on.
+    ///
+    /// A painter needs it to resolve an id BACK to the page it names — a
+    /// `see_also` row is painted with the topic's title, the same string the
+    /// sidebar shows — and the corpus is keyed by language, so the id alone is
+    /// not enough.
+    ///
+    /// ```
+    /// use norte_frontend::help::HelpState;
+    /// use norte_help::Lang;
+    ///
+    /// let help = HelpState::new(Lang::Es, "Teclado".to_owned());
+    /// assert_eq!(help.lang(), Lang::Es);
+    /// ```
+    #[must_use]
+    pub fn lang(&self) -> Lang {
+        self.lang
     }
 
     /// The open corpus topic, or `None` for the synthetic [`KEYS_ID`] page
@@ -279,9 +316,19 @@ impl HelpState {
         mask_terminal_hazards(&self.filter)
     }
 
-    /// Routes typed characters into the filter.
+    /// Routes typed characters into the filter, and hands the cursor back to
+    /// the sidebar.
+    ///
+    /// Filtering is a SIDEBAR gesture: what the box narrows is the list of
+    /// topics, and the arrow keys inside it are there to walk the hits. Left
+    /// with the focus in the body they walked the ACTION cursor of the page
+    /// underneath instead, and the list being filtered — the only thing on
+    /// screen that had just changed — could not be walked at all. An invariant
+    /// of the type rather than of each caller, on the same grounds as
+    /// [`push_char`](Self::push_char)'s `filtering` guard.
     pub fn start_filter(&mut self) {
         self.filtering = true;
+        self.focus = Focus::Topics;
     }
 
     /// Stops routing typed characters into the filter, KEEPING the text:
@@ -482,13 +529,20 @@ impl HelpState {
                 title: topic.title.clone(),
             });
         }
-        if needle.is_empty() || fold(KEYS_ID.as_bytes()).contains(&needle) {
+        // Same rule as [`matches`] applies to the corpus: id OR title. The
+        // title here is the frontend's own label, so a reader who types what
+        // the row SAYS (`tecl…` against `Teclado`) finds the row they are
+        // looking straight at — before, only the literal `keys` reached it.
+        if needle.is_empty()
+            || fold(KEYS_ID.as_bytes()).contains(&needle)
+            || fold(self.keys_label.as_bytes()).contains(&needle)
+        {
             rows.push(SidebarRow::Group {
                 tag: KEYS_TAG.to_owned(),
             });
             rows.push(SidebarRow::Topic {
                 id: TopicId::new(KEYS_ID),
-                title: KEYS_ID.to_owned(),
+                title: self.keys_label.clone(),
             });
         }
         self.rows = rows;
@@ -624,6 +678,26 @@ impl HelpState {
 /// actually named "copying" arrives buried among them. Typing the key
 /// (`pane.co`, `task.cancel`) still finds the page that documents it, which
 /// is what matching commands at all was for.
+///
+/// # Known gap: diacritics
+///
+/// [`fold`] normalizes to NFC and lowercases; it does NOT strip diacritics.
+/// So a needle typed without accents misses a title that has them: `como`
+/// does not find «Cómo se lee esta ayuda» and `raton` does not find «Usar el
+/// ratón» — 3 of the 8 Spanish titles as the corpus stands. Typing the accent
+/// works, and so does any accent-free substring of the same title (`se lee`,
+/// `usar el`), so no page is unreachable; it is worse than that for the
+/// reader who does not know that.
+///
+/// Deliberately NOT fixed here. [`fold`] is ONE pipeline shared with the
+/// filename path (quick search, `nav`), and there a name is BYTES: `café` and
+/// `cafe` are two different files that must stay two different rows, so
+/// folding the accent away would make the filename filter lie about what is
+/// on disk. Splitting the two would mean a second normalization pipeline and
+/// a second cache, and the choice of which surface gets which rule is a
+/// design decision this phase is not the place to take. The next phase that
+/// touches help search should take it explicitly — decompose to NFD and drop
+/// `Mn` for the HELP needle only, or accept the gap and say so in the docs.
 fn matches(topic: &Topic, needle: &str) -> bool {
     if needle.is_empty() {
         return true;
@@ -657,8 +731,56 @@ mod tests {
     use super::*;
     use norte_help::{Lang, TopicId};
 
+    /// The label the TUI would hand in, standing in for `t("help-topic-keys")`
+    /// — deliberately NOT the id, so a test that passes by matching `keys`
+    /// cannot pass by accident.
+    const KEYS_LABEL: &str = "Keyboard";
+
     fn state() -> HelpState {
-        HelpState::new(Lang::En)
+        HelpState::new(Lang::En, KEYS_LABEL.to_owned())
+    }
+
+    /// FIX 2: the keyboard page has to be findable by the name it is PAINTED
+    /// with. Its label lives in the frontend's catalogue, so before this the
+    /// filter only reached it through the literal `keys` and a reader typing
+    /// the localized word watched the row they were looking at disappear.
+    #[test]
+    fn the_synthetic_keyboard_page_is_found_by_its_painted_label() {
+        let mut s = state();
+        assert!(
+            s.rows().iter().any(|r| matches!(
+                r,
+                SidebarRow::Topic { id, title }
+                    if id.as_str() == KEYS_ID && title == KEYS_LABEL
+            )),
+            "the synthetic row carries the frontend's label as its title"
+        );
+        for needle in ["keyb", "KEYBOARD", "board"] {
+            s = state();
+            s.start_filter();
+            for c in needle.chars() {
+                s.push_char(c);
+            }
+            assert!(
+                shown(&s).iter().any(|id| id == KEYS_ID),
+                "filtering by {needle:?} must keep the keyboard page: {:?}",
+                shown(&s)
+            );
+        }
+        // The id stays a match too, and so does the fallback for a frontend
+        // that hands in nothing.
+        s = state();
+        s.start_filter();
+        for c in "keys".chars() {
+            s.push_char(c);
+        }
+        assert!(shown(&s).iter().any(|id| id == KEYS_ID));
+        let blank = HelpState::new(Lang::En, String::new());
+        assert!(blank.rows().iter().any(|r| matches!(
+            r,
+            SidebarRow::Topic { id, title }
+                if id.as_str() == KEYS_ID && title == KEYS_ID
+        )));
     }
 
     /// The ids the sidebar is showing, in row order.
@@ -957,6 +1079,30 @@ mod tests {
         assert_eq!(s.filter_raw(), "copy");
         s.backspace();
         assert_eq!(s.filter_raw(), "copy");
+    }
+
+    /// Opening the filter takes the cursor back to the sidebar: the arrows
+    /// inside the box walk the HITS. Reachable in the TUI with `Tab` then `/`
+    /// — the index has seven `see_also` rows to move the focus into — and
+    /// before this the arrows drove the body of the page underneath while the
+    /// list the reader was narrowing could not be walked at all.
+    #[test]
+    fn opening_the_filter_hands_the_cursor_back_to_the_sidebar() {
+        let mut s = state();
+        s.toggle_focus();
+        assert_eq!(s.focus(), Focus::Body, "the index has links to focus");
+        s.start_filter();
+        assert_eq!(s.focus(), Focus::Topics);
+
+        // …and the arrows really do drive the list now.
+        let before = s.selected_topic().cloned();
+        s.down();
+        assert_ne!(
+            s.selected_topic().cloned(),
+            before,
+            "the sidebar cursor moved: {:?}",
+            s.rows()
+        );
     }
 
     #[test]

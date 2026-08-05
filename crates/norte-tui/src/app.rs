@@ -2533,6 +2533,19 @@ impl App {
 ///
 /// Built ONCE per process: `Effective::build_for` materialises the whole
 /// merged keymap for three screens, and `App::new` runs in every render test.
+///
+/// Which makes this dead weight in the BINARY, and deliberately so: `App::new`
+/// forces it and `main.rs` throws it away on the very next lines. It earns its
+/// place in the render tests, which build an `App` and never load a keymap —
+/// and nowhere else.
+///
+/// One consequence a test author has to know: the LABEL of every row is frozen
+/// here at `Lang::from_env()`, because `TuiChords` resolves labels once, when
+/// it is built. The prose and the chords do not depend on it, but a test that
+/// asserts on a help label through this default reads whatever locale the
+/// machine running it happens to have — so such a test must build its own
+/// `TuiChords` with the language it means (`snapshots_ui.rs`'s `open_help`
+/// does exactly that).
 fn default_help_chords() -> std::sync::Arc<crate::help::TuiChords> {
     static DEFAULT: std::sync::LazyLock<std::sync::Arc<crate::help::TuiChords>> =
         std::sync::LazyLock::new(|| {
@@ -2598,13 +2611,20 @@ impl HelpView {
     /// Opens the overlay on the index topic of `lang`, with `keys_lines` as
     /// the body of the synthetic keyboard entry.
     ///
+    /// The label of that entry is resolved HERE and handed to the model:
+    /// `norte_frontend::help` has no Fluent access on purpose, and this is
+    /// the frontend that names the page. Resolving it once, at the seam,
+    /// keeps the sidebar and the filter looking at the same string — a
+    /// painter-side special case would only make the row unfindable by the
+    /// name it wears.
+    ///
     /// The body starts EMPTY: nothing has been laid out yet because nothing
     /// knows how wide the terminal is. [`refresh`](Self::refresh) is what
     /// fills it, and the run loop calls it before every paint.
     #[must_use]
     pub fn new(lang: norte_help::Lang, keys_lines: Vec<String>) -> Self {
         Self {
-            state: norte_frontend::help::HelpState::new(lang),
+            state: norte_frontend::help::HelpState::new(lang, t("help-topic-keys")),
             keys_lines,
             body: crate::help_render::Rendered {
                 lines: Vec::new(),
@@ -2628,7 +2648,9 @@ impl HelpView {
         theme: &crate::theme::TuiTheme,
     ) {
         self.body = match self.state.topic() {
-            Some(topic) => crate::help_render::render_topic(topic, chords, width, theme),
+            Some(topic) => {
+                crate::help_render::render_topic(topic, self.state.lang(), chords, width, theme)
+            }
             // The synthetic `keys` page: its body is the effective keymap,
             // generated text with no runnable rows and therefore no action
             // map — a chord is not something Enter runs.

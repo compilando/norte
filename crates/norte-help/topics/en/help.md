@@ -22,6 +22,11 @@ runs the command exactly as its own key would: the same confirmation, the same
 policy gate, the same journal entry. Enter on a link follows it, and
 {{cmd:dialog.back}} returns to the page you came from.
 
+Rows for the overlay's own verbs — the three on this page — are the exception.
+They are listed so their keys can be looked up, but they mean something only
+inside an overlay, so a pane has nothing to run: Enter on one says so and
+leaves the help open.
+
 {{cmd:dialog.filter}} starts filtering the list on the left. It matches page
 titles, page ids and the commands each page documents — a command from the
 start of the id or of any of its dotted parts — so `copy` brings up every page

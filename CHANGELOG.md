@@ -174,6 +174,24 @@ independently through `PROTOCOL_VERSION`.
   hostile or broken daemon aborts the whole apply before any move is
   submitted (shared `validate_ai_plan` belt in `norte-frontend`).
 
+### Changed
+
+- **`q` no longer closes the help.** The overlay now resolves its keys through
+  the `dialog` context like every other one, and `q` is `app.quit` there — a
+  key that means "leave the app" cannot also mean "leave this page". `Esc`
+  closes it, the key that opened it (`F1`) closes it, and `Backspace` goes back
+  a page or out of the help when there is nowhere left to go back to.
+
+### Fixed
+
+- **The F1 cheatsheet stops quoting its own translation keys.** The `dialog`
+  keymap merges the preset's `[global]` section, so `app.quit` and its
+  neighbours turn up while the dialog half of the page is drawn — and that half
+  was asking the `dialog-cmd-*` catalogue for them. A missing Fluent message
+  answers with its own id, so eight rows read `dialog-cmd-app-quit` at whoever
+  came looking for the key. Each command is now labelled from the catalogue it
+  actually lives in.
+
 ## [0.3.0-alpha.2] - 2026-08-02
 
 ### Added

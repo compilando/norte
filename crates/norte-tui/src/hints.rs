@@ -35,11 +35,37 @@ const NAVIGATION_HINT_EXCLUDED: &[&str] = &[
 /// (confirm/collision/approval/trust-host) never include navigation commands
 /// in their allowlists to begin with, so this is a no-op for them.
 #[must_use]
-fn without_navigation<'a>(supported: &'a [&'a str]) -> Vec<&'a str> {
+pub(crate) fn without_navigation<'a>(supported: &'a [&'a str]) -> Vec<&'a str> {
     supported
         .iter()
         .copied()
         .filter(|c| !NAVIGATION_HINT_EXCLUDED.contains(c))
+        .collect()
+}
+
+/// Commands the HELP overlay's footer leaves unsaid (MAJOR, H3b): `Enter` and
+/// `Esc` are the UNIVERSAL overlay keys — every other overlay's footer already
+/// drops its self-evident verbs through [`without_navigation`], and the `help`
+/// topic spells both of them out in prose. Excluded ONLY from the generated
+/// HINT text via [`help_hint_commands`]; `ALLOW_HELP` and the dispatch in
+/// `app.rs` are untouched — the keys still work, they are just not printed.
+const HELP_HINT_EXCLUDED: &[&str] = &["dialog.confirm", "dialog.cancel"];
+
+/// Filters a SUPPORTED allowlist down to what the HELP footer spells out:
+/// [`without_navigation`] plus [`HELP_HINT_EXCLUDED`]. Used only by
+/// [`DialogHints::build`] for [`DialogHints::help`].
+///
+/// Even across the FULL inner width of the overlay (74 cells on an 80-column
+/// frame, once the footer stopped being carved out of the body column alone)
+/// the five surviving groups do not fit, and `fit_hint_groups` drops them from
+/// the tail — so the one that fell off was `[tab] other pane`, the only way
+/// into the body, where `Enter` runs commands that touch the filesystem.
+/// Dropping the two universal verbs leaves the three the reader cannot guess.
+#[must_use]
+pub(crate) fn help_hint_commands<'a>(supported: &'a [&'a str]) -> Vec<&'a str> {
+    without_navigation(supported)
+        .into_iter()
+        .filter(|c| !HELP_HINT_EXCLUDED.contains(c))
         .collect()
 }
 
@@ -145,7 +171,7 @@ impl DialogHints {
             extensions: dialog_hints(&without_navigation(ALLOW_EXTENSIONS), eff),
             plugin_config: dialog_hints(&without_navigation(ALLOW_PLUGIN_CONFIG), eff),
             nav_list: dialog_hints(&without_navigation(ALLOW_NAV_HOTLIST), eff),
-            help: dialog_hints(&without_navigation(ALLOW_HELP), eff),
+            help: dialog_hints(&help_hint_commands(ALLOW_HELP), eff),
         }
     }
 }
@@ -332,6 +358,43 @@ mod tests {
                 hints.help
             );
         }
+    }
+
+    /// MAJOR (H3b): el pie de la ayuda no gasta ancho en `Enter`/`Esc` — son
+    /// las teclas universales de cualquier overlay — para que `[tab]`, la
+    /// ÚNICA entrada al cuerpo, quepa en un frame de 80 columnas. Y es solo
+    /// el hint IMPRESO: `ALLOW_HELP` y el despacho siguen aceptándolas.
+    #[test]
+    fn el_pie_de_la_ayuda_calla_las_teclas_universales_pero_no_las_desactiva() {
+        use crate::app::{ALLOW_HELP, help_action};
+        let (_, preset) = crate::keymap::presets()
+            .into_iter()
+            .find(|(n, _)| *n == "orthodox")
+            .expect("preset orthodox");
+        let known: Vec<&str> = crate::keymap::COMMANDS
+            .iter()
+            .copied()
+            .chain(crate::keymap::DIALOG_COMMANDS.iter().copied())
+            .collect();
+        let eff =
+            crate::keymap::Effective::build_for(&preset, &[], &known, Screen::Dialog).unwrap();
+        let hints = DialogHints::build(&eff);
+        for cmd in ["dialog.confirm", "dialog.cancel"] {
+            assert!(
+                !hints.help.contains(&t(&dialog_hint_id(cmd))),
+                "{cmd} no se imprime en el pie de la ayuda: {}",
+                hints.help
+            );
+            assert!(
+                ALLOW_HELP.contains(&cmd) && help_action(cmd).is_some(),
+                "…pero la tecla SIGUE viva: {cmd}"
+            );
+        }
+        assert!(
+            hints.help.contains(&t(&dialog_hint_id("dialog.pane"))),
+            "y el verbo que entra al cuerpo sí llega: {}",
+            hints.help
+        );
     }
 
     /// [`without_navigation`] filtra SOLO las cuatro entradas de navegación,

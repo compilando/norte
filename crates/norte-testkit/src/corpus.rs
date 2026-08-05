@@ -286,6 +286,112 @@ pub fn hostile_chords() -> Vec<HostileChord> {
     ]
 }
 
+/// A hostile DISPLAY TITLE: prose meant to be painted into a narrow column,
+/// not a filename.
+///
+/// The other two families of this corpus cover the surfaces norte had until
+/// now: [`hostile_names`] is BYTES off a filesystem, [`hostile_chords`] is a
+/// single codepoint out of a keymap. A title is neither — it is a whole
+/// string of editorial text, it is TRUNCATED to fit a sidebar or a column,
+/// and from the help overlay (H3b) onwards it is also a surface a plugin
+/// manifest can feed. The hazards that shape live on the CUT: two titles that
+/// become the same string once truncated, a combining mark orphaned onto the
+/// ellipsis, a grapheme cluster split down the middle.
+///
+/// Truncation of a title is by the RIGHT (`norte_tui::ui::right_ellipsis`):
+/// head plus tail collides any two labels that agree on both ends, so a label
+/// keeps its distinct prefix and loses its tail. [`HostileTitle::twin`] is
+/// built for THAT rule — the pair shares everything up to the cut.
+#[derive(Debug, Clone)]
+pub struct HostileTitle {
+    /// Stable identifier (for test names and messages).
+    pub id: &'static str,
+    /// The title itself, as an author or a plugin manifest would write it.
+    pub text: &'static str,
+    /// The other half of a COLLIDING pair, when the hazard needs two strings.
+    ///
+    /// A collision cannot be expressed by one string: it is a property of a
+    /// PAIR that renders identically once cut. `None` for the fixtures whose
+    /// hazard is internal to a single title.
+    pub twin: Option<&'static str>,
+    /// Why it is hostile (living documentation).
+    pub why: &'static str,
+}
+
+/// The 4 canonical hostile titles.
+///
+/// ```
+/// let titles = norte_testkit::corpus::hostile_titles();
+/// assert_eq!(titles.len(), 4);
+///
+/// // The colliding pair shares a long prefix: cut short enough, both sides
+/// // render the same string.
+/// let pair = titles.iter().find(|t| t.id == "truncation_twins").unwrap();
+/// let twin = pair.twin.expect("a collision needs two strings");
+/// assert_ne!(pair.text, twin);
+/// assert_eq!(&pair.text[..30], &twin[..30]);
+///
+/// // The bidi-isolate title is LEGITIMATE editorial text that is made of
+/// // terminal hazards: it is what makes a hazard sweep over prose a live
+/// // constraint and not a hypothetical.
+/// let bidi = titles.iter().find(|t| t.id == "bidi_isolate_url").unwrap();
+/// assert!(bidi.text.chars().any(norte_encoding::is_terminal_hazard));
+/// ```
+#[must_use]
+pub fn hostile_titles() -> Vec<HostileTitle> {
+    vec![
+        HostileTitle {
+            id: "truncation_twins",
+            text: "Copiar al host remoto (SFTP, puerto 22)",
+            twin: Some("Copiar al host remoto (SFTP, puerto 2222)"),
+            why: "two DIFFERENT titles that share everything up to the cut: \
+                  right-truncated into a sidebar column both read `Copiar al \
+                  host remo…`, so a reader picking one of the two rows cannot \
+                  tell which page they are opening. Nothing can prevent the \
+                  collision in a narrow column — what a frontend owes is that \
+                  the cut is MARKED (the `…`), never a silent equality",
+        },
+        HostileTitle {
+            id: "nfd_accent_on_the_cut",
+            // `cafe` + U+0301: the accent is its OWN codepoint, of width 0.
+            text: "Copiar cafe\u{301}.txt al otro panel",
+            twin: None,
+            why: "an NFD combining acute is width 0, so a truncator that \
+                  walks by CELLS never spends budget on it: the mark can \
+                  survive its base character and end up composed onto the \
+                  ellipsis (`caf…` painted as `caf´…`), moving an accent onto \
+                  a glyph the author never wrote. macOS hands out NFD by \
+                  default, so this is the ordinary case, not the exotic one",
+        },
+        HostileTitle {
+            id: "zwj_cluster_on_the_cut",
+            text: "Marcar 👨\u{200D}👩\u{200D}👧\u{200D}👦 y copiar",
+            twin: None,
+            why: "a ZWJ emoji cluster is several codepoints painted as ONE \
+                  glyph. A cut that falls inside it turns one family into two \
+                  or three unrelated people, and a cut that leaves the tail \
+                  starting on the joiner composes the joiner onto the \
+                  ellipsis. ZWJ is deliberately NOT masked (see `must_mask`), \
+                  so a truncator cannot lean on masking to avoid it",
+        },
+        HostileTitle {
+            id: "bidi_isolate_url",
+            // U+2066 LRI … U+2069 PDI: the CORRECT way to put an LTR URL
+            // inside RTL prose.
+            text: "\u{2066}sftp://host/ruta\u{2069} en el panel derecho",
+            twin: None,
+            why: "the LEGITIMATE case: `U+2066`..`U+2069` are how an RTL \
+                  locale keeps an LTR run (a URL, a path, a command id) from \
+                  reordering the sentence around it — and every one of them \
+                  is in `norte_encoding::is_terminal_hazard`. So a corpus \
+                  hazard sweep is not a hypothetical the day an RTL \
+                  translation lands: it is the gate that forces the choice \
+                  between isolating the run and shipping raw bidi controls to \
+                  a terminal to be a deliberate one",
+        },
+    ]
+}
+
 fn hex_decode(s: &str) -> Vec<u8> {
     assert!(s.len().is_multiple_of(2), "hex de longitud par: {s}");
     (0..s.len())

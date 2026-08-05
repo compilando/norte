@@ -259,7 +259,6 @@ cli-ls-skipped = aviso: { $n } entradas del contenedor omitidas del índice (nom
 
 # --- Ayuda (F1) — construida del keymap efectivo ---
 help-title = Ayuda
-help-hint = [esc/q/f1] cerrar   [↑/↓/pgup/pgdn] desplazar
 help-section-browse = Navegación (panes)
 help-section-viewer = Viewer
 help-section-dialog = Diálogos y overlays

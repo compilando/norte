@@ -464,6 +464,92 @@ fn take_width(s: &str, max: usize) -> String {
     out
 }
 
+/// Cell width of `s`, the same budget [`take_width`] spends.
+fn cells(s: &str) -> usize {
+    s.chars().map(|c| c.width().unwrap_or(0)).sum()
+}
+
+/// Right-truncation to `max` CELLS, marking the cut with a single `…`.
+///
+/// The shape for a LABEL, where `middle_ellipsis` is the wrong tool: head
+/// plus tail collides any two labels that agree on both ends (`Foo…bar` and
+/// `Foo…bar` for two different plugin-supplied titles), while a right cut
+/// keeps a distinct prefix distinct. Cell-aware, never char counts: a
+/// double-width glyph that does not fit is dropped whole rather than
+/// overflowing the column by one cell.
+fn right_ellipsis(s: &str, max: usize) -> String {
+    if cells(s) <= max {
+        return s.to_owned();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let mut out = take_width(s, max - 1);
+    out.push('…');
+    out
+}
+
+/// Splits a generated dialog hint into its whole `[chord] label` groups.
+///
+/// [`crate::hints::dialog_hints`] joins the groups with a single space and
+/// every group starts with `[`, so the boundary is the ` [` join and NOT any
+/// space: a label is prose and carries spaces of its own (`otro panel`).
+fn hint_groups(hint: &str) -> Vec<&str> {
+    let mut groups = Vec::new();
+    let mut start = 0usize;
+    for (i, _) in hint.match_indices(" [") {
+        groups.push(&hint[start..i]);
+        start = i + 1;
+    }
+    if start < hint.len() {
+        groups.push(&hint[start..]);
+    }
+    groups
+}
+
+/// Fits a generated dialog hint into `max` CELLS by dropping whole
+/// `[chord] label` groups, marking the loss with a trailing `…`.
+///
+/// Every other overlay measures its hint and grows its popup to fit
+/// (`draw_nav_popup`, `draw_extensions`, …). The help overlay is full-screen
+/// and cannot grow, so its footer has to be CUT — and a `middle_ellipsis`
+/// there was actively lying twice over. At 80 columns it produced
+/// `[enter] confirmar [esc]…kspace] atrás [/] filtrar`: the cut fell inside a
+/// group and left the brackets balanced, so `[esc]…kspace]` reads as a chord
+/// for a key called *kspace* that the app invented; and middle truncation
+/// eats the MIDDLE of the list, which is exactly where `[tab] otro panel`
+/// sat — the verb the whole two-pane design rests on, gone without a trace.
+///
+/// A group is therefore emitted WHOLE or not at all, and the `…` says that
+/// something was dropped. Groups are kept in order, stopping at the first
+/// that does not fit: the footer is then a true prefix of the real hint.
+fn fit_hint_groups(hint: &str, max: usize) -> String {
+    if cells(hint) <= max {
+        return hint.to_owned();
+    }
+    // Two cells held back: the `…` and the space that separates it from the
+    // last group kept.
+    let budget = max.saturating_sub(2);
+    let mut out = String::new();
+    for g in hint_groups(hint) {
+        let sep = usize::from(!out.is_empty());
+        if cells(&out) + sep + cells(g) > budget {
+            break;
+        }
+        if sep == 1 {
+            out.push(' ');
+        }
+        out.push_str(g);
+    }
+    if out.is_empty() {
+        // Not even one group fits: say so rather than paint half a chord.
+        return take_width("…", max);
+    }
+    out.push(' ');
+    out.push('…');
+    out
+}
+
 /// La línea de cabecera (#108 L5): etiquetas Fluent (o la `header` custom
 /// del spec, #108 7b — YA saneada y capada al resolver, aquí solo el
 /// recorte por ancho), la del orden activo con `▲`/`▼`. Ancho fiel al de
@@ -905,19 +991,27 @@ fn help_layout(base: Rect) -> (Rect, Rect, Rect, Rect) {
         base.height.saturating_sub(2).max(6),
     );
     let inner = Block::default().borders(Borders::ALL).inner(area);
+    // El corte VERTICAL va PRIMERO (review MAJOR): la caja reserva su última
+    // línea para el pie (el filtro o el hint generado), como `draw_settings`
+    // reserva la suya para la descripción — el pie del borde (`title_bottom`)
+    // no cabría con la lateral delante. Cortando la horizontal antes, el pie
+    // se quedaba con el ancho del CUERPO (50 celdas en un frame de 80) y
+    // `fit_hint_groups` tiraba el grupo que abre el cuerpo, `[tab]`, que es
+    // la única entrada a la mitad donde `Enter` toca el sistema de ficheros.
+    // Así el pie ocupa el ancho ENTERO (74 celdas en ese mismo frame).
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(HELP_SIDEBAR), Constraint::Min(1)])
-        .split(inner);
-    // La columna derecha reserva su última línea para el pie (el filtro o el
-    // hint generado), como `draw_settings` reserva la suya para la
-    // descripción: el pie del borde (`title_bottom`) no cabría con la
-    // lateral delante.
-    let right = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(cols[1]);
-    (area, cols[0], right[0], right[1])
+        .split(rows[0]);
+    // El CUERPO conserva exactamente la misma altura que antes (`inner` menos
+    // la fila del pie): `help_body_size` la publica y el pre-render acota
+    // contra ella. Lo que cambia es la lateral, que ahora también cede esa
+    // fila — el pie es de la caja, no de una columna.
+    (area, cols[0], cols[1], rows[1])
 }
 
 /// Ancho y alto EN CELDAS del cuerpo del overlay de ayuda sobre un frame de
@@ -974,19 +1068,15 @@ fn draw_help(frame: &mut Frame<'_>, help: &crate::app::HelpView, theme: &TuiThem
             // GUI). Un tag sin entrada Fluent pintaría su propia clave, que
             // es lo que la suite de i18n impide.
             SidebarRow::Group { tag } => ListItem::new(Line::styled(
-                middle_ellipsis(&t(&format!("help-group-{tag}")), side_w),
+                right_ellipsis(&t(&format!("help-group-{tag}")), side_w),
                 theme.role(Role::Title),
             )),
-            SidebarRow::Topic { id, title } => {
-                // La entrada sintética `keys` no es un tema del corpus: su
-                // título ES su id (el modelo no tiene acceso a Fluent, a
-                // propósito), así que la etiqueta la pone el frontend.
-                let label = if id.as_str() == norte_frontend::help::KEYS_ID {
-                    t("help-topic-keys")
-                } else {
-                    title.clone()
-                };
-                ListItem::new(Line::raw(middle_ellipsis(&format!("  {label}"), side_w)))
+            // El título de la entrada sintética `keys` es la etiqueta que
+            // `HelpView::new` le dio al modelo (`help-topic-keys`), así que
+            // aquí no hay caso especial: la lateral pinta lo mismo que el
+            // filtro busca.
+            SidebarRow::Topic { title, .. } => {
+                ListItem::new(Line::raw(right_ellipsis(&format!("  {title}"), side_w)))
             }
         })
         .collect();
@@ -1030,9 +1120,11 @@ fn draw_help(frame: &mut Frame<'_>, help: &crate::app::HelpView, theme: &TuiThem
             usize::from(footer_area.width),
         ))
     } else {
-        Line::raw(middle_ellipsis(
-            &format!(" {hint}"),
-            usize::from(footer_area.width),
+        // NUNCA `middle_ellipsis` sobre un hint generado: ver
+        // [`fit_hint_groups`]. Una celda del pie es del margen izquierdo.
+        Line::raw(format!(
+            " {}",
+            fit_hint_groups(hint, usize::from(footer_area.width).saturating_sub(1))
         ))
     };
     frame.render_widget(
@@ -2897,6 +2989,91 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         Paragraph::new(text).style(app.theme.role(Role::StatusBar)),
         area,
     );
+}
+
+#[cfg(test)]
+mod help_footer_tests {
+    use super::{cells, fit_hint_groups, hint_groups};
+    use crate::app::ALLOW_HELP;
+    use crate::hints::{dialog_hints, without_navigation};
+    use crate::keymap::{COMMANDS, DIALOG_COMMANDS, Effective, Screen, presets};
+
+    /// The `dialog` effective of the shipped default preset — the very one
+    /// the help overlay's footer is generated from at runtime.
+    fn dialog_eff() -> Effective {
+        let (_, preset) = presets()
+            .into_iter()
+            .find(|(n, _)| *n == "orthodox")
+            .expect("preset orthodox");
+        let known: Vec<&str> = COMMANDS
+            .iter()
+            .copied()
+            .chain(DIALOG_COMMANDS.iter().copied())
+            .collect();
+        Effective::build_for(&preset, &[], &known, Screen::Dialog).expect("efectivo del preset")
+    }
+
+    /// FIX 1: the footer must never paint a `[` that does not open a WHOLE
+    /// `[chord] label` group.
+    ///
+    /// `middle_ellipsis` cut inside a group and left the brackets balanced —
+    /// `[esc]…kspace]` at 80 columns, a chord for a key the app invented. A
+    /// group is data (the effective keymap × the Fluent label); half of one
+    /// is a fabrication. Swept over EVERY budget from one cell to the full
+    /// hint, so no width has a special case hiding in it.
+    #[test]
+    fn el_pie_de_la_ayuda_jamas_parte_un_grupo() {
+        let eff = dialog_eff();
+        let hint = dialog_hints(&without_navigation(ALLOW_HELP), &eff);
+        let grupos = hint_groups(&hint);
+        assert!(
+            grupos.len() > 2,
+            "el hint de la ayuda tiene varios grupos: {hint:?}"
+        );
+        for max in 1..=cells(&hint) {
+            let out = fit_hint_groups(&hint, max);
+            assert!(
+                cells(&out) <= max,
+                "max={max}: {} celdas en {out:?}",
+                cells(&out)
+            );
+            // Lo que queda tras quitar la marca de recorte tiene que ser una
+            // secuencia de grupos ENTEROS del hint real.
+            let cuerpo = out
+                .strip_suffix('…')
+                .map_or(out.as_str(), str::trim_end)
+                .to_owned();
+            for (i, _) in cuerpo.match_indices('[') {
+                assert!(
+                    grupos.iter().any(|g| cuerpo[i..].starts_with(g)),
+                    "max={max}: un `[` que no abre un grupo entero: {out:?}"
+                );
+            }
+            if cuerpo != hint {
+                assert!(
+                    out.ends_with('…'),
+                    "max={max}: se descartó algo sin marcarlo: {out:?}"
+                );
+            }
+        }
+    }
+
+    /// Y lo que se descarta se descarta por la COLA: el pie es un prefijo
+    /// real del hint, nunca un trozo del medio (que es donde caían los
+    /// verbos nuevos de H3b — `[tab] otro panel` desaparecía entero).
+    #[test]
+    fn el_pie_de_la_ayuda_es_un_prefijo_del_hint() {
+        let eff = dialog_eff();
+        let hint = dialog_hints(&without_navigation(ALLOW_HELP), &eff);
+        for max in 1..=cells(&hint) {
+            let out = fit_hint_groups(&hint, max);
+            let cuerpo = out.strip_suffix('…').map_or(out.as_str(), str::trim_end);
+            assert!(
+                hint.starts_with(cuerpo),
+                "max={max}: {cuerpo:?} no es prefijo de {hint:?}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

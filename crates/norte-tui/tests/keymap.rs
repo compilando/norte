@@ -485,13 +485,20 @@ fn el_contexto_viewer_se_fusiona_para_su_pantalla() {
 
 /// Extensibilidad de la ayuda: TODO comando tiene descripción en AMBOS
 /// locales — un comando nuevo sin entrada help-cmd-* rompe aquí. La
-/// decoración de la pantalla (título, hint, secciones) también.
+/// decoración de la pantalla (título, secciones) también.
+///
+/// `help-hint` YA NO está: el pie del overlay se GENERA del keymap efectivo
+/// (`hints::DialogHints::help`) desde H3b, y la cadena estática que quedaba
+/// anunciaba una tecla (`q`) que el enrutado por keymap ya no acepta.
 #[test]
 fn todo_comando_tiene_ayuda_traducida() {
     use norte_tui::keymap::help_id;
     let ids_decoracion = [
         "help-title".to_owned(),
-        "help-hint".to_owned(),
+        // H3b: la etiqueta de la entrada sintética `keys` de la lateral. Se
+        // resuelve en `HelpView::new` y viaja al modelo como TÍTULO de fila:
+        // sin entrada Fluent, la lateral pintaría `help-topic-keys` literal.
+        "help-topic-keys".to_owned(),
         "help-section-browse".to_owned(),
         "help-section-viewer".to_owned(),
     ];
@@ -502,6 +509,61 @@ fn todo_comando_tiene_ayuda_traducida() {
             assert_ne!(texto, id, "{id}: sin traducción en {lang:?}");
         }
     }
+}
+
+/// H3b: TODA cabecera de grupo de la lateral de la ayuda tiene entrada Fluent
+/// en AMBOS locales.
+///
+/// `draw_help` pinta `t(&format!("help-group-{tag}"))` con el tag que viene
+/// del FRONT MATTER del corpus, y `norte_i18n::t` contesta un fallo de
+/// búsqueda con el id: un tema archivado bajo un tag nuevo pintaría una banda
+/// `help-group-advanced` literal en la lateral. Es el mismo defecto que esta
+/// misma fase arregló un fichero más allá (el `label_id` de `help.rs`, fijado
+/// por `the_cheatsheet_never_paints_a_fluent_id`), y la búsqueda gemela no
+/// tenía guardia.
+///
+/// La suite de paridad de i18n NO lo cubre: solo afirma que EN y ES tienen el
+/// MISMO conjunto de ids, así que un tag ausente en los dos pasa de largo.
+///
+/// Los tags se sacan del MODELO (`HelpState::rows`), no de una lista escrita
+/// a mano: son exactamente las filas `Group` que el pintor recorre, incluida
+/// la sintética `keys` que no sale de ningún `.md`. H3h escribe el corpus
+/// completo y este barrido crece con él sin tocarlo.
+#[test]
+fn toda_cabecera_de_grupo_de_la_ayuda_tiene_etiqueta_traducida() {
+    use norte_frontend::help::{HelpState, SidebarRow};
+
+    let mut vistos = 0usize;
+    for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
+        // La etiqueta de `keys` no se está probando aquí (la cubre
+        // `ids_decoracion`); da igual cuál sea mientras no esté vacía.
+        let state = HelpState::new(lang, "Teclado".to_owned());
+        for row in state.rows() {
+            let SidebarRow::Group { tag } = row else {
+                continue;
+            };
+            vistos += 1;
+            let id = format!("help-group-{tag}");
+            assert_ne!(
+                norte_i18n::t_in(lang, &id),
+                id,
+                "{id}: sin traducción en {lang:?} — la lateral pintaría el id \
+                 Fluent como si fuera el nombre del grupo. Añade la entrada en \
+                 i18n/{}.ftl",
+                match lang {
+                    norte_i18n::Lang::Es => "es",
+                    norte_i18n::Lang::En => "en",
+                }
+            );
+        }
+    }
+    // Anti-vacuidad: sin filas `Group` el bucle no afirma nada. Hoy hay 4
+    // grupos por locale (`basics`, `doing`, `remote` y la sintética `keys`).
+    assert!(
+        vistos >= 8,
+        "el barrido no vio cabeceras de grupo suficientes ({vistos}): el modelo \
+         dejó de agrupar y este test pasaría en vacío"
+    );
 }
 
 /// H1 T3 (#24): TODO comando de [`DIALOG_COMMANDS`] tiene etiqueta CORTA en

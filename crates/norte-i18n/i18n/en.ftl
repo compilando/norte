@@ -257,7 +257,6 @@ cli-ls-skipped = warning: { $n } container entries omitted from the index (hosti
 
 # --- Help (F1) — built from the effective keymap ---
 help-title = Help
-help-hint = [esc/q/f1] close   [↑/↓/pgup/pgdn] scroll
 help-section-browse = Browsing (panes)
 help-section-viewer = Viewer
 help-section-dialog = Dialogs and overlays

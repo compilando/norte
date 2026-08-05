@@ -239,6 +239,16 @@ pub fn middle_ellipsis(s: &str, max: usize) -> String {
         tail.push(c);
     }
     tail.reverse();
+    // H3b encoding audit, FIX 3(b): the tail walker breaks on the first char
+    // that does not FIT, and a combining mark is width 0 — it never breaks.
+    // So when the base character it belongs to is the one that overflows, the
+    // tail starts with a bare `U+0301`, which the terminal composes onto the
+    // `…` we are about to write: the accent migrates from its letter to the
+    // ellipsis. The same shape leaves a ZWJ emoji cluster starting on its
+    // joiner. Leading zero-width chars in the tail have lost their base by
+    // construction, so they are dropped rather than reparented.
+    let first_visible = tail.iter().position(|&c| cell(c) > 0).unwrap_or(tail.len());
+    tail.drain(..first_visible);
 
     let mut out = head;
     out.push('…');
@@ -348,5 +358,125 @@ mod tests {
         assert_eq!(path_display(&sin_auth).0, sin_auth.display_lossy());
         let raiz = root();
         assert_eq!(path_display(&raiz).0, raiz.display_lossy());
+    }
+
+    /// H3b encoding audit, FIX 3(b): the tail of a middle-truncated string
+    /// must never BEGIN on a zero-width char.
+    ///
+    /// A combining mark is width 0, so the tail walker never breaks on one:
+    /// when the base character it belongs to is the one that overflows the
+    /// budget, the mark survives alone at the front of the tail and the
+    /// terminal composes it onto the `…` — the accent migrates off its
+    /// letter. The same shape leaves a ZWJ emoji cluster starting on its
+    /// joiner. Corpus-driven: `nfd_e_acute` and `emoji_zwj_family` are the
+    /// canonical fixtures for exactly this.
+    #[test]
+    fn middle_ellipsis_jamas_deja_la_cola_empezando_en_ancho_cero() {
+        let corpus = norte_testkit::corpus::hostile_names();
+        for id in ["nfd_e_acute", "emoji_zwj_family"] {
+            let n = corpus
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap_or_else(|| panic!("{id} está en el corpus canónico"));
+            let pieza =
+                String::from_utf8(n.bytes.clone()).unwrap_or_else(|_| panic!("{id} es UTF-8"));
+            // Repetida: así el corte cae en TODAS las posiciones posibles
+            // dentro y entre clusters según el presupuesto, sin fijar a mano
+            // el `max` que reproduce el fallo.
+            let s = pieza.repeat(8);
+            for max in 1..=32 {
+                let out = middle_ellipsis(&s, max);
+                let Some(cola) = out.split('…').nth(1) else {
+                    continue;
+                };
+                if let Some(c) = cola.chars().next() {
+                    assert!(
+                        UnicodeWidthChar::width(c).unwrap_or(0) > 0,
+                        "[{id}] max={max}: la cola empieza en U+{:04X} (ancho 0), \
+                         que se compone sobre el `…`: {out:?}",
+                        c as u32
+                    );
+                }
+            }
+        }
+    }
+
+    /// FIX 3(b) otra vez, pero sobre un TÍTULO de display en vez de sobre un
+    /// nombre de fichero: la superficie que estrena H3b (la lateral de la
+    /// ayuda, las filas de una página) y que H3f alimentará desde manifiestos
+    /// de plugin.
+    ///
+    /// El corpus canónico tenía nombres hostiles (bytes) y chords hostiles
+    /// (un codepoint), pero nada con la forma de un título recortado en una
+    /// columna estrecha: `hostile_titles` es esa clase, y `nfd_accent_on_the_
+    /// cut` la fija aquí. Un acento NFD pesa CERO celdas, así que el caminante
+    /// de la cola no rompe nunca sobre él; cuando la letra a la que pertenece
+    /// es la que desborda el presupuesto, el acento sobrevive SOLO al frente
+    /// de la cola y el terminal lo compone sobre el `…` — el acento migra de
+    /// su letra a la elipsis. El cluster ZWJ tiene la misma forma.
+    ///
+    /// Los tres títulos se barren a todos los anchos: cuál es el `max` que
+    /// reproduce el fallo depende del texto, y fijarlo a mano es fijar el bug
+    /// de hoy en vez del invariante.
+    #[test]
+    fn middle_ellipsis_sobre_titulos_hostiles_no_orfana_marcas() {
+        for t in norte_testkit::corpus::hostile_titles() {
+            for texto in std::iter::once(t.text).chain(t.twin) {
+                for max in 1..=40 {
+                    let out = middle_ellipsis(texto, max);
+                    let Some(cola) = out.split('…').nth(1) else {
+                        continue;
+                    };
+                    if let Some(c) = cola.chars().next() {
+                        assert!(
+                            UnicodeWidthChar::width(c).unwrap_or(0) > 0,
+                            "[{}] max={max}: la cola empieza en U+{:04X} (ancho \
+                             0), que se compone sobre el `…`: {out:?}",
+                            t.id,
+                            c as u32
+                        );
+                    }
+                    assert!(
+                        out.chars()
+                            .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
+                            .sum::<usize>()
+                            <= max,
+                        "[{}] max={max}: el recorte desborda su presupuesto: {out:?}",
+                        t.id
+                    );
+                }
+            }
+        }
+    }
+
+    /// La otra mitad de `truncation_twins`: la colisión es REAL y no se puede
+    /// prevenir, así que lo que se exige es que el recorte se MARQUE.
+    ///
+    /// Dos títulos distintos que comparten todo hasta el corte se pintan
+    /// idénticos en una columna estrecha — eso es geometría, no un bug. Lo que
+    /// spec §6 no permite es que la pérdida sea SILENCIOSA: el `…` es lo que
+    /// le dice al lector que lo que ve no es el título entero y que la fila de
+    /// al lado puede ser otra cosa.
+    #[test]
+    fn dos_titulos_que_colisionan_al_recortarse_llevan_marca() {
+        let par = norte_testkit::corpus::hostile_titles()
+            .into_iter()
+            .find(|t| t.id == "truncation_twins")
+            .expect("fixture del corpus");
+        let gemelo = par.twin.expect("una colisión necesita dos cadenas");
+        assert_ne!(par.text, gemelo, "la fixture tiene que ser un PAR distinto");
+        let a = middle_ellipsis(par.text, 20);
+        let b = middle_ellipsis(gemelo, 20);
+        assert!(
+            a.contains('…') && b.contains('…'),
+            "el recorte se marca SIEMPRE: {a:?} / {b:?}"
+        );
+        // Y sin recorte, no colisionan: la colisión es del ancho, no de los
+        // datos.
+        assert_ne!(
+            middle_ellipsis(par.text, 200),
+            middle_ellipsis(gemelo, 200),
+            "con sitio de sobra los dos títulos son distinguibles"
+        );
     }
 }

@@ -745,22 +745,6 @@ fn render_buffer(app: &App) -> ratatui::buffer::Buffer {
     terminal.backend().buffer().clone()
 }
 
-/// Estilos, celda a celda, de la primera fila del buffer que CONTIENE
-/// `needle`.
-fn row_styles(buf: &ratatui::buffer::Buffer, needle: &str) -> Vec<ratatui::style::Style> {
-    for y in buf.area.top()..buf.area.bottom() {
-        let texto: String = (buf.area.left()..buf.area.right())
-            .map(|x| buf[(x, y)].symbol())
-            .collect();
-        if texto.contains(needle) {
-            return (buf.area.left()..buf.area.right())
-                .map(|x| buf[(x, y)].style())
-                .collect();
-        }
-    }
-    panic!("ninguna fila del frame contiene {needle:?}");
-}
-
 #[test]
 fn snapshot_ayuda() {
     let mut app = app_base();
@@ -778,12 +762,36 @@ fn snapshot_ayuda() {
     insta::assert_snapshot!(format!("{arriba}\n===\n{}", render(&app)));
 }
 
+/// Fila del frame en la que cae el PIE del overlay de ayuda, para un frame de
+/// `w`×`h`.
+///
+/// Calca la aritmética de `ui::help_layout`, que es privada: la caja va
+/// centrada con dos filas de margen vertical, su borde se come una fila, y el
+/// pie es la ÚLTIMA fila interior — justo debajo del cuerpo, cuya altura sí
+/// publica `ui::help_body_size`. Hace falta para que la aserción de que el
+/// filtro se pinta apunte al pie y no al frame entero: ver
+/// [`snapshot_ayuda_filtro_hostil`].
+fn help_footer_row(w: u16, h: u16) -> usize {
+    let alto_caja = h.saturating_sub(2).max(6).min(h);
+    let arriba = (h - alto_caja) / 2;
+    let (_, alto_cuerpo) = ui::help_body_size(ratatui::layout::Rect::new(0, 0, w, h));
+    usize::from(arriba + 1) + alto_cuerpo
+}
+
 /// H3b, lección H1 sobre una superficie PINTADA nueva: el filtro de la ayuda
 /// empareja los bytes CRUDOS a propósito (`filter_raw` — un needle con un
 /// override bidi tiene que encontrar el tema que el lector ve en pantalla), y
 /// lo único que puede pintarse es `filter_display`. El pie del overlay es el
-/// eco de ese texto tecleado, o sea la ÚNICA entrada libre de todo el draw:
-/// un `U+202E` que llegue ahí reordena visualmente la línea entera.
+/// eco de ese texto tecleado: un `U+202E` que llegue ahí reordena visualmente
+/// la línea entera.
+///
+/// El pie NO es la única entrada libre del draw, y decirlo era falso (review
+/// MEDIA): la lateral pinta títulos del corpus y el cuerpo pinta encabezados,
+/// celdas de tabla y bloques de código, todos SIN enmascarar y a propósito
+/// —son texto del binario— pero sin más red que la puerta de charset del
+/// corpus (`no_shipped_topic_carries_a_terminal_hazard`, en `norte-help`) y el
+/// catálogo Fluent. Lo que sí es cierto del pie es que es la única entrada
+/// TECLEADA, y por eso es la única que se enmascara en el pintor.
 ///
 /// El needle arranca con el token del fixture canónico `rlo`
 /// (`norte_testkit::corpus::hostile_chords`) — llega por paste tan fácil como
@@ -798,6 +806,13 @@ fn snapshot_ayuda() {
 /// control — un check ciego sobre todo el buffer daría un falso positivo por
 /// el formato del propio volcado. Ver el mismo comentario en
 /// `snapshot_extensions_description_hostil_80x24`.
+///
+/// La aserción anti-vacuidad va acotada al PIE, no al frame (review MEDIA):
+/// `app_base` siembra una entrada `\xE9.dat` que se pinta con su propio
+/// `U+FFFD` en el pane de detrás, así que un `texto.contains('\u{FFFD}')`
+/// sobre todo el frame pasaría aunque el pie no pintase absolutamente nada.
+/// Hoy el overlay tapa esa fila a 80×16 y da igual; la maquetación cambió en
+/// esta misma fase, así que «hoy da igual» no es un sitio donde apoyarse.
 #[test]
 fn snapshot_ayuda_filtro_hostil() {
     let rlo = norte_testkit::corpus::hostile_chords()
@@ -821,12 +836,112 @@ fn snapshot_ayuda_filtro_hostil() {
             rlo.id
         );
     }
+    let pie = texto
+        .lines()
+        .nth(help_footer_row(80, 16))
+        .expect("el pie cae dentro del frame");
     assert!(
-        texto.contains('\u{FFFD}'),
+        pie.contains('\u{FFFD}'),
         "y el filtro SÍ se pinta, enmascarado a U+FFFD — sin esto el test \
-         pasaría igual con un pie que no pintase nada:\n{texto}"
+         pasaría igual con un pie que no pintase nada:\n{pie:?}\n{texto}"
+    );
+    assert!(
+        pie.contains("copiar"),
+        "el resto del needle llega al pie tal cual: el enmascarado es del \
+         hazard, no del texto:\n{pie:?}"
     );
     insta::assert_snapshot!(texto);
+}
+
+/// La compañera del test de arriba, por el otro camino: un título HOSTIL que
+/// llega a la LATERAL.
+///
+/// El de arriba solo ejercita el pie, y encima con un needle que no casa con
+/// nada: la lateral sale vacía y ninguna cadena hostil recorre jamás el camino
+/// del título. Este lo recorre, y con la fixture canónica del caso LEGÍTIMO —
+/// `bidi_isolate_url` de `norte_testkit::corpus::hostile_titles`, que es
+/// `U+2066`…`U+2069` alrededor de un `sftp://`, la forma CORRECTA de meter un
+/// tramo LTR en prosa RTL y a la vez cuatro hazards de terminal seguidos.
+///
+/// El punto de entrada es real: la etiqueta de la entrada sintética `keys` la
+/// resuelve el frontend (`t("help-topic-keys")`) y viaja al modelo como título
+/// de fila, exactamente igual que un título del corpus o —H3f en adelante— el
+/// de un manifiesto de plugin.
+///
+/// Lo que se afirma es lo que de verdad pasa, no lo que uno querría: el pintor
+/// de la lateral NO enmascara, así que el título sale VERBATIM (hasta el
+/// recorte por la derecha) y los aislantes bidi llegan al terminal. No es un
+/// bug del pintor —el texto es de confianza por construcción— pero sí es la
+/// razón por la que la puerta de charset del corpus es LOAD-BEARING y no un
+/// cinturón de más: quítala y esto es una inyección a un `.md` de distancia.
+#[test]
+fn ayuda_un_titulo_hostil_llega_crudo_a_la_lateral() {
+    let bidi = norte_testkit::corpus::hostile_titles()
+        .into_iter()
+        .find(|t| t.id == "bidi_isolate_url")
+        .expect("fixture del corpus");
+    let mut app = app_base();
+    open_help(&mut app);
+    // Mismo constructor que usa `HelpView::new`; lo único que cambia es la
+    // etiqueta, que aquí es la fixture en vez del catálogo Fluent.
+    let view = app.help.as_mut().expect("overlay abierto");
+    view.state = norte_frontend::help::HelpState::new(norte_i18n::Lang::Es, bidi.text.to_owned());
+    // La entrada sintética es la ÚLTIMA de la lateral y a 80×16 no cabe: se
+    // filtra por su id para dejarla sola, que es además el camino por el que
+    // el modelo empareja un título (`filter_raw` contra los bytes crudos).
+    view.state.start_filter();
+    for c in norte_frontend::help::KEYS_ID.chars() {
+        view.state.push_char(c);
+    }
+    refresh_help(&mut app);
+    let texto = render(&app);
+
+    let fila = texto
+        .lines()
+        .find(|l| l.contains('\u{2066}'))
+        .unwrap_or_else(|| {
+            panic!(
+                "el título de la fila sintética `keys` no llegó a la lateral: \
+                 el camino que este test existe para recorrer no se recorrió\n{texto}"
+            )
+        });
+    // Verbatim hasta el recorte: el prefijo del título, aislante incluido,
+    // sale tal cual. `right_ellipsis` corta por la DERECHA, así que la cabeza
+    // sobrevive entera.
+    let cabeza: String = bidi.text.chars().take(10).collect();
+    assert!(
+        fila.contains(&cabeza),
+        "la lateral pinta el título VERBATIM (recortado por la derecha): \
+         {fila:?} debería empezar por {cabeza:?}"
+    );
+    assert!(
+        fila.chars().any(norte_encoding::is_terminal_hazard),
+        "…y sin enmascarar: si esto se pone rojo es que alguien añadió un \
+         filtro en el pintor de la lateral, lo cual está BIEN — actualiza este \
+         test y la nota de `draw_help` a la vez: {fila:?}"
+    );
+}
+
+/// Texto de cada fila del buffer, una entrada por fila del frame.
+fn row_texts(buf: &ratatui::buffer::Buffer) -> Vec<String> {
+    (buf.area.top()..buf.area.bottom())
+        .map(|y| {
+            (buf.area.left()..buf.area.right())
+                .map(|x| buf[(x, y)].symbol())
+                .collect()
+        })
+        .collect()
+}
+
+/// Estilos de cada fila del buffer, celda a celda.
+fn all_row_styles(buf: &ratatui::buffer::Buffer) -> Vec<Vec<ratatui::style::Style>> {
+    (buf.area.top()..buf.area.bottom())
+        .map(|y| {
+            (buf.area.left()..buf.area.right())
+                .map(|x| buf[(x, y)].style())
+                .collect()
+        })
+        .collect()
 }
 
 /// H3b: el cuerpo CON EL FOCO. `copying` trae cinco comandos y tres enlaces,
@@ -838,12 +953,30 @@ fn snapshot_ayuda_filtro_hostil() {
 ///
 /// El snapshot congela el recorte (qué líneas quedaron dentro); el resalte NO
 /// puede salir de él —el volcado del backend es texto pelado, sin estilos— así
-/// que va aparte, celda a celda y por DIFERENCIA: la fila con foco se pinta
-/// distinta de su vecina, y con el foco de vuelta en la lateral las dos vuelven
-/// a pintarse igual. Comparar contra el estilo concreto del tema ataría el
-/// test a la paleta; lo que se afirma es que el foco se VE.
+/// que va aparte, celda a celda.
+///
+/// La aserción es POSITIVA, y esa es la mitad que faltaba (review MAJOR).
+/// Toda la maquinaria del foco descansa en un invariante que cruza dos
+/// crates: la acción *i* de `HelpState::actions` se pinta en la línea
+/// `Rendered::action_lines[i]`. Las dos mitades están fijadas por separado
+/// (`help_render.rs` barre el mapa sobre todo el corpus, el modelo tiene sus
+/// propios tests), pero el sitio donde se ENCUENTRAN es este, y aquí solo se
+/// comparaban DOS filas por desigualdad: desplaza el mapa una posición y se
+/// resalta `f5` mientras el modelo dice `f6` — los vectores siguen siendo
+/// distintos, el test sigue pasando, y el usuario ve bajo el cursor una fila
+/// que dice `pane.copy` mientras `Enter` despacha `pane.move`. Una etiqueta
+/// mentirosa sobre una superficie que MUTA ficheros.
+///
+/// Se localiza la fila resaltada sin nombrarla: se pinta el MISMO frame con y
+/// sin foco en el cuerpo y se diferencian los estilos fila a fila. La única
+/// que cambia es la que lleva el resalte, y de ella se afirma que su TEXTO
+/// nombra el comando que el modelo dice tener enfocado — con el chord y la
+/// etiqueta que da el propio resolver, no una copia del formato. Comparar
+/// contra el estilo concreto del tema ataría el test a la paleta.
 #[test]
 fn snapshot_ayuda_cuerpo_con_foco() {
+    use norte_help::ChordResolver;
+
     let mut app = app_base();
     open_help(&mut app);
     let view = app.help.as_mut().expect("overlay abierto");
@@ -857,9 +990,11 @@ fn snapshot_ayuda_cuerpo_con_foco() {
     // Un paso: la SEGUNDA fila, para que esto no pueda pasar con un pintor que
     // resalte siempre la primera.
     view.state.down();
+    let Some(norte_frontend::help::Action::Run(comando)) = view.state.action().cloned() else {
+        panic!("la fila con foco es una fila ejecutable");
+    };
     assert_eq!(
-        view.state.action(),
-        Some(&norte_frontend::help::Action::Run("pane.move".to_owned())),
+        comando, "pane.move",
         "la fila con foco es la de `pane.move`"
     );
     refresh_help(&mut app);
@@ -870,26 +1005,55 @@ fn snapshot_ayuda_cuerpo_con_foco() {
         "las filas van tras la prosa: revelarlas OBLIGA a desplazar el cuerpo \
          (scroll={scroll})"
     );
-    let buf = render_buffer(&app);
-    let con_foco = row_styles(&buf, "f6 ");
-    let sin_foco = row_styles(&buf, "f5 ");
-    assert_ne!(
-        con_foco, sin_foco,
-        "la fila de `pane.move` tiene el foco: se pinta distinta de la de \
-         `pane.copy`, que no lo tiene"
-    );
+    let con_foco = render_buffer(&app);
     let texto = render(&app);
 
     // Y el resalte es DEL FOCO, no de la fila: devuelto el foco a la lateral,
     // el cursor del cuerpo sigue existiendo pero ya no es el que mueven las
-    // flechas, y ninguna fila queda marcada.
+    // flechas, y ninguna fila queda marcada. El mismo gesto sirve de PATRÓN
+    // para localizar la fila resaltada: entre los dos frames no cambia nada
+    // más (el `reveal` ya no mueve el scroll, que este test acaba de fijar).
     app.help.as_mut().unwrap().state.toggle_focus();
     refresh_help(&mut app);
-    let buf = render_buffer(&app);
+    let sin_foco = render_buffer(&app);
+
+    let estilos_con = all_row_styles(&con_foco);
+    let estilos_sin = all_row_styles(&sin_foco);
+    let distintas: Vec<usize> = (0..estilos_con.len())
+        .filter(|&y| estilos_con[y] != estilos_sin[y])
+        .collect();
     assert_eq!(
-        row_styles(&buf, "f6 "),
-        row_styles(&buf, "f5 "),
-        "sin foco en el cuerpo no hay fila resaltada"
+        distintas.len(),
+        1,
+        "exactamente UNA fila del frame cambia al quitar el foco del cuerpo; \
+         cambiaron {distintas:?}"
+    );
+
+    // Y esa fila es la del comando que el MODELO dice tener enfocado. El
+    // chord y la etiqueta salen del resolver que usa el pintor, así que esto
+    // no puede pasar con una copia del formato de fila que se haya quedado
+    // atrás.
+    let resolver = std::sync::Arc::clone(&app.help_chords);
+    let chord = resolver
+        .chord(&comando)
+        .unwrap_or_else(|| panic!("{comando} tiene chord en el preset orthodox"));
+    let etiqueta = resolver.label(&comando);
+    let fila = &row_texts(&con_foco)[distintas[0]];
+    assert!(
+        fila.contains(&chord) && fila.contains(&etiqueta),
+        "la fila resaltada tiene que ser la de `{comando}` ({chord} / \
+         {etiqueta}), no otra: {fila:?}"
+    );
+    // …y NO la de su vecina. Un mapa desplazado una posición resaltaría
+    // `pane.copy` mientras `Enter` despacha `pane.move`.
+    let vecino = "pane.copy";
+    let chord_vecino = resolver
+        .chord(vecino)
+        .unwrap_or_else(|| panic!("{vecino} tiene chord en el preset orthodox"));
+    assert!(
+        !fila.contains(&resolver.label(vecino)) && !fila.contains(&chord_vecino),
+        "la fila resaltada es la de la acción VECINA: el mapa acción→línea \
+         está desplazado: {fila:?}"
     );
 
     insta::assert_snapshot!(texto);

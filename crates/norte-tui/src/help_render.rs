@@ -13,10 +13,17 @@
 //! That is a claim about its INPUTS, not an oversight, and it is only true of
 //! a corpus that has been through the gate:
 //!
-//! - A BUILT-IN topic is trusted text, cross-checked by the documentation gate
-//!   (`norte-tui/tests/help_gate.rs`): every `{{cmd:…}}` id is compared
-//!   byte-exactly against the frontend's command vocabulary, so a spoofed id
-//!   fails the build instead of reaching a terminal.
+//! - A BUILT-IN topic is trusted text, gated in two halves, and the halves are
+//!   worth separating because they were once confused for one. IDS —
+//!   `{{cmd:…}}` marks and `[[links]]` — are cross-checked by the documentation
+//!   gate (`norte-tui/tests/help_gate.rs`) byte-exactly against the frontend's
+//!   command vocabulary, so a spoofed id fails the build. PROSE — titles,
+//!   headings, table cells, code blocks — is checked by nothing the parser
+//!   does; what covers it is a sweep of the shipped corpus for terminal hazards
+//!   (`norte-help/tests/corpus.rs`). Corpus files are edited by translators, so
+//!   that sweep is the whole guarantee: without it a raw `ESC` in a code fence
+//!   is an ANSI injection into the reader's terminal, and this module would
+//!   paint it faithfully.
 //! - A PLUGIN topic was already masked and bounded by
 //!   [`norte_help::parse_untrusted`], which refuses what it could not paint
 //!   rather than rewriting it.
@@ -27,12 +34,24 @@
 //!
 //! A caller feeding this renderer a corpus that has NOT been through that gate
 //! — a third-party topic set loaded at runtime, say — must mask before calling
-//! in. What this module does guarantee is the *geometry*: it never emits a
+//! in.
+//!
+//! # Owed to H3e: the truncation badge
+//!
+//! [`norte_help::Origin::Plugin`] carries `truncated` and `lossy`, and
+//! `norte_help::Parsed`'s rustdoc calls them "the UI badge: a reader must never
+//! mistake a cut topic for a complete one". This module does not read
+//! `topic.origin` at all, which is correct while the only topics are built-in
+//! and complete. The phase that lets plugins ship help pages must paint that
+//! badge here — masking and bounding, which `parse_untrusted` does, is not the
+//! same as SAYING the page was cut.
+//!
+//! What this module does guarantee is the *geometry*: it never emits a
 //! line wider than the width it was given (measured in terminal CELLS, not
 //! chars — see [`render_block`]), so no wrapping decision here can push a
 //! painted cell off the pane.
 
-use norte_help::{Block, Callout, ChordResolver, CommandText, Span as HSpan, Topic};
+use norte_help::{Block, Callout, ChordResolver, CommandText, Lang, Span as HSpan, Topic};
 use norte_theme::Role;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -64,6 +83,12 @@ pub struct Rendered<'a> {
 /// `width` is the body's width in terminal cells. Everything wraps to it
 /// except code blocks (see [`render_block`]).
 ///
+/// `lang` is the corpus locale the topic came from, and is here for the
+/// `see_also` rows alone: a link is painted with the TITLE of the page it
+/// opens — the very string the sidebar shows for that row — and resolving an
+/// id back to its topic needs the locale. A link the corpus cannot resolve
+/// keeps its id, which is at least addressable; an empty row would not be.
+///
 /// ```
 /// use norte_help::{Availability, ChordResolver, Lang, topic};
 /// use norte_theme::{ColorDepth, Theme};
@@ -85,7 +110,7 @@ pub struct Rendered<'a> {
 ///
 /// let theme = TuiTheme::new(Theme::preset_default(), ColorDepth::Truecolor);
 /// let copying = topic(Lang::En, "copying").expect("the `copying` topic");
-/// let out = render_topic(copying, &Keys, 60, &theme);
+/// let out = render_topic(copying, Lang::En, &Keys, 60, &theme);
 ///
 /// // One action line per command and per link, in `HelpState::actions` order.
 /// assert_eq!(
@@ -93,10 +118,17 @@ pub struct Rendered<'a> {
 ///     copying.commands.len() + copying.see_also.len()
 /// );
 /// assert!(out.action_lines.iter().all(|&i| i < out.lines.len()));
+///
+/// // A `see_also` row is painted with the linked page's TITLE, not its id.
+/// let linked = topic(Lang::En, copying.see_also[0].as_str()).expect("a live link");
+/// let row = &out.lines[out.action_lines[copying.commands.len()]];
+/// let text: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
+/// assert!(text.contains(&linked.title), "{text:?} names {:?}", linked.title);
 /// ```
 #[must_use]
 pub fn render_topic<'a>(
     topic: &'a Topic,
+    lang: Lang,
     r: &(impl ChordResolver + ?Sized),
     width: usize,
     theme: &TuiTheme,
@@ -111,7 +143,7 @@ pub fn render_topic<'a>(
 
     for block in &topic.blocks {
         lines.push(Line::default());
-        lines.extend(render_block(block, r, width, theme));
+        lines.extend(render_block(block, lang, r, width, theme));
     }
 
     let rows = norte_help::rows_of(topic, r);
@@ -136,12 +168,21 @@ pub fn render_topic<'a>(
         lines.push(Line::default());
         for id in &topic.see_also {
             action_lines.push(lines.len());
+            // The TITLE of the page the link opens, not its id: the sidebar
+            // row for that same page says exactly this, and a reader who
+            // follows the link must land somewhere they can recognise as the
+            // place the row named. The `Role::Info` style is what says «this
+            // is a link» — the wiki brackets were saying it a second time, in
+            // a spelling nothing else in the UI uses.
+            //
+            // An id the corpus cannot resolve keeps the id: a dangling link
+            // is a corpus defect (`norte_help::check_corpus` catches it) and
+            // a blank row would hide it from whoever is reading the page.
+            let label = norte_help::topic(lang, id.as_str())
+                .map_or_else(|| id.to_string(), |t| t.title.clone());
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(
-                    fit(&format!("[[{id}]]"), width.saturating_sub(2)),
-                    theme.role(Role::Info),
-                ),
+                Span::styled(fit(&label, width.saturating_sub(2)), theme.role(Role::Info)),
             ]));
         }
     }
@@ -166,7 +207,7 @@ pub fn render_topic<'a>(
 /// the pane's decision, not this function's.
 ///
 /// ```
-/// use norte_help::{Availability, Block, ChordResolver, Span};
+/// use norte_help::{Availability, Block, ChordResolver, Lang, Span};
 /// use norte_theme::{ColorDepth, Theme};
 /// use norte_tui::help_render::render_block;
 /// use norte_tui::theme::TuiTheme;
@@ -187,7 +228,7 @@ pub fn render_topic<'a>(
 ///
 /// let theme = TuiTheme::new(Theme::preset_default(), ColorDepth::Truecolor);
 /// let block = Block::Paragraph(vec![Span::Text("漢字".repeat(40))]);
-/// for line in render_block(&block, &Bare, 20, &theme) {
+/// for line in render_block(&block, Lang::En, &Bare, 20, &theme) {
 ///     let cells: usize = line.spans.iter().map(|s| s.content.width()).sum();
 ///     assert!(cells <= 20, "two cells per char, budgeted as such");
 /// }
@@ -195,6 +236,7 @@ pub fn render_topic<'a>(
 #[must_use]
 pub fn render_block<'a>(
     block: &'a Block,
+    lang: Lang,
     r: &(impl ChordResolver + ?Sized),
     width: usize,
     theme: &TuiTheme,
@@ -210,12 +252,18 @@ pub fn render_block<'a>(
             "",
             theme.role(Role::Title),
         ),
-        Block::Paragraph(spans) => wrap(&frags(spans, r, theme), width, "", "", Style::default()),
+        Block::Paragraph(spans) => wrap(
+            &frags(spans, lang, r, theme),
+            width,
+            "",
+            "",
+            Style::default(),
+        ),
         Block::Bullets(items) => items
             .iter()
             .flat_map(|item| {
                 wrap(
-                    &frags(item, r, theme),
+                    &frags(item, lang, r, theme),
                     width,
                     "• ",
                     "  ",
@@ -234,6 +282,19 @@ pub fn render_block<'a>(
             .collect(),
         Block::Table { header, rows } => table(header, rows, width, theme),
         Block::Callout { kind, spans } => {
+            // KNOWN HAZARD (H3b encoding audit, FIX 4b): the three glyphs do
+            // not agree on width in practice. `ℹ` (U+2139) and `⚠` (U+26A0)
+            // are East Asian AMBIGUOUS — `unicode-width` budgets them at 1,
+            // which is what a text-presentation terminal draws, but many
+            // terminals give them emoji presentation at 2 cells — while `💡`
+            // (U+1F4A1) is 2 everywhere. So the continuation indent computed
+            // here matches the first line on some terminals and is one cell
+            // short on others, and the note/warn arms drift while the tip arm
+            // does not. Deliberately NOT chased: per-terminal presentation
+            // cannot be detected from here, and the failure is a one-cell
+            // ragged indent, never lost or fabricated text. The ASCII
+            // `HOSTILE_BADGE` (`ui.rs`) exists for the case where that is not
+            // acceptable.
             let (glyph, role) = match kind {
                 Callout::Note => ("ℹ", Role::Info),
                 Callout::Warn => ("⚠", Role::Warning),
@@ -242,7 +303,7 @@ pub fn render_block<'a>(
             let head = format!("{glyph} ");
             let cont = " ".repeat(head.width());
             wrap(
-                &frags(spans, r, theme),
+                &frags(spans, lang, r, theme),
                 width,
                 &head,
                 &cont,
@@ -382,6 +443,7 @@ fn fit(text: &str, cells: usize) -> String {
 /// something the reader can press, including the ones that are not.
 fn frags(
     spans: &[HSpan],
+    lang: Lang,
     r: &(impl ChordResolver + ?Sized),
     theme: &TuiTheme,
 ) -> Vec<(String, Style)> {
@@ -392,7 +454,18 @@ fn frags(
             HSpan::Strong(t) => (t.clone(), theme.role(Role::Title)),
             HSpan::Emph(t) => (t.clone(), theme.role(Role::Info)),
             HSpan::Code(t) => (t.clone(), theme.role(Role::Mark)),
-            HSpan::TopicLink(id) => (format!("[[{id}]]"), theme.role(Role::Info)),
+            // The page's TITLE, exactly as the `see_also` rows and the sidebar
+            // paint it. A link mid-sentence used to read `[[selection]]` while
+            // the row for that same page read «Marcar sobre qué se actúa» and
+            // the sidebar read it a third way — three spellings of one thing,
+            // and the wiki brackets were a fourth signal for what `Role::Info`
+            // already says. An unresolvable id keeps the id, for the reason
+            // the `see_also` arm gives.
+            HSpan::TopicLink(id) => (
+                norte_help::topic(lang, id.as_str())
+                    .map_or_else(|| id.to_string(), |t| t.title.clone()),
+                theme.role(Role::Info),
+            ),
             HSpan::CommandRef(c) => match norte_help::render_command(c, r) {
                 CommandText::Chord(k) => (k, theme.role(Role::Mark)),
                 CommandText::Name(n) => (n, theme.role(Role::Info)),
@@ -598,7 +671,7 @@ mod tests {
     #[test]
     fn a_command_mark_becomes_the_users_chord_in_the_prose() {
         let copying = topic(Lang::En, "copying").expect("the `copying` topic");
-        let out = render_topic(copying, &Fake, 60, &theme());
+        let out = render_topic(copying, Lang::En, &Fake, 60, &theme());
         let text = flatten(&out.lines);
         assert!(
             text.contains("f5"),
@@ -616,7 +689,7 @@ mod tests {
         // width and ratatui then trims the tail — the defect #79 fixed in a
         // different place.
         let block = Block::Paragraph(vec![HSpan::Text("漢字".repeat(40))]);
-        let lines = render_block(&block, &Fake, 20, &theme());
+        let lines = render_block(&block, Lang::En, &Fake, 20, &theme());
         assert!(
             lines.len() > 1,
             "160 cells of CJK do not fit in one 20-cell line"
@@ -634,7 +707,7 @@ mod tests {
     #[test]
     fn a_word_longer_than_the_width_is_split_at_a_cell_boundary() {
         let block = Block::Paragraph(vec![HSpan::Text("x".repeat(50))]);
-        let lines = render_block(&block, &Fake, 10, &theme());
+        let lines = render_block(&block, Lang::En, &Fake, 10, &theme());
         for line in &lines {
             assert!(
                 cells(line) <= 10,
@@ -654,7 +727,7 @@ mod tests {
         // cursor: `HelpState::reveal` takes a LINE and the cursor walks
         // ACTIONS.
         let copying = topic(Lang::En, "copying").expect("the `copying` topic");
-        let out = render_topic(copying, &Fake, 60, &theme());
+        let out = render_topic(copying, Lang::En, &Fake, 60, &theme());
         assert_eq!(
             out.action_lines.len(),
             copying.commands.len() + copying.see_also.len(),
@@ -675,11 +748,68 @@ mod tests {
             flatten(std::slice::from_ref(first)).contains("do pane.copy"),
             "the first action line is the first command: {first:?}"
         );
+        // A link row carries the linked page's TITLE — the same string the
+        // sidebar paints for it — and not its id in wiki brackets, a spelling
+        // nothing else in the UI uses.
+        let linked =
+            topic(Lang::En, copying.see_also[0].as_str()).expect("`copying` links live pages");
         let link = &out.lines[out.action_lines[copying.commands.len()]];
+        let painted = flatten(std::slice::from_ref(link));
         assert!(
-            flatten(std::slice::from_ref(link)).contains("[[selection]]"),
-            "the links follow the commands: {link:?}"
+            painted.contains(&linked.title),
+            "the links follow the commands, named as the sidebar names them: \
+             {painted:?} should carry {:?}",
+            linked.title
         );
+        assert!(
+            !painted.contains("[["),
+            "…and without the wiki brackets: {painted:?}"
+        );
+    }
+
+    /// The same map, over the WHOLE corpus and both locales.
+    ///
+    /// The test above pins `copying`, which is the topic the focus tests use;
+    /// this one is the cheap structural sweep behind it. The invariant the
+    /// overlay's focus machinery rests on is cross-crate — action *i* of
+    /// `HelpState::actions` is painted on `action_lines[i]` — and the two
+    /// halves are built in different crates from different data, so a topic
+    /// shape nobody thought about (no commands but three links, a table right
+    /// before the rows, a `see_also` pointing at a page that does not resolve)
+    /// is exactly where the two would fall out of step. Narrow widths are
+    /// swept too: wrapping changes how many lines the PROSE takes, and the map
+    /// is a set of absolute line indices into it.
+    #[test]
+    fn the_action_map_matches_every_topic_of_every_locale() {
+        let th = theme();
+        for lang in [Lang::En, Lang::Es] {
+            for t in norte_help::topics(lang) {
+                for width in [20, 40, 60] {
+                    let out = render_topic(t, lang, &Fake, width, &th);
+                    let ctx = format!("{lang:?}/{} at {width} cells", t.id);
+                    assert_eq!(
+                        out.action_lines.len(),
+                        t.commands.len() + t.see_also.len(),
+                        "[{ctx}] one action line per command and per link, in \
+                         `HelpState::actions` order"
+                    );
+                    assert!(
+                        out.action_lines.windows(2).all(|w| w[0] < w[1]),
+                        "[{ctx}] the indices must be strictly increasing — a \
+                         repeat means two actions share a line and the focus \
+                         cannot tell them apart: {:?}",
+                        out.action_lines
+                    );
+                    assert!(
+                        out.action_lines.iter().all(|&i| i < out.lines.len()),
+                        "[{ctx}] an action line outside the body scrolls into \
+                         nothing: {:?} of {} lines",
+                        out.action_lines,
+                        out.lines.len()
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -695,7 +825,7 @@ mod tests {
                 vec![],
             ],
         };
-        let lines = render_block(&block, &Fake, 40, &theme());
+        let lines = render_block(&block, Lang::En, &Fake, 40, &theme());
         let text = flatten(&lines);
         assert!(text.contains("Answer"), "header painted: {text}");
         assert!(text.contains("skip"), "the short row still paints: {text}");
@@ -707,7 +837,7 @@ mod tests {
         // wear the key style, or every mark looks like something to press.
         let th = theme();
         let unbound = Block::Paragraph(vec![HSpan::CommandRef("pane.rename".to_owned())]);
-        let named = render_block(&unbound, &Fake, 60, &th);
+        let named = render_block(&unbound, Lang::En, &Fake, 60, &th);
         assert_eq!(
             flatten(&named),
             "do pane.rename",
@@ -733,7 +863,7 @@ mod tests {
         // painted in the key style, so the assertion above is a distinction
         // and not just "nothing is ever a key".
         let with_key = Block::Paragraph(vec![HSpan::CommandRef("pane.copy".to_owned())]);
-        let bound = render_block(&with_key, &Fake, 60, &th);
+        let bound = render_block(&with_key, Lang::En, &Fake, 60, &th);
         assert!(
             bound
                 .iter()
@@ -747,7 +877,7 @@ mod tests {
     fn an_unavailable_row_is_not_painted_as_a_pressable_key_either() {
         let th = theme();
         let copying = topic(Lang::En, "copying").expect("the `copying` topic");
-        let out = render_topic(copying, &Fake, 60, &th);
+        let out = render_topic(copying, Lang::En, &Fake, 60, &th);
         let idx = copying
             .commands
             .iter()
@@ -785,7 +915,7 @@ mod tests {
                 spans: vec![HSpan::Text("careful".to_owned())],
             },
         ] {
-            let lines = render_block(&block, &Fake, 40, &th);
+            let lines = render_block(&block, Lang::En, &Fake, 40, &th);
             assert!(!lines.is_empty(), "{block:?} painted nothing");
             for line in &lines {
                 assert!(cells(line) <= 40, "{block:?} overflowed: {line:?}");
@@ -800,7 +930,7 @@ mod tests {
             HSpan::Strong("gamma".to_owned()),
             HSpan::Text(" delta epsilon".to_owned()),
         ]);
-        let lines = render_block(&long, &Fake, 12, &theme());
+        let lines = render_block(&long, Lang::En, &Fake, 12, &theme());
         let text = flatten(&lines);
         assert!(
             !text.contains("betagamma"),
@@ -822,7 +952,7 @@ mod tests {
         let Some(t) = keys else {
             panic!("the corpus ships an index topic");
         };
-        let out = render_topic(t, &Fake, 40, &theme());
+        let out = render_topic(t, Lang::En, &Fake, 40, &theme());
         assert!(!out.lines.is_empty());
         assert_eq!(
             out.action_lines.len(),

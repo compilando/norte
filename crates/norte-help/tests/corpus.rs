@@ -9,6 +9,8 @@
 //! runnable command rows, the F1 context lookup) is built from the structure
 //! and must behave identically whichever language the reader picked.
 
+mod common;
+
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -327,6 +329,127 @@ fn no_topic_trips_a_limits_ceiling() {
             assert!(!parsed.lossy, "{lang:?}/{id}: the topic decoded lossily");
         }
     }
+}
+
+/// PROSE has no hazard gate anywhere else: this is it.
+///
+/// `check_corpus`'s whole issue vocabulary is about IDS — dangling links,
+/// unknown commands, duplicate contexts, inert marks — and every check above
+/// compares STRUCTURE between locales. Not one of them looks at a character.
+/// Meanwhile the renderer masks nothing on purpose, on the grounds that a
+/// built-in topic is trusted: code fences are painted unwrapped and unmasked,
+/// so a raw `ESC` in one is an ANSI sequence delivered straight to the
+/// reader's terminal; a `U+202E` in a title reorders a sidebar row; a
+/// `U+200B` makes two rows visually identical. "Trusted" is a statement about
+/// who may EDIT the file, and the thing standing between an edit and a
+/// terminal is this test.
+///
+/// It is green on the first run and will stay green until someone changes a
+/// `.md`, which is the point: its value is entirely in the edits it will
+/// catch. The `.md` files are what a translator touches, and the day an RTL
+/// locale lands the bidi isolates `U+2066`..`U+2069` — the CORRECT way to
+/// wrap an `sftp://` run inside RTL prose — become legitimate editorial marks
+/// that are also, every one of them, terminal hazards. This gate is what
+/// forces that to be a deliberate decision (isolate the run in the model, or
+/// teach the renderer to mask) instead of a silent regression.
+///
+/// The collector is the one `hostile.rs` sweeps plugin topics with, so our own
+/// prose and third-party prose are held to the SAME definition of "every
+/// string a renderer paints".
+#[test]
+fn no_shipped_topic_carries_a_terminal_hazard() {
+    for lang in LANGS {
+        for t in topics(lang) {
+            for (label, s) in common::strings(t) {
+                if let Some(c) = s.chars().find(|c| norte_encoding::is_terminal_hazard(*c)) {
+                    panic!(
+                        "{lang:?}/{}: raw hazard U+{:04X} in {label}: {s:?}\n\
+                         The renderer masks NOTHING here — a control reaches the \
+                         terminal and a bidi override reorders the line. Rewrite \
+                         the topic, or mask at the seam that paints it.",
+                        t.id, c as u32
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// …and the sweep above really fires. Corpus-driven: the canonical hostile
+/// TITLES (`norte_testkit::corpus::hostile_titles`), planted one at a time in
+/// every string slot the collector reaches.
+///
+/// Without this, `no_shipped_topic_carries_a_terminal_hazard` would pass just
+/// as happily with a collector that returned an empty vector, or with an
+/// `is_terminal_hazard` that had quietly stopped covering bidi. The fixture
+/// that carries the sweep is `bidi_isolate_url`: it is the LEGITIMATE
+/// editorial shape, so what is pinned is that legitimate-looking prose is
+/// exactly what the gate catches.
+#[test]
+fn the_hazard_sweep_catches_a_hostile_title_in_every_slot() {
+    let bidi = norte_testkit::corpus::hostile_titles()
+        .into_iter()
+        .find(|t| t.id == "bidi_isolate_url")
+        .expect("the canonical corpus ships it");
+    let planted = |topic: Topic| {
+        let hits: Vec<&'static str> = common::strings(&topic)
+            .into_iter()
+            .filter(|(_, s)| s.chars().any(norte_encoding::is_terminal_hazard))
+            .map(|(label, _)| label)
+            .collect();
+        assert!(
+            !hits.is_empty(),
+            "a hazard planted in this slot escaped the collector entirely"
+        );
+        hits
+    };
+    let base = || Topic {
+        id: TopicId::new("x"),
+        title: "clean".to_owned(),
+        tags: Vec::new(),
+        see_also: Vec::new(),
+        commands: Vec::new(),
+        context: Vec::new(),
+        blocks: Vec::new(),
+        origin: norte_help::Origin::BuiltIn,
+    };
+
+    // A title: the sidebar row.
+    let mut t = base();
+    t.title = bidi.text.to_owned();
+    assert_eq!(planted(t), ["title"]);
+
+    // A heading: painted like a title, one level down.
+    let mut t = base();
+    t.blocks = vec![norte_help::Block::Heading {
+        level: 2,
+        text: bidi.text.to_owned(),
+    }];
+    assert_eq!(planted(t), ["heading"]);
+
+    // A code fence: the worst of the lot, since it is painted UNWRAPPED and
+    // is where an `ESC` would sit.
+    let mut t = base();
+    t.blocks = vec![norte_help::Block::Code {
+        lang: None,
+        text: format!("norte cp {}\n", bidi.text),
+    }];
+    assert_eq!(planted(t), ["code.text"]);
+
+    // A table cell.
+    let mut t = base();
+    t.blocks = vec![norte_help::Block::Table {
+        header: vec!["Answer".to_owned()],
+        rows: vec![vec![bidi.text.to_owned()]],
+    }];
+    assert_eq!(planted(t), ["table.cell"]);
+
+    // And ordinary prose.
+    let mut t = base();
+    t.blocks = vec![norte_help::Block::Paragraph(vec![Span::Text(
+        bidi.text.to_owned(),
+    )])];
+    assert_eq!(planted(t), ["span"]);
 }
 
 // --- Integrity checks (`norte_help::check`) against the SHIPPED corpus.

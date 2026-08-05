@@ -2597,8 +2597,22 @@ fn on_help_key(
                 app.help = None;
                 return Some(parsed);
             }
-            // Foco en la lateral: Enter abre el tema del cursor.
-            None => help.state.open_selected(),
+            // Foco en la lateral. Arrear el cursor ya PREVISUALIZA (abre lo
+            // que pisa), así que el tema resaltado suele ser YA el abierto y
+            // `open` no haría nada: un Enter mudo, indistinguible de un fallo.
+            // Cuando coinciden, Enter entra AL CUERPO; cuando no —el único
+            // caso que queda, seguir un `see_also` desde una lista filtrada,
+            // donde el resalte se quedó en la fila visible más cercana— abre.
+            // En las dos ramas Enter significa lo mismo: «ir a lo que estoy
+            // mirando».
+            None => {
+                let selected = help.state.selected_topic().cloned();
+                if selected.is_some_and(|id| id != *help.state.current()) {
+                    help.state.open_selected();
+                } else {
+                    help.state.toggle_focus();
+                }
+            }
         },
     }
     None
@@ -2790,6 +2804,74 @@ mod help_key_tests {
         press(&mut app, &mut r, KeyCode::Backspace);
         assert!(app.help.is_some(), "volver tampoco cierra");
         assert_eq!(state(&app).current().as_str(), "index");
+    }
+
+    /// Enter en la lateral SOBRE EL TEMA YA ABIERTO entra al cuerpo. Arrear la
+    /// lateral previsualiza, así que ése es el caso normal y `open` sería un
+    /// no-op: un Enter mudo que nadie puede distinguir de un fallo.
+    #[test]
+    fn enter_on_the_open_topic_moves_the_focus_into_the_body() {
+        let mut app = app_with_help();
+        let mut r = dialog_resolver();
+        assert_eq!(state(&app).focus(), Focus::Topics);
+        assert_eq!(
+            state(&app).selected_topic().map(TopicId::as_str),
+            Some(state(&app).current().as_str()),
+            "el cursor de la lateral se apoya en el tema abierto"
+        );
+
+        let cmd = press(&mut app, &mut r, KeyCode::Enter);
+        assert_eq!(cmd, None, "entrar al cuerpo no despacha nada");
+        assert!(app.help.is_some(), "…ni cierra el overlay");
+        assert_eq!(
+            state(&app).focus(),
+            Focus::Body,
+            "Enter significa «ir a lo que estoy mirando»"
+        );
+    }
+
+    /// La otra rama: con el resalte sobre un tema DISTINTO del abierto —lo
+    /// que pasa al seguir un `see_also` desde una lista filtrada, donde el
+    /// resalte se queda en la fila visible más cercana— Enter lo abre.
+    #[test]
+    fn enter_on_a_topic_that_is_not_the_open_one_opens_it() {
+        let mut app = app_with_help();
+        let mut r = dialog_resolver();
+        // Filtrar a `copying` y seguir su primer enlace: el destino no está
+        // en la lateral filtrada, así que el resalte se queda en `copying`.
+        press(&mut app, &mut r, KeyCode::Char('/'));
+        for c in "copying".chars() {
+            press(&mut app, &mut r, KeyCode::Char(c));
+        }
+        press(&mut app, &mut r, KeyCode::Esc);
+        assert_eq!(topic_ids(&app), vec!["copying".to_owned()]);
+        press(&mut app, &mut r, KeyCode::Tab);
+        assert_eq!(state(&app).focus(), Focus::Body);
+        while !matches!(
+            state(&app).action(),
+            Some(norte_frontend::help::Action::Open(_))
+        ) {
+            press(&mut app, &mut r, KeyCode::Down);
+        }
+        press(&mut app, &mut r, KeyCode::Enter);
+        let abierto = state(&app).current().as_str().to_owned();
+        assert_ne!(abierto, "copying", "el enlace llevó a otra página");
+        assert_eq!(
+            state(&app).selected_topic().map(TopicId::as_str),
+            Some("copying"),
+            "…y el resalte se quedó donde el filtro lo dejó"
+        );
+
+        // Enter en la lateral abre lo resaltado, que NO es lo abierto.
+        press(&mut app, &mut r, KeyCode::Tab);
+        assert_eq!(state(&app).focus(), Focus::Topics);
+        let cmd = press(&mut app, &mut r, KeyCode::Enter);
+        assert_eq!(cmd, None);
+        assert_eq!(
+            state(&app).current().as_str(),
+            "copying",
+            "Enter abre el tema resaltado"
+        );
     }
 
     /// `dialog.back` en la RAÍZ (sin historial) cierra el overlay. Es lo que
