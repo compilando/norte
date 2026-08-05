@@ -41,6 +41,29 @@ const fn max_coalesce(debounce: std::time::Duration) -> std::time::Duration {
     debounce.saturating_mul(10)
 }
 
+/// ¿Este evento del watcher es un CAMBIO en el directorio, o solo una
+/// lectura?
+///
+/// Descartar las lecturas no es una optimización, es lo que impide que la
+/// vigilancia se realimente: listar un directorio lo abre y lo recorre, e
+/// inotify emite `IN_OPEN`/`IN_ACCESS`/`IN_CLOSE_NOWRITE` **sobre el propio
+/// directorio vigilado**. Sin este filtro, cada refresco generaba los
+/// eventos que provocaban el siguiente, así que tras el primer `cd` los dos
+/// panes se re-listaban para siempre al ritmo del suelo de emisión (~1,2 s)
+/// — el «parpadeo constante» que se veía en las columnas, y un gesto de
+/// ratón cancelado cada vez que el listado cambiaba bajo él.
+///
+/// `norte_config::watch` ya tenía este filtro por la misma razón (recargar
+/// abre `norte.toml`, y ese open disparaba otra recarga). Toda escritura
+/// real sigue llegando como `Create`/`Modify`/`Remove`, y un `Err` cuenta
+/// como cambio a propósito: significa «puedes haber perdido eventos».
+fn es_cambio(res: &Result<notify::Event, notify::Error>) -> bool {
+    match res {
+        Err(_) => true,
+        Ok(ev) => !matches!(ev.kind, notify::EventKind::Access(_)),
+    }
+}
+
 /// Estado compartido watcher/poller ↔ [`DirWatch`].
 struct Shared {
     /// Dirs nativos vigilados (uno por pane; `None` = pane no vigilable).
@@ -86,13 +109,16 @@ impl DirWatch {
             dirs: Mutex::new([None, None]),
             degraded: AtomicBool::new(false),
         });
-        // Watcher nativo: cualquier evento (también Err: «puedes haber
+        // Watcher nativo: un evento de CAMBIO (también Err: «puedes haber
         // perdido eventos») = ping crudo; el debouncer coalesce. Mismo
-        // criterio que `norte_config::watch`.
+        // criterio que `norte_config::watch`, incluido su filtro — ver
+        // [`es_cambio`], que es lo que impide que esto se realimente.
         let cb_tx = raw_tx.clone();
         let watcher =
-            notify::recommended_watcher(move |_res: Result<notify::Event, notify::Error>| {
-                let _ = cb_tx.send(());
+            notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+                if es_cambio(&res) {
+                    let _ = cb_tx.send(());
+                }
             })
             .ok();
         if watcher.is_none() {
@@ -251,6 +277,59 @@ mod tests {
 
     async fn recv_within(rx: &mut tokio::sync::mpsc::Receiver<()>, d: std::time::Duration) -> bool {
         tokio::time::timeout(d, rx.recv()).await.is_ok()
+    }
+
+    /// Una LECTURA del dir vigilado no es un cambio. Es el filtro que
+    /// impide que la vigilancia se realimente: listar abre y recorre el
+    /// directorio, e inotify emite `Access` sobre él, así que contarlo
+    /// haría que cada refresco provocase el siguiente.
+    #[test]
+    fn una_lectura_no_cuenta_como_cambio() {
+        use notify::event::{AccessKind, CreateKind, EventKind, ModifyKind, RemoveKind};
+
+        let ev = |kind| Ok(notify::Event::new(kind));
+        assert!(!es_cambio(&ev(EventKind::Access(AccessKind::Any))));
+        assert!(!es_cambio(&ev(EventKind::Access(AccessKind::Read))));
+        assert!(!es_cambio(&ev(EventKind::Access(AccessKind::Open(
+            notify::event::AccessMode::Read
+        )))));
+        // Toda escritura real sigue contando.
+        assert!(es_cambio(&ev(EventKind::Create(CreateKind::File))));
+        assert!(es_cambio(&ev(EventKind::Modify(ModifyKind::Any))));
+        assert!(es_cambio(&ev(EventKind::Remove(RemoveKind::File))));
+        // Y un error significa «puedes haber perdido eventos»: refrescar.
+        assert!(es_cambio(&Err(notify::Error::generic("perdidos"))));
+    }
+
+    /// El bucle completo, con watcher real: leer el directorio vigilado —
+    /// que es LO QUE HACE un refresco— no debe producir ni un evento,
+    /// mientras que crear un fichero sí. Sin el filtro, este test emite en
+    /// la primera lectura y el TUI se re-lista para siempre tras el primer
+    /// `cd`.
+    #[tokio::test]
+    async fn listar_el_dir_vigilado_no_dispara_refrescos() {
+        let dir = tempfile::tempdir().unwrap();
+        // Sondeo prácticamente apagado: este test mira SOLO el watcher.
+        let mut w = DirWatch::new_with(FAST_DEBOUNCE, std::time::Duration::from_hours(1));
+        w.rewatch(&[Some(dir.path().to_path_buf()), None]);
+        // Deja que el watcher nativo se registre antes de leer.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        for _ in 0..5 {
+            let _: Vec<_> = std::fs::read_dir(dir.path())
+                .expect("leer el dir vigilado")
+                .collect();
+        }
+        assert!(
+            !recv_within(&mut w.rx, std::time::Duration::from_millis(600)).await,
+            "leer el directorio no es un cambio: si esto emite, el refresco se realimenta"
+        );
+
+        std::fs::write(dir.path().join("nuevo.txt"), b"x").expect("crear");
+        assert!(
+            recv_within(&mut w.rx, std::time::Duration::from_secs(2)).await,
+            "una escritura real sí refresca"
+        );
     }
 
     /// Una ráfaga de eventos crudos = UN evento debounced (flanco de cola)
