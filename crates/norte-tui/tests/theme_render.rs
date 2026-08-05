@@ -174,10 +174,14 @@ fn ningun_texto_hereda_el_frente_del_terminal_con_tema_de_fondo() {
         let mut app = App::new(Pane::new(dir.clone(), entries), Pane::new(dir, Vec::new()));
         app.theme = TuiTheme::new(theme, ColorDepth::Truecolor);
         app.render_now_ms = Some(2);
-        app.help = Some(norte_tui::app::Help {
-            lines: vec!["  f1             ayuda".to_owned()],
-            scroll: 0,
-        });
+        app.help = Some(norte_tui::app::HelpView::new(
+            norte_i18n::Lang::En,
+            vec!["  f1             ayuda".to_owned()],
+        ));
+        // H3b: el cuerpo se maqueta antes de pintar (lo hace el run loop);
+        // sin esto el overlay pintaría solo su lateral y el barrido de
+        // glifos huérfanos no vería el cuerpo del tema abierto.
+        app.refresh_help(50, 16);
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
         terminal.draw(|f| ui::draw(f, &app)).expect("draw");

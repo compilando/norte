@@ -260,7 +260,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         draw_status(frame, rows[2], app);
     }
     if let Some(help) = &app.help {
-        draw_help(frame, help, &app.theme);
+        draw_help(frame, help, &app.theme, &app.dialog_hints.help);
     }
     if let Some(picker) = &app.theme_picker {
         draw_theme_picker(frame, picker, &app.theme, &app.dialog_hints.picker);
@@ -885,31 +885,159 @@ fn draw_columns_picker(
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-/// Overlay de ayuda a pantalla (casi) completa, por encima de todo.
-fn draw_help(frame: &mut Frame<'_>, help: &crate::app::Help, theme: &TuiTheme) {
+/// Ancho en CELDAS de la barra lateral del overlay de ayuda (H3b). Fijo, no
+/// proporcional: los títulos del corpus son cortos y el cuerpo es prosa, que
+/// es quien necesita el ancho — y una lateral que cambia de tamaño con el
+/// terminal reordena el texto de la izquierda al redimensionar.
+const HELP_SIDEBAR: u16 = 24;
+
+/// Geometría del overlay de ayuda: `(caja, lateral, cuerpo, pie)`.
+///
+/// Una sola función porque el pintor y el PRE-RENDER
+/// ([`crate::app::App::refresh_help`]) tienen que medir lo mismo: el modelo
+/// acota `body_scroll` contra el número de líneas que se maquetaron para un
+/// ancho, y maquetar para un ancho distinto del pintado deja el scroll fuera
+/// del cuerpo justo en los bordes (el fallo que el pre-render evita).
+fn help_layout(base: Rect) -> (Rect, Rect, Rect, Rect) {
     let area = centered(
-        frame.area(),
-        frame.area().width.saturating_sub(4).max(20),
-        frame.area().height.saturating_sub(2).max(6),
+        base,
+        base.width.saturating_sub(4).max(20),
+        base.height.saturating_sub(2).max(6),
     );
+    let inner = Block::default().borders(Borders::ALL).inner(area);
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(HELP_SIDEBAR), Constraint::Min(1)])
+        .split(inner);
+    // La columna derecha reserva su última línea para el pie (el filtro o el
+    // hint generado), como `draw_settings` reserva la suya para la
+    // descripción: el pie del borde (`title_bottom`) no cabría con la
+    // lateral delante.
+    let right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(cols[1]);
+    (area, cols[0], right[0], right[1])
+}
+
+/// Ancho y alto EN CELDAS del cuerpo del overlay de ayuda sobre un frame de
+/// `base`, para que el run loop maquete la página con
+/// [`App::refresh_help`](crate::app::App::refresh_help) justo antes de
+/// pintarla. Ver `help_layout`, de donde sale.
+#[must_use]
+pub fn help_body_size(base: Rect) -> (usize, usize) {
+    let (_, _, body, _) = help_layout(base);
+    (usize::from(body.width), usize::from(body.height))
+}
+
+/// Overlay de ayuda (H3b), a pantalla (casi) completa y por encima de todo:
+/// lateral de temas a la izquierda, cuerpo del tema abierto a la derecha y
+/// pie de una línea bajo el cuerpo.
+///
+/// **No maqueta nada**: el cuerpo llega YA renderizado en
+/// [`crate::app::HelpView`] (ver su doc — el modelo necesita saber cuántas
+/// líneas salieron para acotar su scroll, y un `draw_*` solo recibe `&App`).
+/// Aquí se recorta por scroll y se resalta, nada más.
+///
+/// Enmascarado: los títulos del corpus vienen del binario (built-in) o ya
+/// enmascarados por `norte_help::parse_untrusted` (plugin), y las líneas del
+/// cuerpo las produjo [`crate::help_render`] sobre esa misma entrada — este
+/// draw no vuelve a filtrarlas, igual que [`draw_palette`] con sus filas. La
+/// ÚNICA entrada libre es el filtro tecleado por el usuario, que pasa por el
+/// mismo doble filtro que la barra de quick search (`filter_display` — jamás
+/// `filter_raw` — más [`display_name`]).
+fn draw_help(frame: &mut Frame<'_>, help: &crate::app::HelpView, theme: &TuiTheme, hint: &str) {
+    use norte_frontend::help::{Focus, SidebarRow};
+
+    let (area, sidebar, body_area, footer_area) = help_layout(frame.area());
     clear_themed(frame, area, theme);
-    let inner_h = area.height.saturating_sub(2) as usize;
-    let lines: Vec<Line<'_>> = help
-        .lines
-        .iter()
-        .skip(help.scroll)
-        .take(inner_h)
-        .map(|l| Line::raw(l.as_str()))
-        .collect();
     frame.render_widget(
-        Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" {} — {} ", t("help-title"), t("help-hint")))
-                .title_style(theme.role(Role::Title))
-                .border_style(theme.role(Role::ModalBorder)),
-        ),
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {} ", t("help-title")))
+            .title_style(theme.role(Role::Title))
+            .border_style(theme.role(Role::ModalBorder)),
         area,
+    );
+
+    let state = &help.state;
+    // Una celda de canalón: sin ella un título que llena la lateral queda
+    // pegado a la primera letra de la prosa y las dos columnas se leen como
+    // una sola línea rota.
+    let side_w = usize::from(sidebar.width).saturating_sub(1);
+    let items: Vec<ListItem<'_>> = state
+        .rows()
+        .iter()
+        .map(|row| match row {
+            // El modelo entrega TAGS, no texto: la traducción es cosa del
+            // frontend (una misma fila se llama distinto en la TUI y en la
+            // GUI). Un tag sin entrada Fluent pintaría su propia clave, que
+            // es lo que la suite de i18n impide.
+            SidebarRow::Group { tag } => ListItem::new(Line::styled(
+                middle_ellipsis(&t(&format!("help-group-{tag}")), side_w),
+                theme.role(Role::Title),
+            )),
+            SidebarRow::Topic { id, title } => {
+                // La entrada sintética `keys` no es un tema del corpus: su
+                // título ES su id (el modelo no tiene acceso a Fluent, a
+                // propósito), así que la etiqueta la pone el frontend.
+                let label = if id.as_str() == norte_frontend::help::KEYS_ID {
+                    t("help-topic-keys")
+                } else {
+                    title.clone()
+                };
+                ListItem::new(Line::raw(middle_ellipsis(&format!("  {label}"), side_w)))
+            }
+        })
+        .collect();
+    let mut list_state = ListState::default();
+    // `HelpState` garantiza que el cursor se apoya SIEMPRE en una fila
+    // seleccionable (nunca en una cabecera); con el filtro sin resultados no
+    // hay fila alguna que resaltar.
+    list_state.select((!state.rows().is_empty()).then(|| state.cursor()));
+    frame.render_stateful_widget(
+        List::new(items).highlight_style(theme.role(Role::Selection)),
+        sidebar,
+        &mut list_state,
+    );
+
+    let (lines, action_lines) = help.body();
+    // La línea de la acción con foco. Con el foco en la lateral no se resalta
+    // ninguna: el cursor del cuerpo existe, pero no es el que mueven las
+    // flechas, y resaltarlo diría lo contrario.
+    let focused = (state.focus() == Focus::Body)
+        .then(|| action_lines.get(state.action_cursor()).copied())
+        .flatten();
+    let cuerpo: Vec<Line<'_>> = lines
+        .iter()
+        .enumerate()
+        .skip(state.body_scroll())
+        .take(usize::from(body_area.height))
+        .map(|(i, line)| {
+            if Some(i) == focused {
+                line.clone().style(theme.role(Role::Selection))
+            } else {
+                line.clone()
+            }
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(cuerpo), body_area);
+
+    let footer = if state.filtering() {
+        let (query, _) = display_name(state.filter_display().as_bytes());
+        Line::raw(middle_ellipsis(
+            &format!(" /{query}"),
+            usize::from(footer_area.width),
+        ))
+    } else {
+        Line::raw(middle_ellipsis(
+            &format!(" {hint}"),
+            usize::from(footer_area.width),
+        ))
+    };
+    frame.render_widget(
+        Paragraph::new(footer).style(theme.role(Role::BorderUnfocused)),
+        footer_area,
     );
 }
 

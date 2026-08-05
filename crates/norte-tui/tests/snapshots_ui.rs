@@ -717,10 +717,24 @@ fn snapshot_ayuda() {
         &build(norte_tui::keymap::Screen::Viewer),
         &dialog,
     );
-    app.help = Some(norte_tui::app::Help { lines, scroll: 0 });
+    // El idioma del corpus es el del resto de la UI (`force` arriba), o el
+    // overlay pinta prosa inglesa bajo cabeceras españolas.
+    app.help = Some(norte_tui::app::HelpView::new(norte_i18n::Lang::Es, lines));
+    // H3b: el overlay se maqueta para el frame sobre el que va a pintarse
+    // (lo hace el run loop en cada vuelta); la geometría sale de la MISMA
+    // función que usa el pintor.
+    let (ancho, alto) = ui::help_body_size(ratatui::layout::Rect::new(0, 0, 80, 16));
+    app.refresh_help(ancho, alto);
+    // Arriba: el índice del corpus, donde abre el overlay.
     let arriba = render(&app);
-    // Scrolleada: el viewport empieza más abajo (sección Viewer visible).
-    app.help.as_mut().unwrap().scroll_down(24);
+    // Abajo: la página de teclado sintética — el cheatsheet de siempre,
+    // ahora una entrada más de la lateral.
+    app.help
+        .as_mut()
+        .unwrap()
+        .state
+        .open(&norte_help::TopicId::new(norte_frontend::help::KEYS_ID));
+    app.refresh_help(ancho, alto);
     insta::assert_snapshot!(format!("{arriba}\n===\n{}", render(&app)));
 }
 

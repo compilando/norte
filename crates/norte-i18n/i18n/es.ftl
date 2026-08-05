@@ -254,12 +254,22 @@ msg-open-failed = no se pudo lanzar { $program }: { $error }
 cli-ls-skipped = aviso: { $n } entradas del contenedor omitidas del índice (nombres hostiles/límites)
 
 # --- Ayuda (F1) — construida del keymap efectivo ---
-help-title = Ayuda — teclas activas
+help-title = Ayuda
 help-hint = [esc/q/f1] cerrar   [↑/↓/pgup/pgdn] desplazar
 help-section-browse = Navegación (panes)
 help-section-viewer = Viewer
 help-section-dialog = Diálogos y overlays
 help-dialog-note = cada diálogo soporta su propio subconjunto de estas teclas
+# --- Overlay de ayuda (H3b) — cabeceras de grupo de la lateral y página
+# sintética de teclado. `help-group-{tag}` se busca por el PRIMER tag del
+# propio corpus (ver el front matter de `norte-help/topics/*/*.md`): un tag
+# nuevo allí necesita su entrada aquí, en ambos locales, o la lateral pinta
+# la clave de búsqueda.
+help-group-basics = Fundamentos
+help-group-doing = Operaciones
+help-group-remote = Remoto y archivos
+help-group-keys = Teclado
+help-topic-keys = Teclado
 help-cmd-app-quit = salir de norte
 help-cmd-app-help = esta ayuda
 help-cmd-app-theme = elegir tema

@@ -733,10 +733,11 @@ pub struct App {
     pub board: crate::tasks::TaskBoard,
     /// Viewer abierto (F3); None = navegando.
     pub viewer: Option<crate::viewer::Viewer>,
-    /// Ayuda abierta (F1): líneas ya construidas + scroll. Se construye
-    /// del keymap EFECTIVO al abrir (extensible: preset y capas del
-    /// usuario incluidos, jamás una lista a mano).
-    pub help: Option<Help>,
+    /// Help overlay open (F1, H3b): the navigable view over the `norte-help`
+    /// corpus — sidebar, body, filter and history — plus the generated
+    /// keyboard page, which is still built from the EFFECTIVE keymap (preset
+    /// and the user's layers included, never a hand-kept list).
+    pub help: Option<HelpView>,
     /// Colisiones a la espera de diálogo: JAMÁS se pisa un modal abierto
     /// (una tecla en vuelo respondería a la pregunta equivocada); se
     /// atienden en orden al cerrarse el modal actual.
@@ -799,6 +800,11 @@ pub struct App {
     /// efectivo se mueva al `Resolver` compartido. `ui::draw_*` los lee en
     /// vez de una clave Fluent estática.
     pub dialog_hints: crate::hints::DialogHints,
+    /// Resolver of the help's live marks (H3b): rebuilt with the effective
+    /// keymaps on every hot reload, exactly like `dialog_hints` and
+    /// `help_lines` — a rebind must change the prose, and it does because the
+    /// page is drawn through this.
+    pub help_chords: std::sync::Arc<crate::help::TuiChords>,
     /// Command palette abierta (`Ctrl+P`/vim `:`, H1 T4): `None` = cerrada.
     pub palette: Option<Palette>,
     /// Filas de la palette PRECOMPUTADAS del keymap vigente
@@ -1481,10 +1487,26 @@ impl App {
             openers: norte_frontend::openers::OpenersConfig::empty(),
             pending_open: None,
             dialog_hints: crate::hints::DialogHints::default(),
+            help_chords: default_help_chords(),
             palette: None,
             palette_rows: Vec::new(),
             mouse: crate::mouse::MouseState::default(),
             settings: None,
+        }
+    }
+
+    /// Lays the open help overlay out for a body of `width`×`height` cells,
+    /// through the resolver and theme in force. No-op with the overlay closed.
+    ///
+    /// The split-borrow wrapper exists because [`HelpView::refresh`] needs
+    /// three fields of `App` at once ([`Self::help`] mutably,
+    /// [`Self::help_chords`] and [`Self::theme`] shared) and a caller outside
+    /// this module cannot name them disjointly. The run loop calls it with
+    /// [`crate::ui::help_body_size`] of the frame it is about to paint, so
+    /// the geometry the model clamps against is the geometry on screen.
+    pub fn refresh_help(&mut self, width: usize, height: usize) {
+        if let Some(help) = &mut self.help {
+            help.refresh(&self.help_chords, width, height, &self.theme);
         }
     }
 
@@ -2499,24 +2521,151 @@ impl App {
     }
 }
 
-/// Estado de la ayuda (F1).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Help {
-    /// Contenido ya renderizable (secciones y bindings formateados).
-    pub lines: Vec<String>,
-    /// Primera línea visible.
-    pub scroll: usize,
+/// The resolver [`App::new`] starts with: the ORTHODOX preset with no user
+/// and no project layer, in the language of the environment.
+///
+/// `main.rs` OVERWRITES [`App::help_chords`] at startup and on every hot
+/// reload with the effectives actually in force, exactly as it does with
+/// `help_lines`, `palette_rows` and `dialog_hints` — a rebind that does not
+/// reach the resolver is a help page that teaches the OLD key. This default
+/// only exists so `App::new` stays infallible for the render tests and the
+/// paths that never load a keymap at all.
+///
+/// Built ONCE per process: `Effective::build_for` materialises the whole
+/// merged keymap for three screens, and `App::new` runs in every render test.
+fn default_help_chords() -> std::sync::Arc<crate::help::TuiChords> {
+    static DEFAULT: std::sync::LazyLock<std::sync::Arc<crate::help::TuiChords>> =
+        std::sync::LazyLock::new(|| {
+            // Both `expect`s rest on the same invariant: the preset and the
+            // vocabulary are BINARY CONSTANTS, and `tests/keymap.rs` merges
+            // this exact combination for all three screens — an invalid one
+            // fails the suite, never a user's session. `presets()` itself
+            // panics on the same grounds.
+            let (_, preset) = crate::keymap::presets()
+                .into_iter()
+                .find(|(n, _)| *n == "orthodox")
+                .expect("`presets()` always ships the orthodox preset");
+            // The `dialog` effective merges `[global]` too, so the vocabulary
+            // is the UNION — `DIALOG_COMMANDS` alone would reject the preset.
+            let known: Vec<&str> = crate::keymap::COMMANDS
+                .iter()
+                .copied()
+                .chain(crate::keymap::DIALOG_COMMANDS.iter().copied())
+                .collect();
+            let eff = |screen| {
+                crate::keymap::Effective::build_for(&preset, &[], &known, screen)
+                    .expect("the embedded orthodox preset merges for every screen")
+            };
+            std::sync::Arc::new(crate::help::TuiChords::new(
+                &eff(crate::keymap::Screen::Browse),
+                &eff(crate::keymap::Screen::Viewer),
+                &eff(crate::keymap::Screen::Dialog),
+                norte_i18n::Lang::from_env(),
+            ))
+        });
+    std::sync::Arc::clone(&DEFAULT)
 }
 
-impl Help {
-    /// Baja `n` líneas (tope al final).
-    pub fn scroll_down(&mut self, n: usize) {
-        self.scroll = (self.scroll + n).min(self.lines.len().saturating_sub(1));
+/// State of the help overlay (H3b): the shared navigation model, the
+/// generated keyboard page, and the body as last laid out.
+///
+/// The body is PRE-RENDERED into the state rather than laid out by the
+/// painter, which is this repo's existing idiom (`help_lines`,
+/// [`App::palette_rows`], [`crate::hints::DialogHints`] are all precomputed
+/// and rebuilt on hot reload). The reason is concrete:
+/// `HelpState::reveal`/`clamp_scroll` need the laid-out LINE COUNT, `draw_*`
+/// only ever gets a `&App`, and a renderer that cannot tell the model what it
+/// laid out leaves `body_scroll` unbounded — a reader who pages past the end
+/// gets a permanently blank body.
+#[derive(Debug, Clone)]
+pub struct HelpView {
+    /// Sidebar, body scroll, filter, history and focus.
+    pub state: norte_frontend::help::HelpState,
+    /// The effective-keymap cheatsheet ([`crate::help::build`]), the body of
+    /// the synthetic `keys` entry. Rebuilt on hot reload with everything else
+    /// derived from the keymap.
+    pub keys_lines: Vec<String>,
+    /// Body lines and the action→line map of whatever `state.current()` is,
+    /// laid out for `width`. See [`HelpView::refresh`].
+    ///
+    /// `'static` because the corpus is: `HelpState::topic` hands back a
+    /// `&'static Topic`, so `render_topic` can produce a `Rendered<'static>`
+    /// and the state can simply hold it.
+    body: crate::help_render::Rendered<'static>,
+}
+
+impl HelpView {
+    /// Opens the overlay on the index topic of `lang`, with `keys_lines` as
+    /// the body of the synthetic keyboard entry.
+    ///
+    /// The body starts EMPTY: nothing has been laid out yet because nothing
+    /// knows how wide the terminal is. [`refresh`](Self::refresh) is what
+    /// fills it, and the run loop calls it before every paint.
+    #[must_use]
+    pub fn new(lang: norte_help::Lang, keys_lines: Vec<String>) -> Self {
+        Self {
+            state: norte_frontend::help::HelpState::new(lang),
+            keys_lines,
+            body: crate::help_render::Rendered {
+                lines: Vec::new(),
+                action_lines: Vec::new(),
+            },
+        }
     }
 
-    /// Sube `n` líneas.
-    pub fn scroll_up(&mut self, n: usize) {
-        self.scroll = self.scroll.saturating_sub(n);
+    /// Lays the open page out for `width` and re-establishes the scroll
+    /// invariants: clamps `body_scroll` to what exists, and reveals the
+    /// focused action when the body has the focus.
+    ///
+    /// Call after ANY change to what is shown — opening a topic, going back,
+    /// moving either cursor, editing the filter, a resize, a hot reload —
+    /// and before painting. Cheap: the corpus is static and eight topics.
+    pub fn refresh(
+        &mut self,
+        chords: &crate::help::TuiChords,
+        width: usize,
+        height: usize,
+        theme: &crate::theme::TuiTheme,
+    ) {
+        self.body = match self.state.topic() {
+            Some(topic) => crate::help_render::render_topic(topic, chords, width, theme),
+            // The synthetic `keys` page: its body is the effective keymap,
+            // generated text with no runnable rows and therefore no action
+            // map — a chord is not something Enter runs.
+            None => crate::help_render::Rendered {
+                lines: self
+                    .keys_lines
+                    .iter()
+                    .map(|l| ratatui::text::Line::raw(l.clone()))
+                    .collect(),
+                action_lines: Vec::new(),
+            },
+        };
+        self.state.clamp_scroll(self.body.lines.len());
+        // The guard is not defensive noise: a topic with neither commands nor
+        // `see_also` has no line to reveal, and `HelpState` only refuses the
+        // FOCUS on an empty action list — the cursor itself can be stale for
+        // one frame after a filter rebuilt the page under it.
+        if self.state.focus() == norte_frontend::help::Focus::Body
+            && let Some(&line) = self.body.action_lines.get(self.state.action_cursor())
+        {
+            self.state.reveal(line, height);
+        }
+    }
+
+    /// Body lines to paint and the line each action landed on.
+    #[must_use]
+    pub fn body(&self) -> (&[ratatui::text::Line<'static>], &[usize]) {
+        (&self.body.lines, &self.body.action_lines)
+    }
+
+    /// `true` while the body shows the generated keyboard page.
+    ///
+    /// The same predicate [`refresh`](Self::refresh) branches on, so the two
+    /// cannot disagree about which body is on screen.
+    #[must_use]
+    pub fn on_keys_page(&self) -> bool {
+        self.state.topic().is_none()
     }
 }
 
@@ -2979,6 +3128,65 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         | Modal::SemanticQuery { .. }
         | Modal::TransferName { .. } => None,
     }
+}
+
+/// What a `dialog.*` verb does inside the help overlay (H3b).
+///
+/// A vocabulary of its own rather than [`DialogOutcome`]: a modal answers a
+/// QUESTION (confirm/deny/retry-with-a-policy) and this overlay is a reader —
+/// its verbs move a cursor, follow a link and close a window. Sharing the
+/// enum would force every modal to carry arms it can never produce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelpOutcome {
+    /// One row up: a topic in the sidebar, an action in the body.
+    Up,
+    /// One row down.
+    Down,
+    /// A page up: topics in the sidebar, body lines in the body.
+    PageUp,
+    /// A page down.
+    PageDown,
+    /// Enter: open the selected topic, or run/follow the focused body row.
+    Activate,
+    /// Close the overlay.
+    Close,
+    /// Hand the focus to the other half.
+    TogglePane,
+    /// Back to the previously open topic.
+    Back,
+    /// Start typing into the sidebar filter.
+    StartFilter,
+}
+
+/// Maps an already-resolved `dialog.*` command to what it means inside the
+/// help overlay, or `None` for a verb the overlay does not support — the key
+/// is INERT, exactly as in [`dialog_action`].
+///
+/// Filtered through the SAME [`ALLOW_HELP`] the footer hint is generated from
+/// ([`crate::hints::DialogHints::help`]), never a second copy: a verb the
+/// footer advertises and dispatch drops (or the reverse) is a hint that lies,
+/// and one list cannot drift from itself.
+#[must_use]
+pub fn help_action(cmd: &str) -> Option<HelpOutcome> {
+    if !ALLOW_HELP.contains(&cmd) {
+        return None;
+    }
+    Some(match cmd {
+        "dialog.up" => HelpOutcome::Up,
+        "dialog.down" => HelpOutcome::Down,
+        "dialog.page-up" => HelpOutcome::PageUp,
+        "dialog.page-down" => HelpOutcome::PageDown,
+        "dialog.confirm" => HelpOutcome::Activate,
+        "dialog.cancel" => HelpOutcome::Close,
+        "dialog.pane" => HelpOutcome::TogglePane,
+        "dialog.back" => HelpOutcome::Back,
+        "dialog.filter" => HelpOutcome::StartFilter,
+        // Unreachable through the allowlist above, and deliberately not an
+        // `unreachable!`: a verb added to `ALLOW_HELP` without an arm here is
+        // an inert key, never a panic in a reader's terminal. The test
+        // `help_action_accepts_exactly_the_allowlist` is what catches it.
+        _ => return None,
+    })
 }
 
 /// Resuelve el modal [`Modal::TrustLuaInit`] (decisión 8 del plan H1: NO
@@ -4695,5 +4903,161 @@ mod error_message_tests {
         });
         assert!(s.contains("invalid keymap"), "localizado: {s}");
         assert!(s.contains("F5"), "el detalle diagnóstico se conserva: {s}");
+    }
+}
+
+#[cfg(test)]
+mod help_view_tests {
+    use super::{ALLOW_HELP, HelpOutcome, HelpView, help_action};
+    use crate::keymap::DIALOG_COMMANDS;
+    use norte_frontend::help::{Focus, KEYS_ID};
+    use norte_help::{Lang, TopicId};
+
+    /// The default resolver plus the shipped theme: deterministic, and the
+    /// same pair `App` starts with.
+    fn refresh(view: &mut HelpView, width: usize, height: usize) {
+        let chords = super::default_help_chords();
+        let theme = crate::theme::TuiTheme::new(
+            norte_theme::Theme::preset_default(),
+            norte_theme::ColorDepth::Truecolor,
+        );
+        view.refresh(&chords, width, height, &theme);
+    }
+
+    fn flatten(lines: &[ratatui::text::Line<'static>]) -> String {
+        lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_new_view_opens_on_the_index_with_an_empty_body() {
+        let view = HelpView::new(Lang::En, Vec::new());
+        assert_eq!(view.state.current().as_str(), "index");
+        assert!(!view.on_keys_page(), "the index IS a corpus topic");
+        let (lines, actions) = view.body();
+        assert!(
+            lines.is_empty() && actions.is_empty(),
+            "nothing is laid out until `refresh` knows how wide the terminal is"
+        );
+    }
+
+    /// The allowlist and the dispatcher are ONE list: a verb the footer hint
+    /// advertises (`DialogHints::help`, generated from `ALLOW_HELP`) and that
+    /// dispatch drops is a hint that lies. Swept over the WHOLE `dialog`
+    /// vocabulary, so a verb added to `ALLOW_HELP` without an arm — or an arm
+    /// added without the allowlist — fails here.
+    #[test]
+    fn help_action_accepts_exactly_the_allowlist() {
+        for cmd in ALLOW_HELP {
+            assert!(
+                help_action(cmd).is_some(),
+                "{cmd} is allowed but dispatches to nothing"
+            );
+        }
+        let mut outside = 0_usize;
+        for cmd in DIALOG_COMMANDS {
+            if ALLOW_HELP.contains(cmd) {
+                continue;
+            }
+            outside += 1;
+            assert_eq!(
+                help_action(cmd),
+                None,
+                "{cmd} is outside `ALLOW_HELP`: the key must be INERT"
+            );
+        }
+        assert!(
+            outside > 5,
+            "the sweep must actually cover verbs the overlay refuses: {outside}"
+        );
+        assert_eq!(help_action("pane.copy"), None, "not even a `dialog.*` verb");
+        // Named samples, so a regression says WHICH arm was transposed.
+        assert_eq!(help_action("dialog.confirm"), Some(HelpOutcome::Activate));
+        assert_eq!(help_action("dialog.cancel"), Some(HelpOutcome::Close));
+        assert_eq!(help_action("dialog.pane"), Some(HelpOutcome::TogglePane));
+        assert_eq!(help_action("dialog.back"), Some(HelpOutcome::Back));
+        assert_eq!(help_action("dialog.filter"), Some(HelpOutcome::StartFilter));
+    }
+
+    /// Why the body is pre-rendered at all: `page_down` deliberately does not
+    /// bound itself (the model cannot know how many lines the prose wrapped
+    /// into), so without this clamp a reader who pages past the end gets a
+    /// PERMANENTLY blank body — no key scrolls back into a body that is not
+    /// there.
+    #[test]
+    fn refresh_clamps_a_scroll_paged_past_the_end() {
+        let mut view = HelpView::new(Lang::En, Vec::new());
+        view.state.open(&TopicId::new("copying"));
+        view.state.toggle_focus();
+        assert_eq!(view.state.focus(), Focus::Body, "`copying` has actions");
+        view.state.page_down(1_000_000);
+        refresh(&mut view, 60, 10);
+        let (lines, _) = view.body();
+        assert!(!lines.is_empty(), "the topic laid out");
+        assert!(
+            view.state.body_scroll() < lines.len(),
+            "scroll {} outside a body of {} lines: the page is blank",
+            view.state.body_scroll(),
+            lines.len()
+        );
+    }
+
+    /// The other half of the same contract: with the focus on the body, the
+    /// action the cursor is on has to be ON SCREEN — the cursor walks
+    /// ACTIONS and the body scrolls in LINES, and only the renderer can
+    /// translate one into the other.
+    #[test]
+    fn refresh_reveals_the_focused_action() {
+        let mut view = HelpView::new(Lang::En, Vec::new());
+        view.state.open(&TopicId::new("copying"));
+        view.state.toggle_focus();
+        assert_eq!(view.state.focus(), Focus::Body);
+        for _ in 0..50 {
+            view.state.down();
+        }
+        let height = 6;
+        refresh(&mut view, 60, height);
+        let (_, action_lines) = view.body();
+        let line = action_lines[view.state.action_cursor()];
+        let first = view.state.body_scroll();
+        assert!(
+            (first..first + height).contains(&line),
+            "action line {line} outside the window [{first}, {}): the reader \
+             cannot see what Enter would run",
+            first + height
+        );
+    }
+
+    #[test]
+    fn the_keys_page_paints_keys_lines_and_maps_no_action() {
+        let mut view = HelpView::new(
+            Lang::En,
+            vec!["── Browsing ──".to_owned(), "  f5   copy".to_owned()],
+        );
+        view.state.open(&TopicId::new(KEYS_ID));
+        assert!(view.on_keys_page());
+        refresh(&mut view, 60, 10);
+        let (lines, action_lines) = view.body();
+        assert_eq!(lines.len(), 2, "one painted line per generated line");
+        assert!(flatten(lines).contains("f5   copy"), "{:?}", flatten(lines));
+        assert!(
+            action_lines.is_empty(),
+            "its rows are chords, and a chord is not something Enter runs"
+        );
+
+        // And going back to a corpus topic restores a real action map: the
+        // empty one above is the KEYS page, not a renderer that lost it.
+        view.state.open(&TopicId::new("copying"));
+        refresh(&mut view, 60, 10);
+        assert!(!view.on_keys_page());
+        assert!(!view.body().1.is_empty());
     }
 }

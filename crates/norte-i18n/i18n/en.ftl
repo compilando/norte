@@ -252,12 +252,21 @@ msg-open-failed = could not launch { $program }: { $error }
 cli-ls-skipped = warning: { $n } container entries omitted from the index (hostile names/limits)
 
 # --- Help (F1) — built from the effective keymap ---
-help-title = Help — active keys
+help-title = Help
 help-hint = [esc/q/f1] close   [↑/↓/pgup/pgdn] scroll
 help-section-browse = Browsing (panes)
 help-section-viewer = Viewer
 help-section-dialog = Dialogs and overlays
 help-dialog-note = each dialog supports its own subset of these keys
+# --- Help overlay (H3b) — sidebar group headers and the synthetic keyboard
+# page. `help-group-{tag}` is looked up from the corpus' OWN first tag (see
+# the front matter of `norte-help/topics/*/*.md`): a new tag there needs its
+# entry here, in both locales, or the sidebar paints the lookup key.
+help-group-basics = Basics
+help-group-doing = Doing things
+help-group-remote = Remote & archives
+help-group-keys = Keyboard
+help-topic-keys = Keyboard
 help-cmd-app-quit = quit norte
 help-cmd-app-help = this help
 help-cmd-app-theme = choose theme

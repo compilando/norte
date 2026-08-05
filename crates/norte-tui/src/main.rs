@@ -21,7 +21,7 @@ use norte_proto::methods::{FsSearchParams, SearchHits};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_tui::app::{
     ALLOW_COLUMNS, ALLOW_EXTENSIONS, ALLOW_NAV_HOTLIST, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, App,
-    DialogOutcome, ExtensionManager, Help, KeymapsError, Modal, NavPopupKind, Palette, Pane,
+    DialogOutcome, ExtensionManager, HelpView, KeymapsError, Modal, NavPopupKind, Palette, Pane,
     PendingWrite, PickerAction, SearchDialog, SearchState, Settings, SettingsEditError,
     TransferKind, config_error_category, detail_for_bar, dialog_action, error_category,
     error_message, io_error_category, keymaps_error_category, theme_error_category, trust_lua_key,
@@ -437,10 +437,10 @@ mod palette_modal_guard_tests {
             cursor: 0,
             config: None,
         });
-        a.help = Some(norte_tui::app::Help {
-            lines: Vec::new(),
-            scroll: 0,
-        });
+        a.help = Some(norte_tui::app::HelpView::new(
+            norte_i18n::Lang::En,
+            Vec::new(),
+        ));
         assert!(!modal_wins(&a), "sin modal, cada overlay manda en su tecla");
         a.modal = Some(approval_modal());
         assert!(
@@ -460,10 +460,10 @@ mod palette_modal_guard_tests {
         a.modal = Some(approval_modal());
         assert!(!watch_refresh_allowed(&a), "modal abierto: encolado");
         a.modal = None;
-        a.help = Some(norte_tui::app::Help {
-            lines: Vec::new(),
-            scroll: 0,
-        });
+        a.help = Some(norte_tui::app::HelpView::new(
+            norte_i18n::Lang::En,
+            Vec::new(),
+        ));
         assert!(!watch_refresh_allowed(&a), "ayuda abierta: encolado");
         a.help = None;
         a.panes[0].quick_start(nav::Mode::Filter);
@@ -1080,6 +1080,17 @@ async fn run(
         }
         // Barra Lua en cada vuelta, ANTES del draw (cacheada en el host).
         refresh_lua_status(app, lua_host.as_ref());
+        // H3b: la ayuda se MAQUETA para el terminal sobre el que va a
+        // pintarse, justo antes del draw — el modelo acota su scroll contra
+        // el número de líneas que salieron, y solo el render lo sabe (ver
+        // `HelpView::refresh`). Cada vuelta, no solo al cambiar de tema: un
+        // resize no pasa por ninguna tecla.
+        if app.help.is_some() {
+            let size = terminal.size()?;
+            let (ancho, alto) =
+                ui::help_body_size(ratatui::layout::Rect::new(0, 0, size.width, size.height));
+            app.refresh_help(ancho, alto);
+        }
         // Exención puntual de la regla 2: el draw escribe stdout síncrono
         // (patrón async oficial de ratatui; acotado, runtime multi-thread).
         let pintado = terminal.draw(|f| ui::draw(f, app))?;
@@ -1714,7 +1725,12 @@ async fn run(
                     } else if !modal_wins(app)
                         && let Some(help) = &mut app.help
                     {
-                        // Teclas de la ayuda: fijas, como los diálogos (#24).
+                        // H3b STUB — task 7 replaces this whole arm with the
+                        // real routing (the `dialog` resolver filtered through
+                        // `app::help_action`/`ALLOW_HELP`, filter capture
+                        // included). Until then the overlay keeps the keys it
+                        // had, mapped onto the new model so the crate is not
+                        // left broken and the page stays navigable.
                         // ctrl+c conserva su significado global (salir).
                         match (key.modifiers, key.code) {
                             (KeyModifiers::CONTROL, KeyCode::Char('c')) => app.quit = true,
@@ -1722,10 +1738,12 @@ async fn run(
                                 KeyModifiers::NONE,
                                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::F(1),
                             ) => app.help = None,
-                            (KeyModifiers::NONE, KeyCode::Up) => help.scroll_up(1),
-                            (KeyModifiers::NONE, KeyCode::Down) => help.scroll_down(1),
-                            (KeyModifiers::NONE, KeyCode::PageUp) => help.scroll_up(PAGE),
-                            (KeyModifiers::NONE, KeyCode::PageDown) => help.scroll_down(PAGE),
+                            (KeyModifiers::NONE, KeyCode::Up) => help.state.up(),
+                            (KeyModifiers::NONE, KeyCode::Down) => help.state.down(),
+                            (KeyModifiers::NONE, KeyCode::PageUp) => help.state.page_up(PAGE),
+                            (KeyModifiers::NONE, KeyCode::PageDown) => help.state.page_down(PAGE),
+                            (KeyModifiers::NONE, KeyCode::Tab) => help.state.toggle_focus(),
+                            (KeyModifiers::NONE, KeyCode::Enter) => help.state.open_selected(),
                             _ => {}
                         }
                     } else if app.modal.is_some() {
@@ -4872,10 +4890,14 @@ async fn dispatch(
         Command::ViewerEncodingAuto => viewer_do(app, norte_tui::viewer::Viewer::reset_encoding),
         Command::ViewerHex => viewer_do(app, norte_tui::viewer::Viewer::toggle_hex),
         Command::AppHelp => {
-            app.help = Some(Help {
-                lines: help_lines.to_vec(),
-                scroll: 0,
-            });
+            // H3b STUB — task 7 owns this wiring. The language must be the
+            // NEGOTIATED one (`[ui] lang` beats the environment; see the
+            // `norte_i18n::force` call in `main`), which dispatch does not
+            // receive yet: task 7 threads it in along with the key handling.
+            app.help = Some(HelpView::new(
+                norte_i18n::Lang::from_env(),
+                help_lines.to_vec(),
+            ));
         }
         Command::PaneNamesEncoding => {
             // #57: cicla la reinterpretación de nombres no-UTF8 del pane con

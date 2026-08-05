@@ -851,11 +851,19 @@ fn la_ayuda_se_pinta_sobre_el_viewer() {
         b"cuerpo del fichero\n".to_vec(),
         false,
     ));
-    app.help = Some(norte_tui::app::Help {
-        lines: vec!["  f1             this help".to_owned()],
-        scroll: 0,
-    });
+    // H3b: la página de teclado sintética — el `keys_lines` de siempre, ahora
+    // como cuerpo de una entrada más de la lateral. Se abre navegando a ella
+    // (el overlay arranca en el índice) y se MAQUETA antes de pintar, como
+    // hace el run loop.
+    let mut help = norte_tui::app::HelpView::new(
+        norte_i18n::Lang::En,
+        vec!["  f1             this help".to_owned()],
+    );
+    help.state
+        .open(&norte_help::TopicId::new(norte_frontend::help::KEYS_ID));
+    app.help = Some(help);
     let mut terminal = Terminal::new(TestBackend::new(70, 12)).expect("terminal");
+    app.refresh_help(40, 8);
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     let contenido = terminal.backend().to_string();
     assert!(
