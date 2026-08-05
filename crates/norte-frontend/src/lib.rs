@@ -20,6 +20,7 @@ pub mod config;
 mod decoration;
 mod display;
 mod format;
+pub mod help;
 pub mod keymap;
 mod modal;
 pub mod mouse;

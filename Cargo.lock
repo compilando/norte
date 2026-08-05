@@ -4326,6 +4326,7 @@ dependencies = [
  "globset",
  "norte-config",
  "norte-encoding",
+ "norte-help",
  "norte-i18n",
  "norte-proto",
  "norte-testkit",
