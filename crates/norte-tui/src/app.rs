@@ -2700,6 +2700,27 @@ pub enum TransferKind {
     Move,
 }
 
+/// Si una navegación se REGISTRA en el rastro del pane, o es el rastro
+/// reproduciéndose a sí mismo.
+///
+/// Sin esta distinción `nav.back` se alimenta de su propio rastro: volver de
+/// B a A registraría "estuve en B", así que el siguiente back devuelve a B y
+/// el lector oscila entre dos directorios — el defecto exacto que el rastro
+/// existe para evitar, un nivel más arriba.
+///
+/// Vive aquí (y no junto al `cd` del binario) porque [`Modal::TrustHostKey`]
+/// lo TRANSPORTA: el reintento tras confiar en la host key debe reanudar la
+/// MISMA navegación que el TOFU interrumpió, y la lib no puede referirse a
+/// un tipo declarado en `main.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trail {
+    /// El usuario pidió este movimiento: entra en la MRU y en el rastro, y
+    /// poda la rama de forward.
+    Record,
+    /// `nav.back`/`nav.forward` están reproduciendo; el rastro ya lo sabe.
+    Replay,
+}
+
 /// Diálogo modal activo. Sus teclas resuelven contra el contexto `dialog`
 /// del keymap (H1, issue #24 — CERRADO): el run loop pasa la tecla por el
 /// [`Resolver`](crate::keymap::Resolver) del efectivo `dialog` y el comando
@@ -2774,6 +2795,17 @@ pub enum Modal {
         fingerprint: String,
         /// La ruta remota a la que reintentar navegar tras confiar.
         dir: VPath,
+        /// El pane que estaba navegando cuando saltó el TOFU. El modal lo
+        /// CARGA porque la navegación interrumpida no es necesariamente la
+        /// del pane con el foco (`pane.mirror` manda el OTRO pane a un sitio
+        /// mientras el foco se queda quieto): reintentar contra el foco
+        /// reanudaría en el pane EQUIVOCADO.
+        pane: usize,
+        /// Si la navegación interrumpida se REGISTRA en el rastro o es el
+        /// rastro reproduciéndose. Se transporta por el mismo motivo que
+        /// `pane`: el reintento debe ser la MISMA navegación que el TOFU
+        /// interrumpió, no una nueva.
+        trail: Trail,
     },
     /// TOFU del `./.norte/init.lua` de PROYECTO (M4 Lua, ADR 0026): un repo
     /// AJENO trae un script que correría con los permisos del usuario —
@@ -3909,6 +3941,8 @@ mod tests {
             algo: "ssh-ed25519".into(),
             fingerprint: "SHA256:AAAA".into(),
             dir: root(),
+            pane: 0,
+            trail: Trail::Record,
         };
         assert_eq!(
             dialog_action(&m, "dialog.approve"),

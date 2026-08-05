@@ -4,7 +4,7 @@
 
 use norte_core::TransferOptions;
 use norte_proto::{Entry, EntryKind, Segment, VPath};
-use norte_tui::app::{App, Modal, Pane, TransferKind, sort_entries};
+use norte_tui::app::{App, Modal, Pane, Trail, TransferKind, sort_entries};
 use norte_tui::tasks::RetrySpec;
 use norte_tui::ui;
 use norte_tui::viewer::Viewer;
@@ -607,6 +607,8 @@ fn modal_trust_host_muestra_fingerprint_y_enmascara_host_hostil() {
         algo: "ssh-ed25519".into(),
         fingerprint: "SHA256:abc123XYZ".into(),
         dir: vp("sftp://evilhost/"),
+        pane: 0,
+        trail: Trail::Record,
     });
     let texto = render(&app);
     assert!(
@@ -640,6 +642,8 @@ fn modal_trust_host_fingerprint_hostil_y_sha256_completo() {
         algo: "ssh-ed25519".into(),
         fingerprint: "SHA256:sp\u{202E}oof".into(),
         dir: vp("sftp://h/"),
+        pane: 0,
+        trail: Trail::Record,
     });
     let texto = render(&app);
     assert!(
@@ -658,6 +662,8 @@ fn modal_trust_host_fingerprint_hostil_y_sha256_completo() {
         algo: "ssh-ed25519".into(),
         fingerprint: "SHA256:oXf6dQ7pC3vN2mK9tR1sB4jW8yZ0aL5eH6gU3iO7wA".into(),
         dir: vp("sftp://h/"),
+        pane: 0,
+        trail: Trail::Record,
     });
     let texto = render(&app);
     assert!(

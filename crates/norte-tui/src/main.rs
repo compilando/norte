@@ -23,7 +23,7 @@ use norte_tui::app::{
     ALLOW_COLUMNS, ALLOW_EXTENSIONS, ALLOW_NAV_HOTLIST, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, App,
     DialogOutcome, ExtensionManager, HelpOutcome, HelpView, KeymapsError, Modal, NavPopupKind,
     Palette, Pane, PendingWrite, PickerAction, SearchDialog, SearchState, Settings,
-    SettingsEditError, TransferKind, config_error_category, detail_for_bar, dialog_action,
+    SettingsEditError, Trail, TransferKind, config_error_category, detail_for_bar, dialog_action,
     error_category, error_message, io_error_category, keymaps_error_category, theme_error_category,
     trust_lua_key,
 };
@@ -4376,6 +4376,60 @@ fn after_panes_refresh(
     reap_search_run(app, search_run);
 }
 
+/// Confiar en la host key y REINTENTAR la navegación que el TOFU interrumpió
+/// (#45). `Some(cd)` = el desenlace debe volver YA al caller (la pendiente
+/// siguiente ya se gestionó aquí); `None` = confiar falló y el mensaje quedó
+/// en la barra — el caller sigue por su camino común.
+///
+/// Vive fuera de [`on_dialog_key`] porque el brazo entero (destructurar el
+/// modal + el `trust_host_key` + el reintento) no cabe en el presupuesto de
+/// líneas de esa función.
+async fn trust_host_retry(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    modal: Modal,
+) -> Option<Cd> {
+    let Modal::TrustHostKey {
+        host,
+        port,
+        algo,
+        fingerprint,
+        dir,
+        pane,
+        trail,
+    } = modal
+    else {
+        // El caller solo llama con este modal (brazo `Modal::TrustHostKey`).
+        return None;
+    };
+    match backend
+        .trust_host_key(&host, port, &algo, &fingerprint)
+        .await
+    {
+        Ok(()) => {
+            // El engine re-verifica el fingerprint contra la clave que el
+            // host presenta AHORA (anti-TOCTOU, ADR 0015 D); si aún falla,
+            // el retry lo mostrará.
+            //
+            // `cd_in` (no `cd`): se reanuda la navegación que el TOFU
+            // interrumpió — su pane y su rastro —, que no tiene por qué ser
+            // la del foco actual.
+            let outcome = cd_in(app, backend, events, pane, dir, trail).await;
+            // Solo abrir la siguiente pendiente si el retry NO dejó un modal
+            // (otro HostKeyUnknown): jamás pisar.
+            if app.modal.is_none() {
+                app.open_next_pending();
+            }
+            Some(outcome)
+        }
+        Err(e) => {
+            app.message = Some(error_message(&e));
+            None
+        }
+    }
+}
+
 /// Teclas de un modal abierto, resueltas contra el contexto `dialog` del
 /// keymap (H1 T2, issue #24 CERRADO — rebindeable) y filtradas por el
 /// ALLOWLIST del modal concreto ([`dialog_action`]): la semántica de
@@ -4480,30 +4534,9 @@ async fn on_dialog_key(
                     decide_approval(app, backend, req.approval_id, true).await;
                 }
                 // TOFU (#45): confía en la host key y REINTENTA la navegación.
-                Modal::TrustHostKey {
-                    host,
-                    port,
-                    algo,
-                    fingerprint,
-                    dir,
-                } => {
-                    match backend
-                        .trust_host_key(&host, port, &algo, &fingerprint)
-                        .await
-                    {
-                        Ok(()) => {
-                            // El engine re-verifica el fingerprint contra la
-                            // clave que el host presenta AHORA (anti-TOCTOU,
-                            // ADR 0015 D); si aún falla, el retry lo mostrará.
-                            let outcome = cd(app, backend, events, dir).await;
-                            // Solo abrir la siguiente pendiente si el retry NO
-                            // dejó un modal (otro HostKeyUnknown): jamás pisar.
-                            if app.modal.is_none() {
-                                app.open_next_pending();
-                            }
-                            return outcome;
-                        }
-                        Err(e) => app.message = Some(error_message(&e)),
+                m @ Modal::TrustHostKey { .. } => {
+                    if let Some(outcome) = trust_host_retry(app, backend, events, m).await {
+                        return outcome;
                     }
                 }
             }
@@ -5928,12 +5961,31 @@ fn spawn_fill(pane: usize, mut stream: EntryStream) -> Fill {
 /// future del listado detiene al productor del provider (testeado en
 /// vfs-local). El resto de teclas se descartan mientras dura el cd.
 async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPath) -> Cd {
+    cd_in(app, backend, events, app.focus(), dir, Trail::Record).await
+}
+
+/// Navega `pane` — que NO tiene por qué ser el enfocado, porque
+/// `pane.mirror` manda el OTRO pane a un sitio mientras el foco se queda
+/// quieto. `trail` dice si el movimiento se REGISTRA en el rastro del pane o
+/// es el rastro reproduciéndose ([`Trail`]).
+///
+/// Todo lo que aquí toca estado de pane va por el PARÁMETRO `pane`
+/// (`app.panes[pane]`), jamás por `app.focused()`: son la misma cosa solo
+/// mientras el llamante sea el envoltorio [`cd`].
+async fn cd_in(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    pane: usize,
+    dir: VPath,
+    trail: Trail,
+) -> Cd {
     // Historial (spec 2026-07-18): el dir ANTERIOR se captura AQUÍ y se
     // empuja solo en el brazo de ÉXITO (el pane se reemplazó de verdad).
-    // Al vivir dentro de `cd` cubre TODOS los caminos que navegan —
+    // Al vivir dentro de `cd_in` cubre TODOS los caminos que navegan —
     // nav.enter/nav.parent, quick-Enter (dispatch nav.enter), retry TOFU y
     // los popups de historial/hotlist — sin repetirlo por call-site.
-    let prev = app.focused().dir().clone();
+    let prev = app.panes[pane].dir().clone();
     // #117: los attrs CONFIGURADOS del scheme de destino se piden en el
     // listado; el catálogo del provider se trae UNA vez por scheme y sesión
     // (cache en `App::attr_catalogs` — hints y cabeceras del render).
@@ -5955,14 +6007,14 @@ async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPa
                         // #54: NO ordenamos aquí — `begin_listing` ->
                         // `PaneState::set_listing` normaliza internamente.
                         let more = stream.is_some();
-                        app.focused_mut()
-                            .begin_listing(dir.clone(), first, more, skipped);
-                        let pane = app.focus();
+                        app.panes[pane].begin_listing(dir.clone(), first, more, skipped);
                         // Un cd al MISMO dir (refresh-like) no ensucia el
-                        // historial; el dedup consecutivo de `push` cubre
-                        // el resto de redundancias.
-                        if prev != dir {
-                            app.history[pane].push(prev);
+                        // historial; el dedup consecutivo cubre el resto de
+                        // redundancias. Un `Replay` no registra nada: el
+                        // rastro ya sabe dónde estuvo el lector, y grabar
+                        // aquí lo haría oscilar.
+                        if prev != dir && trail == Trail::Record {
+                            app.history[pane].record(prev);
                         }
                         // Si queda stream, un drenador lo rellena en background.
                         return match stream {
@@ -5979,12 +6031,17 @@ async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPa
                         algo,
                         fingerprint,
                     }) => {
+                        // El modal CARGA `pane` y `trail`: el reintento debe
+                        // reanudar ESTA navegación (este pane, este modo de
+                        // rastro), no una nueva contra el foco de entonces.
                         app.modal = Some(Modal::TrustHostKey {
                             host,
                             port,
                             algo,
                             fingerprint,
                             dir: dir.clone(),
+                            pane,
+                            trail,
                         });
                         // El pane NO se tocó (solo se abrió el modal): Cancelled
                         // conserva un relleno en vuelo del listado anterior, que

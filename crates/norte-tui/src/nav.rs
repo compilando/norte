@@ -23,6 +23,17 @@ const HISTORY_MAX: usize = 30;
 pub struct History {
     /// Más reciente al frente.
     deque: VecDeque<VPath>,
+    /// The trail behind the reader: where `nav.back` goes, newest last.
+    ///
+    /// Separate from `deque` because they answer different questions. The
+    /// deque is "where has this pane been", deduplicated and most-recent
+    /// first, which is what the popup lists. The trail is "where was I just
+    /// now", in order, with repeats — walking the deque as if it were a trail
+    /// oscillates between the two most recent directories forever.
+    back: Vec<VPath>,
+    /// Where `nav.forward` goes: the branch a `nav.back` stepped off, newest
+    /// last. Cleared by any navigation the user initiates.
+    fwd: Vec<VPath>,
 }
 
 impl History {
@@ -53,6 +64,75 @@ impl History {
     #[must_use]
     pub fn entries(&self) -> &VecDeque<VPath> {
         &self.deque
+    }
+
+    /// Records a navigation the USER initiated, leaving `prev` behind.
+    ///
+    /// Feeds BOTH structures: [`History::push`] for the MRU the popup paints,
+    /// and the back stack for the trail `nav.back` walks. They are fed from
+    /// the same event but kept apart on purpose — see the [`History::back`]
+    /// field docs for why one cannot serve as the other.
+    ///
+    /// Skips the trail push when `prev` is already its top, mirroring the
+    /// MRU's consecutive dedup: a redundant `cd` onto the directory we are
+    /// already tracking (a pane refresh, say) is not a step the reader took,
+    /// and recording it would make `nav.back` do nothing visible once.
+    ///
+    /// Clears `fwd`: the reader chose a different path, so the branch they
+    /// stepped off no longer exists. Offering a "forward" into a history the
+    /// reader already abandoned is the browser bug everyone knows.
+    pub fn record(&mut self, prev: VPath) {
+        self.push(prev.clone());
+        if self.back.last() != Some(&prev) {
+            self.back.push(prev);
+            if self.back.len() > HISTORY_MAX {
+                // Newest last, so the cap drops from the front: the oldest
+                // step of the trail is the one the reader is least likely to
+                // still want.
+                self.back.remove(0);
+            }
+        }
+        self.fwd.clear();
+    }
+
+    /// Steps one directory BACK along the trail, leaving `current` behind.
+    ///
+    /// Pops the back stack, pushes `current` onto the forward stack so
+    /// [`History::step_forward`] can undo this, and returns the target.
+    /// `None` when the trail is exhausted — the caller should then leave the
+    /// pane where it is rather than invent a destination.
+    ///
+    /// Deliberately does NOT feed the MRU: going back is not visiting
+    /// somewhere new, and a popup that grew an entry per back-press would
+    /// stop being a list of the places the reader went.
+    pub fn step_back(&mut self, current: VPath) -> Option<VPath> {
+        let target = self.back.pop()?;
+        self.fwd.push(current);
+        Some(target)
+    }
+
+    /// Steps one directory FORWARD along the branch a [`History::step_back`]
+    /// stepped off — the mirror image of it, down to leaving the MRU alone.
+    ///
+    /// `None` when there is no such branch, either because the reader never
+    /// went back or because a [`History::record`] pruned it.
+    pub fn step_forward(&mut self, current: VPath) -> Option<VPath> {
+        let target = self.fwd.pop()?;
+        self.back.push(current);
+        Some(target)
+    }
+
+    /// Length of the back trail. Zero means `nav.back` is a no-op, which is
+    /// what a caller checks before painting the key as available.
+    #[must_use]
+    pub fn back_len(&self) -> usize {
+        self.back.len()
+    }
+
+    /// Length of the forward branch. Zero means `nav.forward` is a no-op.
+    #[must_use]
+    pub fn fwd_len(&self) -> usize {
+        self.fwd.len()
     }
 }
 
@@ -98,5 +178,59 @@ mod tests {
         );
         h.remove(&vp("mem:///a"));
         assert_eq!(contar_a(&h), 0, "remove retira TODAS las ocurrencias");
+    }
+
+    #[test]
+    fn el_rastro_no_oscila_entre_dos_directorios() {
+        // El defecto que este rastro existe para no tener: recorrer la MRU
+        // como si fuera un rastro lleva de A a B, de vuelta a A, y de vuelta
+        // a B — el lector se queda atrapado entre dos dirs sin salida.
+        let mut h = History::default();
+        h.record(vp("mem:///a")); // salimos de A hacia B
+        h.record(vp("mem:///b")); // salimos de B hacia C (estamos en C)
+        assert_eq!(h.step_back(vp("mem:///c")), Some(vp("mem:///b")));
+        assert_eq!(h.step_back(vp("mem:///b")), Some(vp("mem:///a")));
+        assert_eq!(h.step_back(vp("mem:///a")), None, "el rastro se acaba");
+    }
+
+    #[test]
+    fn adelante_deshace_atras_y_una_navegacion_nueva_lo_borra() {
+        let mut h = History::default();
+        h.record(vp("mem:///a"));
+        h.record(vp("mem:///b"));
+        assert_eq!(h.step_back(vp("mem:///c")), Some(vp("mem:///b")));
+        assert_eq!(h.step_forward(vp("mem:///b")), Some(vp("mem:///c")));
+        assert_eq!(h.step_forward(vp("mem:///c")), None);
+
+        // Volver atrás y NAVEGAR a otro sitio corta la rama de delante: es
+        // la semántica del navegador, y lo contrario ofrecería un «adelante»
+        // hacia una historia que el lector ya abandonó.
+        assert_eq!(h.step_back(vp("mem:///c")), Some(vp("mem:///b")));
+        h.record(vp("mem:///b"));
+        assert_eq!(h.step_forward(vp("mem:///z")), None, "rama podada");
+    }
+
+    #[test]
+    fn el_rastro_no_toca_la_mru_del_popup() {
+        // Son dos preguntas distintas: «¿dónde he estado?» (la MRU que pinta
+        // el popup) y «¿dónde estaba hace un momento?» (el rastro). Ir atrás
+        // no es visitar un sitio nuevo.
+        let mut h = History::default();
+        h.record(vp("mem:///a"));
+        h.record(vp("mem:///b"));
+        let antes: Vec<VPath> = h.entries().iter().cloned().collect();
+        let _ = h.step_back(vp("mem:///c"));
+        let _ = h.step_forward(vp("mem:///b"));
+        let despues: Vec<VPath> = h.entries().iter().cloned().collect();
+        assert_eq!(antes, despues, "la MRU es asunto aparte");
+    }
+
+    #[test]
+    fn el_rastro_esta_acotado_como_la_mru() {
+        let mut h = History::default();
+        for i in 0..(HISTORY_MAX + 20) {
+            h.record(vp(&format!("mem:///d{i}")));
+        }
+        assert_eq!(h.back_len(), HISTORY_MAX, "el rastro no crece sin fin");
     }
 }

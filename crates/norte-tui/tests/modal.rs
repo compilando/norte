@@ -9,7 +9,7 @@
 
 use norte_core::TransferOptions;
 use norte_proto::{CollisionPolicy, VPath};
-use norte_tui::app::{DialogOutcome, Modal, TransferKind, dialog_action};
+use norte_tui::app::{DialogOutcome, Modal, Trail, TransferKind, dialog_action};
 use norte_tui::keymap::{
     COMMANDS, Chord, DIALOG_COMMANDS, Effective, KeyCode, Mods, Resolution, Resolver, Screen,
     parse_keymap,
@@ -61,6 +61,8 @@ fn trust_host() -> Modal {
         algo: "ssh-ed25519".into(),
         fingerprint: "SHA256:AAAA".into(),
         dir: vp("sftp://h/"),
+        pane: 0,
+        trail: Trail::Record,
     }
 }
 
