@@ -1101,7 +1101,7 @@ async fn run(
         // está mirando. Sin esto habría que recalcular el layout en cada
         // click, y un click resuelto contra un layout que no es el pintado
         // no falla ruidosamente: marca el fichero de al lado.
-        app.mouse.set_geometry(ui::pane_geometry(app, pintado.area));
+        mouse::after_frame(app, ui::pane_geometry(app, pintado.area));
         // #52: listado lazy — las entradas VISIBLES sin size se hidratan por
         // tandas (máx. una en vuelo; dedup por (pane, path) en `last_probed`).
         if stat_probe.is_none() {

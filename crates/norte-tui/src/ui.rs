@@ -117,7 +117,7 @@ fn list_offset(selected: Option<usize>, total: usize, height: u16) -> usize {
 ///
 /// Mismo trato que [`pane_list_rows`] (#124): el draw es quien sabe dónde
 /// cayó cada cosa, así que el run loop devuelve esto al modelo
-/// ([`crate::mouse::MouseState::set_geometry`]) tras cada frame y el ratón resuelve sus
+/// ([`crate::mouse::after_frame`]) tras cada frame y el ratón resuelve sus
 /// clicks contra la ÚLTIMA pantalla que el usuario vio, no contra una
 /// recalculada a ojo. Se computa aquí, junto al layout que replica, para
 /// que cambiarlo rompa el test de geometría de al lado y no el ratón en

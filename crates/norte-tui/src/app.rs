@@ -439,6 +439,14 @@ impl Pane {
         self.state.mark_all();
     }
 
+    /// Cuántas veces ha MOVIDO índices el listado de este pane — delegado
+    /// puro a [`norte_frontend::PaneState::listing_epoch`]. Lo lee el ratón
+    /// para soltar un gesto cuyos índices ya no nombran lo que se pintó.
+    #[must_use]
+    pub fn listing_epoch(&self) -> u64 {
+        self.state.listing_epoch()
+    }
+
     /// Marca (o desmarca) UNA entrada por su índice. Delegado puro al
     /// primitivo que necesita el ctrl+click
     /// ([`norte_frontend::PaneState::set_mark`]).

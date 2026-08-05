@@ -156,6 +156,23 @@ pub struct PaneState {
     /// about entries that were listed, and restoring it over a listing that
     /// moved underneath would resurrect marks the prune already dropped.
     sweep_baseline: Option<HashSet<VPath>>,
+    /// Bumped by every change that can MOVE an index into
+    /// [`Self::entries`]: a new listing, a cd, a refill, a page of an
+    /// incremental fill, a re-sort, a hidden-entries toggle. Read through
+    /// [`Self::listing_epoch`].
+    ///
+    /// It exists because an index is the only thing a pointer gesture
+    /// carries. A frontend resolves a click against the frame it painted
+    /// and then feeds that index back — to a sweep, to a double click —
+    /// and between the two the listing can move underneath. This is the
+    /// one signal that says so, so that a frontend can drop a gesture that
+    /// has stopped meaning anything instead of applying it to whatever now
+    /// occupies that row.
+    ///
+    /// Deliberately NOT the same thing as dropping `sweep_baseline`: that
+    /// one is a claim about mark IDENTITY (paths), and it is kept where it
+    /// already was.
+    listing_epoch: u64,
     /// Extent (`lo..=hi`, clamped nowhere) the sweep in progress applied
     /// last, so the next [`Self::apply_sweep`] can give back exactly the
     /// rows that left the range instead of rebuilding the mark set.
@@ -272,6 +289,7 @@ impl PaneState {
             marks: HashSet::new(),
             sweep_baseline: None,
             sweep_extent: None,
+            listing_epoch: 0,
             pruned_marks: 0,
             name_encoding: None,
             name_encoding_entry: 0,
@@ -338,6 +356,7 @@ impl PaneState {
         }
         self.entries = kept;
         self.sort_keys = kept_keys;
+        self.listing_moved();
         self.cursor = anchor
             .and_then(|p| self.entries.iter().position(|e| e.path == p))
             .unwrap_or_else(|| self.cursor.min(self.entries.len().saturating_sub(1)));
@@ -380,6 +399,7 @@ impl PaneState {
             .collect();
         pares.sort_by(|a, b| crate::sort::cmp_keyed_with((&a.1, &a.0), (&b.1, &b.0), self.sort));
         (self.entries, self.sort_keys) = pares.into_iter().unzip();
+        self.listing_moved();
         self.cursor = anchor
             .and_then(|p| self.entries.iter().position(|e| e.path == p))
             .unwrap_or_else(|| self.cursor.min(self.entries.len().saturating_sub(1)));
@@ -481,6 +501,7 @@ impl PaneState {
         self.dir = dir;
         self.entries = entries;
         self.sort_keys = sort_keys;
+        self.listing_moved();
         self.cursor = 0;
         self.loading = false;
         self.quick = None;
@@ -535,6 +556,7 @@ impl PaneState {
         self.dir = dir;
         self.entries = Vec::new();
         self.sort_keys = Vec::new();
+        self.listing_moved();
         self.cursor = 0;
         self.loading = true;
         self.quick = None;
@@ -937,6 +959,43 @@ impl PaneState {
             changed += 1;
         }
         changed
+    }
+
+    /// How many times this pane's listing has MOVED (see the
+    /// `listing_epoch` field). Opaque and monotonic: compare two readings,
+    /// never interpret the number.
+    ///
+    /// The frontends hold it next to the geometry they painted, so that an
+    /// in-flight pointer gesture whose indices no longer name what the user
+    /// saw is dropped rather than applied to the new listing.
+    ///
+    /// ```
+    /// use norte_frontend::PaneState;
+    /// use norte_proto::VPath;
+    ///
+    /// let dir = VPath::parse("mem:///d").unwrap();
+    /// let mut p = PaneState::new(dir.clone(), Vec::new());
+    /// let antes = p.listing_epoch();
+    /// p.set_listing(dir, Vec::new());
+    /// assert_ne!(p.listing_epoch(), antes, "otro listado, otros índices");
+    /// ```
+    #[must_use]
+    pub fn listing_epoch(&self) -> u64 {
+        self.listing_epoch
+    }
+
+    /// Records that the indices of [`Self::entries`] may have moved.
+    ///
+    /// Called from EVERY site that touches `entries` — one line each,
+    /// rather than a guess derived from the length (a re-sort keeps the
+    /// length and moves every index) or from the directory (a refill of the
+    /// same directory moves them too).
+    ///
+    /// Saturating: a session that overflowed a `u64` of listing changes is
+    /// not reachable, and wrapping back onto the epoch a frontend is
+    /// holding is the one outcome worth ruling out.
+    fn listing_moved(&mut self) {
+        self.listing_epoch = self.listing_epoch.saturating_add(1);
     }
 
     /// Arms a pointer sweep: drops any baseline left by a previous one, so
@@ -1371,6 +1430,9 @@ impl PaneState {
             batch_keys,
             self.sort,
         );
+        // Una página de un relleno paginado también MUEVE índices: el
+        // merge inserta en su sitio ordenado, no al final.
+        self.listing_moved();
         self.cursor = anchor
             .and_then(|p| self.entries.iter().position(|e| e.path == p))
             .unwrap_or_else(|| self.cursor.min(self.entries.len().saturating_sub(1)));
@@ -1402,6 +1464,7 @@ impl PaneState {
         self.cursor = self.cursor.min(entries.len().saturating_sub(1));
         self.entries = entries;
         self.sort_keys = sort_keys;
+        self.listing_moved();
         self.sweep_baseline = None;
         self.sweep_extent = None;
         self.pruned_marks = self.prune_marks();

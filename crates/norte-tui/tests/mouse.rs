@@ -72,7 +72,7 @@ fn pintar(app: &mut App) -> Vec<String> {
     let mut terminal = Terminal::new(TestBackend::new(W, H)).expect("terminal de test");
     let frame = terminal.draw(|f| ui::draw(f, app)).expect("draw");
     let geometria = ui::pane_geometry(app, frame.area);
-    app.mouse.set_geometry(geometria);
+    mouse::after_frame(app, geometria);
     terminal
         .backend()
         .to_string()
@@ -496,6 +496,104 @@ fn con_un_overlay_abierto_el_raton_no_toca_los_panes() {
     assert_eq!(app.panes[0].marks_len(), 0);
 }
 
+/// Un release que se COMIÓ otro pump no puede dejar el gesto armado.
+///
+/// Los `select!` internos (el del cd, `on_tick`, `refresh_panes`, el del
+/// viewer) filtran `Event::Key` y tiran el resto, así que un botón soltado
+/// mientras corren no llega nunca. Sin caducidad, la siguiente motion
+/// —minutos después, en otro directorio— continuaría aquel barrido y
+/// marcaría filas que el usuario ni ve; y nada acota eso en el tiempo.
+///
+/// Caduca donde deja de ser verdad: el listado se movió, así que los
+/// índices del gesto ya no nombran lo que se pintó.
+#[test]
+fn un_release_que_se_comio_otro_pump_no_deja_el_gesto_armado() {
+    let mut app = app_pintada(10);
+    let dir = app.panes[0].dir().clone();
+    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 1));
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 2));
+    let marcas = app.panes[0].marks_len();
+    assert!(marcas > 0, "el barrido iba en marcha");
+
+    // …el release cae dentro de un pump que solo mira teclas: jamás llega.
+    // Lo que sí pasa es que ese pump refresca el listado.
+    app.panes[0].refresh_listing(entradas(&dir, 10));
+    let _ = pintar(&mut app);
+
+    let despues = app.panes[0].marks_len();
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 7));
+    assert_eq!(
+        app.panes[0].marks_len(),
+        despues,
+        "la motion no continúa un barrido que ya no existe"
+    );
+    let _ = mouse::handle(&mut app, ev(ARRIBA, 5, FILA0 + 7));
+    assert_eq!(app.panes[0].marks_len(), despues, "ni el release tardío");
+}
+
+/// Un click de ANTES de un cd y otro de después no son un doble click.
+///
+/// Los dos caen sobre la misma celda —la fila 2 del pane— y pueden caer
+/// dentro de la misma ventana de 400 ms, pero entre medias el pane cambió de
+/// directorio: la segunda fila 2 es otro fichero. Emparejarlos entra en un
+/// directorio que nadie eligió, y es de las cosas más difíciles de explicar
+/// («hice click dos veces y se metió en una carpeta que no toqué»).
+#[test]
+fn un_click_antes_y_otro_despues_de_un_cd_no_son_un_doble_click() {
+    let mut app = app_pintada(10);
+    let t0 = std::time::Instant::now();
+    assert_eq!(
+        mouse::handle_at(&mut app, ev(ABAJO, 5, FILA0 + 2), t0),
+        After::Nothing
+    );
+
+    // cd: el pane pasa a otro listado (el camino real de `nav.enter`).
+    let otro = vp("file:///casa/subdir");
+    app.panes[0].set_listing(otro.clone(), entradas(&otro, 10));
+    let _ = pintar(&mut app);
+
+    assert_eq!(
+        mouse::handle_at(
+            &mut app,
+            ev(ABAJO, 5, FILA0 + 2),
+            t0 + std::time::Duration::from_millis(80)
+        ),
+        After::Nothing,
+        "misma celda y 80 ms, pero ya no es la misma fila"
+    );
+}
+
+/// Un modal abierto a mitad de un arrastre también se lleva el gesto: para
+/// cuando el usuario responda, el arrastre es historia.
+#[test]
+fn un_modal_abierto_a_mitad_de_un_arrastre_se_lleva_el_gesto() {
+    let mut app = app_pintada(10);
+    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 1));
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 2));
+    let marcas = app.panes[0].marks_len();
+
+    app.modal = Some(norte_tui::app::Modal::ConfirmQuit);
+    let _ = pintar(&mut app);
+    app.modal = None;
+    let _ = pintar(&mut app);
+
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 7));
+    assert_eq!(app.panes[0].marks_len(), marcas, "gesto muerto");
+}
+
+/// Y lo que NO debe caducar: un frame normal, sin nada que se mueva, deja el
+/// gesto vivo. Sin esto la caducidad sería «cancelar siempre», que pasa los
+/// dos tests de arriba y rompe todos los arrastres.
+#[test]
+fn un_frame_normal_no_caduca_el_gesto() {
+    let mut app = app_pintada(10);
+    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 1));
+    let _ = pintar(&mut app);
+    let _ = pintar(&mut app);
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 4));
+    assert_eq!(app.panes[0].marks_len(), 4, "el barrido sigue vivo");
+}
+
 /// La captura se SUELTA antes de ceder la terminal a un programa externo y
 /// se restituye al volver. Sin esto el programa lanzado (un editor, un
 /// paginador) hereda una terminal en modo ratón que no pidió y recibe cada
@@ -559,7 +657,7 @@ fn con_mouse_false_no_hay_captura_ni_manejo() {
     assert!(out.is_empty(), "nada escrito al terminal");
 
     let mut app = app_pintada(5);
-    app.mouse.set_geometry(None);
+    mouse::after_frame(&mut app, None);
     let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 3));
     assert_eq!(
         app.panes[0].cursor(),

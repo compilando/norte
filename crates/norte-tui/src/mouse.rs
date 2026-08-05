@@ -118,8 +118,28 @@ pub struct Hit {
     pub index: Option<usize>,
 }
 
+/// Todo lo que tiene que seguir siendo verdad para que un gesto en vuelo
+/// signifique algo: los índices de cada pane y que nadie se haya puesto
+/// delante.
+///
+/// Un gesto solo lleva índices ([`Spot`]), y un índice nombra una fila del
+/// listado que se pintó. Cuando ese listado se mueve —otro directorio, un
+/// refill tras una mutación, una página de un relleno paginado, un
+/// re-ordenado— el índice pasa a nombrar otro fichero, y el gesto ha dejado
+/// de ser el que el usuario hizo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct Vigencia {
+    /// [`crate::app::Pane::listing_epoch`] de cada pane.
+    epochs: [u64; 2],
+    /// Había un overlay/modal delante al pintar. Un modal que se abre a
+    /// mitad de un arrastre se lleva el gesto por delante: cuando se cierre,
+    /// el usuario ya está a otra cosa.
+    overlay: bool,
+}
+
 /// Estado de ratón que vive en el modelo: la geometría del último frame, el
-/// gesto armado y el instante del último click (para el doble).
+/// gesto armado, el instante del último click (para el doble) y la vigencia
+/// de todo ello.
 #[derive(Debug, Default)]
 pub struct MouseState {
     /// `None` = el último frame no pintó panes (visor abierto) o todavía no
@@ -130,25 +150,54 @@ pub struct MouseState {
     drag: Drag,
     /// `(cuándo, dónde)` del último click izquierdo, para el doble.
     last_click: Option<(Instant, Spot)>,
+    /// La [`Vigencia`] del frame anterior, para detectar el cambio.
+    vigencia: Vigencia,
 }
 
 impl MouseState {
-    /// Guarda la geometría del frame recién pintado (#124).
-    pub fn set_geometry(&mut self, geometry: Option<[PaneGeometry; 2]>) {
-        self.geometry = geometry;
-        if geometry.is_none() {
-            // Sin panes en pantalla no hay dónde soltar: un gesto armado
-            // que sobreviviera a abrir el visor volvería a marcar al
-            // cerrarlo, contra un listado que pudo cambiar entero.
-            self.drag.cancel();
-        }
-    }
-
     /// La geometría del último frame.
     #[must_use]
     pub const fn geometry(&self) -> Option<&[PaneGeometry; 2]> {
         self.geometry.as_ref()
     }
+
+    /// Suelta el gesto armado y el click a medio emparejar.
+    ///
+    /// Las marcas que un barrido ya aplicó SE QUEDAN: soltar el gesto no es
+    /// deshacerlo (contrato de [`Drag::cancel`]).
+    fn invalidate(&mut self) {
+        self.drag.cancel();
+        self.last_click = None;
+    }
+}
+
+/// Cierra el frame: devuelve al modelo la geometría recién pintada (#124) y
+/// suelta el gesto en vuelo si ha dejado de significar algo.
+///
+/// **Este es el ÚNICO sitio donde un gesto caduca**, y va aquí porque el run
+/// loop pasa por aquí después de CADA frame, antes de atender ningún evento.
+///
+/// La alternativa era parchear los sitios que se comen eventos de ratón: el
+/// `select!` interno del cd, `on_tick`, `refresh_panes`, el pump del
+/// viewer… todos filtran `Event::Key` y tiran los demás, así que un release
+/// que caiga ahí no llega nunca. El gesto se queda ARMADO y la siguiente
+/// motion continúa un barrido que el usuario terminó hace rato; y un click
+/// de antes de un cd se empareja con uno de después en un doble click que
+/// entra en un directorio que nadie pidió. Pero esos pumps son cuatro hoy y
+/// serán cinco mañana, y el quinto no tiene por qué acordarse. Lo que sí es
+/// invariante es que un gesto vive de índices y los índices los mueve el
+/// listado: comprobarlo aquí cubre los cuatro, y al quinto gratis.
+pub fn after_frame(app: &mut App, geometry: Option<[PaneGeometry; 2]>) {
+    let vigencia = Vigencia {
+        epochs: [app.panes[0].listing_epoch(), app.panes[1].listing_epoch()],
+        overlay: overlay_open(app),
+    };
+    // Sin panes pintados (visor abierto) tampoco hay dónde soltar.
+    if vigencia != app.mouse.vigencia || geometry.is_none() {
+        app.mouse.invalidate();
+    }
+    app.mouse.vigencia = vigencia;
+    app.mouse.geometry = geometry;
 }
 
 /// Qué debe hacer el run loop tras un evento de ratón. Todo lo que se puede
