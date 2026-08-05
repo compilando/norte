@@ -8,24 +8,34 @@ TUI/GUI/CLI clients, and MCP-based agent access. Read the
 ## Commands
 
 ```sh
-cargo build --workspace                  # Build the full workspace
-cargo nextest run --workspace           # Run tests; do not use `cargo test`
-cargo nextest run -p norte-vfs          # Test one crate
-cargo clippy --workspace --all-targets -- -D warnings
+just t norte-vfs                        # Test one crate (nextest; never `cargo test`)
+just c norte-vfs                        # Clippy one crate, warnings denied
 cargo fmt --all
-cargo llvm-cov nextest --workspace      # Local coverage; CI threshold is 85% for core/VFS/proto
-cargo deny check                        # Licenses and security advisories
 just ci-fast                            # Gate minus coverage (lint test docs)
 just ci                                 # Run the complete local CI suite
+just disk                               # Where the build cache went
+just prune                              # Reclaim it without a full rebuild
 ```
 
-Pace CI to avoid slowing iteration. While iterating, prefer targeted
-`cargo nextest run -p <crate>` and `cargo clippy -p <crate> --all-targets`. Use
-`just ci-fast` for a normal pre-commit check; it skips the `cov` gate, which
-re-instruments proto/vfs/core in a separate target (~34s fixed plus a rebuild).
-Run the full `just ci` once per change — never on a loop — and only when you
-touched proto/vfs/core logic (the sole crates under the 85% coverage gate) or at
-the final close of the work.
+Pace CI to avoid slowing iteration. While iterating, prefer the targeted
+`just t <crate>` and `just c <crate>`. Use `just ci-fast` for a normal
+pre-commit check; it skips the `cov` gate, which re-instruments proto/vfs/core
+in a separate target (~34s fixed plus a rebuild). Run the full `just ci` once
+per change — never on a loop — and only when you touched proto/vfs/core logic
+(the sole crates under the 85% coverage gate) or at the final close of the work.
+
+**Go through `just`, not through bare `cargo`, for anything that compiles the
+workspace.** Cargo keys its artifacts on the feature set, so `cargo nextest run
+-p norte-tui` and `just test` build two complete, separate universes of that
+crate and everything under it — and cargo never garbage-collects, so both stay
+on disk forever. One workspace universe is ~30 GB; this is how a target
+directory reaches 300 GB. The `just` recipes all share one feature set
+(`features` in the justfile) so targeted runs reuse what the gate compiled.
+When space does run out, `just prune` drops the incremental cache and the
+coverage target without forcing a rebuild from scratch; `just prune-all` is the
+hammer. `just ci` refuses to start below 40 GB free, because running out of
+disk mid-build corrupts artifacts and surfaces as linker errors that look like
+code bugs.
 
 ## Workspace map
 
