@@ -1,4 +1,4 @@
-# Passing a location between panes — mirror, pull, swap
+# Passing a location between panes — mirror, pull, swap, and going back
 
 - Date: 2026-08-05
 - Status: approved
@@ -27,6 +27,8 @@ Three commands, named relative to the FOCUS rather than to the screen:
 | `pane.mirror` | the unfocused pane goes where this one is | `alt+i` |
 | `pane.pull` | this pane goes where the other one is | `alt+u` |
 | `pane.swap` | the two panes exchange locations | `ctrl+u` (`alt+s` in the `vim` preset) |
+| `nav.back` | this pane returns to where it was before | `alt+left` |
+| `nav.forward` | undoes a `nav.back` | `alt+right` |
 
 Focus-relative and not screen-absolute (`send-left`/`send-right`, the Krusader
 shape) because a focus-relative command reads the same wherever the focus is,
@@ -84,6 +86,45 @@ indexed by pane. Swap has to exchange it explicitly. Leave it behind and each
 pane shows the trail of the content that used to be on that side — a popup full
 of places the reader never went, offering to take them "back" somewhere they
 have never been.
+
+### Going back needs a trail, and the one that exists is not one
+
+`nav.back` cannot be built on what is there. `App::history` is a `VecDeque` of
+visited directories with `push`/`remove`/`entries` and no cursor — an MRU list
+for the `pane.history` popup, which is a different thing from a trail. Walking
+it as if it were a trail gives the classic oscillation: from A go to B, back
+lands on A, back again lands on B, and the reader is stuck between two
+directories with no way further back.
+
+So `History` grows a real trail alongside the MRU it already keeps, with
+browser semantics:
+
+- a `cd` the user asked for pushes the previous directory onto the BACK stack
+  and CLEARS the forward stack;
+- `nav.back` pops the back stack, pushes the current directory onto the forward
+  stack, and navigates;
+- `nav.forward` is the mirror image, and exists because without it `nav.back`
+  is a trapdoor: one keystroke too many and the only way home is to navigate by
+  hand. Five extra lines for the half that makes the other half safe.
+
+Both are ordinary navigation: same `cd`, same cursor memory, same TOFU. What
+they must NOT do is feed themselves — a `cd` issued BY `nav.back` must not push
+onto the back stack, or back becomes a loop between two directories, which is
+the same trap in a new shape. The trail therefore distinguishes navigation the
+user initiated from navigation the trail itself replayed.
+
+The MRU stays exactly as it is: `pane.history` keeps listing where the pane has
+been, most recent first, with no duplicates. The two answer different
+questions — "where have I been?" versus "where was I just now?" — and neither
+can be derived from the other.
+
+A `nav.back` with an empty trail does nothing and says so in the status bar,
+for the reason the help overlay's `Backspace` closes rather than doing nothing:
+a key that silently does nothing is indistinguishable from a broken one.
+
+Both stacks live INSIDE `History`, not beside it. That keeps `App` at one
+array per pane for all of this, which is exactly the point the next section
+makes.
 
 ### The trap: state indexed by pane outside `app.panes`
 
@@ -143,18 +184,28 @@ in marks, filter, cursor and sort.
 
 Three new commands cost more than their code, and all of it is enforced:
 
-- `help-cmd-pane-mirror`, `-pull`, `-swap` in both locales, or the i18n parity
-  suite fails;
+- `help-cmd-pane-mirror`, `-pull`, `-swap`, `help-cmd-nav-back` and
+  `-forward` in both locales, or the i18n parity suite fails;
 - bindings in the three presets;
 - a paragraph in the help corpus, or the documentation gate fails the build —
-  its allowlist has a ceiling that can only shrink. The *Two panes, one
-  destination* topic is where they belong, since that is the page about exactly
-  this relationship.
+  its allowlist has a ceiling that can only shrink. The three pane commands
+  belong in *Two panes, one destination*, which is the page about exactly this
+  relationship; `nav.back`/`nav.forward` belong with `nav.enter`/`nav.parent`
+  in *Moving around*, whichever topic currently documents those.
 
 ## Testing
 
 - Mirror, pull and swap on the happy path, including that mirror leaves the
   focus where it was and swap leaves it on the same side.
+- Back and forward walk a real trail: A→B→C, back twice reaches A, forward
+  twice reaches C. The oscillation the MRU would have produced (A→B→A→B) is
+  what this test exists to refuse.
+- A `cd` the user initiates after going back CLEARS the forward stack.
+- A `cd` issued by `nav.back` does not push onto the back stack — the property
+  that keeps back from looping between two directories.
+- `nav.back` on an empty trail is a no-op that says so.
+- The MRU behind `pane.history` is unchanged by any of it: same entries, same
+  order, still no duplicates.
 - A `cd` that fails leaves the other pane untouched, and says so.
 - Mirror and pull are refused from a virtual search pane; swap is not.
 - **Swap with a `Fill` in flight** — the test that catches the pane-index bug:
@@ -172,6 +223,10 @@ Three new commands cost more than their code, and all of it is enforced:
 - **Opening the directory under the cursor in the other pane** (Krusader folds
   this into the same key). Deliberately not built: it makes one key mean two
   things depending on what the cursor happens to be on.
+- Persisting the trail across sessions. The MRU is not persisted either, and a
+  back stack that survives a restart would offer to take the reader back to a
+  place they left in another session, possibly on a host that is no longer
+  reachable.
 - Copying marks, filter or cursor with the location.
 - Tabs. norte has two panes; if tabs ever arrive, these commands work per
   visible pane and need no change.
