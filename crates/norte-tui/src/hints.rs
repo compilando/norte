@@ -184,11 +184,18 @@ pub struct DialogHints {
     /// are inert until it closes (H3c).
     ///
     /// The generated footers already say so — [`Self::with_modals_inert`]
-    /// replaces them. This flag is for the two modals whose key hint is not
-    /// generated but baked into Fluent PROSE (the AI rename plan and the
-    /// semantic hits, the only two an over-modal help can cover), so their
-    /// text can say the same true thing instead of advertising `y`/`n` at a
-    /// reader for whom both do nothing.
+    /// replaces them. This flag is for the modals whose key hint is not
+    /// generated but baked into Fluent PROSE, so their text can say the same
+    /// true thing instead of advertising `y`/`n` at a reader for whom both do
+    /// nothing.
+    ///
+    /// Today that is the AI rename plan and the semantic hits — the two whose
+    /// hint is PROSE, which is not the same set as "the modals a help can
+    /// cover". That set is every modal
+    /// `norte_tui::help_context::help_over_modal_allowed` admits, the agent
+    /// approval and the host-key TOFU included; those simply have a generated
+    /// footer, which the function above replaces. A new prose-hinted modal needs
+    /// an arm here too.
     pub modals_inert: bool,
 }
 

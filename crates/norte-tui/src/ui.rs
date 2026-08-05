@@ -1648,9 +1648,22 @@ fn modal_width(titulo: &str, cuerpo: &str, frame_width: u16) -> u16 {
 fn modal_height(modal: &crate::app::Modal) -> u16 {
     use crate::app::Modal;
     match modal {
-        Modal::ApproveAgentOp { req } => u16::try_from(req.paths.len())
-            .unwrap_or(u16::MAX)
-            .saturating_add(4),
+        // Review H3c MINOR-5: cabecera + la VENTANA de rutas (más el resumen,
+        // si el lote no cabe entero) + el pie, más los bordes — el MISMO
+        // cómputo acotado que ConfirmDelete, y por la misma razón: cuántas
+        // rutas trae la petición lo elige el AGENTE, y `centered` recorta
+        // contra el frame, así que un alto sin tope dejaba las últimas líneas
+        // sin pintar. La última es el aviso de que las teclas están inertes.
+        Modal::ApproveAgentOp { req } => {
+            let lineas = 1
+                + req.paths.len().min(norte_frontend::MODAL_ITEM_LIMIT)
+                + usize::from(req.paths.len() > norte_frontend::MODAL_ITEM_LIMIT)
+                + 1;
+            // `+ 2` (los bordes), no el `+ 3` de ConfirmDelete: este modal
+            // siempre ajustó exacto y acotar la lista no es motivo para
+            // moverle la caja una fila.
+            u16::try_from(lineas).unwrap_or(u16::MAX).saturating_add(2)
+        }
         // #103 T10: una línea POR ítem listado (más la de resumen, si el
         // lote no cabe entero), más las dos fijas (destino/modo + teclas) y
         // los bordes — el mismo `body_lines + 3` que el resto. `centered`
@@ -1925,6 +1938,15 @@ fn session_bytes(req: &norte_proto::methods::PolicyApprovalRequired) -> &[u8] {
 /// joiner in-band que un nombre pueda imitar) y elipsis media (un `from`
 /// kilométrico no expulsa el destino de la caja); el enmascarado se MARCA con
 /// el badge (spec §6).
+///
+/// La lista se ENVENTANA en [`norte_frontend::MODAL_ITEM_LIMIT`] rutas más una
+/// línea de resumen, como `ConfirmDelete`/`ConfirmTransfer` (review H3c
+/// MINOR-5). Cuántas rutas trae la petición lo elige el AGENTE, y sin tope el
+/// alto crecía con ellas: `centered` recorta contra el frame, así que las
+/// líneas de sobra no se pintaban — incluida la ÚLTIMA, que bajo H3c es la
+/// única explicación de por qué las teclas del modal no responden. El resumen
+/// lleva badge si alguna ruta OCULTA es hostil (misma doctrina que el plan IA y
+/// los hits semánticos: lo escondido jamás se cuela "limpio").
 fn approval_modal_text(
     req: &norte_proto::methods::PolicyApprovalRequired,
     hint: &str,
@@ -1935,7 +1957,8 @@ fn approval_modal_text(
         "modal-approval-body",
         &[("session", &session), ("op", &op)],
     )];
-    for (i, p) in req.paths.iter().enumerate() {
+    let limite = norte_frontend::MODAL_ITEM_LIMIT;
+    for (i, p) in req.paths.iter().take(limite).enumerate() {
         let (texto, hostil) = display_name(p.as_bytes());
         lineas.push(ta(
             "modal-approval-path",
@@ -1944,6 +1967,21 @@ fn approval_modal_text(
                 ("n", &(i + 1).to_string()),
                 ("path", &middle_ellipsis(&texto, 46)),
             ],
+        ));
+    }
+    if req.paths.len() > limite {
+        let oculta_hostil = req.paths[limite..]
+            .iter()
+            .any(|p| display_name(p.as_bytes()).1);
+        // Clave COMPARTIDA con `item_lines_with` (la de ConfirmDelete): el
+        // resumen dice lo mismo en los dos sitios o el lector aprende dos
+        // frases para un solo hecho.
+        lineas.push(badge_prefixed(
+            oculta_hostil,
+            ta(
+                "gui-modal-more",
+                &[("n", &(req.paths.len() - limite).to_string())],
+            ),
         ));
     }
     lineas.push(hint.to_owned());
@@ -3397,13 +3435,15 @@ mod ai_rename_plan_modal_tests {
     /// H3c: con una ayuda abierta ENCIMA, las teclas del modal no responden,
     /// así que su pie no puede seguir ofreciéndolas.
     ///
-    /// Este modal y el de hits semánticos son los dos únicos que una ayuda
-    /// puede tapar (`modal_help_toggle`), y son justo los dos cuya pista es
-    /// PROSA de Fluent en vez de un hint generado — los generados ya los
-    /// sustituye `DialogHints::with_modals_inert`. Sin esta rama, un lector
-    /// con la ayuda delante veía «y/Enter: aplicar» y ninguna de las dos
-    /// hacía nada: un pie que miente, que es exactamente lo que el diseño de
-    /// `hints.rs` existe para no tener.
+    /// Este modal y el de hits semánticos son los dos únicos cuya pista es
+    /// PROSA de Fluent en vez de un hint generado, y por eso necesitan esta
+    /// rama: los generados ya los sustituye `DialogHints::with_modals_inert`.
+    /// NO son los dos únicos que una ayuda puede tapar — eso lo decide
+    /// `help_context::help_over_modal_allowed`, e incluye la aprobación de
+    /// agente y el TOFU de host key. Sin esta rama, un lector con la ayuda
+    /// delante veía «y/Enter: aplicar» y ninguna de las dos hacía nada: un pie
+    /// que miente, que es exactamente lo que el diseño de `hints.rs` existe
+    /// para no tener.
     #[test]
     fn el_pie_del_plan_no_ofrece_teclas_inertes_bajo_la_ayuda() {
         use norte_i18n::t;
@@ -3774,6 +3814,118 @@ mod semantic_hits_modal_tests {
             semantic_hits_modal_text(&hits, 1, 10, &crate::hints::DialogHints::default());
         let ind2 = body2.lines().nth(10).expect("indicador");
         assert!(!ind2.starts_with(HOSTILE_BADGE), "{body2:?}");
+    }
+}
+
+/// El modal de aprobación de agente: la lista de rutas y su ALTO (review H3c
+/// MINOR-5).
+#[cfg(test)]
+mod approval_modal_tests {
+    use super::{HOSTILE_BADGE, approval_modal_text, modal_height};
+
+    fn req(paths: Vec<String>) -> norte_proto::methods::PolicyApprovalRequired {
+        norte_proto::methods::PolicyApprovalRequired {
+            approval_id: 1,
+            session: Some("s1".into()),
+            op: "copy".into(),
+            paths,
+            ttl_ms: 60_000,
+        }
+    }
+
+    fn rutas(n: usize) -> Vec<String> {
+        (1..=n).map(|i| format!("mem:///proj/f{i}.txt")).collect()
+    }
+
+    /// Review MINOR-5: el número de rutas lo elige el AGENTE, y el alto no
+    /// podía crecer con él sin tope.
+    ///
+    /// `centered` recorta contra el frame, así que las líneas de sobra
+    /// simplemente no se pintaban — incluida la ÚLTIMA, que bajo H3c es la
+    /// única explicación de por qué `y`/`n` no hacen nada. Un `paths` de 400
+    /// entradas borraba el aviso de la pantalla. Ahora se enventana como
+    /// `ConfirmDelete`: `MODAL_ITEM_LIMIT` rutas más una línea de resumen.
+    #[test]
+    fn la_lista_de_rutas_se_enventana_y_el_pie_siempre_cabe() {
+        let limite = norte_frontend::MODAL_ITEM_LIMIT;
+        let total = limite + 7;
+        let (_, body) = approval_modal_text(&req(rutas(total)), "PIE-DEL-MODAL");
+        let lines: Vec<&str> = body.lines().collect();
+
+        // cabecera + LIMITE rutas + resumen + pie.
+        assert_eq!(lines.len(), limite + 3, "{body:?}");
+        assert!(lines[1].contains("f1.txt"), "{body:?}");
+        assert!(
+            lines[limite].contains(&format!("f{limite}.txt")),
+            "la última ruta de la ventana: {body:?}"
+        );
+        assert!(
+            !body.contains(&format!("f{}.txt", limite + 1)),
+            "la cola NO se pinta: {body:?}"
+        );
+        assert!(
+            lines[limite + 1].contains(&(total - limite).to_string()),
+            "el resumen dice cuántas quedan fuera: {body:?}"
+        );
+        assert_eq!(
+            lines[limite + 2],
+            "PIE-DEL-MODAL",
+            "y el pie es la ÚLTIMA línea, siempre presente: {body:?}"
+        );
+
+        // El alto lo dice el mismo cómputo acotado: cuerpo + marco, jamás
+        // `paths.len()` crudo.
+        let modal = crate::app::Modal::ApproveAgentOp {
+            req: req(rutas(total)),
+        };
+        let alto = modal_height(&modal);
+        assert_eq!(alto, u16::try_from(limite + 3).expect("cabe") + 2, "{alto}");
+        assert_eq!(
+            modal_height(&crate::app::Modal::ApproveAgentOp { req: req(rutas(1)) }),
+            5,
+            "un lote que cabe conserva su alto de siempre: acotar la lista no \
+             le mueve la caja"
+        );
+        assert_eq!(
+            alto,
+            modal_height(&crate::app::Modal::ApproveAgentOp {
+                req: req(rutas(400)),
+            }),
+            "el agente no elige el alto: 17 rutas y 400 miden lo mismo"
+        );
+    }
+
+    /// Un lote que CABE se pinta entero y sin línea de resumen: enventanar no
+    /// puede inventarse un «y N más» que no existe.
+    #[test]
+    fn un_lote_que_cabe_no_lleva_resumen() {
+        let (_, body) = approval_modal_text(&req(rutas(2)), "PIE");
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines.len(), 4, "{body:?}"); // cabecera + 2 rutas + pie
+        assert!(body.contains("f2.txt"), "{body:?}");
+        assert_eq!(lines[3], "PIE", "{body:?}");
+    }
+
+    /// Y lo ESCONDIDO no se cuela limpio (misma doctrina que el plan IA y los
+    /// hits semánticos): si alguna ruta fuera de la ventana es hostil, la línea
+    /// de resumen va MARCADA — el humano decide sabiendo que hay algo raro que
+    /// no está viendo.
+    #[test]
+    fn el_resumen_marca_una_ruta_hostil_escondida() {
+        let limite = norte_frontend::MODAL_ITEM_LIMIT;
+        let mut paths = rutas(limite + 2);
+        paths[limite + 1] = "mem:///proj/x\u{202e}y.txt".to_owned();
+        let (_, body) = approval_modal_text(&req(paths), "PIE");
+        let resumen = body.lines().nth(limite + 1).expect("resumen");
+        assert!(
+            resumen.starts_with(HOSTILE_BADGE),
+            "el resumen delata la hostil oculta: {body:?}"
+        );
+
+        // Con TODAS las ocultas limpias, no marca (o el badge no diría nada).
+        let (_, limpio) = approval_modal_text(&req(rutas(limite + 2)), "PIE");
+        let resumen_limpio = limpio.lines().nth(limite + 1).expect("resumen");
+        assert!(!resumen_limpio.starts_with(HOSTILE_BADGE), "{limpio:?}");
     }
 }
 

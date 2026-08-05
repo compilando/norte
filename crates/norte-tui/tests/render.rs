@@ -415,6 +415,61 @@ fn modal_de_aprobacion_enmascara_marca_y_no_oculta_el_destino() {
     );
 }
 
+/// Review H3c MINOR-5: cuántas rutas trae la petición lo elige el AGENTE, y el
+/// pie del modal tiene que PINTARSE de todas formas.
+///
+/// El alto crecía con `paths.len()` sin tope y `centered` recorta contra el
+/// frame, así que las líneas de sobra no llegaban al buffer — incluida la
+/// ÚLTIMA, que bajo H3c es la única explicación de por qué las teclas del modal
+/// no responden. Se comprueba sobre el FRAME pintado (no sobre el texto): el
+/// defecto era del recorte, no del cuerpo.
+#[test]
+fn el_pie_del_modal_de_aprobacion_se_pinta_con_un_lote_gigante() {
+    let dir = vp("file:///x");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir, Vec::new()),
+    );
+    // Con una ayuda TAPÁNDOLO: el pie inerte es el aviso que no puede perderse.
+    app.help = Some(norte_tui::app::HelpView::new(
+        norte_i18n::Lang::En,
+        Vec::new(),
+    ));
+    app.help.as_mut().expect("abierta").over_modal = true;
+    app.dialog_hints = app.dialog_hints.with_modals_inert();
+    app.modal = Some(norte_tui::app::Modal::ApproveAgentOp {
+        req: norte_proto::methods::PolicyApprovalRequired {
+            approval_id: 1,
+            session: Some("s1".into()),
+            op: "copy".into(),
+            paths: (1..=400).map(|i| format!("mem:///proj/f{i}.txt")).collect(),
+            ttl_ms: 60_000,
+        },
+    });
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let contenido = terminal.backend().to_string();
+
+    assert!(
+        contenido.contains(&norte_i18n::t("modal-hint-help-open")),
+        "el aviso de teclas inertes se pinta con 400 rutas: {contenido}"
+    );
+    assert!(
+        contenido.contains(&norte_i18n::t("modal-approval-title")),
+        "y la pregunta sigue a la vista: {contenido}"
+    );
+    // La lista está ACOTADA y resumida: la cola no se pinta ni empuja nada.
+    assert!(
+        !contenido.contains("f400"),
+        "la cola no se pinta: {contenido}"
+    );
+    assert!(
+        contenido.contains("390"),
+        "el resumen dice cuántas quedan fuera: {contenido}"
+    );
+}
+
 /// M4-IA (doctrina encoding-auditor): el plan de rename IA pinta contenido
 /// del MODELO — controles/bidi → `�` con badge; un `from` kilométrico no
 /// expulsa el `to` de la caja (elipsis media); `→` fuera de banda al inicio

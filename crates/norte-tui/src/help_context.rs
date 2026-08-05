@@ -73,6 +73,56 @@ fn modal_context(modal: &Modal) -> &'static str {
     }
 }
 
+/// May `F1` open a help page OVER this modal? (review H3c MINOR-3)
+///
+/// Exhaustive and wildcard-free for the same reason as `modal_context`: this
+/// is a decision about a security-relevant property, and a new modal variant
+/// must not be able to inherit an answer nobody chose.
+///
+/// `false` for the SIX variants the run loop intercepts before the `dialog`
+/// keymap ever resolves — the five free-text editors (`Modal::Mkdir`,
+/// `Modal::MarkPattern`, `Modal::AiRenameInstruction`, `Modal::SemanticQuery`,
+/// `Modal::TransferName`) plus the project `init.lua` TOFU
+/// (`Modal::TrustLuaInit`). They were already excluded, but only as the residue
+/// of that interception 3000 lines away in `main`: moving one onto the `dialog`
+/// keymap — a plausible cleanup — would have opened a help page over a text
+/// field the reader is typing into, and over a trust prompt that has NO TTL to
+/// bound how long it stays unanswerable.
+///
+/// The free-text ones cannot resolve `app.help` at all without reinterpreting
+/// what is being typed, which is exactly what they avoid; their pages are
+/// reachable from the index. `TrustLuaInit` has no `dialog_action` allowlist
+/// either (H1 decision 8).
+///
+/// ```
+/// use norte_tui::help_context::help_over_modal_allowed;
+/// let escribiendo = norte_tui::app::Modal::Mkdir {
+///     name: "nuevo".into(),
+///     error: None,
+/// };
+/// assert!(!help_over_modal_allowed(&escribiendo));
+/// assert!(help_over_modal_allowed(&norte_tui::app::Modal::ConfirmQuit));
+/// ```
+#[must_use]
+pub fn help_over_modal_allowed(modal: &Modal) -> bool {
+    match modal {
+        Modal::TrustLuaInit { .. }
+        | Modal::MarkPattern { .. }
+        | Modal::Mkdir { .. }
+        | Modal::AiRenameInstruction { .. }
+        | Modal::SemanticQuery { .. }
+        | Modal::TransferName { .. } => false,
+        Modal::ConfirmDelete { .. }
+        | Modal::ConfirmTransfer { .. }
+        | Modal::ConfirmQuit
+        | Modal::Collision { .. }
+        | Modal::ApproveAgentOp { .. }
+        | Modal::TrustHostKey { .. }
+        | Modal::AiRenamePlan { .. }
+        | Modal::SemanticHits { .. } => true,
+    }
+}
+
 /// Where the reader is: the topmost thing on screen, because that is what
 /// they are looking at and what they need explained.
 ///

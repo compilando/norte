@@ -255,6 +255,11 @@ msg-hidden-hidden = hidden entries hidden
 # swallowed Enter reads as a command that ran.
 msg-help-not-runnable = that row documents an overlay key, not a command a pane can run
 msg-help-modal-waiting = answer the dialog first: a command run from here would push it off the screen
+# H3c (review MAJOR-2): F1 over a dialog no page documents yet. The index is
+# NOT opened over it — a page covering a live question freezes its keys and
+# explains something else — so the reader is told instead, and the dialog stays
+# answerable.
+msg-help-no-dialog-page = no help page explains this dialog yet: answer it, and press F1 for the index
 msg-marked-by-pattern = { $n } marks changed
 msg-mouse-capture-failed = the terminal did not accept mouse capture: norte stays keyboard-only
 # Drag in flight, BOTH frontends: what a release would do right now. Never

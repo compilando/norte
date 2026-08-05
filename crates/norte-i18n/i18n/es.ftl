@@ -257,6 +257,11 @@ msg-hidden-hidden = entradas ocultas escondidas
 # se dice, porque un Enter comido se lee como un comando que sí corrió.
 msg-help-not-runnable = esa fila documenta una tecla de overlay, no un comando que un pane pueda correr
 msg-help-modal-waiting = contesta primero al diálogo: un comando lanzado desde aquí lo echaría de la pantalla
+# H3c (review MAJOR-2): F1 sobre un diálogo que ninguna página documenta
+# todavía. NO se abre el índice encima — una página que tapa una pregunta viva
+# le congela las teclas y habla de otra cosa —, así que se dice y el diálogo
+# sigue contestable.
+msg-help-no-dialog-page = ninguna página explica este diálogo todavía: contéstalo y pulsa F1 para el índice
 msg-marked-by-pattern = { $n } marcas cambiadas
 msg-mouse-capture-failed = el terminal no aceptó la captura de ratón: norte se queda solo con teclado
 # Arrastre EN VUELO, en LOS DOS frontends: qué haría soltar ahora mismo.

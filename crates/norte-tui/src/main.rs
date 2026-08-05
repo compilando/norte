@@ -432,11 +432,57 @@ fn modal_wins(app: &App) -> bool {
 /// still painted on top ([`norte_tui::ui::draw`] paints it last), so the
 /// question is never HIDDEN — only unanswerable until the help closes, and its
 /// TTL running out denies the agent.
+///
+/// The flag decides ONLY while a modal is live, and it cannot be stale by the
+/// time it is read: [`settle_help_over_modal`] clears it at the top of every
+/// turn of the run loop, so it always describes the modal that is on screen NOW
+/// rather than one that has since been answered (review MINOR-1).
 #[must_use]
 fn help_owns_keys(app: &App) -> bool {
     match app.help.as_ref() {
-        Some(help) => help.over_modal || !modal_wins(app),
+        // Ownership expressed as the two cases rather than as one boolean: with
+        // a modal live the flag decides; with none there is nobody to compete
+        // with and the help owns the key anyway.
+        Some(help) => {
+            if app.modal.is_some() {
+                help.over_modal
+            } else {
+                debug_assert!(
+                    !help.over_modal,
+                    "`over_modal` con `app.modal` vacío: \
+                     `settle_help_over_modal` no corrió esta vuelta"
+                );
+                true
+            }
+        }
         None => false,
+    }
+}
+
+/// Makes `HelpView::over_modal` a fact about the PRESENT (review MINOR-1).
+///
+/// The flag is set once, when the overlay opens, and [`help_owns_keys`] and
+/// [`close_stale_overlays`] both trust it later. That trust is only sound while
+/// it still describes the modal on screen: if the modal an `over_modal` help was
+/// opened over went away and a DIFFERENT one arrived, the help would keep the
+/// keys and `close_stale_overlays` would never retire it — the new prompt
+/// unanswerable until the reader closes a page about a dialog that no longer
+/// exists.
+///
+/// Unreachable today (every async writer refuses to touch a live modal, and the
+/// paths that close one are the paths that answer it), but the argument for that
+/// spanned four functions. Clearing the flag whenever no modal is live makes it
+/// one line: the memory cannot outlive what it is a memory OF, so `over_modal`
+/// being `true` means a modal was there on the previous turn AND is there now.
+///
+/// Called at the top of the run loop, BEFORE the retained modals (the AI plan,
+/// the semantic hits) are planted: one of those arriving must find the flag
+/// already cleared, so it is treated as a modal arriving over an open help.
+fn settle_help_over_modal(app: &mut App) {
+    if app.modal.is_none()
+        && let Some(help) = app.help.as_mut()
+    {
+        help.over_modal = false;
     }
 }
 
@@ -490,13 +536,30 @@ fn close_stale_overlays(app: &mut App) {
 /// `help_lines` is the body of the synthetic keyboard entry, snapshotted from
 /// the VIGENTE keymap (rebuilt by the hot reload, which also closes an open
 /// overlay so no snapshot survives a rebind).
+///
+/// OVER A MODAL, a context with no page opens NOTHING (review MAJOR-2). The
+/// index is the least surprising landing from a pane or the viewer — nothing
+/// there is waiting on a decision — but over a dialog it covers a live question
+/// with "Welcome to norte — norte is an orthodox file manager. Two panes…",
+/// freezes the dialog's verbs, replaces its footer, and lets the reader walk
+/// from the index into another dialog's `y`/`n` prose while an agent approval
+/// waits behind it. So the reader is TOLD and the prompt stays answerable —
+/// the same decision [`palette_help`] already makes for an undocumented row,
+/// applied where it matters more. The pages still missing are on the
+/// documentation gate's shrinking allowlist, so this is temporary by
+/// construction.
 fn open_contextual_help(app: &mut App, lang: norte_help::Lang, help_lines: &[String]) {
     let context = norte_tui::help_context::help_context(app);
+    let over_modal = app.modal.is_some();
+    if over_modal && norte_help::topic_for_context(lang, context).is_none() {
+        app.message = Some(t("msg-help-no-dialog-page"));
+        return;
+    }
     app.help = Some(HelpView::new_at(
         lang,
         help_lines.to_vec(),
         context,
-        app.modal.is_some(),
+        over_modal,
     ));
 }
 
@@ -1429,6 +1492,10 @@ async fn run(
         if dir_watch.take_degraded_notice() {
             app.message = Some(t("status-watch-degraded"));
         }
+        // Review MINOR-1: `over_modal` describe el modal que hay AHORA, no uno
+        // que ya se contestó. Antes de plantar los modales retenidos de abajo,
+        // que tienen que encontrar la bandera ya limpia.
+        settle_help_over_modal(app);
         // Plan IA retenido (M4-IA): abre en cuanto el modal activo se cierra.
         // Las aprobaciones no compiten aquí: con la cola no vacía y sin modal,
         // `open_next_pending` ya habría abierto una al cerrarse el anterior.
@@ -2895,6 +2962,12 @@ async fn on_columns_key(
 /// has typed to the command palette — the two are the same model at different
 /// speeds (the `help` topic says as much), so the filter should not have to be
 /// retyped to cross between them.
+///
+/// That second bridge is REFUSED while the page covers a modal
+/// (`HelpView::over_modal`), the same guard the `Action::Run` arm makes: the
+/// palette would open behind a live dialog, painted but unable to receive a
+/// key, and every keystroke meant for its filter would be answering the dialog
+/// instead.
 fn on_help_key(
     app: &mut App,
     resolver: &mut Resolver,
@@ -2909,7 +2982,20 @@ fn on_help_key(
         return None;
     }
     if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('p') {
-        let filter = app.help.as_ref()?.state.filter_raw().to_owned();
+        let help = app.help.as_ref()?;
+        // Review H3c MAJOR-1: el MISMO guard que el brazo `Action::Run` de
+        // abajo, y por una razón peor. Cruzar a la palette dejaría el modal en
+        // pie, y la rama de la palette del run loop está gateada por
+        // `!modal_wins`: la palette quedaría PINTADA con aspecto de viva y sin
+        // recibir una sola tecla — todas caen en la rama del modal y se
+        // resuelven contra su allowlist. Teclear `copy` para filtrar sobre una
+        // aprobación de agente descartaría `c`, `o`, `p` y la `y` APROBARÍA la
+        // mutación. La ayuda se queda abierta y se dice por qué.
+        if help.over_modal {
+            app.message = Some(t("msg-help-modal-waiting"));
+            return None;
+        }
+        let filter = help.state.filter_raw().to_owned();
         app.help = None;
         // Sin filas de plugin: `Command::AppPalette` las pide al backend y
         // esta función es SÍNCRONA a propósito (todo lo demás aquí lo es).
@@ -3143,6 +3229,24 @@ mod help_key_tests {
         }
     }
 
+    /// El TOFU de una host key: la superficie de SEGURIDAD que una ayuda sí
+    /// puede tapar, porque `dialog.trust-host` tiene página (`remote`) y la
+    /// aprobación de agente no — sobre ésa `F1` ya no abre nada (MAJOR-2), así
+    /// que los tests de «los verbos de debajo son inertes» viven aquí. La
+    /// consecuencia es de la misma clase: `dialog.approve` (la `y` del preset)
+    /// CONFÍA en una clave sin verificar.
+    fn trust_host_modal_de_test() -> Modal {
+        Modal::TrustHostKey {
+            host: "h".into(),
+            port: Some(22),
+            algo: "ssh-ed25519".into(),
+            fingerprint: "SHA256:AAAA".into(),
+            dir: VPath::parse("sftp://h/").expect("wire de test"),
+            pane: 0,
+            trail: norte_tui::app::Trail::Record,
+        }
+    }
+
     /// `F1` desde un pane abre la página del PANE, no el índice, y llega con
     /// el historial vacío: `Esc` cierra el overlay, no camina hacia atrás a un
     /// sitio que el lector no pidió.
@@ -3163,6 +3267,42 @@ mod help_key_tests {
         assert!(
             app.help.is_none(),
             "«atrás» en la raíz cierra: la página contextual NO es un paso de navegación"
+        );
+    }
+
+    /// Review H3c MAJOR-2: sobre un modal SIN página escrita, `F1` no abre
+    /// NADA — lo dice y deja la pregunta contestable.
+    ///
+    /// El fallback al índice vale desde un pane o desde el visor (nadie espera
+    /// una decisión), pero sobre un diálogo tapaba una pregunta viva con
+    /// «Bienvenido a norte — norte es un gestor de ficheros ortodoxo. Dos
+    /// paneles…», congelaba sus verbos, le sustituía el pie y dejaba al lector
+    /// caminar del índice a `copying` para leer la prosa de `y`/`n` de OTRO
+    /// diálogo mientras la aprobación esperaba detrás. Es la misma decisión que
+    /// [`palette_help`] ya había tomado para una fila sin documentar, aplicada
+    /// donde importa más.
+    #[test]
+    fn f1_sobre_un_modal_sin_pagina_no_tapa_la_pregunta() {
+        let mut app = app_with_help_closed();
+        app.modal = Some(approval_modal_de_test());
+        assert!(
+            norte_help::topic_for_context(Lang::En, "dialog.approval").is_none(),
+            "precondición: nadie ha escrito todavía la página de la aprobación"
+        );
+        abrir_ayuda(&mut app);
+        assert!(
+            app.help.is_none(),
+            "el índice NO tapa una aprobación de agente por consolar"
+        );
+        assert!(app.modal.is_some(), "y la pregunta sigue ahí…");
+        assert!(
+            !help_owns_keys(&app),
+            "…contestable: la tecla siguiente es del modal, no de una página"
+        );
+        assert_eq!(
+            app.message.as_deref(),
+            Some(norte_i18n::t("msg-help-no-dialog-page").as_str()),
+            "y el F1 no desaparece en silencio"
         );
     }
 
@@ -3193,7 +3333,7 @@ mod help_key_tests {
     #[test]
     fn esc_cierra_la_ayuda_y_deja_el_modal_intacto() {
         let mut app = app_with_help_closed();
-        app.modal = Some(approval_modal_de_test());
+        app.modal = Some(trust_host_modal_de_test());
         abrir_ayuda(&mut app);
         assert!(help_owns_keys(&app), "la rama de la ayuda es la que corre");
         let mut r = dialog_resolver();
@@ -3201,7 +3341,7 @@ mod help_key_tests {
         assert!(app.help.is_none(), "la ayuda se cerró");
         assert!(
             app.modal.is_some(),
-            "una aprobación de agente NO se contesta cerrando una ayuda"
+            "una host key desconocida NO se contesta cerrando una ayuda"
         );
         assert!(
             !help_owns_keys(&app),
@@ -3210,18 +3350,18 @@ mod help_key_tests {
     }
 
     /// Mientras la ayuda tapa el modal, los verbos del modal son inertes: se
-    /// aprueba con la ayuda cerrada, mirándolo.
+    /// decide con la ayuda cerrada, mirándolo.
     #[test]
     fn los_verbos_del_modal_no_se_alcanzan_por_debajo_de_la_ayuda() {
         let mut app = app_with_help_closed();
-        app.modal = Some(approval_modal_de_test());
+        app.modal = Some(trust_host_modal_de_test());
         abrir_ayuda(&mut app);
         // La rama que corre es la de la ayuda (`help_owns_keys`), así que la
         // del modal —la única que llama a `dialog_action`— no ve esta tecla.
         assert!(help_owns_keys(&app));
         let mut r = dialog_resolver();
         press(&mut app, &mut r, KeyCode::Char('y')); // dialog.approve
-        assert!(app.modal.is_some(), "no se aprobó nada a ciegas");
+        assert!(app.modal.is_some(), "no se confió en nada a ciegas");
         assert!(app.help.is_some(), "y `y` tampoco cierra la ayuda");
     }
 
@@ -3243,14 +3383,49 @@ mod help_key_tests {
         assert!(app.help.is_none(), "la ayuda cede la pantalla");
     }
 
+    /// Review MINOR-1: `over_modal` es un hecho del PRESENTE, no un recuerdo.
+    ///
+    /// Si el modal sobre el que se abrió la ayuda desaparece y llega OTRO, la
+    /// bandera vieja haría que la ayuda se quedara las teclas y
+    /// `close_stale_overlays` no la retirara nunca: el modal nuevo sería
+    /// incontestable hasta cerrar una página sobre un diálogo que ya no existe.
+    /// `settle_help_over_modal` la limpia en cuanto no hay modal, así que el
+    /// segundo modal se trata como lo que es — uno que LLEGA sobre una ayuda
+    /// abierta.
+    #[test]
+    fn over_modal_no_sobrevive_al_modal_que_lo_justificaba() {
+        let mut app = app_with_help_closed();
+        app.modal = Some(collision_modal_de_test());
+        abrir_ayuda(&mut app);
+        assert!(app.help.as_ref().expect("abierta").over_modal);
+
+        // El modal se contesta; la ayuda sigue abierta (Esc cerraría solo la
+        // ayuda, pero el modal puede irse por su propio camino: un retry).
+        app.modal = None;
+        settle_help_over_modal(&mut app);
+        assert!(
+            !app.help.as_ref().expect("sigue abierta").over_modal,
+            "la bandera no sobrevive a lo que era un recuerdo DE"
+        );
+
+        // …y ahora llega otro modal, que NO hereda las teclas de la ayuda.
+        app.modal = Some(approval_modal_de_test());
+        assert!(
+            !help_owns_keys(&app),
+            "el modal nuevo se queda la tecla: nadie pidió una página sobre ÉL"
+        );
+        close_stale_overlays(&mut app);
+        assert!(app.help.is_none(), "y la ayuda caduca como el resto");
+    }
+
     /// Y la ayuda que tapa un modal tampoco DESPACHA: `dispatch` planta sus
     /// propios modales, así que correr `pane.copy` desde la página sustituiría
-    /// la aprobación que espera respuesta — desaparecería de la pantalla sin
-    /// que nadie la haya contestado. Se dice y la página se queda.
+    /// la pregunta que espera respuesta — desaparecería de la pantalla sin que
+    /// nadie la haya contestado. Se dice y la página se queda.
     #[test]
     fn una_fila_ejecutable_no_se_despacha_por_encima_de_un_modal() {
         let mut app = app_with_help_closed();
-        app.modal = Some(approval_modal_de_test());
+        app.modal = Some(trust_host_modal_de_test());
         abrir_ayuda(&mut app);
         let mut r = dialog_resolver();
         // A una página con filas ejecutables (la del contexto puede no
@@ -3270,11 +3445,47 @@ mod help_key_tests {
         let cmd = press(&mut app, &mut r, KeyCode::Enter);
         assert_eq!(cmd, None, "nada que el run loop pueda despachar");
         assert!(app.help.is_some(), "y la ayuda no se cierra sola");
-        assert!(app.modal.is_some(), "la aprobación sigue en pie");
+        assert!(app.modal.is_some(), "la pregunta sigue en pie");
         assert_eq!(
             app.message.as_deref(),
             Some(norte_i18n::t("msg-help-modal-waiting").as_str()),
             "el Enter no puede desaparecer en silencio"
+        );
+    }
+
+    /// Y el PUENTE a la palette tampoco cruza por encima de un modal (review
+    /// H3c MAJOR-1), por la misma razón que el brazo de arriba y con una
+    /// consecuencia peor.
+    ///
+    /// `Ctrl+P` cerraba la ayuda y abría la palette dejando el modal en pie.
+    /// La rama de la palette del run loop está gateada por `!modal_wins`, así
+    /// que la palette quedaba PINTADA y con aspecto de viva pero sin recibir
+    /// una sola tecla: todas caían en la rama del modal y se resolvían contra
+    /// su allowlist. Teclear `copy` para filtrar sobre este TOFU descarta `c`,
+    /// `o`, `p`… y la `y` CONFÍA en la host key.
+    #[test]
+    fn el_puente_a_la_palette_no_cruza_por_encima_de_un_modal() {
+        let mut app = app_with_help_closed();
+        app.modal = Some(trust_host_modal_de_test());
+        abrir_ayuda(&mut app);
+        assert!(
+            app.help.as_ref().expect("abierta").over_modal,
+            "precondición: la ayuda se abrió ENCIMA del modal"
+        );
+        let mut r = dialog_resolver();
+
+        let cmd = on_help_key(&mut app, &mut r, KeyModifiers::CONTROL, KeyCode::Char('p'));
+        assert_eq!(cmd, None, "nada que despachar");
+        assert!(
+            app.palette.is_none(),
+            "la palette NO se abre: sus teclas se las quedaría el modal"
+        );
+        assert!(app.help.is_some(), "la ayuda se queda donde estaba");
+        assert!(app.modal.is_some(), "y el modal sigue esperando respuesta");
+        assert_eq!(
+            app.message.as_deref(),
+            Some(norte_i18n::t("msg-help-modal-waiting").as_str()),
+            "el Ctrl+P no puede desaparecer en silencio"
         );
     }
 
@@ -3331,13 +3542,76 @@ mod help_key_tests {
         assert!(app.help.is_none(), "ni abre nada");
     }
 
+    /// Review H3c MINOR-3: los SEIS modales que el run loop intercepta antes de
+    /// `on_dialog_key` no admiten ayuda por encima, y ahora eso es una DECISIÓN
+    /// (`help_context::help_over_modal_allowed`) en vez de la resaca del
+    /// enrutado de teclas.
+    ///
+    /// Antes quedaban fuera solo porque cada uno hace `continue` 3000 líneas
+    /// más arriba; mover uno al keymap `dialog` —una limpieza plausible— habría
+    /// abierto el agujero en silencio sobre un editor de texto libre y sobre el
+    /// TOFU de `init.lua`, que NO tiene TTL.
+    #[test]
+    fn los_modales_interceptados_no_admiten_ayuda_por_encima() {
+        let interceptados = [
+            Modal::TrustLuaInit {
+                path: "repo/.norte/init.lua".into(),
+                hash_abbrev: "ab12cd34ef56ab78ab12cd34ef56ab78".into(),
+            },
+            Modal::MarkPattern {
+                mark: true,
+                pattern: "*.rs".into(),
+                error: None,
+            },
+            Modal::Mkdir {
+                name: "nuevo".into(),
+                error: None,
+            },
+            Modal::AiRenameInstruction {
+                instruction: "en snake_case".into(),
+                error: None,
+            },
+            Modal::SemanticQuery {
+                query: "facturas".into(),
+                error: None,
+            },
+            Modal::TransferName {
+                kind: norte_tui::app::TransferKind::Copy,
+                from: VPath::parse("file:///x/a").expect("wire de test"),
+                to_dir: VPath::parse("file:///y").expect("wire de test"),
+                name: "a".into(),
+                original: b"a".to_vec(),
+                touched: false,
+                from_marks: false,
+                enc: None,
+                error: None,
+            },
+        ];
+        for modal in interceptados {
+            let etiqueta = format!("{modal:?}");
+            let mut app = app_with_help_closed();
+            app.modal = Some(modal);
+            assert!(
+                !modal_help_toggle(&mut app, "app.help", Lang::En, &[]),
+                "{etiqueta}: el hook no puede CONSUMIR la tecla de un modal que \
+                 no admite ayuda — quien decide vuelve a ser el allowlist"
+            );
+            assert!(
+                app.help.is_none(),
+                "{etiqueta}: F1 no abre una página sobre un editor de texto \
+                 libre ni sobre el TOFU de Lua"
+            );
+            assert!(app.modal.is_some(), "{etiqueta}: y el modal sigue ahí");
+        }
+    }
+
     /// …y la dirección contraria NO: una ayuda que el lector abrió DESDE el
     /// modal sobrevive a la limpieza, o `F1` sobre un diálogo abriría una
     /// página que la siguiente tecla se lleva.
     #[test]
     fn la_ayuda_abierta_desde_el_modal_sobrevive_a_la_limpieza() {
         let mut app = app_with_help_closed();
-        app.modal = Some(approval_modal_de_test());
+        app.modal = Some(trust_host_modal_de_test());
         abrir_ayuda(&mut app);
         app.palette = Some(Palette::new(Vec::new()));
         close_stale_overlays(&mut app);
@@ -5760,14 +6034,16 @@ async fn on_search_enter(
 /// [`on_help_key`]: la misma tecla que abre la ayuda la cierra, y lo
 /// hardcodeado es el SIGNIFICADO, jamás la tecla.
 ///
-/// Los modales de TEXTO LIBRE (`Mkdir`, `MarkPattern`, `AiRenameInstruction`,
-/// `SemanticQuery`, `TransferName`) y el TOFU de Lua nunca llegan aquí: el run
-/// loop los intercepta antes para leer teclas CRUDAS (decisión 8 del plan H1 —
-/// el keymap no puede reinterpretar lo que se está escribiendo), así que `F1`
-/// sigue siendo inerte en ellos. Sus contextos existen en el vocabulario y sus
-/// páginas se alcanzan por el índice; abrirlas con la tecla exigiría resolver el
-/// keymap dentro de un editor de texto, que es exactamente lo que esos modales
-/// evitan.
+/// Qué modales lo admiten es una DECISIÓN, no la resaca del enrutado: lo dice
+/// [`norte_tui::help_context::help_over_modal_allowed`], exhaustivo sobre
+/// `Modal` y sin comodín (review MINOR-3). Los cinco editores de TEXTO LIBRE
+/// (`Mkdir`, `MarkPattern`, `AiRenameInstruction`, `SemanticQuery`,
+/// `TransferName`) y el TOFU de Lua responden `false`: hoy tampoco llegan aquí
+/// —el run loop los intercepta antes para leer teclas CRUDAS (decisión 8 del
+/// plan H1: el keymap no puede reinterpretar lo que se está escribiendo)—, y
+/// preguntarlo AQUÍ es lo que impide que mover uno de ellos al keymap `dialog`
+/// abra el agujero en silencio. Sus contextos existen en el vocabulario y sus
+/// páginas se alcanzan por el índice.
 fn modal_help_toggle(
     app: &mut App,
     cmd: &str,
@@ -5775,6 +6051,16 @@ fn modal_help_toggle(
     help_lines: &[String],
 ) -> bool {
     if cmd != "app.help" {
+        return false;
+    }
+    // No consumir la tecla cuando la ayuda no puede abrirse: quien decide
+    // vuelve a ser el allowlist del modal (`dialog_action`), que deja caer
+    // `app.help` — la tecla queda INERTE, que es lo que se quiere.
+    if app
+        .modal
+        .as_ref()
+        .is_some_and(|m| !norte_tui::help_context::help_over_modal_allowed(m))
+    {
         return false;
     }
     open_contextual_help(app, lang, help_lines);
