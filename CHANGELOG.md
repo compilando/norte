@@ -9,6 +9,44 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Help you can navigate, and that knows your keys (H3b):** `F1` opens a page,
+  not a key dump. The topics of the corpus on the left, grouped by tag; the page
+  you are on to the right; `/` to filter the list by page title, page id or the
+  commands a page documents; `Tab` to move the cursor into the page; `Enter` to
+  run the command a row describes — through the same dispatch its own key uses,
+  with the same confirmation, the same policy gate and the same journal entry,
+  because a second, quieter way to run a mutation is exactly what this project
+  does not want; and `Backspace` to go back where you came from, or out of the
+  help when there is nowhere left to go back to. Those are the orthodox
+  preset's keys: the overlay resolves every one of them through the `dialog`
+  context, so a rebind moves them and the footer it generates says where they
+  went.
+  Enter on a link follows it and the help stays open — reading is not leaving.
+  Enter on a runnable row closes the overlay first, deliberately: the command
+  acts on the panes underneath, and help left on screen would cover the
+  confirmation it opens. Arrowing the list of topics PREVIEWS them instead of
+  navigating, so a scan down the index does not cost one `Backspace` per row
+  before the overlay can close. `Ctrl+P` hands whatever you have typed to the
+  command palette rather than making you retype it — the same model at a
+  different speed — with the built-in commands only, since that handoff cannot
+  wait on the backend for the plugin rows.
+  No key in any page is written into the text. Each one is a `{{cmd:…}}` mark
+  looked up in your effective keymap as the page is drawn, so a rebind changes
+  the prose (a hot reload rebuilds that resolver next to the cheatsheet, or
+  every page would keep teaching the old key), and a command you have unbound
+  is named in the prose instead of claiming a chord you do not have. The corpus
+  gains a page about this help itself, in English and Spanish like the rest.
+  The old flat cheatsheet is still there, as the last entry in the list,
+  generated from the same effective keymap — and still the one place the
+  `dialog.*` verbs are all visible, which overlay footers leave out for want of
+  width.
+  What this phase does **not** do, each with a later phase of its own: the page
+  still claims every command it documents is runnable right now, so nothing is
+  dimmed and no reason is given for what the app would refuse (H3d); plugins
+  cannot ship help pages yet (H3e); and the GUI has no help view at all (H3f),
+  although the navigation model lives in `norte-frontend` rather than in the
+  TUI precisely so that view is a second painter and not a second corpus.
+
 - **The mouse, in both frontends:** left click focuses a pane and moves its
   cursor, double click does exactly what `nav.enter` does, and the wheel
   scrolls the listing **under the pointer** rather than the focused one.

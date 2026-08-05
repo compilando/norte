@@ -687,11 +687,15 @@ fn snapshot_viewer_texto_y_hex() {
     insta::assert_snapshot!(format!("{texto}\n===\n{hex}"));
 }
 
-#[test]
-fn snapshot_ayuda() {
-    let mut app = app_base();
-    // El MISMO builder que usa el binario (no una copia del formato):
-    // ambas pantallas, desde el preset orthodox real.
+/// Abre el overlay de ayuda (H3b) tal cual lo hace el binario: el cheatsheet
+/// sintético de la entrada `keys` y el resolver de chords salen de los MISMOS
+/// builders (`norte_tui::help::build` y `TuiChords::new`, no una copia del
+/// formato) sobre el preset orthodox real, y AMBOS en el idioma del resto de
+/// la UI (`vp` fuerza ES arriba). El resolver también, no solo el corpus: es
+/// quien pone la etiqueta de cada fila ejecutable (`ChordResolver::label`), y
+/// el default de `App` resuelve el idioma del ENTORNO — con él, un lector
+/// español leería prosa española con las filas etiquetadas en inglés.
+fn open_help(app: &mut App) {
     let presets = norte_tui::keymap::presets();
     let (_, preset) = presets.iter().find(|(n, _)| *n == "orthodox").unwrap();
     let build = |screen| {
@@ -712,19 +716,55 @@ fn snapshot_ayuda() {
         norte_tui::keymap::Screen::Dialog,
     )
     .unwrap();
-    let lines = norte_tui::help::build(
-        &build(norte_tui::keymap::Screen::Browse),
-        &build(norte_tui::keymap::Screen::Viewer),
+    let browse = build(norte_tui::keymap::Screen::Browse);
+    let viewer = build(norte_tui::keymap::Screen::Viewer);
+    let lines = norte_tui::help::build(&browse, &viewer, &dialog);
+    app.help_chords = std::sync::Arc::new(norte_tui::help::TuiChords::new(
+        &browse,
+        &viewer,
         &dialog,
-    );
-    // El idioma del corpus es el del resto de la UI (`force` arriba), o el
-    // overlay pinta prosa inglesa bajo cabeceras españolas.
+        norte_i18n::Lang::Es,
+    ));
     app.help = Some(norte_tui::app::HelpView::new(norte_i18n::Lang::Es, lines));
-    // H3b: el overlay se maqueta para el frame sobre el que va a pintarse
-    // (lo hace el run loop en cada vuelta); la geometría sale de la MISMA
-    // función que usa el pintor.
+    refresh_help(app);
+}
+
+/// H3b: el overlay se maqueta para el frame sobre el que va a pintarse (lo
+/// hace el run loop en cada vuelta), y la geometría sale de la MISMA función
+/// que usa el pintor. 80×16 es el frame de [`render`].
+fn refresh_help(app: &mut App) {
     let (ancho, alto) = ui::help_body_size(ratatui::layout::Rect::new(0, 0, 80, 16));
     app.refresh_help(ancho, alto);
+}
+
+/// Como [`render`], pero devuelve el BUFFER: el volcado de texto no lleva
+/// estilos, así que un resalte solo se puede pinchar celda a celda.
+fn render_buffer(app: &App) -> ratatui::buffer::Buffer {
+    let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, app)).expect("draw");
+    terminal.backend().buffer().clone()
+}
+
+/// Estilos, celda a celda, de la primera fila del buffer que CONTIENE
+/// `needle`.
+fn row_styles(buf: &ratatui::buffer::Buffer, needle: &str) -> Vec<ratatui::style::Style> {
+    for y in buf.area.top()..buf.area.bottom() {
+        let texto: String = (buf.area.left()..buf.area.right())
+            .map(|x| buf[(x, y)].symbol())
+            .collect();
+        if texto.contains(needle) {
+            return (buf.area.left()..buf.area.right())
+                .map(|x| buf[(x, y)].style())
+                .collect();
+        }
+    }
+    panic!("ninguna fila del frame contiene {needle:?}");
+}
+
+#[test]
+fn snapshot_ayuda() {
+    let mut app = app_base();
+    open_help(&mut app);
     // Arriba: el índice del corpus, donde abre el overlay.
     let arriba = render(&app);
     // Abajo: la página de teclado sintética — el cheatsheet de siempre,
@@ -734,8 +774,125 @@ fn snapshot_ayuda() {
         .unwrap()
         .state
         .open(&norte_help::TopicId::new(norte_frontend::help::KEYS_ID));
-    app.refresh_help(ancho, alto);
+    refresh_help(&mut app);
     insta::assert_snapshot!(format!("{arriba}\n===\n{}", render(&app)));
+}
+
+/// H3b, lección H1 sobre una superficie PINTADA nueva: el filtro de la ayuda
+/// empareja los bytes CRUDOS a propósito (`filter_raw` — un needle con un
+/// override bidi tiene que encontrar el tema que el lector ve en pantalla), y
+/// lo único que puede pintarse es `filter_display`. El pie del overlay es el
+/// eco de ese texto tecleado, o sea la ÚNICA entrada libre de todo el draw:
+/// un `U+202E` que llegue ahí reordena visualmente la línea entera.
+///
+/// El needle arranca con el token del fixture canónico `rlo`
+/// (`norte_testkit::corpus::hostile_chords`) — llega por paste tan fácil como
+/// a mano — y con él delante ningún tema casa: la lateral queda vacía y el
+/// cuerpo sigue enseñando lo que se estaba leyendo, que es justo el contrato
+/// del modelo. Lo que se pincha aquí es el FRAME, no el modelo (que tiene su
+/// propio test en `norte_frontend::help`): un snapshot a secas registraría el
+/// hazard tan contento.
+///
+/// El barrido es POR LÍNEA y no sobre el `to_string()` entero: el backend une
+/// las filas con `\n`, que `is_terminal_hazard` marca (correctamente) como
+/// control — un check ciego sobre todo el buffer daría un falso positivo por
+/// el formato del propio volcado. Ver el mismo comentario en
+/// `snapshot_extensions_description_hostil_80x24`.
+#[test]
+fn snapshot_ayuda_filtro_hostil() {
+    let rlo = norte_testkit::corpus::hostile_chords()
+        .into_iter()
+        .find(|c| c.id == "rlo")
+        .expect("fixture del corpus");
+    let mut app = app_base();
+    open_help(&mut app);
+    let view = app.help.as_mut().expect("overlay abierto");
+    view.state.start_filter();
+    for c in std::iter::once(rlo.token).chain("copiar".chars()) {
+        view.state.push_char(c);
+    }
+    refresh_help(&mut app);
+    let texto = render(&app);
+    for (n, linea) in texto.lines().enumerate() {
+        assert!(
+            !linea.chars().any(norte_encoding::is_terminal_hazard),
+            "el pie del overlay de ayuda pintó un hazard de terminal \
+             (fila {n}, fixture {}): {linea:?}\n{texto}",
+            rlo.id
+        );
+    }
+    assert!(
+        texto.contains('\u{FFFD}'),
+        "y el filtro SÍ se pinta, enmascarado a U+FFFD — sin esto el test \
+         pasaría igual con un pie que no pintase nada:\n{texto}"
+    );
+    insta::assert_snapshot!(texto);
+}
+
+/// H3b: el cuerpo CON EL FOCO. `copying` trae cinco comandos y tres enlaces,
+/// y sus filas se pintan al FINAL de la página, detrás de toda la prosa: mover
+/// el foco al cuerpo y dar un paso obliga a que la fila activa esté a la vez
+/// RESALTADA y VISIBLE. Eso es lo que pincha este test, y la razón de que
+/// `HelpView::refresh` llame a `reveal` — sin él el resalte viviría fuera de la
+/// ventana y el lector movería un cursor que no ve.
+///
+/// El snapshot congela el recorte (qué líneas quedaron dentro); el resalte NO
+/// puede salir de él —el volcado del backend es texto pelado, sin estilos— así
+/// que va aparte, celda a celda y por DIFERENCIA: la fila con foco se pinta
+/// distinta de su vecina, y con el foco de vuelta en la lateral las dos vuelven
+/// a pintarse igual. Comparar contra el estilo concreto del tema ataría el
+/// test a la paleta; lo que se afirma es que el foco se VE.
+#[test]
+fn snapshot_ayuda_cuerpo_con_foco() {
+    let mut app = app_base();
+    open_help(&mut app);
+    let view = app.help.as_mut().expect("overlay abierto");
+    view.state.open(&norte_help::TopicId::new("copying"));
+    view.state.toggle_focus();
+    assert_eq!(
+        view.state.focus(),
+        norte_frontend::help::Focus::Body,
+        "el tema tiene filas ejecutables, así que el foco SÍ entra"
+    );
+    // Un paso: la SEGUNDA fila, para que esto no pueda pasar con un pintor que
+    // resalte siempre la primera.
+    view.state.down();
+    assert_eq!(
+        view.state.action(),
+        Some(&norte_frontend::help::Action::Run("pane.move".to_owned())),
+        "la fila con foco es la de `pane.move`"
+    );
+    refresh_help(&mut app);
+
+    let scroll = app.help.as_ref().unwrap().state.body_scroll();
+    assert!(
+        scroll > 0,
+        "las filas van tras la prosa: revelarlas OBLIGA a desplazar el cuerpo \
+         (scroll={scroll})"
+    );
+    let buf = render_buffer(&app);
+    let con_foco = row_styles(&buf, "f6 ");
+    let sin_foco = row_styles(&buf, "f5 ");
+    assert_ne!(
+        con_foco, sin_foco,
+        "la fila de `pane.move` tiene el foco: se pinta distinta de la de \
+         `pane.copy`, que no lo tiene"
+    );
+    let texto = render(&app);
+
+    // Y el resalte es DEL FOCO, no de la fila: devuelto el foco a la lateral,
+    // el cursor del cuerpo sigue existiendo pero ya no es el que mueven las
+    // flechas, y ninguna fila queda marcada.
+    app.help.as_mut().unwrap().state.toggle_focus();
+    refresh_help(&mut app);
+    let buf = render_buffer(&app);
+    assert_eq!(
+        row_styles(&buf, "f6 "),
+        row_styles(&buf, "f5 "),
+        "sin foco en el cuerpo no hay fila resaltada"
+    );
+
+    insta::assert_snapshot!(texto);
 }
 
 /// Command palette (`Ctrl+P`/vim `:`, H1 T4): filtrada a "principio" deja
