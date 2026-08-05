@@ -971,11 +971,72 @@ fn draw_columns_picker(
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-/// Ancho en CELDAS de la barra lateral del overlay de ayuda (H3b). Fijo, no
-/// proporcional: los títulos del corpus son cortos y el cuerpo es prosa, que
-/// es quien necesita el ancho — y una lateral que cambia de tamaño con el
-/// terminal reordena el texto de la izquierda al redimensionar.
-const HELP_SIDEBAR: u16 = 24;
+/// Lower bound in CELLS of the help sidebar: the width it used to have,
+/// unconditionally. Kept as a FLOOR so an 80-column frame never gets a
+/// narrower list of topics than it had before the sidebar was sized to its
+/// content.
+const HELP_SIDEBAR_MIN: u16 = 24;
+
+/// Upper bound of the sidebar, as a percentage of the FRAME's width. The
+/// sidebar is a table of contents: past roughly a third of the screen it is
+/// taking width from the prose it exists to point at.
+const HELP_SIDEBAR_PCT: u16 = 35;
+
+/// Cells between the sidebar and the body. Without it a title that fills the
+/// sidebar sits against the first letter of the prose and the two columns
+/// read as one broken line.
+const HELP_GUTTER: u16 = 2;
+
+/// Typographic measure of the body in CELLS. Prose is read at 60–72 cells; at
+/// 90 the eye loses the line on the return sweep, and the surplus is exactly
+/// what the sidebar needs to stop truncating its titles.
+const HELP_MEASURE: u16 = 72;
+
+/// Cells the body keeps whatever the sidebar asks for. Only bites on frames
+/// too narrow for the overlay to be useful at all, and only to keep the body
+/// from being laid out at zero width.
+const HELP_BODY_MIN: u16 = 20;
+
+/// Cells a topic row is indented by in the sidebar, so that a title never
+/// lines up with the group header above it.
+const HELP_ROW_INDENT: usize = 2;
+
+/// Cells the sidebar would need to paint every row of `lang` IN FULL: the
+/// indent plus the widest title, and the widest group header.
+///
+/// Measured over the whole corpus and not over `HelpState::rows()`, which is
+/// what the filter narrows: a sidebar sized to the rows that survive would
+/// change width on every keystroke, and the body — pre-rendered at the width
+/// left over — would re-wrap its prose under the reader while they type.
+///
+/// The synthetic `keys` GROUP is deliberately not measured: its header is not
+/// painted (see [`draw_help`]).
+fn help_sidebar_desired(lang: norte_help::Lang) -> u16 {
+    let mut want = HELP_ROW_INDENT + cells(&t("help-topic-keys"));
+    for topic in norte_help::topics(lang) {
+        want = want.max(HELP_ROW_INDENT + cells(&topic.title));
+        match topic.tags.first() {
+            Some(tag) if !tag.is_empty() => {
+                want = want.max(cells(&t(&format!("help-group-{tag}"))));
+            }
+            _ => {}
+        }
+    }
+    u16::try_from(want).unwrap_or(u16::MAX)
+}
+
+/// Width in CELLS of the help sidebar over a frame of `base`, for the corpus
+/// of `lang`.
+///
+/// Public for the test that pins the sizing decision: the sidebar grows with
+/// its content, floors at the 24 cells it used to have fixed, and never takes
+/// more than a 35% share of the frame. See `help_layout`, where that is
+/// decided and where the two bounds are named.
+#[must_use]
+pub fn help_sidebar_width(base: Rect, lang: norte_help::Lang) -> u16 {
+    let (_, sidebar, _, _) = help_layout(base, help_sidebar_desired(lang));
+    sidebar.width
+}
 
 /// Geometría del overlay de ayuda: `(caja, lateral, cuerpo, pie)`.
 ///
@@ -984,7 +1045,11 @@ const HELP_SIDEBAR: u16 = 24;
 /// acota `body_scroll` contra el número de líneas que se maquetaron para un
 /// ancho, y maquetar para un ancho distinto del pintado deja el scroll fuera
 /// del cuerpo justo en los bordes (el fallo que el pre-render evita).
-fn help_layout(base: Rect) -> (Rect, Rect, Rect, Rect) {
+///
+/// `sidebar_desired` es lo que la lateral necesitaría para pintar sus filas
+/// enteras ([`help_sidebar_desired`]); llega como parámetro para que esto siga
+/// siendo una función de números, medible a cualquier tamaño sin corpus.
+fn help_layout(base: Rect, sidebar_desired: u16) -> (Rect, Rect, Rect, Rect) {
     let area = centered(
         base,
         base.width.saturating_sub(4).max(20),
@@ -1003,24 +1068,52 @@ fn help_layout(base: Rect) -> (Rect, Rect, Rect, Rect) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(inner);
+    // El corte HORIZONTAL: lateral, canalón y cuerpo. La lateral pide lo que
+    // mide su contenido, con suelo en lo que siempre tuvo y techo en una parte
+    // del frame; el cuerpo se queda el resto, capado a su MEDIDA. Lo que sobre
+    // —un terminal muy ancho— sencillamente no se usa: 90 celdas de prosa se
+    // leen peor que 72, no mejor.
+    let avail = rows[0].width;
+    let pct = u16::try_from(u32::from(base.width) * u32::from(HELP_SIDEBAR_PCT) / 100)
+        .unwrap_or(u16::MAX);
+    let ceiling = pct
+        .max(HELP_SIDEBAR_MIN)
+        .min(avail.saturating_sub(HELP_GUTTER + HELP_BODY_MIN));
+    // `max` DESPUÉS de `min`: en un frame demasiado estrecho para el suelo
+    // manda el techo — una lateral más ancha que la caja dejaría el cuerpo a
+    // cero celdas, y un `clamp` con el rango invertido entra en pánico.
+    let side = sidebar_desired
+        .max(HELP_SIDEBAR_MIN.min(ceiling))
+        .min(ceiling);
+    let gutter = HELP_GUTTER.min(avail.saturating_sub(side));
+    let body = avail.saturating_sub(side + gutter).min(HELP_MEASURE);
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(HELP_SIDEBAR), Constraint::Min(1)])
+        .constraints([
+            Constraint::Length(side),
+            Constraint::Length(gutter),
+            Constraint::Length(body),
+            Constraint::Min(0),
+        ])
         .split(rows[0]);
     // El CUERPO conserva exactamente la misma altura que antes (`inner` menos
     // la fila del pie): `help_body_size` la publica y el pre-render acota
     // contra ella. Lo que cambia es la lateral, que ahora también cede esa
     // fila — el pie es de la caja, no de una columna.
-    (area, cols[0], cols[1], rows[1])
+    (area, cols[0], cols[2], rows[1])
 }
 
 /// Ancho y alto EN CELDAS del cuerpo del overlay de ayuda sobre un frame de
 /// `base`, para que el run loop maquete la página con
 /// [`App::refresh_help`](crate::app::App::refresh_help) justo antes de
 /// pintarla. Ver `help_layout`, de donde sale.
+///
+/// `lang` es el locale del corpus con el que se abrió el overlay
+/// (`HelpState::lang`): la lateral se dimensiona a los títulos que tiene que
+/// pintar, así que el ancho que le queda al cuerpo depende de él. El ALTO no.
 #[must_use]
-pub fn help_body_size(base: Rect) -> (usize, usize) {
-    let (_, _, body, _) = help_layout(base);
+pub fn help_body_size(base: Rect, lang: norte_help::Lang) -> (usize, usize) {
+    let (_, _, body, _) = help_layout(base, help_sidebar_desired(lang));
     (usize::from(body.width), usize::from(body.height))
 }
 
@@ -1043,7 +1136,8 @@ pub fn help_body_size(base: Rect) -> (usize, usize) {
 fn draw_help(frame: &mut Frame<'_>, help: &crate::app::HelpView, theme: &TuiTheme, hint: &str) {
     use norte_frontend::help::{Focus, SidebarRow};
 
-    let (area, sidebar, body_area, footer_area) = help_layout(frame.area());
+    let (area, sidebar, body_area, footer_area) =
+        help_layout(frame.area(), help_sidebar_desired(help.state.lang()));
     clear_themed(frame, area, theme);
     frame.render_widget(
         Block::default()
@@ -1055,36 +1149,61 @@ fn draw_help(frame: &mut Frame<'_>, help: &crate::app::HelpView, theme: &TuiThem
     );
 
     let state = &help.state;
-    // Una celda de canalón: sin ella un título que llena la lateral queda
-    // pegado a la primera letra de la prosa y las dos columnas se leen como
-    // una sola línea rota.
-    let side_w = usize::from(sidebar.width).saturating_sub(1);
-    let items: Vec<ListItem<'_>> = state
-        .rows()
-        .iter()
-        .map(|row| match row {
+    // El canalón es una COLUMNA propia del layout, así que la lateral puede
+    // gastarse su ancho entero en el título.
+    let side_w = usize::from(sidebar.width);
+    // Las filas pintadas NO son las del modelo: entre grupo y grupo va una
+    // línea en blanco. Va aquí y no en `HelpState::rows`, que es la lista
+    // NAVEGABLE — sus índices son los que direcciona `cursor()`, y meter
+    // separadores ahí rompería el cursor y de paso la GUI hermana. Por eso se
+    // lleva el mapa fila→ítem: es lo que traduce el cursor del modelo al
+    // índice del widget.
+    let mut items: Vec<ListItem<'_>> = Vec::with_capacity(state.rows().len() + 4);
+    let mut painted: Vec<usize> = Vec::with_capacity(state.rows().len());
+    for (i, row) in state.rows().iter().enumerate() {
+        match row {
             // El modelo entrega TAGS, no texto: la traducción es cosa del
             // frontend (una misma fila se llama distinto en la TUI y en la
             // GUI). Un tag sin entrada Fluent pintaría su propia clave, que
             // es lo que la suite de i18n impide.
-            SidebarRow::Group { tag } => ListItem::new(Line::styled(
-                right_ellipsis(&t(&format!("help-group-{tag}")), side_w),
-                theme.role(Role::Title),
-            )),
+            SidebarRow::Group { tag } => {
+                if keys_only_group(state.rows(), i) {
+                    // Una cabecera que se llama igual que su única entrada no
+                    // informa de nada y cuesta una fila. Se apunta el ítem que
+                    // vendrá — el cursor jamás se apoya en una cabecera, así
+                    // que el mapa solo tiene que quedar bien formado.
+                    painted.push(items.len());
+                    continue;
+                }
+                // Aire entre grupos, menos antes del primero: un blanco
+                // arriba del todo se lee como una lateral descuadrada.
+                if !items.is_empty() {
+                    items.push(ListItem::new(Line::default()));
+                }
+                painted.push(items.len());
+                items.push(ListItem::new(Line::styled(
+                    right_ellipsis(&t(&format!("help-group-{tag}")), side_w),
+                    theme.role(Role::Title),
+                )));
+            }
             // El título de la entrada sintética `keys` es la etiqueta que
             // `HelpView::new` le dio al modelo (`help-topic-keys`), así que
             // aquí no hay caso especial: la lateral pinta lo mismo que el
             // filtro busca.
             SidebarRow::Topic { title, .. } => {
-                ListItem::new(Line::raw(right_ellipsis(&format!("  {title}"), side_w)))
+                painted.push(items.len());
+                items.push(ListItem::new(Line::raw(right_ellipsis(
+                    &format!("{}{title}", " ".repeat(HELP_ROW_INDENT)),
+                    side_w,
+                ))));
             }
-        })
-        .collect();
+        }
+    }
     let mut list_state = ListState::default();
     // `HelpState` garantiza que el cursor se apoya SIEMPRE en una fila
     // seleccionable (nunca en una cabecera); con el filtro sin resultados no
     // hay fila alguna que resaltar.
-    list_state.select((!state.rows().is_empty()).then(|| state.cursor()));
+    list_state.select(painted.get(state.cursor()).copied());
     frame.render_stateful_widget(
         List::new(items).highlight_style(theme.role(Role::Selection)),
         sidebar,
@@ -1113,24 +1232,79 @@ fn draw_help(frame: &mut Frame<'_>, help: &crate::app::HelpView, theme: &TuiThem
         .collect();
     frame.render_widget(Paragraph::new(cuerpo), body_area);
 
-    let footer = if state.filtering() {
+    // Dónde está el lector dentro de la página, con el MISMO idioma que el
+    // visor (`{fila}/{total}`, `draw_viewer`). Solo cuando la página NO cabe:
+    // un `1/9` sobre nueve líneas visibles es ruido. Importa más aquí que en
+    // el visor porque las filas ejecutables — la columna de chords y el
+    // `Enter` para el que existe este overlay — se pintan DETRÁS de toda la
+    // prosa, así que en una página larga no se ven en el primer render y sin
+    // esto nada dice que estén ahí.
+    let total = lines.len();
+    let pos = (total > usize::from(body_area.height)).then(|| {
+        format!(
+            " {}/{} ",
+            (state.body_scroll() + 1).min(total.max(1)),
+            total.max(1)
+        )
+    });
+    let pos = pos.unwrap_or_default();
+    // El indicador se lleva su trozo del pie ANTES de recortar el hint: a la
+    // derecha jamás le disputa el borde izquierdo al hint, y el hint jamás se
+    // le come a él (`fit_hint_groups` tira grupos enteros, no celdas sueltas).
+    let ancho = usize::from(footer_area.width);
+    let izq_max = ancho.saturating_sub(cells(&pos));
+    let izq = if state.filtering() {
         let (query, _) = display_name(state.filter_display().as_bytes());
-        Line::raw(middle_ellipsis(
-            &format!(" /{query}"),
-            usize::from(footer_area.width),
-        ))
+        middle_ellipsis(&format!(" /{query}"), izq_max)
     } else {
         // NUNCA `middle_ellipsis` sobre un hint generado: ver
         // [`fit_hint_groups`]. Una celda del pie es del margen izquierdo.
-        Line::raw(format!(
-            " {}",
-            fit_hint_groups(hint, usize::from(footer_area.width).saturating_sub(1))
-        ))
+        format!(" {}", fit_hint_groups(hint, izq_max.saturating_sub(1)))
     };
+    let hueco = ancho.saturating_sub(cells(&izq) + cells(&pos));
+    let footer = Line::from(vec![
+        Span::raw(izq),
+        Span::raw(" ".repeat(hueco)),
+        Span::raw(pos),
+    ]);
     frame.render_widget(
         Paragraph::new(footer).style(theme.role(Role::BorderUnfocused)),
         footer_area,
     );
+}
+
+/// Whether the sidebar paints a header for the group row at `header`.
+///
+/// Public because it is also what says which `help-group-{tag}` lookups the
+/// painter can make, and the i18n sweep over those lookups
+/// (`norte-tui/tests/keymap.rs`) must ask rather than re-derive: a tag whose
+/// header is never painted needs no Fluent entry, and one that is painted
+/// needs one in every locale.
+#[must_use]
+pub fn help_group_is_painted(rows: &[norte_frontend::help::SidebarRow], header: usize) -> bool {
+    !keys_only_group(rows, header)
+}
+
+/// Whether the group header at `header` heads a group whose only member is
+/// the synthetic keyboard entry.
+///
+/// Keyed off [`norte_frontend::help::KEYS_ID`] and never off the STRING: the
+/// header and the row are both painted from Fluent, and in every locale so far
+/// they are the same word — but that is a fact about the catalogue, not
+/// something to branch on.
+fn keys_only_group(rows: &[norte_frontend::help::SidebarRow], header: usize) -> bool {
+    use norte_frontend::help::{KEYS_ID, SidebarRow};
+
+    let mut members = rows
+        .get(header.saturating_add(1)..)
+        .unwrap_or_default()
+        .iter()
+        .take_while(|row| matches!(row, SidebarRow::Topic { .. }));
+    let only = matches!(
+        members.next(),
+        Some(SidebarRow::Topic { id, .. }) if id.as_str() == KEYS_ID
+    );
+    only && members.next().is_none()
 }
 
 /// Command palette (`Ctrl+P`/vim `:`, H1 T4, spec-promised): filtro libre

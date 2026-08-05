@@ -733,7 +733,18 @@ fn open_help(app: &mut App) {
 /// hace el run loop en cada vuelta), y la geometría sale de la MISMA función
 /// que usa el pintor. 80×16 es el frame de [`render`].
 fn refresh_help(app: &mut App) {
-    let (ancho, alto) = ui::help_body_size(ratatui::layout::Rect::new(0, 0, 80, 16));
+    refresh_help_en(app, 80, 16);
+}
+
+/// [`refresh_help`] sobre un frame de `w`×`h`: la geometría del overlay ya no
+/// depende solo del frame — la lateral se dimensiona a los títulos del corpus
+/// del idioma abierto — así que el idioma sale del propio modelo, como en el
+/// run loop.
+fn refresh_help_en(app: &mut App, w: u16, h: u16) {
+    let Some(lang) = app.help.as_ref().map(|v| v.state.lang()) else {
+        return;
+    };
+    let (ancho, alto) = ui::help_body_size(ratatui::layout::Rect::new(0, 0, w, h), lang);
     app.refresh_help(ancho, alto);
 }
 
@@ -762,6 +773,70 @@ fn snapshot_ayuda() {
     insta::assert_snapshot!(format!("{arriba}\n===\n{}", render(&app)));
 }
 
+/// H3b, pie ADAPTATIVO: el pie de la ayuda ofrece sus CINCO verbos imprimibles
+/// y deja que el ancho decida cuántos se pintan (`ui::fit_hint_groups` tira
+/// grupos ENTEROS por la cola y marca la pérdida con `…`).
+///
+/// Antes excluía `[enter]`/`[esc]` SIEMPRE, para honrar un frame de 80: en un
+/// terminal de 113 columnas el pie se quedaba medio vacío con las dos teclas
+/// universales escondidas sin motivo. La exclusión fija cede ahora al mecanismo
+/// que ya existía.
+///
+/// Lo que se pincha es el invariante, no un ancho concreto: a 113 caben los
+/// cinco (y sin `…`, porque no se perdió nada); a 80 sobreviven los del
+/// principio del ranking — los que el lector NO puede adivinar — y el `…` dice
+/// que hubo recorte. En ningún ancho aparece medio grupo.
+#[test]
+fn el_pie_de_la_ayuda_se_adapta_al_ancho() {
+    let pie_a = |w: u16, h: u16| {
+        let mut app = app_base();
+        open_help(&mut app);
+        refresh_help_en(&mut app, w, h);
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
+        terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+        terminal
+            .backend()
+            .to_string()
+            .lines()
+            .nth(help_footer_row(w, h))
+            .expect("el pie cae dentro del frame")
+            .to_owned()
+    };
+
+    let ancho = pie_a(113, 16);
+    for verbo in ["filtrar", "atrás", "otro panel", "confirmar", "cancelar"] {
+        assert!(
+            ancho.contains(verbo),
+            "a 113 columnas caben los cinco grupos, y `{verbo}` falta: {ancho:?}"
+        );
+    }
+    assert!(
+        !ancho.contains('…'),
+        "…y sin marca de pérdida, porque no se perdió nada: {ancho:?}"
+    );
+
+    let estrecho = pie_a(80, 16);
+    for verbo in ["filtrar", "atrás", "otro panel"] {
+        assert!(
+            estrecho.contains(verbo),
+            "a 80 columnas sobreviven los verbos que el lector no puede \
+             adivinar, y `{verbo}` falta: {estrecho:?}"
+        );
+    }
+    assert!(
+        estrecho.contains('…'),
+        "y el recorte se MARCA — un pie recortado en silencio miente: {estrecho:?}"
+    );
+    // Grupo entero o nada: ningún corchete queda huérfano.
+    for pie in [&ancho, &estrecho] {
+        assert_eq!(
+            pie.matches('[').count(),
+            pie.matches(']').count(),
+            "medio grupo `[chord] etiqueta` en el pie: {pie:?}"
+        );
+    }
+}
+
 /// Fila del frame en la que cae el PIE del overlay de ayuda, para un frame de
 /// `w`×`h`.
 ///
@@ -771,10 +846,15 @@ fn snapshot_ayuda() {
 /// publica `ui::help_body_size`. Hace falta para que la aserción de que el
 /// filtro se pinta apunte al pie y no al frame entero: ver
 /// [`snapshot_ayuda_filtro_hostil`].
+///
+/// El corte VERTICAL no cambió al dimensionar la lateral por contenido: el
+/// idioma que pide ahora `help_body_size` decide el reparto de ANCHO y nada
+/// más, así que aquí sirve cualquiera.
 fn help_footer_row(w: u16, h: u16) -> usize {
     let alto_caja = h.saturating_sub(2).max(6).min(h);
     let arriba = (h - alto_caja) / 2;
-    let (_, alto_cuerpo) = ui::help_body_size(ratatui::layout::Rect::new(0, 0, w, h));
+    let (_, alto_cuerpo) =
+        ui::help_body_size(ratatui::layout::Rect::new(0, 0, w, h), norte_i18n::Lang::Es);
     usize::from(arriba + 1) + alto_cuerpo
 }
 
@@ -919,6 +999,178 @@ fn ayuda_un_titulo_hostil_llega_crudo_a_la_lateral() {
         "…y sin enmascarar: si esto se pone rojo es que alguien añadió un \
          filtro en el pintor de la lateral, lo cual está BIEN — actualiza este \
          test y la nota de `draw_help` a la vez: {fila:?}"
+    );
+}
+
+/// Como [`render`] pero sobre un frame de `w`×`h`, maquetando la ayuda para
+/// ESE frame: la geometría del overlay depende de las dos dimensiones y el
+/// pre-render tiene que medir lo mismo que el pintor.
+fn render_ayuda(app: &mut App, w: u16, h: u16) -> String {
+    refresh_help_en(app, w, h);
+    let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, app)).expect("draw");
+    terminal.backend().to_string()
+}
+
+/// La lateral se dimensiona a SU CONTENIDO, entre dos topes.
+///
+/// Antes era una constante de 24 celdas y a 113 columnas recortaba cinco de
+/// las nueve filas del corpus español — con 90 celdas de prosa al lado, que es
+/// más ancho del que se lee de un vistazo. Ahora pide lo que miden sus filas
+/// (sangría incluida, en CELDAS) y se queda entre el suelo de siempre y un
+/// tercio largo del frame.
+///
+/// Los dos extremos que se fijan aquí son los dos que pueden romperse por
+/// separado: que el contenido MANDE (un corpus con títulos más largos ensancha
+/// la lateral) y que el tope AGUANTE (en un frame estrecho no se la come).
+#[test]
+fn la_lateral_de_la_ayuda_se_dimensiona_a_sus_titulos() {
+    use norte_i18n::Lang;
+    use ratatui::layout::Rect;
+    use unicode_width::UnicodeWidthStr;
+
+    // Lo que miden las filas del corpus: la sangría de dos celdas más el
+    // título más ancho, o la cabecera de grupo más ancha si ganase.
+    let ancho_pedido = |lang| {
+        norte_help::topics(lang)
+            .iter()
+            .map(|t| 2 + t.title.width())
+            .max()
+            .expect("el corpus trae temas")
+    };
+    let es = ancho_pedido(Lang::Es);
+    let en = ancho_pedido(Lang::En);
+    assert!(
+        es > en,
+        "el corpus español tiene los títulos más largos ({es} vs {en}); si eso \
+         deja de ser cierto, este test compara dos cosas iguales"
+    );
+
+    // Frame ANCHO: manda el contenido, y dos corpus distintos dan dos anchos
+    // distintos. Una constante pasaría lo de abajo y fallaría aquí.
+    let ancho = Rect::new(0, 0, 160, 40);
+    assert_eq!(
+        usize::from(ui::help_sidebar_width(ancho, Lang::Es)),
+        es,
+        "con sitio de sobra la lateral pide exactamente lo que mide su fila \
+         más ancha"
+    );
+    assert_eq!(usize::from(ui::help_sidebar_width(ancho, Lang::En)), en);
+
+    // Frame ESTRECHO: el tope del 35 % del frame gana, y el suelo histórico
+    // de 24 celdas se respeta — ni una lateral que se come la prosa ni una
+    // más angosta que la de antes.
+    for w in [80u16, 100, 113] {
+        let lateral = ui::help_sidebar_width(Rect::new(0, 0, w, 40), Lang::Es);
+        assert!(
+            lateral >= 24,
+            "a {w} columnas la lateral encogió por debajo del ancho que tenía \
+             fijo ({lateral})"
+        );
+        assert!(
+            u32::from(lateral) * 100 <= u32::from(w) * 35,
+            "a {w} columnas la lateral se pasa del 35 % del frame ({lateral})"
+        );
+    }
+    // …y el tope es lo que MUERDE a 80 columnas: la lateral pedía 39.
+    assert_eq!(
+        ui::help_sidebar_width(Rect::new(0, 0, 80, 40), Lang::Es),
+        28
+    );
+
+    // Y el cuerpo tiene medida tipográfica: la prosa no crece con el terminal
+    // más allá de lo que se lee de un vistazo.
+    let (cuerpo, _) = ui::help_body_size(Rect::new(0, 0, 200, 40), Lang::Es);
+    assert_eq!(cuerpo, 72, "la prosa se corta en su medida, no en el borde");
+}
+
+/// …y con sitio, NINGÚN título sale recortado.
+///
+/// La comprobación de arriba es aritmética; ésta es sobre el frame pintado, que
+/// es donde se ve si la sangría, el canalón o la elipsis se comieron una celda
+/// de más. A 120 columnas caben las nueve filas del corpus español enteras.
+#[test]
+fn a_120_columnas_ningun_titulo_de_la_ayuda_sale_recortado() {
+    let mut app = app_base();
+    open_help(&mut app);
+    let texto = render_ayuda(&mut app, 120, 36);
+    for tema in norte_help::topics(norte_i18n::Lang::Es) {
+        assert!(
+            texto.lines().any(|l| l.contains(&tema.title)),
+            "el título {:?} no aparece entero en la lateral:\n{texto}",
+            tema.title
+        );
+    }
+    assert!(
+        !texto
+            .lines()
+            .any(|l| l.contains("…") && l.contains("  SFTP")),
+        "…y sin elipsis en la fila más larga:\n{texto}"
+    );
+}
+
+/// El pie dice DÓNDE está el lector, con el mismo idioma que el visor
+/// (`{primera visible}/{total}`), y se calla cuando la página cabe entera.
+///
+/// No es adorno: las filas ejecutables de un tema se pintan DETRÁS de toda su
+/// prosa, así que en una página larga no entran en el primer render y sin el
+/// indicador nada dice que estén ahí.
+#[test]
+fn el_pie_de_la_ayuda_situa_al_lector_solo_cuando_hace_falta() {
+    let mut app = app_base();
+    open_help(&mut app);
+
+    // 80×16: el índice no cabe ni de lejos en las 12 filas del cuerpo.
+    let texto = render_ayuda(&mut app, 80, 16);
+    let view = app.help.as_ref().expect("overlay abierto");
+    let total = view.body().0.len();
+    let (_, alto) = ui::help_body_size(ratatui::layout::Rect::new(0, 0, 80, 16), view.state.lang());
+    assert!(total > alto, "el índice no cabe en {alto} filas ({total})");
+    let pie = texto
+        .lines()
+        .nth(help_footer_row(80, 16))
+        .expect("el pie cae dentro del frame");
+    // Pegado al borde derecho de la caja: el volcado del backend entrecomilla
+    // cada fila, así que el ancla es el `│` de la caja y no el fin de línea.
+    assert!(
+        pie.contains(&format!("1/{total} │")),
+        "el pie sitúa al lector en la primera línea, a la DERECHA: {pie:?}"
+    );
+
+    // Y sigue al scroll. El foco entra en el cuerpo para que `page_down`
+    // desplace (con el foco en la lateral mueve el cursor de temas), lo que de
+    // paso hace que `refresh` REVELE la acción con foco: da igual cuánto se
+    // mueva el cuerpo — lo que se fija es que el pie dice la línea que de
+    // verdad está arriba, no que se movieran cinco.
+    app.help.as_mut().expect("overlay").state.toggle_focus();
+    app.help.as_mut().expect("overlay").state.page_down(5);
+    let texto = render_ayuda(&mut app, 80, 16);
+    let scroll = app.help.as_ref().expect("overlay").state.body_scroll();
+    assert!(scroll > 0, "el cuerpo se desplazó");
+    let pie = texto
+        .lines()
+        .nth(help_footer_row(80, 16))
+        .expect("el pie cae dentro del frame");
+    assert!(
+        pie.contains(&format!("{}/{total} │", scroll + 1)),
+        "el indicador va con el scroll ({scroll}): {pie:?}"
+    );
+
+    // Frame de sobra: la página entra entera y el indicador SOBRA — un `1/9`
+    // sobre nueve líneas visibles no informa de nada.
+    let texto = render_ayuda(&mut app, 120, 60);
+    let view = app.help.as_ref().expect("overlay abierto");
+    let total = view.body().0.len();
+    let (_, alto) =
+        ui::help_body_size(ratatui::layout::Rect::new(0, 0, 120, 60), view.state.lang());
+    assert!(total <= alto, "la página cabe en {alto} filas ({total})");
+    let pie = texto
+        .lines()
+        .nth(help_footer_row(120, 60))
+        .expect("el pie cae dentro del frame");
+    assert!(
+        !pie.contains(&format!("/{total}")),
+        "con la página entera a la vista el pie no dice nada: {pie:?}"
     );
 }
 

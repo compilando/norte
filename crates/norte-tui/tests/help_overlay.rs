@@ -53,8 +53,8 @@ fn a_rebind_reaches_the_rendered_page() {
     // Baseline: the preset's own key.
     assert_eq!(
         render_command("pane.copy", &chords(&[])),
-        CommandText::Chord("f5".to_owned()),
-        "el preset orthodox ata `pane.copy` a f5"
+        CommandText::Chord("F5".to_owned()),
+        "el preset orthodox ata `pane.copy` a f5, PINTADO `F5` (`paint_chord`)"
     );
 
     // A user layer that prepends its own binding — `prepend` is what wins, the
@@ -65,12 +65,16 @@ fn a_rebind_reaches_the_rendered_page() {
     let rebound = chords(std::slice::from_ref(&layer));
     assert_eq!(
         render_command("pane.copy", &rebound),
-        CommandText::Chord("ctrl+alt+k".to_owned()),
+        // Los modificadores se escriben como los escribe la documentación; la
+        // TECLA no (`paint_chord`): `k` sigue en minúscula porque `ctrl+K` es
+        // un binding DISTINTO (`Char('K')`), y enseñar `Ctrl+K` sería enseñar
+        // un chord que este usuario no tiene.
+        CommandText::Chord("Ctrl+Alt+k".to_owned()),
         "la página tiene que enseñar la tecla NUEVA, no la del preset"
     );
     assert_eq!(
         rebound.chord("pane.copy").as_deref(),
-        Some("ctrl+alt+k"),
+        Some("Ctrl+Alt+k"),
         "y el resolver mismo, que es de donde sale"
     );
 

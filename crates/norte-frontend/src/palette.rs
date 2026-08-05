@@ -100,18 +100,19 @@ pub fn plugin_rows(plugins: &[norte_proto::methods::PluginInfo]) -> Vec<Row> {
 }
 
 /// The FIRST chord (in `eff.bindings()`'s precedence order) that resolves
-/// to `cmd`, if any. RENDER-side duty (encoding audit H1): `eff` can come
-/// from a hostile keymap (`./.norte/keymap.toml`, an untrusted PROJECT
-/// layer — `parse_chord` accepts ANY loose codepoint); `Chord`'s `Display`
-/// writes it raw ON PURPOSE (logs/debug want the real chord), so the
-/// palette's chord column masks HERE, not in the engine — same mechanism
-/// as `hints::dialog_hints`.
+/// to `cmd`, if any, ready to PAINT.
+///
+/// Goes through [`crate::keymap::paint_chord`], the single presentation home
+/// for a chord: it masks (render-side duty, encoding audit H1 — `eff` can
+/// come from a hostile `./.norte/keymap.toml`, an untrusted PROJECT layer,
+/// and `Chord`'s `Display` writes it raw ON PURPOSE for logs) and only then
+/// spells it the way the documentation does (`F5`, not `f5`).
 #[must_use]
 pub fn first_chord(cmd: &str, eff: &Effective) -> Option<String> {
     eff.bindings()
         .into_iter()
         .find(|(_, c)| *c == cmd)
-        .map(|(chord, _)| norte_encoding::mask_terminal_hazards(&chord))
+        .map(|(chord, _)| crate::keymap::paint_chord(&chord))
 }
 
 /// Filters a full [`Row`] snapshot for an OPEN palette in a given context

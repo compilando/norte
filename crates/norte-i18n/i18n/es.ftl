@@ -271,7 +271,9 @@ help-dialog-note = cada diálogo soporta su propio subconjunto de estas teclas
 help-group-basics = Fundamentos
 help-group-doing = Operaciones
 help-group-remote = Remoto y archivos
-help-group-keys = Teclado
+# La entrada sintética `keys` NO lleva cabecera: es un grupo de uno por
+# construcción y su cabecera se llamaría igual que su única fila, así que la
+# lateral no la pinta (`ui::draw_help`). Por eso no hay `help-group-keys`.
 help-topic-keys = Teclado
 help-cmd-app-quit = salir de norte
 help-cmd-app-help = esta ayuda

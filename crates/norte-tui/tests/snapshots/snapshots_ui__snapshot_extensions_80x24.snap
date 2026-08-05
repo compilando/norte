@@ -23,6 +23,6 @@ expression: texto.clone()
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"
-"│  └ [enter] confirmar [y] aprobar [esc] cancelar [e] activar ──────────────┘  │"
+"│  └ [Enter] confirmar [y] aprobar [Esc] cancelar [e] activar ──────────────┘  │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘"
 " ⟨file⟩/casa  2/5                                                               "

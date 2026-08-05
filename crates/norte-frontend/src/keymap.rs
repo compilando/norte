@@ -122,6 +122,127 @@ impl std::fmt::Display for Chord {
     }
 }
 
+/// Turns a chord as [`Chord`]'s `Display` writes it into text fit to be
+/// PAINTED at a reader: masked first, then spelled the way every convention —
+/// norte's own documentation included — spells a key (`F5`, `Shift+F8`,
+/// `Ctrl+K`), instead of the raw lower case `Display` produces.
+///
+/// `Display` is raw and lower case ON PURPOSE: logs and debug output want the
+/// literal chord, byte for byte. This is the other side — the one place a
+/// chord becomes text on a terminal or a GPU surface. Both frontends route
+/// through it (`norte_frontend::palette::first_chord`, the TUI's F1
+/// cheatsheet, and every overlay footer), so a key is spelled one way across
+/// the whole product.
+///
+/// # Masking runs FIRST, and the cosmetics can never undo it
+///
+/// [`parse_chord`] accepts ANY lone codepoint as a [`KeyCode::Char`], and a
+/// project `./.norte/keymap.toml` in a cloned repository is an UNTRUSTED
+/// layer: it can bind `RLO`, `BEL` or `ZWSP` to a supported command. So
+/// `norte_encoding::mask_terminal_hazards` runs before anything cosmetic, and
+/// the prettifier that follows it cannot resurrect what masking removed: it
+/// only ever REPLACES a token it recognises with a fixed ASCII constant from
+/// the table below, and passes every other token through unchanged. It never
+/// decodes, unescapes, or maps a codepoint back.
+///
+/// # The table
+///
+/// A chord may be a SEQUENCE of keys joined by spaces (`g g`) and each key a
+/// stack of modifiers joined by `+` — neither separator can occur inside a
+/// token, because `Display` writes `Char(' ')` as `space` and `Char('+')` as
+/// `plus`. Each token is then mapped:
+///
+/// - function keys: `f1`…`f12` → `F1`…`F12` (any `f` followed by digits);
+/// - modifiers: `ctrl`/`alt`/`shift`/`super`/`meta` → `Ctrl`/`Alt`/`Shift`/
+///   `Super`/`Meta`, the `+` joins preserved;
+/// - named keys: `enter`, `tab`, `esc`, `backspace`, `space`, `plus`, `up`,
+///   `down`, `left`, `right`, `home`, `end`, `pgup`, `pgdn`, `insert`,
+///   `delete` → `Enter`, `Tab`, `Esc`, `Backspace`, `Space`, `Plus`, `Up`,
+///   `Down`, `Left`, `Right`, `Home`, `End`, `PgUp`, `PgDn`, `Insert`,
+///   `Delete`;
+/// - a single printable character stays EXACTLY as it is: `y` must not become
+///   `Y`, because the key bound is the lower-case one and telling a reader to
+///   press `Y` is telling them to press Shift. This holds UNDER a modifier
+///   too, and there it is not merely cosmetic: `Chord::new` drops `shift` on a
+///   `Char`, and [`parse_chord`] rejects `shift+<char>` outright, so `ctrl+K`
+///   is a genuinely DIFFERENT binding from `ctrl+k` (`Char('K')` vs
+///   `Char('k')`) — printing `Ctrl+K` for the latter would name a chord the
+///   reader does not have;
+/// - anything else passes through untouched. Nothing is invented.
+///
+/// This is DISPLAY only. The keymap, [`parse_chord`] and every stored string
+/// stay byte-identical.
+///
+/// ```
+/// use norte_frontend::keymap::paint_chord;
+///
+/// assert_eq!(paint_chord("f5"), "F5");
+/// assert_eq!(paint_chord("shift+f8"), "Shift+F8");
+/// assert_eq!(paint_chord("ctrl+k"), "Ctrl+k");
+/// assert_eq!(paint_chord("y"), "y", "the bound key is the lower-case one");
+/// assert_eq!(paint_chord("g g"), "g g");
+/// ```
+#[must_use]
+pub fn paint_chord(raw: &str) -> String {
+    // Masking FIRST — see the rustdoc above. Never reorder these two.
+    let masked = norte_encoding::mask_terminal_hazards(raw);
+    let mut out = String::with_capacity(masked.len());
+    for (i, key) in masked.split(' ').enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        for (j, token) in key.split('+').enumerate() {
+            if j > 0 {
+                out.push('+');
+            }
+            out.push_str(&pretty_token(token));
+        }
+    }
+    out
+}
+
+/// One token of a chord, spelled for a reader. See [`paint_chord`] for the
+/// whole table and for why nothing here can undo the masking that ran before.
+fn pretty_token(token: &str) -> String {
+    let named = match token {
+        "ctrl" => "Ctrl",
+        "alt" => "Alt",
+        "shift" => "Shift",
+        // Not spellings `Display` produces today (`Mods` has no such flag),
+        // but a frontend that grows them must not have to touch this table.
+        "super" => "Super",
+        "meta" => "Meta",
+        "enter" => "Enter",
+        "tab" => "Tab",
+        "esc" => "Esc",
+        "backspace" => "Backspace",
+        "space" => "Space",
+        "plus" => "Plus",
+        "up" => "Up",
+        "down" => "Down",
+        "left" => "Left",
+        "right" => "Right",
+        "home" => "Home",
+        "end" => "End",
+        "pgup" => "PgUp",
+        "pgdn" => "PgDn",
+        "insert" => "Insert",
+        "delete" => "Delete",
+        other => {
+            // `f` plus digits is a function key, and ONLY that: a lone
+            // `Char` token is exactly one character, so `f5` can never be a
+            // character binding. The digits are copied verbatim.
+            let rest = other.strip_prefix('f').unwrap_or_default();
+            if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()) {
+                return format!("F{rest}");
+            }
+            // A single printable character, or anything unrecognised: raw.
+            return other.to_owned();
+        }
+    };
+    named.to_owned()
+}
+
 /// Error de carga o parseo de un keymap. Diagnóstico SIEMPRE accionable:
 /// la config rota es un error claro, jamás comportamiento raro.
 #[derive(Debug, thiserror::Error)]
@@ -1849,6 +1970,124 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
             parse_keymap("[dialog]\nkeymap = [{ on = [\"y\"], run = \"dialog.approve\" }]\n")
                 .unwrap();
         assert!(layer.has_full_keymap());
+    }
+
+    /// The table [`paint_chord`] documents, walked over what `Display`
+    /// actually writes — the round trip is the point: every spelling here is
+    /// produced by formatting a real [`Chord`], never hand-written, so the
+    /// table cannot drift from the `Display` it is the counterpart of.
+    #[test]
+    fn paint_chord_spells_a_key_the_way_the_docs_do() {
+        for (raw, painted) in [
+            ("f1", "F1"),
+            ("f12", "F12"),
+            ("shift+f8", "Shift+F8"),
+            ("ctrl+alt+f5", "Ctrl+Alt+F5"),
+            ("enter", "Enter"),
+            ("tab", "Tab"),
+            ("esc", "Esc"),
+            ("backspace", "Backspace"),
+            ("space", "Space"),
+            ("plus", "Plus"),
+            ("up", "Up"),
+            ("down", "Down"),
+            ("left", "Left"),
+            ("right", "Right"),
+            ("home", "Home"),
+            ("end", "End"),
+            ("pgup", "PgUp"),
+            ("pgdn", "PgDn"),
+            ("insert", "Insert"),
+            ("delete", "Delete"),
+        ] {
+            assert_eq!(
+                parse_chord(raw).expect("chord del catálogo").to_string(),
+                raw,
+                "el fixture tiene que ser lo que `Display` escribe de verdad"
+            );
+            assert_eq!(paint_chord(raw), painted, "{raw}");
+        }
+    }
+
+    /// THE case that matters: a single printable character is painted
+    /// EXACTLY as it is bound. Telling a reader to press `Y` is telling them
+    /// to press Shift — and it is not only cosmetic, because `Char('Y')` is a
+    /// different binding that `parse_chord` would resolve to a different key.
+    /// Holds under a modifier too (`Ctrl+k`, never `Ctrl+K`).
+    #[test]
+    fn paint_chord_never_shifts_a_printable_key() {
+        for chord in [
+            "y",
+            "n",
+            "k",
+            "G",
+            "ctrl+k",
+            "alt+p",
+            "ctrl+alt+k",
+            "ñ",
+            "漢",
+        ] {
+            let painted = paint_chord(chord);
+            let key = painted.rsplit('+').next().expect("siempre hay tecla");
+            let bound = chord.rsplit('+').next().expect("siempre hay tecla");
+            assert_eq!(key, bound, "{chord} → {painted}: la TECLA no se toca");
+        }
+        assert_eq!(paint_chord("ctrl+k"), "Ctrl+k");
+        assert_eq!(
+            paint_chord("G"),
+            "G",
+            "…y la mayúscula ligada sigue mayúscula"
+        );
+    }
+
+    /// A multi-key SEQUENCE keeps its space join, and every key of it is
+    /// spelled.
+    #[test]
+    fn paint_chord_spells_every_key_of_a_sequence() {
+        assert_eq!(paint_chord("g g"), "g g");
+        assert_eq!(paint_chord("g home"), "g Home");
+        assert_eq!(paint_chord("ctrl+x f5"), "Ctrl+x F5");
+    }
+
+    /// Nothing unrecognised is invented: an `f` that is not a function key,
+    /// a modifier spelled wrong, an empty string — all pass through.
+    #[test]
+    fn paint_chord_invents_nothing() {
+        for raw in ["", "fx", "f", "megakey", "CTRL+k", "f5x"] {
+            assert_eq!(
+                paint_chord(raw),
+                raw,
+                "{raw:?} no se reconoce: pasa tal cual"
+            );
+        }
+    }
+
+    /// Masking runs FIRST and the cosmetics cannot undo it (encoding audit
+    /// H1): every hostile chord of the canonical corpus — bindable from an
+    /// untrusted project `./.norte/keymap.toml` — comes out as `U+FFFD`, with
+    /// no hazard surviving, whether it is the whole chord or one key of a
+    /// sequence under a modifier.
+    #[test]
+    fn paint_chord_masks_before_it_prettifies() {
+        for hazard in norte_testkit::corpus::hostile_chords() {
+            for raw in [
+                hazard.token.to_string(),
+                format!("ctrl+{}", hazard.token),
+                format!("f5 {}", hazard.token),
+            ] {
+                let painted = paint_chord(&raw);
+                assert!(
+                    !painted.chars().any(norte_encoding::is_terminal_hazard),
+                    "[{}] hazard crudo tras pintar {raw:?}: {painted:?}",
+                    hazard.id
+                );
+                assert!(
+                    painted.contains('\u{FFFD}'),
+                    "[{}] el hazard debe quedar en U+FFFD: {painted:?}",
+                    hazard.id
+                );
+            }
+        }
     }
 }
 

@@ -16,7 +16,7 @@ expression: texto
 "│ [x] Fecha · relative                                                        ││"
 "│ [x] x�evil                                                                  ││"
 "│ [ ] Tipo                                                                    ││"
-"└ [enter] confirmar [esc] cancelar [e] activar [ctrl+s] ordenar [f] formato ──┘│"
+"└ [Enter] confirmar [Esc] cancelar [e] activar [Ctrl+s] ordenar [f] formato ──┘│"
 "│                                      ││                                      │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"

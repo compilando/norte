@@ -268,7 +268,9 @@ help-dialog-note = each dialog supports its own subset of these keys
 help-group-basics = Basics
 help-group-doing = Doing things
 help-group-remote = Remote & archives
-help-group-keys = Keyboard
+# The synthetic `keys` entry gets NO header: it is a group of one by
+# construction and its header would be the same word as its only row, so the
+# sidebar does not paint it (`ui::draw_help`). Hence no `help-group-keys`.
 help-topic-keys = Keyboard
 help-cmd-app-quit = quit norte
 help-cmd-app-help = this help

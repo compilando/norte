@@ -141,8 +141,17 @@ pub fn render_topic<'a>(
         )),
     ];
 
-    for block in &topic.blocks {
+    for (i, block) in topic.blocks.iter().enumerate() {
         lines.push(Line::default());
+        // A heading opens a SECTION, and one blank line — the same one that
+        // separates two paragraphs — says nothing about that. A second one
+        // does. Never at the top of the body (the first block already sits
+        // under the title's rule, which is separation enough) and never after
+        // the last block: trailing blanks are scroll the reader has to pay
+        // for.
+        if i > 0 && matches!(block, Block::Heading { .. }) {
+            lines.push(Line::default());
+        }
         lines.extend(render_block(block, lang, r, width, theme));
     }
 
@@ -474,6 +483,63 @@ fn frags(
         .collect()
 }
 
+/// One WORD of the wrap, and the whitespace that follows it.
+///
+/// A word can span several styled fragments, which is the whole point: a
+/// fragment boundary is not a break opportunity. See [`units`].
+struct Unit<'f> {
+    /// The word, in pieces — one per fragment it crosses, each with its own
+    /// style. Never contains whitespace.
+    word: Vec<(&'f str, Style)>,
+    /// The blanks that separate it from the next word, already normalised to
+    /// spaces, in the style of the fragment each run came from.
+    spaces: Vec<(String, Style)>,
+}
+
+/// Groups styled fragments into wrap [`Unit`]s: ONLY whitespace opens a break
+/// opportunity.
+///
+/// The defect this exists to kill: `wrap` used to walk each fragment
+/// independently, so the boundary BETWEEN two fragments was a break
+/// opportunity even with no space at it. A sentence ending in an inline code
+/// span — `…dentro de un `.zip`.` — is a `Code(".zip")` fragment followed by a
+/// `Text(".")` one, and at any width where the boundary lands near the margin
+/// the full stop was pushed onto a line of its own. Two fragments with nothing
+/// between them are one word and wrap as one unit.
+///
+/// Whitespace is normalised to spaces here: a tab or a newline inside a span
+/// would otherwise be painted raw into a cell grid.
+fn units<'f>(frags: &'f [(String, Style)]) -> Vec<Unit<'f>> {
+    let mut out: Vec<Unit<'f>> = Vec::new();
+    // Whether the last unit's word can still take another piece — i.e. no
+    // whitespace has been seen since it started.
+    let mut open = false;
+    for (text, style) in frags {
+        for (word, spaces) in tokens(text) {
+            if !word.is_empty() {
+                match out.last_mut() {
+                    Some(last) if open => last.word.push((word, *style)),
+                    _ => out.push(Unit {
+                        word: vec![(word, *style)],
+                        spaces: Vec::new(),
+                    }),
+                }
+                open = true;
+            }
+            if !spaces.is_empty() {
+                if let Some(last) = out.last_mut() {
+                    last.spaces
+                        .push((" ".repeat(spaces.chars().count()), *style));
+                }
+                // Blanks BEFORE the first word are dropped: a body never
+                // opens on the indentation of its source.
+                open = false;
+            }
+        }
+    }
+    out
+}
+
 /// Wraps styled fragments into lines of at most `width` CELLS, prefixing the
 /// first line with `head` and every continuation with `cont`.
 ///
@@ -482,6 +548,10 @@ fn frags(
 /// same line — so a wrap never joins two words and a line never ends in
 /// trailing blanks. A word wider than the whole line is cut at a cell
 /// boundary.
+///
+/// The unit of wrapping is a [`Unit`], not a fragment: only whitespace is a
+/// break opportunity, so a word that crosses a style change (a code span
+/// closing a sentence, say) moves to the next line WHOLE. See [`units`].
 fn wrap<'a>(
     frags: &[(String, Style)],
     width: usize,
@@ -498,29 +568,31 @@ fn wrap<'a>(
     let mut pending: Vec<Span<'a>> = Vec::new();
     let mut pending_w = 0usize;
 
-    for (text, style) in frags {
-        for (word, spaces) in tokens(text) {
-            if !word.is_empty() {
-                let word_w = word.width();
-                if cur_w == 0 {
-                    // A line never starts with the blanks that ended the
-                    // previous one.
-                    pending.clear();
-                    pending_w = 0;
-                } else if cur_w + pending_w + word_w > inner {
-                    lines.push(std::mem::take(&mut cur));
-                    cur_w = 0;
-                    pending.clear();
-                    pending_w = 0;
-                } else {
-                    cur.append(&mut pending);
-                    cur_w += pending_w;
-                    pending_w = 0;
-                }
+    for unit in units(frags) {
+        // The whole unit is measured before the break decision: the word is
+        // indivisible at a fragment boundary.
+        let word_w: usize = unit.word.iter().map(|(w, _)| w.width()).sum();
+        if word_w > 0 {
+            if cur_w == 0 {
+                // A line never starts with the blanks that ended the
+                // previous one.
+                pending.clear();
+                pending_w = 0;
+            } else if cur_w + pending_w + word_w > inner {
+                lines.push(std::mem::take(&mut cur));
+                cur_w = 0;
+                pending.clear();
+                pending_w = 0;
+            } else {
+                cur.append(&mut pending);
+                cur_w += pending_w;
+                pending_w = 0;
+            }
 
-                let mut rest = word;
+            for (piece, style) in &unit.word {
+                let mut rest = *piece;
                 while !rest.is_empty() {
-                    let avail = inner - cur_w;
+                    let avail = inner.saturating_sub(cur_w);
                     if rest.width() <= avail {
                         cur.push(Span::styled(rest.to_owned(), *style));
                         cur_w += rest.width();
@@ -553,12 +625,11 @@ fn wrap<'a>(
                     rest = &rest[cut..];
                 }
             }
-            if !spaces.is_empty() && cur_w > 0 {
-                // Whitespace is normalised to spaces: a tab or a newline
-                // inside a span would be painted raw into a cell grid.
-                let blanks = " ".repeat(spaces.chars().count());
+        }
+        if cur_w > 0 {
+            for (blanks, style) in unit.spaces {
                 pending_w += blanks.width();
-                pending.push(Span::styled(blanks, *style));
+                pending.push(Span::styled(blanks, style));
             }
         }
     }
@@ -923,19 +994,31 @@ mod tests {
         }
     }
 
+    /// A wrap must never swallow the whitespace it broke at: two words the
+    /// source SEPARATED must never come out adjacent.
+    ///
+    /// The invariant is untouched; the fixture is not. It used to read
+    /// `Text("alpha beta")` + `Strong("gamma")`, with no whitespace between
+    /// `beta` and `gamma` — which makes `betagamma` a single word of the
+    /// source, so painting it as one is the correct answer, not the failure
+    /// the assertion was reaching for. (Splitting it across two lines is the
+    /// defect `a_code_span_and_the_punctuation_after_it_are_one_word` pins.)
+    /// The space is now explicit, so every pair here really is two words.
     #[test]
     fn wrapping_never_joins_two_words() {
         let long = Block::Paragraph(vec![
-            HSpan::Text("alpha beta".to_owned()),
+            HSpan::Text("alpha beta ".to_owned()),
             HSpan::Strong("gamma".to_owned()),
             HSpan::Text(" delta epsilon".to_owned()),
         ]);
         let lines = render_block(&long, Lang::En, &Fake, 12, &theme());
         let text = flatten(&lines);
-        assert!(
-            !text.contains("betagamma"),
-            "a wrap must not glue two words together: {text}"
-        );
+        for glued in ["alphabeta", "betagamma", "gammadelta", "deltaepsilon"] {
+            assert!(
+                !text.contains(glued),
+                "a wrap must not glue two words together ({glued}): {text}"
+            );
+        }
         for line in &lines {
             let painted = flatten(std::slice::from_ref(line));
             assert_eq!(
@@ -944,6 +1027,121 @@ mod tests {
                 "no line ends in the blanks that separated it from the next"
             );
         }
+    }
+
+    /// Only WHITESPACE is a break opportunity: a fragment boundary with no
+    /// space at it is inside a word, and the two halves wrap together.
+    ///
+    /// The shape that shipped: a sentence closing on an inline code span
+    /// broke as `…dentro de un .zip` / `.`, leaving the full stop alone on
+    /// the next line, because `wrap` walked one fragment at a time. Pinned at
+    /// EVERY width where the boundary can land near the margin, not at one
+    /// hand-picked one — the defect only shows at the widths that put the
+    /// break there.
+    #[test]
+    fn a_code_span_and_the_punctuation_after_it_are_one_word() {
+        let sentence = Block::Paragraph(vec![
+            HSpan::Text("Un fichero dentro de un ".to_owned()),
+            HSpan::Code(".zip".to_owned()),
+            HSpan::Text(". Y sigue.".to_owned()),
+        ]);
+        for width in 10..=40 {
+            let lines = render_block(&sentence, Lang::En, &Fake, width, &theme());
+            for line in &lines {
+                let painted = flatten(std::slice::from_ref(line));
+                assert_ne!(
+                    painted.trim(),
+                    ".",
+                    "the full stop belongs to `.zip`, not to a line of its own \
+                     (width {width}): {:?}",
+                    flatten(&lines)
+                );
+                assert!(
+                    cells(line) <= width,
+                    "keeping the word whole must not overflow the body \
+                     (width {width}): {painted:?}"
+                );
+            }
+            // Nothing is lost or invented by the regrouping.
+            assert_eq!(
+                flatten(&lines).replace('\n', " "),
+                "Un fichero dentro de un .zip. Y sigue.",
+                "width {width}"
+            );
+        }
+    }
+
+    /// The other half of the same rule: a word that crosses a style change
+    /// moves to the next line WHOLE, rather than being split at the boundary
+    /// to fill the current one.
+    #[test]
+    fn a_word_that_crosses_a_style_change_wraps_as_one() {
+        // `123456789` + `abc` is one 12-cell word: on a 12-cell body it fits
+        // alone on a line, and `xxxx ` before it must push it down entire.
+        let block = Block::Paragraph(vec![
+            HSpan::Text("xxxx 123456789".to_owned()),
+            HSpan::Strong("abc".to_owned()),
+        ]);
+        let lines = render_block(&block, Lang::En, &Fake, 12, &theme());
+        assert_eq!(
+            flatten(&lines),
+            "xxxx\n123456789abc",
+            "the styled tail must not be left behind on the previous line"
+        );
+    }
+
+    /// A heading opens a section, and the single blank line that separates two
+    /// paragraphs does not say so. It gets two — but never at the top of the
+    /// body, where the title's rule is separation enough, and never a trailing
+    /// one after the last block.
+    #[test]
+    fn a_heading_is_given_more_air_than_a_paragraph_break() {
+        let para = |s: &str| Block::Paragraph(vec![HSpan::Text(s.to_owned())]);
+        let heading = |s: &str| Block::Heading {
+            level: 1,
+            text: s.to_owned(),
+        };
+        let topic = Topic {
+            id: TopicId::new("spacing"),
+            title: "Spacing".to_owned(),
+            tags: Vec::new(),
+            see_also: Vec::new(),
+            commands: Vec::new(),
+            context: Vec::new(),
+            blocks: vec![para("one"), heading("Section"), para("two")],
+            origin: norte_help::Origin::BuiltIn,
+        };
+        let out = render_topic(&topic, Lang::En, &Fake, 40, &theme());
+        let text = flatten(&out.lines);
+        let rows: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            rows,
+            vec![
+                "Spacing",
+                &"─".repeat(40)[..],
+                "",
+                "one",
+                "",
+                "",
+                "Section",
+                "",
+                "two",
+            ],
+            "two blanks before the heading, one between paragraphs, none \
+             trailing: {rows:?}"
+        );
+
+        // A topic that OPENS on a heading gets no extra blank: the rule above
+        // it already separates it from the title.
+        let first = Topic {
+            blocks: vec![heading("Section"), para("one")],
+            ..topic
+        };
+        let out = render_topic(&first, Lang::En, &Fake, 40, &theme());
+        assert_eq!(
+            flatten(&out.lines).lines().collect::<Vec<_>>(),
+            vec!["Spacing", &"─".repeat(40)[..], "", "Section", "", "one"],
+        );
     }
 
     #[test]

@@ -526,9 +526,16 @@ fn todo_comando_tiene_ayuda_traducida() {
 /// MISMO conjunto de ids, así que un tag ausente en los dos pasa de largo.
 ///
 /// Los tags se sacan del MODELO (`HelpState::rows`), no de una lista escrita
-/// a mano: son exactamente las filas `Group` que el pintor recorre, incluida
-/// la sintética `keys` que no sale de ningún `.md`. H3h escribe el corpus
-/// completo y este barrido crece con él sin tocarlo.
+/// a mano: son exactamente las filas `Group` que el pintor recorre. H3h
+/// escribe el corpus completo y este barrido crece con él sin tocarlo.
+///
+/// Las que el pintor NO pinta quedan fuera, y quién es quién lo dice él
+/// (`ui::help_group_is_painted`), no una copia de la regla: la cabecera del
+/// grupo sintético `keys` se suprime —es un grupo de uno cuya cabecera se
+/// llamaría igual que su única fila— así que exigirle entrada Fluent sería
+/// exigir una cadena que nadie busca. Si alguna vez un tema del corpus se
+/// archiva bajo ese tag, su cabecera SÍ se pinta y este barrido vuelve a
+/// pedirla.
 #[test]
 fn toda_cabecera_de_grupo_de_la_ayuda_tiene_etiqueta_traducida() {
     use norte_frontend::help::{HelpState, SidebarRow};
@@ -538,10 +545,13 @@ fn toda_cabecera_de_grupo_de_la_ayuda_tiene_etiqueta_traducida() {
         // La etiqueta de `keys` no se está probando aquí (la cubre
         // `ids_decoracion`); da igual cuál sea mientras no esté vacía.
         let state = HelpState::new(lang, "Teclado".to_owned());
-        for row in state.rows() {
+        for (i, row) in state.rows().iter().enumerate() {
             let SidebarRow::Group { tag } = row else {
                 continue;
             };
+            if !norte_tui::ui::help_group_is_painted(state.rows(), i) {
+                continue;
+            }
             vistos += 1;
             let id = format!("help-group-{tag}");
             assert_ne!(
@@ -557,10 +567,11 @@ fn toda_cabecera_de_grupo_de_la_ayuda_tiene_etiqueta_traducida() {
             );
         }
     }
-    // Anti-vacuidad: sin filas `Group` el bucle no afirma nada. Hoy hay 4
-    // grupos por locale (`basics`, `doing`, `remote` y la sintética `keys`).
+    // Anti-vacuidad: sin filas `Group` el bucle no afirma nada. Hoy hay 3
+    // grupos PINTADOS por locale (`basics`, `doing`, `remote`; la cabecera de
+    // la sintética `keys` no se pinta).
     assert!(
-        vistos >= 8,
+        vistos >= 6,
         "el barrido no vio cabeceras de grupo suficientes ({vistos}): el modelo \
          dejó de agrupar y este test pasaría en vacío"
     );

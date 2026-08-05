@@ -1101,10 +1101,12 @@ async fn run(
         // el número de líneas que salieron, y solo el render lo sabe (ver
         // `HelpView::refresh`). Cada vuelta, no solo al cambiar de tema: un
         // resize no pasa por ninguna tecla.
-        if app.help.is_some() {
+        if let Some(lang) = app.help.as_ref().map(|h| h.state.lang()) {
             let size = terminal.size()?;
-            let (ancho, alto) =
-                ui::help_body_size(ratatui::layout::Rect::new(0, 0, size.width, size.height));
+            let (ancho, alto) = ui::help_body_size(
+                ratatui::layout::Rect::new(0, 0, size.width, size.height),
+                lang,
+            );
             app.refresh_help(ancho, alto);
         }
         // Exención puntual de la regla 2: el draw escribe stdout síncrono

@@ -11,10 +11,12 @@
 //!   which `norte-help`'s corpus resolves its live `{{cmd:…}}` marks against
 //!   the reader's own keymap and language.
 //!
-//! Every chord either shape paints goes through `paint_chord`. `Chord`'s
-//! `Display` is raw ON PURPOSE (logs and debug output want the real chord),
-//! and a project `./.norte/keymap.toml` carries no trust, so masking is the
-//! painter's duty — one home for it here rather than one per call site.
+//! Every chord either shape paints goes through
+//! [`norte_frontend::keymap::paint_chord`]. `Chord`'s `Display` is raw and
+//! lower case ON PURPOSE (logs and debug output want the real chord), and a
+//! project `./.norte/keymap.toml` carries no trust, so masking — and then the
+//! conventional spelling — is the painter's duty, in ONE shared home rather
+//! than one per call site.
 
 use std::collections::HashMap;
 
@@ -22,21 +24,7 @@ use norte_help::{Availability, ChordResolver};
 use norte_i18n::t;
 use unicode_width::UnicodeWidthStr;
 
-use crate::keymap::{Effective, Screen, dialog_hint_id, help_id};
-
-/// The single place a chord becomes PAINTABLE text in this module.
-///
-/// Render-side duty (encoding audit H1): `Effective::bindings` hands back
-/// `Chord`'s `Display`, which writes hazards raw on purpose — the keymap
-/// engine does not filter them, and `parse_chord` accepts ANY lone codepoint
-/// as a `KeyCode::Char`. A `./.norte/keymap.toml` in a cloned repository is an
-/// untrusted PROJECT layer that can therefore bind RLO, BEL or ZWSP to a
-/// supported command, and both [`build`] and [`TuiChords`] put the result on
-/// a terminal. Same mechanism as [`crate::hints::dialog_hints`] and
-/// `norte_frontend::palette::first_chord`.
-fn paint_chord(raw: &str) -> String {
-    norte_encoding::mask_terminal_hazards(raw)
-}
+use crate::keymap::{Effective, Screen, dialog_hint_id, help_id, paint_chord};
 
 /// Width in CELLS of the chord column of the cheatsheet.
 const CHORD_COLUMN: usize = 14;
@@ -140,10 +128,11 @@ fn label_id(command: &str) -> String {
 ///     norte_i18n::Lang::En,
 /// );
 ///
-/// // A `{{cmd:pane.copy}}` mark in the corpus becomes the reader's own key.
+/// // A `{{cmd:pane.copy}}` mark in the corpus becomes the reader's own key,
+/// // spelled the way the documentation spells it (`paint_chord`).
 /// assert_eq!(
 ///     render_command("pane.copy", &r),
-///     CommandText::Chord("f5".to_owned()),
+///     CommandText::Chord("F5".to_owned()),
 /// );
 /// // A command with no key names itself rather than inventing one.
 /// assert_eq!(r.chord("no.such.command"), None);
@@ -404,7 +393,7 @@ mod tests {
     #[test]
     fn resolves_a_browse_command_to_its_effective_chord() {
         let r = orthodox_resolver();
-        assert_eq!(r.chord("pane.copy").as_deref(), Some("f5"));
+        assert_eq!(r.chord("pane.copy").as_deref(), Some("F5"));
     }
 
     #[test]
@@ -434,7 +423,7 @@ mod tests {
         }
         assert!(swept > 40, "the sweep must actually cover the app: {swept}");
         // Named samples, one per screen, so a regression says WHICH arm.
-        assert_eq!(r.chord("pane.copy").as_deref(), Some("f5"));
+        assert_eq!(r.chord("pane.copy").as_deref(), Some("F5"));
         assert_eq!(r.chord("viewer.hex").as_deref(), Some("x"));
         assert_eq!(r.chord("dialog.approve").as_deref(), Some("y"));
     }

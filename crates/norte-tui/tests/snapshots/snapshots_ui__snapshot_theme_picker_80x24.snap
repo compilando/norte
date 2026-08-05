@@ -18,7 +18,7 @@ expression: texto.clone()
 "│                    │ catppuccin-latte                   │                    │"
 "│                    │ retro-crt                          │                    │"
 "│                    │ retro-crt-amber                    │                    │"
-"│                    └ [enter] confirmar [esc] cancelar ──┘                    │"
+"│                    └ [Enter] confirmar [Esc] cancelar ──┘                    │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"

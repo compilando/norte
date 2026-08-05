@@ -11,7 +11,7 @@ expression: render(&app)
 "│ ! �.da┌ Favoritos ───────────────────────────────────────────────────┐       │"
 "│       │ trabajo — ⟨file⟩/home/o/work                                 │       │"
 "│       │ rota ruta inválida                                           │       │"
-"│       └ [enter] confirmar [esc] cancelar [a] añadir [d] borrar ──────┘       │"
+"│       └ [Enter] confirmar [Esc] cancelar [a] añadir [d] borrar ──────┘       │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"

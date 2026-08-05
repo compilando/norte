@@ -43,31 +43,44 @@ pub(crate) fn without_navigation<'a>(supported: &'a [&'a str]) -> Vec<&'a str> {
         .collect()
 }
 
-/// Commands the HELP overlay's footer leaves unsaid (MAJOR, H3b): `Enter` and
-/// `Esc` are the UNIVERSAL overlay keys — every other overlay's footer already
-/// drops its self-evident verbs through [`without_navigation`], and the `help`
-/// topic spells both of them out in prose. Excluded ONLY from the generated
-/// HINT text via [`help_hint_commands`]; `ALLOW_HELP` and the dispatch in
-/// `app.rs` are untouched — the keys still work, they are just not printed.
-const HELP_HINT_EXCLUDED: &[&str] = &["dialog.confirm", "dialog.cancel"];
-
-/// Filters a SUPPORTED allowlist down to what the HELP footer spells out:
-/// [`without_navigation`] plus [`HELP_HINT_EXCLUDED`]. Used only by
-/// [`DialogHints::build`] for [`DialogHints::help`].
+/// The HELP overlay's printable verbs, in the PRIORITY order its footer
+/// offers them.
 ///
-/// Even across the FULL inner width of the overlay (74 cells on an 80-column
-/// frame, once the footer stopped being carved out of the body column alone)
-/// the five surviving groups do not fit, and `fit_hint_groups` drops them from
-/// the tail — so the one that fell off was `[tab] other pane`, the only way
-/// into the body, where `Enter` runs commands that touch the filesystem.
-/// Dropping the two universal verbs leaves the three the reader cannot guess.
-#[must_use]
-pub(crate) fn help_hint_commands<'a>(supported: &'a [&'a str]) -> Vec<&'a str> {
-    without_navigation(supported)
-        .into_iter()
-        .filter(|c| !HELP_HINT_EXCLUDED.contains(c))
-        .collect()
-}
+/// The help overlay is full-screen and cannot grow, so it is the one footer
+/// whose hint has to be CUT — `ui::fit_hint_groups` drops whole
+/// `[chord] label` groups from the TAIL and marks the loss with a `…`. That
+/// mechanism is what decides here: this list is offered WHOLE and the width
+/// takes what it takes, so a 113-column terminal shows all five groups and an
+/// 80-column one keeps the three at the head.
+///
+/// The order is therefore a ranking of what a reader cannot guess:
+///
+/// 1. `dialog.filter` — nothing else on screen suggests the page is
+///    searchable;
+/// 2. `dialog.back` — the only way out of a link, and the overlay's history is
+///    invisible;
+/// 3. `dialog.pane` — the only way INTO the body, where `Enter` runs commands
+///    that touch the filesystem;
+/// 4. `dialog.confirm`, 5. `dialog.cancel` — the UNIVERSAL overlay keys, which
+///    the `help` topic also spells out in prose. Last because they are the
+///    ones a reader already knows, not because they are unimportant.
+///
+/// It was a fixed EXCLUSION of the last two before, which honoured the
+/// 80-column frame by hiding `[enter]`/`[esc]` on every frame, wide ones
+/// included. `ALLOW_HELP` and the dispatch in `app.rs` are untouched either
+/// way — this is the printed hint only.
+///
+/// Navigation is absent for the reason [`without_navigation`] gives, and
+/// `help_priority_covers_every_printable_verb` pins that this list stays a
+/// complete projection of `ALLOW_HELP`: a verb added there must be ranked
+/// here, not silently unprintable.
+const HELP_HINT_PRIORITY: &[&str] = &[
+    "dialog.filter",
+    "dialog.back",
+    "dialog.pane",
+    "dialog.confirm",
+    "dialog.cancel",
+];
 
 /// Footer hint for an overlay: the join of its SUPPORTED dialog commands ×
 /// the effective dialog keymap × Fluent labels — same invariant as F1 help
@@ -89,15 +102,46 @@ pub fn dialog_hints(supported: &[&str], eff: &Effective) -> String {
             // keymap potencialmente hostil (`./.norte/keymap.toml`, capa de
             // PROYECTO sin trust — `parse_chord` acepta CUALQUIER
             // codepoint suelto como `KeyCode::Char`). `Chord`'s `Display`
-            // lo escribe crudo A PROPÓSITO (logs/debug quieren el chord
-            // real); este hint SÍ se pinta en el pie de modales de
-            // seguridad, así que se enmascara aquí, no en el motor. Mismo
-            // mecanismo que `App::query_display`.
-            let chord = norte_encoding::mask_terminal_hazards(&chord);
+            // lo escribe crudo y en minúscula A PROPÓSITO (logs/debug
+            // quieren el chord real); este hint SÍ se pinta en el pie de
+            // modales de seguridad, así que `paint_chord` — el ÚNICO hogar
+            // de presentación de un chord, compartido con la palette y la
+            // ayuda F1 — enmascara PRIMERO y solo después escribe la tecla
+            // como la escribe la documentación (`F5`, no `f5`).
+            let chord = crate::keymap::paint_chord(&chord);
             out.push(format!("[{chord}] {}", t(&dialog_hint_id(cmd))));
         }
     }
     out.join(" ")
+}
+
+/// Same hint, but in the order the CALLER gives instead of the effective
+/// keymap's.
+///
+/// [`dialog_hints`] follows the effective on purpose (a footer that lists keys
+/// in the order they resolve), and every overlay that can GROW to fit its hint
+/// wants exactly that. The help overlay cannot grow: its footer is cut by
+/// `ui::fit_hint_groups`, which drops groups from the TAIL — so the order is
+/// what decides which verbs survive a narrow frame, and that is a
+/// presentation ranking (`HELP_HINT_PRIORITY`, private to this module), not a
+/// keymap fact.
+///
+/// A command with no binding in the effective is skipped, same as
+/// [`dialog_hints`] — no phantom key. `order` is expected to be duplicate-free
+/// (a constant ranking); a repeat would simply print its group twice.
+#[must_use]
+pub fn dialog_hints_in_order(order: &[&str], eff: &Effective) -> String {
+    order
+        .iter()
+        .filter_map(|cmd| {
+            // `first_chord` is the same join `dialog_hints` performs (first
+            // chord of the command in the effective's precedence order),
+            // through the same `paint_chord` presentation home.
+            norte_frontend::palette::first_chord(cmd, eff)
+                .map(|chord| format!("[{chord}] {}", t(&dialog_hint_id(cmd))))
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Hints precomputados de TODOS los overlays de diálogo, uno por campo.
@@ -144,7 +188,7 @@ impl DialogHints {
     pub fn build(eff: &Effective) -> Self {
         use crate::app::{
             ALLOW_APPROVAL, ALLOW_COLLISION, ALLOW_COLUMNS, ALLOW_CONFIRM, ALLOW_EXTENSIONS,
-            ALLOW_HELP, ALLOW_NAV_HOTLIST, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, ALLOW_TRUST_HOST,
+            ALLOW_NAV_HOTLIST, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, ALLOW_TRUST_HOST,
         };
         Self {
             confirm: dialog_hints(ALLOW_CONFIRM, eff),
@@ -171,7 +215,10 @@ impl DialogHints {
             extensions: dialog_hints(&without_navigation(ALLOW_EXTENSIONS), eff),
             plugin_config: dialog_hints(&without_navigation(ALLOW_PLUGIN_CONFIG), eff),
             nav_list: dialog_hints(&without_navigation(ALLOW_NAV_HOTLIST), eff),
-            help: dialog_hints(&help_hint_commands(ALLOW_HELP), eff),
+            // H3b: offered WHOLE, in priority order — the width decides how
+            // much of it is printed (`ui::fit_hint_groups`), not a fixed
+            // exclusion. See [`HELP_HINT_PRIORITY`].
+            help: dialog_hints_in_order(HELP_HINT_PRIORITY, eff),
         }
     }
 }
@@ -180,6 +227,24 @@ impl DialogHints {
 mod tests {
     use super::*;
     use crate::keymap::{Screen, parse_keymap};
+
+    /// El efectivo `dialog` del preset de fábrica, que es el que pintan los
+    /// pies reales. Vocabulario = `COMMANDS` ∪ `DIALOG_COMMANDS`: el efectivo
+    /// `dialog` fusiona TAMBIÉN la sección `[global]` del preset, así que
+    /// `DIALOG_COMMANDS` a secas no basta (`build_for` fallaría con
+    /// `UnknownCommand { run: "app.quit" }`).
+    fn orthodox_dialog() -> Effective {
+        let (_, preset) = crate::keymap::presets()
+            .into_iter()
+            .find(|(n, _)| *n == "orthodox")
+            .expect("preset orthodox");
+        let known: Vec<&str> = crate::keymap::COMMANDS
+            .iter()
+            .copied()
+            .chain(crate::keymap::DIALOG_COMMANDS.iter().copied())
+            .collect();
+        Effective::build_for(&preset, &[], &known, Screen::Dialog).expect("efectivo dialog")
+    }
 
     /// Encoding audit H1: un `./.norte/keymap.toml` de PROYECTO (sin trust)
     /// puede ligar un chord hostil (RLO/ZWSP/LRM/BEL, corpus
@@ -257,8 +322,10 @@ mod tests {
         let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog).unwrap();
         // El allowlist pide confirm-antes-que-cancel; el efectivo declara
         // cancel primero — el hint sigue al efectivo.
+        // Chords PINTADOS (`paint_chord`): `Esc`/`Enter`, no `esc`/`enter` —
+        // `Chord`'s `Display` es crudo y en minúscula solo para logs.
         let hint = dialog_hints(&["dialog.confirm", "dialog.cancel"], &eff);
-        assert_eq!(hint, "[esc] cancel [enter] confirm");
+        assert_eq!(hint, "[Esc] cancel [Enter] confirm");
     }
 
     #[test]
@@ -276,7 +343,7 @@ mod tests {
         let known = ["dialog.up"];
         let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog).unwrap();
         let hint = dialog_hints(&["dialog.up"], &eff);
-        assert_eq!(hint, "[up] up");
+        assert_eq!(hint, "[Up] up");
     }
 
     #[test]
@@ -302,18 +369,7 @@ mod tests {
     /// navegación) — nada que filtrar, así que su comportamiento no cambia.
     #[test]
     fn overlays_no_modales_omiten_navegacion_del_hint() {
-        use crate::keymap::{COMMANDS, DIALOG_COMMANDS, presets};
-        let (_, preset) = presets()
-            .into_iter()
-            .find(|(n, _)| *n == "orthodox")
-            .expect("preset orthodox");
-        let known: Vec<&str> = COMMANDS
-            .iter()
-            .copied()
-            .chain(DIALOG_COMMANDS.iter().copied())
-            .collect();
-        let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog).unwrap();
-        let hints = DialogHints::build(&eff);
+        let hints = DialogHints::build(&orthodox_dialog());
         for hint in [
             &hints.picker,
             &hints.extensions,
@@ -321,36 +377,20 @@ mod tests {
             &hints.nav_list,
         ] {
             assert!(
-                !hint.contains("[up]") && !hint.contains("[down]"),
+                !hint.contains("[Up]") && !hint.contains("[Down]"),
                 "las flechas no deberían salir en un hint no-modal: {hint:?}"
             );
         }
         // El picker SÍ conserva confirm/cancel (no son navegación).
-        assert!(hints.picker.contains("[enter]"));
-        assert!(hints.picker.contains("[esc]"));
+        assert!(hints.picker.contains("[Enter]"));
+        assert!(hints.picker.contains("[Esc]"));
     }
 
     /// H3b: the help overlay's footer is GENERATED like every other
     /// overlay's — the three verbs it adds must reach it with their chords.
     #[test]
     fn el_hint_de_la_ayuda_lista_sus_verbos_propios() {
-        let (_, preset) = crate::keymap::presets()
-            .into_iter()
-            .find(|(n, _)| *n == "orthodox")
-            .expect("preset orthodox");
-        // The `dialog` effective ALSO merges the preset's `[global]` section,
-        // so `DIALOG_COMMANDS` alone is not a sufficient known-command
-        // vocabulary (`build_for` fails with `UnknownCommand { run:
-        // "app.quit" }`). Same union as
-        // `overlays_no_modales_omiten_navegacion_del_hint`.
-        let known: Vec<&str> = crate::keymap::COMMANDS
-            .iter()
-            .copied()
-            .chain(crate::keymap::DIALOG_COMMANDS.iter().copied())
-            .collect();
-        let eff =
-            crate::keymap::Effective::build_for(&preset, &[], &known, Screen::Dialog).unwrap();
-        let hints = DialogHints::build(&eff);
+        let hints = DialogHints::build(&orthodox_dialog());
         for cmd in ["dialog.filter", "dialog.back", "dialog.pane"] {
             assert!(
                 hints.help.contains(&t(&crate::keymap::dialog_hint_id(cmd))),
@@ -360,40 +400,86 @@ mod tests {
         }
     }
 
-    /// MAJOR (H3b): el pie de la ayuda no gasta ancho en `Enter`/`Esc` — son
-    /// las teclas universales de cualquier overlay — para que `[tab]`, la
-    /// ÚNICA entrada al cuerpo, quepa en un frame de 80 columnas. Y es solo
-    /// el hint IMPRESO: `ALLOW_HELP` y el despacho siguen aceptándolas.
+    /// H3b, adaptive footer: the help hint is OFFERED whole — all five
+    /// printable verbs, `Enter` and `Esc` included — and in the priority order
+    /// a narrow frame will cut from the tail. Nothing is excluded up front any
+    /// more: a 113-column terminal has room for the lot and used to paint half
+    /// an empty footer while hiding them.
     #[test]
-    fn el_pie_de_la_ayuda_calla_las_teclas_universales_pero_no_las_desactiva() {
-        use crate::app::{ALLOW_HELP, help_action};
-        let (_, preset) = crate::keymap::presets()
-            .into_iter()
-            .find(|(n, _)| *n == "orthodox")
-            .expect("preset orthodox");
-        let known: Vec<&str> = crate::keymap::COMMANDS
-            .iter()
-            .copied()
-            .chain(crate::keymap::DIALOG_COMMANDS.iter().copied())
-            .collect();
-        let eff =
-            crate::keymap::Effective::build_for(&preset, &[], &known, Screen::Dialog).unwrap();
-        let hints = DialogHints::build(&eff);
-        for cmd in ["dialog.confirm", "dialog.cancel"] {
+    fn el_pie_de_la_ayuda_ofrece_todos_sus_verbos_en_orden_de_prioridad() {
+        let hints = DialogHints::build(&orthodox_dialog());
+        let posicion = |cmd: &str| {
+            hints
+                .help
+                .find(&t(&dialog_hint_id(cmd)))
+                .unwrap_or_else(|| panic!("{cmd} debe estar en el pie de la ayuda: {}", hints.help))
+        };
+        let orden: Vec<usize> = HELP_HINT_PRIORITY.iter().map(|c| posicion(c)).collect();
+        assert!(
+            orden.windows(2).all(|w| w[0] < w[1]),
+            "los verbos salen en el orden de prioridad, que es el que decide \
+             qué sobrevive a un frame estrecho: {}",
+            hints.help
+        );
+        // …y la navegación sigue fuera (`without_navigation`, MAJOR-1).
+        for cmd in NAVIGATION_HINT_EXCLUDED {
             assert!(
-                !hints.help.contains(&t(&dialog_hint_id(cmd))),
-                "{cmd} no se imprime en el pie de la ayuda: {}",
+                !hints
+                    .help
+                    .contains(&format!("] {}", t(&dialog_hint_id(cmd)))),
+                "{cmd} es autoevidente y no gasta ancho: {}",
                 hints.help
             );
+        }
+    }
+
+    /// [`HELP_HINT_PRIORITY`] es una proyección COMPLETA de `ALLOW_HELP`: un
+    /// verbo nuevo en el allowlist tiene que rankearse aquí, no quedarse
+    /// invisible en el pie para siempre (que es lo que hacía la exclusión
+    /// fija). Y al revés: nada se anuncia que el despacho no acepte.
+    #[test]
+    fn help_priority_covers_every_printable_verb() {
+        use crate::app::{ALLOW_HELP, help_action};
+        let printable = without_navigation(ALLOW_HELP);
+        for cmd in &printable {
             assert!(
-                ALLOW_HELP.contains(&cmd) && help_action(cmd).is_some(),
-                "…pero la tecla SIGUE viva: {cmd}"
+                HELP_HINT_PRIORITY.contains(cmd),
+                "{cmd} es imprimible pero no está rankeado en HELP_HINT_PRIORITY"
             );
         }
-        assert!(
-            hints.help.contains(&t(&dialog_hint_id("dialog.pane"))),
-            "y el verbo que entra al cuerpo sí llega: {}",
-            hints.help
+        for cmd in HELP_HINT_PRIORITY {
+            assert!(
+                printable.contains(cmd),
+                "{cmd} se anunciaría sin que el despacho lo acepte"
+            );
+            assert!(
+                help_action(cmd).is_some(),
+                "…y la tecla tiene que estar viva: {cmd}"
+            );
+        }
+        assert_eq!(HELP_HINT_PRIORITY.len(), printable.len());
+    }
+
+    /// `dialog_hints_in_order` sigue el ORDEN del caller (al revés que
+    /// [`dialog_hints`], que sigue el efectivo) y omite lo no ligado.
+    #[test]
+    fn dialog_hints_in_order_sigue_al_caller_no_al_efectivo() {
+        let preset = parse_keymap(
+            r#"
+            [dialog]
+            keymap = [
+                { on = ["esc"], run = "dialog.cancel" },
+                { on = ["enter"], run = "dialog.confirm" },
+            ]
+        "#,
+        )
+        .unwrap();
+        let known = ["dialog.confirm", "dialog.cancel", "dialog.pane"];
+        let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog).unwrap();
+        assert_eq!(
+            dialog_hints_in_order(&["dialog.confirm", "dialog.pane", "dialog.cancel"], &eff),
+            "[Enter] confirm [Esc] cancel",
+            "el orden es el pedido, y `dialog.pane` (sin binding) no inventa tecla"
         );
     }
 

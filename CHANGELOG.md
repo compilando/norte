@@ -176,6 +176,40 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **The help overlay reads like a page now.** The sidebar is sized to its own
+  titles instead of a flat 24 cells — floored at that 24 so nothing narrows, and
+  capped at a third of the screen — so the list of topics stops cutting five of
+  its nine rows on a normal terminal. The prose it points at gained a gutter and
+  lost its 90-cell lines: the body is laid out at a 72-cell measure, which is
+  what a line of text is read at. Groups are separated by a blank line, a
+  heading inside a page gets more air than a paragraph break, and the synthetic
+  keyboard entry no longer carries a header that repeats its own name. The
+  footer says where you are in the page (`{line}/{total}`, the viewer's idiom)
+  whenever the page does not fit — the runnable rows of a topic are painted
+  behind all of its prose, and nothing used to say they were down there.
+
+- **Keys are spelled the way the documentation spells them.** `F5`,
+  `Shift+F8`, `Ctrl+Alt+F5`, `PgUp` — everywhere a chord is painted: the F1
+  cheatsheet, the prose of every help topic, the command palette's chord
+  column and the footer of every overlay. `Chord`'s `Display` stays raw and
+  lower case, because logs and debug output want the literal chord; the
+  conventional spelling is a single shared presentation home
+  (`norte_frontend::keymap::paint_chord`) that the three painters now route
+  through, and which masks terminal hazards FIRST — an untrusted project
+  `./.norte/keymap.toml` can bind any codepoint, and nothing cosmetic may
+  resurrect it. A key bound to a single printable character is left exactly as
+  it is: `y` is not painted `Y`, because `Y` is a different binding and would
+  be telling you to press Shift.
+
+- **The help footer fills the terminal it is given.** It used to drop
+  `[enter]` and `[esc]` from the printed hint unconditionally so the rest
+  would fit at 80 columns, which left a 113-column footer half empty with two
+  keys hidden for no reason. All five verbs are now offered in priority order
+  and the width decides: a wide terminal shows them all, a narrow one keeps
+  the ones you cannot guess (`[/] filtrar`, `[backspace] atrás`,
+  `[tab] otro panel`) and marks the cut with `…`. Whole `[chord] label` groups
+  as always — never half of one.
+
 - **`q` no longer closes the help.** The overlay now resolves its keys through
   the `dialog` context like every other one, and `q` is `app.quit` there — a
   key that means "leave the app" cannot also mean "leave this page". `Esc`
@@ -183,6 +217,12 @@ independently through `PROTOCOL_VERSION`.
   a page or out of the help when there is nowhere left to go back to.
 
 ### Fixed
+
+- **A help page no longer breaks a word at a style change.** Only whitespace
+  is a break opportunity: two styled fragments with nothing between them are
+  one word and wrap together. A sentence closing on an inline code span used to
+  render as `…dentro de un .zip` with the full stop alone on the next line, at
+  any width where the boundary landed near the margin.
 
 - **The F1 cheatsheet stops quoting its own translation keys.** The `dialog`
   keymap merges the preset's `[global]` section, so `app.quit` and its

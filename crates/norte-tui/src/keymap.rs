@@ -5,7 +5,7 @@
 //! (GUI-c T1/T2) — este módulo es una capa fina TUI-específica.
 pub use norte_frontend::keymap::{
     Chord, Effective, KeyCode, KeymapError, KeymapFile, Mods, Resolution, Resolver, Screen,
-    parse_chord, parse_keymap,
+    paint_chord, parse_chord, parse_keymap,
 };
 
 use crossterm::event::{KeyCode as CtCode, KeyModifiers as CtMods};
