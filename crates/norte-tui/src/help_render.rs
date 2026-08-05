@@ -169,7 +169,7 @@ pub fn render_topic<'a>(
             .unwrap_or(0);
         for row in &rows {
             action_lines.push(lines.len());
-            lines.push(row_line(row, col, width, theme));
+            lines.push(row_line(row, col, width, lang, theme));
         }
     }
 
@@ -322,16 +322,44 @@ pub fn render_block<'a>(
     }
 }
 
-/// One runnable row: the chord in its padded column, then the label.
+/// One runnable row: the chord in its padded column, then the label — and, on
+/// a row that cannot run, WHY.
 ///
 /// Always ONE line — an action that wrapped would break the invariant
-/// [`Rendered::action_lines`] rests on — so the label is cut, not wrapped.
+/// [`Rendered::action_lines`] rests on — so the text is cut, not wrapped.
+///
+/// The reason is painted because dimming alone leaves the reader guessing
+/// whether the row is inapplicable or the app is broken. Its Fluent id comes
+/// from [`norte_frontend::availability::reason_key`], the same ids the GUI's
+/// context menu paints, so the two surfaces explain a veto in one wording.
+///
+/// # Which text takes the ellipsis
+///
+/// On an UNAVAILABLE row the reason is budgeted FIRST and the LABEL is cut. The
+/// obvious way round — compose `label — reason` and truncate the whole thing —
+/// paints `copy the selection to the other pane — read-only backe…` in any
+/// realistic pane, which answers the question the reader did not ask and drops
+/// the one the dimming raised. The command's own name is already in the prose
+/// above the table and its chord is in the column to the left, so the label is
+/// the recoverable half.
+///
+/// An available row is untouched: it has no reason, gets the whole budget for
+/// its label, and nothing about it changed.
+///
+/// If the reason ALONE does not fit, it takes the ellipsis and the label is
+/// dropped entirely — there is nothing else to give up, and a row that says
+/// `read-onl…` still points at the right kind of answer.
 fn row_line<'a>(
     row: &norte_help::ResolvedRow,
     col: usize,
     width: usize,
+    lang: Lang,
     theme: &TuiTheme,
 ) -> Line<'a> {
+    /// Between the label and the reason. Spaced em dash, as the status bar
+    /// spells the same join.
+    const SEP: &str = " — ";
+
     let chord = row.chord.as_deref().unwrap_or(NO_CHORD);
     let available = row.row.avail.is_available();
     // An unavailable row is prose, not a key: it must not wear the key style
@@ -350,11 +378,31 @@ fn row_line<'a>(
     // hugs the chord instead of stretching across an empty column.
     let pad = " ".repeat(col.saturating_sub(chord.width()) + 2);
     let used = 2 + chord.width() + pad.width();
+    let budget = width.saturating_sub(used);
+    let text = match row.row.avail.reason() {
+        Some(reason) => {
+            let reason = norte_i18n::t_in(lang, norte_frontend::availability::reason_key(reason));
+            // What is left once the reason and its separator are paid for. Zero
+            // means the reason is the whole line.
+            let for_label = budget.saturating_sub(SEP.width() + reason.width());
+            if for_label == 0 {
+                fit(&reason, budget)
+            } else {
+                format!("{}{SEP}{reason}", fit(&row.label, for_label))
+            }
+        }
+        None => fit(&row.label, budget),
+    };
+    debug_assert!(
+        text.width() <= budget,
+        "row of {} cells in a {budget}-cell budget: {text:?}",
+        text.width()
+    );
     Line::from(vec![
         Span::raw("  "),
         Span::styled(chord.to_owned(), key_style),
         Span::raw(pad),
-        Span::styled(fit(&row.label, width.saturating_sub(used)), label_style),
+        Span::styled(text, label_style),
     ])
 }
 
@@ -720,6 +768,139 @@ mod tests {
                 Availability::Available
             }
         }
+    }
+
+    /// Todo vetado por el mismo motivo: lo que se comprueba es que la razón
+    /// ACOMPAÑA a la fila, no qué comando la tiene.
+    struct Vetado;
+
+    impl ChordResolver for Vetado {
+        fn chord(&self, _command: &str) -> Option<String> {
+            Some("f5".to_owned())
+        }
+
+        fn label(&self, command: &str) -> String {
+            format!("do {command}")
+        }
+
+        fn availability(&self, _command: &str) -> Availability {
+            Availability::Unavailable {
+                reason: Reason::ReadOnlyBackend,
+            }
+        }
+    }
+
+    /// Nada vetado: el contrapunto de [`Vetado`].
+    struct Libre;
+
+    impl ChordResolver for Libre {
+        fn chord(&self, _command: &str) -> Option<String> {
+            Some("f5".to_owned())
+        }
+
+        fn label(&self, command: &str) -> String {
+            format!("do {command}")
+        }
+
+        fn availability(&self, _command: &str) -> Availability {
+            Availability::Available
+        }
+    }
+
+    #[test]
+    fn una_fila_vetada_pinta_su_razon() {
+        // Atenuar sin decir por qué deja al lector adivinando si es un bug.
+        let out = render_topic(
+            topic(Lang::En, "copying").expect("copying"),
+            Lang::En,
+            &Vetado,
+            80,
+            &theme(),
+        );
+        let texto = flatten(&out.lines);
+        assert!(
+            texto.contains(&norte_i18n::t_in(Lang::En, "reason-read-only")),
+            "la razón acompaña a la fila atenuada: {texto}"
+        );
+        // Y una fila que SÍ puede correr no arrastra ninguna razón: si la
+        // pintara, el lector no distinguiría lo que puede pulsar.
+        let libre = render_topic(
+            topic(Lang::En, "copying").expect("copying"),
+            Lang::En,
+            &Libre,
+            80,
+            &theme(),
+        );
+        let libre = flatten(&libre.lines);
+        assert!(
+            !libre.contains(&norte_i18n::t_in(Lang::En, "reason-read-only")),
+            "razón pintada en una página sin nada vetado: {libre}"
+        );
+    }
+
+    /// Estrecho: la RAZÓN sobrevive y la etiqueta se lleva la elipsis.
+    ///
+    /// Al revés — componer `etiqueta — razón` y recortar el conjunto — el lector
+    /// se queda con el nombre del comando (que ya está en la prosa de arriba y
+    /// en la columna del chord) y pierde el único dato que la atenuación
+    /// planteaba. Y la fila sigue siendo UNA línea cueste lo que cueste: el
+    /// mapa `action_lines` cuenta con eso.
+    #[test]
+    fn en_una_fila_estrecha_la_razon_sobrevive_y_la_etiqueta_se_recorta() {
+        let razon = norte_i18n::t_in(Lang::En, "reason-read-only");
+        let filas_a = |ancho: usize| -> Vec<String> {
+            let out = render_topic(
+                topic(Lang::En, "copying").expect("copying"),
+                Lang::En,
+                &Vetado,
+                ancho,
+                &theme(),
+            );
+            // Ninguna FILA se sale del ancho, con razón o sin ella. (Sólo las
+            // filas: un `Block::Code` se deja largo a propósito — ver
+            // `render_block` — y clipearlo es cosa del pane.)
+            for &y in &out.action_lines {
+                let line = &out.lines[y];
+                assert!(
+                    cells(line) <= ancho,
+                    "fila de {} celdas en un cuerpo de {ancho}: {:?}",
+                    cells(line),
+                    flatten(std::slice::from_ref(line))
+                );
+            }
+            out.action_lines
+                .iter()
+                .map(|&y| flatten(std::slice::from_ref(&out.lines[y])))
+                .collect()
+        };
+
+        // La razón entera sobrevive en todo ancho donde QUEPA, aunque la
+        // etiqueta no.
+        for ancho in [30, 40, 60, 80] {
+            let filas = filas_a(ancho);
+            assert!(
+                filas.iter().any(|f| f.contains(&razon)),
+                "a {ancho} celdas la razón entera sigue ahí: {filas:?}"
+            );
+        }
+
+        // A 40 celdas la etiqueta más larga de la página ya no cabe: es ELLA
+        // la que se recorta, con la razón intacta detrás.
+        let filas = filas_a(40);
+        assert!(
+            filas.iter().any(|f| f.contains('…') && f.contains(&razon)),
+            "la etiqueta cede y la razón queda: {filas:?}"
+        );
+
+        // Y cuando ni la razón cabe, se lleva ella la elipsis y la etiqueta
+        // desaparece: no hay nada más que ceder.
+        let estrechas = filas_a(20);
+        let fila = estrechas.first().expect("hay filas");
+        assert!(fila.contains('…'), "la razón se recorta: {fila:?}");
+        assert!(
+            !fila.contains("do pane"),
+            "sin sitio, la etiqueta no se pinta a medias: {fila:?}"
+        );
     }
 
     fn flatten(lines: &[Line<'_>]) -> String {

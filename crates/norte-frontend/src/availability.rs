@@ -30,14 +30,16 @@ use norte_help::{Availability, Reason};
 /// a `.zip` file is enterable (`nav.enter` composes an archive scheme onto
 /// it); in the GUI it is not, because the GUI has no archive composition on
 /// Enter. A `kind: EntryKind` in here would force the table to pick one of the
-/// two and be wrong in the other frontend.
+/// two and be wrong in the other frontend. [`Facts::rename_single`] is the
+/// second instance of exactly that, so the pattern is the rule here and not an
+/// exception made once.
 ///
 /// (`clippy::struct_excessive_bools`: allowed on purpose. These are six
 /// INDEPENDENT observations about one moment, not the states of a machine —
 /// any combination of them is a real context, so there is no enum to collapse
 /// them into. Wrapping each in a two-variant enum would make every call site
-/// read `Enterable::No, Viewable::Yes, Single::Yes` for no gain: the field
-/// names already say which question each answer belongs to.)
+/// read `Enterable::No, Viewable::Yes, RenameSingle::Yes` for no gain: the
+/// field names already say which question each answer belongs to.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Facts {
@@ -46,8 +48,17 @@ pub struct Facts {
     pub enterable: bool,
     /// The focused entry has something to show in a viewer.
     pub viewable: bool,
-    /// Exactly one entry is the target.
-    pub single: bool,
+    /// Exactly one entry will be renamed.
+    ///
+    /// Not "exactly one entry is selected", because the two frontends TARGET
+    /// differently: the GUI's rename refuses a multiple selection, while the
+    /// TUI's renames the entry under the CURSOR and ignores the marks
+    /// entirely. Same shape as [`Facts::enterable`] — the table cannot know, so
+    /// the caller says. The field is deliberately about the rename and not
+    /// about the selection: a generic `single` read by this one arm invited the
+    /// TUI to fill it from its marked set, which dimmed `pane.rename` for a
+    /// batch the TUI renames one entry of quite happily.
+    pub rename_single: bool,
     /// The pane the command reads FROM refuses mutation.
     pub source_read_only: bool,
     /// The pane the command writes TO refuses mutation.
@@ -88,6 +99,34 @@ pub fn reason_key(reason: Reason) -> &'static str {
         Reason::WrongTarget => "reason-wrong-target",
         _ => "reason-unavailable",
     }
+}
+
+/// Whether a location on this scheme refuses mutation, decided SYNTACTICALLY.
+///
+/// Today that means "inside an archive" (`zip+file`, `tar+gz+file`…, ADR
+/// 0018/0028): the archive provider announces `READ_ONLY` and no mutation ever
+/// leaves it, so the scheme alone is enough to know.
+///
+/// It exists for the moment BEFORE the capability flags have arrived. A
+/// frontend that caches `Capabilities` per scheme should prefer the flags and
+/// fall back here (see `norte_tui::app::App::pane_read_only`); one that caches
+/// nothing has only this. Either way it answers too MUCH read-only, never too
+/// little: a backend that refuses writes for some other reason says so when
+/// the task is submitted, which is a real error the user sees, whereas
+/// claiming a read-only location is writable would offer an operation that
+/// cannot exist.
+///
+/// ```
+/// use norte_frontend::availability::scheme_is_read_only;
+///
+/// assert!(scheme_is_read_only("zip+file"));
+/// assert!(scheme_is_read_only("tar+gz+file"));
+/// assert!(!scheme_is_read_only("file"));
+/// assert!(!scheme_is_read_only("s3"));
+/// ```
+#[must_use]
+pub fn scheme_is_read_only(scheme: &str) -> bool {
+    norte_proto::scheme_archive_format(scheme).is_some()
 }
 
 /// Deshabilitado por `reason`.
@@ -131,7 +170,7 @@ fn first_failure(checks: &[(bool, Reason)]) -> Availability {
 /// let en_un_zip = Facts {
 ///     enterable: false,
 ///     viewable: true,
-///     single: true,
+///     rename_single: true,
 ///     source_read_only: true,
 ///     dest_read_only: false,
 ///     degraded: false,
@@ -162,10 +201,11 @@ pub fn verdict(command: &str, facts: &Facts) -> Availability {
             !facts.dest_read_only && !facts.source_read_only,
             Reason::ReadOnlyBackend,
         ),
-        // Renombrar de verdad (`pane.rename`, shift+F6): UNA entrada, la del
-        // cursor. Con varias marcas se apaga en vez de renombrar la del
-        // cursor a espaldas del objetivo anunciado — renombrar en bloque
-        // sería un batch-rename, otra feature.
+        // Renombrar de verdad (`pane.rename`, shift+F6): UNA entrada. CUÁL y
+        // si con varias marcas cuenta como una lo dice el llamador
+        // (`rename_single`), porque los dos frontends apuntan distinto — la
+        // GUI se niega con selección múltiple, la TUI renombra la del cursor
+        // ignorando las marcas.
         //
         // El ORDEN de estos dos checks es la decisión, no un detalle: dentro
         // de un zip con tres marcas, «es de solo lectura» es lo que el
@@ -173,13 +213,21 @@ pub fn verdict(command: &str, facts: &Facts) -> Availability {
         // escribible un zip), así que gana el backend.
         "pane.rename" => first_failure(&[
             (facts.source_read_only, Reason::ReadOnlyBackend),
-            (!facts.single, Reason::WrongTarget),
+            (!facts.rename_single, Reason::WrongTarget),
         ]),
         // Los dos escriben en el ORIGEN y sólo el origen los veta. El rename
         // de IA además actúa sobre la CARPETA entera, no sobre el objetivo
         // señalado, así que a diferencia de `pane.rename` el recuento no le
         // afecta (por eso no comparte arm con él).
-        "pane.ai-rename" | "pane.delete" => gated(!facts.source_read_only, Reason::ReadOnlyBackend),
+        //
+        // `pane.delete-permanent` (shift+F8) es del vocabulario de la TUI y no
+        // del menú de la GUI, pero se veta con el MISMO criterio: borrar
+        // saltándose la papelera sigue siendo escribir en el origen. Sin este
+        // brazo la página de copiado atenuaba F8 y dejaba shift+F8 encendido
+        // dentro de un zip — dos filas contiguas contándose lo contrario.
+        "pane.ai-rename" | "pane.delete" | "pane.delete-permanent" => {
+            gated(!facts.source_read_only, Reason::ReadOnlyBackend)
+        }
         // Aquí caen dos cosas distintas, y conviene no confundirlas al leer:
         // los comandos que NO tienen impedimento posible (`pane.copy-path` no
         // toca el backend — vale hasta dentro de un zip; `app.quit` tampoco) y
@@ -201,7 +249,7 @@ mod tests {
         Facts {
             enterable: false,
             viewable: true,
-            single: true,
+            rename_single: true,
             source_read_only: false,
             dest_read_only: false,
             degraded: false,
@@ -232,13 +280,40 @@ mod tests {
         // El orden es la decisión: con un lote de 3 ficheros dentro de un
         // zip, «es de solo lectura» explica más que «hay más de uno».
         let f = Facts {
-            single: false,
+            rename_single: false,
             source_read_only: true,
             ..one_file()
         };
         assert_eq!(
             verdict("pane.rename", &f).reason(),
             Some(Reason::ReadOnlyBackend)
+        );
+    }
+
+    /// La MISMA divergencia que `enterable`, sobre renombrar: la GUI se niega
+    /// con selección múltiple, la TUI renombra la del cursor e ignora las
+    /// marcas. Con un `single` genérico decidiendo este brazo, la ayuda de la
+    /// TUI atenuaba shift+F6 en cuanto hubiese dos marcas — una fila apagada
+    /// para algo que la app hace sin pestañear, que es justo el fallo que H3d
+    /// existe para no cometer.
+    #[test]
+    fn renombrar_lo_decide_el_llamador_no_el_recuento() {
+        let tui_con_marcas = Facts {
+            rename_single: true,
+            ..one_file()
+        };
+        assert!(
+            verdict("pane.rename", &tui_con_marcas).is_available(),
+            "la TUI renombra la del cursor: no se atenúa"
+        );
+        let gui_con_marcas = Facts {
+            rename_single: false,
+            ..one_file()
+        };
+        assert_eq!(
+            verdict("pane.rename", &gui_con_marcas).reason(),
+            Some(Reason::WrongTarget),
+            "la GUI se niega con selección múltiple"
         );
     }
 
@@ -310,6 +385,37 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Borrar sin papelera se veta como borrar: dentro de un zip las DOS
+    /// filas de la página de copiado (F8 y shift+F8) tienen que decir lo
+    /// mismo — la que quedase encendida prometería la más destructiva.
+    #[test]
+    fn borrar_permanente_se_veta_como_borrar() {
+        let dentro_de_un_zip = Facts {
+            source_read_only: true,
+            ..one_file()
+        };
+        for cmd in ["pane.delete", "pane.delete-permanent"] {
+            assert_eq!(
+                verdict(cmd, &dentro_de_un_zip).reason(),
+                Some(Reason::ReadOnlyBackend),
+                "{cmd} ofrecido dentro de un backend de solo lectura"
+            );
+        }
+    }
+
+    /// El criterio SINTÁCTICO: un scheme compuesto de archivo es de solo
+    /// lectura por construcción; uno de provider, no.
+    #[test]
+    fn el_scheme_de_archivo_es_de_solo_lectura() {
+        assert!(scheme_is_read_only("zip+file"));
+        assert!(scheme_is_read_only("tar+file"));
+        assert!(scheme_is_read_only("tar+gz+file"));
+        assert!(!scheme_is_read_only("file"));
+        assert!(!scheme_is_read_only("sftp"));
+        assert!(!scheme_is_read_only("s3"));
+        assert!(!scheme_is_read_only("mem"));
     }
 
     /// Una conexión degradada NO veta nada, y eso está fijado a propósito:

@@ -233,3 +233,39 @@ async fn embedded_sanea_catalogo_y_pide_attrs() {
         .expect("list");
     assert!(bare.iter().all(|e| e.attrs.is_empty()));
 }
+
+/// H3d: las DOS mitades de `fs.capabilities` en UNA llamada, y las mismas que
+/// devuelven los dos accesores por separado.
+///
+/// Existe porque los frontends quieren ambas: la TUI cachea el catálogo para
+/// sus columnas y los flags para responder «¿es de solo lectura?» sin volver a
+/// preguntar. Con `capabilities` y `attr_catalog` cada una tirando la otra
+/// mitad, eso eran dos rondas por un mensaje que ya las traía juntas.
+#[tokio::test]
+async fn embedded_capabilities_y_attrs_en_una_llamada() {
+    let engine = Engine::new();
+    let mem = Arc::new(MemProvider::new().with_synthetic_attrs());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    let backend = Backend::Embedded(Arc::new(engine));
+
+    let (caps, cat) = backend
+        .capabilities_and_attrs(&vp("mem:///"))
+        .await
+        .expect("las dos mitades");
+    assert_eq!(
+        caps,
+        backend.capabilities(&vp("mem:///")).await.expect("caps"),
+        "los flags son los mismos que por el accesor de siempre"
+    );
+    assert_eq!(
+        cat.iter().map(|a| a.id.clone()).collect::<Vec<_>>(),
+        backend
+            .attr_catalog(&vp("mem:///"))
+            .await
+            .expect("catálogo")
+            .iter()
+            .map(|a| a.id.clone())
+            .collect::<Vec<_>>(),
+        "y el catálogo también: esto no es un camino con otro saneo"
+    );
+}

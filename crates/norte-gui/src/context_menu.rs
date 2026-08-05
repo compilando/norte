@@ -136,7 +136,12 @@ pub fn facts_for(
     Facts {
         enterable: single && kind == EntryKind::Dir,
         viewable: single && kind == EntryKind::File,
-        single,
+        // La GUI se NIEGA a renombrar una selección múltiple: renombraría la
+        // del cursor a espaldas del objetivo que el menú anuncia, y renombrar
+        // en bloque sería un batch-rename, otra feature. La TUI llena este
+        // mismo hecho con `true` porque su shift+F6 apunta al cursor y punto
+        // — de ahí que sea un hecho del llamador y no del recuento.
+        rename_single: single,
         source_read_only,
         dest_read_only,
         // La GUI no sigue la pista de las degradaciones de conexión (la TUI sí,

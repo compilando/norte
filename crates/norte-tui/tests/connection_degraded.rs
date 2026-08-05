@@ -1,7 +1,12 @@
 //! #44: la degradación de una sesión remota a texto plano se pinta como
 //! indicador PERSISTENTE en la status bar. A diferencia de `app.message`
-//! (transitorio), `app.connection_warning` sobrevive a las teclas y sigue
+//! (transitorio), el aviso de degradación sobrevive a las teclas y sigue
 //! avisando en cada frame mientras no haya mensaje, búsqueda viva ni hook Lua.
+//!
+//! H3d: lo que `App` retiene es el valor ESTRUCTURADO por scheme
+//! (`note_degraded`) y la frase la compone la barra (`connection_banner`) — el
+//! `Option<String>` ya formateado de #44 tiraba scheme y host y no sabía
+//! responder «qué conexión se degradó».
 
 use norte_proto::VPath;
 use norte_tui::app::{App, Pane};
@@ -28,7 +33,13 @@ fn connection_warning_se_pinta_en_la_status_bar() {
     );
     // Sin mensaje transitorio, sin búsqueda viva, sin hook Lua: el aviso
     // persistente debe caer en la línea de estado.
-    app.connection_warning = Some("⚠ sftp://remoto.example — texto plano".to_string());
+    // H3d: entra el valor ESTRUCTURADO del wire; la frase la compone la barra.
+    app.note_degraded(norte_proto::methods::ConnectionDegraded {
+        scheme: "sftp".to_owned(),
+        host: "remoto.example".to_owned(),
+        reason: "tls-auth-rejected".to_owned(),
+        detail: None,
+    });
 
     let out = render(&app);
     assert!(

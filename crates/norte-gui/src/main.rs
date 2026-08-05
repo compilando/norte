@@ -5146,19 +5146,13 @@ fn menu_origin(anchor: (f32, f32), panel: (f32, f32), viewport: (f32, f32)) -> (
     (x, y)
 }
 
-/// ¿El backend de este scheme es de SOLO LECTURA? Hoy eso significa «dentro
-/// de un archivo» (`zip+file`, `tar+gz+file`…, ADR 0018/0028): el provider de
-/// archivos anuncia `READ_ONLY` y ninguna mutación llega a salir de él.
-///
-/// Sintáctico, como el `scheme_archive_format` del que se apoya: no consulta
-/// al daemon (la GUI no cachea `Capabilities` por conexión), así que responde
-/// a la pregunta que sí puede responder — y de más, nunca de menos: un
-/// backend que rechace la escritura por otro motivo lo dirá al someter la
-/// task, no antes.
-#[must_use]
-fn scheme_is_read_only(scheme: &str) -> bool {
-    norte_proto::scheme_archive_format(scheme).is_some()
-}
+// ¿El backend de este scheme es de SOLO LECTURA? Vivía AQUÍ, inline, y ahora
+// es de `norte_frontend::availability` (H3d tarea 2): la TUI necesitaba el
+// mismo criterio sintáctico para el momento previo a que lleguen las caps, y
+// dos copias de «qué scheme es de solo lectura» se separan en cuanto se añada
+// un formato de archivo. La GUI sigue sin cachear `Capabilities` por conexión,
+// así que aquí este ES el criterio, no el respaldo.
+use norte_frontend::availability::scheme_is_read_only;
 
 /// Colores de la SUPERFICIE del panel del modal: `pane_bg_focus` + `fg` — el
 /// mismo par que ya usan los panes (`render_pane`), porque `Regular.fg` está
@@ -7307,7 +7301,7 @@ mod tests {
     // Menú contextual (tarea 4 del plan de ratón).
     use super::{
         ContextMenu, clipboard_text, context_menu, context_target, expire_stale_menu, keymap,
-        menu_origin, rename_modal_for, scheme_is_read_only,
+        menu_origin, rename_modal_for,
     };
     // Drag & drop entre panes (tarea 5 del plan de ratón).
     use super::transfer_modal;
@@ -10209,16 +10203,9 @@ mod tests {
         );
     }
 
-    /// Los schemes de archivo (`zip+file`, `tar+gz+file`…) son de SOLO
-    /// LECTURA; los de provider, no.
-    #[test]
-    fn el_scheme_de_archivo_es_de_solo_lectura() {
-        assert!(scheme_is_read_only("zip+file"));
-        assert!(scheme_is_read_only("tar+gz+file"));
-        assert!(!scheme_is_read_only("file"));
-        assert!(!scheme_is_read_only("sftp"));
-        assert!(!scheme_is_read_only("s3"));
-    }
+    // `el_scheme_de_archivo_es_de_solo_lectura` se fue con la función a
+    // `norte_frontend::availability` (H3d tarea 2), donde vive su test: aquí
+    // habría probado el crate de al lado a través de un `use`.
 
     /// El texto que va al portapapeles es WIRE: una ruta por línea, lossless
     /// incluso con un nombre que no es UTF-8 (se reparsea a los MISMOS

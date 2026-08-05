@@ -719,6 +719,26 @@ pub struct App {
     /// lectura por [`Self::attr_catalog`], escritura por
     /// [`Self::insert_attr_catalog`].
     attr_catalogs: std::collections::HashMap<String, norte_proto::AttrCatalog>,
+    /// Capability flags per SCHEME, the other half of the same response.
+    ///
+    /// `fs.capabilities` answers with `capabilities` AND `attrs` in one
+    /// message, and this crate was keeping only the attrs — so the honest
+    /// answer to "does this location refuse writes" was already in the
+    /// process, thrown away, and asking for it again meant a second round trip
+    /// over a link that had just carried it. Filled from the SAME call as
+    /// [`Self::attr_catalogs`] (`main::first_page`), so caching it costs
+    /// nothing.
+    ///
+    /// Keyed by scheme, exactly like the attr catalogue and with the same
+    /// known imprecision: two `sftp` hosts share one entry. That is why it
+    /// answers questions about the SHAPE of a backend (read-only, ADR 0018)
+    /// and is not used as a substitute for a per-path probe of something that
+    /// can differ between two locations of one scheme — `pane.delete`'s
+    /// `TRASH` check stays a probe for that reason.
+    ///
+    /// Private: read through [`Self::caps`], written through
+    /// [`Self::insert_caps`].
+    caps: std::collections::HashMap<String, norte_proto::Capabilities>,
     /// Índice del pane con foco (invariante 0|1: privado, ver [`Self::focus`]).
     focus: usize,
     /// `true` cuando el usuario pidió salir.
@@ -770,9 +790,31 @@ pub struct App {
     /// YA saneada por el host (`detail_for_bar`). `Some` sustituye la línea
     /// default de la barra del pane con foco; `None` = barra normal.
     pub lua_status: Option<String>,
-    /// #44: sesión remota degradada a texto plano; indicador PERSISTENTE en la
-    /// status bar (a diferencia de `message`, que es transitorio).
-    pub connection_warning: Option<String>,
+    /// #44: remote sessions degraded to plaintext, BY SCHEME.
+    ///
+    /// Was a single pre-formatted `Option<String>`: `main` formatted the scheme
+    /// and the host into a sentence and dropped the structured
+    /// `ConnectionDegraded`, so "which connection degraded" had no answer, a
+    /// second degradation silently overwrote the first, and the help had no
+    /// fact to read. The value is kept whole and the banner
+    /// ([`Self::connection_banner`]) is built from it on demand.
+    ///
+    /// Keyed by scheme, so `sftp` and `ftp` coexist. Two HOSTS on one scheme
+    /// still collapse into one entry — the same imprecision [`Self::caps`]
+    /// carries, and the banner does not claim otherwise.
+    ///
+    /// NEVER CLEARED, deliberately. A degradation is not known to be resolved
+    /// without a successful reconnect that reports the session encrypted, and
+    /// the wire has no such notification: `connection.degraded` is only ever
+    /// sent, never withdrawn. Any clearing rule this side could invent — a
+    /// timeout, the next successful listing, leaving the pane — would say "the
+    /// session is encrypted again" on evidence that does not support it, which
+    /// is the one wrong answer for a security indicator. Follow-up work is a
+    /// wire notification for the recovered case, not a heuristic here.
+    ///
+    /// Private: read through [`Self::degraded_for`] /
+    /// [`Self::connection_banner`], written through [`Self::note_degraded`].
+    degraded: std::collections::HashMap<String, norte_proto::methods::ConnectionDegraded>,
     /// Historial de directorios por pane (spec 2026-07-18, `Alt+↓`): mismo
     /// índice que `panes`. Vive en `App` y no en `Pane` (el historial no es
     /// estado de render): cada cd EXITOSO empuja el dir anterior (main.rs).
@@ -1472,6 +1514,7 @@ impl App {
             panes: [left, right],
             render_now_ms: None,
             attr_catalogs: std::collections::HashMap::new(),
+            caps: std::collections::HashMap::new(),
             columns: norte_frontend::columns::ColumnsSettings::default(),
             focus: 0,
             quit: false,
@@ -1489,7 +1532,7 @@ impl App {
             extensions: None,
             lua_pending_trust: None,
             lua_status: None,
-            connection_warning: None,
+            degraded: std::collections::HashMap::new(),
             history: [
                 crate::nav::History::default(),
                 crate::nav::History::default(),
@@ -1549,6 +1592,159 @@ impl App {
     /// (un fallo no cachea nada: el próximo cd al scheme reintenta).
     pub fn insert_attr_catalog(&mut self, scheme: String, catalog: norte_proto::AttrCatalog) {
         self.attr_catalogs.insert(scheme, catalog);
+    }
+
+    /// The cached capability flags of `scheme`, if the response has landed.
+    ///
+    /// `None` means "not asked yet, or the call failed" and never "no
+    /// capabilities": a caller must degrade rather than read absence as a
+    /// denial (see [`Self::pane_read_only`] for the shape of that).
+    #[must_use]
+    pub fn caps(&self, scheme: &str) -> Option<&norte_proto::Capabilities> {
+        self.caps.get(scheme)
+    }
+
+    /// Caches the capability flags of `scheme`.
+    ///
+    /// Called from the same place as [`Self::insert_attr_catalog`] and with
+    /// the halves of ONE `fs.capabilities` response — see [`Self::caps`]'
+    /// field docs for why keeping only the attrs was waste.
+    pub fn insert_caps(&mut self, scheme: String, caps: norte_proto::Capabilities) {
+        self.caps.insert(scheme, caps);
+    }
+
+    /// Whether the pane's location refuses mutation.
+    ///
+    /// Answered from the capability flags when they have arrived, and
+    /// SYNTACTICALLY from the scheme until they do
+    /// ([`norte_frontend::availability::scheme_is_read_only`]) — an archive
+    /// scheme is read-only by construction, so the guess is right for the case
+    /// that matters and wrong only in the direction of offering something that
+    /// will then fail honestly. It never claims a location is writable that
+    /// the flags say is not: `READ_ONLY`'s own contract is that the UI vetoes
+    /// upfront.
+    ///
+    /// An index outside `0|1` is `false`, i.e. "writable, as far as this
+    /// knows": the callers are the `Facts` assembly and the help, and a
+    /// verdict is not the place to panic over a bad index.
+    #[must_use]
+    pub fn pane_read_only(&self, pane: usize) -> bool {
+        let Some(p) = self.panes.get(pane) else {
+            return false;
+        };
+        let scheme = p.dir().scheme();
+        match self.caps(scheme) {
+            Some(c) => c.flags.contains(norte_proto::CapabilityFlags::READ_ONLY),
+            None => norte_frontend::availability::scheme_is_read_only(scheme),
+        }
+    }
+
+    /// The context the help's verdict table is asked against.
+    ///
+    /// Every predicate here is the one the matching `dispatch` arm uses, and
+    /// that is the whole contract of this function: a fact derived a second way
+    /// dims a row the app would have run, which is worse than not dimming at
+    /// all — the reader stops trying.
+    ///
+    /// - `enterable`: `nav.enter`'s — `Dir | Symlink`, or an archive the TUI
+    ///   knows how to compose a scheme for ([`crate::nav::archive_root_for`],
+    ///   so a `.zip` FILE counts). This is where the TUI and the GUI genuinely
+    ///   disagree, which is why the table takes the boolean rather than a kind.
+    /// - `viewable`: `pane.view`'s — `File | Symlink` (a symlink to a
+    ///   directory fails in the viewer with a visible message, which is the
+    ///   dispatch arm's own decision).
+    /// - `rename_single`: `true`, ALWAYS, and that is the honest answer rather
+    ///   than a shortcut. `Command::PaneRename` (`App::open_rename`) targets
+    ///   `selected()` and never looks at the marks, so shift+F6 renames exactly
+    ///   one entry no matter how many are marked. Filling this from the marked
+    ///   set — the obvious reading of the field's old name — dimmed the row for
+    ///   a batch the TUI renames one entry of quite happily. The GUI fills the
+    ///   same fact from its count, because its rename does refuse a multiple
+    ///   selection.
+    /// - the two read-only flags: [`Self::pane_read_only`] for the focused pane
+    ///   and the other one. "Source" is the focused pane because every command
+    ///   in the table acts FROM the focus.
+    /// - `degraded`: [`Self::degraded_for`] on the focused pane's scheme. It
+    ///   vetoes nothing today — see the field's rustdoc in
+    ///   [`norte_frontend::availability::Facts`].
+    ///
+    /// NOT computed: policy denial. See [`crate::help::TuiChords`]'
+    /// `availability` for why faking it would dim a row for a rule that does
+    /// not apply to the human sitting here.
+    #[must_use]
+    pub fn help_facts(&self) -> norte_frontend::availability::Facts {
+        let pane = self.focused();
+        let sel = pane.selected();
+        norte_frontend::availability::Facts {
+            enterable: sel.is_some_and(|e| {
+                matches!(e.kind, EntryKind::Dir | EntryKind::Symlink)
+                    || crate::nav::archive_root_for(e).is_some()
+            }),
+            viewable: sel.is_some_and(|e| matches!(e.kind, EntryKind::File | EntryKind::Symlink)),
+            rename_single: true,
+            source_read_only: self.pane_read_only(self.focus),
+            dest_read_only: self.pane_read_only(self.focus ^ 1),
+            degraded: self.degraded_for(pane.dir().scheme()).is_some(),
+        }
+    }
+
+    /// Freezes [`Self::help_facts`] into the resolver the help overlay renders
+    /// through.
+    ///
+    /// Called when the overlay OPENS, before the first layout, so every row of
+    /// every page the reader walks is judged against one context — see
+    /// [`crate::help::TuiChords`]' `facts` for why a live read would make a
+    /// page disagree with itself.
+    pub fn freeze_help_facts(&mut self) {
+        let facts = self.help_facts();
+        self.help_chords = std::sync::Arc::new(self.help_chords.with_facts(facts));
+    }
+
+    /// Records a `connection.degraded` notification (#44).
+    ///
+    /// Keyed by scheme, so a second scheme does not evict the first. A repeat
+    /// for the SAME scheme replaces the entry: the newest report is the one
+    /// worth showing, and the old one described the same session.
+    pub fn note_degraded(&mut self, d: norte_proto::methods::ConnectionDegraded) {
+        self.degraded.insert(d.scheme.clone(), d);
+    }
+
+    /// The degradation reported for `scheme`, if any.
+    ///
+    /// This is the fact the help's [`norte_frontend::availability::Facts`]
+    /// carries. It vetoes nothing on its own — see that field's rustdoc: the
+    /// wire vocabulary means "unencrypted", not "unusable".
+    #[must_use]
+    pub fn degraded_for(&self, scheme: &str) -> Option<&norte_proto::methods::ConnectionDegraded> {
+        self.degraded.get(scheme)
+    }
+
+    /// The persistent status-bar banner, or `None` when nothing degraded.
+    ///
+    /// With ONE degradation it names the connection, exactly as #44 did. With
+    /// several it reports how MANY instead of picking one: showing one and
+    /// hiding the rest is what the pre-formatted string did by accident, and a
+    /// reader who has two plaintext sessions must not be told about one.
+    ///
+    /// Never cleared once set — see the `degraded` field for why that is a
+    /// decision and not an omission.
+    #[must_use]
+    pub fn connection_banner(&self) -> Option<String> {
+        let mut it = self.degraded.values();
+        let first = it.next()?;
+        if it.next().is_none() {
+            return Some(ta(
+                "status-connection-degraded",
+                &[
+                    ("scheme", first.scheme.as_str()),
+                    ("host", first.host.as_str()),
+                ],
+            ));
+        }
+        Some(ta(
+            "status-connections-degraded",
+            &[("n", &self.degraded.len().to_string())],
+        ))
     }
 
     /// El pane con foco.
@@ -3928,6 +4124,218 @@ mod tests {
 
     fn app_dos_panes() -> App {
         App::new(pane_con(&["a"]), pane_con(&["b"]))
+    }
+
+    /// Unas caps cualesquiera: lo que se prueba es el CACHÉ por scheme, no
+    /// qué flags trae el provider.
+    fn caps_de_test() -> norte_proto::Capabilities {
+        norte_proto::Capabilities {
+            flags: norte_proto::CapabilityFlags::RENAME_ATOMIC,
+            max_path: None,
+        }
+    }
+
+    /// Las caps se cachean por SCHEME, como el catálogo de atributos, y por
+    /// la misma razón: `fs.capabilities` devuelve las dos mitades en UNA
+    /// llamada y la TUI ya la hace para las columnas. Tirar la mitad de caps
+    /// y luego sondear otra vez sería pagar dos rondas por un dato que ya
+    /// llegó.
+    #[test]
+    fn las_caps_se_cachean_por_scheme() {
+        let mut app = app_dos_panes();
+        assert!(app.caps("mem").is_none(), "sin sembrar, no se inventa nada");
+        app.insert_caps("mem".to_owned(), caps_de_test());
+        assert!(app.caps("mem").is_some());
+        assert!(app.caps("sftp").is_none(), "un scheme no responde por otro");
+    }
+
+    /// Antes de que llegue la primera respuesta, la respuesta honesta es «no
+    /// lo sé», y quien pregunta cae al criterio SINTÁCTICO (el scheme dice si
+    /// es un archivo comprimido). Lo que no puede hacer es afirmar que se
+    /// puede escribir.
+    #[test]
+    fn sin_caps_todavia_el_solo_lectura_lo_decide_el_scheme() {
+        let app = app_dos_panes();
+        assert!(!app.pane_read_only(0), "mem:// no es de solo lectura");
+
+        let dentro_de_un_zip = app_en("zip+file:///a.zip/!", "file:///casa");
+        assert!(
+            dentro_de_un_zip.pane_read_only(0),
+            "un scheme de archivo es de solo lectura por construcción"
+        );
+        assert!(!dentro_de_un_zip.pane_read_only(1));
+    }
+
+    /// Cuando las caps SÍ llegaron mandan ellas: un provider que anuncia
+    /// `READ_ONLY` sobre un scheme que sintácticamente no lo es (un montaje
+    /// remoto en solo lectura) se veta igual.
+    #[test]
+    fn con_caps_manda_el_flag_read_only() {
+        let mut app = app_dos_panes();
+        app.insert_caps(
+            "mem".to_owned(),
+            norte_proto::Capabilities {
+                flags: norte_proto::CapabilityFlags::READ_ONLY,
+                max_path: None,
+            },
+        );
+        assert!(app.pane_read_only(0));
+        app.insert_caps("mem".to_owned(), caps_de_test());
+        assert!(!app.pane_read_only(0), "sin el flag, escribible");
+    }
+
+    /// Los hechos que la ayuda congela salen de los MISMOS predicados que usan
+    /// los brazos de `dispatch`: un `.zip` se ENTRA en la TUI (`nav.enter`
+    /// compone el scheme) aunque sea un File, y `pane.view` quiere File o
+    /// Symlink. Derivarlos otra vez aquí sería atenuar filas que la app
+    /// ejecutaría.
+    #[test]
+    fn los_hechos_de_la_ayuda_siguen_a_los_predicados_del_dispatch() {
+        let mut app = app_dos_panes();
+        // El cursor está sobre un File normal: no se entra, se ve.
+        let f = app.help_facts();
+        assert!(!f.enterable, "un fichero cualquiera no se entra");
+        assert!(f.viewable);
+        assert!(f.rename_single, "shift+F6 renombra UNA: la del cursor");
+        assert!(!f.source_read_only && !f.dest_read_only);
+        assert!(!f.degraded);
+
+        // Un `.zip` ES entrable en la TUI aunque su kind sea File.
+        let zip = Pane::new(
+            root(),
+            vec![Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: root().join(norte_proto::Segment::new(b"a.zip".to_vec()).unwrap()),
+                kind: EntryKind::File,
+                size: Some(1),
+                mtime_ms: None,
+            }],
+        );
+        let app_zip = App::new(zip, pane_con(&["b"]));
+        assert!(
+            app_zip.help_facts().enterable,
+            "en la TUI un .zip se entra: la ayuda no puede decir lo contrario"
+        );
+
+        // Y la degradación del scheme del pane con foco llega al hecho.
+        app.note_degraded(degradacion_de_test("mem", "sin-host"));
+        assert!(app.help_facts().degraded);
+    }
+
+    /// Con VARIAS marcas la ayuda NO atenúa shift+F6, porque la TUI lo
+    /// ejecuta: `Command::PaneRename` va a `open_rename`, que renombra
+    /// `selected()` y no mira las marcas. Atenuarlo sería el fallo exacto que
+    /// H3d existe para no cometer — apagar una fila que la app habría corrido,
+    /// que enseña al lector a no volver a intentarlo.
+    ///
+    /// (La GUI sí se niega con selección múltiple, y su menú lo sigue haciendo:
+    /// `norte_gui::context_menu`, `renombrar_es_una_sola_entrada_y_la_de_ia_es_otra`.
+    /// El hecho es del llamador precisamente porque las dos respuestas son
+    /// correctas.)
+    #[test]
+    fn con_varias_marcas_la_ayuda_no_atenua_renombrar() {
+        use norte_help::ChordResolver as _;
+
+        let mut app = App::new(pane_con(&["a", "b", "c"]), pane_con(&["z"]));
+        app.focused_mut().toggle_mark_and_advance();
+        app.focused_mut().toggle_mark_and_advance();
+        assert_eq!(
+            app.focused().marked_paths().len(),
+            2,
+            "hay DOS marcas: el caso que se atenuaba"
+        );
+        assert!(app.help_facts().rename_single);
+
+        app.freeze_help_facts();
+        assert!(
+            app.help_chords.availability("pane.rename").is_available(),
+            "la TUI renombra la del cursor con marcas puestas: la ayuda no puede negarlo"
+        );
+        // Y dentro de un archivo sí se apaga, por el backend — el veto real
+        // sigue en pie.
+        let mut zip = App::new(
+            Pane::new(vp("zip+file:///a.zip/!"), Vec::new()),
+            pane_con(&["z"]),
+        );
+        zip.freeze_help_facts();
+        assert_eq!(
+            zip.help_chords.availability("pane.rename").reason(),
+            Some(norte_help::Reason::ReadOnlyBackend)
+        );
+    }
+
+    /// Congelar los hechos al abrir la ayuda: el resolver que la vista usa
+    /// pasa a responder con los hechos de ESE momento.
+    #[test]
+    fn congelar_los_hechos_reescribe_el_resolver_de_la_ayuda() {
+        use norte_help::ChordResolver as _;
+
+        let mut app = app_en("zip+file:///a.zip/!", "zip+file:///b.zip/!");
+        assert!(
+            app.help_chords.availability("pane.copy").is_available(),
+            "antes de congelar el resolver no sabe nada del contexto"
+        );
+        app.freeze_help_facts();
+        assert_eq!(
+            app.help_chords.availability("pane.copy").reason(),
+            Some(norte_help::Reason::ReadOnlyBackend),
+            "los dos panes son de solo lectura: copiar no tiene destino"
+        );
+    }
+
+    /// Una notif `connection.degraded` como la del wire (#44).
+    fn degradacion_de_test(scheme: &str, host: &str) -> norte_proto::methods::ConnectionDegraded {
+        norte_proto::methods::ConnectionDegraded {
+            scheme: scheme.to_owned(),
+            host: host.to_owned(),
+            reason: "ftp-plaintext".to_owned(),
+            detail: None,
+        }
+    }
+
+    /// #44 guardaba la degradación como PROSA ya formateada: el scheme y el
+    /// host se metían en el mensaje y se tiraban, así que «¿qué conexión se
+    /// degradó?» no tenía respuesta. H3d la necesita por pane.
+    #[test]
+    fn la_degradacion_se_guarda_por_scheme() {
+        let mut app = app_dos_panes();
+        app.note_degraded(degradacion_de_test("sftp", "ejemplo.org"));
+        let d = app.degraded_for("sftp").expect("la degradación se retuvo");
+        assert_eq!(d.host, "ejemplo.org", "el host sobrevive, no solo la frase");
+        assert_eq!(d.reason, "ftp-plaintext");
+        assert!(app.degraded_for("file").is_none());
+    }
+
+    /// Y dos conexiones degradadas no se pisan: antes la última ganaba y la
+    /// primera desaparecía de la barra sin que nada la hubiera resuelto.
+    #[test]
+    fn dos_degradaciones_conviven() {
+        let mut app = app_dos_panes();
+        app.note_degraded(degradacion_de_test("sftp", "a.org"));
+        app.note_degraded(degradacion_de_test("ftp", "b.org"));
+        assert!(app.degraded_for("sftp").is_some());
+        assert!(app.degraded_for("ftp").is_some());
+        // Y la barra deja de mentir sobre cuántas hay: con una sola nombra la
+        // conexión; con dos dice que son dos, en vez de enseñar una y callar
+        // la otra.
+        let banner = app.connection_banner().expect("hay aviso");
+        assert!(banner.contains('2'), "el recuento no salió: {banner}");
+        assert!(
+            !banner.contains("a.org") && !banner.contains("b.org"),
+            "con varias no se elige una y se esconden las demás: {banner}"
+        );
+    }
+
+    /// Sin degradación no hay aviso, y con UNA el aviso es el de siempre
+    /// (#44): scheme y host, formateados desde el valor estructurado.
+    #[test]
+    fn el_aviso_de_una_sola_degradacion_nombra_la_conexion() {
+        let mut app = app_dos_panes();
+        assert!(app.connection_banner().is_none());
+        app.note_degraded(degradacion_de_test("sftp", "remoto.example"));
+        let banner = app.connection_banner().expect("hay aviso");
+        assert!(banner.contains("sftp"), "{banner}");
+        assert!(banner.contains("remoto.example"), "{banner}");
     }
 
     /// `App` con cada pane sobre SU dir (el `app_dos_panes` de arriba pone

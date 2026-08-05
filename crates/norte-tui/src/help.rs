@@ -20,6 +20,7 @@
 
 use std::collections::HashMap;
 
+use norte_frontend::availability::Facts;
 use norte_help::{Availability, ChordResolver};
 use norte_i18n::t;
 use unicode_width::UnicodeWidthStr;
@@ -28,6 +29,22 @@ use crate::keymap::{Effective, Screen, dialog_hint_id, help_id, paint_chord};
 
 /// Width in CELLS of the chord column of the cheatsheet.
 const CHORD_COLUMN: usize = 14;
+
+/// The facts of a context with nothing in the way: what [`TuiChords`] answers
+/// against until the overlay opens and freezes the real ones.
+///
+/// Everything permissive, so the table vetoes nothing. Not `Default`, because
+/// "all false" is what a derive would give and that is the OPPOSITE of
+/// permissive here — `enterable: false` alone would dim `nav.enter` on every
+/// page painted through a resolver nobody had frozen yet.
+const NO_IMPEDIMENT: Facts = Facts {
+    enterable: true,
+    viewable: true,
+    rename_single: true,
+    source_read_only: false,
+    dest_read_only: false,
+    degraded: false,
+};
 
 /// Padding that takes `seq` up to `col` CELLS, or nothing when it is already
 /// wider.
@@ -158,6 +175,24 @@ pub struct TuiChords {
     /// The language `label` answers in. Also the language whose catalogue
     /// decides whether there IS an answer; see [`ChordResolver::label`].
     lang: norte_i18n::Lang,
+    /// The context [`ChordResolver::availability`] answers against, FROZEN
+    /// when the overlay opened ([`Self::with_facts`], called by
+    /// `crate::app::App::freeze_help_facts`).
+    ///
+    /// Frozen and not read live, which is the same decision the GUI's context
+    /// menu makes and for the same reason: the reader walks a page whose rows
+    /// were dimmed under one set of facts, and a row that changed verdict
+    /// halfway down — because a task finished and repainted a pane — would
+    /// make the page disagree with itself. Stale for the lifetime of one
+    /// overlay is the price, and it is small: the facts are about WHERE the
+    /// panes are, which the reader cannot change without closing the help.
+    ///
+    /// Before the first freeze it is [`Facts`] with nothing impeded, so the
+    /// resolver dims NOTHING. That is the table's own fail-open default
+    /// (`norte_frontend::availability::verdict`) applied one level up: a
+    /// resolver built by a hot reload and not yet frozen must not start
+    /// claiming commands are broken.
+    facts: Facts,
 }
 
 /// Compile anchor: a fourth `Screen` must not silently make `chord` answer
@@ -197,7 +232,32 @@ impl TuiChords {
                     .or_insert_with(|| paint_chord(&seq));
             }
         }
-        Self { chords, lang }
+        Self {
+            chords,
+            lang,
+            facts: NO_IMPEDIMENT,
+        }
+    }
+
+    /// The same resolver answering [`ChordResolver::availability`] against
+    /// `facts`.
+    ///
+    /// Returns a NEW value instead of mutating: the open overlay holds an
+    /// `Arc` of the resolver it was laid out with, and the freeze happens by
+    /// swapping a fresh one in (`crate::app::App::freeze_help_facts`) exactly
+    /// as the hot reload swaps a rebuilt one. Nothing that a page has already
+    /// been painted through can change underneath it.
+    ///
+    /// The chord map is cloned, once per help open. That is the whole cost, and
+    /// the alternative — resolving facts per rendered row — is what the frozen
+    /// snapshot exists to avoid.
+    #[must_use]
+    pub fn with_facts(&self, facts: Facts) -> Self {
+        Self {
+            chords: self.chords.clone(),
+            lang: self.lang,
+            facts,
+        }
     }
 }
 
@@ -227,16 +287,27 @@ impl ChordResolver for TuiChords {
         if text == id { String::new() } else { text }
     }
 
-    /// Always [`Availability::Available`] in this phase: the help page claims
-    /// every command it documents is runnable right now.
+    /// Whether the command can run in the context the overlay was opened in,
+    /// answered by the ONE shared table
+    /// ([`norte_frontend::availability::verdict`]) so a dimmed help row and a
+    /// greyed-out GUI menu entry can never disagree.
     ///
-    /// That is weaker than what [`ChordResolver::availability`] promises, and
-    /// deliberately so for H3b. H3d wires the real sources (backend
-    /// capabilities, plugin state, policy scope); until then the page makes
-    /// the same claim the rest of the app already makes, because this phase
-    /// changes how help is NAVIGATED, not what it knows about the world.
-    fn availability(&self, _command: &str) -> Availability {
-        Availability::Available
+    /// Two reasons of the vocabulary are deliberately NOT computed here, and
+    /// the absence is the honest answer rather than a gap:
+    ///
+    /// - [`norte_help::Reason::PolicyDenied`] is unreachable. The embedded
+    ///   TUI's actor is `journal::Actor::User`, which `ScopedPolicy::evaluate`
+    ///   allows unconditionally, and the embedded engine is handed `AllowAll`
+    ///   anyway. Policy denial is meaningful for an AGENT going through the
+    ///   daemon; in this app the human is the one who APPROVES a denial, never
+    ///   its subject. Computing it would dim a row for a rule that does not
+    ///   apply to the reader.
+    /// - [`norte_help::Reason::PluginInactive`] has no surface yet: an
+    ///   inactive plugin's commands are filtered out of the palette entirely
+    ///   (`norte_frontend::palette`), so there is no row to dim. It arrives
+    ///   with plugin help (H3e), which has to cache plugin state regardless.
+    fn availability(&self, command: &str) -> Availability {
+        norte_frontend::availability::verdict(command, &self.facts)
     }
 }
 
@@ -544,11 +615,78 @@ mod tests {
         }
     }
 
+    /// Facts sin ningún impedimento: un fichero suelto en un directorio
+    /// escribible, con el otro pane igual.
+    fn facts_normales() -> norte_frontend::availability::Facts {
+        norte_frontend::availability::Facts {
+            enterable: true,
+            viewable: true,
+            rename_single: true,
+            source_read_only: false,
+            dest_read_only: false,
+            degraded: false,
+        }
+    }
+
+    fn resolver_con(facts: norte_frontend::availability::Facts) -> TuiChords {
+        orthodox_resolver().with_facts(facts)
+    }
+
+    /// Antes de congelar nada, el resolver no atenúa: es el mismo fail-OPEN de
+    /// la tabla (`norte_frontend::availability::verdict`) aplicado a los hechos
+    /// — negar por no haber mirado sería peor que ofrecer y fallar honesto.
     #[test]
-    fn every_command_is_available_in_this_phase() {
-        // H3d wires the real sources. Pinned so the day it changes, this
-        // assertion is the one that says where the claim used to live.
+    fn sin_hechos_congelados_no_se_atenua_nada() {
         let r = orthodox_resolver();
         assert_eq!(r.availability("pane.copy"), Availability::Available);
+        assert_eq!(r.availability("nav.enter"), Availability::Available);
+        assert_eq!(r.availability("pane.view"), Availability::Available);
+    }
+
+    /// H3d: la fila de un comando que no puede correr AHORA sale atenuada y
+    /// con su razón, en vez de prometer algo que la app va a rechazar.
+    #[test]
+    fn dentro_de_un_zip_copiar_hacia_aqui_esta_vetado() {
+        let r = resolver_con(norte_frontend::availability::Facts {
+            dest_read_only: true,
+            ..facts_normales()
+        });
+        assert_eq!(
+            r.availability("pane.copy").reason(),
+            Some(norte_help::Reason::ReadOnlyBackend)
+        );
+    }
+
+    /// Y el caso que la fase existe para NO romper: un comando que sí puede
+    /// correr sigue disponible. Una ayuda que atenúa de más es tan inútil
+    /// como una que no atenúa nada.
+    #[test]
+    fn lo_que_puede_correr_sigue_disponible() {
+        let r = resolver_con(facts_normales());
+        assert!(r.availability("pane.copy").is_available());
+        assert!(r.availability("app.quit").is_available());
+    }
+
+    /// Los hechos se CONGELAN al abrir: `with_facts` devuelve otro resolver en
+    /// vez de mutar el que la vista está usando, así que una página abierta no
+    /// puede cambiar de veredicto bajo el cursor del lector.
+    #[test]
+    fn congelar_los_hechos_no_toca_el_resolver_de_partida() {
+        let antes = orthodox_resolver();
+        let dentro_de_un_zip = antes.with_facts(norte_frontend::availability::Facts {
+            source_read_only: true,
+            ..facts_normales()
+        });
+        assert!(!dentro_de_un_zip.availability("pane.delete").is_available());
+        assert!(
+            antes.availability("pane.delete").is_available(),
+            "el resolver de partida siguió intacto"
+        );
+        // Y los chords viajan con la copia: congelar hechos no puede costar la
+        // tecla del lector.
+        assert_eq!(
+            dentro_de_un_zip.chord("pane.copy"),
+            antes.chord("pane.copy")
+        );
     }
 }

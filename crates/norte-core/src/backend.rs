@@ -350,6 +350,36 @@ impl Backend {
         }
     }
 
+    /// Both halves of `fs.capabilities` for `path`: the capability flags AND
+    /// the attribute catalogue, in ONE round trip.
+    ///
+    /// [`Self::capabilities`] and [`Self::attr_catalog`] each throw the other
+    /// half of that response away, so a frontend that wants both — the TUI
+    /// caches the catalogue for its columns and the flags to answer
+    /// "read-only?" without asking again — paid two round trips for one
+    /// message. Remote mode makes a single `fs.capabilities` call here;
+    /// embedded mode asks the engine twice, which is two in-process lookups
+    /// and no I/O at all.
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo.
+    pub async fn capabilities_and_attrs(
+        &self,
+        path: &VPath,
+    ) -> Result<(Capabilities, norte_proto::AttrCatalog), Error> {
+        match self {
+            Self::Embedded(engine) => Ok((
+                engine.capabilities(path).await?,
+                engine.attr_catalog(path).await?,
+            )),
+            #[cfg(unix)]
+            Self::Remote(r) => {
+                let full = r.capabilities_full(path).await?;
+                Ok((full.capabilities, full.attrs))
+            }
+        }
+    }
+
     /// Metadatos de un nodo (`fs.stat`).
     ///
     /// # Errors
@@ -1995,7 +2025,10 @@ pub mod remote {
             Ok(self.capabilities_full(path).await?.attrs)
         }
 
-        async fn capabilities_full(&self, path: &VPath) -> Result<FsCapabilitiesResult, Error> {
+        pub(super) async fn capabilities_full(
+            &self,
+            path: &VPath,
+        ) -> Result<FsCapabilitiesResult, Error> {
             self.call_timed(
                 methods::FS_CAPABILITIES,
                 &FsCapabilitiesParams { path: path.clone() },

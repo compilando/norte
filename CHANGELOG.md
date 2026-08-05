@@ -9,6 +9,24 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The help stops offering what the app would refuse (H3d):** a row for a
+  command that cannot run where you are — writing into an archive, renaming
+  something the backend will not let you rename — is dimmed and says why,
+  instead of promising a key that is about to fail. The verdict comes from the
+  same table the GUI's context menu uses, so the two cannot disagree about
+  whether "copy" is available; where the frontends genuinely differ they say
+  so as facts rather than forking the table (a `.zip` is a thing you enter in
+  the terminal and a file you open in the GUI). Capability flags now come from
+  the answer norte was already fetching for the columns and throwing half
+  away, so knowing this costs no extra round trip, and a degraded connection
+  is finally kept as data instead of a sentence — two degraded connections no
+  longer overwrite each other.
+  Three things it deliberately does not claim: policy denial, because in the
+  embedded app you are the human, whom the policy engine never denies;
+  the difference between a plugin that was never approved and one whose
+  approval expired, because the protocol does not carry it; and anything at
+  all from a degraded connection — that flag means the session is unencrypted,
+  not that it cannot act, and dimming on it would lie to every FTP user.
 - **Help about where you actually are (H3c):** `F1` no longer always opens the
   index. From a pane it opens the page about the panes, from a collision dialog
   the copying page, from the host-key prompt the remote page — the mapping

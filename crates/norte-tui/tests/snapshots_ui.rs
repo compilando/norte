@@ -888,6 +888,12 @@ fn open_help(app: &mut App) {
         &dialog,
         norte_i18n::Lang::Es,
     ));
+    // H3d: y los hechos del contexto se congelan igual que en el binario
+    // (`open_contextual_help`), así que estos snapshots registran lo que un
+    // lector ve DESDE `app_base` — con `file:///casa` escribible, nada
+    // atenuado por el backend, y las filas de `nav.enter`/`pane.view` decididas
+    // por lo que hay bajo el cursor.
+    app.freeze_help_facts();
     app.help = Some(norte_tui::app::HelpView::new(norte_i18n::Lang::Es, lines));
     refresh_help(app);
 }
@@ -1397,6 +1403,48 @@ fn all_row_styles(buf: &ratatui::buffer::Buffer) -> Vec<Vec<ratatui::style::Styl
 /// nombra el comando que el modelo dice tener enfocado — con el chord y la
 /// etiqueta que da el propio resolver, no una copia del formato. Comparar
 /// contra el estilo concreto del tema ataría el test a la paleta.
+/// H3d de punta a punta, sobre el FRAME: con los dos panes dentro de un zip
+/// (`READ_ONLY` por construcción del scheme, ADR 0018), las filas de la página
+/// de copiado que ESCRIBEN salen con su razón al lado, no solo atenuadas.
+///
+/// Es lo único que ata la cadena completa —`freeze_help_facts` → la tabla
+/// compartida → `row_line`— a lo que se ve: los tres tramos tienen su test
+/// unitario, y ninguno se rompería si el congelado dejara de llamarse al abrir.
+///
+/// Se recorre el cuerpo con el foco (como `snapshot_ayuda_cuerpo_con_foco`)
+/// porque las filas ejecutables van TRAS la prosa: sin desplazar, la razón
+/// existe y no está en el frame. El frame es de 100×30 — un terminal real, no
+/// uno holgado a medida — y la razón sale ENTERA porque `row_line` la presupuesta
+/// antes que la etiqueta: quien cede es el nombre del comando, que ya está en la
+/// prosa de arriba y en la columna del chord.
+#[test]
+fn la_ayuda_dentro_de_un_zip_pinta_la_razon_del_veto() {
+    let dentro = vp("zip+file:///a.zip/!");
+    let mut app = App::new(
+        Pane::new(
+            dentro.clone(),
+            vec![entry(&dentro, b"leeme.txt", EntryKind::File, Some(3))],
+        ),
+        Pane::new(dentro, Vec::new()),
+    );
+    app.dialog_hints = default_dialog_hints();
+    open_help(&mut app);
+    let view = app.help.as_mut().expect("overlay abierto");
+    view.state.open(&norte_help::TopicId::new("copying"));
+    view.state.toggle_focus();
+    refresh_help_en(&mut app, 100, 30);
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let texto = terminal.backend().to_string();
+
+    let razon = norte_i18n::t_in(norte_i18n::Lang::Es, "reason-read-only");
+    assert!(
+        texto.contains(&razon),
+        "la fila vetada tiene que decir POR QUÉ ({razon}):\n{texto}"
+    );
+}
+
 #[test]
 fn snapshot_ayuda_cuerpo_con_foco() {
     use norte_help::ChordResolver;

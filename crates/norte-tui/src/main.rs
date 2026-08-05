@@ -555,6 +555,10 @@ fn open_contextual_help(app: &mut App, lang: norte_help::Lang, help_lines: &[Str
         app.message = Some(t("msg-help-no-dialog-page"));
         return;
     }
+    // H3d: los hechos del contexto se CONGELAN aquí, antes de la primera
+    // maquetación — un veredicto no puede cambiar bajo el cursor del lector a
+    // mitad de página (`App::freeze_help_facts`).
+    app.freeze_help_facts();
     app.help = Some(HelpView::new_at(
         lang,
         help_lines.to_vec(),
@@ -605,6 +609,9 @@ fn palette_help(app: &mut App, lang: norte_help::Lang, help_lines: &[String]) {
     match palette_help_target(app, lang).map(|topic| topic.id.clone()) {
         Some(id) => {
             app.palette = None;
+            // H3d: mismo congelado que `open_contextual_help` — la ayuda que
+            // se abre desde la palette es la misma ayuda.
+            app.freeze_help_facts();
             app.help = Some(HelpView::new_at_topic(
                 lang,
                 help_lines.to_vec(),
@@ -1046,8 +1053,11 @@ async fn main() -> Result<()> {
     // (una vez por scheme y sesión; el picker de la tarea 4 lo quiere
     // aunque no haya columnas attr configuradas); un fallo NO tumba el
     // arranque — sin catálogo se pinta con defaults Opaque.
-    if let Ok(cat) = backend.attr_catalog(&start).await {
-        app.insert_attr_catalog(start.scheme().to_owned(), cat);
+    // H3d: la MISMA respuesta trae las caps (`fs.capabilities` devuelve las
+    // dos mitades), así que se cachean juntas — sin ellas la ayuda del primer
+    // F1 caería al criterio sintáctico teniendo el dato al alcance.
+    if let Ok(both) = backend.capabilities_and_attrs(&start).await {
+        cache_capabilities(&mut app, start.scheme(), both);
     }
     for i in 0..app.panes.len() {
         app.apply_scheme_sort(i);
@@ -1643,10 +1653,10 @@ async fn run(
             } => {
                 // #44: sesión remota degradó a texto plano — indicador
                 // PERSISTENTE en la status bar (no pisa `message` transitorio).
-                app.connection_warning = Some(ta(
-                    "status-connection-degraded",
-                    &[("scheme", d.scheme.as_str()), ("host", d.host.as_str())],
-                ));
+                // H3d: se retiene el valor ESTRUCTURADO, no la frase — la barra
+                // la compone (`App::connection_banner`) y la ayuda puede
+                // preguntar por scheme cuál se degradó.
+                app.note_degraded(d);
             }
             res = async {
                 match &mut stat_probe {
@@ -6664,7 +6674,7 @@ async fn dispatch(
                 .selected()
                 .filter(|e| matches!(e.kind, EntryKind::Dir | EntryKind::Symlink))
                 .map(|e| e.path.clone())
-                .or_else(|| app.focused().selected().and_then(archive_root_for));
+                .or_else(|| app.focused().selected().and_then(nav::archive_root_for));
             if let Some(dir) = target {
                 cd_outcome = cd(app, backend, events, dir).await;
             }
@@ -7764,40 +7774,6 @@ async fn read_head(backend: &Backend, path: &VPath) -> Result<(Vec<u8>, bool), E
     Ok((out, truncated))
 }
 
-/// Si la entrada es un contenedor navegable (`.<formato>` de la whitelist
-/// de proto, extensión ASCII case-insensitive), la raíz de su interior
-/// (ADR 0018). El mapa extensión→formato es azúcar de presentación; la
-/// validación real es del core. Un SYMLINK a un archivo no entra como
-/// contenedor en v1 (decisión consciente: exigiría resolver el target por
-/// stat del core; issue de fase 8g).
-fn archive_root_for(e: &norte_proto::Entry) -> Option<VPath> {
-    // Extensiones cuyo sufijo no coincide con el token del formato (#55):
-    // `tar+gz` no tiene un `.tar+gz` real en el mundo, la gente escribe
-    // `.tgz`/`.tar.gz`. Se comprueban ANTES del genérico `.{formato}` — un
-    // `.tar.gz` no casaría de todos modos con `.tar` (termina en `.gz`), así
-    // que el orden es defensivo, no estrictamente necesario hoy.
-    const EXT_ALIASES: &[(&[u8], &str)] = &[(b".tar.gz", "tar+gz"), (b".tgz", "tar+gz")];
-    fn ends_ci(name: &[u8], suffix: &[u8]) -> bool {
-        name.len() >= suffix.len() && name[name.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
-    }
-    if e.kind != EntryKind::File {
-        return None;
-    }
-    let name = e.path.file_name()?.as_bytes();
-    let format = EXT_ALIASES
-        .iter()
-        .find(|(suffix, _)| ends_ci(name, suffix))
-        .map(|(_, format)| *format)
-        .or_else(|| {
-            norte_proto::ARCHIVE_FORMATS
-                .iter()
-                .find(|f| ends_ci(name, format!(".{f}").as_bytes()))
-                .copied()
-        })?;
-    // Falla (exterior con `!`, ya compuesto…): no es navegable — Enter no-op.
-    VPath::archive_compose(format, &e.path, &[]).ok()
-}
-
 /// Pane inicial del arranque: listado COMPLETO de `start` pidiendo los
 /// attrs configurados (#117) — sin ellos las celdas attr nacerían en
 /// blanco hasta el primer cd/refresh. Regla 7: todo por el `Backend`.
@@ -7828,12 +7804,36 @@ async fn listing(
     backend.list_with_skipped_attrs(dir, attrs).await
 }
 
+/// Cachea en `App` las DOS mitades de una respuesta de `fs.capabilities`
+/// (H3d): el catálogo de attrs (#117) y los flags de capacidad.
+///
+/// Una función y no dos líneas repetidas en el arranque y en el `cd` a
+/// propósito: la respuesta trae ambas y guardarlas juntas es el punto entero
+/// del cambio — quien tire una mitad aquí paga otra ronda de red por un dato
+/// que ya estaba en el proceso, y ese descuido tiene ahora un test
+/// (`caps_cache_tests`) en vez de vivir dentro del `select!` del run loop,
+/// donde nada lo mira.
+fn cache_capabilities(
+    app: &mut App,
+    scheme: &str,
+    (caps, catalog): (norte_proto::Capabilities, norte_proto::AttrCatalog),
+) {
+    app.insert_attr_catalog(scheme.to_owned(), catalog);
+    app.insert_caps(scheme.to_owned(), caps);
+}
+
 /// Primera página de `dir` (hasta [`FIRST_PAGE`]) más el stream con el RESTO
 /// (o `None` si el dir cabía en la primera página) y las omitidas del
 /// contenedor (#93). El primer render no espera al listado entero (ADR 0017).
 /// Regla 7: el TUI no toca el FS. `attrs`/`fetch_catalog` (#117): pide los
 /// attrs configurados y, una vez por scheme y sesión, el catálogo del
 /// provider (cuarto elemento de la tupla).
+///
+/// H3d: ese cuarto elemento son las DOS mitades de `fs.capabilities` —
+/// `Capabilities` y catálogo — porque el wire las trae juntas
+/// (`Backend::capabilities_and_attrs`). La TUI cacheaba solo el catálogo y
+/// luego preguntaba «¿es de solo lectura?» con otra ronda por un dato que ya
+/// había llegado.
 async fn first_page(
     backend: &Backend,
     dir: &VPath,
@@ -7844,14 +7844,14 @@ async fn first_page(
         Vec<Entry>,
         Option<EntryStream>,
         Option<u64>,
-        Option<norte_proto::AttrCatalog>,
+        Option<(norte_proto::Capabilities, norte_proto::AttrCatalog)>,
     ),
     Error,
 > {
     // El catálogo ANTES del stream (misma conexión, una vez por scheme);
     // un fallo del catálogo NO tumba el cd: sin hints se pinta Opaque.
     let catalog = if fetch_catalog {
-        backend.attr_catalog(dir).await.ok()
+        backend.capabilities_and_attrs(dir).await.ok()
     } else {
         None
     };
@@ -7991,8 +7991,11 @@ async fn cd_in(
                     Ok((first, stream, skipped, catalog)) => {
                         // #117: el catálogo recién llegado se cachea por
                         // scheme — los frames siguientes ya pintan con hints.
-                        if let Some(cat) = catalog {
-                            app.insert_attr_catalog(scheme.clone(), cat);
+                        // H3d: y las caps de la MISMA respuesta, que es lo
+                        // que responde «¿este pane es de solo lectura?» sin
+                        // otra ronda (`App::pane_read_only`).
+                        if let Some(both) = catalog {
+                            cache_capabilities(app, &scheme, both);
                         }
                         // #54: NO ordenamos aquí — `begin_listing` ->
                         // `PaneState::set_listing` normaliza internamente.
@@ -8070,99 +8073,6 @@ async fn cd_in(
 }
 
 #[cfg(test)]
-mod archive_nav_tests {
-    use super::*;
-    use norte_proto::{Entry, EntryKind};
-
-    fn entry(wire: &str, kind: EntryKind) -> Entry {
-        Entry {
-            attrs: std::collections::BTreeMap::new(),
-            path: VPath::parse(wire).expect("wire de test"),
-            kind,
-            size: None,
-            mtime_ms: None,
-        }
-    }
-
-    #[test]
-    fn archive_root_for_decide_por_extension_y_kind() {
-        let e = entry("file:///d/A.ZIP", EntryKind::File);
-        assert_eq!(
-            archive_root_for(&e).expect("mayúsculas entran").to_wire(),
-            "zip+file:///d/A.ZIP/!"
-        );
-        assert!(archive_root_for(&entry("file:///d/a.tar", EntryKind::File)).is_some());
-        assert!(archive_root_for(&entry("file:///d/a.txt", EntryKind::File)).is_none());
-        // Un dir llamado x.zip NO es contenedor; un symlink tampoco (v1).
-        assert!(archive_root_for(&entry("file:///d/x.zip", EntryKind::Dir)).is_none());
-        assert!(archive_root_for(&entry("file:///d/x.zip", EntryKind::Symlink)).is_none());
-        // #56 (antes v1 = no-op): Enter sobre un zip DENTRO de un tar
-        // compone una capa más — anidamiento navegable.
-        assert_eq!(
-            archive_root_for(&entry("tar+file:///a.tar/!/i.zip", EntryKind::File))
-                .expect("anidado navegable")
-                .to_wire(),
-            "zip+tar+file:///a.tar/!/i.zip/!"
-        );
-    }
-
-    /// #55: `.tgz`/`.tar.gz` no coinciden con el token `tar+gz` vía el
-    /// genérico `.{formato}` (el `+` no está en la extensión de archivo) —
-    /// `EXT_ALIASES` los mapea explícitamente, case-insensitive, antes del
-    /// genérico. `.tar`/`.zip` planos siguen funcionando sin pasar por el
-    /// alias (`.tar.gz` NO debe casar `.tar`: termina en `.gz`).
-    #[test]
-    fn archive_root_for_extensiones_targz() {
-        for wire in [
-            "file:///d/a.tgz",
-            "file:///d/a.tar.gz",
-            "file:///d/A.TAR.GZ",
-        ] {
-            let root = archive_root_for(&entry(wire, EntryKind::File))
-                .unwrap_or_else(|| panic!("{wire} debería ser navegable"));
-            assert_eq!(root.scheme(), "tar+gz+file", "wire={wire}");
-        }
-        // Extensiones planas siguen funcionando (no capturadas por el alias).
-        assert_eq!(
-            archive_root_for(&entry("file:///d/a.tar", EntryKind::File))
-                .expect("tar plano sigue")
-                .scheme(),
-            "tar+file"
-        );
-        assert_eq!(
-            archive_root_for(&entry("file:///d/a.zip", EntryKind::File))
-                .expect("zip plano sigue")
-                .scheme(),
-            "zip+file"
-        );
-    }
-
-    /// Candado de encoding (#55, review): `ends_ci` es de BYTES y el compose
-    /// no pasa por String — un nombre NO-UTF8 terminado en `.tgz` compone
-    /// bien y sus bytes crudos sobreviven el wire (regla 1). Si alguien
-    /// "simplifica" mañana con `to_str()`/lossy, esto se pone rojo.
-    #[test]
-    fn archive_root_for_targz_nombre_no_utf8() {
-        for wire in [
-            "file:///d/%FF%FE.tgz",
-            "file:///d/a%F1o.TGZ",
-            "file:///d/%FF.tar.gz",
-        ] {
-            let root = archive_root_for(&entry(wire, EntryKind::File))
-                .unwrap_or_else(|| panic!("{wire} debería ser navegable"));
-            assert_eq!(root.scheme(), "tar+gz+file", "wire={wire}");
-        }
-        assert_eq!(
-            archive_root_for(&entry("file:///d/%FF%FE.tgz", EntryKind::File))
-                .expect("no-UTF8 navegable")
-                .to_wire(),
-            "tar+gz+file:///d/%FF%FE.tgz/!",
-            "los bytes crudos sobreviven el compose"
-        );
-    }
-}
-
-#[cfg(test)]
 mod open_tests {
     use super::{App, Pane, resolve_opener};
     use norte_proto::{Entry, EntryKind, Segment, VPath};
@@ -8231,6 +8141,80 @@ mod open_tests {
         resolve_opener(&mut app);
         assert!(app.pending_open.is_none());
         assert!(app.message.is_some(), "lo dice en la barra");
+    }
+}
+
+#[cfg(test)]
+mod help_freeze_tests {
+    use super::{App, Pane, open_contextual_help};
+    use norte_help::ChordResolver as _;
+    use norte_proto::VPath;
+
+    /// Abrir la ayuda CONGELA los hechos del contexto (H3d).
+    ///
+    /// El resto de la cadena —la tabla compartida, el resolver, el pintor de la
+    /// razón— tiene sus propios tests y seguiría VERDE con esta llamada
+    /// borrada: el overlay se pintaría contra el resolver permisivo del
+    /// arranque y ninguna fila se atenuaría jamás. Este test es el único que
+    /// mira el eslabón.
+    ///
+    /// Se abre desde dentro de un zip (`READ_ONLY` por el scheme, ADR 0018) con
+    /// los dos panes ahí: sin destino escribible, `pane.copy` no puede correr.
+    #[test]
+    fn abrir_la_ayuda_congela_los_hechos_del_contexto() {
+        let dentro = VPath::parse("zip+file:///a.zip/!").expect("wire de test");
+        let mut app = App::new(
+            Pane::new(dentro.clone(), Vec::new()),
+            Pane::new(dentro, Vec::new()),
+        );
+        assert!(
+            app.help_chords.availability("pane.copy").is_available(),
+            "antes de abrir, el resolver del arranque no atenúa nada"
+        );
+
+        open_contextual_help(&mut app, norte_help::Lang::En, &[]);
+
+        assert!(app.help.is_some(), "el overlay se abrió");
+        assert_eq!(
+            app.help_chords.availability("pane.copy").reason(),
+            Some(norte_help::Reason::ReadOnlyBackend),
+            "la ayuda tiene que saber que está dentro de un archivo"
+        );
+    }
+}
+
+#[cfg(test)]
+mod caps_cache_tests {
+    use super::{App, Pane, cache_capabilities};
+    use norte_proto::VPath;
+
+    /// H3d: `fs.capabilities` devuelve catálogo Y flags en una respuesta, y
+    /// las dos mitades se cachean. La que se tiraba era la de los flags, y
+    /// tirarla costaba una ronda de red extra la próxima vez que alguien
+    /// preguntase si el pane era de solo lectura.
+    #[test]
+    fn se_cachean_las_dos_mitades_de_una_respuesta() {
+        let dir = VPath::parse("mem:///").expect("wire de test");
+        let mut app = App::new(
+            Pane::new(dir.clone(), Vec::new()),
+            Pane::new(dir, Vec::new()),
+        );
+        let caps = norte_proto::Capabilities {
+            flags: norte_proto::CapabilityFlags::READ_ONLY,
+            max_path: None,
+        };
+        let catalog = norte_proto::AttrCatalog::new(Vec::new());
+
+        cache_capabilities(&mut app, "mem", (caps, catalog));
+
+        assert_eq!(app.caps("mem"), Some(&caps), "los flags se quedaron");
+        assert!(
+            app.attr_catalog("mem").is_some(),
+            "y el catálogo, que es la mitad que ya se guardaba"
+        );
+        // Y el efecto que la ayuda consume: con el flag puesto, el pane es de
+        // solo lectura sin volver a preguntar a nadie.
+        assert!(app.pane_read_only(0));
     }
 }
 

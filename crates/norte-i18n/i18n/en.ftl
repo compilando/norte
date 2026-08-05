@@ -188,6 +188,7 @@ cli-confirm-read = confirmation read
 cli-inline-password = the URL must not carry an inline password (user:pass@…); secrets go through the keyring/env/secrets.age
 cli-connection-degraded = ⚠ { $scheme }://{ $host }: UNENCRYPTED session (server rejected AUTH TLS, tls="allow"). Data and credentials travel in cleartext.
 status-connection-degraded = ⚠ { $scheme }://{ $host } — plaintext
+status-connections-degraded = ⚠ { $n } connections in plaintext
 status-archive-skipped = ⚠ { $n } entries omitted (hostile names/limits)
 status-names-encoding = names: { $enc }
 status-hidden = { $n } hidden

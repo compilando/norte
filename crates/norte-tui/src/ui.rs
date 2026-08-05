@@ -3186,10 +3186,12 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         }
     } else if let Some(lua) = &app.lua_status {
         format!(" {lua}{seq}")
-    } else if let Some(warn) = &app.connection_warning {
+    } else if let Some(warn) = app.connection_banner() {
         // #44: sesión remota degradada a texto plano. PERSISTENTE (como
         // `search-status-failed`): sobrevive a las teclas — sin `message`, sin
         // búsqueda viva y sin hook Lua sigue avisando en cada frame.
+        // H3d: la frase se COMPONE aquí desde el valor estructurado (una
+        // conexión: la nombra; varias: cuántas), en vez de guardarse ya escrita.
         format!(" {warn}{seq}")
     } else {
         // #93: el contenedor omitió entradas de su índice — el listado que
