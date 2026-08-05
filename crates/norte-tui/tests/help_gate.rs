@@ -22,9 +22,24 @@
 //! entradas que dejaron de tapar algo ([`norte_help::Stale`]), y el
 //! `const _` de debajo de la lista impide que crezca sin que alguien suba el
 //! techo a mano en el mismo diff.
+//!
+//! # La otra mitad: los CONTEXTOS
+//!
+//! Lo mismo, en las dos direcciones, para los sitios donde el lector puede
+//! estar (H3c): un tema no puede reclamar una pantalla que la TUI no tiene, y
+//! una pantalla que la TUI sabe abrir no puede quedarse sin página — F1 ahí
+//! abriría el índice y nadie se quejaría. El vocabulario sale de una sola
+//! fuente ([`contextos`]) y la deuda de [`CONTEXTOS_PENDIENTES`] tiene los
+//! mismos dos mecanismos de menguado que [`PENDIENTES`].
+//!
+//! Aquí la puerta mide algo MÁS que una mención: reclamar un contexto es
+//! decirle al lector "esto es lo que explica lo que tienes delante". Que la
+//! página lo explique de verdad lo decide quien la escribe — una aprobación de
+//! agente no se explica con la página de copiar — y por eso la lista de
+//! pendientes lleva escrito, línea a línea, por qué cada contexto sigue ahí.
 
 use norte_help::{Issue, check_commands, check_contexts, check_corpus};
-use norte_tui::keymap::{COMMANDS, DIALOG_COMMANDS, Screen};
+use norte_tui::keymap::{COMMANDS, DIALOG_COMMANDS};
 
 /// El vocabulario contra el que se cruza el corpus: TODO lo que la TUI
 /// despacha, `COMMANDS` ∪ `DIALOG_COMMANDS`.
@@ -119,25 +134,65 @@ const _: () = assert!(
      documenta el comando en vez de añadirlo aquí"
 );
 
-/// Los contextos que un tema puede declarar en su front matter: uno por
-/// pantalla del keymap.
+/// Los contextos que la TUI sabe abrir. UNA fuente: el vocabulario cerrado de
+/// [`norte_tui::help_context::CONTEXTS`], anclado a `Modal` allí — el `match`
+/// sin comodín de `modal_context` es lo que impide que un modal nuevo llegue
+/// sin que alguien decida qué página lo explica.
 ///
-/// El id sigue al nombre de la VARIANTE (`browse`), no al de la sección del
-/// `keymap.toml` (`[pane]`): es el contexto de la ayuda, no el del keymap, y
-/// el corpus ya está escrito así. H3c cablea la búsqueda real de F1.
-const CONTEXTOS: &[(Screen, &str)] = &[
-    (Screen::Browse, "browse"),
-    (Screen::Viewer, "viewer"),
-    (Screen::Dialog, "dialog"),
+/// Duplicar la lista aquí sería la tercera copia que se desincroniza (y la
+/// segunda ya se desincronizó: hasta H3c esta puerta pedía un contexto
+/// `dialog` que ningún modal produce). Se calcula, como [`vocabulario`], y por
+/// la misma razón; la allowlist, en cambio, es literal.
+fn contextos() -> Vec<&'static str> {
+    norte_tui::help_context::CONTEXTS.to_vec()
+}
+
+/// Contextos que todavía no tienen página. Se borran, uno a uno, conforme H3h
+/// escribe el corpus.
+///
+/// A MANO y en orden de vocabulario, jamás calculada, por lo mismo que
+/// [`PENDIENTES`]: una lista derivada del propio corpus taparía la regresión
+/// por construcción.
+///
+/// Y solo puede MENGUAR por dos mecanismos, no por una promesa: el `const _`
+/// de debajo impide que crezca sin subir el techo a mano en el mismo diff, y
+/// el test de abajo reporta como fallo la entrada que ya no tapa nada —
+/// alguien escribió la página y se dejó la línea, silenciando al siguiente
+/// contexto que caiga ahí.
+const CONTEXTOS_PENDIENTES: &[&str] = &[
+    // No hay página del visor: la escribe H3h.
+    "viewer",
+    // Ni página de agentes y política: también H3h. Ningún tema habla hoy de
+    // aprobaciones, y hacer que `copying` reclame este contexto para callar
+    // la puerta sería contarle al lector lo que no ha preguntado.
+    "dialog.approval",
+    // El TOFU del `init.lua` de un proyecto: ningún tema menciona ni los
+    // plugins ni el `init.lua`.
+    "dialog.trust-lua",
+    // Salir: `app.quit` sigue en PENDIENTES, así que tampoco hay prosa que
+    // explique la pregunta.
+    "dialog.quit",
+    // El nombre editable de una transferencia (y el renombrado, que abre el
+    // mismo modal): `copying` cuenta que el destino es el otro panel, no que
+    // se pueda teclear el nombre, y `mouse` solo NOMBRA `pane.rename` en la
+    // lista del menú contextual.
+    "dialog.transfer-name",
+    // Crear directorio: `pane.mkdir` está en PENDIENTES.
+    "dialog.mkdir",
+    // Renombrado por IA: `pane.ai-rename` está en PENDIENTES.
+    "dialog.ai-rename",
+    // Búsqueda semántica: `pane.semantic-search` está en PENDIENTES.
+    "dialog.semantic-search",
 ];
 
-/// Ancla de compilación para [`CONTEXTOS`]: un `match` sin comodín sobre
-/// [`Screen`]. Una variante nueva no compila AQUÍ, justo encima de la tabla
-/// que tiene que crecer con ella (mismo idioma que `LOCALES` en
-/// `norte-help`, y una sola lista en vez de dos que se desincronizan).
-const _: fn(Screen) = |screen| match screen {
-    Screen::Browse | Screen::Viewer | Screen::Dialog => (),
-};
+/// El TECHO de la deuda de contextos, con el mismo papel que el de
+/// [`PENDIENTES`]: la lista solo puede bajar, y subir el número es una
+/// edición deliberada que un revisor ve en el mismo diff.
+const _: () = assert!(
+    CONTEXTOS_PENDIENTES.len() <= 8,
+    "la allowlist de contextos solo puede MENGUAR: escribe la página en vez \
+     de añadir el contexto aquí"
+);
 
 #[test]
 fn el_corpus_que_enviamos_esta_integro() {
@@ -220,23 +275,97 @@ fn todo_comando_del_vocabulario_esta_documentado_o_en_pendientes() {
 
 #[test]
 fn los_contextos_del_corpus_son_pantallas_que_la_tui_tiene() {
-    let contextos: Vec<&str> = CONTEXTOS.iter().map(|&(_, id)| id).collect();
+    let contextos = contextos();
     let issues = check_contexts(&contextos);
+
+    // Una dirección: ningún tema declara un contexto inventado, y dos temas
+    // no se pelean por el mismo. Aquí la lista no se toca — el arreglo está
+    // en el front matter del tema, porque los contextos los define la TUI.
+    let del_corpus: Vec<&Issue> = issues
+        .iter()
+        .filter(|i| {
+            matches!(
+                i,
+                Issue::UnknownContext { .. } | Issue::DuplicateContext { .. }
+            )
+        })
+        .collect();
     assert!(
-        issues.is_empty(),
+        del_corpus.is_empty(),
         "arregla el front matter del tema, no esta lista: los contextos los \
          define la TUI.\n{}",
-        lineas(&issues)
+        del_corpus
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 
-    // DEUDA REGISTRADA para H3c/H3h, no arreglable en H3a: esto comprueba
-    // que ningún tema declare un contexto inventado y que dos temas no se
-    // peleen por el mismo, pero NO que cada contexto tenga tema. La spec
-    // pide "todo contexto conocido tiene exactamente un tema" y hoy solo
-    // `panes` declara uno (`browse`): F1 en el viewer y en un diálogo no
-    // abriría nada, y esta puerta calla. Falta la mitad "cero temas" en
-    // `check_contexts_in` (una variante nueva de `norte_help::Issue`), y
-    // hasta que exista, este test no puede pedirla.
+    // La otra: cada contexto que la TUI sabe abrir tiene una página, o está
+    // enumerado en CONTEXTOS_PENDIENTES. Sin esto, F1 en una pantalla sin
+    // página abre el índice y nadie se queja.
+    let sin_pagina: Vec<&str> = issues
+        .iter()
+        .filter_map(|i| match i {
+            Issue::ContextWithoutTopic { context, .. } => Some(context.as_str()),
+            _ => None,
+        })
+        .collect();
+    let sin_tapar: Vec<&&str> = sin_pagina
+        .iter()
+        .filter(|c| !CONTEXTOS_PENDIENTES.contains(c))
+        .collect();
+    assert!(
+        sin_tapar.is_empty(),
+        "contextos sin página y sin entrada en CONTEXTOS_PENDIENTES. \
+         Reclámalos desde el `context` de la página que ya los explica, o \
+         añádelos a la lista si toca esperar a H3h: {sin_tapar:?}"
+    );
+
+    // Y la mitad que hace que la allowlist mengüe de verdad: una entrada que
+    // ya no tapa nada. O bien la página se escribió y la línea sobrevivió —
+    // silenciando al siguiente contexto que caiga ahí — o bien el id salió
+    // del vocabulario y la línea no silencia nada.
+    let rancias: Vec<String> = CONTEXTOS_PENDIENTES
+        .iter()
+        .filter(|c| !sin_pagina.contains(*c))
+        .map(|c| {
+            if contextos.contains(c) {
+                format!("`{c}` ya tiene página: borra la línea")
+            } else {
+                format!("`{c}` ya no está en el vocabulario de la TUI: borra la línea")
+            }
+        })
+        .collect();
+    assert!(
+        rancias.is_empty(),
+        "entradas de CONTEXTOS_PENDIENTES que ya no tapan nada:\n{}",
+        rancias.join("\n")
+    );
+
+    // Y nada más, por lo mismo que en la puerta de comandos: una variante
+    // nueva de `Issue` que este fichero ignorase en silencio sería
+    // exactamente el fallo que la puerta existe para no tener.
+    let sin_clasificar: Vec<&Issue> = issues
+        .iter()
+        .filter(|i| {
+            !matches!(
+                i,
+                Issue::UnknownContext { .. }
+                    | Issue::DuplicateContext { .. }
+                    | Issue::ContextWithoutTopic { .. }
+            )
+        })
+        .collect();
+    assert!(
+        sin_clasificar.is_empty(),
+        "hallazgos que esta puerta no clasifica:\n{}",
+        sin_clasificar
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
 }
 
 /// Un hallazgo por línea, como los imprimiría `norte doctor` (H3g).

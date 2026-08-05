@@ -62,7 +62,7 @@ pub use check::{
     Inert, Issue, Mark, Stale, check_commands, check_commands_in, check_contexts,
     check_contexts_in, check_corpus, check_locales,
 }; // task 8
-pub use corpus::{topic, topic_for_context, topic_ids, topics}; // task 7
+pub use corpus::{topic, topic_for_command, topic_for_context, topic_ids, topics}; // task 7
 pub use model::{Availability, Block, Callout, CommandRow, Origin, Reason, Span, Topic, TopicId}; // task 2
 pub use norte_i18n::Lang;
 pub use parse::{Limits, ParseError, Parsed, parse_trusted, parse_untrusted}; // tasks 4, 5 and 6

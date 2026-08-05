@@ -10,6 +10,7 @@ commands = [
     "pane.delete-permanent",
     "task.cancel",
 ]
+context = ["dialog.confirm", "dialog.collision"]
 +++
 Marca lo que quieras en el panel con el foco y pulsa {{cmd:pane.copy}}. El
 destino es el otro panel, tenga lo que tenga: un directorio local, un host

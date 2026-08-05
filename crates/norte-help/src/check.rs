@@ -848,14 +848,23 @@ pub fn check_contexts_in(lang: Lang, topics: &[Topic], known: &[&str]) -> Vec<Is
 /// use norte_help::{Issue, Lang, check_contexts};
 ///
 /// // The frontend's contexts, spelled out: this crate does not depend on a
-/// // frontend, so the caller supplies the vocabulary. Today `browse` is the
-/// // only one the shipped corpus claims…
-/// assert_eq!(check_contexts(&["browse"]), Vec::new());
+/// // frontend, so the caller supplies the vocabulary. These five are what the
+/// // shipped corpus claims today…
+/// let claimed = [
+///     "browse",
+///     "dialog.confirm",
+///     "dialog.collision",
+///     "dialog.trust-host",
+///     "dialog.mark-pattern",
+/// ];
+/// assert_eq!(check_contexts(&claimed), Vec::new());
 /// // …so a vocabulary with more places in it reports the pages nobody has
 /// // written yet, one per place, and the frontend's gate is where they sit on
 /// // a shrinking allowlist until someone writes them.
+/// let mut known = claimed.to_vec();
+/// known.push("viewer");
 /// assert_eq!(
-///     check_contexts(&["browse", "viewer"]),
+///     check_contexts(&known),
 ///     vec![Issue::ContextWithoutTopic {
 ///         context: "viewer".to_owned(),
 ///         lang: Lang::En,

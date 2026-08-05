@@ -500,6 +500,59 @@ fn open_contextual_help(app: &mut App, lang: norte_help::Lang, help_lines: &[Str
     ));
 }
 
+/// The page that documents the palette row under the cursor, if one does (H3c).
+///
+/// The other direction of the bridge H3b built: from the help, `Ctrl+P` carries
+/// the filter into the palette; from the palette, `F1` opens the page about the
+/// highlighted command. Two views of one model at two densities, so crossing
+/// between them should not cost the reader a re-type.
+///
+/// A PLUGIN row is answered `None` explicitly. Its key is
+/// `plugin:{id}:{command}` ([`parse_plugin_key`]), which no corpus page
+/// documents and which is not a host command either — the `command_id` half
+/// comes from a third-party manifest with no validated charset, so it must never
+/// be handed to a lookup as if it were one of ours. The corpus lookup would also
+/// answer `None` on its own; the guard is what makes that a decision instead of
+/// a coincidence, and it is the same `key`/`text` split the palette already
+/// makes between dispatch and paint.
+fn palette_help_target(app: &App, lang: norte_help::Lang) -> Option<&'static norte_help::Topic> {
+    let key = app.palette.as_ref().and_then(Palette::selected)?;
+    if parse_plugin_key(&key).is_some() {
+        return None;
+    }
+    norte_help::topic_for_command(lang, &key)
+}
+
+/// `F1` inside the command palette: open the page for the highlighted row, or
+/// say that no page documents it (H3c).
+///
+/// On success the palette CLOSES — the help takes the screen and the next key
+/// belongs to what the reader is looking at — and the page arrives as the root
+/// of the trail ([`HelpView::new_at_topic`]), so one `Esc` leaves it.
+///
+/// On failure the palette STAYS and the status bar says so. Opening the index
+/// instead would be worse than nothing: the reader asked about one command and
+/// would land on a table of contents, with no way to tell whether their command
+/// is in there somewhere or simply undocumented.
+///
+/// `over_modal` is `false` and not `app.modal.is_some()`: the palette's arm of
+/// the key chain only runs when no modal is on screen (`modal_wins`), so there
+/// is no modal for this help to have been opened over.
+fn palette_help(app: &mut App, lang: norte_help::Lang, help_lines: &[String]) {
+    match palette_help_target(app, lang).map(|topic| topic.id.clone()) {
+        Some(id) => {
+            app.palette = None;
+            app.help = Some(HelpView::new_at_topic(
+                lang,
+                help_lines.to_vec(),
+                &id,
+                false,
+            ));
+        }
+        None => app.message = Some(t("msg-palette-no-help")),
+    }
+}
+
 #[cfg(test)]
 mod palette_modal_guard_tests {
     use super::*;
@@ -614,6 +667,112 @@ mod palette_modal_guard_tests {
             modal_wins(&a),
             "un modal en vuelo con ajustes abierto DEBE ganarle"
         );
+    }
+}
+
+/// `F1` sobre una fila de la command palette (H3c): el puente hacia la página
+/// que documenta ese comando, la otra dirección del que H3b ya tendió
+/// (`Ctrl+P` desde la ayuda se lleva el filtro).
+#[cfg(test)]
+mod palette_help_tests {
+    use super::*;
+
+    fn app() -> App {
+        let d = VPath::parse("file:///x").expect("wire de test");
+        App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()))
+    }
+
+    /// La palette abierta con UNA fila, la de `key`, bajo el cursor. Las filas
+    /// se construyen a mano y no del keymap efectivo a propósito: lo que se
+    /// prueba es qué hace `F1` con la clave de despacho de la fila resaltada, y
+    /// una fila de plugin no sale de `COMMANDS`.
+    fn app_with_palette_on(key: &str) -> App {
+        let mut app = app();
+        app.palette = Some(Palette::new(vec![norte_tui::palette::Row {
+            key: key.to_owned(),
+            text: key.to_owned(),
+            desc: "descripción de prueba".to_owned(),
+            chord: "—".to_owned(),
+        }]));
+        app
+    }
+
+    /// `F1` sobre una fila de la palette abre la página que documenta ese
+    /// comando: los dos son vistas del mismo modelo a dos densidades, así que
+    /// cruzar de la rápida a la que explica no debería costar re-teclear.
+    #[test]
+    fn f1_en_la_palette_abre_la_pagina_del_comando_bajo_el_cursor() {
+        let app = app_with_palette_on("pane.copy");
+        let abierto =
+            palette_help_target(&app, norte_help::Lang::En).expect("pane.copy tiene página");
+        assert_eq!(abierto.id.as_str(), "copying");
+    }
+
+    /// …y la abre de verdad: la palette se cierra (la tecla siguiente es de la
+    /// ayuda, que es lo que se ve) y la página llega como RAÍZ del rastro —
+    /// `Esc` cierra el overlay en vez de caminar a un índice que el lector no
+    /// pidió, igual que la ayuda contextual de un modal.
+    #[test]
+    fn abrir_la_pagina_cierra_la_palette_y_llega_sin_historial() {
+        let mut app = app_with_palette_on("pane.copy");
+        palette_help(&mut app, norte_help::Lang::En, &[]);
+        assert!(app.palette.is_none(), "la palette se cierra");
+        let help = app.help.as_mut().expect("la ayuda se abrió");
+        assert_eq!(help.state.current().as_str(), "copying");
+        assert!(
+            !help.over_modal,
+            "la rama de la palette solo corre sin modal en pantalla"
+        );
+        assert!(!help.state.back(), "sin historial: Esc cierra");
+        assert!(app.message.is_none(), "y nada que disculparse");
+    }
+
+    /// Una fila SIN página no abre nada y lo dice: mejor que abrir el índice y
+    /// dejar al lector buscando qué tenía que ver con lo que pidió.
+    #[test]
+    fn una_fila_sin_pagina_lo_dice() {
+        // `app.theme` sigue en la allowlist de la puerta de documentación.
+        let mut app = app_with_palette_on("app.theme");
+        assert!(palette_help_target(&app, norte_help::Lang::En).is_none());
+        palette_help(&mut app, norte_help::Lang::En, &[]);
+        assert!(app.help.is_none(), "no se abre el índice por consolar");
+        assert!(app.palette.is_some(), "y la palette se queda donde estaba");
+        assert_eq!(
+            app.message.as_deref(),
+            Some(norte_i18n::t("msg-palette-no-help").as_str())
+        );
+    }
+
+    /// La `key` de una fila de PLUGIN es `plugin:{id}:{command}` (P1): ningún
+    /// tema del corpus la documenta y no es un comando del host. Toma el camino
+    /// de «sin página» — ni pánico, ni una página ajena, ni un `Command::parse`
+    /// que no le corresponde.
+    #[test]
+    fn una_fila_de_plugin_toma_el_camino_de_sin_pagina() {
+        let mut app = app_with_palette_on("plugin:dev.norte.demo:greet");
+        assert!(palette_help_target(&app, norte_help::Lang::En).is_none());
+        palette_help(&mut app, norte_help::Lang::En, &[]);
+        assert!(app.help.is_none());
+        assert!(app.palette.is_some());
+        assert_eq!(
+            app.message.as_deref(),
+            Some(norte_i18n::t("msg-palette-no-help").as_str())
+        );
+    }
+
+    /// Sin ninguna fila visible (un filtro que no casa nada) no hay comando que
+    /// documentar: mismo camino, sin `unwrap` de por medio.
+    #[test]
+    fn sin_fila_visible_no_hay_pagina() {
+        let mut app = app_with_palette_on("pane.copy");
+        for c in "zzzz".chars() {
+            app.palette.as_mut().expect("abierta").push_char(c);
+        }
+        assert!(app.palette.as_ref().expect("abierta").visible().is_empty());
+        assert!(palette_help_target(&app, norte_help::Lang::En).is_none());
+        palette_help(&mut app, norte_help::Lang::En, &[]);
+        assert!(app.help.is_none());
+        assert!(app.palette.is_some());
     }
 }
 
@@ -1861,6 +2020,15 @@ async fn run(
                                 }
                             }
                             KeyCode::Esc if plain => app.palette = None,
+                            // H3c: el puente hacia la página que documenta la
+                            // fila resaltada. Va AQUÍ, explícito junto a
+                            // `ctrl+c`/`ctrl+p`, porque las teclas de la
+                            // palette son FIJAS (decisión 8, arriba): no hay
+                            // verbo `dialog.*` para «explícame esta fila», así
+                            // que tampoco puede resolverse por el keymap.
+                            KeyCode::F(1) if plain => {
+                                palette_help(app, lang, help_lines);
+                            }
                             KeyCode::Up if plain => {
                                 if let Some(p) = &mut app.palette {
                                     p.up();

@@ -10,7 +10,7 @@ expression: texto
 "│   notas.txt           420 B          ││                                      │"
 "│ ! �.dat ┌ Paleta de comandos ──────────────────────────────────────┐         │"
 "│         │ [extensión] abc�gpj.exe    …                           — │         │"
-"│         └ /  [↑/↓/pgup/pgdn] navegar · [enter] ejecutar · [esc] cer┘         │"
+"│         └ /  [enter] ejecutar · [esc] cerrar · [f1] ayuda ─────────┘         │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"

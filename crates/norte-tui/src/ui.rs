@@ -303,12 +303,24 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     // sobre quién manda. Cierra la clase de H1 MINOR-4 (aceptada entonces
     // solo para la palette) para AMBOS overlays.
     if let Some(modal) = &app.modal {
+        // H3c: con una página de ayuda ABIERTA ENCIMA (`over_modal`), la ayuda
+        // se queda las teclas y los verbos del modal son INERTES. El pie deja
+        // de ofrecerlos y dice lo que es verdad (`with_modals_inert`): un
+        // `[y] aprobar [n] denegar` que no hace nada es la misma mentira que
+        // `hints.rs` existe para que un rebind no pueda contar. La caja y la
+        // pregunta NO se tocan — se siguen pintando aquí, las últimas, encima
+        // de la página.
+        let inertes = app
+            .help
+            .as_ref()
+            .is_some_and(|help| help.over_modal)
+            .then(|| app.dialog_hints.with_modals_inert());
         draw_modal(
             frame,
             modal,
             &app.theme,
             app.focused().name_encoding(),
-            &app.dialog_hints,
+            inertes.as_ref().unwrap_or(&app.dialog_hints),
         );
     }
 }
@@ -1328,6 +1340,11 @@ fn keys_only_group(rows: &[norte_frontend::help::SidebarRow], header: usize) -> 
 /// es ESTÁTICO (`palette-hint`): la palette NO resuelve por el contexto
 /// `dialog` (decisión 8 del plan H1 — es un editor de filtro libre como el
 /// diálogo de búsqueda), así que no hay hint GENERADO que mostrar aquí.
+///
+/// Ese pie se une con `palette-hint-help` (H3c: `F1` sobre una fila abre la
+/// página que documenta su comando). Van en dos claves y se juntan AQUÍ porque
+/// `palette-hint` lo pinta también la GUI, que todavía no tiene overlay de
+/// ayuda (fase H3f): una sola cadena le haría anunciar una tecla inerte.
 fn draw_palette(frame: &mut Frame<'_>, palette: &crate::app::Palette, theme: &TuiTheme) {
     let rows = u16::try_from(palette.visible().len().max(1))
         .unwrap_or(u16::MAX)
@@ -1352,7 +1369,11 @@ fn draw_palette(frame: &mut Frame<'_>, palette: &crate::app::Palette, theme: &Tu
         )
     };
     let (query, _) = display_name(palette.query_display().as_bytes());
-    let footer = Line::raw(format!(" /{query}  {} ", t("palette-hint")));
+    let footer = Line::raw(format!(
+        " /{query}  {} · {} ",
+        t("palette-hint"),
+        t("palette-hint-help")
+    ));
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {} ", t("palette-title")))
@@ -1817,7 +1838,7 @@ fn modal_title_body(
             dir,
             entries,
             offset,
-        } => ai_rename_plan_modal_text(dir, entries, *offset),
+        } => ai_rename_plan_modal_text(dir, entries, *offset, hints),
         // M4-IA-2: mismo enmascarado que la instrucción IA — consulta y
         // error son texto de usuario.
         Modal::SemanticQuery { query, error } => semantic_query_modal_text(query, error.as_deref()),
@@ -1827,7 +1848,7 @@ fn modal_title_body(
             hits,
             offset,
             cursor,
-        } => semantic_hits_modal_text(hits, *offset, *cursor),
+        } => semantic_hits_modal_text(hits, *offset, *cursor, hints),
         // #105: nombre de destino editable — dir destino + campo + error,
         // todo de usuario y todo enmascarado.
         Modal::TransferName {
@@ -2040,6 +2061,7 @@ fn ai_rename_plan_modal_text(
     dir: &norte_proto::VPath,
     entries: &[norte_proto::methods::AiRenameEntry],
     offset: usize,
+    dialog_hints: &crate::hints::DialogHints,
 ) -> (String, String) {
     // Cinturón de render: el clamp vive en `App::ai_plan_scroll`, pero un
     // offset fuera de rango jamás debe pintar una ventana vacía.
@@ -2090,7 +2112,14 @@ fn ai_rename_plan_modal_text(
             ),
         ));
     }
-    lines.push(t("modal-ai-rename-plan-hint"));
+    // H3c: con una ayuda encima, `y`/`n` no responden — el pie dice eso en
+    // vez de ofrecerlos (gemelo de `DialogHints::with_modals_inert`, para los
+    // dos modales cuya pista es prosa y no hint generado).
+    lines.push(if dialog_hints.modals_inert {
+        t("modal-hint-help-open")
+    } else {
+        t("modal-ai-rename-plan-hint")
+    });
     (t("modal-ai-rename-plan"), lines.join("\n"))
 }
 
@@ -2132,6 +2161,7 @@ fn semantic_hits_modal_text(
     hits: &[norte_proto::methods::SemanticHit],
     offset: usize,
     cursor: usize,
+    dialog_hints: &crate::hints::DialogHints,
 ) -> (String, String) {
     // Cinturón de render: el clamp vive en `App::semantic_cursor`, pero un
     // offset fuera de rango jamás debe pintar una ventana vacía.
@@ -2175,7 +2205,12 @@ fn semantic_hits_modal_text(
             ),
         ));
     }
-    lines.push(t("modal-semantic-hits-hint"));
+    // H3c: ver `ai_rename_plan_modal_text` — misma razón, misma cadena.
+    lines.push(if dialog_hints.modals_inert {
+        t("modal-hint-help-open")
+    } else {
+        t("modal-semantic-hits-hint")
+    });
     (t("modal-semantic-hits"), lines.join("\n"))
 }
 
@@ -3359,6 +3394,38 @@ mod ai_rename_plan_modal_tests {
         }
     }
 
+    /// H3c: con una ayuda abierta ENCIMA, las teclas del modal no responden,
+    /// así que su pie no puede seguir ofreciéndolas.
+    ///
+    /// Este modal y el de hits semánticos son los dos únicos que una ayuda
+    /// puede tapar (`modal_help_toggle`), y son justo los dos cuya pista es
+    /// PROSA de Fluent en vez de un hint generado — los generados ya los
+    /// sustituye `DialogHints::with_modals_inert`. Sin esta rama, un lector
+    /// con la ayuda delante veía «y/Enter: aplicar» y ninguna de las dos
+    /// hacía nada: un pie que miente, que es exactamente lo que el diseño de
+    /// `hints.rs` existe para no tener.
+    #[test]
+    fn el_pie_del_plan_no_ofrece_teclas_inertes_bajo_la_ayuda() {
+        use norte_i18n::t;
+        let vivas = crate::hints::DialogHints::default();
+        let (_, normal) = ai_rename_plan_modal_text(&dir(), &[entry("a", "b")], 0, &vivas);
+        assert!(
+            normal.contains(&t("modal-ai-rename-plan-hint")),
+            "sin ayuda encima, el pie ofrece sus teclas: {normal}"
+        );
+
+        let inertes = vivas.with_modals_inert();
+        let (_, tapado) = ai_rename_plan_modal_text(&dir(), &[entry("a", "b")], 0, &inertes);
+        assert!(
+            !tapado.contains(&t("modal-ai-rename-plan-hint")),
+            "con la ayuda encima NO puede ofrecer y/n: {tapado}"
+        );
+        assert!(
+            tapado.contains(&t("modal-hint-help-open")),
+            "y tiene que decir por qué: {tapado}"
+        );
+    }
+
     /// Audit MINOR-6a (corpus canónico, molde del sweep de `app.rs`): cada
     /// nombre hostil, en la posición `from` Y en la `to` — ningún char de
     /// `is_terminal_hazard` sobrevive en el texto pintado, y cuando el
@@ -3373,7 +3440,12 @@ mod ai_rename_plan_modal_tests {
             ];
             for (from, to) in casos {
                 let hostil = display_name(from.as_bytes()).1 || display_name(to.as_bytes()).1;
-                let (_, body) = ai_rename_plan_modal_text(&dir(), &[entry(&from, &to)], 0);
+                let (_, body) = ai_rename_plan_modal_text(
+                    &dir(),
+                    &[entry(&from, &to)],
+                    0,
+                    &crate::hints::DialogHints::default(),
+                );
                 // Por LÍNEA: el `\n` que separa las líneas del cuerpo es un
                 // control legítimo del formato, no contenido pintado.
                 assert!(
@@ -3405,7 +3477,12 @@ mod ai_rename_plan_modal_tests {
             .find(|n| n.id == "arrow_join_spoof")
             .expect("fixture del corpus");
         let from = String::from_utf8_lossy(&spoof.bytes).into_owned();
-        let (_, body) = ai_rename_plan_modal_text(&dir(), &[entry(&from, "real.txt")], 0);
+        let (_, body) = ai_rename_plan_modal_text(
+            &dir(),
+            &[entry(&from, "real.txt")],
+            0,
+            &crate::hints::DialogHints::default(),
+        );
         let lines: Vec<&str> = body.lines().collect();
         // dir + from + to + hint = 4 líneas exactas: el spoof no añade una.
         assert_eq!(lines.len(), 4, "{body:?}");
@@ -3425,7 +3502,12 @@ mod ai_rename_plan_modal_tests {
             .find(|n| n.id == "rtl_override")
             .expect("fixture del corpus");
         let to = String::from_utf8_lossy(&rtl.bytes).into_owned();
-        let (_, body) = ai_rename_plan_modal_text(&dir(), &[entry("limpio.txt", &to)], 0);
+        let (_, body) = ai_rename_plan_modal_text(
+            &dir(),
+            &[entry("limpio.txt", &to)],
+            0,
+            &crate::hints::DialogHints::default(),
+        );
         let to_line = body.lines().nth(2).expect("línea del destino");
         assert!(to_line.starts_with(HOSTILE_BADGE), "{body:?}");
         assert!(to_line.contains('\u{FFFD}'), "{body:?}");
@@ -3443,7 +3525,8 @@ mod ai_rename_plan_modal_tests {
         let entries: Vec<AiRenameEntry> = (1..=7)
             .map(|i| entry(&format!("f{i}"), &format!("t{i}")))
             .collect();
-        let (_, body) = ai_rename_plan_modal_text(&dir(), &entries, 0);
+        let (_, body) =
+            ai_rename_plan_modal_text(&dir(), &entries, 0, &crate::hints::DialogHints::default());
         let lines: Vec<&str> = body.lines().collect();
         // dir + 5 parejas × 2 + indicador + hint = 13.
         assert_eq!(lines.len(), 13, "{body:?}");
@@ -3454,7 +3537,8 @@ mod ai_rename_plan_modal_tests {
         assert!(lines[11].contains("5/7"), "indicador: {body:?}");
         assert!(!body.contains("f6"), "la cola espera al scroll: {body:?}");
         // offset 2 = parejas 3..=7, numeración absoluta, indicador al tope.
-        let (_, body2) = ai_rename_plan_modal_text(&dir(), &entries, 2);
+        let (_, body2) =
+            ai_rename_plan_modal_text(&dir(), &entries, 2, &crate::hints::DialogHints::default());
         let lines2: Vec<&str> = body2.lines().collect();
         assert_eq!(lines2.len(), 13, "alto ESTABLE al scroll: {body2:?}");
         assert!(
@@ -3464,7 +3548,8 @@ mod ai_rename_plan_modal_tests {
         assert!(body2.contains("f7"), "{body2:?}");
         assert!(lines2[11].contains("7/7"), "{body2:?}");
         // Un offset desbocado se clampa en el render (cinturón).
-        let (_, body3) = ai_rename_plan_modal_text(&dir(), &entries, 999);
+        let (_, body3) =
+            ai_rename_plan_modal_text(&dir(), &entries, 999, &crate::hints::DialogHints::default());
         assert!(body3.contains("f7"), "{body3:?}");
         // Alto: 13 líneas de cuerpo + 3 de marco.
         let modal = crate::app::Modal::AiRenamePlan {
@@ -3484,12 +3569,14 @@ mod ai_rename_plan_modal_tests {
             .map(|i| entry(&format!("f{i}"), &format!("t{i}")))
             .collect();
         entries[5] = entry("x\u{202e}y", "limpio.txt");
-        let (_, body) = ai_rename_plan_modal_text(&dir(), &entries, 0);
+        let (_, body) =
+            ai_rename_plan_modal_text(&dir(), &entries, 0, &crate::hints::DialogHints::default());
         let ind = body.lines().nth(11).expect("indicador");
         assert!(ind.starts_with(HOSTILE_BADGE), "{body:?}");
         // offset 1: la hostil entra en la ventana; la oculta (pareja 1) es
         // limpia — el indicador ya no marca.
-        let (_, body2) = ai_rename_plan_modal_text(&dir(), &entries, 1);
+        let (_, body2) =
+            ai_rename_plan_modal_text(&dir(), &entries, 1, &crate::hints::DialogHints::default());
         let ind2 = body2.lines().nth(11).expect("indicador");
         assert!(!ind2.starts_with(HOSTILE_BADGE), "{body2:?}");
     }
@@ -3527,7 +3614,12 @@ mod semantic_hits_modal_tests {
                 .expect("wire válido")
                 .join(Segment::new(n.bytes.clone()).expect("segmento del corpus"));
             let hostil = norte_frontend::path_display(&path).1;
-            let (_, body) = semantic_hits_modal_text(&[hit(path, 0.5)], 0, 0);
+            let (_, body) = semantic_hits_modal_text(
+                &[hit(path, 0.5)],
+                0,
+                0,
+                &crate::hints::DialogHints::default(),
+            );
             // Por LÍNEA: el `\n` que separa las líneas del cuerpo es un
             // control legítimo del formato, no contenido pintado.
             assert!(
@@ -3566,7 +3658,12 @@ mod semantic_hits_modal_tests {
         let path = dir
             .clone()
             .join(Segment::new(fixture.bytes.clone()).expect("segmento del corpus"));
-        let (_, body) = semantic_hits_modal_text(&[hit(path, 0.91)], 0, 0);
+        let (_, body) = semantic_hits_modal_text(
+            &[hit(path, 0.91)],
+            0,
+            0,
+            &crate::hints::DialogHints::default(),
+        );
         let linea = body.lines().next().expect("la línea del hit");
         assert!(
             linea.contains(&señuelo),
@@ -3582,7 +3679,12 @@ mod semantic_hits_modal_tests {
         let mut largo = b"x".repeat(120);
         largo.extend_from_slice(&fixture.bytes);
         let path = dir.join(Segment::new(largo).expect("segmento válido"));
-        let (_, body) = semantic_hits_modal_text(&[hit(path, 0.91)], 0, 0);
+        let (_, body) = semantic_hits_modal_text(
+            &[hit(path, 0.91)],
+            0,
+            0,
+            &crate::hints::DialogHints::default(),
+        );
         let linea = body.lines().next().expect("la línea del hit");
         assert!(
             linea.trim_end().ends_with("0.91"),
@@ -3601,7 +3703,8 @@ mod semantic_hits_modal_tests {
     #[test]
     fn hits_largos_ventana_cursor_indicador_y_alto() {
         let hits = hits(12);
-        let (_, body) = semantic_hits_modal_text(&hits, 0, 3);
+        let (_, body) =
+            semantic_hits_modal_text(&hits, 0, 3, &crate::hints::DialogHints::default());
         let lines: Vec<&str> = body.lines().collect();
         // 10 hits + indicador + hint = 12.
         assert_eq!(lines.len(), 12, "{body:?}");
@@ -3623,7 +3726,8 @@ mod semantic_hits_modal_tests {
         assert!(!body.contains("f11"), "la cola espera al scroll: {body:?}");
         // La ventana sigue al cursor: offset 2 = hits 3..=12, numeración
         // absoluta, cursor al fondo visible.
-        let (_, body2) = semantic_hits_modal_text(&hits, 2, 11);
+        let (_, body2) =
+            semantic_hits_modal_text(&hits, 2, 11, &crate::hints::DialogHints::default());
         let lines2: Vec<&str> = body2.lines().collect();
         assert_eq!(lines2.len(), 12, "alto ESTABLE al scroll: {body2:?}");
         assert!(
@@ -3636,7 +3740,8 @@ mod semantic_hits_modal_tests {
         );
         assert!(lines2[10].contains("12/12"), "{body2:?}");
         // Un offset desbocado se clampa en el render (cinturón).
-        let (_, body3) = semantic_hits_modal_text(&hits, 999, 0);
+        let (_, body3) =
+            semantic_hits_modal_text(&hits, 999, 0, &crate::hints::DialogHints::default());
         assert!(body3.contains("f12"), "{body3:?}");
         // Alto: 12 líneas de cuerpo + 3 de marco.
         let modal = crate::app::Modal::SemanticHits {
@@ -3659,12 +3764,14 @@ mod semantic_hits_modal_tests {
                 .join(Segment::new(b"x\xe2\x80\xaey".to_vec()).expect("segmento")),
             0.1,
         );
-        let (_, body) = semantic_hits_modal_text(&hits, 0, 0);
+        let (_, body) =
+            semantic_hits_modal_text(&hits, 0, 0, &crate::hints::DialogHints::default());
         let ind = body.lines().nth(10).expect("indicador");
         assert!(ind.starts_with(HOSTILE_BADGE), "{body:?}");
         // offset 1: el hostil entra en la ventana; el oculto (hit 1) es
         // limpio — el indicador ya no marca.
-        let (_, body2) = semantic_hits_modal_text(&hits, 1, 10);
+        let (_, body2) =
+            semantic_hits_modal_text(&hits, 1, 10, &crate::hints::DialogHints::default());
         let ind2 = body2.lines().nth(10).expect("indicador");
         assert!(!ind2.starts_with(HOSTILE_BADGE), "{body2:?}");
     }

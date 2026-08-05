@@ -10,6 +10,7 @@ commands = [
     "pane.delete-permanent",
     "task.cancel",
 ]
+context = ["dialog.confirm", "dialog.collision"]
 +++
 Mark what you want in the focused pane and press {{cmd:pane.copy}}. The other
 pane is the destination, whatever it is holding — a local directory, an SSH

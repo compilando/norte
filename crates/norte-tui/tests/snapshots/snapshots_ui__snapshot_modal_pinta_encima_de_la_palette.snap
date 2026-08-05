@@ -17,4 +17,4 @@ expression: render(&app)
 "│         │ nav.enter                en…irectorio seleccionado Enter │         │"
 "│         │ nav.parent               su…torio padre        Backspace │         │"
 "└─────────│ nav.back                 vo…ectorio anterior    Alt+Left │─────────┘"
-" ⟨file⟩/ca└ /  [↑/↓/pgup/pgdn] navegar · [enter] ejecutar · [esc] cer┘          "
+" ⟨file⟩/ca└ /  [enter] ejecutar · [esc] cerrar · [f1] ayuda ─────────┘          "

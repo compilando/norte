@@ -180,6 +180,16 @@ pub struct DialogHints {
     pub nav_list: String,
     /// Help overlay (`App::help`, H3b).
     pub help: String,
+    /// `true` when a help page is covering a modal, so the modal's own keys
+    /// are inert until it closes (H3c).
+    ///
+    /// The generated footers already say so — [`Self::with_modals_inert`]
+    /// replaces them. This flag is for the two modals whose key hint is not
+    /// generated but baked into Fluent PROSE (the AI rename plan and the
+    /// semantic hits, the only two an over-modal help can cover), so their
+    /// text can say the same true thing instead of advertising `y`/`n` at a
+    /// reader for whom both do nothing.
+    pub modals_inert: bool,
 }
 
 impl DialogHints {
@@ -219,6 +229,43 @@ impl DialogHints {
             // much of it is printed (`ui::fit_hint_groups`), not a fixed
             // exclusion. See [`HELP_HINT_PRIORITY`].
             help: dialog_hints_in_order(HELP_HINT_PRIORITY, eff),
+            // Los hints RECIÉN construidos describen teclas que sí responden;
+            // solo `with_modals_inert` levanta el flag, y solo mientras una
+            // ayuda tape el modal.
+            modals_inert: false,
+        }
+    }
+
+    /// The same hints, with every MODAL footer replaced by "close the help to
+    /// answer" (H3c).
+    ///
+    /// For the state where a help page is open OVER a modal: the help owns the
+    /// keys then (`HelpView::over_modal`), so the modal's verbs are INERT — an
+    /// approval prompt advertising `[y] approve [n] deny` while both keys do
+    /// nothing is the same defect this module exists to prevent, only reached
+    /// through key OWNERSHIP instead of through a rebind. A footer here can
+    /// never desync from what the key does; that has to include the case where
+    /// the key does nothing.
+    ///
+    /// The four modal fields and no others. The rest belong to overlays that
+    /// are not modals, and a modal being on screen at all already took their
+    /// keys away long before this (`modal_wins`) — a state H1 decided
+    /// deliberately, not one this function is about.
+    ///
+    /// Only the footer changes: the box, the title and the question keep being
+    /// painted, on top of the page ([`crate::ui::draw`] paints the modal last).
+    /// Hiding the question is the defect that ordering fixed, and replacing a
+    /// footer must not undo it.
+    #[must_use]
+    pub fn with_modals_inert(&self) -> Self {
+        let aviso = t("modal-hint-help-open");
+        Self {
+            confirm: aviso.clone(),
+            collision: aviso.clone(),
+            approval: aviso.clone(),
+            trust_host: aviso,
+            modals_inert: true,
+            ..self.clone()
         }
     }
 }
@@ -481,6 +528,51 @@ mod tests {
             "[Enter] confirm [Esc] cancel",
             "el orden es el pedido, y `dialog.pane` (sin binding) no inventa tecla"
         );
+    }
+
+    /// H3c: con una página de ayuda ENCIMA, los CUATRO pies de modal dicen que
+    /// hay que cerrarla y no ofrecen ni un verbo — ni `confirmar`/`cancelar`,
+    /// que es lo que el test de render no puede aislar (el pie de la propia
+    /// ayuda los lista, y ahí sí responden).
+    ///
+    /// Los pies que NO son de modal se quedan intactos: un modal en pantalla ya
+    /// les había quitado la tecla mucho antes (`modal_wins`, H1), y eso es una
+    /// decisión de entonces, no lo que esta función arregla.
+    #[test]
+    fn los_pies_de_modal_dejan_de_ofrecer_verbos_bajo_la_ayuda() {
+        let vivos = DialogHints::build(&orthodox_dialog());
+        let inertes = vivos.with_modals_inert();
+        let aviso = t("modal-hint-help-open");
+        for pie in [
+            &inertes.confirm,
+            &inertes.collision,
+            &inertes.approval,
+            &inertes.trust_host,
+        ] {
+            assert_eq!(pie, &aviso);
+        }
+        // Ningún verbo del vocabulario `dialog.*` sobrevive en ellos.
+        for cmd in crate::keymap::DIALOG_COMMANDS {
+            let etiqueta = t(&dialog_hint_id(cmd));
+            for pie in [
+                &inertes.confirm,
+                &inertes.collision,
+                &inertes.approval,
+                &inertes.trust_host,
+            ] {
+                assert!(
+                    !pie.contains(&etiqueta),
+                    "{cmd} sigue anunciado en un pie inerte: {pie:?}"
+                );
+            }
+        }
+        // Y lo que no es un modal no se toca.
+        assert_eq!(inertes.picker, vivos.picker);
+        assert_eq!(inertes.columns, vivos.columns);
+        assert_eq!(inertes.extensions, vivos.extensions);
+        assert_eq!(inertes.plugin_config, vivos.plugin_config);
+        assert_eq!(inertes.nav_list, vivos.nav_list);
+        assert_eq!(inertes.help, vivos.help, "la ayuda SÍ tiene las teclas");
     }
 
     /// [`without_navigation`] filtra SOLO las cuatro entradas de navegación,

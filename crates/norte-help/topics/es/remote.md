@@ -4,6 +4,7 @@ title = "SFTP, FTP y almacenamiento de objetos"
 tags = ["remote"]
 see_also = ["copying", "archives"]
 commands = ["pane.hotlist", "pane.history", "pane.refresh"]
+context = ["dialog.trust-host"]
 +++
 Un panel sostiene un sitio remoto igual que sostiene un directorio. La
 dirección es una URL, y su esquema dice quién contesta:

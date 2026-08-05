@@ -2732,11 +2732,36 @@ impl HelpView {
         context: &str,
         over_modal: bool,
     ) -> Self {
+        if let Some(topic) = norte_help::topic_for_context(lang, context) {
+            return Self::new_at_topic(lang, keys_lines, &topic.id, over_modal);
+        }
         let mut view = Self::new(lang, keys_lines);
         view.over_modal = over_modal;
-        if let Some(topic) = norte_help::topic_for_context(lang, context) {
-            view.state.open_as_root(&topic.id);
-        }
+        view
+    }
+
+    /// Opens the help on a page the caller already picked, instead of on a
+    /// context the corpus resolves (H3c).
+    ///
+    /// The sibling of [`new_at`](Self::new_at) for the other bridge into the
+    /// corpus: `F1` on a command palette row opens the page that DOCUMENTS that
+    /// command ([`norte_help::topic_for_command`]), which is a topic id in hand
+    /// and not a place the reader is standing in.
+    ///
+    /// Same trail treatment for the same reason — the page arrives as the ROOT
+    /// (`HelpState::open_as_root`), because being PUT on a page is not
+    /// navigation the reader did and `Esc` has to close the overlay rather than
+    /// walk back to an index they never saw.
+    #[must_use]
+    pub fn new_at_topic(
+        lang: norte_help::Lang,
+        keys_lines: Vec<String>,
+        topic: &norte_help::TopicId,
+        over_modal: bool,
+    ) -> Self {
+        let mut view = Self::new(lang, keys_lines);
+        view.over_modal = over_modal;
+        view.state.open_as_root(topic);
         view
     }
 

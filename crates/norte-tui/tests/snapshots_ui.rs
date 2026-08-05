@@ -581,6 +581,163 @@ fn snapshot_modal_papelera_y_permanente() {
     insta::assert_snapshot!(format!("{papelera}\n===\n{permanente}"));
 }
 
+/// H3c: mientras una página de ayuda ABIERTA DESDE el modal lo tapa, la ayuda
+/// se queda las teclas (`HelpView::over_modal`) y los verbos del modal son
+/// INERTES. Un pie que siguiera ofreciéndolos mentiría — `y` y `n` no harían
+/// nada — así que dice lo que es verdad: cierra la ayuda para responder.
+///
+/// Lo que NO cambia: la caja y la pregunta siguen visibles, encima de la ayuda
+/// (el modal se pinta el último). Esconder la pregunta es el defecto que H1
+/// arregló pintándolo así, y esto no lo deshace.
+///
+/// Las aserciones van contra el hint GENERADO del modal (`DialogHints`) y no
+/// contra etiquetas sueltas: `[Enter] confirmar` sale también en el pie de la
+/// PROPIA ayuda, donde sí está vivo, así que buscar la etiqueta a secas en el
+/// frame confundiría dos pies distintos.
+#[test]
+fn el_pie_del_modal_no_ofrece_verbos_inertes_bajo_la_ayuda() {
+    // Idioma fijo ANTES del primer `t()`: el catálogo se resuelve una vez, y
+    // `vp` (que es quien lo fuerza en el resto del archivo) todavía no ha
+    // corrido aquí.
+    let _ = norte_i18n::force(norte_i18n::Lang::Es);
+    let etiqueta = |cmd: &str| norte_i18n::t(&norte_tui::keymap::dialog_hint_id(cmd));
+    let aviso = norte_i18n::t("modal-hint-help-open");
+    let verbos = default_dialog_hints().approval;
+
+    let mut app = app_base();
+    app.modal = Some(Modal::ApproveAgentOp {
+        req: norte_proto::methods::PolicyApprovalRequired {
+            approval_id: 1,
+            session: Some("s1".into()),
+            op: "copy".into(),
+            paths: vec!["mem:///a".into()],
+            ttl_ms: 60_000,
+        },
+    });
+    open_help_over_modal(&mut app);
+    let tapado = render(&app);
+
+    assert!(
+        tapado.contains(&aviso),
+        "el pie tiene que decir por qué las teclas del modal no responden:\n{tapado}"
+    );
+    assert!(
+        !tapado.contains(&verbos),
+        "el pie sigue ofreciendo los verbos inertes ({verbos:?}):\n{tapado}"
+    );
+    // Y ni sueltas: `aprobar`/`denegar` solo puede pintarlas este modal (el pie
+    // de la ayuda lista los suyos, que sí responden).
+    for cmd in ["dialog.approve", "dialog.deny"] {
+        assert!(
+            !tapado.contains(&etiqueta(cmd)),
+            "{cmd} está inerte y el pie lo sigue ofreciendo:\n{tapado}"
+        );
+    }
+    // Y la pregunta NO se esconde: el título y la ruta que se aprueba siguen
+    // ahí, encima de la página (el modal se pinta el último, H1).
+    assert!(
+        tapado.contains(&norte_i18n::t("modal-approval-title")),
+        "la pregunta tiene que seguir a la vista:\n{tapado}"
+    );
+    assert!(
+        tapado.contains("mem:///a"),
+        "…y la ruta con ella:\n{tapado}"
+    );
+
+    // Cerrada la ayuda, el modal recupera sus verbos: la tecla vuelve a hacer
+    // lo que el pie dice.
+    app.help = None;
+    let visible = render(&app);
+    assert!(
+        !visible.contains(&aviso),
+        "sin ayuda por encima no hay nada que cerrar:\n{visible}"
+    );
+    assert!(
+        visible.contains(&verbos),
+        "los verbos vuelven al pie en cuanto la ayuda se cierra:\n{visible}"
+    );
+}
+
+/// El mismo pie honesto en TODOS los modales con hint generado, no solo en la
+/// aprobación: la mentira es idéntica en una confirmación de borrado, en una
+/// colisión y en una host key sin confiar.
+///
+/// El par de aserciones por modal es lo que le da fuerza: con la ayuda cerrada
+/// su hint generado se pinta ENTERO (si no, la mitad de abajo no probaría nada),
+/// y con la ayuda encima no queda ni rastro de él.
+#[test]
+fn ningun_modal_con_hint_generado_ofrece_verbos_bajo_la_ayuda() {
+    let _ = norte_i18n::force(norte_i18n::Lang::Es);
+    let aviso = norte_i18n::t("modal-hint-help-open");
+    let hints = default_dialog_hints();
+    let modales = [
+        (
+            Modal::ConfirmDelete {
+                items: vec![vp("file:///casa/notas.txt")],
+                permanent: true,
+            },
+            hints.confirm.clone(),
+        ),
+        (
+            Modal::ConfirmTransfer {
+                kind: TransferKind::Copy,
+                items: vec![vp("file:///casa/notas.txt")],
+                to: vp("file:///otro"),
+            },
+            hints.confirm.clone(),
+        ),
+        (Modal::ConfirmQuit, hints.confirm.clone()),
+        (
+            Modal::Collision {
+                retry: RetrySpec {
+                    kind: TransferKind::Copy,
+                    from: vp("file:///casa/notas.txt"),
+                    to: vp("file:///otro/notas.txt"),
+                    opts: TransferOptions::default(),
+                    name_encoding: None,
+                },
+            },
+            hints.collision.clone(),
+        ),
+        (
+            Modal::TrustHostKey {
+                host: "ejemplo.org".into(),
+                port: Some(22),
+                algo: "ssh-ed25519".into(),
+                fingerprint: "SHA256:abc".into(),
+                dir: vp("sftp://ejemplo.org/casa"),
+                pane: 0,
+                trail: Trail::Record,
+            },
+            hints.trust_host.clone(),
+        ),
+    ];
+    for (modal, verbos) in modales {
+        let mut app = app_base();
+        app.modal = Some(modal);
+
+        // Sin ayuda: el pie generado se pinta entero.
+        let solo = render(&app);
+        assert!(
+            solo.contains(&verbos),
+            "este modal no pinta su hint entero, así que la otra mitad del test \
+             no probaría nada ({verbos:?}):\n{solo}"
+        );
+
+        // Con la ayuda encima: ni un verbo, y el aviso en su lugar.
+        open_help_over_modal(&mut app);
+        let tapado = render(&app);
+        assert!(
+            tapado.contains(&aviso),
+            "este modal no dice por qué sus teclas no responden:\n{tapado}"
+        );
+        assert!(
+            !tapado.contains(&verbos),
+            "este modal sigue ofreciendo verbos inertes ({verbos:?}):\n{tapado}"
+        );
+    }
+}
+
 /// TOFU Lua (M4, ADR 0026): la forma exacta del modal de confianza del
 /// `./.norte/init.lua` queda congelada — path saneado + sha256 abreviado +
 /// aviso de que corre con los permisos del usuario.
@@ -732,6 +889,15 @@ fn open_help(app: &mut App) {
         norte_i18n::Lang::Es,
     ));
     app.help = Some(norte_tui::app::HelpView::new(norte_i18n::Lang::Es, lines));
+    refresh_help(app);
+}
+
+/// La misma ayuda, pero abierta ENCIMA de un modal (H3c, `over_modal`): la que
+/// se queda las teclas, con lo que los verbos del modal quedan inertes hasta
+/// que se cierre.
+fn open_help_over_modal(app: &mut App) {
+    open_help(app);
+    app.help.as_mut().expect("la ayuda se abrió").over_modal = true;
     refresh_help(app);
 }
 

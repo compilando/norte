@@ -11,6 +11,7 @@ commands = [
     "mark.pattern-add",
     "mark.pattern-remove",
 ]
+context = ["dialog.mark-pattern"]
 +++
 Un comando actúa sobre las entradas marcadas o, si no hay ninguna marcada,
 sobre la que está bajo el cursor. No hay un tercer caso, y por eso un lote de

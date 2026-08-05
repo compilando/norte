@@ -500,13 +500,31 @@ const DOCUMENTED: [&str; 30] = [
     "task.cancel",
 ];
 
-/// The UI contexts a topic may claim, mirroring the frontend's `Screen`.
+/// The UI contexts a topic may claim, mirroring `norte_tui::help_context`'s
+/// closed vocabulary — one id per PLACE the reader can be, which since phase
+/// H3c means one per modal rather than one per screen.
 ///
 /// Written out because `norte-help` does not depend on a frontend (rule 7 in
-/// reverse: the corpus knows nothing about ratatui or GPUI). Task 9 wires the
-/// real vocabulary from `norte-tui`, where the enum lives; this is the pin
-/// that the corpus does not drift in the meantime.
-const CONTEXTS: [&str; 3] = ["browse", "viewer", "dialog"];
+/// reverse: the corpus knows nothing about ratatui or GPUI). The gate that
+/// crosses this with the real vocabulary is `norte-tui`'s
+/// `tests/help_gate.rs`, which reads `help_context::CONTEXTS` directly; this
+/// is the pin that the corpus does not drift from it in the meantime, and a
+/// disagreement surfaces there as an `UnknownContext`.
+const CONTEXTS: [&str; 13] = [
+    "browse",
+    "viewer",
+    "dialog.confirm",
+    "dialog.collision",
+    "dialog.approval",
+    "dialog.trust-host",
+    "dialog.trust-lua",
+    "dialog.quit",
+    "dialog.mark-pattern",
+    "dialog.transfer-name",
+    "dialog.mkdir",
+    "dialog.ai-rename",
+    "dialog.semantic-search",
+];
 
 #[test]
 fn the_shipped_corpus_has_no_integrity_issues() {
@@ -539,10 +557,13 @@ fn the_shipped_corpus_claims_only_contexts_the_ui_has() {
     assert!(del_corpus.is_empty(), "{del_corpus:?}");
 
     // The mirror direction is real debt, so it is NAMED here rather than
-    // filtered away in silence: only `panes` claims a context today, and the
-    // pages for the rest are phase H3h's. The frontend's gate is what carries
-    // the shrinking allowlist; this assertion is what makes writing one of
-    // those pages show up as a failure in this file too.
+    // filtered away in silence: four places have a page that really explains
+    // them (`browse` in `panes`, the confirmation and the collision dialog in
+    // `copying`, the host-key question in `remote`, the glob prompt in
+    // `selection`), and the pages for the rest are phase H3h's — there is no
+    // viewer page and no agents-and-policy page to point at. The frontend's
+    // gate is what carries the shrinking allowlist; this assertion is what
+    // makes writing one of those pages show up as a failure in this file too.
     let sin_pagina: Vec<&str> = issues
         .iter()
         .filter_map(|i| match i {
@@ -550,7 +571,19 @@ fn the_shipped_corpus_claims_only_contexts_the_ui_has() {
             _ => None,
         })
         .collect();
-    assert_eq!(sin_pagina, ["viewer", "dialog"]);
+    assert_eq!(
+        sin_pagina,
+        [
+            "viewer",
+            "dialog.approval",
+            "dialog.trust-lua",
+            "dialog.quit",
+            "dialog.transfer-name",
+            "dialog.mkdir",
+            "dialog.ai-rename",
+            "dialog.semantic-search",
+        ]
+    );
 }
 
 #[test]

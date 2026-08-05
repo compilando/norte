@@ -187,6 +187,74 @@ pub fn topic_for_context(lang: Lang, context: &str) -> Option<&'static Topic> {
         .find(|t| t.context.iter().any(|c| c == context))
 }
 
+/// The topic that documents `command`, if one names it.
+///
+/// The reverse of what the documentation gate walks: it checks that every
+/// command IS named by some topic, and this is the lookup that makes the check
+/// pay off at runtime — the palette's row for a command can open its page, so
+/// the fast gesture and the one that explains are two views of one model rather
+/// than two places to look.
+///
+/// `None` is a normal answer — a command no page names yet, which the gate
+/// carries on a shrinking allowlist — and a caller with no page to open should
+/// say so rather than open the index: a reader sent to the index has to work out
+/// for themselves what it had to do with what they asked.
+///
+/// The comparison is byte-exact, like every id comparison in this crate, and the
+/// key is a DISPATCH key: a plugin row's `plugin:{id}:{command}` is answered
+/// `None` by the same rule that answers an unknown command, with no special case
+/// here.
+///
+/// # Which page, when several name it
+///
+/// Unlike a context, a command is legitimately named by several topics: the
+/// mouse page names `pane.copy` to say a drag does what that key does, and the
+/// copying page is where copying is explained. So this cannot be "the first
+/// claimant in corpus order" — corpus order is READING order (the mouse page is
+/// basics, copying is later), which says nothing about which page owns a
+/// command, and taking it would open *Using the mouse* for `pane.copy`.
+///
+/// The corpus already carries the answer in data the author maintains anyway:
+/// among the pages that name the command, one that ALSO links to another of them
+/// through `see_also` is deferring — "I mention this; it is explained over
+/// there". So the winner is the first claimant, in corpus order, that defers to
+/// no other claimant. If every claimant defers (a mutual `see_also` between two
+/// pages that both name it) the first in corpus order wins, which is arbitrary
+/// but total: this function always answers the same page for the same corpus.
+///
+/// ```
+/// use norte_help::{Lang, topic_for_command};
+///
+/// // `mouse` and `copying` both name it, and `mouse` comes first in the
+/// // corpus — but it links to `copying`, so it is pointing rather than
+/// // explaining.
+/// assert_eq!(
+///     topic_for_command(Lang::En, "pane.copy").map(|t| t.id.as_str()),
+///     Some("copying")
+/// );
+/// assert!(topic_for_command(Lang::En, "no.such.command").is_none());
+/// ```
+///
+/// # Panics
+/// If an embedded topic is malformed; see [`topics`].
+#[must_use]
+pub fn topic_for_command(lang: Lang, command: &str) -> Option<&'static Topic> {
+    let claimants: Vec<&'static Topic> = topics(lang)
+        .iter()
+        .filter(|t| t.commands.iter().any(|c| c == command))
+        .collect();
+    let defers = |t: &Topic| {
+        claimants
+            .iter()
+            .any(|other| other.id != t.id && t.see_also.contains(&other.id))
+    };
+    claimants
+        .iter()
+        .copied()
+        .find(|t| !defers(t))
+        .or_else(|| claimants.first().copied())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,5 +291,56 @@ mod tests {
     #[test]
     fn un_contexto_sin_tema_es_none_no_un_panico() {
         assert!(topic_for_context(Lang::En, "no-existe-este-contexto").is_none());
+    }
+
+    #[test]
+    fn un_comando_resuelve_a_la_pagina_que_lo_documenta() {
+        // La vuelta de lo que camina la puerta de documentación: ella
+        // garantiza que TODO comando fuera de su allowlist lo nombra algún
+        // tema, y esto es la consulta que cobra esa garantía en runtime (F1
+        // sobre una fila de la palette).
+        let t = topic_for_command(Lang::En, "pane.copy").expect("pane.copy está documentado");
+        assert_eq!(t.id.as_str(), "copying");
+        // Y el id no depende del idioma del lector: la paridad es estructural.
+        assert_eq!(
+            topic_for_command(Lang::Es, "pane.copy").map(|es| es.id.clone()),
+            Some(t.id.clone())
+        );
+        assert!(topic_for_command(Lang::En, "no.such.command").is_none());
+    }
+
+    #[test]
+    fn la_pagina_de_un_comando_es_la_que_lo_explica_no_la_que_lo_menciona() {
+        // `mouse` nombra `pane.copy`/`pane.move` (un arrastre hace lo que hace
+        // esa tecla) y va ANTES que `copying` en el corpus, así que "el primer
+        // reclamante" abriría «Using the mouse» sobre la fila `pane.copy` de la
+        // palette. El desempate es la deferencia: `mouse` enlaza a `copying`
+        // por `see_also`, luego está señalando, no explicando.
+        for cmd in ["pane.copy", "pane.move"] {
+            assert_eq!(
+                topic_for_command(Lang::En, cmd).map(|t| t.id.as_str()),
+                Some("copying"),
+                "{cmd} se explica en la página de copiar"
+            );
+        }
+        // Y al revés: cuando la primera página en orden de corpus NO defiere,
+        // gana ella. `panes` nombra `nav.enter` igual que `mouse` y
+        // `archives`, y no enlaza a ninguna de las dos.
+        assert_eq!(
+            topic_for_command(Lang::En, "nav.enter").map(|t| t.id.as_str()),
+            Some("panes")
+        );
+        assert_eq!(
+            topic_for_command(Lang::En, "mark.toggle").map(|t| t.id.as_str()),
+            Some("selection")
+        );
+    }
+
+    #[test]
+    fn una_clave_de_fila_de_plugin_no_documenta_nada() {
+        // La `key` de una fila de plugin de la palette
+        // (`plugin:{id}:{command}`) no es un comando del host y ningún tema
+        // del corpus la nombra: `None`, jamás un pánico ni una página ajena.
+        assert!(topic_for_command(Lang::En, "plugin:dev.norte.demo:greet").is_none());
     }
 }

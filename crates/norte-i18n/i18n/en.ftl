@@ -12,6 +12,11 @@ modal-collision-body = destination already exists:
 modal-approval-title = Agent approval
 modal-approval-body = agent "{ $session }" requests { $op }:
 modal-approval-path = { $badge }path { $n }: { $path }
+# H3c: the footer of a modal a help page is covering. While that help is open
+# it owns the keys, so the modal's verbs do nothing — a footer that kept
+# offering them would lie. The box and the question stay visible (the modal is
+# painted last); only the verbs are replaced by what is true.
+modal-hint-help-open = close the help to answer this
 modal-trust-host-title = Unknown host key
 modal-trust-host-host = { $badge }host: { $host }
 modal-trust-host-algo = { $badge }algorithm: { $algo }
@@ -289,8 +294,21 @@ help-cmd-app-settings = settings
 # --- Command palette (H1 T4) — a free-text filter editor like the search
 # dialog (decision 8): its keys are hardcoded, NOT resolved through the
 # `dialog` context, so this hint is a static string like `search-hint`.
+#
+# Arrows and paging are NOT listed, for the reason `without_navigation` gives
+# (H1 MAJOR-1): they are self-evident and the box is 60 cells wide, so spelling
+# them out cut the rest of the footer mid-word instead.
 palette-title = Command palette
-palette-hint = [↑/↓/pgup/pgdn] navigate · [enter] run · [esc] close
+palette-hint = [enter] run · [esc] close
+# H3c, and a SEPARATE key on purpose: `palette-hint` is painted by both
+# frontends, and only the TUI has a help overlay for F1 to open (the GUI's is
+# phase H3f). Folded into the string above, the GUI's footer would advertise a
+# key that does nothing there. When H3f lands, the GUI joins this group too.
+palette-hint-help = [f1] help
+# H3c: F1 on a row opens the page that documents that command. When no page
+# does, the palette stays open and says so — opening the index instead would
+# leave the reader working out what it had to do with what they asked.
+msg-palette-no-help = no help page documents this command yet
 # --- Settings overlay (S3) — same free-text-filter idiom as the palette
 # above (decision 8): search is always active, Enter toggles/cycles/edits.
 settings-title = Settings

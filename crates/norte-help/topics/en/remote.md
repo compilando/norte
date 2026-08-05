@@ -4,6 +4,7 @@ title = "SFTP, FTP and object storage"
 tags = ["remote"]
 see_also = ["copying", "archives"]
 commands = ["pane.hotlist", "pane.history", "pane.refresh"]
+context = ["dialog.trust-host"]
 +++
 A pane holds a remote location the same way it holds a directory. The address
 is a URL, and its scheme says who answers:

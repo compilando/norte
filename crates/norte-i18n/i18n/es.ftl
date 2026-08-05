@@ -12,6 +12,12 @@ modal-collision-body = el destino ya existe:
 modal-approval-title = Aprobación de agente
 modal-approval-body = el agente "{ $session }" pide { $op }:
 modal-approval-path = { $badge }ruta { $n }: { $path }
+# H3c: el pie de un modal al que una página de ayuda está tapando. Mientras
+# esa ayuda esté abierta se queda las teclas, así que los verbos del modal no
+# hacen nada — un pie que siguiera ofreciéndolos mentiría. La caja y la
+# pregunta siguen a la vista (el modal se pinta el último); lo que se sustituye
+# son los verbos por lo que es verdad.
+modal-hint-help-open = cierra la ayuda para responder a esto
 modal-trust-host-title = Host key desconocida
 modal-trust-host-host = { $badge }host: { $host }
 modal-trust-host-algo = { $badge }algoritmo: { $algo }
@@ -292,8 +298,22 @@ help-cmd-app-settings = ajustes
 # --- Paleta de comandos (H1 T4) — editor de filtro libre como el diálogo
 # de búsqueda (decisión 8): sus teclas son fijas, NO resuelven por el
 # contexto `dialog` — este hint es una cadena estática, como `search-hint`.
+#
+# Las flechas y el paginado NO se listan, por lo mismo que dice
+# `without_navigation` (H1 MAJOR-1): son autoevidentes y la caja mide 60
+# celdas, así que escribirlas recortaba el resto del pie a media palabra.
 palette-title = Paleta de comandos
-palette-hint = [↑/↓/pgup/pgdn] navegar · [enter] ejecutar · [esc] cerrar
+palette-hint = [enter] ejecutar · [esc] cerrar
+# H3c, y clave SEPARADA a propósito: `palette-hint` lo pintan los DOS
+# frontends, y solo la TUI tiene overlay de ayuda que F1 pueda abrir (el de la
+# GUI es la fase H3f). Metido en la cadena de arriba, el pie de la GUI
+# anunciaría una tecla que allí no hace nada. Cuando llegue H3f, la GUI une
+# también este grupo.
+palette-hint-help = [f1] ayuda
+# H3c: F1 sobre una fila abre la página que documenta ese comando. Si ninguna
+# lo documenta, la palette se queda abierta y lo dice — abrir el índice
+# dejaría al lector averiguando qué tenía que ver con lo que pidió.
+msg-palette-no-help = ninguna página de la ayuda documenta este comando todavía
 # --- Overlay de ajustes (S3) — mismo criterio de filtro libre que la
 # paleta de arriba (decisión 8): la búsqueda está SIEMPRE activa, Enter
 # togglea/cicla/edita.

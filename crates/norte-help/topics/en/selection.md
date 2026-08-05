@@ -11,6 +11,7 @@ commands = [
     "mark.pattern-add",
     "mark.pattern-remove",
 ]
+context = ["dialog.mark-pattern"]
 +++
 A command acts on the marked entries, or on the entry under the cursor when
 nothing is marked. There is no third case, which is why a batch of one needs

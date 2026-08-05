@@ -11,7 +11,7 @@ expression: render(&app)
 "│ ! �.dat ┌ Paleta de comandos ──────────────────────────────────────┐         │"
 "│         │ cursor.top               ir…ncipio                  Home │         │"
 "│         │ viewer.top               ir…ncipio                  Home │         │"
-"│         └ /principio  [↑/↓/pgup/pgdn] navegar · [enter] ejecutar · ┘         │"
+"│         └ /principio  [enter] ejecutar · [esc] cerrar · [f1] ayuda ┘         │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"
