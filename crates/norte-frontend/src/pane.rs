@@ -1575,7 +1575,7 @@ impl PaneState {
     ///
     /// La sonda es AUTORITATIVA: acaba de mirar el fichero, así que su valor
     /// pisa el que hubiera (que puede venir heredado de antes del refresco,
-    /// ver [`Self::inherit_known_metadata`] — sin esto, un fichero que crece
+    /// ver `inherit_known_metadata` — sin esto, un fichero que crece
     /// mostraría para siempre el tamaño con el que se listó la primera vez).
     /// Lo que NO pisa es con `None`: un stat que falla o un provider que no
     /// sabe el dato jamás borra uno que sí se conocía.

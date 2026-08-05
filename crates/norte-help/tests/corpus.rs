@@ -343,7 +343,7 @@ fn no_topic_trips_a_limits_ceiling() {
 /// is: a list computed from the corpus cannot notice that the corpus stopped
 /// documenting something. A mark added or dropped shows up here as a diff, and
 /// the number is the one phase H3h has to move.
-const DOCUMENTED: [&str; 19] = [
+const DOCUMENTED: [&str; 20] = [
     "mark.all",
     "mark.clear",
     "mark.invert",
@@ -360,6 +360,7 @@ const DOCUMENTED: [&str; 19] = [
     "pane.move",
     "pane.names-encoding",
     "pane.refresh",
+    "pane.rename",
     "pane.switch",
     "pane.view",
     "task.cancel",

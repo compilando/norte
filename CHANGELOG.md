@@ -9,6 +9,54 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The mouse, in both frontends:** left click focuses a pane and moves its
+  cursor, double click does exactly what `nav.enter` does, and the wheel
+  scrolls the listing **under the pointer** rather than the focused one.
+  Ctrl+click toggles one mark, shift+click marks the range from the cursor
+  (additively), and a drag marks what it sweeps — retreating gives those rows
+  back instead of leaving everything the pointer ever touched marked. A plain
+  click still never marks: browsing a listing cannot change what the next
+  command acts on.
+  Dragging onto the other pane **copies; shift+drag moves**, and the modifier
+  is read at RELEASE, so someone who starts a drag and changes their mind does
+  not move what they meant to copy. The drop opens the same confirmation the
+  copy and move keys open and goes through the same collision dialog, policy
+  gate, journal entry and undo — there is no quieter second mutation path,
+  in either frontend.
+  The rule that lets one gesture do two jobs is the row you press: a drag from
+  a **marked** row carries the marks, a drag from an **unmarked** row carries
+  that one row — but only once the pointer crosses into the other pane
+  (*promotion*, without which the commonest drag in any file manager would
+  transfer nothing). Promotion changes what the gesture does, never what is
+  selected: the pressed row is not marked, and rows the sweep marked on the
+  way out are given back, so a cancelled drag leaves the selection exactly as
+  it was. A sweep armed with shift is deliberately **not** promotable —
+  shift means "extend the range", and reading a range that ends past the pane
+  boundary as a drop would turn a marking gesture into a move of the whole
+  selection. Because the gesture means one thing at home and another across
+  the way, it says which before the button comes up: how many items, to which
+  directory, copy or move — the GUI as a drag label, the TUI in the status
+  bar, both read from the same state the release reads.
+  Right click (GUI) opens a menu of operations that already have keys — open,
+  view, copy, move, rename, delete, copy path — each dispatching the SAME
+  command the keyboard does, with entries that cannot run right now dimmed
+  and carrying their reason. Two of them became real commands rather than
+  menu-only actions: `pane.rename` (shift+F6) and `pane.copy-path` (alt+y).
+  The menu acts on the marks when the clicked row is marked and on that row
+  alone when it is not — which means **right-clicking an unmarked row drops
+  that pane's marks**, irrecoverably, Esc included. That is deliberate: every
+  command prefers the marks when there are any, so leaving them would let the
+  menu say "1" while the copy took eleven.
+  In the terminal the mouse is captured by default, which means your emulator
+  stops seeing the buttons it uses for its own text selection. `[ui] mouse =
+  false` (hot-reloaded, and discoverable in the settings overlay) gives it
+  back, and Shift+drag selects natively in almost every emulator. Capture is
+  released on exit, on panic, and whenever norte hands the terminal to an
+  external program, so nothing ever inherits a terminal in mouse mode.
+  The semantics live once, in `norte-frontend::mouse`, as a pure state
+  machine over pane indices: each frontend hit-tests, feeds it, and applies
+  the effects, so the two cannot drift into two different file managers.
+
 - **Help corpus (H3a, ADR 0040):** new crate `norte-help`, the foundation of
   the help-system redesign. Topics are markdown-lite files with TOML front
   matter between `+++` fences, embedded through an explicit `include_str!`

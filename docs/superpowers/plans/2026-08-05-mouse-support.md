@@ -33,21 +33,21 @@ GPUI mouse events in `norte-gui`, shared logic in `norte-frontend`.
 **Files:** `crates/norte-frontend/src/pane.rs`, new
 `crates/norte-frontend/src/mouse.rs`.
 
-- [ ] `PaneState::mark_range(from: usize, to: usize)` — marks every entry
+- [x] `PaneState::mark_range(from: usize, to: usize)` — marks every entry
       between two visible indices inclusive, in either order, respecting the
       live quick-search filter exactly as `mark_all` does (`markable_indices`).
       Returns how many marks it changed, like the glob marker.
-- [ ] `PaneState::set_mark(index, bool)` — the primitive ctrl+click needs;
+- [x] `PaneState::set_mark(index, bool)` — the primitive ctrl+click needs;
       `toggle_mark` already exists but works on the cursor only.
-- [ ] `mouse.rs`: a `DragKind { MarkSweep, Transfer }` and a `Drag` state
+- [x] `mouse.rs`: a `DragKind { MarkSweep, Transfer }` and a `Drag` state
       machine — `press(pane, index, mods)`, `motion(pane, index)`,
       `release(pane, index, mods)` — returning an `Effect` the frontend
       applies (`MoveCursor`, `SetMarks`, `Transfer { from_pane, to_pane, move_files }`).
       Pure: no I/O, no rendering, no frontend types.
-- [ ] A drag that starts on an UNMARKED entry marks the sweep; a drag that
+- [x] A drag that starts on an UNMARKED entry marks the sweep; a drag that
       starts on a MARKED entry is a transfer of the current marks. Pin that
       distinction with tests — it is the rule that lets one gesture do both.
-- [ ] Tests: range marking in both directions, under a filter, on an empty
+- [x] Tests: range marking in both directions, under a filter, on an empty
       listing; sweep vs transfer; a release outside any row cancels.
 
 Commit: `feat(frontend): shared marking and drag semantics for the mouse`.
@@ -59,21 +59,21 @@ Commit: `feat(frontend): shared marking and drag semantics for the mouse`.
 **Files:** `crates/norte-tui/src/main.rs`, `crates/norte-tui/src/ui.rs`,
 `crates/norte-config` (the `[ui] mouse` key), `crates/norte-help/topics/*`.
 
-- [ ] `[ui] mouse` (default true) in the config schema, with the settings-overlay
+- [x] `[ui] mouse` (default true) in the config schema, with the settings-overlay
       entry so it is discoverable, and hot reload like every other `[ui]` key.
-- [ ] Enable/disable crossterm mouse capture at startup and on hot reload.
+- [x] Enable/disable crossterm mouse capture at startup and on hot reload.
       Capture must be released on exit and on the external-opener suspend path
       (`run_opener`), or the launched program inherits a terminal in mouse mode.
-- [ ] Hit-testing: the draw already knows each pane's rect; store the last
+- [x] Hit-testing: the draw already knows each pane's rect; store the last
       painted rects (the `#124` precedent, where the real viewport height goes
       back into the model after each frame) and map a click position to
       `(pane, index)`.
-- [ ] Left click: focus that pane and move the cursor. Double click: `nav.enter`.
+- [x] Left click: focus that pane and move the cursor. Double click: `nav.enter`.
       Wheel: scroll the listing under the pointer, not the focused one.
       Ctrl+click, shift+click and drag: the Task 1 semantics.
-- [ ] Right click: open the context menu of Task 4 if it has landed; otherwise
+- [x] Right click: open the context menu of Task 4 if it has landed; otherwise
       nothing (do not invent a second menu).
-- [ ] Tests: hit-testing maths against a known layout, including the header and
+- [x] Tests: hit-testing maths against a known layout, including the header and
       footer rows and a click outside any row; capture is released on suspend.
 
 Commit: `feat(tui): mouse capture, click, wheel and drag marking`.
@@ -216,15 +216,18 @@ Commit: `feat(gui): drag and drop between panes`.
 
 ### Task 6: Close
 
-- [ ] Document the mouse in the help corpus (both locales): what the buttons do,
-      the marking modifiers, and — for the TUI — that capture takes over the
-      terminal's own selection and how to get it back (`[ui] mouse = false`, or
-      Shift+drag in most terminals).
-- [ ] Changelog entry.
-- [ ] `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`,
-      `cargo nextest run --workspace`, `just ci`, plus `cargo check` and
-      `cargo nextest run` inside `crates/norte-gui` (it is outside the
-      workspace).
+- [x] The `mouse` help topic (both locales) now covers the buttons, the marking
+      modifiers, drag-copies/shift-drag-moves, the promotion rule and what it
+      gives back, the right-click menu and its target rule (including that
+      right-clicking an unmarked row discards the marks), and — for the TUI —
+      that capture takes over the terminal's own selection and how to get it
+      back (`[ui] mouse = false`, or Shift+drag in most terminals).
+      `pane.rename` left the documentation gate's allowlist, whose ceiling
+      came down with it.
+- [x] Changelog entry.
+- [x] `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`,
+      `cargo nextest run --workspace`, `just ci`, plus fmt/clippy/nextest
+      inside `crates/norte-gui` (it is outside the workspace).
 
 Commit: `docs(mouse): help topic and changelog`.
 
