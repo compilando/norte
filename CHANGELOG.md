@@ -9,6 +9,30 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Passing a location between the panes:** `Alt+i` sends this pane's location
+  to the other one and leaves the focus where it is — the fastest way to line
+  up a copy, because the destination is whatever the other pane holds. `Alt+u`
+  is the same gesture the other way round, and `Ctrl+U` swaps the two, which is
+  how you reverse the direction of a copy without navigating anything: nothing
+  is re-read, and the marks, the filter, the sort and the pane's own trail all
+  travel with their pane, so the focus stays on the side of the screen you were
+  already looking at. Mirroring onto a host you have not visited connects and
+  asks about its key exactly as walking there would, and the question belongs to
+  the pane that is travelling, not to the one you are looking at. If the
+  destination cannot be reached the pane stays where it was and says why. From a
+  live-search results pane there is nothing to send: a list of hits is not a
+  location, and norte says so rather than guessing which directory you meant.
+- **A real back and forward:** `Alt+←` returns the focused pane to where it was
+  and `Alt+→` undoes that. It is a trail, not a list of favourites: from one
+  directory to a second and then a third, back twice reaches the first — walking
+  the "places this pane has been" list instead would bounce between the two most
+  recent forever. Navigating somewhere new from the middle of the trail forgets
+  the branch you stepped off, as a browser does. If a step back lands on a
+  directory that has since disappeared, the step is rewound and the dead
+  directory leaves the trail, the popup and the forward branch at once, so the
+  key cannot trap you on it; any other failure keeps it, because a host that is
+  down is still a place. When the trail runs out the key says so — a key that
+  goes quiet is indistinguishable from a broken one.
 - **Help you can navigate, and that knows your keys (H3b):** `F1` opens a page,
   not a key dump. The topics of the corpus on the left, grouped by tag; the page
   you are on to the right; `/` to filter the list by page title, page id or the

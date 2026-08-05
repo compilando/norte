@@ -1581,6 +1581,31 @@ impl App {
         self.focus ^= 1;
     }
 
+    /// Exchanges the two panes and everything `App` keeps beside them
+    /// (`pane.swap`).
+    ///
+    /// Touches no disk: no listing is refetched, nothing can fail, and the
+    /// marks, the filter, the sort and the cursor all survive because the
+    /// WHOLE pane moves rather than being rebuilt.
+    ///
+    /// The focus stays on the same physical SIDE on purpose. Moving it along
+    /// with the content would make the command a no-op from where the reader
+    /// sits: they would still be looking at the same listing, just on the
+    /// other half of the screen.
+    ///
+    /// The history moves WITH the pane, because it belongs to the content and
+    /// not to the side of the screen. Left behind, each pane would offer to
+    /// take the reader "back" to places that content has never been.
+    ///
+    /// NOT the whole story: the run loop keeps its own state indexed by pane
+    /// (the paginated fill in flight, the decoration fetches, the stat-probe
+    /// dedup) which `App` cannot see. `main::reconcile_swap` is the other
+    /// half, and the two are driven together by `Cd::Swapped`.
+    pub fn swap_panes(&mut self) {
+        self.panes.swap(0, 1);
+        self.history.swap(0, 1);
+    }
+
     /// Da el foco al pane `i`. Un índice fuera de `0|1` se IGNORA (el
     /// invariante de `focus` es de la propia `App`): el único emisor de
     /// índices que no son literales es el hit test del ratón, y ahí un
@@ -3736,6 +3761,77 @@ mod tests {
 
     fn app_dos_panes() -> App {
         App::new(pane_con(&["a"]), pane_con(&["b"]))
+    }
+
+    /// `App` con cada pane sobre SU dir (el `app_dos_panes` de arriba pone
+    /// los dos sobre `root()`, que no distingue lados).
+    fn app_en(izq: &str, der: &str) -> App {
+        App::new(
+            Pane::new(vp(izq), Vec::new()),
+            Pane::new(vp(der), Vec::new()),
+        )
+    }
+
+    /// El intercambio cruza el pane Y su historial, y deja el foco en el
+    /// mismo LADO: quien miraba a la izquierda sigue mirando a la izquierda,
+    /// y ahora ahí está lo que había a la derecha.
+    #[test]
+    fn el_intercambio_cruza_pane_e_historial_y_no_mueve_el_foco() {
+        let mut app = app_en("mem:///izq", "mem:///der");
+        app.history[0].record(vp("mem:///rastro-izq"));
+        app.history[1].record(vp("mem:///rastro-der"));
+        app.set_focus(0);
+
+        app.swap_panes();
+
+        assert_eq!(app.panes[0].dir(), &vp("mem:///der"));
+        assert_eq!(app.panes[1].dir(), &vp("mem:///izq"));
+        assert_eq!(app.focus(), 0, "el foco se queda en su lado");
+        // El rastro viaja con el CONTENIDO, no con el lado: si no, el popup
+        // ofrecería llevar «atrás» a sitios donde ese contenido nunca estuvo.
+        assert_eq!(
+            app.history[0].entries().front(),
+            Some(&vp("mem:///rastro-der"))
+        );
+        assert_eq!(
+            app.history[1].entries().front(),
+            Some(&vp("mem:///rastro-izq"))
+        );
+        // Y el RASTRO de atrás/adelante viaja también, no solo la MRU que
+        // pinta el popup: son dos estructuras dentro del mismo `History`.
+        assert_eq!(app.history[0].back_len(), 1);
+        assert_eq!(
+            app.history[0].step_back(vp("mem:///der")),
+            Some(vp("mem:///rastro-der")),
+            "el atrás del pane 0 apunta al rastro que llegó con su contenido"
+        );
+    }
+
+    /// Dos intercambios son la identidad.
+    #[test]
+    fn dos_intercambios_dejan_todo_como_estaba() {
+        let mut app = app_en("mem:///izq", "mem:///der");
+        app.swap_panes();
+        app.swap_panes();
+        assert_eq!(app.panes[0].dir(), &vp("mem:///izq"));
+        assert_eq!(app.panes[1].dir(), &vp("mem:///der"));
+    }
+
+    /// El foco se queda en el LADO también cuando estaba a la derecha: el
+    /// intercambio no toca `focus` en absoluto. (Mutación de control:
+    /// añadir `self.focus ^= 1` a `swap_panes` rompe aquí y en el test de
+    /// arriba a la vez.)
+    #[test]
+    fn el_intercambio_con_el_foco_a_la_derecha_tampoco_lo_mueve() {
+        let mut app = app_en("mem:///izq", "mem:///der");
+        app.set_focus(1);
+        app.swap_panes();
+        assert_eq!(app.focus(), 1);
+        assert_eq!(
+            app.focused().dir(),
+            &vp("mem:///izq"),
+            "en el lado derecho ahora está lo que había a la izquierda"
+        );
     }
 
     /// Popup de historial (spec 2026-07-18): navegación con `PickerAction`,

@@ -467,7 +467,7 @@ fn the_hazard_sweep_catches_a_hostile_title_in_every_slot() {
 /// is: a list computed from the corpus cannot notice that the corpus stopped
 /// documenting something. A mark added or dropped shows up here as a diff, and
 /// the number is the one phase H3h has to move.
-const DOCUMENTED: [&str; 25] = [
+const DOCUMENTED: [&str; 30] = [
     "app.help",
     "app.palette",
     "dialog.back",
@@ -479,17 +479,22 @@ const DOCUMENTED: [&str; 25] = [
     "mark.pattern-add",
     "mark.pattern-remove",
     "mark.toggle",
+    "nav.back",
     "nav.enter",
+    "nav.forward",
     "nav.parent",
     "pane.copy",
     "pane.delete",
     "pane.delete-permanent",
     "pane.history",
     "pane.hotlist",
+    "pane.mirror",
     "pane.move",
     "pane.names-encoding",
+    "pane.pull",
     "pane.refresh",
     "pane.rename",
+    "pane.swap",
     "pane.switch",
     "pane.view",
     "task.cancel",

@@ -95,6 +95,13 @@ err-lua-statusbar = Lua statusbar disabled: { $detail }
 err-lua-no-state-dir = project init.lua not loaded: no state directory (XDG_STATE_HOME/HOME)
 # Ya en la cima: no hay directorio padre (raíz `/` o raíz de unidad Windows).
 msg-nav-at-top = already at the top
+# El rastro de atrás/adelante se acabó: la tecla lo DICE, porque una tecla
+# que calla es indistinguible de una rota.
+msg-nav-no-back = no further back
+msg-nav-no-forward = nothing to go forward to
+# Un pane virtual de búsqueda no es una ubicación: una lista de hits no se
+# puede mandar al otro pane ni traer de él.
+msg-pane-not-a-location = search results are not a location: nothing to send
 msg-view-error = view: { $error }
 msg-config-reloaded = config reloaded
 msg-daemon-lost = daemon connection lost; reconnecting…
@@ -355,6 +362,11 @@ help-cmd-cursor-top = go to top
 help-cmd-cursor-bottom = go to bottom
 help-cmd-nav-enter = enter the selected directory
 help-cmd-nav-parent = go to parent directory
+help-cmd-nav-back = back to the previous directory
+help-cmd-nav-forward = forward again
+help-cmd-pane-mirror = send this location to the other pane
+help-cmd-pane-pull = go where the other pane is
+help-cmd-pane-swap = swap the two panes
 help-cmd-pane-copy = copy selection to the other pane
 help-cmd-pane-move = move selection to the other pane
 help-cmd-pane-delete = delete (trash when available)

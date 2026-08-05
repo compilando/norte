@@ -3,7 +3,17 @@ id = "panes"
 title = "Two panes, one destination"
 tags = ["basics"]
 see_also = ["selection", "copying"]
-commands = ["pane.switch", "nav.enter", "nav.parent", "pane.refresh"]
+commands = [
+    "pane.switch",
+    "nav.enter",
+    "nav.parent",
+    "pane.refresh",
+    "pane.mirror",
+    "pane.pull",
+    "pane.swap",
+    "nav.back",
+    "nav.forward",
+]
 context = ["browse"]
 +++
 Two panes are on screen at once. One has focus: it is the one the cursor moves
@@ -33,4 +43,63 @@ archive. Copy does not behave differently because of it; that is what
 Each pane keeps its own directory history and its own sort order, so the
 remote side can look nothing like the local one and neither has to compromise.
 
+# Moving a location across
+
+{{cmd:pane.mirror}} sends the **other** pane where this one is, and the focus
+stays where it was. It is the fastest way to line a copy up: {{cmd:pane.copy}}
+never asks where to, so preparing a transfer *is* pointing the other pane
+somewhere — and this points it without you having to leave the source.
+{{cmd:pane.pull}} is the same gesture the other way round: the focused pane
+goes where the other one is.
+
+Neither of them says anything when both panes are already in the same place.
+Nothing was asked for that failed, and re-listing a pane for no reason would
+slide its listing out from under the cursor sitting in it.
+
+{{cmd:pane.swap}} exchanges the two, which is how you reverse the direction of
+a copy without navigating anywhere. It touches no disk: no listing is re-read,
+nothing can fail, and the marks, the filter, the sort order, the cursor and the
+pane's own history all travel with their pane, because the whole pane moves
+instead of being rebuilt. The focus stays on the same physical **side** of the
+screen on purpose — carrying it along with the content would leave you looking
+at the very same listing and calling it a swap.
+
+Mirroring onto a host you have not visited yet connects and asks about its key
+exactly as walking there would. The question belongs to the pane that is
+travelling, which under a mirror is not the pane you are sitting in. If the
+destination cannot be reached, the pane stays where it was and the reason goes
+to the status bar.
+
+A pane showing the hits of a live search has no location to hand over: the
+directory behind it is the root the search walked, not the list you are reading,
+so the gesture is refused and says why rather than guessing. Only the pane the
+location comes **from** is vetoed. Sending a location onto a results pane is
+fine — the listing that arrives is a real one, and it ends the search.
+
+# Going back
+
+{{cmd:nav.back}} returns the focused pane to where it was, and
+{{cmd:nav.forward}} undoes that. Each pane walks its own trail, and neither key
+moves the focus.
+
+It is a TRAIL, not a list. From one directory to a second and then a third,
+back twice reaches the first. A most-recently-used list walked as if it were a
+trail would bounce between the two most recent directories forever, which is
+why "where was I a moment ago" and "where has this pane been" are two different
+questions here: the second one is the popup behind {{cmd:pane.history}}, and
+stepping back never adds to it.
+
+Navigating somewhere new from the middle of the trail forgets the branch you
+stepped off, exactly as a browser does. A way forward into a history you have
+already abandoned is the bug everyone has met.
+
+A step that fails is rewound — you never left, so the trail is put back as it
+was. When the reason is that the directory is **gone**, it also leaves the
+trail, the forward branch and the history popup, so the key can never trap you
+on a directory that has proved not to be there. Any other failure keeps it: a
+host that was down and a directory you may not read are both still places, and
+either may answer next time.
+
 > 💡 A directory you visit often is worth a favourite: the pane remembers where it has been, and favourites are shared by both panes.
+
+> 💡 When there is nothing further back, the key says so. A key that goes quiet is indistinguishable from a broken one.

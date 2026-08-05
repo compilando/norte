@@ -94,6 +94,13 @@ err-lua-statusbar = statusbar Lua deshabilitada: { $detail }
 err-lua-no-state-dir = init.lua del proyecto no cargado: sin directorio de estado (XDG_STATE_HOME/HOME)
 # Ya en la cima: no hay directorio padre (raíz `/` o raíz de unidad Windows).
 msg-nav-at-top = ya estás en la cima
+# El rastro de atrás/adelante se acabó: la tecla lo DICE, porque una tecla
+# que calla es indistinguible de una rota.
+msg-nav-no-back = no hay más atrás
+msg-nav-no-forward = no hay nada hacia delante
+# Un pane virtual de búsqueda no es una ubicación: una lista de hits no se
+# puede mandar al otro pane ni traer de él.
+msg-pane-not-a-location = los resultados de búsqueda no son una ubicación: no hay nada que mandar
 msg-refresh-error = refresh: { $error }
 msg-view-error = view: { $error }
 msg-config-reloaded = config recargada
@@ -361,6 +368,11 @@ help-cmd-cursor-top = ir al principio
 help-cmd-cursor-bottom = ir al final
 help-cmd-nav-enter = entrar en el directorio seleccionado
 help-cmd-nav-parent = subir al directorio padre
+help-cmd-nav-back = volver al directorio anterior
+help-cmd-nav-forward = avanzar otra vez
+help-cmd-pane-mirror = mandar esta ubicación al otro pane
+help-cmd-pane-pull = ir a donde está el otro pane
+help-cmd-pane-swap = intercambiar los dos panes
 help-cmd-pane-copy = copiar la selección al otro pane
 help-cmd-pane-move = mover la selección al otro pane
 help-cmd-pane-delete = borrar (papelera si la hay)

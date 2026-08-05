@@ -31,6 +31,14 @@ keymap = [
     { on = ["enter"], run = "nav.enter" },
     { on = ["h"], run = "nav.parent" },
     { on = ["backspace"], run = "nav.parent" },
+    { on = ["alt+left"], run = "nav.back" },
+    { on = ["alt+right"], run = "nav.forward" },
+    { on = ["alt+i"], run = "pane.mirror" },
+    { on = ["alt+u"], run = "pane.pull" },
+    # `ctrl+u` (el chord de los otros dos presets para pane.swap) ya es
+    # `cursor.page-up` aquí arriba: el idioma vim manda en su propio preset,
+    # así que el intercambio se va a `alt+s`.
+    { on = ["alt+s"], run = "pane.swap" },
     { on = ["f5"], run = "pane.copy" },
     { on = ["f6"], run = "pane.move" },
     { on = ["f7"], run = "pane.mkdir" },

@@ -320,8 +320,10 @@ fn cd_landed_pane(outcome: &Cd) -> Option<usize> {
         Cd::Replaced(pane) => Some(*pane),
         // Un refresh re-lista IN SITU (mismo dir, orden ya aplicado): no hay
         // aterrizaje que ordenar ni decoración nueva que pedir — paridad con
-        // el camino de `on_tick`, que tampoco lo hace.
-        Cd::Refreshed(..) | Cd::Failed(..) | Cd::Cancelled => None,
+        // el camino de `on_tick`, que tampoco lo hace. Un `Swapped` tampoco
+        // lista nada: los dos listados ya existían, solo cambiaron de lado
+        // (sus decoraciones viajan con ellos en [`reconcile_swap`]).
+        Cd::Refreshed(..) | Cd::Swapped | Cd::Failed(..) | Cd::Cancelled => None,
     }
 }
 
@@ -348,6 +350,11 @@ enum Cd {
     /// que [`apply_cd`] aplique el ritual post-refresh — mismo `[bool; 2]`
     /// que devuelve [`refresh_panes`] (`true` = listado completo asentado).
     Refreshed([bool; 2]),
+    /// `pane.swap` cruzó los panes DESDE `dispatch`, que no ve el estado
+    /// indexado por pane que vive en el run loop. El desenlace viaja para que
+    /// [`reconcile_swap`] cruce también esa mitad — mismo patrón que
+    /// `Refreshed`.
+    Swapped,
 }
 
 /// MINOR-4 (H1 close): un modal puede llegar de forma ASÍNCRONA (p. ej.
@@ -501,7 +508,12 @@ mod palette_modal_guard_tests {
 /// —sigue en su listado anterior, cuyo relleno continúa siendo válido— así que
 /// no tocan el fill (#78). Un `Refreshed` (#118) delega en
 /// [`release_refreshed_fill`]: el mismo ritual que [`after_panes_refresh`].
-fn apply_cd(fill: &mut Option<Fill>, last_probed: &mut Probed, outcome: Cd) {
+fn apply_cd(
+    fill: &mut Option<Fill>,
+    decorate_fetch: &mut [Option<DecorateFetch>; 2],
+    last_probed: &mut Probed,
+    outcome: Cd,
+) {
     match outcome {
         Cd::Filling(f) => {
             // Listado nuevo (lazy): la dedup de la sonda #52 caduca — la
@@ -524,7 +536,38 @@ fn apply_cd(fill: &mut Option<Fill>, last_probed: &mut Probed, outcome: Cd) {
         // panes virtuales (jamás los saca del modo), así que no hay run de
         // búsqueda que cosechar por este camino.
         Cd::Refreshed(refreshed) => release_refreshed_fill(refreshed, fill, last_probed),
+        // `pane.swap`: `App::swap_panes` ya cruzó panes e historiales; aquí
+        // se cruza la mitad que vive en el run loop.
+        Cd::Swapped => reconcile_swap(fill, decorate_fetch, last_probed),
     }
+}
+
+/// The other half of `pane.swap`: the per-pane state that lives in the run
+/// loop rather than in `App`.
+///
+/// `App::swap_panes` moves the panes and their histories; these three are
+/// indexed by pane too, and leaving any of them behind is a bug a green suite
+/// does not catch — the listing keeps arriving, just into the wrong half of
+/// the screen, and the decorations land on somebody else's rows.
+///
+/// The watcher needs nothing here: the run loop re-points it from
+/// `watch_targets(app)` at the top of EVERY iteration (pinned by
+/// `swap_tests::watch_targets_sigue_a_los_panes_tras_el_intercambio`), so the
+/// swapped directories reach it on the next tick.
+fn reconcile_swap(
+    fill: &mut Option<Fill>,
+    decorate_fetch: &mut [Option<DecorateFetch>; 2],
+    last_probed: &mut Probed,
+) {
+    if let Some(f) = fill.as_mut() {
+        f.pane ^= 1;
+    }
+    // Cada slot lleva su `dir` como guard anti-stale, así que cruzarlos basta:
+    // el fetch sigue correspondiendo al listado que ahora está al otro lado.
+    decorate_fetch.swap(0, 1);
+    // Es una caché de dedup de `stat`, no estado: traducir sus claves cuesta
+    // más que volver a sondear, y un sondeo de más es invisible.
+    last_probed.clear();
 }
 
 /// Núcleo del ritual post-refresh (#117 review, #118): suelta el drenador
@@ -1544,7 +1587,7 @@ async fn run(
                                 decorate_fetch[pane] =
                                     spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                             }
-                            apply_cd(&mut fill, &mut last_probed, outcome);
+                            apply_cd(&mut fill, &mut decorate_fetch, &mut last_probed, outcome);
                             // Paridad con el sitio del resolver: entrar en
                             // un hit apaga el modo virtual del pane, y hay
                             // que cosechar el run (regla 3).
@@ -1600,7 +1643,7 @@ async fn run(
                             decorate_fetch[pane] =
                                 spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                         }
-                        apply_cd(&mut fill, &mut last_probed, outcome);
+                        apply_cd(&mut fill, &mut decorate_fetch, &mut last_probed, outcome);
                     } else if app.search_dialog.is_some() && !modal_wins(app) {
                         // Diálogo Alt+F7 (liveSearch T6): captura imprimibles
                         // como los demás overlays; Enter con criterio lanza la
@@ -1722,7 +1765,7 @@ async fn run(
                             decorate_fetch[pane] =
                                 spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                         }
-                        apply_cd(&mut fill, &mut last_probed, outcome);
+                        apply_cd(&mut fill, &mut decorate_fetch, &mut last_probed, outcome);
                                     // Paridad con el sitio del resolver (#118
                                     // review): un cd elegido en la palette
                                     // (nav.parent…) también puede apagar el
@@ -1785,7 +1828,7 @@ async fn run(
                                 decorate_fetch[pane] =
                                     spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                             }
-                            apply_cd(&mut fill, &mut last_probed, outcome);
+                            apply_cd(&mut fill, &mut decorate_fetch, &mut last_probed, outcome);
                             reap_search_run(app, &mut search_run);
                             if let Some(pending) = app.pending_open.take() {
                                 app.message =
@@ -2018,7 +2061,7 @@ async fn run(
                             decorate_fetch[pane] =
                                 spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                         }
-                        apply_cd(&mut fill, &mut last_probed, outcome);
+                        apply_cd(&mut fill, &mut decorate_fetch, &mut last_probed, outcome);
                     } else {
                         // Esc con un comando Lua en vuelo (BROWSE: sin modal
                         // ni overlay, y NO en el viewer): pide cancelación
@@ -2079,6 +2122,7 @@ async fn run(
                                         backend,
                                         &mut events,
                                         &mut fill,
+                                        &mut decorate_fetch,
                                         &mut last_probed,
                                         &mut search_run,
                                     )
@@ -2093,6 +2137,7 @@ async fn run(
                                         backend,
                                         &mut events,
                                         &mut fill,
+                                        &mut decorate_fetch,
                                         &mut last_probed,
                                         &mut search_run,
                                     )
@@ -2181,7 +2226,7 @@ async fn run(
                             decorate_fetch[pane] =
                                 spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                         }
-                        apply_cd(&mut fill, &mut last_probed, outcome);
+                        apply_cd(&mut fill, &mut decorate_fetch, &mut last_probed, outcome);
                                         // Paridad con el sitio del resolver
                                         // (#118 review): el Enter del quick
                                         // search ES un nav.enter — entrar en
@@ -2257,7 +2302,7 @@ async fn run(
                             decorate_fetch[pane] =
                                 spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                         }
-                        apply_cd(&mut fill, &mut last_probed, outcome);
+                        apply_cd(&mut fill, &mut decorate_fetch, &mut last_probed, outcome);
                                     // Un cd (nav.parent…) apagó el modo virtual del
                                     // pane de búsqueda: suelta el run y cancela.
                                     reap_search_run(app, &mut search_run);
@@ -4969,6 +5014,7 @@ async fn on_search_escape(
     backend: &Backend,
     events: &mut EventStream,
     fill: &mut Option<Fill>,
+    decorate_fetch: &mut [Option<DecorateFetch>; 2],
     last_probed: &mut Probed,
     search_run: &mut Option<SearchRun>,
 ) {
@@ -4982,7 +5028,7 @@ async fn on_search_escape(
     let prev = s.prev_dir.clone();
     *search_run = None;
     let outcome = cd(app, backend, events, prev).await;
-    apply_cd(fill, last_probed, outcome);
+    apply_cd(fill, decorate_fetch, last_probed, outcome);
 }
 
 /// Enter sobre un hit del pane virtual (liveSearch T6): cd al PADRE del hit y
@@ -4993,6 +5039,7 @@ async fn on_search_enter(
     backend: &Backend,
     events: &mut EventStream,
     fill: &mut Option<Fill>,
+    decorate_fetch: &mut [Option<DecorateFetch>; 2],
     last_probed: &mut Probed,
     search_run: &mut Option<SearchRun>,
 ) {
@@ -5010,7 +5057,7 @@ async fn on_search_enter(
     *search_run = None;
     let pane = app.focus();
     let outcome = cd(app, backend, events, parent).await;
-    apply_cd(fill, last_probed, outcome);
+    apply_cd(fill, decorate_fetch, last_probed, outcome);
     // Re-ancla el cursor sobre el hit por path (el cd resetea a 0); si cayó
     // en una página aún no drenada, el cursor se queda arriba (v1).
     if let Some(i) = app.panes[pane].entries().iter().position(|e| e.path == hit) {
@@ -5263,6 +5310,174 @@ async fn run_opener(
     status
 }
 
+/// Where a pane gesture wants to send a pane.
+///
+/// The `*_plan` functions return this instead of navigating so the DECISION —
+/// which pane travels, and where — is testable without a `Backend` or an
+/// event stream. `None` from them means there is nothing to do, and WHY is
+/// deliberately not this type's business: the dispatch arm decides whether
+/// the reason deserves a message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PaneMove {
+    /// The pane that will navigate.
+    pane: usize,
+    /// Where it will go.
+    dir: VPath,
+}
+
+/// `pane.mirror`: the UNFOCUSED pane goes where the focused one is, and the
+/// focus stays put — the fastest way to line up a copy, because the
+/// destination of `pane.copy` is whatever the other pane holds.
+///
+/// `None` when the focused pane is a virtual search listing (a list of hits
+/// is not a location, so there is no origin to send) or when both panes are
+/// already there — a redundant `cd` would re-list the other pane and slide
+/// its listing out from under the reader's cursor for nothing.
+fn mirror_plan(app: &App) -> Option<PaneMove> {
+    let from = app.focus();
+    let to = from ^ 1;
+    if app.panes[from].virtual_search {
+        return None;
+    }
+    let dir = app.panes[from].dir().clone();
+    (app.panes[to].dir() != &dir).then_some(PaneMove { pane: to, dir })
+}
+
+/// `pane.pull`: the FOCUSED pane goes where the other one is — the same
+/// gesture as [`mirror_plan`] the other way round, with the same two reasons
+/// to decline.
+fn pull_plan(app: &App) -> Option<PaneMove> {
+    let to = app.focus();
+    let from = to ^ 1;
+    if app.panes[from].virtual_search {
+        return None;
+    }
+    let dir = app.panes[from].dir().clone();
+    (app.panes[to].dir() != &dir).then_some(PaneMove { pane: to, dir })
+}
+
+/// Carries out what a `*_plan` decided: navigate, or explain the refusal.
+///
+/// `pane.mirror` and `pane.pull` differ ONLY in which pane travels and which
+/// one the location is read FROM, and both of those are already settled by
+/// the time the plan exists — so they share this body rather than two arms
+/// that must be kept in step by hand.
+///
+/// `origin` is the pane the location comes from. A virtual search listing
+/// there is the one refusal that deserves a message: the reader asked for
+/// something that cannot be done. Both panes already being in the same place
+/// stays SILENT — nothing was asked for that failed.
+async fn run_pane_gesture(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    plan: Option<PaneMove>,
+    origin: usize,
+) -> Cd {
+    let Some(m) = plan else {
+        if app.panes[origin].virtual_search {
+            app.message = Some(t("msg-pane-not-a-location"));
+        }
+        return Cd::Cancelled;
+    };
+    // Navegación ORDINARIA, pero por `cd_in` y no por el envoltorio `cd`: el
+    // pane que viaja lo dice el plan, y en el espejo NO es el del foco.
+    cd_in(app, backend, events, m.pane, m.dir, Trail::Record).await
+}
+
+/// Which way `nav.back`/`nav.forward` are walking the trail. The two are the
+/// same operation mirrored, so they share one body rather than two arms that
+/// must be kept in step by hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrailStep {
+    /// `nav.back`.
+    Back,
+    /// `nav.forward`.
+    Forward,
+}
+
+impl TrailStep {
+    /// Fluent id for "there is nothing this way". A key that goes silent is
+    /// indistinguishable from a broken one, so the exhausted trail SAYS so.
+    fn empty_message(self) -> &'static str {
+        match self {
+            Self::Back => "msg-nav-no-back",
+            Self::Forward => "msg-nav-no-forward",
+        }
+    }
+}
+
+/// One step back for the focused pane, or `None` when the trail is empty.
+///
+/// Takes `&mut App` because asking IS the step: the trail hands the target
+/// over and moves the current directory to the forward branch in one
+/// operation, so a caller cannot peek and then forget to walk.
+fn back_target(app: &mut App) -> Option<VPath> {
+    let pane = app.focus();
+    let current = app.panes[pane].dir().clone();
+    app.history[pane].step_back(current)
+}
+
+/// One step forward, undoing a [`back_target`].
+fn forward_target(app: &mut App) -> Option<VPath> {
+    let pane = app.focus();
+    let current = app.panes[pane].dir().clone();
+    app.history[pane].step_forward(current)
+}
+
+/// Rewinds the step [`back_target`]/[`forward_target`] took, because the cd
+/// it aimed at FAILED and the reader never actually left where they were.
+///
+/// The inverse of a step IS the step the other way: `step_forward(target)`
+/// pops the `current` that `step_back` pushed onto the forward branch and
+/// puts `target` back where it came from. Rewinding through the same two
+/// methods is why the two stacks cannot drift — there is no second piece of
+/// bookkeeping to get wrong.
+fn untake_step(app: &mut App, pane: usize, step: TrailStep, target: VPath) {
+    let _ = match step {
+        TrailStep::Back => app.history[pane].step_forward(target),
+        TrailStep::Forward => app.history[pane].step_back(target),
+    };
+}
+
+/// `nav.back` / `nav.forward`: replays the focused pane's trail one step.
+///
+/// A `Cd::Failed` rewinds the step and, when the directory turned out not to
+/// exist, retires it from the whole history — the same treatment the nav
+/// popup already gives a `NotFound`, so the reader is never left with a key
+/// that can only aim at a directory that proved to be gone. A `Cd::Cancelled`
+/// deliberately does NOT rewind: the TOFU modal RESUMES this very navigation
+/// (it carries the pane and the trail mode), and a rewound trail would then
+/// count the successful retry twice.
+async fn walk_trail(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    step: TrailStep,
+) -> Cd {
+    let pane = app.focus();
+    let target = match step {
+        TrailStep::Back => back_target(app),
+        TrailStep::Forward => forward_target(app),
+    };
+    let Some(dir) = target else {
+        app.message = Some(t(step.empty_message()));
+        return Cd::Cancelled;
+    };
+    // `Trail::Replay`: el rastro se está recorriendo a sí mismo. Si esto
+    // registrara, volver de B a A grabaría «estuve en B» y el siguiente atrás
+    // devolvería a B — la misma oscilación que el rastro existe para evitar,
+    // un nivel más arriba.
+    let outcome = cd_in(app, backend, events, pane, dir.clone(), Trail::Replay).await;
+    if let Cd::Failed(e) = &outcome {
+        untake_step(app, pane, step, dir.clone());
+        if matches!(e, Error::NotFound) {
+            app.history[pane].remove(&dir);
+        }
+    }
+    outcome
+}
+
 /// Ejecuta un comando nombrado (ADR 0006: los mismos nombres que verán la
 /// palette y el wire). Un error de listado en un cd NO tumba el TUI: el
 /// pane se queda donde estaba (aviso visible: barra de mensajes, issue #20).
@@ -5300,6 +5515,32 @@ async fn dispatch(
             }
         }
         Command::PaneSwitch => app.switch_focus(),
+        // `pane.mirror`: la ubicación sale del pane con FOCO y viaja el otro.
+        Command::PaneMirror => {
+            let plan = mirror_plan(app);
+            let origin = app.focus();
+            cd_outcome = run_pane_gesture(app, backend, events, plan, origin).await;
+        }
+        // `pane.pull`: el mismo gesto al revés — la ubicación sale del OTRO
+        // pane y viaja el del foco.
+        Command::PanePull => {
+            let plan = pull_plan(app);
+            let origin = app.focus() ^ 1;
+            cd_outcome = run_pane_gesture(app, backend, events, plan, origin).await;
+        }
+        // `pane.swap`: NO toca disco — los dos listados ya existían y solo
+        // cambian de lado. La mitad que `dispatch` no ve (fill en vuelo,
+        // fetches de decoración, dedup de la sonda) viaja al run loop.
+        Command::PaneSwap => {
+            app.swap_panes();
+            cd_outcome = Cd::Swapped;
+        }
+        Command::NavBack => {
+            cd_outcome = walk_trail(app, backend, events, TrailStep::Back).await;
+        }
+        Command::NavForward => {
+            cd_outcome = walk_trail(app, backend, events, TrailStep::Forward).await;
+        }
         // `/` (spec 2026-07-18): arranca el quick search en el modo de la
         // config. Con uno ya activo las teclas se comen antes del resolver,
         // así que este brazo solo corre para ABRIRLO — sin recursión.
@@ -5653,6 +5894,246 @@ async fn plugin_config_summaries(
         });
     }
     out
+}
+
+#[cfg(test)]
+mod pane_gestures_tests {
+    use super::{
+        App, Pane, TrailStep, back_target, forward_target, mirror_plan, pull_plan, untake_step,
+    };
+    use norte_proto::VPath;
+
+    fn vp(wire: &str) -> VPath {
+        VPath::parse(wire).expect("wire de test")
+    }
+
+    /// `App` con cada pane sobre su dir. Se construyen los panes ENTEROS
+    /// (`Pane::new`) en vez de mover un pane existente: es el mismo molde que
+    /// usan los demás módulos de test de este fichero y no hace falta ningún
+    /// setter `#[cfg(test)]` nuevo.
+    fn app_en(izq: &str, der: &str) -> App {
+        App::new(
+            Pane::new(vp(izq), Vec::new()),
+            Pane::new(vp(der), Vec::new()),
+        )
+    }
+
+    /// Espejo: el pane SIN foco se va a donde está el que tiene el foco, y el
+    /// foco no se mueve.
+    #[test]
+    fn el_espejo_manda_al_otro_pane_y_no_mueve_el_foco() {
+        let mut app = app_en("mem:///a", "mem:///b");
+        app.set_focus(0);
+        let plan = mirror_plan(&app).expect("con dos panes normales hay plan");
+        assert_eq!(plan.pane, 1, "viaja el OTRO pane");
+        assert_eq!(plan.dir, vp("mem:///a"), "a donde está el del foco");
+        assert_eq!(app.focus(), 0, "el foco no se ha movido");
+    }
+
+    /// El espejo mira al FOCO, no al pane 0: con el foco a la derecha viaja
+    /// el izquierdo. (Mutación de control: fijar `from = 0` rompe aquí.)
+    #[test]
+    fn el_espejo_con_el_foco_a_la_derecha_manda_el_izquierdo() {
+        let mut app = app_en("mem:///a", "mem:///b");
+        app.set_focus(1);
+        let plan = mirror_plan(&app).expect("plan");
+        assert_eq!(plan.pane, 0);
+        assert_eq!(plan.dir, vp("mem:///b"));
+    }
+
+    /// Traer: el pane CON foco se va a donde está el otro.
+    #[test]
+    fn traer_mueve_el_pane_con_foco() {
+        let mut app = app_en("mem:///a", "mem:///b");
+        app.set_focus(0);
+        let plan = pull_plan(&app).expect("plan");
+        assert_eq!(plan.pane, 0);
+        assert_eq!(plan.dir, vp("mem:///b"));
+    }
+
+    /// Los dos ya en el mismo sitio: no-op SILENCIOSO, no un cd redundante
+    /// que reordene el listado del otro pane bajo el cursor del lector.
+    #[test]
+    fn en_el_mismo_dir_no_hay_nada_que_hacer() {
+        let mut app = app_en("mem:///a", "mem:///a");
+        app.set_focus(0);
+        assert!(mirror_plan(&app).is_none());
+        assert!(pull_plan(&app).is_none());
+    }
+
+    /// Desde un pane VIRTUAL de resultados no hay ubicación que mandar ni de
+    /// donde traer: `dir()` ahí es la RAÍZ del walk, no lo que el lector ve.
+    #[test]
+    fn un_pane_virtual_no_es_una_ubicacion() {
+        let mut app = app_en("mem:///a", "mem:///b");
+        app.panes[0].virtual_search = true;
+        app.set_focus(0);
+        assert!(mirror_plan(&app).is_none(), "no hay origen que mandar");
+        app.set_focus(1);
+        assert!(pull_plan(&app).is_none(), "ni de donde traer");
+    }
+
+    /// El pane virtual solo veta cuando es el ORIGEN. Mandarle una ubicación
+    /// ENCIMA sí vale: el cd real lo saca del modo búsqueda, que es
+    /// exactamente lo que el lector pidió.
+    #[test]
+    fn un_pane_virtual_si_puede_ser_destino() {
+        let mut app = app_en("mem:///a", "mem:///b");
+        app.panes[1].virtual_search = true;
+        app.set_focus(0);
+        let plan = mirror_plan(&app).expect("el destino virtual no veta");
+        assert_eq!(plan.pane, 1);
+        assert_eq!(plan.dir, vp("mem:///a"));
+    }
+
+    // --- nav.back / nav.forward ---
+
+    /// Mueve el pane 0 a `dir` sin pasar por un `cd` (que necesita backend):
+    /// un pane NUEVO sobre ese dir, el mismo molde que usan los demás
+    /// módulos de test de este fichero.
+    fn poner_en(app: &mut App, dir: &str) {
+        app.panes[0] = Pane::new(vp(dir), Vec::new());
+    }
+
+    /// El rastro se recorre de verdad: A→B→C, dos veces atrás llega a A. La
+    /// oscilación A→B→A→B que daría recorrer la MRU es lo que este test
+    /// rechaza.
+    #[test]
+    fn atras_recorre_el_rastro_y_adelante_lo_deshace() {
+        let mut app = app_en("mem:///c", "mem:///otro");
+        app.set_focus(0);
+        app.history[0].record(vp("mem:///a"));
+        app.history[0].record(vp("mem:///b"));
+
+        let a_donde = back_target(&mut app).expect("hay rastro");
+        assert_eq!(a_donde, vp("mem:///b"));
+        poner_en(&mut app, "mem:///b");
+        assert_eq!(back_target(&mut app), Some(vp("mem:///a")));
+        poner_en(&mut app, "mem:///a");
+        assert_eq!(back_target(&mut app), None, "se acabó el rastro");
+
+        assert_eq!(forward_target(&mut app), Some(vp("mem:///b")));
+    }
+
+    /// Con el rastro vacío la tecla lo DICE: una tecla que calla es
+    /// indistinguible de una rota. (El mensaje lo pone `walk_trail`, que
+    /// necesita backend; aquí se pinea la mitad que decide que NO hay
+    /// destino.)
+    #[test]
+    fn atras_sin_rastro_no_da_destino() {
+        let mut app = app_en("mem:///a", "mem:///otro");
+        app.set_focus(0);
+        assert_eq!(back_target(&mut app), None);
+        assert_eq!(forward_target(&mut app), None);
+    }
+
+    /// La propiedad que impide el bucle: un `Replay` no registra. Se
+    /// comprueba sobre el rastro, que es donde vive la decisión.
+    #[test]
+    fn el_rastro_no_se_alimenta_de_si_mismo() {
+        let mut app = app_en("mem:///c", "mem:///otro");
+        app.set_focus(0);
+        app.history[0].record(vp("mem:///b"));
+        let antes = app.history[0].back_len();
+        let _ = back_target(&mut app);
+        assert_eq!(
+            app.history[0].back_len(),
+            antes - 1,
+            "un paso atrás CONSUME rastro; jamás lo produce"
+        );
+    }
+
+    /// El rastro es POR PANE: `back_target` sigue al foco, no al pane 0.
+    #[test]
+    fn el_rastro_es_del_pane_con_foco() {
+        let mut app = app_en("mem:///izq", "mem:///der");
+        app.history[0].record(vp("mem:///solo-izq"));
+        app.set_focus(1);
+        assert_eq!(back_target(&mut app), None, "el pane 1 no tiene rastro");
+        app.set_focus(0);
+        assert_eq!(back_target(&mut app), Some(vp("mem:///solo-izq")));
+    }
+
+    /// Un paso atrás que ATERRIZA en un cd fallido no puede dejar el rastro
+    /// contando un movimiento que nunca ocurrió: el lector sigue donde
+    /// estaba. Se rebobina ENTERO — el destino vuelve al rastro y el
+    /// «adelante» no se queda con un fantasma que devolvería al lector al
+    /// sitio del que no se ha movido.
+    #[test]
+    fn un_paso_atras_fallido_se_rebobina_entero() {
+        let mut app = app_en("mem:///c", "mem:///otro");
+        app.set_focus(0);
+        app.history[0].record(vp("mem:///a"));
+        app.history[0].record(vp("mem:///b"));
+        let dir = back_target(&mut app).expect("hay rastro");
+        assert_eq!(
+            (app.history[0].back_len(), app.history[0].fwd_len()),
+            (1, 1)
+        );
+
+        untake_step(&mut app, 0, TrailStep::Back, dir.clone());
+
+        assert_eq!(
+            (app.history[0].back_len(), app.history[0].fwd_len()),
+            (2, 0),
+            "el rastro queda exactamente como estaba"
+        );
+        assert_eq!(
+            back_target(&mut app),
+            Some(dir),
+            "y el mismo destino sigue disponible para reintentarlo"
+        );
+    }
+
+    /// Simétrico: un paso ADELANTE fallido se rebobina igual.
+    #[test]
+    fn un_paso_adelante_fallido_se_rebobina_entero() {
+        let mut app = app_en("mem:///c", "mem:///otro");
+        app.set_focus(0);
+        app.history[0].record(vp("mem:///b"));
+        let _ = back_target(&mut app); // rastro: back=[], fwd=[c]
+        poner_en(&mut app, "mem:///b");
+        let dir = forward_target(&mut app).expect("hay rama de delante");
+        assert_eq!(
+            (app.history[0].back_len(), app.history[0].fwd_len()),
+            (1, 0)
+        );
+
+        untake_step(&mut app, 0, TrailStep::Forward, dir.clone());
+
+        assert_eq!(
+            (app.history[0].back_len(), app.history[0].fwd_len()),
+            (0, 1)
+        );
+        assert_eq!(forward_target(&mut app), Some(dir));
+    }
+
+    /// Y si el destino resultó NO EXISTIR, además de rebobinar se RETIRA de
+    /// todo el historial — el mismo trato que ya le da el popup a un
+    /// `NotFound`. Sin esto `nav.back` seguiría apuntando a un directorio que
+    /// acaba de demostrar que no está, y la tecla solo podría fallar.
+    #[test]
+    fn un_destino_notfound_desaparece_del_rastro_entero() {
+        let mut app = app_en("mem:///c", "mem:///otro");
+        app.set_focus(0);
+        app.history[0].record(vp("mem:///a"));
+        app.history[0].record(vp("mem:///b"));
+        let dir = back_target(&mut app).expect("hay rastro");
+
+        // Lo que hace `walk_trail` ante un `Cd::Failed(NotFound)`.
+        untake_step(&mut app, 0, TrailStep::Back, dir.clone());
+        app.history[0].remove(&dir);
+
+        assert_eq!(
+            back_target(&mut app),
+            Some(vp("mem:///a")),
+            "el atrás salta al siguiente vivo, no reintenta el dir muerto"
+        );
+        assert!(
+            !app.history[0].entries().contains(&dir),
+            "y tampoco sigue en la MRU que pinta el popup"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -6303,7 +6784,7 @@ mod search_fill_tests {
 
 #[cfg(test)]
 mod apply_cd_tests {
-    use super::{Cd, Fill, FillMsg, Probed, apply_cd};
+    use super::{Cd, DecorateFetch, Fill, FillMsg, Probed, apply_cd};
     use norte_proto::Error;
 
     fn fill(pane: usize) -> Fill {
@@ -6316,7 +6797,8 @@ mod apply_cd_tests {
     fn replaced_suelta_el_fill_del_pane() {
         let mut f = Some(fill(0));
         let mut lp = Probed::new();
-        apply_cd(&mut f, &mut lp, Cd::Replaced(0));
+        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        apply_cd(&mut f, &mut df, &mut lp, Cd::Replaced(0));
         assert!(f.is_none(), "el fill del listado viejo se suelta");
     }
 
@@ -6325,7 +6807,8 @@ mod apply_cd_tests {
     fn replaced_de_otro_pane_no_toca() {
         let mut f = Some(fill(0));
         let mut lp = Probed::new();
-        apply_cd(&mut f, &mut lp, Cd::Replaced(1));
+        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        apply_cd(&mut f, &mut df, &mut lp, Cd::Replaced(1));
         assert!(f.is_some(), "el fill del pane 0 sobrevive");
     }
 
@@ -6335,7 +6818,8 @@ mod apply_cd_tests {
     fn failed_conserva_el_fill() {
         let mut f = Some(fill(0));
         let mut lp = Probed::new();
-        apply_cd(&mut f, &mut lp, Cd::Failed(Error::NotFound));
+        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        apply_cd(&mut f, &mut df, &mut lp, Cd::Failed(Error::NotFound));
         assert!(
             f.is_some(),
             "el fill del listado anterior sigue vivo tras un cd fallido"
@@ -6347,7 +6831,8 @@ mod apply_cd_tests {
     fn cancelled_conserva_el_fill() {
         let mut f = Some(fill(0));
         let mut lp = Probed::new();
-        apply_cd(&mut f, &mut lp, Cd::Cancelled);
+        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        apply_cd(&mut f, &mut df, &mut lp, Cd::Cancelled);
         assert!(f.is_some());
     }
 
@@ -6358,7 +6843,8 @@ mod apply_cd_tests {
     fn refreshed_suelta_el_fill_del_pane_relistado() {
         let mut f = Some(fill(0));
         let mut lp = Probed::from([(0, norte_proto::VPath::parse("file:///d/x").unwrap())]);
-        apply_cd(&mut f, &mut lp, Cd::Refreshed([true, false]));
+        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        apply_cd(&mut f, &mut df, &mut lp, Cd::Refreshed([true, false]));
         assert!(f.is_none(), "el drenador del listado viejo se suelta");
         assert!(lp.is_empty(), "la dedup de la sonda #52 caduca");
     }
@@ -6369,7 +6855,8 @@ mod apply_cd_tests {
     fn refreshed_a_medias_conserva_el_fill_del_pane_no_relistado() {
         let mut f = Some(fill(1));
         let mut lp = Probed::new();
-        apply_cd(&mut f, &mut lp, Cd::Refreshed([true, false]));
+        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        apply_cd(&mut f, &mut df, &mut lp, Cd::Refreshed([true, false]));
         assert!(
             f.is_some(),
             "el fill del pane NO re-listado sobrevive al Esc a medias"
@@ -6382,9 +6869,104 @@ mod apply_cd_tests {
     fn refreshed_vacio_no_toca_nada() {
         let mut f = Some(fill(0));
         let mut lp = Probed::from([(0, norte_proto::VPath::parse("file:///d/x").unwrap())]);
-        apply_cd(&mut f, &mut lp, Cd::Refreshed([false, false]));
+        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        apply_cd(&mut f, &mut df, &mut lp, Cd::Refreshed([false, false]));
         assert!(f.is_some(), "sin pane re-listado, el fill sigue");
         assert!(!lp.is_empty(), "sin pane re-listado, la dedup sigue");
+    }
+}
+
+#[cfg(test)]
+mod swap_tests {
+    use super::{
+        App, Cd, DecorateFetch, Fill, FillMsg, Pane, Probed, apply_cd, reconcile_swap,
+        watch_targets,
+    };
+    use norte_proto::VPath;
+
+    fn vp(wire: &str) -> VPath {
+        VPath::parse(wire).expect("wire de test")
+    }
+
+    fn fill(pane: usize) -> Fill {
+        let (_tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
+        Fill { pane, rx }
+    }
+
+    fn decorate(pane: usize) -> DecorateFetch {
+        let (_tx, rx) = tokio::sync::oneshot::channel();
+        DecorateFetch {
+            pane,
+            dir: vp("mem:///d"),
+            rx,
+        }
+    }
+
+    /// El relleno EN VUELO lleva su índice de pane: si el intercambio no lo
+    /// voltea, los lotes del listado siguen llegando al pane de al lado y el
+    /// lector ve crecer la lista equivocada. Es el bug que una suite verde no
+    /// ve, porque el listado sigue llegando: solo llega al sitio que no es.
+    #[test]
+    fn el_intercambio_voltea_el_indice_del_relleno_en_vuelo() {
+        let mut f = Some(fill(0));
+        let mut df: [Option<DecorateFetch>; 2] = [Some(decorate(0)), None];
+        let mut lp = Probed::from([(0, vp("mem:///d/x"))]);
+
+        reconcile_swap(&mut f, &mut df, &mut lp);
+
+        assert_eq!(f.as_ref().expect("sigue vivo").pane, 1, "índice volteado");
+        assert!(df[1].is_some() && df[0].is_none(), "cruzados");
+        assert!(lp.is_empty(), "la caché de stat se tira, no se traduce");
+    }
+
+    /// Sin nada en vuelo el reconciliado es inofensivo: un intercambio no
+    /// puede inventar un relleno ni un fetch donde no los había.
+    #[test]
+    fn el_intercambio_sin_nada_en_vuelo_no_inventa_nada() {
+        let mut f: Option<Fill> = None;
+        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        let mut lp = Probed::new();
+        reconcile_swap(&mut f, &mut df, &mut lp);
+        assert!(f.is_none());
+        assert!(df[0].is_none() && df[1].is_none());
+    }
+
+    /// El desenlace `Cd::Swapped` tiene que LLEGAR al reconciliado: la mitad
+    /// del intercambio que `dispatch` no puede hacer viaja por `apply_cd`, y
+    /// un brazo que se olvidara de llamarlo dejaría el fill apuntando al pane
+    /// que no es sin que ningún test de `App` se enterase.
+    #[test]
+    fn apply_cd_swapped_reconcilia_el_estado_del_run_loop() {
+        let mut f = Some(fill(1));
+        let mut df: [Option<DecorateFetch>; 2] = [None, Some(decorate(1))];
+        let mut lp = Probed::from([(1, vp("mem:///d/x"))]);
+        apply_cd(&mut f, &mut df, &mut lp, Cd::Swapped);
+        assert_eq!(f.as_ref().expect("sigue vivo").pane, 0);
+        assert!(df[0].is_some() && df[1].is_none());
+        assert!(lp.is_empty());
+    }
+
+    /// El watcher NO necesita reconciliado propio, y esto es lo que hace
+    /// cierta esa afirmación: el conjunto vigilado se deriva de `app.panes`
+    /// en cada vuelta del run loop (`rewatch(&watch_targets(app))` es la
+    /// primera sentencia del bucle), así que basta con que `watch_targets`
+    /// no cachee nada. Si alguien introdujera una copia por lado, el
+    /// intercambio dejaría cada pane vigilando el dir del otro.
+    #[test]
+    fn watch_targets_sigue_a_los_panes_tras_el_intercambio() {
+        let mut app = App::new(
+            Pane::new(vp("file:///izq"), Vec::new()),
+            Pane::new(vp("file:///der"), Vec::new()),
+        );
+        let antes = watch_targets(&app);
+        app.swap_panes();
+        let despues = watch_targets(&app);
+        assert_eq!(
+            antes[0], despues[1],
+            "el dir izquierdo pasa a vigilarse a la derecha"
+        );
+        assert_eq!(antes[1], despues[0]);
+        assert_ne!(antes[0], antes[1], "los dos dirs eran distintos de partida");
     }
 }
 

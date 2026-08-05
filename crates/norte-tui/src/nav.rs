@@ -56,8 +56,17 @@ impl History {
     /// Retira TODAS las ocurrencias de `path` (p.ej. tras un `cd` fallido
     /// con `NotFound` al navegar desde el popup — la spec dice "se
     /// RETIRA si el cd falla con `NotFound`").
+    ///
+    /// Prunes the TRAIL as well as the MRU. "This directory is gone" is one
+    /// fact, not two: left on the trail, a path the popup just retired would
+    /// still be where `nav.back` aims — a key that can only fail, and one the
+    /// reader has no other way to steer around. Pruning both is also what
+    /// keeps the two structures from ever disagreeing about which places
+    /// still exist.
     pub fn remove(&mut self, path: &VPath) {
         self.deque.retain(|p| p != path);
+        self.back.retain(|p| p != path);
+        self.fwd.retain(|p| p != path);
     }
 
     /// Entradas, más reciente primero.
@@ -223,6 +232,31 @@ mod tests {
         let _ = h.step_forward(vp("mem:///b"));
         let despues: Vec<VPath> = h.entries().iter().cloned().collect();
         assert_eq!(antes, despues, "la MRU es asunto aparte");
+    }
+
+    /// «Este directorio ya no está» es UN hecho: `remove` lo aplica a la MRU
+    /// y al rastro a la vez. Sin esto el popup retiraba la entrada y
+    /// `nav.back` seguía apuntando al mismo dir muerto.
+    #[test]
+    fn remove_poda_el_rastro_y_no_solo_la_mru() {
+        let mut h = History::default();
+        h.record(vp("mem:///a"));
+        h.record(vp("mem:///b"));
+        // Y también la rama de delante: el mismo dir puede estar en las dos.
+        assert_eq!(h.step_back(vp("mem:///c")), Some(vp("mem:///b")));
+        assert_eq!(h.fwd_len(), 1);
+
+        h.remove(&vp("mem:///b"));
+        assert_eq!(h.back_len(), 1, "b sale del rastro de atrás");
+        assert!(!h.entries().contains(&vp("mem:///b")), "y de la MRU");
+        assert_eq!(
+            h.step_back(vp("mem:///c")),
+            Some(vp("mem:///a")),
+            "atrás salta al siguiente vivo, no al dir retirado"
+        );
+
+        h.remove(&vp("mem:///c"));
+        assert_eq!(h.fwd_len(), 0, "y de la rama de delante");
     }
 
     #[test]

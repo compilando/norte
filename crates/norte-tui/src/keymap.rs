@@ -96,6 +96,9 @@ macro_rules! commands {
 commands! {
     "app.quit" => AppQuit,
     "pane.switch" => PaneSwitch,
+    "pane.mirror" => PaneMirror,
+    "pane.pull" => PanePull,
+    "pane.swap" => PaneSwap,
     "cursor.up" => CursorUp,
     "cursor.down" => CursorDown,
     "cursor.page-up" => CursorPageUp,
@@ -104,6 +107,8 @@ commands! {
     "cursor.bottom" => CursorBottom,
     "nav.enter" => NavEnter,
     "nav.parent" => NavParent,
+    "nav.back" => NavBack,
+    "nav.forward" => NavForward,
     "app.help" => AppHelp,
     "app.theme" => AppTheme,
     "app.extensions" => AppExtensions,
@@ -415,6 +420,62 @@ mod tests {
                 "preset {nombre}: pane.columns"
             );
         }
+    }
+
+    /// The five pane/navigation gestures resolve in the three factory
+    /// presets, THROUGH the real crossterm adapter. A preset that loses one
+    /// leaves the gesture unreachable by keyboard while every other test
+    /// stays green — the same regression class the mark commands are pinned
+    /// against.
+    ///
+    /// `pane.swap` is deliberately NOT the same chord everywhere: `ctrl+u` is
+    /// already `cursor.page-up` in `vim`, and the vim idiom outranks the
+    /// borrowed one in its own preset, so there it is `alt+s`. This test
+    /// spells out both so a future edit that "unifies" them has to argue with
+    /// the reason.
+    #[test]
+    fn pane_gesture_chords_resolve_in_the_three_presets() {
+        let comunes = [
+            ((CtMods::ALT, CtCode::Char('i')), "pane.mirror"),
+            ((CtMods::ALT, CtCode::Char('u')), "pane.pull"),
+            ((CtMods::ALT, CtCode::Left), "nav.back"),
+            ((CtMods::ALT, CtCode::Right), "nav.forward"),
+        ];
+        for (name, preset) in presets() {
+            let eff = Effective::build_for(&preset, &[], COMMANDS, Screen::Browse)
+                .unwrap_or_else(|e| panic!("preset {name}: {e}"));
+            let swap = if name == "vim" {
+                (CtMods::ALT, CtCode::Char('s'))
+            } else {
+                (CtMods::CONTROL, CtCode::Char('u'))
+            };
+            for ((mods, code), command) in comunes.iter().chain(&[(swap, "pane.swap")]) {
+                let mut r = Resolver::new(eff.clone());
+                let chord = chord_from_crossterm(*mods, *code)
+                    .unwrap_or_else(|| panic!("preset {name}: chord no modelado {code:?}"));
+                assert_eq!(
+                    r.push(chord),
+                    Resolution::Run((*command).to_owned()),
+                    "preset {name}: {command}"
+                );
+            }
+        }
+    }
+
+    /// En `vim`, `ctrl+u` SIGUE siendo `cursor.page-up`: el chord de
+    /// `pane.swap` de los otros dos presets no lo pisó. (Mutación de control:
+    /// ligar ahí `pane.swap` rompe este test.)
+    #[test]
+    fn vim_ctrl_u_sigue_siendo_page_up() {
+        let vim = presets()
+            .into_iter()
+            .find(|(n, _)| *n == "vim")
+            .expect("preset vim")
+            .1;
+        let eff = Effective::build_for(&vim, &[], COMMANDS, Screen::Browse).expect("vim efectivo");
+        let mut r = Resolver::new(eff);
+        let ctrl_u = chord_from_crossterm(CtMods::CONTROL, CtCode::Char('u')).expect("ctrl+u");
+        assert_eq!(r.push(ctrl_u), Resolution::Run("cursor.page-up".to_owned()));
     }
 
     /// The six mark commands resolve in the three factory presets (#103). A
