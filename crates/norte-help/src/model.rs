@@ -190,6 +190,15 @@ pub enum Reason {
     PolicyDenied,
     /// The connection is degraded.
     ConnectionDegraded,
+    /// The command does not apply to what is selected right now: a directory
+    /// has nothing to show in the viewer, and "open" means nothing over
+    /// eleven marked entries at once.
+    ///
+    /// Unlike the other variants this one is about the SELECTION, not about
+    /// the backend or the actor — it is what a context menu needs to explain
+    /// an entry it dims for the shape of what was clicked rather than for
+    /// what the provider can do.
+    WrongTarget,
 }
 
 /// Availability of a command row in the CURRENT context.

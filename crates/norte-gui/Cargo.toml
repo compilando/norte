@@ -39,6 +39,14 @@ norte-config = { path = "../norte-config", version = "0.3.0-alpha.2" }
 # Strings de UI por Fluent (GUI-e T1): mismos bundles es/en que la TUI
 # (`crates/norte-i18n/i18n/*.ftl`), por path como el resto de los internos.
 norte-i18n = { path = "../norte-i18n" }
+# Vocabulario de disponibilidad (`Availability`/`Reason`) del menú contextual
+# (plan de ratón, tarea 4). QUÉ aporta: el corpus de ayuda YA define cómo se
+# dice «esta operación no puede correr ahora, y por esto» — reusarlo evita un
+# segundo vocabulario paralelo que la ayuda y el menú tendrían que mantener
+# sincronizado a mano. TAMAÑO: crate INTERNO del workspace, sin dependencias
+# externas nuevas (norte-encoding/norte-i18n/serde/thiserror/toml ya están
+# todas en este grafo). Por path como el resto de los internos.
+norte-help = { path = "../norte-help" }
 # `norte-theme` keeps `Theme.effects` as an opaque `toml::Value` (ADR 0020
 # D4); the GUI-only `EffectsV1` interpreter (ADR 0036, `src/effects.rs`)
 # reads it directly, so this crate needs the same `toml` crate `norte-theme`

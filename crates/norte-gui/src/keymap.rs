@@ -62,6 +62,12 @@ pub const COMMANDS: &[&str] = &[
     // `alt+s` vía `gui_supplement` (ver su comentario) para pasar el pin de
     // alcanzabilidad.
     "pane.semantic-search",
+    // Plan de ratón (tarea 4): copia al portapapeles la ruta (forma WIRE) de
+    // lo que la op tocaría — las marcas, o el cursor si no hay ninguna. Nace
+    // con el menú contextual, pero NO es «del menú»: es un comando como los
+    // demás (paleta + chord `alt+y` vía `gui_supplement`, libre en los tres
+    // presets), y el menú lo despacha igual que lo despacha el teclado.
+    "pane.copy-path",
 ];
 
 /// Comandos del contexto Viewer (pantalla del visor F3).
@@ -154,7 +160,10 @@ fn preset(name: &str) -> KeymapFile {
 /// y en este supplemento. NO `alt+shift+s`: la gramática del keymap
 /// compartido rechaza `shift+<char>` (el char debe ir ya «shifteado», y un
 /// `alt+S` dependería de la fidelidad de `key_char` bajo alt — frágil por
-/// plataforma), así que el chord llano es el robusto, como `alt+i`.
+/// plataforma), así que el chord llano es el robusto, como `alt+i`. `alt+y`
+/// → `pane.copy-path` (plan de ratón, tarea 4) sigue el mismo criterio: ni
+/// los presets ni este supplemento lo usan, y el `ctrl+shift+c` de los
+/// escritorios no es expresable en esta gramática (`shift+<char>`).
 fn gui_supplement() -> KeymapFile {
     const TOML: &str = r#"
 [pane]
@@ -165,6 +174,7 @@ prepend_keymap = [
     { on = ["delete"], run = "pane.delete" },
     { on = ["alt+i"], run = "pane.ai-rename" },
     { on = ["alt+s"], run = "pane.semantic-search" },
+    { on = ["alt+y"], run = "pane.copy-path" },
 ]
 "#;
     parse_keymap(TOML).unwrap_or_else(|e| panic!("supplemento GUI embebido inválido: {e}"))

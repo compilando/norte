@@ -38,6 +38,16 @@
 //!   pintar los hijos) y la fase de burbuja los recorre en orden INVERSO
 //!   (`Window::dispatch_mouse_event`), así que la fila siempre gana y la
 //!   raíz solo ve los releases que ninguna fila consumió.
+//!   **Menú contextual** (botón derecho, tarea 4 del plan de ratón):
+//!   `on_mouse_down(MouseButton::Right)` por fila — el mismo hit test
+//!   gratuito — y `MouseDownEvent.position` como ancla del panel. Qué
+//!   entradas hay, sobre qué actúan y cuáles pueden correr lo decide
+//!   [`context_menu`] (puro, testeable sin GPU); esta capa pinta y despacha
+//!   por `run_command`, el MISMO camino que el teclado. El scrim del menú
+//!   sí `occlude()` (a diferencia de los heredados): un click fuera lo
+//!   cierra sin colarse a la fila de debajo. Una entrada deshabilitada
+//!   registra un listener que sólo hace `cx.stop_propagation()`, para que
+//!   pulsarla no cierre el menú por ese scrim.
 //! - **async → UI**: `cx.spawn` + `this.update` + `cx.notify()`, con un canal
 //!   `tokio::mpsc` que cruza desde el hilo de sesión tokio (ver `session.rs`).
 //! - **Accesibilidad (AccessKit, GUI-e T2)**: `div().id(...)` (convierte a
@@ -79,6 +89,7 @@ use norte_proto::{Entry, EntryKind, Segment, VPath};
 use norte_theme::{FileKind, Role, Theme};
 
 mod columns_view;
+mod context_menu;
 mod effects;
 mod extensions_view;
 mod keymap;
@@ -89,6 +100,7 @@ mod session;
 mod settings_view;
 mod theme_map;
 
+use context_menu::{ContextMenu, MenuOutcome};
 use modal::{Modal, ModalOutcome, PendingOp, PendingTransfer, TransferKind};
 use session::{LoadConfig, SessionCmd, SessionEvent};
 
@@ -342,6 +354,11 @@ struct NorteGui {
     /// frames que lo atraviesan — y porque el `render_row` que lo alimenta se
     /// reconstruye entero en cada uno.
     mouse: MouseState,
+    /// El menú contextual abierto (botón derecho sobre una fila), o `None`.
+    /// Overlay anclado al puntero: captura el teclado como la paleta (el
+    /// modal sigue ganando), lo cierra un click fuera, y caduca solo si el
+    /// listado se mueve bajo él (ver [`NorteGui::expire_stale_context_menu`]).
+    context_menu: Option<ContextMenu>,
     /// Última respuesta de `SessionCmd::PluginConfigSummaries` (G3c),
     /// cacheada para que `set_settings_status` (que refresca las filas
     /// tras CUALQUIER escritura general, no solo un cambio de plugin)
@@ -464,6 +481,65 @@ fn apply_mouse_effects(
         }
     }
     out
+}
+
+/// Fija el OBJETIVO de un menú contextual sobre la fila `idx` de `pane` y lo
+/// devuelve junto al tipo de esa entrada (`None` si el índice no nombra
+/// ninguna: un listado que encogió entre el evento y esto).
+///
+/// Es la regla del menú, y muta el modelo a propósito: una fila pulsada que
+/// NO está marcada se convierte en la selección entera del pane (las marcas
+/// se sueltan), que es lo que hace cualquier file manager de escritorio y lo
+/// que hace que «actúa sobre esta fila» sea VERDAD y no una promesa que la
+/// primera copia rompería — `marked_paths` (la fuente única de sobre qué
+/// opera cada comando) devuelve las marcas si las hay, así que dejarlas
+/// puestas haría que el menú dijera una cosa y la op tocara otra. Una fila
+/// pulsada que SÍ está marcada no toca nada: el objetivo son las marcas.
+///
+/// Pura respecto a GPUI (sólo `PaneState`), para poder clavar la regla sin
+/// levantar ventana.
+fn context_target(
+    pane: &mut PaneState,
+    idx: usize,
+) -> Option<(context_menu::Target, norte_proto::EntryKind)> {
+    let entry = pane.entries().get(idx).cloned()?;
+    // El cursor va a la fila pulsada ANTES de decidir nada: sin marcas,
+    // `marked_paths` cae en el cursor, así que «actúa sobre esta fila» sólo
+    // es verdad si el cursor está EN ella.
+    pane.set_cursor(idx);
+    if !pane.is_marked(&entry) {
+        pane.clear_marks();
+    }
+    let target = if pane.marks_len() > 1 {
+        context_menu::Target::Marks(pane.marks_len())
+    } else {
+        let bytes = entry.path.file_name().map_or(&b""[..], Segment::as_bytes);
+        context_menu::Target::Entry(row_label(bytes, entry.kind))
+    };
+    Some((target, entry.kind))
+}
+
+/// Cierra el menú si el listado de SU pane se movió bajo él. Ver
+/// [`NorteGui::expire_stale_context_menu`], el único caller.
+fn expire_stale_menu(menu: &mut Option<ContextMenu>, epochs: [u64; 2]) {
+    let stale = menu
+        .as_ref()
+        .is_some_and(|m| epochs.get(m.pane).is_some_and(|e| m.is_stale(*e)));
+    if stale {
+        *menu = None;
+    }
+}
+
+/// El texto que `pane.copy-path` deja en el portapapeles: una ruta por línea,
+/// en forma WIRE. Ver [`NorteGui::copy_paths_to_clipboard`] para por qué wire
+/// y no `display_lossy`.
+#[must_use]
+fn clipboard_text(paths: &[VPath]) -> String {
+    paths
+        .iter()
+        .map(VPath::to_wire)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Suelta el gesto armado si su [`MouseValidity`] cambió desde el frame
@@ -776,6 +852,7 @@ impl NorteGui {
                     columns_picker: None,
                     flash: None,
                     mouse: MouseState::default(),
+                    context_menu: None,
                     extensions: None,
                     plugin_config_summaries: Vec::new(),
                 };
@@ -861,6 +938,7 @@ impl NorteGui {
                     columns_picker: None,
                     flash: None,
                     mouse: MouseState::default(),
+                    context_menu: None,
                     extensions: None,
                     plugin_config_summaries: Vec::new(),
                 }
@@ -1773,6 +1851,9 @@ impl NorteGui {
             "pane.move" => self.open_transfer_modal(TransferKind::Move),
             "pane.delete" => self.open_delete_modal(),
             "pane.ai-rename" => self.open_ai_rename(),
+            // Plan de ratón (tarea 4): al portapapeles, no al daemon — es la
+            // única op de esta lista que no toca ningún backend.
+            "pane.copy-path" => self.copy_paths_to_clipboard(cx),
             "pane.semantic-search" => self.open_semantic_search(),
             "task.cancel" => self.cancel_task_under_cursor(),
             "task.next" => {
@@ -2603,6 +2684,17 @@ impl NorteGui {
             return;
         }
 
+        // Menú contextual abierto (botón derecho, tarea 4 del plan de ratón):
+        // captura fija como cualquier overlay. Va justo tras el modal porque
+        // es lo más reciente que el usuario abrió y porque no puede coexistir
+        // con las demás pantallas (`open_context_menu` no abre con ninguna
+        // delante, y activar una entrada cierra el menú antes de despachar).
+        if self.context_menu.is_some() {
+            self.on_context_menu_key(ks, cx);
+            cx.notify();
+            return;
+        }
+
         // Vista de ajustes abierta (F11, S4): captura fija, mismo criterio de
         // prioridad que el modal — gana incluso sobre el visor (ver doc del
         // campo `settings_view`).
@@ -2850,13 +2942,10 @@ impl NorteGui {
     fn expire_stale_mouse_gesture(&mut self) {
         let validity = MouseValidity {
             epochs: [self.panes[0].listing_epoch(), self.panes[1].listing_epoch()],
-            hidden: self.modal.is_some()
-                || self.viewer.is_some()
-                || self.viewer_loading
-                || self.settings_view.is_some()
-                || self.extensions.is_some()
-                || self.palette.is_some()
-                || self.columns_picker.is_some(),
+            // El menú contextual cuenta como overlay delante (tarea 4): se
+            // abre con el botón derecho a mitad de un arrastre igual que un
+            // modal, y el gesto deja de significar lo que el usuario hizo.
+            hidden: self.overlay_in_front() || self.context_menu.is_some(),
         };
         expire_stale_gesture(&mut self.mouse, validity);
     }
@@ -2900,6 +2989,146 @@ impl NorteGui {
         if applied.changed {
             cx.notify();
         }
+    }
+
+    /// Botón DERECHO sobre una fila: abre el menú contextual en el puntero
+    /// (plan de ratón, tarea 4).
+    ///
+    /// Antes de abrirlo fija el OBJETIVO en el modelo, y ahí está la decisión
+    /// que hace que el menú no mienta: si la fila pulsada NO está marcada, el
+    /// menú actúa sobre ella sola, así que las marcas de ese pane se sueltan
+    /// (lo que hace cualquier file manager de escritorio al pulsar con el
+    /// derecho fuera de la selección) y la fila pasa a ser el cursor. Si SÍ
+    /// está marcada, no se toca nada: el menú actúa sobre las marcas y lo
+    /// dice. Sin ese paso, el menú diría «1 elemento» mientras once filas
+    /// siguen resaltadas y la copia se llevaría las once.
+    ///
+    /// Con cualquier overlay/modal delante NO abre: sus scrims no ocluyen el
+    /// ratón, así que un click derecho podría alcanzar una fila de debajo.
+    fn open_context_menu(
+        &mut self,
+        pane: usize,
+        idx: usize,
+        at: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.overlay_in_front() {
+            return;
+        }
+        self.flash = None;
+        // Un menú delante caduca cualquier gesto de marcado en vuelo (mismo
+        // criterio que `expire_stale_mouse_gesture`); desarmarlo aquí evita
+        // además que el release del botón derecho lo continúe.
+        self.mouse.drag.cancel();
+        self.focus = pane;
+        // Como el click limpio: el filtro se cierra (el índice es ABSOLUTO).
+        self.panes[pane].quick_cancel();
+        self.query[pane].clear();
+
+        // La regla «marcas o esta fila» (cursor incluido) vive en
+        // `context_target` (pura).
+        let Some((target, kind)) = context_target(&mut self.panes[pane], idx) else {
+            return;
+        };
+        self.follow_cursor(pane);
+        let facts = context_menu::Facts {
+            kind,
+            count: target.count(),
+            source_read_only: scheme_is_read_only(self.panes[pane].dir().scheme()),
+            dest_read_only: scheme_is_read_only(self.panes[1 - pane].dir().scheme()),
+        };
+        self.context_menu = Some(ContextMenu::open(
+            pane,
+            self.panes[pane].listing_epoch(),
+            (f32::from(at.x), f32::from(at.y)),
+            target,
+            &facts,
+        ));
+        cx.notify();
+    }
+
+    /// ¿Hay algo delante del dual-pane? (modal, visor, ajustes, extensiones,
+    /// paleta, picker de columnas). Fuente única del criterio que comparten
+    /// el guard de apertura del menú contextual y la vigencia de los gestos
+    /// de ratón — dos listas separadas se desincronizarían al añadir la
+    /// séptima pantalla.
+    fn overlay_in_front(&self) -> bool {
+        self.modal.is_some()
+            || self.viewer.is_some()
+            || self.viewer_loading
+            || self.settings_view.is_some()
+            || self.extensions.is_some()
+            || self.palette.is_some()
+            || self.columns_picker.is_some()
+    }
+
+    /// Activa la entrada `i` del menú: despacha su comando por el MISMO
+    /// `run_command` que ejecuta el teclado — el menú no tiene camino propio.
+    /// Una entrada DESHABILITADA no despacha nada y deja el menú abierto
+    /// (cerrarlo sería indistinguible de haber ejecutado algo).
+    fn activate_context_menu(&mut self, i: usize, cx: &mut Context<Self>) {
+        let Some(cmd) = self.context_menu.as_ref().and_then(|m| m.activate(i)) else {
+            cx.notify();
+            return;
+        };
+        self.context_menu = None;
+        self.run_command(cmd, cx);
+        cx.notify();
+    }
+
+    /// Enruta UNA tecla con el menú abierto (captura fija de overlay): la
+    /// decisión es de [`ContextMenu::on_key`], aquí sólo se aplica.
+    fn on_context_menu_key(&mut self, ks: &gpui::Keystroke, cx: &mut Context<Self>) {
+        let Some(menu) = &mut self.context_menu else {
+            return;
+        };
+        match menu.on_key(&ks.key) {
+            MenuOutcome::None => {}
+            MenuOutcome::Close => self.context_menu = None,
+            MenuOutcome::Run(cmd) => {
+                self.context_menu = None;
+                self.run_command(cmd, cx);
+            }
+        }
+    }
+
+    /// Cierra el menú si el listado de su pane se movió bajo él (un `cd`, un
+    /// refresh asíncrono tras una mutación): el objetivo se fijó contra el
+    /// listado que había al abrirlo. Gemelo de
+    /// [`Self::expire_stale_mouse_gesture`], y por el mismo motivo va en
+    /// `render`.
+    fn expire_stale_context_menu(&mut self) {
+        expire_stale_menu(
+            &mut self.context_menu,
+            [self.panes[0].listing_epoch(), self.panes[1].listing_epoch()],
+        );
+    }
+
+    /// `pane.copy-path`: copia al portapapeles la ruta de lo que la op
+    /// tocaría — las marcas del pane con foco, o el cursor si no hay ninguna
+    /// (`marked_paths`, la MISMA fuente que copiar/mover/borrar: el menú no
+    /// puede copiar la ruta de algo distinto de lo que borraría).
+    ///
+    /// Forma WIRE, una por línea. No `display_lossy`: esa es la vista humana
+    /// (lleva el `⟨scheme⟩` y sustituye por `�` lo que no se puede pintar),
+    /// y una ruta con `�` dentro no nombra ningún fichero. El wire es
+    /// LOSSLESS (bytes no-UTF8 → `%XX`), reparseable por el propio norte y,
+    /// por construcción, sin controles crudos (`vpath_codec` escapa C0/DEL).
+    /// Los formateadores bidi SÍ pasan: son parte de la identidad del
+    /// nombre, y enmascararlos daría una ruta que no existe — misma doctrina
+    /// que `norte-help` con sus claves de despacho (una identidad no se
+    /// enmascara, se cita entera o no se cita).
+    fn copy_paths_to_clipboard(&mut self, cx: &mut Context<Self>) {
+        let paths = self.panes[self.focus].marked_paths();
+        if paths.is_empty() {
+            return;
+        }
+        let n = paths.len();
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(clipboard_text(&paths)));
+        self.flash = Some((
+            norte_i18n::ta("gui-menu-copied", &[("n", &n.to_string())]),
+            false,
+        ));
     }
 
     /// Rueda del ratón sobre un pane: le da el foco y mueve el cursor. Con
@@ -3605,6 +3834,15 @@ impl NorteGui {
                 MouseButton::Left,
                 cx.listener(move |this, ev: &MouseUpEvent, _w, cx| {
                     this.on_mouse_release(Some(Spot::new(pane, idx)), mouse_mods(ev.modifiers), cx);
+                }),
+            )
+            // Botón derecho: el menú contextual (tarea 4). El hit test sale
+            // igual de gratis que el del izquierdo — el evento ya sabe su
+            // (pane, índice) — y `ev.position` es el ancla del panel.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, ev: &MouseDownEvent, _w, cx| {
+                    this.open_context_menu(pane, idx, ev.position, cx);
                 }),
             );
 
@@ -4409,6 +4647,148 @@ impl NorteGui {
     /// Pinta el panel del modal activo (overlay centrado, ver `render`): título
     /// y cuerpo saneados por [`modal_lines`] (mapeados 1:1 a divs, sin volver a
     /// tocar bytes de usuario aquí), más el pie de teclas fijo por variante.
+    /// Pinta el menú contextual: scrim transparente que OCLUYE el ratón (un
+    /// click fuera cierra y no se cuela a la fila de debajo) + panel anclado
+    /// al puntero, recolocado para que quepa entero ([`menu_origin`]).
+    ///
+    /// Una entrada deshabilitada se pinta atenuada CON su motivo y, aun así,
+    /// registra un listener: el suyo sólo corta la propagación, para que
+    /// pulsarla no cierre el menú por el scrim de detrás — un menú que se
+    /// cierra al pulsar algo que no hizo nada se lee como que sí lo hizo.
+    fn render_context_menu(
+        &self,
+        menu: &ContextMenu,
+        chrome: &ChromeColors,
+        viewport: gpui::Size<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        // Alto ESTIMADO (cabecera + entradas + pie, más el padding vertical):
+        // sólo sirve para recolocar el panel dentro de la ventana, así que
+        // una estimación por lo alto es la buena — desplazar de más deja el
+        // menú visible; de menos, lo saca por abajo.
+        let filas = menu.items.len() + 2;
+        #[allow(clippy::cast_precision_loss)] // ≤ 16 filas: exacto en f32.
+        let alto = filas as f32 * f32::from(self.fonts.row_h) + 4.0 * sp::M;
+        let (x, y) = menu_origin(
+            menu.anchor,
+            (CONTEXT_MENU_W, alto),
+            (f32::from(viewport.width), f32::from(viewport.height)),
+        );
+        let (panel_bg, panel_fg) = modal_panel_colors(chrome);
+        let (title_bg, title_fg) = modal_title_colors(chrome);
+        let hover_bg = chrome.hover_bg;
+
+        let mut panel = div()
+            .id("context-menu")
+            .role(gpui::Role::Menu)
+            .aria_label(menu.target.text())
+            .absolute()
+            .left(px(x))
+            .top(px(y))
+            .w(px(CONTEXT_MENU_W))
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .border_1()
+            .border_color(chrome.border_focus)
+            .rounded(px(sp::RADIUS_PANEL))
+            .bg(panel_bg)
+            .text_color(panel_fg)
+            .py(px(sp::XS))
+            // Cabecera: SOBRE QUÉ actúa el menú (el recuento de marcas o el
+            // nombre de la fila). Es la línea que impide que una copia se
+            // lleve once ficheros cuando el usuario señalaba uno.
+            .child(
+                div()
+                    .px(px(sp::M))
+                    .py(px(1.0)) // sub-XS: acento fino de una línea
+                    .bg(title_bg)
+                    .text_color(title_fg)
+                    .truncate()
+                    .child(SharedString::from(menu.target.text())),
+            );
+
+        for (i, item) in menu.items.iter().enumerate() {
+            let disponible = item.avail.is_available();
+            let mut row = div()
+                .id(format!("context-menu-item-{i}"))
+                .role(gpui::Role::MenuItem)
+                // GPUI (rev f14fea9) no expone `aria_disabled`: el estado ya
+                // va DENTRO del nombre accesible, porque `item.text()` de una
+                // entrada apagada incluye su motivo — un lector de pantalla
+                // anuncia «Borrar — backend de solo lectura», que dice más
+                // que un flag.
+                .aria_label(item.text())
+                .aria_selected(i == menu.cursor)
+                .px(px(sp::M))
+                .py(px(1.0)) // sub-XS: acento fino de una línea
+                .truncate()
+                .child(SharedString::from(item.text()));
+            if disponible {
+                row = row
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(hover_bg))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                            this.activate_context_menu(i, cx);
+                        }),
+                    );
+            } else {
+                // Atenuado: el mismo «dim relativo» que las celdas y el badge
+                // de decoración (GPUI no tiene un atributo DIM del terminal).
+                row = row
+                    .text_color(gpui::Rgba {
+                        a: 0.45,
+                        ..panel_fg
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_this, _ev: &MouseDownEvent, _w, cx| {
+                            cx.stop_propagation();
+                        }),
+                    );
+            }
+            if i == menu.cursor {
+                row = row.bg(chrome.sel_bg);
+            }
+            panel = panel.child(row);
+        }
+
+        let (footer_bg, footer_fg) = modal_footer_colors(chrome);
+        let mut footer = div()
+            .mt(px(sp::XS))
+            .px(px(sp::M))
+            .py(px(1.0)) // sub-XS: acento fino de una línea
+            .bg(footer_bg)
+            .truncate()
+            .child(SharedString::from(norte_i18n::t("gui-menu-hint")));
+        if let Some(fg) = footer_fg {
+            footer = footer.text_color(fg);
+        }
+        panel = panel.child(footer);
+
+        div()
+            .absolute()
+            .inset_0()
+            .occlude()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
+                    this.context_menu = None;
+                    cx.notify();
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
+                    this.context_menu = None;
+                    cx.notify();
+                }),
+            )
+            .child(panel)
+    }
+
     fn render_modal(&self, m: &Modal, chrome: &ChromeColors) -> impl IntoElement {
         let lines = modal_lines(m);
         // Nombre accesible = título (1.ª línea, siempre presente); el resto
@@ -4509,6 +4889,40 @@ impl NorteGui {
         }
         panel.child(footer_row)
     }
+}
+
+/// Ancho del panel del menú contextual. Fijo a propósito: medir el texto más
+/// largo por frame costaría lo que cuesta medir texto en GPUI, y un menú que
+/// cambia de ancho al cambiar de fila se lee como un fallo. Las etiquetas
+/// truncan dentro (`.truncate()`), nunca desbordan.
+const CONTEXT_MENU_W: f32 = 320.0;
+
+/// Dónde pintar el panel del menú para que quepa ENTERO: en el puntero, o
+/// desplazado lo justo si se saldría por la derecha o por abajo. Con una
+/// ventana más pequeña que el panel cae a `(0, 0)` — recortado por arriba
+/// antes que fuera de la vista.
+///
+/// PURA (sin GPUI): la aritmética de colocación es lo único de este overlay
+/// que puede equivocarse en silencio.
+#[must_use]
+fn menu_origin(anchor: (f32, f32), panel: (f32, f32), viewport: (f32, f32)) -> (f32, f32) {
+    let x = anchor.0.min(viewport.0 - panel.0).max(0.0);
+    let y = anchor.1.min(viewport.1 - panel.1).max(0.0);
+    (x, y)
+}
+
+/// ¿El backend de este scheme es de SOLO LECTURA? Hoy eso significa «dentro
+/// de un archivo» (`zip+file`, `tar+gz+file`…, ADR 0018/0028): el provider de
+/// archivos anuncia `READ_ONLY` y ninguna mutación llega a salir de él.
+///
+/// Sintáctico, como el `scheme_archive_format` del que se apoya: no consulta
+/// al daemon (la GUI no cachea `Capabilities` por conexión), así que responde
+/// a la pregunta que sí puede responder — y de más, nunca de menos: un
+/// backend que rechace la escritura por otro motivo lo dirá al someter la
+/// task, no antes.
+#[must_use]
+fn scheme_is_read_only(scheme: &str) -> bool {
+    norte_proto::scheme_archive_format(scheme).is_some()
 }
 
 /// Colores de la SUPERFICIE del panel del modal: `pane_bg_focus` + `fg` — el
@@ -5854,6 +6268,11 @@ impl Render for NorteGui {
         // sin virtualizar). Ver issue #87.
         let _t0 = std::time::Instant::now();
 
+        // Un menú contextual abierto caduca si el listado se movió bajo él
+        // (va ANTES del gesto: cerrarlo devuelve la vigencia del ratón a
+        // «sin overlay delante» en este mismo frame).
+        self.expire_stale_context_menu();
+
         // Un gesto de ratón en vuelo caduca aquí si el listado se movió bajo
         // el puntero o si algo se puso delante (ver el método).
         self.expire_stale_mouse_gesture();
@@ -6028,6 +6447,7 @@ impl Render for NorteGui {
             || self.extensions.is_some()
             || self.palette.is_some()
             || self.columns_picker.is_some()
+            || self.context_menu.is_some()
         {
             &[][..]
         } else {
@@ -6042,6 +6462,15 @@ impl Render for NorteGui {
                     .text_color(chrome.quick_fg)
                     .child(SharedString::from(format!("{}…", pending_hint(pending)))),
             );
+        }
+
+        // Menú contextual (tarea 4 del plan de ratón): panel ANCLADO al
+        // puntero sobre un scrim transparente que ocluye el ratón — así un
+        // click fuera lo cierra sin que además mueva el cursor de la fila que
+        // hay debajo. Va antes de los overlays centrados (paleta/picker/
+        // modal), que siguen ganando encima si llegaran a coexistir.
+        if let Some(menu) = &self.context_menu {
+            root = root.child(self.render_context_menu(menu, &chrome, window.viewport_size(), cx));
         }
 
         // Overlay de la paleta de comandos (G3c, `ctrl+p`): un scrim +
@@ -6564,10 +6993,15 @@ mod tests {
         task_at_cursor, theme_map, unknown_preset_banner, validated_family, viewer_header,
         viewer_status,
     };
+    // Menú contextual (tarea 4 del plan de ratón).
+    use super::{
+        ContextMenu, clipboard_text, context_menu, context_target, expire_stale_menu, keymap,
+        menu_origin, scheme_is_read_only,
+    };
     use gpui::rgb;
     use norte_frontend::mouse::{Mods, Spot};
     use norte_frontend::viewer::Viewer;
-    use norte_proto::{EntryKind, VPath};
+    use norte_proto::{EntryKind, Segment, VPath};
     use norte_theme::Theme;
 
     fn vp() -> VPath {
@@ -8921,5 +9355,200 @@ mod tests {
         );
         assert!(!mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 6)).changed);
         assert_eq!(panes[0].marks_len(), 0);
+    }
+
+    // --- Menú contextual del botón derecho (plan de ratón, tarea 4) --------
+    //
+    // Qué entradas hay y cuál puede correr está clavado en `context_menu`
+    // (puro). Lo que se clava aquí es el cableado de la GUI: sobre QUÉ queda
+    // apuntando el modelo tras pulsar con el derecho, dónde cabe el panel, y
+    // qué texto sale hacia el portapapeles.
+
+    /// La fila pulsada está MARCADA: el menú actúa sobre las marcas, y no
+    /// toca ninguna.
+    #[test]
+    fn el_menu_apunta_a_las_marcas_cuando_la_fila_pulsada_esta_marcada() {
+        let mut pane = pane_con(6);
+        for i in [1usize, 3, 4] {
+            pane.set_mark(i, true);
+        }
+        let (target, kind) = context_target(&mut pane, 3).expect("la fila 3 existe");
+        assert_eq!(target, context_menu::Target::Marks(3));
+        assert_eq!(target.count(), 3);
+        assert_eq!(kind, EntryKind::File);
+        assert_eq!(pane.marks_len(), 3, "las marcas se quedan tal cual");
+        assert_eq!(
+            pane.marked_paths().len(),
+            3,
+            "y la op tocaría exactamente esas tres"
+        );
+    }
+
+    /// La fila pulsada NO está marcada: el menú actúa sobre ella sola, y las
+    /// marcas de ese pane se sueltan — si no, el menú diría «1» y la copia se
+    /// llevaría once (`marked_paths` prefiere las marcas SIEMPRE).
+    #[test]
+    fn el_menu_apunta_a_la_fila_sola_cuando_no_esta_marcada() {
+        let mut pane = pane_con(12);
+        for i in 0..11 {
+            pane.set_mark(i, true);
+        }
+        assert_eq!(pane.marks_len(), 11);
+
+        // El nombre de la fila 11 sale del pane (que ORDENA), nunca de
+        // suponer que la entrada 11 se llama «e11».
+        let pulsada = pane.entries()[11].path.clone();
+        let esperado = row_label(
+            pulsada.file_name().map_or(&b""[..], Segment::as_bytes),
+            EntryKind::File,
+        );
+        let (target, _) = context_target(&mut pane, 11).expect("la fila 11 existe");
+        assert_eq!(
+            target,
+            context_menu::Target::Entry(esperado),
+            "el objetivo es la fila pulsada"
+        );
+        assert_eq!(target.count(), 1);
+        assert_eq!(pane.marks_len(), 0, "las once marcas se sueltan");
+        let paths = pane.marked_paths();
+        assert_eq!(paths.len(), 1, "la op tocaría una sola entrada");
+        assert_eq!(paths[0], pulsada, "y es la pulsada");
+    }
+
+    /// Un índice que ya no nombra ninguna fila (el listado encogió entre el
+    /// evento y esto) no abre menú y no toca las marcas.
+    #[test]
+    fn una_fila_que_ya_no_existe_no_abre_menu() {
+        let mut pane = pane_con(3);
+        pane.set_mark(0, true);
+        assert!(context_target(&mut pane, 9).is_none());
+        assert_eq!(pane.marks_len(), 1);
+    }
+
+    /// El menú se cierra cuando el listado de SU pane se mueve (un `cd`, un
+    /// refresh asíncrono tras una mutación): el objetivo se fijó contra el
+    /// listado que había al abrirlo. El del OTRO pane no le incumbe.
+    #[test]
+    fn el_menu_se_cierra_con_un_listado_nuevo_en_su_pane() {
+        let facts = context_menu::Facts {
+            kind: EntryKind::File,
+            count: 1,
+            source_read_only: false,
+            dest_read_only: false,
+        };
+        let abierto = || {
+            Some(ContextMenu::open(
+                1,
+                7,
+                (0.0, 0.0),
+                context_menu::Target::Entry("e0".into()),
+                &facts,
+            ))
+        };
+
+        let mut menu = abierto();
+        expire_stale_menu(&mut menu, [3, 7]);
+        assert!(menu.is_some(), "su pane no se movió: sigue abierto");
+        expire_stale_menu(&mut menu, [3, 9]);
+        assert!(menu.is_none(), "su pane relistó: se cierra");
+
+        let mut menu = abierto();
+        expire_stale_menu(&mut menu, [99, 7]);
+        assert!(menu.is_some(), "el otro pane no le incumbe");
+    }
+
+    /// El panel se recoloca para caber entero: pegado al puntero mientras
+    /// quepa, desplazado lo justo si no, y jamás con origen negativo.
+    #[test]
+    fn el_panel_del_menu_se_recoloca_para_caber() {
+        let panel = (320.0, 200.0);
+        let viewport = (1000.0, 700.0);
+        assert_eq!(
+            menu_origin((100.0, 100.0), panel, viewport),
+            (100.0, 100.0),
+            "si cabe, va en el puntero"
+        );
+        assert_eq!(
+            menu_origin((900.0, 650.0), panel, viewport),
+            (680.0, 500.0),
+            "si no cabe, se desplaza lo justo"
+        );
+        assert_eq!(
+            menu_origin((10.0, 10.0), panel, (200.0, 100.0)),
+            (0.0, 0.0),
+            "ventana más pequeña que el panel: nunca origen negativo"
+        );
+    }
+
+    /// Los schemes de archivo (`zip+file`, `tar+gz+file`…) son de SOLO
+    /// LECTURA; los de provider, no.
+    #[test]
+    fn el_scheme_de_archivo_es_de_solo_lectura() {
+        assert!(scheme_is_read_only("zip+file"));
+        assert!(scheme_is_read_only("tar+gz+file"));
+        assert!(!scheme_is_read_only("file"));
+        assert!(!scheme_is_read_only("sftp"));
+        assert!(!scheme_is_read_only("s3"));
+    }
+
+    /// El texto que va al portapapeles es WIRE: una ruta por línea, lossless
+    /// incluso con un nombre que no es UTF-8 (se reparsea a los MISMOS
+    /// bytes), y sin controles crudos. `display_lossy` habría metido un `�`
+    /// y la ruta ya no nombraría ningún fichero.
+    #[test]
+    fn el_portapapeles_lleva_wire_lossless_con_nombres_hostiles() {
+        let dir = VPath::parse("mem:///").unwrap();
+        let hostil = dir.join(Segment::new(vec![0xFF, 0xFE, b'a']).expect("segmento no vacío"));
+        let control = dir.join(Segment::new(b"x\x1b[31my".to_vec()).expect("segmento no vacío"));
+        let texto = clipboard_text(&[hostil.clone(), control.clone()]);
+
+        let lineas: Vec<&str> = texto.split('\n').collect();
+        assert_eq!(lineas.len(), 2, "una ruta por línea: {texto:?}");
+        assert!(
+            lineas.iter().all(|l| !l.chars().any(char::is_control)),
+            "el wire escapa C0/DEL (el único control es MI separador): {texto:?}"
+        );
+        assert!(
+            !texto.contains('\u{FFFD}'),
+            "nada de reemplazos: una ruta con � no nombra ningún fichero"
+        );
+        assert_eq!(
+            VPath::parse(lineas[0]).expect("el wire se reparsea"),
+            hostil,
+            "round-trip byte-exacto del nombre no-UTF8"
+        );
+        assert_eq!(
+            VPath::parse(lineas[1]).expect("el wire se reparsea"),
+            control
+        );
+    }
+
+    /// TODA entrada del menú despacha un comando que el TECLADO también
+    /// alcanza (existe en `COMMANDS` y tiene chord en el preset de fábrica):
+    /// el menú no puede ser el único camino a una operación, ni inventarse
+    /// una que el teclado no tenga.
+    #[test]
+    fn cada_entrada_del_menu_tiene_equivalente_de_teclado() {
+        let facts = context_menu::Facts {
+            kind: EntryKind::File,
+            count: 1,
+            source_read_only: false,
+            dest_read_only: false,
+        };
+        let (browse, _) = keymap::build_effectives_preset_only("orthodox");
+        let con_chord: std::collections::HashSet<&str> =
+            browse.bindings().iter().map(|(_, cmd)| *cmd).collect();
+        for item in context_menu::items(&facts) {
+            assert!(
+                keymap::COMMANDS.contains(&item.command),
+                "{:?} no es un comando de la GUI",
+                item.command
+            );
+            assert!(
+                con_chord.contains(item.command),
+                "{:?} no tiene chord: el menú sería su único camino",
+                item.command
+            );
+        }
     }
 }
