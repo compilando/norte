@@ -824,6 +824,19 @@ pub struct App {
     /// `palette`/`help`, que se CIERRAN, este overlay se queda abierto y se
     /// refresca en su sitio (ver el doc de `Settings::refresh`).
     pub settings: Option<Settings>,
+    /// How many times the two panes have been exchanged (`pane.swap`).
+    ///
+    /// It exists because nothing else in the model records that a swap
+    /// happened: everything indexed by pane TRAVELS with the pane, so a swap
+    /// merely exchanges two values and anything comparing them per side sees
+    /// nothing move. Read through [`Self::swap_seq`] by the mouse, whose
+    /// armed gesture carries pane indices that the swap has just
+    /// re-attributed to the other side's content.
+    ///
+    /// Only ever compared for EQUALITY, so it wraps rather than saturating —
+    /// saturating would eventually stop changing, which is the one thing it
+    /// must never do.
+    swap_seq: u64,
 }
 
 /// Qué popup de navegación está abierto (spec 2026-07-18).
@@ -1492,6 +1505,7 @@ impl App {
             palette_rows: Vec::new(),
             mouse: crate::mouse::MouseState::default(),
             settings: None,
+            swap_seq: 0,
         }
     }
 
@@ -1598,12 +1612,27 @@ impl App {
     /// take the reader "back" to places that content has never been.
     ///
     /// NOT the whole story: the run loop keeps its own state indexed by pane
-    /// (the paginated fill in flight, the decoration fetches, the stat-probe
-    /// dedup) which `App` cannot see. `main::reconcile_swap` is the other
-    /// half, and the two are driven together by `Cd::Swapped`.
+    /// (the paginated fills in flight, the decoration fetches, the stat-probe
+    /// dedup, the live search run) which `App` cannot see.
+    /// `main::reconcile_swap` is the other half, and the two are driven
+    /// together by `Cd::Swapped`.
     pub fn swap_panes(&mut self) {
         self.panes.swap(0, 1);
         self.history.swap(0, 1);
+        // Lo ÚNICO que queda como rastro de que hubo intercambio: todo lo
+        // demás viaja con su pane, así que quien compare por lado no ve
+        // moverse nada (ver [`Self::swap_seq`]).
+        self.swap_seq = self.swap_seq.wrapping_add(1);
+    }
+
+    /// How many times [`Self::swap_panes`] has run.
+    ///
+    /// Only useful as an equality check against a previously read value: any
+    /// difference means the two sides changed places, so anything holding a
+    /// pane INDEX from before now names the other side's content.
+    #[must_use]
+    pub const fn swap_seq(&self) -> u64 {
+        self.swap_seq
     }
 
     /// Da el foco al pane `i`. Un índice fuera de `0|1` se IGNORA (el
@@ -2742,8 +2771,59 @@ pub enum Trail {
     /// El usuario pidió este movimiento: entra en la MRU y en el rastro, y
     /// poda la rama de forward.
     Record,
-    /// `nav.back`/`nav.forward` están reproduciendo; el rastro ya lo sabe.
-    Replay,
+    /// `nav.back`/`nav.forward` están reproduciendo, y ESTE es el paso que
+    /// están dando. El rastro ya lo sabe, así que la navegación no se
+    /// registra; el paso viaja dentro porque un `Replay` sin saber en qué
+    /// sentido va no se puede deshacer, y quien tenga que rebobinarlo puede
+    /// no ser quien lo empezó: el TOFU suspende la navegación y la respuesta
+    /// al modal la termina, minutos después y desde otro sitio del código.
+    ///
+    /// Va DENTRO de la variante, y no en un campo aparte junto a ella, para
+    /// que «registrar» y «tener sentido» no puedan contradecirse: un
+    /// `Record` con sentido, o un `Replay` sin él, serían estados que alguien
+    /// tendría que acordarse de no construir.
+    Replay(TrailStep),
+}
+
+impl Trail {
+    /// El paso del rastro que esta navegación está dando, si es que está
+    /// dando alguno. `None` para un [`Trail::Record`]: no salió del rastro,
+    /// así que no hay nada que rebobinar si acaba mal.
+    #[must_use]
+    pub fn step(self) -> Option<TrailStep> {
+        match self {
+            Self::Record => None,
+            Self::Replay(step) => Some(step),
+        }
+    }
+}
+
+/// Which way `nav.back`/`nav.forward` are walking the trail. The two are the
+/// same operation mirrored, so they share one body rather than two arms that
+/// must be kept in step by hand.
+///
+/// Vive aquí por el mismo motivo que [`Trail`], que lo transporta: el modal
+/// TOFU ([`Modal::TrustHostKey`]) suspende una navegación que puede ser un
+/// paso del rastro, y quien responda al modal necesita saber en qué sentido
+/// iba para deshacerlo si la respuesta acaba abandonándola.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrailStep {
+    /// `nav.back`.
+    Back,
+    /// `nav.forward`.
+    Forward,
+}
+
+impl TrailStep {
+    /// Fluent id for "there is nothing this way". A key that goes silent is
+    /// indistinguishable from a broken one, so the exhausted trail SAYS so.
+    #[must_use]
+    pub fn empty_message(self) -> &'static str {
+        match self {
+            Self::Back => "msg-nav-no-back",
+            Self::Forward => "msg-nav-no-forward",
+        }
+    }
 }
 
 /// Diálogo modal activo. Sus teclas resuelven contra el contexto `dialog`
@@ -2827,9 +2907,18 @@ pub enum Modal {
         /// reanudaría en el pane EQUIVOCADO.
         pane: usize,
         /// Si la navegación interrumpida se REGISTRA en el rastro o es el
-        /// rastro reproduciéndose. Se transporta por el mismo motivo que
-        /// `pane`: el reintento debe ser la MISMA navegación que el TOFU
-        /// interrumpió, no una nueva.
+        /// rastro reproduciéndose — y, en ese caso, QUÉ paso estaba dando
+        /// ([`Trail::step`]). Se transporta por el mismo motivo que `pane`:
+        /// el reintento debe ser la MISMA navegación que el TOFU interrumpió,
+        /// no una nueva.
+        ///
+        /// El paso viaja porque este modal es el ÚNICO sitio donde una
+        /// navegación sobrevive a quien la empezó: `walk_trail` ya devolvió
+        /// `Suspended` y no rebobinó nada (el reintento iba a terminar el
+        /// paso), así que si la respuesta al modal acaba abandonando la
+        /// navegación —denegar, o un reintento que falla— el rastro se queda
+        /// creyendo que el lector se fue de donde sigue estando. Quien
+        /// responde al modal rebobina, y para eso necesita el sentido.
         trail: Trail,
     },
     /// TOFU del `./.norte/init.lua` de PROYECTO (M4 Lua, ADR 0026): un repo

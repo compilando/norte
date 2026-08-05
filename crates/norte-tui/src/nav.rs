@@ -19,6 +19,18 @@ const HISTORY_MAX: usize = 30;
 /// `Alt+↓` lo recorre en un popup (T5). Vive en memoria del proceso, no en
 /// `norte.toml` — a propósito, fuera de alcance de la spec (§Fuera de
 /// alcance).
+///
+/// INVARIANTE del rastro: `back.len() + fwd.len() <= HISTORY_MAX`.
+///
+/// Es lo que acota la memoria del rastro, y no cada pila por su cuenta.
+/// [`History::record`] es el único método que hace CRECER la suma, y la
+/// acota: trunca `back` al tope y vacía `fwd`. Los dos pasos la conservan
+/// exactamente — mueven un elemento de una pila a la otra — y
+/// [`History::remove`] solo la reduce. Por eso [`History::step_forward`]
+/// puede empujar a `back` SIN comprobar el tope: el hueco que deja el `pop`
+/// de `fwd` es el que ocupa. Romper el invariante (p.ej. hacer que `record`
+/// deje de vaciar `fwd`) haría crecer el rastro sin fin por el único camino
+/// que no lo comprueba.
 #[derive(Debug, Default)]
 pub struct History {
     /// Más reciente al frente.
@@ -125,6 +137,11 @@ impl History {
     ///
     /// `None` when there is no such branch, either because the reader never
     /// went back or because a [`History::record`] pruned it.
+    ///
+    /// Pushes onto `back` with no bound check because it cannot need one: it
+    /// pops `fwd` first, and the type's invariant (`back.len() + fwd.len() <=
+    /// HISTORY_MAX`, stated on [`History`]) makes that pop the room for this
+    /// push.
     pub fn step_forward(&mut self, current: VPath) -> Option<VPath> {
         let target = self.fwd.pop()?;
         self.back.push(current);
@@ -266,5 +283,47 @@ mod tests {
             h.record(vp(&format!("mem:///d{i}")));
         }
         assert_eq!(h.back_len(), HISTORY_MAX, "el rastro no crece sin fin");
+    }
+
+    /// El tope de arriba solo mueve `record`. El invariante que documenta el
+    /// tipo —y del que depende `step_forward` para empujar a `back` sin
+    /// comprobar nada— es sobre la SUMA de las dos pilas, así que hay que
+    /// alternar las tres operaciones más allá del tope: ir hasta el fondo del
+    /// rastro, volver hasta el final, y navegar de nuevo desde ahí.
+    #[test]
+    fn el_tope_aguanta_alternando_las_tres_operaciones() {
+        let mut h = History::default();
+        let suma = |h: &History| h.back_len() + h.fwd_len();
+
+        let mut cur = vp("mem:///start");
+        for i in 0..(HISTORY_MAX * 2) {
+            h.record(cur.clone());
+            cur = vp(&format!("mem:///d{i}"));
+            assert!(suma(&h) <= HISTORY_MAX, "record no desborda la suma");
+        }
+        assert_eq!(h.back_len(), HISTORY_MAX, "el rastro está lleno");
+
+        // Hasta el fondo: cada paso mueve un dir de una pila a la otra.
+        let mut pasos = 0;
+        while let Some(target) = h.step_back(cur.clone()) {
+            cur = target;
+            pasos += 1;
+            assert!(suma(&h) <= HISTORY_MAX, "atrás no desborda la suma");
+        }
+        assert_eq!(pasos, HISTORY_MAX, "se recorrió el rastro entero");
+        assert_eq!(h.fwd_len(), HISTORY_MAX, "toda la memoria está delante");
+
+        // Y de vuelta: aquí es donde `step_forward` empuja a `back` sin
+        // comprobar el tope. Sin el invariante, `back` acabaría por encima.
+        while let Some(target) = h.step_forward(cur.clone()) {
+            cur = target;
+            assert!(suma(&h) <= HISTORY_MAX, "adelante no desborda la suma");
+        }
+        assert_eq!(h.back_len(), HISTORY_MAX, "el rastro vuelve a estar lleno");
+
+        // Una navegación nueva desde el tope tampoco lo desborda.
+        h.record(cur);
+        assert!(suma(&h) <= HISTORY_MAX);
+        assert_eq!(h.fwd_len(), 0, "y poda la rama de delante");
     }
 }

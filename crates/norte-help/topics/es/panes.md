@@ -94,12 +94,21 @@ Navegar a un sitio nuevo desde la mitad del rastro olvida la rama de la que te
 saliste, igual que en un navegador. Ofrecer un «adelante» hacia una historia
 que ya has abandonado es el fallo que todo el mundo conoce.
 
-Un paso que falla se rebobina: no llegaste a irte, así que el rastro se queda
-como estaba. Cuando el motivo es que el directorio **ya no está**, además sale
-del rastro, de la rama de delante y del popup de historial, de modo que la
-tecla no puede dejarte atrapado en un directorio que se ha demostrado que no
-existe. Cualquier otro fallo lo conserva: un host caído o un directorio que no
-puedes leer siguen siendo sitios, y pueden responder al siguiente intento.
+Un paso que no llega se rebobina: no te fuiste, así que el rastro se queda como
+estaba. Vale tanto para el paso que **falla** como para el que **abandonas**
+con Esc mientras lista: en los dos casos el panel sigue enseñando lo mismo, y
+un rastro que diera el paso por bueno te mandaría «adelante» al directorio que
+ya está en pantalla. Cuando el motivo es que el directorio **ya no está**,
+además sale del rastro, de la rama de delante y del popup de historial, de modo
+que la tecla no puede dejarte atrapado en un directorio que se ha demostrado
+que no existe. Cualquier otro fallo lo conserva: un host caído o un directorio
+que no puedes leer siguen siendo sitios, y pueden responder al siguiente
+intento.
+
+El paso que se para a preguntar por la clave desconocida de un host es el único
+que ESPERA: ni se da ni se deshace hasta que respondes, porque confiar en la
+clave reanuda esa misma navegación. Si confías, el paso se termina; si deniegas,
+o si el paso reanudado falla, se rebobina como cualquier otro que no llegó.
 
 > 💡 Un directorio al que vuelves a menudo merece un favorito: el panel recuerda por dónde ha pasado, y los favoritos son comunes a los dos paneles.
 

@@ -159,8 +159,18 @@ fn preset(name: &str) -> KeymapFile {
 /// `pane.ai-rename` (M4-IA) es NUEVO (no venía del preset privado retirado):
 /// los presets compartidos no bindean el comando (la TUI lo alcanza por
 /// paleta) y el pin de alcanzabilidad de la GUI exige al menos un chord —
-/// `alt+i` está libre en los tres presets de fábrica. `alt+s` →
-/// `pane.semantic-search` (M4-IA-2) sigue el mismo criterio: libre en los
+/// `alt+i` estaba libre en los tres presets de fábrica CUANDO se eligió.
+/// **Ya no**: los gestos de panel bindean `alt+i` → `pane.mirror` en los
+/// tres presets, y `alt+s` → `pane.swap` en `vim`. No rompe nada hoy
+/// (`build_for_subset` filtra los comandos que la GUI no tiene, y este
+/// supplemento gana al preset), pero deja `Alt+i` significando cosas
+/// distintas en cada frontend —renombrado IA aquí, espejo de panel en la
+/// TUI—, que va contra la premisa del catálogo compartido. Se anota y no se
+/// cambia en la rama de los gestos: reasignar un chord de la GUI es decisión
+/// de la GUI. Hay que resolverlo ANTES de que `pane.mirror` entre en el
+/// `COMMANDS` de la GUI, que es cuando colisionan de verdad. Ningún gate lo
+/// habría avisado: `norte-gui` vive fuera del workspace. `alt+s` →
+/// `pane.semantic-search` (M4-IA-2) siguió el mismo criterio: libre en los
 /// tres presets (que solo usan alt+c/alt+e/alt+down/alt+f7/alt+enter/alt+x)
 /// y en este supplemento. NO `alt+shift+s`: la gramática del keymap
 /// compartido rechaza `shift+<char>` (el char debe ir ya «shifteado», y un

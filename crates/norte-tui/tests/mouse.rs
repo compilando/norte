@@ -788,6 +788,40 @@ fn un_frame_normal_no_caduca_el_gesto() {
     assert_eq!(app.panes[0].marks_len(), 4, "el barrido sigue vivo");
 }
 
+/// Un `pane.swap` a mitad de un arrastre también se lleva el gesto.
+///
+/// `listing_epoch` VIAJA con el pane, así que el intercambio se limita a
+/// cruzar los dos valores: cuando EMPATAN —los dos panes habiendo listado el
+/// mismo número de veces, lo normal recién arrancado— la vigencia por épocas
+/// no ve nada moverse y el gesto sobrevive. Pero su `Spot { pane, index }`
+/// nombra ahora el contenido del OTRO lado: el gesto quedó reatribuido a
+/// espaldas del lector.
+#[test]
+fn un_intercambio_de_panes_a_mitad_de_un_arrastre_se_lleva_el_gesto() {
+    let mut app = app_pintada(10);
+    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 1));
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 2));
+    assert!(app.panes[0].marks_len() > 0, "el barrido iba en marcha");
+    assert_eq!(
+        app.panes[0].listing_epoch(),
+        app.panes[1].listing_epoch(),
+        "las épocas EMPATAN: es justo lo que deja ciego al chequeo por épocas"
+    );
+
+    app.swap_panes();
+    let _ = pintar(&mut app);
+
+    // Las marcas del barrido viajaron con su pane al lado 1; el pane 0 es
+    // ahora el otro listado, y el gesto armado sigue nombrando `pane: 0`.
+    let antes = app.panes[0].marks_len();
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 7));
+    assert_eq!(
+        app.panes[0].marks_len(),
+        antes,
+        "el arrastre no puede continuar sobre el contenido del otro lado"
+    );
+}
+
 /// La captura se SUELTA antes de ceder la terminal a un programa externo y
 /// se restituye al volver. Sin esto el programa lanzado (un editor, un
 /// paginador) hereda una terminal en modo ratón que no pidió y recibe cada

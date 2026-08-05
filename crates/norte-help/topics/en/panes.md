@@ -93,12 +93,21 @@ Navigating somewhere new from the middle of the trail forgets the branch you
 stepped off, exactly as a browser does. A way forward into a history you have
 already abandoned is the bug everyone has met.
 
-A step that fails is rewound — you never left, so the trail is put back as it
-was. When the reason is that the directory is **gone**, it also leaves the
-trail, the forward branch and the history popup, so the key can never trap you
-on a directory that has proved not to be there. Any other failure keeps it: a
-host that was down and a directory you may not read are both still places, and
-either may answer next time.
+A step that does not arrive is rewound — you never left, so the trail is put
+back as it was. That covers the step that **fails** and the one you **abandon**
+with Esc while it is still listing: either way the pane is showing what
+it was showing, and a trail that counted the step would send you "forward" into
+the directory already on screen. When the reason is that the directory is
+**gone**, it also leaves the trail, the forward branch and the history popup, so
+the key can never trap you on a directory that has proved not to be there. Any
+other failure keeps it: a host that was down and a directory you may not read
+are both still places, and either may answer next time.
+
+A step that stops to ask about an unknown host key is the one case that waits:
+it is neither taken nor put back until you answer, because trusting the key
+resumes that very navigation. Trust it and the step finishes; deny it, or let
+the resumed step fail, and the step is rewound like any other that never
+arrived.
 
 > 💡 A directory you visit often is worth a favourite: the pane remembers where it has been, and favourites are shared by both panes.
 

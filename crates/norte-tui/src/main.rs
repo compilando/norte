@@ -23,9 +23,9 @@ use norte_tui::app::{
     ALLOW_COLUMNS, ALLOW_EXTENSIONS, ALLOW_NAV_HOTLIST, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, App,
     DialogOutcome, ExtensionManager, HelpOutcome, HelpView, KeymapsError, Modal, NavPopupKind,
     Palette, Pane, PendingWrite, PickerAction, SearchDialog, SearchState, Settings,
-    SettingsEditError, Trail, TransferKind, config_error_category, detail_for_bar, dialog_action,
-    error_category, error_message, io_error_category, keymaps_error_category, theme_error_category,
-    trust_lua_key,
+    SettingsEditError, Trail, TrailStep, TransferKind, config_error_category, detail_for_bar,
+    dialog_action, error_category, error_message, io_error_category, keymaps_error_category,
+    theme_error_category, trust_lua_key,
 };
 use norte_tui::config::{self, Layers, WatchMode};
 use norte_tui::help::TuiChords;
@@ -132,11 +132,22 @@ enum FillMsg {
     Failed,
 }
 
-/// Un listado RELLENÁNDOSE en background: el pane destino y el canal del
-/// drenador. Soltarlo (un cd nuevo) dropea el `rx` → el drenador muere en su
-/// próximo envío → suelta el stream → cancelación cooperativa (regla 3).
+/// A listing being FILLED in the background: the drainer's channel, nothing
+/// else. Dropping it drops the `rx` → the drainer dies on its next send →
+/// releases the stream → cooperative cancellation (rule 3).
+///
+/// It does NOT carry its pane. The run loop keeps `[Option<Fill>; 2]`, one
+/// slot per pane, so the array index IS the pane — the same shape as
+/// `decorate_fetch`. A `pane` field beside it would be a second source of the
+/// same fact, and two sources of one fact drift; a `pane.swap` would then have
+/// to keep them in step by hand instead of just swapping the two slots.
+///
+/// One slot per pane is also the whole point rather than a tidiness: with a
+/// single global slot, any cd that starts a new paginated listing dropped
+/// whoever was draining — and `pane.mirror` makes that ONE keystroke with no
+/// change of focus, so the pane left half-listed under a permanent
+/// «cargando…» is the one the reader is looking at.
 struct Fill {
-    pane: usize,
     rx: tokio::sync::mpsc::Receiver<FillMsg>,
 }
 
@@ -316,21 +327,28 @@ async fn fetch_plugin_columns(
 /// aún necesita pasarlo a [`apply_cd`] justo después.
 fn cd_landed_pane(outcome: &Cd) -> Option<usize> {
     match outcome {
-        Cd::Filling(f) => Some(f.pane),
-        Cd::Replaced(pane) => Some(*pane),
+        Cd::Filling { pane, .. } | Cd::Replaced(pane) => Some(*pane),
         // Un refresh re-lista IN SITU (mismo dir, orden ya aplicado): no hay
         // aterrizaje que ordenar ni decoración nueva que pedir — paridad con
         // el camino de `on_tick`, que tampoco lo hace. Un `Swapped` tampoco
         // lista nada: los dos listados ya existían, solo cambiaron de lado
         // (sus decoraciones viajan con ellos en [`reconcile_swap`]).
-        Cd::Refreshed(..) | Cd::Swapped | Cd::Failed(..) | Cd::Cancelled => None,
+        Cd::Refreshed(..) | Cd::Swapped | Cd::Failed(..) | Cd::Cancelled | Cd::Suspended => None,
     }
 }
 
 /// Desenlace de un `cd`, para que el run loop actualice el relleno vivo.
 enum Cd {
-    /// El pane se reemplazó y su RESTO se rellena en background.
-    Filling(Fill),
+    /// The pane was replaced and the REST of its listing fills in the
+    /// background. The pane index rides ALONGSIDE the [`Fill`] and not inside
+    /// it: the run loop files the fill by pane, and the index is that filing
+    /// key, not a property of the drainer.
+    Filling {
+        /// Pane whose listing is filling.
+        pane: usize,
+        /// The drainer, headed for `fill[pane]`.
+        fill: Fill,
+    },
     /// El pane `usize` se reemplazó y ya está completo: un relleno anterior
     /// de ESE pane queda obsoleto y hay que soltarlo.
     Replaced(usize),
@@ -343,8 +361,21 @@ enum Cd {
     /// 2026-07-18: `NotFound` retira la entrada). Sin el índice de pane: al no
     /// tocar ya el relleno (#78) nadie lo consulta.
     Failed(Error),
-    /// El cd se abandonó (Esc/Ctrl-C): nada cambió, el relleno sigue.
+    /// El cd se ABANDONÓ y nada lo reanuda: `Esc` durante el listado, `Ctrl-C`,
+    /// o el stream de eventos muriéndose. Nada cambió y el relleno sigue.
+    ///
+    /// Distinto de [`Cd::Suspended`] a propósito: los dos dejan el pane donde
+    /// estaba, pero solo uno de ellos va a volver. Quien recorre el rastro
+    /// necesita saber cuál, y probar `app.modal` para averiguarlo adivina.
     Cancelled,
+    /// El cd se PARÓ a medias y algo va a reanudar ESTA MISMA navegación: el
+    /// modal TOFU (`Modal::TrustHostKey`), que carga el pane y el modo de
+    /// rastro para que el reintento continúe donde esta se quedó.
+    ///
+    /// Para el relleno y para los panes es idéntico a [`Cd::Cancelled`] (el
+    /// pane no se tocó); la diferencia la lee [`rewind_for`], que NO rebobina
+    /// un paso del rastro que el reintento va a terminar.
+    Suspended,
     /// #118: `pane.refresh` (Ctrl+R) re-listó estos panes DESDE `dispatch`
     /// (que no ve `fill`/`last_probed`): el desenlace viaja al run loop para
     /// que [`apply_cd`] aplique el ritual post-refresh — mismo `[bool; 2]`
@@ -501,35 +532,45 @@ mod palette_modal_guard_tests {
     }
 }
 
-/// Aplica el desenlace de un cd al relleno paginado en curso: uno nuevo lo
-/// sustituye (el rx anterior dropeado mata su drenador → suelta el stream,
-/// regla 3); un REEMPLAZO del MISMO pane lo suelta (su drenador drenaría el
-/// listado viejo sobre el nuevo); un FALLO o un cd ABANDONADO no tocan el pane
-/// —sigue en su listado anterior, cuyo relleno continúa siendo válido— así que
-/// no tocan el fill (#78). Un `Refreshed` (#118) delega en
-/// [`release_refreshed_fill`]: el mismo ritual que [`after_panes_refresh`].
+/// Aplica el desenlace de un cd a los rellenos paginados en curso: uno nuevo
+/// ocupa el hueco DE SU PANE (el rx anterior de ESE pane, dropeado, mata su
+/// drenador → suelta el stream, regla 3); un REEMPLAZO del MISMO pane lo
+/// suelta (su drenador drenaría el listado viejo sobre el nuevo); un FALLO o
+/// un cd ABANDONADO no tocan el pane —sigue en su listado anterior, cuyo
+/// relleno continúa siendo válido— así que no tocan el fill (#78). Un
+/// `Refreshed` (#118) delega en [`release_refreshed_fill`]: el mismo ritual
+/// que [`after_panes_refresh`].
+///
+/// El hueco es POR PANE ([`Fill`]): un cd de un pane jamás estrangula el
+/// relleno del otro.
+///
+/// `search_run` viaja hasta aquí SOLO por el brazo `Swapped`
+/// ([`reconcile_swap`]): también está indexado por pane, y su cruce tiene que
+/// pasar antes del [`reap_search_run`] que estos mismos call sites hacen a
+/// continuación.
 fn apply_cd(
-    fill: &mut Option<Fill>,
+    fill: &mut [Option<Fill>; 2],
     decorate_fetch: &mut [Option<DecorateFetch>; 2],
     last_probed: &mut Probed,
+    search_run: &mut Option<SearchRun>,
     outcome: Cd,
 ) {
     match outcome {
-        Cd::Filling(f) => {
+        Cd::Filling { pane, fill: f } => {
             // Listado nuevo (lazy): la dedup de la sonda #52 caduca — la
             // misma entrada re-enfocada debe poder re-hidratarse.
             last_probed.clear();
-            *fill = Some(f);
+            fill[pane] = Some(f);
         }
         Cd::Replaced(pane) => {
             last_probed.clear();
-            if fill.as_ref().is_some_and(|f| f.pane == pane) {
-                *fill = None;
-            }
+            fill[pane] = None;
         }
         // El pane no cambió: su relleno (si lo había) sigue drenando el mismo
         // listado. Soltarlo aquí lo dejaba colgado en `loading=true` (#78).
-        Cd::Failed(..) | Cd::Cancelled => {}
+        // `Suspended` (TOFU) va aquí por la misma razón que `Cancelled`: el
+        // pane no se tocó, y encima el reintento lo va a re-listar entero.
+        Cd::Failed(..) | Cd::Cancelled | Cd::Suspended => {}
         // #118: Ctrl+R desde `dispatch` — misma semántica que el ritual de
         // los otros disparadores (`after_panes_refresh`), un solo cuerpo.
         // `reap_search_run` no hace falta aquí: `refresh_panes` SALTA los
@@ -538,29 +579,51 @@ fn apply_cd(
         Cd::Refreshed(refreshed) => release_refreshed_fill(refreshed, fill, last_probed),
         // `pane.swap`: `App::swap_panes` ya cruzó panes e historiales; aquí
         // se cruza la mitad que vive en el run loop.
-        Cd::Swapped => reconcile_swap(fill, decorate_fetch, last_probed),
+        Cd::Swapped => reconcile_swap(fill, decorate_fetch, last_probed, search_run),
     }
 }
 
 /// The other half of `pane.swap`: the per-pane state that lives in the run
 /// loop rather than in `App`.
 ///
-/// `App::swap_panes` moves the panes and their histories; these three are
+/// `App::swap_panes` moves the panes and their histories; these four are
 /// indexed by pane too, and leaving any of them behind is a bug a green suite
 /// does not catch — the listing keeps arriving, just into the wrong half of
-/// the screen, and the decorations land on somebody else's rows.
+/// the screen, the decorations land on somebody else's rows, and the live
+/// search's hits pour into the pane the reader is not looking at.
 ///
 /// The watcher needs nothing here: the run loop re-points it from
-/// `watch_targets(app)` at the top of EVERY iteration (pinned by
-/// `swap_tests::watch_targets_sigue_a_los_panes_tras_el_intercambio`), so the
-/// swapped directories reach it on the next tick.
+/// `watch_targets(app)` at the top of EVERY iteration, so the swapped
+/// directories reach it on the next tick.
+///
+/// That rests on two facts, and only one of them is pinned.
+/// `swap_tests::watch_targets_sigue_a_los_panes_tras_el_intercambio` proves
+/// `watch_targets` is a pure function of `app.panes` — nobody caches a target
+/// per side, which is the half that could rot silently. The other half, that
+/// the `rewatch` call really is the first statement of the loop body, is
+/// ordering no unit test in this file can observe: if someone moved it below
+/// the key handling, each pane would watch the other's directory for one
+/// tick after a swap. Read the call site before trusting this comment.
 fn reconcile_swap(
-    fill: &mut Option<Fill>,
+    fill: &mut [Option<Fill>; 2],
     decorate_fetch: &mut [Option<DecorateFetch>; 2],
     last_probed: &mut Probed,
+    search_run: &mut Option<SearchRun>,
 ) {
-    if let Some(f) = fill.as_mut() {
-        f.pane ^= 1;
+    // Un hueco por pane: cruzarlos ES el reconciliado (el índice del array es
+    // el pane, y no hay copia del índice dentro del `Fill` que mantener a
+    // mano — ver [`Fill`]).
+    fill.swap(0, 1);
+    // La búsqueda VIVA guarda su pane virtual como el relleno guardaba el suyo,
+    // y aquí es donde TIENE que voltear: el mismo call site cosecha con
+    // `reap_search_run` justo después de `apply_cd`, y esa cosecha mira
+    // `panes[s.pane].virtual_search` — con el índice sin voltear ve el listado
+    // ordinario que acaba de llegar del otro lado y cancela la Task en
+    // silencio, dejando al otro pane con hits a medias en `Running` para
+    // siempre. A lo sumo hay UN run (el pane virtual es uno), así que voltear
+    // su índice es todo el cruce que necesita.
+    if let Some(s) = search_run.as_mut() {
+        s.pane ^= 1;
     }
     // Cada slot lleva su `dir` como guard anti-stale, así que cruzarlos basta:
     // el fetch sigue correspondiendo al listado que ahora está al otro lado.
@@ -576,12 +639,18 @@ fn reconcile_swap(
 /// invalida la dedup de la sonda #52 (un listado nuevo re-lazifica las
 /// entries). Cuerpo ÚNICO para [`after_panes_refresh`] (run loop) y el brazo
 /// `Cd::Refreshed` de [`apply_cd`] (Ctrl+R vía `dispatch`).
-fn release_refreshed_fill(refreshed: [bool; 2], fill: &mut Option<Fill>, last_probed: &mut Probed) {
+fn release_refreshed_fill(
+    refreshed: [bool; 2],
+    fill: &mut [Option<Fill>; 2],
+    last_probed: &mut Probed,
+) {
     if refreshed == [false; 2] {
         return;
     }
-    if fill.as_ref().is_some_and(|f| refreshed[f.pane]) {
-        *fill = None;
+    for pane in 0..2 {
+        if refreshed[pane] {
+            fill[pane] = None;
+        }
     }
     last_probed.clear();
 }
@@ -593,9 +662,9 @@ fn release_refreshed_fill(refreshed: [bool; 2], fill: &mut Option<Fill>, last_pr
 /// propio root de la búsqueda colándose entre resultados): se suelta el fill y
 /// se DESCARTA el lote. Cinturón simétrico al drain-guard de [`drain_search`];
 /// el tirante es soltar el fill en `launch_search`.
-fn apply_fill_msg(app: &mut App, fill: &mut Option<Fill>, pane: usize, msg: Option<FillMsg>) {
+fn apply_fill_msg(app: &mut App, fill: &mut [Option<Fill>; 2], pane: usize, msg: Option<FillMsg>) {
     if app.panes[pane].virtual_search {
-        *fill = None;
+        fill[pane] = None;
         return;
     }
     match msg {
@@ -603,11 +672,11 @@ fn apply_fill_msg(app: &mut App, fill: &mut Option<Fill>, pane: usize, msg: Opti
         Some(FillMsg::Failed) => {
             app.panes[pane].finish_listing();
             app.message = Some(t("msg-list-incomplete"));
-            *fill = None;
+            fill[pane] = None;
         }
         None => {
             app.panes[pane].finish_listing();
-            *fill = None;
+            fill[pane] = None;
         }
     }
 }
@@ -1066,8 +1135,10 @@ async fn run(
     // Debounce del hot-reload SIN bloquear el loop (revisión fase 6): cada
     // evento de config empuja el deadline; el reload corre cuando vence.
     let mut reload_at: Option<tokio::time::Instant> = None;
-    // Listado paginado rellenándose en background (ADR 0017): a lo sumo uno.
-    let mut fill: Option<Fill> = None;
+    // Listados paginados rellenándose en background (ADR 0017): un hueco POR
+    // PANE — los dos panes pueden estar paginando a la vez, y con un hueco
+    // global el cd de uno mataba el drenador del otro (ver [`Fill`]).
+    let mut fill: [Option<Fill>; 2] = [None, None];
     // Búsqueda viva en curso (liveSearch T6): a lo sumo una (el pane virtual
     // es uno). Molde `Fill`: se drena en el select y se suelta al salir.
     let mut search_run: Option<SearchRun> = None;
@@ -1311,15 +1382,24 @@ async fn run(
                     app.panes[f.pane].set_plugin_columns(cols);
                 }
             }
-            msg = async {
-                match &mut fill {
-                    Some(f) => f.rx.recv().await,
-                    None => std::future::pending().await,
+            (pane, msg) = async {
+                // Un hueco POR PANE (igual que `decorate_fetch`): se espera al
+                // primero que hable; con los dos vacíos, pendiente. `recv` es
+                // cancel-safe, así que perder la carrera no pierde el lote del
+                // otro brazo.
+                let [slot_a, slot_b] = &mut fill;
+                match (slot_a, slot_b) {
+                    (Some(a), Some(b)) => tokio::select! {
+                        m = a.rx.recv() => (0, m),
+                        m = b.rx.recv() => (1, m),
+                    },
+                    (Some(a), None) => (0, a.rx.recv().await),
+                    (None, Some(b)) => (1, b.rx.recv().await),
+                    (None, None) => std::future::pending().await,
                 }
             } => {
                 // Lote del drenador del listado paginado (ADR 0017): al pane
-                // que lo abrió. `None` = canal cerrado (fin del drenado).
-                let pane = fill.as_ref().map_or(0, |f| f.pane);
+                // de SU hueco. `None` = canal cerrado (fin del drenado).
                 apply_fill_msg(app, &mut fill, pane, msg);
             }
             hits = async {
@@ -1587,7 +1667,13 @@ async fn run(
                                 decorate_fetch[pane] =
                                     spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                             }
-                            apply_cd(&mut fill, &mut decorate_fetch, &mut last_probed, outcome);
+                            apply_cd(
+                                &mut fill,
+                                &mut decorate_fetch,
+                                &mut last_probed,
+                                &mut search_run,
+                                outcome,
+                            );
                             // Paridad con el sitio del resolver: entrar en
                             // un hit apaga el modo virtual del pane, y hay
                             // que cosechar el run (regla 3).
@@ -1643,7 +1729,13 @@ async fn run(
                             decorate_fetch[pane] =
                                 spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                         }
-                        apply_cd(&mut fill, &mut decorate_fetch, &mut last_probed, outcome);
+                        apply_cd(
+                            &mut fill,
+                            &mut decorate_fetch,
+                            &mut last_probed,
+                            &mut search_run,
+                            outcome,
+                        );
                     } else if app.search_dialog.is_some() && !modal_wins(app) {
                         // Diálogo Alt+F7 (liveSearch T6): captura imprimibles
                         // como los demás overlays; Enter con criterio lanza la
@@ -1765,7 +1857,13 @@ async fn run(
                             decorate_fetch[pane] =
                                 spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                         }
-                        apply_cd(&mut fill, &mut decorate_fetch, &mut last_probed, outcome);
+                        apply_cd(
+                            &mut fill,
+                            &mut decorate_fetch,
+                            &mut last_probed,
+                            &mut search_run,
+                            outcome,
+                        );
                                     // Paridad con el sitio del resolver (#118
                                     // review): un cd elegido en la palette
                                     // (nav.parent…) también puede apagar el
@@ -1828,7 +1926,13 @@ async fn run(
                                 decorate_fetch[pane] =
                                     spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                             }
-                            apply_cd(&mut fill, &mut decorate_fetch, &mut last_probed, outcome);
+                            apply_cd(
+                                &mut fill,
+                                &mut decorate_fetch,
+                                &mut last_probed,
+                                &mut search_run,
+                                outcome,
+                            );
                             reap_search_run(app, &mut search_run);
                             if let Some(pending) = app.pending_open.take() {
                                 app.message =
@@ -2061,7 +2165,13 @@ async fn run(
                             decorate_fetch[pane] =
                                 spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                         }
-                        apply_cd(&mut fill, &mut decorate_fetch, &mut last_probed, outcome);
+                        apply_cd(
+                            &mut fill,
+                            &mut decorate_fetch,
+                            &mut last_probed,
+                            &mut search_run,
+                            outcome,
+                        );
                     } else {
                         // Esc con un comando Lua en vuelo (BROWSE: sin modal
                         // ni overlay, y NO en el viewer): pide cancelación
@@ -2226,7 +2336,13 @@ async fn run(
                             decorate_fetch[pane] =
                                 spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                         }
-                        apply_cd(&mut fill, &mut decorate_fetch, &mut last_probed, outcome);
+                        apply_cd(
+                            &mut fill,
+                            &mut decorate_fetch,
+                            &mut last_probed,
+                            &mut search_run,
+                            outcome,
+                        );
                                         // Paridad con el sitio del resolver
                                         // (#118 review): el Enter del quick
                                         // search ES un nav.enter — entrar en
@@ -2302,7 +2418,13 @@ async fn run(
                             decorate_fetch[pane] =
                                 spawn_decorate_fetch(backend, pane, dir, paths, plugin_cols);
                         }
-                        apply_cd(&mut fill, &mut decorate_fetch, &mut last_probed, outcome);
+                        apply_cd(
+                            &mut fill,
+                            &mut decorate_fetch,
+                            &mut last_probed,
+                            &mut search_run,
+                            outcome,
+                        );
                                     // Un cd (nav.parent…) apagó el modo virtual del
                                     // pane de búsqueda: suelta el run y cancela.
                                     reap_search_run(app, &mut search_run);
@@ -4410,7 +4532,7 @@ async fn refresh_panes(app: &mut App, backend: &Backend, events: &mut EventStrea
 fn after_panes_refresh(
     app: &App,
     refreshed: [bool; 2],
-    fill: &mut Option<Fill>,
+    fill: &mut [Option<Fill>; 2],
     last_probed: &mut Probed,
     search_run: &mut Option<SearchRun>,
 ) {
@@ -4460,7 +4582,10 @@ async fn trust_host_retry(
             // `cd_in` (no `cd`): se reanuda la navegación que el TOFU
             // interrumpió — su pane y su rastro —, que no tiene por qué ser
             // la del foco actual.
-            let outcome = cd_in(app, backend, events, pane, dir, trail).await;
+            let outcome = cd_in(app, backend, events, pane, dir.clone(), trail).await;
+            // Y si era un paso del rastro, ESTE es el sitio donde se termina:
+            // `walk_trail` lo dejó dado porque contaba con este reintento.
+            settle_suspended_trail(app, pane, &dir, trail, &outcome);
             // Solo abrir la siguiente pendiente si el retry NO dejó un modal
             // (otro HostKeyUnknown): jamás pisar.
             if app.modal.is_none() {
@@ -4470,6 +4595,10 @@ async fn trust_host_retry(
         }
         Err(e) => {
             app.message = Some(error_message(&e));
+            // Confiar FALLÓ: no hay reintento, así que la navegación que el
+            // TOFU suspendió muere aquí — para el rastro es idéntica a un cd
+            // abandonado, y el paso tiene que volver.
+            settle_suspended_trail(app, pane, &dir, trail, &Cd::Cancelled);
             None
         }
     }
@@ -4518,10 +4647,22 @@ async fn on_dialog_key(
         DialogOutcome::Cancelled => {
             app.modal = None;
             app.open_next_pending();
-            // Cerrar el diálogo de aprobación ES denegar (fail-safe): el
-            // agente recibe `not-approved`, jamás una espera colgada.
-            if let Modal::ApproveAgentOp { req } = modal {
-                decide_approval(app, backend, req.approval_id, false).await;
+            match modal {
+                // Cerrar el diálogo de aprobación ES denegar (fail-safe): el
+                // agente recibe `not-approved`, jamás una espera colgada.
+                Modal::ApproveAgentOp { req } => {
+                    decide_approval(app, backend, req.approval_id, false).await;
+                }
+                // DENEGAR la host key abandona la navegación que el TOFU
+                // suspendió: no hay reintento que la termine, así que el paso
+                // del rastro que `walk_trail` dejó dado vuelve aquí. Es el
+                // camino MÁS probable de los tres (decir que no a un host
+                // desconocido es lo normal), y el único que no pasa por
+                // `trust_host_retry`.
+                Modal::TrustHostKey {
+                    dir, pane, trail, ..
+                } => settle_suspended_trail(app, pane, &dir, trail, &Cd::Cancelled),
+                _ => {}
             }
         }
         DialogOutcome::Confirmed => {
@@ -4898,7 +5039,7 @@ fn search_params(dialog: &SearchDialog, root: VPath) -> FsSearchParams {
 async fn launch_search(
     app: &mut App,
     backend: &Backend,
-    fill: &mut Option<Fill>,
+    fill: &mut [Option<Fill>; 2],
     search_run: &mut Option<SearchRun>,
     params: FsSearchParams,
 ) {
@@ -4906,6 +5047,12 @@ async fn launch_search(
     let root = params.root.clone();
     match backend.search(params).await {
         Ok((task, rx)) => {
+            // `prev_dir` y `root` son el MISMO directorio: la raíz sale de
+            // `app.focused().dir()` en el Enter del diálogo. `back_target` se
+            // apoya en esa igualdad — el `dir()` de un pane virtual es lo que
+            // deja en la rama de delante, y solo es honesto porque es el sitio
+            // donde el lector estaba. Si algún día la raíz se puede teclear,
+            // el rastro necesita `prev_dir`, no `dir()`.
             let prev_dir = app.panes[pane].dir().clone();
             app.search_dialog = None;
             app.message = None;
@@ -4914,9 +5061,7 @@ async fn launch_search(
             // pane (dir aún cargándose) alimentaría el listado real como hits
             // (review MAJOR T6) — se suelta ya (tirante; `apply_fill_msg` es
             // el cinturón por si llega un lote antes).
-            if fill.as_ref().is_some_and(|f| f.pane == pane) {
-                *fill = None;
-            }
+            fill[pane] = None;
             // Un run previo (raro: el diálogo se cierra al lanzar) se cancela.
             if let Some(old) = search_run.replace(SearchRun {
                 task,
@@ -5013,7 +5158,7 @@ async fn on_search_escape(
     app: &mut App,
     backend: &Backend,
     events: &mut EventStream,
-    fill: &mut Option<Fill>,
+    fill: &mut [Option<Fill>; 2],
     decorate_fetch: &mut [Option<DecorateFetch>; 2],
     last_probed: &mut Probed,
     search_run: &mut Option<SearchRun>,
@@ -5028,7 +5173,7 @@ async fn on_search_escape(
     let prev = s.prev_dir.clone();
     *search_run = None;
     let outcome = cd(app, backend, events, prev).await;
-    apply_cd(fill, decorate_fetch, last_probed, outcome);
+    apply_cd(fill, decorate_fetch, last_probed, search_run, outcome);
 }
 
 /// Enter sobre un hit del pane virtual (liveSearch T6): cd al PADRE del hit y
@@ -5038,7 +5183,7 @@ async fn on_search_enter(
     app: &mut App,
     backend: &Backend,
     events: &mut EventStream,
-    fill: &mut Option<Fill>,
+    fill: &mut [Option<Fill>; 2],
     decorate_fetch: &mut [Option<DecorateFetch>; 2],
     last_probed: &mut Probed,
     search_run: &mut Option<SearchRun>,
@@ -5057,7 +5202,7 @@ async fn on_search_enter(
     *search_run = None;
     let pane = app.focus();
     let outcome = cd(app, backend, events, parent).await;
-    apply_cd(fill, decorate_fetch, last_probed, outcome);
+    apply_cd(fill, decorate_fetch, last_probed, search_run, outcome);
     // Re-ancla el cursor sobre el hit por path (el cd resetea a 0); si cayó
     // en una página aún no drenada, el cursor se queda arriba (v1).
     if let Some(i) = app.panes[pane].entries().iter().position(|e| e.path == hit) {
@@ -5333,6 +5478,13 @@ struct PaneMove {
 /// is not a location, so there is no origin to send) or when both panes are
 /// already there — a redundant `cd` would re-list the other pane and slide
 /// its listing out from under the reader's cursor for nothing.
+///
+/// "Already there" reads `virtual_search` as well as the directory: a results
+/// pane's `dir()` is the ROOT the search walked, which is usually the very
+/// directory the other pane is sitting in, and it is NOT what the reader is
+/// looking at. Comparing the two alone refused the gesture in silence
+/// precisely when it had the most to do — the real cd is what takes the pane
+/// out of search mode.
 fn mirror_plan(app: &App) -> Option<PaneMove> {
     let from = app.focus();
     let to = from ^ 1;
@@ -5340,12 +5492,13 @@ fn mirror_plan(app: &App) -> Option<PaneMove> {
         return None;
     }
     let dir = app.panes[from].dir().clone();
-    (app.panes[to].dir() != &dir).then_some(PaneMove { pane: to, dir })
+    (app.panes[to].dir() != &dir || app.panes[to].virtual_search)
+        .then_some(PaneMove { pane: to, dir })
 }
 
 /// `pane.pull`: the FOCUSED pane goes where the other one is — the same
 /// gesture as [`mirror_plan`] the other way round, with the same two reasons
-/// to decline.
+/// to decline and the same reading of a virtual DESTINATION.
 fn pull_plan(app: &App) -> Option<PaneMove> {
     let to = app.focus();
     let from = to ^ 1;
@@ -5353,7 +5506,8 @@ fn pull_plan(app: &App) -> Option<PaneMove> {
         return None;
     }
     let dir = app.panes[from].dir().clone();
-    (app.panes[to].dir() != &dir).then_some(PaneMove { pane: to, dir })
+    (app.panes[to].dir() != &dir || app.panes[to].virtual_search)
+        .then_some(PaneMove { pane: to, dir })
 }
 
 /// Carries out what a `*_plan` decided: navigate, or explain the refusal.
@@ -5385,33 +5539,26 @@ async fn run_pane_gesture(
     cd_in(app, backend, events, m.pane, m.dir, Trail::Record).await
 }
 
-/// Which way `nav.back`/`nav.forward` are walking the trail. The two are the
-/// same operation mirrored, so they share one body rather than two arms that
-/// must be kept in step by hand.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TrailStep {
-    /// `nav.back`.
-    Back,
-    /// `nav.forward`.
-    Forward,
-}
-
-impl TrailStep {
-    /// Fluent id for "there is nothing this way". A key that goes silent is
-    /// indistinguishable from a broken one, so the exhausted trail SAYS so.
-    fn empty_message(self) -> &'static str {
-        match self {
-            Self::Back => "msg-nav-no-back",
-            Self::Forward => "msg-nav-no-forward",
-        }
-    }
-}
-
 /// One step back for the focused pane, or `None` when the trail is empty.
 ///
 /// Takes `&mut App` because asking IS the step: the trail hands the target
 /// over and moves the current directory to the forward branch in one
 /// operation, so a caller cannot peek and then forget to walk.
+///
+/// Reads `dir()` with NO `virtual_search` veto, unlike the mirror and pull
+/// gestures, and on purpose. Those need a location to HAND OVER, and a list
+/// of hits is not one. This one needs the directory to leave BEHIND on the
+/// forward branch, and a results pane has a perfectly good one: its `dir()`
+/// is the root the search walked, which is the pane's own directory at the
+/// moment the reader pressed the search key — `launch_search` stores the very
+/// same value as `SearchRun::prev_dir` to restore on `Esc`, and
+/// `pane_gestures_tests::la_raiz_de_la_busqueda_es_el_dir_del_pane_que_la_lanza`
+/// pins the equivalence at the seam that could break it. So a step back out
+/// of a results pane goes where the reader really was, and the forward branch
+/// keeps the directory they really searched from — as a listing, because the
+/// hits died with the run this step reaps. Vetoing instead would strand the
+/// reader in a results pane, taking away the one key that reads as "get me
+/// out of here and back where I came from".
 fn back_target(app: &mut App) -> Option<VPath> {
     let pane = app.focus();
     let current = app.panes[pane].dir().clone();
@@ -5440,15 +5587,106 @@ fn untake_step(app: &mut App, pane: usize, step: TrailStep, target: VPath) {
     };
 }
 
+/// What a finished trail step should do to the trail it was walking.
+///
+/// The WHOLE policy of [`walk_trail`], in one value the tests can ask for
+/// directly. It used to live inline in `walk_trail`, where the only way to
+/// pin it was to re-enact the effect in the test — which pins [`History`],
+/// not the policy: `walk_trail` could stop rewinding altogether and every
+/// test stayed green.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rewind {
+    /// Leave the trail as the step left it: the pane really did move, or
+    /// something is about to resume the very same navigation.
+    No,
+    /// Put the step back — the reader never left where they were.
+    Step,
+    /// Put the step back AND retire the destination from the whole history:
+    /// it proved not to be there.
+    StepAndRetire,
+}
+
+/// Decides, from how a trail step ENDED, what the trail owes the reader.
+///
+/// A `Failed` never moved the pane, so the step is put back; when the reason
+/// is that the directory is GONE it also leaves the history entirely — the
+/// same treatment the nav popup already gives a `NotFound`, so the reader is
+/// never left with a key that can only aim at a directory that proved not to
+/// be there.
+///
+/// A `Cancelled` rewinds TOO. It is the outcome of `Esc` during a slow
+/// listing and of an event stream that died: nothing resumes those, and the
+/// pane never moved, so a trail that kept the step would believe the reader
+/// left a directory they are still looking at — and the next `nav.forward`
+/// would "return" them to the listing already on screen while `back` grew a
+/// phantom that eats the following `nav.back` as well. The one outcome that
+/// must NOT rewind is `Suspended`: the TOFU modal resumes this very
+/// navigation (it carries the pane and the trail mode), and a rewound trail
+/// would count the successful retry twice.
+///
+/// Everything else — the two landings and the outcomes that reach `apply_cd`
+/// from elsewhere — means the pane moved or the trail was never involved.
+fn rewind_for(outcome: &Cd) -> Rewind {
+    match outcome {
+        Cd::Failed(Error::NotFound) => Rewind::StepAndRetire,
+        Cd::Failed(_) | Cd::Cancelled => Rewind::Step,
+        Cd::Suspended | Cd::Filling { .. } | Cd::Replaced(_) | Cd::Refreshed(..) | Cd::Swapped => {
+            Rewind::No
+        }
+    }
+}
+
+/// Carries out what [`rewind_for`] decided, on the trail of `pane`.
+///
+/// Split from the decision so the decision can be read (and tested) without a
+/// backend, and joined to it at the ONE call site in [`walk_trail`] — the
+/// tests drive this pair, which is the pair the production path drives.
+fn rewind_trail(app: &mut App, pane: usize, step: TrailStep, dir: &VPath, rewind: Rewind) {
+    match rewind {
+        Rewind::No => {}
+        Rewind::Step => untake_step(app, pane, step, dir.clone()),
+        Rewind::StepAndRetire => {
+            untake_step(app, pane, step, dir.clone());
+            app.history[pane].remove(dir);
+        }
+    }
+}
+
+/// Settles the trail of a navigation the TOFU prompt SUSPENDED, once that
+/// prompt has been answered.
+///
+/// [`walk_trail`] deliberately leaves a `Cd::Suspended` step taken: the retry
+/// was going to finish it. But the retry is not guaranteed to happen — the
+/// reader can deny the key, trusting it can fail, and the retry itself can
+/// fail or be abandoned — and when it does not, the step is left standing for
+/// a move that never occurred. That is the same lie [`rewind_for`] exists to
+/// stop, on the one path where the navigation OUTLIVES the function that
+/// started it, which is why nobody was there to undo it.
+///
+/// Runs the answer's outcome through the very same [`rewind_for`] the trail
+/// walker runs. `trail.step()` of `None` (a `Trail::Record` navigation: a
+/// plain cd that happened to meet an unknown host) means there is no step to
+/// rewind, so this is a no-op — and a second `Suspended` (another unknown
+/// key, or the same one asked again) is a no-op TOO: the modal is open again
+/// carrying the same trail, so the step is still going to be settled by
+/// whoever answers THAT one.
+///
+/// Rewinding here cannot double up with [`walk_trail`]: the walker saw
+/// `Suspended` and did nothing, so this is the FIRST and only rewind of that
+/// step.
+fn settle_suspended_trail(app: &mut App, pane: usize, dir: &VPath, trail: Trail, outcome: &Cd) {
+    if let Some(step) = trail.step() {
+        rewind_trail(app, pane, step, dir, rewind_for(outcome));
+    }
+}
+
 /// `nav.back` / `nav.forward`: replays the focused pane's trail one step.
 ///
-/// A `Cd::Failed` rewinds the step and, when the directory turned out not to
-/// exist, retires it from the whole history — the same treatment the nav
-/// popup already gives a `NotFound`, so the reader is never left with a key
-/// that can only aim at a directory that proved to be gone. A `Cd::Cancelled`
-/// deliberately does NOT rewind: the TOFU modal RESUMES this very navigation
-/// (it carries the pane and the trail mode), and a rewound trail would then
-/// count the successful retry twice.
+/// What a finished step owes the trail is [`rewind_for`]'s call, applied by
+/// [`rewind_trail`]; this body only walks.
+///
+/// A `Cd::Suspended` leaves the step taken on purpose — see
+/// [`settle_suspended_trail`], which is who finishes it.
 async fn walk_trail(
     app: &mut App,
     backend: &Backend,
@@ -5467,14 +5705,11 @@ async fn walk_trail(
     // `Trail::Replay`: el rastro se está recorriendo a sí mismo. Si esto
     // registrara, volver de B a A grabaría «estuve en B» y el siguiente atrás
     // devolvería a B — la misma oscilación que el rastro existe para evitar,
-    // un nivel más arriba.
-    let outcome = cd_in(app, backend, events, pane, dir.clone(), Trail::Replay).await;
-    if let Cd::Failed(e) = &outcome {
-        untake_step(app, pane, step, dir.clone());
-        if matches!(e, Error::NotFound) {
-            app.history[pane].remove(&dir);
-        }
-    }
+    // un nivel más arriba. LLEVA el paso: si la navegación se SUSPENDE (TOFU),
+    // quien responda al modal es quien tendrá que rebobinarlo, y para eso
+    // necesita saber en qué sentido iba.
+    let outcome = cd_in(app, backend, events, pane, dir.clone(), Trail::Replay(step)).await;
+    rewind_trail(app, pane, step, &dir, rewind_for(&outcome));
     outcome
 }
 
@@ -5608,9 +5843,12 @@ async fn dispatch(
                 // del daemon…) nunca llama a `set_listing` (`cd`'s doc, `Err`
                 // arm), así que el hint recién fijado arriba nunca se
                 // consume — descartarlo aquí evita que sobreviva a un `cd`
-                // futuro sin relación. `Cd::Cancelled` (p. ej. el modal TOFU,
-                // que REINTENTA esta misma navegación) lo CONSERVA a
-                // propósito: el reintento debe seguir aterrizando en `child`.
+                // futuro sin relación. `Cd::Suspended` (el modal TOFU, que
+                // REINTENTA esta misma navegación) lo CONSERVA a propósito: el
+                // reintento debe seguir aterrizando en `child`. Un
+                // `Cd::Cancelled` (Esc) también lo conserva — el lector sigue
+                // en el mismo listado, y el hint muere con el siguiente cd que
+                // sí aterrice.
                 if matches!(cd_outcome, Cd::Failed(_)) {
                     app.focused_mut().clear_pending_focus();
                 }
@@ -5899,9 +6137,10 @@ async fn plugin_config_summaries(
 #[cfg(test)]
 mod pane_gestures_tests {
     use super::{
-        App, Pane, TrailStep, back_target, forward_target, mirror_plan, pull_plan, untake_step,
+        App, Cd, Pane, Rewind, Trail, TrailStep, back_target, forward_target, mirror_plan,
+        pull_plan, record_step, rewind_for, rewind_trail, settle_suspended_trail,
     };
-    use norte_proto::VPath;
+    use norte_proto::{Error, VPath};
 
     fn vp(wire: &str) -> VPath {
         VPath::parse(wire).expect("wire de test")
@@ -5986,6 +6225,30 @@ mod pane_gestures_tests {
         assert_eq!(plan.dir, vp("mem:///a"));
     }
 
+    /// Y el atajo de «ya están los dos en el mismo sitio» no puede callarse
+    /// ante un destino VIRTUAL: la raíz por la que anduvo la búsqueda suele
+    /// ser justamente el dir del otro pane, y ahí `dir()` no es lo que el
+    /// lector está viendo. Con el atajo comparando solo dirs, reflejar sobre
+    /// un pane de resultados enraizado ahí mismo no hacía NADA — ni sacaba al
+    /// pane del modo búsqueda, ni decía por qué.
+    #[test]
+    fn un_destino_virtual_en_el_mismo_dir_si_tiene_algo_que_hacer() {
+        let mut app = app_en("mem:///a", "mem:///a");
+        app.panes[1].virtual_search = true;
+
+        app.set_focus(0);
+        let plan = mirror_plan(&app).expect("el destino virtual no está «ya ahí»");
+        assert_eq!(plan.pane, 1, "viaja el pane de resultados");
+        assert_eq!(plan.dir, vp("mem:///a"), "y el cd real lo saca del modo");
+
+        // Y el gesto simétrico: con el foco EN el pane virtual, `pane.pull`
+        // lo trae a donde está el otro — el mismo dir, listado de verdad.
+        app.set_focus(1);
+        let plan = pull_plan(&app).expect("traer a un pane virtual tampoco es no-op");
+        assert_eq!(plan.pane, 1);
+        assert_eq!(plan.dir, vp("mem:///a"));
+    }
+
     // --- nav.back / nav.forward ---
 
     /// Mueve el pane 0 a `dir` sin pasar por un `cd` (que necesita backend):
@@ -6043,6 +6306,55 @@ mod pane_gestures_tests {
         );
     }
 
+    /// Un paso atrás desde un pane de RESULTADOS sí se da (es la tecla que
+    /// más se parece a «sácame de aquí»), y lo que deja en la rama de delante
+    /// es el directorio REAL desde el que se buscó — no una lista de hits, que
+    /// no es un sitio. El `dir()` de un pane virtual ES ese directorio.
+    #[test]
+    fn atras_desde_un_pane_de_resultados_deja_el_dir_real_en_la_rama() {
+        let mut app = app_en("mem:///b", "mem:///otro");
+        app.set_focus(0);
+        app.history[0].record(vp("mem:///a")); // el lector llegó a B desde A
+        app.panes[0].begin_search(vp("mem:///b")); // Alt+F7 en B
+        assert!(app.panes[0].virtual_search, "pane de resultados");
+
+        assert_eq!(
+            back_target(&mut app),
+            Some(vp("mem:///a")),
+            "el paso sale de la búsqueda hacia donde el lector estaba antes"
+        );
+        poner_en(&mut app, "mem:///a"); // el cd real aterriza (y cosecha el run)
+        assert_eq!(
+            forward_target(&mut app),
+            Some(vp("mem:///b")),
+            "y el adelante devuelve al dir desde el que se buscó, como listado"
+        );
+    }
+
+    /// Lo que hace honesto el test de arriba, pinchado en la costura que
+    /// podría romperlo: la raíz de la búsqueda ES el `dir()` del pane que la
+    /// lanza. Si el diálogo dejara teclear otra raíz, `back_target` empezaría
+    /// a apuntar a un sitio donde el lector no ha estado y tendría que leer
+    /// `SearchRun::prev_dir` en su lugar.
+    #[test]
+    fn la_raiz_de_la_busqueda_es_el_dir_del_pane_que_la_lanza() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = app_en("mem:///raiz", "mem:///otro");
+        app.set_focus(0);
+        let mut dialog = norte_tui::app::SearchDialog::new();
+        dialog.push_char('x'); // sin criterio, Enter no lanza
+        app.search_dialog = Some(dialog);
+
+        let params = super::on_search_dialog_key(&mut app, KeyModifiers::NONE, KeyCode::Enter)
+            .expect("Enter con criterio lanza la búsqueda");
+        assert_eq!(
+            params.root,
+            *app.panes[0].dir(),
+            "la raíz del walk es el dir del pane con foco"
+        );
+    }
+
     /// El rastro es POR PANE: `back_target` sigue al foco, no al pane 0.
     #[test]
     fn el_rastro_es_del_pane_con_foco() {
@@ -6052,6 +6364,59 @@ mod pane_gestures_tests {
         assert_eq!(back_target(&mut app), None, "el pane 1 no tiene rastro");
         app.set_focus(0);
         assert_eq!(back_target(&mut app), Some(vp("mem:///solo-izq")));
+    }
+
+    // --- La POLÍTICA del rastro (`rewind_for`) y su efecto (`rewind_trail`).
+    // Los tests llaman a las MISMAS funciones que llama `walk_trail`: antes
+    // re-implementaban el efecto (`untake_step` + `history.remove` a mano),
+    // así que `walk_trail` podía dejar de rebobinar y seguían verdes.
+
+    /// Un `NotFound` no solo rebobina: RETIRA el destino de todo el
+    /// historial. Es la única de las tres decisiones que toca la MRU.
+    #[test]
+    fn la_politica_ante_un_destino_que_no_existe_es_rebobinar_y_retirar() {
+        assert_eq!(
+            rewind_for(&Cd::Failed(Error::NotFound)),
+            Rewind::StepAndRetire
+        );
+    }
+
+    /// Cualquier OTRO fallo rebobina pero CONSERVA el destino: un host caído
+    /// o un directorio que no puedes leer siguen siendo sitios, y pueden
+    /// responder al siguiente intento.
+    #[test]
+    fn la_politica_ante_otro_fallo_es_rebobinar_conservando_el_destino() {
+        assert_eq!(
+            rewind_for(&Cd::Failed(Error::PermissionDenied)),
+            Rewind::Step
+        );
+    }
+
+    /// Un cd ABANDONADO (Esc durante un listado lento, o el stream de
+    /// eventos muriéndose) rebobina IGUAL que un fallo: nadie lo reanuda y el
+    /// pane no se movió. Sin esto el rastro cree que el lector se fue de un
+    /// directorio que sigue en pantalla.
+    #[test]
+    fn la_politica_ante_un_cd_abandonado_es_rebobinar() {
+        assert_eq!(rewind_for(&Cd::Cancelled), Rewind::Step);
+    }
+
+    /// Y la ÚNICA que no toca el rastro: el TOFU va a reanudar ESTA misma
+    /// navegación (el modal carga el pane y el modo de rastro), así que
+    /// rebobinar contaría dos veces el reintento que sí funcione.
+    #[test]
+    fn la_politica_ante_un_cd_suspendido_es_no_tocar_el_rastro() {
+        assert_eq!(rewind_for(&Cd::Suspended), Rewind::No);
+    }
+
+    /// Un cd que SÍ movió el pane no debe rebobinar nada, ni los desenlaces
+    /// que llegan de otros caminos (refresh, swap) y jamás salen de un paso
+    /// del rastro.
+    #[test]
+    fn un_cd_que_aterriza_no_rebobina() {
+        assert_eq!(rewind_for(&Cd::Replaced(0)), Rewind::No);
+        assert_eq!(rewind_for(&Cd::Refreshed([true, true])), Rewind::No);
+        assert_eq!(rewind_for(&Cd::Swapped), Rewind::No);
     }
 
     /// Un paso atrás que ATERRIZA en un cd fallido no puede dejar el rastro
@@ -6071,7 +6436,8 @@ mod pane_gestures_tests {
             (1, 1)
         );
 
-        untake_step(&mut app, 0, TrailStep::Back, dir.clone());
+        let outcome = Cd::Failed(Error::PermissionDenied);
+        rewind_trail(&mut app, 0, TrailStep::Back, &dir, rewind_for(&outcome));
 
         assert_eq!(
             (app.history[0].back_len(), app.history[0].fwd_len()),
@@ -6099,13 +6465,237 @@ mod pane_gestures_tests {
             (1, 0)
         );
 
-        untake_step(&mut app, 0, TrailStep::Forward, dir.clone());
+        let outcome = Cd::Failed(Error::PermissionDenied);
+        rewind_trail(&mut app, 0, TrailStep::Forward, &dir, rewind_for(&outcome));
 
         assert_eq!(
             (app.history[0].back_len(), app.history[0].fwd_len()),
             (0, 1)
         );
         assert_eq!(forward_target(&mut app), Some(dir));
+    }
+
+    /// El caso de esta revisión: `Esc` durante el listado del paso. El lector
+    /// sigue en C, así que el rastro tiene que quedarse como estaba. Con el
+    /// paso dado por bueno, el «adelante» siguiente cd-ea al directorio que
+    /// ya está en pantalla (una tecla que no hace nada visible) y `back`
+    /// hereda un fantasma que se come el siguiente `nav.back`.
+    #[test]
+    fn un_paso_abandonado_con_esc_no_deja_fantasma_en_el_rastro() {
+        let mut app = app_en("mem:///c", "mem:///otro");
+        app.set_focus(0);
+        app.history[0].record(vp("mem:///a"));
+        app.history[0].record(vp("mem:///b"));
+        let dir = back_target(&mut app).expect("hay rastro");
+
+        // El pane NO se movió: sigue en C (`poner_en` no se llama).
+        rewind_trail(
+            &mut app,
+            0,
+            TrailStep::Back,
+            &dir,
+            rewind_for(&Cd::Cancelled),
+        );
+
+        assert_eq!(
+            (app.history[0].back_len(), app.history[0].fwd_len()),
+            (2, 0),
+            "el rastro queda como estaba: nadie se fue de C"
+        );
+        assert_eq!(
+            back_target(&mut app),
+            Some(vp("mem:///b")),
+            "y el mismo destino sigue ahí para reintentarlo"
+        );
+    }
+
+    /// El TOFU es la excepción: el modal REANUDA esta misma navegación, así
+    /// que el paso ya dado se queda dado — rebobinarlo haría que el reintento
+    /// exitoso contara dos veces.
+    #[test]
+    fn un_paso_suspendido_por_el_tofu_conserva_el_paso() {
+        let mut app = app_en("mem:///c", "mem:///otro");
+        app.set_focus(0);
+        app.history[0].record(vp("mem:///a"));
+        app.history[0].record(vp("mem:///b"));
+        let dir = back_target(&mut app).expect("hay rastro");
+
+        rewind_trail(
+            &mut app,
+            0,
+            TrailStep::Back,
+            &dir,
+            rewind_for(&Cd::Suspended),
+        );
+
+        assert_eq!(
+            (app.history[0].back_len(), app.history[0].fwd_len()),
+            (1, 1),
+            "el paso sigue dado: lo terminará el reintento"
+        );
+    }
+
+    // --- El paso que sobrevive a quien lo empezó: TOFU (`Modal::TrustHostKey`).
+    // `walk_trail` devuelve `Suspended` SIN rebobinar porque el reintento iba
+    // a terminar el paso; estos tres pinchan quién lo termina de verdad, con
+    // la misma pareja `rewind_for`/`rewind_trail` que corre en producción.
+
+    /// El lector anduvo A→B→C→D, dio UN paso atrás (ya completo: está en C,
+    /// con D en la rama de delante) y el SIGUIENTE paso atrás —hacia B— se
+    /// queda suspendido en el modal TOFU. Devuelve la app y el destino del
+    /// paso suspendido.
+    ///
+    /// La rama de delante previa no es decorado: es lo que distingue un
+    /// rebobinado del rastro de dos. Con `fwd` vacío el segundo rebobinado
+    /// sería un no-op y ningún test lo vería; con la rama del lector debajo,
+    /// se la come.
+    fn app_con_paso_suspendido() -> (App, VPath) {
+        let mut app = app_en("mem:///d", "mem:///otro");
+        app.set_focus(0);
+        for dir in ["mem:///a", "mem:///b", "mem:///c"] {
+            app.history[0].record(vp(dir));
+        }
+        // Un `nav.back` anterior YA completado: rastro back=[a,b], fwd=[d].
+        let c = back_target(&mut app).expect("hay rastro");
+        assert_eq!(c, vp("mem:///c"));
+        poner_en(&mut app, "mem:///c");
+        assert_eq!(
+            (app.history[0].back_len(), app.history[0].fwd_len()),
+            (2, 1)
+        );
+
+        // Y AHORA el paso que el TOFU suspende: el pane NO se mueve.
+        let dir = back_target(&mut app).expect("hay rastro");
+        assert_eq!(dir, vp("mem:///b"));
+        // Lo que hace `walk_trail` ante un `Suspended`: NADA, a propósito —
+        // cuenta con que quien responda al modal termine el paso.
+        rewind_trail(
+            &mut app,
+            0,
+            TrailStep::Back,
+            &dir,
+            rewind_for(&Cd::Suspended),
+        );
+        assert_eq!(
+            (app.history[0].back_len(), app.history[0].fwd_len()),
+            (1, 2),
+            "el paso está dado y pendiente de terminar"
+        );
+        (app, dir)
+    }
+
+    /// El reintento ATERRIZA: el pane se movió de verdad, así que no se
+    /// rebobina nada — el paso que `walk_trail` dio es el paso que ocurrió.
+    #[test]
+    fn un_reintento_que_aterriza_deja_el_paso_dado_y_no_lo_registra() {
+        let (mut app, dir) = app_con_paso_suspendido();
+        let antes = (app.history[0].back_len(), app.history[0].fwd_len());
+        let mru_antes: Vec<VPath> = app.history[0].entries().iter().cloned().collect();
+        // El modal TRANSPORTA el rastro de la navegación interrumpida, y el
+        // reintento se lo pasa a `cd_in` tal cual: sigue siendo un `Replay`.
+        let trail = Trail::Replay(TrailStep::Back);
+
+        record_step(&mut app.history[0], &vp("mem:///c"), &dir, trail); // lo que hace el cd_in del reintento
+        settle_suspended_trail(&mut app, 0, &dir, trail, &Cd::Replaced(0));
+
+        assert_eq!(
+            (app.history[0].back_len(), app.history[0].fwd_len()),
+            antes,
+            "el paso ya estaba contado: terminarlo no lo cuenta otra vez"
+        );
+        assert_eq!(
+            app.history[0].entries().iter().cloned().collect::<Vec<_>>(),
+            mru_antes,
+            "y un reintento que aterriza sigue siendo un Replay: no entra en la MRU"
+        );
+    }
+
+    /// El reintento FALLA (o el lector deniega la clave, o confiar falla): la
+    /// navegación muere sin que el pane se moviera nunca. El paso vuelve
+    /// EXACTAMENTE una vez — rebobinarlo dos veces se comería la rama de
+    /// delante que el lector ya tenía.
+    #[test]
+    fn un_reintento_abandonado_rebobina_el_paso_exactamente_una_vez() {
+        let (mut app, dir) = app_con_paso_suspendido();
+        let (back_dado, fwd_dado) = (app.history[0].back_len(), app.history[0].fwd_len());
+
+        settle_suspended_trail(
+            &mut app,
+            0,
+            &dir,
+            Trail::Replay(TrailStep::Back),
+            &Cd::Cancelled,
+        );
+
+        assert_eq!(
+            (app.history[0].back_len(), app.history[0].fwd_len()),
+            (back_dado + 1, fwd_dado - 1),
+            "el paso vuelve UNA vez: uno de más detrás, uno de menos delante \
+             (dos rebobinados darían (3, 0) y se comerían la rama del lector)"
+        );
+        assert_eq!(
+            back_target(&mut app),
+            Some(dir),
+            "y el mismo destino sigue disponible para reintentarlo"
+        );
+        assert_eq!(
+            app.history[0].fwd_len(),
+            2,
+            "con la rama de delante que el lector ya tenía intacta debajo"
+        );
+    }
+
+    /// El reintento se topa con OTRA clave desconocida: vuelve a suspenderse.
+    /// No se rebobina (el modal nuevo carga el mismo rastro y el mismo paso,
+    /// así que sigue habiendo quien lo termine) y tampoco se registra nada —
+    /// sigue siendo un `Replay`.
+    #[test]
+    fn un_reintento_que_vuelve_a_suspenderse_no_rebobina_ni_registra() {
+        let (mut app, dir) = app_con_paso_suspendido();
+        let antes = (app.history[0].back_len(), app.history[0].fwd_len());
+        let mru_antes: Vec<VPath> = app.history[0].entries().iter().cloned().collect();
+
+        settle_suspended_trail(
+            &mut app,
+            0,
+            &dir,
+            Trail::Replay(TrailStep::Back),
+            &Cd::Suspended,
+        );
+        // Y lo que el `cd_in` del reintento hace con el rastro: nada.
+        record_step(
+            &mut app.history[0],
+            &vp("mem:///c"),
+            &dir,
+            Trail::Replay(TrailStep::Back),
+        );
+
+        assert_eq!(
+            (app.history[0].back_len(), app.history[0].fwd_len()),
+            antes,
+            "el paso sigue pendiente de terminar, ni rebobinado ni duplicado"
+        );
+        assert_eq!(
+            app.history[0].entries().iter().cloned().collect::<Vec<_>>(),
+            mru_antes,
+            "y un Replay no entra en la MRU por reintentarse"
+        );
+    }
+
+    /// Un cd NORMAL que se topa con el TOFU no tiene paso que rebobinar: no
+    /// salió del rastro. `Trail::Record` lo dice, y `settle` no toca nada.
+    #[test]
+    fn un_cd_normal_suspendido_no_tiene_paso_que_rebobinar() {
+        let (mut app, dir) = app_con_paso_suspendido();
+        let antes = (app.history[0].back_len(), app.history[0].fwd_len());
+
+        settle_suspended_trail(&mut app, 0, &dir, Trail::Record, &Cd::Cancelled);
+
+        assert_eq!(
+            (app.history[0].back_len(), app.history[0].fwd_len()),
+            antes,
+            "una navegación que no salió del rastro no le debe nada"
+        );
     }
 
     /// Y si el destino resultó NO EXISTIR, además de rebobinar se RETIRA de
@@ -6120,9 +6710,8 @@ mod pane_gestures_tests {
         app.history[0].record(vp("mem:///b"));
         let dir = back_target(&mut app).expect("hay rastro");
 
-        // Lo que hace `walk_trail` ante un `Cd::Failed(NotFound)`.
-        untake_step(&mut app, 0, TrailStep::Back, dir.clone());
-        app.history[0].remove(&dir);
+        let outcome = Cd::Failed(Error::NotFound);
+        rewind_trail(&mut app, 0, TrailStep::Back, &dir, rewind_for(&outcome));
 
         assert_eq!(
             back_target(&mut app),
@@ -6133,6 +6722,60 @@ mod pane_gestures_tests {
             !app.history[0].entries().contains(&dir),
             "y tampoco sigue en la MRU que pinta el popup"
         );
+    }
+}
+
+/// La OTRA decisión que `walk_trail` depende de y nadie pinchaba: qué
+/// navegaciones entran en el rastro. El guard `trail == Trail::Record` es la
+/// única línea que impide que `nav.back` se alimente de su propio rastro.
+#[cfg(test)]
+mod record_step_tests {
+    use super::{Trail, TrailStep, nav, record_step};
+    use norte_proto::VPath;
+
+    fn vp(wire: &str) -> VPath {
+        VPath::parse(wire).expect("wire de test")
+    }
+
+    /// Una navegación del USUARIO deja huella en las dos estructuras: el
+    /// rastro que recorre `nav.back` y la MRU que pinta el popup.
+    #[test]
+    fn una_navegacion_del_usuario_entra_en_el_rastro_y_en_la_mru() {
+        let mut h = nav::History::default();
+        record_step(&mut h, &vp("mem:///a"), &vp("mem:///b"), Trail::Record);
+        assert_eq!(h.back_len(), 1, "un paso en el rastro");
+        assert!(h.entries().contains(&vp("mem:///a")), "y en la MRU");
+    }
+
+    /// EL guard. Un `Replay` es el rastro recorriéndose a sí mismo: si
+    /// registrara, volver de B a A grabaría «estuve en B», el siguiente atrás
+    /// devolvería a B, y el lector oscilaría entre dos directorios para
+    /// siempre. Borra `&& trail == Trail::Record` de `record_step` y este
+    /// test se pone rojo — es su único guardián.
+    #[test]
+    fn un_replay_no_alimenta_el_rastro() {
+        let mut h = nav::History::default();
+        record_step(
+            &mut h,
+            &vp("mem:///b"),
+            &vp("mem:///a"),
+            Trail::Replay(TrailStep::Back),
+        );
+        assert_eq!(h.back_len(), 0, "un paso atrás jamás produce rastro");
+        assert!(
+            h.entries().is_empty(),
+            "ni entra en la MRU: volver no es visitar un sitio nuevo"
+        );
+    }
+
+    /// Un cd al MISMO dir (refresh-like) no es un paso que el lector diera:
+    /// registrarlo haría que el siguiente `nav.back` no hiciera nada visible.
+    #[test]
+    fn un_cd_al_mismo_dir_no_es_un_paso() {
+        let mut h = nav::History::default();
+        record_step(&mut h, &vp("mem:///a"), &vp("mem:///a"), Trail::Record);
+        assert_eq!(h.back_len(), 0);
+        assert!(h.entries().is_empty());
     }
 }
 
@@ -6383,8 +7026,10 @@ async fn first_page(
 
 /// Arranca el drenador del RESTO del listado: envía lotes coalescidos al run
 /// loop, que los aplica con [`Pane::extend_listing`]. Soltar el `rx` (un cd
-/// nuevo) mata el drenador en su próximo envío → suelta el stream (regla 3).
-fn spawn_fill(pane: usize, mut stream: EntryStream) -> Fill {
+/// nuevo DEL MISMO PANE) mata el drenador en su próximo envío → suelta el
+/// stream (regla 3). Sin `pane`: quién lo recibe lo decide el hueco donde el
+/// run loop lo archive (ver [`Fill`]).
+fn spawn_fill(mut stream: EntryStream) -> Fill {
     // Bounded a 1: el drenador no corre por delante del run loop más de un
     // lote (backpressure); el pico de memoria es un lote, no todo el dir.
     let (tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
@@ -6432,7 +7077,7 @@ fn spawn_fill(pane: usize, mut stream: EntryStream) -> Fill {
             }
         }
     });
-    Fill { pane, rx }
+    Fill { rx }
 }
 
 /// cd CANCELABLE (regla 3): el listado corre contra el stream de eventos —
@@ -6443,6 +7088,27 @@ fn spawn_fill(pane: usize, mut stream: EntryStream) -> Fill {
 /// vfs-local). El resto de teclas se descartan mientras dura el cd.
 async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPath) -> Cd {
     cd_in(app, backend, events, app.focus(), dir, Trail::Record).await
+}
+
+/// The ONE place that decides whether a navigation joins the pane's trail.
+///
+/// Two conditions, both load-bearing, both easy to lose in the middle of the
+/// success arm of [`cd_in`] where they used to live:
+///
+/// - `prev != dir`: a cd onto the directory the pane is ALREADY showing (a
+///   refresh-like navigation) is not a step the reader took. Recording it
+///   would make the next `nav.back` do nothing visible. The MRU's consecutive
+///   dedup covers the rest of the redundancies.
+/// - `trail == Trail::Record`: a `Trail::Replay` is the trail walking ITSELF.
+///   Recording there feeds the trail its own steps — going back from B to A
+///   would log "I was at B", so the next `nav.back` returns to B and the
+///   reader oscillates between two directories forever. This is the single
+///   line that stops `nav.back` from doing that, and it is pinned by
+///   `record_step_tests::un_replay_no_alimenta_el_rastro`.
+fn record_step(h: &mut nav::History, prev: &VPath, dir: &VPath, trail: Trail) {
+    if prev != dir && trail == Trail::Record {
+        h.record(prev.clone());
+    }
 }
 
 /// Navega `pane` — que NO tiene por qué ser el enfocado, porque
@@ -6489,17 +7155,13 @@ async fn cd_in(
                         // `PaneState::set_listing` normaliza internamente.
                         let more = stream.is_some();
                         app.panes[pane].begin_listing(dir.clone(), first, more, skipped);
-                        // Un cd al MISMO dir (refresh-like) no ensucia el
-                        // historial; el dedup consecutivo cubre el resto de
-                        // redundancias. Un `Replay` no registra nada: el
-                        // rastro ya sabe dónde estuvo el lector, y grabar
-                        // aquí lo haría oscilar.
-                        if prev != dir && trail == Trail::Record {
-                            app.history[pane].record(prev);
-                        }
+                        record_step(&mut app.history[pane], &prev, &dir, trail);
                         // Si queda stream, un drenador lo rellena en background.
                         return match stream {
-                            Some(s) => Cd::Filling(spawn_fill(pane, s)),
+                            Some(s) => Cd::Filling {
+                                pane,
+                                fill: spawn_fill(s),
+                            },
                             None => Cd::Replaced(pane),
                         };
                     }
@@ -6524,10 +7186,14 @@ async fn cd_in(
                             pane,
                             trail,
                         });
-                        // El pane NO se tocó (solo se abrió el modal): Cancelled
-                        // conserva un relleno en vuelo del listado anterior, que
-                        // sigue siendo válido (MINOR del rust-reviewer).
-                        return Cd::Cancelled;
+                        // El pane NO se tocó (solo se abrió el modal): como
+                        // `Cancelled`, conserva un relleno en vuelo del listado
+                        // anterior, que sigue siendo válido (MINOR del
+                        // rust-reviewer). Pero SUSPENDED y no `Cancelled`: esta
+                        // navegación va a CONTINUAR en el retry del modal, y
+                        // quien recorre el rastro tiene que distinguirla de un
+                        // cd abandonado, que no vuelve.
+                        return Cd::Suspended;
                     }
                     // Un error de listado NO tumba el TUI: el pane se queda,
                     // pero un relleno previo de ESTE pane ya no aplica. El
@@ -6757,7 +7423,7 @@ mod search_fill_tests {
         );
         // Relleno paginado vivo del pane 0 (dir aún cargándose).
         let (_tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
-        let mut fill = Some(Fill { pane: 0, rx });
+        let mut fill = [Some(Fill { rx }), None];
         // Alt+F7 sobre el pane 0: pasa a virtual y se vacía.
         app.panes[0].begin_search(root.clone());
         // Llega un lote del drenador del listado REAL.
@@ -6774,7 +7440,7 @@ mod search_fill_tests {
             app.panes[0].entries().is_empty(),
             "el listado real NO entra en el pane virtual"
         );
-        assert!(fill.is_none(), "el fill obsoleto se suelta");
+        assert!(fill[0].is_none(), "el fill obsoleto se suelta");
         assert!(
             app.panes[0].virtual_search,
             "el pane sigue en modo búsqueda"
@@ -6783,45 +7449,143 @@ mod search_fill_tests {
 }
 
 #[cfg(test)]
+mod mirror_fill_tests {
+    use super::{
+        App, Cd, DecorateFetch, Fill, FillMsg, Pane, Probed, SearchRun, apply_cd, apply_fill_msg,
+    };
+    use norte_proto::{Entry, EntryKind, Segment, VPath};
+
+    fn vp(w: &str) -> VPath {
+        VPath::parse(w).expect("wire de test")
+    }
+
+    fn file(dir: &VPath, name: &str) -> Entry {
+        Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: dir.join(Segment::new(name.as_bytes().to_vec()).unwrap()),
+            kind: EntryKind::File,
+            size: Some(1),
+            mtime_ms: None,
+        }
+    }
+
+    /// Un relleno paginado por PANE, y no uno global: `pane.mirror` manda el
+    /// OTRO pane a un sitio SIN mover el foco, así que con un solo hueco basta
+    /// una tecla para que el pane que el lector está mirando —el suyo, el
+    /// enfocado, aún paginando un dir grande— se quede a medias.
+    ///
+    /// Soltar su `rx` mata al drenador sin `finish_listing`, y `loading` solo
+    /// lo apaga `finish_listing`/`Failed`/un listado nuevo: el pane queda con
+    /// el listado truncado bajo un «cargando…» permanente.
+    #[test]
+    fn un_espejo_al_otro_pane_no_estrangula_el_relleno_del_pane_mirado() {
+        let dir = vp("file:///d");
+        let mut app = App::new(
+            Pane::new(dir.clone(), Vec::new()),
+            Pane::new(dir.clone(), Vec::new()),
+        );
+        // El pane 0 —el enfocado, el que el lector mira— está paginando.
+        app.panes[0].begin_listing(dir.clone(), vec![file(&dir, "a")], true, None);
+        let (tx0, rx0) = tokio::sync::mpsc::channel::<FillMsg>(1);
+        let mut fill = [Some(Fill { rx: rx0 }), None];
+        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        let mut lp = Probed::new();
+
+        // `pane.mirror`: el pane 1 viaja, y su listado también viene paginado.
+        let (_tx1, rx1) = tokio::sync::mpsc::channel::<FillMsg>(1);
+        app.panes[1].begin_listing(dir.clone(), Vec::new(), true, None);
+        let mut sr: Option<SearchRun> = None;
+        apply_cd(
+            &mut fill,
+            &mut df,
+            &mut lp,
+            &mut sr,
+            Cd::Filling {
+                pane: 1,
+                fill: Fill { rx: rx1 },
+            },
+        );
+
+        // El drenador del pane 0 sigue teniendo a quién enviar: nadie le
+        // soltó el `rx` por debajo.
+        tx0.try_send(FillMsg::Batch(vec![file(&dir, "b")]))
+            .expect("el drenador del pane 0 no fue abandonado");
+        let msg = fill[0]
+            .as_mut()
+            .expect("el relleno del pane 0 sigue en su hueco")
+            .rx
+            .try_recv()
+            .ok();
+        apply_fill_msg(&mut app, &mut fill, 0, msg);
+
+        assert_eq!(
+            app.panes[0].entries().len(),
+            2,
+            "el lote posterior entra en el listado del pane 0"
+        );
+        assert!(
+            app.panes[0].loading(),
+            "y el «cargando…» sigue vivo: nadie terminó el listado por él"
+        );
+        assert!(fill[1].is_some(), "el espejo se quedó con SU hueco");
+    }
+}
+
+#[cfg(test)]
 mod apply_cd_tests {
-    use super::{Cd, DecorateFetch, Fill, FillMsg, Probed, apply_cd};
+    use super::{Cd, DecorateFetch, Fill, FillMsg, Probed, SearchRun, apply_cd};
     use norte_proto::Error;
 
-    fn fill(pane: usize) -> Fill {
+    fn fill() -> Fill {
         let (_tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
-        Fill { pane, rx }
+        Fill { rx }
+    }
+
+    /// El hueco del pane 0 ocupado y el del 1 libre: la disposición de
+    /// partida de casi todos estos casos.
+    fn en_el_pane_0() -> [Option<Fill>; 2] {
+        [Some(fill()), None]
     }
 
     /// Un REEMPLAZO del mismo pane suelta su relleno obsoleto.
     #[test]
     fn replaced_suelta_el_fill_del_pane() {
-        let mut f = Some(fill(0));
+        let mut f = en_el_pane_0();
         let mut lp = Probed::new();
         let mut df: [Option<DecorateFetch>; 2] = [None, None];
-        apply_cd(&mut f, &mut df, &mut lp, Cd::Replaced(0));
-        assert!(f.is_none(), "el fill del listado viejo se suelta");
+        let mut sr: Option<SearchRun> = None;
+        apply_cd(&mut f, &mut df, &mut lp, &mut sr, Cd::Replaced(0));
+        assert!(f[0].is_none(), "el fill del listado viejo se suelta");
     }
 
     /// Un reemplazo de OTRO pane no toca el relleno vivo.
     #[test]
     fn replaced_de_otro_pane_no_toca() {
-        let mut f = Some(fill(0));
+        let mut f = en_el_pane_0();
         let mut lp = Probed::new();
         let mut df: [Option<DecorateFetch>; 2] = [None, None];
-        apply_cd(&mut f, &mut df, &mut lp, Cd::Replaced(1));
-        assert!(f.is_some(), "el fill del pane 0 sobrevive");
+        let mut sr: Option<SearchRun> = None;
+        apply_cd(&mut f, &mut df, &mut lp, &mut sr, Cd::Replaced(1));
+        assert!(f[0].is_some(), "el fill del pane 0 sobrevive");
     }
 
     /// #78: un cd FALLIDO NO suelta el relleno — el pane sigue en su listado
     /// anterior, que se sigue rellenando (soltarlo lo colgaba en loading).
     #[test]
     fn failed_conserva_el_fill() {
-        let mut f = Some(fill(0));
+        let mut f = en_el_pane_0();
         let mut lp = Probed::new();
         let mut df: [Option<DecorateFetch>; 2] = [None, None];
-        apply_cd(&mut f, &mut df, &mut lp, Cd::Failed(Error::NotFound));
+        let mut sr: Option<SearchRun> = None;
+        apply_cd(
+            &mut f,
+            &mut df,
+            &mut lp,
+            &mut sr,
+            Cd::Failed(Error::NotFound),
+        );
         assert!(
-            f.is_some(),
+            f[0].is_some(),
             "el fill del listado anterior sigue vivo tras un cd fallido"
         );
     }
@@ -6829,11 +7593,36 @@ mod apply_cd_tests {
     /// Un cd abandonado no toca nada.
     #[test]
     fn cancelled_conserva_el_fill() {
-        let mut f = Some(fill(0));
+        let mut f = en_el_pane_0();
         let mut lp = Probed::new();
         let mut df: [Option<DecorateFetch>; 2] = [None, None];
-        apply_cd(&mut f, &mut df, &mut lp, Cd::Cancelled);
-        assert!(f.is_some());
+        let mut sr: Option<SearchRun> = None;
+        apply_cd(&mut f, &mut df, &mut lp, &mut sr, Cd::Cancelled);
+        assert!(f[0].is_some());
+    }
+
+    /// Un listado nuevo ocupa el hueco DE SU PANE y solo ese: el relleno del
+    /// otro pane sigue drenando. Es lo que hace que `pane.mirror` —que manda
+    /// el OTRO pane a un sitio sin mover el foco— no pueda dejar a medias el
+    /// pane que el lector está mirando.
+    #[test]
+    fn filling_de_un_pane_no_toca_el_hueco_del_otro() {
+        let mut f = en_el_pane_0();
+        let mut lp = Probed::new();
+        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        let mut sr: Option<SearchRun> = None;
+        apply_cd(
+            &mut f,
+            &mut df,
+            &mut lp,
+            &mut sr,
+            Cd::Filling {
+                pane: 1,
+                fill: fill(),
+            },
+        );
+        assert!(f[0].is_some(), "el relleno del pane 0 sigue en su hueco");
+        assert!(f[1].is_some(), "y el nuevo ocupa el suyo");
     }
 
     /// #118: Ctrl+R re-listó el pane 0 (listado COMPLETO nuevo) — su
@@ -6841,11 +7630,18 @@ mod apply_cd_tests {
     /// sonda #52 también caduca: el listado nuevo re-lazifica las entries.
     #[test]
     fn refreshed_suelta_el_fill_del_pane_relistado() {
-        let mut f = Some(fill(0));
+        let mut f = en_el_pane_0();
         let mut lp = Probed::from([(0, norte_proto::VPath::parse("file:///d/x").unwrap())]);
         let mut df: [Option<DecorateFetch>; 2] = [None, None];
-        apply_cd(&mut f, &mut df, &mut lp, Cd::Refreshed([true, false]));
-        assert!(f.is_none(), "el drenador del listado viejo se suelta");
+        let mut sr: Option<SearchRun> = None;
+        apply_cd(
+            &mut f,
+            &mut df,
+            &mut lp,
+            &mut sr,
+            Cd::Refreshed([true, false]),
+        );
+        assert!(f[0].is_none(), "el drenador del listado viejo se suelta");
         assert!(lp.is_empty(), "la dedup de la sonda #52 caduca");
     }
 
@@ -6853,25 +7649,56 @@ mod apply_cd_tests {
     /// paginado sigue siendo válido (#78: soltarlo lo colgaba en loading).
     #[test]
     fn refreshed_a_medias_conserva_el_fill_del_pane_no_relistado() {
-        let mut f = Some(fill(1));
+        let mut f = [None, Some(fill())];
         let mut lp = Probed::new();
         let mut df: [Option<DecorateFetch>; 2] = [None, None];
-        apply_cd(&mut f, &mut df, &mut lp, Cd::Refreshed([true, false]));
+        let mut sr: Option<SearchRun> = None;
+        apply_cd(
+            &mut f,
+            &mut df,
+            &mut lp,
+            &mut sr,
+            Cd::Refreshed([true, false]),
+        );
         assert!(
-            f.is_some(),
+            f[1].is_some(),
             "el fill del pane NO re-listado sobrevive al Esc a medias"
         );
+    }
+
+    /// Y el simétrico: un refresh de los DOS panes suelta los dos huecos.
+    #[test]
+    fn refreshed_de_ambos_panes_suelta_los_dos_huecos() {
+        let mut f = [Some(fill()), Some(fill())];
+        let mut lp = Probed::new();
+        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        let mut sr: Option<SearchRun> = None;
+        apply_cd(
+            &mut f,
+            &mut df,
+            &mut lp,
+            &mut sr,
+            Cd::Refreshed([true, true]),
+        );
+        assert!(f[0].is_none() && f[1].is_none());
     }
 
     /// #118: refresh totalmente abandonado (Esc antes del primer pane) o
     /// ambos panes en modo virtual: nada cambió, nada se toca.
     #[test]
     fn refreshed_vacio_no_toca_nada() {
-        let mut f = Some(fill(0));
+        let mut f = en_el_pane_0();
         let mut lp = Probed::from([(0, norte_proto::VPath::parse("file:///d/x").unwrap())]);
         let mut df: [Option<DecorateFetch>; 2] = [None, None];
-        apply_cd(&mut f, &mut df, &mut lp, Cd::Refreshed([false, false]));
-        assert!(f.is_some(), "sin pane re-listado, el fill sigue");
+        let mut sr: Option<SearchRun> = None;
+        apply_cd(
+            &mut f,
+            &mut df,
+            &mut lp,
+            &mut sr,
+            Cd::Refreshed([false, false]),
+        );
+        assert!(f[0].is_some(), "sin pane re-listado, el fill sigue");
         assert!(!lp.is_empty(), "sin pane re-listado, la dedup sigue");
     }
 }
@@ -6879,8 +7706,8 @@ mod apply_cd_tests {
 #[cfg(test)]
 mod swap_tests {
     use super::{
-        App, Cd, DecorateFetch, Fill, FillMsg, Pane, Probed, apply_cd, reconcile_swap,
-        watch_targets,
+        App, Cd, DecorateFetch, Fill, FillMsg, Pane, Probed, SearchHits, SearchRun, SearchState,
+        TaskRef, apply_cd, reap_search_run, reconcile_swap, watch_targets,
     };
     use norte_proto::VPath;
 
@@ -6888,9 +7715,30 @@ mod swap_tests {
         VPath::parse(wire).expect("wire de test")
     }
 
-    fn fill(pane: usize) -> Fill {
-        let (_tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
-        Fill { pane, rx }
+    /// Una búsqueda viva CORRIENDO sobre `pane`. La Task es sintética (el
+    /// `TaskRef` de test del core): aquí no se ejerce el walker, sino el
+    /// índice de pane que el run loop guarda a su lado.
+    fn search_run(pane: usize) -> SearchRun {
+        let (_tx, rx) = tokio::sync::mpsc::channel::<SearchHits>(1);
+        let id = norte_proto::TaskId::new(1);
+        let (_progreso, prx) = tokio::sync::watch::channel(norte_proto::TaskProgress {
+            task_id: id,
+            kind: norte_proto::TaskKind::Search,
+            state: norte_proto::TaskState::Running,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: None,
+            current: None,
+        });
+        SearchRun {
+            task: TaskRef::synthetic_for_tests(id, prx),
+            rx,
+            pane,
+            prev_dir: vp("file:///antes"),
+            hits: 0,
+            state: SearchState::Running,
+        }
     }
 
     fn decorate(pane: usize) -> DecorateFetch {
@@ -6902,19 +7750,34 @@ mod swap_tests {
         }
     }
 
-    /// El relleno EN VUELO lleva su índice de pane: si el intercambio no lo
-    /// voltea, los lotes del listado siguen llegando al pane de al lado y el
-    /// lector ve crecer la lista equivocada. Es el bug que una suite verde no
-    /// ve, porque el listado sigue llegando: solo llega al sitio que no es.
+    /// El relleno EN VUELO está archivado POR PANE: si el intercambio no cruza
+    /// los huecos, los lotes del listado siguen llegando al pane de al lado y
+    /// el lector ve crecer la lista equivocada. Es el bug que una suite verde
+    /// no ve, porque el listado sigue llegando: solo llega al sitio que no es.
+    ///
+    /// Comprueba que se movió ESE drenador y no un hueco cualquiera: el lote
+    /// enviado por el `tx` del pane 0 se recoge del hueco del pane 1.
     #[test]
-    fn el_intercambio_voltea_el_indice_del_relleno_en_vuelo() {
-        let mut f = Some(fill(0));
+    fn el_intercambio_cruza_los_huecos_del_relleno_en_vuelo() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
+        let mut f = [Some(Fill { rx }), None];
         let mut df: [Option<DecorateFetch>; 2] = [Some(decorate(0)), None];
         let mut lp = Probed::from([(0, vp("mem:///d/x"))]);
+        let mut sr: Option<SearchRun> = None;
 
-        reconcile_swap(&mut f, &mut df, &mut lp);
+        reconcile_swap(&mut f, &mut df, &mut lp, &mut sr);
 
-        assert_eq!(f.as_ref().expect("sigue vivo").pane, 1, "índice volteado");
+        assert!(f[0].is_none(), "el hueco del pane 0 queda libre");
+        tx.try_send(FillMsg::Failed)
+            .expect("el drenador sigue vivo");
+        assert!(
+            f[1].as_mut()
+                .expect("cruzado al hueco del pane 1")
+                .rx
+                .try_recv()
+                .is_ok(),
+            "y es EL MISMO drenador el que ahora alimenta al pane 1"
+        );
         assert!(df[1].is_some() && df[0].is_none(), "cruzados");
         assert!(lp.is_empty(), "la caché de stat se tira, no se traduce");
     }
@@ -6923,11 +7786,12 @@ mod swap_tests {
     /// puede inventar un relleno ni un fetch donde no los había.
     #[test]
     fn el_intercambio_sin_nada_en_vuelo_no_inventa_nada() {
-        let mut f: Option<Fill> = None;
+        let mut f: [Option<Fill>; 2] = [None, None];
         let mut df: [Option<DecorateFetch>; 2] = [None, None];
         let mut lp = Probed::new();
-        reconcile_swap(&mut f, &mut df, &mut lp);
-        assert!(f.is_none());
+        let mut sr: Option<SearchRun> = None;
+        reconcile_swap(&mut f, &mut df, &mut lp, &mut sr);
+        assert!(f[0].is_none() && f[1].is_none());
         assert!(df[0].is_none() && df[1].is_none());
     }
 
@@ -6937,13 +7801,75 @@ mod swap_tests {
     /// que no es sin que ningún test de `App` se enterase.
     #[test]
     fn apply_cd_swapped_reconcilia_el_estado_del_run_loop() {
-        let mut f = Some(fill(1));
+        let (_tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
+        let mut f = [None, Some(Fill { rx })];
         let mut df: [Option<DecorateFetch>; 2] = [None, Some(decorate(1))];
         let mut lp = Probed::from([(1, vp("mem:///d/x"))]);
-        apply_cd(&mut f, &mut df, &mut lp, Cd::Swapped);
-        assert_eq!(f.as_ref().expect("sigue vivo").pane, 0);
+        let mut sr: Option<SearchRun> = None;
+        apply_cd(&mut f, &mut df, &mut lp, &mut sr, Cd::Swapped);
+        assert!(f[0].is_some() && f[1].is_none());
         assert!(df[0].is_some() && df[1].is_none());
         assert!(lp.is_empty());
+    }
+
+    /// La búsqueda VIVA también está indexada por pane: `SearchRun` guarda el
+    /// pane virtual que muestra los hits, exactamente como el relleno guarda
+    /// el suyo. Si el intercambio no lo voltea, los hits siguen entrando en el
+    /// pane de al lado.
+    #[test]
+    fn el_intercambio_voltea_el_pane_de_la_busqueda_viva() {
+        let mut f: [Option<Fill>; 2] = [None, None];
+        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        let mut lp = Probed::new();
+        let mut sr = Some(search_run(0));
+
+        reconcile_swap(&mut f, &mut df, &mut lp, &mut sr);
+
+        assert_eq!(
+            sr.as_ref().expect("el run sigue vivo").pane,
+            1,
+            "el pane virtual de la búsqueda cambió de lado con su pane"
+        );
+    }
+
+    /// Y el intercambio no puede COSECHAR la búsqueda por el camino.
+    ///
+    /// El `Esc`/`Enter` del pane virtual son las ÚNICAS teclas que ese modo
+    /// intercepta, así que un `Ctrl+U` cae al resolutor y cruza los panes con
+    /// una búsqueda corriendo. Justo después, el mismo call site pasa por
+    /// [`reap_search_run`], que suelta el run cuando su pane ya no es virtual:
+    /// con el `pane` sin voltear mira el pane 0 —que ahora tiene el listado
+    /// ordinario que vino del otro lado— y CANCELA la Task en silencio,
+    /// dejando el pane 1 con hits a medias en `Running` para siempre y sin su
+    /// manejador de `Esc` (que exige un run vivo PARA ESE pane).
+    ///
+    /// Por eso el volteo tiene que ocurrir DENTRO de `reconcile_swap`: pasada
+    /// la cosecha ya no hay nada que salvar.
+    #[test]
+    fn un_intercambio_no_cosecha_la_busqueda_viva() {
+        let mut app = App::new(
+            Pane::new(vp("file:///izq"), Vec::new()),
+            Pane::new(vp("file:///der"), Vec::new()),
+        );
+        // Búsqueda viva en el pane 0 (el `Alt+F7` lo dejó virtual).
+        app.panes[0].begin_search(vp("file:///izq"));
+        let mut sr = Some(search_run(0));
+        let mut f: [Option<Fill>; 2] = [None, None];
+        let mut df: [Option<DecorateFetch>; 2] = [None, None];
+        let mut lp = Probed::new();
+
+        // `Ctrl+U`: `dispatch` cruza los panes y el run loop reconcilia…
+        app.swap_panes();
+        apply_cd(&mut f, &mut df, &mut lp, &mut sr, Cd::Swapped);
+        // …y el MISMO call site cosecha a continuación.
+        reap_search_run(&app, &mut sr);
+
+        let s = sr.as_ref().expect("la búsqueda en curso NO se cancela");
+        assert_eq!(s.pane, 1, "sigue los hits a su nuevo lado");
+        assert!(
+            app.panes[s.pane].virtual_search,
+            "y ese lado es el que está en modo búsqueda"
+        );
     }
 
     /// El watcher NO necesita reconciliado propio, y esto es lo que hace
@@ -6975,9 +7901,9 @@ mod refresh_ritual_tests {
     use super::{App, Fill, FillMsg, Pane, Probed, SearchRun, after_panes_refresh};
     use norte_proto::VPath;
 
-    fn fill(pane: usize) -> Fill {
+    fn fill() -> Fill {
         let (_tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
-        Fill { pane, rx }
+        Fill { rx }
     }
 
     fn app() -> App {
@@ -6992,12 +7918,12 @@ mod refresh_ritual_tests {
     #[test]
     fn esc_a_medias_conserva_el_fill_del_pane_no_refrescado() {
         let app = app();
-        let mut f = Some(fill(1));
+        let mut f = [None, Some(fill())];
         let mut lp = Probed::from([(1, VPath::parse("file:///d/x").unwrap())]);
         let mut sr: Option<SearchRun> = None;
         after_panes_refresh(&app, [true, false], &mut f, &mut lp, &mut sr);
         assert!(
-            f.is_some(),
+            f[1].is_some(),
             "el fill del pane 1 (no re-listado) sobrevive al Esc a medias"
         );
         assert!(lp.is_empty(), "la dedup de la sonda #52 caduca igualmente");

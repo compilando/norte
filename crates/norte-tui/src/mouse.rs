@@ -119,8 +119,8 @@ pub struct Hit {
 }
 
 /// Todo lo que tiene que seguir siendo verdad para que un gesto en vuelo
-/// signifique algo: los índices de cada pane y que nadie se haya puesto
-/// delante.
+/// signifique algo: los índices de cada pane, que los dos panes sigan del
+/// lado en que estaban, y que nadie se haya puesto delante.
 ///
 /// Un gesto solo lleva índices ([`Spot`]), y un índice nombra una fila del
 /// listado que se pintó. Cuando ese listado se mueve —otro directorio, un
@@ -131,6 +131,13 @@ pub struct Hit {
 struct Vigencia {
     /// [`crate::app::Pane::listing_epoch`] de cada pane.
     epochs: [u64; 2],
+    /// [`crate::app::App::swap_seq`]. Las épocas NO cubren un `pane.swap`:
+    /// viajan con su pane, así que el intercambio se limita a cruzar los dos
+    /// valores y, cuando empatan —lo normal recién arrancado—, la
+    /// comparación por lado no ve nada moverse. El gesto, en cambio, guarda
+    /// un índice de pane, y tras el cruce ese índice nombra el contenido del
+    /// otro lado.
+    swap: u64,
     /// Había un overlay/modal delante al pintar. Un modal que se abre a
     /// mitad de un arrastre se lleva el gesto por delante: cuando se cierre,
     /// el usuario ya está a otra cosa.
@@ -201,6 +208,7 @@ impl MouseState {
 pub fn after_frame(app: &mut App, geometry: Option<[PaneGeometry; 2]>) {
     let vigencia = Vigencia {
         epochs: [app.panes[0].listing_epoch(), app.panes[1].listing_epoch()],
+        swap: app.swap_seq(),
         overlay: overlay_open(app),
     };
     // Sin panes pintados (visor abierto) tampoco hay dónde soltar.
