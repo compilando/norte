@@ -212,6 +212,18 @@ pub enum Issue {
         /// Locale the declaration is in.
         lang: Lang,
     },
+    /// A context the frontend knows how to open, that NO topic claims: `F1`
+    /// there would open nothing.
+    ///
+    /// The mirror of [`Issue::UnknownContext`], and the half phase H3a left
+    /// owed. One of them catches a topic pointing at a place that does not
+    /// exist; this one catches a place with nothing to say.
+    ContextWithoutTopic {
+        /// The context id, from the frontend's vocabulary.
+        context: String,
+        /// Locale whose corpus was searched.
+        lang: Lang,
+    },
     /// Two topics claim the same context. F1 there can only open one of them,
     /// and which one would depend on corpus order.
     DuplicateContext {
@@ -317,6 +329,9 @@ impl fmt::Display for Issue {
                 f,
                 "[{lang:?}] `{topic}` claims the context `{context}`, which the UI does not have"
             ),
+            Self::ContextWithoutTopic { context, lang } => {
+                write!(f, "[{lang:?}] no topic explains the context `{context}`")
+            }
             Self::DuplicateContext {
                 context,
                 first,
@@ -729,18 +744,25 @@ pub fn check_commands(known: &[&str], allow: &[&str]) -> Vec<Issue> {
 /// Crosses the `context` declarations of a set of topics with the contexts a
 /// frontend has. The logic behind [`check_contexts`].
 ///
-/// Two failures, and they are different failures. An UNKNOWN context is a
+/// Three failures, and they are different failures. An UNKNOWN context is a
 /// topic F1 will never reach. A DUPLICATE one is a topic F1 reaches only by
 /// accident of corpus order, which is worse: it works, until someone reorders
-/// the table.
+/// the table. A context with NO topic is the mirror of the first — a place the
+/// frontend can open the help from, where [`crate::topic_for_context`] answers
+/// `None` and F1 opens nothing at all.
 ///
-/// There is a THIRD, and it is not checked here yet: a known context that NO
-/// topic claims, where F1 opens nothing at all. The spec asks for exactly one
-/// topic per context, and today only `browse` has one — the viewer and the
-/// dialogs have none, and this function is silent about it. Adding it needs a
-/// variant on [`Issue`] (and therefore a line in its `Display`), which is
-/// phase H3c's job, when F1 actually performs the lookup; `norte-tui`'s
-/// `tests/help_gate.rs` carries the same note at the call site.
+/// That third direction is the whole reason the spec's "exactly one topic per
+/// context" is a checkable claim rather than a wish, and it is the half phase
+/// H3a left owed: without it a new modal ships with no page and the only
+/// symptom is a reader pressing F1 and landing on the index. It fires per
+/// context and not per topic, because the repair is one page to write, not one
+/// front matter to fix.
+///
+/// A frontend with contexts whose pages are not written yet keeps them on a
+/// SHRINKING allowlist at the call site, the way `norte-tui`'s
+/// `tests/help_gate.rs` already does for undocumented commands. This function
+/// takes no allowlist of its own: the debt belongs to whoever owns the
+/// vocabulary.
 ///
 /// ```
 /// use norte_help::{Issue, Lang, Origin, Topic, TopicId, check_contexts_in};
@@ -755,13 +777,21 @@ pub fn check_commands(known: &[&str], allow: &[&str]) -> Vec<Issue> {
 ///     blocks: Vec::new(),
 ///     origin: Origin::BuiltIn,
 /// };
+/// // Both directions of the same mismatch, from one call: the page points at a
+/// // place the app does not have, and the place the app does have has no page.
 /// assert_eq!(
 ///     check_contexts_in(Lang::En, &[t], &["browse"]),
-///     vec![Issue::UnknownContext {
-///         topic: "panes".to_owned(),
-///         context: "nowhere".to_owned(),
-///         lang: Lang::En,
-///     }]
+///     vec![
+///         Issue::UnknownContext {
+///             topic: "panes".to_owned(),
+///             context: "nowhere".to_owned(),
+///             lang: Lang::En,
+///         },
+///         Issue::ContextWithoutTopic {
+///             context: "browse".to_owned(),
+///             lang: Lang::En,
+///         },
+///     ]
 /// );
 /// ```
 #[must_use]
@@ -792,6 +822,22 @@ pub fn check_contexts_in(lang: Lang, topics: &[Topic], known: &[&str]) -> Vec<Is
             }
         }
     }
+    // The other direction: every context the caller says it can open must have
+    // a page. `claimed` already holds who claimed what, so this is a set
+    // difference rather than a second sweep of the corpus.
+    //
+    // In the caller's order, not sorted, for the reason [`check_commands_in`]
+    // reports undocumented commands in the caller's order: `known` is a
+    // vocabulary a human wrote, and its order is the order the missing pages
+    // should be written in.
+    for context in known {
+        if !claimed.iter().any(|(c, _)| c == context) {
+            issues.push(Issue::ContextWithoutTopic {
+                context: (*context).to_owned(),
+                lang,
+            });
+        }
+    }
     issues
 }
 
@@ -799,11 +845,22 @@ pub fn check_contexts_in(lang: Lang, topics: &[Topic], known: &[&str]) -> Vec<Is
 /// (`Lang::En`; see [`check_commands`] for why one pass is enough).
 ///
 /// ```
-/// use norte_help::check_contexts;
+/// use norte_help::{Issue, Lang, check_contexts};
 ///
-/// // The frontend's `Screen`, spelled out: this crate does not depend on a
-/// // frontend, so the caller supplies the vocabulary.
-/// assert_eq!(check_contexts(&["browse", "viewer", "dialog"]), Vec::new());
+/// // The frontend's contexts, spelled out: this crate does not depend on a
+/// // frontend, so the caller supplies the vocabulary. Today `browse` is the
+/// // only one the shipped corpus claims…
+/// assert_eq!(check_contexts(&["browse"]), Vec::new());
+/// // …so a vocabulary with more places in it reports the pages nobody has
+/// // written yet, one per place, and the frontend's gate is where they sit on
+/// // a shrinking allowlist until someone writes them.
+/// assert_eq!(
+///     check_contexts(&["browse", "viewer"]),
+///     vec![Issue::ContextWithoutTopic {
+///         context: "viewer".to_owned(),
+///         lang: Lang::En,
+///     }]
+/// );
 /// ```
 ///
 /// # Panics
@@ -1226,11 +1283,14 @@ mod tests {
             &["pane.copy"],
             &["pane.rename"],
         ));
-        issues.extend(check_contexts_in(Lang::En, &[t], &["browse"]));
+        // `viewer` is in the vocabulary and no topic claims it: the tenth
+        // variant, and the only one that needs the KNOWN list to say more than
+        // the corpus does.
+        issues.extend(check_contexts_in(Lang::En, &[t], &["browse", "viewer"]));
 
-        // One of each of the nine variants, and nothing rendered empty or
+        // One of each of the ten variants, and nothing rendered empty or
         // without its payload.
-        assert_eq!(issues.len(), 9, "{issues:?}");
+        assert_eq!(issues.len(), 10, "{issues:?}");
         for issue in &issues {
             let line = issue.to_string();
             assert!(
@@ -1249,14 +1309,36 @@ mod tests {
     #[test]
     fn an_unknown_context_names_the_topic_that_declares_it() {
         let mut t = topic("panes");
-        t.context = vec!["dialog.collision".to_owned()];
+        // Also claims the one real context of this vocabulary, so the mirror
+        // direction stays quiet and the assertion below is about ONE thing.
+        t.context = vec!["browse".to_owned(), "dialog.collision".to_owned()];
         assert_eq!(
-            check_contexts_in(Lang::En, &[t], &["browse", "viewer", "dialog"]),
+            check_contexts_in(Lang::En, &[t], &["browse"]),
             vec![Issue::UnknownContext {
                 topic: "panes".to_owned(),
                 context: "dialog.collision".to_owned(),
                 lang: Lang::En,
             }]
+        );
+    }
+
+    #[test]
+    fn un_contexto_conocido_sin_tema_es_un_hallazgo() {
+        // La mitad que faltaba (deuda registrada en H3a): `check_contexts`
+        // cazaba contextos inventados y duplicados, pero NO que un contexto
+        // que la app sabe abrir se quedara sin página. F1 ahí no abriría
+        // nada y ninguna puerta lo decía.
+        let issues = check_contexts_in(
+            Lang::En,
+            crate::corpus::topics(Lang::En),
+            &["browse", "un-contexto-huerfano"],
+        );
+        assert!(
+            issues.iter().any(|i| matches!(
+                i,
+                Issue::ContextWithoutTopic { context, .. } if context == "un-contexto-huerfano"
+            )),
+            "{issues:?}"
         );
     }
 
@@ -1375,6 +1457,9 @@ mod tests {
                 context,
                 lang,
             },
+            Issue::ContextWithoutTopic { context, .. } => {
+                Issue::ContextWithoutTopic { context, lang }
+            }
             Issue::DuplicateContext {
                 context,
                 first,

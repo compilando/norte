@@ -384,6 +384,35 @@ impl HelpState {
         }
     }
 
+    /// Shows `id` as the ROOT of the reader's trail: the body changes and the
+    /// history is left EMPTY, so [`back`](Self::back) answers `false`.
+    ///
+    /// The verb for a page the reader did not navigate to but was PUT on —
+    /// contextual help (`F1` over a dialog opens the page about that dialog).
+    /// [`open`](Self::open) would be wrong there twice over: the reader never
+    /// visited the index, so "back to the index" is a place they never were,
+    /// and the frontends make `back` at the root mean CLOSE. One press of
+    /// `Esc` has to leave a page nobody asked to be on.
+    ///
+    /// An unknown id changes nothing (as in `open`), but the history is
+    /// cleared either way: the caller is stating where the trail STARTS, and
+    /// that is true whether or not this locale's corpus has the page.
+    ///
+    /// ```
+    /// use norte_frontend::help::HelpState;
+    /// use norte_help::{Lang, TopicId};
+    ///
+    /// let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
+    /// help.open(&TopicId::new("copying"));
+    /// help.open_as_root(&TopicId::new("archives"));
+    /// assert_eq!(help.current().as_str(), "archives");
+    /// assert!(!help.back(), "nothing to walk back to");
+    /// ```
+    pub fn open_as_root(&mut self, id: &TopicId) {
+        self.show(id);
+        self.history.clear();
+    }
+
     /// Goes back to the previously open topic. `false` when there is no
     /// history left, so the caller can decide what `Esc`/`Backspace` means
     /// then (the TUI closes the overlay).
@@ -878,6 +907,30 @@ mod tests {
             "no history left, and the caller must be able to tell"
         );
         assert_eq!(s.current().as_str(), "index");
+    }
+
+    /// H3c: the CONTEXTUAL open is not navigation the reader did, so it must
+    /// not leave a step behind. `Esc` on a page `F1` chose for them has to
+    /// close the overlay, never walk back to an index they never asked for.
+    #[test]
+    fn opening_as_root_leaves_nothing_for_back_to_walk() {
+        // Con historial ya apilado (`following_a_link_pushes_history_and_back_
+        // pops_it` pina esa mitad): llegar como raíz lo BORRA, así que el
+        // `back()` que habría vuelto a `copying` ahora no tiene nada.
+        let mut s = state();
+        s.open(&TopicId::new("copying"));
+        s.open_as_root(&TopicId::new("archives"));
+        assert_eq!(s.current().as_str(), "archives", "el cuerpo sí cambia");
+        assert!(
+            !s.back(),
+            "llegar como raíz significa que «atrás» solo puede ser salir"
+        );
+
+        // Y la raíz que coincide con lo ya abierto tampoco apila: `show`
+        // ignora el id actual, y el clear no depende de que haya cambiado.
+        let mut s = state();
+        s.open_as_root(&TopicId::new("index"));
+        assert!(!s.back());
     }
 
     #[test]

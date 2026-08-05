@@ -151,6 +151,42 @@ pub fn topic(lang: Lang, id: &str) -> Option<&'static Topic> {
     topics(lang).iter().find(|t| t.id.as_str() == id)
 }
 
+/// The topic that explains `context`, if any topic claims it.
+///
+/// The mapping lives in the corpus — a topic's `context` front matter — and
+/// not in the frontend, so moving the explanation of a screen from one page to
+/// another is an edit to prose rather than a code change. The frontend owns
+/// only the vocabulary of context IDS (which places the app has), which is the
+/// half it is the authority on: this crate does not know what a modal is.
+///
+/// `None` is a normal answer: a context whose page has not been written yet.
+/// [`crate::check_contexts`] is what refuses to let that state ship unnoticed,
+/// through [`crate::Issue::ContextWithoutTopic`].
+///
+/// First claimant in corpus order wins, and that is not a tie-break worth
+/// relying on: two topics claiming one context is itself a finding
+/// ([`crate::Issue::DuplicateContext`]), because otherwise which page F1 opens
+/// would depend on the order of a table.
+///
+/// ```
+/// use norte_help::{Lang, topic_for_context};
+///
+/// assert_eq!(
+///     topic_for_context(Lang::En, "browse").map(|t| t.id.as_str()),
+///     Some("panes")
+/// );
+/// assert!(topic_for_context(Lang::En, "no-such-context").is_none());
+/// ```
+///
+/// # Panics
+/// If an embedded topic is malformed; see [`topics`].
+#[must_use]
+pub fn topic_for_context(lang: Lang, context: &str) -> Option<&'static Topic> {
+    topics(lang)
+        .iter()
+        .find(|t| t.context.iter().any(|c| c == context))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,5 +207,21 @@ mod tests {
     fn an_unknown_id_is_none_rather_than_a_panic() {
         assert!(topic(Lang::En, "").is_none());
         assert!(topic(Lang::Es, " panes ").is_none(), "no trimming");
+    }
+
+    #[test]
+    fn un_contexto_declarado_resuelve_a_su_tema() {
+        // `panes` declara `context = ["browse"]`: F1 en el pane abre esa
+        // página, y el mapa vive en el CORPUS, no en código de frontend.
+        let t = topic_for_context(Lang::En, "browse").expect("browse tiene página");
+        assert_eq!(t.id.as_str(), "panes");
+        // Y en el otro locale resuelve al MISMO id: la paridad es estructural.
+        let es = topic_for_context(Lang::Es, "browse").expect("browse en es");
+        assert_eq!(es.id, t.id);
+    }
+
+    #[test]
+    fn un_contexto_sin_tema_es_none_no_un_panico() {
+        assert!(topic_for_context(Lang::En, "no-existe-este-contexto").is_none());
     }
 }

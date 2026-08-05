@@ -250,6 +250,7 @@ msg-hidden-hidden = entradas ocultas escondidas
 # (`dialog.*`). No son despachables desde un pane, así que no corre nada — y
 # se dice, porque un Enter comido se lee como un comando que sí corrió.
 msg-help-not-runnable = esa fila documenta una tecla de overlay, no un comando que un pane pueda correr
+msg-help-modal-waiting = contesta primero al diálogo: un comando lanzado desde aquí lo echaría de la pantalla
 msg-marked-by-pattern = { $n } marcas cambiadas
 msg-mouse-capture-failed = el terminal no aceptó la captura de ratón: norte se queda solo con teclado
 # Arrastre EN VUELO, en LOS DOS frontends: qué haría soltar ahora mismo.

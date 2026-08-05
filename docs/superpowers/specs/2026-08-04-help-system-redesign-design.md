@@ -346,3 +346,22 @@ closes.
   Deliberate, and worth stating plainly.
 - **H3b likely exceeds the 400-line PR guideline.** Split into state and
   render if it does.
+
+## Amendment 2026-08-05 (H3c): context granularity and key ownership
+
+Two things the H3c section left open, decided during implementation.
+
+**Contexts are per MODAL, not per screen.** "F1 in the approval modal opens
+*Agents & policy*, in the collision dialog opens *Copying*" asks two different
+pages of one `Screen::Dialog`, so the vocabulary is one id per modal, anchored
+on `Modal` in `norte-tui/src/help_context.rs`: a new modal variant does not
+compile until someone names the page that explains it. Contexts whose page is
+not written yet sit on a shrinking allowlist in the documentation gate.
+
+**Key ownership between the help and a modal goes to whoever arrived first.**
+Help opened FROM a modal owns the keys, and `Esc` closes only the help — the
+modal is untouched, and its own verbs are unreachable until the help closes. A
+modal ARRIVING over an open help closes the help, as the palette and settings
+overlays already do: an agent's approval prompt may never sit hidden under a
+help page. The consequence is deliberate and fail-closed: a help page left open
+over an approval lets its TTL expire, which denies the agent.

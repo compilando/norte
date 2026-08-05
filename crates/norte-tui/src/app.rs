@@ -2659,6 +2659,28 @@ pub struct HelpView {
     /// `&'static Topic`, so `render_topic` can produce a `Rendered<'static>`
     /// and the state can simply hold it.
     body: crate::help_render::Rendered<'static>,
+    /// `true` when the overlay was opened while a modal was ALREADY on screen
+    /// (H3c).
+    ///
+    /// It decides who owns the keys, and the two directions are different
+    /// events:
+    ///
+    /// * opened FROM a modal (this flag `true`) the help owns them. The reader
+    ///   asked to read about the question in front of them, so `Esc` has to put
+    ///   them back in front of it rather than answer it, and the modal's own
+    ///   verbs stay unreachable meanwhile — an agent operation is approved by
+    ///   looking at it, never by a key pressed blind through a page.
+    /// * a modal ARRIVING over an already-open help (this flag `false`) closes
+    ///   the help instead, exactly as it closes the palette and the settings
+    ///   overlay: the next key must land where the pixels point.
+    ///
+    /// Two consequences, both deliberate. The modal keeps being painted LAST
+    /// ([`crate::ui::draw`]), so a help opened over it does not hide the
+    /// question — the box stays on top of the page, and its verbs simply do
+    /// nothing until the help closes. And a help page left open over an agent
+    /// approval lets its TTL expire, which DENIES the agent: fail-closed, which
+    /// is the direction to fail in.
+    pub over_modal: bool,
 }
 
 impl HelpView {
@@ -2684,7 +2706,38 @@ impl HelpView {
                 lines: Vec::new(),
                 action_lines: Vec::new(),
             },
+            over_modal: false,
         }
+    }
+
+    /// Opens the overlay on the page for `context`, falling back to the index
+    /// when no page claims it.
+    ///
+    /// The fallback is not a papering-over: `norte_help::check_contexts` fails
+    /// the documentation gate for a context with no page, so the pages that are
+    /// still missing are on a shrinking allowlist and nothing else can reach
+    /// here. The index is the least surprising place to land.
+    ///
+    /// The contextual page arrives as the ROOT of the trail
+    /// (`HelpState::open_as_root`): `F1` putting the reader on a page is not
+    /// navigation the reader did, so `Esc` must close the overlay instead of
+    /// walking back to an index they never asked for.
+    ///
+    /// `over_modal` is the caller's answer to "was a modal already on screen?"
+    /// — see the field for what it decides.
+    #[must_use]
+    pub fn new_at(
+        lang: norte_help::Lang,
+        keys_lines: Vec<String>,
+        context: &str,
+        over_modal: bool,
+    ) -> Self {
+        let mut view = Self::new(lang, keys_lines);
+        view.over_modal = over_modal;
+        if let Some(topic) = norte_help::topic_for_context(lang, context) {
+            view.state.open_as_root(&topic.id);
+        }
+        view
     }
 
     /// Lays the open page out for `width` and re-establishes the scroll

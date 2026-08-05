@@ -249,6 +249,7 @@ msg-hidden-hidden = hidden entries hidden
 # are not dispatchable from a pane, so nothing runs — said out loud, because a
 # swallowed Enter reads as a command that ran.
 msg-help-not-runnable = that row documents an overlay key, not a command a pane can run
+msg-help-modal-waiting = answer the dialog first: a command run from here would push it off the screen
 msg-marked-by-pattern = { $n } marks changed
 msg-mouse-capture-failed = the terminal did not accept mouse capture: norte stays keyboard-only
 # Drag in flight, BOTH frontends: what a release would do right now. Never
