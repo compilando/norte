@@ -409,6 +409,7 @@ gui-viewer-image-unreadable = unreadable image
 gui-a11y-pane-left = left pane
 gui-a11y-pane-right = right pane
 gui-a11y-tasks = tasks in progress
+gui-mouse-transfer-unavailable = dragging between panes does not copy yet: mark, then use the copy or move key
 gui-modal-copy-title = Copy { $n } item(s) → { $to }
 gui-modal-move-title = Move { $n } item(s) → { $to }
 gui-modal-delete-title = Delete { $n } item(s)

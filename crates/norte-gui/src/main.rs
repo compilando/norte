@@ -25,6 +25,19 @@
 //!   `MouseDownEvent.click_count` (1 = foco+cursor, 2 = `cd`). `on_scroll_wheel`
 //!   con `ScrollWheelEvent.delta` mueve el cursor. Se usa `on_mouse_down` (no
 //!   `on_click`) para no exigir un `.id()` estable por fila.
+//!   **Marcado con el ratón** (ctrl+click, shift+click, arrastre): las REGLAS
+//!   no viven aquí, viven en [`norte_frontend::mouse`] — la misma máquina de
+//!   gestos que consume la TUI (regla 7), para que los dos frontends no
+//!   deriven a dos file managers distintos. Esta capa solo hace lo que es de
+//!   GPUI: el hit test (que sale GRATIS, `on_mouse_move`/`on_mouse_up` de una
+//!   fila solo disparan con el puntero sobre su hitbox — ver
+//!   `HitboxId::is_hovered`, rev f14fea9) y aplicar los `Effect` sobre el
+//!   modelo. El `on_mouse_up` de la RAÍZ cierra el gesto cuando se suelta
+//!   fuera de toda fila: los listeners de la raíz se registran ANTES que los
+//!   de las filas (`Interactivity::paint_mouse_listeners` corre antes de
+//!   pintar los hijos) y la fase de burbuja los recorre en orden INVERSO
+//!   (`Window::dispatch_mouse_event`), así que la fila siempre gana y la
+//!   raíz solo ve los releases que ninguna fila consumió.
 //! - **async → UI**: `cx.spawn` + `this.update` + `cx.notify()`, con un canal
 //!   `tokio::mpsc` que cruza desde el hilo de sesión tokio (ver `session.rs`).
 //! - **Accesibilidad (AccessKit, GUI-e T2)**: `div().id(...)` (convierte a
@@ -48,16 +61,18 @@
 
 use gpui::{
     Animation, AnimationExt, AnyElement, App, Bounds, BoxShadow, Context, FocusHandle, IntoElement,
-    KeyDownEvent, MouseButton, MouseDownEvent, ParentElement, Pixels, Render, RenderImage,
-    ScrollDelta, ScrollStrategy, ScrollWheelEvent, SharedString, Styled, UniformListScrollHandle,
-    Window, WindowBounds, WindowOptions, canvas, div, fill, hsla, img, linear_color_stop,
-    linear_gradient, point, prelude::*, pulsating_between, px, rgb, rgba, size, uniform_list,
+    KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement, Pixels, Render, RenderImage, ScrollDelta, ScrollStrategy, ScrollWheelEvent,
+    SharedString, Styled, UniformListScrollHandle, Window, WindowBounds, WindowOptions, canvas,
+    div, fill, hsla, img, linear_color_stop, linear_gradient, point, prelude::*, pulsating_between,
+    px, rgb, rgba, size, uniform_list,
 };
 use gpui_platform::application;
 
 use std::ops::Range;
 
 use norte_config::ConfirmQuit;
+use norte_frontend::mouse::{Drag, Effect, Mods, Press, Spot};
 use norte_frontend::settings::PendingWrite;
 use norte_frontend::{PaneState, nav::Mode};
 use norte_proto::{Entry, EntryKind, Segment, VPath};
@@ -321,6 +336,12 @@ struct NorteGui {
     /// settings status only renders inside its own view). Cleared on the
     /// NEXT keypress: honest without new chrome.
     flash: Option<(String, bool)>,
+    /// Gesto de ratón armado (ctrl/shift+click y arrastre de marcado): la
+    /// máquina COMPARTIDA con la TUI ([`norte_frontend::mouse`]). Vive en el
+    /// modelo y no en el árbol de render porque un gesto sobrevive a los
+    /// frames que lo atraviesan — y porque el `render_row` que lo alimenta se
+    /// reconstruye entero en cada uno.
+    mouse: MouseState,
     /// Última respuesta de `SessionCmd::PluginConfigSummaries` (G3c),
     /// cacheada para que `set_settings_status` (que refresca las filas
     /// tras CUALQUIER escritura general, no solo un cambio de plugin)
@@ -328,6 +349,186 @@ struct NorteGui {
     /// editar `ui.theme` blanquearía la sección Plugins hasta el próximo
     /// `PluginConfigSummariesReady`.
     plugin_config_summaries: Vec<norte_frontend::settings::PluginConfigSummary>,
+}
+
+/// El gesto de puntero en curso. Un envoltorio de la máquina compartida
+/// ([`norte_frontend::mouse::Drag`]) y nada más: aquí NO se decide qué marca
+/// un arrastre ni cuándo un gesto es transferencia — eso lo decide
+/// `norte-frontend` para los dos frontends a la vez (regla 7).
+#[derive(Debug, Default)]
+struct MouseState {
+    drag: Drag,
+    /// La [`MouseValidity`] del frame anterior, para detectar el cambio.
+    validity: MouseValidity,
+}
+
+/// Todo lo que tiene que seguir siendo verdad para que un gesto en vuelo
+/// signifique algo. Gemelo de la `Vigencia` de `norte-tui/src/mouse.rs`.
+///
+/// Un gesto solo lleva índices ([`Spot`]), y un índice nombra una fila del
+/// listado que se pintó. Cuando ese listado se mueve —otro directorio, un
+/// refill tras una mutación, una página de un relleno paginado, un
+/// re-ordenado— el índice pasa a nombrar otro fichero, y el gesto ha dejado
+/// de ser el que el usuario hizo. En la GUI eso llega ASÍNCRONO
+/// (`SessionEvent::Listed`), a mitad de un arrastre y sin que nadie toque
+/// nada.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct MouseValidity {
+    /// `PaneState::listing_epoch` de cada pane.
+    epochs: [u64; 2],
+    /// El dual-pane no está a la vista (visor/ajustes/extensiones) o hay un
+    /// overlay delante. Un modal que se abre a mitad de un arrastre se lleva
+    /// el gesto por delante: cuando se cierre, el usuario ya está a otra
+    /// cosa. Y sin filas pintadas tampoco hay dónde soltar.
+    hidden: bool,
+}
+
+/// Qué dejó tras de sí una tanda de [`Effect`]s: lo único que el modelo puro
+/// no puede hacer por sí mismo y que el caller (con `Context`) sí.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct MouseApplied {
+    /// El pane cuyo cursor se movió, para que el caller le haga
+    /// `follow_cursor` (la lista virtualizada de GPUI no sigue al cursor
+    /// sola). `None` = ningún cursor cambió.
+    moved_cursor: Option<usize>,
+    /// El gesto pidió una transferencia entre panes.
+    transfer: bool,
+    /// La tanda no estaba vacía. Un `motion` que no cambia de fila no emite
+    /// NADA (contrato de `Drag::motion`), y repintar por cada píxel que
+    /// recorre el puntero sobre la misma fila sería el coste que ese
+    /// contrato existe para evitar.
+    changed: bool,
+}
+
+/// Los dos modificadores que el marcado entiende. `platform` (⌘) se deja
+/// fuera a propósito, igual que en `on_key`: aquí sigue siendo asunto del
+/// keymap, no de estos gestos.
+fn mouse_mods(m: Modifiers) -> Mods {
+    Mods::new(m.control, m.shift)
+}
+
+/// El índice ABSOLUTO de la fila RESALTADA de un pane: el ancla desde la que
+/// marca un shift+click.
+///
+/// Es lo que el usuario VE resaltado, no el cursor real: bajo un quick search
+/// en modo filtro el resaltado sale de la selección del filtro y el cursor
+/// real puede estar en cualquier parte del listado completo, así que tomarlo
+/// a él como ancla marcaría un rango que empieza en una fila que nadie está
+/// mirando. Gemelo de `painted_anchor` en `norte-tui/src/mouse.rs`.
+fn painted_anchor(pane: &PaneState) -> usize {
+    pane.quick()
+        .and_then(norte_frontend::nav::QuickSearch::selected_entry_index)
+        .unwrap_or_else(|| pane.cursor())
+}
+
+/// Aplica los efectos que devuelve la máquina compartida. Cada uno mapea
+/// sobre UNA operación que ya existía en [`PaneState`]: esta capa no inventa
+/// ninguna, y en particular no toca el quick search — marcar con el filtro
+/// puesto es lo que hace que el marcado no alcance lo que el filtro esconde
+/// (ver el rustdoc de `PaneState::mark_range`). Quien lo cierra es
+/// [`NorteGui::on_row_click`], y solo para el click limpio.
+fn apply_mouse_effects(
+    panes: &mut [PaneState; 2],
+    focus: &mut usize,
+    effects: &[Effect],
+) -> MouseApplied {
+    let mut out = MouseApplied {
+        changed: !effects.is_empty(),
+        ..MouseApplied::default()
+    };
+    for effect in effects {
+        match *effect {
+            Effect::MoveCursor { pane, index } => {
+                *focus = pane;
+                panes[pane].set_cursor(index);
+                out.moved_cursor = Some(pane);
+            }
+            Effect::SetMark {
+                pane,
+                index,
+                marked,
+            } => panes[pane].set_mark(index, marked),
+            Effect::MarkRange { pane, from, to } => {
+                panes[pane].mark_range(from, to);
+            }
+            Effect::BeginSweep { pane } => panes[pane].begin_sweep(),
+            Effect::SweepRange { pane, from, to } => {
+                panes[pane].apply_sweep(from, to);
+            }
+            // Arrastrar entre paneles NO transfiere todavía: el drop es la
+            // tarea 5 del plan. El caller lo dice en voz alta (`flash`) en vez
+            // de tragarse el gesto — un arrastre que no hace nada Y no explica
+            // nada se lee como que el ratón está roto. Mismo criterio que la
+            // TUI (`msg-mouse-transfer-unavailable`).
+            Effect::Transfer { .. } => out.transfer = true,
+        }
+    }
+    out
+}
+
+/// Suelta el gesto armado si su [`MouseValidity`] cambió desde el frame
+/// anterior. Ver [`NorteGui::expire_stale_mouse_gesture`], el único caller.
+fn expire_stale_gesture(mouse: &mut MouseState, validity: MouseValidity) {
+    if validity != mouse.validity {
+        mouse.drag.cancel();
+    }
+    mouse.validity = validity;
+}
+
+/// Botón izquierdo abajo sobre una fila: alimenta la máquina compartida con
+/// lo que solo el frontend sabe (si la fila estaba marcada, dónde está el
+/// ancla visible) y aplica lo que devuelve.
+fn mouse_press(
+    mouse: &mut MouseState,
+    panes: &mut [PaneState; 2],
+    focus: &mut usize,
+    at: Spot,
+    mods: Mods,
+) -> MouseApplied {
+    let marked = panes[at.pane]
+        .entries()
+        .get(at.index)
+        .is_some_and(|e| panes[at.pane].is_marked(e));
+    let cursor = painted_anchor(&panes[at.pane]);
+    let fx = mouse.drag.press(Press {
+        at,
+        marked,
+        cursor,
+        mods,
+    });
+    apply_mouse_effects(panes, focus, &fx)
+}
+
+/// El puntero pasó sobre `at` con el botón pulsado.
+fn mouse_motion(
+    mouse: &mut MouseState,
+    panes: &mut [PaneState; 2],
+    focus: &mut usize,
+    at: Spot,
+) -> MouseApplied {
+    let fx = mouse.drag.motion(at);
+    apply_mouse_effects(panes, focus, &fx)
+}
+
+/// El botón subió. `at` es `None` cuando el release no cayó sobre ninguna
+/// fila (cromo, franja de tasks, fuera de la ventana): el gesto se CANCELA
+/// en vez de adivinar un destino.
+fn mouse_release(
+    mouse: &mut MouseState,
+    panes: &mut [PaneState; 2],
+    focus: &mut usize,
+    at: Option<Spot>,
+    mods: Mods,
+) -> MouseApplied {
+    let fx = mouse.drag.release(at, mods);
+    let applied = apply_mouse_effects(panes, focus, &fx);
+    // Suelta la baseline del barrido (una foto del conjunto de marcas): no
+    // hace falta para la corrección —el siguiente `BeginSweep` la re-arma—,
+    // solo evita que sobreviva al gesto.
+    for pane in &mut *panes {
+        pane.end_sweep();
+    }
+    applied
 }
 
 impl NorteGui {
@@ -574,6 +775,7 @@ impl NorteGui {
                     palette: None,
                     columns_picker: None,
                     flash: None,
+                    mouse: MouseState::default(),
                     extensions: None,
                     plugin_config_summaries: Vec::new(),
                 };
@@ -658,6 +860,7 @@ impl NorteGui {
                     palette: None,
                     columns_picker: None,
                     flash: None,
+                    mouse: MouseState::default(),
                     extensions: None,
                     plugin_config_summaries: Vec::new(),
                 }
@@ -2554,32 +2757,149 @@ impl NorteGui {
         );
     }
 
-    /// Click en una fila: foco a ese pane + cursor a esa fila; doble-click sobre
-    /// un directorio hace `cd`.
+    /// Botón izquierdo abajo sobre una fila: foco a ese pane + cursor a esa
+    /// fila; doble-click sobre un directorio hace `cd`; ctrl/shift/arrastre
+    /// marcan, vía la máquina COMPARTIDA con la TUI ([`norte_frontend::mouse`]).
+    ///
+    /// El doble click va ANTES de la máquina y solo SIN modificadores (mismo
+    /// orden y misma condición que la TUI): entrar en un directorio no es un
+    /// gesto de marcado, y con ctrl/shift pulsados lo que el usuario pide es
+    /// marcar, no navegar. `click_count` lo cuenta GPUI a nivel de plataforma
+    /// — no hace falta la ventana de tiempo a mano que sí necesita la TUI
+    /// (ningún protocolo de ratón de terminal reporta dobles clicks).
     fn on_row_click(
         &mut self,
         pane: usize,
         idx: usize,
         dir_target: Option<VPath>,
         click_count: usize,
+        mods: Mods,
         cx: &mut Context<Self>,
     ) {
         // El flash también se despide con el ratón (review 7c MINOR-4a).
         self.flash = None;
-        self.focus = pane;
-        // Un click cancela cualquier filtro (el cursor real vuelve a mandar) y
-        // se posa en `idx`: sin `set_cursor` en PaneState, se emula home + page.
-        self.panes[pane].quick_cancel();
-        self.query[pane].clear();
-        self.panes[pane].home();
-        self.panes[pane].page_down(idx);
-        self.follow_cursor(pane);
-        if click_count >= 2
-            && let Some(dir) = dir_target
-        {
-            self.cd(pane, dir, cx);
+        if mods == Mods::NONE && click_count >= 2 {
+            // Desarma lo que armara el primer click de la pareja: el listado
+            // está a punto de cambiar entero bajo el puntero, y un ancla
+            // rancia barrería contra entradas que ya no son las mismas.
+            self.mouse.drag.cancel();
+            self.focus = pane;
+            // Un click cancela cualquier filtro (el cursor real vuelve a
+            // mandar) y se posa en `idx`.
+            self.panes[pane].quick_cancel();
+            self.query[pane].clear();
+            self.panes[pane].set_cursor(idx);
+            self.follow_cursor(pane);
+            if let Some(dir) = dir_target {
+                self.cd(pane, dir, cx);
+            }
+            cx.notify();
+            return;
+        }
+        let applied = mouse_press(
+            &mut self.mouse,
+            &mut self.panes,
+            &mut self.focus,
+            Spot::new(pane, idx),
+            mods,
+        );
+        // Un click LIMPIO cierra el quick search del pane pulsado, y solo él.
+        //
+        // El orden importa y la excepción también. Con el filtro puesto se
+        // pinta un SUBCONJUNTO: el resaltado sale de la selección del filtro,
+        // así que mover el cursor real no movería nada visible y la siguiente
+        // operación actuaría sobre la fila del filtro y no sobre la pulsada.
+        // Cerrarlo arregla eso — el índice es ABSOLUTO y sobrevive a que
+        // vuelva el listado entero.
+        //
+        // Pero cerrarlo ANTES de marcar sería mucho peor que no cerrarlo:
+        // `mark_range`/`set_mark`/`apply_sweep` consultan el filtro para no
+        // alcanzar lo que esconde (ver su rustdoc), y sin filtro un
+        // shift+click marcaría TODOS los índices intermedios —los ocultos
+        // incluidos—, que es justo el ensanchamiento silencioso de la
+        // siguiente copia o borrado que esos guards existen para impedir. Por
+        // eso va DESPUÉS del press, y por eso solo para el gesto que no marca
+        // nada: la pulsación limpia arma el barrido pero no marca (contrato de
+        // `Drag::press`).
+        if mods == Mods::NONE {
+            self.panes[pane].quick_cancel();
+            self.query[pane].clear();
+        }
+        if let Some(p) = applied.moved_cursor {
+            self.follow_cursor(p);
         }
         cx.notify();
+    }
+
+    /// Cierra el frame para el ratón: suelta el gesto en vuelo si ha dejado
+    /// de significar algo. **Es el ÚNICO sitio donde un gesto caduca**, y va
+    /// en `render` porque es por donde pasa la GUI después de cada cambio de
+    /// estado y antes de atender ningún evento del siguiente.
+    ///
+    /// Cubre las dos formas de quedarse con un gesto rancio. Una es el
+    /// listado que se mueve bajo el puntero: aquí llega ASÍNCRONO (un
+    /// `SessionEvent::Listed` de un refresh tras una mutación) sin que el
+    /// usuario suelte el botón, y los índices del gesto pasan a nombrar otros
+    /// ficheros. La otra es el release que no llega — un botón soltado con la
+    /// ventana ya sin foco (alt+tab a mitad de arrastre) o fuera de ella: sin
+    /// esto el gesto seguiría armado y la siguiente pasada del ratón, minutos
+    /// y un directorio después, continuaría el barrido.
+    ///
+    /// Las marcas que un barrido ya aplicó SE QUEDAN: soltar el gesto no es
+    /// deshacerlo (contrato de `Drag::cancel`).
+    fn expire_stale_mouse_gesture(&mut self) {
+        let validity = MouseValidity {
+            epochs: [self.panes[0].listing_epoch(), self.panes[1].listing_epoch()],
+            hidden: self.modal.is_some()
+                || self.viewer.is_some()
+                || self.viewer_loading
+                || self.settings_view.is_some()
+                || self.extensions.is_some()
+                || self.palette.is_some()
+                || self.columns_picker.is_some(),
+        };
+        expire_stale_gesture(&mut self.mouse, validity);
+    }
+
+    /// El puntero cruzó una fila con el botón izquierdo pulsado: extiende el
+    /// gesto armado. Un barrido re-enuncia su rango ENTERO en cada motion, y
+    /// uno que no cambia de fila no emite nada (contrato de `Drag::motion`),
+    /// así que esto no necesita throttling propio por encima del que ya trae
+    /// la máquina — GPUI reporta el puntero por píxel, pero la máquina lo
+    /// deduplica por fila.
+    fn on_row_drag(&mut self, pane: usize, idx: usize, cx: &mut Context<Self>) {
+        let applied = mouse_motion(
+            &mut self.mouse,
+            &mut self.panes,
+            &mut self.focus,
+            Spot::new(pane, idx),
+        );
+        if let Some(p) = applied.moved_cursor {
+            self.follow_cursor(p);
+        }
+        if applied.changed {
+            cx.notify();
+        }
+    }
+
+    /// El botón izquierdo subió. `at` es `None` cuando el release no cayó
+    /// sobre ninguna fila (el `on_mouse_up` de la raíz): el gesto se cancela
+    /// en vez de adivinar un destino — un destino inferido es una operación
+    /// de ficheros que nadie pidió.
+    fn on_mouse_release(&mut self, at: Option<Spot>, mods: Mods, cx: &mut Context<Self>) {
+        let applied = mouse_release(&mut self.mouse, &mut self.panes, &mut self.focus, at, mods);
+        if applied.transfer {
+            // Tarea 5 del plan (drag & drop entre panes). Hasta entonces se
+            // dice en voz alta, igual que la TUI: un arrastre que no hace nada
+            // y tampoco explica nada se lee como que el ratón está roto.
+            self.flash = Some((norte_i18n::t("gui-mouse-transfer-unavailable"), false));
+        }
+        if let Some(p) = applied.moved_cursor {
+            self.follow_cursor(p);
+        }
+        if applied.changed {
+            cx.notify();
+        }
     }
 
     /// Rueda del ratón sobre un pane: le da el foco y mueve el cursor. Con
@@ -3254,12 +3574,39 @@ impl NorteGui {
             // variación legible sobre `mark_bg`).
             row = row.hover(|s| s.bg(chrome.hover_bg));
         }
-        let row = row.on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |this, ev: &MouseDownEvent, _w, cx| {
-                this.on_row_click(pane, idx, dir_target.clone(), ev.click_count, cx);
-            }),
-        );
+        // El hit test del ratón sale GRATIS: `on_mouse_move`/`on_mouse_up` de
+        // una fila solo disparan con el puntero sobre SU hitbox (bubble +
+        // `hitbox.is_hovered`, `Interactivity::on_mouse_move` en el rev
+        // f14fea9), así que el (pane, índice) de un evento es el de esta fila
+        // y no hay que traducir píxeles a filas como en la TUI.
+        let row = row
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, ev: &MouseDownEvent, _w, cx| {
+                    this.on_row_click(
+                        pane,
+                        idx,
+                        dir_target.clone(),
+                        ev.click_count,
+                        mouse_mods(ev.modifiers),
+                        cx,
+                    );
+                }),
+            )
+            .on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, _w, cx| {
+                // Solo con el botón izquierdo pulsado: `on_mouse_move` llega
+                // también al pasear el ratón sin pulsar nada, y un barrido que
+                // arrancara ahí marcaría por su cuenta.
+                if ev.pressed_button == Some(MouseButton::Left) {
+                    this.on_row_drag(pane, idx, cx);
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(move |this, ev: &MouseUpEvent, _w, cx| {
+                    this.on_mouse_release(Some(Spot::new(pane, idx)), mouse_mods(ev.modifiers), cx);
+                }),
+            );
 
         // Blink de cursor (G2 decisión 3, ADR 0036 amendment): SOLO la fila
         // bajo el cursor real (`highlighted`), SOLO con `cursor_blink =
@@ -5507,6 +5854,10 @@ impl Render for NorteGui {
         // sin virtualizar). Ver issue #87.
         let _t0 = std::time::Instant::now();
 
+        // Un gesto de ratón en vuelo caduca aquí si el listado se movió bajo
+        // el puntero o si algo se puso delante (ver el método).
+        self.expire_stale_mouse_gesture();
+
         // Paleta de chrome resuelta UNA vez por frame (ver doc de
         // `ChromeColors`): `render_row` corre por cada fila visible y no debe
         // resolver el tema por fila.
@@ -5523,6 +5874,18 @@ impl Render for NorteGui {
             .aria_label("norte")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
+            // Release fuera de toda fila (cromo, franja de tasks, hueco bajo
+            // el listado): cierra el gesto CANCELÁNDOLO. Los listeners de la
+            // raíz se registran antes que los de las filas y la fase de
+            // burbuja los recorre al revés, así que si el release cayó sobre
+            // una fila ella ya lo consumió y esto no encuentra nada armado
+            // (ver la cabecera del módulo).
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, ev: &MouseUpEvent, _w, cx| {
+                    this.on_mouse_release(None, mouse_mods(ev.modifiers), cx);
+                }),
+            )
             .flex()
             .flex_col()
             .size_full()
@@ -6183,22 +6546,26 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::MouseValidity;
     use super::effects;
+    use super::expire_stale_gesture;
     use super::{
         BANNER_DETAIL_MAX_CHARS, BG, BORDER_FOCUS, BORDER_UNFOCUS, ERR_FG, FG, HEADER_BG, MARK_BG,
         MARK_FG, PANE_BG, PANE_BG_FOCUS, QUICK_FG, SEL_BG,
     };
     use super::{
-        ChromeColors, ConfirmQuit, FontSet, ImagePreview, affected_dirs, apply_viewer_command,
-        banner_safe, chrome_mark_fg, confirm_quit_should_open, confirm_quit_task_count,
-        decoration_badge_color, first_cancelable, flicker_factor, flicker_scale,
-        generation_is_current, glowed, has_pending_work, hydration_batch, image_preview_from,
-        image_status, keymap_error_detail, modal_footer_colors, modal_panel_colors,
-        modal_title_colors, motion_active, pane_inner_cells, pending_hint, retain_active,
-        row_label, styled_span_color, task_at_cursor, theme_map, unknown_preset_banner,
-        validated_family, viewer_header, viewer_status,
+        ChromeColors, ConfirmQuit, FontSet, ImagePreview, MouseState, affected_dirs,
+        apply_viewer_command, banner_safe, chrome_mark_fg, confirm_quit_should_open,
+        confirm_quit_task_count, decoration_badge_color, first_cancelable, flicker_factor,
+        flicker_scale, generation_is_current, glowed, has_pending_work, hydration_batch,
+        image_preview_from, image_status, keymap_error_detail, modal_footer_colors,
+        modal_panel_colors, modal_title_colors, motion_active, mouse_motion, mouse_press,
+        mouse_release, pane_inner_cells, pending_hint, retain_active, row_label, styled_span_color,
+        task_at_cursor, theme_map, unknown_preset_banner, validated_family, viewer_header,
+        viewer_status,
     };
     use gpui::rgb;
+    use norte_frontend::mouse::{Mods, Spot};
     use norte_frontend::viewer::Viewer;
     use norte_proto::{EntryKind, VPath};
     use norte_theme::Theme;
@@ -8143,5 +8510,416 @@ mod tests {
             hydration_batch(candidatas, &todas, 10).is_empty(),
             "en régimen estacionario no se manda nada"
         );
+    }
+
+    // --- Ratón: marcado con ctrl/shift y arrastre (plan de ratón, tarea 3) --
+    //
+    // Las REGLAS viven en `norte_frontend::mouse` y están clavadas allí; lo
+    // que se clava aquí es el cableado de la GUI: que los efectos de la máquina
+    // compartida caen sobre el `PaneState` correcto, que el ancla de un
+    // shift+click es el CURSOR y no la fila pulsada, y que un click limpio
+    // sigue sin tocar las marcas.
+
+    /// Un pane con `n` entradas (`mem:///e0`…`mem:///e{n-1}`).
+    fn pane_con(n: usize) -> norte_frontend::PaneState {
+        let dir = VPath::parse("mem:///").unwrap();
+        let entries = (0..n)
+            .map(|i| norte_proto::Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: dir.join(
+                    norte_proto::Segment::new(format!("e{i}").into_bytes())
+                        .expect("segmento no vacío y sin '/'"),
+                ),
+                kind: EntryKind::File,
+                size: None,
+                mtime_ms: None,
+            })
+            .collect();
+        norte_frontend::PaneState::new(dir, entries)
+    }
+
+    /// Los dos panes del modelo, con `n` entradas cada uno.
+    fn panes_con(n: usize) -> [norte_frontend::PaneState; 2] {
+        [pane_con(n), pane_con(n)]
+    }
+
+    /// ¿Está marcada la fila `i` de `pane`? Lo mismo que le pasa
+    /// `render_pane` a `render_row` como flag `marked` (el fondo `mark_bg` y
+    /// el `●` del canalón salen de ahí), así que asertarlo es asertar el
+    /// tratamiento visual de la fila sin necesidad de GPU.
+    fn marcada(pane: &norte_frontend::PaneState, i: usize) -> bool {
+        pane.entries().get(i).is_some_and(|e| pane.is_marked(e))
+    }
+
+    /// ctrl+click togglea EXACTAMENTE una entrada, en los dos sentidos, y no
+    /// arrastra tras de sí ni el cursor ni las vecinas.
+    #[test]
+    fn ctrl_click_togglea_exactamente_una_entrada() {
+        let mut mouse = MouseState::default();
+        let mut panes = panes_con(6);
+        let mut focus = 1usize;
+
+        let _ = mouse_press(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 3),
+            Mods::CTRL,
+        );
+        assert_eq!(focus, 0, "el pane pulsado toma el foco");
+        assert_eq!(panes[0].marks_len(), 1, "una marca, ni una más");
+        assert!(marcada(&panes[0], 3));
+        assert!(panes[1].marks_len() == 0, "el otro pane no se entera");
+
+        // Un ctrl+click más sobre la MISMA fila la desmarca (si no, una fila
+        // marcada no tendría forma de desmarcarse con el ratón: cualquier
+        // otra lectura de una fila marcada arma una transferencia).
+        let _ = mouse_press(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 3),
+            Mods::CTRL,
+        );
+        assert_eq!(panes[0].marks_len(), 0);
+
+        // Y otra fila distinta suma en vez de reemplazar.
+        for i in [1usize, 4] {
+            let _ = mouse_press(
+                &mut mouse,
+                &mut panes,
+                &mut focus,
+                Spot::new(0, i),
+                Mods::CTRL,
+            );
+        }
+        assert_eq!(panes[0].marks_len(), 2);
+        assert!(marcada(&panes[0], 1) && marcada(&panes[0], 4));
+        assert!(!marcada(&panes[0], 2), "el hueco entre las dos NO se marca");
+    }
+
+    /// shift+click marca el rango desde el CURSOR, no desde el punto de la
+    /// pulsación. La diferencia es todo el gesto: anclar en la fila pulsada
+    /// marcaría UNA sola entrada y el rango entero se perdería en silencio.
+    #[test]
+    fn shift_click_marca_el_rango_desde_el_cursor_no_desde_la_pulsacion() {
+        let mut mouse = MouseState::default();
+        let mut panes = panes_con(10);
+        let mut focus = 0usize;
+
+        // Click limpio en la 6: deja el cursor ahí (y no marca nada).
+        let _ = mouse_press(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 6),
+            Mods::NONE,
+        );
+        let _ = mouse_release(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Some(Spot::new(0, 6)),
+            Mods::NONE,
+        );
+        assert_eq!(panes[0].cursor(), 6);
+        assert_eq!(panes[0].marks_len(), 0);
+
+        // shift+click en la 2: marca 2..=6 (cinco filas). Anclado en la fila
+        // pulsada habría marcado una sola.
+        let _ = mouse_press(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 2),
+            Mods::SHIFT,
+        );
+        assert_eq!(panes[0].marks_len(), 5, "rango 2..=6 desde el cursor");
+        for i in 2..=6 {
+            assert!(marcada(&panes[0], i), "la fila {i} debe quedar marcada");
+        }
+        assert!(!marcada(&panes[0], 1) && !marcada(&panes[0], 7));
+        assert_eq!(
+            panes[0].cursor(),
+            6,
+            "el cursor se queda en el ancla: el extremo sigue a la vista y un \
+             segundo shift+click extiende el MISMO rango"
+        );
+    }
+
+    /// Un arrastre marca lo que barre, y RETROCEDER devuelve el exceso. Es la
+    /// propiedad que el usuario nota: pasarse quince filas y volver no puede
+    /// dejar quince ficheros marcados fuera de pantalla.
+    #[test]
+    fn el_arrastre_barre_marcando_y_al_retroceder_devuelve_el_exceso() {
+        let mut mouse = MouseState::default();
+        let mut panes = panes_con(20);
+        let mut focus = 1usize;
+
+        let aplicado = mouse_press(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 2),
+            Mods::NONE,
+        );
+        assert_eq!(aplicado.moved_cursor, Some(0));
+        assert_eq!(
+            panes[0].marks_len(),
+            0,
+            "la pulsación arma el barrido pero todavía no marca"
+        );
+
+        let _ = mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 15));
+        assert_eq!(panes[0].marks_len(), 14, "2..=15");
+        assert!(marcada(&panes[0], 15));
+
+        // Retroceso: el rango se encoge y el exceso se SUELTA.
+        let _ = mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 5));
+        assert_eq!(panes[0].marks_len(), 4, "2..=5");
+        for i in 6..=15 {
+            assert!(!marcada(&panes[0], i), "la fila {i} debía soltarse");
+        }
+
+        // El release re-enuncia el rango final (los motions pueden venir
+        // coalescidos) y no lo amplía.
+        let _ = mouse_release(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Some(Spot::new(0, 5)),
+            Mods::NONE,
+        );
+        assert_eq!(panes[0].marks_len(), 4);
+        assert_eq!(panes[0].cursor(), 5, "el cursor sigue al puntero");
+        assert_eq!(panes[1].marks_len(), 0);
+    }
+
+    /// Una marca hecha ANTES del gesto sobrevive al retroceso del barrido: el
+    /// rubber-band solo devuelve lo que puso ESTE arrastre.
+    #[test]
+    fn el_barrido_no_se_lleva_por_delante_las_marcas_previas() {
+        let mut mouse = MouseState::default();
+        let mut panes = panes_con(20);
+        let mut focus = 0usize;
+
+        let _ = mouse_press(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 12),
+            Mods::CTRL,
+        );
+        assert!(marcada(&panes[0], 12));
+
+        let _ = mouse_press(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 2),
+            Mods::NONE,
+        );
+        let _ = mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 15));
+        let _ = mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 4));
+        let _ = mouse_release(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Some(Spot::new(0, 4)),
+            Mods::NONE,
+        );
+        assert!(
+            marcada(&panes[0], 12),
+            "la marca previa al gesto no la toca el retroceso"
+        );
+        assert_eq!(panes[0].marks_len(), 4, "2..=4 del barrido + la 12");
+    }
+
+    /// Un click limpio sigue siendo lo que siempre fue: foco + cursor, marcas
+    /// intactas. Ni la pulsación ni el release marcan nada.
+    #[test]
+    fn el_click_limpio_solo_enfoca_y_mueve_el_cursor() {
+        let mut mouse = MouseState::default();
+        let mut panes = panes_con(8);
+        let mut focus = 1usize;
+
+        let aplicado = mouse_press(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 3),
+            Mods::NONE,
+        );
+        assert_eq!(focus, 0);
+        assert_eq!(panes[0].cursor(), 3);
+        assert_eq!(aplicado.moved_cursor, Some(0));
+        assert!(!aplicado.transfer);
+        assert_eq!(panes[0].marks_len(), 0);
+
+        let aplicado = mouse_release(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Some(Spot::new(0, 3)),
+            Mods::NONE,
+        );
+        assert!(
+            !aplicado.changed,
+            "un gesto que no salió de su fila es un click: el release no emite \
+             nada"
+        );
+        assert_eq!(
+            panes[0].marks_len(),
+            0,
+            "un click JAMÁS cambia la selección"
+        );
+    }
+
+    /// Arrastrar desde una fila YA marcada hasta el otro pane es una
+    /// TRANSFERENCIA, no un barrido: no marca nada y se anuncia (tarea 5 del
+    /// plan). Mismo criterio que la TUI, que lo dice por la barra de estado.
+    #[test]
+    fn el_arrastre_desde_una_fila_marcada_pide_transferencia_y_no_marca() {
+        let mut mouse = MouseState::default();
+        let mut panes = panes_con(8);
+        let mut focus = 0usize;
+
+        let _ = mouse_press(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 2),
+            Mods::CTRL,
+        );
+        assert_eq!(panes[0].marks_len(), 1);
+
+        // Press SIN modificadores sobre esa misma fila marcada: transferencia.
+        let _ = mouse_press(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 2),
+            Mods::NONE,
+        );
+        let cruce = mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(1, 4));
+        assert!(!cruce.changed, "una transferencia no marca por el camino");
+        let soltar = mouse_release(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Some(Spot::new(1, 4)),
+            Mods::NONE,
+        );
+        assert!(soltar.transfer, "el gesto pide transferencia");
+        assert_eq!(panes[0].marks_len(), 1, "las marcas del origen intactas");
+        assert_eq!(panes[1].marks_len(), 0, "y el destino sin marcar nada");
+    }
+
+    /// Soltar fuera de toda fila (el `on_mouse_up` de la raíz) cancela el
+    /// gesto en vez de adivinar un destino — pero lo que el barrido ya marcó
+    /// se queda: cancelar un gesto no es deshacerlo.
+    #[test]
+    fn soltar_fuera_de_toda_fila_cancela_sin_deshacer() {
+        let mut mouse = MouseState::default();
+        let mut panes = panes_con(10);
+        let mut focus = 0usize;
+
+        let _ = mouse_press(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 1),
+            Mods::NONE,
+        );
+        let _ = mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 4));
+        assert_eq!(panes[0].marks_len(), 4);
+
+        let aplicado = mouse_release(&mut mouse, &mut panes, &mut focus, None, Mods::NONE);
+        assert!(!aplicado.changed && !aplicado.transfer);
+        assert_eq!(panes[0].marks_len(), 4, "lo ya marcado se queda");
+
+        // Y el gesto quedó DESARMADO: un motion posterior no marca sola.
+        let huerfano = mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 9));
+        assert!(!huerfano.changed);
+        assert_eq!(panes[0].marks_len(), 4);
+    }
+
+    /// Un gesto caduca cuando el listado se mueve bajo el puntero (un
+    /// refresh asíncrono tras una mutación, un `cd`) o cuando algo se pone
+    /// delante: sin esto la siguiente pasada del ratón continuaría un barrido
+    /// contra índices que ya nombran otros ficheros. Lo que el barrido ya
+    /// marcó SE QUEDA — caducar el gesto no es deshacerlo.
+    #[test]
+    fn un_gesto_caduca_cuando_el_listado_se_mueve_bajo_el_puntero() {
+        let mut mouse = MouseState::default();
+        let mut panes = panes_con(10);
+        let mut focus = 0usize;
+        let vigente = MouseValidity {
+            epochs: [panes[0].listing_epoch(), panes[1].listing_epoch()],
+            hidden: false,
+        };
+        expire_stale_gesture(&mut mouse, vigente);
+
+        let _ = mouse_press(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 1),
+            Mods::NONE,
+        );
+        let _ = mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 3));
+        assert_eq!(panes[0].marks_len(), 3, "1..=3");
+
+        // Aterriza un listado nuevo en ese pane: los índices del gesto dejan
+        // de nombrar lo que el usuario pulsó.
+        let dir = VPath::parse("mem:///otro").unwrap();
+        panes[0].set_listing(dir, Vec::new());
+        let nueva = MouseValidity {
+            epochs: [panes[0].listing_epoch(), panes[1].listing_epoch()],
+            hidden: false,
+        };
+        assert_ne!(nueva, vigente, "un listado nuevo cambia la vigencia");
+        expire_stale_gesture(&mut mouse, nueva);
+
+        let mut panes = panes_con(10);
+        let huerfano = mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 9));
+        assert!(
+            !huerfano.changed,
+            "el gesto caducó: una motion posterior no marca por su cuenta"
+        );
+        assert_eq!(panes[0].marks_len(), 0);
+    }
+
+    /// Un overlay/visor delante también caduca el gesto: cuando se cierre, el
+    /// usuario ya está a otra cosa.
+    #[test]
+    fn un_overlay_delante_caduca_el_gesto() {
+        let mut mouse = MouseState::default();
+        let mut panes = panes_con(10);
+        let mut focus = 0usize;
+        let epochs = [panes[0].listing_epoch(), panes[1].listing_epoch()];
+        expire_stale_gesture(
+            &mut mouse,
+            MouseValidity {
+                epochs,
+                hidden: false,
+            },
+        );
+        let _ = mouse_press(
+            &mut mouse,
+            &mut panes,
+            &mut focus,
+            Spot::new(0, 1),
+            Mods::NONE,
+        );
+        expire_stale_gesture(
+            &mut mouse,
+            MouseValidity {
+                epochs,
+                hidden: true,
+            },
+        );
+        assert!(!mouse_motion(&mut mouse, &mut panes, &mut focus, Spot::new(0, 6)).changed);
+        assert_eq!(panes[0].marks_len(), 0);
     }
 }

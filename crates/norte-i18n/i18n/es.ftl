@@ -414,6 +414,7 @@ gui-viewer-image-unreadable = imagen ilegible
 gui-a11y-pane-left = panel izquierdo
 gui-a11y-pane-right = panel derecho
 gui-a11y-tasks = tareas en curso
+gui-mouse-transfer-unavailable = arrastrar entre paneles todavía no copia: marca y usa la tecla de copiar o mover
 gui-modal-copy-title = Copiar { $n } elemento(s) → { $to }
 gui-modal-move-title = Mover { $n } elemento(s) → { $to }
 gui-modal-delete-title = Borrar { $n } elemento(s)

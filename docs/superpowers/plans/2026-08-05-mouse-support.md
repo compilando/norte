@@ -84,12 +84,20 @@ Commit: `feat(tui): mouse capture, click, wheel and drag marking`.
 
 **Files:** `crates/norte-gui/src/main.rs`.
 
-- [ ] Ctrl+click toggles a mark, shift+click marks the range, drag sweeps —
+- [x] Ctrl+click toggles a mark, shift+click marks the range, drag sweeps —
       all through Task 1, so the two frontends cannot drift.
-- [ ] The existing single click (focus + cursor) and double click (`cd`) stay
-      exactly as they are.
-- [ ] Marked rows already have a visual treatment; verify it survives a sweep
+- [x] The existing single click (focus + cursor) and double click (`cd`) stay
+      exactly as they are. One deliberate narrowing, for parity with the TUI:
+      the double click only fires WITHOUT modifiers, because ctrl+double-click
+      is now "mark, then unmark" and must not also walk into a directory.
+- [x] Marked rows already have a visual treatment; verify it survives a sweep
       and that the row under the pointer during a drag updates live.
+- [x] A gesture expires when the listing moves under the pointer or an overlay
+      appears (`expire_stale_mouse_gesture`, the GUI's twin of the TUI's
+      `mouse::after_frame`) — in the GUI a relist lands ASYNC, mid-drag.
+- [x] A drag that starts on a marked row is a transfer: it says so
+      (`gui-mouse-transfer-unavailable`, both locales) instead of marking or
+      doing nothing. Task 5 replaces the message with the drop.
 
 Commit: `feat(gui): ctrl and shift click, and drag, mark entries`.
 
