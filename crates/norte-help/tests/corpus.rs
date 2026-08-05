@@ -25,11 +25,12 @@ const LANGS: [Lang; 2] = [Lang::En, Lang::Es];
 /// the corpus so that DELETING a topic file is a test failure too: a check
 /// that reads the corpus to decide what the corpus should contain cannot see
 /// an absence.
-const EXPECTED: [&str; 7] = [
+const EXPECTED: [&str; 8] = [
     "index",
     "panes",
     "selection",
     "mouse",
+    "help",
     "copying",
     "remote",
     "archives",
@@ -343,7 +344,12 @@ fn no_topic_trips_a_limits_ceiling() {
 /// is: a list computed from the corpus cannot notice that the corpus stopped
 /// documenting something. A mark added or dropped shows up here as a diff, and
 /// the number is the one phase H3h has to move.
-const DOCUMENTED: [&str; 20] = [
+const DOCUMENTED: [&str; 25] = [
+    "app.help",
+    "app.palette",
+    "dialog.back",
+    "dialog.filter",
+    "dialog.pane",
     "mark.all",
     "mark.clear",
     "mark.invert",

@@ -64,10 +64,8 @@ const PENDIENTES: &[&str] = &[
     "cursor.page-down",
     "cursor.top",
     "cursor.bottom",
-    "app.help",
     "app.theme",
     "app.extensions",
-    "app.palette",
     "app.settings",
     "pane.ai-rename",
     "pane.semantic-search",
@@ -116,7 +114,7 @@ const PENDIENTES: &[&str] = &[
 /// edición deliberada, en el mismo diff, que un revisor ve. El número solo
 /// puede bajar — y cuando H3h lo deje en 0, la lista desaparece con él.
 const _: () = assert!(
-    PENDIENTES.len() <= 49,
+    PENDIENTES.len() <= 47,
     "la allowlist de la puerta de documentación solo puede MENGUAR: \
      documenta el comando en vez de añadirlo aquí"
 );
