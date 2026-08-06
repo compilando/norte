@@ -281,9 +281,30 @@ impl HelpState {
             .retain(|id, _| self.plugins.iter().any(|n| &n.id == id));
         self.rebuild_rows();
         // The open page may have just stopped existing (a plugin left the
-        // catalogue while the reader was on it). `rebuild_rows` moves the body
-        // onto the row the cursor landed on, and the actions of a page that is
-        // gone must not survive it either.
+        // catalogue while the reader was on it). `rebuild_rows` ends by moving
+        // the body onto the row the cursor landed on — that is its own TAIL
+        // block, not `sync_cursor`, which moves only the cursor — so wherever
+        // the sidebar still has a row, `current` follows it and the actions of
+        // the page that replaced it are rebuilt here.
+        //
+        // The one case that does NOT recover is a sidebar left EMPTY by a
+        // filter: there is nowhere to follow to, and `rebuild_rows`
+        // deliberately keeps showing what was being read (see its tail and
+        // `a_filter_that_matches_nothing_leaves_the_open_topic_alone`). Then
+        // `current` names a plugin that is gone, and BOTH `current_topic` and
+        // `plugin_needs_fetch` answer `None` — so a frontend that told the
+        // synthetic keyboard page apart by "no topic resolved" would paint the
+        // whole cheatsheet under that plugin's name.
+        //
+        // Not papered over here, for two reasons. It is unreachable from the
+        // shipped callers — the catalogue is installed on the OPEN path, before
+        // a filter has been typed or a page opened — and the filter behaviour it
+        // would collide with is a deliberate decision, not an oversight. What
+        // the frontends owe instead is to branch on the ID
+        // (`norte_tui::app::HelpView::refresh` keys its keyboard-page arm on
+        // `KEYS_ID`), which is correct no matter how `current` got stale. A
+        // caller that ever refreshes the catalogue MID-overlay has to decide
+        // what a vanished page should show, and that decision belongs with it.
         self.rebuild_actions();
     }
 

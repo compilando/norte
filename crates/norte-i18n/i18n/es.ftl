@@ -296,9 +296,13 @@ help-group-remote = Remoto y archivos
 # para las filas de plugin.
 help-group-extensions = Extensiones
 # H3e: la línea de procedencia bajo el título de una página de plugin.
-# `truncated` y `lossy` los dice el HOST, no el re-parseo del texto (que llega
-# ya corto y ya decodificado): son el único sitio donde el lector se entera de
-# que la página venía recortada.
+# `help-plugin-origin` es INCONDICIONAL en toda página de plugin y el resto se
+# añade si procede — un plugin que no declara publicador y manda un fichero
+# limpio no debe poder hacer desaparecer la línea y que su página se lea como
+# una del manual. `truncated`/`lossy` los dice el HOST, no el re-parseo del
+# texto (que llega ya corto y ya decodificado): es el único sitio donde el
+# lector se entera de que la página venía recortada.
+help-plugin-origin = de una extensión
 help-plugin-truncated = recortada
 help-plugin-lossy = hay bytes que no decodifican
 # La entrada sintética `keys` NO lleva cabecera: es un grupo de uno por

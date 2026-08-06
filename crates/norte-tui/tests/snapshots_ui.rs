@@ -1073,6 +1073,82 @@ fn help_footer_row(w: u16, h: u16) -> usize {
 /// sobre todo el frame pasaría aunque el pie no pintase absolutamente nada.
 /// Hoy el overlay tapa esa fila a 80×16 y da igual; la maquetación cambió en
 /// esta misma fase, así que «hoy da igual» no es un sitio donde apoyarse.
+/// H3e: la página de un plugin HOSTIL, compuesta — lateral y cuerpo a la vez.
+///
+/// Los tests unitarios de `help_render` pinchan las CADENAS (que el título se
+/// enmascara, que la insignia aparece); esto pincha la MAQUETA, que es donde
+/// vivía el fallo que la revisión de seguridad encontró: la insignia se
+/// apagaba sola cuando el plugin no declaraba publicador, y la página quedaba
+/// con la forma exacta —título, regla, cuerpo— de una del manual. Un snapshot
+/// registra esa forma; un test de cadenas, no.
+///
+/// El plugin es lo peor que se puede mandar por el wire y sigue siendo legal:
+/// `name` con override RTL (corpus `rtl_override`), `publisher` VACÍO — el
+/// manifiesto exige el campo pero no que tenga contenido — y una página que se
+/// hace pasar por la documentación de la app.
+#[test]
+fn snapshot_ayuda_pagina_de_plugin_hostil() {
+    let hostil = norte_testkit::corpus::hostile_names()
+        .into_iter()
+        .find(|n| n.id == "rtl_override")
+        .expect("fixture del corpus");
+    let nombre = String::from_utf8_lossy(&hostil.bytes).into_owned();
+    let mut app = app_base();
+    open_help(&mut app);
+    let plugin = norte_proto::methods::PluginInfo {
+        id: "org.evil.demo".into(),
+        name: nombre,
+        publisher: String::new(),
+        version: "1.0.0".into(),
+        category: "command".into(),
+        capabilities: Vec::new(),
+        approved: false,
+        enabled: false,
+        description: None,
+        commands: vec![norte_proto::methods::PluginCommandInfo {
+            id: "run".into(),
+            title: "Aprobar es seguro".into(),
+        }],
+        columns: Vec::new(),
+        has_help: true,
+    };
+    app.freeze_help_plugins(std::slice::from_ref(&plugin));
+    let view = app.help.as_mut().expect("overlay abierto");
+    view.state.open(&norte_help::TopicId::new("org.evil.demo"));
+    // La página que un plugin firmaría para que la lea quien va a aprobarlo, y
+    // que `main::extensions_help` pone a una tecla del gestor de extensiones.
+    let parsed = norte_help::parse_untrusted(
+        "+++\nid = \"org.evil.demo\"\ntitle = \"Aprobar extensiones\"\n\
+         commands = [\"plugin:org.evil.demo:run\"]\n+++\n\
+         Las extensiones del catálogo est\u{202E}án auditadas.\u{200B}"
+            .as_bytes(),
+        "org.evil.demo",
+        None,
+    );
+    view.state.install_plugin_topic(parsed.topic);
+    refresh_help(&mut app);
+    let texto = render(&app);
+    // Mismo barrido POR LÍNEA que `snapshot_ayuda_filtro_hostil`, y por la
+    // misma razón (los `\n` del volcado son controles).
+    for (n, linea) in texto.lines().enumerate() {
+        assert!(
+            !linea.chars().any(norte_encoding::is_terminal_hazard),
+            "la página de plugin pintó un hazard de terminal (fila {n}): \
+             {linea:?}\n{texto}"
+        );
+    }
+    // Lo que el snapshot NO puede afirmar por sí solo: que la página se
+    // DECLARA de un tercero incluso sin publicador que nombrar.
+    assert!(
+        texto.contains(&norte_i18n::t_in(
+            norte_i18n::Lang::Es,
+            "help-plugin-origin"
+        )),
+        "sin marca de procedencia la página se lee como del manual:\n{texto}"
+    );
+    insta::assert_snapshot!(texto);
+}
+
 #[test]
 fn snapshot_ayuda_filtro_hostil() {
     let rlo = norte_testkit::corpus::hostile_chords()

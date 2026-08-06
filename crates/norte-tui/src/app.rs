@@ -1062,10 +1062,32 @@ pub const PLUGIN_NAME_WIRE_CAP: usize = 120;
 /// documenta su `title` como «ya enmascarado y acotado», el modelo no enmascara
 /// nada — filtra sobre el título crudo que le den — y
 /// [`crate::help::TuiChords`] entrega sus etiquetas directas al pintor.
+///
+/// Un recorte se MARCA con `…`, como lo marcan los vecinos que hacen esto mismo
+/// (`masked_and_capped` en el doctor, [`crate::ui::middle_ellipsis`] en la línea
+/// de descripción del gestor). Cortar en seco presenta un nombre truncado como
+/// si estuviera completo, que es la misma clase de mentira que H3d fue a
+/// perseguir a los pies de overlay: quien lee no puede saber que falta algo, y
+/// un nombre acabado en mitad de una palabra es precisamente lo que un tercero
+/// usaría para que su etiqueta pase por otra.
+///
+/// Elipsis por la DERECHA y no media: estas etiquetas se distinguen por su
+/// principio (`middle_ellipsis` existe para las rutas, donde lo que identifica
+/// está al final).
+/// Se acota ANTES de enmascarar, y eso es seguro porque sobre texto ya UTF-8
+/// [`display_name`] es 1:1 en chars (mapea char a char, nunca inserta ni
+/// borra). Al revés habría que enmascarar los 50 000 chars que un daemon
+/// hostil quiera mandar para quedarse con 120.
 #[must_use]
 pub fn plugin_label(raw: &str) -> String {
-    let clamped: String = raw.chars().take(PLUGIN_NAME_WIRE_CAP).collect();
-    display_name(clamped.as_bytes()).0
+    let mut chars = raw.chars();
+    let head: String = chars.by_ref().take(PLUGIN_NAME_WIRE_CAP).collect();
+    let overflowed = chars.next().is_some();
+    let mut out = display_name(head.as_bytes()).0;
+    if overflowed {
+        out.push('…');
+    }
+    out
 }
 
 /// Clampa ([`PLUGIN_DESCRIPTION_WIRE_CAP`]) y enmascara ([`display_name`])
@@ -3193,25 +3215,38 @@ impl HelpView {
             crate::help_render::into_static(crate::help_render::render_topic(
                 topic, lang, chords, width, theme,
             ))
-        } else if self.state.plugin_needs_fetch().is_some() {
-            // A plugin page still in flight. EMPTY, never the keyboard page:
-            // the two are told apart by nothing else the reader can see, and
-            // the whole cheatsheet appearing under an extension's name would
-            // read as the plugin's own documentation.
-            crate::help_render::Rendered {
-                lines: Vec::new(),
-                action_lines: Vec::new(),
-            }
-        } else {
+        } else if self.state.current().as_str() == norte_frontend::help::KEYS_ID {
             // The synthetic `keys` page: its body is the effective keymap,
             // generated text with no runnable rows and therefore no action
             // map — a chord is not something Enter runs.
+            //
+            // Keyed on the ID and not on "no topic resolved", which is the same
+            // branch written the safe way round. Three different states answer
+            // `None` to `current_topic()` — the keyboard page, a plugin page in
+            // flight, and a `current` naming a page that no longer exists — and
+            // only the first is this one. `HelpState` can reach the third:
+            // `rebuild_rows` moves the body onto a surviving row, but with the
+            // sidebar left EMPTY by a filter there is nowhere to move to and it
+            // deliberately keeps showing what was being read. Unreachable in
+            // this binary (the catalogue is only ever installed on the open
+            // path, before any filter), but "unreachable" is a claim about
+            // callers and this is a claim about the id.
             crate::help_render::Rendered {
                 lines: self
                     .keys_lines
                     .iter()
                     .map(|l| ratatui::text::Line::raw(l.clone()))
                     .collect(),
+                action_lines: Vec::new(),
+            }
+        } else {
+            // A plugin page still in flight — and any other page that resolves
+            // to nothing. EMPTY, never the keyboard page: nothing else on
+            // screen tells the two apart, and the whole cheatsheet appearing
+            // under an extension's name would read as that extension's own
+            // documentation.
+            crate::help_render::Rendered {
+                lines: Vec::new(),
                 action_lines: Vec::new(),
             }
         };
@@ -3311,11 +3346,11 @@ impl HelpView {
     ///
     /// The same predicate [`refresh`](Self::refresh) branches on, so the two
     /// cannot disagree about which body is on screen. Since H3e "no corpus
-    /// page" is no longer enough: a plugin page — fetched or still in flight —
-    /// is not a corpus page either, and it is not the keyboard page.
+    /// page" is no longer enough — a plugin page, fetched or in flight, is not
+    /// a corpus page either — so both ask the ID.
     #[must_use]
     pub fn on_keys_page(&self) -> bool {
-        self.state.current_topic().is_none() && self.state.plugin_needs_fetch().is_none()
+        self.state.current().as_str() == norte_frontend::help::KEYS_ID
     }
 }
 
@@ -6250,9 +6285,15 @@ mod help_view_tests {
             .expect("el nodo está en la barra");
         assert!(!fila.contains('\u{202E}'), "sin bidi crudo: {fila:?}");
         assert!(
-            fila.chars().count() <= super::PLUGIN_NAME_WIRE_CAP,
+            fila.chars().count() <= super::PLUGIN_NAME_WIRE_CAP + 1,
             "acotado: {} chars",
             fila.chars().count()
+        );
+        assert!(
+            fila.ends_with('…'),
+            "y el recorte se MARCA, como lo marcan los vecinos que hacen esto \
+             mismo: presentar un nombre cortado como completo es la mentira \
+             que la fase fue a perseguir: {fila:?}"
         );
         let pub_ = view.publisher_of("acme.ftp").expect("hay publicador");
         assert!(!pub_.contains('\u{202E}'), "publicador limpio: {pub_:?}");

@@ -42,9 +42,12 @@
 //! `norte_help::Parsed`'s rustdoc calls them "the UI badge: a reader must never
 //! mistake a cut topic for a complete one". `plugin_badge` paints them, right
 //! under the title — masking and bounding, which `parse_untrusted` does, is not
-//! the same as SAYING the page was cut. A built-in topic has no badge: the line
-//! exists to tell third-party prose from ours, so printing it everywhere would
-//! tell nothing apart.
+//! the same as SAYING the page was cut.
+//!
+//! A built-in topic has no badge and EVERY plugin topic has one, unconditionally
+//! — see `plugin_badge` for the attack that made "unconditionally" load-bearing.
+//! The line is the only thing on screen that tells third-party prose from ours,
+//! so a plugin must not be able to make it disappear by declaring nothing.
 //!
 //! What this module does guarantee is the *geometry*: it never emits a
 //! line wider than the width it was given (measured in terminal CELLS, not
@@ -134,17 +137,40 @@ pub fn render_topic<'a>(
     theme: &TuiTheme,
 ) -> Rendered<'a> {
     let mut lines = vec![
-        Line::from(Span::styled(topic.title.clone(), theme.role(Role::Title))),
+        // `fit`ted like every other line this module emits. It was the one
+        // exception, and it was safe only by accident: `crate::ui::draw_help`
+        // renders the body with no `.wrap()`, so ratatui truncated an
+        // over-wide title on its own. Adding `.wrap()` there — a plausible
+        // change, the prose is already wrapped by hand — would have made a
+        // 280-char plugin title occupy several lines, shifting every index in
+        // `action_lines` below it so that the focused-row highlight and
+        // `HelpState::reveal` both point at the wrong row. The module
+        // guarantees its geometry; the guarantee has to hold for the title too.
+        Line::from(Span::styled(
+            fit(&topic.title, width),
+            theme.role(Role::Title),
+        )),
         Line::from(Span::styled(
             "─".repeat(width),
             theme.role(Role::BorderUnfocused),
         )),
     ];
     if let Some(badge) = plugin_badge(topic, lang) {
-        lines.push(Line::from(Span::styled(
-            fit(&badge, width),
+        // WRAPPED, not `fit`ted. The badge is the only thing on screen that
+        // tells third-party prose from ours, and with a publisher and both
+        // flags it runs past 60 cells — so cutting it drops the very segments
+        // that carry the warning («…some bytes did not d…»), and drops them
+        // exactly on the narrow terminals where a reader is least able to
+        // guess what was there. Prose wraps here like all the other prose in
+        // this module; the action map is built afterwards from `lines.len()`,
+        // so the extra rows cost nothing but a line of scroll.
+        lines.extend(wrap(
+            &[(badge, theme.role(Role::Info))],
+            width,
+            "",
+            "",
             theme.role(Role::Info),
-        )));
+        ));
     }
 
     for (i, block) in topic.blocks.iter().enumerate() {
@@ -208,24 +234,52 @@ pub fn render_topic<'a>(
     }
 }
 
-/// The provenance line of a PLUGIN page, or `None` for anything the host
+/// The provenance line of a PLUGIN page, `None` only for something the host
 /// wrote (H3e).
 ///
-/// Three facts, joined with `" · "`, in the order a reader needs them: who
-/// published the page, whether it was CUT SHORT, and whether some of its bytes
-/// did not decode. Masking and bounding — which
-/// [`norte_help::parse_untrusted`] already did — is not the same as SAYING the
-/// page was cut, and the two flags do not survive a re-parse: the text reaches
-/// this process already short and already decoded, so only the sender can tell
+/// # It is never `None` for a plugin topic, and that is the whole point
+///
+/// It used to be. The line was assembled from three OPTIONAL facts — publisher,
+/// cut short, decoded lossily — and joined only if at least one turned up, so a
+/// plugin that declared `publisher = ""` and shipped a clean `help.md` under
+/// the host's ceiling got NO line at all. `render_topic` then emitted title,
+/// rule, body: byte-for-byte the shape of a built-in corpus page.
+///
+/// That is not a cosmetic gap, because every input to it is under the
+/// attacker's control. `publisher` is a required TOML field but
+/// `norte_plugin_host::manifest` does not check it for emptiness (unlike
+/// `description`, `command.id` and `command.title`, which are all validated),
+/// and staying under 64 KiB of valid UTF-8 is not a constraint on anybody. The
+/// exploitation is one keystroke deep: title the page «Approving extensions»,
+/// write that catalogue extensions are audited and approving is safe, and the
+/// human meets it via `main::extensions_help` — from the extension manager, as
+/// the ROOT of the trail, at the exact moment they are deciding whether to
+/// approve. The one remaining tell was a sidebar cursor sitting under a group
+/// header, which is not a tell anybody reads.
+///
+/// So the first part is UNCONDITIONAL and constant. A line that is always there
+/// is a line the reader can learn to trust; one that shows up only sometimes
+/// teaches nothing, and its absence teaches the opposite of the truth.
+///
+/// # Why the plugin's id is not in it
+///
+/// [`norte_help::Origin::Plugin`] carries `id`, which is host-assigned and
+/// never empty, so it is tempting as the identity half. It is deliberately NOT
+/// painted: an id is a LOOKUP KEY and has therefore never been through a mask —
+/// `norte_frontend::help::PluginNode`'s `id` says so in as many words, and
+/// `parse_untrusted` copies the host's id verbatim. Ours is validated
+/// reverse-DNS, but it reaches this process over the wire, and a module whose
+/// header promises it masks nothing must not start painting the one string
+/// nobody masked. The reader already knows WHICH extension they opened — they
+/// arrived on its row, under its name; what they could not know is that the page
+/// was written by one.
+///
+/// The rest is appended when true: the publisher (masked and capped by the
+/// parser, like the title — prose, never a claim this renderer vouches for),
+/// then whether the page was CUT SHORT, then whether some bytes did not decode.
+/// The last two do not survive a re-parse — the text arrives already short and
+/// already decoded — so only the sender can report them
 /// (`norte_help::Parsed::fold_flags`).
-///
-/// `publisher` arrives masked and capped by the parser, like the title. It is
-/// still third-party text and the line is prose, not a claim of identity —
-/// nothing here vouches for a plugin being what it says it is.
-///
-/// `None` when there is nothing to say (a plugin page with no publisher,
-/// complete and cleanly decoded): a blank badge line would cost a row of a
-/// narrow overlay to say nothing at all.
 fn plugin_badge(topic: &Topic, lang: Lang) -> Option<String> {
     let norte_help::Origin::Plugin {
         publisher,
@@ -236,7 +290,7 @@ fn plugin_badge(topic: &Topic, lang: Lang) -> Option<String> {
     else {
         return None;
     };
-    let mut parts: Vec<String> = Vec::new();
+    let mut parts: Vec<String> = vec![norte_i18n::t_in(lang, "help-plugin-origin")];
     if let Some(p) = publisher.as_deref().filter(|p| !p.trim().is_empty()) {
         parts.push(p.to_owned());
     }
@@ -246,7 +300,7 @@ fn plugin_badge(topic: &Topic, lang: Lang) -> Option<String> {
     if *lossy {
         parts.push(norte_i18n::t_in(lang, "help-plugin-lossy"));
     }
-    (!parts.is_empty()).then(|| parts.join(" · "))
+    Some(parts.join(" · "))
 }
 
 /// Detaches a rendering from the topic it borrowed.
@@ -1474,17 +1528,112 @@ mod tests {
     fn una_pagina_de_plugin_lleva_su_insignia() {
         let parsed = norte_help::parse_untrusted(b"cuerpo", "acme.ftp", Some("ACME".to_owned()))
             .fold_flags(true, true);
-        let out = render_topic(&parsed.topic, Lang::En, &Vetado, 60, &theme());
+        // Barrido de anchos, y NADA se pierde en ninguno: la insignia se
+        // ENVUELVE en vez de recortarse. Con publicador y las dos banderas pasa
+        // de 60 celdas, así que recortarla se comía justo los segmentos que
+        // avisan — y se los comía en los terminales estrechos, donde el lector
+        // menos puede adivinar lo que faltaba.
+        for ancho in [40, 60, 100] {
+            let out = render_topic(&parsed.topic, Lang::En, &Vetado, ancho, &theme());
+            for line in &out.lines {
+                assert!(cells(line) <= ancho, "desborda a {ancho}: {line:?}");
+            }
+            // Unido SIN saltos: una frase partida por el envoltorio sigue
+            // siendo la misma frase para quien la lee.
+            let texto = flatten(&out.lines).replace('\n', " ");
+            assert!(
+                texto.contains(&norte_i18n::t_in(Lang::En, "help-plugin-origin")),
+                "la página se declara de un tercero ({ancho}): {texto}"
+            );
+            assert!(texto.contains("ACME"), "el publicador se nombra: {texto}");
+            assert!(
+                texto.contains(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")),
+                "un cuerpo cortado se declara ({ancho}): {texto}"
+            );
+            assert!(
+                texto.contains(&norte_i18n::t_in(Lang::En, "help-plugin-lossy")),
+                "una decodificación con pérdida se declara ({ancho}): {texto}"
+            );
+        }
+    }
+
+    /// El ataque: un `help.md` PULIDO no puede pasar por página del manual.
+    ///
+    /// La insignia se construía uniendo tres datos OPCIONALES y solo se pintaba
+    /// si alguno aparecía, así que un plugin con `publisher = ""` (campo
+    /// requerido, pero el manifiesto no comprueba que no esté vacío) y un
+    /// fichero limpio bajo el tope se quedaba SIN línea: título, regla, cuerpo
+    /// — la misma forma exacta que una página del corpus.
+    ///
+    /// Y con una superficie de entrega de una sola tecla: `extensions_help`
+    /// abre esa página como raíz desde el gestor de extensiones, justo cuando
+    /// el humano está decidiendo si aprueba. Una página titulada «Approving
+    /// extensions» explicando que aprobar es seguro llegaría sin nada que la
+    /// distinguiera de la documentación de la app.
+    #[test]
+    fn un_help_md_pulido_no_puede_pasar_por_pagina_del_manual() {
+        // Lo peor que puede mandar un plugin: sin publicador, sin recortar, sin
+        // pérdida — todo lo que la insignia solía necesitar para existir.
+        let parsed = norte_help::parse_untrusted(
+            b"+++\nid = \"org.evil.demo\"\ntitle = \"Approving extensions\"\n+++\n\
+              Catalogue extensions are audited. Approving is safe.",
+            "org.evil.demo",
+            None,
+        );
+        assert!(
+            plugin_badge(&parsed.topic, Lang::En).is_some(),
+            "una página de plugin SIEMPRE se declara"
+        );
+        let out = render_topic(&parsed.topic, Lang::En, &Libre, 60, &theme());
         let texto = flatten(&out.lines);
-        assert!(texto.contains("ACME"), "el publicador se nombra: {texto}");
         assert!(
-            texto.contains(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")),
-            "un cuerpo cortado se declara: {texto}"
+            texto.contains(&norte_i18n::t_in(Lang::En, "help-plugin-origin")),
+            "la marca de procedencia está: {texto}"
+        );
+
+        // Y la forma de la página NO coincide con la de una del corpus: la del
+        // corpus es título+regla+cuerpo, ésta lleva una línea más entre medias.
+        let corpus = render_topic(
+            topic(Lang::En, "copying").expect("copying"),
+            Lang::En,
+            &Libre,
+            60,
+            &theme(),
         );
         assert!(
-            texto.contains(&norte_i18n::t_in(Lang::En, "help-plugin-lossy")),
-            "una decodificación con pérdida se declara: {texto}"
+            !flatten(&corpus.lines).contains(&norte_i18n::t_in(Lang::En, "help-plugin-origin")),
+            "…y no es una línea que lleve todo el mundo, o no distinguiría nada"
         );
+    }
+
+    /// La invariante entera, barrida: NINGUNA combinación de lo que un plugin
+    /// controla deja una página de plugin sin insignia.
+    #[test]
+    fn ninguna_pagina_de_plugin_se_queda_sin_insignia() {
+        for publisher in [
+            None,
+            Some(String::new()),
+            Some("   ".to_owned()),
+            Some("ACME".to_owned()),
+        ] {
+            for truncated in [false, true] {
+                for lossy in [false, true] {
+                    let parsed =
+                        norte_help::parse_untrusted(b"cuerpo", "acme.ftp", publisher.clone())
+                            .fold_flags(truncated, lossy);
+                    let badge = plugin_badge(&parsed.topic, Lang::En);
+                    assert!(
+                        badge.is_some(),
+                        "sin insignia con publisher={publisher:?} truncated={truncated} lossy={lossy}"
+                    );
+                    let badge = badge.expect("comprobado justo arriba");
+                    assert!(
+                        !badge.starts_with(" ·") && !badge.starts_with('·'),
+                        "un publicador en blanco no deja un separador huérfano: {badge:?}"
+                    );
+                }
+            }
+        }
     }
 
     /// Y una página del corpus NO lleva insignia: la línea existe para

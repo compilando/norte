@@ -2212,18 +2212,10 @@ async fn run(
                                     // es texto NO confiable: `detail_for_bar`
                                     // (enmascarado + tope, patrón #73).
                                     if let Some((id, command)) = parse_plugin_key(&cmd) {
-                                        app.message = Some(
-                                            match backend
-                                                .plugin_run_command(id, command, "")
-                                                .await
-                                            {
-                                                Ok(output) => ta(
-                                                    "msg-plugin-run-ok",
-                                                    &[("output", &detail_for_bar(&output))],
-                                                ),
-                                                Err(e) => error_message(&e),
-                                            },
-                                        );
+                                        let (id, command) =
+                                            (id.to_owned(), command.to_owned());
+                                        run_plugin_command(app, backend, &id, &command)
+                                            .await;
                                         continue;
                                     }
                                     // MISMA función de despacho que el
@@ -2294,9 +2286,18 @@ async fn run(
                         // DESPACHAR la fila activada. El overlay ya se cerró:
                         // el comando actúa sobre los panes de debajo y la
                         // ayuda taparía la confirmación que abra.
-                        if let Some(cmd) =
-                            on_help_key(app, dialog_resolver, key.modifiers, key.code)
-                        {
+                        match on_help_key(app, dialog_resolver, key.modifiers, key.code) {
+                            // (H3e) Una fila de PLUGIN sale por el MISMO
+                            // despacho que el Enter de la palette, no por un
+                            // camino paralelo: `plugin.run_command` es de
+                            // donde sale la autorización y la ayuda no la
+                            // rodea. No toca los panes, así que no arrastra la
+                            // contabilidad de cd del brazo de abajo.
+                            Some(HelpDispatch::Plugin(id, command)) => {
+                                run_plugin_command(app, backend, &id, &command).await;
+                            }
+                            None => {}
+                            Some(HelpDispatch::Command(cmd)) => {
                             // MISMO despacho y MISMA contabilidad posterior que
                             // el Enter de la palette: una fila de la ayuda es
                             // `nav.parent` tanto como lo es una de la palette,
@@ -2338,6 +2339,7 @@ async fn run(
                             if let Some(pending) = app.pending_open.take() {
                                 app.message =
                                     Some(launch_opener(terminal, capture, pending).await);
+                            }
                             }
                         }
                     } else if app.modal.is_some() {
@@ -3030,6 +3032,49 @@ async fn on_columns_key(
 ///
 /// TWO REGIMES, the same split the palette and the search dialog already have:
 ///
+/// What [`on_help_key`] hands the run loop to execute.
+///
+/// Two variants because a help row can name two different KINDS of thing, and
+/// only the run loop can run either: this function is sync (its tests are, and
+/// its callers are async), while both destinations need an `await`.
+///
+/// Keeping them apart in the type rather than collapsing to a string is the
+/// point — `Command` is the closed, parsed vocabulary of the app (#112), and a
+/// plugin key is deliberately NOT in it: its `command_id` half comes from a
+/// third-party manifest with no validated charset, so it must never be handed
+/// to a lookup as though it were one of ours.
+#[derive(Debug, PartialEq, Eq)]
+enum HelpDispatch {
+    /// A built-in command, already parsed against `COMMANDS`.
+    Command(Command),
+    /// A plugin-contributed command: `(plugin_id, command_id)`, split at the
+    /// FIRST colon after the prefix ([`parse_plugin_key`]).
+    Plugin(String, String),
+}
+
+/// Runs a plugin's command and announces the result (P1, H3e).
+///
+/// The ONE place either surface dispatches one. It was written inline in the
+/// palette's `Enter` arm and the help overlay grew a second need for it in
+/// H3e; a copy would have been a second path with its own answer to what a
+/// failure looks like, and H3b's rule is that executing from the help goes
+/// through the SAME dispatch as the palette, with nothing bypassed.
+///
+/// Authorisation is the SERVER's: `plugin.run_command` resolves the command
+/// against the catalogue and enforces approved+enabled itself
+/// (`resolve_runnable`), independently of any snapshot a client froze. What a
+/// client-side check buys is agreement with what the reader is looking at, and
+/// it is never what permits the call.
+///
+/// The plugin's output is UNTRUSTED text: it goes through `detail_for_bar`
+/// (masked and capped, pattern #73) before it reaches the status bar.
+async fn run_plugin_command(app: &mut App, backend: &Backend, id: &str, command: &str) {
+    app.message = Some(match backend.plugin_run_command(id, command, "").await {
+        Ok(output) => ta("msg-plugin-run-ok", &[("output", &detail_for_bar(&output))]),
+        Err(e) => error_message(&e),
+    });
+}
+
 /// * While the sidebar filter is open the keys are FIXED. There is no
 ///   `dialog.*` verb for "type a character", so resolving through the keymap
 ///   here would make every printable key mean whatever it is bound to instead
@@ -3056,7 +3101,7 @@ fn on_help_key(
     resolver: &mut Resolver,
     mods: KeyModifiers,
     code: KeyCode,
-) -> Option<Command> {
+) -> Option<HelpDispatch> {
     // Salida de emergencia global, hardcodeada ANTES de resolver — como en
     // todos los overlays (la de este fichero, jamás `Command::AppQuit`: no
     // pregunta).
@@ -3190,6 +3235,32 @@ fn on_help_key(
                 // silencio se leería como que el comando corrió. (El resto
                 // de ids del corpus SÍ parsean: la puerta de documentación
                 // los cruza byte a byte contra `COMMANDS ∪ DIALOG_COMMANDS`.)
+                // (H3e) Una fila de PLUGIN. Su clave es `plugin:{id}:{cmd}`,
+                // que no vive en `COMMANDS` y que `Command::parse` rechaza —
+                // así que sin este brazo el Enter caía en el `msg-help-not-
+                // runnable` de abajo y la app se negaba a correr justo la fila
+                // que ella misma acababa de pintar como disponible, con el pie
+                // prometiendo `⏎ ejecutar`. La atenuación era decorativa.
+                if let Some((id, command)) = parse_plugin_key(&cmd) {
+                    // La foto congelada DIMEA; jamás AUTORIZA. Negarse aquí es
+                    // coherencia con lo que el lector tiene delante — una fila
+                    // atenuada que al pulsarla corriera sería peor que no
+                    // atenuar nada — pero la autoridad sigue siendo
+                    // `resolve_runnable` en el servidor, que comprueba
+                    // aprobado+activo por su cuenta y no se fía de ningún
+                    // cliente. Dos comprobaciones que dicen lo mismo, una
+                    // cortés y otra vinculante.
+                    if !norte_help::ChordResolver::availability(&*app.help_chords, &cmd)
+                        .is_available()
+                    {
+                        app.message = Some(t("msg-help-not-runnable"));
+                        return None;
+                    }
+                    let (id, command) = (id.to_owned(), command.to_owned());
+                    // Cerrar ANTES de despachar, como abajo.
+                    app.help = None;
+                    return Some(HelpDispatch::Plugin(id, command));
+                }
                 let Some(parsed) = Command::parse(&cmd) else {
                     // La barra de estado se ve: el overlay ocupa el frame
                     // menos una fila arriba y otra abajo, y la barra es esa
@@ -3201,7 +3272,7 @@ fn on_help_key(
                 // sobre los panes de debajo y la ayuda taparía la
                 // confirmación que abra.
                 app.help = None;
-                return Some(parsed);
+                return Some(HelpDispatch::Command(parsed));
             }
             // Foco en la lateral. Arrear el cursor ya PREVISUALIZA (abre lo
             // que pisa), así que el tema resaltado suele ser YA el abierto y
@@ -3706,7 +3777,7 @@ mod help_key_tests {
     }
 
     /// One unmodified key press.
-    fn press(app: &mut App, resolver: &mut Resolver, code: KeyCode) -> Option<Command> {
+    fn press(app: &mut App, resolver: &mut Resolver, code: KeyCode) -> Option<HelpDispatch> {
         on_help_key(app, resolver, KeyModifiers::NONE, code)
     }
 
@@ -3788,12 +3859,106 @@ mod help_key_tests {
         let cmd = press(&mut app, &mut r, KeyCode::Enter);
         assert_eq!(
             cmd,
-            Some(Command::PaneCopy),
+            Some(HelpDispatch::Command(Command::PaneCopy)),
             "la primera fila de `copying` es `pane.copy`"
         );
         assert!(
             app.help.is_none(),
             "el overlay se cierra ANTES de despachar"
+        );
+    }
+
+    /// Deja la ayuda abierta sobre la página de `acme.ftp`, con una fila
+    /// ejecutable y el foco ya en el cuerpo: lo que ve un lector que llegó por
+    /// `F1` desde el gestor de extensiones.
+    fn app_con_pagina_de_plugin(activo: bool) -> (App, Resolver) {
+        let mut app = app_with_help();
+        let mut plugin = norte_proto::methods::PluginInfo {
+            id: "acme.ftp".into(),
+            name: "FTP".into(),
+            publisher: "ACME".into(),
+            version: "1.0.0".into(),
+            category: "command".into(),
+            capabilities: Vec::new(),
+            approved: activo,
+            enabled: activo,
+            description: None,
+            commands: vec![norte_proto::methods::PluginCommandInfo {
+                id: "sync".into(),
+                title: "Sincronizar".into(),
+            }],
+            columns: Vec::new(),
+            has_help: true,
+        };
+        plugin.has_help = true;
+        app.freeze_help_plugins(std::slice::from_ref(&plugin));
+        let help = app.help.as_mut().expect("abierto");
+        help.state.open(&TopicId::new("acme.ftp"));
+        let parsed = norte_help::parse_untrusted(
+            b"+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n\
+              commands = [\"plugin:acme.ftp:sync\"]\n+++\ncuerpo",
+            "acme.ftp",
+            None,
+        );
+        help.state.install_plugin_topic(parsed.topic);
+        let mut r = dialog_resolver();
+        press(&mut app, &mut r, KeyCode::Tab);
+        assert_eq!(state(&app).focus(), Focus::Body, "Tab pasa al cuerpo");
+        (app, r)
+    }
+
+    /// H3e: Enter sobre la fila de un plugin ACTIVO la despacha de verdad.
+    ///
+    /// No lo hacía. La clave es `plugin:{id}:{cmd}`, que no vive en `COMMANDS`
+    /// y que `Command::parse` rechaza, así que el Enter caía en el brazo de
+    /// «esta fila no es ejecutable» — sobre una fila que el propio resolver
+    /// acababa de pintar como DISPONIBLE, con el pie prometiendo `⏎ ejecutar`.
+    /// La atenuación de `verdict_with_plugins` era decorativa: la app se negaba
+    /// tanto con la fila encendida como con la apagada.
+    #[test]
+    fn enter_sobre_la_fila_de_un_plugin_activo_la_despacha() {
+        let (mut app, mut r) = app_con_pagina_de_plugin(true);
+        assert!(
+            norte_help::ChordResolver::availability(&*app.help_chords, "plugin:acme.ftp:sync")
+                .is_available(),
+            "la premisa: el resolver la pinta disponible"
+        );
+        let cmd = press(&mut app, &mut r, KeyCode::Enter);
+        assert_eq!(
+            cmd,
+            Some(HelpDispatch::Plugin(
+                "acme.ftp".to_owned(),
+                "sync".to_owned()
+            )),
+            "el run loop recibe qué plugin y qué comando, ya separados"
+        );
+        assert!(
+            app.help.is_none(),
+            "y el overlay se cierra ANTES de despachar, como con un built-in"
+        );
+    }
+
+    /// Y sobre la de un plugin APAGADO se niega. La foto congelada no autoriza
+    /// nada —`plugin.run_command` comprueba aprobado+activo por su cuenta en el
+    /// servidor— pero una fila atenuada que al pulsarla corriera sería peor que
+    /// no atenuar nada: el lector aprendería que la atenuación no significa
+    /// nada.
+    #[test]
+    fn enter_sobre_la_fila_de_un_plugin_apagado_se_niega() {
+        let (mut app, mut r) = app_con_pagina_de_plugin(false);
+        assert_eq!(
+            norte_help::ChordResolver::availability(&*app.help_chords, "plugin:acme.ftp:sync")
+                .reason(),
+            Some(norte_help::Reason::PluginInactive),
+            "la premisa: el resolver la pinta atenuada"
+        );
+        let cmd = press(&mut app, &mut r, KeyCode::Enter);
+        assert_eq!(cmd, None, "no se despacha nada");
+        assert!(app.help.is_some(), "y la ayuda se queda abierta");
+        assert_eq!(
+            app.message.as_deref(),
+            Some(norte_i18n::t("msg-help-not-runnable").as_str()),
+            "comerse el Enter en silencio se leería como que el comando corrió"
         );
     }
 

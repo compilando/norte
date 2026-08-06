@@ -30,6 +30,13 @@ use crate::keymap::{Effective, Screen, dialog_hint_id, help_id, paint_chord};
 /// Width in CELLS of the chord column of the cheatsheet.
 const CHORD_COLUMN: usize = 14;
 
+/// What a plugin-contributed command's dispatch key starts with — the same
+/// prefix `norte_frontend::availability::plugin_of_command` strips, and that
+/// function stays the authority on whether a key is WELL FORMED. This constant
+/// answers the looser question [`TuiChords::label`] needs: does this key claim
+/// to be a plugin's, and therefore carry text nobody in this process wrote?
+const PLUGIN_KEY_PREFIX: &str = "plugin:";
+
 /// The facts of a context with nothing in the way: what [`TuiChords`] answers
 /// against until the overlay opens and freezes the real ones.
 ///
@@ -387,7 +394,32 @@ impl ChordResolver for TuiChords {
         }
         let id = label_id(command);
         let text = norte_i18n::t_in(self.lang, &id);
-        if text == id { String::new() } else { text }
+        if text != id {
+            return text;
+        }
+        if command.starts_with(PLUGIN_KEY_PREFIX) {
+            // A `plugin:` key the snapshot does not name. Blank would be the
+            // generic answer, and `norte_help::label_or_id` would then fall
+            // back to the command id — the behaviour we want, except that a
+            // `plugin:` id is THIRD-PARTY TEXT and that fallback paints it
+            // RAW. Handing back the masked, capped spelling keeps the visible
+            // behaviour (the row wears its key) and takes the hazard out of it.
+            //
+            // Today only `norte_help::parse_untrusted` builds these topics and
+            // its `is_own_command` already refuses a key carrying a control or
+            // a bidi override — but `Topic` is a plain struct with public
+            // fields and `HelpState::install_plugin_topic` does not re-check,
+            // so the renderer would be trusting a filter three crates away to
+            // stay in place. It costs one comparison not to.
+            //
+            // The PERMISSIVE prefix on purpose, unlike the strict
+            // `plugin_of_command` above: that one asks "may this be answered
+            // from the snapshot", an identity question, while this asks "is
+            // this third-party text", and anything merely CLAIMING to be a
+            // plugin key must be handled as though it were.
+            return crate::app::plugin_label(command);
+        }
+        String::new()
     }
 
     /// Whether the command can run in the context the overlay was opened in,
@@ -920,15 +952,39 @@ mod tests {
     fn una_clave_sin_titulo_en_la_foto_sigue_pintando_su_id() {
         let r = resolver_con_titulos(&[("plugin:org.norte.demo:greet", "Greet the world")]);
         assert_eq!(
-            r.label("plugin:org.norte.demo:otro"),
-            "",
-            "el resolver contesta en blanco, que es el contrato de `label`"
-        );
-        assert_eq!(
             render_command("plugin:org.norte.demo:otro", &r),
             CommandText::Name("plugin:org.norte.demo:otro".to_owned()),
-            "…y la cadena de `norte-help` se repliega al id"
+            "la fila sigue llevando su clave: pobre, pero legible — una fila \
+             sin texto ninguno sería peor"
         );
+    }
+
+    /// …y esa clave se entrega ENMASCARADA. El repliegue de
+    /// `norte_help::label_or_id` pinta el id crudo, y un id de plugin es texto
+    /// de tercero: hoy `is_own_command` ya rechaza una clave con controles o
+    /// bidi al PARSEAR, pero `Topic` es un struct con campos públicos y
+    /// `install_plugin_topic` no lo vuelve a comprobar. El pintor no puede
+    /// depender de un filtro que vive tres crates más allá.
+    #[test]
+    fn una_clave_de_plugin_hostil_no_se_pinta_cruda() {
+        let r = resolver_con_titulos(&[]);
+        let hostil = "plugin:acme.ftp:\u{202E}x\u{200B}y";
+        let pintado = r.label(hostil);
+        assert!(
+            !pintado.chars().any(norte_encoding::is_terminal_hazard),
+            "sin peligros de terminal: {pintado:?}"
+        );
+        assert!(pintado.contains('\u{FFFD}'), "anti-vacuidad: {pintado:?}");
+        assert_eq!(
+            render_command(hostil, &r),
+            CommandText::Name(pintado),
+            "y es lo que la cadena de `norte-help` acaba nombrando"
+        );
+        // Una clave MALFORMADA (que `plugin_of_command` rechaza) también: la
+        // pregunta «¿esto es texto de tercero?» es más laxa que «¿esto
+        // identifica un comando?», a propósito.
+        let malformada = r.label("plugin:\u{202E}");
+        assert!(!malformada.chars().any(norte_encoding::is_terminal_hazard));
     }
 
     /// Un título hostil llega ENMASCARADO y ACOTADO — el enmascarado ocurre en
@@ -947,10 +1003,11 @@ mod tests {
             "sin peligros de terminal: {label:?}"
         );
         assert!(
-            label.chars().count() <= crate::app::PLUGIN_NAME_WIRE_CAP,
-            "acotado: {} chars",
+            label.chars().count() <= crate::app::PLUGIN_NAME_WIRE_CAP + 1,
+            "acotado (+1 por la marca de recorte): {} chars",
             label.chars().count()
         );
+        assert!(label.ends_with('…'), "y el recorte se MARCA: {label:?}");
         assert!(label.contains('\u{FFFD}'), "anti-vacuidad: {label:?}");
     }
 
@@ -970,12 +1027,14 @@ mod tests {
             norte_i18n::t_in(norte_i18n::Lang::En, "help-cmd-pane-copy"),
         );
         assert_ne!(r.label("pane.copy"), "IMPOSTOR");
-        // Y una clave `plugin:` MALFORMADA tampoco entra: `plugin_of_command`
-        // la rechaza, igual que el brazo de disponibilidad la atenúa
-        // fail-closed. Una sola definición de «esto es una clave de plugin».
+        // Y una clave `plugin:` MALFORMADA tampoco se lee del mapa:
+        // `plugin_of_command` la rechaza, igual que el brazo de disponibilidad
+        // la atenúa fail-closed. Una sola definición de «esto IDENTIFICA un
+        // comando». Cae al repliegue seguro, que devuelve la propia clave
+        // enmascarada — jamás el título que el mapa pretendía asociarle.
         let r = resolver_con_titulos(&[("plugin:", "IMPOSTOR"), ("plugin:x", "IMPOSTOR")]);
-        assert_eq!(r.label("plugin:"), "");
-        assert_eq!(r.label("plugin:x"), "");
+        assert_eq!(r.label("plugin:"), "plugin:");
+        assert_eq!(r.label("plugin:x"), "plugin:x");
     }
 
     /// Los títulos viajan con el re-congelado de hechos, como el conjunto de

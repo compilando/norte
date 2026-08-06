@@ -290,9 +290,14 @@ help-group-remote = Remote & archives
 # H3e: the group the plugin pages sit under, after everything the host wrote.
 # Not a corpus tag — `norte_frontend::help` emits it for the plugin rows.
 help-group-extensions = Extensions
-# H3e: the provenance line under a plugin page's title. `truncated` and `lossy`
-# come from the HOST, not from re-parsing the text (it arrives already short and
-# already decoded), so these are the only place a reader learns a page was cut.
+# H3e: the provenance line under a plugin page's title. `help-plugin-origin` is
+# UNCONDITIONAL on any plugin page and the others are appended when true — a
+# plugin that declares no publisher and ships a clean file must not be able to
+# make the line vanish and have its page read as a built-in one.
+# `truncated`/`lossy` come from the HOST, not from re-parsing the text (it
+# arrives already short and already decoded), so this is the only place a reader
+# learns a page was cut.
+help-plugin-origin = from an extension
 help-plugin-truncated = cut short
 help-plugin-lossy = some bytes did not decode
 # The synthetic `keys` entry gets NO header: it is a group of one by
