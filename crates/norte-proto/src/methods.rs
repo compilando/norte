@@ -297,8 +297,10 @@ use crate::{
 /// mismo razonamiento que el bump 0.30.0 deja escrito arriba).
 ///
 /// Quien reciba `MethodNotFound` a un `plugin.help` debe tratarlo como «este
-/// plugin no tiene página», nunca como un fallo: es exactamente lo que
-/// contesta un daemon 0.33, y la ayuda es cosmética.
+/// plugin no tiene página», nunca como un fallo. La razón es que la ayuda es
+/// COSMÉTICA: si el peer no implementa el método, no hay página que pintar y no
+/// hay nada roto. No es que un daemon N-1 conteste eso — nunca recibe la
+/// llamada, porque el handshake ya lo rechazó.
 pub const PROTOCOL_VERSION: &str = "0.34.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
@@ -341,6 +343,17 @@ pub const FS_READ_MAX_CHUNK: u64 = 8 * 1024 * 1024;
 /// 0017). Pedir un `limit` mayor no es error: se recorta a este techo (mismo
 /// patrón que [`FS_READ_MAX_CHUNK`]), y el resto sigue por el `next_cursor`.
 pub const FS_LIST_MAX_PAGE: u32 = 10_000;
+
+/// Tope de bytes de [`PluginHelpResult::markdown`] (H3e, 0.34.0), aplicado
+/// tanto al fichero fuente como al TEXTO decodificado.
+///
+/// Está aquí, y no solo en el host, porque es NORMATIVO: el contrato invita a
+/// un receptor a dimensionar contra él, y un peer que no es Rust no puede
+/// resolver `norte_help::Limits::untrusted()`. El host DEBE recortar a este
+/// número — `norte-core` tiene un test que ancla los dos valores, así que no
+/// pueden separarse en silencio— y cambiarlo cambia el contrato de wire, con
+/// bump.
+pub const PLUGIN_HELP_MAX_BYTES: usize = 64 * 1024;
 
 /// ¿Acepta un core `server` a un cliente `client`? N y N-1 (spec §11):
 /// mismo major; en 0.x el "major efectivo" es el minor — se acepta el
@@ -604,6 +617,15 @@ pub const PLUGIN_SET_CONFIG: &str = "plugin.set_config";
 /// modelo. Parsear en los dos lados es deliberado — host-side para que
 /// `norte doctor` y el catálogo puedan reportar problemas sin un frontend
 /// delante, cliente-side porque el wire lleva TEXTO, no un árbol.
+///
+/// Un id DESCONOCIDO es `INVALID_PARAMS` (mismo trato que
+/// [`PLUGIN_SET_APPROVAL`] da a un plugin fantasma), NO una página vacía. Ojo
+/// con la analogía: la apertura es la de [`PLUGIN_LIST`], pero la indulgencia
+/// con los ids NO es la de [`PLUGIN_GET_CONFIG`], que ante un id desconocido
+/// responde `keys: []` y jamás falla. Aquí sí falla, y a propósito: la página
+/// vacía ya SIGNIFICA algo distinto ("este plugin existe y no documentó nada"),
+/// así que devolverla también para un plugin inexistente borraría la diferencia
+/// que un frontend necesita para decidir si su catálogo está rancio.
 pub const PLUGIN_HELP: &str = "plugin.help";
 /// `rpc.cancel` — notificación client→server (#72): retira la request en
 /// vuelo cuyo `id` JSON-RPC se indica. Best-effort y SIN respuesta: la
@@ -1604,23 +1626,31 @@ pub struct PluginInfo {
     /// deserializar aquí (mismo criterio aditivo que `commands` en 0.26.0).
     #[serde(default)]
     pub columns: Vec<PluginColumnInfo>,
-    /// `true` si el plugin trae un `help.md` junto a su `plugin.toml`
+    /// `true` si el plugin trae un `help.md` SERVIBLE junto a su `plugin.toml`
     /// (H3e, 0.34.0). Es DISCOVERY barato: decide si el nodo del plugin
-    /// aparece en la barra de temas de la ayuda, y evita que 64 KiB por
-    /// plugin viajen en cada `plugin.list` — el contenido se pide aparte
-    /// con [`PLUGIN_HELP`], bajo demanda.
+    /// aparece en la barra de temas de la ayuda, y evita que
+    /// [`PLUGIN_HELP_MAX_BYTES`] por plugin viajen en cada `plugin.list` — el
+    /// contenido se pide aparte con [`PLUGIN_HELP`], bajo demanda.
     ///
-    /// El host NO lee el fichero ni lo parsea, así que un `help.md` presente
-    /// pero ilegible o vacío sale `true` aquí y se degrada al pedirlo (markdown
-    /// vacío), que es la dirección correcta — la ayuda es cosmética y jamás
-    /// tumba un plugin.
+    /// El host DEBE calcularlo con la MISMA guarda que aplica al servir
+    /// [`PLUGIN_HELP`], no con una comprobación de existencia más laxa. Si no,
+    /// el par (`has_help: true`, `markdown: ""`) le dice a quien llama «esa ruta
+    /// existe y es un fichero regular» sobre un fichero que el host se niega a
+    /// servir — un oráculo de rutas montado con dos métodos abiertos, ninguno
+    /// gateado por policy.
     ///
-    /// Lo que el host DEBE hacer es calcularlo con la MISMA guarda que aplica
-    /// al servir [`PLUGIN_HELP`], no con una comprobación de existencia más
-    /// laxa. Si no, el par (`has_help: true`, `markdown: ""`) le dice a quien
-    /// llama «esa ruta existe y es un fichero regular» sobre un fichero que el
-    /// host se niega a servir — un oráculo de rutas montado con dos métodos
-    /// abiertos, ninguno gateado por policy.
+    /// Qué puede concluir un RECEPTOR, que es lo que importa aquí:
+    ///
+    /// - `true` NO promete una página con contenido. El host no lee el fichero
+    ///   ni lo parsea, así que un `help.md` vacío o ilegible sale `true` y se
+    ///   degrada al pedirlo (markdown vacío) — la dirección correcta, porque la
+    ///   ayuda es cosmética y jamás tumba un plugin.
+    /// - `false` NO significa «no hay fichero». Significa «no hay página que yo
+    ///   vaya a servir»: puede no existir, o existir y no pasar la guarda (un
+    ///   symlink que sale del directorio del plugin). Las dos son
+    ///   indistinguibles a propósito, y distinguirlas es justo lo que reabriría
+    ///   el oráculo. Quien quiera el diagnóstico lo obtiene de `norte doctor`,
+    ///   en local, no del wire.
     ///
     /// `skip_serializing_if` sobre `false`: un plugin sin ayuda produce un
     /// payload IDÉNTICO byte a byte al de 0.33 (mismo criterio aditivo
@@ -1974,12 +2004,12 @@ pub struct PluginHelpResult {
     /// `skip_serializing_if`), así que ausente y vacío solo se distinguen de
     /// ENTRADA, y ahí significan lo mismo.
     ///
-    /// El tope acota ESTE TEXTO, no solo los bytes del fichero: un byte puede
-    /// decodificar a tres (windows-1252 `0x80` → `U+20AC`), así que una fuente
-    /// que cabía justa daría el triple del tope si solo se acotara la fuente.
-    /// El host corta las dos veces y `truncated` cubre ambos cortes, de modo
-    /// que un receptor puede dimensionar por el tope documentado y los dos
-    /// lados ven la MISMA página.
+    /// El tope es [`PLUGIN_HELP_MAX_BYTES`] y acota ESTE TEXTO, no solo los
+    /// bytes del fichero: un byte puede decodificar a tres (windows-1252 `0x80`
+    /// → `U+20AC`), así que una fuente que cabía justa daría el triple del tope
+    /// si solo se acotara la fuente. El host corta las dos veces y `truncated`
+    /// cubre ambos cortes, de modo que un receptor puede dimensionar por esa
+    /// constante y los dos lados ven la MISMA página.
     ///
     /// NO está enmascarado: lleva verbatim los peligros de terminal que el
     /// plugin escribiera (ESC, controles C0, anulaciones bidi). Se parsea con

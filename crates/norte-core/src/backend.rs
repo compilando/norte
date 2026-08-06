@@ -1335,13 +1335,27 @@ impl Backend {
         }
     }
 
-    /// La página de ayuda de un plugin (H3e, 0.34.0), ya acotada por el host.
-    /// Embebido: registro EFÍMERO por llamada en `spawn_blocking` (regla 2),
-    /// mismo criterio de coste que [`Self::plugin_get_config`].
+    /// La página de ayuda de un plugin (H3e, 0.34.0), ya acotada por el host a
+    /// [`norte_proto::methods::PLUGIN_HELP_MAX_BYTES`]. Embebido: registro
+    /// EFÍMERO por llamada en `spawn_blocking` (regla 2), mismo criterio de
+    /// coste que [`Self::plugin_get_config`].
+    ///
+    /// El markdown que devuelve NO está enmascarado: lleva verbatim los peligros
+    /// de terminal que el plugin escribiera (ESC, controles C0, anulaciones
+    /// bidi). Se parsea con `norte_help::parse_untrusted`, que enmascara al
+    /// construir el modelo; nunca se pinta ni se loguea en crudo.
     ///
     /// # Errors
-    /// Taxonomía del protocolo; [`Error::NotFound`] si `id` no está en el
-    /// catálogo. Con el daemon caído, `ProviderUnavailable{retryable:true}`.
+    /// Taxonomía del protocolo; con el daemon caído,
+    /// `ProviderUnavailable{retryable:true}`.
+    ///
+    /// Un `id` que no está en el catálogo NO da el mismo error por los dos
+    /// caminos, y conviene saberlo: embebido es [`Error::NotFound`], mientras
+    /// que el daemon responde `INVALID_PARAMS` sin taxonomía en `data`, que
+    /// `to_taxonomy` entrega como `Internal{panic:false}`. Un frontend que
+    /// quiera distinguir "plugin desconocido" de "el daemon tuvo un problema"
+    /// no puede hacerlo por el wire; lo correcto en ambos casos es tratarlo
+    /// como "no hay página" y seguir pintando.
     pub async fn plugin_help(
         &self,
         id: &str,
@@ -2706,10 +2720,15 @@ pub mod remote {
         }
 
         /// `plugin.help` contra el daemon (H3e, 0.34.0). Sin fallback
-        /// especial: un daemon N-1 (0.33, sin el handler) responde
-        /// `MethodNotFound`, que `call_timed`/`to_taxonomy` degradan a un
-        /// error genérico — el frontend lo trata como "este plugin no tiene
-        /// página" y sigue pintando la ayuda, nunca como un fallo.
+        /// especial: cualquier error —incluido un peer que no implemente el
+        /// método y conteste `MethodNotFound`— lo degradan
+        /// `call_timed`/`to_taxonomy` a un error de la taxonomía, y el frontend
+        /// lo trata como "este plugin no tiene página" y sigue pintando la
+        /// ayuda, nunca como un fallo. La ayuda es cosmética.
+        ///
+        /// El markdown NO está enmascarado (ver [`Backend::plugin_help`]):
+        /// se parsea antes de pintarlo, nunca se vuelca en crudo a un terminal
+        /// ni a un log.
         pub(super) async fn plugin_help(
             &self,
             id: &str,

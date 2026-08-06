@@ -35,7 +35,7 @@ mod manifest;
 mod runtime;
 
 pub use capability::{Capabilities, NetCap, Scope};
-pub use catalog::{Catalog, LoadError, PluginEntry, Tier};
+pub use catalog::{Catalog, HelpPresence, LoadError, PluginEntry, Tier, verified_child};
 pub use config_values::{
     CONFIG_VALUES_MAX_BYTES, ConfigValueError, encode_wire_value, persist_plugin_setting,
     persist_plugin_setting_typed, resolve_settings,
@@ -44,7 +44,7 @@ pub use manifest::{
     COMMAND_ID_MAX_CHARS, COMMAND_TITLE_MAX_CHARS, CONFIG_DESCRIPTION_MAX_CHARS,
     CONFIG_ENUM_MAX_VALUES, CONFIG_KEY_MAX_CHARS, CONFIG_MAX_KEYS, CONFIG_STRING_MAX_CHARS,
     Category, ColumnContrib, CommandContrib, ConfigKeySpec, Contributions, DecoratorContrib,
-    HookContrib, Manifest, ManifestError, PreviewerContrib, ProviderContrib,
+    HookContrib, Manifest, ManifestError, PreviewerContrib, ProviderContrib, is_valid_plugin_id,
 };
 pub use runtime::{
     ColumnsInstance, DecoratorInstance, PluginInstance, PluginRuntime, ProviderInstance,

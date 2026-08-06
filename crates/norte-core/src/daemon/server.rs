@@ -2665,14 +2665,15 @@ async fn handle_plugin_get_config(
 /// desconocido es `INVALID_PARAMS`, mismo trato que `plugin.set_approval` da a
 /// un plugin fantasma.
 ///
-/// A diferencia de sus vecinos, este método parte el LOOKUP de la LECTURA:
-/// `plugin.list`/`plugin.get_config` solo tocan memoria, pero aquí hay un
-/// fichero de hasta 64 KiB que puede vivir en un montaje lento u hostil, y
-/// leerlo dentro del handler async sosteniendo el `std::Mutex` del registro
-/// violaría la regla 2 y encolaría a todas las demás conexiones detrás. Por eso:
-/// lookup bajo el lock, lock soltado, lectura + acotado en `spawn_blocking`. Un
-/// plugin sin `help.md` legible responde la página en blanco sin una sola
-/// llamada bloqueante.
+/// Ni un solo syscall bajo el lock: aquí hay un fichero de hasta
+/// [`methods::PLUGIN_HELP_MAX_BYTES`] que puede vivir en un montaje lento u
+/// hostil, y tanto la guarda de escape (tres syscalls) como la lectura dentro
+/// del handler async sosteniendo el `std::Mutex` del registro violarían la regla
+/// 2 y encolarían a todas las demás conexiones detrás. Por eso el lock solo
+/// resuelve el id contra el catálogo —memoria pura— y devuelve un
+/// `HelpJob` OPACO; verificar y leer ocurre en `spawn_blocking`, con el lock ya
+/// soltado. El trabajo es opaco a propósito: este handler nunca llega a tener
+/// una ruta que pudiera re-derivar del id del wire.
 // `skip_all` SIN el id: viene crudo del wire y no debe llegar al log antes de
 // validarse contra el catálogo (mismo criterio que `handle_plugin_set_approval`).
 #[tracing::instrument(skip_all)]
@@ -2682,31 +2683,22 @@ async fn handle_plugin_help(
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::PluginHelpParams = parse_params(params)?;
     // El lock se libera al cerrar el bloque, ANTES de cualquier `.await`.
-    let path = {
+    let job = {
         let reg = shared.plugins.lock().expect("plugins lock sano");
-        if !reg.is_known(&p.id) {
-            return Err(RpcError::protocol(
-                codes::INVALID_PARAMS,
-                "unknown plugin id",
-            ));
-        }
-        // Ruta YA canonicalizada y confirmada dentro del dir del plugin: se abre
-        // tal cual, sin re-derivarla del id (ver `verified_help_path`).
-        reg.verified_help_path(&p.id)
+        reg.help_job(&p.id)
     };
-    let Some(path) = path else {
-        // Sin página legible (ausente, ilegible o escapada del directorio): en
-        // blanco, y sin tocar el disco. La ayuda es cosmética; quien quiere el
-        // diagnóstico fino usa `norte doctor`.
-        return to_value(&crate::PluginRegistry::read_help_page(None));
+    let Some(job) = job else {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "unknown plugin id",
+        ));
     };
-    // `read_help_page` es también quien TOPA la lectura (`max_bytes + 1`): un
+    // `HelpJob::read` es también quien TOPA la lectura (`max_bytes + 1`): un
     // `help.md` disperso de 100 GiB no puede convertir esta llamada en una
     // reserva de 100 GiB. Ver su rustdoc.
-    let page =
-        tokio::task::spawn_blocking(move || crate::PluginRegistry::read_help_page(Some(&path)))
-            .await
-            .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "plugin help task panicked"))?;
+    let page = tokio::task::spawn_blocking(move || job.read())
+        .await
+        .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "plugin help task panicked"))?;
     to_value(&page)
 }
 

@@ -1486,11 +1486,13 @@ max = 10
         );
     }
 
-    /// TDD (H3e, addition A): `has_help` is one `is_file` at discovery while
-    /// the CONTENT is read later through the escape guard, so a `help.md`
-    /// symlinked OUT of the plugin's own directory announces a page and
-    /// serves nothing. From the reader's side that is indistinguishable from
-    /// an author who wrote nothing, which is exactly why it needs a finding.
+    /// TDD (H3e, addition A): `announces_help` is one `is_file` at discovery
+    /// while the CONTENT is read later through the escape guard, so a `help.md`
+    /// symlinked OUT of the plugin's own directory announces a page and serves
+    /// nothing. From the reader's side that is indistinguishable from an author
+    /// who wrote nothing, which is exactly why it needs a finding. The wire's
+    /// `PluginInfo.has_help` is the STRICT flag and reports `false` here — this
+    /// finding is the only thing that surfaces the case at all.
     #[cfg(unix)]
     #[test]
     fn un_help_md_que_escapa_del_directorio_del_plugin_sale_como_vacio() {

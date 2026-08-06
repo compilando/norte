@@ -342,6 +342,78 @@ pub type ResolvedPreviewer = (
 /// repetir el tuple de 5 elementos (clippy `type_complexity`).
 pub type ResolvedDecorator = ResolvedPreviewer;
 
+/// El trabajo de leer el `help.md` de UN plugin ya resuelto, listo para
+/// ejecutarse fuera del reactor (H3e). Se obtiene con
+/// [`PluginRegistry::help_job`] y se consume con [`HelpJob::read`].
+///
+/// Es OPACO: lleva dentro el `dir` que el catálogo guardó al descubrir, y no lo
+/// expone. Ese es todo el punto — el llamador consigue algo que puede mover a un
+/// `spawn_blocking` sin haber recibido nunca una ruta que pudiera re-derivar del
+/// id que vino por el wire, así que la guarda de escape se queda entera dentro
+/// del registro en vez de convertirse en una obligación del que llama.
+#[derive(Debug, Clone)]
+pub(crate) struct HelpJob {
+    dir: PathBuf,
+}
+
+impl HelpJob {
+    /// Verifica y LEE, acotado, el `help.md` del plugin. Sin página legible
+    /// (ausente, ilegible o escapada del directorio) devuelve la página en
+    /// blanco, indistinguible de un `help.md` vacío: la ayuda es cosmética y no
+    /// tiene por qué distinguir esos casos — quien los distingue es
+    /// `norte doctor`.
+    ///
+    /// La guarda de escape ([`norte_plugin_host::verified_child`]) se aplica
+    /// AQUÍ, no al construir el trabajo: son tres syscalls y este método corre
+    /// en `spawn_blocking`, mientras que construirlo es memoria pura y ocurre
+    /// bajo el lock del registro.
+    ///
+    /// EL TOPE SE APLICA AL LEER, no al decodificar. La guarda comprueba que hay
+    /// un fichero regular y NADA sobre su tamaño, así que un plugin puede enviar
+    /// `help.md` como un fichero DISPERSO de 100 GiB —unos pocos bytes en un
+    /// tarball— y una sola llamada a `plugin.help` intentaría reservar 100 GiB:
+    /// abortar por fallo de reserva, o el OOM killer llevándose el daemon con su
+    /// journal y toda task en vuelo. Como el método está ABIERTO a un agente y
+    /// el plugin no necesita ni aprobación ni activación, sería la primera
+    /// lectura sin tope disparable por un agente en el daemon. Se leen como
+    /// mucho `max_bytes + 1` bytes: el byte de más es lo que deja a
+    /// [`norte_help::cut_and_decode_untrusted`] ver que sobraba y marcar
+    /// `truncated` honestamente, en vez de servir un fichero cortado como si
+    /// estuviera completo.
+    ///
+    /// El texto que devuelve NO está enmascarado: lleva verbatim los peligros de
+    /// terminal que el plugin escribiera (ESC, controles C0, anulaciones bidi).
+    /// Se parsea con `norte_help::parse_untrusted`, que enmascara al construir el
+    /// modelo; nunca se pinta ni se loguea en crudo.
+    ///
+    /// I/O SÍNCRONA: el llamador async lo mete en `spawn_blocking` (regla 2).
+    #[must_use]
+    pub(crate) fn read(self) -> norte_proto::methods::PluginHelpResult {
+        use std::io::Read as _;
+
+        let tope = u64::try_from(norte_help::Limits::untrusted().max_bytes)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        let bytes = norte_plugin_host::verified_child(&self.dir, "help.md")
+            .and_then(|p| {
+                let f = std::fs::File::open(p).ok()?;
+                let mut buf = Vec::new();
+                // Un fallo a mitad de lectura degrada a página en blanco, igual
+                // que un `help.md` que no se puede abrir: servir lo leído hasta
+                // el error lo presentaría como completo.
+                f.take(tope).read_to_end(&mut buf).ok()?;
+                Some(buf)
+            })
+            .unwrap_or_default();
+        let s = norte_help::cut_and_decode_untrusted(&bytes);
+        norte_proto::methods::PluginHelpResult {
+            markdown: s.markdown,
+            truncated: s.truncated,
+            lossy: s.lossy,
+        }
+    }
+}
+
 /// Registro de plugins: catálogo descubierto + estado persistido fusionado.
 #[derive(Debug)]
 pub struct PluginRegistry {
@@ -453,19 +525,26 @@ impl PluginRegistry {
                     // `capabilities`/`commands`/`columns`.
                     //
                     // La bandera del WIRE es la ESTRICTA de las dos: el
-                    // `e.has_help` del catálogo es un `is_file` que SIGUE
+                    // `is_present` del catálogo es un `is_file` que SIGUE
                     // enlaces (presencia, no permiso — así lo dice su propio
-                    // comentario), mientras que aquí se aplica la MISMA guarda
-                    // que usará el lector. Si divergen, el par
+                    // comentario), mientras que `is_servable` ya pasó la
+                    // MISMA guarda que aplicará el lector. Si divergen, el par
                     // (`has_help: true`, `markdown: ""`) es exactamente el
                     // oráculo "esa ruta existe y es un fichero regular", y las
                     // dos mitades las lee un agente por `plugin.list` +
                     // `plugin.help`, ninguno de los dos gateado por policy. Y
                     // aun sin el agente, la barra lateral pintaría un nodo que
-                    // se abre en blanco. Cuesta dos `canonicalize` por plugin y
-                    // por llamada, ruido al lado de los `plugin.toml` y
-                    // `config.toml` que el descubrimiento ya leyó.
-                    has_help: Self::verified_child(&e.dir, "help.md").is_some(),
+                    // se abre en blanco.
+                    //
+                    // Se LEE, no se calcula: `list()` corre en el reactor async
+                    // y bajo el lock global de plugins (`handle_plugin_list` lo
+                    // llama síncrono desde `dispatch`), así que aplicar la
+                    // guarda aquí serían tres syscalls por plugin bloqueando a
+                    // todas las demás conexiones sobre un directorio que puede
+                    // estar en autofs o NFS — y `plugin.list` está ABIERTO a un
+                    // agente. El veredicto se calcula al DESCUBRIR, donde la
+                    // I/O ya vive fuera del reactor.
+                    has_help: e.help.is_servable(),
                 }
             })
             .collect();
@@ -528,7 +607,8 @@ impl PluginRegistry {
     /// llega a tocar el sistema de ficheros, solo falla el lookup.
     ///
     /// El fichero debe CANONICALIZAR DENTRO del directorio del plugin
-    /// (`verified_child`, la misma guarda que `plugin.wasm`): un
+    /// ([`norte_plugin_host::verified_child`], la misma guarda que
+    /// `plugin.wasm`): un
     /// `help.md` que es un symlink a `~/.ssh/id_ed25519` o a `/etc/…` se lee
     /// como si no hubiera página. La razón es que esto cruza el wire y un
     /// AGENTE puede pedirlo: sin la guarda, `plugin.help` sería una lectura de
@@ -538,7 +618,7 @@ impl PluginRegistry {
     /// gateado por `approved`/`enabled` (la documentación es justo lo que se lee
     /// ANTES de aprobar), así que el directorio del plugin fue DESCUBIERTO, no
     /// consentido. Lo seguro es la conjunción de tres cosas: el contenido está
-    /// ACOTADO ([`Self::read_help_page`]), la ruta NO la controla quien llama
+    /// ACOTADO (`HelpJob::read`), la ruta NO la controla quien llama
     /// (sale del catálogo, no del wire), y la guarda impide que apunte fuera del
     /// directorio donde el humano ya dejó caer el bundle.
     ///
@@ -551,79 +631,36 @@ impl PluginRegistry {
     /// escapado; desde el lado del lector, un `help.md` que apunta fuera es
     /// indistinguible de un autor que no escribió nada, y eso merece un aviso.
     ///
-    /// I/O SÍNCRONA: el llamador async va por `spawn_blocking` (regla 2),
-    /// igual que el resto de este registro.
+    /// El texto que devuelve NO está enmascarado: lleva verbatim los peligros
+    /// de terminal que el plugin escribiera (ESC, controles C0, anulaciones
+    /// bidi). Se parsea con `norte_help::parse_untrusted`, que enmascara al
+    /// construir el modelo; nunca se pinta ni se loguea en crudo.
+    ///
+    /// I/O SÍNCRONA: el llamador async va por `help_job` +
+    /// `spawn_blocking` (regla 2), que además saca la verificación del lock.
     #[must_use]
     pub fn help_of(&self, id: &str) -> Option<norte_proto::methods::PluginHelpResult> {
-        if !self.is_known(id) {
-            return None;
-        }
-        Some(Self::read_help_page(self.verified_help_path(id).as_deref()))
+        self.help_job(id).map(HelpJob::read)
     }
 
-    /// Lee un `help.md` cuya ruta YA verificó [`Self::verified_help_path`] y lo
-    /// acota para el wire (H3e). `None` (sin página legible) da la página en
-    /// blanco, indistinguible de un `help.md` vacío.
+    /// El trabajo de leer el `help.md` de `id`, resuelto contra el catálogo pero
+    /// SIN tocar todavía el disco (H3e). `None` si `id` no está descubierto.
     ///
-    /// EL TOPE SE APLICA AL LEER, no al decodificar. `verified_child` comprueba
-    /// que hay un fichero regular y NADA sobre su tamaño, así que un plugin
-    /// puede enviar `help.md` como un fichero DISPERSO de 100 GiB —unos pocos
-    /// bytes en un tarball— y una sola llamada a `plugin.help` intentaría
-    /// reservar 100 GiB: abortar por fallo de reserva, o el OOM killer llevándose
-    /// el daemon con su journal y toda task en vuelo. Como el método está
-    /// ABIERTO a un agente y el plugin no necesita ni aprobación ni activación,
-    /// sería la primera lectura sin tope disparable por un agente en el daemon.
+    /// Es la mitad de [`Self::help_of`] que se puede hacer bajo un lock: aquí
+    /// solo hay una búsqueda en memoria. La verificación (tres syscalls) y la
+    /// lectura viven en [`HelpJob::read`], que el llamador async ejecuta en
+    /// `spawn_blocking` con el lock ya soltado (regla 2).
     ///
-    /// Se leen como mucho `max_bytes + 1` bytes: el byte de más es lo que deja a
-    /// [`norte_help::cut_and_decode_untrusted`] ver que sobraba y marcar
-    /// `truncated` honestamente, en vez de servir un fichero cortado como si
-    /// estuviera completo.
-    ///
-    /// I/O SÍNCRONA: el llamador async va por `spawn_blocking` (regla 2).
+    /// Devuelve un valor OPACO a propósito: el `dir` que lleva dentro no es
+    /// accesible, así que quien lo recibe no puede re-derivar una ruta a partir
+    /// del id del wire ni saltarse la guarda. La garantía se queda entera dentro
+    /// del registro.
     #[must_use]
-    pub fn read_help_page(path: Option<&Path>) -> norte_proto::methods::PluginHelpResult {
-        use std::io::Read as _;
-
-        let tope = u64::try_from(norte_help::Limits::untrusted().max_bytes)
-            .unwrap_or(u64::MAX)
-            .saturating_add(1);
-        let bytes = path
-            .and_then(|p| {
-                let f = std::fs::File::open(p).ok()?;
-                let mut buf = Vec::new();
-                // Un fallo a mitad de lectura degrada a página en blanco, igual
-                // que un `help.md` que no se puede abrir: servir lo leído hasta
-                // el error lo presentaría como completo.
-                f.take(tope).read_to_end(&mut buf).ok()?;
-                Some(buf)
-            })
-            .unwrap_or_default();
-        let s = norte_help::cut_and_decode_untrusted(&bytes);
-        norte_proto::methods::PluginHelpResult {
-            markdown: s.markdown,
-            truncated: s.truncated,
-            lossy: s.lossy,
-        }
-    }
-
-    /// La ruta del `help.md` de `id` YA VERIFICADA (H3e), o `None` si `id` no
-    /// está en el catálogo, no tiene `help.md`, o el que tiene no es legible o
-    /// escapa de su propio directorio.
-    ///
-    /// GARANTÍA: lo que sale de aquí está CANONICALIZADO y confirmado DENTRO
-    /// del directorio que el catálogo guardó para ese plugin (`verified_child`,
-    /// la misma guarda que `plugin.wasm`). El llamador puede abrirlo
-    /// directamente y NO DEBE re-derivarlo del `id`: re-derivar volvería a
-    /// resolver el nombre y perdería la guarda, que es lo único que impide que
-    /// `plugin.help` se convierta en una lectura de fichero arbitrario por fuera
-    /// del motor de policy.
-    ///
-    /// Existe separada de [`Self::help_of`] para que el daemon pueda hacer el
-    /// LOOKUP bajo el lock del registro y la LECTURA fuera (regla 2).
-    #[must_use]
-    pub fn verified_help_path(&self, id: &str) -> Option<PathBuf> {
+    pub(crate) fn help_job(&self, id: &str) -> Option<HelpJob> {
         let entry = self.catalog.plugins.iter().find(|e| e.manifest.id == id)?;
-        Self::verified_child(&entry.dir, "help.md")
+        Some(HelpJob {
+            dir: entry.dir.clone(),
+        })
     }
 
     /// `true` si `id` trae un fichero `help.md`, SIN aplicar la guarda de
@@ -643,7 +680,7 @@ impl PluginRegistry {
         self.catalog
             .plugins
             .iter()
-            .any(|e| e.manifest.id == id && e.has_help)
+            .any(|e| e.manifest.id == id && e.help.is_present())
     }
 
     /// Esquema `[config]` de `id` + valores EFECTIVOS, EMPAREJADOS en orden
@@ -1020,12 +1057,7 @@ impl PluginRegistry {
     }
 
     /// `true` si `id` corresponde a un plugin realmente descubierto.
-    ///
-    /// Público desde H3e: el handler de `plugin.help` necesita separar
-    /// "¿existe?" (respuesta `INVALID_PARAMS` inmediata, bajo el lock) de la
-    /// lectura del fichero (fuera del lock, en `spawn_blocking`).
-    #[must_use]
-    pub fn is_known(&self, id: &str) -> bool {
+    fn is_known(&self, id: &str) -> bool {
         self.catalog.plugins.iter().any(|e| e.manifest.id == id)
     }
 
@@ -1057,45 +1089,12 @@ impl PluginRegistry {
     /// (misma frontera de confianza), por eso es defensa en profundidad, no una
     /// barrera fuerte. Devuelve la ruta CANÓNICA (ya resuelta) para no re-seguir
     /// enlaces al abrirla.
+    /// La guarda vive en `norte-plugin-host` (ver
+    /// [`norte_plugin_host::verified_child`], que documenta lo que NO cubre):
+    /// el catálogo la necesita al descubrir y este crate al leer o ejecutar, y
+    /// una segunda copia de un guard de seguridad es peor que la dependencia.
     fn verified_wasm(dir: &Path) -> Option<PathBuf> {
-        Self::verified_child(dir, "plugin.wasm")
-    }
-
-    /// `<dir>/<name>` canonicalizado, SOLO si el fichero real cae DENTRO de
-    /// `dir`. La forma común del guard de issue #69: un fichero que el host
-    /// lee o ejecuta desde el directorio de un plugin no puede resolver fuera
-    /// de él POR SYMLINK. `None` si no existe, no es fichero, no canonicaliza
-    /// (enlace roto) o escapa.
-    ///
-    /// # Qué NO cubre (dicho, no insinuado)
-    ///
-    /// - **Solo symlinks.** Un HARDLINK no tiene ruta de destino: `<dir>/x`
-    ///   canonicaliza a sí mismo y pasa la guarda aunque su inodo sea el de
-    ///   `~/.ssh/id_ed25519`. Un bind mount igual. Ninguna guarda BASADA EN
-    ///   RUTAS puede verlos, así que "no puede escapar de su directorio" es más
-    ///   fuerte de lo que esto entrega: lo que entrega es "no puede escapar por
-    ///   symlink".
-    /// - **Es una observación PUNTUAL, no un handle.** Devolver la ruta canónica
-    ///   evita re-resolver los componentes INTERMEDIOS, pero el kernel resuelve
-    ///   la ruta entera en cada `open`, componente final incluido: quien pueda
-    ///   escribir en el directorio puede cambiar ese último componente entre el
-    ///   chequeo y la apertura (TOCTOU). Una ruta canónica no congela nada. Está
-    ///   FUERA del modelo de amenaza —quien escribe ahí ya puede reemplazar el
-    ///   bundle entero, misma frontera de confianza— pero se dice en vez de
-    ///   darse por resuelto.
-    ///
-    /// `O_NOFOLLOW` cerraría esa carrera del componente final y se DESCARTA a
-    /// sabiendas: también prohibiría un symlink INTERNO al directorio, que un
-    /// plugin organizando sus propios ficheros con enlaces usa legítimamente
-    /// (hay un test que lo fija). No re-litigar sin ese caso a mano.
-    fn verified_child(dir: &Path, name: &str) -> Option<PathBuf> {
-        let child = dir.join(name);
-        if !child.is_file() {
-            return None;
-        }
-        let canon_child = child.canonicalize().ok()?;
-        let canon_dir = dir.canonicalize().ok()?;
-        canon_child.starts_with(&canon_dir).then_some(canon_child)
+        norte_plugin_host::verified_child(dir, "plugin.wasm")
     }
 
     /// Lee el estado persistido. Ausente = vacío; corrupto = `InvalidData`.
@@ -2055,6 +2054,20 @@ header = "Size"
 
     // -------------------------------------------------------------------
     // H3e: `has_help` al descubrir + `help_of` bajo demanda.
+
+    #[test]
+    fn el_tope_del_wire_y_el_del_host_son_el_mismo_numero() {
+        // `PLUGIN_HELP_MAX_BYTES` es NORMATIVO: el contrato invita a un
+        // receptor a dimensionar contra él. El host recorta por
+        // `Limits::untrusted()`. Son dos crates que no se conocen, así que sin
+        // este ancla podrían separarse en silencio y el wire prometería un tope
+        // que nadie aplica. `norte-core` depende de los dos: es el único sitio
+        // donde la igualdad se puede afirmar.
+        assert_eq!(
+            norte_proto::methods::PLUGIN_HELP_MAX_BYTES,
+            norte_help::Limits::untrusted().max_bytes
+        );
+    }
 
     #[test]
     fn help_of_devuelve_el_markdown_acotado_del_plugin() {

@@ -452,10 +452,11 @@ fn golden_methods() {
     // 98 → 101 en 0.32.0: + ai_rename_plan_params/result/result_empty (M4-IA,
     // ADR 0031). 101 → 106 en 0.33.0: + index_embed_params,
     // index_search_semantic_params(/_no_root)/result y semantic_hit (M4-IA-2,
-    // ADR 0031 A3). 106 → 112 en 0.34.0: + plugin_info_with_help,
-    // plugin_help_params y plugin_help_result(/_flags/_empty/_lossy) (H3e,
-    // ADR 0040 — los dos últimos son la página vacía y la hostil).
-    assert_eq!(fixtures.len(), 112, "[methods.json] fixtures sin caso Rust");
+    // ADR 0031 A3). 106 → 113 en 0.34.0: + plugin_info_with_help,
+    // plugin_help_params y
+    // plugin_help_result(/_flags/_empty/_lossy/_absent) (H3e, ADR 0040 — los
+    // tres últimos son la página vacía, la hostil y el campo AUSENTE).
+    assert_eq!(fixtures.len(), 113, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `ai.*` (0.32.0, M4-IA, ADR 0031): plan de rename revisable.
@@ -692,6 +693,27 @@ fn check_methods_plugin_help(fixtures: &BTreeMap<String, Value>) {
             truncated: false,
             lossy: true,
         },
+    );
+    // `markdown` AUSENTE se lee como la página vacía — normativo desde el
+    // rustdoc del campo, y hasta ahora sin fixture. NO va por `check_one`: es
+    // deliberadamente asimétrico (en emisión el campo no se omite jamás), así
+    // que solo se comprueba la dirección que el contrato promete, la de
+    // ENTRADA.
+    let absent: PluginHelpResult = serde_json::from_value(
+        fixtures
+            .get("plugin_help_result_absent")
+            .expect("[methods.json] falta la fixture plugin_help_result_absent")
+            .clone(),
+    )
+    .expect("[methods/plugin_help_result_absent] deserialize");
+    assert_eq!(
+        absent,
+        PluginHelpResult {
+            markdown: String::new(),
+            truncated: false,
+            lossy: false,
+        },
+        "un peer que omite `markdown` está diciendo «no hay página»"
     );
 }
 
@@ -1861,6 +1883,11 @@ fn method_names_frozen() {
     assert_eq!(methods::PLUGIN_COLUMN_VALUES, "plugin.column_values");
     assert_eq!(methods::FS_READ_MAX_CHUNK, 8 * 1024 * 1024);
     assert_eq!(methods::FS_LIST_MAX_PAGE, 10_000);
+    // 0.34.0 (H3e): el tope de `PluginHelpResult::markdown`. El LITERAL, no el
+    // símbolo: el contrato invita a un receptor a dimensionar contra él, así
+    // que cambiarlo es cambiar el wire y tiene que ponerse algo rojo.
+    // `norte-core` ancla aparte que este número y el del host son el mismo.
+    assert_eq!(methods::PLUGIN_HELP_MAX_BYTES, 64 * 1024);
     // 0.18.0 (M4 live search): fs.search + search.hits + TaskKind::Search.
     // Aditivo sobre 0.17.x.
     assert_eq!(methods::FS_SEARCH, "fs.search");

@@ -39,20 +39,127 @@ pub struct PluginEntry {
     /// Codificación canónica de string (decisión 4). Vacío si el manifiesto
     /// no declara `[config]`.
     pub settings: BTreeMap<String, String>,
-    /// El directorio trae un `help.md` junto al `plugin.toml` (H3e).
-    ///
-    /// Un `is_file` al descubrir, NUNCA una lectura: el catálogo se recorre
-    /// entero en cada `plugin.list` (el registro es efímero por llamada), y
-    /// leer 64 KiB por plugin ahí pagaría el contenido en cada listado para
-    /// una bandera que solo decide si se pinta un nodo en la barra lateral.
-    /// El contenido se lee bajo demanda, en `plugin.help`.
-    ///
-    /// SIGUE ENLACES, a propósito: esto es presencia, no permiso. Quien LEE el
-    /// fichero es quien comprueba que no escape del directorio del plugin
-    /// (`PluginRegistry::help_of` en `norte-core`, misma guarda que
-    /// `plugin.wasm`), así que un `help.md` enlazado a `/etc/…` se anuncia y
-    /// luego se lee como página vacía — nunca entrega lo de fuera.
-    pub has_help: bool,
+    /// Qué hay en `<dir>/help.md` al descubrir (H3e).
+    pub help: HelpPresence,
+}
+
+/// Qué encontró el descubrimiento en `<dir>/help.md` (H3e).
+///
+/// Un TRI-ESTADO y no dos banderas: "pasa la guarda" implica "existe", nunca al
+/// revés, así que dos bools tendrían una cuarta combinación imposible
+/// (verificado y ausente) que alguien acabaría construyendo.
+///
+/// Se resuelve AQUÍ, al descubrir, y no en `plugin.list`: ese listado corre en
+/// el reactor async y bajo el lock global de plugins, así que las tres llamadas
+/// al sistema de la guarda (un `is_file` y dos `canonicalize`) por plugin
+/// bloquearían a todas las demás conexiones sobre un directorio que puede estar
+/// en autofs o NFS, y `plugin.list` está ABIERTO a un agente. El descubrimiento
+/// ya es I/O y ya corre fuera del reactor, así que este es su sitio — como
+/// `name`, `commands` o `capabilities`, que también son instantáneas del momento
+/// de descubrir.
+///
+/// NUNCA es una lectura del contenido: el catálogo se recorre entero en cada
+/// `plugin.list` (el registro es efímero por llamada), y leer 64 KiB por plugin
+/// ahí pagaría el contenido en cada listado para decidir si se pinta un nodo en
+/// una barra lateral. El contenido se lee bajo demanda, en `plugin.help`.
+///
+/// Es una PISTA cacheada, y por eso puede quedar rancia sin consecuencias: quien
+/// sirve el contenido vuelve a aplicar la guarda al leer, así que un
+/// [`Self::Servable`] rancio no entrega nada de fuera. Lo único que revela es
+/// que al descubrir había un fichero regular no-escapado en la ruta FIJA
+/// `<dir>/help.md`, que no la elige quien pregunta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelpPresence {
+    /// No hay `help.md`.
+    Absent,
+    /// Hay un `help.md` pero el host NO lo servirá: no pasa la guarda de escape
+    /// ([`verified_child`]) — un symlink que sale del directorio del plugin, o
+    /// uno roto. Existe para el DIAGNÓSTICO (`norte doctor` lo reporta), nunca
+    /// para el wire: distinguirlo ahí sería un oráculo de rutas.
+    Unservable,
+    /// Hay un `help.md` y pasa la guarda. Es el estado que cruza el wire como
+    /// `PluginInfo::has_help`.
+    Servable,
+}
+
+impl HelpPresence {
+    /// ¿El autor puso un `help.md`, lo sirvamos o no? La pregunta LAXA, la del
+    /// diagnóstico.
+    #[must_use]
+    pub fn is_present(self) -> bool {
+        !matches!(self, Self::Absent)
+    }
+
+    /// ¿Hay una página que el host vaya a servir? La pregunta ESTRICTA, la que
+    /// cruza el wire.
+    #[must_use]
+    pub fn is_servable(self) -> bool {
+        matches!(self, Self::Servable)
+    }
+}
+
+/// Resuelve el tri-estado de `<dir>/help.md` (H3e). El `is_file` LAXO sigue
+/// enlaces a propósito —presencia, no permiso—, y la guarda decide si además es
+/// servible.
+fn help_presence(dir: &Path) -> HelpPresence {
+    if verified_child(dir, "help.md").is_some() {
+        HelpPresence::Servable
+    } else if dir.join("help.md").is_file() {
+        HelpPresence::Unservable
+    } else {
+        HelpPresence::Absent
+    }
+}
+
+/// `<dir>/<name>` canonicalizado, SOLO si el fichero real cae DENTRO de `dir`.
+///
+/// La forma común del guard de issue #69: un fichero que el host lee o ejecuta
+/// desde el directorio de un plugin no puede resolver fuera de él POR SYMLINK.
+/// `None` si no existe, no es fichero, no canonicaliza (enlace roto) o escapa.
+///
+/// Vive aquí, y no en `norte-core` junto a sus llamadores, para que exista UNA
+/// sola implementación: el catálogo necesita el veredicto al descubrir (ver
+/// [`PluginEntry::help`]) y `norte-core` lo necesita al leer o
+/// ejecutar. Copiar la guarda para evitar la dependencia sería mucho peor que
+/// tenerla aquí — dos copias de un guard de seguridad divergen.
+///
+/// # Qué NO cubre (dicho, no insinuado)
+///
+/// - **Solo symlinks.** Un HARDLINK no tiene ruta de destino: `<dir>/x`
+///   canonicaliza a sí mismo y pasa la guarda aunque su inodo sea el de
+///   `~/.ssh/id_ed25519`. Un bind mount igual. Ninguna guarda BASADA EN RUTAS
+///   puede verlos, así que "no puede escapar de su directorio" es más fuerte de
+///   lo que esto entrega: lo que entrega es "no puede escapar por symlink".
+/// - **Es una observación PUNTUAL, no un handle.** Devolver la ruta canónica
+///   evita re-resolver los componentes INTERMEDIOS, pero el kernel resuelve la
+///   ruta entera en cada `open`, componente final incluido: quien pueda escribir
+///   en el directorio puede cambiar ese último componente entre el chequeo y la
+///   apertura (TOCTOU). Una ruta canónica no congela nada. Está FUERA del modelo
+///   de amenaza —quien escribe ahí ya puede reemplazar el bundle entero, misma
+///   frontera de confianza— pero se dice en vez de darse por resuelto.
+///
+/// `O_NOFOLLOW` cerraría esa carrera del componente final y se DESCARTA a
+/// sabiendas: también prohibiría un symlink INTERNO al directorio, que un plugin
+/// organizando sus propios ficheros con enlaces usa legítimamente (hay un test
+/// que lo fija). No re-litigar sin ese caso a mano.
+///
+/// ```
+/// use norte_plugin_host::verified_child;
+///
+/// let dir = tempfile::tempdir().unwrap();
+/// std::fs::write(dir.path().join("help.md"), "hola").unwrap();
+/// assert!(verified_child(dir.path(), "help.md").is_some());
+/// assert!(verified_child(dir.path(), "ausente.md").is_none());
+/// ```
+#[must_use]
+pub fn verified_child(dir: &Path, name: &str) -> Option<PathBuf> {
+    let child = dir.join(name);
+    if !child.is_file() {
+        return None;
+    }
+    let canon_child = child.canonicalize().ok()?;
+    let canon_dir = dir.canonicalize().ok()?;
+    canon_child.starts_with(&canon_dir).then_some(canon_child)
 }
 
 /// Un manifiesto que no cargó, con su causa (para avisar en el gestor en vez de
@@ -124,7 +231,7 @@ impl Catalog {
                 // valores a medias.
                 match resolve_settings(&manifest, &dir) {
                     Ok(settings) => cat.plugins.push(PluginEntry {
-                        has_help: dir.join("help.md").is_file(),
+                        help: help_presence(&dir),
                         manifest,
                         dir,
                         enabled: false,

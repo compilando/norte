@@ -30,6 +30,11 @@ mod undo;
 pub use engine::{Engine, TransferOptions};
 pub use journal::{Actor, ChainStatus, Journal, JournalEntry, Reversal, SqliteJournal};
 pub use norte_index::Index;
+/// ¿Es esto un id de plugin válido? Re-export de `norte-plugin-host` para que
+/// un frontend pueda DESCARTAR en su punto de entrada un id que llegó por el
+/// wire, sin depender del runtime de plugins (regla 7: los frontends hablan con
+/// el core, y este crate ya les da [`PluginRegistry`] por el mismo camino).
+pub use norte_plugin_host::is_valid_plugin_id;
 /// Límites anti-bomba de los providers archive (#95.2): re-export para que
 /// los frontends configuren [`Engine::set_archive_limits`] sin depender de
 /// `norte-vfs-archive` (regla 7: hablan con el core).

@@ -382,6 +382,10 @@
     "truncated": false,
     "lossy": false
   },
+  "plugin_help_result_absent": {
+    "truncated": false,
+    "lossy": false
+  },
   "plugin_help_result_empty": {
     "markdown": "",
     "truncated": false,

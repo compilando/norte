@@ -4,7 +4,7 @@
 use norte_plugin_host::{
     COMMAND_ID_MAX_CHARS, COMMAND_TITLE_MAX_CHARS, CONFIG_DESCRIPTION_MAX_CHARS,
     CONFIG_ENUM_MAX_VALUES, CONFIG_MAX_KEYS, CONFIG_STRING_MAX_CHARS, Catalog, Category,
-    ConfigKeySpec, Manifest, ManifestError, Scope,
+    ConfigKeySpec, HelpPresence, Manifest, ManifestError, Scope,
 };
 
 const SYNTAX_PREVIEW: &str = r#"
@@ -979,7 +979,11 @@ fn descubrir_marca_el_plugin_que_trae_help_md() {
     .unwrap();
 
     let cat = Catalog::load_dir(root.path());
-    assert!(cat.plugins[0].has_help, "el help.md descubierto se anuncia");
+    assert_eq!(
+        cat.plugins[0].help,
+        HelpPresence::Servable,
+        "el help.md descubierto se anuncia, y pasa la guarda"
+    );
 }
 
 #[test]
@@ -988,7 +992,7 @@ fn sin_help_md_no_se_anuncia_ayuda() {
     write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
 
     let cat = Catalog::load_dir(root.path());
-    assert!(!cat.plugins[0].has_help);
+    assert_eq!(cat.plugins[0].help, HelpPresence::Absent);
 }
 
 #[test]
@@ -1001,7 +1005,37 @@ fn un_help_md_que_es_un_directorio_no_anuncia_ayuda() {
     std::fs::create_dir_all(root.path().join("org.norte.syntax-preview").join("help.md")).unwrap();
 
     let cat = Catalog::load_dir(root.path());
-    assert!(!cat.plugins[0].has_help);
+    assert_eq!(
+        cat.plugins[0].help,
+        HelpPresence::Absent,
+        "ni presente ni servible: un directorio no es una pagina"
+    );
+}
+
+/// El tercer estado, el que existe precisamente para no colapsarse con los
+/// otros dos (H3e): hay `help.md` y el host NO lo servirá. `Absent` diría que
+/// el autor no se documentó y `Servable` prometería una página; solo este
+/// estado deja a `norte doctor` reportar "lo pusiste y apunta fuera".
+#[cfg(unix)]
+#[test]
+fn un_help_md_que_escapa_del_directorio_esta_presente_pero_no_es_servible() {
+    let root = tempfile::tempdir().unwrap();
+    write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
+    let fuera = root.path().join("ajeno.md");
+    std::fs::write(&fuera, "secreto").unwrap();
+    std::os::unix::fs::symlink(
+        &fuera,
+        root.path().join("org.norte.syntax-preview").join("help.md"),
+    )
+    .unwrap();
+
+    let cat = Catalog::load_dir(root.path());
+    assert_eq!(cat.plugins[0].help, HelpPresence::Unservable);
+    assert!(cat.plugins[0].help.is_present(), "el fichero está ahí");
+    assert!(
+        !cat.plugins[0].help.is_servable(),
+        "y el wire no lo anuncia: anunciar y servir vacío es el oráculo"
+    );
 }
 
 // ---------------------------------------------------------------------
