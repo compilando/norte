@@ -301,6 +301,15 @@ help-plugin-origin = from an extension
 help-plugin-by = published by { $who }
 help-plugin-truncated = cut short
 help-plugin-lossy = some bytes did not decode
+# H3g: `norte help` writes to a stream that may not be a terminal, so its
+# callouts are ASCII WORDS where the TUI paints `ℹ`/`⚠`/`💡` and the see-also
+# row is spelled out instead of implied by a style.
+help-see-also = See also
+help-callout-note = note
+help-callout-warn = warning
+help-callout-tip = tip
+cli-help-unknown-topic = no help page is called { $id } — `norte help --list` names them all
+cli-help-no-matches = nothing matches { $query }
 # The synthetic `keys` entry gets NO header: it is a group of one by
 # construction and its header would be the same word as its only row, so the
 # sidebar does not paint it (`ui::draw_help`). Hence no `help-group-keys`.

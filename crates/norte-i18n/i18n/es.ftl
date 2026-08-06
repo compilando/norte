@@ -306,6 +306,15 @@ help-plugin-origin = de una extensión
 help-plugin-by = publicada por { $who }
 help-plugin-truncated = recortada
 help-plugin-lossy = hay bytes que no decodifican
+# H3g: `norte help` escribe a un flujo que puede no ser un terminal, así que sus
+# avisos son PALABRAS ASCII donde el TUI pinta `ℹ`/`⚠`/`💡`, y la fila de
+# «ver también» se escribe en vez de insinuarse con un estilo.
+help-see-also = Ver también
+help-callout-note = nota
+help-callout-warn = aviso
+help-callout-tip = truco
+cli-help-unknown-topic = ninguna página de ayuda se llama { $id } — `norte help --list` las nombra todas
+cli-help-no-matches = nada coincide con { $query }
 # La entrada sintética `keys` NO lleva cabecera: es un grupo de uno por
 # construcción y su cabecera se llamaría igual que su única fila, así que la
 # lateral no la pinta (`ui::draw_help`). Por eso no hay `help-group-keys`.

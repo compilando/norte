@@ -1,0 +1,332 @@
+{
+  "lang": "en",
+  "topics": [
+    {
+      "commands": [],
+      "context": [],
+      "id": "index",
+      "see_also": [
+        "panes",
+        "selection",
+        "mouse",
+        "help",
+        "copying",
+        "remote",
+        "archives"
+      ],
+      "tags": [
+        "basics"
+      ],
+      "text": "Welcome to norte\n────────────────\n\nnorte is an orthodox file manager. Two panes, the keyboard first, and one set of commands whether the files are on this machine, on an SSH host, in an S3-compatible bucket, or inside a .zip.\n\nThat last part is the whole idea. A backend is not a mode you enter and leave; it is only what a pane happens to be showing. Copying out of an archive into a bucket is the same two keys as copying between two local directories.\n\nWhere to go next\n\n  • Two panes, one destination — the two panes, focus, and why the other one is the destination\n  • Marking what to act on — marking the entries a command will act on\n  • Using the mouse — click, wheel and drag, and what capture costs the terminal\n  • Reading this help — moving around these pages, and where the keys in them come from\n  • Copying, moving and deleting — copying, moving, deleting, and cancelling without losing data\n  • SFTP, FTP and object storage — SFTP, FTP and S3-compatible object storage\n  • Inside an archive — walking into a .zip or a .tar as if it were a directory\n\n  tip: The keys in this help are not written into the text: each one is looked up in your keymap as the page is drawn. Rebind a command and these pages name the key you chose.\n\nSee also: Two panes, one destination, Marking what to act on, Using the mouse, Reading this help, Copying, moving and deleting, SFTP, FTP and object storage, Inside an archive\n",
+      "title": "Welcome to norte"
+    },
+    {
+      "commands": [
+        {
+          "chord": "Tab",
+          "command": "pane.switch",
+          "label": "switch pane"
+        },
+        {
+          "chord": "Enter",
+          "command": "nav.enter",
+          "label": "enter the selected directory"
+        },
+        {
+          "chord": "Backspace",
+          "command": "nav.parent",
+          "label": "go to parent directory"
+        },
+        {
+          "chord": "Ctrl+r",
+          "command": "pane.refresh",
+          "label": "reload both panes (Ctrl+R)"
+        },
+        {
+          "chord": "Alt+i",
+          "command": "pane.mirror",
+          "label": "send this location to the other pane"
+        },
+        {
+          "chord": "Alt+u",
+          "command": "pane.pull",
+          "label": "go where the other pane is"
+        },
+        {
+          "chord": "Ctrl+u",
+          "command": "pane.swap",
+          "label": "swap the two panes"
+        },
+        {
+          "chord": "Alt+Left",
+          "command": "nav.back",
+          "label": "back to the previous directory"
+        },
+        {
+          "chord": "Alt+Right",
+          "command": "nav.forward",
+          "label": "forward again"
+        }
+      ],
+      "context": [
+        "browse"
+      ],
+      "id": "panes",
+      "see_also": [
+        "selection",
+        "copying"
+      ],
+      "tags": [
+        "basics"
+      ],
+      "text": "Two panes, one destination\n──────────────────────────\n\nTwo panes are on screen at once. One has focus: it is the one the cursor moves in, and the one every command reads from. The other one is the destination.\n\nTab hands the focus to the other pane. Everything else follows from which pane holds it — Enter walks into the entry under the cursor and Backspace goes back up, landing the cursor on the directory you just left.\n\nCtrl+r re-reads the listing. It refreshes both panes, not just the focused one, because a change made outside norte rarely respects which pane you happened to be looking at. Local directories are watched and refresh themselves; a remote or an archive is not, so that is the key that tells you the truth about them.\n\nNo command ever asks where to. That is why an orthodox manager needs so few keys, and why the second pane is not a layout preference you can talk it out of.\n\nThe destination is a pane, not a disk\n\nThe inactive pane can be an SFTP host, an S3 bucket, or the inside of an archive. Copy does not behave differently because of it; that is what Copying, moving and deleting is about.\n\nEach pane keeps its own directory history and its own sort order, so the remote side can look nothing like the local one and neither has to compromise.\n\nMoving a location across\n\nAlt+i sends the other pane where this one is, and the focus stays where it was. It is the fastest way to line a copy up: F5 never asks where to, so preparing a transfer is pointing the other pane somewhere — and this points it without you having to leave the source. Alt+u is the same gesture the other way round: the focused pane goes where the other one is.\n\nNeither of them says anything when both panes are already in the same place. Nothing was asked for that failed, and re-listing a pane for no reason would slide its listing out from under the cursor sitting in it.\n\nCtrl+u exchanges the two, which is how you reverse the direction of a copy without navigating anywhere. It touches no disk: no listing is re-read, nothing can fail, and the marks, the filter, the sort order, the cursor and the pane's own history all travel with their pane, because the whole pane moves instead of being rebuilt. The focus stays on the same physical side of the screen on purpose — carrying it along with the content would leave you looking at the very same listing and calling it a swap.\n\nMirroring onto a host you have not visited yet connects and asks about its key exactly as walking there would. The question belongs to the pane that is travelling, which under a mirror is not the pane you are sitting in. If the destination cannot be reached, the pane stays where it was and the reason goes to the status bar.\n\nA pane showing the hits of a live search has no location to hand over: the directory behind it is the root the search walked, not the list you are reading, so the gesture is refused and says why rather than guessing. Only the pane the location comes from is vetoed. Sending a location onto a results pane is fine — the listing that arrives is a real one, and it ends the search.\n\nGoing back\n\nAlt+Left returns the focused pane to where it was, and Alt+Right undoes that. Each pane walks its own trail, and neither key moves the focus.\n\nIt is a TRAIL, not a list. From one directory to a second and then a third, back twice reaches the first. A most-recently-used list walked as if it were a trail would bounce between the two most recent directories forever, which is why \"where was I a moment ago\" and \"where has this pane been\" are two different questions here: the second one is the popup behind Alt+Down, and stepping back never adds to it.\n\nNavigating somewhere new from the middle of the trail forgets the branch you stepped off, exactly as a browser does. A way forward into a history you have already abandoned is the bug everyone has met.\n\nA step that does not arrive is rewound — you never left, so the trail is put back as it was. That covers the step that fails and the one you abandon with Esc while it is still listing: either way the pane is showing what it was showing, and a trail that counted the step would send you \"forward\" into the directory already on screen. When the reason is that the directory is gone, it also leaves the trail, the forward branch and the history popup, so the key can never trap you on a directory that has proved not to be there. Any other failure keeps it: a host that was down and a directory you may not read are both still places, and either may answer next time.\n\nA step that stops to ask about an unknown host key is the one case that waits: it is neither taken nor put back until you answer, because trusting the key resumes that very navigation. Trust it and the step finishes; deny it, or let the resumed step fail, and the step is rewound like any other that never arrived.\n\n  tip: A directory you visit often is worth a favourite: the pane remembers where it has been, and favourites are shared by both panes.\n\n  tip: When there is nothing further back, the key says so. A key that goes quiet is indistinguishable from a broken one.\n\n  Tab            switch pane\n  Enter          enter the selected directory\n  Backspace      go to parent directory\n  Ctrl+r         reload both panes (Ctrl+R)\n  Alt+i          send this location to the other pane\n  Alt+u          go where the other pane is\n  Ctrl+u         swap the two panes\n  Alt+Left       back to the previous directory\n  Alt+Right      forward again\n\nSee also: Marking what to act on, Copying, moving and deleting\n",
+      "title": "Two panes, one destination"
+    },
+    {
+      "commands": [
+        {
+          "chord": "Insert",
+          "command": "mark.toggle",
+          "label": "toggle mark on the entry under the cursor"
+        },
+        {
+          "chord": "Ctrl+a",
+          "command": "mark.all",
+          "label": "mark every visible entry"
+        },
+        {
+          "chord": "*",
+          "command": "mark.invert",
+          "label": "invert the marks"
+        },
+        {
+          "chord": "Ctrl+A",
+          "command": "mark.clear",
+          "label": "clear every mark"
+        },
+        {
+          "chord": "Plus",
+          "command": "mark.pattern-add",
+          "label": "mark by pattern"
+        },
+        {
+          "chord": "-",
+          "command": "mark.pattern-remove",
+          "label": "unmark by pattern"
+        }
+      ],
+      "context": [
+        "dialog.mark-pattern"
+      ],
+      "id": "selection",
+      "see_also": [
+        "panes",
+        "copying"
+      ],
+      "tags": [
+        "basics"
+      ],
+      "text": "Marking what to act on\n──────────────────────\n\nA command acts on the marked entries, or on the entry under the cursor when nothing is marked. There is no third case, which is why a batch of one needs no special key.\n\n  • Insert flips the mark on the entry under the cursor and steps down a row, so holding it sweeps a range — and sweeping back over it unmarks it again\n  • Ctrl+a marks everything the listing is showing\n  • * flips the marks of what is showing, and leaves the rest alone\n  • Ctrl+A drops them all\n  • Plus marks by glob, and - unmarks by glob\n\nWhat the listing is showing\n\nA bulk mark reaches what you can actually see. With a quick filter active it marks the filtered subset and not the whole directory; while a long listing is still arriving it reaches the part that has arrived so far, and the pane says so while that is happening.\n\nMarking by glob is the same rule from the other end: the pattern is matched against the names in front of you, so *.log twice in a row marks the same set twice rather than toggling it off. Case is folded and the names are normalised first, so *README* finds readme and a name written in NFD by macOS still matches the pattern you typed.\n\nWhen a refresh finds that a marked entry has vanished, the mark goes with it and the status bar says how many were dropped. A silent prune would quietly change what the next command acts on.\n\n  warning: Marks belong to one listing. Changing directory clears them, and an operation consumes them the moment the batch is sent — so a selection is never left half-spent, waiting on which task happened to finish.\n\n  Insert         toggle mark on the entry under the cursor\n  Ctrl+a         mark every visible entry\n  *              invert the marks\n  Ctrl+A         clear every mark\n  Plus           mark by pattern\n  -              unmark by pattern\n\nSee also: Two panes, one destination, Copying, moving and deleting\n",
+      "title": "Marking what to act on"
+    },
+    {
+      "commands": [
+        {
+          "chord": "Enter",
+          "command": "nav.enter",
+          "label": "enter the selected directory"
+        },
+        {
+          "chord": "Insert",
+          "command": "mark.toggle",
+          "label": "toggle mark on the entry under the cursor"
+        },
+        {
+          "chord": "F5",
+          "command": "pane.copy",
+          "label": "copy selection to the other pane"
+        },
+        {
+          "chord": "F6",
+          "command": "pane.move",
+          "label": "move selection to the other pane"
+        }
+      ],
+      "context": [],
+      "id": "mouse",
+      "see_also": [
+        "selection",
+        "panes",
+        "copying"
+      ],
+      "tags": [
+        "basics"
+      ],
+      "text": "Using the mouse\n───────────────\n\nnorte listens to the mouse in both frontends, and the two behave the same because the rules live in one place. In the terminal that has a price, and the price is at the bottom of this page — read it before wondering why you can no longer select text.\n\n  • a left click gives that pane the focus and puts the cursor on the row you clicked\n  • a double click on a row does exactly what Enter does: walks into a directory, an archive or a remote, and leaves a file alone\n  • the wheel scrolls the listing under the pointer, focused or not, so you can read one pane while working in the other. It moves that pane's cursor, which is also what a command falls back to there when nothing is marked\n  • ctrl and a click toggle the mark of one row, the same mark Insert sets from the keyboard\n  • shift and a click mark the range between the cursor and the row you clicked, and add to what was already marked\n  • dragging across rows marks what it sweeps, and pulling back gives those rows up again\n  • a right click opens a menu of the operations you already have keys for\n\nA click never marks on its own. Marking is either a modifier or a drag, so clicking around a listing to see what is in it cannot change what the next command will act on.\n\nDragging between panes\n\nA drag onto the other pane copies. Hold shift and it moves. The decision is read when you let go, not when you press, so a drag you started as a copy stays a copy until the moment shift is down — and you can change your mind either way, mid-gesture. Whichever it is, the drop opens the same confirmation F5 and F6 open, and is undone the same way: a drop is an ordinary operation, not a quieter one.\n\nWhat travels depends on the row you started on, which is how one gesture does two jobs:\n\n  • a drag that starts on a row that is already marked takes the marks — all of them, wherever they are in that listing\n  • a drag that starts on an unmarked row takes that one row, and only from the moment the pointer crosses into the other pane. Until then the same gesture is still marking what it sweeps\n\nThat second rule is called promotion, and it exists because grabbing one file and pulling it across is the commonest drag there is. It changes what the gesture does, never what is selected: the row you pressed is not marked by it, and any rows the sweep marked on the way out are given back when the pointer leaves the pane. Come home and the sweep resumes from the same anchor, having lost nothing.\n\nTwo ways out, both leaving the selection exactly as it was: let go over the source pane (dropping at home does nothing) or let go anywhere that is not a row — a border, a header, the status bar. A destination is never guessed.\n\nBecause the gesture means one thing over its own pane and another over the far one, it says which before you let go: how many items, to which directory, and copy or move. In the terminal that line is the status bar. It is read from the same state the drop reads, so it cannot promise one thing and the drop do another — but the terminal only reports the keyboard alongside a mouse report, so pressing shift without moving updates it on the next row you cross.\n\nThe right-click menu\n\nThe graphical frontend opens a menu at the pointer with the operations that already have keys: open (Enter), F3, F5, F6, Shift+F6, F8, and copying the path to the clipboard. Every entry runs the same command the keyboard runs — there is no second way to copy a file. Entries that cannot run right now (a read-only listing, a remote without the capability) are shown dimmed with the reason instead of disappearing.\n\nWhat the menu acts on is decided by the row you right-clicked:\n\n  • if that row is marked, the menu acts on the marks, and its header says how many\n  • if it is not, the menu acts on that row alone\n\nGetting there costs something, and it is worth knowing before it surprises you: right-clicking an unmarked row drops that pane's marks. It has to, because every command prefers the marks when there are any — leaving them would make the menu say \"1\" and the copy take eleven. The discarded selection cannot be brought back, not even by closing the menu with Esc. The trade is deliberate: the failure it prevents is silent, and this one is visible the instant the menu opens.\n\nGiving the terminal its mouse back\n\nWhile norte is capturing the mouse, your terminal emulator never sees the button presses it uses for its own text selection. Select-and-paste stops working the way you have it in your fingers, and that surprises people far more than the mouse support pleases them.\n\nTwo ways out, and neither needs a restart:\n\n  • hold Shift while you drag. Almost every emulator (xterm, GNOME Terminal, Konsole, Alacritty, kitty, WezTerm, Windows Terminal) reads Shift+drag as \"this one is mine\" and selects text normally. Shift is doing double duty here: the emulator keeps it for itself, so norte never sees it and neither the range marking nor the move-instead-of-copy above fires. On a terminal that passes Shift+drag through instead, you get norte's gesture and no selection\n  • set mouse = false under [ui] in norte.toml, or turn Mouse off in the settings screen. The capture is released as soon as the file is saved\n\nThe same release happens whenever norte hands the terminal to another program — an editor, a pager — and is taken back when that program exits. A program launched from norte never inherits a terminal in mouse mode.\n\n  tip: Everything the mouse does here, the keyboard already did. If a gesture feels missing, the key for it exists — the mouse is a second way in, never the only one.\n\n  Enter          enter the selected directory\n  Insert         toggle mark on the entry under the cursor\n  F5             copy selection to the other pane\n  F6             move selection to the other pane\n\nSee also: Marking what to act on, Two panes, one destination, Copying, moving and deleting\n",
+      "title": "Using the mouse"
+    },
+    {
+      "commands": [
+        {
+          "chord": "F1",
+          "command": "app.help",
+          "label": "this help"
+        },
+        {
+          "chord": "Ctrl+p",
+          "command": "app.palette",
+          "label": "command palette"
+        },
+        {
+          "chord": "/",
+          "command": "dialog.filter",
+          "label": "filter"
+        },
+        {
+          "chord": "Tab",
+          "command": "dialog.pane",
+          "label": "other pane"
+        },
+        {
+          "chord": "Backspace",
+          "command": "dialog.back",
+          "label": "back"
+        }
+      ],
+      "context": [],
+      "id": "help",
+      "see_also": [
+        "index",
+        "panes"
+      ],
+      "tags": [
+        "basics"
+      ],
+      "text": "Reading this help\n─────────────────\n\nF1 opens this overlay from anywhere. The list on the left is every page; the panel on the right is the page you are on.\n\nTab moves between the two. On the left, up and down change the page, and the cursor OPENS what it lands on — arrowing down the list is reading it, not choosing what to read. On the right they walk the runnable rows and the links at the bottom. Enter on a runnable row closes the help and runs the command exactly as its own key would: the same confirmation, the same policy gate, the same journal entry. Enter on a link follows it, and Backspace returns to the page you came from.\n\nRows for the overlay's own verbs — the three on this page — are the exception. They are listed so their keys can be looked up, but they mean something only inside an overlay, so a pane has nothing to run: Enter on one says so and leaves the help open.\n\n/ starts filtering the list on the left. It matches page titles, page ids and the commands each page documents — a command from the start of the id or of any of its dotted parts — so copy brings up every page that documents pane.copy, not only the one named after it. Leaving the search box keeps what you typed; emptying it is what backspace is for.\n\nThe keys here are yours\n\nNo key in these pages is written into the text. Each one is looked up in your effective keymap as the page is drawn, so a rebind changes the prose. A command with no key at all shows its name instead of claiming one.\n\nThe last entry in the list, keys, is the other direction: the whole effective keymap, generated, including the dialog.* verbs that overlay footers leave out for want of width.\n\n  tip: Ctrl+p is the fast version of the same model: type, Enter, gone. This help is the version that explains.\n\n  F1             this help\n  Ctrl+p         command palette\n  /              filter\n  Tab            other pane\n  Backspace      back\n\nSee also: Welcome to norte, Two panes, one destination\n",
+      "title": "Reading this help"
+    },
+    {
+      "commands": [
+        {
+          "chord": "F5",
+          "command": "pane.copy",
+          "label": "copy selection to the other pane"
+        },
+        {
+          "chord": "F6",
+          "command": "pane.move",
+          "label": "move selection to the other pane"
+        },
+        {
+          "chord": "F8",
+          "command": "pane.delete",
+          "label": "delete (trash when available)"
+        },
+        {
+          "chord": "Shift+F8",
+          "command": "pane.delete-permanent",
+          "label": "PERMANENT delete"
+        },
+        {
+          "chord": "Ctrl+k",
+          "command": "task.cancel",
+          "label": "cancel the most recent task"
+        }
+      ],
+      "context": [
+        "dialog.confirm",
+        "dialog.collision"
+      ],
+      "id": "copying",
+      "see_also": [
+        "selection",
+        "remote",
+        "archives"
+      ],
+      "tags": [
+        "doing"
+      ],
+      "text": "Copying, moving and deleting\n────────────────────────────\n\nMark what you want in the focused pane and press F5. The other pane is the destination, whatever it is holding — a local directory, an SSH host, a bucket. An archive is the one thing that can only ever be a source; see Inside an archive.\n\nF6 moves. Within one backend that is a rename: no bytes are read, no bytes are written, and the size of what you are moving does not matter. Only when the two ends are different backends — or different filesystems on this machine — does it degrade into a copy followed by a delete of the source.\n\nF8 uses the trash when the backend offers one and deletes permanently when it does not. Shift+F8 never uses the trash. Both confirm first, and the confirmation says which of the two is about to happen.\n\nEvery transfer is a task\n\nA copy is not a frozen screen. It reports progress, it keeps going while you navigate elsewhere, and Ctrl+k stops the most recent one.\n\nWhat cancelling promises is per file: bytes go to a staging file and the destination name does not appear until that file is complete, so no half-written file ever wears the name you were expecting.\n\nA cancelled tree is a different matter. The files already copied stay where they landed — each one whole, none of them half-written, but the directory is there and it is partial. Nothing sweeps it up for you.\n\n  warning: Cancelling a copy INTO object storage is the one case that stays ambiguous: the server may finish a copy it had already begun, so the object can appear after you cancelled, and abandoned multipart parts can go on costing money until a lifecycle rule clears them.\n\nResumable copies are asked for explicitly, from the command line. There a cancelled copy leaves a file whose name carries .norte-partial — unmistakable at a glance, and where the next attempt picks up:\n\n  norte cp --resume sftp://host/big.iso ./big.iso\n\nWhen the name is already taken\n\nThe first collision stops the transfer and asks. Your answer is not applied to that one entry: the whole operation is sent again with that policy in force, so one answer governs every collision the rest of the way.\n\n  Answer      What happens\n  ──────────  ───────────────────────────────────────────────────────────\n  overwrite   what is at the destination is replaced\n  skip        the colliding entries are left alone\n  rename      the copy lands beside it: report.txt becomes report (1).txt\n  keep newer  replaced only where the source is more recent, else left\n\nAnswer with the key the dialog shows, not with a default: there is none, because a dialog that can destroy data should not be answerable by leaning on a key.\n\n  warning: keep newer does not guess. When either side has no usable timestamp, that entry stops and asks again rather than being replaced or skipped on a hunch.\n\n  warning: Case collisions are judged against the destination, not the source: README and readme live together happily on Linux and land on the same file on macOS or Windows, and it is the destination that decides.\n\n  F5             copy selection to the other pane\n  F6             move selection to the other pane\n  F8             delete (trash when available)\n  Shift+F8       PERMANENT delete\n  Ctrl+k         cancel the most recent task\n\nSee also: Marking what to act on, SFTP, FTP and object storage, Inside an archive\n",
+      "title": "Copying, moving and deleting"
+    },
+    {
+      "commands": [
+        {
+          "chord": "Ctrl+d",
+          "command": "pane.hotlist",
+          "label": "favorite directories"
+        },
+        {
+          "chord": "Alt+Down",
+          "command": "pane.history",
+          "label": "directory history"
+        },
+        {
+          "chord": "Ctrl+r",
+          "command": "pane.refresh",
+          "label": "reload both panes (Ctrl+R)"
+        }
+      ],
+      "context": [
+        "dialog.trust-host"
+      ],
+      "id": "remote",
+      "see_also": [
+        "copying",
+        "archives"
+      ],
+      "tags": [
+        "remote"
+      ],
+      "text": "SFTP, FTP and object storage\n────────────────────────────\n\nA pane holds a remote location the same way it holds a directory. The address is a URL, and its scheme says who answers:\n\n  Scheme  What it reaches               Served by\n  ──────  ────────────────────────────  ──────────────────\n  file    this machine                  built in\n  sftp    file transfer over SSH        built in\n  ftp     plain FTP                     a sandboxed plugin\n  s3      S3-compatible object storage  built in\n\nFTP is the odd one out: it is served by a WebAssembly plugin that ships inside norte and touches the network only through a socket the host opens for it, at an address the host resolved and vetted first. That is a deliberate place to put the oldest and least trustworthy of the four.\n\nGetting there\n\nA remote lives in your favourites. Put it in norte.toml:\n\n  [[hotlist]]\n  name = \"work\"\n  path = \"sftp://you@host/srv/data\"\n\nThen Ctrl+d opens the list and confirming takes that pane there. Alt+Down brings you back to somewhere the pane has already been this session. From that point on every command in this help works unchanged — Ctrl+r especially, since a remote directory is not watched and will not notice a change on its own.\n\nA favourite is only an address. How a connection authenticates, and what it is allowed to do, lives separately in connections.toml — so a favourite gives away nothing but a path.\n\nThe first time you reach an unknown SSH host, norte shows you its fingerprint and asks. Compare it against the host through some other channel before you accept: that dialog is the only moment anyone gets to notice a machine sitting in the middle, and it deliberately has no default answer.\n\nSecrets\n\nconnections.toml holds references, never secrets. When a connection needs one, it is looked for in three places, in order: the NORTE_SECRET_ environment variable for that connection, then the system keyring, then an encrypted secrets.age file. The first hit wins, so a machine with no keyring — a server, a container — still works through the other two.\n\nAn S3 access key id is not on that list, because it is not a secret: it is an identifier, and it sits in connections.toml in the clear. The secret access key beside it does go through the resolver.\n\nIt is also why a password never goes in the URL: an address of the form sftp://user:pass@host is rejected rather than quietly accepted, because a URL ends up in history, in logs and on screen.\n\n  warning: FTP is plaintext. Not \"unless you turn on TLS\" — there is no FTPS yet, so the setting means nothing and the password and every byte of every file cross the network in the clear. Each FTP connection says so. Off your own network, use sftp://.\n\n  warning: Object storage has no directories. A folder there is a common prefix of the keys under it, so an empty folder exists only if something wrote a marker object for it, and removing the last key under a prefix makes the folder itself disappear. Renaming one is a copy of every key followed by a delete of every key, not an instant operation.\n\n  Ctrl+d         favorite directories\n  Alt+Down       directory history\n  Ctrl+r         reload both panes (Ctrl+R)\n\nSee also: Copying, moving and deleting, Inside an archive\n",
+      "title": "SFTP, FTP and object storage"
+    },
+    {
+      "commands": [
+        {
+          "chord": "Enter",
+          "command": "nav.enter",
+          "label": "enter the selected directory"
+        },
+        {
+          "chord": "Backspace",
+          "command": "nav.parent",
+          "label": "go to parent directory"
+        },
+        {
+          "chord": "F3",
+          "command": "pane.view",
+          "label": "view the selected file"
+        },
+        {
+          "chord": "Alt+e",
+          "command": "pane.names-encoding",
+          "label": "show names as… (cp437/cp866/Shift-JIS/GBK/…; display only)"
+        }
+      ],
+      "context": [],
+      "id": "archives",
+      "see_also": [
+        "copying",
+        "remote"
+      ],
+      "tags": [
+        "remote"
+      ],
+      "text": "Inside an archive\n─────────────────\n\nEnter on an archive walks into it. The pane lists what is inside, the cursor moves as usual, F3 opens an entry in the viewer, and Backspace walks back out. Nothing is unpacked into a folder you have to find and delete afterwards.\n\nThree containers are addressable, recognised by extension:\n\n  Format  Extension      Read by\n  ──────  ─────────────  ─────────────────────────────\n  zip     .zip           seeking straight to the entry\n  tar     .tar           seeking straight to the entry\n  tar+gz  .tar.gz, .tgz  decompressing; see below\n\nA .tar.gz cannot be seeked: reaching the last entry means decompressing everything before it. Browsing one is therefore fine, and reading several entries out of one would mean starting over each time — so from the second read of the same archive, norte decompresses it once into a scratch file and serves the rest from there. That file is anonymous and unlinked, so it never appears in a listing and the space returns by itself when norte lets go of it, but while it exists it is as large as the decompressed archive. Above a gigabyte it is not built at all, and reads fall back to the slow path.\n\nThe ! in the path\n\nAn archive path names the container and the entry inside it at once, with a ! segment between them:\n\n  zip+file:///home/you/photos.zip/!/2019/spain.jpg\n\nThe scheme grows the format, and the ! marks the boundary. Everything to its left is an ordinary file on the outer backend — which may itself be remote, so zip+sftp:// is a real address and reading a zip on an SSH host needs no download first.\n\n  warning: An archive is read-only. Copying out of one is an ordinary copy and works with any destination; copying into one is refused.\n\nNames that are not UTF-8\n\nA zip entry only promises UTF-8 when bit 11 of its header says so. Older archives are routinely CP437, CP866 or whatever codepage the machine that wrote them used, and nothing in the file says which.\n\nnorte keeps the raw bytes and refuses to guess in silence. When the names look wrong, Alt+e re-reads them as another encoding for display only — cp437, cp866, Shift-JIS, GBK, windows-1252 — and the bytes in the archive are untouched, as is what a copy writes at the far end.\n\nAn entry whose name cannot be a path at all, such as one containing .. or carrying an absolute path, is left out of the listing rather than placed somewhere it was never meant to go. The pane says how many it dropped.\n\n  Enter          enter the selected directory\n  Backspace      go to parent directory\n  F3             view the selected file\n  Alt+e          show names as… (cp437/cp866/Shift-JIS/GBK/…; display only)\n\nSee also: Copying, moving and deleting, SFTP, FTP and object storage\n",
+      "title": "Inside an archive"
+    },
+    {
+      "commands": [],
+      "context": [],
+      "id": "keys",
+      "see_also": [],
+      "tags": [
+        "keys"
+      ],
+      "text": "Keyboard\n\n── Browsing (panes) ──\n  Up             move cursor up\n  Down           move cursor down\n  PgUp           page up\n  PgDn           page down\n  Home           go to top\n  End            go to bottom\n  Enter          enter the selected directory\n  Backspace      go to parent directory\n  Alt+Left       back to the previous directory\n  Alt+Right      forward again\n  Alt+i          send this location to the other pane\n  Alt+u          go where the other pane is\n  Ctrl+u         swap the two panes\n  F5             copy selection to the other pane\n  F6             move selection to the other pane\n  F7             create a directory (F7)\n  Shift+F6       rename in place (Shift+F6)\n  F8             delete (trash when available)\n  Shift+F8       PERMANENT delete\n  Ctrl+k         cancel the most recent task\n  F3             view the selected file\n  F4             open the selected file with an external program (openers.toml)\n  /              quick search in pane (filter/jump)\n  Alt+Down       directory history\n  Alt+F7         search by name/content (Alt+F7)\n  Alt+e          show names as… (cp437/cp866/Shift-JIS/GBK/…; display only)\n  Ctrl+r         reload both panes (Ctrl+R)\n  Ctrl+h         show or hide hidden entries\n  Alt+.          show or hide hidden entries\n  Alt+c          column picker\n  Ctrl+d         favorite directories\n  Insert         toggle mark on the entry under the cursor\n  Space          toggle mark on the entry under the cursor\n  Ctrl+a         mark every visible entry\n  Ctrl+A         clear every mark\n  *              invert the marks\n  Plus           mark by pattern\n  -              unmark by pattern\n  q              quit norte\n  F10            quit norte\n  Ctrl+c         quit norte\n  Tab            switch pane\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n\n── Viewer ──\n  q              close the viewer\n  Esc            close the viewer\n  F3             close the viewer\n  F10            close the viewer\n  Up             one line up\n  Down           one line down\n  PgUp           page up\n  PgDn           page down\n  Home           go to top\n  End            go to bottom\n  e              reload as… (next encoding)\n  E              back to auto-detection\n  x              toggle hex view\n  Ctrl+c         quit norte\n  Tab            switch pane\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n\n── Dialogs and overlays ──\n  each dialog supports its own subset of these keys\n  Enter          confirm\n  y              approve\n  n              deny\n  Esc            cancel\n  o              overwrite\n  s              skip\n  r              rename\n  w              keep newer\n  Up             up\n  Down           down\n  PgUp           pg up\n  PgDn           pg dn\n  a              add\n  e              toggle\n  Space          toggle\n  d              remove\n  Shift+Up       move up\n  Shift+Down     move down\n  K              move up\n  J              move down\n  Ctrl+s         sort by\n  f              format\n  Tab            other pane\n  Backspace      back\n  /              filter\n  q              quit norte\n  F10            quit norte\n  Ctrl+c         quit norte\n  F1             this help\n  F9             choose theme\n  F11            settings\n  F12            extension manager\n  Ctrl+p         command palette\n\n",
+      "title": "Keyboard"
+    }
+  ],
+  "version": 1
+}

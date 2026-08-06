@@ -17,6 +17,7 @@ use norte_vfs::Provider;
 use norte_vfs_local::LocalProvider;
 
 mod doctor;
+mod help;
 
 /// Ruta del binario de frontend a lanzar: el HERMANO de `exe` si existe,
 /// si no el nombre pelado (que el `PATH` resolverá). Puro para poder
@@ -76,7 +77,14 @@ const EXIT_CANCELLED: u8 = 130;
 #[command(
     name = "norte",
     version,
-    about = "file manager ortodoxo — CLI de humo (M0)"
+    about = "file manager ortodoxo — CLI de humo (M0)",
+    // H3g: `help` es NUESTRO subcomando (el corpus de ayuda, ADR 0040), no el
+    // que clap genera para reimprimir su propio `--help`. Sin esto clap aborta
+    // al construir el parser: «command name `help` is duplicated». La ayuda de
+    // clap sigue estando donde siempre — `norte --help`, `norte <cmd> --help`;
+    // lo que se pierde es `norte help <cmd>` como sinónimo de ese `--help`, y
+    // ese nombre lo quiere la documentación del producto.
+    disable_help_subcommand = true
 )]
 struct Cli {
     /// Opera contra el daemon (arrancándolo si hace falta) en vez del
@@ -228,6 +236,22 @@ enum Cmd {
     /// Diagnósticos de solo lectura sobre capas de config y keymaps (H2)
     Doctor {
         /// Salida JSON en vez de texto para humanos
+        #[arg(long)]
+        json: bool,
+    },
+    /// Documentación de norte: índice, una página, búsqueda, o la hoja de
+    /// teclas EFECTIVAS. Embebida — no necesita daemon (H3g)
+    Help {
+        /// Página a mostrar (`--list` las enumera). `keys` es la hoja de
+        /// teclado, generada del keymap efectivo
+        topic: Option<String>,
+        /// Enumera las páginas: id y título
+        #[arg(long)]
+        list: bool,
+        /// Busca en títulos, etiquetas, comandos y cuerpo
+        #[arg(long, value_name = "TEXTO")]
+        search: Option<String>,
+        /// Salida JSON (para agentes y goldens)
         #[arg(long)]
         json: bool,
     },
@@ -474,6 +498,18 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     if let Cmd::Doctor { json } = cli.cmd {
         return doctor_cmd(json).await;
     }
+    // La ayuda es el corpus EMBEBIDO más el keymap del usuario (H3g): ni
+    // engine, ni daemon, ni red. Va aquí arriba por eso — construir un engine
+    // para imprimir documentación sería trabajo que el lector paga sin verlo.
+    if let Cmd::Help {
+        ref topic,
+        list,
+        ref search,
+        json,
+    } = cli.cmd
+    {
+        return Ok(help::run(topic.as_deref(), list, search.as_deref(), json));
+    }
 
     // Índice de búsqueda (M4, ADR 0034): el MISMO fichero que el daemon
     // (config_dir/index.db), así `norte index build` en embebido persiste y una
@@ -614,6 +650,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Cmd::Audit { .. }
         | Cmd::Ai { .. }
         | Cmd::Doctor { .. }
+        | Cmd::Help { .. }
         | Cmd::Tui { .. }
         | Cmd::Gui { .. } => unreachable!("manejado arriba"),
         #[cfg(unix)]

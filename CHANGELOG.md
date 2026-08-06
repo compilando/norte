@@ -9,6 +9,24 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **`norte help` reads the same corpus from the command line (H3g):** the index,
+  one page by id, `--list`, `--search`, and `keys` — the keyboard sheet
+  generated from *your* effective keymap, not a written list. Embedded: no
+  daemon, no network, no engine. `--json` dumps the whole thing (or one page)
+  for agents and for a golden that pins the shape, with a `version` field so a
+  consumer has a discriminator before it needs one.
+  It behaves like a command-line tool rather than a window: exit 1 with one line
+  on stderr for an unknown page (naming `--list`) or a search that matched
+  nothing, following `grep`; a closed pipe is a quiet exit rather than the Rust
+  panic `println!` produces, so `norte help | head` prints what you asked for
+  and stops; and the arguments it echoes back in an error are masked and capped,
+  since an error line is exactly where a pasted string carrying an escape ends
+  up. Callouts are ASCII words where the terminal app paints glyphs — the stream
+  may not be a terminal.
+  `norte help <command>` is no longer clap's way to reprint a subcommand's
+  `--help`; that lives where it always did, at `norte <command> --help`.
+  Plugin pages are deliberately not reachable from here: they need the plugin
+  registry, and `norte doctor` already reports what is wrong with one.
 - **The GUI has the help, and `F1` finally does something (H3f):** the same
   corpus, the same model and the same executable rows the terminal app got in
   H3b–H3e, painted in the active theme — sidebar of topics on the left, page on
