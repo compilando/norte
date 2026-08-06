@@ -305,6 +305,12 @@ help-plugin-lossy = some bytes did not decode
 # construction and its header would be the same word as its only row, so the
 # sidebar does not paint it (`ui::draw_help`). Hence no `help-group-keys`.
 help-topic-keys = Keyboard
+# H3f: footer of the GUI's help overlay. A FIXED string, unlike the TUI's
+# footer, which is generated from the `dialog` keymap — the GUI has no such
+# context and routes these keys by hardcoded GPUI names (`help_view::on_key`),
+# so a generated hint would have nothing to generate from. Rebinding does not
+# change these keys, and this string must change if `on_key` does.
+help-hint-gui = ⇥ pane · ⏎ run · / filter · ⌫ back · Ctrl+P palette · Esc close
 help-cmd-app-quit = quit norte
 help-cmd-app-help = this help
 help-cmd-app-theme = choose theme

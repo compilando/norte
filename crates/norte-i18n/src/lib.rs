@@ -89,6 +89,28 @@ fn global() -> Lang {
     *GLOBAL.get_or_init(Lang::from_env)
 }
 
+/// El idioma global vigente: el que [`force`] fijó, o el del entorno si nadie
+/// lo fijó.
+///
+/// Existe para los callers que necesitan traducir con [`t_in`] en el idioma
+/// que [`t`] usaría — un resolver que guarda el idioma en un campo, por
+/// ejemplo. Sin esto tenían que re-derivar la negociación por su cuenta, y dos
+/// derivaciones del mismo hecho acaban discrepando: la UI en un idioma y una
+/// tabla dentro de ella en otro.
+///
+/// OJO: leerlo FIJA el idioma si nadie lo había fijado (`get_or_init`), igual
+/// que traducir. Llamarlo antes de [`force`] hace que ese `force` posterior
+/// devuelva `false` salvo que coincida.
+///
+/// ```
+/// let lang = norte_i18n::active();
+/// assert_eq!(norte_i18n::t("help-title"), norte_i18n::t_in(lang, "help-title"));
+/// ```
+#[must_use]
+pub fn active() -> Lang {
+    global()
+}
+
 /// Traduce `id` en el idioma global.
 #[must_use]
 pub fn t(id: &str) -> String {

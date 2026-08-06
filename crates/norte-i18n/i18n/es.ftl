@@ -310,6 +310,12 @@ help-plugin-lossy = hay bytes que no decodifican
 # construcción y su cabecera se llamaría igual que su única fila, así que la
 # lateral no la pinta (`ui::draw_help`). Por eso no hay `help-group-keys`.
 help-topic-keys = Teclado
+# H3f: pie del overlay de ayuda de la GUI. Cadena FIJA, a diferencia del pie
+# de la TUI, que se genera del keymap `dialog` — la GUI no tiene ese contexto
+# y rutea estas teclas por nombre GPUI hardcodeado (`help_view::on_key`), así
+# que un hint generado no tendría de qué generarse. Redefinir teclas no cambia
+# estas, y esta cadena debe cambiar si cambia `on_key`.
+help-hint-gui = ⇥ panel · ⏎ ejecutar · / filtrar · ⌫ atrás · Ctrl+P paleta · Esc cerrar
 help-cmd-app-quit = salir de norte
 help-cmd-app-help = esta ayuda
 help-cmd-app-theme = elegir tema
