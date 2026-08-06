@@ -9,6 +9,27 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The GUI has the help, and `F1` finally does something (H3f):** the same
+  corpus, the same model and the same executable rows the terminal app got in
+  H3b–H3e, painted in the active theme — sidebar of topics on the left, page on
+  the right, `/` to filter, `⇥` to cross between the two, `⏎` to run the row you
+  are reading, `Ctrl+P` to hand your filter to the command palette. Extensions
+  get a page each, fetched the moment you open their row and never before, and
+  every plugin page says on its face that a plugin wrote it.
+  The bug underneath it is worth naming, because nothing reported it: all three
+  shipped keymaps have bound `F1` to the help since the corpus existed, and the
+  GUI filtered that binding out because its command table did not list the
+  command. The key was not broken, it was dropped — silently, which is the part
+  that took a test to make impossible again.
+  A row the app would refuse is dimmed here too, judged against the facts of the
+  moment the overlay opened rather than a fresher set: a page whose verdicts
+  shift while you read it disagrees with itself, and `⏎` on a dimmed row now
+  says why instead of quietly doing nothing.
+  Deliberately not done: `F1` in the GUI always opens the index, because the GUI
+  has no dialog-context table to map a screen onto a page (the terminal app's
+  contextual `F1` is H3c); the GUI's palette still does not offer `F1` on a row
+  to open that command's page; and the help is unreachable while the viewer is
+  open, since the viewer captures every key through its own resolver.
 - **Plugins bring their own help page (H3e):** a plugin can ship a `help.md`
   next to its `plugin.toml`, and it becomes one more page in the help overlay,
   under an *Extensions* group, with the plugin's own commands as rows you can
