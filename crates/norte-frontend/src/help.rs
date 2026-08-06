@@ -13,7 +13,7 @@
 //! turns each one into a Fluent string. That is what lets one model serve two
 //! frontends that name the same thing differently.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use norte_encoding::mask_terminal_hazards;
 use norte_help::{Lang, Origin, Topic, TopicId, topics};
@@ -241,9 +241,16 @@ impl HelpState {
 
     /// Installs the plugin nodes the sidebar offers (H3e).
     ///
-    /// Two kinds are DROPPED, and both drops are deliberate:
+    /// Three kinds are DROPPED, and every drop is deliberate:
     ///
     /// * a plugin with no `help.md` — its node would open nothing;
+    /// * a repeated id, FIRST-WINS — catalogue order is the order the
+    ///   extension manager and the palette already show, so the first node is
+    ///   the one the reader has seen elsewhere. `Catalog::load_dir` rejects a
+    ///   duplicate id fail-closed and a locally-discovered catalogue cannot
+    ///   produce one, but these nodes are built from `plugin.list`, which
+    ///   crosses the wire, and this model does not get to assume the peer
+    ///   enforced what our host enforces;
     /// * a plugin whose id is also a corpus topic id (or the synthetic keys
     ///   page). `parse_untrusted` assigns the topic the host-supplied id, so a
     ///   plugin published as `copying` would otherwise sit in the same id space
@@ -263,10 +270,12 @@ impl HelpState {
     /// Any page already fetched for a plugin that is no longer in the list is
     /// forgotten with it — the catalogue is the truth about what exists.
     pub fn set_plugins(&mut self, nodes: Vec<PluginNode>) {
+        let mut seen: BTreeSet<String> = BTreeSet::new();
         self.plugins = nodes
             .into_iter()
             .filter(|n| n.has_help)
             .filter(|n| n.id != KEYS_ID && norte_help::topic(self.lang, &n.id).is_none())
+            .filter(|n| seen.insert(n.id.clone()))
             .collect();
         self.plugin_topics
             .retain(|id, _| self.plugins.iter().any(|n| &n.id == id));
@@ -1451,6 +1460,31 @@ mod tests {
             help.current().as_str(),
             "acme.ftp",
             "un plugin que ya no está en el catálogo no se abre"
+        );
+    }
+
+    /// Dos nodos con el mismo id dan UNA fila, la primera. `Catalog::load_dir`
+    /// rechaza el id repetido fail-closed, así que un catálogo descubierto en
+    /// local no puede producirlo — pero estos nodos se construyen desde
+    /// `plugin.list`, que cruza el wire, y este modelo no da por hecho que el
+    /// par aplicara lo que aplica nuestro host. Dos filas que abren la misma
+    /// página es un daño pequeño; lo que sobra es la suposición.
+    #[test]
+    fn dos_nodos_con_el_mismo_id_dan_una_sola_fila() {
+        let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
+        let mut impostor = nodo("acme.ftp");
+        impostor.title = "El impostor".to_owned();
+        help.set_plugins(vec![nodo("acme.ftp"), impostor]);
+        let filas: Vec<&SidebarRow> = help
+            .rows()
+            .iter()
+            .filter(|r| matches!(r, SidebarRow::Topic { id, .. } if id.as_str() == "acme.ftp"))
+            .collect();
+        assert_eq!(filas.len(), 1, "una sola fila: {:?}", help.rows());
+        assert!(
+            matches!(filas[0], SidebarRow::Topic { title, .. } if title == "Título de acme.ftp"),
+            "y gana la PRIMERA, que es la que el gestor y la paleta ya muestran: {:?}",
+            filas[0]
         );
     }
 
