@@ -303,6 +303,7 @@ help-group-extensions = Extensiones
 # texto (que llega ya corto y ya decodificado): es el único sitio donde el
 # lector se entera de que la página venía recortada.
 help-plugin-origin = de una extensión
+help-plugin-by = publicada por { $who }
 help-plugin-truncated = recortada
 help-plugin-lossy = hay bytes que no decodifican
 # La entrada sintética `keys` NO lleva cabecera: es un grupo de uno por

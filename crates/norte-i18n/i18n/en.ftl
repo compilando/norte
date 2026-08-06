@@ -298,6 +298,7 @@ help-group-extensions = Extensions
 # arrives already short and already decoded), so this is the only place a reader
 # learns a page was cut.
 help-plugin-origin = from an extension
+help-plugin-by = published by { $who }
 help-plugin-truncated = cut short
 help-plugin-lossy = some bytes did not decode
 # The synthetic `keys` entry gets NO header: it is a group of one by

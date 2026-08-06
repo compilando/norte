@@ -125,7 +125,7 @@ const INVISIBLE: [char; 5] = [
 /// exists.
 ///
 /// `trim().is_empty()` is not enough, and the gap is on the hostile path.
-/// Masking runs BEFORE the span parse (see [`spans_masked`]) and several
+/// Masking runs BEFORE the span parse (see `spans_masked`) and several
 /// members of the hazard set are WHITESPACE — `\t`, `\r`, U+000B, U+000C,
 /// U+0085, U+2028 and U+2029. Masking turns each of them into `U+FFFD`, which
 /// is NOT whitespace, so a plain trim finds content where there was none and
@@ -143,7 +143,33 @@ const INVISIBLE: [char; 5] = [
 /// mark whose text would be a gap on screen falls through to the next step of
 /// its fallback chain. Sharing one definition is the point: a string the
 /// parser would refuse as an id must not be quietly accepted as a key.
-pub(crate) fn is_blank_id(id: &str) -> bool {
+///
+/// PUBLIC since H3e, for the frontends. They face the same question about text
+/// that never went through this parser at all — a plugin's `name`, its
+/// `publisher` — and the wrong answer is the tempting one: `str::trim` plus
+/// `is_empty` calls `"\u{3164}"` (HANGUL FILLER) non-blank, because it is not
+/// whitespace, so a name made of invisibles passes a blank check and then paints
+/// as nothing. One definition of "does this string PAINT anything?", shared, is
+/// the point.
+///
+/// ```
+/// use norte_help::is_blank_id;
+///
+/// assert!(is_blank_id(""));
+/// assert!(is_blank_id("   "));
+/// // What a naive `trim().is_empty()` gets wrong: invisibles are not
+/// // whitespace, but they paint nothing.
+/// assert!(is_blank_id("\u{3164}\u{115F}"));
+/// // …and the replacement character a mask leaves behind is not content
+/// // either — which is why a caller masks FIRST and asks this SECOND: a
+/// // zero-width space is a terminal hazard, not one of these, so it only
+/// // reads as blank once masking has turned it into `U+FFFD`.
+/// assert!(is_blank_id("\u{FFFD}"));
+/// assert!(!is_blank_id("\u{200B}"), "raw, it is a hazard rather than a blank");
+/// assert!(!is_blank_id("ACME"));
+/// ```
+#[must_use]
+pub fn is_blank_id(id: &str) -> bool {
     id.chars()
         .all(|c| c.is_whitespace() || c == '\u{FFFD}' || INVISIBLE.contains(&c))
 }
@@ -754,7 +780,7 @@ pub fn foreign_commands(source: &str, plugin_id: &str) -> Vec<String> {
 /// degrades to "there is no header" (the fenced text becomes body prose).
 ///
 /// A source with no fence at all is `false`: not declaring a header is a
-/// choice, not a defect. The question asked is exactly [`front_matter::split`]'s
+/// choice, not a defect. The question asked is exactly `front_matter::split`'s
 /// own — every failure of its EXCEPT "the file does not open with the fence" —
 /// so this cannot drift from the grammar it reports on. A bare `+++` with no
 /// line break after it counts as no fence, because that is how `split` reads

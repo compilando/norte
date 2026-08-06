@@ -280,6 +280,29 @@ pub fn render_topic<'a>(
 /// The last two do not survive a re-parse — the text arrives already short and
 /// already decoded — so only the sender can report them
 /// (`norte_help::Parsed::fold_flags`).
+///
+/// # The `·` joiner, and what the label does NOT close
+///
+/// The segments are joined in band, so a publisher containing `·` can make one
+/// segment look like two: `publisher = "ACME · cut short"` paints a page that
+/// appears to admit it was truncated when it was not. The publisher is
+/// therefore wrapped in a LABELLED segment (`help-plugin-by`, "published by X")
+/// so a fabricated `·` reads inside a run that already announced whose name it
+/// is.
+///
+/// That is MITIGATION, not a fix, and the distinction matters to whoever reads
+/// this next: `"ACME · cut short"` still renders as two visually separate
+/// segments and the label only makes the first one say `published by ACME`.
+/// The only thing that closes it is one segment per line, and that is not worth
+/// the rows on a 40-cell overlay — because the direction of the lie is benign.
+/// A fabricated segment can add a warning the page does not deserve; it cannot
+/// HIDE one, since the real flags are appended after the publisher and come
+/// from the host. The flags are what a reader acts on, and they cannot be
+/// suppressed from inside the file.
+///
+/// `is_blank_id` and not `str::trim`: `"\u{3164}"` (HANGUL FILLER) is not
+/// whitespace, so a trim-based check calls it a publisher and paints
+/// `published by ` with nothing after it.
 fn plugin_badge(topic: &Topic, lang: Lang) -> Option<String> {
     let norte_help::Origin::Plugin {
         publisher,
@@ -291,8 +314,8 @@ fn plugin_badge(topic: &Topic, lang: Lang) -> Option<String> {
         return None;
     };
     let mut parts: Vec<String> = vec![norte_i18n::t_in(lang, "help-plugin-origin")];
-    if let Some(p) = publisher.as_deref().filter(|p| !p.trim().is_empty()) {
-        parts.push(p.to_owned());
+    if let Some(p) = publisher.as_deref().filter(|p| !norte_help::is_blank_id(p)) {
+        parts.push(norte_i18n::ta_in(lang, "help-plugin-by", &[("who", p)]));
     }
     if *truncated {
         parts.push(norte_i18n::t_in(lang, "help-plugin-truncated"));
@@ -1634,6 +1657,63 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Un publicador en BLANCO no produce un segmento vacío, y «blanco»
+    /// incluye los invisibles que no son espacio en blanco (U+3164 y compañía).
+    /// Con `trim().is_empty()` la insignia pintaba «published by » sin nada
+    /// detrás.
+    #[test]
+    fn un_publicador_en_blanco_no_pinta_un_segmento_vacio() {
+        for publisher in ["", "   ", "\u{3164}\u{115F}"] {
+            let parsed =
+                norte_help::parse_untrusted(b"cuerpo", "acme.ftp", Some(publisher.to_owned()));
+            let badge = plugin_badge(&parsed.topic, Lang::En).expect("siempre hay insignia");
+            assert_eq!(
+                badge,
+                norte_i18n::t_in(Lang::En, "help-plugin-origin"),
+                "solo la marca de procedencia, sin `·` colgando: {badge:?}"
+            );
+        }
+    }
+
+    /// El publicador va en un segmento ETIQUETADO, para que un `·` dentro del
+    /// nombre no pueda pasar por estructura de la insignia.
+    ///
+    /// MITIGACIÓN, no arreglo: `"ACME · cut short"` sigue viéndose como dos
+    /// segmentos, y lo único que lo cerraría es un segmento por línea. No se
+    /// paga porque la mentira solo puede AÑADIR un aviso que la página no
+    /// merece, jamás ESCONDER uno — las banderas reales las pone el host
+    /// después, y son lo que el lector usa para decidir.
+    #[test]
+    fn el_publicador_va_etiquetado_y_las_banderas_del_host_sobreviven() {
+        let parsed = norte_help::parse_untrusted(
+            b"cuerpo",
+            "acme.ftp",
+            Some("ACME \u{00B7} cut short".to_owned()),
+        )
+        .fold_flags(false, true);
+        let badge = plugin_badge(&parsed.topic, Lang::En).expect("siempre hay insignia");
+        assert!(
+            badge.contains(&norte_i18n::ta_in(
+                Lang::En,
+                "help-plugin-by",
+                &[("who", "ACME \u{00B7} cut short")]
+            )),
+            "el nombre entero va dentro de su etiqueta: {badge:?}"
+        );
+        // Lo que NO puede hacer: suprimir una bandera de verdad.
+        assert!(
+            badge.contains(&norte_i18n::t_in(Lang::En, "help-plugin-lossy")),
+            "la bandera del host sobrevive a la fabricación: {badge:?}"
+        );
+        // …ni fabricar la que no tiene: `truncated` es false y la insignia no
+        // contiene el texto REAL de esa bandera como segmento propio, solo
+        // dentro del nombre etiquetado.
+        assert!(
+            !badge.ends_with(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")),
+            "{badge:?}"
+        );
     }
 
     /// Y una página del corpus NO lleva insignia: la línea existe para

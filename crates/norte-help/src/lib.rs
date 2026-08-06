@@ -67,6 +67,6 @@ pub use model::{Availability, Block, Callout, CommandRow, Origin, Reason, Span, 
 pub use norte_i18n::Lang;
 pub use parse::{
     CutAndDecoded, Limits, ParseError, Parsed, cut_and_decode_untrusted, foreign_commands,
-    has_broken_front_matter, parse_trusted, parse_untrusted,
-}; // tasks 4, 5 and 6; H3e adds the wire seam
+    has_broken_front_matter, is_blank_id, parse_trusted, parse_untrusted,
+}; // tasks 4, 5 and 6; H3e adds the wire seam and `is_blank_id`
 pub use resolve::{ChordResolver, CommandText, ResolvedRow, render_command, render_span, rows_of}; // task 9

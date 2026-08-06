@@ -1833,6 +1833,16 @@ impl App {
     /// exactly as `with_facts` carries the plugins across — so the re-freeze the
     /// refresh funnel performs mid-overlay cannot drop either half.
     pub fn freeze_help_plugins(&mut self, plugins: &[norte_proto::methods::PluginInfo]) {
+        // The id gate of [`HelpView::set_plugins`], applied to the resolver's
+        // half of the snapshot as well, so no structure the help owns can hold
+        // an id the host had no business announcing. `set_plugins` re-applies it
+        // rather than trusting this: it is public and exercised directly by
+        // tests, so it stays safe by construction like
+        // `norte_frontend::palette::plugin_rows`.
+        let plugins: Vec<&norte_proto::methods::PluginInfo> = plugins
+            .iter()
+            .filter(|p| norte_core::is_valid_plugin_id(&p.id))
+            .collect();
         let active: std::collections::BTreeSet<String> = plugins
             .iter()
             .filter(|p| p.approved && p.enabled)
@@ -1868,7 +1878,9 @@ impl App {
             .filter(|(_, title)| !title.is_empty())
             .collect();
         if let Some(help) = self.help.as_mut() {
-            help.set_plugins(plugins);
+            let owned: Vec<norte_proto::methods::PluginInfo> =
+                plugins.into_iter().cloned().collect();
+            help.set_plugins(&owned);
         }
         self.help_chords = std::sync::Arc::new(self.help_chords.with_plugins(active, titles));
     }
@@ -3312,7 +3324,57 @@ impl HelpView {
     /// whether its command rows are runnable, never whether its page shows: a
     /// human reads a plugin's documentation precisely in order to decide
     /// whether to enable it.
+    ///
+    /// A BLANK `name` falls back to the plugin's id. `name` is required in the
+    /// manifest but never checked for content, so `name = "\u{3164}\u{3164}"`
+    /// — HANGUL FILLERs, which are not whitespace and survive masking — is a
+    /// legal manifest whose sidebar row paints as an empty line under the
+    /// `Extensions` header: a page the reader can move onto, open, and read,
+    /// attached to a name that says nothing. The id is the one identifier the
+    /// host assigns, so it is what the row falls back to; it goes through
+    /// [`plugin_label`] like everything else, because until the id itself is
+    /// validated at this seam it is no more trustworthy than the name.
+    ///
+    /// `norte_help::is_blank_id` and not `str::trim().is_empty()`: the filler
+    /// characters this exists to catch are not whitespace, so a trim-based
+    /// check answers "not blank" about a string that paints nothing. Asked
+    /// AFTER masking, so a name of zero-width spaces — hazards rather than
+    /// invisibles — has already become `U+FFFD` and counts as blank too.
+    ///
+    /// The extension MANAGER has the same gap and is deliberately left alone:
+    /// its row carries the version and the approval badges beside the name, so
+    /// a blank name there is an odd-looking row rather than an unattributed
+    /// one. Seen and judged, not missed.
+    ///
+    /// # The id is validated HERE, and a bad one is DROPPED
+    ///
+    /// `PluginInfo.id` arrives over the wire. Our own host will only ever send
+    /// a reverse-DNS id it validated, but this frontend does not get to assume
+    /// the peer enforced what our host enforces — the same reasoning
+    /// `norte_frontend::help::HelpState::set_plugins` gives for its own
+    /// duplicate and corpus-collision guards. An id is a LOOKUP KEY that flows
+    /// straight into `TopicId`, into `plugin_needs_fetch`, and back out as the
+    /// argument to `plugin.help`, so it is the one field that must be right
+    /// rather than merely paintable.
+    ///
+    /// DROPPED, never rewritten. Masking an id is not a safety measure — it is
+    /// not injective, so it silently maps two distinct plugins onto one row —
+    /// and a repaired id would be a key that resolves to nothing or, worse, to
+    /// something else. Refusing the node is the only answer that cannot lie:
+    /// the reader loses a help page for a plugin the host should not have
+    /// announced, and `norte doctor` is where that gets diagnosed. Same
+    /// discipline as `norte_help::parse_untrusted`'s command keys, which are
+    /// refused rather than rewritten for exactly this reason.
+    ///
+    /// It also bounds the work: `is_valid_plugin_id` caps the length at 128, so
+    /// a megabyte of `id` costs one rejected comparison instead of a masked,
+    /// capped copy per plugin and a `TopicId` the sidebar filter folds on every
+    /// keystroke.
     pub fn set_plugins(&mut self, plugins: &[norte_proto::methods::PluginInfo]) {
+        let plugins: Vec<&norte_proto::methods::PluginInfo> = plugins
+            .iter()
+            .filter(|p| norte_core::is_valid_plugin_id(&p.id))
+            .collect();
         self.publishers = plugins
             .iter()
             .map(|p| (p.id.clone(), plugin_label(&p.publisher)))
@@ -3320,11 +3382,18 @@ impl HelpView {
         self.state.set_plugins(
             plugins
                 .iter()
-                .map(|p| norte_frontend::help::PluginNode {
-                    id: p.id.clone(),
-                    title: plugin_label(&p.name),
-                    has_help: p.has_help,
-                    active: p.approved && p.enabled,
+                .map(|p| {
+                    let named = plugin_label(&p.name);
+                    norte_frontend::help::PluginNode {
+                        id: p.id.clone(),
+                        title: if norte_help::is_blank_id(&named) {
+                            plugin_label(&p.id)
+                        } else {
+                            named
+                        },
+                        has_help: p.has_help,
+                        active: p.approved && p.enabled,
+                    }
                 })
                 .collect(),
         );
@@ -3333,12 +3402,21 @@ impl HelpView {
     /// Who to attribute `id`'s page to, ready to hand to
     /// `norte_help::parse_untrusted`. `None` for a plugin outside the snapshot
     /// or one that declares no publisher — a blank attribution is worse than
-    /// none, because the badge would print a lone separator.
+    /// none, because the badge would print `published by ` with nothing after
+    /// it, which reads as a rendering fault rather than as an absence.
+    ///
+    /// Blankness is `norte_help::is_blank_id`, not `str::trim().is_empty()`:
+    /// `publisher` is a required TOML field that the manifest never checks for
+    /// content, and `"\u{3164}"` (HANGUL FILLER) is not whitespace, so a
+    /// trim-based check would call it a publisher. Asked AFTER
+    /// [`plugin_label`] has masked, so a publisher of zero-width spaces — a
+    /// hazard rather than an invisible — is already `U+FFFD` by the time this
+    /// looks, and counts as blank too.
     #[must_use]
     pub fn publisher_of(&self, id: &str) -> Option<String> {
         self.publishers
             .get(id)
-            .filter(|p| !p.trim().is_empty())
+            .filter(|p| !norte_help::is_blank_id(p))
             .cloned()
     }
 
@@ -6299,6 +6377,109 @@ mod help_view_tests {
         assert!(!pub_.contains('\u{202E}'), "publicador limpio: {pub_:?}");
     }
 
+    /// H3e: un `name` en BLANCO cae al id del plugin.
+    ///
+    /// `name` es obligatorio en el manifiesto pero nadie comprueba que tenga
+    /// contenido, y U+3164 (HANGUL FILLER) no es espacio en blanco: sobrevive
+    /// al `trim` y al enmascarado. Sin el repliegue, la barra pinta una fila
+    /// VACÍA bajo la cabecera «Extensiones» — una página que el lector puede
+    /// pisar, abrir y leer, colgando de un nombre que no dice nada.
+    #[test]
+    fn un_nombre_en_blanco_cae_al_id_del_plugin() {
+        let mut view = HelpView::new(Lang::En, Vec::new());
+        let mut p = plugin("acme.ftp", "\u{3164}\u{3164}");
+        p.publisher = "\u{3164}".to_owned();
+        view.set_plugins(&[p]);
+        let fila = view
+            .state
+            .rows()
+            .iter()
+            .find_map(|r| match r {
+                norte_frontend::help::SidebarRow::Topic { id, title }
+                    if id.as_str() == "acme.ftp" =>
+                {
+                    Some(title.clone())
+                }
+                _ => None,
+            })
+            .expect("el nodo está en la barra");
+        assert_eq!(fila, "acme.ftp", "la fila se nombra con el id: {fila:?}");
+
+        // Y un publicador en blanco no se atribuye: la insignia pintaría
+        // «publicada por » sin nada detrás, que se lee como un fallo del
+        // pintor y no como una ausencia.
+        assert_eq!(view.publisher_of("acme.ftp"), None);
+
+        // Anti-vacuidad: un nombre REAL no se toca.
+        let mut view = HelpView::new(Lang::En, Vec::new());
+        view.set_plugins(&[plugin("acme.ftp", "FTP")]);
+        assert!(view.state.rows().iter().any(|r| matches!(
+            r,
+            norte_frontend::help::SidebarRow::Topic { title, .. } if title == "FTP"
+        )));
+        assert_eq!(view.publisher_of("acme.ftp").as_deref(), Some("ACME"));
+    }
+
+    /// H3e: un id que NO es un id de plugin válido se DESCARTA en el punto de
+    /// entrada — nunca se repara.
+    ///
+    /// El id llega por el wire y es una CLAVE: viaja a `TopicId`, a
+    /// `plugin_needs_fetch` y de vuelta como argumento de `plugin.help`.
+    /// Enmascararlo no sería una medida de seguridad (el enmascarado no es
+    /// inyectivo: dos plugins distintos caerían en la misma fila) y un id
+    /// «reparado» sería una clave que no resuelve a nada, o peor, a otra cosa.
+    /// Negarse es la única respuesta que no puede mentir. Mismo criterio que
+    /// las claves de comando de `parse_untrusted`, que se rechazan en vez de
+    /// reescribirse.
+    #[test]
+    fn un_id_que_no_es_de_plugin_se_descarta_en_la_entrada() {
+        let mut view = HelpView::new(Lang::En, Vec::new());
+        let mut bidi = plugin("acme.\u{202E}ftp", "Bidi");
+        bidi.publisher = "ACME".to_owned();
+        view.set_plugins(&[
+            plugin("acme.ftp", "Bueno"),
+            bidi,
+            plugin("sinpunto", "Sin punto"),
+            plugin(&"a.".repeat(500), "Kilométrico"),
+        ]);
+        let ids: Vec<String> = view
+            .state
+            .rows()
+            .iter()
+            .filter_map(|r| match r {
+                norte_frontend::help::SidebarRow::Topic { id, .. } => Some(id.as_str().to_owned()),
+                norte_frontend::help::SidebarRow::Group { .. } => None,
+            })
+            // La barra lleva TODO el corpus además de las extensiones: lo que
+            // se mira aquí son las filas de plugin, que son las que este
+            // filtro decide.
+            .filter(|id| {
+                id != norte_frontend::help::KEYS_ID && norte_help::topic(Lang::En, id).is_none()
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["acme.ftp".to_owned()],
+            "solo sobrevive el id válido: {ids:?}"
+        );
+        // Y no se queda una atribución colgando del que se fue.
+        assert_eq!(view.publisher_of("acme.\u{202E}ftp"), None);
+    }
+
+    /// Un nombre de invisibles que son HAZARDS (no `INVISIBLE`) también cuenta
+    /// como blanco — porque se pregunta DESPUÉS de enmascarar, cuando ya son
+    /// `U+FFFD`. Es el orden lo que hace que una sola pregunta cubra las dos
+    /// familias.
+    #[test]
+    fn un_nombre_de_espacios_de_ancho_cero_tambien_cae_al_id() {
+        let mut view = HelpView::new(Lang::En, Vec::new());
+        view.set_plugins(&[plugin("acme.ftp", "\u{200B}\u{200B}")]);
+        assert!(view.state.rows().iter().any(|r| matches!(
+            r,
+            norte_frontend::help::SidebarRow::Topic { title, .. } if title == "acme.ftp"
+        )));
+    }
+
     /// `plugin_needs_fetch` PREGUNTA, no avisa: sigue contestando `Some` hasta
     /// que la página se instala, y el run loop lo visita en cada vuelta. Sin la
     /// reclamación, un daemon que no contesta se reintentaría a ritmo de frame.
@@ -6480,6 +6661,37 @@ mod help_plugin_snapshot_tests {
                 .reason(),
             Some(norte_help::Reason::PluginInactive),
             "pero sus filas no se ofrecen"
+        );
+    }
+
+    /// La misma puerta, en la mitad del RESOLVER: ni el conjunto de activos ni
+    /// el mapa de títulos pueden guardar un id que el host no debió anunciar.
+    #[test]
+    fn un_id_invalido_no_entra_en_la_foto_del_resolver() {
+        let mut app = app();
+        app.help = Some(super::HelpView::new(norte_help::Lang::En, Vec::new()));
+        let mut malo = plugin("acme.\u{202E}ftp", true, true);
+        malo.commands = vec![norte_proto::methods::PluginCommandInfo {
+            id: "sync".to_owned(),
+            title: "Sincronizar".to_owned(),
+        }];
+        app.freeze_help_plugins(&[malo]);
+        assert_eq!(
+            norte_help::ChordResolver::availability(
+                &*app.help_chords,
+                "plugin:acme.\u{202E}ftp:sync"
+            )
+            .reason(),
+            Some(norte_help::Reason::PluginInactive),
+            "no está activo: su id nunca entró en el conjunto"
+        );
+        assert_eq!(
+            norte_help::ChordResolver::label(&*app.help_chords, "plugin:acme.\u{202E}ftp:sync")
+                .chars()
+                .filter(|c| norte_encoding::is_terminal_hazard(*c))
+                .count(),
+            0,
+            "y su título no llegó al mapa: la etiqueta cae al repliegue seguro"
         );
     }
 
