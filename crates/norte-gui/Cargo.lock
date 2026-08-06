@@ -5072,6 +5072,7 @@ dependencies = [
  "norte-config",
  "norte-connect",
  "norte-encoding",
+ "norte-help",
  "norte-index",
  "norte-plugin-host",
  "norte-proto",
