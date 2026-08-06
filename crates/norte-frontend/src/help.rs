@@ -13,8 +13,10 @@
 //! turns each one into a Fluent string. That is what lets one model serve two
 //! frontends that name the same thing differently.
 
+use std::collections::BTreeMap;
+
 use norte_encoding::mask_terminal_hazards;
-use norte_help::{Lang, Topic, TopicId, topics};
+use norte_help::{Lang, Origin, Topic, TopicId, topics};
 
 use crate::nav::fold;
 
@@ -40,6 +42,31 @@ pub const KEYS_ID: &str = "keys";
 
 /// Tag the keyboard page is grouped under.
 const KEYS_TAG: &str = "keys";
+
+/// Tag the plugin pages are grouped under.
+const PLUGINS_TAG: &str = "extensions";
+
+/// A plugin that can have a page in the sidebar (H3e).
+///
+/// The frontend builds these from `plugin.list`; this model never talks to a
+/// backend.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginNode {
+    /// Catalogue id. A LOOKUP KEY: byte-exact, never masked (masking is not
+    /// injective, so it would collapse two distinct plugins onto one row).
+    pub id: String,
+    /// `PluginInfo.name`, ALREADY masked and capped by the caller — this
+    /// model does no masking, it only carries what the frontend prepared.
+    pub title: String,
+    /// The plugin ships a `help.md` (`PluginInfo.has_help`). Without one there
+    /// is no page and therefore no row: a node that opens nothing is a dead
+    /// end the reader pays for with a keystroke.
+    pub has_help: bool,
+    /// Approved AND enabled. It does not decide whether the page shows — a
+    /// human reads a plugin's documentation precisely to decide whether to
+    /// enable it — only whether its command rows are runnable.
+    pub active: bool,
+}
 
 /// One row of the sidebar.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -119,6 +146,12 @@ pub struct HelpState {
     actions: Vec<Action>,
     action_cursor: usize,
     body_scroll: usize,
+    /// Plugin nodes, in catalogue order, minus the ones dropped by
+    /// [`HelpState::set_plugins`].
+    plugins: Vec<PluginNode>,
+    /// Pages already fetched, keyed by plugin id. Owned, because they are
+    /// parsed at runtime — the corpus is `'static` and these are not.
+    plugin_topics: BTreeMap<String, Topic>,
 }
 
 impl HelpState {
@@ -161,6 +194,8 @@ impl HelpState {
             actions: Vec::new(),
             action_cursor: 0,
             body_scroll: 0,
+            plugins: Vec::new(),
+            plugin_topics: BTreeMap::new(),
         };
         state.rebuild_rows();
         state.rebuild_actions();
@@ -193,10 +228,106 @@ impl HelpState {
     }
 
     /// The open corpus topic, or `None` for the synthetic [`KEYS_ID`] page
-    /// (whose body the frontend generates from the effective keymap).
+    /// (whose body the frontend generates from the effective keymap) and for a
+    /// plugin page, which is not `'static`.
+    ///
+    /// Prefer [`current_topic`](Self::current_topic): this one answers "is the
+    /// open page a corpus page", which only a caller that genuinely needs the
+    /// `'static` lifetime should be asking.
     #[must_use]
     pub fn topic(&self) -> Option<&'static Topic> {
         norte_help::topic(self.lang, self.current.as_str())
+    }
+
+    /// Installs the plugin nodes the sidebar offers (H3e).
+    ///
+    /// Two kinds are DROPPED, and both drops are deliberate:
+    ///
+    /// * a plugin with no `help.md` — its node would open nothing;
+    /// * a plugin whose id is also a corpus topic id (or the synthetic keys
+    ///   page). `parse_untrusted` assigns the topic the host-supplied id, so a
+    ///   plugin published as `copying` would otherwise sit in the same id space
+    ///   as the built-in page of that name and every `[[copying]]` in the
+    ///   corpus could land in third-party prose. The corpus wins; `norte
+    ///   doctor` reports the collision so the loss is not silent.
+    ///
+    ///   That collision cannot arise TODAY from a locally-discovered plugin:
+    ///   `norte_plugin_host::manifest::is_valid_plugin_id` demands reverse-DNS
+    ///   (two dot-separated segments) and every corpus id is a single segment,
+    ///   so a manifest saying `id = "copying"` does not load at all. The guard
+    ///   stays because the ids reaching this method came off the WIRE and the
+    ///   id space belongs to another crate, which promises this one nothing.
+    ///   [`current_topic`](Self::current_topic)'s lookup order is the second
+    ///   half of the same defence.
+    ///
+    /// Any page already fetched for a plugin that is no longer in the list is
+    /// forgotten with it — the catalogue is the truth about what exists.
+    pub fn set_plugins(&mut self, nodes: Vec<PluginNode>) {
+        self.plugins = nodes
+            .into_iter()
+            .filter(|n| n.has_help)
+            .filter(|n| n.id != KEYS_ID && norte_help::topic(self.lang, &n.id).is_none())
+            .collect();
+        self.plugin_topics
+            .retain(|id, _| self.plugins.iter().any(|n| &n.id == id));
+        self.rebuild_rows();
+        // The open page may have just stopped existing (a plugin left the
+        // catalogue while the reader was on it). `rebuild_rows` moves the body
+        // onto the row the cursor landed on, and the actions of a page that is
+        // gone must not survive it either.
+        self.rebuild_actions();
+    }
+
+    /// Installs a page parsed from `plugin.help` (H3e). Ignored when the
+    /// plugin is not a current node — a late answer for a plugin that has
+    /// since left the catalogue must not resurrect it.
+    pub fn install_plugin_topic(&mut self, topic: Topic) {
+        let Origin::Plugin { id, .. } = &topic.origin else {
+            return;
+        };
+        if !self.plugins.iter().any(|n| &n.id == id) {
+            return;
+        }
+        self.plugin_topics.insert(id.clone(), topic);
+        self.rebuild_actions();
+    }
+
+    /// The open page, whatever it is: the corpus FIRST, then a plugin's. The
+    /// order is the shadowing guard's second half — even if a node slipped
+    /// past [`set_plugins`](Self::set_plugins), the built-in page would still
+    /// win here.
+    ///
+    /// `None` for the synthetic keyboard page, and for a plugin node whose
+    /// page has not arrived yet (see
+    /// [`plugin_needs_fetch`](Self::plugin_needs_fetch)).
+    #[must_use]
+    pub fn current_topic(&self) -> Option<&Topic> {
+        norte_help::topic(self.lang, self.current.as_str())
+            .or_else(|| self.plugin_topics.get(self.current.as_str()))
+    }
+
+    /// The plugin id whose page the reader is on and the state does not have
+    /// yet — what the frontend must ask `plugin.help` for. `None` when the
+    /// open page is a corpus page, the keyboard page, or an already-fetched
+    /// plugin page.
+    #[must_use]
+    pub fn plugin_needs_fetch(&self) -> Option<&str> {
+        let id = self.current.as_str();
+        (norte_help::topic(self.lang, id).is_none()
+            && !self.plugin_topics.contains_key(id)
+            && self.plugins.iter().any(|n| n.id == id))
+        .then_some(id)
+    }
+
+    /// Whether the plugin owning the open page is active (approved AND
+    /// enabled). `true` for anything that is not a plugin page: a corpus page
+    /// has no plugin to be inactive.
+    #[must_use]
+    pub fn current_plugin_active(&self) -> bool {
+        self.plugins
+            .iter()
+            .find(|n| n.id == self.current.as_str())
+            .is_none_or(|n| n.active)
     }
 
     /// The sidebar as it stands under the current filter.
@@ -495,8 +626,17 @@ impl HelpState {
     }
 
     /// Whether `id` names something this overlay can show.
+    ///
+    /// A plugin NODE counts, page in hand or not: its body may still be in
+    /// flight (see [`plugin_needs_fetch`](Self::plugin_needs_fetch)), and a
+    /// reader who cannot open the row they can see would have to press the key
+    /// twice to find out the answer arrived. The catalogue, not the cache, is
+    /// what says the page exists — which is also why a plugin that LEFT the
+    /// catalogue stops being openable even with its page still parsed.
     fn exists(&self, id: &TopicId) -> bool {
-        id.as_str() == KEYS_ID || norte_help::topic(self.lang, id.as_str()).is_some()
+        id.as_str() == KEYS_ID
+            || norte_help::topic(self.lang, id.as_str()).is_some()
+            || self.plugins.iter().any(|n| n.id == id.as_str())
     }
 
     /// Shows `id` WITHOUT remembering where the reader was.
@@ -573,6 +713,33 @@ impl HelpState {
                 id: TopicId::new(KEYS_ID),
                 title: self.keys_label.clone(),
             });
+        }
+        // The plugin pages go LAST, under their own header: they are the only
+        // rows the host did not write, and the reading order the corpus author
+        // laid out ends where third-party prose begins. Catalogue order within
+        // the group, for the same reason the corpus keeps corpus order.
+        //
+        // Filtered by id OR title like every other row — the title being the
+        // already-masked name the frontend handed in, so the reader finds the
+        // row by what it SAYS. Nothing to match on beyond those two: a node is
+        // not a topic, and its commands are only known once its page arrives.
+        let hits: Vec<&PluginNode> = self
+            .plugins
+            .iter()
+            .filter(|n| {
+                needle.is_empty()
+                    || fold(n.id.as_bytes()).contains(&needle)
+                    || fold(n.title.as_bytes()).contains(&needle)
+            })
+            .collect();
+        if !hits.is_empty() {
+            rows.push(SidebarRow::Group {
+                tag: PLUGINS_TAG.to_owned(),
+            });
+            rows.extend(hits.into_iter().map(|n| SidebarRow::Topic {
+                id: TopicId::new(&n.id),
+                title: n.title.clone(),
+            }));
         }
         self.rows = rows;
         self.sync_cursor();
@@ -680,9 +847,14 @@ impl HelpState {
 
     /// Rebuilds what `Enter` can do on the open topic: its commands in
     /// declared order, then its `see_also` links. Empty for the keyboard page
-    /// — its rows are chords, and a chord is not something you press Enter on.
+    /// — its rows are chords, and a chord is not something you press Enter on
+    /// — and for a plugin page that has not arrived yet.
+    ///
+    /// A plugin page contributes its own commands (`parse_untrusted` accepts
+    /// only that plugin's own dispatch keys) and never any link: the parser
+    /// drops `see_also`, so the links half is naturally empty.
     fn rebuild_actions(&mut self) {
-        self.actions = self.topic().map_or_else(Vec::new, |topic| {
+        self.actions = self.current_topic().map_or_else(Vec::new, |topic| {
             topic
                 .commands
                 .iter()
@@ -1179,6 +1351,191 @@ mod tests {
              is a dead end"
         );
         assert_eq!(s.action(), None);
+    }
+
+    fn nodo(id: &str) -> PluginNode {
+        PluginNode {
+            id: id.to_owned(),
+            title: format!("Título de {id}"),
+            has_help: true,
+            active: true,
+        }
+    }
+
+    #[test]
+    fn los_plugins_con_ayuda_ponen_una_fila_en_la_barra() {
+        let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
+        help.set_plugins(vec![nodo("acme.ftp")]);
+        assert!(
+            help.rows().iter().any(|r| matches!(
+                r,
+                SidebarRow::Topic { id, .. } if id.as_str() == "acme.ftp"
+            )),
+            "el nodo del plugin está en la barra: {:?}",
+            help.rows()
+        );
+    }
+
+    #[test]
+    fn un_plugin_sin_ayuda_no_pone_fila() {
+        let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
+        let mut n = nodo("acme.ftp");
+        n.has_help = false;
+        help.set_plugins(vec![n]);
+        assert!(
+            !help.rows().iter().any(|r| matches!(
+                r,
+                SidebarRow::Topic { id, .. } if id.as_str() == "acme.ftp"
+            )),
+            "sin página no hay nodo que abrir"
+        );
+    }
+
+    /// Fail-closed: el corpus gana. La colisión NO puede nacer hoy de un
+    /// plugin descubierto localmente — `is_valid_plugin_id` exige DNS inverso
+    /// (dos segmentos separados por punto) y todo id del corpus es un solo
+    /// segmento, así que un manifiesto con `id = "copying"` ni siquiera carga.
+    /// La guarda existe porque ESTE modelo recibe ids que vinieron del WIRE y
+    /// el espacio de ids lo posee otro crate, que a este no le promete nada:
+    /// un `PluginNode` es un struct plano que cualquiera —este test el
+    /// primero— puede construir. Sin la guarda, un plugin publicado como
+    /// `copying` se comería la página de copiar y todos los `[[copying]]` del
+    /// corpus aterrizarían en prosa de terceros.
+    #[test]
+    fn un_plugin_no_tapa_una_pagina_del_corpus() {
+        let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
+        help.set_plugins(vec![nodo("copying")]);
+        help.open(&TopicId::new("copying"));
+        let abierto = help.current_topic().expect("hay página");
+        assert_eq!(abierto.origin, norte_help::Origin::BuiltIn);
+    }
+
+    #[test]
+    fn la_pagina_de_un_plugin_se_abre_cuando_llega_del_wire() {
+        let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
+        help.set_plugins(vec![nodo("acme.ftp")]);
+        help.open(&TopicId::new("acme.ftp"));
+        assert_eq!(help.plugin_needs_fetch(), Some("acme.ftp"), "aún no llegó");
+        assert!(help.current_topic().is_none(), "no se inventa cuerpo");
+
+        // `id` es OBLIGATORIO en el header (`FrontMatter::id` no tiene
+        // `#[serde(default)]`): sin él el TOML no deserializa, `parse_untrusted`
+        // degrada a «no hay header» —nunca a un error— y se perderían a la vez
+        // el título y los comandos, que es justo lo que este test mira. El id
+        // declarado da igual: el que manda es el que asigna el host.
+        let parsed = norte_help::parse_untrusted(
+            b"+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n\
+              commands = [\"plugin:acme.ftp:sync\"]\n+++\ncuerpo",
+            "acme.ftp",
+            None,
+        );
+        help.install_plugin_topic(parsed.topic);
+        assert_eq!(help.plugin_needs_fetch(), None, "ya está instalada");
+        assert_eq!(help.current_topic().expect("hay página").title, "FTP");
+        assert_eq!(
+            help.actions().first(),
+            Some(&Action::Run("plugin:acme.ftp:sync".to_owned())),
+            "sus comandos son filas ejecutables"
+        );
+    }
+
+    #[test]
+    fn cambiar_de_plugins_olvida_las_paginas_que_ya_no_estan() {
+        let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
+        help.set_plugins(vec![nodo("acme.ftp")]);
+        let parsed = norte_help::parse_untrusted(b"cuerpo", "acme.ftp", None);
+        help.install_plugin_topic(parsed.topic);
+        help.set_plugins(vec![nodo("otro.plugin")]);
+        help.open(&TopicId::new("acme.ftp"));
+        assert_ne!(
+            help.current().as_str(),
+            "acme.ftp",
+            "un plugin que ya no está en el catálogo no se abre"
+        );
+    }
+
+    /// Una página que llega tarde, para un plugin que ya no está en el
+    /// catálogo, no lo resucita: el catálogo es la verdad sobre qué existe, y
+    /// una respuesta en vuelo no puede reabrir una puerta que se cerró.
+    #[test]
+    fn una_pagina_de_un_plugin_que_no_es_nodo_se_ignora() {
+        let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
+        help.set_plugins(vec![nodo("otro.plugin")]);
+        let parsed = norte_help::parse_untrusted(b"cuerpo", "acme.ftp", None);
+        help.install_plugin_topic(parsed.topic);
+        help.open(&TopicId::new("acme.ftp"));
+        assert_ne!(help.current().as_str(), "acme.ftp");
+        assert!(
+            !help.rows().iter().any(|r| matches!(
+                r,
+                SidebarRow::Topic { id, .. } if id.as_str() == "acme.ftp"
+            )),
+            "y tampoco aparece en la barra"
+        );
+    }
+
+    /// La fila de un plugin se filtra como cualquier otra: por id o por
+    /// título. Si no, el filtro dejaría la lista del corpus vacía y las
+    /// extensiones colgando debajo, que es exactamente lo que el lector NO
+    /// buscaba.
+    #[test]
+    fn el_filtro_alcanza_y_descarta_las_filas_de_plugin() {
+        let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
+        help.set_plugins(vec![nodo("acme.ftp")]);
+        help.start_filter();
+        for c in "acme".chars() {
+            help.push_char(c);
+        }
+        assert!(
+            shown(&help).iter().any(|id| id == "acme.ftp"),
+            "el id alcanza la fila: {:?}",
+            shown(&help)
+        );
+
+        let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
+        help.set_plugins(vec![nodo("acme.ftp")]);
+        help.start_filter();
+        for c in "título".chars() {
+            help.push_char(c);
+        }
+        assert!(
+            shown(&help).iter().any(|id| id == "acme.ftp"),
+            "y el título también: {:?}",
+            shown(&help)
+        );
+
+        let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
+        help.set_plugins(vec![nodo("acme.ftp")]);
+        help.start_filter();
+        for c in "zzzz".chars() {
+            help.push_char(c);
+        }
+        assert!(
+            help.rows().is_empty(),
+            "y lo que no casa se va, cabecera incluida: {:?}",
+            help.rows()
+        );
+    }
+
+    /// Un nodo inactivo (no aprobado, o deshabilitado) SIGUE teniendo página:
+    /// un humano lee la documentación de un plugin justo para decidir si lo
+    /// habilita. Lo que su estado decide es si sus filas son ejecutables.
+    #[test]
+    fn un_plugin_inactivo_conserva_su_pagina() {
+        let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
+        let mut n = nodo("acme.ftp");
+        n.active = false;
+        help.set_plugins(vec![n]);
+        assert!(help.rows().iter().any(|r| matches!(
+            r,
+            SidebarRow::Topic { id, .. } if id.as_str() == "acme.ftp"
+        )));
+        help.open(&TopicId::new("acme.ftp"));
+        assert!(!help.current_plugin_active(), "pero no está activo");
+
+        // Una página del corpus no tiene plugin que pueda estar inactivo.
+        help.open(&TopicId::new("copying"));
+        assert!(help.current_plugin_active());
     }
 
     #[test]
