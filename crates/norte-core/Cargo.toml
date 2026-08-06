@@ -23,6 +23,10 @@ norte-config.workspace = true
 norte-connect.workspace = true
 # Modelo de plugins (M4-P3): catálogo + manifiesto que el PluginRegistry expone.
 norte-plugin-host.workspace = true
+# H3e: el host ACOTA el `help.md` de un plugin con el MISMO tope y la misma
+# detección de encoding que el parser hostil del frontend. La alternativa era
+# repetir el corte aquí, y dos topes que empiezan iguales no siguen iguales.
+norte-help.workspace = true
 norte-proto.workspace = true
 # Matchers de fs.search (M4 live search): detección/decodificación de encoding
 # de la aguja (transcodificación multi-encoding) y NFC del nombre.

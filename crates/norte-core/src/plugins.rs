@@ -447,11 +447,12 @@ impl PluginRegistry {
                             header: c.header.clone(),
                         })
                         .collect(),
-                    // (H3e, 0.34.0) todavía sin cablear: el catálogo aún no
-                    // mira si hay un `help.md` junto al manifiesto. `false` es
-                    // el default honesto mientras tanto — "no hay página" —, y
-                    // la Task 3 de H3e lo sustituye por el valor real.
-                    has_help: false,
+                    // (H3e, 0.34.0) discovery barato: el catálogo ya sabe si
+                    // hay `help.md` porque lo miró al descubrir. NO gateado
+                    // por approved/enabled — la documentación de un plugin es
+                    // justo lo que un humano lee ANTES de aprobarlo, mismo
+                    // criterio que `capabilities`/`commands`/`columns`.
+                    has_help: e.has_help,
                 }
             })
             .collect();
@@ -503,6 +504,34 @@ impl PluginRegistry {
             .iter()
             .find(|p| p.manifest.id == id)
             .map(|p| &p.settings)
+    }
+
+    /// El `help.md` de `id`, ACOTADO para el wire (H3e).
+    ///
+    /// `None` si `id` no está en el catálogo. Eso es lo que hace segura la
+    /// llamada: `id` viene del WIRE y se usa como CLAVE DE BÚSQUEDA contra los
+    /// plugins descubiertos, nunca compuesta en una ruta — la ruta sale del
+    /// `dir` que el catálogo guardó al descubrir, así que un `../` en el id no
+    /// llega a tocar el sistema de ficheros, solo falla el lookup.
+    ///
+    /// Un plugin conocido SIEMPRE devuelve `Some`, aunque su `help.md` falte o
+    /// no se pueda leer: en ese caso `markdown` es la cadena vacía. La ayuda es
+    /// cosmética y no tiene por qué distinguirse de "página en blanco" — lo
+    /// que sí distingue es `norte doctor`, que reporta el fichero ausente o
+    /// ilegible como un hallazgo `plugin-help`.
+    ///
+    /// I/O SÍNCRONA: el llamador async va por `spawn_blocking` (regla 2),
+    /// igual que el resto de este registro.
+    #[must_use]
+    pub fn help_of(&self, id: &str) -> Option<norte_proto::methods::PluginHelpResult> {
+        let entry = self.catalog.plugins.iter().find(|e| e.manifest.id == id)?;
+        let bytes = std::fs::read(entry.dir.join("help.md")).unwrap_or_default();
+        let s = norte_help::sanitize_untrusted(&bytes);
+        Some(norte_proto::methods::PluginHelpResult {
+            markdown: s.markdown,
+            truncated: s.truncated,
+            lossy: s.lossy,
+        })
     }
 
     /// Esquema `[config]` de `id` + valores EFECTIVOS, EMPAREJADOS en orden
@@ -1874,5 +1903,63 @@ header = "Size"
             Some(vec![Some("1".to_string()), None])
         );
         assert_eq!(column_values_checked(vec![Some("1".into())], 2), None);
+    }
+
+    // -------------------------------------------------------------------
+    // H3e: `has_help` al descubrir + `help_of` bajo demanda.
+
+    #[test]
+    fn help_of_devuelve_el_markdown_acotado_del_plugin() {
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
+        std::fs::write(
+            tmp.path().join("plugins/org.norte.demo/help.md"),
+            "+++\nid = \"org.norte.demo\"\ntitle = \"Demo\"\n+++\ncuerpo",
+        )
+        .unwrap();
+
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert!(reg.list().plugins[0].has_help, "list lo anuncia");
+        let help = reg.help_of("org.norte.demo").expect("hay página");
+        assert!(help.markdown.contains("cuerpo"));
+        assert!(!help.truncated && !help.lossy);
+    }
+
+    #[test]
+    fn help_of_de_un_id_desconocido_es_none() {
+        // Fail-closed: el id viene del WIRE. Se resuelve contra el catálogo y
+        // jamás se compone en una ruta — un `../` no llega a tocar el FS.
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert!(reg.help_of("../../etc/passwd").is_none());
+        assert!(reg.help_of("otro.plugin").is_none());
+    }
+
+    #[test]
+    fn help_of_acota_un_help_md_enorme_y_lo_declara() {
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
+        let gordo = "a".repeat(norte_help::Limits::untrusted().max_bytes + 4096);
+        std::fs::write(tmp.path().join("plugins/org.norte.demo/help.md"), &gordo).unwrap();
+
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        let help = reg.help_of("org.norte.demo").expect("hay página");
+        assert!(help.truncated, "un fichero por encima del tope se declara");
+        assert!(help.markdown.len() <= norte_help::Limits::untrusted().max_bytes);
+        assert!(help.markdown.len() < gordo.len(), "y de verdad se cortó");
+    }
+
+    #[test]
+    fn un_help_md_ilegible_es_pagina_vacia_no_error() {
+        // La ayuda es cosmética: un `help.md` que no se puede leer nunca
+        // tumba el plugin ni la llamada.
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
+        std::fs::create_dir_all(tmp.path().join("plugins/org.norte.demo/help.md")).unwrap();
+
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        let help = reg.help_of("org.norte.demo").expect("el plugin existe");
+        assert_eq!(help.markdown, "");
     }
 }

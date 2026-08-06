@@ -966,6 +966,44 @@ fn catalogo_plugin_sin_config_tiene_settings_vacio() {
     assert!(cat.plugins[0].settings.is_empty());
 }
 
+// --- H3e: el catálogo anuncia si el plugin trae `help.md` ----------------
+
+#[test]
+fn descubrir_marca_el_plugin_que_trae_help_md() {
+    let root = tempfile::tempdir().unwrap();
+    write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
+    std::fs::write(
+        root.path().join("org.norte.syntax-preview").join("help.md"),
+        "+++\nid = \"org.norte.syntax-preview\"\ntitle = \"Preview\"\n+++\ncuerpo",
+    )
+    .unwrap();
+
+    let cat = Catalog::load_dir(root.path());
+    assert!(cat.plugins[0].has_help, "el help.md descubierto se anuncia");
+}
+
+#[test]
+fn sin_help_md_no_se_anuncia_ayuda() {
+    let root = tempfile::tempdir().unwrap();
+    write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
+
+    let cat = Catalog::load_dir(root.path());
+    assert!(!cat.plugins[0].has_help);
+}
+
+#[test]
+fn un_help_md_que_es_un_directorio_no_anuncia_ayuda() {
+    // `is_file`, no `exists`: un `help.md` que es un directorio no es una
+    // página, y anunciarla haría que la barra lateral pintase un nodo que
+    // luego se abre vacío.
+    let root = tempfile::tempdir().unwrap();
+    write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
+    std::fs::create_dir_all(root.path().join("org.norte.syntax-preview").join("help.md")).unwrap();
+
+    let cat = Catalog::load_dir(root.path());
+    assert!(!cat.plugins[0].has_help);
+}
+
 // ---------------------------------------------------------------------
 // ADR 0037 (G3b): `Category::Decorator` + `Contributions.decorator`.
 

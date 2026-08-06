@@ -39,6 +39,14 @@ pub struct PluginEntry {
     /// Codificación canónica de string (decisión 4). Vacío si el manifiesto
     /// no declara `[config]`.
     pub settings: BTreeMap<String, String>,
+    /// El directorio trae un `help.md` junto al `plugin.toml` (H3e).
+    ///
+    /// Un `is_file` al descubrir, NUNCA una lectura: el catálogo se recorre
+    /// entero en cada `plugin.list` (el registro es efímero por llamada), y
+    /// leer 64 KiB por plugin ahí pagaría el contenido en cada listado para
+    /// una bandera que solo decide si se pinta un nodo en la barra lateral.
+    /// El contenido se lee bajo demanda, en `plugin.help`.
+    pub has_help: bool,
 }
 
 /// Un manifiesto que no cargó, con su causa (para avisar en el gestor en vez de
@@ -110,6 +118,7 @@ impl Catalog {
                 // valores a medias.
                 match resolve_settings(&manifest, &dir) {
                     Ok(settings) => cat.plugins.push(PluginEntry {
+                        has_help: dir.join("help.md").is_file(),
                         manifest,
                         dir,
                         enabled: false,

@@ -100,6 +100,19 @@ when #125 lands.
 - A richer markdown feature later means extending a closed vocabulary, which
   is a deliberate act rather than an accidental capability.
 
+## Amendment (2026-08-06, phase H3e — the core depends on `norte-help` too)
+
+Decision 1 said frontends and the CLI depend on `norte-help`. Phase H3e adds
+`norte-core` to that list: `plugin.help` hands a plugin's `help.md` over the
+wire as markdown TEXT, so the HOST is what cuts it at the 64 KiB untrusted cap
+and decodes it through the `norte-encoding` boundary — with
+`norte_help::sanitize_untrusted`, the same cap and the same detection the
+frontend's `parse_untrusted` applies when it parses the text on arrival. The
+alternative was re-implementing the cut in `norte-core`, and two caps that
+start out equal do not stay equal; the whole hostile-input story here rests on
+there being one. The direction stays acyclic — `norte-help` still knows nothing
+about the core, the frontends, or the protocol.
+
 ## Alternatives considered
 
 - **A module inside `norte-frontend`.** Rejected: the CLI and `doctor` need
