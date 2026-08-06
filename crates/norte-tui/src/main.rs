@@ -548,7 +548,19 @@ fn close_stale_overlays(app: &mut App) {
 /// applied where it matters more. The pages still missing are on the
 /// documentation gate's shrinking allowlist, so this is temporary by
 /// construction.
-fn open_contextual_help(app: &mut App, lang: norte_help::Lang, help_lines: &[String]) {
+/// `plugins` is the catalogue as of the moment the reader pressed the key
+/// (H3e), or `None` when it could not be asked for. It arrives as a PARAMETER
+/// because this function is SYNC — its callers are async and its tests are not
+/// — and it is taken ONCE, on the open path, never while painting. `None` and
+/// an empty catalogue land in the same place: no plugin rows in the sidebar and
+/// every `plugin:` command dimmed, which is the honest answer to "I could not
+/// find out".
+fn open_contextual_help(
+    app: &mut App,
+    lang: norte_help::Lang,
+    help_lines: &[String],
+    plugins: Option<&norte_proto::methods::PluginListResult>,
+) {
     let context = norte_tui::help_context::help_context(app);
     let over_modal = app.modal.is_some();
     if over_modal && norte_help::topic_for_context(lang, context).is_none() {
@@ -565,6 +577,54 @@ fn open_contextual_help(app: &mut App, lang: norte_help::Lang, help_lines: &[Str
         context,
         over_modal,
     ));
+    // H3e: el estado de los plugins se CONGELA con el resto de los hechos, en
+    // las dos mitades a la vez (barra lateral y resolver) —
+    // `App::freeze_help_plugins`.
+    //
+    // SIEMPRE, incluso sin catálogo: el resolver vive en `App` y sobrevive al
+    // cierre del overlay, así que no congelar aquí dejaría en pie la foto de la
+    // ayuda ANTERIOR. Un catálogo vacío es la respuesta honesta a «no lo pude
+    // averiguar» — ninguna fila de extensión, y todo comando `plugin:`
+    // atenuado — y fail-closed es la dirección en la que equivocarse.
+    app.freeze_help_plugins(plugins.map_or(&[], |l| l.plugins.as_slice()));
+}
+
+/// Fetches the page of the plugin node the reader just opened (H3e).
+///
+/// On demand and once: 64 KiB per plugin must not ride every `plugin.list`, and
+/// a page already installed is never asked for again within one overlay. The
+/// "once" is [`HelpView::claim_plugin_fetch`]'s job — `plugin_needs_fetch` is a
+/// POLLING question and this runs on every turn of the run loop, so without the
+/// claim a dead daemon would be re-asked at frame rate.
+///
+/// A failure is SILENT on purpose — an empty page with the plugin's name is a
+/// better answer than an error toast over a help overlay, and a daemon N-1
+/// without the handler lands here too (`plugin.help` is 0.34.0). The page stays
+/// blank for the life of the overlay; closing and reopening the help is the
+/// retry.
+///
+/// The overlay is re-borrowed AFTER the await: the reader may have closed it, or
+/// moved to another page, while the answer was in flight.
+async fn fetch_plugin_page(backend: &Backend, app: &mut App) {
+    let Some(id) = app.help.as_mut().and_then(HelpView::claim_plugin_fetch) else {
+        return;
+    };
+    let Ok(res) = backend.plugin_help(&id).await else {
+        return;
+    };
+    let Some(help) = app.help.as_mut() else {
+        return;
+    };
+    // The publisher comes from the SNAPSHOT, already masked and capped, never
+    // from the page: a plugin does not get to say who published it.
+    // `parse_untrusted` masks it again, which is harmless.
+    let publisher = help.publisher_of(&id);
+    // `fold_flags` is not optional: the text arrives already short and already
+    // decoded, so this parse comes out clean and the badge — the whole
+    // user-facing mitigation for a hostile `help.md` — would go dark.
+    let parsed = norte_help::parse_untrusted(res.markdown.as_bytes(), &id, publisher)
+        .fold_flags(res.truncated, res.lossy);
+    help.state.install_plugin_topic(parsed.topic);
 }
 
 /// The page that documents the palette row under the cursor, if one does (H3c).
@@ -1537,6 +1597,11 @@ async fn run(
         // `HelpView::refresh`). Cada vuelta, no solo al cambiar de tema: un
         // resize no pasa por ninguna tecla.
         if let Some(lang) = app.help.as_ref().map(|h| h.state.lang()) {
+            // H3e: la página de un nodo de plugin se pide AQUÍ, bajo demanda y
+            // una sola vez por overlay (`fetch_plugin_page`). Antes de
+            // maquetar, para que la página recién llegada se pinte en ESTE
+            // frame y no en el siguiente.
+            fetch_plugin_page(backend, app).await;
             let size = terminal.size()?;
             let (ancho, alto) = ui::help_body_size(
                 ratatui::layout::Rect::new(0, 0, size.width, size.height),
@@ -2026,8 +2091,16 @@ async fn run(
                             );
                         }
                     } else if app.extensions.is_some() && !modal_wins(app) {
-                        on_extensions_key(app, backend, dialog_resolver, key.modifiers, key.code)
-                            .await;
+                        on_extensions_key(
+                            app,
+                            backend,
+                            dialog_resolver,
+                            lang,
+                            help_lines,
+                            key.modifiers,
+                            key.code,
+                        )
+                        .await;
                     } else if app.nav_popup.is_some() && !modal_wins(app) {
                         // Popup historial/hotlist (spec 2026-07-18): Enter
                         // sobre un item NAVEGA por el flujo de cd normal —
@@ -3201,7 +3274,7 @@ mod help_key_tests {
     /// `Command::AppHelp`'s whole body ([`open_contextual_help`]), which is
     /// what `F1` runs.
     fn abrir_ayuda(app: &mut App) {
-        open_contextual_help(app, Lang::En, &[]);
+        open_contextual_help(app, Lang::En, &[], None);
     }
 
     /// The page `context` opens today, or the documented fallback. The corpus
@@ -4253,6 +4326,118 @@ mod settings_message_tests {
     }
 }
 
+/// `F1` in the extension manager: open the help on the highlighted plugin's OWN
+/// page (H3e).
+///
+/// The manager is where a human decides whether to approve an extension, and
+/// the page that argues for it is one keystroke away — from the list they are
+/// already looking at, with no detour through the help's own sidebar. The
+/// snapshot is the list the manager ALREADY holds, so this costs no round trip;
+/// the page itself is fetched by the run loop, on demand, like any other plugin
+/// node.
+///
+/// Order matters here and the sequence is not interchangeable:
+/// `HelpState::open_as_root` refuses an id that names nothing it can show, so
+/// the nodes have to be installed BEFORE the page is opened.
+///
+/// The manager CLOSES, as the palette does for its own `F1` bridge: its arm
+/// sits ahead of the help in the run loop's key chain, so an overlay left open
+/// underneath would eat every key meant for the page.
+///
+/// A plugin with no `help.md` gets a status line rather than silence — the row
+/// looks exactly like one that does, and a key that appears to do nothing reads
+/// as a broken app. `over_modal` is `false`: this arm only runs with no modal on
+/// screen (`modal_wins`).
+fn extensions_help(app: &mut App, lang: norte_help::Lang, help_lines: &[String]) {
+    let Some(plugin) = app.extensions.as_ref().and_then(ExtensionManager::selected) else {
+        return;
+    };
+    if !plugin.has_help {
+        app.message = Some(t("msg-extensions-no-help"));
+        return;
+    }
+    let id = norte_help::TopicId::new(&plugin.id);
+    let Some(plugins) = app.extensions.take().map(|m| m.plugins) else {
+        return;
+    };
+    // H3d: el mismo congelado que `open_contextual_help` — la ayuda que se abre
+    // desde el gestor es la misma ayuda.
+    app.freeze_help_facts();
+    app.help = Some(HelpView::new(lang, help_lines.to_vec()));
+    app.freeze_help_plugins(&plugins);
+    if let Some(help) = app.help.as_mut() {
+        help.state.open_as_root(&id);
+    }
+}
+
+#[cfg(test)]
+mod extensions_help_tests {
+    use super::{App, ExtensionManager, Pane, extensions_help};
+    use norte_vfs::VPath;
+
+    fn app_con(plugins: Vec<norte_proto::methods::PluginInfo>) -> App {
+        let d = VPath::parse("file:///x").expect("wire de test");
+        let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()));
+        app.extensions = Some(ExtensionManager {
+            plugins,
+            errors: Vec::new(),
+            cursor: 0,
+            config: None,
+        });
+        app
+    }
+
+    fn plugin(id: &str, has_help: bool) -> norte_proto::methods::PluginInfo {
+        norte_proto::methods::PluginInfo {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            publisher: "ACME".to_owned(),
+            version: "1.0.0".to_owned(),
+            category: "command".to_owned(),
+            capabilities: Vec::new(),
+            approved: true,
+            enabled: true,
+            description: None,
+            commands: Vec::new(),
+            columns: Vec::new(),
+            has_help,
+        }
+    }
+
+    /// H3e: `F1` sobre la fila de un plugin con `help.md` abre la ayuda EN SU
+    /// página, con el catálogo que el gestor ya tenía — sin pasar por la
+    /// lateral y sin una segunda ida al daemon.
+    #[test]
+    fn f1_sobre_un_plugin_con_ayuda_abre_su_pagina() {
+        let mut app = app_con(vec![plugin("acme.ftp", true)]);
+        extensions_help(&mut app, norte_help::Lang::En, &[]);
+        let help = app.help.as_ref().expect("la ayuda se abrió");
+        assert_eq!(help.state.current().as_str(), "acme.ftp");
+        assert!(
+            app.extensions.is_none(),
+            "el gestor se cierra: su rama va ANTES en la cadena de teclas y se \
+             comería las teclas de la página"
+        );
+        // La página llega como RAÍZ del rastro: al lector lo PUSIERON ahí, así
+        // que un `Esc` tiene que salir, no volver a un índice que no visitó.
+        assert!(!app.help.as_mut().expect("abierta").state.back());
+    }
+
+    /// Y sobre una fila sin `help.md` se DICE. La fila es idéntica a una que sí
+    /// la tiene, y una tecla que calla no se distingue de una rota.
+    #[test]
+    fn f1_sobre_un_plugin_sin_ayuda_lo_dice_y_no_cierra_el_gestor() {
+        let mut app = app_con(vec![plugin("acme.ftp", false)]);
+        extensions_help(&mut app, norte_help::Lang::En, &[]);
+        assert!(app.help.is_none(), "no hay página que abrir");
+        assert!(app.extensions.is_some(), "el gestor se queda donde estaba");
+        assert_eq!(
+            app.message.as_deref(),
+            Some(norte_i18n::t("msg-extensions-no-help").as_str())
+        );
+    }
+}
+
 /// Teclas del overlay de extensiones (M4-P3), resueltas contra el contexto
 /// `dialog` del keymap (H1 T2, issue #24); `ctrl+c` conserva su salida
 /// global, hardcodeado ANTES de resolver. Regla 7: aprobar/activar viaja al
@@ -4264,10 +4449,15 @@ mod settings_message_tests {
 /// togglea la APROBACIÓN del plugin (decisión 3 del plan H1: "aprobar un
 /// plugin" reutiliza semánticamente `dialog.approve`, antes era la tecla
 /// `a` hardcodeada; ahora `a` es `dialog.add`, que este overlay no soporta).
+///
+/// Fuera del allowlist, una sola tecla más: `app.help` (H3e) abre la página del
+/// plugin resaltado — ver [`extensions_help`].
 async fn on_extensions_key(
     app: &mut App,
     backend: &Backend,
     resolver: &mut Resolver,
+    lang: norte_help::Lang,
+    help_lines: &[String],
     mods: KeyModifiers,
     code: KeyCode,
 ) {
@@ -4303,6 +4493,18 @@ async fn on_extensions_key(
         Resolution::Reset => return,
     };
     let panel_open = app.extensions.as_ref().is_some_and(|m| m.config.is_some());
+    // H3e: `app.help` es un comando de `[global]`, no un verbo `dialog.*`, así
+    // que no está en ningún allowlist de este overlay y sin esta rama F1 sería
+    // inerte aquí. Se resuelve por el keymap como todo lo demás (un rebind de
+    // `app.help` mueve también este puente); lo cableado es el significado, no
+    // la tecla. Mismo criterio que la rama `app.help` de `on_help_key` y que F9
+    // en `on_theme_picker_key`. NO cuando el panel de `[config]` está abierto:
+    // ahí el lector está editando valores, y perder el panel para leer prosa no
+    // es lo que pidió.
+    if cmd == "app.help" && !panel_open {
+        extensions_help(app, lang, help_lines);
+        return;
+    }
     // H1 T3: el MISMO allowlist que consume el hint generado
     // (`hints::DialogHints::build`) — una sola fuente para dispatch y footer.
     // G3c: qué allowlist aplica depende de si el panel de `[config]` está
@@ -6086,7 +6288,14 @@ fn modal_help_toggle(
     {
         return false;
     }
-    open_contextual_help(app, lang, help_lines);
+    // Sin foto de plugins (H3e): esta rama es SÍNCRONA — la cadena de teclas
+    // del modal lo es — y pedirla cuesta una ida y vuelta al daemon. La
+    // degradación es exactamente la documentada para `plugins: None`: la ayuda
+    // que se abre sobre un diálogo no ofrece filas de extensión. Es la
+    // superficie donde menos se echa en falta: el lector está contestando una
+    // pregunta, no explorando el catálogo, y el grupo entero está a un `Esc` y
+    // un F1 de distancia.
+    open_contextual_help(app, lang, help_lines, None);
     true
 }
 
@@ -6854,7 +7063,15 @@ async fn dispatch(
         // H3c: la página de DONDE ESTÁ el lector, no el índice. Todo el cuerpo
         // vive en `open_contextual_help` (documentado allí) para que los tests
         // abran la ayuda por el MISMO sitio que F1.
-        Command::AppHelp => open_contextual_help(app, lang, help_lines),
+        // H3e: la foto del catálogo se toma AQUÍ, en el camino de apertura —
+        // una sola llamada, jamás mientras se pinta. Un fallo del backend deja
+        // la ayuda sin filas de extensión (y con todo comando `plugin:`
+        // atenuado), que es exactamente lo que «no lo pude averiguar»
+        // significa; nunca tumba la ayuda entera.
+        Command::AppHelp => {
+            let plugins = backend.plugins_list().await.ok();
+            open_contextual_help(app, lang, help_lines, plugins.as_ref());
+        }
         Command::PaneNamesEncoding => {
             // #57: cicla la reinterpretación de nombres no-UTF8 del pane con
             // foco (display-only, regla 1). El anuncio va por la barra.
@@ -8206,7 +8423,7 @@ mod help_freeze_tests {
             "antes de abrir, el resolver del arranque no atenúa nada"
         );
 
-        open_contextual_help(&mut app, norte_help::Lang::En, &[]);
+        open_contextual_help(&mut app, norte_help::Lang::En, &[], None);
 
         assert!(app.help.is_some(), "el overlay se abrió");
         assert_eq!(
@@ -8897,7 +9114,7 @@ mod refresh_ritual_tests {
             Pane::new(d.clone(), vec![fichero]),
             Pane::new(d, Vec::new()),
         );
-        super::open_contextual_help(&mut app, norte_help::Lang::En, &[]);
+        super::open_contextual_help(&mut app, norte_help::Lang::En, &[], None);
         assert!(
             app.help_chords.availability("pane.view").is_available(),
             "con un fichero bajo el cursor, F3 se puede pulsar"

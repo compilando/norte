@@ -36,15 +36,15 @@
 //! — a third-party topic set loaded at runtime, say — must mask before calling
 //! in.
 //!
-//! # Owed to H3e: the truncation badge
+//! # The truncation badge (H3e)
 //!
 //! [`norte_help::Origin::Plugin`] carries `truncated` and `lossy`, and
 //! `norte_help::Parsed`'s rustdoc calls them "the UI badge: a reader must never
-//! mistake a cut topic for a complete one". This module does not read
-//! `topic.origin` at all, which is correct while the only topics are built-in
-//! and complete. The phase that lets plugins ship help pages must paint that
-//! badge here — masking and bounding, which `parse_untrusted` does, is not the
-//! same as SAYING the page was cut.
+//! mistake a cut topic for a complete one". `plugin_badge` paints them, right
+//! under the title — masking and bounding, which `parse_untrusted` does, is not
+//! the same as SAYING the page was cut. A built-in topic has no badge: the line
+//! exists to tell third-party prose from ours, so printing it everywhere would
+//! tell nothing apart.
 //!
 //! What this module does guarantee is the *geometry*: it never emits a
 //! line wider than the width it was given (measured in terminal CELLS, not
@@ -140,6 +140,12 @@ pub fn render_topic<'a>(
             theme.role(Role::BorderUnfocused),
         )),
     ];
+    if let Some(badge) = plugin_badge(topic, lang) {
+        lines.push(Line::from(Span::styled(
+            fit(&badge, width),
+            theme.role(Role::Info),
+        )));
+    }
 
     for (i, block) in topic.blocks.iter().enumerate() {
         lines.push(Line::default());
@@ -199,6 +205,111 @@ pub fn render_topic<'a>(
     Rendered {
         lines,
         action_lines,
+    }
+}
+
+/// The provenance line of a PLUGIN page, or `None` for anything the host
+/// wrote (H3e).
+///
+/// Three facts, joined with `" · "`, in the order a reader needs them: who
+/// published the page, whether it was CUT SHORT, and whether some of its bytes
+/// did not decode. Masking and bounding — which
+/// [`norte_help::parse_untrusted`] already did — is not the same as SAYING the
+/// page was cut, and the two flags do not survive a re-parse: the text reaches
+/// this process already short and already decoded, so only the sender can tell
+/// (`norte_help::Parsed::fold_flags`).
+///
+/// `publisher` arrives masked and capped by the parser, like the title. It is
+/// still third-party text and the line is prose, not a claim of identity —
+/// nothing here vouches for a plugin being what it says it is.
+///
+/// `None` when there is nothing to say (a plugin page with no publisher,
+/// complete and cleanly decoded): a blank badge line would cost a row of a
+/// narrow overlay to say nothing at all.
+fn plugin_badge(topic: &Topic, lang: Lang) -> Option<String> {
+    let norte_help::Origin::Plugin {
+        publisher,
+        truncated,
+        lossy,
+        ..
+    } = &topic.origin
+    else {
+        return None;
+    };
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(p) = publisher.as_deref().filter(|p| !p.trim().is_empty()) {
+        parts.push(p.to_owned());
+    }
+    if *truncated {
+        parts.push(norte_i18n::t_in(lang, "help-plugin-truncated"));
+    }
+    if *lossy {
+        parts.push(norte_i18n::t_in(lang, "help-plugin-lossy"));
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+/// Detaches a rendering from the topic it borrowed.
+///
+/// [`render_topic`] borrows the topic's strings, which is free for the corpus
+/// (`'static`) and impossible for a plugin page: that one is OWNED by
+/// `norte_frontend::help::HelpState`, and a `crate::app::HelpView` holding both
+/// the state and a rendering borrowed from it would be a self-referential
+/// struct. Cloning the visible page's spans is the cost of not building one —
+/// it happens once per layout, and only for plugin pages.
+///
+/// Every field of ratatui's `Line` and `Span` is carried across EXPLICITLY,
+/// with no `..` rest pattern: dropping styling silently is this function's
+/// failure mode, and a field added by a future ratatui must break the build
+/// here rather than quietly stop being copied.
+///
+/// ```
+/// use norte_help::{Availability, ChordResolver, Lang, parse_untrusted};
+/// use norte_theme::{ColorDepth, Theme};
+/// use norte_tui::help_render::{into_static, render_topic};
+/// use norte_tui::theme::TuiTheme;
+///
+/// struct Bare;
+/// impl ChordResolver for Bare {
+///     fn chord(&self, _command: &str) -> Option<String> {
+///         None
+///     }
+///     fn label(&self, command: &str) -> String {
+///         command.to_owned()
+///     }
+///     fn availability(&self, _command: &str) -> Availability {
+///         Availability::Available
+///     }
+/// }
+///
+/// let theme = TuiTheme::new(Theme::preset_default(), ColorDepth::Truecolor);
+/// let parsed = parse_untrusted(b"a body", "acme.ftp", Some("ACME".to_owned()));
+/// // The topic is OWNED here, so the rendering borrows from a local.
+/// let owned = into_static(render_topic(&parsed.topic, Lang::En, &Bare, 40, &theme));
+/// drop(parsed);
+/// // …and outlives it.
+/// assert!(!owned.lines.is_empty());
+/// ```
+#[must_use]
+pub fn into_static(r: Rendered<'_>) -> Rendered<'static> {
+    Rendered {
+        lines: r
+            .lines
+            .into_iter()
+            .map(|line| Line {
+                style: line.style,
+                alignment: line.alignment,
+                spans: line
+                    .spans
+                    .into_iter()
+                    .map(|span| Span {
+                        style: span.style,
+                        content: std::borrow::Cow::Owned(span.content.into_owned()),
+                    })
+                    .collect(),
+            })
+            .collect(),
+        action_lines: r.action_lines,
     }
 }
 
@@ -1353,6 +1464,101 @@ mod tests {
             flatten(&out.lines).lines().collect::<Vec<_>>(),
             vec!["Spacing", &"─".repeat(40)[..], "", "Section", "", "one"],
         );
+    }
+
+    /// H3e: una página de plugin se DECLARA. Enmascarar y acotar —lo que
+    /// `parse_untrusted` ya hizo— no es lo mismo que decir que la página venía
+    /// cortada, y sin esa línea el lector no distingue una página completa de
+    /// un `help.md` que el host tuvo que recortar.
+    #[test]
+    fn una_pagina_de_plugin_lleva_su_insignia() {
+        let parsed = norte_help::parse_untrusted(b"cuerpo", "acme.ftp", Some("ACME".to_owned()))
+            .fold_flags(true, true);
+        let out = render_topic(&parsed.topic, Lang::En, &Vetado, 60, &theme());
+        let texto = flatten(&out.lines);
+        assert!(texto.contains("ACME"), "el publicador se nombra: {texto}");
+        assert!(
+            texto.contains(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")),
+            "un cuerpo cortado se declara: {texto}"
+        );
+        assert!(
+            texto.contains(&norte_i18n::t_in(Lang::En, "help-plugin-lossy")),
+            "una decodificación con pérdida se declara: {texto}"
+        );
+    }
+
+    /// Y una página del corpus NO lleva insignia: la línea existe para
+    /// distinguir la prosa de terceros de la nuestra, así que pintarla en
+    /// todas partes no distinguiría nada.
+    #[test]
+    fn una_pagina_del_corpus_no_lleva_insignia() {
+        let out = render_topic(
+            topic(Lang::En, "copying").expect("copying"),
+            Lang::En,
+            &Fake,
+            60,
+            &theme(),
+        );
+        let texto = flatten(&out.lines);
+        assert!(!texto.contains(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")));
+        assert!(!texto.contains(&norte_i18n::t_in(Lang::En, "help-plugin-lossy")));
+    }
+
+    #[test]
+    fn una_pagina_de_plugin_hostil_sale_enmascarada() {
+        let parsed = norte_help::parse_untrusted(
+            "+++\nid = \"acme.ftp\"\ntitle = \"a\u{202E}gpj.exe\"\n+++\ncuerpo con \u{200B}truco"
+                .as_bytes(),
+            "acme.ftp",
+            None,
+        );
+        let out = render_topic(&parsed.topic, Lang::En, &Vetado, 60, &theme());
+        let texto = flatten(&out.lines);
+        assert!(!texto.contains('\u{202E}'), "sin override bidi: {texto:?}");
+        assert!(!texto.contains('\u{200B}'), "sin invisibles: {texto:?}");
+        // Anti-vacuidad: el texto hostil SÍ llegó a la página, enmascarado.
+        assert!(
+            texto.contains('\u{FFFD}'),
+            "el peligro llegó y se enmascaró: {texto:?}"
+        );
+    }
+
+    /// [`into_static`] desprende la maquetación del tema que prestó sus
+    /// cadenas — y tiene que llevarse TODO: el contenido, el estilo de cada
+    /// span, y el estilo y la alineación de cada línea. Perder estilos en
+    /// silencio es el modo de fallo de esta función, así que se afirma sobre
+    /// los estilos, no solo sobre el texto.
+    #[test]
+    fn into_static_conserva_texto_y_estilo() {
+        let parsed = norte_help::parse_untrusted(
+            b"+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n\
+              commands = [\"plugin:acme.ftp:sync\"]\n+++\n# Cabecera\n\ncuerpo",
+            "acme.ftp",
+            Some("ACME".to_owned()),
+        )
+        .fold_flags(true, false);
+        let prestada = render_topic(&parsed.topic, Lang::En, &Vetado, 60, &theme());
+        let propia = into_static(prestada.clone());
+        assert_eq!(propia.action_lines, prestada.action_lines);
+        assert_eq!(propia.lines.len(), prestada.lines.len());
+        for (a, b) in propia.lines.iter().zip(&prestada.lines) {
+            assert_eq!(a.style, b.style, "estilo de línea perdido");
+            assert_eq!(a.alignment, b.alignment, "alineación perdida");
+            assert_eq!(a.spans.len(), b.spans.len());
+            for (x, y) in a.spans.iter().zip(&b.spans) {
+                assert_eq!(x.content, y.content);
+                assert_eq!(x.style, y.style, "estilo de span perdido: {x:?}");
+            }
+        }
+        // Anti-vacuidad: la página tiene MÁS de un estilo, o comparar estilos
+        // no prueba nada.
+        let estilos: std::collections::BTreeSet<String> = prestada
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| format!("{:?}", s.style))
+            .collect();
+        assert!(estilos.len() > 1, "la página es monoestilo: {estilos:?}");
     }
 
     #[test]

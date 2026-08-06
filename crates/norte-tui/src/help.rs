@@ -203,6 +203,19 @@ pub struct TuiChords {
     /// resolver built by a hot reload and not yet frozen must not start
     /// claiming commands are broken.
     facts: Facts,
+    /// Plugin ids that are approved AND enabled, snapshotted when the overlay
+    /// opened (H3e). Empty means "nothing active" and dims every plugin row,
+    /// which is the right answer both when there are no plugins and when the
+    /// snapshot could not be taken: offering a row `plugin.run_command` would
+    /// refuse is the worse mistake.
+    ///
+    /// Note the asymmetry with [`Self::facts`], which defaults to fail-OPEN.
+    /// It is not an inconsistency: the facts table is a list of known
+    /// IMPEDIMENTS, so "I have not looked" means "no impediment known", while
+    /// a plugin set is an ALLOWLIST and "I have not looked" means "I cannot
+    /// vouch for any of them". Same principle in both — do not claim what has
+    /// not been established.
+    active_plugins: std::collections::BTreeSet<String>,
 }
 
 /// Compile anchor: a fourth `Screen` must not silently make `chord` answer
@@ -246,6 +259,7 @@ impl TuiChords {
             chords,
             lang,
             facts: NO_IMPEDIMENT,
+            active_plugins: std::collections::BTreeSet::new(),
         }
     }
 
@@ -267,6 +281,24 @@ impl TuiChords {
             chords: self.chords.clone(),
             lang: self.lang,
             facts,
+            active_plugins: self.active_plugins.clone(),
+        }
+    }
+
+    /// The same resolver, carrying the plugin snapshot (H3e).
+    ///
+    /// A NEW value, for the reason [`Self::with_facts`] gives, and the two
+    /// compose in either order: each carries the other's field over, so the
+    /// re-freeze the refresh funnel performs while the overlay is open
+    /// (`main::after_panes_refresh`) cannot drop the snapshot and dim every
+    /// plugin row halfway down a page.
+    #[must_use]
+    pub fn with_plugins(&self, active: std::collections::BTreeSet<String>) -> Self {
+        Self {
+            chords: self.chords.clone(),
+            lang: self.lang,
+            facts: self.facts,
+            active_plugins: active,
         }
     }
 }
@@ -302,22 +334,35 @@ impl ChordResolver for TuiChords {
     /// ([`norte_frontend::availability::verdict`]) so a dimmed help row and a
     /// greyed-out GUI menu entry can never disagree.
     ///
-    /// Two reasons of the vocabulary are deliberately NOT computed here, and
-    /// the absence is the honest answer rather than a gap:
+    /// One reason of the vocabulary is deliberately NOT computed here, and the
+    /// absence is the honest answer rather than a gap:
+    /// [`norte_help::Reason::PolicyDenied`] is unreachable. The embedded TUI's
+    /// actor is `journal::Actor::User`, which `ScopedPolicy::evaluate` allows
+    /// unconditionally, and the embedded engine is handed `AllowAll` anyway.
+    /// Policy denial is meaningful for an AGENT going through the daemon; in
+    /// this app the human is the one who APPROVES a denial, never its subject.
+    /// Computing it would dim a row for a rule that does not apply to the
+    /// reader.
     ///
-    /// - [`norte_help::Reason::PolicyDenied`] is unreachable. The embedded
-    ///   TUI's actor is `journal::Actor::User`, which `ScopedPolicy::evaluate`
-    ///   allows unconditionally, and the embedded engine is handed `AllowAll`
-    ///   anyway. Policy denial is meaningful for an AGENT going through the
-    ///   daemon; in this app the human is the one who APPROVES a denial, never
-    ///   its subject. Computing it would dim a row for a rule that does not
-    ///   apply to the reader.
-    /// - [`norte_help::Reason::PluginInactive`] has no surface yet: an
-    ///   inactive plugin's commands are filtered out of the palette entirely
-    ///   (`norte_frontend::palette`), so there is no row to dim. It arrives
-    ///   with plugin help (H3e), which has to cache plugin state regardless.
+    /// [`norte_help::Reason::PluginInactive`] DOES have a surface since H3e: a
+    /// plugin's own page lists that plugin's `plugin:{id}:{command}` rows, and
+    /// a switched-off plugin must show them dimmed rather than promise a
+    /// dispatch `plugin.run_command` would refuse. Which is why this routes
+    /// through `verdict_with_plugins` and never through plain `verdict` — the
+    /// latter answers a `plugin:` key through its fail-OPEN wildcard, lighting
+    /// every such row unconditionally.
+    ///
+    /// (The palette makes the OPPOSITE call and both are right: it filters an
+    /// inactive plugin's commands out entirely, because a list of what you can
+    /// run has no business showing what you cannot, while a page ABOUT one
+    /// plugin has every business saying that this is its command and it is
+    /// switched off.)
     fn availability(&self, command: &str) -> Availability {
-        norte_frontend::availability::verdict(command, &self.facts)
+        norte_frontend::availability::verdict_with_plugins(
+            command,
+            &self.facts,
+            &self.active_plugins,
+        )
     }
 }
 
@@ -697,6 +742,62 @@ mod tests {
         assert_eq!(
             dentro_de_un_zip.chord("pane.copy"),
             antes.chord("pane.copy")
+        );
+    }
+
+    /// H3e: la fila de un comando de un plugin APAGADO sale atenuada, con su
+    /// razón. Es el fallo de H3d en su forma nueva — sin el brazo `plugin:`,
+    /// la clave cae en el comodín fail-OPEN de la tabla y la fila se enciende
+    /// incondicionalmente sobre un `plugin.run_command` que va a rechazarla.
+    #[test]
+    fn un_comando_de_plugin_apagado_llega_atenuado_a_la_pagina() {
+        let r = resolver_con(facts_normales()).with_plugins(std::collections::BTreeSet::new());
+        assert_eq!(
+            r.availability("plugin:acme.ftp:sync").reason(),
+            Some(norte_help::Reason::PluginInactive)
+        );
+    }
+
+    #[test]
+    fn un_comando_de_plugin_encendido_no_se_atenua() {
+        let r = resolver_con(facts_normales())
+            .with_plugins(["acme.ftp".to_owned()].into_iter().collect());
+        assert!(r.availability("plugin:acme.ftp:sync").is_available());
+    }
+
+    /// La foto de plugins viaja con el congelado de hechos, y al revés: los
+    /// dos constructores se llaman en secuencia (`main::open_contextual_help`
+    /// congela y luego enchufa la foto) y `App::freeze_help_facts` vuelve a
+    /// congelar en cada refresco de panes. Si `with_facts` no arrastrara el
+    /// conjunto, ese re-congelado apagaría todas las filas de plugin a mitad
+    /// de lectura.
+    #[test]
+    fn congelar_los_hechos_no_pierde_la_foto_de_plugins() {
+        let r = orthodox_resolver()
+            .with_plugins(["acme.ftp".to_owned()].into_iter().collect())
+            .with_facts(facts_normales());
+        assert!(r.availability("plugin:acme.ftp:sync").is_available());
+        // Y al revés: la foto tomada después conserva los hechos.
+        let r = resolver_con(norte_frontend::availability::Facts {
+            dest_read_only: true,
+            ..facts_normales()
+        })
+        .with_plugins(std::collections::BTreeSet::new());
+        assert_eq!(
+            r.availability("pane.copy").reason(),
+            Some(norte_help::Reason::ReadOnlyBackend)
+        );
+    }
+
+    /// Sin foto (un resolver recién construido, o uno que un hot-reload
+    /// rehízo) NINGÚN plugin está activo: ofrecer una fila que
+    /// `plugin.run_command` rechazaría es el peor de los dos errores.
+    #[test]
+    fn sin_foto_de_plugins_ninguna_fila_de_plugin_se_ofrece() {
+        let r = orthodox_resolver();
+        assert_eq!(
+            r.availability("plugin:acme.ftp:sync").reason(),
+            Some(norte_help::Reason::PluginInactive)
         );
     }
 }

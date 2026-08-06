@@ -1037,6 +1037,32 @@ fn nav_item_display(
 /// tope del manifiesto: mirror deliberado, no coincidencia.
 pub const PLUGIN_DESCRIPTION_WIRE_CAP: usize = 280;
 
+/// Tope defensivo sobre `PluginInfo.name`/`.publisher` en el wire (H3e).
+///
+/// Ni uno ni otro tienen tope en el manifiesto — sí lo tienen `description`
+/// (280) y `contributions.command[].title` (120,
+/// `norte_plugin_host::manifest::COMMAND_TITLE_MAX_CHARS`) — así que aquí no
+/// hay un límite de origen que reflejar y el cliente pone el suyo. Mismo valor
+/// que el del título de un comando: son el mismo tipo de texto (una etiqueta
+/// corta de tercero que va a una fila) y la ayuda los pinta uno al lado del
+/// otro. Sin él, un `name` kilométrico no desborda el pintado (la lateral
+/// recorta), pero sí el FILTRO del modelo, que pliega el título entero en cada
+/// tecla.
+pub const PLUGIN_NAME_WIRE_CAP: usize = 120;
+
+/// Acota ([`PLUGIN_NAME_WIRE_CAP`]) y enmascara ([`display_name`]) una etiqueta
+/// corta de tercero — el `name` o el `publisher` de un plugin — para que pueda
+/// entrar en el modelo de la ayuda (H3e).
+///
+/// En el PUNTO DE ENTRADA, no al pintar: `norte_frontend::help::PluginNode`
+/// documenta su `title` como «ya enmascarado y acotado», y el modelo no
+/// enmascara nada — filtra sobre el título crudo que le den.
+#[must_use]
+pub fn plugin_label(raw: &str) -> String {
+    let clamped: String = raw.chars().take(PLUGIN_NAME_WIRE_CAP).collect();
+    display_name(clamped.as_bytes()).0
+}
+
 /// Clampa ([`PLUGIN_DESCRIPTION_WIRE_CAP`]) y enmascara ([`display_name`])
 /// la `description` de CADA plugin de `plugins`, IN PLACE — en el único
 /// punto donde un `PluginListResult` recién llegado del `Backend` entra al
@@ -1758,6 +1784,37 @@ impl App {
     pub fn freeze_help_facts(&mut self) {
         let facts = self.help_facts();
         self.help_chords = std::sync::Arc::new(self.help_chords.with_facts(facts));
+    }
+
+    /// Freezes the plugin catalogue into the overlay AND into the resolver it
+    /// renders through (H3e).
+    ///
+    /// Both halves of one snapshot, so they cannot disagree: the sidebar offers
+    /// a page for every plugin with a `help.md`
+    /// ([`HelpView::set_plugins`]), and the resolver dims the command rows of
+    /// the ones that are not approved-and-enabled
+    /// ([`crate::help::TuiChords::with_plugins`]).
+    ///
+    /// A PHOTOGRAPH, taken when the help opens and thrown away with it. That is
+    /// the same discipline [`Self::freeze_help_facts`] follows and it buys the
+    /// same thing — no verdict changes under the reader's cursor — plus two
+    /// practical ones: there is no plugin cache in [`App`] to invalidate, and no
+    /// round trip to the daemon while a frame is being painted.
+    ///
+    /// The resolver is updated even with no overlay open. It is the same
+    /// snapshot either way, and `with_plugins` carries the frozen facts across
+    /// exactly as `with_facts` carries the plugins across — so the re-freeze the
+    /// refresh funnel performs mid-overlay cannot drop either half.
+    pub fn freeze_help_plugins(&mut self, plugins: &[norte_proto::methods::PluginInfo]) {
+        let active: std::collections::BTreeSet<String> = plugins
+            .iter()
+            .filter(|p| p.approved && p.enabled)
+            .map(|p| p.id.clone())
+            .collect();
+        if let Some(help) = self.help.as_mut() {
+            help.set_plugins(plugins);
+        }
+        self.help_chords = std::sync::Arc::new(self.help_chords.with_plugins(active));
     }
 
     /// Records a `connection.degraded` notification (#44).
@@ -2936,10 +2993,36 @@ pub struct HelpView {
     /// Body lines and the action→line map of whatever `state.current()` is,
     /// laid out for `width`. See [`HelpView::refresh`].
     ///
-    /// `'static` because the corpus is: `HelpState::topic` hands back a
-    /// `&'static Topic`, so `render_topic` can produce a `Rendered<'static>`
-    /// and the state can simply hold it.
+    /// `'static` because a rendering that borrowed from [`Self::state`] would
+    /// make this a self-referential struct. That is free for the corpus —
+    /// `HelpState::topic` hands back a `&'static Topic`, so `render_topic`
+    /// produces a `Rendered<'static>` outright — and costs one clone of the
+    /// VISIBLE page for a plugin's, whose topic `HelpState` owns
+    /// (`crate::help_render::into_static`, H3e).
     body: crate::help_render::Rendered<'static>,
+    /// Plugin ids whose page has already been ASKED FOR in this overlay (H3e).
+    ///
+    /// `HelpState::plugin_needs_fetch` is a POLLING question, not an event: it
+    /// keeps answering `Some(id)` until the page is installed, so the run loop
+    /// would re-issue the request on every frame — and forever against a daemon
+    /// that cannot answer. This set is what turns it into an event, and it
+    /// covers BOTH halves at once: the request in flight, and the ones that
+    /// already answered. A success stops answering by itself
+    /// (`install_plugin_topic`); a failure is what needs remembering.
+    ///
+    /// Lives on the VIEW, so its scope is the open overlay: closing and
+    /// reopening the help asks again, which is the only retry a reader has and
+    /// the only one they can ask for.
+    asked: std::collections::BTreeSet<String>,
+    /// Publisher of each plugin of the snapshot, keyed by id — already masked
+    /// and capped ([`plugin_label`]).
+    ///
+    /// Kept here and not in `norte_frontend::help::PluginNode` because only one
+    /// caller needs it and only once: `norte_help::parse_untrusted` takes the
+    /// publisher as the attribution of the page it is about to build, and the
+    /// page is parsed when its `plugin.help` answer arrives — long after the
+    /// snapshot that knew the publisher was taken.
+    publishers: std::collections::BTreeMap<String, String>,
     /// `true` when the overlay was opened while a modal was ALREADY on screen
     /// (H3c).
     ///
@@ -2987,6 +3070,8 @@ impl HelpView {
                 lines: Vec::new(),
                 action_lines: Vec::new(),
             },
+            asked: std::collections::BTreeSet::new(),
+            publishers: std::collections::BTreeMap::new(),
             over_modal: false,
         }
     }
@@ -3060,21 +3145,41 @@ impl HelpView {
         height: usize,
         theme: &crate::theme::TuiTheme,
     ) {
-        self.body = match self.state.topic() {
-            Some(topic) => {
-                crate::help_render::render_topic(topic, self.state.lang(), chords, width, theme)
+        let lang = self.state.lang();
+        self.body = if let Some(topic) = self.state.topic() {
+            // A corpus page. Asked for FIRST and through `topic()` rather than
+            // `current_topic()` for the lifetime alone: this one is `'static`,
+            // so the common case keeps rendering straight into the field with
+            // nothing cloned. `current_topic()` resolves the corpus first too,
+            // so the two can never pick different pages.
+            crate::help_render::render_topic(topic, lang, chords, width, theme)
+        } else if let Some(topic) = self.state.current_topic() {
+            // A plugin page (H3e): owned by the model, so the rendering that
+            // borrows it has to be detached before it can be stored.
+            crate::help_render::into_static(crate::help_render::render_topic(
+                topic, lang, chords, width, theme,
+            ))
+        } else if self.state.plugin_needs_fetch().is_some() {
+            // A plugin page still in flight. EMPTY, never the keyboard page:
+            // the two are told apart by nothing else the reader can see, and
+            // the whole cheatsheet appearing under an extension's name would
+            // read as the plugin's own documentation.
+            crate::help_render::Rendered {
+                lines: Vec::new(),
+                action_lines: Vec::new(),
             }
+        } else {
             // The synthetic `keys` page: its body is the effective keymap,
             // generated text with no runnable rows and therefore no action
             // map — a chord is not something Enter runs.
-            None => crate::help_render::Rendered {
+            crate::help_render::Rendered {
                 lines: self
                     .keys_lines
                     .iter()
                     .map(|l| ratatui::text::Line::raw(l.clone()))
                     .collect(),
                 action_lines: Vec::new(),
-            },
+            }
         };
         self.state.clamp_scroll(self.body.lines.len());
         // The guard is not defensive noise: a topic with neither commands nor
@@ -3094,13 +3199,89 @@ impl HelpView {
         (&self.body.lines, &self.body.action_lines)
     }
 
+    /// The plugin id whose page must be fetched NOW, claiming it so the next
+    /// call does not ask again (H3e). `None` when there is nothing to fetch or
+    /// the open page has already been asked for.
+    ///
+    /// The claim is what makes `HelpState::plugin_needs_fetch` — which polls,
+    /// see the view's own `asked` set — usable from a run loop that visits it
+    /// every frame.
+    /// Claiming BEFORE the request, rather than after it succeeds, is the whole
+    /// point: the case worth guarding is the one where the answer never comes.
+    ///
+    /// ```
+    /// use norte_frontend::help::PluginNode;
+    /// use norte_help::{Lang, TopicId};
+    /// use norte_tui::app::HelpView;
+    ///
+    /// let mut view = HelpView::new(Lang::En, Vec::new());
+    /// view.state.set_plugins(vec![PluginNode {
+    ///     id: "acme.ftp".to_owned(),
+    ///     title: "FTP".to_owned(),
+    ///     has_help: true,
+    ///     active: true,
+    /// }]);
+    /// view.state.open(&TopicId::new("acme.ftp"));
+    /// assert_eq!(view.claim_plugin_fetch().as_deref(), Some("acme.ftp"));
+    /// // Asked once. A page that never arrives is not asked for again.
+    /// assert_eq!(view.claim_plugin_fetch(), None);
+    /// ```
+    pub fn claim_plugin_fetch(&mut self) -> Option<String> {
+        let id = self.state.plugin_needs_fetch()?.to_owned();
+        self.asked.insert(id.clone()).then_some(id)
+    }
+
+    /// Installs the plugin catalogue this overlay was opened with (H3e).
+    ///
+    /// The ONE ingest point for third-party text into the help model: `name`
+    /// and `publisher` are masked and capped HERE ([`plugin_label`]), exactly as
+    /// the palette does with a plugin's `description`, because
+    /// `norte_frontend::help::PluginNode` documents its `title` as already safe
+    /// and the model masks nothing.
+    ///
+    /// A node is ACTIVE when the plugin is approved AND enabled. That decides
+    /// whether its command rows are runnable, never whether its page shows: a
+    /// human reads a plugin's documentation precisely in order to decide
+    /// whether to enable it.
+    pub fn set_plugins(&mut self, plugins: &[norte_proto::methods::PluginInfo]) {
+        self.publishers = plugins
+            .iter()
+            .map(|p| (p.id.clone(), plugin_label(&p.publisher)))
+            .collect();
+        self.state.set_plugins(
+            plugins
+                .iter()
+                .map(|p| norte_frontend::help::PluginNode {
+                    id: p.id.clone(),
+                    title: plugin_label(&p.name),
+                    has_help: p.has_help,
+                    active: p.approved && p.enabled,
+                })
+                .collect(),
+        );
+    }
+
+    /// Who to attribute `id`'s page to, ready to hand to
+    /// `norte_help::parse_untrusted`. `None` for a plugin outside the snapshot
+    /// or one that declares no publisher — a blank attribution is worse than
+    /// none, because the badge would print a lone separator.
+    #[must_use]
+    pub fn publisher_of(&self, id: &str) -> Option<String> {
+        self.publishers
+            .get(id)
+            .filter(|p| !p.trim().is_empty())
+            .cloned()
+    }
+
     /// `true` while the body shows the generated keyboard page.
     ///
     /// The same predicate [`refresh`](Self::refresh) branches on, so the two
-    /// cannot disagree about which body is on screen.
+    /// cannot disagree about which body is on screen. Since H3e "no corpus
+    /// page" is no longer enough: a plugin page — fetched or still in flight —
+    /// is not a corpus page either, and it is not the keyboard page.
     #[must_use]
     pub fn on_keys_page(&self) -> bool {
-        self.state.topic().is_none()
+        self.state.current_topic().is_none() && self.state.plugin_needs_fetch().is_none()
     }
 }
 
@@ -5952,5 +6133,227 @@ mod help_view_tests {
         refresh(&mut view, 60, 10);
         assert!(!view.on_keys_page());
         assert!(!view.body().1.is_empty());
+    }
+
+    /// Un plugin del catálogo, con la forma que llega por el wire.
+    fn plugin(id: &str, name: &str) -> norte_proto::methods::PluginInfo {
+        norte_proto::methods::PluginInfo {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            publisher: "ACME".to_owned(),
+            version: "1.0.0".to_owned(),
+            category: "command".to_owned(),
+            capabilities: Vec::new(),
+            approved: true,
+            enabled: true,
+            description: None,
+            commands: Vec::new(),
+            columns: Vec::new(),
+            has_help: true,
+        }
+    }
+
+    /// H3e: la página de un plugin que aún NO ha llegado se pinta VACÍA, jamás
+    /// como la página de teclado. Las dos son «no hay tema del corpus» para
+    /// `HelpState::topic`, y sin la distinción el chuletario entero aparecería
+    /// bajo el nombre de una extensión, leyéndose como su documentación.
+    #[test]
+    fn una_pagina_de_plugin_en_vuelo_sale_vacia_y_no_es_el_teclado() {
+        let mut view = HelpView::new(Lang::En, vec!["  f5   copy".to_owned()]);
+        view.set_plugins(&[plugin("acme.ftp", "FTP")]);
+        view.state.open(&TopicId::new("acme.ftp"));
+        assert!(
+            !view.on_keys_page(),
+            "una página de plugin no es la de teclado"
+        );
+        refresh(&mut view, 60, 10);
+        let (lines, action_lines) = view.body();
+        assert!(lines.is_empty(), "cuerpo vacío mientras llega: {lines:?}");
+        assert!(action_lines.is_empty());
+
+        // Y cuando llega, se pinta — con su insignia de procedencia.
+        let parsed = norte_help::parse_untrusted(
+            b"+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n+++\ncuerpo del plugin",
+            "acme.ftp",
+            view.publisher_of("acme.ftp"),
+        )
+        .fold_flags(true, false);
+        view.state.install_plugin_topic(parsed.topic);
+        refresh(&mut view, 60, 10);
+        let pintado = flatten(view.body().0);
+        assert!(pintado.contains("cuerpo del plugin"), "{pintado}");
+        assert!(
+            pintado.contains("ACME"),
+            "el publicador acompaña: {pintado}"
+        );
+        assert!(
+            pintado.contains(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")),
+            "y la insignia de recorte: {pintado}"
+        );
+    }
+
+    /// El texto de terceros se enmascara y se acota en el PUNTO DE ENTRADA:
+    /// `PluginNode::title` promete llegar seguro y el modelo no enmascara nada
+    /// — filtra sobre lo que le den.
+    #[test]
+    fn el_nombre_de_un_plugin_entra_enmascarado_y_acotado() {
+        let mut view = HelpView::new(Lang::En, Vec::new());
+        let mut p = plugin("acme.ftp", &format!("a\u{202E}{}", "x".repeat(5_000)));
+        p.publisher = "AC\u{202E}ME".to_owned();
+        view.set_plugins(&[p]);
+        let fila = view
+            .state
+            .rows()
+            .iter()
+            .find_map(|r| match r {
+                norte_frontend::help::SidebarRow::Topic { id, title }
+                    if id.as_str() == "acme.ftp" =>
+                {
+                    Some(title.clone())
+                }
+                _ => None,
+            })
+            .expect("el nodo está en la barra");
+        assert!(!fila.contains('\u{202E}'), "sin bidi crudo: {fila:?}");
+        assert!(
+            fila.chars().count() <= super::PLUGIN_NAME_WIRE_CAP,
+            "acotado: {} chars",
+            fila.chars().count()
+        );
+        let pub_ = view.publisher_of("acme.ftp").expect("hay publicador");
+        assert!(!pub_.contains('\u{202E}'), "publicador limpio: {pub_:?}");
+    }
+
+    /// `plugin_needs_fetch` PREGUNTA, no avisa: sigue contestando `Some` hasta
+    /// que la página se instala, y el run loop lo visita en cada vuelta. Sin la
+    /// reclamación, un daemon que no contesta se reintentaría a ritmo de frame.
+    #[test]
+    fn la_pagina_se_pide_una_sola_vez_por_overlay() {
+        let mut view = HelpView::new(Lang::En, Vec::new());
+        view.set_plugins(&[plugin("acme.ftp", "FTP")]);
+        view.state.open(&TopicId::new("acme.ftp"));
+        assert_eq!(view.claim_plugin_fetch().as_deref(), Some("acme.ftp"));
+        for _ in 0..100 {
+            assert_eq!(
+                view.claim_plugin_fetch(),
+                None,
+                "un fallo no se reintenta dentro del mismo overlay"
+            );
+            assert_eq!(
+                view.state.plugin_needs_fetch(),
+                Some("acme.ftp"),
+                "y el modelo sigue diciendo que falta: es la reclamación la que \
+                 corta el bucle, no el modelo"
+            );
+        }
+        // Cerrar y reabrir la ayuda SÍ vuelve a pedir: es el único reintento
+        // que el lector tiene, y el único que puede pedir.
+        let mut otra = HelpView::new(Lang::En, Vec::new());
+        otra.set_plugins(&[plugin("acme.ftp", "FTP")]);
+        otra.state.open(&TopicId::new("acme.ftp"));
+        assert_eq!(otra.claim_plugin_fetch().as_deref(), Some("acme.ftp"));
+    }
+
+    /// Una página del corpus no pide nada, y la de teclado tampoco: pedir por
+    /// ellas sería una llamada al daemon por frame durante toda la lectura.
+    #[test]
+    fn una_pagina_del_corpus_no_pide_nada() {
+        let mut view = HelpView::new(Lang::En, Vec::new());
+        view.set_plugins(&[plugin("acme.ftp", "FTP")]);
+        assert_eq!(view.claim_plugin_fetch(), None, "el índice no pide nada");
+        view.state.open(&TopicId::new(KEYS_ID));
+        assert_eq!(view.claim_plugin_fetch(), None, "el teclado tampoco");
+    }
+}
+
+#[cfg(test)]
+mod help_plugin_snapshot_tests {
+    use super::App;
+    use norte_help::ChordResolver;
+    use norte_vfs::VPath;
+
+    fn app() -> App {
+        let d = VPath::parse("file:///x").expect("wire de test");
+        App::new(
+            super::Pane::new(d.clone(), Vec::new()),
+            super::Pane::new(d, Vec::new()),
+        )
+    }
+
+    fn plugin(id: &str, approved: bool, enabled: bool) -> norte_proto::methods::PluginInfo {
+        norte_proto::methods::PluginInfo {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            publisher: "ACME".to_owned(),
+            version: "1.0.0".to_owned(),
+            category: "command".to_owned(),
+            capabilities: Vec::new(),
+            approved,
+            enabled,
+            description: None,
+            commands: Vec::new(),
+            columns: Vec::new(),
+            has_help: true,
+        }
+    }
+
+    /// H3e: la foto congela las DOS mitades a la vez — la barra ofrece la
+    /// página de cada plugin con `help.md`, y el resolver atenúa los comandos
+    /// de los que no están aprobados-y-activos. Si sólo cuajara una, el lector
+    /// leería una página cuyas filas prometen lo que la app va a rechazar.
+    #[test]
+    fn la_foto_llega_a_la_barra_y_al_resolver() {
+        let mut app = app();
+        app.help = Some(super::HelpView::new(norte_help::Lang::En, Vec::new()));
+        app.freeze_help_plugins(&[
+            plugin("acme.ftp", true, true),
+            plugin("otro.off", true, false),
+        ]);
+
+        let help = app.help.as_ref().expect("la ayuda está abierta");
+        let ids: Vec<String> = help
+            .state
+            .rows()
+            .iter()
+            .filter_map(|r| match r {
+                norte_frontend::help::SidebarRow::Topic { id, .. } => Some(id.as_str().to_owned()),
+                norte_frontend::help::SidebarRow::Group { .. } => None,
+            })
+            .collect();
+        assert!(ids.iter().any(|i| i == "acme.ftp"), "{ids:?}");
+        assert!(
+            ids.iter().any(|i| i == "otro.off"),
+            "un plugin apagado CONSERVA su página — leerla es cómo se decide \
+             encenderlo: {ids:?}"
+        );
+
+        assert!(
+            app.help_chords
+                .availability("plugin:acme.ftp:sync")
+                .is_available()
+        );
+        assert_eq!(
+            app.help_chords
+                .availability("plugin:otro.off:sync")
+                .reason(),
+            Some(norte_help::Reason::PluginInactive),
+            "pero sus filas no se ofrecen"
+        );
+    }
+
+    /// El re-congelado de hechos que el embudo de refresco hace con la ayuda
+    /// abierta (`main::after_panes_refresh`) NO puede apagar las filas de
+    /// plugin a mitad de lectura, ni al revés.
+    #[test]
+    fn recongelar_los_hechos_no_pierde_la_foto_de_plugins() {
+        let mut app = app();
+        app.help = Some(super::HelpView::new(norte_help::Lang::En, Vec::new()));
+        app.freeze_help_plugins(&[plugin("acme.ftp", true, true)]);
+        app.freeze_help_facts();
+        assert!(
+            app.help_chords
+                .availability("plugin:acme.ftp:sync")
+                .is_available()
+        );
     }
 }

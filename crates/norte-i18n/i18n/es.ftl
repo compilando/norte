@@ -291,6 +291,16 @@ help-dialog-note = cada diálogo soporta su propio subconjunto de estas teclas
 help-group-basics = Fundamentos
 help-group-doing = Operaciones
 help-group-remote = Remoto y archivos
+# H3e: el grupo bajo el que van las páginas de plugin, detrás de todo lo que
+# escribió el host. No es un tag del corpus — lo emite `norte_frontend::help`
+# para las filas de plugin.
+help-group-extensions = Extensiones
+# H3e: la línea de procedencia bajo el título de una página de plugin.
+# `truncated` y `lossy` los dice el HOST, no el re-parseo del texto (que llega
+# ya corto y ya decodificado): son el único sitio donde el lector se entera de
+# que la página venía recortada.
+help-plugin-truncated = recortada
+help-plugin-lossy = hay bytes que no decodifican
 # La entrada sintética `keys` NO lleva cabecera: es un grupo de uno por
 # construcción y su cabecera se llamaría igual que su única fila, así que la
 # lateral no la pinta (`ui::draw_help`). Por eso no hay `help-group-keys`.
@@ -368,6 +378,7 @@ msg-hotlist-removed = favorito eliminado: { $name }
 msg-plugin-run-ok = extensión: { $output }
 # G3c: `dialog.confirm` sobre un plugin con esquema `[config]` vacío.
 msg-plugin-config-empty = este plugin no declara ajustes configurables
+msg-extensions-no-help = esta extensión no trae página de ayuda
 # G3c: `plugin.set_config` tuvo éxito — { $key } es la clave declarada por el
 # manifiesto (charset seguro, nunca texto libre del plugin); { $value } es el
 # valor nuevo, ya validado client-side.

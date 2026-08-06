@@ -287,6 +287,14 @@ help-dialog-note = each dialog supports its own subset of these keys
 help-group-basics = Basics
 help-group-doing = Doing things
 help-group-remote = Remote & archives
+# H3e: the group the plugin pages sit under, after everything the host wrote.
+# Not a corpus tag — `norte_frontend::help` emits it for the plugin rows.
+help-group-extensions = Extensions
+# H3e: the provenance line under a plugin page's title. `truncated` and `lossy`
+# come from the HOST, not from re-parsing the text (it arrives already short and
+# already decoded), so these are the only place a reader learns a page was cut.
+help-plugin-truncated = cut short
+help-plugin-lossy = some bytes did not decode
 # The synthetic `keys` entry gets NO header: it is a group of one by
 # construction and its header would be the same word as its only row, so the
 # sidebar does not paint it (`ui::draw_help`). Hence no `help-group-keys`.
@@ -361,6 +369,7 @@ msg-hotlist-removed = favorite removed: { $name }
 msg-plugin-run-ok = extension: { $output }
 # G3c: `dialog.confirm` on a plugin with an empty `[config]` schema.
 msg-plugin-config-empty = this plugin declares no configurable settings
+msg-extensions-no-help = this extension ships no help page
 # G3c: plugin.set_config succeeded — { $key } is the manifest-declared,
 # charset-safe config key (never plugin free text); { $value } is the new
 # value already validated client-side.
