@@ -455,7 +455,13 @@ pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
                 detail: p.id.clone(),
             });
         }
-        if p.has_help {
+        // `announces_help`, NOT the wire's `p.has_help`: the two answer
+        // different questions on purpose. The wire flag is STRICT (it applies
+        // the escape guard, so a `help.md` symlinked out of the plugin's own
+        // directory reports `false` and stops being a path-existence oracle);
+        // this is a LOCAL diagnostic, and gating it on the strict flag would
+        // make `norte doctor` blind to exactly the case it exists to report.
+        if registry.announces_help(&p.id) {
             findings.extend(check_plugin_help(&registry, &p.id));
         }
         if let Some(settings) = registry.settings_of(&p.id) {
@@ -482,9 +488,12 @@ pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
 /// * `plugin-help-lossy`: it carries bytes that decode under no reading the
 ///   parser is willing to make.
 /// * `plugin-help-empty`: it ANNOUNCES a page and serves nothing.
-///   [`norte_core::plugins::PluginRegistry`] computes `has_help` with one
-///   `is_file` at discovery, while the CONTENT is read later through the
-///   escape guard, so this state is real and otherwise invisible. Three causes,
+///   [`norte_core::plugins::PluginRegistry::announces_help`] answers the lax
+///   question — is there a `help.md` at all — while the CONTENT is read
+///   through the escape guard, so this state is real and otherwise invisible.
+///   The WIRE's `PluginInfo.has_help` is the strict flag and would hide it:
+///   gating this check on that one would blind the diagnostic to the very case
+///   it is here to name. Three causes,
 ///   all the author's: the file is empty, it is unreadable (permissions, a
 ///   directory), or it is a symlink pointing OUT of the plugin's own directory
 ///   — which the host refuses to serve. That last one is the guard doing its
