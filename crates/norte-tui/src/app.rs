@@ -1064,7 +1064,7 @@ pub const PLUGIN_NAME_WIRE_CAP: usize = 120;
 /// [`crate::help::TuiChords`] entrega sus etiquetas directas al pintor.
 ///
 /// Un recorte se MARCA con `…`, como lo marcan los vecinos que hacen esto mismo
-/// (`masked_and_capped` en el doctor, [`crate::ui::middle_ellipsis`] en la línea
+/// (`masked_and_capped` en el doctor, [`norte_frontend::middle_ellipsis`] en la línea
 /// de descripción del gestor). Cortar en seco presenta un nombre truncado como
 /// si estuviera completo, que es la misma clase de mentira que H3d fue a
 /// perseguir a los pies de overlay: quien lee no puede saber que falta algo, y
