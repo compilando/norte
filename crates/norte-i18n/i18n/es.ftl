@@ -593,6 +593,11 @@ cli-doctor-footer-connections-not-probed = nota: el keyring/`age` no se prueban 
 cli-doctor-detail-connections-parse = connections.toml no parsea (corrígelo o bórralo)
 cli-doctor-detail-connections-none = no hay connections.toml, o no hay conexiones configuradas
 cli-doctor-detail-plugin-digest-stale = { $id }: las capabilities del manifiesto cambiaron desde la aprobación; requiere re-aprobación
+cli-doctor-detail-plugin-help-truncated = { $id }: su help.md pasa del tope y se sirve cortado
+cli-doctor-detail-plugin-help-lossy = { $id }: su help.md tiene bytes que no decodifican; se pintan como caracteres de reemplazo
+cli-doctor-detail-plugin-help-empty = { $id }: anuncia un help.md que no sirve nada: vacío, ilegible, o un enlace que apunta fuera del directorio del propio plugin
+cli-doctor-detail-plugin-help-foreign-command = { $detail } — su help.md declara un comando que no es suyo; esa fila se descarta
+cli-doctor-detail-plugin-help-shadows-topic = { $id }: su id es también una página de ayuda del binario; la del plugin no se muestra
 
 # --- Registro de settings (S2): ajustes generales curados que muestra el
 # overlay del TUI (S3) y la vista de la GUI (S4). Un par nombre/desc por

@@ -4202,6 +4202,7 @@ dependencies = [
  "norte-core",
  "norte-encoding",
  "norte-frontend",
+ "norte-help",
  "norte-i18n",
  "norte-mcp",
  "norte-proto",

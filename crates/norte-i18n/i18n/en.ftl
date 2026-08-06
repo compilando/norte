@@ -579,6 +579,11 @@ cli-doctor-footer-connections-not-probed = note: keyring/age are not probed (sid
 cli-doctor-detail-connections-parse = connections.toml does not parse (fix or remove it)
 cli-doctor-detail-connections-none = no connections.toml, or no connections configured
 cli-doctor-detail-plugin-digest-stale = { $id }: manifest capabilities changed since approval; re-approval required
+cli-doctor-detail-plugin-help-truncated = { $id }: its help.md is over the size limit and is served cut short
+cli-doctor-detail-plugin-help-lossy = { $id }: its help.md has bytes that do not decode; they render as replacement characters
+cli-doctor-detail-plugin-help-empty = { $id }: it announces a help.md that serves nothing: empty, unreadable, or a symlink pointing outside the plugin's own directory
+cli-doctor-detail-plugin-help-foreign-command = { $detail } — its help.md declares a command it does not own; that row is dropped
+cli-doctor-detail-plugin-help-shadows-topic = { $id }: its id is also a built-in help page; the plugin page is not shown
 
 # --- Settings registry (S2): curated GENERAL settings shown by the TUI
 # overlay (S3) and the GUI view (S4). One name/desc pair per entry in

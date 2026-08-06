@@ -455,6 +455,9 @@ pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
                 detail: p.id.clone(),
             });
         }
+        if p.has_help {
+            findings.extend(check_plugin_help(&registry, &p.id));
+        }
         if let Some(settings) = registry.settings_of(&p.id) {
             for (key, value) in settings {
                 findings.push(Finding {
@@ -467,6 +470,102 @@ pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
         }
     }
     findings
+}
+
+/// `plugin-help` findings for ONE plugin that announces a `help.md` (H3e).
+///
+/// None of this is a hard error — help is cosmetic and never stops an approved
+/// plugin from loading:
+///
+/// * `plugin-help-truncated`: the file is past the untrusted cap and is served
+///   cut short.
+/// * `plugin-help-lossy`: it carries bytes that decode under no reading the
+///   parser is willing to make.
+/// * `plugin-help-empty`: it ANNOUNCES a page and serves nothing.
+///   [`norte_core::plugins::PluginRegistry`] computes `has_help` with one
+///   `is_file` at discovery, while the CONTENT is read later through the
+///   escape guard, so this state is real and otherwise invisible. Three causes,
+///   all the author's: the file is empty, it is unreadable (permissions, a
+///   directory), or it is a symlink pointing OUT of the plugin's own directory
+///   — which the host refuses to serve. That last one is the guard doing its
+///   job, and from the reader's side it is indistinguishable from an author who
+///   wrote nothing, which is exactly why it needs a finding.
+/// * `plugin-help-foreign-command`: the header declares commands that are not
+///   the plugin's own. They are dropped from the model in silence, so this is
+///   where the author finds out. Only the HEADER is examined: a foreign
+///   `{{cmd:…}}` in the BODY degrades to literal text inside the span cutter,
+///   with no counter to thread out, and adding one would touch every span
+///   signature for the sake of a diagnostic
+///   ([`norte_help::foreign_commands`]'s own contract).
+/// * `plugin-help-shadows-topic`: the plugin's id is also a built-in help page
+///   id. The frontend discards the node (the corpus wins, fail-closed), so
+///   without this finding the plugin's page would vanish without saying why.
+///   It cannot fire TODAY — a `plugin.id` must be reverse-DNS (two dotted
+///   segments minimum) and every corpus id is a single segment, so the two id
+///   spaces do not overlap. That is a property of two crates that neither
+///   promises to the other, and it costs one lookup to keep the guard; the
+///   test `la_colision_de_id_con_el_corpus_es_hoy_estructuralmente_imposible`
+///   pins both invariants so relaxing either one is loud.
+///
+/// Third-party text reaching a `detail` goes through [`masked_and_capped`],
+/// exactly as in `plugin-config`. The plugin ID does not: it is already the
+/// catalogue's own validated key, and every other plugin finding in this module
+/// prints it raw.
+///
+/// A malformed FRONT MATTER is deliberately NOT reported yet (H3e addition B):
+/// `foreign_commands` answers `[]` both for "no header" and for "header that
+/// failed to parse", and telling those apart needs a question `norte-help` does
+/// not export today. Re-implementing the grammar here would be exactly the
+/// drift this phase exists to prevent.
+fn check_plugin_help(registry: &norte_core::plugins::PluginRegistry, id: &str) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let Some(help) = registry.help_of(id) else {
+        return out;
+    };
+    if help.truncated {
+        out.push(Finding {
+            section: "plugins",
+            severity: Severity::Warn,
+            code: "plugin-help-truncated",
+            detail: id.to_owned(),
+        });
+    }
+    if help.lossy {
+        out.push(Finding {
+            section: "plugins",
+            severity: Severity::Warn,
+            code: "plugin-help-lossy",
+            detail: id.to_owned(),
+        });
+    }
+    if help.markdown.is_empty() {
+        out.push(Finding {
+            section: "plugins",
+            severity: Severity::Warn,
+            code: "plugin-help-empty",
+            detail: id.to_owned(),
+        });
+    }
+    for foreign in norte_help::foreign_commands(&help.markdown, id) {
+        out.push(Finding {
+            section: "plugins",
+            severity: Severity::Warn,
+            code: "plugin-help-foreign-command",
+            detail: format!("{id}: {}", masked_and_capped(&foreign)),
+        });
+    }
+    // The collision is judged against the ENGLISH corpus: both locales carry
+    // the same ids (the parity test pins that), so asking both would report
+    // the same defect twice.
+    if norte_help::topic(norte_help::Lang::En, id).is_some() {
+        out.push(Finding {
+            section: "plugins",
+            severity: Severity::Warn,
+            code: "plugin-help-shadows-topic",
+            detail: id.to_owned(),
+        });
+    }
+    out
 }
 
 /// Cap (CHARS, not bytes — same criterion as the manifest's own
@@ -1212,6 +1311,185 @@ max = 10
             f.detail.chars().count() < 200,
             "the long value must be capped: {}",
             f.detail
+        );
+    }
+
+    /// A minimal valid manifest for an arbitrary `id` — the `plugin-help`
+    /// tests below need the id to be the thing under test (`acme.ftp` for the
+    /// detail, `copying` for the corpus collision).
+    fn manifest_for(id: &str) -> String {
+        format!(
+            "[plugin]\nid = \"{id}\"\nname = \"X\"\npublisher = \"norte\"\n\
+             version = \"0.1.0\"\ncategory = \"command\"\n[capabilities]\nfs-read = \"scoped\"\n"
+        )
+    }
+
+    /// Lays down `help.md` (raw BYTES: some fixtures are deliberately not
+    /// valid UTF-8) inside an already-written plugin directory.
+    fn write_help(config_dir: &std::path::Path, dir: &str, bytes: &[u8]) {
+        std::fs::write(config_dir.join("plugins").join(dir).join("help.md"), bytes).unwrap();
+    }
+
+    /// TDD (H3e): a `help.md` past the untrusted cap is served cut short, and
+    /// the author only finds out here.
+    #[test]
+    fn un_help_md_recortado_sale_como_hallazgo() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "acme.ftp", &manifest_for("acme.ftp"));
+        // Over `Limits::untrusted().max_bytes` (64 KiB), and valid UTF-8 so
+        // the ONLY flag this fixture raises is `truncated`.
+        write_help(dir.path(), "acme.ftp", &vec![b'a'; 70 * 1024]);
+
+        let f = check_plugins(dir.path())
+            .into_iter()
+            .find(|f| f.code == "plugin-help-truncated")
+            .expect("se reporta el recorte");
+        assert_eq!(f.severity, Severity::Warn);
+        assert!(f.detail.contains("acme.ftp"), "detail: {}", f.detail);
+    }
+
+    /// TDD (H3e): bytes that decode under no reading the parser is willing to
+    /// make. The fixture needs a UTF-8 BOM — `norte_encoding::detect` recovers
+    /// bare high bytes as a legacy encoding, so only a BOM makes the encoding
+    /// a CERTAINTY and the following invalid sequence a genuine loss.
+    #[test]
+    fn un_help_md_con_bytes_que_no_decodifican_sale_como_hallazgo() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "acme.ftp", &manifest_for("acme.ftp"));
+        write_help(dir.path(), "acme.ftp", b"\xef\xbb\xbf# T\xc3\x28tulo\n");
+
+        let f = check_plugins(dir.path())
+            .into_iter()
+            .find(|f| f.code == "plugin-help-lossy")
+            .expect("se reporta la pérdida");
+        assert_eq!(f.severity, Severity::Warn);
+        assert!(f.detail.contains("acme.ftp"), "detail: {}", f.detail);
+    }
+
+    /// TDD (H3e): the header declares a command the plugin does not own. The
+    /// parser drops that row in silence, so this finding is the only place
+    /// the author learns of it.
+    #[test]
+    fn un_help_md_con_comandos_ajenos_sale_como_hallazgo() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "acme.ftp", &manifest_for("acme.ftp"));
+        write_help(
+            dir.path(),
+            "acme.ftp",
+            b"+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\ncommands = [\"fs.copy\"]\n+++\nbody\n",
+        );
+
+        let f = check_plugins(dir.path())
+            .into_iter()
+            .find(|f| f.code == "plugin-help-foreign-command")
+            .expect("se reporta el comando ajeno");
+        assert_eq!(f.severity, Severity::Warn);
+        assert!(f.detail.contains("fs.copy"), "detail: {}", f.detail);
+    }
+
+    /// H3e: `plugin-help-shadows-topic` guards the case where a plugin's id
+    /// is also a corpus page id — the frontend discards that node (the corpus
+    /// wins, fail-closed) and the page would vanish without saying why.
+    ///
+    /// It CANNOT fire today, and this test is what pins the two invariants
+    /// that make it unreachable, so that relaxing either one fails here
+    /// instead of silently re-opening the hole:
+    ///
+    /// 1. a `plugin.id` must be reverse-DNS — at least two `[A-Za-z0-9-]`
+    ///    segments separated by a dot (`norte_plugin_host`'s own
+    ///    `is_valid_plugin_id`); a manifest claiming a bare `copying` does not
+    ///    even load, it surfaces as `plugin-manifest-broken`;
+    /// 2. every corpus id is a single segment, with no dot in it.
+    ///
+    /// The finding stays wired regardless: it costs one lookup, and "the id
+    /// spaces cannot overlap" is a property of two crates that neither of them
+    /// promises to the other.
+    #[test]
+    fn la_colision_de_id_con_el_corpus_es_hoy_estructuralmente_imposible() {
+        for id in norte_help::topic_ids(norte_help::Lang::En) {
+            assert!(
+                !id.as_str().contains('.'),
+                "a corpus id with a dot COULD be claimed by a plugin: {id:?} — \
+                 write the real fixture test for plugin-help-shadows-topic"
+            );
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "copying", &manifest_for("copying"));
+        write_help(dir.path(), "copying", b"# Copying\n\nprose\n");
+
+        let findings = check_plugins(dir.path());
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.code == "plugin-manifest-broken" && f.severity == Severity::Error),
+            "a bare (non reverse-DNS) id must not load at all: {findings:?}"
+        );
+        assert!(
+            !findings.iter().any(|f| f.code.starts_with("plugin-help")),
+            "an excluded plugin has no help findings: {findings:?}"
+        );
+    }
+
+    /// TDD (H3e, addition A): `has_help` is one `is_file` at discovery while
+    /// the CONTENT is read later through the escape guard, so a `help.md`
+    /// symlinked OUT of the plugin's own directory announces a page and
+    /// serves nothing. From the reader's side that is indistinguishable from
+    /// an author who wrote nothing, which is exactly why it needs a finding.
+    #[cfg(unix)]
+    #[test]
+    fn un_help_md_que_escapa_del_directorio_del_plugin_sale_como_vacio() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "acme.ftp", &manifest_for("acme.ftp"));
+        let outside = dir.path().join("secreto.md");
+        std::fs::write(&outside, "# no es suyo\n").unwrap();
+        std::os::unix::fs::symlink(
+            &outside,
+            dir.path().join("plugins").join("acme.ftp").join("help.md"),
+        )
+        .unwrap();
+
+        let findings = check_plugins(dir.path());
+        let f = findings
+            .iter()
+            .find(|f| f.code == "plugin-help-empty")
+            .unwrap_or_else(|| panic!("expected a plugin-help-empty finding: {findings:?}"));
+        assert_eq!(f.severity, Severity::Warn);
+        assert!(f.detail.contains("acme.ftp"), "detail: {}", f.detail);
+    }
+
+    /// Not documenting yourself is not a defect: a plugin without `help.md`
+    /// must produce no `plugin-help` noise at all.
+    #[test]
+    fn un_plugin_sin_help_md_no_genera_ruido() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "org.norte.demo", DEMO_MANIFEST);
+
+        assert!(
+            !check_plugins(dir.path())
+                .iter()
+                .any(|f| f.code.starts_with("plugin-help")),
+            "no documentarse no es un defecto"
+        );
+    }
+
+    /// …and neither is documenting yourself WELL: a clean `help.md` declaring
+    /// only its own commands is silent too.
+    #[test]
+    fn un_help_md_limpio_no_genera_ruido() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "acme.ftp", &manifest_for("acme.ftp"));
+        write_help(
+            dir.path(),
+            "acme.ftp",
+            b"+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n\
+              commands = [\"plugin:acme.ftp:connect\"]\n+++\nprosa\n",
+        );
+
+        let findings = check_plugins(dir.path());
+        assert!(
+            !findings.iter().any(|f| f.code.starts_with("plugin-help")),
+            "un help.md correcto no es un hallazgo: {findings:?}"
         );
     }
 

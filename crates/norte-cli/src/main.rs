@@ -862,6 +862,28 @@ fn doctor_finding_line(f: &doctor::Finding) -> String {
             "cli-doctor-detail-plugin-digest-stale",
             &[("id", &f.detail)],
         ),
+        // H3e `plugin-help-*`: same policy — `detail` stays the machine value
+        // (the plugin id; for `foreign-command`, `{id}: {command}`, already
+        // masked and capped at the `doctor` boundary) and the sentence lives
+        // here.
+        "plugin-help-truncated" => norte_i18n::ta(
+            "cli-doctor-detail-plugin-help-truncated",
+            &[("id", &f.detail)],
+        ),
+        "plugin-help-lossy" => {
+            norte_i18n::ta("cli-doctor-detail-plugin-help-lossy", &[("id", &f.detail)])
+        }
+        "plugin-help-empty" => {
+            norte_i18n::ta("cli-doctor-detail-plugin-help-empty", &[("id", &f.detail)])
+        }
+        "plugin-help-foreign-command" => norte_i18n::ta(
+            "cli-doctor-detail-plugin-help-foreign-command",
+            &[("detail", &f.detail)],
+        ),
+        "plugin-help-shadows-topic" => norte_i18n::ta(
+            "cli-doctor-detail-plugin-help-shadows-topic",
+            &[("id", &f.detail)],
+        ),
         _ => f.detail.clone(),
     }
 }
@@ -1927,6 +1949,48 @@ mod tests {
                     "{scheme} invade el namespace del formato {format}"
                 );
             }
+        }
+    }
+
+    /// H3e: every `plugin-help-*` code must have a renderer arm AND a Fluent
+    /// message in BOTH locales. A missing key falls back to the key ITSELF
+    /// (`norte_i18n::ta_in`'s contract), and a missing arm falls back to the
+    /// raw machine `detail` — both are silent in text mode, so they are pinned
+    /// here instead.
+    #[test]
+    fn los_hallazgos_plugin_help_se_renderizan_en_los_dos_idiomas() {
+        for code in [
+            "plugin-help-truncated",
+            "plugin-help-lossy",
+            "plugin-help-empty",
+            "plugin-help-foreign-command",
+            "plugin-help-shadows-topic",
+        ] {
+            let key = format!("cli-doctor-detail-{code}");
+            for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
+                let rendered = norte_i18n::ta_in(
+                    lang,
+                    &key,
+                    &[("id", "acme.ftp"), ("detail", "acme.ftp: fs.copy")],
+                );
+                assert_ne!(rendered, key, "{key} missing in {lang:?}");
+                assert!(
+                    rendered.contains("acme.ftp"),
+                    "{key} drops the id: {rendered}"
+                );
+            }
+            // …and the arm exists: the line is not the raw detail.
+            let f = doctor::Finding {
+                section: "plugins",
+                severity: doctor::Severity::Warn,
+                code,
+                detail: "acme.ftp".to_owned(),
+            };
+            assert_ne!(
+                doctor_finding_line(&f),
+                f.detail,
+                "{code} has no renderer arm"
+            );
         }
     }
 

@@ -27,6 +27,9 @@ norte-connect.workspace = true
 norte-core.workspace = true
 norte-encoding.workspace = true
 norte-frontend.workspace = true
+# H3e: `doctor` juzga un `help.md` con el MISMO tope y las MISMAS reglas de
+# pertenencia de comandos que aplican en el host y en el frontend.
+norte-help.workspace = true
 norte-mcp.workspace = true
 norte-i18n.workspace = true
 norte-proto.workspace = true
