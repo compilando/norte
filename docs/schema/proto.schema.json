@@ -1771,7 +1771,8 @@
           "type": "boolean"
         },
         "markdown": {
-          "description": "El `help.md` del plugin, ya acotado y ya UTF-8 VÁLIDO (el host\ndecodifica y sustituye lo irrecuperable). Sin `help.md` legible:\ncadena vacía, nunca un error — la ayuda es cosmética.",
+          "default": "",
+          "description": "El `help.md` del plugin, ya acotado y ya UTF-8 VÁLIDO (el host\ndecodifica y sustituye lo irrecuperable). Sin `help.md` legible:\ncadena vacía, nunca un error — la ayuda es cosmética. Por eso el\ncampo AUSENTE también se acepta y se lee como esa misma página vacía\n(`#[serde(default)]`): un peer que expresa «no hay página» omitiéndolo\nno puede recibir un fallo de deserialización por decir justo lo que el\ncontrato ya permite decir. En emisión NO se omite nunca (sin\n`skip_serializing_if`), así que ausente y vacío solo se distinguen de\nENTRADA, y ahí significan lo mismo.",
           "type": "string"
         },
         "truncated": {
@@ -1780,9 +1781,6 @@
           "type": "boolean"
         }
       },
-      "required": [
-        "markdown"
-      ],
       "type": "object"
     },
     "PluginInfo": {

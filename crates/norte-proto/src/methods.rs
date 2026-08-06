@@ -281,7 +281,8 @@ use crate::{
 /// variante `TaskKind::Embed`. Ventana N=0.33.x / N-1=0.32.x: un cliente
 /// 0.32 jamás llama a los métodos nuevos y degrada el kind nuevo a
 /// `TaskKind::Unknown` por su `serde(other)` — nada que gatear en emisión.
-/// 0.34.0 (H3e): la ayuda de los PLUGINS por el wire. [`PluginInfo`] gana
+/// 0.34.0 (H3e, ADR 0040): la ayuda de los PLUGINS por el wire — el corpus
+/// de esa ADR alcanzando el protocolo. [`PluginInfo`] gana
 /// `has_help: bool` (discovery barato, `skip_serializing_if` sobre `false` —
 /// un plugin sin ayuda produce el MISMO payload que en 0.33) y aparece el
 /// método [`PLUGIN_HELP`] ([`PluginHelpParams`] → [`PluginHelpResult`]), que
@@ -1964,7 +1965,14 @@ pub struct PluginHelpParams {
 pub struct PluginHelpResult {
     /// El `help.md` del plugin, ya acotado y ya UTF-8 VÁLIDO (el host
     /// decodifica y sustituye lo irrecuperable). Sin `help.md` legible:
-    /// cadena vacía, nunca un error — la ayuda es cosmética.
+    /// cadena vacía, nunca un error — la ayuda es cosmética. Por eso el
+    /// campo AUSENTE también se acepta y se lee como esa misma página vacía
+    /// (`#[serde(default)]`): un peer que expresa «no hay página» omitiéndolo
+    /// no puede recibir un fallo de deserialización por decir justo lo que el
+    /// contrato ya permite decir. En emisión NO se omite nunca (sin
+    /// `skip_serializing_if`), así que ausente y vacío solo se distinguen de
+    /// ENTRADA, y ahí significan lo mismo.
+    #[serde(default)]
     pub markdown: String,
     /// El fichero superaba el tope y se cortó. Viaja porque el receptor NO
     /// puede deducirlo: el texto le llega ya corto, así que su propio parseo

@@ -452,9 +452,10 @@ fn golden_methods() {
     // 98 → 101 en 0.32.0: + ai_rename_plan_params/result/result_empty (M4-IA,
     // ADR 0031). 101 → 106 en 0.33.0: + index_embed_params,
     // index_search_semantic_params(/_no_root)/result y semantic_hit (M4-IA-2,
-    // ADR 0031 A3). 106 → 110 en 0.34.0: + plugin_info_with_help,
-    // plugin_help_params y plugin_help_result(/_flags) (H3e).
-    assert_eq!(fixtures.len(), 110, "[methods.json] fixtures sin caso Rust");
+    // ADR 0031 A3). 106 → 112 en 0.34.0: + plugin_info_with_help,
+    // plugin_help_params y plugin_help_result(/_flags/_empty/_lossy) (H3e,
+    // ADR 0040 — los dos últimos son la página vacía y la hostil).
+    assert_eq!(fixtures.len(), 112, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `ai.*` (0.32.0, M4-IA, ADR 0031): plan de rename revisable.
@@ -662,6 +663,33 @@ fn check_methods_plugin_help(fixtures: &BTreeMap<String, Value>) {
         &PluginHelpResult {
             markdown: "cut".to_owned(),
             truncated: true,
+            lossy: true,
+        },
+    );
+    // La forma "no hay página" que el contrato PROMETE: cadena vacía y ambas
+    // banderas bajas, nunca un error (ver el rustdoc de `markdown`).
+    check_one(
+        fixtures,
+        "plugin_help_result_empty",
+        &PluginHelpResult {
+            markdown: String::new(),
+            truncated: false,
+            lossy: false,
+        },
+    );
+    // HOSTIL, y banderas MIXTAS (cabe perder bytes sin llegar al tope): el
+    // `U+FFFD` que `lossy` describe viaja VERBATIM, y con él un override
+    // bidi `U+202E` que da la vuelta al texto que le sigue ("gnp.exe" se lee
+    // "exe.png"). Enmascarar es cosa del FRONTEND al renderizar — el wire
+    // transporta, no sanea —, así que la fixture conserva el peligro a
+    // propósito: si algún día alguien "limpia" el texto en proto, este
+    // golden es lo que se pone rojo.
+    check_one(
+        fixtures,
+        "plugin_help_result_lossy",
+        &PluginHelpResult {
+            markdown: "Ver\u{FFFD}sion \u{202E}gnp.exe".to_owned(),
+            truncated: false,
             lossy: true,
         },
     );

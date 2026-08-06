@@ -382,9 +382,19 @@
     "truncated": false,
     "lossy": false
   },
+  "plugin_help_result_empty": {
+    "markdown": "",
+    "truncated": false,
+    "lossy": false
+  },
   "plugin_help_result_flags": {
     "markdown": "cut",
     "truncated": true,
+    "lossy": true
+  },
+  "plugin_help_result_lossy": {
+    "markdown": "Ver\uFFFDsion \u202Egnp.exe",
+    "truncated": false,
     "lossy": true
   },
   "plugin_info": {
