@@ -272,6 +272,108 @@ pub fn verdict(command: &str, facts: &Facts) -> Availability {
     }
 }
 
+/// The plugin id inside a palette dispatch key, `plugin:{id}:{command}`.
+///
+/// `None` for anything that is not one of those keys. A key with the prefix
+/// but no `id:command` after it returns `None` too, and the caller treats that
+/// as inactive: a malformed key names no plugin, so there is nothing that
+/// could run it.
+///
+/// # Where the boundary is
+///
+/// The FIRST `:` after the prefix, and that is not a coin toss. The two halves
+/// are validated differently and the split has to follow the asymmetry: the
+/// core restricts `plugin_id` to reverse-DNS (`[A-Za-z0-9-]` segments, so
+/// never a `:`), while `command_id` comes out of the manifest with NO charset
+/// validation and may carry any byte, colons included — see
+/// [`crate::palette::Row`], which builds these keys. Splitting on the LAST
+/// colon, or splitting more than once, would attribute
+/// `plugin:acme.ftp:do:it` to a plugin that does not exist.
+///
+/// The one input where this disagrees with `norte_help`'s `is_own_command` is
+/// a plugin id that itself contains a `:`. That crate refuses such an id
+/// outright (it makes the split ambiguous, so it fails closed and the plugin
+/// gets no command rows at all); this function cannot see the ambiguity from
+/// the key alone and reports the segment before the first colon. The
+/// divergence is documented rather than papered over because it is
+/// unreachable from a validated id and because the two failures point the
+/// same way in practice: a `help.md` whose plugin id carries a colon yields
+/// zero command rows, so there is no verdict left for this function to get
+/// wrong on that path.
+///
+/// ```
+/// use norte_frontend::availability::plugin_of_command;
+///
+/// assert_eq!(plugin_of_command("plugin:acme.ftp:sync"), Some("acme.ftp"));
+/// // The command id may carry colons; the plugin id may not.
+/// assert_eq!(plugin_of_command("plugin:acme.ftp:do:it"), Some("acme.ftp"));
+/// // Not a plugin key, or not a whole one.
+/// assert_eq!(plugin_of_command("pane.copy"), None);
+/// assert_eq!(plugin_of_command("plugin:acme.ftp"), None);
+/// assert_eq!(plugin_of_command("plugin:"), None);
+/// ```
+#[must_use]
+pub fn plugin_of_command(command: &str) -> Option<&str> {
+    let rest = command.strip_prefix("plugin:")?;
+    let (id, cmd) = rest.split_once(':')?;
+    (!id.is_empty() && !cmd.is_empty()).then_some(id)
+}
+
+/// [`verdict`], plus the arm for plugin-contributed commands (H3e).
+///
+/// `active` is the set of plugin ids that are approved AND enabled — the
+/// frontend's SNAPSHOT, taken when the help opened. A `plugin:` key whose
+/// plugin is not in it is [`Reason::PluginInactive`]: the row stays visible,
+/// because the reader is looking at that plugin's own page and "it is here but
+/// switched off" is the answer they came for, and it dims because
+/// `plugin.run_command` would refuse it.
+///
+/// The palette does NOT get this row — it filters an inactive plugin's
+/// commands out entirely (see [`crate::palette::plugin_rows`]), and that
+/// decision stands. A list of everything you can run has no business showing
+/// what you cannot; a page ABOUT one plugin has every business saying that
+/// this is the plugin's own command and it is switched off.
+///
+/// Malformed `plugin:` keys are inactive rather than available: the fail-OPEN
+/// default of [`verdict`] exists for commands this table does not KNOW, and a
+/// key that names no plugin is not unknown, it is broken.
+///
+/// ```
+/// use norte_frontend::availability::{Facts, verdict_with_plugins};
+/// use norte_help::Reason;
+/// use std::collections::BTreeSet;
+///
+/// let facts = Facts {
+///     enterable: false,
+///     viewable: true,
+///     rename_single: true,
+///     source_read_only: false,
+///     dest_read_only: false,
+///     degraded: false,
+/// };
+/// let activos: BTreeSet<String> = ["acme.ftp".to_owned()].into_iter().collect();
+///
+/// assert!(verdict_with_plugins("plugin:acme.ftp:sync", &facts, &activos).is_available());
+/// assert_eq!(
+///     verdict_with_plugins("plugin:otro:sync", &facts, &activos).reason(),
+///     Some(Reason::PluginInactive)
+/// );
+/// // A built-in command never looks at the set.
+/// assert!(verdict_with_plugins("pane.copy", &facts, &BTreeSet::new()).is_available());
+/// ```
+#[must_use]
+pub fn verdict_with_plugins(
+    command: &str,
+    facts: &Facts,
+    active: &std::collections::BTreeSet<String>,
+) -> Availability {
+    if command.starts_with("plugin:") {
+        let ok = plugin_of_command(command).is_some_and(|id| active.contains(id));
+        return gated(ok, Reason::PluginInactive);
+    }
+    verdict(command, facts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,6 +577,88 @@ mod tests {
                 "{cmd} atenuado por un impedimento de ESTADO"
             );
         }
+    }
+
+    fn activos(ids: &[&str]) -> std::collections::BTreeSet<String> {
+        ids.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn el_comando_de_un_plugin_apagado_se_atenua() {
+        let v = verdict_with_plugins(
+            "plugin:acme.ftp:sync",
+            &one_file(),
+            &activos(&["otro.plugin"]),
+        );
+        assert_eq!(v.reason(), Some(Reason::PluginInactive));
+    }
+
+    #[test]
+    fn el_comando_de_un_plugin_activo_se_ofrece() {
+        let v = verdict_with_plugins("plugin:acme.ftp:sync", &one_file(), &activos(&["acme.ftp"]));
+        assert!(v.is_available());
+    }
+
+    #[test]
+    fn un_comando_del_binario_no_mira_los_plugins() {
+        let v = verdict_with_plugins("pane.copy", &one_file(), &activos(&[]));
+        assert!(v.is_available(), "el prefijo `plugin:` es lo que decide");
+    }
+
+    #[test]
+    fn una_clave_de_plugin_malformada_no_se_ofrece() {
+        // `plugin:` sin id ni comando no identifica nada: fail-closed, porque
+        // el único despacho posible sería contra un plugin que no existe.
+        let v = verdict_with_plugins("plugin:", &one_file(), &activos(&["acme.ftp"]));
+        assert_eq!(v.reason(), Some(Reason::PluginInactive));
+    }
+
+    /// La frontera la marca el PRIMER `:` tras `plugin:`, y eso no es un
+    /// detalle: `plugin_id` es DNS inverso validado por el core (nunca lleva
+    /// `:`), mientras que `command_id` sale del manifiesto SIN validación de
+    /// charset y puede llevar los que quiera. Partir por el último, o partir
+    /// más de una vez, atribuiría `plugin:acme.ftp:do:it` a un plugin que no
+    /// existe y atenuaría una fila que sí se puede ejecutar.
+    #[test]
+    fn el_id_del_comando_puede_llevar_dos_puntos() {
+        assert_eq!(
+            plugin_of_command("plugin:acme.ftp:do:it"),
+            Some("acme.ftp"),
+            "la frontera es el primer `:`, no el último"
+        );
+        assert!(
+            verdict_with_plugins(
+                "plugin:acme.ftp:do:it",
+                &one_file(),
+                &activos(&["acme.ftp"])
+            )
+            .is_available()
+        );
+    }
+
+    /// Toda forma que no nombra un plugin Y un comando es `None`, y el
+    /// veredicto de todas ellas es el mismo: apagada. La lista es el contrato
+    /// —lo que la tabla considera «roto» frente a «desconocido»— y por eso se
+    /// enumera aquí y no se deduce de la implementación.
+    #[test]
+    fn las_claves_que_no_nombran_plugin_y_comando_son_none() {
+        for clave in [
+            "plugin:",
+            "plugin::",
+            "plugin:acme.ftp",
+            "plugin:acme.ftp:",
+            "plugin::sync",
+        ] {
+            assert_eq!(plugin_of_command(clave), None, "{clave} identificó algo");
+            assert_eq!(
+                verdict_with_plugins(clave, &one_file(), &activos(&["acme.ftp", ""])).reason(),
+                Some(Reason::PluginInactive),
+                "{clave} ofrecida"
+            );
+        }
+        // Y lo que no lleva el prefijo no es asunto suyo.
+        assert_eq!(plugin_of_command("pane.copy"), None);
+        assert_eq!(plugin_of_command("plugins:acme.ftp:sync"), None);
     }
 
     /// El criterio SINTÁCTICO: un scheme compuesto de archivo es de solo
