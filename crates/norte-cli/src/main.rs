@@ -876,6 +876,10 @@ fn doctor_finding_line(f: &doctor::Finding) -> String {
         "plugin-help-empty" => {
             norte_i18n::ta("cli-doctor-detail-plugin-help-empty", &[("id", &f.detail)])
         }
+        "plugin-help-bad-header" => norte_i18n::ta(
+            "cli-doctor-detail-plugin-help-bad-header",
+            &[("id", &f.detail)],
+        ),
         "plugin-help-foreign-command" => norte_i18n::ta(
             "cli-doctor-detail-plugin-help-foreign-command",
             &[("detail", &f.detail)],
@@ -1963,6 +1967,7 @@ mod tests {
             "plugin-help-truncated",
             "plugin-help-lossy",
             "plugin-help-empty",
+            "plugin-help-bad-header",
             "plugin-help-foreign-command",
             "plugin-help-shadows-topic",
         ] {

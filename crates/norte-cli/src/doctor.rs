@@ -499,6 +499,17 @@ pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
 ///   — which the host refuses to serve. That last one is the guard doing its
 ///   job, and from the reader's side it is indistinguishable from an author who
 ///   wrote nothing, which is exactly why it needs a finding.
+/// * `plugin-help-bad-header`: the file opens a `+++` fence and the header it
+///   starts does not parse. `FrontMatter`'s `id` and `title` are REQUIRED, so
+///   forgetting one — the commonest way to write a `help.md` that silently does
+///   nothing — makes the WHOLE header vanish: `parse_untrusted` degrades a bad
+///   header to "there is no header" and reads its text as body prose. Nothing
+///   else reports it, because `foreign_commands` answers `[]` for a header that
+///   failed to parse exactly as it does for a clean one, and that asymmetry is
+///   the entire argument for this finding
+///   ([`norte_help::has_broken_front_matter`] is the question; the grammar is
+///   NOT re-derived here). A file with no fence at all is not an error — a
+///   plugin may choose not to declare a header.
 /// * `plugin-help-foreign-command`: the header declares commands that are not
 ///   the plugin's own. They are dropped from the model in silence, so this is
 ///   where the author finds out. Only the HEADER is examined: a foreign
@@ -521,11 +532,6 @@ pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
 /// catalogue's own validated key, and every other plugin finding in this module
 /// prints it raw.
 ///
-/// A malformed FRONT MATTER is deliberately NOT reported yet (H3e addition B):
-/// `foreign_commands` answers `[]` both for "no header" and for "header that
-/// failed to parse", and telling those apart needs a question `norte-help` does
-/// not export today. Re-implementing the grammar here would be exactly the
-/// drift this phase exists to prevent.
 fn check_plugin_help(registry: &norte_core::plugins::PluginRegistry, id: &str) -> Vec<Finding> {
     let mut out = Vec::new();
     let Some(help) = registry.help_of(id) else {
@@ -552,6 +558,14 @@ fn check_plugin_help(registry: &norte_core::plugins::PluginRegistry, id: &str) -
             section: "plugins",
             severity: Severity::Warn,
             code: "plugin-help-empty",
+            detail: id.to_owned(),
+        });
+    }
+    if norte_help::has_broken_front_matter(&help.markdown) {
+        out.push(Finding {
+            section: "plugins",
+            severity: Severity::Warn,
+            code: "plugin-help-bad-header",
             detail: id.to_owned(),
         });
     }
@@ -1394,6 +1408,38 @@ max = 10
             .expect("se reporta el comando ajeno");
         assert_eq!(f.severity, Severity::Warn);
         assert!(f.detail.contains("fs.copy"), "detail: {}", f.detail);
+    }
+
+    /// TDD (H3e, addition B): the mistake that actually happens — a header
+    /// declaring `title` and `commands` but NOT the required `id`. The whole
+    /// header is then read as prose, and the asymmetry pinned here is the
+    /// argument for the finding: `foreign_commands` cannot see the `fs.copy`
+    /// it declares (there is no parsed header to read a list from), so a
+    /// broken header must NOT show up as a foreign-command defect, and
+    /// without `plugin-help-bad-header` it would not show up at all.
+    #[test]
+    fn un_help_md_con_la_cabecera_rota_sale_como_hallazgo() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "acme.ftp", &manifest_for("acme.ftp"));
+        write_help(
+            dir.path(),
+            "acme.ftp",
+            b"+++\ntitle = \"FTP\"\ncommands = [\"fs.copy\"]\n+++\nbody\n",
+        );
+
+        let findings = check_plugins(dir.path());
+        let f = findings
+            .iter()
+            .find(|f| f.code == "plugin-help-bad-header")
+            .unwrap_or_else(|| panic!("expected a bad-header finding: {findings:?}"));
+        assert_eq!(f.severity, Severity::Warn);
+        assert!(f.detail.contains("acme.ftp"), "detail: {}", f.detail);
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.code == "plugin-help-foreign-command"),
+            "una cabecera que no parsea no tiene lista de comandos que revisar: {findings:?}"
+        );
     }
 
     /// H3e: `plugin-help-shadows-topic` guards the case where a plugin's id

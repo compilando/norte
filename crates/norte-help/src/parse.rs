@@ -749,6 +749,41 @@ pub fn foreign_commands(source: &str, plugin_id: &str) -> Vec<String> {
         .collect()
 }
 
+/// `true` when `source` opens with the `+++` fence and the header it starts
+/// still fails to parse — the one authoring mistake [`parse_untrusted`]
+/// degrades to "there is no header" (the fenced text becomes body prose).
+///
+/// A source with no fence at all is `false`: not declaring a header is a
+/// choice, not a defect. The question asked is exactly [`front_matter::split`]'s
+/// own — every failure of its EXCEPT "the file does not open with the fence" —
+/// so this cannot drift from the grammar it reports on. A bare `+++` with no
+/// line break after it counts as no fence, because that is how `split` reads
+/// it too.
+///
+/// It exists for `norte doctor`, for the same reason
+/// [`foreign_commands`] does: `FrontMatter`'s `id` and `title` are REQUIRED,
+/// so forgetting one makes the entire header vanish into the body, and
+/// `foreign_commands` then answers `[]` — indistinguishable from a clean file.
+/// Silence would read as "correct".
+///
+/// ```
+/// use norte_help::has_broken_front_matter;
+///
+/// // A fenced header missing the required `id`: everything it declared is
+/// // silently read as prose.
+/// assert!(has_broken_front_matter("+++\ntitle = \"FTP\"\n+++\nbody\n"));
+///
+/// // No fence at all: a plugin that chose not to declare a header.
+/// assert!(!has_broken_front_matter("# FTP\n\nbody\n"));
+/// ```
+#[must_use]
+pub fn has_broken_front_matter(source: &str) -> bool {
+    matches!(
+        front_matter::split(source),
+        Err(e) if !matches!(e, front_matter::FrontMatterError::Missing)
+    )
+}
+
 /// Parses a plugin `help.md`. NEVER fails: it detects the encoding and
 /// decodes accordingly, bounds by [`Limits::untrusted`], and masks terminal
 /// hazards AT PARSE TIME (masking lives where the data is built, exactly as
@@ -2287,5 +2322,43 @@ p\u{202E}ara\n\n\
     #[test]
     fn sin_encabezado_no_hay_comandos_ajenos() {
         assert!(foreign_commands("solo cuerpo", "acme.ftp").is_empty());
+    }
+
+    /// La valla que se abre y no se cierra: el caso fácil de fallar, porque
+    /// `split` lo distingue de «no hay valla» y esta función DEBE reportarlo.
+    /// Es además el que produce el `help.md` más engañoso — el autor ve su
+    /// encabezado escrito y el lector lo ve como prosa, valla incluida.
+    #[test]
+    fn una_valla_que_nunca_cierra_es_un_encabezado_roto() {
+        assert!(has_broken_front_matter(
+            "+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\ncuerpo sin cerrar\n"
+        ));
+    }
+
+    /// Un encabezado válido no es un defecto, y tampoco lo son las dos formas
+    /// de no tener valla: ninguna prosa y un `+++` que ni siquiera abre línea
+    /// (`split` lee ambos como «no hay encabezado», y esta función copia esa
+    /// lectura en vez de rederivar la gramática).
+    #[test]
+    fn un_encabezado_valido_o_ausente_no_es_un_defecto() {
+        assert!(!has_broken_front_matter(
+            "+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n+++\ncuerpo\n"
+        ));
+        assert!(!has_broken_front_matter("solo cuerpo"));
+        assert!(!has_broken_front_matter("+++"));
+    }
+
+    /// La asimetría que justifica el hallazgo: con el encabezado roto,
+    /// `foreign_commands` calla (no hay lista que leer) y solo esta función
+    /// tiene algo que decir.
+    #[test]
+    fn el_encabezado_roto_lo_reporta_esta_funcion_y_no_foreign_commands() {
+        // `title` y `commands`, sin el `id` obligatorio.
+        let src = "+++\ntitle = \"FTP\"\ncommands = [\"fs.copy\"]\n+++\ncuerpo\n";
+        assert!(has_broken_front_matter(src));
+        assert!(
+            foreign_commands(src, "acme.ftp").is_empty(),
+            "sin encabezado deserializado no hay comandos que revisar"
+        );
     }
 }

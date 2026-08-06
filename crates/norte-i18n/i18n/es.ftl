@@ -607,6 +607,7 @@ cli-doctor-detail-plugin-digest-stale = { $id }: las capabilities del manifiesto
 cli-doctor-detail-plugin-help-truncated = { $id }: su help.md pasa del tope y se sirve cortado
 cli-doctor-detail-plugin-help-lossy = { $id }: su help.md tiene bytes que no decodifican; se pintan como caracteres de reemplazo
 cli-doctor-detail-plugin-help-empty = { $id }: anuncia un help.md que no sirve nada: vacío, ilegible, o un enlace que apunta fuera del directorio del propio plugin
+cli-doctor-detail-plugin-help-bad-header = { $id }: su help.md abre una cabecera +++ que no parsea; la cabecera entera se ignora y su texto se lee como prosa
 cli-doctor-detail-plugin-help-foreign-command = { $detail } — su help.md declara un comando que no es suyo; esa fila se descarta
 cli-doctor-detail-plugin-help-shadows-topic = { $id }: su id es también una página de ayuda del binario; la del plugin no se muestra
 

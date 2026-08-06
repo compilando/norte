@@ -591,6 +591,7 @@ cli-doctor-detail-plugin-digest-stale = { $id }: manifest capabilities changed s
 cli-doctor-detail-plugin-help-truncated = { $id }: its help.md is over the size limit and is served cut short
 cli-doctor-detail-plugin-help-lossy = { $id }: its help.md has bytes that do not decode; they render as replacement characters
 cli-doctor-detail-plugin-help-empty = { $id }: it announces a help.md that serves nothing: empty, unreadable, or a symlink pointing outside the plugin's own directory
+cli-doctor-detail-plugin-help-bad-header = { $id }: its help.md opens a +++ header that does not parse; the whole header is ignored and its text is read as prose
 cli-doctor-detail-plugin-help-foreign-command = { $detail } — its help.md declares a command it does not own; that row is dropped
 cli-doctor-detail-plugin-help-shadows-topic = { $id }: its id is also a built-in help page; the plugin page is not shown
 
