@@ -87,12 +87,18 @@ impl HelpLine {
         Self::default()
     }
 
-    /// A plain line of generated text, in the regular role: the shape the
-    /// synthetic keyboard page arrives in (it is built from the effective
-    /// keymap, not from the corpus, so it never goes through [`render_topic`]).
+    /// A plain line of generated text in a MONOSPACED face: the shape the
+    /// synthetic keyboard page arrives in.
+    ///
+    /// That page is built from the effective keymap rather than the corpus, so
+    /// it never goes through [`render_topic`] — and its chord column is aligned
+    /// with SPACES, which line up only under a fixed pitch.
     #[must_use]
-    pub fn text(text: impl Into<String>) -> Self {
-        Self::one(text, Role::Regular)
+    pub fn mono_text(text: impl Into<String>) -> Self {
+        Self {
+            mono: true,
+            ..Self::one(text, Role::Regular)
+        }
     }
 }
 
@@ -405,17 +411,43 @@ mod tests {
         );
     }
 
+    /// The action indices are indices INTO `HelpState::actions()`, so the pin
+    /// has to compare against that list and not against a count re-derived from
+    /// the same assumption the renderer encodes. A reordering inside
+    /// `rebuild_actions` would otherwise mis-map every Enter while this test
+    /// stayed green.
     #[test]
-    fn el_mapa_de_acciones_cubre_comandos_y_enlaces_en_una_sola_secuencia() {
+    fn el_mapa_de_acciones_indexa_las_acciones_del_modelo() {
+        use norte_frontend::help::{Action, HelpState};
+
         let topic = norte_help::topic(Lang::En, "copying").expect("corpus topic");
+        let mut state = HelpState::new(Lang::En, "Keyboard".to_owned());
+        state.open(&topic.id);
+        let actions = state.actions().to_vec();
+        assert!(!actions.is_empty());
+
         let lines = render_topic(topic, Lang::En, &Fixed);
-        let mut actions: Vec<usize> = lines.iter().filter_map(|l| l.action).collect();
-        actions.sort_unstable();
-        let expected: Vec<usize> = (0..topic.commands.len() + topic.see_also.len()).collect();
+        let mapped: Vec<usize> = lines.iter().filter_map(|l| l.action).collect();
         assert_eq!(
-            actions, expected,
-            "one line per action, indexed as `HelpState::actions()` orders them"
+            mapped,
+            (0..actions.len()).collect::<Vec<_>>(),
+            "one line per action of the model, in the model's order"
         );
+
+        // And each mapped line NAMES the action it points at, which is what
+        // makes Enter land where the highlight is.
+        for (line, action) in lines.iter().filter(|l| l.action.is_some()).zip(&actions) {
+            let text: String = line.spans.iter().map(|s| s.text.as_str()).collect();
+            let expected = match action {
+                Action::Run(cmd) => Fixed.label(cmd),
+                Action::Open(id) => norte_help::topic(Lang::En, id.as_str())
+                    .map_or_else(|| id.to_string(), |t| t.title.clone()),
+            };
+            assert!(
+                text.contains(&expected),
+                "row {text:?} does not name {action:?}"
+            );
+        }
     }
 
     #[test]

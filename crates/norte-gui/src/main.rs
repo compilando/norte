@@ -1330,6 +1330,14 @@ impl NorteGui {
                             paths,
                             requested,
                         });
+                        // H3f review (rust MAJOR 4): a listing landing UNDER the
+                        // open help re-freezes its facts. The freeze buys "no
+                        // verdict changes because the reader moved" and nothing
+                        // more: a copy finishing re-lists both panes, and
+                        // without this the page would keep judging `nav.enter`
+                        // and friends against an entry that no longer exists —
+                        // and dispatch against it on Enter.
+                        self.refreeze_help_facts();
                         if std::env::var_os("NORTE_GUI_DEBUG").is_some() {
                             eprintln!(
                                 "[norte-gui] pane {pane} aplicó listado: {} entradas, cursor={}",
@@ -2534,9 +2542,15 @@ impl NorteGui {
         self.help_chords = Some(view.freeze(&base, self.help_facts()));
         self.help = Some(view);
         // The catalogue arrives async (`SessionEvent::PluginsListed`), which
-        // re-installs the snapshot and RE-FREEZES the resolver. The GUI does
-        // not cache a plugin list of its own — the palette and the extension
-        // manager ask for it when they open, and so does this.
+        // re-installs the snapshot and re-freezes the PLUGIN half only. The GUI
+        // does not cache a plugin list of its own — the palette and the
+        // extension manager ask for it when they open, and so does this.
+        //
+        // KNOWN GAP: a keymap hot reload while the overlay is open does not
+        // reach it. `keys_lines` and the chord map are snapshots taken right
+        // here, so a rebind landing from the config watcher would leave the
+        // page teaching the old keys until it is reopened. The fix is to
+        // rebuild both where `apply_keymap_live` swaps the resolvers.
         let _ = self.cmds.send(SessionCmd::PluginsList);
     }
 
@@ -2547,16 +2561,31 @@ impl NorteGui {
     /// resolver that never saw it would offer rows for plugins it then dims,
     /// and name their commands by their raw dispatch keys.
     fn install_help_plugins(&mut self, plugins: &[norte_proto::methods::PluginInfo]) {
-        let facts = self.help_facts();
+        // Only the PLUGIN half is re-frozen. Re-reading the facts here would
+        // silently replace the ones captured when the overlay opened, so rows
+        // the reader is looking at would change verdict the moment a catalogue
+        // answered — which is the exact promise the frozen resolver exists to
+        // keep. The facts ride along untouched (`with_plugins` carries them),
+        // the same split the TUI settled on.
+        //
+        // Nothing to do with the help closed, and this event also fires for the
+        // palette and the extension manager: the guard comes first so the
+        // common case does not rebuild a keymap-wide resolver for nobody.
+        if self.help.is_none() {
+            return;
+        }
         let base = help_view::GuiChords::new(
             self.resolver.effective(),
             self.viewer_resolver.effective(),
             norte_i18n::active(),
         );
+        let facts = self
+            .help_chords
+            .as_ref()
+            .map_or_else(|| self.help_facts(), help_view::GuiChords::facts);
         if let Some(view) = &mut self.help {
             view.set_plugins(plugins);
-            let frozen = view.freeze(&base, facts);
-            self.help_chords = Some(frozen);
+            self.help_chords = Some(view.freeze(&base, facts));
         }
     }
 
@@ -2586,9 +2615,17 @@ impl NorteGui {
         let Some(view) = &mut self.help else {
             return;
         };
+        // The footer's answer lives until the NEXT key, like the app's flash:
+        // it answers one question and must not outlive it.
+        view.status = None;
         let outcome = help_view::on_key(view, &ks.key, ks.key_char.as_deref(), &chords);
         match outcome {
-            help_view::HelpOutcome::None | help_view::HelpOutcome::Palette(_) => {}
+            help_view::HelpOutcome::None => {}
+            // `handoff` is the only producer of `Palette`, and it is handled
+            // above, before the modifier gate — the pure router cannot return
+            // it. Kept as an explicit arm rather than folded into `None` so a
+            // future producer has to decide what it means here.
+            help_view::HelpOutcome::Palette(_) => {}
             help_view::HelpOutcome::Close => self.close_help(),
             help_view::HelpOutcome::Run(key) => {
                 // Same dispatch the palette uses, built-in or plugin: one path,
@@ -2606,11 +2643,12 @@ impl NorteGui {
             }
             help_view::HelpOutcome::Blocked(reason) => {
                 // The dimming raised a question; this answers it in the same
-                // wording the context menu uses for the same veto.
-                self.flash = Some((
-                    norte_i18n::t(norte_frontend::availability::reason_key(reason)),
-                    false,
-                ));
+                // wording the context menu uses for the same veto — in the
+                // overlay's OWN footer, because the window-level flash is
+                // painted under this overlay's scrim.
+                view.status = Some(norte_i18n::t(norte_frontend::availability::reason_key(
+                    reason,
+                )));
             }
         }
         // The model moves the scroll and the focus in LINES, and only the
@@ -2638,6 +2676,24 @@ impl NorteGui {
             }
         }
         self.fetch_help_page();
+    }
+
+    /// Re-freezes the open help against the CURRENT facts, keeping its plugin
+    /// snapshot.
+    ///
+    /// Called where the panes are re-listed, and nowhere else. The freeze is
+    /// about the READER not moving the world, not about the world standing
+    /// still: two of the facts describe the entry under the cursor, and a task
+    /// finishing underneath the overlay re-lists both panes, so a page left
+    /// open would otherwise explain a selection that is gone.
+    fn refreeze_help_facts(&mut self) {
+        if self.help.is_none() {
+            return;
+        }
+        let facts = self.help_facts();
+        if let Some(chords) = self.help_chords.take() {
+            self.help_chords = Some(chords.with_facts(facts));
+        }
     }
 
     /// Closes the overlay and drops the frozen resolver with it — the two are
@@ -4717,6 +4773,54 @@ impl NorteGui {
             )
     }
 
+    /// Text of one sidebar row, or `None` for a row that must not be painted.
+    ///
+    /// The `None` is the whole point. A group header is named by
+    /// `help-group-{tag}`, and `norte_i18n::t` answers a MISSING message with the
+    /// id itself — so a tag with no catalogue entry paints a literal
+    /// `help-group-…` at the reader. That is not hypothetical: the model always
+    /// emits a group for the synthetic keyboard page (`KEYS_TAG`), and both
+    /// catalogues deliberately have no entry for it, because the row underneath
+    /// already wears that name. Suppressing the header is what the TUI does too
+    /// (`keys_only_group`).
+    ///
+    /// Answering `None` for ANY untranslated tag rather than for `keys` by name
+    /// means a future tag cannot regress into painting its id — and
+    /// `los_grupos_del_corpus_tienen_nombre_traducido` is what stops a corpus group
+    /// from disappearing silently instead.
+    #[must_use]
+    fn sidebar_label(row: &norte_frontend::help::SidebarRow) -> Option<String> {
+        match row {
+            norte_frontend::help::SidebarRow::Group { tag } => {
+                let id = format!("help-group-{tag}");
+                let text = norte_i18n::t(&id);
+                (text != id).then_some(text)
+            }
+            // The title verbatim: it is already the corpus' own, and a plugin's was
+            // masked at parse and made non-blank at ingest.
+            norte_frontend::help::SidebarRow::Topic { title, .. } => Some(title.clone()),
+        }
+    }
+
+    /// First sidebar row to paint so that `cursor` stays inside a window of
+    /// `height` rows.
+    ///
+    /// The minimum that keeps the selection visible: it scrolls only when the
+    /// cursor would leave the window, so a reader arrowing through a short list
+    /// never sees the list move under them.
+    #[must_use]
+    fn sidebar_offset(cursor: usize, len: usize, height: usize) -> usize {
+        if height == 0 || len <= height {
+            return 0;
+        }
+        let last_start = len - height;
+        // Keep the cursor one row inside the bottom edge where there is room, so
+        // the next row down is visible before it is selected.
+        cursor
+            .saturating_sub(height.saturating_sub(1))
+            .min(last_start)
+    }
+
     /// Colour of a help fragment's theme role, resolved against the active
     /// theme with the same fallbacks the rest of the chrome uses.
     ///
@@ -4764,7 +4868,28 @@ impl NorteGui {
                 chrome.border_unfocus
             })
             .font(self.fonts.ui.clone());
-        for (i, row) in state.rows().iter().enumerate() {
+        // The sidebar scrolls like the body does: with enough plugin pages the
+        // list outgrows the panel, and without an offset the cursor walks off
+        // the bottom while the body keeps changing for a row nobody can see.
+        let side_first =
+            Self::sidebar_offset(state.cursor(), state.rows().len(), Self::HELP_BODY_ROWS);
+        for (i, row) in state
+            .rows()
+            .iter()
+            .enumerate()
+            .skip(side_first)
+            .take(Self::HELP_BODY_ROWS)
+        {
+            let Some(label) = Self::sidebar_label(row) else {
+                // A group header with nothing to say: today only the synthetic
+                // keyboard group, whose single member already wears the same
+                // name. Skipped rather than painted, because `help-group-keys`
+                // does not exist in either catalogue — `norte_i18n::t` answers
+                // a missing message with the id, so this row shipped a literal
+                // `help-group-keys` to every reader who pressed F1. The TUI
+                // suppresses the same header structurally (`keys_only_group`).
+                continue;
+            };
             let selected = i == state.cursor() && focus_topics;
             let mut r = div()
                 .id(format!("help-topic-{i}"))
@@ -4774,21 +4899,13 @@ impl NorteGui {
                 .rounded(px(sp::RADIUS_ROW))
                 .truncate();
             r = match row {
-                // A group header is not selectable, and its Fluent key comes
-                // from the corpus' own tag (`help-group-{tag}`) — an unknown
-                // tag resolves to the id, which is visible in the sidebar and
-                // therefore caught by the corpus tests rather than by a reader.
-                norte_frontend::help::SidebarRow::Group { tag } => r
+                norte_frontend::help::SidebarRow::Group { .. } => r
                     .text_color(chrome.quick_fg)
-                    .child(SharedString::from(norte_i18n::t(&format!(
-                        "help-group-{tag}"
-                    )))),
-                // The title verbatim: it is already the corpus' own, and a
-                // plugin's was masked at parse.
-                norte_frontend::help::SidebarRow::Topic { title, .. } => r
+                    .child(SharedString::from(label)),
+                norte_frontend::help::SidebarRow::Topic { .. } => r
                     .pl(px(sp::S * 2.0))
                     .aria_selected(selected)
-                    .child(SharedString::from(title.clone())),
+                    .child(SharedString::from(label)),
             };
             if selected {
                 r = r.bg(chrome.sel_bg);
@@ -4810,21 +4927,43 @@ impl NorteGui {
             .px(px(sp::S))
             .font(self.fonts.ui.clone());
         // `body_scroll` is what `pagedown` and `reveal` move; skipping is how
-        // an `overflow_hidden` column honours it (GPUI wraps and clips, so the
-        // model's line count and the painted rows are the same unit only
-        // approximately — see `HELP_BODY_ROWS`).
-        for line in self.help_body(view).into_iter().skip(state.body_scroll()) {
+        // an `overflow_hidden` column honours it. The `take` is not cosmetic:
+        // `Limits::untrusted()` bounds a plugin page at 64 KiB and 512 blocks
+        // but NOT at line count — one bullet block of 64 KiB is ~16 000 lines —
+        // and without a bound every one of them was laid out and shaped by GPUI
+        // on every frame the overlay stayed open. The window height is already
+        // known, so the bound already existed; it simply was not applied.
+        for line in self
+            .help_body(view)
+            .into_iter()
+            .skip(state.body_scroll())
+            .take(Self::HELP_BODY_ROWS)
+        {
             let dim = line.dim;
             let focused = !focus_topics && line.action == Some(state.action_cursor());
             let mut l = div()
                 .flex()
                 .flex_row()
+                .flex_wrap()
                 .items_center()
-                .gap(px(sp::XS))
+                // NO `gap` between the fragments of one line: they are the
+                // pieces of a running sentence (`Block::Paragraph` emits one
+                // line whose spans split at every `code`/`**strong**`), and a
+                // gap inserts word boundaries the author never wrote. The
+                // spacing that belongs there is already inside `Span::Text`.
                 .pl(px(f32::from(line.indent) * sp::S))
                 .rounded(px(sp::RADIUS_ROW));
             if line.mono {
                 l = l.font(self.fonts.mono.clone());
+            }
+            if line.badge {
+                // The provenance line is the ONE thing on screen that tells
+                // third-party prose from norte's own, so it does not read as
+                // one more `Role::Info` paragraph: it gets the page's width to
+                // itself and a rule under it. Painting it identically to the
+                // body is how a page that says "from an extension" still looks
+                // like something norte wrote.
+                l = l.border_b_1().border_color(chrome.border_unfocus);
             }
             if focused {
                 l = l.bg(chrome.sel_bg);
@@ -4890,9 +5029,23 @@ impl NorteGui {
                     .px(px(sp::S))
                     .py(px(1.0)) // sub-XS: acento fino de una línea
                     .bg(chrome.quick_bg)
-                    .text_color(chrome.quick_fg)
+                    // The footer says why a dimmed row did nothing when there
+                    // is something to say, and the key hints otherwise. INSIDE
+                    // the frame on purpose: the window-level flash is painted
+                    // before this overlay's scrim, so a reason routed there was
+                    // covered by 67% black the moment it appeared — dimming
+                    // that cannot explain itself is decorative.
+                    .text_color(if view.status.is_some() {
+                        chrome.err_fg
+                    } else {
+                        chrome.quick_fg
+                    })
                     .truncate()
-                    .child(SharedString::from(norte_i18n::t("help-hint-gui"))),
+                    .child(SharedString::from(
+                        view.status
+                            .clone()
+                            .unwrap_or_else(|| norte_i18n::t("help-hint-gui")),
+                    )),
             )
     }
 
@@ -4907,10 +5060,14 @@ impl NorteGui {
     fn help_body(&self, view: &help_view::HelpView) -> Vec<help_render::HelpLine> {
         let state = &view.state;
         if state.current().as_str() == norte_frontend::help::KEYS_ID {
+            // MONOSPACED, because the cheatsheet is a TABLE: its chord column
+            // is padded with spaces (`help_view::keys_lines`), and space
+            // padding under a proportional face aligns nothing — the labels
+            // came out ragged, which is the one thing a key sheet must not be.
             return view
                 .keys_lines
                 .iter()
-                .map(|l| help_render::HelpLine::text(l.clone()))
+                .map(|l| help_render::HelpLine::mono_text(l.clone()))
                 .collect();
         }
         let Some(chords) = &self.help_chords else {
@@ -9193,6 +9350,85 @@ mod tests {
                     "{name}/{role:?} paints the help in its own background"
                 );
             }
+        }
+    }
+
+    /// H3f review (rust BLOCKER 1): the sidebar never paints a Fluent id.
+    ///
+    /// The model always emits a group for the synthetic keyboard page, and
+    /// neither catalogue defines `help-group-keys` — deliberately, because the
+    /// row underneath already wears that name. `norte_i18n::t` answers a
+    /// missing message WITH THE ID, so the overlay shipped a literal
+    /// `help-group-keys` to every reader who pressed F1, in both locales, with
+    /// no plugin and no filter involved.
+    #[test]
+    fn la_barra_lateral_jamas_pinta_un_id_de_fluent() {
+        let state = norte_frontend::help::HelpState::new(
+            norte_i18n::active(),
+            norte_i18n::t("help-topic-keys"),
+        );
+        for row in state.rows() {
+            let Some(label) = crate::NorteGui::sidebar_label(row) else {
+                continue;
+            };
+            assert!(
+                !label.starts_with("help-group-"),
+                "raw Fluent id in the sidebar: {label:?}"
+            );
+        }
+        // The keyboard group in particular is suppressed, not translated.
+        let keys_group = state.rows().iter().find(
+            |r| matches!(r, norte_frontend::help::SidebarRow::Group { tag } if tag == "keys"),
+        );
+        assert!(keys_group.is_some(), "the model still emits that group");
+        assert_eq!(
+            keys_group.and_then(crate::NorteGui::sidebar_label),
+            None,
+            "and the painter drops it"
+        );
+    }
+
+    /// The other half of the same rule: a group the CORPUS declares must have a
+    /// name, or suppressing untranslated tags would make it vanish silently
+    /// instead of painting its id.
+    #[test]
+    fn los_grupos_del_corpus_tienen_nombre_traducido() {
+        for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
+            for topic in norte_help::topics(lang) {
+                let Some(tag) = topic.tags.first() else {
+                    continue;
+                };
+                let id = format!("help-group-{tag}");
+                assert_ne!(
+                    norte_i18n::t_in(lang, &id),
+                    id,
+                    "{lang:?}: group {tag:?} of topic {} has no name",
+                    topic.id.as_str()
+                );
+            }
+        }
+    }
+
+    /// H3f review (rust MAJOR 7): the sidebar scrolls, so the selection cannot
+    /// leave the window while the body keeps changing for a row nobody sees.
+    #[test]
+    fn la_barra_lateral_mantiene_el_cursor_a_la_vista() {
+        const H: usize = 5;
+        // Short list: never scrolls.
+        assert_eq!(crate::NorteGui::sidebar_offset(3, 4, H), 0);
+        // Cursor inside the first window: still anchored at the top.
+        assert_eq!(crate::NorteGui::sidebar_offset(4, 20, H), 0);
+        // Past it: the window follows, one row at a time.
+        assert_eq!(crate::NorteGui::sidebar_offset(5, 20, H), 1);
+        // At the end: clamped so the last window is full, never past it.
+        assert_eq!(crate::NorteGui::sidebar_offset(19, 20, H), 15);
+        // And the invariant that matters, for every position of a long list.
+        for cursor in 0..40 {
+            let first = crate::NorteGui::sidebar_offset(cursor, 40, H);
+            assert!(
+                (first..first + H).contains(&cursor),
+                "cursor {cursor} fell outside the window starting at {first}"
+            );
         }
     }
 

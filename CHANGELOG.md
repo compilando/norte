@@ -25,11 +25,25 @@ independently through `PROTOCOL_VERSION`.
   moment the overlay opened rather than a fresher set: a page whose verdicts
   shift while you read it disagrees with itself, and `⏎` on a dimmed row now
   says why instead of quietly doing nothing.
+  What the reviews caught, since it is the part worth recording: the sidebar
+  shipped a literal `help-group-keys` to every reader who pressed `F1` — the
+  model always emits that group and neither catalogue names it, on purpose, so
+  the painter had to drop it rather than translate it; a plugin whose name is
+  blank *after* masking bought itself a nameless row in the Extensions group,
+  which is the H3e fix this frontend was missing; plugin ids arrived unvalidated
+  where the terminal app drops them; a blank command title sent the row back to
+  wearing its raw dispatch key; the reason a dimmed row gave on `⏎` was painted
+  underneath the overlay's own scrim; the search box could be entered and never
+  left, so letters meant for the page silently edited it; and the body laid out
+  every line of a document, not the ones on screen.
   Deliberately not done: `F1` in the GUI always opens the index, because the GUI
   has no dialog-context table to map a screen onto a page (the terminal app's
   contextual `F1` is H3c); the GUI's palette still does not offer `F1` on a row
-  to open that command's page; and the help is unreachable while the viewer is
-  open, since the viewer captures every key through its own resolver.
+  to open that command's page; the help is unreachable while the viewer is open,
+  since the viewer captures every key through its own resolver; `Esc` closes in
+  every configuration but `F1` still closes even when `app.help` is rebound
+  elsewhere; and a keymap reload landing while the page is open does not reach
+  it.
 - **Plugins bring their own help page (H3e):** a plugin can ship a `help.md`
   next to its `plugin.toml`, and it becomes one more page in the help overlay,
   under an *Extensions* group, with the plugin's own commands as rows you can

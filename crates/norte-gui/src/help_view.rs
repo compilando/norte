@@ -31,11 +31,17 @@ pub const NO_IMPEDIMENT: Facts = Facts {
 };
 
 /// Cap, in CHARS, on a string a plugin chose before it is painted — the GUI
-/// twin of the TUI's `app::plugin_label`.
+/// twin of the TUI's `app::plugin_label`, and deliberately the SAME number
+/// (`PLUGIN_NAME_WIRE_CAP`, itself a mirror of the manifest's
+/// `COMMAND_TITLE_MAX_CHARS`). A legitimate 100-char command title complete in
+/// one frontend and elided in the other is one product describing one command
+/// two ways.
 ///
 /// `mask_terminal_hazards` neutralises hazards and does NOT cap length, and a
-/// kilometric name is its own denial of service against a one-line row.
-const PLUGIN_TEXT_CAP: usize = 64;
+/// kilometric name is its own denial of service against a one-line row. Note
+/// what this is NOT: a bound on painted WIDTH. Sixty-four full-width glyphs
+/// pass it and occupy twice the columns of Latin — see `help_render`'s badge.
+const PLUGIN_TEXT_CAP: usize = 120;
 
 /// What a plugin-contributed dispatch key starts with.
 ///
@@ -148,6 +154,16 @@ impl GuiChords {
     /// carries the other's fields over, so a re-freeze while the overlay is
     /// open cannot drop the snapshot and dim every plugin row halfway down a
     /// page, nor take their names away.
+    /// The facts this resolver was frozen against.
+    ///
+    /// Exists so a re-freeze can CARRY THEM OVER rather than re-read them: the
+    /// plugin catalogue answering is not a reason for the page's verdicts to
+    /// change under the reader.
+    #[must_use]
+    pub fn facts(&self) -> Facts {
+        self.facts
+    }
+
     #[must_use]
     pub fn with_plugins(&self, active: BTreeSet<String>, titles: HashMap<String, String>) -> Self {
         Self {
@@ -259,6 +275,13 @@ pub struct HelpView {
     active: BTreeSet<String>,
     /// `plugin:{id}:{command}` to the manifest's title, from the same snapshot.
     titles: HashMap<String, String>,
+    /// One line the overlay's own footer shows instead of the key hints —
+    /// today, why the row under the cursor did nothing.
+    ///
+    /// It lives HERE and not in the app's window-level flash because the flash
+    /// is painted before this overlay's scrim and would be covered by it. It is
+    /// cleared by the next key, so it never outlives the question it answers.
+    pub status: Option<String>,
 }
 
 impl HelpView {
@@ -277,6 +300,7 @@ impl HelpView {
             publishers: HashMap::new(),
             active: BTreeSet::new(),
             titles: HashMap::new(),
+            status: None,
         }
     }
 
@@ -293,19 +317,57 @@ impl HelpView {
         self.titles.clear();
         let mut nodes = Vec::with_capacity(plugins.len());
         for p in plugins {
+            // The id is the one field that has to be RIGHT rather than merely
+            // paintable: it becomes a `TopicId`, it is folded by the sidebar
+            // filter on every keystroke, and it goes back out as the argument
+            // of `plugin.help`. An announcement this process had no business
+            // receiving is DROPPED, never rewritten — masking an id is not
+            // injective, so two of them could collapse onto one row, and
+            // `is_valid_plugin_id` is also the only thing bounding its length.
+            if !norte_core::is_valid_plugin_id(&p.id) {
+                continue;
+            }
             let active = p.approved && p.enabled;
             if active {
                 self.active.insert(p.id.clone());
             }
-            self.publishers
-                .insert(p.id.clone(), plugin_text(&p.publisher));
-            for c in &p.commands {
-                self.titles
-                    .insert(format!("plugin:{}:{}", p.id, c.id), plugin_text(&c.title));
+            // A blank publisher is NO attribution, not an empty one: the model
+            // must not carry a claim the badge would then have to re-filter.
+            let publisher = plugin_text(&p.publisher);
+            if !norte_help::is_blank_id(&publisher) {
+                self.publishers.insert(p.id.clone(), publisher);
             }
+            for c in &p.commands {
+                // A blank title is DROPPED so `norte_help::label_or_id` reaches
+                // its own fallback. Storing it would satisfy the `get` in
+                // `GuiChords::label` and return "", which that function treats
+                // as "no label" — and the fallback then paints the RAW
+                // `plugin:{id}:{command}` dispatch key, which is exactly what
+                // the snapshot exists to prevent. The manifest bounds a title's
+                // length and never its content, so this is reachable by an
+                // honest plugin, not only a hostile one.
+                let title = plugin_text(&c.title);
+                if norte_help::is_blank_id(&title) {
+                    continue;
+                }
+                self.titles
+                    .insert(format!("plugin:{}:{}", p.id, c.id), title);
+            }
+            // A name that is blank AFTER masking — `""`, or U+3164 HANGUL
+            // FILLER, which is neither a hazard nor whitespace — falls back to
+            // the id. Without it the Extensions group grows a nameless row the
+            // reader can arrow onto and open: a full third-party page with
+            // nothing on screen attributing it to anyone, at the moment they
+            // are deciding whether to approve that plugin (the H3e fix, which
+            // this frontend was missing).
+            let named = plugin_text(&p.name);
             nodes.push(norte_frontend::help::PluginNode {
                 id: p.id.clone(),
-                title: plugin_text(&p.name),
+                title: if norte_help::is_blank_id(&named) {
+                    plugin_text(&p.id)
+                } else {
+                    named
+                },
                 has_help: p.has_help,
                 active,
             });
@@ -411,6 +473,17 @@ const PAGE: usize = 10;
 /// `settings_view::on_key` and `palette_view::on_key` established for a GUI
 /// overlay; unlike the TUI there is no `dialog` keymap to resolve through).
 ///
+/// # `f1` closes even when `app.help` no longer opens with it
+///
+/// A known and unfixed asymmetry. H3f put `app.help` into the GUI's command
+/// table, so the key that OPENS the help is now whatever the user bound it to,
+/// while the key that closes it is spelled here. Rebind `app.help` to `f2` and
+/// you get `f2` to open and both `f2` (nothing) and `f1` (close) afterwards.
+/// The TUI resolves its close through the keymap — "what is hardcoded is the
+/// meaning, not the key" — and this overlay should too; doing it needs the
+/// resolver in here, which is the whole reason this module is pure. `Esc`
+/// closes in every configuration, which is what the footer promises.
+///
 /// `chords` is the FROZEN resolver the open page was painted through
 /// ([`HelpView::freeze`]): Enter has to be answered by the verdict the reader
 /// can SEE, never by a fresher one that would run what the page shows dimmed.
@@ -423,6 +496,41 @@ pub fn on_key(
 ) -> HelpOutcome {
     use norte_frontend::help::{Action, Focus};
 
+    // The filter is a REGIME, not a flag. While it is open the keys that leave
+    // it must leave it, and nothing else may be routed as if it were closed:
+    // without this, a reader who typed `/cop`, opened the page and pressed `⇥`
+    // was still filtering, so every letter meant for the body silently edited
+    // the sidebar — which rebuilds the rows and can move the page out from
+    // under them. `Esc` here closes the BOX and keeps the text (the search is
+    // not undone); `Esc` outside it closes the overlay, which is what the
+    // footer advertises.
+    if view.state.filtering() {
+        match key {
+            "escape" | "enter" => {
+                view.state.end_filter();
+                return HelpOutcome::None;
+            }
+            "backspace" => {
+                view.state.backspace();
+                return HelpOutcome::None;
+            }
+            "up" => {
+                view.state.up();
+                return HelpOutcome::None;
+            }
+            "down" => {
+                view.state.down();
+                return HelpOutcome::None;
+            }
+            _ => {
+                if let Some(c) = crate::keys::typed_char(key, key_char) {
+                    view.state.push_char(c);
+                }
+                return HelpOutcome::None;
+            }
+        }
+    }
+
     match key {
         "escape" | "f1" => return HelpOutcome::Close,
         "tab" => view.state.toggle_focus(),
@@ -431,19 +539,12 @@ pub fn on_key(
         "pageup" => view.state.page_up(PAGE),
         "pagedown" => view.state.page_down(PAGE),
         "backspace" => {
-            // While filtering it erases; otherwise it walks the trail back. The
-            // order matters: `HelpState::backspace` is a no-op when the filter
-            // is closed, so asking it first and falling through would make one
-            // key mean two things at once.
-            if view.state.filtering() {
-                view.state.backspace();
-            } else {
-                // `false` = the trail was already at its root. Nothing to do:
-                // backspace on the first page is not a close (that is `Esc`),
-                // and a reader who lands on a page through `F1` never had a
-                // trail to walk back.
-                let _ = view.state.back();
-            }
+            // The filter regime above already claimed this key while the box is
+            // open, so here it always means the trail. `false` = already at the
+            // root: nothing to do. Backspace on the first page is not a close
+            // (that is `Esc`), and a reader put on a page by `F1` never had a
+            // trail to walk back.
+            let _ = view.state.back();
         }
         "enter" => {
             if view.state.focus() == Focus::Topics {
@@ -463,12 +564,11 @@ pub fn on_key(
             };
         }
         _ => {
-            if let Some(c) = crate::keys::typed_char(key, key_char) {
-                if view.state.filtering() {
-                    view.state.push_char(c);
-                } else if c == '/' {
-                    view.state.start_filter();
-                }
+            // Outside the filter regime a typed char means one thing only:
+            // `/` opens the box. Everything else is inert rather than swallowed
+            // into a filter nobody opened.
+            if crate::keys::typed_char(key, key_char) == Some('/') {
+                view.state.start_filter();
             }
         }
     }
@@ -638,6 +738,92 @@ mod tests {
         );
     }
 
+    /// H3f review (encoding H1 / rust MAJOR 3): the H3e fix the GUI was
+    /// missing. A name that is blank AFTER masking falls back to the id, so the
+    /// Extensions group cannot grow a row with no attribution on it — the row a
+    /// reader opens to decide whether to approve that very plugin.
+    ///
+    /// The blank comes from the shared corpus (`invisible_filler_blank`,
+    /// U+3164 HANGUL FILLER ×3), whose own `why` names this exact surface: it
+    /// is not a terminal hazard, so masking passes it through, and it is not
+    /// whitespace, so a `trim` check would too.
+    #[test]
+    fn un_nombre_en_blanco_cae_al_id_del_plugin() {
+        let filler = norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == "invisible_filler_blank")
+            .expect("la fixture del corpus existe");
+        let blank = String::from_utf8(filler.bytes).expect("la fixture es UTF-8");
+        for name in [blank.as_str(), "", "   "] {
+            let mut p = info("acme.ftp", true, true, true);
+            p.name = name.to_owned();
+            let mut view = HelpView::new(norte_i18n::Lang::En, Vec::new());
+            view.set_plugins(&[p]);
+            let titles: Vec<String> = view
+                .state
+                .rows()
+                .iter()
+                .filter_map(|r| match r {
+                    norte_frontend::help::SidebarRow::Topic { id, title }
+                        if id.as_str() == "acme.ftp" =>
+                    {
+                        Some(title.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                titles,
+                vec!["acme.ftp".to_owned()],
+                "a nameless row for name={name:?}"
+            );
+        }
+    }
+
+    /// H3f review (encoding M1 / rust MAJOR 2): an id this process had no
+    /// business receiving is DROPPED, never rewritten — it becomes a `TopicId`,
+    /// is folded by the filter on every keystroke, and goes back out as the
+    /// argument of `plugin.help`.
+    #[test]
+    fn un_id_invalido_no_entra_en_el_modelo() {
+        for bad in [
+            String::new(),
+            "has:colon".to_owned(),
+            "acme.\u{202e}ftp".to_owned(),
+            "a".repeat(4096),
+        ] {
+            let mut p = info("placeholder", true, true, true);
+            p.id = bad.clone();
+            let mut view = HelpView::new(norte_i18n::Lang::En, Vec::new());
+            view.set_plugins(&[p]);
+            assert!(
+                topic_ids(&view).iter().all(|id| *id != bad),
+                "id {bad:?} reached the sidebar"
+            );
+        }
+    }
+
+    /// H3f review (encoding M2): a blank command title must not satisfy the
+    /// snapshot lookup, because `norte_help::label_or_id` reads a blank label
+    /// as "no label" and falls back to painting the RAW dispatch key — which is
+    /// what the snapshot exists to prevent.
+    #[test]
+    fn un_titulo_de_comando_en_blanco_no_secuestra_la_etiqueta() {
+        let (browse, viewer) = effectives();
+        let mut p = info("acme.ftp", true, true, true);
+        p.commands[0].title = "\u{3164}".to_owned();
+        let mut view = HelpView::new(norte_i18n::Lang::En, Vec::new());
+        view.set_plugins(&[p]);
+        let r = view.freeze(
+            &GuiChords::new(&browse, &viewer, norte_i18n::Lang::En),
+            NO_IMPEDIMENT,
+        );
+        let key = "plugin:acme.ftp:greet";
+        // The masked, capped spelling of the key — the `label` fallback — and
+        // never the blank the manifest offered.
+        assert_eq!(r.label(key), plugin_text(key));
+    }
+
     #[test]
     fn claim_plugin_fetch_pregunta_una_sola_vez() {
         let mut view = HelpView::new(norte_i18n::Lang::En, Vec::new());
@@ -772,9 +958,21 @@ mod tests {
 
     #[test]
     fn enter_sobre_una_fila_ejecutable_despacha_el_mismo_id_que_la_paleta() {
+        let topic = norte_help::topic(norte_help::Lang::En, "copying").expect("corpus topic");
+        let first = topic.commands.first().expect("copying has command rows");
         let mut view = body_of("copying");
         match on_key(&mut view, "enter", None, &chords()) {
-            HelpOutcome::Run(cmd) => assert!(cmd.contains('.'), "a dispatch id: {cmd}"),
+            HelpOutcome::Run(cmd) => {
+                // The FOCUSED row, not merely something that looks like an id:
+                // the body cursor starts on the first action.
+                assert_eq!(&cmd, first);
+                // …and it is a key this frontend can actually dispatch, which
+                // is what "the same id as the palette" means.
+                assert!(
+                    crate::keymap::COMMANDS.contains(&cmd.as_str()),
+                    "{cmd} is not in the GUI's command table"
+                );
+            }
             other => panic!("expected Run, got {other:?}"),
         }
     }
@@ -807,6 +1005,52 @@ mod tests {
         assert_eq!(view.state.focus(), norte_frontend::help::Focus::Topics);
         let _ = on_key(&mut view, "tab", None, &c);
         assert_eq!(view.state.focus(), norte_frontend::help::Focus::Body);
+    }
+
+    /// H3f review (rust MAJOR 6): the filter is a regime. `Esc` inside it
+    /// closes the BOX and keeps the text; outside it closes the overlay. And
+    /// once it is closed, a typed letter must not go on editing a search the
+    /// reader already left — that silently rebuilt the sidebar under the page
+    /// they were reading.
+    #[test]
+    fn el_filtro_se_abandona_sin_cerrar_la_ayuda() {
+        let c = chords();
+        let mut view = HelpView::new(norte_i18n::Lang::En, Vec::new());
+        let _ = on_key(&mut view, "/", Some("/"), &c);
+        for ch in "cop".chars() {
+            let s = ch.to_string();
+            let _ = on_key(&mut view, &s, Some(&s), &c);
+        }
+        assert!(matches!(
+            on_key(&mut view, "escape", None, &c),
+            HelpOutcome::None
+        ));
+        assert!(!view.state.filtering(), "Esc left the box");
+        assert_eq!(view.state.filter_raw(), "cop", "…and kept the search");
+        // A letter now is inert, not more filter text.
+        let _ = on_key(&mut view, "x", Some("x"), &c);
+        assert_eq!(view.state.filter_raw(), "cop");
+        // And Esc again closes the overlay, as the footer advertises.
+        assert!(matches!(
+            on_key(&mut view, "escape", None, &c),
+            HelpOutcome::Close
+        ));
+    }
+
+    /// Enter inside the box also leaves it (and does NOT open a topic behind
+    /// the reader's back).
+    #[test]
+    fn enter_en_el_filtro_solo_cierra_la_caja() {
+        let c = chords();
+        let mut view = HelpView::new(norte_i18n::Lang::En, Vec::new());
+        let before = view.state.current().clone();
+        let _ = on_key(&mut view, "/", Some("/"), &c);
+        assert!(matches!(
+            on_key(&mut view, "enter", None, &c),
+            HelpOutcome::None
+        ));
+        assert!(!view.state.filtering());
+        assert_eq!(view.state.current(), &before);
     }
 
     #[test]
