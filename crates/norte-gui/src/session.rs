@@ -157,6 +157,13 @@ pub enum SessionCmd {
         /// Id del plugin.
         id: String,
     },
+    /// El `help.md` de UN plugin, BAJO DEMANDA (H3f, `plugin.help`, 0.34.0):
+    /// 64 KiB por plugin no pueden viajar en cada `plugin.list`, así que la
+    /// página se pide cuando el lector abre su nodo en la ayuda.
+    PluginHelp {
+        /// Id del plugin cuya página acaba de abrirse.
+        id: String,
+    },
     /// Resúmenes de `[config]` de TODOS los plugins aprobados+activados
     /// (G3c) — alimenta la sección Plugins del overlay de ajustes
     /// (`plugins_list` + un `plugin.get_config` por plugin, resuelto aquí
@@ -372,6 +379,20 @@ pub enum SessionEvent {
     },
     /// Fallo al pedir `plugin.get_config` (G3c) — mensaje ya renderizable.
     PluginConfigFailed(String),
+    /// Respuesta a [`SessionCmd::PluginHelp`] (H3f).
+    ///
+    /// El markdown NO está enmascarado: lleva verbatim lo que el plugin
+    /// escribiera. Se parsea con `norte_help::parse_untrusted`, que enmascara
+    /// al construir el modelo; nunca se pinta ni se loguea en crudo. NO hay
+    /// variante de fallo: una página que no llega deja la página vacía (ver el
+    /// brazo del comando), que es mejor respuesta que un error encima de la
+    /// ayuda.
+    PluginHelpReady {
+        /// Plugin al que pertenece la página.
+        id: String,
+        /// El resultado ya acotado que vino del wire.
+        result: norte_proto::methods::PluginHelpResult,
+    },
     /// Resúmenes de `[config]` para la sección Plugins del overlay de
     /// ajustes (G3c): respuesta a `PluginConfigSummaries`.
     PluginConfigSummariesReady(Vec<norte_frontend::settings::PluginConfigSummary>),
@@ -592,6 +613,21 @@ pub fn spawn(
                                     let _ =
                                         tx.send(SessionEvent::PluginConfigFailed(format!("{e}")));
                                 }
+                            }
+                        });
+                    }
+                    SessionCmd::PluginHelp { id } => {
+                        let backend = Backend::Remote(remote.clone());
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            // Un fallo es SILENCIOSO a propósito: una página
+                            // vacía con el nombre del plugin es mejor que un
+                            // error encima del overlay de ayuda, y un daemon
+                            // N-1 sin el handler cae aquí también
+                            // (`plugin.help` es 0.34.0). Cerrar y reabrir la
+                            // ayuda es el reintento del lector.
+                            if let Ok(result) = backend.plugin_help(&id).await {
+                                let _ = tx.send(SessionEvent::PluginHelpReady { id, result });
                             }
                         });
                     }

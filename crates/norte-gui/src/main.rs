@@ -101,6 +101,8 @@ mod columns_view;
 mod context_menu;
 mod effects;
 mod extensions_view;
+mod help_render;
+mod help_view;
 mod keymap;
 mod keys;
 mod modal;
@@ -352,6 +354,17 @@ struct NorteGui {
     /// same z-order and key-capture slot as the palette (modal wins).
     /// Esc discards; Enter applies in-session and persists (TUI parity).
     columns_picker: Option<columns_view::ColumnsView>,
+    /// The help overlay (H3f, `F1`): `Some` while open, same z-order and
+    /// key-capture slot as the palette (modal still wins).
+    help: Option<help_view::HelpView>,
+    /// The resolver the open help page was painted through, FROZEN when the
+    /// overlay opened ([`help_view::HelpView::freeze`]).
+    ///
+    /// Beside the view rather than inside it because Enter has to be answered
+    /// by the verdict the reader can SEE: a row dimmed under the facts of the
+    /// moment the page opened must not become runnable because a task finished
+    /// underneath the overlay. It dies with the view.
+    help_chords: Option<help_view::GuiChords>,
     /// Transient one-line notice `(message, is_error)` — today only the
     /// picker's save outcome (#108 7c; the TUI uses `app.message`, the
     /// settings status only renders inside its own view). Cleared on the
@@ -1027,6 +1040,8 @@ impl NorteGui {
                     settings_view: None,
                     palette: None,
                     columns_picker: None,
+                    help: None,
+                    help_chords: None,
                     flash: None,
                     mouse: MouseState::default(),
                     context_menu: None,
@@ -1113,6 +1128,8 @@ impl NorteGui {
                     settings_view: None,
                     palette: None,
                     columns_picker: None,
+                    help: None,
+                    help_chords: None,
                     flash: None,
                     mouse: MouseState::default(),
                     context_menu: None,
@@ -1502,6 +1519,9 @@ impl NorteGui {
                     if let Some(palette) = &mut self.palette {
                         palette.extend(norte_frontend::palette::plugin_rows(&plugins));
                     }
+                    // H3f: the help's Extensions group and its `plugin:` rows
+                    // come from this same catalogue.
+                    self.install_help_plugins(&plugins);
                     if let Some(ext) = &mut self.extensions {
                         ext.plugins = plugins;
                         ext.errors = errors;
@@ -1541,6 +1561,14 @@ impl NorteGui {
             }
             SessionEvent::PluginConfigFailed(msg) => {
                 self.errors[self.focus] = Some(msg);
+            }
+            SessionEvent::PluginHelpReady { id, result } => {
+                // Late answers are harmless: the reader may have closed the
+                // overlay, or moved to another page, while it was in flight —
+                // installing a page nobody is looking at costs a parse.
+                if let Some(view) = &mut self.help {
+                    view.install_plugin_page(&id, &result);
+                }
             }
             SessionEvent::PluginConfigSummariesReady(summaries) => {
                 self.plugin_config_summaries = summaries;
@@ -2024,6 +2052,7 @@ impl NorteGui {
             "app.settings" => self.open_settings(),
             "app.palette" => self.open_palette(),
             "app.extensions" => self.open_extensions(),
+            "app.help" => self.open_help(),
             "pane.columns" => self.open_columns_picker(),
             "pane.switch" => self.focus = 1 - self.focus,
             "cursor.up" => self.panes[f].cursor_up(),
@@ -2443,6 +2472,195 @@ impl NorteGui {
                     self.run_command(&key, cx);
                 }
             }
+        }
+    }
+
+    /// Body rows the help overlay shows at its fixed height, for the scroll
+    /// arithmetic the model does in LINES.
+    ///
+    /// An estimate, deliberately: the panel is 520 px tall with a ~20 px line,
+    /// and GPUI wraps long prose into rows this count cannot see. Being off
+    /// costs a page key that scrolls slightly less than a screenful, or a
+    /// revealed row landing a line or two from the edge — never a row the
+    /// reader cannot reach, because `reveal` only ever scrolls TOWARDS it.
+    const HELP_BODY_ROWS: usize = 24;
+
+    /// The facts the help overlay is frozen against: the same table the
+    /// context menu builds from, seeded from the FOCUSED pane's cursor.
+    ///
+    /// Same syntactic read-only criterion the context menu uses — the GUI does
+    /// not cache `Capabilities` per connection, so the scheme is the answer
+    /// here and not a fallback. An empty pane has nothing under the cursor, and
+    /// the honest answer there is "no impediment known" rather than a made-up
+    /// entry kind: the table is a list of known impediments, and it fails open.
+    fn help_facts(&self) -> norte_frontend::availability::Facts {
+        let f = self.focus;
+        let Some(entry) = self.panes[f].entries().get(self.panes[f].cursor()) else {
+            return help_view::NO_IMPEDIMENT;
+        };
+        let count = self.panes[f].marks_len().max(1);
+        context_menu::facts_for(
+            entry.kind,
+            count,
+            context_menu::ReadOnly {
+                source: scheme_is_read_only(self.panes[f].dir().scheme()),
+                dest: scheme_is_read_only(self.panes[1 - f].dir().scheme()),
+            },
+        )
+    }
+
+    /// Opens the help on the index (`app.help`, `F1`, H3f).
+    ///
+    /// The resolver is frozen HERE, with the facts of this moment: a page whose
+    /// rows change verdict while the reader walks it disagrees with itself, and
+    /// Enter would then run something the page shows dimmed.
+    ///
+    /// The plugin catalogue is asked for async, exactly as the palette does:
+    /// the corpus pages are there instantly and the Extensions group fills in
+    /// when `plugin.list` answers. A catalogue that never arrives leaves that
+    /// group empty and every `plugin:` row dimmed — the honest answer to "I
+    /// could not find out", and fail-closed is the direction to fail in.
+    fn open_help(&mut self) {
+        let lang = norte_i18n::active();
+        let view = help_view::HelpView::new(
+            lang,
+            help_view::keys_lines(self.resolver.effective(), self.viewer_resolver.effective()),
+        );
+        let base = help_view::GuiChords::new(
+            self.resolver.effective(),
+            self.viewer_resolver.effective(),
+            lang,
+        );
+        self.help_chords = Some(view.freeze(&base, self.help_facts()));
+        self.help = Some(view);
+        // The catalogue arrives async (`SessionEvent::PluginsListed`), which
+        // re-installs the snapshot and RE-FREEZES the resolver. The GUI does
+        // not cache a plugin list of its own — the palette and the extension
+        // manager ask for it when they open, and so does this.
+        let _ = self.cmds.send(SessionCmd::PluginsList);
+    }
+
+    /// Re-installs the plugin snapshot on the open help and re-freezes its
+    /// resolver — the answer to the `plugin.list` [`Self::open_help`] sent.
+    ///
+    /// Both halves together: a view holding a fresh catalogue beside a
+    /// resolver that never saw it would offer rows for plugins it then dims,
+    /// and name their commands by their raw dispatch keys.
+    fn install_help_plugins(&mut self, plugins: &[norte_proto::methods::PluginInfo]) {
+        let facts = self.help_facts();
+        let base = help_view::GuiChords::new(
+            self.resolver.effective(),
+            self.viewer_resolver.effective(),
+            norte_i18n::active(),
+        );
+        if let Some(view) = &mut self.help {
+            view.set_plugins(plugins);
+            let frozen = view.freeze(&base, facts);
+            self.help_chords = Some(frozen);
+        }
+    }
+
+    /// Handles ONE key with the help open — same ctrl/alt/platform gate as
+    /// [`Self::on_palette_key`], with `ctrl+p` intercepted BEFORE it as the
+    /// bridge into the palette (the pure router never sees a modifier).
+    fn on_help_key(&mut self, ks: &gpui::Keystroke, cx: &mut Context<Self>) {
+        if ks.modifiers.control && ks.key == "p" {
+            let out = self.help.as_ref().map(help_view::handoff);
+            if let Some(help_view::HelpOutcome::Palette(filter)) = out {
+                self.close_help();
+                self.open_palette();
+                if let Some(p) = &mut self.palette {
+                    for c in filter.chars() {
+                        p.push_char(c);
+                    }
+                }
+            }
+            return;
+        }
+        if ks.modifiers.control || ks.modifiers.alt || ks.modifiers.platform {
+            return;
+        }
+        let Some(chords) = self.help_chords.clone() else {
+            return;
+        };
+        let Some(view) = &mut self.help else {
+            return;
+        };
+        let outcome = help_view::on_key(view, &ks.key, ks.key_char.as_deref(), &chords);
+        match outcome {
+            help_view::HelpOutcome::None | help_view::HelpOutcome::Palette(_) => {}
+            help_view::HelpOutcome::Close => self.close_help(),
+            help_view::HelpOutcome::Run(key) => {
+                // Same dispatch the palette uses, built-in or plugin: one path,
+                // so nothing here can bypass policy or plugin approval.
+                self.close_help();
+                if let Some((id, command)) = parse_plugin_palette_key(&key) {
+                    let _ = self.cmds.send(SessionCmd::PluginRunCommand {
+                        id: id.to_owned(),
+                        command: command.to_owned(),
+                        arg: String::new(),
+                    });
+                } else {
+                    self.run_command(&key, cx);
+                }
+            }
+            help_view::HelpOutcome::Blocked(reason) => {
+                // The dimming raised a question; this answers it in the same
+                // wording the context menu uses for the same veto.
+                self.flash = Some((
+                    norte_i18n::t(norte_frontend::availability::reason_key(reason)),
+                    false,
+                ));
+            }
+        }
+        // The model moves the scroll and the focus in LINES, and only the
+        // painter knows how many there are: re-establish both invariants after
+        // every key, the way the TUI's `HelpView::refresh` does before every
+        // paint. Computed after the borrow above ends.
+        let (total, focused_line) = self.help.as_ref().map_or((0, None), |v| {
+            let lines = self.help_body(v);
+            // Which LINE the focused action landed on is a fact of the layout,
+            // so ask the layout rather than deriving it from the action index:
+            // prose between two rows makes the two disagree.
+            let focused = (v.state.focus() == norte_frontend::help::Focus::Body)
+                .then(|| {
+                    lines
+                        .iter()
+                        .position(|l| l.action == Some(v.state.action_cursor()))
+                })
+                .flatten();
+            (lines.len(), focused)
+        });
+        if let Some(view) = &mut self.help {
+            view.state.clamp_scroll(total);
+            if let Some(line) = focused_line {
+                view.state.reveal(line, Self::HELP_BODY_ROWS);
+            }
+        }
+        self.fetch_help_page();
+    }
+
+    /// Closes the overlay and drops the frozen resolver with it — the two are
+    /// one photograph, and a resolver outliving its page would freeze the NEXT
+    /// one against facts nobody looked at.
+    fn close_help(&mut self) {
+        self.help = None;
+        self.help_chords = None;
+    }
+
+    /// Asks for the page of the plugin node the reader just opened, once
+    /// ([`help_view::HelpView::claim_plugin_fetch`]).
+    ///
+    /// On demand: 64 KiB per plugin must not ride every `plugin.list`. The
+    /// claim is what makes this callable after every key without re-asking a
+    /// daemon that cannot answer.
+    fn fetch_help_page(&mut self) {
+        if let Some(id) = self
+            .help
+            .as_mut()
+            .and_then(help_view::HelpView::claim_plugin_fetch)
+        {
+            let _ = self.cmds.send(SessionCmd::PluginHelp { id });
         }
     }
 
@@ -2936,6 +3154,17 @@ impl NorteGui {
         // paleta, captura fija — nada cae al dual-pane de abajo.
         if self.columns_picker.is_some() {
             self.on_columns_key(ks, cx);
+            cx.notify();
+            return;
+        }
+
+        // Ayuda abierta (`F1`, H3f): overlay con la MISMA prioridad de
+        // captura que la paleta — el modal, comprobado arriba, sigue ganando.
+        // Va ANTES de la paleta porque `ctrl+p` desde la ayuda ABRE la paleta
+        // (el puente del filtro), y con el orden inverso esa tecla nunca
+        // llegaría aquí.
+        if self.help.is_some() {
+            self.on_help_key(ks, cx);
             cx.notify();
             return;
         }
@@ -4486,6 +4715,210 @@ impl NorteGui {
                     .truncate()
                     .child(SharedString::from(norte_i18n::t("palette-hint"))),
             )
+    }
+
+    /// Colour of a help fragment's theme role, resolved against the active
+    /// theme with the same fallbacks the rest of the chrome uses.
+    ///
+    /// A dimmed row overrides it wholesale with `quick_fg`: the reason it
+    /// carries is prose about why nothing will happen, and painting half of
+    /// that row in the key colour would keep promising a key.
+    fn help_role_color(&self, role: Role, chrome: &ChromeColors) -> gpui::Rgba {
+        match role {
+            Role::Title => chrome.header_fg,
+            Role::Mark => chrome_mark_fg(&self.theme),
+            Role::Info => chrome.quick_fg,
+            Role::Warning => chrome.err_fg,
+            _ => chrome.fg,
+        }
+    }
+
+    /// Paints the help overlay (H3f, `F1`): sidebar, body, filter header and
+    /// hint footer — the same visual language as the palette, because it is
+    /// the same model at a lower density and not a second design.
+    ///
+    /// Nothing here masks: every string arrives already safe (see
+    /// `help_render`'s module doc, and `help_view::plugin_text` for the
+    /// snapshot's strings).
+    fn render_help(
+        &self,
+        view: &help_view::HelpView,
+        chrome: &ChromeColors,
+    ) -> impl IntoElement + use<> {
+        let state = &view.state;
+        let focus_topics = state.focus() == norte_frontend::help::Focus::Topics;
+
+        // ── sidebar ──────────────────────────────────────────────────────
+        let mut side = div()
+            .id("help-topics")
+            .role(gpui::Role::List)
+            .aria_label(norte_i18n::t("help-title"))
+            .w(px(200.0))
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .border_r_1()
+            .border_color(if focus_topics {
+                chrome.border_focus
+            } else {
+                chrome.border_unfocus
+            })
+            .font(self.fonts.ui.clone());
+        for (i, row) in state.rows().iter().enumerate() {
+            let selected = i == state.cursor() && focus_topics;
+            let mut r = div()
+                .id(format!("help-topic-{i}"))
+                .role(gpui::Role::ListItem)
+                .px(px(sp::S))
+                .py(px(1.0)) // sub-XS: acento fino de una línea
+                .rounded(px(sp::RADIUS_ROW))
+                .truncate();
+            r = match row {
+                // A group header is not selectable, and its Fluent key comes
+                // from the corpus' own tag (`help-group-{tag}`) — an unknown
+                // tag resolves to the id, which is visible in the sidebar and
+                // therefore caught by the corpus tests rather than by a reader.
+                norte_frontend::help::SidebarRow::Group { tag } => r
+                    .text_color(chrome.quick_fg)
+                    .child(SharedString::from(norte_i18n::t(&format!(
+                        "help-group-{tag}"
+                    )))),
+                // The title verbatim: it is already the corpus' own, and a
+                // plugin's was masked at parse.
+                norte_frontend::help::SidebarRow::Topic { title, .. } => r
+                    .pl(px(sp::S * 2.0))
+                    .aria_selected(selected)
+                    .child(SharedString::from(title.clone())),
+            };
+            if selected {
+                r = r.bg(chrome.sel_bg);
+                if let Some(fg) = chrome.sel_fg {
+                    r = r.text_color(fg);
+                }
+            }
+            side = side.child(r);
+        }
+
+        // ── body ─────────────────────────────────────────────────────────
+        let mut body = div()
+            .id("help-body")
+            .role(gpui::Role::Document)
+            .flex_1()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .px(px(sp::S))
+            .font(self.fonts.ui.clone());
+        // `body_scroll` is what `pagedown` and `reveal` move; skipping is how
+        // an `overflow_hidden` column honours it (GPUI wraps and clips, so the
+        // model's line count and the painted rows are the same unit only
+        // approximately — see `HELP_BODY_ROWS`).
+        for line in self.help_body(view).into_iter().skip(state.body_scroll()) {
+            let dim = line.dim;
+            let focused = !focus_topics && line.action == Some(state.action_cursor());
+            let mut l = div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(sp::XS))
+                .pl(px(f32::from(line.indent) * sp::S))
+                .rounded(px(sp::RADIUS_ROW));
+            if line.mono {
+                l = l.font(self.fonts.mono.clone());
+            }
+            if focused {
+                l = l.bg(chrome.sel_bg);
+            }
+            for span in &line.spans {
+                let color = if dim {
+                    chrome.quick_fg
+                } else {
+                    self.help_role_color(span.role, chrome)
+                };
+                l = l.child(
+                    div()
+                        .text_color(color)
+                        .child(SharedString::from(span.text.clone())),
+                );
+            }
+            // A blank line still occupies one: it is the paragraph separation
+            // the renderer emitted, and collapsing it would run the prose
+            // together.
+            if line.spans.is_empty() {
+                l = l.child(div().child(SharedString::from(" ")));
+            }
+            body = body.child(l);
+        }
+
+        // ── frame ────────────────────────────────────────────────────────
+        let header = if state.filtering() {
+            format!("⌕ {}", state.filter_display())
+        } else {
+            norte_i18n::t("help-title")
+        };
+        div()
+            .id("help-view")
+            .role(gpui::Role::Document)
+            .aria_label(norte_i18n::t("help-title"))
+            .w(px(720.0))
+            .h(px(520.0))
+            .flex()
+            .flex_col()
+            .border_2()
+            .border_color(chrome.border_focus)
+            .bg(chrome.pane_bg_focus)
+            .child(
+                div()
+                    .px(px(sp::S))
+                    .py(px(sp::XS))
+                    .bg(chrome.header_bg)
+                    .text_color(chrome.header_fg)
+                    .truncate()
+                    .child(SharedString::from(header)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_row()
+                    .overflow_hidden()
+                    .child(side)
+                    .child(body),
+            )
+            .child(
+                div()
+                    .px(px(sp::S))
+                    .py(px(1.0)) // sub-XS: acento fino de una línea
+                    .bg(chrome.quick_bg)
+                    .text_color(chrome.quick_fg)
+                    .truncate()
+                    .child(SharedString::from(norte_i18n::t("help-hint-gui"))),
+            )
+    }
+
+    /// The lines of the open page.
+    ///
+    /// Three cases, and the third is the one worth stating: the synthetic
+    /// keyboard page comes from the generated cheatsheet, a corpus or plugin
+    /// page from the renderer — and anything else (a plugin page still in
+    /// flight) is EMPTY, never the cheatsheet. Nothing else on screen tells the
+    /// two apart, and the whole keymap appearing under an extension's name
+    /// would read as that extension's own documentation.
+    fn help_body(&self, view: &help_view::HelpView) -> Vec<help_render::HelpLine> {
+        let state = &view.state;
+        if state.current().as_str() == norte_frontend::help::KEYS_ID {
+            return view
+                .keys_lines
+                .iter()
+                .map(|l| help_render::HelpLine::text(l.clone()))
+                .collect();
+        }
+        let Some(chords) = &self.help_chords else {
+            return Vec::new();
+        };
+        state.current_topic().map_or_else(Vec::new, |topic| {
+            help_render::render_topic(topic, state.lang(), chords)
+        })
     }
 
     /// Pinta el picker de columnas (#108 7c, `alt+c`): mismo idioma visual
@@ -6794,6 +7227,23 @@ impl Render for NorteGui {
             );
         }
 
+        // Overlay de la ayuda (H3f, `F1`): mismo patrón que la paleta —
+        // scrim + panel centrado, pintado antes del modal, que sigue ganando
+        // encima (`on_key` ya lo impide por construcción).
+        if let Some(view) = &self.help {
+            root = root.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .occlude()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(rgba(0x000000aa))
+                    .child(self.render_help(view, &chrome)),
+            );
+        }
+
         // Overlay del picker de columnas (#108 7c): mismo patrón que la
         // paleta, pintado antes del modal (el modal sigue ganando encima).
         // `.occlude()`: a diferencia de los scrims heredados, este SÍ come
@@ -8707,6 +9157,59 @@ mod tests {
     /// pasa a ser el del tema `default.toml` (consistente con la TUI) — NO el
     /// aspecto histórico pre-tema. Valores leídos directamente de
     /// `crates/norte-theme/presets/default.toml`.
+    /// H3f: the four roles the help paints with resolve to a VISIBLE colour in
+    /// every shipped theme, and never to the page's own background.
+    ///
+    /// A help page painted in the background colour is a page the reader cannot
+    /// read, and it fails silently — the overlay opens, the keys work, and the
+    /// text is not there. The check is per THEME because each one declares its
+    /// own roles: a preset that forgets `warning` falls back through `chrome`,
+    /// and this is what says the fallback is still legible.
+    #[test]
+    fn los_roles_de_la_ayuda_son_visibles_en_todos_los_temas() {
+        for name in norte_theme::preset_names() {
+            let theme = norte_theme::Theme::preset(name)
+                .expect("preset parseable")
+                .expect("preset existente");
+            let c = ChromeColors::resolve(&theme);
+            let bg = c.pane_bg_focus;
+            for role in [
+                norte_theme::Role::Title,
+                norte_theme::Role::Mark,
+                norte_theme::Role::Info,
+                norte_theme::Role::Warning,
+            ] {
+                // Same resolution `NorteGui::help_role_color` performs, minus
+                // the `self` it needs — kept in sync by using the same helpers.
+                let fg = match role {
+                    norte_theme::Role::Title => c.header_fg,
+                    norte_theme::Role::Mark => chrome_mark_fg(&theme),
+                    norte_theme::Role::Info => c.quick_fg,
+                    _ => c.err_fg,
+                };
+                assert_ne!(
+                    (fg.r, fg.g, fg.b),
+                    (bg.r, bg.g, bg.b),
+                    "{name}/{role:?} paints the help in its own background"
+                );
+            }
+        }
+    }
+
+    /// H3f: the GUI's help footer is a fixed string, so nothing generates it
+    /// and nothing would notice it missing from a locale until a reader saw a
+    /// raw `help-hint-gui` in the overlay.
+    #[test]
+    fn el_pie_de_la_ayuda_existe_en_ambos_locales() {
+        for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
+            assert_ne!(
+                norte_i18n::t_in(lang, "help-hint-gui"),
+                "help-hint-gui",
+                "{lang:?}"
+            );
+        }
+    }
+
     #[test]
     fn tema_default_reproduce_el_tema_default() {
         let t = norte_theme::Theme::preset_default();
