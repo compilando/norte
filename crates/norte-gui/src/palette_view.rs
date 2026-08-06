@@ -23,16 +23,8 @@ use norte_frontend::keymap::Effective;
 use norte_frontend::palette::{Row, first_chord};
 use norte_i18n::t;
 
-use crate::keymap::COMMANDS;
+use crate::keymap::{COMMANDS, help_id};
 use crate::keys::typed_char;
-
-/// Fluent id for a command's help text: `help-cmd-<dashed>` — same
-/// derivation the TUI's `help`/`palette` modules use (shared `help-cmd-*`
-/// catalog, `norte-i18n`).
-#[must_use]
-fn help_id(cmd: &str) -> String {
-    format!("help-cmd-{}", cmd.replace('.', "-"))
-}
 
 /// Built-in rows: one per [`COMMANDS`] entry, chord from the first
 /// resolving binding of `browse` (the GUI has no separate `viewer`

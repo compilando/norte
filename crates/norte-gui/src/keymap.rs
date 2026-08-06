@@ -26,6 +26,12 @@ pub const COMMANDS: &[&str] = &[
     // `ctrl+p` so the shared binding reaches `app.palette` unshadowed.
     "app.palette",
     "app.extensions",
+    // H3f: the three shared presets have bound `f1` → `app.help` since H3a,
+    // but this table did not list it — and `Effective::build_for_subset`
+    // filters by it, so the binding was dropped and F1 did nothing, silently.
+    // No supplement needed: the chord comes from the shared catalogue, like
+    // `app.palette`/`app.extensions`.
+    "app.help",
     "pane.switch",
     "cursor.up",
     "cursor.down",
@@ -109,6 +115,20 @@ pub const KNOWN_PRESETS: &[&str] = norte_frontend::keymap::presets::NAMES;
 #[must_use]
 pub fn is_known_preset(name: &str) -> bool {
     norte_frontend::keymap::presets::source(name).is_some()
+}
+
+/// Fluent id for a command's short help text: `help-cmd-<dashed>` — the same
+/// derivation the TUI's `help`/`palette` modules use over the shared
+/// `help-cmd-*` catalogue.
+///
+/// Here rather than in one of its two callers (`palette_view`, `help_view`, and
+/// the keyboard cheatsheet they share) because the derivation is a fact about
+/// the KEYMAP vocabulary: two copies could drift, and a drifted id resolves to
+/// nothing, which `norte_i18n::t` answers with the id itself — a raw
+/// `help-cmd-…` painted at the reader.
+#[must_use]
+pub fn help_id(cmd: &str) -> String {
+    format!("help-cmd-{}", cmd.replace('.', "-"))
 }
 
 /// Preset por nombre, tomado del catálogo COMPARTIDO
@@ -414,6 +434,25 @@ mod tests {
     #[test]
     fn build_effectives_preset_only_no_panica() {
         let _ = build_effectives_preset_only("orthodox");
+    }
+
+    /// H3f: the bug this closes is one of OMISSION — the presets bound `f1`
+    /// and the GUI filtered the binding out, so the key did nothing and
+    /// nothing said so. Pinned in all three presets, because the drop
+    /// happened in `build_for_subset` and would happen again for any of them.
+    #[test]
+    fn app_help_esta_en_commands_y_los_presets_lo_alcanzan() {
+        assert!(
+            COMMANDS.contains(&"app.help"),
+            "F1 was being dropped silently"
+        );
+        for preset in KNOWN_PRESETS {
+            let (browse, _) = build_effectives_preset_only(preset);
+            assert!(
+                browse.bindings().iter().any(|(_, cmd)| *cmd == "app.help"),
+                "{preset}: the shared preset binds f1 → app.help, and COMMANDS is what lets it through"
+            );
+        }
     }
 
     /// Diseño C2/G0 (preset compartido canónico): el preset `vim` construye
