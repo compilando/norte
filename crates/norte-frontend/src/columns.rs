@@ -136,6 +136,7 @@ mod validated_plugin_requests_tests {
                     header: (*c).to_owned(),
                 })
                 .collect(),
+            has_help: false,
         }
     }
 

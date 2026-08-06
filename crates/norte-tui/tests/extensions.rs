@@ -23,6 +23,7 @@ fn plugin(id: &str, name: &str, category: &str, caps: &[&str], approved: bool) -
         description: None,
         commands: Vec::new(),
         columns: Vec::new(),
+        has_help: false,
     }
 }
 

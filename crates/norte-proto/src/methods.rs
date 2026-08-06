@@ -281,7 +281,17 @@ use crate::{
 /// variante `TaskKind::Embed`. Ventana N=0.33.x / N-1=0.32.x: un cliente
 /// 0.32 jamás llama a los métodos nuevos y degrada el kind nuevo a
 /// `TaskKind::Unknown` por su `serde(other)` — nada que gatear en emisión.
-pub const PROTOCOL_VERSION: &str = "0.33.0";
+/// 0.34.0 (H3e): la ayuda de los PLUGINS por el wire. [`PluginInfo`] gana
+/// `has_help: bool` (discovery barato, `skip_serializing_if` sobre `false` —
+/// un plugin sin ayuda produce el MISMO payload que en 0.33) y aparece el
+/// método [`PLUGIN_HELP`] ([`PluginHelpParams`] → [`PluginHelpResult`]), que
+/// entrega el `help.md` ya acotado y decodificado más las banderas
+/// `truncated`/`lossy` que el receptor no puede deducir. Ventana
+/// N=0.34.x / N-1=0.33.x: un cliente 0.33 ignora el campo desconocido, no
+/// emite `has_help` (default `false` aquí) y jamás llama al método nuevo; un
+/// daemon 0.33 responde `MethodNotFound`, que el frontend trata como «este
+/// plugin no tiene página», nunca como un fallo.
+pub const PROTOCOL_VERSION: &str = "0.34.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -575,6 +585,18 @@ pub const PLUGIN_GET_CONFIG: &str = "plugin.get_config";
 /// los ajustes de un plugin son datos de USUARIO, un agente no los edita por
 /// su cuenta.
 pub const PLUGIN_SET_CONFIG: &str = "plugin.set_config";
+/// `plugin.help` — la página de ayuda de UN plugin (H3e, 0.34.0), BAJO
+/// DEMANDA: el host devuelve el `help.md` ya ACOTADO (tope de bytes de
+/// `norte_help::Limits::untrusted`) y ya decodificado a UTF-8 válido, con
+/// dos banderas que cuentan qué pasó al acotarlo. ABIERTO como
+/// [`PLUGIN_LIST`]: leer documentación no consiente nada.
+///
+/// El texto es de TERCEROS y no está enmascarado: el frontend lo vuelve a
+/// parsear con `norte_help::parse_untrusted`, que enmascara al construir el
+/// modelo. Parsear en los dos lados es deliberado — host-side para que
+/// `norte doctor` y el catálogo puedan reportar problemas sin un frontend
+/// delante, cliente-side porque el wire lleva TEXTO, no un árbol.
+pub const PLUGIN_HELP: &str = "plugin.help";
 /// `rpc.cancel` — notificación client→server (#72): retira la request en
 /// vuelo cuyo `id` JSON-RPC se indica. Best-effort y SIN respuesta: la
 /// confirmación real es que la request cancelada responde con su desenlace
@@ -1574,6 +1596,23 @@ pub struct PluginInfo {
     /// deserializar aquí (mismo criterio aditivo que `commands` en 0.26.0).
     #[serde(default)]
     pub columns: Vec<PluginColumnInfo>,
+    /// `true` si el plugin trae un `help.md` junto a su `plugin.toml`
+    /// (H3e, 0.34.0). Es DISCOVERY barato: decide si el nodo del plugin
+    /// aparece en la barra de temas de la ayuda, y evita que 64 KiB por
+    /// plugin viajen en cada `plugin.list` — el contenido se pide aparte
+    /// con [`PLUGIN_HELP`], bajo demanda.
+    ///
+    /// El host lo calcula con UN `is_file` al descubrir: no lee el fichero,
+    /// no lo parsea, y por tanto un `help.md` presente pero ilegible o vacío
+    /// sale `true` aquí y se degrada al pedirlo (markdown vacío), que es la
+    /// dirección correcta — la ayuda es cosmética y jamás tumba un plugin.
+    ///
+    /// `skip_serializing_if` sobre `false`: un plugin sin ayuda produce un
+    /// payload IDÉNTICO byte a byte al de 0.33 (mismo criterio aditivo
+    /// fuerte que los `attrs` de 0.30). Un peer N-1 que construye su propio
+    /// `PluginInfo` no lo emite y aquí se toma por `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_help: bool,
 }
 
 /// Un directorio de plugin que NO se pudo cargar (elemento de
@@ -1879,6 +1918,51 @@ pub struct PluginColumnValuesResult {
 pub struct PluginGetConfigParams {
     /// Id del plugin cuyo esquema `[config]` se consulta.
     pub id: String,
+}
+
+/// Params de [`PLUGIN_HELP`].
+///
+/// ```
+/// use norte_proto::methods::PluginHelpParams;
+/// let p: PluginHelpParams = serde_json::from_str(r#"{"id":"acme.ftp"}"#).unwrap();
+/// assert_eq!(p.id, "acme.ftp");
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginHelpParams {
+    /// Id del plugin cuyo `help.md` se pide. Es una CLAVE DE BÚSQUEDA
+    /// contra el catálogo: el host la resuelve contra los plugins que
+    /// descubrió y jamás la compone en una ruta de fichero.
+    pub id: String,
+}
+
+/// Result de [`PLUGIN_HELP`]: el `help.md` acotado y qué se perdió al
+/// acotarlo.
+///
+/// ```
+/// use norte_proto::methods::PluginHelpResult;
+/// let r: PluginHelpResult =
+///     serde_json::from_str(r#"{"markdown":"body","truncated":true,"lossy":false}"#)
+///         .unwrap();
+/// assert!(r.truncated && !r.lossy);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginHelpResult {
+    /// El `help.md` del plugin, ya acotado y ya UTF-8 VÁLIDO (el host
+    /// decodifica y sustituye lo irrecuperable). Sin `help.md` legible:
+    /// cadena vacía, nunca un error — la ayuda es cosmética.
+    pub markdown: String,
+    /// El fichero superaba el tope y se cortó. Viaja porque el receptor NO
+    /// puede deducirlo: el texto le llega ya corto, así que su propio parseo
+    /// saldría limpio y la insignia — la mitigación entera frente a un
+    /// `help.md` hostil — se apagaría en silencio.
+    #[serde(default)]
+    pub truncated: bool,
+    /// Algún byte no decodificó bajo ninguna lectura y salió `U+FFFD`.
+    /// Viaja por la misma razón que `truncated`.
+    #[serde(default)]
+    pub lossy: bool,
 }
 
 /// Una clave `[config.<key>]` del esquema de un plugin, esquema + valor

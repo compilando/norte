@@ -1749,6 +1749,42 @@
       ],
       "type": "object"
     },
+    "PluginHelpParams": {
+      "description": "Params de [`PLUGIN_HELP`].\n\n```\nuse norte_proto::methods::PluginHelpParams;\nlet p: PluginHelpParams = serde_json::from_str(r#\"{\"id\":\"acme.ftp\"}\"#).unwrap();\nassert_eq!(p.id, \"acme.ftp\");\n```",
+      "properties": {
+        "id": {
+          "description": "Id del plugin cuyo `help.md` se pide. Es una CLAVE DE BÚSQUEDA\ncontra el catálogo: el host la resuelve contra los plugins que\ndescubrió y jamás la compone en una ruta de fichero.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "PluginHelpResult": {
+      "description": "Result de [`PLUGIN_HELP`]: el `help.md` acotado y qué se perdió al\nacotarlo.\n\n```\nuse norte_proto::methods::PluginHelpResult;\nlet r: PluginHelpResult =\n    serde_json::from_str(r#\"{\"markdown\":\"body\",\"truncated\":true,\"lossy\":false}\"#)\n        .unwrap();\nassert!(r.truncated && !r.lossy);\n```",
+      "properties": {
+        "lossy": {
+          "default": false,
+          "description": "Algún byte no decodificó bajo ninguna lectura y salió `U+FFFD`.\nViaja por la misma razón que `truncated`.",
+          "type": "boolean"
+        },
+        "markdown": {
+          "description": "El `help.md` del plugin, ya acotado y ya UTF-8 VÁLIDO (el host\ndecodifica y sustituye lo irrecuperable). Sin `help.md` legible:\ncadena vacía, nunca un error — la ayuda es cosmética.",
+          "type": "string"
+        },
+        "truncated": {
+          "default": false,
+          "description": "El fichero superaba el tope y se cortó. Viaja porque el receptor NO\npuede deducirlo: el texto le llega ya corto, así que su propio parseo\nsaldría limpio y la insignia — la mitigación entera frente a un\n`help.md` hostil — se apagaría en silencio.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "markdown"
+      ],
+      "type": "object"
+    },
     "PluginInfo": {
       "description": "Un plugin descubierto (elemento de [`PluginListResult::plugins`], M4-P3).",
       "properties": {
@@ -1792,6 +1828,10 @@
         },
         "enabled": {
           "description": "`true` si un humano lo tiene activado.",
+          "type": "boolean"
+        },
+        "has_help": {
+          "description": "`true` si el plugin trae un `help.md` junto a su `plugin.toml`\n(H3e, 0.34.0). Es DISCOVERY barato: decide si el nodo del plugin\naparece en la barra de temas de la ayuda, y evita que 64 KiB por\nplugin viajen en cada `plugin.list` — el contenido se pide aparte\ncon [`PLUGIN_HELP`], bajo demanda.\n\nEl host lo calcula con UN `is_file` al descubrir: no lee el fichero,\nno lo parsea, y por tanto un `help.md` presente pero ilegible o vacío\nsale `true` aquí y se degrada al pedirlo (markdown vacío), que es la\ndirección correcta — la ayuda es cosmética y jamás tumba un plugin.\n\n`skip_serializing_if` sobre `false`: un plugin sin ayuda produce un\npayload IDÉNTICO byte a byte al de 0.33 (mismo criterio aditivo\nfuerte que los `attrs` de 0.30). Un peer N-1 que construye su propio\n`PluginInfo` no lo emite y aquí se toma por `false`.",
           "type": "boolean"
         },
         "id": {
@@ -2982,6 +3022,12 @@
     "plugin_get_config_result": {
       "$ref": "#/$defs/PluginGetConfigResult"
     },
+    "plugin_help_params": {
+      "$ref": "#/$defs/PluginHelpParams"
+    },
+    "plugin_help_result": {
+      "$ref": "#/$defs/PluginHelpResult"
+    },
     "plugin_info": {
       "$ref": "#/$defs/PluginInfo"
     },
@@ -3183,6 +3229,8 @@
     "plugin_decorations",
     "plugin_get_config_params",
     "plugin_get_config_result",
+    "plugin_help_params",
+    "plugin_help_result",
     "plugin_info",
     "plugin_list_params",
     "plugin_list_result",

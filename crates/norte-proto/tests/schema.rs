@@ -76,6 +76,8 @@ struct ProtocolSchema {
     plugin_decorations: PluginDecorations,
     plugin_get_config_params: PluginGetConfigParams,
     plugin_get_config_result: PluginGetConfigResult,
+    plugin_help_params: PluginHelpParams,
+    plugin_help_result: PluginHelpResult,
     plugin_info: PluginInfo,
     plugin_list_params: PluginListParams,
     plugin_list_result: PluginListResult,

@@ -452,8 +452,9 @@ fn golden_methods() {
     // 98 → 101 en 0.32.0: + ai_rename_plan_params/result/result_empty (M4-IA,
     // ADR 0031). 101 → 106 en 0.33.0: + index_embed_params,
     // index_search_semantic_params(/_no_root)/result y semantic_hit (M4-IA-2,
-    // ADR 0031 A3).
-    assert_eq!(fixtures.len(), 106, "[methods.json] fixtures sin caso Rust");
+    // ADR 0031 A3). 106 → 110 en 0.34.0: + plugin_info_with_help,
+    // plugin_help_params y plugin_help_result(/_flags) (H3e).
+    assert_eq!(fixtures.len(), 110, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `ai.*` (0.32.0, M4-IA, ADR 0031): plan de rename revisable.
@@ -612,6 +613,58 @@ fn check_methods_plugin(fixtures: &BTreeMap<String, Value>) {
     check_methods_plugin_exec(fixtures);
     check_methods_plugin_data_out_v2(fixtures);
     check_methods_plugin_config(fixtures);
+    check_methods_plugin_help(fixtures);
+}
+
+/// Casos de `plugin.help` (H3e, 0.34.0): el `has_help` de [`PluginInfo`] y
+/// los dos tipos del método. Función propia por el límite de líneas de
+/// `check_methods_plugin_info`, cuyos goldens NO cambian — que sigan byte a
+/// byte iguales es justo lo que demuestra que el campo es aditivo fuerte.
+fn check_methods_plugin_help(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{PluginHelpParams, PluginHelpResult, PluginInfo};
+    check_one(
+        fixtures,
+        "plugin_info_with_help",
+        &PluginInfo {
+            id: "acme.ftp".to_owned(),
+            name: "FTP".to_owned(),
+            publisher: "ACME".to_owned(),
+            version: "0.1.0".to_owned(),
+            category: "provider".to_owned(),
+            capabilities: vec!["fs-read".to_owned()],
+            approved: true,
+            enabled: true,
+            description: None,
+            commands: Vec::new(),
+            columns: Vec::new(),
+            has_help: true,
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_help_params",
+        &PluginHelpParams {
+            id: "acme.ftp".to_owned(),
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_help_result",
+        &PluginHelpResult {
+            markdown: "+++\ntitle = \"FTP\"\n+++\nBody.".to_owned(),
+            truncated: false,
+            lossy: false,
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_help_result_flags",
+        &PluginHelpResult {
+            markdown: "cut".to_owned(),
+            truncated: true,
+            lossy: true,
+        },
+    );
 }
 
 /// Casos de [`PluginInfo`]/[`PluginCommandInfo`] (P1, 0.26.0): el shape sin
@@ -653,6 +706,7 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
             description: None,
             commands: vec![],
             columns: vec![],
+            has_help: false,
         },
     );
     // (P1/G3c) description + commands + columns POBLADOS: golden nuevo, no
@@ -684,6 +738,7 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
                 id: "git-status".into(),
                 header: "Git".into(),
             }],
+            has_help: false,
         },
     );
     check_one(
@@ -702,6 +757,7 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
                 description: None,
                 commands: vec![],
                 columns: vec![],
+                has_help: false,
             }],
             errors: vec![PluginLoadError {
                 dir: "/plugins/broken".into(),
@@ -1826,7 +1882,10 @@ fn method_names_frozen() {
     assert_eq!(methods::INDEX_EMBED, "index.embed");
     assert_eq!(methods::INDEX_SEARCH_SEMANTIC, "index.search_semantic");
     assert_eq!(methods::INDEX_SEMANTIC_MAX_K, 100);
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.33.0");
+    // 0.34.0 (H3e): plugin.help — la página de ayuda de UN plugin bajo
+    // demanda; PluginInfo gana has_help (discovery barato, sin método nuevo).
+    assert_eq!(methods::PLUGIN_HELP, "plugin.help");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.34.0");
 }
 
 #[test]

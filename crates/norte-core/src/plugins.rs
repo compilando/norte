@@ -447,6 +447,11 @@ impl PluginRegistry {
                             header: c.header.clone(),
                         })
                         .collect(),
+                    // (H3e, 0.34.0) todavía sin cablear: el catálogo aún no
+                    // mira si hay un `help.md` junto al manifiesto. `false` es
+                    // el default honesto mientras tanto — "no hay página" —, y
+                    // la Task 3 de H3e lo sustituye por el valor real.
+                    has_help: false,
                 }
             })
             .collect();

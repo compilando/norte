@@ -257,6 +257,7 @@ mod tests {
             description: None,
             commands: Vec::new(),
             columns: Vec::new(),
+            has_help: false,
         }
     }
 

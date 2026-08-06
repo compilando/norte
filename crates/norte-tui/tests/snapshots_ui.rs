@@ -390,6 +390,7 @@ fn snapshot_extensions_80x24() {
             description: None,
             commands: Vec::new(),
             columns: Vec::new(),
+            has_help: false,
         }],
         errors: Vec::new(),
         cursor: 0,
@@ -434,6 +435,7 @@ fn snapshot_extensions_description_hostil_80x24() {
             description: Some(descripcion),
             commands: Vec::new(),
             columns: Vec::new(),
+            has_help: false,
         }],
         errors: Vec::new(),
         cursor: 0,
@@ -1630,6 +1632,7 @@ fn snapshot_palette_fila_de_plugin_hostil() {
             title: titulo,
         }],
         columns: Vec::new(),
+        has_help: false,
     };
     // Sin query: `plugin_rows` sobre UN plugin con UN comando ya deja una
     // sola fila — "filtrada a solo ella" por construcción, no por texto

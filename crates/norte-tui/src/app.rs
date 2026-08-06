@@ -1075,6 +1075,7 @@ mod clamp_plugin_descriptions_tests {
             description: description.map(str::to_owned),
             commands: Vec::new(),
             columns: Vec::new(),
+            has_help: false,
         }
     }
 
@@ -1525,6 +1526,7 @@ mod palette_tests {
                 title: "Greet loudly".into(),
             }],
             columns: Vec::new(),
+            has_help: false,
         };
         let mut all = rows();
         all.extend(crate::palette::plugin_rows(&[plugin]));

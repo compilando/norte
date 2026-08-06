@@ -899,11 +899,11 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.33.0 (M4-IA-2): acepta 0.33.x (N) y 0.32.x (N-1), rechaza 0.31.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.33.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.32.0"), "N-1");
+    // 0.34.0 (H3e): acepta 0.34.x (N) y 0.33.x (N-1), rechaza 0.32.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.34.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.33.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.31.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.32.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -964,6 +964,7 @@ fn plugin_types_roundtrip() {
             description: None,
             commands: vec![],
             columns: vec![],
+            has_help: false,
         }],
         errors: vec![PluginLoadError {
             dir: "/plugins/broken".into(),
@@ -1023,6 +1024,7 @@ fn plugin_info_none_description_omitted_on_wire() {
         description: None,
         commands: vec![],
         columns: vec![],
+        has_help: false,
     };
     let wire = serde_json::to_string(&info).unwrap();
     assert!(

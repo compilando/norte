@@ -4008,6 +4008,7 @@ mod plugin_description_line_tests {
             description: description.map(str::to_owned),
             commands: Vec::new(),
             columns: Vec::new(),
+            has_help: false,
         }
     }
 

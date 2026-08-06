@@ -302,6 +302,7 @@ mod tests {
                 title: "Greet".into(),
             }],
             columns: Vec::new(),
+            has_help: false,
         };
         v.extend(norte_frontend::palette::plugin_rows(&[plugin]));
         assert_eq!(v.rows().len(), before + 1);

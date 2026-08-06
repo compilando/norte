@@ -374,6 +374,19 @@
   "plugin_get_config_result_empty": {
     "keys": []
   },
+  "plugin_help_params": {
+    "id": "acme.ftp"
+  },
+  "plugin_help_result": {
+    "markdown": "+++\ntitle = \"FTP\"\n+++\nBody.",
+    "truncated": false,
+    "lossy": false
+  },
+  "plugin_help_result_flags": {
+    "markdown": "cut",
+    "truncated": true,
+    "lossy": true
+  },
   "plugin_info": {
     "approved": true,
     "capabilities": [
@@ -415,6 +428,21 @@
     "id": "org.norte.demo",
     "name": "Demo Previewer",
     "publisher": "norte",
+    "version": "0.1.0"
+  },
+  "plugin_info_with_help": {
+    "approved": true,
+    "capabilities": [
+      "fs-read"
+    ],
+    "category": "provider",
+    "columns": [],
+    "commands": [],
+    "enabled": true,
+    "has_help": true,
+    "id": "acme.ftp",
+    "name": "FTP",
+    "publisher": "ACME",
     "version": "0.1.0"
   },
   "plugin_list_params": {},
