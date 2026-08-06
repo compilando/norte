@@ -296,13 +296,9 @@ use crate::{
 /// `VERSION_MISMATCH` en `initialize`, antes de despachar método alguno (el
 /// mismo razonamiento que el bump 0.30.0 deja escrito arriba).
 ///
-/// Este bump es SOLO de wire, y a diferencia del de 0.30.0 la ausencia NO es
-/// aquí una respuesta válida: mientras el daemon no cablee el handler
-/// (H3e T4), `plugin.help` responde `MethodNotFound` a un peer de su MISMA
-/// versión, y `plugin.list` emite `has_help: false` fijo (H3e T3). Ambas son
-/// lagunas de esta ventana, no el contrato: quien llame durante ella debe
-/// tratar el `MethodNotFound` como «este plugin no tiene página», nunca como
-/// un fallo.
+/// Quien reciba `MethodNotFound` a un `plugin.help` debe tratarlo como «este
+/// plugin no tiene página», nunca como un fallo: es exactamente lo que
+/// contesta un daemon 0.33, y la ayuda es cosmética.
 pub const PROTOCOL_VERSION: &str = "0.34.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
@@ -1614,12 +1610,17 @@ pub struct PluginInfo {
     /// plugin viajen en cada `plugin.list` — el contenido se pide aparte
     /// con [`PLUGIN_HELP`], bajo demanda.
     ///
-    /// El host DEBE calcularlo con UN `is_file` al descubrir: no lee el
-    /// fichero, no lo parsea, y por tanto un `help.md` presente pero ilegible
-    /// o vacío sale `true` aquí y se degrada al pedirlo (markdown vacío), que
-    /// es la dirección correcta — la ayuda es cosmética y jamás tumba un
-    /// plugin. Eso es el CONTRATO; el daemon de 0.34.0 todavía emite `false`
-    /// fijo, ver el bump en [`PROTOCOL_VERSION`].
+    /// El host NO lee el fichero ni lo parsea, así que un `help.md` presente
+    /// pero ilegible o vacío sale `true` aquí y se degrada al pedirlo (markdown
+    /// vacío), que es la dirección correcta — la ayuda es cosmética y jamás
+    /// tumba un plugin.
+    ///
+    /// Lo que el host DEBE hacer es calcularlo con la MISMA guarda que aplica
+    /// al servir [`PLUGIN_HELP`], no con una comprobación de existencia más
+    /// laxa. Si no, el par (`has_help: true`, `markdown: ""`) le dice a quien
+    /// llama «esa ruta existe y es un fichero regular» sobre un fichero que el
+    /// host se niega a servir — un oráculo de rutas montado con dos métodos
+    /// abiertos, ninguno gateado por policy.
     ///
     /// `skip_serializing_if` sobre `false`: un plugin sin ayuda produce un
     /// payload IDÉNTICO byte a byte al de 0.33 (mismo criterio aditivo
@@ -1972,6 +1973,18 @@ pub struct PluginHelpResult {
     /// contrato ya permite decir. En emisión NO se omite nunca (sin
     /// `skip_serializing_if`), así que ausente y vacío solo se distinguen de
     /// ENTRADA, y ahí significan lo mismo.
+    ///
+    /// El tope acota ESTE TEXTO, no solo los bytes del fichero: un byte puede
+    /// decodificar a tres (windows-1252 `0x80` → `U+20AC`), así que una fuente
+    /// que cabía justa daría el triple del tope si solo se acotara la fuente.
+    /// El host corta las dos veces y `truncated` cubre ambos cortes, de modo
+    /// que un receptor puede dimensionar por el tope documentado y los dos
+    /// lados ven la MISMA página.
+    ///
+    /// NO está enmascarado: lleva verbatim los peligros de terminal que el
+    /// plugin escribiera (ESC, controles C0, anulaciones bidi). Se parsea con
+    /// `norte_help::parse_untrusted`, que enmascara al construir el modelo;
+    /// nunca se pinta ni se loguea en crudo.
     #[serde(default)]
     pub markdown: String,
     /// El fichero superaba el tope y se cortó. Viaja porque el receptor NO

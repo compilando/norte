@@ -66,7 +66,7 @@ pub use corpus::{topic, topic_for_command, topic_for_context, topic_ids, topics}
 pub use model::{Availability, Block, Callout, CommandRow, Origin, Reason, Span, Topic, TopicId}; // task 2
 pub use norte_i18n::Lang;
 pub use parse::{
-    Limits, ParseError, Parsed, Sanitized, foreign_commands, parse_trusted, parse_untrusted,
-    sanitize_untrusted,
+    CutAndDecoded, Limits, ParseError, Parsed, cut_and_decode_untrusted, foreign_commands,
+    parse_trusted, parse_untrusted,
 }; // tasks 4, 5 and 6; H3e adds the wire seam
 pub use resolve::{ChordResolver, CommandText, ResolvedRow, render_command, render_span, rows_of}; // task 9

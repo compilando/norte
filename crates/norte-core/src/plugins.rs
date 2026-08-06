@@ -447,12 +447,25 @@ impl PluginRegistry {
                             header: c.header.clone(),
                         })
                         .collect(),
-                    // (H3e, 0.34.0) discovery barato: el catálogo ya sabe si
-                    // hay `help.md` porque lo miró al descubrir. NO gateado
-                    // por approved/enabled — la documentación de un plugin es
-                    // justo lo que un humano lee ANTES de aprobarlo, mismo
-                    // criterio que `capabilities`/`commands`/`columns`.
-                    has_help: e.has_help,
+                    // (H3e, 0.34.0) NO gateado por approved/enabled — la
+                    // documentación de un plugin es justo lo que un humano lee
+                    // ANTES de aprobarlo, mismo criterio que
+                    // `capabilities`/`commands`/`columns`.
+                    //
+                    // La bandera del WIRE es la ESTRICTA de las dos: el
+                    // `e.has_help` del catálogo es un `is_file` que SIGUE
+                    // enlaces (presencia, no permiso — así lo dice su propio
+                    // comentario), mientras que aquí se aplica la MISMA guarda
+                    // que usará el lector. Si divergen, el par
+                    // (`has_help: true`, `markdown: ""`) es exactamente el
+                    // oráculo "esa ruta existe y es un fichero regular", y las
+                    // dos mitades las lee un agente por `plugin.list` +
+                    // `plugin.help`, ninguno de los dos gateado por policy. Y
+                    // aun sin el agente, la barra lateral pintaría un nodo que
+                    // se abre en blanco. Cuesta dos `canonicalize` por plugin y
+                    // por llamada, ruido al lado de los `plugin.toml` y
+                    // `config.toml` que el descubrimiento ya leyó.
+                    has_help: Self::verified_child(&e.dir, "help.md").is_some(),
                 }
             })
             .collect();
@@ -519,15 +532,22 @@ impl PluginRegistry {
     /// `help.md` que es un symlink a `~/.ssh/id_ed25519` o a `/etc/…` se lee
     /// como si no hubiera página. La razón es que esto cruza el wire y un
     /// AGENTE puede pedirlo: sin la guarda, `plugin.help` sería una lectura de
-    /// fichero arbitrario POR FUERA del motor de policy y de sus scopes. El
-    /// directorio del plugin es lo único que la aprobación del humano
-    /// consintió; lo que hay fuera no forma parte del trato.
+    /// fichero arbitrario POR FUERA del motor de policy y de sus scopes.
+    ///
+    /// Lo que hace segura la apertura NO es una aprobación: `help_of` NO está
+    /// gateado por `approved`/`enabled` (la documentación es justo lo que se lee
+    /// ANTES de aprobar), así que el directorio del plugin fue DESCUBIERTO, no
+    /// consentido. Lo seguro es la conjunción de tres cosas: el contenido está
+    /// ACOTADO ([`Self::read_help_page`]), la ruta NO la controla quien llama
+    /// (sale del catálogo, no del wire), y la guarda impide que apunte fuera del
+    /// directorio donde el humano ya dejó caer el bundle.
     ///
     /// Un plugin conocido SIEMPRE devuelve `Some`, aunque su `help.md` falte,
     /// no se pueda leer o escape del directorio: en esos casos `markdown` es la
     /// cadena vacía. La ayuda es cosmética y no tiene por qué distinguirse de
-    /// "página en blanco" — lo que sí distingue es `norte doctor`, que toma de
-    /// aquí su hallazgo `plugin-help` y reporta el fichero ausente, ilegible o
+    /// "página en blanco" — lo que sí distingue es `norte doctor`, que gatea por
+    /// [`Self::announces_help`] (la bandera LAXA, sin la guarda) y toma de aquí
+    /// el contenido, y así puede reportar el fichero ausente, ilegible o
     /// escapado; desde el lado del lector, un `help.md` que apunta fuera es
     /// indistinguible de un autor que no escribió nada, y eso merece un aviso.
     ///
@@ -538,16 +558,52 @@ impl PluginRegistry {
         if !self.is_known(id) {
             return None;
         }
-        let bytes = self
-            .verified_help_path(id)
-            .and_then(|p| std::fs::read(p).ok())
+        Some(Self::read_help_page(self.verified_help_path(id).as_deref()))
+    }
+
+    /// Lee un `help.md` cuya ruta YA verificó [`Self::verified_help_path`] y lo
+    /// acota para el wire (H3e). `None` (sin página legible) da la página en
+    /// blanco, indistinguible de un `help.md` vacío.
+    ///
+    /// EL TOPE SE APLICA AL LEER, no al decodificar. `verified_child` comprueba
+    /// que hay un fichero regular y NADA sobre su tamaño, así que un plugin
+    /// puede enviar `help.md` como un fichero DISPERSO de 100 GiB —unos pocos
+    /// bytes en un tarball— y una sola llamada a `plugin.help` intentaría
+    /// reservar 100 GiB: abortar por fallo de reserva, o el OOM killer llevándose
+    /// el daemon con su journal y toda task en vuelo. Como el método está
+    /// ABIERTO a un agente y el plugin no necesita ni aprobación ni activación,
+    /// sería la primera lectura sin tope disparable por un agente en el daemon.
+    ///
+    /// Se leen como mucho `max_bytes + 1` bytes: el byte de más es lo que deja a
+    /// [`norte_help::cut_and_decode_untrusted`] ver que sobraba y marcar
+    /// `truncated` honestamente, en vez de servir un fichero cortado como si
+    /// estuviera completo.
+    ///
+    /// I/O SÍNCRONA: el llamador async va por `spawn_blocking` (regla 2).
+    #[must_use]
+    pub fn read_help_page(path: Option<&Path>) -> norte_proto::methods::PluginHelpResult {
+        use std::io::Read as _;
+
+        let tope = u64::try_from(norte_help::Limits::untrusted().max_bytes)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        let bytes = path
+            .and_then(|p| {
+                let f = std::fs::File::open(p).ok()?;
+                let mut buf = Vec::new();
+                // Un fallo a mitad de lectura degrada a página en blanco, igual
+                // que un `help.md` que no se puede abrir: servir lo leído hasta
+                // el error lo presentaría como completo.
+                f.take(tope).read_to_end(&mut buf).ok()?;
+                Some(buf)
+            })
             .unwrap_or_default();
-        let s = norte_help::sanitize_untrusted(&bytes);
-        Some(norte_proto::methods::PluginHelpResult {
+        let s = norte_help::cut_and_decode_untrusted(&bytes);
+        norte_proto::methods::PluginHelpResult {
             markdown: s.markdown,
             truncated: s.truncated,
             lossy: s.lossy,
-        })
+        }
     }
 
     /// La ruta del `help.md` de `id` YA VERIFICADA (H3e), o `None` si `id` no
@@ -568,6 +624,26 @@ impl PluginRegistry {
     pub fn verified_help_path(&self, id: &str) -> Option<PathBuf> {
         let entry = self.catalog.plugins.iter().find(|e| e.manifest.id == id)?;
         Self::verified_child(&entry.dir, "help.md")
+    }
+
+    /// `true` si `id` trae un fichero `help.md`, SIN aplicar la guarda de
+    /// escape (H3e): la bandera LAXA, el `is_file` que sigue enlaces.
+    ///
+    /// Existe porque hay dos preguntas distintas y una sola no sirve para las
+    /// dos. `PluginInfo::has_help`, que cruza el WIRE, es la ESTRICTA (la misma
+    /// guarda que el lector: anunciar `true` y servir `""` sería un oráculo de
+    /// rutas). Un DIAGNÓSTICO local necesita la laxa: "el autor puso un
+    /// `help.md` y el host se niega a servirlo" es justo el hallazgo que hay que
+    /// dar, y con la estricta ese caso desaparece sin dejar rastro — se vuelve
+    /// indistinguible de un plugin que no se documentó.
+    ///
+    /// No la use nada que responda por el wire.
+    #[must_use]
+    pub fn announces_help(&self, id: &str) -> bool {
+        self.catalog
+            .plugins
+            .iter()
+            .any(|e| e.manifest.id == id && e.has_help)
     }
 
     /// Esquema `[config]` de `id` + valores EFECTIVOS, EMPAREJADOS en orden
@@ -988,10 +1064,30 @@ impl PluginRegistry {
     /// `<dir>/<name>` canonicalizado, SOLO si el fichero real cae DENTRO de
     /// `dir`. La forma común del guard de issue #69: un fichero que el host
     /// lee o ejecuta desde el directorio de un plugin no puede resolver fuera
-    /// de él por symlink. `None` si no existe, no es fichero, no canonicaliza
-    /// (enlace roto) o escapa. Devuelve la ruta CANÓNICA para no re-seguir
-    /// enlaces al abrirla — entre el chequeo y la apertura no se vuelve a
-    /// resolver el nombre.
+    /// de él POR SYMLINK. `None` si no existe, no es fichero, no canonicaliza
+    /// (enlace roto) o escapa.
+    ///
+    /// # Qué NO cubre (dicho, no insinuado)
+    ///
+    /// - **Solo symlinks.** Un HARDLINK no tiene ruta de destino: `<dir>/x`
+    ///   canonicaliza a sí mismo y pasa la guarda aunque su inodo sea el de
+    ///   `~/.ssh/id_ed25519`. Un bind mount igual. Ninguna guarda BASADA EN
+    ///   RUTAS puede verlos, así que "no puede escapar de su directorio" es más
+    ///   fuerte de lo que esto entrega: lo que entrega es "no puede escapar por
+    ///   symlink".
+    /// - **Es una observación PUNTUAL, no un handle.** Devolver la ruta canónica
+    ///   evita re-resolver los componentes INTERMEDIOS, pero el kernel resuelve
+    ///   la ruta entera en cada `open`, componente final incluido: quien pueda
+    ///   escribir en el directorio puede cambiar ese último componente entre el
+    ///   chequeo y la apertura (TOCTOU). Una ruta canónica no congela nada. Está
+    ///   FUERA del modelo de amenaza —quien escribe ahí ya puede reemplazar el
+    ///   bundle entero, misma frontera de confianza— pero se dice en vez de
+    ///   darse por resuelto.
+    ///
+    /// `O_NOFOLLOW` cerraría esa carrera del componente final y se DESCARTA a
+    /// sabiendas: también prohibiría un symlink INTERNO al directorio, que un
+    /// plugin organizando sus propios ficheros con enlaces usa legítimamente
+    /// (hay un test que lo fija). No re-litigar sin ese caso a mano.
     fn verified_child(dir: &Path, name: &str) -> Option<PathBuf> {
         let child = dir.join(name);
         if !child.is_file() {
@@ -2002,6 +2098,46 @@ header = "Size"
         assert!(help.markdown.len() < gordo.len(), "y de verdad se cortó");
     }
 
+    #[test]
+    fn un_help_md_gigante_no_se_carga_entero_en_memoria() {
+        // Un `help.md` DISPERSO de 100 GiB son unos pocos bytes en un tarball.
+        // Leerlo entero para acotarlo DESPUÉS aborta por fallo de reserva, o
+        // invita al OOM killer a llevarse el daemon con su journal y toda task
+        // en vuelo. Y `plugin.help` está ABIERTO a un agente sobre un plugin
+        // que no necesita ni aprobación ni activación: sería la primera lectura
+        // SIN TOPE disparable por un agente en el daemon. El tope se aplica al
+        // LEER, no al decodificar.
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
+        let f = std::fs::File::create(tmp.path().join("plugins/org.norte.demo/help.md")).unwrap();
+        // Disperso: ni un byte escrito, así que el fixture cabe en cualquier CI.
+        f.set_len(100 * 1024 * 1024 * 1024).unwrap();
+        drop(f);
+
+        let inicio = std::time::Instant::now();
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        let help = reg.help_of("org.norte.demo").expect("hay página");
+        assert!(
+            inicio.elapsed() < std::time::Duration::from_secs(10),
+            "la lectura acotada no depende del tamaño del fichero"
+        );
+        assert!(
+            !help.markdown.is_empty(),
+            "la página se sirve CORTADA, no se pierde: sin tope, la reserva de \
+             100 GiB falla y el fichero se degrada a «no hay página» (y donde \
+             la reserva sí entra, se la lleva el OOM killer)"
+        );
+        assert!(
+            help.markdown.len() <= norte_help::Limits::untrusted().max_bytes,
+            "lo que cruza el wire sigue acotado"
+        );
+        assert!(
+            help.truncated,
+            "y el recorte se declara: leer max_bytes+1 es lo que deja a \
+             `cut_and_decode_untrusted` ver que sobraba"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn un_help_md_que_apunta_fuera_del_directorio_no_se_lee() {
@@ -2018,8 +2154,16 @@ header = "Size"
 
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
         assert!(
-            reg.list().plugins[0].has_help,
-            "el `is_file` del catálogo sigue el enlace: anuncia presencia"
+            !reg.list().plugins[0].has_help,
+            "la bandera del wire usa la MISMA guarda que el lector: anunciar \
+             `true` y servir `\"\"` es el oráculo «esa ruta existe y es un \
+             fichero regular», y las dos mitades las lee un agente"
+        );
+        assert!(
+            reg.announces_help("org.norte.demo"),
+            "y la bandera LAXA sigue diciendo que el autor puso el fichero: sin \
+             ella, «lo puso y el host se niega a servirlo» sería indistinguible \
+             de «no se documentó», y `norte doctor` no tendría qué reportar"
         );
         let help = reg.help_of("org.norte.demo").expect("el plugin existe");
         assert_eq!(help.markdown, "", "no hay página, y no es un error");

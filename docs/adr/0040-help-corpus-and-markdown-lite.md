@@ -106,8 +106,14 @@ Decision 1 said frontends and the CLI depend on `norte-help`. Phase H3e adds
 `norte-core` to that list: `plugin.help` hands a plugin's `help.md` over the
 wire as markdown TEXT, so the HOST is what cuts it at the 64 KiB untrusted cap
 and decodes it through the `norte-encoding` boundary — with
-`norte_help::sanitize_untrusted`, the same cap and the same detection the
-frontend's `parse_untrusted` applies when it parses the text on arrival. The
+`norte_help::cut_and_decode_untrusted`, the same cap and the same detection the
+frontend's `parse_untrusted` applies when it parses the text on arrival. That
+name is deliberate and was corrected during the phase: the function does not
+sanitize, and the text it returns still carries every terminal hazard the
+plugin wrote — only `parse_untrusted` masks, on arrival, where the model is
+built. The cap is applied to the source AND to the decoded string, because a
+single byte can decode to three and a cap that only bounds the source lets the
+host and the frontend disagree about where the same page ends. The
 alternative was re-implementing the cut in `norte-core`, and two caps that
 start out equal do not stay equal; the whole hostile-input story here rests on
 there being one. The direction stays acyclic — `norte-help` still knows nothing

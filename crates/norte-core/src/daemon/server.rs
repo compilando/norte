@@ -2696,24 +2696,18 @@ async fn handle_plugin_help(
     };
     let Some(path) = path else {
         // Sin página legible (ausente, ilegible o escapada del directorio): en
-        // blanco. La ayuda es cosmética; quien quiere el diagnóstico fino usa
-        // `norte doctor`.
-        return to_value(&methods::PluginHelpResult {
-            markdown: String::new(),
-            truncated: false,
-            lossy: false,
-        });
+        // blanco, y sin tocar el disco. La ayuda es cosmética; quien quiere el
+        // diagnóstico fino usa `norte doctor`.
+        return to_value(&crate::PluginRegistry::read_help_page(None));
     };
-    let s = tokio::task::spawn_blocking(move || {
-        norte_help::sanitize_untrusted(&std::fs::read(path).unwrap_or_default())
-    })
-    .await
-    .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "plugin help task panicked"))?;
-    to_value(&methods::PluginHelpResult {
-        markdown: s.markdown,
-        truncated: s.truncated,
-        lossy: s.lossy,
-    })
+    // `read_help_page` es también quien TOPA la lectura (`max_bytes + 1`): un
+    // `help.md` disperso de 100 GiB no puede convertir esta llamada en una
+    // reserva de 100 GiB. Ver su rustdoc.
+    let page =
+        tokio::task::spawn_blocking(move || crate::PluginRegistry::read_help_page(Some(&path)))
+            .await
+            .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "plugin help task panicked"))?;
+    to_value(&page)
 }
 
 /// `plugin.set_config` (0.28.0, G3c, ADR 0037): persiste UN valor de

@@ -646,10 +646,19 @@ const MAX_HEADER_COMMANDS: usize = 16;
 /// Keeping the cut here rather than in `norte-core` is what stops the byte cap
 /// and the encoding detection from existing twice and drifting apart.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Sanitized {
-    /// The text, cut at a UTF-8 boundary and decoded — ALWAYS valid UTF-8.
+pub struct CutAndDecoded {
+    /// The text, cut at a UTF-8 boundary and decoded — ALWAYS valid UTF-8, and
+    /// never longer than [`Limits::untrusted`]`.max_bytes`.
+    ///
+    /// It is NOT masked. Terminal hazards a plugin wrote — ESC, C0 controls,
+    /// bidi overrides — travel through it verbatim, by design: the wire carries
+    /// TEXT and the masking happens where the model is built, in
+    /// [`parse_untrusted`], on the receiving side. Never render this string to a
+    /// terminal and never log it; parse it first.
     pub markdown: String,
-    /// The source was longer than [`Limits::untrusted`] allows.
+    /// The source was longer than [`Limits::untrusted`] allows, OR its decoded
+    /// form was (a byte can grow on decoding — see
+    /// [`cut_and_decode_untrusted`]).
     pub truncated: bool,
     /// Some byte did not decode under any reading and came out `U+FFFD`.
     pub lossy: bool,
@@ -657,24 +666,48 @@ pub struct Sanitized {
 
 /// Cuts and decodes untrusted `help.md` bytes for the wire.
 ///
+/// It does NOT sanitize — the name says exactly what it does because the output
+/// legitimately carries ESC, C0 controls and bidi overrides. See
+/// [`CutAndDecoded::markdown`]: only [`parse_untrusted`] masks, and it does so
+/// when it builds the model. Never render or log this string directly.
+///
 /// Never fails: oversize truncates, undecodable bytes become `U+FFFD`, and both
 /// losses are reported in the flags rather than raised as an error. Help is
 /// cosmetic and must never brick an approved plugin.
 ///
-/// ```
-/// use norte_help::sanitize_untrusted;
+/// # The cap is applied TWICE, and it has to be
 ///
-/// let s = sanitize_untrusted(b"+++\ntitle = \"FTP\"\n+++\nbody");
+/// [`Limits::max_bytes`] bounds the SOURCE, and decoding happens after: 64 KiB
+/// of windows-1252 `0x80` decodes to ~192 KiB of UTF-8 `U+20AC`, which used to
+/// cross the wire with `truncated == false`. That is a receiver sizing on the
+/// documented cap and being wrong by 3×, and — the part that decides it — the
+/// receiving [`parse_untrusted`] re-cuts to 64 KiB, so `norte doctor` and the
+/// frontend would show DIFFERENT pages for the same file. So the decoded string
+/// is cut again, on a `char` boundary, and the second cut ORs into `truncated`.
+///
+/// ```
+/// use norte_help::cut_and_decode_untrusted;
+///
+/// let s = cut_and_decode_untrusted(b"+++\ntitle = \"FTP\"\n+++\nbody");
 /// assert!(!s.truncated && !s.lossy);
 /// assert!(s.markdown.ends_with("body"));
 /// ```
 #[must_use]
-pub fn sanitize_untrusted(bytes: &[u8]) -> Sanitized {
+pub fn cut_and_decode_untrusted(bytes: &[u8]) -> CutAndDecoded {
     let limits = Limits::untrusted();
-    let truncated = bytes.len() > limits.max_bytes;
+    let mut truncated = bytes.len() > limits.max_bytes;
     let head = cut_at_boundary(bytes, limits.max_bytes);
-    let (markdown, lossy) = decode_source(bytes, head);
-    Sanitized {
+    let (mut markdown, lossy) = decode_source(bytes, head);
+    if markdown.len() > limits.max_bytes {
+        // At most three steps back: no character is wider than four bytes.
+        let mut cut = limits.max_bytes;
+        while cut > 0 && !markdown.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        markdown.truncate(cut);
+        truncated = true;
+    }
+    CutAndDecoded {
         markdown,
         truncated,
         lossy,
@@ -765,11 +798,11 @@ pub fn foreign_commands(source: &str, plugin_id: &str) -> Vec<String> {
 #[must_use]
 pub fn parse_untrusted(bytes: &[u8], fallback_id: &str, publisher: Option<String>) -> Parsed {
     let limits = Limits::untrusted();
-    let Sanitized {
+    let CutAndDecoded {
         markdown: text,
         mut truncated,
         lossy,
-    } = sanitize_untrusted(bytes);
+    } = cut_and_decode_untrusted(bytes);
 
     // ANY header failure degrades to "there is no header", never to an error:
     // the whole text becomes the body. A cut that lands mid-header is the
@@ -2151,13 +2184,41 @@ p\u{202E}ara\n\n\
     #[test]
     fn sanitizar_recorta_en_el_mismo_tope_que_el_parser() {
         let gordo = vec![b'a'; Limits::untrusted().max_bytes + 100];
-        let s = sanitize_untrusted(&gordo);
+        let s = cut_and_decode_untrusted(&gordo);
         assert!(s.truncated, "pasarse del tope se declara");
         assert!(!s.lossy, "ascii no es lossy");
         assert!(
             s.markdown.len() <= Limits::untrusted().max_bytes,
             "el texto sale acotado: {}",
             s.markdown.len()
+        );
+    }
+
+    #[test]
+    fn el_tope_vale_para_el_texto_decodificado_no_solo_para_los_bytes() {
+        // El tope es de bytes FUENTE y la decodificación va después: 64 KiB de
+        // windows-1252 `0x80` son ~192 KiB de UTF-8 `U+20AC`. Sin el segundo
+        // corte cruzaban el wire con `truncated` en falso — un receptor que
+        // dimensiona por el tope documentado se equivoca 3×, y el
+        // `parse_untrusted` del otro lado RE-corta a 64 KiB, así que `norte
+        // doctor` y el frontend verían páginas distintas del MISMO fichero.
+        let max = Limits::untrusted().max_bytes;
+        let s = cut_and_decode_untrusted(&vec![0x80_u8; max]);
+        assert!(
+            s.markdown.chars().count() < s.markdown.len(),
+            "el fixture solo dice algo si de verdad decodificó a multi-byte: \
+             {} chars en {} bytes",
+            s.markdown.chars().count(),
+            s.markdown.len()
+        );
+        assert!(
+            s.markdown.len() <= max,
+            "el TEXTO sale acotado, no solo la fuente: {}",
+            s.markdown.len()
+        );
+        assert!(
+            s.truncated,
+            "y el segundo corte se declara: la fuente cabía justa, el texto no"
         );
     }
 
@@ -2173,7 +2234,7 @@ p\u{202E}ara\n\n\
         // [`Parsed::lossy`]). El BOM es certeza de UTF-8, y bajo UTF-8 esos
         // bytes no se recuperan de ninguna manera. Es el mismo fixture que ya
         // fija el doctest de [`parse_untrusted`].
-        let s = sanitize_untrusted(b"\xef\xbb\xbfhola \xFF\xFE mundo");
+        let s = cut_and_decode_untrusted(b"\xef\xbb\xbfhola \xFF\xFE mundo");
         assert!(s.lossy, "un byte irrecuperable se declara");
         assert!(s.markdown.contains('\u{FFFD}'));
     }
@@ -2190,7 +2251,7 @@ p\u{202E}ara\n\n\
         let src = b"+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n\
                     +++\nCuerpo con {{cmd:plugin:acme.ftp:sync}}.";
         let directo = parse_untrusted(src, "acme.ftp", None);
-        let s = sanitize_untrusted(src);
+        let s = cut_and_decode_untrusted(src);
         let por_el_wire = parse_untrusted(s.markdown.as_bytes(), "acme.ftp", None)
             .fold_flags(s.truncated, s.lossy);
         assert_eq!(directo.topic.title, "FTP", "el encabezado se parsea");
