@@ -514,18 +514,31 @@ impl PluginRegistry {
     /// `dir` que el catálogo guardó al descubrir, así que un `../` en el id no
     /// llega a tocar el sistema de ficheros, solo falla el lookup.
     ///
-    /// Un plugin conocido SIEMPRE devuelve `Some`, aunque su `help.md` falte o
-    /// no se pueda leer: en ese caso `markdown` es la cadena vacía. La ayuda es
-    /// cosmética y no tiene por qué distinguirse de "página en blanco" — lo
-    /// que sí distingue es `norte doctor`, que reporta el fichero ausente o
-    /// ilegible como un hallazgo `plugin-help`.
+    /// El fichero debe CANONICALIZAR DENTRO del directorio del plugin
+    /// (`verified_child`, la misma guarda que `plugin.wasm`): un
+    /// `help.md` que es un symlink a `~/.ssh/id_ed25519` o a `/etc/…` se lee
+    /// como si no hubiera página. La razón es que esto cruza el wire y un
+    /// AGENTE puede pedirlo: sin la guarda, `plugin.help` sería una lectura de
+    /// fichero arbitrario POR FUERA del motor de policy y de sus scopes. El
+    /// directorio del plugin es lo único que la aprobación del humano
+    /// consintió; lo que hay fuera no forma parte del trato.
+    ///
+    /// Un plugin conocido SIEMPRE devuelve `Some`, aunque su `help.md` falte,
+    /// no se pueda leer o escape del directorio: en esos casos `markdown` es la
+    /// cadena vacía. La ayuda es cosmética y no tiene por qué distinguirse de
+    /// "página en blanco" — lo que sí distingue es `norte doctor`, que toma de
+    /// aquí su hallazgo `plugin-help` y reporta el fichero ausente, ilegible o
+    /// escapado; desde el lado del lector, un `help.md` que apunta fuera es
+    /// indistinguible de un autor que no escribió nada, y eso merece un aviso.
     ///
     /// I/O SÍNCRONA: el llamador async va por `spawn_blocking` (regla 2),
     /// igual que el resto de este registro.
     #[must_use]
     pub fn help_of(&self, id: &str) -> Option<norte_proto::methods::PluginHelpResult> {
         let entry = self.catalog.plugins.iter().find(|e| e.manifest.id == id)?;
-        let bytes = std::fs::read(entry.dir.join("help.md")).unwrap_or_default();
+        let bytes = Self::verified_child(&entry.dir, "help.md")
+            .and_then(|p| std::fs::read(p).ok())
+            .unwrap_or_default();
         let s = norte_help::sanitize_untrusted(&bytes);
         Some(norte_proto::methods::PluginHelpResult {
             markdown: s.markdown,
@@ -941,13 +954,24 @@ impl PluginRegistry {
     /// barrera fuerte. Devuelve la ruta CANÓNICA (ya resuelta) para no re-seguir
     /// enlaces al abrirla.
     fn verified_wasm(dir: &Path) -> Option<PathBuf> {
-        let wasm = dir.join("plugin.wasm");
-        if !wasm.is_file() {
+        Self::verified_child(dir, "plugin.wasm")
+    }
+
+    /// `<dir>/<name>` canonicalizado, SOLO si el fichero real cae DENTRO de
+    /// `dir`. La forma común del guard de issue #69: un fichero que el host
+    /// lee o ejecuta desde el directorio de un plugin no puede resolver fuera
+    /// de él por symlink. `None` si no existe, no es fichero, no canonicaliza
+    /// (enlace roto) o escapa. Devuelve la ruta CANÓNICA para no re-seguir
+    /// enlaces al abrirla — entre el chequeo y la apertura no se vuelve a
+    /// resolver el nombre.
+    fn verified_child(dir: &Path, name: &str) -> Option<PathBuf> {
+        let child = dir.join(name);
+        if !child.is_file() {
             return None;
         }
-        let canon_wasm = wasm.canonicalize().ok()?;
+        let canon_child = child.canonicalize().ok()?;
         let canon_dir = dir.canonicalize().ok()?;
-        canon_wasm.starts_with(&canon_dir).then_some(canon_wasm)
+        canon_child.starts_with(&canon_dir).then_some(canon_child)
     }
 
     /// Lee el estado persistido. Ausente = vacío; corrupto = `InvalidData`.
@@ -1948,6 +1972,54 @@ header = "Size"
         assert!(help.truncated, "un fichero por encima del tope se declara");
         assert!(help.markdown.len() <= norte_help::Limits::untrusted().max_bytes);
         assert!(help.markdown.len() < gordo.len(), "y de verdad se cortó");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn un_help_md_que_apunta_fuera_del_directorio_no_se_lee() {
+        // El `help.md` cruza el wire y un AGENTE puede pedirlo: un symlink que
+        // sale del directorio del plugin convertiría `plugin.help` en una
+        // lectura de fichero arbitrario POR FUERA del motor de policy (misma
+        // forma que el `plugin.wasm` del issue #69). Se lee como página vacía.
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
+        let fuera = tmp.path().join("ajeno.md");
+        std::fs::write(&fuera, "secreto-de-otro-sitio").unwrap();
+        let link = tmp.path().join("plugins/org.norte.demo/help.md");
+        std::os::unix::fs::symlink(&fuera, &link).unwrap();
+
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert!(
+            reg.list().plugins[0].has_help,
+            "el `is_file` del catálogo sigue el enlace: anuncia presencia"
+        );
+        let help = reg.help_of("org.norte.demo").expect("el plugin existe");
+        assert_eq!(help.markdown, "", "no hay página, y no es un error");
+        assert!(
+            !help.markdown.contains("secreto-de-otro-sitio"),
+            "el contenido de fuera del dir JAMÁS cruza el wire"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn un_help_md_enlazado_dentro_del_directorio_si_se_lee() {
+        // La guarda es "no escapar del dir", NO "nada de symlinks": un plugin
+        // que organiza su propio directorio con enlaces no hace nada malo.
+        let tmp = TempDir::new().unwrap();
+        write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
+        let dir = tmp.path().join("plugins/org.norte.demo");
+        std::fs::write(
+            dir.join("README.md"),
+            "+++\nid = \"org.norte.demo\"\ntitle = \"Demo\"\n+++\ncuerpo",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(dir.join("README.md"), dir.join("help.md")).unwrap();
+
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert!(reg.list().plugins[0].has_help, "is_file sigue el enlace");
+        let help = reg.help_of("org.norte.demo").expect("hay página");
+        assert!(help.markdown.contains("cuerpo"));
     }
 
     #[test]

@@ -46,6 +46,12 @@ pub struct PluginEntry {
     /// leer 64 KiB por plugin ahí pagaría el contenido en cada listado para
     /// una bandera que solo decide si se pinta un nodo en la barra lateral.
     /// El contenido se lee bajo demanda, en `plugin.help`.
+    ///
+    /// SIGUE ENLACES, a propósito: esto es presencia, no permiso. Quien LEE el
+    /// fichero es quien comprueba que no escape del directorio del plugin
+    /// (`PluginRegistry::help_of` en `norte-core`, misma guarda que
+    /// `plugin.wasm`), así que un `help.md` enlazado a `/etc/…` se anuncia y
+    /// luego se lee como página vacía — nunca entrega lo de fuera.
     pub has_help: bool,
 }
 
