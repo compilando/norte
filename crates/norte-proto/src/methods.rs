@@ -287,10 +287,21 @@ use crate::{
 /// método [`PLUGIN_HELP`] ([`PluginHelpParams`] → [`PluginHelpResult`]), que
 /// entrega el `help.md` ya acotado y decodificado más las banderas
 /// `truncated`/`lossy` que el receptor no puede deducir. Ventana
-/// N=0.34.x / N-1=0.33.x: un cliente 0.33 ignora el campo desconocido, no
-/// emite `has_help` (default `false` aquí) y jamás llama al método nuevo; un
-/// daemon 0.33 responde `MethodNotFound`, que el frontend trata como «este
-/// plugin no tiene página», nunca como un fallo.
+/// N=0.34.x / N-1=0.33.x, y la dirección que tiene que sostenerse es un
+/// cliente 0.33 contra un daemon 0.34: ignora el campo desconocido, no emite
+/// `has_help` (default `false` aquí) y jamás llama al método nuevo — nada que
+/// gatear en emisión. La inversa NO es una pregunta sobre ayuda:
+/// [`version_compatible`] rechaza de plano a un cliente del FUTURO con
+/// `VERSION_MISMATCH` en `initialize`, antes de despachar método alguno (el
+/// mismo razonamiento que el bump 0.30.0 deja escrito arriba).
+///
+/// Este bump es SOLO de wire, y a diferencia del de 0.30.0 la ausencia NO es
+/// aquí una respuesta válida: mientras el daemon no cablee el handler
+/// (H3e T4), `plugin.help` responde `MethodNotFound` a un peer de su MISMA
+/// versión, y `plugin.list` emite `has_help: false` fijo (H3e T3). Ambas son
+/// lagunas de esta ventana, no el contrato: quien llame durante ella debe
+/// tratar el `MethodNotFound` como «este plugin no tiene página», nunca como
+/// un fallo.
 pub const PROTOCOL_VERSION: &str = "0.34.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
@@ -1602,10 +1613,12 @@ pub struct PluginInfo {
     /// plugin viajen en cada `plugin.list` — el contenido se pide aparte
     /// con [`PLUGIN_HELP`], bajo demanda.
     ///
-    /// El host lo calcula con UN `is_file` al descubrir: no lee el fichero,
-    /// no lo parsea, y por tanto un `help.md` presente pero ilegible o vacío
-    /// sale `true` aquí y se degrada al pedirlo (markdown vacío), que es la
-    /// dirección correcta — la ayuda es cosmética y jamás tumba un plugin.
+    /// El host DEBE calcularlo con UN `is_file` al descubrir: no lee el
+    /// fichero, no lo parsea, y por tanto un `help.md` presente pero ilegible
+    /// o vacío sale `true` aquí y se degrada al pedirlo (markdown vacío), que
+    /// es la dirección correcta — la ayuda es cosmética y jamás tumba un
+    /// plugin. Eso es el CONTRATO; el daemon de 0.34.0 todavía emite `false`
+    /// fijo, ver el bump en [`PROTOCOL_VERSION`].
     ///
     /// `skip_serializing_if` sobre `false`: un plugin sin ayuda produce un
     /// payload IDÉNTICO byte a byte al de 0.33 (mismo criterio aditivo
