@@ -158,5 +158,10 @@
     "id": "cmd_mark_bidi_payload",
     "hex": "7b7b636d643ae280ae66732e636f70797d7d",
     "why": "{{cmd:<RLO>fs.copy}}: la marca viva del corpus de ayuda (norte-help, ADR 0040) con un bidi override DENTRO del payload — el parser de spans debe conservar los bytes tal cual (no enmascara: eso es la pasada hostil previa) y NO resolver, de modo que el chequeo del corpus lo compare byte-exacto y el id spoofeado no case con ningún comando real; como nombre de fichero pinea además que una ruta puede transportar una marca completa hasta un help.md de plugin"
+  },
+  {
+    "id": "invisible_filler_blank",
+    "hex": "e385a4e385a4e385a4",
+    "why": "U+3164 HANGUL FILLER x3: NO es un hazard (sobrevive intacto a mask_terminal_hazards, y ampliar ese set es contrato entre crates) y aun asi no pinta NADA — un nombre que existe y se ve vacio. Con H3e cruza dos superficies nuevas: una fila de plugin sin nombre en la barra lateral de la ayuda, y un segmento de badge en blanco. Es la clase que obligo a norte-help a inventarse `is_blank_id`, asi que la fixture hace que las dos crates compartan UN adversario en vez de que una guarde su constante privada. En forma mixta `a<U+3164>b.txt` es ademas un gemelo de `ab.txt` que ninguna mascara marca: dos entradas indistinguibles en un dialogo de aprobacion (mismo ataque que zwsp_twin, pero SIN badge que avise)"
   }
 ]

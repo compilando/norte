@@ -71,6 +71,12 @@ pub enum Origin {
     /// it silently maps distinct keys onto one — and the parser refuses a key
     /// it could not paint instead of rewriting it. The same `key`/`text`
     /// split the command palette makes.
+    ///
+    /// "Masked" means free of `norte_encoding::is_terminal_hazard` characters,
+    /// and that is the whole claim. A dispatch key may still carry zero-width
+    /// combining marks, which are not hazards and are kept knowingly — so a
+    /// renderer gets no promise about how many CELLS a string occupies. See
+    /// `is_own_command` for why that line is drawn there.
     Plugin {
         /// Plugin id in the catalogue: a LOOKUP KEY, assigned by the host and
         /// kept byte-exact. It is what a registry or approval lookup matches

@@ -241,8 +241,21 @@ const MAX_COMMAND_ID_CHARS: usize = 200;
 /// Everything here REJECTS; nothing rewrites. A command id is an identity, so
 /// masking it would be worse than useless: it would produce a key that
 /// resolves to nothing, or to the wrong thing. A key we could not paint
-/// safely is a key we refuse — which is also what lets the model promise that
-/// every string it carries is free of terminal hazards.
+/// safely is a key we refuse — which is what lets the model promise that every
+/// string it carries is free of [`norte_encoding::is_terminal_hazard`]
+/// characters.
+///
+/// That promise, and no more. Zero-width COMBINING MARKS are not in the hazard
+/// set and are not rejected here: `plugin:acme:sync` followed by sixty
+/// `U+0301` is a valid key by every rule above, and a width-aware renderer
+/// measures it at zero cells and paints it whole — a zalgo smear over whatever
+/// follows it on the line. Accepted knowingly: deciding what a combining mark
+/// is needs a Unicode category table this crate does not carry and would not
+/// earn (rule 8) for a cosmetic, terminal-dependent artefact, and a partial
+/// blacklist of one or two blocks would claim more than it delivers. So the
+/// model promises no terminal hazards — NOT that every string it carries
+/// renders in a predictable number of cells.
+/// `a_dispatch_key_of_combining_marks_is_accepted_knowingly` pins it.
 fn is_own_command(id: &str, plugin: &str) -> bool {
     // A plugin id that is empty, or that carries the separator, would make
     // the split ambiguous. Fail closed: this entry point is fed over the
@@ -757,6 +770,16 @@ pub fn cut_and_decode_untrusted(bytes: &[u8]) -> CutAndDecoded {
 /// the span cutter, with no counter to thread out, and adding one would touch
 /// every span signature for a diagnostic.
 ///
+/// BOUNDED by `MAX_HEADER_COMMANDS` (sixteen), the same ceiling
+/// [`parse_untrusted`] applies to the commands it keeps — the two doors agree
+/// here as they already do through `is_own_command`. Without it this is a
+/// one-entry-in, one-finding-out amplifier: the front matter is TOML and sits
+/// outside [`Limits`], so 64 KiB of `commands = ["", "", …]` holds about 21 829
+/// entries, every one of them foreign, and `norte doctor` would answer a file
+/// the host already bounded with a screen flood in text mode and a
+/// multi-megabyte array in `--json`. Reporting the first sixteen is not a loss:
+/// past that the message is "this header is wrong", not "here is another id".
+///
 /// ```
 /// use norte_help::foreign_commands;
 ///
@@ -772,6 +795,7 @@ pub fn foreign_commands(source: &str, plugin_id: &str) -> Vec<String> {
     fm.commands
         .into_iter()
         .filter(|c| !is_own_command(c, plugin_id))
+        .take(MAX_HEADER_COMMANDS)
         .collect()
 }
 
@@ -816,9 +840,12 @@ pub fn has_broken_front_matter(source: &str) -> bool {
 /// the palette rows do, instead of being scattered across every frontend).
 ///
 /// `fallback_id` is the plugin's id, supplied by the HOST registry — it is
-/// not plugin input, and the caller MUST pass an id it has validated (the
-/// catalogue restricts them to `[A-Za-z0-9-]` segments). It is used verbatim,
-/// because it is an identity: see the note on ids below.
+/// not plugin input, and the caller SHOULD pass an id it has validated (the
+/// catalogue restricts them to `[A-Za-z0-9-]` segments). It is used verbatim
+/// as the topic ID, because that is an identity: see the note on ids below.
+/// When it also stands in for a missing TITLE, that copy is masked and capped
+/// like any other header string — the model's guarantee must not rest on a
+/// caller convention.
 ///
 /// ```
 /// use norte_help::{Origin, parse_untrusted};
@@ -855,7 +882,8 @@ pub fn has_broken_front_matter(source: &str) -> bool {
 /// identity produces a key that resolves to nothing or to something else.
 /// They are accepted or REFUSED, never rewritten — which is what lets the
 /// model still promise that every string it carries is free of terminal
-/// hazards.
+/// hazards. Only that: a key may still carry zero-width combining marks, which
+/// are not hazards and are kept knowingly (see `is_own_command`).
 #[must_use]
 pub fn parse_untrusted(bytes: &[u8], fallback_id: &str, publisher: Option<String>) -> Parsed {
     let limits = Limits::untrusted();
@@ -882,8 +910,20 @@ pub fn parse_untrusted(bytes: &[u8], fallback_id: &str, publisher: Option<String
     let title = fm
         .as_ref()
         .map_or_else(String::new, |f| header_string(&f.title, &mut truncated));
+    // The fallback goes through `header_string` too. It is the COMMON branch,
+    // not a corner — a `help.md` with no `+++` fence at all is a legitimate
+    // choice, and such a file has no title — so a verbatim copy here would make
+    // the one string that skips masking the one that runs most often. The id is
+    // host-supplied, but "the caller validated it" is a convention, not a type,
+    // and `Origin::Plugin` promises the renderer something unconditional.
+    //
+    // Capping it does NOT raise `truncated`, for the same reason `publisher`
+    // does not (see below): the badge is about the PLUGIN'S DOCUMENT, and this
+    // title is not in the document — it is the host's own id standing in for a
+    // title the author never wrote. Badging a byte-complete `help.md` because
+    // the id it was filed under is long is a badge that cries wolf.
     let title = if is_blank_id(&title) {
-        fallback_id.to_owned()
+        header_string(fallback_id, &mut false)
     } else {
         title
     };

@@ -736,3 +736,108 @@ fn assert_no_hazard(topic: &Topic, ctx: &str) {
         }
     }
 }
+
+// ---------------------------------------------------------------------
+// H3e encoding audit: the fallback title, the doctor's flood, and the
+// zalgo the dispatch key knowingly lets through.
+
+#[test]
+fn the_fallback_title_is_masked_and_bounded_like_a_declared_one() {
+    // A `help.md` with no `+++` fence at all is a legitimate choice — the
+    // COMMON case, not a corner — and such a file has no title, so the
+    // fallback branch runs. The fallback is the plugin id, and if it is
+    // copied verbatim the one string in the model that never went through
+    // `header_string` is the one that runs most often.
+    //
+    // `Origin::Plugin` promises the renderer that everything it carries is
+    // already masked and bounded. Today that promise held only because
+    // callers happen to validate ids — a convention, not a type. The id
+    // FIELD stays verbatim (it is a lookup key and masking is not
+    // injective); only the TITLE copy is masked and capped.
+    let hostile = "acme\u{202E}ftp.exe";
+    let parsed = parse_untrusted(b"just prose, no fence", hostile, None);
+    assert!(
+        !parsed.topic.title.contains('\u{202E}'),
+        "a raw RLO reached the title: {:?}",
+        parsed.topic.title
+    );
+    assert_eq!(
+        parsed.topic.id.as_str(),
+        hostile,
+        "the ID stays byte-exact: it is a lookup key, and masking is not injective"
+    );
+
+    let long = "a".repeat(HEADER_CHARS + 500);
+    let parsed = parse_untrusted(b"", &long, None);
+    assert!(
+        parsed.topic.title.chars().count() <= HEADER_CHARS,
+        "the fallback ignored the cap: {} chars",
+        parsed.topic.title.chars().count()
+    );
+    assert!(
+        !parsed.truncated,
+        "but cutting THIS one does not badge the document: the title is not IN \
+         the document, it is the host's id standing in for one the author never \
+         wrote — same call `publisher` already makes, and \
+         `a_hostile_fallback_id_is_kept_verbatim_as_the_identity` pins it"
+    );
+}
+
+#[test]
+fn a_header_cannot_flood_the_doctor_with_foreign_commands() {
+    // `foreign_commands` feeds one `norte doctor` finding per entry. A 64 KiB
+    // front matter of `commands = ["", "", …]` holds ~21 829 of them by
+    // `MAX_HEADER_COMMANDS`' own measurement, and none is the plugin's own,
+    // so every one becomes a finding: a screen flood in text mode and a
+    // multi-megabyte array in `--json`, out of a file the host already
+    // bounded. The parser never builds more than sixteen commands; the
+    // report about them must not either.
+    let mut header = String::from("+++\nid = \"acme.ftp\"\ntitle = \"T\"\ncommands = [");
+    for _ in 0..5_000 {
+        header.push_str("\"fs.copy\",");
+    }
+    header.push_str("]\n+++\nbody");
+
+    let foreign = norte_help::foreign_commands(&header, "acme.ftp");
+    assert!(
+        !foreign.is_empty(),
+        "the fixture must really declare foreign commands"
+    );
+    assert!(
+        foreign.len() <= 16,
+        "one finding per entry, uncapped: {} of them",
+        foreign.len()
+    );
+}
+
+#[test]
+fn a_dispatch_key_of_combining_marks_is_accepted_knowingly() {
+    // The zalgo hole, PINNED rather than closed. `plugin:acme:` + 60 combining
+    // acutes passes every check `is_own_command` makes — it is none of
+    // `U+FFFD`, the invisible fillers or `is_terminal_hazard` — reaches
+    // `topic.commands`, and a width-aware renderer measures it at zero cells
+    // and paints it whole: a zalgo stack over whatever follows.
+    //
+    // It is ACCEPTED on purpose. Rejecting it means deciding what a combining
+    // mark is, which needs a Unicode category table this crate does not carry
+    // and would not earn (rule 8) for a cosmetic, terminal-dependent smear;
+    // and a partial blacklist of one or two blocks would be a worse lie than
+    // this test. The command id is an identity: it is accepted or refused,
+    // never rewritten, so masking is not on the table either.
+    //
+    // What this pins is the HONEST claim: the model promises no
+    // `is_terminal_hazard` character, NOT that every string renders in a
+    // predictable number of cells.
+    let zalgo: String = std::iter::repeat_n('\u{0301}', 60).collect();
+    let key = format!("plugin:acme:sync{zalgo}");
+    let src = format!("+++\nid = \"acme\"\ntitle = \"T\"\n+++\nrun {{{{cmd:{key}}}}}\n");
+    let parsed = parse_untrusted(src.as_bytes(), "acme", None);
+
+    assert_eq!(
+        command_refs(&parsed),
+        vec![key],
+        "documented behaviour: a combining-mark stack in a dispatch key is kept"
+    );
+    // And the promise that IS made still holds over it.
+    assert_no_hazard(&parsed.topic, "zalgo command key");
+}
