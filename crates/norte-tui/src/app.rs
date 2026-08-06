@@ -1037,26 +1037,31 @@ fn nav_item_display(
 /// tope del manifiesto: mirror deliberado, no coincidencia.
 pub const PLUGIN_DESCRIPTION_WIRE_CAP: usize = 280;
 
-/// Tope defensivo sobre `PluginInfo.name`/`.publisher` en el wire (H3e).
+/// Tope defensivo sobre las etiquetas cortas de un plugin en el wire (H3e):
+/// `PluginInfo.name`, `.publisher` y `PluginCommandInfo.title`.
 ///
-/// Ni uno ni otro tienen tope en el manifiesto — sí lo tienen `description`
-/// (280) y `contributions.command[].title` (120,
-/// `norte_plugin_host::manifest::COMMAND_TITLE_MAX_CHARS`) — así que aquí no
-/// hay un límite de origen que reflejar y el cliente pone el suyo. Mismo valor
-/// que el del título de un comando: son el mismo tipo de texto (una etiqueta
-/// corta de tercero que va a una fila) y la ayuda los pinta uno al lado del
-/// otro. Sin él, un `name` kilométrico no desborda el pintado (la lateral
-/// recorta), pero sí el FILTRO del modelo, que pliega el título entero en cada
-/// tecla.
+/// El manifiesto acota SOLO el tercero — 120,
+/// `norte_plugin_host::manifest::COMMAND_TITLE_MAX_CHARS` — y no acota `name`
+/// ni `publisher`, así que para esos dos no hay límite de origen que reflejar y
+/// el cliente pone el suyo. Se elige EL MISMO valor a propósito: son el mismo
+/// tipo de texto (una etiqueta corta de tercero que va a una fila) y la ayuda
+/// los pinta uno al lado del otro. Para `title` el tope es además un espejo del
+/// del manifiesto, con el mismo criterio que
+/// [`PLUGIN_DESCRIPTION_WIRE_CAP`]: el límite de parseo solo protege el camino
+/// honesto, y un daemon hostil o comprometido puede mandar cualquier longitud.
+///
+/// Sin él, un `name` kilométrico no desborda el pintado (la lateral recorta),
+/// pero sí el FILTRO del modelo, que pliega el título entero en cada tecla.
 pub const PLUGIN_NAME_WIRE_CAP: usize = 120;
 
 /// Acota ([`PLUGIN_NAME_WIRE_CAP`]) y enmascara ([`display_name`]) una etiqueta
-/// corta de tercero — el `name` o el `publisher` de un plugin — para que pueda
-/// entrar en el modelo de la ayuda (H3e).
+/// corta de tercero — el `name`, el `publisher` o el título de un comando de un
+/// plugin — para que pueda entrar en el modelo de la ayuda (H3e).
 ///
 /// En el PUNTO DE ENTRADA, no al pintar: `norte_frontend::help::PluginNode`
-/// documenta su `title` como «ya enmascarado y acotado», y el modelo no
-/// enmascara nada — filtra sobre el título crudo que le den.
+/// documenta su `title` como «ya enmascarado y acotado», el modelo no enmascara
+/// nada — filtra sobre el título crudo que le den — y
+/// [`crate::help::TuiChords`] entrega sus etiquetas directas al pintor.
 #[must_use]
 pub fn plugin_label(raw: &str) -> String {
     let clamped: String = raw.chars().take(PLUGIN_NAME_WIRE_CAP).collect();
@@ -1811,10 +1816,39 @@ impl App {
             .filter(|p| p.approved && p.enabled)
             .map(|p| p.id.clone())
             .collect();
+        // The manifest's name for every contributed command, keyed by its
+        // DISPATCH key — built with the same `format!` the palette uses
+        // (`norte_frontend::palette::plugin_rows`) so these keys and the ones a
+        // page carries in `topic.commands` cannot be spelled differently. The
+        // command id has no validated charset and may contain `:`, which is why
+        // nothing here ever splits one; it is only ever appended.
+        //
+        // NOT filtered by `approved && enabled`, unlike `active` above: an
+        // inactive plugin's page still lists its rows — dimmed, which is the
+        // answer the reader came for — and a dimmed row deserves its name as
+        // much as a live one. The wire agrees; `commands` is discovery data a
+        // human inspects BEFORE approving (`norte_core::plugins`).
+        //
+        // A blank title is dropped rather than stored: `label` would return it
+        // verbatim and `norte_help::label_or_id` would then fall back to the id
+        // anyway, so keeping it would only make the map lie about what it knows.
+        let titles: std::collections::HashMap<String, String> = plugins
+            .iter()
+            .flat_map(|p| {
+                let plugin_id = p.id.clone();
+                p.commands.iter().map(move |c| {
+                    (
+                        format!("plugin:{plugin_id}:{}", c.id),
+                        plugin_label(&c.title),
+                    )
+                })
+            })
+            .filter(|(_, title)| !title.is_empty())
+            .collect();
         if let Some(help) = self.help.as_mut() {
             help.set_plugins(plugins);
         }
-        self.help_chords = std::sync::Arc::new(self.help_chords.with_plugins(active));
+        self.help_chords = std::sync::Arc::new(self.help_chords.with_plugins(active, titles));
     }
 
     /// Records a `connection.degraded` notification (#44).
@@ -6295,6 +6329,73 @@ mod help_plugin_snapshot_tests {
             columns: Vec::new(),
             has_help: true,
         }
+    }
+
+    /// El MISMO `help.md` en los dos casos del test de abajo: declara el
+    /// comando en su front matter (la fila) y lo cita en la prosa (la marca en
+    /// línea). Fíjese en lo que NO lleva: un título. El header de un tema no
+    /// tiene dónde ponerlo — `parse_untrusted` solo conserva claves de
+    /// despacho — así que el nombre solo puede salir del manifiesto.
+    const PAGINA: &[u8] = b"+++\nid = \"org.norte.demo\"\ntitle = \"Demo\"\n\
+                            commands = [\"plugin:org.norte.demo:greet\"]\n+++\n\
+                            La marca propia: {{cmd:plugin:org.norte.demo:greet}}";
+
+    /// El nombre de un comando sale de la FOTO (el manifiesto), jamás del
+    /// `help.md`. El plugin escribe los dos, así que solo uno puede mandar, y
+    /// tiene que ser el que ve el humano que aprueba el plugin: el gestor de
+    /// extensiones, la paleta y la solicitud de aprobación muestran el del
+    /// manifiesto, y una página que llamara `greet` de otra manera dejaría al
+    /// lector sin saber qué está aprobando.
+    ///
+    /// Se demuestra cambiando el manifiesto con los MISMOS bytes de página: si
+    /// el texto pintado sigue al manifiesto, la página no es la fuente.
+    #[test]
+    fn el_nombre_de_un_comando_sale_de_la_foto_no_de_la_pagina() {
+        let pintado_con = |titulo: &str| -> String {
+            let mut app = app();
+            app.help = Some(super::HelpView::new(norte_help::Lang::En, Vec::new()));
+            let mut p = plugin("org.norte.demo", true, true);
+            p.commands = vec![norte_proto::methods::PluginCommandInfo {
+                id: "greet".to_owned(),
+                title: titulo.to_owned(),
+            }];
+            app.freeze_help_plugins(&[p]);
+            let help = app.help.as_mut().expect("abierta");
+            help.state.open(&norte_help::TopicId::new("org.norte.demo"));
+            let parsed = norte_help::parse_untrusted(PAGINA, "org.norte.demo", None);
+            help.state.install_plugin_topic(parsed.topic);
+            app.refresh_help(70, 20);
+            let (lines, _) = app.help.as_ref().expect("abierta").body();
+            lines
+                .iter()
+                .map(|l| {
+                    l.spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let texto = pintado_con("Greet the world");
+        assert!(
+            texto.contains("Greet the world"),
+            "la fila y la marca llevan el nombre del manifiesto: {texto}"
+        );
+        assert!(
+            !texto.contains("plugin:org.norte.demo:greet"),
+            "y NO su clave de despacho, ni en la prosa ni en la fila: {texto}"
+        );
+        // Dos veces: una en la prosa (la marca en línea) y otra en la tabla de
+        // filas ejecutables. `render_command` y `rows_of` comparten
+        // `label_or_id` justo para que no puedan discrepar.
+        assert_eq!(texto.matches("Greet the world").count(), 2, "{texto}");
+
+        // Mismos bytes de página, otro manifiesto: manda el manifiesto.
+        let otro = pintado_con("Saludar al mundo");
+        assert!(otro.contains("Saludar al mundo"), "{otro}");
+        assert!(!otro.contains("Greet the world"), "{otro}");
     }
 
     /// H3e: la foto congela las DOS mitades a la vez — la barra ofrece la

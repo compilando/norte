@@ -216,6 +216,28 @@ pub struct TuiChords {
     /// vouch for any of them". Same principle in both — do not claim what has
     /// not been established.
     active_plugins: std::collections::BTreeSet<String>,
+    /// Dispatch key (`plugin:{plugin_id}:{command_id}`) to the title the
+    /// MANIFEST gives that command, snapshotted with [`Self::active_plugins`]
+    /// from the same `plugin.list` (H3e).
+    ///
+    /// Without it a plugin's own page named its commands by their raw dispatch
+    /// key — `plugin:org.norte.demo:greet` where the manifest says «Greet the
+    /// world» — in the prose AND in the row below it. The chain is
+    /// `norte_help::render_command` → no chord → `label_or_id` →
+    /// [`ChordResolver::label`], and a `plugin:` key has no `help-cmd-*` entry
+    /// BY CONSTRUCTION, so the fallback to the id was guaranteed on the one
+    /// page where every row is a plugin command.
+    ///
+    /// The titles come from the SNAPSHOT and never from the `help.md`. A plugin
+    /// authors both, so only one of them can be the answer, and it has to be
+    /// the one the extension manager shows the human who approves the plugin —
+    /// otherwise a page could call `greet` one thing while the manager, the
+    /// palette and the approval prompt call it another.
+    ///
+    /// Values are already masked and capped (`crate::app::plugin_label`): the
+    /// resolver hands strings straight to a painter, so anything it carries has
+    /// to be paintable already.
+    plugin_labels: HashMap<String, String>,
 }
 
 /// Compile anchor: a fourth `Screen` must not silently make `chord` answer
@@ -260,6 +282,7 @@ impl TuiChords {
             lang,
             facts: NO_IMPEDIMENT,
             active_plugins: std::collections::BTreeSet::new(),
+            plugin_labels: HashMap::new(),
         }
     }
 
@@ -282,23 +305,34 @@ impl TuiChords {
             lang: self.lang,
             facts,
             active_plugins: self.active_plugins.clone(),
+            plugin_labels: self.plugin_labels.clone(),
         }
     }
 
-    /// The same resolver, carrying the plugin snapshot (H3e).
+    /// The same resolver, carrying the plugin snapshot (H3e): which plugins are
+    /// active, and what the manifest calls each of their commands.
+    ///
+    /// BOTH halves in one builder because they are one photograph — the same
+    /// `plugin.list`, the same instant — and a resolver holding a fresh active
+    /// set beside stale titles would dim a row correctly while naming it wrong.
     ///
     /// A NEW value, for the reason [`Self::with_facts`] gives, and the two
-    /// compose in either order: each carries the other's field over, so the
+    /// compose in either order: each carries the other's fields over, so the
     /// re-freeze the refresh funnel performs while the overlay is open
     /// (`main::after_panes_refresh`) cannot drop the snapshot and dim every
-    /// plugin row halfway down a page.
+    /// plugin row halfway down a page — nor take their names away.
     #[must_use]
-    pub fn with_plugins(&self, active: std::collections::BTreeSet<String>) -> Self {
+    pub fn with_plugins(
+        &self,
+        active: std::collections::BTreeSet<String>,
+        titles: HashMap<String, String>,
+    ) -> Self {
         Self {
             chords: self.chords.clone(),
             lang: self.lang,
             facts: self.facts,
             active_plugins: active,
+            plugin_labels: titles,
         }
     }
 }
@@ -313,6 +347,28 @@ impl ChordResolver for TuiChords {
 
     /// The catalogue's short label, or an EMPTY string when it has no entry.
     ///
+    /// A `plugin:{id}:{command}` key is answered from the SNAPSHOT instead
+    /// (H3e): the app's Fluent catalogue cannot possibly hold an entry for a
+    /// command a third party declared, so the generic path below returns blank
+    /// and `norte_help::label_or_id` falls back to the raw dispatch key —
+    /// which is how a plugin's own page came to name its commands
+    /// `plugin:org.norte.demo:greet` while the manifest, the palette and the
+    /// extension manager all said «Greet the world».
+    ///
+    /// Only a key `norte_frontend::availability::plugin_of_command` recognises
+    /// is answered from here, and that guard is STRUCTURAL rather than a
+    /// promise about the caller: this map arrives through a public builder, and
+    /// a built-in command's label must not be overridable by data that came off
+    /// the wire even in principle. `App::freeze_help_plugins` cannot produce
+    /// such a key — it puts the prefix on itself — so the guard costs one
+    /// comparison and closes the shape of the mistake rather than the instance.
+    /// Sharing the predicate with the availability arm also means "what counts
+    /// as a plugin key" has one definition in this frontend, not two.
+    ///
+    /// A key the snapshot does not name still returns blank, so the fallback to
+    /// the id survives untouched: a row wearing its dispatch key is poor, and a
+    /// row wearing nothing at all is worse.
+    ///
     /// Blank on a miss is the contract, not an accident: `norte_i18n::t_in`
     /// answers a missing message with the id itself, so returning it
     /// unconditionally would paint `help-cmd-…` at the reader and stop
@@ -324,6 +380,11 @@ impl ChordResolver for TuiChords {
     /// cannot drift out of agreement with it. A message id can never be its
     /// own translation, so the comparison has no false positive.
     fn label(&self, command: &str) -> String {
+        if norte_frontend::availability::plugin_of_command(command).is_some()
+            && let Some(title) = self.plugin_labels.get(command)
+        {
+            return title.clone();
+        }
         let id = label_id(command);
         let text = norte_i18n::t_in(self.lang, &id);
         if text == id { String::new() } else { text }
@@ -751,7 +812,8 @@ mod tests {
     /// incondicionalmente sobre un `plugin.run_command` que va a rechazarla.
     #[test]
     fn un_comando_de_plugin_apagado_llega_atenuado_a_la_pagina() {
-        let r = resolver_con(facts_normales()).with_plugins(std::collections::BTreeSet::new());
+        let r = resolver_con(facts_normales())
+            .with_plugins(std::collections::BTreeSet::new(), HashMap::new());
         assert_eq!(
             r.availability("plugin:acme.ftp:sync").reason(),
             Some(norte_help::Reason::PluginInactive)
@@ -760,8 +822,10 @@ mod tests {
 
     #[test]
     fn un_comando_de_plugin_encendido_no_se_atenua() {
-        let r = resolver_con(facts_normales())
-            .with_plugins(["acme.ftp".to_owned()].into_iter().collect());
+        let r = resolver_con(facts_normales()).with_plugins(
+            ["acme.ftp".to_owned()].into_iter().collect(),
+            HashMap::new(),
+        );
         assert!(r.availability("plugin:acme.ftp:sync").is_available());
     }
 
@@ -774,7 +838,10 @@ mod tests {
     #[test]
     fn congelar_los_hechos_no_pierde_la_foto_de_plugins() {
         let r = orthodox_resolver()
-            .with_plugins(["acme.ftp".to_owned()].into_iter().collect())
+            .with_plugins(
+                ["acme.ftp".to_owned()].into_iter().collect(),
+                HashMap::new(),
+            )
             .with_facts(facts_normales());
         assert!(r.availability("plugin:acme.ftp:sync").is_available());
         // Y al revés: la foto tomada después conserva los hechos.
@@ -782,7 +849,7 @@ mod tests {
             dest_read_only: true,
             ..facts_normales()
         })
-        .with_plugins(std::collections::BTreeSet::new());
+        .with_plugins(std::collections::BTreeSet::new(), HashMap::new());
         assert_eq!(
             r.availability("pane.copy").reason(),
             Some(norte_help::Reason::ReadOnlyBackend)
@@ -799,5 +866,129 @@ mod tests {
             r.availability("plugin:acme.ftp:sync").reason(),
             Some(norte_help::Reason::PluginInactive)
         );
+    }
+
+    /// Un mapa de títulos con la forma que sale de `plugin.list`.
+    fn titulos(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect()
+    }
+
+    fn resolver_con_titulos(pairs: &[(&str, &str)]) -> TuiChords {
+        resolver_con(facts_normales()).with_plugins(
+            ["org.norte.demo".to_owned()].into_iter().collect(),
+            titulos(pairs),
+        )
+    }
+
+    /// H3e: la fila de un comando de plugin lleva el NOMBRE que le da el
+    /// manifiesto, no su clave de despacho.
+    ///
+    /// El defecto se veía en pantalla: la página de `org.norte.demo` pintaba
+    /// `plugin:org.norte.demo:greet` donde el manifiesto dice «Greet the
+    /// world», y la paleta —mirando los mismos datos— pintaba el título. La
+    /// cadena es `render_command` → sin chord → `label_or_id` → `label` en
+    /// blanco → repliegue al id, y para una clave `plugin:` ese repliegue está
+    /// GARANTIZADO: el catálogo Fluent de la app no puede tener una entrada
+    /// para un comando que declaró un tercero.
+    #[test]
+    fn una_fila_de_plugin_lleva_el_nombre_del_manifiesto() {
+        let r = resolver_con_titulos(&[("plugin:org.norte.demo:greet", "Greet the world")]);
+        assert_eq!(r.label("plugin:org.norte.demo:greet"), "Greet the world");
+    }
+
+    /// Y la marca `{{cmd:…}}` en línea dice LO MISMO: `render_command` y
+    /// `rows_of` comparten `label_or_id` precisamente para que la prosa y la
+    /// fila de debajo no puedan nombrar un comando de dos maneras.
+    #[test]
+    fn la_marca_en_linea_y_la_fila_dicen_lo_mismo() {
+        let r = resolver_con_titulos(&[("plugin:org.norte.demo:greet", "Greet the world")]);
+        assert_eq!(
+            render_command("plugin:org.norte.demo:greet", &r),
+            CommandText::Name("Greet the world".to_owned()),
+            "sin chord (un comando de plugin no está en el keymap) la marca \
+             NOMBRA el comando, y lo nombra como el manifiesto"
+        );
+    }
+
+    /// Una clave que la foto no nombra conserva el comportamiento de hoy: se
+    /// repliega al id, JAMÁS a blanco. Una fila con su clave de despacho es
+    /// pobre; una fila sin texto ninguno es peor.
+    #[test]
+    fn una_clave_sin_titulo_en_la_foto_sigue_pintando_su_id() {
+        let r = resolver_con_titulos(&[("plugin:org.norte.demo:greet", "Greet the world")]);
+        assert_eq!(
+            r.label("plugin:org.norte.demo:otro"),
+            "",
+            "el resolver contesta en blanco, que es el contrato de `label`"
+        );
+        assert_eq!(
+            render_command("plugin:org.norte.demo:otro", &r),
+            CommandText::Name("plugin:org.norte.demo:otro".to_owned()),
+            "…y la cadena de `norte-help` se repliega al id"
+        );
+    }
+
+    /// Un título hostil llega ENMASCARADO y ACOTADO — el enmascarado ocurre en
+    /// el punto de entrada (`crate::app::plugin_label`), no al pintar, porque
+    /// este resolver entrega sus cadenas directas al pintor.
+    #[test]
+    fn un_titulo_hostil_llega_enmascarado_y_acotado() {
+        let hostil = format!("Gre\u{202E}et\u{200B}{}", "x".repeat(5_000));
+        let r = resolver_con_titulos(&[(
+            "plugin:org.norte.demo:greet",
+            &crate::app::plugin_label(&hostil),
+        )]);
+        let label = r.label("plugin:org.norte.demo:greet");
+        assert!(
+            !label.chars().any(norte_encoding::is_terminal_hazard),
+            "sin peligros de terminal: {label:?}"
+        );
+        assert!(
+            label.chars().count() <= crate::app::PLUGIN_NAME_WIRE_CAP,
+            "acotado: {} chars",
+            label.chars().count()
+        );
+        assert!(label.contains('\u{FFFD}'), "anti-vacuidad: {label:?}");
+    }
+
+    /// Un comando del binario NO se lee del mapa de plugins: su etiqueta sigue
+    /// saliendo del catálogo Fluent, pase lo que pase en el mapa.
+    ///
+    /// `App::freeze_help_plugins` no puede producir una clave así — pone el
+    /// prefijo él mismo — pero `with_plugins` es PÚBLICO y el mapa nace de
+    /// datos que cruzaron el wire, así que la guarda es estructural: la
+    /// etiqueta de un comando del binario no debe poder sobrescribirse ni en
+    /// principio. Este test pina la forma del fallo, no una instancia.
+    #[test]
+    fn un_comando_del_binario_no_se_lee_del_mapa_de_plugins() {
+        let r = resolver_con_titulos(&[("pane.copy", "IMPOSTOR")]);
+        assert_eq!(
+            r.label("pane.copy"),
+            norte_i18n::t_in(norte_i18n::Lang::En, "help-cmd-pane-copy"),
+        );
+        assert_ne!(r.label("pane.copy"), "IMPOSTOR");
+        // Y una clave `plugin:` MALFORMADA tampoco entra: `plugin_of_command`
+        // la rechaza, igual que el brazo de disponibilidad la atenúa
+        // fail-closed. Una sola definición de «esto es una clave de plugin».
+        let r = resolver_con_titulos(&[("plugin:", "IMPOSTOR"), ("plugin:x", "IMPOSTOR")]);
+        assert_eq!(r.label("plugin:"), "");
+        assert_eq!(r.label("plugin:x"), "");
+    }
+
+    /// Los títulos viajan con el re-congelado de hechos, como el conjunto de
+    /// activos: el embudo de refresco (`main::after_panes_refresh`) los pisaría
+    /// si no, y una página abierta perdería los nombres de sus filas a mitad de
+    /// lectura.
+    #[test]
+    fn recongelar_los_hechos_no_pierde_los_titulos() {
+        let r = resolver_con_titulos(&[("plugin:org.norte.demo:greet", "Greet the world")])
+            .with_facts(norte_frontend::availability::Facts {
+                dest_read_only: true,
+                ..facts_normales()
+            });
+        assert_eq!(r.label("plugin:org.norte.demo:greet"), "Greet the world");
     }
 }
