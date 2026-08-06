@@ -365,3 +365,45 @@ modal ARRIVING over an open help closes the help, as the palette and settings
 overlays already do: an agent's approval prompt may never sit hidden under a
 help page. The consequence is deliberate and fail-closed: a help page left open
 over an approval lets its TTL expire, which denies the agent.
+
+## Amendment 2026-08-06 (H3e): what the bump carries, and what a plugin page owes the reader
+
+**`PluginInfo.settings` is dropped.** The design proposed carrying it
+opportunistically "with whichever future change bumps `PROTOCOL_VERSION`", to
+close the display debt P2 deferred. That debt was closed first, by 0.28.0
+(G3c), which shipped `plugin.get_config`/`plugin.set_config` — the schema plus
+the effective value, not a flattened display map. Carrying `settings` now would
+be a second, weaker way to read the same thing. The bump carries `has_help` and
+`plugin.help`, and nothing else.
+
+**Plugin state is a SNAPSHOT, not a cache.** One `plugin.list` on the `F1`
+path, frozen beside the capability and connection facts H3d already freezes,
+dead when the overlay closes. No cache in `App`, no invalidation events, no
+round trip while painting. The cost is that `F1` from a modal or from the
+palette opens without the extensions group: those chains are synchronous and a
+daemon call inside key handling is not worth a sidebar node.
+
+**The palette keeps hiding inactive plugin commands.** `Reason::PluginInactive`
+surfaces on the plugin's own page — where a reader is asking about that plugin
+— and nowhere else. The palette stays the fast gesture.
+
+**`has_help` is strict; `false` does not mean "absent".** The wire flag applies
+the same escape guard the reader applies, so a `help.md` symlinked out of the
+plugin's directory reports `false`. Computing it laxly made the pair
+(`has_help: true`, empty page) a path-existence oracle an agent could read
+through `plugin.list` + `plugin.help`, neither of which the policy engine
+gates. `norte doctor` keeps the lax question for itself, because a diagnostic
+that inherits the strict flag goes blind to exactly the case it exists to name.
+
+**A plugin page always declares itself.** The badge under the title is not
+conditional on the plugin having filled in a publisher: a page that renders in
+the same shape as norte's own prose is a page that can tell the reader
+approving extensions is safe, one keystroke from the extension manager, at the
+moment they are deciding. The provenance line is unconditional and the id — 
+host-assigned, never empty — is what fills it when the plugin says nothing.
+
+**The corpus/plugin id collision cannot happen today, and the guard stays.**
+Plugin ids are reverse-DNS; every corpus topic id is a single segment. The
+guard remains because `HelpState` receives ids over the WIRE and does not get
+to assume the peer validated them the way this host does, and the collision is
+pinned by a test that goes red if either invariant is relaxed.

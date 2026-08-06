@@ -9,6 +9,34 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Plugins bring their own help page (H3e):** a plugin can ship a `help.md`
+  next to its `plugin.toml`, and it becomes one more page in the help overlay,
+  under an *Extensions* group, with the plugin's own commands as rows you can
+  run from there. The page arrives on demand — 64 KiB per plugin has no
+  business riding every listing — and it is fetched once per time you open the
+  help, never while a frame is being painted. A row for a plugin that is not
+  approved and enabled is dimmed and says so, which is the answer you came for
+  if you are reading that plugin's documentation to decide whether to turn it
+  on. The rows wear the name the plugin gave the command, not the internal key
+  norte dispatches it with.
+  The text is third-party and is treated as such throughout: the host bounds it
+  at the same cap the hostile-input parser uses, decodes it, and refuses to
+  serve a `help.md` that symlinks out of the plugin's own directory; the page
+  is masked when it is parsed, so a bidi override in a title cannot rearrange
+  what you read; a `{{cmd:}}` naming a command the plugin does not own stays
+  literal text instead of becoming a row you could press; and every plugin page
+  says on its face that it is a plugin page, because a page that could pass for
+  norte's own prose is a page that can tell you approving is safe.
+  `norte doctor` now names six ways a `help.md` can silently do nothing: over
+  the size cap, undecodable bytes, announcing a page that serves nothing, a
+  `+++` header that does not parse, commands the plugin does not own, and an id
+  that collides with a built-in page.
+  Two things it deliberately does not do. `F1` pressed over a dialog or from
+  the command palette opens without the extensions group: those paths are
+  synchronous, and a daemon round trip inside key handling is not worth a
+  sidebar node. And the command palette still hides an inactive plugin's
+  commands rather than dimming them — the palette is the fast gesture, and the
+  place to explain a plugin is its own page.
 - **The help stops offering what the app would refuse (H3d):** a row for a
   command that cannot run where you are — writing into an archive, renaming
   something the backend will not let you rename — is dimmed and says why,
