@@ -535,8 +535,11 @@ impl PluginRegistry {
     /// igual que el resto de este registro.
     #[must_use]
     pub fn help_of(&self, id: &str) -> Option<norte_proto::methods::PluginHelpResult> {
-        let entry = self.catalog.plugins.iter().find(|e| e.manifest.id == id)?;
-        let bytes = Self::verified_child(&entry.dir, "help.md")
+        if !self.is_known(id) {
+            return None;
+        }
+        let bytes = self
+            .verified_help_path(id)
             .and_then(|p| std::fs::read(p).ok())
             .unwrap_or_default();
         let s = norte_help::sanitize_untrusted(&bytes);
@@ -545,6 +548,26 @@ impl PluginRegistry {
             truncated: s.truncated,
             lossy: s.lossy,
         })
+    }
+
+    /// La ruta del `help.md` de `id` YA VERIFICADA (H3e), o `None` si `id` no
+    /// está en el catálogo, no tiene `help.md`, o el que tiene no es legible o
+    /// escapa de su propio directorio.
+    ///
+    /// GARANTÍA: lo que sale de aquí está CANONICALIZADO y confirmado DENTRO
+    /// del directorio que el catálogo guardó para ese plugin (`verified_child`,
+    /// la misma guarda que `plugin.wasm`). El llamador puede abrirlo
+    /// directamente y NO DEBE re-derivarlo del `id`: re-derivar volvería a
+    /// resolver el nombre y perdería la guarda, que es lo único que impide que
+    /// `plugin.help` se convierta en una lectura de fichero arbitrario por fuera
+    /// del motor de policy.
+    ///
+    /// Existe separada de [`Self::help_of`] para que el daemon pueda hacer el
+    /// LOOKUP bajo el lock del registro y la LECTURA fuera (regla 2).
+    #[must_use]
+    pub fn verified_help_path(&self, id: &str) -> Option<PathBuf> {
+        let entry = self.catalog.plugins.iter().find(|e| e.manifest.id == id)?;
+        Self::verified_child(&entry.dir, "help.md")
     }
 
     /// Esquema `[config]` de `id` + valores EFECTIVOS, EMPAREJADOS en orden
@@ -921,7 +944,12 @@ impl PluginRegistry {
     }
 
     /// `true` si `id` corresponde a un plugin realmente descubierto.
-    fn is_known(&self, id: &str) -> bool {
+    ///
+    /// Público desde H3e: el handler de `plugin.help` necesita separar
+    /// "¿existe?" (respuesta `INVALID_PARAMS` inmediata, bajo el lock) de la
+    /// lectura del fichero (fuera del lock, en `spawn_blocking`).
+    #[must_use]
+    pub fn is_known(&self, id: &str) -> bool {
         self.catalog.plugins.iter().any(|e| e.manifest.id == id)
     }
 

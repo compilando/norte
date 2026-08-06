@@ -2394,6 +2394,166 @@ async fn plugin_run_command_id_desconocido_es_invalid_params() {
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 }
 
+// ---------- plugin.help (H3e) ----------
+
+/// Daemon sembrado con el plugin demo, dando al test la oportunidad de escribir
+/// su propio `help.md` (H3e). `seed` recibe `(raiz_del_tempdir, dir_del_plugin)`
+/// — la raíz para poder dejar ficheros FUERA del directorio del plugin, que es
+/// justo lo que el caso del enlace escapado necesita.
+async fn spawn_daemon_help_plugin(
+    seed: impl FnOnce(&std::path::Path, &std::path::Path),
+) -> TestDaemon {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    let plugins_root = dir.path().join("cfg");
+    let plugin_dir = plugins_root.join("plugins").join("org.norte.demo");
+    std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin");
+    std::fs::write(plugin_dir.join("plugin.toml"), DEMO_MANIFEST).expect("write manifest");
+    seed(dir.path(), &plugin_dir);
+
+    let engine = Arc::new(Engine::new());
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    let daemon = Daemon::bind(
+        engine,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+            plugins_dir: Some(plugins_root),
+        },
+    )
+    .await
+    .expect("bind");
+    let run = tokio::spawn(daemon.run());
+    TestDaemon {
+        socket,
+        run,
+        _dir: dir,
+        mem,
+    }
+}
+
+/// `plugin.help` por el socket devuelve el `help.md` del plugin, ya acotado por
+/// el host: cuerpo íntegro, sin recorte ni pérdida.
+#[tokio::test]
+async fn plugin_help_devuelve_la_pagina_acotada_del_plugin() {
+    let d = spawn_daemon_help_plugin(|_root, plugin_dir| {
+        std::fs::write(
+            plugin_dir.join("help.md"),
+            "# Demo\n\nLa página del plugin demo.\n",
+        )
+        .expect("write help.md");
+    })
+    .await;
+    let c = connected_client(&d).await;
+    let help: methods::PluginHelpResult = c
+        .call(
+            methods::PLUGIN_HELP,
+            &methods::PluginHelpParams {
+                id: "org.norte.demo".into(),
+            },
+        )
+        .await
+        .expect("plugin.help responde");
+    assert!(help.markdown.contains("demo"), "llega el cuerpo: {help:?}");
+    assert!(
+        !help.truncated && !help.lossy,
+        "nada que recortar: {help:?}"
+    );
+
+    // Y `plugin.list` lo anuncia, para que el frontend no pida en vano.
+    let list: methods::PluginListResult = c
+        .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
+        .await
+        .expect("plugin.list");
+    assert!(list.plugins[0].has_help, "has_help lo anuncia");
+}
+
+/// Un id que NO está en el catálogo es `INVALID_PARAMS` — mismo trato que
+/// `plugin.set_approval` da a un plugin fantasma. El id nunca se compone en una
+/// ruta, así que un `../` solo falla el lookup.
+#[tokio::test]
+async fn plugin_help_de_un_id_desconocido_es_invalid_params() {
+    let d = spawn_daemon_help_plugin(|_root, plugin_dir| {
+        std::fs::write(plugin_dir.join("help.md"), "# Demo\n").expect("write help.md");
+    })
+    .await;
+    let c = connected_client(&d).await;
+    let err = c
+        .call::<_, methods::PluginHelpResult>(
+            methods::PLUGIN_HELP,
+            &methods::PluginHelpParams {
+                id: "no.existe".into(),
+            },
+        )
+        .await
+        .expect_err("un plugin fantasma no tiene página");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+
+    let err2 = c
+        .call::<_, methods::PluginHelpResult>(
+            methods::PLUGIN_HELP,
+            &methods::PluginHelpParams {
+                id: "../../etc/passwd".into(),
+            },
+        )
+        .await
+        .expect_err("un id con travesía es solo un id desconocido");
+    assert!(matches!(err2, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+}
+
+/// Mismo criterio que `plugin.list`: leer documentación no consiente nada, así
+/// que un AGENTE también puede pedir la página.
+#[tokio::test]
+async fn plugin_help_esta_abierto_a_un_agente() {
+    let d = spawn_daemon_help_plugin(|_root, plugin_dir| {
+        std::fs::write(plugin_dir.join("help.md"), "# Demo\n").expect("write help.md");
+    })
+    .await;
+    let agent = connected_agent(&d, "claude-01").await;
+    let help: methods::PluginHelpResult = agent
+        .call(
+            methods::PLUGIN_HELP,
+            &methods::PluginHelpParams {
+                id: "org.norte.demo".into(),
+            },
+        )
+        .await
+        .expect("un agente puede leer la página de un plugin");
+    assert!(help.markdown.contains("Demo"));
+}
+
+/// El agujero que cierra la guarda del host, comprobado en el punto donde un
+/// AGENTE llega: `plugin.help` no puede convertirse en una lectura de fichero
+/// arbitrario que rodee el motor de policy. Un `help.md` que es un enlace a algo
+/// de FUERA del directorio del plugin se sirve como página en blanco.
+#[cfg(unix)]
+#[tokio::test]
+async fn plugin_help_no_sirve_un_help_md_que_escapa_del_directorio() {
+    let d = spawn_daemon_help_plugin(|root, plugin_dir| {
+        let secreto = root.join("secreto.md");
+        std::fs::write(&secreto, "CLAVE-PRIVADA-QUE-NO-DEBE-CRUZAR-EL-WIRE")
+            .expect("write secreto");
+        std::os::unix::fs::symlink(&secreto, plugin_dir.join("help.md")).expect("symlink");
+    })
+    .await;
+    let agent = connected_agent(&d, "claude-01").await;
+    let help: methods::PluginHelpResult = agent
+        .call(
+            methods::PLUGIN_HELP,
+            &methods::PluginHelpParams {
+                id: "org.norte.demo".into(),
+            },
+        )
+        .await
+        .expect("un plugin conocido siempre responde");
+    assert_eq!(
+        help.markdown, "",
+        "un enlace que sale del directorio no se sirve"
+    );
+}
+
 /// Manifiesto con `[config]` (G3c): tres claves de tipos distintos, para
 /// ejercitar `plugin.get_config`/`plugin.set_config` de punta a punta por
 /// el socket.

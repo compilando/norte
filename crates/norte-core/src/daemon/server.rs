@@ -1825,6 +1825,8 @@ async fn dispatch(
         // plugin.set_approval/set_enabled — ajustes de plugin son datos de
         // usuario, un agente no los edita por su cuenta.
         methods::PLUGIN_GET_CONFIG => handle_plugin_get_config(req.params, shared).await,
+        // plugin.help (H3e): ABIERTO, mismo criterio que plugin.list.
+        methods::PLUGIN_HELP => handle_plugin_help(req.params, shared).await,
         methods::PLUGIN_SET_CONFIG => {
             let p: methods::PluginSetConfigParams = parse_params(req.params)?;
             handle_plugin_set_config(&conn.actor, &p, shared).await
@@ -2651,6 +2653,67 @@ async fn handle_plugin_get_config(
         .map(|(key, spec, value)| crate::plugins::config_key_to_wire(key, &spec, value))
         .collect();
     to_value(&methods::PluginGetConfigResult { keys })
+}
+
+/// `plugin.help` (H3e, 0.34.0): la página de ayuda de un plugin, para CUALQUIER
+/// conexión — mismo criterio que `plugin.list`/`plugin.get_config`: leer
+/// documentación no consiente nada.
+///
+/// El `id` es una CLAVE contra el catálogo, jamás un componente de ruta
+/// (`PluginRegistry` lo resuelve contra los plugins descubiertos), así que un
+/// id con `../` falla el lookup en vez de salir del directorio. Un id
+/// desconocido es `INVALID_PARAMS`, mismo trato que `plugin.set_approval` da a
+/// un plugin fantasma.
+///
+/// A diferencia de sus vecinos, este método parte el LOOKUP de la LECTURA:
+/// `plugin.list`/`plugin.get_config` solo tocan memoria, pero aquí hay un
+/// fichero de hasta 64 KiB que puede vivir en un montaje lento u hostil, y
+/// leerlo dentro del handler async sosteniendo el `std::Mutex` del registro
+/// violaría la regla 2 y encolaría a todas las demás conexiones detrás. Por eso:
+/// lookup bajo el lock, lock soltado, lectura + acotado en `spawn_blocking`. Un
+/// plugin sin `help.md` legible responde la página en blanco sin una sola
+/// llamada bloqueante.
+// `skip_all` SIN el id: viene crudo del wire y no debe llegar al log antes de
+// validarse contra el catálogo (mismo criterio que `handle_plugin_set_approval`).
+#[tracing::instrument(skip_all)]
+async fn handle_plugin_help(
+    params: Option<serde_json::Value>,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::PluginHelpParams = parse_params(params)?;
+    // El lock se libera al cerrar el bloque, ANTES de cualquier `.await`.
+    let path = {
+        let reg = shared.plugins.lock().expect("plugins lock sano");
+        if !reg.is_known(&p.id) {
+            return Err(RpcError::protocol(
+                codes::INVALID_PARAMS,
+                "unknown plugin id",
+            ));
+        }
+        // Ruta YA canonicalizada y confirmada dentro del dir del plugin: se abre
+        // tal cual, sin re-derivarla del id (ver `verified_help_path`).
+        reg.verified_help_path(&p.id)
+    };
+    let Some(path) = path else {
+        // Sin página legible (ausente, ilegible o escapada del directorio): en
+        // blanco. La ayuda es cosmética; quien quiere el diagnóstico fino usa
+        // `norte doctor`.
+        return to_value(&methods::PluginHelpResult {
+            markdown: String::new(),
+            truncated: false,
+            lossy: false,
+        });
+    };
+    let s = tokio::task::spawn_blocking(move || {
+        norte_help::sanitize_untrusted(&std::fs::read(path).unwrap_or_default())
+    })
+    .await
+    .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "plugin help task panicked"))?;
+    to_value(&methods::PluginHelpResult {
+        markdown: s.markdown,
+        truncated: s.truncated,
+        lossy: s.lossy,
+    })
 }
 
 /// `plugin.set_config` (0.28.0, G3c, ADR 0037): persiste UN valor de

@@ -1335,6 +1335,36 @@ impl Backend {
         }
     }
 
+    /// La página de ayuda de un plugin (H3e, 0.34.0), ya acotada por el host.
+    /// Embebido: registro EFÍMERO por llamada en `spawn_blocking` (regla 2),
+    /// mismo criterio de coste que [`Self::plugin_get_config`].
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo; [`Error::NotFound`] si `id` no está en el
+    /// catálogo. Con el daemon caído, `ProviderUnavailable{retryable:true}`.
+    pub async fn plugin_help(
+        &self,
+        id: &str,
+    ) -> Result<norte_proto::methods::PluginHelpResult, Error> {
+        match self {
+            Self::Embedded(_) => {
+                let dir = crate::connect::config_dir();
+                let id = id.to_owned();
+                tokio::task::spawn_blocking(
+                    move || -> Result<norte_proto::methods::PluginHelpResult, Error> {
+                        let reg = crate::PluginRegistry::discover(&dir)
+                            .map_err(|_| Error::Io { retryable: false })?;
+                        reg.help_of(&id).ok_or(Error::NotFound)
+                    },
+                )
+                .await
+                .map_err(|_| Error::Internal { panic: true })?
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.plugin_help(id).await,
+        }
+    }
+
     /// Persiste UN valor de `[config]` para `id`, validado contra el
     /// esquema del manifiesto (0.28.0, G3c, ADR 0037). Embebido: registro
     /// EFÍMERO por-llamada + `PluginRegistry::set_config` (valida, persiste,
@@ -2671,6 +2701,22 @@ pub mod remote {
             self.call_timed(
                 methods::PLUGIN_GET_CONFIG,
                 &methods::PluginGetConfigParams { id: id.to_owned() },
+            )
+            .await
+        }
+
+        /// `plugin.help` contra el daemon (H3e, 0.34.0). Sin fallback
+        /// especial: un daemon N-1 (0.33, sin el handler) responde
+        /// `MethodNotFound`, que `call_timed`/`to_taxonomy` degradan a un
+        /// error genérico — el frontend lo trata como "este plugin no tiene
+        /// página" y sigue pintando la ayuda, nunca como un fallo.
+        pub(super) async fn plugin_help(
+            &self,
+            id: &str,
+        ) -> Result<methods::PluginHelpResult, Error> {
+            self.call_timed(
+                methods::PLUGIN_HELP,
+                &methods::PluginHelpParams { id: id.to_owned() },
             )
             .await
         }
