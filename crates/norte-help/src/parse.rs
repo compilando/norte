@@ -638,6 +638,84 @@ fn header_string(s: &str, truncated: &mut bool) -> String {
 /// them a runnable row on the same dispatch path as the palette.
 const MAX_HEADER_COMMANDS: usize = 16;
 
+/// A plugin `help.md` cut down to what the wire may carry.
+///
+/// It is the FIRST half of `parse_untrusted`, exposed on its own because the
+/// host needs exactly that half: the protocol carries markdown TEXT, not a
+/// parsed tree ([`crate::parse_untrusted`] runs again on the receiving side).
+/// Keeping the cut here rather than in `norte-core` is what stops the byte cap
+/// and the encoding detection from existing twice and drifting apart.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sanitized {
+    /// The text, cut at a UTF-8 boundary and decoded — ALWAYS valid UTF-8.
+    pub markdown: String,
+    /// The source was longer than [`Limits::untrusted`] allows.
+    pub truncated: bool,
+    /// Some byte did not decode under any reading and came out `U+FFFD`.
+    pub lossy: bool,
+}
+
+/// Cuts and decodes untrusted `help.md` bytes for the wire.
+///
+/// Never fails: oversize truncates, undecodable bytes become `U+FFFD`, and both
+/// losses are reported in the flags rather than raised as an error. Help is
+/// cosmetic and must never brick an approved plugin.
+///
+/// ```
+/// use norte_help::sanitize_untrusted;
+///
+/// let s = sanitize_untrusted(b"+++\ntitle = \"FTP\"\n+++\nbody");
+/// assert!(!s.truncated && !s.lossy);
+/// assert!(s.markdown.ends_with("body"));
+/// ```
+#[must_use]
+pub fn sanitize_untrusted(bytes: &[u8]) -> Sanitized {
+    let limits = Limits::untrusted();
+    let truncated = bytes.len() > limits.max_bytes;
+    let head = cut_at_boundary(bytes, limits.max_bytes);
+    let (markdown, lossy) = decode_source(bytes, head);
+    Sanitized {
+        markdown,
+        truncated,
+        lossy,
+    }
+}
+
+/// Command ids a plugin's front matter declares that are NOT its own.
+///
+/// The rule is [`parse_untrusted`]'s: a plugin documents `plugin:{id}:{command}`
+/// and nothing else. Those entries are silently dropped from the model — which
+/// is the right runtime behaviour and a terrible authoring experience, so
+/// `norte doctor` reports them and this is where it gets them.
+///
+/// Only the HEADER is examined, and only when it PARSES: a header that is
+/// missing, unterminated or not valid TOML reports nothing here, because there
+/// is no `commands` list to read. That failure is a diagnostic of its own and
+/// belongs to whoever reports malformed headers, not to this function.
+///
+/// A `{{cmd:…}}` written in the BODY that names a foreign command degrades to
+/// literal text and is not counted here either: the parser refuses it inside
+/// the span cutter, with no counter to thread out, and adding one would touch
+/// every span signature for a diagnostic.
+///
+/// ```
+/// use norte_help::foreign_commands;
+///
+/// let src = "+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n\
+///            commands = [\"fs.copy\"]\n+++\nbody";
+/// assert_eq!(foreign_commands(src, "acme.ftp"), vec!["fs.copy".to_owned()]);
+/// ```
+#[must_use]
+pub fn foreign_commands(source: &str, plugin_id: &str) -> Vec<String> {
+    let Ok((fm, _)) = front_matter::split(source) else {
+        return Vec::new();
+    };
+    fm.commands
+        .into_iter()
+        .filter(|c| !is_own_command(c, plugin_id))
+        .collect()
+}
+
 /// Parses a plugin `help.md`. NEVER fails: it detects the encoding and
 /// decodes accordingly, bounds by [`Limits::untrusted`], and masks terminal
 /// hazards AT PARSE TIME (masking lives where the data is built, exactly as
@@ -687,9 +765,11 @@ const MAX_HEADER_COMMANDS: usize = 16;
 #[must_use]
 pub fn parse_untrusted(bytes: &[u8], fallback_id: &str, publisher: Option<String>) -> Parsed {
     let limits = Limits::untrusted();
-    let mut truncated = bytes.len() > limits.max_bytes;
-    let head = cut_at_boundary(bytes, limits.max_bytes);
-    let (text, lossy) = decode_source(bytes, head);
+    let Sanitized {
+        markdown: text,
+        mut truncated,
+        lossy,
+    } = sanitize_untrusted(bytes);
 
     // ANY header failure degrades to "there is no header", never to an error:
     // the whole text becomes the body. A cut that lands mid-header is the
@@ -2066,5 +2146,85 @@ p\u{202E}ara\n\n\
         let (out, truncated) = blocks_of(&all, Limits::built_in(), Mode::Trusted);
         assert!(!truncated);
         assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn sanitizar_recorta_en_el_mismo_tope_que_el_parser() {
+        let gordo = vec![b'a'; Limits::untrusted().max_bytes + 100];
+        let s = sanitize_untrusted(&gordo);
+        assert!(s.truncated, "pasarse del tope se declara");
+        assert!(!s.lossy, "ascii no es lossy");
+        assert!(
+            s.markdown.len() <= Limits::untrusted().max_bytes,
+            "el texto sale acotado: {}",
+            s.markdown.len()
+        );
+    }
+
+    #[test]
+    fn sanitizar_devuelve_utf8_valido_de_bytes_rotos() {
+        // Lo que el wire promete: `String`, siempre. Un byte irrecuperable
+        // sale `U+FFFD` y la bandera lo dice.
+        //
+        // El BOM del principio es parte del caso, no decoración: sin él,
+        // `decode_source` deja que la detección lea `\xFF\xFE` como
+        // windows-1252 y salen dos caracteres perfectamente válidos, con
+        // `lossy` honestamente en falso (lo dice el rustdoc de
+        // [`Parsed::lossy`]). El BOM es certeza de UTF-8, y bajo UTF-8 esos
+        // bytes no se recuperan de ninguna manera. Es el mismo fixture que ya
+        // fija el doctest de [`parse_untrusted`].
+        let s = sanitize_untrusted(b"\xef\xbb\xbfhola \xFF\xFE mundo");
+        assert!(s.lossy, "un byte irrecuperable se declara");
+        assert!(s.markdown.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn sanitizar_y_reparsear_da_el_mismo_cuerpo_que_parsear_directo() {
+        // El salto de wire de H3e: host sanitiza, frontend parsea. El modelo
+        // resultante tiene que ser el mismo que el del parseo directo, salvo
+        // las banderas, que el emisor vuelve a poner con `fold_flags`.
+        // Con `id`, que es obligatorio: sin él el encabezado no deserializa,
+        // degrada a "no hay encabezado" y el `title` de los dos lados sería
+        // el id de respaldo por la misma vía trivial. La comparación solo
+        // dice algo si el encabezado se parsea de verdad.
+        let src = b"+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n\
+                    +++\nCuerpo con {{cmd:plugin:acme.ftp:sync}}.";
+        let directo = parse_untrusted(src, "acme.ftp", None);
+        let s = sanitize_untrusted(src);
+        let por_el_wire = parse_untrusted(s.markdown.as_bytes(), "acme.ftp", None)
+            .fold_flags(s.truncated, s.lossy);
+        assert_eq!(directo.topic.title, "FTP", "el encabezado se parsea");
+        assert!(
+            directo
+                .topic
+                .blocks
+                .iter()
+                .any(|b| matches!(b, Block::Paragraph(s)
+                    if s.contains(&Span::CommandRef("plugin:acme.ftp:sync".to_owned())))),
+            "y la marca propia sigue viva: {:?}",
+            directo.topic.blocks
+        );
+        assert_eq!(directo.topic.blocks, por_el_wire.topic.blocks);
+        assert_eq!(directo.topic.title, por_el_wire.topic.title);
+    }
+
+    #[test]
+    fn comandos_ajenos_del_encabezado_se_reportan() {
+        // `id` y `title` no son adorno: son obligatorios en `FrontMatter`, y
+        // sin ellos el TOML no deserializa, el `split` falla y esta función
+        // no vería lista alguna que revisar.
+        let src = "+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n\
+                   commands = [\"plugin:acme.ftp:sync\", \"fs.copy\", \
+                   \"plugin:otro:borrar\"]\n+++\ncuerpo";
+        let ajenos = foreign_commands(src, "acme.ftp");
+        assert_eq!(
+            ajenos,
+            vec!["fs.copy".to_owned(), "plugin:otro:borrar".to_owned()]
+        );
+    }
+
+    #[test]
+    fn sin_encabezado_no_hay_comandos_ajenos() {
+        assert!(foreign_commands("solo cuerpo", "acme.ftp").is_empty());
     }
 }
