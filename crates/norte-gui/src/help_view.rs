@@ -11,7 +11,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use norte_frontend::availability::Facts;
-use norte_frontend::keymap::{Effective, paint_chord};
+use norte_frontend::keymap::{Chord, Effective, paint_chord, parse_chord};
 use norte_help::{Availability, ChordResolver};
 
 /// The facts of a context with nothing in the way: what [`GuiChords`] answers
@@ -107,6 +107,20 @@ pub struct GuiChords {
     /// Values are already masked and capped ([`plugin_text`]): the resolver
     /// hands strings straight to a painter.
     plugin_labels: HashMap<String, String>,
+    /// EVERY chord bound to `app.help`, and not just the first.
+    ///
+    /// The overlay's own close keys ([`closes_help`]). Plural because the vim
+    /// preset ships two — `f1` and `?` — and picking one would leave the other
+    /// opening a page it cannot close: exactly the asymmetry this field exists
+    /// to remove, reachable today without anybody rebinding anything.
+    ///
+    /// Kept as `Chord`s and not as the painted strings beside them in
+    /// [`Self::chords`]: one is for a reader to recognise, the other is for a
+    /// keystroke to match, and matching on the label would make the close
+    /// depend on how a chord is spelled for humans.
+    ///
+    /// SEQUENCES are excluded — see [`closes_help`] for why.
+    close_chords: Vec<Chord>,
 }
 
 impl GuiChords {
@@ -122,12 +136,23 @@ impl GuiChords {
                     .or_insert_with(|| paint_chord(&seq));
             }
         }
+        // From BROWSE alone: the help opens from the panes, and the viewer
+        // captures every key through its own resolver, so a `app.help` bound
+        // only in the viewer screen is not a key this overlay can be closed
+        // with.
+        let close_chords = browse
+            .bindings()
+            .into_iter()
+            .filter(|(seq, cmd)| *cmd == "app.help" && !seq.contains(' '))
+            .filter_map(|(seq, _)| parse_chord(&seq).ok())
+            .collect();
         Self {
             chords,
             lang,
             facts: NO_IMPEDIMENT,
             active_plugins: BTreeSet::new(),
             plugin_labels: HashMap::new(),
+            close_chords,
         }
     }
 
@@ -405,6 +430,30 @@ impl HelpView {
         base.with_facts(facts)
             .with_plugins(self.active.clone(), self.titles.clone())
     }
+
+    /// [`Self::freeze`] against a REBUILT `base`, carrying `prev`'s facts over.
+    ///
+    /// What a keymap reload landing on an open page needs, and the two halves
+    /// are not the same kind of thing. The CHORDS are a fact about the
+    /// keyboard: a rebind that does not reach the page leaves it teaching a key
+    /// that no longer does anything, which is worse than any churn — the TUI
+    /// rebuilds its resolver on every hot reload for exactly this reason. The
+    /// FACTS are a fact about the moment the reader opened the page, frozen on
+    /// purpose so a row cannot change verdict under their cursor, and a
+    /// `keymap.toml` being saved is no reason to re-judge what can run.
+    #[must_use]
+    pub fn refreeze(&self, base: &GuiChords, prev: &GuiChords) -> GuiChords {
+        self.freeze(base, prev.facts())
+    }
+
+    /// Replaces the synthetic keyboard page's lines.
+    ///
+    /// That page is GENERATED from the effective keymaps rather than read from
+    /// the corpus, so it goes stale on a rebind exactly like the chords do —
+    /// and it is the one page whose entire content is keys.
+    pub fn set_keys_lines(&mut self, lines: Vec<String>) {
+        self.keys_lines = lines;
+    }
 }
 
 /// Width in CHARS of the chord column of the keyboard cheatsheet.
@@ -473,20 +522,54 @@ const PAGE: usize = 10;
 /// `settings_view::on_key` and `palette_view::on_key` established for a GUI
 /// overlay; unlike the TUI there is no `dialog` keymap to resolve through).
 ///
-/// # `f1` closes even when `app.help` no longer opens with it
+/// # The key that OPENS the help closes it, and it is the reader's key
 ///
-/// A known and unfixed asymmetry. H3f put `app.help` into the GUI's command
-/// table, so the key that OPENS the help is now whatever the user bound it to,
-/// while the key that closes it is spelled here. Rebind `app.help` to `f2` and
-/// you get `f2` to open and both `f2` (nothing) and `f1` (close) afterwards.
-/// The TUI resolves its close through the keymap — "what is hardcoded is the
-/// meaning, not the key" — and this overlay should too; doing it needs the
-/// resolver in here, which is the whole reason this module is pure. `Esc`
-/// closes in every configuration, which is what the footer promises.
+/// It used to be `f1`, spelled right here, which made the two halves of one
+/// switch disagree the moment `app.help` was rebound: `f2` opened the page and
+/// `f1` — by then bound to something else, or to nothing — closed it. The
+/// close now goes through [`closes_help`], which asks the KEYMAP, and this
+/// router never sees that key; what is hardcoded is the meaning, not the key,
+/// the same rule the TUI settled on. `Esc` stays hardcoded and closes in every
+/// configuration, which is what the footer promises.
 ///
 /// `chords` is the FROZEN resolver the open page was painted through
 /// ([`HelpView::freeze`]): Enter has to be answered by the verdict the reader
 /// can SEE, never by a fresher one that would run what the page shows dimmed.
+/// Does this keystroke mean `app.help` — that is, is it a key the reader opens
+/// the help WITH, and therefore one that closes it?
+///
+/// Asked BEFORE the router's modifier gate, because a rebind can put the
+/// command behind `ctrl+h` and that gate exists to keep modified keys out of
+/// the filter, not to keep them from closing the overlay.
+///
+/// The comparison is between `Chord`s and never between painted strings: a
+/// painted chord is for a human to read (`Ctrl+H`), and matching on it would
+/// make the close depend on the spelling of a label.
+///
+/// EVERY chord bound to the command answers `true`, which is the case that
+/// exists today without anybody editing a keymap: the vim preset binds both
+/// `f1` and `?`, and until this function existed `?` opened a page that only
+/// `f1` and `Esc` could close.
+///
+/// A MULTI-chord binding (`g h`) answers `false`. The overlay has no sequence
+/// state — the TUI's resolver does, this router does not — so the honest answer
+/// is that the first chord of a sequence is not the sequence. Such a reader
+/// still closes with `Esc`, which is why that one is hardcoded.
+#[must_use]
+pub fn closes_help(
+    chords: &GuiChords,
+    key: &str,
+    key_char: Option<&str>,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+) -> bool {
+    let Some(pressed) = crate::keymap::gpui_chord(key, ctrl, alt, shift, key_char) else {
+        return false;
+    };
+    chords.close_chords.contains(&pressed)
+}
+
 #[must_use]
 pub fn on_key(
     view: &mut HelpView,
@@ -532,7 +615,12 @@ pub fn on_key(
     }
 
     match key {
-        "escape" | "f1" => return HelpOutcome::Close,
+        // `escape` and NOT `escape | f1`: which key toggles the overlay shut is
+        // the reader's, and it is decided by the keymap in [`closes_help`],
+        // called before this router. `Esc` stays hardcoded because it is what
+        // the footer advertises and it depends on no binding — every other
+        // overlay in this frontend closes with it too.
+        "escape" => return HelpOutcome::Close,
         "tab" => view.state.toggle_focus(),
         "up" => view.state.up(),
         "down" => view.state.down(),
@@ -613,6 +701,106 @@ mod tests {
 
     fn effectives() -> (Effective, Effective) {
         crate::keymap::build_effectives_preset_only("orthodox")
+    }
+
+    /// Un keymap con `app.help` en un chord MÁS, para la mitad del
+    /// interruptor que vive dentro del overlay.
+    fn effectives_con_help_tambien_en(chord: &str) -> (Effective, Effective) {
+        // En `[pane]` y no en `[global]`: el contexto específico pisa al
+        // global, así que un `[global]` de capa no le gana a un `[pane]` del
+        // preset — que es justo lo que pasa con `ctrl+h`, ya ligado a
+        // `pane.toggle-hidden`.
+        let capa = norte_frontend::keymap::parse_keymap(&format!(
+            "[pane]\nprepend_keymap = [{{ on = [\"{chord}\"], run = \"app.help\" }}]\n"
+        ))
+        .expect("la capa de test parsea");
+        crate::keymap::build_effectives_with("orthodox", &[capa])
+    }
+
+    /// La tecla que ABRE la ayuda la CIERRA, y son TODAS las teclas del
+    /// lector, no `F1` hardcodeada.
+    ///
+    /// El caso no necesita que nadie edite un keymap: el preset **vim** liga
+    /// `f1` y `?` a `app.help`, así que hasta ahora `?` abría una página que
+    /// solo cerraban `f1` y `Esc` — una tecla que hace la mitad de su trabajo.
+    #[test]
+    fn cierran_todas_las_teclas_de_app_help() {
+        let (browse, viewer) = crate::keymap::build_effectives_preset_only("vim");
+        let chords = GuiChords::new(&browse, &viewer, norte_i18n::Lang::En);
+        assert!(
+            closes_help(&chords, "f1", None, false, false, false),
+            "la tecla obvia sigue cerrando"
+        );
+        assert!(
+            closes_help(&chords, "?", Some("?"), false, false, false),
+            "y la OTRA que el mismo preset liga a `app.help` también"
+        );
+        assert!(
+            !closes_help(&chords, "x", Some("x"), false, false, false),
+            "una tecla que no es `app.help` no cierra nada"
+        );
+
+        // Y una capa de usuario que añade su propio chord entra igual: lo que
+        // manda es el keymap, no una lista escrita aquí.
+        let (browse, viewer) = effectives_con_help_tambien_en("ctrl+h");
+        let chords = GuiChords::new(&browse, &viewer, norte_i18n::Lang::En);
+        assert!(closes_help(&chords, "h", None, true, false, false));
+        assert!(
+            closes_help(&chords, "f1", None, false, false, false),
+            "sin quitarle la suya al preset"
+        );
+    }
+
+    /// El router puro ya no conoce `f1`: quien decide es el keymap
+    /// ([`closes_help`], llamado por `main.rs` antes del gate de
+    /// modificadores). `Esc` sí sigue aquí — lo anuncia el pie y no depende
+    /// de ningún binding.
+    #[test]
+    fn el_router_no_hardcodea_f1() {
+        let (browse, viewer) = effectives();
+        let chords = GuiChords::new(&browse, &viewer, norte_i18n::Lang::En);
+        let mut view = HelpView::new(norte_i18n::Lang::En, Vec::new());
+        assert!(matches!(
+            on_key(&mut view, "f1", None, &chords),
+            HelpOutcome::None
+        ));
+        assert!(matches!(
+            on_key(&mut view, "escape", None, &chords),
+            HelpOutcome::Close
+        ));
+    }
+
+    /// Una recarga de keymap con la página abierta LLEGA a la página: los
+    /// chords se rehacen desde los efectivos nuevos y los HECHOS —
+    /// congelados al abrir a propósito— se conservan. Las dos mitades
+    /// juntas: rehacer los hechos cambiaría el veredicto de una fila bajo el
+    /// cursor del lector, y no rehacer los chords deja la página enseñando
+    /// la tecla VIEJA.
+    #[test]
+    fn una_recarga_de_keymap_alcanza_la_pagina_sin_descongelar_los_hechos() {
+        let (browse, viewer) = effectives();
+        let base = GuiChords::new(&browse, &viewer, norte_i18n::Lang::En);
+        let congelados = Facts {
+            source_read_only: true,
+            ..NO_IMPEDIMENT
+        };
+        let view = HelpView::new(norte_i18n::Lang::En, Vec::new());
+        let antes = view.freeze(&base, congelados);
+        assert_eq!(antes.chord("app.help").as_deref(), Some("F1"));
+
+        let (browse, viewer) = effectives_con_help_tambien_en("ctrl+h");
+        let base = GuiChords::new(&browse, &viewer, norte_i18n::Lang::En);
+        let despues = view.refreeze(&base, &antes);
+        assert_eq!(
+            despues.chord("app.help").as_deref(),
+            Some("Ctrl+h"),
+            "el rebind alcanza la página abierta"
+        );
+        assert_eq!(
+            despues.facts(),
+            congelados,
+            "y los hechos siguen siendo los del momento en que se abrió"
+        );
     }
 
     #[test]

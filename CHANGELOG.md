@@ -9,6 +9,25 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The key that opens the GUI's help now closes it — all of them:** the close
+  was spelled `f1` inside the overlay, so the two halves of one switch could
+  disagree. No rebinding was needed to see it: the **vim** preset binds
+  `app.help` to both `f1` and `?`, so `?` opened a page that only `f1` and
+  `Esc` could close. The close is now asked of the keymap, and every chord
+  bound to `app.help` answers it — including one behind `ctrl`, which the
+  overlay's modifier gate used to swallow. `Esc` still closes in every
+  configuration, which is what the footer promises.
+
+- **A keymap change now reaches a help page that is already open:** the page's
+  chords and its generated keyboard sheet were frozen when the overlay opened,
+  so they could go on naming keys that no longer did anything. They are rebuilt
+  where the effective keymaps are; the availability FACTS are deliberately not,
+  since freezing those is what keeps a row from changing verdict under the
+  reader's cursor. The window is narrow and worth naming: this frontend watches
+  no config files, and the settings screen cannot be open at the same time as
+  the help — but the write is asynchronous, so changing the preset, closing
+  settings and opening the help lands the swap with the page in front of you.
+
 - **A wide publisher no longer pushes a warning off a plugin's help page:** the
   provenance line under a plugin page title is `from an extension · published
   by X`, followed by the host's own flags — cut short, some bytes did not
@@ -91,11 +110,11 @@ independently through `PROTOCOL_VERSION`.
   Deliberately not done: `F1` in the GUI always opens the index, because the GUI
   has no dialog-context table to map a screen onto a page (the terminal app's
   contextual `F1` is H3c); the GUI's palette still does not offer `F1` on a row
-  to open that command's page; the help is unreachable while the viewer is open,
-  since the viewer captures every key through its own resolver; `Esc` closes in
-  every configuration but `F1` still closes even when `app.help` is rebound
-  elsewhere; and a keymap reload landing while the page is open does not reach
-  it.
+  to open that command's page; and the help is unreachable while the viewer is
+  open, since the viewer captures every key through its own resolver. The two
+  keyboard defects this entry used to list — `F1` closing regardless of what
+  `app.help` is bound to, and a keymap reload never reaching the open page —
+  are fixed; see below.
 - **Plugins bring their own help page (H3e):** a plugin can ship a `help.md`
   next to its `plugin.toml`, and it becomes one more page in the help overlay,
   under an *Extensions* group, with the plugin's own commands as rows you can

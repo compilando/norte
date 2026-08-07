@@ -2413,9 +2413,55 @@ impl NorteGui {
             Some(Ok((browse, viewer))) => {
                 self.resolver = norte_frontend::keymap::Resolver::new(browse);
                 self.viewer_resolver = norte_frontend::keymap::Resolver::new(viewer);
+                self.rebuild_help_chords();
                 true
             }
             _ => false,
+        }
+    }
+
+    /// Lleva un keymap recién cargado a la página de ayuda ABIERTA, si la hay.
+    ///
+    /// `GuiChords`' own rustdoc states the obligation — «rebuild it wherever
+    /// the effectives are rebuilt: a rebind that does not reach this resolver
+    /// is a help page teaching the OLD key» — y hasta aquí solo se cumplía al
+    /// abrir. La página se quedaba enseñando las teclas viejas, y su hoja de
+    /// teclado entera (generada de los efectivos, no del corpus) era un
+    /// listado obsoleto.
+    ///
+    /// # La ventana por la que esto pasa
+    ///
+    /// Estrecha, y por eso conviene dejarla escrita en vez de que el siguiente
+    /// lector la busque. Esta GUI no vigila ficheros de configuración (la TUI
+    /// sí): el keymap solo cambia desde la pantalla de ajustes, que no puede
+    /// estar abierta a la vez que la ayuda —el overlay abierto se queda con las
+    /// teclas—. Lo que sí es asíncrono es la ESCRITURA
+    /// (`commit_settings_write` va por `cx.background_spawn`), así que basta
+    /// cambiar el preset, cerrar ajustes y abrir la ayuda antes de que el hilo
+    /// de fondo conteste: el swap de resolvers aterriza con la página delante.
+    ///
+    /// Los HECHOS no se re-leen: `HelpView::refreeze` los arrastra del
+    /// resolver anterior a propósito. Congelarlos al abrir es lo que impide
+    /// que una fila cambie de veredicto bajo el cursor del lector, y guardar
+    /// un keymap no es una razón para re-juzgar qué puede ejecutarse.
+    fn rebuild_help_chords(&mut self) {
+        if self.help.is_none() {
+            return;
+        }
+        let base = help_view::GuiChords::new(
+            self.resolver.effective(),
+            self.viewer_resolver.effective(),
+            norte_i18n::active(),
+        );
+        let keys =
+            help_view::keys_lines(self.resolver.effective(), self.viewer_resolver.effective());
+        let prev = self
+            .help_chords
+            .clone()
+            .unwrap_or_else(|| base.with_facts(self.help_facts()));
+        if let Some(view) = &mut self.help {
+            view.set_keys_lines(keys);
+            self.help_chords = Some(view.refreeze(&base, &prev));
         }
     }
 
@@ -2593,6 +2639,28 @@ impl NorteGui {
     /// [`Self::on_palette_key`], with `ctrl+p` intercepted BEFORE it as the
     /// bridge into the palette (the pure router never sees a modifier).
     fn on_help_key(&mut self, ks: &gpui::Keystroke, cx: &mut Context<Self>) {
+        // La tecla que ABRE la ayuda la CIERRA, y la decide el keymap
+        // (`help_view::closes_help`), no una `f1` escrita en el router. Va
+        // ANTES del gate de modificadores de abajo: ese gate existe para que
+        // un chord con ctrl/alt no se teclee en el filtro, no para impedir que
+        // cierre el overlay — un `app.help` en `ctrl+h` es perfectamente
+        // legal. Y antes también del puente `ctrl+p`, que jamás puede ser
+        // `app.help` (`ctrl+p` es `app.palette` en los tres presets) pero cuyo
+        // orden no debería depender de eso.
+        if let Some(chords) = self.help_chords.as_ref()
+            && help_view::closes_help(
+                chords,
+                &ks.key,
+                ks.key_char.as_deref(),
+                ks.modifiers.control,
+                ks.modifiers.alt,
+                ks.modifiers.shift,
+            )
+        {
+            self.close_help();
+            cx.notify();
+            return;
+        }
         if ks.modifiers.control && ks.key == "p" {
             let out = self.help.as_ref().map(help_view::handoff);
             if let Some(help_view::HelpOutcome::Palette(filter)) = out {

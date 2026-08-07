@@ -309,13 +309,28 @@ fn build_effectives_layers(
 /// (revisión C2/G0 CRITICAL 1 — misma clase de regresión).
 #[must_use]
 pub fn build_effectives_preset_only(preset_name: &str) -> (Effective, Effective) {
+    build_effectives_with(preset_name, &[])
+}
+
+/// [`build_effectives_preset_only`] MÁS las capas que se le pasen, sobre el
+/// supplemento.
+///
+/// Existe para los tests que necesitan un keymap con algo REASIGNADO — la
+/// mitad de la ayuda que se cierra con la tecla del lector, por ejemplo, no se
+/// puede probar con el preset de fábrica, donde esa tecla ya es `F1`. Los
+/// helpers que componen las capas (`preset`, `gui_supplement`, `all_commands`)
+/// son privados y así siguen: lo que se expone es la composición ya hecha, que
+/// es la que tiene el orden correcto.
+#[must_use]
+pub fn build_effectives_with(preset_name: &str, layers: &[KeymapFile]) -> (Effective, Effective) {
     let preset = preset(preset_name);
-    let supplement = [gui_supplement()];
+    let mut kfs = vec![gui_supplement()];
+    kfs.extend_from_slice(layers);
     let cmds = all_commands();
     (
-        Effective::build_for_subset(&preset, &supplement, &cmds, Screen::Browse)
+        Effective::build_for_subset(&preset, &kfs, &cmds, Screen::Browse)
             .expect("preset browse válido"),
-        Effective::build_for_subset(&preset, &supplement, &cmds, Screen::Viewer)
+        Effective::build_for_subset(&preset, &kfs, &cmds, Screen::Viewer)
             .expect("preset viewer válido"),
     )
 }
