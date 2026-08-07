@@ -421,6 +421,51 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **The terminal binary is `ntc`.** Nobody types `norte-tui` twice a day;
+  Norton Commander was `nc`. `norte tui` still launches it and the CRATE keeps
+  its name — renaming that would touch five manifests and a crates.io identity
+  to spare nobody any typing. The rename had one defect that could half-land:
+  the CLI hands the process over BY BINARY NAME, a string that compiles whether
+  or not a binary answers to it and fails at `exec` time, with the user in
+  front of it. A test now reads the expected name out of the TUI's own
+  manifest, so the two cannot drift apart. `cargo uninstall norte-tui` still
+  takes the crate name, which is why the `justfile` says so out loud.
+
+- **A tag now produces something you can download.** cargo-dist had been
+  configured since before the first tag and had never run: its model is
+  CI-driven, and CI is off. `just dist` builds the artefacts on a developer
+  machine, `just dist-smoke` unpacks each archive and runs the binary inside it
+  — the one packaging failure a user finds before we do — and `just
+  dist-publish <tag>` uploads them, with the protocol, config and keymap JSON
+  Schemas alongside, so a third party can write a client without cloning
+  (#13). The five configured targets stay in `dist-workspace.toml` because
+  they describe the release the project should produce; what we build today is
+  **x86_64 Linux only**, and the release notes say so rather than the config
+  quietly pretending otherwise. The checksums dist generates are checksums, not
+  signatures, and nothing calls them that.
+
+- **`norte` ships with `ntc`.** The CLI was marked out of the release back when
+  it was an M0 test bench. It is now the non-interactive half of the product —
+  `daemon`, `connect`, `mcp`, `policy`, `undo`, `index`, `ai`, `audit`,
+  `doctor` — and an artefact carrying `ntc` alone leaves a user with no daemon
+  and no `doctor`. dist builds one archive and one installer per package, so
+  there are two of each; the README gives both.
+
+- **The graphical interface stays source-only, and the gate says why.**
+  `norte-gui` joined the workspace (one lockfile, one resolution) but is kept
+  out of `default-members` and out of the release. The reason is not build
+  time. GPUI enables `serde_json/preserve_order`, and cargo unifies features
+  per invocation: with the GUI in the same `cargo` as the core, the core's
+  `serde_json` swaps sorted maps for insertion order — and with it the protocol
+  JSON Schema we publish, the CLI's `--json`, and the goldens that pin them.
+  Five tests went red without a line of code changing. So the gate names its
+  packages instead of saying `--workspace`, which was silently overriding
+  `default-members`, and the core is now tested exactly as it is distributed.
+  A GPUI binary also links against the graphics stack of the machine that built
+  it, which is the honest limit of shipping one at all. Its own gate,
+  `just gui-ci`, keeps auditing it against its own licence policy — excluded
+  from the workspace audit, never unaudited.
+
 - **The help overlay reads like a page now.** The sidebar is sized to its own
   titles instead of a flat 24 cells — floored at that 24 so nothing narrows, and
   capped at a third of the screen — so the list of topics stops cutting five of

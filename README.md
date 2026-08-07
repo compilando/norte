@@ -15,26 +15,34 @@ auditing.
 
 ## Install
 
-On Linux and macOS, install the prebuilt binary from the latest release:
+The release ships two binaries, each with its own installer: `ntc`, the file
+manager, and `norte`, the command line tool that runs the daemon, connections,
+policy, undo, the index and `doctor`. Install both:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/compilando/norte/releases/latest/download/ntc-installer.sh | sh
+  https://github.com/compilando/norte/releases/latest/download/norte-tui-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/compilando/norte/releases/latest/download/norte-cli-installer.sh | sh
 ```
 
-On Windows, run this command in PowerShell:
+> **The alpha carries x86_64 Linux only.** The release is built on a developer
+> machine and uploaded by hand, because CI is off. The macOS and Windows
+> targets are configured and will appear the day a release runs in CI; until
+> then, build from source on those platforms.
 
-```powershell
-irm https://github.com/compilando/norte/releases/latest/download/ntc-installer.ps1 | iex
-```
-
-To install from source instead, run `make setup`, followed by:
+To install from source, run `make setup`, followed by:
 
 ```sh
 cargo install --path crates/norte-cli --locked   # the `norte` command
 cargo install --path crates/norte-tui --locked   # the `ntc` file manager
 cargo install --path crates/norte-gui --locked   # graphical interface (optional, GPU)
 ```
+
+The graphical interface is **experimental and source-only**: a GPUI binary
+links against the graphics stack of the machine that built it, so shipping one
+would promise more than it can keep. It needs a Wayland or X session with
+working Vulkan.
 
 ## Run
 

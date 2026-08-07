@@ -1,6 +1,6 @@
 [package]
 name = "norte-cli"
-description = "CLI de humo de norte: banco de pruebas manual del core embebido"
+description = "CLI de norte: daemon, conexiones, política, undo, índice, IA y diagnóstico"
 license = "AGPL-3.0-only"
 version.workspace = true
 edition.workspace = true
@@ -12,11 +12,14 @@ authors.workspace = true
 name = "norte"
 path = "src/main.rs"
 
-# El CLI es un banco de pruebas de M0 (spec): NO entra en el release
-# distribuido (un solo instalador para el TUI, el producto). Se compila desde
-# fuente o con `cargo install --path crates/norte-cli`.
+# El CLI SÍ entra en el release. `dist = false` venía de M0, cuando `norte` era
+# un banco de pruebas del core embebido; hoy es la mitad no interactiva del
+# producto — `daemon`, `connect`, `mcp`, `policy`, `undo`, `index`, `ai`,
+# `audit`, `doctor` — y `norte tui` es como el README enseña a arrancar la TUI.
+# Un artefacto con `ntc` y sin `norte` deja al usuario sin daemon ni doctor;
+# `scripts/dist-smoke.sh` lo comprueba sobre el archivo construido.
 [package.metadata.dist]
-dist = false
+dist = true
 
 [dependencies]
 anyhow.workspace = true

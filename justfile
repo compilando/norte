@@ -88,17 +88,17 @@ docs:
 check-gui:
     cd crates/norte-gui && cargo check --locked
 
-# Detección de rupturas de API en los crates publicables (ADR 0038, #13).
-# Herramienta externa: `cargo install cargo-semver-checks`. Necesita una
-# BASELINE: el primer release publicado o un tag git (`--baseline-rev vX.Y.Z`);
-# hasta que exista ese tag no hay contra qué comparar y la receta no corre.
-# `--exclude` deja fuera lo NO publicable (frontends/binarios y el árbol de la
-# GUI, excluido del workspace). AÚN NO está en `ci`: cablearla antes de tener
-# binario+baseline rompería cada `just ci` (decisión de gate del ADR 0038); se
-# añade a `ci` cuando ambos estén disponibles.
-baseline := "HEAD"
-semver:
-    cargo semver-checks --workspace --baseline-rev {{baseline}}
+# Rupturas de API pública contra el último tag (ADR 0038, #13).
+#
+# Los frontends (`norte-cli`/`norte-tui`/`norte-gui`) son BINARIOS: no tienen
+# API pública que romper. Lo que importa aquí son las librerías publicables
+# —proto, vfs, testkit—, que es lo que consume un tercero. La GUI queda fuera
+# por el mismo motivo que en `core_pkgs`: no debe entrar en la invocación.
+#
+# NO está en `ci`: cablearla antes de tener release publicado rompería cada
+# `just ci` (decisión de gate del ADR 0038). Corre en `just release-check`.
+semver baseline="v0.3.0-alpha.2":
+    cargo semver-checks {{core_pkgs}} --baseline-rev {{baseline}}
 
 # Lo que corre CI. `_disk` primero: quedarse sin disco a mitad de un build no
 # falla limpio, corrompe artefactos.
@@ -274,3 +274,54 @@ gui-ci:
     # Se audita aquí, contra su propia política, con su manifiesto como ÚNICA
     # raíz del grafo.
     cargo deny --manifest-path crates/norte-gui/Cargo.toml check --config crates/norte-gui/deny.toml
+
+# ---------- distribución ----------
+
+# Construye los artefactos de release para ESTA máquina.
+#
+# `dist-workspace.toml` declara CINCO targets: son los que produciría una
+# release desde CI. Aquí solo sale el del host, y `--target` es explícito por
+# DOS motivos: sin él dist intenta los cinco y se para en el primer cruce a
+# macOS, y los instaladores («global») se generan con la tabla de plataformas
+# que se les pase — sin acotarla, el instalador le prometería a un macOS un
+# archivo que esta release no contiene y moriría en un 404 en vez de decir
+# «no hay binario para tu plataforma».
+#
+# `rm -rf` primero: dist no limpia, y un `.ps1` de una corrida anterior con
+# otra configuración se subiría como si fuera de esta.
+#
+# Cross-compilar aws-lc-rs es lo que el ADR 0021 dio por frágil; macOS y
+# Windows necesitan sus máquinas. Las notas de la release dicen qué lleva; la
+# config no se recorta para disimularlo.
+dist:
+    rm -rf target/distrib
+    dist build --artifacts=local --target=$(rustc -vV | sed -n 's/^host: //p')
+    dist build --artifacts=global --target=$(rustc -vV | sed -n 's/^host: //p')
+    @echo "artefactos en target/distrib/:"
+    @ls -1 target/distrib/
+
+# Arranca los binarios DESDE los artefactos construidos (no desde
+# target/release).
+dist-smoke:
+    ./scripts/dist-smoke.sh
+
+# Sube a la release del tag lo construido aquí. El tag ya tiene que existir y
+# estar empujado: esto publica, no etiqueta.
+#
+# Se sube TODO fichero suelto de `target/distrib` en vez de una lista de globs:
+# qué produce dist depende de los targets que se le pasen (sin Windows no hay
+# `.ps1`), y un glob sin coincidencias se pasaría literal y reventaría la
+# subida entera. `-maxdepth 1` deja fuera los directorios de staging.
+#
+# Los esquemas van con los binarios a propósito (#13): un tercero que quiera
+# escribir un cliente no debería tener que clonar el repositorio para saber la
+# forma del protocolo.
+dist-publish tag:
+    ./scripts/dist-smoke.sh
+    gh release upload {{tag}} \
+        $(find target/distrib -maxdepth 1 -type f) \
+        docs/schema/proto.schema.json \
+        docs/schema/norte.schema.json \
+        docs/schema/keymap.schema.json \
+        --clobber
+    @echo "subido a {{tag}}. Comprueba: gh release view {{tag}}"

@@ -16,3 +16,12 @@ installers = ["shell", "powershell"]
 # musl estático (cualquier distro vieja) queda como futuro: aws-lc-rs (russh/
 # rustls) sobre musl exige toolchain cruzado y es frágil — ver ADR 0021.
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+# Un `cargo build --package` POR aplicación, no un `--workspace` para todas.
+#
+# No es una preferencia de estilo: sin esto dist construye el workspace entero
+# en una invocación, y eso mete `norte-gui` —que no se distribuye— en el mismo
+# `cargo` que `ntc` y `norte`. Las features se unifican por invocación, así que
+# `serde_json/preserve_order` de GPUI acabaría COMPILADO DENTRO de los binarios
+# que publicamos: orden de claves distinto al que prueba el gate, en binarios
+# que nadie probó así. Ver `core_pkgs` en el justfile, misma frontera.
+precise-builds = true
