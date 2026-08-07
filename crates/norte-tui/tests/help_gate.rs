@@ -84,17 +84,6 @@ const PENDIENTES: &[&str] = &[
     "app.settings",
     "pane.ai-rename",
     "pane.semantic-search",
-    "pane.open",
-    "viewer.close",
-    "viewer.up",
-    "viewer.down",
-    "viewer.page-up",
-    "viewer.page-down",
-    "viewer.top",
-    "viewer.bottom",
-    "viewer.encoding",
-    "viewer.encoding-auto",
-    "viewer.hex",
     "pane.quick-search",
     "pane.search",
     "pane.toggle-hidden",
@@ -129,7 +118,7 @@ const PENDIENTES: &[&str] = &[
 /// edición deliberada, en el mismo diff, que un revisor ve. El número solo
 /// puede bajar — y cuando H3h lo deje en 0, la lista desaparece con él.
 const _: () = assert!(
-    PENDIENTES.len() <= 47,
+    PENDIENTES.len() <= 36,
     "la allowlist de la puerta de documentación solo puede MENGUAR: \
      documenta el comando en vez de añadirlo aquí"
 );
@@ -160,8 +149,6 @@ fn contextos() -> Vec<&'static str> {
 /// alguien escribió la página y se dejó la línea, silenciando al siguiente
 /// contexto que caiga ahí.
 const CONTEXTOS_PENDIENTES: &[&str] = &[
-    // No hay página del visor: la escribe H3h.
-    "viewer",
     // Ni página de agentes y política: también H3h. Ningún tema habla hoy de
     // aprobaciones, y hacer que `copying` reclame este contexto para callar
     // la puerta sería contarle al lector lo que no ha preguntado.
@@ -189,7 +176,7 @@ const CONTEXTOS_PENDIENTES: &[&str] = &[
 /// [`PENDIENTES`]: la lista solo puede bajar, y subir el número es una
 /// edición deliberada que un revisor ve en el mismo diff.
 const _: () = assert!(
-    CONTEXTOS_PENDIENTES.len() <= 8,
+    CONTEXTOS_PENDIENTES.len() <= 7,
     "la allowlist de contextos solo puede MENGUAR: escribe la página en vez \
      de añadir el contexto aquí"
 );

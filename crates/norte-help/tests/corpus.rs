@@ -27,13 +27,14 @@ const LANGS: [Lang; 2] = [Lang::En, Lang::Es];
 /// the corpus so that DELETING a topic file is a test failure too: a check
 /// that reads the corpus to decide what the corpus should contain cannot see
 /// an absence.
-const EXPECTED: [&str; 8] = [
+const EXPECTED: [&str; 9] = [
     "index",
     "panes",
     "selection",
     "mouse",
     "help",
     "copying",
+    "viewer",
     "remote",
     "archives",
 ];
@@ -467,7 +468,7 @@ fn the_hazard_sweep_catches_a_hostile_title_in_every_slot() {
 /// is: a list computed from the corpus cannot notice that the corpus stopped
 /// documenting something. A mark added or dropped shows up here as a diff, and
 /// the number is the one phase H3h has to move.
-const DOCUMENTED: [&str; 30] = [
+const DOCUMENTED: [&str; 41] = [
     "app.help",
     "app.palette",
     "dialog.back",
@@ -491,6 +492,7 @@ const DOCUMENTED: [&str; 30] = [
     "pane.mirror",
     "pane.move",
     "pane.names-encoding",
+    "pane.open",
     "pane.pull",
     "pane.refresh",
     "pane.rename",
@@ -498,6 +500,16 @@ const DOCUMENTED: [&str; 30] = [
     "pane.switch",
     "pane.view",
     "task.cancel",
+    "viewer.bottom",
+    "viewer.close",
+    "viewer.down",
+    "viewer.encoding",
+    "viewer.encoding-auto",
+    "viewer.hex",
+    "viewer.page-down",
+    "viewer.page-up",
+    "viewer.top",
+    "viewer.up",
 ];
 
 /// The UI contexts a topic may claim, mirroring `norte_tui::help_context`'s
@@ -557,13 +569,12 @@ fn the_shipped_corpus_claims_only_contexts_the_ui_has() {
     assert!(del_corpus.is_empty(), "{del_corpus:?}");
 
     // The mirror direction is real debt, so it is NAMED here rather than
-    // filtered away in silence: four places have a page that really explains
-    // them (`browse` in `panes`, the confirmation and the collision dialog in
-    // `copying`, the host-key question in `remote`, the glob prompt in
-    // `selection`), and the pages for the rest are phase H3h's — there is no
-    // viewer page and no agents-and-policy page to point at. The frontend's
-    // gate is what carries the shrinking allowlist; this assertion is what
-    // makes writing one of those pages show up as a failure in this file too.
+    // filtered away in silence: the places that have a page which really
+    // explains them are gone from this list, and what is left is what phase
+    // H3h has still to write. The frontend's gate is what carries the
+    // shrinking allowlist; this assertion is what makes writing one of those
+    // pages show up as a failure in this file too — and it is a failure that
+    // asks for a deletion, which is the shape debt should have.
     let sin_pagina: Vec<&str> = issues
         .iter()
         .filter_map(|i| match i {
@@ -574,7 +585,6 @@ fn the_shipped_corpus_claims_only_contexts_the_ui_has() {
     assert_eq!(
         sin_pagina,
         [
-            "viewer",
             "dialog.approval",
             "dialog.trust-lua",
             "dialog.quit",

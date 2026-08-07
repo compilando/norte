@@ -4,9 +4,9 @@ expression: texto
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
 "│N┌ Ayuda ───────────────────────────────────────────────────────────────────┐a│"
-"│ │                              Aprobar extensiones                         │ │"
-"│ │Operaciones                   ────────────────────────────────────────────│ │"
-"│ │  Copiar, mover y borrar      de una extensión                            │ │"
+"│ │Operaciones                   Aprobar extensiones                         │ │"
+"│ │  Copiar, mover y borrar      ────────────────────────────────────────────│ │"
+"│ │  Leer un fichero sin salir   de una extensión                            │ │"
 "│ │                                                                          │ │"
 "│ │Remoto y archivos             Las extensiones del catálogo est�án         │ │"
 "│ │  SFTP, FTP y almacenamient…  auditadas.�                                 │ │"

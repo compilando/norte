@@ -11,13 +11,14 @@
         "mouse",
         "help",
         "copying",
+        "viewer",
         "remote",
         "archives"
       ],
       "tags": [
         "basics"
       ],
-      "text": "Welcome to norte\n────────────────\n\nnorte is an orthodox file manager. Two panes, the keyboard first, and one set of commands whether the files are on this machine, on an SSH host, in an S3-compatible bucket, or inside a .zip.\n\nThat last part is the whole idea. A backend is not a mode you enter and leave; it is only what a pane happens to be showing. Copying out of an archive into a bucket is the same two keys as copying between two local directories.\n\nWhere to go next\n\n  • Two panes, one destination — the two panes, focus, and why the other one is the destination\n  • Marking what to act on — marking the entries a command will act on\n  • Using the mouse — click, wheel and drag, and what capture costs the terminal\n  • Reading this help — moving around these pages, and where the keys in them come from\n  • Copying, moving and deleting — copying, moving, deleting, and cancelling without losing data\n  • SFTP, FTP and object storage — SFTP, FTP and S3-compatible object storage\n  • Inside an archive — walking into a .zip or a .tar as if it were a directory\n\n  tip: The keys in this help are not written into the text: each one is looked up in your keymap as the page is drawn. Rebind a command and these pages name the key you chose.\n\nSee also: Two panes, one destination, Marking what to act on, Using the mouse, Reading this help, Copying, moving and deleting, SFTP, FTP and object storage, Inside an archive\n",
+      "text": "Welcome to norte\n────────────────\n\nnorte is an orthodox file manager. Two panes, the keyboard first, and one set of commands whether the files are on this machine, on an SSH host, in an S3-compatible bucket, or inside a .zip.\n\nThat last part is the whole idea. A backend is not a mode you enter and leave; it is only what a pane happens to be showing. Copying out of an archive into a bucket is the same two keys as copying between two local directories.\n\nWhere to go next\n\n  • Two panes, one destination — the two panes, focus, and why the other one is the destination\n  • Marking what to act on — marking the entries a command will act on\n  • Using the mouse — click, wheel and drag, and what capture costs the terminal\n  • Reading this help — moving around these pages, and where the keys in them come from\n  • Copying, moving and deleting — copying, moving, deleting, and cancelling without losing data\n  • Reading a file without leaving — reading a file in place, and handing one to another program\n  • SFTP, FTP and object storage — SFTP, FTP and S3-compatible object storage\n  • Inside an archive — walking into a .zip or a .tar as if it were a directory\n\n  tip: The keys in this help are not written into the text: each one is looked up in your keymap as the page is drawn. Rebind a command and these pages name the key you chose.\n\nSee also: Two panes, one destination, Marking what to act on, Using the mouse, Reading this help, Copying, moving and deleting, Reading a file without leaving, SFTP, FTP and object storage, Inside an archive\n",
       "title": "Welcome to norte"
     },
     {
@@ -248,6 +249,84 @@
       ],
       "text": "Copying, moving and deleting\n────────────────────────────\n\nMark what you want in the focused pane and press F5. The other pane is the destination, whatever it is holding — a local directory, an SSH host, a bucket. An archive is the one thing that can only ever be a source; see Inside an archive.\n\nF6 moves. Within one backend that is a rename: no bytes are read, no bytes are written, and the size of what you are moving does not matter. Only when the two ends are different backends — or different filesystems on this machine — does it degrade into a copy followed by a delete of the source.\n\nF8 uses the trash when the backend offers one and deletes permanently when it does not. Shift+F8 never uses the trash. Both confirm first, and the confirmation says which of the two is about to happen.\n\nEvery transfer is a task\n\nA copy is not a frozen screen. It reports progress, it keeps going while you navigate elsewhere, and Ctrl+k stops the most recent one.\n\nWhat cancelling promises is per file: bytes go to a staging file and the destination name does not appear until that file is complete, so no half-written file ever wears the name you were expecting.\n\nA cancelled tree is a different matter. The files already copied stay where they landed — each one whole, none of them half-written, but the directory is there and it is partial. Nothing sweeps it up for you.\n\n  warning: Cancelling a copy INTO object storage is the one case that stays ambiguous: the server may finish a copy it had already begun, so the object can appear after you cancelled, and abandoned multipart parts can go on costing money until a lifecycle rule clears them.\n\nResumable copies are asked for explicitly, from the command line. There a cancelled copy leaves a file whose name carries .norte-partial — unmistakable at a glance, and where the next attempt picks up:\n\n  norte cp --resume sftp://host/big.iso ./big.iso\n\nWhen the name is already taken\n\nThe first collision stops the transfer and asks. Your answer is not applied to that one entry: the whole operation is sent again with that policy in force, so one answer governs every collision the rest of the way.\n\n  Answer      What happens\n  ──────────  ───────────────────────────────────────────────────────────\n  overwrite   what is at the destination is replaced\n  skip        the colliding entries are left alone\n  rename      the copy lands beside it: report.txt becomes report (1).txt\n  keep newer  replaced only where the source is more recent, else left\n\nAnswer with the key the dialog shows, not with a default: there is none, because a dialog that can destroy data should not be answerable by leaning on a key.\n\n  warning: keep newer does not guess. When either side has no usable timestamp, that entry stops and asks again rather than being replaced or skipped on a hunch.\n\n  warning: Case collisions are judged against the destination, not the source: README and readme live together happily on Linux and land on the same file on macOS or Windows, and it is the destination that decides.\n\n  F5             copy selection to the other pane\n  F6             move selection to the other pane\n  F8             delete (trash when available)\n  Shift+F8       PERMANENT delete\n  Ctrl+k         cancel the most recent task\n\nSee also: Marking what to act on, SFTP, FTP and object storage, Inside an archive\n",
       "title": "Copying, moving and deleting"
+    },
+    {
+      "commands": [
+        {
+          "chord": "F3",
+          "command": "pane.view",
+          "label": "view the selected file"
+        },
+        {
+          "chord": "q",
+          "command": "viewer.close",
+          "label": "close the viewer"
+        },
+        {
+          "chord": "Up",
+          "command": "viewer.up",
+          "label": "one line up"
+        },
+        {
+          "chord": "Down",
+          "command": "viewer.down",
+          "label": "one line down"
+        },
+        {
+          "chord": "PgUp",
+          "command": "viewer.page-up",
+          "label": "page up"
+        },
+        {
+          "chord": "PgDn",
+          "command": "viewer.page-down",
+          "label": "page down"
+        },
+        {
+          "chord": "Home",
+          "command": "viewer.top",
+          "label": "go to top"
+        },
+        {
+          "chord": "End",
+          "command": "viewer.bottom",
+          "label": "go to bottom"
+        },
+        {
+          "chord": "e",
+          "command": "viewer.encoding",
+          "label": "reload as… (next encoding)"
+        },
+        {
+          "chord": "E",
+          "command": "viewer.encoding-auto",
+          "label": "back to auto-detection"
+        },
+        {
+          "chord": "x",
+          "command": "viewer.hex",
+          "label": "toggle hex view"
+        },
+        {
+          "chord": "F4",
+          "command": "pane.open",
+          "label": "open the selected file with an external program (openers.toml)"
+        }
+      ],
+      "context": [
+        "viewer"
+      ],
+      "id": "viewer",
+      "see_also": [
+        "panes",
+        "archives",
+        "mouse"
+      ],
+      "tags": [
+        "doing"
+      ],
+      "text": "Reading a file without leaving\n──────────────────────────────\n\nF3 opens the entry under the cursor and q puts it away. Nothing is written, nothing is unpacked, and the file is never opened for writing — the viewer reads.\n\nWhat it reads is the first 256 KiB, not the file. That is why a 40 GB log opens as fast as a note, and why the status line says so when there is more: what you are looking at is the head, and it is not pretending otherwise.\n\nUp and Down move a line, PgUp and PgDn a screen, and Home and End go to the ends of what was read.\n\nThe same keys work on a file inside a .zip or over SFTP. The pane holds a location, the viewer reads whatever that location gives it, and neither of them has a special case for a backend; see Inside an archive.\n\nText is a decision, not a fact\n\nA file is bytes. Whether those bytes are text, and in which encoding, is DETECTED — by looking at the bytes, never at the extension — and the answer is in the status line.\n\ne disagrees with the detector: it cycles the plausible candidates, reloading the same bytes as UTF-8, as one of the legacy 8-bit encodings, as UTF-16. E hands the decision back.\n\n  tip: Reloading changes nothing on disk. Decoding is a reading of bytes that never move, so a wrong guess costs you a screen of mojibake and one keystroke.\n\nTwo things are always visible without being asked for: bytes that did not decode arrive as � rather than being dropped, and control characters, bidi overrides and invisible separators are masked before they are painted. A terminal that executes what it displays is a terminal a file can drive, so nothing here is painted raw.\n\nWhen it is not text at all\n\nx switches to a hex dump: offset, sixteen bytes, and the printable column beside them. It is the honest view for anything that was never text, and it is where you land when the detector says binary.\n\nImages are recognised by their magic bytes — PNG, JPEG, GIF, BMP, WebP — again by content and not by name. The graphical frontend paints them; the terminal shows the hex, because that is what a terminal can honestly show.\n\nAn extension can also supply a preview: a plugin that knows a format turns it into text or into styled lines, and its output is bounded and masked like any other third-party text. A plugin that fails, is disabled, or takes too long does not block the file — you get the raw view, which is what you would have had anyway.\n\nHanding the file to another program\n\nF4 does not use the viewer at all: it launches an external program on the entry under the cursor, chosen by openers.toml from the file's mimetype and this OS. bat for source, xdg-open for a PDF, whatever you put there.\n\nThat is the one command on this page that leaves norte. Openers are CONFIGURATION and not plugins, deliberately: a WebAssembly plugin has no way to execute anything, so this is the only door out, and it is one you open by writing a file yourself.\n\n  warning: Whatever you launch runs with your permissions, outside every policy norte enforces. Norte hands over the path and steps back; the program decides what it does with it.\n\nWhile an external program has the terminal, norte does not — it takes it back when the program exits, and a program launched from here never inherits a terminal left in mouse mode. See Using the mouse.\n\n  F3             view the selected file\n  q              close the viewer\n  Up             one line up\n  Down           one line down\n  PgUp           page up\n  PgDn           page down\n  Home           go to top\n  End            go to bottom\n  e              reload as… (next encoding)\n  E              back to auto-detection\n  x              toggle hex view\n  F4             open the selected file with an external program (openers.toml)\n\nSee also: Two panes, one destination, Inside an archive, Using the mouse\n",
+      "title": "Reading a file without leaving"
     },
     {
       "commands": [

@@ -29,6 +29,7 @@ const EN: &[(&str, &str)] = &[
     ("mouse", include_str!("../topics/en/mouse.md")),
     ("help", include_str!("../topics/en/help.md")),
     ("copying", include_str!("../topics/en/copying.md")),
+    ("viewer", include_str!("../topics/en/viewer.md")),
     ("remote", include_str!("../topics/en/remote.md")),
     ("archives", include_str!("../topics/en/archives.md")),
 ];
@@ -44,6 +45,7 @@ const ES: &[(&str, &str)] = &[
     ("mouse", include_str!("../topics/es/mouse.md")),
     ("help", include_str!("../topics/es/help.md")),
     ("copying", include_str!("../topics/es/copying.md")),
+    ("viewer", include_str!("../topics/es/viewer.md")),
     ("remote", include_str!("../topics/es/remote.md")),
     ("archives", include_str!("../topics/es/archives.md")),
 ];
