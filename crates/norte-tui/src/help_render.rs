@@ -281,28 +281,11 @@ pub fn render_topic<'a>(
 /// already decoded — so only the sender can report them
 /// (`norte_help::Parsed::fold_flags`).
 ///
-/// # The `·` joiner, and what the label does NOT close
-///
-/// The segments are joined in band, so a publisher containing `·` can make one
-/// segment look like two: `publisher = "ACME · cut short"` paints a page that
-/// appears to admit it was truncated when it was not. The publisher is
-/// therefore wrapped in a LABELLED segment (`help-plugin-by`, "published by X")
-/// so a fabricated `·` reads inside a run that already announced whose name it
-/// is.
-///
-/// That is MITIGATION, not a fix, and the distinction matters to whoever reads
-/// this next: `"ACME · cut short"` still renders as two visually separate
-/// segments and the label only makes the first one say `published by ACME`.
-/// The only thing that closes it is one segment per line, and that is not worth
-/// the rows on a 40-cell overlay — because the direction of the lie is benign.
-/// A fabricated segment can add a warning the page does not deserve; it cannot
-/// HIDE one, since the real flags are appended after the publisher and come
-/// from the host. The flags are what a reader acts on, and they cannot be
-/// suppressed from inside the file.
-///
-/// `is_blank_id` and not `str::trim`: `"\u{3164}"` (HANGUL FILLER) is not
-/// whitespace, so a trim-based check calls it a publisher and paints
-/// `published by ` with nothing after it.
+/// The assembly itself — the `·` joiner and why the publisher is wrapped in a
+/// LABELLED segment, and the display clamp that keeps a wide publisher from
+/// pushing the host's flags out of the box — lives in
+/// [`norte_frontend::help_badge::plugin_badge`], shared with the other two
+/// frontends since H3h.
 fn plugin_badge(topic: &Topic, lang: Lang) -> Option<String> {
     let norte_help::Origin::Plugin {
         publisher,
@@ -313,17 +296,7 @@ fn plugin_badge(topic: &Topic, lang: Lang) -> Option<String> {
     else {
         return None;
     };
-    let mut parts: Vec<String> = vec![norte_i18n::t_in(lang, "help-plugin-origin")];
-    if let Some(p) = publisher.as_deref().filter(|p| !norte_help::is_blank_id(p)) {
-        parts.push(norte_i18n::ta_in(lang, "help-plugin-by", &[("who", p)]));
-    }
-    if *truncated {
-        parts.push(norte_i18n::t_in(lang, "help-plugin-truncated"));
-    }
-    if *lossy {
-        parts.push(norte_i18n::t_in(lang, "help-plugin-lossy"));
-    }
-    Some(parts.join(" · "))
+    norte_frontend::help_badge::plugin_badge(publisher.as_deref(), *truncated, *lossy, lang)
 }
 
 /// Detaches a rendering from the topic it borrowed.

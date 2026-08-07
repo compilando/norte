@@ -22,6 +22,7 @@ mod decoration;
 mod display;
 mod format;
 pub mod help;
+pub mod help_badge;
 pub mod keymap;
 mod modal;
 pub mod mouse;
@@ -37,7 +38,7 @@ pub mod viewer;
 
 pub use decoration::{BADGE_MAX_CHARS, Decoration, merge_decorations, sanitize_decoration};
 pub use display::{
-    display_name, display_name_with, middle_ellipsis, path_display, path_display_with,
+    cells, display_name, display_name_with, middle_ellipsis, path_display, path_display_with,
 };
 pub use format::human_bytes;
 pub use modal::{

@@ -139,6 +139,19 @@ pub fn path_display_with(
     (out, hostil)
 }
 
+/// Ancho de DISPLAY de `s` en celdas de terminal.
+///
+/// La misma medida contra la que presupuesta [`middle_ellipsis`], expuesta al
+/// crate para que quien reserve sitio a un campo POSTERIOR lo mida igual que lo
+/// mide el truncador. Un char sin ancho asignado (code point no asignado) pesa
+/// 0, que es lo que hace también el caminante del truncador.
+#[must_use]
+pub fn cells(s: &str) -> usize {
+    s.chars()
+        .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
+        .sum()
+}
+
 /// Elipsis MEDIA a `max` CELDAS de terminal: conserva cabeza (scheme) y cola
 /// (nombre) —lo que identifica la ruta ante un humano— y marca el recorte con
 /// `…`. Presupuesta por ANCHO DE CELDA (CJK/emoji ocupan 2 columnas), no por

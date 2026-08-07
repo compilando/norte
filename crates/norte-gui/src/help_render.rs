@@ -341,9 +341,11 @@ fn frags(spans: &[Span], lang: Lang, r: &(impl ChordResolver + ?Sized)) -> Vec<H
 /// nothing must not paint the one string nobody masked. The reader already
 /// knows which extension they opened — they arrived on its row, under its name.
 ///
-/// `is_blank_id` and not `str::trim`: `"\u{3164}"` (HANGUL FILLER) is not
-/// whitespace, so a trim-based check calls it a publisher and paints
-/// `published by ` with nothing after it.
+/// The line itself is assembled by [`norte_frontend::help_badge::plugin_badge`]
+/// — three byte-identical copies of a security-shaped string is how one of them
+/// drifts, and this frontend was the one that could not afford the drift: it
+/// paints the line UNWRAPPED in a fixed-width panel, so an unclamped publisher
+/// pushed the host's flags off the right edge.
 fn plugin_badge(topic: &Topic, lang: Lang) -> Option<String> {
     let norte_help::Origin::Plugin {
         publisher,
@@ -354,17 +356,7 @@ fn plugin_badge(topic: &Topic, lang: Lang) -> Option<String> {
     else {
         return None;
     };
-    let mut parts: Vec<String> = vec![norte_i18n::t_in(lang, "help-plugin-origin")];
-    if let Some(p) = publisher.as_deref().filter(|p| !norte_help::is_blank_id(p)) {
-        parts.push(norte_i18n::ta_in(lang, "help-plugin-by", &[("who", p)]));
-    }
-    if *truncated {
-        parts.push(norte_i18n::t_in(lang, "help-plugin-truncated"));
-    }
-    if *lossy {
-        parts.push(norte_i18n::t_in(lang, "help-plugin-lossy"));
-    }
-    Some(parts.join(" · "))
+    norte_frontend::help_badge::plugin_badge(publisher.as_deref(), *truncated, *lossy, lang)
 }
 
 #[cfg(test)]
@@ -495,6 +487,39 @@ mod tests {
         assert!(badge.contains(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")));
         assert!(badge.contains(&norte_i18n::t_in(Lang::En, "help-plugin-lossy")));
         assert!(badge.contains("ACME"));
+    }
+
+    #[test]
+    fn un_publisher_ancho_no_expulsa_del_panel_las_banderas_del_host() {
+        // El panel de la página tiene ancho FIJO (720 px) y esta línea no se
+        // envuelve, así que un publisher de 280 chars CJK —lo que el cap del
+        // parser permite— son 560 columnas que empujan fuera del panel lo único
+        // que el lector puede accionar: que la página venga cortada y que haya
+        // bytes sin decodificar. Las banderas las pone el HOST; el publisher lo
+        // pone un tercero. Quien decide si se ve un aviso sobre un plugin no
+        // puede ser el propio plugin.
+        let parsed = norte_help::parse_untrusted(b"body", "acme.ftp", Some("字".repeat(280)))
+            .fold_flags(true, true);
+        let lines = render_topic(&parsed.topic, Lang::En, &Fixed);
+        let badge = lines
+            .iter()
+            .find(|l| l.badge)
+            .map(|l| l.spans.iter().map(|s| s.text.as_str()).collect::<String>())
+            .expect("plugin page");
+        assert!(
+            badge.contains(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")),
+            "la bandera de corte sobrevive: {badge}"
+        );
+        assert!(
+            badge.contains(&norte_i18n::t_in(Lang::En, "help-plugin-lossy")),
+            "la de decodificación también: {badge}"
+        );
+        let ancho = norte_frontend::cells(&badge);
+        assert!(
+            ancho <= norte_frontend::help_badge::MAX_BADGE_CELLS,
+            "la insignia mide {ancho} celdas, por encima del presupuesto {}",
+            norte_frontend::help_badge::MAX_BADGE_CELLS
+        );
     }
 
     #[test]

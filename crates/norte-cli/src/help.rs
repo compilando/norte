@@ -369,9 +369,11 @@ fn table(header: &[String], rows: &[Vec<String>]) -> String {
 /// not reachable from this command today; the renderer takes a `Topic`, and
 /// this is not the place to forget.)
 ///
-/// `is_blank_id` and not `str::trim`: `"\u{3164}"` (HANGUL FILLER) is not
-/// whitespace, so a trim-based check calls it a publisher and prints
-/// `published by ` with nothing after it.
+/// The assembly is [`norte_frontend::help_badge::plugin_badge`], shared with the
+/// two windowed frontends since H3h. The clamp it applies to the publisher is
+/// not about a terminal — it is about a third-party string never deciding
+/// whether the host's own flags are visible — so it belongs to all three, and
+/// this command is where an unbounded line would be piped somewhere else.
 fn plugin_badge(topic: &Topic, lang: Lang) -> Option<String> {
     let norte_help::Origin::Plugin {
         publisher,
@@ -382,17 +384,7 @@ fn plugin_badge(topic: &Topic, lang: Lang) -> Option<String> {
     else {
         return None;
     };
-    let mut parts = vec![norte_i18n::t_in(lang, "help-plugin-origin")];
-    if let Some(p) = publisher.as_deref().filter(|p| !norte_help::is_blank_id(p)) {
-        parts.push(norte_i18n::ta_in(lang, "help-plugin-by", &[("who", p)]));
-    }
-    if *truncated {
-        parts.push(norte_i18n::t_in(lang, "help-plugin-truncated"));
-    }
-    if *lossy {
-        parts.push(norte_i18n::t_in(lang, "help-plugin-lossy"));
-    }
-    Some(parts.join(" · "))
+    norte_frontend::help_badge::plugin_badge(publisher.as_deref(), *truncated, *lossy, lang)
 }
 
 /// The keyboard cheatsheet: every binding of every screen with its catalogue
