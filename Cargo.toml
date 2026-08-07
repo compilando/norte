@@ -178,10 +178,18 @@ flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 # `Entry::new(service, user)` simple. default-features=false: el crate elige
 # los backends (los defaults arrastran el async zbus, no usado).
 keyring = { version = "3", default-features = false }
-# age 0.11 (no 0.12): probado 0.12.1 (2026-07-21, #41) — ya compila, pero
-# i18n-embed-fl 0.10 SIGUE arrastrando proc-macro-error2 (RUSTSEC-2026-0173)
-# y 0.12 añade el árbol PQ (ml-kem/hpke/p256/sha3) sin ganancia. Reevaluar
-# cuando i18n-embed-fl suelte proc-macro-error2.
+# age 0.11 (no 0.12), y el motivo CAMBIÓ (revisado 2026-08-07, #41).
+#
+# Ya no es el proc-macro: i18n-embed-fl 0.10.1 migró a `proc-macro-error3`, así
+# que age 0.12 sí quitaría RUSTSEC-2026-0173. Lo que queda es el precio: 0.12
+# mete hpke, ml-kem, p256 y sha3 como dependencias NO opcionales —un árbol
+# post-cuántico y de ECDH entero— y aquí age solo se usa para cifrar un fichero
+# de secretos con passphrase (scrypt). Cambiar un proc-macro de build-time sin
+# mantener por cuatro crates de criptografía dentro del binario que se
+# distribuye no es un buen trato, y menos con la release congelada.
+#
+# Tampoco hay atajo: `i18n-embed-fl` es dependencia REQUERIDA de age en 0.11 y
+# en 0.12, sin feature que la apague.
 age = "0.11"
 zeroize = "1"
 # Solo dev (norte-connect): generación de claves ed25519 efímeras en tests

@@ -70,7 +70,13 @@ ignore = [
     # vulnerabilidad). Es un proc-macro de BUILD-TIME que entra por
     # `age` → `i18n-embed-fl` (localización de los mensajes de error de age,
     # norte-connect fase 6). Sin impacto en runtime ni superficie de ataque.
-    # Vigilado: se quita cuando age/i18n-embed-fl migren (issue #41).
+    #
+    # Revisado 2026-08-07 (#41): `i18n-embed-fl` 0.10.1 YA migró a
+    # `proc-macro-error3`, así que subir a age 0.12 lo quitaría. No se hace:
+    # 0.12 trae hpke/ml-kem/p256/sha3 como dependencias no opcionales, y
+    # cambiar un proc-macro de build-time sin mantener por cuatro crates de
+    # criptografía DENTRO del binario distribuido es peor trato. Ver el
+    # comentario de `age` en el Cargo.toml raíz.
     "RUSTSEC-2026-0173",
 ]
 
