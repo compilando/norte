@@ -1563,6 +1563,13 @@
             "$ref": "#/$defs/VPath"
           },
           "type": "array"
+        },
+        "plugin_id": {
+          "description": "QUÉ plugin sirve la columna (0.35.0, #120). Ausente = el host resuelve\npor `column_id` a secas, que es lo que hacía antes y sigue haciendo\npara un cliente 0.34.\n\nEl campo existe porque `column_id` NO identifica al plugin y el host\nresolvía a-la-primera-que-casa: dos plugins consentidos que declaren el\nmismo id bare —`status` es el ejemplo obvio— hacían que una columna\nconfigurada como `plugin:a/status` pintara los valores de `b` sin que\nnada lo dijera. El frontend SIEMPRE sabe cuál configuró el usuario (el\nid de configuración lleva el plugin dentro), así que lo que faltaba era\nsitio en el wire para decirlo.\n\nUn host que lo reciba DEBE servir ese plugin o ninguno: si el plugin\nnombrado no está aprobado, activado, o no declara `column_id`, la\nrespuesta son celdas ausentes — jamás las de otro plugin. Caer al\nprimero que case sería reintroducir el fallo con un campo más.\n\n`skip_serializing_if`: una petición sin este campo es byte a byte la de\n0.34, así que la ventana N-1 no ve forma nueva.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

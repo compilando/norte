@@ -804,7 +804,7 @@ async fn columns_ready(
                 return;
             }
             let raw = backend
-                .plugin_column_values(&column, &paths)
+                .plugin_column_values(&plugin, &column, &paths)
                 .await
                 .unwrap_or_default();
             let sanitized = norte_frontend::columns::sanitize_column_values(&paths, &raw);

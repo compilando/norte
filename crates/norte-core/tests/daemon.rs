@@ -251,7 +251,7 @@ async fn initialize_rechaza_version_incompatible() {
             methods::INITIALIZE,
             &InitializeParams {
                 client_info: client_info(),
-                protocol_version: "0.33.2".into(),
+                protocol_version: "0.34.2".into(),
                 encodings: vec![],
                 agent_session: None,
             },
@@ -1812,7 +1812,7 @@ async fn frames_hostiles_y_formas_canonicas_crudas() {
 
     // initialize + daemon.shutdown con params null (golden canónico, M1).
     s.write_all(
-        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.33.0\",\"encodings\":[\"json\"]}}\n",
+        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"client_info\":{\"name\":\"raw\",\"version\":\"0\"},\"protocol_version\":\"0.34.0\",\"encodings\":[\"json\"]}}\n",
     )
     .await
     .expect("write");

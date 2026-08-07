@@ -998,8 +998,35 @@ impl PluginRegistry {
     /// world dedicado que [`Self::resolve_decorators`].
     #[must_use]
     pub fn resolve_columns(&self, column_id: &str) -> Option<ResolvedDecorator> {
+        self.resolve_columns_of(None, column_id)
+    }
+
+    /// Como [`Self::resolve_columns`], pero pudiendo exigir QUÉ plugin
+    /// (0.35.0, #120).
+    ///
+    /// Con `plugin_id = Some(p)` solo se considera `p`: si no está aprobado,
+    /// activado, o no declara `column_id`, la respuesta es `None` — JAMÁS otro
+    /// plugin. Caer al primero que case sería el fallo original con un
+    /// parámetro más: dos plugins consentidos que declaren `status` hacían que
+    /// una columna configurada como `plugin:a/status` pintara los valores de
+    /// `b`, y ninguna capa lo notaba porque cada una comprobaba lo suyo (el
+    /// frontend, que el plugin configurado declare la columna; el host, que
+    /// alguien la declare).
+    ///
+    /// Con `plugin_id = None` se conserva el comportamiento anterior —
+    /// primero que case— porque es lo que un cliente 0.34 espera, y lo que ya
+    /// se comía.
+    #[must_use]
+    pub fn resolve_columns_of(
+        &self,
+        plugin_id: Option<&str>,
+        column_id: &str,
+    ) -> Option<ResolvedDecorator> {
         self.catalog.plugins.iter().find_map(|e| {
             if e.manifest.category != norte_plugin_host::Category::Columns {
+                return None;
+            }
+            if plugin_id.is_some_and(|want| want != e.manifest.id) {
                 return None;
             }
             let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();

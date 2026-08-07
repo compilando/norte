@@ -113,7 +113,7 @@ impl ColumnsPicker {
     /// sin catálogo de provider ([`Self::open_with_catalog`] con `None`).
     #[must_use]
     pub fn open(settings: &ColumnsSettings, scheme: &str, current_sort: SortSpec) -> Self {
-        Self::open_with_catalog(settings, scheme, current_sort, None)
+        Self::open_with_catalog(settings, scheme, current_sort, None, &[])
     }
 
     /// Construye el picker con el catálogo de attrs del provider (#117):
@@ -126,6 +126,7 @@ impl ColumnsPicker {
         scheme: &str,
         current_sort: SortSpec,
         catalog: Option<&norte_proto::AttrCatalog>,
+        plugins: &[norte_proto::methods::PluginInfo],
     ) -> Self {
         let raw = settings.raw_ids_for(scheme);
         let mut rows: Vec<PickerRow> = Vec::new();
@@ -185,6 +186,29 @@ impl ColumnsPicker {
         if let Some(cat) = catalog {
             for info in cat {
                 let id = format!("attr:{}", info.id);
+                if !rows.iter().any(|r| r.id == id) {
+                    rows.push(make_row(id, None, false, settings, scheme, catalog));
+                }
+            }
+        }
+        // Columnas DECLARADAS por plugins (#120), mismo criterio que los attrs:
+        // las no configuradas se ofrecen deshabilitadas al final.
+        //
+        // Solo de plugins aprobados Y activados: ofrecer la columna de uno que
+        // el humano no ha consentido sería invitarle a configurar algo que el
+        // host se va a negar a servir, y la fila resultante pintaría en blanco
+        // sin decir por qué.
+        //
+        // El id que se ofrece lleva el plugin dentro (`plugin:{p}/{c}`) — es
+        // la forma que `[ui.columns]` guarda y la que desde 0.35.0 identifica
+        // sin ambigüedad qué plugin sirve la columna cuando dos declaran el
+        // mismo id bare.
+        for p in plugins {
+            if !p.approved || !p.enabled {
+                continue;
+            }
+            for c in &p.columns {
+                let id = format!("plugin:{}/{}", p.id, c.id);
                 if !rows.iter().any(|r| r.id == id) {
                     rows.push(make_row(id, None, false, settings, scheme, catalog));
                 }
@@ -582,7 +606,8 @@ mod tests {
             ..Default::default()
         };
         let st = ColumnsSettings::resolve(&cfg);
-        let mut p = ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), Some(&cat));
+        let mut p =
+            ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), Some(&cat), &[]);
         // El configurado sigue habilitado; el anunciado no-configurado aparece
         // deshabilitado al final, UNA sola vez.
         let uid: Vec<_> = p
@@ -626,7 +651,7 @@ mod tests {
     fn open_sin_catalogo_conserva_la_conducta_historica() {
         let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
         let a = ColumnsPicker::open(&st, "file", SortSpec::default());
-        let b = ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), None);
+        let b = ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), None, &[]);
         assert_eq!(a.rows(), b.rows());
     }
 
@@ -643,7 +668,8 @@ mod tests {
             hint: AttrHint::Identity,
         }]);
         let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
-        let mut p = ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), Some(&cat));
+        let mut p =
+            ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), Some(&cat), &[]);
         assert!(!p.finish().ids.contains(&"attr:posix.uid".to_owned()));
         while p.rows()[p.cursor()].id != "attr:posix.uid" {
             p.down();
@@ -668,7 +694,7 @@ mod tests {
             hint: AttrHint::Identity,
         }]);
         let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
-        let p = ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), Some(&cat));
+        let p = ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), Some(&cat), &[]);
         let fila = p
             .rows()
             .iter()
@@ -707,5 +733,93 @@ mod tests {
             .map(|r| r.id.as_str())
             .collect();
         assert_eq!(habilitadas, ["name", "mtime"]);
+    }
+}
+
+#[cfg(test)]
+mod plugin_offer_tests {
+    use super::*;
+
+    fn plugin(
+        id: &str,
+        cols: &[&str],
+        approved: bool,
+        enabled: bool,
+    ) -> norte_proto::methods::PluginInfo {
+        norte_proto::methods::PluginInfo {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            publisher: String::new(),
+            version: "1.0.0".to_owned(),
+            category: "columns".to_owned(),
+            capabilities: Vec::new(),
+            approved,
+            enabled,
+            description: None,
+            commands: Vec::new(),
+            columns: cols
+                .iter()
+                .map(|c| norte_proto::methods::PluginColumnInfo {
+                    id: (*c).to_owned(),
+                    header: (*c).to_owned(),
+                })
+                .collect(),
+            has_help: false,
+        }
+    }
+
+    /// Una columna declarada por un plugin consentido se OFRECE (#120). Antes
+    /// solo se llegaba a ella editando `[ui.columns]` a mano, que es tanto
+    /// como no ofrecerla.
+    #[test]
+    fn se_ofrece_la_columna_de_un_plugin_consentido() {
+        let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
+        let plugins = [plugin("org.norte.git", &["status"], true, true)];
+        let p = ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), None, &plugins);
+        let fila = p
+            .rows()
+            .iter()
+            .find(|r| r.id == "plugin:org.norte.git/status")
+            .expect("la columna declarada debe ofrecerse");
+        assert!(
+            !fila.enabled,
+            "se OFRECE deshabilitada: el picker ofrece, no impone"
+        );
+    }
+
+    /// Un plugin sin consentir no se ofrece: configurarlo daría una columna
+    /// que el host se niega a servir y que pintaría en blanco sin decir por qué.
+    #[test]
+    fn no_se_ofrece_lo_que_el_humano_no_ha_consentido() {
+        let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
+        for (approved, enabled) in [(false, true), (true, false), (false, false)] {
+            let plugins = [plugin("org.norte.git", &["status"], approved, enabled)];
+            let p =
+                ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), None, &plugins);
+            assert!(
+                !p.rows().iter().any(|r| r.id.starts_with("plugin:")),
+                "approved={approved} enabled={enabled} no debe ofrecerse"
+            );
+        }
+    }
+
+    /// Dos plugins pueden declarar el MISMO id bare, y las dos filas tienen que
+    /// existir por separado: el id que se ofrece lleva el plugin dentro, que es
+    /// justo lo que desde 0.35.0 el wire sabe distinguir (#120).
+    #[test]
+    fn dos_plugins_con_el_mismo_id_bare_dan_dos_filas() {
+        let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
+        let plugins = [
+            plugin("org.a.tool", &["status"], true, true),
+            plugin("org.b.tool", &["status"], true, true),
+        ];
+        let p = ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), None, &plugins);
+        for id in ["plugin:org.a.tool/status", "plugin:org.b.tool/status"] {
+            assert!(
+                p.rows().iter().any(|r| r.id == id),
+                "falta la fila `{id}`: colapsarlas escondería una columna que el \
+                 usuario sí puede configurar"
+            );
+        }
     }
 }

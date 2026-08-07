@@ -456,7 +456,10 @@ fn golden_methods() {
     // plugin_help_params y
     // plugin_help_result(/_flags/_empty/_lossy/_absent) (H3e, ADR 0040 — los
     // tres últimos son la página vacía, la hostil y el campo AUSENTE).
-    assert_eq!(fixtures.len(), 113, "[methods.json] fixtures sin caso Rust");
+    // 113 → 114 en 0.35.0: + plugin_column_values_params_scoped (#120 — la
+    // petición que NOMBRA al plugin; la que no lo nombra conserva su fixture
+    // byte a byte, que es lo que `skip_serializing_if` promete).
+    assert_eq!(fixtures.len(), 114, "[methods.json] fixtures sin caso Rust");
 }
 
 /// Familia `ai.*` (0.32.0, M4-IA, ADR 0031): plan de rename revisable.
@@ -1184,6 +1187,20 @@ fn check_methods_plugin_decorate_and_columns(fixtures: &BTreeMap<String, Value>)
         &PluginColumnValuesParams {
             column_id: "git-status".into(),
             paths: vec![vpath("file:///repo/a.rs"), vpath("file:///repo/README")],
+            // Sin `plugin_id`: es la petición de un cliente 0.34, y su golden
+            // tiene que seguir siendo EL MISMO fichero que antes del bump —
+            // eso es lo que `skip_serializing_if` promete.
+            plugin_id: None,
+        },
+    );
+    // Con `plugin_id` (0.35.0, #120): la forma nueva, en su propio golden.
+    check_one(
+        fixtures,
+        "plugin_column_values_params_scoped",
+        &PluginColumnValuesParams {
+            column_id: "status".into(),
+            paths: vec![vpath("file:///repo/a.rs")],
+            plugin_id: Some("org.norte.git".into()),
         },
     );
     check_one(
@@ -1940,7 +1957,9 @@ fn method_names_frozen() {
     // 0.34.0 (H3e): plugin.help — la página de ayuda de UN plugin bajo
     // demanda; PluginInfo gana has_help (discovery barato, sin método nuevo).
     assert_eq!(methods::PLUGIN_HELP, "plugin.help");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.34.0");
+    // 0.35.0 (#120): PluginColumnValuesParams gana `plugin_id` — sin método
+    // nuevo, así que aquí solo se mueve la versión.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.35.0");
 }
 
 #[test]

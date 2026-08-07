@@ -296,6 +296,13 @@
       "file:///repo/README"
     ]
   },
+  "plugin_column_values_params_scoped": {
+    "column_id": "status",
+    "paths": [
+      "file:///repo/a.rs"
+    ],
+    "plugin_id": "org.norte.git"
+  },
   "plugin_column_values_result": {
     "values": [
       "modified",

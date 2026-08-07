@@ -2078,7 +2078,12 @@ impl App {
     /// config — un sort de cabecera previo no se pierde al abrir). Con el
     /// catálogo cacheado del scheme (#117): el picker OFRECE los attrs
     /// anunciados por el provider y cicla sus formatos por hint.
-    pub fn open_columns_picker(&mut self) {
+    /// `plugins` = el catálogo VIVO (`plugin.list`), para ofrecer también las
+    /// columnas que declaran los plugins aprobados y activados (#120). Vacío
+    /// (el fetch falló, o no hay daemon) = se ofrecen solo builtins y attrs:
+    /// una columna de plugin que no se puede confirmar que exista no se
+    /// ofrece, igual que un attr no anunciado.
+    pub fn open_columns_picker(&mut self, plugins: &[norte_proto::methods::PluginInfo]) {
         let scheme = self.focused().dir().scheme().to_owned();
         let sort = self.focused().sort();
         self.columns_picker = Some(
@@ -2087,6 +2092,7 @@ impl App {
                 &scheme,
                 sort,
                 self.attr_catalog(&scheme),
+                plugins,
             ),
         );
     }

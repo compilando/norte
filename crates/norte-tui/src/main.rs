@@ -309,7 +309,7 @@ async fn fetch_plugin_columns(
             return out;
         }
         let raw = backend
-            .plugin_column_values(&column, paths)
+            .plugin_column_values(&plugin, &column, paths)
             .await
             .unwrap_or_default();
         let sanitized = norte_frontend::columns::sanitize_column_values(paths, &raw);
@@ -7345,7 +7345,18 @@ async fn dispatch(
             });
         }
         Command::AppTheme => app.open_theme_picker(),
-        Command::PaneColumns => app.open_columns_picker(),
+        // ASÍNCRONA por lo mismo que `app.palette`: las filas de columna de
+        // plugin salen de `plugin.list` (aprobado + activado). Un fetch
+        // fallido NO impide abrir el picker — degrada a builtins + attrs,
+        // igual que la palette degrada a built-ins.
+        Command::PaneColumns => {
+            let plugins = backend
+                .plugins_list()
+                .await
+                .map(|l| l.plugins)
+                .unwrap_or_default();
+            app.open_columns_picker(&plugins);
+        }
         Command::AppExtensions => match backend.plugins_list().await {
             // El catálogo llega YA ordenado por categoría e id desde el core.
             Ok(list) => {

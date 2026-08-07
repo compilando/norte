@@ -1241,6 +1241,7 @@ impl Backend {
     /// Solo por fallos de INFRAESTRUCTURA (igual que [`Self::plugin_decorate`]).
     pub async fn plugin_column_values(
         &self,
+        plugin_id: &str,
         column_id: &str,
         paths: &[VPath],
     ) -> Result<Vec<Option<String>>, Error> {
@@ -1253,12 +1254,16 @@ impl Backend {
                 let entries = crate::plugins::paths_to_basenames(paths);
                 let expected_len = paths.len();
                 let column_id_owned = column_id.to_owned();
+                let plugin_id_owned = plugin_id.to_owned();
                 let values = tokio::task::spawn_blocking(
                     move || -> Result<Vec<Option<String>>, Error> {
                         let reg = crate::PluginRegistry::discover(&dir)
                             .map_err(|_| Error::Io { retryable: false })?;
+                        // ESE plugin o ninguno (#120): dos plugins consentidos
+                        // que declaren el mismo id bare no pueden servirse el
+                        // uno por el otro.
                         let Some((id, _name, wasm, caps, settings)) =
-                            reg.resolve_columns(&column_id_owned)
+                            reg.resolve_columns_of(Some(&plugin_id_owned), &column_id_owned)
                         else {
                             return Ok(vec![None; expected_len]);
                         };
@@ -1290,7 +1295,7 @@ impl Backend {
                 Ok(values)
             }
             #[cfg(unix)]
-            Self::Remote(r) => r.plugin_column_values(column_id, paths).await,
+            Self::Remote(r) => r.plugin_column_values(plugin_id, column_id, paths).await,
         }
     }
 
@@ -2681,6 +2686,7 @@ pub mod remote {
         /// columna no aplica en absoluto.
         pub(super) async fn plugin_column_values(
             &self,
+            plugin_id: &str,
             column_id: &str,
             paths: &[VPath],
         ) -> Result<Vec<Option<String>>, Error> {
@@ -2691,6 +2697,7 @@ pub mod remote {
             let params = methods::PluginColumnValuesParams {
                 column_id: column_id.to_owned(),
                 paths: paths.to_vec(),
+                plugin_id: Some(plugin_id.to_owned()),
             };
             let call = client.call::<_, methods::PluginColumnValuesResult>(
                 methods::PLUGIN_COLUMN_VALUES,

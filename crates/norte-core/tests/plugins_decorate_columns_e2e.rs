@@ -189,7 +189,7 @@ async fn plugin_decorate_y_column_values_e2e_wasm_real_a_traves_del_backend() {
         "sin aprobar, ningún decorator consentido: []"
     );
     let none_col_yet = backend
-        .plugin_column_values("name-len", &paths)
+        .plugin_column_values("org.norte.cols", "name-len", &paths)
         .await
         .expect("plugin.column_values no es error sin aprobar");
     assert_eq!(
@@ -246,7 +246,7 @@ async fn plugin_decorate_y_column_values_e2e_wasm_real_a_traves_del_backend() {
 
     // --- plugin.column_values ---
     let values = backend
-        .plugin_column_values("name-len", &paths)
+        .plugin_column_values("org.norte.cols", "name-len", &paths)
         .await
         .expect("plugin.column_values no es error");
     assert_eq!(
@@ -261,7 +261,7 @@ async fn plugin_decorate_y_column_values_e2e_wasm_real_a_traves_del_backend() {
 
     // Un id de columna no declarado por ningún plugin: celdas vacías, no error.
     let unknown_col = backend
-        .plugin_column_values("no-declarada", &paths)
+        .plugin_column_values("org.norte.cols", "no-declarada", &paths)
         .await
         .expect("plugin.column_values no es error para un id desconocido");
     assert_eq!(unknown_col, vec![None, None, None]);

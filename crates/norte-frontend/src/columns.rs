@@ -101,7 +101,11 @@ pub fn validated_plugin_requests(
         let declared = plugins.iter().any(|p| {
             p.approved && p.enabled && p.id == *plugin && p.columns.iter().any(|c| c.id == *column)
         });
-        if declared && !out.iter().any(|(_, c)| c == column) {
+        // Dedup por la PAREJA, no por el id bare (#120). Dos plugins
+        // consentidos pueden declarar `status` los dos, y desde 0.35.0 el wire
+        // sabe distinguirlos: deduplicar por columna a secas tiraría en
+        // silencio la segunda que el usuario configuró a propósito.
+        if declared && !out.iter().any(|(p, c)| p == plugin && c == column) {
             out.push((plugin.clone(), column.clone()));
         }
     }
@@ -162,12 +166,17 @@ mod validated_plugin_requests_tests {
         );
     }
 
-    /// Review MAJOR-2: dos plugins consentidos con el MISMO id bare de
-    /// columna — el wire es first-match, así que servir ambos pintaría los
-    /// valores de uno bajo la cabecera del otro. Se conserva el primero;
-    /// el segundo queda en blanco (ausencia visible, jamás datos ajenos).
+    /// Dos plugins consentidos con el MISMO id bare de columna: AMBOS se
+    /// sirven (#120 cerrada).
+    ///
+    /// Hasta 0.35.0 el wire llevaba solo el id bare y el host resolvía a la
+    /// primera que casara, así que servir los dos habría pintado los valores
+    /// de uno bajo la cabecera del otro; se conservaba el primero y el segundo
+    /// quedaba en blanco — ausencia visible antes que atribución falsa. Ahora
+    /// la petición nombra al plugin, el host sirve ESE o ninguno, y quedarse
+    /// con uno solo tiraría en silencio una columna que el usuario configuró.
     #[test]
-    fn colision_de_id_bare_conserva_solo_el_primero() {
+    fn colision_de_id_bare_sirve_a_los_dos_plugins() {
         let plugins = vec![
             plugin("a", &["branch"], true, true),
             plugin("b", &["branch"], true, true),
@@ -178,8 +187,23 @@ mod validated_plugin_requests_tests {
         ];
         assert_eq!(
             validated_plugin_requests(&requested, &plugins),
-            vec![("a".to_owned(), "branch".to_owned())],
-            "el par de b se omite: blanco antes que atribución falsa (#120)"
+            requested,
+            "cada par va con su plugin: el wire ya sabe distinguirlos (#120)"
+        );
+    }
+
+    /// Lo que sigue deduplicándose es la pareja REPETIDA: configurar dos veces
+    /// `plugin:a/branch` es una columna, no dos peticiones al mismo guest.
+    #[test]
+    fn la_pareja_repetida_se_deduplica() {
+        let plugins = vec![plugin("a", &["branch"], true, true)];
+        let requested = vec![
+            ("a".to_owned(), "branch".to_owned()),
+            ("a".to_owned(), "branch".to_owned()),
+        ];
+        assert_eq!(
+            validated_plugin_requests(&requested, &plugins),
+            vec![("a".to_owned(), "branch".to_owned())]
         );
     }
 }

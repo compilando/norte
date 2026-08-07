@@ -2599,7 +2599,9 @@ async fn handle_plugin_column_values(
     let entries = crate::plugins::paths_to_basenames(&p.paths);
     let resolved = {
         let reg = shared.plugins.lock().expect("plugins lock sano");
-        reg.resolve_columns(&p.column_id)
+        // `plugin_id` presente = ESE plugin o ninguno (#120). Ausente = cliente
+        // 0.34: se conserva el primero-que-case de antes.
+        reg.resolve_columns_of(p.plugin_id.as_deref(), &p.column_id)
     };
     let Some((id, _name, wasm, caps, settings)) = resolved else {
         return to_value(&methods::PluginColumnValuesResult {

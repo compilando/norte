@@ -899,11 +899,11 @@ fn policy_types_roundtrip() {
 fn version_ventana_actual() {
     use norte_proto::PROTOCOL_VERSION;
     use norte_proto::methods::version_compatible;
-    // 0.34.0 (H3e): acepta 0.34.x (N) y 0.33.x (N-1), rechaza 0.32.x (N-2).
-    assert!(version_compatible(PROTOCOL_VERSION, "0.34.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.33.0"), "N-1");
+    // 0.35.0 (#120): acepta 0.35.x (N) y 0.34.x (N-1), rechaza 0.33.x (N-2).
+    assert!(version_compatible(PROTOCOL_VERSION, "0.35.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.34.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.32.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.33.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -1270,7 +1270,21 @@ fn plugin_decorate_and_column_values_are_positional() {
     let cvp = PluginColumnValuesParams {
         column_id: "git-status".into(),
         paths: paths.clone(),
+        plugin_id: None,
     };
+    // Ausente NO se emite: la petición de un cliente que no nombra plugin es
+    // byte a byte la de 0.34 (#120).
+    assert!(
+        !serde_json::to_string(&cvp).unwrap().contains("plugin_id"),
+        "plugin_id ausente no debe aparecer en el wire"
+    );
+    let cvp_scoped = PluginColumnValuesParams {
+        plugin_id: Some("org.norte.git".into()),
+        ..cvp.clone()
+    };
+    let back: PluginColumnValuesParams =
+        serde_json::from_str(&serde_json::to_string(&cvp_scoped).unwrap()).unwrap();
+    assert_eq!(back.plugin_id.as_deref(), Some("org.norte.git"));
     // `Some("")` (celda real, cadena vacía) y `None` (la columna no aplica a
     // esa entrada) deben distinguirse en el wire — `values: Vec<Option
     // <String>>`, no `Vec<String>` (MAJOR de protocol-guardian aplicado).

@@ -360,6 +360,11 @@ struct NorteGui {
     /// same z-order and key-capture slot as the palette (modal wins).
     /// Esc discards; Enter applies in-session and persists (TUI parity).
     columns_picker: Option<columns_view::ColumnsView>,
+    /// El catálogo vivo de plugins (`plugin.list`), cacheado: el picker de
+    /// columnas ofrece las que declaran los aprobados y activados (#120) y
+    /// llega asíncrono, así que se guarda al recibirlo en vez de re-pedirlo
+    /// cada vez que se pinta.
+    plugins: Vec<norte_proto::methods::PluginInfo>,
     /// The help overlay (H3f, `F1`): `Some` while open, same z-order and
     /// key-capture slot as the palette (modal still wins).
     help: Option<help_view::HelpView>,
@@ -1003,6 +1008,7 @@ impl NorteGui {
                         PaneState::new(dir.clone(), Vec::new()),
                         PaneState::new(dir.clone(), Vec::new()),
                     ],
+                    plugins: Vec::new(),
                     column_settings: norte_frontend::columns::ColumnsSettings::default(),
                     attr_catalogs: std::collections::HashMap::new(),
                     sort_override: [None, None],
@@ -1079,6 +1085,7 @@ impl NorteGui {
                 let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel();
                 Self {
                     help_dragging: false,
+                    plugins: Vec::new(),
                     panes: [
                         PaneState::new(placeholder.clone(), Vec::new()),
                         PaneState::new(placeholder, Vec::new()),
@@ -1534,6 +1541,15 @@ impl NorteGui {
                 Ok((plugins, errors)) => {
                     if let Some(palette) = &mut self.palette {
                         palette.extend(norte_frontend::palette::plugin_rows(&plugins));
+                    }
+                    // #120: el picker de columnas ofrece las columnas que los
+                    // plugins declaran, y el catálogo llega ASÍNCRONO. Se
+                    // cachea, y si el picker ya está abierto se reconstruye
+                    // con él — abrirlo y ver aparecer las filas un instante
+                    // después es mejor que no verlas nunca.
+                    self.plugins = plugins.clone();
+                    if self.columns_picker.is_some() {
+                        self.open_columns_picker();
                     }
                     // H3f: the help's Extensions group and its `plugin:` rows
                     // come from this same catalogue.
@@ -2998,6 +3014,9 @@ impl NorteGui {
     /// cacheado del scheme (#117): el picker OFRECE los attrs anunciados
     /// por el provider y cicla sus formatos por hint.
     fn open_columns_picker(&mut self) {
+        // Pide el catálogo: se abre con lo cacheado (posiblemente nada la
+        // primera vez) y `PluginsListed` reconstruye el picker al llegar.
+        let _ = self.cmds.send(SessionCmd::PluginsList);
         let f = self.focus;
         let scheme = self.panes[f].dir().scheme().to_owned();
         let sort = self.panes[f].sort();
@@ -3007,6 +3026,7 @@ impl NorteGui {
                 &scheme,
                 sort,
                 self.attr_catalogs.get(&scheme),
+                &self.plugins,
             ),
         ));
     }

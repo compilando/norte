@@ -265,7 +265,7 @@ fn snapshot_columns_picker_80x24() {
         ..Default::default()
     };
     app.columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg);
-    app.open_columns_picker();
+    app.open_columns_picker(&[]);
     let texto = render_80x24(&app);
     let hint = &app.dialog_hints.columns;
     assert!(
@@ -295,7 +295,7 @@ fn picker_capa_un_id_opaco_kilometrico() {
         ..Default::default()
     };
     app.columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg);
-    app.open_columns_picker();
+    app.open_columns_picker(&[]);
     let texto = render_80x24(&app);
     let cap = norte_frontend::columns::HEADER_MAX_CHARS;
     assert!(

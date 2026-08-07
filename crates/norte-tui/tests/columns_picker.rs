@@ -82,7 +82,7 @@ fn builtins(app: &App) -> Vec<Builtin> {
 fn picker_ordena_y_persiste() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut app = app();
-    app.open_columns_picker();
+    app.open_columns_picker(&[]);
     {
         let p = app.columns_picker.as_mut().expect("picker abierto");
         p.down(); // size
@@ -117,7 +117,7 @@ fn picker_ordena_y_persiste() {
 fn picker_toggle_persiste_la_lista() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut app = app();
-    app.open_columns_picker();
+    app.open_columns_picker(&[]);
     {
         let p = app.columns_picker.as_mut().expect("picker abierto");
         p.down(); // size
@@ -155,7 +155,7 @@ fn picker_toggle_persiste_la_lista() {
 fn picker_cicla_formato_y_persiste_spec() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut app = app();
-    app.open_columns_picker();
+    app.open_columns_picker(&[]);
     {
         let p = app.columns_picker.as_mut().expect("picker abierto");
         p.down(); // size
@@ -203,7 +203,7 @@ fn picker_cancel_no_toca_nada() {
     let mut app = app();
     let antes = builtins(&app);
     let sort_antes = app.focused().sort();
-    app.open_columns_picker();
+    app.open_columns_picker(&[]);
     {
         let p = app.columns_picker.as_mut().expect("picker abierto");
         p.down();

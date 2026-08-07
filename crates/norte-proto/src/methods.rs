@@ -296,12 +296,24 @@ use crate::{
 /// `VERSION_MISMATCH` en `initialize`, antes de despachar método alguno (el
 /// mismo razonamiento que el bump 0.30.0 deja escrito arriba).
 ///
+/// 0.35.0 (#120): [`PluginColumnValuesParams`] gana `plugin_id: Option<String>`.
+/// `column_id` no identifica al plugin, y el host resolvía a-la-primera-que-
+/// casa, así que dos plugins consentidos que declararan el mismo id bare
+/// hacían que `plugin:a/status` pintara los valores de `b` en silencio. El
+/// frontend siempre supo cuál era; lo que faltaba era sitio donde decirlo.
+/// Ventana N=0.35.x / N-1=0.34.x en la dirección que importa: un cliente 0.34
+/// no emite el campo, el host cae al camino de antes y el resultado es el
+/// mismo que tenía — incluida su ambigüedad, que es exactamente lo que un
+/// cliente viejo ya se comía. `skip_serializing_if` sobre `None` deja el
+/// payload de una petición sin plugin idéntico byte a byte al de 0.34. La
+/// inversa la corta [`version_compatible`] en el handshake, como siempre.
+///
 /// Quien reciba `MethodNotFound` a un `plugin.help` debe tratarlo como «este
 /// plugin no tiene página», nunca como un fallo. La razón es que la ayuda es
 /// COSMÉTICA: si el peer no implementa el método, no hay página que pintar y no
 /// hay nada roto. No es que un daemon N-1 conteste eso — nunca recibe la
 /// llamada, porque el handshake ya lo rechazó.
-pub const PROTOCOL_VERSION: &str = "0.34.0";
+pub const PROTOCOL_VERSION: &str = "0.35.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -1936,6 +1948,27 @@ pub struct PluginColumnValuesParams {
     /// Id de la columna (declarado por el plugin; identifica QUÉ columna
     /// entre varias que un mismo plugin `columns` podría exponer).
     pub column_id: String,
+    /// QUÉ plugin sirve la columna (0.35.0, #120). Ausente = el host resuelve
+    /// por `column_id` a secas, que es lo que hacía antes y sigue haciendo
+    /// para un cliente 0.34.
+    ///
+    /// El campo existe porque `column_id` NO identifica al plugin y el host
+    /// resolvía a-la-primera-que-casa: dos plugins consentidos que declaren el
+    /// mismo id bare —`status` es el ejemplo obvio— hacían que una columna
+    /// configurada como `plugin:a/status` pintara los valores de `b` sin que
+    /// nada lo dijera. El frontend SIEMPRE sabe cuál configuró el usuario (el
+    /// id de configuración lleva el plugin dentro), así que lo que faltaba era
+    /// sitio en el wire para decirlo.
+    ///
+    /// Un host que lo reciba DEBE servir ese plugin o ninguno: si el plugin
+    /// nombrado no está aprobado, activado, o no declara `column_id`, la
+    /// respuesta son celdas ausentes — jamás las de otro plugin. Caer al
+    /// primero que case sería reintroducir el fallo con un campo más.
+    ///
+    /// `skip_serializing_if`: una petición sin este campo es byte a byte la de
+    /// 0.34, así que la ventana N-1 no ve forma nueva.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
     /// Rutas a valorar, en el orden en que se listan.
     pub paths: Vec<VPath>,
 }
