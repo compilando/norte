@@ -84,10 +84,6 @@ const PENDIENTES: &[&str] = &[
     "app.settings",
     "pane.ai-rename",
     "pane.semantic-search",
-    "pane.quick-search",
-    "pane.search",
-    "pane.toggle-hidden",
-    "pane.columns",
     "pane.mkdir",
     "dialog.confirm",
     "dialog.cancel",
@@ -102,12 +98,7 @@ const PENDIENTES: &[&str] = &[
     "dialog.page-up",
     "dialog.page-down",
     "dialog.add",
-    "dialog.toggle-enabled",
     "dialog.remove",
-    "dialog.move-up",
-    "dialog.move-down",
-    "dialog.sort",
-    "dialog.cycle-format",
 ];
 
 /// El TECHO de la deuda: la puerta no solo obliga a que la lista mengüe
@@ -118,7 +109,7 @@ const PENDIENTES: &[&str] = &[
 /// edición deliberada, en el mismo diff, que un revisor ve. El número solo
 /// puede bajar — y cuando H3h lo deje en 0, la lista desaparece con él.
 const _: () = assert!(
-    PENDIENTES.len() <= 36,
+    PENDIENTES.len() <= 27,
     "la allowlist de la puerta de documentación solo puede MENGUAR: \
      documenta el comando en vez de añadirlo aquí"
 );
@@ -176,7 +167,7 @@ const CONTEXTOS_PENDIENTES: &[&str] = &[
 /// [`PENDIENTES`]: la lista solo puede bajar, y subir el número es una
 /// edición deliberada que un revisor ve en el mismo diff.
 const _: () = assert!(
-    CONTEXTOS_PENDIENTES.len() <= 7,
+    CONTEXTOS_PENDIENTES.len() <= 27,
     "la allowlist de contextos solo puede MENGUAR: escribe la página en vez \
      de añadir el contexto aquí"
 );

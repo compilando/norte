@@ -4,8 +4,8 @@ expression: texto
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
 "│N┌ Ayuda ───────────────────────────────────────────────────────────────────┐a│"
-"│ │Operaciones                   Aprobar extensiones                         │ │"
-"│ │  Copiar, mover y borrar      ────────────────────────────────────────────│ │"
+"│ │  Encontrar cosas             Aprobar extensiones                         │ │"
+"│ │  Qué enseña el listado       ────────────────────────────────────────────│ │"
 "│ │  Leer un fichero sin salir   de una extensión                            │ │"
 "│ │                                                                          │ │"
 "│ │Remoto y archivos             Las extensiones del catálogo est�án         │ │"

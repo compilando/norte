@@ -11,6 +11,8 @@
         "mouse",
         "help",
         "copying",
+        "finding",
+        "columns",
         "viewer",
         "remote",
         "archives"
@@ -18,7 +20,7 @@
       "tags": [
         "basics"
       ],
-      "text": "Welcome to norte\n────────────────\n\nnorte is an orthodox file manager. Two panes, the keyboard first, and one set of commands whether the files are on this machine, on an SSH host, in an S3-compatible bucket, or inside a .zip.\n\nThat last part is the whole idea. A backend is not a mode you enter and leave; it is only what a pane happens to be showing. Copying out of an archive into a bucket is the same two keys as copying between two local directories.\n\nWhere to go next\n\n  • Two panes, one destination — the two panes, focus, and why the other one is the destination\n  • Marking what to act on — marking the entries a command will act on\n  • Using the mouse — click, wheel and drag, and what capture costs the terminal\n  • Reading this help — moving around these pages, and where the keys in them come from\n  • Copying, moving and deleting — copying, moving, deleting, and cancelling without losing data\n  • Reading a file without leaving — reading a file in place, and handing one to another program\n  • SFTP, FTP and object storage — SFTP, FTP and S3-compatible object storage\n  • Inside an archive — walking into a .zip or a .tar as if it were a directory\n\n  tip: The keys in this help are not written into the text: each one is looked up in your keymap as the page is drawn. Rebind a command and these pages name the key you chose.\n\nSee also: Two panes, one destination, Marking what to act on, Using the mouse, Reading this help, Copying, moving and deleting, Reading a file without leaving, SFTP, FTP and object storage, Inside an archive\n",
+      "text": "Welcome to norte\n────────────────\n\nnorte is an orthodox file manager. Two panes, the keyboard first, and one set of commands whether the files are on this machine, on an SSH host, in an S3-compatible bucket, or inside a .zip.\n\nThat last part is the whole idea. A backend is not a mode you enter and leave; it is only what a pane happens to be showing. Copying out of an archive into a bucket is the same two keys as copying between two local directories.\n\nWhere to go next\n\n  • Two panes, one destination — the two panes, focus, and why the other one is the destination\n  • Marking what to act on — marking the entries a command will act on\n  • Using the mouse — click, wheel and drag, and what capture costs the terminal\n  • Reading this help — moving around these pages, and where the keys in them come from\n  • Copying, moving and deleting — copying, moving, deleting, and cancelling without losing data\n  • Reading a file without leaving — reading a file in place, and handing one to another program\n  • Finding things — the quick filter, the subtree search, and hidden entries\n  • What the listing shows — which columns the listing shows, and how it is sorted\n  • SFTP, FTP and object storage — SFTP, FTP and S3-compatible object storage\n  • Inside an archive — walking into a .zip or a .tar as if it were a directory\n\n  tip: The keys in this help are not written into the text: each one is looked up in your keymap as the page is drawn. Rebind a command and these pages name the key you chose.\n\nSee also: Two panes, one destination, Marking what to act on, Using the mouse, Reading this help, Copying, moving and deleting, Finding things, What the listing shows, Reading a file without leaving, SFTP, FTP and object storage, Inside an archive\n",
       "title": "Welcome to norte"
     },
     {
@@ -249,6 +251,83 @@
       ],
       "text": "Copying, moving and deleting\n────────────────────────────\n\nMark what you want in the focused pane and press F5. The other pane is the destination, whatever it is holding — a local directory, an SSH host, a bucket. An archive is the one thing that can only ever be a source; see Inside an archive.\n\nF6 moves. Within one backend that is a rename: no bytes are read, no bytes are written, and the size of what you are moving does not matter. Only when the two ends are different backends — or different filesystems on this machine — does it degrade into a copy followed by a delete of the source.\n\nF8 uses the trash when the backend offers one and deletes permanently when it does not. Shift+F8 never uses the trash. Both confirm first, and the confirmation says which of the two is about to happen.\n\nEvery transfer is a task\n\nA copy is not a frozen screen. It reports progress, it keeps going while you navigate elsewhere, and Ctrl+k stops the most recent one.\n\nWhat cancelling promises is per file: bytes go to a staging file and the destination name does not appear until that file is complete, so no half-written file ever wears the name you were expecting.\n\nA cancelled tree is a different matter. The files already copied stay where they landed — each one whole, none of them half-written, but the directory is there and it is partial. Nothing sweeps it up for you.\n\n  warning: Cancelling a copy INTO object storage is the one case that stays ambiguous: the server may finish a copy it had already begun, so the object can appear after you cancelled, and abandoned multipart parts can go on costing money until a lifecycle rule clears them.\n\nResumable copies are asked for explicitly, from the command line. There a cancelled copy leaves a file whose name carries .norte-partial — unmistakable at a glance, and where the next attempt picks up:\n\n  norte cp --resume sftp://host/big.iso ./big.iso\n\nWhen the name is already taken\n\nThe first collision stops the transfer and asks. Your answer is not applied to that one entry: the whole operation is sent again with that policy in force, so one answer governs every collision the rest of the way.\n\n  Answer      What happens\n  ──────────  ───────────────────────────────────────────────────────────\n  overwrite   what is at the destination is replaced\n  skip        the colliding entries are left alone\n  rename      the copy lands beside it: report.txt becomes report (1).txt\n  keep newer  replaced only where the source is more recent, else left\n\nAnswer with the key the dialog shows, not with a default: there is none, because a dialog that can destroy data should not be answerable by leaning on a key.\n\n  warning: keep newer does not guess. When either side has no usable timestamp, that entry stops and asks again rather than being replaced or skipped on a hunch.\n\n  warning: Case collisions are judged against the destination, not the source: README and readme live together happily on Linux and land on the same file on macOS or Windows, and it is the destination that decides.\n\n  F5             copy selection to the other pane\n  F6             move selection to the other pane\n  F8             delete (trash when available)\n  Shift+F8       PERMANENT delete\n  Ctrl+k         cancel the most recent task\n\nSee also: Marking what to act on, SFTP, FTP and object storage, Inside an archive\n",
       "title": "Copying, moving and deleting"
+    },
+    {
+      "commands": [
+        {
+          "chord": "/",
+          "command": "pane.quick-search",
+          "label": "quick search in pane (filter/jump)"
+        },
+        {
+          "chord": "Alt+F7",
+          "command": "pane.search",
+          "label": "search by name/content (Alt+F7)"
+        },
+        {
+          "chord": "Ctrl+h",
+          "command": "pane.toggle-hidden",
+          "label": "show or hide hidden entries"
+        }
+      ],
+      "context": [],
+      "id": "finding",
+      "see_also": [
+        "selection",
+        "panes",
+        "viewer"
+      ],
+      "tags": [
+        "doing"
+      ],
+      "text": "Finding things\n──────────────\n\nTwo different questions, two different keys. *Which of the rows in front of me is it? is {{cmd:pane.quick-search}}. Is it anywhere under here?* is Alt+F7.\n\nNarrowing what is already listed\n\n/ types into the pane. Every keystroke filters the rows to the ones whose name contains what you typed, the cursor lands on the first, and leaving the search puts the listing back exactly as it was.\n\nNothing is read from disk and nothing is asked of a daemon: the entries are already here, and this only decides which of them you are looking at. That is why it is instant on a directory of a hundred thousand entries, and why it works identically over SFTP, in a bucket, or inside a .zip.\n\nMatching ignores case and compares names in a normalised form, so café finds a name macOS stored decomposed. The bytes on disk are never touched by any of that — it is the comparison that is lenient, not the name.\n\nSearching a whole subtree\n\nAlt+F7 walks everything under the pane's directory. It matches on the name, by glob (*.rs) or by regular expression, and it can also search CONTENT — a literal string or a regular expression over the files the detector reads as text.\n\nResults arrive in the pane as they are found, so the first hits are usable while the walk is still going. A hit that lives somewhere else is still a real entry: put the cursor on it and every command on this page's neighbours works on it, including opening it in the viewer.\n\nA search is a task, exactly like a copy. It reports progress, it does not freeze the screen, you can navigate the other pane while it runs, and it can be cancelled — see Copying, moving and deleting.\n\n  warning: A content search over a remote backend reads the candidate files over the network. On SFTP or on object storage that is a request per file, and a deep tree is slow in a way the same search on a local disk is not. Narrow it by name first.\n\nThe needle is transcoded rather than the haystack decoded: a content search does not decode whole files into text to look inside them, which is what lets it run over a directory of unknown encodings without inventing content that is not there.\n\nHidden entries\n\nCtrl+h shows or hides the entries whose name starts with a dot. It is per pane and it is a decision about the LISTING: the provider always lists everything, and hiding only sets aside what is already here — which is why toggling it back is instant and never re-reads the directory.\n\nThe consequence is worth stating plainly, because it is the one that surprises: a row you cannot see is a row you cannot mark, so a command acts on the visible selection. Copying a DIRECTORY still copies everything inside it, hidden entries included — the filter is on what you are shown, not on what a recursive operation walks.\n\n  tip: A search suspends the filter. Asking for .env by name and being told nothing was found, because the answer was hidden, is worse than an extra row: an explicit request wins over a display preference.\n\n  /              quick search in pane (filter/jump)\n  Alt+F7         search by name/content (Alt+F7)\n  Ctrl+h         show or hide hidden entries\n\nSee also: Marking what to act on, Two panes, one destination, Reading a file without leaving\n",
+      "title": "Finding things"
+    },
+    {
+      "commands": [
+        {
+          "chord": "Alt+c",
+          "command": "pane.columns",
+          "label": "column picker"
+        },
+        {
+          "chord": "e",
+          "command": "dialog.toggle-enabled",
+          "label": "toggle"
+        },
+        {
+          "chord": "Shift+Up",
+          "command": "dialog.move-up",
+          "label": "move up"
+        },
+        {
+          "chord": "Shift+Down",
+          "command": "dialog.move-down",
+          "label": "move down"
+        },
+        {
+          "chord": "Ctrl+s",
+          "command": "dialog.sort",
+          "label": "sort by"
+        },
+        {
+          "chord": "f",
+          "command": "dialog.cycle-format",
+          "label": "format"
+        }
+      ],
+      "context": [],
+      "id": "columns",
+      "see_also": [
+        "finding",
+        "panes",
+        "remote"
+      ],
+      "tags": [
+        "doing"
+      ],
+      "text": "What the listing shows\n──────────────────────\n\nAlt+c opens the picker: every column norte can show, the ones that are on, and the order they appear in.\n\n  • e turns the highlighted column on or off\n  • Shift+Up and Shift+Down move it in the row\n  • Ctrl+s sorts the listing by it\n  • f changes how its values are written\n\nConfirming applies the choice and saves it; cancelling leaves the listing as it was. This is one of the few dialogs where ⏎ is safe by construction — it writes your own configuration and touches no file.\n\nNot every column comes from norte\n\nThree kinds of column share the picker, and they behave differently for good reasons:\n\n  Kind      Where the value comes from               Example\n  ────────  ───────────────────────────────────────  ─────────────────\n  built-in  the entry itself                         name, size, mtime\n  attr      an attribute the provider reports        `attr:posix.mode`\n  plugin    an extension that computes it per entry  a `git` status\n\nA column a backend cannot answer is left empty. That is the honest outcome: object storage has no owner and no mode, and painting a plausible - would be inventing an answer. See SFTP, FTP and object storage.\n\n  tip: A plugin column is filled asynchronously, after the listing is already on screen. It appears a moment later on a slow provider, and a listing that changes underneath it drops what it had rather than showing a value that belongs to the previous directory.\n\nFormats\n\nSize and time can be written more than one way — bytes or IEC units, absolute or relative dates — and f walks the choices for the column under the cursor. An attribute column offers the cycle its provider's hint allows, and offers none when the value is opaque.\n\nOne case is deliberately inert: a column whose format is pinned by a per-scheme rule in your configuration shows that format and refuses to cycle. The picker only writes the GLOBAL setting, and letting you cycle a value that the more specific rule would go on overriding is a dialog that lies to you about what it just did.\n\nSorting\n\nCtrl+s sorts by the highlighted column; pressing it again reverses the direction. The default is by name, ascending, directories first. A column with no order to it — the kind of an entry, say — does nothing when you press it, rather than inventing a ranking.\n\nSorting is per pane and is remembered while the pane lives, so the two panes can be sorted differently — which is the point when one of them is a listing you are reading and the other a destination you are filling.\n\n  Alt+c          column picker\n  e              toggle\n  Shift+Up       move up\n  Shift+Down     move down\n  Ctrl+s         sort by\n  f              format\n\nSee also: Finding things, Two panes, one destination, SFTP, FTP and object storage\n",
+      "title": "What the listing shows"
     },
     {
       "commands": [
