@@ -3344,6 +3344,45 @@ mod help_key_tests {
         Resolver::new(eff(Screen::Dialog))
     }
 
+    /// Bajo **vim** el preset liga `app.help` a `f1` Y a `?`. La TUI resuelve
+    /// el cierre por el keymap (`cmd == "app.help"` en `on_help_key`), así que
+    /// las dos cierran sin que nada las enumere — es la propiedad que la GUI no
+    /// tenía y que su `closes_help` le da ahora. El test la pinea aquí para que
+    /// un cambio en la resolución del contexto `dialog` no la pierda en
+    /// silencio.
+    #[test]
+    fn bajo_vim_las_dos_teclas_de_ayuda_cierran() {
+        use norte_frontend::keymap::Resolution;
+
+        let (_, preset) = presets()
+            .into_iter()
+            .find(|(n, _)| *n == "vim")
+            .expect("preset vim");
+        let known: Vec<&str> = COMMANDS
+            .iter()
+            .copied()
+            .chain(DIALOG_COMMANDS.iter().copied())
+            .collect();
+        let dialog = Effective::build_for(&preset, &[], &known, Screen::Dialog)
+            .expect("efectivo dialog del preset vim");
+
+        for (mods, code) in [
+            (KeyModifiers::NONE, KeyCode::F(1)),
+            (KeyModifiers::NONE, KeyCode::Char('?')),
+        ] {
+            let mut app = app_with_help();
+            let mut resolver = Resolver::new(dialog.clone());
+            let chord = chord_from_crossterm(mods, code).expect("chord modelado");
+            assert!(
+                matches!(resolver.push(chord), Resolution::Run(cmd) if cmd == "app.help"),
+                "{code:?} es `app.help` en el contexto dialog"
+            );
+            let mut resolver = Resolver::new(dialog.clone());
+            assert!(on_help_key(&mut app, &mut resolver, mods, code).is_none());
+            assert!(app.help.is_none(), "{code:?} cierra la ayuda");
+        }
+    }
+
     fn app_with_help() -> App {
         let d = VPath::parse("file:///x").expect("wire de test");
         let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()));
