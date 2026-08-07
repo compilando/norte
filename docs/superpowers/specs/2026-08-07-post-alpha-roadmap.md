@@ -1,0 +1,251 @@
+# Post-alpha roadmap — ordered by the functionality worth building
+
+**Date:** 2026-08-07
+**Status:** proposal, not approved
+**Context:** every milestone M0–M5 is met and packaging now turns a tag into
+downloadable artefacts. What remains is not debt — it is the part of
+specification §17 that was never built. This orders it by what the software
+gains, and says for each what already exists, because that is what decides
+whether a feature is a week or a milestone.
+
+Nothing here is scheduled. The point of the order is that each item makes the
+next one cheaper or more obviously worth doing.
+
+---
+
+## 1. Directory comparison and synchronization
+
+**§17.** Compare panes by metadata or hash, produce an approved one-way or
+two-way plan.
+
+The largest missing capability, and the one an orthodox file manager is judged
+on. It is also the one whose machinery is most nearly complete: two panes with
+independent listings, first-class selection that survives sorts and refreshes,
+a task scheduler with progress and cancellation, a journal with undo, a policy
+gate, and `sha2` already in `norte-core`'s dependency tree — comparison by hash
+costs no new dependency.
+
+What has to be built is the middle: a comparison that streams over two
+providers without holding both listings in memory, a plan as a first-class wire
+type (so the CLI and an agent can produce and approve one, not just the TUI),
+and a result the user can operate rather than read — the diff belongs in a
+virtual pane, the way search results already do.
+
+The interesting design question is what "same" means across providers that
+disagree about what they can tell you: mtime resolution differs, S3 has an
+ETag that is a hash only sometimes, an archive has neither owner nor mtime you
+should trust. The honest answer is that the comparison declares its own
+confidence, and the plan records which criterion produced each decision.
+
+**Depends on nothing. Unblocks:** a real answer to "did the copy work".
+
+---
+
+## 2. Batch rename, and the executor AI rename was supposed to feed
+
+**§17.** Counters, slices, regular expressions, case changes and character
+cleanup, with collision preview and transactional undo. "AI rename feeds the
+same executor."
+
+Today that sentence is inverted: AI rename exists and the executor does not.
+`apply_ai_rename` walks the approved pairs and submits one `fs.move` per pair,
+in plan order. Three things follow, and all three are visible to a user:
+
+- **No transaction.** The fifth move failing leaves four done. Undo is
+  per-task, so undoing the batch means undoing four things by hand.
+- **No collision preview.** Each move meets the engine's collision handling on
+  its own; the plan as a whole is never checked against itself.
+- **Chained renames cannot work.** `a→b, b→c` collides on the first move even
+  though the plan is perfectly consistent. Any rename that permutes names — the
+  common case for "number these episodes correctly" — fails.
+
+So the batch-rename engine is not a new feature bolted next to the AI one; it
+is the thing that makes the AI one correct. Build the rules engine (counters,
+slices, regex, case, cleanup) and the planner underneath it: cycle detection,
+topological ordering with temporary names where a permutation demands one,
+whole-plan collision preview against the destination's real case-sensitivity,
+and a batch that lands in the journal as ONE undoable unit.
+
+**Closes #121** on the way (AI rename over the first-class selection), because
+the executor takes a selection rather than a directory.
+
+**Depends on nothing. Unblocks:** honest undo for anything that moves many
+files at once, which item 1 also wants.
+
+---
+
+## 3. Volumes, mounts and drive switching
+
+**§17.** Enumerate platform volumes, show free space, support removable media
+and safe ejection, expose drive switching as commands.
+
+Norton Commander had `Alt+F1`/`Alt+F2` and every orthodox manager since has
+had them. Nothing in the tree enumerates a volume or reports free space today —
+`statvfs` appears nowhere.
+
+Small, self-contained, and platform-shaped: a `Volumes` capability on the
+provider trait (local answers it, remote providers decline), a wire type, a
+picker in both frontends. Free space is also the answer to a question a copy
+should be asking before it starts and currently does not.
+
+Eject is the part that deserves care: "safe" means the write cache is flushed
+and nothing of ours holds the mount, and saying so wrongly loses data.
+
+**Depends on nothing.**
+
+---
+
+## 4. Shell integration
+
+**§17.** cd-on-quit wrappers, file-picker mode, opening a terminal in the
+active pane.
+
+The smallest surface on this list and the one that changes daily use the most:
+it is what makes a terminal file manager something you stay in rather than
+visit. None of it exists.
+
+- **cd-on-quit**: the binary writes the final directory somewhere the shell
+  wrapper reads, and we ship the wrapper for bash, zsh and fish. The trap is
+  that a directory is BYTES — the wrapper must survive a non-UTF-8 path, which
+  means a NUL-delimited file and not an `echo`.
+- **Picker mode**: `ntc --pick` prints the selection and exits, so other tools
+  can use it to choose files. Nearly free once selection is first-class, which
+  it already is.
+- **Terminal in the pane**: spawn the user's shell with the pane's directory as
+  cwd. Only meaningful for `file://`; on a remote pane it must say so rather
+  than open a shell somewhere surprising.
+
+**Depends on nothing. Cheap.**
+
+---
+
+## 5. Git status as the official columns plugin
+
+**§17.** "Ship status as an official columns plugin, not a Git client in the
+core."
+
+M4's exit criterion is "a third party can ship a plugin without changing the
+core", and the columns interface is wired end to end — declared columns,
+approval, per-pane values, cells in both frontends. What is missing is the
+proof: a plugin somebody actually wants.
+
+Git status is that proof. It is also the honest test of the interface's
+performance story, because status for a large repository is not free and the
+plugin must be able to answer late without stalling a listing — which the
+per-pane value fetch already allows and nothing has yet exercised under load.
+
+If the interface turns out to be wrong, it is far better to learn it here than
+from a third party.
+
+**Depends on:** nothing, but is most valuable AFTER item 1, because a compare
+between a working tree and a branch is the natural next thought.
+
+---
+
+## 6. Directory watching in the graphical frontend (#106)
+
+The TUI half landed: `notify` over the visible `file://` directories, a
+debouncer with a real floor between refreshes, and a documented degradation to
+mtime polling when the inotify watch count runs out. The GUI is still blind to
+external changes.
+
+Not new design — the model is written and the pitfall is already handled once.
+It is the second half of a feature that is currently half-true in the release
+notes.
+
+**Depends on nothing. Closes #106.**
+
+---
+
+## 7. The filesystem edge cases the spec names
+
+**§17.** Explicit symlink policy, cycle detection, sparse files, Windows
+reparse points, bounded retry for locked files.
+
+Correctness rather than capability, and the reason it sits here rather than
+first is that items 1 and 2 both need the first two of them and will force the
+design anyway: a comparison that follows symlinks into a cycle never ends, and
+a recursive copy needs to have decided.
+
+Sparse files matter the moment somebody copies a VM image. Bounded retry for
+locked files is what makes Windows usable at all — and is untestable here while
+CI is off, which is its own decision (see the end).
+
+---
+
+## 8. Local observability
+
+**§17.** Structured tracing by task and session, rotating local logs,
+inspectable task traces; nothing leaves the machine.
+
+`#[instrument]` is on the effectful core functions already, so the events
+exist. What does not exist is anywhere for them to go: no rotating appender,
+no way for a user to hand over what happened.
+
+This is what makes a bug report possible from someone who is not us — which a
+stable release needs more than it needs another feature. It pairs with
+`norte doctor`, which already exists and would be the natural place to say
+"the log is here".
+
+---
+
+## 9. Daemon lifecycle hardening
+
+**§17.** Start on demand, shut down after configurable idle time, upgrade
+gracefully, authenticate local peers, never run as root, loopback TCP with a
+token.
+
+Idle shutdown and on-demand start work. Two pieces are missing and only one is
+interesting: **graceful upgrade** (a new daemon takes over without dropping the
+sessions of a running GUI and TUI) and **loopback TCP with a token**, which
+only matters if a client should ever be somewhere the socket is not.
+
+The GUI and TUI already share a daemon session, so upgrade is the piece that
+protects something real.
+
+---
+
+## 10. RAR, read-only, by delegation
+
+**Product decision 5.** Read-only RAR through an installed `unrar` or `7z`,
+with no non-free code in the dependency graph.
+
+Small and genuinely wanted — RAR is what a decade of downloads is in. The
+archive provider composition already exists (ADR 0018), so this is a delegating
+provider plus the honest failure when the executable is absent.
+
+The interesting constraint is rule 9: the delegate is an external program, so
+it gets a path and a pipe, never the user's whole filesystem.
+
+---
+
+## 11. Packaging, tier two
+
+**§17.** Signed artifacts, common package managers, update notification.
+
+Deliberately out of scope of the packaging work just merged, and the reason
+stands: all three need infrastructure decisions rather than code — where the
+signing key lives, who maintains the AUR and Homebrew formulae, and what a
+notification is allowed to do (notify, never install unattended).
+
+Worth doing when there is a release cadence to attach them to.
+
+---
+
+## Not on this list, on purpose
+
+**CI.** Off for billing, so there is no three-OS matrix and the gate is one
+developer's Linux machine. That is not a feature to build; it is a decision to
+make, and it decides whether items 3, 7 and 9 can honestly claim Windows and
+macOS support. Two open issues — a Windows trash path that can destroy
+non-recyclable items (#25) and the missing named-pipe transport (#33) — are
+unverifiable until it comes back.
+
+**The four upstream-blocked issues.** #37 (russh-sftp decodes names lossily),
+#48 (opendal trims paths), #114 and #115 (attributes the libraries discard).
+Each needs a patch to somebody else's crate; none is closable here.
+
+**A 1.0 with the specification unchanged.** Items 1–4 are §17 capabilities. A
+release that calls itself stable while four of them are absent is either a
+different version number or a smaller specification, and that is a product
+decision rather than an engineering one.
