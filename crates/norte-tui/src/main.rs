@@ -6923,7 +6923,7 @@ fn untake_step(app: &mut App, pane: usize, step: TrailStep, target: VPath) {
 ///
 /// The WHOLE policy of [`walk_trail`], in one value the tests can ask for
 /// directly. It used to live inline in `walk_trail`, where the only way to
-/// pin it was to re-enact the effect in the test — which pins [`History`],
+/// pin it was to re-enact the effect in the test — which pins [`nav::History`],
 /// not the policy: `walk_trail` could stop rewinding altogether and every
 /// test stayed green.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
