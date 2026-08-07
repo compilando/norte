@@ -848,25 +848,34 @@ pub fn check_contexts_in(lang: Lang, topics: &[Topic], known: &[&str]) -> Vec<Is
 /// use norte_help::{Issue, Lang, check_contexts};
 ///
 /// // The frontend's contexts, spelled out: this crate does not depend on a
-/// // frontend, so the caller supplies the vocabulary. These five are what the
-/// // shipped corpus claims today…
+/// // frontend, so the caller supplies the vocabulary. Every context the
+/// // shipped corpus claims is in this list, and since H3h the frontend's own
+/// // list is the same one — no place a reader can be is missing its page.
 /// let claimed = [
 ///     "browse",
+///     "viewer",
 ///     "dialog.confirm",
 ///     "dialog.collision",
+///     "dialog.approval",
 ///     "dialog.trust-host",
+///     "dialog.trust-lua",
+///     "dialog.quit",
 ///     "dialog.mark-pattern",
+///     "dialog.transfer-name",
+///     "dialog.mkdir",
+///     "dialog.ai-rename",
+///     "dialog.semantic-search",
 /// ];
 /// assert_eq!(check_contexts(&claimed), Vec::new());
-/// // …so a vocabulary with more places in it reports the pages nobody has
-/// // written yet, one per place, and the frontend's gate is where they sit on
-/// // a shrinking allowlist until someone writes them.
+/// // A vocabulary with a place the corpus does not explain reports it, one
+/// // issue per place. That is the direction H3h emptied, and the frontend's
+/// // gate is what keeps it empty.
 /// let mut known = claimed.to_vec();
-/// known.push("viewer");
+/// known.push("dialog.invented");
 /// assert_eq!(
 ///     check_contexts(&known),
 ///     vec![Issue::ContextWithoutTopic {
-///         context: "viewer".to_owned(),
+///         context: "dialog.invented".to_owned(),
 ///         lang: Lang::En,
 ///     }]
 /// );
