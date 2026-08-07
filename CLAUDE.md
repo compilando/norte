@@ -9,7 +9,7 @@ TUI/GUI/CLI clients, and MCP-based agent access. Read the
 
 ```sh
 just t norte-vfs                        # Test one crate (nextest; never `cargo test`)
-just c norte-vfs                        # Clippy one crate, warnings denied
+just c                                  # Clippy the gate's crates, warnings denied
 cargo fmt --all
 just ci-fast                            # Gate minus coverage (lint test docs)
 just ci                                 # Run the complete local CI suite

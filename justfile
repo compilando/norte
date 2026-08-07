@@ -218,13 +218,23 @@ cli *args:
 # DISTINTO (otro conjunto de features = otro fingerprint) para ese crate y
 # todo su árbol, que además se queda en disco para siempre. Iterar con esta
 # receta reaprovecha lo que `just ci` ya compiló, y al revés.
+#
+# El crate se elige FILTRANDO (`-E package(...)`), no con `-p`: `-p norte-vfs`
+# junto a `--features norte-tui/schema` es un error de cargo —«el paquete no
+# contiene esas features»— porque con un solo paquete seleccionado ya no hay
+# workspace donde resolver el resto. La receta llevaba tiempo rota por eso.
+# Filtrar selecciona los mismos tests SIN cambiar el conjunto de paquetes, que
+# es justo lo que hace que se reaproveche la compilación del gate.
 t crate:
-    cargo nextest run -p {{crate}} {{features}}
+    CARGO_INCREMENTAL=0 cargo nextest run {{core_pkgs}} {{features}} -E 'package({{crate}})'
 
-# Clippy de un crate concreto, con las features del gate por lo mismo:
-# `just c norte-tui`.
-c crate:
-    cargo clippy -p {{crate}} --all-targets {{features}} -- -D warnings
+# Clippy con las features del gate. SIN argumento de crate, y no por descuido:
+# clippy no tiene el filtro que `nextest` sí tiene, y recortar los paquetes
+# cambia la unificación de features —o sea, el universo de artefactos— con lo
+# que se perdería justo lo que hace barata esta receta. Warm cuesta lo que
+# cuesta revisar lo que tocaste; el resto sale de la caché.
+c:
+    CARGO_INCREMENTAL=0 cargo clippy {{core_pkgs}} --all-targets {{features}} -- -D warnings
 
 # Loop de desarrollo: tests del workspace en cada guardado (exige cargo-watch).
 watch:
